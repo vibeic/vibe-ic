@@ -295,7 +295,8 @@ def promote_and_record_checkpoints(
         yosys_version: Optional[str] = None,
         image_digest: Optional[str] = None,
         invocation_id: Optional[str] = None,
-        resumed_from_rung: Optional[str] = None) -> List[str]:
+        resumed_from_rung: Optional[str] = None,
+        evidence_log: Optional[Path] = None) -> List[str]:
     """Promote every log-attested `.part` and write its manifest. Returns the
     rungs recorded, in ladder order.
 
@@ -312,9 +313,29 @@ def promote_and_record_checkpoints(
                 continue
             os.replace(str(part), str(final))
             digest = _sha256_file_streamed(final)
-            size = final.stat().st_size
+            _st = final.stat()
+            size = _st.st_size
+            # WHEN THE RUNG FINISHED, not when the host filed it. `os.replace`
+            # preserves the mtime yosys wrote, and that is the only record of
+            # how long the rung took -- a copy that does not preserve mtimes
+            # would otherwise lose it, and the manifest is what survives.
+            written = datetime.fromtimestamp(
+                _st.st_mtime, tz=timezone.utc).isoformat()
         except OSError:
             continue
+        # THE LEG'S OWN LOG. A resumed run does not re-run the rungs below its
+        # checkpoint, so its log cannot contain their evidence -- and the
+        # classifier reads that evidence. Naming the log here is what lets a
+        # resumed run carry it forward instead of reaching a different verdict
+        # about the same proof. Hash-bound, so a log that changed is refused.
+        _ev: Dict[str, Any] = {"state": "absent"}
+        try:
+            if evidence_log is not None and Path(evidence_log).is_file():
+                _ev = {"path": Path(evidence_log).name,
+                       "sha256": _sha256_file_streamed(Path(evidence_log)),
+                       "bytes": Path(evidence_log).stat().st_size}
+        except OSError:
+            _ev = {"state": "unreadable"}
         try:
             _atomic_write_json(ckpt_dir / (rung + ".json"), {
                 "schema_version": LEC_CHECKPOINT_SCHEMA_VERSION,
@@ -322,7 +343,9 @@ def promote_and_record_checkpoints(
                 "rung": rung,
                 "rung_index": ladder_index(rung),
                 "base_script_sha256": base_script_sha256,
-                "il": {"path": rung + ".il", "sha256": digest, "bytes": size},
+                "il": {"path": rung + ".il", "sha256": digest, "bytes": size,
+                       "written_utc": written},
+                "evidence_log": _ev,
                 "yosys": {"version": yosys_version},
                 "container": {"image_digest": image_digest},
                 "invocation_id": invocation_id,
@@ -364,7 +387,9 @@ def list_checkpoint_rungs_declared(ckpt_dir: Path, key: str,
 
 
 def select_resume_checkpoint(ckpt_dir: Path, key: str,
-                             base_script_sha256: str) -> Optional[Dict]:
+                             base_script_sha256: str,
+                             reports_dir: Optional[Path] = None
+                             ) -> Optional[Dict]:
     """The FURTHEST checkpoint that revalidates, or None. Refuses on any doubt.
 
     Every field is re-checked against the caller's own current values, and the
@@ -400,7 +425,32 @@ def select_resume_checkpoint(ckpt_dir: Path, key: str,
             continue
         if actual != il_meta["sha256"]:
             continue
+        # THE CARRIED EVIDENCE IS PART OF THE CHECKPOINT. Without the prior
+        # leg's log a resumed run reaches a DIFFERENT VERDICT about the same
+        # proof -- measured on sha256: from-zero INCONCLUSIVE (798/1837 proven,
+        # equiv_induct did not converge, 0 counterexamples) vs resumed FAIL
+        # ("the RTL and gate netlist may genuinely differ"), because the
+        # resumed log carries no equiv_induct pass for the classifier to read.
+        # So a checkpoint whose evidence is gone is REFUSED, and the run starts
+        # from zero -- slower, and the only answer that stays true.
+        _ev = manifest.get("evidence_log")
+        _ev_path: Optional[Path] = None
+        if reports_dir is not None:
+            if not isinstance(_ev, dict) or not isinstance(_ev.get("path"), str):
+                continue
+            _cand = Path(reports_dir) / _ev["path"]
+            try:
+                if not _cand.is_file():
+                    continue
+                if _sha256_file_streamed(_cand) != _ev.get("sha256"):
+                    continue
+            except OSError:
+                continue
+            _ev_path = _cand
         best = {
+            "evidence_log": str(_ev_path) if _ev_path else None,
+            "evidence_log_sha256": (_ev or {}).get("sha256")
+                                   if isinstance(_ev, dict) else None,
             "rung": rung,
             "rung_index": ladder_index(rung),
             "il_path": str(il_path.resolve()),
@@ -476,8 +526,11 @@ def recover_orphan_checkpoints(ckpt_dir: Path, key: str,
             text = log.read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
+        # The log that ATTESTS the orphan is also the evidence that leg
+        # produced -- the same file, so the manifest names the one it read.
         got = promote_and_record_checkpoints(
-            ckpt_dir, key, base_script_sha256, text, **manifest_fields)
+            ckpt_dir, key, base_script_sha256, text,
+            **{**manifest_fields, "evidence_log": log})
         for rung in got:
             if rung not in recovered:
                 recovered.append(rung)
@@ -899,6 +952,26 @@ _STALL_MARKER = "[lec_run] ERROR: yosys equiv stopped making forward progress"
 _STALL_RE = re.compile(re.escape(_STALL_MARKER))
 _EXECUTION_STOP_RE = re.compile(
     f"(?:{re.escape(_TIMEOUT_MARKER)}|{re.escape(_STALL_MARKER)})")
+
+
+def strip_producer_stop_markers(raw: str) -> Tuple[str, int]:
+    """Drop the lines carrying THIS producer's own stop markers. (text, count)
+
+    Used only on a PRIOR leg's log when a resumed run carries it forward as
+    evidence. Those two markers say how THAT leg ended; carrying them would
+    make the current run report a kill it did not suffer -- `budget_exhausted`
+    and `progress_stalled` are read off exactly these strings. The fact that a
+    prior leg was stopped is not lost: it is recorded in
+    `lec_resume.carried_evidence.prior_leg_was_stopped`, which is measured HERE
+    and returned as the count. PURE.
+    """
+    kept, dropped = [], 0
+    for line in (raw or "").splitlines(True):
+        if _TIMEOUT_MARKER in line or _STALL_MARKER in line:
+            dropped += 1
+            continue
+        kept.append(line)
+    return "".join(kept), dropped
 
 
 def run_was_stopped(raw: str) -> bool:
@@ -1652,7 +1725,20 @@ def parse_equiv_output(text: str) -> Dict:
     _stop_kind = ("the no-forward-progress watchdog"
                   if _STALL_RE.search(text) else "the wall-clock budget")
 
-    final = _FINAL_RE.search(text)
+    # THE LAST `equiv_status`, NOT THE FIRST. `_OLD_TOTAL_RE` below already
+    # argues this in its own comment -- "a recipe that calls it more than once
+    # must be read at the state it finished in" -- and `lec_proved_points_from
+    # _output` already takes `[-1]`. This reader was the one that did not, and
+    # while every recipe emitted exactly one `equiv_status` the two spellings
+    # coincided and nothing could tell them apart.
+    #
+    # A RESUMED recipe emits TWO: one on the design it just read back (which
+    # STATES the position it resumed at) and the closing one. Read first-match,
+    # the verdict would publish the counts the run STARTED from as the counts
+    # it FINISHED with, and every point the resumed rungs proved would be
+    # invisible.
+    _finals = list(_FINAL_RE.finditer(text))
+    final = _finals[-1] if _finals else None
     proven: Optional[int] = int(final.group(1)) if final else None
     unproven: Optional[int] = int(final.group(2)) if final else None
     total: Optional[int] = None
@@ -4118,7 +4204,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 rpt_out.parent,
                 yosys_version=runtime_yosys_version,
                 image_digest=runtime_image_digest,
-                invocation_id=invocation_id)
+                invocation_id=invocation_id, evidence_log=live_log_path)
             if _recovered:
                 resume_record["rungs_recovered_from_a_killed_run"] = _recovered
                 print("[lec_run] recovered checkpoint(s) a previous killed "
@@ -4127,7 +4213,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             prune_stale_checkpoint_parts(ckpt_dir)
             resume_from = select_resume_checkpoint(
                 ckpt_dir, ckpt_key,
-                _sha256_bytes(canonical_script.encode("utf-8")))
+                _sha256_bytes(canonical_script.encode("utf-8")),
+                reports_dir=rpt_out.parent)
         if resume_from is not None:
             script = _make_script(frontend, slang_prefix, defines,
                                   checkpoint_dir=str(ckpt_dir),
@@ -4201,7 +4288,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                 yosys_version=runtime_yosys_version,
                 image_digest=runtime_image_digest,
                 invocation_id=invocation_id,
-                resumed_from_rung=(resume_from or {}).get("rung"))
+                resumed_from_rung=(resume_from or {}).get("rung"),
+                evidence_log=live_log_path)
             resume_record["rungs_recorded_this_run"] = _recorded
             resume_record["resumed"] = resume_from is not None
             if resume_from is not None:
@@ -4213,6 +4301,9 @@ def main(argv: Optional[List[str]] = None) -> int:
                     "checkpoint_bytes": resume_from["checkpoint_bytes"],
                     "checkpoint_written_timestamp":
                         resume_from.get("written_timestamp"),
+                    "evidence_log": resume_from.get("evidence_log"),
+                    "evidence_log_sha256":
+                        resume_from.get("evidence_log_sha256"),
                     # MEASURED from this run's OWN leading equiv_status, not
                     # remembered from the run that wrote the checkpoint. None
                     # is NOT_MEASURED and is never replaced by a zero.
@@ -4364,9 +4455,45 @@ def main(argv: Optional[List[str]] = None) -> int:
                               "to FAIL (no free pass).", file=sys.stderr)
     elapsed = round(time.time() - t0, 2)
 
+    # THE EVIDENCE FOR A RESUMED PROOF IS BOTH LEGS. The rungs below the
+    # checkpoint ran in a PREVIOUS invocation, so this run's log cannot contain
+    # them -- and `parse_equiv_output` reads exactly that missing evidence to
+    # tell "the induction did not converge, and it recorded no counterexample"
+    # (INCONCLUSIVE) from "the designs may genuinely differ" (FAIL). MEASURED on
+    # sha256 before this: from-zero INCONCLUSIVE, resumed FAIL, same 798/1039
+    # counts, same design. The prior leg's own stop markers are stripped --
+    # they say how THAT leg ended -- and the count of them is recorded.
+    _carried_text, _carried_stops = "", 0
+    _carried = (resume_record.get("resumed_from") or {}).get("evidence_log") \
+        if resume_record.get("resumed") else None
+    if _carried:
+        try:
+            _carried_text, _carried_stops = strip_producer_stop_markers(
+                Path(_carried).read_text(encoding="utf-8", errors="replace"))
+        except OSError as _exc:
+            # NOT_MEASURED, and it must not become a different verdict: the
+            # selector already refused any checkpoint whose evidence would not
+            # revalidate, so reaching here means it vanished between then and
+            # now. Say so; do not silently classify on half a proof.
+            _carried_text, _carried_stops = "", 0
+            resume_record["carried_evidence_error"] = str(_exc)
+            print(f"[lec_run] WARN: carried evidence unreadable: {_exc}",
+                  file=sys.stderr)
+    if _carried_text:
+        resume_record["carried_evidence"] = {
+            "log": Path(_carried).name,
+            "sha256": (resume_record.get("resumed_from") or {}).get(
+                "evidence_log_sha256"),
+            "bytes": len(_carried_text.encode("utf-8")),
+            "prior_leg_stop_markers_stripped": _carried_stops,
+            "prior_leg_was_stopped": _carried_stops > 0,
+        }
+        raw = _carried_text.rstrip("\n") + "\n" + raw
+
     # Always persist the raw tool log for transparency / gate corroboration.
     # On a cache hit this is the byte-revalidated source report, while the new
     # invocation attestation lives in lec.json and its unique telemetry file.
+    # For a resumed run this is BOTH legs, in order, which is the proof.
     _atomic_write_bytes(rpt_out, raw.encode("utf-8"))
 
     # WAS THIS RUN STOPPED? Asked ONCE, of this run's own log, through the

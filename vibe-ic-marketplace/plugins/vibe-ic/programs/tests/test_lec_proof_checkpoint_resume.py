@@ -339,9 +339,14 @@ def _install_fake_yosys(monkeypatch, scripts, *, stop_after_rung, tail,
         lec_run, "_container_dir_writable",
         lambda _c, _p: (True, "") if writable else (False, "probe refused"))
 
+    _live_box = {}
+
     def _fake(_container, ys, **_kw):
         script = Path(ys).read_text(encoding="utf-8")
         scripts.append(script)
+        # The real runner tees yosys into `live_log_path`; the stub must too,
+        # because that file is the EVIDENCE a later resumed run carries.
+        _live_box["path"] = _kw.get("live_log_path")
         out = []
         for line in script.splitlines():
             if line.startswith("write_rtlil "):
@@ -353,8 +358,17 @@ def _install_fake_yosys(monkeypatch, scripts, *, stop_after_rung, tail,
                 rung = line.rsplit(":", 1)[1]
                 out.append(line[len("log "):])
                 if stop_after_rung is not None and rung == stop_after_rung:
-                    return True, "\n".join(out) + "\n" + tail
-        return True, "\n".join(out) + "\n" + tail
+                    return _emit(out)
+        return _emit(out)
+
+    def _emit(out):
+        text = "\n".join(out) + "\n" + tail
+        if _live_box.get("path"):
+            try:
+                Path(_live_box["path"]).write_text(text, encoding="utf-8")
+            except OSError:
+                pass
+        return True, text
 
     monkeypatch.setattr(lec_run, "run_yosys_equiv", _fake)
 
@@ -612,3 +626,206 @@ def test_recovery_runs_before_the_prune_in_main(monkeypatch, tmp_path):
     assert rec < pru, (
         "main() prunes the `.part` files before trying to recover them, so a "
         "killed run's complete checkpoints are deleted rather than published")
+
+
+# ---------------------------------------------------------------------------
+# THE VERDICT A RESUMED RUN REACHES
+# ---------------------------------------------------------------------------
+# MEASURED ON sha256 (8HD-9, RTL vs post-DFT scan netlist, sky130A), and it is
+# the defect this section exists for. From zero the proof reached
+#
+#     INCONCLUSIVE — 798/1837 proven, 1039 unproven, equiv_induct did NOT
+#     converge, 0 counterexamples
+#
+# and the RESUMED run on the SAME checkpoint reached
+#
+#     FAIL — "the RTL and gate netlist may genuinely differ at these points"
+#
+# with the SAME 798/1039 counts. Not a near miss: a false NOT_EQUIVALENT, the
+# exact harm `lec_run`'s module docstring says it exists to prevent, introduced
+# by resumption itself. The cause is structural — a resumed run does not re-run
+# the rungs below its checkpoint, so its log carries no `equiv_induct` pass,
+# and `induction_did_not_converge` / `induction_ladder_exhausted` read exactly
+# those lines to tell a non-converging proof from a refuted one.
+_FROM_ZERO_LADDER = (
+    "equiv_simple: Starting.\n"
+    "Found 9 unproven $equiv cells (9 groups) in equiv:\n"
+    "Proved 8 previously unproven $equiv cells.\n"
+    "equiv_induct: Proving $equiv cells in module equiv.\n"
+    "Found 1 unproven $equiv cells in module equiv:\n"
+    "Proved 0 previously unproven $equiv cells.\n"
+    "equiv_status: Found 9 $equiv cells in equiv:\n"
+    "  Of those cells 8 are proven and 1 are unproven.\n")
+_RESUMED_LEG_ONLY = (
+    "Executing RTLIL frontend.\n"
+    "equiv_status: Found 9 $equiv cells in equiv:\n"
+    "  Of those cells 8 are proven and 1 are unproven.\n"
+    "equiv_status: Found 9 $equiv cells in equiv:\n"
+    "  Of those cells 8 are proven and 1 are unproven.\n")
+
+
+def test_a_resumed_leg_alone_reaches_the_WRONG_verdict():
+    """The RED, pinned. Not an academic worry — this is what shipped for one
+    real sha256 run before the carry existed, and it is a false FAIL."""
+    alone = lec_run.parse_equiv_output(_RESUMED_LEG_ONLY)
+    full = lec_run.parse_equiv_output(_FROM_ZERO_LADDER)
+    assert full["verdict"] == "INCONCLUSIVE", full["verdict"]
+    assert alone["verdict"] == "FAIL", (
+        "the fixture no longer reproduces the defect, so the test below proves "
+        "nothing: " + alone["verdict"])
+    assert alone["proven"] == full["proven"] == 8
+
+
+def test_the_carried_leg_restores_the_from_zero_verdict():
+    """The GREEN. Both legs, in order, are the evidence for the proof."""
+    carried = lec_run.parse_equiv_output(
+        _FROM_ZERO_LADDER + _RESUMED_LEG_ONLY)
+    full = lec_run.parse_equiv_output(_FROM_ZERO_LADDER)
+    assert carried["verdict"] == full["verdict"] == "INCONCLUSIVE"
+    assert carried["equivalent"] == full["equivalent"] is False
+    assert (carried["proven"], carried["unproven"]) == \
+        (full["proven"], full["unproven"])
+
+
+def test_the_counts_come_from_the_LAST_equiv_status_not_the_first():
+    """A resumed recipe emits TWO `equiv_status`: one STATING the position it
+    resumed at, one closing. Read first-match, the verdict publishes the counts
+    the run STARTED from and every point the resumed rungs proved is
+    invisible."""
+    two = ("equiv_status: Found 9 $equiv cells in equiv:\n"
+           "  Of those cells 8 are proven and 1 are unproven.\n"
+           "equiv_induct: Proving $equiv cells in module equiv.\n"
+           "Found 1 unproven $equiv cells in module equiv:\n"
+           "Proved 1 previously unproven $equiv cells.\n"
+           "equiv_status: Found 9 $equiv cells in equiv:\n"
+           "  Of those cells 9 are proven and 0 are unproven.\n"
+           "  Equivalence successfully proven!\n")
+    p = lec_run.parse_equiv_output(two)
+    assert (p["proven"], p["unproven"]) == (9, 0), (
+        f"the verdict read the position the run resumed AT: {p}")
+    assert p["verdict"] == "PASS"
+    # ...and the probe, which already took the last one, still agrees.
+    assert lec_run.lec_proved_points_from_output(two) == \
+        {"proved": 9, "unproven": 0}
+
+
+def test_a_prior_legs_stop_marker_is_not_carried_forward():
+    """A stop marker says how THAT leg ended. Carried, it would make this run
+    report a kill it did not suffer — `budget_exhausted` and `progress_stalled`
+    are read off exactly these strings."""
+    prior = (_FROM_ZERO_LADDER + lec_run._TIMEOUT_MARKER + " (rc=124)\n")
+    text, dropped = lec_run.strip_producer_stop_markers(prior)
+    assert dropped == 1
+    assert lec_run._TIMEOUT_MARKER not in text
+    assert "Proved 8 previously unproven" in text, (
+        "the strip took the evidence with the marker")
+    # POSITIVE CONTROL: a leg that was NOT stopped loses nothing.
+    same, none = lec_run.strip_producer_stop_markers(_FROM_ZERO_LADDER)
+    assert none == 0 and same == _FROM_ZERO_LADDER
+    assert lec_run.strip_producer_stop_markers("") == ("", 0)
+
+
+def test_a_checkpoint_whose_carried_evidence_is_gone_is_refused(tmp_path):
+    """The conservative rule: no evidence, no resume. Running from zero is
+    slower and is the only answer that stays true."""
+    reports = tmp_path / "reports"
+    ck = reports / "lec_checkpoints" / "ck"
+    _plant(ck, "equiv_simple_full")
+    log = reports / "lec.live.20260906T000000-aaaa.rpt"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    log.write_text("yosys output\n" + _log("equiv_simple_full", scope="ck"),
+                   encoding="utf-8")
+    assert lec_run.promote_and_record_checkpoints(
+        ck, _KEY, _BASE, log.read_text(), evidence_log=log) == \
+        ["equiv_simple_full"]
+
+    def sel():
+        r = lec_run.select_resume_checkpoint(ck, _KEY, _BASE,
+                                             reports_dir=reports)
+        return r["rung"] if r else None
+
+    assert sel() == "equiv_simple_full", "POSITIVE CONTROL failed"
+    raw = log.read_bytes()
+    log.unlink()
+    assert sel() is None, "a checkpoint was resumed with its evidence gone"
+    log.write_bytes(raw)
+    assert sel() == "equiv_simple_full"
+    log.write_bytes(raw + b"# tampered\n")
+    assert sel() is None, "a checkpoint was resumed with its evidence CHANGED"
+    log.write_bytes(raw)
+    assert sel() == "equiv_simple_full"
+    # ...and the OLD contract, without reports_dir, still answers — which is
+    # what proves the refusals above come from THIS check and nothing else.
+    log.unlink()
+    r = lec_run.select_resume_checkpoint(ck, _KEY, _BASE)
+    assert r and r["rung"] == "equiv_simple_full"
+
+
+def test_the_manifest_says_when_the_rung_finished(tmp_path):
+    """`written_timestamp` is when the HOST filed the checkpoint; every rung of
+    one run shares it to the millisecond. How long a rung TOOK is the .il's own
+    mtime, which `os.replace` preserves and a copy does not — so the manifest
+    records it."""
+    ck = tmp_path / "ck"
+    _plant(ck, "equiv_simple_full")
+    os_mtime = 1_757_000_000
+    import os as _os
+    _os.utime(ck / "equiv_simple_full.il.part", (os_mtime, os_mtime))
+    lec_run.promote_and_record_checkpoints(
+        ck, _KEY, _BASE, _log("equiv_simple_full", scope="ck"))
+    man = json.loads((ck / "equiv_simple_full.json").read_text())
+    assert man["il"]["written_utc"].startswith("2025-09-04T"), \
+        man["il"]["written_utc"]
+    assert man["il"]["written_utc"] != man["written_timestamp"]
+
+
+def test_e2e_a_resumed_run_reaches_THE_SAME_VERDICT_as_the_run_it_resumes(
+        monkeypatch, tmp_path):
+    """THE PROPERTY, driven through `main()` and not through the parser alone.
+
+    A parser fed both legs classifies correctly whether or not `main` ever
+    hands it both — so a test that only calls `parse_equiv_output` passes on
+    the code that shipped the false FAIL. This one makes invocation 1 emit a
+    FULL ladder (with equiv_induct evidence) and invocation 2 emit a RESUMED
+    leg (without it), and requires the two verdicts to agree.
+    """
+    proj = _project(tmp_path)
+    argv = [str(proj), "--top", "dut", "--container", "fake",
+            "--liberty", "/missing"]
+
+    scripts = []
+    _install_fake_yosys(monkeypatch, scripts, stop_after_rung=None,
+                        tail=_FROM_ZERO_LADDER)
+    lec_run.main(argv)
+    first = json.loads((proj / "reports/lec.json").read_text())
+    assert first["verdict"] == "INCONCLUSIVE", first["verdict"]
+
+    # A leg that got as far as rung 0 and no further is what is on disk now.
+    ck = next((proj / "reports/lec_checkpoints").iterdir())
+    for rung in lec_run.LEC_CHECKPOINT_RUNGS[1:]:
+        for ext in (".il", ".json"):
+            (ck / (rung + ext)).unlink(missing_ok=True)
+
+    scripts.clear()
+    _install_fake_yosys(monkeypatch, scripts, stop_after_rung=None,
+                        tail=_RESUMED_LEG_ONLY)
+    lec_run.main(argv)
+    second = json.loads((proj / "reports/lec.json").read_text())
+
+    assert second["lec_resume"]["resumed"] is True
+    assert scripts[0].startswith("read_rtlil ")
+    carried = second["lec_resume"].get("carried_evidence")
+    assert carried, ("the resumed run carried NO evidence, so its verdict is "
+                     "reached on a log that cannot contain the induction it "
+                     "did not re-run")
+    assert carried["sha256"].startswith("sha256:")
+    assert carried["prior_leg_was_stopped"] is False
+    assert second["verdict"] == first["verdict"], (
+        f"resumed verdict {second['verdict']} != from-zero {first['verdict']} "
+        "-- the same proof, the same design, two different answers")
+    assert second["equivalent"] == first["equivalent"]
+    assert (second["compared_points"], second["unproven_points"]) == \
+           (first["compared_points"], first["unproven_points"])
+    # ...and the published log is BOTH legs, which is what the verdict rests on.
+    rpt = (proj / "reports/lec.rpt").read_text()
+    assert "equiv_induct" in rpt and "RTLIL frontend" in rpt
