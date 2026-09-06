@@ -110,7 +110,7 @@ import json
 import sys
 from decimal import Decimal
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # so the sibling imports below resolve however this is invoked
 
@@ -278,6 +278,66 @@ def check_slot_pads(slot: dict) -> List[Dict[str, Any]]:
         f"understood must not read as a slot with no pads.",
         slot=slot.get("slot"), source_file=slot.get("source_file"),
         unmatched_list_keys=unmatched)]
+
+
+# --------------------------------------------------------------------------- #
+# WHO OWES THE SLOT CONTRACT (#2070 O1, owner ruling 2026-09-07)
+# --------------------------------------------------------------------------- #
+#: Recorded in `examined` when the slot rules were not owed, so a reader can
+#: see that they were CONSIDERED and by what authority they were not raised.
+#: A rule silently not evaluated and a rule evaluated clean must never produce
+#: the same report.
+NOT_OWED_KEY = "slot_rules_not_owed"
+
+
+def slot_rules_are_owed(project: Path,
+                        declared_slot: Any) -> Tuple[bool, Optional[str]]:
+    """(owed, why-not). THE DESIGN'S OWN DECLARATION DECIDES THE ROUTE.
+
+    MEASURED, and it is what this clause got wrong. Once step 0.5ic learned the
+    run's PDK (#2070 item 2), the fetch resolved the registry's live shuttle for
+    that process and fetched its slots — for two designs that declare
+    `deliverable=HARDMACRO`. This clause then refused them with
+    SLOT_NOT_DECLARED plus the shape rules of slots THEY NEVER BOUGHT, and a
+    HARDMACRO that names no operator failed step 0.5ic because an operator
+    happened to exist on a PDK it targets.
+
+    THE RULING: a live shuttle in the registry, on the PDK the design names, is
+    INFORMATION, not a requirement. The slot contract is owed by a design that
+    is going THROUGH a shuttle — a shuttle die must name its slot — and by
+    nobody else.
+
+    So the rules are owed when EITHER:
+      * the design DECLARED a slot (whatever it calls itself, a design that
+        names a slot is checked against that slot), or
+      * its declaration is anything other than HARDMACRO — which includes
+        `DIE`, and, deliberately, includes NOT_DETERMINED and an unreadable or
+        absent declaration. An unstated route must never buy a pass: the whole
+        weight of this clause is that a die that was DEFAULTED and a die that
+        was CHOSEN are the same number with different provenance.
+
+    Nothing here widens what a DIE owes. `u_hawaii_adc` — DIE, no slot — is
+    refused exactly as it is today, and that is the negative control.
+    """
+    if declared_slot is not None:
+        return True, None
+    doc, err = TD.load(project / TD.DECLARATION_REL)
+    if err is not None or not isinstance(doc, dict):
+        # DEGRADE TOWARDS OWING IT. "I could not read the declaration" is not
+        # "the design declared HARDMACRO".
+        return True, None
+    deliverable = TD.answer(doc, "deliverable")
+    if deliverable != TD.DELIVERABLE_HARDMACRO:
+        return True, None
+    return False, (
+        f"the design's own declaration at {TD.DECLARATION_REL} answers "
+        f"deliverable={TD.DELIVERABLE_HARDMACRO} and names no slot, so it is "
+        f"not going through this operator. A live shuttle on the PDK this "
+        f"design targets is INFORMATION, not a requirement: the slot contract "
+        f"— which slot was bought, and the shape of that slot — is owed by a "
+        f"design that is submitting a die to it. This one terminates at the "
+        f"hardmacro kit (step 37.5ip). Every rule about the RECORD itself was "
+        f"still evaluated; only the slot contract was not owed.")
 
 
 def _geometry_key(slot: dict) -> tuple:
@@ -535,6 +595,15 @@ def evaluate(project: Path, doc: Optional[dict],
             scan=rec.get("scan")))
         return _verdict(refusals, examined, na_reason)
 
+    # WHETHER THE SLOT CONTRACT IS OWED AT ALL, decided ONCE, from the
+    # design's own declaration, before any slot rule is raised. See
+    # `slot_rules_are_owed`.
+    _declared_slot = rec.get("declared_slot")
+    owed, not_owed_why = slot_rules_are_owed(project, _declared_slot)
+    if not owed:
+        examined[NOT_OWED_KEY] = not_owed_why
+        na_reason = not_owed_why
+
     # every slot: on disk, unchanged, and self-consistent
     for s in slots:
         src = s.get("source_file")
@@ -558,8 +627,15 @@ def evaluate(project: Path, doc: Optional[dict],
                     f"geometry in this report is not the geometry on disk.",
                     slot=s.get("slot"), source_file=src,
                     recorded_sha256=recorded, actual_sha256=now))
-        refusals.extend(check_slot_geometry(s))
-        refusals.extend(check_slot_pads(s))
+        # THE RECORD'S INTEGRITY IS OWED BY EVERY DESIGN — that is the block
+        # above, and it is unconditional: whether the file is on disk and
+        # whether it still hashes to what was ingested is about whether this
+        # report can be believed at all. What is CONDITIONAL is the SLOT
+        # CONTRACT, which is a statement about the die this design is
+        # submitting. A hardmacro that names no slot is submitting none.
+        if owed:
+            refusals.extend(check_slot_geometry(s))
+            refusals.extend(check_slot_pads(s))
 
     # THE ARTEFACT A LATER STEP OPENS MUST SAY WHAT THE RECORD SAYS. The slot
     # files under the project are the step's declared output and the thing
@@ -604,8 +680,18 @@ def evaluate(project: Path, doc: Optional[dict],
 
     # the declared slot
     shipped = rec.get("slots_shipped") or sorted({str(s.get("slot")) for s in slots})
-    declared = rec.get("declared_slot")
-    if declared is None:
+    declared = _declared_slot
+    if declared is None and not owed:
+        # NOT SILENT. The operator, the count of slots it ships and the route
+        # the design chose are all reported, because "an operator exists on
+        # this process and this design is not using it" is exactly the fact a
+        # reader of a hardmacro's submission record needs.
+        examined["operator_shuttle_available_not_used"] = {
+            "slots_shipped": shipped,
+            "declared_route": TD.ROUTE_IP,
+            "why": not_owed_why,
+        }
+    elif declared is None:
         refusals.append(_refusal(
             "SLOT_NOT_DECLARED",
             f"a template was ingested and no slot was declared. The template "
