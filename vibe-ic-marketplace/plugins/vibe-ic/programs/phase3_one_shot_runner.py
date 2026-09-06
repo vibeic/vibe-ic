@@ -10528,6 +10528,53 @@ def _netlist_matches_liberty(netlist_path: Path,
         return True
 
 
+def _registry_glob_one_local(root_prefix: str,
+                             full: str) -> Optional[str]:
+    """Resolve a registry asset glob against the LOCAL filesystem.
+
+    Returns the deterministic sorted-first match, or None when the pattern
+    matches nothing locally (including the ordinary host case, where the PDK
+    root does not exist at all) so the caller falls through to the container.
+
+    Applies the SAME two acceptance tests as the container branch — the
+    candidate must sit under the PDK root and must actually exist — so a local
+    resolution can never be laxer than an in-container one.
+    """
+    import glob as _glob_m
+
+    def _under_root(cand: str) -> bool:
+        """Both acceptance tests, applied to EVERY candidate.
+
+        The textual prefix is the container branch's own test. The realpath
+        containment is the half a textual test cannot make: a registry pattern
+        containing `..` composes a path that still STARTS with the root and
+        resolves outside it. Caught by this function's own no-leak arm, which
+        resolved `/etc/passwd` through the literal (non-glob) branch while the
+        docstring above claimed the root was enforced.
+        """
+        if not cand.startswith(root_prefix):
+            return False
+        try:
+            real_root = os.path.realpath(root_prefix.rstrip('/'))
+            return (os.path.realpath(cand) == real_root
+                    or os.path.realpath(cand).startswith(real_root + os.sep))
+        except OSError:
+            return False
+
+    try:
+        if not os.path.isdir(root_prefix.rstrip('/')):
+            return None
+        if not any(ch in full for ch in "*?["):
+            return (full if os.path.exists(full) and _under_root(full)
+                    else None)
+        for h in sorted(_glob_m.glob(full)):
+            if _under_root(h) and os.path.exists(h):
+                return h
+    except OSError:
+        return None
+    return None
+
+
 def _registry_glob_one(container: str, root: str, pattern: Optional[str],
                        ) -> Optional[str]:
     """Resolve ONE registry asset glob to a concrete in-container path.
@@ -10564,6 +10611,36 @@ def _registry_glob_one(container: str, root: str, pattern: Optional[str],
         return None
     root_prefix = root.rstrip('/') + '/'
     full = f"{root.rstrip('/')}/{pattern.lstrip('/')}"
+    # LOCAL FIRST — the same order `_read_pdk_text` already establishes ("Host
+    # read first ... then the container"), for the same reason and one step
+    # earlier in the chain.
+    #
+    # WHY THIS EXISTS. Resolution used to run ONLY through `docker exec`. That
+    # is correct when the runner sits on the host beside the container, and it
+    # is unreachable when the runner is ALREADY RUNNING INSIDE that image:
+    # there is no `docker` binary in there, so `_docker_exec_raw` returns 127
+    # for every probe, every asset resolves to None, `_pdk_config_from_registry`
+    # returns None, and `_detect_pdk` REFUSES with "declared in
+    # pdk_registry.json but its assets could not be resolved". MEASURED
+    # 2026-09-06 on the canonical front door (`vibe_ic_one_shot_runner.py`
+    # inside ghcr.io/vibeic/vibeic-eda 0.3.46, --pdk gf180mcuD): Phase 2 passed,
+    # Phase 3 halted at its first act, and every one of that registry entry's
+    # six declared assets was present and matched exactly one file at the very
+    # path the probe was asking about. The PDK was under the process's own
+    # root the whole time; only the ACCESS ROUTE was missing.
+    #
+    # The refusal it produces is right and stays right — a named PDK must never
+    # resolve to another foundry's data. This adds the route, not an exception:
+    # a genuinely absent asset still resolves to None and still REFUSES.
+    #
+    # Host-side behaviour is unchanged BY CONSTRUCTION: `/foss/pdks/...` does
+    # not exist on a host filesystem, so the local branch finds nothing and
+    # falls through to the container exactly as before. A local hit is returned
+    # only after the SAME two acceptance tests the container branch applies —
+    # under the PDK root, and actually exists.
+    _local_hit = _registry_glob_one_local(root_prefix, full)
+    if _local_hit is not None:
+        return _local_hit
     if not any(ch in full for ch in "*?["):
         rc, _o, _e = _docker_exec_raw(
             container, f"test -e {shlex.quote(full)}", timeout=60)
@@ -10613,10 +10690,14 @@ def _pdk_config_from_registry(project: Path, reg: Dict[str, Any]
     root = reg.get("container_path") or ""
     if not root:
         return None
-    rc, _o, _e = _docker_exec_raw(
-        container, f"test -d {shlex.quote(root)}", timeout=60)
-    if rc != 0:
-        return None
+    # Same local-first order as the asset globs below: in-container the root
+    # is a plain directory on this process's own filesystem, and probing it
+    # through a docker binary that is not there reported it ABSENT.
+    if not os.path.isdir(root):
+        rc, _o, _e = _docker_exec_raw(
+            container, f"test -d {shlex.quote(root)}", timeout=60)
+        if rc != 0:
+            return None
 
     liberty = _registry_glob_one(container, root, reg.get("liberty_glob"))
     tech_lef = _registry_glob_one(container, root, reg.get("tech_lef_glob"))
@@ -10628,7 +10709,7 @@ def _pdk_config_from_registry(project: Path, reg: Dict[str, Any]
     # SITE: registry value wins; else read the PDK's own cell LEF.
     site = reg.get("site")
     if not site:
-        _t = _container_file_text(container, cell_lef) or ""
+        _t = _read_pdk_text(cell_lef, container) or ""
         m = re.search(r"^\s*SITE\s+([A-Za-z_][A-Za-z0-9_]*)", _t, re.MULTILINE)
         site = m.group(1) if m else "unit"
 
@@ -10636,7 +10717,7 @@ def _pdk_config_from_registry(project: Path, reg: Dict[str, Any]
     # FIRST routing layer declared in this PDK's tech LEF.
     metal_prefix = reg.get("metal_prefix")
     if not metal_prefix:
-        _t = _container_file_text(container, tech_lef) or ""
+        _t = _read_pdk_text(tech_lef, container) or ""
         m = re.search(
             r"LAYER\s+([A-Za-z_]+)\d+\s*;?[^L]*?TYPE\s+ROUTING",
             _t, re.IGNORECASE | re.DOTALL)

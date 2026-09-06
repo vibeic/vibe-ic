@@ -51105,6 +51105,32 @@ _L10_TC_EXP_COL = re.compile(
     r'(?i)預期|expect|golden|digest|\bresult\b|結果|判定|pass|必過')
 _L10_TC_IN_COL = re.compile(
     r'(?i)輸入|\binput\b|stimulus|message|訊息|firmware|涵蓋|coverage|範圍')
+# ORGANIC — the AFFIRMATION-LED oracle cell (the ASSERTION row).
+#
+# A verification-plan table of the shape `| scenario | expected |` states a
+# PROPOSITION in its scenario column and ticks the oracle column to say that
+# proposition must HOLD.  The scenario cell IS the predicate; the tick is its polarity.  Read
+# positionally the row emits `expected = "✅"`, and
+# `l10_test_case_oracle_anchor_check` correctly refuses it — VACUOUS_EXPECTED
+# ("a checkmark or bullet is not an oracle") or, when the tick trails a
+# parenthetical rationale, NO_ORACLE_ANCHOR.  MEASURED on a CPU cell: 2 of 10
+# harvested cases, and BOTH scenario texts anchor against that design's own
+# observable vocabulary (`observable:SRAM`, `observable:i_rst`).  The input
+# stated a checkable property; the harvest filed it where nothing reads it as
+# one, and the flow then failed the design for the omission.
+# The ASCII affirmations need a TOKEN BOUNDARY. Without it the bare `Y`
+# alternative matches the first letter of an ordinary oracle — "Yields no error"
+# reads as affirmation-led with a tail carrying no digit and no relation, i.e. as
+# an assertion row, and the scenario would displace a real oracle. Caught on
+# review of this change, before it ran on anything.
+_L10_TC_AFFIRM_LED = re.compile(
+    r'^\s*(?:\u2705|\u2713|\u2714|\u2611|\u221a|\u25cb|\u25ef|\u25cf|'
+    r'OK|Yes|Y|\u662f|\u6709|\u5fc5\u904e|\u6210\u7acb)'
+    r'(?![A-Za-z0-9_])\s*', re.I)
+# A tick that INTRODUCES a real oracle ("✅ 100% PASS", "✅ < 10 cycle") is NOT
+# an assertion row — the oracle is the remainder and must be left exactly as it
+# is.  A digit or a comparison relation in the remainder is the discriminator.
+_L10_TC_SUBSTANTIVE_TAIL = re.compile(r'[0-9]|[<>≤≥]|<=|>=|==')
 
 
 def _harvest_test_cases_from_input_tables(
@@ -51249,15 +51275,39 @@ def _harvest_test_cases_from_input_tables(
                             if _stim_i is None:
                                 _stim_i = 0 if exp_i != 0 else min(
                                     1, len(cells) - 1)
+                        # ORGANIC — the ASSERTION ROW (see _L10_TC_AFFIRM_LED).
+                        # When the oracle cell only TICKS, the proposition the
+                        # tick affirms is the scenario cell, so that is the
+                        # oracle.  Carried with an explicit polarity word so the
+                        # case predicts something ("this holds") rather than
+                        # restating its own scenario, and with the tick kept
+                        # verbatim beside it so the routing is auditable and
+                        # reversible.  A tick that merely PREFIXES a real oracle
+                        # is left untouched by the _SUBSTANTIVE_TAIL guard, so
+                        # every row that already carried a golden value is
+                        # byte-identical.
+                        _expected = last
+                        _affirm_led = bool(
+                            last and _L10_TC_AFFIRM_LED.match(last))
+                        _assertion_row = bool(
+                            _affirm_led
+                            and not _L10_TC_SUBSTANTIVE_TAIL.search(
+                                _L10_TC_AFFIRM_LED.sub('', last, count=1))
+                            and re.search(r'[0-9A-Za-z]', first))
+                        if _assertion_row:
+                            _expected = f"holds: {first}"
                         _case = {
                             "name": name,
                             "kind": "functional_vector",
                             "stimulus": re.sub(
                                 r'[`*]', '', cells[_stim_i]).strip(),
-                            "expected": last,
+                            "expected": _expected,
                             "evidence": (f"input/docs/{fname} "
                                          "(verification-plan table)"),
                         }
+                        if _assertion_row:
+                            _case["oracle_from_assertion_row"] = True
+                            _case["assertion_affirmation"] = last
                         if _oracle_absent:
                             _case["oracle_absent"] = True
                         out.append(_case)
