@@ -5098,29 +5098,17 @@ def _rcvar_flat_compiles(flat_txt: str, tgt: str, rtl_dir: Path,
 
 
 def step_reset_clock_variant_aliases(project: Path, top: str) -> StepResult:
-    """ORGANIC #518 — auto-emit a reset/clock NAME-VARIANT alias wrapper for the
-    TOP module so a hidden testbench instantiating an equivalent STANDARD
-    spelling (e.g. a `reset_n` design vs a TB using `.rst_n`) elaborates.
+    """ADVISORY: adapt a top reset/clock spelling only to a requested interface.
 
-    This is the REAL wiring of `reset_clock_variant_alias.py` into the flow (the
-    #518 reopen flagged that the program was dormant — same disease as #517
-    round-1). UNLIKE the leaf-typo case (a different MODULE name → a sibling
-    wrapper), the reset/clock case is a different PORT name on the SAME module
-    name the TB instantiates — so the wrapper must TAKE OVER the top name: the
-    top module is renamed to `<top>__rcvar_inner` in place and a wrapper named
-    `<top>` exposing the canonical reset/clock port names instantiates it.
+    A recognized equivalent name is not permission to change public ports.
+    Require an authoritative interface enumeration requesting the destination
+    and omitting the source; missing or ambiguous authority produces a named
+    SKIP without modifying RTL. Never infer dual-reset compatibility from names.
+    Explicit compatibility callers can still use the low-level wrapper emitter.
 
-    Applies ONLY to the designated TOP module (not internal sub-modules, whose
-    callers use the original port names). Best-effort + idempotent + polarity-
-    safe (the emitter RAISES on any cross-polarity rename); never fails the flow.
-
-    ROUND-4 (#518): when `top` is the runner's auto-wrapper name (the
-    orchestrator passes args.top_name, default 'chip_top'), the alias target is
-    RESOLVED to the single-leaf author module — the module the hidden TB
-    actually instantiates — because chip_top.v may not even exist yet at this
-    plan position (it is emitted later inside step_yosys_synth) and aliasing
-    the wrapper would not help the TB anyway. Multi-module projects resolve to
-    None and SKIP (no new exposure; #511 negative no-leak preserved).
+    The existing top/hierarchy, polarity, constraint and idempotency guards
+    remain in force. This optional adaptation records and continues; it is not
+    an interface-conformance gate and does not certify a skipped design.
     """
     t0 = time.time()
     rtl_dir = _pl.rtl_dir(project)
@@ -5152,12 +5140,8 @@ def step_reset_clock_variant_aliases(project: Path, top: str) -> StepResult:
     if any(m.endswith("__rcvar_inner") for m in all_modules):
         return StepResult("reset_clock_variant_aliases", "SKIP",
                           time.time() - t0, "alias wrapper already present")
-    # #518 round-4 target resolution: the orchestrator passes args.top_name
-    # (default = the runner's auto-wrapper name 'chip_top'), but the hidden TB
-    # instantiates the AUTHOR LEAF module — and chip_top.v may not even exist
-    # yet at this plan position (it is emitted later, inside step_yosys_synth).
-    # For a chip_top-like top name, resolve the single-leaf author module and
-    # alias THAT; for any other top name keep rounds-1-3 behavior verbatim.
+    # Resolve the authored public top before checking its requested contract;
+    # the runner's default wrapper may not have been emitted at this point.
     resolved_via_chip_top = False
     if _rcvar_is_chip_top_name(top):
         tgt = _rcvar_single_leaf_author(bodies)
@@ -5210,24 +5194,8 @@ def step_reset_clock_variant_aliases(project: Path, top: str) -> StepResult:
         return StepResult("reset_clock_variant_aliases", "SKIP",
                           time.time() - t0,
                           f"top {tgt!r} has no parseable ANSI ports")
-    # ORGANIC #689 — CONTRACT-AWARE suppression (FIRST-CLASS, applies
-    # UNCONDITIONALLY before the #618 SDC + #518 L9 guards). The alias
-    # canonicaliser used to UNCONDITIONALLY rename any recognised non-canonical
-    # STANDARD reset/clock spelling (`reset`->`rst`, `clock`->`clk`, …) and take
-    # over the top name. But when the design's OWN contract (its staged prompt /
-    # external-interface doc / parsed L3 port list) ALREADY declares that
-    # standard spelling, THAT spelling IS the TB-facing contract — a hidden
-    # benchmark TB instantiates the DUT by exactly that name (e.g. RTLLM's
-    # multi_booth_8bit declares `reset` and its TB binds `.reset(...)`). Renaming
-    # it (lossy in-place: `reset`->`rst`, the wrapper then exposing ONLY `rst`)
-    # makes the wrapper port differ from the TB binding → a hard iverilog
-    # `port 'reset' is not a port of dut` elaboration FAIL on a TB-passing
-    # design. The #618 SDC guard misses this (RTLLM ships no SDC → empty pinned
-    # set) and the #518 L9 guard misses it (L9 top_ports==[] + top_module case
-    # differs), so the design's OWN contract must be consulted directly. Drive
-    # the plan with the contract spellings so any contract-declared port is
-    # preserved verbatim (additive, never lossy). chip-AGNOSTIC: port-decl
-    # grammar + the closed standard reset/clock spelling set; no chip literal.
+    # Preserve public source spellings even in documents whose loose format
+    # cannot authorize a replacement interface.
     try:
         _contract_ports = _rcv.design_contract_ports(project)
     except Exception:  # pragma: no cover — defensive
@@ -5275,42 +5243,29 @@ def step_reset_clock_variant_aliases(project: Path, top: str) -> StepResult:
             "reset_clock_variant_aliases", "SKIP", time.time() - t0,
             "authoritative L3/L9 top-port enumeration exactly matches the "
             "RTL interface; preserving its documented reset/clock spellings")
-    # ORGANIC #792 — the RESET renames the #689 contract-suppression dropped (in
-    # full_plan, contract-declared, NOT in the suppressed plan) are NOT abandoned.
-    # The #689 suppression exists because a hidden TB may bind the design's own
-    # contract spelling (`multi_booth`/`up_down` `.reset`, arstn `.arstn`); but a
-    # DIFFERENT hidden TB may instead bind the canonical (`sequence_detector`
-    # `.rst_n`). These are PROVABLY INDISTINGUISHABLE from the contract alone —
-    # only the invisible TB binding differs. So instead of suppress-or-rename,
-    # expose BOTH spellings additively (polarity-safe dual-port reset wrapper):
-    # whichever the TB binds drives the reset, the other defaults INACTIVE. Only
-    # RESETS qualify (a clock has no inactive level → stays suppressed). The
-    # canonical-collision / cross-polarity cases are already absent from
-    # full_plan (plan_aliases skips them), so additive never collides.
-    _contract = {c.lower() for c in _contract_ports}
-    additive_reset_map = {
-        p: full_plan[p] for p in full_plan
-        if p not in plan and p.lower() in _contract
-        and _rcv.classify_reset(p) is not None}
-    # ORGANIC #186 — an AUTHORITATIVE, COMPLETE top port enumeration (a generated
-    # L3 port table / L9 top_ports) IS the documented interface. The #792
-    # additive dual-spelling reset would ADD a canonical synonym NOT in that
-    # enumeration → a phantom extra top port (the reported 9th port) that breaks
-    # the documented N-port contract and that `spec_conformance_check` then FAILs
-    # (a deviation the flow itself introduced). When the contract is
-    # authoritative, PURE-SUPPRESS any additive reset whose contract spelling is
-    # enumerated but whose canonical synonym is NOT — delivering only the
-    # documented spelling (the un-additive #689 behavior). A conforming hidden TB
-    # binds the DOCUMENTED spelling, so no #518/#792 case regresses. No-op for
-    # free-text prompts (RTLLM/VerilogEval ship no structured L3/L9 →
-    # authoritative_contract_ports returns None) → #792 additive kept there.
-    if additive_reset_map:
-        if _auth_ports is not None:
-            for _p in list(additive_reset_map):
-                _canon = str(additive_reset_map[_p]).lower()
-                if _p.lower() in _auth_ports and _canon not in _auth_ports:
-                    del additive_reset_map[_p]
-    if not plan and not additive_reset_map:
+    # Preserve a native port explicitly bound by the resolved top's L9.
+    if resolved_via_chip_top:
+        l9_info = _rcvar_l9_top_ports(project)
+        if l9_info is not None:
+            l9_top, l9_names = l9_info
+            pinned = sorted(set(full_plan) & l9_names)
+            if l9_top == tgt and pinned:
+                return StepResult(
+                    "reset_clock_variant_aliases", "SKIP", time.time() - t0,
+                    f"L9 declares native port spelling(s) {pinned} for "
+                    f"top_module {tgt!r}; refusing to rename against the "
+                    f"project's own contract")
+    # Port recognition only proposes a same-polarity spelling. Authorization
+    # must come from the requested interface, not guessed downstream bindings.
+    # Loose mentions can preserve a source spelling but cannot authorize a new
+    # one. In particular, naming two resets does not say they are combinable.
+    _requested_ports = {str(n).lower() for n in (_auth_ports or ())}
+    plan = {p: canon for p, canon in plan.items()
+            if canon.lower() in _requested_ports
+            and p.lower() not in _requested_ports}
+    # Automatic flow never constructs additive aliases. Retain the emitter's
+    # explicit additive_reset_map API for intentional compatibility callers.
+    if not plan:
         _why = (
                 f"authoritative top-port contract declares reset spelling(s) "
                 f"{_authoritative_reset_pins}; preserving them per port even "
@@ -5318,145 +5273,33 @@ def step_reset_clock_variant_aliases(project: Path, top: str) -> StepResult:
                 if _authoritative_reset_pins else
                 "the design's own contract already declares the standard "
                 "spelling(s) — refusing to rename the TB-facing contract (#689)"
-                if _contract_ports and full_plan
-                else "top reset/clock ports already canonical")
+                if any(p.lower() in _contract_ports for p in full_plan)
+                else "no authoritative interface requests an equivalent "
+                     "reset/clock spelling; preserving the authored ports"
+                if full_plan else "top reset/clock ports already canonical")
         return StepResult("reset_clock_variant_aliases", "SKIP",
                           time.time() - t0, _why)
-    # ORGANIC #618 — spec-aware suppression (applies UNCONDITIONALLY, before
-    # the resolved_via_chip_top-gated L9 guard below). The alias emitter
-    # renames a recognised non-canonical clock/reset spelling to a hardcoded
-    # canon for the legitimate #518 hidden-TB-uses-a-different-equivalent-name
-    # case. But when the design's OWN staged constraint SDC
-    # (input/constraints/*.sdc + input/reference_flow/**/*.sdc — the
-    # upstream-verified ground truth, same ranking as #554/#623) already pins
-    # the ORIGINAL spelling (`set clk_port_name clk_i` / `create_clock
-    # [get_ports {clk_i}]`), renaming it is GUARANTEED to break that SDC's
-    # get_ports AND the l9_rtl_pin_consistency_check (the sole strict-
-    # structural gate → Overall:FAIL). The design's own constraint IS the
-    # contract → drop those renames. The #618 ibex case took the directly-
-    # authored chip_top branch (resolved_via_chip_top=False) AND its L9 top
-    # (ibex_top) != tgt (chip_top), so the existing L9 guard never fired —
-    # hence this must be unconditional and SDC-keyed. No-leak: the #518
-    # designs ship NO staged SDC pinning the renamed port, so pinned is empty
-    # and the rename proceeds unchanged. Chip-AGNOSTIC: standard-SDC syntax +
-    # set-membership on port spellings, no chip names.
+    # A constraint pinning the native spelling vetoes an otherwise requested
+    # rename: rewriting the port would break the staged SDC contract.
     try:
         import sdc_constraints as _rcv_sdc
         _pinned_sdc = _rcv_sdc.staged_constrained_ports(project)
     except Exception:  # pragma: no cover — defensive
         _pinned_sdc = set()
-    # #792 — an SDC-pinned reset stays PURE-SUPPRESSED (not additive): the
-    # design ships a real constraint binding the spec spelling, so keep #618
-    # behavior exactly (no extra canonical port that could surprise the SDC).
-    _sdc_pinned = sorted({p for p in plan if p.lower() in _pinned_sdc}
-                         | {p for p in additive_reset_map
-                            if p.lower() in _pinned_sdc})
+    _sdc_pinned = sorted(p for p in plan if p.lower() in _pinned_sdc)
     for _p in _sdc_pinned:
-        plan.pop(_p, None)
-        additive_reset_map.pop(_p, None)
-    if not plan and not additive_reset_map:
+        del plan[_p]
+    if not plan:
         return StepResult(
             "reset_clock_variant_aliases", "SKIP", time.time() - t0,
-            (f"design's staged constraint SDC already pins the original "
-             f"spelling(s) {_sdc_pinned}; renaming would break the SDC "
-             if _sdc_pinned else
-             # MEASURED: this branch printed "...pins the original spelling(s) []"
-             # on a project staging no SDC at all. Both maps can already be empty
-             # because an EARLIER suppression (#689 / #186) emptied them, and this
-             # return then blamed an SDC it has no case for. The SKIP is CORRECT —
-             # proceeding renames the inner module and emits a wrapper for an EMPTY
-             # alias map, which is the structural change #186 exists to prevent —
-             # but the REASON was wrong, and a reader chasing a phantom SDC is a
-             # real cost. Only the message changes here; the control flow does not.
-             f"nothing left to alias: an earlier contract-aware suppression "
-             f"emptied the plan (no SDC is staged; #618's own cause is empty) "
-             f"and renaming would break the SDC ") +
-            f"get_ports + l9_rtl_pin_consistency_check — refusing to rename "
-            f"the design's own contract (#618)")
-    # In-flow EVIDENCE guard (#518 round-4 adversarial review, HIGH): when the
-    # alias target was resolved from the runner's default top-name AND the
-    # project's L9 explicitly declares the NATIVE spelling of a port this plan
-    # would rename for that very module, the runner's own L9-driven TBs
-    # (full-stack / oracle) bind that spelling — the rename would hard-FAIL
-    # them on a healthy design. The only in-flow evidence says the native
-    # spelling is the contract → SKIP. With no such L9 evidence (no L9 / empty
-    # top_ports / different top_module) the field-verified #518 doctrine
-    # applies: hidden benchmark TBs converge on the canonical spellings.
-    if resolved_via_chip_top:
-        l9_info = _rcvar_l9_top_ports(project)
-        if l9_info is not None:
-            l9_top, l9_names = l9_info
-            pinned = sorted(set(plan) & l9_names)
-            if l9_top == tgt:
-                # #792 — an additive reset L9 pins stays PURE-SUPPRESSED (#689):
-                # the in-flow L9-driven TB binds the spec spelling the un-aliased
-                # core already exposes, so drop it from the additive set.
-                for _p in [p for p in additive_reset_map if p in l9_names]:
-                    del additive_reset_map[_p]
-                if pinned:
-                    # Preserve the exact field-verified #518 SKIP when there is
-                    # nothing additive to keep; otherwise emit the additive
-                    # wrapper but drop only the L9-pinned renames.
-                    if not additive_reset_map:
-                        return StepResult(
-                            "reset_clock_variant_aliases", "SKIP",
-                            time.time() - t0,
-                            f"L9 declares native port spelling(s) {pinned} for "
-                            f"top_module {tgt!r}; in-flow L9-driven TBs bind "
-                            f"them — refusing to rename against the project's "
-                            f"own contract")
-                    for _p in pinned:
-                        del plan[_p]
-    # ORGANIC-20260704 — WHITEBOX-SAFE FLAT MODE. When there is no additive
-    # dual-spelling need AND no internal caller instantiates the top (so no
-    # `.orig(...)` connection would break), edit the top IN PLACE — rename its
-    # reset/clock ports to canonical in its OWN header + add 1-bit internal wire
-    # aliases — instead of hiding the core in a `<top>__rcvar_inner` submodule.
-    # The two-level wrapper put the design's internal signals one instance down,
-    # breaking hidden whitebox testbenches that bind them hierarchically
-    # (`dut.<internal>`). Flat mode keeps ONE module under the top name with
-    # internals directly accessible. Strictly narrower than the wrapper path
-    # (no additive, no internal callers) → zero regression to those cases; falls
-    # back to the wrapper below on any non-ANSI header / unfound port / compile
-    # failure.
-    # OPT-IN (default OFF → the wrapper stays the shipped default; zero change to
-    # the general silicon flow and its #518/#689/#792 guard tests). The whitebox
-    # delivery context (CVDP hidden-cocotb harnesses that bind `dut.<internal>`)
-    # sets VIBE_IC_RCVAR_WHITEBOX_FLAT=1 to prefer the flat, hierarchy-preserving
-    # transform there.
+            f"design's staged constraint SDC already pins the original "
+            f"spelling(s) {_sdc_pinned}; refusing to rename the design's "
+            f"own contract (#618)")
+    # Explicit flat-output preference changes representation only AFTER the
+    # public interface has authorized the rename. It is not naming authority.
+    # Keep internal references accessible when no parent needs rewiring.
     _flat_optin = os.environ.get("VIBE_IC_RCVAR_WHITEBOX_FLAT") == "1"
-    # ORGANIC-20260704 residual (the "4th mechanism") — ADDITIVE dual-spelling
-    # reset under the WHITEBOX opt-in. The additive wrapper exposes BOTH the
-    # design's own reset spelling AND a canonical synonym, AND-combined
-    # (`wire r__rcvar_net = resetn & rst_n`), with the synonym pulled to its
-    # inactive level via a `tri1`/`tri0` net-type. That pull is NOT honored by
-    # the official Icarus-13 cocotb scorer: a hidden whitebox harness drives ONLY
-    # the design's own spelling (the one the author wrote, which IS in the
-    # contract) and leaves the synonym UNDRIVEN → `resetn & <undriven tri1>`
-    # resolves to x → the design is frozen in reset forever (m_axis_valid stuck
-    # 0). PROVEN on cvdp_copilot_axi_stream_upscale_0001: the flat/original module
-    # PASSES the official scorer, the additive wrapper FAILS, and removing ONLY
-    # the additive synonym (keeping the design's own reset) restores PASS.
-    # In the whitebox delivery context the additive synonym bridge is never
-    # needed (the harness binds the design's own spelling), so under the opt-in
-    # SUPPRESS the additive map: apply the pure-rename flat transform if any
-    # rename remains, else deliver the original module unchanged. OPT-IN gated
-    # (default OFF) → the general silicon flow + its #518/#689/#792 additive
-    # guard tests are unchanged. §4.05: operates only on the design's own port
-    # contract, no oracle/harness read.
-    if _flat_optin and additive_reset_map and not parents:
-        _suppressed_additive = sorted(additive_reset_map)
-        additive_reset_map = {}
-        if not plan:
-            return StepResult(
-                "reset_clock_variant_aliases", "SKIP", time.time() - t0,
-                f"whitebox opt-in: additive dual-spelling reset synonym(s) "
-                f"{_suppressed_additive} suppressed (the hidden cocotb harness "
-                f"binds the design's own reset spelling and would leave the "
-                f"AND-combined synonym undriven → design frozen; "
-                f"ORGANIC-20260704 4th-mechanism, proven on "
-                f"axi_stream_upscale_0001). Delivering the original flat module.")
-    if _flat_optin and not additive_reset_map and not parents:
+    if _flat_optin and not parents:
         try:
             flat_txt = _rcv.emit_variant_alias_flat(target_txt, tgt, plan)
         except ValueError as e:                # cross-polarity guard
@@ -5490,7 +5333,7 @@ def step_reset_clock_variant_aliases(project: Path, top: str) -> StepResult:
         wrapper = _rcv.emit_variant_alias_wrapper(
             inner, ports, plan, wrapper_name=tgt,
             param_block=pblock, param_names=pnames, import_block=iblock,
-            additive_reset_map=additive_reset_map, localparam_defs=lpdefs)
+            localparam_defs=lpdefs)
     except ValueError as e:  # cross-polarity guard — never alias unsafely
         return StepResult("reset_clock_variant_aliases", "SKIP",
                           time.time() - t0, f"polarity-guard declined: {e}")
@@ -5559,15 +5402,10 @@ def step_reset_clock_variant_aliases(project: Path, top: str) -> StepResult:
     rewired = len(written) - 1
     resolved_note = (f" (resolved TB-facing leaf {tgt!r} from runner "
                      f"top-name {top!r})" if tgt != top else "")
-    _additive_note = (
-        f"; additive dual-spelling reset port(s) {additive_reset_map} "
-        f"(both contract + canonical exposed, polarity-safe — #792)"
-        if additive_reset_map else "")
     return StepResult(
         "reset_clock_variant_aliases", "PASS", time.time() - t0,
         f"top {tgt!r} reset/clock ports {plan} aliased to canonical; wrapper "
         f"takes the top name, inner renamed {inner!r}{resolved_note}"
-        f"{_additive_note}"
         + (f"; rewired {rewired} internal caller file(s) to the inner"
            if rewired else ""), written)
 

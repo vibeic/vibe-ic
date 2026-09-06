@@ -993,7 +993,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `report_belongs_to_project_check` | any | — | a runner report must be ABOUT the project it sits in. |
 | `reported_figure_artifact_backing_check` | any | — | the ARTIFACT-BACKING gate. |
 | `reports_subfolder_taxonomy_check` | any | — | enforce that `<project>/reports/` contains ONLY the 6 phase-aligned subfolders + 2 top-level summary markdown files (v1.6.25 hygiene gate). |
-| `reset_clock_variant_alias` | any | v0.3.18 | v0.3.18 (ORGANIC #518). |
+| `reset_clock_variant_alias` | any | — | Reset/clock spelling proposals and explicit public-interface adaptation. |
 | `reset_dependency_check` | any | — | deterministic compliance check derived from <chip-class> v040 debug. |
 | `reset_discipline_check` | any | — | deterministic reset-discipline lint. |
 | `residual_combinational_synth` | any | — | deterministic spec->RTL for the RESIDUAL "other" cluster of tiny combinational VerilogEval problems: the grab-bag left after the named st... |
@@ -2308,7 +2308,7 @@ _(no programs in this group)_
 - `report_belongs_to_project_check` — a runner report must be ABOUT the project it sits in.
 - `reported_figure_artifact_backing_check` — the ARTIFACT-BACKING gate.
 - `reports_subfolder_taxonomy_check` — enforce that `<project>/reports/` contains ONLY the 6 phase-aligned subfolders + 2 top-level summary markdown files (v1.6.25 hygiene gate).
-- `reset_clock_variant_alias` — v0.3.18 (ORGANIC #518).  _[v0.3.18]_
+- `reset_clock_variant_alias` — Reset/clock spelling proposals and explicit public-interface adaptation.
 - `reset_dependency_check` — deterministic compliance check derived from <chip-class> v040 debug.
 - `reset_discipline_check` — deterministic reset-discipline lint.
 - `residual_combinational_synth` — deterministic spec->RTL for the RESIDUAL "other" cluster of tiny combinational VerilogEval problems: the grab-bag left after the named st...
