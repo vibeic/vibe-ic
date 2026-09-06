@@ -1545,6 +1545,17 @@ steps:
                                             # ripple add/compare chain is a
                                             # slow-corner (SS) closure risk.
                                             # Reports, never blocks.
+      - counter_decode_lookahead_phase_check # ADVISORY: a level decoded from
+                                            # a counter LOOKAHEAD and
+                                            # registered on the edge that
+                                            # advances that counter is
+                                            # published one cycle early.
+                                            # Routed ESCALATE by
+                                            # gate_directed_rtl_repair; may
+                                            # never move this step's verdict
+                                            # (a lookahead decode is legal
+                                            # when the spec asks the level to
+                                            # lead). Reports, never blocks.
       - fresh_agent_rtl_bug_density_metric  # ADVISORY: counts fix:/bug:/hotfix:
                                             # commits over this project's RTL
                                             # paths. Observability, not a
