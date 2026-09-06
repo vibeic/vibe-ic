@@ -176,6 +176,7 @@ Exit codes:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import sys
@@ -744,6 +745,58 @@ def _read_spec(path: Path) -> Tuple[str, bool]:
     return text, path.suffix.lower() == ".json"
 
 
+def validate_spec_clarification(review: object, sources: Dict[str, str]) -> dict:
+    """Validate an AI-identified missing definition, never infer one from prose.
+
+    This is a source-bound question, NOT a proven RTL defect or a waiver.
+    Absent review means NOT_REVIEWED, not that the spec is unambiguous. Binding
+    the entire supplied corpus prevents a request about one chapter silently
+    surviving an answer supplied in another. No PASS/resolved token is accepted;
+    an amended spec needs a fresh ordinary review and all normal design gates.
+    D1 remains ADVISORY; consumers own their existing acceptance boundary.
+    """
+    if review is None:
+        return {"status": "NOT_REVIEWED", "requests": [], "errors": []}
+    errors: List[str] = []
+    requests: List[dict] = []
+    if not isinstance(review, dict):
+        return {"status": "INVALID", "requests": [],
+                "errors": ["spec clarification must be an object"]}
+    if review.get("schema") != "vibeic.spec_clarification.v1":
+        errors.append("spec clarification schema must be vibeic.spec_clarification.v1")
+    by_hash = {hashlib.sha256(text.encode()).hexdigest(): text
+               for text in sources.values()}
+    hashes = review.get("source_sha256")
+    if (not by_hash or not isinstance(hashes, list)
+            or not all(isinstance(h, str) for h in hashes)
+            or len(set(hashes)) != len(hashes)
+            or set(hashes) != set(by_hash)):
+        errors.append("source_sha256 must bind every distinct supplied source exactly")
+    raw_requests = review.get("requests")
+    if not isinstance(raw_requests, list) or not raw_requests:
+        errors.append("spec clarification requests must be a non-empty list")
+        raw_requests = []
+    for index, request in enumerate(raw_requests):
+        prefix = f"requests[{index}]"
+        if not isinstance(request, dict):
+            errors.append(f"{prefix} must be an object")
+            continue
+        source_hash = request.get("source_sha256")
+        text = by_hash.get(source_hash, "") if isinstance(source_hash, str) else ""
+        excerpt = request.get("excerpt")
+        if (not isinstance(excerpt, str) or not excerpt.strip()
+                or " ".join(excerpt.split()) not in " ".join(text.split())):
+            errors.append(f"{prefix}.excerpt must quote its bound source")
+        for field in ("missing_information", "question"):
+            value = request.get(field)
+            if not isinstance(value, str) or len(value.strip()) < 16:
+                errors.append(f"{prefix}.{field} must give a concrete description")
+        requests.append({key: request.get(key) for key in (
+            "source_sha256", "excerpt", "missing_information", "question")})
+    return {"status": "INVALID" if errors else "SPEC_CLARIFICATION_REQUIRED",
+            "requests": requests if not errors else [], "errors": errors}
+
+
 def _unread_siblings(files: List[Path],
                      exclude: Optional[Path] = None) -> List[Path]:
     """Spec-shaped files sitting in the SAME directories as the ones we were
@@ -781,6 +834,8 @@ def main() -> int:
     ap.add_argument("--strict", action="store_true",
                     help="Fail (exit 1) on any WARN finding")
     ap.add_argument("--json", dest="json_out", help="Write findings as JSON to this path")
+    ap.add_argument("--clarification-review",
+                    help="Source-bound AI questions; default: reports/spec_clarification_review.json")
     a = ap.parse_args()
 
     specs = list(a.paths) + ([a.spec] if a.spec else [])
@@ -795,9 +850,11 @@ def main() -> int:
     # chapter of it, so every readable prose document is collected here and the
     # checklist is run ONCE over the lot, after this loop.
     corpus_docs: List[Tuple[str, str]] = []
+    raw_sources: Dict[str, str] = {}
     for f in files:
         try:
             text, is_json = _read_spec(f)
+            raw_sources[str(f)] = text
             if len(text.strip()) < _MIN_SPEC_CHARS:
                 all_findings.append({"code": "spec-too-short", "severity": "INFO",
                                      "message": f"spec under {_MIN_SPEC_CHARS} chars — "
@@ -836,6 +893,21 @@ def main() -> int:
                 + " — widen the caller's pattern if these are part of the spec."),
             "spec": "(corpus)"})
 
+    review_path = Path(a.clarification_review or "reports/spec_clarification_review.json")
+    clarification = validate_spec_clarification(None, raw_sources)
+    if a.clarification_review or review_path.exists():
+        try:
+            declaration = json.loads(review_path.read_text())
+            # A present null file is malformed, not an absent review.
+            clarification = validate_spec_clarification(
+                declaration if declaration is not None else {}, raw_sources)
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            clarification = {"status": "INVALID", "requests": [],
+                             "errors": [f"clarification review unreadable: {exc}"]}
+    for error in clarification["errors"]:
+        all_findings.append({"code": "spec-clarification-invalid", "severity": "ERROR",
+                             "message": error, "spec": str(review_path)})
+
     n_err = sum(1 for d in all_findings if d["severity"] == "ERROR")
     n_warn = sum(1 for d in all_findings if d["severity"] == "WARN")
     fail = n_err > 0 or (a.strict and n_warn > 0)
@@ -845,11 +917,15 @@ def main() -> int:
           f"[{parsed} spec(s) linted of {len(files) + len(unread)} candidate(s)]")
     for d in all_findings:
         print(f"  [{d['severity']}] {d['code']}: {d['message']}")
+    print(f"spec clarification: {clarification['status']} (D1 ADVISORY; not RTL repair evidence)")
+    for request in clarification["requests"]:
+        print(f"  Missing: {request['missing_information']}")
+        print(f"  Question: {request['question']}")
 
     if a.json_out:
         Path(a.json_out).write_text(json.dumps(
             {"verdict": verdict, "errors": n_err, "warnings": n_warn,
-             "findings": all_findings}, indent=2) + "\n")
+             "findings": all_findings, "spec_clarification": clarification}, indent=2) + "\n")
 
     return 1 if fail else 0
 

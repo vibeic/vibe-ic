@@ -17,6 +17,14 @@
       "bucket_B_skill_file": "agents/ic-expert-agent.md",
       "bucket_B_section_anchor": "NL spec phrase patterns"
     },
+    "phase1.spec_review": {
+      "description": "Source-bound AI questions about missing spec definitions. The shared validator checks the supplied corpus and evidence; it never invents a predicate or treats a question as RTL repair proof. D1 stays advisory, while the benchmark adapter retains its existing acceptance/scoring boundary.",
+      "bucket_A_program": "programs/spec_review_lint.py",
+      "bucket_A_related": [
+        "programs/benchmark_dispatch.py"
+      ],
+      "bucket_B_skill_file": "skills/spec-review/SKILL.md"
+    },
     "phase2.detect_ic_class": {
       "bucket_A_program": "programs/ic_class_profile.py",
       "bucket_A_related": [

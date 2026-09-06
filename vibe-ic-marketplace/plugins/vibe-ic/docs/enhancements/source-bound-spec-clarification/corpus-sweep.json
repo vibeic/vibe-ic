@@ -1,0 +1,850 @@
+{
+  "schema": "vibeic.spec_clarification_capture_measurement.v1",
+  "base_commit": "854d302959d86d6faa9721bea784a989f5e23a17",
+  "base_version": "1.18.43",
+  "corpus_count": 69,
+  "new_false_positive_count": 0,
+  "structural_verdict_or_finding_deltas": 0,
+  "coverage_limit": "69 public-input corpora only; absence of a review is NOT_REVIEWED, not proof of semantic completeness.",
+  "benchmark_run_or_score_performed": false,
+  "protected_file_count": 139,
+  "protected_hashes_unchanged": true,
+  "acceptance_ledger_sha256": "d83e5d7aa4ea5f9c712dd1fd1542a3e354cfde670ce1e2e8aff1286ec01e2eaa",
+  "real_source_probe": {
+    "id": "cvdp_copilot_64b66b_decoder_0011",
+    "source_sha256": "3006b2809a3a72dea027d28fd57b18eba75fca9bcb71abd9243d2ae329bf9284",
+    "declaration_sha256": "4d0f1d74da9eb49a5c26441ad34d703b2216b68a28e73bde813e3fac0ecedfaf",
+    "status": "SPEC_CLARIFICATION_REQUIRED",
+    "purpose": "source-bound diagnostic mechanics, not independent review or RTL repair"
+  },
+  "rows": [
+    {
+      "id": "cvdp_copilot_64b66b_decoder_0011",
+      "source_sha256": [
+        "3006b2809a3a72dea027d28fd57b18eba75fca9bcb71abd9243d2ae329bf9284"
+      ],
+      "baseline_verdict": "FAIL",
+      "candidate_verdict": "FAIL",
+      "baseline_returncode": 1,
+      "candidate_returncode": 1,
+      "changed_fields": [],
+      "clarification_status": "NOT_REVIEWED"
+    },
+    {
+      "id": "cvdp_copilot_64b66b_encoder_0009",
+      "source_sha256": [
+        "dd820fd49805513826c6845aa713e1a484772751f2babb5aa8af96239abfe3a8"
+      ],
+      "baseline_verdict": "FAIL",
+      "candidate_verdict": "FAIL",
+      "baseline_returncode": 1,
+      "candidate_returncode": 1,
+      "changed_fields": [],
+      "clarification_status": "NOT_REVIEWED"
+    },
+    {
+      "id": "cvdp_copilot_Serial_Line_Converter_0011",
+      "source_sha256": [
+        "bf28bb075f142d29a98c71414136bea74b84d0127f92c93d0b29d3f372b32c1a"
+      ],
+      "baseline_verdict": "FAIL",
+      "candidate_verdict": "FAIL",
+      "baseline_returncode": 1,
+      "candidate_returncode": 1,
+      "changed_fields": [],
+      "clarification_status": "NOT_REVIEWED"
+    },
+    {
+      "id": "cvdp_copilot_ahb_clk_counter_0001",
+      "source_sha256": [
+        "30be0e36a22b3eaa954f324f4b49cddaaf1557d124b2bec242ba55aef2bd256e"
+      ],
+      "baseline_verdict": "FAIL",
+      "candidate_verdict": "FAIL",
+      "baseline_returncode": 1,
+      "candidate_returncode": 1,
+      "changed_fields": [],
+      "clarification_status": "NOT_REVIEWED"
+    },
+    {
+      "id": "cvdp_copilot_apb_dsp_op_0002",
+      "source_sha256": [
+        "36e03c61bd558dd9d61f7340fc6d858d6b7cf16e023d7672c4805c0aeb664bef"
+      ],
+      "baseline_verdict": "FAIL",
+      "candidate_verdict": "FAIL",
+      "baseline_returncode": 1,
+      "candidate_returncode": 1,
+      "changed_fields": [],
+      "clarification_status": "NOT_REVIEWED"
+    },
+    {
+      "id": "cvdp_copilot_apb_gpio_0001",
+      "source_sha256": [
+        "ad8d42f6c9a9b3a6fc65cf5cdbfb4e67882384f45597e69daa14fdcc9cd59165"
+      ],
+      "baseline_verdict": "FAIL",
+      "candidate_verdict": "FAIL",
+      "baseline_returncode": 1,
+      "candidate_returncode": 1,
+      "changed_fields": [],
+      "clarification_status": "NOT_REVIEWED"
+    },
+    {
+      "id": "cvdp_copilot_apb_gpio_0005",
+      "source_sha256": [
+        "89ecb6b7f1f2543a06e6f56d97054e62da21d9d1b5c2065c68b133a6164e5e2f"
+      ],
+      "baseline_verdict": "FAIL",
+      "candidate_verdict": "FAIL",
+      "baseline_returncode": 1,
+      "candidate_returncode": 1,
+      "changed_fields": [],
+      "clarification_status": "NOT_REVIEWED"
+    },
+    {
+      "id": "cvdp_copilot_arithmetic_progression_generator_0015",
+      "source_sha256": [
+        "987380ad2f36983b81237156953eee81bf4a8c94ec10d7aeb6dd7f9cd0078784"
+      ],
+      "baseline_verdict": "FAIL",
+      "candidate_verdict": "FAIL",
+      "baseline_returncode": 1,
+      "candidate_returncode": 1,
+      "changed_fields": [],
+      "clarification_status": "NOT_REVIEWED"
+    },
+    {
+      "id": "cvdp_copilot_axi_alu_0001",
+      "source_sha256": [
+        "d8ad9c48d300d5174bedff2f86c18600bba496facb111e46b51637fec896f22f"
+      ],
+      "baseline_verdict": "FAIL",
+      "candidate_verdict": "FAIL",
+      "baseline_returncode": 1,
+      "candidate_returncode": 1,
+      "changed_fields": [],
+      "clarification_status": "NOT_REVIEWED"
+    },
+    {
+      "id": "cvdp_copilot_axi_stream_downscale_0001",
+      "source_sha256": [
+        "08012b656d720beb99194751c07d04a5bf9dc752d19e56f87cc6a5d35f6b7bf3"
+      ],
+      "baseline_verdict": "FAIL",
+      "candidate_verdict": "FAIL",
+      "baseline_returncode": 1,
+      "candidate_returncode": 1,
+      "changed_fields": [],
+      "clarification_status": "NOT_REVIEWED"
+    },
+    {
+      "id": "cvdp_copilot_axi_stream_upscale_0001",
+      "source_sha256": [
+        "74a770f3e7757cfe62776a8a2c0028d9eb92021b38e2637409b11be7470ed5f2"
+      ],
+      "baseline_verdict": "FAIL",
+      "candidate_verdict": "FAIL",
+      "baseline_returncode": 1,
+      "candidate_returncode": 1,
+      "changed_fields": [],
+      "clarification_status": "NOT_REVIEWED"
+    },
+    {
+      "id": "cvdp_copilot_axi_tap_0009",
+      "source_sha256": [
+        "d193cfb10f96d0386d9c70d60738e922da569358aa5d1c0b3dd40ae35ac47913"
+      ],
+      "baseline_verdict": "FAIL",
+      "candidate_verdict": "FAIL",
+      "baseline_returncode": 1,
+      "candidate_returncode": 1,
+      "changed_fields": [],
+      "clarification_status": "NOT_REVIEWED"
+    },
+    {
+      "id": "cvdp_copilot_axis_border_gen_0014",
+      "source_sha256": [
+        "c0843e8ea08133a15a22ae4bf968ff4f927fd23c97e1e771e6c3bf979d4a4311"
+      ],
+      "baseline_verdict": "FAIL",
+      "candidate_verdict": "FAIL",
+      "baseline_returncode": 1,
+      "candidate_returncode": 1,
+      "changed_fields": [],
+      "clarification_status": "NOT_REVIEWED"
+    },
+    {
+      "id": "cvdp_copilot_cache_lru_0019",
+      "source_sha256": [
+        "f3fbbe8dd2b3ab3a2c12ee0b4fd435e458ef8e70420c69212103d6bed0d1f74d"
+      ],
+      "baseline_verdict": "FAIL",
+      "candidate_verdict": "FAIL",
+      "baseline_returncode": 1,
+      "candidate_returncode": 1,
+      "changed_fields": [],
+      "clarification_status": "NOT_REVIEWED"
+    },
+    {
+      "id": "cvdp_copilot_clock_jitter_detection_module_0003",
+      "source_sha256": [
+        "85116bdf49c93e62cdec60deff74766b9f91d3d84fb492e33ec7f31b00b8e6d9"
+      ],
+      "baseline_verdict": "FAIL",
+      "candidate_verdict": "FAIL",
+      "baseline_returncode": 1,
+      "candidate_returncode": 1,
+      "changed_fields": [],
+      "clarification_status": "NOT_REVIEWED"
+    },
+    {
+      "id": "cvdp_copilot_compression_engine_0001",
+      "source_sha256": [
+        "da44749f0a67fb3ceb0c23a45c3eb70d87a06420c9365ee03aaa19e27dc1f83f"
+      ],
+      "baseline_verdict": "FAIL",
+      "candidate_verdict": "FAIL",
+      "baseline_returncode": 1,
+      "candidate_returncode": 1,
+      "changed_fields": [],
+      "clarification_status": "NOT_REVIEWED"
+    },
+    {
+      "id": "cvdp_copilot_concatenate_0001",
+      "source_sha256": [
+        "ed734eb789c94c64026768731c77f52f22402a100c3522a39b32ce794da7938a"
+      ],
+      "baseline_verdict": "FAIL",
+      "candidate_verdict": "FAIL",
+      "baseline_returncode": 1,
+      "candidate_returncode": 1,
+      "changed_fields": [],
+      "clarification_status": "NOT_REVIEWED"
+    },
+    {
+      "id": "cvdp_copilot_configurable_digital_low_pass_filter_0011",
+      "source_sha256": [
+        "5886de7a089fdbfdcbb606fe567725ccefc1dccc3039fb3baea62a8029033152"
+      ],
+      "baseline_verdict": "FAIL",
+      "candidate_verdict": "FAIL",
+      "baseline_returncode": 1,
+      "candidate_returncode": 1,
+      "changed_fields": [],
+      "clarification_status": "NOT_REVIEWED"
+    },
+    {
+      "id": "cvdp_copilot_data_bus_controller_0001",
+      "source_sha256": [
+        "0c4e349a19813f94b98e07659e182aa46dd7158161a294939baec73cfaa3936a"
+      ],
+      "baseline_verdict": "FAIL",
+      "candidate_verdict": "FAIL",
+      "baseline_returncode": 1,
+      "candidate_returncode": 1,
+      "changed_fields": [],
+      "clarification_status": "NOT_REVIEWED"
+    },
+    {
+      "id": "cvdp_copilot_digital_dice_roller_0001",
+      "source_sha256": [
+        "e8b1faa636a36193320784f0bd514a3b177e07edefe18ab2d7cf4e7b59e0bfa6"
+      ],
+      "baseline_verdict": "FAIL",
+      "candidate_verdict": "FAIL",
+      "baseline_returncode": 1,
+      "candidate_returncode": 1,
+      "changed_fields": [],
+      "clarification_status": "NOT_REVIEWED"
+    },
+    {
+      "id": "cvdp_copilot_digital_stopwatch_0001",
+      "source_sha256": [
+        "83dad7b6395da90376b07b1082511fc4c80d05501531171f428eb8e53f631455"
+      ],
+      "baseline_verdict": "FAIL",
+      "candidate_verdict": "FAIL",
+      "baseline_returncode": 1,
+      "candidate_returncode": 1,
+      "changed_fields": [],
+      "clarification_status": "NOT_REVIEWED"
+    },
+    {
+      "id": "cvdp_copilot_digital_stopwatch_0012",
+      "source_sha256": [
+        "2226a651da3a196ecd06bd99ad963ac5086340447d3a5cfb0a4c414825611294"
+      ],
+      "baseline_verdict": "FAIL",
+      "candidate_verdict": "FAIL",
+      "baseline_returncode": 1,
+      "candidate_returncode": 1,
+      "changed_fields": [],
+      "clarification_status": "NOT_REVIEWED"
+    },
+    {
+      "id": "cvdp_copilot_elevator_control_0006",
+      "source_sha256": [
+        "be34a36a85eb225dd837d326d484ebe14078886887ede1099c2c5cdfb712e37a"
+      ],
+      "baseline_verdict": "FAIL",
+      "candidate_verdict": "FAIL",
+      "baseline_returncode": 1,
+      "candidate_returncode": 1,
+      "changed_fields": [],
+      "clarification_status": "NOT_REVIEWED"
+    },
+    {
+      "id": "cvdp_copilot_elevator_control_0009",
+      "source_sha256": [
+        "dc506125fda3fb4607d8ccb10416a418b7b0236a248c833f25ecebd31d85c0ae"
+      ],
+      "baseline_verdict": "FAIL",
+      "candidate_verdict": "FAIL",
+      "baseline_returncode": 1,
+      "candidate_returncode": 1,
+      "changed_fields": [],
+      "clarification_status": "NOT_REVIEWED"
+    },
+    {
+      "id": "cvdp_copilot_elevator_control_0026",
+      "source_sha256": [
+        "5c8877c25b706712a76123d035cc7f65ff407640f4f83ef424c569ad82108438"
+      ],
+      "baseline_verdict": "FAIL",
+      "candidate_verdict": "FAIL",
+      "baseline_returncode": 1,
+      "candidate_returncode": 1,
+      "changed_fields": [],
+      "clarification_status": "NOT_REVIEWED"
+    },
+    {
+      "id": "cvdp_copilot_elevator_control_0033",
+      "source_sha256": [
+        "2b30686a91dccaf5d68b57b4350387667e136cbce9a67ce9c53de873b6b8f23a"
+      ],
+      "baseline_verdict": "FAIL",
+      "candidate_verdict": "FAIL",
+      "baseline_returncode": 1,
+      "candidate_returncode": 1,
+      "changed_fields": [],
+      "clarification_status": "NOT_REVIEWED"
+    },
+    {
+      "id": "cvdp_copilot_elevator_control_0036",
+      "source_sha256": [
+        "d3965f45df0fa70318135e2760e7f89b442d3e590d45c4bad68da859adcf06d0"
+      ],
+      "baseline_verdict": "FAIL",
+      "candidate_verdict": "FAIL",
+      "baseline_returncode": 1,
+      "candidate_returncode": 1,
+      "changed_fields": [],
+      "clarification_status": "NOT_REVIEWED"
+    },
+    {
+      "id": "cvdp_copilot_ethernet_packet_parser_0001",
+      "source_sha256": [
+        "3e6ba77b44acc43fd0b6ada5445f375d404e005ad47b76b8f8418858d376fd39"
+      ],
+      "baseline_verdict": "FAIL",
+      "candidate_verdict": "FAIL",
+      "baseline_returncode": 1,
+      "candidate_returncode": 1,
+      "changed_fields": [],
+      "clarification_status": "NOT_REVIEWED"
+    },
+    {
+      "id": "cvdp_copilot_fan_controller_0008",
+      "source_sha256": [
+        "78e24f9496dd4d960cbf0be7262016a2725bdffbe8f96400f32efc152b45a97e"
+      ],
+      "baseline_verdict": "FAIL",
+      "candidate_verdict": "FAIL",
+      "baseline_returncode": 1,
+      "candidate_returncode": 1,
+      "changed_fields": [],
+      "clarification_status": "NOT_REVIEWED"
+    },
+    {
+      "id": "cvdp_copilot_fibonacci_series_0001",
+      "source_sha256": [
+        "b85e96731ed3e032b6a261af31cb46ed5c441c80919a5e1854e135bba244850f"
+      ],
+      "baseline_verdict": "FAIL",
+      "candidate_verdict": "FAIL",
+      "baseline_returncode": 1,
+      "candidate_returncode": 1,
+      "changed_fields": [],
+      "clarification_status": "NOT_REVIEWED"
+    },
+    {
+      "id": "cvdp_copilot_fifo_async_0001",
+      "source_sha256": [
+        "33eadc59dbc91891a23fad89731623c79b9e2e1477792c66b920689f689cde7b"
+      ],
+      "baseline_verdict": "FAIL",
+      "candidate_verdict": "FAIL",
+      "baseline_returncode": 1,
+      "candidate_returncode": 1,
+      "changed_fields": [],
+      "clarification_status": "NOT_REVIEWED"
+    },
+    {
+      "id": "cvdp_copilot_fifo_to_axis_0001",
+      "source_sha256": [
+        "ba94790feb495e681e26592baef4380c56ada29c6a37a7ae472504621cf05136"
+      ],
+      "baseline_verdict": "FAIL",
+      "candidate_verdict": "FAIL",
+      "baseline_returncode": 1,
+      "candidate_returncode": 1,
+      "changed_fields": [],
+      "clarification_status": "NOT_REVIEWED"
+    },
+    {
+      "id": "cvdp_copilot_hebbian_rule_0012",
+      "source_sha256": [
+        "ff415df3dee64f0af90e4479de662a169663016584972ca8c921725dc032989d"
+      ],
+      "baseline_verdict": "FAIL",
+      "candidate_verdict": "FAIL",
+      "baseline_returncode": 1,
+      "candidate_returncode": 1,
+      "changed_fields": [],
+      "clarification_status": "NOT_REVIEWED"
+    },
+    {
+      "id": "cvdp_copilot_hebbian_rule_0017",
+      "source_sha256": [
+        "208a9aeea056d4f470efe981a36663453123dd5240529a14e7a318cfca55892f"
+      ],
+      "baseline_verdict": "FAIL",
+      "candidate_verdict": "FAIL",
+      "baseline_returncode": 1,
+      "candidate_returncode": 1,
+      "changed_fields": [],
+      "clarification_status": "NOT_REVIEWED"
+    },
+    {
+      "id": "cvdp_copilot_hmac_register_0001",
+      "source_sha256": [
+        "d7cb52430430abd951b73f052da2f041b62506c4d4e64514e97c14fa06570a74"
+      ],
+      "baseline_verdict": "FAIL",
+      "candidate_verdict": "FAIL",
+      "baseline_returncode": 1,
+      "candidate_returncode": 1,
+      "changed_fields": [],
+      "clarification_status": "NOT_REVIEWED"
+    },
+    {
+      "id": "cvdp_copilot_huffman_0001",
+      "source_sha256": [
+        "b3c42a7a6936c167b4a008c5b7096f1339dfd2fc248116dfa3145b969d738424"
+      ],
+      "baseline_verdict": "FAIL",
+      "candidate_verdict": "FAIL",
+      "baseline_returncode": 1,
+      "candidate_returncode": 1,
+      "changed_fields": [],
+      "clarification_status": "NOT_REVIEWED"
+    },
+    {
+      "id": "cvdp_copilot_image_rotate_0001",
+      "source_sha256": [
+        "d640d3fac49cc021621fdecb3927251dcb4553afe81c471a482dd6ec0e24dd59"
+      ],
+      "baseline_verdict": "FAIL",
+      "candidate_verdict": "FAIL",
+      "baseline_returncode": 1,
+      "candidate_returncode": 1,
+      "changed_fields": [],
+      "clarification_status": "NOT_REVIEWED"
+    },
+    {
+      "id": "cvdp_copilot_interrupt_controller_0014",
+      "source_sha256": [
+        "4babe34126248996e14cf9cb479752094b55150e82a07b469ba07a0be2d6e5c2"
+      ],
+      "baseline_verdict": "FAIL",
+      "candidate_verdict": "FAIL",
+      "baseline_returncode": 1,
+      "candidate_returncode": 1,
+      "changed_fields": [],
+      "clarification_status": "NOT_REVIEWED"
+    },
+    {
+      "id": "cvdp_copilot_interrupt_controller_0017",
+      "source_sha256": [
+        "c09e581fa1648120ba69cb31c850c39d9da8e23d7bcefa0b295eb6394e6436d0"
+      ],
+      "baseline_verdict": "FAIL",
+      "candidate_verdict": "FAIL",
+      "baseline_returncode": 1,
+      "candidate_returncode": 1,
+      "changed_fields": [],
+      "clarification_status": "NOT_REVIEWED"
+    },
+    {
+      "id": "cvdp_copilot_interrupt_controller_0019",
+      "source_sha256": [
+        "0a7905dfa3e3c88137ebe430dc09a1e70ff71a51c5e1665815b728e52276801b"
+      ],
+      "baseline_verdict": "FAIL",
+      "candidate_verdict": "FAIL",
+      "baseline_returncode": 1,
+      "candidate_returncode": 1,
+      "changed_fields": [],
+      "clarification_status": "NOT_REVIEWED"
+    },
+    {
+      "id": "cvdp_copilot_ir_receiver_0005",
+      "source_sha256": [
+        "1574f40814b80cbb48eeb8d3a1b1ebbbc750157aebe9552bffbdfb645bd4e7ee"
+      ],
+      "baseline_verdict": "FAIL",
+      "candidate_verdict": "FAIL",
+      "baseline_returncode": 1,
+      "candidate_returncode": 1,
+      "changed_fields": [],
+      "clarification_status": "NOT_REVIEWED"
+    },
+    {
+      "id": "cvdp_copilot_load_store_unit_0009",
+      "source_sha256": [
+        "b9a8cb049a6c7484154246b84d5e42f5aeb350365b12c1434511f184438058ee"
+      ],
+      "baseline_verdict": "FAIL",
+      "candidate_verdict": "FAIL",
+      "baseline_returncode": 1,
+      "candidate_returncode": 1,
+      "changed_fields": [],
+      "clarification_status": "NOT_REVIEWED"
+    },
+    {
+      "id": "cvdp_copilot_mux_synch_0011",
+      "source_sha256": [
+        "e80fa0a10c42304eef559f291ec4350195b56d7bb2a846058fde39eaf15eb8b9"
+      ],
+      "baseline_verdict": "FAIL",
+      "candidate_verdict": "FAIL",
+      "baseline_returncode": 1,
+      "candidate_returncode": 1,
+      "changed_fields": [],
+      "clarification_status": "NOT_REVIEWED"
+    },
+    {
+      "id": "cvdp_copilot_perceptron_0006",
+      "source_sha256": [
+        "024fb678bfbfb281c5b427a6e2c56fa30e69dc97a20844004542b6cb77647755"
+      ],
+      "baseline_verdict": "FAIL",
+      "candidate_verdict": "FAIL",
+      "baseline_returncode": 1,
+      "candidate_returncode": 1,
+      "changed_fields": [],
+      "clarification_status": "NOT_REVIEWED"
+    },
+    {
+      "id": "cvdp_copilot_perceptron_0013",
+      "source_sha256": [
+        "3732e7f7e62d3912d3da85439c13b695fc251a0e945c091aee5c0de2fd24902f"
+      ],
+      "baseline_verdict": "FAIL",
+      "candidate_verdict": "FAIL",
+      "baseline_returncode": 1,
+      "candidate_returncode": 1,
+      "changed_fields": [],
+      "clarification_status": "NOT_REVIEWED"
+    },
+    {
+      "id": "cvdp_copilot_ping_pong_buffer_0001",
+      "source_sha256": [
+        "0f1e097cb36db7ecaf3c1d780b16655b10c8cc9688dec5010ce01dcc90589750"
+      ],
+      "baseline_verdict": "FAIL",
+      "candidate_verdict": "FAIL",
+      "baseline_returncode": 1,
+      "candidate_returncode": 1,
+      "changed_fields": [],
+      "clarification_status": "NOT_REVIEWED"
+    },
+    {
+      "id": "cvdp_copilot_prbs_gen_0003",
+      "source_sha256": [
+        "32cf317283a223de7ccd30b5c59ae1d5d0d5fb9d4312e0e8e0413291b938326a"
+      ],
+      "baseline_verdict": "FAIL",
+      "candidate_verdict": "FAIL",
+      "baseline_returncode": 1,
+      "candidate_returncode": 1,
+      "changed_fields": [],
+      "clarification_status": "NOT_REVIEWED"
+    },
+    {
+      "id": "cvdp_copilot_reed_solomon_encoder_and_decoder_0005",
+      "source_sha256": [
+        "31dc33c29681d3dfa20775263d338587abf94e8d6e69bd8bca9ecd4451b24a77"
+      ],
+      "baseline_verdict": "FAIL",
+      "candidate_verdict": "FAIL",
+      "baseline_returncode": 1,
+      "candidate_returncode": 1,
+      "changed_fields": [],
+      "clarification_status": "NOT_REVIEWED"
+    },
+    {
+      "id": "cvdp_copilot_register_file_2R1W_0006",
+      "source_sha256": [
+        "76ac4af51b01a8bc41643151cb78a99b5b1e4675441f5020cd6bdef4f4a2c290"
+      ],
+      "baseline_verdict": "FAIL",
+      "candidate_verdict": "FAIL",
+      "baseline_returncode": 1,
+      "candidate_returncode": 1,
+      "changed_fields": [],
+      "clarification_status": "NOT_REVIEWED"
+    },
+    {
+      "id": "cvdp_copilot_restoring_division_0001",
+      "source_sha256": [
+        "1e47d6ec916dfb1fa8b5053332b97a5352839136ecbdb424cf30d03a00acfdaf"
+      ],
+      "baseline_verdict": "FAIL",
+      "candidate_verdict": "FAIL",
+      "baseline_returncode": 1,
+      "candidate_returncode": 1,
+      "changed_fields": [],
+      "clarification_status": "NOT_REVIEWED"
+    },
+    {
+      "id": "cvdp_copilot_rounding_0001",
+      "source_sha256": [
+        "2959059c7d231660c055823e2827a6096c86edc55c9f4b5e38adc69d2beea9e5"
+      ],
+      "baseline_verdict": "FAIL",
+      "candidate_verdict": "FAIL",
+      "baseline_returncode": 1,
+      "candidate_returncode": 1,
+      "changed_fields": [],
+      "clarification_status": "NOT_REVIEWED"
+    },
+    {
+      "id": "cvdp_copilot_scrambler_0018",
+      "source_sha256": [
+        "6f5a1273037c9499c570289a978b659f44b687dbb807447e95492beaee855eba"
+      ],
+      "baseline_verdict": "FAIL",
+      "candidate_verdict": "FAIL",
+      "baseline_returncode": 1,
+      "candidate_returncode": 1,
+      "changed_fields": [],
+      "clarification_status": "NOT_REVIEWED"
+    },
+    {
+      "id": "cvdp_copilot_sdram_controller_0001",
+      "source_sha256": [
+        "b92be1552b980dafe994dd9a394f70060feab775b43b7befd9b78120f1cbf489"
+      ],
+      "baseline_verdict": "FAIL",
+      "candidate_verdict": "FAIL",
+      "baseline_returncode": 1,
+      "candidate_returncode": 1,
+      "changed_fields": [],
+      "clarification_status": "NOT_REVIEWED"
+    },
+    {
+      "id": "cvdp_copilot_secure_ALU_0001",
+      "source_sha256": [
+        "d8b468f09629ff94e6fb39337e52c6f8dc6adddb40f734777456c393db36d8ce"
+      ],
+      "baseline_verdict": "FAIL",
+      "candidate_verdict": "FAIL",
+      "baseline_returncode": 1,
+      "candidate_returncode": 1,
+      "changed_fields": [],
+      "clarification_status": "NOT_REVIEWED"
+    },
+    {
+      "id": "cvdp_copilot_secure_read_write_register_bank_0001",
+      "source_sha256": [
+        "c87b7f933023ab4718fe3db7523912f3a049dc0488ae8eda026e531f85ce1272"
+      ],
+      "baseline_verdict": "FAIL",
+      "candidate_verdict": "FAIL",
+      "baseline_returncode": 1,
+      "candidate_returncode": 1,
+      "changed_fields": [],
+      "clarification_status": "NOT_REVIEWED"
+    },
+    {
+      "id": "cvdp_copilot_sequencial_binary_to_one_hot_decoder_0001",
+      "source_sha256": [
+        "35486b08c8c12fdfa8798145064064a03ef2d564c39678ed5f10e1ff84935983"
+      ],
+      "baseline_verdict": "FAIL",
+      "candidate_verdict": "FAIL",
+      "baseline_returncode": 1,
+      "candidate_returncode": 1,
+      "changed_fields": [],
+      "clarification_status": "NOT_REVIEWED"
+    },
+    {
+      "id": "cvdp_copilot_serial_in_parallel_out_0014",
+      "source_sha256": [
+        "7712cef5f2075161e2665b72e1cf8322eca77e8ece4dd2fe3d95f3d9c3a84de6"
+      ],
+      "baseline_verdict": "FAIL",
+      "candidate_verdict": "FAIL",
+      "baseline_returncode": 1,
+      "candidate_returncode": 1,
+      "changed_fields": [],
+      "clarification_status": "NOT_REVIEWED"
+    },
+    {
+      "id": "cvdp_copilot_simple_spi_0001",
+      "source_sha256": [
+        "4f444a5d95903715b25d13eb7cc9b8774a22d65efcc2a3f2bc892ea4e4c78888"
+      ],
+      "baseline_verdict": "FAIL",
+      "candidate_verdict": "FAIL",
+      "baseline_returncode": 1,
+      "candidate_returncode": 1,
+      "changed_fields": [],
+      "clarification_status": "NOT_REVIEWED"
+    },
+    {
+      "id": "cvdp_copilot_skid_buffer_0001",
+      "source_sha256": [
+        "a46c8fd872bec7c05526594314105bdda95b8d58553ac19c13d077e3a6a26328"
+      ],
+      "baseline_verdict": "FAIL",
+      "candidate_verdict": "FAIL",
+      "baseline_returncode": 1,
+      "candidate_returncode": 1,
+      "changed_fields": [],
+      "clarification_status": "NOT_REVIEWED"
+    },
+    {
+      "id": "cvdp_copilot_sprite_0004",
+      "source_sha256": [
+        "10003fef44cd3a1233a7d9475e6ae3623832299224dd58d897d1831267f82349"
+      ],
+      "baseline_verdict": "FAIL",
+      "candidate_verdict": "FAIL",
+      "baseline_returncode": 1,
+      "candidate_returncode": 1,
+      "changed_fields": [],
+      "clarification_status": "NOT_REVIEWED"
+    },
+    {
+      "id": "cvdp_copilot_static_branch_predict_0001",
+      "source_sha256": [
+        "8eacda098bc16eae7aec5afdcb40fc0cb202c648fb5d4a6de78ff9cc67d4b816"
+      ],
+      "baseline_verdict": "FAIL",
+      "candidate_verdict": "FAIL",
+      "baseline_returncode": 1,
+      "candidate_returncode": 1,
+      "changed_fields": [],
+      "clarification_status": "NOT_REVIEWED"
+    },
+    {
+      "id": "cvdp_copilot_strobe_divider_0001",
+      "source_sha256": [
+        "e9404b66144ecb5b7ccb923a55f860102243784a3831fbbc41701744872b0e28"
+      ],
+      "baseline_verdict": "FAIL",
+      "candidate_verdict": "FAIL",
+      "baseline_returncode": 1,
+      "candidate_returncode": 1,
+      "changed_fields": [],
+      "clarification_status": "NOT_REVIEWED"
+    },
+    {
+      "id": "cvdp_copilot_sync_serial_communication_0001",
+      "source_sha256": [
+        "030e1158b263d499bb43df38a419e7f9d16255b36d990a7dc8902f8948742bfc"
+      ],
+      "baseline_verdict": "FAIL",
+      "candidate_verdict": "FAIL",
+      "baseline_returncode": 1,
+      "candidate_returncode": 1,
+      "changed_fields": [],
+      "clarification_status": "NOT_REVIEWED"
+    },
+    {
+      "id": "cvdp_copilot_sync_serial_communication_0014",
+      "source_sha256": [
+        "0aed3219729c3b035eb33265e217fd57e70cddfc8b7376ff4b7ed8a753328156"
+      ],
+      "baseline_verdict": "FAIL",
+      "candidate_verdict": "FAIL",
+      "baseline_returncode": 1,
+      "candidate_returncode": 1,
+      "changed_fields": [],
+      "clarification_status": "NOT_REVIEWED"
+    },
+    {
+      "id": "cvdp_copilot_ttc_lite_0001",
+      "source_sha256": [
+        "a6fafcefaf2c908ac557c148e6cd5f67d87dcc8da8e847493153685250c256c5"
+      ],
+      "baseline_verdict": "FAIL",
+      "candidate_verdict": "FAIL",
+      "baseline_returncode": 1,
+      "candidate_returncode": 1,
+      "changed_fields": [],
+      "clarification_status": "NOT_REVIEWED"
+    },
+    {
+      "id": "cvdp_copilot_vending_machine_0001",
+      "source_sha256": [
+        "e9b0b9ca402bef0ac8c3f4a8a505a1b720cc118c8350736ac70377be13291930"
+      ],
+      "baseline_verdict": "FAIL",
+      "candidate_verdict": "FAIL",
+      "baseline_returncode": 1,
+      "candidate_returncode": 1,
+      "changed_fields": [],
+      "clarification_status": "NOT_REVIEWED"
+    },
+    {
+      "id": "cvdp_copilot_virtual2physical_tlb_0001",
+      "source_sha256": [
+        "2b355bfde2327d8c20c3268e3592b9a2374aab91ffe8c872558e831bf6cd54e7"
+      ],
+      "baseline_verdict": "FAIL",
+      "candidate_verdict": "FAIL",
+      "baseline_returncode": 1,
+      "candidate_returncode": 1,
+      "changed_fields": [],
+      "clarification_status": "NOT_REVIEWED"
+    },
+    {
+      "id": "cvdp_copilot_wb2ahb_0001",
+      "source_sha256": [
+        "cd3bf064e46833815ecd4eb7748495611b9d8b4620a715d8cc1324e466871c02"
+      ],
+      "baseline_verdict": "FAIL",
+      "candidate_verdict": "FAIL",
+      "baseline_returncode": 1,
+      "candidate_returncode": 1,
+      "changed_fields": [],
+      "clarification_status": "NOT_REVIEWED"
+    },
+    {
+      "id": "cvdp_copilot_word_change_detector_0001",
+      "source_sha256": [
+        "e2ff275aa7158b99c639c0431e68dcb32b58a6554d6acfc2b9c9ab26dc170c99"
+      ],
+      "baseline_verdict": "FAIL",
+      "candidate_verdict": "FAIL",
+      "baseline_returncode": 1,
+      "candidate_returncode": 1,
+      "changed_fields": [],
+      "clarification_status": "NOT_REVIEWED"
+    }
+  ]
+}
