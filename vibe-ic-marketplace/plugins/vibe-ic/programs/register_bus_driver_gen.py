@@ -612,7 +612,14 @@ def dut_parameter_defaults(rtl_text: str, dut_module: str) -> Dict[str, int]:
     # enough -- closed the header early and truncated the parameter list, and a
     # `(` inside one held it open. Offsets are preserved by the blanker.
     code = _hdl_code_text.strip_hdl_comments_and_strings(rtl_text or "")
-    m = re.search(r"\bmodule\s+" + re.escape(dut_module) + r"\b\s*#\s*\(", code)
+    # A package IMPORT may sit between the module name and its parameter
+    # header:  `module prim_count\n  import prim_count_pkg::*;\n#(`.
+    # Requiring only whitespace there made this harvester return {} for every
+    # such module, so every width declared over those parameters became
+    # unresolvable -- the SAME header-import blindness ORGANIC #701 fixed in the
+    # module ENUMERATOR, one regex later in the same file set.
+    m = re.search(r"\bmodule\s+" + re.escape(dut_module)
+                  + r"\b\s*(?:import\s+[^;]+;\s*)*#\s*\(", code)
     if not m:
         return {}
     i = m.end() - 1

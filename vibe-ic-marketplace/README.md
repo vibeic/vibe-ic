@@ -14,13 +14,13 @@ and the contribution guides for extending it.
 |---|---|
 | Plugins in this marketplace | **1** — [`plugins/vibe-ic`](plugins/vibe-ic/) |
 | Plugin version | **1.17.57** |
-| Deterministic programs | **1369** top level (`plugins/vibe-ic/programs/*.py`), of which **1272** are catalogued in [`INDEX.md`](plugins/vibe-ic/programs/INDEX.md) |
+| Deterministic programs | **1370** top level (`plugins/vibe-ic/programs/*.py`), of which **1272** are catalogued in [`INDEX.md`](plugins/vibe-ic/programs/INDEX.md) |
 | Skills | **60** (`plugins/vibe-ic/skills/*/SKILL.md`, each with a `compliance.yaml`) |
 | Slash commands | **7** (`plugins/vibe-ic/commands/*.md`) |
 | Agents | **9** (`plugins/vibe-ic/agents/*.md`) |
 | MCP-EDA tools | **56** (48 EDA + 7 lab-device + 1 health) |
 | Canonical flow | **68 steps** across **8 stages** (`plugins/vibe-ic/flow/phase1_phase2_phase3.yaml`) — 26 of them conditional, including the cell/IP vs chip/IC split |
-| Test files | **3247** under `plugins/vibe-ic/programs/tests/` + **50** under `plugins/vibe-ic/mcp-eda/test/` (`test_*.py`, any depth) |
+| Test files | **3250** under `plugins/vibe-ic/programs/tests/` + **50** under `plugins/vibe-ic/mcp-eda/test/` (`test_*.py`, any depth) |
 | License | Apache-2.0 |
 
 Every count above is generated, not typed: `python3 plugins/vibe-ic/programs/gen_program_inventory.py` writes [`PROGRAM_INVENTORY.json`](plugins/vibe-ic/programs/PROGRAM_INVENTORY.json), and `--check` fails when a stated count drifts from the tree. Several of these populations are simultaneously true and count different things — the artefact carries a `definition` for each, so quote the key, not a bare number.
@@ -39,7 +39,7 @@ Design**: the AI agent is the core decision-maker; EDA tools are callable
 execution engines.
 
 It is also **program-first**. The product is the deterministic runner chain
-(`vibe_ic_one_shot_runner.py` → `phase1/phase2/phase3` runners → 1369 top-level programs
+(`vibe_ic_one_shot_runner.py` → `phase1/phase2/phase3` runners → 1370 top-level programs
 → MCP-EDA), not a prompt. **60 of the 63 flow steps are gated by a program
 whose exit code is the verdict**; the AI is the fall-through when a program
 cannot decide, never the thing that declares PASS.
@@ -362,7 +362,7 @@ claude plugin install vibe-ic
 
 The MCP-EDA server lives **inside** the plugin
 (`plugins/vibe-ic/mcp-eda/`), so one install gets the skills, the agents,
-the 1369 top-level programs, and all 56 EDA/device tools. See
+the 1370 top-level programs, and all 56 EDA/device tools. See
 [`plugins/vibe-ic/mcp-eda/INSTALL_GUIDE.md`](plugins/vibe-ic/mcp-eda/INSTALL_GUIDE.md)
 for the container prerequisites.
 
@@ -464,7 +464,7 @@ auto-registered on install. Inventory of record:
 
 ---
 
-## Deterministic programs (1369 top level)
+## Deterministic programs (1370 top level)
 
 ```bash
 cd plugins/vibe-ic && python3 -m pytest programs/tests/ -q
@@ -558,11 +558,11 @@ vibe-ic-marketplace/
         │       ├── ic_expert_L1..L9.md  ← prose lessons per layer
         │       └── manifests/L1_manifest.json  ← 40-fact Q-bank (PoC)
         ├── skills/                      ← 60 skills, each + compliance.yaml
-        ├── programs/                    ← 4692 *.py at any depth (1369 top level)
+        ├── programs/                    ← 4696 *.py at any depth (1370 top level)
         │   ├── flow_compliance_check.py ← final gate
         │   ├── stage{1,2,3,4}_compliance.py
         │   ├── pdk_registry.json, ic_class_registry.json
-        │   └── tests/                   ← 3247 test files
+        │   └── tests/                   ← 3250 test files
         ├── mcp-eda/                     ← bundled MCP server, 56 tools
         ├── ip-catalog/                  ← reusable open-source IP index
         └── hooks/

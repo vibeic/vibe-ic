@@ -56,6 +56,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import _path_layout as _pl
 import _l10_execution as _l10x
 from _atomic_artefact import write_text as _atomic_write_text
+import _port_width  # resolve a `[aw-1:0]` cell over the DUT's own params, or refuse
 
 # Generic, chip-AGNOSTIC signal-role vocabulary. These match on STRUCTURE of the
 # identifier (a `clk`/`clock` token, a `rst`/`reset` token, an active-low `_n`
@@ -133,6 +134,43 @@ def _parse_ports(text: str, module: str) -> List[Tuple[str, str, str]]:
         return []
 
 
+def _resolve_widths(sources: List[Tuple[Path, str]],
+                    module: str,
+                    ports: List[Tuple[str, str, str]]
+                    ) -> Tuple[Optional[List[Tuple[str, str, str]]], str]:
+    """`(ports_with_literal_widths, why)` or `(None, refusal)`.
+
+    The ANSI parser hands back the width cell VERBATIM, so a port declared
+    `input [aw-1:0] adr` arrives as the cell `[aw-1:0]`. `aw` is a parameter of
+    the DUT's own header and does not exist in the TB module's scope, so
+    emitting the cell as written produced
+
+        error: Unable to bind parameter `aw' in `tb_<case>'
+        error: Dimensions must be a constant with no unknown or high-Z bits.
+
+    and killed EVERY unit TB for that DUT (iverilog rc=2). The cell is now
+    EVALUATED over the DUT's own parameter defaults by the shared `_port_width`
+    resolver -- the same resolver the full-stack TB generator uses, so the two
+    TBs cannot disagree about how wide a port is.
+
+    The defaults, and not any instantiation override, are what elaborate here:
+    the TB emits a bare `<dut> u_dut ( ... )` with no `#(...)`.
+
+    A width that does not evaluate REFUSES, naming the symbol. It is not
+    narrowed to one bit: a TB whose ports are the wrong width is a TB whose
+    result means nothing, and one that says so is worth more than one that
+    runs."""
+    params = _port_width.defaults_from_sources(sources, module)
+    resolved, refusals = _port_width.resolve_ports(ports, params)
+    if refusals:
+        return None, (
+            f"DUT {module!r} declares {len(refusals)} port(s) whose width is "
+            f"not derivable from its own parameter defaults "
+            f"({params or 'none declared'}): " + "; ".join(refusals)
+            + " -- refusing to emit a TB rather than declaring them 1 bit")
+    return resolved, f"widths resolved over {params or 'no parameters'}"
+
+
 def resolve_dut(project: Path, top: str) -> Tuple[Optional[str],
                                                   List[Tuple[str, str, str]],
                                                   str]:
@@ -157,7 +195,10 @@ def resolve_dut(project: Path, top: str) -> Tuple[Optional[str],
         for _f, txt in sources:
             ports = _parse_ports(txt, top)
             if ports:
-                return top, ports, f"bound to --top module {top!r}"
+                resolved, why = _resolve_widths(sources, top, ports)
+                if resolved is None:
+                    return None, [], why
+                return top, resolved, f"bound to --top module {top!r}; {why}"
 
     defined: Dict[str, str] = {}
     for _f, txt in sources:
@@ -178,9 +219,12 @@ def resolve_dut(project: Path, top: str) -> Tuple[Optional[str],
     if len(roots) == 1:
         ports = _parse_ports(defined[roots[0]], roots[0])
         if ports:
-            return roots[0], ports, (
+            resolved, why = _resolve_widths(sources, roots[0], ports)
+            if resolved is None:
+                return None, [], why
+            return roots[0], resolved, (
                 f"--top {top!r} names no RTL module; bound to the unambiguous "
-                f"instantiation-graph root {roots[0]!r}")
+                f"instantiation-graph root {roots[0]!r}; {why}")
         return None, [], (
             f"instantiation-graph root {roots[0]!r} has no parseable ANSI port "
             f"list (non-ANSI header) — cannot bind a TB to it")

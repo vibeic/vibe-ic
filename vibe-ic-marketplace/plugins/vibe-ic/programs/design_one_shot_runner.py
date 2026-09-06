@@ -102,6 +102,7 @@ import _commercial_pdk as _cpdk  # config-driven commercial-PDK id (NDA: no SKU 
 import _lesson_digest  # surface the captured-lesson digest to spec-to-rtl authors
 import _runner_measurement as _rmeas  # the tool's third value, read from its artefact
 import _hdl_code_text  # offset-preserving comment/string blanker (#731)
+import _port_width  # shared port-width resolver: evaluate over the DUT's params, or refuse by name
 # STAGED IS NOT CONSUMED (ORGANIC #733). `_lesson_digest` hands the author a
 # digest; NOTHING asked whether a section that matches this design was USED.
 # Measured in that program's header: a blind author was handed a section
@@ -7063,31 +7064,71 @@ def _v643_is_power_pin(p: dict, nm: str) -> bool:
     return bool(_V643_POWER_PIN_RE.match(nm or ""))
 
 
-def _v643_width_decl(p: dict) -> str:
-    """ORGANIC #643 — the ` [msb:lsb]` width prefix for a port declaration, or
-    "" for a 1-bit port. Prefers the RTL-parsed `width_decl` cell (`[31:0]`),
-    else builds it from L9 `msb`/`lsb` or `width`. A multi-bit bus declared
-    1-bit (the pre-#643 behaviour) made the TB uncompilable on a real SoC
-    wrapper."""
-    wd = p.get("width_decl")
-    if isinstance(wd, str) and wd.strip():
-        # ORGANIC #643 — ONLY a CONSTANT numeric width may be emitted into the
-        # TB scope. A PARAMETERIZED width (`[size-1:0]`) references a parameter
-        # not visible in the TB and would fail elaboration ("Dimensions must be
-        # constant"); fall through to the 1-bit declaration (compiles with a
-        # benign port-width padding warning), preserving the pre-#643 behaviour
-        # for parameterized datapath tops.
-        m = re.match(r"^\[\s*(\d+)\s*:\s*(\d+)\s*\]$", wd.strip())
-        if m:
-            return f" [{m.group(1)}:{m.group(2)}]"
-        return ""
-    msb, lsb = p.get("msb"), p.get("lsb")
-    if isinstance(msb, int) and isinstance(lsb, int) and msb != lsb:
-        return f" [{msb}:{lsb}]"
-    w = p.get("width")
-    if isinstance(w, int) and w > 1:
-        return f" [{w - 1}:0]"
-    return ""
+def _v643_width_decl(p: dict,
+                     params: Optional[Dict[str, int]] = None
+                     ) -> Optional[str]:
+    """ORGANIC #643 — the ` [msb:lsb]` width prefix for a port declaration.
+
+    Returns ``" [hi:lo]"`` for a resolved bus, ``""`` for a port that really is
+    one bit, and ``None`` to REFUSE when the port states a width that is not
+    derivable. `_v643_width_refusal` gives the reason for the same port.
+
+    WHAT CHANGED AND WHY (the defect this replaces). This function used to match
+    ONLY a literal ``[N:M]`` cell and ``return ""`` for anything else — so a bus
+    declared ``input [aw-1:0] adr`` was emitted into the TB as ``reg adr = 0;``,
+    ONE BIT of a wide port, with the rest of the bus left floating. iverilog
+    accepts that with a port-width padding warning, the simulation runs, and the
+    step reports CONNECTIVITY_PASS over a connection that is not connected.
+
+    That early ``return ""`` also short-circuited the L9 ``msb``/``lsb`` branch
+    below it, which made the function NON-MONOTONE IN ITS INPUT: a port carrying
+    BOTH the RTL width cell and the L9 numbers resolved to one bit, while the
+    same port with the width cell DELETED resolved correctly to ``[9:0]``.
+    Deleting evidence improved the answer. Both directions are now the same
+    answer, and the both-present case is pinned in the #643 test.
+
+    The width is now EVALUATED over the DUT's own parameter defaults by the
+    shared ``_port_width`` resolver (which delegates the arithmetic to
+    ``register_bus_driver_gen._int_expr`` — no new evaluator), and when it
+    cannot be evaluated this refuses BY NAME instead of defaulting. A width is
+    never defaulted, and never silently narrowed to one bit."""
+    decl, _why = _port_width.resolve(
+        p.get("width_decl"), params,
+        msb=p.get("msb"), lsb=p.get("lsb"), width=p.get("width"))
+    return decl
+
+
+def _v643_width_refusal(p: dict,
+                        params: Optional[Dict[str, int]] = None) -> str:
+    """The reason `_v643_width_decl` refused this port, or "" when it did not.
+
+    Kept beside the resolver rather than folded into its return so that every
+    existing caller of `_v643_width_decl` keeps a one-value contract, and so the
+    refusal text names the blocking symbol at the point the step reports it."""
+    decl, why = _port_width.resolve(
+        p.get("width_decl"), params,
+        msb=p.get("msb"), lsb=p.get("lsb"), width=p.get("width"))
+    return "" if decl is not None else why
+
+
+def _v643_dut_param_defaults(project: Path, dut_module: str) -> Dict[str, int]:
+    """`{PARAM: default}` for the DUT the full-stack TB instantiates.
+
+    The TB emits a bare ``<dut> u_dut ( ... )`` with NO ``#(...)`` override, so
+    the widths that elaborate ARE the module header's own defaults. An override
+    taken from some other instantiation in the design would describe a different
+    elaboration than the one this TB performs, so none is consulted."""
+    rtl_dir = _pl.rtl_dir(project)
+    if not dut_module or not rtl_dir.is_dir():
+        return {}
+    sources: List[Tuple[Path, str]] = []
+    for ext in (".v", ".sv"):
+        for f in sorted(rtl_dir.rglob(f"*{ext}")):
+            try:
+                sources.append((f, f.read_text(errors="replace")))
+            except OSError:
+                continue
+    return _port_width.defaults_from_sources(sources, dut_module)
 
 
 def _v661_rtl_module_names(project: Path) -> List[str]:
@@ -8261,6 +8302,14 @@ def step_full_stack_tb_gen(project: Path,
     # UNCONDITIONAL `.vccd1(vccd1)` would bind to a non-existent DUT port →
     # iverilog rc=2 → reference_tb FAIL → downstream blocked.
     _v645_power_pin_names: List[str] = []
+    # The DUT's OWN parameter defaults — the widths that actually elaborate,
+    # because the instance emitted below is a bare `u_dut (` with no `#(...)`.
+    # Without these, a port declared `[aw-1:0]` resolved to ONE BIT and the step
+    # still said CONNECTIVITY_PASS over a bus that was not connected.
+    _v643_params = _v643_dut_param_defaults(project, top_module)
+    # Ports whose stated width is NOT derivable. Collected, never defaulted:
+    # a wrong binding is a wrong TB, so ANY refusal fails the step by name.
+    _v643_unresolved: List[str] = []
     for p in top_ports:
         if not isinstance(p, dict):
             continue
@@ -8278,7 +8327,14 @@ def step_full_stack_tb_gen(project: Path,
         # ORGANIC #643 — declare every port at its REAL width (`[msb:lsb]`),
         # from the parsed RTL surface or L9; a multi-bit bus declared 1-bit was
         # the dominant uncompilable-TB defect on SoC wrappers.
-        w = _v643_width_decl(p)
+        w = _v643_width_decl(p, _v643_params)
+        if w is None:
+            # REFUSE BY NAME. The alternative the old code took -- emit the port
+            # as one bit and carry on -- is what produced CONNECTIVITY_PASS over
+            # an unconnected bus. Never default a width.
+            _v643_unresolved.append(
+                f"{nm} ({direction}): {_v643_width_refusal(p, _v643_params)}")
+            continue
         if nm in ("clk", "reset_n"):
             if direction == "input":
                 inst_args.append(f"    .{nm}({nm})")
@@ -8319,12 +8375,27 @@ def step_full_stack_tb_gen(project: Path,
             decl_lines.append(f"  wire{w} {nm};")
             inst_args.append(f"    .{nm}({nm})")
 
+    if _v643_unresolved:
+        # No TB is emitted and no previous TB is overwritten: the step FAILS
+        # naming every port and the symbol that blocked it, so the width is
+        # fixed in the design or the extraction rather than papered over here.
+        return StepResult(
+            "full_stack_tb_gen", "FAIL", time.time() - t0,
+            f"cannot declare the DUT surface of {top_module!r}: "
+            f"{len(_v643_unresolved)} port(s) state a width that is not "
+            f"derivable from the DUT's own parameter defaults "
+            f"({_v643_params or 'none declared'}) — "
+            + "; ".join(_v643_unresolved)
+            + ". Refusing rather than declaring them 1 bit: a narrowed port "
+              "binds bit 0 of a bus and still reports CONNECTIVITY_PASS.")
+
     lines.extend(decl_lines)
 
     # THE CLOCK GENERATOR, BOUND TO THE PORT THIS DUT ACTUALLY CLOCKS ON.
     # Emitted here, after the declarations, so the reg it drives is already
     # declared. See `_fs_tb_resolve_clock_reset` for what this closes.
-    _fs_inputs = [(p.get("name", "").strip(), _v643_width_decl(p))
+    _fs_inputs = [(p.get("name", "").strip(),
+                   _v643_width_decl(p, _v643_params) or "")
                   for p in top_ports
                   if isinstance(p, dict)
                   and (p.get("name") or "").strip()
@@ -18797,8 +18868,18 @@ def main() -> int:
     # ran the YAML gate checkers that (over)write reports/phase2/gates/*.json +
     # reports/phase2/lint/*.json with identity-less payloads. Stamp them now,
     # caller-side, so a cross-design byte-identity audit no longer flags honest
-    # gate jsons as canned cross-design reports. Runs LAST so it catches every
-    # gate/lint json produced during this run.
+    # gate jsons as canned cross-design reports.
+    #
+    # THIS IS NOT THE LAST WRITE. It used to claim that it was -- that it ran
+    # last and therefore caught every gate/lint json the run produced -- and
+    # the file mtimes said otherwise: `emit_final_summary` below runs
+    # final_report_generate.py, which invokes flow_compliance_check.py, which
+    # RE-RUNS the same YAML gate checkers -- and they rewrite the gate jsons
+    # WITHOUT the stamp. Measured on a clean subservient run: this sweep
+    # reported "stamped 10", and 7 of those 10 were identity-less again by the
+    # time the runner exited. The second sweep after `emit_final_summary` is
+    # what makes the claim true; this one is kept so the ordinary case is
+    # stamped before anything reads it.
     plan.append(step_stamp_gate_reports(project))
 
     summary = {
@@ -18828,6 +18909,35 @@ def main() -> int:
     _finalize_rtl_provenance()
     # v1.6.32: emit canonical final_summary.md (best-effort).
     fs_ok = _pl.emit_final_summary(project, PROGRAMS_DIR)
+    # THE LAST WRITE TO THE GATE DIRS, and therefore the one that decides what
+    # a reader finds there. `emit_final_summary` just re-ran the YAML gate
+    # checkers (final_report_generate.py -> flow_compliance_check.py) and
+    # overwrote the stamp on every gate json it re-emitted. Fixing the ORDER is
+    # the fix: sweep once more, here, where nothing writes those dirs
+    # afterwards. `_stamp_design_identity_in_file` is idempotent, so a file the
+    # earlier sweep already stamped and nobody rewrote is not touched again --
+    # which is exactly why the count below is the count of files the report
+    # generator clobbered.
+    try:
+        _late_stamped = _stamp_gate_report_dirs(project)
+    except Exception as _e:  # noqa: BLE001 — stamping must never fail the run
+        _late_stamped = []
+        print(f"design_one_shot_runner: late identity re-stamp skipped "
+              f"(non-fatal): {_e}")
+    if _late_stamped:
+        for _s in plan:
+            if _s.name != "stamp_gate_reports":
+                continue
+            _s.detail += (
+                f"; re-stamped {len(_late_stamped)} json(s) that "
+                f"final_report_generate.py's compliance re-run had overwritten "
+                f"after the first sweep")
+            _s.output_files = sorted(set(list(_s.output_files or [])
+                                         + _late_stamped))
+        # The published record must describe the tree as it is being LEFT, not
+        # as it was mid-run.
+        summary["steps"] = [asdict(s) for s in plan]
+        out.write_text(json.dumps(summary, indent=2, ensure_ascii=False) + "\n")
     print(f"\n=== design_one_shot_runner DONE — {out}")
     print(f"verdict: {summary['verdict']}")
     for s in plan:
