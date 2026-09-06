@@ -33,7 +33,27 @@ import sys
 import time
 from pathlib import Path
 
-IMAGE = "ghcr.io/vibeic/vibeic-eda@sha256:8c5694abdf5c269c1d9def5368704e0c4b51c869d1d9c9380e123e07657fe9eb"
+# THE REPOSITORY HALF IS DEPLOYMENT CONFIGURATION, READ THE SAME WAY THE RUNNER
+# READS IT -- same variable, same default. This fake stands in for a host that
+# HOLDS the pinned bytes, so the reference it answers with has to be the one the
+# runner is asking about; a literal here answers about a repository the caller
+# never asked for, and `_image_profile` then refuses with "fixed image
+# inspection does not bind the requested digest".
+#
+# MEASURED 2026-09-07 on 8HD-4 (lane czimgrepo) on pristine main `edb9bc96d5e4`, re-measured after rebase onto `cd83d08a933c` (pin 0.3.48):
+# with `VIBEIC_EDA_IMAGE_REPO` exported -- which every fleet host does, and which
+# `run_suite_in_eda_image.sh` forwards into the container -- 10 test functions in
+# this file were red with exactly that refusal, and green with the variable
+# unset. Every `invoke` hands this script `dict(os.environ)`, so it sees the same
+# configuration the runner resolved from.
+#
+# THE DIGEST STAYS LITERAL. It is the identity, and the tests that assert the
+# DEFAULT repository (`test_with_no_env_the_pin_is_the_published_repository`,
+# `test_an_empty_repo_env_is_not_a_repository`) clear the env for themselves via
+# `_fresh_runner`, so they still pin the published default.
+IMAGE = ((os.environ.get("VIBEIC_EDA_IMAGE_REPO") or "").strip()
+         or "ghcr.io/vibeic/vibeic-eda") + (
+    "@sha256:8c5694abdf5c269c1d9def5368704e0c4b51c869d1d9c9380e123e07657fe9eb")
 IMAGE_ID = "sha256:" + "1" * 64
 CID = "2" * 64
 PREFIX = "VIBEIC_PROGRESS "

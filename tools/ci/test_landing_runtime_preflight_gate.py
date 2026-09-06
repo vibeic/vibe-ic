@@ -403,7 +403,17 @@ def test_the_full_tier_refuses_once_when_it_cannot_run_the_test_runtime(tmp_path
     assert "cannot import the test runner" in combined
     assert "trusted_pytest_entry.py" in combined
     # BOTH remedies, because a refusal with no way forward is a wall.
-    assert "ghcr.io/vibeic/vibeic-eda@sha256:" in combined, (
+    # THE REPOSITORY HALF IS DEPLOYMENT CONFIGURATION. The refusal names
+    # `_pin.image_reference()`, which composes the CONFIGURED repository with the
+    # pinned digest, so the expectation is composed the same way -- same
+    # variable, same default. MEASURED 2026-09-07 on 8HD-4 (lane czimgrepo) on
+    # pristine main `edb9bc96d5e4`, re-measured after rebase onto `cd83d08a933c` (pin 0.3.48): with `VIBEIC_EDA_IMAGE_REPO` exported, which
+    # every fleet host does, this line was the one red in this file. What is
+    # asserted is unchanged and is the load-bearing half: the refusal names a
+    # DIGEST-pinned image, not a tag.
+    _repo = (os.environ.get("VIBEIC_EDA_IMAGE_REPO") or "").strip() \
+        or "ghcr.io/vibeic/vibeic-eda"
+    assert f"{_repo}@sha256:" in combined, (
         "the refusal does not name the digest-pinned runner image")
     assert f"{_HOST_LANE_ENV}=auto" in combined, (
         "the refusal does not name the host lane")

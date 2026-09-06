@@ -24,12 +24,45 @@ assert _RUNTIME_SPEC and _RUNTIME_SPEC.loader
 R = importlib.util.module_from_spec(_RUNTIME_SPEC)
 _RUNTIME_SPEC.loader.exec_module(R)
 
+#: THE PIN IS THE DIGEST; THE REPOSITORY IS DEPLOYMENT CONFIGURATION.
+#:
+#: MEASURED 2026-09-07 on 8HD-4 (lane czimgrepo) against pristine main
+#: `edb9bc96d5e4`, re-measured after rebase onto `cd83d08a933c` (pin 0.3.48): with `VIBEIC_EDA_IMAGE_REPO` exported -- which every host on
+#: this fleet does from `~/.bashrc` and `~/.profile`, and which
+#: `tools/ci/run_suite_in_eda_image.sh` forwards into the container -- 44 node
+#: ids across this file, `test_hermetic_candidate_runner.py` and
+#: `test_landing_runtime_preflight_gate.py` were RED, and with the variable
+#: unset they were green. 28 of them were in this file, 18 of those failing as
+#: `manifest.runner.image is not the BASE-owned runner image`, because every
+#: manifest here is built from `_RUNNER` and `_RUNNER["image"]` was a literal.
+#:
+#: v1.18.10 moved the repository from a literal to configuration in the MODULES
+#: (`protected_landing_transition.RUNNER_IMAGE` and
+#: `hermetic_candidate_runner.IMAGE` both compose it from this env) and left it
+#: a literal HERE. So "green on the touched files" only ever held in a shell
+#: nobody on this fleet runs: the tests were measuring an unconfigured host.
+#:
+#: THE DIGEST STAYS SPELLED HERE, deliberately. It is the identity, it is what
+#: `test_manifest_and_runtime_use_one_exact_base_owned_image` binds the two
+#: modules against, and taking it from a module under test would turn that
+#: assertion into a tautology. Only the repository half is read from the env,
+#: and it is read the SAME way the modules read it -- same variable, same
+#: default -- so the two cannot disagree about which bytes are demanded.
+_PINNED_DIGEST = (
+    "sha256:8c5694abdf5c269c1d9def5368704e0c4b51c869d1d9c9380e123e07657fe9eb")
+
+
+def _configured_repo() -> str:
+    """The repository half, from the one env, with the published default."""
+    return (os.environ.get("VIBEIC_EDA_IMAGE_REPO") or "").strip() \
+        or "ghcr.io/vibeic/vibeic-eda"
+
+
 _RUNNER = {
     "schema": 1,
     "profile_id": "vibeic-landing-hermetic-v1",
     "engine": "docker",
-    "image": ("ghcr.io/vibeic/vibeic-eda@sha256:"
-              "8c5694abdf5c269c1d9def5368704e0c4b51c869d1d9c9380e123e07657fe9eb"),
+    "image": f"{_configured_repo()}@{_PINNED_DIGEST}",
     "platform": "linux/amd64",
     "user": "65534:65534",
     "network": "none",
