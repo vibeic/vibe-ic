@@ -1091,6 +1091,14 @@ def _make_ai_review_task(problem_id: str, project: Path, got: dict,
                 "required_result_on_repair": "PASS",
                 "pass_marker": "VIBEIC_AI_CHALLENGE=PASS",
                 "fail_marker": "VIBEIC_AI_CHALLENGE=FAIL",
+                "marker_form": (
+                    "both markers are checked against the challenge SOURCE "
+                    "TEXT: each must appear in the file as a LITERAL string. "
+                    "A format string such as $display(\"VIBEIC_AI_CHALLENGE"
+                    "=%s\", ok ? \"PASS\" : \"FAIL\") prints the marker "
+                    "correctly at run time and still contains neither "
+                    "literal, so it is rejected; write one $display per "
+                    "marker with the marker spelled out"),
                 "constraints": [
                     "derive assertions only from prompt_path",
                     "self-contained: no include/readmem/file/system/DPI access",
