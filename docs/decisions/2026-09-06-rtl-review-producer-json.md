@@ -14,6 +14,20 @@ CONCLUDE from evidence it did not fully get?
 named ERROR record inside an emitted report. Both refuse to call an unreadable
 producer clean; they disagree about whether an artefact should exist afterwards.
 
+**RULED 2026-09-06: the landed contract wins.** Not on the issue's text — #2036
+says "Do not translate the crash into an empty finding set or PASS" and
+"Invalid/missing JSON and failed producer execution must remain distinct from a
+legitimate clean empty array", which mandates DISTINCTNESS and names no
+mechanism, so both designs satisfy it. It was ruled on precedent: v1.17.43 is
+landed and was falsified in both directions, and a rebase conforms to it rather
+than reversing three landed assertions. That cost was measured before the
+ruling, not estimated — reversing them reddens exactly
+`TestUnreadableIsNotEmpty::test_unknown_shape_refuses`,
+`::test_non_object_records_refuse` and `::test_reset_and_precheck_refuse_too`.
+PR #2039's twelve contradicting assertions are retired with a collision table in
+`programs/tests/test_rtl_review_hygiene_json.py`'s module docstring; every input
+they carried still runs, under the landed expectation.
+
 The line drawn here keeps both, split by what is actually on disk:
 
 * **NO EVIDENCE** — the JSON file is absent, is unparseable, the producer's exit
@@ -72,6 +86,14 @@ never supplies `--l12-json`, `--strict` cannot exit 0 through this program today
 That is the rule correctly reporting that this driver never supplies L12; the
 remedy is for the driver to pass an L12 JSON when one exists, not to weaken the
 rule.
+
+## 2b. A skipped auditor's `rule_id` is the auditor NAME
+
+Ruled 2026-09-06, against PR #2039's `<name>_not_measured`. A `rule_id` that
+changes with the OUTCOME breaks matching by rule across runs and across
+reports: a reader diffing two reviews must find the same auditor under the same
+key whether it ran or not. NOT_MEASURED is a STATE, and it belongs in the
+record's message and in `auditors_not_run` (§2), never in the identifier.
 
 ## 3. The legacy auditor mapping was a fiction
 
