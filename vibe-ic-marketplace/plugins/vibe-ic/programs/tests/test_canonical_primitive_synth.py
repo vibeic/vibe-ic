@@ -314,3 +314,225 @@ def test_hook_author_guard_never_overwrites(tmp_path):
     (rtl_dir / "existing.v").write_text("module existing(); endmodule\n")
     # RTL already present → the guard must DEFER (never clobber the design's own).
     assert R._try_canonical_primitive_rtl(proj, 0.0) is None
+
+
+# ============================================================================
+# issue #2035, families F6 + F7, and the architecture question underneath them.
+#
+# MEASURED FIRST (base 764d6b3e5, host 8HD-8): two neutral input-only
+# descriptions naming `Module name: barrel_shifter` with ports in/ctrl/out both
+# returned EMIT rc=0 and were overwritten with the fixed three-mux hierarchy --
+# one of them while the input said in plain words that no submodule and no
+# generate block may be used. Detection was doing duty as topology selection,
+# which is why an ALTERNATIVE-ARCHITECTURE CONTROL could not be satisfied at all.
+#
+# These tests pin, in order: the sixteen templates do not move; a stated
+# structural directive withdraws a template and is NAMED for the AI author; and
+# F6/F7 are COMPOSED from the acceptance contract the input states rather than
+# from a seventeenth and eighteenth fixed template.
+# ============================================================================
+
+_ARCH_CONFLICT_DESC = (
+    "Module name:\n    barrel_shifter\n"
+    "A barrel shifter for shifting bits efficiently, controlled by ctrl.\n"
+    "Input ports:\n in: 8-bit input to be shifted.\n ctrl: 3-bit shift amount.\n"
+    "Output ports:\n out: 8-bit shifted output.\n"
+    "This block is delivered as a single leaf cell: the implementation must not\n"
+    "instantiate any submodule and must not use a generate block.\n")
+
+_F6_DESC = (
+    "Module name:\n    elastic_stage\n"
+    "An elastic pipeline stage between a producer and a consumer.\n"
+    "Input ports:\n clk: Clock signal.\n rst_n: Active low reset signal.\n"
+    " up_data [7:0]: The 8-bit word offered by the producer.\n"
+    " up_valid: High when the producer is offering up_data.\n"
+    " dn_ready: High when the consumer can take a word this cycle.\n"
+    "Output ports:\n up_ready: High when this stage can take a word.\n"
+    " dn_data [7:0]: The word offered to the consumer.\n"
+    " dn_valid: High when dn_data is being offered.\n"
+    "Implementation:\n"
+    "A transfer happens when that interface's valid and ready are both high.\n"
+    "The stage must register the output and buffer one additional transfer so\n"
+    "the producer is only stalled when no slot is free. No word that was not\n"
+    "accepted may be captured, no accepted word may be lost under backpressure,\n"
+    "and accepted words must leave in the order they arrived.\n")
+
+# Same shape, same words, a DIFFERENT legitimate architecture: zero added
+# latency. This is the alternative-architecture control for the contract layer.
+_F6_STORAGE_SENTENCE = (
+    "The stage must register the output and buffer one additional transfer so\n"
+    "the producer is only stalled when no slot is free. ")
+assert _F6_STORAGE_SENTENCE in _F6_DESC, "fixture drifted"
+
+_F6_ALT_DESC = _F6_DESC.replace(
+    _F6_STORAGE_SENTENCE,
+    "This stage must not add latency: the offered word is seen by the consumer\n"
+    "in the same cycle it is offered. ")
+
+# Same shape with the storage policy simply NOT STATED: must route to AI by name.
+_F6_UNSTATED_DESC = _F6_DESC.replace(_F6_STORAGE_SENTENCE, "")
+
+_F7_DESC = (
+    "Module name:\n    pulse_divider\n"
+    "An event ratio divider.\n"
+    "Input ports:\n clk: Clock signal.\n rst_n: Active low reset signal.\n"
+    " in_data [7:0]: The 8-bit payload accompanying an input event.\n"
+    " in_valid: Pulses high for one cycle on each input event.\n"
+    "Output ports:\n out_data [7:0]: The forwarded payload.\n"
+    " out_valid: Pulses high for one cycle on each output event.\n"
+    "Implementation:\n"
+    "The divider emits one output event for every 1 input events. Counting an\n"
+    "input event and emitting the output event are the same cycle's work.\n")
+
+
+def test_sixteen_templates_are_byte_identical_to_their_own_text():
+    """The contract layer must not re-author a working emitter: every template
+    shape still emits exactly its `_TEMPLATES` entry, and `desc_text` is ignored
+    for them. Compared by MEMBERSHIP of the shape-key set, not by count."""
+    assert set(rcs._TEMPLATES) == {k for k, _ in rcs._DETECTORS}
+    for shape, text in rcs._TEMPLATES.items():
+        assert rcs.emit_rtl(shape) == text
+        assert rcs.emit_rtl(shape, _F6_DESC) == text
+
+
+def test_stated_directive_withdraws_the_fixed_topology():
+    """OLD WRONG BEHAVIOUR, on input-only material: this description matches the
+    barrel-shifter detector while forbidding the very structure the template is
+    built from, and used to be answered with that template anyway."""
+    assert rcs._is_barrel_shifter(
+        _ARCH_CONFLICT_DESC, rcs.module_name_of(_ARCH_CONFLICT_DESC),
+        rcs._port_tokens(_ARCH_CONFLICT_DESC) - rcs._NOISE) is True
+    conflict = rcs.architecture_conflict(
+        _ARCH_CONFLICT_DESC, "barrel_shifter_right_8")
+    assert conflict is not None
+    assert conflict["polarity"] == "forbid"
+    assert conflict["property"] in {"submodule_instantiation", "generate_block"}
+    assert rcs.detect_shape(_ARCH_CONFLICT_DESC) is None
+
+
+def test_withdrawn_topology_is_routed_to_ai_by_name():
+    """No hidden DEFER: the program says WHICH stated directive it could not
+    honour, so the AI author is handed the decision rather than guessing it."""
+    why = rcs.route_to_ai_reason(_ARCH_CONFLICT_DESC)
+    assert why is not None and why["route"] == "ai_author"
+    assert why["kind"] == "architecture_conflict"
+    assert why["shape_declined"] == "barrel_shifter_right_8"
+    assert "must not" in why["stated"].lower()
+
+
+@pytest.mark.parametrize("shape,desc", _INLINE_POS.items())
+def test_canonical_descriptions_state_no_conflicting_directive(shape, desc):
+    """The withdrawal must not fire on ordinary prose: every canonical
+    description still detects its own shape, i.e. the DEFER population grew only
+    for inputs that really do state a contradicting directive."""
+    assert rcs.architecture_conflict(desc, shape) is None
+    assert rcs.detect_shape(desc) == shape
+
+
+def test_template_commitments_are_derived_from_the_template_text():
+    """Commitments are read out of the emitted RTL, so a re-authored template
+    cannot leave a hand-written second list behind, stale."""
+    barrel = rcs.template_commitments("barrel_shifter_right_8")
+    assert {"submodule_instantiation", "generate_block"} <= barrel
+    assert "gray_code" not in barrel
+    assert "gray_code" in rcs.template_commitments("async_gray_fifo")
+
+
+def test_f6_contract_is_extracted_from_the_input():
+    c = rcs.extract_handshake_contract(_F6_DESC)
+    assert c is not None and c.kind == "elastic_stage"
+    assert c.unresolved == []
+    assert (c.up["valid"], c.up["ready"], c.up["data"]) == (
+        "up_valid", "up_ready", "up_data")
+    assert (c.down["valid"], c.down["ready"], c.down["data"]) == (
+        "dn_valid", "dn_ready", "dn_data")
+    assert c.width == 8 and c.storage == "skid" and c.ordering == "fifo"
+    assert c.clock == "clk" and c.reset == "rst_n" and c.reset_active_low is True
+
+
+def test_f6_is_composed_not_templated():
+    """F6 is a consumer of the contract layer: no `_TPL_` exists for it, and the
+    emitted module carries the INPUT's own module and port names."""
+    assert "elastic_handshake_stage" not in rcs._TEMPLATES
+    shape = rcs.detect_shape(_F6_DESC)
+    assert shape == "elastic_handshake_stage"
+    rtl = rcs.emit_rtl(shape, _F6_DESC)
+    assert "module elastic_stage (" in rtl
+    for port in ("up_valid", "up_ready", "up_data",
+                 "dn_valid", "dn_ready", "dn_data"):
+        assert port in rtl
+    # acceptance-qualified storage: every capture is gated by an ACCEPTED
+    # transfer, never by valid alone.
+    assert "wire up_fire = up_valid && up_ready;" in rtl
+    assert "if (up_fire) held_data <= up_data;" in rtl
+    assert "skid_data  <= up_data;" in rtl
+    assert "assign up_ready = !skid_valid;" in rtl
+
+
+def test_f6_alternative_architecture_control_stays_green():
+    """THE CONTROL. Same shape words, a legitimately different architecture
+    (zero added latency). It must NOT be answered with the buffered stage."""
+    c = rcs.extract_handshake_contract(_F6_ALT_DESC)
+    assert c is not None and c.unresolved == [] and c.storage == "passthrough"
+    rtl = rcs.emit_rtl(rcs.detect_shape(_F6_ALT_DESC), _F6_ALT_DESC)
+    assert "assign dn_valid = up_valid;" in rtl
+    assert "assign up_ready = dn_ready;" in rtl
+    assert "always" not in rtl and "skid" not in rtl
+    assert rtl != rcs.emit_rtl(rcs.detect_shape(_F6_DESC), _F6_DESC)
+
+
+def test_f6_unstated_storage_is_routed_to_ai_by_name_not_guessed():
+    assert rcs.detect_shape(_F6_UNSTATED_DESC) is None
+    why = rcs.route_to_ai_reason(_F6_UNSTATED_DESC)
+    assert why is not None and why["kind"] == "unstated_contract_fields"
+    assert why["contract_kind"] == "elastic_stage"
+    assert any("storage under backpressure" in u for u in why["unresolved"])
+
+
+def test_f7_unit_ratio_consume_and_capture_are_simultaneous():
+    """F7's defect is that consume and capture are exclusive, which drops every
+    other input at a unit ratio. The composed emitter does both in one cycle."""
+    c = rcs.extract_handshake_contract(_F7_DESC)
+    assert c is not None and c.kind == "ratio_divider"
+    assert c.ratio == 1 and c.unresolved == []
+    assert "event_ratio_divider" not in rcs._TEMPLATES
+    rtl = rcs.emit_rtl(rcs.detect_shape(_F7_DESC), _F7_DESC)
+    assert "module pulse_divider #(" in rtl
+    assert "wire consume  = in_valid;" in rtl
+    assert "wire emit_now = in_valid && (count == RATIO - 1);" in rtl
+    # the two are separate concurrent facts about the same cycle, never an
+    # if/else between consuming and capturing
+    assert "out_valid <= emit_now;" in rtl
+    assert "if (in_valid) out_data <= in_data;" in rtl
+    assert "else if" not in rtl.split("end else begin")[1]
+
+
+def test_generated_scoreboards_come_from_the_same_contract():
+    """The queue scoreboard (F6) and the ratio/latency count (F7) that #2035 asks
+    for are composed from the contract fields, so a stage and its check cannot
+    drift apart."""
+    tb6 = rcs.emit_scoreboard_tb(rcs.extract_handshake_contract(_F6_DESC))
+    assert "module tb_elastic_stage;" in tb6
+    assert "if (up_valid && up_ready) begin q[wr]" in tb6
+    assert "accepted transfers lost" in tb6
+    tb7 = rcs.emit_scoreboard_tb(rcs.extract_handshake_contract(_F7_DESC))
+    assert "module tb_pulse_divider;" in tb7
+    assert "if (n_out * 1 != n_in)" in tb7
+    for tb in (tb6, tb7):
+        assert tb.isascii()
+
+
+def test_contract_shapes_refuse_to_emit_without_their_input():
+    """A composed shape has no fixed answer to fall back on: asked to emit with
+    no description, it raises rather than inventing a topology."""
+    for shape in rcs._CONTRACT_SHAPES:
+        with pytest.raises((ValueError, KeyError)):
+            rcs.emit_rtl(shape)
+
+
+@pytest.mark.parametrize("desc", _INLINE_NEG)
+def test_contract_layer_does_not_mis_fire_on_near_misses(desc):
+    """Fail-closed is preserved: the contract layer is consulted only when no
+    template claimed the input, and it declines everything that states no
+    handshake."""
+    assert rcs.detect_shape(desc) is None

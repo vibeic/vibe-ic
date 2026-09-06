@@ -2186,7 +2186,10 @@ def _try_canonical_primitive_rtl(
         return None  # DEFER → fall through to spec-to-rtl
     module = _cps.module_name_of(desc) or "chip_top"
     try:
-        rtl = _cps.emit_rtl(shape)
+        # `desc` is passed so a CONTRACT-composed shape can be composed from the
+        # acceptance contract the description states; the sixteen fixed-template
+        # shapes ignore it and emit byte-for-byte what they always emitted.
+        rtl = _cps.emit_rtl(shape, desc)
     except Exception as e:
         return StepResult("rtl_gen", "FAIL", time.time() - t0,
                           f"canonical_primitive_synth emit failed for {shape}: {e}")
