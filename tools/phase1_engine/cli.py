@@ -204,6 +204,34 @@ def _cmd_render(args: argparse.Namespace) -> int:
     return 0
 
 
+def _docs_door_top_module(text: str, source_name: str = "prose"):
+    """#2049 item 1 — ask the DOCS front door what top module THIS SAME input
+    declares, so the two Phase-1 front doors cannot disagree about the design's
+    top by construction.
+
+    `phase1_doc_one_shot_runner._extract_top_module_from_docs` is the docs
+    door's own derivation (explicit `module X (` declaration > `Module Name:`
+    label > heading / intro-phrase prose). It returns None when the input
+    declares no top — and None is the honest answer, not a cue to invent one.
+
+    Returns (name_or_None, status) where status is one of
+    `declared_in_input` / `top_undeclared` / `docs_door_unavailable`.
+    `docs_door_unavailable` is NOT `top_undeclared`: it says the question could
+    not be asked, so the caller still must not invent a name.
+    """
+    try:
+        import phase1_doc_one_shot_runner as _docs  # programs/ is on sys.path
+        # via .render's _find_programs_dir
+        cand = _docs._extract_top_module_from_docs({source_name: text})
+    except Exception as exc:  # degrade LOUDLY — never silently
+        print(f"[stub] WARN docs-door top-module derivation unavailable: "
+              f"{type(exc).__name__}: {exc}", file=sys.stderr)
+        return None, "docs_door_unavailable"
+    if cand:
+        return cand, "declared_in_input"
+    return None, "top_undeclared"
+
+
 def _stub_l_docs_from_prose(docs_dir: Path, out_dir: Path,
                             ic_name: str | None = None) -> int:
     """v0.1.38 fallback — when `docs_dir` contains prose `.md` files only
@@ -230,7 +258,19 @@ def _stub_l_docs_from_prose(docs_dir: Path, out_dir: Path,
     if not name_m:
         # Heuristic 2: `module X (` declaration in prose body
         name_m = _re.search(r"\bmodule\s+([A-Za-z_]\w*)\s*[(#]", text)
+    # #2049 item 1 — `docs_dir.parent.name` is a DIRECTORY, not a design
+    # declaration. The prompt front door bridges its input into
+    # `<proj>/input/docs/`, so this fallback published `top_module: "input"`
+    # — a top named after a directory that every downstream artefact then
+    # carried. The chip NAME may still fall back to the directory (chip name
+    # and RTL top are distinct concepts, #583/#541 above); the RTL TOP may
+    # not. It is either declared by the input or it is `top_undeclared`.
     mod_name = name_m.group(1) if name_m else docs_dir.parent.name
+    if name_m:
+        top_module, top_status = name_m.group(1), "declared_in_input"
+    else:
+        top_module, top_status = _docs_door_top_module(
+            text, source_name=prose_files[0].name)
     # Heuristic 3: input/output port lines `input [N:0] name` (multi-line OK)
     port_re = _re.compile(
         r"\b(input|output|inout)\s+(?:wire\s+|reg\s+|logic\s+)?"
@@ -332,7 +372,8 @@ def _stub_l_docs_from_prose(docs_dir: Path, out_dir: Path,
                                      else "registered-fallback unknown_protocol_class"),
           "class_detection_keyword": matched_kw}
     l3 = {"ports": ports}
-    l9 = {"top_module": mod_name,
+    l9 = {"top_module": top_module,
+          "top_module_status": top_status,
           "top_ports": [p["name"] for p in ports],
           "stub_origin": "_stub_l_docs_from_prose"}
     layer_payloads = {
