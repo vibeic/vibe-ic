@@ -9546,8 +9546,50 @@ def _declared_pdk_alternates(project: Path, source_rel, line, adopted):
     document is a mention, and this file's ORGANIC-20260801 note already
     forbids promoting a mention to a declaration.
 
+    POLARITY IS CONSULTED AT THE CLAUSE, NOT AT A LOOK-BACK WINDOW (#2071).
+    This used to read the 24 characters BEFORE the name and nothing after it, so
+    a denial written AFTER the name was invisible and the denied family was
+    co-declared with the target:
+
+        gf180mcu is the target and sky130 is not used   ->  [gf180mcu, sky130]
+
+    The reach is `_prose_polarity.sentence_scope` — the tree's one rule for
+    "which text does a denial govern" — rather than a second private scope. A
+    look-back window is not a weaker version of that rule; it is a DIFFERENT
+    rule, and the direction it fails in is the loud one: it publishes a family
+    the design's own row denies, and `submission_template_fetch.
+    declared_pdk_families` then accepts a run on it.
+
+    `extra_breaks=("|",)` IS MEASURED, NOT A PREFERENCE. `sentence_scope` bounds
+    on sentence punctuation, and the rows this function actually reads carry
+    none: of the six benchmark designs' real L1 target rows, five are MARKDOWN
+    TABLE ROWS (`| <label> | <value> | <note> |`) with no `. ` anywhere. Without
+    a cell break the scope of every name is the WHOLE ROW, so a denial in a
+    NEIGHBOURING, UNRELATED CELL retracts a family this cell declares — trading
+    #2071's over-report for an under-report, which is the SILENT direction
+    `_prose_polarity` names. A table cell is a FIELD, not a clause of a
+    sentence, and that is exactly the "input that is not prose" case
+    `extra_breaks` exists for (vibe-ic#790). `;` is deliberately NOT added: this
+    module measured that treating it as an end loses a denial that genuinely
+    governs the clause beside it.
+
+    THE BUDGET IS THE ROW. `before`/`after` default to 240 characters, which on
+    a long table row would reintroduce, as a character count, the very
+    asymmetry this replaces. The text here is ONE already-capped row, so the
+    budget is set to its length and the BREAK RULE alone decides the scope.
+
+    THE VOCABULARY IS UNCHANGED. `_FOUNDRY_NEGATION_RE` is already
+    `_prose_polarity.DENIAL_CORE_RE`, and it is kept — widening to the RETIRED
+    tier here, or blanking brackets before the search, would each be a SECOND
+    change, and would make this function disagree with
+    `_extract_pdk_target_with_provenance` about the same row. Brackets in
+    particular must not be blanked: in three of the six real rows the family
+    names sit INSIDE the parenthetical, so a denial written beside a name would
+    be blanked away with it.
+
     chip-AGNOSTIC: reads the same `_OPEN_PDK_TOKEN_RE` name namespace the
-    adopted target itself came from; no chip / foundry / PDK literal added.
+    adopted target itself came from; `|` is pipe-table syntax. No chip /
+    foundry / PDK literal added.
     """
     if not adopted or not source_rel or not line:
         return []
@@ -9563,8 +9605,10 @@ def _declared_pdk_alternates(project: Path, source_rel, line, adopted):
     for m in _OPEN_PDK_TOKEN_RE.finditer(row):
         if _match_is_inside_path_token(row, m.start(), m.end()):
             continue
-        span = row[max(0, m.start() - 24):m.end()]
-        if _FOUNDRY_NEGATION_RE.search(span):
+        lo, hi = _prose_sentence_scope(row, m.start(), m.end(),
+                                       before=len(row), after=len(row),
+                                       extra_breaks=("|",))
+        if _FOUNDRY_NEGATION_RE.search(row[lo:hi]):
             continue
         tok = re.sub(r"^ihp[- ]?", "", m.group(1).lower()).replace(" ", "")
         if tok not in out:
