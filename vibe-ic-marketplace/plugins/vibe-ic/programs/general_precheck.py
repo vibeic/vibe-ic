@@ -109,10 +109,29 @@ same way:
     NOT_DETERMINED  no verdict was obtained: no layout, an unreadable layout,
                     a question left unanswered, or a delegated checker that
                     could not run. "NOT DETERMINED" beats a guess.
+    NOT_APPLICABLE  the TECHNOLOGY has no such facility, derived from the PDK
+                    volume and never from a declaration. Does not block a PASS.
 
-No `SKIPPED`, `N/A` or `BLOCKED`. All three read as "nothing to worry about
-here" in an aggregate, and nothing-to-worry-about is exactly what a design
-nobody checked is not entitled to.
+No `SKIPPED` or `BLOCKED`, and NOT_APPLICABLE is admitted for exactly one
+reason. The three-verdict rule above was written because `SKIPPED` / `N/A` /
+`BLOCKED` all read as "nothing to worry about here" in an aggregate, and
+nothing-to-worry-about is exactly what a design nobody checked is not entitled
+to. That reasoning is intact and is what the derivation requirement enforces:
+
+    DECLARED not-applicable   REFUSED. `seal_ring_required: false` is a design
+                              saying "do not check this". It stays
+                              NOT_DETERMINED and the evidence says why.
+    DERIVED  not-applicable   ADMITTED. The PDK volume ships no seal-ring
+                              generator at all, so there is no facility to
+                              exercise and nothing was skipped — there was
+                              nothing there. The report names the volume and
+                              the path that was absent, so a reader can check
+                              the derivation instead of taking the word.
+
+MEASURED over the six PDK volumes the pinned image carries (image label
+0.3.46, `_pdk_layer_authority`): two ship the generator, three do not, and one
+name resolves to no volume at all and stays NOT_DETERMINED. A tier nothing can
+reach would be decoration; a tier every design can reach would be the hole.
 
 EXIT CODES
 ==========
@@ -159,6 +178,7 @@ if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
 import _gds_geometry as _geom                                   # noqa: E402
+import _pdk_layer_authority as _pdkauth                         # noqa: E402
 import _tapeout_declaration as _decl                            # noqa: E402
 import plugin_manifest_discovery as _pmd                        # noqa: E402
 from _atomic_artefact import write_text as atomic_write_text    # noqa: E402
@@ -168,6 +188,9 @@ ATTRIBUTION = "general_precheck"
 PASS = "PASS"
 FAIL = "FAIL"
 NOT_DETERMINED = "NOT_DETERMINED"
+#: Admitted ONLY for a fact about the process — see the four-verdict note in
+#: the module docstring. Never reachable from a declaration.
+NOT_APPLICABLE = "NOT_APPLICABLE"
 
 #: Where the truth for a step comes from. Recorded per step in the report,
 #: because "we measured this" and "we asked the PDK" and "we compared it to
@@ -368,6 +391,12 @@ class PrecheckReport:
     steps: List[StepEvidence] = field(default_factory=list)
     failed_steps: List[str] = field(default_factory=list)
     undetermined_steps: List[str] = field(default_factory=list)
+    #: Rungs the TECHNOLOGY has no facility for. Named, never merely absent.
+    not_applicable_steps: List[str] = field(default_factory=list)
+    #: What the PDK volume answered, and how it was found. Published whether or
+    #: not a rung used it, so "the technology was not asked" is visible as a
+    #: fact instead of being inferred from a rung's prose.
+    technology: Dict[str, Any] = field(default_factory=dict)
     operator_specific_excluded: List[Dict[str, str]] = field(
         default_factory=lambda: [{"step_id": s, "reason": r}
                                  for s, r in OPERATOR_SPECIFIC_EXCLUDED])
@@ -389,6 +418,7 @@ class PrecheckReport:
             f"steps_with_evidence={self.steps_with_evidence}, "
             f"failed={len(self.failed_steps)}, "
             f"undetermined={len(self.undetermined_steps)}, "
+            f"not_applicable={len(self.not_applicable_steps)}, "
             f"declaration_answered={a.get('answered', 0)}/"
             f"{a.get('questions_total', len(_decl.QUESTIONS))} — {self.reason}")
 
@@ -700,32 +730,96 @@ def _step_zero_area(ev: StepEvidence, geom: Optional[Dict[str, Any]]) -> None:
 
 
 def _step_forbidden_layers(ev: StepEvidence, layers: Optional[Dict[Any, int]],
-                           forbidden: Any) -> None:
+                           forbidden: Any,
+                           allowed: Optional[set] = None,
+                           authority: Optional[str] = None,
+                           authority_tried: Optional[List[str]] = None,
+                           authority_why: str = "") -> None:
+    """FORBIDDEN IS THE COMPLEMENT OF THE PROCESS, NOT A LIST SOMEBODY TYPED.
+
+    Owner ruling, 2026-09-06 (vibe-ic#2058): this rung is DERIVED, never
+    declared. The allowed set is the technology's own KLayout layer table —
+    the same table its deck and its viewer read — and every layer/datatype the
+    GDS draws on that the table does not define is a layer the process does not
+    know.
+
+    THE MEASUREMENT THAT MADE IT A RULING. spm x gf180mcuD, image label 0.3.46,
+    lane czspmfp: `General.ForbiddenLayers` = NOT_DETERMINED, evidence "the
+    layout draws on 32 layer/datatype pair(s), and `forbidden_layers` was not
+    declared, so no layer can be called forbidden". Nobody had typed a list, so
+    a finished die went to a foundry with the question unasked. Derived
+    instead: 29 of those 32 pairs are in the technology's table and THREE are
+    not.
+
+    A DECLARED LIST STILL BINDS, IN THE ONE DIRECTION THAT CANNOT LAUNDER
+    ANYTHING. The declaration may forbid MORE than the process does — a taking
+    party's own prohibition on a layer the technology defines perfectly well.
+    It may never widen what is allowed, so no `forbidden_layers` value can turn
+    an unmapped layer into an acceptable one, and an empty list buys nothing.
+
+    A technology whose table could not be read is NOT_DETERMINED and names the
+    authority it went without. It is never an empty allowed set, which would
+    make every layer in every GDS forbidden at once.
+    """
     if layers is None:
         ev.evidence = "the layout was not read, so its layers are unknown"
         return
     used = sorted(f"{l}/{d}" for (l, d) in layers)
+    declared = ([str(f).strip() for f in forbidden]
+                if isinstance(forbidden, (list, tuple)) else [])
     ev.measured = {"layers_used": used[:200],
                    "layers_used_count": len(used),
-                   "declared_forbidden": forbidden}
-    if forbidden == _decl.NOT_DETERMINED:
-        ev.evidence = (f"the layout draws on {len(used)} layer/datatype "
-                       "pair(s), and `forbidden_layers` was not declared, so "
-                       "no layer can be called forbidden")
+                   "declared_forbidden": forbidden,
+                   "layer_authority": authority,
+                   "layer_authority_tried": list(authority_tried or []),
+                   "allowed_pairs": len(allowed) if allowed else None}
+    declared_hits = sorted(set(declared) & set(used))
+    if allowed is None:
+        # A DECLARED PROHIBITION STILL REFUSES WITH NO TABLE TO READ. The
+        # derivation replaces the declaration as the source of what is
+        # ALLOWED; it does not cancel a prohibition somebody wrote down. Losing
+        # this refusal because the volume was unreachable would be a check
+        # weakened by an absence, which is the opposite of the ruling.
+        if declared_hits:
+            ev.verdict = FAIL
+            ev.evidence = (
+                f"the declaration forbids {', '.join(declared_hits)} and they "
+                f"are in use. The technology's own layer table could not be "
+                f"read ({authority_why or 'no PDK layer table'}), so this "
+                f"refusal is the declaration's alone and no statement is made "
+                f"about the other {len(used) - len(declared_hits)} pair(s)")
+            return
+        ev.evidence = (
+            f"the layout draws on {len(used)} layer/datatype pair(s), and the "
+            f"technology's own layer table could not be read, so the allowed "
+            f"set is unknown and no further layer can be called forbidden "
+            f"({authority_why or 'no PDK layer table'})")
         return
-    if not isinstance(forbidden, (list, tuple)):
-        ev.evidence = (f"`forbidden_layers` is {type(forbidden).__name__}, "
-                       "not a list of \"layer/datatype\" strings")
-        return
-    hits = sorted(set(str(f).strip() for f in forbidden) & set(used))
-    if hits:
+    unmapped = sorted((f"{l}/{d}" for (l, d) in layers
+                       if (l, d) not in allowed),
+                      key=lambda t: tuple(int(x) for x in t.split("/")))
+    ev.measured["unmapped_layers"] = unmapped
+    if unmapped or declared_hits:
         ev.verdict = FAIL
-        ev.evidence = (f"the layout draws on forbidden layer(s) "
-                       f"{', '.join(hits)}")
+        parts = []
+        if unmapped:
+            parts.append(
+                f"{len(unmapped)} of the {len(used)} layer/datatype pair(s) in "
+                f"this layout are not defined by the technology's own layer "
+                f"table ({authority}, {len(allowed)} pair(s)): "
+                f"{', '.join(unmapped)}")
+        if declared_hits:
+            parts.append(f"the declaration forbids {', '.join(declared_hits)} "
+                         f"and they are in use")
+        ev.evidence = "; ".join(parts)
     else:
         ev.verdict = PASS
-        ev.evidence = (f"none of the {len(forbidden)} forbidden layer(s) "
-                       f"appears among the {len(used)} in use")
+        ev.evidence = (f"every one of the {len(used)} layer/datatype pair(s) "
+                       f"in this layout is defined by the technology's own "
+                       f"layer table ({authority}, {len(allowed)} pair(s))"
+                       + (f", and none of the {len(declared)} additionally "
+                          f"declared forbidden layer(s) is in use"
+                          if declared else ""))
 
 
 # --------------------------------------------------------------------------- #
@@ -735,19 +829,67 @@ def _step_delegate(ev: StepEvidence, step: Step, project: Path,
                    runner: Runner, programs_dir: Path,
                    timeout: Optional[float],
                    seal_required: Any = None,
-                   pdk: Optional[str] = None) -> None:
+                   pdk: Optional[str] = None,
+                   seal_facility: Optional[bool] = None,
+                   seal_facility_path: Optional[str] = None,
+                   seal_facility_tried: Optional[List[str]] = None,
+                   volume_why: str = "") -> None:
     d = step.delegate
     assert d is not None
-    if step.step_id == "General.SealRing" and seal_required is _decl.NOT_DETERMINED:
-        ev.evidence = ("`seal_ring_required` was not declared. Whether this "
-                       "layout owes a seal ring is the taking party's rule, "
-                       "and with no party named there is no rule to apply")
-        return
-    if step.step_id == "General.SealRing" and seal_required is False:
-        ev.evidence = ("the declaration states no seal ring is required, so "
-                       "the layout was not measured for one. Declared-away is "
-                       "not the same as checked-and-clean")
-        return
+    if step.step_id == "General.SealRing":
+        # A NOT_APPLICABLE THE TECHNOLOGY EARNS, NOT ONE THE DESIGN DECLARES
+        # (vibe-ic#2058 FP-10). `seal_ring_required: false` used to reach this
+        # rung as a NOT_DETERMINED and reach `die_finishing_gen` as a decided
+        # not-applicable — one declaration, two consumers, opposite meanings,
+        # and no value of it able to produce a PASS.
+        #
+        # The question is answered from the PROCESS: does this PDK volume ship
+        # a seal-ring generator at all? MEASURED over the six volumes in the
+        # pinned image (label 0.3.46): three ship none, two ship one, and one
+        # name resolves to no volume. Where there is no facility there is
+        # nothing to exercise and nothing was skipped, so NOT_APPLICABLE is a
+        # statement rather than a shrug — and the report names the volume and
+        # the absent path so the derivation can be checked.
+        ev.measured = {"seal_ring_required_declared": seal_required,
+                       "technology_seal_ring_facility": seal_facility,
+                       "seal_ring_facility_path": seal_facility_path,
+                       "seal_ring_facility_tried": list(seal_facility_tried
+                                                        or [])}
+        if seal_facility is False:
+            ev.verdict = NOT_APPLICABLE
+            _absent = ", ".join(seal_facility_tried or []) or "the PDK volume"
+            ev.evidence = (
+                "this technology has no seal-ring facility: its PDK volume "
+                f"ships no seal-ring generator ({_absent}). A seal ring is "
+                "not applicable to a process that cannot build one — DERIVED "
+                "from the volume, not taken from the declaration")
+            return
+        if seal_required is _decl.NOT_DETERMINED:
+            ev.evidence = ("`seal_ring_required` was not declared. Whether "
+                           "this layout owes a seal ring is the taking "
+                           "party's rule, and with no party named there is no "
+                           "rule to apply")
+            if seal_facility is None:
+                ev.evidence += (f". The technology could not be asked either "
+                                f"({volume_why or 'no PDK volume resolved'})")
+            return
+        if seal_required is False:
+            if seal_facility is None:
+                ev.evidence = (
+                    "the declaration states no seal ring is required, and the "
+                    "technology could not be asked whether it has the "
+                    f"facility ({volume_why or 'no PDK volume resolved'}). "
+                    "Declared-away is not the same as checked-and-clean, and "
+                    "a not-applicable nobody derived is not one")
+                return
+            ev.evidence = (
+                "the declaration states no seal ring is required, but this "
+                f"technology HAS the facility ({seal_facility_path}) — so a "
+                "seal ring is applicable to it and the layout was still not "
+                "measured for one. A declared not-applicable is refused; only "
+                "a technology with no seal-ring facility at all earns "
+                "NOT_APPLICABLE")
+            return
 
     prog = programs_dir / f"{d.program}.py"
     if not prog.is_file():
@@ -774,9 +916,19 @@ def _step_delegate(ev: StepEvidence, step: Step, project: Path,
            "--json", str(out)]
     rc, stdout, stderr = runner(cmd, timeout)
     ev.returncode = rc
+    # BOTH SIDES (#2061 R-04 x #2058). R-04's token-aligned tail replaces the
+    # raw `[-400:]`: that cut began at whatever byte fell 400 back from the end,
+    # a point set by the LENGTH OF THE PROJECT PATH the delegate echoed, so two
+    # runs of one tree differing only in where the project lived published
+    # evidence starting mid-token. Nothing about this lane's change touches that
+    # window — it changes what `ev.measured` CARRIES, not what the tail SAYS.
     tail = _evidence_tail(stderr.strip() or stdout.strip())
-    ev.measured = {"command": cmd, "report": str(out),
-                   "report_written": out.is_file()}
+    # UPDATE, never replace: the seal-ring rung above records what the
+    # TECHNOLOGY answered before this delegate runs, and that derivation is
+    # part of the evidence for the delegate's verdict too.
+    ev.measured = dict(ev.measured or {},
+                       **{"command": cmd, "report": str(out),
+                          "report_written": out.is_file()})
     if rc == 0:
         ev.verdict = PASS
         ev.evidence = f"{d.program} exited 0: {tail}" if tail else \
@@ -871,6 +1023,21 @@ def evaluate(project: Path,
         read_error = str(exc)
         rep.geometry = {"read_error": read_error}
 
+    # THE TECHNOLOGY, ASKED ONCE. Both derived rungs below — the seal-ring
+    # tier and the forbidden-layer complement — are statements about the
+    # PROCESS, so the volume is resolved a single time and every attempt is
+    # carried into the evidence of whichever rung needed it.
+    volume, volume_why, _volume_tried = _pdkauth.resolve_volume(pdk)
+    allowed, layer_authority, layer_tried = _pdkauth.layer_table(volume)
+    seal_facility, seal_path, seal_tried = _pdkauth.seal_ring_facility(volume)
+    rep.technology = {"pdk": pdk, "volume": str(volume) if volume else None,
+                      "volume_resolution": volume_why,
+                      "volume_tried": _volume_tried,
+                      "layer_table": layer_authority,
+                      "layer_table_pairs": len(allowed) if allowed else None,
+                      "seal_ring_facility": seal_facility,
+                      "seal_ring_facility_path": seal_path}
+
     by_id = {s.step_id: s for s in steps}
     for step in LADDER:
         ev = by_id[step.step_id]
@@ -888,20 +1055,32 @@ def evaluate(project: Path,
             _step_zero_area(ev, geom)
         elif step.step_id == "General.ForbiddenLayers":
             _step_forbidden_layers(
-                ev, layers, _decl.answer(doc, _decl.FORBIDDEN_LAYERS_KEY))
+                ev, layers, _decl.answer(doc, _decl.FORBIDDEN_LAYERS_KEY),
+                allowed=allowed, authority=layer_authority,
+                authority_tried=(layer_tried or _volume_tried),
+                authority_why=volume_why)
         elif step.delegate is not None:
             seal = ans.get("seal_ring_required")
             _step_delegate(ev, step, project, run, pdir, timeout,
                            seal_required=(seal if _decl.is_answered(seal)
                                           else _decl.NOT_DETERMINED),
-                           pdk=pdk)
+                           pdk=pdk, seal_facility=seal_facility,
+                           seal_facility_path=seal_path,
+                           seal_facility_tried=seal_tried,
+                           volume_why=volume_why)
 
     with_evidence = sum(1 for s in steps if s.verdict != NOT_DETERMINED)
     failed = [s.step_id for s in steps if s.verdict == FAIL]
     undet = [s.step_id for s in steps if s.verdict == NOT_DETERMINED]
+    # NAMED, ALWAYS. A rung that did not apply is disclosed as its own list, so
+    # a PASS states which of its steps was answered by the technology rather
+    # than by the layout — and cannot be read as "every step measured
+    # something".
+    n_a = [s.step_id for s in steps if s.verdict == NOT_APPLICABLE]
     rep.steps_with_evidence = with_evidence
     rep.failed_steps = failed
     rep.undetermined_steps = undet
+    rep.not_applicable_steps = n_a
 
     if failed:
         rep.verdict = FAIL
@@ -921,7 +1100,10 @@ def evaluate(project: Path,
         rep.reason = (f"every one of the {len(LADDER)} general ladder step(s) "
                       "carries passing evidence; the "
                       f"{len(OPERATOR_SPECIFIC_EXCLUDED)} operator-specific "
-                      "step(s) are excluded and named")
+                      "step(s) are excluded and named"
+                      + (f"; {len(n_a)} step(s) do not apply to this "
+                         f"technology and say from what that was derived: "
+                         + ", ".join(n_a) if n_a else ""))
     return rep
 
 

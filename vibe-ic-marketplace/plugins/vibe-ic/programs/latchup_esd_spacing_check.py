@@ -76,6 +76,12 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import phase3_one_shot_runner as _p  # noqa: E402  (shipped DEF parsers — single source)
 
+import sys as _sys                                             # noqa: E402
+from pathlib import Path as _Path                              # noqa: E402
+if str(_Path(__file__).resolve().parent) not in _sys.path:
+    _sys.path.insert(0, str(_Path(__file__).resolve().parent))
+import _declared_die as _dd                                    # noqa: E402
+
 
 # --------------------------------------------------------------------------- #
 # CONSERVATIVE screening distance.
@@ -293,6 +299,31 @@ def _sparse_die_tap_skip_attested(def_file: Path) -> bool:
         return False
 
 
+def _project_of(def_file: Path) -> Optional[Path]:
+    """The project directory that owns a canonical DEF, or None.
+
+    `<project>/phase3/stage3/pnr/<file>` — three levels up, using the path AS
+    GIVEN and not `.resolve()`, for the reason `_sparse_die_tap_skip_attested`
+    states one function above: a symlinked DEF must find the project's own
+    records, not the symlink target's. A DEF outside that layout has no project
+    around it, which is a legitimate state and is answered with None rather
+    than with a guess.
+    """
+    try:
+        if len(def_file.parents) > 3:
+            cand = def_file.parents[3]
+            if (cand / _dd.FLOORPLAN_RECTANGLES_REL).is_file():
+                return cand
+        ab = def_file.absolute()
+        if len(ab.parents) > 3:
+            cand = ab.parents[3]
+            if (cand / _dd.FLOORPLAN_RECTANGLES_REL).is_file():
+                return cand
+    except (OSError, IndexError):
+        return None
+    return None
+
+
 def _latchup_tap_spacing_check(def_file: Path,
                                screen_um: float = _DEFAULT_SCREEN_UM,
                                rated_tap_masters: Optional[Sequence[str]] = None,
@@ -323,7 +354,15 @@ def _latchup_tap_spacing_check(def_file: Path,
                 "note": "Routed DEF could not be read — cannot screen tap spacing."}
 
     units = _parse_units(text)
-    die = _parse_diearea_um(text, units)
+    # THE DIE, NOT THE DEF'S RECTANGLE (vibe-ic#2058 FP-15). On a SLOT run
+    # `DIEAREA` states the PLACEABLE CORE, so a well-formed-die claim anchored
+    # on it is a claim about the core. The run's own floorplan record answers
+    # first and BOTH rectangles are published, so a reader can see which one
+    # the guard below used and whether the two agree.
+    def_die = _parse_diearea_um(text, units)
+    _die = _dd.resolve(_project_of(def_file),
+                       def_rect_um=list(def_die) if def_die else None)
+    die = tuple(_die.rect) if _die.rect else None
     geom = _parse_placed_geometry(text)
     std = [(x / units, y / units) for _i, m, x, y in geom if _is_std_cell(m)]
     taps = [(x / units, y / units) for _i, m, x, y in geom
@@ -333,7 +372,11 @@ def _latchup_tap_spacing_check(def_file: Path,
                            and not _is_rated_tap(m, rated_tap_masters)})
     base.update({"n_std": len(std), "n_tap": len(taps),
                  "unknown_taps": unknown_taps, "units_per_um": units,
-                 "diearea_um": list(die) if die else None})
+                 # `diearea_um` keeps its meaning — the DEF's own record — and
+                 # the die is published beside it under its own name.
+                 "diearea_um": list(def_die) if def_die else None,
+                 "die_rect_um": list(die) if die else None,
+                 "die_source": _die.source, "die_basis": _die.basis})
 
     if not geom:
         return {**base, "status": "INCOMPLETE", "reason": "NO_PLACED_GEOMETRY",
@@ -407,9 +450,10 @@ def _latchup_tap_spacing_check(def_file: Path,
     # A degenerate / missing DIEAREA cannot anchor a 'well-formed-die' GAP claim.
     if die is None or min(die[2] - die[0], die[3] - die[1]) < _MIN_DIE_SIDE_UM:
         return {**base, "status": "INCOMPLETE", "reason": "DEGENERATE_DIEAREA",
-                "note": ("DIEAREA is missing or degenerate (zero/sub-micron side) — "
+                "note": ("the die is missing or degenerate (zero/sub-micron side) — "
                          "cannot establish a well-formed die to make a CONCLUSIVE "
-                         "spacing GAP claim. Spacing screen withheld (no over-claim).")}
+                         "spacing GAP claim. Spacing screen withheld (no "
+                         f"over-claim). Die basis: {_die.basis}")}
 
     # CONCLUSIVE GAP #2: a std cell provably > screen_um from EVERY tap. Because
     # the screen is DELIBERATELY GENEROUS (looser than any real rule), a violation

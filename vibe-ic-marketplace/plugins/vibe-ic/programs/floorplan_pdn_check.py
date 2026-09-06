@@ -74,6 +74,12 @@ from pathlib import Path
 
 import _path_layout as _pl
 
+import sys as _sys                                             # noqa: E402
+from pathlib import Path as _Path                              # noqa: E402
+if str(_Path(__file__).resolve().parent) not in _sys.path:
+    _sys.path.insert(0, str(_Path(__file__).resolve().parent))
+import _declared_die as _dd                                    # noqa: E402
+
 
 _GATE_NAME = "floorplan_pdn_check"
 _GATE_LABEL = "floorplan_pdn"
@@ -103,6 +109,7 @@ _RE_IFP_UTIL = re.compile(
 _RE_GPL_UTIL = re.compile(
     r"Utilization:\s*([0-9]*\.?[0-9]+)\s*%", re.IGNORECASE)
 
+_RE_UNITS = re.compile(r"UNITS\s+DISTANCE\s+MICRONS\s+(\d+)")
 _RE_DIEAREA = re.compile(
     r"DIEAREA\s*\(\s*(-?\d+)\s+(-?\d+)\s*\)\s*\(\s*(-?\d+)\s+(-?\d+)\s*\)")
 
@@ -149,6 +156,10 @@ def _parse_floorplan_def(path: Path):
         "n_components": None,    # from COMPONENTS <n> ; header
         "n_component_lines": 0,  # counted "- inst cell" lines
         "has_specialnets_pg": False,
+        # The DEF's own grid. Needed to compare its rectangle against the
+        # run's declared die, which is in microns. None means the DEF did not
+        # state one — reported as None, never defaulted here.
+        "units_per_um": None,
     }
 
     in_components = False
@@ -157,6 +168,14 @@ def _parse_floorplan_def(path: Path):
         s = raw.strip()
         if not s:
             continue
+
+        if out["units_per_um"] is None:
+            mu = _RE_UNITS.search(s)
+            if mu:
+                try:
+                    out["units_per_um"] = int(mu.group(1)) or None
+                except ValueError:                        # pragma: no cover
+                    out["units_per_um"] = None
 
         if out["diearea"] is None:
             m = _RE_DIEAREA.search(s)
@@ -365,6 +384,16 @@ def main(argv=None) -> int:
         _emit(args, project, "FAIL", findings, extra)
         return 1
 
+    # The ONE derivation of the die, asked once for this report.
+    _da = fp["diearea"]
+    _u = fp.get("units_per_um")
+    # NO DEFAULT GRID. Without `UNITS DISTANCE MICRONS` the DEF's integers are
+    # not convertible to microns, so the DEF rectangle is simply not offered as
+    # a fallback rather than offered at a guessed scale.
+    _die = _dd.resolve(
+        project,
+        def_rect_um=([_da[0] / _u, _da[1] / _u, _da[2] / _u, _da[3] / _u]
+                     if _da and _u else None))
     extra["die_area_units"] = fp["die_area_units"]
     extra["n_rows"] = fp["n_rows"]
     extra["n_components"] = (
@@ -390,10 +419,27 @@ def main(argv=None) -> int:
         fail = True
     else:
         x1, y1, x2, y2 = fp["diearea"]
+        # RULE 1 IS ABOUT THE DEF RECORD, and stays about it: a floorplan that
+        # declares no outline, or a degenerate one, is a structural defect
+        # whatever the die is. What is DISCLOSED here is that the record and
+        # the die need not be the same rectangle (vibe-ic#2058 FP-15): on a
+        # SLOT run `DIEAREA` states the placeable CORE. Naming both stops this
+        # INFO line from being quoted as the die size, which is what it read
+        # as when it was the only rectangle in the report.
+        extra["die_source"] = _die.source
+        extra["die_basis"] = _die.basis
+        extra["die_rect_um"] = list(_die.rect) if _die.rect else None
+        _also = ""
+        if _die.is_declared and _die.rect is not None:
+            _also = (f"; the run declares the DIE as "
+                     f"{_die.width_um():g} x {_die.height_um():g} um "
+                     f"({_die.basis})")
         findings.append({
             "severity": "INFO", "rule": "DIEAREA_OK",
             "message": f"DIEAREA ({x1} {y1}) ({x2} {y2}) "
-                       f"= {fp['die_area_units']} DEF-units^2",
+                       f"= {fp['die_area_units']} DEF-units^2 — this is the "
+                       f"DEF's own record, which on a slot run states the "
+                       f"placeable core{_also}",
         })
 
     # Rule 2 — at least one ROW (placeable core region).

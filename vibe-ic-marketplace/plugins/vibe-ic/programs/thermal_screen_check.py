@@ -77,6 +77,10 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+if str(Path(__file__).resolve().parent) not in sys.path:
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _declared_die as _dd                                     # noqa: E402
+
 _VERSION = "1.0.0"
 
 # Default first-order air-cooled-package screen limit. Power density is
@@ -249,12 +253,27 @@ def _die_area_mm2_from_json(data: Any) -> Tuple[Optional[float], str]:
 def _resolve_die_area_mm2(die_source: Optional[Path],
                           area_mm2: Optional[float],
                           area_um2: Optional[float],
+                          project: Optional[Path] = None,
                           ) -> Tuple[Optional[float], str]:
-    """Resolve die area to mm² from CLI overrides or a DEF/JSON source."""
+    """Resolve die area to mm² — the RUN'S DECLARED DIE before any DEF.
+
+    vibe-ic#2058 FP-15. A power DENSITY is a power divided by a die area, and
+    on a SLOT run `DIEAREA` is the placeable CORE, not the die: measured
+    1052 x 1647 um stated as the die of a 1936 x 2531 um slot, which is 2.4x
+    too small and makes every density on such a run 2.4x too large. The run's
+    own floorplan record answers first; the DEF is consulted only after it, and
+    the provenance token says which of the two the number came from, so a
+    reader is never left to infer it.
+    """
     if area_mm2 is not None:
         return area_mm2, "cli_mm2"
     if area_um2 is not None:
         return area_um2 / 1e6, "cli_um2"
+    if project is not None:
+        rect, why, _rec = _dd.declared(project)
+        if rect is not None:
+            w, h = rect[2] - rect[0], rect[3] - rect[1]
+            return (w * h) / 1e6, f"declared_die_record({why})"
     if die_source is None:
         return None, "no_die_source"
     try:
@@ -299,6 +318,7 @@ def evaluate(power_path: Path, die_source: Optional[Path],
              area_mm2: Optional[float], area_um2: Optional[float],
              limit_w_per_mm2: float, tj_max_c: float,
              theta_ja: Optional[float], ambient_c: Optional[float],
+             project: Optional[Path] = None,
              ) -> Tuple[str, Dict[str, Any]]:
     """Return (verdict, report). verdict in {PASS, FAIL, SKIP}."""
     rep: Dict[str, Any] = {
@@ -348,7 +368,8 @@ def evaluate(power_path: Path, die_source: Optional[Path],
         return "SKIP", rep
 
     # (2) die area.
-    die_mm2, a_prov = _resolve_die_area_mm2(die_source, area_mm2, area_um2)
+    die_mm2, a_prov = _resolve_die_area_mm2(die_source, area_mm2, area_um2,
+                                            project=project)
     if die_mm2 is None:
         rep["verdict"] = "SKIP"
         rep["skip_reason"] = "no_die_area"
@@ -482,7 +503,8 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     verdict, rep = evaluate(
         power_path, die_source, args.die_area_mm2, args.die_area_um2,
-        args.limit_w_per_mm2, args.tj_max, args.theta_ja, args.ambient)
+        args.limit_w_per_mm2, args.tj_max, args.theta_ja, args.ambient,
+        project=(in_path if in_path.is_dir() else None))
     _emit(rep, args.json)
     return {"PASS": 0, "FAIL": 1, "SKIP": 3}[verdict]
 

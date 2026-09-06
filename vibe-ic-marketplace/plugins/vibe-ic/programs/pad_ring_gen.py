@@ -204,6 +204,7 @@ from _atomic_artefact import write_text as atomic_write_text
 
 import _pad_ring as PR
 import _source_record_merge as _srm     # noqa: E402
+import _declared_die as _dd                                    # noqa: E402
 
 PROGRAM = "pad_ring_gen"
 
@@ -1143,8 +1144,31 @@ def main(argv: Optional[List[str]] = None) -> int:
     except (PR.DefError, OSError) as exc:
         return _fail("FLOORPLAN_DEF_UNREADABLE",
                      f"{PR.FLOORPLAN_DEF_REL}: {exc}")
+    # A RING GOES ROUND THE DIE, NOT ROUND THE CORE (vibe-ic#2058 FP-15,
+    # FP-14). `_pad_ring.parse_def` reads `floorplan.def`'s own DIEAREA, and on
+    # a SLOT run that rectangle is the PLACEABLE CORE: the runner hands
+    # OpenROAD the core as `-die_area` because `ppl place_pins` places pins on
+    # the die boundary and has no core-boundary mode. A ring built on it would
+    # be placed on top of the rows.
+    #
+    # The run's own floorplan record is therefore the authority for the
+    # rectangle, converted into this DEF's own units so the ring coordinates
+    # and the placement coordinates stay in one grid. The DEF's record is kept
+    # under its own key and `die_source` names which of the two the ring was
+    # built from — a fallback is published, never silent.
+    _dierec = _dd.resolve(
+        project,
+        def_rect_um=[c / die.units for c in die.box])
+    _def_box = list(die.box)
+    if _dierec.rect is not None and _dierec.is_declared:
+        _x0, _y0, _x1, _y1 = (int(round(v * die.units)) for v in _dierec.rect)
+        if [_x0, _y0, _x1, _y1] != _def_box and len(die.diearea) == 2:
+            die.diearea = [(_x0, _y0), (_x1, _y1)]
     die_rec = {"units": die.units, "diearea": [list(p) for p in die.diearea],
-               "box": list(die.box), "n_corners": die.n_die_corners}
+               "box": list(die.box), "n_corners": die.n_die_corners,
+               "def_diearea_box": _def_box,
+               "die_source": _dierec.source, "die_basis": _dierec.basis,
+               "die_moved_off_the_def_record": list(die.box) != _def_box}
     if die.n_die_corners != len(PR.CORNER_POSITIONS):
         # A rectilinear die needs one corner cell per vertex, and the config
         # contract has one PAD_CORNER and four named positions — it cannot

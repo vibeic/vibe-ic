@@ -21,6 +21,12 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
+import sys as _sys                                             # noqa: E402
+from pathlib import Path as _Path                              # noqa: E402
+if str(_Path(__file__).resolve().parent) not in _sys.path:
+    _sys.path.insert(0, str(_Path(__file__).resolve().parent))
+import _declared_die as _dd                                    # noqa: E402
+
 
 # ---------------------------------------------------------------------------
 # public API (consumed by tests)
@@ -372,6 +378,18 @@ def _discover_def(project: Path) -> Optional[Path]:
     return None
 
 
+_DEF_UNITS_RE = re.compile(r"(?m)^\s*UNITS\s+DISTANCE\s+MICRONS\s+(\d+)")
+
+
+def _def_units(def_text: str) -> int:
+    """DEF database units per micron. 1000 is the DEF default, not a PDK fact."""
+    m = _DEF_UNITS_RE.search(def_text)
+    try:
+        return int(m.group(1)) if m and int(m.group(1)) > 0 else 1000
+    except ValueError:                                    # pragma: no cover
+        return 1000
+
+
 def check(project: Path, def_path: Optional[Path] = None) -> PadCheckResult:
     """Run the pad-side constraint check.
 
@@ -404,6 +422,20 @@ def check(project: Path, def_path: Optional[Path] = None) -> PadCheckResult:
     except ValueError as exc:
         return {"verdict": "ERROR", "wrong_side_pins": {},
                 "vacuous": False, "note": str(exc)}
+
+    # A PIN'S SIDE IS ITS SIDE OF THE DIE (vibe-ic#2058 FP-15). `ppl
+    # place_pins` places pins on the DIE boundary and has no core-boundary
+    # mode, so on a SLOT run — where `DIEAREA` states the placeable CORE —
+    # every pin sits OUTSIDE the rectangle this classification was being made
+    # against. The run's own floorplan record answers first, converted into the
+    # DEF's own units so the pin coordinates and the rectangle are comparable;
+    # the DEF's rectangle is the named fallback and `die_source` says which
+    # answered.
+    _units = _def_units(def_text)
+    _die = _dd.resolve(project, def_rect_um=[c / _units for c in diearea])
+    die_source, die_basis = _die.source, _die.basis
+    if _die.rect is not None:
+        diearea = tuple(int(round(v * _units)) for v in _die.rect)
 
     # ---- load pad-side table -------------------------------------------
     table = _load_pad_side_table(project)
@@ -474,14 +506,17 @@ def check(project: Path, def_path: Optional[Path] = None) -> PadCheckResult:
             detail_lines.append(
                 f"  expected={exp} actual={act}: {', '.join(sorted_names)}")
         note = (f"FAIL: {len(wrong)} pin(s) on wrong side:\n"
-                + "\n".join(detail_lines))
+                + "\n".join(detail_lines)
+                + f"\n  sides measured against {die_basis}")
         return {"verdict": "FAIL", "wrong_side_pins": wrong,
-                "vacuous": False, "note": note}
+                "vacuous": False, "note": note,
+                "die_source": die_source, "die_basis": die_basis}
 
     note = (f"PASS: all {len(expected_sides)} constrained pin(s) "
-            f"are on the correct side.")
+            f"are on the correct side, measured against {die_basis}.")
     return {"verdict": "PASS", "wrong_side_pins": {},
-            "vacuous": False, "note": note}
+            "vacuous": False, "note": note,
+            "die_source": die_source, "die_basis": die_basis}
 
 
 # ---------------------------------------------------------------------------
