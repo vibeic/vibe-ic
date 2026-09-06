@@ -939,6 +939,17 @@ def _consults_polarity(fn: ast.AST, aliases: Set[str]) -> bool:
 #: previous shape unusable — a lane fixing one offender was invited to record
 #: every other offender that run happened to see as accepted debt.
 _OFFENDER_REGISTER: Dict[str, str] = {
+    "design_one_shot_runner::_chip_top_resolve_excluded_variant_params":
+        "OWNER: lane czaes1. ADDED BY v1.17.85 (af94a508b, 'a wrapper default "
+        "naming an excluded variant is derived or refused'). Delete this entry "
+        "in the commit that fixes it -- an entry that outlives its offender is "
+        "itself an offender and this gate refuses it.",
+    "phase1_doc_one_shot_runner::_harvest_test_cases_from_input_tables":
+        "OWNER: lane czadcl10, which owns the L10 path. ADDED BY v1.17.79 "
+        "(8982e2646); the function itself dates from v1.0.0, so that landing "
+        "changed what it DOES with what it reads rather than introducing new "
+        "code. Delete this entry in the commit that fixes it -- an entry that "
+        "outlives its offender is itself an offender and this gate refuses it.",
     "lec_run::lec_proved_points_from_output":
         "OWNER: lane czlecresume (landed v1.17.62, 364d3cc75). Reads the LEC "
         "tool's own output to decide which proof points were proved, and writes "
@@ -969,6 +980,25 @@ def scan(root: Path) -> List[str]:
     return sorted(set(found))
 
 
+def _defines_function(root: Path, name: str) -> bool:
+    """Does THIS tree define `module::function`? Parsed, never imported.
+
+    A `def` inside a class or a nested scope still counts: the scanner walks the
+    whole module with `ast.walk`, so this must ask the same question the same
+    way or the two could disagree about the same name.
+    """
+    module, _, fn = name.partition("::")
+    src = root / "programs" / f"{module}.py"
+    if not src.is_file():
+        return False
+    try:
+        tree = ast.parse(src.read_text(errors="replace"))
+    except (OSError, SyntaxError):
+        return False
+    return any(isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+               and n.name == fn for n in ast.walk(tree))
+
+
 def _ratchet_verdict(new: List[str], root: Path) -> int:
     """`offenders == register`, by MEMBERSHIP. The landing gate's question.
 
@@ -980,13 +1010,22 @@ def _ratchet_verdict(new: List[str], root: Path) -> int:
     SCOPED TO THE TREE BEING SCANNED, the same way `exemption_audit` is: an
     entry whose module is simply not in this checkout is out of scope, not
     stale, or the verdict would depend on which tree the gate was aimed at.
+
+    AND THE SAME ARGUMENT REACHES THE FUNCTION, which is where scoping at the
+    module alone breaks. MEASURED 2026-09-06: `design_one_shot_runner::_chip_top
+    _resolve_excluded_variant_params` became an offender at v1.17.85, and
+    `design_one_shot_runner.py` is in every checkout — so on any tree older than
+    that landing a correct entry for it was reported STALE, purely because the
+    module file exists and the function does not. That is the same
+    tree-dependence the paragraph above forbids, one level down: an entry naming
+    a function this tree does not define is a claim about a different tree, not
+    a claim that has expired.
     """
     registered = set(_OFFENDER_REGISTER)
     offenders = set(new)
     unregistered = sorted(offenders - registered)
-    stale = sorted(
-        n for n in registered - offenders
-        if (root / "programs" / f"{n.split('::', 1)[0]}.py").is_file())
+    stale = sorted(n for n in registered - offenders
+                   if _defines_function(root, n))
 
     if unregistered:
         print(f"[FAIL] {len(unregistered)} prose extractor(s) read a value out "
