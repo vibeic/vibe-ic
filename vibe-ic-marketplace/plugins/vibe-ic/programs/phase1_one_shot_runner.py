@@ -340,17 +340,29 @@ def step_ingest_render(project: Path, ic_name: str) -> StepResult:
     return StepResult("phase1_ingest_render", "PASS", time.time() - t0, note)
 
 
-def _prompt_text_for(project: Path) -> str:
-    """Best-effort: the free-text spec the ingest consumed."""
+def _prompt_sources_for(project: Path) -> "Dict[str, str]":
+    """The free-text spec the ingest consumed, keyed by its own file NAME.
+
+    #czl9prompt — the text alone was enough to extract ports, but not to record
+    WHERE they came from, and L9's prose channel names its documents. Returning
+    the mapping keeps provenance available to every caller; `_prompt_text_for`
+    is now a view over it, so there is still ONE place that decides what the
+    input IS."""
     for p in (project / "input" / "phase1_prompt.md",
               project / "input" / "docs" / "design_description.md"):
         if p.is_file():
-            return p.read_text(errors="replace")
+            return {p.name: p.read_text(errors="replace")}
     docs = project / "input" / "docs"
     if docs.is_dir():
-        return "\n".join(f.read_text(errors="replace")
-                         for f in sorted(docs.glob("*")) if f.is_file())
-    return ""
+        return {f.name: f.read_text(errors="replace")
+                for f in sorted(docs.glob("*")) if f.is_file()}
+    return {}
+
+
+def _prompt_text_for(project: Path) -> str:
+    """Best-effort: the free-text spec the ingest consumed."""
+    srcs = _prompt_sources_for(project)
+    return "\n".join(srcs[k] for k in sorted(srcs))
 
 
 def _seed_structural_ports(project: Path, out_dir: Path) -> int:
@@ -360,7 +372,8 @@ def _seed_structural_ports(project: Path, out_dir: Path) -> int:
     try:
         sys.path.insert(0, str(PROGRAMS_DIR))
         import phase1_port_extract as _ppx
-        prompt = _prompt_text_for(project)
+        srcs = _prompt_sources_for(project)
+        prompt = "\n".join(srcs[k] for k in sorted(srcs))
         if not prompt.strip():
             return 0
         facts = _ppx.extract(prompt)
@@ -386,6 +399,46 @@ def _seed_structural_ports(project: Path, out_dir: Path) -> int:
         if facts.get("enums") and not d.get("enums"):
             d["enums"] = facts["enums"]
         _stamp.dump(l8r, d)
+        # L9 — the INTEGRATION SPEC, and the reason this lane exists.
+        #
+        # Before #czl9prompt this function stopped at L1/L8R. L9 is the document
+        # the interface-reading gates downstream actually walk, and the prompt
+        # engine's own L9 is a STUB: `top_ports` is a list of bare NAME STRINGS
+        # with no direction, so a consumer asking "which of these is an output"
+        # got nothing. Measured on this base, the two front doors emitted L9s
+        # from ONE byte-identical input that agreed on nothing: docs mode five
+        # ports carrying their direction plus 554 characters of the input's own
+        # prose; prompt mode five strings, no direction, no prose.
+        #
+        # Only fills an L9 that carries NO structured port: a richer L9 (dict
+        # entries) is never clobbered, and a bare-string `top_ports` is not
+        # "structured" — it is the stub this repairs.
+        l9p = out_dir / "L9_INTEGRATION_SPEC.json"
+        if l9p.is_file():
+            l9 = json.loads(l9p.read_text())
+            structured = [e for k in ("ports", "top_ports", "top_module_pins")
+                          for e in (l9.get(k) or []) if isinstance(e, dict)]
+            if not structured:
+                evidence = sorted(srcs)[0] if srcs else None
+                entries = [{"name": pt["name"],
+                            "mode": pt["dir"],
+                            "direction": pt["dir"],
+                            "io": None,
+                            "evidence": evidence,
+                            # names the PROGRAM that read it, not a grammar it
+                            # did not use. The two doors agree on the ports and
+                            # their directions and say honestly that different
+                            # readers produced them.
+                            "extraction_strategy": "phase1_port_extract"}
+                           for pt in ports]
+                l9["ports"] = entries
+                l9["top_ports"] = entries
+                l9["top_module_pins"] = entries
+                # The SAME prose emitter the docs door runs, on the same input.
+                # Without it L9's prose channel stays empty and every prose rule
+                # downstream is dormant — a verdict over zero characters.
+                _ppx.emit_interface_prose(l9, srcs)
+                _stamp.dump(l9p, l9)
         # L4 — register map (markdown register table with an offset column)
         if facts.get("regmap"):
             l4p = out_dir / "L4_REGMAP.json"

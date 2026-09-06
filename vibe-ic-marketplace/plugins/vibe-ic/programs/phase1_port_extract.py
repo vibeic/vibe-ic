@@ -22,7 +22,7 @@ import json
 import re
 import sys
 from pathlib import Path
-from typing import Dict, List
+from typing import Any, Dict, List
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _specrtl_common import (  # noqa: E402
@@ -113,8 +113,27 @@ def extract_ports(prompt: str) -> List[Dict]:
         return table_inline
     # only fall back to the structured-prose signal-definition list when no table
     # / code interface was found (tables/code are higher-confidence).
+    #
+    # #czl9prompt — the fallback tier is a UNION of the two prose grammars, not
+    # one of them. `extract_prose_ports` is HEADING-anchored (`Inputs:` then
+    # `name:` bullets); `extract_inline_direction_bullet_ports` reads a bullet
+    # that carries its own direction keyword (`- input clk`). A plain-language
+    # description that lists its pins one per bullet under no heading matches
+    # only the second, and before this union THIS function returned [] on it —
+    # which is what made the prompt front door halt on a port-declaring input
+    # while the docs front door, which called the second grammar directly, read
+    # all five. Order: heading-anchored first, then the bullet grammar, so the
+    # dedup keeps the heading form's entry on a name both produce.
     prose = extract_prose_ports(prompt)
-    return _dedup_ports([Port(p["name"], p["dir"], p["width"]) for p in prose])
+    fallback = [Port(p["name"], p["dir"], p["width"]) for p in prose]
+    for e in extract_inline_direction_bullet_ports(prompt):
+        w = e.get("width")
+        try:
+            width = int(w) if w is not None else 1
+        except (TypeError, ValueError):
+            width = 1
+        fallback.append(Port(e["name"], e["mode"], width))
+    return _dedup_ports(fallback)
 
 
 def extract_params(prompt: str) -> List[Dict]:
@@ -475,6 +494,322 @@ def extract_reset(prompt: str) -> Dict:
                                 r'|reset.*\blow\b', prompt, re.I)
                       or nm.lower().endswith('_n'))
     return {"name": nm, "polarity": "active_low" if active_low else "active_high"}
+
+
+# ══ #czl9prompt — ONE interface recovery core, called by BOTH front doors ══
+#
+# These definitions were AUTHORED for the docs front door (#czl9docs) and lived
+# inside `phase1_doc_one_shot_runner.py`, where only that door could reach them.
+# The PROMPT front door runs a different ingester (`tools/phase1_engine`) and
+# already called THIS module for its structural port seed — so on the identical
+# input, one door read five ports and the other read zero and halted.
+#
+# The fix is not a second implementation. The code below is the docs door's own,
+# MOVED here unchanged apart from the rename to a public name; the docs door now
+# imports it back. One implementation, two callers: a grammar either door learns
+# is a grammar both doors know, and neither can drift from the other.
+
+DIRECTIONAL_PORT_STOP = {
+    "input", "inputs", "output", "outputs", "inout", "inouts",
+    "signal", "signals", "port", "ports", "pin", "pins", "description",
+    "parameter", "parameters", "note", "notes", "example", "examples",
+    "functionality", "behavior", "behaviour", "overview", "interface",
+    "where", "the", "this", "register", "registers", "field", "fields",
+    # Step-2.7: attribute/parameter words that are NEVER a top-level I/O port
+    # name — a `- Width: configurable` / `- Latency: 3 cycles` colon-bullet
+    # under an Inputs:/Outputs: heading describes a CONFIG value, not a pin.
+    # (reset / enable / valid / clock / mode are deliberately NOT here — those
+    # ARE common real port names.)
+    "width", "latency", "throughput", "protocol", "frequency",
+    "endianness", "depth", "bandwidth", "resolution", "period", "duty",
+    "encoding", "polarity", "format", "size",
+}
+
+
+# v1.17.x — for #czl9docs. A list bullet that carries its OWN direction
+# keyword — `- input clk`, `* output cmd_out (4 bits)`, `- inout sda` — is a
+# port declaration whose direction is stated by the bullet itself, so it
+# needs NO enclosing `Ports:` heading. Both pre-existing bullet extractors
+# (`_l1_bullet_port_extract`, `_l1_directional_prose_port_extract`) are
+# HEADING-anchored: they open a port block only after a `Ports:` /
+# `Inputs:` line. A plain-language design description that opens with one
+# sentence and then lists its pins one per bullet matches neither, so its
+# entire interface was dropped and L1 asserted `no_pin_table_in_input` —
+# a positive claim about an input that does declare ports.
+#
+# Precision rule (the discriminator against documentation prose such as
+# `- Input validation is performed by the host`): after the identifier the
+# bullet must END, or continue only with a WIDTH / a separated description
+# (`(`, `[`, `:`, `,`, `-`, en/em dash). A bullet that continues with bare
+# prose words is a sentence, not a declaration, and never contributes.
+#
+# Chip-AGNOSTIC: Verilog/SV direction grammar + Markdown/RST list grammar
+# only. No chip, vendor, PDK or port-name literal participates.
+_RE_L1_INLINE_DIR_BULLET = re.compile(
+    r"(?m)^\s*[-*+]\s+`?"
+    r"(?P<dir>input|output|inout)\b`?"
+    r"(?:\s+(?:wire|reg|logic|signal|port|pin))?"
+    r"(?:\s*\[\s*(?P<wpre>[^\]\n]{1,40})\s*\])?"
+    r"\s+`?(?P<name>[A-Za-z_][A-Za-z0-9_]{0,40})`?"
+    r"(?:\s*\[\s*(?P<wpost>[^\]\n]{1,40})\s*\])?"
+    r"`?(?P<rest>[^\n]{0,240})$"
+)
+# A trailing remainder that is bare prose (starts with a letter/digit that is
+# not part of a separator) means the bullet was a SENTENCE.
+_RE_L1_INLINE_DIR_SEP = re.compile(r"^\s*(?:[(\[:,;.]|-{1,2}\s|[–—])")
+# `(4 bits)` / `(4-bit)` / `4 bits` — a stated width, not a description.
+_RE_L1_INLINE_DIR_WIDTH_WORDS = re.compile(
+    r"(?i)^\s*\(?\s*(\d{1,5})\s*[- ]?bits?\b\s*(?:wide)?\s*\)?\s*$")
+
+
+def extract_inline_direction_bullet_ports(text: str) -> List[Dict[str, Any]]:
+    """Ports declared as list bullets that carry their own direction keyword,
+    with NO enclosing port heading: ``- input clk`` / ``* output cmd_out
+    (4 bits)`` / ``- inout [7:0] data``.
+
+    Returns ``[{name, mode, width, description}]``. A bullet contributes ONLY
+    when the identifier is followed by end-of-line, a width, or a SEPARATED
+    description — a bullet that runs on into bare prose is a sentence and is
+    rejected."""
+    out: List[Dict[str, Any]] = []
+    if not text:
+        return out
+    for m in _RE_L1_INLINE_DIR_BULLET.finditer(text):
+        name = m.group("name")
+        # A single-character name (`q`, `d`) is a legitimate port here and is
+        # NOT rejected the way the heading-anchored prose extractor rejects it:
+        # there, direction came from a heading and a lone letter was as likely
+        # to be a stray token; here the bullet's own `input`/`output` keyword
+        # is the evidence, so the name does not have to carry it too.
+        if not name or name.lower() in DIRECTIONAL_PORT_STOP:
+            continue
+        rest = (m.group("rest") or "").strip()
+        desc = None
+        width = None
+        wraw = m.group("wpre") or m.group("wpost")
+        if rest:
+            if not _RE_L1_INLINE_DIR_SEP.match(rest):
+                # bare prose continuation — a sentence, not a declaration.
+                continue
+            body = rest
+            if body.startswith("("):
+                close = body.find(")")
+                paren = body[1:close] if close > 0 else body[1:]
+                tail = body[close + 1:] if close > 0 else ""
+                wm = _RE_L1_INLINE_DIR_WIDTH_WORDS.match(paren)
+                if wm:
+                    if wraw is None:
+                        width = wm.group(1)
+                    body = tail.strip()
+                else:
+                    desc = paren.strip() or None
+                    body = tail.strip()
+            if desc is None and body:
+                stripped = body.lstrip(" \t:,;.-–—")
+                wm = _RE_L1_INLINE_DIR_WIDTH_WORDS.match(stripped)
+                if wm:
+                    if wraw is None and width is None:
+                        width = wm.group(1)
+                else:
+                    desc = stripped.strip() or None
+        if wraw and width is None:
+            wraw = wraw.strip()
+            if ":" in wraw:
+                bw = re.match(r"\s*([^:]+):([^\]]+)\s*$", wraw)
+                if bw:
+                    try:
+                        width = str(abs(int(bw.group(1).strip())
+                                        - int(bw.group(2).strip())) + 1)
+                    except ValueError:
+                        width = None
+            elif wraw.isdigit():
+                width = wraw
+        out.append({"name": name, "mode": m.group("dir").lower(),
+                    "width": width, "description": desc})
+    return out
+
+# ── #czl9docs — L9's prose channel, which carried nothing ──────────────
+#
+# `_frame_contract.input_prose_from_json` assembles the prose an L9 carries by
+# walking it for the declared prose keys (description / summary / overview /
+# notes / …), and `spec_conformance_check` feeds that channel to every
+# frame-contract rule. Measured on this base with the flow's own step-2
+# invocation, one RTL body violating all three elements:
+#
+#   L9 as the front door emits it   PASS rc=0, 0 findings
+#   the SAME L9 + the input's own
+#   interface sentences in `notes`  FAIL rc=1, 2 errors + composition INFO
+#
+# The L9 emitter never wrote a single prose key, so the channel was empty and
+# every prose-derived rule downstream was structurally dormant — a verdict over
+# ZERO characters, the same shape as a verdict over zero ports.
+#
+# L9 already has a PER-PORT prose channel (`top_ports[].description`, cascaded
+# from L1 by `_v1_6_463_cascade_l1_descriptions_to_l9`). That channel is
+# correctly empty when the input glosses no individual port. What had NO home in
+# L9 at all is an interface constraint stated as a SENTENCE ABOUT THE DESIGN
+# rather than as a gloss on one pin — "`cmd_out` must be valid in the same clock
+# cycle that `frame_done` asserts". This emits those, verbatim, with provenance.
+#
+# §4.05: reads the extracted INPUT documents only. Nothing is paraphrased,
+# summarised or invented — every character is copied from the input, and the
+# provenance record names the document and the rule that selected it.
+#
+# Chip-AGNOSTIC: anchors on the design's OWN declared port names, whatever they
+# are; no chip, vendor, protocol or signal-name literal participates.
+MAX_INTERFACE_PROSE_BLOCK_CHARS = 600
+MAX_INTERFACE_PROSE_TOTAL_CHARS = 4000
+_RE_BULLET_ONLY = re.compile(r"(?m)\A(?:\s*(?:[-*+]\s+[^\n]*)?\n?)+\Z")
+
+
+def declared_port_names(content: Dict[str, Any]) -> List[str]:
+    """Every port name L9 itself declares, from whichever container carries
+    them. Order-stable and deduped."""
+    names: List[str] = []
+    for key in ("ports", "top_ports", "top_module_pins"):
+        for entry in content.get(key) or []:
+            if isinstance(entry, dict):
+                nm = entry.get("name")
+                if isinstance(nm, str) and nm.strip() and nm not in names:
+                    names.append(nm.strip())
+    return names
+
+
+def block_mentions_port(block: str, names: List[str]) -> bool:
+    """Does this block name one of the design's declared ports?
+
+    A name of three characters or more matches bare; a one- or two-character
+    name (`q`, `rx`) must appear in a code span, because a bare two-letter token
+    matches ordinary English far too often to be evidence of anything."""
+    for nm in names:
+        if len(nm) >= 3:
+            if re.search(rf"(?<![A-Za-z0-9_]){re.escape(nm)}(?![A-Za-z0-9_])",
+                         block):
+                return True
+        else:
+            if re.search(rf"`{re.escape(nm)}`", block):
+                return True
+    return False
+
+
+def emit_interface_prose(content: Dict[str, Any],
+                               extracted: Dict[str, str]) -> None:
+    """Carry the input's own interface-constraining sentences into L9's prose
+    channel, verbatim, with provenance.
+
+    Selection rule, in two branches, because the honest answer depends on how
+    much prose there is:
+
+      WHOLE — when the extracted input fits inside the total budget, carry it
+        whole. This is not a shortcut: it is the SAME channel prompt mode
+        already hands these rules (`spec_conformance_check` sets
+        `spec_body = spec_raw` for a markdown spec), so for a short design
+        description "carry it all" is the least novel option available, and
+        selecting from it can only LOSE constraints. Measured on this base with
+        one RTL body violating three elements: port-anchored selection reached
+        2 of 3 (the third sentence names no port), the whole document reached
+        3 of 3.
+      ANCHORED — when it does not fit, carry the blocks that NAME one of the
+        design's declared ports, plus the block a colon lead-in introduces
+        (that is where the table the lead-in announces lives). Bullet-only
+        blocks are skipped: that is the port table, which L9 already holds
+        structurally.
+
+    Either way `interface_prose_provenance.selection` says which branch ran and
+    `truncated` says whether anything was cut, so a short channel is never
+    mistaken for a short input.
+
+    Writes `notes` (one of the declared prose keys the consumer walks) plus
+    `interface_prose_provenance`. When nothing is carried, writes the
+    honest-null `no_interface_prose_in_input` instead of an empty string."""
+    names = declared_port_names(content)
+
+    # WHOLE branch. Note it does NOT require a declared port: prose is prose,
+    # and the port list is only needed to SELECT from prose that does not fit.
+    whole = "\n\n".join(
+        (extracted.get(f) or "").strip()
+        for f in sorted(extracted) if (extracted.get(f) or "").strip())
+    if whole and len(whole) <= MAX_INTERFACE_PROSE_TOTAL_CHARS:
+        content["notes"] = whole
+        content["interface_prose_provenance"] = {
+            "selection": "whole",
+            "rule": ("the extracted input carried whole — it fits the budget, "
+                     "so selecting from it could only lose constraints"),
+            "documents": [f for f in sorted(extracted)
+                          if (extracted.get(f) or "").strip()],
+            "blocks": 1,
+            "chars": len(whole),
+            "truncated": False,
+            "anchored_on": names,
+        }
+        return
+
+    if not names:
+        # Too big to carry whole, and no declared port to select with. That is
+        # NOT_MEASURED — say so rather than emitting a silently empty channel.
+        content["no_interface_prose_in_input"] = True
+        content["interface_prose_provenance"] = {
+            "selection": "none",
+            "rule": "blocks naming a declared port name",
+            "not_measured": ("the input exceeds the prose budget and L9 "
+                             "declares no port to select with"),
+            "documents": [], "blocks": 0, "truncated": True}
+        return
+
+    kept: List[str] = []
+    docs: List[str] = []
+    truncated = False
+    total = 0
+    for fname in sorted(extracted):
+        text = extracted.get(fname) or ""
+        if not text.strip():
+            continue
+        blocks = [b for b in re.split(r"\n\s*\n", text)]
+        take_next = False
+        used_here = False
+        for block in blocks:
+            body = block.strip()
+            if not body:
+                continue
+            wanted = take_next or block_mentions_port(body, names)
+            # A lead-in ending in a colon introduces the block after it.
+            take_next = wanted and body.rstrip().endswith(":")
+            if not wanted:
+                continue
+            if _RE_BULLET_ONLY.match(body):
+                # the port table itself — L9 already carries it structurally.
+                continue
+            if len(body) > MAX_INTERFACE_PROSE_BLOCK_CHARS:
+                body = body[:MAX_INTERFACE_PROSE_BLOCK_CHARS]
+                truncated = True
+            if body in kept:
+                continue
+            if total + len(body) > MAX_INTERFACE_PROSE_TOTAL_CHARS:
+                truncated = True
+                break
+            kept.append(body)
+            total += len(body)
+            used_here = True
+        if used_here:
+            docs.append(fname)
+        if truncated and total >= MAX_INTERFACE_PROSE_TOTAL_CHARS:
+            break
+
+    content["interface_prose_provenance"] = {
+        "selection": "anchored",
+        "rule": ("blocks of the input that name a declared port, plus the "
+                 "block a colon lead-in introduces; bullet-only blocks "
+                 "excluded (already carried structurally)"),
+        "chars": total,
+        "documents": docs,
+        "blocks": len(kept),
+        "truncated": truncated,
+        "anchored_on": names,
+    }
+    if kept:
+        content["notes"] = "\n\n".join(kept)
+    else:
+        content["no_interface_prose_in_input"] = True
 
 
 def extract(prompt: str) -> Dict:
