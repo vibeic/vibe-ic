@@ -402,6 +402,29 @@ try:  # sibling module; programs/ is on sys.path when run as a script
 except ImportError:  # pragma: no cover - packaged/flattened layouts
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import _watchdog as _wd  # type: ignore
+def _evidence_tail(text: str, limit: int = 400) -> str:
+    """The tail of a delegate's output as WHOLE LINES, never mid-token.
+
+    #2061 R-04: this was `[-400:]`, so a published refusal's evidence began at
+    whatever byte fell 400 back from the end -- a point set by the LENGTH OF THE
+    PROJECT PATH the delegate happened to echo. Two runs of one tree, differing
+    only in where the project lived, published evidence that started in the
+    middle of a different token. The cut is advanced to the next line boundary,
+    so the window carries whole lines; when the final line alone is longer than
+    the budget it is advanced to the next whitespace instead, so it still begins
+    on a token. Evidence already inside the budget comes back byte-identical.
+    """
+    text = text or ""
+    if len(text) <= limit:
+        return text
+    cut = text[-limit:]
+    nl = cut.find("\n")
+    if nl != -1:
+        return cut[nl + 1:]
+    ws = next((i for i, ch in enumerate(cut) if ch.isspace()), -1)
+    return cut[ws + 1:] if ws != -1 else cut
+
+
 def default_runner(cmd: List[str], timeout: Optional[float]
                    ) -> Tuple[int, str, str]:
     """PROGRESS-supervised delegation to a checker.
@@ -751,7 +774,7 @@ def _step_delegate(ev: StepEvidence, step: Step, project: Path,
            "--json", str(out)]
     rc, stdout, stderr = runner(cmd, timeout)
     ev.returncode = rc
-    tail = (stderr.strip() or stdout.strip())[-400:]
+    tail = _evidence_tail(stderr.strip() or stdout.strip())
     ev.measured = {"command": cmd, "report": str(out),
                    "report_written": out.is_file()}
     if rc == 0:
