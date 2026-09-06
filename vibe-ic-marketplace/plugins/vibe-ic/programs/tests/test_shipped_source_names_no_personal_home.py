@@ -48,8 +48,14 @@ def test_the_gate_still_goes_red_when_a_home_path_is_planted(tmp_path):
     # The gate scans git-tracked files; the copy is not a work tree, so it
     # scans what is on disk. Plant on the very file the finding was on.
     victim = root / "programs" / "analog_a6_native_pv.py"
+    # ASSEMBLED, never written out. A literal here would be a personal home
+    # path in a SHIPPED, git-tracked file, and the gate scans this file too —
+    # so writing the mutation plainly makes the test the finding. That is the
+    # same "the guard reads its own citation" shape as the defect this module
+    # is about, one level up, and it is worth the two lines to avoid.
+    planted = "/" + "home" + "/" + "somebody" + "/x.cir"
     victim.write_text(victim.read_text()
-                      + '\n_PLANTED = "/home/somebody/x.cir"\n')
+                      + f'\n_PLANTED = "{planted}"\n')
     cp = _run(root)
     assert cp.returncode != 0 or "FAIL" in (cp.stdout + cp.stderr), \
         (cp.stdout + cp.stderr)[-3000:]
