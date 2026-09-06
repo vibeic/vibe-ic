@@ -449,6 +449,8 @@ _REPAIR_WORKLIST = "needs_ai_repair.jsonl"
 _ENHANCEMENT_WORKLIST = "program_enhancement_candidates.jsonl"
 _ACCEPTANCE_REPORT = "program_first_ai_review_acceptance.json"
 _REVIEW_CORRECTION_SCHEMA = "vibeic.benchmark.ai_review_correction.v1"
+_PROGRAM_REGATE_SCHEMA = "vibeic.benchmark.program_regate.v1"
+_PRE_GATE_INPUT_SCHEMA = "vibeic.benchmark.pre_gate_input.v1"
 
 #: A verification challenge has three substantive outcomes -- the candidate
 #: PASSed it, the candidate FAILed it, or the challenge itself is INVALID --
@@ -640,6 +642,179 @@ def _archive_candidate(problem_id: str, project: Path, got: dict,
     record["manifest_path"] = str(manifest.resolve())
     _write_immutable_json(manifest, record)
     return record
+
+
+def _program_version() -> str:
+    """The running Program's own version, or "" when the manifest is unreadable.
+
+    An empty string is reported as-is. A retry that cannot name which Program
+    produced which bytes is not evidence, and a default would invent one.
+    """
+    from l_doc_generator_stamp import plugin_version     # noqa: PLC0415
+    try:
+        return str(plugin_version() or "")
+    except Exception:                                    # noqa: BLE001
+        return ""
+
+
+def _pre_gate_input_root(run_p: Path, problem_id: str, signed_hash: str) -> Path:
+    return (Path(run_p).resolve() / "pre_gate_inputs"
+            / _safe_problem_id(problem_id) / str(signed_hash))
+
+
+def _archive_pre_gate_input(run_p: Path, problem_id: str,
+                            source_paths: list[Path], signed_hash: str) -> dict:
+    """Freeze the exact SIGNED bytes the PROGRAM gates are about to consume.
+
+    The gates may normalize this RTL in place, and that overwrite destroys the
+    only copy of what the author actually signed. When a later Program fix
+    changes the transform there is then nothing to re-enter FROM: the frozen
+    output is unwanted, and re-signing it would attribute a Program mutation to
+    the author. Preserving the input at this boundary makes the pair
+    (signed input sha, gate output sha) a recorded fact rather than something
+    reconstructed after the fact.
+
+    Immutable: a second call with the same bytes is a no-op, and different
+    bytes under the same hash raise rather than overwrite.
+    """
+    root = _pre_gate_input_root(run_p, problem_id, signed_hash)
+    frozen: list[str] = []
+    for index, source in enumerate(source_paths):
+        target = root / "rtl" / f"{index:02d}_{source.name}"
+        _write_immutable_text(target, source.read_text(errors="replace"))
+        frozen.append(str(target.resolve()))
+    record = {
+        "schema": _PRE_GATE_INPUT_SCHEMA,
+        "id": str(problem_id),
+        "rtl_sha256": str(signed_hash),
+        "rtl_paths": frozen,
+        "source_rtl_paths": [str(Path(p).resolve()) for p in source_paths],
+        "program_version": _program_version(),
+    }
+    manifest = root / "manifest.json"
+    record["manifest_path"] = str(manifest.resolve())
+    _write_immutable_json(manifest, record)
+    return record
+
+
+def _bind_pre_gate_output(preserved: dict, output_hash: str) -> dict:
+    """Record the (signed input -> gate output) pair the gates just produced.
+
+    One immutable file per pair, so which Program turned which signed input
+    into which frozen output is readable later without re-running anything.
+    """
+    record = {
+        "schema": _PRE_GATE_INPUT_SCHEMA,
+        "id": str(preserved.get("id")),
+        "signed_input_sha256": str(preserved.get("rtl_sha256")),
+        "gate_output_sha256": str(output_hash),
+        "input_manifest_path": str(preserved.get("manifest_path")),
+        "program_version": _program_version(),
+    }
+    path = (Path(str(preserved["manifest_path"])).parent
+            / f"gate_output_{output_hash}.json")
+    _write_immutable_json(path, record)
+    return {**record, "binding_path": str(path.resolve())}
+
+
+def _preserved_input_paths(preserved: dict) -> list[Path]:
+    return [Path(str(p)) for p in preserved.get("rtl_paths") or []]
+
+
+def _pre_gate_input_manifest(regate: dict) -> dict | None:
+    """The preserved signed-input manifest a regate names, or None.
+
+    None means "could not read it or it does not verify" -- never an empty
+    default. The bytes on disk must still hash to the signed input hash the
+    record claims, or the record describes something that is no longer there.
+    """
+    path = Path(str((regate or {}).get("input_manifest_path") or ""))
+    try:
+        preserved = json.loads(path.read_text(errors="replace"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(preserved, dict) \
+            or preserved.get("schema") != _PRE_GATE_INPUT_SCHEMA:
+        return None
+    signed = str(preserved.get("rtl_sha256") or "")
+    if signed != str(regate.get("signed_input_sha256") or ""):
+        return None
+    paths = _preserved_input_paths(preserved)
+    if not paths or not all(q.is_file() for q in paths):
+        return None
+    try:
+        if _sha256_text(_candidate_text(paths)) != signed:
+            return None
+    except OSError:
+        return None
+    return preserved
+
+
+def _pending_program_regate(task: dict) -> dict | None:
+    """An AUTHORIZED, not-yet-re-entered Program re-entry on this task.
+
+    Only `_apply_program_regate` writes this state, and only after the
+    preserved input, the Program version change and the unaccepted task have
+    all been checked. Its stale embedded provenance is the very condition it
+    exists to resolve, so the ordinary final-provenance refusal must stand
+    aside for exactly this one state -- and for no other.
+    """
+    regate = task.get("program_regate")
+    if not isinstance(regate, dict) \
+            or regate.get("schema") != _PROGRAM_REGATE_SCHEMA \
+            or regate.get("status") != "REGATE_PENDING":
+        return None
+    return regate
+
+
+def _verified_program_regate(task: dict) -> dict | None:
+    """The regate record ONLY if every one of its bindings still holds.
+
+    Returns None -- leaving every existing refusal exactly as it was -- unless
+    the task carries a complete `program_regate` whose preserved input is still
+    on disk with the signed bytes, whose recorded new output is this task's own
+    frozen candidate, and whose Program version actually moved. A record that
+    fails ANY of these is not evidence and is treated as absent.
+    """
+    regate = task.get("program_regate")
+    if not isinstance(regate, dict):
+        return None
+    if regate.get("schema") != _PROGRAM_REGATE_SCHEMA:
+        return None
+    signed = str(regate.get("signed_input_sha256") or "")
+    produced = str(regate.get("new_output_sha256") or "")
+    before = str(regate.get("program_version_before") or "")
+    after = str(regate.get("program_version_after") or "")
+    if not re.fullmatch(r"[0-9a-f]{64}", signed):
+        return None
+    if produced != str(task.get("rtl_sha256") or ""):
+        return None
+    if not before or not after or before == after:
+        return None
+    preserved = _pre_gate_input_manifest(regate)
+    if preserved is None or str(preserved.get("id")) != str(task.get("id")):
+        return None
+    # The named "before" version is not decoration: it must be the Program
+    # that actually produced the preserved input.
+    if before != str(preserved.get("program_version") or ""):
+        return None
+    return regate
+
+
+def _signed_candidate_hash(task: dict) -> str:
+    """The hash an AI repair author's signature is required to cover.
+
+    Normally the frozen candidate itself: the author signs the bytes that were
+    reviewed. After a VERIFIED Program re-entry the author's bytes are the
+    preserved signed INPUT instead -- the Program, not the author, produced the
+    difference, so requiring the author's signature over the Program's output
+    would attribute a Program mutation to the author. With no verified regate
+    record this is `task["rtl_sha256"]`, exactly as before.
+    """
+    regate = _verified_program_regate(task)
+    if regate is None:
+        return str(task.get("rtl_sha256") or "")
+    return str(regate.get("signed_input_sha256") or "")
 
 
 def _validate_candidate_snapshot(candidate: dict, problem_id: str) -> list[str]:
@@ -1086,7 +1261,7 @@ def _refresh_final_repair_provenance(task: dict) -> tuple[dict | None,
         return None, reasons
     parent_task = {**task, "rtl_sha256": parent_hash}
     return _validate_repair_record(
-        path, parent_task, str(task.get("rtl_sha256") or ""), challenge)
+        path, parent_task, _signed_candidate_hash(task), challenge)
 
 
 def _validate_embedded_repair_provenance(task: dict) -> list[str]:
@@ -1113,7 +1288,7 @@ def _validate_embedded_repair_provenance(task: dict) -> list[str]:
         reasons.append("repair_provenance prompt hash is stale")
     if provenance.get("parent_rtl_sha256") != parent.get("rtl_sha256"):
         reasons.append("repair_provenance parent hash is stale")
-    if provenance.get("repaired_rtl_sha256") != task.get("rtl_sha256"):
+    if provenance.get("repaired_rtl_sha256") != _signed_candidate_hash(task):
         reasons.append("repair_provenance repaired hash is stale")
     if str(provenance.get("challenge_sha256")) not in expected_challenge_hashes:
         reasons.append("repair_provenance challenge hash is not inherited")
@@ -3784,6 +3959,7 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
         pre_logs: list[str] = []
         review_path = Path(str(task.get("review_path") or ""))
         if (task.get("candidate_origin") == "AI_REPAIR"
+                and _pending_program_regate(task) is None
                 and (not review_path.is_file()
                      or _validate_embedded_repair_provenance(task))):
             final_provenance, final_provenance_reasons = \
@@ -3840,6 +4016,52 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
             repair_plans.append({
                 "kind": "noop", "id": pid, "pre_logs": pre_logs})
             continue
+        pending_regate = _pending_program_regate(task)
+        if pending_regate is not None:
+            # An explicit, already-validated PROGRAM re-entry restored the
+            # preserved SIGNED input into the work tree.  This is not a new AI
+            # edit and must not be asked for a fresh counterexample against the
+            # unwanted transformed candidate: the author's bytes are the ones
+            # they already signed, and only the Program changed.
+            preserved = _pre_gate_input_manifest(pending_regate)
+            if (preserved is None
+                    or str(working_hash)
+                    != str(pending_regate.get("signed_input_sha256"))):
+                result.update({"accepted": False, "awaiting_ai": True,
+                               "awaiting_ai_review": False,
+                               "ai_repair_required": True})
+                repair_plans.append({
+                    "kind": "report", "id": pid, "pre_logs": pre_logs,
+                    "log": f"  {pid:44s} regate input drifted before re-entry",
+                    "repair": {
+                        "schema": "vibeic.benchmark.ai_repair_task.v2",
+                        "id": pid, "project": str(proj),
+                        "status": "PROGRAM_REGATE_INPUT_DRIFT",
+                        "reasons": [
+                            "the work tree no longer holds the preserved "
+                            "signed pre-gate input this re-entry was "
+                            "authorized for"],
+                        "signed_input_sha256":
+                            pending_regate.get("signed_input_sha256"),
+                        "working_rtl_sha256": working_hash,
+                    },
+                })
+                continue
+            repair_plans.append({
+                "kind": "run", "id": pid, "pre_logs": pre_logs,
+                "task": task, "result": result, "project": proj,
+                "challenge": None,
+                "repair_provenance": task.get("repair_provenance"),
+                "repair_parent_candidate": (
+                    task.get("repair_parent_candidate_snapshot")
+                    or task.get("candidate_snapshot")),
+                "pre_gate_input": preserved,
+                "regate": pending_regate,
+                "program_first_phases": (
+                    result.get("program_first_phases")
+                    or result.get("phases") or {}),
+            })
+            continue
         prior_verdict = _validate_ai_review(task)
         challenge = prior_verdict.get("verified_challenge")
         if prior_verdict.get("status") != "REPAIR_REQUIRED" or not challenge:
@@ -3886,10 +4108,35 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
                 },
             })
             continue
+        # Freeze the signed bytes BEFORE the gates can normalize them in
+        # place.  Without this the only copy of what the author signed is
+        # destroyed, and a later Program fix has nothing to re-enter from.
+        try:
+            preserved = _archive_pre_gate_input(
+                run_p, pid, working_paths, str(working_hash))
+        except (OSError, ValueError) as exc:
+            result.update({"accepted": False, "awaiting_ai": True,
+                           "awaiting_ai_review": False,
+                           "ai_repair_required": True})
+            repair_plans.append({
+                "kind": "report", "id": pid, "pre_logs": pre_logs,
+                "log": f"  {pid:44s} signed pre-gate input not preserved",
+                "repair": {
+                    "schema": "vibeic.benchmark.ai_repair_task.v2",
+                    "id": pid, "project": str(proj),
+                    "status": "PRE_GATE_INPUT_NOT_PRESERVED",
+                    "reasons": [f"{type(exc).__name__}: {exc}"],
+                    "signed_rtl_sha256": working_hash,
+                },
+            })
+            continue
         repair_plans.append({
             "kind": "run", "id": pid, "pre_logs": pre_logs,
             "task": task, "result": result, "project": proj,
             "challenge": challenge, "repair_provenance": repair_provenance,
+            "repair_parent_candidate": task.get("candidate_snapshot"),
+            "pre_gate_input": preserved,
+            "regate": None,
             "program_first_phases": (
                 result.get("program_first_phases")
                 or result.get("phases") or {}),
@@ -3945,7 +4192,8 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
                 program_first_phases.get("phase4_debugging", {})
         if got.get("ok"):
             inherited = list(task.get("verification_challenges") or [])
-            inherited.append(plan["challenge"])
+            if plan.get("challenge") is not None:
+                inherited.append(plan["challenge"])
             new_task = _make_ai_review_task(
                 pid, proj, got, result.get("routing_verdict") or {}, rc,
                 run_p, "AI_REPAIR",
@@ -3953,8 +4201,29 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
                 verification_challenges=inherited,
                 program_candidate=(task.get("program_candidate_snapshot")
                                    or task.get("candidate_snapshot")),
-                repair_parent_candidate=task.get("candidate_snapshot"),
+                repair_parent_candidate=plan.get("repair_parent_candidate"),
                 repair_provenance=plan["repair_provenance"])
+            preserved = plan.get("pre_gate_input")
+            if isinstance(preserved, dict):
+                binding = _bind_pre_gate_output(
+                    preserved, new_task["rtl_sha256"])
+                new_task["pre_gate_input"] = binding
+                regate = plan.get("regate")
+                if isinstance(regate, dict):
+                    # A Program RE-ENTRY: the author's bytes did not change,
+                    # the Program's did.  Bind the new output to the SAME
+                    # author signature and record the transition; this grants
+                    # no acceptance and no repair permit.
+                    new_task["program_regate"] = {
+                        **regate,
+                        "new_output_sha256": new_task["rtl_sha256"],
+                        "input_manifest_path": binding["input_manifest_path"],
+                        "binding_path": binding["binding_path"],
+                        "attributed_to": "PROGRAM",
+                        "author_signature_unchanged": True,
+                        "repair_authorized": False,
+                        "status": "FRESH_REVIEW_REQUIRED",
+                    }
             task_by_id[pid] = new_task
             result["review_task"] = new_task["review_path"]
             result["candidate_origin"] = "AI_REPAIR"
@@ -4190,27 +4459,38 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
     return 2 if (remaining_backup or repairs or ordered_tasks) else 1
 
 
+_CORRECTION_REFUSED = "REVIEW_CORRECTION_REFUSED"
+_REGATE_REFUSED = "PROGRAM_REGATE_REFUSED"
+
+
 def _correction_path(path: str | Path, run_p: Path | None = None,
-                     *, exists: bool = True) -> Path:
-    """BLOCKING: correction evidence may not traverse a symlink or escape run."""
+                     *, exists: bool = True,
+                     token: str = _CORRECTION_REFUSED) -> Path:
+    """BLOCKING: correction evidence may not traverse a symlink or escape run.
+
+    `token` names the refusing operation. It changes only the message prefix:
+    the two operations enforce one identical path contract, so a divergence
+    here could not be a divergence in what is allowed.
+    """
     if not isinstance(path, (str, Path)) or not str(path):
-        raise ValueError("REVIEW_CORRECTION_REFUSED: malformed path")
+        raise ValueError(f"{token}: malformed path")
     path = Path(path).absolute()
     if any(part.is_symlink() for part in [path, *path.parents]):
-        raise ValueError(f"REVIEW_CORRECTION_REFUSED: symlink path: {path}")
+        raise ValueError(f"{token}: symlink path: {path}")
     path = path.resolve()
     if run_p is not None and not path.is_relative_to(run_p):
-        raise ValueError(f"REVIEW_CORRECTION_REFUSED: path outside run: {path}")
+        raise ValueError(f"{token}: path outside run: {path}")
     if exists and not path.is_file():
-        raise ValueError(f"REVIEW_CORRECTION_REFUSED: missing file: {path}")
+        raise ValueError(f"{token}: missing file: {path}")
     return path
 
 
-def _correction_object(path: Path) -> tuple[dict, str]:
+def _correction_object(path: Path,
+                       token: str = _CORRECTION_REFUSED) -> tuple[dict, str]:
     raw = path.read_bytes().decode("utf-8")
     obj = json.loads(raw)
     if not isinstance(obj, dict):
-        raise ValueError(f"REVIEW_CORRECTION_REFUSED: not a JSON object: {path}")
+        raise ValueError(f"{token}: not a JSON object: {path}")
     return obj, raw
 
 
@@ -4429,22 +4709,298 @@ def _apply_review_correction(run_p: Path, request_path: Path) -> None:
           "; same candidate; FRESH_REVIEW_REQUIRED; no repair permit")
 
 
+def _apply_program_regate(run_p: Path, request_path: Path) -> None:
+    """Re-enter the FIXED Program from ONE preserved, signed pre-gate input.
+
+    BLOCKING. A deterministic gate can normalize a signed author candidate into
+    different bytes before freezing it, which correctly makes the author's
+    final signature stale. When that transform is later FIXED, the pending task
+    is stuck: its unchanged working output is not re-gated, restoring the signed
+    input reads as a new AI edit needing a counterexample against the unwanted
+    candidate, and re-signing the unwanted output would attribute a PROGRAM
+    mutation to the AI author. This operation is the missing third option.
+
+    It restores ONLY the exactly preserved signed input, records the transition
+    with the Program version before and after and both output hashes, and hands
+    the ordinary resume a re-entry it can gate. It never attributes the
+    regenerated bytes to the author, never accepts, never publishes, never
+    supersedes a challenge and never grants a repair permit: the regenerated
+    output carries the SAME downstream obligations as a first-time output,
+    including a fresh independent review.
+
+    The stale-signature refusal is NOT weakened. Every task without a verified
+    `program_regate` record is compared exactly as before; see
+    `_signed_candidate_hash`.
+    """
+    def refuse(reason: str) -> None:
+        raise ValueError(f"{_REGATE_REFUSED}: {reason}")
+
+    run_p = run_p.resolve()
+    request, request_raw = _correction_object(
+        _correction_path(request_path, token=_REGATE_REFUSED), _REGATE_REFUSED)
+    request_sha = _sha256_text(request_raw)
+    task_path = _correction_path(run_p / _REVIEW_WORKLIST, run_p,
+                                 token=_REGATE_REFUSED)
+    task_raw = task_path.read_text(encoding="utf-8")
+    tasks = _read_jsonl(task_path)
+    ids = [str(t.get("id")) for t in tasks]
+    pid = str(request.get("id") or "")
+    if not pid or len(set(ids)) != len(ids) or ids.count(pid) != 1:
+        refuse("missing or duplicate task id")
+    current = tasks[ids.index(pid)]
+    archive = run_p / "program_regates" / _safe_problem_id(pid) / request_sha
+    transition_path = _correction_path(archive / "transition.json", run_p,
+                                       exists=False, token=_REGATE_REFUSED)
+    transition = None
+    if transition_path.exists():
+        transition, _ = _correction_object(transition_path, _REGATE_REFUSED)
+        task = transition.get("prior_task")
+        if not isinstance(task, dict):
+            refuse("invalid transition archive")
+    else:
+        task = current
+    consumed = current.get("program_regate")
+    if isinstance(consumed, dict) \
+            and consumed.get("request_sha256") == request_sha \
+            and consumed.get("status") != "REGATE_PENDING":
+        # The gates already consumed this exact re-entry. Verify its archive
+        # still stands, then report -- never open a second round.
+        if transition is None:
+            refuse("immutable archive missing")
+        print(f"  {pid}: PROGRAM_REGATE_ALREADY_APPLIED; consumed by the "
+              f"gates; new output {str(current.get('rtl_sha256'))[:12]}; "
+              "no repair permit")
+        return
+    if request.get("schema") != _PROGRAM_REGATE_SCHEMA:
+        refuse("wrong request schema")
+    if task.get("schema") != _REVIEW_TASK_SCHEMA:
+        refuse("wrong task schema")
+    for field, expected in (
+            ("task_sha256", _review_task_digest(task)),
+            ("prompt_sha256", task.get("prompt_sha256")),
+            ("stale_output_sha256", task.get("rtl_sha256"))):
+        if not re.fullmatch(r"[0-9a-f]{64}", str(request.get(field) or "")) \
+                or request[field] != expected:
+            refuse(f"stale {field}")
+    author = request.get("author")
+    blind = request.get("blind")
+    if (not isinstance(author, dict) or author.get("kind") != "AI"
+            or not isinstance(author.get("model"), str)
+            or author["model"].strip().lower() in {"", "unknown", "unspecified", "n/a"}
+            or not isinstance(blind, dict) or blind.get("oracle_accessed") is not False):
+        refuse("attributed blind AI required")
+    if not isinstance(request.get("rationale"), str) \
+            or len(request["rationale"].strip()) < 80:
+        refuse("rationale needs 80 characters")
+
+    # The task must actually be the stuck shape this operation exists for:
+    # an AI repair whose author signature covers the PRE-gate bytes.
+    if task.get("candidate_origin") != "AI_REPAIR":
+        refuse("only an AI_REPAIR candidate can be re-gated")
+    provenance = task.get("repair_provenance")
+    if not isinstance(provenance, dict):
+        refuse("task lacks its AI repair provenance")
+    signed = str(request.get("signed_input_sha256") or "")
+    if not re.fullmatch(r"[0-9a-f]{64}", signed):
+        refuse("malformed signed_input_sha256")
+    if str(provenance.get("repaired_rtl_sha256") or "") != signed:
+        refuse("signed_input_sha256 is not the hash the author signed")
+    if signed == str(task.get("rtl_sha256") or ""):
+        refuse("the gates did not change the signed input; nothing to re-gate")
+
+    # The Program must actually have moved. A retry with the same Program
+    # reproduces the same output: that is a loop, not a fix.
+    before = str(request.get("program_version_before") or "")
+    after = str(request.get("program_version_after") or "")
+    running = _program_version()
+    if not before or not after:
+        refuse("both Program versions must be named")
+    if before == after:
+        refuse("Program version unchanged; a retry with the same Program "
+               "is a loop, not a fix")
+    if not running:
+        refuse("the running Program version is not readable")
+    if after != running:
+        refuse(f"program_version_after {after!r} is not the running "
+               f"Program {running!r}")
+
+    # The preserved signed input must exist and still BE those bytes.
+    pre_gate = task.get("pre_gate_input")
+    if not isinstance(pre_gate, dict):
+        refuse("task has no preserved pre-gate input record")
+    if str(pre_gate.get("signed_input_sha256") or "") != signed \
+            or str(pre_gate.get("gate_output_sha256") or "") \
+            != str(task.get("rtl_sha256") or ""):
+        refuse("preserved pre-gate binding does not name this task's pair")
+    manifest_path = _correction_path(pre_gate.get("input_manifest_path") or "",
+                                     run_p, token=_REGATE_REFUSED)
+    preserved, _ = _correction_object(manifest_path, _REGATE_REFUSED)
+    if preserved.get("schema") != _PRE_GATE_INPUT_SCHEMA \
+            or str(preserved.get("id")) != pid \
+            or str(preserved.get("rtl_sha256") or "") != signed:
+        refuse("preserved input manifest does not match the request")
+    if before != str(preserved.get("program_version") or ""):
+        refuse(f"program_version_before {before!r} is not the Program that "
+               "produced the preserved input")
+    preserved_paths = [_correction_path(q, run_p, token=_REGATE_REFUSED)
+                       for q in preserved.get("rtl_paths") or []]
+    if not preserved_paths:
+        refuse("preserved input has no RTL")
+    if len(preserved_paths) != len(preserved.get("source_rtl_paths") or []):
+        refuse("preserved input manifest is internally inconsistent")
+    if _sha256_text(_candidate_text(preserved_paths)) != signed:
+        refuse("preserved signed input hash drift")
+
+    # The work tree must still hold the frozen stale output: a regate is not a
+    # way to smuggle an unproven hand edit past the repair predicate.
+    project = _correction_path(task.get("project") or "", run_p, exists=False,
+                               token=_REGATE_REFUSED)
+    if not project.is_dir():
+        refuse("missing project directory")
+    working_paths = [_correction_path(q, run_p, token=_REGATE_REFUSED)
+                     for q in _rtl_files(project)]
+    if sorted(str(q) for q in working_paths) != sorted(
+            task.get("working_rtl_paths") or []):
+        refuse("working RTL path set drift")
+    working_hash = _sha256_text(_candidate_text(working_paths))
+    already_applied = working_hash == signed
+    if not already_applied and working_hash != str(task.get("rtl_sha256") or ""):
+        refuse("working RTL drifted from the frozen gate output")
+    if len(working_paths) != len(preserved_paths):
+        refuse("preserved input does not cover the working RTL file set")
+    prompt_path = _correction_path(task.get("prompt_path") or "", run_p,
+                                   token=_REGATE_REFUSED)
+    if _sha256_text(prompt_path.read_text(errors="replace")) \
+            != task.get("prompt_sha256"):
+        refuse("prompt drift")
+
+    material_paths = [prompt_path, manifest_path, *preserved_paths]
+    for field in ("completion_path", "response_payload_path", "manifest_path"):
+        material_paths.append(_correction_path(
+            (task.get("candidate_snapshot") or {}).get(field) or "", run_p,
+            token=_REGATE_REFUSED))
+    for item in task.get("verification_challenges") or []:
+        path = _correction_path(item.get("path") or "", run_p,
+                                token=_REGATE_REFUSED)
+        if _sha256_text(path.read_text(encoding="utf-8")) != item.get("sha256"):
+            refuse("inherited challenge drift")
+        material_paths.append(path)
+    hashes = {str(q): hashlib.sha256(q.read_bytes()).hexdigest()
+              for q in material_paths}
+
+    new_task = dict(task)
+    new_task["program_regate"] = {
+        "schema": _PROGRAM_REGATE_SCHEMA,
+        "request_sha256": request_sha,
+        "archive_path": str(archive),
+        "signed_input_sha256": signed,
+        "stale_output_sha256": str(task.get("rtl_sha256")),
+        "input_manifest_path": str(manifest_path),
+        "program_version_before": before,
+        "program_version_after": after,
+        "attributed_to": "PROGRAM",
+        "author_signature_unchanged": True,
+        "repair_authorized": False,
+        "status": "REGATE_PENDING",
+    }
+    expected_transition = {"schema": _PROGRAM_REGATE_SCHEMA,
+                           "prior_task": task, "new_task": new_task,
+                           "material_sha256": hashes,
+                           "request_sha256": request_sha}
+    if transition is not None and transition != expected_transition:
+        refuse("transition evidence drift")
+    if current not in (task, new_task):
+        refuse("current task drift")
+    committed = current == new_task
+    if not committed:
+        solve, _ = _correction_object(
+            _correction_path(run_p / "solve_report.json", run_p,
+                             token=_REGATE_REFUSED), _REGATE_REFUSED)
+        results = solve.get("results")
+        matches = ([r for r in results if isinstance(r, dict) and r.get("id") == pid]
+                   if isinstance(results, list) else [])
+        if len(matches) != 1 or matches[0].get("accepted") is not False:
+            refuse("task must be unaccepted")
+        acceptance_path = _correction_path(run_p / _ACCEPTANCE_REPORT, run_p,
+                                           exists=False, token=_REGATE_REFUSED)
+        if acceptance_path.exists():
+            acceptance, _ = _correction_object(acceptance_path, _REGATE_REFUSED)
+            if pid in (acceptance.get("accepted_ids") or []):
+                refuse("candidate already accepted")
+        response = _correction_path(task.get("response_path") or "", run_p,
+                                    exists=False, token=_REGATE_REFUSED)
+        if response.exists():
+            refuse("candidate already published")
+
+    archives = {
+        "prior_task.json": json.dumps(task, ensure_ascii=False,
+                                      sort_keys=True) + "\n",
+        "prior_gate_output_manifest.json": _correction_path(
+            (task.get("candidate_snapshot") or {}).get("manifest_path") or "",
+            run_p, token=_REGATE_REFUSED).read_bytes().decode("utf-8"),
+        "request.json": request_raw,
+        "transition.json": json.dumps(expected_transition, ensure_ascii=False,
+                                      sort_keys=True) + "\n"}
+    for name, raw in archives.items():
+        path = _correction_path(archive / name, run_p, exists=False,
+                                token=_REGATE_REFUSED)
+        if path.exists():
+            if path.read_bytes().decode("utf-8") != raw:
+                refuse("immutable archive drift")
+        else:
+            if transition is not None:
+                refuse("immutable archive missing")
+            _atomic_write_text(path, raw)
+    # Recheck all source material before the one authoritative commit.
+    for path, digest in hashes.items():
+        source = _correction_path(path, run_p, token=_REGATE_REFUSED)
+        if hashlib.sha256(source.read_bytes()).hexdigest() != digest:
+            refuse("source changed during preparation")
+    if task_path.read_text(encoding="utf-8") != task_raw:
+        refuse("worklist changed during preparation")
+    if not committed:
+        tasks[ids.index(pid)] = new_task
+        _write_jsonl(task_path, tasks)
+    # Restore ONLY the exactly preserved signed input. Idempotent: the bytes
+    # are compared, and identical bytes are left alone.
+    if not already_applied:
+        for target, source in zip(working_paths, preserved_paths):
+            _atomic_write_text(target, source.read_text(errors="replace"))
+        restored = _sha256_text(_candidate_text(working_paths))
+        if restored != signed:
+            refuse("restored work tree does not hash to the signed input")
+    print(f"  {pid}: PROGRAM_REGATE_" +
+          ("ALREADY_APPLIED" if committed else "APPLIED") +
+          f"; program {before} -> {after}; signed input {signed[:12]} restored; "
+          "PROGRAM-attributed; no repair permit")
+
+
 def cmd_resume(bench: str, dataset: str, run: str, jobs: int = 1,
                heavy_jobs: int | None = None,
                worker_threads: int = 0,
-               review_correction: str | None = None) -> int:
+               review_correction: str | None = None,
+               program_regate: str | None = None) -> int:
     """Run the sole resume coordinator under an exclusive run-root lock."""
     try:
-        if review_correction is not None:
+        if review_correction is not None or program_regate is not None:
             # Check BEFORE resolve/open of the persistent coordinator lock.
             _correction_path(Path(run) / _COORDINATOR_LOCK,
-                             Path(run).absolute().resolve(), exists=False)
+                             Path(run).absolute().resolve(), exists=False,
+                             token=(_CORRECTION_REFUSED
+                                    if review_correction is not None
+                                    else _REGATE_REFUSED))
         with _run_root_coordinator_lock(Path(run), "resume"):
             if review_correction is not None:
                 try:
                     _apply_review_correction(Path(run).resolve(), Path(review_correction))
                 except (KeyError, TypeError, AttributeError) as exc:
                     raise ValueError("REVIEW_CORRECTION_REFUSED: malformed evidence: "
+                                     f"{type(exc).__name__}: {exc}") from exc
+            if program_regate is not None:
+                try:
+                    _apply_program_regate(Path(run).resolve(), Path(program_regate))
+                except (KeyError, TypeError, AttributeError) as exc:
+                    raise ValueError(f"{_REGATE_REFUSED}: malformed evidence: "
                                      f"{type(exc).__name__}: {exc}") from exc
             return _cmd_resume_locked(
                 bench, dataset, run, jobs=jobs, heavy_jobs=heavy_jobs,
@@ -4490,6 +5046,13 @@ def main():
                          "unaccepted review on unchanged RTL; requires "
                          "hash-bound blind AI correction evidence; never "
                          "accepts, supersedes a challenge, or permits repair")
+    ap.add_argument("--program-regate", metavar="REQUEST.json",
+                    help="with --resume: re-enter the FIXED Program from one "
+                         "preserved, signed pre-gate input; requires the "
+                         "preserved input, a CHANGED Program version and an "
+                         "unaccepted task; binds the new output to the SAME "
+                         "author signature, attributes the regenerated bytes "
+                         "to the PROGRAM, and never accepts or permits repair")
     ap.add_argument("--limit", type=int, default=0,
                     help="with --solve: stop after N problems (0 = all)")
     ap.add_argument("--dataset", help="dataset path on disk")
@@ -4528,6 +5091,11 @@ def main():
     a = ap.parse_args()
     if a.review_correction and (not a.resume or a.solve or a.score or a.show or a.list):
         ap.error("--review-correction requires --resume alone")
+    if a.program_regate and (not a.resume or a.solve or a.score or a.show or a.list):
+        ap.error("--program-regate requires --resume alone")
+    if a.program_regate and a.review_correction:
+        ap.error("--program-regate and --review-correction are separate "
+                 "operations; run one per resume")
 
     if a.list:
         cmd_list()
@@ -4574,7 +5142,8 @@ def main():
         sys.exit(cmd_resume(
             a.bench, a.dataset, a.run, jobs=a.jobs,
             heavy_jobs=a.heavy_jobs, worker_threads=a.worker_threads,
-            review_correction=a.review_correction))
+            review_correction=a.review_correction,
+            program_regate=a.program_regate))
     if a.solve:
         if not (a.dataset and a.run):
             raise SystemExit("--solve requires --dataset and --run")
