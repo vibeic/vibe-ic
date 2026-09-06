@@ -14883,6 +14883,14 @@ def step_yosys_synth(project: Path, top_name: str = "chip_top",
         except Exception:  # nosec — never let detection break synth
             return []
 
+    # #2050 — the FSM encoding table this synth WRITES, named once. The
+    # unmounted-container staging route below relocates it exactly as it
+    # relocates the netlist, and it can only do that against a single spelling
+    # of the path (B3-17: two correct landings that did not know about each
+    # other left `-encfile <host path>` inside a script staged into a container
+    # that cannot resolve host paths).
+    fsm_enc_host = synth_dir / _fsm_encfile_name()
+
     cmds = [f"read_verilog -sv -DSIMULATION {f}" for f in rtl_files] + \
         _sparse_fsm_preserve_cmds(rtl_files) + [
         # v1.6.191 (#78 P0) — synth_top auto-selected ASIC-core
@@ -14892,7 +14900,7 @@ def step_yosys_synth(project: Path, top_name: str = "chip_top",
         # matching the old and new encodings positionally by name. MEASURED
         # NO-LEAK: the netlist is byte-identical with and without the flag.
         f"synth -top {synth_top} -flatten "
-        f"-encfile {synth_dir / _fsm_encfile_name()}",
+        f"-encfile {fsm_enc_host}",
         # v1.6.193 (#80 P0) — `synth -flatten` keeps async-reset DFFs
         # as behavioral `always @(posedge clk or negedge rst_n)`
         # blocks. To force every cell to a counted primitive without
@@ -15019,11 +15027,23 @@ def step_yosys_synth(project: Path, top_name: str = "chip_top",
                         f"failed: {cp_err}")
                 else:
                     netlist_c = f"{cont_wd}/netlist_yosys.v"
+                    # #2050 x #118 (B3-17) — the FSM encoding table is a
+                    # SECOND OUTPUT of this script, and v1.18.0 wrote it by
+                    # its HOST path. This route exists because the container
+                    # cannot resolve host paths, so the staged script named a
+                    # directory that does not exist inside it: yosys either
+                    # dies on the write or writes nowhere the host can read,
+                    # and step-13 LEC then compares a recoded netlist with no
+                    # translation to match its state registers by — the exact
+                    # inconsistent miter #2050 closed. It travels with the
+                    # script, the same relocation the netlist already gets.
+                    fsm_enc_c = f"{cont_wd}/{_fsm_encfile_name()}"
                     script_c = script
                     # longest-first so no path is a prefix casualty
                     for hp in sorted(stage_map, key=len, reverse=True):
                         script_c = script_c.replace(hp, stage_map[hp])
                     script_c = script_c.replace(str(out_v), netlist_c)
+                    script_c = script_c.replace(str(fsm_enc_host), fsm_enc_c)
                     rc, out, err = _run(
                         ["docker", "exec", "-w", cont_wd, container,
                          "bash", "-lc", f"yosys -p '{script_c}'"],
@@ -15034,6 +15054,20 @@ def step_yosys_synth(project: Path, top_name: str = "chip_top",
                             rc = 1
                             err += ("\nyosys docker fallback: netlist "
                                     "retrieval from staging failed")
+                        # The table comes back BEST-EFFORT and never changes
+                        # this step's verdict: a design with no extracted FSM
+                        # produces no table, and an absent table is already a
+                        # state step-13 handles (the recipe is then
+                        # byte-identical to the pre-#2050 one). What must not
+                        # happen is a SILENT absence, so a failed retrieval of
+                        # a table the container did write is named in the log.
+                        _rc_enc, _o_enc, _e_enc = _run(
+                            ["docker", "cp", f"{container}:{fsm_enc_c}",
+                             str(fsm_enc_host)], timeout=60)
+                        if _rc_enc != 0:
+                            err += ("\nyosys docker fallback: FSM encoding "
+                                    "table not retrieved from staging "
+                                    f"({fsm_enc_c}): {_e_enc.strip()}")
                     _run(["docker", "exec", container, "bash", "-lc",
                           f"rm -rf {cont_wd}"], timeout=30)
     log = synth_dir / "yosys.log"

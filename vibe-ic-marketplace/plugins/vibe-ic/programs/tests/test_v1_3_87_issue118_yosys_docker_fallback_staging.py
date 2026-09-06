@@ -93,6 +93,18 @@ def test_unmounted_container_routes_through_staging(tmp_path, monkeypatch):
     ex = [j for j in joined if "yosys -p" in j and "docker exec" in j]
     assert ex and "-w /tmp/vibeic_test_stage" in ex[0], ex
     assert str(synth_dir) not in ex[0], "host path leaked into staged script"
+    # #2050 x #118 (B3-17) — THE ENCODING TABLE IS RELOCATED, NOT DROPPED.
+    # "no host path in the staged script" is satisfied just as well by deleting
+    # `-encfile` altogether, and that would silently re-open #2050 (a recoded
+    # netlist compared with no translation builds an inconsistent miter). So
+    # the flag must still be there, naming the STAGED path, and the table must
+    # be copied back to the host beside the netlist it belongs to.
+    from lec_run import FSM_ENCFILE_NAME
+    assert f"-encfile /tmp/vibeic_test_stage/{FSM_ENCFILE_NAME}" in ex[0], ex[0]
+    assert any(j.startswith(
+        f"docker cp test-eda:/tmp/vibeic_test_stage/{FSM_ENCFILE_NAME} ")
+        and j.endswith(str(synth_dir / FSM_ENCFILE_NAME)) for j in joined), \
+        joined
     # netlist retrieved to the host
     out_v = synth_dir / "netlist_yosys.v"
     assert out_v.is_file() and out_v.stat().st_size > 0
