@@ -243,7 +243,8 @@ def _package_scope(pkgs: Dict[str, Dict[str, int]],
     return out
 
 
-def dut_defaults(rtl_text: str, dut_module: str) -> Dict[str, int]:
+def dut_defaults(rtl_text: str, dut_module: str,
+                 notes: Optional[List[str]] = None) -> Dict[str, int]:
     """`{NAME: value}` for every constant visible where `dut_module` declares
     its ports, read out of THIS ONE text.
 
@@ -265,7 +266,8 @@ def dut_defaults(rtl_text: str, dut_module: str) -> Dict[str, int]:
     if m is None:
         return {}
     try:
-        pkgs = m.package_constants([("<text>", rtl_text or "")])
+        pkgs = m.package_constants([("<text>", rtl_text or "")],
+                                   top=dut_module or None, notes=notes)
         imported = m.dut_imported_packages(rtl_text or "", dut_module or "")
         out = _package_scope(pkgs, imported)
         # SEEDED: a module's own default is legitimately written over a package
@@ -278,7 +280,8 @@ def dut_defaults(rtl_text: str, dut_module: str) -> Dict[str, int]:
 
 
 def defaults_from_sources(sources: Sequence[Tuple[object, str]],
-                          dut_module: str) -> Dict[str, int]:
+                          dut_module: str,
+                          notes: Optional[List[str]] = None) -> Dict[str, int]:
     """`dut_defaults` for `dut_module`, with PACKAGES read from EVERY source.
 
     A package is declared in a file of its own, so a module's own text can
@@ -288,12 +291,22 @@ def defaults_from_sources(sources: Sequence[Tuple[object, str]],
 
     An empty result is returned when no file declares the module — again not an
     error, and the caller then refuses on the width cell alone.
+
+    `notes`, when a caller supplies a list, receives one line per package that
+    is declared more than once and had to be DECIDED — which copy the
+    elaboration of this DUT reaches and which one is shadowed. Nothing is
+    written for a package declared once, or for copies that say the same thing.
     """
     m = _rbdg()
     if m is None:
         return {}
     try:
-        pkgs = m.package_constants(sources or [])
+        # THE DUT IS THE TOP of the elaboration these testbenches build -- they
+        # instantiate it bare, with nothing above it -- so it is the top whose
+        # path decides which copy of a package declared twice is the one this
+        # design compiles. See `register_bus_driver_gen.package_constants`.
+        pkgs = m.package_constants(sources or [], top=dut_module or None,
+                                   notes=notes)
     except Exception:
         pkgs = {}
     own: Dict[str, int] = {}

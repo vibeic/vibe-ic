@@ -534,9 +534,30 @@ def find_req_rsp_pairs(ports: Sequence[Tuple[str, str, str]],
 _WIDTH_EXPR_MAX = 1 << 20
 _WIDTH_EXPR_EXP_MAX = 64
 
+#: A DECLARATION ENDS AT ITS OWN TERMINATOR, NOT AT THE END OF THE LINE.
+#: The value used to be captured as `[^,\n]+` -- a deliberate bound, because a
+#: capture that runs on swallows the NEXT declaration. But a real design writes
+#: a long constant across two lines:
+#:
+#:     parameter int RsvdWidth = top_pkg::TL_AUW - prim_mubi_pkg::MuBi4Width -
+#:                               H2DCmdIntgWidth - DataIntgWidth;
+#:
+#: and the capture stopped at the newline, so the value was the dangling
+#: `A - B -`, failed to parse, and every port declared over `RsvdWidth` refused
+#: on a number the design states in full.
+#:
+#: So the pattern now ends at the `=` and captures NOTHING; `_trim_value` reads
+#: the value from there and cuts at the declaration's own terminator -- a `,`
+#: or `;` at bracket depth 0, or the `)` that closes the parameter header. The
+#: bound moved from the LINE to BRACKET DEPTH, which is where a declaration
+#: actually ends, so it still cannot swallow the next one -- and a `,` inside
+#: `(...)`, `[...]` or a `{...}` concatenation is no longer a terminator either.
+#: Ending the match at the `=` also matters for `finditer`: a capture that ran
+#: past the newline would CONSUME the following declarations and they would
+#: never be matched at all.
 _PARAM_DECL_RE = re.compile(
     r"\bparameter\b(?:\s+(?:int|integer|logic|bit|byte|shortint|longint"
-    r"|unsigned|signed))*\s*(?:\[[^\]]*\]\s*)?(\w+)\s*=\s*([^,\n]+)")
+    r"|unsigned|signed))*\s*(?:\[[^\]]*\]\s*)?(\w+)\s*=\s*")
 
 #: The same shape for a LOCALPARAM. SystemVerilog allows one in the parameter
 #: PORT LIST, and that is where a design puts a width it derives from its own
@@ -549,7 +570,7 @@ _PARAM_DECL_RE = re.compile(
 #: overrides by `resolve_bus_widths`.
 _LOCALPARAM_DECL_RE = re.compile(
     r"\blocalparam\b(?:\s+(?:int|integer|logic|bit|byte|shortint|longint"
-    r"|unsigned|signed))*\s*(?:\[[^\]]*\]\s*)?(\w+)\s*=\s*([^,\n]+)")
+    r"|unsigned|signed))*\s*(?:\[[^\]]*\]\s*)?(\w+)\s*=\s*")
 
 #: `$clog2` is the one system function that appears in a width expression often
 #: enough to matter, and it is a pure integer function of one integer, so it can
@@ -584,9 +605,19 @@ def _mangle_params(params: Dict[str, int]) -> Dict[str, int]:
 
     A key that cannot be rewritten unambiguously is DROPPED, so a width over it
     refuses by name instead of resolving against a mangled near-miss.
+
+    A non-INTEGER value is dropped for the same reason. Every harvest in this
+    file stores only integers, but a caller may hand this evaluator anything,
+    and once a width can be a constant CHOICE a non-integer no longer has to
+    take part in the arithmetic to reach the answer: `A ? 1 : 2` would simply
+    have found a string TRUTHY and returned a width. Dropping the name refuses
+    by name instead. (`bool` is not an integer here either -- this evaluator
+    has always refused to return one.)
     """
     out: Dict[str, int] = {}
     for k, v in (params or {}).items():
+        if not isinstance(v, int) or isinstance(v, bool):
+            continue
         mk = _mangle_scope(str(k))
         if mk is not None:
             out[mk] = v
@@ -604,7 +635,8 @@ def _mangle_params(params: Dict[str, int]) -> Dict[str, int]:
 #: The table is `{name: arity}`. A call to anything not in it REFUSES: this
 #: stays an arithmetic evaluator over the design's own constants, and running
 #: the design's own FUNCTIONS (`prim_util_pkg::vbits(N)`) is not arithmetic.
-_CONST_FUNCS = {"clog2": 1, "idiv": 2, "imod": 2}
+_CONST_FUNCS = {"clog2": 1, "idiv": 2, "imod": 2,
+                "ltoi": 1, "land": 2, "lor": 2, "lnot": 1}
 
 
 def _idiv(a: int, b: int) -> int:
@@ -624,6 +656,194 @@ def _imod(a: int, b: int) -> int:
     return -r if a < 0 else r
 
 
+#: A WIDTH IS SOMETIMES A CONSTANT CHOICE, NOT A CONSTANT SUM.
+#: `localparam int DataOutW = EnableDataIntgPt ? SramDw + IntgWidth : SramDw`
+#: states the width completely -- both arms, and the constant that picks between
+#: them -- and an arithmetic-only evaluator could not even PARSE `?:`, `&&`,
+#: `||` or `!`, so every port declared over such a constant refused on a number
+#: the design states in full. Measured on the corpus: 48 such declarations, 21
+#: of them needing a relational operator.
+#:
+#: The widening is BOUNDED and stays the same machinery: the Verilog forms are
+#: REWRITTEN to the whitelisted-AST evaluator (integer results, no names it has
+#: not harvested, no side effects, never `eval` of the design's own text). A
+#: relational or logical result is an INTEGER 1/0, as in Verilog -- never a
+#: Python bool, which this evaluator has always refused.
+_TERNARY_NEST_MAX = 64
+_OPENERS = "([{"
+_CLOSERS = ")]}"
+
+#: The operand of a Verilog `!`: a parenthesised group, a name, a literal, or
+#: another `!`.
+_NOT_PRIMARY_RE = re.compile(r"[A-Za-z_]\w*|\d[\w']*|'[sSdDhHbBoO][0-9a-fA-F_]+")
+
+
+def _ltoi(v) -> int:
+    """A relational result as Verilog states it: the integer 1 or 0."""
+    return 1 if v else 0
+
+
+def _land(a, b) -> int:
+    """Verilog `&&` over constants. Both operands are already evaluated, so a
+    division by zero in the right-hand operand REFUSES rather than being
+    short-circuited away -- an honest refusal, not a guessed 0."""
+    return 1 if (a and b) else 0
+
+
+def _lor(a, b) -> int:
+    """Verilog `||` over constants."""
+    return 1 if (a or b) else 0
+
+
+def _lnot(a) -> int:
+    """Verilog `!` over a constant."""
+    return 0 if a else 1
+
+
+def _match_bracket(s: str, i: int) -> int:
+    """Index of the bracket closing the opener at `s[i]`, or -1."""
+    depth = 0
+    for j in range(i, len(s)):
+        if s[j] in _OPENERS:
+            depth += 1
+        elif s[j] in _CLOSERS:
+            depth -= 1
+            if depth == 0:
+                return j
+    return -1
+
+
+def _not_operand_span(s: str, j: int, budget: int):
+    """`(start, end)` of the PRIMARY that a `!` at `s[j-1]` negates, or None."""
+    if budget <= 0:
+        return None
+    while j < len(s) and s[j].isspace():
+        j += 1
+    if j >= len(s):
+        return None
+    if s[j] == "!" and not (j + 1 < len(s) and s[j + 1] == "="):
+        inner = _not_operand_span(s, j + 1, budget - 1)
+        return None if inner is None else (j, inner[1])
+    if s[j] in _OPENERS:
+        k = _match_bracket(s, j)
+        return None if k < 0 else (j, k + 1)
+    m = _NOT_PRIMARY_RE.match(s, j)
+    return (j, m.end()) if m else None
+
+
+def _rewrite_not(s: str, budget: int = _TERNARY_NEST_MAX) -> Optional[str]:
+    """Verilog `!x` -> `lnot(x)`, at VERILOG's precedence.
+
+    NOT a textual `!` -> `not`. Python's `not` binds LOOSER than `==` and
+    Verilog's `!` binds TIGHTER, so `!a == b` would silently change meaning --
+    from `(!a) == b` to `!(a == b)`. Rewriting to a CALL over the operand
+    primary keeps the design's own grouping. `!=` is left alone; anything the
+    operand scan cannot name REFUSES.
+    """
+    if budget <= 0:
+        return None
+    out, i = [], 0
+    while i < len(s):
+        ch = s[i]
+        if ch != "!" or (i + 1 < len(s) and s[i + 1] == "="):
+            out.append(ch)
+            i += 1
+            continue
+        span = _not_operand_span(s, i + 1, budget)
+        if span is None:
+            return None
+        inner = _rewrite_not(s[span[0]:span[1]], budget - 1)
+        if inner is None:
+            return None
+        out.append("lnot(" + inner + ")")
+        i = span[1]
+    return "".join(out)
+
+
+def _rewrite_groups(s: str, budget: int) -> Optional[str]:
+    """`_rewrite_ternary` applied INSIDE every bracketed group of `s`.
+
+    A ternary is legitimately nested inside a call -- `$clog2(ExplicitErrs ?
+    N+1 : N)` -- so a rewrite that only looked at bracket depth 0 would leave
+    exactly that shape unparsable.
+    """
+    if budget <= 0:
+        return None
+    out, i = [], 0
+    while i < len(s):
+        ch = s[i]
+        if ch in _OPENERS:
+            k = _match_bracket(s, i)
+            if k < 0:
+                return None
+            inner = _rewrite_ternary(s[i + 1:k], budget - 1)
+            if inner is None:
+                return None
+            out.append(ch + inner + s[k])
+            i = k + 1
+            continue
+        if ch in _CLOSERS:
+            return None                 # unbalanced: refuse rather than guess
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
+def _rewrite_ternary(s: str, budget: int = _TERNARY_NEST_MAX) -> Optional[str]:
+    """Verilog `c ? a : b` -> Python `((a) if (c) else (b))`, or None.
+
+    Right-associative, as SystemVerilog is: the `:` that closes a `?` is the
+    first one at the same bracket depth that no nested `?` has claimed, so
+    `c1 ? a : c2 ? b : d` groups as `c1 ? a : (c2 ? b : d)`. Each part is
+    parenthesised on the way out, so the design's own grouping survives the
+    difference between Verilog's and Python's precedence tables.
+
+    By the time this runs the scope operator has already been mangled away, so
+    every remaining `:` at depth 0 is a ternary separator; one without a `?`
+    is left alone and the parse below refuses it.
+    """
+    if budget <= 0:
+        return None
+    depth = q = 0
+    q = -1
+    for i, ch in enumerate(s):
+        if ch in _OPENERS:
+            depth += 1
+        elif ch in _CLOSERS:
+            depth -= 1
+            if depth < 0:
+                return None
+        elif ch == "?" and depth == 0:
+            q = i
+            break
+    if q < 0:
+        return _rewrite_groups(s, budget)
+    depth, pending, c = 0, 0, -1
+    for i in range(q + 1, len(s)):
+        ch = s[i]
+        if ch in _OPENERS:
+            depth += 1
+        elif ch in _CLOSERS:
+            depth -= 1
+            if depth < 0:
+                return None
+        elif depth == 0 and ch == "?":
+            pending += 1
+        elif depth == 0 and ch == ":":
+            if pending == 0:
+                c = i
+                break
+            pending -= 1
+    if c < 0:
+        return None                      # a `?` with no `:` is not a ternary
+    cond = _rewrite_ternary(s[:q], budget - 1)
+    tval = _rewrite_ternary(s[q + 1:c], budget - 1)
+    fval = _rewrite_ternary(s[c + 1:], budget - 1)
+    if cond is None or tval is None or fval is None:
+        return None
+    return "((" + tval + ") if (" + cond + ") else (" + fval + "))"
+
+
 def _clog2(n: int) -> int:
     """IEEE 1800 `$clog2`: the number of bits needed to index `n` values.
 
@@ -641,7 +861,12 @@ def _int_expr(expr: str, params: Dict[str, int]) -> Optional[int]:
     unresolvable width becomes a refusal rather than a silent 32.
     """
     import ast as _ast
-    text = str(expr).strip().rstrip(";")
+    # ONE EXPRESSION, WHATEVER LINE IT IS ON. A declaration's value legitimately
+    # spans two lines, and a NEWLINE ends an expression in Python -- so the
+    # value read across the line break parsed as a syntax error and refused on
+    # arithmetic it states completely. Whitespace is collapsed before parsing;
+    # Verilog has no whitespace-sensitive expression syntax to lose.
+    text = " ".join(str(expr).split()).rstrip(";")
     # SCOPE-QUALIFIED names first: `top_pkg::TL_DW` is a legal width bound and
     # `::` is not Python, so without this the parse below fails and every
     # package-scoped width refuses whatever the package says.
@@ -662,22 +887,67 @@ def _int_expr(expr: str, params: Dict[str, int]) -> Optional[int]:
     # plain call; any other `$...` is left alone and fails to parse, which is
     # the refusal we want.
     text = _CLOG2_RE.sub("clog2(", text)
+    # VERILOG'S BOOLEAN FORMS ARE NOT PYTHON'S. `&&`, `||` and `!` are not
+    # Python operators and `c ? a : b` is not Python syntax at all, so a width
+    # written as a constant CHOICE did not parse and refused whatever the
+    # design said. `&&`/`||` map onto Python's own `and`/`or`, whose precedence
+    # against relational operators is Verilog's; `!` and `?:` are rewritten
+    # structurally, because their precedence is NOT.
+    text = text.replace("&&", " and ").replace("||", " or ")
+    text = _rewrite_not(text)
+    if text is None:
+        return None
+    text = _rewrite_ternary(text)
+    if text is None:
+        return None
     try:
         tree = _ast.parse(text, mode="eval")
     except SyntaxError:
         return None
 
+    def _call(fn, args, node):
+        return _ast.copy_location(
+            _ast.Call(func=_ast.Name(id=fn, ctx=_ast.Load()),
+                      args=args, keywords=[]), node)
+
     class _VerilogIntOps(_ast.NodeTransformer):
-        """`a / b` -> `idiv(a, b)`, `a % b` -> `imod(a, b)`."""
+        """Verilog's arithmetic and logic, not Python's.
+
+        `a / b` -> `idiv(a, b)`, `a % b` -> `imod(a, b)`, and every RELATIONAL
+        or LOGICAL result -> the integer 1/0 Verilog states it as. Without the
+        last part a comparison would come back as a Python bool, which this
+        evaluator refuses by design -- so the wrapping is what lets a width be
+        a constant choice at all.
+        """
 
         def visit_BinOp(self, node):          # noqa: N802 — ast API name
             self.generic_visit(node)
             if isinstance(node.op, (_ast.Div, _ast.Mod)):
                 fn = "idiv" if isinstance(node.op, _ast.Div) else "imod"
-                return _ast.copy_location(
-                    _ast.Call(func=_ast.Name(id=fn, ctx=_ast.Load()),
-                              args=[node.left, node.right], keywords=[]),
-                    node)
+                return _call(fn, [node.left, node.right], node)
+            return node
+
+        def visit_Compare(self, node):        # noqa: N802 — ast API name
+            self.generic_visit(node)
+            if len(node.ops) != 1:
+                # `a < b < c` is a CHAIN in Python and `(a<b)<c` in Verilog.
+                # Left un-wrapped so the walk below refuses it by name rather
+                # than evaluating one language's meaning of the other's text.
+                return node
+            return _call("ltoi", [node], node)
+
+        def visit_BoolOp(self, node):         # noqa: N802 — ast API name
+            self.generic_visit(node)
+            fn = "land" if isinstance(node.op, _ast.And) else "lor"
+            folded = node.values[0]
+            for nxt in node.values[1:]:
+                folded = _call(fn, [folded, nxt], node)
+            return folded
+
+        def visit_UnaryOp(self, node):        # noqa: N802 — ast API name
+            self.generic_visit(node)
+            if isinstance(node.op, _ast.Not):
+                return _call("lnot", [node.operand], node)
             return node
 
     tree = _ast.fix_missing_locations(_VerilogIntOps().visit(tree))
@@ -689,8 +959,16 @@ def _int_expr(expr: str, params: Dict[str, int]) -> Optional[int]:
                                  _ast.Constant, _ast.Name, _ast.Load,
                                  _ast.Add, _ast.Sub, _ast.Mult, _ast.USub,
                                  _ast.UAdd, _ast.FloorDiv, _ast.LShift,
-                                 _ast.RShift, _ast.Pow, _ast.Call)):
+                                 _ast.RShift, _ast.Pow, _ast.Call,
+                                 # the constant-choice forms, and NOTHING else:
+                                 # no subscript, no attribute, no comprehension.
+                                 _ast.IfExp, _ast.BoolOp, _ast.And, _ast.Or,
+                                 _ast.Not, _ast.Compare, _ast.Lt, _ast.LtE,
+                                 _ast.Gt, _ast.GtE, _ast.Eq, _ast.NotEq)):
             return None
+        if isinstance(node, _ast.Compare) and len(node.ops) != 1:
+            return None      # a comparison CHAIN means different things in the
+                             # two languages; refuse rather than pick one
         # A CALL is allowed for exactly one name, with exactly one argument.
         # Anything else -- another function, a method, a keyword or starred
         # argument -- refuses. This stays an arithmetic evaluator.
@@ -728,7 +1006,8 @@ def _int_expr(expr: str, params: Dict[str, int]) -> Optional[int]:
                 return None
     try:
         _ns = dict(params)
-        _ns.update(clog2=_clog2, idiv=_idiv, imod=_imod)
+        _ns.update(clog2=_clog2, idiv=_idiv, imod=_imod,
+                   ltoi=_ltoi, land=_land, lor=_lor, lnot=_lnot)
         val = eval(compile(tree, "<width>", "eval"), {"__builtins__": {}}, _ns)
     except Exception:
         return None
@@ -780,25 +1059,48 @@ def _dut_header_text(rtl_text: str, dut_module: str) -> str:
 
 
 def _trim_value(text: str) -> str:
-    """A declaration's value, cut at the `)` that closes the header rather than
-    at the first `)` in the text.
+    """A declaration's value: everything up to the declaration's OWN terminator.
 
-    The value pattern cannot simply stop at `)`: the last declaration in a
-    parameter header is followed by the header's own `)`, but a value may
-    legitimately CONTAIN one -- `localparam int IdxW = $clog2(N)`. Stopping at
-    the first `)` truncated that to `$clog2(N`, which then failed to parse, so
-    the constant was silently absent and every port declared over it refused.
-    Walk the text instead and stop at the first `)` that has no `(` of its own.
+    The terminator is a `,` or `;` at bracket depth 0, or a closing bracket
+    with no opener of its own -- the `)` that closes the parameter header. It
+    is NOT the end of the line: a design writes a long constant across two
+    lines and the value carries on (see `_PARAM_DECL_RE`).
+
+    Every bracket kind counts toward the depth, so a `,` inside a call, a
+    packed range or a `{...}` concatenation is part of the value and not a
+    terminator -- and `localparam int IdxW = $clog2(N)` keeps its own `)`,
+    which is what this function was written for: stopping at the FIRST `)`
+    truncated it to `$clog2(N`, the parse failed, the constant was silently
+    absent, and every port declared over it refused.
+
+    A value with no terminator at all runs to the end of the text and simply
+    fails to evaluate, which is a refusal by name and not a wrong width.
     """
     depth = 0
     for i, ch in enumerate(text):
-        if ch == "(":
+        if ch in _OPENERS:
             depth += 1
-        elif ch == ")":
+        elif ch in _CLOSERS:
             if depth == 0:
                 return text[:i].strip()
             depth -= 1
+        elif depth == 0 and ch in ",;":
+            return text[:i].strip()
     return text.strip()
+
+
+def _decl_hits(text: str, *regexes) -> List[Tuple[int, str, str]]:
+    """`[(position, NAME, value)]` for every declaration `regexes` match.
+
+    One place, so the four harvests in this file cannot drift on where a
+    declaration's value ends. The match itself stops at the `=`; the value is
+    read from there by `_trim_value`.
+    """
+    hits: List[Tuple[int, str, str]] = []
+    for rx in regexes:
+        for m in rx.finditer(text):
+            hits.append((m.start(), m.group(1), _trim_value(text[m.end():])))
+    return hits
 
 
 def _harvest(header: str, *regexes,
@@ -819,10 +1121,7 @@ def _harvest(header: str, *regexes,
     over it refusing, on a number stated in a file the same run had already
     read. The module's OWN names still win: `out` is layered over `seed`.
     """
-    hits = []
-    for rx in regexes:
-        for m in rx.finditer(header):
-            hits.append((m.start(), m.group(1), _trim_value(m.group(2))))
+    hits = _decl_hits(header, *regexes)
     base = dict(seed or {})
     out: Dict[str, int] = {}
     for _pos, name, expr in sorted(hits):
@@ -940,10 +1239,7 @@ def dut_body_constants(rtl_text: str, dut_module: str,
     body = _dut_body_text(rtl_text, dut_module)
     if not body:
         return {}
-    hits = []
-    for rx in (_PARAM_DECL_RE, _LOCALPARAM_DECL_RE):
-        for m in rx.finditer(body):
-            hits.append((m.start(), m.group(1), _trim_value(m.group(2))))
+    hits = _decl_hits(body, _PARAM_DECL_RE, _LOCALPARAM_DECL_RE)
     base = dict(seed or {})
     out: Dict[str, int] = {}
     seen: Dict[str, List[Optional[int]]] = {}
@@ -991,41 +1287,70 @@ def dut_imported_packages(rtl_text: str, dut_module: str) -> List[str]:
     return out
 
 
-def package_constants(sources: Sequence[Tuple[object, str]]
-                      ) -> Dict[str, Dict[str, int]]:
-    """`{package: {NAME: value}}` for every package declared in `sources`.
+def _module_declaring_file(sources: Sequence[Tuple[object, str]],
+                           module: str) -> Optional[object]:
+    """The path of the FIRST source that declares `module`, or None.
+
+    Comments are blanked first: a sentence that names the module is not a
+    declaration (#731).
+    """
+    if not module:
+        return None
+    pat = re.compile(r"\bmodule\s+" + re.escape(str(module)) + r"\b")
+    for path, raw in sources or []:
+        code = _hdl_code_text.strip_hdl_comments_and_strings(raw or "")
+        if pat.search(code):
+            return path
+    return None
+
+
+def _path_parts(path: object) -> List[str]:
+    """`path` as directory segments, separator-agnostic."""
+    return [s for s in re.split(r"[\\/]+", str(path)) if s not in ("", ".")]
+
+
+def _source_tree_distance(a: object, b: object) -> int:
+    """Directory steps between two source files: 0 in the same directory.
+
+    This is how far apart the design keeps two files, and it is the only thing
+    in the INPUT that says which copy of a duplicated package the elaboration
+    of a given top actually compiles: a tool is handed a file list rooted where
+    the top's own modules live, and a copy sitting outside that tree is not on
+    it. Nothing here reads a directory NAME, so no convention is assumed.
+    """
+    da, db = _path_parts(a)[:-1], _path_parts(b)[:-1]
+    i = 0
+    while i < len(da) and i < len(db) and da[i] == db[i]:
+        i += 1
+    return (len(da) - i) + (len(db) - i)
+
+
+def _package_fixpoint(bodies: Dict[str, List[Tuple[object, str]]]
+                      ) -> Tuple[Dict[str, Dict[str, int]],
+                                 Dict[str, Dict[str, set]]]:
+    """`(constants, per-package {NAME: {values seen in each body}})`.
 
     Resolved to a FIXPOINT because one package legitimately states a constant
     over another's (`localparam int W = other_pkg::Base * 2`). Each round
     re-offers everything resolved so far; the loop stops the round nothing new
     resolves, so a genuinely circular or unresolvable constant is simply ABSENT
     and every width over it refuses by name.
+
+    ONE NAME, TWO DECLARATIONS, TWO VALUES -> AMBIGUOUS, NOT FIRST-WINS. Every
+    body is harvested; a name survives only if the bodies that resolve it
+    AGREE. The second return value reports what each body said, so a caller can
+    tell an agreement from a silence.
     """
-    bodies: Dict[str, List[str]] = {}
-    for _path, raw in sources or []:
-        code = _hdl_code_text.strip_hdl_comments_and_strings(raw or "")
-        for m in _PACKAGE_RE.finditer(code):
-            bodies.setdefault(m.group(1), []).append(m.group(2))
     out: Dict[str, Dict[str, int]] = {p: {} for p in bodies}
+    said: Dict[str, Dict[str, set]] = {p: {} for p in bodies}
     for _round in range(len(bodies) + 1):
         changed = False
         scoped = {f"{p}::{k}": v for p, d in out.items() for k, v in d.items()}
         for pkg, blist in bodies.items():
             local = out[pkg]
-            # ONE NAME, TWO DECLARATIONS, TWO VALUES -> AMBIGUOUS, NOT FIRST-WINS.
-            # A source set can legitimately contain the same package twice --
-            # measured: a vendor copy and a docs copy of one package that agree
-            # on 17 constants and DISAGREE on one. Keeping whichever file sorted
-            # first would resolve a width to a number the other copy contradicts,
-            # silently. Every body is harvested; a name survives only if the
-            # bodies that resolve it AGREE.
             seen: Dict[str, set] = {}
-            for body in blist:
-                hits = []
-                for rx in (_PARAM_DECL_RE, _LOCALPARAM_DECL_RE):
-                    for m in rx.finditer(body):
-                        hits.append((m.start(), m.group(1),
-                                     _trim_value(m.group(2))))
+            for _path, body in blist:
+                hits = _decl_hits(body, _PARAM_DECL_RE, _LOCALPARAM_DECL_RE)
                 acc = dict(local)
                 for _pos, name, expr in sorted(hits):
                     val = _int_expr(expr, {**scoped, **acc})
@@ -1033,12 +1358,113 @@ def package_constants(sources: Sequence[Tuple[object, str]]
                         acc[name] = val
                         seen.setdefault(name, set()).add(val)
             for name, vals in seen.items():
+                said[pkg].setdefault(name, set()).update(vals)
                 if name in local or len(vals) != 1:
                     continue
                 local[name] = next(iter(vals))
                 changed = True
         if not changed:
             break
+    return out, said
+
+
+def _bodies_diverge(pkg: str, blist: Sequence[Tuple[object, str]],
+                    said: Dict[str, set],
+                    constants: Dict[str, int]) -> bool:
+    """True when the copies of `pkg` do not describe the SAME package.
+
+    Two copies diverge when they disagree on a value (a name with more than one
+    value) or when one states a constant the other does not. Copies that state
+    the same names with the same values are the same package written twice, and
+    nothing has to be decided about them -- they resolve exactly as one copy
+    would, with no note.
+    """
+    if any(len(v) > 1 for v in said.values()):
+        return True
+    names = None
+    for _path, body in blist:
+        here = {n for _pos, n, _e in
+                _decl_hits(body, _PARAM_DECL_RE, _LOCALPARAM_DECL_RE)}
+        if names is None:
+            names = here
+        elif names != here:
+            return True
+    return False
+
+
+def package_constants(sources: Sequence[Tuple[object, str]],
+                      top: Optional[str] = None,
+                      notes: Optional[List[str]] = None
+                      ) -> Dict[str, Dict[str, int]]:
+    """`{package: {NAME: value}}` for every package declared in `sources`.
+
+    ONE PACKAGE DECLARED TWICE, WITH TWO DIFFERENT VALUES, IS NOT AMBIGUOUS IF
+    THE DESIGN SAYS WHICH COPY IT BUILDS. Measured: a source set that carries a
+    package twice -- once beside the RTL the top instantiates, once beside the
+    documents -- agreeing on 17 constants and disagreeing on one. Refusing both
+    is honest but needless: the design INPUT states which copy the elaboration
+    of `top` reaches, because the file list a tool is handed is rooted where the
+    top's own modules live. The copy on that path WINS; the other is SHADOWED,
+    contributes nothing, and is named in `notes`.
+
+    Without a `top`, or when no unique copy is nearer to it than the rest, the
+    old rule stands unchanged: every body is harvested and a name survives only
+    if the bodies that resolve it AGREE, so a width over a contested constant
+    refuses by name rather than taking whichever file sorted first.
+
+    `notes` (a list the caller supplies) receives one line per package that had
+    to be decided. Nothing is written to it when a package is declared once, or
+    when the copies say the same thing -- there is nothing to record.
+    """
+    bodies: Dict[str, List[Tuple[object, str]]] = {}
+    for path, raw in sources or []:
+        code = _hdl_code_text.strip_hdl_comments_and_strings(raw or "")
+        for m in _PACKAGE_RE.finditer(code):
+            bodies.setdefault(m.group(1), []).append((path, m.group(2)))
+    out, said = _package_fixpoint(bodies)
+    dupes = {p: b for p, b in bodies.items() if len(b) > 1}
+    if not dupes:
+        return out
+    top_path = _module_declaring_file(sources, top) if top else None
+    decided: Dict[str, List[Tuple[object, str]]] = {}
+    for pkg, blist in dupes.items():
+        if not _bodies_diverge(pkg, blist, said.get(pkg, {}), out.get(pkg, {})):
+            continue
+        contested = sorted(n for n, v in said.get(pkg, {}).items()
+                           if len(v) > 1)
+        if top_path is None:
+            if notes is not None:
+                why = (f"no top module was named"
+                       if not top else
+                       f"no source here declares the top module {top!r}")
+                notes.append(
+                    f"{pkg}: declared in {len(blist)} places and {why}, so no "
+                    f"elaboration path decides between them; contested "
+                    f"constant(s) {contested} are dropped")
+            continue
+        ranked = sorted((_source_tree_distance(top_path, path), str(path))
+                        for path, _b in blist)
+        if len(ranked) > 1 and ranked[0][0] == ranked[1][0]:
+            if notes is not None:
+                notes.append(
+                    f"{pkg}: declared in {len(blist)} places, none of them "
+                    f"nearer the elaboration of {top!r} than another, so no "
+                    f"copy wins; contested constant(s) {contested} are dropped")
+            continue
+        keep = ranked[0][1]
+        decided[pkg] = [(path, body) for path, body in blist
+                        if str(path) == keep]
+        if notes is not None:
+            shadowed = [pth for _d, pth in ranked[1:]]
+            notes.append(
+                f"{pkg}: declared in {len(blist)} places; the copy the "
+                f"elaboration of {top!r} reaches wins ({keep}); shadowed "
+                f"{shadowed}; they disagreed on {contested}")
+    if not decided:
+        return out
+    for pkg, blist in decided.items():
+        bodies[pkg] = blist
+    out, _said = _package_fixpoint(bodies)
     return out
 
 

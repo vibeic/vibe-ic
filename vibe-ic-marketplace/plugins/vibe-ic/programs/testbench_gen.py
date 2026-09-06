@@ -160,8 +160,17 @@ def _resolve_widths(project: Path,
     A width that does not evaluate REFUSES, naming the symbol. It is not
     narrowed to one bit: a TB whose ports are the wrong width is a TB whose
     result means nothing, and one that says so is worth more than one that
-    runs."""
-    params = _port_width.defaults_from_sources(sources, module)
+    runs.
+
+    WHEN THE SOURCE SET DECLARES ONE PACKAGE TWICE, the resolver picks the copy
+    the elaboration of this DUT reaches and SHADOWS the other. That is a choice
+    the run made about which numbers the widths came from, so it is reported in
+    the reason rather than left in the resolver: a reader who sees `[31:0]` is
+    entitled to know that a second copy of the package said something else and
+    was not used. Nothing is added when a package is declared once, or when the
+    copies say the same thing -- there is nothing to record."""
+    notes: List[str] = []
+    params = _port_width.defaults_from_sources(sources, module, notes=notes)
     # The same L9 numbers the full-stack TB generator uses. Without them the two
     # generators would disagree about a port whose cell needs a `define -- one
     # resolving it, the other refusing -- which is exactly the kind of split
@@ -174,7 +183,8 @@ def _resolve_widths(project: Path,
             f"not derivable from its own parameter defaults "
             f"({_port_width.scope_summary(params)}): " + "; ".join(refusals)
             + " -- refusing to emit a TB rather than declaring them 1 bit")
-    return resolved, f"widths resolved over {_port_width.scope_summary(params)}"
+    return resolved, (f"widths resolved over {_port_width.scope_summary(params)}"
+                      + ("; " + "; ".join(notes) if notes else ""))
 
 
 def resolve_dut(project: Path, top: str) -> Tuple[Optional[str],
