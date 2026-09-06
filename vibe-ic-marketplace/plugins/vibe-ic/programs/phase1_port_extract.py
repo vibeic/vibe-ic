@@ -729,8 +729,38 @@ def extract_prose_ports(prompt: str) -> List[Dict]:
         # Default, Status…) heads a descriptor bullet — never a real port. Real
         # ports are lowercase/snake_case (clk, coin_input) or short all-caps
         # acronyms (A, B, OUT), which this does NOT match.
+        #
+        # EXCEPT when the line DIMENSIONS the name. MEASURED on the RTLLM
+        # `calendar` prompt: its three outputs are literally
+        #     Hours: 6-bit output representing the current hours
+        #     Mins:  6-bit output representing the current minutes
+        #     Secs:  6-bit output representing the current seconds
+        # under an explicit `Output ports:` heading, and all three match
+        # `[A-Z][a-z]{2,}`. Dropping them published a calendar whose interface
+        # was CLK and RST and nothing else — and that is worse than publishing
+        # nothing, because a non-empty port list walks past the extraction-gap
+        # halt and the design is emitted against an interface missing every
+        # output it has.
+        #
+        # The separator is EVIDENCE ON THE LINE, not a longer word list: a
+        # descriptor sentence ("Latency: one cycle from sample to output")
+        # states no bit width, while a port line that needs this exception
+        # states one — a bracket range on the name, a range in a parenthetical,
+        # or an `N-bit` phrase in the description. A descriptor that does state
+        # a bit width is indistinguishable from a port declaration by any
+        # evidence the document carries, and reading it as a port is then the
+        # honest reading. Only inside an EXPLICIT port section, where the
+        # heading has already said these lines are the interface.
         if re.fullmatch(r'[A-Z][a-z]{2,}', name):
-            continue
+            _dims = (m.group(1) or m.group(3)
+                     or (_RANGE.search(m.group(4)) if (
+                         m.lastindex and m.lastindex >= 4 and m.group(4))
+                         else None)
+                     or re.search(r'\b\d+\s*-?\s*bits?\b',
+                                  line.split(':', 1)[1] if ':' in line else '',
+                                  re.I))
+            if not (unbulleted and _dims):
+                continue
         desc = line.split(':', 1)[1] if ':' in line else ""
         # direction: explicit N-bit input/output in the description wins, else section
         d = None

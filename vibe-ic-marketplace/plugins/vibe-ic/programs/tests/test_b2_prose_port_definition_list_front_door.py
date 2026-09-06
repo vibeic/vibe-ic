@@ -109,6 +109,42 @@ def test_a_titlecase_descriptor_bullet_is_still_rejected():
     assert set(got) == {"clk"}, got
 
 
+def test_a_titlecase_name_that_dimensions_itself_is_a_port():
+    # MEASURED on the RTLLM `calendar` prompt: all three of its outputs are
+    # TitleCase English words, and the TitleCase descriptor rule dropped every
+    # one of them. The interface published for that design was CLK and RST and
+    # nothing else — which is WORSE than publishing nothing, because a
+    # non-empty port list walks past the extraction-gap halt and the design is
+    # then emitted against an interface missing every output it has.
+    spec = ("Output ports:\n"
+            "    Hours: 6-bit output representing the current hours\n"
+            "    Mins: 6-bit output representing the current minutes\n"
+            "    Secs: 6-bit output representing the current seconds\n")
+    got = _by_name(E.extract_prose_ports(spec))
+    assert set(got) == {"Hours", "Mins", "Secs"}, got
+    assert all(got[n]["dir"] == "output" and got[n]["width"] == 6 for n in got), got
+
+
+def test_a_titlecase_name_that_dimensions_itself_by_a_range_is_a_port():
+    # The other spelling of the same evidence: a bracket range on the name.
+    spec = ("Input ports:\n"
+            "    Address[7:0]: the address to read\n")
+    got = _by_name(E.extract_prose_ports(spec))
+    assert set(got) == {"Address"}, got
+    assert got["Address"]["width"] == 8 and got["Address"]["msb"] == 7
+
+
+def test_a_titlecase_name_with_a_width_OUTSIDE_a_section_is_still_rejected():
+    # The exception is scoped to an EXPLICIT port section, where the heading has
+    # already said these lines are the interface. A free-standing descriptor
+    # bullet keeps the old answer even when it happens to state a bit width —
+    # this is the control for the `unbulleted` half of the condition, and it
+    # fails if that half is dropped.
+    spec = "- Address: the 8-bit address bus is driven by the master\n"
+    got = _by_name(E.extract_prose_ports(spec))
+    assert "Address" not in got, got
+
+
 def test_bulleted_lists_outside_any_section_are_unchanged():
     # The pre-existing channel: a bullet with an explicit direction in the
     # description, no section header anywhere.
