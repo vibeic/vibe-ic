@@ -153,10 +153,31 @@ def _collect_port_names(layers: Dict[str, Any]) -> List[str]:
             for v in node:
                 _scan(v, in_container)
 
-    for code in ("L1", "L8R", "L5", "L17"):
-        if code in layers:
-            _scan(layers[code], False)
-    return names
+    # #2049 item 2 — the scan population is DERIVED, not hand-listed.
+    # It used to be the literal tuple ("L1", "L8R", "L5", "L17"). A hand list
+    # cannot notice a NEW port-bearing layer: v1.17.74 seeds L9 from the prompt
+    # front door, L9 was not on the list, and so a port that reached only L9
+    # was invisible to this gate — which then reported "sufficient" off L1/L8R
+    # alone while the design's real interface sat unread in L9.
+    # The population is now every layer PRESENT in the documents. WHICH of them
+    # actually carry ports is still decided by the container / direction-
+    # evidence guards above — i.e. by the documents themselves, not by a list
+    # in this file that a future layer can fall off.
+    for code in sorted(layers):
+        _scan(layers[code], False)
+    # DEDUPLICATE, order-preserving. The same port is legitimately restated in
+    # several L documents (L1 pinout, L3 ports, L9 top_ports), and widening the
+    # population above turned that restatement into arithmetic: a five-port
+    # design reported `port_count=23`. The port POPULATION is a set of signal
+    # names, not a count of mentions; every consumer below (>=1 port, clock,
+    # reset, width advisories) reads it as a set already.
+    seen_names: set = set()
+    unique: List[str] = []
+    for n in names:
+        if n not in seen_names:
+            seen_names.add(n)
+            unique.append(n)
+    return unique
 
 
 def _name_present(layers: Dict[str, Any]) -> bool:
