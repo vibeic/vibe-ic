@@ -451,8 +451,92 @@ CAP_ROLE = "cap"
 #: converted here, rather than as a multiple of another capacitor's LENGTH.
 #: Under the old model those were the same statement; under the real one only
 #: the first is what the entry's own prose says.
+#: THE PERIMETER TERM IS OPTIONAL, AND ITS ABSENCE IS A DISCLOSURE, NOT A
+#: REFUSAL (vibe-ic#2062 follow-up; the three reds v1.17.98 left on main).
+#:
+#: The landing that introduced the two-term inversion above also added
+#: `cap_perim_ff_per_um` to this entry's `requires_pdk_measured`, so a family
+#: characterised for the AREA density and not the perimeter one stopped being
+#: admitted at all. Two things were wrong with that, and the second is the one
+#: that mattered:
+#:
+#:   1. it is not what the rest of the same landing does —
+#:      `split_oversize_capacitors`, twenty screens down, reads the same key and
+#:      writes `cperi = float(cperi) if isinstance(cperi, (int, float)) else
+#:      0.0`. One file, one landing, two answers to "what if this family has no
+#:      perimeter constant".
+#:   2. it silently reclassified a whole class of declaration. Every family
+#:      SHIPPED in `pdk_registry.json` carries the constant in every corner
+#:      (checked: sky130A and ihp-sg13g2, fast/slow/typ, all six), so the
+#:      refusal could never fire in production — it fired only on a
+#:      partially-characterised family, and it took two bounds with it that are
+#:      about the BIAS RESISTOR and have nothing to do with capacitors.
+#:
+#: So: `cap_perim_ff_per_um` defaults to 0.0 when the family does not carry it,
+#: which degenerates this expression EXACTLY into the area-only form
+#: `C / (carea * w)` that preceded it — the older model, not a wrong one, and
+#: never a term that "resolves to nothing" (which is the silent-drop failure the
+#: refusal was reaching for; `_safe_eval` raising KeyError there would leave the
+#: device at a library nominal with nothing saying so). The degradation is
+#: NAMED, in `cap_perimeter_model` on the emitted IR's provenance, so a reader
+#: is told which of the two models sized the capacitors.
+CAP_PERIM_KEY = "cap_perim_ff_per_um"
+
+#: PROCESS CONSTANTS AN ENTRY MAY NAME WITHOUT REQUIRING, and the value used
+#: when the family does not carry them. A constant is allowed to be absent ONLY
+#: if it appears here: `admission_env` seeds these before the measured params,
+#: so the name always resolves and the expression is never DROPPED — which is
+#: the failure `requires_pdk_measured` exists to prevent, and the one a bare
+#: "just leave it out" would reintroduce. Membership in this map is the
+#: entry's promise that the degenerate model is a real model and that its use
+#: is disclosed (see `cap_perimeter_model`), not that the constant does not
+#: matter.
+EXPLICIT_ENV_DEFAULTS: Dict[str, float] = {CAP_PERIM_KEY: 0.0}
+
+
+def cap_perimeter_model(measured: Optional[Dict[str, float]]) -> Dict[str, Any]:
+    """WHICH capacitor model sized this block, said out loud.
+
+    `two_term` when the family carries a measured perimeter density,
+    `area_only` when it does not — and the second is a real, older model, not a
+    failure. Published on every emission so it can never be inferred from
+    silence."""
+    v = (measured or {}).get(CAP_PERIM_KEY)
+    have = isinstance(v, (int, float)) and not isinstance(v, bool)
+    return {
+        "model": "two_term" if have else "area_only",
+        "cap_perim_ff_per_um": float(v) if have else None,
+        "note": (
+            "C = carea*w*l + 2*cperi*(w+l); the drawn length inverts it "
+            "exactly" if have else
+            "this family declares no measured `cap_perim_ff_per_um`, so the "
+            "perimeter term is 0 and the two-term inversion degenerates to the "
+            "area-only form C/(carea*w). That is the model this library used "
+            "before the constant was measured; it realises MORE than the "
+            "target by 2*cperi*(w+l), which on a characterised family was "
+            "measured at 0.5-2%. Characterise the family "
+            "(programs/pdk_analog_characterize.py) to size on the real model."),
+    }
+
+
 def cap_l_expr(ff_expr: str) -> str:
-    """The drawn-length expression realising `ff_expr` femtofarads."""
+    r"""The drawn-length expression realising `ff_expr` femtofarads.
+
+    THE CAPACITANCE IS PUBLISHED SEPARATELY, and this is why. What a reader of
+    this library wants to know about a capacitor is the CAPACITANCE it is sized
+    to — "forty unit sampling caps", "the Miller fraction of the load" — and
+    until now that fact existed only INSIDE the composed length expression, so
+    the only way to read it was to scrape the head of the string. A guard did
+    exactly that (`re.match(r"\s*([0-9.]+)\s*\*", …)`), and when the two-term
+    inversion legitimately re-composed the expression the multiplier stopped
+    being the first token and the guard dereferenced None. The fact was right,
+    the reading was a SECOND COPY of it, and the copy broke.
+    ``ff_expr`` is therefore carried beside ``expr`` on every capacitor row
+    (`cap_ff_expr_rows`), so the capacitance has a first-class home and nothing
+    has to parse the length to recover it. The multiplier CANNOT be hoisted out
+    of the length expression instead: the inversion is not linear in it — the
+    fringe term does not scale — and factoring it out would reintroduce exactly
+    the sizing error the two-term model exists to remove."""
     return (f"(({ff_expr}) - 2 * cap_perim_ff_per_um * w_cap) "
             f"/ (cap_area_ff_per_um2 * w_cap + 2 * cap_perim_ff_per_um)")
 
@@ -568,13 +652,18 @@ SLEW_MARGIN_EXPR = (
 #: same record and can tell that the range, not the topology, is what does not
 #: close.
 #:
-#: What the ruling does NOT settle, and what is therefore left standing and
-#: flagged: the emitted TESTBENCH is still built from `fclk_max` (`tper_ns =
-#: 1000 / fclk_max`, three lines of it below in `stimulus`), so the deck
-#: exercises this block at a clock it is no longer held to. That mismatch is
-#: real and it is recorded here rather than closed silently — closing it
-#: multiplies every corner's transient span by the clock ratio, which is a
-#: run-cost decision, not a correctness one this file may take alone.
+#: AND THE MISMATCH IS CLOSED (owner ruling, 2026-09-07). This note used to
+#: read "what the ruling does NOT settle": the emitted TESTBENCH was still
+#: built from `fclk_max`, so the deck exercised the block at a clock it was no
+#: longer held to. The owner ruled that a block is MEASURED at the clock it is
+#: GRADED at, and accepted the cost — the transient span goes as 1/clock, so
+#: the span is multiplied by exactly `fclk_max / fclk`, MEASURED once per
+#: block: 1.0000x on the ldo (its deck is an `op` analysis with no transient at
+#: all) and 1.2823x on the modulator (399282.5 ns -> 512000.0 ns). No deadline
+#: exists for that to trip; the corner sweep runs to completion. The stimulus
+#: below is written against `fclk`, and
+#: `test_the_testbench_runs_at_the_clock_the_entry_GRADES` compares the two
+#: expressions to each other so they cannot drift apart again.
 #:
 #: ── THE SUPERSEDED ARGUMENT, KEPT ─────────────────────────────────────────
 #: EVALUATED AT `fclk_max`, THE CLOCK THE EMITTED TESTBENCH ACTUALLY RUNS AT.
@@ -1756,6 +1845,8 @@ LIBRARY: Dict[str, Dict[str, Any]] = {
             {"device": "caz", "param": "l",
              "expr": cap_l_expr("autozero_over_sampling_cap * ("
                                 + SAMPLING_CAP_FF_EXPR + ")"),
+             "ff_expr": ("autozero_over_sampling_cap * ("
+                         + SAMPLING_CAP_FF_EXPR + ")"),
              "rationale": ("the auto-zero capacitor has to DOMINATE the "
                            "quantiser's input capacitance or the level it "
                            "stores reaches the latch divided down. Measured "
@@ -1765,6 +1856,9 @@ LIBRARY: Dict[str, Dict[str, Any]] = {
              "expr": cap_l_expr("miller_fraction_of_load * ("
                                 + SAMPLING_CAP_FF_EXPR + ") * "
                                 + _LOAD_OVER_CS_DERIVED_EXPR),
+             "ff_expr": ("miller_fraction_of_load * ("
+                         + SAMPLING_CAP_FF_EXPR + ") * "
+                         + _LOAD_OVER_CS_DERIVED_EXPR),
              "rationale": ("the buffer is the integrator OTA instantiated a "
                            "third time, so its compensation is the same "
                            "quantity the integrators' own is — derived, not "
@@ -1772,6 +1866,7 @@ LIBRARY: Dict[str, Dict[str, Any]] = {
                            "earlier declaration")},
             {"device": "c_vcm", "param": "l",
              "expr": cap_l_expr("40.0 * (" + SAMPLING_CAP_FF_EXPR + ")"),
+             "ff_expr": "40.0 * (" + SAMPLING_CAP_FF_EXPR + ")",
              "rationale": ("four unit sampling/DAC capacitors commutate onto "
                            "vcm every clock; holding the disturbance to a "
                            "tenth of the signal takes about forty of those "
@@ -1821,11 +1916,34 @@ LIBRARY: Dict[str, Dict[str, Any]] = {
             # states a clock TARGET and no range has not said what the block
             # must work over, and refusing is the honest answer to that.
             "fclk_max": {"unit": "MHz", "why":
-                         "an integrator that settles at the target clock "
-                         "may not settle at the fastest one the declaration "
-                         "admits, and the fastest is the one the block is "
-                         "held to. A declaration with no stated range does "
-                         "not say what has to be met"},
+                         "the top of the declared clock range. Since the "
+                         "#2062 ruling the block is HELD to the operating "
+                         "point (`fclk`), not to this; what this binds is the "
+                         "figure `settling_time_constants_at_fclk_max` "
+                         "reports, non-blocking, so a reader sees what the "
+                         "block would do at the fastest rate the declaration "
+                         "admits. Still REQUIRED, not defaulted: a "
+                         "declaration that states a clock TARGET and no range "
+                         "has not said what the block must work over, and "
+                         "refusing is the honest answer to that"},
+            # THE OPERATING POINT, and it must be BOUND, not merely present.
+            # Everything this entry decides is now evaluated at `fclk`: the
+            # bias length (`_R_IB_L_UM_EXPR`), the settling bound
+            # (`_SETTLING_TC_AT_FCLK_EXPR`) and — since the #2062 ruling — the
+            # emitted testbench's clock period and transient span. It was NOT
+            # in this list while the deck ran at `fclk_max`, and the docstring
+            # of `spec_row_values` records the measured shape of that exact
+            # gap in the other direction: "A2 admitted the block and A3 then
+            # reported `tper_ns needs 1000 / fclk_max, which the bound spec
+            # does not supply` — one declaration, two readers, two answers."
+            # Naming it here makes A2 refuse, by name, where A3 would
+            # otherwise fail to render.
+            "fclk": {"unit": "MHz", "why":
+                     "the clock the declaration names as the block's "
+                     "operating point. The bias is derived at it, the "
+                     "settling bound is graded at it, and the emitted "
+                     "testbench runs at it — a declaration that does not "
+                     "bind it has not said what the converter is for"},
         },
         # The slew bound below is evaluated against the process's OWN
         # measured constants, so the entry names them and refuses a family
@@ -1837,8 +1955,9 @@ LIBRARY: Dict[str, Dict[str, Any]] = {
         # area density and not the perimeter one can no longer be sized, and
         # is refused BY NAME here rather than sized on a term that resolves
         # to nothing.
+        # `cap_perim_ff_per_um` is NOT in this list: it is optional and its
+        # absence is disclosed, never refused. See `cap_perimeter_model`.
         "requires_pdk_measured": ["cap_area_ff_per_um2",
-                                  "cap_perim_ff_per_um",
                                   "rsheet_ohm_per_sq",
                                   "vth_n_extracted_v"],
         "requires_domain": {
@@ -2393,18 +2512,22 @@ LIBRARY: Dict[str, Dict[str, Any]] = {
             "param_exprs": [
                 {"device": "cs{i}", "param": "l",
                  "expr": SAMPLING_CAP_L_EXPR,
+                 "ff_expr": SAMPLING_CAP_FF_EXPR,
                  "rationale": ("sampling-capacitor length at the library "
                                "drawn width, from the sampled kT/C budget "
                                "of the declared ENOB / OSR / Vref")},
                 {"device": "ci{i}", "param": "l",
                  "expr": cap_l_expr("(" + SAMPLING_CAP_FF_EXPR
                                     + ") / {coeff}"),
+                 "ff_expr": "(" + SAMPLING_CAP_FF_EXPR + ") / {coeff}",
                  "rationale": ("cs/ci IS this stage's loop coefficient, so "
                                "the integrating capacitor is the sampling "
                                "capacitor divided by it")},
                 {"device": "cc{i}", "param": "l",
                  "expr": cap_l_expr("miller_fraction_of_load * ("
                                     + SAMPLING_CAP_FF_EXPR + ") / {coeff}"),
+                 "ff_expr": ("miller_fraction_of_load * ("
+                             + SAMPLING_CAP_FF_EXPR + ") / {coeff}"),
                  "rationale": ("Miller compensation is a fraction of the "
                                "LOAD it has to dominate, and the load is "
                                "this stage's integrating capacitor. Held at "
@@ -2414,6 +2537,7 @@ LIBRARY: Dict[str, Dict[str, Any]] = {
                                "circuit that is not this one")},
                 {"device": "cf{i}", "param": "l",
                  "expr": SAMPLING_CAP_L_EXPR,
+                 "ff_expr": SAMPLING_CAP_FF_EXPR,
                  "rationale": ("the 1-bit DAC's feedback capacitor is drawn "
                                "EQUAL to the sampling capacitor, so the "
                                "loop's full scale is the declared "
@@ -2798,17 +2922,35 @@ LIBRARY: Dict[str, Dict[str, Any]] = {
                 # density of 0.6 — neither 0, nor 1, nor 1/2.
                 "vstep_v": "supply / 2 + vref / 10",
                 # The declared clock, as a period in nanoseconds.
-                # THE FASTEST CLOCK THE DECLARATION ADMITS, not its
-                # target. The amplifier is hardest at the top of the
-                # declared range, so that is the corner worth exercising —
-                # and it is a DECLARED fact, from the same spec row.
-                "tper_ns": "1000 / fclk_max",
-                "thigh_ns": "1000 / fclk_max / 2 - 1",
+                #
+                # THE CLOCK THE GRADE NAMES (owner ruling, vibe-ic#2062,
+                # 2026-09-07). The entry requirement `settling_time_constants`
+                # is evaluated at `fclk`, the operating point the declaration
+                # NAMES, and the bias is derived at `fclk` too. This deck used
+                # to run at `fclk_max` instead, so the block was HELD to one
+                # clock and EXERCISED at another — and the density the deck
+                # measured was therefore never a measurement of the thing the
+                # bound had admitted. A block is measured at the clock it is
+                # graded at; that is the whole of the ruling.
+                #
+                # THE COST IS ACCEPTED, AND IT IS A COST, NOT A REASON. The
+                # transient span goes as 1/clock, so moving the deck from the
+                # ceiling to the operating point multiplies every corner's
+                # simulated span by `fclk_max / fclk` exactly. No deadline
+                # exists for that to trip: `analog_real_corner_sweep` runs every
+                # corner to completion (#2062 R12). The ratio is MEASURED and
+                # reported beside the figures rather than argued about here.
+                #
+                # The ceiling is not lost: `settling_time_constants_at_fclk_max`
+                # publishes what the block would do at the top of the declared
+                # range, non-blocking, on every emission.
+                "tper_ns": "1000 / fclk",
+                "thigh_ns": "1000 / fclk / 2 - 1",
                 # ONE CONVERSION WINDOW, in nanoseconds. `window_clocks` is
                 # the counter group's own period, published into the
                 # constants during expansion because the expression grammar
                 # has no logarithm and nothing else could derive it.
-                "twin_ns": "window_clocks * 1000 / fclk_max",
+                "twin_ns": "window_clocks * 1000 / fclk",
                 # The measurement starts after the reset clock and three
                 # more, so the reset itself and the first transfers are not
                 # counted as conversion samples.
@@ -2818,10 +2960,10 @@ LIBRARY: Dict[str, Dict[str, Any]] = {
                 # reset can land anywhere in the first window and the first
                 # window is not a conversion. The second one is: it begins
                 # at a reset the counter itself produced.
-                "tmeas_ns": "window_clocks * 1000 / fclk_max * 1.02",
-                "twin2_ns": "window_clocks * 2000 / fclk_max",
-                "tstop_ns": "window_clocks * 2000 / fclk_max",
-                "tstep_ns": "1000 / fclk_max / 200",
+                "tmeas_ns": "window_clocks * 1000 / fclk * 1.02",
+                "twin2_ns": "window_clocks * 2000 / fclk",
+                "tstop_ns": "window_clocks * 2000 / fclk",
+                "tstep_ns": "1000 / fclk / 200",
             },
             "conditions": [
                 "supply = {supply} V (the bound core supply when the spec "
@@ -2830,9 +2972,11 @@ LIBRARY: Dict[str, Dict[str, Any]] = {
                 "{vrefn_v} V — a span of the bound reference centred on "
                 "half the supply; the block generates its own common mode "
                 "from it",
-                "the modulator clock runs at the FASTEST rate the "
-                "declaration admits ({tper_ns} ns period), which is the "
-                "binding settling corner, and the block's own counter makes "
+                "the modulator clock runs at the OPERATING POINT the "
+                "declaration names ({tper_ns} ns period) — the same clock "
+                "`settling_time_constants` grades and the bias is derived at, "
+                "so this deck measures the block the entry actually admitted "
+                "— and the block's own counter makes "
                 "the conversion window {twin_ns} ns long. The run is TWO "
                 "windows and only the second is measured: an incremental "
                 "converter's answer is one window's worth of bits, and the "
@@ -3140,6 +3284,13 @@ def admission_env(lib: Dict[str, Any], spec_values: Dict[str, float],
     environment from the one the expression will finally run in would pass
     something that later resolves to a different number."""
     env: Dict[str, float] = {}
+    # The perimeter density defaults to 0 — the area-only model — rather than
+    # being absent, because an ABSENT name makes `_safe_eval` raise and the
+    # expression is then dropped SILENTLY, leaving the device at a library
+    # nominal with nothing saying so. See `cap_perimeter_model`, which is what
+    # says so. A family that carries the constant overwrites this on the very
+    # next line.
+    env.update(EXPLICIT_ENV_DEFAULTS)
     env.update({k: float(v) for k, v in (measured or {}).items()
                 if isinstance(v, (int, float)) and not isinstance(v, bool)})
     env.update({k: float(v) for k, v in (lib.get("constants") or {}).items()
@@ -3366,6 +3517,35 @@ def library_invariants(library: Optional[Dict[str, Any]] = None
     """
     lib_map = LIBRARY if library is None else library
     problems: List[str] = []
+    # EVERY CAPACITOR SIZED BY THE TWO-TERM INVERSION PUBLISHES ITS
+    # CAPACITANCE. Held here rather than by a reviewer remembering: the fact a
+    # reader wants about a capacitor is what it is sized TO, and while it lived
+    # only inside the composed length expression the only way to read it was to
+    # scrape the string — which is exactly how a guard came to dereference None
+    # when the composition legitimately changed (v1.17.98, red on main to the
+    # tip). A row whose `expr` carries the inversion and no `ff_expr` puts the
+    # fact back out of reach.
+    for _bt, _entry in sorted(lib_map.items()):
+        for _r in (_entry.get("device_param_exprs") or []):
+            if not isinstance(_r, dict):
+                continue
+            if CAP_PERIM_KEY in str(_r.get("expr") or "") \
+                    and not str(_r.get("ff_expr") or "").strip():
+                problems.append(
+                    f"{_bt}: `{_r.get('device')}` is sized by the two-term "
+                    f"capacitor inversion and declares no `ff_expr`, so the "
+                    f"capacitance it is sized to can only be recovered by "
+                    f"parsing the drawn-length expression")
+        for _g in (_entry.get("stage_group") or _entry.get("stages") or []):
+            for _r in ((_g or {}).get("param_exprs") or []):
+                if not isinstance(_r, dict):
+                    continue
+                if CAP_PERIM_KEY in str(_r.get("expr") or "") \
+                        and not str(_r.get("ff_expr") or "").strip():
+                    problems.append(
+                        f"{_bt}: staged `{_r.get('device')}` is sized by the "
+                        f"two-term capacitor inversion and declares no "
+                        f"`ff_expr`")
     for btype, entry in sorted(lib_map.items()):
         # A behaviour record that says "not verified" and does not say WHAT
         # was measured, what it means and what would close it is a blank

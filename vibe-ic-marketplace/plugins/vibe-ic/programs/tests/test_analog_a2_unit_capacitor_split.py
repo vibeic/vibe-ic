@@ -309,18 +309,49 @@ def test_every_entry_that_sizes_a_capacitor_declares_the_constants_it_needs():
         declared = set(lib.get("requires_pdk_measured") or [])
         for const in ("cap_area_ff_per_um2", "cap_perim_ff_per_um"):
             if const in exprs:
-                assert const in declared, (
+                assert const in declared or const in A2.EXPLICIT_ENV_DEFAULTS, (
                     f"library entry `{name}` sizes a device with `{const}` "
-                    f"and does not declare it in requires_pdk_measured, so a "
-                    f"family that carries no such constant would be sized "
-                    f"against a name that resolves to nothing instead of "
-                    f"being refused by name")
+                    f"and neither declares it in requires_pdk_measured nor "
+                    f"carries an explicit default for it, so a family that "
+                    f"carries no such constant would be sized against a name "
+                    f"that RESOLVES TO NOTHING — the expression is dropped "
+                    f"silently and the device keeps a library nominal with "
+                    f"nothing saying so")
 
 
 def test_the_delta_sigma_entry_declares_the_perimeter_constant():
-    """The specific one this change added, pinned so a revert is loud."""
-    assert "cap_perim_ff_per_um" in A2.LIBRARY["delta_sigma"][
-        "requires_pdk_measured"]
+    """The specific one this change added, pinned so a revert is loud.
+
+    RE-AIMED at what must not be reverted (vibe-ic#2062 follow-up). The
+    valuable half of this landing is that the entry SIZES with the perimeter
+    term — the two-term inversion, worth 0.5-2% on every capacitor. That is
+    pinned below and is untouched.
+
+    The half that is no longer asserted is REFUSING a family that lacks the
+    constant. Its stated reason was that such a family "would be sized against
+    a name that resolves to nothing" — and that is now closed by a different
+    and stronger mechanism: the name resolves to an EXPLICIT 0.0
+    (`EXPLICIT_ENV_DEFAULTS`), which degenerates the inversion exactly into the
+    area-only model that preceded it, and the model actually used is published
+    (`cap_perimeter_model`). Nothing is silent either way.
+
+    Why it changed: the refusal could never fire in production — every family
+    shipped in `pdk_registry.json` carries the constant in all three corners —
+    and where it did fire it took two bounds about the BIAS RESISTOR down with
+    it, leaving three tests red on main from v1.17.98 to the tip.
+    """
+    entry = A2.LIBRARY["delta_sigma"]
+    # the sizing still uses the perimeter term — the part that matters
+    exprs = " ".join(str(e.get("expr", ""))
+                     for e in entry["device_param_exprs"])
+    assert "cap_perim_ff_per_um" in exprs
+    # ...and a family without it is never left with an unresolved name
+    assert "cap_perim_ff_per_um" in A2.EXPLICIT_ENV_DEFAULTS
+    assert A2.admission_env(entry, {}, {})["cap_perim_ff_per_um"] == 0.0
+    # ...and which model was used is DISCLOSED, both ways
+    assert A2.cap_perimeter_model({"cap_perim_ff_per_um": 0.04})["model"] \
+        == "two_term"
+    assert A2.cap_perimeter_model({})["model"] == "area_only"
 
 
 # ── a capacitor smaller than its own fringe ──────────────────────────────
