@@ -49121,6 +49121,79 @@ _czl9_block_mentions_port = _ppx.block_mentions_port
 _czl9_emit_interface_prose = _ppx.emit_interface_prose
 
 
+# ORGANIC #2060 item 3 — ONE PLACE WRITES THE TOP CELL OF RECORD.
+#
+# `L1.tapeout_metadata.top_cell` was mirrored by THREE of the branches that
+# resolve `top_module`, each with its own copy of the same eight lines, and by
+# none of the other three. Derived from the tree rather than from memory — every
+# site that assigns `top_module_extraction_strategy` inside
+# `gen_l9_integration_spec`:
+#
+#   rtl_filesystem_scan            no mirror
+#   staged_rtl_structural_top      no mirror
+#   doc_module_decl_or_heading     no mirror
+#   rtl_top_prose_v1_6_545         mirrored, but ONLY when the evidence also
+#                                  carried the `top cell: NAME` sign-off form
+#   doc_prose_top_cell_v1_6_398    mirrored
+#   doc_prose_top_module_v1_6_409  mirrored
+#   l1_ic_name_fallback            no mirror  (and must stay that way)
+#   top_undeclared                 no mirror  (and must stay that way)
+#
+# So whether a design's L1 carries its own top cell depended on WHICH extractor
+# happened to win — and the three that do not mirror are the HIGHER-priority
+# ones, which is the wrong way round: the better the evidence, the more likely
+# the field vanished. MEASURED on the IC whose top moved from a `_top` name to a
+# `_core` name: the win moved from the last-resort prose walker to a
+# higher-priority stated-top branch and `tapeout_metadata.top_cell` disappeared
+# from L1 without anything going red.
+#
+# The mirror now runs ONCE, after the cascade converges, keyed on the STATUS the
+# cascade already computes rather than on a re-spelled list of strategy names —
+# so a branch added later is covered the day it is added, and cannot be added to
+# a list nobody remembers to update.
+#
+# IT IS GATED ON `TOP_MODULE_STATUS_DECLARED`, AND THAT IS THE WHOLE SAFETY
+# ARGUMENT. `tapeout_metadata.top_cell` is the top cell OF RECORD. A name the
+# flow DERIVED from the chip's identifier (`l1_ic_name_fallback`, status
+# `derived_from_chip_name`) is not one, and a design that declared no top at all
+# (`top_undeclared`) certainly is not; writing either would publish a
+# fabricated tape-out fact, which is the failure #2049 and #2052 have both just
+# been spent removing from this same cascade. Those two statuses write nothing,
+# exactly as before.
+#
+# Defensive no-op on a missing / unreadable / non-dict L1, as all three copies
+# were: this mirrors a value the caller already has, and failing to mirror must
+# never take the layer down.
+#
+# chip-AGNOSTIC: a status vocabulary and a field name; no chip, PDK or vendor
+# literal.
+def _v2060_mirror_top_cell(project, top_module, top_module_status) -> bool:
+    """Mirror `top_module` into `L1.tapeout_metadata.top_cell`. True if written.
+
+    Returns whether the write happened so a caller — and a test — can tell
+    "declined because the top is not declared" from "tried and could not".
+    """
+    if not top_module or top_module_status != TOP_MODULE_STATUS_DECLARED:
+        return False
+    try:
+        l1_path = _pl.generated_docs_dir(project) / "L1_DATASHEET.json"
+        if not l1_path.exists():
+            return False
+        l1 = json.loads(l1_path.read_text(encoding="utf-8"))
+        if not isinstance(l1, dict):
+            return False
+        tm = l1.get("tapeout_metadata")
+        if not isinstance(tm, dict):
+            tm = {}
+        tm["top_cell"] = top_module
+        l1["tapeout_metadata"] = tm
+        l1["no_tapeout_metadata_in_input"] = False
+        _stamp.dump(l1_path, l1)
+        return True
+    except Exception:
+        return False
+
+
 def gen_l9_integration_spec(project: Path,
                             extracted: Dict[str, str],
                             l3: dict) -> LDocResult:
@@ -50083,45 +50156,10 @@ def gen_l9_integration_spec(project: Path,
                 top_module_extraction_strategy = (
                     "rtl_top_prose_v1_6_545"
                 )
-                # v1.6.398 mirror, applied on the v1.6.545 path too.
-                # The RTL-top prose walker now intercepts the foundry/
-                # PV-tool `top cell: NAME` sign-off prose that the
-                # v1.6.398 helper used to catch (the `top ... cell`
-                # anchor is part of the v1.6.545 regex). When the hit
-                # carries that top-cell-of-record form, mirror it into
-                # L1.tapeout_metadata.top_cell so the L1 consumer sees
-                # the same single source of truth. Defensive no-op on
-                # missing / malformed L1. Chip-AGNOSTIC.
-                _v1_6_545_evid = ""
-                try:
-                    _v1_6_545_evid = str(_v1_6_545_top_hit[1] or "")
-                except Exception:
-                    _v1_6_545_evid = ""
-                if _V1_6_398_RE_TOP_CELL.search(_v1_6_545_evid):
-                    try:
-                        _v1_6_545_l1_path = (
-                            _pl.generated_docs_dir(project)
-                            / "L1_DATASHEET.json"
-                        )
-                        if _v1_6_545_l1_path.exists():
-                            _v1_6_545_l1 = json.loads(
-                                _v1_6_545_l1_path.read_text(
-                                    encoding="utf-8"))
-                            if isinstance(_v1_6_545_l1, dict):
-                                _v1_6_545_tm = (
-                                    _v1_6_545_l1.get("tapeout_metadata")
-                                )
-                                if not isinstance(_v1_6_545_tm, dict):
-                                    _v1_6_545_tm = {}
-                                _v1_6_545_tm["top_cell"] = top_module
-                                _v1_6_545_l1["tapeout_metadata"] = (
-                                    _v1_6_545_tm
-                                )
-                                _v1_6_545_l1[
-                                    "no_tapeout_metadata_in_input"] = False
-                                _stamp.dump(_v1_6_545_l1_path, _v1_6_545_l1)
-                    except Exception:
-                        pass
+                # ORGANIC #2060 item 3 — the top-cell mirror that stood
+                # here (and was gated on the evidence ALSO carrying a
+                # `top cell:` sign-off line) now runs once for every branch,
+                # after the cascade converges. See `_v2060_mirror_top_cell`.
     if top_module is None:
         # Fall back to L1.ic_name — the chip's own identifier is a better
         # honest answer than the canonical sentinel when no module-decl
@@ -50198,33 +50236,8 @@ def gen_l9_integration_spec(project: Path,
             top_module_extraction_strategy = (
                 "doc_prose_top_cell_v1_6_398"
             )
-            # Mirror into L1.tapeout_metadata.top_cell so the L1
-            # consumer (datasheet readers, foundry-handoff gates)
-            # sees the LVS/DRC top-cell of record alongside the L9
-            # override. Updates L1 on disk in-place (already written
-            # by gen_l1_datasheet). Safe no-op on missing / non-dict
-            # / malformed L1.
-            try:
-                _v1_6_398_l1_path = (
-                    _pl.generated_docs_dir(project) / "L1_DATASHEET.json"
-                )
-                if _v1_6_398_l1_path.exists():
-                    _v1_6_398_l1 = json.loads(
-                        _v1_6_398_l1_path.read_text(encoding="utf-8"))
-                    if isinstance(_v1_6_398_l1, dict):
-                        _v1_6_398_tm = (
-                            _v1_6_398_l1.get("tapeout_metadata")
-                        )
-                        if not isinstance(_v1_6_398_tm, dict):
-                            _v1_6_398_tm = {}
-                        _v1_6_398_tm["top_cell"] = _v1_6_398_top_cell
-                        _v1_6_398_l1["tapeout_metadata"] = _v1_6_398_tm
-                        _v1_6_398_l1["no_tapeout_metadata_in_input"] = (
-                            False
-                        )
-                        _stamp.dump(_v1_6_398_l1_path, _v1_6_398_l1)
-            except Exception:
-                pass
+            # ORGANIC #2060 item 3 — mirrored once after the cascade, for
+            # every branch that publishes a declared top.
     # v1.6.405 — for #294 P2: when v1.6.398 returned None too (or did
     # not fire because we still have a weak `l1_ic_name_fallback`
     # strategy), try prose-form `top module: NAME` / `main module is
@@ -50248,30 +50261,8 @@ def gen_l9_integration_spec(project: Path,
             top_module_extraction_strategy = (
                 "doc_prose_top_module_v1_6_409"
             )
-            # Mirror into L1.tapeout_metadata.top_cell so downstream
-            # consumers see a single source of truth. Same defensive
-            # no-op pattern as the v1.6.398 mirror above.
-            try:
-                _v1_6_405_l1_path = (
-                    _pl.generated_docs_dir(project) / "L1_DATASHEET.json"
-                )
-                if _v1_6_405_l1_path.exists():
-                    _v1_6_405_l1 = json.loads(
-                        _v1_6_405_l1_path.read_text(encoding="utf-8"))
-                    if isinstance(_v1_6_405_l1, dict):
-                        _v1_6_405_tm = (
-                            _v1_6_405_l1.get("tapeout_metadata")
-                        )
-                        if not isinstance(_v1_6_405_tm, dict):
-                            _v1_6_405_tm = {}
-                        _v1_6_405_tm["top_cell"] = _v1_6_405_top_module
-                        _v1_6_405_l1["tapeout_metadata"] = _v1_6_405_tm
-                        _v1_6_405_l1["no_tapeout_metadata_in_input"] = (
-                            False
-                        )
-                        _stamp.dump(_v1_6_405_l1_path, _v1_6_405_l1)
-            except Exception:
-                pass
+            # ORGANIC #2060 item 3 — mirrored once after the cascade, for
+            # every branch that publishes a declared top.
     # v1.6.189 (#76 P1) fell back to the canonical `chip_top` default here so
     # `L9.top_module` was NEVER null, because a null cascaded into
     # `foundry_handoff_package_check` via v1.6.174 (the bracket-variant matrix
@@ -50303,6 +50294,10 @@ def gen_l9_integration_spec(project: Path,
                          if top_module_default_applied
                          else _top_module_status_for(
                              top_module_extraction_strategy))
+    # ORGANIC #2060 item 3 — the ONE mirror. Keyed on the status the cascade
+    # just computed, so every branch that publishes a DECLARED top writes the
+    # top cell of record, and a derived or undeclared top writes nothing.
+    _v2060_mirror_top_cell(project, top_module, top_module_status)
     no_top_module_in_input = _flag_no_X_in_input(
         top_module if not top_module_default_applied else None,
         evidence, "top_module")

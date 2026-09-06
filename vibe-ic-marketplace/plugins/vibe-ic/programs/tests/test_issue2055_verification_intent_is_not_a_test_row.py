@@ -478,3 +478,172 @@ def test_the_function_is_clean_by_CONSULTING_not_by_EXEMPTION():
     assert name not in entries, (
         "the function was recorded as accepted debt in "
         f"{G._BASELINE_NAME} instead of being fixed")
+
+
+# ---------------------------------------------------------------------------
+# 6. ONE place writes L1.tapeout_metadata.top_cell   (#2060 item 3)
+#
+# The mirror was copied into THREE of the branches that resolve `top_module`
+# and absent from the other three — and the three without it are the
+# HIGHER-priority ones, so the better the evidence the more likely the field
+# vanished.  MEASURED over 25 485 published L9 documents on the lane host:
+#
+#     l1_ic_name_fallback             14044 docs      0 carry top_cell
+#     canonical_chip_top_sentinel      2431 docs      0 carry top_cell
+#     doc_module_decl_or_heading       1040 docs      0 carry top_cell
+#     doc_prose_top_module_v1_6_409     102 docs    102 carry top_cell  (100%)
+#     rtl_top_prose_v1_6_545             10 docs      0 carry top_cell
+#     staged_rtl_structural_top           4 docs      0 carry top_cell
+#
+# Three mirror SITES existed; exactly ONE of them ever produced the field.  So
+# for the IC whose top moved from a prose-walker win to a stated-top win, the
+# field disappeared and nothing went red.
+# ---------------------------------------------------------------------------
+def _l1_project(ic_name: str = "probe_ic"):
+    root = Path(tempfile.mkdtemp(prefix="i2060_"))
+    gd = root / "phase1" / "generated_docs"
+    gd.mkdir(parents=True)
+    (gd / "L1_DATASHEET.json").write_text(json.dumps(
+        {"ic_name": ic_name, "schema_version": 2, "doc_class": "datasheet"}))
+    return root
+
+
+def _top_cell_of(root: Path):
+    l1 = json.loads((root / "phase1" / "generated_docs" / "L1_DATASHEET.json")
+                    .read_text(errors="replace"))
+    return (l1.get("tapeout_metadata") or {}).get("top_cell")
+
+
+def _run_l9(docs, ic_name="probe_ic"):
+    root = _l1_project(ic_name)
+    (root / "input" / "docs").mkdir(parents=True)
+    for fname, text in docs.items():
+        (root / "input" / "docs" / fname).write_text(text)
+    P.gen_l9_integration_spec(root, dict(docs), {})
+    l9 = json.loads((root / "phase1" / "generated_docs" /
+                     "L9_INTEGRATION_SPEC.json").read_text(errors="replace"))
+    f = l9.get("fields", l9)
+    return f.get("top_module_extraction_strategy"), _top_cell_of(root)
+
+
+def _design_owned_strategies():
+    """The roster, DERIVED from the tree — never a list retyped here."""
+    try:
+        import _pack_top_module as _ptm  # noqa: WPS433
+        return set(_ptm.DESIGN_OWNED_STRATEGIES)
+    except Exception:
+        return set(P._DESIGN_OWNED_TOP_STRATEGIES_FALLBACK)
+
+
+def test_every_branch_that_publishes_a_declared_top_writes_the_top_cell():
+    """The unification, enumerated from the tree rather than from memory.
+
+    A branch added later is covered the day it is added: the mirror is keyed on
+    the STATUS the cascade already computes, not on a list of strategy names
+    that someone has to remember to extend.
+    """
+    owned = _design_owned_strategies()
+    assert owned, "the design-owned roster could not be read — NOT_MEASURED"
+    for strategy in sorted(owned):
+        status = P._top_module_status_for(strategy)
+        assert status == P.TOP_MODULE_STATUS_DECLARED, (
+            f"{strategy} is design-owned but its status is {status!r}")
+        root = _l1_project()
+        assert P._v2060_mirror_top_cell(root, "adc_core", status) is True, (
+            f"the branch {strategy} publishes a declared top and did not "
+            f"write L1.tapeout_metadata.top_cell")
+        assert _top_cell_of(root) == "adc_core"
+
+
+def test_the_walker_branch_is_byte_identical():
+    """THE NAMED CONTROL. The one branch that already mirrored must not move.
+
+    102 of 102 published L9 documents resolved by `doc_prose_top_module_v1_6_409`
+    carry `tapeout_metadata.top_cell`; that must still be true, with the same
+    value, written the same way.
+    """
+    status = P._top_module_status_for("doc_prose_top_module_v1_6_409")
+    root = _l1_project()
+    assert P._v2060_mirror_top_cell(root, "adc_core", status) is True
+    l1 = json.loads((root / "phase1" / "generated_docs" / "L1_DATASHEET.json")
+                    .read_text(errors="replace"))
+    assert l1["tapeout_metadata"]["top_cell"] == "adc_core"
+    assert l1["no_tapeout_metadata_in_input"] is False
+
+
+def test_a_stated_top_now_carries_the_field_end_to_end():
+    """THE DEFECT, through the real cascade.
+
+    `doc_module_decl_or_heading` is the highest-priority document branch and
+    the largest observed population (1040 L9 docs, 0 with the field).
+    """
+    strategy, top_cell = _run_l9(
+        {"README.md": "# Design\n\nmodule adc_core (input clk);\nendmodule\n"})
+    assert strategy == "doc_module_decl_or_heading", strategy
+    assert top_cell == "adc_core", (
+        "a design whose own document declares its top module published no top "
+        "cell of record")
+
+
+def test_a_design_with_no_declared_top_writes_nothing_end_to_end():
+    strategy, top_cell = _run_l9(
+        {"README.md": "# Design\n\nA converter with no declared top.\n"})
+    assert strategy == P.TOP_MODULE_UNDECLARED_STRATEGY, strategy
+    assert top_cell is None
+
+
+@pytest.mark.parametrize("strategy", [
+    "l1_ic_name_fallback", "canonical_chip_top_sentinel", "top_undeclared",
+    "some_strategy_nobody_classified",
+])
+def test_a_name_the_flow_derived_is_never_a_tapeout_fact(strategy):
+    """The safety argument, and the reason this is not simply "always write it".
+
+    `tapeout_metadata.top_cell` is the top cell OF RECORD.  A label the flow
+    DERIVED from the chip's identifier is not one, and a design that declared
+    no top certainly is not — writing either would publish a fabricated
+    tape-out fact, which is what #2049 and #2052 were just spent removing from
+    this same cascade.  14 044 + 2 431 published L9 documents sit on those two
+    statuses.
+    """
+    status = P._top_module_status_for(strategy)
+    assert status != P.TOP_MODULE_STATUS_DECLARED
+    root = _l1_project()
+    assert P._v2060_mirror_top_cell(root, "adc_core", status) is False
+    assert _top_cell_of(root) is None
+
+
+def test_the_mirror_declines_loudly_rather_than_raising():
+    """"Could not" and "declined" are different, and neither may take L9 down."""
+    missing = Path(tempfile.mkdtemp(prefix="i2060_none_"))
+    assert P._v2060_mirror_top_cell(
+        missing, "adc_core", P.TOP_MODULE_STATUS_DECLARED) is False
+    bad = _l1_project()
+    (bad / "phase1" / "generated_docs" / "L1_DATASHEET.json").write_text("{[")
+    assert P._v2060_mirror_top_cell(
+        bad, "adc_core", P.TOP_MODULE_STATUS_DECLARED) is False
+    empty = _l1_project()
+    assert P._v2060_mirror_top_cell(
+        empty, "", P.TOP_MODULE_STATUS_DECLARED) is False
+
+
+def test_there_is_exactly_ONE_writer_of_the_field_in_this_module():
+    """ONE PLACE, enforced — so a fourth private copy cannot appear quietly.
+
+    Parsed, not grepped: a comment or a docstring mentioning the field is not a
+    writer, and the point of the fix is that only one statement assigns it.
+    """
+    import ast as _ast
+    src = (_PROGRAMS / "phase1_doc_one_shot_runner.py").read_text(
+        errors="replace")
+    tree = _ast.parse(src)
+    writers = [
+        n for n in _ast.walk(tree)
+        if isinstance(n, _ast.Subscript)
+        and isinstance(n.slice, _ast.Constant)
+        and n.slice.value == "top_cell"
+        and isinstance(getattr(n, "ctx", None), _ast.Store)
+    ]
+    assert len(writers) == 1, (
+        f"{len(writers)} statements assign tapeout_metadata['top_cell'] at "
+        f"lines {[w.lineno for w in writers]} — the mirror was copied again")
