@@ -1023,6 +1023,68 @@ def run_phase1_second_track(project: Path, rc_in: int) -> int:
     return max(int(rc_in or 0), rc_track)
 
 
+def _czl9_sufficiency_gate(project: Path) -> Tuple[bool, str]:
+    """#czl9docs — run the sufficiency gate on the PROMPT branch too.
+
+    The docs branch reaches this gate inside its delegate's advisory table, and
+    the extraction-gap clause blocks there. The prompt branch reached NEITHER:
+    measured on this base, a prompt-mode run over an input declaring five ports
+    emitted an L9 with 0 ports and 0 characters of prose, printed no sufficiency
+    line at all, and exited 0. So the front door a design happened to come
+    through decided whether anyone looked — which is the exact shape this
+    function's own neighbours already call out:
+
+        "one flow step, two mode branches, one question. Gating only one of
+         them would leave whichever front door a given design used unexamined"
+
+    Returns ``(extraction_gap, first_output_line)``. ADVISORY like the docs
+    branch, with the SAME single exception: the extraction gap (the input
+    declares ports and the L documents carry none), which blocks. rc 1 here can
+    only come from ``--strict-extraction-gap``, which is the only strict flag
+    passed."""
+    chk = PROGRAMS_DIR / "phase1_sufficiency_check.py"
+    if not chk.is_file():
+        # DEGRADE LOUDLY: an absent check is stated, never assumed clean.
+        print("      phase1_sufficiency_check: SKIPPED (program not present) "
+              "[ADVISORY]")
+        return False, "SKIPPED (program not present)"
+    rp = _pl.report_path(project, "phase1/phase1_sufficiency.json")
+    rp.parent.mkdir(parents=True, exist_ok=True)
+    argv = [sys.executable, str(chk), str(_pl.generated_docs_dir(project)),
+            "--project", str(project), "--strict-extraction-gap",
+            "--json", str(rp)]
+    # NO `timeout=`. `run_host_supervised` bounds NO PROGRESS, never runtime —
+    # a slow-but-working check on a loaded host runs to completion however long
+    # that legitimately takes, and only a tree that is idle across the grace is
+    # killed. I wrote `subprocess.run(..., timeout=300)` here first, copying the
+    # docs branch, and `test_no_runtime_bound_remains_at_either_dispatch_site`
+    # caught it by AST: a clock-based kill is the defect, and a bigger constant
+    # is the same defect restated.
+    res = _wd.run_host_supervised(argv, stall_grace_s=_TRACK_STALL_GRACE_S)
+    if res.outcome in ("stalled", "ceiling"):
+        # A STALL IS NOT A VERDICT about the design. Report it as a stall and
+        # do not let it become an extraction-gap FAIL.
+        print(f"      phase1_sufficiency_check: STALLED — no CPU, no I/O and "
+              f"no output from its process tree for the "
+              f"{_TRACK_STALL_GRACE_S}s grace, after {res.elapsed_s:.0f}s "
+              f"[ADVISORY, NOT_MEASURED]")
+        return False, "STALLED (NOT_MEASURED)"
+    try:
+        cp = _wd.completed_process(argv, res)
+    except Exception as exc:            # never let an advisory crash the run
+        print(f"      phase1_sufficiency_check: SKIPPED ({exc}) [ADVISORY]")
+        return False, f"SKIPPED ({exc})"
+    out = (cp.stdout or cp.stderr or "").strip().splitlines()
+    gap = cp.returncode == 1
+    head = out[0] if out else "(no output)"
+    print(f"      phase1_sufficiency_check: {head}"
+          f"{' [BLOCKING: extraction gap]' if gap else ' [ADVISORY]'}")
+    for line in out[1:6]:
+        print(f"        {line}")
+    return gap, head
+
+
+
 # ── Top-level dispatcher ───────────────────────────────────────────
 
 def main() -> int:
@@ -1148,6 +1210,13 @@ def main() -> int:
     _refused = any(s.status == _spf.REFUSAL_STATUS for s in plan)
     rc_second = 0 if _refused else run_phase1_second_track(project, 0)
 
+    # #czl9docs — the sufficiency gate, on THIS branch too. NOT after a
+    # refusal, for the same reason the second track is not: it would parse
+    # L-docs that were never written and report a derived failure on top of the
+    # real one.
+    _gap, _suff = (False, "not run — D1 was REFUSED") if _refused else \
+        _czl9_sufficiency_gate(project)
+
     reports = project / "reports"
     reports.mkdir(parents=True, exist_ok=True)
     summary = {
@@ -1160,6 +1229,8 @@ def main() -> int:
         "second_track": ("not run — D1 was REFUSED" if _refused else
                          _expert_track_summary(project)),
         "step_0_5ic": "ran" if rc_route == 0 else "FAILED to run",
+        "sufficiency": _suff,
+        "extraction_gap": _gap,
     }
     if _refused:
         summary["preflight_ledger"] = _spf.LEDGER_REL
@@ -1176,7 +1247,17 @@ def main() -> int:
     print(f"verdict: {summary['verdict']}")
     for s in plan:
         print(f"  {s.status:6} {s.name:24} {s.detail[:120]}")
-    return max(0 if summary["verdict"] != "FAIL" else 1, rc_second, rc_route)
+    if _gap:
+        # Same clause, same wording and same rc as the docs branch. A design
+        # must not get a different answer because of which front door it came
+        # through.
+        print("FAIL: EXTRACTION GAP — the design input declares ports and the "
+              "generated L documents carry none; every downstream gate that "
+              "reads a port list would report a verdict over ZERO ports. See "
+              "reports/phase1/phase1_sufficiency.json (ports_reason="
+              "extraction_gap)")
+    return max(0 if summary["verdict"] != "FAIL" else 1, rc_second, rc_route,
+               1 if _gap else 0)
 
 
 if __name__ == "__main__":

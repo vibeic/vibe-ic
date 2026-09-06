@@ -49,7 +49,7 @@ def _rep(missing):
 
 
 def test_strict_blocks_when_a_required_fact_is_missing(tmp_path, monkeypatch):
-    monkeypatch.setattr(S, "check", lambda path, doc_text="": _rep([{"fact": "supply_voltage", "question": "V?"}]))
+    monkeypatch.setattr(S, "check", lambda path, doc_text="", project=None: _rep([{"fact": "supply_voltage", "question": "V?"}]))
     assert S.main([str(_layers(tmp_path)), "--strict"]) == 1
 
 
@@ -58,13 +58,13 @@ def test_without_strict_the_same_gap_is_disclosed_not_blocked(tmp_path,
     """The other half of the split. If this inverted, every Phase-1 run would
     start blocking on an incomplete dialogue — which is the normal state early
     in one."""
-    monkeypatch.setattr(S, "check", lambda path, doc_text="": _rep([{"fact": "supply_voltage", "question": "V?"}]))
+    monkeypatch.setattr(S, "check", lambda path, doc_text="", project=None: _rep([{"fact": "supply_voltage", "question": "V?"}]))
     assert S.main([str(_layers(tmp_path))]) == 0
 
 
 def test_strict_passes_when_nothing_is_missing(tmp_path, monkeypatch):
     """…or the first test is met by a gate that always blocks under --strict."""
-    monkeypatch.setattr(S, "check", lambda path, doc_text="": _rep([]))
+    monkeypatch.setattr(S, "check", lambda path, doc_text="", project=None: _rep([]))
     assert S.main([str(_layers(tmp_path)), "--strict"]) == 0
 
 
