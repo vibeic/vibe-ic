@@ -157,10 +157,38 @@ _CASE_LABEL_RE = re.compile(
 # extracting the map (the boundary scan still runs on the FULL text, since a
 # default behavior may be stated in an example). chip-AGNOSTIC: pure heading
 # grammar (markdown heading / bold heading), no design literal.
-_EXAMPLE_HEADING_RE = re.compile(
-    r"^\s*(?:#{1,6}\s*|\*\*\s*|\d+\.\s*)*"
-    r"(?:example|scenario|test\s*case|test\s*inputs|sample)\b",
-    re.I)
+# The heading DECORATION prefix is consumed by a LINE SCANNER, one greedy step at
+# a time, NOT by a quantified group `(?:#{1,6}\s*|\*\*\s*|\d+\.\s*)*`. That group's
+# first alternative is itself quantified, so a run of N '#' can be cut into runs of
+# 1..6 in hexanacci(N) ways, and on a line that does NOT carry the keyword the engine
+# has to enumerate every one of them before it may report failure: measured 1.98x per
+# added '#', 27 s at N=28, and ~8e16 s at the N=80 banner rule a real input document
+# carries -- i.e. the extractor deterministically never returns. A non-return on a
+# finite input is a defect in the extractor, so this is fixed by removing the
+# ambiguity, never by a timeout and never by a size cap that would drop content.
+#
+# The scanner accepts EXACTLY the same prefixes as the group did. The three
+# alternatives begin on disjoint characters ('#', '*', a digit) and none of them can
+# consume a letter, so the greedy path can never step over the keyword and there is
+# nothing a backtrack could find that greedy misses. Each step consumes at least one
+# character and is never reconsidered, so the scan is linear in the line length.
+# chip-AGNOSTIC: pure heading grammar, no design literal.
+_HEADING_PREFIX_STEP_RE = re.compile(r"#{1,6}\s*|\*\*\s*|\d+\.\s*")
+_EXAMPLE_KEYWORD_RE = re.compile(
+    r"(?:example|scenario|test\s*case|test\s*inputs|sample)\b", re.I)
+_LEADING_WS_RE = re.compile(r"\s*")
+
+
+def _is_example_heading(ln: str) -> bool:
+    """True when `ln` opens an EXAMPLE / SCENARIO / TEST-CASE section."""
+    i = _LEADING_WS_RE.match(ln).end()
+    n = len(ln)
+    while i < n:
+        m = _HEADING_PREFIX_STEP_RE.match(ln, i)
+        if m is None or m.end() == i:
+            break
+        i = m.end()
+    return _EXAMPLE_KEYWORD_RE.match(ln, i) is not None
 _ANY_HEADING_RE = re.compile(r"^\s*(?:#{1,6}\s|\*\*[^*]+\*\*\s*:?\s*$)")
 
 
@@ -231,12 +259,12 @@ def _strip_example_sections(text: str) -> str:
     out: List[str] = []
     in_example = False
     for ln in lines:
-        if _EXAMPLE_HEADING_RE.match(ln):
+        if _is_example_heading(ln):
             in_example = True
             out.append("\n" if ln.endswith("\n") else "")
             continue
         if in_example and _ANY_HEADING_RE.match(ln) \
-                and not _EXAMPLE_HEADING_RE.match(ln):
+                and not _is_example_heading(ln):
             in_example = False
         out.append(("\n" if ln.endswith("\n") else "") if in_example else ln)
     return "".join(out)
