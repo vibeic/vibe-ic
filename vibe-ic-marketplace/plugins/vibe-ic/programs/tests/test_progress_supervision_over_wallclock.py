@@ -460,6 +460,34 @@ def test_a_slow_analog_pv_tool_is_not_reported_as_a_missing_one():
     assert "not found" not in (err or "").lower()
 
 
+def test_a_supervised_analog_pv_launch_error_is_contained_not_raised():
+    """Removing `except Exception: return 127` must not turn an unexpected
+    launch error into a traceback out of a physical-verification step.
+
+    The old helper swallowed EVERYTHING into 127 — which is what made a slow
+    tool indistinguishable from a missing one. The fix keeps 127 for the case
+    it genuinely describes (the tool could not be RUN) and takes the timeout
+    out of that bucket. This pins the half that must not regress.
+    """
+    import analog_a6_native_pv as A6
+
+    def _explode(*a, **k):
+        raise OSError(24, "Too many open files")
+
+    import _docker_watchdog as _dw
+    orig = _dw.run_docker_supervised
+    _dw.run_docker_supervised = _explode
+    try:
+        rc, out, err = A6._docker_exec("vibeic-eda", "klayout -b -r d.lydrc",
+                                       marker="d.lydrc")
+    finally:
+        _dw.run_docker_supervised = orig
+
+    assert rc == 127, rc
+    assert "Too many open files" in err
+    assert out == ""
+
+
 def test_the_analog_pv_long_tools_are_supervised_not_wall_clocked():
     """Every LONG call in that producer must carry a progress marker; the SHORT
     probes (`test -e`, `command -v`) must keep the bounded raw path, because a

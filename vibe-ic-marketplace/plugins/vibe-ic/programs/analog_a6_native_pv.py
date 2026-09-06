@@ -133,9 +133,19 @@ def _docker_exec(container: str, cmd: str, timeout: int = 600, *,
         # the run still happens, on the bounded path, and the caller can see
         # from the rc which path it took.
         return _docker_exec_raw(container, cmd, timeout)
-    return _dw.run_docker_supervised(
-        container, cmd, marker, docker_exec_raw=_docker_exec_raw,
-        log_path=log_path)
+    try:
+        return _dw.run_docker_supervised(
+            container, cmd, marker, docker_exec_raw=_docker_exec_raw,
+            log_path=log_path)
+    except Exception as exc:                        # noqa: BLE001
+        # THE OLD HELPER SWALLOWED EVERYTHING INTO rc 127, and removing that
+        # must not silently turn an unexpected launch error into a traceback
+        # out of a physical-verification step. `run_supervised` maps a missing
+        # binary to 127 itself; what can still escape is an OSError from the
+        # spawn (permissions, no fds). Those ARE "the tool could not be run",
+        # so 127 is the right code for them and the exception text says which.
+        # A TIMEOUT can no longer arrive here at all — that was the defect.
+        return 127, "", f"supervised launch failed: {exc!r}"
 
 
 def _to_container_path(container: str, host_path: str) -> str:
