@@ -43,6 +43,7 @@ chip-AGNOSTIC: the colon-form grammar + the closed standard reset/clock spelling
 set; the design name `synchronizer`/`arstn` appears ONLY in the fixtures.
 """
 import shutil
+import re
 import subprocess
 import sys
 import tempfile
@@ -288,6 +289,23 @@ def test_518_endstate_alias_program_runs_on_arstn(tmp_path):
                         capture_output=True, text=True)
     assert cp.returncode == 0, (cp.returncode, cp.stdout, cp.stderr)
     assert "ok" in cp.stdout.lower()
+    # ...AND THE ARTEFACT, not merely the announcement. `ok: wrote <path>
+    # (aliases={...})` is printed from the CLI's own plan dict, BEFORE anything
+    # reads back what the emitter produced. MEASURED on this tree: with
+    # `emit_variant_alias_wrapper` neutered to ignore its rename_map, this case
+    # still passed every assertion above — the program reported an alias it had
+    # not emitted, and a test named "alias program runs on arstn" was green
+    # against a wrapper containing no alias at all. So pin the file:
+    out = tmp_path / "core_aliased.v"
+    assert out.is_file(), cp.stdout
+    wrapper = out.read_text()
+    assert re.search(r"\binput\s+rst_n\b", wrapper), wrapper
+    assert not re.search(r"\binput\s+arstn\b", wrapper), (
+        "the requested rename must REPLACE the source spelling on the "
+        "TB-facing face, not sit beside it", wrapper)
+    # and the core keeps its authored spelling, driven from the renamed face —
+    # this is the polarity-preserving 1:1 alias, not a second reset port.
+    assert re.search(r"\.arstn\s*\(\s*rst_n\s*\)", wrapper), wrapper
     # AND THE OTHER DIRECTION, so this cannot pass against a program that
     # aliases whatever it likes: without the explicit mapping it must REFUSE.
     ref = subprocess.run(base, capture_output=True, text=True)
