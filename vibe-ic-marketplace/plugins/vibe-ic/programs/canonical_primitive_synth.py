@@ -2016,14 +2016,25 @@ def _port_width(desc_text: str, name: str) -> Optional[int]:
     return None
 
 
+# ONE recogniser for clock and reset names, used both to FIND them and to keep
+# them out of the data-port candidates. They were two different lists before, and
+# they disagreed: measured 2026-09-06, a stage whose clock is named `i_clk` had
+# that clock CHOSEN as its upstream data port. It did not reach emission only
+# because an unrelated field (the width) was also unstated -- the layer was saved
+# by a check that knows nothing about clocks.
+_CLOCKISH = re.compile(r"^\w*(?:clk|clock)\w*$", re.I)
+_RESETISH = re.compile(r"^\w*(?:rst|reset)\w*$", re.I)
+
+
+def _is_clock_or_reset(name: str) -> bool:
+    return bool(_CLOCKISH.match(name) or _RESETISH.match(name))
+
+
 def _clock_and_reset(desc_text: str, dirs: Dict[str, str]) -> Tuple[
         Optional[str], Optional[str], Optional[bool], Optional[bool]]:
     """(clock, reset, reset_active_low, reset_synchronous) as STATED, else None."""
-    clk = next((p for p in dirs
-                if re.fullmatch(r"clk|clock|clk_i|i_clk", p, re.I)), None)
-    rst = next((p for p in dirs
-                if re.fullmatch(r"rst_?n?|reset_?n?|rstn|resetn|rst_i|i_rst",
-                                p, re.I)), None)
+    clk = next((p for p in dirs if _CLOCKISH.match(p)), None)
+    rst = next((p for p in dirs if _RESETISH.match(p)), None)
     low = (desc_text or "").lower()
     active_low: Optional[bool] = None
     if rst:
@@ -2097,8 +2108,7 @@ def _data_port_for(prefix: str, dirs: Dict[str, str], want_dir: str,
     cands = [p for p, d in dirs.items()
              if d == want_dir and p not in taken
              and not _VALID_SUF.match(p) and not _READY_SUF.match(p)
-             and not re.fullmatch(r"clk|clock|rst_?n?|reset_?n?|rstn|resetn",
-                                  p, re.I)]
+             and not _is_clock_or_reset(p)]
     if not cands:
         return None
     pref = [p for p in cands if p.lower().startswith(prefix) and prefix]

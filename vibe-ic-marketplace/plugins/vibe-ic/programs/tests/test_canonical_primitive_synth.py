@@ -1137,3 +1137,45 @@ def test_prose_after_the_port_blocks_is_not_read_as_ports():
     # on word boundaries: "state" is inside "stage", and this assertion failed
     # for exactly that reason before -- the same trap the program was fixed for
     assert not _names_word("counter", rtl) and not _names_word("state", rtl)
+
+
+def test_a_clock_is_never_chosen_as_a_data_port():
+    """Measured before this: a stage whose clock is named `i_clk` had that clock
+    CHOSEN as its upstream data port. It did not reach emission only because the
+    width was also unstated -- the layer was saved by a check that knows nothing
+    about clocks. Finding a clock and excluding it from the data candidates were
+    two different name lists, and they disagreed."""
+    desc = ("Module name:\n    stage\nInput ports:\n i_clk: Clock.\n"
+            " up_valid: The producer is offering a word.\n"
+            " dn_ready: The consumer can take a word.\n"
+            "Output ports:\n up_ready: This stage can take a word.\n"
+            " dn_data [7:0]: The word offered on.\n dn_valid: Offered.\n"
+            "Implementation:\nThe stage must register the output and buffer one "
+            "additional transfer.\n")
+    c = rcs.extract_handshake_contract(desc)
+    assert c is not None and c.clock == "i_clk"
+    assert c.up["data"] is None
+    assert any("data port" in u for u in c.unresolved)
+    assert rcs.detect_shape(desc) is None
+
+
+@pytest.mark.parametrize("clk,rst", [("clk", "rst_n"), ("i_clk", "i_rst_n"),
+                                     ("clk_i", "rst_ni"), ("CLK", "RESET_N")])
+def test_ordinary_clock_and_reset_spellings_are_recognised(clk, rst):
+    """One recogniser, so a spelling that is found as a clock is also kept out of
+    the data candidates -- and a reset spelled `i_rst_n` no longer leaves the
+    contract unresolved."""
+    desc = ("Module name:\n    stage\nInput ports:\n"
+            f" {clk}: Clock.\n {rst}: Active low reset.\n"
+            " up_data [7:0]: The word offered.\n up_valid: Offered.\n"
+            " dn_ready: The consumer can take a word.\n"
+            "Output ports:\n up_ready: This stage can take a word.\n"
+            " dn_data [7:0]: The word offered on.\n dn_valid: Offered.\n"
+            "Implementation:\nThe stage must register the output and buffer one "
+            "additional transfer.\n")
+    c = rcs.extract_handshake_contract(desc)
+    assert c is not None and c.unresolved == [], (clk, rst, c.unresolved)
+    assert c.clock == clk and c.reset == rst
+    assert c.up["data"] == "up_data"
+    rtl = rcs.emit_rtl(rcs.detect_shape(desc), desc)
+    assert f"input  wire {clk}," in rtl and f"input  wire {rst}," in rtl
