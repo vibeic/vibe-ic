@@ -836,3 +836,33 @@ def test_the_known_blind_spot_is_still_exactly_one():
                                                         for w in words):
                 blind.add((shape, dim))
     assert blind == _KNOWN_UNEXAMINED
+
+
+# ============================================================================
+# A CHECK THAT CANNOT FAIL IS NOT A CHECK. Measured by mutating the composed RTL
+# 13 valid ways and running each against the generated scoreboard: the first
+# version killed 9 and let three through, of which two were real holes --
+#   * a stage that back-pressures when it does not have to passed at reduced
+#     throughput (59 transfers instead of 82): correctness was checked, the
+#     contract's "stalled only when no slot is free" clause was not;
+#   * a stage whose reset never clears passed with ZERO transfers observed --
+#     a vacuous pass, the checker reporting success on a run that did nothing.
+# (The third, an unconditional capture inside the branch where up_ready is
+# already high, is semantically EQUIVALENT and survives correctly.)
+# Both holes are closed in the generator, so every composed design gets the
+# stronger check; the kill rate is now 12 of 13. Evidence: the lane's killtest/.
+# ============================================================================
+
+def test_the_elastic_scoreboard_checks_the_no_needless_stall_clause():
+    tb = rcs.emit_scoreboard_tb(rcs.extract_handshake_contract(_F6_DESC))
+    assert "stalled at cycle" in tb
+    assert "if (!up_ready) begin" in tb
+
+
+def test_neither_scoreboard_can_pass_vacuously():
+    tb6 = rcs.emit_scoreboard_tb(rcs.extract_handshake_contract(_F6_DESC))
+    assert "if (rd < 32) begin" in tb6
+    assert "only %0d transfers observed" in tb6
+    tb7 = rcs.emit_scoreboard_tb(rcs.extract_handshake_contract(_F7_DESC))
+    assert "if (n_in == 0) begin" in tb7
+    assert "vacuous" in tb7
