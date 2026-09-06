@@ -172,12 +172,32 @@ def _log(*rungs, scope="ck"):
                    for r in rungs)
 
 
+def _evidence(tmp_path, *rungs, scope="ck"):
+    """The leg's OWN log as a file, which is what `main` always hands to
+    promotion.
+
+    A checkpoint with no evidence is not resumable and never was: without the
+    prior leg's log a resumed run reaches a DIFFERENT verdict about the same
+    proof (measured on sha256 — from-zero INCONCLUSIVE, resumed FAIL). That
+    requirement used to be conditional on the caller passing `reports_dir`, so
+    a unit test that omitted it got a resume decision no production run would
+    have made; it is unconditional now, and these tests provide the evidence
+    the producer provides.
+    """
+    p = tmp_path / "reports" / "lec.live.20260907T000000-aaaa.rpt"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text("yosys output\n" + _log(*rungs, scope=scope),
+                 encoding="utf-8")
+    return p
+
+
 def test_only_a_log_attested_part_is_promoted(tmp_path):
     ck = tmp_path / "ck"
     _plant(ck, "equiv_simple_full")
     _plant(ck, "equiv_induct_seq4", b"# truncated by a kill")
     got = lec_run.promote_and_record_checkpoints(
-        ck, _KEY, _BASE, _log("equiv_simple_full"))
+        ck, _KEY, _BASE, _log("equiv_simple_full"),
+        evidence_log=_evidence(tmp_path, "equiv_simple_full"))
     assert got == ["equiv_simple_full"]
     assert (ck / "equiv_simple_full.il").is_file()
     assert (ck / "equiv_simple_full.json").is_file()
@@ -195,9 +215,10 @@ def test_select_takes_the_furthest_rung(tmp_path):
     for rung in ("equiv_simple_full", "equiv_induct_seq4",
                  "equiv_induct_seq16"):
         _plant(ck, rung, f"# {rung}".encode())
+    _rungs = ("equiv_simple_full", "equiv_induct_seq4", "equiv_induct_seq16")
     lec_run.promote_and_record_checkpoints(
-        ck, _KEY, _BASE,
-        _log("equiv_simple_full", "equiv_induct_seq4", "equiv_induct_seq16"))
+        ck, _KEY, _BASE, _log(*_rungs),
+        evidence_log=_evidence(tmp_path, *_rungs))
     picked = lec_run.select_resume_checkpoint(ck, _KEY, _BASE)
     assert picked["rung"] == "equiv_induct_seq16"
     assert picked["rung_index"] == 2
@@ -206,14 +227,16 @@ def test_select_takes_the_furthest_rung(tmp_path):
 @pytest.mark.parametrize("how", ["foreign_key_asked", "foreign_key_declared",
                                  "foreign_ladder_asked",
                                  "foreign_ladder_declared", "bytes_changed",
-                                 "il_removed"])
+                                 "il_removed", "evidence_removed",
+                                 "evidence_changed", "evidence_never_recorded"])
 def test_select_refuses_a_checkpoint_that_is_not_this_one(tmp_path, how):
     """Each negative is bracketed by a POSITIVE control on the SAME directory:
     a validator that refuses everything would pass every negative test."""
     ck = tmp_path / "ck"
     _plant(ck, "equiv_simple_full")
     lec_run.promote_and_record_checkpoints(
-        ck, _KEY, _BASE, _log("equiv_simple_full"))
+        ck, _KEY, _BASE, _log("equiv_simple_full"),
+        evidence_log=_evidence(tmp_path, "equiv_simple_full"))
     assert lec_run.select_resume_checkpoint(ck, _KEY, _BASE), (
         "POSITIVE CONTROL failed before the negative even ran")
 
@@ -234,6 +257,16 @@ def test_select_refuses_a_checkpoint_that_is_not_this_one(tmp_path, how):
         (ck / "equiv_simple_full.il").write_bytes(b"# something else\n")
     elif how == "il_removed":
         (ck / "equiv_simple_full.il").unlink()
+    elif how == "evidence_removed":
+        # The carried leg's log, in the checkpoint's OWN directory.
+        (ck / "equiv_simple_full.evidence.rpt").unlink()
+    elif how == "evidence_changed":
+        (ck / "equiv_simple_full.evidence.rpt").write_text("# tampered\n")
+    elif how == "evidence_never_recorded":
+        # A checkpoint promoted with no evidence at all. It used to be
+        # resumable whenever the caller omitted `reports_dir`; it is not.
+        doc["evidence_log"] = {"state": "absent"}
+        man.write_text(json.dumps(doc))
 
     assert lec_run.select_resume_checkpoint(ck, ask_key, ask_base) is None, (
         f"a checkpoint was accepted despite {how}")
@@ -403,13 +436,37 @@ def test_e2e_a_second_invocation_resumes_at_the_next_rung(monkeypatch,
     assert resumed["rung"] == "equiv_simple_full"
     assert resumed["rung_index"] == 0
     assert resumed["checkpoint_sha256"].startswith("sha256:")
-    assert second["proof_identity"]["resume"]["checkpoint_sha256"] == \
-        resumed["checkpoint_sha256"], (
-            "the .il the proof consumed is not named in the proof identity, "
-            "so it could be swapped under a cached PASS")
-    assert "resume" not in first["proof_identity"], (
-        "a FROM-ZERO identity grew a resume key; every identity on the fleet "
-        "would move for a run that resumed nothing")
+    # THE IDENTITY IS THE RECIPE; THE PATH TAKEN THROUGH IT IS RECORDED BESIDE
+    # IT. A PASS is a PASS however it was reached, so a resumed run's identity
+    # is the one a from-zero run would use — that is what lets invocation 3
+    # find invocation 2's entry instead of re-proving to build its own. The .il
+    # it consumed cannot be swapped: `select_resume_checkpoint` re-hashes the
+    # .il AND its carried evidence against the manifest, and refuses the
+    # checkpoint outright unless both match, BEFORE the script that reads it is
+    # ever built.
+    assert second["proof_identity"] == first["proof_identity"], (
+        "a resumed run built a different proof identity from the from-zero run "
+        "of the SAME design, so its PASS is cached where nothing looks for it")
+    assert "resume" not in second["proof_identity"], second["proof_identity"]
+    ex = second["proof_execution"]
+    assert ex["path"] == "resumed", ex
+    assert ex["resumed_from"]["checkpoint_sha256"] == \
+        resumed["checkpoint_sha256"], ex
+    assert ex["canonical_recipe_sha256"] != \
+        ex["equivalence_script_sha256_executed"], (
+            "a resumed run reports the from-zero recipe as the bytes it ran")
+    # BOTH LEGS, HASH-BOUND, in the report that gets cached.
+    legs = {leg["leg"]: leg for leg in ex["evidence_legs"]}
+    assert set(legs) == {"carried", "this_invocation"}, ex["evidence_legs"]
+    assert legs["carried"]["sha256"].startswith("sha256:"), legs
+    assert legs["carried"]["through_rung"] == "equiv_simple_full", legs
+    assert legs["this_invocation"]["sha256"].startswith("sha256:"), legs
+    # And a from-zero run says so, with one leg.
+    assert first["proof_execution"]["path"] == "from-zero"
+    assert first["proof_execution"]["canonical_recipe_sha256"] == \
+        first["proof_execution"]["equivalence_script_sha256_executed"]
+    assert [leg["leg"] for leg in first["proof_execution"]["evidence_legs"]] \
+        == ["this_invocation"]
 
 
 def test_e2e_a_stopped_run_says_which_rung_it_can_be_resumed_from(monkeypatch,
@@ -727,7 +784,17 @@ def test_a_prior_legs_stop_marker_is_not_carried_forward():
 
 def test_a_checkpoint_whose_carried_evidence_is_gone_is_refused(tmp_path):
     """The conservative rule: no evidence, no resume. Running from zero is
-    slower and is the only answer that stays true."""
+    slower and is the only answer that stays true.
+
+    THE EVIDENCE IS PART OF THE CHECKPOINT, so it lives WHERE THE CHECKPOINT
+    LIVES. It used to be named in `reports/` — the per-invocation
+    `lec.live.<id>.rpt` the run was tee-ing — which made resumability depend on
+    a file nothing promises to keep: an ordinary clean of `reports/` left the
+    .il valid and its evidence gone, and a 43.8 MB rung was then re-proved from
+    zero for a reason that had nothing to do with the proof. Promotion now
+    COPIES the leg's log in beside the .il as `<rung>.evidence.rpt` and binds
+    it there; the live log may be deleted the moment the run ends.
+    """
     reports = tmp_path / "reports"
     ck = reports / "lec_checkpoints" / "ck"
     _plant(ck, "equiv_simple_full")
@@ -740,25 +807,37 @@ def test_a_checkpoint_whose_carried_evidence_is_gone_is_refused(tmp_path):
         ["equiv_simple_full"]
 
     def sel():
-        r = lec_run.select_resume_checkpoint(ck, _KEY, _BASE,
-                                             reports_dir=reports)
+        r = lec_run.select_resume_checkpoint(ck, _KEY, _BASE)
         return r["rung"] if r else None
 
     assert sel() == "equiv_simple_full", "POSITIVE CONTROL failed"
-    raw = log.read_bytes()
+    kept = ck / "equiv_simple_full.evidence.rpt"
+    assert kept.is_file(), "the leg's log was not copied into the checkpoint"
+    assert kept.read_bytes() == log.read_bytes(), "the copy is not the log"
+
+    # THE FIX: the live log goes away and the checkpoint is STILL resumable,
+    # because its evidence is its own.
     log.unlink()
+    assert sel() == "equiv_simple_full", (
+        "deleting a per-invocation live log made a durable checkpoint "
+        "unresumable — the defect this move exists to remove")
+
+    # THE INVARIANT KEPT: the checkpoint's OWN evidence gone, or changed, is
+    # still a refusal, and each negative is bracketed by a positive control.
+    raw = kept.read_bytes()
+    kept.unlink()
     assert sel() is None, "a checkpoint was resumed with its evidence gone"
-    log.write_bytes(raw)
+    kept.write_bytes(raw)
     assert sel() == "equiv_simple_full"
-    log.write_bytes(raw + b"# tampered\n")
+    kept.write_bytes(raw + b"# tampered\n")
     assert sel() is None, "a checkpoint was resumed with its evidence CHANGED"
-    log.write_bytes(raw)
+    kept.write_bytes(raw)
     assert sel() == "equiv_simple_full"
-    # ...and the OLD contract, without reports_dir, still answers — which is
-    # what proves the refusals above come from THIS check and nothing else.
-    log.unlink()
-    r = lec_run.select_resume_checkpoint(ck, _KEY, _BASE)
-    assert r and r["rung"] == "equiv_simple_full"
+    # And the resume record names the copy, not the live log, so the carried
+    # text `main` reads back is the one that was revalidated.
+    picked = lec_run.select_resume_checkpoint(ck, _KEY, _BASE)
+    assert Path(picked["evidence_log"]).parent == ck.resolve(), picked
+    assert Path(picked["evidence_log"]).name == "equiv_simple_full.evidence.rpt"
 
 
 def test_the_manifest_says_when_the_rung_finished(tmp_path):
@@ -870,3 +949,261 @@ def test_a_cache_hit_does_not_announce_a_resume_it_never_made(monkeypatch,
     assert "RESUMING the proof" not in err, (
         "an invocation that launched no yosys announced a resume:\n" + err)
     assert "exact PASS cache HIT" in err
+
+
+# ---------------------------------------------------------------------------
+# A PASS IS A PASS REGARDLESS OF PATH — the cache key is the RECIPE
+# ---------------------------------------------------------------------------
+def test_e2e_a_resumed_pass_is_found_by_the_next_invocation(monkeypatch,
+                                                            tmp_path):
+    """Invocation 1 is killed after one rung; invocation 2 RESUMES and proves
+    it. Invocation 3 must find that PASS and launch nothing.
+
+    THE DEFECT THIS PINS. The identity used to grow a `resume` key naming the
+    rung and the .il, so a PASS reached by resuming was filed under a key no
+    other invocation computes. Invocation 3 selects the now-FURTHEST rung
+    (rung 3, not rung 0), resumes from a different position, misses, and
+    re-proves the design it already proved; only invocation 4 — resuming from
+    the same rung as 3 — finds 3's entry. Four invocations to converge on a
+    design that was proven at two.
+
+    The `_install_fake_yosys` stub raises on nothing and records every script
+    it is handed, so "launched nothing" is MEMBERSHIP of that list, not a
+    duration or a guess.
+    """
+    proj = _project(tmp_path)
+    argv = [str(proj), "--top", "dut", "--container", "fake",
+            "--liberty", "/missing"]
+
+    scripts = []
+    _install_fake_yosys(monkeypatch, scripts,
+                        stop_after_rung="equiv_simple_full",
+                        tail=_STOPPED_TAIL)
+    lec_run.main(argv)
+    first = json.loads((proj / "reports/lec.json").read_text())
+    assert first["lec_resume"]["state"] == "RESUMABLE", first["lec_resume"]
+
+    scripts.clear()
+    _install_fake_yosys(monkeypatch, scripts, stop_after_rung=None,
+                        tail=_PASS_TAIL)
+    lec_run.main(argv)
+    second = json.loads((proj / "reports/lec.json").read_text())
+    assert second["verdict"] == "PASS", second["verdict"]
+    assert second["lec_resume"]["resumed"] is True
+    assert len(scripts) >= 1, "invocation 2 launched nothing"
+    assert second["cache"]["hit"] is False, second["cache"]
+    entries = sorted((proj / "reports/lec_pass_cache").glob("*/entry.json"))
+    assert len(entries) == 1, [str(e) for e in entries]
+    stored = json.loads(entries[0].read_text())
+    assert stored["cache_key"] == second["cache"]["cache_key"]
+
+    # INVOCATION 3 — the same design, nothing changed. It must not launch.
+    scripts.clear()
+    _install_fake_yosys(monkeypatch, scripts, stop_after_rung=None,
+                        tail=_PASS_TAIL)
+    lec_run.main(argv)
+    third = json.loads((proj / "reports/lec.json").read_text())
+    assert third["cache"]["hit"] is True, third["cache"]
+    assert scripts == [], (
+        "invocation 3 re-proved a design invocation 2 had already proven: the "
+        "PASS was cached under a key only a resumed run computes")
+    assert third["cache"]["cache_key"] == second["cache"]["cache_key"]
+    assert third["lec_resume"]["state"] == "CACHE_HIT_NOTHING_RESUMED"
+    # The cached report carries BOTH legs of the proof that produced it, each
+    # hash-bound — that is what makes a resumed PASS reviewable at all.
+    legs = {leg["leg"]: leg
+            for leg in stored["proof_identity"] and
+            json.loads((entries[0].parent / "source_report.json").read_text())
+            ["proof_execution"]["evidence_legs"]}
+    assert set(legs) == {"carried", "this_invocation"}, legs
+    assert all(str(v.get("sha256", "")).startswith("sha256:")
+               for v in legs.values()), legs
+
+
+def test_e2e_a_resume_survives_a_clean_of_the_live_logs(monkeypatch, tmp_path):
+    """Ruling (5), driven through main: resumability must not depend on a file
+    an ordinary clean removes. Every `reports/lec.live.*.rpt` AND the published
+    `reports/lec.rpt` are deleted between the two invocations, and the second
+    still resumes at the rung the first left."""
+    proj = _project(tmp_path)
+    argv = [str(proj), "--top", "dut", "--container", "fake",
+            "--liberty", "/missing"]
+    scripts = []
+    _install_fake_yosys(monkeypatch, scripts,
+                        stop_after_rung="equiv_simple_full",
+                        tail=_STOPPED_TAIL)
+    lec_run.main(argv)
+
+    reports = proj / "reports"
+    removed = []
+    for log in sorted(reports.glob("lec.live.*.rpt")) + [reports / "lec.rpt"]:
+        if log.is_file():
+            log.unlink()
+            removed.append(log.name)
+    assert removed, "nothing was cleaned, so the arm proves nothing"
+
+    scripts.clear()
+    _install_fake_yosys(monkeypatch, scripts, stop_after_rung=None,
+                        tail=_PASS_TAIL)
+    lec_run.main(argv)
+    second = json.loads((proj / "reports/lec.json").read_text())
+    assert second["lec_resume"]["resumed"] is True, (
+        f"cleaning {removed} made a durable checkpoint unresumable")
+    assert scripts and scripts[0].startswith("read_rtlil ")
+    assert second["verdict"] == "PASS", second["verdict"]
+
+
+# ---------------------------------------------------------------------------
+# A checkpoint directory without a bound is a disk leak
+# ---------------------------------------------------------------------------
+_LADDER_A = "sha256:" + "a" * 64
+_LADDER_B = "sha256:" + "b" * 64
+
+
+def _record(ck, tmp_path, key, base, *rungs, scope="ck"):
+    for rung in rungs:
+        _plant(ck, rung, f"# {rung} of {base[-4:]}".encode())
+    return lec_run.promote_and_record_checkpoints(
+        ck, key, base, _log(*rungs, scope=scope),
+        evidence_log=_evidence(tmp_path, *rungs, scope=scope))
+
+
+def test_a_superseded_ladder_is_pruned_and_the_live_one_is_not(tmp_path):
+    """When the emitted ladder changes, the SAME checkpoint directory receives
+    a second ladder's rungs — `lec_checkpoint_key` deliberately does not bind
+    the script. The old ladder's .il can never revalidate again and nothing
+    removed it: one 43.8 MB rung per ladder per design, kept forever.
+
+    MEMBERSHIP, not a count: the arm asserts exactly WHICH files remain."""
+    ck = tmp_path / "ck"
+    _record(ck, tmp_path, _KEY, _LADDER_A,
+            "equiv_simple_full", "equiv_induct_seq4")
+    before = {p.name for p in ck.iterdir()}
+    assert before == {
+        "equiv_simple_full.il", "equiv_simple_full.json",
+        "equiv_simple_full.evidence.rpt",
+        "equiv_induct_seq4.il", "equiv_induct_seq4.json",
+        "equiv_induct_seq4.evidence.rpt"}, before
+
+    # POSITIVE CONTROL: the LIVE ladder's own rungs are never pruned.
+    assert lec_run.prune_superseded_ladders(ck, _KEY, _LADDER_A) == []
+    assert {p.name for p in ck.iterdir()} == before
+
+    # A newer ladder records one rung here.
+    _record(ck, tmp_path, _KEY, _LADDER_B, "equiv_simple_full")
+    removed = lec_run.prune_superseded_ladders(ck, _KEY, _LADDER_B)
+    assert set(removed) == {"equiv_induct_seq4.il", "equiv_induct_seq4.json",
+                            "equiv_induct_seq4.evidence.rpt"}, removed
+    assert {p.name for p in ck.iterdir()} == {
+        "equiv_simple_full.il", "equiv_simple_full.json",
+        "equiv_simple_full.evidence.rpt"}, {p.name for p in ck.iterdir()}
+    # ...and what survives is ladder B's, byte for byte.
+    assert (ck / "equiv_simple_full.il").read_bytes() == b"# equiv_simple_full of bbbb"
+    assert lec_run.select_resume_checkpoint(ck, _KEY, _LADDER_B) is not None
+    assert lec_run.select_resume_checkpoint(ck, _KEY, _LADDER_A) is None
+
+
+@pytest.mark.parametrize("how", ["foreign_key", "unreadable_manifest",
+                                 "not_our_file"])
+def test_the_prune_touches_only_what_this_program_wrote(tmp_path, how):
+    """A deletion is not reversible, so the prune refuses every doubt: a
+    manifest naming another key, a manifest that will not parse, and any file
+    this program does not write are left exactly where they are.
+
+    Each negative carries a POSITIVE CONTROL in the SAME call — one rung that
+    IS ours and IS a superseded ladder's — so a prune that refused everything
+    could not pass this test.
+    """
+    ck = tmp_path / "ck"
+    # the positive control: ladder A's rung, cleanly recorded
+    _record(ck, tmp_path, _KEY, _LADDER_A, "equiv_simple_full")
+    control = {"equiv_simple_full.il", "equiv_simple_full.json",
+               "equiv_simple_full.evidence.rpt"}
+
+    if how == "not_our_file":
+        (ck / "operator_notes.txt").write_text("do not delete\n")
+        protected = {"operator_notes.txt"}
+    else:
+        _record(ck, tmp_path, _KEY, _LADDER_A, "equiv_induct_seq4")
+        man = ck / "equiv_induct_seq4.json"
+        if how == "foreign_key":
+            doc = json.loads(man.read_text())
+            doc["checkpoint_key"] = "sha256:" + "9" * 64
+            man.write_text(json.dumps(doc))
+        else:
+            man.write_text("{not json")
+        protected = {"equiv_induct_seq4.il", "equiv_induct_seq4.json",
+                     "equiv_induct_seq4.evidence.rpt"}
+
+    removed = lec_run.prune_superseded_ladders(ck, _KEY, _LADDER_B)
+    assert set(removed) == control, (sorted(removed), sorted(control))
+    survivors = {p.name for p in ck.iterdir()}
+    assert survivors == protected, (sorted(survivors), sorted(protected))
+
+
+def test_e2e_the_prune_waits_until_this_ladder_has_landed_a_rung(monkeypatch,
+                                                                 tmp_path):
+    """Superseding says a NEWER ladder owns this directory, and the evidence
+    for that is a rung the new ladder recorded. An attempt that dies in its
+    first pass must not delete a complete ladder and leave nothing behind.
+
+    THE SECOND LADDER HAS TO BE A DIFFERENT LADDER for this arm to be able to
+    fail at all. `lec_checkpoint_key` binds the design and the tool and NOT the
+    script, so the real-world second ladder is a plugin release that changes
+    the emitted recipe — one extra line here, which moves `base_script_sha256`
+    and nothing else. Driving two runs of the SAME ladder would leave nothing
+    superseded and the arm would pass whatever the trigger did: measured, with
+    the `if _recorded:` gate replaced by `if True:` the same-ladder version of
+    this test still passed.
+    """
+    proj = _project(tmp_path)
+    argv = [str(proj), "--top", "dut", "--container", "fake",
+            "--liberty", "/missing"]
+    scripts = []
+    _install_fake_yosys(monkeypatch, scripts,
+                        stop_after_rung="equiv_simple_full",
+                        tail=_STOPPED_TAIL)
+    lec_run.main(argv)
+    rec = json.loads((proj / "reports/lec.json").read_text())["lec_resume"]
+    ck = proj / rec["directory"]
+    ladder_a = {p.name for p in ck.iterdir()}
+    assert "equiv_simple_full.il" in ladder_a, ladder_a
+    base_a = rec["base_script_sha256"]
+
+    # A NEW LADDER for the same design+tool: same checkpoint key, new recipe.
+    _real = lec_run.build_equiv_script
+    monkeypatch.setattr(
+        lec_run, "build_equiv_script",
+        lambda *a, **k: "# ladder B\n" + _real(*a, **k))
+
+    # ...whose first attempt records NOTHING.
+    def _dead(_container, ys, **_kw):
+        scripts.append(Path(ys).read_text(encoding="utf-8"))
+        return True, "ERROR: the tool died before the first rung\n"
+
+    monkeypatch.setattr(lec_run, "run_yosys_equiv", _dead)
+    lec_run.main(argv)
+    after = json.loads((proj / "reports/lec.json").read_text())["lec_resume"]
+    assert after["base_script_sha256"] != base_a, (
+        "the second run ran the SAME ladder, so nothing was superseded and "
+        "this arm cannot fail")
+    assert after["rungs_recorded_this_run"] == [], after
+    assert "superseded_ladder_files_removed" not in after, after
+    assert {p.name for p in ck.iterdir()} == ladder_a, (
+        "a run that recorded no rung of its own deleted another ladder's work")
+
+    # POSITIVE CONTROL: once ladder B DOES land a rung, ladder A is pruned —
+    # so the arm above is a statement about the trigger, not about a prune
+    # that never fires.
+    _install_fake_yosys(monkeypatch, scripts,
+                        stop_after_rung="equiv_simple_full",
+                        tail=_STOPPED_TAIL)
+    monkeypatch.setattr(
+        lec_run, "build_equiv_script",
+        lambda *a, **k: "# ladder B\n" + _real(*a, **k))
+    lec_run.main(argv)
+    third = json.loads((proj / "reports/lec.json").read_text())["lec_resume"]
+    assert third["rungs_recorded_this_run"] == ["equiv_simple_full"], third
+    assert lec_run.select_resume_checkpoint(
+        ck, third["checkpoint_key"], base_a) is None, (
+            "ladder A still revalidates after ladder B landed a rung")

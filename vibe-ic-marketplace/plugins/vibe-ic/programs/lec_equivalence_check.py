@@ -225,20 +225,121 @@ _RPT_UNPROVEN_RE = re.compile(
 _RPT_SUCCESS_RE = re.compile(
     r"equivalence\s+successfully\s+proven", re.IGNORECASE)
 
+# THREE DIFFERENT NUMBERS CARRY THE WORD `unproven`, AND ONLY ONE IS RESIDUAL.
+# `max()` over every match of `_RPT_UNPROVEN_RE` reads the LARGEST of them,
+# which is structurally the equiv_simple ENTRY line — the population that pass
+# STARTED with, before it discharged a single point:
+#
+#   equiv_simple ENTRY   "Found 3396 unproven $equiv cells (3396 groups) in
+#                         equiv:"                  <- the pass's INPUT
+#   equiv_induct residual"Found 35 unproven $equiv cells in module equiv:"
+#   equiv_status FINAL   "Of those cells 830 are proven and 3242 are
+#                         unproven."               <- the run's answer
+#
+# The final line was never matched at all (`3242 are unproven` carries no
+# `$equiv` after the count), so the one authoritative reading was the one
+# reading this gate could not see, while the entry line — a number that says
+# nothing about what remains — was reported as `rpt_unproven_points` and fed
+# straight into `LEC_UNPROVEN_POINTS`. On the measured opentitan_aes log that
+# is 3396 unproven published for a run whose own status line says 3242, and on
+# a log where equiv_simple then proved everything it is a FAIL manufactured out
+# of a pass's input.
+#
+# lec_run's parser already owns this precedence and documents it; this gate is
+# deliberately an INDEPENDENT reader of the same artefacts (a producer bug must
+# stay visible to it), so the precedence is re-stated here rather than imported,
+# and `test_lec_rpt_reading_matches_the_producer` pins the two readings to the
+# same answer on the same logs.
+_RPT_FINAL_RE = re.compile(
+    r"(\d+)\s+are\s+proven\s+and\s+(\d+)\s+are\s+unproven", re.IGNORECASE)
+_RPT_SIMPLE_ENTRY_RE = re.compile(
+    r"Found\s+(\d+)\s+unproven\s+\$equiv\s+cells\s+\(\d+\s+groups\)"
+    r"\s+in\s+equiv\s*:", re.IGNORECASE)
+#: Anchored at line start for the same reason lec_run anchors it: a design
+#: comment a tool echoes into its log must not be read as this run's residual.
+_RPT_INDUCT_RESIDUAL_RE = re.compile(
+    r"(?m)^[ \t]*Found\s+(\d+)\s+unproven\s+\$equiv\s+cells"
+    r"\s+in\s+module\s+equiv\s*:", re.IGNORECASE)
+_RPT_PROVED_PASS_RE = re.compile(
+    r"Proved\s+(\d+)\s+previously\s+unproven\s+\$equiv\s+cells",
+    re.IGNORECASE)
+#: A Verilog LINE COMMENT the tool echoed into its own log. Anchored at line
+#: start on purpose: an absolute path (`/foss/pdks/...`) and a `//` inside a
+#: sentence are not comments and must survive. Dropped BEFORE any count is
+#: read, because a design that carries
+#:     // Found 999 unproven $equiv cells in module equiv:
+#: would otherwise have written this gate's verdict from its own source file —
+#: caught by the spoof arm of test_lec_rpt_point_reading_precedence, which the
+#: line-anchored residual pattern alone did NOT stop (it fell through to the
+#: generic branch and read 999).
+_RPT_HDL_LINE_COMMENT_RE = re.compile(r"(?m)^[ \t]*//.*$")
+
 
 def parse_rpt(text: str) -> dict:
-    """Best-effort extraction of point counts from an LEC text report."""
+    """Point counts from an LEC text report, read by PRECEDENCE not by max().
+
+    `rpt_points_source` names which reading produced the numbers, so a reader
+    of the summary can tell an equiv_status answer from a mid-ladder estimate
+    from a generic tool's line. A count that no reading measured stays None —
+    never a zero and never the nearest available number.
+    """
+    text = _RPT_HDL_LINE_COMMENT_RE.sub("", text or "")
     out: dict = {
         "rpt_success_line": bool(_RPT_SUCCESS_RE.search(text)),
         "rpt_proven_points": None,
         "rpt_unproven_points": None,
+        "rpt_points_source": None,
     }
+    # 1) equiv_status — the run's own final decomposition. LAST match: a recipe
+    #    that calls equiv_status more than once (a resumed leg states the
+    #    position it read back and then its own answer) must be read at the
+    #    state it FINISHED in.
+    finals = list(_RPT_FINAL_RE.finditer(text))
+    if finals:
+        out["rpt_proven_points"] = int(finals[-1].group(1))
+        out["rpt_unproven_points"] = int(finals[-1].group(2))
+        out["rpt_points_source"] = "equiv_status"
+        return out
+    # 2) A yosys log that never reached equiv_status (killed, stalled). Proven
+    #    is CUMULATIVE — each pass reports the cells IT discharged and the sets
+    #    are disjoint; unproven is the LAST residual, the furthest state the
+    #    run reached. Either may be absent, and absent stays None.
+    proved = [int(n) for n in _RPT_PROVED_PASS_RE.findall(text)]
+    residual = [int(n) for n in _RPT_INDUCT_RESIDUAL_RE.findall(text)]
+    if proved or residual:
+        if proved:
+            out["rpt_proven_points"] = sum(proved)
+        if residual:
+            out["rpt_unproven_points"] = residual[-1]
+        out["rpt_points_source"] = "yosys_pass_lines"
+        if residual:
+            return out
+        # No residual line: the entry count is the only `unproven` number in
+        # this log and it is the pass's INPUT. Say so instead of reporting it.
+        if _RPT_SIMPLE_ENTRY_RE.search(text):
+            out["rpt_unproven_not_measured"] = (
+                "the only `unproven` count in this log is the equiv_simple "
+                "ENTRY line, which is the population that pass started with, "
+                "not what remains: no equiv_status line and no residual line")
+        return out
+    # 3) A non-Yosys tool. The generic shapes, with the equiv_simple entry line
+    #    excluded by SPAN so the exclusion cannot be defeated by a tool that
+    #    happens to print the same words elsewhere on the line.
+    _entry_spans = [m.span() for m in _RPT_SIMPLE_ENTRY_RE.finditer(text)]
     proven = [int(m) for m in _RPT_PROVEN_RE.findall(text)]
-    unproven = [int(m) for m in _RPT_UNPROVEN_RE.findall(text)]
+    unproven = [int(m.group(1)) for m in _RPT_UNPROVEN_RE.finditer(text)
+                if not any(a <= m.start() < b for a, b in _entry_spans)]
     if proven:
         out["rpt_proven_points"] = max(proven)
+        out["rpt_points_source"] = "generic"
     if unproven:
         out["rpt_unproven_points"] = max(unproven)
+        out["rpt_points_source"] = "generic"
+    if out["rpt_unproven_points"] is None and _entry_spans:
+        out["rpt_unproven_not_measured"] = (
+            "the only `unproven` count in this log is the equiv_simple ENTRY "
+            "line, which is the population that pass started with, not what "
+            "remains")
     return out
 
 

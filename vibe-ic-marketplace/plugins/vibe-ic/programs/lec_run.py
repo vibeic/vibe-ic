@@ -116,6 +116,12 @@ LEC_RECIPE_SCHEMA_VERSION = "vibeic.lec.recipe.v3-checkpointed"
 LEC_PASS_CACHE_SCHEMA_VERSION = "vibeic.lec.pass-cache.v1"
 LEC_TELEMETRY_SCHEMA_VERSION = "vibeic.lec.telemetry.v1"
 LEC_CHECKPOINT_SCHEMA_VERSION = "vibeic.lec.checkpoint.v1"
+#: WHAT ACTUALLY RAN, beside the identity that says WHAT WAS PROVED. The PASS
+#: cache key is the recipe (`lec_cache_key` over the from-zero identity), so
+#: this is where a resumed run names the bytes it executed and the two evidence
+#: legs it reached its verdict from. It is REPORT-ONLY: nothing here is hashed
+#: into a key, and nothing here can make a cache entry hit or miss.
+LEC_PROOF_EXECUTION_SCHEMA_VERSION = "vibeic.lec.proof-execution.v1"
 DEFAULT_CACHE_REL = "reports/lec_pass_cache"
 DEFAULT_CHECKPOINT_REL = "reports/lec_checkpoints"
 
@@ -324,17 +330,33 @@ def promote_and_record_checkpoints(
                 _st.st_mtime, tz=timezone.utc).isoformat()
         except OSError:
             continue
-        # THE LEG'S OWN LOG. A resumed run does not re-run the rungs below its
-        # checkpoint, so its log cannot contain their evidence -- and the
-        # classifier reads that evidence. Naming the log here is what lets a
-        # resumed run carry it forward instead of reaching a different verdict
-        # about the same proof. Hash-bound, so a log that changed is refused.
+        # THE LEG'S OWN LOG, COPIED IN BESIDE THE .il. A resumed run does not
+        # re-run the rungs below its checkpoint, so its log cannot contain
+        # their evidence -- and the classifier reads that evidence. Naming the
+        # log is what lets a resumed run carry it forward instead of reaching a
+        # different verdict about the same proof. Hash-bound, so a log that
+        # changed is refused.
+        #
+        # WHY A COPY AND NOT A NAME. The log this points at is
+        # `reports/lec.live.<invocation>.rpt` -- a per-invocation file that any
+        # ordinary clean of `reports/` removes, while the checkpoint beside it
+        # survives. Naming it there made RESUMABILITY depend on a file nothing
+        # promised to keep: the .il stayed valid, its evidence vanished, and
+        # `select_resume_checkpoint` then refused a perfectly good 43.8 MB rung
+        # and re-proved it from zero. The evidence is part of the checkpoint,
+        # so it lives in the checkpoint's own directory, under the RUNG's name
+        # (one evidence file per rung, replaced when that rung is re-recorded),
+        # and it is hash-bound THERE.
         _ev: Dict[str, Any] = {"state": "absent"}
         try:
             if evidence_log is not None and Path(evidence_log).is_file():
-                _ev = {"path": Path(evidence_log).name,
-                       "sha256": _sha256_file_streamed(Path(evidence_log)),
-                       "bytes": Path(evidence_log).stat().st_size}
+                _ev_name = rung + ".evidence.rpt"
+                _atomic_write_bytes(ckpt_dir / _ev_name,
+                                    Path(evidence_log).read_bytes())
+                _ev = {"path": _ev_name,
+                       "sha256": _sha256_file_streamed(ckpt_dir / _ev_name),
+                       "bytes": (ckpt_dir / _ev_name).stat().st_size,
+                       "copied_from": Path(evidence_log).name}
         except OSError:
             _ev = {"state": "unreadable"}
         try:
@@ -388,16 +410,21 @@ def list_checkpoint_rungs_declared(ckpt_dir: Path, key: str,
 
 
 def select_resume_checkpoint(ckpt_dir: Path, key: str,
-                             base_script_sha256: str,
-                             reports_dir: Optional[Path] = None
-                             ) -> Optional[Dict]:
+                             base_script_sha256: str) -> Optional[Dict]:
     """The FURTHEST checkpoint that revalidates, or None. Refuses on any doubt.
 
     Every field is re-checked against the caller's own current values, and the
-    .il is RE-HASHED — so a checkpoint written for another netlist, by another
-    ladder, or corrupted since it was written, is refused BY NAME rather than
-    silently resumed from. `None` means "run from zero", which is exactly the
-    behaviour before checkpoints existed.
+    .il AND its carried evidence are RE-HASHED — so a checkpoint written for
+    another netlist, by another ladder, or corrupted since it was written, is
+    refused BY NAME rather than silently resumed from. `None` means "run from
+    zero", which is exactly the behaviour before checkpoints existed.
+
+    THE EVIDENCE IS RESOLVED BESIDE THE .il, never in `reports/`. The
+    `reports_dir` parameter this function used to take made the evidence check
+    OPTIONAL (absent argument -> no check at all) and pointed it at a
+    per-invocation live log that an ordinary clean deletes. Both are gone: the
+    requirement is unconditional, and it is asked of the copy the checkpoint
+    owns.
     """
     ckpt_dir = Path(ckpt_dir)
     best: Optional[Dict] = None
@@ -435,19 +462,16 @@ def select_resume_checkpoint(ckpt_dir: Path, key: str,
         # So a checkpoint whose evidence is gone is REFUSED, and the run starts
         # from zero -- slower, and the only answer that stays true.
         _ev = manifest.get("evidence_log")
-        _ev_path: Optional[Path] = None
-        if reports_dir is not None:
-            if not isinstance(_ev, dict) or not isinstance(_ev.get("path"), str):
+        if not isinstance(_ev, dict) or not isinstance(_ev.get("path"), str):
+            continue
+        _ev_path = ckpt_dir / _ev["path"]
+        try:
+            if not _ev_path.is_file():
                 continue
-            _cand = Path(reports_dir) / _ev["path"]
-            try:
-                if not _cand.is_file():
-                    continue
-                if _sha256_file_streamed(_cand) != _ev.get("sha256"):
-                    continue
-            except OSError:
+            if _sha256_file_streamed(_ev_path) != _ev.get("sha256"):
                 continue
-            _ev_path = _cand
+        except OSError:
+            continue
         best = {
             "evidence_log": str(_ev_path) if _ev_path else None,
             "evidence_log_sha256": (_ev or {}).get("sha256")
@@ -536,6 +560,52 @@ def recover_orphan_checkpoints(ckpt_dir: Path, key: str,
             if rung not in recovered:
                 recovered.append(rung)
     return sorted(recovered, key=ladder_index)
+
+
+def prune_superseded_ladders(ckpt_dir: Path, key: str,
+                             base_script_sha256: str) -> List[str]:
+    """Remove the rung artefacts of a ladder this identity has MOVED ON from.
+
+    A checkpoint directory is named by `lec_checkpoint_key`, which binds the
+    design and the tool but DELIBERATELY NOT the script — so when the emitted
+    ladder changes (a plugin release that adds or reorders a rung), the SAME
+    directory receives a second ladder's rungs under a new
+    `base_script_sha256`. The old ladder's `.il` files can never revalidate
+    again (`select_resume_checkpoint` refuses on the ladder mismatch, by name),
+    but nothing removed them: a 43.8 MB rung per ladder per design, kept
+    forever. A checkpoint directory with no bound is a disk leak.
+
+    Bounded to ONE ladder — the latest one to record a rung here. Only rungs
+    whose OWN manifest names THIS key and a DIFFERENT ladder are removed, and
+    only the three files this program writes for a rung. A manifest that will
+    not parse, one that names another key, and any file this program does not
+    write are left exactly where they are: an unreadable manifest is not
+    evidence that its .il is dead.
+
+    Returns the file names removed. Never raises — a filesystem that will not
+    take a deletion must not fail a proof that already succeeded.
+    """
+    ckpt_dir = Path(ckpt_dir)
+    removed: List[str] = []
+    for rung in LEC_CHECKPOINT_RUNGS:
+        man_path = ckpt_dir / (rung + ".json")
+        try:
+            manifest = json.loads(man_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(manifest, dict):
+            continue
+        if (manifest.get("schema_version") != LEC_CHECKPOINT_SCHEMA_VERSION
+                or manifest.get("checkpoint_key") != key
+                or manifest.get("base_script_sha256") == base_script_sha256):
+            continue
+        for name in (rung + ".il", rung + ".evidence.rpt", rung + ".json"):
+            try:
+                (ckpt_dir / name).unlink()
+                removed.append(name)
+            except OSError:
+                continue
+    return removed
 
 
 def prune_stale_checkpoint_parts(ckpt_dir: Path) -> List[str]:
@@ -4101,6 +4171,14 @@ def main(argv: Optional[List[str]] = None) -> int:
         "statement": None,
     }
 
+    proof_execution: Dict[str, Any] = {
+        "schema_version": LEC_PROOF_EXECUTION_SCHEMA_VERSION,
+        "path": None,
+        "canonical_recipe_sha256": None,
+        "equivalence_script_sha256_executed": None,
+        "evidence_legs": [],
+    }
+
     def _telemetry_finish(status: str, **extra: Any) -> None:
         _finish_telemetry_sidecar(telemetry_path, status, **extra)
 
@@ -4242,8 +4320,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             prune_stale_checkpoint_parts(ckpt_dir)
             resume_from = select_resume_checkpoint(
                 ckpt_dir, ckpt_key,
-                _sha256_bytes(canonical_script.encode("utf-8")),
-                reports_dir=rpt_out.parent)
+                _sha256_bytes(canonical_script.encode("utf-8")))
         if resume_from is not None:
             script = _make_script(frontend, slang_prefix, defines,
                                   checkpoint_dir=str(ckpt_dir),
@@ -4251,22 +4328,41 @@ def main(argv: Optional[List[str]] = None) -> int:
         else:
             script = canonical_script
         ys_host.write_text(script, encoding="utf-8")
+        # THE PROOF IDENTITY IS THE RECIPE, NOT THE PATH TAKEN THROUGH IT.
+        # `canonical_script` — the FROM-ZERO ladder — is what the identity is
+        # built from on every run, resumed or not, so a PASS reached by
+        # resuming is stored under exactly the key a from-zero run would search.
+        #
+        # WHY THIS IS NOT A LIE ABOUT WHAT RAN. A resumed script is not an
+        # independent recipe: `_make_script(..., resume_from=...)` derives it
+        # MECHANICALLY from this same canonical ladder plus one checkpoint, and
+        # that checkpoint was already refused unless its manifest names this
+        # canonical ladder (`base_script_sha256`), its .il re-hashes to the
+        # recorded digest, and its carried evidence re-hashes too. The bytes
+        # that were actually executed, and both evidence legs, are recorded in
+        # `proof_execution` below and in `lec_resume` — named, hash-bound, and
+        # reviewable — they are simply not part of the KEY.
+        #
+        # WHAT KEYING ON THE RESUMED SCRIPT COST. Every resume produced its own
+        # key, so a PASS reached at invocation 2 was stored where no later
+        # invocation looks: invocation 3 selects the now-FURTHEST rung, resumes
+        # from a different position, misses, and re-proves; only invocation 4,
+        # resuming from the same rung as 3, finds 3's entry. Convergence at
+        # four invocations for a design that was proven at two.
         final_proof_identity = _identity_for(
-            script, frontend, defines, slang_prefix)
+            canonical_script, frontend, defines, slang_prefix)
+        proof_execution["path"] = ("resumed" if resume_from is not None
+                                   else "from-zero")
+        proof_execution["canonical_recipe_sha256"] = _sha256_bytes(
+            canonical_script.encode("utf-8"))
+        proof_execution["equivalence_script_sha256_executed"] = _sha256_bytes(
+            script.encode("utf-8"))
         if resume_from is not None:
-            # A RESUMED proof is a DIFFERENT proof identity from a from-zero
-            # one: it ran a different script AND it consumed an artefact whose
-            # bytes are in no other field. Both facts are named here, so the
-            # .il can never be swapped under a cached PASS. On a from-zero run
-            # this key is ABSENT, so that identity keeps exactly the shape it
-            # had — the only thing that moves it is `recipe_schema_version`
-            # (v2 -> v3), which invalidates every pre-existing PASS cache entry
-            # ON PURPOSE: the ladder this program emits is not the v2 ladder,
-            # and a cache entry that claims otherwise would be a lie about
-            # which script proved the design.
-            final_proof_identity["resume"] = {
+            proof_execution["resumed_from"] = {
                 "rung": resume_from["rung"],
+                "rung_index": resume_from["rung_index"],
                 "checkpoint_sha256": resume_from["checkpoint_sha256"],
+                "checkpoint_bytes": resume_from["checkpoint_bytes"],
             }
         if proof_identity_complete(final_proof_identity):
             _key = lec_cache_key(final_proof_identity)
@@ -4329,6 +4425,20 @@ def main(argv: Optional[List[str]] = None) -> int:
                 evidence_log=live_log_path)
             resume_record["rungs_recorded_this_run"] = _recorded
             resume_record["resumed"] = resume_from is not None
+            # PRUNE ONLY ONCE THIS LADDER HAS LANDED SOMETHING. Superseding is
+            # a statement that a NEWER ladder now owns this directory, and the
+            # evidence for that statement is a rung this ladder recorded. Doing
+            # it before the run (at selection time) would let an attempt that
+            # dies in its first pass delete a complete ladder and leave nothing
+            # in its place.
+            if _recorded:
+                _pruned = prune_superseded_ladders(
+                    ckpt_dir, ckpt_key,
+                    _sha256_bytes(canonical_script.encode("utf-8")))
+                if _pruned:
+                    resume_record["superseded_ladder_files_removed"] = _pruned
+                    print("[lec_run] pruned a superseded ladder's checkpoints "
+                          f"in {ckpt_dir.name}: {_pruned}", file=sys.stderr)
             if resume_from is not None:
                 _at = resume_status_counts(_raw)
                 resume_record["resumed_from"] = {
@@ -4348,6 +4458,36 @@ def main(argv: Optional[List[str]] = None) -> int:
                     "unproven_at_checkpoint": (_at or {}).get("unproven"),
                     "counts_measured": _at is not None,
                 }
+        # BOTH LEGS, HASH-BOUND. A resumed PASS is stored under the same key a
+        # from-zero PASS would use, so the entry has to carry the evidence for
+        # the whole proof and not just for the half this process ran. The
+        # carried leg is the checkpoint's own copy (revalidated at selection);
+        # this leg is the log this invocation produced. Named and hashed here,
+        # so a reader of the cached report can re-check either one.
+        _legs: List[Dict[str, Any]] = []
+        if resume_from is not None and resume_from.get("evidence_log"):
+            _legs.append({
+                "leg": "carried",
+                "path": Path(resume_from["evidence_log"]).name,
+                "sha256": resume_from.get("evidence_log_sha256"),
+                "through_rung": resume_from["rung"],
+            })
+        try:
+            if live_log_path is not None and Path(live_log_path).is_file():
+                _legs.append({
+                    "leg": "this_invocation",
+                    "path": Path(live_log_path).name,
+                    "sha256": _sha256_file_streamed(Path(live_log_path)),
+                    "bytes": Path(live_log_path).stat().st_size,
+                })
+            else:
+                # NOT_MEASURED, never a fabricated entry: the leg ran, and the
+                # log this process was tee-ing is simply not readable here.
+                _legs.append({"leg": "this_invocation", "state": "unreadable"})
+        except OSError as _exc:
+            _legs.append({"leg": "this_invocation", "state": "unreadable",
+                          "error": str(_exc)})
+        proof_execution["evidence_legs"] = _legs
         return _launched, _raw
 
     # The deadline is established HERE, once, before the first attempt.
@@ -4667,6 +4807,12 @@ def main(argv: Optional[List[str]] = None) -> int:
                 "nothing to resume from — a restart starts over, and that is "
                 "a measured fact about this run rather than a default")
     report["lec_resume"] = resume_record
+    # WHAT RAN, beside WHAT WAS PROVED. `proof_identity` is the recipe — the
+    # key a PASS is cached under, identical for a from-zero and a resumed run
+    # of the same design — so the bytes this invocation actually executed and
+    # the evidence legs it read are recorded here, where a reader can check
+    # them and no cache lookup depends on them.
+    report["proof_execution"] = proof_execution
     if final_proof_identity is not None:
         report["proof_identity"] = final_proof_identity
     if cache_hit_report is None:
