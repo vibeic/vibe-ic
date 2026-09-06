@@ -712,17 +712,42 @@ def test_the_gate_is_GREEN_on_the_tree_that_ships():
 
 
 def test_the_ratchet_blocks_a_landing_that_ADDS_an_offender(tmp_path):
-    """DIRECTION 1: an offender that is not in the register fails the gate."""
+    """DIRECTION 1: an offender that is not in the register fails the gate.
+
+    THE OFFENDER IS PLANTED, NOT BORROWED FROM THE REGISTER. This test used to
+    empty `_OFFENDER_REGISTER` and hand its former contents back as the
+    observed population, which was exact while the register had entries and went
+    VACUOUS the moment it emptied: v1.18.24 fixed every offender this gate
+    named, `sorted(kept)` became `[]`, and a gate asked about NO offenders
+    correctly answered rc 0 — a green test proving nothing. The population a
+    ratchet judges is not the register's own contents, so the fixture must not
+    be either. Both arms are asserted here: the same name UNREGISTERED blocks
+    and REGISTERED does not, so the refusal is about membership and not about
+    the name.
+
+    Its sibling in `test_hdl_noncode_blanking_at_declaration_scans.py` went
+    vacuous exactly this way and was repaired in the same commit; this one had
+    one entry left and so was still asking a question — which is luck, not a
+    property, and is why it is repaired beside it rather than after it.
+    """
     import importlib
     G2 = importlib.import_module("prose_polarity_consulted_check")
     root = PROGRAMS.parent
+    planted = "spec_conformance_check::_frame_contract_findings"
     kept = dict(G2._OFFENDER_REGISTER)
+    assert planted not in kept, (
+        "the planted name must not already be registered, or the first arm "
+        "below asks nothing")
     try:
         G2._OFFENDER_REGISTER.clear()          # as if the entry were never added
-        rc = G2._ratchet_verdict(sorted(kept), root)
+        rc_unregistered = G2._ratchet_verdict([planted], root)
+        G2._OFFENDER_REGISTER[planted] = "planted by this test"
+        rc_registered = G2._ratchet_verdict([planted], root)
     finally:
+        G2._OFFENDER_REGISTER.clear()
         G2._OFFENDER_REGISTER.update(kept)
-    assert rc == 1, "an unregistered offender must BLOCK"
+    assert rc_unregistered == 1, "an unregistered offender must BLOCK"
+    assert rc_registered == 0, "the SAME offender, registered, must not block"
 
 
 def test_the_ratchet_refuses_an_entry_that_outlived_its_offender():

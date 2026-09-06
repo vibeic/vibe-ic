@@ -322,8 +322,13 @@ _LANDING_WINDOW_ANCHOR = "lane_emit_window"
 # RE-PINNED with the whole-file digest below, same edit, same reason: the
 # hoisted definition sits above the `lane_emit_window` anchor. See the
 # "EXIT TRAP THAT CALLED A FUNCTION NOT YET DEFINED" block below.
+# RE-PINNED AGAIN with the whole-file digest below for the CHEAP-TIER POLARITY
+# RATCHET, same shape and the same reason: the new `run` line sits at 620, and
+# the anchor moved 2173 -> 2191, so every byte of the prefix moved with it. See
+# the "CHEAP TIER GAINED THE POLARITY RATCHET" block below for the full account
+# and for the enumeration of all six faces at the base and at the candidate.
 _LANDING_EXECUTION_PREFIX_SHA256 = (
-    "425a1a0cb3280b869ba4ee1feb6f7e9d47b5fc8980f1d2ecd4e716fab2e0a8f7"
+    "08be699b4bf97f88e8d638252f3492118390d35989485f90e25371fa5ca50016"
 )
 # RE-PINNED when the landing gained its runtime PREFLIGHT. Both digests below
 # moved for one reason and it is stated here rather than left to `git log`: the
@@ -721,8 +726,46 @@ _LANDING_EXECUTION_PREFIX_SHA256 = (
 # `tools/test_gatekeeper_land_lanes.py`, falsified both directions (red on the
 # unfixed script naming line 2110, red again on a synthetic late-defined probe,
 # green after).
+# RE-PINNED FOR THE CHEAP TIER GAINING THE POLARITY RATCHET (vibe-ic#712).
+# TWO of the six faces moved and BOTH are re-pinned in this commit. THE SIX WERE
+# ENUMERATED FROM THIS FILE'S OWN CODE — `landing_semantic_progress_contract`
+# hashes the whole script, the entry-to-`lane_emit_window` prefix and the three
+# lane bodies; `_semantic_driver_contract_errors` hashes the driver — never from
+# the diff, and never from the two the gate happened to print in its refusal.
+# Each of the six was DERIVED at the base and again over the edited tree, by
+# re-running that same code. Main moved twice under this lane while the re-pin
+# was being verified (4fc47b3ef v1.18.13 -> e11665f5e -> 4a1558d56), so the
+# derivation was repeated at the new base; neither landing touches
+# `gatekeeper-land.sh` or the driver, and all six values are identical at both:
+#
+#   whole file          717ab8d7e9df… -> 254734ed2710…   MOVED
+#   execution prefix    425a1a0cb328… -> 08be699b4bf9…   MOVED
+#   run_pytest                  3b3b685c4841…            unmoved, untouched
+#   run_repo_tools_pytest       95de055aebcd…            unmoved, untouched
+#   run_unselectable_pytest     aac62e70f0eb…            unmoved, untouched
+#   _SEMANTIC_DRIVER_SHA256     a50922ce5e5c…            unmoved, untouched
+#
+# The base column reproduces the six constants that were standing here byte for
+# byte, which is what makes the candidate column a measurement of this edit
+# rather than of my arithmetic.
+#
+# WHAT MOVED, and why it is exactly two. `tools/gatekeeper-land.sh` gains ONE
+# `run` line in the CHEAP tier at 620, beside `cheap:version-sync` and outside
+# the range block, invoking `prose_polarity_consulted_check.py --ratchet` so no
+# landing can add a polarity-blind prose extractor that `_OFFENDER_REGISTER`
+# does not record. Adding lines at 620 pushes the `lane_emit_window` anchor from
+# 2173 to 2191, so the entry-to-anchor prefix moved with the whole file — the
+# same signature every earlier edit to the control flow ahead of the lanes left,
+# and the reason the two are always re-pinned as a pair.
+#
+# WHAT DID NOT MOVE, which is the part this pin exists to protect: the three
+# lane bodies are byte-identical, which is this file's own independent witness
+# that no population's execution changed — no pytest INVOCATION, no argument
+# added or removed, no `rc` decision rewritten, and the driver untouched. The
+# new line is a `run` of a checker in the tier that runs before any lane is
+# dispatched; it can REFUSE a landing, and it cannot change how one is measured.
 _LANDING_SCRIPT_SHA256 = (
-    "717ab8d7e9df13794a2add6b9fd322306d450b8ebfe7140b31051e03c64004fe"
+    "254734ed2710124a1efc5208501d18311d1f3768ea1f0f7a6abb98634df78461"
 )
 # The helper AST is not enough: a counterfeit CLI can define the expected
 # helper and never call it.  Bind the policy to the complete reviewed driver

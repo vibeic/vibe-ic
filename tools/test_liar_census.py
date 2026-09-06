@@ -3598,3 +3598,71 @@ def test_an_ABSENT_control_arm_that_TIMED_OUT_is_NA_not_a_liar(monkeypatch,
     res = lc.probe_producer_emitted_nothing(cl, sandbox)
     assert res.verdict == lc.NA, res
     assert "control arm did not run" in res.detail, res.detail
+
+
+# --------------------------------------------------------------------------
+# THE PROMOTION RULE IS "MUST NOT WEAKEN", NOT "ADVISORY TO BLOCKING"
+#
+# It demanded advisory -> blocking exactly, and that turned a real
+# strengthening into a REMOVAL: `l9_floorplan_contract_check .` gained
+# `--json reports/phase1/gates/l9_floorplan_contract.json` and STAYED advisory,
+# so the shipped-floor control reported the obligation as gone while the gate
+# had in fact started publishing a verdict where it published nothing.
+# --------------------------------------------------------------------------
+def _clause(step, kind, cmd):
+    return (step, kind, cmd)
+
+
+def test_a_same_kind_json_append_is_a_promotion_not_a_removal():
+    """DIRECTION 1: more disclosure, same authority — not a retirement."""
+    was = _clause("D1", "advisory_program_exit_zero",
+                  "l9_floorplan_contract_check .")
+    now = _clause("D1", "advisory_program_exit_zero",
+                  "l9_floorplan_contract_check . --json "
+                  "reports/phase1/gates/l9_floorplan_contract.json")
+    assert lc._is_monotonic_json_promotion(was, now)
+
+
+def test_a_blocking_clause_that_gains_its_json_is_also_a_promotion():
+    """The same claim one rank up: publishing a report never retires a gate."""
+    was = _clause("4", "program_exit_zero", "some_gate .")
+    now = _clause("4", "program_exit_zero", "some_gate . --json reports/x.json")
+    assert lc._is_monotonic_json_promotion(was, now)
+
+
+def test_a_kind_that_WEAKENS_is_never_a_promotion():
+    """DIRECTION 2, and the reason the rule is a rank and not a pair.
+
+    blocking -> advisory is the downgrade this whole record exists to catch. It
+    must stay a REMOVAL even when the argv gains its `--json`, or the widening
+    above would have opened the exact door it was written to keep shut.
+    """
+    was = _clause("4", "program_exit_zero", "some_gate .")
+    now = _clause("4", "advisory_program_exit_zero",
+                  "some_gate . --json reports/x.json")
+    assert not lc._is_monotonic_json_promotion(was, now)
+
+
+def test_the_prefix_and_step_requirements_survive_the_widening():
+    """Everything the old shape refused, it still refuses."""
+    base = _clause("4", "advisory_program_exit_zero", "some_gate .")
+    # a moved step
+    assert not lc._is_monotonic_json_promotion(
+        base, _clause("5", "advisory_program_exit_zero",
+                      "some_gate . --json reports/x.json"))
+    # a renamed program
+    assert not lc._is_monotonic_json_promotion(
+        base, _clause("4", "advisory_program_exit_zero",
+                      "other_gate . --json reports/x.json"))
+    # a changed input, not an append
+    assert not lc._is_monotonic_json_promotion(
+        base, _clause("4", "advisory_program_exit_zero",
+                      "some_gate other --json reports/x.json"))
+    # more than the one --json PATH appended
+    assert not lc._is_monotonic_json_promotion(
+        base, _clause("4", "advisory_program_exit_zero",
+                      "some_gate . --strict --json reports/x.json"))
+    # an empty --json path
+    assert not lc._is_monotonic_json_promotion(
+        base, _clause("4", "advisory_program_exit_zero", "some_gate . --json="))
+

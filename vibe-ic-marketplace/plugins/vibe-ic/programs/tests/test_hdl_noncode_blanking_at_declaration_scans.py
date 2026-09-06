@@ -178,15 +178,106 @@ def test_a_commented_out_instantiation_is_not_read_as_the_real_one():
 
 
 # ── the gate itself ───────────────────────────────────────────────────────
+def _load_gate():
+    """The gate module, imported from the programs dir this file already uses."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "hdl_declaration_scan_gate_for_tests",
+        PROGRAMS / "hdl_declaration_scan_strips_comments_check.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
 def test_the_declaration_scan_gate_is_green_on_this_tree():
-    """The gate BLOCKS (rc=1) on a new unstripped scan. Driven here so the
-    three repairs above are held by the gate, not only by their own unit
-    tests."""
+    """The gate BLOCKS on a new unstripped scan, and what "green" HONESTLY means
+    here is a RATCHET.
+
+    Driven here so the repairs above are held by the gate, not only by their own
+    unit tests. The verdict asked for is `--ratchet`: `offenders == the
+    register`. That is the true statement — three scans DO still read unstripped
+    text, each with a named owning lane — where "no scan reads unstripped text"
+    would be false, and where the plain count is not an instrument at all: this
+    population went 166 -> 165 -> 163 across a handful of landings while
+    offenders were both entering and leaving, so the number moved DOWN in the
+    same window that three new ones arrived.
+    """
     proc = subprocess.run(
         [sys.executable,
-         str(PROGRAMS / "hdl_declaration_scan_strips_comments_check.py")],
+         str(PROGRAMS / "hdl_declaration_scan_strips_comments_check.py"),
+         "--ratchet"],
         capture_output=True, text=True, timeout=900)
     assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "[PASS]" in proc.stdout
+
+
+def test_the_ratchet_blocks_a_landing_that_ADDS_an_unstripped_scan():
+    """DIRECTION 1: an offender not in the register fails the gate.
+
+    THE OFFENDER IS PLANTED, NOT BORROWED FROM THE REGISTER. This test used to
+    empty `_OFFENDER_REGISTER` and hand its former contents back as the
+    observed population, which was exact while the register had entries and went
+    VACUOUS the moment it emptied: v1.18.24 fixed every offender this gate
+    named, `sorted(kept)` became `[]`, and a gate asked about NO offenders
+    correctly answered rc 0 — a green test proving nothing. The population a
+    ratchet judges is not the register's own contents, so the fixture must not
+    be either. Both arms are asserted here: the same name UNREGISTERED blocks
+    and REGISTERED does not, so the refusal is about membership and not about
+    the name.
+    """
+    G = _load_gate()
+    root = PROGRAMS.parent
+    planted = "canonical_primitive_synth::_rtl_input_port_widths::_HDR(rtl)"
+    kept = dict(G._OFFENDER_REGISTER)
+    assert planted not in kept, (
+        "the planted name must not already be registered, or the first arm "
+        "below asks nothing")
+    try:
+        G._OFFENDER_REGISTER.clear()
+        rc_unregistered = G._ratchet_verdict([planted], root)
+        G._OFFENDER_REGISTER[planted] = "planted by this test"
+        rc_registered = G._ratchet_verdict([planted], root)
+    finally:
+        G._OFFENDER_REGISTER.clear()
+        G._OFFENDER_REGISTER.update(kept)
+    assert rc_unregistered == 1, "an unregistered offender must BLOCK"
+    assert rc_registered == 0, "the SAME offender, registered, must not block"
+
+
+def test_the_ratchet_refuses_an_entry_that_outlived_its_offender():
+    """DIRECTION 2: an entry whose offender is gone is itself an offender.
+
+    Uses `canonical_primitive_synth::_rtl_input_port_widths`, which WAS an
+    offender until the repair above stripped comments on the value reaching the
+    scan — so this is the exact shape of fixing one and forgetting the entry.
+    """
+    G = _load_gate()
+    root = PROGRAMS.parent
+    kept = dict(G._OFFENDER_REGISTER)
+    try:
+        G._OFFENDER_REGISTER[
+            "canonical_primitive_synth::_rtl_input_port_widths::_HDR(rtl)"] = (
+            "planted for this test")
+        rc = G._ratchet_verdict(sorted(kept), root)
+    finally:
+        G._OFFENDER_REGISTER.clear()
+        G._OFFENDER_REGISTER.update(kept)
+    assert rc == 1, "a stale register entry must BLOCK"
+
+
+def test_the_ratchet_is_scoped_to_the_tree_it_is_aimed_at(tmp_path):
+    """An entry naming a function this checkout does not define is out of scope,
+    not stale — otherwise the verdict depends on which tree the gate was aimed
+    at, which is the one property a gate must not have."""
+    G = _load_gate()
+    (tmp_path / "programs").mkdir()
+    kept = dict(G._OFFENDER_REGISTER)
+    try:
+        rc = G._ratchet_verdict([], tmp_path)
+    finally:
+        G._OFFENDER_REGISTER.clear()
+        G._OFFENDER_REGISTER.update(kept)
+    assert rc == 0, "an out-of-tree entry is not stale"
 
 
 # ── site 4: the struct-typed bus ports read off the DUT header ────────────

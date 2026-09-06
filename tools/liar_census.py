@@ -661,23 +661,44 @@ def _clause_counter(flow_yaml: Path):
         (c.step, c.kind, c.cmd) for c in discover_clauses(flow_yaml))
 
 
+#: Ordered weakest-to-strongest. A promotion may keep the rank or raise it; it
+#: may never lower it. Spelled as a rank rather than a pair of names so the one
+#: question asked below is "did the kind WEAKEN", which is the property that
+#: matters, instead of an enumeration that has to be revisited per transition.
+_CLAUSE_RANK = {"advisory_program_exit_zero": 0, "program_exit_zero": 1}
+
+
 def _is_monotonic_json_promotion(was, now) -> bool:
-    """True only for an advisory made blocking while declaring its JSON proof.
+    """True for a clause that declares its JSON proof without weakening.
 
     Clause identity remains the exact ``(step, kind, cmd)`` triple everywhere
     else.  This one transition is not a retirement: the same invocation stays
-    on the same step, becomes *more* authoritative, and appends exactly one
-    ``--json PATH`` output.  Requiring the complete old argv as a prefix keeps
-    a renamed program, changed input, moved step, optional downgrade, or
+    on the same step, appends exactly one ``--json PATH`` output, and does not
+    become less authoritative.  Requiring the complete old argv as a prefix
+    keeps a renamed program, changed input, moved step, optional downgrade, or
     arbitrary re-spelling visible as a removal.
+
+    THE RANK, NOT THE PAIR.  This used to demand advisory -> blocking exactly,
+    and that turned a real strengthening into a REMOVAL: `l9_floorplan_contract
+    _check .` gained `--json reports/phase1/gates/l9_floorplan_contract.json`
+    and STAYED advisory, so the floor reported the obligation as gone and the
+    shipped-floor control fired on a clause that had in fact become MORE
+    disclosing.  A gate that publishes its verdict where it published nothing
+    is not a retirement in either kind.
+
+    What is still refused is any WEAKENING: blocking -> advisory remains a
+    removal, because that is the downgrade this record exists to catch, and it
+    is refused by the same one comparison rather than by omission.
     """
     import shlex  # noqa: PLC0415
 
     old_step, old_kind, old_cmd = was
     new_step, new_kind, new_cmd = now
-    if (old_step != new_step
-            or old_kind != "advisory_program_exit_zero"
-            or new_kind != "program_exit_zero"):
+    if old_step != new_step:
+        return False
+    if old_kind not in _CLAUSE_RANK or new_kind not in _CLAUSE_RANK:
+        return False
+    if _CLAUSE_RANK[new_kind] < _CLAUSE_RANK[old_kind]:
         return False
     try:
         old_argv = shlex.split(old_cmd)
@@ -776,7 +797,7 @@ def _clause_floor_contract(floor_path: Path = CLAUSE_FLOOR):
         if not _is_monotonic_json_promotion(was, now):
             raise ValueError(
                 f"{floor_path} monotonic_promotions[{index}] is not the "
-                "strict advisory-to-blocking plus --json transition: "
+                "strict non-weakening plus --json transition: "
                 f"{was!r} -> {now!r}")
         promoted_from[was] += 1
         if promoted_from[was] > raw[was]:

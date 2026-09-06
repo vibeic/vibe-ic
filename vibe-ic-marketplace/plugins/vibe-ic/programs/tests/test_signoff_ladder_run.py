@@ -159,13 +159,49 @@ class TestEMDensityTier:
         r = mod.check_tier_2_em(tmp_path)
         assert r.verdict == "NOT_RUN"
 
-    def test_present_report_no_jmax_skips_not_run(self, tmp_path):
+    def test_present_report_no_jmax_skips_not_run(self, tmp_path, monkeypatch):
         # Report present but NO Jmax reference → honest SKIP, never the old
         # decap proxy, never a fabricated PASS.
+        #
+        # THE ENVIRONMENT IS PART OF THE CASE, and it has to be stated or this
+        # test is not about what it says. `_discover_jmax_ref` falls back to the
+        # PDK tech-LEF at `$PDK_ROOT/$PDK` — deliberately, since b52cb973c: the
+        # reference is genuinely resolvable, just outside the project. So on a
+        # host WITH a PDK (every run inside the EDA image, which is the shape
+        # `tools/ci/run_suite_in_eda_image.sh` and therefore the landing gate
+        # uses) there IS a Jmax reference, the tier judges, and "no Jmax
+        # reference" is simply false. MEASURED: this case returned PASS there
+        # while passing under a runner with no PDK in the environment — the same
+        # test, two answers, decided by the host.
+        #
+        # Unset it, so the case is the one the name describes.
+        monkeypatch.delenv("PDK_ROOT", raising=False)
+        monkeypatch.delenv("PDK", raising=False)
         _write(tmp_path / "reports/phase3/em_segments.csv", _em_csv(1e-4))
         r = mod.check_tier_2_em(tmp_path)
         assert r.verdict == "NOT_RUN"
         assert r.details["em_verdict"] == "SKIPPED"
+
+    def test_the_pdk_fallback_supplies_the_reference_the_project_lacks(
+            self, tmp_path, monkeypatch):
+        """The other half of the ruling, and the reason the case above must
+        unset the variable rather than assume it.
+
+        b52cb973c made `$PDK_ROOT/$PDK` a legitimate Jmax source: absent from
+        the PROJECT is not absent from the WORLD. Pinned on a synthetic PDK so
+        it does not depend on which PDK this host happens to carry.
+        """
+        pdk_root = tmp_path / "pdks"
+        variant = pdk_root / "synthpdk"
+        variant.mkdir(parents=True)
+        (variant / "synthpdk.tlef").write_text("LAYER met1\nEND met1\n")
+        monkeypatch.setenv("PDK_ROOT", str(pdk_root))
+        monkeypatch.setenv("PDK", "synthpdk")
+        jmax, tech = mod._discover_jmax_ref(tmp_path / "proj")
+        assert jmax is None
+        assert tech is not None and tech.name == "synthpdk.tlef", (
+            "the PDK fallback must reach $PDK_ROOT/$PDK when the project "
+            "carries no reference of its own")
 
     def test_under_jmax_pass(self, tmp_path):
         _write(tmp_path / "reports/phase3/em_segments.csv", _em_csv(1e-4))

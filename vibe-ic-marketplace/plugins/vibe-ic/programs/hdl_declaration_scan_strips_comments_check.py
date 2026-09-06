@@ -316,10 +316,104 @@ def _load(p: Path) -> Optional[List[str]]:
     return sorted(v) if isinstance(v, list) else None
 
 
+#: THE OFFENDER REGISTER — a RATCHET BY MEMBERSHIP, and it is SOURCE.
+#:
+#: Same shape as `prose_polarity_consulted_check._OFFENDER_REGISTER`, and for
+#: the same measured reason: a COUNT is not the instrument. This population went
+#: 166 -> 165 -> 163 across a handful of landings while offenders were both
+#: entering and leaving, so the number moved DOWN in the same window that three
+#: new offenders arrived. Only membership names them.
+#:
+#: THE RULE (`--ratchet`): fail when an offender is NOT in this register — that
+#: is a landing ADDING one, and it is blocked. The entry is DELETED IN THE SAME
+#: COMMIT that fixes the offender, and an entry left behind once its offender is
+#: gone is itself an offender, so the register cannot rot into a list of things
+#: that used to be true.
+#:
+#: THIS IS NOT THE BASELINE AND NO FLAG WRITES IT. `hdl_declaration_scan_
+#: baseline.json` is the DEBT register — 160 scans that predate the rule and are
+#: owed down. This is the much narrower claim that a KNOWN NEW offender has a
+#: named owner who is going to fix it. Reviewed in the diff like any other
+#: source; `--write-baseline` remains the thing this gate must not be told to do
+#: on a lane's behalf.
+_OFFENDER_REGISTER: Dict[str, str] = {
+    # EMPTY, AND THAT IS THE RATCHET FINISHING ITS JOB RATHER THAN A DISABLED
+    # GATE. It shipped in this branch with four entries — czaes1's
+    # `_chip_top_resolve_excluded_variant_params`, czlecresume's
+    # `lec_proved_points_from_output`, czadcl10's
+    # `_doc_module_name_label_or_inline` and czfsm's `_module_at`, each naming
+    # its owner and its landing. v1.18.24 (83af0e54b, "six unstripped
+    # declaration scans", #731) fixed all four, so all four entries are DELETED
+    # here as source, in the commit that observed it — an entry that outlives
+    # its offender is itself an offender, and `_ratchet_verdict` refuses one.
+    #
+    # An empty register is the STRONGEST state this gate has, not the weakest:
+    # `--ratchet` now fails on ANY declaration scan over unstripped text, with
+    # no membership to fall through. Nothing here needs to be re-added for the
+    # next landing to be judged.
+}
+
+
+def _defines_function(root, name: str) -> bool:
+    """Does THIS tree define the `module::function` an entry names?
+
+    Scoped the way `main` already scopes everything else: an entry naming a
+    function this checkout does not define is a claim about a DIFFERENT tree,
+    not a claim that has expired. Without it, a correct entry for an offender
+    that arrives with a later landing reads as stale on every older tree — the
+    verdict would depend on which tree the gate was aimed at.
+    """
+    import ast as _ast
+    parts = name.split("::")
+    if len(parts) < 2:
+        return False
+    module, fn = parts[0], parts[1]
+    src = Path(root) / "programs" / f"{module}.py"
+    if not src.is_file():
+        return False
+    try:
+        tree = _ast.parse(src.read_text(errors="replace"))
+    except (OSError, SyntaxError):
+        return False
+    return any(isinstance(n, (_ast.FunctionDef, _ast.AsyncFunctionDef))
+               and n.name == fn for n in _ast.walk(tree))
+
+
+def _ratchet_verdict(new, root) -> int:
+    """`offenders == register`, by MEMBERSHIP. The landing gate's question."""
+    registered = set(_OFFENDER_REGISTER)
+    offenders = set(new)
+    unregistered = sorted(offenders - registered)
+    stale = sorted(n for n in registered - offenders
+                   if _defines_function(root, n))
+    if unregistered:
+        print(f"[FAIL] {len(unregistered)} declaration regex(es) scan text no "
+              f"stripper touched and are NOT in the offender register:")
+        for n in unregistered:
+            print(f"   {n}")
+        print("\n  Strip comments on the value that reaches the scan. If this "
+              "landing cannot,\n  the entry names an OWNER who will — it does "
+              "not name the gate as wrong.")
+        return 1
+    if stale:
+        print(f"[FAIL] {len(stale)} offender-register entry(ies) no longer name "
+              f"an offender — delete the entry in the commit that fixed it:")
+        for n in stale:
+            print(f"   {n}")
+        return 1
+    print(f"[PASS] hdl_declaration_scan: offenders are exactly the "
+          f"{len(registered)} in the register; no landing added one.")
+    return 0
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--root", default=None)
     ap.add_argument("--json", dest="json_out")
+    ap.add_argument("--ratchet", action="store_true",
+                    help="verdict by MEMBERSHIP against the offender register: "
+                         "fail when an offender is unregistered (a landing "
+                         "added one) or when an entry outlived its offender")
     ap.add_argument("--baseline", default=None)
     ap.add_argument("--write-baseline", action="store_true")
     a = ap.parse_args(argv)
@@ -367,11 +461,21 @@ def main(argv=None) -> int:
 
     new = sorted(set(now) - set(base))
     gone = sorted(set(base) - set(now))
+    if a.ratchet:
+        return _ratchet_verdict(new, root)
     print(f"  declaration scans over unstripped text: {len(now)} "
           f"(baseline {len(base)})")
     if gone:
-        print(f"  [NOTE] baseline shrank by {len(gone)}. Re-run with "
-              f"--write-baseline.")
+        # AN ERRAND IS NOT A FINDING (hygiene census #2066, CZH-12). This line
+        # used to read "Re-run with --write-baseline", which invites the next
+        # lane to bank every offender THIS run happened to see as accepted debt
+        # — the shrink and the arrivals are written by one flag. The shrink is
+        # reported, and the remedy is a reviewed deletion.
+        print(f"  [NOTE] the recorded set shrank by {len(gone)}: "
+              f"{', '.join(gone[:3])}{' …' if len(gone) > 3 else ''}")
+        print(f"         DELETE those lines from programs/{_BASELINE_NAME} as "
+              f"source, in the commit\n"
+              f"         that fixed them. Reviewed like code, in the diff.")
     if new:
         print(f"\n[FAIL] {len(new)} declaration regex(es) newly scan text no "
               f"stripper touched:")

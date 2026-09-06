@@ -3104,6 +3104,69 @@ def _run_cell(dim: int, sid: str, cwd: Path, flow_override: Optional[Path],
         shutil.rmtree(holder, ignore_errors=True)
 
 
+class MirrorUnavailable(RuntimeError):
+    """No scratch parent can hold a HARDLINK MIRROR of the checkout.
+
+    Raised, and turned into a NOT_VERIFIED skip by the caller, because a replay
+    that cannot mirror has measured NOTHING — it has not shown a mutation
+    failing to redden its witness.
+    """
+
+
+def _mirror_scratch_parent() -> Path:
+    """Where the hardlink mirror may live: it must accept a HARDLINK FROM the
+    checkout, and it must be writable.
+
+    Both halves are load-bearing and both used to be assumed.
+
+      * The mirror is built with `cp -al`. Hardlinks cannot cross a MOUNT POINT
+        — not merely a filesystem — so `st_dev` equality is NOT the test. Under
+        `tools/ci/run_suite_in_eda_image.sh`, the harness the landing gate uses,
+        `$REPO_ROOT` and `/tmp` are two separate BIND MOUNTS of one device:
+        `st_dev` matches and `cp -al` still fails EXDEV. Measured.
+      * `REPO_ROOT.parent` — the original choice, made to keep the links on one
+        filesystem — is NOT WRITABLE in that same harness, which binds the
+        checkout at its own path and nothing above it. Measured:
+        `PermissionError: [Errno 13] … '<repo parent>/matmut_…'`.
+
+    So each candidate is TRIED, with the operation that actually has to work: a
+    real `os.link` of a file that already exists in the checkout. Nothing is
+    written into the worktree — hardlinking does not modify its source.
+    """
+    src = None
+    for cand_src in sorted(REPO_ROOT.rglob("*.py")):
+        if cand_src.is_file():
+            src = cand_src
+            break
+    if src is None:                                   # pragma: no cover
+        raise MirrorUnavailable(f"no regular file under {REPO_ROOT} to link from")
+
+    tried = []
+    cands = [REPO_ROOT.parent]
+    tmpdir = os.environ.get("TMPDIR")
+    if tmpdir:
+        cands.append(Path(tmpdir))
+    cands.append(Path(tempfile.gettempdir()))
+    for cand in cands:
+        if not cand.is_dir():
+            tried.append(f"{cand}: not a directory")
+            continue
+        probe_dir = None
+        try:
+            probe_dir = tempfile.mkdtemp(prefix=".matmut_probe_", dir=str(cand))
+            os.link(src, os.path.join(probe_dir, "probe"))
+        except OSError as exc:
+            tried.append(f"{cand}: {exc.__class__.__name__} {exc.strerror or exc}")
+            continue
+        finally:
+            if probe_dir is not None:
+                shutil.rmtree(probe_dir, ignore_errors=True)
+        return cand
+    raise MirrorUnavailable(
+        "no scratch parent accepts a hardlink from the checkout, so `cp -al` "
+        "cannot build the isolated mirror every replay needs: "
+        + "; ".join(tried))
+
 def replay(mut: Mutation, sid: Optional[str] = None,
            timeout: int = 900, *,
            stall_looks: int = _pr.DEFAULT_STALL_LOOKS,
@@ -3141,9 +3204,15 @@ def replay(mut: Mutation, sid: Optional[str] = None,
     # ``cp -al`` fails every replay with EXDEV before either arm runs.  Put the
     # scratch beside (not inside) the git checkout: same filesystem for the
     # links, outside the worktree so the suite cannot observe its own mirror.
-    scratch_parent = REPO_ROOT.parent
+    # ONLY the PLUGIN_TREE channel builds a `cp -al` hardlink mirror, so only it
+    # needs a scratch that can hold one. A FLOW_YAML mutation edits a scratch
+    # copy of the yaml and never links anything — demanding a hardlink-capable
+    # parent for it would refuse a replay that has no such requirement, which is
+    # its own way of measuring the mount instead of the mutation.
     scratch = Path(tempfile.mkdtemp(
-        prefix=f"matmut_{mut.name}_", dir=str(scratch_parent)))
+        prefix=f"matmut_{mut.name}_",
+        dir=(str(_mirror_scratch_parent()) if mut.channel == PLUGIN_TREE
+             else None)))
     try:
         if mut.channel == FLOW_YAML:
             base = load_flow()
