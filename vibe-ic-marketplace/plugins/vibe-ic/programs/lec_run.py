@@ -2964,9 +2964,16 @@ class StepBudget:
         return sum(1 for a in self.attempts if a["launched"])
 
 
-def annotate_step_budget(report: Dict, budget: "StepBudget") -> Dict:
+def annotate_step_budget(report: Dict, budget: "StepBudget", *,
+                         stopped: Optional[bool] = None) -> Dict:
     """Record WHAT was attempted, WHICH resource ran out, and HOW MANY attempts
     were made onto the verdict the parser already produced.
+
+    `stopped` — was THIS run cut off by one of this producer's own stop markers
+    (`_TIMEOUT_MARKER` / `_STALL_MARKER`)? That, and NOT the verdict word, is
+    what separates "the clock ended it" from "it finished and decided". When it
+    is None the attempt record's `killed_by_budget` is used, which is what
+    every caller predating this parameter effectively asked for.
 
     ADDITIVE ONLY — it never touches `verdict` or `equivalent`. A budget-killed
     proof already classifies as a DISCLOSED non-PASS (`SKIPPED-CONDITION`, or
@@ -2984,6 +2991,15 @@ def annotate_step_budget(report: Dict, budget: "StepBudget") -> Dict:
     report["step_budget_exhausted"] = budget.exhausted()
     report["exhausted_resource"] = (
         "wall_clock_seconds" if budget.exhausted() else None)
+    # THE FIELD THAT SAYS WHICH OF THE TWO IT WAS. `step_budget_exhausted`
+    # answers "is the ADMISSION budget spent" and stays exactly what it was --
+    # true of a proof that legitimately ran long and then DECIDED as much as of
+    # one the clock cut off. A machine reader had no field that separated them,
+    # which is how a completed, engine-limited proof was consumed as a timeout.
+    report["step_budget_stopped_this_proof"] = (
+        bool(stopped) if stopped is not None
+        else any(a.get("killed_by_budget") for a in budget.attempts
+                 if a.get("launched")))
     if budget.exhausted():
         # THE BUDGET NO LONGER STOPS A RUNNING PROOF, so "exhausted" no longer
         # implies "produced nothing". It governs ATTEMPT ADMISSION: past the
@@ -2996,17 +3012,64 @@ def annotate_step_budget(report: Dict, budget: "StepBudget") -> Dict:
         # The machine-readable fields above are unchanged and still true (the
         # budget IS spent). Only the sentence splits, and only on whether the
         # producer actually reached a verdict.
-        _decided = str(report.get("verdict", "")).strip().upper() in (
-            "PASS", "FAIL")
+        # WHICH TEST DECIDES THIS, and why it is not the verdict word.
+        #
+        # MEASURED (opentitan_aes x sky130A with the ceiling removed, and
+        # reproduced on 8HD-9 on a 9-point miter with a 1s ADMISSION budget):
+        # the proof ran to completion through `equiv_induct -seq 64` -- rc 0,
+        # `killed_by_budget: false`, a closing `equiv_status`, 830 of 4072
+        # points proven, ZERO counterexamples, cause "SAT base case could not
+        # be established" -- and lec.json still said
+        #
+        #     "no attempt reached a verdict. The resource that ran out is
+        #      WALL-CLOCK TIME ... Raise --timeout"
+        #
+        # because the branch keyed on `verdict in ("PASS", "FAIL")`.
+        # INCONCLUSIVE is a DECIDED state -- it is the third of the three, and
+        # it is the one nearly every large sequential design lands on -- so the
+        # test excluded exactly the population it most needed to describe, and
+        # told its readers to buy time that could not have helped: raising
+        # --timeout cannot establish a base case the engine says diverges.
+        #
+        # A run that WAS stopped still gets the clock sentence, because for
+        # that run it is TRUE. The observable is this producer's OWN stop
+        # marker, never the verdict word.
+        _stopped = (bool(stopped) if stopped is not None
+                    else any(a.get("killed_by_budget") for a in launched))
+        _decided = not _stopped
         if _decided:
+            _tail = (
+                f" STEP BUDGET: the {budget.total_s}s admission budget was "
+                f"spent ({len(launched)} attempt(s), "
+                f"{report['step_elapsed_sec']}s elapsed), so no FURTHER "
+                "attempt would have been launched. It did not stop this one "
+                "-- the budget bounds attempts, not runtime -- and the "
+                "verdict above is the proof's own.")
+            # NAME THE COUNTS AND WHOSE LIMIT IT WAS, but only on positive
+            # evidence that a miter was built and a status was reached: a
+            # frontend abort is also "not stopped", and claiming a ladder ran
+            # for it would be the same class of unearned sentence in the other
+            # direction.
+            _miter = report.get("miter_points")
+            _proven = report.get("compared_points")
+            _unproven = report.get("unproven_points")
+            if (str(report.get("verdict", "")).strip().upper()
+                    not in ("PASS", "FAIL")
+                    and isinstance(_miter, int) and _miter > 0
+                    and isinstance(_proven, int) and isinstance(_unproven, int)
+                    and (_proven + _unproven) > 0):
+                _tail += (
+                    f" This run REACHED its {report.get('verdict')} on the "
+                    f"tool's own evidence -- the ladder ran to a closing "
+                    f"equiv_status over {_miter} point(s): {_proven} proven, "
+                    f"{_unproven} unproven, "
+                    f"{report.get('non_equivalent_points')} counterexample(s). "
+                    "The limit it hit is the ENGINE's, named in the verdict "
+                    "above; WALL-CLOCK TIME is not the resource that ran out "
+                    "and raising --timeout / VIBEIC_LEC_YOSYS_TIMEOUT_S cannot "
+                    "move it.")
             report["verdict_explanation"] = (
-                (report.get("verdict_explanation") or "").rstrip()
-                + f" STEP BUDGET: the {budget.total_s}s admission budget was "
-                  f"spent ({len(launched)} attempt(s), "
-                  f"{report['step_elapsed_sec']}s elapsed), so no FURTHER "
-                  "attempt would have been launched. It did not stop this one "
-                  "-- the budget bounds attempts, not runtime -- and the "
-                  "verdict above is the proof's own.")
+                (report.get("verdict_explanation") or "").rstrip() + _tail)
         else:
             report["verdict_explanation"] = (
                 (report.get("verdict_explanation") or "").rstrip()
@@ -4251,7 +4314,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                  "Yosys/Docker could not run — no equivalence evidence "
                  "produced. See reports/lec.rpt.")},
             resolved_top, gate_abs, liberty, liberty_source)
-        diag = annotate_step_budget(diag, budget)
+        diag = annotate_step_budget(
+            diag, budget, stopped=bool(_EXECUTION_STOP_RE.search(raw)))
         diag["lec_resume"] = resume_record
         _telemetry_finish("tool_unavailable", verdict=diag["verdict"],
                           equivalent=False,
@@ -4272,6 +4336,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         report["step_elapsed_sec"] = round(budget.elapsed_s(), 2)
         report["step_budget_exhausted"] = False
         report["exhausted_resource"] = None
+        report["step_budget_stopped_this_proof"] = False
     else:
         # §4.05 NO-LEAK: if the slang retry was attempted and slang ALSO failed
         # to build a miter, downgrade provisional INCONCLUSIVE to FAIL — a
@@ -4281,7 +4346,11 @@ def main(argv: Optional[List[str]] = None) -> int:
                               liberty_source)
         report["elapsed_sec"] = elapsed
         # WHAT was attempted, WHICH resource ran out, HOW MANY attempts.
-        report = annotate_step_budget(report, budget)
+        # `stopped` is MEASURED from this run's own log -- the producer writes
+        # those two markers itself and nothing else can -- so the budget
+        # sentence follows the evidence rather than the verdict word.
+        report = annotate_step_budget(
+            report, budget, stopped=bool(_EXECUTION_STOP_RE.search(raw)))
         report["gold_rtl_files"] = [Path(f).name for f in gold_files]
         report["gold_frontend"] = gold_frontend
         report["gold_defines"] = (
