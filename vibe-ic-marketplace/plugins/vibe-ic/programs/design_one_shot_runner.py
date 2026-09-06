@@ -1674,7 +1674,7 @@ def step_phase1(project: Path) -> StepResult:
     return StepResult("phase1", "FAIL",
                       time.time() - t0,
                       f"rc={rc} L_count={len(L_files)} "
-                      f"out_tail={(out+err)[-1000:]}")
+                      f"out_tail={_evidence_tail(out + err, 1000)}")
 
 
 def detect_ic_class(project: Path) -> Tuple[str, str]:
@@ -6776,7 +6776,7 @@ def _step_rtl_gen_bound(
     return StepResult("rtl_gen", "FAIL",
                       time.time() - t0,
                       f"rc={rc}{restored_note} "
-                      f"stderr_tail={err[-500:]}{_fb_note}",
+                      f"stderr_tail={_evidence_tail(err, 500)}{_fb_note}",
                       extras={"fallback_skill": _fb,
                               "generator_failed": gen_name,
                               "class_config": config} if _fb else None)
@@ -9828,7 +9828,7 @@ def _iverilog_compile_with_sv_fallback(
                 return (vrc, vout,
                         _vdiag + _LADDER_EXHAUSTED_NOTE.format(
                             first=_first_rung_summary(err or out),
-                            reason=_vl_reason[:200]),
+                            reason=_evidence_head(_vl_reason)),
                         "verilator_sv2017")
         # verilator unavailable / also rejected / non-assertion failure —
         # honest iverilog failure stands.
@@ -11155,7 +11155,7 @@ def _reference_tb_generic_full_stack(project: Path, top_name: str,
             time.time() - t0,
             (f"generic full-stack TB ({tb_path.name}) compiled but did "
              f"not reach FULL_STACK_TB_DONE (rc={rc}) — possible RTL "
-             f"defect. transcript_tail={out[-1000:]}"),
+             f"defect. transcript_tail={_evidence_tail(out, 1000)}"),
             [str(transcript)],
             extras={"verification_track": "generic_full_stack",
                     "aid_tb_skipped_reason": track_reason,
@@ -15056,7 +15056,7 @@ def step_yosys_synth(project: Path, top_name: str = "chip_top",
         except (subprocess.TimeoutExpired, OSError) as exc:
             snc = None
         if snc is not None and snc.returncode != 0:
-            tail = ((snc.stdout or "") + (snc.stderr or ""))[-1000:]
+            tail = _evidence_tail((snc.stdout or "") + (snc.stderr or ""), 1000)
             return StepResult(
                 "yosys_synth", "FAIL",
                 time.time() - t0,
@@ -15262,7 +15262,7 @@ def step_qsf_gen(project: Path, top_name: str = "chip_top",
                           [str(qsf)])
     return StepResult("qsf_gen", "FAIL",
                       time.time() - t0,
-                      f"rc={rc} out={out[-500:]} err={err[-500:]}")
+                      f"rc={rc} out={_evidence_tail(out, 500)} err={_evidence_tail(err, 500)}")
 
 
 def step_sdc_gen(project: Path, top_name: str = "chip_top",
@@ -15313,7 +15313,7 @@ def step_sdc_gen(project: Path, top_name: str = "chip_top",
                           [str(sdc)])
     return StepResult("sdc_gen", "FAIL",
                       time.time() - t0,
-                      f"rc={rc} out={out[-500:]} err={err[-500:]}")
+                      f"rc={rc} out={_evidence_tail(out, 500)} err={_evidence_tail(err, 500)}")
 
 
 # -------------------------------------------------------------------------
@@ -15344,10 +15344,10 @@ def step_otp_image_check(project: Path) -> StepResult:
     if rc == 0:
         return StepResult("otp_image_check", "PASS",
                           time.time() - t0,
-                          tail.splitlines()[0][:200] if tail else "")
+                          _evidence_head(tail) if tail else "")
     return StepResult("otp_image_check", "FAIL",
                       time.time() - t0,
-                      tail[-1000:])
+                      _evidence_tail(tail, 1000))
 
 
 # -------------------------------------------------------------------------
@@ -17573,7 +17573,7 @@ def step_dft_lec_chain(project: Path, top_name: str, container: str,
                 _dft_disclose_skip(
                     synth_dir / "post_dft_not_run.json",
                     f"yosys opt_clean of scan netlist failed (rc={rc}): "
-                    f"{(err or out)[-200:]}", _POST_DFT_SKIP_OWN)
+                    f"{_evidence_tail(err or out, 200)}", _POST_DFT_SKIP_OWN)
                 results.append(StepResult("post_dft_opt", "SKIP",
                                time.time() - t0,
                                f"post-DFT opt failed (rc={rc}) → disclosed-skip"))
@@ -19442,7 +19442,7 @@ def main() -> int:
                         "kind": "reserved_keyword_port_leak",
                         "token": tok,
                         "log": rel,
-                        "evidence": m.group(0)[:200],
+                        "evidence": _evidence_head(m.group(0)),
                     })
                     msg = (
                         f"Verilog reserved keyword '{tok}' appears as "
@@ -19461,7 +19461,7 @@ def main() -> int:
                     "port": port,
                     "module": mod,
                     "log": rel,
-                    "evidence": m.group(0)[:200],
+                    "evidence": _evidence_head(m.group(0)),
                 })
                 msg = (
                     f"L9.top_ports declares port '{port}' but RTL "
@@ -19472,7 +19472,7 @@ def main() -> int:
                 if msg not in out["next_steps"]:
                     out["next_steps"].append(msg)
             for m in _RE_YOSYS_ERROR.finditer(text):
-                err = m.group(1).strip()[:200]
+                err = _evidence_head(m.group(1).strip())
                 if not any(s.get("kind") == "yosys_error"
                             and s.get("evidence") == err
                             for s in out["signatures"]):
