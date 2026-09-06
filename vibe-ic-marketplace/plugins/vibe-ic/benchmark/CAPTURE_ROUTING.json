@@ -250,8 +250,8 @@
       "_note": "Bucket A target TBD — analog sizing loop currently has no single dedicated check program; the closest is the analog-sizing-loop skill itself. File a backlog if a deterministic sizing-loop checker is authored.",
       "bucket_B_skill_file": "skills/analog-sizing-loop/SKILL.md"
     },
-    "benchmark.program_retry": {
-      "description": "Explicit provenance-bound retry of a corrected Program validation step from preserved signed input, through the shared coordinator and ordinary declared validation route. Preserve prior output and proof; require a fresh independent review. This is neither an AI repair nor acceptance.",
+    "benchmark.program_regate": {
+      "description": "The ONE explicit Program re-entry: re-run the FIXED Program on one preserved, signed pre-gate input, in a staged project through the shared coordinator and the ordinary declared validation route. Bound by BOTH Program identities -- the declared version pair and the executable source tree. Preserve prior output and proof; require a fresh independent review. This is neither an AI repair nor an acceptance. Merged from benchmark.program_regate (v1.17.63) and benchmark.program_retry (v1.17.71) under #2047; --program-retry remains a deprecated alias of --program-regate.",
       "bucket_A_program": "programs/benchmark_dispatch.py",
       "bucket_A_related": [
         "programs/vibe_ic_one_shot_runner.py"
