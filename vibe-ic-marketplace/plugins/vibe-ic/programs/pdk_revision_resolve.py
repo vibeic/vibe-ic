@@ -208,8 +208,16 @@ _VERSIONS_SEGMENT = "versions"
 
 #: A revision token: a hex identifier of at least 12 characters, or a dotted
 #: release number. See the docstring for the two placeholders this rejects.
-_HEX_TOKEN = re.compile(r"^[0-9a-fA-F]{12,64}$")
-_DOTTED_TOKEN = re.compile(r"^[vV]?\d+(?:\.\d+)+(?:[-+.][0-9A-Za-z]+)*$")
+#:
+#: `\\A`/`\\Z`, NOT `^`/`$` — vibe-ic#2069. `$` matches BEFORE a final
+#: newline, so `re.match(r"...$", "2.5\\n")` succeeds and a value read
+#: straight out of a file kept its framing and was accepted anyway. That
+#: defeats the point of making `is_revision_token` exact: the framing is the
+#: evidence that the token was not declared as itself. Caught by this lane's
+#: own test rather than reasoned about, which is why that test drives every
+#: framing form.
+_HEX_TOKEN = re.compile(r"\A[0-9a-fA-F]{12,64}\Z")
+_DOTTED_TOKEN = re.compile(r"\A[vV]?\d+(?:\.\d+)+(?:[-+.][0-9A-Za-z]+)*\Z")
 
 #: When a source names no component (a bare token file, or a path segment),
 #: the record still needs a key to corroborate on. This is that key. It is not
@@ -232,13 +240,37 @@ def is_revision_token(tok: Any) -> bool:
     """Is *tok* something that identifies a source state, or a placeholder?
 
     Pure, and deliberately narrow — see the docstring's PLACEHOLDERS note.
+
+    EXACT, NOT STRIPPED — vibe-ic#2069. This used to `tok.strip()` first, and
+    that one call is what let a slice of PROSE be accepted as a revision.
+    MEASURED on `pdk_registry.json` at v1.17.98: sweeping every string in the
+    registry and every `/`-separated segment of every string, ONE token was
+    accepted —
+
+        ' 2.5 '
+
+    — a fragment of an explanatory `_note` reading ``lmax 0.9 / 2.5 / 5.0``,
+    split on its slashes. Stripped it is `2.5`, which matches the dotted
+    release form and is a perfectly good revision-SHAPED string. It declares
+    nothing. A revision is what a PDK tree DECLARES — its revision file, its
+    tag, its install path — never a string that happens to look like one, and
+    a token arriving with whitespace around it was cut out of something else
+    rather than declared.
+
+    So the framing is the evidence, and it is not thrown away here. Every
+    caller that reads a DECLARATION already hands this an exact token —
+    `ln.split()` / `text.split()` / `Path(...).parts` all yield
+    whitespace-free fields — and the one caller that reads a value out of a
+    JSON document (`_parse_node_info`) strips it THERE, deliberately, where
+    "the surrounding whitespace is framing in this file format" is a statement
+    somebody made about that format rather than a blanket rule applied to
+    every string in the repo.
     """
     if not isinstance(tok, str):
         return False
-    t = tok.strip()
-    if not t:
+    if not tok:
         return False
-    return bool(_HEX_TOKEN.match(t) or _DOTTED_TOKEN.match(t))
+    return bool(_HEX_TOKEN.match(tok) or _DOTTED_TOKEN.match(tok))
 
 
 # ---------------------------------------------------------------------------
@@ -364,8 +396,20 @@ def _parse_node_info(text: str) -> Dict[str, str]:
     commit = doc.get(_NODE_INFO_KEY)
     if not isinstance(commit, dict):
         return {}
-    return {str(k): v.strip() for k, v in commit.items()
-            if is_revision_token(v)}
+    # The ONE place a DECLARED value may legitimately arrive with framing
+    # whitespace: a JSON string field. Stripped here, at the reader, because
+    # this is a statement about THIS file format — not by `is_revision_token`,
+    # which since #2069 is exact so that a fragment cut out of prose cannot
+    # pass as a declaration. Both halves use the same stripped value, so the
+    # token that is TESTED is the token that is STORED.
+    out: Dict[str, str] = {}
+    for k, v in commit.items():
+        if not isinstance(v, str):
+            continue
+        t = v.strip()
+        if is_revision_token(t):
+            out[str(k)] = t
+    return out
 
 
 def _sha256_text(text: str) -> str:

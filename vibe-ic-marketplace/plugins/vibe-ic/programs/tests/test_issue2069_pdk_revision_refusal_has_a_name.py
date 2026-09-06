@@ -214,3 +214,102 @@ def test_the_resolver_cli_is_silent_about_the_refusal_when_it_resolves(
     rec = json.loads(out.read_text(encoding="utf-8"))
     assert rec["refusal"] is None
     assert rec["revision"] == fix.FIXTURE_REVISION_STR
+
+
+# ── a revision is DECLARED, never merely revision-SHAPED ──────────────────
+#
+# vibe-ic#2069, second finding (lane czpdkreg, red on the pristine tip).
+# `test_w6_pdk_revision_is_recorded::test_no_string_in_the_real_registry_is_
+# ever_accepted_as_a_revision` sweeps every string in `pdk_registry.json` and
+# every `/`-separated segment of every string, and at v1.17.98 exactly ONE was
+# accepted as a PDK revision:
+#
+#     ' 2.5 '
+#
+# It is a fragment of an explanatory `_note` reading ``lmax 0.9 / 2.5 / 5.0``,
+# cut out by the sweep's own split on slashes. `is_revision_token` stripped it
+# to `2.5`, which is a valid dotted release form — a perfectly good
+# revision-SHAPED string that declares nothing.
+#
+# The repair is that the predicate is EXACT. The framing whitespace IS the
+# evidence that the token was cut out of something rather than declared, and
+# throwing it away before matching is what made a slice of prose
+# indistinguishable from a declaration.
+
+def test_a_token_cut_out_of_prose_is_not_a_revision():
+    """The measured string, and the shape it came from."""
+    assert prr.is_revision_token(" 2.5 ") is False
+    assert prr.is_revision_token("2.5") is True, (
+        "the DECLARED form must still be accepted — a predicate that rejects "
+        "everything is not the fix")
+    # the same asymmetry over the hex form, so this is about framing and not
+    # about the dotted pattern specifically
+    assert prr.is_revision_token(" " + "a" * 40 + " ") is False
+    assert prr.is_revision_token("a" * 40) is True
+    # and every way prose framing arrives
+    for framed in ("\t2.5", "2.5\n", " 2.5", "2.5 ", "\n2.5\t"):
+        assert prr.is_revision_token(framed) is False, repr(framed)
+
+
+def test_the_real_registry_yields_no_revision_at_all():
+    """DRIVEN over the shipped `pdk_registry.json`, the way the w6 sweep does.
+
+    The registry is the REQUEST side — names, paths, decks, prose. Nothing in
+    it may be accepted as a revision, and the count is asserted as `0` against
+    a sweep whose own denominator is checked, so an empty sweep cannot pass as
+    a clean one.
+    """
+    reg = json.loads((PROGRAMS / "pdk_registry.json").read_text(
+        encoding="utf-8"))
+    entries = reg.get("pdks") or []
+    assert entries, "nothing was swept"
+    accepted, scanned = [], 0
+
+    def sweep(node):
+        nonlocal scanned
+        if isinstance(node, str):
+            for tok in [node] + [s for s in node.split("/") if s]:
+                scanned += 1
+                if prr.is_revision_token(tok):
+                    accepted.append(tok)
+        elif isinstance(node, dict):
+            for v in node.values():
+                sweep(v)
+        elif isinstance(node, list):
+            for v in node:
+                sweep(v)
+
+    sweep(entries)
+    assert scanned > 100, f"the sweep examined only {scanned} strings"
+    assert accepted == [], accepted
+
+
+def test_a_declared_value_with_framing_whitespace_still_resolves():
+    """THE OTHER DIRECTION, and the reason the strip moved rather than went.
+
+    A JSON declaration may legitimately carry framing whitespace around its
+    value. `_parse_node_info` strips it THERE — a statement about that file
+    format — so tightening the predicate must not lose a real declaration.
+    The token that is TESTED is the token that is STORED.
+    """
+    doc = json.dumps({prr._NODE_INFO_KEY: {
+        "comp_a": "  " + "b" * 40 + "\n",
+        "comp_b": " 2.5 ",
+        "comp_c": " unknown ",
+    }})
+    got = prr._parse_node_info(doc)
+    assert got == {"comp_a": "b" * 40, "comp_b": "2.5"}, got
+    assert "comp_c" not in got, "a placeholder is still refused"
+    for v in got.values():
+        assert v == v.strip(), f"stored un-normalised: {v!r}"
+
+
+def test_the_declaration_readers_are_unaffected_by_the_tightening():
+    """The other three sources hand the predicate whitespace-free fields by
+    construction (`split()` / `Path.parts`). Driven, so "by construction"
+    is measured rather than asserted."""
+    assert prr._parse_sources("comp_a   " + "c" * 40 + "  \n") == {
+        "comp_a": "c" * 40}
+    assert prr._parse_commit("  " + "d" * 40 + "\n  ") == {
+        prr.TREE_COMPONENT: "d" * 40}
+    assert prr._parse_sources("comp_a  2.5\n") == {"comp_a": "2.5"}
