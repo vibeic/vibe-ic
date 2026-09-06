@@ -222,6 +222,94 @@ def _declared_l19_target(project: Path):
         return None
 
 
+def _families_agree(a, b):
+    """`analog_pdk_availability.families_agree`, or None when it cannot be
+    imported. A comparison that could not be MADE must never read as a
+    comparison that came back clean."""
+    try:
+        sys.path.insert(0, str(PROGRAMS_DIR))
+        import analog_pdk_availability as _apa
+        return _apa.families_agree(a, b)
+    except Exception:
+        return None
+
+
+def _pdk_contradiction(args, project: Path):
+    """`(flag, declared)` when the run's `--pdk` CONTRADICTS the design's own
+    declaration, else None.
+
+    BIND OR REFUSE, NEVER SILENTLY IGNORE. Until `--pdk` was forwarded here at
+    all, an operator flag and a design declaration could disagree for a whole
+    campaign without one line of output saying so. Now that the flag arrives,
+    the disagreement has to be resolved somewhere, and there is no honest
+    silent answer: substituting the flag discards what the design says it is
+    for, and substituting the declaration discards what the operator asked to
+    measure. Both names go in the refusal and the run stops.
+
+    A missing declaration is NOT a contradiction — `families_agree` returns
+    None there and this returns None, so a project with no L19 target keeps
+    running on the operator's flag exactly as before."""
+    flag = (getattr(args, "pdk", "") or "").strip()
+    if not flag or flag.lower() == "auto":
+        return None
+    declared = (_declared_l19_target(project) or "").strip()
+    if _families_agree(flag, declared) is False:
+        return flag, declared
+    return None
+
+
+def _effective_analog_pdk(args, project: Path) -> str:
+    """The PDK selector the A-track's sub-producers run with, or "" when the
+    run has not been told and the design does not say.
+
+    Precedence: the run's own `--pdk`, then `VIBEIC_ANALOG_PDK`, then the
+    design's L19 declaration. THERE IS NO LITERAL DEFAULT, and the empty
+    string is a refusal signal for the caller — not a value to sweep with.
+    The default this replaced was the bare string "sky130", which is not even
+    an installed directory name (the installed family is `sky130A`), so it
+    could not have resolved for any project on any host."""
+    for cand in (getattr(args, "pdk", "") or "",
+                 os.environ.get("VIBEIC_ANALOG_PDK", "") or ""):
+        cand = cand.strip()
+        if cand and cand.lower() != "auto":
+            return cand
+    return (_declared_l19_target(project) or "").strip()
+
+
+#: What a sub-producer prints when the ENVIRONMENT, not the design, is what
+#: stopped it. Matched on the producer's own words rather than on an exit code,
+#: because the exit code it uses (2) is shared with the design-side refusals
+#: ("BLOCKED on A3_netlist_gen", "no successful sim") that a skill CAN act on.
+#: Structural, chip-AGNOSTIC: no tool is named that the producers do not
+#: themselves name in the same sentence.
+_ENV_GAP_MARKERS = (
+    "not in container",
+    "BLOCKED on host mount root",
+)
+
+
+def _producer_env_gap(cp):
+    """The sub-producer's own sentence when it could not REACH its tool, else
+    None. Returns the producer's words verbatim — the tool or the mount it
+    could not see is the whole value of the message to whoever reads the run
+    record, and flattening it into "artefact missing" is what hid this class
+    of gap for the length of a campaign."""
+    blob = ((cp.stderr or "") + "\n" + (cp.stdout or "")) if cp else ""
+    for line in blob.splitlines():
+        line = line.strip()
+        if line and any(m in line for m in _ENV_GAP_MARKERS):
+            return line[:400]
+    return None
+
+
+def _corner_results_exists(project: Path, block: str) -> bool:
+    """Did the sweep leave a `corner_results.json` behind? An environment gap
+    reported ALONGSIDE a written artefact is not a refusal — the artefact is
+    what the gate grades, so the existing branch keeps ownership of it."""
+    return (Path(project) / "phase3" / "analog" / block
+            / "corner_results.json").is_file()
+
+
 def _try_native_a6_pv(project: Path, block: str, container: str):
     """Run native per-block PV (svrfdrc DRC + klayout_pdk_lvs LVS) when the
     v1.4.24 resolver resolves the project's STAGED sign-off decks (rung 1/2).
@@ -1364,16 +1452,80 @@ def step_for_block(project: Path, block: Dict[str, Any], step_name: str,
             if step_name == "A4_corner_sweep":
                 real_prog = PROGRAMS_DIR / "analog_real_corner_sweep.py"
                 if real_prog.is_file():
+                    # THE CONTAINER IS READ THE WAY ITS SIX SIBLINGS READ IT.
+                    # This runner passes `--container` at seven sites; six
+                    # consult `args` first and fall back to the environment.
+                    # A4 alone omitted the `getattr`, so an orchestrated run
+                    # invoked with `--container <name>` still asked for
+                    # `vibeic-eda`. When that name is not running, the sweep
+                    # exits 2 having written nothing, and the fallthrough at
+                    # the bottom of this function reported "artefact missing —
+                    # invoke skill `ams-sim`": a deterministic producer that
+                    # could not reach its tool, reported as a step that needs
+                    # the AI. The consequence is that A4 — the corner sweep,
+                    # the A-track's only real simulation step — had never once
+                    # run under the orchestrator, on any design.
+                    _a4_container = (getattr(args, "container", None)
+                                     or os.environ.get(
+                                         "VIBEIC_ANALOG_CONTAINER",
+                                         "vibeic-eda"))
+                    # NO LITERAL PDK DEFAULT — AND NOTHING INVENTED IN ITS
+                    # PLACE. The default this replaces was a bare open-PDK
+                    # family name that is not an installed directory on any
+                    # host this repo runs on (every installed directory of
+                    # that family carries a revision suffix), so the selector
+                    # the runner sent was a name that could not resolve for
+                    # any project. It is deliberately not quoted here: a test
+                    # scans this block for a PDK literal, and a quotation
+                    # would be indistinguishable from a default. Now the runner
+                    # forwards a selector only when it HAS one — the run's
+                    # `--pdk`, the environment, or the design's own L19
+                    # declaration — and otherwise passes no `--pdk` at all.
+                    #
+                    # WHY NOT REFUSE WHEN NOTHING DECLARES A PDK. Measured:
+                    # the sweep does not need a selector to proceed. Its own
+                    # contract resolves the EFFECTIVE simulation PDK from the
+                    # project's L19 target / staged custom PDK by deck context
+                    # and stamps it into corner_results.json as
+                    # `pdk_used_for_sim`; the CLI selector only picks an
+                    # open-PDK fast path. A refusal here therefore blocks runs
+                    # the sweep can complete, and it does — it turns
+                    # `test_the_run_record_names_the_circuit_a4_measured`
+                    # (a real deck, no L19) from PASS_STRUCTURE_ONLY into a
+                    # refusal, and pre-empts the sweep's own upstream
+                    # A3-absent blocker in
+                    # `test_runner_records_blocked_block_as_fail_not_waived`.
+                    # Silence here hands the question to the one component
+                    # that can answer it; inventing a name did not.
+                    _a4_pdk = _effective_analog_pdk(args, project)
                     rs_cmd = [sys.executable, str(real_prog), str(project),
                               "--block", bname,
-                              "--container",
-                              os.environ.get("VIBEIC_ANALOG_CONTAINER",
-                                              "vibeic-eda"),
-                              "--pdk",
-                              os.environ.get("VIBEIC_ANALOG_PDK",
-                                              "sky130")]
+                              "--container", _a4_container]
+                    if _a4_pdk:
+                        rs_cmd += ["--pdk", _a4_pdk]
                     rs_cp = _pr.run(rs_cmd, capture_output=True,
                                             text=True)
+                    # A PRODUCER THAT COULD NOT REACH ITS TOOL IS NOT AN
+                    # HONEST "ARTEFACT NOT YET EMITTED". Without this the run
+                    # fell through to the WAIVED branch below, whose message
+                    # asks a reader to invoke `ams-sim` — but no skill can
+                    # supply a container or an ngspice binary, so the advice
+                    # could not be acted on and the environment gap was never
+                    # named. The row is BLOCKED (in `_FAIL_STATUSES`, so it
+                    # cannot round up to a green verdict) and carries the
+                    # ENV_UNAVAILABLE tier and the container name in `extras`.
+                    _env_gap = _producer_env_gap(rs_cp)
+                    if _env_gap and not _corner_results_exists(project, bname):
+                        return StepResult(
+                            step_name, bname, _spf.REFUSAL_STATUS,
+                            time.time() - t0,
+                            f"{_env_gap} (container={_a4_container})",
+                            extras={"producer": real_prog.name,
+                                    "producer_rc": rs_cp.returncode,
+                                    "container": _a4_container,
+                                    "pdk": _a4_pdk,
+                                    "verdict_tier": "ENV_UNAVAILABLE",
+                                    "env_unavailable": "container"})
                     # Re-run the substance gate whenever the sweep left an
                     # artefact behind — not only when the sweep exited 0.
                     #
@@ -1618,11 +1770,41 @@ def main() -> int:
                           "ANALOG_DETERMINISTIC_STUBS=1 env var."))
     p.add_argument("--blocks", default="",
                    help="comma-separated subset of block names; default = all")
+    p.add_argument("--pdk", default="",
+                   help=("PDK selector for the A-track's PDK-bound producers. "
+                         "Forwarded here by vibe_ic_one_shot_runner so a run "
+                         "driven with --pdk measures the PDK it names. When it "
+                         "CONTRADICTS the design's own L19 declaration the run "
+                         "REFUSES with both named; when it is absent the "
+                         "declaration is used; there is no literal default."))
     args = p.parse_args()
 
     project = args.project.resolve()
     if not project.is_dir():
         print(f"ERROR: not a directory: {project}", file=sys.stderr)
+        return 2
+
+    # BIND OR REFUSE. A `--pdk` that contradicts the design's own declaration
+    # is a question this runner is not entitled to answer by itself, so it
+    # answers with both names and stops rather than picking one in silence.
+    _contra = _pdk_contradiction(args, project)
+    if _contra:
+        _flag, _declared = _contra
+        msg = (f"--pdk {_flag} CONTRADICTS the design's own declared PDK "
+               f"target {_declared} (phase1/generated_docs/"
+               f"L19_CONSTRAINTS_PDK.json#fields.pdk_target). Refusing to "
+               f"substitute either one silently: re-run with --pdk "
+               f"{_declared}, or correct the design's declaration. Nothing "
+               f"was simulated and no analog artefact was written.")
+        print(f"[BLOCKED] analog_one_shot_runner: {msg}", file=sys.stderr)
+        out = _pl.report_path(project, "analog_one_shot.json")
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps({"phase": "analog",
+                                    "verdict": _spf.REFUSAL_STATUS,
+                                    "reason": msg,
+                                    "pdk_flag": _flag,
+                                    "pdk_declared": _declared,
+                                    "blocks": []}, indent=2) + "\n")
         return 2
 
     # v1.6.128 (#50 Fix 1) — differentiate "missing block list" from

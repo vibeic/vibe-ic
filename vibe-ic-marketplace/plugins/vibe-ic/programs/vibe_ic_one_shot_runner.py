@@ -1006,9 +1006,24 @@ def main() -> int:
     _analog_dispatch = run_analog and halted_at in ("", "phase2")
     if _analog_dispatch:
         runner = _phase_runner("analog")
-        rc = _run_phase("ANALOG A1..A8", runner,
-                         [str(project), "--container", args.container],
-                         env=_phase_env)
+        # `--pdk` REACHES THE ANALOG TRACK. Until now this was the only phase
+        # invocation that forwarded nothing: phase1 (above) and phase3 (below)
+        # both pass the operator's `--pdk` on, and the A-track — the one track
+        # whose every step is a PDK-bound simulation or a PDK-bound rule deck —
+        # was given only the container. A run driven with `--pdk <X>` therefore
+        # produced analog evidence that had nothing to do with `<X>`; measured
+        # on `u_hawaii_adc`, a run invoked with `--pdk sky130A` wrote
+        # `layout_provenance.json` naming ihp-sg13g2 twelve times, sky130A zero
+        # times, and raised no mismatch advisory. The label on that run was the
+        # only thing sky130A about it.
+        #
+        # `auto` is the argparse default and means "the design decides"; it is
+        # not a selector, so it is not forwarded — same test the phase1 site
+        # uses, so the two cannot drift apart.
+        _analog_args = [str(project), "--container", args.container]
+        if args.pdk and str(args.pdk).strip().lower() != "auto":
+            _analog_args += ["--pdk", str(args.pdk).strip()]
+        rc = _run_phase("ANALOG A1..A8", runner, _analog_args, env=_phase_env)
         rep = _read_report(_pl.report_path(project, "analog_one_shot.json"))
         verdict = rep.get("verdict") or ("PASS" if rc == 0 else "FAIL")
         plan.append(("analog", verdict, rc))

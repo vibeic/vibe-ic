@@ -63,8 +63,27 @@ say-so.
 
 chip-AGNOSTIC: no chip / vendor / SKU / design-name literal anywhere; the gate
 keys purely on Verilog structure.
-Contract: exit 0 = PASS, exit 1 = vacuous TB found,
-exit 2 = NOT_APPLICABLE / IO error (blocking vacuity tier in Step 4).
+Contract: exit 0 = PASS, exit 1 = vacuous TB found, exit 2 = this gate did
+not judge anything — and the REPORT says which of the two reasons that was:
+
+    verdict NOT_APPLICABLE — there was no TB to examine, and this gate says so
+        on purpose. rc 2 is the flow's DISCLOSED-SKIP convention (see the
+        `NOT_APPLICABLE` branch in `main`); `program_exit_zero` consumes it as
+        VACUOUS_PASS. It is NOT a failure of the design and must not be read
+        as one: a gate that examined nothing has accused nobody.
+    verdict IO_ERROR — the gate could not READ the tree. "Could not read it"
+        is not "read it and there was nothing", so this stays BLOCKING, and
+        the consumer names the path it could not read.
+
+A CONSUMER MUST BRANCH ON THE REPORT'S VERDICT, NOT ON THE BARE EXIT CODE.
+Until this was written, the contract line above declared rc 2 a blocking tier
+in Step 4 — contradicting the `NOT_APPLICABLE` branch forty lines below it —
+and `design_one_shot_runner.step_step4_functional_evidence` implemented the
+header rather than the branch: `if vacuous_rc != 0: ... "FAIL"`. So a
+disclosed skip reddened a run, and the reason the reader was handed named the
+wrong thing. The retired wording is deliberately NOT reproduced here: a test
+scans this header for it, and a quotation would be indistinguishable from the
+claim.
 """
 from __future__ import annotations
 
