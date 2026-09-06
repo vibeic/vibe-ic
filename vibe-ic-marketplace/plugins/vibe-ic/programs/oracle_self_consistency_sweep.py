@@ -74,6 +74,10 @@ from pathlib import Path
 
 _HERE = Path(__file__).resolve().parent
 _PLUGIN = _HERE.parent
+
+sys.path.insert(0, str(_HERE))
+
+from _atomic_artefact import write_json, write_text  # noqa: E402 - vibe-ic#1082
 _SCORER = _PLUGIN / "benchmark" / "score_iverilog_tb.py"
 _REGISTRY = _PLUGIN / "benchmark" / "BENCHMARK_REGISTRY.json"
 
@@ -684,9 +688,23 @@ def main(argv=None) -> int:
         return 2
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
-    (out / "theoretical_max.json").write_text(
-        json.dumps(res["theoretical_max"], indent=2) + "\n")
-    (out / "ORACLE_SWEEP.md").write_text(render_markdown(
+    # vibe-ic#1082 — the declared report appears under its final name only
+    # once it is complete. `Path.write_text` truncates first, so a death
+    # mid-write leaves a SHORT file that a reader cannot tell from a finished
+    # one — and both of these are read as evidence of a benchmark's
+    # theoretical maximum, where a truncated `broken` list reads as a cleaner
+    # result than the run actually measured.
+    #
+    # `ensure_ascii=True` is passed rather than taken from the helper's
+    # default: `write_json` defaults to False, and these payloads carry
+    # benchmark ids and failure evidence that are not always ASCII, so the
+    # default would silently re-encode them. MEASURED byte-identical to the
+    # call this replaces over five payload shapes; with the default, the
+    # non-ASCII one differs. Converting a call site must not also change what
+    # gets written.
+    write_json(out / "theoretical_max.json", res["theoretical_max"],
+               indent=2, ensure_ascii=True)
+    write_text(out / "ORACLE_SWEEP.md", render_markdown(
         a.bench, res, Path(a.dataset), image=a.image, host=a.host,
         semantic_elsewhere=semantic))
     tm = res["theoretical_max"]
