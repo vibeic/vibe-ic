@@ -295,16 +295,34 @@ LAYER_FILE_NAMES = {
     # silently fail with file-not-found.
     "L13": "L13_LAB_CALIBRATION.json",
     # Advanced / coverage-completeness layers (opt-in, see ADVANCED_LAYER_CODES).
+    #
+    # L16 / L18 / L20 / L23 carried SHORT names here — L16_COMPLIANCE.json,
+    # L18_INTERCONNECT.json, L20_DFT_SCAN.json, L23_SECURITY.json — that no
+    # producer in this repo has ever written. Same failure shape as L11 above,
+    # and the tree already says so in three places without anyone fixing the
+    # map: `professional_tb_gen.py` ("Phase 1 writes
+    # L16_COMPLIANCE_PROPERTIES.json"), `l_doc_consumer_contract.py`
+    # ("L20_DFT_SCAN.json while the emitter writes L20_DFT_SCAN_TOPOLOGY.json")
+    # and `test_l16_compliance_properties_actionable_check.py` ("a filename
+    # present in zero real runs"). Census over the whole tree at #2057:
+    #   L16  112 long : 7 short      L18  101 long : 2 short
+    #   L20  111 long : 2 short      L23  151 long : 2 short
+    # and every one of the short-name hits was this map, its bundled twin, or
+    # prose describing the defect. `programs/l_doc_taxonomy.py` is the naming
+    # authority and declares the long form for all four; they are aligned to it
+    # here. Until this line the fix in `from_existing_docs` reached 20 of the 24
+    # layers on accept_a2b / accept_espi / accept_lpddr5 — the four missing were
+    # exactly these four, opening files nobody writes.
     "L14": "L14_PROTOCOL_VERSIONING.json",
     "L15": "L15_ENCODING_TABLES.json",
-    "L16": "L16_COMPLIANCE.json",
+    "L16": "L16_COMPLIANCE_PROPERTIES.json",
     "L17": "L17_CHANNEL_SIGNAL_CATALOG.json",
-    "L18": "L18_INTERCONNECT.json",
+    "L18": "L18_INTERCONNECT_TOPOLOGY.json",
     "L19": "L19_CONSTRAINTS_PDK.json",
-    "L20": "L20_DFT_SCAN.json",
+    "L20": "L20_DFT_SCAN_TOPOLOGY.json",
     "L21": "L21_POWER_INTENT.json",
     "L22": "L22_VERIFICATION_PLAN.json",
-    "L23": "L23_SECURITY.json",
+    "L23": "L23_SECURITY_REQUIREMENTS.json",
     "L24": "L24_SIGNOFF.json",
     "L25": "L25_RELIABILITY_MISSION_PROFILE.json",
     "L26": "L26_MECHANICAL_TRANSDUCTION.json",

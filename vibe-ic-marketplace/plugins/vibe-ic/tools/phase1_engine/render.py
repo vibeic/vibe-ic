@@ -23,6 +23,7 @@ from .schema import (
     ALL_LAYER_CODES,
     Fact,
     FactGraph,
+    GENERATABLE_LAYER_CODES,
     LAYER_FILE_NAMES,
 )
 
@@ -432,7 +433,7 @@ def render_layers(
 
     Returns dict mapping layer code → written file path.
     """
-    layers = layers or ALL_LAYER_CODES
+    layers = layers or GENERATABLE_LAYER_CODES
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     written: Dict[str, Path] = {}
@@ -551,7 +552,7 @@ def render_human_docs(
     JSON, never the human-readable Markdown that the public 3-phase
     definition expects from a Phase-1 prompt entry.
     """
-    layers = layers or ALL_LAYER_CODES
+    layers = layers or GENERATABLE_LAYER_CODES
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     written: Dict[str, Path] = {}

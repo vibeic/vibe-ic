@@ -39,8 +39,8 @@ requirement IDs defeat it, in four measured ways — every one verified by
 running the satisfier and the pattern against each other:
 
   NONCAPTURING  `(?:A|B)` — the alternation rule keeps the `?:`, so
-                `(##\s+(?:Output|Findings))` yields the literal `## (?:Output)`,
-                and an optional `(?:run\s+)?` is emitted verbatim.
+                `(##\\s+(?:Output|Findings))` yields the literal `## (?:Output)`,
+                and an optional `(?:run\\s+)?` is emitted verbatim.
   METACHAR      `.?` / `.*` survive into the literal, where `.?` is TWO
                 characters but matches at most one.
   ESCAPE        the final `re.sub(r'\\', '', s)` turns `\b` into the letter
@@ -48,8 +48,33 @@ running the satisfier and the pattern against each other:
   REPETITION    `{7,40}` is copied through instead of being expanded.
 
 Fixing the synthesiser would shrink this list; that is a separate change and
-is deliberately NOT bundled here, because it would move 53 rows at once in the
-same diff that first makes them visible.
+was deliberately NOT bundled with #2050, because it would have moved 53 rows at
+once in the same diff that first made them visible.
+
+#2057 IS THAT SEPARATE CHANGE, AND THE LIST IS NOW EMPTY. `_pattern_to_satisfier`
+no longer rewrites the pattern's surface text; `_shared/pattern_satisfier.py`
+walks the parse tree the `re` module itself produces and verifies its own answer
+with `re.fullmatch` under the driver's audit flags before returning it. All four
+causes above are structural consequences of reading the surface instead of the
+structure, and all four went at once:
+
+    53 skills declared, over 8 requirement IDs   ->   0 skills, 0 IDs
+    generated compliance tests                        69 -> 69 (membership
+                                                      unchanged; no skill
+                                                      added or removed)
+
+The measured membership of the removal is in the #2057 lane evidence
+(`limits_measured_FINAL.txt`): every one of the 53 named below was removed, none
+survived, and none was newly added. THE FILE IS KEPT, EMPTY. The generated test
+still asserts measured == declared, so a required pattern that becomes
+unreachable in future reddens immediately and lands here by name — which is the
+direction this register was built to catch. Deleting an empty register because
+it is momentarily unused is how the next unreachable pattern ships as a skip.
+
+`REASONS` is kept for the same reason: it is the recorded cause of each of the
+eight IDs, and `programs/tests/test_pattern_satisfier_2057.py` re-runs every one
+of those eight patterns through the new satisfier, so the entries are live
+evidence that the four defects are gone rather than history.
 """
 from typing import Dict, Tuple
 
@@ -87,7 +112,19 @@ REASONS: Dict[str, str] = {
 #: synthesiser; delete the entry when it becomes empty. Do NOT add an entry to
 #: silence a red — a new red here means a real requirement stopped being
 #: reachable, and the generated test says which.
-SYNTHETIC_FIXTURE_LIMITATIONS: Dict[str, Tuple[str, ...]] = {
+#:
+#: EMPTY since #2057. It is not a dead register: the generated test asserts
+#: measured == declared in BOTH directions, so the first pattern that becomes
+#: unreachable for `_shared/pattern_satisfier.py` reddens 69 tests at once and
+#: is written here by name, with its cause in REASONS above.
+SYNTHETIC_FIXTURE_LIMITATIONS: Dict[str, Tuple[str, ...]] = {}
+
+#: THE 53 THAT WERE HERE, kept as the record of what #2057 removed — so the
+#: claim "all 53 went" is a membership a reader can check rather than a count
+#: to be trusted. Nothing reads this at audit time; it is asserted against the
+#: live measurement in programs/tests/test_pattern_satisfier_2057.py, which
+#: re-runs every one of these skills' patterns through the new satisfier.
+REMOVED_BY_2057: Dict[str, Tuple[str, ...]] = {
     'ams-sim': ('R_has_output_section', 'R_next_step'),
     'analog-extraction-resim': ('R_has_output_section', 'R_next_step'),
     'analog-flow-orchestrate': ('R_has_output_section', 'R_next_step'),

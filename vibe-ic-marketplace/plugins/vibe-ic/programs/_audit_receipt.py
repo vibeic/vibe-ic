@@ -86,39 +86,80 @@ def receipt_path_for(auditor: str, json_path: Union[str, Path]) -> Path:
     return Path(json_path).parent / receipt_filename(auditor)
 
 
+# `Path.resolve()` raises a BARE `RuntimeError` for ELOOP on CPython
+# (`pathlib.check_eloop`), not an `OSError` — an `except OSError` written for
+# exactly that case never fires. `programs/eda_report_audit.py::_in_scope`
+# records the same trap and the same measurement, reached through the
+# production command `drc_report_check . --mode drc --signoff --under
+# reports/phase3/drc_signoff.rpt`. Measured again here at #2057, when the
+# `--json` document started carrying a subject digest: a mutually-pointing
+# pair of report-named symlinks turned that gate from "a verdict about 11 DRC
+# items" into a traceback and NO verdict document at all. Every filesystem
+# touch in this module is guarded for both, and an unreadable item is recorded
+# as `basis: path` — never dropped, and never silently digested as empty.
+_FS_ERRORS = (OSError, RuntimeError, ValueError)
+
+
+def _safe_resolve(p: Path) -> Path:
+    try:
+        return p.resolve()
+    except _FS_ERRORS:
+        return p
+
+
+def _safe_is_file(p: Path) -> bool:
+    try:
+        return p.is_file()
+    except _FS_ERRORS:
+        return False
+
+
 def _file_digest(p: Path) -> Optional[str]:
     try:
         return sha256(p.read_bytes()).hexdigest()
-    except OSError:
+    except _FS_ERRORS:
         return None
 
 
-def subject_of(items: Iterable[Union[str, Path]]) -> Dict[str, Any]:
+def subject_of(items: Iterable[Union[str, Path]],
+               relative_to: Optional[Union[str, Path]] = None) -> Dict[str, Any]:
     """Describe what was audited, deterministically.
 
     Paths are resolved and sorted so two runs over the same subject in a
     different argument order produce the same digest, and a run over a
     different subject does not.
+
+    `relative_to` (#2057) re-expresses each item's recorded `path` relative to
+    that directory when it is under it. It CANNOT change the digest — the
+    digest is taken over basename + content hash and never over a path — and
+    it exists because a receipt that is itself a committed artefact must not
+    carry the absolute path of the machine that produced it. Omitted, the
+    resolved path is recorded exactly as before.
     """
-    resolved: List[Path] = []
-    for it in items:
-        p = Path(it)
-        try:
-            resolved.append(p.resolve())
-        except OSError:
-            resolved.append(p)
+    resolved: List[Path] = [_safe_resolve(Path(it)) for it in items]
     resolved.sort(key=str)
+
+    base: Optional[Path] = None
+    if relative_to is not None:
+        base = _safe_resolve(Path(relative_to))
 
     entries: List[Dict[str, Any]] = []
     basis = BASIS_CONTENT if resolved else BASIS_PATH
     for p in resolved:
-        digest = _file_digest(p) if p.is_file() else None
+        is_file = _safe_is_file(p)
+        digest = _file_digest(p) if is_file else None
         if digest is None:
             basis = BASIS_PATH
+        shown = p
+        if base is not None:
+            try:
+                shown = p.relative_to(base)
+            except ValueError:
+                shown = p
         entries.append({
-            'path': str(p),
+            'path': str(shown),
             'sha256': digest,
-            'is_file': p.is_file(),
+            'is_file': is_file,
         })
 
     # THE DIGEST IS MACHINE-INDEPENDENT ON PURPOSE. It is taken over

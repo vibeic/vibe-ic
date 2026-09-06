@@ -38,6 +38,7 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 
 import _atomic_output  # noqa: E402  (#1082 same-dir temp + atomic rename)
+import _audit_receipt  # noqa: E402  (#2057 content-addressed subject digest)
 from typing import List, Optional, Sequence, Tuple
 
 import lvs_verdict_tokens as _lvt  # #524 — shared netgen terminal-verdict tokens
@@ -74,6 +75,12 @@ class AuditResult:
     #: _json_report_signals_vacuous` already reads exactly this key off a
     #: gate's own --json report; this is the producer side of that reader.
     verdict: str = ""
+    #: #2057 — THE POPULATION `summary.files_found` COUNTS, by name. It is set
+    #: on the same line as that count, from the same list, so the two can never
+    #: describe different things. `main()` turns it into the `subject` block of
+    #: the emitted report and does NOT emit this field itself: the report
+    #: carries the content-addressed digest, not a machine's path list.
+    subject_files: List[str] = field(default_factory=list)
 
 
 # v0.119.21: tool-unavailable-for-PDK waiver. Custom open-source PDKs
@@ -1778,6 +1785,7 @@ def _check_drc(project_dir: Path) -> AuditResult:
     # is formed, and this is the whole decision being added.
     result.passed = (own_design and determined_files > 0 and real_total == 0 and authentic
                      and not unreadable and not contradictions)
+    result.subject_files = [str(f) for f in files]
     result.summary = {"files_found": len(files), "categories_found": cats_found,
                       "design_binding": design_binding,
                       "has_count": has_count, "tool_authentic": authentic,
@@ -2003,6 +2011,7 @@ def _check_lvs(project_dir: Path) -> AuditResult:
     # keyword found (report structure) AND an authentic tool signature.
     result.passed = (own_design and verdict == "MATCH"
                      and len(cats_found) > 0 and authentic)
+    result.subject_files = [str(f) for f in files]
     result.summary = {"files_found": len(files), "categories_found": cats_found,
                       "design_binding": design_binding,
                       "tool_authentic": authentic,
@@ -2115,6 +2124,7 @@ def _check_power(project_dir: Path) -> AuditResult:
                 file=rel))
 
     result.passed = own_design and has_leak and has_dyn and authentic and machine_ok
+    result.subject_files = [str(f) for f in files]
     result.summary = {"files_found": len(files), "has_leakage": has_leak,
                       "design_binding": design_binding,
                       "has_dynamic": has_dyn, "tool_authentic": authentic,
@@ -2239,6 +2249,7 @@ def _check_em(project_dir: Path) -> AuditResult:
             file=rel))
 
     result.passed = own_design and has_density and authentic and machine_ok
+    result.subject_files = [str(f) for f in files]
     result.summary = {"files_found": len(files), "has_density": has_density,
                       "design_binding": design_binding,
                       "positive_current_in_report": positive_current,
@@ -2323,6 +2334,7 @@ def _check_ir_drop(project_dir: Path) -> AuditResult:
         break
 
     result.passed = own_design and has_drop and authentic and budget_ok
+    result.subject_files = [str(f) for f in files]
     result.summary = {"files_found": len(files), "has_drop_value": has_drop,
                       "design_binding": design_binding,
                       "tool_authentic": authentic,
@@ -2933,6 +2945,7 @@ def _check_sta(project_dir: Path) -> AuditResult:
                       and not real_violation_found
                       and not not_measured_hard
                       and not basis_offenders and not unreadable)
+    result.subject_files = [str(f) for f in files]
     result.summary = {"files_found": len(files),
                       # The third value, published beside the verdict rather
                       # than folded into it. `sta_not_measured_hard` is why a
@@ -3159,6 +3172,7 @@ def _check_antenna(project_dir: Path) -> AuditResult:
         result.passed = False
     else:
         result.passed = authentic and own_design
+    result.subject_files = [str(f) for f in files]
     result.summary = {"files_found": len(files), "violations": total_viol,
                       "design_binding": design_binding,
                       "clean": clean_flag, "tool_authentic": authentic}
@@ -3244,6 +3258,31 @@ def main(argv: list = None) -> int:
     # would be a field that says nothing on every report ever written.
     if not report.get("verdict"):
         report.pop("verdict", None)
+
+    # #2057 — THE `--json` DOCUMENT IS ITS OWN RECEIPT.
+    #
+    # The four `eda_report_audit` wrappers that sit inside phase-3 sign-off
+    # (`drc_report_check`, `lvs_report_check`, `ir_drop_report_check`,
+    # `sta_report_check`) write to a caller-chosen `--json` path which IS a
+    # declared step output — `reports/phase3/lvs.json` at step 31,
+    # `reports/phase3/sta/post_route_summary.json` at step 23, and so on.
+    # #2050 left all four UNREGISTERED and blocking rather than write a second
+    # artefact into a sign-off directory whose contents are accounted
+    # elsewhere. The ruling on #2057 is that no second file is needed: this
+    # document becomes the receipt by carrying the one field it lacked.
+    #
+    # `subject` is `_audit_receipt.subject_of` over exactly the population
+    # `summary.files_found` counts — a content-addressed digest over
+    # basename + sha256, identical in any checkout and different for any other
+    # subject, so a stale audit beside a fresh report is detectable instead of
+    # indistinguishable. `basis` states whether the digest witnessed bytes
+    # (`content`) or only paths (`path`); it is never assumed.
+    #
+    # Every mode gains it, not only the four: this is the single write site
+    # behind six sign-off wrappers, and a field present on some reports and
+    # absent on others would make its absence ambiguous.
+    report["subject"] = _audit_receipt.subject_of(
+        report.pop("subject_files", []), relative_to=project_dir)
     report_json = json.dumps(report, indent=2, ensure_ascii=False)
 
     if args.json:

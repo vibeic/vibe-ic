@@ -26,10 +26,21 @@ from .schema import (
     ALL_LAYER_CODES,
     Fact,
     FactGraph,
+    GENERATABLE_LAYER_CODES,
     LAYER_CODES,
     LAYER_FILE_NAMES,
     Provenance,
 )
+
+# THE ONE ROUND-TRIP POPULATION (#2057). Both directions of the round trip walk
+# `GENERATABLE_LAYER_CODES` — the set `render.render_layers` can write — so the
+# reverse-extract cannot read fewer layers than the renderer emits. It used to
+# walk `ALL_LAYER_CODES` (14) while the renderer could write 28, and L14..L27
+# were written by Phase 1 and dropped here without a word: measured on
+# accept_a2b / accept_espi / accept_lpddr5, 24 files in, 14 layers out, ten
+# layers gone. This is deliberately the RENDERER's own list and NOT a second
+# hand-fed register beside it; a second list is the thing that drifted.
+_ROUND_TRIP_LAYER_CODES = GENERATABLE_LAYER_CODES
 
 
 # ---------------------------------------------------------------------------
@@ -117,7 +128,7 @@ def from_existing_docs(
     inferred_class = class_path
     fg = FactGraph(ic_name="__unknown__", class_path="__unknown__")
 
-    for code in ALL_LAYER_CODES:
+    for code in _ROUND_TRIP_LAYER_CODES:
         fname = LAYER_FILE_NAMES.get(code)
         if not fname:
             continue
@@ -181,7 +192,7 @@ def from_structured_yaml(yaml_path: Path) -> FactGraph:
         class_path=doc.get("class_path", "__unknown__"),
     )
 
-    for code in ALL_LAYER_CODES:
+    for code in _ROUND_TRIP_LAYER_CODES:
         tree = doc.get(code)
         if not isinstance(tree, dict):
             continue
