@@ -33,7 +33,7 @@ import sys
 import time
 from pathlib import Path
 
-IMAGE = "ghcr.io/vibeic/vibeic-eda@sha256:8da785a8d3275884ad0d0ee0fb10f7e90d8b7bf11a08d38e9559b0764112480f"
+IMAGE = "ghcr.io/vibeic/vibeic-eda@sha256:8c5694abdf5c269c1d9def5368704e0c4b51c869d1d9c9380e123e07657fe9eb"
 IMAGE_ID = "sha256:" + "1" * 64
 CID = "2" * 64
 PREFIX = "VIBEIC_PROGRESS "
