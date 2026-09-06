@@ -941,6 +941,64 @@ def render_netlist(ir: Dict[str, Any], pdkctx: Dict[str, Any],
     return "\n".join(L)
 
 
+# ── the integration control the emitted testbench carries ─────────────────
+# MEASURED (lane czdsm, 2026-09-07, 8HD-6, image vibeic-eda 0.3.47
+# sha256:8da785a8…, ngspice-47): the A3 testbench used to carry NO `.options`
+# card at all, so every deck this producer verified ran on ngspice's SPICE3
+# default `trtol = 7`. On the `delta_sigma` block of a real project that
+# default ABORTS the transient:
+#
+#     doAnalyses: TRAN: Timestep too small; time = 2.61293e-05,
+#     timestep = 4.87367e-21: trouble with node "xdut.nbias"
+#
+# and A3 then deleted a netlist that had passed all five static checkers,
+# wrote `NETLIST_NOT_SIMULATABLE`, and left A4..A7 BLOCKED on "no *.sp".
+#
+# THE NODE IN THE MESSAGE IS THE MESSENGER, NOT THE FAULT. `nbias` was
+# measured, isolated and in circuit, to carry 41.13 uA from a 17.32 kohm
+# bias resistor into the diode-connected mirror reference, to sit at
+# 0.487795 V with roughly 830 ohm of small-signal impedance, and to move
+# 2.6 mV over the 33 clock cycles before the abort. Held at that potential
+# by an ideal source it stops being named and the same abort reappears on
+# `xdut.ntail_cm`. It is not floating and no netlist change reaches it.
+#
+# `trtol` IS NOT AN ACCURACY TOLERANCE — it is the factor the local
+# truncation error bound is MULTIPLIED by when the next timestep is chosen,
+# so a smaller value asks for a SMALLER step and a TIGHTER error. Emitting it
+# is therefore the opposite of a relabel, and the measurement says so in both
+# directions: LOOSENING (reltol 1e-2 / abstol 1e-10 / vntol 1e-5) fails
+# SOONER, at 14.05 us; the four idioms that could hide a singularity all fail
+# too (rshunt 1e12 -> 143.1 us, gmin 1e-9 -> 87.3 us, method=gear -> 38.2 us,
+# itl4=100 -> byte-identical to the default at 26.13 us); trtol 3 -> 8.97 us
+# and trtol 2 -> 24.57 us still fail; trtol 1 COMPLETES all 399251 ns and the
+# modulator's own measurement comes out real (density 0.4344, swing 1.0659).
+#
+# IT IS THE INTEGRATION, NOT THE DECK. Under the default the abort time is
+# not a property of the circuit at all — halving the maximum step moves it
+# from 26.13 us to 203.54 us and quartering it to 145.44 us, non-monotonically.
+# Under `trtol=1` the run COMPLETES at both steps and answers the same:
+# density 0.434376 at 3.89894 ns and 0.436314 at 1.94947 ns, swing 1.06594
+# and 1.06597. Every quiescent node agrees with the default-trtol run to five
+# decimals over the window that run reached (nbias 0.48779 both, vcm 0.58996
+# both, nd2_cm 0.42144 vs 0.42142): the physics is the same, computed with
+# the error control the deck always needed.
+#
+# It is emitted for EVERY block this producer renders, not for the class that
+# was measured: a per-block-type options table is the template table this
+# program exists to not be, and an integration control is a property of the
+# SIMULATOR and of this producer's own verification, never of the design.
+_TB_INTEGRATION_OPTIONS = (
+    "* the integration control this producer verifies under — see "
+    "`_TB_INTEGRATION_OPTIONS`",
+    ".options trtol=1",
+)
+#: ngspice / SPICE3 ship `trtol = 7`. A value at or above it asks for a step
+#: at least as large as the default and so verifies nothing; the guard in
+#: `test_a3_testbench_carries_integration_control` holds the emitted card
+#: strictly below it rather than to the literal 1, so tightening it further
+#: stays legal and silently dropping it cannot.
+_NGSPICE_DEFAULT_TRTOL = 7.0
+
 def render_testbench(ir: Dict[str, Any], pdkctx: Dict[str, Any],
                      env: Dict[str, Any], prov_lines: List[str]
                      ) -> Tuple[Optional[str], Dict[str, Any], List[str]]:
@@ -992,6 +1050,10 @@ def render_testbench(ir: Dict[str, Any], pdkctx: Dict[str, Any],
     L.append(f"xdut {' '.join(ports)} {block}")
     for ln in tb.get("cards") or []:
         L.append(ln.format(**fmt))
+    # TOP LEVEL, before `.control`: an `.options` card inside a `.control`
+    # block is a `ngspice` interactive command, not a circuit option, and the
+    # analysis that follows would still run on the default.
+    L.extend(_TB_INTEGRATION_OPTIONS)
     L.append(".control")
     for ln in tb.get("control") or []:
         L.append(ln.format(**fmt))
