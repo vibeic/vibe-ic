@@ -146,6 +146,76 @@ CVDP scoring additionally requires `--scorer-root <official-cvdp-root>` (or
 `CVDP_BENCHMARK_ROOT`) and the exact official simulation images. Run the shipped
 EDA image preflight before scoring. Do not substitute tools silently.
 
+### Explicit Program retry of a preserved signed repair
+
+When a Program gate transformed an AI repair into different bytes, the existing
+`AI_REPAIR_FINAL_PROVENANCE_REQUIRED` refusal remains authoritative. An upgraded
+Program can now be tried against the preserved, originally signed input with:
+
+```bash
+python3 programs/benchmark_dispatch.py <bench> --resume \
+  --dataset <DATASET> --run <RUN> --worker-threads 1 \
+  --program-retry <RUN>/program_retry_request.json
+```
+
+This operation is BLOCKING and initially supports only an unaccepted,
+unpublished `AI_REPAIR` task with a valid signed input snapshot. It does not
+authorize AI edits, refresh a signature, supersede a test, or accept a result.
+The normal repair boundary automatically saves `repair_input_candidate_snapshot`
+before running gates. For a legacy task, supply an existing candidate manifest
+whose exact RTL hash matches the unchanged signed repair record and whose
+`source_rtl_paths` exactly match the task's working RTL paths. Reconstructing an
+unsigned input, supplying arbitrary RTL files, and other candidate origins are
+unsupported and refused.
+
+The request is a JSON object with these fields:
+
+| Field | Required binding |
+| --- | --- |
+| `schema` | `vibeic.benchmark.program_retry.v1` |
+| `id` | Exact pending task ID |
+| `task_sha256` | SHA-256 of `json.dumps(task, ensure_ascii=False, sort_keys=True)` |
+| `prompt_sha256`, `rtl_sha256` | Task's current prompt and frozen output hashes |
+| `repair_record_sha256` | SHA-256 of the unchanged signed record's exact file bytes |
+| `input_manifest_path`, `input_manifest_sha256` | Preserved input manifest and its exact file hash |
+| `input_rtl_sha256` | Preserved input hash, equal to signed `repaired_rtl_sha256` |
+| `program_identity` | Current `benchmark_dispatch._program_retry_identity()` object |
+| `reason` | Explanation of the Program retry, at least 20 characters |
+| `review_sha256`, `challenge_sha256` | Exact current proof file hashes if a current review/test exists; otherwise omit or use null |
+
+The identity fingerprints installed runtime source and configuration, including
+dirty edits. It is checked again after the runner. A prior retry with the same
+identity is refused; legacy tasks lack an earlier Program fingerprint, so the
+request records the newly observed identity without claiming a measured prior
+identity. Requests, input snapshots, and evidence must be regular files inside
+the run with no symlink traversal. Normal relative project links to locations
+inside the same project are preserved, including missing optional targets;
+absolute or escaping project links are refused.
+
+Under the existing coordinator lock, the operation runs the ordinary supplied-RTL
+validation entry (`2`) with the original declared exit, in a staged project.
+Collection uses the normal runner predicate; the exact return code and raw
+reports remain available. It preserves the complete prior project, prior task,
+solve/acceptance/worklist bytes, and any current review/test under
+`program_retries/<id>/<request-sha>/`. Staged gate outputs remain at their original
+paths so references in reports remain usable. Current and inherited challenges
+remain obligations of the fresh independent review. Program actions are recorded
+separately from the original AI repair author.
+
+Successful retry freezes a candidate in a fresh request-addressed snapshot,
+creates unoccupied review/test paths, and returns `2` with `PENDING`. Complete
+the fresh independent review and invoke ordinary `--resume` afterward. If the
+new output still differs from the signed input, the unchanged final-provenance
+check still refuses acceptance. Existing signatures and historical challenges
+cannot be automatically rebound to the new output.
+
+Runner failures preserve the original project/task and write a bound failure
+record. An interrupted operation without a valid terminal record emits
+`PROGRAM_RETRY_REFUSED` and blocks ordinary resume. Reconcile the immutable
+intent, staged output, preserved prior project, and transition before continuing;
+automatic rollback and guessed recovery are deliberately unsupported. Do not
+delete a journal or overwrite owner edits to make resume advance.
+
 Before invoking any official host scorer, run the deterministic cwd guard over
 the exact design and scorer working directory (and testbench when applicable):
 
