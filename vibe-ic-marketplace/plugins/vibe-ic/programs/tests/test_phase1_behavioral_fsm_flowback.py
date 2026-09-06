@@ -1007,8 +1007,11 @@ def test_canonical_writer_refuses_root_replaced_after_emit_before_write(
     displaced = tmp_path / "project.displaced"
     real_emit = canonical_primitive.emit_rtl
 
-    def _emit_then_replace(shape):
-        rtl = real_emit(shape)
+    def _emit_then_replace(shape, desc_text=""):
+        # follows canonical_primitive_synth.emit_rtl's call shape, which now
+        # carries the description a CONTRACT-composed shape is composed from;
+        # the assertions below are unchanged.
+        rtl = real_emit(shape, desc_text)
         project.rename(displaced)
         project.mkdir()
         return rtl

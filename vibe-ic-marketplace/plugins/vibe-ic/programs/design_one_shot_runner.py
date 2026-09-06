@@ -2186,7 +2186,10 @@ def _try_canonical_primitive_rtl(
         return None  # DEFER → fall through to spec-to-rtl
     module = _cps.module_name_of(desc) or "chip_top"
     try:
-        rtl = _cps.emit_rtl(shape)
+        # `desc` is passed so a CONTRACT-composed shape can be composed from the
+        # acceptance contract the description states; the sixteen fixed-template
+        # shapes ignore it and emit byte-for-byte what they always emitted.
+        rtl = _cps.emit_rtl(shape, desc)
     except Exception as e:
         return StepResult("rtl_gen", "FAIL", time.time() - t0,
                           f"canonical_primitive_synth emit failed for {shape}: {e}")
@@ -2199,14 +2202,37 @@ def _try_canonical_primitive_rtl(
         # the exact point where a replacement project could be adopted.
         publication = _publish_phase1_rtl_no_clobber(project, out, rtl)
         publication.require_current_chain()
+        # A CONTRACT-composed shape carries its own check: the queue scoreboard
+        # (F6) / ratio-and-latency count (F7) that issue #2035 asks for, composed
+        # from the SAME contract as the RTL, so the stage and the thing that
+        # checks it cannot drift apart. Published only for the composed shapes
+        # (the sixteen fixed templates get nothing new), NEVER over an existing
+        # file, and never able to affect the RTL result: a failure to publish it
+        # is recorded in `scoreboard_tb` rather than raised, because the RTL is
+        # the step's product and the scoreboard is additive evidence.
+        tb_written, tb_note = None, None
+        if shape in getattr(_cps, "_CONTRACT_SHAPES", {}):
+            tb_path = _pl.tb_dir(project) / f"tb_{module}.v"
+            try:
+                if tb_path.exists():
+                    tb_note = f"kept the existing {tb_path.name}"
+                else:
+                    tb_path.parent.mkdir(parents=True, exist_ok=True)
+                    contract = _cps.extract_handshake_contract(desc)
+                    with open(tb_path, "x") as fh:
+                        fh.write(_cps.emit_scoreboard_tb(contract))
+                    tb_written = str(tb_path)
+            except Exception as e:
+                tb_note = f"scoreboard not published: {type(e).__name__}: {e}"
         result = StepResult(
             "rtl_gen", "PASS", time.time() - t0,
             f"deterministic RTL via canonical_primitive_synth[{shape}] "
             f"(program-first; no LLM) -> {out.relative_to(project)}",
-            output_files=[str(out)],
+            output_files=[str(out)] + ([tb_written] if tb_written else []),
             extras={"deterministic_generator": "canonical_primitive_synth",
                     "shape": shape, "module": module,
-                    "program_first": True})
+                    "program_first": True,
+                    "scoreboard_tb": tb_written or tb_note})
         publication.require_current_chain()
         return result
     except Exception:

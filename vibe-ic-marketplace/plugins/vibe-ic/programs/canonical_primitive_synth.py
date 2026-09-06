@@ -27,6 +27,14 @@ capture of designs that the flow otherwise defers to an LLM authoring pass
     mealy_seq_detector_10011   -> fsm              (overlapping 10011 detector)
     pipelined_ripple_adder_64  -> adder_pipe_64bit (registered 16-bit slices)
 
+Two further shapes own NO template. They are COMPOSED from a handshake/
+acceptance contract extracted from the input (see "handshake/acceptance layer"),
+so the emitted module name, port names, widths, reset style and ratio are the
+input's own:
+
+    elastic_handshake_stage    -> <stated module>  (valid/ready both directions)
+    event_ratio_divider        -> <stated module>  (N input events -> 1 output)
+
 FAIL-CLOSED CONTRACT
 --------------------
 `detect_shape(desc_text)` returns exactly one of the sixteen shape keys ONLY when the
@@ -388,17 +396,60 @@ _DETECTORS: List[Tuple[str, object]] = [
 
 
 def detect_shape(desc_text: str) -> Optional[str]:
-    """Return one of the nine shape keys, or None (FAIL-CLOSED) if no shape tightly
-    matches. Detection reads the STRUCTURE: module-name token + port role set +
-    distinctive prose phrase — never the directory/leaf name."""
+    """Return one of the SIXTEEN template shape keys, or a CONTRACT-composed shape
+    key, or None (FAIL-CLOSED) if the input states no shape tightly.
+
+    Detection reads the STRUCTURE: module-name token + port role set +
+    distinctive prose phrase - never the directory/leaf name.
+
+    A template shape is additionally WITHDRAWN when the input states a
+    structural implementation directive the fixed topology for that shape
+    contradicts (`architecture_conflict`): detection is not the same thing as
+    topology, and a design that matches the shape words while being legitimately
+    built another way must reach the AI author untouched rather than be
+    overwritten. `route_to_ai_reason` names the conflict.
+    """
     if not desc_text or not desc_text.strip():
         return None
     mod = module_name_of(desc_text)
     ports = _port_tokens(desc_text) - _NOISE
     matched = [key for key, det in _DETECTORS if det(desc_text, mod, ports)]
     if len(matched) == 1:
+        if architecture_conflict(desc_text, matched[0]) is not None:
+            return None  # stated architecture contradicts the topology -> AI
         return matched[0]
-    # zero matches -> DEFER; >1 (should not happen given tightness) -> ambiguous DEFER
+    if not matched:
+        # No fixed topology claims this input; it may still fully STATE a
+        # handshake/acceptance contract we can compose.
+        return _contract_shape(desc_text)
+    # >1 (should not happen given tightness) -> ambiguous DEFER
+    return None
+
+
+def route_to_ai_reason(desc_text: str) -> Optional[Dict]:
+    """Why this input was DEFERRED, when the program can say so by name.
+
+    Returns None when nothing was deferred or when there is nothing specific to
+    say. Never guesses a value: it names what the input did not state, or the
+    stated directive that made a fixed topology inapplicable.
+    """
+    if detect_shape(desc_text) is not None:
+        return None
+    mod = module_name_of(desc_text or "")
+    ports = _port_tokens(desc_text or "") - _NOISE
+    matched = [key for key, det in _DETECTORS if det(desc_text or "", mod, ports)]
+    if len(matched) == 1:
+        conflict = architecture_conflict(desc_text, matched[0])
+        if conflict is not None:
+            return {"route": "ai_author", "kind": "architecture_conflict",
+                    **conflict}
+    try:
+        c = extract_handshake_contract(desc_text or "")
+    except Exception:
+        c = None
+    if c is not None and c.kind is not None and c.unresolved:
+        return {"route": "ai_author", "kind": "unstated_contract_fields",
+                "contract_kind": c.kind, "unresolved": list(c.unresolved)}
     return None
 
 
@@ -1653,15 +1704,903 @@ _SHAPE_MODULE: Dict[str, str] = {
 }
 
 
-def emit_rtl(shape: str) -> str:
-    """Return the exact verified-correct RTL for the given shape key."""
+# ================================================== architecture-directive layer
+# WHY THIS LAYER EXISTS (measured, 2026-09-06, lane cz2035p, base 764d6b3e5)
+# ------------------------------------------------------------------------
+# The detector set above is fail-closed on the SHAPE WORDS, which protects every
+# design that misses them. It does NOT protect the design that MATCHES them and
+# is legitimately built another way: two neutral input-only descriptions naming
+# `Module name: barrel_shifter` with ports in/ctrl/out both returned EMIT rc=0 and
+# were overwritten with the fixed three-mux hierarchy — one of them while the
+# input said in plain words "must not instantiate any submodule and must not use
+# a generate block". A stated implementation directive was silently violated.
+#
+# So detection is separated from topology here: a template is a proposal, and it
+# is withdrawn when the INPUT ITSELF states a structural directive the template
+# contradicts. The program then DEFERS and NAMES the conflict for the AI author
+# instead of guessing. The 16 templates are untouched and still emit byte-for-byte
+# what they emitted before for every description that states no such directive.
+
+# Structural implementation properties an input can demand or forbid, and the
+# input phrases that name them. Chip-agnostic: no design, PDK or vendor word.
+_ARCH_TAG_PHRASES: Dict[str, Tuple[str, ...]] = {
+    "submodule_instantiation": ("submodule", "sub-module", "sub module",
+                                "child module", "module instantiation",
+                                "instantiated module", "hierarchy",
+                                "hierarchical"),
+    "generate_block": ("generate block", "generate loop", "generate statement",
+                       "genvar"),
+    "multiplexer_stages": ("mux", "muxes", "multiplexer", "multiplexers"),
+    "sequential_logic": ("flip-flop", "flipflop", "flip flop", "sequential logic",
+                         "clocked storage", "pipeline register",
+                         "pipeline registers"),
+    "case_statement": ("case statement", "case block"),
+    "for_loop": ("for loop", "for-loop"),
+    "gray_code": ("gray code", "gray-code"),
+}
+
+# Polarity markers. A directive is recognised only when a marker AND a tag phrase
+# occur in the SAME clause — a bare mention of "mux" is not a directive.
+_FORBID_MARKERS = ("must not", "shall not", "may not", "cannot", "can not",
+                   "must never", "without using", "without any", "do not use",
+                   "does not permit", "is not permitted", "are not permitted",
+                   "is not allowed", "are not allowed", "forbids", "forbidden",
+                   "no use of", "avoid using")
+_REQUIRE_MARKERS = ("must use", "must be implemented", "must be built",
+                    "must instantiate", "must contain", "shall use",
+                    "shall be implemented", "shall be built", "using only",
+                    "implemented using", "built from", "required to use",
+                    "is required to")
+
+# Clauses are SENTENCES, not lines. Splitting on newlines was measured
+# 2026-09-06 to defeat the whole layer with nothing but reformatting: "the
+# implementation must not\ninstantiate any submodule" put the marker in one
+# clause and the tag in the next, no directive was recorded, and the fixed
+# template was emitted over the stated prohibition -- the original defect,
+# reachable from any description wrapped at a column width. The lane's own
+# exposure fixture had the phrase on one line, which is why the layer looked
+# like it worked.
+_CLAUSE_SPLIT = re.compile(r"[.;]+")
+
+
+def _names(phrase: str, text: str) -> bool:
+    """Whether `text` NAMES `phrase`, on word boundaries.
+
+    A plain substring test is wrong here for the same reason it was wrong for
+    "asynchronous reset": measured 2026-09-06, `must not use a demux` tagged
+    multiplexer_stages, `a premuxed input` did too, and `a genvariable name`
+    tagged generate_block -- each of which silently WITHDREW a template that the
+    input never objected to.
+    """
+    return re.search(r"\b" + re.escape(phrase) + r"\b", text) is not None
+
+
+def extract_architecture_directives(desc_text: str) -> List[Tuple[str, str, str]]:
+    """Structural implementation directives STATED in the description.
+
+    Returns a list of ``(polarity, tag, evidence_clause)`` where polarity is
+    ``"forbid"`` or ``"require"`` and tag is a key of ``_ARCH_TAG_PHRASES``.
+    Reads the design INPUT only. A clause carries a directive only when it holds
+    both a polarity marker and a tag phrase, so ordinary prose that merely
+    mentions a mux or a register produces nothing.
+    """
+    out: List[Tuple[str, str, str]] = []
+    flowed = re.sub(r"\s*\n\s*", " ", desc_text or "")
+    for clause in _CLAUSE_SPLIT.split(flowed):
+        low = clause.lower()
+        if not low.strip():
+            continue
+        forbid = any(m in low for m in _FORBID_MARKERS)
+        require = any(m in low for m in _REQUIRE_MARKERS)
+        if not (forbid or require):
+            continue
+        # A clause that carries both markers is ambiguous about which property is
+        # negated; record nothing rather than guess a polarity.
+        if forbid and require:
+            continue
+        pol = "forbid" if forbid else "require"
+        for tag, phrases in _ARCH_TAG_PHRASES.items():
+            if any(_names(p, low) for p in phrases):
+                out.append((pol, tag, clause.strip()))
+    return out
+
+
+# Reset behaviour a template's CODE commits to, and the opposite of each. These
+# are not architecture directives -- an input states them as plain fact ("rst_n:
+# Active low reset") rather than as a "must not" -- but they are decidable on
+# both sides: the input states one pole, and the template's own always-block and
+# reset test show which pole it implements. Measured on the base: 11 of the 16
+# templates reset asynchronously and 3 synchronously, and nothing checked that
+# against what the input said.
+_OPPOSITE_POLE = {
+    "async_reset": "sync_reset",
+    "sync_reset": "async_reset",
+    "active_low_reset": "active_high_reset",
+    "active_high_reset": "active_low_reset",
+}
+
+_RESET_TOKEN = re.compile(r"\b\w*(?:rst|reset)\w*\b", re.I)
+
+
+def extract_stated_reset_poles(desc_text: str) -> set:
+    """Reset timing/polarity poles the INPUT states, as a set of pole tags.
+
+    A pole counts only when the phrase sits on a line that also names a reset
+    signal, so an "active low" said about some other pin is not read as a
+    statement about reset. When a text states BOTH poles of a pair it is
+    ambiguous and neither is recorded.
+    """
+    poles = set()
+    for line in (desc_text or "").splitlines():
+        low = line.lower()
+        if not _RESET_TOKEN.search(low):
+            continue
+        # "asynchronous reset" CONTAINS "synchronous reset", and "async reset"
+        # contains "sync reset", so a substring test reads every asynchronous
+        # statement as stating both poles -- which the ambiguity rule below then
+        # discards, silently recording no pole at all. Measured 2026-09-06 on the
+        # three sync-reset templates once the fixture population was widened from
+        # ten shapes to sixteen. The boundary is required on the left.
+        if re.search(r"(?<![a-z])async(?:hronous)?\s+reset", low):
+            poles.add("async_reset")
+        if re.search(r"(?<![a-z])sync(?:hronous)?\s+reset", low):
+            poles.add("sync_reset")
+        if "active low" in low or "active-low" in low:
+            poles.add("active_low_reset")
+        if "active high" in low or "active-high" in low:
+            poles.add("active_high_reset")
+    for a, b in (("async_reset", "sync_reset"),
+                 ("active_low_reset", "active_high_reset")):
+        if a in poles and b in poles:
+            poles -= {a, b}
+    return poles
+
+
+def _rtl_commitments(rtl: str) -> set:
+    """Which structural properties a piece of emitted RTL actually commits to.
+
+    DERIVED from the RTL text, never hand-declared per shape: if a template is
+    ever re-authored its commitments move with it, and no second list can go
+    stale the way the shape-count docstring did.
+    """
+    tags = set()
+    low = rtl.lower()
+    if re.search(r"^\s*generate\b", rtl, re.M) or "genvar" in low:
+        tags.add("generate_block")
+    n_modules = len(re.findall(r"^\s*module\s+\w+", rtl, re.M))
+    if n_modules > 1 or re.search(r"^\s*[A-Za-z_]\w*\s+u_\w+\s*\(", rtl, re.M):
+        tags.add("submodule_instantiation")
+    if "mux" in low:
+        tags.add("multiplexer_stages")
+    if re.search(r"always\s*@\s*\(\s*(posedge|negedge)", rtl):
+        tags.add("sequential_logic")
+    if re.search(r"\bcase\s*\(", rtl):
+        tags.add("case_statement")
+    if re.search(r"\bfor\s*\(", rtl):
+        tags.add("for_loop")
+    if "gray" in low:
+        tags.add("gray_code")
+    # reset poles, read from the code: the sensitivity list says whether reset is
+    # asynchronous, and the reset test says which level asserts it.
+    sens = re.findall(r"always\s*@\s*\(([^)]*)\)", rtl)
+    seq = [e for e in sens if "edge" in e]
+    if seq:
+        if any(re.search(r"edge\s+\w*(?:rst|reset)\w*", e, re.I) for e in seq):
+            tags.add("async_reset")
+        else:
+            tags.add("sync_reset")
+        tests = re.findall(r"if\s*\(\s*(!?)\s*(\w*(?:rst|reset)\w*)\s*\)",
+                           rtl, re.I)
+        levels = {("active_low_reset" if bang else "active_high_reset")
+                  for bang, _ in tests}
+        if len(levels) == 1:
+            tags |= levels
+    return tags
+
+
+def template_commitments(shape: str) -> set:
+    """The structural properties the fixed template for `shape` commits to."""
+    return _rtl_commitments(_TEMPLATES[shape])
+
+
+def architecture_conflict(desc_text: str, shape: str) -> Optional[Dict[str, str]]:
+    """The first stated directive that the fixed template for `shape` violates.
+
+    ``None`` when the input states no structural directive the template
+    contradicts — which is the case for every canonical description of the
+    sixteen shapes, so their behaviour is unchanged.
+    """
     if shape not in _TEMPLATES:
-        raise KeyError(f"unknown shape: {shape!r}")
-    return _TEMPLATES[shape]
+        return None
+    have = template_commitments(shape)
+    for pole in sorted(extract_stated_reset_poles(desc_text)):
+        if _OPPOSITE_POLE[pole] in have and pole not in have:
+            return {"shape_declined": shape, "polarity": "stated",
+                    "property": pole,
+                    "stated": f"the input states {pole.replace('_', ' ')}",
+                    "reason": "the input states a reset behaviour that the "
+                              "canonical topology for this shape implements "
+                              "the other way"}
+    for pol, tag, clause in extract_architecture_directives(desc_text):
+        if pol == "forbid" and tag in have:
+            return {"shape_declined": shape, "polarity": "forbid",
+                    "property": tag, "stated": clause,
+                    "reason": "the input forbids a structural property the "
+                              "canonical topology for this shape is built from"}
+        if pol == "require" and tag not in have:
+            return {"shape_declined": shape, "polarity": "require",
+                    "property": tag, "stated": clause,
+                    "reason": "the input requires a structural property the "
+                              "canonical topology for this shape does not have"}
+    return None
 
 
-def module_of_shape(shape: str) -> str:
-    return _SHAPE_MODULE[shape]
+# ==================================================== handshake/acceptance layer
+# The composable layer issue #2035 asks for in its two canonical_primitive_synth
+# rows. Neither row wants a seventeenth fixed topology: both name a COMPOSITION —
+# "acceptance-qualified storage composition" and "simultaneous consume/new-input
+# count". So what is extracted from the input is a CONTRACT — what a transfer is,
+# when it is accepted, what storage is legal under backpressure, what must never
+# be captured, dropped or reordered, and at what ratio and latency — and the
+# emitter is driven by that contract. Anything the input does not structurally
+# state lands in `unresolved` and is routed to AI BY NAME; it is never guessed.
+
+_VALID_SUF = re.compile(r"^(.*?)_?(valid|vld)$", re.I)
+_READY_SUF = re.compile(r"^(.*?)_?(ready|rdy)$", re.I)
+
+
+def _port_directions(desc_text: str) -> Dict[str, str]:
+    """Declared port name -> "in"/"out", read from the Input/Output port blocks."""
+    dirs: Dict[str, str] = {}
+    cur: Optional[str] = None
+    for line in (desc_text or "").splitlines():
+        stripped = line.strip()
+        low = stripped.lower()
+        # Heading forms seen in real descriptions: "Input ports:", "Inputs:",
+        # "Input Signals:", "INPUT PORTS:". Measured 2026-09-06: the plural
+        # "Inputs:" was NOT matched, so every port under it had no direction, the
+        # contract could not be built, and the layer silently never fired on such
+        # a description -- fail-closed, but invisible, and only because every
+        # fixture in this lane happened to use "Input ports:".
+        if re.match(r"^inputs?\s*(ports?|signals?)?\s*[:：]?\s*$", low):
+            cur = "in"
+            continue
+        if re.match(r"^outputs?\s*(ports?|signals?)?\s*[:：]?\s*$", low):
+            cur = "out"
+            continue
+        # Any OTHER section heading ends the port block. Without this, a line in
+        # the prose that happens to look like "count: the internal counter" is
+        # registered as a port -- with the direction of whichever block was open
+        # last -- and can then be chosen as the channel's data port and land in
+        # the emitted module. Measured 2026-09-06.
+        if re.match(r"^[A-Za-z][A-Za-z /]*[:：]\s*$", stripped):
+            cur = None
+            continue
+        m = re.match(r"^([A-Za-z_]\w*)\s*(\[[^\]]*\])?\s*[:：(]", stripped)
+        if not m:
+            continue
+        name = m.group(1)
+        if name.lower() in _NOISE:
+            continue
+        inline = None
+        if re.search(r"\(\s*input\b", low):
+            inline = "in"
+        elif re.search(r"\(\s*output\b", low):
+            inline = "out"
+        d = inline or cur
+        if d:
+            dirs[name] = d
+    return dirs
+
+
+def _port_width(desc_text: str, name: str) -> Optional[int]:
+    """Declared width of `name`, from `name [hi:lo]:` or an "N-bit" phrase on its
+    own declaration line. None when the input does not state one."""
+    for line in (desc_text or "").splitlines():
+        m = re.match(r"^\s*" + re.escape(name) + r"\s*(\[([^\]]*)\])?\s*[:：(]",
+                     line)
+        if not m:
+            continue
+        if m.group(2):
+            b = re.match(r"\s*(\d+)\s*:\s*(\d+)\s*$", m.group(2))
+            if b:
+                return abs(int(b.group(1)) - int(b.group(2))) + 1
+        # Two DIFFERENT widths stated in prose on the port's own line ("the
+        # 8-bit word, packed into a 32-bit beat") is not a stated width: taking
+        # the first would be a guess, and the layer's rule is to name what the
+        # input did not settle. An explicit [hi:lo] above always wins.
+        widths = {int(m) for m in re.findall(r"(\d+)[- ]bits?\b", line, re.I)}
+        # A single-bit port is idiomatically written in WORDS in these
+        # descriptions ("data_in: One-bit input."), and a width stated in words
+        # is still a width the input stated. Only 1 is read this way: "four-bit"
+        # is left unresolved and NAMED rather than guessed, because a general
+        # word-number reader is a different thing from reading what this corpus
+        # actually writes.
+        if re.search(r"\b(?:one|single)[- ]bit\b", line, re.I):
+            widths.add(1)
+        if len(widths) == 1:
+            return widths.pop()
+        return None
+    return None
+
+
+# ONE recogniser for clock and reset names, used both to FIND them and to keep
+# them out of the data-port candidates. They were two different lists before, and
+# they disagreed: measured 2026-09-06, a stage whose clock is named `i_clk` had
+# that clock CHOSEN as its upstream data port. It did not reach emission only
+# because an unrelated field (the width) was also unstated -- the layer was saved
+# by a check that knows nothing about clocks.
+_CLOCKISH = re.compile(r"^\w*(?:clk|clock)\w*$", re.I)
+_RESETISH = re.compile(r"^\w*(?:rst|reset)\w*$", re.I)
+
+
+def _is_clock_or_reset(name: str) -> bool:
+    return bool(_CLOCKISH.match(name) or _RESETISH.match(name))
+
+
+def _clock_and_reset(desc_text: str, dirs: Dict[str, str]) -> Tuple[
+        Optional[str], Optional[str], Optional[bool], Optional[bool]]:
+    """(clock, reset, reset_active_low, reset_synchronous) as STATED, else None."""
+    clk = next((p for p in dirs if _CLOCKISH.match(p)), None)
+    rst = next((p for p in dirs if _RESETISH.match(p)), None)
+    low = (desc_text or "").lower()
+    active_low: Optional[bool] = None
+    if rst:
+        if rst.lower().endswith("n") or "active low" in low or "active-low" in low:
+            active_low = True
+        elif "active high" in low or "active-high" in low:
+            active_low = False
+    sync: Optional[bool] = None
+    if "asynchronous reset" in low or "async reset" in low:
+        sync = False
+    elif "synchronous reset" in low or "sync reset" in low:
+        sync = True
+    return clk, rst, active_low, sync
+
+
+class HandshakeContract:
+    """What the input structurally states about transfers and their acceptance.
+
+    Fields are only ever filled from the design INPUT. `unresolved` names each
+    load-bearing thing the input did NOT state; a non-empty `unresolved` means
+    the program declines and hands those names to the AI author.
+    """
+
+    def __init__(self, module: Optional[str]) -> None:
+        self.module = module
+        self.kind: Optional[str] = None      # "elastic_stage" | "ratio_divider"
+        self.clock: Optional[str] = None
+        self.reset: Optional[str] = None
+        self.reset_active_low: Optional[bool] = None
+        self.reset_sync: Optional[bool] = None
+        self.up: Dict[str, Optional[str]] = {}
+        self.down: Dict[str, Optional[str]] = {}
+        self.width: Optional[int] = None
+        self.storage: Optional[str] = None   # "skid" | "passthrough"
+        self.ordering = "fifo"
+        self.ratio: Optional[int] = None
+        self.latency: Optional[int] = None
+        self.unresolved: List[str] = []
+
+    # the invariants every emission from this contract must hold, stated once so
+    # the emitter and the generated scoreboard cannot drift apart
+    INVARIANTS = (
+        "a transfer occurs on a channel if and only if valid && ready",
+        "data is captured only on an accepted transfer",
+        "an accepted transfer is never dropped",
+        "accepted transfers leave in the order they arrived",
+    )
+
+    def as_dict(self) -> Dict:
+        return {k: v for k, v in self.__dict__.items()}
+
+
+def _channel_pairs(dirs: Dict[str, str]) -> Dict[str, Dict[str, str]]:
+    """Group declared ports into handshake channels keyed by their name prefix."""
+    chans: Dict[str, Dict[str, str]] = {}
+    for p, d in dirs.items():
+        m = _VALID_SUF.match(p)
+        if m:
+            chans.setdefault(m.group(1).lower(), {})["valid"] = p
+            chans[m.group(1).lower()]["valid_dir"] = d
+            continue
+        m = _READY_SUF.match(p)
+        if m:
+            chans.setdefault(m.group(1).lower(), {})["ready"] = p
+            chans[m.group(1).lower()]["ready_dir"] = d
+    return chans
+
+
+def _data_port_for(prefix: str, dirs: Dict[str, str], want_dir: str,
+                   taken: set) -> Optional[str]:
+    cands = [p for p, d in dirs.items()
+             if d == want_dir and p not in taken
+             and not _VALID_SUF.match(p) and not _READY_SUF.match(p)
+             and not _is_clock_or_reset(p)]
+    if not cands:
+        return None
+    pref = [p for p in cands if p.lower().startswith(prefix) and prefix]
+    if len(pref) == 1:
+        return pref[0]
+    if len(cands) == 1:
+        return cands[0]
+    return None
+
+
+def extract_handshake_contract(desc_text: str) -> Optional[HandshakeContract]:
+    """Build the contract the input states, or None when it states no handshake.
+
+    Returning a contract does NOT mean the program will emit: a contract with a
+    non-empty `unresolved` is the route-to-AI path, carrying the names.
+    """
+    if not desc_text or not desc_text.strip():
+        return None
+    dirs = _port_directions(desc_text)
+    if not dirs:
+        return None
+    low = desc_text.lower()
+    c = HandshakeContract(module_name_of(desc_text))
+    c.clock, c.reset, c.reset_active_low, c.reset_sync = _clock_and_reset(
+        desc_text, dirs)
+    chans = _channel_pairs(dirs)
+    up_pref = [k for k, v in chans.items()
+               if v.get("valid_dir") == "in" and v.get("ready_dir") == "out"]
+    dn_pref = [k for k, v in chans.items()
+               if v.get("valid_dir") == "out" and v.get("ready_dir") == "in"]
+
+    if len(up_pref) == 1 and len(dn_pref) == 1:
+        c.kind = "elastic_stage"
+        up, dn = chans[up_pref[0]], chans[dn_pref[0]]
+        taken = {up["valid"], up["ready"], dn["valid"], dn["ready"]}
+        c.up = {"valid": up["valid"], "ready": up["ready"],
+                "data": _data_port_for(up_pref[0], dirs, "in", taken)}
+        taken.add(c.up["data"] or "")
+        c.down = {"valid": dn["valid"], "ready": dn["ready"],
+                  "data": _data_port_for(dn_pref[0], dirs, "out", taken)}
+        for side, name in (("up", c.up), ("down", c.down)):
+            if not name["data"]:
+                c.unresolved.append(f"{side}stream data port (not stated "
+                                    f"unambiguously)")
+        if c.up.get("data"):
+            c.width = _port_width(desc_text, c.up["data"])
+        if c.width is None:
+            c.unresolved.append("data width (not stated)")
+        # legal storage under backpressure, as STATED
+        if _has_any(desc_text, "must not add latency", "no additional latency",
+                    "zero latency", "zero-latency", "purely combinational path",
+                    "same cycle"):
+            c.storage = "passthrough"
+        elif _has_any(desc_text, "skid", "elastic buffer", "register the output",
+                      "registered output", "buffer one transfer",
+                      "one additional transfer", "registered handshake",
+                      "pipeline the handshake"):
+            c.storage = "skid"
+        else:
+            c.unresolved.append("storage under backpressure (the input states "
+                                "neither a registered/skid stage nor a "
+                                "zero-latency pass-through)")
+    else:
+        # ratio shape: an input event stream and an output event stream, no ready
+        in_ev = [p for p, d in dirs.items()
+                 if d == "in" and (_VALID_SUF.match(p)
+                                   or re.search(r"(^|_)(pulse|tick|strobe|en)$",
+                                                p, re.I))]
+        out_ev = [p for p, d in dirs.items()
+                  if d == "out" and (_VALID_SUF.match(p)
+                                     or re.search(r"(^|_)(pulse|tick|strobe|en)$",
+                                                  p, re.I))]
+        ratio_stated = _has_any(desc_text, "for every", "ratio", "one output for",
+                                "divide", "divider", "per input")
+        if len(in_ev) == 1 and len(out_ev) == 1 and ratio_stated:
+            c.kind = "ratio_divider"
+            taken = {in_ev[0], out_ev[0]}
+            c.up = {"valid": in_ev[0],
+                    "data": _data_port_for("", dirs, "in", taken)}
+            c.down = {"valid": out_ev[0],
+                      "data": _data_port_for("", dirs, "out", taken)}
+            if c.up.get("data"):
+                c.width = _port_width(desc_text, c.up["data"])
+            m = re.search(r"(?:one\s+output\s+(?:event\s+)?(?:pulse\s+)?"
+                          r"for\s+every|for\s+every|ratio\s+of|divide[sd]?\s+by)"
+                          r"\s+(\d+)", low)
+            if m:
+                c.ratio = int(m.group(1))
+            elif re.search(r"unit\s+ratio|ratio\s+of\s+one|one[- ]to[- ]one", low):
+                c.ratio = 1
+            else:
+                c.unresolved.append("input-to-output ratio (not stated as a "
+                                    "number)")
+        else:
+            return None
+
+    if not c.module:
+        c.unresolved.append("module name (no 'Module name:' token)")
+    if not c.clock:
+        c.unresolved.append("clock port (not stated)")
+    if not c.reset:
+        c.unresolved.append("reset port (not stated)")
+    elif c.reset_active_low is None:
+        c.unresolved.append("reset polarity (not stated)")
+    return c
+
+
+def _reserved_names(c: HandshakeContract) -> set:
+    """Every identifier the emitted module already owes to the INPUT."""
+    names = {c.module, c.clock, c.reset}
+    for side in (c.up, c.down):
+        names |= {v for v in side.values() if v}
+    return {n for n in names if n}
+
+
+def _internals(c: HandshakeContract, *wanted: str) -> Dict[str, str]:
+    """Internal signal names that cannot collide with the design's own ports.
+
+    Measured 2026-09-06: a divider whose payload port is named `count` and a
+    stage whose data port is named `held_data` both emitted RTL that DOES NOT
+    COMPILE -- "'count' has already been declared in this scope" -- because the
+    internal names were fixed literals. Ports come from the input, so the
+    internals must give way, deterministically and in the same order every time.
+    """
+    taken = {n.lower() for n in _reserved_names(c)}
+    out: Dict[str, str] = {}
+    for want in wanted:
+        name = want
+        n = 1
+        while name.lower() in taken:
+            n += 1
+            name = f"{want}_{n}"
+        taken.add(name.lower())
+        out[want] = name
+    return out
+
+
+def _rst_edge(c: HandshakeContract) -> str:
+    if c.reset_sync:
+        return f"@(posedge {c.clock})"
+    edge = "negedge" if c.reset_active_low else "posedge"
+    return f"@(posedge {c.clock} or {edge} {c.reset})"
+
+
+def _rst_test(c: HandshakeContract) -> str:
+    return f"!{c.reset}" if c.reset_active_low else f"{c.reset}"
+
+
+def _emit_elastic_stage(c: HandshakeContract) -> str:
+    """Compose an elastic (backpressure-tolerant) stage from the contract.
+
+    Every write to storage is qualified by an ACCEPTED transfer, so unaccepted
+    data is never captured; upstream is back-pressured while no slot is free, so
+    an accepted transfer is never dropped; and the held slot always drains before
+    the skid slot, so accepted transfers never reorder.
+    """
+    w = c.width or 1
+    rng = f"[{w - 1}:0] " if w > 1 else ""
+    uv, ur, ud = c.up["valid"], c.up["ready"], c.up["data"]
+    dv, dr, dd = c.down["valid"], c.down["ready"], c.down["data"]
+    nm = _internals(c, "held_data", "held_valid", "skid_data", "skid_valid",
+                    "up_fire", "dn_fire")
+    hd, hv, sd, sv = (nm["held_data"], nm["held_valid"],
+                      nm["skid_data"], nm["skid_valid"])
+    uf, df = nm["up_fire"], nm["dn_fire"]
+    hdr = (f"// {c.module}: elastic handshake stage composed from the stated\n"
+           f"// acceptance contract (issue #2035, F6). Invariants held:\n"
+           + "".join(f"//   - {i}\n" for i in HandshakeContract.INVARIANTS))
+    if c.storage == "passthrough":
+        return (hdr + f"// Storage: NONE - the input states a zero-latency path,\n"
+                      f"// so no transfer may be captured at all.\n"
+                f"module {c.module} (\n"
+                f"    input  wire {rng}{ud},\n"
+                f"    input  wire {uv},\n"
+                f"    output wire {ur},\n"
+                f"    output wire {rng}{dd},\n"
+                f"    output wire {dv},\n"
+                f"    input  wire {dr}\n"
+                f");\n"
+                f"    assign {dv} = {uv};\n"
+                f"    assign {ur} = {dr};\n"
+                f"    assign {dd} = {ud};\n"
+                f"endmodule\n")
+    return (hdr + f"// Storage: one held slot + one skid slot, so upstream is only\n"
+                  f"// stalled when both are occupied.\n"
+            f"module {c.module} (\n"
+            f"    input  wire {c.clock},\n"
+            f"    input  wire {c.reset},\n"
+            f"    input  wire {rng}{ud},\n"
+            f"    input  wire {uv},\n"
+            f"    output wire {ur},\n"
+            f"    output wire {rng}{dd},\n"
+            f"    output wire {dv},\n"
+            f"    input  wire {dr}\n"
+            f");\n"
+            f"    reg  {rng}{hd};\n"
+            f"    reg        {hv};\n"
+            f"    reg  {rng}{sd};\n"
+            f"    reg        {sv};\n\n"
+            f"    // ACCEPTANCE: a transfer happens iff valid && ready.\n"
+            f"    wire {uf} = {uv} && {ur};\n"
+            f"    wire {df} = {dv} && {dr};\n\n"
+            f"    assign {ur} = !{sv};\n"
+            f"    assign {dv} = {hv};\n"
+            f"    assign {dd} = {hd};\n\n"
+            f"    always {_rst_edge(c)} begin\n"
+            f"        if ({_rst_test(c)}) begin\n"
+            f"            {hv} <= 1'b0;\n"
+            f"            {sv} <= 1'b0;\n"
+            f"            {hd}  <= {w}'d0;\n"
+            f"            {sd}  <= {w}'d0;\n"
+            f"        end else if ({df} || !{hv}) begin\n"
+            f"            if ({sv}) begin\n"
+            f"                // ORDERING: the older skid entry drains first.\n"
+            f"                {hd}  <= {sd};\n"
+            f"                {hv} <= 1'b1;\n"
+            f"                {sv} <= 1'b0;\n"
+            f"            end else begin\n"
+            f"                {hv} <= {uf};\n"
+            f"                if ({uf}) {hd} <= {ud};\n"
+            f"            end\n"
+            f"        end else if ({uf}) begin\n"
+            f"            // Stalled downstream: an ACCEPTED transfer still has a\n"
+            f"            // slot, so it is never lost.\n"
+            f"            {sd}  <= {ud};\n"
+            f"            {sv} <= 1'b1;\n"
+            f"        end\n"
+            f"    end\n"
+            f"endmodule\n")
+
+
+def _emit_ratio_divider(c: HandshakeContract) -> str:
+    """Compose an event-ratio divider from the contract.
+
+    Consuming the current unit and counting a NEW input are the SAME cycle's
+    work, never exclusive alternatives — which is why a unit ratio emits on
+    every input instead of on every other one (issue #2035, F7).
+    """
+    n = c.ratio or 1
+    cw = max(1, (n - 1).bit_length()) if n > 1 else 1
+    iv, ov = c.up["valid"], c.down["valid"]
+    idat, odat = c.up.get("data"), c.down.get("data")
+    nm = _internals(c, "count", "consume", "emit_now")
+    cnt, consume, emit_now = nm["count"], nm["consume"], nm["emit_now"]
+    w = c.width or 1
+    rng = f"[{w - 1}:0] " if w > 1 else ""
+    ports = [f"    input  wire {c.clock},", f"    input  wire {c.reset},"]
+    if idat:
+        ports.append(f"    input  wire {rng}{idat},")
+    ports.append(f"    input  wire {iv},")
+    if odat:
+        ports.append(f"    output reg  {rng}{odat},")
+    ports.append(f"    output reg  {ov}")
+    body_data_rst = f"            {odat}  <= {w}'d0;\n" if odat else ""
+    body_data = (f"            if ({iv}) {odat} <= {idat};\n"
+                 if (idat and odat) else "")
+    return (f"// {c.module}: event-ratio divider composed from the stated\n"
+            f"// contract (issue #2035, F7): one output event per {n} input\n"
+            f"// event(s). Consume and capture are SIMULTANEOUS, so no input is\n"
+            f"// skipped at a unit ratio.\n"
+            f"module {c.module} #(\n"
+            f"    parameter RATIO = {n}\n"
+            f") (\n" + "\n".join(ports) + "\n);\n"
+            f"    // Sized from RATIO itself: a counter sized from the ratio\n"
+            f"    // stated in the description would silently wrap the moment a\n"
+            f"    // caller overrode the parameter it is declared with.\n"
+            f"    reg [$clog2(RATIO + 1) - 1:0] {cnt};\n\n"
+            f"    // Both happen on the same cycle; neither excludes the other.\n"
+            f"    wire {consume}  = {iv};\n"
+            f"    wire {emit_now} = {iv} && ({cnt} == RATIO - 1);\n\n"
+            f"    always {_rst_edge(c)} begin\n"
+            f"        if ({_rst_test(c)}) begin\n"
+            f"            {cnt} <= 0;\n"
+            f"            {ov} <= 1'b0;\n" + body_data_rst +
+            f"        end else begin\n"
+            f"            {ov} <= {emit_now};\n" + body_data +
+            f"            if ({consume})\n"
+            f"                {cnt} <= {emit_now} ? 0 : ({cnt} + 1'b1);\n"
+            f"        end\n"
+            f"    end\n"
+            f"endmodule\n")
+
+
+def emit_from_contract(c: HandshakeContract) -> str:
+    """The composed RTL for a fully resolved contract."""
+    if c.unresolved:
+        raise ValueError("contract is not fully stated: "
+                         + "; ".join(c.unresolved))
+    if c.kind == "elastic_stage":
+        return _emit_elastic_stage(c)
+    if c.kind == "ratio_divider":
+        return _emit_ratio_divider(c)
+    raise KeyError(f"unknown contract kind: {c.kind!r}")
+
+
+def emit_scoreboard_tb(c: HandshakeContract) -> str:
+    """A self-checking scoreboard testbench composed from the SAME contract.
+
+    The queue scoreboard (F6) and the ratio/latency count (F7) that issue #2035
+    asks for: both are derived from the contract fields, so a stage and its check
+    cannot drift apart. It reads the contract, never a reference output.
+    """
+    if c.kind == "elastic_stage" and c.storage == "skid":
+        uv, ur, ud = c.up["valid"], c.up["ready"], c.up["data"]
+        dv, dr, dd = c.down["valid"], c.down["ready"], c.down["data"]
+        w = c.width or 1
+        rng = f"[{w - 1}:0] " if w > 1 else ""
+        rst_on = "1'b0" if c.reset_active_low else "1'b1"
+        rst_off = "1'b1" if c.reset_active_low else "1'b0"
+        tn = _internals(c, "q", "wr", "rd", "errors", "i")
+        q, wr, rd, errors, i = (tn["q"], tn["wr"], tn["rd"], tn["errors"],
+                                tn["i"])
+        return (f"// Scoreboard TB for {c.module}: pushes a stream through random\n"
+                f"// backpressure and checks the contract's four invariants.\n"
+                f"`timescale 1ns/1ps\n"
+                f"module tb_{c.module};\n"
+                f"    reg {c.clock} = 1'b0; always #5 {c.clock} = ~{c.clock};\n"
+                f"    reg {c.reset};\n"
+                f"    reg {rng}{ud}; reg {uv}; wire {ur};\n"
+                f"    wire {rng}{dd}; wire {dv}; reg {dr};\n"
+                f"    {c.module} dut (.{c.clock}({c.clock}), .{c.reset}({c.reset}),\n"
+                f"        .{ud}({ud}), .{uv}({uv}), .{ur}({ur}),\n"
+                f"        .{dd}({dd}), .{dv}({dv}), .{dr}({dr}));\n"
+                f"    reg [{w - 1}:0] {q} [0:1023];\n"
+                f"    integer {wr} = 0, {rd} = 0, {errors} = 0, {i};\n"
+                f"    always @(posedge {c.clock}) if ({rst_off} == {c.reset}) begin\n"
+                f"        if ({uv} && {ur}) begin {q}[{wr}] = {ud}; {wr} = {wr} + 1; end\n"
+                f"        if ({dv} && {dr}) begin\n"
+                f"            if ({rd} >= {wr}) begin\n"
+                f"                {errors} = {errors} + 1;\n"
+                f"                $display(\"FAIL: output with no accepted input\");\n"
+                f"            end else if ({dd} !== {q}[{rd}]) begin\n"
+                f"                {errors} = {errors} + 1;\n"
+                f"                $display(\"FAIL: got %0d expected %0d (order)\",\n"
+                f"                         {dd}, {q}[{rd}]);\n"
+                f"            end\n"
+                f"            {rd} = {rd} + 1;\n"
+                f"        end\n"
+                f"    end\n"
+                f"    initial begin\n"
+                f"        {c.reset} = {rst_on}; {uv} = 0; {dr} = 0; {ud} = 0;\n"
+                f"        @(posedge {c.clock}); @(posedge {c.clock});\n"
+                f"        {c.reset} = {rst_off};\n"
+                f"        for ({i} = 0; {i} < 200; {i} = {i} + 1) begin\n"
+                f"            @(negedge {c.clock});\n"
+                f"            {uv} = ($random % 3) != 0;\n"
+                f"            {ud} = {i}[{w - 1}:0];\n"
+                f"            {dr} = ($random % 2) != 0;\n"
+                f"            @(posedge {c.clock});\n"
+                f"            if ({uv} && {ur}) {ud} = {ud};\n"
+                f"        end\n"
+                f"        @(negedge {c.clock}); {uv} = 0; {dr} = 1;\n"
+                f"        for ({i} = 0; {i} < 20; {i} = {i} + 1) @(posedge {c.clock});\n"
+                f"        if ({wr} - {rd} != 0) begin\n"
+                f"            {errors} = {errors} + 1;\n"
+                f"            $display(\"FAIL: %0d accepted transfers lost\", {wr} - {rd});\n"
+                f"        end\n"
+                f"        // The contract says the producer is stalled only when no\n"
+                f"        // slot is free, so with the consumer always ready every\n"
+                f"        // offered word must be accepted on the cycle it is offered.\n"
+                f"        {dr} = 1;\n"
+                f"        for ({i} = 0; {i} < 32; {i} = {i} + 1) begin\n"
+                f"            @(negedge {c.clock}); {uv} = 1; {ud} = {i}[{w - 1}:0];\n"
+                f"            @(posedge {c.clock});\n"
+                f"            if (!{ur}) begin\n"
+                f"                {errors} = {errors} + 1;\n"
+                f"                $display(\"FAIL: stalled at cycle %0d with a free slot\", {i});\n"
+                f"            end\n"
+                f"        end\n"
+                f"        @(negedge {c.clock}); {uv} = 0;\n"
+                f"        for ({i} = 0; {i} < 8; {i} = {i} + 1) @(posedge {c.clock});\n"
+                f"        // A run that observed nothing is not a pass.\n"
+                f"        if ({rd} < 32) begin\n"
+                f"            {errors} = {errors} + 1;\n"
+                f"            $display(\"FAIL: only %0d transfers observed\", {rd});\n"
+                f"        end\n"
+                f"        if ({errors} == 0) $display(\"PASS %0d transfers\", {rd});\n"
+                f"        else $display(\"ERRORS %0d\", {errors});\n"
+                f"        $finish;\n"
+                f"    end\n"
+                f"endmodule\n")
+    if c.kind == "ratio_divider":
+        iv, ov = c.up["valid"], c.down["valid"]
+        n = c.ratio or 1
+        rst_on = "1'b0" if c.reset_active_low else "1'b1"
+        rst_off = "1'b1" if c.reset_active_low else "1'b0"
+        idat, odat = c.up.get("data"), c.down.get("data")
+        w = c.width or 1
+        rng = f"[{w - 1}:0] " if w > 1 else ""
+        tn = _internals(c, "n_in", "n_out", "i")
+        n_in, n_out, i = tn["n_in"], tn["n_out"], tn["i"]
+        decl = f"    reg {rng}{idat}; wire {rng}{odat};\n" if (idat and odat) else ""
+        conn = (f", .{idat}({idat}), .{odat}({odat})" if (idat and odat) else "")
+        drive = f"        {idat} = {i}[{w - 1}:0];\n" if idat else ""
+        return (f"// Ratio/latency TB for {c.module}: counts input events and\n"
+                f"// output events and checks the stated {n}:1 ratio - the check\n"
+                f"// that catches every-other-input being dropped.\n"
+                f"`timescale 1ns/1ps\n"
+                f"module tb_{c.module};\n"
+                f"    reg {c.clock} = 1'b0; always #5 {c.clock} = ~{c.clock};\n"
+                f"    reg {c.reset}; reg {iv}; wire {ov};\n" + decl +
+                f"    {c.module} dut (.{c.clock}({c.clock}), .{c.reset}({c.reset}),\n"
+                f"        .{iv}({iv}), .{ov}({ov}){conn});\n"
+                f"    integer {n_in} = 0, {n_out} = 0, {i};\n"
+                f"    always @(posedge {c.clock}) if ({c.reset} == {rst_off}) begin\n"
+                f"        if ({iv}) {n_in}  = {n_in}  + 1;\n"
+                f"        if ({ov}) {n_out} = {n_out} + 1;\n"
+                f"    end\n"
+                f"    initial begin\n"
+                f"        {c.reset} = {rst_on}; {iv} = 0;\n"
+                f"        @(posedge {c.clock}); @(posedge {c.clock});\n"
+                f"        {c.reset} = {rst_off};\n"
+                f"        for ({i} = 0; {i} < 64; {i} = {i} + 1) begin\n"
+                f"            @(negedge {c.clock}); {iv} = 1;\n" + drive +
+                f"            @(posedge {c.clock});\n"
+                f"        end\n"
+                f"        @(negedge {c.clock}); {iv} = 0;\n"
+                f"        for ({i} = 0; {i} < 4; {i} = {i} + 1) @(posedge {c.clock});\n"
+                f"        if ({n_in} == 0) begin\n"
+                f"            $display(\"FAIL: no input events were driven - vacuous\");\n"
+                f"        end else if ({n_out} != {n_in} / {n})\n"
+                f"            $display(\"FAIL: %0d in %0d out, expected %0d\","
+                f" {n_in}, {n_out}, {n_in} / {n});\n"
+                f"        else $display(\"PASS %0d in %0d out\", {n_in}, {n_out});\n"
+                f"        $finish;\n"
+                f"    end\n"
+                f"endmodule\n")
+    raise KeyError(f"no scoreboard for contract kind {c.kind!r}"
+                   f"/storage {c.storage!r}")
+
+
+# The two contract-composed families are shapes like any other, but they own no
+# template: `emit_rtl` composes them from the contract the input states.
+_CONTRACT_SHAPES = {
+    "elastic_handshake_stage": "elastic_stage",
+    "event_ratio_divider": "ratio_divider",
+}
+
+
+def _contract_shape(desc_text: str) -> Optional[str]:
+    """The contract-composed shape this input fully states, or None.
+
+    Fail-closed exactly like the template detectors: an input that states a
+    handshake but leaves anything load-bearing unstated returns None, and the
+    unstated names are available from `route_to_ai_reason`.
+    """
+    try:
+        c = extract_handshake_contract(desc_text)
+    except Exception:
+        return None
+    if c is None or c.kind is None or c.unresolved:
+        return None
+    for key, kind in _CONTRACT_SHAPES.items():
+        if kind == c.kind:
+            return key
+    return None
+
+
+def emit_rtl(shape: str, desc_text: str = "") -> str:
+    """RTL for a shape key.
+
+    For the sixteen TEMPLATE shapes this returns the exact verified-correct
+    template, byte for byte, and `desc_text` is not read - their output is
+    unchanged by the contract layer. For a CONTRACT-composed shape the RTL is
+    composed from the handshake/acceptance contract stated by `desc_text`, which
+    is therefore required.
+    """
+    if shape in _TEMPLATES:
+        return _TEMPLATES[shape]
+    if shape in _CONTRACT_SHAPES:
+        c = extract_handshake_contract(desc_text or "")
+        if c is None or c.kind != _CONTRACT_SHAPES[shape]:
+            raise ValueError(f"{shape!r} needs the design description it was "
+                             f"detected from; none was supplied")
+        return emit_from_contract(c)
+    raise KeyError(f"unknown shape: {shape!r}")
+
+
+def module_of_shape(shape: str, desc_text: str = "") -> str:
+    if shape in _SHAPE_MODULE:
+        return _SHAPE_MODULE[shape]
+    if shape in _CONTRACT_SHAPES:
+        return module_name_of(desc_text or "") or "chip_top"
+    raise KeyError(f"unknown shape: {shape!r}")
 
 
 # ======================================================================== desc I/O
@@ -1702,8 +2641,8 @@ def _read_project_desc(project_dir: Path) -> Tuple[str, str]:
 
 
 # ======================================================================== CLI
-def _emit_and_write(shape: str, out_path: Path) -> str:
-    rtl = emit_rtl(shape)
+def _emit_and_write(shape: str, out_path: Path, desc_text: str = "") -> str:
+    rtl = emit_rtl(shape, desc_text)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(rtl)
     return str(out_path)
@@ -1726,12 +2665,13 @@ def main(argv=None) -> int:
         shape = detect_shape(desc)
         if shape is None:
             print(json.dumps({"verdict": "DEFER", "shape": None,
-                              "module": module_name_of(desc)}))
+                              "module": module_name_of(desc),
+                              "defer_reason": route_to_ai_reason(desc)}))
             return 2
-        module = module_of_shape(shape)
+        module = module_of_shape(shape, desc)
         written = None
         if a.out:
-            written = _emit_and_write(shape, Path(a.out))
+            written = _emit_and_write(shape, Path(a.out), desc)
         print(json.dumps({"verdict": "EMIT", "shape": shape,
                           "module": module, "written": written}))
         return 0
@@ -1744,12 +2684,14 @@ def main(argv=None) -> int:
     shape = detect_shape(desc)
     if shape is None:
         print(json.dumps({"verdict": "DEFER", "shape": None,
-                          "module": module_name_of(desc)}))
+                          "module": module_name_of(desc),
+                          "defer_reason": route_to_ai_reason(desc)}))
         return 2
-    module = module_of_shape(shape)
+    module = module_of_shape(shape, desc)
     written = None
     if a.emit:
-        written = _emit_and_write(shape, proj / "phase2" / "stage1" / "rtl" / f"{module}.v")
+        written = _emit_and_write(
+            shape, proj / "phase2" / "stage1" / "rtl" / f"{module}.v", desc)
     print(json.dumps({"verdict": "EMIT", "shape": shape,
                       "module": module, "written": written}))
     return 0
