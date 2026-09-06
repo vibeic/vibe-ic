@@ -281,7 +281,7 @@ def test_the_declaration_in_hand_is_admitted():
     assert a2.entry_admission(ENTRY, dict(SPEC), _UNITS, MEASURED) == []
 
 
-def test_a_decade_of_stated_clock_range_cannot_settle_and_is_refused():
+def test_a_decade_of_stated_clock_range_is_ADMITTED_and_REPORTED():
     """The declaration this module used to treat as the positive case.
 
     MEASURED end to end and reproduced to six decimals on two hosts by two
@@ -292,13 +292,36 @@ def test_a_decade_of_stated_clock_range_cannot_settle_and_is_refused():
     above it, with the quantiser toggling rather than latched: the converter
     does not carry its input code. The settling count at that clock is 1.33
     against the 10.40 that enob 14 needs.
+
+    RE-AIMED (vibe-ic#2062, owner ruling 2026-09-06, and the declaration
+    fc161867 that followed it). The block is held to the operating point its
+    declaration NAMES, and the figure at the range CEILING is reported beside
+    it: a range column is not a requirement, and refusing a topology on the
+    worst end of a stated span makes a declaration's honesty about its own
+    range cost it the topology. The measured density evidence above is
+    unchanged and is now what the INFO row says — it is the RANGE that does
+    not close, not the topology.
+
+    NOTHING THAT WAS CHECKED STOPPED BEING CHECKED: both numbers this test
+    pinned before are pinned below, and the operating-point figure and the
+    admission are pinned in addition.
     """
     decade = {**SPEC, "fclk_max": 10.0}
     refusals = a2.entry_admission(ENTRY, decade, _UNITS, MEASURED)
-    named = [r for r in refusals if r.get("field") == "settling_time_constants"]
-    assert named, refusals
-    assert named[0]["value"] == pytest.approx(1.3333333, rel=1e-5)
-    assert float(named[0]["min"]) == pytest.approx(10.3972077, rel=1e-6)
+    assert not [r for r in refusals
+                if r.get("field") == "settling_time_constants"], refusals
+
+    info = [r for r in a2.entry_informational(ENTRY, decade, MEASURED)
+            if r["field"] == "settling_time_constants_at_fclk_max"]
+    assert info, "the ceiling figure is not published at all"
+    assert info[0]["blocking"] is False
+    assert info[0]["state"] == "NOT_MET"
+    assert info[0]["value"] == pytest.approx(1.3333333, rel=1e-5)
+    assert info[0]["requirement"] == pytest.approx(10.3972077, rel=1e-6)
+
+    env = a2.admission_env(ENTRY, decade, MEASURED)
+    assert a2._safe_eval(a2._SETTLING_TC_AT_FCLK_EXPR, env) == pytest.approx(
+        13.3333333, rel=1e-6)
 
 
 def test_the_slew_margin_is_true_by_construction_and_still_falsifiable():

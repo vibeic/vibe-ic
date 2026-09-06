@@ -496,7 +496,7 @@ def _klayout_lvs_runset_runner(deck: str, gds: str, netlist: str, block: str,
     # mode is empty, so it lands beside the process's own working directory
     # and the write is refused. MEASURED on this campaign's blocks:
     #
-    #   ERROR: RuntimeError: Unable to open file: /home/reyerchu//ldo_extracted.cir
+    #   ERROR: RuntimeError: Unable to open file: /home/<your-user>//ldo_extracted.cir
     #          (errno=13) in Netlist::write in Executable::cleanup
     #
     # That exception is raised in the runset's CLEANUP, after the verdict is

@@ -328,17 +328,32 @@ def test_a_decade_of_clock_range_is_refused_because_it_cannot_settle(tmp_path):
     carry its input code.
 
     The settling count at that clock is (1/10) * 13.33 = 1.33 against the 10.40
-    that enob 14 needs. Emitting a topology here would render a modulator whose
-    bitstream carries no code, so the entry refuses instead.
+    that enob 14 needs; at the clock the declaration NAMES as its operating
+    point it is 13.33 against the same 10.40.
+
+    RE-AIMED (vibe-ic#2062, owner ruling 2026-09-06). The entry used to REFUSE
+    this declaration on the ceiling figure. It now ADMITS it at the declared
+    operating point and PUBLISHES the ceiling figure beside it, because a
+    stated range is not a requirement: refusing here makes a declaration's
+    honesty about its own span cost it the topology. Both numbers this test
+    pinned before are still pinned — 1.3333333 and 10.3972077 — and the
+    admission and the operating-point figure are pinned in addition. The
+    measured density evidence above is unchanged and still stands as the
+    reason the RANGE does not close, which is now what the record says.
     """
     d, res, _ = a2(tmp_path, "decade", fclk=1.0, fclk_max=10.0)
-    assert res.returncode == 2
-    g = _gap(d)
-    bad = [r for r in g["admission_refusals"]
-           if r.get("field") == "settling_time_constants"]
-    assert bad, g["admission_refusals"]
-    assert bad[0]["value"] == pytest.approx(1.3333333, rel=1e-5)
-    assert float(bad[0]["min"]) == pytest.approx(10.3972077, rel=1e-6)
+    assert res.returncode == 0, res.stderr[-2000:]
+    ir = read_json(d / "topology.json")
+    info = [r for r in (ir.get("derived_informational") or [])
+            if r.get("field") == "settling_time_constants_at_fclk_max"]
+    assert info, ir.get("derived_informational")
+    assert info[0]["blocking"] is False
+    assert info[0]["state"] == "NOT_MET"
+    assert info[0]["value"] == pytest.approx(1.3333333, rel=1e-5)
+    assert info[0]["requirement"] == pytest.approx(10.3972077, rel=1e-6)
+    # ...and no refusal was recorded for the blocking row at the operating
+    # point, which is the half of the ruling that admits the block.
+    assert not (d / "topology_gap.json").is_file()
 
 
 def test_a_reference_too_small_to_settle_the_declared_resolution_is_refused(

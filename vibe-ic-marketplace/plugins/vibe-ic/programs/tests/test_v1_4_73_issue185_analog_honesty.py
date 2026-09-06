@@ -208,15 +208,34 @@ def test_a4_env_gap_nominal_out_of_spec_not_newly_failed(tmp_path):
 
 
 def test_a4_derived_out_of_spec_corner_not_failed(tmp_path):
-    # NO-REGRESSION: an out-of-spec corner that is DERIVED (simulator_run False)
-    # is arithmetic, not a measurement → not graded → PASS.
+    """NO-REGRESSION, KEPT: an out-of-spec corner that is DERIVED
+    (simulator_run False) is arithmetic, not a measurement, so it is NOT
+    GRADED — `A4_CORNER_MARGIN_FAIL` must not fire on it. That assertion is
+    unchanged and still holds.
+
+    RE-AIMED on the VERDICT (vibe-ic#2062). Not-graded was also being read as
+    CERTIFIED: the step passed over a record carrying a corner nobody measured.
+    Measured on a real run, this gate returned PASS over a record whose own
+    fields said `corners_executed: 1`, `total_corners: 9` and
+    `full_pvt_sweep_executed: false` — eight cells of arithmetic in the same
+    column as one measurement. A derived corner is now ACCOUNTED FOR
+    (NOT_MEASURED, rc 1) rather than certified: not a measured defect, and not
+    a pass either. The two verdicts are different words for a reason.
+    """
     _block_list(tmp_path, [{"name": "ldo", "type": "ldo"}])
     _corners(tmp_path, "ldo", _ldo_doc(1.2, 1.35, worst_real=False))
     r = _run_a4(tmp_path)
     rpt = json.loads((tmp_path / "a4.json").read_text())
     rules = [f.get("rule") for f in rpt.get("findings", [])]
     assert "A4_CORNER_MARGIN_FAIL" not in rules, rpt
-    assert rpt["verdict"] == "PASS", rpt
+    assert rpt["verdict"] == "INCOMPLETE", rpt
+    assert rpt["reason_class"] == "NOT_MEASURED", rpt
+    assert r.returncode == 1, r.stderr[-2000:]
+    # ...and it NAMES the corner it could not account for, so the record is
+    # actionable rather than merely non-green.
+    nm = [f for f in rpt["findings"]
+          if f.get("rule") == "A4_PVT_SWEEP_NOT_MEASURED"]
+    assert nm and nm[0]["unaccounted_corners"], rpt
 
 
 def test_a4_all_real_corners_in_spec_passes(tmp_path):

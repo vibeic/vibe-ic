@@ -152,7 +152,6 @@ def test_state_1_a_declaration_that_settles_is_admitted():
 @pytest.mark.parametrize("label,over", [
     ("a reference too small for the resolution", {"vref": 0.8, "enob": 16.0}),
     ("a resolution too fine for the reference", {"enob": 19.0}),
-    ("a decade of stated clock range", {"fclk_max": 10.0}),
 ])
 def test_state_2_a_declaration_that_does_not_settle_is_REFUSED(label, over):
     """The comparison is lost on the design's OWN numbers -- which is the
@@ -163,6 +162,62 @@ def test_state_2_a_declaration_that_does_not_settle_is_REFUSED(label, over):
     assert r["value"] < float(r["min"]), (label, r["value"], r["min"])
     # the refusal names the requirement it was held to, not only the value
     assert r["min_expr"] == a2._SETTLING_TC_REQUIRED_EXPR
+
+
+def test_a_decade_of_stated_clock_range_is_ADMITTED_and_REPORTED(
+        ):
+    """RE-AIMED, not dropped (vibe-ic#2062, owner ruling 2026-09-06).
+
+    This case used to be the third parameter of the REFUSED test above: a
+    declaration whose clock RANGE spans a decade was refused because the
+    settling count at the range CEILING (1.3333) is below the requirement
+    (10.3972). The ruling is that a block is held to the operating point its
+    declaration NAMES, and that the ceiling figure is REPORTED beside it — a
+    range column is not a requirement, and refusing a topology on the worst
+    end of a stated span makes a declaration's honesty about its own range
+    cost it the topology.
+
+    NOTHING THAT WAS CHECKED STOPPED BEING CHECKED. Both numbers the old
+    parameter pinned are still pinned here, by name: 1.3333333 at the ceiling
+    and 10.3972077 as the requirement. What is added is the admission, and the
+    operating-point figure that justifies it.
+    """
+    state, _ = _verdict(fclk_max=10.0)
+    assert state == "SATISFIED"
+
+    sp = dict(BASE, fclk_max=10.0)
+    env = a2.admission_env(a2.LIBRARY["delta_sigma"], sp, _measured())
+    at_target = a2._safe_eval(a2._SETTLING_TC_AT_FCLK_EXPR, env)
+    at_ceiling = a2._safe_eval(a2._SETTLING_TC_EXPR, env)
+    need = a2._safe_eval(a2._SETTLING_TC_REQUIRED_EXPR, env)
+    assert at_target == pytest.approx(13.3333333, rel=1e-6), at_target
+    assert at_ceiling == pytest.approx(1.3333333, rel=1e-6), at_ceiling
+    assert need == pytest.approx(10.3972077, rel=1e-6), need
+    assert at_target > need > at_ceiling
+
+    # ...and the ceiling figure is PUBLISHED, not merely not-blocking. A bound
+    # demoted from blocking to reporting and then not reported is a number
+    # that quietly left the record.
+    info = [r for r in a2.entry_informational(
+        a2.LIBRARY["delta_sigma"], sp, _measured())
+        if r["field"] == "settling_time_constants_at_fclk_max"]
+    assert info, "the ceiling figure is not published at all"
+    assert info[0]["blocking"] is False
+    assert info[0]["state"] == "NOT_MET"
+    assert info[0]["value"] == pytest.approx(1.3333333, rel=1e-6)
+    assert info[0]["requirement"] == pytest.approx(10.3972077, rel=1e-6)
+
+
+def test_an_informational_row_can_never_refuse_the_entry():
+    """BOTH DIRECTIONS on the demotion itself. The ceiling row is NOT_MET on
+    this declaration; if `informational` were ignored anywhere in
+    `entry_admission` it would refuse, and the ruling would be inert."""
+    refs = a2.entry_admission(
+        a2.LIBRARY["delta_sigma"], dict(BASE, fclk_max=10.0),
+        {k: UNITS[k] for k in BASE}, _measured())
+    assert not [r for r in refs
+                if r.get("field") == "settling_time_constants_at_fclk_max"], \
+        refs
 
 
 def test_state_3_an_unresolvable_constant_is_NOT_EVALUATED_and_is_NAMED():

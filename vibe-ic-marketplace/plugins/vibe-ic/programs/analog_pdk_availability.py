@@ -166,6 +166,149 @@ def _model_lib_candidates(lister: Callable[[str], List[str]],
     return sorted(dict.fromkeys(libs))
 
 
+# ── rung-2 SIGN-OFF DECK discovery ─────────────────────────────────────────
+# THE DEFECT THIS CLOSES, MEASURED (vibe-ic#2062, lane rbadc2 then czadcfd).
+# The rung-2 result carried `pdk_root` / `klayout_dir` / `netgen_dir` /
+# `magic_dir` and NO `drc_deck` and NO `lvs_deck` key at all, while
+# `analog_one_shot_runner._try_native_a6_pv` returns None unless one of those
+# two is set. So for every project whose PDK comes from the IMAGE — which is
+# every open-PDK project — A6 abandoned the native per-block PV before it named
+# a tool, and the step then FAILed `A6_PV_DRC_NO_EVIDENCE` /
+# `A6_PV_LVS_NO_EVIDENCE`: "the tool has not run". Only rung 1 (a project that
+# stages its own `input/pdk/`) ever populated them, which is why the lanes that
+# staged a PDK got a real A6 and the front door never did. Measured on
+# ihp-sg13g2, same block, same container: as shipped `run_block_pv` returned
+# ran=False in 0.00 s; with the image's own two decks present in the result it
+# ran for 21.4 s and returned DRC 0 violations / LVS match. The decks were in
+# the image the whole time.
+#
+# DERIVED FROM THE PDK VOLUME, NEVER A TYPED PATH. The relative sub-paths below
+# are the plugin's OWN canonical deck globs (`pdk_analog_completeness_check.
+# _AXES["drc_deck"] / ["lvs_deck"]`) with the project roots stripped and
+# re-rooted at the installed PDK's `libs.tech` — the same convention, the same
+# deliberate deepest-first order, one definition shared with rung 1. No family,
+# vendor or SKU literal appears; a PDK this repo has never heard of resolves by
+# the same rule as the open ones. Reports PATHS ONLY (NDA hygiene).
+_RUNG2_MACRO_DRC_EXTS = (".lydrc",)
+_RUNG2_MACRO_LVS_EXTS = (".lylvs",)
+
+
+def _a6_runnable_suffixes() -> Dict[str, tuple]:
+    """The deck extensions the CONSUMER can actually run, taken from the
+    consumer itself (`analog_a6_native_pv.deck_kind` / `.lvs_deck_kind` map
+    exactly these to an engine). Enumerating anything else would hand A6 a
+    deck it refuses as `unknown` — naming a tool and then not running it is
+    the same silent hole this closes, one step later. Falls back to the same
+    literals when the consumer is not importable (it is a sibling program, so
+    that is a shipping fault, not a normal path)."""
+    drc = (".rule", ".svrf", ".drc")
+    lvs = (".lvs", ".rule", ".svrf")
+    try:
+        import analog_a6_native_pv as _pv
+        drc = tuple(_pv._SVRF_DECK_SUFFIXES) + tuple(
+            e for e in _pv._KLAYOUT_DECK_SUFFIXES
+            if e not in _RUNG2_MACRO_DRC_EXTS)
+        lvs = tuple(
+            e for e in _pv._KLAYOUT_LVS_SUFFIXES
+            if e not in _RUNG2_MACRO_LVS_EXTS) + tuple(_pv._SVRF_DECK_SUFFIXES)
+    except Exception:
+        pass
+    return {"drc_deck": drc, "lvs_deck": lvs}
+
+
+def _axis_rel_globs(axis: str) -> List[str]:
+    """`pdk_analog_completeness_check._AXES[axis]` with the project-root
+    prefixes (`input/pdk`, `pdk`, …) stripped and de-duped, order preserved.
+    That axis is the plugin's ONE definition of what a staged sign-off deck
+    looks like; expressed relative to a PDK tree it is equally the definition
+    of what an INSTALLED one looks like."""
+    try:
+        import pdk_analog_completeness_check as _pac
+        roots = tuple(_pac._PDK_ROOTS)
+        raw = tuple(_pac._AXES[axis])
+    except Exception:
+        # Inline fallback mirroring the canonical convention, deepest-first.
+        return (["klayout/tech/drc/*.drc", "klayout/drc/*.drc", "klayout/*.drc"]
+                if axis == "drc_deck" else
+                ["klayout/tech/lvs/*.lvs", "klayout/lvs/*.lvs", "klayout/*.lvs"])
+    out: List[str] = []
+    for g in raw:
+        for r in roots:
+            if g.startswith(r + "/"):
+                g = g[len(r) + 1:]
+                break
+        if g not in out:
+            out.append(g)
+    return out
+
+
+def _deck_family_rank(name: str, matched_dir: Optional[str]) -> int:
+    """0 exact / 1 same family / 2 unrelated — how strongly a deck FILE NAME
+    identifies the PDK directory it was found under, by the SAME structural
+    token rule `families_agree` already uses to match a target to an installed
+    directory. This is load-bearing and was measured: one open PDK ships six
+    files matching the deck glob in one directory, and plain alphabetical order
+    puts a per-rule helper first and its sign-off deck fourth."""
+    stem = re.sub(r"\.[^.]*$", "", name)
+    if not matched_dir:
+        return 2
+    if _norm(stem) == _norm(matched_dir):
+        return 0
+    return 1 if families_agree(stem, matched_dir) else 2
+
+
+def _rung2_deck_candidates(lister: Callable[[str], List[str]],
+                           pdk_root: Optional[str],
+                           matched_dir: Optional[str],
+                           axis: str) -> List[str]:
+    """Every sign-off deck of `axis` the installed PDK ships that A6 can run,
+    RANKED best-first: family affinity, then the axis's own deepest-first
+    order, then name (so the answer is deterministic). The full ranked list is
+    published beside the chosen deck — a resolver that silently picks one of
+    six is the next version of this same defect."""
+    if not pdk_root:
+        return []
+    libs_tech = f"{pdk_root.rstrip('/')}/libs.tech"
+    plain = _a6_runnable_suffixes()[axis]
+    macro = (_RUNG2_MACRO_DRC_EXTS if axis == "drc_deck"
+             else _RUNG2_MACRO_LVS_EXTS)
+    # (rel-dir, suffix) pairs in axis order; the KLayout XML macro form is a
+    # LOWER tier than the plain runset of the same directory — where a PDK
+    # ships both, the plain runset is the one its own tooling runs.
+    probes: List[tuple] = []
+    dirs: List[str] = []
+    for rel in _axis_rel_globs(axis):
+        d, _, pat = rel.rpartition("/")
+        if "*" in d or not pat.startswith("*.") or "*" in pat[1:]:
+            continue                    # `**` / `*DRC*.rule`: not a plain suffix
+        suf = pat[1:].lower()
+        if suf not in plain:
+            continue                    # the consumer has no engine for it
+        probes.append((d, suf))
+        if d not in dirs:
+            dirs.append(d)
+    for d in dirs:
+        for suf in macro:
+            probes.append((d, suf))
+    listed: Dict[str, List[str]] = {}
+    ranked: List[tuple] = []
+    seen = set()
+    for idx, (d, suf) in enumerate(probes):
+        base = f"{libs_tech}/{d}" if d else libs_tech
+        if base not in listed:
+            listed[base] = lister(base) or []
+        for name in listed[base]:
+            if not name.lower().endswith(suf):
+                continue
+            path = f"{base}/{name}"
+            if path in seen:
+                continue
+            seen.add(path)
+            ranked.append((_deck_family_rank(name, matched_dir), idx, name, path))
+    ranked.sort()
+    return [r[3] for r in ranked]
+
+
 # ── family matching ──────────────────────────────────────────────────────
 
 def _norm(s: str) -> str:
@@ -502,6 +645,14 @@ def resolve_pdk(target: Optional[str], project=None,
     # can PARSE them (device roles + corner sections) — the missing piece that
     # kept every rung-2 native family at NEEDS_NATIVE_TEMPLATE.
     spice_libs = _model_lib_candidates(lister, ngspice_dir) if available else []
+    # The installed PDK's OWN sign-off decks. Without these two keys A6's
+    # native per-block PV is abandoned before it names a tool — see
+    # `_rung2_deck_candidates`.
+    klayout_present = bool(tech_present.get("klayout"))
+    drc_cands = (_rung2_deck_candidates(lister, pdk_root, matched, "drc_deck")
+                 if (available and klayout_present) else [])
+    lvs_cands = (_rung2_deck_candidates(lister, pdk_root, matched, "lvs_deck")
+                 if (available and klayout_present) else [])
     res = {
         "available": available,
         "probe_ok": probe_ok,
@@ -519,6 +670,10 @@ def resolve_pdk(target: Optional[str], project=None,
         "magic_dir": f"{pdk_root}/libs.tech/magic" if tech_present["magic"] else None,
         "klayout_dir": f"{pdk_root}/libs.tech/klayout" if tech_present["klayout"] else None,
         "netgen_dir": f"{pdk_root}/libs.tech/netgen" if tech_present["netgen"] else None,
+        "drc_deck": drc_cands[0] if drc_cands else None,
+        "lvs_deck": lvs_cands[0] if lvs_cands else None,
+        "drc_deck_candidates": drc_cands,
+        "lvs_deck_candidates": lvs_cands,
         "reason": (
             f"native PDK {matched!r} installed with ngspice tech"
             if available else
@@ -554,7 +709,9 @@ def native_available_header(res: Dict[str, Any], sim_pdk: str) -> str:
         f"* pdk_native_available: target={res.get('target')} "
         f"source=container_installed rung=2 "
         f"installed={res.get('matched_dir')} root={res.get('pdk_root')} "
-        f"ngspice={res.get('ngspice_dir')} — the L19 target PDK is INSTALLED "
+        f"ngspice={res.get('ngspice_dir')} "
+        f"drc_deck={res.get('drc_deck')} lvs_deck={res.get('lvs_deck')} "
+        f"— the L19 target PDK is INSTALLED "
         f"in the EDA container; the native analog path applies (no "
         f"open-source-default fallback / no deferral).\n")
 
