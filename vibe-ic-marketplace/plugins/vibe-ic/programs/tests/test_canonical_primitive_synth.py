@@ -1332,3 +1332,238 @@ def test_the_scoreboard_locals_also_give_way():
     c = rcs.extract_handshake_contract(desc)
     tb = rcs.emit_scoreboard_tb(c)
     assert "integer n_in_2 = 0, n_out_2 = 0, i;" in tb
+
+
+# ============================================================================
+# CZ2035P-6 -- WHAT A DETECTOR NEVER LOOKS AT, IT CANNOT REFUSE (closed, for the
+# one dimension where the template's own pole is soundly derivable).
+#
+# The block above records three routes measured closed. Route 3 was re-measured
+# on this base over all 16 detectors x 4 polar dimensions: 13 of 16 examine NONE
+# of the four and all 16 are blind to at least three, so its "cost = exactly one
+# canonical shape" is an artefact of how terse the canonical descriptions are,
+# not a property of the rule -- against ordinary prose it would defer nearly
+# everything. Route 2 reopens under a WIDTH test: a shift preserves the
+# operand's width, a zero-extension does not. Anchored on a declared input port
+# of known integer width it yields a pole for exactly one of the sixteen
+# templates, and that pole is right.
+#
+# The seam was already there: `detect_shape` withdraws a template through
+# `architecture_conflict` and `route_to_ai_reason` names the withdrawal. Only
+# the POLE VOCABULARY is new.
+# ============================================================================
+
+# Neutral, input-only. Matches `_is_barrel_shifter` (module-name token, ports
+# in/ctrl/out, the phrase "barrel shifter", "ctrl" and "shift") while asking for
+# the other direction.
+_BARREL_LEFT_DESC = (
+    "Module name:\n    barrel_shifter\n"
+    "A barrel shifter that performs a logical shift left on an 8-bit input, "
+    "controlled by ctrl.\n"
+    "Input ports:\n in: Data to be shifted.\n ctrl: Shift amount.\n"
+    "Output ports:\n out: Shifted result.\n"
+    "The barrel shifter shall shift the input to the left by the number of bit "
+    "positions given by ctrl, filling the vacated low-order bits with zero.\n")
+
+_BARREL_RIGHT_DESC = _BARREL_LEFT_DESC.replace("shift left", "shift right") \
+    .replace("to the left", "to the right").replace("low-order", "high-order")
+
+
+def test_a_stated_opposite_shift_direction_withdraws_the_template():
+    """OLD WRONG BEHAVIOUR, on input-only material. Measured on the base before
+    this layer: this description matched `barrel_shifter_right_8` and was
+    answered EMIT, rc=0, with `{4'b0000, in[7:4]}` -- a RIGHT shifter for an
+    input that says left three times, silently. The detector still matches it;
+    the fixed topology is now WITHDRAWN and the pole is NAMED."""
+    assert rcs._is_barrel_shifter(
+        _BARREL_LEFT_DESC, rcs.module_name_of(_BARREL_LEFT_DESC),
+        rcs._port_tokens(_BARREL_LEFT_DESC) - rcs._NOISE), (
+        "the fixture must still MATCH the detector, or it proves nothing")
+    # These two lines come FIRST on purpose. They read only APIs the base
+    # already had, so swapping the base program back in makes this test fail by
+    # ASSERTION on the old behaviour -- not by AttributeError on a layer that is
+    # simply absent, which would be no evidence of anything.
+    assert rcs.detect_shape(_BARREL_LEFT_DESC) is None
+    conflict = rcs.architecture_conflict(_BARREL_LEFT_DESC,
+                                         "barrel_shifter_right_8")
+    assert conflict is not None and conflict["polarity"] == "stated"
+    assert conflict["property"] == "shift_left"
+    assert rcs.extract_stated_shift_direction(_BARREL_LEFT_DESC) == {"shift_left"}
+    why = rcs.route_to_ai_reason(_BARREL_LEFT_DESC)
+    assert why["route"] == "ai_author"
+    assert why["kind"] == "architecture_conflict"
+    assert why["shape_declined"] == "barrel_shifter_right_8"
+    assert why["property"] == "shift_left"
+
+
+def test_the_alternative_architecture_control_stays_green():
+    """THE CONTROL. A withdrawal that fires on the agreeing input too would be a
+    regression wearing a fix's clothes: it would cost the shape its template for
+    saying what the template already does. An input stating the SAME direction
+    still gets it, and an input that states no direction is untouched."""
+    assert rcs.extract_stated_shift_direction(_BARREL_RIGHT_DESC) == {"shift_right"}
+    assert rcs.architecture_conflict(_BARREL_RIGHT_DESC,
+                                     "barrel_shifter_right_8") is None
+    assert rcs.detect_shape(_BARREL_RIGHT_DESC) == "barrel_shifter_right_8"
+    assert rcs.emit_rtl(rcs.detect_shape(_BARREL_RIGHT_DESC),
+                        _BARREL_RIGHT_DESC) == rcs._TEMPLATES[
+                            "barrel_shifter_right_8"]
+    silent = _INLINE_POS["barrel_shifter_right_8"]
+    assert rcs.extract_stated_shift_direction(silent) == set()
+    assert rcs.detect_shape(silent) == "barrel_shifter_right_8"
+
+
+def test_shift_poles_are_derived_from_the_template_code():
+    """Derived, never hand-declared -- a re-authored template moves its own pole.
+    Exactly ONE of the sixteen yields one, and it says what that template does.
+    Compared by MEMBERSHIP of the shape set, not by count."""
+    poled = {s for s in rcs._TEMPLATES
+             if any(p.startswith("shift_") for p in rcs.template_commitments(s))}
+    assert poled == {"barrel_shifter_right_8"}
+    assert "shift_right" in rcs.template_commitments("barrel_shifter_right_8")
+    assert "shift_left" not in rcs.template_commitments("barrel_shifter_right_8")
+
+
+def test_the_shift_derivation_can_report_either_pole():
+    """A rule that can only ever say one thing is not a rule. Feed it the same
+    template with its one port-anchored concatenation reversed and it must say
+    the other pole -- and then the SAME description conflicts the other way."""
+    left_rtl = rcs._TEMPLATES["barrel_shifter_right_8"].replace(
+        "{4'b0000, in[7:4]}", "{in[3:0], 4'b0000}")
+    assert left_rtl != rcs._TEMPLATES["barrel_shifter_right_8"]
+    assert "shift_left" in rcs._rtl_commitments(left_rtl)
+    assert "shift_right" not in rcs._rtl_commitments(left_rtl)
+
+
+def test_a_zero_extension_is_not_read_as_a_shift():
+    """The measurement that reopened this route. Reading the code NAIVELY, the
+    IEEE-754 multiplier's `{2'd0, a[30:23]}` looks like a right shift. It is a
+    zero-EXTENSION of the exponent FIELD: bit 30 is not `a`'s msb, so the slice
+    is not anchored where a shift's would be."""
+    tpl = rcs._TEMPLATES["ieee754_single_multiplier"]
+    assert "{2'd0, a[30:23]}" in tpl, "fixture drifted from the template"
+    widths = rcs._rtl_input_port_widths(tpl)
+    assert widths["a"] == 32 and widths["b"] == 32
+    assert rcs._rtl_shift_poles(tpl) == set()
+
+
+_ANCHOR_MODULE = ("module m(input [7:0] x, output [7:0] y);\n"
+                  "    wire [7:0] t = %s;\n"
+                  "    assign y = t;\n"
+                  "endmodule\n")
+
+
+@pytest.mark.parametrize("expr,pole", [
+    ("{4'b0000, x[7:4]}", "shift_right"),   # a real right shift by 4
+    ("{x[3:0], 4'b0000}", "shift_left"),    # a real left shift by 4
+])
+def test_the_anchored_forms_are_recognised(expr, pole):
+    assert rcs._rtl_shift_poles(_ANCHOR_MODULE % expr) == {pole}
+
+
+@pytest.mark.parametrize("expr,violates", [
+    # msb anchor alone is satisfied, fill-width anchor is not: the TOP nibble
+    # zero-extended to six bits. Not a shift.
+    ("{2'b00, x[7:4]}", "fill-width anchor"),
+    # fill-width anchor alone is satisfied, msb anchor is not: a middle field.
+    ("{2'b00, x[5:2]}", "msb anchor"),
+    # the same two, mirrored, for the left form
+    ("{x[6:0], 3'b000}", "left msb anchor"),
+    ("{x[4:1], 3'b000}", "left low anchor"),
+])
+def test_each_anchor_is_load_bearing_on_its_own(expr, violates):
+    """NEITHER anchor is redundant. Each of these satisfies exactly one of the
+    two and is not a shift; dropping the anchor it violates would make the rule
+    call it one. Written after a mutation of an earlier formulation SURVIVED:
+    that version also tested width preservation, which the two anchors already
+    imply, so the clause could not fail and proved nothing."""
+    assert rcs._rtl_shift_poles(_ANCHOR_MODULE % expr) == set(), violates
+
+
+def test_a_parametric_port_width_yields_no_pole_rather_than_a_default():
+    """Unknown is recorded as unknown. A width the source writes parametrically
+    does not resolve to an integer, so the width test cannot be applied and no
+    pole is claimed -- never a guessed default."""
+    widths = rcs._rtl_input_port_widths(rcs._TEMPLATES["async_gray_fifo"])
+    assert "wdata" in widths and widths["wdata"] is None
+    assert widths["wclk"] == 1
+    for shape in ("async_gray_fifo", "pipelined_ripple_adder_64",
+                  "pipelined_unsigned_multiplier_8"):
+        assert rcs._rtl_shift_poles(rcs._TEMPLATES[shape]) == set()
+
+
+def test_a_description_stating_both_shift_directions_records_neither():
+    """The same ambiguity rule the reset poles use: contradictory input is not a
+    licence to pick."""
+    both = _BARREL_LEFT_DESC + "In an alternative mode it may shift right.\n"
+    assert rcs.extract_stated_shift_direction(both) == set()
+    assert rcs.detect_shape(both) == "barrel_shifter_right_8"
+
+
+@pytest.mark.parametrize("text", [
+    "The output field is right-justified within the word.",
+    "The left-hand operand is registered before the adder.",
+    "Any data left over from the previous frame is discarded.",
+    "A right-angle turn in the layout is not permitted.",
+])
+def test_a_direction_word_not_about_shifting_states_nothing(text):
+    """`left` and `right` are ordinary English. The pole counts only where it is
+    SHIFTING that is being described, or the layer withdraws templates from
+    descriptions that never objected to them -- the same class of defect as
+    `demux` once forging a mux directive."""
+    assert rcs.extract_stated_shift_direction(text) == set()
+    assert rcs.detect_shape(
+        _INLINE_POS["barrel_shifter_right_8"] + text
+    ) == "barrel_shifter_right_8"
+
+
+def test_the_sixteen_canonical_descriptions_still_emit_their_own_bytes():
+    """The end-to-end guard, pinned in the suite so no human has to remember to
+    run it: every canonical description still detects as its own shape and emits
+    its template byte for byte. Membership first, then bytes."""
+    assert set(_INLINE_POS) == {k for k, _ in rcs._DETECTORS}
+    for shape, desc in _INLINE_POS.items():
+        assert rcs.detect_shape(desc) == shape
+        assert rcs.emit_rtl(shape, desc) == rcs._TEMPLATES[shape]
+
+
+def test_the_lfsr_states_a_direction_and_keeps_its_template():
+    """The population's own witness that the width test is load-bearing. The
+    LFSR's canonical description says "the register is shifted left" -- a real
+    stated pole, in the shipped corpus, not a constructed one. Its template
+    shifts an internal register, not an input port, so no pole is derived from
+    it and the shape is untouched. The blunter rule measured closed above (defer
+    whenever the input states a dimension the detector ignores) would have taken
+    this template away for saying something true about itself."""
+    desc = _INLINE_POS["lfsr4_xnor_left"]
+    assert rcs.extract_stated_shift_direction(desc) == {"shift_left"}
+    assert rcs._rtl_shift_poles(rcs._TEMPLATES["lfsr4_xnor_left"]) == set()
+    assert rcs.architecture_conflict(desc, "lfsr4_xnor_left") is None
+    assert rcs.detect_shape(desc) == "lfsr4_xnor_left"
+    assert rcs.emit_rtl("lfsr4_xnor_left", desc) == rcs._TEMPLATES["lfsr4_xnor_left"]
+
+
+def test_the_front_door_defers_the_contradicted_shape(tmp_path):
+    """NO HUMAN HAS TO REMEMBER THIS. The withdrawal is on the path the runner
+    already takes for every ordinary design: `_try_canonical_primitive_rtl`
+    returns None, the step falls through to the AI author, and -- the part that
+    matters -- NO RTL is written. Before this layer the same project got a
+    right-shift `barrel_shifter.v` on disk and a PASS."""
+    R = _load_runner()
+    proj = _mk_project(tmp_path, _BARREL_LEFT_DESC)
+    assert R._try_canonical_primitive_rtl(proj, 0.0) is None
+    rtl_dir = proj / "phase2" / "stage1" / "rtl"
+    assert not rtl_dir.is_dir() or list(rtl_dir.rglob("*.v")) == []
+
+
+def test_the_front_door_still_emits_the_agreeing_shape(tmp_path):
+    """The control, on the same path: an input that states the direction the
+    template implements is still answered program-first, byte for byte."""
+    R = _load_runner()
+    proj = _mk_project(tmp_path, _BARREL_RIGHT_DESC)
+    res = R._try_canonical_primitive_rtl(proj, 0.0)
+    assert res is not None and res.status == "PASS"
+    assert res.extras.get("shape") == "barrel_shifter_right_8"
+    emitted = sorted((proj / "phase2" / "stage1" / "rtl").glob("*.v"))
+    assert [p.name for p in emitted] == ["barrel_shifter.v"]
+    assert emitted[0].read_text() == rcs._TEMPLATES["barrel_shifter_right_8"]
