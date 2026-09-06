@@ -112,6 +112,41 @@ label, and `io.vibeic.derived.openroad.commit`. Verified on one host of each
 store family: `openroad -version` = `26Q3-2065-gcad013df98`, both cap_cmom OSDI
 objects present, `from sealring_cells import gf180mcu_sealring` constructs.
 
+## THE GATE ITSELF WAS ASKED, NOT REASONED ABOUT
+
+Everything above is a reading of the code. This is the code's own answer. The real,
+unmodified `_image_profile` from `tools/ci/hermetic_candidate_runner.py` (v1.18.3) was
+imported verbatim and called with only the module constants `IMAGE` /
+`IMAGE_REPO_DIGEST` patched — the function untouched — inside the 0.3.47 image, with
+the host Docker CLI and socket bound in the way `run_suite_in_eda_image.sh` does it.
+
+| host / store | reference offered | the gate's own verdict |
+|---|---|---|
+| 8HD-4 overlay2 | `ghcr…@sha256:06537f7e…` (0.3.46, pulled) — **control** | **PASS** |
+| 8HD-4 overlay2 | `vibeic-eda:0.3.47` (the tag it has) | REFUSAL — *does not bind the requested digest* |
+| 8HD-4 overlay2 | `vibeic-eda@sha256:c23c6487…` | REFUSAL — *No such image* |
+| 8HD-8 containerd | `vibeic-eda@sha256:c23c6487…` | **PASS** |
+| 8HD-8 containerd | `ghcr…@sha256:66c33ff2…` (0.3.6, the current pin) | PASS |
+| 8HD-4 overlay2 | `ghcr…@sha256:66c33ff2…` (0.3.6, the current pin) | PASS |
+
+The control passing is what makes the refusals mean something: the harness is not
+refusing everything put in front of it.
+
+**So the sharp statement is not "the pin cannot move". It is:**
+
+> Pinned as `vibeic-eda@sha256:c23c6487…`, the 0.3.47 image is accepted by the existing
+> gate, unmodified, on the two containerd hosts — and refused on the three overlay2
+> hosts, where the same bytes have no such reference. One literal cannot serve both.
+
+And the reason the *current* 0.3.6 pin does work everywhere is not that it is better
+specified — it is that 0.3.6 was **pulled** from a registry, so every store has a real
+registry digest for it. A save/load artefact never can. That is the whole difficulty in
+one sentence.
+
+(One arm of the prediction was wrong and is recorded as such: I predicted 0.3.6 would be
+absent from 8HD-8 and it is present. A guess about host state, with nothing measured
+behind it.)
+
 ## The candidate designs, for the ruling
 
 1. **Identity by content, and NOT by image ID.** The table above rules out a
@@ -122,12 +157,23 @@ objects present, `from sealring_cells import gf180mcu_sealring` constructs.
    whatever image carries that tag — accepting either an empty `RepoDigests` or a
    locally synthesised one. That is a different assertion from today's, not a
    loosened one, and it is exactly the part the owner has to rule on.
-2. **Publish it after all.** Push 0.3.47 to ghcr and keep every line above
-   exactly as it is. This contradicts the 2026-09-07 ruling, so it is a change of
-   ruling, not an implementation choice.
+2. **Publish it after all.** Push 0.3.47 to a registry and keep every line above
+   exactly as it is — this is the only option under which the pin becomes the pure
+   value change the lane was asked for, and the table above is why: a pulled image
+   has a real registry digest on every store, a loaded one does not. It contradicts
+   the 2026-09-07 no-push ruling, so it is a change of ruling, not an implementation
+   choice. (A registry the fleet can reach is not necessarily ghcr.)
 
-Option 1 is the one consistent with the ruling as given. It still needs the
-owner to say so, because it changes what the landing gate means by "pinned".
+3. **Make the fleet one store.** The split is entirely docker-version/snapshotter:
+   overlay2 on 29.1.3, containerd on 29.7.2/29.8.0. Moving all five to the containerd
+   snapshotter would make `vibeic-eda@sha256:c23c6487…` valid everywhere with no code
+   change at all — the gate already accepts it on the two hosts that have it. That is
+   a fleet-configuration decision with its own blast radius, and it is not mine.
+
+Option 1 is the one consistent with the no-push ruling as given, and it still needs
+the owner to say so, because it changes what the landing gate means by "pinned".
+Option 3 is the only one that needs no code change anywhere; option 2 is the only one
+that makes the pin the one-line value move this was originally scoped as.
 
 ## The bytes, so the ruling can be acted on without rebuilding
 
