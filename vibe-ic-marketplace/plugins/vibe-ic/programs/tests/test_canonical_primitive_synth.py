@@ -644,3 +644,59 @@ def test_a_pole_said_about_another_signal_is_not_a_reset_statement():
             + " enable_n: An active high enable that gates the divider.\n")
     assert rcs.extract_stated_reset_poles(desc) == {"active_low_reset"}
     assert rcs.detect_shape(desc) == "odd_clock_divider"
+
+
+# ============================================================================
+# The composed check has to SHIP, or a human has to remember to run it. When the
+# runner composes a contract shape it now publishes the scoreboard the same
+# contract produced, next to the RTL, under the author guard.
+# ============================================================================
+
+def _mk_contract_project(tmp_path, desc_text):
+    idoc = tmp_path / "phase1" / "input_doc"
+    idoc.mkdir(parents=True)
+    (idoc / "design_description.txt").write_text(desc_text)
+    return tmp_path
+
+
+def test_composed_shape_publishes_its_scoreboard(tmp_path):
+    R = _load_runner()
+    proj = _mk_contract_project(tmp_path / "p", _F6_DESC)
+    res = R._try_canonical_primitive_rtl(proj, 0.0)
+    assert res is not None and res.status == "PASS"
+    assert res.extras["shape"] == "elastic_handshake_stage"
+    tb = proj / "phase2" / "stage1" / "tb" / "tb_elastic_stage.v"
+    assert tb.is_file()
+    assert res.extras["scoreboard_tb"] == str(tb)
+    assert str(tb) in res.output_files
+    body = tb.read_text()
+    assert "module tb_elastic_stage;" in body
+    assert "accepted transfers lost" in body
+
+
+def test_scoreboard_never_overwrites_an_authors_testbench(tmp_path):
+    R = _load_runner()
+    proj = _mk_contract_project(tmp_path / "p", _F6_DESC)
+    tb = proj / "phase2" / "stage1" / "tb" / "tb_elastic_stage.v"
+    tb.parent.mkdir(parents=True)
+    tb.write_text("// an author's own testbench\n")
+    res = R._try_canonical_primitive_rtl(proj, 0.0)
+    assert res is not None and res.status == "PASS"
+    assert tb.read_text() == "// an author's own testbench\n"
+    assert "kept the existing" in res.extras["scoreboard_tb"]
+    assert str(tb) not in res.output_files
+
+
+def test_template_shapes_publish_no_scoreboard(tmp_path):
+    """The sixteen fixed templates own no contract, so nothing new appears next
+    to them: this wiring is additive for the composed shapes only."""
+    R = _load_runner()
+    proj = _mk_contract_project(tmp_path / "p",
+                                _INLINE_POS["pulse_detect_0to1to0"])
+    res = R._try_canonical_primitive_rtl(proj, 0.0)
+    assert res is not None and res.status == "PASS"
+    assert res.extras["shape"] == "pulse_detect_0to1to0"
+    assert res.extras.get("scoreboard_tb") is None
+    assert not (proj / "phase2" / "stage1" / "tb").exists()
+    assert res.output_files == [
+        str(proj / "phase2" / "stage1" / "rtl" / "pulse_detect.v")]
