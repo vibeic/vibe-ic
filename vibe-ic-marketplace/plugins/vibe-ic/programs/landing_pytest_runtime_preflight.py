@@ -90,8 +90,13 @@ HOST_LANE_AUTO = "auto"
 #: and `tools/ci/protected_landing_transition.json` spell it.  A remedy that
 #: names a floating tag is not a remedy: a floating tag is how a host ends up
 #: with a runtime nobody pinned.
-RUNNER_IMAGE = ("ghcr.io/vibeic/vibeic-eda@sha256:"
-                "66c33ff2e05781758f596d82bff61ad8a404ef0a7eae3d21ab8a9d55df0d01ff")
+#: Resolved the way the runner resolves it: the DIGEST is the identity and is
+#: pinned here; the REPOSITORY is deployment configuration and comes from the one
+#: env, defaulting to the published repository.  A remedy line that named a
+#: registry this host cannot reach would be no remedy at all.
+RUNNER_IMAGE = (
+    (os.environ.get("VIBEIC_EDA_IMAGE_REPO") or "ghcr.io/vibeic/vibeic-eda")
+    + "@sha256:8da785a8d3275884ad0d0ee0fb10f7e90d8b7bf11a08d38e9559b0764112480f")
 
 #: The parent's semantic progress stream, which this probe must NOT join.
 #:

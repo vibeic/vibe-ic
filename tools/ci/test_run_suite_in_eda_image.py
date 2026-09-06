@@ -202,16 +202,40 @@ def test_no_engine_declares_itself_as_the_control_it_is():
     assert "a green result would mean the control stopped checking" in text
 
 
-def _pinned_image() -> str:
-    """The digest the harness will use — READ from the single pin, as it does."""
+def _pinned_parts() -> dict:
+    """The two constants the harness reads: the pinned DIGEST and the DEFAULT
+    repository.
+
+    The pin is split on purpose. The digest is the identity -- the bytes -- and
+    is asserted everywhere. The repository is deployment configuration, because
+    the same bytes are served from the published registry and from a LAN one and
+    which a host can reach is a fact about the network. This helper composes them
+    exactly as the harness does, so the test moves with the harness and not with
+    a copy of its answer.
+    """
     import ast
+    wanted = ("IMAGE_DIGEST", "IMAGE_REPO_DEFAULT")
     src = (_REPO / "tools/ci/hermetic_candidate_runner.py").read_text(
         encoding="utf-8")
+    found = {}
     for node in ast.parse(src).body:
-        if isinstance(node, ast.Assign) and any(
-                getattr(t, "id", "") == "IMAGE" for t in node.targets):
-            return ast.literal_eval(node.value)
-    raise AssertionError("hermetic_candidate_runner.py pins no IMAGE")
+        if not isinstance(node, ast.Assign):
+            continue
+        for target in node.targets:
+            name = getattr(target, "id", "")
+            if name in wanted and name not in found:
+                found[name] = ast.literal_eval(node.value)
+    missing = [name for name in wanted if name not in found]
+    if missing:
+        raise AssertionError(
+            f"hermetic_candidate_runner.py pins no {', '.join(missing)}")
+    return found
+
+
+def _pinned_image() -> str:
+    """The reference the harness will use with no env set."""
+    parts = _pinned_parts()
+    return f"{parts['IMAGE_REPO_DEFAULT']}@{parts['IMAGE_DIGEST']}"
 
 
 def test_the_harness_keeps_no_literal_copy_of_the_pinned_digest():
@@ -242,6 +266,24 @@ def test_the_pinned_image_is_a_digest_and_matches_the_landing_preflight():
     assert digest in preflight, (
         "the pinned runtime and the landing runtime preflight name different "
         "images")
+
+
+def test_the_harness_composes_the_pin_from_digest_and_configured_repository():
+    """The identity is the digest; the repository is configuration.
+
+    The harness must read BOTH constants and honour the one env, so that a host
+    which reaches the same bytes at a different registry is still pinned to those
+    bytes. If it ever went back to reading a single composed constant, a
+    deployment could only follow by editing the pin -- which is how a second
+    definition of the runtime gets created.
+    """
+    text = _HARNESS.read_text(encoding="utf-8")
+    assert "IMAGE_DIGEST" in text and "IMAGE_REPO_DEFAULT" in text, (
+        "the harness must read the digest and the default repository")
+    assert "VIBEIC_EDA_IMAGE_REPO" in text, (
+        "the harness must honour the one repository config point")
+    # and the digest it reads is a real digest, not a tag
+    assert re.fullmatch(r"sha256:[0-9a-f]{64}", _pinned_parts()["IMAGE_DIGEST"])
 
 
 def test_the_harness_refuses_when_the_pin_cannot_be_read():
