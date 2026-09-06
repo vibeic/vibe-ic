@@ -1061,9 +1061,12 @@ def _local_exec_mode() -> bool:
 
     This is the third resolver in this file to learn the same lesson, and it
     is deliberately the same shape as the two that came before it —
-    `_read_pdk_text` ("Host read first ... then the container") and, since
-    v1.17.79, `_registry_glob_one_local`. Those two taught the PDK to resolve
-    in-image; this one teaches the TOOLS to run there.
+    `_read_pdk_text` ("Host read first ... then the container"), which taught
+    the PDK TEXT to be read in-image; this one teaches the TOOLS to run there,
+    and it does so at the ONE exec seam, so no individual resolver needs a
+    filesystem opinion of its own. (`_registry_glob_one` briefly had one, in
+    v1.17.79; it made three declared-asset refusals stop refusing and was
+    removed once this seam existed.)
 
     THE PREDICATE IS "NO ROUTE EXISTS", AND IT IS EXACTLY ONE QUESTION:
     is there a `docker` client on PATH? With no client there is no route to
@@ -10665,51 +10668,35 @@ def _netlist_matches_liberty(netlist_path: Path,
         return True
 
 
-def _registry_glob_one_local(root_prefix: str,
-                             full: str) -> Optional[str]:
-    """Resolve a registry asset glob against the LOCAL filesystem.
+def _registry_path_under_root(root_prefix: str, cand: str) -> bool:
+    """Is `cand` an acceptable resolution for a registry asset under
+    `root_prefix` (which ends in '/')?
 
-    Returns the deterministic sorted-first match, or None when the pattern
-    matches nothing locally (including the ordinary host case, where the PDK
-    root does not exist at all) so the caller falls through to the container.
+    BOTH acceptance tests, applied to EVERY candidate on EVERY route.
 
-    Applies the SAME two acceptance tests as the container branch — the
-    candidate must sit under the PDK root and must actually exist — so a local
-    resolution can never be laxer than an in-container one.
-    """
-    import glob as _glob_m
+    The textual prefix drops the login-shell banner and any other non-path
+    noise line (see `_registry_glob_one`). The `..`-normalisation is the half
+    a textual test cannot make: a registry pattern containing `..` composes a
+    path that still STARTS with the root and names a file outside it. This was
+    first caught by the v1.17.79 no-leak arm against the local resolver, which
+    resolved `/etc/passwd` through the literal branch; the same hole was open
+    on the container route, where the literal branch accepted whatever
+    `test -e` said, so the predicate now lives at the ONE place both routes
+    pass through.
 
-    def _under_root(cand: str) -> bool:
-        """Both acceptance tests, applied to EVERY candidate.
-
-        The textual prefix is the container branch's own test. The realpath
-        containment is the half a textual test cannot make: a registry pattern
-        containing `..` composes a path that still STARTS with the root and
-        resolves outside it. Caught by this function's own no-leak arm, which
-        resolved `/etc/passwd` through the literal (non-glob) branch while the
-        docstring above claimed the root was enforced.
-        """
-        if not cand.startswith(root_prefix):
-            return False
-        try:
-            real_root = os.path.realpath(root_prefix.rstrip('/'))
-            return (os.path.realpath(cand) == real_root
-                    or os.path.realpath(cand).startswith(real_root + os.sep))
-        except OSError:
-            return False
-
+    Symlinks are resolved when they exist HERE (in-image, the PDK is on this
+    filesystem); when they do not, `os.path.realpath` degrades to a lexical
+    normalisation, which is exactly what is wanted for a path that names a
+    file in a container this process cannot see. PDK/chip-AGNOSTIC."""
+    if not cand.startswith(root_prefix):
+        return False
     try:
-        if not os.path.isdir(root_prefix.rstrip('/')):
-            return None
-        if not any(ch in full for ch in "*?["):
-            return (full if os.path.exists(full) and _under_root(full)
-                    else None)
-        for h in sorted(_glob_m.glob(full)):
-            if _under_root(h) and os.path.exists(h):
-                return h
+        real_root = os.path.realpath(root_prefix.rstrip('/'))
+        real_cand = os.path.realpath(cand)
+        return (real_cand == real_root
+                or real_cand.startswith(real_root + os.sep))
     except OSError:
-        return None
-    return None
+        return False
 
 
 def _registry_glob_one(container: str, root: str, pattern: Optional[str],
@@ -10748,37 +10735,35 @@ def _registry_glob_one(container: str, root: str, pattern: Optional[str],
         return None
     root_prefix = root.rstrip('/') + '/'
     full = f"{root.rstrip('/')}/{pattern.lstrip('/')}"
-    # LOCAL FIRST — the same order `_read_pdk_text` already establishes ("Host
-    # read first ... then the container"), for the same reason and one step
-    # earlier in the chain.
+    # ONE ROUTE, DECIDED IN ONE PLACE. Every probe below goes through
+    # `_docker_exec_raw`, which since v1.17.86 asks `_local_exec_mode()`
+    # whether a route to a container exists at all and, when none does (the
+    # runner is ALREADY RUNNING INSIDE the image, where there is no `docker`
+    # binary), runs the same `bash -lc` on THIS filesystem. So the in-image
+    # case v1.17.79 came here to fix — every declared asset present under the
+    # process's own root, reported absent because the only access route was
+    # `docker exec` — is fixed one layer down, for every probe in this file at
+    # once, and this resolver does not need a second opinion.
     #
-    # WHY THIS EXISTS. Resolution used to run ONLY through `docker exec`. That
-    # is correct when the runner sits on the host beside the container, and it
-    # is unreachable when the runner is ALREADY RUNNING INSIDE that image:
-    # there is no `docker` binary in there, so `_docker_exec_raw` returns 127
-    # for every probe, every asset resolves to None, `_pdk_config_from_registry`
-    # returns None, and `_detect_pdk` REFUSES with "declared in
-    # pdk_registry.json but its assets could not be resolved". MEASURED
-    # 2026-09-06 on the canonical front door (`vibe_ic_one_shot_runner.py`
-    # inside ghcr.io/vibeic/vibeic-eda 0.3.46, --pdk gf180mcuD): Phase 2 passed,
-    # Phase 3 halted at its first act, and every one of that registry entry's
-    # six declared assets was present and matched exactly one file at the very
-    # path the probe was asking about. The PDK was under the process's own
-    # root the whole time; only the ACCESS ROUTE was missing.
-    #
-    # The refusal it produces is right and stays right — a named PDK must never
-    # resolve to another foundry's data. This adds the route, not an exception:
-    # a genuinely absent asset still resolves to None and still REFUSES.
-    #
-    # Host-side behaviour is unchanged BY CONSTRUCTION: `/foss/pdks/...` does
-    # not exist on a host filesystem, so the local branch finds nothing and
-    # falls through to the container exactly as before. A local hit is returned
-    # only after the SAME two acceptance tests the container branch applies —
-    # under the PDK root, and actually exists.
-    _local_hit = _registry_glob_one_local(root_prefix, full)
-    if _local_hit is not None:
-        return _local_hit
+    # WHY THE SECOND OPINION WAS REMOVED (this defect). v1.17.79 answered the
+    # same question here with a `_registry_glob_one_local` consulted BEFORE
+    # the container, unconditionally. That is not a route, it is a different
+    # oracle: it answers from whatever this filesystem happens to carry,
+    # whoever the caller named as the container and whatever that container
+    # would have said. MEASURED on the tip in the pinned image: the three
+    # tests that pin "a DECLARED asset that does not resolve is a REFUSAL"
+    # (`test_detect_pdk_refuses_when_declared_assets_absent`,
+    # `test_pdk_config_from_registry_none_when_liberty_unresolved`,
+    # `test_b3_unbranched_registry_name_refuses_not_silent_sky130a`) all read
+    # DID NOT RAISE SystemExit — the resolver stopped asking whether the
+    # declared asset resolved and started answering "the family ships in this
+    # image". A refusal that depends on what the image happens to carry is not
+    # a refusal.
     if not any(ch in full for ch in "*?["):
+        # Containment FIRST: a pattern that composes a path outside the
+        # declared root is refused without asking anything, on either route.
+        if not _registry_path_under_root(root_prefix, full):
+            return None
         rc, _o, _e = _docker_exec_raw(
             container, f"test -e {shlex.quote(full)}", timeout=60)
         return full if rc == 0 else None
@@ -10794,7 +10779,7 @@ def _registry_glob_one(container: str, root: str, pattern: Optional[str],
     # does — preserving the deterministic sorted-first choice.
     for ln in out.splitlines():
         h = ln.strip()
-        if not h.startswith(root_prefix):
+        if not _registry_path_under_root(root_prefix, h):
             continue
         rc2, _o2, _e2 = _docker_exec_raw(
             container, f"test -e {shlex.quote(h)}", timeout=60)
@@ -10827,14 +10812,13 @@ def _pdk_config_from_registry(project: Path, reg: Dict[str, Any]
     root = reg.get("container_path") or ""
     if not root:
         return None
-    # Same local-first order as the asset globs below: in-container the root
-    # is a plain directory on this process's own filesystem, and probing it
-    # through a docker binary that is not there reported it ABSENT.
-    if not os.path.isdir(root):
-        rc, _o, _e = _docker_exec_raw(
-            container, f"test -d {shlex.quote(root)}", timeout=60)
-        if rc != 0:
-            return None
+    # ONE ROUTE (see `_registry_glob_one`): `_docker_exec_raw` already runs
+    # this probe on THIS filesystem when no route to a container exists, so
+    # the in-image case resolves without a second, container-blind opinion.
+    rc, _o, _e = _docker_exec_raw(
+        container, f"test -d {shlex.quote(root)}", timeout=60)
+    if rc != 0:
+        return None
 
     liberty = _registry_glob_one(container, root, reg.get("liberty_glob"))
     tech_lef = _registry_glob_one(container, root, reg.get("tech_lef_glob"))
