@@ -293,6 +293,31 @@ def emit_consume_manifest(project: Path, staged_paths: List[Path],
     return mf_path
 
 
+def _unresolved_module_refs(files: List[Path]) -> List[str]:
+    """Modules INSTANTIATED by ``files`` that ``files`` do not DEFINE.
+
+    Empty means the set is closed — it is a design, and staging anything
+    around it would be clobbering someone's work. Non-empty means the set
+    names something it does not contain, which is what a glue wrapper is.
+
+    Fail-safe: any problem reading or analysing returns ``[]``, i.e. the
+    historical directory-level skip. A defect in this analysis must never be
+    able to stage over an author's tree.
+    """
+    try:
+        import staged_rtl_closure_preflight as _pf
+    except Exception:  # noqa: BLE001
+        return []
+    try:
+        report = _pf.audit([str(f) for f in files])
+    except Exception:  # noqa: BLE001
+        return []
+    if report.get("verdict") == "ERROR":
+        return []
+    return sorted({str(f.get("module_ref")) for f in report.get("findings", [])
+                   if f.get("module_ref")})
+
+
 def consume_reused_ip_rtl(project: Path) -> Dict:
     """DETERMINISTIC reused-IP CONSUME: stage the design's provided build RTL
     into ``phase2/stage1/rtl/`` so synth can find a top.
@@ -321,10 +346,44 @@ def consume_reused_ip_rtl(project: Path) -> Dict:
                     and p.name != _MANIFEST_NAME):
                 existing.append(p)
     if existing:
-        result["reason"] = (
-            f"phase2/stage1/rtl/ already holds {len(existing)} RTL file(s) — "
-            f"a deterministic generator / author owns it; CONSUME skipped")
-        return result
+        # A DIRECTORY-LEVEL SKIP CANNOT ANSWER A CLOSURE-LEVEL QUESTION.
+        #
+        # "rtl/ is non-empty" was read as "a generator or author owns the
+        # design", and for a generator that is true. For CATALOG-GLUE it is
+        # the opposite: `step_rtl_gen` WAIVES with `fallback_skill=
+        # catalog-glue-author`, whose whole job is to author a WRAPPER around
+        # reused IP — and the IP it wraps is staged by THIS step, next. An
+        # author who obeys that waive literally writes one file here, and the
+        # act of obeying it disarms the staging the wrapper depends on: the
+        # vendor closure is never staged and synth fails on a module nobody
+        # can find. The two halves of the flow already disagreed —
+        # `_autoemit_chip_top_wrapper` defers at the WRAPPER level ("caller
+        # already provided one") while this deferred at the DIRECTORY level —
+        # and only the directory-level one was load-bearing.
+        #
+        # The right question is not "is rtl/ empty" but "does rtl/ hold a
+        # DESIGN": a set of files whose instantiations all resolve inside it.
+        # A glue wrapper does not; it is a file that names what is missing.
+        # chip-AGNOSTIC — pure SV instantiation closure, no IP or vendor name.
+        #
+        # Existing files are still never clobbered: the staging loop below is
+        # first-wins on a name collision, so an author's wrapper survives
+        # verbatim and only the modules it REFERENCES arrive around it.
+        unresolved = _unresolved_module_refs(existing)
+        if not unresolved:
+            result["reason"] = (
+                f"phase2/stage1/rtl/ already holds {len(existing)} RTL file(s) "
+                f"— a deterministic generator / author owns it; CONSUME "
+                f"skipped")
+            return result
+        result["pre_existing_rtl"] = sorted(f.name for f in existing)
+        result["unresolved_module_refs"] = unresolved
+        result["consume_reason_override"] = (
+            f"phase2/stage1/rtl/ holds {len(existing)} file(s) but is NOT "
+            f"closed: {len(unresolved)} instantiated module(s) are defined "
+            f"nowhere in it ({', '.join(unresolved[:8])}). That is a GLUE "
+            f"wrapper, not a design — staging the reused IP it instantiates, "
+            f"first-wins so nothing already present is overwritten.")
 
     provided = discover_provided_build_rtl(project)
     if not provided:
@@ -412,7 +471,9 @@ def consume_reused_ip_rtl(project: Path) -> Dict:
     result["reason"] = (
         f"staged {len(staged)} design-provided build-RTL file(s) into "
         f"phase2/stage1/rtl/ (deterministic; residual glue still WAIVES to "
-        f"catalog-glue-author)")
+        f"catalog-glue-author)"
+        + (" — " + result["consume_reason_override"]
+           if result.get("consume_reason_override") else ""))
     return result
 
 

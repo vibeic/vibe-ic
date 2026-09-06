@@ -13128,6 +13128,573 @@ def _apply_l8_param_overrides(project, param_block: str):
     return param_block, applied, unapplied
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# EXCLUDED-VARIANT PARAMETER RESOLUTION (chip-AGNOSTIC)
+#
+# A security-hardened IP ships several implementation variants of one block
+# behind a compile-time parameter, and a staging convention may EXCLUDE one of
+# them by renaming its file `<module>.sv.unused-<why>-excluded` so no RTL glob
+# picks it up. The auto-emitted chip_top copies the DUT's parameter header
+# VERBATIM, so the vendor DEFAULT — which may name exactly the excluded variant
+# — becomes what gets built. yosys then aborts with
+#   Module `\aes_sbox_dom' referenced in ... is not part of the design
+# and the operator is left to triage a raw elaboration abort. #586's closure
+# preflight already DIAGNOSES that abort after the fact; this resolves or
+# REFUSES it BEFORE the wrapper is written, which is the only place the choice
+# is still a choice.
+#
+# TWO OUTCOMES, NEVER A THIRD. Either the design INPUT declares something that
+# determines the variant — in which case the value is DERIVED from the RTL's
+# own guard structure and recorded with its full provenance — or it does not,
+# in which case the emitter REFUSES BY NAME. It never picks a variant for
+# itself: that is #586's refusal ("Choosing a different PRESENT variant would
+# silently rewrite a parameter selection and is NOT done") and it is untouched.
+# A free choice must be DECLARED, and an undeclared one is an INPUT defect that
+# the flow states rather than papers over.
+#
+# Everything below is structure, not vocabulary: the exclusion is read off a
+# FILENAME convention, the candidate values off the RTL's own generate guards,
+# the masked/unmasked partition off the RTL's own localparam, and the declared
+# intent off L8. No chip, vendor, IP or module name appears anywhere in it.
+# ─────────────────────────────────────────────────────────────────────────────
+
+#: `<module>.<v|sv>.unused-<why>-excluded` — a file DELIBERATELY kept out of
+#: the staged set. The marker is the name; the module is its first component
+#: (a Verilog identifier can never contain a dot).
+_EXCLUDED_VARIANT_FILE_RE = re.compile(
+    r"^(?P<mod>[A-Za-z_]\w*)\.(?:sv|v)\.unused-[\w.+-]*excluded$")
+
+_CT_BEGIN_LABEL_RE = re.compile(r"\bbegin\s*:\s*([A-Za-z_]\w*)")
+_CT_BEGIN_END_RE = re.compile(r"\bbegin\b|\bend\b")
+_CT_IF_TAIL_RE = re.compile(
+    r"\bif\s*\((?P<cond>[^()]*(?:\([^()]*\)[^()]*)*)\)\s*$")
+_CT_ELSE_TAIL_RE = re.compile(r"\belse\s*$")
+_CT_LOCALPARAM_RE = re.compile(
+    r"\blocalparam\b[^;=]*?\b([A-Za-z_]\w*)\s*=\s*([^;]+);")
+_CT_TERNARY_RE = re.compile(
+    r"^\((?P<expr>.*)\)\s*\?\s*(?P<t>1'b[01])\s*:\s*(?P<f>1'b[01])$", re.S)
+_CT_WORD_SPLIT_RE = re.compile(r"[A-Z]+(?![a-z])|[A-Z][a-z]+|[a-z]+|\d+")
+
+
+def _chip_top_excluded_variant_modules(project, rtl_dir):
+    """``{module_name: path-as-shown}`` for every file the design ships under
+    the ``*.unused-*-excluded`` marker.
+
+    Empty for every design that excludes nothing — which is why this whole
+    mechanism is a NO-OP, byte for byte, on such a design.
+    """
+    out = {}
+    roots = []
+    for cand in (Path(project) / "input", Path(rtl_dir),
+                 Path(rtl_dir).parent):
+        try:
+            if cand.is_dir() and cand not in roots:
+                roots.append(cand)
+        except OSError:
+            continue
+    for root in roots:
+        try:
+            for f in sorted(root.rglob("*excluded")):
+                if not f.is_file():
+                    continue
+                m = _EXCLUDED_VARIANT_FILE_RE.match(f.name)
+                if not m:
+                    continue
+                mod = m.group("mod")
+                if mod not in out:
+                    try:
+                        out[mod] = str(f.relative_to(Path(project)))
+                    except ValueError:
+                        out[mod] = f.name
+        except OSError:
+            continue
+    return out
+
+
+def _chip_top_generate_blocks(text):
+    """Every ``begin : LABEL`` block, with the guard that opens it.
+
+    Returns a list of dicts ``{label, start, end, kind, cond}`` where ``kind``
+    is ``if`` / ``elseif`` / ``else`` / ``plain``. ``start``/``end`` bound the
+    block body, so "which blocks enclose offset N" is a containment test.
+
+    Conservative by construction, exactly like the closure preflight's own
+    ``_enclosing_if_generate``: a block whose opener is not immediately
+    preceded by ``if (...)`` or a bare ``else`` is ``plain`` and never
+    constrains anything, so ``for``/``always``/named blocks keep their meaning.
+    """
+    blocks = []
+    for m in _CT_BEGIN_LABEL_RE.finditer(text):
+        b_start = m.start()
+        depth = 0
+        b_end = len(text)
+        for t in _CT_BEGIN_END_RE.finditer(text, b_start):
+            if t.group(0) == "begin":
+                depth += 1
+            else:
+                depth -= 1
+                if depth == 0:
+                    b_end = t.start()
+                    break
+        before = text[:b_start].rstrip()
+        kind, cond, guard_at = "plain", None, b_start
+        m_if = _CT_IF_TAIL_RE.search(before)
+        if m_if:
+            cond = m_if.group("cond").strip()
+            guard_at = m_if.start()
+            kind = ("elseif"
+                    if _CT_ELSE_TAIL_RE.search(before[:m_if.start()].rstrip())
+                    else "if")
+        elif _CT_ELSE_TAIL_RE.search(before):
+            kind = "else"
+            guard_at = _CT_ELSE_TAIL_RE.search(before).start()
+        blocks.append({"label": m.group(1), "start": b_start, "end": b_end,
+                       "kind": kind, "cond": cond, "guard_at": guard_at})
+    return blocks
+
+
+def _chip_top_sibling_conds(blocks, blk):
+    """The conditions an ``else`` / ``else if`` branch must NEGATE.
+
+    An ``else`` says "none of the preceding arms of THIS chain held", and that
+    is a statement about the siblings, not about the block itself. Walking the
+    chain backwards is the only way to evaluate one; a reader who takes the
+    ``else`` branch as unconditional gets the opposite of the truth.
+    """
+    conds = []
+    cur = blk
+    seen = 0
+    while cur["kind"] in ("else", "elseif") and seen < 32:
+        seen += 1
+        prev = None
+        for c in blocks:
+            if c["end"] < cur["guard_at"] and (
+                    prev is None or c["end"] > prev["end"]):
+                prev = c
+        if prev is None:
+            break
+        if prev["cond"] is not None:
+            conds.append(prev["cond"])
+        cur = prev
+    return conds
+
+
+def _chip_top_predicate_values(text, param):
+    """``{localparam_name: (frozenset(values), polarity)}`` for every localparam
+    whose value is decided SOLELY by ``param``.
+
+    This is the design's OWN derivation, read off the design's own RTL — the
+    same expression the elaborator evaluates. Nothing here knows what the
+    predicate MEANS; it only knows which values of ``param`` make it true.
+    """
+    preds = {}
+    for m in _CT_LOCALPARAM_RE.finditer(text):
+        name, rhs = m.group(1), " ".join(m.group(2).split())
+        polarity = True
+        t = _CT_TERNARY_RE.match(rhs)
+        if t:
+            rhs = t.group("expr").strip()
+            if t.group("t") == "1'b0" and t.group("f") == "1'b1":
+                polarity = False
+            elif not (t.group("t") == "1'b1" and t.group("f") == "1'b0"):
+                continue
+        if "&&" in rhs or "?" in rhs:
+            continue
+        terms = [x.strip() for x in rhs.split("||")]
+        vals = []
+        ok = True
+        for term in terms:
+            term = term.strip().strip("()").strip()
+            tm = re.match(r"^" + re.escape(param) + r"\s*==\s*([\w:']+)$",
+                          term)
+            if not tm:
+                ok = False
+                break
+            vals.append(tm.group(1).split("::")[-1])
+        if ok and vals:
+            preds[name] = (frozenset(vals), polarity)
+    return preds
+
+
+def _chip_top_eval_cond(cond, param, value, preds):
+    """``True`` / ``False`` / ``None`` — and ``None`` is load-bearing.
+
+    An unknown guard is NOT a false one. Every caller treats ``None`` as
+    "this file cannot be evaluated" and REFUSES, because resolving a variant
+    off a guard we could not read is exactly the silent pick this whole
+    mechanism exists to prevent.
+    """
+    if cond is None:
+        return None
+    c = " ".join(cond.split())
+    neg = False
+    while c.startswith("!"):
+        neg = not neg
+        c = c[1:].strip()
+    c = c.strip("()").strip()
+    res = None
+    m = re.match(r"^" + re.escape(param) + r"\s*==\s*([\w:']+)$", c)
+    if m:
+        res = (m.group(1).split("::")[-1] == value.split("::")[-1])
+    else:
+        m = re.match(r"^" + re.escape(param) + r"\s*!=\s*([\w:']+)$", c)
+        if m:
+            res = (m.group(1).split("::")[-1] != value.split("::")[-1])
+        elif c in preds:
+            vals, polarity = preds[c]
+            res = ((value.split("::")[-1] in vals) == polarity)
+    if res is None:
+        return None
+    return (not res) if neg else res
+
+
+def _chip_top_modules_for_value(text, blocks, insts, param, value, preds,
+                                universe):
+    """``(reached_modules, unknown)`` — which modules of ``universe`` are
+    instantiated when ``param == value``.
+
+    ``unknown`` is True when a guard enclosing an instantiation we care about
+    could not be evaluated. The caller refuses on it; it never guesses.
+    """
+    reached = set()
+    unknown = False
+    for ref, pos in insts:
+        if ref not in universe:
+            continue
+        ok = True
+        for blk in blocks:
+            if not (blk["start"] <= pos < blk["end"]):
+                continue
+            if blk["kind"] == "plain":
+                continue
+            for sc in _chip_top_sibling_conds(blocks, blk):
+                v = _chip_top_eval_cond(sc, param, value, preds)
+                if v is None:
+                    unknown = True
+                    ok = False
+                    break
+                if v:
+                    ok = False
+                    break
+            if not ok:
+                break
+            if blk["cond"] is not None:
+                v = _chip_top_eval_cond(blk["cond"], param, value, preds)
+                if v is None:
+                    unknown = True
+                    ok = False
+                    break
+                if not v:
+                    ok = False
+                    break
+        if ok:
+            reached.add(ref)
+    return reached, unknown
+
+
+def _chip_top_concept_stems(name):
+    """Stemmed word tokens of an identifier, for concept matching."""
+    stems = set()
+    for tok in _CT_WORD_SPLIT_RE.findall(name or ""):
+        s = tok.lower()
+        for suf in ("ing", "ed", "es", "s"):
+            if s.endswith(suf) and len(s) - len(suf) >= 4:
+                s = s[:-len(suf)]
+                break
+        if len(s) >= 4:
+            stems.add(s)
+    return stems
+
+
+def _chip_top_declares_predicate(pred_name, declared_names):
+    """The DECLARED parameter that speaks about the same thing as the RTL's own
+    predicate — or ``None``.
+
+    This can only ever NARROW a candidate set that was already derived
+    structurally; it can never introduce a value. When it finds nothing, or
+    finds more than one, the caller REFUSES rather than choosing.
+    """
+    pstems = _chip_top_concept_stems(pred_name)
+    hits = [d for d in declared_names
+            if pstems & _chip_top_concept_stems(d)]
+    return hits[0] if len(hits) == 1 else None
+
+
+def _chip_top_param_refusals(rtl_dir, synth_top=None):
+    """Every emission-time parameter refusal recorded in ``rtl_dir``.
+
+    Read from the sidecars rather than re-derived, so the step that FAILs and
+    the emitter that refused are quoting one record and cannot drift apart.
+
+    EVERY sidecar, not the one named after this step's ``synth_top``. Measured:
+    the wrapper is emitted by whichever step gets there first — the reused-IP
+    CONSUME step names it ``chip_top``, while ``step_yosys_synth`` may then
+    re-resolve its own top to the instantiation-graph root and look for a
+    differently-named sidecar that does not exist. A refusal that is filed
+    under one name and looked up under another is a refusal nobody makes.
+    """
+    out = []
+    try:
+        for sc in sorted(Path(rtl_dir).glob(".*__param_resolution.json")):
+            try:
+                out.extend(json.loads(sc.read_text(errors="replace"))
+                           .get("refusals") or [])
+            except Exception:  # noqa: BLE001 — one bad sidecar is not a verdict
+                continue
+    except Exception:  # noqa: BLE001 — a missing rtl_dir is no refusal
+        return []
+    return out
+
+
+def _chip_top_resolve_excluded_variant_params(project, rtl_dir, param_block,
+                                              declared):
+    """DERIVE — or REFUSE BY NAME — every wrapper parameter default that selects
+    a variant the design deliberately EXCLUDED from staging.
+
+    ``declared`` is what the design INPUT stated (the L8 overrides that were
+    just applied). Returns ``(param_block, resolved, refusals)``.
+
+    THE SENTENCE THIS CLOSES. Before this, a reader of a green emit could
+    believe the wrapper's parameter header was a build the design had asked
+    for. It was not: it was the vendor's default, and where that default named
+    a module the cell had removed on purpose, the build could not exist at all
+    — a fact discovered several steps later as a raw yosys abort attributed to
+    the toolchain.
+    """
+    resolved = {}
+    refusals = []
+    excluded = _chip_top_excluded_variant_modules(project, rtl_dir)
+    if not excluded:
+        # Nothing was excluded: identical behaviour, byte for byte.
+        return param_block, resolved, refusals
+    try:
+        import staged_rtl_closure_preflight as _pf
+    except Exception:  # noqa: BLE001 — never fail the emit on the analyser
+        return param_block, resolved, refusals
+    files = _pf._gather([str(rtl_dir)])
+    if not files:
+        return param_block, resolved, refusals
+    defined = set()
+    for _t in files.values():
+        defined |= set(_pf._MODULE_DEF_RE.findall(_t))
+    universe = defined | set(excluded)
+    wrapper_defaults = {m.group(1): m.group(2).strip()
+                        for m in _pf._PARAM_RE.finditer(param_block)}
+    declared_names = sorted(declared or {})
+
+    for path, text in sorted(files.items()):
+        insts = _pf._instantiations(text)
+        hit = sorted({r for r, _ in insts if r in excluded})
+        if not hit:
+            continue
+        blocks = _chip_top_generate_blocks(text)
+        own_defaults = _pf._param_defaults(text)
+        for param, cur in sorted(wrapper_defaults.items()):
+            if param in resolved or any(r["parameter"] == param
+                                        for r in refusals):
+                continue
+            preds = _chip_top_predicate_values(text, param)
+            # Does THIS file decide anything on THIS parameter? Every other
+            # parameter of the wrapper is simply not this file's business, and
+            # scoping the question is what keeps the refusal below narrow: an
+            # unreadable guard about some other parameter must not be reported
+            # as an unreadable guard about this one.
+            if not (preds or any(param in (b["cond"] or "") for b in blocks)):
+                continue
+            reached, unknown = _chip_top_modules_for_value(
+                text, blocks, insts, param, cur, preds, universe)
+            if unknown:
+                # AN UNREADABLE GUARD IS NOT A CLEAN ONE. Skipping here is how
+                # the abort reached yosys in the first place: we could not say
+                # the default was safe, said nothing, and the operator got a
+                # raw elaboration error several steps later. Refuse, by name.
+                refusals.append({
+                    "parameter": param, "wrapper_default": cur,
+                    "excluded_modules": hit,
+                    "excluded_files": [excluded[x] for x in hit],
+                    "instantiated_in": path,
+                    "in_closure_candidates": [],
+                    "reason": "UNREADABLE_GUARD",
+                    "message": (
+                        f"{path} instantiates EXCLUDED module(s) {hit} under a "
+                        f"generate guard this check could not evaluate, so "
+                        f"whether {param} = {cur} selects them is UNKNOWN — "
+                        f"not known-safe. Refusing to emit a wrapper whose "
+                        f"elaboration cannot be predicted; DECLARE {param} in "
+                        f"the design input, or stage {hit}.")})
+                continue
+            if not (reached & set(excluded)):
+                # This parameter's default does not select the excluded
+                # variant. Nothing to do.
+                continue
+            hit_excluded = sorted(reached & set(excluded))
+
+            # 1. CANDIDATES — structural. Every value this file's own guards
+            #    name for `param`, plus the consuming module's own declared
+            #    default (an `else` arm has no value token of its own, so the
+            #    default is the only way its value is ever nameable).
+            cands = set()
+            for blk in blocks:
+                for c in ([blk["cond"]] if blk["cond"] else []):
+                    for m in re.finditer(
+                            re.escape(param) + r"\s*==\s*([\w:']+)", c):
+                        cands.add(m.group(1).split("::")[-1])
+            if param in own_defaults:
+                cands.add(own_defaults[param].split("::")[-1])
+            cands.discard(cur.split("::")[-1])
+            in_closure = []
+            reached_by = {}
+            for v in sorted(cands):
+                r2, unk2 = _chip_top_modules_for_value(
+                    text, blocks, insts, param, v, preds, universe)
+                if not unk2 and r2 and not (r2 - defined):
+                    in_closure.append(v)
+                    reached_by[v] = r2
+            # AN `else` ARM HAS NO VALUE TOKEN OF ITS OWN, so the enumeration
+            # above cannot NAME it. An in-closure arm that no candidate reaches
+            # is a variant this flow can neither propose nor rule out, and a
+            # candidate set with one of those in it is INCOMPLETE — the
+            # difference between "these are the alternatives" and "these are
+            # the alternatives I can spell". Resolving out of an incomplete set
+            # is the silent pick, one level further in.
+            covered = set()
+            for _s in reached_by.values():
+                covered |= _s
+            unnameable = sorted(
+                {r for r, pos in insts
+                 if r in defined and r not in covered
+                 and any(b["kind"] == "else" and b["start"] <= pos < b["end"]
+                         and any(re.search(r"\b" + re.escape(param) + r"\b",
+                                           c)
+                                 for c in _chip_top_sibling_conds(blocks, b))
+                         for b in blocks)})
+
+            # 2. NARROW BY WHAT THE INPUT DECLARED. The guards that put the
+            #    excluded module out of reach are the ones a declaration has
+            #    to speak about; if the input declares nothing about any of
+            #    them, the choice is FREE and a free choice must be declared.
+            governing = []
+            for ref, pos in insts:
+                if ref not in hit_excluded:
+                    continue
+                for blk in blocks:
+                    if not (blk["start"] <= pos < blk["end"]):
+                        continue
+                    for c in ([blk["cond"]] if blk["cond"] else []) + \
+                            _chip_top_sibling_conds(blocks, blk):
+                        for n in preds:
+                            if re.search(r"\b" + re.escape(n) + r"\b", c) \
+                                    and n not in governing:
+                                governing.append(n)
+            narrowed, provenance = list(in_closure), None
+            for pred_name in governing:
+                dname = _chip_top_declares_predicate(pred_name,
+                                                     declared_names)
+                if dname is None:
+                    continue
+                dval = str(declared[dname]).strip()
+                m_b = re.match(r"^(?:1'b)?([01])$", dval)
+                if not m_b:
+                    continue
+                want = (m_b.group(1) == "1")
+                vals, polarity = preds[pred_name]
+                narrowed = [v for v in narrowed
+                            if ((v in vals) == polarity) == want]
+                provenance = {"rtl_predicate": pred_name,
+                              "rtl_predicate_true_for": sorted(vals),
+                              "declared_parameter": dname,
+                              "declared_value": dval}
+                break
+            if provenance is None:
+                refusals.append({
+                    "parameter": param, "wrapper_default": cur,
+                    "excluded_modules": hit_excluded,
+                    "excluded_files": [excluded[x] for x in hit_excluded],
+                    "instantiated_in": path,
+                    "in_closure_candidates": in_closure,
+                    "reason": "UNDECLARED_FREE_CHOICE",
+                    "message": (
+                        f"parameter {param} = {cur} selects module(s) "
+                        f"{hit_excluded} which this design EXCLUDES from "
+                        f"staging ({[excluded[x] for x in hit_excluded]}), so "
+                        f"the wrapper cannot elaborate. The design input "
+                        f"declares {declared_names or 'no parameter'} and "
+                        f"nothing that decides {param}. Choosing among "
+                        f"{in_closure or 'the remaining variants'} is a FREE "
+                        f"CHOICE and this flow does not make one for you: "
+                        f"DECLARE {param} in the design input.")})
+                continue
+
+            # 3. RESOLVE, or refuse with the survivors named.
+            own = own_defaults.get(param, "").split("::")[-1]
+            if len(narrowed) > 1 and own in narrowed:
+                narrowed = [own]
+            # The design's OWN declared default for the parameter is a
+            # statement by the design, so it can be adopted even where an arm
+            # is unnameable. Anything else must have a COMPLETE set behind it.
+            if len(narrowed) == 1 and unnameable and narrowed[0] != own:
+                refusals.append({
+                    "parameter": param, "wrapper_default": cur,
+                    "excluded_modules": hit_excluded,
+                    "excluded_files": [excluded[x] for x in hit_excluded],
+                    "instantiated_in": path,
+                    "in_closure_candidates": in_closure,
+                    "surviving_candidates": narrowed,
+                    "unnameable_in_closure_variants": unnameable,
+                    "derivation": provenance,
+                    "reason": "INCOMPLETE_CANDIDATE_SET",
+                    "message": (
+                        f"parameter {param} = {cur} selects excluded module(s) "
+                        f"{hit_excluded}. {narrowed[0]} is consistent with the "
+                        f"declared {provenance['declared_parameter']} = "
+                        f"{provenance['declared_value']}, but so may be "
+                        f"{unnameable}, which sit in `else` arms no value "
+                        f"token names — so the alternatives cannot be "
+                        f"ENUMERATED, only partly spelled. This flow does not "
+                        f"choose out of an incomplete set: DECLARE {param} in "
+                        f"the design input.")})
+                continue
+            if len(narrowed) == 1:
+                resolved[param] = {
+                    "value": narrowed[0], "was": cur,
+                    "excluded_modules": hit_excluded,
+                    "excluded_files": [excluded[x] for x in hit_excluded],
+                    "instantiated_in": path,
+                    "in_closure_candidates": in_closure,
+                    "derivation": provenance,
+                    "unnameable_in_closure_variants": unnameable,
+                    "tie_break": ("consuming module's own declared default"
+                                  if len(in_closure) > 1 else None)}
+            else:
+                refusals.append({
+                    "parameter": param, "wrapper_default": cur,
+                    "excluded_modules": hit_excluded,
+                    "excluded_files": [excluded[x] for x in hit_excluded],
+                    "instantiated_in": path,
+                    "in_closure_candidates": in_closure,
+                    "surviving_candidates": narrowed,
+                    "derivation": provenance,
+                    "reason": ("NO_VARIANT_MATCHES_DECLARATION" if not narrowed
+                               else "AMBIGUOUS_AFTER_DECLARATION"),
+                    "message": (
+                        f"parameter {param} = {cur} selects excluded module(s) "
+                        f"{hit_excluded}. The design declares "
+                        f"{provenance['declared_parameter']} = "
+                        f"{provenance['declared_value']}, and the RTL's own "
+                        f"{provenance['rtl_predicate']} leaves "
+                        f"{narrowed or 'NO'} in-closure variant(s) consistent "
+                        f"with it. This flow will not choose: DECLARE "
+                        f"{param} in the design input.")})
+
+    for name, info in sorted(resolved.items()):
+        pat = re.compile(
+            r"(\bparameter\b[^;,=()]*?\b" + re.escape(name) +
+            r"\s*=\s*)([^,;)\n]+)")
+        param_block = pat.sub(lambda m: m.group(1) + info["value"],
+                              param_block, count=1)
+    return param_block, resolved, refusals
+
+
 def _autoemit_chip_top_wrapper(project: Path, rtl_dir: Path,
                               synth_top: str):
     """Deterministic chip_top wrapper auto-emit (extracted from
@@ -13387,6 +13954,42 @@ def _autoemit_chip_top_wrapper(project: Path, rtl_dir: Path,
             print(f"      chip_top param override NOT applied: {_n} = {_v} "
                   f"— no such parameter in {mod_name}'s header; recorded, "
                   f"not guessed")
+    # v1.17.72+ — RESOLVE OR REFUSE a default that selects an EXCLUDED variant.
+    # The L8 pass above honours what the input STATED. This pass looks at what
+    # the input's own RTL then makes of it: where a copied vendor default
+    # selects a module the design deliberately removed from staging, the
+    # wrapper it would produce cannot elaborate at all. Derive the value from
+    # the design's declared intent and the RTL's own guard structure, or refuse
+    # BY NAME here — never emit a wrapper whose build is already impossible and
+    # leave yosys to report it as an elaboration abort.
+    _var_resolved, _var_refusals = {}, []
+    try:
+        param_block, _var_resolved, _var_refusals = (
+            _chip_top_resolve_excluded_variant_params(
+                project, rtl_dir, param_block, _ovr_applied))
+    except Exception:  # noqa: BLE001 — analysis must never break the emit
+        _var_resolved, _var_refusals = {}, []
+    if _var_resolved or _var_refusals:
+        try:
+            (rtl_dir / f".{synth_top}__param_resolution.json").write_text(
+                json.dumps({"resolved": _var_resolved,
+                            "refusals": _var_refusals,
+                            "declared_by_input": _ovr_applied,
+                            "source": "excluded-variant parameter resolution"},
+                           indent=2))
+        except OSError:
+            pass
+        for _n, _i in sorted(_var_resolved.items()):
+            _d = _i["derivation"]
+            print(f"      chip_top param DERIVED: {_n} = {_i['value']} "
+                  f"(was {_i['was']}; {_i['excluded_modules']} excluded as "
+                  f"{_i['excluded_files']}; the design declares "
+                  f"{_d['declared_parameter']} = {_d['declared_value']} and "
+                  f"{_i['instantiated_in']}'s own {_d['rtl_predicate']} is "
+                  f"true only for {_d['rtl_predicate_true_for']})")
+        for _r in _var_refusals:
+            print(f"      chip_top param REFUSED: {_r['reason']}: "
+                  f"{_r['message']}")
     param_header = f" {param_block.strip()}" if param_block.strip() else ""
     # Re-emit the DUT header's package imports on the wrapper so package-scoped
     # param types/defaults (`sbox_impl_e SecSBoxImpl = SBoxImplDom`) and port
@@ -13752,6 +14355,24 @@ def step_yosys_synth(project: Path, top_name: str = "chip_top",
             rtl_files.append(str(_emitted))
     except Exception:
         pass  # non-fatal: yosys will still try and may succeed
+    # REFUSED AT EMISSION, NOT DISCOVERED BY YOSYS. When the wrapper's own
+    # parameter header still selects a variant the design EXCLUDED from
+    # staging, the build is impossible before a tool is started, and the
+    # parameter — not the toolchain — is the thing to report. Without this the
+    # flow ran a full elaboration to earn a raw
+    # "Module `X' referenced ... is not part of the design", which reads as a
+    # synthesis failure and was triaged as one.
+    _refusals = _chip_top_param_refusals(rtl_dir, synth_top)
+    if _refusals:
+        _named = ", ".join(sorted({r["parameter"] for r in _refusals}))
+        return StepResult(
+            "yosys_synth", "FAIL", time.time() - t0,
+            f"PARAMETER UNRESOLVED ({_named}) — refused at chip_top emission, "
+            f"before yosys: "
+            + " | ".join(f"{r['reason']}: {r['message']}"
+                         for r in _refusals[:4]),
+            [str(rtl_dir / f".{synth_top}__param_resolution.json")],
+            extras={"param_refusals": _refusals})
     # ORGANIC #639 — REUSED-IP / catalog-glue staging has no
     # instantiation-closure pruning or duplicate-module dedup. A flat
     # vendor RTL dump (no per-IP rtl_files manifest) stages every *.sv/*.v
