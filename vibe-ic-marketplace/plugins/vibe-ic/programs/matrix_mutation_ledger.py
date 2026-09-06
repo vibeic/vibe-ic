@@ -3204,8 +3204,15 @@ def replay(mut: Mutation, sid: Optional[str] = None,
     # ``cp -al`` fails every replay with EXDEV before either arm runs.  Put the
     # scratch beside (not inside) the git checkout: same filesystem for the
     # links, outside the worktree so the suite cannot observe its own mirror.
+    # ONLY the PLUGIN_TREE channel builds a `cp -al` hardlink mirror, so only it
+    # needs a scratch that can hold one. A FLOW_YAML mutation edits a scratch
+    # copy of the yaml and never links anything — demanding a hardlink-capable
+    # parent for it would refuse a replay that has no such requirement, which is
+    # its own way of measuring the mount instead of the mutation.
     scratch = Path(tempfile.mkdtemp(
-        prefix=f"matmut_{mut.name}_", dir=str(_mirror_scratch_parent())))
+        prefix=f"matmut_{mut.name}_",
+        dir=(str(_mirror_scratch_parent()) if mut.channel == PLUGIN_TREE
+             else None)))
     try:
         if mut.channel == FLOW_YAML:
             base = load_flow()
