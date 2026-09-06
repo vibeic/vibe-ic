@@ -439,10 +439,17 @@ def test_a_replayed_request_is_refused_not_silently_reapplied(
         tmp_path, monkeypatch, capsys):
     """Replaces the retired `test_regate_replay_is_idempotent`.
 
-    The re-gate reported ALREADY_APPLIED and changed nothing; the retry
-    refused an occupied archive. The merged operation takes the RETRY side:
-    once a re-entry is journalled, a second round on the same request is an
-    explicit refusal that must be reconciled, never a silent no-op report.
+    The re-gate reported ALREADY_APPLIED and changed nothing. The merged
+    operation refuses instead -- and the refusal that actually answers a
+    BYTE-IDENTICAL replay is the staleness guard, MEASURED, not the archive
+    guard: a successful re-entry rewrites the task, so the request's
+    `task_sha256` no longer describes anything on disk. The message is
+    asserted rather than the token, because this operation checks in a fixed
+    order and "something was refused" would pass on any earlier guard.
+
+    The other half of the old idempotence -- a second round with the request
+    RE-BOUND to the new task -- is
+    `test_a_second_re_entry_under_the_same_source_identity_is_refused`.
     """
     run, stuck, signed, _, _ = _stuck(tmp_path, monkeypatch)
     request_path, _ = _request(run, stuck, signed)
@@ -451,7 +458,7 @@ def test_a_replayed_request_is_refused_not_silently_reapplied(
     first = bd._read_jsonl(run / bd._REVIEW_WORKLIST)[0]
     capsys.readouterr()
     assert _resume(run, request_path) == 2
-    assert "PROGRAM_REGATE_REFUSED" in capsys.readouterr().err
+    assert "stale task_sha256" in _refusal(capsys)
     assert bd._read_jsonl(run / bd._REVIEW_WORKLIST)[0] == first
 
 
@@ -1178,16 +1185,22 @@ RETIRED = {
             "intent journal has already recorded one. Both cannot hold: one "
             "reports success on a re-run, the other refuses it."),
         "resolution": (
-            "The merged operation takes the RETRY side. The re-gate's "
-            "idempotence was affordable only because it restored bytes and "
-            "committed no run; the merged operation RUNS the Program in a "
-            "staged project and promotes, so a second round over a journalled "
-            "one is unknown state that must be reconciled explicitly, never a "
-            "silent already-applied report. The five re-gate refusals that "
-            "served the replay archive -- 'invalid transition archive', "
-            "'immutable archive drift', 'immutable archive missing', "
-            "'transition evidence drift' and 'current task drift' -- are "
-            "superseded by the journal guard, not dropped."),
+            "The merged operation takes the RETRY side: it refuses. The "
+            "re-gate's idempotence was affordable only because it restored "
+            "bytes and committed no run; the merged operation RUNS the Program "
+            "in a staged project and promotes, so a second round is unknown "
+            "state to reconcile, never a silent already-applied report. "
+            "MEASURED, and worth stating exactly because it is not the guard "
+            "one would guess: a BYTE-IDENTICAL replay is answered by the "
+            "staleness guard ('stale task_sha256'), because a successful "
+            "re-entry rewrites the task the request was bound to; the "
+            "identity guard ('Program identity has not changed since the "
+            "prior re-entry') is what answers a replay RE-BOUND to the new "
+            "task, and the archive guard answers a foreign occupant. The five "
+            "re-gate refusals that served the replay archive -- 'invalid "
+            "transition archive', 'immutable archive drift', 'immutable "
+            "archive missing', 'transition evidence drift' and 'current task "
+            "drift' -- are superseded by the journal guard, not dropped."),
         "concern_carried_by": "test_a_replayed_request_is_refused_not_silently_reapplied",
     },
 }
