@@ -19,12 +19,19 @@ WHAT IS RED, AND WHAT FIXES IT
 ==============================
     layer `ppa`
         glob-derived   (`ppa_*.py`)                    21
-        relation-derived (executables importing `_ppa`) 28
-        IN THE LAYER, OUTSIDE THE GLOB                   7
+        relation-derived (executables importing `_ppa`) 29
+        IN THE LAYER, OUTSIDE THE GLOB                   8
 
         area.py · gate_proof_vocabulary_has_a_producer.py · openroad.py
-        power_total_vs_budget_check.py · readme_ppa_extractor.py ·
-        records_migrate.py · timing.py
+        phase3_one_shot_runner.py · power_total_vs_budget_check.py ·
+        readme_ppa_extractor.py · records_migrate.py · timing.py
+
+        THE COUNTS ABOVE ARE THE SHADOW OF A MEMBER SET, NOT THE PIN. Both
+        member sets are published: `--json` now carries `glob_members` and
+        `relation_members` beside `outside`, and the suite asserts those SETS.
+        A count alone cannot say WHO entered or left -- one arrival and one
+        departure leave 8 at 8 -- and re-deriving a count is the one repair
+        that can be done without reading the tree. Re-derive the SETS.
 
         RE-DERIVED 2026-08-25, and EVERY face of the finding with it. The
         previous re-derivation moved only the pinned regex in
@@ -39,6 +46,16 @@ WHAT IS RED, AND WHAT FIXES IT
         WHAT MOVED SINCE 21/27/6: v1.11.81 added `_ppa/records_migrate.py`,
         which imports the layer package and is executable, and which no
         `ppa_*.py` glob reaches. The glob did not move. That is the finding.
+
+        WHAT MOVED SINCE 21/28/7, re-derived 2026-09-07 on `9cf22c191`:
+        v1.17.91 `8d7a76cca` added `from _ppa import delivery_path` to
+        `phase3_one_shot_runner.py`. That module is executable, so it ENTERED
+        the relation; no `ppa_*.py` glob reaches it, so it entered the OUTSIDE
+        set in the same step. NOTHING LEFT. The glob is unchanged at 21 for the
+        third re-derivation running, which is the whole finding: the layer grows
+        and the population selected by a filename prefix does not.
+        Re-derived by running this program's own `_imports` / `_is_executable`
+        over the live tree, not by editing a number to fit.
 
         Restated at the merge with main a4caccefe (v1.11.69), which grew the
         layer. ONE OF THEM IS THIS BRANCH'S OWN
@@ -75,13 +92,15 @@ compare against the relation: modules that import the package `_<p>` AND are
 EXECUTABLE (they carry an `if __name__ == "__main__"` guard). A finding is a
 prefix whose relation-derived set is not a subset of the glob-derived set.
 
-EXECUTABILITY IS PART OF THE RELATION, not a refinement. TEN modules import
+EXECUTABILITY IS PART OF THE RELATION, not a refinement. ELEVEN modules import
 `_ppa` outside the glob; three of them (`_ppa_corpus.py`, `closure.py`,
 `yosys.py`) carry no entry point, so an exit-code contract cannot be enforced
 on them and they are not members of the population these suites test. Counting
-them would inflate the finding by 42.9 per cent with modules the rule has
-nothing to say about. (Re-derived 2026-08-25 with this program's own
-`_imports`/`_is_executable`; it read seven/two/40 per cent when written.)
+them would inflate the finding by 37.5 per cent with modules the rule has
+nothing to say about. (Re-derived 2026-09-07 with this program's own
+`_imports`/`_is_executable`; it read ten/three/42.9 per cent on 2026-08-25 and
+seven/two/40 per cent when written -- the non-executable three are the SAME
+three each time, so the whole of the move is on the executable side.)
 
 `test_*.py` IS EXCLUDED. A suite globbing `test_*.py` is discovering tests, not
 a layer, and there is no package `_test` for it to relate to.
@@ -177,8 +196,17 @@ def scan(root: Path) -> Tuple[List[dict], Dict[str, int]]:
                     if _imports(t, pkg) and _is_executable(t)}
         outside = sorted(relation - globset)
         if outside:
+            # THE MEMBERS, NOT ONLY THEIR SIZES. A consumer that can only read
+            # `glob`/`relation`/`len(outside)` can pin a population by its
+            # cardinality alone, and a count cannot report an arrival that is
+            # cancelled by a departure. Both member sets are published so the
+            # pin can be a statement about a SET; the three counts are kept for
+            # every existing reader and are exactly len() of the sets beside
+            # them.
             findings.append({"layer": pre, "glob": len(globset),
                              "relation": len(relation), "outside": outside,
+                             "glob_members": sorted(globset),
+                             "relation_members": sorted(relation),
                              "selected_by": sorted(by)})
     return findings, {
         "tests_read": tests_read,
