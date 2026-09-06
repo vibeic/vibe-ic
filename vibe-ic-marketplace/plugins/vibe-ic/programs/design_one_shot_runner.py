@@ -12845,7 +12845,22 @@ def _phase2_sv_synth_fallback(project: Path, container: str,
                   f"{TOOLS_IN_CONTAINER}/bin:$PATH")
     # Technology-independent lowering chain — identical to the default
     # Phase-2 synth path (synth -flatten; techmap; opt; dffunmap; abc).
-    synth_tail = (f"synth -top {synth_top} -flatten; "
+    # #2050 — `synth` runs `fsm`, whose `fsm_recode` pass RE-ASSIGNS the state
+    # encoding of every FSM it extracts, so the netlist holds the same state
+    # register under the same name with a different code and usually a
+    # different WIDTH. `-encfile` (passed to `fsm_recode` via `fsm`) WRITES the
+    # old->new table; step-13 LEC reads it back with `equiv_make -encfile` and
+    # matches the two encodings instead of matching them positionally by name.
+    # Without it the LEC miter is INCONSISTENT and `equiv_induct`'s base case
+    # goes UNSAT (`Circuit inherently diverges!`) — measured on opentitan_aes:
+    # 19 of 19 extracted FSMs recoded, 3242 of 4072 key points left unproven.
+    # MEASURED NO-LEAK: the emitted netlist is BYTE-IDENTICAL with and without
+    # this flag (same sha256 on opentitan_aes and on a 4-state reproducer) —
+    # `-encfile` only RECORDS the translation, it changes no synthesis
+    # decision, so no PPA, timing or downstream artefact can move.
+    from lec_run import FSM_ENCFILE_NAME  # noqa: E402 — consumer owns the name
+    fsm_enc_c = f"{workdir}/{FSM_ENCFILE_NAME}"
+    synth_tail = (f"synth -top {synth_top} -flatten -encfile {fsm_enc_c}; "
                   f"techmap; opt; dffunmap; abc -g cmos2; "
                   f"write_verilog -noexpr -nostr -noattr {netlist_c}; stat")
     reads_join = " ".join(container_rtl)
@@ -14502,10 +14517,20 @@ def step_yosys_synth(project: Path, top_name: str = "chip_top",
             else:
                 stub.write_text("\n".join(["00"] * 128) + "\n")
 
+    def _fsm_encfile_name() -> str:
+        # Single source of truth is the CONSUMER, lec_run.FSM_ENCFILE_NAME.
+        from lec_run import FSM_ENCFILE_NAME  # noqa: E402
+        return FSM_ENCFILE_NAME
+
     cmds = [f"read_verilog -sv -DSIMULATION {f}" for f in rtl_files] + [
         # v1.6.191 (#78 P0) — synth_top auto-selected ASIC-core
         # when available; falls back to caller's top_name.
-        f"synth -top {synth_top} -flatten",
+        # #2050 — record the FSM encoding translation `fsm_recode` applies,
+        # so step-13 LEC can match the recoded state registers instead of
+        # matching the old and new encodings positionally by name. MEASURED
+        # NO-LEAK: the netlist is byte-identical with and without the flag.
+        f"synth -top {synth_top} -flatten "
+        f"-encfile {synth_dir / _fsm_encfile_name()}",
         # v1.6.193 (#80 P0) — `synth -flatten` keeps async-reset DFFs
         # as behavioral `always @(posedge clk or negedge rst_n)`
         # blocks. To force every cell to a counted primitive without

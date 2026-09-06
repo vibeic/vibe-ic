@@ -400,6 +400,55 @@ def audit(project: Path) -> AuditResult:
     # non-equivalent point forces the substance FAIL below (§4.05 NO-LEAK — this
     # can never launder a real mismatch into a pass). Non-blocking, but a visible
     # non-PASS: it must be closed with sign-off LEC.
+    # --- (d1) #2050 — THE MITER ITSELF WAS INCONSISTENT ---------------------
+    # `equiv_induct` prints `Circuit inherently diverges!` when its BASE CASE
+    # goes UNSAT. Read yosys's `passes/equiv/equiv_induct.cc`: the base case is
+    #     ez->assume(all unproven key points equal at steps 1..k); ez->solve()
+    # so UNSAT says there is NO trace in which the recipe's own key points can
+    # all be equal for k consecutive cycles. That is a statement about the
+    # MITER, not about induction depth, and a deeper `-seq` provably cannot
+    # help — each rung only ADDS assumed-equal terms and adding clauses
+    # preserves UNSAT (MEASURED on opentitan_aes: -seq 4/16/64 printed
+    # byte-identical output, all three aborting at base-case step 2).
+    #
+    # Reporting this as "a disclosed sequential-depth capability gap ... close
+    # with sign-off LEC" pointed the reader at the one remedy that cannot work:
+    # a commercial sequential engine handed the same inconsistent miter has the
+    # same nothing to prove. The usual cause is a key point that is NOT the
+    # same signal on the two sides — most often `synth`'s `fsm_recode`
+    # re-encoding an FSM state register while the recipe matched the old and
+    # new encodings positionally by name.
+    #
+    # Still INCONCLUSIVE and still non-blocking — this names the cause, it does
+    # not change the pass/fail direction. NO-LEAK: `induction_wall_kind` is ""
+    # on every log without a flat-wall signature (every PASS, every
+    # counterexample FAIL), so no existing verdict moves; a producer that never
+    # recorded the field falls through to (d2) exactly as before.
+    if (is_inconclusive and (non_equiv in (None, 0))
+            and str(lc.get("induction_wall_kind", "")) == "miter_inconsistent"):
+        res.inconclusive = True
+        res.passed = False
+        res.findings.append(Finding(
+            rule="LEC_INCONCLUSIVE_MITER_INCONSISTENT", severity="WARNING",
+            message=("LEC verdict is INCONCLUSIVE — equiv_induct's SAT BASE "
+                     f"CASE went UNSAT (`Circuit inherently diverges!`) with "
+                     f"{unproven} point(s) unproven. The base case asks whether "
+                     "the miter's own unproven key points CAN all be equal for "
+                     "k consecutive cycles; UNSAT means they cannot, so at "
+                     "least one matched pair is not the same signal on the two "
+                     "sides. This is NOT a sequential-depth gap: a deeper -seq "
+                     "only adds assumed-equal terms and preserves UNSAT, and a "
+                     "sign-off LEC engine handed the same miter has the same "
+                     "nothing to prove. Check first whether synthesis "
+                     "re-encoded an FSM state register (yosys `fsm_recode`); if "
+                     "so the fix is `synth -encfile <f>` plus `equiv_make "
+                     "-encfile <f>`, which matches the two encodings instead of "
+                     "matching them positionally by name. Visible non-PASS "
+                     "(never a vacuous PASS)."),
+            file=LEC_JSON_REL))
+        return res
+
+    # --- (d2) ----------------------------------------------------------------
     if is_inconclusive and (non_equiv in (None, 0)):
         res.inconclusive = True
         res.passed = False
@@ -407,14 +456,18 @@ def audit(project: Path) -> AuditResult:
             rule="LEC_INCONCLUSIVE_NONCONVERGENCE", severity="WARNING",
             message=("LEC verdict is INCONCLUSIVE — a completed equivalence "
                      f"miter left {unproven} point(s) unproven, but equiv_induct "
-                     "did NOT converge (a flat induction wall) and NO "
-                     "counterexample was recorded (0 non-equivalent points). "
-                     "Non-convergence is not non-equivalence: a real difference "
-                     "produces a counterexample. This is INCONCLUSIVE, NOT "
-                     "NOT_EQUIVALENT — a disclosed sequential-depth capability "
-                     "gap. Close with sign-off LEC (Conformal/VC LEC), which "
-                     "handles deep sequential induction. Visible non-PASS (never "
-                     "a vacuous PASS)."),
+                     "did NOT converge (a flat induction wall). This is "
+                     "INCONCLUSIVE, NOT NOT_EQUIVALENT — a disclosed "
+                     "sequential-depth capability gap. Close with sign-off LEC "
+                     "(Conformal/VC LEC), which handles deep sequential "
+                     "induction. NOTE on `non_equivalent_points: 0` — ON THE "
+                     "YOSYS PATH that zero is not evidence: no pass in yosys's "
+                     "passes/equiv emits a counterexample, and lec_run.py "
+                     "hardcodes that field to 0 for this tool, so a genuine "
+                     "difference surfaces as an UNPROVEN point, i.e. inside the "
+                     "count above. (A sign-off LEC report CAN carry a real "
+                     "count, and there the field means what it says.) Visible "
+                     "non-PASS (never a vacuous PASS)."),
             file=LEC_JSON_REL))
         return res
 
