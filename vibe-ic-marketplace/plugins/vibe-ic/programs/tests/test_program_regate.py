@@ -300,6 +300,10 @@ def _refusal(capsys):
     ("author", {"kind": "HUMAN", "model": "x"}, "attributed blind AI"),
     ("blind", {"oracle_accessed": True}, "attributed blind AI"),
     ("rationale", "too short", "rationale needs 80 characters"),
+    # A version that is neither the running Program nor the one the preserved
+    # input was made under: the request names a lineage the archive denies.
+    ("program_version_before", "0.9.9",
+     "is not the Program that produced the preserved input"),
 ])
 def test_a_malformed_or_stale_request_is_refused(
         tmp_path, monkeypatch, capsys, field, value, needle):
@@ -443,6 +447,28 @@ def test_the_two_operations_are_declared_separate_at_the_front_door():
     assert "--program-regate" in source
     assert "--program-regate and --review-correction are separate" in source
     assert "--program-regate requires --resume alone" in source
+
+
+def test_the_front_door_refuses_both_operations_in_one_resume(
+        tmp_path, monkeypatch, capsys):
+    """The separation must be REFUSED, not merely written down.
+
+    The sibling test above reads the source, so it survives a front door whose
+    check has been removed while its help text stays. This one runs the parser.
+    Asserting the message -- not just the exit code -- keeps it red on a tree
+    that has no `--program-regate` at all, where argparse answers
+    "unrecognized arguments" with the same SystemExit(2).
+    """
+    monkeypatch.setattr(bd.sys, "argv", [
+        "benchmark_dispatch.py", "rtllm", "--resume",
+        "--run", str(tmp_path),
+        "--program-regate", str(tmp_path / "regate.json"),
+        "--review-correction", str(tmp_path / "correction.json")])
+    with pytest.raises(SystemExit) as excinfo:
+        bd.main()
+    assert excinfo.value.code == 2
+    assert "--program-regate and --review-correction are separate" in \
+        capsys.readouterr().err
 
 
 def test_a_regate_record_that_does_not_verify_changes_nothing():
