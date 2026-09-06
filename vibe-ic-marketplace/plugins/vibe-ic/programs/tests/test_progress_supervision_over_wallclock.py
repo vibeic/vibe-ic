@@ -220,6 +220,56 @@ def test_a_fast_job_through_lec_docker_is_unchanged():
 
 
 # ---------------------------------------------------------------------------
+# 2b. THE THIRD KILL, END TO END. The DRC change rests on it: a job that IS
+#     progressing and is going NOWHERE. `test_watchdog` proves `abort_probe`
+#     with fake processes and a source-text assertion; nothing drove it over a
+#     REAL subprocess, which is the only way to see that a chatty, CPU-burning
+#     child — the exact shape no generic signal can stop — is actually stopped.
+# ---------------------------------------------------------------------------
+def test_a_progressing_job_going_nowhere_is_aborted_with_its_reason():
+    """The child prints continuously, so output AND CPU advance every poll and
+    the stall grace can NEVER fire. Only the caller's domain predicate can end
+    it, and the outcome must be its own third state — not a stall, not a
+    ceiling, and never a natural exit that a reader would take as a result."""
+    looks = {"n": 0}
+
+    def going_nowhere():
+        looks["n"] += 1
+        if looks["n"] < 4:
+            return None
+        return "the convergence metric has not moved"
+
+    res = _wd.run_supervised(
+        ["bash", "-c", "while :; do echo tick; sleep 0.05; done"],
+        stall_grace_s=3600, poll_s=0.2, abort_probe=going_nowhere)
+
+    assert res.outcome == "aborted", (
+        f"a chatty CPU-burning child ended as {res.outcome!r}; every generic "
+        f"signal reads it as healthy, so only the domain predicate can stop it")
+    assert res.rc == _wd.RC_ABORTED
+    assert res.rc not in (0, 124, _wd.RC_STALLED), (
+        "a deliberate abort must not be confusable with a natural exit, a "
+        "wall-clock kill, or a hang")
+    assert res.abort_reason == "the convergence metric has not moved"
+    assert "WATCHDOG_ABORTED: the convergence metric has not moved" in res.err
+    assert "tick" in res.out, (
+        "the child was not actually progressing, so this test did not "
+        "exercise the case it claims")
+
+
+def test_a_progressing_job_with_a_satisfied_predicate_is_never_aborted():
+    """The other direction, and the one that makes the DRC change safe: while
+    the caller's predicate keeps answering None, the same chatty child runs to
+    its own end however long it takes."""
+    res = _wd.run_supervised(
+        ["bash", "-c", "for i in $(seq 1 40); do echo tick; sleep 0.05; done"],
+        stall_grace_s=3600, poll_s=0.2, abort_probe=lambda: None)
+    assert res.outcome == "natural", res.err[-300:]
+    assert res.rc == 0
+    assert res.out.count("tick") == 40
+
+
+# ---------------------------------------------------------------------------
 # 3b. THE OUTER WALL. Removing the inner ceiling is worth nothing if the RUNNER
 #     still wraps the producer in a host deadline five minutes further out.
 # ---------------------------------------------------------------------------
