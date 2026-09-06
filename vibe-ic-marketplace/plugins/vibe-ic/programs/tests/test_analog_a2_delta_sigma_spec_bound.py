@@ -225,11 +225,38 @@ def test_the_sampling_capacitor_follows_the_declared_oversampling(tmp_path):
 
 def test_the_sampling_capacitor_follows_the_declared_reference(tmp_path):
     """The LSB is measured against the reference, so the budget goes as
-    1/Vref**2."""
-    d1, _, r1 = a2(tmp_path, "v10", vref=1.0)
-    d2, _, r2 = a2(tmp_path, "v05", vref=0.5)
+    1/Vref**2.
+
+    SWEPT ACROSS THE DECLARED Vref RANGE (0.8-1.2), not across 1.0/0.5 as it
+    was. `settling_time_constants` refuses vref 0.5 at enob 14 -- the
+    slew-derived bias delivers 6.67 time constants against the 10.40 that
+    resolution needs -- so the old low point declared a converter that does
+    not settle, and the capability could not be exercised through it. The
+    ASSERTION is unchanged in kind and the ratio is still exact: (1.2/0.8)**2
+    = 2.25. The refused point is not dropped, it is asserted as a refusal in
+    `test_a_reference_too_small_to_settle_the_declared_resolution_is_refused`
+    below, so the population is split rather than narrowed.
+    """
+    d1, _, r1 = a2(tmp_path, "v12", vref=1.2)
+    d2, _, r2 = a2(tmp_path, "v08", vref=0.8)
     c1, c2 = _cap_lengths(r1, d1), _cap_lengths(r2, d2)
-    assert c2["cs1"] == pytest.approx(c1["cs1"] * 4.0, rel=1e-3)
+    assert c2["cs1"] == pytest.approx(c1["cs1"] * 2.25, rel=1e-3)
+
+
+def test_a_reference_too_small_to_settle_the_declared_resolution_is_refused(
+        tmp_path):
+    """The low point the sweep above used to run at, kept as a REFUSAL rather
+    than dropped. At vref 0.5 the slew-derived bias delivers 6.67 settling
+    time constants against the 10.40 that enob 14 needs, so the converter
+    slews to the answer and never settles on it. Emitting a topology here
+    would render a modulator whose bitstream carries no code."""
+    d, res, _ = a2(tmp_path, "v05", vref=0.5)
+    assert res.returncode == 2
+    g = _gap(d)
+    bad = [r for r in g["admission_refusals"]
+           if r.get("field") == "settling_time_constants"]
+    assert bad, g["admission_refusals"]
+    assert bad[0]["value"] < float(bad[0]["min"])
 
 
 def test_the_capacitor_ratio_is_the_loop_coefficient(tmp_path):

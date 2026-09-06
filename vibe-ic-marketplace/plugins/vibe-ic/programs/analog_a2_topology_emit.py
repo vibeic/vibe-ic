@@ -453,6 +453,64 @@ SLEW_MARGIN_EXPR = (
     "(" + _TAIL_I_EXPR + ") * settle_periods_available "
     "/ (fclk * hz_per_mhz) / ((" + _LOAD_F_EXPR + ") * vref)")
 
+#: SMALL-SIGNAL SETTLING — the question `slew_margin` above does not ask.
+#: Slewing is the LARGE-signal race (can the bias move a full reference step
+#: at all); settling is the exponential that follows it, and a block can slew
+#: to the answer and never settle on it.
+#:
+#:     gm   = I_tail / V_ov                     (input pair carrying I_tail)
+#:     tau  = C_load / gm
+#:     n    = t_available / tau                 [time constants]
+#:
+#: WHAT CANCELS, AND WHY IT IS WRITTEN DOWN. Substituting `_TAIL_I_EXPR` —
+#: which is itself DERIVED from the slew requirement — gives, exactly:
+#:
+#:     n = vref * slew_design_margin / integrator_input_overdrive_v
+#:
+#: — and `fclk` cancels along with everything else, because the bias was
+#: DERIVED at the same clock the settling is evaluated at. What is left is
+#: the real question this bound asks: DOES SIZING THE BIAS FOR SLEW ALSO BUY
+#: THE SETTLING THE DECLARED RESOLUTION NEEDS? It is a statement about the
+#: stated slew margin and overdrive against `vref` and `enob`, and it can
+#: fail on a design's numbers -- vref 0.8 with enob 16 gives 10.67 against a
+#: requirement of 11.78 and is refused.
+#:
+#: `C_load` CANCELS, and with it `sampling_cap_ff`, `osr`, `enob`, `order` and
+#: every process constant. That is real physics rather than a modelling slip:
+#: the slew current and the settling current are BOTH proportional to the
+#: load, so sizing the bias for slew pins the settling time-constant COUNT no
+#: matter how large the capacitor is. VERIFIED against this module's own
+#: expressions at eight declarations (osr 64/256/512, enob 10/14, order 1/2,
+#: vdd 1.2/1.3, vref 0.8/1.0): the closed form above and the evaluated
+#: expression agree to 1e-9 in every one.
+#:
+#: This is recorded for the reason `slew_margin`'s own constancy is recorded
+#: two hundred lines below: a reader who believes this number responds to the
+#: capacitor will read a bound that moved for the wrong reason. What it DOES
+#: respond to is `vref`, the two stated design conditions, and — the term that
+#: dominates here — the RATIO of the clock the circuit is SIZED at to the
+#: clock it is EVALUATED at.
+#: EVALUATED AT `fclk`, THE CLOCK THE BIAS IS DERIVED AT, and that is the
+#: whole discipline of this bound. `_R_IB_L_UM_EXPR` and `_TAIL_I_EXPR` both
+#: read `fclk`, so `fclk` is the clock this circuit HAS been sized for.
+#: Evaluating settling against any OTHER clock does not measure the settling
+#: of the emitted circuit; it measures the RATIO of two clocks, and it would
+#: report a sizing defect for a declaration whose only sin is a wide stated
+#: range. The clock the emitted TESTBENCH runs at is a different question
+#: with its own answer, recorded on `bias_resistor_l_um` below.
+_SETTLING_TC_EXPR = (
+    "(settle_periods_available / (fclk * hz_per_mhz)) "
+    "/ ((" + _LOAD_F_EXPR + ") "
+    "/ ((" + _TAIL_I_EXPR + ") / integrator_input_overdrive_v))")
+#: ...and HOW MANY time constants the DECLARATION asks for. Settling to within
+#: half an LSB of full scale is `exp(-n) <= 2 ** -(enob + 1)`, so
+#: `n >= (enob + 1) * ln2`. DERIVED from a bound spec row, never tabulated: a
+#: flat floor is a hidden resolution assumption, and the retired branch's flat
+#: 7.0 is exactly that — it is the ~10-bit answer (7.62) carried against a
+#: declaration that asks for 14 bits (10.40). Deriving it is STRICTER here,
+#: not looser.
+_SETTLING_TC_REQUIRED_EXPR = "(enob + settling_lsb_fraction_bits) * ln2"
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # THE TOPOLOGY LIBRARY
@@ -1022,6 +1080,28 @@ LIBRARY: Dict[str, Dict[str, Any]] = {
             # sized to deliver twice the current the worst transfer needs —
             # not a number lifted from any datasheet.
             "slew_design_margin": 2.0,
+            # The gate overdrive the INTEGRATOR'S INPUT PAIR is biased at,
+            # which is what turns its tail current into a transconductance.
+            # Stated separately from `bias_overdrive_v` on purpose: that one
+            # is the MIRROR DIODE's overdrive and its own comment forbids
+            # using it to size or characterise a device, so reading `gm` off
+            # it would be borrowing a constant against its stated meaning.
+            # MEASURED corroboration (round 31, `.op` on the emitted
+            # netlist): gm 697 uS at 43 uA per side is an overdrive of
+            # 2 * 43u / 697u = 0.123 V. The stated 0.15 V is the
+            # CONSERVATIVE side of that — a larger overdrive is less gm per
+            # amp, so the settling count below comes out SMALLER (13.3
+            # against 16.2) and the bound is harder to pass, not easier.
+            "integrator_input_overdrive_v": 0.15,
+            # Settling to within HALF an LSB, not a whole one: one extra bit
+            # of headroom on the exponential. Stated as a constant because
+            # the fraction is a design convention, not a process number.
+            "settling_lsb_fraction_bits": 1.0,
+            # The natural logarithm of 2 — a universal mathematical constant,
+            # a library constant for the same reason `kt_j_300k` is one, and
+            # present as a NAME because `_safe_eval` admits arithmetic over
+            # named values only and permits no function calls.
+            "ln2": 0.6931471805599453,
         },
         "constant_roles": {"w_cap": "cap", "w_res": "res"},
         # SHARED by every stage: the bias branch, the on-chip common-mode
@@ -1733,6 +1813,80 @@ LIBRARY: Dict[str, Dict[str, Any]] = {
                      "can still fail if the load expression and this "
                      "derivation are edited apart, which is a real "
                      "regression and the reason it is not deleted")},
+            # THE COMPANION BOUND `slew_margin` NEVER WAS. `slew_margin`
+            # above asks whether the bias can MOVE a full reference step in
+            # the time budgeted; this asks whether the loop then SETTLES on
+            # it to the resolution the declaration asks for. They are
+            # different questions with different answers, and only the first
+            # was ever checked: a converter can slew to the answer and never
+            # settle on it, and the bitstream it emits carries no code.
+            #
+            # WHAT IT CAN AND CANNOT FAIL ON, stated because `slew_margin`
+            # two entries below had to learn the same lesson the hard way.
+            # The bias is DERIVED from the slew requirement, so substituting
+            # that derivation collapses this to
+            #
+            #     n = vref * slew_design_margin
+            #             / integrator_input_overdrive_v
+            #
+            # and `C_load` cancels, taking `sampling_cap_ff`, `osr`, `order`,
+            # `fclk` and every process constant with it. That is real physics
+            # and not a modelling slip: the slew current and the settling
+            # current are BOTH proportional to the load, so sizing for slew
+            # pins the settling time-constant COUNT however large the
+            # capacitor is. It is NOT the `slew_margin` defect, because the
+            # REQUIREMENT side is derived from `enob` and the value side from
+            # `vref` -- two bound spec rows -- so the comparison moves on a
+            # design's own numbers and can be lost:
+            #
+            #     vref 1.0, enob 14 -> 13.33 against 10.40   admitted
+            #     vref 0.8, enob 16 -> 10.67 against 11.78   REFUSED
+            #
+            # MEASURED, and the transient agrees with what too few constants
+            # predicts (round 31, OSR 64): `vsum2` and `vint` swing TOGETHER
+            # with their difference fixed at 0.011 V, so the integrating
+            # capacitor never changes charge -- the virtual ground is not a
+            # virtual ground and the charge `cf2` commutates each clock lands
+            # on the summing node's own capacitance instead of on `ci`.
+            # `vint` covers 0.4571..0.7427 V within ONE clock and covers the
+            # same range over eight, so it moves 0.285 V per clock and
+            # accumulates nothing.
+            #
+            # THE CLOCK THIS IS *NOT* EVALUATED AT, and why that is a
+            # separate finding rather than this bound's business. The emitted
+            # testbench runs at `fclk_max` while the circuit is sized at
+            # `fclk` (recorded on `bias_resistor_l_um` below). Evaluated
+            # across that mismatch the count is (fclk / fclk_max) * 13.33 =
+            # 1.33 against the same 10.40, and it refuses -- but what that
+            # number measures is the RATIO OF TWO CLOCKS, not the settling of
+            # the circuit that was actually sized. Folding it in here would
+            # report a sizing defect for every declaration that merely states
+            # a wide clock range: this topology tolerates a range of only
+            # 1.28x (fclk_max <= 1.2824 MHz at fclk 1.0, enob 14), so the
+            # shipped test fixture's own 0.1-10 MHz declaration would be
+            # refused along with the design. The mismatch is real and it is
+            # NOT closeable by sizing this topology -- buying the missing
+            # 7.8x of settling raises the tail current 98 uA -> 766 uA
+            # against a block already measured at 0.947 mA of a declared
+            # 1.0 mA ceiling, and MEASURED `.ac` at the emitted amplifier's
+            # own operating point says the current does not even buy the gm:
+            # DC gain falls 50.3 dB -> 22.4 dB at 5x and 19.3 dB at 10x as
+            # the mirror-side input device leaves saturation (Vds 0.289 ->
+            # 0.024 -> 0.014 V). Which declaration gives way is a decision
+            # about the design, not a number this file may pick silently.
+            {"name": "settling_time_constants", "expr": _SETTLING_TC_EXPR,
+             "min_expr": _SETTLING_TC_REQUIRED_EXPR, "max": 1.0e9,
+             "why": ("the summing node has to SETTLE inside the part of the "
+                     "clock this entry budgets for the transfer, not merely "
+                     "slew across it. Settling to within half an LSB of full "
+                     "scale takes (enob + 1) * ln2 time constants of "
+                     "C_load/gm — DERIVED from the declared resolution, "
+                     "because a flat floor is a hidden resolution "
+                     "assumption. Fewer than that and the charge stays on "
+                     "the summing node instead of reaching the integrating "
+                     "capacitor, which is a converter that does not "
+                     "integrate. A count below the requirement is that "
+                     "statement, and saying so IS the answer")},
             {"name": "sampling_cap_ff", "expr": SAMPLING_CAP_FF_EXPR,
              "min": 1.0, "max": 100000.0,
              "why": ("the noise budget derived from this declaration has to "
@@ -2944,21 +3098,52 @@ def entry_admission(lib: Dict[str, Any], spec_values: Dict[str, float],
     for spec in (lib.get(REQUIRES_DERIVED_KEY) or []):
         if not isinstance(spec, dict):
             continue
-        try:
-            val = _safe_eval(str(spec.get("expr")), env)
-        except Exception as exc:                                # noqa: BLE001
+        # THREE STATES, and the third is not an error dressed as a verdict.
+        # A bound whose expression cannot be RESOLVED has not been evaluated,
+        # and the honest report of that is neither "satisfied" nor "not
+        # satisfied" but "not measured, and here is the name that was
+        # missing". `_safe_eval` raises KeyError carrying the unresolved name
+        # itself, so the name is reported rather than a repr of the
+        # exception: a reader who is told `integrator_input_overdrive_v` can
+        # go and bind it, and a reader told "KeyError" cannot.
+        unresolved: List[str] = []
+        vals: Dict[str, float] = {}
+        for key, ex in (("value", spec.get("expr")),
+                        ("min", spec.get("min_expr")),
+                        ("max", spec.get("max_expr"))):
+            if ex is None:
+                continue
+            try:
+                vals[key] = _safe_eval(str(ex), env)
+            except KeyError as exc:
+                unresolved.append(str(exc.args[0] if exc.args else exc))
+            except Exception as exc:                            # noqa: BLE001
+                unresolved.append(f"{type(exc).__name__}: {exc}")
+        if unresolved:
             refusals.append({
                 "requirement": "derived_unresolvable",
                 "field": spec.get("name"), "expr": spec.get("expr"),
-                "detail": (f"the derived value `{spec.get('name')}` does not "
-                           f"resolve in this block's environment: {exc}")})
+                "missing": sorted(set(unresolved)),
+                "detail": (f"the derived value `{spec.get('name')}` was NOT "
+                           f"EVALUATED: this block's environment binds no "
+                           f"value for {', '.join(sorted(set(unresolved)))}. "
+                           f"That is not the same statement as the bound "
+                           f"having been checked and failed")})
             continue
-        lo, hi = spec.get("min"), spec.get("max")
+        val = vals["value"]
+        # A floor may itself be DERIVED from the declaration — a resolution
+        # bound whose requirement is a fixed number is a hidden assumption
+        # about the resolution. `min_expr` wins over `min` when both are
+        # present, and the resolved number is reported so the refusal names
+        # the requirement it was held to rather than only the value.
+        lo = vals.get("min", spec.get("min"))
+        hi = vals.get("max", spec.get("max"))
         if ((lo is not None and val < float(lo))
                 or (hi is not None and val > float(hi))):
             refusals.append({
                 "requirement": "derived_range", "field": spec.get("name"),
                 "value": val, "min": lo, "max": hi,
+                "min_expr": spec.get("min_expr"),
                 "why": spec.get("why"),
                 "detail": (f"this declaration derives "
                            f"`{spec.get('name')}` = {val:g}, outside the "
