@@ -6,6 +6,7 @@ asserted rc 0 here would be asserting the defect away.
 """
 from __future__ import annotations
 
+import json
 import shutil
 import re
 import sys
@@ -19,6 +20,47 @@ import _progress_run as _pr  # noqa: E402
 
 PROG = (Path(__file__).resolve().parents[1]
         / "layer_membership_is_declared_not_inferred_from_a_filename_prefix.py")
+
+# ── THE PIN IS A MEMBER SET, NOT A COUNT ─────────────────────────────────────
+# Every earlier spelling of this pin was three counts (`glob 21, relation 28,
+# 7 outside`) with ONE member named beside them. A count cannot report an
+# arrival that a departure cancels -- 8 members leave 8 members -- and a count
+# is the one thing that can be re-derived without reading the tree, so a
+# re-derivation and an edit-to-fit are indistinguishable in the diff. These are
+# the members. A move is then reported as a NAME that entered or left.
+#
+# Read from the program's own `--json` (`glob_members` / `relation_members` /
+# `outside`), which is the program's `_imports` / `_is_executable` over the live
+# tree -- not a filename pattern this file wrote for the occasion.
+_PPA_GLOB_MEMBERS = frozenset({
+    "ppa_ablation_check.py", "ppa_agent_context_build.py",
+    "ppa_area_threshold_check.py", "ppa_closure_run.py",
+    "ppa_contract_build.py", "ppa_contract_check.py",
+    "ppa_diagnostic_router.py", "ppa_eco_spare_records.py",
+    "ppa_feasibility_check.py", "ppa_head_to_head_check.py",
+    "ppa_measurement_check.py", "ppa_metric_extract.py",
+    "ppa_page_claim_check.py", "ppa_pareto_check.py",
+    "ppa_pnr_search_space.py", "ppa_pr_scope_check.py",
+    "ppa_predict_aggregate.py", "ppa_problem_integrity_check.py",
+    "ppa_report_gen.py", "ppa_search_run.py", "ppa_signoff_records.py",
+})
+#: The finding itself: layer members no `ppa_*.py` glob reaches.
+#: `phase3_one_shot_runner.py` entered at v1.17.91 `8d7a76cca`, which added
+#: `from _ppa import delivery_path` to an executable module. Nothing left.
+_PPA_OUTSIDE_MEMBERS = frozenset({
+    "area.py", "gate_proof_vocabulary_has_a_producer.py", "openroad.py",
+    "phase3_one_shot_runner.py", "power_total_vs_budget_check.py",
+    "readme_ppa_extractor.py", "records_migrate.py", "timing.py",
+})
+
+
+def _moved(what: str, pinned, seen) -> str:
+    return (f"the ppa layer's {what} population MOVED: "
+            f"entered={sorted(set(seen) - set(pinned))} "
+            f"left={sorted(set(pinned) - set(seen))}. "
+            f"RE-DERIVE the finding and record which member entered or left "
+            f"and why -- do not edit this set to fit, and do not replace it "
+            f"with a count.")
 
 _LAYER_MEMBER = '''\
 import _demo
@@ -121,7 +163,7 @@ def test_a_bad_invocation_is_rc_3():
     assert r.returncode == 3, f"rc={r.returncode}\n{r.stdout}\n{r.stderr}"
 
 
-def test_the_shipped_tree_is_RED_and_that_is_the_point():
+def test_the_shipped_tree_is_RED_and_that_is_the_point(tmp_path):
     """This gate refuses on the tree it ships with, by design.
 
     There is no inventory: a recorded waiver would make the question disappear.
@@ -131,40 +173,57 @@ def test_the_shipped_tree_is_RED_and_that_is_the_point():
     root = Path(__file__).resolve().parents[5]
     if not (root / ".git").exists():
         pytest.skip("not a checkout")
-    r = _pr.run([sys.executable, str(PROG), "--root", str(root)],
-                       capture_output=True, text=True)
+    rec = tmp_path / "layer_membership.json"
+    r = _pr.run([sys.executable, str(PROG), "--root", str(root),
+                 "--json", str(rec)], capture_output=True, text=True)
     assert r.returncode == 1, (
         f"the ppa layer gap is GONE (rc={r.returncode}). If the two suites were "
         f"repaired, delete this assertion and assert rc 0 — do not weaken the "
         f"gate.\n{r.stdout}")
     assert "layer `ppa`" in r.stdout
     assert "power_total_vs_budget_check.py" in r.stdout
-    # THE POPULATION, PINNED ALONGSIDE THE MEMBER. The member assertion above
-    # cannot notice the layer GROWING: when the merge with main a4caccefe took
-    # the gap from 5 outside to 6, this test still passed and said nothing.
-    # RE-DERIVED on the composed tree: the layer took one more member into BOTH
-    # the glob and the relation (20/26 -> 21/27) and the 6 outside are the same
-    # 6 names, so the gap did not move — the population did.
-    # RE-DERIVED AGAIN 2026-08-25 (21/27/6 -> 21/28/7). v1.11.81 added
-    # `programs/_ppa/records_migrate.py`, which imports the layer package and so
-    # joins the RELATION, and which no prefix glob reaches and so joins the
-    # OUTSIDE set. The glob is unchanged at 21, which is the whole finding: the
-    # layer grew and the population selected by a filename prefix did not.
-    # The number was NOT edited to fit — the program was re-run on this tree and
-    # its own line read back (`layer `ppa`: glob 21, relation 28, 7 outside`),
-    # and the new outside member is named in the member list below.
-    # A count pin without a member set is the defect
-    # `population_pin_without_its_member_set` reports; a member set without a
-    # count is the half that cannot see growth. Keep BOTH.
-    # If this fails, RE-DERIVE the finding -- do not edit the number to fit.
-    # ANCHORED, not a substring: "7 outside" is contained in "17 outside".
-    assert re.search(r"glob 21, relation 28, 7 outside(?!\d)", r.stdout), (
-        f"the ppa layer population moved; re-derive the finding\n{r.stdout}")
-    # THE MEMBER THE COUNT ALONE WOULD NOT HAVE SHOWN. One arrival and one
-    # departure leave 7 at 7; naming the arrival is what makes the count a
-    # statement about a set rather than about its size.
-    assert "records_migrate.py" in r.stdout, (
-        f"the layer's newest outside member is not reported\n{r.stdout}")
+
+    # THE POPULATION, PINNED BY ITS MEMBERS.
+    #
+    # HISTORY OF THIS PIN, because it is the point. It was three counts
+    # (20/26/6 -> 21/27/6 -> 21/28/7 -> 21/29/8) with ONE member named beside
+    # them. Every move so far has been a single arrival, so a count happened to
+    # be enough to notice it; an arrival cancelled by a departure would have
+    # left the count at rest and the pin would have said nothing. Worse, a
+    # count can be re-derived without reading the tree, so "I re-ran the
+    # program" and "I edited the number until it passed" produce the identical
+    # diff. A member set can only be moved by naming who moved.
+    #
+    # The RELATION is not pinned as a third literal: it is exactly the glob
+    # plus what falls outside it, and recording the same fact twice is how two
+    # faces of one pin drift apart. The identity is asserted instead.
+    #
+    # The three counts on the human line are then asserted to be len() of these
+    # sets — the line keeps its reader, and no count is a literal anywhere.
+    doc = json.loads(rec.read_text(encoding="utf-8"))
+    ppa = [f for f in doc["findings"] if f["layer"] == "ppa"]
+    assert len(ppa) == 1, f"expected exactly one `ppa` finding\n{doc}"
+    ppa = ppa[0]
+    glob_m = set(ppa["glob_members"])
+    rel_m = set(ppa["relation_members"])
+    out_m = set(ppa["outside"])
+
+    assert out_m == set(_PPA_OUTSIDE_MEMBERS), _moved(
+        "outside (the finding)", _PPA_OUTSIDE_MEMBERS, out_m)
+    assert glob_m == set(_PPA_GLOB_MEMBERS), _moved(
+        "glob-derived", _PPA_GLOB_MEMBERS, glob_m)
+    assert rel_m == glob_m | out_m, (
+        f"the relation is no longer the glob plus what falls outside it: "
+        f"in the relation only={sorted(rel_m - (glob_m | out_m))}, "
+        f"missing from it={sorted((glob_m | out_m) - rel_m)}")
+    assert (ppa["glob"], ppa["relation"], len(ppa["outside"])) == (
+        len(glob_m), len(rel_m), len(out_m)), (
+        f"the published counts disagree with the published members\n{ppa}")
+    # ANCHORED, not a substring: "8 outside" is contained in "18 outside".
+    assert re.search(
+        rf"glob {len(glob_m)}, relation {len(rel_m)}, "
+        rf"{len(out_m)} outside(?!\d)", r.stdout), (
+        f"the human line disagrees with the member sets\n{r.stdout}")
 
 
 def test_no_test_files_read_is_undetermined_not_a_pass():
