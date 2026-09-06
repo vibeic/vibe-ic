@@ -7942,12 +7942,31 @@ def step_l10_unit_tb_gen(project: Path,
     def _consequence(scope: dict) -> str:
         """#761 — name the CONSUMER and what it will do with the cases this
         producer did not write a TB for. A SKIP that does not say who grades
-        the remainder is what made the two scopes look like one."""
+        the remainder is what made the two scopes look like one.
+
+        ORGANIC #2064 — and name the OTHER PRODUCER. "any without a TB will
+        FAIL Step 4" was true while this file was the only producer; it stopped
+        being true when `analog_acceptance_tb_gen` began authoring an
+        executable acceptance for the analog `verification_intent` rows. The
+        union comes from `testbench_gen.flow_authorable`, so the count here and
+        the count a Step-4 consumer reports cannot drift apart."""
         ungraded = int(scope.get("total") or 0)
         if not ungraded:
             return ""
-        return (f"; all {ungraded} will be graded by l10_tb_conformance_check "
+        tail = (f"; all {ungraded} will be graded by l10_tb_conformance_check "
                 f"and any without a TB will FAIL Step 4")
+        try:
+            rows = _tbg.load_l10_cases(project) or []
+            flow = _tbg.flow_authorable(project, rows)
+        except Exception:
+            return tail
+        if "analog_acceptance" not in flow:
+            return tail
+        return (tail + f"; across the whole flow {flow['authorable']} of "
+                f"{flow['total']} declared row(s) are authorable "
+                f"({flow['scaffold']} by this scaffold, "
+                f"{flow['analog_acceptance']} by analog_acceptance_tb_gen), "
+                f"the rest {flow['unauthorable_kinds']}")
 
     if emitted == -1:
         return StepResult("l10_unit_tb_gen", "SKIP", time.time() - t0,
@@ -7986,6 +8005,125 @@ def step_l10_unit_tb_gen(project: Path,
         + (f"; {_tbg.describe_scope(_scope)}" if _scope else "")
         + _known_answer_vector_census(_tb_report),
         [str(out_dir)])
+
+
+def step_analog_acceptance_tb_gen(project: Path) -> StepResult:
+    """ORGANIC #2064 — run the ANALOG-ACCEPTANCE producer beside the L10 unit-TB
+    scaffolder, so an analog `verification_intent` row finally has a producer.
+
+    MEASURED, u_hawaii_adc at v1.18.3 (this lane, front door, image 0.3.46):
+    the design's own `## Verification intent` section became four L10 rows of
+    `kind: verification_intent`, `step_l10_unit_tb_gen` reported "0 in scope, 4
+    out of scope" and Step 4 read "0 functional tests ran for 4 declared L10/L12
+    row(s)". No producer in the tree could author one of those four, so the
+    denominator was four and the numerator could never be raised. This step
+    invokes the producer that can: it derives each acceptance from the design's
+    OWN input (L22's plan — the L5 bound table joined to the verification-intent
+    bullets) and emits an executable check per derived clause.
+
+    A design that declares no analog block is a byte-for-byte no-op: the
+    producer writes nothing and this step SKIPs with the layer fact named.
+    chip-AGNOSTIC: L22/L10 structure only, no chip/vendor/SKU literal."""
+    t0 = time.time()
+    try:
+        import sys as _sys
+        if str(PROGRAMS_DIR) not in _sys.path:
+            _sys.path.insert(0, str(PROGRAMS_DIR))
+        import analog_acceptance_tb_gen as _acc
+    except Exception as e:  # pragma: no cover — defensive import guard
+        return StepResult("analog_acceptance_tb_gen", "SKIP",
+                          time.time() - t0, f"producer unavailable: {e}")
+    rep: dict = {}
+    try:
+        emitted = _acc.emit_acceptance_checks(project, rep)
+    except Exception as e:
+        return StepResult("analog_acceptance_tb_gen", "SKIP",
+                          time.time() - t0,
+                          f"L10/L22 unreadable, nothing emitted: {e}")
+    rows = rep.get("rows") or []
+    authorable = sum(1 for r in rows if r.get("authorable"))
+    census = (f"{len(rows)} {'/'.join(sorted(_acc.ACCEPTANCE_KINDS))} row(s), "
+              f"{authorable} authorable, "
+              f"{len(rep.get('clauses') or [])} acceptance clause(s), "
+              f"{len(rep.get('refusals') or [])} refused by name")
+    if emitted == -1:
+        return StepResult("analog_acceptance_tb_gen", "SKIP",
+                          time.time() - t0, str(rep.get("reason")))
+    if emitted == -2:
+        # EVERY row was refused. That is a real, reviewable outcome — not an
+        # absence — so it is reported as its own state and the refusals still
+        # reach Step 4 through the JUnit the run step writes.
+        return StepResult(
+            "analog_acceptance_tb_gen", "SKIP", time.time() - t0,
+            f"no acceptance clause is derivable from the input: {census}; "
+            f"every refusal is named in {_acc.RECORD_REL}")
+    return StepResult(
+        "analog_acceptance_tb_gen", "PASS", time.time() - t0,
+        f"emitted {emitted} executable acceptance check(s) under "
+        f"{_acc.check_dir(project)} for Step-4 functional evidence; {census}",
+        [str(_acc.check_dir(project))])
+
+
+def step_analog_acceptance_tb_run(project: Path) -> StepResult:
+    """EXECUTE the acceptance checks `step_analog_acceptance_tb_gen` wrote.
+
+    Producing a check and RUNNING it are different jobs — the #797/#1975 lesson
+    one layer over, where the unit TBs were written and never run and Step 4
+    counted zero. The checks read JSON records only (no simulator), so this
+    step has no toolchain dependency and no NOT_EXECUTED-for-lack-of-simulator
+    state; a check that does not complete is still NOT_MEASURED, never a pass.
+
+    The JUnit lands in the Step-4 professional-result slot
+    (`sim_professional/analog_acceptance/results.xml`) that
+    `_sim_results_bridge` already reads and that `testbench_gen.run_unit_tbs`
+    already writes a sibling of — so Step 4's denominator becomes real with no
+    change to the gate that judges it."""
+    t0 = time.time()
+    try:
+        import sys as _sys
+        if str(PROGRAMS_DIR) not in _sys.path:
+            _sys.path.insert(0, str(PROGRAMS_DIR))
+        import analog_acceptance_tb_gen as _acc
+    except Exception as e:  # pragma: no cover — defensive import guard
+        return StepResult("analog_acceptance_tb_run", NOT_EXECUTED_STATUS,
+                          time.time() - t0, f"executor unavailable: {e}",
+                          extras={"sim_executed": False})
+    rep: dict = {}
+    try:
+        executed = _acc.run_acceptance_checks(project, rep)
+    except Exception as e:
+        return StepResult("analog_acceptance_tb_run", NOT_EXECUTED_STATUS,
+                          time.time() - t0, f"executor raised: {e}",
+                          extras={"sim_executed": False})
+    if executed == -1:
+        return StepResult("analog_acceptance_tb_run", "SKIP", time.time() - t0,
+                          str(rep.get("reason")),
+                          extras={"sim_executed": False})
+    detail = (f"{rep.get('rows_total', 0)} "
+              f"{'/'.join(sorted(_acc.ACCEPTANCE_KINDS))} row(s), "
+              f"{rep.get('rows_authorable', 0)} authorable; "
+              f"{rep.get('passed', 0)} pass, {rep.get('failed', 0)} fail, "
+              f"{rep.get('not_measured', 0)} NOT_MEASURED, "
+              f"{rep.get('refused', 0)} refused by name; JUnit "
+              f"{rep.get('results_xml')} is part of the Step-4 functional "
+              f"denominator; per-clause record {rep.get('record')}")
+    # A refusal and an unmeasured acceptance are NOT passes. The step's own
+    # status says so; the blocking verdict remains Step 4's, taken from the
+    # JUnit above.
+    status = "PASS" if (rep.get("failed", 0) == 0
+                        and rep.get("not_measured", 0) == 0
+                        and rep.get("refused", 0) == 0
+                        and rep.get("passed", 0) > 0) else "FAIL"
+    return StepResult(
+        "analog_acceptance_tb_run", status, time.time() - t0, detail,
+        output_files=[x for x in (rep.get("results_xml"), rep.get("record"))
+                      if x],
+        extras={"passed": rep.get("passed", 0), "failed": rep.get("failed", 0),
+                "not_measured": rep.get("not_measured", 0),
+                "refused": rep.get("refused", 0),
+                "rows_total": rep.get("rows_total", 0),
+                "rows_authorable": rep.get("rows_authorable", 0),
+                "sim_executed": bool(executed and executed > 0)})
 
 
 def _known_answer_vector_census(tb_report: dict) -> str:
@@ -19669,6 +19807,14 @@ def main() -> int:
         # Step-4 bridge reads. Fail-closed: no simulator / nothing to run
         # writes NOTHING and does not report a pass.
         plan.append(step_l10_unit_tb_run(project, args.container))
+        # ORGANIC #2064 — the ANALOG-ACCEPTANCE producer and its executor, in
+        # the same order and for the same reason as the pair above: the L10
+        # `verification_intent` rows of an analog block had NO producer, so
+        # Step 4's denominator counted them and its numerator could not reach
+        # them. Runs here, beside the unit-TB pair, so the JUnit lands before
+        # `step_step4_functional_evidence` reads it.
+        plan.append(step_analog_acceptance_tb_gen(project))
+        plan.append(step_analog_acceptance_tb_run(project))
         # NEW TB PATH — professional cocotb testbench (deterministic derivation from
         # the L-docs; bounded-latency STREAMING scoreboard closes the serial-datapath
         # functional-verification DEFER, e.g. the spm bit-serial multiplier). Runs

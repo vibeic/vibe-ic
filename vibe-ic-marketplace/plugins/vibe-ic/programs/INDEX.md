@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1280
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1280)
+- **Total programs (excluding helpers / shims):** 1281
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1281)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1271 |
+| `any` | 1272 |
 
 ## Alphabetical listing
 
@@ -64,6 +64,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `analog_a8_hardmacro_emit` | any | — | A8 PRODUCER for an ANALOG block: emit the real hardmacro abstract kit from the block's own signed-off layout. |
 | `analog_a8_hardmacro_gen_check` | any | — | Verifies that the upstream `analog-hardmacro-gen` skill has emitted |
 | `analog_a9_hw_verify_check` | any | — | A9 deterministic gate (Co-Sim / HW Verify). |
+| `analog_acceptance_tb_gen` | any | — | PRODUCER of executable acceptance checks for the analog `verification_intent` rows Phase 1 declares. |
 | `analog_adc_enob_corner_check` | any | — | R12 system-ENOB per-corner gate (A4). |
 | `analog_artefact_substance_check` | any | — | catch substance-less analog deliverables that pass `analog_per_block_pv_completeness_check` and `analog_hardmacro_check` on file-presence... |
 | `analog_block_coverage_check` | any | — | deterministic gate for analog block design coverage |
@@ -1352,7 +1353,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1271 programs)
+### `any` (1272 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `absence_verdict_names_its_search_space_check` — "not found" must say WHERE it looked.
@@ -1392,6 +1393,7 @@ _(no programs in this group)_
 - `analog_a8_hardmacro_emit` — A8 PRODUCER for an ANALOG block: emit the real hardmacro abstract kit from the block's own signed-off layout.
 - `analog_a8_hardmacro_gen_check` — Verifies that the upstream `analog-hardmacro-gen` skill has emitted
 - `analog_a9_hw_verify_check` — A9 deterministic gate (Co-Sim / HW Verify).
+- `analog_acceptance_tb_gen` — PRODUCER of executable acceptance checks for the analog `verification_intent` rows Phase 1 declares.
 - `analog_adc_enob_corner_check` — R12 system-ENOB per-corner gate (A4).
 - `analog_artefact_substance_check` — catch substance-less analog deliverables that pass `analog_per_block_pv_completeness_check` and `analog_hardmacro_check` on file-presence...
 - `analog_block_coverage_check` — deterministic gate for analog block design coverage

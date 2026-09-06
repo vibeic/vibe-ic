@@ -550,6 +550,61 @@ def producer_scope(cases: List[dict],
     }
 
 
+# ORGANIC #2064 — THE SCOPE TABLE IS NOT THE FLOW'S SCOPE.
+#
+# `SCAFFOLD_KINDS` above is THIS producer's scope. A Step-4 consumer that
+# reports it as "how many declared rows any producer in the flow can author"
+# is right only while this file is the only producer — and it stopped being
+# that when `analog_acceptance_tb_gen` (#2064) started authoring an executable
+# acceptance for `verification_intent` rows out of L22's plan and the A4
+# corner-sweep record. The two answers must come from ONE accessor, or the
+# gap that #761 closed inside this file reopens one level up.
+#
+# The analog half is NOT a kind set. Whether a `verification_intent` row is
+# authorable depends on whether the design's own input states a bound or a PVT
+# matrix for it, so it is a per-PROJECT, per-ROW question and is answered by
+# asking that producer, never by widening `SCAFFOLD_KINDS`. Widening it would
+# also make Step 4 pass on an EMPTY denominator, which is the outcome the
+# #2064 ruling refused.
+def acceptance_authorable_rows(project: Path) -> "set | None":
+    """The L10 row names the ANALOG-ACCEPTANCE producer can author, or None.
+
+    `None` means "could not be measured" (producer absent or unreadable) — it
+    is never handed back as an empty set, so a caller cannot report "0
+    authorable" for a question nobody asked."""
+    try:
+        import analog_acceptance_tb_gen as _acc  # noqa: WPS433 — lazy on purpose
+    except Exception:
+        return None
+    return _acc.authorable_row_names(project)
+
+
+def flow_authorable(project: Path, rows: List[dict]) -> Dict[str, object]:
+    """How many of `rows` ANY producer in the flow is scoped to author.
+
+    Keys: `scaffold` (this file's), `analog_acceptance` (#2064's),
+    `authorable` (the union) and `unauthorable_kinds` (a histogram of what is
+    left over). `analog_acceptance` is absent — not zero — when that producer
+    could not be asked; the union then degrades to the scaffold count and says
+    so through the missing key."""
+    scaffold = [r for r in rows
+                if isinstance(r, dict) and case_kind(r) in SCAFFOLD_KINDS]
+    out: Dict[str, object] = {"scaffold": len(scaffold),
+                              "scaffold_kinds": sorted(SCAFFOLD_KINDS)}
+    authorable = {id(r) for r in scaffold}
+    names = acceptance_authorable_rows(project)
+    if names is not None:
+        acc = [r for r in rows
+               if isinstance(r, dict) and str(r.get("name") or "") in names]
+        out["analog_acceptance"] = len(acc)
+        authorable |= {id(r) for r in acc}
+    out["authorable"] = len(authorable)
+    out["total"] = len(rows)
+    out["unauthorable_kinds"] = kind_histogram(
+        [r for r in rows if isinstance(r, dict) and id(r) not in authorable])
+    return out
+
+
 def describe_scope(scope: Dict[str, object]) -> str:
     """One-line human rendering of `producer_scope` — the LAYER fact first, the
     FILTER fact second, so a reader cannot mistake the second for the first."""
