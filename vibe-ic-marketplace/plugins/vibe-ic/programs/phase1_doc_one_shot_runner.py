@@ -48907,6 +48907,190 @@ def _v647_drop_redundant_bit_scalars(pins):
     return out if dropped else pins
 
 
+# ── #czl9docs — L9's prose channel, which carried nothing ──────────────
+#
+# `_frame_contract.input_prose_from_json` assembles the prose an L9 carries by
+# walking it for the declared prose keys (description / summary / overview /
+# notes / …), and `spec_conformance_check` feeds that channel to every
+# frame-contract rule. Measured on this base with the flow's own step-2
+# invocation, one RTL body violating all three elements:
+#
+#   L9 as the front door emits it   PASS rc=0, 0 findings
+#   the SAME L9 + the input's own
+#   interface sentences in `notes`  FAIL rc=1, 2 errors + composition INFO
+#
+# The L9 emitter never wrote a single prose key, so the channel was empty and
+# every prose-derived rule downstream was structurally dormant — a verdict over
+# ZERO characters, the same shape as a verdict over zero ports.
+#
+# L9 already has a PER-PORT prose channel (`top_ports[].description`, cascaded
+# from L1 by `_v1_6_463_cascade_l1_descriptions_to_l9`). That channel is
+# correctly empty when the input glosses no individual port. What had NO home in
+# L9 at all is an interface constraint stated as a SENTENCE ABOUT THE DESIGN
+# rather than as a gloss on one pin — "`cmd_out` must be valid in the same clock
+# cycle that `frame_done` asserts". This emits those, verbatim, with provenance.
+#
+# §4.05: reads the extracted INPUT documents only. Nothing is paraphrased,
+# summarised or invented — every character is copied from the input, and the
+# provenance record names the document and the rule that selected it.
+#
+# Chip-AGNOSTIC: anchors on the design's OWN declared port names, whatever they
+# are; no chip, vendor, protocol or signal-name literal participates.
+_CZL9_MAX_BLOCK_CHARS = 600
+_CZL9_MAX_TOTAL_CHARS = 4000
+_RE_CZL9_BULLET_ONLY = re.compile(r"(?m)\A(?:\s*(?:[-*+]\s+[^\n]*)?\n?)+\Z")
+
+
+def _czl9_declared_port_names(content: Dict[str, Any]) -> List[str]:
+    """Every port name L9 itself declares, from whichever container carries
+    them. Order-stable and deduped."""
+    names: List[str] = []
+    for key in ("ports", "top_ports", "top_module_pins"):
+        for entry in content.get(key) or []:
+            if isinstance(entry, dict):
+                nm = entry.get("name")
+                if isinstance(nm, str) and nm.strip() and nm not in names:
+                    names.append(nm.strip())
+    return names
+
+
+def _czl9_block_mentions_port(block: str, names: List[str]) -> bool:
+    """Does this block name one of the design's declared ports?
+
+    A name of three characters or more matches bare; a one- or two-character
+    name (`q`, `rx`) must appear in a code span, because a bare two-letter token
+    matches ordinary English far too often to be evidence of anything."""
+    for nm in names:
+        if len(nm) >= 3:
+            if re.search(rf"(?<![A-Za-z0-9_]){re.escape(nm)}(?![A-Za-z0-9_])",
+                         block):
+                return True
+        else:
+            if re.search(rf"`{re.escape(nm)}`", block):
+                return True
+    return False
+
+
+def _czl9_emit_interface_prose(content: Dict[str, Any],
+                               extracted: Dict[str, str]) -> None:
+    """Carry the input's own interface-constraining sentences into L9's prose
+    channel, verbatim, with provenance.
+
+    Selection rule, in two branches, because the honest answer depends on how
+    much prose there is:
+
+      WHOLE — when the extracted input fits inside the total budget, carry it
+        whole. This is not a shortcut: it is the SAME channel prompt mode
+        already hands these rules (`spec_conformance_check` sets
+        `spec_body = spec_raw` for a markdown spec), so for a short design
+        description "carry it all" is the least novel option available, and
+        selecting from it can only LOSE constraints. Measured on this base with
+        one RTL body violating three elements: port-anchored selection reached
+        2 of 3 (the third sentence names no port), the whole document reached
+        3 of 3.
+      ANCHORED — when it does not fit, carry the blocks that NAME one of the
+        design's declared ports, plus the block a colon lead-in introduces
+        (that is where the table the lead-in announces lives). Bullet-only
+        blocks are skipped: that is the port table, which L9 already holds
+        structurally.
+
+    Either way `interface_prose_provenance.selection` says which branch ran and
+    `truncated` says whether anything was cut, so a short channel is never
+    mistaken for a short input.
+
+    Writes `notes` (one of the declared prose keys the consumer walks) plus
+    `interface_prose_provenance`. When nothing is carried, writes the
+    honest-null `no_interface_prose_in_input` instead of an empty string."""
+    names = _czl9_declared_port_names(content)
+
+    # WHOLE branch. Note it does NOT require a declared port: prose is prose,
+    # and the port list is only needed to SELECT from prose that does not fit.
+    whole = "\n\n".join(
+        (extracted.get(f) or "").strip()
+        for f in sorted(extracted) if (extracted.get(f) or "").strip())
+    if whole and len(whole) <= _CZL9_MAX_TOTAL_CHARS:
+        content["notes"] = whole
+        content["interface_prose_provenance"] = {
+            "selection": "whole",
+            "rule": ("the extracted input carried whole — it fits the budget, "
+                     "so selecting from it could only lose constraints"),
+            "documents": [f for f in sorted(extracted)
+                          if (extracted.get(f) or "").strip()],
+            "blocks": 1,
+            "chars": len(whole),
+            "truncated": False,
+            "anchored_on": names,
+        }
+        return
+
+    if not names:
+        # Too big to carry whole, and no declared port to select with. That is
+        # NOT_MEASURED — say so rather than emitting a silently empty channel.
+        content["no_interface_prose_in_input"] = True
+        content["interface_prose_provenance"] = {
+            "selection": "none",
+            "rule": "blocks naming a declared port name",
+            "not_measured": ("the input exceeds the prose budget and L9 "
+                             "declares no port to select with"),
+            "documents": [], "blocks": 0, "truncated": True}
+        return
+
+    kept: List[str] = []
+    docs: List[str] = []
+    truncated = False
+    total = 0
+    for fname in sorted(extracted):
+        text = extracted.get(fname) or ""
+        if not text.strip():
+            continue
+        blocks = [b for b in re.split(r"\n\s*\n", text)]
+        take_next = False
+        used_here = False
+        for block in blocks:
+            body = block.strip()
+            if not body:
+                continue
+            wanted = take_next or _czl9_block_mentions_port(body, names)
+            # A lead-in ending in a colon introduces the block after it.
+            take_next = wanted and body.rstrip().endswith(":")
+            if not wanted:
+                continue
+            if _RE_CZL9_BULLET_ONLY.match(body):
+                # the port table itself — L9 already carries it structurally.
+                continue
+            if len(body) > _CZL9_MAX_BLOCK_CHARS:
+                body = body[:_CZL9_MAX_BLOCK_CHARS]
+                truncated = True
+            if body in kept:
+                continue
+            if total + len(body) > _CZL9_MAX_TOTAL_CHARS:
+                truncated = True
+                break
+            kept.append(body)
+            total += len(body)
+            used_here = True
+        if used_here:
+            docs.append(fname)
+        if truncated and total >= _CZL9_MAX_TOTAL_CHARS:
+            break
+
+    content["interface_prose_provenance"] = {
+        "selection": "anchored",
+        "rule": ("blocks of the input that name a declared port, plus the "
+                 "block a colon lead-in introduces; bullet-only blocks "
+                 "excluded (already carried structurally)"),
+        "chars": total,
+        "documents": docs,
+        "blocks": len(kept),
+        "truncated": truncated,
+        "anchored_on": names,
+    }
+    if kept:
+        content["notes"] = "\n\n".join(kept)
+    else:
+        content["no_interface_prose_in_input"] = True
+
+
 def gen_l9_integration_spec(project: Path,
                             extracted: Dict[str, str],
                             l3: dict) -> LDocResult:
@@ -50648,6 +50832,12 @@ def gen_l9_integration_spec(project: Path,
     # fabricated.
     # Chip-AGNOSTIC.
     _v1_6_581_route_l1_fallback_top_module(content, promoted_from_l1)
+
+    # #czl9docs — LAST, so it anchors on the FINAL declared port list (the
+    # fallback route above can clear `top_module_pins`, and a rule anchored on
+    # a list that is about to be emptied would carry prose about ports the
+    # emitted document does not declare).
+    _czl9_emit_interface_prose(content, extracted)
 
     return _write_l_doc(
         project, "L9_INTEGRATION_SPEC", content, evidence,
