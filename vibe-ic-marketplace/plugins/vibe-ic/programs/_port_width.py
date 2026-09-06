@@ -52,12 +52,31 @@ place this module departs from ``register_bus_driver_gen.resolve_bus_widths``,
 which resolves widths for a driver bound INSIDE the design and therefore must
 honour the overrides.
 
-NO FOURTH EVALUATOR.  The expression arithmetic and the parameter-header
-harvest are ``register_bus_driver_gen._int_expr`` and
-``register_bus_driver_gen.dut_parameter_defaults`` — the AST-based, bounded,
-refuse-on-unknown-identifier pair already in the tree.  This module adds the
-port-declaration shape around them and nothing else.  If that evaluator gains a
-form, both TB generators gain it on the same day.
+WHERE A WIDTH IS STATED.  Not one place — four, and a resolver that reads only
+the first refuses on numbers the design states in full:
+
+  * the module's ``#( ... )`` parameter header, parameters and its localparams
+    (``localparam int IdxW = $clog2(N)``);
+  * the module BODY — Verilog-1995 has no header at all and states the width
+    one line below the port list (``parameter BITS = 39;``);
+  * a PACKAGE, reached by SCOPE (``[top_pkg::TL_DW-1:0]``) or by IMPORT
+    (``module m import aes_reg_pkg::*; #(...) ( ... [NumRegsData-1:0] ... )``);
+  * and the module's OWN default written over one of those
+    (``parameter int DATA_WIDTH = top_pkg::TL_DW``), which is why the header and
+    body harvests are SEEDED with what is in scope before them.
+
+Precedence runs the other way: the module's own names win over an imported one,
+and a name two IMPORTED packages define DIFFERENTLY is ambiguous and is dropped
+— an ambiguous width is not a known width.
+
+NO FOURTH EVALUATOR.  The expression arithmetic and every harvest above are
+``register_bus_driver_gen._int_expr``, ``dut_scope_constants``,
+``package_constants`` and ``dut_imported_packages`` — the AST-based, bounded,
+refuse-on-unknown-identifier machinery already in the tree, extended in place.
+(``dut_parameter_defaults`` stays parameters-only over the module's own header,
+because ``resolve_bus_widths`` merges instantiation overrides onto it.)  This
+module adds the port-declaration shape around them and nothing else.  If that
+evaluator gains a form, both TB generators gain it on the same day.
 
 chip-AGNOSTIC: no chip, SKU, vendor, PDK or design literal appears here; every
 number comes out of the design's own RTL.
