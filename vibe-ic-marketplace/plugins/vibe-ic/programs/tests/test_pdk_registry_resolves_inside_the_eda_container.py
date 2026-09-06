@@ -20,18 +20,28 @@ The repo already settled this exact question one layer over: `_read_pdk_text`
 reads "Host read first (so a staged/host-local copy still wins), then the
 container", for the same reason.  The registry resolver never got that order.
 
-FIX: try the local filesystem first, then fall through to the container.
-Host-side behaviour is unchanged by construction — `/foss/pdks/...` does not
-exist on a host filesystem, so the local branch finds nothing and the docker
-branch runs exactly as before.
+FIX (v1.17.79, then CORRECTED here).  v1.17.79 answered this by giving
+`_registry_glob_one` its OWN local resolver, consulted before the container
+and unconditionally.  That resolved the in-image case and broke the contract
+one layer up: a second, container-blind oracle answers from whatever this
+filesystem happens to carry, so three tests pinning "a DECLARED asset that
+does not resolve is a REFUSAL" went `DID NOT RAISE SystemExit`.  A refusal
+that depends on what the image happens to ship is not a refusal.
 
-§4.05 NO-LEAK — a resolution can never be laxer than the container branch:
+The route now lives at the ONE exec seam instead: `_local_exec_mode()` asks
+whether a route to a container exists at all, and `_docker_exec_raw` runs the
+same `bash -lc` probe on THIS filesystem when none does.  So every assertion
+below still holds — a present asset resolves without docker — while the
+resolver keeps asking the container it was handed, and a mocked container
+still decides the answer.
+
+§4.05 NO-LEAK — resolution can never be laxer than the container branch:
   * an absent root still resolves to None, so the caller still REFUSES;
   * a glob that matches nothing still resolves to None;
   * a candidate outside the PDK root is rejected, textually AND after
-    symlink/`..` resolution.  (That last one was caught by this file's own
-    no-leak arm: the first draft returned `/etc/passwd` through the literal
-    branch while its docstring claimed the root was enforced.)
+    symlink/`..` resolution — now on BOTH routes, because the predicate
+    (`_registry_path_under_root`) sits at the one place both pass through.
+    (The literal container branch had no containment at all before this.)
 """
 from __future__ import annotations
 
@@ -117,25 +127,29 @@ def test_a_candidate_outside_the_pdk_root_is_rejected(tmp_path):
     root = _fake_pdk(tmp_path)
     outside = tmp_path / "outside.lef"
     outside.write_text("x\n")
-    assert m._registry_glob_one_local(
-        str(root) + "/", str(outside)) is None
+    assert m._registry_path_under_root(str(root) + "/", str(outside)) is False
 
 
 def test_a_dotdot_pattern_that_starts_under_the_root_is_rejected(tmp_path):
-    """NO-LEAK: the half a textual prefix test cannot make."""
+    """NO-LEAK: the half a textual prefix test cannot make — end to end, on
+    the route the resolver actually takes."""
     m = _p3()
     root = _fake_pdk(tmp_path)
     outside = tmp_path / "outside.lef"
     outside.write_text("x\n")
     escaped = f"{root}/../outside.lef"
     assert escaped.startswith(str(root) + "/"), "arm must be textually under root"
-    assert m._registry_glob_one_local(str(root) + "/", escaped) is None
+    assert m._registry_path_under_root(str(root) + "/", escaped) is False
+    # and the resolver itself refuses it, though the file is right there
+    assert m._registry_glob_one(
+        _NO_SUCH_CONTAINER, str(root), "../outside.lef") is None
 
 
-def test_host_side_order_is_unchanged_when_the_root_is_not_local(tmp_path):
-    """The local branch is a no-op whenever the PDK is not on this filesystem,
-    which is the ordinary host case — so the docker branch still decides."""
+def test_a_root_that_is_not_on_this_filesystem_resolves_to_none(tmp_path):
+    """A PDK root that is not here resolves to nothing, whichever route runs:
+    on a host the named container decides, and in-image the probe runs on this
+    filesystem and finds no such directory. Either way the caller REFUSES."""
     m = _p3()
-    assert m._registry_glob_one_local(
-        "/foss/pdks/definitely_not_here/", 
-        "/foss/pdks/definitely_not_here/libs.ref/x/*.lib") is None
+    assert m._registry_glob_one(
+        _NO_SUCH_CONTAINER, "/foss/pdks/definitely_not_here",
+        "libs.ref/x/*.lib") is None
