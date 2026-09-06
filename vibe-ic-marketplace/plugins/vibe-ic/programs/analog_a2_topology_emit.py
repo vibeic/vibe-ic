@@ -465,15 +465,16 @@ SLEW_MARGIN_EXPR = (
 #: WHAT CANCELS, AND WHY IT IS WRITTEN DOWN. Substituting `_TAIL_I_EXPR` —
 #: which is itself DERIVED from the slew requirement — gives, exactly:
 #:
-#:     n = vref * slew_design_margin / integrator_input_overdrive_v
+#:     n = (fclk / fclk_max) * vref * slew_design_margin
+#:             / integrator_input_overdrive_v
 #:
-#: — and `fclk` cancels along with everything else, because the bias was
-#: DERIVED at the same clock the settling is evaluated at. What is left is
-#: the real question this bound asks: DOES SIZING THE BIAS FOR SLEW ALSO BUY
-#: THE SETTLING THE DECLARED RESOLUTION NEEDS? It is a statement about the
-#: stated slew margin and overdrive against `vref` and `enob`, and it can
-#: fail on a design's numbers -- vref 0.8 with enob 16 gives 10.67 against a
-#: requirement of 11.78 and is refused.
+#: What is left is the real question: DOES SIZING THE BIAS FOR SLEW, AT THE
+#: CLOCK IT IS SIZED AT, BUY THE SETTLING THE DECLARED RESOLUTION NEEDS AT
+#: THE CLOCK THE BLOCK IS RUN AT? Two bound spec rows reach the value
+#: (`vref`, and the clock RATIO) and one reaches the requirement (`enob`), so
+#: it is lost on a design's own numbers -- vref 0.8 with enob 16 at matched
+#: clocks gives 10.67 against 11.78 and is refused, and this design's decade
+#: of stated clock range gives 1.33 against 10.40 and is refused.
 #:
 #: `C_load` CANCELS, and with it `sampling_cap_ff`, `osr`, `enob`, `order` and
 #: every process constant. That is real physics rather than a modelling slip:
@@ -490,16 +491,24 @@ SLEW_MARGIN_EXPR = (
 #: respond to is `vref`, the two stated design conditions, and — the term that
 #: dominates here — the RATIO of the clock the circuit is SIZED at to the
 #: clock it is EVALUATED at.
-#: EVALUATED AT `fclk`, THE CLOCK THE BIAS IS DERIVED AT, and that is the
-#: whole discipline of this bound. `_R_IB_L_UM_EXPR` and `_TAIL_I_EXPR` both
-#: read `fclk`, so `fclk` is the clock this circuit HAS been sized for.
-#: Evaluating settling against any OTHER clock does not measure the settling
-#: of the emitted circuit; it measures the RATIO of two clocks, and it would
-#: report a sizing defect for a declaration whose only sin is a wide stated
-#: range. The clock the emitted TESTBENCH runs at is a different question
-#: with its own answer, recorded on `bias_resistor_l_um` below.
+#: EVALUATED AT `fclk_max`, THE CLOCK THE EMITTED TESTBENCH ACTUALLY RUNS AT.
+#: Not a free choice, and MEASURED rather than argued: the only deck that
+#: exists for this block runs the modulator at `fclk_max` -- the deck says so
+#: itself, "the modulator clock runs at the FASTEST rate the declaration
+#: admits (100 ns period), which is the binding settling corner" -- and at
+#: that clock it produces a density of 0.462028 where its own condition line
+#: requires 0.6 (input held one tenth of the reference above mid-scale;
+#: `swing` 1.04976, so the quantiser is toggling and not latched at a rail).
+#: Reproduced to six decimals on two hosts by two lanes.
+#:
+#: The bias is DERIVED from `fclk` (see `_R_IB_L_UM_EXPR`), so reporting the
+#: verdict at `fclk` instead would read 13.33 and PASS -- beside a deck that
+#: measures a bitstream carrying no code. That is a false green, whatever the
+#: bound's name means in isolation, and no deck runs this block at `fclk` for
+#: the passing reading to describe. The clock a design is HELD to is the one
+#: it is exercised at.
 _SETTLING_TC_EXPR = (
-    "(settle_periods_available / (fclk * hz_per_mhz)) "
+    "(settle_periods_available / (fclk_max * hz_per_mhz)) "
     "/ ((" + _LOAD_F_EXPR + ") "
     "/ ((" + _TAIL_I_EXPR + ") / integrator_input_overdrive_v))")
 #: ...and HOW MANY time constants the DECLARATION asks for. Settling to within
@@ -1816,64 +1825,69 @@ LIBRARY: Dict[str, Dict[str, Any]] = {
             # THE COMPANION BOUND `slew_margin` NEVER WAS. `slew_margin`
             # above asks whether the bias can MOVE a full reference step in
             # the time budgeted; this asks whether the loop then SETTLES on
-            # it to the resolution the declaration asks for. They are
-            # different questions with different answers, and only the first
-            # was ever checked: a converter can slew to the answer and never
-            # settle on it, and the bitstream it emits carries no code.
+            # it to the resolution the declaration asks for. Different
+            # questions, different answers: a converter can slew to the
+            # answer and never settle on it, and the bitstream it emits
+            # carries no code.
             #
-            # WHAT IT CAN AND CANNOT FAIL ON, stated because `slew_margin`
-            # two entries below had to learn the same lesson the hard way.
-            # The bias is DERIVED from the slew requirement, so substituting
-            # that derivation collapses this to
+            # MEASURED, END TO END, AND THAT IS WHY THIS ENTRY REFUSES.
+            # The emitted deck holds the input one tenth of the reference
+            # above mid-scale and states its own acceptance in the deck:
+            # the mean of the 1-bit output "must be 0.5 plus the input's
+            # fraction of the reference span -- 0.6 here". It measures
             #
-            #     n = vref * slew_design_margin
+            #     density 0.462028   against 0.6 required
+            #     swing   1.04976    (so the quantiser IS toggling, not
+            #                         latched at a rail, and it is not the
+            #                         0.5 of a loop ignoring its input)
+            #
+            # -- below mid-scale for an input above it, i.e. moving the
+            # WRONG WAY. Reproduced to six decimals on two hosts by two
+            # independent lanes on the same A3 netlist.
+            #
+            # WHAT CAN AND CANNOT MOVE IT, stated because `slew_margin` two
+            # entries below had to learn the same lesson. The bias is DERIVED
+            # from the slew requirement, so substituting that derivation
+            # collapses the value to
+            #
+            #     n = (fclk / fclk_max) * vref * slew_design_margin
             #             / integrator_input_overdrive_v
             #
-            # and `C_load` cancels, taking `sampling_cap_ff`, `osr`, `order`,
-            # `fclk` and every process constant with it. That is real physics
-            # and not a modelling slip: the slew current and the settling
-            # current are BOTH proportional to the load, so sizing for slew
-            # pins the settling time-constant COUNT however large the
-            # capacitor is. It is NOT the `slew_margin` defect, because the
-            # REQUIREMENT side is derived from `enob` and the value side from
-            # `vref` -- two bound spec rows -- so the comparison moves on a
-            # design's own numbers and can be lost:
+            # and `C_load` cancels, taking `sampling_cap_ff`, `osr`, `order`
+            # and every process constant with it. Real physics, not a
+            # modelling slip: the slew current and the settling current are
+            # BOTH proportional to the load, so sizing for slew pins the
+            # settling COUNT however large the capacitor is. It is NOT the
+            # `slew_margin` defect, because two bound spec rows reach the
+            # value (`vref`, and the clock RATIO) and one reaches the
+            # requirement (`enob`):
             #
-            #     vref 1.0, enob 14 -> 13.33 against 10.40   admitted
-            #     vref 0.8, enob 16 -> 10.67 against 11.78   REFUSED
+            #     vref 1.0, enob 14, fclk_max == fclk -> 13.33 vs 10.40  ok
+            #     vref 0.8, enob 16, fclk_max == fclk -> 10.67 vs 11.78  REFUSED
+            #     this declaration (fclk 1.0, fclk_max 10) ->  1.33 vs 10.40  REFUSED
             #
-            # MEASURED, and the transient agrees with what too few constants
-            # predicts (round 31, OSR 64): `vsum2` and `vint` swing TOGETHER
-            # with their difference fixed at 0.011 V, so the integrating
-            # capacitor never changes charge -- the virtual ground is not a
-            # virtual ground and the charge `cf2` commutates each clock lands
-            # on the summing node's own capacitance instead of on `ci`.
-            # `vint` covers 0.4571..0.7427 V within ONE clock and covers the
-            # same range over eight, so it moves 0.285 V per clock and
-            # accumulates nothing.
-            #
-            # THE CLOCK THIS IS *NOT* EVALUATED AT, and why that is a
-            # separate finding rather than this bound's business. The emitted
-            # testbench runs at `fclk_max` while the circuit is sized at
-            # `fclk` (recorded on `bias_resistor_l_um` below). Evaluated
-            # across that mismatch the count is (fclk / fclk_max) * 13.33 =
-            # 1.33 against the same 10.40, and it refuses -- but what that
-            # number measures is the RATIO OF TWO CLOCKS, not the settling of
-            # the circuit that was actually sized. Folding it in here would
-            # report a sizing defect for every declaration that merely states
-            # a wide clock range: this topology tolerates a range of only
-            # 1.28x (fclk_max <= 1.2824 MHz at fclk 1.0, enob 14), so the
-            # shipped test fixture's own 0.1-10 MHz declaration would be
-            # refused along with the design. The mismatch is real and it is
-            # NOT closeable by sizing this topology -- buying the missing
-            # 7.8x of settling raises the tail current 98 uA -> 766 uA
-            # against a block already measured at 0.947 mA of a declared
-            # 1.0 mA ceiling, and MEASURED `.ac` at the emitted amplifier's
-            # own operating point says the current does not even buy the gm:
-            # DC gain falls 50.3 dB -> 22.4 dB at 5x and 19.3 dB at 10x as
+            # NOT CLOSEABLE BY SIZING, WHICH IS WHY IT IS LEFT TO REFUSE.
+            # The only knobs are the clock ratio and the stated ratio
+            # vref*slew_design_margin/integrator_input_overdrive_v. Buying
+            # the missing 7.8x through the bias raises the tail current
+            # 98 uA -> 766 uA against a block already measured at 0.947 mA of
+            # a declared 1.0 mA ceiling -- and it does not even buy the gm:
+            # MEASURED `.ac` at the emitted amplifier's own operating point
+            # gives DC gain 50.3 dB -> 22.4 dB at 5x and 19.3 dB at 10x as
             # the mirror-side input device leaves saturation (Vds 0.289 ->
-            # 0.024 -> 0.014 V). Which declaration gives way is a decision
-            # about the design, not a number this file may pick silently.
+            # 0.024 -> 0.014 V). Nor may this file close it by re-sizing the
+            # amplifier: THIS ENTRY ITSELF hands that trade away, in the
+            # provenance it writes into every deck -- "the OTA inside each
+            # integrator is carried at the reference geometry: its
+            # transconductance sets whether the stage settles inside the
+            # clock phase, and trading that against current is sizing
+            # judgment owned by skill `analog-sizing`".
+            #
+            # SO WHAT WOULD HAVE TO CHANGE IS A DECLARATION, and by a stated
+            # amount: `fclk_max` down to 1.2824 MHz (= fclk * 13.33 / 10.40),
+            # or the current ceiling up from the declared 1.0 mA. Which one
+            # gives way is a decision about the design; this entry's job is
+            # to say that one of them must, and it says it by refusing.
             {"name": "settling_time_constants", "expr": _SETTLING_TC_EXPR,
              "min_expr": _SETTLING_TC_REQUIRED_EXPR, "max": 1.0e9,
              "why": ("the summing node has to SETTLE inside the part of the "

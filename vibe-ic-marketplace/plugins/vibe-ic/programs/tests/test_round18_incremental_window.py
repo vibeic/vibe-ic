@@ -60,8 +60,15 @@ ENTRY = a2.LIBRARY["delta_sigma"]
 DECLARED = ["vdd", "vss", "vin", "vrefp", "vrefn", "clk", "bit_out"]
 
 #: The declaration in hand (u_hawaii_adc, L5 Block A).
+# ROUND 34 — `fclk_max` is 1.0, not 10.0. `settling_time_constants` is
+# evaluated at the clock the emitted testbench RUNS at, and this topology's
+# count is (fclk/fclk_max) * vref * slew_design_margin /
+# integrator_input_overdrive_v = (fclk/fclk_max) * 13.33 against
+# (enob+1)*ln2 = 10.40, so it tolerates a stated clock range of only 1.28x.
+# The decade this used to declare is now asserted as a REFUSAL below rather
+# than carried as the positive case -- a SPLIT, not a narrowing.
 SPEC = {"order": 2.0, "osr": 256.0, "enob": 14.0, "vref": 1.0,
-        "fclk": 1.0, "fclk_max": 10.0, "vdd": 1.2}
+        "fclk": 1.0, "fclk_max": 1.0, "vdd": 1.2}
 
 #: The process constants `pdk_analog_characterize` measured for ihp-sg13g2.
 MEASURED = {"cap_area_ff_per_um2": 1.5, "rsheet_ohm_per_sq": 260.0009360028072,
@@ -272,6 +279,26 @@ def test_the_declaration_in_hand_is_admitted():
     """The positive case. MEASURED at fclk 1 MHz, ENOB 14, OSR 256, vref 1 V:
     no refusal at all."""
     assert a2.entry_admission(ENTRY, dict(SPEC), _UNITS, MEASURED) == []
+
+
+def test_a_decade_of_stated_clock_range_cannot_settle_and_is_refused():
+    """The declaration this module used to treat as the positive case.
+
+    MEASURED end to end and reproduced to six decimals on two hosts by two
+    independent lanes: the emitted deck runs the modulator at `fclk_max`, and
+    against its own stated acceptance -- the mean of the 1-bit output "must be
+    0.5 plus the input's fraction of the reference span -- 0.6 here" -- it
+    measures density 0.462028 with swing 1.04976. Below mid-scale for an input
+    above it, with the quantiser toggling rather than latched: the converter
+    does not carry its input code. The settling count at that clock is 1.33
+    against the 10.40 that enob 14 needs.
+    """
+    decade = {**SPEC, "fclk_max": 10.0}
+    refusals = a2.entry_admission(ENTRY, decade, _UNITS, MEASURED)
+    named = [r for r in refusals if r.get("field") == "settling_time_constants"]
+    assert named, refusals
+    assert named[0]["value"] == pytest.approx(1.3333333, rel=1e-5)
+    assert float(named[0]["min"]) == pytest.approx(10.3972077, rel=1e-6)
 
 
 def test_the_slew_margin_is_true_by_construction_and_still_falsifiable():

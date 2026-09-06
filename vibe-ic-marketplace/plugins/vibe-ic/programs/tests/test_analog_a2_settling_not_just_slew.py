@@ -74,8 +74,11 @@ def _mod(path: Path = A2SRC):
 a2 = _mod()
 UNITS = {"order": "", "vdd": "V", "osr": "", "enob": "bit", "vref": "V",
          "fclk": "MHz", "fclk_max": "MHz"}
+# A SERVABLE declaration: the clock range is inside the 1.28x this topology
+# tolerates. The decade of range the real design declares is a REFUSAL case and
+# is asserted as one below, not used as the baseline.
 BASE = {"order": 2.0, "vdd": 1.2, "osr": 256.0, "enob": 14.0, "vref": 1.0,
-        "fclk": 1.0, "fclk_max": 10.0}
+        "fclk": 1.0, "fclk_max": 1.0}
 FIELD = "settling_time_constants"
 
 
@@ -149,6 +152,7 @@ def test_state_1_a_declaration_that_settles_is_admitted():
 @pytest.mark.parametrize("label,over", [
     ("a reference too small for the resolution", {"vref": 0.8, "enob": 16.0}),
     ("a resolution too fine for the reference", {"enob": 19.0}),
+    ("a decade of stated clock range", {"fclk_max": 10.0}),
 ])
 def test_state_2_a_declaration_that_does_not_settle_is_REFUSED(label, over):
     """The comparison is lost on the design's OWN numbers -- which is the
@@ -184,24 +188,40 @@ def test_the_unresolvable_state_is_not_reported_as_a_failed_bound():
 # ── what the bound does and does not respond to ───────────────────────────
 @pytest.mark.parametrize("over", [
     {"osr": 64.0}, {"osr": 512.0}, {"order": 1.0}, {"vdd": 1.3},
-    {"fclk": 0.1}, {"fclk": 10.0}, {"fclk_max": 1.0}, {"enob": 12.0},
+    {"fclk": 0.1, "fclk_max": 0.1}, {"fclk": 10.0, "fclk_max": 10.0},
+    {"enob": 12.0}, {"vdd": 1.1},
 ])
-def test_the_count_is_independent_of_the_load_and_of_the_clock(over):
+def test_the_count_is_independent_of_the_load_and_of_the_absolute_clock(over):
     """`C_load` CANCELS, because the slew current and the settling current
     are both proportional to it -- so does `fclk`, because the bias is
     derived at the same clock the settling is evaluated at. Asserted, not
     left to be rediscovered: a reader who thinks this number responds to the
     capacitor will read a moved bound as evidence of something it is not.
 
-    `enob` is in the list on purpose -- it moves the REQUIREMENT, never the
-    count.
+    The clock pairs move BOTH clocks together: only their RATIO reaches the
+    count, so the absolute rate cancels while a mismatch does not. `enob` is in
+    the list on purpose -- it moves the REQUIREMENT, never the count.
     """
     env = a2.admission_env(a2.LIBRARY["delta_sigma"], {**BASE, **over},
                            _measured())
     got = a2._safe_eval(a2._SETTLING_TC_EXPR, env)
-    closed = BASE["vref"] * env["slew_design_margin"] \
-        / env["integrator_input_overdrive_v"]
+    closed = (env["fclk"] / env["fclk_max"]) * BASE["vref"] \
+        * env["slew_design_margin"] / env["integrator_input_overdrive_v"]
     assert got == pytest.approx(closed, rel=1e-9), over
+
+
+def test_the_count_DOES_respond_to_the_clock_RATIO():
+    """The mismatch this entry exists to catch: a circuit biased at `fclk` and
+    run at `fclk_max`. Only the ratio reaches the count, and it reaches it
+    linearly."""
+    seen = {}
+    for fmax in (1.0, 2.0, 10.0):
+        env = a2.admission_env(a2.LIBRARY["delta_sigma"],
+                               {**BASE, "fclk_max": fmax}, _measured())
+        seen[fmax] = a2._safe_eval(a2._SETTLING_TC_EXPR, env)
+    assert seen[1.0] > seen[2.0] > seen[10.0], seen
+    assert seen[10.0] == pytest.approx(seen[1.0] / 10.0, rel=1e-9)
+    assert seen[10.0] == pytest.approx(1.3333333, rel=1e-6)
 
 
 def test_the_count_DOES_respond_to_the_declared_reference():
