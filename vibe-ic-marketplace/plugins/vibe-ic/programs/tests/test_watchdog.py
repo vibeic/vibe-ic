@@ -162,14 +162,26 @@ def test_supervise_progressing_runs_to_natural_exit():
     assert killer.calls == []
 
 
-def test_supervise_ceiling_backstops_cpu_burning_loop():
+def test_supervise_records_the_ceiling_and_keeps_supervising():
+    """THE RULING (2026-09-07, vibe-ic#2051). This test used to assert the
+    opposite — `outcome == "ceiling"`, `killer.calls == ["ceiling"]` — and that
+    assertion is what a 5360 s Yosys proof at 1374 points, 0 failed and 99.9 %
+    CPU was killed by.
+
+    A job that is still PROGRESSING crosses the budget and is NOT stopped. The
+    crossing is recorded, announced once, and supervision continues; the job
+    ends when the job ends. The fake clock runs to ten times the ceiling so
+    "not killed" is measured over a long stretch and not sampled at one poll.
+    """
     clk = _FakeClock()
-    proc = _RunningProc()
+    proc = _RunningProc(finish_after=1000)   # exits on its own, long after
     state = {"cpu": 0.0}
+    notices = []
 
     def wait_fn(p, t):
         clk.advance(t)
-        return None
+        p.polls += 1
+        return 0 if p.polls >= 1000 else None
 
     def cpu():
         state["cpu"] += 1.0        # always burning → never stalls
@@ -177,13 +189,88 @@ def test_supervise_ceiling_backstops_cpu_burning_loop():
 
     meter = W.ProgressMeter(size_fn=lambda: 0, cpu_fn=cpu)
     killer = _KillCounter(proc)
+    obs = {}
     outcome, rc = W.supervise(
         proc, meter.sample, killer,
         poll_s=10, stall_grace_s=100, hard_ceiling_s=1000,
-        wait_fn=wait_fn, clock=clk)
-    assert outcome == "ceiling"
-    assert killer.calls == ["ceiling"]
-    assert clk.t > 100             # lived well past the grace
+        wait_fn=wait_fn, clock=clk, observations=obs,
+        ceiling_notice=notices.append)
+
+    assert outcome == "natural", outcome
+    assert rc == 0
+    assert killer.calls == [], (
+        "the ceiling killed a job that was making forward progress")
+    assert not proc.killed
+    assert clk.t >= 10_000, clk.t         # ran to 10x the ceiling, unharmed
+    # RECORDED, and recorded ONCE — a notice per poll past the budget would
+    # bury the run log it exists to reach.
+    assert obs["hard_ceiling_exceeded"] is True
+    assert 1000 <= obs["hard_ceiling_crossed_s"] <= 1010, obs
+    assert len(notices) == 1, notices
+
+
+def test_a_ceiling_that_is_never_crossed_records_nothing():
+    """THE CONTROL for the case above. If the crossing were recorded
+    unconditionally, the assertions there would hold on a supervisor that had
+    never looked at the clock at all."""
+    clk = _FakeClock()
+    proc = _RunningProc()
+    notices = []
+
+    def wait_fn(p, t):
+        clk.advance(t)
+        p.polls += 1
+        return 0 if p.polls >= 5 else None
+
+    meter = W.ProgressMeter(size_fn=lambda: 0)
+    obs = {}
+    outcome, rc = W.supervise(
+        proc, meter.sample, _KillCounter(proc),
+        poll_s=10, stall_grace_s=100_000, hard_ceiling_s=100_000,
+        wait_fn=wait_fn, clock=clk, observations=obs,
+        ceiling_notice=notices.append)
+    assert outcome == "natural"
+    assert notices == []
+    assert "hard_ceiling_exceeded" not in obs
+    assert "hard_ceiling_crossed_s" not in obs
+
+
+def test_a_stalled_job_is_still_killed_after_the_ceiling_is_recorded():
+    """The ceiling stops being a kill; the STALL does not stop being one.
+
+    A job that crosses the budget while progressing and THEN goes flat must
+    still be reaped — otherwise this landing would have replaced one wrong
+    answer (kill the healthy) with another (never kill the hung).
+    """
+    clk = _FakeClock()
+    proc = _RunningProc()
+    state = {"cpu": 0.0, "alive": True}
+    notices = []
+
+    def wait_fn(p, t):
+        clk.advance(t)
+        return None
+
+    def cpu():
+        if clk.t < 2000:
+            state["cpu"] += 1.0      # progressing across the 1000 s ceiling
+        return state["cpu"]          # then flat forever
+
+    meter = W.ProgressMeter(size_fn=lambda: 0, cpu_fn=cpu)
+    killer = _KillCounter(proc)
+    obs = {}
+    outcome, rc = W.supervise(
+        proc, meter.sample, killer,
+        poll_s=10, stall_grace_s=100, hard_ceiling_s=1000,
+        wait_fn=wait_fn, clock=clk, observations=obs,
+        ceiling_notice=notices.append)
+
+    assert outcome == "stalled", outcome
+    assert killer.calls == ["stalled"], killer.calls
+    assert notices and obs["hard_ceiling_exceeded"] is True
+    # It died of the STALL, shortly after the signals went flat — not at the
+    # budget, which it had already crossed 1000 s earlier and survived.
+    assert 2000 < clk.t < 2200, clk.t
 
 
 # ── run_supervised(): real host sub-processes + injected cpu_probe ───────────
@@ -239,21 +326,43 @@ def test_run_supervised_hung_is_stalled():
     assert "WATCHDOG_STALLED" in res.err
 
 
-def test_run_supervised_cpu_silent_not_killed_before_ceiling():
-    """A silent busy loop (no stdout) is kept alive by the injected CPU probe;
-    only the ceiling stops it — proves progress = output OR CPU."""
-    proc_pid = {"pid": None}
+def test_run_supervised_cpu_silent_survives_the_budget_and_exits_naturally():
+    """A REAL silent busy loop, on a real host, across a real budget.
 
-    def cpu_probe(proc):
-        proc_pid["pid"] = proc.pid
-        return _local_cpu_ticks(proc.pid)
+    Two properties in one run, and the second is the ruling (vibe-ic#2051):
 
+      * a silent CPU-bound phase is kept alive by the injected CPU probe alone
+        — it emits nothing, so the output signal cannot be what saved it, and
+        the grace is a third of the run;
+      * it CROSSES the ceiling and is not touched. This test previously
+        asserted `outcome == "ceiling"` and `rc == RC_CEILING`, i.e. that the
+        clock killed it. The child now stops when the child is done, and the
+        crossing survives only as a record on `.supervision`.
+
+    The child bounds ITSELF (a busy loop with an end), which is the only way to
+    write this case now: under the ruling an endless one would run forever, and
+    a test that needs a wall clock to finish cannot be a test that wall clocks
+    are gone.
+    """
+    child = ("import time\n"
+             "x = 0\n"
+             "end = time.monotonic() + 3.0\n"
+             "while time.monotonic() < end:\n"
+             "    x += 1\n")
     res = W.run_supervised(
-        [sys.executable, "-c", "x=0\nwhile True:\n    x+=1"],
-        stall_grace_s=1.5, poll_s=0.3, hard_ceiling_s=4.5, cpu_probe=cpu_probe)
-    assert res.outcome == "ceiling", res.err
-    assert res.rc == W.RC_CEILING
-    assert res.elapsed_s > 2.5     # CPU signal carried it past the 1.5s grace
+        [sys.executable, "-c", child],
+        stall_grace_s=1.0, poll_s=0.25, hard_ceiling_s=1.0,
+        cpu_probe=lambda proc: _local_cpu_ticks(proc.pid))
+
+    assert res.outcome == "natural", (res.outcome, res.err)
+    assert res.rc == 0, res.err
+    assert res.elapsed_s > 2.5, res.elapsed_s     # lived past a 1.0 s budget
+    assert "WATCHDOG_CEILING" not in _as_str(res.err), res.err
+    assert res.supervision.get("hard_ceiling_exceeded") is True, res.supervision
+
+
+def _as_str(v):
+    return v.decode("utf-8", "replace") if isinstance(v, bytes) else v
 
 
 def test_run_supervised_fast_normal_natural_rc_no_kill():

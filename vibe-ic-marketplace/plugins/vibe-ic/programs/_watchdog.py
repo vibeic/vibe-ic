@@ -20,9 +20,24 @@ ANY signal advancing resets the grace clock. So a CPU-bound-but-quiet phase is
 kept alive by the CPU signal, and a chatty phase by the output signal; a genuine
 deadlock (flat everything) trips the grace and dies. `stall_grace_s` is the ONE
 tunable — "how long may the job be SILENT *and* idle before we call it hung" —
-NOT a runtime estimate. `hard_ceiling_s` (default 24h) is a pathological-
-infinite-loop backstop ONLY (a CPU-burning loop that never goes idle), NOT the
-primary control.
+NOT a runtime estimate.
+
+THE STALL IS THE ONLY KILLER (owner ruling 2026-09-07, vibe-ic#2051).
+`hard_ceiling_s` (default 24h) used to be a second, terminating one: a
+"pathological-infinite-loop backstop" that killed at the clock regardless of
+progress. MEASURED 2026-09-06 on 8HD-9: two sha256 LEC yosys runs wrapped in
+`timeout --kill-after=5 86395`, one of them 5360 s into a proof at 1374 points
+proved, 0 failed, 99.9 % CPU and still advancing. A tool that is CONVERGING at
+the ceiling was torn down and booked RC_CEILING — a statement about the clock,
+recorded where a reader looks for a statement about the design.
+
+So `hard_ceiling_s` is now a RECORDED BUDGET and nothing terminates on it. At
+the crossing the supervisor notes it (`observations['hard_ceiling_exceeded']`)
+and calls the injected `ceiling_notice` ONCE; the job CONTINUES. A CPU-burning
+loop that never goes idle is still killed — by the STALL path when its signals
+go flat — and a job that is busy but getting nowhere has its own primitive in
+`abort_probe`, which stops on the CALLER'S DOMAIN EVIDENCE and returns the
+distinct RC_ABORTED. Both of those are measurements. A clock is not.
 
 DESIGN — this module knows NOTHING about docker or EDA. The caller INJECTS:
   • `cpu_probe(proc) -> Optional[float]` — HOW to read the job's CPU (docker
@@ -38,7 +53,7 @@ DESIGN — this module knows NOTHING about docker or EDA. The caller INJECTS:
   • `log_path` — an external tee'd log to also watch for growth.
   • `popen_factory(cmd, **kw) -> proc` — HOW to launch (default: host
     subprocess.Popen). `proc` must expose `.wait(timeout)` and `.kill()`.
-The SUPERVISION LOGIC (the meter + the grace/ceiling loop) is fully general
+The SUPERVISION LOGIC (the meter + the stall-grace loop) is fully general
 here, so a docker-exec'd in-container tool, a host subprocess, or any future
 caller reuse it unchanged. The sibling `loop_guard(...)` (while/poll/retry/
 convergence-loop face) lives here too and REUSES `ProgressMeter`: it is the
@@ -60,19 +75,23 @@ The primitive stays domain-blind — it only polls the predicate and kills.
 outcome/rc, never dressed up as a natural exit or as a hang.
 
 Public API (stable — an enforcement gate builds against it):
-  RC_STALLED, RC_CEILING, RC_ABORTED  — distinct return codes for the 3 kills
+  RC_STALLED, RC_ABORTED  — the return codes of the TWO kills that exist
+  RC_CEILING  — retained, NO LONGER PRODUCED BY A CLOCK (vibe-ic#2051); a tool
+                may still exit 124 on its own and that must stay legible
   SupervisedResult(rc,out,err,outcome,elapsed_s,abort_reason,scope,
                    supervision)   # supervision = what was watched + when it
                                   # last moved, so a kill is EVIDENCE not a word
   ProgressMeter(size_fn, log_fn, cpu_fn)      — signal fusion → monotonic score
   supervise(proc, progress_probe, kill_fn, *, poll_s, stall_grace_s,
             hard_ceiling_s, wait_fn=None, clock=time.monotonic,
-            abort_probe=None, observations=None) -> (outcome, rc)
+            abort_probe=None, observations=None,
+            ceiling_notice=None) -> (outcome, rc)
   run_supervised(cmd, *, log_path=None, output_progress=True,
                  domain_progress_probe=None,
                  stall_grace_s=1800, poll_s=30,
                  hard_ceiling_s=86400, cpu_probe=None, kill=None,
-                 popen_factory=None, env=None, abort_probe=None)
+                 popen_factory=None, env=None, abort_probe=None,
+                 ceiling_notice=None)
                  -> SupervisedResult
   loop_guard(name, *, max_iter, stall_iters=None, progress_fn=None,
              clock=time.monotonic) -> LoopGuard   # in-process convergence loops
@@ -91,9 +110,15 @@ from dataclasses import dataclass, field
 from typing import Callable, Optional, Tuple
 
 # Distinct return codes: STALLED (no forward progress) is NOT the natural rc and
-# NOT the old rc=124 estimate-timeout; the CEILING backstop keeps the historical
-# rc=124 "wall-clock" code so existing downstream diagnostics still read it.
+# NOT the old rc=124 estimate-timeout.
 RC_STALLED = 199
+# RC_CEILING is NO LONGER PRODUCED BY THIS MODULE (vibe-ic#2051): the ceiling
+# records a budget and never kills. The name and the value stay because 124 is
+# still what a tool wrapped in its OWN GNU `timeout` exits with on the paths
+# that legitimately still use one (a host-side `subprocess.run(timeout=)` whose
+# docker client would otherwise orphan the tool), and downstream classifiers
+# read it. Removing it would silently reclassify those, which is a second
+# defect rather than a completion of the first.
 RC_CEILING = 124
 # ABORTED — the caller's own convergence predicate said "this is going
 # nowhere". Distinct from STALLED (the job WAS progressing) and from CEILING
@@ -103,19 +128,23 @@ RC_ABORTED = 198
 
 DEFAULT_POLL_S = 30              # cheap probe cadence (negligible overhead)
 DEFAULT_STALL_GRACE_S = 1800     # 30 min of ZERO forward progress ⇒ hung
-DEFAULT_HARD_CEILING_S = 86_400  # 24 h absolute backstop (pathological loop)
+DEFAULT_HARD_CEILING_S = 86_400  # 24 h RECORDED BUDGET — never a kill (#2051)
 
 
 @dataclass
 class SupervisedResult:
     """Outcome of a supervised sub-process. `.rc` is the return code
-    (RC_STALLED on a stall kill, RC_CEILING on the backstop kill, else the
-    process's natural rc). `.out`/`.err` are decoded str, or raw bytes
-    when the caller passed `as_text=False`."""
+    (RC_STALLED on a stall kill, RC_ABORTED on a convergence abort, else the
+    process's natural rc — which since vibe-ic#2051 is what a job that crossed
+    `hard_ceiling_s` and then finished returns, because the ceiling no longer
+    stops anything). `.out`/`.err` are decoded str, or raw bytes when the
+    caller passed `as_text=False`."""
     rc: int
     out: str
     err: str
-    # 'natural' | 'stalled' | 'ceiling' | 'aborted' | 'launch_error'
+    # 'natural' | 'stalled' | 'aborted' | 'launch_error'.
+    # 'ceiling' is retained in the type only as the tripwire described on the
+    # ceiling branch of `run_supervised`; the supervisor cannot produce it.
     outcome: str
     elapsed_s: float = 0.0
     # The `abort_probe` reason, present ONLY on outcome == 'aborted'.
@@ -155,7 +184,7 @@ class ProgressMeter:
     FORWARD its last value — a signal *disappearing* is never mistaken for
     progress. This closes the None-flap where an intermittently-failing CPU
     probe (None ↔ frozen value) would otherwise reset the grace clock every
-    poll and let a genuinely hung job squat until the ceiling. pure + generic."""
+    poll and let a genuinely hung job squat forever. pure + generic."""
 
     def __init__(self,
                  size_fn: Optional[Callable[[], float]] = None,
@@ -274,7 +303,8 @@ def supervise(proc, progress_probe: Callable[[], object],
               wait_fn: Optional[Callable[[object, float], Optional[int]]] = None,
               clock: Callable[[], float] = time.monotonic,
               abort_probe: Optional[Callable[[], Optional[str]]] = None,
-              observations: Optional[dict] = None
+              observations: Optional[dict] = None,
+              ceiling_notice: Optional[Callable[[float], None]] = None
               ) -> Tuple[str, Optional[int]]:
     """Generic progress-stall control loop over an already-launched process.
 
@@ -282,9 +312,25 @@ def supervise(proc, progress_probe: Callable[[], object],
     by the token CHANGING between polls (use a ProgressMeter for the robust
     monotonic score). `kill_fn(proc, reason)` terminates the job tree. Returns
     ``(outcome, exit_code)`` with outcome ∈
-    {'natural','stalled','ceiling','aborted'}.
-    Kills ONLY after NO progress for `stall_grace_s`; `hard_ceiling_s` is a
-    pathological backstop only. `wait_fn`/`clock` are injectable for tests.
+    {'natural','stalled','aborted'}.
+    Kills ONLY after NO progress for `stall_grace_s`. `wait_fn`/`clock` are
+    injectable for tests.
+
+    `hard_ceiling_s` IS NOT A KILL (owner ruling 2026-09-07, vibe-ic#2051). It
+    is a RECORDED BUDGET: when the job crosses it the loop notes the crossing
+    in `observations`, calls `ceiling_notice(elapsed_s)` ONCE, and KEEPS
+    SUPERVISING. Nothing here terminates on a clock, so a tool that is still
+    converging at the budget is never torn down for having taken longer than
+    somebody guessed. The outcome ``'ceiling'`` is therefore no longer
+    reachable from this function; `RC_CEILING` survives only because a tool may
+    still exit 124 on its own, and a downstream reader must be able to tell
+    that apart from anything we did.
+
+    `ceiling_notice` is injected, never assumed: this module knows nothing about
+    sidecars or dashboards, so WHERE the crossing is recorded is the caller's
+    choice (see `_docker_watchdog.run_docker_supervised`). It fires at most
+    once per run and an exception from it can never stop the job — a notice
+    that could kill what it is reporting on would be the defect again.
 
     `observations` (optional dict) is FILLED IN as the loop runs:
     ``since_last_progress_s`` (how long the job had been showing nothing when
@@ -304,6 +350,7 @@ def supervise(proc, progress_probe: Callable[[], object],
     start = clock()
     last_progress = start
     polls = 0
+    ceiling_recorded = False
 
     def _record(now: float) -> None:
         if observations is None:
@@ -335,10 +382,26 @@ def supervise(proc, progress_probe: Callable[[], object],
             _record(now)
             kill_fn(proc, "stalled")
             return "stalled", None
-        if now - start > hard_ceiling_s:
-            _record(now)
-            kill_fn(proc, "ceiling")
-            return "ceiling", None
+        if not ceiling_recorded and now - start > hard_ceiling_s:
+            # THE BUDGET IS RECORDED, NEVER SPENT AS A KILL (vibe-ic#2051).
+            # This branch used to read `kill_fn(proc, "ceiling"); return`, and
+            # that is what tore down a converging proof at 86395 s and booked
+            # it RC_CEILING — a verdict about the clock wearing the shape of a
+            # verdict about the design. The crossing is still worth SAYING, so
+            # it is recorded and announced exactly once; then supervision
+            # continues on forward progress, which is the only thing that may
+            # stop a job. A CPU-burning loop that goes quiet is still killed —
+            # by the STALL path, on evidence, however long it took to get there.
+            ceiling_recorded = True
+            elapsed = round(now - start, 3)
+            if observations is not None:
+                observations["hard_ceiling_crossed_s"] = elapsed
+                observations["hard_ceiling_exceeded"] = True
+            if ceiling_notice is not None:
+                try:
+                    ceiling_notice(elapsed)
+                except Exception:  # nosec — a notice may never stop a job
+                    pass
         if abort_probe is not None:
             try:
                 reason = abort_probe()
@@ -375,6 +438,7 @@ def run_supervised(cmd, *, log_path=None, output_progress: bool = True,
                    wait_fn=None,
                    clock: Callable[[], float] = time.monotonic,
                    abort_probe: Optional[Callable[[], Optional[str]]] = None,
+                   ceiling_notice: Optional[Callable[[float], None]] = None,
                    as_text: bool = True
                    ) -> SupervisedResult:
     """Launch `cmd` and supervise it by FORWARD PROGRESS (see module docstring).
@@ -386,8 +450,10 @@ def run_supervised(cmd, *, log_path=None, output_progress: bool = True,
     can disable output progress so a chatty subject cannot impersonate domain
     progress. A still-progressing job is
     NEVER killed; a job idle+silent for `stall_grace_s` is killed via
-    `kill(proc, 'stalled')` → rc=RC_STALLED; the `hard_ceiling_s` backstop kills
-    → rc=RC_CEILING. `cpu_probe`/`kill`/`popen_factory` inject the transport
+    `kill(proc, 'stalled')` → rc=RC_STALLED. `hard_ceiling_s` is a RECORDED
+    BUDGET and kills NOTHING (vibe-ic#2051): crossing it fires `ceiling_notice`
+    once, marks `.supervision['hard_ceiling_exceeded']`, and the job runs on.
+    `cpu_probe`/`kill`/`popen_factory` inject the transport
     (docker/host/…); the default launches a host subprocess and kills it with
     proc.kill(). `abort_probe` (optional) is the caller's convergence read — a
     non-empty reason stops the job → rc=RC_ABORTED, `outcome='aborted'`, and the
@@ -517,7 +583,7 @@ def run_supervised(cmd, *, log_path=None, output_progress: bool = True,
         poll_s=poll_s, stall_grace_s=stall_grace_s,
         hard_ceiling_s=hard_ceiling_s, wait_fn=wait_fn, clock=clock,
         abort_probe=(_abort_capture if abort_probe is not None else None),
-        observations=_obs)
+        observations=_obs, ceiling_notice=ceiling_notice)
     _obs["watched"] = meter.watched()
     _obs["stall_grace_s"] = stall_grace_s
     _obs["hard_ceiling_s"] = hard_ceiling_s
@@ -580,11 +646,19 @@ def run_supervised(cmd, *, log_path=None, output_progress: bool = True,
                         f"elapsed_s={_obs.get('elapsed_s')}"),
             "stalled", elapsed, scope=scope_meta, supervision=_obs)
     if outcome == "ceiling":
+        # UNREACHABLE from `supervise` since vibe-ic#2051 — the ceiling records
+        # and continues, it never returns this outcome. The branch is kept, and
+        # kept LOUD, because deleting it would let a future edit that restores
+        # the clock kill fall through to the 'natural' return below and be
+        # reported as an ordinary exit. If this ever fires, the mechanism is
+        # back and the message says so rather than the run looking normal.
         return SupervisedResult(
             RC_CEILING, out,
-            err + _note(f"\nWATCHDOG_CEILING: hard backstop "
-                        f"{hard_ceiling_s:g}s exceeded (pathological non-idle "
-                        f"loop) — killed. "
+            err + _note(f"\nWATCHDOG_CEILING: a clock stopped this job at "
+                        f"{hard_ceiling_s:g}s. Since vibe-ic#2051 the ceiling "
+                        f"is a RECORDED BUDGET and nothing may terminate on "
+                        f"it — reaching this line means a wall-clock kill has "
+                        f"been reintroduced into the supervisor. "
                         f"watched={_obs.get('watched')} "
                         f"since_last_progress_s="
                         f"{_obs.get('since_last_progress_s')}"),

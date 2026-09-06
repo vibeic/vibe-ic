@@ -9,8 +9,10 @@ An owned job is identified by PID *and* ``/proc`` starttime.  Session-detached
 and double-forked descendants adopt to this helper, are retained by a fresh
 descendant census, and are signalled through pidfds.  A terminal result is
 published only after a complete final census explicitly contains zero owned
-processes.  There is no whole-run wall timeout; the underlying watchdog uses
-forward progress.  A durable termination-pending transition releases the outer
+processes.  There is no whole-run wall timeout at any layer: this helper passes
+``hard_ceiling_s=float("inf")``, and since vibe-ic#2051 the underlying watchdog
+would not terminate on a finite one either — it supervises by forward progress
+and kills only a job whose every readable signal has gone flat.  A durable termination-pending transition releases the outer
 dispatcher with rc 2 while this isolated helper continues to own and reap work
 until kernel exit events plus a complete final census prove zero descendants.
 """
@@ -683,6 +685,11 @@ def run_owned(argv: Sequence[str], cwd: Path, env: Dict[str, str], *,
                 (lambda: semantic_progress_monitor.error or None)
                 if semantic_progress_monitor is not None else None),
             stall_grace_s=stall_grace_s, poll_s=poll_s,
+            # No budget to record: this helper supervises jobs whose length is
+            # not knowable in advance, so there is no number here to be honest
+            # about. Since vibe-ic#2051 a finite value would not have stopped
+            # anything either — `inf` says "we are not claiming a budget",
+            # which is a different statement from claiming one and ignoring it.
             hard_ceiling_s=float("inf"), popen_factory=_popen, kill=_kill)
         proc = holder.get("proc")
         observed: Set[Identity] = set()

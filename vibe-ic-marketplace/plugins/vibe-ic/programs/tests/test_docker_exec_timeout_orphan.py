@@ -20,6 +20,15 @@ implementations — design_one_shot_runner (Phase 2 synth),
 ppa_area_threshold_check, mixed_signal_top_lvs_run — never got it. The wrap is
 now one shared helper and all of them use it.
 
+AND THE SUPERVISED PATH NO LONGER USES IT AT ALL (vibe-ic#2051, 2026-09-07).
+There the wrap was doing two jobs, and only one of them was legitimate: it tore
+a spawned tree down whole, AND it SIGKILLed the tool at `hard_ceiling_s`
+whatever the job was doing. The owner ruled the second out — only a progress
+stall may stop a job — so the wrap came off that path, and the teardown is now
+proved to come from the identity-anchored reap instead of from GNU `timeout`.
+The last three tests in this file are that proof, and they are the ones that
+keep the 2026-07-22 hazard caught.
+
 chip/tool-AGNOSTIC: no chip, tool or PDK literal; the helper is a pure string
 transform over whatever command it is handed.
 """
@@ -73,9 +82,17 @@ def test_wrap_quotes_the_command_so_it_cannot_break_out():
     assert w.count(shlex.quote(nasty)) == 2
 
 
-def test_supervisor_ceiling_wrap_is_unchanged_by_the_refactor():
-    """`run_docker_supervised` built this string inline before; the shared
-    helper must reproduce it byte-for-byte at the 24 h ceiling."""
+def test_the_wrap_helper_is_unchanged_for_the_callers_that_still_need_it():
+    """The helper's exact output, pinned.
+
+    `run_docker_supervised` no longer calls this (vibe-ic#2051 — see
+    `test_the_supervised_path_carries_no_outer_clock` below), but four callers
+    still do, and they still need to: each drives a RAW `docker exec` under a
+    host-side `subprocess.run(timeout=)`, where the bound kills the docker
+    CLIENT and leaves the tool inside the container running. This assertion
+    keeps that string byte-for-byte, so removing the clock from the supervised
+    path cannot quietly change what the orphan guard emits everywhere else.
+    """
     expected = (
         "if command -v timeout >/dev/null 2>&1; then "
         "exec timeout --kill-after=5 86395 bash -lc X; "
@@ -151,3 +168,81 @@ def test_lec_run_docker_helper_carries_a_container_side_deadline():
     assert "wrap_with_container_timeout" in body, (
         "lec_run._docker lost its container-side deadline — a host timeout "
         "there orphans a yosys equivalence run inside the container")
+
+
+# ===========================================================================
+# vibe-ic#2051 — THE SUPERVISED PATH HAS NO OUTER CLOCK, AND STILL TEARS AN
+# ORPHAN DOWN WHOLE.
+#
+# The wrap was introduced here because GNU `timeout` "puts the command in its
+# own process group", so a tool that spawns children (yosys -> abc) is killed
+# as a group rather than left overwriting the good netlist. Taking the wrap off
+# the supervised path is therefore only safe if the grouping was never the
+# wrap's to give. MEASURED 2026-09-07 in the pinned image: it was not. `docker
+# exec` starts each exec in its OWN session, so the stamping shell already
+# reports pid == pgid == sid with no `timeout` anywhere, and `exec` hands that
+# pid — and that group — straight to the tool.
+#
+# These three tests hold the two halves apart: the shape (no clock, still a
+# group-signalling reap) and the mechanism (the reap selects by the STAMP, so
+# an unstamped job is left alone — which is what makes a torn-down tree the
+# reap's doing and not the shell's).
+# ===========================================================================
+
+def test_the_supervised_path_carries_no_outer_clock():
+    """The command `run_docker_supervised` sends into the container.
+
+    A `timeout` here is a wall clock on every long tool run in the plugin, which
+    is the defect #2051 removed. The assertion is on the STRING the supervised
+    path builds, not on the source of the function, so a reintroduction through
+    a differently-spelled helper is caught too.
+    """
+    built = dw.supervised_container_command("yosys -p 'synth'", "/tmp/x.pid")
+    assert "timeout" not in built, built
+    assert "--kill-after" not in built, built
+    # It is still an `exec`, so the stamped pid IS the tool's pid.
+    assert built.rstrip().endswith(
+        "exec bash -lc " + shlex.quote("yosys -p 'synth'")), built
+    # ...and it is still stamped, which is what the reap selects on.
+    assert "/tmp/x.pid" in built, built
+
+    body = func_src((PROGRAMS / "_docker_watchdog.py").read_text(),
+                    "run_docker_supervised")
+    assert "wrap_with_container_timeout" not in body, (
+        "the supervised path took its outer wall clock back")
+    assert "supervised_container_command" in body, body
+
+
+def test_the_stall_reap_signals_the_whole_process_group():
+    """THE 2026-07-22 HAZARD, still caught — by the reap rather than by a clock.
+
+    The reap must (a) signal the process GROUP when the stamped root leads one,
+    which is what tears a `yosys -> abc` tree down atomically, and (b) also name
+    the ppid-walked descendants, which catches a child that called `setpgid` and
+    left the group. Losing either would let an orphan survive to overwrite the
+    artifact of the step that replaced it.
+    """
+    reap = dw.reap_command("/tmp/job.pid", "TERM")
+    # (a) the GROUP, guarded by "the root actually leads one"
+    assert 'VPG=$(ps -o pgid= -p "$VPID"' in reap, reap
+    assert 'kill -TERM -- "-$VPID"' in reap, reap
+    # (b) the ppid walk, so nothing that left the group is missed
+    assert "ps -eo pid=,ppid=" in reap, reap
+    assert 'kill -TERM "$VPID" $VKIDS' in reap, reap
+
+
+def test_the_reap_selects_by_the_stamp_and_never_by_a_pattern():
+    """Why the teardown above is the REAP's doing.
+
+    Identity is `(pid, /proc starttime)` read from the stamp and re-validated;
+    with no stamp, or a recycled pid, the reap does NOTHING and says which. A
+    fallback to matching a command line would put back the defect that
+    SIGTERMed another run's healthy tool in the shared container (2026-08-27),
+    and it is exactly on the paths where the stamp failed that it would fire.
+    """
+    reap = dw.reap_command("/tmp/job.pid", "KILL")
+    for why in ("no_stamp", "unreadable", "bad_pid", "bad_starttime",
+                "already_gone", "pid_reused"):
+        assert f"VIBEIC_REAP_SKIP {why}" in reap, why
+    assert "pkill" not in reap, reap
+    assert "pgrep" not in reap, reap
