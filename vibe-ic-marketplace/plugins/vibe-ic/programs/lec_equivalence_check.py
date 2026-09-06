@@ -135,6 +135,15 @@ class AuditResult:
     non_equivalent_points: Optional[int] = None
     unproven_points: Optional[int] = None
     evidence_source: str = ""          # "json" | "json+rpt" | "rpt"
+    # #2068 — the budget-exhausted, verdict-less terminal state. NOT a verdict
+    # and NOT a waiver: nothing was decided, so nothing can be waived. When
+    # True the step is NOT_MEASURED and `exhausted_resource` names what ran out.
+    not_measured: bool = False
+    exhausted_resource: str = ""
+    # #2068 item 2 — an overrun that did NOT cost a verdict. Recorded, never
+    # acted on: the budget is a RECORDING ceiling (owner ruling on #2051), so a
+    # real verdict produced past it keeps its verdict and the overrun is a note.
+    budget_overrun: dict = field(default_factory=dict)
     findings: List[Finding] = field(default_factory=list)
     summary: dict = field(default_factory=dict)
 
@@ -236,6 +245,49 @@ def parse_rpt(text: str) -> dict:
 # ---------------------------------------------------------------------------
 # Core audit
 # ---------------------------------------------------------------------------
+#: #2068 — keys a producer uses to say "my declared budget ran out". lec_run
+#: writes `step_budget_exhausted`; `budget_exhausted` is the older spelling and
+#: `_lec_leg_stop_evidence` in phase3_one_shot_runner already reads both.
+_BUDGET_EXHAUSTED_KEYS = ("step_budget_exhausted", "budget_exhausted")
+
+#: Where the producer names WHAT ran out. Never defaulted: an exhaustion whose
+#: resource was not recorded is reported as unnamed, not as wall-clock.
+_EXHAUSTED_RESOURCE_KEYS = ("exhausted_resource", "budget_resource",
+                            "exhausted_budget_resource")
+
+
+def budget_exhausted_resource(lc: dict) -> Optional[str]:
+    """Return the named exhausted resource when the producer declares budget
+    exhaustion, `"unnamed"` when it declares it without naming one, else None.
+
+    `lc` is the lower-cased key map of `reports/lec.json`.
+    """
+    if not any(lc.get(k) is True for k in _BUDGET_EXHAUSTED_KEYS):
+        return None
+    for k in _EXHAUSTED_RESOURCE_KEYS:
+        v = lc.get(k)
+        if isinstance(v, str) and v.strip():
+            return v.strip()
+    return "unnamed"
+
+
+def verdict_was_decided(lc: dict, equivalent: Optional[bool],
+                        non_equiv: Optional[int]) -> bool:
+    """True iff the LEC actually DECIDED something.
+
+    Decided means one of the two directions was established: a proof
+    (`equivalent is True`) or a counterexample (`non_equivalent_points > 0`).
+    Everything else -- INCONCLUSIVE, SKIPPED-CONDITION, a bare absent verdict --
+    decided nothing, whatever else the report carries. `unproven_points` is
+    deliberately NOT a decision: an unproven point is the absence of one.
+    """
+    if equivalent is True:
+        return True
+    if non_equiv is not None and non_equiv > 0:
+        return True
+    return False
+
+
 def audit(project: Path) -> AuditResult:
     res = AuditResult()
     json_path = project / LEC_JSON_REL
@@ -318,6 +370,72 @@ def audit(project: Path) -> AuditResult:
         "evidence_source": res.evidence_source,
         "rpt": rpt_info,
     }
+
+    # --- (b0) #2068 — BUDGET EXHAUSTED WITH NO VERDICT: a terminal state of
+    # its own, and the one state that is NOT waivable ----------------------
+    # lec_run records `step_budget_exhausted` with `exhausted_resource` when
+    # the step's declared budget ran out. That ceiling RECORDS, it never kills
+    # (owner ruling on #2051), so the flag alone says nothing about the result:
+    # a proof completed at 7300 s against a 7200 s budget is still a proof, and
+    # (item 2 below) keeps its verdict with the overrun recorded as a note.
+    #
+    # What is NOT a result is an exhausted budget that left NOTHING decided.
+    # Measured on opentitan_aes (lane rbaes2, 8HD-8, image 0.3.46): step 13 ran
+    # 8553.69 s against a 7200 s budget, proved 830 of 4072 miter points, hit no
+    # counterexample, established no base case, and was recorded INCONCLUSIVE.
+    # The INCONCLUSIVE branches below then routed it to rc=3 + the
+    # PASS_WITH_WAIVERS sentinel, flow_compliance promoted step 13 to
+    # WAIVED-DEFERRED, and the completion audit credited the slot: the IC came
+    # out PASS_WITH_WAIVERS on a step that decided nothing at all.
+    #
+    # A waiver is a decision to accept a KNOWN outcome. Here there is no
+    # outcome: not a pass, not a fail, not a disclosed capability gap whose
+    # shape is understood -- just a measurement that did not finish. So this
+    # returns NOT_MEASURED, naming the resource that ran out, and main() gives
+    # it rc=1 WITHOUT the waiver sentinel, so no consumer can promote it into a
+    # waiver row. It is placed BEFORE (c0)/(d)/(d1)/(d2) precisely because those
+    # are the branches that were laundering it.
+    #
+    # NO-LEAK, both directions: it fires only when the producer itself declared
+    # exhaustion AND nothing was decided. A budget-exhausted run that proved
+    # equivalence, or that produced a counterexample, falls straight through --
+    # `verdict_was_decided` is the whole test -- and a run that never declared
+    # exhaustion is untouched, so every existing verdict in this file stands.
+    _exhausted = budget_exhausted_resource(lc)
+    _decided = verdict_was_decided(lc, equivalent, non_equiv)
+    if _exhausted is not None and not _decided:
+        res.not_measured = True
+        res.inconclusive = False
+        res.passed = False
+        res.exhausted_resource = _exhausted
+        res.summary["not_measured"] = True
+        res.summary["exhausted_resource"] = _exhausted
+        res.findings.append(Finding(
+            rule="LEC_BUDGET_EXHAUSTED", severity="ERROR",
+            message=("LEC step budget was EXHAUSTED (resource: "
+                     f"{_exhausted}) and NO verdict was reached: equivalence "
+                     "was neither proven nor refuted, and no counterexample "
+                     "was recorded. This is NOT_MEASURED -- a terminal state "
+                     "of its own, not a result. It is NOT eligible for a "
+                     "waiver row and must NOT be credited in the completion "
+                     "audit: a waiver accepts a known outcome, and here there "
+                     "is no outcome to accept. The IC cannot be "
+                     "PASS_WITH_WAIVERS while this step stands. Re-run the "
+                     "step with a budget it can finish inside, or close it "
+                     "with a sign-off LEC that reaches a verdict. The budget "
+                     "itself stays a RECORDING ceiling -- do NOT shorten it, "
+                     "and do NOT turn it into a kill."),
+            file=LEC_JSON_REL))
+        return res
+
+    # #2068 item 2 — the overrun that did NOT cost a verdict. Recorded here so
+    # a reader sees the ceiling was passed; it changes no verdict, and it is
+    # deliberately NOT a Finding, because `res.passed` is `not res.findings`
+    # and a recording ceiling must never void a real proof.
+    if _exhausted is not None and _decided:
+        res.budget_overrun = {"exhausted_resource": _exhausted,
+                              "verdict_reached": True}
+        res.summary["budget_overrun"] = res.budget_overrun
 
     # --- (d) INCONCLUSIVE: NO completed comparison → zero decided points ----
     # A run that reaches 0 decided points is NOT classifiable as PASS or FAIL —
@@ -625,6 +743,27 @@ def main(argv: Optional[List[str]] = None) -> int:
         out.write_text(report_json)
 
     print(report_json)
+
+    # #2068 — NOT_MEASURED: the budget ran out and nothing was decided. rc=1,
+    # and — the load-bearing half — WITHOUT the `PASS_WITH_WAIVERS` sentinel,
+    # so `flow_compliance_check._check_program_exit_zero` cannot promote it to
+    # WAIVED-DEFERRED. The non-waivable token is printed LAST and SHORT for the
+    # same reason the waiver sentinel is: the consumer reads only the trailing
+    # 300 chars of stdout and requires the token at line-start, so a long line
+    # would be sliced mid-string and the disclosure would be lost.
+    if result.not_measured:
+        print(f"LEC NOT_MEASURED: step budget exhausted "
+              f"(resource: {result.exhausted_resource}) with no verdict — "
+              f"nothing was decided, so nothing can be waived.")
+        print(f"NOT_MEASURED_NON_WAIVABLE: LEC_BUDGET_EXHAUSTED "
+              f"({result.exhausted_resource})")
+        return 1
+
+    if result.budget_overrun:
+        # A recording ceiling that recorded. The verdict below is unaffected.
+        print(f"NOTE: step budget exhausted (resource: "
+              f"{result.budget_overrun.get('exhausted_resource')}) but a real "
+              f"verdict was reached — the overrun is recorded, not acted on.")
 
     # A real not-equivalent / unproven / vacuous / missing result → 1 (hard FAIL).
     if not (result.passed or result.inconclusive):
