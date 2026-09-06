@@ -107,10 +107,45 @@ def _env_yosys_timeout_default() -> int:
 DEFAULT_YOSYS_TIMEOUT_S = _env_yosys_timeout_default()
 DEFAULT_JSON_REL = "reports/lec.json"
 DEFAULT_RPT_REL = "reports/lec.rpt"
-LEC_RECIPE_SCHEMA_VERSION = "vibeic.lec.recipe.v2-short-first"
+# v3 — the ladder now emits an RTLIL CHECKPOINT after every rung, so the
+# recipe text a proof is bound to is not the v2 one. The identity's
+# `equivalence_script` sha already separates them; the version string is what
+# makes that separation READABLE in a stored cache entry.
+LEC_RECIPE_SCHEMA_VERSION = "vibeic.lec.recipe.v3-checkpointed"
 LEC_PASS_CACHE_SCHEMA_VERSION = "vibeic.lec.pass-cache.v1"
 LEC_TELEMETRY_SCHEMA_VERSION = "vibeic.lec.telemetry.v1"
+LEC_CHECKPOINT_SCHEMA_VERSION = "vibeic.lec.checkpoint.v1"
 DEFAULT_CACHE_REL = "reports/lec_pass_cache"
+DEFAULT_CHECKPOINT_REL = "reports/lec_checkpoints"
+
+# THE PROOF LADDER, in the order `build_equiv_script` emits it: (rung name,
+# the yosys command(s) that constitute the rung). The rung NAMES are
+# `lec_stage_from_output`'s OWN vocabulary, so there is one spelling of a
+# ladder position in this file and not two.
+LEC_LADDER: Tuple[Tuple[str, str], ...] = (
+    ("equiv_simple_full", "equiv_simple -short\nequiv_simple\n"),
+    ("equiv_induct_seq4", "equiv_induct -seq 4\n"),
+    ("equiv_induct_seq16", "equiv_induct -seq 16\n"),
+    ("equiv_induct_seq64", "equiv_induct -seq 64\n"),
+)
+LEC_CHECKPOINT_RUNGS: Tuple[str, ...] = tuple(n for n, _ in LEC_LADDER)
+
+# Written by a `log` command placed AFTER each `write_rtlil`. yosys executes a
+# script strictly in order, so the sentinel's presence in the log is a positive
+# attestation that THAT backend pass finished — which is the only thing that
+# distinguishes a complete checkpoint from one truncated by a kill mid-write.
+# The checkpoint is written as `<rung>.il.part` and PROMOTED to `<rung>.il` by
+# the host only for the rungs the log attests. A file with no sentinel is never
+# promoted and therefore never resumed from.
+LEC_CHECKPOINT_SENTINEL = "LEC_CHECKPOINT_WRITTEN"
+# The payload is `<checkpoint dir name>:<rung>`, not the bare rung. The
+# directory is named by the checkpoint key, so an attestation READ OUT OF
+# ANOTHER INVOCATION'S LOG (see `recover_orphan_checkpoints`) can be checked to
+# belong to THIS design's ladder. Without the prefix, the verilog attempt's log
+# would attest the slang attempt's `.part` of the same rung name.
+_CHECKPOINT_SENTINEL_RE = re.compile(
+    r"(?m)^" + re.escape(LEC_CHECKPOINT_SENTINEL)
+    + r"[ \t]+(\S+?):(\S+)[ \t]*$")
 
 
 def _utc_now() -> str:
@@ -123,6 +158,19 @@ def _sha256_bytes(data: bytes) -> str:
 
 def _sha256_file(path: Path) -> str:
     return _sha256_bytes(path.read_bytes())
+
+
+def _sha256_file_streamed(path: Path, chunk: int = 1 << 20) -> str:
+    """Same value as `_sha256_file`, without holding the file in memory.
+
+    A checkpoint of a large miter is a large file; `read_bytes()` on it would
+    make hashing the checkpoint cost more memory than the proof did.
+    """
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for block in iter(lambda: fh.read(chunk), b""):
+            h.update(block)
+    return "sha256:" + h.hexdigest()
 
 
 def _canonical_json_bytes(value: Any) -> bytes:
@@ -153,6 +201,306 @@ def _atomic_write_json(path: Path, value: Any) -> None:
 def lec_cache_key(identity: Dict) -> str:
     """Content-address one exact proof identity (pure and order-sensitive)."""
     return _sha256_bytes(_canonical_json_bytes(identity))
+
+
+# ---------------------------------------------------------------------------
+# PROOF CHECKPOINTS — resume a killed leg instead of re-proving from zero.
+# ---------------------------------------------------------------------------
+# THE DEFECT THIS EXISTS TO REMOVE (measured, 8HD-9, 2026-09-06). yosys marks a
+# `$equiv` key-point PROVEN by REWIRING that cell's \B input to the same signal
+# as \A. That is ORDINARY RTLIL — no side table, no in-memory-only state — so
+# `write_rtlil` / `read_rtlil` ROUND-TRIPS the proven set across a fresh
+# process: on a 33-point miter a resumed leg's `equiv_induct` reports
+# "Found 1 unproven $equiv cells" where the same pass from zero reports 33, and
+# the same holds between induction depths (`-seq 4` -> `-seq 16`).
+#
+# The engine could therefore always resume. THIS PROGRAM NEVER ASKED IT TO: the
+# emitted recipe contained no `write_rtlil` and no `read_rtlil` anywhere, and
+# the PASS cache accepts only a COMPLETED proof. So every killed or stalled leg
+# re-proved the same points from nothing — measured on sha256, whose two killed
+# legs re-proved the same 1060 points twice for 14,390 s of CPU.
+#
+# WHAT IS AND IS NOT RESUMABLE. yosys writes nothing WHILE a pass runs, so the
+# granularity is a whole rung: completed rungs are free on a restart, the rung
+# that was in flight is not. That is a limit of the engine, not of this code,
+# and it is why the ladder is checkpointed rung by rung rather than by time.
+#
+# A CHECKPOINT IS NOT A PASS. It carries no verdict, it never seeds or
+# satisfies the PASS cache (`pass_cache_eligible` is untouched), and a resumed
+# run reaches its verdict the only way any run does — by parsing the fresh
+# yosys log its own `equiv_status` produced.
+
+
+def lec_checkpoint_key(identity: Dict) -> str:
+    """Content-address the DESIGN + TOOL a checkpoint belongs to.
+
+    Deliberately NOT `lec_cache_key`: a RESUMED run's `equivalence_script` is a
+    different script (it reads an .il instead of the sources), so keying the
+    checkpoint on it would make a resuming run unable to find the very
+    checkpoint it is resuming from — and it would be circular besides, since
+    the script has to contain the checkpoint paths.
+
+    Everything else in the identity is kept, so a checkpoint is bound to the
+    gold RTL bytes, the GATE NETLIST bytes, the top, the scan wrappers, the
+    Liberty, the yosys version, the container image digest, the gold frontend
+    and its define set, and `recipe_schema_version`. The one thing that binding
+    cannot see — WHICH LADDER wrote the file — is carried separately as
+    `base_script_sha256` in the checkpoint manifest and is checked at resume.
+    """
+    subject = {k: v for k, v in identity.items() if k != "equivalence_script"}
+    subject["checkpoint_schema_version"] = LEC_CHECKPOINT_SCHEMA_VERSION
+    return _sha256_bytes(_canonical_json_bytes(subject))
+
+
+def checkpoint_dir_for(project: Path, key: str) -> Path:
+    """The one directory a given design+tool identity checkpoints into."""
+    return Path(project) / DEFAULT_CHECKPOINT_REL / key.split(":", 1)[-1]
+
+
+def ladder_index(rung: str) -> int:
+    """Position of a rung in the ladder, or -1 for a name we do not emit."""
+    try:
+        return LEC_CHECKPOINT_RUNGS.index(rung)
+    except ValueError:
+        return -1
+
+
+def checkpoints_attested_by_log(raw: str,
+                                scope: Optional[str] = None) -> List[str]:
+    """Rungs whose `write_rtlil` DEMONSTRABLY finished, in log order.
+
+    The sentinel is emitted by a `log` command placed after the write, so it
+    can only appear once that backend pass has returned. A run killed inside a
+    write leaves the `.part` file behind and no sentinel, and the file is then
+    never promoted — which is the whole reason the promotion is log-driven and
+    not directory-driven.
+
+    `scope` — the checkpoint directory's name. Given, only attestations naming
+    that directory count; a log from a DIFFERENT recipe attempt cannot then
+    vouch for this one's bytes.
+    """
+    out: List[str] = []
+    for m in _CHECKPOINT_SENTINEL_RE.finditer(raw or ""):
+        where, rung = m.group(1), m.group(2)
+        if rung not in LEC_CHECKPOINT_RUNGS:
+            continue
+        if scope is not None and where != scope:
+            continue
+        out.append(rung)
+    return out
+
+
+def promote_and_record_checkpoints(
+        ckpt_dir: Path, key: str, base_script_sha256: str, raw: str, *,
+        yosys_version: Optional[str] = None,
+        image_digest: Optional[str] = None,
+        invocation_id: Optional[str] = None,
+        resumed_from_rung: Optional[str] = None) -> List[str]:
+    """Promote every log-attested `.part` and write its manifest. Returns the
+    rungs recorded, in ladder order.
+
+    Never raises: a checkpoint is an OPTIMISATION, and a filesystem that will
+    not take one must not be able to fail a proof that already succeeded.
+    """
+    ckpt_dir = Path(ckpt_dir)
+    recorded: List[str] = []
+    for rung in checkpoints_attested_by_log(raw, scope=ckpt_dir.name):
+        part = ckpt_dir / (rung + ".il.part")
+        final = ckpt_dir / (rung + ".il")
+        try:
+            if not part.is_file() or part.stat().st_size == 0:
+                continue
+            os.replace(str(part), str(final))
+            digest = _sha256_file_streamed(final)
+            size = final.stat().st_size
+        except OSError:
+            continue
+        try:
+            _atomic_write_json(ckpt_dir / (rung + ".json"), {
+                "schema_version": LEC_CHECKPOINT_SCHEMA_VERSION,
+                "checkpoint_key": key,
+                "rung": rung,
+                "rung_index": ladder_index(rung),
+                "base_script_sha256": base_script_sha256,
+                "il": {"path": rung + ".il", "sha256": digest, "bytes": size},
+                "yosys": {"version": yosys_version},
+                "container": {"image_digest": image_digest},
+                "invocation_id": invocation_id,
+                "written_by_resumed_run": bool(resumed_from_rung),
+                "resumed_from_rung": resumed_from_rung,
+                "written_timestamp": _utc_now(),
+            })
+        except OSError:
+            continue
+        if rung not in recorded:
+            recorded.append(rung)
+    return sorted(recorded, key=ladder_index)
+
+
+def list_checkpoint_rungs_declared(ckpt_dir: Path, key: str,
+                                   base_script_sha256: str) -> List[str]:
+    """Rungs whose MANIFEST claims this identity, in ladder order.
+
+    Manifest-level only: this does NOT re-hash the .il, and it is used for the
+    report field, never for a resume decision. The byte revalidation lives in
+    `select_resume_checkpoint`, which is the ONE place a wrong answer could
+    change what gets proved. Doing it twice would make every completed run pay
+    a second full read of the whole ladder for a line in a report.
+    """
+    out: List[str] = []
+    for rung in LEC_CHECKPOINT_RUNGS:
+        try:
+            manifest = json.loads(
+                (Path(ckpt_dir) / (rung + ".json")).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if (manifest.get("schema_version") == LEC_CHECKPOINT_SCHEMA_VERSION
+                and manifest.get("checkpoint_key") == key
+                and manifest.get("base_script_sha256") == base_script_sha256
+                and manifest.get("rung") == rung
+                and (Path(ckpt_dir) / (rung + ".il")).is_file()):
+            out.append(rung)
+    return out
+
+
+def select_resume_checkpoint(ckpt_dir: Path, key: str,
+                             base_script_sha256: str) -> Optional[Dict]:
+    """The FURTHEST checkpoint that revalidates, or None. Refuses on any doubt.
+
+    Every field is re-checked against the caller's own current values, and the
+    .il is RE-HASHED — so a checkpoint written for another netlist, by another
+    ladder, or corrupted since it was written, is refused BY NAME rather than
+    silently resumed from. `None` means "run from zero", which is exactly the
+    behaviour before checkpoints existed.
+    """
+    ckpt_dir = Path(ckpt_dir)
+    best: Optional[Dict] = None
+    for rung in LEC_CHECKPOINT_RUNGS:
+        man_path = ckpt_dir / (rung + ".json")
+        il_path = ckpt_dir / (rung + ".il")
+        try:
+            manifest = json.loads(man_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        il_meta = manifest.get("il")
+        if (manifest.get("schema_version") != LEC_CHECKPOINT_SCHEMA_VERSION
+                or manifest.get("checkpoint_key") != key
+                or manifest.get("base_script_sha256") != base_script_sha256
+                or manifest.get("rung") != rung
+                or manifest.get("rung_index") != ladder_index(rung)
+                or not isinstance(il_meta, dict)
+                or il_meta.get("path") != rung + ".il"
+                or not isinstance(il_meta.get("sha256"), str)):
+            continue
+        try:
+            if not il_path.is_file() or il_path.stat().st_size == 0:
+                continue
+            actual = _sha256_file_streamed(il_path)
+        except OSError:
+            continue
+        if actual != il_meta["sha256"]:
+            continue
+        best = {
+            "rung": rung,
+            "rung_index": ladder_index(rung),
+            "il_path": str(il_path.resolve()),
+            "checkpoint_sha256": actual,
+            "checkpoint_bytes": il_path.stat().st_size,
+            "manifest": str(man_path),
+            "written_timestamp": manifest.get("written_timestamp"),
+        }
+    return best
+
+
+def resume_status_counts(raw: str) -> Optional[Dict[str, int]]:
+    """proved/unproven AT THE CHECKPOINT, read from a resumed run's own log.
+
+    A resumed script's FIRST pass is `equiv_status` on the design it just read
+    back, so the FIRST `N are proven and M are unproven` line in the log is the
+    checkpoint's position. Returns None — never a fabricated zero — unless that
+    line demonstrably precedes the first induction pass, because a log in which
+    it does not is a log where the read-back did not happen and the only line
+    present is the FINAL status.
+    """
+    if not raw:
+        return None
+    first = _FINAL_RE.search(raw)
+    if not first:
+        return None
+    induct = re.search(r"(?i)Executing\s+EQUIV_INDUCT\s+pass", raw)
+    if induct is not None and induct.start() < first.start():
+        return None
+    return {"proved": int(first.group(1)), "unproven": int(first.group(2))}
+
+
+def recover_orphan_checkpoints(ckpt_dir: Path, key: str,
+                               base_script_sha256: str, reports_dir: Path,
+                               **manifest_fields: Any) -> List[str]:
+    """Promote `.part` files a PREVIOUS invocation wrote but never published.
+
+    WHY THIS IS NOT OPTIONAL. Promotion normally happens on this program's own
+    return path, so every stop that ROUTES THROUGH IT — the progress watchdog,
+    a container-side kill, `subprocess.TimeoutExpired` — publishes its
+    checkpoints. A stop that does NOT (the runner's outer subprocess budget
+    killing `lec_run.py` itself, an OOM, a reboot) leaves complete `.part`
+    files that nothing would ever promote, and the next invocation's prune
+    would DELETE the very work this feature exists to preserve. Measured on
+    sha256: two complete 43.8 MB rungs were sitting as `.part` while the run
+    was in flight.
+
+    The attestation is the same one promotion always uses, read out of the
+    LIVE LOG the previous invocation was tee-ing (`reports/lec.live.*.rpt`,
+    plus the published `lec.rpt`), and it is SCOPED to this checkpoint
+    directory's name so another attempt's log cannot vouch for these bytes.
+    Never raises: recovery is a bonus, and a filesystem that will not give it
+    must not fail a proof.
+    """
+    ckpt_dir = Path(ckpt_dir)
+    orphans = [r for r in LEC_CHECKPOINT_RUNGS
+               if (ckpt_dir / (r + ".il.part")).is_file()]
+    if not orphans:
+        return []
+    recovered: List[str] = []
+    try:
+        logs = sorted(Path(reports_dir).glob("lec.live.*.rpt"))
+        published = Path(reports_dir) / DEFAULT_RPT_REL.split("/")[-1]
+        if published.is_file():
+            logs.append(published)
+    except OSError:
+        return []
+    for log in logs:
+        if not [r for r in LEC_CHECKPOINT_RUNGS
+                if (ckpt_dir / (r + ".il.part")).is_file()]:
+            break
+        try:
+            text = log.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        got = promote_and_record_checkpoints(
+            ckpt_dir, key, base_script_sha256, text, **manifest_fields)
+        for rung in got:
+            if rung not in recovered:
+                recovered.append(rung)
+    return sorted(recovered, key=ladder_index)
+
+
+def prune_stale_checkpoint_parts(ckpt_dir: Path) -> List[str]:
+    """Remove `<rung>.il.part` leftovers of a run killed mid-write.
+
+    Only files this program itself writes, only in this key's own directory,
+    only the `.part` spelling — a promoted `.il` and its manifest are never
+    touched here.
+    """
+    removed: List[str] = []
+    for rung in LEC_CHECKPOINT_RUNGS:
+        part = Path(ckpt_dir) / (rung + ".il.part")
+        try:
+            if part.is_file():
+                part.unlink()
+                removed.append(part.name)
+        except OSError:
+            continue
+    return removed
 
 
 def _has_fingerprint(value: Any) -> bool:
@@ -1963,6 +2311,33 @@ def _container_file_exists(container: str, path: str) -> bool:
         return False
 
 
+def _container_dir_writable(container: str, path: str) -> Tuple[bool, str]:
+    """Can the TOOL write into this directory? Measured, never assumed.
+
+    `write_rtlil` to a path the container cannot write is a HARD yosys ERROR
+    that aborts the whole script (measured in-container: rc 1, "Can't open
+    output file ... for writing"). A checkpoint is an optimisation, so it must
+    never be able to fail a proof that would otherwise have succeeded — the
+    directives are therefore emitted ONLY after a real write has been observed
+    to land and read back. A failed probe DISABLES checkpointing loudly and
+    leaves the recipe byte-identical to the un-checkpointed one.
+    """
+    token = secrets.token_hex(8)
+    probe = str(Path(path) / (".lec_ckpt_probe." + token))
+    q = shlex.quote(probe)
+    rc, out, err = _docker_exec_raw(
+        container,
+        f"printf %s {shlex.quote(token)} > {q} && cat {q} && rm -f {q}",
+        timeout=60)
+    if rc == 0 and token in _strip_login_banner(out or ""):
+        return True, ""
+    detail = (_strip_login_banner(err or "").strip()
+              or _strip_login_banner(out or "").strip() or f"rc={rc}")
+    return False, (f"the container cannot write into {path} ({detail}) — "
+                   "checkpointing disabled for this run; the recipe is the "
+                   "un-checkpointed one")
+
+
 def _container_file_sha256(container: str, path: str) -> Optional[str]:
     """Hash a container-only input; absence disables cache, never the proof."""
     rc, out, _ = _docker_exec_raw(
@@ -2186,8 +2561,25 @@ def build_equiv_script(gold_files: List[str], gate_netlist: str, top: str,
                        scan_mode: Optional[Dict] = None,
                        gate_wrapper_v: str = "",
                        gold_wrapper_v: str = "",
-                       fsm_encfile: Optional[str] = None) -> str:
+                       fsm_encfile: Optional[str] = None,
+                       checkpoint_dir: Optional[str] = None,
+                       resume_from: Optional[Dict] = None) -> str:
     """Build the Yosys RTL(gold)≡synth-netlist(gate) equiv script.
+
+    `checkpoint_dir` — emit an RTLIL CHECKPOINT after every ladder rung, into
+    that directory, each followed by a `log` sentinel that attests the write
+    finished. With `checkpoint_dir=None` AND `resume_from=None` the emitted
+    text is BYTE-IDENTICAL to the recipe before checkpoints existed, which is
+    what makes the no-checkpoint path a control rather than a claim.
+
+    `resume_from` — a validated checkpoint record from
+    `select_resume_checkpoint`. The whole front half (both source reads,
+    `equiv_make`, `equiv_struct`) is REPLACED by a `read_rtlil` of that
+    checkpoint, and only the rungs AFTER it are emitted. The two read-only
+    observables the parser depends on are preserved deliberately: `stat` (the
+    miter cell histogram `miter_is_stateless` reads) and the closing
+    `equiv_status`. A leading `equiv_status` is added so the resumed run's own
+    log STATES the position it resumed at instead of the caller remembering it.
 
     v1.3.85 — APPROACH C (satgen-modelable BOTH sides). Step-13 compares an RTL
     gold against a Liberty-mapped synth gate — two DIFFERENT cell vocabularies,
@@ -2300,6 +2692,27 @@ def build_equiv_script(gold_files: List[str], gate_netlist: str, top: str,
         gold_wrap_read = f"read_verilog -sv {gold_wrapper_v}\n"
         gate_rename = f"rename {top} {top}__scan\n"
         gate_wrap_read = f"read_verilog -sv {gate_wrapper_v}\n"
+    # RESUME FIRST, and deliberately BEFORE the FSM-encoding block below: a
+    # resumed run does not BUILD a miter, it reads one back, so nothing the
+    # encfile path sets up applies to it. Keeping this return above that block
+    # leaves BOTH paths byte-identical to what each was before this rebase.
+    if resume_from is not None:
+        # RESUME. The proven-marking is carried IN the RTLIL (yosys rewires a
+        # proven $equiv cell's \\B to its \\A), so reading the checkpoint back
+        # restores the proof position itself — not a note about it.
+        return (
+            f"read_rtlil {shlex.quote(str(resume_from['il_path']))}\n"
+            # `stat` is the observable `miter_is_stateless` reads; without it a
+            # resumed run's parse would differ from a from-zero run's for a
+            # reason that has nothing to do with the design.
+            f"stat\n"
+            # SAY WHERE WE RESUMED, in the run's own log.
+            f"equiv_status\n"
+            + _emit_ladder(checkpoint_dir,
+                           start_index=int(resume_from["rung_index"]) + 1)
+            + "equiv_status\n"
+        )
+
     # FSM RE-ENCODING (#2050) — `synth` runs `fsm`, whose `fsm_recode` pass
     # RE-ASSIGNS the state encoding of every FSM it extracts. The gate then
     # holds the SAME state register under the SAME hierarchical name with a
@@ -2424,13 +2837,35 @@ def build_equiv_script(gold_files: List[str], gate_netlist: str, top: str,
         # quickly, but is never treated as a complete result: every survivor
         # still flows into the original full simple pass and 4/16/64 induction
         # ladder below. Soundness therefore remains exactly the full recipe's.
-        f"equiv_simple -short\n"
-        f"equiv_simple\n"
-        f"equiv_induct -seq 4\n"
-        f"equiv_induct -seq 16\n"
-        f"equiv_induct -seq 64\n"
-        f"equiv_status\n"
+        + _emit_ladder(checkpoint_dir, start_index=0)
+        + "equiv_status\n"
     )
+
+
+def _emit_ladder(checkpoint_dir: Optional[str], start_index: int) -> str:
+    """The rungs from `start_index` on, each followed by its checkpoint.
+
+    With `checkpoint_dir` None this returns exactly the five command lines the
+    recipe has always ended with, so the no-checkpoint script is a control and
+    not a re-implementation of one.
+    """
+    out = []
+    for idx in range(max(0, start_index), len(LEC_LADDER)):
+        rung, commands = LEC_LADDER[idx]
+        out.append(commands)
+        if checkpoint_dir:
+            # `.part` first, PROMOTED by the host only for the rungs the
+            # sentinel below attests. A write killed halfway therefore leaves a
+            # `.part` nobody will ever read, never a truncated `<rung>.il` a
+            # later run would try to resume from.
+            out.append("write_rtlil "
+                       + shlex.quote(str(Path(checkpoint_dir)
+                                         / (rung + ".il.part"))) + "\n")
+            # A yosys `log` command: it prints its argument verbatim at
+            # column 0 AFTER the backend pass above has returned.
+            out.append("log " + LEC_CHECKPOINT_SENTINEL + " "
+                       + Path(checkpoint_dir).name + ":" + rung + "\n")
+    return "".join(out)
 
 
 # ---------------------------------------------------------------------------
@@ -3378,11 +3813,53 @@ def main(argv: Optional[List[str]] = None) -> int:
     cache_hit_report: Optional[Dict] = None
     final_proof_identity: Optional[Dict] = None
 
+    # --- proof checkpointing ------------------------------------------------
+    # Decided ONCE per invocation, and only ever by a measurement: the host has
+    # to be able to make the directory and the CONTAINER has to be able to
+    # write into it. Anything else disables checkpointing with a stated reason
+    # and leaves the emitted recipe byte-identical to the one before this
+    # existed. Degrade loudly, never silently.
+    checkpoint_root = project / DEFAULT_CHECKPOINT_REL
+    checkpoint_enabled = True
+    checkpoint_disabled_reason: Optional[str] = None
+    try:
+        checkpoint_root.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        checkpoint_enabled = False
+        checkpoint_disabled_reason = (
+            f"could not create {checkpoint_root}: {exc}")
+    if checkpoint_enabled:
+        _ok, _why = _container_dir_writable(
+            container, str(checkpoint_root.resolve()))
+        if not _ok:
+            checkpoint_enabled, checkpoint_disabled_reason = False, _why
+    if not checkpoint_enabled:
+        print(f"[lec_run] WARN: proof checkpointing OFF — "
+              f"{checkpoint_disabled_reason}", file=sys.stderr)
+    resume_record: Dict[str, Any] = {
+        "enabled": checkpoint_enabled,
+        "reason": checkpoint_disabled_reason,
+        "schema_version": LEC_CHECKPOINT_SCHEMA_VERSION,
+        "directory": None,
+        "checkpoint_key": None,
+        "base_script_sha256": None,
+        "resumed": False,
+        "resumed_from": None,
+        "rungs_recorded_this_run": [],
+        "rungs_recovered_from_a_killed_run": [],
+        "rungs_available": [],
+        "state": "DISABLED" if not checkpoint_enabled else "NO_CHECKPOINT",
+        "resumable_from_rung": None,
+        "state_label": None,
+        "statement": None,
+    }
+
     def _telemetry_finish(status: str, **extra: Any) -> None:
         _finish_telemetry_sidecar(telemetry_path, status, **extra)
 
-    def _make_script(frontend: str, slang_prefix: str,
-                     defines: str) -> str:
+    def _make_script(frontend: str, slang_prefix: str, defines: str, *,
+                     checkpoint_dir: Optional[str] = None,
+                     resume_from: Optional[Dict] = None) -> str:
         return build_equiv_script(
             gold_files, gate_abs, resolved_top, liberty,
             blackbox_v=macro_blackbox_v or None,
@@ -3397,7 +3874,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             # is byte-identical to the pre-change one. It flows through
             # `_identity_for` -> script_sha256, so a run WITH a translation and
             # a run WITHOUT one can never share a PASS-cache entry.
-            fsm_encfile=fsm_encfile_beside_netlist(gate_abs))
+            fsm_encfile=fsm_encfile_beside_netlist(gate_abs),
+            checkpoint_dir=checkpoint_dir, resume_from=resume_from)
 
     def _identity_for(script: str, frontend: str, defines: str,
                       slang_prefix: str) -> Dict:
@@ -3416,6 +3894,30 @@ def main(argv: Optional[List[str]] = None) -> int:
         identity["slang_load_prefix"] = slang_prefix if frontend == "slang" else None
         return identity
 
+    def _canonical_script_for(frontend: str, slang_prefix: str,
+                              defines: str) -> Tuple[str, Optional[str],
+                                                     Optional[Path]]:
+        """(the FROM-ZERO script actually run, checkpoint key, directory).
+
+        NOT circular even though the script has to contain the checkpoint
+        paths: `lec_checkpoint_key` ignores `equivalence_script` by
+        construction, so the key can be computed from a script that does not
+        yet know where the checkpoints go.
+
+        The PREFLIGHT cache lookup and `_run` both call this, so the identity
+        the cache is SEARCHED under is the identity a from-zero run would
+        STORE under. Letting those two drift is how a cache stops hitting
+        without anything reporting that it stopped.
+        """
+        base = _make_script(frontend, slang_prefix, defines)
+        if not checkpoint_enabled:
+            return base, None, None
+        key = lec_checkpoint_key(
+            _identity_for(base, frontend, defines, slang_prefix))
+        cdir = checkpoint_dir_for(project, key)
+        return (_make_script(frontend, slang_prefix, defines,
+                             checkpoint_dir=str(cdir)), key, cdir)
+
     # Preflight every recipe the deterministic retry ladder could select. This
     # is what lets a second invocation reuse a prior slang PASS without first
     # rerunning—and failing—the built-in Verilog frontend. Both valid slang
@@ -3427,7 +3929,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             ("slang", "plugin -i slang", "-DSIMULATION -DYOSYS"),
             ("slang", "", "-DSYNTHESIS -DYOSYS"),
             ("slang", "plugin -i slang", "-DSYNTHESIS -DYOSYS")):
-        _candidate_script = _make_script(_fe, _prefix, _defs)
+        _candidate_script, _, _ = _canonical_script_for(_fe, _prefix, _defs)
         _candidate_identity = _identity_for(
             _candidate_script, _fe, _defs, _prefix)
         if proof_identity_complete(_candidate_identity):
@@ -3453,10 +3955,76 @@ def main(argv: Optional[List[str]] = None) -> int:
     def _run(frontend: str, slang_prefix: str = "",
              defines: str = "-DSIMULATION -DYOSYS"):
         nonlocal cache_hit_report, final_proof_identity
-        script = _make_script(frontend, slang_prefix, defines)
+        # THE FROM-ZERO SCRIPT FIRST, always — it is what the checkpoint key
+        # and the manifest's `base_script_sha256` are computed from, so a
+        # resumed run and a from-zero run agree on WHICH ladder wrote a file.
+        canonical_script, ckpt_key, ckpt_dir = _canonical_script_for(
+            frontend, slang_prefix, defines)
+        # RECORDED, not re-derived later. The report needs the SAME
+        # `base_script_sha256` this attempt used; re-deriving it after the run
+        # would have to reconstruct the frontend, the define set AND the slang
+        # load prefix the attempt chose, and a single wrong guess reports zero
+        # available checkpoints for a ladder that wrote four.
+        resume_record["base_script_sha256"] = _sha256_bytes(
+            canonical_script.encode("utf-8"))
+        resume_from: Optional[Dict] = None
+        if checkpoint_enabled and ckpt_dir is not None and ckpt_key is not None:
+            resume_record["checkpoint_key"] = ckpt_key
+            try:
+                ckpt_dir.mkdir(parents=True, exist_ok=True)
+                resume_record["directory"] = str(
+                    ckpt_dir.relative_to(project))
+            except (OSError, ValueError):
+                resume_record["directory"] = str(ckpt_dir)
+            # RECOVER BEFORE PRUNING. The prune deletes `.part` leftovers; a
+            # complete one belonging to a run that was killed before it could
+            # publish is recoverable, and deleting it first would destroy
+            # exactly the work this feature exists to keep.
+            _recovered = recover_orphan_checkpoints(
+                ckpt_dir, ckpt_key,
+                _sha256_bytes(canonical_script.encode("utf-8")),
+                rpt_out.parent,
+                yosys_version=runtime_yosys_version,
+                image_digest=runtime_image_digest,
+                invocation_id=invocation_id)
+            if _recovered:
+                resume_record["rungs_recovered_from_a_killed_run"] = _recovered
+                print("[lec_run] recovered checkpoint(s) a previous killed "
+                      f"invocation never published: {_recovered}",
+                      file=sys.stderr)
+            prune_stale_checkpoint_parts(ckpt_dir)
+            resume_from = select_resume_checkpoint(
+                ckpt_dir, ckpt_key,
+                _sha256_bytes(canonical_script.encode("utf-8")))
+        if resume_from is not None:
+            script = _make_script(frontend, slang_prefix, defines,
+                                  checkpoint_dir=str(ckpt_dir),
+                                  resume_from=resume_from)
+            print(f"[lec_run] RESUMING the proof at rung "
+                  f"{resume_from['rung']} (index {resume_from['rung_index']}) "
+                  f"from {resume_from['checkpoint_sha256']} "
+                  f"({resume_from['checkpoint_bytes']} bytes) — the rungs "
+                  "before it are NOT re-proved.", file=sys.stderr)
+        else:
+            script = canonical_script
         ys_host.write_text(script, encoding="utf-8")
         final_proof_identity = _identity_for(
             script, frontend, defines, slang_prefix)
+        if resume_from is not None:
+            # A RESUMED proof is a DIFFERENT proof identity from a from-zero
+            # one: it ran a different script AND it consumed an artefact whose
+            # bytes are in no other field. Both facts are named here, so the
+            # .il can never be swapped under a cached PASS. On a from-zero run
+            # this key is ABSENT, so that identity keeps exactly the shape it
+            # had — the only thing that moves it is `recipe_schema_version`
+            # (v2 -> v3), which invalidates every pre-existing PASS cache entry
+            # ON PURPOSE: the ladder this program emits is not the v2 ladder,
+            # and a cache entry that claims otherwise would be a lie about
+            # which script proved the design.
+            final_proof_identity["resume"] = {
+                "rung": resume_from["rung"],
+                "checkpoint_sha256": resume_from["checkpoint_sha256"],
+            }
         if proof_identity_complete(final_proof_identity):
             _key = lec_cache_key(final_proof_identity)
             _hit = find_pass_cache(
@@ -3494,6 +4062,32 @@ def main(argv: Optional[List[str]] = None) -> int:
         budget.record(frontend, defines, _attempt_budget,
                       budget.elapsed_s() - _started, _launched,
                       bool(_TIMEOUT_RE.search(_raw)))
+        if checkpoint_enabled and ckpt_dir is not None and ckpt_key is not None:
+            _recorded = promote_and_record_checkpoints(
+                ckpt_dir, ckpt_key,
+                _sha256_bytes(canonical_script.encode("utf-8")), _raw,
+                yosys_version=runtime_yosys_version,
+                image_digest=runtime_image_digest,
+                invocation_id=invocation_id,
+                resumed_from_rung=(resume_from or {}).get("rung"))
+            resume_record["rungs_recorded_this_run"] = _recorded
+            resume_record["resumed"] = resume_from is not None
+            if resume_from is not None:
+                _at = resume_status_counts(_raw)
+                resume_record["resumed_from"] = {
+                    "rung": resume_from["rung"],
+                    "rung_index": resume_from["rung_index"],
+                    "checkpoint_sha256": resume_from["checkpoint_sha256"],
+                    "checkpoint_bytes": resume_from["checkpoint_bytes"],
+                    "checkpoint_written_timestamp":
+                        resume_from.get("written_timestamp"),
+                    # MEASURED from this run's OWN leading equiv_status, not
+                    # remembered from the run that wrote the checkpoint. None
+                    # is NOT_MEASURED and is never replaced by a zero.
+                    "proved_at_checkpoint": (_at or {}).get("proved"),
+                    "unproven_at_checkpoint": (_at or {}).get("unproven"),
+                    "counts_measured": _at is not None,
+                }
         return _launched, _raw
 
     # The deadline is established HERE, once, before the first attempt.
@@ -3658,6 +4252,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                  "produced. See reports/lec.rpt.")},
             resolved_top, gate_abs, liberty, liberty_source)
         diag = annotate_step_budget(diag, budget)
+        diag["lec_resume"] = resume_record
         _telemetry_finish("tool_unavailable", verdict=diag["verdict"],
                           equivalent=False,
                           current_pass=lec_stage_from_output(raw))
@@ -3712,6 +4307,55 @@ def main(argv: Optional[List[str]] = None) -> int:
     # scan netlist compared WITHOUT the constraints is visible as such rather
     # than looking like an ordinary comparison.
     report["scan_functional_mode"] = scan_record
+    # WHERE THIS PROOF CAN BE PICKED UP FROM. Without this a reader of a
+    # stalled or budget-stopped lec.json cannot tell that the work the run DID
+    # do is on disk and where — which is why every restart used to re-prove
+    # from zero and nothing in the artefact said it had to.
+    if cache_hit_report is not None:
+        resume_record["state"] = "NOT_CONSULTED_CACHE_HIT"
+        resume_record["statement"] = (
+            "an exact PASS cache entry revalidated, so yosys was never "
+            "launched and no checkpoint was read or written by this run")
+    elif checkpoint_enabled and resume_record.get("checkpoint_key"):
+        _cdir = project / DEFAULT_CHECKPOINT_REL / \
+            str(resume_record["checkpoint_key"]).split(":", 1)[-1]
+        resume_record["rungs_available"] = list_checkpoint_rungs_declared(
+            _cdir, resume_record["checkpoint_key"],
+            resume_record.get("base_script_sha256") or "")
+        _furthest = (resume_record["rungs_available"][-1]
+                     if resume_record["rungs_available"] else None)
+        _complete = bool(report.get("verdict") == "PASS"
+                         or (not report.get("budget_exhausted")
+                             and not report.get("progress_stalled")
+                             and not report.get("parse_error")))
+        if _complete:
+            resume_record["state"] = "COMPLETE"
+            resume_record["state_label"] = report.get("verdict")
+            resume_record["statement"] = (
+                "the proof ran to a completed equiv_status; the checkpoints "
+                f"on disk ({resume_record['rungs_available']}) are evidence, "
+                "not work to be finished")
+        elif _furthest is not None:
+            resume_record["state"] = "RESUMABLE"
+            resume_record["resumable_from_rung"] = _furthest
+            resume_record["state_label"] = (
+                f"{report.get('verdict')}-resumable-from-rung-"
+                f"{ladder_index(_furthest)}")
+            resume_record["statement"] = (
+                f"the proof did NOT complete ({report.get('verdict')}) and a "
+                f"revalidatable checkpoint stands at rung {_furthest} "
+                f"(index {ladder_index(_furthest)}): a re-invocation on these "
+                "exact inputs resumes THERE and does not re-prove the rungs "
+                "before it. This is not a pass and it never seeds the PASS "
+                "cache.")
+        else:
+            resume_record["state"] = "NO_CHECKPOINT"
+            resume_record["state_label"] = report.get("verdict")
+            resume_record["statement"] = (
+                "the proof did not complete and no rung finished, so there is "
+                "nothing to resume from — a restart starts over, and that is "
+                "a measured fact about this run rather than a default")
+    report["lec_resume"] = resume_record
     if final_proof_identity is not None:
         report["proof_identity"] = final_proof_identity
     if cache_hit_report is None:
@@ -3739,7 +4383,15 @@ def main(argv: Optional[List[str]] = None) -> int:
         "cache_hit" if cache_hit_report is not None else "complete",
         verdict=report.get("verdict"), equivalent=report.get("equivalent"),
         current_pass=("cache_hit" if cache_hit_report is not None
-                      else lec_stage_from_output(raw)))
+                      else lec_stage_from_output(raw)),
+        # THE RESUME FACT, in the sidecar as well as the report: the sidecar is
+        # what a supervisor writes and a monitor reads while the step is still
+        # running, and it is the artefact that recorded a ceiling kill without
+        # ever saying how far the proof had got.
+        resumed_from=resume_record.get("resumed_from"),
+        checkpoint_key=resume_record.get("checkpoint_key"),
+        checkpoint_state=resume_record.get("state"),
+        rungs_recorded=resume_record.get("rungs_recorded_this_run"))
     report = attach_telemetry(report, telemetry_path, project)
     _atomic_write_json(json_out, report)
 
