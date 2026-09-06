@@ -840,3 +840,89 @@ def test_hunk_A_is_recorded_as_NOT_APPLICABLE_on_this_base():
         "— HUNK A (the docs door's call site) is applicable and must be applied; "
         "HUNK B is already in place, so the ports will not be dropped in the "
         "meantime.")
+
+
+# ---------------------------------------------------------------------------
+# 8. the oracle vocabulary does not read as an HDL declaration
+#
+# `hdl_declaration_scan_strips_comments_check` reads a regex SOURCE and asks
+# whether it names an HDL declaration keyword (`module|input|output|inout`).  A
+# pattern that does, scanned over a string no comment-stripper touched, is a
+# real defect class: `// This module controls the counter` mints a module named
+# `controls`.  `_V2055_ORACLE_ARTEFACT_RE` reads a MARKDOWN BULLET and never
+# parses HDL, so the finding was a false positive — and the honest way out is
+# not an exemption, it is not to write the token.
+# ---------------------------------------------------------------------------
+def _decl_gate():
+    import hdl_declaration_scan_strips_comments_check as G  # noqa: WPS433
+    return G
+
+
+def test_the_oracle_vocabulary_does_not_read_as_an_hdl_declaration():
+    G = _decl_gate()
+    assert G.declares_hdl(P._V2055_ORACLE_ARTEFACT_RE.pattern) is False, (
+        "the oracle-artefact vocabulary names an HDL declaration keyword; a "
+        "scan of it over unstripped text is a real finding, and the fix is to "
+        "drop the token, never to exempt the site")
+    # The instrument can see: the SAME predicate says True for a pattern that
+    # really does name one.  A detector that cannot fire proves nothing.
+    assert G.declares_hdl(r"\bmodule\s+(\w+)") is True
+
+
+def test_dropping_the_token_cost_no_verdict():
+    """The swap was measured, not assumed.
+
+    `reference output` / `expected output file` went; `reference result(s) /
+    vector(s)` and `expected answer file` say the same thing.  Every sentence
+    this lane measured keeps its verdict.
+    """
+    refused = [
+        "Golden cross-check (verify stage only): the fabricated part's layout.",
+        "Golden cross-check: compare the netlist against the fabricated part.",
+        "Verify against the golden reference output committed under tests/.",
+    ]
+    for sentence in refused:
+        became_row, refusal = _verdict(sentence)
+        assert not became_row and refusal is not None, sentence
+        assert refusal["reason_code"] == "ORACLE_CROSS_CHECK_4_05", sentence
+    for sentence in (
+            "Compare the measured settling time against the declared 5 us limit.",
+            "Cross-check the two counters against each other after 100 cycles."):
+        assert _verdict(sentence)[0], sentence
+
+
+def test_the_declaration_scan_does_not_name_this_lanes_regex():
+    """It went to ZERO by not writing the token — not into either register.
+
+    Checked three ways, because a green from a scan that looked at nothing is
+    not a green: the run must produce a real population, the function must be
+    absent from the raw findings, and it must be absent from BOTH the accepted-
+    debt baseline and the gate's non-HDL exemption map.
+    """
+    import json as _json
+    import subprocess
+    G = _decl_gate()
+    plugin = _PROGRAMS.parent
+    out_json = Path(tempfile.mkdtemp(prefix="i2055_hdl_")) / "scan.json"
+    subprocess.run(
+        [sys.executable,
+         str(_PROGRAMS / "hdl_declaration_scan_strips_comments_check.py"),
+         "--root", str(plugin), "--json", str(out_json)],
+        capture_output=True, text=True, timeout=1800)
+    assert out_json.is_file(), "the scan wrote no report — NOT_MEASURED"
+    report = _json.loads(out_json.read_text(errors="replace"))
+    raw = report.get("unstripped_scans") or []
+    assert len(raw) > 50, (
+        f"the scan found {len(raw)} call sites — that is not a population this "
+        f"tree can have, so the run measured nothing")
+    mine = [r for r in raw if "_V2055_ORACLE_ARTEFACT_RE" in r]
+    assert mine == [], f"still named by the gate: {mine}"
+    baseline = _json.loads(
+        (_PROGRAMS / "hdl_declaration_scan_baseline.json").read_text(
+            errors="replace"))
+    known = baseline.get("known") or []
+    assert known, "the baseline could not be read as a population"
+    assert not [k for k in known if "_V2055" in k], (
+        "the finding was recorded as accepted debt instead of removed")
+    assert not [k for k in G._NOT_HDL_DECLARATION if "_V2055" in k], (
+        "the finding was exempted as non-HDL instead of removed")

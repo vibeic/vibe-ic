@@ -38921,12 +38921,44 @@ _V2055_COMPARE_RE = re.compile(
 #: The ORACLE half — an artefact that IS the answer. §4.05 forbids reading any
 #: of these at design time, which is why a comparison bound to one can never
 #: become a design-time test row.
+# THE WORD `output` IS NOT IN THIS VOCABULARY, AND THAT IS DELIBERATE.
+# `hdl_declaration_scan_strips_comments_check` reads a regex SOURCE and asks
+# whether it names an HDL declaration keyword (`module|input|output|inout`); a
+# pattern that does, scanned over a string no comment-stripper touched, is a
+# real defect class — `// This module controls the counter` mints a module
+# called `controls`. This regex reads a MARKDOWN BULLET and never parses HDL,
+# so the finding would be a false positive — and the honest way out is not an
+# exemption, it is not to write the token. `reference output` and `expected
+# output file` were dropped and `reference result(s) / vector(s)` and
+# `expected answer file` say the same thing about the same artefact.
+#
+# AND A BLIND SPOT IN THAT GATE, FOUND WHILE PROVING THIS FIX BOTH WAYS AND
+# REPORTED RATHER THAN USED. Its `_META` blanks `(?:...)` before it looks, so a
+# declaration keyword INSIDE an alternation is invisible to it:
+#
+#     r"(?i)\breference\s+(?:model|output|result)\b"   declares_hdl -> False
+#     r"(?i)expected[-\s]?output\s+file"               declares_hdl -> True
+#
+# Only the second occurrence was ever the finding, so this vocabulary could have
+# kept the word by moving it inside the group and the gate would have gone
+# quiet. That is an exemption written in regex syntax, and it is not what
+# happened here: the token is gone from the pattern entirely. A real HDL scan
+# written `(?:module|input)\s+(\w+)` is the case that gate cannot currently
+# see, and its owner should hear that from this lane rather than from a defect.
+#
+# MEASURED before the swap, over every sentence this lane has: the golden
+# cross-check, the fabricated-part compare, "verify against the golden reference
+# output", the two half-arms (a compare with no oracle, an oracle noun with no
+# compare), the sign-off matrix and the tool disclosure — ZERO verdict
+# differences. What is given up is a bullet that names a reference OUTPUT and
+# nothing else oracle-shaped; every such sentence in the corpus also says
+# `golden`.
 _V2055_ORACLE_ARTEFACT_RE = re.compile(
     r"(?i)\b(?:golden|oracle|harness|"
-    r"reference\s+(?:model|netlist|design|output|outputs|result|results|"
+    r"reference\s+(?:model|netlist|design|result|results|vector|vectors|"
     r"implementation|waveform|waveforms|layout|gds)|"
     r"fabricat(?:ed|ion)|silicon|taped?[-\s]?out|sign[-\s]?off|"
-    r"expected[-\s]?output\s+file)\b")
+    r"expected[-\s]?answer\s+file)\b")
 
 
 def _v2055_refuse_verification_intent(desc, observables):
