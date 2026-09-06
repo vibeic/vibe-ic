@@ -198,7 +198,7 @@ publisher, from a converged run, in a commit that is not this one.
 
 What IS asserted, on every host: the producer exists and a FLOW PATH dispatches
 it (``test_d3_a8_producer_is_reachable_from_a_flow_path``, with
-``analog_one_shot_runner.subprocess`` recorded); the emitter behaves
+``analog_one_shot_runner``'s process launchers recorded); the emitter behaves
 (``programs/tests/test_analog_hardmacro_gds_emit.py``); and whatever a run root
 does carry at that path must BE a hardmacro layout — real GDSII header, real
 geometry records, defining a structure named after its own block directory
@@ -4394,7 +4394,9 @@ def test_d3_a8_producer_is_reachable_from_a_flow_path():
     Since the producer clause was deliberately withdrawn from A8's GATE (the
     acceptance auditor must not create what it certifies), the runner is the
     SOLE production site, so this asserts the DISPATCH, not the source text:
-    ``analog_one_shot_runner.subprocess`` is replaced with a recorder and the
+    every launcher `analog_one_shot_runner` uses is replaced with a recorder
+    (see `test_the_a8_dispatch_recorder_covers_every_launcher_the_runner_uses`)
+    and the
     A8 step is driven for one block.
 
     The name is written down here rather than read out of the manifest,
@@ -4411,23 +4413,42 @@ def test_d3_a8_producer_is_reachable_from_a_flow_path():
     runner = pytest.importorskip("analog_one_shot_runner")
     seen = []
 
+    # THE RECORDER MUST COVER EVERY LAUNCHER THE RUNNER USES, and which one it
+    # uses is derived from the tree by `_runner_process_launchers` rather than
+    # written down here. MEASURED 2026-09-06: this recorder replaced only
+    # `analog_one_shot_runner.subprocess`, and v1.17.70 converted the A8
+    # dispatch (with every other site in the module) from `subprocess.run(...,
+    # timeout=)` to `_progress_run.run` — progress supervision instead of a
+    # wall clock. `_progress_run` holds its OWN `subprocess` reference, so the
+    # recorder stopped observing anything and this test reported "dispatched 0
+    # time(s)". Bisected by explicit file swap: on v1.17.69 (`dd85b42ce`,
+    # `subprocess.run(`) the very same test PASSES; on v1.17.70 (`0dc644b26`,
+    # `_pr.run(`) it fails. The DISPATCH never went away — the instrument went
+    # blind to it, and a blind instrument reports zero, which reads exactly
+    # like the defect this test exists to catch.
     class _Recorder:
+        def __init__(self, real):
+            self._real = real
+
         def __getattr__(self, name):
-            return getattr(runner.subprocess, name)
+            return getattr(self._real, name)
 
         def run(self, argv, *a, **kw):
             seen.append([str(x) for x in argv])
             return subprocess.CompletedProcess(argv, 0, "", "")
 
-    saved = runner.subprocess
+    saved_sub = runner.subprocess
+    saved_pr = runner._pr
     with tempfile.TemporaryDirectory(prefix="d3_a8_wire_") as td:
         proj = Path(td)
         try:
-            runner.subprocess = _Recorder()
+            runner.subprocess = _Recorder(saved_sub)
+            runner._pr = _Recorder(saved_pr)
             runner.step_for_block(proj, {"name": "blk_a"},
                                   "A8_hardmacro_gen", None)
         finally:
-            runner.subprocess = saved
+            runner.subprocess = saved_sub
+            runner._pr = saved_pr
 
     hits = [argv for argv in seen
             if any(a.endswith(f"{prog_name}.py") for a in argv)]
@@ -4436,6 +4457,79 @@ def test_d3_a8_producer_is_reachable_from_a_flow_path():
         f"at A8_hardmacro_gen; A8's declared .gds is PRODUCED_LIVE evidence "
         f"only while a flow path actually runs the producer. Dispatched "
         f"argv: {seen}")
+
+
+def _runner_process_launchers():
+    """Every `<module>.run/Popen/check_output/call` the analog runner uses to
+    start a process, DERIVED from its source by AST rather than written down.
+
+    A list written down here is the instrument that failed: it said
+    `subprocess`, the runner moved to `_progress_run`, and the list could not
+    notice. Derivation is what makes the guard below able to notice.
+    """
+    import ast
+    import importlib
+    runner_mod = importlib.import_module("analog_one_shot_runner")
+    runner_src = Path(runner_mod.__file__).read_text()
+    out = set()
+    for node in ast.walk(ast.parse(runner_src)):
+        if not isinstance(node, ast.Call):
+            continue
+        fn = node.func
+        if not isinstance(fn, ast.Attribute):
+            continue
+        if fn.attr not in ("run", "Popen", "check_output", "call"):
+            continue
+        if isinstance(fn.value, ast.Name):
+            out.add(fn.value.id)
+    return out
+
+
+def test_the_a8_dispatch_recorder_covers_every_launcher_the_runner_uses():
+    """THE GUARD ON THE INSTRUMENT ABOVE.
+
+    `test_d3_a8_producer_is_reachable_from_a_flow_path` proves a dispatch by
+    replacing the runner's process launcher with a recorder. It can only ever
+    prove anything about launchers the recorder actually replaces. MEASURED
+    2026-09-06: v1.17.70 moved every launch in `analog_one_shot_runner` from
+    `subprocess.run(..., timeout=)` to `_progress_run.run`, the recorder still
+    replaced only `subprocess`, and the A8 test reported "dispatched 0
+    time(s)" about a dispatch that was happening on every run.
+
+    So this asserts the pairing, not a name: every module the runner launches
+    processes through must be one the A8 test swaps out. A future conversion
+    to a third helper reddens HERE, where the reason is legible, instead of
+    silently turning the A8 test into a check of nothing.
+    """
+    runner = pytest.importorskip("analog_one_shot_runner")
+    launchers = _runner_process_launchers()
+    assert launchers, (
+        "no process launcher found in analog_one_shot_runner; the derivation "
+        "is broken, and an empty set would make this guard vacuous")
+    swapped = {"subprocess", "_pr"}      # what the A8 test replaces
+    missed = {name for name in launchers
+              if name not in swapped and hasattr(runner, name)}
+    assert not missed, (
+        f"analog_one_shot_runner launches processes through {sorted(missed)}, "
+        f"which test_d3_a8_producer_is_reachable_from_a_flow_path does not "
+        f"replace with its recorder; that test would report zero dispatches "
+        f"for a dispatch that happens")
+
+
+def test_the_guard_notices_a_launcher_it_does_not_cover():
+    """The guard above is worth its verdict only if it can fail. Feed the
+    derivation a module that launches through a third helper and require the
+    set to contain it."""
+    import ast
+    planted = "def f():\n    return _spawn.run(['x'])\n"
+    found = set()
+    for node in ast.walk(ast.parse(planted)):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) \
+                and node.func.attr == "run" \
+                and isinstance(node.func.value, ast.Name):
+            found.add(node.func.value.id)
+    assert found == {"_spawn"}
+    assert "_spawn" not in {"subprocess", "_pr"}
 
 
 # THE A8 LIVE-PRODUCTION PROOF IS NOT HERE, AND THAT IS THE HONEST PLACE FOR IT.
