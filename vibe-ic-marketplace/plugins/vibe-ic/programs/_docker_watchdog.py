@@ -32,6 +32,7 @@ import json
 import os
 import secrets
 import shlex
+import sys
 import time
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Set, Tuple
@@ -496,6 +497,41 @@ def wrap_with_container_timeout(cmd: str, timeout_s: float,
     )
 
 
+def supervised_container_command(cmd: str, pidfile: str) -> str:
+    """The SUPERVISED path's in-container command: identity stamp, then `exec`.
+
+    NO OUTER CLOCK (owner ruling 2026-09-07, vibe-ic#2051). This path used to
+    hand `cmd` to `wrap_with_container_timeout` at `hard_ceiling_s`, which put
+    a GNU `timeout --kill-after=5 86395` in front of every long tool run: a
+    still-converging proof was SIGKILLed inside the container at the budget and
+    the flow recorded a design it had never finished comparing. The budget is
+    now recorded and announced (see `run_docker_supervised`), and the ONLY
+    thing that terminates a supervised job is the progress-stall reap.
+
+    THE WRAP'S OTHER PURPOSE SURVIVES WITHOUT IT — measured, not assumed.
+    `wrap_with_container_timeout` was introduced (2026-07-22) because GNU
+    `timeout` "puts the command in its own process group", so a tool that
+    spawns children is torn down whole rather than orphaned onto the good
+    netlist. That grouping is not the wrap's to give: `docker exec` already
+    starts each exec in its OWN session, so the stamping shell is ALREADY the
+    process-group leader and `exec` hands that pid — and that group — to the
+    tool. MEASURED 2026-09-07 in the pinned image: the shell reports
+    ``pid=pgid=sid=20`` with no `timeout` anywhere, a stamped job at pid 152
+    with two children at pgid 152 is reaped by `kill_supervised_job` as
+    ``VIBEIC_REAP TERM 152 171 172`` leaving ZERO survivors, and the same
+    launch WITHOUT a stamp reports ``VIBEIC_REAP_SKIP no_stamp`` and leaves all
+    three alive — so the teardown is the reap's doing and not the shell's.
+
+    `wrap_with_container_timeout` itself STAYS, for the four callers that need
+    it: those drive a raw `docker exec` under a HOST-side
+    `subprocess.run(timeout=)`, where killing the client orphans the tool. That
+    is a different mechanism with a different, real hazard; this function is
+    the supervised path, which has a supervisor instead.
+    """
+    return (identity_stamp_prelude(pidfile)
+            + "exec bash -lc " + shlex.quote(cmd))
+
+
 def run_docker_supervised(container: str, cmd: str, marker: str, *,
                           docker_exec_raw: RawExec,
                           log_path: Optional[Path] = None,
@@ -507,7 +543,9 @@ def run_docker_supervised(container: str, cmd: str, marker: str, *,
                           stall_grace_s: float = DEFAULT_STALL_GRACE_S,
                           poll_s: float = DEFAULT_POLL_S,
                           hard_ceiling_s: float = DEFAULT_HARD_CEILING_S,
-                          term_grace_s: float = _TERM_GRACE_S
+                          term_grace_s: float = _TERM_GRACE_S,
+                          ceiling_notice: Optional[
+                              Callable[[Dict[str, Any]], None]] = None
                           ) -> Tuple[int, str, str]:
     """Launch `cmd` inside `container` (or on the host when container is ''/
     'host') under the progress-stall watchdog. Returns (rc, out, err) where rc
@@ -557,10 +595,9 @@ def run_docker_supervised(container: str, cmd: str, marker: str, *,
         })
         _write_telemetry(Path(telemetry_path), telemetry)
 
-    # OUTER backstop: wrap with a container-side `timeout` at the CEILING so the
-    # tool self-terminates even if the host supervisor dies.
-    wrapped = wrap_with_container_timeout(cmd, hard_ceiling_s,
-                                          pidfile=pidfile)
+    # NO OUTER CLOCK on the supervised path (vibe-ic#2051). The stamp is what
+    # the reap needs; nothing else is imposed on the tool.
+    wrapped = supervised_container_command(cmd, pidfile)
     if container in ("", "host"):
         full = ["bash", "-lc", wrapped]
     else:
@@ -674,16 +711,79 @@ def run_docker_supervised(container: str, cmd: str, marker: str, *,
         except Exception:  # nosec — release the host docker-exec client
             pass
 
+    def _on_ceiling(elapsed_s: float) -> None:
+        """The budget was crossed: RECORD it, SAY it, and let the job run on.
+
+        vibe-ic#2051. `hard_ceiling_s` is no longer a deadline, so the crossing
+        has to reach a reader some other way or it becomes an unmeasured thing
+        that reads as a measured zero. Two channels, both with an existing
+        consumer:
+
+          * the SIDECAR — a `hard_ceiling` row on `events` plus the
+            `hard_ceiling_exceeded` flag, in the same document `lec_run`
+            already hashes into its report (`attach_telemetry`) and the
+            dashboard already reads. It is written where the run's own numbers
+            are, so "it went over budget" is answerable beside "how far it had
+            got" rather than from a second artefact.
+          * STDERR of the supervising process — one line, so a crossing is
+            visible in the run log of a caller that wired no sidecar at all.
+
+        It is a NOTICE, not a verdict: `status` is untouched, no rc is
+        invented, and the job is not signalled. `ceiling_notice`, when the
+        caller injected one, is called last and its failure is swallowed — a
+        notification that could take down the run it is reporting on would be
+        the defect this landing removes, wearing new clothes.
+        """
+        record = {
+            "event": "hard_ceiling",
+            "budget_sec": hard_ceiling_s,
+            "elapsed_sec": elapsed_s,
+            "attempt": attempt_number,
+            "action": "recorded_and_continued",
+            "note": ("the recorded budget was exceeded; the job is still "
+                     "making forward progress and is NOT stopped — only the "
+                     "progress-stall watchdog may stop it"),
+        }
+        if telemetry_path is not None:
+            try:
+                telemetry.setdefault("events", []).append(record)
+                telemetry["hard_ceiling_exceeded"] = True
+                if telemetry.get("attempts"):
+                    telemetry["attempts"][-1]["budget_exceeded_sec"] = elapsed_s
+                _write_telemetry(Path(telemetry_path), telemetry)
+            except Exception:  # nosec — instrumentation may never fail a run
+                pass
+        try:
+            sys.stderr.write(
+                "WATCHDOG_HARD_CEILING: recorded budget %g s exceeded at "
+                "%g s; job is progressing and CONTINUES (vibe-ic#2051 — the "
+                "budget is a record, only a progress stall may stop a job)\n"
+                % (hard_ceiling_s, elapsed_s))
+            sys.stderr.flush()
+        except Exception:  # nosec
+            pass
+        if ceiling_notice is not None:
+            try:
+                ceiling_notice(dict(record))
+            except Exception:  # nosec — a notice may never stop a job
+                pass
+
     try:
         res = _wd.run_supervised(
             full, log_path=log_path, cpu_probe=_cpu_probe, kill=_kill,
             stall_grace_s=stall_grace_s, poll_s=poll_s,
-            hard_ceiling_s=hard_ceiling_s)
+            hard_ceiling_s=hard_ceiling_s, ceiling_notice=_on_ceiling)
         if telemetry_path is not None:
             attempt_elapsed_s = round(time.monotonic() - telemetry_started, 3)
+            # A STOP IS A STOP WE MADE. `progress_stalled` is ours — the
+            # reap fired. rc 124 is NOT: since vibe-ic#2051 nothing here kills
+            # on a clock, so a 124 can only be the tool's own exit, and
+            # labelling it `hard_ceiling` would put OUR vocabulary on THEIR
+            # verdict. The budget crossing, when there was one, is already on
+            # `events` / `hard_ceiling_exceeded` — a fact about the run, next
+            # to how far it got, instead of a stop that never happened.
             telemetry["status"] = (
-                "progress_stalled" if res.rc == RC_STALLED else
-                "hard_ceiling" if res.rc == RC_CEILING else "complete")
+                "progress_stalled" if res.rc == RC_STALLED else "complete")
             telemetry["returncode"] = res.rc
             telemetry["elapsed_sec"] = round(
                 prior_elapsed_s + attempt_elapsed_s, 3)

@@ -97,9 +97,14 @@ RC_STALLED = _wd.RC_STALLED
 #: must reach the stamp as UNDETERMINED, never as a failing verdict.
 RC_UNDETERMINED = 2
 
-#: Absolute backstop for a pathological CPU-burning infinite loop, inherited
-#: from `_watchdog`. NOT the primary control and never the thing that fires on a
-#: slow host: a job must run a full day to reach it.
+#: The RECORDED BUDGET, inherited from `_watchdog` — and since the owner ruling
+#: of 2026-09-07 (vibe-ic#2051) it is not a control of any kind. Crossing it
+#: makes `_watchdog` note the crossing and announce it ONCE; the child keeps
+#: running. So this module has no wall clock left at any layer: `run()` returns
+#: when the child exits, however long that legitimately takes, and raises
+#: `Stalled` only when every readable progress signal sat still. Passing a
+#: smaller number here changes what gets RECORDED and nothing about what gets
+#: stopped.
 HARD_CEILING_S = _wd.DEFAULT_HARD_CEILING_S
 
 _CLK_TCK = float(os.sysconf("SC_CLK_TCK")) if hasattr(os, "sysconf") else 100.0
@@ -483,6 +488,11 @@ def run(cmd, *, cwd=None, env=None, input=None,  # noqa: A002
         # handlers would go quiet and the rc would be read as the tool's own
         # verdict. A drop-in may not change the exception contract.
         raise FileNotFoundError(_wd._as_text(res.err) or _fmt(cmd))
+    # 'ceiling' is UNREACHABLE since vibe-ic#2051 — `_watchdog` records the
+    # budget and never stops on it. The branch stays because `_watchdog` keeps
+    # its own tripwire for the same reason: if a wall-clock kill is ever put
+    # back, this module must raise rather than hand the caller a
+    # CompletedProcess carrying rc 124 as though the tool had said it.
     if outcome in ("stalled", "ceiling"):
         raise Stalled(cmd, stall_looks, poll_s,
                       getattr(res, "elapsed_s", elapsed) or elapsed,
