@@ -921,6 +921,21 @@ _COST_LINE = re.compile(
     r"^[ \t]+(programs/tests/[A-Za-z0-9_.\-]+\.py)[ \t]+(\d+)[ \t]*$", re.M)
 
 
+def _can_really_mkdir_in(d: Path) -> bool:
+    """Whether this process can actually create a directory in ``d``.
+
+    Asked by doing it. Nothing else is authoritative: a read-only bind mount, a
+    full filesystem and a directory whose mode bits are generous to a group this
+    process is not in all pass `os.access(d, os.W_OK)`.
+    """
+    try:
+        probe = Path(tempfile.mkdtemp(prefix="vibeic1446-probe-", dir=str(d)))
+    except OSError:
+        return False
+    probe.rmdir()
+    return True
+
+
 def _a_non_volatile_root() -> Path:
     """A writable directory outside every git work tree and outside all four
     volatile prefixes — WALKED TO, never named.
@@ -931,6 +946,27 @@ def _a_non_volatile_root() -> Path:
     `/nonexistent`). The first ancestor of the plugin tree that is outside the
     repository is outside it in all three; the account home is the fallback for
     a checkout that itself lives under a volatile root.
+
+    THAT WAS NOT ENOUGH, and the reason is worth stating because it is a fact
+    about the mounts and not about the tree. `tools/ci/run_suite_in_eda_image.sh`
+    binds the repository at its OWN path, which it must do for
+    docker-out-of-docker path fidelity, and the daemon then CREATES every
+    missing ancestor of that path root-owned 0755. The container user is 1000,
+    so EVERY ancestor above the checkout is unwritable, and the account home the
+    harness supplies is under `/var/tmp` and therefore volatile. Measured
+    2026-09-06 on 8HD-9 against image 0.3.46: this helper walked nine candidates,
+    rejected all nine, and this arm failed for the mount shape.
+
+    So the walk does not stop at the ancestors. It goes on to ENUMERATE the top
+    level of the filesystem and asks each entry the SAME three questions. That
+    is still walking rather than naming — nothing here knows what the image
+    calls its writable directory, and in that shape the answer turned out to be
+    `/headless`. The ancestors are tried FIRST and unchanged, so every shape
+    that already had an answer returns exactly the answer it returned before and
+    pays nothing for this paragraph.
+
+    The predicate is untouched. The only thing that changed is that the helper
+    stops giving up while it still has somewhere to look.
     """
     tried = []
     seen = set()
@@ -938,6 +974,10 @@ def _a_non_volatile_root() -> Path:
     try:
         candidates.append(Path.home())
     except (RuntimeError, KeyError):                       # pragma: no cover
+        pass
+    try:
+        candidates.extend(sorted(d for d in Path("/").iterdir() if d.is_dir()))
+    except OSError:                                        # pragma: no cover
         pass
     for d in candidates:
         if d in seen:
@@ -952,6 +992,12 @@ def _a_non_volatile_root() -> Path:
             why.append("volatile")
         if not os.access(d, os.W_OK):
             why.append("not writable")
+        elif not _can_really_mkdir_in(d):
+            # `os.access` answers about this uid against the mode bits; it says
+            # yes on a read-only bind mount and on a full filesystem. The
+            # question this arm needs is the one only `mkdir` answers, and it
+            # is asked here rather than left to blow up inside the loop below.
+            why.append("not writable (mkdir refused)")
         if not why:
             return d
         tried.append(f"{d} ({', '.join(why)})")
