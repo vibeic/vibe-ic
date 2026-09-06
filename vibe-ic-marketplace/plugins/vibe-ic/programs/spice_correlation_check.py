@@ -762,6 +762,209 @@ def derive_liberty_path_tolerance(liberty_text: str, stages: List[dict],
     }
 
 
+# ══════════════════════════════════════════════════════════════════════════
+#  THE TWO ERROR SOURCES, SEPARATED  (owner ruling, 2026-09-06)
+#
+#  A post-layout path correlation carries two independent errors and the gate
+#  used to report their SUM as one number attributed to the design:
+#
+#    (1) the PDK's OWN liberty<->transistor-model CHARACTERISATION gap. The
+#        NLDM tables and the ngspice device models are two different
+#        characterisations of the same silicon, produced by different flows.
+#        On an open PDK they do not agree, and NOTHING about a design can
+#        change that: MEASURED on gf180mcuD (2026-09-06) the residual was
+#        corner-INDEPENDENT (ss 1.873, tt 1.845) and survived every corner and
+#        operating-point correction the flow could make.
+#    (2) the DESIGN's own modelling error — a wrong wire load, an unannotated
+#        parasitic, a stage the STA counted and the netlist does not have.
+#
+#  `derive_liberty_path_tolerance` derives its tolerance from the local NLDM
+#  GRID half-range, i.e. it models INTERPOLATION error and nothing else. So a
+#  gate that judges (1)+(2) against that tolerance is measuring the PDK with an
+#  instrument calibrated for the design, and on gf180mcuD it CANNOT pass however
+#  correct the design is.
+#
+#  THE FIX IS NOT A WIDER TOLERANCE. The tolerance does not move. What moves is
+#  what is COMPARED: the characterisation gap is measured in the same run, on a
+#  single-stage reference deck at a liberty GRID POINT (where interpolation
+#  error is zero BY CONSTRUCTION, so what is left is the characterisation gap
+#  alone), and reported as its own PDK-attributed line with its own number. The
+#  DESIGN is then judged against a reference that carries that same
+#  characterisation — the same liberty cone delay, carried through the same
+#  liberty->model ratio the PDK itself exhibits — so the design is the only
+#  variable left in the number that gets the verdict.
+#
+#  WHY THIS CANNOT LAUNDER A DESIGN DEFECT. Every reference deck is built from
+#  the PDK alone: one cell, one liberty grid point, no SPEF, no netlist
+#  connectivity, no path. A wrong wire load, a missing stage, a mis-stitched
+#  fanin cannot move a single reference measurement, so they move the design
+#  number by exactly as much as they did before. Proven both directions by
+#  `tests/test_v1_17_spice_correlation_pdk_gap_separated.py`.
+#
+#  BOTH NUMBERS ARE PRINTED SIDE BY SIDE and neither can be quoted alone: the
+#  raw uncorrected error stays in the report under its own key.
+# ══════════════════════════════════════════════════════════════════════════
+
+def nldm_grid_point(table: dict, slew: float, load_axis: float) -> dict:
+    """The nearest CHARACTERISED grid point of an NLDM table (pure).
+
+    Returns {i, j, slew, load, value} in the table's own units. At a grid point
+    the table carries a measured number rather than an interpolation, so a
+    comparison made there has zero interpolation error by construction — which
+    is what makes it a clean measurement of the characterisation gap alone.
+    """
+    idx1, idx2, values = table["index_1"], table["index_2"], table["values"]
+    i = min(range(len(idx1)), key=lambda k: abs(idx1[k] - slew))
+    j = min(range(len(idx2)), key=lambda k: abs(idx2[k] - load_axis))
+    return {"i": i, "j": j, "slew": idx1[i], "load": idx2[j],
+            "value": values[i][j]}
+
+
+def stage_nldm_table(liberty_text: str, stage: dict
+                     ) -> Optional[Tuple[str, dict]]:
+    """(table_name, table) for the arc this stage's toggling pin drives, by the
+    SAME selection `derive_liberty_path_tolerance` uses (pure). None when the
+    liberty does not carry the cell, the arc, or the table."""
+    cell_block = extract_cell_block(liberty_text, stage["cell"])
+    if not cell_block:
+        return None
+    related = stage["toggle_pin"]
+    for block in _timing_blocks(cell_block):
+        rel = re.search(r'related_pin\s*:\s*"?([^";]+)', block)
+        if not (rel and related in rel.group(1).split()):
+            continue
+        table_name = ("cell_fall" if stage.get("transition") == "fall"
+                      else "cell_rise")
+        table = parse_nldm_table(block, table_name)
+        if table:
+            return table_name, table
+    return None
+
+
+def measure_pdk_characterisation(
+        container: str, sources: dict, subckts: dict, liberty_text: str,
+        stages: List[dict], out_dir: Path, hdr: dict) -> dict:
+    """Measure the PDK's liberty<->model characterisation ratio per distinct
+    cell of the path, each on its OWN single-stage deck at a liberty grid point.
+
+    Reads NOTHING about the design except which cells and which arcs it uses:
+    no SPEF, no connectivity, no stage chaining, no path. Returns
+    {ratio_by_cell, references, incomplete} — `incomplete` naming every cell
+    whose reference could not be measured, so a caller degrades LOUDLY instead
+    of silently treating an unmeasured PDK as a perfect one.
+    """
+    vdd = hdr["nom_voltage"] or 1.0
+    temp_c = hdr["nom_temperature"]
+    vth = vdd * hdr["output_threshold_fall"] / 100.0
+    ratio_by_cell: dict = {}
+    references: List[dict] = []
+    incomplete: List[dict] = []
+    seen: set = set()
+    for stage in stages:
+        cell = stage["cell"]
+        if cell in seen:
+            continue
+        seen.add(cell)
+        found = stage_nldm_table(liberty_text, stage)
+        if not found:
+            incomplete.append({"cell": cell,
+                               "reason": "no NLDM table for this arc"})
+            continue
+        table_name, table = found
+        slew = stage.get("input_slew_ns")
+        if slew is None:
+            slew = table["index_1"][len(table["index_1"]) // 2]
+        load_pf = stage.get("sta_load_pf")
+        if load_pf is None:
+            load_pf = stage.get("wire_cap_pf") or 0.0
+        grid = nldm_grid_point(table, float(slew),
+                               float(load_pf) / max(hdr["cap_unit_pf"], 1e-30))
+        liberty_ns = grid["value"] * hdr["time_unit_ns"]
+        if liberty_ns <= 0:
+            incomplete.append({"cell": cell,
+                               "reason": "liberty grid value is not positive"})
+            continue
+        # ONE stage, and measured by the SAME instrument the design number is
+        # measured by (`build_installed_stagewise_deck` +
+        # `parse_stagewise_meas`, both drive polarities, the arc PROVED by
+        # which one produces the declared output transition). Two numbers
+        # measured by two conventions cannot be divided into each other. The
+        # only differences from the design's own stage are the two that make
+        # this the PDK's number and not the design's: the operating point is
+        # the liberty GRID POINT rather than the STA's, and there is no SPEF
+        # wire cap, no chaining, no endpoint receiver — nothing of this design.
+        load_ref_pf = grid["load"] * hdr["cap_unit_pf"]
+        ref_stage = dict(stage)
+        ref_stage["wire_cap_pf"] = 0.0
+        ref_stage["sta_load_pf"] = load_ref_pf
+        ref_stage["sta_delay_ns"] = liberty_ns
+        tr_ns = pulse_tr_for_slew(
+            grid["slew"] * hdr["time_unit_ns"], hdr["slew_lower_fall"],
+            hdr["slew_upper_fall"], hdr["slew_derate"])
+        deck = build_installed_stagewise_deck(
+            sources["model_file"], sources["model_section"],
+            sources["model_preludes"], sources["cell_spice"], [ref_stage],
+            subckts, vdd, temp_c, vth, load_ref_pf, [tr_ns])
+        deck_path = out_dir / f"pdk_reference_{cell}.spice"
+        log_path = out_dir / f"pdk_reference_{cell}.log"
+        deck_path.write_text(deck)
+        ok, transcript = _run_ngspice_in(
+            container, str(Path(sources["model_file"]).parent),
+            str(deck_path))
+        log_path.write_text(transcript or "")
+        # `ok` is NOT the health signal — the deck deliberately contains a
+        # `.meas` that must fail (the wrong drive polarity). The parse is.
+        measured, why = parse_stagewise_meas(transcript, 1, vdd)
+        if measured is None:
+            incomplete.append({
+                "cell": cell,
+                "reason": (why + ("" if ok else
+                                  "; ngspice also exited non-zero")),
+                "log": str(log_path)})
+            continue
+        spice_ns = measured[0]
+        if spice_ns <= 0:
+            incomplete.append({"cell": cell,
+                               "reason": "reference delay is not positive",
+                               "log": str(log_path)})
+            continue
+        ratio = spice_ns / liberty_ns
+        ratio_by_cell[cell] = ratio
+        references.append({
+            "cell": cell,
+            "arc": table_name,
+            "related_pin": stage["toggle_pin"],
+            "grid_index": [grid["i"], grid["j"]],
+            "grid_input_slew_ns": round(grid["slew"] * hdr["time_unit_ns"], 9),
+            "grid_output_load_pf": round(load_ref_pf, 9),
+            "liberty_grid_delay_ns": round(liberty_ns, 9),
+            "spice_delay_ns": round(spice_ns, 9),
+            "ratio_spice_over_liberty": round(ratio, 9),
+            "gap_pct": round((ratio - 1.0) * 100.0, 6),
+            "deck": str(deck_path), "log": str(log_path),
+        })
+    return {"ratio_by_cell": ratio_by_cell, "references": references,
+            "incomplete": incomplete}
+
+
+def characterised_reference_ns(stages: List[dict],
+                               ratio_by_cell: dict) -> Optional[float]:
+    """The liberty cone delay carried through the PDK's OWN measured
+    liberty->model ratio, stage by stage (pure).
+
+    None when ANY stage's cell has no measured reference — a partial
+    correction is a number nobody can attribute, and the caller must fall back
+    to the uncorrected comparison and say so.
+    """
+    total = 0.0
+    for stage in stages:
+        ratio = ratio_by_cell.get(stage["cell"])
+        if ratio is None:
+            return None
+        total += float(stage.get("sta_delay_ns") or 0.0) * ratio
+    return total
+
+
 def path_correlation_verdict(pct_error: float, tolerance_pct: float) -> str:
     """Classify with the derived tolerance; twice it is critical severity."""
     err = abs(pct_error)
@@ -1382,22 +1585,62 @@ def parse_verilog_instances(vtext: str) -> dict:
     return inst_map
 
 
+#: IEEE 1481 escapes any character that is not legal in a bare SPEF
+#: identifier by prefixing it with a backslash. The backslash is SPEF's
+#: SPELLING of the name, not part of the name: the netlist that names the same
+#: net spells it `__uuf__._178_` where the SPEF spells it `__uuf__\\._178_`.
+_SPEF_ESCAPE_RE = re.compile(r"\\(.)")
+
+
+def spef_unescape(name: str) -> str:
+    """Drop SPEF's escaping backslashes, returning the name as the netlist
+    spells it (pure).
+
+    MEASURED (spm x gf180mcuD, 2026-09-06, `phase3/stage3/extracted/spm.spef`):
+    337 of the 673 `*D_NET` records in that SPEF — HALF the extraction — carry
+    an escaped `.` in their `*NAME_MAP` name, because OpenROAD flattens a
+    hierarchical instance name into a net name containing the divider. Keyed on
+    the escaped spelling, every one of them was unreachable by a caller holding
+    the netlist's spelling, and `resolve_path_stages` then read a wire cap of
+    ZERO for 4 of the 12 stages of the critical path — a design that looked
+    faster in SPICE than in STA for a reason that was entirely the reader's.
+    """
+    return _SPEF_ESCAPE_RE.sub(r"\1", name)
+
+
 def parse_spef_caps(spef_text: str) -> dict:
     """Map {net_name: total_cap_pf} from a SPEF (*NAME_MAP + *D_NET) (pure).
     Assumes *C_UNIT PF (the commercial-PDK extraction unit); callers needing another
-    unit should scale. Returns {} when the SPEF has no D_NET records."""
+    unit should scale. Returns {} when the SPEF has no D_NET records.
+
+    Names are keyed BOTH as the SPEF spells them and as `spef_unescape` renders
+    them, so a caller holding either spelling finds the net. Keying only the
+    unescaped form would silently drop a design whose netlist genuinely carries
+    a backslash; keying only the escaped form is the defect above.
+
+    A `*D_NET` may name its net by `*<id>` (the name-map indirection) or
+    literally; both are read, because a SPEF writer is free to emit either and
+    a reader that understands one spelling reports the other as absent.
+    """
     id2name = {}
-    for m in re.finditer(r"^\*(\d+)\s+([A-Za-z_]\S*)\s*$", spef_text, re.MULTILINE):
+    for m in re.finditer(r"^\*(\d+)\s+(\S+)\s*$", spef_text, re.MULTILINE):
         id2name[m.group(1)] = m.group(2)
     caps = {}
-    for m in re.finditer(r"^\*D_NET\s+\*(\d+)\s+([\d.eE+\-]+)", spef_text,
+    for m in re.finditer(r"^\*D_NET\s+(\S+)\s+([\d.eE+\-]+)", spef_text,
                          re.MULTILINE):
-        name = id2name.get(m.group(1))
-        if name:
-            try:
-                caps[name] = float(m.group(2))
-            except ValueError:
-                pass
+        token = m.group(1)
+        name = (id2name.get(token[1:]) if token.startswith("*")
+                and token[1:].isdigit() else token)
+        if not name:
+            continue
+        try:
+            value = float(m.group(2))
+        except ValueError:
+            continue
+        caps[name] = value
+        bare = spef_unescape(name)
+        if bare != name:
+            caps[bare] = value
     return caps
 
 
@@ -1474,10 +1717,19 @@ def resolve_path_stages(sta_path: dict, inst_map: dict, spef_caps: dict,
         prior_slew = next(
             (pr.get("slew_ns") for pr in reversed(sta_path["rows"][:row_index])
              if pr.get("slew_ns") is not None), None)
+        # NOT `.get(out_net, 0.0)`. "the SPEF does not carry this net" and
+        # "the SPEF says this net has no capacitance" are different facts and
+        # the deck cannot tell them apart once a default has been supplied:
+        # both build a stage driving nothing, and the SPICE side then runs
+        # FASTER than the STA for a reason that is the reader's, not the
+        # design's. The absence is carried on the stage and reported.
+        wire_cap = spef_caps.get(out_net)
         stages.append({
             "inst": inst, "cell": r["cell"], "toggle_pin": toggle_pin,
             "out_pin": out_pin, "out_net": out_net,
-            "wire_cap_pf": spef_caps.get(out_net, 0.0),
+            "wire_cap_pf": 0.0 if wire_cap is None else wire_cap,
+            "wire_cap_source": ("spef" if wire_cap is not None
+                                else "ABSENT_FROM_SPEF"),
             "sta_delay_ns": r["incr"],
             "input_slew_ns": prior_slew,
             "output_slew_ns": r.get("slew_ns"),
@@ -1505,6 +1757,10 @@ def resolve_path_stages(sta_path: dict, inst_map: dict, spef_caps: dict,
         "endpoint_load_pf": endpoint_load_pf,
         "covered": len(stages),
         "total_comb": total_comb,
+        # MEMBERSHIP, not a count: a reader has to be able to see WHICH net
+        # the deck modelled with no wire load at all.
+        "nets_absent_from_spef": [s["out_net"] for s in stages
+                                  if s["wire_cap_source"] != "spef"],
     }
 
 
@@ -1616,6 +1872,34 @@ def _installed_pin_node(pin: str, stage: dict, input_node: str,
     return tie_value_for_cell(stage["cell"])
 
 
+def stagewise_stage_load_pf(stage: dict, is_last: bool,
+                            endpoint_load_pf: float) -> Tuple[float, str]:
+    """(load in pF, WHERE it came from) for one stage of the per-stage deck.
+
+    ONE function, called by the deck builder AND by the report, because a load
+    spelled in two places is two places to get wrong.
+
+    THE SOURCE IS THE POINT. MEASURED (spm x gf180mcuD, image 0.3.46): scaling
+    EVERY `*D_NET` total capacitance in the design's own SPEF by 10 -- 673
+    records -- moved this gate's numbers by NOTHING. Byte-identical
+    `pct_error`, `spice_path_delay_ns` and every per-cell PDK ratio. The reason
+    is here: when the STA report states a load for a stage, the deck uses THAT,
+    and the SPEF is never read for it. That is the right operating point (it is
+    what the tolerance is derived at) and it is not being changed -- but a
+    reader must not be able to believe that a parasitic-annotation error is on
+    the design side of this comparison when it is not. The report now says,
+    per stage, which artefact the load came from.
+    """
+    load = stage.get("sta_load_pf")
+    if isinstance(load, (int, float)) and load > 0:
+        return float(load), "sta_report"
+    load = float(stage.get("wire_cap_pf") or 0.0)
+    source = "spef" if load > 0 else "none"
+    if is_last and endpoint_load_pf > load:
+        load, source = endpoint_load_pf, "endpoint_receiver"
+    return max(float(load), 1e-4), source
+
+
 def build_installed_stagewise_deck(
         model_file: str, model_section: str, model_preludes: List[str],
         cell_spice: str, stages: List[dict], subckts: dict, vdd: float,
@@ -1662,12 +1946,8 @@ def build_installed_stagewise_deck(
     for i, stage in enumerate(stages):
         pins, _raw = subckts[stage["cell"]]
         tr = max(float(slew_tr[i]), 0.001)
-        load = stage.get("sta_load_pf")
-        if not isinstance(load, (int, float)) or load <= 0:
-            load = float(stage.get("wire_cap_pf") or 0.0)
-            if i == n - 1:
-                load = max(load, endpoint_load_pf)
-        load = max(float(load), 1e-4)
+        load, _src = stagewise_stage_load_pf(stage, i == n - 1,
+                                             endpoint_load_pf)
         out_tr = "FALL" if stage["transition"] == "fall" else "RISE"
         for var, v_from, v_to, in_tr in (("r", 0.0, vdd, "RISE"),
                                          ("f", vdd, 0.0, "FALL")):
@@ -1824,6 +2104,10 @@ _STA_CORNER_LIBERTY_RES = (
     re.compile(r"(?m)^===\s*SETUP\s+corner:[^\n]*?\bliberty=([^\s,]+)"),
     re.compile(r"(?m)^#\s*corner_liberty:\s*\w+=(\S+)\s*$"),
 )
+#: The per-corner section marker this flow's own multi-corner STA writer emits:
+#: `=== SETUP corner: ... ===` / `=== HOLD corner: ... ===`. A report with none
+#: of these is ONE section, which is the whole file.
+_STA_CORNER_SECTION_RE = re.compile(r"(?m)^===\s+\S+\s+corner:")
 _STA_OCV_LATE_RE = re.compile(
     r"(?m)^\s*OCV_DERATE_APPLIED\b[^\n]*?\blate=([0-9.]+)")
 
@@ -1848,14 +2132,70 @@ def parse_sta_corner_basis(text: str) -> dict:
 
     Returns an empty `liberty` when the report declares none -- the caller must
     then decline to correlate rather than assume the active corner.
+
+    AND WHEN IT DECLARES MORE THAN ONE (SPM-12, lane spmspice, measured over the
+    landed v1.17.52 code). A multi-corner writer can stamp TWO distinct
+    libraries into ONE report. This function used to take the FIRST match of the
+    FIRST regex that hit and say nothing, so which corner the deck was built at
+    was decided by regex order and by where in the file the writer happened to
+    put its header. MEASURED: one report stamping both `ss_125C_4v50` and
+    `ff_n40C_5v50` gave cone 5.3238 ns / SPICE 4.1188 ns = -22.63 % against
+    20.03 %, MISMATCH; the SAME design whose report stamps `ss` alone measures
+    7.4884 ns. A 1.8x swing in the number that gets the verdict, decided by
+    which of two stamped corners was silently picked.
+
+    Two declared corners is not a corner. `declared_liberties` carries the whole
+    SET -- membership, so the caller can name both in its refusal -- and
+    `liberty` is answered ONLY when exactly one was declared. This is the third
+    refusal of the same shape, beside "declared none" and "declared one that
+    cannot be read": in all three the honest answer is that the corner the deck
+    must be built at is unknown.
     """
-    out = {"liberty": "", "ocv_late_derate": None}
-    for rx in _STA_CORNER_LIBERTY_RES:
-        m = rx.search(text or "")
-        if m:
-            out["liberty"] = m.group(1).strip()
-            break
-    m = _STA_OCV_LATE_RE.search(text or "")
+    whole = text or ""
+    # SCOPE FIRST. This flow's OWN canonical multi-corner report is SECTIONED:
+    # spm's `sta_mcorner_ocv.rpt` opens `=== SETUP corner: process=SS
+    # liberty=..._ss_125C_4v50.lib ===` at line 1 and `=== HOLD corner:
+    # process=FF liberty=..._ff_n40C_5v50.lib ===` at line 133. `parse_sta_path`
+    # takes the FIRST path block, which is inside the FIRST section, so the
+    # corner that path was produced at is the one THAT SECTION declares --
+    # never "some corner this file mentions somewhere". A file-wide set would
+    # refuse every run of a design whose STA writes both corners into one
+    # report, which is a refusal about the report's SHAPE and not about
+    # anything that can be wrong.
+    #
+    # The ambiguity SPM-12 measured is inside the scope, not across sections:
+    # the old code took the first match of the first regex that hit, so a
+    # report whose HOLD stamp came first handed the deck the FF corner and the
+    # gate charged a 1.8x delay swing to the design. Scoped, that is exactly
+    # the case that still refuses.
+    scope = whole
+    marks = [m.start() for m in _STA_CORNER_SECTION_RE.finditer(whole)]
+    if marks:
+        first_path = whole.find("Startpoint:")
+        starts = [i for i in marks if first_path < 0 or i <= first_path]
+        begin = starts[-1] if starts else marks[0]
+        after = [i for i in marks if i > begin]
+        scope = whole[begin:after[0]] if after else whole[begin:]
+    out = {"liberty": "", "ocv_late_derate": None, "declared_liberties": [],
+           "declared_liberties_in_file": [], "sections": len(marks)}
+
+    def _declared(chunk: str) -> List[str]:
+        found: List[str] = []
+        for rx in _STA_CORNER_LIBERTY_RES:
+            for m in rx.finditer(chunk):
+                value = m.group(1).strip()
+                if value and value not in found:
+                    found.append(value)
+        return sorted(found)
+
+    declared = _declared(scope)
+    out["declared_liberties"] = declared
+    # Kept so a reader can still see that the report carried more than one --
+    # the refusal is scoped, the DISCLOSURE is not.
+    out["declared_liberties_in_file"] = _declared(whole) if marks else declared
+    if len(declared) == 1:
+        out["liberty"] = declared[0]
+    m = _STA_OCV_LATE_RE.search(scope)
     if m:
         try:
             v = float(m.group(1))
@@ -2114,6 +2454,17 @@ def run_installed_pdk_path_correlation(
     # to fall back on the active corner: the comparison would then be between
     # two different PVT points and the number would be an artefact of the gate.
     basis = parse_sta_corner_basis(sta_text)
+    declared_corners = basis["declared_liberties"]
+    if len(declared_corners) > 1:
+        # SPM-12. Picking one of two stamped corners is not a measurement of
+        # this design; it is a measurement of regex order.
+        return {"status": "ERROR",
+                "reason": f"{sta_report.name} declares "
+                          f"{len(declared_corners)} DIFFERENT corner libraries "
+                          f"({', '.join(Path(c).name for c in declared_corners)})"
+                          f", so the corner the SPICE deck must be built at is "
+                          f"unknown; refusing a cross-corner correlation rather "
+                          f"than picking one of them"}
     corner_liberty = basis["liberty"] or ""
     if not corner_liberty:
         return {"status": "ERROR",
@@ -2214,12 +2565,45 @@ def run_installed_pdk_path_correlation(
     if spice_ns <= 0 or expected_ns <= 0:
         return {"status": "ERROR", "reason": "path delay measurement absent",
                 "deck": str(deck_path), "log": str(log_path)}
-    pct_error = (spice_ns - expected_ns) / expected_ns * 100.0
+    # THE UNCORRECTED NUMBER IS KEPT, ALWAYS. It is the sum of the PDK's
+    # characterisation gap and the design's own error, and it is what this gate
+    # used to publish as if it were the design's alone. It stays in the report
+    # under its own name so neither number can be quoted without the other.
+    raw_pct_error = (spice_ns - expected_ns) / expected_ns * 100.0
     tolerance_pct = float(tolerance["tolerance_pct"])
+
+    # (a) THE PDK's OWN GAP, MEASURED IN THIS RUN, ON THIS PDK, AT A GRID POINT.
+    pdk_ref = measure_pdk_characterisation(
+        container, sources, subckts, liberty_text, resolved["stages"],
+        out_dir, hdr)
+    design_reference_ns = characterised_reference_ns(
+        resolved["stages"], pdk_ref["ratio_by_cell"])
+
+    if design_reference_ns and design_reference_ns > 0:
+        # (b) THE DESIGN, against a reference carrying the SAME
+        # characterisation — so the design is the only variable left.
+        pct_error = ((spice_ns - design_reference_ns)
+                     / design_reference_ns * 100.0)
+        pdk_gap_pct = (design_reference_ns - expected_ns) / expected_ns * 100.0
+        basis = "liberty_cone_carried_through_measured_pdk_characterisation"
+        degraded = None
+    else:
+        # DEGRADE LOUDLY. An unmeasured PDK reference is not a PDK with no gap:
+        # falling through to the uncorrected comparison keeps the gate exactly
+        # as strict as it was, and the reason is named.
+        pct_error = raw_pct_error
+        pdk_gap_pct = None
+        basis = "uncorrected_liberty_cone (PDK reference NOT MEASURED)"
+        degraded = (
+            "the liberty<->model characterisation reference could not be "
+            "measured for every cell on the path, so the design number is the "
+            "UNCORRECTED one and still carries the PDK's own gap: "
+            + "; ".join(f"{e['cell']}: {e['reason']}"
+                        for e in pdk_ref["incomplete"]))
     verdict = path_correlation_verdict(pct_error, tolerance_pct)
     report = {
         "program": "spice_correlation_check.installed_pdk_path_driver",
-        "version": "2.0.0",
+        "version": "2.1.0",
         "provenance": "real_ngspice_transistor_path",
         "reference": {
             "sta_report": sta_report.name,
@@ -2243,10 +2627,34 @@ def run_installed_pdk_path_correlation(
             "node, so receivers on the same net that are not on the path "
             "contribute no pin capacitance",
         ],
+        # (c) BOTH NUMBERS, BESIDE EACH OTHER. The first is a property of the
+        # PDK and no design change can move it; the second is the design's.
+        "pdk_characterisation": {
+            "what_this_measures": (
+                "the open PDK's OWN liberty-NLDM vs ngspice-model gap, "
+                "measured in this run on single-stage reference decks at "
+                "liberty GRID POINTS (zero interpolation error by "
+                "construction). It reads no SPEF, no netlist connectivity and "
+                "no path: no design change can move it."),
+            "gap_pct": (None if pdk_gap_pct is None
+                        else round(pdk_gap_pct, 6)),
+            "cells_referenced": sorted(pdk_ref["ratio_by_cell"]),
+            "references": pdk_ref["references"],
+            "not_measured": pdk_ref["incomplete"],
+        },
         "correlation": {
             "spice_path_delay_ns": round(spice_ns, 9),
             "liberty_spef_cone_delay_ns": round(expected_ns, 9),
+            "design_reference_ns": (None if design_reference_ns is None
+                                    else round(design_reference_ns, 9)),
+            "design_reference_basis": basis,
             "pct_error": round(pct_error, 6),
+            "pct_error_uncorrected": round(raw_pct_error, 6),
+            "pct_error_uncorrected_note": (
+                "the design's error PLUS the PDK's characterisation gap. This "
+                "is the number this gate used to judge; it is kept so the two "
+                "cannot be separated silently."),
+            "degraded": degraded,
             "tolerance_pct": round(tolerance_pct, 6),
             "critical_tolerance_pct": round(2.0 * tolerance_pct, 6),
             "tolerance_derivation": tolerance,
@@ -2260,6 +2668,18 @@ def run_installed_pdk_path_correlation(
             "per_stage_sta_ns": [
                 round(float(s.get("sta_delay_ns") or 0.0), 6)
                 for s in resolved["stages"]],
+            # WHICH ARTEFACT EACH STAGE'S LOAD CAME FROM. See
+            # `stagewise_stage_load_pf`: a x10 scaling of every SPEF *D_NET
+            # record moved this gate by nothing, because the STA report's own
+            # stated load wins wherever it exists.
+            "per_stage_load_source": [
+                stagewise_stage_load_pf(
+                    s, i == len(resolved["stages"]) - 1,
+                    resolved["endpoint_load_pf"])[1]
+                for i, s in enumerate(resolved["stages"])],
+            # MEMBERSHIP. A stage the SPEF never named carried NO wire load.
+            "path_nets_absent_from_spef":
+                resolved.get("nets_absent_from_spef", []),
             "verdict": verdict,
         },
         "artifacts": {"deck": str(deck_path), "log": str(log_path)},

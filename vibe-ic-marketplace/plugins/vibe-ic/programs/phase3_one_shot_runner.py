@@ -21908,7 +21908,8 @@ def _build_postroute_timing_repair_tcl(top: str, tech_lef_c: str, cell_lef_c: st
     )
 
 
-def _antenna_repair_tcl(pdk: "PdkConfig") -> str:
+def _antenna_repair_tcl(pdk: "PdkConfig",
+                        out_dir_c: str = ".") -> str:
     """v0.2.14 — emit the OpenROAD Tcl that repairs process-antenna violations
     after the main detailed_route, returned as a pure string so the
     silicon-critical sequence is pinned by regression tests (v0.1.49 doctrine).
@@ -22062,17 +22063,125 @@ def _antenna_repair_tcl(pdk: "PdkConfig") -> str:
         "  #       DEGRADES to the external repair->detailed_route pass\n"
         "  #       (byte-compatible with the pre-v1.3.47 loop) — never aborts.\n"
         "  #   A FULL global_route is still DROPPED (ibex ~1900-net timeout).\n"
+        "  #   (e) A COUNT THAT REPEATS IS NOT A FIXED POINT, and the loop\n"
+        "  #       used to treat one as if it were. MEASURED on spm x\n"
+        "  #       gf180mcuD (image 0.3.46), the run's own openroad.log, both\n"
+        "  #       antenna windows at the 6-iteration cap:\n"
+        "  #           window 1   22 7 6 5 4 2 2\n"
+        "  #           window 2    2 2 2 2 3 2 3\n"
+        "  #       Window 2 held 2 for four turns and shipped 3 -- the loop\n"
+        "  #       ends on its LAST iteration, not its best -- and printed the\n"
+        "  #       terminal sentinel with no sequence, no best, and nothing\n"
+        "  #       saying it had not converged. So when the tool NAMES the\n"
+        "  #       violating nets (`check_antennas -report_violating_nets`) the\n"
+        "  #       comparison is by MEMBERSHIP: two turns with the same count\n"
+        "  #       and different nets is exactly the oscillation a count cannot\n"
+        "  #       see. When the tool does NOT name them the loop keeps the\n"
+        "  #       count-only rule it always had, byte-for-byte -- a reader\n"
+        "  #       must be able to tell 'the set did not shrink' from 'nobody\n"
+        "  #       could tell me what the set was'.\n"
+        "  #   (f) AND IT CANNOT GO BACK. Measured in the same image, one line\n"
+        "  #       different, against a control that survives:\n"
+        "  #         `odb::dbChip_destroy [[ord::get_db] getChip]` + `read_db`\n"
+        "  #         restores the routing (check_antennas agrees, 3 == 3) and\n"
+        "  #         then `report_worst_slack -max` dies with `[CRITICAL\n"
+        "  #         ORD-2008] unknown master term type`; WITHOUT the restore\n"
+        "  #         the same session answers 12.26 and finishes.\n"
+        "  #       A mid-session rollback destroys the STA network every\n"
+        "  #       remaining PnR step runs on. ODB's ECO journal\n"
+        "  #       (beginEco/endEco/undoEco, ONE argument) survives the\n"
+        "  #       session and still does NOT restore the design: measured\n"
+        "  #       around a real repair+reroute, 31 violations before, 8\n"
+        "  #       after, instances 5963 -> 5994 -> 5963 (the diodes DO\n"
+        "  #       roll back exactly) -- and check_antennas then reads 22,\n"
+        "  #       NEITHER state. The re-routed wires stay and the diodes\n"
+        "  #       they were built around are gone. So the loop cannot\n"
+        "  #       restore a best it walked past -- it must not walk past it.\n"
+        "  proc _vic_ant_nets {f n} {\n"
+        "    set out {}\n"
+        "    if {[catch {set fh [open $f r]}]} { return {} }\n"
+        "    while {[gets $fh line] >= 0} {\n"
+        "      if {[regexp {^Net:\\s+(\\S.*)$} $line -> nm]} {\n"
+        "        lappend out [string trim $nm]\n"
+        "      }\n"
+        "    }\n"
+        "    catch {close $fh}\n"
+        "    set out [lsort -unique $out]\n"
+        "    # A report that does not name EVERY violating net is not a\n"
+        "    # membership answer, and must not be used as one.\n"
+        "    if {[llength $out] != $n} { return {} }\n"
+        "    return $out\n"
+        "  }\n"
         "  set _ant_cap 6\n"
         "  set _ant_margin 0\n"
+        f"  set _ant_dir {out_dir_c}\n"
+        "  set _ant_seq {}\n"
+        "  set _ant_sets {}\n"
+        "  set _ant_best -1\n"
+        "  set _ant_best_i -1\n"
+        "  set _ant_stop CAP\n"
+        "  set _ant_membership 1\n"
         "  for {set _i 0} {$_i < $_ant_cap} {incr _i} {\n"
         "    set _nv -1\n"
-        "    if {[catch {set _nv [check_antennas]} _ac]} {\n"
+        "    set _ant_rf $_ant_dir/antenna_iter_$_i.rpt\n"
+        "    if {[catch {set _nv [check_antennas -report_violating_nets "
+        "-report_file $_ant_rf]} _ac]} {\n"
         "      puts \"ANTENNA_LOOP_CHECK_NONFATAL: $_ac\"\n"
+        "      set _ant_stop CHECK_FAILED\n"
         "      break\n"
         "    }\n"
+        "    set _ant_now [_vic_ant_nets $_ant_rf $_nv]\n"
+        "    if {$_nv > 0 && [llength $_ant_now] == 0} {\n"
+        "      if {$_ant_membership} {\n"
+        "        puts \"ANTENNA_LOOP_MEMBERSHIP_UNAVAILABLE: iter=$_i -- the "
+        "violating-net report named 0 of $_nv nets, so this loop falls back to "
+        "the count-only stop rule and cannot see an oscillation that keeps the "
+        "count\"\n"
+        "      }\n"
+        "      set _ant_membership 0\n"
+        "    }\n"
+        "    lappend _ant_seq $_nv\n"
+        "    lappend _ant_sets $_ant_now\n"
+        "    puts \"ANTENNA_LOOP_ITER: iter=$_i nets=$_nv "
+        "violating={$_ant_now}\"\n"
+        "    if {$_ant_best < 0 || $_nv < $_ant_best} {\n"
+        "      set _ant_best $_nv\n"
+        "      set _ant_best_i $_i\n"
+        "    }\n"
         "    if {$_nv == 0} {\n"
+        "      set _ant_stop CONVERGED\n"
         "      puts \"ANTENNA_LOOP_CONVERGED: iter=$_i\"\n"
         "      break\n"
+        "    }\n"
+        "    if {$_i > 0 && $_ant_membership} {\n"
+        "      # PROGRESS IS A STRICTLY SMALLER COUNT. A turn that "
+        "repaired 15 nets\n"
+        "      # and introduced 2 has made progress even though the "
+        "new set is\n"
+        "      # NOT a subset of the old one -- MEASURED on spm, "
+        "22 -> 7 with\n"
+        "      # x[10] and x[17] newly violating. A turn that did NOT "
+        "shrink the\n"
+        "      # count has stopped repairing, and every further turn "
+        "can only move\n"
+        "      # away from the best state, which this session cannot "
+        "get back to.\n"
+        "      set _ant_prev_n [lindex $_ant_seq end-1]\n"
+        "      if {$_nv >= $_ant_prev_n} {\n"
+        "        # MEMBERSHIP CLASSIFIES THE STOP. A repeated count "
+        "with a DIFFERENT\n"
+        "        # set is an oscillation; with the SAME set it is a "
+        "fixed point of\n"
+        "        # the repair. A count alone cannot tell them apart.\n"
+        "        if {$_nv > $_ant_prev_n} {\n"
+        "          set _ant_stop REGRESSED\n"
+        "        } elseif {$_ant_now eq [lindex $_ant_sets end-1]} {\n"
+        "          set _ant_stop FIXED_POINT\n"
+        "        } else {\n"
+        "          set _ant_stop OSCILLATING\n"
+        "        }\n"
+        "        break\n"
+        "      }\n"
         "    }\n"
         "    # PRIMARY: tool-native repair + incremental reroute in ONE call,\n"
         "    # escalating -ratio_margin. -iterations 1 = one pass per outer turn.\n"
@@ -22099,9 +22208,87 @@ def _antenna_repair_tcl(pdk: "PdkConfig") -> str:
         "    # Escalate head-room each turn (cap 40) vs reroute re-introduction.\n"
         "    if {$_ant_margin < 40} { set _ant_margin [expr {$_ant_margin + 10}] }\n"
         "  }\n"
-        "  # Authoritative in-session post-repair antenna check.\n"
-        "  if {[catch {check_antennas} _ra_chk]} { puts "
+        "  # THE STATE WE ARE ACTUALLY LEAVING. On the cap path the loop's last\n"
+        "  # recorded measurement is one repair OLD, so measure once more and\n"
+        "  # record it -- the published sequence must end on the shipped state.\n"
+        "  if {$_ant_stop eq \"CAP\"} {\n"
+        "    set _ant_rf $_ant_dir/antenna_iter_final.rpt\n"
+        "    if {[catch {set _nv [check_antennas -report_violating_nets "
+        "-report_file $_ant_rf]} _ra_chk]} {\n"
+        "      puts \"ANTENNA_POSTROUTE_CHECK_NONFATAL: $_ra_chk\"\n"
+        "    } else {\n"
+        "      set _ant_now [_vic_ant_nets $_ant_rf $_nv]\n"
+        "      lappend _ant_seq $_nv\n"
+        "      lappend _ant_sets $_ant_now\n"
+        "      puts \"ANTENNA_LOOP_ITER: iter=final nets=$_nv "
+        "violating={$_ant_now}\"\n"
+        "      if {$_ant_best < 0 || $_nv < $_ant_best} {\n"
+        "        set _ant_best $_nv\n"
+        "        set _ant_best_i final\n"
+        "      }\n"
+        "    }\n"
+        "  } else {\n"
+        "    # Authoritative in-session post-repair antenna check (the loop's\n"
+        "    # own last measurement IS the leaving state on every other path).\n"
+        "    if {[catch {check_antennas} _ra_chk]} { puts "
         "\"ANTENNA_POSTROUTE_CHECK_NONFATAL: $_ra_chk\" }\n"
+        "  }\n"
+        "  puts \"ANTENNA_LOOP_SEQUENCE: $_ant_seq\"\n"
+        "  puts \"ANTENNA_LOOP_BEST: iter=$_ant_best_i nets=$_ant_best\"\n"
+        "  set _ant_last [lindex $_ant_seq end]\n"
+        "  if {$_ant_stop ne \"CONVERGED\"} {\n"
+        "    puts \"ANTENNA_LOOP_NOT_CONVERGED: stop=$_ant_stop "
+        "membership=$_ant_membership sequence={$_ant_seq} "
+        "best=$_ant_best@iter$_ant_best_i last=$_ant_last "
+        "remaining={[lindex $_ant_sets end]}\"\n"
+        "  }\n"
+        "  if {$_ant_last > $_ant_best} {\n"
+        "    puts \"ANTENNA_LOOP_BEST_NOT_RESTORED: reached $_ant_best at "
+        "iteration $_ant_best_i, leaving $_ant_last. A mid-session rollback is "
+        "NOT available on this tool: dbChip_destroy + read_db restores the "
+        "routing and then kills the STA network the rest of this session runs "
+        "on (ORD-2008), measured against a control that survives without it.\"\n"
+        "  }\n"
+        # WHY the residual could not be repaired, from the block's OWN geometry
+        # rather than from a reader's guess. A pin outside every standard-cell
+        # row has a feeder crossing a band with no diode site, which is why
+        # every ANT marker on spm carries DIODES_AREA 0. NONFATAL throughout.
+        "  if {[catch {\n"
+        "    set _ab [ord::get_db_block]\n"
+        "    set _adbu [$_ab getDefUnits]\n"
+        "    set _arylo 0 ; set _aryhi 0 ; set _arn 0\n"
+        "    foreach _ar [$_ab getRows] {\n"
+        "      set _abb [$_ar getBBox]\n"
+        "      if {$_arn == 0} { set _arylo [$_abb yMin] ; "
+        "set _aryhi [$_abb yMax] }\n"
+        "      if {[$_abb yMin] < $_arylo} { set _arylo [$_abb yMin] }\n"
+        "      if {[$_abb yMax] > $_aryhi} { set _aryhi [$_abb yMax] }\n"
+        "      incr _arn\n"
+        "    }\n"
+        "    if {$_arn > 0} {\n"
+        "      foreach _an [lindex $_ant_sets end] {\n"
+        "        set _anet [$_ab findNet $_an]\n"
+        "        if {$_anet eq \"NULL\" || $_anet eq \"\"} { continue }\n"
+        "        foreach _abt [$_anet getBTerms] {\n"
+        "          set _abtb [$_abt getBBox]\n"
+        "          set _ay [$_abtb yMin]\n"
+        "          set _agap 0\n"
+        "          if {$_ay > $_aryhi} { set _agap [expr {$_ay - $_aryhi}] }\n"
+        "          if {$_ay < $_arylo} { set _agap [expr {$_arylo - $_ay}] }\n"
+        "          if {$_agap > 0} {\n"
+        "            puts [format \"ANTENNA_PIN_FEEDER_OUTSIDE_ROWS: net=%s "
+        "pin_y=%.2f um rows_y=%.2f..%.2f um gap=%.2f um -- this pin sits "
+        "outside every standard-cell row, so its feeder crosses a band with "
+        "NO diode site and repair_antennas has nowhere to insert one "
+        "(DIODES_AREA 0). This is a FLOORPLAN fact: ppl place_pins places "
+        "pins on the DIE boundary and has no core-boundary mode.\" $_an "
+        "[expr {$_ay/double($_adbu)}] [expr {$_arylo/double($_adbu)}] "
+        "[expr {$_aryhi/double($_adbu)}] [expr {$_agap/double($_adbu)}]]\n"
+        "          }\n"
+        "        }\n"
+        "      }\n"
+        "    }\n"
+        "  } _afe]} { puts \"ANTENNA_FEEDER_DIAGNOSIS_NONFATAL: $_afe\" }\n"
         "}\n"
         # Restore the tie-net protection unconditionally — OUTSIDE the
         # if/else and after every `break` path above, so no exit from the
@@ -26154,7 +26341,7 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     # v0.2.14 — antenna repair + the DRT-0305 PG-net cleanup that must precede
     # routing. Both built by pure helpers so the silicon-critical Tcl is pinned by
     # regression tests (v0.1.49 doctrine).
-    antenna_repair_block = _antenna_repair_tcl(pdk)
+    antenna_repair_block = _antenna_repair_tcl(pdk, out_dir_c)
     pg_cleanup_block = _pg_net_cleanup_tcl()
     dont_use_block = _dont_use_tcl(pdk)
     # Measure THIS library's buffer-family span so pnr.tcl can restore the
@@ -32100,6 +32287,307 @@ def _pnr_chain_continues(pnr_row: Optional["StepResult"]) -> bool:
     return bool((pnr_row.extras or {}).get("pnr_signoff_writes_complete"))
 
 
+# ══════════════════════════════════════════════════════════════════════════
+#  THE DATABASE UNIT NOBODY DECLARED  (rbspm RB-08 / czspmdrc CZ-13)
+#
+#  `general_precheck`'s `General.DatabaseUnit` rung compares the streamed
+#  layout's own UNITS record against the DECLARED `database_unit_um`. On a
+#  self-tape-out nothing ever answered that question -- there is no operator to
+#  publish it and `tapeout_declaration_gen` refuses to infer -- so the rung
+#  reported NOT_DETERMINED, which is a non-pass, and `tapeout_precheck` was the
+#  ONE sign-off gate of six that could never go green however correct the die.
+#
+#  WHICH ARTEFACT IS THE AUTHORITY -- AND WHICH IS NOT.
+#  MEASURED (spm x gf180mcuD, image 0.3.46, 2026-09-06):
+#
+#      tech LEF   `DATABASE MICRONS 2000 ;`      -> 0.0005 um
+#      routed DEF `UNITS DISTANCE MICRONS 2000 ;`-> 0.0005 um
+#      PDK cell GDS UNITS record                 -> 0.001  um
+#      OUR streamed GDS UNITS record             -> 0.001  um
+#      tech LEF   `MANUFACTURINGGRID 0.0050 ;`
+#
+#  The LEF/DEF database unit and the GDS database unit are TWO DIFFERENT
+#  DATABASES and this technology deliberately writes them at different
+#  resolutions. Publishing the LEF's 0.0005 as the declared answer would have
+#  made `General.DatabaseUnit` REFUSE a stream that is exactly right -- a gate
+#  that goes from never-passing to always-failing is not a fix. The authority
+#  for the grid a STREAM of this technology is written on is the technology's
+#  OWN shipped stream: `pdk.cell_gds`. Ours matches it exactly.
+#
+#  The LEF/DEF pair still has to agree WITH EACH OTHER -- OpenROAD writes the
+#  DEF at the LEF's database unit, so a disagreement means the DEF was written
+#  against a different technology than the one the flow is holding, and every
+#  coordinate in it is scaled wrong. That is refused here, naming both numbers.
+#
+#  And every one of the three must be able to REPRESENT the manufacturing grid:
+#  a database unit that does not divide MANUFACTURINGGRID exactly cannot spell
+#  a legal coordinate, whatever else agrees.
+#
+#  NEVER A DEFAULT. Any input that could not be read leaves the answer
+#  unpublished and NAMES what could not be read; the rung then reports
+#  NOT_DETERMINED exactly as it did before, which is the honest non-pass.
+# ══════════════════════════════════════════════════════════════════════════
+
+_LEF_DBU_RE = re.compile(
+    r"(?im)^\s*DATABASE\s+MICRONS\s+([0-9.]+)\s*;")
+_DEF_DBU_RE = re.compile(
+    r"(?im)^\s*UNITS\s+DISTANCE\s+MICRONS\s+([0-9.]+)\s*;")
+_LEF_MFG_GRID_RE = re.compile(
+    r"(?im)^\s*MANUFACTURINGGRID\s+([0-9.]+)\s*;")
+
+
+def _first_float(rx: "re.Pattern", text: Optional[str]) -> Optional[float]:
+    """The first number `rx` captures in `text`, or None. None means NOT READ —
+    it is never turned into a default by a caller."""
+    if not text:
+        return None
+    m = rx.search(text)
+    if not m:
+        return None
+    try:
+        value = float(m.group(1))
+    except ValueError:
+        return None
+    return value if value > 0 else None
+
+
+def lef_database_units_per_um(text: Optional[str]) -> Optional[float]:
+    """`UNITS { DATABASE MICRONS <n> ; }` from a tech LEF (pure)."""
+    return _first_float(_LEF_DBU_RE, text)
+
+
+def def_database_units_per_um(text: Optional[str]) -> Optional[float]:
+    """`UNITS DISTANCE MICRONS <n> ;` from a DEF header (pure)."""
+    return _first_float(_DEF_DBU_RE, text)
+
+
+def lef_manufacturing_grid_um(text: Optional[str]) -> Optional[float]:
+    """`MANUFACTURINGGRID <n> ;` from a tech LEF (pure)."""
+    return _first_float(_LEF_MFG_GRID_RE, text)
+
+
+def _divides_exactly(grid_um: Optional[float],
+                     dbu_um: Optional[float]) -> Optional[bool]:
+    """Can a coordinate database of `dbu_um` spell `grid_um` exactly? None when
+    either side is unknown (never a default)."""
+    if not grid_um or not dbu_um or dbu_um <= 0:
+        return None
+    ratio = grid_um / dbu_um
+    return abs(ratio - round(ratio)) <= 1e-9 * max(1.0, abs(ratio))
+
+
+def database_unit_verdict(lef_dbu_per_um: Optional[float],
+                          def_dbu_per_um: Optional[float],
+                          stream_dbu_um: Optional[float],
+                          mfg_grid_um: Optional[float]) -> Dict[str, Any]:
+    """The whole decision, as a pure function of four readings.
+
+    `verdict` is PASS / FAIL / NOT_MEASURED; `database_unit_um` is the answer
+    to publish and is None on anything but PASS. Every refusal names BOTH
+    numbers it is refusing over."""
+    rec: Dict[str, Any] = {
+        "lef_database_units_per_um": lef_dbu_per_um,
+        "lef_database_unit_um": (None if not lef_dbu_per_um
+                                 else 1.0 / lef_dbu_per_um),
+        "def_database_units_per_um": def_dbu_per_um,
+        "def_database_unit_um": (None if not def_dbu_per_um
+                                 else 1.0 / def_dbu_per_um),
+        "stream_database_unit_um": stream_dbu_um,
+        "manufacturing_grid_um": mfg_grid_um,
+        "database_unit_um": None,
+        "verdict": "NOT_MEASURED",
+        "reason": "",
+        "not_read": [],
+    }
+    for name, value in (("tech LEF DATABASE MICRONS", lef_dbu_per_um),
+                        ("DEF UNITS DISTANCE MICRONS", def_dbu_per_um),
+                        ("PDK cell GDS UNITS", stream_dbu_um)):
+        if not value:
+            rec["not_read"].append(name)
+    if rec["not_read"]:
+        rec["reason"] = (
+            "not published: " + ", ".join(rec["not_read"]) + " could not be "
+            "read. An unread number is not a number — the declaration keeps "
+            "NOT_DETERMINED and the precheck rung keeps saying so.")
+        return rec
+    # THE LEF AND THE DEF ARE ONE DATABASE. A disagreement means the DEF was
+    # written against a different technology than the one held here.
+    if abs(lef_dbu_per_um - def_dbu_per_um) > 1e-9 * max(
+            1.0, abs(lef_dbu_per_um)):
+        rec["verdict"] = "FAIL"
+        rec["reason"] = (
+            f"the tech LEF declares DATABASE MICRONS {lef_dbu_per_um:g} "
+            f"({1.0 / lef_dbu_per_um:g} um) and the routed DEF declares UNITS "
+            f"DISTANCE MICRONS {def_dbu_per_um:g} "
+            f"({1.0 / def_dbu_per_um:g} um). These are the same database and "
+            f"they disagree, so every coordinate in the DEF is scaled against "
+            f"a technology the flow is not holding. Refused; nothing published.")
+        return rec
+    for label, dbu in (("the LEF/DEF database", 1.0 / lef_dbu_per_um),
+                       ("the stream database", stream_dbu_um)):
+        ok = _divides_exactly(mfg_grid_um, dbu)
+        if ok is False:
+            rec["verdict"] = "FAIL"
+            rec["reason"] = (
+                f"{label} unit is {dbu:g} um and the tech LEF declares "
+                f"MANUFACTURINGGRID {mfg_grid_um:g} um. {mfg_grid_um:g} is not "
+                f"a whole number of {dbu:g} um, so a legal coordinate cannot "
+                f"be spelled in this database at all. Refused; nothing "
+                f"published.")
+            return rec
+    rec["database_unit_um"] = stream_dbu_um
+    rec["verdict"] = "PASS"
+    rec["reason"] = (
+        f"the technology's OWN shipped stream is written at {stream_dbu_um:g} "
+        f"um, so that is the grid a stream of this technology is on. The tech "
+        f"LEF and the routed DEF agree with each other at "
+        f"{1.0 / lef_dbu_per_um:g} um — a DIFFERENT database, deliberately, "
+        f"and not the authority for a stream" +
+        (f" — and both divide MANUFACTURINGGRID {mfg_grid_um:g} um exactly"
+         if mfg_grid_um else
+         "; the tech LEF declares no MANUFACTURINGGRID, so that half was not "
+         "checked"))
+    return rec
+
+
+def _read_technology_text(path: Optional[str],
+                          container: str) -> Optional[str]:
+    """A PDK file's text, from the host when it is there and from the container
+    when it is not. None means NOT READ."""
+    if not path:
+        return None
+    host = Path(path)
+    if host.is_file():
+        try:
+            return host.read_text(errors="replace")
+        except OSError:
+            return None
+    rc, out, _err = _docker_exec(container, f"cat {shlex.quote(str(path))}")
+    return out if rc == 0 and out else None
+
+
+def _pdk_stream_database_unit_um(pdk: "PdkConfig",
+                                 container: str) -> Optional[float]:
+    """The database unit of the PDK's OWN shipped standard-cell GDS, read from
+    its UNITS record. None when the PDK ships no cell GDS or it cannot be read.
+
+    Read with `_gds_geometry` on the host when the file is there; otherwise the
+    16-byte UNITS record is pulled out of the container with a fixed-size head
+    read, because a 22 GB image is not going to hand a 100 MB GDS through a
+    pipe to answer one number."""
+    if not pdk.cell_gds:
+        return None
+    host = Path(pdk.cell_gds)
+    if host.is_file():
+        try:
+            import _gds_geometry as _geom
+            return _geom.read_layout(host).dbu_um
+        except Exception:
+            return None
+    probe = (
+        "python3 - <<'VIC_DBU_EOF'\n"
+        "import struct\n"
+        f"f = open({json.dumps(str(pdk.cell_gds))}, 'rb')\n"
+        "def _d8(b):\n"
+        "    s = -1.0 if b[0] & 0x80 else 1.0\n"
+        "    e = (b[0] & 0x7f) - 64\n"
+        "    m = int.from_bytes(b[1:], 'big') / float(1 << 56)\n"
+        "    return s * m * (16.0 ** e)\n"
+        "while True:\n"
+        "    h = f.read(4)\n"
+        "    if len(h) < 4:\n"
+        "        break\n"
+        "    ln, rt, _dt = struct.unpack('>HBB', h)\n"
+        "    body = f.read(max(0, ln - 4))\n"
+        "    if rt == 0x03 and len(body) >= 16:\n"
+        "        print('VIC_STREAM_DBU_UM: %.12g' % (_d8(body[8:16]) * 1e6))\n"
+        "        break\n"
+        "VIC_DBU_EOF\n")
+    rc, out, _err = _docker_exec(container, probe)
+    if rc != 0:
+        return None
+    m = re.search(r"^VIC_STREAM_DBU_UM:\s*([0-9.eE+\-]+)\s*$",
+                  out or "", re.MULTILINE)
+    if not m:
+        return None
+    try:
+        value = float(m.group(1))
+    except ValueError:
+        return None
+    return value if value > 0 else None
+
+
+def publish_database_unit_declaration(project: Path, pdk: "PdkConfig",
+                                      container: str,
+                                      def_file: Path) -> Dict[str, Any]:
+    """Publish the technology's database unit into the record the tape-out
+    precheck reads, or say in writing why it was not published.
+
+    Writes `reports/phase3/technology_units.json` on EVERY call — a producer
+    that writes nothing when it declines is indistinguishable from one that
+    never ran — and merges `database_unit_um` into
+    `input/submission_template/tapeout_declaration.json` ONLY on PASS and ONLY
+    when nobody has already answered it. An OPERATOR's answer outranks a
+    technology reading: the operator is the party that has to accept the die.
+    """
+    _tlef = _read_technology_text(pdk.tech_lef, container)
+    rec = database_unit_verdict(
+        lef_database_units_per_um(_tlef),
+        def_database_units_per_um(
+            def_file.read_text(errors="replace")
+            if def_file.is_file() else None),
+        _pdk_stream_database_unit_um(pdk, container),
+        lef_manufacturing_grid_um(_tlef))
+    rec["program"] = "phase3_one_shot_runner.publish_database_unit_declaration"
+    rec["tech_lef"] = pdk.tech_lef
+    rec["cell_gds"] = pdk.cell_gds
+    rec["def"] = str(def_file)
+    rec["published"] = False
+    rec["published_to"] = None
+
+    if rec["verdict"] == "PASS":
+        try:
+            import _tapeout_declaration as _td
+            decl_path = project / _td.DECLARATION_REL
+            if decl_path.is_file():
+                doc, err = _td.load(decl_path)
+                if err is None and isinstance(doc, dict):
+                    already = _td.answer(doc, "database_unit_um")
+                    if _td.is_answered(already):
+                        rec["published"] = False
+                        rec["reason"] += (
+                            f" — not published: the declaration already "
+                            f"answers database_unit_um={already!r}, and that "
+                            f"answer outranks this reading.")
+                    else:
+                        doc, _ignored = _td.merge_answers(
+                            doc, {"database_unit_um": rec["database_unit_um"]})
+                        decl_path.write_text(
+                            json.dumps(doc, indent=2,
+                                       ensure_ascii=False) + "\n")
+                        rec["published"] = True
+                        rec["published_to"] = str(decl_path)
+                else:
+                    rec["reason"] += (
+                        f" — not published: {decl_path} is unreadable"
+                        f"{'' if err is None else ' (' + err + ')'}")
+            else:
+                rec["reason"] += (
+                    f" — not published: no declaration at {decl_path}; step "
+                    f"0.5ic writes it and it is not here")
+        except Exception as exc:  # pragma: no cover - defensive
+            rec["reason"] += f" — not published: {exc}"
+
+    out = _pl.reports_dir(project) / "phase3" / "technology_units.json"
+    try:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps(rec, indent=2, ensure_ascii=False) + "\n")
+        rec["record"] = str(out)
+    except OSError:
+        rec["record"] = None
+    return rec
+
+
 def step_gds(project: Path, top: str, pdk: PdkConfig,
              container: str) -> StepResult:
     t0 = time.time()
@@ -32112,6 +32600,15 @@ def step_gds(project: Path, top: str, pdk: PdkConfig,
     if not def_file.is_file():
         return StepResult("gds", "SKIP", time.time() - t0,
                           f"DEF missing: {def_file}")
+
+    # THE STREAM-OUT IS WHERE THE TECHNOLOGY IS BOUND, so it is where the
+    # database unit gets DECLARED rather than left NOT_DETERMINED forever.
+    # Non-fatal by construction: it publishes or it says why, and the tape-out
+    # precheck's rung reports whichever it got.
+    _dbu_rec = publish_database_unit_declaration(project, pdk, container,
+                                                 def_file)
+    print(f"      database unit: {_dbu_rec['verdict']} — "
+          f"{_dbu_rec['reason']}")
 
     # ONE resolution for the whole step. `top` names the FILES this step reads
     # and writes; the DEF names the CELL every tool below is asked to open,
@@ -46514,6 +47011,94 @@ def _rel_to_project(path, project):
         return str(path)
 
 
+_ANT_LOOP_SEQ_RE = re.compile(r"^ANTENNA_LOOP_SEQUENCE:\s*(.*)$", re.MULTILINE)
+_ANT_LOOP_BEST_RE = re.compile(
+    r"^ANTENNA_LOOP_BEST:\s*iter=(\S+)\s+nets=(-?\d+)\s*$", re.MULTILINE)
+_ANT_LOOP_NOTCONV_RE = re.compile(
+    r"^ANTENNA_LOOP_NOT_CONVERGED:\s*stop=(\S+)\s+membership=(\d)", re.MULTILINE)
+_ANT_LOOP_CONV_RE = re.compile(r"^ANTENNA_LOOP_CONVERGED:", re.MULTILINE)
+_ANT_FEEDER_RE = re.compile(
+    r"^ANTENNA_PIN_FEEDER_OUTSIDE_ROWS:\s*net=(\S+)\s+pin_y=([\d.\-]+) um\s+"
+    r"rows_y=([\d.\-]+)\.\.([\d.\-]+) um\s+gap=([\d.\-]+) um", re.MULTILINE)
+
+
+def antenna_loop_trace(log_txt: str) -> Dict[str, Any]:
+    """What the antenna repair loop DID, from the markers it prints (pure).
+
+    Before this the report read `Found N net violations` -- the LAST pair in
+    the log -- and published N. MEASURED on spm x gf180mcuD (image 0.3.46): the
+    loop had held 2 and was leaving 3, and the report said 3 with no way for a
+    reader to learn that a better state had existed and been walked past.
+    `converged` is the fact that was missing entirely: a count is not a verdict
+    on a loop.
+
+    Every field is None/empty when the marker is absent -- an OLD log, or a run
+    whose design was already antenna-clean and skipped the loop. Never a
+    default: `converged: None` is "the loop left no trace", which is not the
+    same fact as "it did not converge".
+    """
+    # THE LAST WINDOW IS THE ONE THAT SHIPS. A PnR session runs this block
+    # once per antenna window (spm runs two: after the main route and after the
+    # post-route timing repair), and `_emit_antenna_report` already takes the
+    # LAST `Found N` pair as the count. Reading the FIRST sequence beside the
+    # LAST count would publish window 1's history against window 2's state --
+    # on spm, `[22, 7, 6, 5, 4, 2, 2]` beside a count of 2 that window 2
+    # produced. Every field below is scoped to the last window, and the number
+    # of windows is published so the reader knows there were more.
+    whole = log_txt or ""
+    _starts = [m.start() for m in
+               re.finditer(r"^ANTENNA_LOOP_ITER:\s*iter=0\b", whole, re.MULTILINE)]
+    windows = len(_starts)
+    log_txt = whole[_starts[-1]:] if _starts else whole
+    seq: List[int] = []
+    m = _ANT_LOOP_SEQ_RE.search(log_txt or "")
+    if m:
+        for tok in m.group(1).split():
+            try:
+                seq.append(int(tok))
+            except ValueError:
+                pass
+    best_i: Optional[str] = None
+    best_n: Optional[int] = None
+    mb = _ANT_LOOP_BEST_RE.search(log_txt or "")
+    if mb:
+        best_i, best_n = mb.group(1), int(mb.group(2))
+    mn = _ANT_LOOP_NOTCONV_RE.search(log_txt or "")
+    converged: Optional[bool] = None
+    if mn:
+        converged = False
+    elif _ANT_LOOP_CONV_RE.search(log_txt or ""):
+        converged = True
+    # MEMBERSHIP, deduped by net. The block runs once per antenna WINDOW and a
+    # PnR session has two, so the same pin is reported by each — a reader
+    # counting lines would read four pins where the design has two.
+    feeders: List[Dict[str, Any]] = []
+    _seen_feeder: Set[str] = set()
+    for f in _ANT_FEEDER_RE.findall(log_txt or ""):
+        if f[0] in _seen_feeder:
+            continue
+        _seen_feeder.add(f[0])
+        feeders.append({"net": f[0], "pin_y_um": float(f[1]),
+                        "rows_y_um": [float(f[2]), float(f[3])],
+                        "gap_um": float(f[4])})
+    return {
+        "repair_windows": windows,
+        "sequence": seq,
+        "best_iteration": best_i,
+        "best_net_violations": best_n,
+        "last_net_violations": seq[-1] if seq else None,
+        "converged": converged,
+        "stop_reason": mn.group(1) if mn else None,
+        # 0 means the tool did not name the violating nets, so the loop could
+        # only compare counts -- which cannot see an oscillation that keeps the
+        # count. Distinguished from "the set did not shrink" on purpose.
+        "membership_available": (bool(int(mn.group(2))) if mn else None),
+        "best_not_restored": bool(
+            seq and best_n is not None and seq[-1] > best_n),
+        "pins_outside_cell_rows": feeders,
+    }
+
+
 def _emit_antenna_report(project: Path, top: str, pdk: PdkConfig,
                          container: str, antenna_rpt: Path,
                          notes: List[str]) -> bool:
@@ -46600,6 +47185,8 @@ def _emit_antenna_report(project: Path, top: str, pdk: PdkConfig,
                               if have_counts
                               else "unmeasured (detailed_route aborted; "
                                    "check_antennas found no routing, ANT-0008)")
+                # WHAT THE LOOP DID, not just where it stopped.
+                _loop = antenna_loop_trace(log_txt)
                 antenna_rpt.parent.mkdir(parents=True, exist_ok=True)
                 _incomplete_note = (
                     "\n# ROUTING INCOMPLETE: detailed_route did not complete (abort\n"
@@ -46629,7 +47216,35 @@ def _emit_antenna_report(project: Path, top: str, pdk: PdkConfig,
                     f"antenna check: {_count_str}\n"
                     f"antenna clean: {'YES' if clean else 'NO'}\n"
                     f"routing complete: {'NO' if routing_incomplete else 'YES'}\n"
+                    + (f"repair loop converged: "
+                       f"{'YES' if _loop['converged'] else 'NO'}\n"
+                       f"repair loop sequence (net violations per iteration): "
+                       f"{_loop['sequence']}\n"
+                       f"repair loop best: {_loop['best_net_violations']} at "
+                       f"iteration {_loop['best_iteration']}; it left "
+                       f"{_loop['last_net_violations']}\n"
+                       if _loop["sequence"] else "")
+                    + ("# THE LOOP WALKED PAST ITS OWN BEST and cannot go\n"
+                       "# back: a mid-session rollback (dbChip_destroy +\n"
+                       "# read_db) restores the routing and then kills the STA\n"
+                       "# network the rest of the PnR session runs on\n"
+                       "# (ORD-2008). The loop stops at the first turn that\n"
+                       "# does not strictly shrink the violating-net set.\n"
+                       if _loop["best_not_restored"] else "")
+                    + ("# THE LOOP COULD ONLY COMPARE COUNTS: the tool did not\n"
+                       "# name the violating nets, so an oscillation that keeps\n"
+                       "# the count is invisible to its stop rule.\n"
+                       if _loop["membership_available"] is False else "")
+                    + "".join(
+                        f"# FLOORPLAN, NOT ROUTER: net {f['net']}'s pin sits at "
+                        f"y={f['pin_y_um']:.2f} um, {f['gap_um']:.2f} um "
+                        f"outside the standard-cell rows "
+                        f"({f['rows_y_um'][0]:.2f}..{f['rows_y_um'][1]:.2f} "
+                        f"um). Its feeder crosses a band with no diode site, "
+                        f"so repair_antennas has nowhere to insert one.\n"
+                        for f in _loop["pins_outside_cell_rows"])
                     + (f"pins left unaccessed: {pins_unaccessed} "
+
                        f"(DRT-627 — the router could not reach these pins; the "
                        f"fork downgrades this from the fatal DRT-0073 so a repair "
                        f"can continue, so it is NOT visible as a routing "
@@ -46644,6 +47259,10 @@ def _emit_antenna_report(project: Path, top: str, pdk: PdkConfig,
                     "routing_incomplete": routing_incomplete,
                     # #552 — its own field, not folded into routing_incomplete.
                     "pins_unaccessed": pins_unaccessed,
+                    # ITS OWN FIELD. "3 violations remain" and "the loop held 2
+                    # and let go of it" are different facts, and a count cannot
+                    # carry the second.
+                    "repair_loop": _loop,
                     # RESOLVED, not templated. This read
                     # "phase3/stage3/pnr/openroad.log" as a constant, and the
                     # published cell does not carry that file.
