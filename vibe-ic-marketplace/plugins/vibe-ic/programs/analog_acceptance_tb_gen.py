@@ -129,9 +129,21 @@ PASS = "PASS"
 FAIL = "FAIL"
 NOT_MEASURED = "NOT_MEASURED"
 REFUSED = "REFUSED"
+#: ORGANIC #2064, J1 RULING (2026-09-07). A quantity the input declares
+#: EXPLICITLY UNBOUNDED — in its own words, e.g. a target of "best-effort" — is
+#: the DESIGN'S OWN STATEMENT that no acceptance bound exists for it. The first
+#: revision refused it under `NO_DECLARED_BOUND` and emitted a JUnit `<error>`,
+#: which made an honest declaration a permanent red: nothing anyone could do to
+#: the design or the sweep would ever clear it. It is now DISCLOSED — named in
+#: the JUnit and in the ledger so no reader can miss it, and BLOCKING NOTHING.
+#:
+#: A bound that is ABSENT — the input declares nothing either way, including a
+#: placeholder such as "TBD", which is a bound not yet determined — is a
+#: different fact and STAYS REFUSED, and still blocks.
+DISCLOSED = "DISCLOSED"
 
 #: Exit codes of an emitted check script.
-_EXIT = {PASS: 0, FAIL: 1, NOT_MEASURED: 3, REFUSED: 4}
+_EXIT = {PASS: 0, FAIL: 1, NOT_MEASURED: 3, REFUSED: 4, DISCLOSED: 5}
 _EXIT_VERDICT = {v: k for k, v in _EXIT.items()}
 
 #: §4.05 — the vocabulary of an artefact this flow must NOT read as design
@@ -181,6 +193,42 @@ def _fields(doc: Optional[dict]) -> dict:
 def _norm(name: Any) -> str:
     """A spec name reduced to its comparison form (lowercase alphanumerics)."""
     return re.sub(r"[^a-z0-9]+", "", str(name or "").lower())
+
+
+#: A declared bound FIELD whose content is one of these declares NOTHING. They
+#: are the "nothing here" spellings a spec table uses for an empty cell, plus
+#: the placeholders that say a value is still owed. `TBD` is deliberately in
+#: this set: a bound that is to-be-determined has not been determined, which is
+#: the ABSENT case, not a statement that no bound applies. chip-AGNOSTIC: a
+#: table-cell vocabulary, never a chip/vendor/SKU literal.
+_EMPTY_BOUND_CELLS = frozenset({
+    "", "-", "--", "\u2013", "\u2014", "\u2212", "n/a", "na", "none", "null",
+    "tbd", "tbc", "?", "??", "...", ".",
+})
+
+
+def _declared_bound_cells(spec: dict) -> List[str]:
+    """The bound FIELDS of one L5 spec row that actually say something.
+
+    A numeric cell is excluded: if the row carried a usable number `_bound_of`
+    would have bound it, so a number reaching here is one the binder could not
+    use (a bare target with no tolerance), not a declaration that no bound
+    applies."""
+    out: List[str] = []
+    for key in ("target_raw", "range_raw"):
+        raw = spec.get(key)
+        if raw is None:
+            continue
+        text = str(raw).strip()
+        if not text or text.lower() in _EMPTY_BOUND_CELLS:
+            continue
+        try:
+            float(text.replace("\u2212", "-"))
+            continue          # a number the binder could not use, not a word
+        except ValueError:
+            pass
+        out.append(text)
+    return out
 
 
 def _bound_of(spec: dict) -> Optional[dict]:
@@ -311,7 +359,8 @@ def derive_clauses(project: Path) -> dict:
     Returns
       {"applicable": bool, "reason": str,
        "rows": [ {name, authorable, clauses:[...], refusals:[...]} ],
-       "blocks": [...], "clauses": [...], "refusals": [...]}
+       "blocks": [...], "clauses": [...], "refusals": [...],
+       "disclosures": [...]}
     Nothing is written and nothing is executed here."""
     plan = load_plan(project)
     if plan is None:
@@ -319,7 +368,8 @@ def derive_clauses(project: Path) -> dict:
                 "reason": ("no L22 analog verification plan "
                            "(fields.verification_plan.analog) — this design "
                            "declares no analog block; producer is a no-op"),
-                "rows": [], "blocks": [], "clauses": [], "refusals": []}
+                "rows": [], "blocks": [], "clauses": [], "refusals": [],
+                "disclosures": []}
     rows = load_intent_rows(project)
     if not rows:
         return {"applicable": False,
@@ -327,12 +377,13 @@ def derive_clauses(project: Path) -> dict:
                            f"{'/'.join(sorted(ACCEPTANCE_KINDS))} — nothing "
                            f"for this producer to author"),
                 "rows": [], "blocks": sorted(_block_index(plan)),
-                "clauses": [], "refusals": []}
+                "clauses": [], "refusals": [], "disclosures": []}
 
     blocks = _block_index(plan)
     out_rows: List[dict] = []
     all_clauses: List[dict] = []
     all_refusals: List[dict] = []
+    all_disclosures: List[dict] = []
 
     for row in rows:
         row_name = str(row.get("name") or "")
@@ -344,6 +395,7 @@ def derive_clauses(project: Path) -> dict:
                 evidence.append(str(e))
         clauses: List[dict] = []
         refusals: List[dict] = []
+        disclosures: List[dict] = []
 
         golden = [t for t in _GOLDEN_TOKENS if t in text.lower()]
         if golden:
@@ -362,7 +414,8 @@ def derive_clauses(project: Path) -> dict:
                 "evidence": evidence})
             out_rows.append({"name": row_name, "authorable": False,
                              "scope": scope, "clauses": [],
-                             "refusals": [r["id"] for r in refusals]})
+                             "refusals": [r["id"] for r in refusals],
+                             "disclosures": []})
             all_refusals.extend(refusals)
             continue
 
@@ -387,18 +440,44 @@ def derive_clauses(project: Path) -> dict:
             qn = _norm(spec.get("name"))
             bound = _bound_of(spec)
             if bound is None:
-                refusals.append({
+                # J1 RULING. TWO DIFFERENT FACTS, KEPT APART.
+                said = _declared_bound_cells(spec)
+                entry = {
                     "id": f"{row_name}__{bname}__{qn}",
                     "row": row_name, "block": bname, "quantity": qn,
-                    "l5_name": spec.get("name"), "verdict": REFUSED,
-                    "reason_class": "NO_DECLARED_BOUND",
-                    "detail": (f"this row names {spec.get('name')!r} and the "
-                               f"input declares no numeric bound for it "
-                               f"(target_raw={spec.get('target_raw')!r}, "
-                               f"range_raw={spec.get('range_raw')!r}); an "
-                               f"acceptance the input does not state is "
-                               f"refused, never invented"),
-                    "evidence": evidence})
+                    "l5_name": spec.get("name"),
+                    "declared_as": {"target_raw": spec.get("target_raw"),
+                                    "range_raw": spec.get("range_raw")},
+                    "evidence": evidence}
+                if said:
+                    # The input SPOKE, and what it said is not a bound. That is
+                    # the design's own statement that no acceptance applies —
+                    # disclosed by name, and blocking nothing.
+                    entry.update({
+                        "verdict": DISCLOSED,
+                        "reason_class": "NO_BOUND_DECLARED",
+                        "declared_value": said[0],
+                        "detail": (
+                            f"this row names {spec.get('name')!r} and the input "
+                            f"DECLARES it unbounded in its own words: "
+                            f"{'; '.join(repr(x) for x in said)}. That is the "
+                            f"design's statement that no acceptance bound "
+                            f"exists for it, not a bound withheld — disclosed "
+                            f"here and blocking nothing")})
+                    disclosures.append(entry)
+                else:
+                    entry.update({
+                        "verdict": REFUSED,
+                        "reason_class": "NO_DECLARED_BOUND",
+                        "detail": (
+                            f"this row names {spec.get('name')!r} and the input "
+                            f"declares NOTHING about its bound "
+                            f"(target_raw={spec.get('target_raw')!r}, "
+                            f"range_raw={spec.get('range_raw')!r}); an "
+                            f"acceptance the input does not state is refused, "
+                            f"never invented — and a bound that is absent is "
+                            f"not a bound declared not to exist")})
+                    refusals.append(entry)
                 continue
             clauses.append(_value_clause(row_name, bname, spec, bound,
                                          evidence, "named_quantity"))
@@ -448,7 +527,10 @@ def derive_clauses(project: Path) -> dict:
                         row_name, bname, spec, bound, evidence,
                         "block_scoped_bound"))
 
-        if not clauses and not refusals:
+        # A row whose ONLY outcome is a disclosure is NOT unaccounted for: the
+        # input spoke about it and said no bound applies. Refusing it here
+        # would re-erect the wall this ruling removed.
+        if not clauses and not refusals and not disclosures:
             refusals.append({
                 "id": f"{row_name}__no_acceptance",
                 "row": row_name, "verdict": REFUSED,
@@ -460,13 +542,16 @@ def derive_clauses(project: Path) -> dict:
 
         out_rows.append({"name": row_name, "authorable": bool(clauses),
                          "scope": scope, "clauses": [c["id"] for c in clauses],
-                         "refusals": [r["id"] for r in refusals]})
+                         "refusals": [r["id"] for r in refusals],
+                         "disclosures": [d["id"] for d in disclosures]})
         all_clauses.extend(clauses)
         all_refusals.extend(refusals)
+        all_disclosures.extend(disclosures)
 
     return {"applicable": True, "reason": "",
             "rows": out_rows, "blocks": sorted(blocks),
-            "clauses": all_clauses, "refusals": all_refusals}
+            "clauses": all_clauses, "refusals": all_refusals,
+            "disclosures": all_disclosures}
 
 
 def _value_clause(row_name: str, bname: str, spec: dict,
@@ -766,6 +851,18 @@ def run_acceptance_checks(project: Path, report: "dict | None" = None,
                       "detail": (f"{refusal['reason_class']}: "
                                  f"{refusal['detail']}"),
                       "time": 0.0, "row": refusal["row"]})
+    # J1 RULING — VISIBLE, AND BLOCKING NOTHING. A disclosure is a testcase so
+    # no reader can miss it, and it is `<skipped>` so it charges neither a
+    # failure nor an error. It also never CREDITS: a skip is subtracted from
+    # the passed count, so a suite of nothing but disclosures has passed == 0
+    # and `find_professional_tb_pass` still returns None.
+    for disc in derived.get("disclosures") or []:
+        cases.append({"name": disc["id"], "verdict": DISCLOSED,
+                      "detail": (f"{disc['reason_class']}: "
+                                 f"{disc.get('declared_value')!r} — "
+                                 f"{disc['detail']}"),
+                      "time": 0.0, "row": disc["row"],
+                      "declared_value": disc.get("declared_value")})
 
     report["cases"] = cases
     report["passed"] = sum(1 for c in cases if c["verdict"] == PASS)
@@ -773,6 +870,7 @@ def run_acceptance_checks(project: Path, report: "dict | None" = None,
     report["not_measured"] = sum(1 for c in cases
                                  if c["verdict"] == NOT_MEASURED)
     report["refused"] = sum(1 for c in cases if c["verdict"] == REFUSED)
+    report["disclosed"] = sum(1 for c in cases if c["verdict"] == DISCLOSED)
     report["executed"] = executed
     report["rows_total"] = len(derived["rows"])
     report["rows_authorable"] = sum(1 for r in derived["rows"]
@@ -792,6 +890,10 @@ def run_acceptance_checks(project: Path, report: "dict | None" = None,
         "rows_total": report["rows_total"],
         "rows_authorable": report["rows_authorable"],
         "clauses": derived["clauses"], "refusals": derived["refusals"],
+        # THE LEDGER. A disclosed non-acceptance is carried here under its own
+        # key, by name and with the input's own words, so a reader sees what
+        # the design SAID rather than a silence.
+        "disclosures": derived.get("disclosures") or [],
         "rows": derived["rows"], "cases": cases,
         # PROJECT-RELATIVE. The record travels with the project; an absolute
         # path in it names a directory that does not exist wherever it lands.
@@ -808,14 +910,20 @@ def _xml_escape(text: str) -> str:
 
 
 def _junit(cases: List[dict]) -> str:
-    """One `<testcase>` per clause AND per refusal.
+    """One `<testcase>` per clause, per refusal AND per disclosure.
 
     A NOT_MEASURED or REFUSED case is an `<error>`: the acceptance could not be
     executed. It is never `<skipped>` — a skip is subtracted from the passed
     count by every JUnit reader, which would let an acceptance nobody could run
-    read as a suite with nothing wrong in it."""
+    read as a suite with nothing wrong in it.
+
+    A DISCLOSED case IS `<skipped>`, and that is the whole point of the J1
+    ruling: the input's own words say no acceptance bound exists, so there is
+    nothing that could have run and nothing anyone could ever do to clear an
+    error charged for it. It is still a `<testcase>`, so it is visible, and it
+    is still subtracted from `passed`, so it can never credit a suite either."""
     body = []
-    failures = errors = 0
+    failures = errors = skipped = 0
     for c in cases:
         name = _xml_escape(c["name"])
         line = (f'  <testcase classname="{RESULT_DIR_NAME}" name="{name}" '
@@ -829,6 +937,11 @@ def _junit(cases: List[dict]) -> str:
             body.append(line + ">")
             body.append(f'    <failure message="{detail[:400]}">{detail}'
                         f'</failure>')
+        elif c["verdict"] == DISCLOSED:
+            skipped += 1
+            body.append(line + ">")
+            body.append(f'    <skipped type="{DISCLOSED}" '
+                        f'message="{detail[:400]}">{detail}</skipped>')
         else:
             errors += 1
             body.append(line + ">")
@@ -837,7 +950,8 @@ def _junit(cases: List[dict]) -> str:
         body.append("  </testcase>")
     return ('<?xml version="1.0" encoding="UTF-8"?>\n<testsuites>\n'
             f'<testsuite name="{RESULT_DIR_NAME}" tests="{len(cases)}" '
-            f'failures="{failures}" errors="{errors}" skipped="0">\n'
+            f'failures="{failures}" errors="{errors}" '
+            f'skipped="{skipped}">\n'
             + "\n".join(body) + "\n</testsuite>\n</testsuites>\n")
 
 
@@ -874,14 +988,16 @@ def main(argv: "list[str] | None" = None) -> int:
               f"executed={n} pass={report.get('passed', 0)} "
               f"fail={report.get('failed', 0)} "
               f"not_measured={report.get('not_measured', 0)} "
-              f"refused={report.get('refused', 0)}"
+              f"refused={report.get('refused', 0)} "
+              f"disclosed={report.get('disclosed', 0)}"
               + (f" — {report['reason']}" if report.get("reason") else ""))
     else:
         n = emit_acceptance_checks(project, report)
         print(f"{TOOL}: emitted {max(n, 0)} check(s); "
               f"rows={len(report.get('rows') or [])} "
               f"clauses={len(report.get('clauses') or [])} "
-              f"refusals={len(report.get('refusals') or [])}"
+              f"refusals={len(report.get('refusals') or [])} "
+              f"disclosures={len(report.get('disclosures') or [])}"
               + (f" — {report.get('reason')}" if report.get("reason") else ""))
     if ns.json:
         p = Path(ns.json)

@@ -8242,7 +8242,8 @@ def step_analog_acceptance_tb_gen(project: Path) -> StepResult:
     census = (f"{len(rows)} {'/'.join(sorted(_acc.ACCEPTANCE_KINDS))} row(s), "
               f"{authorable} authorable, "
               f"{len(rep.get('clauses') or [])} acceptance clause(s), "
-              f"{len(rep.get('refusals') or [])} refused by name")
+              f"{len(rep.get('refusals') or [])} refused by name, "
+              f"{len(rep.get('disclosures') or [])} disclosed non-acceptance(s)")
     if emitted == -1:
         return StepResult("analog_acceptance_tb_gen", "SKIP",
                           time.time() - t0, str(rep.get("reason")))
@@ -8301,12 +8302,22 @@ def step_analog_acceptance_tb_run(project: Path) -> StepResult:
               f"{rep.get('rows_authorable', 0)} authorable; "
               f"{rep.get('passed', 0)} pass, {rep.get('failed', 0)} fail, "
               f"{rep.get('not_measured', 0)} NOT_MEASURED, "
-              f"{rep.get('refused', 0)} refused by name; JUnit "
+              f"{rep.get('refused', 0)} refused by name, "
+              f"{rep.get('disclosed', 0)} disclosed non-acceptance(s) "
+              f"(the input's own words say no bound applies — these block "
+              f"nothing); JUnit "
               f"{rep.get('results_xml')} is part of the Step-4 functional "
               f"denominator; per-clause record {rep.get('record')}")
     # A refusal and an unmeasured acceptance are NOT passes. The step's own
     # status says so; the blocking verdict remains Step 4's, taken from the
     # JUnit above.
+    #
+    # ORGANIC #2064 J1 RULING — a DISCLOSED non-acceptance is deliberately NOT
+    # in this predicate. The input's own words say no acceptance bound exists
+    # for that quantity, so there is nothing anyone could do to the design or
+    # the sweep that would ever clear it; charging it here would make an honest
+    # declaration a permanent red. It stays visible in the detail line above,
+    # in the JUnit and in the ledger.
     status = "PASS" if (rep.get("failed", 0) == 0
                         and rep.get("not_measured", 0) == 0
                         and rep.get("refused", 0) == 0
