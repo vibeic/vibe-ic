@@ -176,6 +176,47 @@ def _tokens(s: str) -> List[str]:
     return re.findall(r"[a-z0-9]+", s.lower())
 
 
+def families_agree(a: Optional[str], b: Optional[str]) -> Optional[bool]:
+    """Do two PDK selector strings denote the SAME family?
+
+    Returns True (they agree), False (they contradict), or None when the
+    question cannot be asked — either side empty, or neither side carries a
+    token long enough to identify a family. `None` is NOT `False`: a caller
+    must not report a contradiction it could not actually observe.
+
+    Matching is the same structural token containment `_match_installed`
+    already uses against installed directory names, so a declaration and a
+    flag are compared exactly the way a flag is compared to a PDK on disk:
+
+        ihp-sg13g2 vs sg13g2   -> True   (the L19 target is the bare family)
+        sky130A    vs sky130   -> True   (the installed dir carries a suffix)
+        sky130A    vs sg13g2   -> False
+        ""         vs sg13g2   -> None
+
+    No family literal appears here; the rule is purely structural, so a PDK
+    this repo has never heard of compares by the same rule as the open ones.
+    """
+    an, bn = _norm(a or ""), _norm(b or "")
+    if not an or not bn:
+        return None
+    if an == bn:
+        return True
+    a_toks = [t for t in _tokens(a or "") if len(t) >= 4]
+    b_toks = [t for t in _tokens(b or "") if len(t) >= 4]
+    if not a_toks and len(an) >= 4:
+        a_toks = [an]
+    if not b_toks and len(bn) >= 4:
+        b_toks = [bn]
+    if not a_toks or not b_toks:
+        # Nothing on one side is specific enough to name a family. Saying
+        # "they contradict" here would invent a finding out of a string too
+        # short to carry one.
+        return None
+    if any(t in bn for t in a_toks) or any(t in an for t in b_toks):
+        return True
+    return False
+
+
 def _match_installed(target: str, installed: List[str]) -> Optional[str]:
     """Return the installed PDK dir whose name best matches the L19 target
     family token, or None. Matching is token containment on the NORMALISED

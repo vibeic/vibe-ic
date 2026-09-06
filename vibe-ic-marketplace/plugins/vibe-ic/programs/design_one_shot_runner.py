@@ -7601,10 +7601,42 @@ def step_step4_functional_evidence(project: Path,
         str(project), "--json", str(vacuous_report),
     ], cwd=project, timeout=60)
     vacuous_detail = (vacuous_out or vacuous_err).strip()
-    if vacuous_rc != 0:
+    # rc 2 IS THE FLOW'S DISCLOSED-SKIP CONVENTION, AND THIS SITE WAS THE ONE
+    # CONSUMER THAT DID NOT KNOW IT. `vacuous_testbench_check` documents it in
+    # its own words ("rc 2 is the flow's DISCLOSED-SKIP convention"), and
+    # `program_exit_zero` consumes it as VACUOUS_PASS. This line read ANY
+    # non-zero as a failure, so the same exit code meant "nothing to check,
+    # and I said so" to one consumer and "the testbench is vacuous" to the
+    # other — a gate that had examined nothing could redden a run, and the
+    # reason a reader was given named the wrong thing.
+    #
+    # BUT rc 2 HAS A SECOND PRODUCER INSIDE THE CHECKER: an `OSError` is
+    # written as verdict `IO_ERROR` and also exits 2. That is "could not read
+    # it", not "read it and there was nothing" — the two must not collapse, so
+    # the REPORT's own verdict decides, not the bare exit code, and IO_ERROR
+    # keeps the blocking behaviour it has today with its reason named.
+    _vac_verdict = ""
+    try:
+        _vac_verdict = str(json.loads(
+            vacuous_report.read_text(errors="replace")).get("verdict") or "")
+    except (OSError, ValueError):
+        _vac_verdict = ""
+    _vacuous_skip = ""
+    if vacuous_rc == 2 and _vac_verdict == "NOT_APPLICABLE":
+        # DISCLOSED, AND NOT RECLASSIFIED EITHER WAY. The gate examined no
+        # testbench and said so; that is not a pass it can hand out and not a
+        # failure it can charge. The step's verdict is decided below by the
+        # evidence branches that actually own the question — a project with no
+        # sim tree still FAILs, on `no results.xml`, which is the true reason.
+        _vacuous_skip = (f"vacuous_testbench NOT_APPLICABLE (disclosed skip, "
+                         f"rc=2): {vacuous_detail[:300]}")
+        print(f"[step4] {_vacuous_skip}", flush=True)
+    elif vacuous_rc != 0:
         return StepResult(
             "step4_functional_evidence", "FAIL", time.time() - t0,
-            f"vacuous_testbench_check rc={vacuous_rc}: {vacuous_detail}",
+            (f"vacuous_testbench_check rc={vacuous_rc}"
+             + (f" ({_vac_verdict})" if _vac_verdict else "")
+             + f": {vacuous_detail}"),
             [str(vacuous_report.relative_to(project))])
 
     sim_results = _pl.sim_dir(project) / "results.xml"
@@ -7634,7 +7666,10 @@ def step_step4_functional_evidence(project: Path,
                     "program_first": "professional_tb_gen"})
     return StepResult(
         "step4_functional_evidence", "PASS", time.time() - t0,
-        f"Step 4 TB and functional evidence passed: {oracle_detail}", outputs)
+        (f"Step 4 TB and functional evidence passed: {oracle_detail}"
+         + (f" [{_vacuous_skip}]" if _vacuous_skip else "")), outputs,
+        extras=({"vacuous_disclosed_skip": _vacuous_skip}
+                if _vacuous_skip else {}))
 
 
 def step_l10_unit_tb_gen(project: Path,
