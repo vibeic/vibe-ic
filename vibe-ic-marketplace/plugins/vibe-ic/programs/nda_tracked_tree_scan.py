@@ -101,14 +101,47 @@ def _patterns():
     except ImportError:
         return []
     try:
-        fam = _c.nda_regex_family()
+        # `nda_token_patterns()`, not `nda_regex_family()`. Two reasons, both
+        # measured on this gate's own parent commit:
+        #
+        #  (a) COVERAGE. `nda_regex_family()` was three of the eight roles
+        #      `nda_tokens()` names, so this gate — the one whose whole job is
+        #      "no NDA token in the tracked tree" — could not see a foundry
+        #      BRAND, the IP vendor or the IP part. Planting one token per role
+        #      into a tracked file of a throwaway repo and running this gate:
+        #      index 0,1,2 -> rc 1, index 3..7 -> rc 0 with the message "no NDA
+        #      token in any tracked path or content". Five of eight tokens had
+        #      a clean, specific, false PASS. The family is the whole token
+        #      list now, and this call is what makes the docstring above ("if a
+        #      role is added to the store, this gate starts covering it with no
+        #      edit here") true rather than aspirational.
+        #
+        #  (b) ESCAPING. The loop below used to `re.compile()` the family
+        #      LITERALS. A token is a literal, not a pattern: any regex
+        #      metacharacter in it changed what this gate matched, silently and
+        #      in the direction of matching MORE than the token. The builder
+        #      escapes each token and applies the same boundaries every other
+        #      NDA detector uses, so all of them now answer one question.
+        pats = _c.nda_token_patterns()
     except Exception:  # noqa: BLE001 — an unusable store is "no store"
         return []
-    out = []
-    for p in fam or []:
-        out.append(p if hasattr(p, "search")
-                   else re.compile(p, re.IGNORECASE))
-    return out
+    return [re.compile(p, re.IGNORECASE) for p in pats or []]
+
+
+def _roles():
+    """The ROLE of each pattern index, index-aligned with `_patterns()`.
+
+    Reported, never the literal. `pattern index [4]` on its own is unreadable
+    to everyone but the operator holding the private config; `4=foundry_brand2`
+    says what class of leak it is and still prints nothing protected."""
+    here = Path(__file__).resolve().parent
+    if str(here) not in sys.path:
+        sys.path.insert(0, str(here))
+    try:
+        import _commercial_pdk as _c
+        return list(_c.nda_regex_family_roles())
+    except Exception:  # noqa: BLE001 — same "unusable store is no store" rule
+        return []
 
 
 def _toplevel(repo: Path) -> Path:
@@ -274,6 +307,7 @@ def scan(repo: Path, ref: str = None) -> dict:
                              "patterns": sorted(content_hits),
                              "hits": sum(content_hits.values())})
     return {"configured": True, "findings": findings, "ref": ref or "(index)",
+            "roles": _roles(),
             "scanned": scanned, "symlinks": links,
             "repo": str(repo), "requested": len(wanted),
             "unresolved": unresolved, "gitlinks": gitlinks,
@@ -378,12 +412,16 @@ def main(argv=None) -> int:
         return 2
 
     if rep["findings"]:
+        roles = rep.get("roles") or []
         print(f"[FAIL] {len(rep['findings'])} tracked path(s) carry an NDA "
               f"token. The delta guards cannot see these: nothing about them "
               f"is changing, so they stay served by the public repo forever.")
         for f in rep["findings"]:
+            named = ", ".join(
+                f"{i}={roles[i]}" if i < len(roles) else str(i)
+                for i in f["patterns"])
             print(f"   {f['carrier']:7s} {f['file']}  "
-                  f"(pattern index {f['patterns']}, {f['hits']} hit(s))")
+                  f"(pattern index {named}, {f['hits']} hit(s))")
         print("   Output is MASKED on purpose — the literal is never printed.")
         return 1
 

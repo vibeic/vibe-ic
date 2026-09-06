@@ -81,9 +81,10 @@ def message_regex() -> "re.Pattern[str]":
     """Case-insensitive alternation over EVERY NDA token (SKU family + foundry
     brands + IP vendor/part), longest-first so the most specific token wins.
 
-    Deliberately WIDER than `nda_source_regex()`: that one covers the process /
-    SKU codename family, while a commit message leaks just as badly by naming
-    the foundry / IP BRAND ("...built at <brand>..."). Delegates to the shared
+    THE SAME family as `nda_source_regex()` since the two were unified: the
+    source / tracked-tree side used to cover only the process-SKU roles, so a
+    foundry BRAND or the IP vendor/part was forbidden in a message and allowed
+    in a tracked artefact. This guard is built on
     `_commercial_pdk.nda_content_regex()` so the message guard and the diff
     guard (`nda_diff_scan_check`) can never drift — one token store, one
     boundary rule, both scanners."""

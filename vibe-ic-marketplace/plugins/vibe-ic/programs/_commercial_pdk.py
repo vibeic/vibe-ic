@@ -229,27 +229,158 @@ def _family(*roles: str) -> List[str]:
     return have
 
 
+#: The hit boundaries. `(?<![0-9a-zA-Z]) … (?![0-9a-zA-Z])` rather than `\b`:
+#: it rejects a hit that is merely a substring of a longer alphanumeric word
+#: (a vendor name inside a conference URL) while still catching a token glued
+#: to punctuation, the way a real mid-sentence leak is — and, unlike `\b`, it
+#: behaves the same for a token that starts or ends with a non-word character.
+_BOUND_L = r"(?<![0-9a-zA-Z])"
+_BOUND_R = r"(?![0-9a-zA-Z])"
+
+
 def nda_regex_family() -> List[str]:
-    """The process / foundry-product codename family used by the prose
-    detectors' `pdk_codename` rule (word-bounded, case-insensitive at match
-    time)."""
-    return _family("sku_full", "foundry_product", "sku_prefix")
+    """EVERY token the store names, in `NDA_ROLES` order — the family the
+    source / tracked-tree / prose detectors match on.
+
+    IT USED TO BE THREE ROLES: `sku_full`, `foundry_product`, `sku_prefix`, the
+    "process / foundry-product codename" subset. `nda_tokens()` named eight.
+    The five it left out — `foundry_brand1..3`, `ip_vendor`, `ip_part` — are
+    exactly the roles the store exists to keep out of tracked artefacts: a
+    foundry BRAND is a commercial foundry NAME, and a vendor brand plus a part
+    number is the disclosure #247 was filed for.
+
+    MEASURED on this file's own parent commit, with the fictional fixture set,
+    by planting one token per role into a tracked file of a throwaway git repo
+    and running `nda_tracked_tree_scan.py`:
+
+        index 0,1,2  ->  rc 1   (FAIL — the token was seen)
+        index 3..7   ->  rc 0   (PASS — "no NDA token in any tracked path or
+                                 content", over a tree that carried one)
+
+    rc 0 there is not a weaker verdict, it is a FALSE one, printed in the
+    confident, specific shape this repo removes everywhere else. A token the
+    list names and the family cannot match leaves the constraint unenforced for
+    that token while every gate reports clean.
+
+    So the family IS the token list. `NDA_ROLES` order (not length order) makes
+    the returned index stable and mappable back to a role by
+    `nda_regex_family_roles()`, which is what lets a finding be reported as an
+    INDEX without echoing what it matched."""
+    return _family(*NDA_ROLES)
+
+
+def nda_regex_family_roles() -> List[str]:
+    """The ROLE of each entry of `nda_regex_family()`, index-aligned.
+
+    A detector reports `pattern index 4`; this is how a reader turns that back
+    into `foundry_brand2` without the literal ever being printed. Index-aligned
+    by construction (both walk `NDA_ROLES` through `_family`), never by two
+    lists that happen to agree today."""
+    toks = _nda_token_map()
+    have = [r for r in NDA_ROLES if toks.get(r)]
+    if not have:
+        raise NoNdaLiterals(
+            "no NDA literals; a pattern built from an empty token set "
+            "matches EVERYTHING. A caller must report NOT_MEASURED.")
+    return have
+
+
+def _token_alt(token: str) -> str:
+    """One token as a regex ALTERNATIVE: escaped, separator-insensitive.
+
+    `[\s_\-]*` and not `[\s_\-]+`: `nda_content_regex`'s docstring claims a
+    multi-word brand's "spaced / unspaced / hyphenated / underscored spellings
+    all hit", and with `+` the UNSPACED spelling was the one spelling that did
+    not — measured, fictional two-word brand, `nospace` variant: no match from
+    either builder. A concatenated brand name is the ordinary way a brand
+    reaches a filename or an identifier, so it was the miss that mattered."""
+    return r"[\s_\-]*".join(re.escape(part) for part in token.split())
+
+
+def _b64_fragment(token: str, offset: int) -> str:
+    """The base64 substring of `token` that is invariant when the token sits at
+    byte `offset` (0, 1 or 2) within a base64 payload — "" when too short.
+
+    Base64 encodes three bytes to four characters, so what a token looks like
+    encoded depends on where it starts. Only the characters produced by 3-byte
+    groups made ENTIRELY of token bytes are invariant: the first group mixes in
+    whatever precedes the token (drop 4 characters when `offset` is non-zero)
+    and the last group mixes in whatever follows (drop 4 always). The result is
+    a fragment that appears verbatim however the token is embedded.
+
+    Below 8 characters a fragment stops being a signature and starts matching
+    ordinary base64 payloads, so it is refused rather than returned — which is
+    a REAL BOUND, not a tuning choice: a token of 6 characters has no safe
+    base64 signature at any offset, and one of 7 has one at offset 0 only.
+    `nda_token_patterns` therefore covers the encoded form of the LONG tokens
+    at every offset and the short ones at some or none. That residual is
+    reported here rather than papered over with a shorter floor."""
+    import base64
+    enc = base64.b64encode(("\0" * offset + token).encode()).decode()
+    core = enc[(4 if offset else 0):-4]
+    return core if len(core) >= 8 else ""
+
+
+def _b64_alts(token: str) -> List[str]:
+    """Every invariant base64 fragment of `token`, over all three offsets.
+
+    WHY A TRACKED-TREE SCANNER NEEDS THIS. The module docstring above records
+    that this very repo once kept the token store base64-ENCODED and defended
+    it with "`git grep <SKU>` therefore finds NOTHING in tracked source" —
+    "Our own plaintext sweeps returned zero BECAUSE the tokens were encoded;
+    the sweep measured the encoding, not the exposure." A plaintext-only tree
+    scan has exactly that blind spot, and the blind spot is not hypothetical.
+
+    MEASURED 2026-09-07, real store, both trees: 0 hits over the plugin tree
+    (7948 blobs) and 1 over the sibling dataset tree — a tracked file still
+    carrying that historical shape, from which every role decodes in one call,
+    and which the plaintext scan of the same tree reports as a clean rc 0."""
+    return sorted({f for f in (_b64_fragment(token, o) for o in (0, 1, 2)) if f})
+
+
+def nda_token_patterns() -> List[str]:
+    """Per-token pattern STRINGS, index-aligned with `nda_regex_family()`.
+
+    For a detector that wants ONE pattern per token so it can report which
+    index hit (`nda_tracked_tree_scan`). The single-alternation form is
+    `nda_source_regex_str()`.
+
+    These are patterns, not literals. `nda_tracked_tree_scan._patterns()` used
+    to `re.compile()` the raw family LITERALS: unescaped, so any regex
+    metacharacter in a token silently changed what the gate matched, and a
+    literal `.` in a SKU quietly matched any character.
+
+    Each entry also matches the token's BASE64 fragments (see `_b64_alts`),
+    unanchored — an encoded token has no word boundary to anchor to, and a
+    scanner that only sees plaintext measures the encoding rather than the
+    exposure. This widening is deliberately NOT in `nda_source_regex_str()`:
+    a commit message or a backlog document does not carry a base64 payload,
+    and the prose rules built on that string must not start matching one."""
+    out = []
+    for t in nda_regex_family():
+        alts = [_BOUND_L + _token_alt(t) + _BOUND_R]
+        alts += [re.escape(b) for b in _b64_alts(t)]
+        out.append("(?:" + "|".join(alts) + ")")
+    return out
 
 
 def nda_source_regex() -> "re.Pattern[str]":
-    """Compiled, case-insensitive, word-bounded regex matching the PDK/process
-    codename family — built at runtime from the private token store, so no
-    literal token lives in this detector's source."""
-    fam = sorted(set(nda_regex_family()), key=len, reverse=True)
-    return re.compile(r"\b(" + "|".join(re.escape(t) for t in fam) + r")\b",
-                      re.IGNORECASE)
+    """Compiled, case-insensitive, boundary-anchored regex over EVERY NDA
+    token — built at runtime from the private token store, so no literal token
+    lives in this detector's source."""
+    return re.compile(nda_source_regex_str(), re.IGNORECASE)
 
 
 def nda_source_regex_str() -> str:
-    """Same as `nda_source_regex()` but returns the raw pattern STRING, for
-    detectors that keep a table of `(name, pattern, message)` tuples."""
-    fam = sorted(set(nda_regex_family()), key=len, reverse=True)
-    return r"\b(" + "|".join(re.escape(t) for t in fam) + r")\b"
+    """Same as `nda_source_regex()` but the raw pattern STRING, for detectors
+    that keep a table of `(name, pattern, message)` tuples.
+
+    Longest token first so an alternation prefers the full SKU over the SKU
+    prefix that is a strict prefix of it — the reported span is then the whole
+    leak, which is what `nda_mask_neighbourhood` masks."""
+    alts = [_token_alt(t) for t in
+            sorted(set(nda_regex_family()), key=len, reverse=True)]
+    return _BOUND_L + "(" + "|".join(alts) + ")" + _BOUND_R
 
 
 def nda_cell_prefixes() -> Tuple[str, ...]:
@@ -266,24 +397,19 @@ def nda_content_regex() -> "re.Pattern[str]":
     """Broad, case-insensitive regex over EVERY NDA token — the foundry
     SKU/process family AND the foundry BRANDS AND the IP vendor/part — for
     scanning arbitrary CONTENT (a commit message, a diff's added lines, a
-    filename). WIDER than `nda_source_regex()` (which is only the process/SKU
-    codename family): prose and diffs leak just as badly by naming the foundry
-    or IP BRAND, so the whole token store is in scope here.
+    filename).
 
-    A multi-word brand is matched separator-insensitively (`[\\s_\\-]+`), so its
-    spaced / unspaced / hyphenated / underscored spellings all hit. The
-    `(?<![0-9a-zA-Z]) … (?![0-9a-zA-Z])` boundaries reject a hit that is merely
-    a substring of a longer alphanumeric word (so a vendor name embedded inside
-    a longer word in a spec-doc conference URL never trips the token) while
-    still catching a token glued to punctuation the way a real mid-sentence
-    leak is.
+    IT IS NOW THE SAME PATTERN AS `nda_source_regex()`, and this alias is kept
+    so the two names still say which SURFACE a caller is scanning. It used to
+    be genuinely wider, and that gap was the defect, not the design: the
+    narrow side was the SOURCE and TRACKED-TREE scanners, i.e. the surface the
+    "no foundry name in any repo artefact" constraint is actually about. Two
+    families meant two answers to one question, and the guard whose answer was
+    "clean" was the one guarding the repository.
 
     Shared by `commit_msg_nda_check` and `nda_diff_scan_check` so the message
     guard and the diff guard can never drift."""
-    toks = sorted(set(_family(*NDA_ROLES)), key=len, reverse=True)
-    alts = [r"[\s_\-]+".join(re.escape(p) for p in t.split()) for t in toks]
-    return re.compile(r"(?<![0-9a-zA-Z])(" + "|".join(alts) + r")(?![0-9a-zA-Z])",
-                      re.IGNORECASE)
+    return nda_source_regex()
 
 
 def nda_role_of(matched: str) -> str:
