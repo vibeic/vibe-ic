@@ -49,69 +49,101 @@ import dft_signoff_check as gate                  # noqa: E402
 RUNNER_SRC = Path(runner.__file__).read_text()
 
 
-def _tdf_subprocess_run_timeout_node():
-    """Return the AST node passed as ``timeout=`` to the ``subprocess.run`` call
-    whose first positional argument is the ``tdf_cmd`` list (the invocation of
-    transition_fault_atpg_run.py). None if not found."""
+def _tdf_dispatch_call():
+    """The AST node of the call whose first positional argument is ``tdf_cmd``
+    -- the invocation of transition_fault_atpg_run.py -- whichever dispatcher
+    it goes through. None if not found.
+
+    CZT-10 — deliberately NOT anchored on ``subprocess.run``. The concern this
+    file guards is a property of the DISPATCH, and anchoring on one dispatcher
+    made the test unable to see the call the moment the dispatch moved.
+    """
     tree = ast.parse(RUNNER_SRC)
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
-        func = node.func
-        is_sub_run = (isinstance(func, ast.Attribute) and func.attr == "run"
-                      and isinstance(func.value, ast.Name)
-                      and func.value.id == "subprocess")
-        if not is_sub_run:
-            continue
         if not (node.args and isinstance(node.args[0], ast.Name)
                 and node.args[0].id == "tdf_cmd"):
             continue
-        for kw in node.keywords:
-            if kw.arg == "timeout":
-                return kw.value
+        return node
     return None
 
 
-# ── FORWARD: fails pre-fix (timeout=1800), passes post-fix ──────────────────
+# ── FORWARD: the outer wall is GONE, which is the strongest form of "it does
+#    not defeat the producer's size-scaling" ─────────────────────────────────
 
-def test_tdf_outer_timeout_is_not_a_constant_below_producer_cap():
-    """The tdf subprocess.run timeout must not be a bare constant below the
-    producer's WALL_BUDGET_MAX. Pre-fix it is Constant(1800) < 7200 → this
-    FAILS. Post-fix it is a derived call → this PASSES."""
-    cap = tdf.WALL_BUDGET_MAX
-    node = _tdf_subprocess_run_timeout_node()
-    assert node is not None, (
-        "could not locate the subprocess.run(tdf_cmd, ...) timeout in "
-        "design_one_shot_runner — test anchor is stale")
-    if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
-        assert node.value >= cap, (
-            f"transition-ATPG subprocess timeout is a FIXED {node.value}s < "
-            f"producer WALL_BUDGET_MAX {cap}s — the runner abandons the producer "
-            f"before its own size-scaled batch can finish, so no "
-            f"transition_coverage.json is ever written and the container leaks")
-    # a non-constant (derived) timeout is exactly the fix — accepted here; its
-    # VALUE is checked below.
+def test_the_tdf_dispatch_imposes_no_outer_wall_at_all():
+    """CZT-10 supersedes this file's original fix, and states why.
+
+    The original defect was an outer `subprocess.run(timeout=1800)` BELOW the
+    producer's own size-scaled cap: the runner SIGKILLed the producer mid-batch
+    on any flop-bearing design, no `transition_coverage.json` was written, and
+    the producer's Yosys container was orphaned. The repair was to DERIVE the
+    outer wall from `WALL_BUDGET_MAX` so it could not drift below the cap.
+
+    That repair is correct and it is still a wall. A wall a correct run can
+    reach is a wrong answer at every value, and tracking the cap only moves the
+    moment it is wrong. The dispatch is now supervised on the child's own
+    forward progress and carries NO bound, so it cannot defeat the producer's
+    size-scaling AT ANY size -- which is what this file was written to protect.
+
+    THE SAMPLE DID NOT MOVE, and that is the reason removing the wall is safe
+    rather than a trade. Asserted below in `test_the_fault_sample_is_sized_by
+    _the_producer_alone`.
+    """
+    call = _tdf_dispatch_call()
+    assert call is not None, (
+        "could not locate the dispatch of tdf_cmd in design_one_shot_runner — "
+        "test anchor is stale")
+    bounds = [kw.arg for kw in call.keywords
+              if kw.arg in ("timeout", "hard_ceiling_s")]
+    assert bounds == [], (
+        f"the transition-ATPG dispatch carries {bounds} — an outer wall on a "
+        f"producer that sizes its own batch can only ever kill a run that was "
+        f"still grading")
 
 
-def test_runner_derives_tdf_timeout_and_it_covers_the_cap():
-    """The runner must expose a derived transition-ATPG subprocess wall and it
-    must be >= the producer's cap. Pre-fix the helper is absent (getattr None)
-    → this FAILS; post-fix it returns cap + margin → PASSES."""
-    cap = tdf.WALL_BUDGET_MAX
-    fn = getattr(runner, "_tdf_atpg_subprocess_timeout_s", None)
-    assert fn is not None, (
-        "design_one_shot_runner defines no _tdf_atpg_subprocess_timeout_s(); the "
-        "tdf subprocess.run hardcodes a fixed timeout that cannot track the "
-        "producer's size-scaled WALL_BUDGET_MAX cap")
-    outer = fn()
-    assert outer >= cap, (
-        f"derived transition-ATPG outer wall {outer}s < producer cap {cap}s — "
-        f"the producer would still be killed before its own wall")
-    # margin must be strictly positive: the producer needs time to reap after its
-    # own (capped) wall fires, so outer must be strictly greater than the cap.
-    assert outer > cap, (
-        f"outer wall {outer}s == cap {cap}s leaves no setup/reap margin above the "
-        f"producer's own wall")
+def test_the_fault_sample_is_sized_by_the_producer_alone():
+    """WHY REMOVING THE OUTER WALL CANNOT SHRINK WHAT GETS GRADED.
+
+    The coupling is real: the producer's INNER budget sizes its fault sample,
+    measured here on its own pure functions. What the outer wall never was is
+    an INPUT to that sizing -- the dataflow runs one way, from the producer's
+    `WALL_BUDGET_MAX` out to the runner, and the runner's value reaches the
+    producer nowhere. So the two are separable, and this asserts it instead of
+    asserting that they are.
+    """
+    # The coupling, at two values -- if this ever stops holding, the argument
+    # above is about a mechanism that no longer exists.
+    small = tdf._rightsize_sample(0.5, 120.0, 1800, 100000, 50000)
+    large = tdf._rightsize_sample(0.5, 120.0, 7200, 100000, 50000)
+    assert large > small, (small, large)
+
+    # ...and the outer wall is not one of the sizing inputs.
+    import inspect
+    sizing_inputs = set(
+        inspect.signature(tdf._rightsize_sample).parameters) | set(
+        inspect.signature(tdf._scaled_wall_budget).parameters)
+    assert "outer" not in " ".join(sizing_inputs)
+
+    # The argv is the whole surface between the two, and it carries no bound.
+    # Read with `ast`, which cannot see a comment: the first probe written for
+    # this matched the COMMENT that names the old helper, not the argv.
+    tree = ast.parse(RUNNER_SRC)
+    argv_src = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            names = [t.id for t in node.targets if isinstance(t, ast.Name)]
+            if "tdf_cmd" in names:
+                argv_src.append(ast.unparse(node))
+        elif (isinstance(node, ast.AugAssign)
+              and isinstance(node.target, ast.Name)
+              and node.target.id == "tdf_cmd"):
+            argv_src.append(ast.unparse(node))
+    assert argv_src, "tdf_cmd is not built here any more — anchor is stale"
+    joined = " ".join(argv_src)
+    for flag in ("--timeout", "--wall", "--budget", "--wall-budget"):
+        assert flag not in joined, (flag, joined)
 
 
 # ── REVERSE: must STILL pass on BOTH pre-fix and post-fix ────────────────────

@@ -401,17 +401,39 @@ def scan_file(path: Path, backstop: float) -> List[Row]:
         f = node.func
         if (isinstance(f, ast.Attribute) and isinstance(f.value, ast.Name)
                 and f.value.id in pr_aliases
-                and f.attr in _PROGRESS_RUN_ATTRS
-                and any(k.arg == "timeout" for k in node.keywords)):
-            why = _exempted(lines, node)
+                and f.attr in _PROGRESS_RUN_ATTRS):
+            if any(k.arg == "timeout" for k in node.keywords):
+                why = _exempted(lines, node)
+                rows.append(Row(
+                    path.name, node.lineno, _callee(node),
+                    "progress_run_timeout", "timeout=", None,
+                    "EXEMPT" if why else "OFFENDER",
+                    why or ("`_progress_run` has no `timeout` parameter — this "
+                            "call raises TypeError, which is neither OSError nor "
+                            "SubprocessError and so is not caught beside it. "
+                            "Delete the argument.")))
+                continue
+            # ---- class (3): a CLEAN call to the replacement primitive.
+            #
+            # CZT2 — this class was missing, and its absence made the gate's own
+            # headline number unable to move in the direction the gate exists to
+            # push. `_pr.run` calls were counted ONLY when they were offenders,
+            # so converting a `subprocess.run(timeout=N)` wall clock to the
+            # supervised primitive changed the examined-site count by ZERO: the
+            # old call was never in the population and the new one was not
+            # either. MEASURED: twenty such conversions in one lane, examined
+            # count 115 before and 115 after.
+            #
+            # That matters because the number is used as a MONOTONICITY check --
+            # "never fewer examined sites, a shrink means something left
+            # supervision". A count that cannot rise when supervision spreads
+            # cannot fall when it retreats either, so the check was answering a
+            # question about a population it did not contain.
             rows.append(Row(
-                path.name, node.lineno, _callee(node), "progress_run_timeout",
-                "timeout=", None,
-                "EXEMPT" if why else "OFFENDER",
-                why or ("`_progress_run` has no `timeout` parameter — this "
-                        "call raises TypeError, which is neither OSError nor "
-                        "SubprocessError and so is not caught beside it. "
-                        "Delete the argument.")))
+                path.name, node.lineno, _callee(node), "progress_run", "-",
+                None, "CLEAN",
+                "supervised on the child's own forward progress (output / CPU "
+                "/ IO), with no wall clock of any kind"))
             continue
 
         # ---- class (1): a bounded ceiling on a supervised launch

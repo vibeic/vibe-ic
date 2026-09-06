@@ -253,6 +253,56 @@ def test_a_progress_run_call_without_a_timeout_is_clean(tmp_path):
     assert rc == 0, out
 
 
+def test_a_clean_progress_run_call_is_IN_THE_POPULATION(tmp_path):
+    """CZT2 — rc 0 is not the same as "counted", and the difference was the
+    whole defect.
+
+    A clean `_pr.run` call used to produce NO ROW at all: the primitive was
+    counted only when it was an OFFENDER. So converting a
+    `subprocess.run(timeout=N)` wall clock to the supervised primitive moved the
+    gate's examined-site count by ZERO -- the old call was never in this
+    population and the new one was not either. MEASURED: twenty conversions in
+    one lane, examined 115 before and 115 after.
+
+    That number is used as a MONOTONICITY check ("never fewer examined sites, a
+    shrink means something left supervision"), so a count that cannot RISE when
+    supervision spreads cannot FALL when it retreats either. The check was
+    answering a question about a population it did not contain.
+    """
+    body = ("import _progress_run as _pr\n"
+            "def go(cmd):\n"
+            "    return _pr.run(cmd, capture_output=True)\n")
+    root = _tree(tmp_path, body)
+    rows, _ = G.scan(root / "programs" if (root / "programs").is_dir() else root)
+    prs = [r for r in rows if r.kind == "progress_run"]
+    assert len(prs) == 1, [(r.file, r.line, r.kind, r.verdict) for r in rows]
+    assert prs[0].verdict == "CLEAN", prs[0]
+
+
+def test_the_population_GROWS_when_a_wall_clock_becomes_supervised(tmp_path):
+    """THE MONOTONICITY THE HEADLINE NUMBER CLAIMS TO CHECK, driven.
+
+    Two trees differing by exactly one converted call site. The examined count
+    must go UP by one -- if it does not, the number is inert and a later reader
+    comparing it across versions learns nothing.
+    """
+    before = _tree(tmp_path / "a",
+                   "import subprocess\n"
+                   "def go(cmd):\n"
+                   "    return subprocess.run(cmd, timeout=1800)\n")
+    after = _tree(tmp_path / "b",
+                  "import _progress_run as _pr\n"
+                  "def go(cmd):\n"
+                  "    return _pr.run(cmd)\n")
+
+    def examined(root):
+        d = root / "programs" if (root / "programs").is_dir() else root
+        return len(G.scan(d)[0])
+
+    assert examined(after) == examined(before) + 1, (
+        examined(before), examined(after))
+
+
 def test_the_alias_is_resolved_not_assumed(tmp_path):
     """`import _progress_run as anything` — the offence is the MODULE, not the
     spelling a file happened to import it under."""

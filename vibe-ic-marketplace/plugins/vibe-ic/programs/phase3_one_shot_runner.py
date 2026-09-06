@@ -1166,6 +1166,46 @@ def _docker_timeout_isolate(outputs: List[Path]) -> None:
                 pass
 
 
+#: What `_watchdog.run_supervised` appends to `.err` when it stops a job. The
+#: supervisor already records WHAT IT WATCHED and HOW LONG the job had shown
+#: none of it (`SupervisedResult.supervision`, vibe-ic CZT-08), but
+#: `_docker_exec` returns only `(rc, out, err)` and drops the dataclass — so at
+#: every call site in this file that evidence exists ONLY as this note. A stop
+#: that cannot say what was watched is an assertion, not a measurement; parsing
+#: it back is what lets a step RECORD the evidence instead of restating the rc.
+_SUPERVISION_NOTE_RE = re.compile(
+    r"WATCHDOG_(?P<outcome>STALLED|CEILING|ABORTED)\b(?P<body>.*)",
+    re.S)
+_SUPERVISION_FIELD_RE = re.compile(
+    r"\b(watched|since_last_progress_s|elapsed_s)=(\S+)")
+
+
+def _supervision_evidence(err: str) -> Dict[str, Any]:
+    """The supervisor's own record of a stop, recovered from its `.err` note.
+
+    Returns `{}` when the note is absent — an ABSENT note and a note saying
+    "nothing was watched" are different facts and must not collapse into one
+    default. `watched` names the progress signals that were WIRED (a job
+    supervised on output alone is a stall BY CONSTRUCTION during a silent
+    CPU-bound phase, which is a property of the wiring, not of the design);
+    `since_last_progress_s` is how long it had shown none of them.
+    PURE — parses a string, reads nothing. chip-AGNOSTIC.
+    """
+    m = _SUPERVISION_NOTE_RE.search(err or "")
+    if not m:
+        return {}
+    out: Dict[str, Any] = {"supervisor_outcome": m.group("outcome")}
+    for key, raw in _SUPERVISION_FIELD_RE.findall(m.group("body")):
+        if key == "watched":
+            out[key] = raw
+            continue
+        try:
+            out[key] = float(raw)
+        except ValueError:
+            out[key] = raw
+    return out
+
+
 # ===========================================================================
 # v1.3.47 — PROGRESS-STALL WATCHDOG glue (owner directive: "timeout estimation
 # is not professional; have a general way to let a sub-process ALWAYS finish
@@ -11834,6 +11874,61 @@ import _atomic_artefact as _aa  # noqa: E402  (vibe-ic#1082)
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _progress_run as _pr  # noqa: E402
+
+
+def _run_producer(step: str, cmd: List[str], t0: float, *,
+                  noun: str = "producer",
+                  ) -> Tuple[Optional[Any], Optional[StepResult]]:
+    """Dispatch a PRODUCER PROGRAM under progress supervision, never a clock.
+
+    Returns `(completed_process, None)` on any exit -- however long it took --
+    or `(None, StepResult)` when the step must stop.
+
+    THE DEFECT THIS REPLACES (CZT-11).  Every call site that used this shape
+    wrote `subprocess.run(cmd, timeout=N)` with N a literal 300..1800, and
+    caught `(OSError, subprocess.TimeoutExpired)` into ONE arm returning
+    ENV_UNAVAILABLE.  That collapses two facts a reader needs apart:
+
+      * the producer could not be LAUNCHED (no interpreter, no file, no fork)
+        -- the environment really is missing something; ENV_UNAVAILABLE is
+        right, and `_aggregate_verdict` correctly files it as a waiver tier.
+      * the producer WAS launched and the clock ran out -- which says nothing
+        about the environment and everything about the host.  Reported as
+        ENV_UNAVAILABLE, a busy machine silently converted a step that owes an
+        answer into an excused one.  A bigger N is the same defect with a later
+        date, so the clock is removed rather than raised.
+
+    What replaces it is `_progress_run`: output, CPU and I/O of the child and
+    its live descendants.  ANY signal advancing means progressing, and a
+    progressing child is never stopped, however long it legitimately takes.
+    Only a child with NOTHING moving across N consecutive looks raises
+    `Stalled` -- a finding about the CHILD, which the old expiry never was.
+
+    A stall is BLOCKED, not ENV_UNAVAILABLE: the producer is present and was
+    running, so nothing was missing and nothing is known.  BLOCKED is stricter
+    (`_aggregate_verdict` groups it with FAIL, while ENV_UNAVAILABLE is a
+    waiver tier), so this can only ever refuse a green it used to grant.
+    chip-AGNOSTIC.
+    """
+    try:
+        cp = _pr.run(cmd, capture_output=True, text=True, errors="replace")
+    except _pr.Stalled as exc:
+        return None, StepResult(
+            step, "BLOCKED", time.time() - t0,
+            f"{noun} STALLED: {exc}. It was launched and then made no forward "
+            f"progress on ANY readable signal, so it was stopped as hung -- "
+            f"this is not a slow host and not a missing tool, and NOTHING is "
+            f"known about what it would have produced.",
+            extras={"stopped_as": "STALLED",
+                    "stall_looks": getattr(exc, "looks", None),
+                    "stall_elapsed_s": getattr(exc, "elapsed_s", None),
+                    "stall_signals": getattr(exc, "signals", None)})
+    except OSError as exc:
+        return None, StepResult(
+            step, "ENV_UNAVAILABLE", time.time() - t0,
+            f"{noun} could not be launched: {exc}")
+    return cp, None
+
 
 _SLANG_ERROR_SIGNATURES = _sf.SLANG_ERROR_SIGNATURES
 _decide_synth_frontend = _sf.decide_synth_frontend
@@ -31924,10 +32019,18 @@ def _gds_substance_gate(gds_out: Path, def_file: Path) -> Optional[str]:
     a reason to fail a good design.
     """
     try:
-        cp = subprocess.run(
+        # CZT-11 — no wall clock. The 600 s literal here decided a GATE'S
+        # VERDICT by elapsed time: a substance check that took longer than the
+        # bound raised, the `except` swallowed it, and the stream-out was
+        # reported as carrying substance. Supervision replaces it -- a checker
+        # that is progressing runs to its own exit. A STALL still reaches the
+        # documented rc-2 policy below (an unrunnable checker never fails a
+        # good design), so the fall-through is unchanged in DIRECTION and is
+        # now reached only for a checker that genuinely moved nothing.
+        cp = _pr.run(
             [sys.executable, str(PROGRAMS_DIR / "gds_substance_check.py"),
              "--gds-file", str(gds_out), "--def-file", str(def_file)],
-            timeout=600, check=False, capture_output=True, text=True)
+            check=False, capture_output=True, text=True)
     except Exception:                                     # noqa: BLE001
         return None
     if cp.returncode == 1:
@@ -37017,18 +37120,59 @@ def _run_extraction_lvs(project: Path, top: str, pdk: PdkConfig,
     # v1.3.47 — a stall/ceiling kill must NOT be scored from a PARTIAL extracted
     # netlist (a half-written .spice would drive a false LVS verdict). Isolate
     # the partial output and FAIL as extraction-incomplete.
-    if rc in (_RC_STALLED, 124):
+    if rc in (_RC_STALLED, _RC_ABORTED, 124):
+        # CZT-19 — A STALL IS NOT A MISMATCH, AND THIS SITE BOOKED IT AS ONE.
+        # Both the step and `lvs_verdict.json` said "FAIL": the runner's word
+        # for "netgen compared these two circuits and they are not the same".
+        # Nothing was compared here at all — magic was stopped before it
+        # finished extracting, so no netlist reached netgen. The word asserted
+        # a finding about the DESIGN that the flow's own evidence contradicts,
+        # and `lvs_verdict.json` is a contract seven other programs read.
+        #
+        # THE STOP STATE IS A THIRD STATE, and it is recorded as one:
+        #   status  BLOCKED     — this runner's OWN word (`_aggregate_verdict`
+        #                         names it explicitly in the non-green bucket,
+        #                         so it is NOT a weakening: BLOCKED and FAIL
+        #                         both aggregate to "FAIL"; only the step's own
+        #                         word, and the persisted contract, move). A
+        #                         word `_aggregate_verdict` does not enumerate
+        #                         would fall through to its catch-all green
+        #                         `return "PASS"` — which is exactly the #925
+        #                         defect, so a NEW word was not invented here.
+        #   stopped_as          — WHICH of the three stops, never inferred
+        #                         from the rc by the reader.
+        #   supervision         — what the supervisor WATCHED and how long the
+        #                         job had shown none of it. A stop without
+        #                         that evidence is an assertion.
+        # This is exactly the correction vibe-ic#925 made to the sibling DRC
+        # arm; that fix corrected one arm of one step and left this one.
         _docker_timeout_isolate([spice_out])
+        _sup = _supervision_evidence(err or "")
+        _stopped_as = {_RC_ABORTED: "ABORTED_NO_OUTPUT",
+                       _RC_STALLED: "STALLED",
+                       124: "CEILING"}.get(rc, f"rc={rc}")
+        _why = {_RC_ABORTED: "produced no extracted-netlist bytes at all",
+                _RC_STALLED: "stopped making forward progress",
+                124: "hit the pathological-loop backstop"}.get(
+                    rc, f"was stopped (rc={rc})")
+        _detail = (
+            f"Magic ext2spice {_why} and was stopped (rc={rc}, "
+            f"{_stopped_as}) — NOTHING is known about this design's LVS "
+            f"state: no netlist was extracted, so no compare ran and netgen "
+            f"was never given two circuits. This is NOT a mismatch and NOT a "
+            f"clean run. The partial extracted netlist was isolated to "
+            f"*.timeout.partial (#443/#570); see "
+            f"extracted/ext2spice.log. Sign-off must not proceed.")
         verdict = _write_lvs_verdict(
-            project, "FAIL", "LVS_EXTRACTION_INCOMPLETE",
-            f"Magic ext2spice killed as hung/ceiling (rc={rc}); the partial "
-            f"extracted netlist was isolated (#443/#570).",
-            extras={"transcript_tail": (out + err)[-600:]})
+            project, "BLOCKED", "LVS_EXTRACTION_STALLED", _detail,
+            extras={"stopped_as": _stopped_as,
+                    "supervision": _sup,
+                    "transcript_tail": (out + err)[-600:]})
         return StepResult(
-            "lvs", "FAIL", time.time() - t0,
-            f"Magic ext2spice killed as hung/ceiling (rc={rc}) — no LVS from a "
-            f"partial extracted netlist; see extracted/ext2spice.log",
-            extras={"finding": "LVS_EXTRACTION_INCOMPLETE",
+            "lvs", "BLOCKED", time.time() - t0, _detail,
+            extras={"finding": "LVS_EXTRACTION_STALLED",
+                    "stopped_as": _stopped_as,
+                    "supervision": _sup,
                     "lvs_verdict": verdict,
                     "transcript_tail": (out + err)[-600:]})
     if not spice_out.is_file() or spice_out.stat().st_size == 0:
@@ -37293,14 +37437,66 @@ def _run_extraction_lvs(project: Path, top: str, pdk: PdkConfig,
     # artifact + named finding and FAIL the step (incomplete is never
     # silent and never wears the "compare ran" label). chip-AGNOSTIC.
     if not matched and not mismatched:
+        # CZT-19, SECOND ARM. #477 already refused to read a terminal-verdict-
+        # less run as a verdict, and wrote status INCOMPLETE — which is honest.
+        # The STEP beside it still said "FAIL", and the two words disagree in
+        # the same record: one says "we do not know", the other asserts a
+        # finding about the design.
+        #
+        # The two causes are SPLIT rather than merged, because they are
+        # different facts and a reader must be able to tell them apart:
+        #   * the supervisor STOPPED netgen (rc says so) -> BLOCKED /
+        #     LVS_COMPARE_STALLED, with what was watched and for how long.
+        #     Nothing was compared to completion, so nothing is known.
+        #   * netgen exited on its own and still printed no terminal token
+        #     -> the pre-existing INCOMPLETE / LVS_NO_TERMINAL_VERDICT record,
+        #     unchanged, because that is a different diagnosis (a truncated or
+        #     malformed report from a tool that believed it had finished).
+        # `_aggregate_verdict` maps BLOCKED and FAIL identically, so the
+        # headline run verdict is byte-identical on both arms; only the step's
+        # own word and the persisted contract move.
+        if rc in (_RC_STALLED, _RC_ABORTED, 124):
+            _docker_timeout_isolate([lvs_rpt])
+            _sup = _supervision_evidence(err or "")
+            _stopped_as = {_RC_ABORTED: "ABORTED_NO_OUTPUT",
+                           _RC_STALLED: "STALLED",
+                           124: "CEILING"}.get(rc, f"rc={rc}")
+            _why = {_RC_ABORTED: "produced no report bytes at all",
+                    _RC_STALLED: "stopped making forward progress",
+                    124: "hit the pathological-loop backstop"}.get(
+                        rc, f"was stopped (rc={rc})")
+            _detail = (
+                f"netgen LVS {_why} and was stopped (rc={rc}, "
+                f"{_stopped_as}) — the compare never reached a terminal "
+                f"verdict, so NOTHING is known about this design's LVS "
+                f"state. This is NOT a mismatch and NOT a clean run; no "
+                f"sign-off from a partial report, which was isolated to "
+                f"*.timeout.partial (#570). Sign-off must not proceed.")
+            verdict = _write_lvs_verdict(
+                project, "BLOCKED", "LVS_COMPARE_STALLED", _detail,
+                extras={"stopped_as": _stopped_as,
+                        "supervision": _sup,
+                        "lvs_report": "reports/phase3/lvs.rpt",
+                        "netgen_rc": rc,
+                        "ext2spice_warning": ext_warning,
+                        "transcript_tail": transcript[-600:]})
+            return StepResult(
+                "lvs", "BLOCKED", time.time() - t0, _detail,
+                extras={"finding": "LVS_COMPARE_STALLED",
+                        "stopped_as": _stopped_as,
+                        "supervision": _sup,
+                        "lvs_report": "reports/phase3/lvs.rpt",
+                        "lvs_verdict": verdict,
+                        "ext2spice_warning": ext_warning,
+                        "transcript_tail": transcript[-600:]})
         verdict = _write_lvs_verdict(
             project, "INCOMPLETE", "LVS_NO_TERMINAL_VERDICT",
             f"netgen LVS transcript+report carry NO terminal verdict "
             f"token ('Circuits match uniquely' / 'do NOT match' both "
             f"absent) — the compare did not run to completion (netgen "
-            f"likely killed mid-run; lvs.rpt truncated). This is an "
-            f"INCOMPLETE run, NOT a clean or even a conclusive-mismatch "
-            f"result (#477).",
+            f"exited on its own, rc={rc}; lvs.rpt truncated or malformed). "
+            f"This is an INCOMPLETE run, NOT a clean or even a "
+            f"conclusive-mismatch result (#477).",
             extras={"lvs_report": "reports/phase3/lvs.rpt",
                     "netgen_rc": rc,
                     "ext2spice_warning": ext_warning,
@@ -37309,7 +37505,7 @@ def _run_extraction_lvs(project: Path, top: str, pdk: PdkConfig,
             "lvs", "FAIL", time.time() - t0,
             f"LVS INCOMPLETE: netgen produced no terminal verdict token "
             f"(rc={rc}); lvs.rpt has no 'Circuits match' / 'do NOT match' "
-            f"line — the compare was killed mid-run, not a conclusive "
+            f"line — the compare did not run to completion, not a conclusive "
             f"result (#477 — named in lvs_verdict.json)",
             extras={"finding": "LVS_NO_TERMINAL_VERDICT",
                     "lvs_report": "reports/phase3/lvs.rpt",
@@ -38996,6 +39192,120 @@ def mapped_netlist_available_for_atpg(project: Path) -> Tuple[bool, str]:
         return False, f"mapped-netlist probe unavailable: {exc}"
 
 
+#: Where the self-heal records WHAT it re-ran and WHY. Not a counter: a counter
+#: bounds a loop by how many times it has gone round, which says nothing about
+#: whether going round again would do anything new.
+_SELFHEAL_LEDGER_REL = "phase3/stage3/dft_selfheal_ledger.json"
+
+
+def _selfheal_state_fingerprint(project: Path, reason: str) -> Dict[str, Any]:
+    """WHAT THE TRIGGER ACTUALLY READ, as a comparable record.
+
+    CZT-18. `run_step11_dft_after_synth` re-invokes `step_dft_lec_chain` --
+    Steps 11, 12 AND 13 -- whenever Step 11 is unmeasured. Its predicate reads
+    Step-11 state and nothing else, so Step 13's post-layout LEC is re-run as
+    COLLATERAL: a proof that may have run for hours starts again from zero
+    because a DIFFERENT step has no artefact.
+
+    The legs are separate PROCESSES, each building its own `StepBudget` with
+    `attempts: 1`, so nothing inside the producer can see that this is the
+    second or third time. Bounding it needs a record OUTSIDE the invocation,
+    and this is that record: the inputs the trigger read, so a later invocation
+    can ask "would this repeat work that has already been done on exactly this
+    state?" rather than "how many times have I been here?".
+
+    A count would be wrong in both directions -- it would refuse a legitimate
+    re-run after a genuinely new netlist, and it would permit an identical one
+    as long as the counter had room.
+
+    Includes the mapped netlist's digest ON PURPOSE: a NEW netlist is a new
+    question and must be allowed to re-measure, however many times it has been
+    asked before. PURE apart from reading the tree.
+    """
+    missing = sorted(r for r in _STEP11_REQUIRED_REL
+                     if not (project / r).is_file())
+
+    def _digest(rel: str) -> Optional[str]:
+        f = project / rel
+        try:
+            if not f.is_file():
+                return None
+            return "sha256:" + hashlib.sha256(f.read_bytes()).hexdigest()
+        except OSError:
+            # NOT a default. "Could not read it" and "it is not there" are
+            # different facts, and collapsing them would let an unreadable file
+            # match an absent one and suppress a legitimate re-run.
+            return "unreadable"
+
+    return {"trigger_reason": reason,
+            "step11_required_absent": missing,
+            "not_run_record": _digest(_STEP11_NOT_RUN_REL),
+            "mapped_netlist": _digest("phase2/stage2/synth/netlist.v")}
+
+
+def _read_selfheal_ledger(project: Path) -> List[Dict[str, Any]]:
+    """Prior self-heal invocations, or [] when there are none.
+
+    An unreadable ledger returns [] and the caller SAYS so rather than treating
+    "could not read the record" as "there is no record" -- see the caller's
+    `ledger_readable` note.
+    """
+    try:
+        data = json.loads((project / _SELFHEAL_LEDGER_REL).read_text())
+    except (OSError, ValueError):
+        return []
+    return data if isinstance(data, list) else []
+
+
+def _append_selfheal_ledger(project: Path, entry: Dict[str, Any]) -> None:
+    """Append one invocation record. Never raises: bookkeeping must not break a
+    run that is otherwise working."""
+    path = project / _SELFHEAL_LEDGER_REL
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        rows = _read_selfheal_ledger(project)
+        rows.append(entry)
+        path.write_text(json.dumps(rows, indent=2, sort_keys=True) + "\n")
+    except OSError:
+        pass
+
+
+def _lec_leg_stop_evidence(project: Path) -> Optional[Dict[str, Any]]:
+    """The previous post-layout LEC leg's own record of having been STOPPED,
+    or None when it finished (or never ran).
+
+    CZT-18, second half. Re-invoking the 11->13 chain restarts Step 13's proof
+    FROM ZERO, and yosys `equiv_induct` carries no partial-proof serialisation
+    (Bucket-T / CZT-17), so every point the stopped leg had already proved is
+    discarded. That is a real cost and the flow used to pay it in silence.
+
+    This does not prevent the re-proof -- nothing downstream CAN, because the
+    proved set lives in the engine and the engine cannot hand it back. It makes
+    the cost NAMED, so a reader of the self-heal record sees that a proof was
+    restarted rather than continued, and how far the discarded leg had got.
+
+    Returns None on an absent or unreadable report: an absent record is not
+    evidence of a stop.
+    """
+    try:
+        rep = json.loads(
+            (project / "reports" / "lec.json").read_text(errors="replace"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(rep, dict):
+        return None
+    stopped = bool(rep.get("progress_stalled")) or bool(
+        rep.get("budget_exhausted")) or bool(rep.get("step_budget_exhausted"))
+    if not stopped:
+        return None
+    return {"verdict": rep.get("verdict"),
+            "progress_stalled": bool(rep.get("progress_stalled")),
+            "budget_exhausted": bool(rep.get("budget_exhausted")),
+            "compared_points": rep.get("compared_points"),
+            "unproven_points": rep.get("unproven_points"),
+            "elapsed_sec": rep.get("elapsed_sec")}
+
+
 def _clear_superseded_dft_nonmeasurements(dft_dir: Path) -> List[str]:
     """Remove phase-2 non-measurement records once a real measurement supersedes them.
 
@@ -39067,6 +39377,65 @@ def run_step11_dft_after_synth(project: Path, top: str,
             extras={"step11_needs_rerun": True,
                     "mapped_netlist_available": False,
                     "probe": why_map})]
+    # ---- CZT-18: BOUND THE RE-INVOCATION BY WHAT THE TRIGGER READ ---------
+    #
+    # This re-invokes `step_dft_lec_chain`, which is Steps 11, 12 AND 13. The
+    # trigger above looks at Step-11 state ONLY, so Step 13's post-layout LEC
+    # is re-run as COLLATERAL -- a proof that may have held a core for hours
+    # restarts from zero because a different step has no artefact. And because
+    # each leg is a separate PROCESS building its own `StepBudget` with
+    # `attempts: 1`, nothing inside the producer can see that this has happened
+    # before. The bound therefore has to live out here, in a record.
+    #
+    # NOT A COUNTER. A counter answers "how many times have I been here",
+    # which is the wrong question in both directions: it would refuse a
+    # legitimate re-measure after a genuinely new netlist, and it would permit
+    # an identical repeat as long as it had room. The bound is the STATE the
+    # trigger read -- the same reason over the same inputs cannot buy a second
+    # identical run, and a new netlist always can.
+    fingerprint = _selfheal_state_fingerprint(project, why_needs)
+    prior = _read_selfheal_ledger(project)
+    repeat = next((e for e in prior
+                   if e.get("fingerprint") == fingerprint
+                   and e.get("outcome") == "reinvoked"), None)
+    lec_stop = _lec_leg_stop_evidence(project)
+    if repeat is not None:
+        return [StepResult(
+            "dft_atpg_order_selfheal", "SKIP", time.time() - t0,
+            f"canonical Step 11 is still unmeasured ({why_needs}), and this "
+            f"chain was ALREADY re-invoked on byte-identical inputs at "
+            f"{repeat.get('when')} — same trigger, same absent outputs, same "
+            f"netlist digest. Running it again would repeat that work exactly, "
+            f"including Step 13's post-layout LEC, which restarts its proof "
+            f"from zero every time. The previous invocation's own verdicts "
+            f"stand; re-measuring needs a CHANGED input, not another attempt. "
+            f"See {_SELFHEAL_LEDGER_REL}.",
+            extras={"step11_needs_rerun": True,
+                    "bounded_by": "recorded state, not a count",
+                    "prior_invocation": repeat.get("when"),
+                    "fingerprint": fingerprint,
+                    "ledger": _SELFHEAL_LEDGER_REL})]
+    if lec_stop is not None:
+        # NAMED, not prevented. Nothing downstream CAN resume the proof: the
+        # proved set lives inside yosys and `equiv_induct` has no partial-proof
+        # serialisation to hand it back (Bucket-T / CZT-17). What the flow can
+        # stop doing is paying that cost in silence.
+        print(f"[phase3] dft_atpg_order_selfheal: the previous post-layout LEC "
+              f"leg was STOPPED (verdict {lec_stop.get('verdict')!r}, "
+              f"{lec_stop.get('compared_points')} points compared, "
+              f"{lec_stop.get('unproven_points')} unproven after "
+              f"{lec_stop.get('elapsed_sec')}s). Re-invoking the 11->13 chain "
+              f"RESTARTS that proof FROM ZERO — yosys equiv_induct carries no "
+              f"partial-proof serialisation, so nothing it already established "
+              f"can be handed back. This is collateral of a Step-11 trigger.",
+              file=sys.stderr)
+    import datetime as _dt          # function-local, as elsewhere in this file
+    _append_selfheal_ledger(project, {
+        "when": _dt.datetime.now(_dt.timezone.utc).isoformat(),
+        "fingerprint": fingerprint,
+        "outcome": "reinvoked",
+        "reinvoked": "design_one_shot_runner.step_dft_lec_chain",
+        "collateral_lec_restart_from_zero": lec_stop})
     try:
         import sys as _sys
         if str(PROGRAMS_DIR) not in _sys.path:
@@ -39096,6 +39465,12 @@ def run_step11_dft_after_synth(project: Path, top: str,
            f"artefact(s): {', '.join(_stale_cleared)}" if _stale_cleared else ""),
         extras={"reinvoked": "design_one_shot_runner.step_dft_lec_chain",
                 "trigger": why_needs, "netlist_probe": why_map,
+                "bounded_by": "recorded state, not a count",
+                "fingerprint": fingerprint,
+                "ledger": _SELFHEAL_LEDGER_REL,
+                # CZT-18 — what this re-invocation COST, named rather than
+                # paid in silence. None when the previous LEC leg finished.
+                "collateral_lec_restart_from_zero": lec_stop,
                 "rows": [f"{r.status} {r.name}" for r in rows]})]
     # Re-publish the producer's OWN verdicts as phase-3 rows, verbatim. A
     # sub-step that fails must stay visible as a failure -- the self-heal
@@ -39709,13 +40084,9 @@ def step_digital_hardmacro_gen(project: Path,
     # a run whose own provenance carried `tool magic, exit_code 0`.
     if container:
         cmd += ["--container", container]
-    try:
-        cp = subprocess.run(cmd, capture_output=True, text=True,
-                            errors="replace", timeout=1800)
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        return StepResult("digital_hardmacro_gen", "ENV_UNAVAILABLE",
-                          time.time() - t0,
-                          f"producer did not complete: {exc}")
+    cp, stopped = _run_producer("digital_hardmacro_gen", cmd, t0)
+    if stopped is not None:
+        return stopped
     detail = (cp.stdout or cp.stderr or "").strip().splitlines()
     msg = detail[0] if detail else f"rc={cp.returncode}"
     status = {0: "PASS", 1: "SKIP"}.get(cp.returncode, "ENV_UNAVAILABLE")
@@ -39818,13 +40189,9 @@ def step_ip_release_docs_gen(
             f"runner derivation manifest could not be written: {exc}")
     cmd = [sys.executable, str(prog), str(project), "--run-context",
            context.relative_to(project).as_posix()]
-    try:
-        cp = subprocess.run(cmd, capture_output=True, text=True,
-                            errors="replace", timeout=600)
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        return StepResult("ip_release_docs_gen", "ENV_UNAVAILABLE",
-                          time.time() - t0,
-                          f"producer did not complete: {exc}")
+    cp, stopped = _run_producer("ip_release_docs_gen", cmd, t0)
+    if stopped is not None:
+        return stopped
     detail_lines = (cp.stdout or cp.stderr or "").strip().splitlines()
     detail = detail_lines[0] if detail_lines else f"rc={cp.returncode}"
     status = {0: "PASS", 1: "SKIP", 2: "SKIP"}.get(cp.returncode,
@@ -39925,14 +40292,11 @@ def step_signoff_metrics_aggregate(project: Path) -> StepResult:
         return StepResult("signoff_metrics_aggregate", "BLOCKED",
                           time.time() - t0, f"producer not present: {prog}")
 
-    try:
-        cp = subprocess.run(
-            [sys.executable, str(prog), str(project)],
-            capture_output=True, text=True, errors="replace", timeout=300)
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        return StepResult("signoff_metrics_aggregate", "ENV_UNAVAILABLE",
-                          time.time() - t0,
-                          f"producer did not complete: {exc}")
+    cp, stopped = _run_producer(
+        "signoff_metrics_aggregate", [sys.executable, str(prog), str(project)],
+        t0)
+    if stopped is not None:
+        return stopped
     write_lines = (cp.stdout or cp.stderr or "").strip().splitlines()
     write_detail = write_lines[-1] if write_lines else f"rc={cp.returncode}"
     if cp.returncode != 0:
@@ -39942,14 +40306,12 @@ def step_signoff_metrics_aggregate(project: Path) -> StepResult:
             f"(rc={cp.returncode}): {write_detail}",
             extras={"flow_step": "37.4", "producer_rc": cp.returncode})
 
-    try:
-        checked = subprocess.run(
-            [sys.executable, str(prog), str(project), "--check"],
-            capture_output=True, text=True, errors="replace", timeout=300)
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        return StepResult("signoff_metrics_aggregate", "ENV_UNAVAILABLE",
-                          time.time() - t0,
-                          f"the record check did not complete: {exc}")
+    checked, stopped = _run_producer(
+        "signoff_metrics_aggregate",
+        [sys.executable, str(prog), str(project), "--check"], t0,
+        noun="the record check")
+    if stopped is not None:
+        return stopped
     check_lines = (checked.stdout or checked.stderr or "").strip().splitlines()
     check_detail = check_lines[-1] if check_lines else f"rc={checked.returncode}"
     outputs = [str(q) for q in (
@@ -40059,13 +40421,9 @@ def step_ic_release_docs_gen(project: Path) -> StepResult:
         return StepResult("ic_release_docs_gen", "SKIP", time.time() - t0,
                           f"{prog.name} not present in this tree")
     cmd = [sys.executable, str(prog), str(project)]
-    try:
-        cp = subprocess.run(cmd, capture_output=True, text=True,
-                            errors="replace", timeout=600)
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        return StepResult("ic_release_docs_gen", "ENV_UNAVAILABLE",
-                          time.time() - t0,
-                          f"producer did not complete: {exc}")
+    cp, stopped = _run_producer("ic_release_docs_gen", cmd, t0)
+    if stopped is not None:
+        return stopped
     detail_lines = (cp.stdout or cp.stderr or "").strip().splitlines()
     detail = detail_lines[0] if detail_lines else f"rc={cp.returncode}"
     status = {0: "PASS", 1: "SKIP", 2: "SKIP"}.get(cp.returncode,
@@ -41045,12 +41403,16 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                 _dyn_lef_args += ["--cell-lef", str(pdk.cell_lef)]
             if getattr(pdk, "liberty", None):
                 _dyn_lef_args += ["--liberty", str(pdk.liberty)]
-            subprocess.run(
+            # CZT-11 — a transient PSM solve is exactly the shape a wall
+            # clock ruins: it is long, legitimately, and it is CPU-bound with
+            # long quiet phases. Supervised on the child's output/CPU/IO
+            # instead; the note below now names a STALL as a stall.
+            _pr.run(
                 [sys.executable, str(PROGRAMS_DIR / "dynamic_ir_vectored_emit.py"),
                  "--project", str(project), "--out", str(dyn_ir_json),
                  "--static-json", str(rpt_phase3 / "ir_drop.json"),
                  "--container", container] + _dyn_lef_args,
-                timeout=1800, check=False, capture_output=True, text=True)
+                check=False, capture_output=True, text=True)
             if dyn_ir_json.is_file():
                 written.append(str(dyn_ir_json))
         except Exception as exc:
@@ -41082,10 +41444,11 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
             # EMITTER, and the gate re-runs the screen for the verdict. What
             # was wrong was the silence, not the leniency: an absent report was
             # indistinguishable from a clean one.
-            _dfm = subprocess.run(
+            # CZT-11 — supervised, not clocked.
+            _dfm = _pr.run(
                 [sys.executable, str(PROGRAMS_DIR / "dfm_screen_check.py"),
                  str(project)],
-                timeout=300, check=False, capture_output=True, text=True)
+                check=False, capture_output=True, text=True)
             if dfm_json.is_file():
                 written.append(str(dfm_json))
             else:
@@ -41454,8 +41817,10 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                         str(PROGRAMS_DIR / "si_mcf_sta.py"), "run",
                         str(project), "--container", container]
             _mcf_json.parent.mkdir(parents=True, exist_ok=True)
-            subprocess.run(_mcf_cmd, capture_output=True, text=True,
-                           timeout=1800)
+            # CZT-11 — supervised, not clocked. A multi-corner SI STA run is
+            # long by construction; the 1800 s literal stopped a solve that
+            # was still solving and the note below called it a failure.
+            _pr.run(_mcf_cmd, capture_output=True, text=True)
             if _mcf_json.is_file():
                 written.append(str(_mcf_json))
         except Exception as _mcf_exc:
@@ -49894,8 +50259,21 @@ def _emit_em_current_authority(project: Path, pdk: PdkConfig,
         before = out_json.stat().st_mtime if out_json.is_file() else None
     except OSError:
         before = None
-    proc = subprocess.run(cmd, timeout=600, check=False,
-                          capture_output=True, text=True)
+    # CZT-11 — THE ONE SITE IN THIS POPULATION WITH NO HANDLER AT ALL. A
+    # `TimeoutExpired` here did not become a verdict, a note or a skip: it
+    # propagated out of an emitter that is declared best-effort and returns a
+    # bool, taking the caller down with a traceback that names a clock. The
+    # clock is gone (a Jmax authority read is not long, but "not usually long"
+    # is not a bound and a busy host is not a finding), and the stall the
+    # supervisor CAN state is routed into this function's own contract: the
+    # artefact was not refreshed, said out loud in `notes`, return False.
+    try:
+        proc = _pr.run(cmd, check=False, capture_output=True, text=True)
+    except _pr.Stalled as _em_exc:
+        notes.append(
+            f"EM authority emit STALLED and was stopped: {_em_exc}. The Jmax "
+            f"tier stays honestly unresolved; nothing was refreshed.")
+        return False
     try:
         after = out_json.stat().st_mtime if out_json.is_file() else None
     except OSError:

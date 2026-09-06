@@ -393,7 +393,13 @@ def test_the_runner_step_never_fails_the_run(tmp_path, monkeypatch):
         seen["cmd"] = cmd
         return subprocess.CompletedProcess(cmd, seen["rc"], "line one\n", "")
 
-    monkeypatch.setattr(runner.subprocess, "run", fake_run)
+    # CZT-11 — the DISPATCHER moved, the assertions did not. This step
+    # dispatches its producer through `_progress_run` (no wall clock)
+    # instead of `subprocess.run(timeout=N)`, so a stub bound to
+    # `subprocess.run` no longer intercepts anything and the real
+    # producer runs. Retargeting the double is what keeps this test
+    # measuring what it was written to measure.
+    monkeypatch.setattr(runner._pr, "run", fake_run)
     for rc, expect in ((0, "PASS"), (1, "SKIP"), (2, "ENV_UNAVAILABLE")):
         seen["rc"] = rc
         res = runner.step_digital_hardmacro_gen(tmp_path)

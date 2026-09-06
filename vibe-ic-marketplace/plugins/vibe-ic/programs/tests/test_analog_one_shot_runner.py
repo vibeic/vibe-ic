@@ -322,13 +322,43 @@ def test_no_call_site_passes_timeout_into_the_progress_run_shim():
     programs_dir = require_repo(
         "vibe-ic-marketplace", "plugins", "vibe-ic", "programs")
     offenders = []
+    scanned = 0
     for py in sorted(programs_dir.rglob("*.py")):
         try:
             tree = ast.parse(py.read_text(errors="replace"))
         except SyntaxError:                      # not ours to police here
             continue
+        scanned += 1
+        # A CALL THAT PINS THE REFUSAL IS NOT AN OFFENCE (CZT2, measured RED on
+        # a clean tree at fa88faa424). This guard's population is the WHOLE tree
+        # including `tests/`, and a sibling test in that tree pins the
+        # primitive's own contract with
+        #     with pytest.raises(TypeError):
+        #         _pr.run([...], timeout=30)
+        # -- the call whose failure IS the assertion. Read as an offence, it
+        # made this guard fail on an unmodified checkout: two tests from one
+        # lane, one scanning a population that had come to contain the other.
+        # Excluding `tests/` wholesale would have been the easy repair and would
+        # have blinded the guard to every real offender in a test helper. The
+        # shape that is genuinely exempt is the call inside
+        # `pytest.raises(TypeError)`, so that is what is excluded and nothing
+        # else.
+        pinned = set()
         for node in ast.walk(tree):
-            if not isinstance(node, ast.Call):
+            if not isinstance(node, ast.With):
+                continue
+            for item in node.items:
+                ctx = item.context_expr
+                if (isinstance(ctx, ast.Call)
+                        and isinstance(ctx.func, ast.Attribute)
+                        and ctx.func.attr == "raises"
+                        and ctx.args
+                        and getattr(ctx.args[0], "id", None) == "TypeError"):
+                    for inner in ast.walk(node):
+                        if isinstance(inner, ast.Call):
+                            pinned.add(id(inner))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call) or id(node) in pinned:
                 continue
             fn = node.func
             if not isinstance(fn, ast.Attribute):
@@ -341,6 +371,12 @@ def test_no_call_site_passes_timeout_into_the_progress_run_shim():
                 if kw.arg == "timeout":
                     offenders.append(
                         "%s:%d" % (py.relative_to(programs_dir), node.lineno))
+    # THE DENOMINATOR, ASSERTED. "No offenders" over an unread tree is the
+    # vacuous pass this repo keeps re-finding, and the exemption above is
+    # exactly the kind of edit that can empty a population by accident.
+    assert scanned > 500, (
+        f"only {scanned} files parsed under {programs_dir} — this guard's "
+        f"population collapsed, so an empty offender list means nothing")
     assert offenders == [], (
         "these call sites pass `timeout=` into _progress_run.run, which has no such "
         "parameter, so they raise TypeError at run time: " + ", ".join(offenders))

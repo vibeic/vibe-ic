@@ -16072,35 +16072,14 @@ def _derive_dft_reset_name(blob: str) -> Tuple[str, bool]:
 # sites, build the 2-frame LOC miter ONCE, run its calibration probe, solve the
 # right-sized sample up to WALL_BUDGET_MAX, AND reap its own Yosys container. That
 # tail is bounded but non-zero, so the outer wall is cap + margin, never == cap.
-_TDF_ATPG_SETUP_REAP_MARGIN_S = 900
-
-
-def _tdf_atpg_subprocess_timeout_s() -> int:
-    """Outer wall (seconds) for the transition/at-speed ATPG subprocess (Step 11
-    / DT1), i.e. the ``timeout=`` this runner passes to ``subprocess.run`` when it
-    invokes ``transition_fault_atpg_run.py``.
-
-    It MUST cover that producer's OWN size-scaled wall. The producer sizes its
-    fault sample to complete within ``_scaled_wall_budget(--timeout floor,
-    scan_flops)`` — 1800 s floor + 3 s/scan-flop, CAPPED at ``WALL_BUDGET_MAX``
-    (7200 s) — and runs its Yosys batch under a docker ``timeout`` of that same
-    scaled wall. If this runner's outer ``subprocess.run`` timeout is BELOW that
-    cap, then on any design large enough to earn more than the floor (any design
-    with scan flops) the runner SIGKILLs the producer mid-batch before it can
-    grade its sized sample: no ``transition_coverage.json`` is ever written, the
-    at-speed sub-check is left with no evidence (a hard FAIL, not a measured
-    number), and — because the reap runs in the producer we just killed — the
-    producer's Yosys container is orphaned and keeps burning CPU. A fixed outer
-    timeout below the producer's cap therefore silently DEFEATS the producer's
-    entire size-scaling. This wall tracks the producer's cap so it cannot drift
-    below it. Chip / PDK / vendor AGNOSTIC — keyed ONLY on the producer's own
-    WALL_BUDGET_MAX plus a fixed setup/reap margin, never on any design or
-    library literal."""
-    try:
-        from transition_fault_atpg_run import WALL_BUDGET_MAX as _cap
-    except Exception:
-        _cap = 7200  # producer default; keep in sync if it ever import-fails
-    return int(_cap) + _TDF_ATPG_SETUP_REAP_MARGIN_S
+# CZT-10 — the outer at-speed ATPG wall, and the helper that derived it, are
+# GONE.  They existed to keep the runner's `subprocess.run(timeout=)` from
+# drifting BELOW the producer's own size-scaled cap; the dispatch is now
+# supervised on the producer's forward progress and carries no bound at all, so
+# there is nothing left to keep in step with the cap.  Keeping a helper nothing
+# calls, pinned by a test, would leave a reader believing a wall is still there.
+# See `tests/test_tdf_atpg_outer_wall_covers_producer.py` for the measurement
+# that the producer's fault sample is sized by the producer alone.
 
 
 def step_dft_lec_chain(project: Path, top_name: str, container: str,
@@ -16277,10 +16256,18 @@ def step_dft_lec_chain(project: Path, top_name: str, container: str,
                           str((project / "input" / "pdk").resolve())]
         _scan_t0 = time.time()
         try:
-            _sc = subprocess.run(_scan_cmd, capture_output=True, text=True,
-                                 timeout=1800)
+            # CZT-11 — supervised, not clocked. The 1800 s literal here
+            # stopped a scan-chain insertion that was still inserting, and the
+            # arm below then recorded it as an "execution error" of the tool:
+            # a host condition written down as a fact about the program.
+            _sc = _pr.run(_scan_cmd, capture_output=True, text=True)
             _scan_rc = _sc.returncode
             _scan_tail = (_sc.stderr or _sc.stdout or "")[-300:]
+        except _pr.Stalled as exc:
+            # A STALL IS NOT AN EXECUTION ERROR. The tool ran; every readable
+            # progress signal then sat still. Same non-zero rc (the caller
+            # only tests `== 0`), a tail that says which of the two it was.
+            _scan_rc, _scan_tail = _pr.RC_STALLED, f"STALLED: {exc}"[-300:]
         except Exception as exc:                       # noqa: BLE001
             _scan_rc, _scan_tail = -1, f"execution error: {exc}"
         _scan_meta = _read_scan_chain_meta(project)
@@ -16336,7 +16323,10 @@ def step_dft_lec_chain(project: Path, top_name: str, container: str,
             if _cell_model:
                 cmd += ["--cell-model-path", _cell_model]
         try:
-            r = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
+            # CZT-11 / CZT-10 — supervised, not clocked. See the stall arm
+            # below for why this is the OTHER half of vibe-ic#581, which that
+            # issue explicitly left open.
+            r = _pr.run(cmd, capture_output=True, text=True)
             scan_nl = dft_dir / "scan_netlist.v"
             # Did the ATPG ENGINE actually MEASURE coverage?
             # An engine that could not run at all (missing model, generic
@@ -16396,11 +16386,14 @@ def step_dft_lec_chain(project: Path, top_name: str, container: str,
                 # real coverage measurement → let the coverage gate judge
                 # PASS/FAIL honestly. Also emit the BSDL plan.
                 try:
-                    subprocess.run(
+                    # CZT-11 — supervised, not clocked. `Stalled` is a
+                    # RuntimeError, so the bare `except Exception` below
+                    # already catches it; only the clock is removed.
+                    _pr.run(
                         [sys.executable, str(PROGRAMS_DIR / "bsdl_emit.py"),
                          str(project), "--auto", "--json",
                          str(reports_dir / "phase2/dft/bsdl_plan.json")],
-                        capture_output=True, text=True, timeout=300)
+                        capture_output=True, text=True)
                 except Exception:
                     pass
                 _outs = ["reports/phase2/dft/coverage.json"]
@@ -16526,7 +16519,7 @@ def step_dft_lec_chain(project: Path, top_name: str, container: str,
                     (f"DFT scan inserted; OSS ATPG coverage "
                      f"engine-limited (pdk={pdk}) → "
                      f"disclosed capability-gap")))
-        except subprocess.TimeoutExpired as exc:
+        except _pr.Stalled as exc:
             # vibe-ic#581 — A TIMEOUT IS A BUDGET OUTCOME, NOT A CAPABILITY GAP.
             #
             # This used to fall into the blanket `except Exception` below and be
@@ -16547,23 +16540,47 @@ def step_dft_lec_chain(project: Path, top_name: str, container: str,
             # "raise the budget" from "the tool cannot do this", which the
             # capability flag actively prevented.
             #
-            # The budget is still a size-independent constant. That is the OTHER
-            # half of #581 and it is deliberately NOT fixed here: scaling it needs
-            # a measured cells-per-second, and inventing a formula would replace a
-            # wrong constant with an unmeasured one.
-            _to = getattr(exc, "timeout", None)
+            # CZT-10 — AND THIS IS THE OTHER HALF OF #581, NOW CLOSED.
+            #
+            # #581 left it open in these words: "The budget is still a
+            # size-independent constant ... scaling it needs a measured
+            # cells-per-second, and inventing a formula would replace a wrong
+            # constant with an unmeasured one." That is exactly right, and the
+            # conclusion it stops one step short of is that the constant should
+            # not be SCALED, it should be GONE. A budget that a correct run can
+            # exhaust is a wrong answer at every value, and a bigger one is the
+            # same defect with a later date.
+            #
+            # The dispatch is now supervised on the child's own forward
+            # progress, so an ATPG run that is still grading is never stopped,
+            # at any size, with no formula to calibrate. What reaches this arm
+            # is `Stalled`: every readable signal sat still across N
+            # consecutive looks. That is a finding ABOUT THE ENGINE'S RUN --
+            # actionable, which the expiry never was.
+            #
+            # THE RECORD NO LONGER NAMES A BUDGET, because there is not one.
+            # `budget_exceeded` / `wall_budget_s` said "raise the number"; the
+            # honest fields are what was watched and for how long. The
+            # classification #581 fought for is UNCHANGED: still no
+            # `capability_flag` here (the engine ran), still ahead of the
+            # blanket `except Exception` which keeps the flag for a genuine
+            # capability gap.
             _dft_disclose_skip(
                 dft_dir / "dft_atpg_not_run.json",
-                f"Fault ATPG exceeded its wall budget of {_to}s — the engine was "
-                f"running, not unable. This is a BUDGET outcome, not a capability "
-                f"gap (vibe-ic#581).",
-                {"budget_exceeded": True,
-                 "wall_budget_s": _to,
+                f"Fault ATPG STALLED and was stopped: {exc}. The engine was "
+                f"launched and then made no forward progress on ANY readable "
+                f"signal, so this is a finding about the RUN, not a capability "
+                f"gap (vibe-ic#581) and not a wall clock (CZT-10).",
+                {"stopped_as": "STALLED",
+                 "stall_looks": getattr(exc, "looks", None),
+                 "stall_elapsed_s": getattr(exc, "elapsed_s", None),
+                 "stall_signals": getattr(exc, "signals", None),
+                 "not_run_stage": "producer_stalled",
                  "pdk_detected": pdk_label})
             results.append(StepResult(
                 "dft_insertion", "SKIP", time.time() - t0,
-                f"Fault ATPG exceeded its {_to}s wall budget → disclosed-skip "
-                f"(budget, not capability)"))
+                f"Fault ATPG stopped making forward progress → disclosed-skip "
+                f"(a stall, not a capability and not a clock)"))
         except Exception as exc:
             _dft_disclose_skip(dft_dir / "dft_atpg_not_run.json",
                                f"Fault ATPG execution error: {exc}",
@@ -16638,8 +16655,7 @@ def step_dft_lec_chain(project: Path, top_name: str, container: str,
             # WALL_BUDGET_MAX); a fixed value below that cap SIGKILLs the producer
             # mid-batch on any flop-bearing design, so it writes no coverage and
             # leaks its container. See _tdf_atpg_subprocess_timeout_s.
-            _tdf_p = subprocess.run(tdf_cmd, capture_output=True, text=True,
-                                    timeout=_tdf_atpg_subprocess_timeout_s())
+            _tdf_p = _pr.run(tdf_cmd, capture_output=True, text=True)
             if not tdf_json.is_file():
                 # Ran, produced nothing. The producer writes its JSON on every
                 # path it reaches, so reaching none of them is itself the
@@ -16661,7 +16677,7 @@ def step_dft_lec_chain(project: Path, top_name: str, container: str,
                     _tdf_not_run.unlink()
                 except OSError:
                     pass
-        except subprocess.TimeoutExpired as exc:
+        except _pr.Stalled as exc:
             # vibe-ic#581 (extended to the AT-SPEED path) — A TIMEOUT IS A BUDGET
             # OUTCOME, NOT A CAPABILITY GAP.
             #
@@ -16694,17 +16710,45 @@ def step_dft_lec_chain(project: Path, top_name: str, container: str,
             # genuine budget outcome at the FULL scaled budget — not the old
             # fixed-1800 s throttle that abandoned the producer before its own
             # sized batch could finish.
-            _to = getattr(exc, "timeout", None)
+            # CZT-10 — THE OUTER WALL IS GONE, AND THE FAULT SAMPLE DID NOT
+            # MOVE. This was left untouched by the previous lane on the grounds
+            # that the inner budget also SIZES the sample, so removing the wall
+            # might silently shrink what gets graded. MEASURED rather than
+            # assumed, on the producer's own pure functions:
+            #
+            #   _scaled_wall_budget(1800, scan_flops)  0 -> 1800s,
+            #       1000 -> 4800s, 1800+ -> 7200s (WALL_BUDGET_MAX)
+            #   _rightsize_sample(0.5, 120, W, ...)  W=1800 -> 2820 faults,
+            #       W=3600 -> 5880, W=7200 -> 12000
+            #
+            # So the coupling is REAL -- but it is the INNER budget that sizes
+            # the sample, and the dataflow between the two is ONE-WAY:
+            # `_tdf_atpg_subprocess_timeout_s()` is DERIVED FROM
+            # `WALL_BUDGET_MAX`, and the outer value reaches the producer
+            # nowhere. Read off the argv with `ast` (which cannot see the
+            # comment that mentions the helper by name, and my first probe
+            # matched exactly that comment and had to be redone): `tdf_cmd`
+            # carries --clock / --max-faults / --json / --liberty / --pdk-dir
+            # and no wall, budget or timeout flag at all.
+            #
+            # The producer therefore still sizes its sample from its OWN floor
+            # and cap, unchanged, and the runner simply stops killing it. The
+            # two were separable, and this arm is what the separation leaves:
+            # a stall is a finding about the run.
             _dft_disclose_skip(
                 _tdf_not_run,
-                f"transition-delay-fault ATPG exceeded its wall budget of {_to}s — "
-                f"the SAT engine was running, not unable. This is a BUDGET outcome, "
-                f"not a capability gap (vibe-ic#581).",
-                {"budget_exceeded": True,
-                 "wall_budget_s": _to,
+                f"transition-delay-fault ATPG STALLED and was stopped: {exc}. "
+                f"The SAT engine was launched and then made no forward progress "
+                f"on ANY readable signal — a finding about the RUN, not a "
+                f"capability gap (vibe-ic#581) and not a wall clock (CZT-10). "
+                f"The producer's own size-scaled sample is untouched.",
+                {"stopped_as": "STALLED",
+                 "stall_looks": getattr(exc, "looks", None),
+                 "stall_elapsed_s": getattr(exc, "elapsed_s", None),
+                 "stall_signals": getattr(exc, "signals", None),
                  "skips_required_output":
                      "reports/phase2/dft/transition_coverage.json",
-                 "not_run_stage": "producer_wall_budget_exceeded"})
+                 "not_run_stage": "producer_stalled"})
         except Exception as exc:
             _dft_disclose_skip(
                 _tdf_not_run,

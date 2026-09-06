@@ -1059,15 +1059,19 @@ def step_for_block(project: Path, block: Dict[str, Any], step_name: str,
         gds_prog = PROGRAMS_DIR / "analog_hardmacro_gds_emit.py"
         if gds_prog.is_file():
             try:
-                subprocess.run(
+                # CZT-11 — supervised, not clocked. `Stalled` is a
+                # RuntimeError and is NOT a `SubprocessError`, so it is named
+                # in the handler: converting the call without widening the arm
+                # would turn a swallowed advisory into an escaping exception.
+                _pr.run(
                     [sys.executable, str(gds_prog), str(project),
                      "--block", bname,
                      "--container",
                      (getattr(args, "container", None)
                       or os.environ.get("VIBEIC_ANALOG_CONTAINER",
                                         "vibeic-eda"))],
-                    capture_output=True, text=True, timeout=1800)
-            except (OSError, subprocess.SubprocessError):
+                    capture_output=True, text=True)
+            except (OSError, subprocess.SubprocessError, _pr.Stalled):
                 # Producing is not a verdict; the A8 gate below still reports
                 # the missing artefact on its own evidence.
                 pass
@@ -1090,15 +1094,16 @@ def step_for_block(project: Path, block: Dict[str, Any], step_name: str,
         _pin_prog = PROGRAMS_DIR / "analog_hardmacro_pinname_consistency_check.py"
         if _pin_prog.is_file():
             try:
-                _pin_r = subprocess.run(
+                # CZT-11 — supervised, not clocked (see the GDS emit above).
+                _pin_r = _pr.run(
                     [sys.executable, str(_pin_prog), str(project)],
-                    capture_output=True, text=True, timeout=300)
+                    capture_output=True, text=True)
                 for _ln in ((_pin_r.stdout or "") + (_pin_r.stderr or "")
                             ).splitlines():
                     if "[ERROR]" in _ln or "[WARN" in _ln:
                         print(f"[A8 advisory] interface consistency: "
                               f"{_ln.strip()}")
-            except (OSError, subprocess.SubprocessError) as _pe:
+            except (OSError, subprocess.SubprocessError, _pr.Stalled) as _pe:
                 print(f"[A8 advisory] interface consistency check did not "
                       f"run: {_pe}")
 
@@ -1140,10 +1145,11 @@ def step_for_block(project: Path, block: Dict[str, Any], step_name: str,
         rail_prog = PROGRAMS_DIR / "l21_macro_supply_rail_synth.py"
         if rail_prog.is_file():
             try:
-                subprocess.run(
+                # CZT-11 — supervised, not clocked.
+                _pr.run(
                     [sys.executable, str(rail_prog), str(project), "--apply"],
-                    capture_output=True, text=True, timeout=300)
-            except (OSError, subprocess.SubprocessError):
+                    capture_output=True, text=True)
+            except (OSError, subprocess.SubprocessError, _pr.Stalled):
                 pass
 
     det = det_progs.get(step_name)
@@ -1175,9 +1181,12 @@ def step_for_block(project: Path, block: Dict[str, Any], step_name: str,
                                                  "vibeic-eda"))]
                 _pcmd += list(_prod.get("extra_args") or [])
                 try:
-                    _pre_cp = subprocess.run(_pcmd, capture_output=True,
-                                             text=True, timeout=1800)
-                except (OSError, subprocess.SubprocessError):
+                    # CZT-11 — the producer one line below was already
+                    # supervised (`_pr.run`); this PRE-producer beside it was
+                    # still on a 1800 s clock, so a slow prerequisite could be
+                    # killed and its own successor then ran on nothing.
+                    _pre_cp = _pr.run(_pcmd, capture_output=True, text=True)
+                except (OSError, subprocess.SubprocessError, _pr.Stalled):
                     _pre_cp = None
                 if _pre_cp is not None and _pre_cp.returncode == 0:
                     _emitted = {"prod": _prod, "cp": _pre_cp}
@@ -1345,9 +1354,9 @@ def step_for_block(project: Path, block: Dict[str, Any], step_name: str,
                                       "vibeic-eda"))]
                     pcmd += list(prod.get("extra_args") or [])
                     try:
-                        pcp = subprocess.run(pcmd, capture_output=True,
-                                             text=True, timeout=1800)
-                    except (OSError, subprocess.SubprocessError):
+                        # CZT-11 — same shape as the pre-producer above.
+                        pcp = _pr.run(pcmd, capture_output=True, text=True)
+                    except (OSError, subprocess.SubprocessError, _pr.Stalled):
                         pcp = None
                     if pcp is not None and pcp.returncode == 0:
                         cp_prod = _pr.run(cmd, capture_output=True,

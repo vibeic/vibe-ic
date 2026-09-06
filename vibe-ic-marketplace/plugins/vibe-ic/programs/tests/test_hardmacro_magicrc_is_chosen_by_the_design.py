@@ -199,7 +199,13 @@ def test_the_runner_hands_the_producer_the_designs_own_pdk(tmp_path, monkeypatch
         import subprocess as sp
         return sp.CompletedProcess(cmd, 0, "ok\n", "")
 
-    monkeypatch.setattr(r.subprocess, "run", fake_run)
+    # CZT-11 — the DISPATCHER moved, the assertions did not. This step
+    # dispatches its producer through `_progress_run` (no wall clock)
+    # instead of `subprocess.run(timeout=N)`, so a stub bound to
+    # `subprocess.run` no longer intercepts anything and the real
+    # producer runs. Retargeting the double is what keeps this test
+    # measuring what it was written to measure.
+    monkeypatch.setattr(r._pr, "run", fake_run)
     r.step_digital_hardmacro_gen(tmp_path, pdk)
     assert "--pdk-root" in seen["cmd"], (
         f"the producer was invoked without --pdk-root, so it falls back to "

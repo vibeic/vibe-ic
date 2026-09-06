@@ -297,7 +297,15 @@ def test_the_analog_runner_invokes_this_producer_at_a8_and_only_there(
             return getattr(_sp, name)
 
     rec = _Recorder()
+    # CZT-11 — the DISPATCHER moved, the assertions did not. The A8 producer
+    # dispatch is supervised through `_progress_run` (no wall clock) instead of
+    # `subprocess.run(timeout=N)`, so a recorder attached to the runner's
+    # `subprocess` module records nothing and this test reads 0 dispatches for a
+    # producer that was in fact dispatched. Both modules are recorded, so the
+    # test still sees the dispatch wherever the runner routes it -- and it keeps
+    # seeing it if a site is ever routed back.
     monkeypatch.setattr(AOSR, "subprocess", rec)
+    monkeypatch.setattr(AOSR, "_pr", rec)
 
     proj = tmp_path / "proj"
     proj.mkdir()
