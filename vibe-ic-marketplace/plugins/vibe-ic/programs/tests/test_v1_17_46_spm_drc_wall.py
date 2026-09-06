@@ -207,6 +207,15 @@ def test_lvs_a_non_match_is_still_not_a_count(tmp_path):
     assert "'MISMATCH'" in cell.reason and "not MATCH" in cell.reason
 
 
+def test_lvs_audit_spelling_mismatch_is_still_not_a_count(tmp_path):
+    """The no-leak arm that is GREEN ON BOTH SIDES of this change: reading a
+    second spelling must not have made the FIRST one softer."""
+    proj = _write_lvs(tmp_path, {"summary": {"terminal_verdict": "MISMATCH"}})
+    cell = sma._lvs(proj, LVS_KEYS[1])
+    assert cell.value == "NOT_MEASURED"
+    assert "not MATCH" in cell.reason
+
+
 def test_lvs_no_verdict_at_all_names_both_spellings(tmp_path):
     proj = _write_lvs(tmp_path, {"summary": {"devices": {"ckt1": 1}}})
     cell = sma._lvs(proj, LVS_KEYS[0])
@@ -247,10 +256,84 @@ def test_sta_corner_basis_is_empty_when_the_report_declares_nothing():
     assert b["liberty"] == ""
 
 
-def test_driver_declines_rather_than_correlating_across_corners():
-    src = (PROGS / "spice_correlation_check.py").read_text()
-    assert "refusing a cross-corner correlation" in src
-    assert "refusing to correlate it against another corner" in src
+def _stub_driver(monkeypatch, tmp_path, sta_text, calls):
+    """Minimal project + stubs so the driver reaches its corner decision.
+
+    Everything downstream of that decision is allowed to fail -- the assertion
+    is about WHICH liberty the deck is built from, and that is decided before
+    any of it. Nothing here is a string search: a driver that went back to the
+    active corner records the active corner."""
+    pnr = tmp_path / "phase3" / "stage3" / "pnr"
+    pnr.mkdir(parents=True)
+    (pnr / "spm_pnr.v").write_text("module spm(); endmodule\n")
+    ext = tmp_path / "phase3" / "stage3" / "extracted"
+    ext.mkdir(parents=True)
+    (ext / "spm.spef").write_text("*SPEF \"ieee 1481-1999\"\n")
+    sta = tmp_path / "phase3" / "stage3" / "sta"
+    sta.mkdir(parents=True)
+    (sta / "sta_mcorner_ocv.rpt").write_text(sta_text)
+
+    monkeypatch.setattr(scc, "_resolve_ngspice", lambda c: "/bin/ngspice")
+    monkeypatch.setattr(
+        scc, "_read_container_text",
+        lambda c, path: (calls["read"].append(path), "library (x) { }")[1])
+    monkeypatch.setattr(scc, "parse_verilog_instances", lambda t: {})
+
+    def _disc(container, liberty, required):
+        calls["discover"].append(liberty)
+        return {"subckt_names": {"buf"}, "cell_spice": "/c.spice",
+                "cell_text": "", "model_file": "/m.spice",
+                "model_section": "ss", "model_preludes": []}
+    monkeypatch.setattr(scc, "discover_installed_pdk_sources", _disc)
+    monkeypatch.setattr(scc, "sta_path_stitch_score", lambda t, n: 5)
+    monkeypatch.setattr(
+        scc, "parse_sta_path",
+        lambda t: {"startpoint": "a", "endpoint": "b", "rows": [],
+                   "path_delay_ns": 13.4, "endpoint_transition": "rise"})
+
+
+ACTIVE_TT = "/pdk/lib/cell__tt_025C_5v00.lib"
+
+
+def test_driver_builds_the_deck_at_the_corner_the_report_declares(
+        monkeypatch, tmp_path):
+    """MEASURED: the deck was tt / 25 C / 5.00 V and the path came from a
+    report produced at ss / 125 C / 4.50 V. -71.101 % of "design error"."""
+    calls = {"read": [], "discover": []}
+    _stub_driver(monkeypatch, tmp_path, _OCV_REPORT, calls)
+    scc.run_installed_pdk_path_correlation(
+        tmp_path, liberty_path=ACTIVE_TT, container="none")
+    ss = "/pdk/lib/cell__ss_125C_4v50.lib"
+    assert ss in calls["read"], (
+        "the corner liberty the STA report declares was never read")
+    assert calls["discover"][-1] == ss, (
+        f"the device-model section was discovered for {calls['discover'][-1]}, "
+        f"not for the corner the report was produced at")
+
+
+def test_driver_declines_when_the_report_declares_no_corner(
+        monkeypatch, tmp_path):
+    """An undeclared corner is a REFUSAL, never a fallback to the active one."""
+    calls = {"read": [], "discover": []}
+    _stub_driver(monkeypatch, tmp_path,
+                 "Startpoint: a\nEndpoint: b\n  0.00 0.00 x\n", calls)
+    out = scc.run_installed_pdk_path_correlation(
+        tmp_path, liberty_path=ACTIVE_TT, container="none")
+    assert out["status"] == "ERROR"
+    assert "declares no corner liberty" in out["reason"]
+
+
+def test_driver_declines_when_the_declared_corner_cannot_be_read(
+        monkeypatch, tmp_path):
+    calls = {"read": [], "discover": []}
+    _stub_driver(monkeypatch, tmp_path, _OCV_REPORT, calls)
+    monkeypatch.setattr(
+        scc, "_read_container_text",
+        lambda c, path: "library (x) { }" if path == ACTIVE_TT else None)
+    out = scc.run_installed_pdk_path_correlation(
+        tmp_path, liberty_path=ACTIVE_TT, container="none")
+    assert out["status"] == "ERROR"
+    assert "unreadable" in out["reason"]
 
 
 def test_driver_divides_out_the_ocv_derate_the_spice_side_does_not_carry():
