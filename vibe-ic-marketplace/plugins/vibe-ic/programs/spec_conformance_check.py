@@ -1986,6 +1986,74 @@ def _frame_contract_findings(input_prose: str, rtl_body: str,
     return f
 
 
+# ── a derived register that leads the register the spec named as its source ──
+# The spec pattern is "the converted <X> ... is/are stored in register(s) <R>":
+# it names R as a REGISTER whose content is a conversion OF X. The RTL deviation
+# is to register the conversion of X's NEXT value instead — inside one clocked
+# block, `X <= <next_X>;` beside `R <= f(<next_X>);`. R then leads X by one cycle,
+# and every flag compared against R moves one cycle with it. The two forms are
+# both idiomatic in isolation (the leading form is the classic pointer-pipeline
+# shape), which is exactly why this needs the SPEC to have named R's source:
+# without that sentence the rule stays silent.
+# chip-AGNOSTIC: prose grammar + assignment structure; no design/vendor literal.
+_SPEC_STORED_CONVERSION = (
+    r'\b(?:converted|conversion)\b[^.]{0,240}?\bstored\s+in\s+(?:the\s+)?'
+    r'registers?\s+(?P<names>[A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)*'
+    r'(?:\s*and\s+[A-Za-z_]\w*)?)')
+
+
+def _spec_named_conversion_registers(spec_text: str) -> List[str]:
+    """Register names the SPEC says hold a conversion of something else."""
+    import re
+    out: List[str] = []
+    for m in re.finditer(_SPEC_STORED_CONVERSION, spec_text or '', re.I):
+        for nm in re.split(r'\s*(?:,|and)\s*', m.group('names')):
+            nm = nm.strip()
+            if nm and nm not in out:
+                out.append(nm)
+    return out
+
+
+def _nonblocking_assignments(region: str):
+    """(lhs, rhs) for every whole-signal non-blocking assignment in a region."""
+    import re
+    out = []
+    for m in re.finditer(r'\b([A-Za-z_]\w*)\s*<=\s*([^;]+);', region):
+        out.append((m.group(1), re.sub(r'\s+', ' ', m.group(2)).strip()))
+    return out
+
+
+def _derived_register_leads_named_source(spec_text: str, rtl_body: str):
+    """[(derived, source, rhs_derived, rhs_source)] for each spec-named
+    conversion register the RTL registers from its source's NEXT value."""
+    import re
+    named = set(_spec_named_conversion_registers(spec_text))
+    if not named:
+        return []
+    hits = []
+    for kind, region in _rtl_regions(rtl_body):
+        if kind != 'seq':
+            continue
+        pairs = _nonblocking_assignments(region)
+        for r_lhs, r_rhs in pairs:
+            if r_lhs not in named:
+                continue
+            for x_lhs, x_rhs in pairs:
+                if x_lhs == r_lhs or x_lhs in named:
+                    continue
+                # x_rhs must be a real NEXT-STATE expression of x (it reads x)
+                if not re.search(r'\b%s\b' % re.escape(x_lhs), x_rhs):
+                    continue
+                if x_rhs not in r_rhs:      # r is not built on x's next value
+                    continue
+                # r must not ALSO read x outside that embedded next-state term
+                if re.search(r'\b%s\b' % re.escape(x_lhs),
+                             r_rhs.replace(x_rhs, ' ')):
+                    continue
+                hits.append((r_lhs, x_lhs, r_rhs, x_rhs))
+    return hits
+
+
 def check(spec: SpecContract, rtl_name: str, rtl_ports: List[Port],
           rtl_resets: dict, rtl_registered: Optional[bool],
           path: str, rtl_body: str = '', spec_text: str = '',
@@ -2011,6 +2079,24 @@ def check(spec: SpecContract, rtl_name: str, rtl_ports: List[Port],
             "Re-read the interface: a bullet-listed pin direction may be a "
             "prompt typo (the hidden testbench is the port-direction "
             "authority); flip the mis-read pin to an output."))
+
+    # ---- a spec-named conversion register that LEADS its own source ---------
+    # Declared ADVISORY at the emit gate (not in EMIT_BLOCKING_CONFORMANCE_RULES):
+    # the deviation is measured on one design, and refusing the emit would route
+    # the problem to AI authoring rather than repair it. It is an ERROR in the
+    # conformance report so the CLI exits 1 and the reviewer sees it.
+    if rtl_body and spec_text:
+        for _d, _srcname, _drhs, _srhs in _derived_register_leads_named_source(
+                spec_text, rtl_body):
+            f.append(Finding(path, 'ERROR', 'derived-register-leads-named-source',
+                _d,
+                f"the spec says register '{_d}' STORES a conversion of "
+                f"'{_srcname}', but the RTL registers it from '{_srcname}'s own "
+                f"next value (`{_d} <= {_drhs};` beside `{_srcname} <= {_srhs};`)"
+                f" — so '{_d}' leads '{_srcname}' by one clock and every "
+                f"comparison built on '{_d}' moves one cycle earlier than the "
+                f"spec's register does. Store the conversion of '{_srcname}' "
+                f"itself."))
 
     # ---- port conformance --------------------------------------------------
     # Only when the spec actually declares an interface — a reset/latency-only

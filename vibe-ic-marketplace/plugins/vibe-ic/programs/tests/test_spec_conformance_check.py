@@ -341,3 +341,143 @@ def test_unresolvable_param_width_skips_assertion(tmp_path):
         {"name": "stat", "dir": "output", "width": 8}]})
     res, findings = run(tmp_path, spec, rtl, '.json', '--top', 'u')
     assert 'port-width-mismatch' not in rules(findings), findings
+
+
+# ---- a spec-named conversion register that LEADS its own source -----------
+# RTLLM asyn_fifo, measured 2026-09-06 on the official testbench: changing ONLY
+# `wptr <= gray(waddr_bin + wen)` to `wptr <= gray(waddr_bin)` (and the read
+# counterpart) turns the blind candidate from Error to "Your Design Passed",
+# with 20 of 48 reference samples mismatching before and 0 after. The spec had
+# already named the register and its source: "The converted write and read
+# pointers are stored in registers wptr and rptr."
+_CONV_SPEC = (
+    "The write and read pointers are binary registers waddr_bin and raddr_bin. "
+    "The pointers are converted to Gray code using XOR operations with "
+    "right-shifted values. The converted write and read pointers are stored in "
+    "registers wptr and rptr, respectively."
+)
+
+_CONV_RTL_LEADS = """
+module ptr(input clk, input rst_n, input inc, output [4:0] g);
+  reg [4:0] waddr_bin, wptr;
+  always @(posedge clk or negedge rst_n)
+    if(!rst_n) begin waddr_bin <= 5'd0; wptr <= 5'd0; end
+    else begin
+      waddr_bin <= waddr_bin + inc;
+      wptr <= (waddr_bin + inc) ^ ((waddr_bin + inc) >> 1);
+    end
+  assign g = wptr;
+endmodule
+"""
+
+_CONV_RTL_STORES_ITS_SOURCE = _CONV_RTL_LEADS.replace(
+    "wptr <= (waddr_bin + inc) ^ ((waddr_bin + inc) >> 1);",
+    "wptr <= waddr_bin ^ (waddr_bin >> 1);")
+
+
+def test_derived_register_registered_from_its_sources_next_value(tmp_path):
+    res, findings = run(tmp_path, _CONV_SPEC, _CONV_RTL_LEADS)
+    assert 'derived-register-leads-named-source' in rules(findings), findings
+    hit = next(f for f in findings
+               if f['rule'] == 'derived-register-leads-named-source')
+    assert hit['symbol'] == 'wptr'
+    assert 'waddr_bin' in hit['message']
+    assert res.returncode == 1
+
+
+def test_derived_register_that_stores_its_named_source_is_silent(tmp_path):
+    # The negative control: the SAME spec, the SAME module, one expression
+    # changed to the form the spec names.
+    _res, findings = run(tmp_path, _CONV_SPEC, _CONV_RTL_STORES_ITS_SOURCE)
+    assert 'derived-register-leads-named-source' not in rules(findings), findings
+
+
+def test_derived_register_rule_needs_the_spec_to_name_the_register(tmp_path):
+    # §4.05 no-leak: without the sentence that names the register and its
+    # source, the leading form is ordinary idiomatic RTL and must NOT fire.
+    spec_no_naming = ("The write pointer is converted to Gray code using XOR "
+                      "operations with right-shifted values.")
+    _res, findings = run(tmp_path, spec_no_naming, _CONV_RTL_LEADS)
+    assert 'derived-register-leads-named-source' not in rules(findings), findings
+
+
+def test_derived_register_rule_is_not_fired_by_a_shared_reset_literal(tmp_path):
+    # Both registers reset to the same literal in the same block; that identity
+    # is not a lead-by-one and must not fire.
+    rtl = """
+module ptr(input clk, input rst_n, input inc, output [4:0] g);
+  reg [4:0] waddr_bin, wptr;
+  always @(posedge clk or negedge rst_n)
+    if(!rst_n) begin waddr_bin <= 5'd0; wptr <= 5'd0; end
+    else begin
+      waddr_bin <= waddr_bin + inc;
+      wptr <= waddr_bin ^ (waddr_bin >> 1);
+    end
+  assign g = wptr;
+endmodule
+"""
+    _res, findings = run(tmp_path, _CONV_SPEC, rtl)
+    assert 'derived-register-leads-named-source' not in rules(findings), findings
+
+
+def test_derived_register_rule_is_advisory_at_the_emit_gate():
+    # Declared: an ERROR in the report (CLI rc 1) but NOT emit-blocking. The
+    # deviation is measured on one design and there is no oracle that could
+    # accept a repair, so refusing the emit would route the problem to AI
+    # authoring rather than fix it. Promoting it is the owner's ruling.
+    sys.path.insert(0, str(SCRIPT.parent))
+    import spec_conformance_check as C
+    assert ('derived-register-leads-named-source'
+            not in C.EMIT_BLOCKING_CONFORMANCE_RULES)
+
+
+def test_derived_register_rule_reset_literal_alone_cannot_anchor_the_match(tmp_path):
+    # DISCRIMINATING control: `waddr_bin`'s RESET value 1'b0 also appears inside
+    # wptr's correct RHS. Only the "the source's other assignment must actually
+    # READ the source" guard rejects this; the `x_rhs == r_rhs` guard does not.
+    rtl = """
+module ptr(input clk, input rst_n, input inc, output [4:0] g);
+  reg [4:0] waddr_bin, wptr;
+  always @(posedge clk or negedge rst_n)
+    if(!rst_n) begin waddr_bin <= 1'b0; wptr <= 5'd0; end
+    else begin
+      waddr_bin <= waddr_bin + inc;
+      wptr <= inc ? 5'd1 : 1'b0;
+    end
+  assign g = wptr;
+endmodule
+"""
+    _res, findings = run(tmp_path, _CONV_SPEC, rtl)
+    assert 'derived-register-leads-named-source' not in rules(findings), findings
+
+
+def test_derived_register_rule_only_fires_on_the_register_the_spec_named(tmp_path):
+    # DISCRIMINATING control: the spec DOES name a conversion register, so the
+    # rule is live — but it names a different one than the leading register in
+    # the RTL. Only the per-register name filter rejects this.
+    spec = ("The read pointer is a binary register raddr_bin. The converted "
+            "read pointer is stored in register rptr.")
+    _res, findings = run(tmp_path, spec, _CONV_RTL_LEADS)
+    assert 'derived-register-leads-named-source' not in rules(findings), findings
+
+
+def test_derived_register_identity_conversion_still_leads(tmp_path):
+    # The identity spelling of the same defect: the spec-named register takes
+    # the source's next value verbatim. It must fire — an early version of this
+    # rule had a guard that suppressed exactly this case.
+    rtl = _CONV_RTL_LEADS.replace(
+        "wptr <= (waddr_bin + inc) ^ ((waddr_bin + inc) >> 1);",
+        "wptr <= waddr_bin + inc;")
+    _res, findings = run(tmp_path, _CONV_SPEC, rtl)
+    assert 'derived-register-leads-named-source' in rules(findings), findings
+
+
+def test_derived_register_mixed_current_and_next_terms_is_not_claimed(tmp_path):
+    # DISCRIMINATING control for the "r must be built ONLY on the source's next
+    # value" guard: an RHS that reads BOTH the next value and the current one is
+    # not a clean lead-by-one, and naming it would be a guess.
+    rtl = _CONV_RTL_LEADS.replace(
+        "wptr <= (waddr_bin + inc) ^ ((waddr_bin + inc) >> 1);",
+        "wptr <= (waddr_bin + inc) ^ waddr_bin;")
+    _res, findings = run(tmp_path, _CONV_SPEC, rtl)
+    assert 'derived-register-leads-named-source' not in rules(findings), findings
