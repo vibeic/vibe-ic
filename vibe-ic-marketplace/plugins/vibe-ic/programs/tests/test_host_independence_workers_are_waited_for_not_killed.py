@@ -26,9 +26,10 @@ the same event from the other side -- that gate went 417 s -> 804 s in a hygiene
 sweep and this program "fell from PASS to PARALLEL_INCOMPLETE, `worker 0 exceeded
 its 600s process budget`, naming that gate".
 
-And ``PARALLEL_INCOMPLETE`` exits 2 under ``run_tolerating_uncheckable``, so one
-killed worker discarded the whole 144-gate audit as UNCHECKABLE. The loud failure
-of one shard reached a reader as the silent absence of all eight.
+And ``PARALLEL_INCOMPLETE`` exits 2 under ``run_tolerating_uncheckable``, whose
+contract is that rc 2 is LOUD AND NON-FATAL. One killed worker therefore turned
+the whole 144-gate audit into `could not check`: announced, blocking nothing, and
+leaving the sweep with no verdict at all about host independence.
 
 WHAT THIS FILE LOCKS
 ====================
