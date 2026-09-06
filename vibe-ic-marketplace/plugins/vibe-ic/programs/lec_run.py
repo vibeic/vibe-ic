@@ -2286,15 +2286,39 @@ def annotate_step_budget(report: Dict, budget: "StepBudget") -> Dict:
     report["exhausted_resource"] = (
         "wall_clock_seconds" if budget.exhausted() else None)
     if budget.exhausted():
-        report["verdict_explanation"] = (
-            (report.get("verdict_explanation") or "").rstrip()
-            + f" STEP BUDGET: exhausted the TOTAL {budget.total_s}s wall-clock "
-              f"budget for this step after {len(launched)} attempt(s), "
-              f"{report['step_elapsed_sec']}s elapsed. The resource that ran "
-              "out is WALL-CLOCK TIME, not equivalence evidence: the designs "
-              "are neither proven equivalent nor proven different. Raise "
-              "--timeout / VIBEIC_LEC_YOSYS_TIMEOUT_S, or close the remainder "
-              "with sign-off LEC.")
+        # THE BUDGET NO LONGER STOPS A RUNNING PROOF, so "exhausted" no longer
+        # implies "produced nothing". It governs ATTEMPT ADMISSION: past the
+        # deadline no FURTHER attempt is launched. A proof that legitimately ran
+        # long and then DECIDED is the case this branch could not previously
+        # reach, and appending "neither proven equivalent nor proven different"
+        # to a PASS would be a contradiction inside one report -- introduced by
+        # the very change that made the long run possible.
+        #
+        # The machine-readable fields above are unchanged and still true (the
+        # budget IS spent). Only the sentence splits, and only on whether the
+        # producer actually reached a verdict.
+        _decided = str(report.get("verdict", "")).strip().upper() in (
+            "PASS", "FAIL")
+        if _decided:
+            report["verdict_explanation"] = (
+                (report.get("verdict_explanation") or "").rstrip()
+                + f" STEP BUDGET: the {budget.total_s}s admission budget was "
+                  f"spent ({len(launched)} attempt(s), "
+                  f"{report['step_elapsed_sec']}s elapsed), so no FURTHER "
+                  "attempt would have been launched. It did not stop this one "
+                  "-- the budget bounds attempts, not runtime -- and the "
+                  "verdict above is the proof's own.")
+        else:
+            report["verdict_explanation"] = (
+                (report.get("verdict_explanation") or "").rstrip()
+                + f" STEP BUDGET: exhausted the TOTAL {budget.total_s}s "
+                  f"admission budget for this step after {len(launched)} "
+                  f"attempt(s), {report['step_elapsed_sec']}s elapsed, and no "
+                  "attempt reached a verdict. The resource that ran out is "
+                  "WALL-CLOCK TIME, not equivalence evidence: the designs are "
+                  "neither proven equivalent nor proven different. Raise "
+                  "--timeout / VIBEIC_LEC_YOSYS_TIMEOUT_S, or close the "
+                  "remainder with sign-off LEC.")
     return report
 
 
@@ -2369,7 +2393,27 @@ def run_yosys_equiv(container: str, ys_path_in_container: str,
     # both keep their real FAIL — so this can neither fabricate a PASS nor hide a
     # real mismatch (proven on opentitan_aes × sky130A and covered by the tests).
     if launched and getattr(r, "returncode", 0) in _CONTAINER_TIMEOUT_RCS:
-        out = out.rstrip("\n") + f"\n{_TIMEOUT_MARKER} after {timeout}s"
+        # THE DURATION WAS NEVER MEASURED, so it is no longer stated. `timeout`
+        # is the step's ATTEMPT-ADMISSION budget and no kind of deadline, so
+        # "after {timeout}s" would name a wall this run did not hit. And rc 137
+        # is AMBIGUOUS by construction -- the comment on
+        # `_CONTAINER_TIMEOUT_RCS` says so itself: it is GNU `timeout`'s SIGKILL
+        # escalation AND a container OOM-kill. An OOM at ten minutes used to be
+        # recorded as "exceeded its time budget after 7200s"; with the ceiling
+        # back at the pathological backstop the same sentence would read
+        # 86400s, which is the same lie with a bigger number.
+        #
+        # The MARKER itself is kept verbatim: `_TIMEOUT_RE`,
+        # `_EXECUTION_STOP_RE` and `budget_kill_blocks_frontend_retry` key on
+        # it, and renaming it is a separate change with its own blast radius.
+        # Only the fabricated duration goes, replaced by the observable rc.
+        out = out.rstrip("\n") + (
+            "\n" + _TIMEOUT_MARKER
+            + f" (rc={getattr(r, 'returncode', 0)}: the container-side "
+            f"backstop, or an OOM kill -- rc 137 does not distinguish them). "
+            f"No equivalence verdict was reached. The {timeout}s step budget "
+            f"governs ATTEMPT ADMISSION, not runtime, so no wall-clock "
+            f"duration is claimed here.")
     elif launched and getattr(r, "returncode", 0) in _PROGRESS_STALL_RCS:
         out = out.rstrip("\n") + f"\n{_STALL_MARKER}"
     return launched, out

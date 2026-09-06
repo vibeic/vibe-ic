@@ -90,6 +90,24 @@ written for: the two worst offences on main were spelled
 a `Constant` at the call site, and dropping them is worse than flagging them
 wrongly, because a report that lists neither tells a reader nothing was skipped.
 
+RESIDUAL BOUNDARIES, STATED RATHER THAN LEFT SILENT
+----------------------------------------------------
+  * class (2) recognises ``import _progress_run as X`` -> ``X.run(...)``. A
+    ``from _progress_run import run`` -> bare ``run(...)`` would not be seen.
+    MEASURED on this tree: ZERO files use that form, so the rule covers the
+    whole population today -- but it covers it by luck of style, not by
+    construction, and a reader is entitled to know which.
+  * a ``**kwargs`` splat into a supervised launch could carry a ceiling this
+    file cannot see. MEASURED on this tree: TWO splat sites exist -- one inside
+    `_watchdog` itself (outside this scan by construction) and one in
+    `gate_discloses_denominator_check`, whose dict is built two lines above the
+    call and carries only ``poll_s``. So no ceiling hides in a splat today.
+  * the same-file function resolver keys on the function NAME. Two
+    module-level functions sharing a name in one file resolve to the last
+    definition. The error direction is toward FLAGGING (the resolver takes the
+    MINIMUM of the returns it can read), and every offender is printed with its
+    file and line, so a wrong resolution is visible rather than silent.
+
 So resolution is by `ast` over, in order: a literal; ``float(X)``/``int(X)``
 around anything resolvable; ``math.inf``; a module-level constant in the same
 file; a LOCAL assignment in the enclosing function; the enclosing function's

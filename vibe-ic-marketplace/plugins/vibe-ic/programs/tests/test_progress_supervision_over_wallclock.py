@@ -328,6 +328,101 @@ def test_the_declared_lec_budget_is_still_read_from_the_producer():
 
 
 # ---------------------------------------------------------------------------
+# 3c. THE SECOND-ORDER CONSEQUENCES OF REMOVING A DEADLINE. Both were made
+#     REACHABLE by this lane's own change, so both are this lane's to close.
+# ---------------------------------------------------------------------------
+def _spent_budget(total_s, elapsed_s):
+    """A StepBudget with one recorded attempt and `elapsed_s` on its clock."""
+    now = [0.0]
+    b = lec_run.StepBudget(total_s, clock=lambda: now[0])
+    b.record("verilog", "", total_s, elapsed_s, True, False)
+    now[0] = elapsed_s
+    return b
+
+
+def test_a_spent_admission_budget_does_not_contradict_a_verdict():
+    """A proof may now legitimately run PAST the budget and still decide.
+
+    While the budget was a deadline this was unreachable — a run past it had
+    been killed, so it had no verdict — and `annotate_step_budget` appended
+    "the designs are neither proven equivalent nor proven different"
+    unconditionally. Appending that to a PASS is not a disclosure, it is a
+    contradiction inside one report, and this lane's own change is what made
+    it reachable.
+    """
+    b = _spent_budget(7200, 10800.0)
+    assert b.exhausted(), "the fixture did not actually spend the budget"
+    rep = lec_run.annotate_step_budget(
+        {"verdict": "PASS", "equivalent": True,
+         "verdict_explanation": "all 1374/1374 $equiv cells proven"}, b)
+    ex = rep["verdict_explanation"]
+    assert "neither proven equivalent nor proven different" not in ex, (
+        "a PASS report also says the designs were never compared:\n" + ex)
+    assert "bounds attempts, not runtime" in ex
+    # the machine-readable fields stay true and unchanged
+    assert rep["step_budget_exhausted"] is True
+    assert rep["exhausted_resource"] == "wall_clock_seconds"
+
+
+def test_a_spent_budget_with_no_verdict_still_says_nothing_was_decided():
+    """The other direction. The disclosure that mattered must survive: when no
+    attempt reached a verdict, the report must still say so in those words."""
+    b = _spent_budget(7200, 10800.0)
+    rep = lec_run.annotate_step_budget(
+        {"verdict": "INCONCLUSIVE", "equivalent": False,
+         "verdict_explanation": "stopped before any completed equiv_status"}, b)
+    ex = rep["verdict_explanation"]
+    assert "neither proven equivalent nor proven different" in ex
+    assert "no attempt reached a verdict" in ex
+
+
+def test_an_unspent_budget_appends_nothing_at_all():
+    """The control: the ordinary path is untouched."""
+    now = [0.0]
+    b = lec_run.StepBudget(7200, clock=lambda: now[0])
+    before = "all 1374/1374 $equiv cells proven"
+    rep = lec_run.annotate_step_budget(
+        {"verdict": "PASS", "verdict_explanation": before}, b)
+    assert rep["verdict_explanation"] == before
+    assert rep["step_budget_exhausted"] is False
+
+
+def test_the_kill_record_does_not_name_a_duration_it_never_measured():
+    """rc 137 is GNU `timeout`'s SIGKILL escalation AND a container OOM-kill —
+    `_CONTAINER_TIMEOUT_RCS`' own comment says so. Stamping "after {budget}s"
+    on it asserted a wall the run may never have reached, and with the ceiling
+    back at the pathological backstop that number would now read 86400.
+    """
+    class _R:
+        returncode = 137
+        stdout = "Yosys 0.68\n9.2. Executing EQUIV_SIMPLE pass.\n"
+        stderr = ""
+
+    seen = {}
+
+    def fake_docker(container, cmd, timeout=120, marker=None, **kw):
+        seen["timeout"] = timeout
+        return _R()
+
+    import types
+    orig = lec_run._docker
+    lec_run._docker = fake_docker
+    try:
+        launched, out = lec_run.run_yosys_equiv(
+            "vibeic-eda", "/work/equiv.ys", timeout=7200)
+    finally:
+        lec_run._docker = orig
+
+    assert launched
+    assert lec_run._TIMEOUT_MARKER in out, (
+        "the budget-kill marker must survive — consumers key on it")
+    assert "after 7200s" not in out, (
+        "the record still names a duration nothing measured:\n" + out)
+    assert "rc=137" in out
+    assert "ATTEMPT ADMISSION" in out
+
+
+# ---------------------------------------------------------------------------
 # 4. THE MIGRATION LEFTOVER. `_progress_run.run` has no `timeout=` parameter,
 #    deliberately — "convert a call site by deleting the argument". One call
 #    site kept the argument, and the TypeError it raises is not a

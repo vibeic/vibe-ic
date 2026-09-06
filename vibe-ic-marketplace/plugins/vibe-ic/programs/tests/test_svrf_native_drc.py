@@ -299,6 +299,34 @@ def test_the_drc_budget_is_a_no_output_predicate_not_a_wall_clock_ceiling(
     assert "7200" in reason
 
 
+def test_docker_exec_forwards_the_abort_probe_to_the_supervisor(monkeypatch):
+    """THE MIDDLE LINK OF THE CHAIN, which neither neighbour covers.
+
+    `test_the_drc_budget_is_a_no_output_predicate_not_a_wall_clock_ceiling`
+    proves the DRC step HANDS an `abort_probe` to `_docker_exec`, and
+    `test_progress_supervision_over_wallclock` proves `run_supervised` ACTS on
+    one over a real child. Between them sits a one-line pass-through, and a
+    one-line pass-through is exactly the kind of thing that is deleted by an
+    unrelated edit and noticed by nobody, because both neighbours stay green.
+    """
+    seen = {}
+
+    def fake_supervised(cmd, **kw):
+        seen.update(kw)
+        return R._wd.SupervisedResult(0, "", "", "natural", 0.0)
+
+    monkeypatch.setattr(R._wd, "run_supervised", fake_supervised)
+    monkeypatch.setattr(R._dwd, "new_job_pidfile", lambda: "/tmp/x.pid")
+    monkeypatch.setattr(R._dwd, "cleanup_job_pidfile", lambda *a, **k: None)
+    probe = lambda: None                                    # noqa: E731
+    R._docker_exec("vibeic-eda", "svrfdrc deck.rule a.gds a.rpt",
+                   marker="a.gds", abort_probe=probe)
+    assert seen.get("abort_probe") is probe, (
+        "_docker_exec dropped the caller's convergence predicate on the floor; "
+        "the DRC budget would then never fire and a going-nowhere run would "
+        "hold a core until the 24h backstop")
+
+
 def test_drc_budget_env_override_still_governs_the_predicate(tmp_path,
                                                              monkeypatch):
     """The knob keeps working, on the predicate instead of on a clock."""

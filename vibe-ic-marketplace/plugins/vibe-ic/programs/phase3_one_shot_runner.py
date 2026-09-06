@@ -33467,7 +33467,10 @@ def _try_svrf_native_drc(project: Path, top: str, pdk: PdkConfig,
     # OWN output, not the clock: the budget is spent only while the report has
     # not grown. A DRC that is emitting results is now never stopped by it, and
     # one that has produced nothing for the budget is stopped with a stated
-    # REASON and rc=_wd.RC_ABORTED — a third state, distinguishable from both a
+    # REASON and rc=_wd.RC_ABORTED. THIS IS NOT A NEW IDEA IN THIS TREE:
+    # `gate_discloses_denominator_check` already expresses its own aggregate
+    # budget as an `abort_probe` beside a progress-derived stall grace, for
+    # exactly this reason — a third state, distinguishable from both a
     # hang (RC_STALLED) and a natural exit. `log_path=rpt` wires the report as a
     # real progress signal at the same time, so the generic fusion can see it too.
     # chip/tool-AGNOSTIC: a file-size read and a monotonic clock.
