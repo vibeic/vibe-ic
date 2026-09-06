@@ -1334,3 +1334,163 @@ def test_a_declaration_the_shell_cannot_split_is_NAMED_not_a_crash(tmp_path):
     res = G.audit(r, timeout=_T)
     assert res.verdict == "FAIL", res
     assert [f["kind"] for f in res.findings] == ["GATE_UNRUNNABLE"], res.findings
+
+
+# --------------------------------------------------------------------------
+# THE POINTER ARM — a verdict that is a function of an invisible env pointer
+# --------------------------------------------------------------------------
+def _pointer_repo(tmp_path: Path, body: str, *, name: str = "r") -> Path:
+    """A repo whose ONE gate reads `VIBE_IC_BENCHMARK_DATA` and nothing else.
+
+    The reduced form of the 63x8 census checker, which returned rc 0 with the
+    corpus withheld and rc 1 `census block is stale` with it bound, at one commit,
+    in one tree — a verdict decided by a variable that appears in no argv.
+
+    `untracked=True` because the two-tree half of this probe reports NO_STIMULUS
+    over two identical trees, and a fixture that landed there would be measuring
+    the wrong refusal.
+    """
+    r = _repo_with(tmp_path, 'run "ptr" "$ROOT" python3 ptr.py\n',
+                   untracked=True, name=name)
+    (r / "ptr.py").write_text(body)
+    subprocess.run(["git", "-C", str(r), "add", "ptr.py"], check=True)
+    subprocess.run(["git", "-C", str(r), "commit", "-qm", "ptr"], check=True)
+    return r
+
+
+#: PASS with the pointer withheld, FAIL with it bound. The census defect, reduced.
+_FLIPS = (
+    "import os, sys\n"
+    "bound = bool(os.environ.get('VIBE_IC_BENCHMARK_DATA'))\n"
+    "print('FAIL stale' if bound else 'PASS fresh')\n"
+    "sys.exit(1 if bound else 0)\n"
+)
+
+#: Reports DIFFERENTLY with and without the corpus and stays a PASS. This is the
+#: honest shape every corpus-reading gate has, and the arm must not fire on it.
+_REPORTS_DIFFERENTLY = (
+    "import os\n"
+    "bound = bool(os.environ.get('VIBE_IC_BENCHMARK_DATA'))\n"
+    "print('PASS 4 cell(s)' if bound else 'PASS 0 cell(s), corpus not offered')\n"
+)
+
+#: PASS with the corpus, NOT_CHECKED (rc 2) without it. Also honest — it SAYS it
+#: could not look — and rc 2 is never half of a flip.
+_DECLINES_WITHOUT_CORPUS = (
+    "import os, sys\n"
+    "bound = bool(os.environ.get('VIBE_IC_BENCHMARK_DATA'))\n"
+    "print('PASS 4 cell(s)' if bound else 'NOT_CHECKED: no corpus offered')\n"
+    "sys.exit(0 if bound else 2)\n"
+)
+
+
+def test_a_verdict_that_flips_with_the_env_pointer_is_CAUGHT(tmp_path,
+                                                             monkeypatch):
+    """THE DEFECT THIS ARM WAS ADDED FOR, and the two-tree half cannot see it.
+
+    Both existing arms inherit this process's environment, so this gate agrees
+    with itself perfectly across a working checkout and a fresh worktree. Without
+    the pointer arm the probe prints `[PASS] ... give the same verdict` over a
+    gate whose answer is decided by a variable nobody can see in its argv.
+    """
+    monkeypatch.setenv(G.POINTER_ENV, str(tmp_path / "corpus"))
+    r = _pointer_repo(tmp_path, _FLIPS)
+    res = G.audit(r, timeout=_T, tmp_root=tmp_path, pointer_arm=True)
+    assert res.verdict == "FAIL", res
+    kinds = {f["kind"] for f in res.findings}
+    assert kinds == {"ENV_POINTER_DEPENDENT_VERDICT"}, res.findings
+    detail = res.findings[0]["detail"]
+    assert "PASS" in detail and "FAIL" in detail and G.POINTER_ENV in detail
+    assert res.pointer["probed"] == 1, res.pointer
+
+
+def test_the_two_tree_half_alone_calls_that_gate_HOST_INDEPENDENT(tmp_path,
+                                                                  monkeypatch):
+    """The NEGATIVE CONTROL, and it is the reason the arm exists at all.
+
+    With the pointer arm switched off, the identical fixture PASSES — both arms
+    read the same environment, so they agree by construction. A test that cannot
+    fail against the pre-fix code proves nothing, so this pins what the pre-fix
+    code actually said.
+    """
+    monkeypatch.setenv(G.POINTER_ENV, str(tmp_path / "corpus"))
+    monkeypatch.setattr(G, "pointer_arm_finding",
+                        lambda *a, **k: None)   # the code before the arm
+    r = _pointer_repo(tmp_path, _FLIPS)
+    res = G.audit(r, timeout=_T, tmp_root=tmp_path, pointer_arm=True)
+    assert res.verdict == "PASS", res
+    assert res.findings == [], res.findings
+
+
+def test_a_gate_that_merely_REPORTS_differently_is_not_a_finding(tmp_path,
+                                                                 monkeypatch):
+    """THE FALSE-POSITIVE CONTROL. Different words are not a different verdict.
+
+    Every corpus-reading gate says something different with and without a corpus.
+    Requiring its OUTPUT to be identical would report all of them, which is how a
+    check that fires on legitimate code gets deleted rather than landed.
+    """
+    monkeypatch.setenv(G.POINTER_ENV, str(tmp_path / "corpus"))
+    r = _pointer_repo(tmp_path, _REPORTS_DIFFERENTLY)
+    res = G.audit(r, timeout=_T, tmp_root=tmp_path, pointer_arm=True)
+    assert [f for f in res.findings
+            if f["kind"] == "ENV_POINTER_DEPENDENT_VERDICT"] == [], res.findings
+    assert res.pointer["probed"] == 1, res.pointer
+
+
+def test_a_gate_that_DECLINES_without_the_corpus_is_not_a_flip(tmp_path,
+                                                               monkeypatch):
+    """rc 2 is the disclosed third state, never half of a PASS/FAIL flip.
+
+    A gate that says "I could not look" without a corpus and PASSes with one has
+    told the reader exactly which environment it was in. That is the shape this
+    whole family is repaired TOWARDS; reporting it as the defect would punish the
+    fix.
+    """
+    monkeypatch.setenv(G.POINTER_ENV, str(tmp_path / "corpus"))
+    r = _pointer_repo(tmp_path, _DECLINES_WITHOUT_CORPUS)
+    res = G.audit(r, timeout=_T, tmp_root=tmp_path, pointer_arm=True)
+    assert [f for f in res.findings
+            if f["kind"] == "ENV_POINTER_DEPENDENT_VERDICT"] == [], res.findings
+
+
+def test_with_no_pointer_bound_the_arm_is_NOT_CHECKED_and_says_so(
+        tmp_path, monkeypatch, capsys):
+    """No corpus named means no second environment, and that is not coverage.
+
+    The arm can only toggle bound -> withheld: building a "present" environment
+    out of nothing would mean inventing a corpus. So the run reports a pointer
+    denominator of zero and the verdict line names it, rather than printing the
+    same sentence a fully-probed run prints.
+    """
+    monkeypatch.delenv(G.POINTER_ENV, raising=False)
+    r = _pointer_repo(tmp_path, _FLIPS)
+    res = G.audit(r, timeout=_T, tmp_root=tmp_path, pointer_arm=True)
+    assert res.verdict == "PASS", res
+    assert res.pointer == {"bound": "", "probed": 0, "not_probed": []}, res.pointer
+    G.main([str(r)])
+    err = capsys.readouterr().err
+    assert f"{G.POINTER_ENV} arm NOT CHECKED" in err, err
+
+
+def test_the_pointer_arm_restores_the_environment_it_toggled(tmp_path,
+                                                             monkeypatch):
+    """A probe that leaked a changed environment would BE the defect it hunts.
+
+    Every gate declared after the one being toggled would be driven under the
+    wrong environment, and the probe would report their difference as theirs.
+    """
+    monkeypatch.setenv(G.POINTER_ENV, str(tmp_path / "corpus"))
+    r = _pointer_repo(tmp_path, _FLIPS)
+    G.audit(r, timeout=_T, tmp_root=tmp_path, pointer_arm=True)
+    assert os.environ.get(G.POINTER_ENV) == str(tmp_path / "corpus")
+
+
+def test_the_pointer_denominator_is_published_in_the_machine_record(tmp_path,
+                                                                    monkeypatch):
+    """A consumer that cannot read the denominator has to infer it, and will."""
+    monkeypatch.setenv(G.POINTER_ENV, str(tmp_path / "corpus"))
+    r = _pointer_repo(tmp_path, _REPORTS_DIFFERENTLY)
+    doc = G._audit_doc(G.audit(r, timeout=_T, tmp_root=tmp_path, pointer_arm=True))
+    assert doc["pointer_arm"]["probed"] == 1, doc["pointer_arm"]
+    assert doc["pointer_arm"]["bound"] == str(tmp_path / "corpus")

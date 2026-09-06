@@ -373,6 +373,21 @@ def _load():
     return CV, SUB, DIMENSIONS, DIMENSION_NAMES, DIMENSION_QUESTIONS
 
 
+def _provenance():
+    """``programs/tests/_census_provenance``, with the plugin's import posture.
+
+    Same seam `corpus_identity_line` already reaches for `_published_corpus`, and
+    for the same reason: the corpus vocabulary is defined ONCE, next to the module
+    that owns it, so the writer of the provenance line and the reader that has to
+    match it cannot drift apart.
+    """
+    sp = str(PLUGIN_ROOT / "programs" / "tests")
+    if sp not in sys.path:
+        sys.path.insert(0, sp)
+    import _census_provenance as PROV  # noqa: E402
+    return PROV
+
+
 # ============================================================================
 # DERIVED FIGURES OUTSIDE THE BLOCK (vibe-ic#961)
 # ============================================================================
@@ -1115,13 +1130,16 @@ def corpus_identity_line() -> str:
 
 
 def _corpus_commit(root) -> str:
-    """The corpus's own HEAD, short. `unknown-commit` rather than a guess."""
+    """The corpus's own HEAD, short. `unknown-commit` rather than a guess.
+
+    DELEGATED, not re-implemented. `--check` has to decide whether the corpus this
+    host has mounted is the one the block NAMES, and a reader that resolves a
+    commit by its own rule can disagree with the writer about the same tree and
+    report the disagreement as drift.
+    """
     try:
-        out = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=str(root),
-                             capture_output=True, text=True, timeout=20)
-        sha = out.stdout.strip()
-        return sha if out.returncode == 0 and sha else "unknown-commit"
-    except Exception:  # pragma: no cover - defensive
+        return _provenance().corpus_commit(root)
+    except Exception:  # pragma: no cover - a seam that cannot be imported
         return "unknown-commit"
 
 
@@ -1288,6 +1306,40 @@ def splice(text: str, block: str) -> str:
             f"  {BEGIN}\n  {END}\n). A hand edit that removed them would make "
             f"this generator silently write nothing, so it refuses instead.")
     return text[:start] + block + text[stop + len(END):]
+
+
+def _committed_block(text: str, path: Path) -> str:
+    """The GENERATED block of `path`, marker to marker.
+
+    Handed to the provenance reader instead of the whole file so that the line it
+    parses can only be the one the generator WROTE. A `Corpus at generation:` line
+    typed into the surrounding prose would otherwise decide which environment the
+    check compares in, which is a hand-editable verdict.
+    """
+    start = text.find(BEGIN)
+    stop = text.find(END)
+    if start < 0 or stop < 0 or stop < start:
+        raise SystemExit(
+            f"{path}: generated-census markers not found, so the block declares "
+            f"no provenance and there is nothing to reproduce. This is the same "
+            f"refusal `splice` makes, one step earlier.")
+    return text[start:stop + len(END)]
+
+
+def _not_measured_lines(path: Path, exc: Exception) -> str:
+    """rc 2. The declared provenance could not be arranged on THIS host.
+
+    NOT a pass and NOT a stale finding, and the sentence says which: a reader who
+    is handed rc 2 here has learned that the block was not checked, and WHY, which
+    is strictly more than the rc 0 or the rc 1 this used to return depending on
+    what happened to be mounted.
+    """
+    return (
+        f"NOT_MEASURED: {path} was NOT checked for staleness. Its census block "
+        f"declares the corpus it was generated against, and that provenance could "
+        f"not be arranged here, so any comparison would be between two different "
+        f"measurements.\n"
+        f"NOT_MEASURED: {exc}")
 
 
 def _norecord_lines(norecord: str) -> str:
@@ -1502,22 +1554,66 @@ def _run(args: argparse.Namespace) -> int:
         Path(args.figures_json).write_text(json.dumps(fig_report, indent=2,
                                                       default=str))
 
-    rows, totals, norecord = census_rows_with_record()
-
-    # A PASS must say how much it examined (vibe-ic#447). A census rendered over
-    # zero cells matches an empty table trivially, and every count below would
-    # read 0 without a single assertion firing.
-    if not rows or not totals["cells"]:
-        sys.stderr.write(
-            f"NOTHING_SCANNED: the live census produced {len(rows)} dimension "
-            f"row(s) over {totals.get('cells', 0)} cell(s) — this is NOT a "
-            f"pass. Check that the eight dimension modules import and that "
-            f"pytest can collect them.\n")
-        return 2
-
     path = Path(args.out)
     text = path.read_text(encoding="utf-8")
-    updated = splice(text, render(rows, totals))
+
+    # COMPARE LIKE WITH LIKE, OR SAY YOU COULD NOT (see
+    # `programs/tests/_census_provenance`). Several cells consult the published
+    # corpus, so the census is a function of (this commit, that corpus) and the
+    # block SAYS which corpus — `corpus_identity_line` writes it into the block for
+    # exactly this reason. Re-deriving under whatever THIS host has mounted and
+    # calling the difference staleness compares two different measurements.
+    #
+    # MEASURED on 2026-09-05 at main `3e3d0a46e`, one tree, two environments: with
+    # the pointer withheld `--check` is green; with the corpus at `8c4b608a` bound
+    # it exits 1 and reports the block as drifted, because 44 corpus-gated cells
+    # stop skipping and `undeclared` re-derives at 449 against a block published at
+    # 405. Neither number is wrong. The verdict was simply a function of an
+    # environment variable that appears in no argv, in no commit and in no report.
+    #
+    # ONLY THE `--check` PATH. A WRITE declares the provenance it actually had —
+    # that is what makes the declaration worth reading — so arranging the
+    # environment under it would make the block describe a corpus the run did not
+    # use. `--check-figures` is left alone, and that is MEASURED rather than read
+    # off the bindings: on this tree its output is BYTE-IDENTICAL with and without
+    # the corpus, rc 0 both, because every anchored figure binds to
+    # `flow_matrix.flowref`, which parses the flow yaml and never reaches the
+    # corpus seam.
+    with contextlib.ExitStack() as stack:
+        if args.check:
+            PROV = _provenance()
+            try:
+                stack.enter_context(PROV.reproduce(_committed_block(text, path)))
+            except PROV.NoDeclaredProvenance as exc:
+                # NOT a refusal. `render()` writes a provenance line into every
+                # block it produces, so a block WITHOUT one cannot equal any
+                # rendering under any environment — the whole-block comparison
+                # below therefore has an environment-INDEPENDENT answer, and
+                # withholding it would tell a reader nothing about a tree whose
+                # state is not in doubt. Said out loud, and then measured.
+                sys.stderr.write(
+                    f"UNARRANGED: {path}'s census block declares no provenance "
+                    f"({exc}). It is therefore not a block this generator "
+                    f"rendered and cannot match one in ANY environment, so the "
+                    f"comparison below is environment-independent and is made "
+                    f"as-is.\n")
+            except PROV.CannotReproduce as exc:
+                sys.stderr.write(_not_measured_lines(path, exc) + "\n")
+                return 2
+        rows, totals, norecord = census_rows_with_record()
+
+        # A PASS must say how much it examined (vibe-ic#447). A census rendered
+        # over zero cells matches an empty table trivially, and every count below
+        # would read 0 without a single assertion firing.
+        if not rows or not totals["cells"]:
+            sys.stderr.write(
+                f"NOTHING_SCANNED: the live census produced {len(rows)} dimension "
+                f"row(s) over {totals.get('cells', 0)} cell(s) — this is NOT a "
+                f"pass. Check that the eight dimension modules import and that "
+                f"pytest can collect them.\n")
+            return 2
+
+        updated = splice(text, render(rows, totals))
 
     # THE COVERAGE DISCLOSURE TRAVELS WITH EVERY VERDICT, red or green. A
     # verdict line that carries the guarded figure and not the unguarded one is
