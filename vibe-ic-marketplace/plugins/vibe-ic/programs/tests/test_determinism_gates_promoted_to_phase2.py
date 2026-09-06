@@ -146,17 +146,20 @@ def test_worked_example_moore_is_detected_and_repaired(tmp_path):
 
 
 @pytest.mark.skipif(not _HAS_IVERILOG, reason="worked-example oracle needs iverilog")
-def test_worked_example_phase_ambiguity_is_reported_as_skip(tmp_path):
+def test_worked_example_clocked_prose_does_not_excuse_a_late_output(tmp_path):
+    """The clocked spelling of the same spec used to land here as an advisory SKIP
+    with the unrepaired RTL still on disk. It now takes the same repair path as
+    the non-clocked spelling — prose about where the output is assigned cannot
+    move the worked example's own cycle alignment."""
     proj = _make_project(tmp_path, RTL_MOORE, spec=SPEC_CLOCKED)
     res = r.step_determinism_gates(proj)
     assert res.status == "PASS", res.detail
-    assert "worked-example oracle SKIP (applicable, non-blocking)" in res.detail
-    assert "phase-ambiguous" in res.detail
-    assert res.extras["worked_example_oracle"]["phase_verdicts"] == {
-        "pre-edge": "BLOCK",
-        "post-edge": "PASS",
-    }
-    assert next(_pl.rtl_dir(proj).rglob("*.v")).read_text() == RTL_MOORE
+    assert "gate-directed repair" in res.detail
+    assert "output-cycle-alignment" in res.detail
+    import worked_example_sequence_oracle_check as _w
+    rtl = next(_pl.rtl_dir(proj).rglob("*.v")).read_text()
+    assert rtl != RTL_MOORE
+    assert _w.analyze(rtl, SPEC_CLOCKED)["verdict"] == "PASS"
 
 
 RTL_ALWAYS_ZERO = """
@@ -171,7 +174,7 @@ def test_worked_example_all_phase_mismatch_stops_phase2(tmp_path):
     proj = _make_project(tmp_path, RTL_ALWAYS_ZERO, spec=SPEC_CLOCKED)
     res = r.step_determinism_gates(proj)
     assert res.status == "FAIL", res.detail
-    assert "in every supported sampling phase" in res.detail
+    assert "at the example's own cycle alignment" in res.detail
     assert next(_pl.rtl_dir(proj).rglob("*.v")).read_text() == RTL_ALWAYS_ZERO
 
 

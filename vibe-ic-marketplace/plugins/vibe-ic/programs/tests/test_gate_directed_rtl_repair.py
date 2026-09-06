@@ -169,14 +169,18 @@ def test_correct_design_is_left_alone():
 
 
 @pytest.mark.skipif(not _HAS_IVERILOG, reason="oracle needs iverilog")
-def test_clocked_phase_ambiguity_is_deferred_not_called_clean():
+def test_clocked_registered_output_is_repaired_not_deferred():
+    """It used to DEFER here: the oracle SKIPped because the spec's prose said the
+    output is assigned inside the clocked block, so the one-cycle-late RTL was
+    shipped unrepaired. The oracle now reads its verdict at the example's own
+    alignment, so the same defect reaches the same transform as the non-clocked
+    spelling of the same spec."""
     res = G.repair(RTL_MOORE, SPEC_CLOCKED)
-    assert res["verdict"] == "DEFER", res
-    assert res["defect"] == "worked-example-oracle-skip"
-    assert res["evidence"]["phase_verdicts"] == {
-        "pre-edge": "BLOCK",
-        "post-edge": "PASS",
-    }
+    assert res["verdict"] == "REPAIRED", res
+    assert res["defect"] == "output-cycle-alignment"
+    assert res["transform"] == "deregister_output"
+    import worked_example_sequence_oracle_check as W
+    assert W.analyze(res["rtl"], SPEC_CLOCKED)["verdict"] == "PASS"
 
 
 @pytest.mark.skipif(not _HAS_IVERILOG, reason="oracle needs iverilog")
@@ -188,10 +192,11 @@ def test_phase_ambiguity_does_not_mask_independent_history_escalation():
 
 
 @pytest.mark.skipif(not _HAS_IVERILOG, reason="oracle needs iverilog")
-def test_all_phase_mismatch_is_not_misrouted_as_alignment_repair():
+def test_mismatch_that_is_not_a_one_cycle_shift_is_not_misrouted_as_alignment_repair():
     res = G.repair(RTL_REGISTERED_ALWAYS_ZERO, SPEC_CLOCKED)
     assert res["verdict"] == "NO_REPAIR", res
-    assert res["defect"] == "worked-example-mismatch-all-phases"
+    assert res["defect"] == "worked-example-mismatch-not-a-cycle-shift"
+    assert res["evidence"]["one_cycle_late"] is False
     assert res["attempts"] == []
     assert "would be a guess" in res["reason"]
 

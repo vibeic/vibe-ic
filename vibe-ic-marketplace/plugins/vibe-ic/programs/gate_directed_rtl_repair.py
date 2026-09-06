@@ -513,19 +513,27 @@ def repair(rtl: str, spec: str) -> dict:
                 "reason", "oracle produced no blocking verdict"),
         }
     if before.get("verdict") == "BLOCK":
-        if before.get("sampling_semantics") == "dual-phase-pre-and-post-edge":
+        # `deregister_output` moves the output EXACTLY ONE CYCLE EARLIER, so it is
+        # the right transform only when the oracle measured the RTL to be exactly
+        # one cycle late — its one-cycle-SHIFTED diagnostic replay passing while
+        # the aligned replay blocks. When the shifted replay ALSO mismatches, the
+        # trace is wrong for some other reason and the transform would be a guess.
+        if (before.get("phase_verdicts")
+                and not before.get("one_cycle_late")):
             res.update(
                 verdict="NO_REPAIR",
-                defect="worked-example-mismatch-all-phases",
+                defect="worked-example-mismatch-not-a-cycle-shift",
                 evidence={"gate": "worked_example_sequence_oracle_check",
                           "phase_verdicts": before.get("phase_verdicts"),
+                          "one_cycle_late": before.get("one_cycle_late"),
                           "inport": before.get("inport"),
                           "outport": before.get("outport"),
                           "in_bits": before.get("in_bits"),
                           "expected_out_bits": before.get("out_bits")},
-                reason="both sampling phases mismatch, so the oracle does not "
-                       "establish a single-cycle alignment defect and the "
-                       "deregister_output transform would be a guess")
+                reason="the one-cycle-shifted replay mismatches too, so the "
+                       "oracle does not establish a single-cycle alignment "
+                       "defect and the deregister_output transform would be a "
+                       "guess")
             return res
         res.update(defect="output-cycle-alignment",
                    evidence={"gate": "worked_example_sequence_oracle_check",
