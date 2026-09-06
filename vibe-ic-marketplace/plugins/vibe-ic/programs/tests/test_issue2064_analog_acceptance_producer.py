@@ -24,6 +24,7 @@ and the byte-adjacent fixture that must be red. A check that cannot fail is not
 a check.
 """
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -35,6 +36,15 @@ if str(PROGRAMS) not in sys.path:
     sys.path.insert(0, str(PROGRAMS))
 
 import analog_acceptance_tb_gen as A      # noqa: E402
+
+
+def _check_env() -> dict:
+    """The environment the EXECUTOR hands an emitted check: the producer's own
+    directory. The check carries no absolute path of its own (see
+    `test_the_emitted_check_carries_no_absolute_home_path`)."""
+    env = dict(os.environ)
+    env[A.PROGRAMS_DIR_ENV] = str(PROGRAMS)
+    return env
 import testbench_gen as T                 # noqa: E402
 import _sim_results_bridge as SRB         # noqa: E402
 
@@ -336,7 +346,7 @@ def test_the_emitted_check_is_an_executable_program(tmp_path):
     # behind a library call: a reviewer has to see which bound is asserted.
     text = script.read_text()
     assert '"min": 1.1' in text and '"max": 1.3' in text
-    proc = subprocess.run([sys.executable, str(script)],
+    proc = subprocess.run([sys.executable, str(script)], env=_check_env(),
                           capture_output=True, text=True, timeout=120)
     assert proc.returncode == A._EXIT[A.PASS], proc.stdout + proc.stderr
     assert "ANALOG_ACCEPTANCE" in proc.stdout and " PASS" in proc.stdout
@@ -348,7 +358,7 @@ def test_the_emitted_check_exits_non_zero_on_a_real_failure(tmp_path):
     rep = {}
     A.emit_acceptance_checks(project, rep)
     script = A.check_dir(project) / f"{rep['clauses'][0]['id']}.py"
-    proc = subprocess.run([sys.executable, str(script)],
+    proc = subprocess.run([sys.executable, str(script)], env=_check_env(),
                           capture_output=True, text=True, timeout=120)
     assert proc.returncode == A._EXIT[A.FAIL], proc.stdout + proc.stderr
 
@@ -689,3 +699,47 @@ def test_the_junit_and_the_record_survive_a_re_run(tmp_path):
     A.run_acceptance_checks(project, {})
     assert (A.result_dir(project) / "results.xml").read_text().count(
         "<testcase") == first.count("<testcase")
+
+
+# --------------------------------------------------------------------------
+# 14. The emitted check lives in the PROJECT tree, which travels. It must
+#     carry no personal absolute path, and it must refuse — NOT_MEASURED, not
+#     FAIL — when it cannot find the producer.
+# --------------------------------------------------------------------------
+def test_the_emitted_check_carries_no_absolute_home_path(tmp_path):
+    project = _value_project(tmp_path)
+    rep = {}
+    A.emit_acceptance_checks(project, rep)
+    A.run_acceptance_checks(project, rep)
+    for artefact in list(A.check_dir(project).glob("*.py")) + [
+            project / A.RECORD_REL]:
+        text = artefact.read_text()
+        assert "/home/" not in text and "/Users/" not in text, (
+            f"{artefact.name} freezes a personal absolute path into a design "
+            f"artefact; it would break anywhere but the machine that wrote it")
+    record = json.loads((project / A.RECORD_REL).read_text())
+    assert not record["results_xml"].startswith("/")
+    assert not record["check_dir"].startswith("/")
+
+
+def test_a_check_that_cannot_find_its_producer_is_not_measured(tmp_path):
+    """Exiting 1 would report a design FAILURE the check never looked for."""
+    project = _value_project(tmp_path)
+    rep = {}
+    A.emit_acceptance_checks(project, rep)
+    script = A.check_dir(project) / f"{rep['clauses'][0]['id']}.py"
+    env = {k: v for k, v in os.environ.items()
+           if k not in (A.PROGRAMS_DIR_ENV, "PYTHONPATH")}
+    proc = subprocess.run([sys.executable, str(script)], env=env,
+                          capture_output=True, text=True, timeout=120)
+    assert proc.returncode == A._EXIT[A.NOT_MEASURED], (
+        proc.returncode, proc.stdout, proc.stderr)
+    assert "NOT_MEASURED" in proc.stdout and A.PROGRAMS_DIR_ENV in proc.stdout
+
+
+def test_the_executor_hands_the_producer_directory_to_the_check(tmp_path):
+    project = _value_project(tmp_path)
+    rep = {}
+    A.emit_acceptance_checks(project, rep)
+    A.run_acceptance_checks(project, rep)
+    assert rep["passed"] == 1 and rep["not_measured"] == 0, rep["cases"]
