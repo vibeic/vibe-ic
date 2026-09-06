@@ -4219,11 +4219,6 @@ def main(argv: Optional[List[str]] = None) -> int:
             script = _make_script(frontend, slang_prefix, defines,
                                   checkpoint_dir=str(ckpt_dir),
                                   resume_from=resume_from)
-            print(f"[lec_run] RESUMING the proof at rung "
-                  f"{resume_from['rung']} (index {resume_from['rung_index']}) "
-                  f"from {resume_from['checkpoint_sha256']} "
-                  f"({resume_from['checkpoint_bytes']} bytes) — the rungs "
-                  "before it are NOT re-proved.", file=sys.stderr)
         else:
             script = canonical_script
         ys_host.write_text(script, encoding="utf-8")
@@ -4258,6 +4253,19 @@ def main(argv: Optional[List[str]] = None) -> int:
                       "launched; source proof and current identity revalidated.",
                       file=sys.stderr)
                 return True, _hit.get("_cache_source_rpt", "")
+        # ANNOUNCED HERE, NOT WHERE THE CHECKPOINT WAS SELECTED. Selecting one
+        # is not resuming from it: the PASS-cache lookup above returns first on
+        # a hit and launches no yosys at all, and the line used to be printed
+        # before that check -- so an invocation that resumed NOTHING said
+        # "RESUMING the proof at rung equiv_induct_seq64" on stderr while
+        # lec.json correctly recorded `resumed: false`. Measured on a real PASS
+        # design, invocations 4 and 5. An operator reads the stderr.
+        if resume_from is not None:
+            print(f"[lec_run] RESUMING the proof at rung "
+                  f"{resume_from['rung']} (index {resume_from['rung_index']}) "
+                  f"from {resume_from['checkpoint_sha256']} "
+                  f"({resume_from['checkpoint_bytes']} bytes) — the rungs "
+                  "before it are NOT re-proved.", file=sys.stderr)
         # THE TOTAL, NOT A FRESH COPY. Handing `args.timeout` here is the defect
         # measured on 2026-08-27: it re-armed the deadline on every attempt.
         # Every attempt now draws from the SAME StepBudget deadline.
@@ -4585,10 +4593,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     # do is on disk and where — which is why every restart used to re-prove
     # from zero and nothing in the artefact said it had to.
     if cache_hit_report is not None:
-        resume_record["state"] = "NOT_CONSULTED_CACHE_HIT"
+        resume_record["state"] = "CACHE_HIT_NOTHING_RESUMED"
         resume_record["statement"] = (
             "an exact PASS cache entry revalidated, so yosys was never "
-            "launched and no checkpoint was read or written by this run")
+            "launched: a checkpoint may have been SELECTED while building the "
+            "identity, but none was read and none was written by this run")
     elif checkpoint_enabled and resume_record.get("checkpoint_key"):
         _cdir = project / DEFAULT_CHECKPOINT_REL / \
             str(resume_record["checkpoint_key"]).split(":", 1)[-1]
@@ -4662,6 +4671,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         # running, and it is the artefact that recorded a ceiling kill without
         # ever saying how far the proof had got.
         resumed_from=resume_record.get("resumed_from"),
+        carried_evidence=resume_record.get("carried_evidence"),
         checkpoint_key=resume_record.get("checkpoint_key"),
         checkpoint_state=resume_record.get("state"),
         rungs_recorded=resume_record.get("rungs_recorded_this_run"))

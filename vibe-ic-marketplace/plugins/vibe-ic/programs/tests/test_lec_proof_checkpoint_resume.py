@@ -829,3 +829,44 @@ def test_e2e_a_resumed_run_reaches_THE_SAME_VERDICT_as_the_run_it_resumes(
     # ...and the published log is BOTH legs, which is what the verdict rests on.
     rpt = (proj / "reports/lec.rpt").read_text()
     assert "equiv_induct" in rpt and "RTLIL frontend" in rpt
+
+
+def test_a_cache_hit_does_not_announce_a_resume_it_never_made(monkeypatch,
+                                                              tmp_path,
+                                                              capsys):
+    """MEASURED on a real PASS design, invocations 4 and 5: the run printed
+    `RESUMING the proof at rung equiv_induct_seq64` on stderr and then
+    `exact PASS cache HIT ... Yosys not launched`. Nothing was resumed --
+    lec.json says `resumed: false`, correctly -- but the operator reads the
+    stderr, and selecting a checkpoint while building an identity is not
+    resuming from it."""
+    proj = _project(tmp_path)
+    argv = [str(proj), "--top", "dut", "--container", "fake",
+            "--liberty", "/missing"]
+    scripts = []
+    _install_fake_yosys(monkeypatch, scripts, stop_after_rung=None,
+                        tail=_PASS_TAIL)
+    lec_run.main(argv)                      # leg 1: proves from zero
+    # THE CANONICAL ENTRY MUST GO. With it present the PREFLIGHT lookup answers
+    # before `_run` is ever entered, so no checkpoint is selected and no line is
+    # printed on EITHER version -- which is how the first draft of this test
+    # passed against the code that shipped the defect. The real reproduction
+    # (work/proj_cache) wiped the cache after leg 1 for exactly this reason:
+    # the hit that exposes the bug is the one INSIDE `_run`, under a RESUME
+    # identity the preflight cannot construct.
+    import shutil
+    shutil.rmtree(proj / "reports/lec_pass_cache", ignore_errors=True)
+    capsys.readouterr()
+    lec_run.main(argv)                      # leg 2: resumes, proves, caches
+    capsys.readouterr()
+    lec_run.main(argv)                      # leg 3: position now stable
+    capsys.readouterr()
+    lec_run.main(argv)                      # leg 4: the cache answers
+    err = capsys.readouterr().err
+    rep = json.loads((proj / "reports/lec.json").read_text())
+    assert rep["cache"]["hit"] is True, (
+        "the fixture did not reach a cache hit, so this proves nothing")
+    assert rep["lec_resume"]["resumed"] is False
+    assert "RESUMING the proof" not in err, (
+        "an invocation that launched no yosys announced a resume:\n" + err)
+    assert "exact PASS cache HIT" in err
