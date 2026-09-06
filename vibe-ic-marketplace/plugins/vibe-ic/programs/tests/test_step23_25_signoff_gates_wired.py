@@ -105,13 +105,20 @@ _MULTICORNER_VIOLATED = (
 )
 
 
-#: Inner subprocess bound for this file. Every gate driven here is a pure
-#: report reader that returns in well under a second (measured over the whole
-#: published corpus: 70 invocations, none slower than a few hundred ms), so a
-#: small bound is honest. It must stay BELOW CI's `--timeout=180` harness bound
-#: (#542): a test that cannot reach its own timeout kills the whole subset
-#: instead of failing as one test.
-_INNER_TIMEOUT_S = 60
+#: CZT2-16 — THE INNER BOUND IS GONE, and the reasoning that justified it is
+#: what removed it. It read: "every gate driven here is a pure report reader
+#: that returns in well under a second (measured over the whole published
+#: corpus: 70 invocations, none slower than a few hundred ms), so a small bound
+#: is honest." A bound chosen because the work is short is a bound that only
+#: ever fires when the HOST is slow, which is not a fact about the gate.
+#: `_run_declared_signoff_gate` now supervises the child's own forward progress
+#: and takes no `timeout` at all, so there is no argument left to pass.
+#:
+#: The concern the constant also served -- staying BELOW CI's `--timeout=180`
+#: harness bound (#542), so a wedged test fails as one test instead of killing
+#: the whole subset -- is unaffected: the harness bound is the harness's, and a
+#: genuinely wedged gate is now stopped by the supervisor as a STALL, which is
+#: a finding about the child rather than a number about the host.
 
 #: The verdicts `phase3_one_shot_runner.main` treats as a releasing run.
 _RELEASING = ("PASS", "PASS_WITH_WAIVERS", "PASS_WITH_OPEN_SOURCE_CONSTRAINTS")
@@ -349,8 +356,7 @@ def test_a_checker_fault_is_not_a_design_failure_and_is_not_neutral_either(
     # A mis-invocation: argparse exits 2.
     r = R._run_declared_signoff_gate(
         _project(tmp_path), "sta_signoff", "sta_report_check.py",
-        "reports/phase3/sta/post_route_summary.json", ("--mode", "bogus"),
-        timeout=_INNER_TIMEOUT_S)
+        "reports/phase3/sta/post_route_summary.json", ("--mode", "bogus"))
     assert r.status == "BLOCKED", r
     assert r.status != "FAIL", "a checker fault is not a verdict on the design"
     assert "rc=2" in r.detail, r.detail
@@ -366,8 +372,7 @@ def test_a_missing_project_is_not_fabricated_into_existence(tmp_path):
     missing = tmp_path / "does_not_exist"
     r = R._run_declared_signoff_gate(
         missing, "sta_corner", "post_route_signoff_corner_check.py",
-        "reports/phase3/sta/post_route_signoff_corner.json",
-        timeout=_INNER_TIMEOUT_S)
+        "reports/phase3/sta/post_route_signoff_corner.json")
     # #544: a project that is not there is not a project that passed.
     assert r.status == "BLOCKED", r
     assert not missing.exists(), (

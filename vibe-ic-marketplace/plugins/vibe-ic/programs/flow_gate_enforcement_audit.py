@@ -1083,11 +1083,42 @@ class _RunnerModule:
                         continue
                     v = node.value
                     if isinstance(v, ast.Tuple):
-                        idx = next((i for i, e in enumerate(v.elts)
-                                    if self._origin(e, sc, known=out)
-                                    == "status"), None)
+                        # CZT2-17 — BOTH CARRIER KINDS, exactly as the scalar
+                        # branch below already accepts both. This branch matched
+                        # only "status", so a helper that returns the PROCESS
+                        # inside a tuple -- `return cp, None`, the shape of a
+                        # helper that hands back both the result and an early
+                        # exit -- was not recognised as delegating at all. The
+                        # spawn inside it was then judged INSIDE ITS OWN FRAME,
+                        # where the value is returned and never tested, and came
+                        # back INLINE_STATUS_IGNORED.
+                        #
+                        # That contradicts this module's own soundness rule,
+                        # stated a hundred lines up: IGNORED is a UNIVERSAL
+                        # claim and "is only ever concluded INSIDE ONE FRAME
+                        # ... across a frame boundary the strongest negative
+                        # this reports is UNPROVEN". A returned value HAS
+                        # crossed the boundary. So this was not a missing
+                        # feature, it was the asymmetry producing the one
+                        # verdict the module promises never to guess.
+                        #
+                        # MEASURED: `phase3_one_shot_runner._run_producer`
+                        # returns `(CompletedProcess, StepResult | None)` and
+                        # every caller reads `cp.returncode` to decide the step
+                        # -- `signoff_metrics_aggregate` came back AUDIT_ONLY /
+                        # INLINE_STATUS_IGNORED against a `declared: blocking`,
+                        # i.e. a contradiction manufactured by the spelling of
+                        # a return.
+                        idx = kind = None
+                        for i, e in enumerate(v.elts):
+                            o = self._origin(e, sc, known=out)
+                            if o in ("status", "process"):
+                                idx, kind = i, o
+                                break
                         if idx is not None:
-                            out[name], grew = ("tuple", idx), True
+                            out[name], grew = ("tuple" if kind == "status"
+                                       else "tuple_process",
+                                       idx), True
                             break
                         continue
                     o = self._origin(v, sc, known=out)
@@ -1104,7 +1135,7 @@ class _RunnerModule:
         back from it is a spawn result at one remove."""
         f = call.func
         return isinstance(f, ast.Name) and known.get(f.id, ("", None))[0] in (
-            "status", "process")
+            "status", "process", "tuple", "tuple_process")
 
     def _launch_sites(self) -> List[tuple]:
         sites = []
@@ -1169,6 +1200,25 @@ class _RunnerModule:
                     # thereafter only ever yields `.stdout`.
                     return _IGNORED
                 return self._fate_of(readers, scope, skip, depth)
+            return _UNPROVEN
+        if kind == "tuple_process":
+            # ("tuple_process", i) — element i is the PROCESS, and the status
+            # is whatever reads `.returncode` off the name it is bound to.
+            # Mirrors the scalar `process` unpack above; the only difference is
+            # which element of the tuple target carries it.
+            if idx is None:
+                return _UNPROVEN
+            if (isinstance(p, ast.Assign) and len(p.targets) == 1
+                    and isinstance(p.targets[0], ast.Tuple)):
+                elts = p.targets[0].elts
+                if idx < len(elts) and isinstance(elts[idx], ast.Name):
+                    nm = elts[idx].id
+                    if nm == "_":
+                        return _IGNORED
+                    readers = self._attr_loads(scope, nm, p.lineno, skip)
+                    if not readers:
+                        return _IGNORED
+                    return self._fate_of(readers, scope, skip, depth)
             return _UNPROVEN
         # ("tuple", i) — the status is element i of what came back
         if idx is None:
