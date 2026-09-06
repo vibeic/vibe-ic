@@ -898,3 +898,58 @@ def test_a_drifted_base_still_lands_with_the_predicate_restored(tmp_path) -> Non
     assert P.describes_tree(drifted, manifest) is None
     operation, _base_id, _cand_id = P.classify_move(drifted, drifted, manifest)
     assert operation == "STEADY", operation
+
+
+# ---------------------------------------------------------------------------
+# IMAGE_RE, pinned on its own.
+#
+# MEASURED: loosening IMAGE_RE so the `@sha256:<64hex>` tail became optional left
+# this whole file green. `test_runner_requires_digest_and_exact_hermetic_profile`
+# feeds a tag, and that tag is refused twice over -- by the shape check and,
+# independently and more strongly, by `image != RUNNER_IMAGE`. So nothing pinned
+# the shape check's own behaviour and it could have been weakened silently.
+#
+# It still has work to do: `parse_manifest` is not the only caller, and "this is
+# an immutable reference" is a claim worth being able to make about a string
+# before knowing which string is expected. So it gets its own table.
+# ---------------------------------------------------------------------------
+
+_DIGEST_64 = "sha256:" + "a" * 64
+
+IMAGE_RE_ACCEPTS = (
+    f"ghcr.io/vibeic/vibeic-eda@{_DIGEST_64}",       # the published repository
+    f"192.0.2.10:5000/vibeic-eda@{_DIGEST_64}",      # a registry on a port
+    f"registry.example.invalid/ns/name@{_DIGEST_64}",
+    f"vibeic-eda@{_DIGEST_64}",                      # no registry host at all
+)
+
+IMAGE_RE_REFUSES = (
+    "ghcr.io/vibeic/vibeic-eda:latest",              # a TAG is not a reference
+    "ghcr.io/vibeic/vibeic-eda",                     # nor is a bare name
+    "ghcr.io/vibeic/vibeic-eda@sha256:" + "a" * 63,  # 63 hex
+    "ghcr.io/vibeic/vibeic-eda@sha256:" + "a" * 65,  # 65 hex
+    "ghcr.io/vibeic/vibeic-eda@sha256:" + "g" * 64,  # not hex
+    "ghcr.io/vibeic/vibeic-eda@md5:" + "a" * 32,     # not sha256
+    f"GHCR.io/vibeic/vibeic-eda@{_DIGEST_64}",       # uppercase host
+    f"ghcr.io/vibeic/vibeic-eda@{_DIGEST_64} ",      # trailing space
+    f"ghcr.io/vibeic/vibeic-eda@{_DIGEST_64}\n",     # trailing newline
+    f"@{_DIGEST_64}",                                # no repository at all
+    "",
+)
+
+
+@pytest.mark.parametrize("reference", IMAGE_RE_ACCEPTS)
+def test_image_re_accepts_an_immutable_reference(reference: str) -> None:
+    assert P.IMAGE_RE.fullmatch(reference) is not None, reference
+
+
+@pytest.mark.parametrize("reference", IMAGE_RE_REFUSES)
+def test_image_re_refuses_anything_that_is_not_one(reference: str) -> None:
+    assert P.IMAGE_RE.fullmatch(reference) is None, reference
+
+
+def test_image_re_requires_the_digest_and_not_merely_a_plausible_name() -> None:
+    """The single property that must never be relaxed: no digest, no reference."""
+    for accepted in IMAGE_RE_ACCEPTS:
+        assert "@sha256:" in accepted
+    assert P.IMAGE_RE.fullmatch("ghcr.io/vibeic/vibeic-eda") is None
