@@ -68,6 +68,7 @@ import _reference_flow_boundary as _rfb
 import _source_record_merge as _srm  # per-source merge: silence cannot erase
 import floorplan_contract as _fpc  # design-declared fixed floorplan + DRV limits
 from _rtl_include_hub import drop_include_hubs as _drop_include_hubs  # shared aggregator filter
+import _container_exec as _cex  # the ONE 'is there a route to a container' predicate
 import _watchdog as _wd  # v1.3.47 — plugin-wide progress-stall supervision
 import _docker_watchdog as _dwd  # shared in-container CPU probe (tree-aware)
 import _runner_lock  # ORGANIC #588 — single-driver lock (all 4 runners)
@@ -1060,7 +1061,11 @@ def _local_exec_mode() -> bool:
     names the route. Tool/PDK/chip-AGNOSTIC: nothing here names either."""
     global _LOCAL_EXEC_MODE
     if _LOCAL_EXEC_MODE is None:
-        _LOCAL_EXEC_MODE = shutil.which("docker") is None
+        # ONE definition of the question, shared with the OTHER way this repo
+        # enters a container (`fault_atpg_run._run_docker`, a `docker run` of a
+        # sibling container). A second copy here is how the two would come to
+        # disagree about which route a run took.
+        _LOCAL_EXEC_MODE = _cex.no_container_route()
         if _LOCAL_EXEC_MODE:
             _named = os.environ.get("EDA_CONTAINER") or "<none named>"
             print("[phase3] EXEC ROUTE = LOCAL: no docker client on PATH, so "

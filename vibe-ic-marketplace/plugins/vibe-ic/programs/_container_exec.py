@@ -66,6 +66,7 @@ it is given.
 from __future__ import annotations
 
 import shlex
+import shutil
 import subprocess
 from typing import Optional, Sequence
 
@@ -152,3 +153,40 @@ def describe_result(cp: subprocess.CompletedProcess,
         return ("`timeout` is not available in this image, so NO deadline "
                 "could be enforced; the command may have run unbounded")
     return None
+
+
+# ---------------------------------------------------------------------------
+# IS THERE A ROUTE TO A CONTAINER AT ALL?
+# ---------------------------------------------------------------------------
+
+def no_container_route() -> bool:
+    """True when this process CANNOT reach any container, because there is no
+    `docker` client on PATH.
+
+    ONE definition, shared, because there are two independent ways this repo
+    enters a container and each learned the same lesson separately:
+    `phase3_one_shot_runner._docker_exec*` (`docker exec` into a named,
+    already-running container) and `fault_atpg_run._run_docker` (`docker run`
+    of a fresh sibling container). Both are unreachable when the runner is
+    ALREADY RUNNING INSIDE that image — there is no docker binary in there —
+    and both were returning 127 for every tool call while the tool itself sat
+    on the process's own PATH. A second copy of this predicate is how the two
+    would come to disagree about which route a run took.
+
+    MEASURED 2026-09-06, subservient through the canonical front door inside
+    ghcr.io/vibeic/vibeic-eda 0.3.46: with only the `docker exec` side taught
+    to run locally, Phase 3 reached PnR but Step 11 still recorded
+    `"exit": 127, "log_tail": "docker binary not found in PATH"` in
+    `reports/phase2/dft/scan_chain.json` — so the run routed the PRE-SCAN
+    netlist while the same tree run host-side routed the SCAN netlist, and the
+    two disagreed about which steps even opened.
+
+    DELIBERATELY NOT "and nobody named a container". A runner's own
+    `--container` DEFAULT is published into `$EDA_CONTAINER`, so that question
+    reads a value the runner wrote to itself and can never be false. What the
+    naming buys is a NAME IN THE DIAGNOSTIC, not a route.
+
+    UNCACHED ON PURPOSE: `shutil.which` is microseconds, callers that want a
+    cache already have one, and a module-level cache here would have to stay
+    coherent with theirs. Tool/PDK/chip-AGNOSTIC."""
+    return shutil.which("docker") is None
