@@ -17335,9 +17335,22 @@ def _floorplan_geometry_tcl(die_w: int, die_h: int, core_pad: int,
         llx, lly, urx, ury = (int(v) for v in fp_rect)
         return (f'initialize_floorplan -die_area "{llx} {lly} {urx} {ury}" \\\n'
                 f'                      -core_area "{llx} {lly} {urx} {ury}"')
+    # `-core_area` takes `llx lly urx ury` — COORDINATES. `core_w`/`core_h` are
+    # WIDTHS (`core_w = die_w - 2*core_pad`, six call sites), and printing a
+    # width where a coordinate is required insets the core by `core_pad` on the
+    # low sides and by `2*core_pad` on the high ones. MEASURED on spm (die 3162,
+    # core_pad 381, lane czspmfp2): `-core_area "381 381 2400 2400"` — 381 um of
+    # inset at left and bottom, 762 um at right and top. That is `core_pad` um
+    # of die thrown away on the top and right of EVERY no-slot design.
+    #
+    # The upper right is the origin PLUS the width, which is the same number as
+    # `die - core_pad` — and that identity is what makes it checkable rather
+    # than merely different. The slot arm above (`fp_rect is not None`) never
+    # reaches this expression and is untouched; with `core_pad == 0` this emits
+    # exactly what it always did.
     return (f'initialize_floorplan -die_area "0 0 {die_w} {die_h}" \\\n'
             f'                      -core_area "{core_pad} {core_pad} '
-            f'{core_w} {core_h}"')
+            f'{core_pad + core_w} {core_pad + core_h}"')
 
 
 def _rewrite_pnr_floorplan_die(tcl_text: str, die_w: int, die_h: int,
@@ -22638,6 +22651,30 @@ def _antenna_repair_tcl(pdk: "PdkConfig",
         "    if {[llength $out] != $n} { return {} }\n"
         "    return $out\n"
         "  }\n"
+        # WRITE THE REAL REPORT OR NONE — NEVER AN EMPTY FILE.
+        # `check_antennas -report_violating_nets -report_file F` CREATES F and
+        # writes ZERO BYTES when nothing violates, so a converged iteration
+        # leaves a file that exists and says nothing. MEASURED on spm (lane
+        # czspmfp2): `phase3/stage3/pnr/antenna_iter_0.rpt` and `_1.rpt` are
+        # both 0 bytes on a run whose antenna sequence converged [1, 0], and
+        # `eda_report_audit` discovers them, judges them and writes four ERROR
+        # findings about them. Since v1.17.103 a verdict over a report holding
+        # no bytes is NOT_MEASURED, so those two unreadable reports cost spm its
+        # `Checker.KLayoutAntenna` row outright.
+        #
+        # A 0-byte report is the ONE state a consumer cannot read as either
+        # "clean" or "absent" — the two answers it is entitled to. Absent is a
+        # legitimate, readable state; empty is not. So the empty file is removed
+        # and the iteration simply has no report, which is true.
+        #
+        # A report WITH CONTENT is never touched: the guard is `file size == 0`,
+        # so a run that has violations still writes and keeps its report — that
+        # is the control, and `_vic_ant_nets` above is what reads it.
+        "  proc _vic_ant_rm_empty {f} {\n"
+        "    if {[file exists $f] && [file size $f] == 0} {\n"
+        "      catch {file delete -- $f}\n"
+        "    }\n"
+        "  }\n"
         "  set _ant_cap 6\n"
         "  set _ant_margin 0\n"
         f"  set _ant_dir {out_dir_c}\n"
@@ -22654,9 +22691,11 @@ def _antenna_repair_tcl(pdk: "PdkConfig",
         "-report_file $_ant_rf]} _ac]} {\n"
         "      puts \"ANTENNA_LOOP_CHECK_NONFATAL: $_ac\"\n"
         "      set _ant_stop CHECK_FAILED\n"
+        "      _vic_ant_rm_empty $_ant_rf\n"
         "      break\n"
         "    }\n"
         "    set _ant_now [_vic_ant_nets $_ant_rf $_nv]\n"
+        "    _vic_ant_rm_empty $_ant_rf\n"
         "    if {$_nv > 0 && [llength $_ant_now] == 0} {\n"
         "      if {$_ant_membership} {\n"
         "        puts \"ANTENNA_LOOP_MEMBERSHIP_UNAVAILABLE: iter=$_i -- the "
@@ -22744,6 +22783,7 @@ def _antenna_repair_tcl(pdk: "PdkConfig",
         "      puts \"ANTENNA_POSTROUTE_CHECK_NONFATAL: $_ra_chk\"\n"
         "    } else {\n"
         "      set _ant_now [_vic_ant_nets $_ant_rf $_nv]\n"
+        "      _vic_ant_rm_empty $_ant_rf\n"
         "      lappend _ant_seq $_nv\n"
         "      lappend _ant_sets $_ant_now\n"
         "      puts \"ANTENNA_LOOP_ITER: iter=final nets=$_nv "

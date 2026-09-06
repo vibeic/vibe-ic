@@ -238,7 +238,12 @@ class TestRewriteFloorplanDie:
             'make_tracks\n')
 
     def test_rewrites_die_and_core(self):
-        out = mod._rewrite_pnr_floorplan_die(self._TCL, 130, 130, 10, 120, 120)
+        out = mod._rewrite_pnr_floorplan_die(self._TCL, 130, 130, 10, 110, 110)
+        # core_w/core_h are WIDTHS: production computes `die - 2*pad`
+        # (six sites), so 130-2*10 = 110. This fixture passed 120 —
+        # `die - pad`, a COORDINATE — which is the same width/coordinate
+        # confusion FP-09 fixed in the builder. With the arithmetic
+        # corrected the asserted string is UNCHANGED: 10+110 = 120 = 130-10.
         assert '-die_area "0 0 130 130"' in out
         assert '-core_area "10 10 120 120"' in out
         assert '-die_area "0 0 95 95"' not in out
@@ -246,7 +251,12 @@ class TestRewriteFloorplanDie:
     def test_preserves_trailing_site_line(self):
         # The regex matches only the die/core lines — the `-site` continuation
         # and everything after are untouched.
-        out = mod._rewrite_pnr_floorplan_die(self._TCL, 130, 130, 10, 120, 120)
+        out = mod._rewrite_pnr_floorplan_die(self._TCL, 130, 130, 10, 110, 110)
+        # core_w/core_h are WIDTHS: production computes `die - 2*pad`
+        # (six sites), so 130-2*10 = 110. This fixture passed 120 —
+        # `die - pad`, a COORDINATE — which is the same width/coordinate
+        # confusion FP-09 fixed in the builder. With the arithmetic
+        # corrected the asserted string is UNCHANGED: 10+110 = 120 = 130-10.
         assert "-site unithd" in out
         assert "make_tracks" in out
 
@@ -298,7 +308,7 @@ class TestRewriteFloorplanDie:
             # 3. And the rewrite is not a no-op on it. A regex that matches but
             #    substitutes the same text back is the same silent failure.
             tcl = f"foo\n{emitted} \\\n                      -site unithd\n"
-            out = mod._rewrite_pnr_floorplan_die(tcl, 130, 130, 10, 120, 120)
+            out = mod._rewrite_pnr_floorplan_die(tcl, 130, 130, 10, 110, 110)
             assert out != tcl, (
                 f"the {label} rewrite left the tcl byte-identical: a resize "
                 f"would be silently discarded")

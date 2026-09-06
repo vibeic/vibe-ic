@@ -870,9 +870,32 @@ class TestSlotPinnedFloorplanRectangle:
         assert '"0 0 1936 2531"' not in tcl
 
     def test_without_a_slot_the_historical_geometry_is_unchanged(self):
+        # FP-09: the upper right is a COORDINATE (origin + width), not the
+        # width. 10+1916 = 1926 = 1936-10, and 10+2511 = 2521 = 2531-10.
         tcl = mod._floorplan_geometry_tcl(1936, 2531, 10, 1916, 2511, None)
         assert '-die_area "0 0 1936 2531"' in tcl
-        assert '-core_area "10 10 1916 2511"' in tcl
+        assert '-core_area "10 10 1926 2521"' in tcl
+        assert (1926, 2521) == (1936 - 10, 2531 - 10)
+
+    def test_a_zero_pad_core_is_byte_identical_to_before_fp09(self):
+        """THE CONTROL for FP-09: with no pad there is nothing to inset, so the
+        corrected builder must emit exactly what it always did."""
+        tcl = mod._floorplan_geometry_tcl(1000, 2000, 0, 1000, 2000, None)
+        assert '-core_area "0 0 1000 2000"' in tcl
+
+    def test_the_core_inset_is_symmetric_on_all_four_sides(self):
+        """The defect in one sentence: a WIDTH printed as a COORDINATE inset the
+        core by `core_pad` on the low sides and `2*core_pad` on the high ones —
+        measured on spm as 381 um vs 762 um. Asserted here as a property, so it
+        cannot come back under a different fixture."""
+        for die_w, die_h, pad in ((3162, 3162, 381), (1936, 2531, 10),
+                                  (5000, 4000, 250)):
+            cw, ch = die_w - 2 * pad, die_h - 2 * pad
+            line = mod._floorplan_geometry_tcl(
+                die_w, die_h, pad, cw, ch, None).splitlines()[-1]
+            llx, lly, urx, ury = [int(v) for v in line.split('"')[1].split()]
+            assert (llx, lly) == (pad, pad), line
+            assert (die_w - urx, die_h - ury) == (pad, pad), line
 
     # ---- the retry loop may not undo it -----------------------------------
     def test_resize_retry_reinstates_the_pinned_rect(self):
@@ -901,8 +924,13 @@ class TestSlotPinnedFloorplanRectangle:
         text = mod._floorplan_geometry_tcl(1936, 2531, 10, 1916, 2511, None)
         out = mod._rewrite_pnr_floorplan_die(text, 2200, 2900, 10, 2180, 2880,
                                              None)
+        # FP-09: a THIRD site pinning the width-as-coordinate form — the hunk
+        # I was handed named two. 10+2180 = 2190 = 2200-10, 10+2880 = 2890 =
+        # 2900-10. The property (the retry loop still resizes a no-slot die) is
+        # unchanged; only the arithmetic it asserts was wrong.
         assert '-die_area "0 0 2200 2900"' in out
-        assert '-core_area "10 10 2180 2880"' in out
+        assert '-core_area "10 10 2190 2890"' in out
+        assert (2190, 2890) == (2200 - 10, 2900 - 10)
 
 
 class TestSealRingBandKeepOut:
