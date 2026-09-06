@@ -55,7 +55,9 @@ Two defects are fixed here:
 chip-AGNOSTIC: yosys pass names and log phrases only; no chip/PDK/vendor
 literal, and no design name is required by any assertion below.
 """
+import ast
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -288,6 +290,44 @@ def test_the_resolver_never_guesses(tmp_path):
         str(tmp_path / "does_not_exist.v")) is None
 
 
+def _functions_owning(src: str, marker: str) -> set:
+    """The INNERMOST function that owns each occurrence of `marker`, by NAME.
+
+    A call-site's identity is the function it lives in, not the line it sits
+    on: a line number moves with every edit above it, while the owning
+    function is the thing a reader means by "the other call-site". Parsed
+    with `ast` and located by offset, so a nested helper that carried the
+    marker would be named as itself rather than credited to its parent.
+    """
+    lines = src.splitlines(keepends=True)
+    starts, acc = [], 0
+    for ln in lines:
+        starts.append(acc)
+        acc += len(ln)
+
+    def _line_of(offset: int) -> int:
+        lo, hi = 0, len(starts) - 1
+        while lo < hi:
+            mid = (lo + hi + 1) // 2
+            if starts[mid] <= offset:
+                lo = mid
+            else:
+                hi = mid - 1
+        return lo + 1
+
+    tree = ast.parse(src)
+    funcs = [n for n in ast.walk(tree)
+             if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+             and getattr(n, "end_lineno", None)]
+    owners = set()
+    for m in re.finditer(re.escape(marker), src):
+        line = _line_of(m.start())
+        enclosing = [n for n in funcs if n.lineno <= line <= n.end_lineno]
+        if enclosing:
+            owners.add(max(enclosing, key=lambda n: n.lineno).name)
+    return owners
+
+
 def test_both_phase2_synth_call_sites_write_the_encfile():
     """The netlist that step-13 compares can come from either synth call-site
     (built-in read_verilog, or the read_slang/sv2v fallback that a modern-SV
@@ -295,13 +335,32 @@ def test_both_phase2_synth_call_sites_write_the_encfile():
     translation, or the LEC fix is live on only one of them.  Read as TEXT:
     importing design_one_shot_runner drags in the whole runner."""
     src = (_PROGRAMS / "design_one_shot_runner.py").read_text()
-    sites = [ln for ln in src.splitlines()
-             if "synth -top {synth_top} -flatten" in ln]
-    assert len(sites) == 2, sites
-    # Count the CODE form (the f-string interpolation `-encfile {`), never the
-    # bare word: the surrounding comments name the flag too, and counting those
+    # THE MEMBER SET, not its size. `len(sites) == 2` and `src.count(...) == 2`
+    # were pins on a live population's SIZE with nothing pinning its MEMBERS:
+    # one call-site leaving and one arriving in the same batch leaves both
+    # numbers at 2 while the population has become a different set, and the pin
+    # would never say so (`population_pin_without_its_member_set` names this
+    # module and this assertion). The identities are the FUNCTIONS that own the
+    # call-sites, compared as a set in BOTH directions; the count survives only
+    # as `len()` of that same set, never as a typed literal.
+    _SYNTH_CALL_SITES = {"_phase2_sv_synth_fallback", "step_yosys_synth"}
+    sites = _functions_owning(src, "synth -top {synth_top} -flatten")
+    assert sites == _SYNTH_CALL_SITES, {
+        "missing": sorted(_SYNTH_CALL_SITES - sites),
+        "unexpected": sorted(sites - _SYNTH_CALL_SITES)}
+    # The CODE form (the f-string interpolation `-encfile {`), never the bare
+    # word: the surrounding comments name the flag too, and matching those
     # would pass on a file where neither call-site actually carries it.
-    assert src.count("-encfile {") == 2, src.count("-encfile {")
+    enc = _functions_owning(src, "-encfile {")
+    assert enc == _SYNTH_CALL_SITES, {
+        "missing": sorted(_SYNTH_CALL_SITES - enc),
+        "unexpected": sorted(enc - _SYNTH_CALL_SITES)}
+    # BOTH halves of the conjunction over the SAME set: every synth call-site
+    # is an encfile call-site and back again, so a third call-site that
+    # forgot the flag cannot hide behind a second one that carries it twice.
+    assert enc == sites, {"synth_only": sorted(sites - enc),
+                          "encfile_only": sorted(enc - sites)}
+    assert len(sites) == len(_SYNTH_CALL_SITES)
     assert "from lec_run import FSM_ENCFILE_NAME" in src
     # AND THE OTHER HALF OF THAT IMPORT MUST EXIST. Caught for real while
     # writing this: restoring lec_run.py from a stale snapshot during a
