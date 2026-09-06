@@ -13689,6 +13689,106 @@ def _published_tree_advisory(project: Path) -> Optional[str]:
     return None
 
 
+def p0_gate_census(records: Optional[List[Dict[str, Any]]]
+                   ) -> Optional[Dict[str, Any]]:
+    """EVERY registered gate, under the verdict it actually returned.
+
+    THE SENTENCE THIS CLOSES. `registered 246 / invoked 246 / passed 182 /
+    failed 1` was the whole published census, and 182 + 1 + 0 is not 246: on a
+    measured run 63 registered gates — 36 SKIP, 11 BLOCKED, 16 INCOMPLETE —
+    were in the umbrella's records and in NO published bucket. So a reader
+    could take `invoked_gate_count: 246` as coverage, and be wrong by 63 gates
+    that returned no statement about this design at all. `invoked` counts
+    every gate that was not `NOT_INVOCABLE`; a gate whose input was absent
+    (SKIP) and a gate whose dependency never produced one (BLOCKED) are both
+    "invoked" under that definition and neither audited anything.
+
+    Publishing the complete partition is the fix, and CHECKING it is what makes
+    it stay true: `closes` compares the three numerators the audit already
+    publishes against the records they are supposed to project. It cannot be
+    false while the projection is correct — which is exactly why it is worth
+    asserting, and why the caller treats a false one as a structural defect of
+    the gate layer rather than a finding about the design.
+
+    ``None`` when the umbrella did not run (stage 3/4): a census over no
+    records is NOT a census of zero. chip-AGNOSTIC — counts, not designs.
+    """
+    if records is None:
+        return None
+    by_verdict: Dict[str, int] = {}
+    for r in records:
+        v = str(r.get("verdict") or "UNKNOWN")
+        by_verdict[v] = by_verdict.get(v, 0) + 1
+    published = {"PASS": _p0_passed_count(records),
+                 "NOT_INVOCABLE": _p0_not_invocable_count(records),
+                 "FAIL": sum(1 for r in records
+                             if r.get("verdict") == "FAIL")}
+    other = {k: n for k, n in by_verdict.items() if k not in published}
+    disagreeing = sorted(k for k, n in published.items()
+                         if by_verdict.get(k, 0) != n)
+    buckets = dict(sorted({**published, **other}.items()))
+    total = sum(buckets.values())
+    registered = len(records)
+    return {
+        "registered": registered,
+        "by_verdict": buckets,
+        "published_total": total,
+        "unaccounted": registered - total,
+        "buckets_disagreeing_with_records": disagreeing,
+        "closes": (total == registered and not disagreeing),
+        "invoked_is_not_coverage": (
+            "`invoked_gate_count` counts every gate that was not "
+            "NOT_INVOCABLE, SKIP and BLOCKED included. The gates that made a "
+            "statement about THIS design are the PASS and FAIL buckets above; "
+            "everything else answered about something it could not see."),
+    }
+
+
+def gate_population_reconciliation(
+        records: Optional[List[Dict[str, Any]]],
+        ledger: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """The TWO gate populations this artifact carries, told apart by name.
+
+    They are not the same set and never were. `registered/invoked/passed/
+    failed` count the P0 structural-RTL REGISTRY; `gate_execution_ledger`
+    records what the FLOW dispatched. Measured on one run: 246 registry names,
+    66 ledger names, 10 in both — and all 5 of that run's ledger FAILs were
+    outside the registry, so the artifact said `failed_gate_count: 1` beside
+    five failing gates and both numbers were right about different things.
+    "How many gates failed" had two answers and nothing in the file said why.
+
+    ADVISORY BY DECLARATION. This publishes and names; it changes no verdict.
+    Making a ledger FAIL blocking would redden runs whose gates are advisory by
+    design, and that is a ruling about policy, not a defect in arithmetic — so
+    it is stated here for a reader and for a maintainer, not enforced.
+    chip-AGNOSTIC — set algebra over gate names.
+    """
+    reg = {str(r.get("name")) for r in (records or []) if r.get("name")}
+    led = {str(r.get("gate")) for r in (ledger or []) if r.get("gate")}
+    reg_fail = sorted({str(r.get("name")) for r in (records or [])
+                       if r.get("verdict") == "FAIL" and r.get("name")})
+    led_fail = sorted({str(r.get("gate")) for r in (ledger or [])
+                       if r.get("verdict") == "FAIL" and r.get("gate")})
+    return {
+        "declared": "ADVISORY — names the populations; changes no verdict.",
+        "p0_registry_gates": len(reg),
+        "ledger_gates": len(led),
+        "in_both": sorted(reg & led),
+        "ledger_only": len(led - reg),
+        "registry_only": len(reg - led),
+        "p0_registry_failed_gates": reg_fail,
+        "ledger_failed_gates": led_fail,
+        "ledger_failures_outside_the_published_census": sorted(
+            set(led_fail) - set(reg_fail)),
+        "note": (
+            "`failed_gate_count` / `passed_gate_count` / `registered_gate_"
+            "count` / `invoked_gate_count` describe the P0 REGISTRY ONLY. "
+            "`gate_execution_ledger` is a DIFFERENT population — what the flow "
+            "dispatched. Neither is a subset of the other. A ledger FAIL "
+            "listed above appears in NO census count in this file."),
+    }
+
+
 def completion_audit_verdict(
     overall: str,
     invoked_gate_count: Optional[int],
@@ -15165,6 +15265,28 @@ def main(argv: Optional[List[str]] = None) -> int:
                 step_artifact_fail_lines.append(
                     f"step{r.id} ({r.name}): {r.status} — {first_reason}")
 
+    # ── THE CENSUS MUST CLOSE ────────────────────────────────────────────
+    # BLOCKING, and declared so. `_gate_census` partitions the umbrella's own
+    # records; `closes` asserts that the three numerators this audit publishes
+    # are the projection of those records and that every record lands in some
+    # bucket. It CANNOT be false while the projection is correct — measured
+    # false on nothing, on real records from a full opentitan_aes run — so it
+    # costs nothing today and catches the day a published count and the records
+    # behind it stop agreeing. It is a structural defect of the GATE LAYER, not
+    # a finding about the design, which is why it is stated as such.
+    _gate_census = p0_gate_census(
+        _p0_gate_records(next((r for r in results if r.id == "P0"), None))
+        if any(r.id == "P0" for r in results) else None)
+    if _gate_census is not None and not _gate_census["closes"]:
+        structural_fail_lines.append(
+            f"gate census does not close: {_gate_census['published_total']} "
+            f"gate(s) in published buckets vs {_gate_census['registered']} "
+            f"registered ({_gate_census['unaccounted']} unaccounted); "
+            f"bucket(s) disagreeing with the umbrella's own records: "
+            f"{_gate_census['buckets_disagreeing_with_records'] or 'none'}. "
+            f"Every published gate count is a projection of those records; "
+            f"one that is not is a defect in this audit, not in the design.")
+
     # Verdict triage. Waivers are NOT pass — they are deferred to
     # foundry sign-off / production tapeout review. Emit a distinct
     # verdict so a downstream gate / human reader cannot mistake
@@ -15927,6 +16049,16 @@ def main(argv: Optional[List[str]] = None) -> int:
             "registered_gate_count": structural_registered_count,
             "invoked_gate_count": structural_invoked_count,
             "not_invocable_gate_count": structural_not_invocable_count,
+            # THE COMPLETE PARTITION, so the four numbers above can be closed
+            # by a reader instead of leaving a remainder with no name, and the
+            # TWO POPULATIONS this file carries, told apart. See
+            # `p0_gate_census` / `gate_population_reconciliation`.
+            "gate_census": _gate_census,
+            "gate_population_reconciliation": gate_population_reconciliation(
+                _p0_gate_records(next((r for r in results if r.id == "P0"),
+                                      None))
+                if any(r.id == "P0" for r in results) else None,
+                _gate_ledger_payload()),
             "step_counts": counts,
             # vibe-ic#1969 — the tally and the records it counted travel in
             # ONE canonical artifact.  `final_report_generate` consumes
