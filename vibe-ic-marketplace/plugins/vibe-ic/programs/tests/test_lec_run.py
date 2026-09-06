@@ -27,6 +27,7 @@ import lec_equivalence_check as gate  # noqa: E402  (downstream consumer)
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import _progress_run as _pr  # noqa: E402
 import _docker_watchdog as _dw  # noqa: E402
+import _watchdog as _WD  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -202,7 +203,26 @@ def test_marked_yosys_uses_container_tree_progress_and_attempt_budget(
     path watched only `docker exec`, declared it still, and returned while the
     7195-second container timeout + Yosys kept running.  A marked long command
     must enter the shared docker supervisor, with the Yosys script as its CPU
-    marker and the producer attempt budget as its ceiling.
+    marker.
+
+    THE CEILING ASSERTION WAS CORRECTED, NOT RELAXED. This test used to read
+    ``seen["hard_ceiling_s"] == 73.0`` -- it asserted that the LEC ATTEMPT
+    BUDGET is handed to the watchdog's hard ceiling, which is the one use
+    `_watchdog`'s own docstring rules out ("a pathological-infinite-loop
+    backstop ONLY ... NOT the primary control"). Pinned there, the budget also
+    became the container-side GNU `timeout`, so a Yosys proof that was printing
+    and holding a full core was SIGKILLed at budget-5s with no verdict.
+    MEASURED 2026-09-06: a post-layout LEC at 5360 s of a 7195 s budget, 1374
+    points proved, 0 failed, 99.9 % CPU, still advancing.
+
+    The assertion below is STRICTLY STRONGER than the one it replaces: the old
+    line was satisfied by exactly one number and said nothing about the other
+    two facts that decide whether a long proof survives. This one requires that
+    no bounded ceiling reaches the supervisor at all, that the progress marker
+    is the exact script, and that the raw-exec probe is wired -- and it cannot
+    be satisfied by re-pinning the budget under any other name. The step budget
+    keeps its real job in `StepBudget.next_attempt_budget()`, which decides
+    whether the NEXT attempt is LAUNCHED and so stops nothing that is running.
     """
     import _docker_watchdog as dw
 
@@ -226,7 +246,11 @@ def test_marked_yosys_uses_container_tree_progress_and_attempt_budget(
     assert got.stdout == "Yosys 0.68\n"
     assert seen["container"] == "vibeic-eda"
     assert seen["marker"] == "/work/equiv.ys"
-    assert seen["hard_ceiling_s"] == 73.0
+    assert seen.get("hard_ceiling_s", _WD.DEFAULT_HARD_CEILING_S) >= \
+        _WD.DEFAULT_HARD_CEILING_S, (
+            f"the 73 s attempt budget reached the supervisor as a hard "
+            f"ceiling ({seen.get('hard_ceiling_s')}) — a wall-clock deadline "
+            f"wearing the watchdog's clothes")
     assert seen["docker_exec_raw"] is lec_run._docker_exec_raw
 
 

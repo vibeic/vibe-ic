@@ -1672,10 +1672,34 @@ def _docker(container: str, cmd: str, timeout: int = 120,
             telemetry_path=telemetry_path,
             telemetry_stage_probe=lec_stage_from_output,
             telemetry_context=telemetry_context,
-            # The producer's declared attempt budget is the absolute backstop.
-            # wrap_with_container_timeout fires five seconds earlier, normally
-            # returning GNU timeout's rc=124/137 for the existing classifier.
-            hard_ceiling_s=float(timeout),
+            # THE ATTEMPT BUDGET IS NOT A CEILING, and handing it to
+            # `hard_ceiling_s` was a wall-clock deadline wearing the watchdog's
+            # clothes. `_watchdog` says what that parameter is for in one line:
+            # "a pathological-infinite-loop backstop ONLY ... NOT the primary
+            # control". Pinned to the budget it also became the container-side
+            # GNU `timeout` (`wrap_with_container_timeout`), so a Yosys proof
+            # that was emitting output and holding a full core was SIGKILLed at
+            # budget-5s with no verdict -- and the flow then recorded a design
+            # it never compared. MEASURED 2026-09-06 on an open benchmark IC: a
+            # post-layout LEC at 5360 s of a 7195 s budget, 1374 points proved,
+            # 0 failed, 99.9 % CPU, still advancing.
+            #
+            # WHAT STILL BOUNDS THE STEP. `timeout` keeps its ORIGINAL job --
+            # `StepBudget.next_attempt_budget()` returns 0 once the step
+            # deadline has passed and the next attempt is NOT LAUNCHED. That is
+            # the anti-re-arm property the budget was written for on
+            # 2026-08-27 (three attempts x 7200 s against a nominal "7200 s
+            # budget"), and it is a decision taken BETWEEN attempts, so it
+            # stops nothing that is running. A RUNNING attempt is now bounded
+            # by FORWARD PROGRESS alone: still moving -> runs to completion,
+            # however long that legitimately takes; stopped moving -> killed
+            # and recorded as STALLED (`_STALL_MARKER`, rc RC_STALLED), which
+            # this file already keeps distinct from `_TIMEOUT_MARKER`.
+            #
+            # A BIGGER NUMBER WOULD BE THE SAME DEFECT WITH A LATER DATE, so
+            # there is no number here at all: the ceiling falls back to the
+            # primitive's own pathological backstop, exactly as
+            # `design_one_shot_runner._run` already does after the same repair.
         )
         return subprocess.CompletedProcess(
             ["docker", "exec", container, "bash", "-lc", cmd],

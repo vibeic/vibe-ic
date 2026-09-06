@@ -18,6 +18,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
+
 PROG = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROG))
 import phase3_one_shot_runner as R  # noqa: E402
@@ -202,21 +204,16 @@ def test_drc_wall_budget_default_and_env(monkeypatch):
     assert R._drc_wall_budget_s() == 7200.0          # non-positive -> default
 
 
-def test_try_svrf_native_drc_timeout_is_blocked_not_excused(tmp_path,
-                                                            monkeypatch):
-    # rc 124 (wall-clock ceiling) -> BLOCKED + SVRFDRC_PERF_CEILING, and the DRC
-    # step passes a BOUNDED hard_ceiling_s (not the 24h default). BLOCKED is
-    # this runner's own word for "the check could not be completed, so NOTHING
-    # is known about the design", and `_aggregate_verdict` names it explicitly
-    # in the non-green bucket.
+def _drc_probe_harness(tmp_path, monkeypatch, rc):
+    """Drive `_try_svrf_native_drc` with a faked exec and hand back what the
+    step passed to the supervisor, plus the StepResult."""
     monkeypatch.setattr(R, "_svrfdrc_bin_container", lambda c: "svrfdrc")
     monkeypatch.setattr(R, "_to_container_path", lambda p, c: p)
-    monkeypatch.delenv("VIBE_IC_DRC_BUDGET_S", raising=False)
     seen = {}
 
     def _fake_exec(c, cmd, **k):
-        seen["hard_ceiling_s"] = k.get("hard_ceiling_s")
-        return (124, "", "")                         # wall-clock ceiling hit
+        seen.update(k)
+        return (rc, "", "")
     monkeypatch.setattr(R, "_docker_exec", _fake_exec)
     gds = R._pl.pnr_dir(tmp_path) / "spm.gds"
     gds.parent.mkdir(parents=True, exist_ok=True)
@@ -227,9 +224,95 @@ def test_try_svrf_native_drc_timeout_is_blocked_not_excused(tmp_path,
                     cell_lef="x", cell_gds=None, site="unit", drc_deck=None,
                     calibre_drc="/x/DRC.rule"),
         "vibeic-eda")
+    return res, seen
+
+
+@pytest.mark.parametrize("rc,expect", [
+    (R._RC_ABORTED, "ABORTED_NO_OUTPUT"),
+    (R._RC_STALLED, "STALLED"),
+    (124, "CEILING"),
+])
+def test_try_svrf_native_drc_stop_is_blocked_not_excused_and_says_which(
+        tmp_path, monkeypatch, rc, expect):
+    """Every way this step can be STOPPED is BLOCKED, and the record says WHICH.
+
+    BLOCKED is this runner's own word for "the check could not be completed, so
+    NOTHING is known about the design", and `_aggregate_verdict` names it
+    explicitly in the non-green bucket. Three stop states, three distinct
+    labels — a reader must never have to guess whether the engine hung, was
+    deliberately stopped, or hit the pathological backstop.
+    """
+    monkeypatch.delenv("VIBE_IC_DRC_BUDGET_S", raising=False)
+    res, _seen = _drc_probe_harness(tmp_path, monkeypatch, rc)
     assert res.status == "BLOCKED"
     assert res.extras.get("finding") == "SVRFDRC_PERF_CEILING"
-    assert seen["hard_ceiling_s"] == 7200.0          # bounded, not the 24h ceiling
+    assert res.extras.get("stopped_as") == expect
+
+
+def test_the_drc_budget_is_a_no_output_predicate_not_a_wall_clock_ceiling(
+        tmp_path, monkeypatch):
+    """THE ASSERTION HERE WAS CORRECTED, NOT RELAXED.
+
+    It used to read ``seen["hard_ceiling_s"] == 7200.0  # bounded, not the 24h
+    ceiling`` — i.e. it required the step to hand its budget to the parameter
+    `_watchdog`'s own docstring reserves for "a pathological-infinite-loop
+    backstop ONLY ... NOT the primary control". Under that pin a DRC that was
+    STREAMING violations into its report was killed at the same second as one
+    stuck in the silent derived-layer build, because a clock cannot tell them
+    apart.
+
+    The budget is still 7200 s and still honours VIBE_IC_DRC_BUDGET_S; what
+    changed is the QUESTION it answers. It is now spent only while the report
+    has NOT grown, expressed through `abort_probe` — the primitive written for
+    a job that is progressing and going nowhere. This test is strictly stronger
+    than the line it replaces: it pins the budget value AND both directions of
+    the predicate, neither of which the old single-number assertion could see.
+    """
+    monkeypatch.delenv("VIBE_IC_DRC_BUDGET_S", raising=False)
+    res, seen = _drc_probe_harness(tmp_path, monkeypatch, R._RC_ABORTED)
+    assert seen.get("hard_ceiling_s") is None, (
+        "the DRC budget is back on the watchdog's pathological backstop — a "
+        "wall-clock deadline wearing the watchdog's clothes")
+    assert seen.get("log_path") is not None, (
+        "the report is the only real progress signal this step has; it must be "
+        "wired")
+    probe = seen.get("abort_probe")
+    assert callable(probe), "the DRC budget must be expressed as a predicate"
+
+    # DIRECTION 1 — a report that is GROWING is never aborted, however long.
+    rpt = tmp_path / "phase3" / "reports" / "drc_svrf_calibre.rpt"
+    rpt.parent.mkdir(parents=True, exist_ok=True)
+    fake_now = [0.0]
+    monkeypatch.setattr(R.time, "monotonic", lambda: fake_now[0])
+    for i in range(1, 6):
+        rpt.write_text("x" * (i * 1000))
+        fake_now[0] += 100_000.0            # a full day between looks
+        assert probe() is None, (
+            "a DRC that is still emitting report bytes was aborted")
+
+    # DIRECTION 2 — a report that has STOPPED growing is aborted past the
+    # budget, and the reason names the measurement rather than the clock.
+    fake_now[0] += 7201.0
+    reason = probe()
+    assert reason, "a DRC that produced nothing for the whole budget ran on"
+    assert "no new report bytes" in reason
+    assert "7200" in reason
+
+
+def test_drc_budget_env_override_still_governs_the_predicate(tmp_path,
+                                                             monkeypatch):
+    """The knob keeps working, on the predicate instead of on a clock."""
+    monkeypatch.setenv("VIBE_IC_DRC_BUDGET_S", "60")
+    _res, seen = _drc_probe_harness(tmp_path, monkeypatch, R._RC_ABORTED)
+    probe = seen["abort_probe"]
+    fake_now = [0.0]
+    monkeypatch.setattr(R.time, "monotonic", lambda: fake_now[0])
+    (tmp_path / "phase3" / "reports").mkdir(parents=True, exist_ok=True)
+    assert probe() is None                  # first look establishes the baseline
+    fake_now[0] += 30.0
+    assert probe() is None                  # inside the 60 s budget
+    fake_now[0] += 40.0
+    assert probe()                          # past it, with nothing written
 
 
 # --------------------------------------------------------------------------
