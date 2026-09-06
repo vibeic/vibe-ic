@@ -1616,13 +1616,140 @@ def _installed_pin_node(pin: str, stage: dict, input_node: str,
     return tie_value_for_cell(stage["cell"])
 
 
+def build_installed_stagewise_deck(
+        model_file: str, model_section: str, model_preludes: List[str],
+        cell_spice: str, stages: List[dict], subckts: dict, vdd: float,
+        temp_c: float, vth: float, endpoint_load_pf: float,
+        slew_tr: List[float]) -> str:
+    """One deck, N INDEPENDENT single-stage circuits, each at the operating
+    point the STA report itself states for that stage.
+
+    WHY NOT THE STITCHED CHAIN.  The tolerance this correlation is judged
+    against is `sum_of_local_nldm_grid_half_ranges` — it is derived PER STAGE
+    at the (input slew, output load) the STA report gives for that stage, and
+    it means "how much can NLDM interpolation be wrong AT THOSE POINTS".  The
+    stitched chain does not visit those points: stage 0 is driven at the
+    reported slew and every stage after it is driven at whatever edge the
+    PREVIOUS SPICE stage produced.  So the number and the tolerance were about
+    different operating points, and the difference is not small.
+
+    MEASURED on `spm` (gf180mcuD, image 0.3.46), same 12 stages, same ss /
+    125 C / 4.50 V corner, same de-derated 12.752 ns reference: the free-running
+    chain gives 6.682 ns (-47.6 %); the same stages measured at the STA
+    operating points give 10.646 ns (-16.5 %), against a 17.26 % tolerance.
+    The chain was reporting the slew divergence of an 12-deep buffer chain as
+    if it were a model-vs-silicon error of the design.
+
+    SENSITISATION IS PROVED, NOT GUESSED.  Each stage is emitted TWICE — once
+    driven by a single rising edge, once by a single falling edge — and both
+    are measured to the output transition the STA row declares.  Exactly one
+    polarity can produce that edge, so the arc that survives is the real one;
+    if NEITHER survives the stage is unmeasured and the caller declines.  The
+    old chain guessed the mux tie and got the polarity of `_232_` wrong.
+    """
+    lines = [
+        "* STA critical-path per-stage correlation at the STA operating points",
+        *(f".include '{path}'" for path in model_preludes),
+        f".lib '{model_file}' {model_section}",
+        f".include '{cell_spice}'",
+        f".temp {temp_c:g}",
+        f"vdd vdd 0 {vdd:g}",
+    ]
+    t0 = 10.0
+    n = len(stages)
+    tmax = t0
+    meas = []
+    for i, stage in enumerate(stages):
+        pins, _raw = subckts[stage["cell"]]
+        tr = max(float(slew_tr[i]), 0.001)
+        load = stage.get("sta_load_pf")
+        if not isinstance(load, (int, float)) or load <= 0:
+            load = float(stage.get("wire_cap_pf") or 0.0)
+            if i == n - 1:
+                load = max(load, endpoint_load_pf)
+        load = max(float(load), 1e-4)
+        out_tr = "FALL" if stage["transition"] == "fall" else "RISE"
+        for var, v_from, v_to, in_tr in (("r", 0.0, vdd, "RISE"),
+                                         ("f", vdd, 0.0, "FALL")):
+            inode, onode = f"si{i}{var}", f"so{i}{var}"
+            lines.append(
+                f"v{inode} {inode} 0 pwl(0 {v_from:g} {t0:g}n {v_from:g} "
+                f"{t0 + tr:g}n {v_to:g})")
+            nodes = [_installed_pin_node(pp, stage, inode, onode)
+                     for pp in pins]
+            lines.append(f"x{i}{var} {' '.join(nodes)} {stage['cell']}")
+            lines.append(f"c{i}{var} {onode} 0 {load * 1e3:g}f")
+            meas.append(
+                f".meas tran d{i}{var} TRIG v({inode}) VAL='{vth:g}' "
+                f"{in_tr}=1 TARG v({onode}) VAL='{vth:g}' {out_tr}=1")
+            meas.append(f".meas tran mx{i}{var} MAX v({onode})")
+            meas.append(f".meas tran mn{i}{var} MIN v({onode})")
+        tmax = max(tmax, t0 + tr + 40.0 * max(
+            float(stage.get("sta_delay_ns") or 0.0), 0.1))
+    step = max(0.001, min(slew_tr) / 100.0) if slew_tr else 0.001
+    lines += meas
+    lines.append(f".tran {step:g}n {tmax:g}n")
+    lines.append(".end")
+    return "\n".join(lines) + "\n"
+
+
+#: ngspice prints `d3f    =  1.13035e-09 targ= ... trig= ...` -- the value is
+#: NOT at end of line, and a failed measure prints no number at all.
+_STAGE_MEAS_RE = re.compile(
+    r"^\s*(d|mx|mn)(\d+)([rf])\s*=\s*"
+    r"([\-+]?[0-9.]+(?:[eE][\-+]?\d+)?)\b", re.MULTILINE)
+
+
+def parse_stagewise_meas(stdout: str, n: int, vdd: float
+                         ) -> Tuple[Optional[List[float]], str]:
+    """`(per-stage delays in ns, "")` or `(None, reason)`.
+
+    A stage counts only when EXACTLY ONE of its two drive polarities produced
+    the declared output transition with a full swing. Zero surviving arcs, or
+    two, is an unresolved sensitisation and returns no number at all."""
+    vals = {}
+    for m in _STAGE_MEAS_RE.finditer(stdout or ""):
+        try:
+            vals[(m.group(1), int(m.group(2)), m.group(3))] = float(m.group(4))
+        except ValueError:
+            pass
+    out: List[float] = []
+    for i in range(n):
+        live = []
+        for var in ("r", "f"):
+            d = vals.get(("d", i, var))
+            mx = vals.get(("mx", i, var))
+            mn = vals.get(("mn", i, var))
+            if d is None or d <= 0:
+                continue
+            if mx is None or mn is None or (mx - mn) < 0.5 * vdd:
+                continue
+            live.append(d)
+        if len(live) != 1:
+            return None, (f"stage {i}: {len(live)} of 2 drive polarities "
+                          f"produced the declared output transition with a "
+                          f"full swing; the arc is unresolved and no delay is "
+                          f"taken from it")
+        out.append(live[0] * 1e9)
+    return out, ""
+
+
 def build_installed_path_deck(model_file: str, model_section: str,
                               model_preludes: List[str],
                               cell_spice: str, stages: List[dict],
                               subckts: dict, vdd: float, tr_ns: float,
                               temp_c: float, vth: float,
-                              endpoint_load_pf: float) -> str:
-    """Build a path deck referencing installed PDK sources, never copying them."""
+                              endpoint_load_pf: float,
+                              expected_ns: float = 0.0) -> str:
+    """Build a path deck referencing installed PDK sources, never copying them.
+
+    `expected_ns` sizes the stimulus window. It used to be `max(8 ns, 24*tr)`
+    however long the path is, so the next input edge could arrive before the
+    current one had propagated out and `.meas` would time a different edge
+    pair. At tt this path arrives at 3.87 ns inside an 8 ns half-period and
+    nothing showed; at the ss corner the same path is 7.15 ns, 89 % of that
+    window. The window now clears the delay the STA side reports by 3x, so
+    aligning the corner cannot silently corrupt the measurement it fixes."""
     n = len(stages)
     def out_node(i):
         return "pout" if i == n - 1 else f"n{i}"
@@ -1644,7 +1771,7 @@ def build_installed_path_deck(model_file: str, model_section: str,
             parity = not parity
 
     td = 2.0
-    pw = max(8.0, 24.0 * tr_ns)
+    pw = max(8.0, 24.0 * tr_ns, 3.0 * float(expected_ns or 0.0))
     period = 2.0 * (td + tr_ns + pw)
     stop = period * 1.2
     step = max(0.001, tr_ns / 100.0)
@@ -1684,6 +1811,56 @@ def parse_path_meas(stdout: str) -> dict:
     for m in _PATH_MEAS_RE.finditer(stdout or ""):
         try:
             out[m.group(1).lower()] = float(m.group(2))
+        except ValueError:
+            pass
+    return out
+
+
+#: The three spellings this flow's own STA writers use to declare WHICH corner
+#: library a report was produced with. `sta_mcorner_ocv.rpt` writes the first
+#: two, `sta_spef_multicorner.rpt` the third.
+_STA_CORNER_LIBERTY_RES = (
+    re.compile(r"(?m)^\s*STA_BASIS_LIBERTY:\s*(\S+)\s*$"),
+    re.compile(r"(?m)^===\s*SETUP\s+corner:[^\n]*?\bliberty=([^\s,]+)"),
+    re.compile(r"(?m)^#\s*corner_liberty:\s*\w+=(\S+)\s*$"),
+)
+_STA_OCV_LATE_RE = re.compile(
+    r"(?m)^\s*OCV_DERATE_APPLIED\b[^\n]*?\blate=([0-9.]+)")
+
+
+def parse_sta_corner_basis(text: str) -> dict:
+    """`{liberty, ocv_late_derate}` -- the corner an STA report DECLARES.
+
+    WHY THIS EXISTS. Everything the deck is built from -- the device model
+    section, `.temp`, the supply, and the NLDM grid the tolerance is derived
+    from -- came from the ACTIVE Liberty, while the path being correlated came
+    from whichever report `_pick_sta_report` scored highest. Those are not the
+    same corner and nothing checked.
+
+    MEASURED on `spm` (gf180mcuD, image 0.3.46, plugin v1.17.42): the deck was
+    built at tt / 25 C / 5.00 V and the path was taken from
+    `sta_mcorner_ocv.rpt`, whose own header says
+    `liberty=..._ss_125C_4v50.lib` and `OCV_DERATE_APPLIED early=0.95
+    late=1.05`. The gate reported `-71.101344 %` against a 9.892457 %
+    tolerance and had never moved. Re-running the SAME deck at the report's
+    own corner: 3.86953 ns -> 7.14807 ns, i.e. -71.101 % -> -46.6 %. Half the
+    "error" was the gate's own corner, and it was charged to the design.
+
+    Returns an empty `liberty` when the report declares none -- the caller must
+    then decline to correlate rather than assume the active corner.
+    """
+    out = {"liberty": "", "ocv_late_derate": None}
+    for rx in _STA_CORNER_LIBERTY_RES:
+        m = rx.search(text or "")
+        if m:
+            out["liberty"] = m.group(1).strip()
+            break
+    m = _STA_OCV_LATE_RE.search(text or "")
+    if m:
+        try:
+            v = float(m.group(1))
+            if v > 0:
+                out["ocv_late_derate"] = v
         except ValueError:
             pass
     return out
@@ -1911,26 +2088,69 @@ def run_installed_pdk_path_correlation(
     netlist_text = netlist.read_text(errors="replace")
     inst_map = parse_verilog_instances(netlist_text)
     required_cells = {entry["cell"] for entry in inst_map.values()}
-    sources = discover_installed_pdk_sources(
+    # The subckt names are only needed to SCORE the candidate STA reports, and
+    # that score does not depend on the corner, so a first discovery pass on
+    # the active Liberty is enough to choose the report. Everything the deck is
+    # actually built from is then re-derived at the report's OWN corner below.
+    probe = discover_installed_pdk_sources(
         container, liberty_path, required_cells)
-    if not sources:
+    if not probe:
         return {"status": "ERROR",
                 "reason": "installed cell SPICE or model section unresolved"}
 
-    sta_report = _pick_sta_report(project, sources["subckt_names"])
+    sta_report = _pick_sta_report(project, probe["subckt_names"])
     if not sta_report:
         return {"status": "ERROR", "reason": "critical STA path unresolved"}
-    sta_path = parse_sta_path(sta_report.read_text(errors="replace"))
+    sta_text = sta_report.read_text(errors="replace")
+    sta_path = parse_sta_path(sta_text)
     if not sta_path:
         return {"status": "ERROR", "reason": "critical STA path unparseable"}
+
+    # ── CORNER ALIGNMENT ────────────────────────────────────────────────────
+    # Correlate the report against the library the report itself says it was
+    # produced with, never against whichever Liberty happens to be "active".
+    # See `parse_sta_corner_basis` for the measurement. A report that declares
+    # no corner, or one whose declared corner cannot be read, is NOT a licence
+    # to fall back on the active corner: the comparison would then be between
+    # two different PVT points and the number would be an artefact of the gate.
+    basis = parse_sta_corner_basis(sta_text)
+    corner_liberty = basis["liberty"] or ""
+    if not corner_liberty:
+        return {"status": "ERROR",
+                "reason": f"{sta_report.name} declares no corner liberty, so "
+                          f"the corner the SPICE deck must be built at is "
+                          f"unknown; refusing a cross-corner correlation"}
+    corner_text = (liberty_text if corner_liberty == liberty_path
+                   else _read_container_text(container, corner_liberty))
+    if not corner_text:
+        return {"status": "ERROR",
+                "reason": f"{sta_report.name} was produced with "
+                          f"{Path(corner_liberty).name}, which is unreadable; "
+                          f"refusing to correlate it against another corner"}
+    corner_aligned = corner_liberty == liberty_path
+    liberty_text = corner_text
+    sources = (probe if corner_aligned else discover_installed_pdk_sources(
+        container, corner_liberty, required_cells))
+    if not sources:
+        return {"status": "ERROR",
+                "reason": f"no installed device-model section resolves for "
+                          f"{Path(corner_liberty).name}, the corner "
+                          f"{sta_report.name} was produced with"}
     resolved = resolve_path_stages(
         sta_path, inst_map, parse_spef_caps(spef.read_text(errors="replace")),
         sources["subckt_names"], liberty_text, max_stages)
     if not resolved:
         return {"status": "ERROR", "reason": "critical path not stitchable"}
 
-    expected_ns = sum(float(stage.get("sta_delay_ns") or 0.0)
-                      for stage in resolved["stages"])
+    # The STA side carries the run's OCV LATE derate; the SPICE side carries
+    # no derate at all, so the raw report number is the model prediction times
+    # a deliberate margin. Divide the margin back out and record that it was:
+    # measured on `spm`, late=1.05, i.e. 5 points of the reported error was
+    # pessimism the gate was charging to the design.
+    derated_ns = sum(float(stage.get("sta_delay_ns") or 0.0)
+                     for stage in resolved["stages"])
+    ocv_late = basis["ocv_late_derate"]
+    expected_ns = derated_ns / ocv_late if ocv_late else derated_ns
     tolerance = derive_liberty_path_tolerance(
         liberty_text, resolved["stages"], expected_ns)
     if not tolerance:
@@ -1951,17 +2171,22 @@ def run_installed_pdk_path_correlation(
     vdd = hdr["nom_voltage"] or 1.0
     temp_c = hdr["nom_temperature"]
     vth = vdd * hdr["output_threshold_fall"] / 100.0
-    input_slew_ns = resolved["stages"][0].get("input_slew_ns")
-    if input_slew_ns is None:
-        input_slew_ns = tolerance["contributions"][0]["input_slew_ns"]
-    tr_ns = pulse_tr_for_slew(
-        float(input_slew_ns), hdr["slew_lower_fall"],
-        hdr["slew_upper_fall"], hdr["slew_derate"])
-    deck = build_installed_path_deck(
+    def _tr_of(idx: int) -> float:
+        slew = resolved["stages"][idx].get("input_slew_ns")
+        if slew is None:
+            contribs = tolerance.get("contributions") or []
+            slew = (contribs[idx]["input_slew_ns"]
+                    if idx < len(contribs) else 0.0)
+        return pulse_tr_for_slew(
+            float(slew), hdr["slew_lower_fall"],
+            hdr["slew_upper_fall"], hdr["slew_derate"])
+
+    slew_tr = [_tr_of(i) for i in range(len(resolved["stages"]))]
+    deck = build_installed_stagewise_deck(
         sources["model_file"], sources["model_section"],
         sources["model_preludes"],
-        sources["cell_spice"], resolved["stages"], subckts, vdd, tr_ns,
-        temp_c, vth, resolved["endpoint_load_pf"])
+        sources["cell_spice"], resolved["stages"], subckts, vdd,
+        temp_c, vth, resolved["endpoint_load_pf"], slew_tr)
     out_dir = _pl.spice_dir(project)
     out_dir.mkdir(parents=True, exist_ok=True)
     deck_path = out_dir / "correlation.spice"
@@ -1970,21 +2195,25 @@ def run_installed_pdk_path_correlation(
     ok, transcript = _run_ngspice_in(
         container, str(Path(sources["model_file"]).parent), str(deck_path))
     log_path.write_text(transcript or "")
-    if not ok:
-        return {"status": "ERROR", "reason": "ngspice execution failed",
-                "deck": str(deck_path), "log": str(log_path)}
-    measured = parse_path_meas(transcript)
-    swing = measured.get("vpout_max", 0.0) - measured.get("vpout_min", 0.0)
-    if swing < 0.5 * vdd:
-        return {"status": "ERROR", "reason": "critical path did not swing",
+    # ngspice exits non-zero when ANY `.meas` finds no edge, and this deck
+    # DELIBERATELY contains such measures: each stage is driven at both input
+    # polarities and only the real arc can produce the declared output
+    # transition, so exactly one of the pair must fail. The exit status is
+    # therefore not the health signal here -- the parse is. A genuine
+    # simulator failure produces no complete per-stage set and is reported
+    # below, with the exit status named so it is not lost.
+    stage_ns, why = parse_stagewise_meas(
+        transcript, len(resolved["stages"]), vdd)
+    if stage_ns is None:
+        return {"status": "ERROR",
+                "reason": (f"per-stage delay not measurable: {why}"
+                           + ("" if ok else "; ngspice also exited non-zero")),
                 "deck": str(deck_path), "log": str(log_path)}
     direction = sta_path["endpoint_transition"]
-    key = "tpd_fall" if direction == "fall" else "tpd_rise"
-    spice_s = measured.get(key)
-    if spice_s is None or spice_s <= 0 or expected_ns <= 0:
+    spice_ns = sum(stage_ns)
+    if spice_ns <= 0 or expected_ns <= 0:
         return {"status": "ERROR", "reason": "path delay measurement absent",
                 "deck": str(deck_path), "log": str(log_path)}
-    spice_ns = spice_s * 1e9
     pct_error = (spice_ns - expected_ns) / expected_ns * 100.0
     tolerance_pct = float(tolerance["tolerance_pct"])
     verdict = path_correlation_verdict(pct_error, tolerance_pct)
@@ -1999,7 +2228,21 @@ def run_installed_pdk_path_correlation(
             "endpoint_transition": direction,
             "sta_total_path_delay_ns": sta_path["path_delay_ns"],
             "liberty_spef_cone_delay_ns": round(expected_ns, 9),
+            "corner_liberty": corner_liberty,
+            "corner_aligned_with_active_liberty": corner_aligned,
+            "deck_corner": f"{sources['model_section']} / {vdd:g}V / "
+                           f"{temp_c:g}C",
+            "ocv_late_derate_removed": ocv_late,
+            "sta_cone_delay_as_reported_ns": round(derated_ns, 9),
         },
+        "unmodelled_terms": [
+            "SPEF interconnect RESISTANCE: the deck carries the SPEF net "
+            "capacitance as a lumped load and no R, so the driver does not "
+            "charge the distributed RC the STA side did",
+            "path-net FANOUT: only the next stage on the path loads each "
+            "node, so receivers on the same net that are not on the path "
+            "contribute no pin capacitance",
+        ],
         "correlation": {
             "spice_path_delay_ns": round(spice_ns, 9),
             "liberty_spef_cone_delay_ns": round(expected_ns, 9),
@@ -2009,6 +2252,14 @@ def run_installed_pdk_path_correlation(
             "tolerance_derivation": tolerance,
             "stages_correlated": resolved["covered"],
             "stages_total_combinational": resolved["total_comb"],
+            "measurement_basis": "per-stage, at the input slew and output "
+                                 "load the STA report states for that stage "
+                                 "-- the same operating points the tolerance "
+                                 "is derived at",
+            "per_stage_spice_ns": [round(v, 6) for v in stage_ns],
+            "per_stage_sta_ns": [
+                round(float(s.get("sta_delay_ns") or 0.0), 6)
+                for s in resolved["stages"]],
             "verdict": verdict,
         },
         "artifacts": {"deck": str(deck_path), "log": str(log_path)},

@@ -4307,6 +4307,185 @@ def _build_tapcell_prune_tcl(pdk: "PdkConfig",
         "}\n")
 
 
+def _build_welltie_coverage_repair_tcl(pdk: "PdkConfig") -> str:
+    """Emit the post-insertion WELL-TIE COVERAGE REPAIR Tcl.
+
+    WHY THIS EXISTS.  `_build_tapcell_prune_tcl` runs at `placed.def` time and
+    keeps only the taps the cells that exist THEN need.  CTS, the resizer
+    repair passes and `repair_antennas` all create DEVICE-BEARING cells AFTER
+    that, anywhere in the core rows, and `tapcell` cannot be re-run once cells
+    are placed (it overlaps them).  The prune's safety lattice was meant to
+    cover them, but its pitch is 2x the tapcell distance and it is bounded to
+    the occupied bbox, so a later cell dropped outside that bbox — or merely
+    into a row the lattice did not put a tap in — gets no tie at all.
+
+    MEASURED (this flow, `spm` on gf180mcuD, image 0.3.46, plugin v1.17.42):
+    18 device-bearing instances (14 CTS/repair buffers + 4 antenna diodes),
+    all created after the prune, ended up further than the PDK max tap
+    distance from every retained tie — up to 98.7 um — and the sign-off deck
+    reported 60 of the run's 70 violations on them (DF.13_MV 41, DF.14_MV 19,
+    the gf180mcu "max distance of Nwell/substrate tap from the active it
+    biases" rules).  Two of them (`wire70`, `wire79` in row y=709.52 um) sat
+    7.84 um from a tie in the row below and STILL violated, because the rule
+    grows the tap INSIDE nwell and the neighbouring row's nwell is a separate
+    island: a tie only counts when it is in the SAME row as the active it
+    biases.  Hence the repair is per-row, not by euclidean distance.
+
+    WHEN IT RUNS.  At the start of `postroute_fill` — after the last
+    instance-creating stage (antenna reconverge) and BEFORE the row fill takes
+    the free sites, so there is somewhere to put a tie.  It only ADDS
+    instances, so the DEF-stage monotonicity gate is unaffected, and
+    `_build_pg_reconnect_tcl` (emitted directly after the fill) gives the new
+    ties their PG connection like every other late instance.
+
+    WHAT IT GUARANTEES.  Every CORE instance with at least one non-PG signal
+    MTerm (the same "functional anchor" selector the sparse-die row fill uses,
+    so no PDK cell is named) has a well-tie in ITS OWN ROW within
+    `pdk.tapcell_distance_um`.  A no-op on a die whose coverage is already
+    complete — a dense design adds 0 ties.  An anchor for which no legal free
+    site exists inside the budget is REPORTED, never silently dropped.
+    chip-AGNOSTIC: masters, rows, sites and orientation all come from odb.
+    """
+    if not pdk.tapcell_master:
+        return ("puts \"WELLTIE_COVERAGE_REPAIR_SKIPPED: no tapcell_master "
+                "configured for this PDK\"\n")
+    tm = pdk.tapcell_master
+    return (
+        "# === well-tie coverage repair (post-insertion, pre-fill) ===\n"
+        "# The #684 tap prune decided coverage at placed.def; CTS, repair and\n"
+        "# antenna-diode insertion added device-bearing cells after it. Restore\n"
+        "# a tie in the SAME ROW within the PDK max tap distance for every one\n"
+        "# of them (the rule grows the tap inside nwell, and a neighbouring\n"
+        "# row's nwell is a separate island).\n"
+        "if {[catch {\n"
+        "  set _wtblk [ord::get_db_block]\n"
+        "  set _wtdbu [[ord::get_db_tech] getDbUnitsPerMicron]\n"
+        f"  set _wtd [expr {{int({pdk.tapcell_distance_um} * $_wtdbu)}}]\n"
+        "  set _wtm \"\"\n"
+        "  foreach _wtl [[ord::get_db] getLibs] {\n"
+        f"    set _wtc [$_wtl findMaster {tm}]\n"
+        "    if {$_wtc ne \"NULL\" && $_wtc ne \"\"} { set _wtm $_wtc }\n"
+        "  }\n"
+        "  if {$_wtm eq \"\"} {\n"
+        "    puts \"WELLTIE_COVERAGE_REPAIR_NO_MASTER: "
+        + tm + " absent from every read LEF\"\n"
+        "  } else {\n"
+        "    set _wttw [$_wtm getWidth]\n"
+        "    array unset _wtrx0; array unset _wtrx1; array unset _wtrsw\n"
+        "    array unset _wtro\n"
+        "    foreach _wtr [$_wtblk getRows] {\n"
+        "      set _wtbb [$_wtr getBBox]\n"
+        "      set _wty [$_wtbb yMin]\n"
+        "      set _wtrx0($_wty) [$_wtbb xMin]\n"
+        "      set _wtrx1($_wty) [$_wtbb xMax]\n"
+        "      set _wtrsw($_wty) [$_wtr getSpacing]\n"
+        "      set _wtro($_wty) [$_wtr getOrient]\n"
+        "    }\n"
+        "    array unset _wtocc; array unset _wtanc; array unset _wttie\n"
+        "    foreach _wti [$_wtblk getInsts] {\n"
+        "      set _wtmm [$_wti getMaster]\n"
+        "      if {![string match \"CORE*\" [$_wtmm getType]]} { continue }\n"
+        "      set _wtbb [$_wti getBBox]\n"
+        "      set _wty [$_wtbb yMin]\n"
+        "      lappend _wtocc($_wty) [$_wtbb xMin] [$_wtbb xMax]\n"
+        f"      if {{[$_wtmm getName] eq \"{tm}\"}} {{\n"
+        "        lappend _wttie($_wty) [$_wtbb xMin]\n"
+        "        continue\n"
+        "      }\n"
+        "      set _wta 0\n"
+        "      foreach _wtmt [$_wtmm getMTerms] {\n"
+        "        set _wtsg [$_wtmt getSigType]\n"
+        "        if {$_wtsg eq \"POWER\" || $_wtsg eq \"GROUND\"} { continue }\n"
+        "        set _wtio [$_wtmt getIoType]\n"
+        "        if {$_wtio eq \"INPUT\" || $_wtio eq \"OUTPUT\" || "
+        "$_wtio eq \"INOUT\"} { set _wta 1; break }\n"
+        "      }\n"
+        "      if {$_wta} { lappend _wtanc($_wty) [$_wtbb xMin] [$_wtbb xMax] }\n"
+        "    }\n"
+        "    set _wtadded 0; set _wtneed 0; set _wtfail 0; set _wtrows 0\n"
+        "    set _wtfaildesc {}\n"
+        "    foreach _wty [lsort -integer [array names _wtanc]] {\n"
+        "      if {![info exists _wtrx0($_wty)]} { continue }\n"
+        "      incr _wtrows\n"
+        "      set _wtties {}\n"
+        "      if {[info exists _wttie($_wty)]} { set _wtties $_wttie($_wty) }\n"
+        "      set _wtocl {}\n"
+        "      if {[info exists _wtocc($_wty)]} { set _wtocl $_wtocc($_wty) }\n"
+        "      set _wtsw $_wtrsw($_wty)\n"
+        "      if {$_wtsw < 1} { set _wtsw 1 }\n"
+        "      foreach {_wtax0 _wtax1} $_wtanc($_wty) {\n"
+        "        set _wtcx [expr {($_wtax0 + $_wtax1) / 2}]\n"
+        "        set _wtok 0\n"
+        "        foreach _wtt $_wtties {\n"
+        "          if {abs($_wtt - $_wtcx) <= $_wtd} { set _wtok 1; break }\n"
+        "        }\n"
+        "        if {$_wtok} { continue }\n"
+        "        incr _wtneed\n"
+        "        set _wtk0 [expr {($_wtcx - $_wtrx0($_wty)) / $_wtsw}]\n"
+        "        set _wtmaxk [expr {$_wtd / $_wtsw}]\n"
+        "        set _wtplaced 0\n"
+        "        for {set _wtj 0} {$_wtj <= $_wtmaxk && !$_wtplaced} "
+        "{incr _wtj} {\n"
+        "          foreach _wtsgn {1 -1} {\n"
+        "            set _wtk [expr {$_wtk0 + $_wtsgn * $_wtj}]\n"
+        "            set _wtx [expr {$_wtrx0($_wty) + $_wtk * $_wtsw}]\n"
+        "            if {$_wtx < $_wtrx0($_wty)} { continue }\n"
+        "            if {[expr {$_wtx + $_wttw}] > $_wtrx1($_wty)} { continue }\n"
+        "            if {abs($_wtx - $_wtcx) > $_wtd} { continue }\n"
+        "            set _wtfree 1\n"
+        "            foreach {_wtoa _wtob} $_wtocl {\n"
+        "              if {$_wtx < $_wtob && $_wtoa < [expr {$_wtx + $_wttw}]} "
+        "{ set _wtfree 0; break }\n"
+        "            }\n"
+        "            if {!$_wtfree} { continue }\n"
+        "            set _wtn \"VIBEIC_WELLTIE_REPAIR_${_wty}_${_wtk}\"\n"
+        "            if {[catch {set _wtni [odb::dbInst_create $_wtblk $_wtm "
+        "$_wtn]} _wtce]} { continue }\n"
+        "            $_wtni setOrient $_wtro($_wty)\n"
+        "            $_wtni setLocation $_wtx $_wty\n"
+        "            $_wtni setPlacementStatus FIRM\n"
+        "            lappend _wtocl $_wtx [expr {$_wtx + $_wttw}]\n"
+        "            lappend _wtties $_wtx\n"
+        "            incr _wtadded\n"
+        "            set _wtplaced 1\n"
+        "            break\n"
+        "          }\n"
+        "        }\n"
+        "        if {!$_wtplaced} {\n"
+        "          incr _wtfail\n"
+        "          lappend _wtfaildesc \"row=$_wty x=$_wtcx\"\n"
+        "        }\n"
+        "      }\n"
+        "    }\n"
+        "    if {$_wtfail > 0} {\n"
+        "      puts \"WELLTIE_COVERAGE_REPAIR_UNPLACEABLE: $_wtfail anchor(s) "
+        "have no free site within the budget in their own row: "
+        "[join $_wtfaildesc {, }]\"\n"
+        "    }\n"
+        "    if {$_wtadded > 0} {\n"
+        "      # MEASURED: `Opendp` re-imports the block only when its cell\n"
+        "      # cache is EMPTY, and every earlier `detailed_placement` in\n"
+        "      # this Tcl has filled it. Without this refresh the very next\n"
+        "      # `filler_placement` does not see the ties just created and\n"
+        "      # tiles a spacer straight over them -- 43 ties, 43 overlaps,\n"
+        "      # and 474 NEW implant/well violations (NP.3d/3e, PP.3d/3e,\n"
+        "      # DF.3b, DF.4c_MV, DF.16_MV) where there had been 60 tap-distance\n"
+        "      # ones. `check_placement` re-imports and moves nothing; its\n"
+        "      # verdict is not consumed here, only its side effect, so it is\n"
+        "      # caught.\n"
+        "      catch {check_placement} _wtcp\n"
+        "    }\n"
+        "    puts \"WELLTIE_COVERAGE_REPAIR: budget="
+        + f"{pdk.tapcell_distance_um}"
+        + "um master=" + tm + " anchor_rows=$_wtrows uncovered_anchors=$_wtneed "
+        "ties_added=$_wtadded unplaceable=$_wtfail\"\n"
+        "  }\n"
+        "} _wterr]} {\n"
+        "  puts \"WELLTIE_COVERAGE_REPAIR_NONFATAL: $_wterr — tie coverage "
+        "for post-prune insertions NOT repaired\"\n"
+        "}\n")
+
+
 def _discover_pg_from_lef(
         cell_lef: Optional[str],
         metal_prefix: str = "met") -> Optional[Tuple[str, str, str, float]]:
@@ -25898,7 +26077,13 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     # FIXED wrapper is NOT flooded with 940K decap/fill cells / a 2 GB GDS.
     # A dense / normal-util design (§4.05 negative) still gets the full
     # fill (util ≥ threshold). chip-AGNOSTIC.
-    filler_block = _build_sparse_die_aware_filler_tcl(
+    # WELL-TIE COVERAGE REPAIR runs FIRST in this stage: it is the last point
+    # at which every device-bearing instance exists (antenna reconverge is
+    # done) AND the row sites are still free, so a tie the #684 prune could not
+    # have known was needed can still be placed. See
+    # `_build_welltie_coverage_repair_tcl` for the measurement that motivates it.
+    filler_block = _build_welltie_coverage_repair_tcl(
+        pdk) + _build_sparse_die_aware_filler_tcl(
         _filler_masters, slot_pinned_core=fp_rect is not None,
         design_declared_die=bool(_l9_die_note),
         sparse_active_row_fill=bool(
@@ -50206,6 +50391,43 @@ def main() -> int:
     # `phase3/final/metrics.json`; 37.5ic `blocks_on` 37.4 for that reason, and
     # dispatching the producer after its consumers would reproduce the defect
     # 37.4 was added to close.
+    # vibe-ic#306 — corroborate a promoted route against the sign-off report,
+    # INLINE and BLOCKING. `drv_promotion_corroboration_check` declares
+    # `ENFORCEMENT: blocking` and was wired NOWHERE — not into the flow
+    # definition, not into a runner — so it ran only if a human invoked it by
+    # hand. It runs here because it must run AFTER sign-off STA exists
+    # (step_canonicalize_artefacts emits sta_mcorner_ocv.rpt just above) and
+    # BEFORE the derived-artefact generators build the hand-off pack and
+    # tape-out checklist on top of a route whose claimed improvement the
+    # sign-off may contradict.
+    plan.append(step_drv_promotion_corroboration(project))
+
+    # Steps 23 / 25 — the sign-off gates the flow DECLARES but that no runner
+    # ever executed (see `_DECLARED_SIGNOFF_GATES` for the measured blast
+    # radius and the exit-code convention). They run HERE for the same reason
+    # the #306 gate above does: after `step_canonicalize_artefacts`, which is
+    # what emits `phase3/stage3/sta/*.rpt` and `reports/phase3/em.rpt`, and
+    # BEFORE the derived-artefact generators build the hand-off pack and
+    # tape-out checklist on top of a sign-off nobody checked.
+    plan.extend(step_declared_signoff_gates(project))
+
+    # ORDERING (measured on `spm`, image 0.3.46, plugin v1.17.42): the
+    # sign-off gates below WRITE three of the reports the sign-off metrics
+    # record READS -- `sta/post_route_signoff_corner.json`,
+    # `sta/sta_corner_record_completeness.json` and
+    # `tapeout_precheck.json`.  They used to run AFTER it, so the record was
+    # produced over reports that did not exist yet: 7 of its 18 keys came out
+    # NOT_MEASURED, its own `--check` passed at production time because both
+    # sides were equally empty, and the SAME command re-run at the end of the
+    # run exited 1 with "7 key(s) no longer state what this run's reports
+    # state ... Re-run the producer" -- which the run recorded in its gate
+    # ledger as FAIL while printing PASS in the step list.  They run BEFORE
+    # the record now.  Both of their own ordering constraints still hold:
+    # after `step_canonicalize_artefacts` (just above, which emits
+    # `sta_mcorner_ocv.rpt`, `phase3/stage3/sta/*.rpt` and `em.rpt`) and
+    # before the derived-artefact generators.  None of the six reads
+    # `phase3/final/metrics.json` or any release document, so nothing that
+    # depended on 37.4 preceding 37.5ic moved.
     plan.append(step_signoff_metrics_aggregate(project))
 
     plan.append(step_tapeout_docs_gen(project))
@@ -50229,25 +50451,6 @@ def main() -> int:
     plan.append(step_ip_release_docs_gen(
         project, args.ic_name or args.top_name, pdk.name))
 
-    # vibe-ic#306 — corroborate a promoted route against the sign-off report,
-    # INLINE and BLOCKING. `drv_promotion_corroboration_check` declares
-    # `ENFORCEMENT: blocking` and was wired NOWHERE — not into the flow
-    # definition, not into a runner — so it ran only if a human invoked it by
-    # hand. It runs here because it must run AFTER sign-off STA exists
-    # (step_canonicalize_artefacts emits sta_mcorner_ocv.rpt just above) and
-    # BEFORE the derived-artefact generators build the hand-off pack and
-    # tape-out checklist on top of a route whose claimed improvement the
-    # sign-off may contradict.
-    plan.append(step_drv_promotion_corroboration(project))
-
-    # Steps 23 / 25 — the sign-off gates the flow DECLARES but that no runner
-    # ever executed (see `_DECLARED_SIGNOFF_GATES` for the measured blast
-    # radius and the exit-code convention). They run HERE for the same reason
-    # the #306 gate above does: after `step_canonicalize_artefacts`, which is
-    # what emits `phase3/stage3/sta/*.rpt` and `reports/phase3/em.rpt`, and
-    # BEFORE the derived-artefact generators build the hand-off pack and
-    # tape-out checklist on top of a sign-off nobody checked.
-    plan.extend(step_declared_signoff_gates(project))
 
     # v1.6.36 — invoke the derived-artefact generators (each emits its
     # own canonical path; failures are best-effort and logged in notes).
