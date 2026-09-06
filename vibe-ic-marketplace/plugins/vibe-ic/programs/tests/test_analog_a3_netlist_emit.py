@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 
 import pytest
 
@@ -427,6 +428,37 @@ def _two_position(node, groups):
     return throws if len(throws) >= 2 else {}
 
 
+_CAP_ARRAY_RE = re.compile(
+    r"(?im)^\*\s*_provenance:\s*capacitor_array\s+base=(\S+)\s+units=(\d+)\s+"
+    r"instances=\[([^\]]*)\]")
+
+
+def _inst_key(card_name):
+    """A deck card is written `xci1_u0`; the declaration names `ci1_u0`. SPICE
+    subcircuit instances carry the `x` prefix and the library does not, so the
+    one letter is stripped for the comparison and nothing else is."""
+    n = str(card_name)
+    return n[1:] if n[:1].lower() == "x" else n
+
+
+def capacitor_arrays(sp_text):
+    """The unit arrays the DECK ITSELF declares: `{base: {units, instances}}`.
+
+    A capacitor the PDK's gencell cannot draw is emitted as N identical units
+    in parallel, and A3 declares each array in the netlist head. Reading that
+    declaration is the point: the alternative is to infer an array from the
+    `_u<N>` spelling of an instance name, which is a second copy of a fact and
+    is exactly how a guard came to compare a LIST of units against a SINGLE
+    name. An undeclared deck yields `{}` and every capacitor is its own device,
+    which is the pre-split behaviour unchanged."""
+    out = {}
+    for m in _CAP_ARRAY_RE.finditer(sp_text or ""):
+        insts = [t.strip().strip("'\"") for t in m.group(3).split(",")
+                 if t.strip()]
+        out[m.group(1)] = {"units": int(m.group(2)), "instances": insts}
+    return out
+
+
 def sc_integrator_report(sp_text):
     """Every switched-capacitor CHARGE BRANCH in a deck, found STRUCTURALLY.
 
@@ -460,6 +492,16 @@ def sc_integrator_report(sp_text):
     devs, ports = _sp_cards(sp_text)
     excl = _SC_RAILS | ports
     caps = [(n, nets) for n, nets in devs if len(nets) == 2]
+    arrays = capacitor_arrays(sp_text)
+    # instance -> the array it belongs to, so a unit is never mistaken for a
+    # capacitor of its own. Read from the deck's OWN declaration, never from
+    # the `_u<N>` spelling: a name convention is a second copy of a fact, and
+    # scraping one is what put this guard on the wrong side of a correct
+    # netlist in the first place.
+    unit_of = {}
+    for base, a in arrays.items():
+        for inst in a["instances"]:
+            unit_of[inst] = base
     mos = [(n, nets) for n, nets in devs if len(nets) == 4]
     gates = {nets[1] for _n, nets in mos}
     groups = _switch_groups(mos, excl)
@@ -470,7 +512,30 @@ def sc_integrator_report(sp_text):
             if S in excl or O in excl or S not in gates or O in gates:
                 continue
             if frozenset((S, O)) in groups:
-                summing[S] = {"integrating_cap": cn, "amp_out": O}
+                base = unit_of.get(_inst_key(cn))
+                st = summing.get(S)
+                if st is None:
+                    # The FIRST capacitor of this shape establishes what the
+                    # integrating capacitor IS. Everything after it has to
+                    # prove membership; it cannot simply join.
+                    st = summing[S] = {
+                        "integrating_cap": base or cn, "amp_out": O,
+                        "integrating_cap_array": base,
+                        "integrating_cap_instances": [],
+                        "integrating_cap_node_pairs": set()}
+                elif base is None or base != st["integrating_cap_array"]:
+                    # NOT a declared unit of the capacitor already found. It is
+                    # a SECOND capacitor welded to the virtual ground, which is
+                    # the defect this whole check exists to reject — so it is
+                    # deliberately NOT adopted into the integrating set, and
+                    # assertion (1) below reports it against `hard_wired_caps`.
+                    # Measured while writing this: adopting it made a sampling
+                    # capacitor welded across the summing node read as part of
+                    # the array and the check passed the exact topology it is
+                    # for.
+                    continue
+                st["integrating_cap_instances"].append(cn)
+                st["integrating_cap_node_pairs"].add(frozenset((S, O)))
 
     # A CHARGE BRANCH is a capacitor BOTH of whose plates are two-position
     # switched, neither of which is a summing node or an amplifier output.
@@ -507,6 +572,19 @@ def sc_integrator_report(sp_text):
 
     for S, st in summing.items():
         st["hard_wired_caps"] = sorted(cn for cn, nets in caps if S in nets)
+        st["integrating_cap_instances"] = sorted(
+            st["integrating_cap_instances"])
+        # WHAT THE DECK SAYS the integrating capacitor is made of. `None` when
+        # it is a single device — a real state, and deliberately not an array
+        # of one, so "declared as an array" and "not split" stay distinct.
+        _a = arrays.get(st["integrating_cap_array"] or "")
+        st["declared_units"] = _a["units"] if _a else None
+        st["declared_instances"] = sorted(_a["instances"]) if _a else None
+        # every unit of the array must sit on the SAME node pair — that is
+        # what makes them PARALLEL, and it is the property a split can get
+        # wrong. Unknowable before the deck declared its arrays.
+        st["units_share_one_node_pair"] = (
+            len(st["integrating_cap_node_pairs"]) == 1)
         st["branches"] = {cn: b for cn, b in branches.items()
                           if S in b["reaches"]}
     return summing, branches
@@ -536,7 +614,12 @@ DS_PDK_RECORD = {"measured": {
         "not_measured": {}}}}}
 
 
-def _emit_modulator(tmp_path):
+def _emit_modulator_text(tmp_path):
+    """The modulator deck this module states its topology properties about.
+
+    Split out from `_emit_modulator` so a test can mutate the TEXT — the
+    negative controls need the deck itself, and re-emitting it a second time
+    inside each of them would be a second copy of this setup."""
     p = make_project(tmp_path, [block("mod_alpha", "delta_sigma", DS_SPEC)])
     rec = p / "analog/_pdk_char/analog_device_params.json"
     rec.parent.mkdir(parents=True, exist_ok=True)
@@ -547,7 +630,83 @@ def _emit_modulator(tmp_path):
     assert cp.returncode == 0, cp.stderr
     sp = bdir(p, "mod_alpha") / "mod_alpha.sp"
     assert sp.is_file(), "no netlist to state a topology property about"
-    return sc_integrator_report(sp.read_text(encoding="utf-8"))
+    return sp.read_text(encoding="utf-8")
+
+
+def _emit_modulator(tmp_path):
+    return sc_integrator_report(_emit_modulator_text(tmp_path))
+
+
+def _vsum1_agrees(report):
+    """The three summing-node claims of the check below, as ONE predicate, so
+    the negative controls exercise the same rule the assertion does rather
+    than a re-typed copy of it."""
+    summing, _branches = report
+    st = summing.get("vsum1")
+    if st is None:
+        return False
+    if st["hard_wired_caps"] != st["integrating_cap_instances"]:
+        return False
+    if st["declared_instances"] is not None and sorted(
+            _inst_key(c) for c in st["integrating_cap_instances"]) \
+            != st["declared_instances"]:
+        return False
+    return bool(st["units_share_one_node_pair"])
+
+
+def test_the_summing_node_rule_FIRES_on_each_way_it_can_be_broken(tmp_path):
+    """BOTH DIRECTIONS, on the REAL emitted deck rather than a hand-built one.
+
+    vibe-ic#2062 follow-up. The rule above had to learn about unit arrays, and
+    a rule that has just been widened is exactly the one to prove still bites.
+    Each arm below breaks the deck ONE way and the rule must reject it; the
+    intact deck must be accepted, or the arms prove nothing.
+
+    The third arm is the one this whole check exists for — a sampling capacitor
+    welded across the summing node — and it is here because the first version
+    of the array-aware reader ADOPTED that capacitor into the array and passed
+    the exact topology the check rejects. Measured, then fixed, then pinned.
+    """
+    txt = _emit_modulator_text(tmp_path)
+    assert _vsum1_agrees(sc_integrator_report(txt)), (
+        "the INTACT deck is rejected, so every arm below proves nothing")
+
+    broken = {
+        "a unit moved off the array's node pair":
+            txt.replace("xci1_u1 vsum1 vo1", "xci1_u1 vsum1 nqd1"),
+        "a declared unit missing from the netlist":
+            "\n".join(l for l in txt.splitlines()
+                       if not l.startswith("xci1_u1 ")),
+        "a SAMPLING capacitor welded across the summing node":
+            txt.replace("xcs1 nsmp1 ncst1", "xcs1 vsum1 vo1"),
+        "the array declaration removed while the units remain":
+            "\n".join(l for l in txt.splitlines()
+                       if "capacitor_array base=ci1" not in l),
+    }
+    for label, mutant in broken.items():
+        assert mutant != txt, f"the mutation site moved: {label}"
+        assert not _vsum1_agrees(sc_integrator_report(mutant)), (
+            f"the summing-node rule ACCEPTED a deck with {label} — a rule "
+            f"that cannot fail is not a rule")
+
+
+def test_the_deck_DECLARES_every_capacitor_array_it_emits(tmp_path):
+    """The producer half. A unit array whose only trace is the `_u<N>` spelling
+    of an instance name forces every consumer to scrape a name convention —
+    which is how the guard above came to compare a list of units against a
+    single name. The deck states its arrays; the instances it names are the
+    instances that exist."""
+    txt = _emit_modulator_text(tmp_path)
+    arrays = capacitor_arrays(txt)
+    assert arrays, "the deck declares no capacitor array at all"
+    cards = {n for n, _nets in _sp_cards(txt)[0]}
+    for base, a in sorted(arrays.items()):
+        assert a["units"] == len(a["instances"]), (base, a)
+        assert a["units"] >= 2, (base, a)
+        for inst in a["instances"]:
+            assert f"x{inst}" in cards or inst in cards, (
+                f"the deck declares array unit `{inst}` for `{base}` and no "
+                f"such instance is in the netlist")
 
 
 def test_every_sampling_capacitor_reaches_the_summing_node_through_a_switch(
@@ -569,14 +728,49 @@ def test_every_sampling_capacitor_reaches_the_summing_node_through_a_switch(
         f"feedback branch per stage); found {sorted(branches)}")
 
     for S, st in sorted(summing.items()):
-        # (1) ONLY the integrating capacitor is welded to the virtual ground.
-        assert st["hard_wired_caps"] == [st["integrating_cap"]], (
+        # (1) ONLY the integrating capacitor is welded to the virtual ground —
+        #     and when the PDK cannot draw it, ONLY ITS UNITS.
+        #
+        # RE-AIMED TO CHECK MORE, NEVER FEWER (vibe-ic#2062 follow-up). This
+        # compared the welded set against a SINGLE name, so the first time a
+        # PDK ceiling made the integrating capacitor split into an array the
+        # guard read `['xci1_u0','xci1_u1'] != ['xci1_u1']` and went red on a
+        # netlist that was right: both units carry the SAME two nodes
+        # (`xci1_u0 vsum1 vo1` / `xci1_u1 vsum1 vo1`), which is what parallel
+        # units ARE, and the branch capacitors that must be switched are
+        # switched and are not split at all. Three assertions now stand where
+        # one did, and two of them were not previously expressible.
+        expected = st["integrating_cap_instances"]
+        assert st["hard_wired_caps"] == expected, (
             f"summing node {S} carries capacitors {st['hard_wired_caps']} "
             f"wired straight onto it; only the integrating capacitor "
-            f"{st['integrating_cap']} may be. A sampling or feedback "
-            f"capacitor with its summing-node plate hard-wired hands the "
-            f"charge back on the next half cycle: net zero per clock period, "
-            f"and the loop filter never accumulates.")
+            f"{st['integrating_cap']} may be — as itself, or as the units of "
+            f"the array the deck declares for it ({expected}). A sampling or "
+            f"feedback capacitor with its summing-node plate hard-wired hands "
+            f"the charge back on the next half cycle: net zero per clock "
+            f"period, and the loop filter never accumulates.")
+
+        # (1a) EVERY declared unit is present. A split that drops a unit
+        #      silently halves the integrating capacitor, which moves the loop
+        #      coefficient and nothing else in this deck would notice.
+        if st["declared_instances"] is not None:
+            assert sorted(_inst_key(c) for c in expected) == \
+                st["declared_instances"], (
+                f"summing node {S}: the deck declares the integrating "
+                f"capacitor as the array {st['declared_instances']} and the "
+                f"netlist welds {sorted(_inst_key(c) for c in expected)}. "
+                f"A missing unit is a smaller integrating capacitor and a "
+                f"different loop coefficient.")
+            assert len(expected) == st["declared_units"], (
+                f"summing node {S}: declared units {st['declared_units']}, "
+                f"instances found {len(expected)}")
+
+        # (1b) ...and they are in PARALLEL, which is the whole claim the array
+        #      makes. Units on different node pairs are not one capacitor.
+        assert st["units_share_one_node_pair"], (
+            f"summing node {S}: the units of {st['integrating_cap']} do not "
+            f"all carry the same two nodes, so they are not in parallel and "
+            f"the array is not the single device the sizing asked for")
 
     for cn, b in sorted(branches.items()):
         # (2) the summing-node plate is a SWITCH, not a weld.
