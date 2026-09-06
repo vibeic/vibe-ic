@@ -63,6 +63,55 @@ DRC_TECH = """
 \t"Metal1 spacing < 0.18um (rule M1.b)"
 """
 
+# The technology file's LAYER TABLE — the shape a magic PDK ships, with this
+# fake PDK's own type names. It is a required PDK read (`read_pdk`), because
+# which conductor plane a drawn type occupies is the PDK's answer and not a
+# spelling convention: `pdkcapcontact` below is a contact from a capacitor
+# plate to metal3, and nothing in its NAME says so.
+MAGIC_TECH = """
+tech
+ format 33
+ pdktech
+end
+
+planes
+ well,w
+ active,a
+ metal1,m1
+ metal2,m2
+ cap1,c1
+ metal3,m3
+end
+
+types
+ well nwell,nw
+ active pdiff,pd
+ active pdiffc,pdc
+ active nsubdiff,nsd
+ active nsubdiffcont,nsc,nsubdiffc
+ active pdksubcont,pdksc
+ active poly,p
+ active polycont,pc
+ metal1 metal1,m1,met1
+ metal1 via1,v1
+ -metal1 m1fill
+ metal2 metal2,m2,met2
+ metal3 metal3,m3,met3
+ cap1 pdkcap,pcap
+ cap1 pdkcapcontact,pdkcapc,pdkcc
+end
+
+contact
+ nsc      nsubdiff   metal1
+ pdc      pdiff      metal1
+ pdksc    nsubdiff   metal1
+ pc       poly       metal1
+ via1     metal1     metal2
+ pdkcc    pdkcap     metal3
+ stackable
+end
+"""
+
 # One gencell child, exactly the shape Magic writes: `magscale 1 2` so the
 # rectangles are internal units, `rlabel` coordinates internal regardless,
 # a four-bar guard ring on a contact type, and four ports.
@@ -169,12 +218,13 @@ def _mag_from_script(script: str) -> str:
 class FakeStage:
     """Stands in for the container, and records what was asked of it."""
 
-    def __init__(self, *, magic=True, pdk=True, drc=True, open_ok=True,
-                 layout=True, child=None):
+    def __init__(self, *, magic=True, pdk=True, drc=True, tech=True,
+                 open_ok=True, layout=True, child=None):
         self._child = child or CHILD_MAG
         self.path = "/stage"
         self.host_tmp = None
         self._magic, self._pdk, self._drc = magic, pdk, drc
+        self._tech = tech
         self._open_ok, self._layout = open_ok, layout
         self.scripts: dict = {}
         self.commands: list = []
@@ -217,6 +267,8 @@ class FakeStage:
                 return (0, FET_TCL, "") if self._pdk else (1, "", "cat: no")
             if path.endswith("-drc.tech"):
                 return (0, DRC_TECH, "") if self._drc else (1, "", "cat: no")
+            if path.endswith(".tech"):
+                return (0, MAGIC_TECH, "") if self._tech else (1, "", "cat: no")
             if path.endswith("-res.tcl"):
                 return 0, RES_TCL, ""
             return 1, "", "cat: no such file"
@@ -425,9 +477,24 @@ def test_arm_d_a_shortfall_is_drawn_and_recorded_as_a_structured_record(
     no deviations -> 0 violations of 560 rules PASS."""
     project = _project(tmp_path, LEGAL_NARROW)
     rc, doc = _run(monkeypatch, project, FakeStage(child=TIGHT_CHILD))
-    assert rc == A5E.RC_OK, doc
     rep = doc["blocks"]["blk"]
-    assert rep["result"] == "OK"
+    # NEVER REFUSED, which is what this arm is about: a shortfall does not
+    # stop the emitter drawing, and the layout is on disk at the bottom.
+    #
+    # WHY THIS IS NOT `rc == RC_OK` ANY MORE, and why that is not a
+    # weakening. This fixture is a device whose ring is deliberately too
+    # tight, and on a device that small the escape islands of four terminals
+    # genuinely MERGE: the short audit finds it, and a drawn short is now
+    # blocking (`blocking_shorts`). So this fixture measures TWO things at
+    # once and `rc == 0` could no longer tell them apart. The assertion below
+    # says exactly what this arm was written to prove — the shortfall is
+    # RECORDED and NOT refused — and then names the one condition that does
+    # move the exit code here, so a short appearing or disappearing in this
+    # fixture cannot pass unnoticed either way.
+    assert rc != A5E.RC_REFUSED, doc
+    assert rep["result"] != "REFUSED"
+    assert (rc, rep["result"]) == (A5E.RC_FORBIDDEN, "SHORTED"), doc
+    assert A5E.blocking_shorts(rep["deviations"]), rep["deviation_summary"]
     taps = [d for d in rep["deviations"]
             if d["quantity"] == "bulk_tap_clearance_lambda"]
     assert taps, rep["deviation_summary"]

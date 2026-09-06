@@ -17,8 +17,10 @@ What belongs here (Bucket A — deterministic, testable):
     unit of `use` transforms and `rect` lines, PER FILE — a parent .mag gains
     `magscale 1 2` the moment any geometry sits off the lambda grid (e.g. a
     half-lambda column of an odd-length LV device), and a gencell child may
-    or may not carry it. `rlabel` coordinates are ALWAYS internal (2x lambda)
-    regardless of the header (measured on both kinds of file).
+    or may not carry it. `rlabel` coordinates follow the SAME header as the
+    geometry — corrected against magic's own streamed GDS on both kinds of
+    file after the older "always internal" claim put a header-less cap
+    child's bottom-plate terminal in the middle of its top plate.
   * LADDER DISCIPLINE (LAW #23): right-side exit ladders stay short-proof
     ("a rung at Y_i can only cross a descent whose top is below Y_i") ONLY
     while rung y's are strictly ascending with rank. D and S labels of one
@@ -108,17 +110,39 @@ def parse_rects_lambda(section_text: str,
 def parse_rlabels(text: str) -> List[Dict]:
     """rlabel entries with centre coordinates in LAMBDA.
 
-    rlabel coordinates are ALWAYS internal units (2x lambda), independent of
-    the file's magscale header — measured against streamed GDS text on both
-    a `magscale 1 2` MOS child and a header-less cap child. The centre is
-    therefore (x1+x2)//4 in lambda.
+    rlabel corner coordinates are in the FILE'S OWN units, exactly like
+    `rect` and `use`, so the centre is (x1+x2)/2 converted by the file's
+    `magscale` header.
+
+    THE CORRECTION, AND HOW IT WAS SETTLED. This function previously read
+    the coordinates as ALWAYS internal (2x lambda) and divided by four, on
+    a docstring claim that it had been measured on both kinds of file. It
+    had not: dividing by four is right ONLY for a `magscale 1 2` file, where
+    the two conversions coincide. Magic's own streamed GDS is the
+    adjudicator and it answers both cases, on ihp-sg13g2 gencell children
+    written by the PDK itself, at 100 lambda per micron:
+
+      `magscale 1 2` MOS child   rlabel hvndiffc 238 ...  -> GDS 1.19 um
+                                 = 119 lambda            = 238 * 1/2   OK
+      header-less cap child      rlabel metal5   510 ...  -> GDS 5.10 um
+                                 = 510 lambda            != 510 // 2
+
+    The cap child is the one that mattered. Its bottom-plate terminal at 510
+    lambda sits just outside the top plate (+-480) and inside the bottom
+    plate (+-560), which is the only place a bottom-plate contact can be;
+    halved to 255 it lands in the DEAD CENTRE of the top plate. Every reader
+    of that label — the terminal's conductor level, the via island position,
+    the short audit — was then answering about the wrong plate, and both of
+    the capacitor's terminals resolved to one conductor.
     """
+    scale = mag_scale(text)
+    num, den = scale
     out = []
     for m in _RLABEL_RE.finditer(text):
         layer, x1, y1, x2, y2, name = m.groups()
         out.append({"layer": layer,
-                    "x": (int(x1) + int(x2)) // 4,
-                    "y": (int(y1) + int(y2)) // 4,
+                    "x": (int(x1) + int(x2)) * num // (2 * den),
+                    "y": (int(y1) + int(y2)) * num // (2 * den),
                     "name": name})
     return out
 

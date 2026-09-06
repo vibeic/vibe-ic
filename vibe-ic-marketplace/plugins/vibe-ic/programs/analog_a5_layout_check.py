@@ -123,6 +123,25 @@ Failure rules:
   A5_DEVICE_PARTITION_WIDTH_MISMATCH
                            — an N-way device split whose layout widths do not
                              sum to `w_um x m`
+  A5_LAYOUT_DRAWN_SHORT    — the producer's own record says two routed nets
+                             are ONE conductor in this layout, with the chain
+                             of rectangles that joins them
+
+A DRAWN SHORT IS NOT A CLEARANCE PREDICTION. Every other number in
+`layout_provenance.json` is a distance this gate deliberately does NOT judge:
+the sign-off deck adjudicates those, at A6, over richer evidence. A short is
+different in kind — it is two nets of the netlist being one conductor in the
+drawn geometry, measured by union-find over the producer's own manifest plus
+the placed gencells' own geometry, and no deck adjudicates it away. MEASURED
+on u_hawaii_adc (ihp-sg13g2): 13 of them across two blocks while this gate
+reported PASS and the A6 LVS reported `mismatch` with nothing between the two
+able to say why.
+
+WHAT THIS RULE CANNOT SEE, said plainly: it reads the producer's RECORD, so a
+block whose layout was drawn by something that writes no record — or whose
+record was removed — is not asked. That is why the producer ALSO exits
+non-zero on its own shorts (`analog_a5_layout_emit`, exit 1): the record is
+the gate's evidence, not the enforcement.
 
 Project-level verdicts (no `--block`):
   VACUOUS_PASS — no `analog_block_list.json` under `phase3/analog/` or
@@ -138,6 +157,7 @@ chip-AGNOSTIC.
 """
 from __future__ import annotations
 
+import json
 import re
 import sys
 from pathlib import Path
@@ -153,6 +173,12 @@ import _analog_layout_matching as _lm
 GATE = "analog_a5_layout_check"
 SKILL = "analog-layout"
 MIN_LAYOUT_BYTES = 200
+
+#: The producer's own record, beside the layout, and the deviation quantity
+#: it writes for a DRAWN SHORT. The name is imported rather than spelled
+#: twice so the gate and the producer cannot drift apart.
+PROVENANCE_NAME = "layout_provenance.json"
+SHORT_QUANTITY = "routed_nets_per_conductor"
 
 
 # Project-level INCOMPLETE (exit 1) — some declared blocks produced a layout
@@ -233,6 +259,36 @@ def _layout_has_real_geometry(path: Path) -> tuple[bool, str]:
     return False, "no placed geometry (no rect paint / use instance lines)"
 
 
+def _drawn_shorts(project: Path, bdir: Path, block: str) -> List[dict]:
+    """A5_LAYOUT_DRAWN_SHORT findings, out of the producer's own record.
+
+    Silent when there is no record and when the record is unreadable — this
+    gate reports what a record SAYS, and "could not read it" is not "read it
+    and it was clean". An unreadable record is not invented into a pass or a
+    fail here; the producer's own non-zero exit is the enforcement."""
+    rec = bdir / PROVENANCE_NAME
+    if not rec.is_file():
+        return []
+    try:
+        data = json.loads(rec.read_text())
+    except (OSError, ValueError):
+        return []
+    devs = data.get("deviations")
+    if not isinstance(devs, list):
+        return []
+    out: List[dict] = []
+    for d in devs:
+        if not isinstance(d, dict) or d.get("quantity") != SHORT_QUANTITY:
+            continue
+        out.append({
+            "block": block, "rule": "A5_LAYOUT_DRAWN_SHORT",
+            "rel_path": str(rec.relative_to(project)),
+            "detail": str(d.get("detail")
+                          or "two routed nets are one conductor"),
+        })
+    return out
+
+
 def _check_block(project: Path, block: str
                  ) -> tuple[Optional[str], List[dict], "_lm.Disclosure"]:
     bdir = project / "phase3" / "analog" / block
@@ -278,6 +334,9 @@ def _check_block(project: Path, block: str
                 "rel_path": str(layout_path.relative_to(project)),
                 "detail": f"{size}B but no real placed geometry: {geo_detail}",
             })
+    # THE PRODUCER'S OWN RECORD, for the ONE thing in it that is not a
+    # clearance prediction. See the module docstring.
+    findings.extend(_drawn_shorts(project, bdir, block))
     # NOTE: per-block DRC / LVS sign-off is deliberately NOT judged here —
     # see the module docstring's "SCOPE" section. It is step A6's verdict,
     # over A6's own (richer) evidence, at the point in the flow where that

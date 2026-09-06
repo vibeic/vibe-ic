@@ -72,6 +72,7 @@ import _atomic_artefact as _aa  # noqa: E402 — vibe-ic#1082
 # arguments; these are only the conventional names.
 GENCELL_TCL = "{root}/{family}/libs.tech/magic/{family}-fet.tcl"
 DRC_TECH = "{root}/{family}/libs.tech/magic/{family}-drc.tech"
+MAGIC_TECH = "{root}/{family}/libs.tech/magic/{family}.tech"
 
 
 def _read(path: str, container: Optional[str]) -> Optional[str]:
@@ -339,6 +340,185 @@ def deck_rules(text: str) -> Dict[str, Dict]:
                   else "via_surround_um")
         out[bucket][key] = max(out[bucket].get(key, 0.0), int(val) / 1000.0)
     return out
+
+
+# ── the PDK's own layer table ──────────────────────────────────────────
+#
+# THE DEFECT THIS CLOSES, MEASURED (ihp-sg13g2, u_hawaii_adc, image 0.3.46).
+# A generator that wants to know which conductor a gencell delivered a
+# terminal on has two ways to ask. It can read the SECTION NAME in the `.mag`
+# and hope the PDK spells its conductors `metalN` / `viaN`, or it can ask the
+# technology file what that type IS. The first is what A5 did, and this PDK
+# delivers a MiM capacitor's TOP plate on a type called `mimcapcontact`:
+# neither spelling matches, so both of that device's terminals read as the
+# `metal5` plane the BOTTOM plate occupies, the emitter dropped a via stack
+# for each of them onto the same plate, and the capacitor was shorted. On
+# u_hawaii_adc that was 13 drawn shorts (1 on `ldo`, 12 on `delta_sigma`),
+# every one of them a MiM capacitor, and the sign-off LVS answered
+# `mismatch` on both blocks with no flow artefact able to say why.
+#
+# The technology file answers the question directly and for every device
+# class at once:
+#
+#   types    <plane> <name>,<alias>,...     which PLANE a type occupies
+#            -<plane> ...                   a NON-connecting type (fill,
+#                                           obstruction, probe markers)
+#   contact  <type> <residue> <residue>     the two types a contact joins
+#
+# so `mimcapcontact` (aliased `mimcc`) is `cap1 mimcapcontact,mimcapc,mimcc,
+# capmc` joined by `mimcc mimcap metal6` — a contact between the cap plate
+# and metal6 — and its terminal is on metal6, one plane above the metal5
+# bottom plate and not shorted to it. The same table says `via4 metal4
+# metal5`, which is the answer the name-reading code already gave, so a PDK
+# that does spell its conductors `metalN`/`viaN` is unchanged.
+#
+# WHAT IS STILL READ FROM A NAME, said plainly: the integer LEVEL of a
+# conductor plane comes from the PLANE's own name (`metal5` -> 5). That is
+# magic's plane identity out of the technology file's `planes` section, not
+# the drawn type's spelling, and the rest of this emitter is built on that
+# integer. A plane whose name carries no integer has no level and
+# contributes none.
+_PLANE_LEVEL_RE = re.compile(r"^metal(\d+)$")
+
+
+def _tech_sections(text: str) -> Dict[str, list]:
+    """The technology file's sections, by keyword.
+
+    A magic `.tech` is a flat sequence of `<keyword> ... end` blocks whose
+    bodies are INDENTED. Comments start with `#`. Nothing here interprets a
+    body; the callers below read the three sections they need."""
+    out: Dict[str, list] = {}
+    cur: Optional[str] = None
+    body: list = []
+    for raw in text.splitlines():
+        line = raw.split("#", 1)[0].rstrip()
+        if not line.strip():
+            continue
+        if line[0].isspace() or line[0] == "-":
+            if cur is not None:
+                body.append(line.strip())
+            continue
+        head = line.split()[0]
+        if cur is not None:
+            out.setdefault(cur, []).extend(body)
+        body = []
+        cur = None if head == "end" else head
+    if cur is not None:
+        out.setdefault(cur, []).extend(body)
+    return out
+
+
+class LayerIdentity:
+    """What a drawn type IS, per the technology file that declares it.
+
+    `plane_of` and `connects` are the file's own `types` and `contact`
+    sections; everything this class answers is derived from them and from
+    nothing else. A type the file does not declare is UNKNOWN — `knows()`
+    says so — and a caller must decide what to do about that rather than be
+    handed a default."""
+
+    def __init__(self, source: str = "") -> None:
+        self.source = source
+        self.canon: Dict[str, str] = {}        # any alias -> canonical name
+        self.plane_of: Dict[str, str] = {}     # canonical name -> plane
+        self.connects: Dict[str, Tuple[str, str]] = {}   # contact -> residues
+        self.conducting: Dict[str, bool] = {}  # canonical name -> connects?
+        self.plane_canon: Dict[str, str] = {}  # plane alias -> plane name
+
+    # -- the questions this table exists to answer ----------------------
+    def knows(self, name: str) -> bool:
+        return name in self.canon
+
+    def conductor_planes(self, name: str) -> list:
+        """Every CONDUCTOR plane a tile of this type occupies, outermost
+        first. A contact IS its two residues plus the cut, which is why a
+        via tile carries the metal above it as well as the metal below."""
+        c = self.canon.get(name)
+        if c is None or not self.conducting.get(c, True):
+            return []
+        out: list = []
+        for res in self.connects.get(c, ()):
+            p = self.plane_of.get(res)
+            if p and p not in out:
+                out.append(p)
+        p = self.plane_of.get(c)
+        if p and p not in out:
+            out.append(p)
+        return out
+
+    def device_electrode_contact(self, name: str) -> bool:
+        """True when this type is a CONTACT with a residue on a plane that
+        carries no routing level — a device ELECTRODE (a capacitor plate, a
+        resistor body, a diffusion) rather than a wire.
+
+        Why a caller cares: a contact IS its residues, so the contact's
+        image on the conductor plane has exactly the ELECTRODE's footprint.
+        Metal painted on that plane and taken OUT of the contact is
+        therefore metal crossing the electrode's own edge, which is the
+        geometry a PDK writes an electrode-spacing rule about. MEASURED on
+        ihp-sg13g2's MiM capacitor with magic's `drc style drc(full)`, on a
+        two-cell fixture holding nothing but the PDK's own gencell child and
+        one painted stub:
+
+            gencell child alone                      0 errors
+            metal6 covering the contact, no exit     0 errors
+            metal6 stub from the contact's own edge  1  MIM.e
+            metal6 stub from the plate centre        1  MIM.e
+            metal6 over the whole plate + stub       4  MIM.e
+            contact-sized metal6 + via6 + metal7     0 errors
+
+        The last line is the PDK's own answer and the general one: leave one
+        level ABOVE the contact's conductor residue, where the wire is this
+        generator's own object rather than the device's electrode."""
+        c = self.canon.get(name)
+        res = self.connects.get(c) if c else None
+        if not res:
+            return False
+        return any(p and not _PLANE_LEVEL_RE.match(p)
+                   for p in (self.plane_of.get(r) for r in res))
+
+    def level(self, name: str) -> Optional[int]:
+        """The HIGHEST numbered conductor plane this type reaches, or None
+        when it reaches none this generator can route on."""
+        ks = [int(m.group(1)) for p in self.conductor_planes(name)
+              for m in (_PLANE_LEVEL_RE.match(p),) if m]
+        return max(ks) if ks else None
+
+
+def layer_identity(text: str, source: str = "") -> LayerIdentity:
+    """Parse a magic technology file's `planes`, `types` and `contact`
+    sections into the table above. No layer, plane or PDK is named here."""
+    sec = _tech_sections(text)
+    li = LayerIdentity(source)
+    for line in sec.get("planes", []):
+        names = [n for n in line.replace(",", " ").split() if n]
+        for n in names:
+            li.plane_canon[n] = names[0]
+    for line in sec.get("types", []):
+        toks = line.split()
+        if len(toks) < 2:
+            continue
+        plane, conducting = toks[0], True
+        if plane.startswith("-"):
+            plane, conducting = plane[1:], False
+        plane = li.plane_canon.get(plane, plane)
+        names = [n for n in " ".join(toks[1:]).replace(",", " ").split() if n]
+        if not names:
+            continue
+        canon = names[0]
+        for n in names:
+            li.canon.setdefault(n, canon)
+        li.plane_of.setdefault(canon, plane)
+        li.conducting.setdefault(canon, conducting)
+    for line in sec.get("contact", []):
+        toks = line.split()
+        if len(toks) != 3 or toks[0] == "stackable":
+            continue
+        ct = li.canon.get(toks[0], toks[0])
+        r1 = li.canon.get(toks[1], toks[1])
+        r2 = li.canon.get(toks[2], toks[2])
+        li.connects.setdefault(ct, (r1, r2))
+    return li
 
 
 def main() -> int:
