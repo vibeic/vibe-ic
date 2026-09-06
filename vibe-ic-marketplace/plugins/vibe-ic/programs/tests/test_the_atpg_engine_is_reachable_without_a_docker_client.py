@@ -325,3 +325,36 @@ class TestTheRemediationHintMatchesTheRouteTaken:
         local = local.split("            else:")[0]
         assert "ONE cause applies here" in local
         assert "TWO distinct causes" not in local
+
+
+class TestTheTwoRoutesAgreeOnWHICHFilesExist:
+    """Edges where the two routes could quietly disagree about the inputs.
+
+    These are not hypotheticals: `_run_docker` decides what to MOUNT from
+    `pdk_dir is not None and pdk_dir.exists()`, and the local route has to make
+    the SAME decision or the tool sees a different set of files depending on
+    which route ran — which is precisely the class of divergence this whole
+    change set exists to remove.
+    """
+
+    def test_a_pdk_dir_that_does_not_exist_is_mounted_by_neither(
+            self, route, monkeypatch, tmp_path):
+        absent = tmp_path / "no_such_pdk"
+        for client, expect_mount in (("/usr/bin/docker", False), (None, False)):
+            route(client)
+            rec = _Recorder()
+            monkeypatch.setattr(F.subprocess, "run", rec)
+            F._run_docker(tmp_path, ["fault", "chain", "--lib", "/pdk/x.lib"],
+                          timeout=60, pdk_dir=absent)
+            argv = rec.argv
+            assert (f"{absent}:/pdk" in argv) is expect_mount, argv
+            # and neither route rewrites /pdk when nothing was mounted there,
+            # so both fail the same way on the same missing file
+            assert "/pdk/x.lib" in argv[-1], argv[-1]
+
+    def test_the_env_preamble_needs_no_translation(self):
+        """It exports only image-absolute paths, identical on both routes."""
+        assert "/work" not in F.ENV_PREAMBLE
+        assert "/pdk" not in F.ENV_PREAMBLE
+        out = F._localise_mounted_paths(F.ENV_PREAMBLE, Path("/p/proj"), None)
+        assert out == F.ENV_PREAMBLE
