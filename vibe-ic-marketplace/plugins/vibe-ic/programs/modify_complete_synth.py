@@ -602,7 +602,11 @@ class BeatModel:
                  # sequencing — what turns a per-beat model into an FSM. All
                  # three come from the input's own statement; a partially stated
                  # handshake is a refusal, not a half-built state machine.
-                 "valid_port", "ready_port", "burst_beats")
+                 "valid_port", "ready_port", "burst_beats",
+                 # the response PORT PAIR, when the emitted interface actually
+                 # carries one. `response_mode` without these is a statement
+                 # about a signal this module does not expose.
+                 "resp_in_port", "resp_out_port")
 
     def __init__(self, data_width: int):
         self.data_width = data_width
@@ -618,6 +622,8 @@ class BeatModel:
         self.valid_port = None
         self.ready_port = None
         self.burst_beats = None
+        self.resp_in_port = None
+        self.resp_out_port = None
 
     @property
     def is_sequenced(self) -> bool:
@@ -713,6 +719,14 @@ class SuppliedContract:
 _EXPR_SAFE_RE = re.compile(r"^[\w\s+\-*/%&|^~()<>!=?:\[\].']+$")
 
 
+# A SIZED VERILOG LITERAL inside a supplied stage expression (`15'd1`, `8'hFF`,
+# `2'b01`). It has to be resolved to its value BEFORE the identifier closure
+# check below, because `15'd1` otherwise presents the token `d1` to a scan for
+# `[A-Za-z_]\w*` and the reference rejects the design's own arithmetic as an
+# unknown name. A sized literal is the commonest token in a supplied stage.
+_SIZED_LITERAL_RE = re.compile(r"(?i)(?<![\w'])(\d+)\s*'\s*([bodh])\s*([0-9a-f_]+)")
+
+
 def _eval_int_expr(expr: str, env: Dict[str, int]) -> int:
     """Evaluate ONE supplied stage expression over the current environment.
     Verilog operators that mean the same thing in Python are used directly; the
@@ -721,12 +735,54 @@ def _eval_int_expr(expr: str, env: Dict[str, int]) -> int:
     e = expr.strip().rstrip(";")
     if not _EXPR_SAFE_RE.match(e):
         raise ValueError(f"unsupported stage expression: {expr!r}")
+
+    def _lit(m: "re.Match") -> str:
+        width, base, digits = int(m.group(1)), m.group(2).lower(), m.group(3)
+        val = int(digits.replace("_", ""), _BASES[base])
+        # a sized literal is truncated to its OWN stated width, exactly as the
+        # hardware truncates it — the value is not widened to fit
+        return str(val & ((1 << width) - 1)) if width else "0"
+
+    e = _SIZED_LITERAL_RE.sub(_lit, e)
+    if "'" in e:
+        # an UNSIZED literal (`'d7`, `'h1F`) or a stray quote. Its width is the
+        # context's, which this reference does not model, so it is refused by
+        # name rather than silently given one.
+        raise ValueError(f"unsupported stage expression: {expr!r}")
     e = re.sub(r"(?<![<>=!])=(?!=)", "==", e)
     e = e.replace("&&", " and ").replace("||", " or ")
     for name in set(re.findall(r"[A-Za-z_]\w*", e)):
         if name not in env:
             raise KeyError(f"unknown identifier in supplied expression: {name}")
-    return int(eval(e, {"__builtins__": {}}, dict(env)))  # noqa: S307 - closed env
+    try:
+        return int(eval(e, {"__builtins__": {}}, dict(env)))  # noqa: S307 - closed env
+    except (SyntaxError, TypeError) as exc:
+        # Verilog syntax that has no Python meaning — a bit-select `d[7:0]`, a
+        # concatenation, a ternary. The reference must say it cannot execute
+        # this, never return a number it did not compute.
+        raise ValueError(
+            f"unsupported stage expression: {expr!r} ({type(exc).__name__})") from exc
+
+
+def _stage_expression_is_executable(expr: str, names: List[str]
+                                    ) -> Optional[str]:
+    """Can the EXECUTABLE SEQUENTIAL REFERENCE actually run this supplied stage
+    expression? Returns None when it can, or the reason when it cannot.
+
+    This is the check that stops the contract from emitting RTL whose reference
+    is unrunnable. The probe environment is a closed placeholder (every known
+    name bound to 1, which also keeps a stated division from dividing by zero);
+    only the SHAPE of the expression is being decided here, never its value."""
+    env = {n: 1 for n in names}
+    try:
+        _eval_int_expr(expr, env)
+    except ZeroDivisionError:
+        return None          # value-dependent, not a shape the reference lacks
+    except KeyError as exc:
+        return str(exc.args[0]) if exc.args else "unknown identifier"
+    except (ValueError, OverflowError) as exc:
+        return str(exc)
+    return None
 
 
 # --------------------------------------------------------------------------- #
@@ -977,6 +1033,48 @@ def _extract_beat_model(prompt: str, ins: List[Port], outs: List[Port]
         unresolved.append("response_mode: the input mentions a response but never "
                           "states whether it is forwarded raw or decoded")
 
+    # -- the response PORT PAIR, when the interface carries one ------------- #
+    # A stated response mode that never reaches the hardware is the F5 defect in
+    # its quietest form: two designs stating OPPOSITE response modes emit
+    # identical RTL and differ only in a comment. So resolve the pair
+    # STRUCTURALLY -- the identifiers of the response clause intersected with the
+    # real ports -- and let the mode act on it.
+    #
+    # When the clause names NO port of this interface, the response is not a
+    # signal this module exposes; there is then nothing here for the emitter to
+    # get right or wrong, and the mode stays descriptive. That is a statement
+    # about the interface, not a default value.
+    if bm.response_mode is not None:
+        rc = re.search(r"(?i)[^.]*\bresponses?\b[^.]*", prompt)
+        rtoks = ([t for t in re.findall(r"[A-Za-z_]\w*", rc.group(0))]
+                 if rc else [])
+        r_in = sorted({t for t in rtoks if t in in_w})
+        r_out = sorted({t for t in rtoks if t in out_w})
+        if len(r_in) == 1 and len(r_out) == 1:
+            bm.resp_in_port, bm.resp_out_port = r_in[0], r_out[0]
+            if in_w[r_in[0]] != out_w[r_out[0]]:
+                unresolved.append(
+                    f"response_width: the response clause names input "
+                    f"`{r_in[0]}` ({in_w[r_in[0]]} bits) and output "
+                    f"`{r_out[0]}` ({out_w[r_out[0]]} bits), so what a "
+                    f"{bm.response_mode} response does with the difference is "
+                    f"not determined by the input")
+        elif r_in or r_out:
+            unresolved.append(
+                f"response_ports: the response clause names "
+                f"{len(r_in)} input and {len(r_out)} output port(s) of this "
+                f"interface, so which pair carries the response is not "
+                f"determined by the input")
+        if (bm.resp_in_port is not None and bm.response_mode == "decoded"):
+            # `raw` is fully determined once the pair is known -- forward the
+            # value unmodified. `decoded` is NOT: the input has not said what it
+            # is decoded INTO, and inventing an encoding here is exactly the
+            # hidden expected value the issue forbids.
+            unresolved.append(
+                f"response_decode: the input states the response on "
+                f"`{bm.resp_in_port}` is decoded but never states what it is "
+                f"decoded into")
+
     if re.search(r"(?i)\b(?:store\s+)?(?:lane|data)\s+is\s+pre[-\s]?aligned\b|"
                  r"\binitiator\s+pre[-\s]?aligns\b", prompt):
         bm.prealigned_store = True
@@ -986,6 +1084,20 @@ def _extract_beat_model(prompt: str, ins: List[Port], outs: List[Port]
     elif re.search(r"(?i)\bstore\s+lane\b", prompt):
         unresolved.append("prealigned_store: the input mentions a store lane but "
                           "never states which side aligns it")
+
+    # A TARGET-aligned store lane means this module has to place the supplied
+    # bytes at an offset. Where the input also requires word-aligned transfers
+    # that offset is always zero, so there is nothing to place and the statement
+    # is consistent and vacuous. Where it does NOT, the placement is a real
+    # decision the input has not made -- whether bytes past the end of the beat
+    # wrap or are dropped -- and emitting either one would be a hidden expected
+    # value. Named, never chosen.
+    if bm.prealigned_store is False and bm.alignment != "word":
+        unresolved.append(
+            "store_lane_placement: the input states the target aligns the store "
+            "lane and does not restrict transfers to word boundaries, but never "
+            "states whether bytes past the end of the beat wrap or are dropped, "
+            "so where the lane lands is not determined by the input")
 
     # -- sequencing: the handshake and the burst length -------------------- #
     # Resolved STRUCTURALLY: a name is only taken when the prose mentions it in a
@@ -1022,12 +1134,29 @@ def _extract_beat_model(prompt: str, ins: List[Port], outs: List[Port]
                           "input names no handshake, so when each beat is "
                           "accepted is not determined")
 
-    for nm, w in ins:
-        if w == bm.data_width and bm.data_in_port is None:
-            bm.data_in_port = nm
-    for nm, w in outs:
-        if w == bm.data_width and bm.data_out_port is None:
-            bm.data_out_port = nm
+    # -- which port actually carries the beat ------------------------------ #
+    # Resolved STRUCTURALLY and ONLY when the interface makes it unambiguous.
+    # Taking the first port of the right width is not a reading of the input, it
+    # is a reading of the declaration ORDER: on an interface carrying both an
+    # address and a write-data port of the beat width it silently stores the
+    # ADDRESS. An ambiguity here is a decision the input did not make, so it is
+    # named and routed to AI.
+    cand_in = [nm for nm, w in ins if w == bm.data_width]
+    cand_out = [nm for nm, w in outs if w == bm.data_width]
+    if len(cand_in) == 1:
+        bm.data_in_port = cand_in[0]
+    else:
+        unresolved.append(
+            f"beat_data_in: {len(cand_in)} input ports carry the stated "
+            f"{bm.data_width}-bit beat width ({', '.join(cand_in) or 'none'}), "
+            f"so which one carries the beat data is not determined by the input")
+    if len(cand_out) == 1:
+        bm.data_out_port = cand_out[0]
+    else:
+        unresolved.append(
+            f"beat_data_out: {len(cand_out)} output ports carry the stated "
+            f"{bm.data_width}-bit beat width ({', '.join(cand_out) or 'none'}), "
+            f"so which one receives the beat data is not determined by the input")
     return bm, unresolved
 
 
@@ -1059,6 +1188,27 @@ def extract_contract(record: dict, ins: List[Port], outs: List[Port]
     if (c.stages or c.beat) and c.clock is None:
         c.unresolved.append("clock: the recovered interface exposes no clock port "
                             "and the input names none")
+    # The contract's own EXECUTABLE SEQUENTIAL REFERENCE (issue #2035, family F1)
+    # has to be able to RUN what it just extracted. A supplied stage expression
+    # the reference cannot execute must be NAMED here, because emitting RTL for
+    # it would ship a contract that can only be compared as text -- which is the
+    # one thing the row says the contract must stop being.
+    if c.stages:
+        # The environment is closed over every name the design ENUMERATES, not
+        # only the stages that survived extraction. A stage dropped for a width
+        # reason already has its own named entry; re-reporting its name as an
+        # unknown identifier in a LATER stage would be one defect counted twice.
+        known = sorted(set(widths)
+                       | {m.group("name").strip()
+                          for m in _STAGE_RE.finditer(prompt)}
+                       | {t.out_port for t in c.tables})
+        for s in c.stages:
+            why = _stage_expression_is_executable(s.expr, known)
+            if why is not None:
+                c.unresolved.append(
+                    f"stage_expression: stage {s.index} result `{s.name}` is "
+                    f"stated as `{s.expr}`, which the executable sequential "
+                    f"reference cannot run ({why})")
     return c
 
 
@@ -1140,7 +1290,8 @@ def _is_driven_sequentially(name: str, c: SuppliedContract) -> bool:
         return True
     if any(t.out_port == name for t in c.tables):
         return True
-    if c.beat is not None and name in (c.beat.data_out_port,):
+    if c.beat is not None and name in (c.beat.data_out_port,
+                                       c.beat.resp_out_port):
         return True
     return False
 
@@ -1166,8 +1317,12 @@ def _emit_beat_fsm(c: SuppliedContract, ins: List[Port], outs: List[Port],
                     if b.mask_port else "")
                  + (f", {b.alignment}-aligned" if b.alignment else "")
                  + (f", {b.response_mode} response" if b.response_mode else "")
-                 + (f", store lane pre-aligned by the "
-                    f"{'initiator' if b.prealigned_store else 'target'}"
+                 # `prealigned_store` False means the TARGET aligns the lane,
+                 # which is precisely NOT pre-aligned. Saying "pre-aligned by the
+                 # target" states the opposite of what the input said, in the one
+                 # artefact a reader of the emitted RTL actually has.
+                 + (", store lane pre-aligned by the initiator"
+                    if b.prealigned_store else ", store lane aligned by the target"
                     if b.prealigned_store is not None else ""))
     def lane_writes(indent: str) -> List[str]:
         """The masked write, one statement per byte lane, exactly as stated."""
@@ -1185,6 +1340,17 @@ def _emit_beat_fsm(c: SuppliedContract, ins: List[Port], outs: List[Port],
                        f"{b.data_in_port}[{hi}:{lo}] : {keep};")
         return out
 
+    def resp_forward(indent: str) -> List[str]:
+        """A `raw` response is FORWARDED UNMODIFIED. That is fully determined by
+        the input once the response port pair is known, so it becomes real
+        hardware here rather than a comment. `decoded` never reaches this point:
+        the input does not state what it is decoded into, so it was named in
+        `unresolved` and emission was refused."""
+        if b.resp_out_port is None or b.response_mode != "raw":
+            return []
+        return [f"{indent}{b.resp_out_port} <= {b.resp_in_port};"
+                f"  // raw response, forwarded unmodified as stated"]
+
     if not b.is_sequenced:
         # UNSEQUENCED: the input states one beat per cycle and names no
         # handshake, so there is no sequence to step through and a state machine
@@ -1193,8 +1359,12 @@ def _emit_beat_fsm(c: SuppliedContract, ins: List[Port], outs: List[Port],
         lines.append(f"    always @(posedge {c.clock}) begin")
         lines.append(f"        if ({rst}) begin")
         lines.append(f"            {b.data_out_port} <= 0;")
+        for ln in resp_forward("            "):
+            lines.append(f"            {b.resp_out_port} <= 0;")
+            break
         lines.append(f"        end else begin")
         lines.extend(lane_writes("            "))
+        lines.extend(resp_forward("            "))
         lines.append(f"        end")
         lines.append(f"    end")
         return lines
@@ -1219,6 +1389,8 @@ def _emit_beat_fsm(c: SuppliedContract, ins: List[Port], outs: List[Port],
     lines.append(f"            state <= S_IDLE;")
     lines.append(f"            beat_index <= {cw}'d0;")
     lines.append(f"            {b.data_out_port} <= 0;")
+    if resp_forward(""):
+        lines.append(f"            {b.resp_out_port} <= 0;")
     lines.append(f"        end else begin")
     lines.append(f"            case (state)")
     lines.append(f"            S_IDLE: if ({accept}) begin")
@@ -1249,6 +1421,7 @@ def _emit_beat_fsm(c: SuppliedContract, ins: List[Port], outs: List[Port],
         # `raw` forwards the beat unmodified, `decoded` is the other stated form.
         lines.append(f"            S_RESP: begin")
         lines.append(f"                // {b.response_mode} response, as stated")
+        lines.extend(resp_forward("                "))
         lines.append(f"                state <= S_IDLE;")
         lines.append(f"            end")
     lines.append(f"            default: state <= S_IDLE;")
