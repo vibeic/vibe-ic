@@ -3657,3 +3657,49 @@ _Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db dis
 **Why this is GENERAL**: Level-vs-edge interrupt confusion and write-clear-priority races are a universal MMIO peripheral bug class, applicable to any counter, timer, or status-flag register with a software-clear path.
 
 _Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
+
+### Skill: Testbench time-zero initialisation — clock in the DECLARATION, asynchronous reset from an INITIAL block
+
+**Pattern**: Two opposite initialisation mistakes both turn a CORRECT design into a
+failing testbench run, and a false FAIL is worse than a slow review because it
+authorises a repair to code that was already right.
+
+* **Clock, spurious edge.** `initial clk = 1'b1;` leaves `clk` at `x` until time
+  zero, so the `x -> 1` transition IS a real `posedge`. The DUT clocks once
+  before the reset window is observed, and every first-cycle or post-reset
+  assertion fails for a testbench reason. (`x -> 0` is a `negedge`, so the trap
+  is polarity-dependent and bites posedge designs initialised to 1.)
+* **Asynchronous reset, missing edge.** The mirror image: `reg areset = 1;` in the
+  declaration means `areset` starts asserted and NEVER TRANSITIONS, so
+  `always @(posedge clk, posedge areset)` never fires on it. The state reads back
+  `x` and the design looks broken when it is not.
+
+**When to apply**: Any testbench asserting the reset state, the power-up state, or
+the exact cycle on which an output first asserts — including every prompt-derived
+verification challenge for a clocked design.
+
+**What to do**:
+
+```verilog
+reg clk    = 1'b0;   // in the DECLARATION: no time-zero edge in either direction
+reg areset = 1'b0;   // starts DEasserted so the assertion below is a real edge
+initial begin
+  #1 areset = 1'b1;  // 0 -> 1 is a genuine posedge an async reset must act on
+  #1 if (state !== EXPECTED) ...
+end
+```
+
+Initialise the clock where it cannot generate an edge; drive an asynchronous
+reset where it must generate one. Then check the first observed rising edge is
+genuinely the first clocked event (`@(negedge clk)` before the first
+`@(posedge clk)` is a cheap way to be sure).
+
+**Worked pattern** (anonymized): in one 156-problem blind review campaign these two
+mistakes cost three separate reviewers a failed attempt each. In every case the
+candidate was correct and the testbench was wrong; the giveaway was a reset-state
+or first-cycle assertion failing while a full reference-model comparison over the
+remaining cycles agreed with the candidate throughout.
+
+**Why this is GENERAL**: it is simulator-semantics craft about `x`-to-value
+transitions at time zero, independent of design, PDK, vendor or benchmark. It
+applies to any Verilog testbench that reasons about the first edge.
