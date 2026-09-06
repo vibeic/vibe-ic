@@ -146,75 +146,118 @@ CVDP scoring additionally requires `--scorer-root <official-cvdp-root>` (or
 `CVDP_BENCHMARK_ROOT`) and the exact official simulation images. Run the shipped
 EDA image preflight before scoring. Do not substitute tools silently.
 
-### Explicit Program retry of a preserved signed repair
+### The Program re-entry: re-running a FIXED Program on a preserved signed input
 
 When a Program gate transformed an AI repair into different bytes, the existing
 `AI_REPAIR_FINAL_PROVENANCE_REQUIRED` refusal remains authoritative. An upgraded
-Program can now be tried against the preserved, originally signed input with:
+Program can be re-entered against the preserved, originally signed input with
+the ONE Program re-entry operation:
 
 ```bash
 python3 programs/benchmark_dispatch.py <bench> --resume \
   --dataset <DATASET> --run <RUN> --worker-threads 1 \
-  --program-retry <RUN>/program_retry_request.json
+  --program-regate <RUN>/program_regate_request.json
 ```
 
-This operation is BLOCKING and initially supports only an unaccepted,
-unpublished `AI_REPAIR` task with a valid signed input snapshot. It does not
-authorize AI edits, refresh a signature, supersede a test, or accept a result.
-The normal repair boundary automatically saves `repair_input_candidate_snapshot`
-before running gates. For a legacy task, supply an existing candidate manifest
-whose exact RTL hash matches the unchanged signed repair record and whose
-`source_rtl_paths` exactly match the task's working RTL paths. Reconstructing an
-unsigned input, supplying arbitrary RTL files, and other candidate origins are
-unsupported and refused.
+`--program-retry` is a DEPRECATED alias of `--program-regate`: it runs the same
+merged operation and prints a deprecation line on stderr. It is removed one
+version after v1.17.75. Giving both names in one resume is refused, not ordered.
+Until v1.17.75 these were TWO operations (`--program-regate`, v1.17.63, and
+`--program-retry`, v1.17.71) for one job; issue #2047 merged them.
+
+**BOTH identities, always.** The merged operation refuses unless the Program
+moved in BOTH senses, because neither is necessary or sufficient for the other:
+a real fix can land with no version bump, and a version can move with the
+executable sources untouched.
+
+* the declared VERSION pair — `program_version_before` must be the version that
+  produced the preserved input, `program_version_after` must be the running
+  Program, and the two must differ (an unchanged version is a loop, not a fix);
+* the executable SOURCE TREE — `program_identity`, which fingerprints installed
+  runtime source and configuration including dirty edits, must equal the running
+  fingerprint, and must differ from the identity of any prior re-entry on this
+  task. It is checked again after the runner.
+
+This operation is BLOCKING and supports only an unaccepted, unpublished
+`AI_REPAIR` task with a valid signed input snapshot. It does not authorize AI
+edits, refresh a signature, supersede a test, or accept a result. The normal
+repair boundary automatically saves both `repair_input_candidate_snapshot` and
+the `pre_gate_input` manifest before running gates; the request must name a
+candidate manifest whose exact RTL hash matches the unchanged signed repair
+record and whose `source_rtl_paths` exactly match the task's working RTL paths,
+and the task's own pre-gate manifest must describe the same signed bytes.
+Reconstructing an unsigned input, supplying arbitrary RTL files, and other
+candidate origins are unsupported and refused.
 
 The request is a JSON object with these fields:
 
 | Field | Required binding |
 | --- | --- |
-| `schema` | `vibeic.benchmark.program_retry.v1` |
+| `schema` | `vibeic.benchmark.program_regate.v1` (the legacy `...program_retry.v1` is still accepted) |
 | `id` | Exact pending task ID |
 | `task_sha256` | SHA-256 of `json.dumps(task, ensure_ascii=False, sort_keys=True)` |
-| `prompt_sha256`, `rtl_sha256` | Task's current prompt and frozen output hashes |
+| `prompt_sha256` | Task's current prompt hash |
+| `stale_output_sha256` | Task's frozen output hash (legacy spelling `rtl_sha256` also accepted) |
+| `signed_input_sha256` | Preserved input hash, equal to signed `repaired_rtl_sha256` (legacy spelling `input_rtl_sha256` also accepted) |
 | `repair_record_sha256` | SHA-256 of the unchanged signed record's exact file bytes |
 | `input_manifest_path`, `input_manifest_sha256` | Preserved input manifest and its exact file hash |
-| `input_rtl_sha256` | Preserved input hash, equal to signed `repaired_rtl_sha256` |
-| `program_identity` | Current `benchmark_dispatch._program_retry_identity()` object |
-| `reason` | Explanation of the Program retry, at least 20 characters |
+| `program_version_before`, `program_version_after` | The declared version pair; `_after` must be the running Program |
+| `program_identity` | Current `benchmark_dispatch._program_source_identity()` object |
+| `author`, `blind` | Attributed blind AI author (`kind: "AI"`, a named `model`, `oracle_accessed: false`) |
+| `rationale` | Explanation of the re-entry, at least 80 characters (legacy spelling `reason` also accepted) |
 | `review_sha256`, `challenge_sha256` | Exact current proof file hashes if a current review/test exists; otherwise omit or use null |
 
-The identity fingerprints installed runtime source and configuration, including
-dirty edits. It is checked again after the runner. A prior retry with the same
-identity is refused; legacy tasks lack an earlier Program fingerprint, so the
-request records the newly observed identity without claiming a measured prior
-identity. Requests, input snapshots, and evidence must be regular files inside
-the run with no symlink traversal. Normal relative project links to locations
-inside the same project are preserved, including missing optional targets;
-absolute or escaping project links are refused.
+Where the two front doors spelled one field differently, both spellings are
+accepted so no caller breaks; supplying both under CONFLICTING values is refused,
+because an ambiguous identity is not an identity.
+
+**What it refuses.** A wrong request or task schema; a missing or duplicate task
+id; a non-`AI_REPAIR` candidate; a stale `task_sha256`, `prompt_sha256`,
+`stale_output_sha256`, repair record, input manifest or Program identity; a
+request naming no source identity at all; an absent, too-short or unattributed
+rationale or author; an unchanged, unnamed or non-running version pair; a signed
+input that is not the hash the author signed, or that the gates never changed; a
+preserved input that is missing, drifted, internally inconsistent, made by a
+different Program version, or that does not cover the working RTL file set; a
+work tree that drifted from the frozen gate output (a hand edit cannot be
+smuggled through a re-entry); prompt or Phase-1 provenance drift; a task already
+accepted in either `solve_report.json` or the acceptance report, or already
+published; a non-canonical response path or a project that is not the
+runner-owned one; a missing, drifted or non-inherited challenge; a task that also
+has a pending AI backup; an occupied archive or fresh review/test path; any
+source changing during preparation; and a request, snapshot or evidence file that
+is not a regular file inside the run, including any symlink traversal. Normal
+relative project links to locations inside the same project are preserved,
+including missing optional targets; absolute or escaping project links are
+refused.
 
 Under the existing coordinator lock, the operation runs the ordinary supplied-RTL
 validation entry (`2`) with the original declared exit, in a staged project.
 Collection uses the normal runner predicate; the exact return code and raw
 reports remain available. It preserves the complete prior project, prior task,
 solve/acceptance/worklist bytes, and any current review/test under
-`program_retries/<id>/<request-sha>/`. Staged gate outputs remain at their original
-paths so references in reports remain usable. Current and inherited challenges
-remain obligations of the fresh independent review. Program actions are recorded
-separately from the original AI repair author.
+`program_regates/<id>/<request-sha>/`. Staged gate outputs remain at their
+original paths so references in reports remain usable. Current and inherited
+challenges remain obligations of the fresh independent review. Program actions
+are recorded separately from the original AI repair author: the transition
+records `attributed_to: "PROGRAM"`, `author_signature_unchanged: true` and
+`repair_authorized: false`, and the author's signature is bound to the preserved
+signed INPUT rather than to the Program's output.
 
-Successful retry freezes a candidate in a fresh request-addressed snapshot,
+A successful re-entry freezes a candidate in a fresh request-addressed snapshot,
 creates unoccupied review/test paths, and returns `2` with `PENDING`. Complete
-the fresh independent review and invoke ordinary `--resume` afterward. If the
-new output still differs from the signed input, the unchanged final-provenance
-check still refuses acceptance. Existing signatures and historical challenges
-cannot be automatically rebound to the new output.
+the fresh independent review and invoke ordinary `--resume` afterward. If the new
+output still differs from the signed input, the unchanged final-provenance check
+still refuses acceptance. Existing signatures and historical challenges cannot be
+automatically rebound to the new output.
 
 Runner failures preserve the original project/task and write a bound failure
 record. An interrupted operation without a valid terminal record emits
-`PROGRAM_RETRY_REFUSED` and blocks ordinary resume. Reconcile the immutable
-intent, staged output, preserved prior project, and transition before continuing;
-automatic rollback and guessed recovery are deliberately unsupported. Do not
-delete a journal or overwrite owner edits to make resume advance.
+`PROGRAM_REGATE_REFUSED` and blocks ordinary resume. A replayed request over a
+journalled re-entry is REFUSED, never reported as already-applied. Reconcile the
+immutable intent, staged output, preserved prior project, and transition before
+continuing; automatic rollback and guessed recovery are deliberately unsupported.
+Do not delete a journal or overwrite owner edits to make resume advance.
 
 Before invoking any official host scorer, run the deterministic cwd guard over
 the exact design and scorer working directory (and testbench when applicable):

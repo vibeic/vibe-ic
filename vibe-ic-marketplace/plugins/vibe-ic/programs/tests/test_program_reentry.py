@@ -1175,3 +1175,462 @@ def test_the_two_pre_merge_modules_are_gone():
     """One operation, one test module. Their content is here, not deleted."""
     for stale in ("test_program_regate.py", "test_program_candidate_retry.py"):
         assert not (Path(__file__).parent / stale).exists(), stale
+
+
+# ── the refusal census: every refuse() site of the merged operation ────
+#
+# `_apply_program_regate` (plus `_regate_project_tree`,
+# `_guard_program_regate_journals` and `_regate_request_field`) declares 66
+# refusal sites.  The tests above reach 38 of them; the 28 below reach the
+# rest, so the census closes at ZERO unreached.  Each was confirmed by
+# DELETING its refusal and observing this module go red -- an unreached
+# refusal is not a bug today, it is a refusal that stops refusing silently on
+# the first change that touches it with a green suite.
+#
+# Every test here asserts the refusal by its OWN MESSAGE.  This operation
+# checks in a fixed order, so a test that merely asserted "something was
+# refused" would pass on whichever earlier guard happened to fire and would
+# keep passing after its own guard was deleted.  Asserting the message means
+# the input really did travel as far as the refusal under test.
+
+
+def _rebind(run, task, request, request_path, **changes):
+    """Change the live task and re-bind the request's digest to it.
+
+    Without the recomputed `task_sha256` the staleness guard at the top of the
+    operation answers first and nothing below it is measured. That is the same
+    trap in test form.
+    """
+    task = dict(task, **changes)
+    bd._write_jsonl(Path(run) / bd._REVIEW_WORKLIST, [task])
+    request["task_sha256"] = bd._sha256_text(
+        json.dumps(task, ensure_ascii=False, sort_keys=True))
+    Path(request_path).write_text(json.dumps(request))
+    return task
+
+
+def _rewrite(request, request_path, **changes):
+    request.update(changes)
+    Path(request_path).write_text(json.dumps(request))
+    return request
+
+
+def _stuck_request(tmp_path, monkeypatch, **over):
+    run, stuck, signed, _, _ = _stuck(tmp_path, monkeypatch)
+    path, request = _request(run, stuck, signed, **over)
+    return run, stuck, signed, path, request
+
+
+# --- the signed input's own shape -------------------------------------
+
+def test_a_malformed_signed_input_hash_is_refused(tmp_path, monkeypatch, capsys):
+    run, stuck, signed, path, request = _stuck_request(
+        tmp_path, monkeypatch,
+        signed_input_sha256="not-a-hash", input_rtl_sha256="not-a-hash")
+    assert _resume(run, path) == 2
+    assert "malformed signed_input_sha256" in _refusal(capsys)
+
+
+def test_a_signed_input_the_gates_never_changed_has_nothing_to_re_gate(
+        tmp_path, monkeypatch, capsys):
+    """If the frozen output IS the signed input the author's signature is not
+    stale, so there is no stuck state and no third option to take."""
+    run, stuck, signed, _, _ = _stuck(tmp_path, monkeypatch)
+    path, _ = _request(run, stuck, signed,
+                       signed_input_sha256=stuck["rtl_sha256"],
+                       input_rtl_sha256=stuck["rtl_sha256"])
+    assert _resume(run, path) == 2
+    assert "nothing to re-gate" in _refusal(capsys)
+
+
+# --- the version-pair identity ----------------------------------------
+
+def test_an_unnamed_program_version_is_refused(tmp_path, monkeypatch, capsys):
+    run, stuck, signed, path, request = _stuck_request(
+        tmp_path, monkeypatch, program_version_before="")
+    assert _resume(run, path) == 2
+    assert "both Program versions must be named" in _refusal(capsys)
+
+
+def test_an_unreadable_running_program_version_is_refused(
+        tmp_path, monkeypatch, capsys):
+    """"Could not read it" is not "read it and it matched": with no readable
+    running version the request's `_after` cannot be checked against anything."""
+    run, stuck, signed, _, _ = _stuck(tmp_path, monkeypatch)
+    path, _ = _request(run, stuck, signed, after="1.17.52")
+    monkeypatch.setattr(bd, "_program_version", lambda: "", raising=False)
+    assert _resume(run, path) == 2
+    assert "the running Program version is not readable" in _refusal(capsys)
+
+
+def test_a_second_re_entry_under_the_same_source_identity_is_refused(
+        tmp_path, monkeypatch, capsys):
+    """The message half of `test_unchanged_program_cannot_retry_again`: the
+    source tree must have moved again, not merely the declared version."""
+    run, stuck, signed, path, request = _stuck_request(tmp_path, monkeypatch)
+    _gate(monkeypatch, _BENIGN)
+    assert _resume(run, path) == 2
+    new = bd._read_jsonl(run / bd._REVIEW_WORKLIST)[0]
+    capsys.readouterr()
+    path2, _ = _request(run, new, signed,
+                        before=_OLD_PROGRAM, after=_running())
+    assert _resume(run, path2) == 2
+    assert "Program identity has not changed since the prior re-entry" in \
+        _refusal(capsys)
+
+
+# --- the solve report the operation reads its authority from -----------
+
+def test_an_unsupported_solve_acceptance_policy_is_refused(
+        tmp_path, monkeypatch, capsys):
+    run, stuck, signed, path, request = _stuck_request(tmp_path, monkeypatch)
+    solve_path = run / "solve_report.json"
+    solve = json.loads(solve_path.read_text())
+    solve["acceptance_policy"] = {"required": False}
+    solve_path.write_text(json.dumps(solve))
+    assert _resume(run, path) == 2
+    assert "unsupported solve acceptance policy" in _refusal(capsys)
+
+
+def test_a_missing_or_unsupported_declared_exit_is_refused(
+        tmp_path, monkeypatch, capsys):
+    """The re-entry re-runs the ORIGINAL declared route; an exit that is not a
+    flow step is not a route this operation can re-enter."""
+    run, stuck, signed, path, request = _stuck_request(tmp_path, monkeypatch)
+    _declare_exit(run, "not-a-flow-step")
+    assert _resume(run, path) == 2
+    assert "missing or unsupported declared exit" in _refusal(capsys)
+
+
+def test_a_benchmark_with_no_bound_io_adapter_is_refused(
+        tmp_path, monkeypatch, capsys):
+    run, stuck, signed, path, request = _stuck_request(tmp_path, monkeypatch)
+    assert bd.cmd_resume("not-a-benchmark", "/unused", str(run),
+                         worker_threads=1, program_regate=str(path)) == 2
+    assert "no bound IO adapter" in _refusal(capsys)
+
+
+# --- the preserved input, in both its records --------------------------
+
+def test_a_pre_gate_binding_that_names_another_pair_is_refused(
+        tmp_path, monkeypatch, capsys):
+    run, stuck, signed, path, request = _stuck_request(tmp_path, monkeypatch)
+    binding = dict(stuck["pre_gate_input"], gate_output_sha256="0" * 64)
+    _rebind(run, stuck, request, path, pre_gate_input=binding)
+    assert _resume(run, path) == 2
+    assert "preserved pre-gate binding does not name this task's pair" in \
+        _refusal(capsys)
+
+
+def _repoint_pre_gate(run, stuck, request, path, **manifest_changes):
+    """Point the task's pre-gate record at a REWRITTEN manifest inside the run."""
+    original = Path(stuck["pre_gate_input"]["input_manifest_path"])
+    manifest = dict(json.loads(original.read_text()), **manifest_changes)
+    forged = Path(run) / f"forged_manifest_{len(list(Path(run).glob('forged_*')))}.json"
+    manifest["manifest_path"] = str(forged)
+    forged.write_text(json.dumps(manifest))
+    binding = dict(stuck["pre_gate_input"], input_manifest_path=str(forged))
+    return _rebind(run, stuck, request, path, pre_gate_input=binding)
+
+
+def test_a_preserved_manifest_for_another_task_is_refused(
+        tmp_path, monkeypatch, capsys):
+    run, stuck, signed, path, request = _stuck_request(tmp_path, monkeypatch)
+    _repoint_pre_gate(run, stuck, request, path, id="p9")
+    assert _resume(run, path) == 2
+    assert "preserved input manifest does not match the request" in _refusal(capsys)
+
+
+def test_a_preserved_manifest_with_no_rtl_is_refused(
+        tmp_path, monkeypatch, capsys):
+    run, stuck, signed, path, request = _stuck_request(tmp_path, monkeypatch)
+    _repoint_pre_gate(run, stuck, request, path, rtl_paths=[], source_rtl_paths=[])
+    assert _resume(run, path) == 2
+    assert "preserved input has no RTL" in _refusal(capsys)
+
+
+def test_an_internally_inconsistent_preserved_manifest_is_refused(
+        tmp_path, monkeypatch, capsys):
+    """One frozen file per source file, or the manifest does not describe a
+    file set anyone can map back onto the work tree."""
+    run, stuck, signed, path, request = _stuck_request(tmp_path, monkeypatch)
+    original = json.loads(
+        Path(stuck["pre_gate_input"]["input_manifest_path"]).read_text())
+    _repoint_pre_gate(run, stuck, request, path,
+                      source_rtl_paths=original["source_rtl_paths"] * 2)
+    assert _resume(run, path) == 2
+    assert "preserved input manifest is internally inconsistent" in _refusal(capsys)
+
+
+def test_a_preserved_input_that_does_not_cover_the_work_tree_is_refused(
+        tmp_path, monkeypatch, capsys):
+    run, stuck, signed, path, request = _stuck_request(tmp_path, monkeypatch)
+    original = json.loads(
+        Path(stuck["pre_gate_input"]["input_manifest_path"]).read_text())
+    _repoint_pre_gate(run, stuck, request, path,
+                      rtl_paths=original["rtl_paths"] * 2,
+                      source_rtl_paths=original["source_rtl_paths"] * 2)
+    assert _resume(run, path) == 2
+    assert "preserved input does not cover the working RTL file set" in _refusal(capsys)
+
+
+def test_a_request_input_differing_from_the_automatic_snapshot_is_refused(
+        tmp_path, monkeypatch, capsys):
+    """The repair boundary preserved the input automatically. A request that
+    names a DIFFERENT record -- even a well-formed one -- is asking the
+    operation to re-enter from bytes nobody froze at the gate boundary."""
+    run, stuck, signed, path, request = _stuck_request(tmp_path, monkeypatch)
+    original = Path(request["input_manifest_path"])
+    candidate = json.loads(original.read_text())
+    copied = Path(run) / "copied_candidate_manifest.json"
+    candidate["manifest_path"] = str(copied)
+    copied.write_text(json.dumps(candidate))
+    _rewrite(request, path, input_manifest_path=str(copied),
+             input_manifest_sha256=_hash(copied))
+    assert _resume(run, path) == 2
+    assert "request differs from automatically preserved input" in _refusal(capsys)
+
+
+# --- the inherited proof obligations ----------------------------------
+
+def test_a_task_with_no_inherited_challenges_is_refused(
+        tmp_path, monkeypatch, capsys):
+    run, stuck, signed, path, request = _stuck_request(tmp_path, monkeypatch)
+    _rebind(run, stuck, request, path, verification_challenges=[])
+    assert _resume(run, path) == 2
+    assert "missing inherited challenges" in _refusal(capsys)
+
+
+def test_a_signed_challenge_that_is_not_inherited_is_refused(
+        tmp_path, monkeypatch, capsys):
+    """The test the author's repair was signed against must travel with it."""
+    run, stuck, signed, path, request = _stuck_request(tmp_path, monkeypatch)
+    provenance = dict(stuck["repair_provenance"], challenge_sha256="0" * 64)
+    _rebind(run, stuck, request, path, repair_provenance=provenance)
+    assert _resume(run, path) == 2
+    assert "signed challenge is not inherited" in _refusal(capsys)
+
+
+def test_a_drifted_signed_input_provenance_is_refused(
+        tmp_path, monkeypatch, capsys):
+    run, stuck, signed, path, request = _stuck_request(tmp_path, monkeypatch)
+    provenance = dict(stuck["repair_provenance"],
+                      unexpected_field="not in the validated record")
+    _rebind(run, stuck, request, path, repair_provenance=provenance)
+    assert _resume(run, path) == 2
+    assert "signed input provenance drift" in _refusal(capsys)
+
+
+# --- the bound current review/test ------------------------------------
+
+def test_a_current_review_that_is_not_exactly_bound_is_refused(
+        tmp_path, monkeypatch, capsys):
+    run, old, path, request, state = _case(tmp_path, monkeypatch, reviewed=True)
+    _rewrite(request, path, review_sha256="0" * 64)
+    assert _resume(run, path) == 2
+    assert "current review/test is not exactly bound" in _refusal(capsys)
+
+
+def test_an_invalid_current_challenge_is_refused(tmp_path, monkeypatch, capsys):
+    """The proof being carried forward has to be a well-formed one; its own
+    validation reasons are quoted rather than replaced by a summary."""
+    run, old, path, request, state = _case(tmp_path, monkeypatch, reviewed=True)
+    review = json.loads(Path(old["review_path"]).read_text())
+    review["verification_test"]["rationale"] = "too short to explain anything"
+    raw = json.dumps(review)
+    Path(old["review_path"]).write_text(raw)
+    _rewrite(request, path, review_sha256=bd._sha256_text(raw))
+    assert _resume(run, path) == 2
+    assert "invalid current challenge" in _refusal(capsys)
+
+
+def test_a_request_binding_a_review_that_does_not_exist_is_refused(
+        tmp_path, monkeypatch, capsys):
+    """The stuck task has no current review. A request that binds one is
+    describing evidence that is not there -- never treated as "no review"."""
+    run, stuck, signed, _, _ = _stuck(tmp_path, monkeypatch)
+    assert not Path(stuck["review_path"]).exists()
+    path, _ = _request(run, stuck, signed, review_sha256="0" * 64)
+    assert _resume(run, path) == 2
+    assert "bound current review/test is missing" in _refusal(capsys)
+
+
+# --- occupied destinations --------------------------------------------
+
+def test_an_occupied_re_entry_archive_is_refused(tmp_path, monkeypatch, capsys):
+    run, stuck, signed, path, request = _stuck_request(tmp_path, monkeypatch)
+    archive = (run / "program_regates" / "p1" / bd._sha256_text(path.read_text()))
+    archive.mkdir(parents=True)
+    assert _resume(run, path) == 2
+    assert "occupied re-entry archive or fresh review/test path" in _refusal(capsys)
+
+
+def test_a_task_that_also_has_a_pending_ai_backup_is_refused(
+        tmp_path, monkeypatch, capsys):
+    """Two open routes for one task is the ambiguity this operation refuses to
+    resolve on the owner's behalf."""
+    run, stuck, signed, path, request = _stuck_request(tmp_path, monkeypatch)
+    bd._write_jsonl(run / bd._BACKUP_WORKLIST, [{"id": "p1"}])
+    assert _resume(run, path) == 2
+    assert "task also has a pending AI backup" in _refusal(capsys)
+
+
+# --- the staged re-run, and the windows around its promotion ----------
+#
+# The last six refusals guard the staged run and the two TOCTOU windows around
+# promotion.  A window guard is only reachable by something changing state
+# INSIDE the window, so these model exactly that -- a concurrent writer, or a
+# staged copy that did not come out as the signed input.  That is what the
+# refusal is for; reaching it any other way would not be reaching it.
+
+def _candidate_root(run, request_path, staged):
+    """The fresh snapshot path the operation is about to claim."""
+    key = "program-regate-" + bd._sha256_text(Path(request_path).read_text())
+    got = fx.bio.collect("rtllm", "p1", Path(staged), supplied_rtl=True)
+    return (Path(run) / "candidate_snapshots" / "p1"
+            / f"{key}-{bd._sha256_text(str(got.get('completion') or ''))}")
+
+
+def test_a_staged_copy_that_is_not_the_signed_input_is_refused(
+        tmp_path, monkeypatch, capsys):
+    """The whole operation is "re-run the Program on the bytes the author
+    signed". If the staged tree does not hash to those bytes, whatever is
+    about to be re-run is not the signed input."""
+    run, old, path, request, state = _case(tmp_path, monkeypatch)
+    real = bd._atomic_write_text
+
+    def corrupt(target, text):
+        if "staged_project" in str(target):
+            text = text + "\n// a concurrent writer\n"
+        return real(target, text)
+
+    monkeypatch.setattr(bd, "_atomic_write_text", corrupt)
+    before = _protected(run, old)
+    assert _resume(run, path) == 2
+    assert "staged work tree does not hash to the signed input" in _refusal(capsys)
+    assert _protected(run, old) == before
+    assert state["calls"] == []
+
+
+def test_a_program_that_rewrites_the_bound_prompt_is_refused(
+        tmp_path, monkeypatch, capsys):
+    """The prompt and the Phase-1 inputs are the DESIGN INPUT. A Program that
+    edits them has changed the question, not answered it."""
+    run, old, path, request, state = _case(tmp_path, monkeypatch)
+
+    def rewrite_prompt(staged):
+        (staged / "input" / "phase1_prompt.md").write_text("a different design\n")
+
+    state["on_run"] = rewrite_prompt
+    before = _protected(run, old)
+    assert _resume(run, path) == 2
+    assert "Program changed bound prompt or Phase-1 inputs" in _refusal(capsys)
+    assert _protected(run, old) == before
+
+
+def test_an_occupied_fresh_candidate_snapshot_is_refused(
+        tmp_path, monkeypatch, capsys):
+    run, old, path, request, state = _case(tmp_path, monkeypatch)
+
+    def occupy(staged):
+        _candidate_root(run, path, staged).mkdir(parents=True, exist_ok=True)
+
+    state["on_run"] = occupy
+    before = _protected(run, old)
+    assert _resume(run, path) == 2
+    assert "occupied fresh candidate snapshot" in _refusal(capsys)
+    assert _protected(run, old) == before
+
+
+def test_a_publication_appearing_during_preparation_is_refused(
+        tmp_path, monkeypatch, capsys):
+    """The candidate was unpublished when the operation started. If it is
+    published while the Program runs, promoting over it would silently
+    supersede a published result."""
+    run, old, path, request, state = _case(tmp_path, monkeypatch)
+
+    def publish(_):
+        response = Path(old["response_path"])
+        response.parent.mkdir(parents=True, exist_ok=True)
+        response.write_text("published by someone else")
+
+    state["on_run"] = publish
+    assert _resume(run, path) == 2
+    assert "publication or fresh review/test path occupied during preparation" \
+        in _refusal(capsys)
+    assert bd._read_jsonl(run / bd._REVIEW_WORKLIST)[0] == old
+
+
+def test_a_staged_output_changing_while_promotion_is_prepared_is_refused(
+        tmp_path, monkeypatch, capsys):
+    """Between freezing the staged output and promoting a copy of it, the two
+    must still be the same tree -- otherwise what gets promoted is not what
+    was gated."""
+    run, old, path, request, state = _case(tmp_path, monkeypatch)
+    real = bd.shutil.copytree
+
+    def copy_then_disturb(*args, **kwargs):
+        # shutil recurses into copytree positionally, so take *args and act
+        # only on OUR call, identified by the promotion copy's target name.
+        result = real(*args, **kwargs)
+        source, target = args[0], args[1]
+        if Path(target).name == "promotion_project":
+            (Path(source) / "phase2/stage1/rtl/dut.v").write_text(
+                "module dut(); endmodule\n")
+        return result
+
+    monkeypatch.setattr(bd.shutil, "copytree", copy_then_disturb)
+    before = _protected(run, old)
+    assert _resume(run, path) == 2
+    assert "staged output changed while preparing promotion" in _refusal(capsys)
+    assert _protected(run, old) == before
+
+
+def test_a_candidate_snapshot_claimed_during_preparation_is_refused(
+        tmp_path, monkeypatch, capsys):
+    """The snapshot path was free when it was first checked. Claiming it in
+    the window before promotion must refuse, not overwrite."""
+    run, old, path, request, state = _case(tmp_path, monkeypatch)
+    real = bd.shutil.copytree
+
+    def copy_then_claim(*args, **kwargs):
+        # shutil recurses into copytree positionally, so take *args and act
+        # only on OUR call, identified by the promotion copy's target name.
+        result = real(*args, **kwargs)
+        source, target = args[0], args[1]
+        if Path(target).name == "promotion_project":
+            _candidate_root(run, path, source).mkdir(parents=True, exist_ok=True)
+        return result
+
+    monkeypatch.setattr(bd.shutil, "copytree", copy_then_claim)
+    before = _protected(run, old)
+    assert _resume(run, path) == 2
+    assert "fresh candidate snapshot occupied during preparation" in _refusal(capsys)
+    assert _protected(run, old) == before
+
+
+def test_a_task_missing_a_candidate_snapshot_is_refused(
+        tmp_path, monkeypatch, capsys):
+    """Three immutable candidate snapshots are read before anything is staged.
+    An absent one is refused by NAME, not answered by the record validator's
+    "candidate snapshot is absent" further in -- the operation must not get as
+    far as validating a record that is not there."""
+    run, stuck, signed, path, request = _stuck_request(tmp_path, monkeypatch)
+    _rebind(run, stuck, request, path, program_candidate_snapshot=None)
+    assert _resume(run, path) == 2
+    assert "missing candidate snapshot" in _refusal(capsys)
+
+
+def test_a_bound_source_changing_during_preparation_is_refused(
+        tmp_path, monkeypatch, capsys):
+    """The message half of `test_staged_failure_and_interruption_are_safe
+    [source_drift]`: every file the operation bound is re-hashed before the
+    one authoritative commit, and the refusal NAMES the file that moved."""
+    run, old, path, request, state = _case(tmp_path, monkeypatch)
+    working = Path(old["working_rtl_paths"][0])
+    state["on_run"] = lambda _: working.write_text("owner edit during the run\n")
+    assert _resume(run, path) == 2
+    err = _refusal(capsys)
+    assert "source changed during preparation" in err
+    assert str(working) in err, err
+    assert bd._read_jsonl(run / bd._REVIEW_WORKLIST)[0] == old
