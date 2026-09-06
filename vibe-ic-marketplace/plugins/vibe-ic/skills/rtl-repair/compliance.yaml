@@ -1,6 +1,16 @@
 # Testability level (v0.50 hybrid strategy — see _shared/TESTING_STRATEGY.md)
 testability: structured
 
+# #2050. output_type MEASURED, not assumed. This skill's declared deliverable
+# is a Markdown `# RTL Repair` report; the patch is quoted INSIDE it. A
+# document cannot carry the RTL `// Post-checks:` header that
+# `postcheck_pass_only` looks for: it can only be TYPED into one, never
+# measured on it. No SKILL.md in this plugin documents emitting that header
+# (zero of 70, measured), and this skill's own required patterns are Markdown
+# headings. The cross-checks below are therefore bound to their auditors' own
+# receipts, exactly as #2048 did for rtl-review.
+output_type: report
+
 # Auto-generated compliance spec for skill 'rtl-repair'
 # Refines vibe-ic/skills/rtl-repair/SKILL.md output requirements.
 skill: rtl-repair
@@ -30,4 +40,12 @@ requirements:
 cross_checks:
   - id: X_output_artifact_check
     description: "Verify repaired RTL exists on disk"
-    rule: postcheck_pass_only
+    rule: audit_receipt_evidence
+    auditor: output_artifact_check
+  # The other half of the output_type pairing (#2048). Repointing the audits
+  # above removes the reason to paste the RTL header; this keeps pasting one a
+  # failure, so a fabricated `// Post-checks:` line in this report cannot pass
+  # unremarked now that nothing else reacts to it.
+  - id: X_text_only_skill
+    description: "rtl-repair emits a report document, not RTL."
+    rule: text_only_report

@@ -102,16 +102,25 @@ requirements:
     pattern: 'PROVENANCE\.md'
     skill_section: 'Usage'
 
-postchecks:
-  # NOTE: both postchecks below use the `postcheck_pass_only` rule, which
-  # currently only matches on RTL `// Post-checks:` headers. When applied
-  # to a Markdown SKILL.md input the rule returns no findings = PASS.
-  # This is a no-op on SKILL.md — the round-trip / CLI-import checks must
-  # be re-implemented as dedicated postcheck rules (tracked as
-  # shared-compliance-engine fix, not part of the phase1 skill itself).
-  - id: X_cli_importable
-    description: "tools/phase1_engine/ module must be importable"
-    rule: postcheck_pass_only
-  - id: X_round_trip_byte_identical
-    description: "Reverse-extract + re-render of any prior <benchmark> benchmark must produce semantically identical L*.json"
-    rule: postcheck_pass_only
+# #2050 — a `postchecks:` key used to sit here. `audit()` reads exactly
+# `output_type`, `requirements` and `cross_checks`; it has never read
+# `postchecks`, so the two entries under it were DEAD, not no-op-passing as
+# the note beside them claimed, and they had never run once. The key is gone
+# rather than moved, because neither obligation is a property of a DOCUMENT
+# and `audit()` can only read the audited document's text. Both were carried
+# to where they can actually be executed, and neither was dropped:
+#
+#   X_cli_importable            — already discharged, and was before this
+#     change: `tools/phase1_engine/tests/` imports cli, ingest, render,
+#     schema and gap_detect directly, so a broken module fails those tests.
+#     `programs/tests/test_phase1_dead_postchecks_key.py` states the
+#     obligation by name so it is findable from here.
+#   X_round_trip_byte_identical — MEASURED, and it does NOT hold today.
+#     `cli round-trip` over a checked-in 24-layer `generated_docs/` re-renders
+#     14 files, identically on three separate fixtures. Cause, read off the
+#     code and not guessed: `ingest.from_existing_docs` iterates
+#     `schema.ALL_LAYER_CODES` (L1..L13, 14 codes) while `render_layers` can
+#     write `GENERATABLE_LAYER_CODES` (28), so the opt-in advanced layers
+#     L14..L27 are written by Phase 1 and then dropped by the reverse-extract
+#     without a word. The same test file pins that shortfall by name, so it is
+#     a number a reader can shrink rather than a claim in a key nobody read.

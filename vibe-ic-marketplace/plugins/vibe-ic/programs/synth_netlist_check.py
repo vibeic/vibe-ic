@@ -52,6 +52,9 @@ from dataclasses import dataclass, asdict
 from pathlib import Path, PurePosixPath
 from typing import Dict, List, Optional, Set, Tuple
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _audit_receipt import emit_receipt  # noqa: E402
+
 
 # ---------------------------------------------------------------------------
 # Data structures
@@ -1001,6 +1004,19 @@ def main(argv: list = None) -> int:
     if args.json:
         Path(args.json).parent.mkdir(parents=True, exist_ok=True)
         Path(args.json).write_text(report_json)
+        # #2050 — producer-written receipt (see programs/_audit_receipt.py).
+        # The subject is the netlist AND every RTL file it was judged against,
+        # so a receipt taken before an RTL edit does not read as backing for
+        # the netlist after it. `examined` counts the cells the verdict is
+        # about; an unreadable netlist is a FAIL over 0 cells, and the
+        # compliance checker reports that as FAIL, not as an empty audit.
+        emit_receipt(
+            'synth_netlist_check', args.json,
+            'PASS' if report["summary"]["pass"] else 'FAIL',
+            int(stats.get("total_cells") or 0),
+            [netlist_path] + [Path(x) for x in args.rtl],
+            extra={'unique_cell_types': stats.get("unique_cell_types"),
+                   'min_cells': args.min_cells})
 
     print(report_json)
     return 0 if report["summary"]["pass"] else 1

@@ -33,6 +33,9 @@ from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import List, Tuple
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _audit_receipt import emit_receipt  # noqa: E402
+
 
 # ---------------------------------------------------------------------------
 # Data structures
@@ -163,6 +166,18 @@ def main(argv: list = None) -> int:
     if args.json:
         Path(args.json).parent.mkdir(parents=True, exist_ok=True)
         Path(args.json).write_text(report_json)
+        # #2050 — the receipt convention, written by the producer. `--json` is
+        # caller-chosen, so this program had no name for the compliance
+        # checker to look for and its obligation BLOCKED. `examined` is 1
+        # because the declared population is exactly the one GDS path named
+        # on the command line, never zero: an absent file is a measured FAIL
+        # over that one path, not an audit of nothing.
+        emit_receipt(
+            'gds_size_check', args.json,
+            'PASS' if report["summary"]["pass"] else 'FAIL',
+            1, [gds_path],
+            extra={'file_size_kb': stats["file_size_kb"],
+                   'min_size_kb': stats["min_size_kb"]})
 
     print(report_json)
     return 0 if report["summary"]["pass"] else 1

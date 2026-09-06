@@ -36,6 +36,9 @@ from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import List, Optional, Tuple
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _audit_receipt import emit_receipt  # noqa: E402
+
 
 # ---------------------------------------------------------------------------
 # Data structures
@@ -228,6 +231,16 @@ def main(argv: list = None) -> int:
     if args.json:
         Path(args.json).parent.mkdir(parents=True, exist_ok=True)
         Path(args.json).write_text(report_json)
+        # #2050 — producer-written receipt (see programs/_audit_receipt.py).
+        # `examined` is the log's line count: a zero-line log that matched no
+        # reject pattern is a pass over nothing, and must not read as a tool
+        # log that was checked.
+        emit_receipt(
+            'eda_log_check', args.json,
+            'PASS' if report["summary"]["pass"] else 'FAIL',
+            int(info["line_count"] or 0), [log_file],
+            extra={'expect_matched': info["expect_matched"],
+                   'reject_matched': info["reject_matched"]})
 
     print(report_json)
     return 0 if report["summary"]["pass"] else 1
