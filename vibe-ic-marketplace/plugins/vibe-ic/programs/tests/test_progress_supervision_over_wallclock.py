@@ -581,11 +581,18 @@ def test_the_declared_lec_budget_is_still_read_from_the_producer():
 # 3c. THE SECOND-ORDER CONSEQUENCES OF REMOVING A DEADLINE. Both were made
 #     REACHABLE by this lane's own change, so both are this lane's to close.
 # ---------------------------------------------------------------------------
-def _spent_budget(total_s, elapsed_s):
-    """A StepBudget with one recorded attempt and `elapsed_s` on its clock."""
+def _spent_budget(total_s, elapsed_s, killed=False):
+    """A StepBudget with one recorded attempt and `elapsed_s` on its clock.
+
+    `killed` is the attempt's `killed_by_budget`. It used to be hard-wired
+    False for every caller, which was invisible while `annotate_step_budget`
+    decided "was this run stopped?" from the VERDICT WORD. It no longer does
+    (an INCONCLUSIVE completion is a decided outcome, not a clock), so a
+    fixture that means "the clock ended it" now has to SAY so.
+    """
     now = [0.0]
     b = lec_run.StepBudget(total_s, clock=lambda: now[0])
-    b.record("verilog", "", total_s, elapsed_s, True, False)
+    b.record("verilog", "", total_s, elapsed_s, True, killed)
     now[0] = elapsed_s
     return b
 
@@ -616,14 +623,96 @@ def test_a_spent_admission_budget_does_not_contradict_a_verdict():
 
 def test_a_spent_budget_with_no_verdict_still_says_nothing_was_decided():
     """The other direction. The disclosure that mattered must survive: when no
-    attempt reached a verdict, the report must still say so in those words."""
-    b = _spent_budget(7200, 10800.0)
+    attempt reached a verdict, the report must still say so in those words.
+
+    The fixture now DECLARES the stop it always described in prose
+    (`killed=True`). Nothing in this test's assertions changed; what changed is
+    that the run's stopped-ness is stated as an observable instead of being
+    inferred from the word INCONCLUSIVE — which is the defect its sibling below
+    exists to pin.
+    """
+    b = _spent_budget(7200, 10800.0, killed=True)
     rep = lec_run.annotate_step_budget(
         {"verdict": "INCONCLUSIVE", "equivalent": False,
          "verdict_explanation": "stopped before any completed equiv_status"}, b)
     ex = rep["verdict_explanation"]
     assert "neither proven equivalent nor proven different" in ex
     assert "no attempt reached a verdict" in ex
+    assert rep["step_budget_stopped_this_proof"] is True
+
+
+def test_an_inconclusive_that_COMPLETED_is_decided_not_a_clock():
+    """MEASURED (opentitan_aes x sky130A, ceiling removed; reproduced on 8HD-9
+    on a 9-point miter with a 1s ADMISSION budget). The proof ran to completion
+    through `equiv_induct -seq 64` — rc 0, `killed_by_budget: false`, a closing
+    equiv_status, 830 of 4072 points proven, ZERO counterexamples, cause "SAT
+    base case could not be established" — and lec.json still said
+
+        "no attempt reached a verdict. The resource that ran out is WALL-CLOCK
+         TIME ... Raise --timeout"
+
+    because the branch keyed on `verdict in ("PASS", "FAIL")`. INCONCLUSIVE is
+    the THIRD decided state and the one nearly every large sequential design
+    lands on, so the test excluded exactly the population it most needed to
+    describe — and prescribed buying time that could not help.
+    """
+    b = _spent_budget(7200, 10800.0, killed=False)
+    rep = lec_run.annotate_step_budget(
+        {"verdict": "INCONCLUSIVE", "equivalent": False,
+         "miter_points": 4072, "compared_points": 830,
+         "unproven_points": 3242, "non_equivalent_points": 0,
+         "verdict_explanation":
+             "830/4072 proven — equiv_induct SAT base case could not be "
+             "established (Circuit inherently diverges)"}, b)
+    ex = rep["verdict_explanation"]
+    assert "no attempt reached a verdict" not in ex, (
+        "a proof that ran the whole ladder and decided is reported as having "
+        "decided nothing:\n" + ex)
+    assert "The resource that ran out is WALL-CLOCK TIME" not in ex
+    assert "Raise --timeout" not in ex, (
+        "the report prescribes more wall clock for an engine limit more time "
+        "cannot move:\n" + ex)
+    assert "bounds attempts, not runtime" in ex
+    assert "830 proven, 3242 unproven, 0 counterexample(s)" in ex, (
+        "the decided narrative does not carry the counts the verdict rests on")
+    assert "the ENGINE's" in ex
+    assert rep["step_budget_stopped_this_proof"] is False
+    # The machine-readable admission-budget facts are UNCHANGED: the budget
+    # really was spent. What was missing is the field that says whether it
+    # stopped THIS proof.
+    assert rep["step_budget_exhausted"] is True
+    assert rep["exhausted_resource"] == "wall_clock_seconds"
+
+
+def test_a_frontend_abort_is_not_told_that_a_ladder_ran():
+    """The other half of the same asymmetry. A zero-miter frontend abort is
+    also "not stopped", and the decided narrative must NOT claim for it a
+    ladder that never ran — the same unearned sentence in the other
+    direction."""
+    b = _spent_budget(7200, 10800.0, killed=False)
+    rep = lec_run.annotate_step_budget(
+        {"verdict": "INCONCLUSIVE", "equivalent": False,
+         "miter_points": None, "compared_points": 0, "unproven_points": 0,
+         "non_equivalent_points": 0,
+         "verdict_explanation": "Yosys built NO equivalence miter"}, b)
+    ex = rep["verdict_explanation"]
+    assert "the ladder ran to a closing equiv_status" not in ex, ex
+    assert "bounds attempts, not runtime" in ex
+
+
+def test_the_clock_narrative_is_still_reachable_when_the_clock_did_it():
+    """POSITIVE CONTROL for the negatives above: with the stop OBSERVED, the
+    wall-clock sentence must still be produced. A fix that simply deleted it
+    would pass every assertion in the two tests above."""
+    b = _spent_budget(7200, 10800.0, killed=False)
+    rep = lec_run.annotate_step_budget(
+        {"verdict": "INCONCLUSIVE", "equivalent": False,
+         "miter_points": 4072, "compared_points": 830, "unproven_points": 3242,
+         "non_equivalent_points": 0, "verdict_explanation": "cut off"},
+        b, stopped=True)
+    assert "The resource that ran out is WALL-CLOCK TIME" in \
+        rep["verdict_explanation"]
+    assert rep["step_budget_stopped_this_proof"] is True
 
 
 def test_an_unspent_budget_appends_nothing_at_all():
