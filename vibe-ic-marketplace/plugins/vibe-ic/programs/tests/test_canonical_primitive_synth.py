@@ -753,3 +753,86 @@ def test_the_l12_gate_really_can_see_that_directory(tmp_path):
         (proj / "reports" / "phase2" / "gates" / "l12_tb_coverage.json").read_text())
     assert report["covered_sequences"] == 1, run.stdout + run.stderr
     assert run.returncode == 0
+
+
+# ============================================================================
+# WHAT A DETECTOR NEVER LOOKS AT, IT CANNOT REFUSE.
+#
+# `barrel_left` -- an input matching the barrel-shifter detector while asking for
+# a shift in the other direction -- is still answered with the right-shift
+# template, and three attempts to close that measured why it is not free:
+#
+#   1. prose-derived behavioural poles are unreliable: scanning the sixteen
+#      templates' own header comments for six polar pairs, ieee754 reads as
+#      "left shift"/"signed" from incidental mantissa wording and two more read
+#      as BOTH poles of signedness -- 2 of 16 misleading before any input;
+#   2. code-derived shift direction is an IMPLEMENTATION detail, not the block's
+#      behaviour: of the five templates that yield an unambiguous pole from
+#      their code, three (gray-code FIFO, partial-product multiplier, restoring
+#      divider) shift internally for reasons unrelated to what they promise;
+#   3. the general table-free rule -- "if the input states a polar dimension the
+#      matched detector never examines, DEFER" -- costs exactly one canonical
+#      shape: parallel_to_serial_4's description states MSB-first and its
+#      detector examines conversion wording, not bit order.
+#
+# That price is a decision, not a defect, so nothing here changes behaviour. What
+# this test DOES do is stop the blindness growing silently: a new shape, or an
+# edited detector, that leaves a stated polar dimension unexamined fails here and
+# has to be looked at by a person.
+# ============================================================================
+
+_POLAR_DIMENSIONS = {
+    "shift_direction": ("left", "right"),
+    "bit_order": ("msb", "lsb", "most significant", "least significant"),
+    "signedness": ("signed", "unsigned"),
+    "clock_edge": ("rising edge", "falling edge", "posedge", "negedge",
+                   "double-edge"),
+}
+
+# The one known blind spot, named rather than tolerated silently. Its template IS
+# MSB-first, so today's answer is right; nothing checks that it stays right.
+_KNOWN_UNEXAMINED = {("parallel_to_serial_4", "bit_order")}
+
+
+def _detector_literals(shape):
+    """Every string literal the detector for `shape` tests, read from source.
+
+    Introspection, not a hand-maintained list: an edited detector moves this on
+    its own."""
+    import ast as _ast
+    fn_name = dict(rcs._DETECTORS)[shape].__name__
+    src = (PROGRAMS / "canonical_primitive_synth.py").read_text()
+    for node in _ast.parse(src).body:
+        if isinstance(node, _ast.FunctionDef) and node.name == fn_name:
+            return {n.value.lower() for n in _ast.walk(node)
+                    if isinstance(n, _ast.Constant) and isinstance(n.value, str)}
+    raise AssertionError(f"detector source for {shape} not found")
+
+
+@pytest.mark.parametrize("shape,desc", _INLINE_POS.items())
+def test_a_stated_polar_dimension_is_one_the_detector_examines(shape, desc):
+    examined = " | ".join(sorted(_detector_literals(shape)))
+    low = desc.lower()
+    for dim, words in _POLAR_DIMENSIONS.items():
+        if not any(w in low for w in words):
+            continue                      # the input states nothing here
+        if (shape, dim) in _KNOWN_UNEXAMINED:
+            continue                      # the recorded exception, above
+        assert any(w in examined for w in words), (
+            f"{shape} answers a description that states {dim}, but its detector "
+            f"never examines that dimension: an input stating the other pole "
+            f"would get this template anyway")
+
+
+def test_the_known_blind_spot_is_still_exactly_one():
+    """If this fails, a shape has been added or a detector edited so that the
+    blindness above grew. That is the moment to take the decision, not later."""
+    blind = set()
+    for shape, desc in _INLINE_POS.items():
+        examined = " | ".join(sorted(_detector_literals(shape)))
+        low = desc.lower()
+        for dim, words in _POLAR_DIMENSIONS.items():
+            if any(w in low for w in words) and not any(w in examined
+                                                        for w in words):
+                blind.add((shape, dim))
+    assert blind == _KNOWN_UNEXAMINED
