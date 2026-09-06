@@ -313,8 +313,12 @@ def test_preflight_refusal_leaves_the_original_container_untouched(tmp_path):
          "Target": "/gone"}]))
     r = h.run()
     assert r.returncode == 4, (r.returncode, r.stderr)
+    # #2038's acceptance is explicit: an invalid preflight must not REMOVE or
+    # STOP the original container. `stop` was missing from this list until the
+    # issue's wording was re-read against it.
     verbs = [c[0] for c in h.calls()]
-    assert "rm" not in verbs and "rename" not in verbs and "run" not in verbs, verbs
+    for destructive in ("rm", "rename", "stop", "run", "kill"):
+        assert destructive not in verbs, (destructive, verbs)
 
 
 def test_old_container_is_kept_until_readback_passes(tmp_path):
@@ -436,3 +440,6 @@ class TestFreshContainerBranch:
         assert "does not exist" in r.stderr
         assert not absent.exists(), "the refusal created the directory it refused"
         assert h.run_argv() is None
+        verbs = [c[0] for c in h.calls()]
+        for destructive in ("rm", "rename", "stop", "run", "kill"):
+            assert destructive not in verbs, (destructive, verbs)
