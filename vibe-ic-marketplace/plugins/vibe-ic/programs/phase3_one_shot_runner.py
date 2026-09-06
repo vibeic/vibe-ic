@@ -39316,13 +39316,27 @@ _DECLARED_SIGNOFF_GATES = (
     # all seven published layouts carry GUARD_RING_MK = 0 and not one matches
     # any slot, and no run ever said so.
     #
-    # IT TAKES NO ARGV, AND THAT IS THE POINT. `--pdk` already resolved itself
-    # from the design's own declaration (`resolve_pdk`); `--slot` now does the
-    # same (`resolve_slot`) instead of defaulting to "1x1" and handing a slot
-    # the design never bought to the one arm we cannot edit. This table cannot
-    # pass per-run values — `step_declared_signoff_gates` takes only `project`
-    # — so a gate that needed them would have had to be given a default, which
-    # is the defect, not the fix.
+    # ITS ARGV TAIL IS EMPTY HERE, AND `--pdk` IS FORWARDED AT THE CALL SITE.
+    # `--slot` still resolves itself (`resolve_slot`) rather than defaulting to
+    # "1x1" and handing a slot the design never bought to the one arm we cannot
+    # edit. `--pdk` cannot: this table is a module CONSTANT and the PDK is
+    # resolved per RUN, so the value is forwarded by
+    # `step_declared_signoff_gates` — see `_PDK_AWARE_SIGNOFF_GATES` below.
+    #
+    # THIS COMMENT USED TO SAY "IT TAKES NO ARGV, AND THAT IS THE POINT",
+    # on the grounds that `--pdk` "already resolved itself from the design's own
+    # declaration". MEASURED (lane czspmfp, spm x gf180mcuD, run invoked
+    # `--pdk gf180mcuD`): with nothing passed, `resolve_pdk` falls back to
+    # scraping the run's tool logs and yields the FAMILY, `gf180mcu`.
+    # `windows_for_pdk` then answers
+    #   gf180mcuD -> status=stated, 6 layers, metal1 min 0.30
+    #   gf180mcu  -> status=unknown-pdk, 0 layers
+    # (re-measured here on this tree). So `general_precheck` forwarded
+    # `gf180mcu` to `metal_layer_density_check`, all five metal layers came back
+    # UNCHECKED, and `Checker.KLayoutDensity` FAILED a die whose measured
+    # densities are 0.4175 .. 0.4594 — comfortably INSIDE the foundry's own
+    # 0.30 minimum. The gate did resolve a PDK; it resolved a LESS SPECIFIC one
+    # than the run was told to build, and "self-resolving" hid that.
     #
     # IT BREAKS THE "READS REPORTS ONLY" PROPERTY ABOVE, DELIBERATELY AND
     # NAMED. Five of these six read reports and cannot hit an ENV_UNAVAILABLE.
@@ -39529,10 +39543,41 @@ def _run_declared_signoff_gate(project: Path, name: str, program: str,
         name, t0, f"{reason} (rc={cp.returncode}): {detail}", outputs)
 
 
-def step_declared_signoff_gates(project: Path) -> List[StepResult]:
-    """Every flow-declared step-23/25 sign-off gate, one StepResult each."""
-    return [_run_declared_signoff_gate(project, *g) for g in
-            _DECLARED_SIGNOFF_GATES]
+#: Declared sign-off gates whose VERDICT can change when the run's PDK is named.
+#: A NAMED SET rather than "pass it to everything", for the same reason
+#: `general_precheck._PDK_AWARE_DELEGATES` is one: a gate that does not take
+#: `--pdk` would die on an unrecognised argument, and a gate that takes it but
+#: does not use it would gain a difference this table cannot account for.
+_PDK_AWARE_SIGNOFF_GATES = frozenset({"tapeout_precheck"})
+
+
+def step_declared_signoff_gates(project: Path,
+                                pdk_name: str = "") -> List[StepResult]:
+    """Every flow-declared step-23/25 sign-off gate, one StepResult each.
+
+    `pdk_name` is the run's OWN `PdkConfig.name` — the distribution the flow was
+    told to build (e.g. `gf180mcuD`), not a family. It is forwarded ONLY to the
+    gates in `_PDK_AWARE_SIGNOFF_GATES`, and only when it is non-empty, so every
+    other gate's argv is byte-identical to what it has always been and a caller
+    that does not supply it gets exactly the previous behaviour.
+
+    FORWARDED HERE RATHER THAN FROZEN INTO THE TABLE because the PDK is resolved
+    per RUN, not per step — the identical shape, and the identical reason, as
+    `general_precheck._step_delegate`, which records the same defect one level
+    down: "with no PDK named, `metal_layer_density_check` has no per-layer
+    windows, every metal layer comes back UNCHECKED and the step FAILs — on a
+    die whose densities were measured and are comfortably inside the foundry's
+    own rule."  NO SECOND RESOLVER: this passes the value the run already
+    resolved; `tapeout_precheck.resolve_pdk` still owns deciding what to do when
+    nobody says.
+    """
+    out: List[StepResult] = []
+    for name, program, out_rel, extra_argv in _DECLARED_SIGNOFF_GATES:
+        if pdk_name and name in _PDK_AWARE_SIGNOFF_GATES:
+            extra_argv = tuple(extra_argv) + ("--pdk", pdk_name)
+        out.append(_run_declared_signoff_gate(
+            project, name, program, out_rel, extra_argv))
+    return out
 
 
 #: Every step name this module plans as a DECLARED sign-off gate, in plan order.
@@ -52745,7 +52790,7 @@ def main() -> int:
     # what emits `phase3/stage3/sta/*.rpt` and `reports/phase3/em.rpt`, and
     # BEFORE the derived-artefact generators build the hand-off pack and
     # tape-out checklist on top of a sign-off nobody checked.
-    plan.extend(step_declared_signoff_gates(project))
+    plan.extend(step_declared_signoff_gates(project, pdk.name))
 
     # ORDERING (measured on `spm`, image 0.3.46, plugin v1.17.42): the
     # sign-off gates below WRITE three of the reports the sign-off metrics
