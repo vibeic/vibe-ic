@@ -557,6 +557,73 @@ _LOCALPARAM_DECL_RE = re.compile(
 _CLOG2_RE = re.compile(r"\$clog2\s*\(")
 
 
+#: A width bound may be SCOPE-QUALIFIED -- `[top_pkg::TL_DW-1:0]` is an ordinary
+#: SystemVerilog port width. `::` is not Python, so the AST evaluator below could
+#: not even PARSE such an expression and every scoped bound refused, no matter
+#: what the package said. The scope operator is rewritten to a name sequence
+#: before parsing, and the SAME rewrite is applied to the parameter map's keys,
+#: so `top_pkg::TL_DW` resolves exactly like an unscoped name -- and an unknown
+#: one still refuses by its FULL scoped name.
+#:
+#: The marker is checked for FIRST: if the text already contains it, the rewrite
+#: would be ambiguous, so the expression REFUSES rather than being mangled into
+#: something that means something else.
+_SCOPE_SEP = "__pkgscope__"
+_SCOPE_OP_RE = re.compile(r"\s*::\s*")
+
+
+def _mangle_scope(text: str) -> Optional[str]:
+    """`a::b` -> `a__pkgscope__b`, or None when the rewrite is not unambiguous."""
+    if _SCOPE_SEP in text:
+        return None
+    return _SCOPE_OP_RE.sub(_SCOPE_SEP, text)
+
+
+def _mangle_params(params: Dict[str, int]) -> Dict[str, int]:
+    """`params` with every scoped key rewritten the same way as an expression.
+
+    A key that cannot be rewritten unambiguously is DROPPED, so a width over it
+    refuses by name instead of resolving against a mangled near-miss.
+    """
+    out: Dict[str, int] = {}
+    for k, v in (params or {}).items():
+        mk = _mangle_scope(str(k))
+        if mk is not None:
+            out[mk] = v
+    return out
+
+
+#: VERILOG INTEGER DIVISION IS NOT PYTHON DIVISION. `localparam int RegBw =
+#: RegDw/8` is ordinary SystemVerilog and IEEE 1364 says `/` on integers
+#: TRUNCATES; Python's `/` yields a float, so the value came back non-integer
+#: and the constant -- and every width declared over it -- refused on a number
+#: the design states in full. `%` has the same problem. Both are rewritten to
+#: integer helpers before evaluation rather than added to the operator
+#: whitelist, so the arithmetic is Verilog's, not Python's.
+#:
+#: The table is `{name: arity}`. A call to anything not in it REFUSES: this
+#: stays an arithmetic evaluator over the design's own constants, and running
+#: the design's own FUNCTIONS (`prim_util_pkg::vbits(N)`) is not arithmetic.
+_CONST_FUNCS = {"clog2": 1, "idiv": 2, "imod": 2}
+
+
+def _idiv(a: int, b: int) -> int:
+    """IEEE 1364 integer `/`: truncate toward zero. Division by zero raises,
+    which the caller turns into a refusal."""
+    if b == 0:
+        raise ZeroDivisionError("integer division by zero")
+    q = abs(a) // abs(b)
+    return -q if (a < 0) != (b < 0) else q
+
+
+def _imod(a: int, b: int) -> int:
+    """IEEE 1364 integer `%`: the sign follows the DIVIDEND."""
+    if b == 0:
+        raise ZeroDivisionError("integer modulo by zero")
+    r = abs(a) % abs(b)
+    return -r if a < 0 else r
+
+
 def _clog2(n: int) -> int:
     """IEEE 1800 `$clog2`: the number of bits needed to index `n` values.
 
@@ -575,6 +642,14 @@ def _int_expr(expr: str, params: Dict[str, int]) -> Optional[int]:
     """
     import ast as _ast
     text = str(expr).strip().rstrip(";")
+    # SCOPE-QUALIFIED names first: `top_pkg::TL_DW` is a legal width bound and
+    # `::` is not Python, so without this the parse below fails and every
+    # package-scoped width refuses whatever the package says.
+    params = _mangle_params(params)
+    mangled = _mangle_scope(text)
+    if mangled is None:
+        return None
+    text = mangled
     # SystemVerilog sized literal: 8'd12 / 32'h20 / 'd7
     m = re.fullmatch(r"(?:\d+)?'[sS]?[dDhHbBoO]?([0-9a-fA-F_]+)", text)
     if m:
@@ -591,9 +666,24 @@ def _int_expr(expr: str, params: Dict[str, int]) -> Optional[int]:
         tree = _ast.parse(text, mode="eval")
     except SyntaxError:
         return None
+
+    class _VerilogIntOps(_ast.NodeTransformer):
+        """`a / b` -> `idiv(a, b)`, `a % b` -> `imod(a, b)`."""
+
+        def visit_BinOp(self, node):          # noqa: N802 — ast API name
+            self.generic_visit(node)
+            if isinstance(node.op, (_ast.Div, _ast.Mod)):
+                fn = "idiv" if isinstance(node.op, _ast.Div) else "imod"
+                return _ast.copy_location(
+                    _ast.Call(func=_ast.Name(id=fn, ctx=_ast.Load()),
+                              args=[node.left, node.right], keywords=[]),
+                    node)
+            return node
+
+    tree = _ast.fix_missing_locations(_VerilogIntOps().visit(tree))
     for node in _ast.walk(tree):
         if isinstance(node, _ast.Name) and node.id not in params \
-                and node.id != "clog2":
+                and node.id not in _CONST_FUNCS:
             return None
         if not isinstance(node, (_ast.Expression, _ast.BinOp, _ast.UnaryOp,
                                  _ast.Constant, _ast.Name, _ast.Load,
@@ -606,8 +696,8 @@ def _int_expr(expr: str, params: Dict[str, int]) -> Optional[int]:
         # argument -- refuses. This stays an arithmetic evaluator.
         if isinstance(node, _ast.Call):
             if (not isinstance(node.func, _ast.Name)
-                    or node.func.id != "clog2"
-                    or len(node.args) != 1
+                    or node.func.id not in _CONST_FUNCS
+                    or len(node.args) != _CONST_FUNCS[node.func.id]
                     or node.keywords):
                 return None
         # BOUNDED. A width expression comes out of the DESIGN'S OWN FILE, so it
@@ -638,7 +728,7 @@ def _int_expr(expr: str, params: Dict[str, int]) -> Optional[int]:
                 return None
     try:
         _ns = dict(params)
-        _ns["clog2"] = _clog2
+        _ns.update(clog2=_clog2, idiv=_idiv, imod=_imod)
         val = eval(compile(tree, "<width>", "eval"), {"__builtins__": {}}, _ns)
     except Exception:
         return None
@@ -761,6 +851,165 @@ def dut_header_constants(rtl_text: str, dut_module: str) -> Dict[str, int]:
     """
     return _harvest(_dut_header_text(rtl_text, dut_module),
                     _PARAM_DECL_RE, _LOCALPARAM_DECL_RE)
+
+
+#: A PACKAGE is where a design puts the constants more than one module is
+#: declared over -- `package top_pkg; localparam int TL_DW = 32; endpackage`.
+#: A module reaches them either by SCOPE (`[top_pkg::TL_DW-1:0]`) or by IMPORT
+#: (`module m import aes_reg_pkg::*; #(...) (... [NumRegsData-1:0] ...)`).
+#: Reading only the module's own text left every such width unresolvable even
+#: though the design states the number in a file the same run already has.
+_PACKAGE_RE = re.compile(
+    r"\bpackage\s+([A-Za-z_]\w*)\s*;(.*?)\bendpackage\b", re.S)
+
+#: The import list a module may carry between its name and its `#(` / port list.
+_MODULE_IMPORT_LIST_RE = r"\b\s*((?:import\s+[^;]+;\s*)*)"
+
+#: `import <pkg>::*;` / `import <pkg>::<name>;` inside such a list.
+_IMPORT_PKG_RE = re.compile(r"\b([A-Za-z_]\w*)\s*::\s*(?:\*|[A-Za-z_]\w*)")
+
+
+def _dut_module_text(code: str, dut_module: str) -> str:
+    """`dut_module`'s own text in ALREADY-BLANKED `code`, header included.
+
+    From the module name to its `endmodule`. Returns "" when either end is
+    absent, so an unterminated module contributes NOTHING rather than the next
+    module's declarations -- the same rule `_dut_header_text` applies to an
+    unterminated parameter header.
+    """
+    m = re.search(r"\bmodule\s+" + re.escape(dut_module) + r"\b", code)
+    if not m:
+        return ""
+    e = re.search(r"\bendmodule\b", code[m.end():])
+    return code[m.end():m.end() + e.start()] if e else ""
+
+
+def _dut_body_text(rtl_text: str, dut_module: str) -> str:
+    """`dut_module`'s text with its `#( ... )` parameter header BLANKED OUT.
+
+    Offsets are preserved (the header is replaced by spaces, not removed) so a
+    harvest over this text and one over the header cannot disagree about which
+    declaration came first.
+    """
+    code = _hdl_code_text.strip_hdl_comments_and_strings(rtl_text or "")
+    body = _dut_module_text(code, dut_module)
+    if not body:
+        return ""
+    hdr = _dut_header_text(rtl_text, dut_module)
+    if hdr:
+        i = body.find(hdr)
+        if i >= 0:
+            body = body[:i] + (" " * len(hdr)) + body[i + len(hdr):]
+    return body
+
+
+def dut_body_constants(rtl_text: str, dut_module: str) -> Dict[str, int]:
+    """`{NAME: value}` for constants `dut_module` declares in its BODY.
+
+    Verilog-1995 has NO parameter header at all. The width is stated completely,
+    in the body, one line below the port list:
+
+        module ram (rd_out, addr_in, ...);
+          parameter BITS = 39;
+          output reg [BITS-1:0] rd_out;
+
+    Reading only the `#( ... )` header left every port of every such module
+    unresolvable, and a behavioural memory model is exactly the shape that has
+    no header.
+
+    AMBIGUITY IS DROPPED, NEVER RESOLVED BY POSITION. A body may declare the
+    same name more than once -- in two arms of a `generate`, or inside a
+    function -- and those are not the module-scope constant a port is declared
+    over. A name whose body declarations do not AGREE on a value is left out, so
+    a width over it refuses by name instead of taking whichever came first.
+    """
+    body = _dut_body_text(rtl_text, dut_module)
+    if not body:
+        return {}
+    hits = []
+    for rx in (_PARAM_DECL_RE, _LOCALPARAM_DECL_RE):
+        for m in rx.finditer(body):
+            hits.append((m.start(), m.group(1), _trim_value(m.group(2))))
+    out: Dict[str, int] = {}
+    seen: Dict[str, List[Optional[int]]] = {}
+    for _pos, name, expr in sorted(hits):
+        val = _int_expr(expr, out)
+        seen.setdefault(name, []).append(val)
+        if val is not None:
+            out[name] = val
+    for name, vals in seen.items():
+        if len({v for v in vals if v is not None}) > 1:
+            out.pop(name, None)
+    return out
+
+
+def dut_scope_constants(rtl_text: str, dut_module: str) -> Dict[str, int]:
+    """Every constant visible where `dut_module`'s ports are declared, from
+    THIS text alone: its parameter header, then its body.
+
+    The header WINS a name clash: it is the module's interface, and a body
+    declaration of the same name is either a shadow or a duplicate.
+    """
+    out = dict(dut_body_constants(rtl_text, dut_module))
+    out.update(dut_header_constants(rtl_text, dut_module))
+    return out
+
+
+def dut_imported_packages(rtl_text: str, dut_module: str) -> List[str]:
+    """The packages `dut_module` IMPORTS, in source order.
+
+    `module aes_control import aes_pkg::*; import aes_reg_pkg::*; #(` — the
+    names those packages export are in scope for every port declaration below,
+    which is where `[NumRegsData-1:0]` comes from.
+    """
+    code = _hdl_code_text.strip_hdl_comments_and_strings(rtl_text or "")
+    m = re.search(r"\bmodule\s+" + re.escape(dut_module)
+                  + _MODULE_IMPORT_LIST_RE, code)
+    if not m:
+        return []
+    out: List[str] = []
+    for im in _IMPORT_PKG_RE.finditer(m.group(1) or ""):
+        if im.group(1) not in out:
+            out.append(im.group(1))
+    return out
+
+
+def package_constants(sources: Sequence[Tuple[object, str]]
+                      ) -> Dict[str, Dict[str, int]]:
+    """`{package: {NAME: value}}` for every package declared in `sources`.
+
+    Resolved to a FIXPOINT because one package legitimately states a constant
+    over another's (`localparam int W = other_pkg::Base * 2`). Each round
+    re-offers everything resolved so far; the loop stops the round nothing new
+    resolves, so a genuinely circular or unresolvable constant is simply ABSENT
+    and every width over it refuses by name.
+    """
+    bodies: Dict[str, str] = {}
+    for _path, raw in sources or []:
+        code = _hdl_code_text.strip_hdl_comments_and_strings(raw or "")
+        for m in _PACKAGE_RE.finditer(code):
+            bodies.setdefault(m.group(1), m.group(2))
+    out: Dict[str, Dict[str, int]] = {p: {} for p in bodies}
+    for _round in range(len(bodies) + 1):
+        changed = False
+        scoped = {f"{p}::{k}": v for p, d in out.items() for k, v in d.items()}
+        for pkg, body in bodies.items():
+            local = out[pkg]
+            hits = []
+            for rx in (_PARAM_DECL_RE, _LOCALPARAM_DECL_RE):
+                for m in rx.finditer(body):
+                    hits.append((m.start(), m.group(1),
+                                 _trim_value(m.group(2))))
+            for _pos, name, expr in sorted(hits):
+                if name in local:
+                    continue
+                val = _int_expr(expr, {**scoped, **local})
+                if val is not None:
+                    local[name] = val
+                    changed = True
+        if not changed:
+            break
+    return out
 
 
 def parameter_overrides(sources: Sequence[Tuple[str, str]],
