@@ -204,6 +204,13 @@ def _cmd_render(args: argparse.Namespace) -> int:
     return 0
 
 
+#: #2060 item 2 — the value published in a NAME slot for an input that declares
+#: no name. It is deliberately NOT an identifier a downstream consumer could
+#: mistake for a design's real name, and deliberately NOT the directory the
+#: caller happened to stage the input under.
+NAME_UNDECLARED = "undeclared"
+
+
 def _docs_door_top_module(text: str, source_name: str = "prose"):
     """#2049 item 1 — ask the DOCS front door what top module THIS SAME input
     declares, so the two Phase-1 front doors cannot disagree about the design's
@@ -269,10 +276,26 @@ def _stub_l_docs_from_prose(docs_dir: Path, out_dir: Path,
     # declaration. The prompt front door bridges its input into
     # `<proj>/input/docs/`, so this fallback published `top_module: "input"`
     # — a top named after a directory that every downstream artefact then
-    # carried. The chip NAME may still fall back to the directory (chip name
-    # and RTL top are distinct concepts, #583/#541 above); the RTL TOP may
-    # not. It is either declared by the input or it is `top_undeclared`.
-    mod_name = name_m.group(1) if name_m else docs_dir.parent.name
+    # carried. The RTL TOP is either declared by the input or it is
+    # `top_undeclared`.
+    #
+    # #2060 item 2 — and NEITHER may the chip NAME. #2049 closed the top and
+    # left the directory reaching `L1.ic_name` and `L1.summary`, so the same
+    # bridge that published `top_module: "input"` still published
+    # `ic_name: "input"` and `summary: "Stub L1 for input (from prose .md)."`
+    # for any prose input that states no module name. Chip name and RTL top
+    # are distinct concepts (#583/#541 above) — that is why the top fix did
+    # not carry — but a directory is a fact about where the caller put the
+    # file, not about the design, and it is a DECLARATION in neither role.
+    # An input that declares no name has an UNDECLARED one: the status
+    # vocabulary the docs door published for the top in v1.17.94
+    # (`TOP_MODULE_STATUS_UNDECLARED`), in the spelling this repo already
+    # uses for an undeclared value in a NAME slot
+    # (`foundry_handoff_package_check._MODE_UNDECLARED`,
+    # `analog_real_corner_sweep.DESIGN_CONTENT_UNDECLARED`). An explicit
+    # `--ic-name` is still authoritative and is consulted FIRST below, so a
+    # caller that names its chip is unaffected.
+    mod_name = name_m.group(1) if name_m else NAME_UNDECLARED
     if name_m:
         top_module, top_status = name_m.group(1), "declared_in_input"
     else:
@@ -385,7 +408,16 @@ def _stub_l_docs_from_prose(docs_dir: Path, out_dir: Path,
           "stub_origin": "_stub_l_docs_from_prose"}
     layer_payloads = {
         "L1_DATASHEET.json": l1,
-        "L2_FRS.json": {"functional_summary": f"See prose at {docs_dir}"},
+        # #2060 item 2, SECOND CARRIER, found by asking the membership
+        # question ("no LAYER may publish the directory name") instead of the
+        # field question: this published the whole staging PATH, so it carried
+        # the directory name the L1 fields were being cleaned of AND an
+        # absolute host path into a shipped L document. The design fact is
+        # WHICH DOCUMENTS the prose came from; the caller's directory layout is
+        # not a fact about the design.
+        "L2_FRS.json": {"functional_summary": (
+            "See the staged prose: "
+            + ", ".join(sorted(p.name for p in prose_files)))},
         "L3_CMD_PROTOCOL.json": l3,
         "L4_REGMAP.json": {},
         "L5_ADI_SPEC.json": {},

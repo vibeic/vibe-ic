@@ -102,12 +102,32 @@ def test_a_real_module_declaration_is_unchanged(tmp_path):
     assert l1["ic_name"] == "framed_rx"
 
 
-def test_the_chip_name_keeps_its_directory_fallback(tmp_path):
-    """The fix narrows the RTL TOP only. L1.ic_name is a chip name, a distinct
-    concept whose directory fallback is documented at the L1 write site — if
-    this row ever flips, the fix has grown past its finding."""
+def test_the_chip_name_no_longer_falls_back_to_the_directory(tmp_path):
+    """#2049 narrowed the RTL TOP only and FENCED its own scope here: the chip
+    name kept the directory fallback, and this row said so, so that a later
+    lane could not widen #2049's fix without saying it had.
+
+    #2060 item 2 is that later change, and it is stated, not slipped in: a
+    directory is a fact about where the caller staged the file, not about the
+    design, and it is a DECLARATION in neither role. The row is REPLACED, not
+    removed, and it keeps its fence character — it still pins that the chip
+    name and the RTL top are answered SEPARATELY (the top by the docs door's
+    own derivation, the name by this fallback), which is the property #2049
+    was protecting. What changed is only what the name falls back TO."""
     _, l1 = _stub(tmp_path, _UNDECLARED, parent_name="zzparent")
-    assert l1["ic_name"] == "zzparent"
+    assert l1["ic_name"] == "undeclared"
+    assert l1["ic_name"] != "zzparent"
+
+
+def test_the_chip_name_and_the_rtl_top_are_still_two_separate_answers(tmp_path):
+    """The fence #2049 wrote, restated as the invariant it was really about:
+    a DECLARED name must reach the chip name without going through the top
+    derivation, and an undeclared top must stay the docs door's refusal."""
+    l9, l1 = _stub(tmp_path, _DECL_LABEL, parent_name="zzparent")
+    assert l1["ic_name"] == "framed_rx" and l9["top_module"] == "framed_rx"
+    l9u, l1u = _stub(tmp_path / "u", _UNDECLARED, parent_name="zzparent")
+    assert l1u["ic_name"] == "undeclared"
+    assert l9u["top_module"] is None
 
 
 def test_the_two_front_doors_agree_on_the_top_of_the_same_bytes(tmp_path):
