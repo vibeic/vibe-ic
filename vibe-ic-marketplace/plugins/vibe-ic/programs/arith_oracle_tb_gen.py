@@ -69,6 +69,61 @@ _CLK_NAMES = {"clk", "clock", "clk_i", "i_clk", "sysclk"}
 _RST_NAMES = {"rst", "reset", "rst_n", "reset_n", "rstn", "i_rst",
               "rst_ni", "arst_n"}
 
+
+# A CLOCK OR RESET IS NEVER AN ARITHMETIC OPERAND, whatever it is called.
+# The exact-name sets above are an ALLOW-LIST, and a design that names its
+# clocks by domain — `wclk`/`rclk`, `clk_a`/`clk_b` — or its resets `wrstn`/
+# `rrstn`/`arstn` walks straight past them. MEASURED 2026-09-06 on the RTLLM
+# asyn_fifo: with `wclk` and `rclk` left in the operand pool and every port
+# resolving to 1 bit (the data buses are parameter-wide, so no numeric width
+# survives), the generator emitted a "closed-form" XOR oracle asserting
+# `wfull == wclk ^ rclk` and FAILED 2 of its 4 vectors against an async FIFO
+# that passes its own dataset testbench. A false rejection is as expensive as a
+# false certificate: the design was sent to repair, the repair was inert, and
+# the emitter's output was waived to AI backup.
+# chip-AGNOSTIC: clock/reset vocabulary by SHAPE, no design or vendor literal.
+#: the bare clock/reset words, matched against a name's own TOKENS rather than
+#: as a substring, so `clocks_per_bit` stays an operand while `wclk` does not.
+_CLK_RST_TOKENS = frozenset({"clk", "clock", "rst", "reset", "rstn", "resetn",
+                             "nrst", "nreset"})
+#: single-letter domain prefixes a design puts on a clock or reset it owns:
+#: w/r (write/read), a/b (two clock domains), i/o, n (active low), s (sync).
+_DOMAIN_PREFIXES = "wrabions"
+
+
+def is_clock_or_reset_port(name: str) -> bool:
+    """True when a port NAME reads as a clock or a reset in any spelling.
+
+    Used to keep such ports out of the arithmetic operand pool. The exact-name
+    sets are an allow-list and a design that names its clocks by domain walks
+    straight past them, so this matches the name's own TOKENS -- and a token
+    that is a clock/reset word behind one domain letter (`wclk`, `arstn`)
+    counts. The bias is deliberate: excluding one extra port costs a DEFER,
+    which is the honest outcome when the oracle cannot be built, while
+    admitting a clock as an operand produces a confident wrong verdict about a
+    correct design.
+    """
+    low = (name or "").strip().lower()
+    if not low:
+        return False
+    if low in _CLK_NAMES or low in _RST_NAMES:
+        return True
+    for tok in re.split(r'[^a-z0-9]+', low):
+        if not tok:
+            continue
+        if tok in _CLK_RST_TOKENS:
+            return True
+        if (len(tok) > 3 and tok[0] in _DOMAIN_PREFIXES
+                and tok[1:] in _CLK_RST_TOKENS):
+            return True
+        if (len(tok) > 3 and tok[-1] == "n"
+                and tok[:-1] in _CLK_RST_TOKENS):
+            return True
+        if (len(tok) > 4 and tok[0] in _DOMAIN_PREFIXES and tok[-1] == "n"
+                and tok[1:-1] in _CLK_RST_TOKENS):
+            return True
+    return False
+
 # ORGANIC-20260703 — a start/valid/enable HANDSHAKE input or a control/STATUS
 # output marks a SEQUENTIAL / protocol-driven datapath for which the closed-form
 # combinational oracle is unsound. chip-AGNOSTIC: pure handshake vocabulary.
@@ -422,7 +477,7 @@ def extract_arith_spec(project: Path,
                       "defer to #654 rather than ship a possibly-wrong oracle")
 
     inputs = [p for p in ports if p["dir"] == "input"
-              and p["name"].lower() not in (_CLK_NAMES | _RST_NAMES)]
+              and not is_clock_or_reset_port(p["name"])]
     outputs = [p for p in ports if p["dir"] == "output"]
     if len(inputs) < 2 or len(outputs) < 1:
         return None, (f"need >=2 data inputs + 1 output for a binary "
@@ -523,7 +578,13 @@ def extract_arith_spec(project: Path,
     # datapath keeps its more-specific reason. chip-AGNOSTIC: clock/handshake/
     # status port-name grammar.
     _names_lc = {str(p.get("name", "")).lower() for p in ports}
-    if _names_lc & _CLK_NAMES:
+    # The clock is recognised by SHAPE, not by an exact-name allow-list. This
+    # guard already said the right thing and `wclk`/`rclk` walked straight past
+    # it, so an asynchronous FIFO was handed a closed-form combinational XOR
+    # oracle over its own clocks and failed 2 of 4 vectors while passing its own
+    # dataset testbench (MEASURED 2026-09-06, RTLLM asyn_fifo).
+    if any(is_clock_or_reset_port(str(p.get("name", ""))) and p.get("dir") == "input"
+           for p in ports):
         return None, (
             "sequential/clocked datapath (a clock input is present): the "
             "closed-form COMBINATIONAL oracle drives no clock and asserts no "
