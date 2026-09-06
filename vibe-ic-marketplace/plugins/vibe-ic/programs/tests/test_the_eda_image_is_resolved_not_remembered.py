@@ -69,6 +69,7 @@ _PROGRAMS = pathlib.Path(__file__).resolve().parents[1]
 _PLUGIN = _PROGRAMS.parent
 sys.path.insert(0, str(_PROGRAMS))
 import _eda_image as M  # noqa: E402
+import _eda_pin as _pin  # noqa: E402
 import not_verified_tier as NV  # noqa: E402
 
 from pathlib import Path
@@ -270,47 +271,67 @@ def test_the_deleted_anchor_is_actually_gone_from_the_repo():
 # ── 2. never a bare :latest ─────────────────────────────────────────────────
 
 def test_resolve_returns_a_digest_not_a_floating_tag(monkeypatch):
-    monkeypatch.setattr(M, "registry_digest", lambda *a, **k: "sha256:" + "a" * 64)
+    """Still the property; the ANSWER is now the pin rather than whatever the
+    registry says `latest` means this minute."""
+    monkeypatch.setattr(M, "registry_digest", lambda *a, **k: pytest.fail(
+        "the run path asked the registry"))
+    monkeypatch.setattr(_pin, "pinned_image_present",
+                        lambda env=None: (_pin.image_reference(env), ""))
     got = M.resolve(env={})
-    assert got == f"{M.IMAGE_REPO}@sha256:{'a' * 64}"
+    assert got == f"{M.IMAGE_REPO}@{_pin.IMAGE_DIGEST}"
     assert ":latest" not in got
 
 
-def test_an_unreachable_registry_says_so_instead_of_pretending(monkeypatch, capsys):
-    """The fallback is honest, not silent: a toolchain quietly older than the
-    caller believes is the failure this module exists to prevent."""
-    monkeypatch.setattr(M, "registry_digest", lambda *a, **k: None)
+def test_the_run_path_takes_the_pin_and_not_the_newest_local_tag(monkeypatch, capsys):
+    """WHAT THIS TEST USED TO SAY, and why it says something else now.
+
+    It used to assert that an unreachable registry fell back to the newest LOCAL
+    TAG, announced on stderr. That ladder was measured on 8hd-3 on 2026-09-07
+    and it is the defect: with `VIBEIC_EDA_IMAGE_REPO` exported and the pinned
+    0.3.47 present, `judged_image()` answered with the 0.3.16 tag and
+    `resolve()` answered with 0.3.46 — two different images, one host, one
+    minute, neither of them the pin.
+
+    The honest-fallback property it protected is KEPT and is strictly stronger:
+    there is no fallback left to be dishonest about, and the one case that used
+    to be silent (a host without the bytes) is announced by name.
+    """
+    monkeypatch.setattr(M, "registry_digest", lambda *a, **k: pytest.fail(
+        "the run path asked the registry"))
     monkeypatch.setattr(M, "local_tags", lambda *a, **k: ["0.3.9", "0.3.10"])
+    monkeypatch.setattr(_pin, "pinned_image_present",
+                        lambda env=None: (_pin.image_reference(env), ""))
     got = M.resolve(env={})
-    assert got == f"{M.IMAGE_REPO}:0.3.9"      # first of the list as given
-    assert "registry unreachable" in capsys.readouterr().err
+    assert got == f"{M.IMAGE_REPO}@{_pin.IMAGE_DIGEST}"
+    assert "0.3.9" not in got and "0.3.10" not in got
 
 
-def test_an_offline_run_still_prefers_a_local_fork_image_over_upstream(
-        monkeypatch, capsys):
-    """A REGRESSION I SHIPPED ONCE. Dropping straight to the legacy upstream
-    image when the registry is unreachable hands a DFT step a toolchain with no
-    Fault and no patched yosys. Being unable to ASK which image is current is not
-    a reason to reach past a fork image this machine already holds.
-
-    This property used to be carried by the anchor step, which named a version
-    the host might not have; it is carried by the LOCAL step now, which by
-    definition names one it does."""
-    monkeypatch.setattr(M, "registry_digest", lambda *a, **k: None)
-    monkeypatch.setattr(M, "local_tags", lambda *a, **k: ["0.3.13"])
+def test_a_run_on_a_host_without_the_pinned_bytes_SAYS_SO(monkeypatch, capsys):
+    """Degrade loudly. The reference returned is still the pinned one — running
+    it fetches exactly those bytes — but the operator is told, because a
+    multi-gigabyte fetch nobody expected is the other half of this module's
+    history."""
+    monkeypatch.setattr(_pin, "pinned_image_present",
+                        lambda env=None: (None, "IMAGE_NOT_PRESENT: x"))
     got = M.resolve(env={})
-    assert got == f"{M.IMAGE_REPO}:0.3.13"
-    assert M.LEGACY_IMAGE not in got
-    assert "registry unreachable" in capsys.readouterr().err
+    assert got == f"{M.IMAGE_REPO}@{_pin.IMAGE_DIGEST}"
+    err = capsys.readouterr().err
+    assert _pin.IMAGE_NOT_PRESENT in err
+    assert "Nothing older is substituted" in err
 
 
-def test_with_nothing_at_all_it_names_the_legacy_image_and_warns(monkeypatch, capsys):
-    """Only when there is no registry AND no local fork image."""
-    monkeypatch.setattr(M, "registry_digest", lambda *a, **k: None)
+def test_the_run_path_never_reaches_for_the_legacy_upstream_image(monkeypatch, capsys):
+    """A REGRESSION I SHIPPED ONCE, in its current form. Dropping to upstream
+    iic-osic-tools hands a DFT step a toolchain with no Fault and no patched
+    yosys. It used to be the last rung; it is not a rung at all now, and this is
+    the assertion that keeps it from becoming one again."""
+    monkeypatch.setattr(_pin, "pinned_image_present",
+                        lambda env=None: (None, "IMAGE_NOT_PRESENT: x"))
     monkeypatch.setattr(M, "local_tags", lambda *a, **k: [])
     got = M.resolve(env={})
-    assert got == M.LEGACY_IMAGE
-    assert "does NOT carry the forked tools" in capsys.readouterr().err
+    assert got != M.LEGACY_IMAGE
+    assert M.LEGACY_IMAGE not in got
+    assert _pin.IMAGE_DIGEST in got
 
 
 @pytest.mark.parametrize("key", ["VIBEIC_EDA_IMAGE", "IIC_EDA_IMAGE"])
@@ -324,16 +345,20 @@ def test_an_explicit_override_wins_over_everything(monkeypatch, key):
 
 def test_local_image_never_touches_the_registry(monkeypatch):
     """Collapsing this into `resolve` turns a skip guard's local check into an
-    unbounded pull."""
+    unbounded pull. The question it answers is now "are the PINNED bytes here",
+    which is the only version of it a skip guard can act on."""
     monkeypatch.setattr(M, "registry_digest",
                         lambda *a, **k: pytest.fail("local_image asked the registry"))
     monkeypatch.setattr(M, "local_tags", lambda *a, **k: ["0.3.16"])
-    assert M.local_image(env={}) == f"{M.IMAGE_REPO}:0.3.16"
+    monkeypatch.setattr(_pin, "pinned_image_present",
+                        lambda env=None: (_pin.image_reference(env), ""))
+    assert M.local_image(env={}) == f"{M.IMAGE_REPO}@{_pin.IMAGE_DIGEST}"
+    assert "0.3.16" not in M.local_image(env={})
 
 
 def test_local_image_is_None_when_the_machine_has_nothing(monkeypatch):
-    monkeypatch.setattr(M, "local_tags", lambda *a, **k: [])
-    monkeypatch.setattr(M, "_run", lambda *a, **k: type("R", (), {"returncode": 1})())
+    monkeypatch.setattr(_pin, "pinned_image_present",
+                        lambda env=None: (None, "IMAGE_NOT_PRESENT: x"))
     assert M.local_image(env={}) is None
 
 
@@ -386,7 +411,7 @@ def test_a_program_that_runs_the_toolchain_takes_the_current_image(rel):
     assert "_img.resolve()" in code, f"{rel} should take the current image"
 
 
-def test_judged_image_makes_no_registry_call_unless_asked(monkeypatch):
+def test_judged_image_makes_no_registry_call_unless_asked(monkeypatch):  # noqa: D401
     """vibe-ic#927's PROPERTY, carried across the mechanism that replaced it.
 
     The anchor made a blocking verdict independent of the registry by freezing a
@@ -399,12 +424,16 @@ def test_judged_image_makes_no_registry_call_unless_asked(monkeypatch):
                         lambda *a, **k: pytest.fail(
                             "judged_image asked the registry without allow_pull"))
     monkeypatch.setattr(M, "local_tags", lambda *a, **k: ["0.3.13"])
-    monkeypatch.setattr(M, "local_digest",
-                        lambda ref: ("sha256:" + "c" * 64, "repo-digest", ""))
-    monkeypatch.setattr(M, "image_version", lambda ref: ("0.3.13", "local-label", ""))
+    monkeypatch.setattr(_pin, "pinned_image_present",
+                        lambda env=None: (_pin.image_reference(env), ""))
+    monkeypatch.setattr(M, "image_version", lambda ref: ("0.3.47", "local-label", ""))
     j = M.judged_image(env={})
-    assert j.digest == "sha256:" + "c" * 64
-    assert j.source == "local"
+    # The mechanism moved from "the newest local tag" to "the pinned bytes,
+    # locally". #927's property is UNCHANGED and better served: a fixed digest
+    # cannot be re-pointed by a publish at all, whereas the newest local tag
+    # moved the moment anything on the host pulled a newer one.
+    assert j.digest == _pin.IMAGE_DIGEST
+    assert j.source == "pinned"
 
 
 def test_with_nothing_local_it_refuses_rather_than_starting_a_pull(monkeypatch):
@@ -421,11 +450,16 @@ def test_with_nothing_local_it_refuses_rather_than_starting_a_pull(monkeypatch):
 
 
 def test_allow_pull_is_the_way_to_reach_the_registry(monkeypatch):
-    monkeypatch.setattr(M, "local_tags", lambda *a, **k: [])
-    monkeypatch.setattr(M, "registry_digest", lambda *a, **k: "sha256:" + "d" * 64)
-    monkeypatch.setattr(M, "image_version", lambda ref: ("0.3.19", "registry-label", ""))
+    """And what it reaches for is THE PINNED DIGEST. Opting into a pull is
+    opting into fetching the bytes that were pinned; it must not have become
+    opting into whichever bytes are newest."""
+    monkeypatch.setattr(_pin, "pinned_image_present",
+                        lambda env=None: (None, "IMAGE_NOT_PRESENT: x"))
+    monkeypatch.setattr(M, "image_digest",
+                        lambda ref, **k: (_pin.IMAGE_DIGEST, "registry-manifest", ""))
+    monkeypatch.setattr(M, "image_version", lambda ref: ("0.3.47", "registry-label", ""))
     j = M.judged_image(env={}, allow_pull=True)
-    assert j.ref == f"{M.IMAGE_REPO}@sha256:{'d' * 64}"
+    assert j.ref == f"{M.IMAGE_REPO}@{_pin.IMAGE_DIGEST}"
     assert j.source == "registry"
 
 
@@ -662,7 +696,11 @@ def out(s):
 if A[:2] == ["image", "inspect"]:
     fmt = A[A.index("--format") + 1] if "--format" in A else ""
     if "RepoDigests" in fmt:
-        out(json.dumps(["ghcr.io/vibeic/vibeic-eda@" + DIGEST]) + "\t" + DIGEST)
+        # The repository half is DEPLOYMENT CONFIGURATION, so the fixture reads
+        # it the same way the code under test does. A literal here would make
+        # every arm fail on a host that reaches the same bytes elsewhere.
+        repo = os.environ.get("VIBEIC_EDA_IMAGE_REPO") or "ghcr.io/vibeic/vibeic-eda"
+        out(json.dumps([repo + "@" + DIGEST]) + "\t" + DIGEST)
     if "Config.Labels" in fmt:
         out(LABEL if LABEL else "<no value>")
     out(DIGEST)
@@ -712,7 +750,18 @@ END M4M5_PR
 _LEF_NARROW = _LEF_CLEAN.replace("RECT -0.8 -0.8 0.8 0.8 ;",
                                  "RECT -0.71 -0.71 0.71 0.71 ;")
 
-_FIXTURE_DIGEST = "sha256:" + "1a2b3c4d" * 8
+#: THE FIXTURE IMAGE IS THE PINNED IMAGE, and it has to be.
+#:
+#: This was an arbitrary digest, which worked while `judged_image()` took
+#: whatever the newest local tag resolved to. It resolves the PIN now — the
+#: fleet-wide defect that change fixed was a gate judging a 0.3.16 tag while the
+#: operator believed it had pinned 0.3.47 — so a fake image wearing some other
+#: digest is exactly what the gate must now refuse, and these arms would be
+#: testing the refusal instead of the four fixture kinds they are about.
+#:
+#: The arms vary the LABEL, the STA answers and the tech LEF. The digest was
+#: never the variable, and binding it to the pin keeps it from becoming one.
+_FIXTURE_DIGEST = _pin.IMAGE_DIGEST
 _FIXTURE_LABEL = "0.3.19"
 
 

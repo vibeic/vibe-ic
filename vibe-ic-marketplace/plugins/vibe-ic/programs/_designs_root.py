@@ -59,9 +59,13 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, List, Optional, Sequence, Tuple
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _eda_pin as _pin  # noqa: E402 — the ONE place the pin is stated
 
 #: Rung 1 — the host directory the user bind-mounted into the EDA container.
 HOST_ROOT_ENV = "VIBEIC_DESIGNS_HOST_ROOT"
@@ -71,7 +75,15 @@ CONT_ROOT_ENV = "VIBEIC_DESIGNS_CONT_ROOT"
 #: The historical container destination. A DEFAULT for the offline branch a
 #: caller opts into explicitly — never an assumption about a live container.
 DEFAULT_CONT_ROOT = "/foss/designs"
-DEFAULT_CONTAINER = os.environ.get("VIBEIC_EDA_CONTAINER", "vibeic-eda")
+#: The container a caller gets when it names none.  DERIVED FROM THE PINNED
+#: DIGEST by `_eda_pin.default_container_name`, not the shared literal
+#: `vibeic-eda`: MEASURED 2026-09-07 on 8hd-3, the container holding that shared
+#: name was running 0.3.46 while the pin demanded 0.3.47, and a run that
+#: attached to it recorded image provenance PASS about the wrong image.  A name
+#: that carries the digest makes two different pins two different containers by
+#: construction.  `VIBEIC_EDA_CONTAINER` still names one explicitly and is still
+#: honoured -- it moves the NAME, never the digest requirement.
+DEFAULT_CONTAINER = _pin.default_container_name()
 
 ERROR_CODE = "DESIGNS_ROOT_UNRESOLVED"
 

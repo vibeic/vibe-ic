@@ -74,6 +74,7 @@ from typing import Dict, List, Optional, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _progress_run as _pr  # noqa: E402
+import _eda_pin as _pin  # noqa: E402 — the ONE place the pin is stated
 
 
 #: The environment variable that opts a host OUT of the digest-pinned image and
@@ -90,13 +91,15 @@ HOST_LANE_AUTO = "auto"
 #: and `tools/ci/protected_landing_transition.json` spell it.  A remedy that
 #: names a floating tag is not a remedy: a floating tag is how a host ends up
 #: with a runtime nobody pinned.
-#: Resolved the way the runner resolves it: the DIGEST is the identity and is
-#: pinned here; the REPOSITORY is deployment configuration and comes from the one
-#: env, defaulting to the published repository.  A remedy line that named a
-#: registry this host cannot reach would be no remedy at all.
-RUNNER_IMAGE = (
-    (os.environ.get("VIBEIC_EDA_IMAGE_REPO") or "ghcr.io/vibeic/vibeic-eda")
-    + "@sha256:8da785a8d3275884ad0d0ee0fb10f7e90d8b7bf11a08d38e9559b0764112480f")
+#: Resolved the way the runner resolves it: the DIGEST is the identity and the
+#: REPOSITORY is deployment configuration, read from the one env and defaulting
+#: to the published repository.  A remedy line that named a registry this host
+#: cannot reach would be no remedy at all.
+#:
+#: READ, NOT COPIED.  This file used to spell the digest itself, which made it a
+#: SECOND definition of the runtime -- the same shape that let the landing
+#: harness sit forty patch releases behind the pin it believed it had.
+RUNNER_IMAGE = _pin.image_reference()
 
 #: The parent's semantic progress stream, which this probe must NOT join.
 #:

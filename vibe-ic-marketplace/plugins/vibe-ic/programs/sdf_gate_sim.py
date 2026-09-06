@@ -48,6 +48,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _atomic_artefact as _aa  # noqa: E402  (vibe-ic#1082)
+import _eda_pin as _pin  # noqa: E402 — the ONE place the pin is stated
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _progress_run as _pr  # noqa: E402
@@ -65,7 +66,14 @@ except Exception:                       # pragma: no cover - direct-script path
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import pdk_cell_models as _pcm
 
-DEFAULT_CONTAINER = os.environ.get("VIBEIC_EDA_CONTAINER", "vibeic-eda")
+#: `_eda_pin.default_container_name()` IS this expression, plus the part
+#: that was missing: the default half derives from the pinned digest
+#: instead of being the shared literal `vibeic-eda`.  MEASURED 2026-09-07
+#: on 8hd-3 -- the container holding that shared name was running 0.3.46
+#: while the pin demanded 0.3.47, and a run that attached to it recorded
+#: image provenance PASS about the wrong image.  `VIBEIC_EDA_CONTAINER` is
+#: read exactly as before and still wins.
+DEFAULT_CONTAINER = _pin.default_container_name()
 _TOOL_PATH = "export PATH=/foss/tools/bin:$PATH; "
 
 # ---------------------------------------------------------------------------

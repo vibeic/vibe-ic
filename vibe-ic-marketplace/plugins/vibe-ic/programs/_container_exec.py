@@ -73,12 +73,14 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _progress_run as _pr  # noqa: E402
+import _eda_pin as _pin  # noqa: E402 — the ONE place the pin is stated
 
 __all__ = [
     "run_in_container",
     "container_deadline_argv",
     "TIMEOUT_EXPIRED_RC",
     "TIMEOUT_UNAVAILABLE_RC",
+    "IMAGE_MISMATCH_RC",
     "DEFAULT_KILL_GRACE_S",
     "CLIENT_GRACE_S",
 ]
@@ -90,6 +92,15 @@ TIMEOUT_EXPIRED_RC = 124
 #: `timeout` itself could not be run (127 = command not found, from the shell).
 #: Surfaced rather than swallowed: see "degrade loudly" above.
 TIMEOUT_UNAVAILABLE_RC = 127
+
+#: The container does not hold the pinned image, so NOTHING was run in it.
+#:
+#: 125 is docker's own "the run itself could not be started" code, chosen so the
+#: refusal cannot be mistaken for a verdict the TOOL produced. It is a non-zero
+#: return like any other, which the `returncode != 0` handling every caller
+#: already has will route -- the same reasoning that made an expired deadline
+#: rc 124 rather than an exception thrown past callers that never expected one.
+IMAGE_MISMATCH_RC = 125
 
 #: Seconds between SIGTERM and the SIGKILL escalation.
 DEFAULT_KILL_GRACE_S = 5
@@ -130,7 +141,32 @@ def run_in_container(container: str,
     Raises ``subprocess.TimeoutExpired`` only if the CONTAINER ITSELF is wedged
     past ``deadline_s + client_grace_s`` — the case a container-side deadline
     cannot cover, and the only case in which an orphan is still possible.
+
+    THE ATTACH CHECK RUNS FIRST, and it is not optional. ``docker exec`` takes a
+    NAME, and a name is a label whichever process got there first is holding.
+    MEASURED 2026-09-07 on 8hd-3: the container named ``vibeic-eda`` was running
+    ``sha256:06537f7e…`` (0.3.46) while the pin demanded ``sha256:8da785a8…``,
+    and a run that attached to it recorded image provenance PASS about the wrong
+    image -- a report that named a digest, and so read as reproducible, and was
+    reproducibly about a toolchain nobody had pinned.
+
+    When the bytes do not match, ``IMAGE_MISMATCH_RC`` comes back with the
+    refusal on stderr and THE COMMAND IS NOT RUN. Naming both digests is the
+    load-bearing part of the message: a reader told only that something
+    mismatched cannot tell a stale container from a mis-set
+    ``VIBEIC_EDA_IMAGE_REPO``, and will simply re-run it.
     """
+    # ONLY A MEASURED DISAGREEMENT STOPS THIS. A container whose image cannot
+    # be read is NOT_MEASURED, not a mismatch: docker reports that itself, as it
+    # always did, and refusing on it would make every locally-built container
+    # unusable while claiming to have judged its image.
+    why = _pin.container_attach_refusal(container)
+    if why:
+        return subprocess.CompletedProcess(
+            args=container_deadline_argv(container, cmd, deadline_s,
+                                         kill_grace_s, shell),
+            returncode=IMAGE_MISMATCH_RC, stdout="",
+            stderr=f"_container_exec: refused, nothing was run: {why}\n")
     return _pr.run(
         container_deadline_argv(container, cmd, deadline_s, kill_grace_s, shell),
         capture_output=True, text=True, errors="replace")
@@ -151,4 +187,11 @@ def describe_result(cp: subprocess.CompletedProcess,
     if cp.returncode == TIMEOUT_UNAVAILABLE_RC:
         return ("`timeout` is not available in this image, so NO deadline "
                 "could be enforced; the command may have run unbounded")
+    if cp.returncode == IMAGE_MISMATCH_RC:
+        # The refusal already names both digests; it is relayed verbatim rather
+        # than summarised, because "the container is the wrong image" is only
+        # actionable when the reader is told WHICH wrong image.
+        return (cp.stderr or "").strip() or (
+            f"the container does not hold the pinned image "
+            f"({_pin.CONTAINER_IMAGE_MISMATCH}); nothing was run")
     return None
