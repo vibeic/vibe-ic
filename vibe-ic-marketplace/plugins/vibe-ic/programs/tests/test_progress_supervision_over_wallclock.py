@@ -220,6 +220,64 @@ def test_a_fast_job_through_lec_docker_is_unchanged():
 
 
 # ---------------------------------------------------------------------------
+# 3b. THE OUTER WALL. Removing the inner ceiling is worth nothing if the RUNNER
+#     still wraps the producer in a host deadline five minutes further out.
+# ---------------------------------------------------------------------------
+def test_the_runner_imposes_no_outer_deadline_on_the_lec_producer():
+    """The declared budget is RECORDED, not ENFORCED.
+
+    THE ASSERTION HERE IS THE ONE THE OLD INVARIANT COULD NOT MAKE. Its
+    siblings in `test_lec_run` require `outer == inner + 300` — satisfied by
+    any number big enough, and satisfied at every one of the three values this
+    wall has held (1200, 3x the inner budget, inner+300). Each was defended in
+    a comment as the right one; each still killed a proof that was computing.
+    This asserts there is no wall.
+
+    Read with `ast`, and keyed on the BUDGET NAME rather than on the dispatch's
+    argv. THE FIRST DRAFT OF THIS TEST WAS VACUOUS and was caught by its own
+    mutation: it filtered on `"lec_run" in ast.unparse(call)`, but the argv is
+    built into a local `cmd`, so that string is not in the call at all. Swapping
+    the pre-fix file back in left it GREEN. What the defect actually touches is
+    `_LEC_PRODUCER_TIMEOUT_S` reaching a `timeout=`, so that is what is read.
+    """
+    import ast
+    src = (PROGRAMS / "design_one_shot_runner.py").read_text(
+        encoding="utf-8", errors="replace")
+    tree = ast.parse(src)
+    assert "_LEC_PRODUCER_TIMEOUT_S" in src, (
+        "the declared budget is gone entirely — this test can no longer "
+        "distinguish 'not enforced' from 'not measured'")
+    bad = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        for k in node.keywords:
+            if k.arg in ("timeout", "hard_ceiling_s") and \
+                    "_LEC_PRODUCER_TIMEOUT_S" in ast.unparse(k.value):
+                bad.append(f"design_one_shot_runner.py:{node.lineno}")
+    assert bad == [], (
+        "the LEC producer is dispatched under a host wall-clock deadline "
+        "again — a progressing proof dies at it with no verdict: "
+        + ", ".join(bad))
+
+
+def test_the_declared_lec_budget_is_still_read_from_the_producer():
+    """Removing the ENFORCEMENT must not remove the DISCLOSURE. The number is
+    still derived from `lec_run`'s own constant, and it still reaches the step
+    record — so "this run went long" stays answerable."""
+    import design_one_shot_runner as R
+    import lec_run as L
+    assert R.lec_producer_yosys_timeout_s() == L.DEFAULT_YOSYS_TIMEOUT_S
+    assert R.lec_producer_outer_timeout_s() == \
+        R.lec_producer_yosys_timeout_s() + 300
+    src = (PROGRAMS / "design_one_shot_runner.py").read_text(
+        encoding="utf-8", errors="replace")
+    assert "_LEC_PRODUCER_TIMEOUT_S}s — RECORDED" in src, (
+        "the declared budget no longer reaches the step record; a run that "
+        "went long is now invisible instead of merely uncut")
+
+
+# ---------------------------------------------------------------------------
 # 4. THE MIGRATION LEFTOVER. `_progress_run.run` has no `timeout=` parameter,
 #    deliberately — "convert a call site by deleting the argument". One call
 #    site kept the argument, and the TypeError it raises is not a

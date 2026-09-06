@@ -16615,9 +16615,9 @@ def step_dft_lec_chain(project: Path, top_name: str, container: str,
                        "no scan netlist → post-DFT disclosed-skip"))
 
     # ================= Step 13 — LEC (RTL ≡ handoff netlist) =================
-    # lec_run's retries share ONE total deadline. The runner therefore grants
-    # exactly that budget plus one bounded setup/report/reap margin, not one
-    # full budget per possible frontend attempt.
+    # lec_run's retries share ONE total deadline, and the runner reads that
+    # budget from the producer rather than restating it. It is now RECORDED,
+    # not ENFORCED: see the dispatch below.
     _LEC_PRODUCER_TIMEOUT_S = lec_producer_outer_timeout_s()
     t0 = time.time()
     # --- Gate-netlist selection ---------------------------------------------
@@ -16660,16 +16660,35 @@ def step_dft_lec_chain(project: Path, top_name: str, container: str,
         # non-scan netlist cannot alter that run's verdict.
         if scan_netlist_is_real_chain(project):
             cmd += ["--scan-meta", SCAN_CHAIN_JSON_REL]
-        # The outer timeout MUST exceed the producer's own worst case, else the
-        # runner kills lec_run before it can write a truthful report and the
-        # verdict falls through to a disclosed-skip. lec_run budgets 1800s PER
-        # yosys invocation and makes up to three (built-in gold read, slang
-        # gold read, slang -DSYNTHESIS define retry) — on a CPU-class gold the
-        # slang miter alone runs tens of minutes. 1200s was BELOW even a single
-        # inner attempt, so any design needing the slang fallback was killed.
+        # NO OUTER DEADLINE, AND THE HISTORY IS THE ARGUMENT. This wall has
+        # been raised twice already — 1200 s was below even ONE inner attempt,
+        # then 3x the inner budget, then one budget plus a margin — and each
+        # time the comment explained why the NEW number was the right one. It
+        # never was. A wall that must "exceed the producer's own worst case"
+        # is a wall whose only job is to not fire, and the one time it does
+        # fire it kills a proof that was still computing and books the design
+        # as unverified.
+        #
+        # WHAT BOUNDS IT NOW. The producer supervises ITSELF by forward
+        # progress: `lec_run._docker(marker=...)` runs every Yosys attempt
+        # under the container-aware progress-stall watchdog, which reads the
+        # in-container process tree's CPU and kills only a job that has
+        # stopped moving. A hung LEC therefore still terminates, on evidence.
+        # And the step budget still refuses to LAUNCH another attempt once the
+        # deadline has passed (`StepBudget.next_attempt_budget()` -> 0), so
+        # the retry-re-arm defect that budget was written for stays closed.
+        #
+        # THIS STEP HAS NO HOST-OBSERVABLE PROGRESS SIGNAL OF ITS OWN, and
+        # that is said rather than papered over: from here the producer is a
+        # quiet Python process whose real work is inside a container. So the
+        # honest treatment is the one this lane applies wherever a signal is
+        # missing — NO CEILING, REPORT ELAPSED. The declared budget is carried
+        # into the step record beside the measured elapsed time, so a reader
+        # can see a run that went long WITHOUT a run that went long being
+        # destroyed to tell them.
+        _lec_started = time.time()
         try:
-            r = subprocess.run(cmd, capture_output=True, text=True,
-                               timeout=_LEC_PRODUCER_TIMEOUT_S)
+            r = subprocess.run(cmd, capture_output=True, text=True)
             lec_json = reports_dir / "lec.json"
             if lec_json.is_file():
                 # #192: the STEP status must come from the producer's OWN verdict
@@ -16682,10 +16701,14 @@ def step_dft_lec_chain(project: Path, top_name: str, container: str,
                 # INCONCLUSIVE (0 compared points — e.g. an unstaged hard macro)
                 # is an honest SKIP, never PASS nor a cascading FAIL.
                 _status, _verdict = lec_step_status_from_report(lec_json)
+                _lec_elapsed = time.time() - _lec_started
                 results.append(StepResult("lec_equivalence", _status,
                                time.time() - t0,
                                f"yosys equiv: verdict={_verdict or 'UNKNOWN'} "
-                               f"(RTL vs {Path(gate_netlist).name}, rc={r.returncode})"
+                               f"(RTL vs {Path(gate_netlist).name}, rc={r.returncode}"
+                               f", elapsed={_lec_elapsed:.0f}s, declared step "
+                               f"budget={_LEC_PRODUCER_TIMEOUT_S}s — RECORDED, "
+                               f"not enforced: a progressing proof is never cut off)"
                                # Only annotate when the artifact is unusable —
                                # a healthy run keeps its original message.
                                + (f"; gate-netlist WARNING: {_lec_netlist_note}"
