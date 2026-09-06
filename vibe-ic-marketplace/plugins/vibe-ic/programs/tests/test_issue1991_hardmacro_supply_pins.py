@@ -291,7 +291,13 @@ def test_runner_passes_the_selected_cell_lef_and_metal_prefix(
     )
     monkeypatch.setattr(runner, "_hardmacro_pdk_dir",
                         lambda _pdk, _container: "/pdk")
-    monkeypatch.setattr(runner.subprocess, "run", fake_run)
+    # CZT-11 — the DISPATCHER moved, the assertions did not. This step
+    # dispatches its producer through `_progress_run` (no wall clock)
+    # instead of `subprocess.run(timeout=N)`, so a stub bound to
+    # `subprocess.run` no longer intercepts anything and the real
+    # producer runs. Retargeting the double is what keeps this test
+    # measuring what it was written to measure.
+    monkeypatch.setattr(runner._pr, "run", fake_run)
 
     result = runner.step_digital_hardmacro_gen(tmp_path, pdk, "eda")
 

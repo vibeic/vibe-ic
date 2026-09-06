@@ -11875,6 +11875,61 @@ import _atomic_artefact as _aa  # noqa: E402  (vibe-ic#1082)
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _progress_run as _pr  # noqa: E402
 
+
+def _run_producer(step: str, cmd: List[str], t0: float, *,
+                  noun: str = "producer",
+                  ) -> Tuple[Optional[Any], Optional[StepResult]]:
+    """Dispatch a PRODUCER PROGRAM under progress supervision, never a clock.
+
+    Returns `(completed_process, None)` on any exit -- however long it took --
+    or `(None, StepResult)` when the step must stop.
+
+    THE DEFECT THIS REPLACES (CZT-11).  Every call site that used this shape
+    wrote `subprocess.run(cmd, timeout=N)` with N a literal 300..1800, and
+    caught `(OSError, subprocess.TimeoutExpired)` into ONE arm returning
+    ENV_UNAVAILABLE.  That collapses two facts a reader needs apart:
+
+      * the producer could not be LAUNCHED (no interpreter, no file, no fork)
+        -- the environment really is missing something; ENV_UNAVAILABLE is
+        right, and `_aggregate_verdict` correctly files it as a waiver tier.
+      * the producer WAS launched and the clock ran out -- which says nothing
+        about the environment and everything about the host.  Reported as
+        ENV_UNAVAILABLE, a busy machine silently converted a step that owes an
+        answer into an excused one.  A bigger N is the same defect with a later
+        date, so the clock is removed rather than raised.
+
+    What replaces it is `_progress_run`: output, CPU and I/O of the child and
+    its live descendants.  ANY signal advancing means progressing, and a
+    progressing child is never stopped, however long it legitimately takes.
+    Only a child with NOTHING moving across N consecutive looks raises
+    `Stalled` -- a finding about the CHILD, which the old expiry never was.
+
+    A stall is BLOCKED, not ENV_UNAVAILABLE: the producer is present and was
+    running, so nothing was missing and nothing is known.  BLOCKED is stricter
+    (`_aggregate_verdict` groups it with FAIL, while ENV_UNAVAILABLE is a
+    waiver tier), so this can only ever refuse a green it used to grant.
+    chip-AGNOSTIC.
+    """
+    try:
+        cp = _pr.run(cmd, capture_output=True, text=True, errors="replace")
+    except _pr.Stalled as exc:
+        return None, StepResult(
+            step, "BLOCKED", time.time() - t0,
+            f"{noun} STALLED: {exc}. It was launched and then made no forward "
+            f"progress on ANY readable signal, so it was stopped as hung -- "
+            f"this is not a slow host and not a missing tool, and NOTHING is "
+            f"known about what it would have produced.",
+            extras={"stopped_as": "STALLED",
+                    "stall_looks": getattr(exc, "looks", None),
+                    "stall_elapsed_s": getattr(exc, "elapsed_s", None),
+                    "stall_signals": getattr(exc, "signals", None)})
+    except OSError as exc:
+        return None, StepResult(
+            step, "ENV_UNAVAILABLE", time.time() - t0,
+            f"{noun} could not be launched: {exc}")
+    return cp, None
+
+
 _SLANG_ERROR_SIGNATURES = _sf.SLANG_ERROR_SIGNATURES
 _decide_synth_frontend = _sf.decide_synth_frontend
 
@@ -31777,10 +31832,18 @@ def _gds_substance_gate(gds_out: Path, def_file: Path) -> Optional[str]:
     a reason to fail a good design.
     """
     try:
-        cp = subprocess.run(
+        # CZT-11 — no wall clock. The 600 s literal here decided a GATE'S
+        # VERDICT by elapsed time: a substance check that took longer than the
+        # bound raised, the `except` swallowed it, and the stream-out was
+        # reported as carrying substance. Supervision replaces it -- a checker
+        # that is progressing runs to its own exit. A STALL still reaches the
+        # documented rc-2 policy below (an unrunnable checker never fails a
+        # good design), so the fall-through is unchanged in DIRECTION and is
+        # now reached only for a checker that genuinely moved nothing.
+        cp = _pr.run(
             [sys.executable, str(PROGRAMS_DIR / "gds_substance_check.py"),
              "--gds-file", str(gds_out), "--def-file", str(def_file)],
-            timeout=600, check=False, capture_output=True, text=True)
+            check=False, capture_output=True, text=True)
     except Exception:                                     # noqa: BLE001
         return None
     if cp.returncode == 1:
@@ -39345,13 +39408,9 @@ def step_digital_hardmacro_gen(project: Path,
     # a run whose own provenance carried `tool magic, exit_code 0`.
     if container:
         cmd += ["--container", container]
-    try:
-        cp = subprocess.run(cmd, capture_output=True, text=True,
-                            errors="replace", timeout=1800)
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        return StepResult("digital_hardmacro_gen", "ENV_UNAVAILABLE",
-                          time.time() - t0,
-                          f"producer did not complete: {exc}")
+    cp, stopped = _run_producer("digital_hardmacro_gen", cmd, t0)
+    if stopped is not None:
+        return stopped
     detail = (cp.stdout or cp.stderr or "").strip().splitlines()
     msg = detail[0] if detail else f"rc={cp.returncode}"
     status = {0: "PASS", 1: "SKIP"}.get(cp.returncode, "ENV_UNAVAILABLE")
@@ -39454,13 +39513,9 @@ def step_ip_release_docs_gen(
             f"runner derivation manifest could not be written: {exc}")
     cmd = [sys.executable, str(prog), str(project), "--run-context",
            context.relative_to(project).as_posix()]
-    try:
-        cp = subprocess.run(cmd, capture_output=True, text=True,
-                            errors="replace", timeout=600)
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        return StepResult("ip_release_docs_gen", "ENV_UNAVAILABLE",
-                          time.time() - t0,
-                          f"producer did not complete: {exc}")
+    cp, stopped = _run_producer("ip_release_docs_gen", cmd, t0)
+    if stopped is not None:
+        return stopped
     detail_lines = (cp.stdout or cp.stderr or "").strip().splitlines()
     detail = detail_lines[0] if detail_lines else f"rc={cp.returncode}"
     status = {0: "PASS", 1: "SKIP", 2: "SKIP"}.get(cp.returncode,
@@ -39561,14 +39616,11 @@ def step_signoff_metrics_aggregate(project: Path) -> StepResult:
         return StepResult("signoff_metrics_aggregate", "BLOCKED",
                           time.time() - t0, f"producer not present: {prog}")
 
-    try:
-        cp = subprocess.run(
-            [sys.executable, str(prog), str(project)],
-            capture_output=True, text=True, errors="replace", timeout=300)
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        return StepResult("signoff_metrics_aggregate", "ENV_UNAVAILABLE",
-                          time.time() - t0,
-                          f"producer did not complete: {exc}")
+    cp, stopped = _run_producer(
+        "signoff_metrics_aggregate", [sys.executable, str(prog), str(project)],
+        t0)
+    if stopped is not None:
+        return stopped
     write_lines = (cp.stdout or cp.stderr or "").strip().splitlines()
     write_detail = write_lines[-1] if write_lines else f"rc={cp.returncode}"
     if cp.returncode != 0:
@@ -39578,14 +39630,12 @@ def step_signoff_metrics_aggregate(project: Path) -> StepResult:
             f"(rc={cp.returncode}): {write_detail}",
             extras={"flow_step": "37.4", "producer_rc": cp.returncode})
 
-    try:
-        checked = subprocess.run(
-            [sys.executable, str(prog), str(project), "--check"],
-            capture_output=True, text=True, errors="replace", timeout=300)
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        return StepResult("signoff_metrics_aggregate", "ENV_UNAVAILABLE",
-                          time.time() - t0,
-                          f"the record check did not complete: {exc}")
+    checked, stopped = _run_producer(
+        "signoff_metrics_aggregate",
+        [sys.executable, str(prog), str(project), "--check"], t0,
+        noun="the record check")
+    if stopped is not None:
+        return stopped
     check_lines = (checked.stdout or checked.stderr or "").strip().splitlines()
     check_detail = check_lines[-1] if check_lines else f"rc={checked.returncode}"
     outputs = [str(q) for q in (
@@ -39695,13 +39745,9 @@ def step_ic_release_docs_gen(project: Path) -> StepResult:
         return StepResult("ic_release_docs_gen", "SKIP", time.time() - t0,
                           f"{prog.name} not present in this tree")
     cmd = [sys.executable, str(prog), str(project)]
-    try:
-        cp = subprocess.run(cmd, capture_output=True, text=True,
-                            errors="replace", timeout=600)
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        return StepResult("ic_release_docs_gen", "ENV_UNAVAILABLE",
-                          time.time() - t0,
-                          f"producer did not complete: {exc}")
+    cp, stopped = _run_producer("ic_release_docs_gen", cmd, t0)
+    if stopped is not None:
+        return stopped
     detail_lines = (cp.stdout or cp.stderr or "").strip().splitlines()
     detail = detail_lines[0] if detail_lines else f"rc={cp.returncode}"
     status = {0: "PASS", 1: "SKIP", 2: "SKIP"}.get(cp.returncode,
@@ -40681,12 +40727,16 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                 _dyn_lef_args += ["--cell-lef", str(pdk.cell_lef)]
             if getattr(pdk, "liberty", None):
                 _dyn_lef_args += ["--liberty", str(pdk.liberty)]
-            subprocess.run(
+            # CZT-11 — a transient PSM solve is exactly the shape a wall
+            # clock ruins: it is long, legitimately, and it is CPU-bound with
+            # long quiet phases. Supervised on the child's output/CPU/IO
+            # instead; the note below now names a STALL as a stall.
+            _pr.run(
                 [sys.executable, str(PROGRAMS_DIR / "dynamic_ir_vectored_emit.py"),
                  "--project", str(project), "--out", str(dyn_ir_json),
                  "--static-json", str(rpt_phase3 / "ir_drop.json"),
                  "--container", container] + _dyn_lef_args,
-                timeout=1800, check=False, capture_output=True, text=True)
+                check=False, capture_output=True, text=True)
             if dyn_ir_json.is_file():
                 written.append(str(dyn_ir_json))
         except Exception as exc:
@@ -40718,10 +40768,11 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
             # EMITTER, and the gate re-runs the screen for the verdict. What
             # was wrong was the silence, not the leniency: an absent report was
             # indistinguishable from a clean one.
-            _dfm = subprocess.run(
+            # CZT-11 — supervised, not clocked.
+            _dfm = _pr.run(
                 [sys.executable, str(PROGRAMS_DIR / "dfm_screen_check.py"),
                  str(project)],
-                timeout=300, check=False, capture_output=True, text=True)
+                check=False, capture_output=True, text=True)
             if dfm_json.is_file():
                 written.append(str(dfm_json))
             else:
@@ -41090,8 +41141,10 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                         str(PROGRAMS_DIR / "si_mcf_sta.py"), "run",
                         str(project), "--container", container]
             _mcf_json.parent.mkdir(parents=True, exist_ok=True)
-            subprocess.run(_mcf_cmd, capture_output=True, text=True,
-                           timeout=1800)
+            # CZT-11 — supervised, not clocked. A multi-corner SI STA run is
+            # long by construction; the 1800 s literal stopped a solve that
+            # was still solving and the note below called it a failure.
+            _pr.run(_mcf_cmd, capture_output=True, text=True)
             if _mcf_json.is_file():
                 written.append(str(_mcf_json))
         except Exception as _mcf_exc:
@@ -49408,8 +49461,21 @@ def _emit_em_current_authority(project: Path, pdk: PdkConfig,
         before = out_json.stat().st_mtime if out_json.is_file() else None
     except OSError:
         before = None
-    proc = subprocess.run(cmd, timeout=600, check=False,
-                          capture_output=True, text=True)
+    # CZT-11 — THE ONE SITE IN THIS POPULATION WITH NO HANDLER AT ALL. A
+    # `TimeoutExpired` here did not become a verdict, a note or a skip: it
+    # propagated out of an emitter that is declared best-effort and returns a
+    # bool, taking the caller down with a traceback that names a clock. The
+    # clock is gone (a Jmax authority read is not long, but "not usually long"
+    # is not a bound and a busy host is not a finding), and the stall the
+    # supervisor CAN state is routed into this function's own contract: the
+    # artefact was not refreshed, said out loud in `notes`, return False.
+    try:
+        proc = _pr.run(cmd, check=False, capture_output=True, text=True)
+    except _pr.Stalled as _em_exc:
+        notes.append(
+            f"EM authority emit STALLED and was stopped: {_em_exc}. The Jmax "
+            f"tier stays honestly unresolved; nothing was refreshed.")
+        return False
     try:
         after = out_json.stat().st_mtime if out_json.is_file() else None
     except OSError:
