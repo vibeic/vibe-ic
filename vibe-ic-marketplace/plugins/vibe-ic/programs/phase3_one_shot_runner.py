@@ -1166,6 +1166,46 @@ def _docker_timeout_isolate(outputs: List[Path]) -> None:
                 pass
 
 
+#: What `_watchdog.run_supervised` appends to `.err` when it stops a job. The
+#: supervisor already records WHAT IT WATCHED and HOW LONG the job had shown
+#: none of it (`SupervisedResult.supervision`, vibe-ic CZT-08), but
+#: `_docker_exec` returns only `(rc, out, err)` and drops the dataclass — so at
+#: every call site in this file that evidence exists ONLY as this note. A stop
+#: that cannot say what was watched is an assertion, not a measurement; parsing
+#: it back is what lets a step RECORD the evidence instead of restating the rc.
+_SUPERVISION_NOTE_RE = re.compile(
+    r"WATCHDOG_(?P<outcome>STALLED|CEILING|ABORTED)\b(?P<body>.*)",
+    re.S)
+_SUPERVISION_FIELD_RE = re.compile(
+    r"\b(watched|since_last_progress_s|elapsed_s)=(\S+)")
+
+
+def _supervision_evidence(err: str) -> Dict[str, Any]:
+    """The supervisor's own record of a stop, recovered from its `.err` note.
+
+    Returns `{}` when the note is absent — an ABSENT note and a note saying
+    "nothing was watched" are different facts and must not collapse into one
+    default. `watched` names the progress signals that were WIRED (a job
+    supervised on output alone is a stall BY CONSTRUCTION during a silent
+    CPU-bound phase, which is a property of the wiring, not of the design);
+    `since_last_progress_s` is how long it had shown none of them.
+    PURE — parses a string, reads nothing. chip-AGNOSTIC.
+    """
+    m = _SUPERVISION_NOTE_RE.search(err or "")
+    if not m:
+        return {}
+    out: Dict[str, Any] = {"supervisor_outcome": m.group("outcome")}
+    for key, raw in _SUPERVISION_FIELD_RE.findall(m.group("body")):
+        if key == "watched":
+            out[key] = raw
+            continue
+        try:
+            out[key] = float(raw)
+        except ValueError:
+            out[key] = raw
+    return out
+
+
 # ===========================================================================
 # v1.3.47 — PROGRESS-STALL WATCHDOG glue (owner directive: "timeout estimation
 # is not professional; have a general way to let a sub-process ALWAYS finish
@@ -36520,18 +36560,59 @@ def _run_extraction_lvs(project: Path, top: str, pdk: PdkConfig,
     # v1.3.47 — a stall/ceiling kill must NOT be scored from a PARTIAL extracted
     # netlist (a half-written .spice would drive a false LVS verdict). Isolate
     # the partial output and FAIL as extraction-incomplete.
-    if rc in (_RC_STALLED, 124):
+    if rc in (_RC_STALLED, _RC_ABORTED, 124):
+        # CZT-19 — A STALL IS NOT A MISMATCH, AND THIS SITE BOOKED IT AS ONE.
+        # Both the step and `lvs_verdict.json` said "FAIL": the runner's word
+        # for "netgen compared these two circuits and they are not the same".
+        # Nothing was compared here at all — magic was stopped before it
+        # finished extracting, so no netlist reached netgen. The word asserted
+        # a finding about the DESIGN that the flow's own evidence contradicts,
+        # and `lvs_verdict.json` is a contract seven other programs read.
+        #
+        # THE STOP STATE IS A THIRD STATE, and it is recorded as one:
+        #   status  BLOCKED     — this runner's OWN word (`_aggregate_verdict`
+        #                         names it explicitly in the non-green bucket,
+        #                         so it is NOT a weakening: BLOCKED and FAIL
+        #                         both aggregate to "FAIL"; only the step's own
+        #                         word, and the persisted contract, move). A
+        #                         word `_aggregate_verdict` does not enumerate
+        #                         would fall through to its catch-all green
+        #                         `return "PASS"` — which is exactly the #925
+        #                         defect, so a NEW word was not invented here.
+        #   stopped_as          — WHICH of the three stops, never inferred
+        #                         from the rc by the reader.
+        #   supervision         — what the supervisor WATCHED and how long the
+        #                         job had shown none of it. A stop without
+        #                         that evidence is an assertion.
+        # This is exactly the correction vibe-ic#925 made to the sibling DRC
+        # arm; that fix corrected one arm of one step and left this one.
         _docker_timeout_isolate([spice_out])
+        _sup = _supervision_evidence(err or "")
+        _stopped_as = {_RC_ABORTED: "ABORTED_NO_OUTPUT",
+                       _RC_STALLED: "STALLED",
+                       124: "CEILING"}.get(rc, f"rc={rc}")
+        _why = {_RC_ABORTED: "produced no extracted-netlist bytes at all",
+                _RC_STALLED: "stopped making forward progress",
+                124: "hit the pathological-loop backstop"}.get(
+                    rc, f"was stopped (rc={rc})")
+        _detail = (
+            f"Magic ext2spice {_why} and was stopped (rc={rc}, "
+            f"{_stopped_as}) — NOTHING is known about this design's LVS "
+            f"state: no netlist was extracted, so no compare ran and netgen "
+            f"was never given two circuits. This is NOT a mismatch and NOT a "
+            f"clean run. The partial extracted netlist was isolated to "
+            f"*.timeout.partial (#443/#570); see "
+            f"extracted/ext2spice.log. Sign-off must not proceed.")
         verdict = _write_lvs_verdict(
-            project, "FAIL", "LVS_EXTRACTION_INCOMPLETE",
-            f"Magic ext2spice killed as hung/ceiling (rc={rc}); the partial "
-            f"extracted netlist was isolated (#443/#570).",
-            extras={"transcript_tail": (out + err)[-600:]})
+            project, "BLOCKED", "LVS_EXTRACTION_STALLED", _detail,
+            extras={"stopped_as": _stopped_as,
+                    "supervision": _sup,
+                    "transcript_tail": (out + err)[-600:]})
         return StepResult(
-            "lvs", "FAIL", time.time() - t0,
-            f"Magic ext2spice killed as hung/ceiling (rc={rc}) — no LVS from a "
-            f"partial extracted netlist; see extracted/ext2spice.log",
-            extras={"finding": "LVS_EXTRACTION_INCOMPLETE",
+            "lvs", "BLOCKED", time.time() - t0, _detail,
+            extras={"finding": "LVS_EXTRACTION_STALLED",
+                    "stopped_as": _stopped_as,
+                    "supervision": _sup,
                     "lvs_verdict": verdict,
                     "transcript_tail": (out + err)[-600:]})
     if not spice_out.is_file() or spice_out.stat().st_size == 0:
@@ -36796,14 +36877,66 @@ def _run_extraction_lvs(project: Path, top: str, pdk: PdkConfig,
     # artifact + named finding and FAIL the step (incomplete is never
     # silent and never wears the "compare ran" label). chip-AGNOSTIC.
     if not matched and not mismatched:
+        # CZT-19, SECOND ARM. #477 already refused to read a terminal-verdict-
+        # less run as a verdict, and wrote status INCOMPLETE — which is honest.
+        # The STEP beside it still said "FAIL", and the two words disagree in
+        # the same record: one says "we do not know", the other asserts a
+        # finding about the design.
+        #
+        # The two causes are SPLIT rather than merged, because they are
+        # different facts and a reader must be able to tell them apart:
+        #   * the supervisor STOPPED netgen (rc says so) -> BLOCKED /
+        #     LVS_COMPARE_STALLED, with what was watched and for how long.
+        #     Nothing was compared to completion, so nothing is known.
+        #   * netgen exited on its own and still printed no terminal token
+        #     -> the pre-existing INCOMPLETE / LVS_NO_TERMINAL_VERDICT record,
+        #     unchanged, because that is a different diagnosis (a truncated or
+        #     malformed report from a tool that believed it had finished).
+        # `_aggregate_verdict` maps BLOCKED and FAIL identically, so the
+        # headline run verdict is byte-identical on both arms; only the step's
+        # own word and the persisted contract move.
+        if rc in (_RC_STALLED, _RC_ABORTED, 124):
+            _docker_timeout_isolate([lvs_rpt])
+            _sup = _supervision_evidence(err or "")
+            _stopped_as = {_RC_ABORTED: "ABORTED_NO_OUTPUT",
+                           _RC_STALLED: "STALLED",
+                           124: "CEILING"}.get(rc, f"rc={rc}")
+            _why = {_RC_ABORTED: "produced no report bytes at all",
+                    _RC_STALLED: "stopped making forward progress",
+                    124: "hit the pathological-loop backstop"}.get(
+                        rc, f"was stopped (rc={rc})")
+            _detail = (
+                f"netgen LVS {_why} and was stopped (rc={rc}, "
+                f"{_stopped_as}) — the compare never reached a terminal "
+                f"verdict, so NOTHING is known about this design's LVS "
+                f"state. This is NOT a mismatch and NOT a clean run; no "
+                f"sign-off from a partial report, which was isolated to "
+                f"*.timeout.partial (#570). Sign-off must not proceed.")
+            verdict = _write_lvs_verdict(
+                project, "BLOCKED", "LVS_COMPARE_STALLED", _detail,
+                extras={"stopped_as": _stopped_as,
+                        "supervision": _sup,
+                        "lvs_report": "reports/phase3/lvs.rpt",
+                        "netgen_rc": rc,
+                        "ext2spice_warning": ext_warning,
+                        "transcript_tail": transcript[-600:]})
+            return StepResult(
+                "lvs", "BLOCKED", time.time() - t0, _detail,
+                extras={"finding": "LVS_COMPARE_STALLED",
+                        "stopped_as": _stopped_as,
+                        "supervision": _sup,
+                        "lvs_report": "reports/phase3/lvs.rpt",
+                        "lvs_verdict": verdict,
+                        "ext2spice_warning": ext_warning,
+                        "transcript_tail": transcript[-600:]})
         verdict = _write_lvs_verdict(
             project, "INCOMPLETE", "LVS_NO_TERMINAL_VERDICT",
             f"netgen LVS transcript+report carry NO terminal verdict "
             f"token ('Circuits match uniquely' / 'do NOT match' both "
             f"absent) — the compare did not run to completion (netgen "
-            f"likely killed mid-run; lvs.rpt truncated). This is an "
-            f"INCOMPLETE run, NOT a clean or even a conclusive-mismatch "
-            f"result (#477).",
+            f"exited on its own, rc={rc}; lvs.rpt truncated or malformed). "
+            f"This is an INCOMPLETE run, NOT a clean or even a "
+            f"conclusive-mismatch result (#477).",
             extras={"lvs_report": "reports/phase3/lvs.rpt",
                     "netgen_rc": rc,
                     "ext2spice_warning": ext_warning,
@@ -36812,7 +36945,7 @@ def _run_extraction_lvs(project: Path, top: str, pdk: PdkConfig,
             "lvs", "FAIL", time.time() - t0,
             f"LVS INCOMPLETE: netgen produced no terminal verdict token "
             f"(rc={rc}); lvs.rpt has no 'Circuits match' / 'do NOT match' "
-            f"line — the compare was killed mid-run, not a conclusive "
+            f"line — the compare did not run to completion, not a conclusive "
             f"result (#477 — named in lvs_verdict.json)",
             extras={"finding": "LVS_NO_TERMINAL_VERDICT",
                     "lvs_report": "reports/phase3/lvs.rpt",

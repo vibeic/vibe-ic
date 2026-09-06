@@ -1841,20 +1841,44 @@ def _check_lvs(project_dir: Path) -> AuditResult:
         # paths — it only replaces an unattributed absence with the reason.
         blocked = _lvs_blocked_verdict(project_dir)
         if blocked:
+            # CZT-19 — BLOCKED now has TWO causes and they are not the same
+            # finding. The original one is an INPUT that cannot support
+            # extraction. The second is a run the supervisor STOPPED: magic or
+            # netgen was killed as hung, so no compare completed. Reporting the
+            # second under `LVS_BLOCKED_INPUT_INCAPABLE` would name a cause the
+            # evidence does not support — the inputs were fine; the run was
+            # stopped. The rule token is chosen from the record's OWN finding,
+            # so the existing token keeps its existing meaning.
+            _bf = str(blocked.get("finding") or "").strip().upper()
+            _stopped = _bf.endswith("_STALLED") or bool(blocked.get("stopped_as"))
+            if _stopped:
+                _rule = "LVS_BLOCKED_RUN_STOPPED"
+                _cause = ("the LVS run was stopped before it could complete "
+                          "(no forward progress)")
+            else:
+                _rule = "LVS_BLOCKED_INPUT_INCAPABLE"
+                _cause = "an extraction input cannot support extraction"
+            _sup = blocked.get("supervision")
+            _sup_note = ""
+            if isinstance(_sup, dict) and _sup:
+                _sup_note = (
+                    f" Supervisor evidence: watched={_sup.get('watched')!r}, "
+                    f"since_last_progress_s="
+                    f"{_sup.get('since_last_progress_s')}.")
             result.findings.append(Finding(
-                rule="LVS_BLOCKED_INPUT_INCAPABLE", severity="ERROR",
+                rule=_rule, severity="ERROR",
                 message=(
                     "LVS is BLOCKED, not failed and not clean: "
-                    + str(blocked.get("message")
-                          or "an extraction input cannot support extraction")
-                    + " No netlist could be extracted, so no compare ran and "
-                      "NOTHING is known about this design's LVS state. "
-                      "Sign-off must not proceed."),
+                    + str(blocked.get("message") or _cause)
+                    + " No compare completed, so NOTHING is known about this "
+                      "design's LVS state. Sign-off must not proceed."
+                    + _sup_note),
                 file=str(blocked.get("tech_file") or "")))
             result.summary = {"files_found": 0, "categories_found": [],
                               "terminal_verdict": "BLOCKED",
                               "blocked": True,
                               "blocked_finding": blocked.get("finding"),
+                              "blocked_stopped_as": blocked.get("stopped_as"),
                               "blocked_input": blocked.get("tech_file")}
             return result
         result.findings.append(Finding(

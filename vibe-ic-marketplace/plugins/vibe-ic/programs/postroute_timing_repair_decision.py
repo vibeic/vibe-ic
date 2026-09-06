@@ -50,7 +50,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Optional, Union
 
 
 def _load_stance(stance: Union["Path", str, dict, None]) -> Optional[dict]:
@@ -106,6 +106,63 @@ _HARD_FAIL_VERDICTS = frozenset({
 })
 
 
+# A SECOND TIER, AND IT IS NOT A FAILURE (CZT-19). The set above answers "did
+# this domain PROVE a violation". It has no answer for a sign-off record that
+# says, in its own words, that the check NEVER COMPLETED — so such a record
+# scored the same as no record at all and Step 32 wrote `no_repair_needed.flag`
+# over it.
+#
+# MEASURED on the tree that shipped this, by driving this module with one
+# synthetic `reports/phase3/lvs_verdict.json` per status word:
+#
+#     status=FAIL        -> repair_needed True   (hard-fail token)
+#     status=INCOMPLETE  -> repair_needed False  <-- certified over an LVS
+#     status=BLOCKED     -> repair_needed False  <-- compare that never ran
+#     status=STALLED     -> repair_needed False
+#
+# and `INCOMPLETE` is not hypothetical: `phase3_one_shot_runner`'s netgen arm
+# has written exactly that word since #477. This is the vibe-ic#925 shape —
+# an unrecognised word falling through to green — one contract over.
+#
+# WHY THIS IS NOT THE DOCSTRING'S "silence is NOT failure". That rule is about
+# an ABSENT or UNPARSEABLE artefact, and it still holds unchanged: absent still
+# means nothing here. A PRESENT record that states the check did not complete
+# is not silence — it is the domain reporting, in a word its own producer
+# chose, that it certified nothing.
+#
+# ENV_UNAVAILABLE is deliberately NOT in this set. The flow already treats it
+# as an established waiver tier (`_aggregate_verdict` -> PASS_WITH_WAIVERS),
+# and moving it here would change the verdict of runs on hosts that simply
+# lack a tool — a different decision, with a different blast radius, and one
+# for the owner rather than for this fix.
+_NOT_DETERMINED_VERDICTS = frozenset({
+    "BLOCKED", "INCOMPLETE", "STALLED", "ABORTED", "NOT_CHECKED",
+    "NOT_DETERMINED", "UNDETERMINED", "INCONCLUSIVE",
+})
+
+
+def _not_determined_signal(data: Any) -> Optional[str]:
+    """Return a short description of an EXPLICIT did-not-complete signal
+    carried by a parsed sign-off artefact, or None when there is none.
+
+    Same field priority as `_hard_failure_signal`, and deliberately narrower:
+    ONLY an explicit token from `_NOT_DETERMINED_VERDICTS`. A missing field, a
+    shape this function does not understand, or an absent artefact all return
+    None — so this can never fire on silence.
+    """
+    if not isinstance(data, dict):
+        return None
+    for key in ("verdict", "status", "result"):
+        val = data.get(key)
+        if (isinstance(val, str)
+                and val.strip().upper() in _NOT_DETERMINED_VERDICTS):
+            stopped = data.get("stopped_as")
+            extra = (f" stopped_as={stopped}"
+                     if isinstance(stopped, str) and stopped else "")
+            return f"{key}={val.strip()}{extra}"
+    return None
+
+
 def _hard_failure_signal(data: Any) -> Optional[str]:
     """Return a short description of the EXPLICIT hard-failure signal carried
     by a parsed sign-off artefact, or None when there is none.
@@ -135,6 +192,19 @@ def _hard_failure_signal(data: Any) -> Optional[str]:
     return None
 
 
+def collect_non_timing_not_determined(
+    project: Union["Path", str, None],
+    signoff_reports: Optional[Dict[str, Any]] = None,
+) -> List[Dict[str, str]]:
+    """One record per non-timing sign-off domain whose artefact states the
+    check DID NOT COMPLETE: ``[{"domain","path","signal"}, ...]``.
+
+    Same population and same override semantics as
+    `collect_non_timing_failures`; only the predicate differs.
+    """
+    return _collect(project, signoff_reports, _not_determined_signal)
+
+
 def collect_non_timing_failures(
     project: Union["Path", str, None],
     signoff_reports: Optional[Dict[str, Any]] = None,
@@ -147,6 +217,17 @@ def collect_non_timing_failures(
     from disk. When both are given, the parsed override wins for the domains
     it names and the rest still come from disk.
     """
+    return _collect(project, signoff_reports, _hard_failure_signal)
+
+
+def _collect(project: Union["Path", str, None],
+             signoff_reports: Optional[Dict[str, Any]],
+             probe: Callable[[Any], Optional[str]]) -> List[Dict[str, str]]:
+    """THE one walk over the canonical sign-off table, parameterised by the
+    predicate. Extracted so the hard-failure tier and the did-not-complete tier
+    read the SAME population from the SAME files: two copies of this loop is
+    how one tier acquires a domain the other does not have.
+    """
     out: List[Dict[str, str]] = []
     overrides = signoff_reports or {}
     root: Optional[Path] = None
@@ -158,7 +239,7 @@ def collect_non_timing_failures(
 
     for domain, rel in _NON_TIMING_SIGNOFF_ARTEFACTS:
         if domain in overrides:
-            signal = _hard_failure_signal(overrides[domain])
+            signal = probe(overrides[domain])
             if signal:
                 out.append({"domain": domain, "path": rel, "signal": signal})
             continue
@@ -171,7 +252,7 @@ def collect_non_timing_failures(
             data = json.loads(p.read_text(errors="ignore"))
         except Exception:
             continue          # unparseable ⇒ not a failure
-        signal = _hard_failure_signal(data)
+        signal = probe(data)
         if signal:
             out.append({"domain": domain, "path": rel, "signal": signal})
 
@@ -182,7 +263,7 @@ def collect_non_timing_failures(
             continue
         if any(domain == d for d, _ in _NON_TIMING_SIGNOFF_ARTEFACTS):
             continue
-        signal = _hard_failure_signal(data)
+        signal = probe(data)
         if signal:
             out.append({"domain": domain, "path": "(caller-supplied)",
                         "signal": signal})
@@ -244,6 +325,7 @@ def decide(stance: Union["Path", str, dict, None],
         "setup_worst_slack_ns": None,
         "hold_worst_slack_ns": None,
         "nontiming_failures": [],
+        "nontiming_not_determined": [],
         "reason": "",
     }
     s = _load_stance(stance)
@@ -275,7 +357,15 @@ def decide(stance: Union["Path", str, dict, None],
     if project is not None or signoff_reports is not None:
         out["nontiming_failures"] = collect_non_timing_failures(
             project, signoff_reports)
-    if out["nontiming_failures"]:
+        # CZT-19 — the SECOND tier. A domain that states it never completed is
+        # not a proven failure and is not filed as one: it gets its own key, so
+        # a reader can tell "this domain failed" from "this domain was stopped
+        # and knows nothing". Both withhold the certification; only the first
+        # is a finding about the design. Like the tier above, this can only
+        # move `repair_needed` False -> True.
+        out["nontiming_not_determined"] = collect_non_timing_not_determined(
+            project, signoff_reports)
+    if out["nontiming_failures"] or out["nontiming_not_determined"]:
         out["repair_needed"] = True
 
     if out["timing_repair_needed"]:
@@ -288,13 +378,30 @@ def decide(stance: Union["Path", str, dict, None],
                 "; also non-timing sign-off failure(s): "
                 + ", ".join(f"{r['domain']}({r['signal']})"
                             for r in out["nontiming_failures"]))
-    elif out["nontiming_failures"]:
+        if out["nontiming_not_determined"]:
+            out["reason"] += (
+                "; also non-timing sign-off domain(s) that never completed: "
+                + ", ".join(f"{r['domain']}({r['signal']})"
+                            for r in out["nontiming_not_determined"]))
+    elif out["nontiming_failures"] or out["nontiming_not_determined"]:
+        parts = []
+        if out["nontiming_failures"]:
+            parts.append(
+                "non-timing sign-off failure(s): "
+                + ", ".join(f"{r['domain']}({r['signal']})"
+                            for r in out["nontiming_failures"]))
+        if out["nontiming_not_determined"]:
+            # The word matters: this is NOT a failed domain, and calling it one
+            # would assert a finding about the design that nothing measured.
+            parts.append(
+                "non-timing sign-off domain(s) that never completed, so "
+                "NOTHING is known about them: "
+                + ", ".join(f"{r['domain']}({r['signal']})"
+                            for r in out["nontiming_not_determined"]))
         out["reason"] = (
-            "no timing violation, but non-timing sign-off failure(s): "
-            + ", ".join(f"{r['domain']}({r['signal']})"
-                        for r in out["nontiming_failures"])
-            + " — Step 32 may not certify 'no repair needed' over a failed "
-              "sign-off domain")
+            "no timing violation, but " + "; ".join(parts)
+            + " — Step 32 may not certify 'no repair needed' over a sign-off "
+              "domain that failed or that never produced a verdict")
     else:
         out["reason"] = (
             f"no setup/hold violation at basis {out['basis']}"
