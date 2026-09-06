@@ -34,7 +34,13 @@ its residuals, **refuse to claim a higher score than the program
 returns**." Claude is the backstop for residual prose, not the rule
 applicator.
 
-Unit tests: `programs/tests/test_rtl_review_aggregate.py`.
+Unit tests: `programs/tests/test_rtl_review_aggregate.py` and
+`programs/tests/test_rtl_review_hygiene_json.py`.
+
+What this consumer is allowed to CONCLUDE from evidence it did not fully get —
+refuse vs report, and why a skipped auditor does not move the score (ruling
+F2036-H) — is recorded in
+`docs/decisions/2026-09-06-rtl-review-producer-json.md`.
 """
 from __future__ import annotations
 
@@ -105,7 +111,18 @@ HYGIENE_RULE_CATEGORY: Dict[str, str] = {
 
 @dataclass
 class Finding:
-    """One finding in the aggregated report."""
+    """One finding in the aggregated report.
+
+    RULING F2036-H. `not_measured_reason` is non-empty on exactly the records
+    that are NOT findings about the RTL at all — an auditor that did not run.
+    Such a record is still listed (a check that did not run is reported, never
+    counted as a pass) but it is excluded from every count that feeds the score,
+    and `ReviewReport.auditors_not_run` names it separately. A score is defined
+    over code findings; "this check did not run" is a fact about the INVOCATION,
+    and smearing it into an informational finding about the RTL is the
+    two-state collapse this repo refuses everywhere — PASS, FAIL and
+    NOT_MEASURED are three states.
+    """
     category: str
     severity: str            # ERROR | WARN | INFO
     rule_id: str
@@ -113,6 +130,11 @@ class Finding:
     line: int
     message: str
     source: str              # which sub-program emitted this
+    not_measured_reason: str = ""   # non-empty ⇒ absence, not a finding
+
+    @property
+    def not_measured(self) -> bool:
+        return bool(self.not_measured_reason)
 
     def as_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -129,6 +151,10 @@ class CategorySummary:
 
     def add(self, f: Finding) -> None:
         self.findings.append(f)
+        if f.not_measured:
+            # RULING F2036-H: listed, never counted. The score is defined over
+            # code findings and an auditor that did not run is not one.
+            return
         if f.severity == "ERROR":
             self.errors += 1
         elif f.severity == "WARN":
@@ -310,6 +336,114 @@ def _finding_records(data: Any, program: str, key: str = "findings") -> List[dic
     return records
 
 
+# ---------------------------------------------------------------------------
+# THE SECOND HALF OF #2036, from PR #2039: evidence that is READABLE but not
+# TRUSTWORTHY.
+#
+# `_read_producer_json` and `_finding_records` above answer one question — did
+# the producer leave us anything we can read at all? If not, the CLI refuses and
+# writes NO report, because a report that exists is a report someone will quote,
+# and a score computed from nothing is a measured zero over an unmeasured thing.
+#
+# But an array that parses can still contain a record that is not a finding:
+# `{}`, `{"severity": "surprise"}`, a record with no severity at all. The loader
+# used to accept every one of those with SILENT DEFAULTS — `severity` became
+# "INFO", `rule` became "unknown", `file` became "" and `line` became 0 — so a
+# producer emitting junk contributed harmless INFO noise and the review stayed
+# clean. And `rtl_precheck_gate` reporting `"auditors": []` — nothing ran at all
+# — scored 10/10 PASS.
+#
+# The line drawn here, and it is the whole doctrine of this file:
+#
+#   NO EVIDENCE  (file absent, unparseable, rc reached no verdict, a shape that
+#                 is not this producer's report)  -> REFUSE: raise, exit 3,
+#                 write nothing.
+#   EVIDENCE PRESENT BUT PARTLY UNTRUSTWORTHY (a record that is not a usable
+#                 finding; an execution list that recorded nothing) -> REPORT:
+#                 a named ERROR record inside the emitted report, so the real
+#                 evidence beside it survives and the review can never be clean.
+# ---------------------------------------------------------------------------
+#: rule_id carried by the named ERROR record each loader emits for untrustworthy
+#: evidence. Stable strings — downstream greps for them.
+_INVALID_EVIDENCE_RULE = {
+    "rtl_hygiene_lint": "hygiene_report_invalid",
+    "reset_discipline_check": "reset_report_invalid",
+    "rtl_precheck_gate": "precheck_report_invalid",
+}
+
+_FINDING_SEVERITIES = ("ERROR", "WARN", "INFO")
+
+
+def _untrusted_evidence(program: str, json_path: Path, reason: str) -> Finding:
+    """A named ERROR record standing in for evidence that cannot be trusted."""
+    return Finding(
+        category="correctness_smells",
+        severity="ERROR",
+        rule_id=_INVALID_EVIDENCE_RULE[program],
+        file=str(json_path),
+        line=0,
+        message=f"{program} evidence is unavailable or invalid: {reason}",
+        source=program,
+    )
+
+
+def _finding_record_defect(item: Dict[str, Any]) -> Optional[str]:
+    """Name why `item` is not a usable finding, or None if it is one.
+
+    Checked against what the producers actually emit, not against a doc:
+    `rtl_hygiene_lint` and `reset_discipline_check` both write `rule`, `file`,
+    `line`, `severity`, `message` on every record (plus `symbol` and, for the
+    hygiene lint, `block_eligible` / `advisory_note`, which are not required
+    here). Extra keys are fine; a missing or wrong-typed required one is not.
+    """
+    missing = [k for k in ("rule", "file", "message")
+               if not isinstance(item.get(k), str)]
+    if missing:
+        return f"lacks a string {'/'.join(missing)}"
+    line = item.get("line")
+    if not isinstance(line, int) or isinstance(line, bool) or line < 0:
+        return f"has line {line!r}, not a non-negative integer"
+    if item.get("severity") not in _FINDING_SEVERITIES:
+        return (f"has severity {item.get('severity')!r}, not one of "
+                f"{'/'.join(_FINDING_SEVERITIES)}")
+    return None
+
+
+def _auditor_record_defect(rec: Dict[str, Any]) -> Optional[str]:
+    """Name why `rec` is not a usable AuditorResult, or None if it is one.
+
+    MEASURED against `rtl_precheck_gate.AuditorResult`, which is what the
+    producer actually serialises: `name` / `passed` / `exit_code` are always
+    written, `skipped` / `skip_reason` / `stdout_tail` / `stderr_tail` carry
+    defaults. A record missing the first three is not a result — reading it as
+    one would silently attribute a verdict to an auditor that never reported.
+    """
+    if not isinstance(rec.get("name"), str) or not rec["name"].strip():
+        return "lacks a non-empty string 'name'"
+    if not isinstance(rec.get("passed"), bool):
+        return f"has passed {rec.get('passed')!r}, not a boolean"
+    exit_code = rec.get("exit_code")
+    if not isinstance(exit_code, int) or isinstance(exit_code, bool):
+        return f"has exit_code {exit_code!r}, not an integer"
+    return None
+
+
+def _partition_finding_records(
+        records: List[dict], program: str,
+        json_path: Path) -> Tuple[List[dict], List[Finding]]:
+    """Split a producer's records into usable findings and named defects."""
+    usable: List[dict] = []
+    defects: List[Finding] = []
+    for index, item in enumerate(records):
+        defect = _finding_record_defect(item)
+        if defect is None:
+            usable.append(item)
+            continue
+        defects.append(_untrusted_evidence(
+            program, json_path, f"finding {index} {defect}"))
+    return usable, defects
+
+
 def _load_hygiene_findings(json_path: Path, rc: Optional[int] = None,
                            stderr: str = "") -> List[Finding]:
     """Parse `rtl_hygiene_lint --json` output into a Finding list.
@@ -320,8 +454,10 @@ def _load_hygiene_findings(json_path: Path, rc: Optional[int] = None,
     at all — on an ordinary clean flip-flop (issue #2036).
     """
     data = _read_producer_json(json_path, "rtl_hygiene_lint", rc, stderr)
-    out: List[Finding] = []
-    for item in _finding_records(data, "rtl_hygiene_lint"):
+    usable, out = _partition_finding_records(
+        _finding_records(data, "rtl_hygiene_lint"), "rtl_hygiene_lint",
+        json_path)
+    for item in usable:
         rule_id = item.get("rule", "unknown")
         category = HYGIENE_RULE_CATEGORY.get(rule_id, "style_readability")
         out.append(Finding(
@@ -345,8 +481,10 @@ def _load_reset_findings(json_path: Path, rc: Optional[int] = None,
     first.
     """
     data = _read_producer_json(json_path, "reset_discipline_check", rc, stderr)
-    out: List[Finding] = []
-    for item in _finding_records(data, "reset_discipline_check"):
+    usable, out = _partition_finding_records(
+        _finding_records(data, "reset_discipline_check"),
+        "reset_discipline_check", json_path)
+    for item in usable:
         out.append(Finding(
             category="reset_clock_hygiene",
             severity=item.get("severity", "WARN"),
@@ -402,8 +540,22 @@ def _load_precheck_findings(json_path: Path, rc: Optional[int] = None,
             f"(got {type(auditors).__name__}) — refusing to read it as an "
             f"empty result")
 
+    # THE PUREST FORM OF #2036, and the one the landed fix still read as clean:
+    # a report whose execution list is EMPTY says NOTHING RAN. That is not a
+    # clean file — it is an unmeasured one, and it used to score 10/10 PASS.
+    if not auditors:
+        return [_untrusted_evidence(
+            "rtl_precheck_gate", json_path,
+            f"the 'auditors' {type(auditors).__name__} is empty — no auditor "
+            f"was measured, which is not a clean result")]
+
     out: List[Finding] = []
-    for rec in records:
+    for index, rec in enumerate(records):
+        defect = _auditor_record_defect(rec)
+        if defect is not None:
+            out.append(_untrusted_evidence(
+                "rtl_precheck_gate", json_path, f"auditor {index} {defect}"))
+            continue
         auditor_name = str(rec.get("name", "unknown"))
         # Map auditor name to category — most precheck auditors target
         # § 4 correctness smells, but specific ones target § 1 or § 2.
@@ -421,8 +573,9 @@ def _load_precheck_findings(json_path: Path, rc: Optional[int] = None,
             out.append(Finding(
                 category=cat, severity="INFO", rule_id=auditor_name,
                 file="", line=0,
-                message=f"auditor did not run: {reason}",
-                source=f"rtl_precheck_gate.{auditor_name}"))
+                message=f"auditor did not run (NOT_MEASURED): {reason}",
+                source=f"rtl_precheck_gate.{auditor_name}",
+                not_measured_reason=reason))
             continue
         if rec.get("passed"):
             continue
@@ -450,6 +603,19 @@ class ReviewReport:
     total_errors: int
     total_warns: int
     total_infos: int
+    #: RULING F2036-H. Every auditor that did not run, by name and reason.
+    #: Populated from exactly the records the score no longer counts, so the
+    #: number can never be quoted without its coverage.
+    auditors_not_run: List[Dict[str, str]] = field(default_factory=list)
+
+    def coverage_note(self) -> str:
+        """The clause that must travel with the score, or "" if fully covered."""
+        if not self.auditors_not_run:
+            return ""
+        listed = "; ".join(f"{a['auditor']} — {a['why']}"
+                           for a in self.auditors_not_run)
+        n = len(self.auditors_not_run)
+        return f"{n} auditor{'' if n == 1 else 's'} not run: {listed}"
 
     def as_dict(self) -> Dict[str, Any]:
         return {
@@ -469,6 +635,8 @@ class ReviewReport:
             "total_errors": self.total_errors,
             "total_warns": self.total_warns,
             "total_infos": self.total_infos,
+            "auditors_not_run": [dict(a) for a in self.auditors_not_run],
+            "coverage_note": self.coverage_note(),
             "emitted_by": _pmd.emitted_by("rtl_review_aggregate"),
         }
 
@@ -489,6 +657,14 @@ def aggregate(
         cat = f.category if f.category in per_cat else "style_readability"
         per_cat[cat].add(f)
 
+    # RULING F2036-H — the not-run records are lifted out of the score and
+    # named in their own field. They stay listed in `per_category` because a
+    # check that did not run is REPORTED, never counted as a pass; what changes
+    # is that it is no longer counted as a FINDING ABOUT THE RTL either.
+    auditors_not_run = [
+        {"auditor": f.rule_id, "why": f.not_measured_reason, "source": f.source}
+        for f in findings if f.not_measured]
+
     total_errors = sum(c.errors for c in per_cat.values())
     total_warns = sum(c.warns for c in per_cat.values())
     total_infos = sum(c.infos for c in per_cat.values())
@@ -504,6 +680,7 @@ def aggregate(
         total_errors=total_errors,
         total_warns=total_warns,
         total_infos=total_infos,
+        auditors_not_run=auditors_not_run,
     )
 
 
@@ -579,13 +756,30 @@ def report_to_markdown(rep: ReviewReport) -> str:
     # § Summary
     out.append("## Summary")
     out.append("")
-    out.append(f"- **Score**: {rep.score}/10 ({rep.severity_band})")
-    out.append(f"- **Verdict**: {rep.verdict}")
+    # RULING F2036-H: a score is never printed bare when an auditor did not
+    # run. A number that can be quoted without its coverage is #2036 one level
+    # up — "nothing was reported" reading as "there was nothing to report".
+    note = rep.coverage_note()
+    coverage = f" — {note}" if note else ""
+    out.append(f"- **Score**: {rep.score}/10 ({rep.severity_band}){coverage}")
+    out.append(f"- **Verdict**: {rep.verdict}{coverage}")
     out.append(f"- **Files reviewed**: {len(rep.files_reviewed)}")
     out.append(f"- **Errors**: {rep.total_errors}")
     out.append(f"- **Warnings**: {rep.total_warns}")
     out.append(f"- **Infos**: {rep.total_infos}")
+    out.append(f"- **Auditors not run**: {len(rep.auditors_not_run)}")
     out.append("")
+
+    # § Not measured — absence, reported as absence
+    if rep.auditors_not_run:
+        out.append("## Not measured")
+        out.append("")
+        out.append("These auditors did not run. They are neither a pass nor a "
+                   "finding; the score above is over the auditors that ran.")
+        out.append("")
+        for a in rep.auditors_not_run:
+            out.append(f"- **{a['auditor']}** — {a['why']}  (via {a['source']})")
+        out.append("")
 
     # § Per-category
     out.append("## Per-category")
@@ -608,7 +802,7 @@ def report_to_markdown(rep: ReviewReport) -> str:
         any_in_section = False
         for cat in CATEGORY_NAMES:
             for f in rep.per_category[cat].findings:
-                if f.severity != sev:
+                if f.severity != sev or f.not_measured:
                     continue
                 any_in_section = True
                 out.append(
@@ -647,7 +841,8 @@ def _cli() -> int:
     p.add_argument("--out-json", type=Path, default=None,
                    help="JSON report path (machine-readable)")
     p.add_argument("--strict", action="store_true",
-                   help="Exit non-zero if verdict != PASS")
+                   help="Exit non-zero if verdict != PASS, or if any auditor "
+                        "did not run (RULING F2036-H)")
     args = p.parse_args()
 
     if not args.rtl_dir.exists():
@@ -676,6 +871,19 @@ def _cli() -> int:
         args.out_json.write_text(
             json.dumps(report.as_dict(), indent=2), encoding="utf-8")
 
+    # RULING F2036-H — `--strict` and incomplete coverage.
+    #
+    # DOWNGRADE (exit 1), not REFUSAL (exit 3), and the reason is which claim
+    # each code makes. Exit 3 means "no verdict was reached and no report
+    # exists"; that is false here — a real review ran over the auditors that
+    # did run and its findings are real evidence, and refusing would destroy
+    # them. Exit 1 means "I reviewed this and I will not certify it as PASS",
+    # which is exactly true when a check did not run. So the report is still
+    # written, it names what did not run, and `--strict` refuses the pass.
+    if args.strict and report.auditors_not_run:
+        print(f"rtl_review_aggregate: --strict refuses to certify PASS — "
+              f"{report.coverage_note()}", file=sys.stderr)
+        return 1
     if args.strict and report.verdict != "PASS":
         return 1
     return 0

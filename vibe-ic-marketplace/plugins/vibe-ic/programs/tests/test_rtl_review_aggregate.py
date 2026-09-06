@@ -506,3 +506,107 @@ class TestEndToEndOnANeutralModule:
         # and the score responds to them rather than staying at the clean value
         assert rep.score < 9, rep.score
         assert rep.total_errors + rep.total_warns >= 1
+
+    def test_a_skipped_auditor_is_reported_beside_the_score_not_inside_it(
+            self, tmp_path):
+        """RULING F2036-H, and the record of why it was needed.
+
+        Lane cz3fix pinned the OPPOSITE of this test first, deliberately, as
+        `test_a_skipped_auditor_is_reported_and_caps_the_score`
+        (`96a9786bdf`). Its measurement stands and is the reason this test
+        exists: `review_rtl_dir` invokes `rtl_precheck_gate` with no
+        `--l12-json`, so `l12_sequence_implementation_check` ALWAYS skips, so
+        `_load_precheck_findings` ALWAYS emitted one INFO, so `compute_score`
+        could never return 10 through this program — a perfectly clean
+        flip-flop scored 9 and `skills/rtl-review/SKILL.md`'s documented
+        `10 | 0 errors, 0 warns, 0 infos | PASS` row was unreachable.
+
+        That lane declined to pick between (a) KEEP the cap and (b) SEPARATE
+        the fact, because (b) RAISES a score and no lane should raise a score
+        on its own judgement. It pinned (a) — today's behaviour — and referred
+        the choice out. It was referred, and it was ruled (b):
+
+          a skipped auditor is a fact about the INVOCATION, not a finding about
+          the RTL, so it does not belong in the score's info count.
+
+        The condition attached to that ruling is what keeps the house principle
+        — "a check that did not run is reported, never counted as a pass" —
+        intact, and it is what the second half of this test pins: the report
+        carries `auditors_not_run`, and the score is never printed without it.
+        """
+        d = tmp_path / "rtl"
+        d.mkdir()
+        (d / "register_slice.sv").write_text(REGISTER_SLICE)
+        rep = mod.review_rtl_dir(d, tmp_path / "ev")
+
+        # (b): the fact is lifted out of the score.
+        assert rep.total_errors == 0 and rep.total_warns == 0
+        assert rep.total_infos == 0, (
+            "a skipped auditor must not be counted as an informational finding "
+            "about the RTL")
+        assert rep.score == 10 and rep.verdict == "PASS"
+
+        # THE CONDITION: it is still reported, by name and reason.
+        assert [a["auditor"] for a in rep.auditors_not_run] == [
+            "l12_sequence_implementation_check"]
+        assert rep.auditors_not_run[0]["why"], "an absence needs its reason"
+
+        # and it is still visible as a record, marked as absence not a finding
+        listed = [f for cat in rep.per_category.values() for f in cat.findings
+                  if f.not_measured]
+        assert [f.rule_id for f in listed] == [
+            "l12_sequence_implementation_check"]
+        assert listed[0].severity == "INFO" and listed[0].line == 0
+        assert "NOT_MEASURED" in listed[0].message
+
+    def test_the_score_is_never_printed_without_its_coverage(self, tmp_path):
+        """RULING F2036-H's condition, at the one place a number gets quoted.
+
+        A 10 that reads as a bare 10 while an auditor did not run is #2036 one
+        level up: "nothing was reported" becoming "there was nothing to
+        report". The markdown the skill hands a human, and the JSON the flow
+        hands a program, must both carry the coverage clause.
+        """
+        d = tmp_path / "rtl"
+        d.mkdir()
+        (d / "register_slice.sv").write_text(REGISTER_SLICE)
+        rep = mod.review_rtl_dir(d, tmp_path / "ev")
+        md = mod.report_to_markdown(rep)
+
+        score_line = [l for l in md.splitlines() if "**Score**" in l]
+        assert len(score_line) == 1, md
+        assert "10/10" in score_line[0]
+        assert "l12_sequence_implementation_check" in score_line[0], score_line
+        assert "1 auditor not run" in score_line[0], score_line
+        assert "## Not measured" in md
+
+        d2 = rep.as_dict()
+        assert d2["auditors_not_run"] == rep.auditors_not_run
+        assert "l12_sequence_implementation_check" in d2["coverage_note"]
+
+    def test_strict_refuses_to_certify_pass_when_an_auditor_did_not_run(
+            self, tmp_path):
+        """RULING F2036-H: `--strict` DOWNGRADES (exit 1), never REFUSES (3).
+
+        Exit 3 in this program means "no verdict was reached and no report
+        exists". That is false here — a real review ran over the auditors that
+        did run, and refusing would destroy that evidence. Exit 1 means "I
+        reviewed this and I will not certify it as PASS", which is exactly what
+        an unrun check makes true. So both artifacts are still written.
+        """
+        import subprocess
+        import sys
+        d = tmp_path / "rtl"
+        d.mkdir()
+        (d / "register_slice.sv").write_text(REGISTER_SLICE)
+        out_md, out_json = tmp_path / "r.md", tmp_path / "r.json"
+        r = subprocess.run(
+            [sys.executable, str(mod.PROGRAMS_DIR / "rtl_review_aggregate.py"),
+             "--rtl-dir", str(d), "--tmp-dir", str(tmp_path / "ev"),
+             "--out-md", str(out_md), "--out-json", str(out_json), "--strict"],
+            capture_output=True, text=True, timeout=600)
+        assert r.returncode == 1, (r.returncode, r.stdout, r.stderr)
+        assert "l12_sequence_implementation_check" in r.stderr, r.stderr
+        # a downgrade keeps the evidence; a refusal would not
+        assert out_md.is_file() and out_json.is_file()
+        assert json.loads(out_json.read_text())["verdict"] == "PASS"
