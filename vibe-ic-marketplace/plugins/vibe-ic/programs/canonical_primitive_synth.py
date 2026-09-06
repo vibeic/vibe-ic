@@ -1814,9 +1814,15 @@ def extract_stated_reset_poles(desc_text: str) -> set:
         low = line.lower()
         if not _RESET_TOKEN.search(low):
             continue
-        if "asynchronous reset" in low or "async reset" in low:
+        # "asynchronous reset" CONTAINS "synchronous reset", and "async reset"
+        # contains "sync reset", so a substring test reads every asynchronous
+        # statement as stating both poles -- which the ambiguity rule below then
+        # discards, silently recording no pole at all. Measured 2026-09-06 on the
+        # three sync-reset templates once the fixture population was widened from
+        # ten shapes to sixteen. The boundary is required on the left.
+        if re.search(r"(?<![a-z])async(?:hronous)?\s+reset", low):
             poles.add("async_reset")
-        if "synchronous reset" in low or "sync reset" in low:
+        if re.search(r"(?<![a-z])sync(?:hronous)?\s+reset", low):
             poles.add("sync_reset")
         if "active low" in low or "active-low" in low:
             poles.add("active_low_reset")

@@ -199,6 +199,59 @@ _INLINE_POS = {
         "Input ports:\n clk: Clock.\n rst_n: Active low reset.\n"
         " d: 4-bit parallel data input.\n"
         "Output ports:\n valid_out: Valid signal.\n dout: Serial output.\n"),
+    # The remaining SIX shapes, added when an audit showed the inline population
+    # was 10 of 16: every claim this module makes about "the canonical
+    # descriptions" was measured on ten of the sixteen, and the dataset-backed
+    # tests that would have covered the rest SKIP wherever the corpus is absent.
+    "serial_to_parallel_8": (
+        "Module name:\n    serial2parallel\n"
+        "Implement a series-parallel conversion: eight serial input bits are\n"
+        "assembled into one 8-bit word, from the most significant bit to the "
+        "least.\n"
+        "Input ports:\n clk: Clock.\n rst_n: Active low reset.\n"
+        " din_serial: Serial input bit.\n din_valid: High when din_serial is "
+        "valid.\n"
+        "Output ports:\n dout_parallel: 8-bit assembled word.\n"
+        " dout_valid: High when dout_parallel is complete.\n"),
+    "traffic_light_fsm": (
+        "Module name:\n    traffic_light\n"
+        "Implement a traffic light controller with a pedestrian pass_request.\n"
+        "Input ports:\n rst_n: Active low reset.\n clk: Clock.\n"
+        " clock: Clock signal.\n pass_request: Pedestrian request.\n"
+        "Output ports:\n red: Red lamp.\n yellow: Yellow lamp.\n"
+        " green: Green lamp.\n"),
+    "radix2_signed_divider": (
+        "Module name:\n    radix2_div\n"
+        "Implement a radix-2 divider that handles signed or unsigned operands\n"
+        "according to the sign input.\n"
+        "Input ports:\n clk: Clock.\n rst: Reset.\n sign: 1 for signed "
+        "operands.\n"
+        " dividend: 8-bit dividend.\n divisor: 8-bit divisor.\n"
+        " opn_valid: Operands are valid.\n"
+        "Output ports:\n res_valid: Result is valid.\n result: 16-bit "
+        "result.\n"),
+    "ieee754_single_multiplier": (
+        "Module name:\n    float_multi\n"
+        "Implement an IEEE 754 single-precision floating-point multiplier.\n"
+        "Input ports:\n clk: Clock.\n rst: Reset.\n a: 32-bit operand.\n"
+        " b: 32-bit operand.\n"
+        "Output ports:\n z: 32-bit product.\n"),
+    "async_gray_fifo": (
+        "Module name:\n    asyn_fifo\n"
+        "Implement an asynchronous FIFO whose pointers cross the clock domains\n"
+        "as gray code.\n"
+        "Input ports:\n wclk: Write clock.\n rclk: Read clock.\n"
+        " wrstn: Write-domain active low reset.\n rrstn: Read-domain reset.\n"
+        " winc: Write enable.\n rinc: Read enable.\n wdata: Write data.\n"
+        "Output ports:\n wfull: FIFO full.\n rempty: FIFO empty.\n"
+        " rdata: Read data.\n"),
+    "lfsr4_xnor_left": (
+        "Module name:\n    LFSR\n"
+        "Implement a 4-bit linear feedback shift register. Each cycle the\n"
+        "register is shifted left and the new low bit is out[3] xor out[2],\n"
+        "inverted.\n"
+        "Input ports:\n clk: Clock.\n rst: Reset.\n"
+        "Output ports:\n out: 4-bit register value.\n"),
 }
 
 # Near-miss descriptions that MUST fail-closed to None (no template mis-fire).
@@ -922,3 +975,36 @@ def test_the_boundary_cases_say_what_was_missing_where_they_can():
     assert why is not None and any("ratio" in u for u in why["unresolved"])
     why = rcs.route_to_ai_reason(_BOUNDARY_NEAR_MISSES["elastic with no clock stated"])
     assert why is not None and any("clock" in u for u in why["unresolved"])
+
+
+def test_asynchronous_is_not_read_as_synchronous():
+    """"asynchronous reset" CONTAINS "synchronous reset". A substring test reads
+    it as stating both poles, the ambiguity rule then discards both, and an input
+    asking for an asynchronous reset against a synchronous template is answered
+    anyway -- exactly the silent wrong answer this layer exists to stop.
+
+    Found only when the inline population was widened from ten shapes to sixteen:
+    none of the original ten says "asynchronous reset"."""
+    assert rcs.extract_stated_reset_poles(
+        "The reset is an asynchronous reset.") == {"async_reset"}
+    assert rcs.extract_stated_reset_poles(
+        "The reset is a synchronous reset.") == {"sync_reset"}
+    assert rcs.extract_stated_reset_poles("rst: async reset.") == {"async_reset"}
+    assert rcs.extract_stated_reset_poles("rst: sync reset.") == {"sync_reset"}
+    # a text that really does state both is still ambiguous, and records neither
+    assert rcs.extract_stated_reset_poles(
+        "An asynchronous reset and a synchronous reset.") == set()
+    # and the consequence: a sync-reset template is withdrawn from an input that
+    # asks for an asynchronous one
+    desc = _INLINE_POS["lfsr4_xnor_left"] + "The reset is an asynchronous reset.\n"
+    assert "sync_reset" in rcs.template_commitments("lfsr4_xnor_left")
+    assert rcs.detect_shape(desc) is None
+    assert rcs.route_to_ai_reason(desc)["property"] == "async_reset"
+
+
+def test_the_inline_population_is_every_shape():
+    """The claim "no canonical description conflicts with its own template" is
+    only worth what its population is worth. It was ten of sixteen, and the
+    dataset-backed tests that would have covered the rest SKIP wherever the
+    corpus is absent -- which is where the bug above was hiding."""
+    assert set(_INLINE_POS) == {shape for shape, _ in rcs._DETECTORS}
