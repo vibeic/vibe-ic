@@ -629,7 +629,56 @@ def test_f2035_f5_alternative_architecture_control_stays_green(solve_as):
         assert ("rdata[%d:%d] <= ~sel[%d] ? wdata[%d:%d] : 8'h00;"
                 % (hi, lo, i, hi, lo)) in rtl, rtl
     assert "active-low" in rtl and "unselected bytes zeroed" in rtl
-    assert "decoded response" in rtl and "pre-aligned by the target" in rtl
+
+    # -- the response-mode and store-lane axes, asserted as SUBSTANCE --------- #
+    # These two axes used to be pinned by the `//` comment this emission
+    # carries, which made the control green even while the two stated facts
+    # could not change a single gate. A comment is not an architecture. Each
+    # axis is now pinned twice: PROVABLY INERT on this interface, and PROVABLY
+    # LOAD-BEARING on one where the fact has somewhere to act.
+    def _stripped(prompt, ports=_F5_PORTS, top="wb_beat_store"):
+        got = solve_as(top, _neutral_record(top, ports, prompt))
+        return None if got is None else "\n".join(
+            l for l in got.splitlines() if not l.strip().startswith("//"))
+
+    # (a) response mode, INERT here: this interface exposes no response port, so
+    #     the stated mode constrains a signal this module does not carry and the
+    #     emitted hardware is identical either way. Byte equality, not a string.
+    assert _stripped(_F5_ALT) == _stripped(
+        _F5_ALT.replace("The response is decoded.",
+                        "The response is forwarded raw.")), \
+        "with no response port the stated mode must not move a single gate"
+
+    # (b) response mode, LOAD-BEARING where the interface carries the pair: the
+    #     two stated facts must produce DIFFERENT hardware, not different prose.
+    _resp_ports = _F5_PORTS + ["input  wire [1:0] sts_in",
+                               "output wire [1:0] sts_out"]
+    _resp_raw = _F5_ALT.replace(
+        "The response is decoded.",
+        "The response on sts_in is forwarded raw to sts_out.")
+    _resp_dec = _F5_ALT.replace("The response is decoded.",
+                                "The response on sts_in is decoded to sts_out.")
+    _raw_rtl = _stripped(_resp_raw, _resp_ports)
+    assert _raw_rtl is not None and "sts_out <= sts_in;" in _raw_rtl, _raw_rtl
+    assert _stripped(_resp_dec, _resp_ports) != _raw_rtl, \
+        "raw and decoded must not emit the same hardware"
+
+    # (c) store lane, INERT here: transfers are word-aligned, so the lane offset
+    #     is always zero and which side aligns it cannot change a gate.
+    assert _stripped(_F5_ALT) == _stripped(
+        _F5_ALT.replace("The store lane is aligned by the target.",
+                        "The store lane is pre-aligned by the initiator.")), \
+        "under word alignment the lane-aligning side must not move a gate"
+
+    # (d) store lane, LOAD-BEARING once word alignment is lifted: the two stated
+    #     facts then differ in OUTCOME — the initiator-aligned transfer is fully
+    #     determined and emits, the target-aligned one is not and is refused.
+    _unaligned = _F5_ALT.replace("Transfers must be word-aligned.",
+                                 "Unaligned transfers are permitted.")
+    assert _stripped(_unaligned) is None, "target-aligned + unaligned is undetermined"
+    assert _stripped(_unaligned.replace(
+        "The store lane is aligned by the target.",
+        "The store lane is pre-aligned by the initiator.")) is not None
 
 
 def test_f2035_f5_understated_beat_is_routed_to_ai_by_name(solve_as):
@@ -1010,3 +1059,485 @@ def test_f2035_contract_layer_is_chip_agnostic():
     for bad in ("cvdp_copilot_", "sha256", "md5", "prompt_hash",
                 "benchmark_name", "ANSWER_LOOKUP"):
         assert bad not in src, "forbidden dispatch token %r in the solver" % bad
+
+
+# =========================================================================== #
+# #2035 RESIDUAL — three defects that survived the v1.17.53 contract landing.
+#
+# The contract layer landed on 2026-09-06 (`e97d31d191ec`). These tests pin the
+# three places where it still failed its own two rows, each MEASURED on the
+# landed base 91d9063b4d31 before being fixed:
+#
+#   R1 (F1) the EXECUTABLE SEQUENTIAL REFERENCE — the deliverable the issue
+#           names for F1 — could not run a supplied stage expression containing
+#           a Verilog sized literal, the commonest token there is, and the
+#           program emitted RTL for such a design reporting NOTHING unresolved.
+#   R2 (F5) the beat data port was taken by DECLARATION ORDER, so an interface
+#           carrying an address and a write-data port of the same width stored
+#           the ADDRESS, silently.
+#   R3 (F5) `response_mode` and `prealigned_store` — two of the three facts the
+#           F5 row names — reached only a `//` comment, so two designs stating
+#           OPPOSITE facts emitted byte-identical hardware.
+# =========================================================================== #
+_BASE_SHA_M = "91d9063b4d3112fcb714405a4af0dcc070979c07"
+
+
+def _load_landed_solver(tmp_path, tag):
+    """Load `modify_complete_synth.py` as it stood at the LANDED contract base
+    91d9063b4d31, or skip saying NOT_MEASURED. This is the pre-fix arm for the
+    three residual defects; it is taken by an explicit blob read, never by a
+    working-tree stash."""
+    root = _PROG.parent
+    while root != root.parent and not (root / ".git").exists():
+        root = root.parent
+    if not (root / ".git").exists():
+        pytest.skip("NOT_MEASURED: no git checkout to read the pre-fix source from")
+    try:
+        got = subprocess.run(["git", "show", "%s:%s" % (_BASE_SHA_M, _REPO_REL)],
+                             cwd=str(root), capture_output=True, text=True)
+    except OSError:
+        pytest.skip("NOT_MEASURED: git unavailable")
+    if got.returncode != 0:
+        pytest.skip("NOT_MEASURED: base blob %s not present in this checkout"
+                    % _BASE_SHA_M)
+    mod_path = tmp_path / ("landed_%s.py" % tag)
+    mod_path.write_text(got.stdout)
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("landed_mcs_%s" % tag,
+                                                  str(mod_path))
+    old = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(old)
+    return old
+
+
+def _iface(ports):
+    """Split a fixture's port list into the (ins, outs) the contract layer sees,
+    without going through the record reader — so a contract can be built for a
+    fixture directly."""
+    ins, outs = [], []
+    for p in ports:
+        m = re.match(r"\s*(input|output)\s+\w+\s*(?:\[(\d+):(\d+)\]\s*)?(\w+)", p)
+        w = 1 if m.group(2) is None else abs(int(m.group(2)) - int(m.group(3))) + 1
+        (ins if m.group(1) == "input" else outs).append((m.group(4), w))
+    return ins, outs
+
+
+def _strip_comments(rtl):
+    return "\n".join(l for l in rtl.splitlines() if not l.strip().startswith("//"))
+
+
+def _body(rtl):
+    """Everything after the port list. A port NAME appearing in the header says
+    nothing about whether the emitter drove it, so every 'this signal is absent'
+    assertion below is made against the body."""
+    return rtl.split(");", 1)[1] if ");" in rtl else rtl
+
+
+# --------------------------------------------------------------------------- #
+# R1 — the executable sequential reference and the Verilog sized literal
+# --------------------------------------------------------------------------- #
+_R1_PORTS = ["input  wire clk", "input  wire reset",
+             "input  wire [11:0] data_in", "output wire [11:0] data_out"]
+
+# A supplied pipeline whose own arithmetic carries a SIZED literal. Nothing here
+# is exotic: `15'd1` is how a design writes a constant in the stage it supplies.
+_R1_SIZED = """Complete the accumulator module. It is a 12-bit design.
+This design supplies its own arithmetic pipeline. Each stage is registered on the
+rising edge of clk.
+
+  Stage 1: acc[14:0] = acc + data_in + 15'd1
+  Stage 2: data_out = acc >> 3
+"""
+
+# The ALTERNATIVE-ARCHITECTURE CONTROL for R1: the SAME supplied behaviour
+# written the other entirely legitimate way, with a plain decimal constant. It
+# must stay green AND its executable reference must produce the same trace — a
+# fix that only taught the reference one spelling would be a fix to a spelling.
+_R1_PLAIN = _R1_SIZED.replace("15'd1", "1")
+
+
+def test_f2035_r1_landed_program_emitted_rtl_whose_reference_could_not_run(
+        tmp_path):
+    """R1, the OLD WRONG behaviour, measured on the landed base.
+
+    The landed program accepted this design, emitted RTL and named NOTHING as
+    unresolved — while its own executable sequential reference, the artefact the
+    issue names for F1, raised on the design's own constant. A contract that
+    cannot be RUN is the one thing the row says the contract must stop being."""
+    old = _load_landed_solver(tmp_path, "r1")
+    old._toplevel = lambda r: "staged_acc"
+    rec = _neutral_record("staged_acc", _R1_PORTS, _R1_SIZED)
+    notes = []
+    assert old.solve(rec, notes) is not None, "the landed program claimed this design"
+    assert notes == [], "and it named nothing unresolved"
+    ins, outs = _iface(_R1_PORTS)
+    c = old.extract_contract(rec, ins, outs)
+    assert [s.expr for s in c.stages] == ["acc + data_in + 15'd1", "acc >> 3"]
+    with pytest.raises(KeyError) as ei:
+        c.run([{"data_in": 5}])
+    assert "d1" in str(ei.value), ei.value
+
+    # AFTER: the same design, the same reference call, a value trace.
+    assert M.extract_contract(rec, ins, outs).run([{"data_in": 5}]) == [
+        {"acc": 6, "data_out": 0}]
+
+
+def test_f2035_r1_reference_runs_the_supplied_sized_literal(solve_as):
+    """R1, the NEW behaviour: the reference executes the design's own stage."""
+    rec = _neutral_record("staged_acc", _R1_PORTS, _R1_SIZED)
+    notes = []
+    assert solve_as("staged_acc", rec, notes) is not None
+    assert notes == [], notes
+    ins, outs = _iface(_R1_PORTS)
+    c = M.extract_contract(rec, ins, outs)
+    trace = c.run([{"data_in": 5}, {"data_in": 7}, {"data_in": 9}])
+    # acc is registered, so it advances on the PREVIOUS state: 0+5+1, 6+7+1,
+    # 14+9+1; data_out is the previous acc >> 3.
+    assert [t["acc"] for t in trace] == [6, 14, 24], trace
+    assert [t["data_out"] for t in trace] == [0, 0, 1], trace
+
+
+def test_f2035_r1_alternative_spelling_control_stays_green_and_agrees(solve_as):
+    """R1 ALTERNATIVE-ARCHITECTURE CONTROL: the same supplied behaviour written
+    with a plain decimal constant is equally legitimate. It must stay green, and
+    its reference trace must be IDENTICAL to the sized-literal one."""
+    ins, outs = _iface(_R1_PORTS)
+    seq = [{"data_in": 5}, {"data_in": 7}, {"data_in": 9}]
+    plain = _neutral_record("staged_acc", _R1_PORTS, _R1_PLAIN)
+    sized = _neutral_record("staged_acc", _R1_PORTS, _R1_SIZED)
+    assert solve_as("staged_acc", plain) is not None
+    assert (M.extract_contract(plain, ins, outs).run(seq)
+            == M.extract_contract(sized, ins, outs).run(seq))
+
+
+def test_f2035_r1_sized_literal_is_truncated_to_its_own_stated_width():
+    """A sized literal carries its OWN width. `2'd7` is 3, not 7 — the reference
+    must wrap where the hardware wraps, or it is not a reference."""
+    assert M._eval_int_expr("2'd7", {}) == 3
+    assert M._eval_int_expr("8'hFF + 1", {}) == 256
+    assert M._eval_int_expr("4'b1010", {}) == 10
+    assert M._eval_int_expr("a + 3'o7", {"a": 1}) == 8
+
+
+def test_f2035_r1_unrunnable_stage_expression_is_routed_to_ai_by_name(solve_as):
+    """The other half of R1, and the half that keeps it honest: an expression
+    the reference genuinely CANNOT execute — here a Verilog bit-select — must be
+    REFUSED and NAMED, not emitted with a reference that dies when run."""
+    prompt = _R1_SIZED.replace("acc + data_in + 15'd1", "acc + data_in[7:0]")
+    notes = []
+    rtl = solve_as("staged_acc",
+                   _neutral_record("staged_acc", _R1_PORTS, prompt), notes)
+    assert rtl is None, (rtl or "")[:400]
+    named = [n.split(":")[0] for n in notes]
+    assert "stage_expression" in named, notes
+
+
+def test_f2035_r1_an_unsized_literal_is_refused_rather_than_given_a_width():
+    """`'d7` has the width of its context. This reference does not model that
+    context, so it refuses rather than inventing one."""
+    with pytest.raises(ValueError):
+        M._eval_int_expr("'d7", {})
+
+
+@pytest.mark.skipif(not HAVE_IVERILOG, reason="NOT_MEASURED: iverilog absent")
+def test_f2035_r1_emitted_sized_literal_rtl_matches_the_reference(solve_as,
+                                                                  tmp_path):
+    """The reference and the emitted hardware must agree cycle for cycle on the
+    design's own sized constant — otherwise the reference is executable and
+    wrong, which is worse than unrunnable."""
+    rec = _neutral_record("staged_acc", _R1_PORTS, _R1_SIZED)
+    rtl = solve_as("staged_acc", rec)
+    assert rtl is not None
+    ins, outs = _iface(_R1_PORTS)
+    seq = [{"data_in": v} for v in (5, 7, 9, 1, 4095, 2)]
+    ref = M.extract_contract(rec, ins, outs).run(seq)
+    vecs = "\n".join("        data_in = 12'd%d; @(posedge clk); #1 "
+                     "$display(\"S %%0d %%0d\", dut.acc, data_out);" % s["data_in"]
+                     for s in seq)
+    tb = """
+`timescale 1ns/1ps
+module tb;
+    reg clk = 0, reset = 1;
+    reg [11:0] data_in = 0;
+    wire [11:0] data_out;
+    staged_acc dut(.clk(clk), .reset(reset), .data_in(data_in), .data_out(data_out));
+    always #5 clk = ~clk;
+    initial begin
+        @(posedge clk); #1 reset = 0;
+%s
+        $finish;
+    end
+endmodule
+""" % vecs
+    got = [l.split()[1:] for l in _run_iverilog(rtl, "staged_acc", tb, tmp_path)]
+    pairs = [(int(a), int(b)) for a, b in got]
+    assert pairs == [(t["acc"], t["data_out"]) for t in ref], (pairs, ref)
+
+
+# --------------------------------------------------------------------------- #
+# R2 — which port carries the beat
+# --------------------------------------------------------------------------- #
+# The same transfer as the landed F5 fixture, on an interface that ALSO carries
+# an address of the beat width. Nothing in the prose says which of the two is the
+# beat data.
+_R2_PORTS = ["input  wire clk", "input  wire rst_n",
+             "input  wire [31:0] addr", "input  wire [31:0] wdata",
+             "input  wire [3:0] sel", "output wire [31:0] rdata"]
+
+# R2 ALTERNATIVE-ARCHITECTURE CONTROL: the same design with a byte-granular
+# address of a DIFFERENT width — an equally ordinary interface, and one on which
+# the beat data port IS structurally determined. It must stay green and must
+# pick the write data.
+_R2_UNAMBIGUOUS_PORTS = ["input  wire clk", "input  wire rst_n",
+                         "input  wire [7:0] addr", "input  wire [31:0] wdata",
+                         "input  wire [3:0] sel", "output wire [31:0] rdata"]
+
+
+def test_f2035_r2_landed_program_stored_the_address_by_declaration_order(
+        tmp_path):
+    """R2, the OLD WRONG behaviour, measured on the landed base.
+
+    Two input ports carry the stated 32-bit beat. The landed program took the
+    FIRST one and said nothing, so the emitted store unit writes the ADDRESS
+    into the data lanes. That is not the conventional reading being preferred
+    over the input — it is declaration ORDER deciding the design."""
+    old = _load_landed_solver(tmp_path, "r2")
+    old._toplevel = lambda r: "wb2"
+    notes = []
+    rtl = old.solve(_neutral_record("wb2", _R2_PORTS, _F5_STATED), notes)
+    assert rtl is not None, "the landed program claimed this design"
+    assert notes == [], "and it named nothing unresolved"
+    assert "rdata[7:0] <= sel[0] ? addr[7:0] : rdata[7:0];" in rtl, rtl
+    assert "wdata" not in _body(rtl), rtl
+
+    # AFTER: the same record no longer resolves by declaration order.
+    saved = M._toplevel
+    try:
+        M._toplevel = lambda r: "wb2"
+        after = []
+        assert M.solve(_neutral_record("wb2", _R2_PORTS, _F5_STATED), after) is None
+        assert [n.split(":")[0] for n in after] == ["beat_data_in"], after
+    finally:
+        M._toplevel = saved
+
+
+def test_f2035_r2_ambiguous_beat_data_port_is_routed_to_ai_by_name(solve_as):
+    """R2, the NEW behaviour: the choice the input did not make is NAMED."""
+    notes = []
+    rtl = solve_as("wb2", _neutral_record("wb2", _R2_PORTS, _F5_STATED), notes)
+    assert rtl is None, (rtl or "")[:400]
+    named = [n.split(":")[0] for n in notes]
+    assert named == ["beat_data_in"], notes
+    assert "addr" in notes[0] and "wdata" in notes[0], notes
+
+
+
+
+def test_f2035_r2_an_interface_with_no_beat_width_port_is_named_not_silent(
+        solve_as):
+    """A refusal must say WHICH fact is missing. With no port of the stated beat
+    width at all the landed program returned a bare None from deep inside the
+    emitter; now the absence is named on both sides."""
+    ports = ["input  wire clk", "input  wire rst_n",
+             "input  wire [15:0] wdata", "input  wire [3:0] sel",
+             "output wire [15:0] rdata"]
+    notes = []
+    assert solve_as("wb3", _neutral_record("wb3", ports, _F5_STATED), notes) is None
+    named = {n.split(":")[0] for n in notes}
+    assert {"beat_data_in", "beat_data_out"} <= named, notes
+
+
+# --------------------------------------------------------------------------- #
+# R3 — a stated fact that reaches only a comment
+# --------------------------------------------------------------------------- #
+# An interface that DOES carry a response pair, so the stated response mode has
+# somewhere to act. `sts_in` is the target's response, `sts_out` the module's.
+_R3_PORTS = ["input  wire clk", "input  wire rst_n",
+             "input  wire [31:0] wdata", "input  wire [3:0] sel",
+             "input  wire [1:0] sts_in", "output wire [31:0] rdata",
+             "output wire [1:0] sts_out"]
+
+_R3_RAW = """Complete the word-boundary store unit.
+The data bus is 32-bit and one beat is transferred per cycle.
+`sel` is the byte mask. A mask bit that is set selects that byte.
+Unselected bytes are preserved.
+Transfers must be word-aligned.
+The response on sts_in is forwarded raw to sts_out.
+The store lane is pre-aligned by the initiator.
+"""
+
+# The SAME design with the one stated fact flipped. This is the pair that made
+# the defect visible: on the landed base these two emitted byte-identical
+# hardware and differed only in a `//` comment.
+_R3_DECODED = _R3_RAW.replace("is forwarded raw to sts_out",
+                              "is decoded to sts_out")
+
+
+def test_f2035_r3_landed_program_emitted_the_same_hardware_for_both_modes(
+        tmp_path):
+    """R3, the OLD WRONG behaviour, measured on the landed base.
+
+    `raw` and `decoded` are opposite statements about the same signal. The
+    landed program recovered the distinction into `BeatModel.response_mode` and
+    then spent it entirely on a comment: strip the comments and the two
+    emissions are the same bytes. A fact that cannot change the hardware has not
+    been read, whatever the model says it holds."""
+    old = _load_landed_solver(tmp_path, "r3")
+    old._toplevel = lambda r: "wb_resp"
+    a = old.solve(_neutral_record("wb_resp", _R3_PORTS, _R3_RAW))
+    b = old.solve(_neutral_record("wb_resp", _R3_PORTS, _R3_DECODED))
+    assert a is not None and b is not None
+    assert _strip_comments(a) == _strip_comments(b), "expected the defect here"
+    assert "sts_out" not in _body(_strip_comments(a)), a
+
+    # AFTER: the two opposite statements no longer produce the same answer.
+    saved = M._toplevel
+    try:
+        M._toplevel = lambda r: "wb_resp"
+        na = M.solve(_neutral_record("wb_resp", _R3_PORTS, _R3_RAW))
+        nb = M.solve(_neutral_record("wb_resp", _R3_PORTS, _R3_DECODED))
+        assert na is not None and nb is None
+        assert "sts_out <= sts_in;" in na, na
+    finally:
+        M._toplevel = saved
+
+
+def test_f2035_r3_a_raw_response_becomes_real_hardware(solve_as):
+    """R3, the NEW behaviour: `raw` means forwarded unmodified, and that is
+    fully determined once the response pair is known — so it is emitted."""
+    notes = []
+    rtl = solve_as("wb_resp", _neutral_record("wb_resp", _R3_PORTS, _R3_RAW),
+                   notes)
+    assert rtl is not None, notes
+    assert notes == [], notes
+    assert "sts_out <= sts_in;" in rtl, rtl
+    assert "output reg  [1:0] sts_out" in rtl, rtl
+
+
+def test_f2035_r3_a_decoded_response_is_routed_to_ai_by_name(solve_as):
+    """The other half: `decoded` is NOT determined — the input never says what
+    it is decoded INTO. Emitting some encoding here would be the hidden expected
+    value the issue forbids, so it is refused and named."""
+    notes = []
+    rtl = solve_as("wb_resp",
+                   _neutral_record("wb_resp", _R3_PORTS, _R3_DECODED), notes)
+    assert rtl is None, (rtl or "")[:400]
+    named = [n.split(":")[0] for n in notes]
+    assert named == ["response_decode"], notes
+    assert "sts_in" in notes[0], notes
+
+
+def test_f2035_r3_the_two_modes_no_longer_emit_the_same_bytes(solve_as):
+    """Membership, not counts: the pair that was byte-identical must now differ
+    in OUTCOME, and it must differ for the stated reason."""
+    raw = solve_as("wb_resp", _neutral_record("wb_resp", _R3_PORTS, _R3_RAW))
+    dec = solve_as("wb_resp", _neutral_record("wb_resp", _R3_PORTS, _R3_DECODED))
+    assert raw is not None and dec is None
+
+
+def test_f2035_r3_alternative_architecture_control_stays_green(solve_as):
+    """R3 ALTERNATIVE-ARCHITECTURE CONTROL: the same raw-response transfer built
+    the other legitimate way — an active-LOW mask whose unselected bytes are
+    zeroed. Equally correct; must stay green and must still forward the
+    response, so the fix cannot have keyed on the mask architecture."""
+    alt = (_R3_RAW.replace("A mask bit that is set selects that byte.",
+                           "A mask bit that is 0 selects that byte.")
+                  .replace("Unselected bytes are preserved.",
+                           "Unselected bytes are zeroed."))
+    notes = []
+    rtl = solve_as("wb_resp", _neutral_record("wb_resp", _R3_PORTS, alt), notes)
+    assert rtl is not None, notes
+    assert "rdata[7:0] <= ~sel[0] ? wdata[7:0] : 8'h00;" in rtl, rtl
+    assert "sts_out <= sts_in;" in rtl, rtl
+
+
+
+
+def test_f2035_r3_mismatched_response_widths_are_routed_to_ai_by_name(solve_as):
+    """A response pair the input names but whose two sides are different widths
+    leaves 'what happens to the difference' unstated. Named, not truncated."""
+    ports = [p.replace("[1:0] sts_out", "[3:0] sts_out") for p in _R3_PORTS]
+    notes = []
+    assert solve_as("wb_resp",
+                    _neutral_record("wb_resp", ports, _R3_RAW), notes) is None
+    named = [n.split(":")[0] for n in notes]
+    assert "response_width" in named, notes
+
+
+def test_f2035_r3_target_aligned_lane_without_word_alignment_is_named(solve_as):
+    """The `prealigned_store` half of R3, and the place where the honest answer
+    is a REFUSAL rather than a fix. When the target aligns the store lane and
+    transfers are NOT restricted to word boundaries, where the lane lands is a
+    real decision — wrap or drop — that the input has not made. The landed
+    program spent this fact on a comment too; it is now named."""
+    prompt = (_F5_STATED.replace("Transfers must be word-aligned.",
+                                 "Unaligned transfers are permitted.")
+                        .replace("The store lane is pre-aligned by the initiator.",
+                                 "The store lane is aligned by the target."))
+    notes = []
+    assert solve_as("wb_beat_store",
+                    _neutral_record("wb_beat_store", _F5_PORTS, prompt),
+                    notes) is None
+    named = [n.split(":")[0] for n in notes]
+    assert "store_lane_placement" in named, notes
+
+
+
+
+@pytest.mark.skipif(not HAVE_IVERILOG, reason="NOT_MEASURED: iverilog absent")
+def test_f2035_r3_emitted_raw_forward_really_forwards(solve_as, tmp_path):
+    """The emitted raw forward is checked as hardware, not as a string."""
+    rtl = solve_as("wb_resp", _neutral_record("wb_resp", _R3_PORTS, _R3_RAW))
+    assert rtl is not None
+    tb = """
+`timescale 1ns/1ps
+module tb;
+    reg clk = 0, rst_n = 0;
+    reg [31:0] wdata = 0; reg [3:0] sel = 4'hF; reg [1:0] sts_in = 0;
+    wire [31:0] rdata; wire [1:0] sts_out;
+    wb_resp dut(.clk(clk), .rst_n(rst_n), .wdata(wdata), .sel(sel),
+                .sts_in(sts_in), .rdata(rdata), .sts_out(sts_out));
+    always #5 clk = ~clk;
+    initial begin
+        @(posedge clk); #1 rst_n = 1;
+        sts_in = 2'd1; @(posedge clk); #1 $display("S %0d", sts_out);
+        sts_in = 2'd2; @(posedge clk); #1 $display("S %0d", sts_out);
+        sts_in = 2'd3; @(posedge clk); #1 $display("S %0d", sts_out);
+        $finish;
+    end
+endmodule
+"""
+    got = [l.split()[1] for l in _run_iverilog(rtl, "wb_resp", tb, tmp_path)]
+    assert got == ["1", "2", "3"], got
+
+
+def test_f2035_r3_target_aligned_comment_says_what_the_input_said(solve_as):
+    """Ruling 2. `prealigned_store is False` means the TARGET aligns the lane —
+    i.e. the lane is precisely NOT pre-aligned. The landed emitter wrote `store
+    lane pre-aligned by the target` into every such emission, stating the
+    opposite of the input in the one artefact a reader of the RTL actually has,
+    and a landed assertion pinned that wrong string in place. Both are corrected
+    here; this node is the regression guard for the wording itself."""
+    rtl = solve_as("wb_beat_store",
+                   _neutral_record("wb_beat_store", _F5_PORTS, _F5_ALT))
+    assert rtl is not None
+    assert "store lane aligned by the target" in rtl, rtl
+    assert "pre-aligned by the target" not in rtl, rtl
+    # and the True side still says pre-aligned, because there it is true
+    other = solve_as("wb_beat_store",
+                     _neutral_record("wb_beat_store", _F5_PORTS, _F5_STATED))
+    assert "store lane pre-aligned by the initiator" in other, other
+
+
+# RETIRED, measured not assumed (orchestrator ruling 2026-09-06: "green on
+# origin/main = covered"). Three nodes this lane added were GREEN on origin/main
+# because they are controls, not coverage. For each I looked for a mutation of
+# this lane's own fix that reddens it while NO pre-existing landed node reddens,
+# and found none — every such mutation co-reddened between 1 and 9 landed nodes:
+#   test_f2035_r2_alternative_interface_control_stays_green
+#   test_f2035_r3_a_response_mode_with_no_response_port_is_unchanged
+#   test_f2035_r3_word_aligned_target_lane_is_vacuous_and_stays_green
+# Their substance was not dropped: it moved into
+# `test_f2035_f5_alternative_architecture_control_stays_green` above, whose
+# response-mode and store-lane axes now assert emitted SUBSTANCE (inert here /
+# load-bearing there) instead of the `//` comment they used to pin.
