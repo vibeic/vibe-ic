@@ -103,7 +103,7 @@ import sys
 from dataclasses import dataclass, asdict, field
 from hashlib import sha256
 from pathlib import Path, PurePosixPath
-from typing import List, Dict, Any, Callable, Optional
+from typing import List, Dict, Any, Callable, Optional, Tuple
 
 
 # ---------------------------------------------------------------------------
@@ -498,9 +498,21 @@ def _cc_postcheck_pass_only(spec: Dict[str, Any], text: str,
 # a diff, not a mystery. A producer NOT in this table is reported as unknown —
 # never assumed to have passed, and never guessed at from a filename alone.
 # ---------------------------------------------------------------------------
+#: A receipt is a small verdict document; refuse to slurp a large file just
+#: to classify it. Same bound and same reason as
+#: `programs/eda_report_audit.py::_SELF_DOC_MAX_BYTES`.
+_CONTENT_PROBE_MAX_BYTES = 512 * 1024
+
+
 @dataclass(frozen=True)
 class ReceiptSpec:
     auditor: str
+    #: The one name the checker opens. EMPTY STRING means the producer writes
+    #: to a caller-chosen path and its own `--json` document IS the receipt
+    #: (#2057): the checker then scans the same search roots for a `*.json`
+    #: whose payload `identify()`s, which is resolution by CONTENT rather than
+    #: by a name nobody can state. `written_as` says, for a reader of a
+    #: NOT_MEASURED message, what that document is.
     filename: str
     emitted_by: str
     # Is this payload THIS producer's report? Guards against a receipt that
@@ -515,6 +527,9 @@ class ReceiptSpec:
     # How many things the audit actually looked at. Zero is not a clean
     # audit; it is an audit that examined nothing.
     examined: Callable[[Dict[str, Any]], int]
+    #: Human description of the receipt document, used only in messages when
+    #: `filename` is empty. Never used to find anything.
+    written_as: str = ''
 
 
 def _d(obj: Any, *keys: str, default: Any = None) -> Any:
@@ -753,6 +768,92 @@ AUDIT_RECEIPTS['sv_compat_check'] = ReceiptSpec(
 )
 
 
+# ---------------------------------------------------------------------------
+# #2057 — THE FOUR `eda_report_audit` WRAPPERS, BOUND THROUGH THEIR OWN --json.
+#
+# #2050 left these four UNREGISTERED and BLOCKING, and said why: they write to
+# a caller-chosen `--json` path which is itself a DECLARED phase-3 sign-off
+# output (`reports/phase3/lvs.json` at step 31,
+# `reports/phase3/sta/post_route_summary.json` at step 23,
+# `reports/phase3/ir_drop_signoff.json` at step 24, and
+# `reports/phase3/drc_router.json` / `reports/phase3/drc_signoff.json` at steps
+# 21 and 31). Writing a `<auditor>_receipt.json` sibling beside one of those
+# would add a second artefact to a directory whose contents are accounted step
+# by step, and #2050 refused to do it blind.
+#
+# THE RULING ON #2057: no second file. The `--json` document IS the receipt.
+# `programs/eda_report_audit.py::main` now emits a `subject` block on every
+# report it writes — `_audit_receipt.subject_of` over exactly the population
+# `summary.files_found` counts, content-addressed over basename + sha256 — so
+# the document carries the one field it lacked. Nothing new appears in a
+# sign-off directory, and step 21 / 23 / 24 / 31 `required_outputs` are
+# unchanged by name.
+#
+# These four are located by CONTENT (`filename=''`), because the caller chose
+# the name and no single name exists: the payload's own
+# `program: "eda_report_audit:<mode>"` field both identifies the producer AND
+# pins the MODE, so `sta_report_check` is never satisfied by a drc audit that
+# happens to sit in the same directory. That field is the producer's own
+# self-description, already relied on by `_is_own_verdict_document`; the
+# checker reads it rather than inventing a filename.
+#
+# Everything below is READ OFF `programs/eda_report_audit.py::main`.
+# ---------------------------------------------------------------------------
+def _report_audit_receipt(auditor: str, mode: str, declared: str) -> ReceiptSpec:
+    """One ReceiptSpec for an `eda_report_audit` wrapper's own --json audit."""
+    program_id = f'eda_report_audit:{mode}'
+    return ReceiptSpec(
+        auditor=auditor,
+        # Caller-chosen; resolved by content. See the `filename` note above.
+        filename='',
+        written_as=f'the `{auditor}` --json audit document ({declared})',
+        emitted_by=(f'programs/{auditor}.py -> '
+                    f'programs/eda_report_audit.py::main --mode {mode}'),
+        # THE MODE IS PART OF THE IDENTITY. A `--json` written by another
+        # wrapper through the same program carries a different `program`
+        # string and is not read as this auditor's evidence.
+        identify=lambda d: (d.get('program') == program_id
+                            and isinstance(d.get('passed'), bool)
+                            and isinstance(d.get('subject'), dict)
+                            and isinstance(d['subject'].get('sha256'), str)),
+        # `passed` is the audit's own gate. `verdict`, when the audit sets it,
+        # is what it says about ITSELF — `VACUOUS_PASS` is the one value in the
+        # tree today and it is NOT a pass, so it lands on the FAIL side rather
+        # than being collapsed onto `passed: true`.
+        verdict=lambda d: (STATE_PASS
+                           if d.get('passed') is True
+                           and d.get('verdict', 'PASS') == 'PASS'
+                           else STATE_FAIL),
+        subject=lambda d: {
+            'sha256': _d(d, 'subject', 'sha256', default=''),
+            'basis': _d(d, 'subject', 'basis', default=''),
+            'items': sorted(
+                PurePosixPath(str(i.get('path', ''))).name
+                for i in (_d(d, 'subject', 'items', default=[]) or [])
+                if isinstance(i, dict)),
+        },
+        # The population `summary.files_found` counts, taken from the subject
+        # block rather than from the count beside it, so a report claiming to
+        # have found files while naming none is NOT_MEASURED.
+        examined=lambda d: len(_d(d, 'subject', 'items', default=[]) or []),
+    )
+
+
+AUDIT_RECEIPTS.update({
+    'drc_report_check': _report_audit_receipt(
+        'drc_report_check', 'drc',
+        'reports/phase3/drc_router.json at step 21, '
+        'reports/phase3/drc_signoff.json at step 31'),
+    'lvs_report_check': _report_audit_receipt(
+        'lvs_report_check', 'lvs', 'reports/phase3/lvs.json at step 31'),
+    'ir_drop_report_check': _report_audit_receipt(
+        'ir_drop_report_check', 'ir_drop',
+        'reports/phase3/ir_drop_signoff.json at step 24'),
+    'sta_report_check': _report_audit_receipt(
+        'sta_report_check', 'sta',
+        'reports/phase3/sta/post_route_summary.json at step 23'),
+})
+
 # Auditors that a compliance.yaml legitimately names but whose receipt
 # contract cannot be registered yet, with the measured reason. They are NOT
 # given a guessed entry above: `audit_receipt_evidence` reports an
@@ -760,32 +861,14 @@ AUDIT_RECEIPTS['sv_compat_check'] = ReceiptSpec(
 # missing, which is the honest state. Inventing a receipt filename here would
 # be the same unmeasured claim this module exists to remove.
 #
-# #2050 emptied and refilled this tuple. The four that were here — gds_size_check,
-# synth_netlist_check, fpga_async_input_synchronizer_check, tapeout_signoff_check —
-# are registered above: their producers now write the receipt themselves.
-#
-# The four that replace them are the `eda_report_audit` wrappers. They have the
-# same caller-chosen `--json` shape, and the same fix would work, but they sit
-# INSIDE phase-3 sign-off: `sta_report_check` is invoked by
-# `phase3_one_shot_runner.step_declared_signoff_gates` and its `--json` file is
-# step 23's own `required_outputs` entry; `drc_report_check` and
-# `ir_drop_report_check` record in their own docstrings that merely honouring
-# `--json` already made evaluating a step write into the project and dirty a
-# published `benchmark-data/` audit. Adding a second artefact beside a declared
-# sign-off output changes that accounting, and doing it blind is how a gate
-# starts reporting the filesystem instead of the design. So they stay
-# unregistered, blocking, and NAMED — which is the honest state, not a guess.
-#
-#   drc_report_check       wrappers over `eda_report_audit`; the receipt is
-#   lvs_report_check         whatever the caller's --json says, and the
-#   ir_drop_report_check     directory it says is a declared phase-3 sign-off
-#   sta_report_check         output whose contents are accounted elsewhere.
-UNREGISTERED_AUDITORS = (
-    'drc_report_check',
-    'ir_drop_report_check',
-    'lvs_report_check',
-    'sta_report_check',
-)
+# #2050 emptied and refilled this tuple; #2057 empties it again, and this time
+# the four that were here are REGISTERED above rather than replaced. THE TUPLE
+# IS KEPT, EMPTY, for the same reason `postcheck_pass_only` was kept when
+# nothing selected it: the next auditor a compliance.yaml names before its
+# contract can be read off its producer belongs here, named and blocking, not
+# guessed at. `test_unregistered_auditors_are_named_and_all_exist` still
+# asserts every member exists as a program, in both directions.
+UNREGISTERED_AUDITORS: Tuple[str, ...] = ()
 
 
 def _receipt_digest(path: Path) -> str:
@@ -856,17 +939,47 @@ def _cc_audit_receipt_evidence(spec: Dict[str, Any], text: str,
     searched = ', '.join(str(r) for r in roots) or '(no evidence root available)'
 
     found: Optional[Path] = None
-    for r in roots:
-        cand = r / rs.filename
-        if cand.is_file():
-            found = cand
-            break
+    if rs.filename:
+        for r in roots:
+            cand = r / rs.filename
+            if cand.is_file():
+                found = cand
+                break
+        looked_for = f'`{rs.filename}`'
+    else:
+        # #2057 — RESOLUTION BY CONTENT, for a producer whose output path the
+        # CALLER chooses. The four `eda_report_audit` wrappers write their
+        # audit to a `--json` path the flow declares per step
+        # (`reports/phase3/lvs.json`, `reports/phase3/sta/post_route_
+        # summary.json`, two different names for drc), so there is no single
+        # filename to look for — and #2050 was right to refuse to invent one.
+        # The producer already states how to recognise its own document; the
+        # checker asks `identify()` instead of guessing a name. Non-recursive,
+        # only inside the same search roots, and size-capped: a receipt found
+        # by wandering the filesystem is not evidence about THIS report.
+        for r in roots:
+            for cand in sorted(r.glob('*.json')):
+                if not cand.is_file():
+                    continue
+                try:
+                    if cand.stat().st_size > _CONTENT_PROBE_MAX_BYTES:
+                        continue
+                    probe = json.loads(cand.read_text(errors='replace'))
+                except (OSError, ValueError):
+                    continue
+                if isinstance(probe, dict) and rs.identify(probe):
+                    found = cand
+                    break
+            if found is not None:
+                break
+        _what = rs.written_as or "this auditor's own --json audit document"
+        looked_for = f'{_what} (matched by content, not by name)'
 
     if found is None:
         return [Finding(
             cid, 'FAIL',
             f'NOT_MEASURED: no receipt from `{auditor}` for this report.',
-            f'{desc} — looked for `{rs.filename}` (emitted by '
+            f'{desc} — looked for {looked_for} (emitted by '
             f'{rs.emitted_by}) in: {searched}. Run the audit and place its '
             'report where this check can read it; do not assert the verdict '
             'in prose.',
@@ -888,7 +1001,7 @@ def _cc_audit_receipt_evidence(spec: Dict[str, Any], text: str,
     if not isinstance(payload, dict):
         return [Finding(
             cid, 'FAIL',
-            f'NOT_MEASURED: receipt at `{rs.filename}` is not an object.',
+            f'NOT_MEASURED: receipt at `{found.name}` is not an object.',
             f'{trace} — got {type(payload).__name__}. This is not '
             f'{auditor}\'s report.',
             state=STATE_NOT_MEASURED)]
@@ -904,7 +1017,7 @@ def _cc_audit_receipt_evidence(spec: Dict[str, Any], text: str,
     if not rs.identify(payload):
         return [Finding(
             cid, 'FAIL',
-            f'NOT_MEASURED: the file at `{rs.filename}` is not '
+            f'NOT_MEASURED: the file at `{found.name}` is not '
             f'`{auditor}`\'s report.',
             f'{trace} — it does not carry the shape {rs.emitted_by} emits. '
             'A payload from another producer is no evidence at all.',

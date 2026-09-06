@@ -269,22 +269,46 @@ def test_the_cli_importable_obligation_is_really_discharged():
         importlib.import_module(f"tools.phase1_engine.{mod}")
 
 
-def test_the_round_trip_obligation_is_measured_and_currently_short():
-    """X_round_trip_byte_identical was the other dead entry, and it does NOT
-    hold. `from_existing_docs` iterates ALL_LAYER_CODES (14) while
-    `render_layers` can write GENERATABLE_LAYER_CODES (28), so the opt-in
-    advanced layers are written by Phase 1 and dropped by the reverse-extract.
+def test_the_round_trip_obligation_is_measured_and_now_holds():
+    """X_round_trip_byte_identical was the other dead entry.
 
-    This pins the shortfall by NAME rather than asserting a green that is not
-    there. Shrink the list when the round trip is fixed; do not extend it.
+    cz2050 measured it and it did NOT hold: `from_existing_docs` iterated
+    ALL_LAYER_CODES (14) while `render_layers` could write
+    GENERATABLE_LAYER_CODES (28), so the opt-in advanced layers were written
+    by Phase 1 and dropped by the reverse-extract. That version of this test
+    pinned the SHORTFALL by name — a list of 14 dropped codes — and said
+    "shrink the list when the round trip is fixed".
+
+    #2057 fixed it, so the list is gone and the obligation is asserted
+    directly: every layer the renderer can write is a layer the reverse
+    extract reads. The list it replaces was a property of the SCHEMA
+    (GENERATABLE minus ALL) and stayed true either way; this one is a
+    property of the ROUND TRIP and is false the moment the drop returns.
+    The membership half of the old assertion — that the advanced codes are
+    exactly L14..L27 and remain OPT-IN, not required — is kept by
+    `test_the_advanced_layers_are_still_opt_in_not_required` in
+    programs/tests/test_round_trip_layer_population_2057.py, where the rest
+    of the round-trip evidence lives.
     """
+    import tempfile
     repo = _PLUGIN.parents[2]
     sys.path.insert(0, str(repo))
+    from tools.phase1_engine import ingest as _ingest
     from tools.phase1_engine.schema import (ALL_LAYER_CODES,
-                                            GENERATABLE_LAYER_CODES)
-    dropped = [c for c in GENERATABLE_LAYER_CODES if c not in ALL_LAYER_CODES]
-    assert dropped == ["L14", "L15", "L16", "L17", "L18", "L19", "L20",
-                       "L21", "L22", "L23", "L24", "L25", "L26", "L27"], dropped
+                                            GENERATABLE_LAYER_CODES,
+                                            LAYER_FILE_NAMES)
+    assert [c for c in GENERATABLE_LAYER_CODES if c not in ALL_LAYER_CODES] \
+        == ["L14", "L15", "L16", "L17", "L18", "L19", "L20",
+            "L21", "L22", "L23", "L24", "L25", "L26", "L27"]
+    with tempfile.TemporaryDirectory() as t:
+        src = Path(t)
+        for code in GENERATABLE_LAYER_CODES:
+            (src / LAYER_FILE_NAMES[code]).write_text(
+                '{"probe_%s": "v"}' % code.lower())
+        graph = _ingest.from_existing_docs(src)
+    read_back = {v for f in graph.facts for v in f.views}
+    assert read_back == set(GENERATABLE_LAYER_CODES), sorted(
+        set(GENERATABLE_LAYER_CODES) - read_back)
 
 
 # ---------------------------------------------------------------------------
@@ -351,8 +375,15 @@ def test_the_limitation_list_size_is_pinned_so_it_can_be_watched_shrinking():
         test, which is a real change to the population and belongs in the diff
         that made it.
     """
-    assert len(limits.SYNTHETIC_FIXTURE_LIMITATIONS) == 53, (
+    assert len(limits.SYNTHETIC_FIXTURE_LIMITATIONS) == 0, (
         "the named synthetic-fixture limitation list changed size")
+    # #2057 took it 53 -> 0 by fixing the one cause, and the 53 names are kept
+    # so the claim is a membership rather than a count. `REMOVED_BY_2057` is
+    # re-measured against the live tree in
+    # programs/tests/test_pattern_satisfier_2057.py.
+    assert len(limits.REMOVED_BY_2057) == 53
+    assert set(limits.REMOVED_BY_2057) & set(
+        limits.SYNTHETIC_FIXTURE_LIMITATIONS) == set()
     assert len(_generated_compliance_tests()) == 69, (
         "the number of skills shipping a GENERATED tests/test_compliance.py "
         "changed")

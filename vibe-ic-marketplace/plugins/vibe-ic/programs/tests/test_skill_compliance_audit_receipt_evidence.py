@@ -411,12 +411,17 @@ def test_unregistered_auditors_are_named_and_all_exist():
     below to have LEFT the list — so this test fails in both directions: if a
     registered auditor is put back on the unregistered list, and if a member
     of the list is registered without being removed from it.
+
+    #2057 EMPTIES IT AGAIN, and this time by registering rather than by
+    replacing: the four `eda_report_audit` wrappers bind through their own
+    `--json` document, which carries a content-addressed subject digest and is
+    resolved by content. The tuple is KEPT, empty — the next auditor a
+    compliance.yaml names before its contract can be read off its producer
+    belongs here, named and blocking. Both directions still hold: a registered
+    auditor may not appear here, and a member here must exist as a program and
+    must NOT be registered.
     """
-    assert scc.UNREGISTERED_AUDITORS == (
-        "drc_report_check",
-        "ir_drop_report_check",
-        "lvs_report_check",
-        "sta_report_check")
+    assert scc.UNREGISTERED_AUDITORS == ()
     for name in scc.UNREGISTERED_AUDITORS:
         assert (_PLUGIN / "programs" / f"{name}.py").is_file(), name
         assert name not in scc.AUDIT_RECEIPTS, (
@@ -426,6 +431,12 @@ def test_unregistered_auditors_are_named_and_all_exist():
                  "fpga_async_input_synchronizer_check"):
         assert name in scc.AUDIT_RECEIPTS, (
             f"{name} was given a producer receipt by #2050 and must stay "
+            "registered")
+        assert name not in scc.UNREGISTERED_AUDITORS, name
+    for name in ("drc_report_check", "ir_drop_report_check",
+                 "lvs_report_check", "sta_report_check"):
+        assert name in scc.AUDIT_RECEIPTS, (
+            f"{name} was bound through its own --json by #2057 and must stay "
             "registered")
         assert name not in scc.UNREGISTERED_AUDITORS, name
 
@@ -463,13 +474,46 @@ def test_repointed_sibling_ids_cannot_pass_on_a_header(tmp_path):
     assert r.returncode == 1
 
 
-def test_a_still_unregistered_auditor_blocks_and_says_what_is_missing(tmp_path):
+def test_an_unregistered_auditor_blocks_and_says_what_is_missing():
     """The other half: an auditor with NO registered contract is a config
-    error naming what is missing, and is never assumed to have passed."""
+    error naming what is missing, and is never assumed to have passed.
+
+    #2057 registered the last four members of `UNREGISTERED_AUDITORS`, so no
+    compliance.yaml in the tree still names an unregistered auditor and this
+    can no longer be shown through a shipped skill. THE RULE IS UNCHANGED and
+    is exercised directly instead, both directions — which is stronger than
+    reading it off whichever skill happened to have the defect. The shipped
+    half of this pair is `test_a_registered_wrapper_is_not_measured_rather_
+    than_a_config_error` below.
+    """
+    spec = {"skill": "probe", "requirements": [],
+            "cross_checks": [{"id": "X_probe",
+                              "rule": "audit_receipt_evidence",
+                              "auditor": "no_such_auditor_at_all",
+                              "description": "probe"}]}
+    f, = [x for x in scc.audit("# r\n", spec)
+          if x.id.startswith("X_probe")]
+    assert f.severity == "FAIL"
+    assert f.id == "X_probe_unknown_auditor"
+    assert "no_such_auditor_at_all" in f.description
+    # direction two: the same call with a REGISTERED auditor is not a config
+    # error at all — it is NOT_MEASURED, which is a different, later state.
+    spec["cross_checks"][0]["auditor"] = "drc_report_check"
+    g, = [x for x in scc.audit("# r\n", spec) if x.id.startswith("X_probe")]
+    assert g.id == "X_probe" and g.state == scc.STATE_NOT_MEASURED
+
+
+def test_a_registered_wrapper_is_not_measured_rather_than_a_config_error(
+        tmp_path):
+    """drc-fix is the skill that carried the `_unknown_auditor` finding. With
+    `drc_report_check` bound, the same run with no audit document on disk
+    reports NOT_MEASURED — still blocking, and now saying what to RUN rather
+    than what to fix in the yaml."""
     yml = _PLUGIN / "skills" / "drc-fix" / "compliance.yaml"
     r, data = _drive(tmp_path, _REVIEW + _RTL_HEADER, None, yml=yml)
     ids = [f["id"] for f in data["findings"] if f["severity"] == "FAIL"]
-    assert "X_drc_report_check_unknown_auditor" in ids
+    assert "X_drc_report_check_unknown_auditor" not in ids
+    assert _state(data, "X_drc_report_check") == ("FAIL", "NOT_MEASURED")
     assert "X_text_only_skill" in ids, "the fabricated header is still a failure"
     assert r.returncode == 1
 
