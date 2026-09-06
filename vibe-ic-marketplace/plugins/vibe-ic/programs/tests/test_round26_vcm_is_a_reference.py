@@ -66,10 +66,29 @@ def test_the_decoupling_is_SIZED_from_the_declaration_not_a_constant():
 
 def test_the_decoupling_dominates_the_charge_that_disturbs_it():
     """Four unit sampling/DAC capacitors commutate onto vcm every clock. The
-    decoupling has to be much larger than that, or it is decorative."""
+    decoupling has to be much larger than that, or it is decorative.
+
+    THE ASSERTION IS UNCHANGED; WHERE IT READS THE MULTIPLIER IS. This read it
+    by regex off the head of the DRAWN-LENGTH expression, which is a second
+    copy of a fact the entry states. When v1.17.98 replaced the area-only
+    length `C/(carea*w)` with the exact inversion of the PDK's two-term model,
+    the multiplier stopped being the first token — correctly, because that
+    inversion is not linear in it: the fringe term does not scale, so hoisting
+    the multiplier back out would reintroduce the very sizing error the
+    two-term model removes. The regex then matched nothing and was
+    dereferenced (`AttributeError`), and this has been RED on main from
+    v1.17.98 to the tip.
+
+    The producer now publishes the CAPACITANCE it sizes each capacitor to, as
+    `ff_expr`, beside the length — so the fact has a first-class home and
+    nothing has to parse a length to recover it. That is the fix; this test
+    reads the published field instead of scraping, and asserts the same
+    number against the same floor.
+    """
     exprs = {e["device"]: e for e in _entry()["device_param_exprs"]}
     import re
-    mult = float(re.match(r"\s*([0-9.]+)\s*\*", exprs["c_vcm"]["expr"]).group(1))
+    ff = exprs["c_vcm"]["ff_expr"]
+    mult = float(re.match(r"\s*([0-9.]+)\s*\*", ff).group(1))
     assert mult >= 10.0, (
         f"decoupling is {mult}x a unit sampling cap; four of them switch onto "
         f"this node every clock")
