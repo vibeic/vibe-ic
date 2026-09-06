@@ -13680,6 +13680,47 @@ def _chip_top_param_refusals(rtl_dir, synth_top=None):
     return out
 
 
+def _resolve_param_defaults_in_block(param_block, resolved, param_code=None):
+    """Write each resolved default into `param_block`. vibe-ic#731.
+
+    Split out of `_chip_top_resolve_excluded_variant_params` ONLY so this rule
+    is reachable by a test. The owning function needs a staged RTL tree AND a
+    derivation that actually resolves the parameter before control gets here,
+    and no fixture in this tree resolves a STRING-valued default -- so the
+    string case, which is the one that was wrong, could not be pinned at all
+    through the public entry. A rule this delicate must not be covered only by
+    a copy of itself living in a test file.
+
+    `param_code` is the blanked copy; recomputed here when not supplied.
+    """
+    if param_code is None:
+        param_code = _hdl_code_text.strip_hdl_comments_and_strings(param_block)
+    for name, info in sorted(resolved.items()):
+        pat = re.compile(
+            r"(\bparameter\b[^;,=()]*?\b" + re.escape(name) +
+            r"\s*=\s*)([^,;)\n]+)")
+        # Locate on the blanked text, splice into the original at the SAME
+        # offsets, then re-blank because the splice moved them. A `.sub` over
+        # the raw block would happily rewrite the first COMMENTED occurrence
+        # and report success while the live default kept the vendor's value.
+        # Same rule as `wrapper_defaults` above, and the same measured defect:
+        # splicing at the BLANKED match's offsets put the cut INSIDE a string
+        # literal and emitted `parameter MODE = "fast"slow"` -- broken Verilog,
+        # in the text this function RETURNS as the wrapper. Choose on the
+        # blanked copy (that is what skips a commented-out declaration), then
+        # re-match the ORIGINAL at that offset and take the span from there.
+        chosen = pat.search(param_code)
+        if chosen is None:
+            continue
+        m = pat.match(param_block, chosen.start())
+        if m is None:
+            continue
+        param_block = param_block[:m.start(2)] + info["value"] \
+            + param_block[m.end(2):]
+        param_code = _hdl_code_text.strip_hdl_comments_and_strings(param_block)
+    return param_block
+
+
 def _chip_top_resolve_excluded_variant_params(project, rtl_dir, param_block,
                                               declared):
     """DERIVE — or REFUSE BY NAME — every wrapper parameter default that selects
@@ -13719,8 +13760,21 @@ def _chip_top_resolve_excluded_variant_params(project, rtl_dir, param_block,
     # ORIGINAL is what gets sliced — `param_block` is RETURNED as the emitted
     # wrapper text, so its comments must survive this function byte for byte.
     param_code = _hdl_code_text.strip_hdl_comments_and_strings(param_block)
-    wrapper_defaults = {m.group(1): param_block[m.start(2):m.end(2)].strip()
-                        for m in _pf._PARAM_RE.finditer(param_code)}
+    # THE BLANKED COPY CHOOSES THE OCCURRENCE; THE ORIGINAL SUPPLIES THE SPAN.
+    # Slicing `param_block` at the BLANKED match's group-2 offsets is wrong
+    # whenever the blanking changed how far that group could reach. For a
+    # STRING-valued default the blanker turns `"fast"` into spaces, the
+    # pattern's `\s*=\s*` eats them, and `([^,;)\n]+)` can only back off onto
+    # the LAST one -- so the recorded default was `"` instead of `"fast"`.
+    # An integer default is untouched by the blanker, which is why every
+    # existing case passed. Re-match the ORIGINAL at the same offset instead:
+    # the blanker is length-preserving, so the offset is valid in both.
+    wrapper_defaults = {}
+    for _m in _pf._PARAM_RE.finditer(param_code):
+        _real = _pf._PARAM_RE.match(param_block, _m.start())
+        if _real is None:
+            continue
+        wrapper_defaults[_m.group(1)] = _real.group(2).strip()
     declared_names = sorted(declared or {})
 
     for path, text in sorted(files.items()):
@@ -13927,20 +13981,8 @@ def _chip_top_resolve_excluded_variant_params(project, rtl_dir, param_block,
                         f"with it. This flow will not choose: DECLARE "
                         f"{param} in the design input.")})
 
-    for name, info in sorted(resolved.items()):
-        pat = re.compile(
-            r"(\bparameter\b[^;,=()]*?\b" + re.escape(name) +
-            r"\s*=\s*)([^,;)\n]+)")
-        # Locate on the blanked text, splice into the original at the SAME
-        # offsets, then re-blank because the splice moved them. A `.sub` over
-        # the raw block would happily rewrite the first COMMENTED occurrence
-        # and report success while the live default kept the vendor's value.
-        m = pat.search(param_code)
-        if m is None:
-            continue
-        param_block = param_block[:m.end(1)] + info["value"] \
-            + param_block[m.end(2):]
-        param_code = _hdl_code_text.strip_hdl_comments_and_strings(param_block)
+    param_block = _resolve_param_defaults_in_block(
+        param_block, resolved, param_code)
     return param_block, resolved, refusals
 
 

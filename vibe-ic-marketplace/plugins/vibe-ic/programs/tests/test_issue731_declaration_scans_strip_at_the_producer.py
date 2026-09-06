@@ -31,6 +31,7 @@ if str(_PROGRAMS) not in sys.path:
 
 import _hdl_code_text  # noqa: E402
 import canonical_primitive_synth as CPS  # noqa: E402
+import design_one_shot_runner as DOSR  # noqa: E402
 import phase1_port_extract as PPX  # noqa: E402
 import sparse_fsm_detect as SFD  # noqa: E402
 
@@ -124,3 +125,54 @@ def test_the_real_module_region_is_still_found():
            "```\n")
     spans = PPX._verilog_region_spans(doc)
     assert spans and any("module real_top" in doc[a:b] for a, b in spans)
+
+
+# ─── design_one_shot_runner._resolve_param_defaults_in_block ─────────────────
+# CZBLANK-007. v1.18.26 closed the commented-out-declaration defect here but
+# took the SPAN from the match made on the BLANKED copy. For a STRING-valued
+# default the blanker turns `"fast"` into spaces, the pattern's `\s*=\s*` eats
+# them, and `([^,;)\n]+)` can only back off onto the LAST one -- so the cut
+# landed INSIDE the literal and the emitted wrapper carried `"fast"slow"`.
+#
+# An integer or expression default is untouched by the blanker, which is why
+# every case v1.18.26 measured came out clean. Those two are the controls: they
+# must keep passing, or the fix has changed something it had no business
+# changing.
+#
+# NOT OVERSTATED: no fixture in this tree RESOLVES a string-valued parameter
+# (the derivation compares the current value against RTL identifiers, and a
+# quoted value matches none), so this was a LATENT corruption of the emitted
+# wrapper rather than one happening on every run.
+def test_a_string_valued_default_is_replaced_whole():
+    """The one that was wrong: the literal must be replaced, not cut open."""
+    out = DOSR._resolve_param_defaults_in_block(
+        '  parameter MODE = "fast"\n', {"MODE": {"value": '"slow"'}})
+    assert out == '  parameter MODE = "slow"\n', out
+
+
+def test_control_a_numeric_default_is_unchanged_in_behaviour():
+    out = DOSR._resolve_param_defaults_in_block(
+        "  parameter WIDTH = 8\n", {"WIDTH": {"value": "16"}})
+    assert out == "  parameter WIDTH = 16\n", out
+
+
+def test_control_an_expression_default_is_unchanged_in_behaviour():
+    out = DOSR._resolve_param_defaults_in_block(
+        "  parameter DEPTH = 1 << 3\n", {"DEPTH": {"value": "64"}})
+    assert out == "  parameter DEPTH = 64\n", out
+
+
+def test_the_commented_out_declaration_is_still_not_the_one_rewritten():
+    """v1.18.26's own property must survive this fix — the whole point of
+    choosing the occurrence on the blanked copy."""
+    out = DOSR._resolve_param_defaults_in_block(
+        "  // parameter VARIANT = 0,   <- kept for reference\n"
+        "  parameter VARIANT = 0\n", {"VARIANT": {"value": "1"}})
+    assert "parameter VARIANT = 1\n" in out, out
+    assert "// parameter VARIANT = 0," in out, out
+
+
+def test_a_parameter_the_derivation_did_not_resolve_is_untouched():
+    """No entry, no edit — byte for byte."""
+    block = '  parameter MODE = "fast"\n  parameter WIDTH = 8\n'
+    assert DOSR._resolve_param_defaults_in_block(block, {}) == block
