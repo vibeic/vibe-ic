@@ -38695,6 +38695,120 @@ def mapped_netlist_available_for_atpg(project: Path) -> Tuple[bool, str]:
         return False, f"mapped-netlist probe unavailable: {exc}"
 
 
+#: Where the self-heal records WHAT it re-ran and WHY. Not a counter: a counter
+#: bounds a loop by how many times it has gone round, which says nothing about
+#: whether going round again would do anything new.
+_SELFHEAL_LEDGER_REL = "phase3/stage3/dft_selfheal_ledger.json"
+
+
+def _selfheal_state_fingerprint(project: Path, reason: str) -> Dict[str, Any]:
+    """WHAT THE TRIGGER ACTUALLY READ, as a comparable record.
+
+    CZT-18. `run_step11_dft_after_synth` re-invokes `step_dft_lec_chain` --
+    Steps 11, 12 AND 13 -- whenever Step 11 is unmeasured. Its predicate reads
+    Step-11 state and nothing else, so Step 13's post-layout LEC is re-run as
+    COLLATERAL: a proof that may have run for hours starts again from zero
+    because a DIFFERENT step has no artefact.
+
+    The legs are separate PROCESSES, each building its own `StepBudget` with
+    `attempts: 1`, so nothing inside the producer can see that this is the
+    second or third time. Bounding it needs a record OUTSIDE the invocation,
+    and this is that record: the inputs the trigger read, so a later invocation
+    can ask "would this repeat work that has already been done on exactly this
+    state?" rather than "how many times have I been here?".
+
+    A count would be wrong in both directions -- it would refuse a legitimate
+    re-run after a genuinely new netlist, and it would permit an identical one
+    as long as the counter had room.
+
+    Includes the mapped netlist's digest ON PURPOSE: a NEW netlist is a new
+    question and must be allowed to re-measure, however many times it has been
+    asked before. PURE apart from reading the tree.
+    """
+    missing = sorted(r for r in _STEP11_REQUIRED_REL
+                     if not (project / r).is_file())
+
+    def _digest(rel: str) -> Optional[str]:
+        f = project / rel
+        try:
+            if not f.is_file():
+                return None
+            return "sha256:" + hashlib.sha256(f.read_bytes()).hexdigest()
+        except OSError:
+            # NOT a default. "Could not read it" and "it is not there" are
+            # different facts, and collapsing them would let an unreadable file
+            # match an absent one and suppress a legitimate re-run.
+            return "unreadable"
+
+    return {"trigger_reason": reason,
+            "step11_required_absent": missing,
+            "not_run_record": _digest(_STEP11_NOT_RUN_REL),
+            "mapped_netlist": _digest("phase2/stage2/synth/netlist.v")}
+
+
+def _read_selfheal_ledger(project: Path) -> List[Dict[str, Any]]:
+    """Prior self-heal invocations, or [] when there are none.
+
+    An unreadable ledger returns [] and the caller SAYS so rather than treating
+    "could not read the record" as "there is no record" -- see the caller's
+    `ledger_readable` note.
+    """
+    try:
+        data = json.loads((project / _SELFHEAL_LEDGER_REL).read_text())
+    except (OSError, ValueError):
+        return []
+    return data if isinstance(data, list) else []
+
+
+def _append_selfheal_ledger(project: Path, entry: Dict[str, Any]) -> None:
+    """Append one invocation record. Never raises: bookkeeping must not break a
+    run that is otherwise working."""
+    path = project / _SELFHEAL_LEDGER_REL
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        rows = _read_selfheal_ledger(project)
+        rows.append(entry)
+        path.write_text(json.dumps(rows, indent=2, sort_keys=True) + "\n")
+    except OSError:
+        pass
+
+
+def _lec_leg_stop_evidence(project: Path) -> Optional[Dict[str, Any]]:
+    """The previous post-layout LEC leg's own record of having been STOPPED,
+    or None when it finished (or never ran).
+
+    CZT-18, second half. Re-invoking the 11->13 chain restarts Step 13's proof
+    FROM ZERO, and yosys `equiv_induct` carries no partial-proof serialisation
+    (Bucket-T / CZT-17), so every point the stopped leg had already proved is
+    discarded. That is a real cost and the flow used to pay it in silence.
+
+    This does not prevent the re-proof -- nothing downstream CAN, because the
+    proved set lives in the engine and the engine cannot hand it back. It makes
+    the cost NAMED, so a reader of the self-heal record sees that a proof was
+    restarted rather than continued, and how far the discarded leg had got.
+
+    Returns None on an absent or unreadable report: an absent record is not
+    evidence of a stop.
+    """
+    try:
+        rep = json.loads(
+            (project / "reports" / "lec.json").read_text(errors="replace"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(rep, dict):
+        return None
+    stopped = bool(rep.get("progress_stalled")) or bool(
+        rep.get("budget_exhausted")) or bool(rep.get("step_budget_exhausted"))
+    if not stopped:
+        return None
+    return {"verdict": rep.get("verdict"),
+            "progress_stalled": bool(rep.get("progress_stalled")),
+            "budget_exhausted": bool(rep.get("budget_exhausted")),
+            "compared_points": rep.get("compared_points"),
+            "unproven_points": rep.get("unproven_points"),
+            "elapsed_sec": rep.get("elapsed_sec")}
+
+
 def _clear_superseded_dft_nonmeasurements(dft_dir: Path) -> List[str]:
     """Remove phase-2 non-measurement records once a real measurement supersedes them.
 
@@ -38766,6 +38880,65 @@ def run_step11_dft_after_synth(project: Path, top: str,
             extras={"step11_needs_rerun": True,
                     "mapped_netlist_available": False,
                     "probe": why_map})]
+    # ---- CZT-18: BOUND THE RE-INVOCATION BY WHAT THE TRIGGER READ ---------
+    #
+    # This re-invokes `step_dft_lec_chain`, which is Steps 11, 12 AND 13. The
+    # trigger above looks at Step-11 state ONLY, so Step 13's post-layout LEC
+    # is re-run as COLLATERAL -- a proof that may have held a core for hours
+    # restarts from zero because a different step has no artefact. And because
+    # each leg is a separate PROCESS building its own `StepBudget` with
+    # `attempts: 1`, nothing inside the producer can see that this has happened
+    # before. The bound therefore has to live out here, in a record.
+    #
+    # NOT A COUNTER. A counter answers "how many times have I been here",
+    # which is the wrong question in both directions: it would refuse a
+    # legitimate re-measure after a genuinely new netlist, and it would permit
+    # an identical repeat as long as it had room. The bound is the STATE the
+    # trigger read -- the same reason over the same inputs cannot buy a second
+    # identical run, and a new netlist always can.
+    fingerprint = _selfheal_state_fingerprint(project, why_needs)
+    prior = _read_selfheal_ledger(project)
+    repeat = next((e for e in prior
+                   if e.get("fingerprint") == fingerprint
+                   and e.get("outcome") == "reinvoked"), None)
+    lec_stop = _lec_leg_stop_evidence(project)
+    if repeat is not None:
+        return [StepResult(
+            "dft_atpg_order_selfheal", "SKIP", time.time() - t0,
+            f"canonical Step 11 is still unmeasured ({why_needs}), and this "
+            f"chain was ALREADY re-invoked on byte-identical inputs at "
+            f"{repeat.get('when')} — same trigger, same absent outputs, same "
+            f"netlist digest. Running it again would repeat that work exactly, "
+            f"including Step 13's post-layout LEC, which restarts its proof "
+            f"from zero every time. The previous invocation's own verdicts "
+            f"stand; re-measuring needs a CHANGED input, not another attempt. "
+            f"See {_SELFHEAL_LEDGER_REL}.",
+            extras={"step11_needs_rerun": True,
+                    "bounded_by": "recorded state, not a count",
+                    "prior_invocation": repeat.get("when"),
+                    "fingerprint": fingerprint,
+                    "ledger": _SELFHEAL_LEDGER_REL})]
+    if lec_stop is not None:
+        # NAMED, not prevented. Nothing downstream CAN resume the proof: the
+        # proved set lives inside yosys and `equiv_induct` has no partial-proof
+        # serialisation to hand it back (Bucket-T / CZT-17). What the flow can
+        # stop doing is paying that cost in silence.
+        print(f"[phase3] dft_atpg_order_selfheal: the previous post-layout LEC "
+              f"leg was STOPPED (verdict {lec_stop.get('verdict')!r}, "
+              f"{lec_stop.get('compared_points')} points compared, "
+              f"{lec_stop.get('unproven_points')} unproven after "
+              f"{lec_stop.get('elapsed_sec')}s). Re-invoking the 11->13 chain "
+              f"RESTARTS that proof FROM ZERO — yosys equiv_induct carries no "
+              f"partial-proof serialisation, so nothing it already established "
+              f"can be handed back. This is collateral of a Step-11 trigger.",
+              file=sys.stderr)
+    import datetime as _dt          # function-local, as elsewhere in this file
+    _append_selfheal_ledger(project, {
+        "when": _dt.datetime.now(_dt.timezone.utc).isoformat(),
+        "fingerprint": fingerprint,
+        "outcome": "reinvoked",
+        "reinvoked": "design_one_shot_runner.step_dft_lec_chain",
+        "collateral_lec_restart_from_zero": lec_stop})
     try:
         import sys as _sys
         if str(PROGRAMS_DIR) not in _sys.path:
@@ -38795,6 +38968,12 @@ def run_step11_dft_after_synth(project: Path, top: str,
            f"artefact(s): {', '.join(_stale_cleared)}" if _stale_cleared else ""),
         extras={"reinvoked": "design_one_shot_runner.step_dft_lec_chain",
                 "trigger": why_needs, "netlist_probe": why_map,
+                "bounded_by": "recorded state, not a count",
+                "fingerprint": fingerprint,
+                "ledger": _SELFHEAL_LEDGER_REL,
+                # CZT-18 — what this re-invocation COST, named rather than
+                # paid in silence. None when the previous LEC leg finished.
+                "collateral_lec_restart_from_zero": lec_stop,
                 "rows": [f"{r.status} {r.name}" for r in rows]})]
     # Re-publish the producer's OWN verdicts as phase-3 rows, verbatim. A
     # sub-step that fails must stay visible as a failure -- the self-heal
