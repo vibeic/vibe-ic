@@ -1817,6 +1817,11 @@ _OPPOSITE_POLE = {
     "sync_reset": "async_reset",
     "active_low_reset": "active_high_reset",
     "active_high_reset": "active_low_reset",
+    # Behavioural, not structural: the input states which way the block shifts
+    # and the template's own code shows which way it shifts. Same shape as the
+    # reset pair -- the VOCABULARY is declared, the per-shape ANSWER is derived.
+    "shift_left": "shift_right",
+    "shift_right": "shift_left",
 }
 
 _RESET_TOKEN = re.compile(r"\b\w*(?:rst|reset)\w*\b", re.I)
@@ -1853,6 +1858,168 @@ def extract_stated_reset_poles(desc_text: str) -> set:
                  ("active_low_reset", "active_high_reset")):
         if a in poles and b in poles:
             poles -= {a, b}
+    return poles
+
+
+# ---------------------------------------------------------------- shift poles
+# CZ2035P-6, measured on this base: an input that says "shift the input to the
+# LEFT" three times matches `_is_barrel_shifter` -- which examines "ctrl" and
+# "shift" but never a direction -- and is answered with the RIGHT-shift
+# template, rc=0, silently. Three earlier routes to closing that were measured
+# and recorded closed in `test_canonical_primitive_synth.py`:
+#
+#   1. reading the poles out of the templates' own HEADER COMMENTS: 2 of 16 read
+#      as both poles of signedness before any input is seen;
+#   2. reading shift direction out of the code NAIVELY: the gray-code FIFO, the
+#      partial-product multiplier and the restoring divider all shift internally
+#      for reasons unrelated to what the block promises;
+#   3. the table-free rule "the input states a polar dimension the matched
+#      detector never examines -> DEFER", costed at "exactly one canonical
+#      shape".
+#
+# Route 3 was re-measured here over all 16 detectors x 4 polar dimensions: 13 of
+# the 16 examine NONE of the four, and every one of the 16 is blind to at least
+# three. The "cost = 1" figure is an artefact of how terse the canonical
+# descriptions are -- barrel_shifter's says only "shifting bits efficiently" and
+# never states a direction at all. Against ordinary prose, which says "on the
+# rising edge of clk" as a matter of course, route 3 would defer nearly
+# everything. So route 3 is closed too, for a reason that was not on record.
+#
+# Route 2 REOPENS once the derivation is ANCHORED. On a declared input port of
+# known integer width W, a shift by k is exactly
+#
+#     right:  { fill(k), X[W-1 : k] }        left:  { X[W-1-k : 0], fill(k) }
+#
+# -- the surviving slice runs to the operand's own MSB and stops at exactly the
+# fill width. A zero-EXTENSION of a FIELD does not: `{2'd0, a[30:23]}` in the
+# IEEE-754 multiplier is the exponent, and 30 is not `a`'s msb. The naive form
+# read that as a right shift. (Width preservation follows from the two anchors
+# rather than being a third test -- as a third test it could never fail, which a
+# mutation of this rule demonstrated before it was written this way.)
+# Measured over the sixteen templates it yields a pole for
+# EXACTLY ONE of them -- barrel_shifter -> shift_right, which is what that
+# template does. The other fifteen yield nothing and are untouched. A width the
+# template states parametrically (`[WIDTH-1:0]`, `[DATA_WIDTH-1:0]`, `[size-1:0]`)
+# does not resolve to an integer and so yields no pole: unknown is recorded as
+# unknown, never as a default.
+
+# "shift left" / "shifts the data to the right" / "left-shift" / "right shift".
+# The direction word only counts when it is SHIFTING that is being described, so
+# a right-justified field or a left-hand operand states nothing here.
+_SHIFT_DIR_PATTERNS = (
+    re.compile(r"\bshift(?:s|ed|ing)?\b(?:\s+the\s+\w+)?"
+               r"(?:\s+to\s+the)?\s+(left|right)\b", re.I),
+    re.compile(r"\b(left|right)[-\s]shift(?:s|ed|ing)?\b", re.I),
+)
+
+
+def extract_stated_shift_direction(desc_text: str) -> set:
+    """Shift-direction poles the INPUT states, as a set of pole tags.
+
+    Same discipline as `extract_stated_reset_poles`: word boundaries, and a text
+    that states BOTH directions is ambiguous, so neither is recorded rather than
+    one being picked.
+    """
+    poles = set()
+    for pat in _SHIFT_DIR_PATTERNS:
+        for m in pat.finditer(desc_text or ""):
+            poles.add("shift_" + m.group(1).lower())
+    if {"shift_left", "shift_right"} <= poles:
+        poles -= {"shift_left", "shift_right"}
+    return poles
+
+
+def _stated_poles(desc_text: str) -> set:
+    """Every decidable pole the input states, across all pole pairs."""
+    return (extract_stated_reset_poles(desc_text)
+            | extract_stated_shift_direction(desc_text))
+
+
+_PORT_DECL = re.compile(
+    r"\b(input|output|inout)\b\s*(?:wire|reg|logic)?\s*"
+    r"(?:\[\s*([^\]]*?)\s*:\s*([^\]]*?)\s*\])?", re.I)
+_IDENT = re.compile(r"[A-Za-z_]\w*")
+_HDR = re.compile(r"\bmodule\s+\w+\s*(?:#\s*\([^;]*?\))?\s*\((.*?)\)\s*;",
+                  re.S)
+
+
+def _rtl_input_port_widths(rtl: str) -> Dict[str, Optional[int]]:
+    """Declared input ports of every module in `rtl`, mapped to integer width.
+
+    A width the source writes parametrically maps to ``None`` -- unknown, never
+    a default. A name declared with two different widths in two modules is
+    dropped: ambiguous is not a width either.
+    """
+    seen: Dict[str, set] = {}
+    for hdr in _HDR.finditer(rtl):
+        direction = None
+        width: Optional[int] = None
+        for entry in hdr.group(1).split(","):
+            d = _PORT_DECL.search(entry)
+            if d is not None:
+                direction = d.group(1).lower()
+                hi, lo = d.group(2), d.group(3)
+                if hi is None:
+                    width = 1
+                elif hi.strip().isdigit() and lo.strip().isdigit():
+                    width = int(hi) - int(lo) + 1
+                else:
+                    width = None
+                entry = entry[d.end():]
+            if direction != "input":
+                continue
+            names = _IDENT.findall(entry)
+            if names:
+                seen.setdefault(names[-1], set()).add(width)
+    return {n: (w.pop() if len(w) == 1 else None) for n, w in seen.items()}
+
+
+_FILL = re.compile(r"^\s*(\d+)\s*'\s*[bBhHdDoO][0-9a-fA-FxXzZ_]+\s*$")
+_SLICE = r"(\w+)\s*\[\s*(\d+)\s*:\s*(\d+)\s*\]"
+_CONCAT_R = re.compile(r"\{\s*([^,{}]+?)\s*,\s*" + _SLICE + r"\s*\}")
+_CONCAT_L = re.compile(r"\{\s*" + _SLICE + r"\s*,\s*([^,{}]+?)\s*\}")
+
+
+def _rtl_shift_poles(rtl: str) -> set:
+    """Which way, if any, this RTL shifts one of its own INPUT PORTS.
+
+    Derived from the code, like every other commitment here. Silence is the
+    answer whenever the width test does not hold, so a design that merely
+    concatenates is never read as a shifter, and a template that shifts only its
+    internal state contributes nothing.
+    """
+    widths = _rtl_input_port_widths(rtl)
+    poles = set()
+
+    def _fill(tok: str) -> Optional[int]:
+        m = _FILL.match(tok)
+        return int(m.group(1)) if m else None
+
+    # A shift is ANCHORED AT BOTH ENDS: shifting `X[W-1:0]` right by k keeps
+    # exactly `X[W-1:k]` and fills k bits, so the surviving slice starts at the
+    # operand's own MSB and stops at exactly the fill width. Width preservation
+    # FOLLOWS from those two -- it is not a third test, and writing it as one
+    # would be a clause that can never fail. Both anchors are needed and neither
+    # is redundant: `{2'b00, x[7:4]}` satisfies the msb anchor alone and
+    # `{2'b00, x[5:2]}` the fill-width anchor alone, and neither is a shift.
+    for m in _CONCAT_R.finditer(rtl):
+        k = _fill(m.group(1))
+        name, hi, lo = m.group(2), int(m.group(3)), int(m.group(4))
+        w = widths.get(name)
+        if k is None or w is None:
+            continue
+        if hi == w - 1 and lo == k:
+            poles.add("shift_right")
+    for m in _CONCAT_L.finditer(rtl):
+        name, hi, lo = m.group(1), int(m.group(2)), int(m.group(3))
+        k = _fill(m.group(4))
+        w = widths.get(name)
+        if k is None or w is None:
+            continue
+        if lo == 0 and hi == w - 1 - k:
+            poles.add("shift_left")
+    if {"shift_left", "shift_right"} <= poles:
+        poles -= {"shift_left", "shift_right"}
     return poles
 
 
@@ -1895,6 +2062,8 @@ def _rtl_commitments(rtl: str) -> set:
                   for bang, _ in tests}
         if len(levels) == 1:
             tags |= levels
+    # which way, if any, this RTL shifts one of its own input ports
+    tags |= _rtl_shift_poles(rtl)
     return tags
 
 
@@ -1913,14 +2082,18 @@ def architecture_conflict(desc_text: str, shape: str) -> Optional[Dict[str, str]
     if shape not in _TEMPLATES:
         return None
     have = template_commitments(shape)
-    for pole in sorted(extract_stated_reset_poles(desc_text)):
-        if _OPPOSITE_POLE[pole] in have and pole not in have:
+    for pole in sorted(_stated_poles(desc_text)):
+        # `.get`, not `[]`: a pole pair that is ever retired from the vocabulary
+        # must switch the check OFF, not raise on every description that states
+        # it. Measured by mutation -- deleting the pair crashed eight tests
+        # including pre-existing ones, which reports a KeyError where it should
+        # report a capability that is simply gone.
+        if _OPPOSITE_POLE.get(pole) in have and pole not in have:
             return {"shape_declined": shape, "polarity": "stated",
                     "property": pole,
                     "stated": f"the input states {pole.replace('_', ' ')}",
-                    "reason": "the input states a reset behaviour that the "
-                              "canonical topology for this shape implements "
-                              "the other way"}
+                    "reason": "the input states a behaviour that the canonical "
+                              "topology for this shape implements the other way"}
     for pol, tag, clause in extract_architecture_directives(desc_text):
         if pol == "forbid" and tag in have:
             return {"shape_declined": shape, "polarity": "forbid",
