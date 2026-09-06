@@ -34,7 +34,13 @@ its residuals, **refuse to claim a higher score than the program
 returns**." Claude is the backstop for residual prose, not the rule
 applicator.
 
-Unit tests: `programs/tests/test_rtl_review_aggregate.py`.
+Unit tests: `programs/tests/test_rtl_review_aggregate.py` and
+`programs/tests/test_rtl_review_hygiene_json.py`.
+
+What this consumer is allowed to CONCLUDE from evidence it did not fully get —
+refuse vs report, and why a skipped auditor does not move the score (ruling
+F2036-H) — is recorded in
+`docs/decisions/2026-09-06-rtl-review-producer-json.md`.
 """
 from __future__ import annotations
 
