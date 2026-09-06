@@ -941,6 +941,20 @@
           }
         }
       },
+      "analog_device_layout_maxima": {
+        "_comment": "Same schema, same reader and same generic role tokens as `analog_device_layout_minima`; no code path is specific to this family. A role absent here is NOT MEASURED and bounds nothing.",
+        "_measured_from": "libs.tech/magic/ihp-sg13g2-cap.tcl \u2014 the gencell's own `_defaults` proc states `lmax 30.0 wmax 30.0` beside the `lmin 2.00 wmin 2.00` the minima record already reads, and magic writes all four into every generated cell's `string parameters` property, so a generated cell carries its own citation.",
+        "_note": "Measured on u_hawaii_adc, image 0.3.46: a gencell asked for a geometry ABOVE these does not refuse the way one below the minimum does \u2014 it CLAMPS to the maximum and draws. Eight `delta_sigma` capacitors asked for at l = 34.75 .. 629.08 um came back drawn at l = 30, twelve netlist capacitors collapsed into two drawn cells, and the only artefact that noticed was the sign-off LVS six steps later.",
+        "roles": {
+          "cap": {
+            "max_width_um": 30.0,
+            "max_length_um": 30.0,
+            "device": "cap_cmim",
+            "rule": "cap_cmim.lmax/wmax",
+            "rule_text": "lmax 30.0 wmax 30.0"
+          }
+        }
+      },
       "analog_device_layout_minima": {
         "_comment": "vibe-ic#1952 — see the sky130A entry's _comment for the schema. Same generic role tokens, same reader, no code path is specific to this family.",
         "_measured_from": "libs.tech/klayout/tech/drc/rule_decks/sg13g2_tech_default.json:166 — `\"Rppd_a\": 0.5` — consumed by libs.tech/klayout/tech/drc/rule_decks/sg13g2_maximal.drc:2603,2604 as `Rppd_all.ext_width(0.5.um)` -> `output(\"Rppd.a\", \"Min. GatPoly width = 0.50\")`. The rule is stated on the drawn GatPoly of the p+ poly resistor, which device_map.res_poly names `rppd`.",

@@ -204,18 +204,66 @@ def test_the_stage_count_is_reported_as_bound_from_the_spec(tmp_path):
 
 # ── the declaration reaches the DEVICE GEOMETRY ───────────────────────────
 def _cap_lengths(root, d):
-    """Render the netlist and read the DRAWN capacitor lengths back off it."""
+    """Render the netlist and read the DRAWN capacitor lengths back off it,
+    with a UNIT ARRAY folded back to the single device it realises.
+
+    A capacitor the target PDK cannot draw at the length this library sizes it
+    to is emitted as N unit devices in parallel
+    (`analog_a2_topology_emit.split_oversize_capacitors`), so the netlist
+    carries `ci1_u0 .. ci1_u20` where it used to carry `ci1`. The properties
+    the tests below assert are about the CAPACITOR, not about how many pieces
+    it is drawn in, so the units are summed on the PDK's own two-term model
+    and inverted back to the equivalent single length. That keeps every
+    assertion below saying exactly what it said before — and it fails loudly
+    if the split ever stops preserving the value, because the folded length
+    would no longer equal the one the sizing asked for."""
     assert run_prog(A3, root, "--pdk", "sky130A").returncode == 0
     text = (d / f"{BLK}.sp").read_text(encoding="utf-8")
-    out = {}
+    import re as _re
+    import analog_a2_topology_emit as _a2
+    import pdk_analog_layout_minima as _m
+    _fam, _ent = _m.resolve_family("ihp-sg13g2")
+
+    def _const(key):
+        def find(o):
+            if isinstance(o, dict):
+                if key in o:
+                    return o[key]
+                for v in o.values():
+                    r = find(v)
+                    if r is not None:
+                        return r
+            return None
+        return find(_ent)
+
+    carea = _const("cap_area_ff_per_um2") or 1.0
+    cperi = _const("cap_perim_ff_per_um") or 0.0
+    totals, widths, plain = {}, {}, {}
     for ln in text.splitlines():
         toks = ln.split()
         if not toks or not toks[0].startswith("x"):
             continue
         name = toks[0][1:]
+        w = l = None
         for t in toks:
             if t.startswith("l="):
-                out[name] = float(t[2:].rstrip("u"))
+                l = float(t[2:].rstrip("u"))
+            elif t.startswith("w="):
+                w = float(t[2:].rstrip("u"))
+        if l is None:
+            continue
+        m = _re.match(r"^(.*)_u\d+$", name)
+        if m is None or w is None:
+            plain[name] = l
+            continue
+        base = m.group(1)
+        totals[base] = totals.get(base, 0.0) + _a2.capacitance_ff(
+            w, l, carea, cperi)
+        widths[base] = w
+    out = dict(plain)
+    for base, ff in totals.items():
+        w = widths[base]
+        out[base] = (ff - 2.0 * cperi * w) / (carea * w + 2.0 * cperi)
     return out
 
 
@@ -310,6 +358,46 @@ def test_the_capacitor_ratio_is_the_loop_coefficient(tmp_path):
     for i, coeff in enumerate(ir["stage_expansion"]["coefficients"], start=1):
         assert caps[f"cs{i}"] / caps[f"ci{i}"] == pytest.approx(coeff,
                                                                rel=1e-5)
+
+
+def test_a_capacitor_above_the_pdk_maximum_is_emitted_as_a_unit_array(
+        tmp_path):
+    """END TO END through the real A2 and the real A3, on the family whose
+    registry record states a capacitor maximum.
+
+    MEASURED before this: the PDK's gencell CLAMPS a capacitor above `lmax`
+    and draws it, so twelve netlist capacitors became two drawn cells, the
+    largest 21x smaller than the netlist asks for, and only the sign-off LVS
+    noticed — six steps later. The netlist must now carry the array, so that
+    the netlist and the layout agree device for device."""
+    d, _, root = a2(tmp_path)
+    ir = read_json(d / "topology.json")
+    rec = ir["_provenance"]["layout_maxima"]
+    assert rec["maxima_available"] is True
+    arrays = {a["device"]: a for a in rec["capacitor_arrays"]}
+    assert arrays, "no capacitor was split on a family that states a maximum"
+    assert rec["refusals"] == []
+    lmax = rec["roles"]["cap"]["max_length_um"]
+    for name, a in arrays.items():
+        assert a["units"] >= 2 and a["unit_l_um"] <= lmax, (name, a)
+        assert a["library_l_um"] > lmax, (name, a)
+        assert a["relative_value_error"] <= a["tolerance"], (name, a)
+        assert a["relative_value_error"] < 1e-9, (name, a)
+
+    assert run_prog(A3, root, "--pdk", "sky130A").returncode == 0
+    text = (d / f"{BLK}.sp").read_text(encoding="utf-8")
+    for name, a in arrays.items():
+        units = [ln for ln in text.splitlines()
+                 if ln.split() and ln.split()[0].startswith(f"x{name}_u")]
+        assert len(units) == a["units"], (name, len(units), a["units"])
+        nets = {tuple(ln.split()[1:3]) for ln in units}
+        assert len(nets) == 1, (
+            f"{name}'s units must be in PARALLEL — one pair of nets, not "
+            f"{len(nets)}")
+        assert not [ln for ln in text.splitlines()
+                    if ln.split() and ln.split()[0] == f"x{name}"], (
+            f"the un-drawable single device {name} is still in the netlist "
+            f"beside its own array")
 
 
 def test_a3_records_the_netlist_as_design_bound_not_structure_only(tmp_path):

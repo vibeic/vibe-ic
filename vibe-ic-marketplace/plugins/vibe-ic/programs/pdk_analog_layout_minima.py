@@ -65,6 +65,13 @@ _REGISTRY = Path(__file__).resolve().parent / "pdk_registry.json"
 MIN_WIDTH_KEY = "min_width_um"
 _MINIMA_KEY = "analog_device_layout_minima"
 
+# The keys the registry states a role's drawn MAXIMA under. Same record
+# shape, same reader, same "absent means not measured" rule as the minima —
+# see `layout_maxima`.
+MAX_WIDTH_KEY = "max_width_um"
+MAX_LENGTH_KEY = "max_length_um"
+_MAXIMA_KEY = "analog_device_layout_maxima"
+
 
 def _read_registry(path: Optional[Path] = None) -> Dict[str, Any]:
     try:
@@ -117,6 +124,67 @@ def layout_minima(selector: str, path: Optional[Path] = None
     if not isinstance(roles, dict):
         return fam, {}
     return fam, {str(k): v for k, v in roles.items() if isinstance(v, dict)}
+
+
+def layout_maxima(selector: str, path: Optional[Path] = None
+                  ) -> Tuple[Optional[str], Dict[str, Any]]:
+    """`(family_name, {role: {max_width_um, max_length_um, device, rule,
+    rule_text}})` — the other end of the same statement.
+
+    WHY THIS EXISTS, MEASURED. The minima were read and the maxima were not,
+    and the two ends do not fail the same way: a PDK gencell asked for a
+    geometry BELOW its minimum refuses, and one asked for a geometry ABOVE
+    its maximum CLAMPS and draws. On the family this was measured on, eight
+    capacitors asked for at 34.75 .. 629.08 um against a 30 um maximum were
+    all drawn at 30, twelve netlist devices became two drawn cells, DRC was
+    clean and only the sign-off LVS — six steps later — said `mismatch`. The
+    family, the device and the numbers are in that family's own registry
+    record; this reader knows none of them.
+
+    A role absent from the record is NOT MEASURED, which bounds nothing; it is
+    never "no maximum exists". Same rule as the minima, and for the same
+    reason: this module supplies no default and no per-family branch."""
+    fam, ent = resolve_family(selector, path)
+    rec = ent.get(_MAXIMA_KEY)
+    if not isinstance(rec, dict):
+        return fam, {}
+    roles = rec.get("roles")
+    if not isinstance(roles, dict):
+        return fam, {}
+    return fam, {str(k): v for k, v in roles.items() if isinstance(v, dict)}
+
+
+def maxima_source(selector: str, path: Optional[Path] = None
+                  ) -> Optional[str]:
+    """The `_measured_from` citation the family's MAXIMA record carries."""
+    _fam, ent = resolve_family(selector, path)
+    rec = ent.get(_MAXIMA_KEY)
+    if isinstance(rec, dict):
+        src = rec.get("_measured_from")
+        if isinstance(src, str) and src.strip():
+            return src
+    return None
+
+
+def max_width_um(roles: Dict[str, Any], role: str) -> Optional[float]:
+    """The declared drawn-width ceiling for `role`, or None."""
+    return _role_number(roles, role, MAX_WIDTH_KEY)
+
+
+def max_length_um(roles: Dict[str, Any], role: str) -> Optional[float]:
+    """The declared drawn-length ceiling for `role`, or None."""
+    return _role_number(roles, role, MAX_LENGTH_KEY)
+
+
+def _role_number(roles: Dict[str, Any], role: str, key: str
+                 ) -> Optional[float]:
+    rec = roles.get(str(role))
+    if not isinstance(rec, dict):
+        return None
+    v = rec.get(key)
+    if isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0:
+        return float(v)
+    return None
 
 
 def minima_source(selector: str, path: Optional[Path] = None

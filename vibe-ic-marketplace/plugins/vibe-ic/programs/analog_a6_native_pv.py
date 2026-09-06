@@ -641,8 +641,13 @@ def _write_drc_report(bdir: Path, block: str, violations: int,
             f"attributed to this flow's own paint",
             f"second_engine_result: {se.get('result', 'MEASURED')}",
             f"second_engine_violations: {se.get('violations', 0)}",
-            f"second_engine_rules: "
+            f"second_engine_rules_adjudicated: "
             f"{','.join(sorted((se.get('own_paint_rules_the_signoff_deck_does_not_grade') or {}))) or '-'}",
+            f"second_engine_rules_deferred_to_signoff_deck: "
+            f"{','.join(sorted((se.get('deferred_to_signoff_deck') or {}))) or '-'}",
+            f"second_engine_rules_reported_not_verdicted: "
+            f"{','.join(sorted((se.get('reported_not_verdicted') or {}))) or '-'}",
+            f"# {se.get('coverage', 'coverage not stated')}",
             "",
         ]
     rpt.write_text("\n".join(lines))
@@ -754,6 +759,41 @@ def unadjudicated_rules(attribution: Dict[str, Any], graded: set
     return out
 
 
+def rules_by_disposition(attribution: Dict[str, Any], graded: set
+                         ) -> Dict[str, Dict[str, int]]:
+    """Every rule the second engine reported, split by WHAT IS DONE WITH IT.
+
+    Three dispositions, and the record carries all three by MEMBERSHIP so a
+    reader is never left inferring one from a total:
+
+      `adjudicated`  the sign-off deck does not grade it and the geometry is
+                     this flow's own paint — it counts.
+      `deferred`     the sign-off deck DOES grade it, so the sign-off
+                     engine's answer stands and this one is not a verdict.
+      `reported`     the sign-off deck does not grade it and the geometry is
+                     not this flow's to change (the PDK's own gencell, or a
+                     placement/interaction class) — surfaced, never a
+                     verdict. MEASURED: 60 rectangles of one such rule on
+                     `ldo` and 816 on `delta_sigma`, none of which any
+                     artefact in this flow used to mention at all.
+    """
+    out: Dict[str, Dict[str, int]] = {"adjudicated": {}, "deferred": {},
+                                      "reported": {}}
+    for cls, rules in ((attribution or {}).get("by_class_and_rule") or {}).items():
+        for message, count in (rules or {}).items():
+            rid = rule_id(message)
+            if rid is None:
+                continue
+            if rid in graded:
+                key = "deferred"
+            elif cls == "LAYOUT":
+                key = "adjudicated"
+            else:
+                key = "reported"
+            out[key][rid] = out[key].get(rid, 0) + int(count)
+    return {k: dict(sorted(v.items())) for k, v in out.items()}
+
+
 def unreadable_rule_messages(attribution: Dict[str, Any]) -> List[str]:
     """Messages the second engine produced whose rule id this program cannot
     read. NOT_MEASURED, never a default."""
@@ -795,18 +835,34 @@ def second_engine_drc(project: Path, block: str, container: str,
         attribution = attribution["blocks"].get(block, attribution)
     graded = graded_rule_ids(lyrdb_text)
     adjudicated = unadjudicated_rules(attribution, graded)
+    disp = rules_by_disposition(attribution, graded)
     return {
         "engine": "magic drc(full)",
         "signoff_rules_graded": len(graded),
         "own_paint_rules_the_signoff_deck_does_not_grade":
             dict(sorted(adjudicated.items())),
         "violations": sum(adjudicated.values()),
+        "deferred_to_signoff_deck": disp["deferred"],
+        "reported_not_verdicted": disp["reported"],
         "unreadable_rule_messages": unreadable_rule_messages(attribution),
         "attribution_result": attribution.get("result"),
         "note": ("only rules the sign-off deck does not grade AT ALL, and "
                  "only violations this engine attributes to the flow's own "
                  "paint, are adjudicated here; a rule the PDK's own gencell "
-                 "breaks alone is reported by that program, never verdicted"),
+                 "breaks alone is `reported_not_verdicted`, and a rule the "
+                 "deck does grade is `deferred_to_signoff_deck`"),
+        # WHAT A ZERO HERE DOES AND DOES NOT MEAN. This engine reports the
+        # rules that FIRED; it does not enumerate the rules it checked and
+        # passed. So an empty `own_paint_rules_…` is "this engine found none
+        # of its own-paint kind", NOT "every rule the sign-off deck skips was
+        # graded and is clean" — the one is a measurement and the other is
+        # the silence this whole path exists to stop being read as a verdict.
+        # The sign-off deck's graded set IS enumerable and is the number
+        # above; this engine's is not, and saying so is cheaper than a reader
+        # assuming it.
+        "coverage": ("this engine reports rules that FIRED; it does not list "
+                     "rules it graded and passed, so an absent rule is NOT "
+                     "evidence that it was graded and clean"),
     }
 
 

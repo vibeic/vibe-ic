@@ -256,3 +256,40 @@ def test_rule_id_is_the_pdks_own_token_in_either_engines_message():
     assert PV.rule_id(_MIM_I) == "MIM.i"
     assert PV.rule_id("Metal1 overlap of Via1 < 0.045um (V1.c1)") == "V1.c1"
     assert PV.rule_id("no id here") is None
+
+
+def test_every_rule_the_second_engine_saw_has_a_stated_disposition():
+    """MEMBERSHIP, not a total. A reader must be able to see which rules
+    counted, which were left to the sign-off engine, and which were surfaced
+    without a verdict — otherwise a `violations: 0` is unreadable."""
+    attribution = {"result": "LAYOUT_OWNS",
+                   "by_class_and_rule": {"LAYOUT": {_MIM_I: 8, _M2_B: 2},
+                                         "DEVICE_CELL": {_M2_D: 60}}}
+    disp = PV.rules_by_disposition(attribution, PV.graded_rule_ids(_LYRDB))
+    assert disp == {"adjudicated": {"MIM.i": 8},
+                    "deferred": {"M2.b": 2},
+                    "reported": {"M2.d": 60}}
+
+
+def test_the_pdks_own_cell_is_surfaced_rather_than_dropped():
+    """It used to appear in no A6 artefact at all: 60 rectangles on one block
+    and 816 on the other, of a rule the sign-off deck does not grade either.
+    Not this flow's to fix, and not this flow's to hide."""
+    attribution = {"result": "DEVICE_ONLY",
+                   "by_class_and_rule": {"DEVICE_CELL": {_M2_D: 816},
+                                         "LAYOUT": {}}}
+    disp = PV.rules_by_disposition(attribution, PV.graded_rule_ids(_LYRDB))
+    assert disp["reported"] == {"M2.d": 816}
+    assert disp["adjudicated"] == {} and disp["deferred"] == {}
+
+
+def test_the_record_says_what_a_zero_from_this_engine_does_not_mean():
+    """THE ARM THAT STOPS THIS PATH RECREATING THE DEFECT IT CLOSES. The
+    sign-off deck's silence was read as cleanliness; this engine reports only
+    rules that FIRED, so its own empty set must not be read the same way."""
+    got = PV.second_engine_drc(
+        Path("/nonexistent"), "blk", "", _LYRDB,
+        runner=lambda p, b, c: (_attr({}), ""))
+    assert got["violations"] == 0
+    assert "does not list rules it graded and passed" in got["coverage"]
+    assert "NOT evidence" in got["coverage"]
