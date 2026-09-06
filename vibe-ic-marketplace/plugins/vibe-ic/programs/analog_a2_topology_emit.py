@@ -4148,8 +4148,52 @@ def split_oversize_capacitors(devices: List[Dict[str, Any]],
     lmin = _minima.min_width_um(role_minima, CAP_ROLE)
     carea = measured.get("cap_area_ff_per_um2")
     cperi = measured.get("cap_perim_ff_per_um")
-    if lmax is None or not isinstance(carea, (int, float)) or carea <= 0:
+    if lmax is None:
+        # This family states NO device maximum, so there is no ceiling to be
+        # above and nothing to split. The provenance block says so
+        # (`maxima_available`), which is the honest report of it.
         return devices, param_exprs, [], []
+    if not isinstance(carea, (int, float)) or carea <= 0:
+        # THE FAMILY STATES A MAXIMUM AND CARRIES NO CONSTANTS TO SPLIT WITH.
+        # MEASURED (vibe-ic#2062 addendum, #2056 residual): this returned
+        # "nothing was split" — indistinguishable from "nothing was oversize"
+        # — while the provenance block, keyed on `maxima_available` alone, went
+        # on to print the note that says a capacitor above the maximum "is
+        # realised as N unit devices in parallel". So on such a family an
+        # oversize capacitor was carried at its library length and the record
+        # asserted the splitting behaviour over it. gf180mcuD is in that state
+        # today: `analog_device_layout_maxima` gives cap l/w max 100 um and the
+        # measured corner carries no `cap_area_ff_per_um2`.
+        #
+        # Detecting the oversize does NOT need the constants — only `lmax` and
+        # the device's own drawn length do — so each oversize device is REFUSED
+        # BY NAME, naming the constant that is missing. A device that is NOT
+        # oversize is untouched: a refusal that fires on a family whose
+        # capacitors are all legal would be a false accusation about the PDK.
+        refusals: List[str] = []
+        by_l = {str(e.get("device")): e for e in param_exprs
+                if e.get("param") == "l"}
+        for d in devices:
+            e = by_l.get(str(d.get("name")))
+            if d.get("role") != CAP_ROLE or e is None:
+                continue
+            try:
+                l_um = float(_safe_eval(str(e["expr"]), dict(env)))
+            except Exception:
+                continue                 # unresolvable here: not this pass's
+            if l_um <= float(lmax):
+                continue
+            refusals.append(
+                f"{d.get('name')}: this entry sizes it to a drawn length of "
+                f"{l_um:.6g}u, above the {lmax:g}u maximum this family states "
+                f"for a {CAP_ROLE!r} device, and the family carries no "
+                f"measured `cap_area_ff_per_um2`, so the unit array that would "
+                f"realise it cannot be solved. Characterise the capacitance "
+                f"constants for this family "
+                f"(programs/pdk_analog_characterize.py) — drawing it at the "
+                f"maximum would silently change the capacitance the noise "
+                f"budget asked for")
+        return devices, param_exprs, [], refusals
     cperi = float(cperi) if isinstance(cperi, (int, float)) else 0.0
 
     by_dev: Dict[str, Dict[str, Any]] = {}
@@ -4582,6 +4626,16 @@ def build_ir(block: str, btype: str, entry: Dict[str, Any],
                     "this family declares no measured device maximum in the "
                     "registry, so NOTHING was checked against one and no "
                     "capacitor was split"),
+                # A THIRD STATE, and it was reading as the first. A family can
+                # state a maximum and carry no measured capacitance constants
+                # — then the ceiling IS checked and the array cannot be solved,
+                # so an oversize device is refused by name rather than carried
+                # at its library length under a note claiming it was split.
+                "split_constants_available": bool(
+                    isinstance((measured_params or {}).get(
+                        "cap_area_ff_per_um2"), (int, float))
+                    and (measured_params or {}).get(
+                        "cap_area_ff_per_um2", 0) > 0),
             },
             "layout_minima": {
                 "path": "programs/pdk_registry.json",

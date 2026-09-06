@@ -201,12 +201,26 @@ def test_a_family_with_no_maxima_record_splits_nothing_and_says_so():
 
 def test_a_family_with_no_measured_capacitance_constants_splits_nothing():
     """The other half of the same rule: a maximum with no constants to solve
-    against is not a licence to guess one."""
+    against is not a licence to guess one. SPLITS NOTHING — unchanged, and
+    still asserted by identity.
+
+    RE-AIMED on the SILENCE (vibe-ic#2056 residual). Returning no refusal here
+    made "nothing was split" indistinguishable from "nothing was oversize",
+    and the provenance block keyed on `maxima_available` alone then printed the
+    note saying an oversize capacitor "is realised as N unit devices in
+    parallel". So the record asserted the split over a device that had been
+    carried at its library length. Detecting the oversize needs only the
+    maximum and the drawn length, so the device is now NAMED. The control that
+    it does not fire on an in-range capacitor is in
+    `test_unit_capacitor_split_per_family.py`.
+    """
     devices, exprs, maxima, minima, _measured = _ir_bits()
     devs, out_exprs, recs, refusals = A2.split_oversize_capacitors(
         devices, exprs, {}, maxima, minima, {})
     assert devs is devices and out_exprs is exprs
-    assert recs == [] and refusals == []
+    assert recs == []
+    assert refusals, "an oversize capacitor was carried in silence"
+    assert all("cap_area_ff_per_um2" in r for r in refusals), refusals
 
 
 # ── the sizing itself is the PDK's own two-term model ────────────────────
