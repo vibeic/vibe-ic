@@ -93,6 +93,42 @@ def _formal_dir(project: Path) -> Path:
     return project / "phase2" / "stage1" / "formal"
 
 
+def _container_can_see(name: str, path) -> bool:
+    """Can `name` READ `path`? The design mount is the precondition these arms
+    have but never stated.
+
+    Both arms stage their design under `Path.home()/vibeic-designs` because the
+    pinned container mounts the HOST's copy of it. That assumption holds when
+    the suite runs on the host, and NOT when it runs inside the EDA image
+    through `tools/ci/run_suite_in_eda_image.sh` — the harness the landing gate
+    uses — because that harness deliberately pins a SCRATCH home:
+
+        HOME=$SCRATCH/home, and a matching /etc/passwd entry
+        MEASURED: Path.home() = /tmp/vibeic-suite-<lane>/home
+
+    `vibeic-eda` mounts `/home/<user>/vibeic-designs` and `/home/<user>`; it does
+    not mount that scratch home. So the design is written somewhere the engine
+    cannot read, formal proves nothing, and the arms returned INCONCLUSIVE — a
+    FAILURE that reads as "the formal flow regressed" when what happened is that
+    the subject never reached the engine. A minimal `abc pdr` sby probe inside
+    that same container returns `DONE (PASS, rc=0)`, so the engine is fine.
+
+    Asked rather than assumed, so the honest answer is NOT_VERIFIED.
+    """
+    if shutil.which("docker") is None:
+        return False
+    try:
+        r = _pr.run(["docker", "exec", name, "test", "-r", str(path)],
+                    capture_output=True, text=True)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return r.returncode == 0
+
+
+def _designs_root_visible() -> bool:
+    return _container_can_see(_REAL_CONTAINER, Path.home() / "vibeic-designs")
+
+
 def _docker_container_running(name: str) -> bool:
     if shutil.which("docker") is None:
         return False
@@ -209,11 +245,13 @@ def test_absent_env_gate_fails_but_names_the_gap(tmp_path):
 # ── the environment IS available ──────────────────────────────────────────
 
 @pytest.mark.skipif(
-    not _docker_container_running(_REAL_CONTAINER),
+    not (_docker_container_running(_REAL_CONTAINER) and _designs_root_visible()),
     reason=not_verified_reason(
-        f"container {_REAL_CONTAINER!r} is not running on this host, "
-        f"so the formal engine this arm drives cannot be reached",
-        f"start it: docker start {_REAL_CONTAINER}"),
+        f"container {_REAL_CONTAINER!r} is not running, or cannot READ "
+        f"{Path.home() / 'vibeic-designs'} — the design this arm stages would "
+        f"never reach the engine, so a verdict here would be about the mount",
+        f"start it (docker start {_REAL_CONTAINER}), and run where "
+        f"Path.home() is the account home that container mounts"),
 )
 def test_available_env_runs_a_real_proof_and_needs_no_waiver(tmp_path):
     """The decisive test for "is this a discovery bug or an environment
@@ -257,11 +295,13 @@ def test_available_env_runs_a_real_proof_and_needs_no_waiver(tmp_path):
 
 
 @pytest.mark.skipif(
-    not _docker_container_running(_REAL_CONTAINER),
+    not (_docker_container_running(_REAL_CONTAINER) and _designs_root_visible()),
     reason=not_verified_reason(
-        f"container {_REAL_CONTAINER!r} is not running on this host, "
-        f"so the formal engine this arm drives cannot be reached",
-        f"start it: docker start {_REAL_CONTAINER}"),
+        f"container {_REAL_CONTAINER!r} is not running, or cannot READ "
+        f"{Path.home() / 'vibeic-designs'} — the design this arm stages would "
+        f"never reach the engine, so a verdict here would be about the mount",
+        f"start it (docker start {_REAL_CONTAINER}), and run where "
+        f"Path.home() is the account home that container mounts"),
 )
 def test_failed_proof_retains_results_and_counterexample_verdict(tmp_path):
     """#1974 failed-proof control: a real refutation stays FAIL evidence.
