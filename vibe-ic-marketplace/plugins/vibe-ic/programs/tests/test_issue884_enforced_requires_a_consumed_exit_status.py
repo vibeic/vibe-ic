@@ -1294,12 +1294,23 @@ def test_884_the_measured_false_enforced_are_no_longer_enforced(gate,
 #: `design_one_shot_runner.py:11128` as it stands, and the extract-method
 #: refactor of it the verifier used. Byte-for-byte the same subprocess, the
 #: same swallow, the same discarded result.
+#: RE-MEASURED for v1.17.70, which is what this fixture's own guard demands
+#: ("no longer has the shape #884 was measured on; re-measure before editing
+#: this test"). The site moved off `subprocess.run(..., timeout=300)` onto the
+#: supervised primitive, which removed a wall clock and changed NOTHING about
+#: the property #884 pins: the spawn is still best-effort, its status is still
+#: never read, and the verdict must still be AUDIT_ONLY. The comment lines the
+#: conversion added are carried verbatim, because this fixture is matched as
+#: literal source text and a paraphrase would not be the site.
 _BSDL_SITE = '''                try:
-                    subprocess.run(
+                    # CZT-11 — supervised, not clocked. `Stalled` is a
+                    # RuntimeError, so the bare `except Exception` below
+                    # already catches it; only the clock is removed.
+                    _pr.run(
                         [sys.executable, str(PROGRAMS_DIR / "bsdl_emit.py"),
                          str(project), "--auto", "--json",
                          str(reports_dir / "phase2/dft/bsdl_plan.json")],
-                        capture_output=True, text=True, timeout=300)
+                        capture_output=True, text=True)
                 except Exception:
                     pass
 '''
@@ -1311,21 +1322,21 @@ def _emit_bsdl_plan(project, reports_dir):
     """Emit the BSDL plan beside the coverage report. Best-effort: the plan is
     documentation, never a gate, so a failure here must not fail the step."""
     try:
-        return subprocess.run(
+        return _pr.run(
             [sys.executable, str(PROGRAMS_DIR / "bsdl_emit.py"),
              str(project), "--auto", "--json",
              str(reports_dir / "phase2/dft/bsdl_plan.json")],
-            capture_output=True, text=True, timeout=300)
+            capture_output=True, text=True)
     except Exception:
         return None
 
 '''
 #: ...and the same site actually WIRED, for the non-degeneracy control.
-_BSDL_WIRED = '''                _bsdl_cp = subprocess.run(
+_BSDL_WIRED = '''                _bsdl_cp = _pr.run(
                     [sys.executable, str(PROGRAMS_DIR / "bsdl_emit.py"),
                      str(project), "--auto", "--json",
                      str(reports_dir / "phase2/dft/bsdl_plan.json")],
-                    capture_output=True, text=True, timeout=300)
+                    capture_output=True, text=True)
                 if _bsdl_cp.returncode != 0:
                     raise RuntimeError("bsdl plan emission failed")
 '''

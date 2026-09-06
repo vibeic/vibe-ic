@@ -39,7 +39,7 @@ that passes on a permanently-silent producer is the bug it is testing for.
 from __future__ import annotations
 
 import json
-import subprocess
+import subprocess  # noqa: F401
 import sys
 from pathlib import Path
 from typing import Optional, Tuple
@@ -242,12 +242,12 @@ def test_dt3_cascade_is_disclosed_when_only_the_upstream_grade_is_missing(tmp_pa
         return _FakeProc(rc=0)
 
     import phase3_one_shot_runner as _R
-    orig = _R.subprocess.run
-    _R.subprocess.run = _fake
+    orig = _R._pr.run
+    _R._pr.run = _fake
     try:
         _run(tmp_path)
     finally:
-        _R.subprocess.run = orig
+        _R._pr.run = orig
 
     rec = _record(tmp_path, "DT3")
     assert rec.is_file(), "DT3's cascade self-disable left no record"
@@ -271,12 +271,12 @@ def test_a_producer_that_writes_nothing_is_disclosed_with_its_exit_status(tmp_pa
         return _FakeProc(rc=3, err="engine aborted: no liberty")
 
     import phase3_one_shot_runner as _R
-    orig = _R.subprocess.run
-    _R.subprocess.run = _fake
+    orig = _R._pr.run
+    _R._pr.run = _fake
     try:
         written, notes = _run(tmp_path)
     finally:
-        _R.subprocess.run = orig
+        _R._pr.run = orig
 
     assert written == []
     for step in ("DT1", "DT2"):
@@ -303,15 +303,24 @@ def test_an_exception_from_the_producer_is_disclosed(tmp_path):
     _coverage(tmp_path, "DT2", "BLOCKED")
 
     def _boom(cmd, **kw):
-        raise subprocess.TimeoutExpired(cmd, 1)
+        # CZT2-15 — the STIMULUS changed because the mechanism did, and the
+        # ASSERTIONS below did not. This dispatch is supervised on the
+        # producer's own forward progress and carries no clock, so
+        # `subprocess.TimeoutExpired` can no longer arrive here at all; a
+        # stimulus that cannot occur would leave this test passing over a
+        # branch nothing reaches. `Stalled` is what the supervisor raises, and
+        # it must land in the same `except Exception` disclosure.
+        import _progress_run as _pr
+        raise _pr.Stalled(cmd, looks=12, poll_s=30.0, elapsed_s=361.0,
+                          signals={"output": True, "cpu": True, "io": True})
 
     import phase3_one_shot_runner as _R
-    orig = _R.subprocess.run
-    _R.subprocess.run = _boom
+    orig = _R._pr.run
+    _R._pr.run = _boom
     try:
         _run(tmp_path)
     finally:
-        _R.subprocess.run = orig
+        _R._pr.run = orig
 
     blob = json.loads(_record(tmp_path, "DT2").read_text())
     assert blob["not_run_stage"] == "producer_execution_error", blob
@@ -340,12 +349,12 @@ def test_a_real_measurement_leaves_no_record(tmp_path):
         return _FakeProc(rc=0)
 
     import phase3_one_shot_runner as _R
-    orig = _R.subprocess.run
-    _R.subprocess.run = _fake
+    orig = _R._pr.run
+    _R._pr.run = _fake
     try:
         written, notes = _run(tmp_path)
     finally:
-        _R.subprocess.run = orig
+        _R._pr.run = orig
 
     assert len(written) == 3, written
     for step in DT_ALL:
@@ -372,12 +381,12 @@ def test_a_real_measurement_retires_a_stale_record(tmp_path):
         return _FakeProc(rc=0)
 
     import phase3_one_shot_runner as _R
-    orig = _R.subprocess.run
-    _R.subprocess.run = _fake
+    orig = _R._pr.run
+    _R._pr.run = _fake
     try:
         _run(tmp_path)
     finally:
-        _R.subprocess.run = orig
+        _R._pr.run = orig
 
     assert not stale.exists(), "a real grade must retire the stale record"
 
@@ -399,13 +408,13 @@ def test_an_existing_grade_is_neither_regraded_nor_recorded(tmp_path):
     launched: list = []
 
     import phase3_one_shot_runner as _R
-    orig = _R.subprocess.run
-    _R.subprocess.run = lambda cmd, **kw: (launched.append(cmd)
+    orig = _R._pr.run
+    _R._pr.run = lambda cmd, **kw: (launched.append(cmd)
                                            or _FakeProc(rc=0))
     try:
         written, notes = _run(tmp_path)
     finally:
-        _R.subprocess.run = orig
+        _R._pr.run = orig
 
     assert launched == [], "a graded tree must not re-launch any producer"
     assert written == [] and notes == []
@@ -447,12 +456,12 @@ def test_producer_argv_is_unchanged(tmp_path):
     cmds: list = []
 
     import phase3_one_shot_runner as _R
-    orig = _R.subprocess.run
-    _R.subprocess.run = lambda cmd, **kw: (cmds.append(cmd) or _FakeProc(rc=0))
+    orig = _R._pr.run
+    _R._pr.run = lambda cmd, **kw: (cmds.append(cmd) or _FakeProc(rc=0))
     try:
         _run(tmp_path)
     finally:
-        _R.subprocess.run = orig
+        _R._pr.run = orig
 
     assert len(cmds) == 3
     progs = [Path(c[1]).name for c in cmds]
@@ -478,12 +487,12 @@ def test_no_pdk_dir_argument_when_there_is_no_staged_pdk(tmp_path):
     cmds: list = []
 
     import phase3_one_shot_runner as _R
-    orig = _R.subprocess.run
-    _R.subprocess.run = lambda cmd, **kw: (cmds.append(cmd) or _FakeProc(rc=0))
+    orig = _R._pr.run
+    _R._pr.run = lambda cmd, **kw: (cmds.append(cmd) or _FakeProc(rc=0))
     try:
         _run(tmp_path)
     finally:
-        _R.subprocess.run = orig
+        _R._pr.run = orig
 
     assert cmds and all("--pdk-dir" not in c for c in cmds)
 

@@ -38070,8 +38070,8 @@ def step_drv_promotion_corroboration(project: Path) -> StepResult:
             blocking that is `BLOCKED`, not a neutral skip — see
             `_signoff_not_checked`.
     """
-    return _run_declared_signoff_gate(project, *_DRV_PROMOTION_GATE,
-                                      timeout=600)
+    # CZT2-16 — the 600 s override went with the parameter it overrode.
+    return _run_declared_signoff_gate(project, *_DRV_PROMOTION_GATE)
 
 
 def _restamp_provenance_output(project: Path, rel: str, path: Path,
@@ -38553,8 +38553,7 @@ def _signoff_not_checked(name: str, t0: float, why: str,
 
 def _run_declared_signoff_gate(project: Path, name: str, program: str,
                                out_rel: str,
-                               extra_argv: tuple = (),
-                               timeout: int = 900) -> StepResult:
+                               extra_argv: tuple = ()) -> StepResult:
     """Invoke one flow-declared sign-off gate inline, blocking on its verdict.
 
     Exactly two exit codes are verdicts about the design — 0 (PASS) and 1
@@ -38588,8 +38587,19 @@ def _run_declared_signoff_gate(project: Path, name: str, program: str,
     cmd = [sys.executable, str(prog), str(project), *extra_argv,
            "--json", str(out_json)]
     try:
-        cp = subprocess.run(cmd, timeout=timeout, check=False,
-                            capture_output=True, text=True)
+        # CZT2-16 — a 900 s PARAMETER DEFAULT (600 at one caller) on a
+        # VERDICT-BEARING dispatch. This function invokes a flow-declared
+        # sign-off gate and blocks on its verdict, so the clock decided whether
+        # a declared gate got to answer at all: on a busy host a working gate
+        # was killed and the step recorded NOT_CHECKED.
+        #
+        # The TIER was already honest -- an expiry reaches the reader as
+        # `_signoff_not_checked`, never as a verdict about the design, which is
+        # the fallback this whole lane argues for. But an honest word for a
+        # kill is still a kill, and a gate that would have answered in 901 s
+        # answers nothing. Supervised instead; a genuine STALL still reaches
+        # this same arm (`Stalled` is an Exception) and now says so.
+        cp = _pr.run(cmd, check=False, capture_output=True, text=True)
     except Exception as exc:                                  # noqa: BLE001
         return _signoff_not_checked(name, t0, f"gate could not run: {exc}")
     detail = _gate_detail(out_json, cp.stdout or "", cp.stderr or "")
@@ -39491,13 +39501,31 @@ def run_at_speed_atpg_producers(project: Path, written: List[str],
     silence went unmeasured. Best-effort + NONFATAL, unchanged: the flow gates
     only VALIDATE the produced reports.
     """
+    # CZT2-15 — A BOUND IN A DATA TABLE IS STILL A BOUND, and it is the one
+    # hiding place a call-site census structurally cannot see: the literal
+    # lives in a tuple, not at the `subprocess.run`, so every census this repo
+    # has run over `subprocess.run(timeout=<literal>)` reported these three as
+    # absent. They were the at-speed ATPG outer wall in a SECOND place -- the
+    # same defect v1.17.70 removed from `design_one_shot_runner`'s DT1
+    # dispatch, sitting here untouched at 2400 / 2400 / 1800 s.
+    #
+    # SAFE FOR THE SAME MEASURED REASON, re-checked for THESE producers. The
+    # worry with an at-speed wall is that the producer's own budget also SIZES
+    # its fault sample, so removing the outer one might silently shrink what
+    # gets graded. It cannot here, and the dataflow is why: `cmd` below carries
+    # --clock / --max-faults / --json / --pdk-dir and NO wall, budget or
+    # timeout flag (read with `ast`, which cannot see a comment), so
+    # `timeout_s` reaches the producer nowhere. And of the three producers only
+    # `transition_fault_atpg_run` has sample sizing at all -- grepped:
+    # `path_delay_fault_atpg_run` and `sdd_atpg_run` contain zero references to
+    # _scaled_wall_budget / _rightsize_sample / WALL_BUDGET_MAX.
     order = (
-        # step, producer program, extra argv, timeout
-        ("DT1", "transition_fault_atpg_run.py", ["--max-faults", "400"], 2400),
-        ("DT2", "path_delay_fault_atpg_run.py", [], 2400),
-        ("DT3", "sdd_atpg_run.py", [], 1800),
+        # step, producer program, extra argv
+        ("DT1", "transition_fault_atpg_run.py", ["--max-faults", "400"]),
+        ("DT2", "path_delay_fault_atpg_run.py", []),
+        ("DT3", "sdd_atpg_run.py", []),
     )
-    for step, prog, extra_argv, timeout_s in order:
+    for step, prog, extra_argv in order:
         out_json = project / _ATPG_COVERAGE_REL[step]
         if not atpg_needs_regrade(out_json):
             # A real grade already exists; retire any record that contradicts it.
@@ -39523,8 +39551,11 @@ def run_at_speed_atpg_producers(project: Path, written: List[str],
             cmd += ["--pdk-dir", str(pdk_in.resolve())]
         out_json.parent.mkdir(parents=True, exist_ok=True)
         try:
-            proc = subprocess.run(cmd, capture_output=True, text=True,
-                                  timeout=timeout_s)
+            # Supervised on the producer's own forward progress (output, CPU
+            # and I/O of the child and its live descendants), never a clock.
+            # A `Stalled` is a RuntimeError, so the `except Exception` beside
+            # this already catches it and the disclosure below names it.
+            proc = _pr.run(cmd, capture_output=True, text=True)
         except Exception as exc:
             atpg_disclose_not_run(
                 project, step,
