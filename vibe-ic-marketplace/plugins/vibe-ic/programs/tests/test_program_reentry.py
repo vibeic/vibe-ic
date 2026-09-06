@@ -104,7 +104,8 @@ def _resume(run, request=None, *, regate=None, retry=None):
     return bd.cmd_resume("rtllm", "/unused", str(run), worker_threads=1, **kwargs)
 
 
-def _merged_identity_fields(run, task, signed, *, before=_OLD_PROGRAM, after=None):
+def _merged_identity_fields(run, task, signed, *, before=_OLD_PROGRAM, after=None,
+                            rationale_key="rationale"):
     """The BOTH-identities half of every merged request.
 
     The version pair and the source-tree hash are neither necessary nor
@@ -119,7 +120,7 @@ def _merged_identity_fields(run, task, signed, *, before=_OLD_PROGRAM, after=Non
         "program_identity": _source_identity(),
         "author": {"kind": "AI", "model": "independent-test-reviewer"},
         "blind": {"oracle_accessed": False},
-        "rationale": _RATIONALE,
+        rationale_key: _RATIONALE,
         "repair_record_sha256": _hash((task.get("repair_provenance") or {}).get("path")),
     }
     if manifest:
@@ -292,11 +293,16 @@ def _case(tmp_path, monkeypatch, *, reviewed=False, exit_step="2"):
                         raising=False)
     monkeypatch.setattr(bd.subprocess, "run", boundary)
     request = {
+        # The v1.17.71 request shape, deliberately: `reason` and `rtl_sha256`,
+        # NOT their merged spellings. Emitting both would make this fixture
+        # stop being the legacy caller it exists to prove still binds -- and
+        # MEASURED, it also sent the stale-`reason` case to the alias
+        # DISAGREEMENT guard instead of the rationale guard it names.
         "schema": "vibeic.benchmark.program_retry.v1", "id": task["id"],
         "task_sha256": bd._sha256_text(json.dumps(task, ensure_ascii=False, sort_keys=True)),
         "prompt_sha256": task["prompt_sha256"], "rtl_sha256": task["rtl_sha256"],
-        "reason": _RATIONALE,
-        **_merged_identity_fields(run, task, signed["repaired_rtl_sha256"]),
+        **_merged_identity_fields(run, task, signed["repaired_rtl_sha256"],
+                                  rationale_key="reason"),
     }
     if reviewed:
         request.update(review_sha256=_hash(task["review_path"]),
@@ -708,23 +714,62 @@ def test_plain_resume_keeps_transformed_output_and_requires_real_final_signature
     assert bd._refresh_final_repair_provenance(old)[0] is None
 
 
-@pytest.mark.parametrize("field", ["task_sha256", "prompt_sha256", "rtl_sha256", "repair_record_sha256",
-                                  "input_manifest_sha256", "input_rtl_sha256", "program_identity", "schema", "reason"])
-def test_stale_request_refuses_before_mutation(tmp_path, monkeypatch, field):
+#: Each stale field and the guard that must ANSWER it. Naming the message is
+#: what makes the case a test of that field: this operation checks in a fixed
+#: order, so asserting only "the sources are intact" passes on whichever
+#: earlier guard fired and keeps passing after the intended one is deleted.
+#: MEASURED per case, not assumed.
+_STALE_GUARD = {
+    "task_sha256": "stale task_sha256",
+    "prompt_sha256": "stale prompt_sha256",
+    "rtl_sha256": "stale stale_output_sha256",
+    "repair_record_sha256": "stale repair record hash",
+    "input_manifest_sha256": "stale input manifest hash",
+    # "stale" is not 64 hex, so the shape guard answers first -- still this
+    # field's own guard, and named as the one that actually fires.
+    "input_rtl_sha256": "malformed signed_input_sha256",
+    "program_identity": "stale Program identity",
+    "schema": "unsupported request schema",
+    "reason": "rationale needs 80 characters",
+}
+
+
+@pytest.mark.parametrize("field", sorted(_STALE_GUARD))
+def test_stale_request_refuses_before_mutation(tmp_path, monkeypatch, capsys, field):
     run, old, path, request, state = _case(tmp_path, monkeypatch)
     request[field] = "stale"
     path.write_text(json.dumps(request))
     before = _protected(run, old)
     assert _resume(run, path) == 2
+    assert _STALE_GUARD[field] in _refusal(capsys)
     assert _protected(run, old) == before
     assert state["calls"] == []
     assert not (run / "program_regates").exists()
 
 
-@pytest.mark.parametrize("drift", ["working", "signature", "input", "prompt", "parent", "challenge",
-                                  "accepted", "accepted_ledger", "published", "occupied", "occupied_review",
-                                  "external", "symlink"])
-def test_evidence_and_state_refusals_preserve_sources(tmp_path, monkeypatch, drift):
+#: Each state drift and the guard that must ANSWER it, measured per case.
+_DRIFT_GUARD = {
+    "working": "working or frozen RTL drift",
+    "signature": "stale repair record hash",
+    # Appending to a frozen snapshot's own RTL breaks that snapshot's integrity
+    # check, which is the guard that owns those bytes.
+    "input": "candidate snapshot RTL bytes do not match completion",
+    "parent": "candidate snapshot RTL bytes do not match completion",
+    "prompt": "prompt drift",
+    "challenge": "inherited challenge drift",
+    "accepted": "task must be unaccepted",
+    "accepted_ledger": "candidate already accepted",
+    "published": "candidate already published",
+    "occupied": "occupied re-entry archive or fresh review/test path",
+    "occupied_review": "occupied re-entry archive or fresh review/test path",
+    "external": "path outside run",
+    "symlink": "symlink path",
+}
+
+
+@pytest.mark.parametrize("drift", sorted(_DRIFT_GUARD))
+def test_evidence_and_state_refusals_preserve_sources(
+        tmp_path, monkeypatch, capsys, drift):
     run, old, path, request, state = _case(tmp_path, monkeypatch)
     if drift in {"working", "signature", "prompt", "parent", "challenge", "input"}:
         target = {"working": old["working_rtl_paths"][0], "signature": old["repair_provenance"]["path"],
@@ -761,6 +806,7 @@ def test_evidence_and_state_refusals_preserve_sources(tmp_path, monkeypatch, dri
         path = linked
     before = _protected(run, old)
     assert _resume(run, path) == 2
+    assert _DRIFT_GUARD[drift] in _refusal(capsys)
     assert _protected(run, old) == before
     assert state["calls"] == []
 
