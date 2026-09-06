@@ -254,8 +254,22 @@ def m1_space_um(text: str) -> Optional[float]:
 _RULE_WIDTH = re.compile(r"^\s*width\s+(\S+)\s+(\d+)\s", re.M)
 _RULE_SPACING = re.compile(r"^\s*spacing\s+(\S+)\s+(\S+)\s+(\d+)\s", re.M)
 _RULE_AREA = re.compile(r"^\s*area\s+(\S+)\s+(\d+)\s+(\d+)\s", re.M)
+# A magic `surround` rule carries a PRESENCE word after the distance, and it
+# is the word that says WHICH SURROUND the distance is:
+#
+#   surround v1/m1 *m1,rm1  5 absence_illegal  "Metal1 overlap of Via1 < 5"
+#   surround v1/m1 *m1,rm1 45 directional      "... < 45 IN ONE DIRECTION"
+#
+# Those are two different rules about the same pair. The first is what the
+# metal must clear the cut by on EVERY side; the second is what it must
+# clear it by along ONE axis. `max()` over both, applied on every side, is
+# not a conservative reading of the deck — it is a DIFFERENT rule, and it
+# is nine times the all-around one on this PDK. The word is captured so the
+# two can be kept apart; a rule whose fifth token is neither presence word
+# is left in the all-around bucket, which is where it was before.
 _RULE_SURROUND = re.compile(
-    r"^\s*surround\s+v(\d+)/m(\d+)\s+(\S+)\s+(\d+)\s", re.M)
+    r"^\s*surround\s+v(\d+)/m(\d+)\s+(\S+)\s+(\d+)\s+(\S+)", re.M)
+_SURROUND_DIRECTIONAL = "directional"
 _METAL_TOK = re.compile(r"(?:^|[,*])(?:all|obs|seal)?m(\d+)\b")
 _VIA_TOK = re.compile(r"^v(\d+)$")
 
@@ -273,7 +287,16 @@ def deck_rules(text: str) -> Dict[str, Dict]:
         {"metal_space_um": {n: um}, "metal_width_um": {n: um},
          "metal_area_um2": {n: um2},
          "via_width_um":   {n: um},  "via_space_um": {n: um},
-         "via_surround_um": {(via, metal): um}}
+         "via_surround_um": {(via, metal): um},
+         "via_surround_dir_um": {(via, metal): um}}
+
+    `via_surround_um` is the surround the deck demands on EVERY side;
+    `via_surround_dir_um` is the one it demands along ONE axis only
+    (magic's `directional` presence word). They are separate keys because
+    they are separate rules: reading the directional one as all-around
+    makes every via island square at nine times the deck's own all-around
+    distance, and on this PDK that square is what a device's neighbouring
+    metal has no room for.
 
     Deck lengths are in the deck's own integer units, which the Metal1 rules
     calibrate as nanometres; areas are those units squared. Nothing here is
@@ -281,7 +304,8 @@ def deck_rules(text: str) -> Dict[str, Dict]:
     that needs it must say so rather than invent it."""
     out: Dict[str, Dict] = {"metal_space_um": {}, "metal_width_um": {},
                             "metal_area_um2": {}, "via_width_um": {},
-                            "via_space_um": {}, "via_surround_um": {}}
+                            "via_space_um": {}, "via_surround_um": {},
+                            "via_surround_dir_um": {}}
     for tok, val in _RULE_WIDTH.findall(text):
         vm = re.match(r"^v(\d+)/m\d+$", tok)
         if vm:
@@ -308,10 +332,12 @@ def deck_rules(text: str) -> Dict[str, Dict]:
         if idx is not None:
             out["metal_area_um2"][idx] = max(
                 out["metal_area_um2"].get(idx, 0.0), int(area) / 1e6)
-    for via, met, _tgt, val in _RULE_SURROUND.findall(text):
+    for via, met, _tgt, val, kind in _RULE_SURROUND.findall(text):
         key = (int(via), int(met))
-        out["via_surround_um"][key] = max(out["via_surround_um"].get(key, 0.0),
-                                          int(val) / 1000.0)
+        bucket = ("via_surround_dir_um"
+                  if kind.strip().lower() == _SURROUND_DIRECTIONAL
+                  else "via_surround_um")
+        out[bucket][key] = max(out[bucket].get(key, 0.0), int(val) / 1000.0)
     return out
 
 
