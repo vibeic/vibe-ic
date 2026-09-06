@@ -199,3 +199,72 @@ def test_one_definition_of_the_route_question():
         assert "no_container_route()" in src, name
     assert (PROGRAMS / "_container_exec.py").read_text().count(
         'shutil.which("docker")') == 1
+
+
+class TestTheRecordSaysWhatActuallyRan:
+    """A fix that makes a step RUN must not make its record LIE.
+
+    `scan_chain.json` records the coverage number's provenance as
+    `image: DOCKER_IMAGE`. Two things are true on the local route and neither
+    was accounted for: no image is started at all, and `DOCKER_IMAGE` is
+    resolved by asking a registry that is UNREACHABLE from inside the image —
+    MEASURED, in the aborted first RUN C:
+
+        _eda_image: registry unreachable and no local ghcr.io/vibeic/vibeic-eda
+        image; falling back to hpretl/iic-osic-tools:latest, which does NOT
+        carry the forked tools.
+
+    So the naive fix would have stamped every in-image scan netlist with an
+    image that was never run and is the wrong image. I killed that run rather
+    than publish its record.
+
+    MUTATIONS THESE MUST KILL:
+      * `"image": _fatpg.DOCKER_IMAGE` restored at the consumer fails
+        `test_the_consumer_records_the_route_not_a_name`.
+      * `atpg_engine_identity` returning `DOCKER_IMAGE` on the local route
+        fails `test_the_local_route_records_no_image`.
+      * Dropping `image` from the local dict fails
+        `test_the_image_key_is_present_on_both_routes`.
+    """
+
+    def test_the_local_route_records_no_image(self, route):
+        route(None)
+        idy = F.atpg_engine_identity()
+        assert idy["exec_route"] == "local"
+        assert idy["image"] is None, idy
+        assert "engine_path" in idy
+        assert "no docker client" in idy["image_note"]
+
+    def test_the_container_route_records_the_image(self, route):
+        route("/usr/bin/docker")
+        idy = F.atpg_engine_identity()
+        assert idy["exec_route"] == "container"
+        assert idy["image"] == F.DOCKER_IMAGE
+
+    def test_the_image_key_is_present_on_both_routes(self, route):
+        """An existing consumer reading `image` must never KeyError."""
+        for client in ("/usr/bin/docker", None):
+            route(client)
+            assert "image" in F.atpg_engine_identity()
+
+    def test_the_consumer_records_the_route_not_a_name(self):
+        """The record writer must go through the identity, not the constant."""
+        src = (PROGRAMS / "fault_scan_chain_insert.py").read_text()
+        assert '"image": _fatpg.DOCKER_IMAGE' not in src
+        assert "_fatpg.atpg_engine_identity()" in src
+
+    def test_the_announcement_does_not_name_the_resolved_image(self):
+        """In-image `DOCKER_IMAGE` is a registry fallback; printing it puts a
+        wrong image in the transcript."""
+        # over the PARSED body, not the characters: the comment above the
+        # print explains why the constant is not named, and a text search
+        # cannot tell an explanation from a use (the same trap as
+        # `out.splitlines()[-25:]` surviving in prose elsewhere in this tree).
+        import ast
+        src = (PROGRAMS / "fault_atpg_run.py").read_text()
+        fn = [n for n in ast.walk(ast.parse(src))
+              if isinstance(n, ast.FunctionDef)
+              and n.name == "_announce_local_atpg_route"]
+        assert len(fn) == 1
+        body = ast.unparse(fn[0])
+        assert "DOCKER_IMAGE" not in body, body

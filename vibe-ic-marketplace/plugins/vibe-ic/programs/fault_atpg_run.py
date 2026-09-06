@@ -67,6 +67,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -1237,10 +1238,48 @@ def _announce_local_atpg_route(project: Path) -> None:
     if _LOCAL_ATPG_ROUTE_ANNOUNCED:
         return
     _LOCAL_ATPG_ROUTE_ANNOUNCED = True
+    # Deliberately does NOT name `DOCKER_IMAGE`: in-image that constant is
+    # whatever `_resolve_docker_image` fell back to when the registry was
+    # unreachable, and naming it would put a wrong image in the transcript.
     print("[dft] EXEC ROUTE = LOCAL: no docker client on PATH, so the ATPG "
-          "engine runs on THIS filesystem instead of in a sibling container "
-          "of %s. The project is read at %s, not at %s."
-          % (DOCKER_IMAGE, project, _WORK_MOUNT), file=sys.stderr)
+          "engine runs on THIS filesystem (fault=%s) instead of in a sibling "
+          "container. The project is read at %s, not at %s."
+          % (shutil.which("fault") or "NOT ON PATH", project, _WORK_MOUNT),
+          file=sys.stderr)
+
+
+def atpg_engine_identity() -> dict:
+    """WHAT ACTUALLY PRODUCED THIS MEASUREMENT — never a name that was not used.
+
+    `scan_chain.json` and the ATPG error report record `image: DOCKER_IMAGE` as
+    the coverage number's provenance. On the LOCAL route no image is started at
+    all, and worse, `DOCKER_IMAGE` is resolved by asking a registry
+    (`_resolve_docker_image`) which is unreachable from inside the image:
+    MEASURED 2026-09-06 in a in-image run,
+
+        _eda_image: registry unreachable and no local ghcr.io/vibeic/vibeic-eda
+        image; falling back to hpretl/iic-osic-tools:latest, which does NOT
+        carry the forked tools.
+
+    So recording `DOCKER_IMAGE` on the local route would stamp the scan netlist
+    with an image that was never run AND is the wrong image — a false
+    provenance record introduced by the very fix that made the step work. That
+    is the failure mode this repo keeps paying for, so the record says which
+    ROUTE ran and identifies the engine by what is actually on PATH.
+
+    `image` is kept as a key on both routes so an existing consumer never
+    KeyErrors; on the local route it is None, which is a readable "there was no
+    image" rather than a plausible-looking lie."""
+    if _CE.no_container_route():
+        return {
+            "exec_route": "local",
+            "image": None,
+            "engine_path": shutil.which("fault"),
+            "image_note": ("no docker client on PATH: the engine ran on this "
+                           "filesystem, not in a container, so there is no "
+                           "image digest to record"),
+        }
+    return {"exec_route": "container", "image": DOCKER_IMAGE}
 
 
 def _run_docker(

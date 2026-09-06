@@ -687,7 +687,8 @@ def run_chain(project: Path, netlist_rel: str, clock: str,
             # wrong cause costs more than one that names none, so this states
             # the image identity as the FIRST fact and offers the version
             # explanation only as one of the possibilities.
-            err_report["image_used"] = _fatpg.DOCKER_IMAGE
+            err_report.update(_fatpg.atpg_engine_identity())
+            err_report["image_used"] = err_report.get("image")
             err_report["error"] = (
                 f"`fault chain` rejected `--skip-boundary`. The image this step "
                 f"ran in was {_fatpg.DOCKER_IMAGE!r} — verify it with "
@@ -817,7 +818,10 @@ def run_chain(project: Path, netlist_rel: str, clock: str,
 
     report = {
         "tool": "fault chain",
-        "image": _fatpg.DOCKER_IMAGE,
+        # WHAT RAN, not what would have. On the local route there is no
+        # image and `DOCKER_IMAGE` is a registry-fallback name that was
+        # never used — see `_fatpg.atpg_engine_identity`.
+        **_fatpg.atpg_engine_identity(),
         "input_netlist": netlist_rel,
         "input_netlist_switch_note": switch_note,
         "output_netlist": SCAN_NETLIST_REL,
