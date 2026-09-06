@@ -60,8 +60,8 @@ import tempfile
 import time
 from dataclasses import dataclass, field, asdict
 from pathlib import Path, PurePosixPath
-from typing import (Any, Dict, FrozenSet, List, Optional, Sequence, Set,
-                    Tuple)
+from typing import (Any, Dict, FrozenSet, Iterable, List, Optional, Sequence,
+                    Set, Tuple)
 import _path_layout as _pl
 import _runner_measurement as _rmeas
 import _reference_flow_boundary as _rfb
@@ -28400,6 +28400,11 @@ def _magic_def_to_gds(project: Path, top: str, pdk: PdkConfig,
     # The cell name comes from the DEF, not from the file-naming `top`.
     # `load <a cell this database does not have>` CREATES an empty cell of
     # that name and streams it. See `_def_design_name`.
+    # ONE resolution of this DEF's physical facts, for BOTH halves below --
+    # the cell name (via `_streamout_top`, which stays THE design-name
+    # authority) and the masters it instantiates. #2044.
+    _res = _def_reopen_resolution(def_file)
+    _def_masters = {m for _i, m in _res.components}
     top, _top_note = _streamout_top(def_file, top)
     tcl = pnr_dir / "magic_stream_out.tcl"
     tcl.write_text(_MAGIC_STREAMOUT_TCL)
@@ -28413,10 +28418,39 @@ def _magic_def_to_gds(project: Path, top: str, pdk: PdkConfig,
     if not pdk.cell_gds:
         lef_list.append(pdk.cell_lef)
     lef_list += list(pdk.macro_lefs)
-    lefs = ";".join(_to_container_path(str(f), container) for f in lef_list)
+    lefs_c = [_to_container_path(str(f), container) for f in lef_list]
+    # #2044 F4 -- ASK THE DEF WHICH MASTERS IT INSTANTIATES. Until now this
+    # streamout took its physical TOP from the DEF and its view LIST from
+    # `pdk.macro_*` alone, so it never asked the file it was streaming what
+    # that file needs -- while `_def_reopen_extra_lefs_c`, on the same DEF,
+    # derives exactly that for every fresh OpenROAD session. The two could
+    # therefore disagree about which masters exist, and the streamout was the
+    # one that could not tell.
+    #
+    # ADDITIVE ON PURPOSE. This does not rebuild or filter the PDK list; it
+    # appends only views the DEF's own masters need that the list above does
+    # not already offer. A DEF whose masters are a subset of the PDK list
+    # contributes NOTHING and the invocation is byte-for-byte today's -- the
+    # same empty-is-the-point discipline as `_extra_lef_read_block`.
+    try:
+        _extra_c = _def_reopen_extra_lefs_c(def_file, pdk, container)
+    except Exception:                      # never fatal to a best-effort stream
+        _extra_c = []
+    for _e in _extra_c:
+        if _e not in lefs_c:
+            lefs_c.append(_e)
+    lefs = ";".join(lefs_c)
     cell_gds_c = _to_container_path(str(pdk.cell_gds), container) if pdk.cell_gds else ""
-    macro_gds_c = ";".join(
-        _to_container_path(str(f), container) for f in pdk.macro_gds)
+    _macro_gds_list = [_to_container_path(str(f), container)
+                       for f in pdk.macro_gds]
+    try:
+        _io_lefs, _io_gds = _discover_padring_io_views(pdk, container)
+    except Exception:
+        _io_gds = []
+    for _g in (_io_gds or []):
+        if str(_g) not in _macro_gds_list:
+            _macro_gds_list.append(str(_g))
+    macro_gds_c = ";".join(_macro_gds_list)
     # Derive the PDK Magic tech rc (loads layer defs + DRC style) from the PDK
     # root so `gds read` maps GDS layers correctly. Convention:
     # <pdk_root>/libs.tech/magic/<pdk_name>.magicrc. Falls back to /dev/null.
@@ -28454,6 +28488,23 @@ def _magic_def_to_gds(project: Path, top: str, pdk: PdkConfig,
     vac = _detect_vacuous_magic(transcript, drc_count=None)
     if not vac["geometry_loaded"]:
         return False, transcript
+    # #2044 F4 -- NEVER A GDS WITH A SILENTLY MISSING MASTER. Measured in the
+    # frozen image: a DEF instantiating one master no view defines makes Magic
+    # print `Cell <m> couldn't be read`, skip it, write a well-formed GDS and
+    # exit 0. Every check above passes that stream -- the file is non-empty,
+    # `geometry_loaded` is True, there is no unknown layer and no empty bbox --
+    # so sign-off DRC, LVS and the hand-off pack received a GDS with a cell
+    # missing from it and nothing anywhere said so. The DEF names the masters;
+    # Magic names the ones it could not resolve; the intersection is a refusal.
+    _missing = _magic_unresolved_masters(transcript, _def_masters)
+    if _missing:
+        return False, (transcript + "\n"
+                       + "STREAMOUT_MASTER_UNRESOLVED "
+                       + ",".join(_missing)
+                       + " -- the DEF instantiates "
+                       + f"{len(_missing)} master(s) Magic could not resolve; "
+                       + "the GDS it wrote is missing their geometry. Refusing "
+                       + "it rather than passing an incomplete GDS to sign-off.")
     return True, transcript
 
 
@@ -32682,6 +32733,50 @@ _RE_MAGIC_DRC_COUNT = re.compile(
 _RE_MAGIC_EMPTY_BBOX = re.compile(
     r"(?:box|bbox|bounding\s*box)\b.*?\b0\s+0\s+(?:0\s+0|1\s+1)\b",
     re.IGNORECASE)
+
+
+#: Magic's two ways of saying it could not resolve a cell a DEF asked for.
+#: MEASURED verbatim in the frozen image (magic 8.3, sky130A), on a DEF
+#: instantiating one master no LEF/GDS defines:
+#:     Cell totally_absent_master_zz couldn't be read
+#:     DEF read, Line 9 (Error): Cell totally_absent_master_zz is not defined.
+#:       Maybe you have not read the corresponding LEF file?
+#: Magic then wrote a 3794-byte GDS and exited 0. #2044 F4.
+_RE_MAGIC_CELL_UNREAD = re.compile(
+    r"^\s*Cell\s+(\S+)\s+couldn't be read\s*$", re.M)
+_RE_MAGIC_CELL_UNDEFINED = re.compile(
+    r"Cell\s+(\S+)\s+is not defined\.", re.M)
+
+
+def _magic_unresolved_masters(transcript: str,
+                              masters: Iterable[str]) -> List[str]:
+    """The masters `masters` asked for that Magic's own transcript says it
+    could not resolve, sorted. Pure; chip- and PDK-AGNOSTIC.
+
+    WHY THE TRANSCRIPT AND NOT THE VIEW LIST. Magic resolves cells from its
+    own PDK search path as well as from the views we hand it -- measured, and
+    `_def_design_name` records the measurement: with `TOP=spm` and no IO views
+    passed at all, Magic still read `gf180mcu_fd_io__in_c` from
+    `$PDKPATH/libs.ref/.../mag`. So "absent from `pdk.macro_lefs`" does NOT
+    mean "missing from the GDS", and refusing on the view list alone would
+    reject runs that are fine. Magic's transcript is the one witness that
+    cannot be wrong about what Magic actually resolved.
+
+    INTERSECTED WITH THE DEF'S OWN MASTERS, which is why this needs the
+    resolver: `Cell <x> couldn't be read` is also what Magic prints for a TOP
+    cell it does not have (the 106-byte-GDS transcript). Only names the DEF
+    actually instantiates are a missing-master finding here; the top-cell case
+    belongs to `_streamout_top` and is already handled there.
+    """
+    want = {str(m) for m in (masters or ()) if m}
+    if not want:
+        return []
+    seen: set = set()
+    for rx in (_RE_MAGIC_CELL_UNREAD, _RE_MAGIC_CELL_UNDEFINED):
+        for name in rx.findall(transcript or ""):
+            if name in want:
+                seen.add(name)
+    return sorted(seen)
 
 
 def _detect_vacuous_magic(transcript: str,
@@ -48354,6 +48449,19 @@ def _def_reopen_extra_lefs_c(def_path: Path, pdk: "PdkConfig",
 
 _DEF_DESIGN_RE = re.compile(r"(?m)^\s*DESIGN\s+(\S+)\s*;")
 
+#: The sections DEF places AFTER `DESIGN`. Hitting one of these means
+#: the header is over, so the DESIGN line is absent and the (possibly
+#: enormous) body below need never be read. #2044 F7.
+#: `END DESIGN` is deliberately NOT a member. It would be redundant --
+#: any DEF large enough to matter opens a section above first -- and
+#: naming the DESIGN keyword in a second compiled pattern would defeat
+#: the guard that keeps `_def_design_name` the ONE design-name parser
+#: (test_issue2044_def_facts_resolved_once::
+#: test_design_half_has_exactly_one_parser). One authority, one pattern.
+_DEF_BODY_SECTION_RE = re.compile(
+    r"^\s*(?:COMPONENTS|PINS|SPECIALNETS|NETS|BLOCKAGES|GROUPS"
+    r"|SCANCHAINS|FILLS|SLOTS|REGIONS)\b")
+
 
 def _def_design_name(def_path: Path) -> Optional[str]:
     """The CELL NAME the DEF declares for itself, or None if it does not.
@@ -48399,16 +48507,34 @@ def _def_design_name(def_path: Path) -> Optional[str]:
     its current behaviour exactly. Chip/PDK-AGNOSTIC: no design, vendor or PDK
     literal -- the DEF names itself.
 
-    Bounded read: `DESIGN` is in the DEF header, so only the head of the file
-    is scanned. Unreadable, absent, or headerless: None, never an exception.
+    BOUNDED BY THE GRAMMAR, NOT BY A BYTE COUNT (#2044 F7). This read used to
+    take the first 65536 bytes and search those. DEF puts `DESIGN` in the
+    header, but it does not put a CEILING on the header: `#` comments are
+    legal anywhere, and a tool that stamps a provenance banner ahead of
+    `DESIGN` pushes it past any fixed offset. A DEF whose header crosses that
+    offset returned None here, and None is not inert -- `_streamout_top` reads
+    it as "the DEF agrees with `top`" and streams the runner's file-naming top,
+    which is the 106-byte-GDS failure this very function was written to stop.
+    The bound was silently reintroducing the bug it fixes.
+
+    So the scan now walks the header a line at a time and stops on whichever
+    comes first: the `DESIGN` line, or the first line opening a section that
+    DEF places AFTER `DESIGN` (`_DEF_BODY_SECTION_RE`). The file body is never
+    read -- a 182 MB DEF still stops at its COMPONENTS line -- but a header of
+    any size is read in full, because the header is where the answer is.
+    Unreadable, absent, or headerless: None, never an exception.
     """
     try:
         with open(def_path, "r", errors="replace") as fh:
-            head = fh.read(65536)
+            for line in fh:
+                m = _DEF_DESIGN_RE.match(line)
+                if m:
+                    return m.group(1)
+                if _DEF_BODY_SECTION_RE.match(line):
+                    return None            # past the header; DESIGN not stated
     except OSError:
         return None
-    m = _DEF_DESIGN_RE.search(head)
-    return m.group(1) if m else None
+    return None
 
 
 def _streamout_top(def_file: Path, top: str) -> Tuple[str, str]:
