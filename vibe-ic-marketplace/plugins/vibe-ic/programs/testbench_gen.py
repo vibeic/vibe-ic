@@ -134,7 +134,8 @@ def _parse_ports(text: str, module: str) -> List[Tuple[str, str, str]]:
         return []
 
 
-def _resolve_widths(sources: List[Tuple[Path, str]],
+def _resolve_widths(project: Path,
+                    sources: List[Tuple[Path, str]],
                     module: str,
                     ports: List[Tuple[str, str, str]]
                     ) -> Tuple[Optional[List[Tuple[str, str, str]]], str]:
@@ -161,7 +162,12 @@ def _resolve_widths(sources: List[Tuple[Path, str]],
     result means nothing, and one that says so is worth more than one that
     runs."""
     params = _port_width.defaults_from_sources(sources, module)
-    resolved, refusals = _port_width.resolve_ports(ports, params)
+    # The same L9 numbers the full-stack TB generator uses. Without them the two
+    # generators would disagree about a port whose cell needs a `define -- one
+    # resolving it, the other refusing -- which is exactly the kind of split
+    # view a single shared resolver exists to prevent.
+    l9 = _port_width.l9_bounds(_pl.generated_docs_dir(project))
+    resolved, refusals = _port_width.resolve_ports_with_l9(ports, params, l9)
     if refusals:
         return None, (
             f"DUT {module!r} declares {len(refusals)} port(s) whose width is "
@@ -195,7 +201,7 @@ def resolve_dut(project: Path, top: str) -> Tuple[Optional[str],
         for _f, txt in sources:
             ports = _parse_ports(txt, top)
             if ports:
-                resolved, why = _resolve_widths(sources, top, ports)
+                resolved, why = _resolve_widths(project, sources, top, ports)
                 if resolved is None:
                     return None, [], why
                 return top, resolved, f"bound to --top module {top!r}; {why}"
@@ -219,7 +225,7 @@ def resolve_dut(project: Path, top: str) -> Tuple[Optional[str],
     if len(roots) == 1:
         ports = _parse_ports(defined[roots[0]], roots[0])
         if ports:
-            resolved, why = _resolve_widths(sources, roots[0], ports)
+            resolved, why = _resolve_widths(project, sources, roots[0], ports)
             if resolved is None:
                 return None, [], why
             return roots[0], resolved, (

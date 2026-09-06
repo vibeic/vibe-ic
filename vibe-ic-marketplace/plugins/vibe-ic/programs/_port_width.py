@@ -242,3 +242,60 @@ def resolve_ports(ports: Sequence[Tuple[str, str, str]],
             continue
         out.append((d, decl.strip(), n))
     return out, refusals
+
+def l9_bounds(generated_docs_dir) -> Dict[str, Dict[str, object]]:
+    """`{port_name: {"msb":.., "lsb":.., "width":..}}` from L9_INTEGRATION_SPEC.
+
+    The L9 extraction measures every top port independently of the RTL parse.
+    When the RTL width cell is an expression this resolver cannot evaluate -- a
+    `define macro, a localparam, a package constant -- those numbers are the
+    only other thing that knows how wide the port is, and using them is what
+    makes "resolve or refuse" refuse only when NOBODY knows.
+
+    This is the same evidence the non-monotonicity bug threw away: the #629
+    reconcile replaced `top_ports` with RTL-only dicts, so by the time the
+    width was needed the L9 numbers were gone.
+
+    Returns `{}` when L9 is absent or unreadable -- which is NOT_MEASURED, and
+    the caller then refuses on the width cell alone rather than inventing one.
+    """
+    import json
+    from pathlib import Path as _P
+    out: Dict[str, Dict[str, object]] = {}
+    try:
+        doc = json.loads(
+            (_P(generated_docs_dir) / "L9_INTEGRATION_SPEC.json").read_text())
+    except Exception:
+        return {}
+    ports = doc.get("top_ports") or doc.get("ports") or []
+    if not isinstance(ports, list):
+        return {}
+    for p in ports:
+        if not isinstance(p, dict):
+            continue
+        nm = (p.get("name") or "").strip()
+        if not nm:
+            continue
+        out[nm] = {"msb": p.get("msb"), "lsb": p.get("lsb"),
+                   "width": p.get("width")}
+    return out
+
+
+def resolve_ports_with_l9(ports: Sequence[Tuple[str, str, str]],
+                          params: Optional[Dict[str, int]] = None,
+                          l9: Optional[Dict[str, Dict[str, object]]] = None
+                          ) -> Tuple[List[Tuple[str, str, str]], List[str]]:
+    """`resolve_ports`, but a port whose cell will not evaluate may still be
+    resolved from the L9 extraction's own numbers for that same port."""
+    l9 = l9 or {}
+    out: List[Tuple[str, str, str]] = []
+    refusals: List[str] = []
+    for d, w, n in ports or []:
+        b = l9.get(n) or {}
+        decl, why = resolve(w, params, msb=b.get("msb"), lsb=b.get("lsb"),
+                            width=b.get("width"))
+        if decl is None:
+            refusals.append(f"{n}: {why}")
+            continue
+        out.append((d, decl.strip(), n))
+    return out, refusals

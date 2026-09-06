@@ -8209,7 +8209,22 @@ def step_full_stack_tb_gen(project: Path,
                 f"structural fault)")
         # ORGANIC #643 — carry the parsed RTL width (`[msb:lsb]` cell) so the
         # declaration loop below emits a multi-bit bus at its real width.
-        top_ports = [{"name": n, "direction": d, "width_decl": w}
+        # Carry the L9 numeric bounds ACROSS the reconcile. The RTL surface is
+        # the authority on WHICH ports exist and on their declared width cell,
+        # but replacing the dicts wholesale threw away L9's independently
+        # measured msb/lsb -- and those are the only other thing that knows how
+        # wide a port is when the cell is a `define macro, a localparam or a
+        # package constant that no parameter table can resolve. Keeping them is
+        # what lets `_v643_width_decl` answer instead of refusing, and it is the
+        # exact "both are present" case the old width helper dropped.
+        _l9_bounds = {(_p.get("name") or "").strip(): _p
+                      for _p in top_ports if isinstance(_p, dict)}
+        top_ports = [dict({"name": n, "direction": d, "width_decl": w},
+                          **{k: v for k, v in
+                             (("msb", (_l9_bounds.get(n) or {}).get("msb")),
+                              ("lsb", (_l9_bounds.get(n) or {}).get("lsb")),
+                              ("width", (_l9_bounds.get(n) or {}).get("width")))
+                             if v is not None})
                      for d, n, w in _rtl_ports] + _l9_power
 
     sim_dir = _pl.sim_full_stack_dir(project)

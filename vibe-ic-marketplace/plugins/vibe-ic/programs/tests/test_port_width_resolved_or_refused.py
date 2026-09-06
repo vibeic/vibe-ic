@@ -230,6 +230,64 @@ def test_the_verbatim_cell_is_what_iverilog_rejects(tmp_path):
     assert rg.returncode == 0, rg.stderr
 
 
+# ── the width cell no parameter table can resolve ────────────────────────────
+# Measured on the corpus: three instantiation-graph ROOTS -- modules a TB really
+# would bind to -- declare a width over something that is not a parameter at all:
+#   caravel_user_project::user_project_wrapper   `[`MPRJ_IO_PADS-1:0]`  a MACRO
+#   edge_llm_accel::fakeram45_2048x39            `[BITS-1:0]`, no param header
+#   opentitan_aes prim_* (17)                    `[IdxW-1:0]`, a localparam
+# No parameter table can evaluate those. The L9 extraction measured the same
+# ports independently, and the #629 RTL reconcile used to THROW THOSE NUMBERS
+# AWAY -- so the flow refused on a width it actually knew.
+
+_MACRO_RTL = (
+    "`define IO_PADS 38\n"
+    "module pad_top (input clk,\n"
+    "                input  [`IO_PADS-1:0] io_in,\n"
+    "                output [`IO_PADS-1:0] io_out);\n"
+    "  assign io_out = io_in;\n"
+    "endmodule\n"
+)
+_MACRO_L9 = {"top_module": "pad_top", "top_ports": [
+    {"name": "clk", "direction": "input", "width": 1},
+    {"name": "io_in", "direction": "input", "width": 38, "msb": 37, "lsb": 0},
+    {"name": "io_out", "direction": "output", "width": 38, "msb": 37, "lsb": 0}]}
+
+
+def test_a_macro_width_is_resolved_from_the_l9_bounds(tmp_path):
+    """The RTL cell is a `define; L9 measured the port. Use what is known."""
+    proj, _ = _seed(tmp_path, _MACRO_L9, _MACRO_RTL, name="pad_top")
+    res = P2.step_full_stack_tb_gen(proj, "pad_top")
+    assert res.status != "FAIL", res.detail
+    body = list(P2._pl.sim_full_stack_dir(proj).glob("tb_*_full.v"))[0].read_text()
+    assert "reg [37:0] io_in = 0;" in body, body
+    assert "wire [37:0] io_out;" in body, body
+    assert "reg io_in = 0;" not in body          # the pre-fix 1-bit declaration
+
+
+def test_the_l9_bounds_survive_the_rtl_reconcile(tmp_path):
+    """The #629 reconcile replaces the port dicts with RTL-derived ones. It must
+    CARRY the L9 numbers across, or the fallback above can never fire in the
+    real flow even though the numbers were on disk the whole time."""
+    proj, _ = _seed(tmp_path, _MACRO_L9, _MACRO_RTL, name="pad_top")
+    P2.step_full_stack_tb_gen(proj, "pad_top")
+    l9 = P2._port_width.l9_bounds(P2._pl.generated_docs_dir(proj))
+    assert l9["io_in"]["msb"] == 37 and l9["io_in"]["lsb"] == 0, l9
+
+
+def test_a_macro_width_with_no_l9_number_still_refuses(tmp_path):
+    """NO-LEAK. The L9 fallback must not become a way to guess: strip the
+    numbers and the same design refuses again, by name."""
+    l9 = {"top_module": "pad_top", "top_ports": [
+        {"name": "clk", "direction": "input"},
+        {"name": "io_in", "direction": "input"},
+        {"name": "io_out", "direction": "output"}]}
+    proj, _ = _seed(tmp_path, l9, _MACRO_RTL, name="pad_top")
+    res = P2.step_full_stack_tb_gen(proj, "pad_top")
+    assert res.status == "FAIL", (res.status, res.detail)
+    assert "io_in" in res.detail and "IO_PADS" in res.detail, res.detail
+
+
 # ── the two generators must agree ────────────────────────────────────────────
 
 def test_both_generators_resolve_the_same_width(tmp_path):
