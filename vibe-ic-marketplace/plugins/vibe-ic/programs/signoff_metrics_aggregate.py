@@ -451,14 +451,60 @@ _DIEAREA_RE = re.compile(
 _UNITS_RE = re.compile(r"^UNITS\s+DISTANCE\s+MICRONS\s+(\d+)", re.M)
 
 
-def _die_bbox(project: Path) -> Cell:
-    """``design__die__bbox`` in MICRONS, from the run's own shipped DEF.
+#: The record `phase3_one_shot_runner.step_pnr` writes on every run, naming
+#: the die rectangle and the rectangle OpenROAD was actually given. Spelled
+#: here because importing the runner to read one path would pull 2.7 MB of
+#: module into an aggregator that reads reports; `test_ct03_floorplan_
+#: rectangles_and_declarations.py` asserts the two constants agree, so the
+#: duplication cannot drift silently.
+FLOORPLAN_RECTANGLES_REL = "reports/phase3/floorplan_rectangles.json"
 
-    The readers parse this as four floats and print a width and a height, so it
-    must be the die the run SHIPPED. The DEF the sign-off GDS was written from
-    is the authority; a floorplan DEF from before any downsize retry is a die
-    that no longer exists.
+
+def _declared_die_rect_um(project: Path):
+    """(rect_um, source_rel, basis) from the run's own floorplan record.
+
+    (None, "", why) when there is no record, it cannot be read, or it carries
+    no usable rectangle. Never a default: the caller falls back to the DEF and
+    SAYS it did.
     """
+    rel = FLOORPLAN_RECTANGLES_REL
+    rec = _json(project, rel)
+    if not isinstance(rec, dict):
+        return None, rel, (f"{rel} is absent or unreadable")
+    rect = rec.get("die_rect_um")
+    if not (isinstance(rect, list) and len(rect) == 4
+            and all(isinstance(v, (int, float)) and not isinstance(v, bool)
+                    for v in rect)
+            and rect[2] > rect[0] and rect[3] > rect[1]):
+        return None, rel, f"{rel} carries no usable `die_rect_um` ({rect!r})"
+    return ([float(v) for v in rect], rel,
+            str(rec.get("die_source") or "the run's floorplan record"))
+
+
+def _die_bbox(project: Path) -> Cell:
+    """``design__die__bbox`` in MICRONS — the DIE, not the floorplan rectangle.
+
+    THE DEF IS NO LONGER THE FIRST AUTHORITY, and the reason is measured. Since
+    the slot fix, and since CT-03 on a design whose own pad ring pins the die,
+    the rectangle OpenROAD is handed as ``-die_area`` is the PLACEABLE CORE —
+    because ``ppl place_pins`` places pins on the die boundary and has no
+    core-boundary mode. The DEF's ``DIEAREA`` then states that core, and this
+    key, which the readers parse as four floats and print as a width and a
+    height, would state the core as the die: 2019 x 2019 um for a 3162 x 3162
+    um die on spm, and 1052 x 1647 for a 1936 x 2531 slot.
+
+    So the run's own floorplan record wins when it exists, and the DEF is the
+    fallback for every tree written before it — with ``basis`` naming which of
+    the two answered, so a reader can always tell. Among DEFs the order is the
+    order the run finishes them: the last DEF a run writes is the one its GDS
+    came from, named explicitly rather than by mtime, which a copy of a tree
+    does not preserve.
+    """
+    rect, rel, basis = _declared_die_rect_um(project)
+    if rect is not None:
+        x0, y0, x1, y1 = rect
+        return Cell(f"{x0:g} {y0:g} {x1:g} {y1:g}", rel,
+                    basis=f"the run's declared die rectangle — {basis}")
     pnr = _pl.pnr_dir(project)
     # In the order the run itself finishes them: the last DEF a run writes is
     # the one its GDS came from. Named explicitly rather than by mtime, which
@@ -483,9 +529,11 @@ def _die_bbox(project: Path) -> Cell:
         x0, y0, x1, y1 = (int(t) / units for t in m.groups())
         return Cell(f"{x0:g} {y0:g} {x1:g} {y1:g}",
                     f"phase3/stage3/pnr/{name}",
-                    basis="DIEAREA / UNITS DISTANCE MICRONS")
-    return unmeasured("no DEF under phase3/stage3/pnr/ carries a DIEAREA, so "
-                      "this run has no die geometry to state")
+                    basis=f"DIEAREA / UNITS DISTANCE MICRONS — {basis}, so "
+                          f"this is the rectangle OpenROAD was given and is "
+                          f"the die only when the two are the same")
+    return unmeasured(f"no DEF under phase3/stage3/pnr/ carries a DIEAREA and "
+                      f"{basis}, so this run has no die geometry to state")
 
 
 def _xor(project: Path) -> Cell:

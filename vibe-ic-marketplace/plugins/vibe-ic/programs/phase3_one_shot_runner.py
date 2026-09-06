@@ -16960,6 +16960,249 @@ def _slot_geometry(project: Path) -> Optional[Dict[str, Any]]:
     return None
 
 
+# ══════════════════════════════════════════════════════════════════════════
+#  THE DIE, AND THE RECTANGLE OPENROAD IS TOLD ABOUT  (CT-03)
+#
+#  Since fix 1 these are two different rectangles on the slot path, and since
+#  CT-03 they are two different rectangles on the ring path too. The DEF then
+#  states the SECOND one, and every consumer that reads `DIEAREA` for "the
+#  die" is reading the placeable core instead:
+#
+#    the seal ring         builds the ring on the rectangle it is given, and
+#                          `die_finishing_gen` falls back to the layout bbox
+#    the die-wide fill     fills the rectangle it is given, and
+#                          `die_density_fill_gen` falls back to the layout bbox
+#                          ("the layout's own bounding box (no die rectangle
+#                          was declared)" — measured on spm, run 3)
+#    the metrics aggregate `signoff_metrics_aggregate._die_bbox` reads DIEAREA
+#    the size check        `general_precheck.KLayout.CheckSize` compares the
+#                          streamed bbox against the DECLARED die
+#
+#  Three of those four already had to be told explicitly `if _slot:`. This
+#  record generalises that from "there is a slot" to "the run knows its die",
+#  so no consumer has to re-derive it and none of them can disagree.
+#
+#  NEVER A DEFAULT. A project with no record gets `(None, why)` and every
+#  caller reports what it went without; nothing here invents a rectangle.
+FLOORPLAN_RECTANGLES_REL = "reports/phase3/floorplan_rectangles.json"
+
+
+def _floorplan_rectangles_record(project: Path,
+                                 die_rect: Sequence[int],
+                                 fp_rect: Optional[Sequence[int]],
+                                 die_source: str,
+                                 core_pad: int,
+                                 ring_inset_um: Optional[float]
+                                 ) -> Dict[str, Any]:
+    """Write both rectangles and say which is which. Written on EVERY run."""
+    rec: Dict[str, Any] = {
+        "program": "phase3_one_shot_runner.step_pnr",
+        "die_rect_um": [int(v) for v in die_rect],
+        "die_source": die_source,
+        "floorplan_rect_um": ([int(v) for v in fp_rect]
+                              if fp_rect is not None else None),
+        "floorplan_rect_is_the_die": fp_rect is None,
+        "core_pad_um": int(core_pad),
+        "ring_inset_um": ring_inset_um,
+        "note": (
+            "`floorplan_rect_um` is what OpenROAD was given as BOTH -die_area "
+            "and -core_area. When it is not null the DEF's DIEAREA states it "
+            "and NOT the die, because `ppl place_pins` has no core-boundary "
+            "mode; read `die_rect_um` for the die."
+            if fp_rect is not None else
+            "the floorplan rectangle IS the die: the DEF's DIEAREA states the "
+            "die and every consumer may read it directly. Pins are placed on "
+            "this boundary, so on a design whose core is inset from it a pin "
+            "sits outside the last row by that inset."),
+    }
+    out = project / FLOORPLAN_RECTANGLES_REL
+    # The path goes in BEFORE the serialisation, or the file on disk states
+    # `"record": null` about itself — a record that cannot name where it is.
+    rec["record"] = str(out)
+    try:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps(rec, indent=2, ensure_ascii=False) + "\n")
+    except OSError as exc:
+        rec["record"] = None
+        rec["record_error"] = str(exc)
+    return rec
+
+
+def ct03_pin_rect(fp_rect: Optional[Sequence[int]],
+                  ring_inset_um: Optional[float],
+                  core_pad: int, core_w: int, core_h: int,
+                  band_gets_a_pad_ring: bool = False
+                  ) -> Optional[List[int]]:
+    """The rectangle `place_pins` must treat as the die, or None for today's.
+
+    MEASURED on spm x gf180mcuD (image 0.3.46): `initialize_floorplan` was
+    handed the ring-sized die as `-die_area`, the rows ran only to y=2395.12 um,
+    and `ppl place_pins` — which places pins on the DIE boundary and has no
+    core-boundary mode — put all 41 pins at 0.26 / 3161.74 um, 762 um outside
+    the last row, with 0 of 15674 components in that band. `repair_antenna`
+    inserts a diode where a ROW is, so every marker carried DIODES_AREA 0.
+
+    WHY THIS IS A PIN RECTANGLE AND NOT THE FLOORPLAN'S. Making the CORE the
+    `-die_area`, which is what the slot path does and what the ruling named,
+    does TWO things and only one of them is wanted: the pins move onto the core
+    boundary (wanted) AND the ROUTER loses every track outside the core (not).
+    Both were measured on spm, end to end, and both failed:
+
+        run 1  -die_area = the core as `-core_area` states it (2019 x 2019 um)
+               antenna 0, ROUTE_NOT_CONVERGED, 1 Metal-1 spacing, flat for the
+               last 43 of 143 iterations
+        run 2  -die_area = the core as the ring's own inset states it
+               (2400 x 2400 um, 29 % more area) — antenna 0 in the FIRST
+               window, and 3 router violations instead of 1
+
+    Before the change the router had the whole die to route in even though rows
+    existed only in the core, and it USED it: the pins were on the die boundary,
+    so every pin net ran through that band. So the rectangle here is applied to
+    `place_pins` ALONE — see `ct03_pin_rect_tcl` — and the floorplan, the rows,
+    the tracks, the router and the DEF's own `DIEAREA` are all left exactly as
+    they are.
+
+    None (today's behaviour, byte for byte) when:
+      * a SLOT already made the die the core — `place_pins` is already right
+        there and nothing needs to move;
+      * this run PLACES A PAD RING in the band — `pad_ring_gen` places the ring
+        from the DIEAREA of `floorplan.def` (`_pad_ring.parse_def`), the band is
+        not empty, and pins on the core boundary would be pins that no pad
+        reaches. That design's residual is REPORTED, not traded;
+      * the design has no ring inset at all — the band is 10-20 um and no
+        measurement asks for this.
+
+    The rectangle returned is the one `-core_area` ALREADY carries, so the pins
+    land exactly where the rows are and no other number in the run moves.
+    """
+    if fp_rect is not None:
+        return None
+    if band_gets_a_pad_ring or ring_inset_um is None:
+        return None
+    return [int(core_pad), int(core_pad), int(core_w), int(core_h)]
+
+
+def ct03_pin_rect_tcl(place_pins_block: str,
+                      pin_rect: Optional[Sequence[int]]) -> str:
+    """`place_pins_block`, wrapped so the pins land on `pin_rect`.
+
+    `pin_rect` None returns the block UNCHANGED — the byte-for-byte control.
+
+    THE MECHANISM, MEASURED IN THE PINNED IMAGE, NOT ASSUMED. `place_pins`
+    reads the die area OUT OF THE DATABASE at the moment it runs, so the
+    database is told the core for exactly that moment and told the die back
+    immediately after. On a 2-cell gf180mcuD design in image 0.3.46:
+
+        initialize_floorplan -die_area "0 0 400 400" -core_area "100 100 300 300"
+        make_tracks                    # tracks over the WHOLE die
+        <shrink>  place_pins  ->  pin y = 200000 dbu = 100 um = the CORE edge
+        <restore> die 0..800000 dbu again, rows 50 -> 50, pins DO NOT move
+        global_placement / detailed_placement / global_route / detailed_route OK
+        write_def -> DIEAREA ( 0 0 ) ( 800000 800000 )   the DIE, not the core
+
+    THE ORDER IS LOAD-BEARING and the other one was measured too: enlarging the
+    die AFTER `make_tracks` leaves the new area with no routing tracks and
+    `global_route` refuses outright (`[ERROR GRT-0229] Vertical edge usage
+    exceeds the maximum allowed … usage=3 limit=0`). So the tracks are made on
+    the FULL die and the shrink is temporary.
+
+    DEGRADES LOUDLY, NEVER SILENTLY. An OpenROAD without
+    `odb::dbBlock_setDieArea` prints `CT03_PIN_RECT_UNAVAILABLE` and runs the
+    unmodified `place_pins`; the restore is in a `finally`-shaped guard so a
+    `place_pins` that throws still leaves the die as it found it.
+    """
+    if pin_rect is None:
+        return place_pins_block
+    llx, lly, urx, ury = (int(v) for v in pin_rect)
+    return f"""# === CT-03 — PLACE THE PINS ON THE CORE BOUNDARY, WHERE THE ROWS ARE ====
+# `ppl place_pins` has no core-boundary mode: it places on the die boundary as
+# the database states it AT THIS MOMENT. Measured on spm: with the ring-sized
+# die stated here, all 41 pins came out 762 um outside the last row and every
+# antenna marker carried DIODES_AREA 0, because `repair_antenna` can only
+# insert a diode where a ROW is. The die is restored immediately below, so the
+# floorplan, the rows, the tracks, the router and this DEF's own DIEAREA are
+# unchanged -- only the pins move.
+set _vic_ct03_blk [ord::get_db_block]
+set _vic_ct03_die [$_vic_ct03_blk getDieArea]
+set _vic_ct03_saved [list [$_vic_ct03_die xMin] [$_vic_ct03_die yMin] \
+                          [$_vic_ct03_die xMax] [$_vic_ct03_die yMax]]
+set _vic_ct03_on 0
+if {{[llength [info commands odb::dbBlock_setDieArea]]
+     && [llength [info commands odb::Rect]]}} {{
+  set _vic_ct03_dbu [[ord::get_db_tech] getDbUnitsPerMicron]
+  set _vic_ct03_r [odb::Rect]
+  $_vic_ct03_r set_xlo [expr {{int({llx} * $_vic_ct03_dbu)}}]
+  $_vic_ct03_r set_ylo [expr {{int({lly} * $_vic_ct03_dbu)}}]
+  $_vic_ct03_r set_xhi [expr {{int({urx} * $_vic_ct03_dbu)}}]
+  $_vic_ct03_r set_yhi [expr {{int({ury} * $_vic_ct03_dbu)}}]
+  odb::dbBlock_setDieArea $_vic_ct03_blk $_vic_ct03_r
+  set _vic_ct03_on 1
+  puts "CT03_PIN_RECT_APPLIED: pins will be placed on {llx} {lly} {urx} {ury} um \
+(the core `-core_area` already states), not on $_vic_ct03_saved dbu"
+}} else {{
+  puts "CT03_PIN_RECT_UNAVAILABLE: this OpenROAD exposes no \
+odb::dbBlock_setDieArea, so the pins stay on the die boundary and the antenna \
+residual that comes from that is NOT fixed on this build"
+}}
+set _vic_ct03_rc [catch {{
+{place_pins_block}
+}} _vic_ct03_err]
+if {{$_vic_ct03_on}} {{
+  set _vic_ct03_r2 [odb::Rect]
+  $_vic_ct03_r2 set_xlo [lindex $_vic_ct03_saved 0]
+  $_vic_ct03_r2 set_ylo [lindex $_vic_ct03_saved 1]
+  $_vic_ct03_r2 set_xhi [lindex $_vic_ct03_saved 2]
+  $_vic_ct03_r2 set_yhi [lindex $_vic_ct03_saved 3]
+  odb::dbBlock_setDieArea $_vic_ct03_blk $_vic_ct03_r2
+  set _vic_ct03_d [$_vic_ct03_blk getDieArea]
+  puts "CT03_DIE_RESTORED: [$_vic_ct03_d xMin] [$_vic_ct03_d yMin] \
+[$_vic_ct03_d xMax] [$_vic_ct03_d yMax] dbu"
+}}
+if {{$_vic_ct03_rc}} {{ error $_vic_ct03_err }}
+# === end CT-03 ==========================================================
+"""
+
+
+def declared_die_rect(project: Path
+                      ) -> Tuple[Optional[List[int]], str]:
+    """(the run's own die rectangle in um, the basis) or (None, why not).
+
+    THE SLOT IS STILL THE FIRST AUTHORITY, read through `_slot_geometry` — the
+    same predicate the floorplan used — so a slot run behaves exactly as it did
+    before this record existed even on a tree written by an older version.
+    The record is the second, and there is no third: a caller that gets None
+    reports NOT_DETERMINED naming this function's reason, and never falls back
+    to a DEF whose DIEAREA may be the core.
+    """
+    slot = _slot_geometry(project)
+    if slot:
+        return (list(slot["die_rect"]),
+                f"shuttle slot {slot['slot']} DIE_AREA ({slot['source_file']})")
+    path = project / FLOORPLAN_RECTANGLES_REL
+    if not path.is_file():
+        return None, (f"{FLOORPLAN_RECTANGLES_REL} is not on disk; step_pnr "
+                      "writes it on every run and it is not here")
+    try:
+        rec = json.loads(path.read_text(errors="replace"))
+    except (OSError, ValueError) as exc:
+        return None, f"{FLOORPLAN_RECTANGLES_REL} could not be read: {exc}"
+    if not isinstance(rec, dict):
+        return None, (f"{FLOORPLAN_RECTANGLES_REL}'s top level is "
+                      f"{type(rec).__name__}, not a mapping")
+    rect = rec.get("die_rect_um")
+    if not (isinstance(rect, list) and len(rect) == 4
+            and all(isinstance(v, (int, float)) and not isinstance(v, bool)
+                    for v in rect)):
+        return None, (f"{FLOORPLAN_RECTANGLES_REL} carries no usable "
+                      f"`die_rect_um` (found {rect!r})")
+    if not (rect[2] > rect[0] and rect[3] > rect[1]):
+        return None, (f"{FLOORPLAN_RECTANGLES_REL}'s `die_rect_um` {rect} is "
+                      "degenerate or inverted")
+    return ([int(v) for v in rect],
+            f"{rec.get('die_source') or 'this run'} "
+            f"(via {FLOORPLAN_RECTANGLES_REL})")
+
+
 _RE_PNR_FLOORPLAN_DIE = re.compile(
     r'initialize_floorplan -die_area "\d+ \d+ \d+ \d+"\s*\\?\s*\n'
     r'\s*-core_area "\d+ \d+ \d+ \d+"')
@@ -26074,6 +26317,80 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
               f"core-boundary mode — cannot put a pin in the seal-ring band",
               file=sys.stderr)
 
+    # === CT-03 — THE PINS, AND ONLY THE PINS ================================
+    # MEASURED on spm x gf180mcuD (lane czspmtail, image 0.3.46): OpenROAD was
+    # handed `-die_area "0 0 3162 3162"` — the RING-SIZED die — while the rows
+    # ran only to y=2395.12 um. `ppl place_pins` places pins on the DIE
+    # boundary and has no core-boundary mode, so every pin came out at
+    # y=3161.48 um: 762 um outside the last row, with ZERO of 15674 components
+    # in that band. `repair_antenna` can only insert a diode where a ROW is, so
+    # every antenna marker on those nets carried `DIODES_AREA 0` and no
+    # iteration of the repair loop could reach them. The residual was neither
+    # the router's nor the loop's; it was the floorplan's.
+    #
+    # THE RULED REMEDY WAS THE SLOT PATH'S SHAPE — make the CORE the
+    # `-die_area` — AND I MEASURED IT END TO END, TWICE, AND IT DOES NOT WORK
+    # HERE. It does two things and only one of them is wanted: the pins move
+    # onto the core boundary (wanted) and the ROUTER loses every track outside
+    # the core (not). Before the change the router had the whole die even
+    # though rows existed only in the core, and it USED it — the pins were ON
+    # the die boundary, so every pin net ran through that band.
+    #
+    #   run 1  -die_area = the core as `-core_area` states it (2019x2019 um)
+    #          antenna 22 -> 0, then ROUTE_NOT_CONVERGED: 1 Metal-1 spacing,
+    #          flat for the last 43 of 143 iterations
+    #   run 2  -die_area = the ring's own symmetric inset (2400x2400, +29 %)
+    #          antenna 0 in the FIRST window, and 3 router violations, not 1
+    #
+    # czspmtail's arm, with the die stated whole, routed clean. So the die
+    # stays whole and the rectangle is applied to `place_pins` ALONE, through
+    # the database, for exactly the moment that command reads it —
+    # `ct03_pin_rect_tcl`, measured in this image on a 2-cell design. The
+    # floorplan, the rows, the tracks, the router and this DEF's own DIEAREA
+    # are byte-for-byte what they are today, which is why this remedy has NO
+    # blast radius where the ruled one had four consumers.
+    #
+    # NOT TAKEN when this run PLACES a pad ring in the band: `pad_ring_gen`
+    # places that ring from the DIEAREA of `floorplan.def`
+    # (`_pad_ring.parse_def`), the band is then not empty, and pins on the core
+    # boundary would be pins no pad reaches. That design's residual is
+    # REPORTED, not traded.
+    _slot_fp_rect = fp_rect
+    _band_gets_a_ring = _chip_path_requests_pad_ring(project)
+    _ct03_pin_rect = ct03_pin_rect(_slot_fp_rect, _ring_inset,
+                                   core_pad, core_w, core_h,
+                                   _band_gets_a_ring)
+    if _ct03_pin_rect is not None:
+        print(f"[phase3] CT-03: the PINS will be placed on the core "
+              f"{_ct03_pin_rect} um, not on the {die_w}x{die_h} um die "
+              f"boundary — `ppl place_pins` has no core-boundary mode, and a "
+              f"pin outside every row is a pin `repair_antenna` can never put "
+              f"a diode beside. The floorplan, the rows, the tracks, the "
+              f"router and this DEF's own DIEAREA are UNCHANGED.",
+              file=sys.stderr)
+    elif _slot_fp_rect is None and _ring_inset is not None and _band_gets_a_ring:
+        print(f"[phase3] CT-03 NOT taken: this run places a pad ring in the "
+              f"{core_pad} um band, so the band is not empty and "
+              f"`pad_ring_gen` places that ring from the DEF's own DIEAREA. "
+              f"The pins stay on the die boundary and the antenna residual "
+              f"that comes from that is REPORTED, not traded.",
+              file=sys.stderr)
+
+    # ONE RECORD, WRITTEN ON EVERY RUN, naming both rectangles and which of
+    # them each downstream consumer must read. A producer that writes nothing
+    # when it has nothing to say is indistinguishable from one that never ran.
+    _floorplan_rectangles_record(
+        project,
+        die_rect=([_slot["die_rect"][0], _slot["die_rect"][1],
+                   _slot["die_rect"][2], _slot["die_rect"][3]] if _slot
+                  else [0, 0, die_w, die_h]),
+        fp_rect=(list(fp_rect) if fp_rect is not None else None),
+        die_source=(f"shuttle slot {_slot['slot']} DIE_AREA "
+                    f"({_slot['source_file']})" if _slot
+                    else f"--die-um {die_w}x{die_h} at the origin"),
+        core_pad=core_pad,
+        ring_inset_um=_ring_inset)
+
     # Pick clock buffer cells: PdkConfig-carried masters win (every registry
     # PDK carries clk_buf_cell/root); otherwise DISCOVER them from the PDK's own
     # Liberty.
@@ -26664,6 +26981,11 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
 
     place_pins_block, pin_order_note = _v1_0_38_pin_placement_block(
         project, _bare_place_pins)
+    # CT-03 — the pins, and ONLY the pins, land on the core boundary. A no-op
+    # returning the block unchanged whenever `_ct03_pin_rect` is None, which
+    # is every slot design, every pad-ring-placing design and every design
+    # with no ring inset.
+    place_pins_block = ct03_pin_rect_tcl(place_pins_block, _ct03_pin_rect)
     # v1.6.36 — emit per-stage DEF snapshots so def_stage_progression_check
     # sees byte-distinct, instance-count-growing, monotone-size files. Each
     # OpenROAD command modifies the in-memory database; write_def after
@@ -27203,6 +27525,24 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
         if _pad_install_failure is not None:
             return _pad_install_failure
         _upsize_tries += 1
+
+    # THE DIE THE RUN SETTLED ON, re-recorded. The record above was written
+    # before the retry loop so that a run that dies inside it still leaves one;
+    # every rung of that loop can move `die_w`/`die_h`, and a consumer handed
+    # a die the run abandoned is worse than one handed nothing.
+    _floorplan_rectangles_record(
+        project,
+        die_rect=([_slot["die_rect"][0], _slot["die_rect"][1],
+                   _slot["die_rect"][2], _slot["die_rect"][3]] if _slot
+                  else [0, 0, die_w, die_h]),
+        fp_rect=(list(fp_rect) if fp_rect is not None else None),
+        die_source=(f"shuttle slot {_slot['slot']} DIE_AREA "
+                    f"({_slot['source_file']})" if _slot
+                    else f"the die this run settled on, {die_w}x{die_h} um at "
+                         f"the origin"),
+        core_pad=core_pad,
+        ring_inset_um=_ring_inset)
+
     def_file = out_dir / f"{top}.def"
     sta_file = out_dir / "sta.rpt"
     # #519: make the CTS sign-off evidence durable the MOMENT CTS completed,
@@ -30154,10 +30494,22 @@ def _die_finishing(project: Path, top: str, pdk: PdkConfig,
     #
     # The slot pins both rectangles precisely so this cannot be guessed. Pass
     # the DIE_AREA explicitly whenever there is one.
-    _slot = _slot_geometry(project)
-    if _slot:
-        argv += ["--die-width", str(_slot["die_w"]),
-                 "--die-height", str(_slot["die_h"])]
+    #
+    # CT-03 — AND WHENEVER THERE IS NOT. The ring path now hands OpenROAD the
+    # core as `-die_area` too, so "no slot" stopped meaning "the DEF's DIEAREA
+    # is the die". `declared_die_rect` answers for both paths from the run's
+    # own record; when it cannot answer, the generator is told nothing and
+    # falls back to the layout bbox exactly as before — which is REPORTED here
+    # rather than silently assumed to be the die.
+    _die_rect, _die_basis = declared_die_rect(project)
+    if _die_rect:
+        argv += ["--die-width", str(_die_rect[2] - _die_rect[0]),
+                 "--die-height", str(_die_rect[3] - _die_rect[1])]
+    else:
+        print(f"[phase3] seal ring: the die rectangle is NOT_DETERMINED "
+              f"({_die_basis}); the generator will fall back to the layout's "
+              f"own bounding box, which since CT-03 may be the CORE",
+              file=sys.stderr)
     # Same reason `_density_metal_fill` passes it: the program resolves its own
     # KLayout runner via `_klayout_launch`, which looks for a container NAMED
     # $VIBEIC_EDA_CONTAINER when no KLayout is on the host PATH. A per-run
@@ -30278,10 +30630,22 @@ def _die_density_fill(project: Path, top: str, pdk: PdkConfig,
     # fix, so a generator told nothing would fill the CORE, report success, and
     # ship a die that is 64.6 % bare. The slot pins the die rectangle exactly,
     # so it is passed explicitly and never guessed.
-    _slot = _slot_geometry(project)
-    if _slot:
-        argv += ["--die-width", str(_slot["die_w"]),
-                 "--die-height", str(_slot["die_h"])]
+    #
+    # CT-03 — AND THE RING PATH IS NOW THE SAME CASE. MEASURED on spm run 3
+    # BEFORE the floorplan change, this program recorded
+    # `die_source: "the layout's own bounding box (no die rectangle was
+    # declared)"` and filled 0,0..3162,3162 — right only because the DEF's
+    # DIEAREA was still the die. With the core as `-die_area` that fallback
+    # would fill 2019 x 2019 of a 3162 x 3162 die and report success.
+    _die_rect, _die_basis = declared_die_rect(project)
+    if _die_rect:
+        argv += ["--die-width", str(_die_rect[2] - _die_rect[0]),
+                 "--die-height", str(_die_rect[3] - _die_rect[1])]
+    else:
+        print(f"[phase3] die-wide fill: the die rectangle is NOT_DETERMINED "
+              f"({_die_basis}); the generator will fall back to the layout's "
+              f"own bounding box, which since CT-03 may be the CORE",
+              file=sys.stderr)
     # Same reason `_density_metal_fill` passes it: the program resolves its own
     # KLayout runner via `_klayout_launch`, which looks for a container NAMED
     # $VIBEIC_EDA_CONTAINER when no KLayout is on the host PATH. A per-run
@@ -32772,6 +33136,346 @@ def publish_database_unit_declaration(project: Path, pdk: "PdkConfig",
     return rec
 
 
+# ══════════════════════════════════════════════════════════════════════════
+#  THE FOUR QUESTIONS BEHIND THE DATABASE UNIT  (rbspm RB-08 remainder)
+#
+#  With `database_unit_um` published, `tapeout_precheck` stopped failing on the
+#  rung nobody could answer and started failing on the four that were HIDDEN
+#  BEHIND IT. Measured on spm run 3 (image 0.3.46), `general_precheck.json`:
+#
+#    KLayout.CheckTopLevel   NOT_DETERMINED  `top_cell` was not declared
+#    KLayout.CheckSize       NOT_DETERMINED  `deliverable` was not declared
+#    General.SealRing        NOT_DETERMINED  `seal_ring_required` ...
+#    General.ForbiddenLayers NOT_DETERMINED  `forbidden_layers` ...
+#
+#  A NOT_DETERMINED rung is a NON-PASS, so those four made the gate unreachable
+#  for every self-tape-out however correct the die.
+#
+#  THE ONE RULE THAT MAKES A DERIVED DECLARATION HONEST.
+#  `tapeout_declaration_gen` refuses to infer, and its reason is exact: "a
+#  number derived from an artefact and written into a DECLARATION stops being a
+#  measurement and becomes a claim, and the next check compares the artefact
+#  against a number taken from that same artefact, which is not a check". The
+#  operative words are THAT SAME ARTEFACT. A declaration derived from an
+#  artefact the consuming check does NOT measure is a real comparison between
+#  two independent things — which is exactly what `publish_database_unit_
+#  declaration` already does (it declares from the TECHNOLOGY's own stream and
+#  the rung measures OURS). Every derivation below obeys the same rule and each
+#  one names the independent artefact it came from:
+#
+#    top_cell        <- the DEF's own `DESIGN` line. The rung measures the
+#                       streamed GDS's top structure. A streamout that wrote a
+#                       different cell as top than the DEF it was written from
+#                       is precisely what this catches — and step 15.5ic makes
+#                       the two names diverge on the chip path on purpose.
+#    deliverable     <- the flow's own delivery ROUTE (`_ppa/delivery_path`),
+#                       and failing that the design's OWN INPUT documents,
+#                       which assign top-level ports to the four SIDES of a
+#                       die. A hardmacro has no die sides.
+#    die_origin_um   <- the run's declared die rectangle (`declared_die_rect`).
+#    die_area_um        The rung measures the streamed GDS's bounding box. A
+#                       stream that lost geometry, or a fill that never reached
+#                       the die, is a bbox that is not the die — the hollow-die
+#                       shape, caught by comparing two independent things.
+#    seal_ring_required <- the TECHNOLOGY: does this PDK ship a die seal-ring
+#                       generator in its own sign-off tech tree? The rung
+#                       measures OUR layout for a ring.
+#    forbidden_layers<- the PDK bridge sign-off config, or the design's own L19
+#                       constraints. There is no third source and NOTHING here
+#                       invents one: a run whose PDK and whose design both
+#                       forbid nothing publishes NOTHING and says so. An empty
+#                       forbidden set claimed as an answer would be a party
+#                       that does not exist saying it does not mind.
+#
+#  AN EXISTING ANSWER ALWAYS WINS, and is never overwritten. The operator, or
+#  a human who wrote the field, is the party that has to accept the die; a
+#  derivation is the weakest authority in the room. That is also what keeps the
+#  REFUSAL direction alive: declare `top_cell` X while the GDS top is Y and the
+#  rung still FAILs naming both, because nothing here quietly corrects it.
+#
+#  chip-AGNOSTIC: no vendor, foundry, node, SKU or design name; the only fixed
+#  strings are this flow's own relative paths and the declaration's own keys.
+
+#: The four questions this publisher exists for, in ladder order, plus the two
+#: `KLayout.CheckSize` also needs before it can reach any verdict at all.
+_DECLARATION_PUBLISH_KEYS: Tuple[str, ...] = (
+    "top_cell", "deliverable", "die_origin_um", "die_area_um",
+    "seal_ring_required", "forbidden_layers",
+)
+
+
+def _declared_deliverable(project: Path) -> Tuple[Optional[str], str]:
+    """(DIE | HARDMACRO, basis) or (None, why not) — never a guess.
+
+    FIRST the flow's own route, which a design cannot accidentally omit;
+    THEN the design's own input documents, because a route is only established
+    once step 0.5ic has written a router artefact and that step needs THIS
+    answer to choose one. Without the second authority the pair is a deadlock:
+    measured on spm, `tapeout_declaration_gen` reported "route NOT_DETERMINED …
+    no router file was written" and `_ppa/delivery_path` then reported
+    NOT_DETERMINED for want of that file.
+    """
+    _here = str(Path(__file__).resolve().parent)
+    if _here not in sys.path:
+        sys.path.insert(0, _here)
+    try:
+        from _ppa import delivery_path as _dpath   # noqa: PLC0415
+        route = str((_dpath.resolve(project) or {}).get("path") or "")
+    except Exception:                                          # noqa: BLE001
+        route = ""
+    if route == "CHIP":
+        return "DIE", ("the flow's own delivery route: step 37.5ic's condition "
+                       "is met and 37.5ip's alone is not (_ppa/delivery_path)")
+    if route == "IP":
+        return "HARDMACRO", ("the flow's own delivery route: the IP/hardmacro "
+                             "terminal alone (_ppa/delivery_path)")
+
+    # THE DESIGN'S OWN INPUT. `io_pad_chip_top_gen` reads the input documents
+    # and records which top-level ports the design puts on which SIDE of the
+    # die, naming the document and the heading it read them from. Four named
+    # sides is a die: a hardmacro is placed inside somebody else's die and has
+    # no north, south, east or west of its own.
+    rep = _pl.reports_dir(project) / "phase3" / "io_pad_chip_top.json"
+    if not rep.is_file():
+        return None, (f"the delivery route is {route or 'unreadable'} and "
+                      f"reports/phase3/io_pad_chip_top.json is not on disk, so "
+                      f"neither the flow nor the design's input has said what "
+                      f"leaves this flow")
+    try:
+        doc = json.loads(rep.read_text(errors="replace"))
+    except (OSError, ValueError) as exc:
+        return None, (f"the delivery route is {route or 'unreadable'} and "
+                      f"reports/phase3/io_pad_chip_top.json could not be read: "
+                      f"{exc}")
+    placement = (doc or {}).get("pad_placement") or {}
+    sides = placement.get("side_signals") or {}
+    named = sorted(k for k, v in sides.items() if v)
+    if len(named) >= 2:
+        return "DIE", (
+            f"the design's own input assigns top-level ports to {len(named)} "
+            f"side(s) of a die ({', '.join(named)}) — "
+            f"{placement.get('source')} § {placement.get('heading')!r}; a "
+            f"hardmacro has no die sides")
+    return None, (
+        f"the delivery route is {route or 'unreadable'} and the design's input "
+        f"assigns top-level ports to {len(named)} die side(s), which is not "
+        f"enough to say a die is what leaves this flow")
+
+
+def _declared_seal_ring_required(project: Path, pdk: "PdkConfig",
+                                 container: str) -> Tuple[Optional[bool], str]:
+    """(True, basis) when the TECHNOLOGY ships a die seal-ring generator.
+
+    NEVER False. "This PDK ships no generator" is not the technology saying a
+    die needs no ring — it is the technology saying nothing, and
+    `_tapeout_declaration` already records why that must stay NOT_DETERMINED:
+    "the PDK not shipping a generator is not this design getting it wrong".
+    So this authority can only ever ANSWER, never DENY, and a design that owes
+    no ring has to say so itself.
+    """
+    _here = str(Path(__file__).resolve().parent)
+    if _here not in sys.path:
+        sys.path.insert(0, _here)
+    try:
+        import die_finishing_gen as _dfg                       # noqa: PLC0415
+    except Exception as exc:                                   # noqa: BLE001
+        return None, f"die_finishing_gen could not be imported: {exc}"
+    pdk_dir = _pdk_dir_of(pdk)
+    if not pdk_dir:
+        return None, ("the PDK directory could not be located from the tech "
+                      "LEF, so no seal-ring generator was looked for")
+    try:
+        script, source, tried = _dfg.resolve_script(
+            project, None, str(Path(pdk_dir).parent), Path(pdk_dir).name, {})
+    except Exception as exc:                                   # noqa: BLE001
+        return None, f"the seal-ring generator search failed: {exc}"
+    if not script:
+        return None, ("this PDK ships no die seal-ring generator (looked for: "
+                      + "; ".join(tried) + "), which is the technology saying "
+                      "nothing and not the technology saying no ring is owed")
+    # The script lives where KLayout lives, which is inside the container.
+    rc, out, _err = _docker_exec(
+        container, f"test -f {shlex.quote(script)} && echo VIC_SEAL_SCRIPT_OK")
+    if rc != 0 or "VIC_SEAL_SCRIPT_OK" not in (out or ""):
+        return None, (f"the seal-ring generator this PDK names ({script}, via "
+                      f"{source}) is not on disk in the runner, so the "
+                      f"technology's answer could not be read")
+    return True, (f"the technology ships a die seal-ring generator at {script} "
+                  f"(via {source}); a die in a process whose own sign-off tech "
+                  f"tree carries a die-seal generator carries the ring it "
+                  f"builds")
+
+
+def _declared_forbidden_layers(project: Path) -> Tuple[Optional[List[str]], str]:
+    """(the forbidden layer/datatype list, basis) or (None, why not).
+
+    TWO AUTHORITIES AND NO THIRD. The PDK integration's own sign-off bridge
+    config is one; the design's own L19 constraints are the other. When neither
+    names a layer this returns None — it does NOT return `[]`. An empty list is
+    a REAL ANSWER in this schema (`_tapeout_declaration.is_answered` says so on
+    purpose) and publishing one here would be this program inventing a party
+    that forbids nothing, which is the exact shape of a narrowed population
+    dressed as a clean result.
+    """
+    tried: List[str] = []
+
+    bridge = project / "input" / "pdk" / "bridge" / "signoff.json"
+    tried.append("input/pdk/bridge/signoff.json:forbidden_layers")
+    if bridge.is_file():
+        try:
+            cfg = json.loads(bridge.read_text(errors="replace"))
+        except (OSError, ValueError) as exc:
+            return None, f"{bridge} could not be read: {exc}"
+        raw = (cfg or {}).get("forbidden_layers")
+        if isinstance(raw, list) and raw:
+            return ([str(v).strip() for v in raw],
+                    "the PDK integration's own sign-off bridge config "
+                    "(input/pdk/bridge/signoff.json:forbidden_layers)")
+
+    l19 = (project / "phase1" / "generated_docs" / "L19_CONSTRAINTS_PDK.json")
+    tried.append("phase1/generated_docs/L19_CONSTRAINTS_PDK.json:"
+                 "constraints.forbidden_layers")
+    if l19.is_file():
+        try:
+            doc = json.loads(l19.read_text(errors="replace"))
+        except (OSError, ValueError) as exc:
+            return None, f"{l19} could not be read: {exc}"
+        raw = ((doc or {}).get("constraints") or {}).get("forbidden_layers")
+        if isinstance(raw, dict):
+            raw = raw.get("layers")
+        if isinstance(raw, list) and raw:
+            return ([str(v).strip() for v in raw],
+                    "the design's own L19 constraints "
+                    "(phase1/generated_docs/L19_CONSTRAINTS_PDK.json:"
+                    "constraints.forbidden_layers)")
+
+    return None, ("no party forbids a layer: " + "; ".join(tried)
+                  + " — and an empty forbidden set is NOT published in their "
+                    "place, because 'nobody said' and 'nobody minds' are "
+                    "different facts and only one of them can be checked")
+
+
+def publish_tapeout_declarations(project: Path, pdk: "PdkConfig",
+                                 container: str, def_file: Path,
+                                 def_top: str) -> Dict[str, Any]:
+    """Publish every declaration this run can DERIVE, or say why it cannot.
+
+    Writes `reports/phase3/tapeout_declaration_publish.json` on EVERY call —
+    a producer that writes nothing when it declines is indistinguishable from
+    one that never ran — and merges into
+    `input/submission_template/tapeout_declaration.json` only the fields it
+    could derive AND that nobody has already answered.
+    """
+    rec: Dict[str, Any] = {
+        "program": "phase3_one_shot_runner.publish_tapeout_declarations",
+        "def": str(def_file),
+        "keys": list(_DECLARATION_PUBLISH_KEYS),
+        "derived": {},
+        "published": [],
+        "not_determined": {},
+        "already_answered": {},
+        "declaration": None,
+        "record": None,
+    }
+
+    derived: Dict[str, Any] = {}
+
+    # 1 — top_cell, from the DEF the stream is written FROM.
+    if def_top:
+        derived["top_cell"] = {
+            "value": def_top,
+            "basis": (f"the DEF's own design name ({def_file.name}); the rung "
+                      f"measures the streamed GDS's top structure, which is a "
+                      f"different artefact")}
+    else:
+        rec["not_determined"]["top_cell"] = (
+            f"{def_file} states no design name, so the cell the stream must be "
+            f"topped by is unknown")
+
+    # 2 — deliverable.
+    _dv, _dv_why = _declared_deliverable(project)
+    if _dv:
+        derived["deliverable"] = {"value": _dv, "basis": _dv_why}
+    else:
+        rec["not_determined"]["deliverable"] = _dv_why
+
+    # 3 — the die rectangle, which `KLayout.CheckSize` needs in both halves.
+    _rect, _rect_why = declared_die_rect(project)
+    if _rect:
+        derived["die_origin_um"] = {
+            "value": [_rect[0], _rect[1]],
+            "basis": f"the run's own die rectangle — {_rect_why}"}
+        derived["die_area_um"] = {
+            "value": [_rect[0], _rect[1], _rect[2], _rect[3]],
+            "basis": f"the run's own die rectangle — {_rect_why}"}
+    else:
+        rec["not_determined"]["die_origin_um"] = _rect_why
+        rec["not_determined"]["die_area_um"] = _rect_why
+
+    # 4 — seal_ring_required, from the technology.
+    _seal, _seal_why = _declared_seal_ring_required(project, pdk, container)
+    if _seal is True:
+        derived["seal_ring_required"] = {"value": True, "basis": _seal_why}
+    else:
+        rec["not_determined"]["seal_ring_required"] = _seal_why
+
+    # 5 — forbidden_layers.
+    _fl, _fl_why = _declared_forbidden_layers(project)
+    if _fl:
+        derived["forbidden_layers"] = {"value": _fl, "basis": _fl_why}
+    else:
+        rec["not_determined"]["forbidden_layers"] = _fl_why
+
+    rec["derived"] = {k: v["basis"] for k, v in derived.items()}
+
+    try:
+        import _tapeout_declaration as _td                     # noqa: PLC0415
+        decl_path = project / _td.DECLARATION_REL
+        rec["declaration"] = str(decl_path)
+        if not decl_path.is_file():
+            rec["not_published_reason"] = (
+                f"no declaration at {decl_path}; step 0.5ic writes it and it "
+                f"is not here")
+        else:
+            doc, err = _td.load(decl_path)
+            if err is not None or not isinstance(doc, dict):
+                rec["not_published_reason"] = (
+                    f"{decl_path} is unreadable"
+                    f"{'' if err is None else ' (' + err + ')'}")
+            else:
+                merge: Dict[str, Any] = {}
+                for key, info in derived.items():
+                    already = _td.answer(doc, key)
+                    if _td.is_answered(already):
+                        rec["already_answered"][key] = (
+                            f"the declaration already answers {key}="
+                            f"{already!r}, and that answer outranks this "
+                            f"derivation")
+                        continue
+                    merge[key] = info["value"]
+                if merge:
+                    doc, ignored = _td.merge_answers(doc, merge)
+                    decl_path.write_text(
+                        json.dumps(doc, indent=2, ensure_ascii=False) + "\n")
+                    rec["published"] = sorted(merge)
+                    if ignored:
+                        rec["ignored_keys"] = ignored
+    except Exception as exc:                                   # noqa: BLE001
+        rec["not_published_reason"] = f"{exc}"
+
+    out = _pl.reports_dir(project) / "phase3" / "tapeout_declaration_publish.json"
+    # Same rule as the floorplan record: the path goes in BEFORE the
+    # serialisation. MEASURED on run 3, where it did not: the record on disk
+    # said `"record": null` while being read from the very path it denied.
+    rec["record"] = str(out)
+    try:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps(rec, indent=2, ensure_ascii=False) + "\n")
+    except OSError:
+        rec["record"] = None
+    return rec
+
+
 def step_gds(project: Path, top: str, pdk: PdkConfig,
              container: str) -> StepResult:
     t0 = time.time()
@@ -32803,6 +33507,23 @@ def step_gds(project: Path, top: str, pdk: PdkConfig,
     # `DESIGN == top` off the chip path: identical behaviour, empty note.
     # See `_def_design_name` for the measurement.
     top, _top_note = _streamout_top(def_file, top)
+
+    # THE FOUR QUESTIONS BEHIND THE DATABASE UNIT. Published from the DEF, the
+    # route, the run's own die rectangle and the technology — never from the
+    # GDS this step is about to write, which is what every one of them is
+    # checked AGAINST. Non-fatal by construction, exactly like the database
+    # unit above it: it publishes or it says why, and the tape-out precheck's
+    # rungs report whichever they got.
+    _decl_rec = publish_tapeout_declarations(project, pdk, container,
+                                             def_file, top)
+    print(f"      tape-out declarations: published "
+          f"{', '.join(_decl_rec['published']) or 'nothing'}"
+          + (f"; NOT_DETERMINED: "
+             f"{', '.join(sorted(_decl_rec['not_determined']))}"
+             if _decl_rec["not_determined"] else "")
+          + (f"; already answered: "
+             f"{', '.join(sorted(_decl_rec['already_answered']))}"
+             if _decl_rec["already_answered"] else ""))
 
     # Fix #3(a) — prefer Magic-based streamout when Magic is available
     # (it merges abutting same-layer geometry → far fewer false DRC
@@ -49005,7 +49726,16 @@ def _emit_metal_density_report(project: Path, top: str, pdk: PdkConfig,
     # counts the datatype set that deck counts. `pdk.drc_deck` is already a
     # container-side path, and an empty one is not fatal: the recipe falls back
     # to the layermap half and RECORDS that the deck contributed nothing.
-    _dens_slot = _slot_geometry(project)
+    # CT-03 — the die rectangle, from the run's OWN record, so the ring path
+    # gets the same correction the slot path has had. Before this, "no slot"
+    # meant "measure the bounding box", which was right only while the DEF's
+    # DIEAREA was still the die.
+    _dens_die, _dens_die_basis = declared_die_rect(project)
+    if not _dens_die:
+        notes.append(
+            f"metal density: the die rectangle is NOT_DETERMINED "
+            f"({_dens_die_basis}), so the measurement divides by the streamed "
+            f"geometry's bounding box and `die_area_source` says so.")
     deck_c = pdk.drc_deck or ""
     if not deck_c:
         notes.append(
@@ -49024,12 +49754,12 @@ def _emit_metal_density_report(project: Path, top: str, pdk: PdkConfig,
         # `die_area_um2`; on a slot submission that is the CORE, and the report
         # then disagrees with the foundry's own die-wide rule by the ratio
         # between the two rectangles (measured: 35.4 % on a 0.5x0.5 slot).
-        # OMITTED, not passed empty, for a design that targets no slot — the
-        # recipe treats an absent `die` global as "measure the bounding box"
-        # and says so in `die_area_source`.
-        + (f"-rd die={_dens_slot['die_rect'][0]},{_dens_slot['die_rect'][1]},"
-           f"{_dens_slot['die_rect'][2]},{_dens_slot['die_rect'][3]} "
-           if _dens_slot else "")
+        # OMITTED, not passed empty, for a run whose die rectangle is
+        # NOT_DETERMINED — the recipe treats an absent `die` global as
+        # "measure the bounding box" and says so in `die_area_source`.
+        + (f"-rd die={_dens_die[0]},{_dens_die[1]},"
+           f"{_dens_die[2]},{_dens_die[3]} "
+           if _dens_die else "")
         # OMITTED rather than passed empty: `-rd deck=` with nothing after it is
         # a malformed argument, and the recipe already treats an absent `deck`
         # global as "no deck offered" and says so in the report.

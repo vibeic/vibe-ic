@@ -202,13 +202,24 @@ def test_the_direct_binding_form_still_works(tmp_path):
 # ── 3. the wiring: the declared die must reach the recipe ───────────────────
 
 def test_the_runner_passes_the_declared_die_and_omits_it_otherwise():
+    """CT-03 WIDENED THE AUTHORITY AND NOT THE PROPERTY. This used to read
+    `_slot_geometry` directly, which made "there is a slot" stand in for "the
+    DEF's DIEAREA is not the die". That stopped being the same fact the moment
+    the RING path also handed OpenROAD the core as `-die_area`, so the source
+    now reads `declared_die_rect`, which answers for the slot path (unchanged,
+    slot first) AND the ring path. The property asserted here is the one it
+    always was: the declared die reaches the recipe, and is OMITTED — never
+    passed empty — when there is none."""
     src = _PROGRAMS.joinpath("phase3_one_shot_runner.py").read_text()
-    assert "_dens_slot = _slot_geometry(project)" in src
-    assert "-rd die={_dens_slot['die_rect'][0]}" in src
+    assert "_dens_die, _dens_die_basis = declared_die_rect(project)" in src
+    assert "-rd die={_dens_die[0]},{_dens_die[1]}," in src
     # OMITTED, not passed empty: `-rd die=` with nothing after it is a
     # malformed KLayout argument, and the recipe already treats an absent `die`
     # global as "measure the bounding box".
-    assert 'if _dens_slot else ""' in src
+    assert 'if _dens_die else ""' in src
+    # …and an undetermined die is DISCLOSED in the report's own notes rather
+    # than being a silent fall-through to the bounding box.
+    assert "the die rectangle is NOT_DETERMINED" in src
 
 
 def test_no_datatype_number_is_written_into_the_producer():
