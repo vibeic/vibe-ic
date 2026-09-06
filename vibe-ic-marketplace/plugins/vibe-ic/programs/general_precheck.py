@@ -133,6 +133,14 @@ MEASURED over the six PDK volumes the pinned image carries (image label
 name resolves to no volume at all and stays NOT_DETERMINED. A tier nothing can
 reach would be decoration; a tier every design can reach would be the hole.
 
+`INFO` IS THE FIFTH, AND IT IS NOT A VERDICT ABOUT THE LAYOUT. `General.
+FlowMarkerLayers` reports which layers in this GDS THIS FLOW put there — a fact
+no design can pass or fail, and one a reader of a tape-out report must have.
+It is a row rather than a sentence inside another rung's prose for the reason
+`_check_drc` gives about its own waiver disclosure: the number of things set
+aside is the single most review-relevant fact a sign-off carries, and burying it
+makes the report quieter than the run it describes.
+
 EXIT CODES
 ==========
     0  PASS
@@ -191,6 +199,10 @@ NOT_DETERMINED = "NOT_DETERMINED"
 #: Admitted ONLY for a fact about the process — see the four-verdict note in
 #: the module docstring. Never reachable from a declaration.
 NOT_APPLICABLE = "NOT_APPLICABLE"
+#: A DISCLOSURE, not a verdict about the layout. A rung that reports something a
+#: reader must see and that no design can pass or fail — see the note in the
+#: module docstring. Carries evidence, and never blocks.
+INFO = "INFO"
 
 #: Where the truth for a step comes from. Recorded per step in the report,
 #: because "we measured this" and "we asked the PDK" and "we compared it to
@@ -352,6 +364,18 @@ LADDER: Tuple[Step, ...] = (
          "KLayout DRC violations",
          delegate=Delegate("drc_report_check", ("--mode", "drc"),
                            f"{DELEGATE_REPORT_DIR}/precheck_klayout_drc.json")),
+    Step("General.FlowMarkerLayers", "Layers THIS FLOW Wrote", 12,
+         OWN_GEOMETRY,
+         "nothing — this rung refuses no layout; it DISCLOSES which layers in "
+         "the stream came from our own flow rather than from the design",
+         note="OURS, and INFO by construction. `def_gds_port_power_restore` "
+              "writes port-label text and power-rail markers into the streamed "
+              "GDS so `klayout_pdk_lvs` can name the power nets. No PDK layer "
+              "table defines them, so without this row they read as unknown "
+              "layers to `General.ForbiddenLayers` and as nothing at all to a "
+              "human. A FOUNDRY-BOUND GDS MUST NOT CARRY THEM — stripping them "
+              "from the deliverable is a separate step, and this row is what "
+              "makes their presence visible enough to ask for."),
 )
 
 
@@ -393,6 +417,10 @@ class PrecheckReport:
     undetermined_steps: List[str] = field(default_factory=list)
     #: Rungs the TECHNOLOGY has no facility for. Named, never merely absent.
     not_applicable_steps: List[str] = field(default_factory=list)
+    #: Rungs that DISCLOSE rather than judge. Named for the same reason.
+    info_steps: List[str] = field(default_factory=list)
+    #: What THIS FLOW declares it writes into a stream, and where that was read.
+    flow_marker_declaration: Dict[str, Any] = field(default_factory=dict)
     #: What the PDK volume answered, and how it was found. Published whether or
     #: not a rung used it, so "the technology was not asked" is visible as a
     #: fact instead of being inferred from a rung's prose.
@@ -419,6 +447,7 @@ class PrecheckReport:
             f"failed={len(self.failed_steps)}, "
             f"undetermined={len(self.undetermined_steps)}, "
             f"not_applicable={len(self.not_applicable_steps)}, "
+            f"info={len(self.info_steps)}, "
             f"declaration_answered={a.get('answered', 0)}/"
             f"{a.get('questions_total', len(_decl.QUESTIONS))} — {self.reason}")
 
@@ -734,7 +763,8 @@ def _step_forbidden_layers(ev: StepEvidence, layers: Optional[Dict[Any, int]],
                            allowed: Optional[set] = None,
                            authority: Optional[str] = None,
                            authority_tried: Optional[List[str]] = None,
-                           authority_why: str = "") -> None:
+                           authority_why: str = "",
+                           flow_markers: Optional[Tuple] = None) -> None:
     """FORBIDDEN IS THE COMPLEMENT OF THE PROCESS, NOT A LIST SOMEBODY TYPED.
 
     Owner ruling, 2026-09-06 (vibe-ic#2058): this rung is DERIVED, never
@@ -795,19 +825,43 @@ def _step_forbidden_layers(ev: StepEvidence, layers: Optional[Dict[Any, int]],
             f"set is unknown and no further layer can be called forbidden "
             f"({authority_why or 'no PDK layer table'})")
         return
-    unmapped = sorted((f"{l}/{d}" for (l, d) in layers
-                       if (l, d) not in allowed),
-                      key=lambda t: tuple(int(x) for x in t.split("/")))
+    def _key(t):
+        return tuple(int(x) for x in t.split("/"))
+
+    # WHAT THIS FLOW PUT THERE IS NOT AN UNKNOWN LAYER (owner ruling,
+    # 2026-09-06). `def_gds_port_power_restore` writes port-label text and
+    # power-rail markers so `klayout_pdk_lvs` can name the power nets, and no
+    # PDK layer table defines them. They are DERIVED from that writer's own
+    # constants — never a list typed here — and they are DISCLOSED by
+    # `General.FlowMarkerLayers`, not silently forgiven: a reader still sees
+    # every one of them, in its own row.
+    #
+    # ANYTHING IN NEITHER SET STILL FAILS. The complement that matters is of
+    # (the technology's table) UNION (what this flow declares it writes); a
+    # layer neither of them accounts for is a layer nobody can explain, which
+    # is the state this rung exists to refuse.
+    _flow_exact, _flow_base, _flow_why, _flow_tried = flow_markers or (
+        set(), None, "the flow's marker declaration was not consulted", [])
+    _outside = [(l, d) for (l, d) in layers if (l, d) not in allowed]
+    _mine = sorted((f"{l}/{d}" for (l, d) in _outside
+                    if _pdkauth.is_flow_marker(l, d, _flow_exact, _flow_base)),
+                   key=_key)
+    unmapped = sorted((f"{l}/{d}" for (l, d) in _outside
+                       if not _pdkauth.is_flow_marker(l, d, _flow_exact,
+                                                      _flow_base)),
+                      key=_key)
     ev.measured["unmapped_layers"] = unmapped
+    ev.measured["flow_marker_layers"] = _mine
+    ev.measured["flow_marker_basis"] = _flow_why
     if unmapped or declared_hits:
         ev.verdict = FAIL
         parts = []
         if unmapped:
             parts.append(
                 f"{len(unmapped)} of the {len(used)} layer/datatype pair(s) in "
-                f"this layout are not defined by the technology's own layer "
-                f"table ({authority}, {len(allowed)} pair(s)): "
-                f"{', '.join(unmapped)}")
+                f"this layout are defined by NEITHER the technology's own layer "
+                f"table ({authority}, {len(allowed)} pair(s)) NOR this flow's "
+                f"own marker declaration: {', '.join(unmapped)}")
         if declared_hits:
             parts.append(f"the declaration forbids {', '.join(declared_hits)} "
                          f"and they are in use")
@@ -815,11 +869,68 @@ def _step_forbidden_layers(ev: StepEvidence, layers: Optional[Dict[Any, int]],
     else:
         ev.verdict = PASS
         ev.evidence = (f"every one of the {len(used)} layer/datatype pair(s) "
-                       f"in this layout is defined by the technology's own "
+                       f"in this layout is accounted for: "
+                       f"{len(used) - len(_mine)} by the technology's own "
                        f"layer table ({authority}, {len(allowed)} pair(s))"
-                       + (f", and none of the {len(declared)} additionally "
+                       + (f" and {len(_mine)} by this flow's own marker "
+                          f"declaration ({', '.join(_mine)}), which "
+                          f"General.FlowMarkerLayers reports in full"
+                          if _mine else "")
+                       + (f". None of the {len(declared)} additionally "
                           f"declared forbidden layer(s) is in use"
                           if declared else ""))
+
+
+def _step_flow_marker_layers(ev: StepEvidence,
+                             layers: Optional[Dict[Any, int]],
+                             flow_markers: Optional[Tuple] = None) -> None:
+    """WHICH LAYERS IN THIS STREAM DID WE PUT THERE? (owner ruling 2026-09-06)
+
+    A DISCLOSURE, never a verdict about the layout: `INFO` whatever it finds,
+    including nothing. `def_gds_port_power_restore` writes port-label text on
+    `TEXT_LAYER[0]` and power-rail markers from `RAIL_MARKER` into the streamed
+    GDS so `klayout_pdk_lvs` can name the power nets geometrically. No PDK
+    layer table defines them — MEASURED on spm x gf180mcuD, they are the three
+    pairs `General.ForbiddenLayers` reported as unmapped: 100/0, 901/0, 902/0.
+
+    A FOUNDRY-BOUND GDS MUST NOT CARRY THEM. This row does not strip them and
+    does not pretend they are harmless; it makes them VISIBLE in the tape-out
+    report, which is the precondition for anyone deciding to remove them.
+    """
+    exact, base, why, tried = flow_markers or (
+        set(), None, "the flow's marker declaration was not consulted", [])
+    ev.measured = {"declaration_basis": why, "declaration_tried": list(tried),
+                   "declared_exact_pairs": sorted(f"{l}/{d}" for l, d in exact),
+                   "declared_label_layer": base}
+    if layers is None:
+        ev.evidence = "the layout was not read, so its layers are unknown"
+        return
+    if not exact and base is None:
+        # The writer could not be read. NOT_DETERMINED, never "the flow writes
+        # nothing" — that answer would report our own markers as unknown layers
+        # in the rung above.
+        ev.evidence = (f"this flow's own marker layers could not be derived, so "
+                       f"nothing can be said about which layers here are ours: "
+                       f"{why}")
+        return
+    mine = sorted((f"{l}/{d}" for (l, d) in layers
+                   if _pdkauth.is_flow_marker(l, d, exact, base)),
+                  key=lambda t: tuple(int(x) for x in t.split("/")))
+    ev.verdict = INFO
+    ev.measured["flow_marker_layers"] = mine
+    ev.measured["layers_used_count"] = len(layers)
+    if mine:
+        ev.evidence = (
+            f"{len(mine)} of the {len(layers)} layer/datatype pair(s) in this "
+            f"stream were written by THIS FLOW, not by the design: "
+            f"{', '.join(mine)} ({why}). They exist so the geometric extractor "
+            f"can name the power nets. A GDS bound for a foundry must not carry "
+            f"them — no PDK layer table defines them, so a taking party sees "
+            f"layers its own process does not have")
+    else:
+        ev.evidence = (f"none of the {len(layers)} layer/datatype pair(s) in "
+                       f"this stream is one this flow declares it writes "
+                       f"({why})")
 
 
 # --------------------------------------------------------------------------- #
@@ -1030,6 +1141,13 @@ def evaluate(project: Path,
     volume, volume_why, _volume_tried = _pdkauth.resolve_volume(pdk)
     allowed, layer_authority, layer_tried = _pdkauth.layer_table(volume)
     seal_facility, seal_path, seal_tried = _pdkauth.seal_ring_facility(volume)
+    # What THIS FLOW declares it writes into a stream. Derived from the writer's
+    # own constants, asked once, consumed by two rungs.
+    flow_markers = _pdkauth.flow_marker_layers()
+    rep.flow_marker_declaration = {
+        "basis": flow_markers[2],
+        "exact_pairs": sorted(f"{l}/{d}" for l, d in flow_markers[0]),
+        "label_layer": flow_markers[1], "tried": list(flow_markers[3])}
     rep.technology = {"pdk": pdk, "volume": str(volume) if volume else None,
                       "volume_resolution": volume_why,
                       "volume_tried": _volume_tried,
@@ -1058,7 +1176,9 @@ def evaluate(project: Path,
                 ev, layers, _decl.answer(doc, _decl.FORBIDDEN_LAYERS_KEY),
                 allowed=allowed, authority=layer_authority,
                 authority_tried=(layer_tried or _volume_tried),
-                authority_why=volume_why)
+                authority_why=volume_why, flow_markers=flow_markers)
+        elif step.step_id == "General.FlowMarkerLayers":
+            _step_flow_marker_layers(ev, layers, flow_markers)
         elif step.delegate is not None:
             seal = ans.get("seal_ring_required")
             _step_delegate(ev, step, project, run, pdir, timeout,
@@ -1077,10 +1197,12 @@ def evaluate(project: Path,
     # than by the layout — and cannot be read as "every step measured
     # something".
     n_a = [s.step_id for s in steps if s.verdict == NOT_APPLICABLE]
+    info = [s.step_id for s in steps if s.verdict == INFO]
     rep.steps_with_evidence = with_evidence
     rep.failed_steps = failed
     rep.undetermined_steps = undet
     rep.not_applicable_steps = n_a
+    rep.info_steps = info
 
     if failed:
         rep.verdict = FAIL
@@ -1103,7 +1225,10 @@ def evaluate(project: Path,
                       "step(s) are excluded and named"
                       + (f"; {len(n_a)} step(s) do not apply to this "
                          f"technology and say from what that was derived: "
-                         + ", ".join(n_a) if n_a else ""))
+                         + ", ".join(n_a) if n_a else "")
+                      + (f"; {len(info)} step(s) DISCLOSE rather than judge and "
+                         f"are not a pass anything earned: " + ", ".join(info)
+                         if info else ""))
     return rep
 
 

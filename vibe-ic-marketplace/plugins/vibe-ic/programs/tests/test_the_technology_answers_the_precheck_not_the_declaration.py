@@ -60,7 +60,12 @@ from test_general_precheck import (                # noqa: E402
 
 #: The layer/datatype the shared die fixture draws its boundary on.
 MAPPED = (67, 20)
-UNMAPPED = (901, 0)
+#: In NEITHER the synthetic technology's table NOR this flow's own marker
+#: declaration — deliberately not 100/901/902, which ARE ours (see
+#: `test_a_flow_marker_layer_is_disclosed_and_not_failed`).
+UNMAPPED = (777, 3)
+#: One the flow itself writes: `def_gds_port_power_restore.RAIL_MARKER["VSS"]`.
+FLOW_MARKER = (902, 0)
 
 
 def _lyp(pairs) -> str:
@@ -287,3 +292,84 @@ def test_the_layer_table_parser_reads_a_named_source(tmp_path):
         "<properties><source>*/*@1</source></properties>"
         "</layer-properties>")
     assert pairs == {(100, 5), (34, 0), (12, 0)}
+
+
+# --------------------------------------------------------------------------- #
+# Owner ruling 2026-09-06 — the flow's OWN marker layers are disclosed, not failed
+# --------------------------------------------------------------------------- #
+def test_the_flow_marker_set_is_derived_from_the_writer_never_typed():
+    """It must come from `def_gds_port_power_restore`'s own constants. A typed
+    copy here would be a second declaration of the same fact, free to drift the
+    day someone moves the writer."""
+    import def_gds_port_power_restore as W
+    exact, base, why, tried = AUTH.flow_marker_layers()
+    assert exact == {tuple(v) for v in W.RAIL_MARKER.values()}
+    assert base == W.TEXT_LAYER[0]
+    assert "def_gds_port_power_restore" in why
+    # the datatype is DATA — the writer's own comment says it is the pin's
+    # 1-based metal index — so the LAYER is what can be declared ahead of a run
+    assert AUTH.is_flow_marker(base, 0, exact, base)
+    assert AUTH.is_flow_marker(base, 4, exact, base)
+    assert not AUTH.is_flow_marker(base + 1, 0, exact, base)
+
+
+def test_a_flow_marker_layer_is_disclosed_and_not_failed(tmp_path, pdkroot):
+    """spm's own case: 100/0, 901/0 and 902/0 are OURS. The rung must stop
+    calling them unknown, and the INFO row must name them."""
+    _technology(pdkroot, "maptech", pairs=[MAPPED, (1, 0)], sealring=False)
+    proj = _project(tmp_path,
+                    lambda p: _die(p, layers=(MAPPED, FLOW_MARKER, (100, 0))),
+                    {"deliverable": "DIE", "top_cell": "chip_top"})
+    rep = GP.evaluate(proj, runner=_NEVER_RAN, pdk="maptech")
+    fl = _step(rep, "General.ForbiddenLayers")
+    assert fl.verdict == GP.PASS, fl.evidence
+    assert fl.measured["unmapped_layers"] == []
+    assert set(fl.measured["flow_marker_layers"]) == {"902/0", "100/0"}
+
+    info = _step(rep, "General.FlowMarkerLayers")
+    assert info.verdict == GP.INFO, info.evidence
+    assert set(info.measured["flow_marker_layers"]) == {"902/0", "100/0"}
+    assert "must not carry them" in info.evidence
+    assert "General.FlowMarkerLayers" in rep.info_steps
+    assert "General.FlowMarkerLayers" not in rep.failed_steps
+    assert "General.FlowMarkerLayers" not in rep.undetermined_steps
+
+
+def test_THE_CONTROL_a_layer_in_neither_set_still_fails_naming_it(tmp_path,
+                                                                  pdkroot):
+    """The ruling's control. Forgiving OUR markers must not forgive anything
+    else — a layer the technology does not define and the flow does not claim
+    is a layer nobody can explain."""
+    _technology(pdkroot, "maptech", pairs=[MAPPED, (1, 0)], sealring=False)
+    proj = _project(tmp_path,
+                    lambda p: _die(p, layers=(MAPPED, FLOW_MARKER, UNMAPPED)),
+                    {"deliverable": "DIE", "top_cell": "chip_top"})
+    fl = _step(GP.evaluate(proj, runner=_NEVER_RAN, pdk="maptech"),
+               "General.ForbiddenLayers")
+    assert fl.verdict == GP.FAIL, fl.evidence
+    assert fl.measured["unmapped_layers"] == [f"{UNMAPPED[0]}/{UNMAPPED[1]}"]
+    assert f"{UNMAPPED[0]}/{UNMAPPED[1]}" in fl.evidence
+    # …and the flow marker beside it is still recognised as ours, not lumped in
+    assert fl.measured["flow_marker_layers"] == [f"{FLOW_MARKER[0]}/{FLOW_MARKER[1]}"]
+
+
+def test_THE_MUTATION_dropping_the_derived_declaration_re_reddens_our_markers(
+        tmp_path, pdkroot, monkeypatch):
+    """Break the derivation and spm's own markers must go red again — which is
+    the state the ruling was issued about. A rung that stays green with the
+    declaration gone is not reading it."""
+    _technology(pdkroot, "maptech", pairs=[MAPPED, (1, 0)], sealring=False)
+    proj = _project(tmp_path,
+                    lambda p: _die(p, layers=(MAPPED, FLOW_MARKER, (100, 0))),
+                    {"deliverable": "DIE", "top_cell": "chip_top"})
+    monkeypatch.setattr(AUTH, "flow_marker_layers",
+                        lambda: (set(), None, "MUTATION: not derived", []))
+    rep = GP.evaluate(proj, runner=_NEVER_RAN, pdk="maptech")
+    fl = _step(rep, "General.ForbiddenLayers")
+    assert fl.verdict == GP.FAIL, "the derivation is not load-bearing"
+    assert set(fl.measured["unmapped_layers"]) == {"100/0", "902/0"}
+    # and the INFO rung refuses too — it must never answer "the flow writes
+    # nothing", which would report our own markers as unknown in the rung above
+    info = _step(rep, "General.FlowMarkerLayers")
+    assert info.verdict == GP.NOT_DETERMINED, info.evidence
+    assert "could not be derived" in info.evidence

@@ -211,3 +211,64 @@ def seal_ring_facility(volume: Optional[Path]
     if cand.is_file():
         return True, str(cand), tried
     return False, None, tried
+
+
+#: THE FLOW'S OWN MARKER LAYERS, derived from the writer, never typed here.
+#:
+#: `def_gds_port_power_restore` puts port-label text and power-rail markers into
+#: the streamed GDS so `klayout_pdk_lvs` can name the power nets geometrically.
+#: They are OURS: no PDK layer table defines them, and MEASURED on spm x
+#: gf180mcuD they are exactly the three pairs that rung reported as unmapped —
+#: 100/0, 901/0 and 902/0 out of 32 in use.
+#:
+#: THE DATATYPE IS DATA, THE LAYER IS THE CONTRACT. That module's own comment:
+#: "text GDS layer TEXT_LAYER[0] (100), datatype = the pin's 1-based metal index
+#: (MET1->dt1, MET2->dt2, …) … datatype 0 = catch-all for a pin with no resolved
+#: metal layer". So the label datatype depends on how many metals THIS design
+#: routed on, and only the LAYER number can be declared ahead of a run. Matching
+#: layer 100 at any datatype is therefore the derivation, not a widening — and
+#: it is why this returns a layer number beside the exact pairs instead of
+#: pretending to enumerate a family it cannot know.
+#:
+#: IMPORTED, NEVER RE-SPELLED. A typed copy of `(901, 0)` here would be a second
+#: declaration of the same fact, free to drift from the writer the day someone
+#: moves it — which is the whole shape `_declared_die` exists to remove one
+#: layer down.
+def flow_marker_layers() -> Tuple[Set[LayerKey], Optional[int], str, List[str]]:
+    """(exact pairs, the label LAYER number, provenance, what was tried).
+
+    `(set(), None, why, tried)` when the writer cannot be imported — and that is
+    NOT_DETERMINED for the caller, never "the flow declares nothing", which
+    would report our own markers as unknown layers.
+    """
+    tried = ["def_gds_port_power_restore.RAIL_MARKER",
+             "def_gds_port_power_restore.TEXT_LAYER"]
+    try:
+        import def_gds_port_power_restore as _w
+    except Exception as exc:                                  # noqa: BLE001
+        return set(), None, (f"the flow's marker writer could not be imported "
+                             f"({exc})"), tried
+    exact: Set[LayerKey] = set()
+    rails = getattr(_w, "RAIL_MARKER", None)
+    if isinstance(rails, dict):
+        for v in rails.values():
+            if (isinstance(v, (tuple, list)) and len(v) == 2
+                    and all(isinstance(n, int) for n in v)):
+                exact.add((int(v[0]), int(v[1])))
+    base = None
+    tl = getattr(_w, "TEXT_LAYER", None)
+    if (isinstance(tl, (tuple, list)) and len(tl) == 2
+            and isinstance(tl[0], int)):
+        base = int(tl[0])
+    if not exact and base is None:
+        return set(), None, ("def_gds_port_power_restore declares neither "
+                             "RAIL_MARKER nor TEXT_LAYER in a shape this can "
+                             "read"), tried
+    return exact, base, ("derived from def_gds_port_power_restore's own "
+                         "RAIL_MARKER and TEXT_LAYER"), tried
+
+
+def is_flow_marker(layer: int, datatype: int,
+                   exact: Set[LayerKey], base: Optional[int]) -> bool:
+    """True iff THIS flow declares it writes on that layer/datatype."""
+    return (layer, datatype) in exact or (base is not None and layer == base)
