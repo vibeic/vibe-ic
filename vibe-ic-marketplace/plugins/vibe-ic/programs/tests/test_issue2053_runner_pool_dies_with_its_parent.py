@@ -25,6 +25,7 @@ lane on this fleet runs the same script names.
 """
 from __future__ import annotations
 
+import contextlib
 import os
 import signal
 import subprocess
@@ -51,8 +52,11 @@ import sys, threading, time
 sys.path.insert(0, {programs!r})
 import benchmark_dispatch as bd
 # Exactly what main() does for --solve/--resume: install on the MAIN thread,
-# before any worker exists.
-bd._install_orphan_guard()
+# before any worker exists. getattr, because on a tree that has no guard at
+# all the coordinator must still RUN and still spawn its pool -- that is the
+# RED arm, and it has to reach the assertion to fail instead of timing out
+# waiting for a pidfile that would never be written.
+getattr(bd, "_install_orphan_guard", lambda: None)()
 budget = bd._RunnerBudget(1, 1, 0)
 threading.Thread(
     target=budget.run,
@@ -60,6 +64,15 @@ threading.Thread(
     daemon=True).start()
 time.sleep(300)
 '''
+
+
+#: A FIXED number of polls, deliberately not a wall clock. A wall-clock wait
+#: is a loop that cannot say "never": it reports how long it was willing to
+#: wait, and on a loaded host it either flakes or hides a survivor behind a
+#: longer deadline. A poll budget terminates on every host, so the RED arm
+#: FAILS rather than hanging.
+_POLL_BUDGET = 60
+_POLL_INTERVAL_S = 0.2
 
 
 def _alive(pid: int) -> bool:
@@ -71,21 +84,62 @@ def _alive(pid: int) -> bool:
     return status.rsplit(")", 1)[-1].split()[0] != "Z"
 
 
-def _wait_gone(pids, deadline_s=20.0) -> bool:
-    end = time.time() + deadline_s
-    while time.time() < end:
-        if not any(_alive(p) for p in pids):
-            return True
-        time.sleep(0.2)
-    return False
+def _argv(pid: int) -> str:
+    """A survivor's own command line, so a failure NAMES what is still running."""
+    try:
+        raw = Path(f"/proc/{pid}/cmdline").read_bytes()
+    except OSError:
+        return "<exited>"
+    return " ".join(raw.decode("utf-8", "replace").split("\0")).strip() or "<no argv>"
+
+
+def _survivors(pids) -> list[str]:
+    """Which of these are STILL RUNNING, reported by pid and argv."""
+    return [f"pid {p}: {_argv(p)}" for p in pids if _alive(p)]
+
+
+def _drain(pids) -> list[str]:
+    """Spend the whole poll budget, then report whoever is left.
+
+    Returns [] when the pool is gone. The budget is a COUNT, so this returns
+    on every host rather than waiting on a clock nobody can bound.
+    """
+    for _ in range(_POLL_BUDGET):
+        left = _survivors(pids)
+        if not left:
+            return []
+        time.sleep(_POLL_INTERVAL_S)
+    return _survivors(pids)
 
 
 def _reap(pids) -> None:
+    """Kill what this test spawned, by RECORDED pid -- never a name pattern.
+
+    The group first, because the runner's own children are the pool: leaving
+    them is exactly the defect under test, and a test that demonstrates an
+    orphan by creating one is not a test anyone should run twice.
+
+    NEVER our own group. MEASURED on the RED arm: with no `start_new_session`
+    the child shares the process group of whoever started it -- which here is
+    pytest -- so `killpg` on it killed the test runner itself (rc=137). That is
+    the same foot-gun the production guard refuses, and the reaper needs it
+    too: on that arm the pids are killed individually instead.
+    """
+    own = os.getpgrp()
     for pid in pids:
         try:
-            os.kill(pid, signal.SIGKILL)
+            pgid = os.getpgid(pid)
         except OSError:
-            pass
+            pgid = None
+        if pgid is not None and pgid != own:
+            with contextlib.suppress(OSError):
+                os.killpg(pgid, signal.SIGKILL)
+        with contextlib.suppress(OSError):
+            os.kill(pid, signal.SIGKILL)
+    for _ in range(_POLL_BUDGET):
+        if not any(_alive(p) for p in pids):
+            return
+        time.sleep(_POLL_INTERVAL_S)
 
 
 @pytest.fixture
@@ -98,40 +152,49 @@ def pool(tmp_path):
     coordinator.write_text(_COORDINATOR.format(
         programs=str(PROGRAMS), runner=str(runner), pidfile=str(pidfile)))
     parent = subprocess.Popen([sys.executable, str(coordinator)])
-    deadline = time.time() + 30
-    while time.time() < deadline and not pidfile.exists():
-        time.sleep(0.1)
-    if not pidfile.exists():
-        parent.kill()
-        pytest.fail("NOT_MEASURED: the fake runner never recorded its pids")
-    child_pid, grandchild_pid = (int(x) for x in pidfile.read_text().split())
-    assert _alive(child_pid) and _alive(grandchild_pid)
+    pids: list[int] = []
     try:
-        yield parent, child_pid, grandchild_pid
+        for _ in range(_POLL_BUDGET):
+            if pidfile.exists():
+                break
+            time.sleep(_POLL_INTERVAL_S)
+        if not pidfile.exists():
+            # NOT a hidden pass and not a hang: the arm could not be set up,
+            # so it is reported as unmeasured rather than scored either way.
+            pytest.fail("NOT_MEASURED: the fake runner never recorded its "
+                        f"pids within {_POLL_BUDGET} polls")
+        pids = [int(x) for x in pidfile.read_text().split()]
+        assert len(pids) == 2 and all(_alive(p) for p in pids), _survivors(pids)
+        yield parent, pids[0], pids[1]
     finally:
-        try:
+        # Reap on BOTH arms. On the red arm the survivors are the whole point,
+        # and leaving them behind would make the test the thing it is meant to
+        # catch: this fixture must not be able to orphan a pool either.
+        with contextlib.suppress(OSError, subprocess.TimeoutExpired):
             parent.kill()
             parent.wait(timeout=10)
-        except OSError:
-            pass
-        _reap([child_pid, grandchild_pid])
+        _reap(pids)
+        assert not _survivors(pids), (
+            "the test itself leaked processes: " + "; ".join(_survivors(pids)))
 
 
-def test_sigterm_to_the_coordinator_takes_the_whole_pool_with_it(pool):
-    """The BR-07 scenario itself: kill the parent, the pool must not survive."""
+@pytest.mark.parametrize("sig", [signal.SIGTERM, signal.SIGINT])
+def test_killing_the_coordinator_takes_the_whole_pool_with_it(pool, sig):
+    """The BR-07 scenario itself: kill the parent, the pool must not survive.
+
+    The assertion is on the SURVIVOR SET, spent against a fixed poll budget:
+    an empty set is the pass, and anything left is named by pid and argv. A
+    test that demonstrated the orphaned pool by waiting for it would be a loop
+    that cannot say "never" -- on a tree with no guard this FAILS, naming the
+    processes that outlived their coordinator.
+    """
     parent, child_pid, grandchild_pid = pool
-    parent.send_signal(signal.SIGTERM)
+    parent.send_signal(sig)
     parent.wait(timeout=20)
-    assert _wait_gone([child_pid, grandchild_pid]), (
-        f"orphaned pool: child alive={_alive(child_pid)}, "
-        f"grandchild alive={_alive(grandchild_pid)}")
-
-
-def test_sigint_to_the_coordinator_takes_the_whole_pool_with_it(pool):
-    parent, child_pid, grandchild_pid = pool
-    parent.send_signal(signal.SIGINT)
-    parent.wait(timeout=20)
-    assert _wait_gone([child_pid, grandchild_pid])
+    survivors = _drain([child_pid, grandchild_pid])
+    assert survivors == [], (
+        f"the pool outlived its coordinator ({sig!r}); still running after "
+        f"{_POLL_BUDGET} polls: " + "; ".join(survivors))
 
 
 def test_signalling_no_children_is_zero_not_an_error(monkeypatch):
