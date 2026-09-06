@@ -1011,13 +1011,26 @@ def test_e2e_a_resumed_pass_is_found_by_the_next_invocation(monkeypatch,
     assert third["lec_resume"]["state"] == "CACHE_HIT_NOTHING_RESUMED"
     # The cached report carries BOTH legs of the proof that produced it, each
     # hash-bound — that is what makes a resumed PASS reviewable at all.
+    source_report = json.loads(
+        (entries[0].parent / "source_report.json").read_text())
+    assert source_report["proof_identity"] == stored["proof_identity"]
     legs = {leg["leg"]: leg
-            for leg in stored["proof_identity"] and
-            json.loads((entries[0].parent / "source_report.json").read_text())
-            ["proof_execution"]["evidence_legs"]}
+            for leg in source_report["proof_execution"]["evidence_legs"]}
     assert set(legs) == {"carried", "this_invocation"}, legs
     assert all(str(v.get("sha256", "")).startswith("sha256:")
                for v in legs.values()), legs
+
+    # AND THE HIT DOES NOT OVERWRITE THAT RECORD WITH ITS OWN EMPTY ONE. An
+    # invocation that launches no yosys has no execution of its own; publishing
+    # this run's all-None `proof_execution` over the cached one would file an
+    # unmeasured record as a measurement.
+    hit_ex = third["proof_execution"]
+    assert hit_ex["path"] == "cache-hit", hit_ex
+    assert hit_ex["yosys_launched"] is False, hit_ex
+    assert hit_ex["source_proof_execution"]["path"] == "resumed", hit_ex
+    assert {leg["leg"] for leg
+            in hit_ex["source_proof_execution"]["evidence_legs"]} == \
+        {"carried", "this_invocation"}, hit_ex
 
 
 def test_e2e_a_resume_survives_a_clean_of_the_live_logs(monkeypatch, tmp_path):

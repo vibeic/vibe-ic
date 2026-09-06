@@ -4812,7 +4812,27 @@ def main(argv: Optional[List[str]] = None) -> int:
     # of the same design — so the bytes this invocation actually executed and
     # the evidence legs it read are recorded here, where a reader can check
     # them and no cache lookup depends on them.
-    report["proof_execution"] = proof_execution
+    if cache_hit_report is not None:
+        # A CACHE HIT RAN NOTHING, so it has no execution record of its own —
+        # and overwriting the source proof's with this invocation's empty one
+        # would publish an all-None record as if it were a measurement. The
+        # cached report's `proof_execution` describes the run that produced the
+        # proof and is KEPT; what this invocation did is stated beside it.
+        _src = report.get("proof_execution")
+        report["proof_execution"] = {
+            "schema_version": LEC_PROOF_EXECUTION_SCHEMA_VERSION,
+            "path": "cache-hit",
+            "yosys_launched": False,
+            "source_proof_execution": (
+                _src if isinstance(_src, dict)
+                else {"state": "not recorded by the run that produced this "
+                                "cache entry"}),
+            "statement": (
+                "this invocation launched no yosys; `source_proof_execution` "
+                "is the record of the run that produced the cached proof"),
+        }
+    else:
+        report["proof_execution"] = proof_execution
     if final_proof_identity is not None:
         report["proof_identity"] = final_proof_identity
     if cache_hit_report is None:
