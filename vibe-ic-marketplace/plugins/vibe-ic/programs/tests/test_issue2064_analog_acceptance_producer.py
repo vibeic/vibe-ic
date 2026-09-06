@@ -632,3 +632,42 @@ def test_step4_sentence_says_unmeasured_not_zero_when_the_producer_is_absent(
     assert "by analog_acceptance_tb_gen" not in text
     denom = W._row_kind_denominator(project)
     assert "rows_authorable_by_analog_acceptance" not in denom
+
+
+# --------------------------------------------------------------------------
+# 13. Every artefact this producer writes appears under its FINAL name only
+#     when it is complete.
+#
+#     CAUGHT BY A DIFF OF FAILURE CONTENT, not by a diff of failing test ids:
+#     `atomic_artifact_write_check` was ALREADY red on the branch base for a
+#     different program, so the test id was identical on both arms and only the
+#     message differed — "1 program(s) newly write ..." became "2 program(s)",
+#     with this one named. An already-red test absorbs a new defect silently.
+# --------------------------------------------------------------------------
+def test_every_artefact_is_written_atomically():
+    import ast as _ast
+    text = (PROGRAMS / "analog_acceptance_tb_gen.py").read_text()
+    assert "_atomic_artefact" in text, (
+        "the JUnit is the Step-4 functional denominator: a writer that dies "
+        "mid-document must not leave a truncated file under the final name")
+    bare = [n.lineno for n in _ast.walk(_ast.parse(text))
+            if isinstance(n, _ast.Call)
+            and isinstance(n.func, _ast.Attribute)
+            and n.func.attr in ("write_text", "write_bytes")
+            and not (isinstance(n.func.value, _ast.Name)
+                     and n.func.value.id.startswith("_atomic"))]
+    assert not bare, (
+        f"non-atomic write(s) at line(s) {bare} — route them through "
+        f"_atomic_artefact.write_text / write_json")
+
+
+def test_the_junit_and_the_record_survive_a_re_run(tmp_path):
+    """Idempotence, byte for byte: the producer is invoked twice by the flow
+    (at Step 4, and again after the A-track)."""
+    project = _value_project(tmp_path)
+    A.emit_acceptance_checks(project, {})
+    A.run_acceptance_checks(project, {})
+    first = (A.result_dir(project) / "results.xml").read_text()
+    A.run_acceptance_checks(project, {})
+    assert (A.result_dir(project) / "results.xml").read_text().count(
+        "<testcase") == first.count("<testcase")

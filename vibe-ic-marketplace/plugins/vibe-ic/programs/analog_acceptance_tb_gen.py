@@ -96,6 +96,14 @@ if str(_HERE) not in sys.path:
 
 import _path_layout as _pl  # noqa: E402
 import _analog_a_check_common as _aac  # noqa: E402
+# EVERY artefact this producer writes is a DECLARED report destination that a
+# downstream reader opens and counts: the JUnit is the Step-4 functional
+# denominator, and the record is the per-clause evidence. A writer that dies
+# mid-document leaves a truncated file under the FINAL name, which is exactly
+# the failure `testbench_gen.run_unit_tbs` already routes around for its own
+# JUnit. `atomic_artifact_write_check` names any program that does not.
+from _atomic_artefact import write_json as _atomic_write_json  # noqa: E402
+from _atomic_artefact import write_text as _atomic_write_text  # noqa: E402
 # ONE definition of "what a PVT matrix in a verification-intent bullet is" and
 # ONE definition of "what a token of that prose is". Both live in the L22
 # emitter, which is the producer of the plan this consumer reads; importing
@@ -652,7 +660,7 @@ def emit_acceptance_checks(project: Path,
             clause_pretty=json.dumps(clause, indent=2, ensure_ascii=False),
             clause_json=json.dumps(clause, ensure_ascii=False),
             programs=str(_HERE), up=up)
-        (out / f"{clause['id']}.py").write_text(text, encoding="utf-8")
+        _atomic_write_text(out / f"{clause['id']}.py", text)
     report["check_dir"] = str(out)
     return len(derived["clauses"])
 
@@ -727,18 +735,18 @@ def run_acceptance_checks(project: Path, report: "dict | None" = None,
         return -1
     res_dir = result_dir(project)
     res_dir.mkdir(parents=True, exist_ok=True)
-    (res_dir / "results.xml").write_text(_junit(cases), encoding="utf-8")
+    _atomic_write_text(res_dir / "results.xml", _junit(cases))
     report["results_xml"] = str(res_dir / "results.xml")
     rec = project / RECORD_REL
     rec.parent.mkdir(parents=True, exist_ok=True)
-    rec.write_text(json.dumps({
+    _atomic_write_json(rec, {
         "gate": TOOL, "producer": TOOL,
         "rows_total": report["rows_total"],
         "rows_authorable": report["rows_authorable"],
         "clauses": derived["clauses"], "refusals": derived["refusals"],
         "rows": derived["rows"], "cases": cases,
         "results_xml": str(res_dir / "results.xml"),
-    }, indent=2, ensure_ascii=False), encoding="utf-8")
+    })
     report["record"] = str(rec)
     return executed if derived["clauses"] else -2
 
@@ -827,8 +835,8 @@ def main(argv: "list[str] | None" = None) -> int:
     if ns.json:
         p = Path(ns.json)
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(json.dumps(report, indent=2, ensure_ascii=False,
-                                default=str), encoding="utf-8")
+        _atomic_write_text(p, json.dumps(report, indent=2, ensure_ascii=False,
+                                         default=str) + "\n")
     # A producer never decides the run's verdict: emission/execution succeeded
     # or it reported why. The BLOCKING verdict is Step 4's, taken from the
     # JUnit this producer wrote.
