@@ -13420,20 +13420,30 @@ def _chip_top_declares_predicate(pred_name, declared_names):
     return hits[0] if len(hits) == 1 else None
 
 
-def _chip_top_param_refusals(rtl_dir, synth_top):
-    """The emission-time parameter refusals recorded for ``synth_top``, if any.
+def _chip_top_param_refusals(rtl_dir, synth_top=None):
+    """Every emission-time parameter refusal recorded in ``rtl_dir``.
 
-    Read from the sidecar rather than re-derived, so the step that FAILs and
+    Read from the sidecars rather than re-derived, so the step that FAILs and
     the emitter that refused are quoting one record and cannot drift apart.
+
+    EVERY sidecar, not the one named after this step's ``synth_top``. Measured:
+    the wrapper is emitted by whichever step gets there first — the reused-IP
+    CONSUME step names it ``chip_top``, while ``step_yosys_synth`` may then
+    re-resolve its own top to the instantiation-graph root and look for a
+    differently-named sidecar that does not exist. A refusal that is filed
+    under one name and looked up under another is a refusal nobody makes.
     """
+    out = []
     try:
-        sc = Path(rtl_dir) / f".{synth_top}__param_resolution.json"
-        if not sc.is_file():
-            return []
-        return list(json.loads(sc.read_text(errors="replace"))
-                    .get("refusals") or [])
-    except Exception:  # noqa: BLE001 — a missing/unreadable sidecar is no refusal
+        for sc in sorted(Path(rtl_dir).glob(".*__param_resolution.json")):
+            try:
+                out.extend(json.loads(sc.read_text(errors="replace"))
+                           .get("refusals") or [])
+            except Exception:  # noqa: BLE001 — one bad sidecar is not a verdict
+                continue
+    except Exception:  # noqa: BLE001 — a missing rtl_dir is no refusal
         return []
+    return out
 
 
 def _chip_top_resolve_excluded_variant_params(project, rtl_dir, param_block,
