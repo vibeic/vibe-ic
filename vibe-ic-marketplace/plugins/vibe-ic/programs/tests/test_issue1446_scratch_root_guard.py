@@ -925,8 +925,8 @@ def _can_really_mkdir_in(d: Path) -> bool:
     """Whether this process can actually create a directory in ``d``.
 
     Asked by doing it. Nothing else is authoritative: a read-only bind mount, a
-    full filesystem and a directory whose mode bits are generous to a group this
-    process is not in all pass `os.access(d, os.W_OK)`.
+    full filesystem and a directory whose mode bits are generous to a group
+    this process is not in all pass `os.access(d, os.W_OK)`.
     """
     try:
         probe = Path(tempfile.mkdtemp(prefix="vibeic1446-probe-", dir=str(d)))
@@ -948,13 +948,14 @@ def _a_non_volatile_root() -> Path:
     a checkout that itself lives under a volatile root.
 
     THAT WAS NOT ENOUGH, and the reason is worth stating because it is a fact
-    about the mounts and not about the tree. `tools/ci/run_suite_in_eda_image.sh`
+    about the mounts and not the tree. `tools/ci/run_suite_in_eda_image.sh`
     binds the repository at its OWN path, which it must do for
     docker-out-of-docker path fidelity, and the daemon then CREATES every
     missing ancestor of that path root-owned 0755. The container user is 1000,
-    so EVERY ancestor above the checkout is unwritable, and the account home the
-    harness supplies is under `/var/tmp` and therefore volatile. Measured
-    2026-09-06 on 8HD-9 against image 0.3.46: this helper walked nine candidates,
+    so EVERY ancestor above the checkout is unwritable, and the account
+    home the harness supplies is under `/var/tmp`, therefore volatile. Measured
+    2026-09-06 on 8HD-9 against image 0.3.46: this helper walked nine
+    candidates,
     rejected all nine, and this arm failed for the mount shape.
 
     So the walk does not stop at the ancestors. It goes on to ENUMERATE the top
@@ -962,8 +963,8 @@ def _a_non_volatile_root() -> Path:
     is still walking rather than naming — nothing here knows what the image
     calls its writable directory, and in that shape the answer turned out to be
     `/headless`. The ancestors are tried FIRST and unchanged, so every shape
-    that already had an answer returns exactly the answer it returned before and
-    pays nothing for this paragraph.
+    that already had an answer returns exactly the answer it returned
+    before and pays nothing for this paragraph.
 
     The predicate is untouched. The only thing that changed is that the helper
     stops giving up while it still has somewhere to look.
