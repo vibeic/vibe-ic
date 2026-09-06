@@ -548,7 +548,9 @@ def run_docker_supervised(container: str, cmd: str, marker: str, *,
                           hard_ceiling_s: float = DEFAULT_HARD_CEILING_S,
                           term_grace_s: float = _TERM_GRACE_S,
                           ceiling_notice: Optional[
-                              Callable[[Dict[str, Any]], None]] = None
+                              Callable[[Dict[str, Any]], None]] = None,
+                          abort_probe: Optional[
+                              Callable[[], Optional[str]]] = None
                           ) -> Tuple[int, str, str]:
     """Launch `cmd` inside `container` (or on the host when container is ''/
     'host') under the progress-stall watchdog. Returns (rc, out, err) where rc
@@ -775,7 +777,19 @@ def run_docker_supervised(container: str, cmd: str, marker: str, *,
         res = _wd.run_supervised(
             full, log_path=log_path, cpu_probe=_cpu_probe, kill=_kill,
             stall_grace_s=stall_grace_s, poll_s=poll_s,
-            hard_ceiling_s=hard_ceiling_s, ceiling_notice=_on_ceiling)
+            hard_ceiling_s=hard_ceiling_s, ceiling_notice=_on_ceiling,
+            # PASSED THROUGH, not reimplemented. `abort_probe` is the CALLER'S
+            # OWN domain read of "this job is progressing but going NOWHERE" —
+            # the one shape the stall watchdog cannot see, a tool burning a
+            # full core and emitting nothing, which every generic signal reads
+            # as healthy forever. It is NOT a clock: it stops a job on a
+            # measurement over that job's own output (rc RC_ABORTED), which is
+            # exactly what vibe-ic#2051 asks for in place of a wall clock.
+            # Without this parameter, a caller with its own predicate could not
+            # move onto this shared path without LOSING it — `phase3_one_shot_
+            # runner` passes `_drc_produced_nothing` at two sites. Default None
+            # is byte-identical to before for every existing caller.
+            abort_probe=abort_probe)
         if telemetry_path is not None:
             attempt_elapsed_s = round(time.monotonic() - telemetry_started, 3)
             # A STOP IS A STOP WE MADE. `progress_stalled` is ours — the

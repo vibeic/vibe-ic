@@ -1259,51 +1259,43 @@ def _docker_exec(container: str, cmd: str, timeout: int = 1800, *,
                else hard_ceiling_s)
     poll = _WATCHDOG_POLL_S if poll_s is None else poll_s
 
-    # OUTER backstop only: wrap with a container-side `timeout` at the CEILING so
-    # the in-container tool self-terminates even if the host watchdog dies.
-    # DELEGATED to `_docker_watchdog.wrap_with_container_timeout` — this file
-    # used to rebuild that string inline, which is how the reap below came to
-    # be a second copy of the same code (see `_kill`).
-    cmd = _tool_status_not_the_log_sinks(cmd)
-    # Per-invocation IDENTITY STAMP: the job records its own (pid, starttime)
-    # at spawn so `_kill` can select IT and nothing else.
-    _pidfile = _dwd.new_job_pidfile()
-    _wrapped = _dwd.wrap_with_container_timeout(cmd, ceiling,
-                                                pidfile=_pidfile)
-    full = _exec_argv(container, _wrapped)
-
-    def _cpu_probe(_proc):
-        return _container_cpu_seconds(container, marker, pidfile=_pidfile)
-
-    def _kill(_proc, reason):
-        # DELEGATED to the ONE identity-anchored reap in `_docker_watchdog`.
-        # This closure used to be a second, independent copy of the marker
-        # `pkill -f` reap — same defect in two files, so fixing either one
-        # alone left the other live. It now signals only the process whose
-        # stamped (pid, /proc starttime) still matches, plus that process's
-        # descendants; a stranger sharing the tool's command line is never
-        # selected. See the block comment above
-        # `_docker_watchdog.new_job_pidfile` for the measurement.
-        _dwd.kill_supervised_job(container, _pidfile,
-                                 docker_exec_raw=_docker_exec_raw,
-                                 term_grace_s=_WATCHDOG_TERM_GRACE_S)
-        try:
-            _proc.kill()
-        except Exception:  # nosec — release the host docker exec client
-            pass
-
     _t0 = time.monotonic()
-    try:
-        res = _wd.run_supervised(
-            full, log_path=log_path, cpu_probe=_cpu_probe, kill=_kill,
-            stall_grace_s=grace, poll_s=poll, hard_ceiling_s=ceiling,
-            abort_probe=abort_probe)
-    finally:
-        _dwd.cleanup_job_pidfile(container, _pidfile, _docker_exec_raw)
-    _log_invocation(cmd, res.rc if res.rc is not None else -1,
+    # THE SHARED SUPERVISED DISPATCH, AND NO CLOCK (vibe-ic#2051, v1.18.28).
+    #
+    # This file used to run its own copy: it wrapped the in-container command
+    # in a GNU `timeout` at the ceiling and then drove `_wd.run_supervised`
+    # with hand-rolled cpu/kill closures. Two defects in one:
+    #
+    #   * the wrap is an OUTER WALL CLOCK. It SIGKILLs the tool at the budget
+    #     however well the job is going — the thing #2051 removed, after a
+    #     still-converging proof was killed at 86395 s and the flow recorded a
+    #     design it had never finished comparing. `supervised_container_command`
+    #     (used by the shared path) carries the identity stamp and NO clock.
+    #   * a private copy of a supervised dispatch is how two files come to
+    #     disagree about what stops a job. The reap and the wrap STRING were
+    #     already delegated here; the DISPATCH was the last piece.
+    #
+    # The wrap's other purpose survives without it, measured rather than
+    # assumed: `docker exec` already starts each exec in its own session, so
+    # the stamping shell is ALREADY the process-group leader and the identity
+    # reap signals that whole group.
+    #
+    # `container=""` is the NATIVE mode the shared path documents, which is
+    # exactly this lane's in-image route: no container to exec into, job and
+    # probes in this process's own table.
+    res_rc, res_out, res_err = _dwd.run_docker_supervised(
+        "" if _local_exec_mode() else container,
+        _tool_status_not_the_log_sinks(cmd), marker,
+        docker_exec_raw=_docker_exec_raw,
+        log_path=log_path,
+        stall_grace_s=grace, poll_s=poll, hard_ceiling_s=ceiling,
+        term_grace_s=_WATCHDOG_TERM_GRACE_S,
+        # the caller's OWN domain read, carried through rather than dropped
+        abort_probe=abort_probe)
+    _log_invocation(cmd, res_rc if res_rc is not None else -1,
                     int((time.monotonic() - _t0) * 1000), marker=marker,
                     container=container, outputs=outputs)
-    return res.rc, res.out, _annotate_local_exec(res.rc, res.err)
+    return res_rc, res_out, _annotate_local_exec(res_rc, res_err)
 
 
 def _docker_timeout_isolate(outputs: List[Path]) -> None:

@@ -107,7 +107,10 @@ def test_the_route_predicate_is_not_duplicated_here():
     """One question, one definition. A second copy is how two exec surfaces
     come to disagree about which route a run took."""
     code = _code_of("design_one_shot_runner.py", "_local_exec_mode")
-    assert "_cex.local_exec_mode" in code, code
+    # ONE alias since czimg4 landed: this file already imported
+    # `_container_exec as _ce` for the guarded argv builder, so a second alias
+    # for the same module was a way for two call sites to look unrelated.
+    assert "_ce.local_exec_mode" in code, code
     assert "shutil.which" not in code, code
     assert "EDA_CONTAINER" not in code, code
 
@@ -219,7 +222,7 @@ def test_in_the_image_every_path_is_reachable(monkeypatch, cex):
     for a file on the runner's own disk and the caller staged it into a
     container that does not exist."""
     d = _load("design_one_shot_runner")
-    monkeypatch.setattr(d._cex, "no_container_route", lambda: True)
+    monkeypatch.setattr(d._ce, "no_container_route", lambda: True)
     d._CONTAINER_MOUNTS_CACHE.clear()
     assert d._path_in_container("/anywhere/at/all.v", "C") is True
     assert d._container_mounts("C") == []
