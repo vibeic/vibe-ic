@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1272
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1272)
+- **Total programs (excluding helpers / shims):** 1273
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1273)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1263 |
+| `any` | 1264 |
 
 ## Alphabetical listing
 
@@ -1284,6 +1284,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `wake_pulse_width_matches_measurement_check` | any | Wave 18 | Half-duplex single-wire bit-bang protocols typically specify the chip's |
 | `wall_clock_bound_standing_in_for_a_verdict` | any | — | A short wall-clock deadline asserted as a substantive finding. |
 | `warn_acceptance_policy_check` | any | — | O3: Enforce that every WARN finding from gate programs is explicitly addressed before the flow can declare PASS. |
+| `watchdog_ceiling_semantics_check` | any | — | supervision is not a SHAPE, it is a SEMANTICS. THIS GATE BLOCKS (rc=1). |
 | `waveform_artifact_hygiene_check` | any | — | no sim waveform dumps in the bundle. |
 | `waveform_ext_synth` | any | — | DETERMINISTIC waveform → RTL synthesizer, COMPLEMENT to ``waveform_truth_table_synth.py`` (v1.1.76 completeness wave-2 absorption). |
 | `waveform_table_conformance_check` | any | — | plugin gate (ORGANIC #716 / Prob098_circuit7). |
@@ -1344,7 +1345,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1263 programs)
+### `any` (1264 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `absence_verdict_names_its_search_space_check` — "not found" must say WHERE it looked.
@@ -2596,6 +2597,7 @@ _(no programs in this group)_
 - `wake_pulse_width_matches_measurement_check` — Half-duplex single-wire bit-bang protocols typically specify the chip's  _[Wave 18]_
 - `wall_clock_bound_standing_in_for_a_verdict` — A short wall-clock deadline asserted as a substantive finding.
 - `warn_acceptance_policy_check` — O3: Enforce that every WARN finding from gate programs is explicitly addressed before the flow can declare PASS.
+- `watchdog_ceiling_semantics_check` — supervision is not a SHAPE, it is a SEMANTICS. THIS GATE BLOCKS (rc=1).
 - `waveform_artifact_hygiene_check` — no sim waveform dumps in the bundle.
 - `waveform_ext_synth` — DETERMINISTIC waveform → RTL synthesizer, COMPLEMENT to ``waveform_truth_table_synth.py`` (v1.1.76 completeness wave-2 absorption).
 - `waveform_table_conformance_check` — plugin gate (ORGANIC #716 / Prob098_circuit7).
