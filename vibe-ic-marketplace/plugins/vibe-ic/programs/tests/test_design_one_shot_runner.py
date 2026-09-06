@@ -193,3 +193,170 @@ def test_dft_clock_wrapper_suffix_beats_secondary_clock():
     assert derive("input core_clk;\ninput data;") == "core_clk"
     # allow-list names are unaffected (first branch), still exact
     assert derive("input i_clk;\ninput user_clock2;") == "i_clk"
+
+
+# ── #2053 emitter half — the emitted candidate STATES its simulation unit ────
+# The AI-challenge boundary compiles the candidate together with the challenge
+# testbench, so a candidate that declares no `timescale inherits whichever unit
+# the compiler read FIRST: the same correct candidate then passed or failed on
+# iverilog's argument order alone. The boundary's half (refuse a pair whose
+# declared units disagree) landed in v1.17.96; this is the emitter's half — it
+# states the unit the project DECLARES, and never guesses one.
+def _load_runner():
+    spec = _ilu.spec_from_file_location("_d1s_ts", str(PROG))
+    mod = _ilu.module_from_spec(spec)
+    sys.modules["_d1s_ts"] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+_EMITTED_RTL = "module chip_top(input clk);\nendmodule\n"
+
+
+class _FakeChain:
+    """Stands in for deterministic_emit_chain: one emitter, one known body."""
+    @staticmethod
+    def try_emit_ex(text, ifc, top):
+        return "fake_emitter", _EMITTED_RTL, []
+
+    @staticmethod
+    def which_emitters():
+        return ["fake_emitter"]
+
+
+def _emit_candidate(project: Path, mod):
+    sys.modules["deterministic_emit_chain"] = _FakeChain
+    try:
+        res = mod._try_spec_artifact_registry_rtl(
+            project, 0.0, phase1_plain_text="a parse-complete prompt")
+    finally:
+        sys.modules.pop("deterministic_emit_chain", None)
+    return res, (project / "phase2" / "stage1" / "rtl" / "chip_top.sv")
+
+
+def _seed_tb(project: Path, body: str, name: str = "tb_chip_top.v") -> Path:
+    tb = project / "phase2" / "stage1" / "tb"
+    tb.mkdir(parents=True, exist_ok=True)
+    f = tb / name
+    f.write_text(body)
+    return f
+
+
+def test_emitted_candidate_states_the_declared_timescale(tmp_path):
+    project = tmp_path / "proj"
+    project.mkdir()
+    _seed_tb(project, "`timescale 1ns / 1ps\nmodule tb; endmodule\n")
+    mod = _load_runner()
+    res, out = _emit_candidate(project, mod)
+    assert res.status == "PASS"
+    text = out.read_text()
+    # RED on main: the emitter published `_EMITTED_RTL` verbatim, stating no unit.
+    assert text.startswith("`timescale 1ns/1ps\n")
+    assert text.endswith(_EMITTED_RTL)
+    assert res.extras["declared_timescale"] == "1ns/1ps"
+    assert mod._declared_timescale(text) == "1ns/1ps"
+
+
+def test_emitted_candidate_takes_the_unit_the_testbench_declares(tmp_path):
+    # Not a default: a different declared unit produces a different statement.
+    project = tmp_path / "proj"
+    project.mkdir()
+    _seed_tb(project, "`timescale 10ps / 1ps\nmodule tb; endmodule\n")
+    res, out = _emit_candidate(project, _load_runner())
+    assert out.read_text().startswith("`timescale 10ps/1ps\n")
+    assert res.extras["declared_timescale"] == "10ps/1ps"
+
+
+def test_no_declared_unit_leaves_the_candidate_unchanged_and_refuses_by_name(tmp_path):
+    # CONTROL. Nothing declares a unit, so nothing is imposed: the emitted file
+    # is byte-identical to what the emitter wrote, and the refusal is NAMED.
+    project = tmp_path / "proj"
+    project.mkdir()
+    _seed_tb(project, "module tb; endmodule\n")
+    res, out = _emit_candidate(project, _load_runner())
+    assert res.status == "PASS"
+    assert out.read_text() == _EMITTED_RTL
+    assert "declared_timescale" not in res.extras
+    assert res.extras["timescale_refusal"].startswith(
+        "RTL_TIMESCALE_NOT_DECLARED")
+    assert "RTL_TIMESCALE_NOT_DECLARED" in res.detail
+
+
+def test_a_commented_out_timescale_is_prose_not_a_declaration(tmp_path):
+    project = tmp_path / "proj"
+    project.mkdir()
+    _seed_tb(project, "// `timescale 1ns / 1ps\nmodule tb; endmodule\n")
+    res, out = _emit_candidate(project, _load_runner())
+    assert out.read_text() == _EMITTED_RTL
+    assert res.extras["timescale_refusal"].startswith(
+        "RTL_TIMESCALE_NOT_DECLARED")
+
+
+def test_disagreeing_declarations_are_refused_by_name(tmp_path):
+    project = tmp_path / "proj"
+    project.mkdir()
+    _seed_tb(project, "`timescale 1ns / 1ps\nmodule a; endmodule\n", "tb_a.v")
+    _seed_tb(project, "`timescale 10ps / 1ps\nmodule b; endmodule\n", "tb_b.v")
+    res, out = _emit_candidate(project, _load_runner())
+    assert out.read_text() == _EMITTED_RTL
+    ref = res.extras["timescale_refusal"]
+    assert ref.startswith("RTL_TIMESCALE_DECLARATIONS_DISAGREE")
+    assert "1ns/1ps" in ref and "10ps/1ps" in ref
+    assert "tb_a.v" in ref and "tb_b.v" in ref
+
+
+def test_an_emitter_that_states_its_own_unit_is_not_restated(tmp_path):
+    project = tmp_path / "proj"
+    project.mkdir()
+    _seed_tb(project, "`timescale 1ns / 1ps\nmodule tb; endmodule\n")
+    mod = _load_runner()
+    own = "`timescale 1ns / 1ps\n" + _EMITTED_RTL
+    assert mod._state_declared_timescale(own, "1ns/1ps") == own
+    assert mod._state_declared_timescale(_EMITTED_RTL, None) == _EMITTED_RTL
+
+
+# ── #2061 R-01 — evidence windows are whole lines, never byte-counted ────────
+def test_evidence_head_keeps_the_pass_line_whole(tmp_path):
+    mod = _load_runner()
+    # The measured shape: sdc_gen prints one PASS line naming a long path.
+    line = "PASS sdc_gen: wrote " + "x" * 300 + "/chip_top.sdc"
+    kept = mod._evidence_head(line + "\ntrailing\n")
+    assert kept == line                 # whole line, not `line[:200]`
+    assert "\n" not in kept
+
+
+def test_evidence_head_never_cuts_a_line_whatever_the_path_length(tmp_path):
+    mod = _load_runner()
+    tail = "PASS sdc_gen: 1 constraint emitted"
+
+    def window(path_len):
+        src = "reading /" + "p" * path_len + "/proj/design.json\n" + tail + "\n"
+        return src, mod._evidence_head(src)
+
+    # Byte-counted, each window ENDED at a different offset inside the path and
+    # published half a path. Line-aligned, every line published is a whole line
+    # of the input, at both lengths.
+    for path_len in (40, 120, 400):
+        src, win = window(path_len)
+        lines = src.splitlines()
+        assert win
+        for ln in win.splitlines():
+            assert ln in lines
+        assert win.splitlines()[0] == lines[0]
+
+
+def test_evidence_head_leaves_a_short_string_byte_identical():
+    mod = _load_runner()
+    for s in ("", "ok", "PASS sdc_gen: done\nsecond line"):
+        assert mod._evidence_head(s) == s
+
+
+def test_evidence_tail_starts_on_a_line_boundary():
+    mod = _load_runner()
+    text = "/" + "q" * 500 + "/proj refused\nbecause the deck is absent\n"
+    kept = mod._evidence_tail(text)
+    assert kept == "because the deck is absent\n"
+    assert mod._evidence_tail("short") == "short"
+    # a single line longer than the budget still begins on a token
+    one = "alpha " + "z" * 600
+    assert mod._evidence_tail(one) == "z" * 400

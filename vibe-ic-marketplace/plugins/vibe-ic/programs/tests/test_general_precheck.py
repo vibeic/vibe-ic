@@ -735,3 +735,47 @@ def test_g10_the_guard_sees_the_collision_it_was_written_for():
               "reports/phase3/antenna_signoff.json",
               "reports/phase3/drc_router.json"):
         assert p in owned, p
+
+
+# ── #2061 R-04 — a delegate's published evidence is whole lines, never a byte
+# tail. Measured on the tree that ships: the 400-char TAIL began mid-token at a
+# point set by the LENGTH OF THE PROJECT PATH, so the same refusal published
+# different evidence text from two directories.
+def _gp_module():
+    import importlib.util as ilu
+    prog = Path(__file__).resolve().parent.parent / "general_precheck.py"
+    spec = ilu.spec_from_file_location("_gp_ev", str(prog))
+    mod = ilu.module_from_spec(spec)
+    sys.modules["_gp_ev"] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_evidence_tail_is_the_same_text_from_two_project_paths():
+    mod = _gp_module()
+    body = ("refusing: the rule deck is absent\n"
+            "checked 3 candidate decks\n")
+
+    def published(path_len):
+        proj = "/" + "d" * path_len + "/proj"
+        return mod._evidence_tail(f"reading {proj}/layout.gds\n" + body)
+
+    short, long = published(420), published(900)
+    # Both inputs are longer than the 400-char budget. BYTE-COUNTED the pair
+    # differed -- one window started inside `/ddd...`, the other inside
+    # `layout.gds`. Line-aligned they are the SAME evidence text.
+    assert short == long == body
+
+
+def test_evidence_tail_never_starts_mid_token():
+    mod = _gp_module()
+    text = "/" + "q" * 500 + "/proj refused\nbecause the deck is absent\n"
+    assert mod._evidence_tail(text) == "because the deck is absent\n"
+    # a single line longer than the budget still begins on a token boundary
+    assert mod._evidence_tail("alpha " + "z" * 600) == "z" * 400
+
+
+def test_evidence_tail_leaves_a_short_string_byte_identical():
+    mod = _gp_module()
+    for s in ("", "rc=1", "refused: no deck\nsecond line\n"):
+        assert mod._evidence_tail(s) == s
