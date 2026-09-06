@@ -127,9 +127,17 @@ json.dump({"selected_labels": [sys.argv[3]], "gates_declared": 1, "x": x},
 _WEDGED = "import time\ntime.sleep(36000)\n"
 
 
-def _fast(argv, **kw):
-    """The REAL supervisor, sampled fast. Not a stub — `_pr.run` itself."""
-    return _pr.run(argv, stall_looks=_LOOKS, poll_s=_POLL_S, **kw)
+def _fast(argv, progress_path):
+    """The REAL configuration point, sampled fast — `supervise_one_worker`.
+
+    Not a paraphrase of it: the progress channel, the env var, the log-path
+    watch and the `Stalled` conversion are all the shipped ones. Only the
+    OBSERVATION CADENCE moves, and `_progress_run` is explicit that sampling
+    more often never kills a working job sooner.
+    """
+    return G.supervise_one_worker(argv, progress_path,
+                                  stall_grace_s=_STALL_WINDOW_S,
+                                  poll_s=_POLL_S)
 
 
 def _launch(tmp_path: Path, n: int):
@@ -219,10 +227,13 @@ def test_a_wedged_worker_is_stopped_and_the_reason_is_named(tmp_path):
         f"the wedged worker came back rc={rc!r} with stall={stall!r}; a child "
         f"asleep for ten hours has stopped, and a supervisor that did not "
         f"notice is not supervising")
-    assert "STALLED" in stall and "signals readable" in stall, (
+    assert "STALLED" in stall and "signals" in stall, (
         f"the refusal does not say WHAT was seen: {stall}")
-    assert str(_LOOKS) in stall, (
-        f"the refusal does not name the number of looks it spent: {stall}")
+    assert "idle" in stall and "grace" in stall, (
+        f"the refusal does not say how long the job had shown nothing, of what "
+        f"grace: {stall}")
+    assert "across 0 consecutive looks" not in stall, (
+        f"the refusal describes an observation nobody made: {stall}")
     assert not json_path.is_file(), (
         "a stopped worker wrote a machine record, so it was not wedged and "
         "this arm is measuring something else")
@@ -291,6 +302,68 @@ def test_the_same_supervisor_at_one_cadence_tells_the_two_apart(tmp_path):
     assert not wedged_rec.is_file() and slow_rec.is_file(), (
         "the two arms did not leave opposite records, so the pool did not "
         "actually run them differently")
+
+
+#: A child that is silent, burns no measurable CPU and does no block I/O — the
+#: shape of a worker QUEUED on the single-holder checkout claim — but which
+#: appends one earned line to the progress channel while it waits.
+_QUEUED_BUT_TALKING = """
+import os, sys, time
+ch = os.environ.get("VIBEIC_HOSTINDEP_WORKER_PROGRESS", "")
+t = time.monotonic()
+while time.monotonic() - t < float(sys.argv[1]):
+    time.sleep(0.3)
+    if ch:
+        open(ch, "a").write("claim: still queued\\n")
+"""
+
+#: The same child with the channel taken away: it does nothing observable at all.
+_QUEUED_AND_SILENT = """
+import sys, time
+t = time.monotonic()
+while time.monotonic() - t < float(sys.argv[1]):
+    time.sleep(0.3)
+"""
+
+
+def test_a_worker_queued_on_the_claim_is_not_mistaken_for_a_wedged_one(tmp_path):
+    """THE REGRESSION THIS CHANNEL EXISTS FOR, both directions in one file.
+
+    MEASURED on 8hd-3 at f3e5bd985, the real gate at `--jobs 8`, supervised on
+    the GENERIC signals alone: three of eight workers were reaped as stalled and
+    every one of them was working correctly — worker 0 at 645.1 s carrying the
+    646 s gate, worker 2 at 810.1 s, worker 5 at 210.0 s, all three with
+    `signals readable: cpu,io,output`. The checkout claim is a single-holder
+    `flock` polled every 0.25 s, so seven of eight workers are queued at any
+    moment: silent, no block I/O, and four syscalls a second is under one clock
+    tick. A process correctly waiting on a lock and a wedged one are the same
+    picture to every generic signal there is.
+
+    So the two arms here differ in ONE thing — whether the child says it is
+    still queued — and they must come back with opposite verdicts.
+    """
+    idle_s = _STALL_WINDOW_S * 5
+
+    talking = tmp_path / "talking.json"
+    rows = G.run_workers_supervised(
+        [(0, ["queued but reporting"], talking,
+          [sys.executable, "-c", _QUEUED_BUT_TALKING, str(idle_s)])],
+        1, run_fn=_fast)
+    assert not rows[0][6], (
+        f"a worker that was queued for {idle_s:.1f}s — "
+        f"{idle_s / _STALL_WINDOW_S:.0f}x the window — and SAID SO on the "
+        f"progress channel was still reaped: {rows[0][6]}. That is the "
+        f"measured regression, unfixed.")
+
+    silent = tmp_path / "silent.json"
+    rows = G.run_workers_supervised(
+        [(0, ["queued and silent"], silent,
+          [sys.executable, "-c", _QUEUED_AND_SILENT, str(idle_s)])],
+        1, run_fn=_fast)
+    assert rows[0][6], (
+        "the SAME shape with the channel taken away was NOT reaped, so the "
+        "channel is not what kept the first arm alive and this test proves "
+        "nothing about it")
 
 
 def test_the_deleted_wall_clock_kill_would_lose_the_record(tmp_path):
@@ -424,7 +497,7 @@ def test_the_ast_check_above_can_actually_see_a_reintroduced_deadline(tmp_path):
     src = (_PROGRAMS / "gate_host_independence_check.py").read_text(
         encoding="utf-8")
     mutated = src.replace(
-        "            cp = launch(argv, capture_output=True, text=True)\n",
+        "            cp = launch(argv, progress_path)\n",
         "            proc = subprocess.Popen(argv)\n"
         "            try:\n"
         "                out, err = proc.communicate(timeout=600)\n"

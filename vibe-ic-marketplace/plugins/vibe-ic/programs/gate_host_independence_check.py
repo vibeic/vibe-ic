@@ -209,6 +209,7 @@ from hygiene_shard_plan import load_profile, plan          # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _progress_run as _pr  # noqa: E402
+import _watchdog as _wd  # noqa: E402
 
 #: Scratch prefix.  UNCHANGED from the leaking version on purpose — the reaper
 #: keys on it, so the directories a pre-fix build already left behind are the
@@ -222,11 +223,62 @@ _SCRATCH_PREFIX = "hostindep-"
 #: program's whole subject is a gate that writes into the tree it measures.
 _CLAIM_PREFIX = "vibeic-ckout-claim-"
 
+#: WHERE A WORKER SAYS IT IS STILL THERE. The parent sets this to a file it
+#: supervises for growth; the worker appends one line per semantic event. Unset
+#: (a standalone run) makes every call below a no-op.
+#:
+#: WHY A CHANNEL AND NOT THE GENERIC SIGNALS. MEASURED on 8hd-3 at f3e5bd985,
+#: the real gate, `--jobs 8`: routing the workers through the progress
+#: supervisor on output/CPU/IO alone REAPED THREE OF THEM —
+#:
+#:   worker 0  1 label   STALLED: no forward progress across 12 consecutive
+#:             looks (15.00s apart, 645.1s elapsed); signals readable: cpu,io,output
+#:   worker 2  15 labels  same, 810.1s elapsed
+#:   worker 5  21 labels  same, 210.0s elapsed
+#:
+#: and every one of them was WORKING CORRECTLY. The checkout claim below is a
+#: single-holder `flock` polled every 0.25 s, and the shipped wiring is
+#: `--jobs 8`, so SEVEN workers are blocked on it at any moment: no output, no
+#: block I/O, and four `flock` attempts a second is far under one clock tick of
+#: CPU. A process correctly waiting on a lock is indistinguishable from a wedged
+#: one by every GENERIC signal there is. That is not a defect in the supervisor
+#: — it is the supervisor's own documented requirement, that a caller with
+#: semantics of its own must hand them over.
+_WORKER_PROGRESS_ENV = "VIBEIC_HOSTINDEP_WORKER_PROGRESS"
+
+
+def note_worker_progress(event: str) -> None:
+    """Append ONE semantic event to the parent's progress channel.
+
+    FINITE AND EARNED, never a heartbeat on a timer: every call site below is a
+    thing that actually happened — a claim acquired, a claim still queued behind
+    a named holder, a gate label finished. A line emitted by a clock would be
+    the wall clock coming back in through the supervisor's own door.
+    """
+    path = os.environ.get(_WORKER_PROGRESS_ENV, "")
+    if not path:
+        return
+    try:
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(event.replace("\n", " ")[:400] + "\n")
+    except OSError:
+        # A worker that cannot say where it is must still do its work. Losing
+        # the channel costs supervision, never the drive.
+        pass
+
+
 #: How long a drive waits for the claim before giving up on ATTRIBUTION. It
 #: never gives up on the DRIVE: the verdict is this gate's job and the
 #: attribution is a side observation, so a busy checkout must cost the second,
 #: never the first.
 _CLAIM_WAIT_S = 600
+
+#: How much queued time earns one line on the progress channel. NOT a heartbeat
+#: cadence dressed up: the event is "this worker is still queued", it is only
+#: true while it is true, and it stops the moment the claim is taken or given
+#: up on. Well under the supervisor's own 12-look window so a queued worker is
+#: never mistaken for a stopped one.
+_CLAIM_NOTE_EVERY_S = 10.0
 
 #: A gate may DECLARE itself out of this comparison, on the line above its own
 #: `run` line, in the script where it is wired:
@@ -925,6 +977,7 @@ class _CheckoutClaim:
             self.why = f"the claim file could not be opened: {exc}"
             return self
         deadline = time.monotonic() + self.wait_s
+        waited = 0.0
         while True:
             try:
                 fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -934,11 +987,21 @@ class _CheckoutClaim:
                     self.why = (f"another driver held the claim on this "
                                 f"checkout for {self.wait_s:g}s")
                     return self
+                # STILL QUEUED, and that is a real event: this worker is
+                # alive, correctly blocked, and has not stopped. Without it the
+                # seven workers that are not holding the claim look frozen to
+                # any generic progress signal.
+                waited += 0.25
+                if waited >= _CLAIM_NOTE_EVERY_S:
+                    waited = 0.0
+                    note_worker_progress(
+                        f"claim: still queued for {self.repo_root.name}")
                 time.sleep(0.25)
                 continue
             self._fh = fh
             self.held = True
             self.why = "held"
+            note_worker_progress(f"claim: held for {self.repo_root.name}")
             return self
 
     def __exit__(self, *exc) -> bool:
@@ -1545,6 +1608,11 @@ def audit(repo_root: Path, timeout: int = 600,
                                     + "  || second run "
                                     + _attestation_summary(rec_b2, 120),
                     })
+            # ONE EARNED EVENT PER LABEL, at the end of the drive that
+            # produced it. This is the semantics the generic signals
+            # cannot see: a worker holding the claim and driving a 646 s
+            # gate emits nothing at all until it is done.
+            note_worker_progress(f"label done: {label}")
     finally:
         _release_scratch(res, repo_root)
 
@@ -1684,6 +1752,41 @@ def precomputed_audit(repo_root: Path, checkout_attestations: Path,
                  None, pointer)
 
 
+def supervise_one_worker(argv, progress_path, **supervision):
+    """ONE worker, supervised by forward progress. Raises `_pr.Stalled`.
+
+    THE ONE PLACE the supervision is configured, so a test that wants a faster
+    OBSERVATION CADENCE drives this exact function rather than a paraphrase of
+    it: two readers of one contract is how the two drift apart, and the drifted
+    one is always the one that was not measured.
+
+    `**supervision` reaches `_watchdog.run_host_supervised` unchanged. It is a
+    cadence, never a bound: `_progress_run` is explicit that "sampling more
+    often never kills a working job sooner".
+    """
+    env = dict(os.environ)
+    env[_WORKER_PROGRESS_ENV] = str(progress_path)
+    res = _wd.run_host_supervised(argv, log_path=str(progress_path), env=env,
+                                  **supervision)
+    if res.outcome in ("stalled", "ceiling"):
+        # THE REFUSAL CARRIES WHAT WAS SEEN, in the supervisor's own numbers.
+        # An earlier version handed `_pr.Stalled` zeros for looks and cadence
+        # because this path does not compute them, and the message then read
+        # "across 0 consecutive looks (0.00s apart)" — a refusal describing an
+        # observation nobody made. The grace and the cadence are what this call
+        # actually asked for, and the idle figure is what `_watchdog` measured.
+        grace = float(supervision.get("stall_grace_s",
+                                      _wd.DEFAULT_STALL_GRACE_S))
+        poll = float(supervision.get("poll_s", max(0.25, grace / 4.0)))
+        watched = res.supervision.get("watched", "?")
+        idle = res.supervision.get("since_last_progress_s", "?")
+        raise _pr.Stalled(
+            argv, max(1, int(round(grace / poll))), poll, res.elapsed_s,
+            {f"{watched} (idle {idle}s of a {grace:g}s grace)": True},
+            _wd._as_text(res.out), _wd._as_text(res.err))
+    return subprocess.CompletedProcess(argv, res.rc, res.out, res.err)
+
+
 def run_workers_supervised(specs, jobs: int, run_fn=None):
     """Launch and supervise every parallel worker BY FORWARD PROGRESS.
 
@@ -1743,6 +1846,28 @@ def run_workers_supervised(specs, jobs: int, run_fn=None):
     finding about the tree, and only a worker that STOPPED is a finding about
     the machine.
 
+    THE WORKER HANDS OVER ITS OWN SEMANTICS, and that is not decoration.
+    MEASURED on 8hd-3 at f3e5bd985, the real gate, `--jobs 8`: supervising these
+    workers on the GENERIC signals alone — output, the process tree's CPU, its
+    block I/O — reaped THREE OF EIGHT, every one of them working correctly::
+
+        worker 0   1 label   STALLED across 12 looks (15.00s apart, 645.1s)
+        worker 2  15 labels  STALLED across 12 looks (15.00s apart, 810.1s)
+        worker 5  21 labels  STALLED across 12 looks (15.00s apart, 210.0s)
+        signals readable on all three: cpu,io,output
+
+    The checkout claim is a single-holder `flock` polled every 0.25 s and the
+    shipped wiring is `--jobs 8`, so SEVEN workers are queued on it at any
+    moment: no output, no block I/O, and four `flock` attempts a second is far
+    under one clock tick of CPU. A process CORRECTLY WAITING ON A LOCK is
+    indistinguishable from a wedged one by every generic signal there is. So
+    each worker gets `_WORKER_PROGRESS_ENV` and appends one EARNED line per
+    semantic event — a claim taken, a claim still queued, a gate label
+    finished — and the parent watches that file for growth. The generic signals
+    still cover the DRIVING phase (a gate under `_run_gate` is a real child
+    whose CPU advances); the channel covers the QUEUED phase, which is the half
+    they cannot see. Together they cover the worker's whole life.
+
     ``run_fn`` IS AN OBSERVATION-CADENCE SEAM, NOT A DEADLINE KNOB. It exists so
     a test can drive the REAL supervisor at a fast sampling cadence instead of
     waiting out the production one (12 looks, about six minutes of total
@@ -1751,12 +1876,17 @@ def run_workers_supervised(specs, jobs: int, run_fn=None):
     sooner" — so nothing a caller can pass here can shorten the life of a
     worker that is still moving. Production passes nothing.
     """
-    launch = run_fn if run_fn is not None else _pr.run
+    launch = run_fn if run_fn is not None else supervise_one_worker
 
     def one(spec):
         i, labels, json_path, argv = spec
+        progress_path = Path(str(json_path) + ".progress")
         try:
-            cp = launch(argv, capture_output=True, text=True)
+            progress_path.touch()
+        except OSError:
+            pass
+        try:
+            cp = launch(argv, progress_path)
         except _pr.Stalled as exc:
             return i, labels, json_path, None, "", "", str(exc)
         return i, labels, json_path, cp.returncode, cp.stdout, cp.stderr, ""
