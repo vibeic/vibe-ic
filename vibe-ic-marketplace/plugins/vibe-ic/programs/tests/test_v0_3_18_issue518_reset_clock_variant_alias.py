@@ -1,13 +1,13 @@
-"""v0.3.18 — #518: emit reset/clock NAME-VARIANT aliases at chip-top so a design
-declaring one standard spelling (reset_n) elaborates against a hidden TB that
-instantiates an equivalent standard spelling (.rst_n) — POLARITY PRESERVED.
+"""Reset/clock public-interface adaptation with explicit requested variants.
 
-Acceptance: a design declaring reset_n elaborates against `.rst_n` (same
-active-low polarity); an active-HIGH reset must NEVER be aliased to an
-active-low name.
+Wrapping/rewiring fixtures declare the requested top-port contract before
+calling the automatic adapter. Low-level emitter tests pass intentional maps.
+Acceptance preserves polarity, hierarchy, parameter forwarding and elaboration;
+missing interface authority must not change the authored ports.
 
 chip-AGNOSTIC: only generic reset/clock spelling sets are baked in.
 """
+import json
 import shutil
 import sys
 from pathlib import Path
@@ -194,6 +194,15 @@ def _runner():
     return P, _pl
 
 
+def _request_interface(project: Path, top: str, *ports: str) -> None:
+    """Public target interface for tests that intentionally request adaptation."""
+    docs = project / "phase1" / "generated_docs"
+    docs.mkdir(parents=True, exist_ok=True)
+    (docs / "L9_INTEGRATION_SPEC.json").write_text(json.dumps({
+        "top_module": top, "top_ports": list(ports),
+    }))
+
+
 def _seq_core(reset_name: str) -> str:
     return (f"module sequence_detector(\n"
             f"    input wire clk,\n"
@@ -208,13 +217,14 @@ def _seq_core(reset_name: str) -> str:
 
 
 def test_step_wired_binding_repro_elaborates(tmp_path):
-    # the #518 reopen binding case: core declares active-low `reset_n`; a hidden
-    # TB instantiates `.rst_n`. The runner step must auto-emit a wrapper that
+    # The core declares active-low `reset_n`; the requested public interface
+    # and its TB use `.rst_n`. The runner step must emit a wrapper that
     # TAKES the top name and exposes `rst_n`, so the TB elaborates.
     P, _pl = _runner()
     rtl = _pl.rtl_dir(tmp_path)
     rtl.mkdir(parents=True)
     (rtl / "sequence_detector.v").write_text(_seq_core("reset_n"))
+    _request_interface(tmp_path, "sequence_detector", "clk", "rst_n", "data_in", "detected")
     r = P.step_reset_clock_variant_aliases(tmp_path, "sequence_detector")
     assert r.status == "PASS", (r.status, r.detail)
     body = (rtl / "sequence_detector.v").read_text()
@@ -243,6 +253,7 @@ def test_step_idempotent(tmp_path):
     rtl = _pl.rtl_dir(tmp_path)
     rtl.mkdir(parents=True)
     (rtl / "sequence_detector.v").write_text(_seq_core("reset_n"))
+    _request_interface(tmp_path, "sequence_detector", "clk", "rst_n", "data_in", "detected")
     assert P.step_reset_clock_variant_aliases(
         tmp_path, "sequence_detector").status == "PASS"
     assert P.step_reset_clock_variant_aliases(
@@ -258,6 +269,7 @@ def test_step_parameterized_top_forwards_params(tmp_path):
         " input [W-1:0] d, output reg [W-1:0] q);\n"
         " always @(posedge clk or negedge reset_n)"
         " if(!reset_n) q<=0; else q<=d;\nendmodule\n")
+    _request_interface(tmp_path, "core", "clk", "rst_n", "d", "q")
     r = P.step_reset_clock_variant_aliases(tmp_path, "core")
     assert r.status == "PASS"
     body = (rtl / "core.v").read_text()
@@ -286,6 +298,7 @@ def test_step_active_high_reset_never_leaks_to_active_low(tmp_path):
     (rtl / "c2.v").write_text(
         "module c2(input clk, input reset, input d, output reg q);\n"
         " always @(posedge clk) if(reset) q<=0; else q<=d;\nendmodule\n")
+    _request_interface(tmp_path, "c2", "clk", "rst", "d", "q")
     r = P.step_reset_clock_variant_aliases(tmp_path, "c2")
     assert r.status == "PASS"
     body = (rtl / "c2.v").read_text()
@@ -335,6 +348,7 @@ def test_step_thin_wrapper_parent_still_aliases_and_rewires(tmp_path):
         "endmodule\n"
         "module top(input clk, input reset_n, output q);"
         " assign q=clk&reset_n; endmodule\n")
+    _request_interface(tmp_path, "top", "clk", "rst_n", "q")
     r = P.step_reset_clock_variant_aliases(tmp_path, "top")
     assert r.status == "PASS", (r.status, r.detail)
     body = (rtl / "design.v").read_text()
@@ -372,6 +386,7 @@ def test_step_round3_multimodule_top_aliases_and_tb_elaborates(tmp_path):
         " output detected);\n"
         "  sequence_detector u(.clk(clk), .reset_n(reset_n),"
         " .data_in(data_in), .detected(detected));\nendmodule\n")
+    _request_interface(tmp_path, "sequence_detector", "clk", "rst_n", "data_in", "detected")
     r = P.step_reset_clock_variant_aliases(tmp_path, "sequence_detector")
     assert r.status == "PASS", (r.status, r.detail)
     # both thin wrappers were rewired to the inner.
@@ -406,6 +421,7 @@ def test_step_round4_runner_chip_top_name_resolves_author_leaf(tmp_path):
     rtl = _pl.rtl_dir(tmp_path)
     rtl.mkdir(parents=True)
     (rtl / "sequence_detector.v").write_text(_seq_core("reset_n"))
+    _request_interface(tmp_path, "sequence_detector", "clk", "rst_n", "data_in", "detected")
     r = P.step_reset_clock_variant_aliases(tmp_path, "chip_top")
     assert r.status == "PASS", (r.status, r.detail)
     assert "resolved TB-facing leaf" in r.detail
@@ -450,6 +466,7 @@ def test_step_round4_real_workdir_shape_with_chip_top_present(tmp_path):
         "  sequence_detector u_dut(.clk(clk), .reset_n(reset_n),"
         " .data_in(data_in), .detected(detected));\nendmodule\n"
         "`default_nettype wire\n")
+    _request_interface(tmp_path, "sequence_detector", "clk", "rst_n", "data_in", "detected")
     r = P.step_reset_clock_variant_aliases(tmp_path, "chip_top")
     assert r.status == "PASS", (r.status, r.detail)
     assert "sequence_detector__rcvar_inner u_dut(" in \
@@ -505,6 +522,7 @@ def test_step_round4_rerun_after_alias_skips_globally(tmp_path):
     rtl = _pl.rtl_dir(tmp_path)
     rtl.mkdir(parents=True)
     (rtl / "sequence_detector.v").write_text(_seq_core("reset_n"))
+    _request_interface(tmp_path, "sequence_detector", "clk", "rst_n", "data_in", "detected")
     assert P.step_reset_clock_variant_aliases(
         tmp_path, "chip_top").status == "PASS"
     r2 = P.step_reset_clock_variant_aliases(tmp_path, "chip_top")
@@ -531,6 +549,7 @@ def test_step_round4_authored_chip_top_still_aliases_directly(tmp_path):
         "module chip_top(input clk, input reset_n, output q1, output q2);\n"
         "  core_a u1(.clk(clk), .q(q1));\n"
         "  core_b u2(.clk(clk), .q(q2));\nendmodule\n")
+    _request_interface(tmp_path, "chip_top", "clk", "rst_n", "q1", "q2")
     r = P.step_reset_clock_variant_aliases(tmp_path, "chip_top")
     assert r.status == "PASS", (r.status, r.detail)
     body = (rtl / "chip_top.v").read_text()
@@ -574,9 +593,8 @@ def test_step_round4_l9_native_spelling_guards_skip(tmp_path):
     assert (rtl / "sequence_detector.v").read_text() == before
 
 
-def test_step_round4_l9_empty_ports_does_not_block(tmp_path):
-    # the REAL round-4 work dir has L9 with top_ports: [] — no spelling
-    # evidence → the canonical alias fires (the field-verified doctrine).
+def test_step_round4_l9_empty_ports_does_not_authorize_alias(tmp_path):
+    # An empty interface supplies no authority to change the public spelling.
     import json as _json
     P, _pl = _runner()
     rtl = _pl.rtl_dir(tmp_path)
@@ -586,9 +604,11 @@ def test_step_round4_l9_empty_ports_does_not_block(tmp_path):
     gd.mkdir(parents=True)
     (gd / "L9_INTEGRATION_SPEC.json").write_text(_json.dumps({
         "top_module": "sequence_detector", "top_ports": []}))
+    before = (rtl / "sequence_detector.v").read_bytes()
     r = P.step_reset_clock_variant_aliases(tmp_path, "chip_top")
-    assert r.status == "PASS", (r.status, r.detail)
-    assert "input rst_n" in (rtl / "sequence_detector.v").read_text()
+    assert r.status == "SKIP", (r.status, r.detail)
+    assert (rtl / "sequence_detector.v").read_bytes() == before
+    assert "request" in r.detail.lower()
 
 
 def test_step_comment_module_header_does_not_eat_rename(tmp_path):
@@ -603,6 +623,7 @@ def test_step_comment_module_header_does_not_eat_rename(tmp_path):
         "module core(input clk, input reset_n, output reg q);\n"
         "  always @(posedge clk or negedge reset_n)"
         " if(!reset_n) q<=0; else q<=~q;\nendmodule\n")
+    _request_interface(tmp_path, "core", "clk", "rst_n", "q")
     r = P.step_reset_clock_variant_aliases(tmp_path, "core")
     assert r.status == "PASS", (r.status, r.detail)
     body = (rtl / "core.v").read_text()

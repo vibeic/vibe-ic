@@ -1,18 +1,12 @@
 #!/usr/bin/env python3
-"""reset_clock_variant_alias.py — v0.3.18 (ORGANIC #518).
+"""Reset/clock spelling proposals and explicit public-interface adaptation.
 
-A design frequently declares its reset/clock port as ONE common standard
-spelling (e.g. `reset_n`) while a hidden testbench instantiates an EQUIVALENT
-standard spelling (`rst_n`) — same semantic (active-low reset), different name
-→ an "Unknown port" compile-FAIL. The set of standard reset/clock spellings is
-small and well-known, so this is recoverable deterministically.
-
-This program provides the POLARITY-SAFE variant map plus a wrapper emitter:
-given a chip-top port list, it renames each non-canonical reset/clock port to
-the canonical spelling for its polarity/role, so a hidden TB using the common
-canonical name elaborates. The renaming is 1:1 (one TB-facing name per core
-input — the only electrically-safe alias for an input clock/reset) and the
-canonical-per-polarity target is the single most likely hidden-TB convention.
+Recognizing equivalent spellings is not authorization to change an interface.
+`plan_aliases` only proposes same-role/same-polarity renames; automatic callers
+must require a requested public contract before applying them. The standalone
+CLI mutation requires explicit SOURCE=TARGET mappings and never guesses names;
+an already-canonical interface may return a named no-op without a mapping.
+The emitters also accept explicit maps for intentional compatibility wrappers.
 
 ABSOLUTE GUARANTEE — POLARITY IS NEVER CROSSED
 ----------------------------------------------
@@ -24,10 +18,9 @@ inverts the reset semantic — that must never happen.
 
 HONEST LIMIT
 ------------
-Only the closed set of STANDARD reset/clock spellings below is recognised; a
-truly novel reset name is left untouched (Category-A port-identity FLOOR). The
-canonical-per-polarity rename is a single best bet — if the hidden TB happens to
-use the design's original (non-canonical) spelling, that case is not rescued.
+Only the closed set of reset/clock spellings below is recognised. Recognition
+does not prove the design's electrical semantics; callers must supply a valid
+interface contract. An unknown spelling is not silently reinterpreted.
 
 chip-AGNOSTIC: only the generic reset/clock spelling sets are baked in.
 """
@@ -108,8 +101,7 @@ def _same_class(a: str, b: str) -> bool:
 
 def plan_aliases(port_names: List[str],
                  contract_ports: "Optional[set]" = None) -> Dict[str, str]:
-    """Deterministic rename policy: map each recognised reset/clock port whose
-    spelling is NOT already canonical to its canonical-per-polarity spelling.
+    """Propose canonical same-polarity renames; this is NOT mutation authority.
 
     Skips a port if the canonical name would collide with another EXISTING port
     OR with a canonical name ALREADY ASSIGNED to an earlier port in this plan —
@@ -118,25 +110,11 @@ def plan_aliases(port_names: List[str],
     adversarial review). Only the first such variant is canonicalised; the rest
     keep their original spelling. POLARITY-SAFE by construction.
 
-    ORGANIC #689 — CONTRACT-AWARE suppression (additive, never lossy/over-firing):
-    `contract_ports` is the (lowercased) set of reset/clock port spellings the
-    design's OWN contract (its staged prompt/description/external-interface doc)
-    declares — see :func:`design_contract_ports`. A spelling pinned there IS the
-    TB-facing contract: a hidden testbench instantiates the DUT by THAT name, so
-    canonicalising it away (e.g. `reset` -> `rst`) makes the wrapper expose a
-    different port than the TB binds -> a hard `port 'reset' is not a port`
-    elaboration FAIL. When a port's spelling appears in `contract_ports`, its
-    rename is DROPPED from the plan (the original spelling is preserved verbatim
-    on the TB-facing surface). This is the SAME first-class suppression rank as
-    the #618 staged-SDC pin and the #518 L9 native-port pin.
-
-    NO-LEAK (§4.05): when `contract_ports` is None/empty (the design ships no
-    staged contract — exactly like the #518/#618 benchmark designs ship no SDC),
-    NOTHING is suppressed and the field-verified #518 doctrine applies unchanged:
-    the legitimate hidden-TB alias still fires (a design declaring a non-canonical
-    spelling its hidden TB needs as the canonical name STILL gets the alias).
-    chip-AGNOSTIC: set-membership on the design's own declared port spellings; no
-    chip/vendor/SKU literal."""
+    `contract_ports` pins source spellings that must remain public. None/empty
+    suppresses no proposals, but does not authorize any of them: a mutating
+    caller must separately check that the requested interface names the target
+    and does not require the source. Naming two resets does not authorize
+    combining them. This helper itself never writes RTL."""
     existing = {p.lower() for p in port_names}
     contract = {c.lower() for c in (contract_ports or set())}
     assigned_targets: set = set()
@@ -147,8 +125,7 @@ def plan_aliases(port_names: List[str],
             continue
         if p.lower() in contract:
             # The design's OWN contract declares this spelling — it IS the
-            # TB-facing name. Renaming it would break the hidden TB's binding
-            # (#689). Preserve the original spelling; do not alias.
+            # public name. Preserve the original spelling; do not alias.
             continue
         if canon in existing:
             continue  # would collide with a real port — skip
@@ -166,7 +143,7 @@ def plan_aliases(port_names: List[str],
 # prompt / external-interface doc) is the FIRST-CLASS source of the TB-facing
 # reset/clock port spelling, on par with the #618 staged-SDC pin and the #518
 # L9 native-port pin. When the contract already declares a STANDARD reset/clock
-# spelling, that spelling IS what the hidden TB binds, so the canonicaliser must
+# spelling, that spelling is part of the public interface, so the adapter must
 # NOT rename it (doing so makes the wrapper expose a different port → a hard
 # `port <X> is not a port` elaboration FAIL).
 
@@ -301,12 +278,10 @@ def design_contract_ports(project: Path) -> set:
     This is the design's TB-facing contract — the SAME ground-truth ranking as
     the #618 staged-SDC pin (:func:`sdc_constraints.staged_constrained_ports`)
     and the #518 L9 native-port pin. `plan_aliases(..., contract_ports=<this>)`
-    drops the rename of any port whose spelling is pinned here, so the hidden TB
-    binding the design's own spelling still elaborates.
+    drops the proposal for any port whose spelling is pinned here.
 
-    Returns an EMPTY set when no contract doc is staged (the #518/#618 benchmark
-    designs ship none — exactly like they ship no SDC), so callers fall through
-    to the field-verified canonical-convergence doctrine unchanged (no-leak).
+    Returns an EMPTY set when no contract doc is staged. An empty set is not
+    permission to rename; the mutating caller needs explicit target authority.
     chip-AGNOSTIC: port-declaration grammar + the closed standard reset/clock
     spelling set; no chip/vendor/SKU literal."""
     pinned: set = set()
@@ -380,9 +355,8 @@ def _all_port_names_from_l3_json(data) -> Optional[set]:
 
 # The structured, generated-doc sources whose port list is AUTHORITATIVE — a
 # parsed L3 external-interface JSON port table (best), or the L9 integration
-# spec's top_ports. Free-text prompts (RTLLM / VerilogEval Path-B) stage NEITHER,
-# so `authoritative_contract_ports` returns None there and the #792 additive
-# dual-spelling behavior is kept unchanged (no-leak).
+# spec's top_ports. Without an explicit enumeration, automatic callers must
+# decline to infer a replacement interface.
 _AUTHORITATIVE_L3_GLOBS = ("phase1/generated_docs/L3*.json",)
 _AUTHORITATIVE_L9_GLOBS = (
     "phase1/**/L9_INTEGRATION_SPEC.json",
@@ -399,7 +373,7 @@ _AUTHORITATIVE_L9_GLOBS = (
 # reset port onto a documented N-port top. These globs are keyed on the LAYER
 # FILENAME (L3 external-interface / L9 integration), never on content type, so a
 # free-text prompt (`input/phase1_prompt.md`) or the auto-bridged
-# `design_description.md` is NOT authoritative and keeps #792 additive (no-leak).
+# `design_description.md` needs an explicit port enumeration to authorize edits.
 _AUTHORITATIVE_DOC_GLOBS = (
     "phase1/input_doc/L3*",
     "phase1/input_doc/L9*",
@@ -488,14 +462,10 @@ def authoritative_contract_ports(project: Path) -> Optional[set]:
     interface (an L3 external-interface JSON port table, or the L9 integration
     spec top_ports). None when only loose prose / free-text prompts are staged.
 
-    Used to decide whether the #792 additive dual-spelling reset synonym may be
-    exposed: when the documented interface is authoritative and enumerates the
-    design's own reset spelling but NOT the canonical synonym, adding the synonym
-    would introduce a top port the documents do not sanction (the #186 9th-port
-    contract break) — so the caller pure-suppresses the additive there. A
-    conforming hidden TB binds the DOCUMENTED spelling, so no #518/#792 case
-    regresses. chip-AGNOSTIC: reads whatever structured port-list key the doc
-    carries; no chip/vendor/SKU literal."""
+    The automatic adapter may use an enumerated target spelling only when the
+    source spelling is not required. The enumeration does not assert that two
+    listed resets are equivalent or can be combined. None is missing authority,
+    not permission to guess a replacement."""
     names: set = set()
     got = False
     seen: set = set()
@@ -536,7 +506,7 @@ def authoritative_contract_ports(project: Path) -> Optional[set]:
     # A benchmark/free-text prompt is authoritative only when it carries an
     # explicit, complete Input-ports + Output-ports enumeration. Loose prose,
     # one-off `reset` mentions, and incomplete sections remain non-authoritative
-    # and preserve the legacy alias rescue path.
+    # and do not authorize automatic adaptation.
     if not got:
         for pat in ("input/phase1_prompt.md", "phase1/input_prompt/*",
                     "input/docs/design_description*"):
@@ -1143,11 +1113,10 @@ def emit_variant_alias_wrapper(core_module: str,
     port decls — resolve on the outer wrapper instead of erroring as
     `use of undeclared identifier`. None/[] re-emits no import line.
 
-    ORGANIC #792 — ADDITIVE dual-spelling RESET ports. `additive_reset_map` maps
-    a core RESET port's spec spelling → its canonical-per-polarity spelling for
-    resets whose spec spelling is the design's OWN contract (so it must stay
-    bindable) BUT whose hidden TB may instead bind the canonical (the #689↔#518
-    indistinguishability — only the invisible TB binding differs). For each such
+    Explicit dual-spelling RESET compatibility: `additive_reset_map` maps a core
+    reset to an intentionally requested equivalent input name. The caller must
+    authorize the combined-reset semantics; names alone are insufficient.
+    The automatic flow does not infer this map. For each such
     reset the wrapper exposes BOTH spellings as input ports and combines them
     POLARITY-SAFELY into the core's single reset port:
       * active-low : `tri1` pull (undriven alias → 1 = deasserted), AND-combine
@@ -1168,9 +1137,8 @@ def emit_variant_alias_wrapper(core_module: str,
     qualifier token) so a take-every-arm parse never doubles the port.
     Disclosed limitation: under event-driven simulators an UNDRIVEN face now
     reads `z` when observed directly (hierarchically / in a VCD) — the pulled
-    INACTIVE value lives on the internal `__rcvar_pull` net; the whitebox
-    delivery context suppresses the additive map entirely (see
-    design_one_shot_runner), so no hidden whitebox harness observes the face.
+    INACTIVE value lives on the internal `__rcvar_pull` net. Callers must account
+    for this distinction when observing or driving an intentionally added port.
     Disjoint from `rename_map`."""
     additive = dict(additive_reset_map or {})
     for orig, new in list(rename_map.items()) + list(additive.items()):
@@ -1322,8 +1290,8 @@ def emit_variant_alias_wrapper(core_module: str,
     lines = [
         f"// {wrapper_name} — reset/clock NAME-VARIANT alias wrapper for "
         f"`{core_module}`",
-        "// Exposes the canonical-per-polarity reset/clock spelling so a hidden",
-        "// testbench using a different but equivalent STANDARD name elaborates.",
+        "// Exposes explicitly requested equivalent reset/clock port names.",
+        "// The caller owns the public-interface and compatibility contract.",
         "// Polarity is preserved 1:1. Generated by reset_clock_variant_alias.py"
         " (#518/#792).",
         f"module {wrapper_name}{import_hdr}{param_hdr} (",
@@ -1447,11 +1415,14 @@ def emit_variant_alias_flat(text: str, module_name: str,
 
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(
-        description="Emit a reset/clock name-variant alias wrapper (canonical "
-                    "spelling, polarity-preserved) for a chip-top module.")
+        description="Emit an explicitly requested reset/clock alias wrapper "
+                    "with polarity preserved; no speculative port names.")
     ap.add_argument("--rtl", required=True, help="RTL file with the core module")
     ap.add_argument("--module", required=True, help="core (chip-top) module name")
     ap.add_argument("--out", default=None, help="wrapper output path")
+    ap.add_argument("--alias", action="append", default=[],
+                    metavar="SOURCE=TARGET",
+                    help="explicit requested rename; required for mutation; repeatable")
     args = ap.parse_args(argv)
     rtl = Path(args.rtl)
     if not rtl.is_file():
@@ -1462,12 +1433,25 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"error: module {args.module!r} not found / no ANSI ports.",
               file=sys.stderr)
         return 1
-    plan = plan_aliases([p[2] for p in ports])
-    if not plan:
-        print(f"ok: {args.module!r} reset/clock ports already canonical "
-              f"(no alias wrapper needed)")
-        return 0
-    wrapper = emit_variant_alias_wrapper(args.module, ports, plan)
+    if not args.alias:
+        if not plan_aliases([p[2] for p in ports]):
+            print("skip: reset/clock ports already canonical; no alias requested")
+            return 0
+        ap.error("--alias SOURCE=TARGET is required to change public port names")
+    plan: Dict[str, str] = {}
+    inputs = {name for direction, _, name in ports if direction == "input"}
+    for requested in args.alias:
+        match = re.fullmatch(r"([A-Za-z_]\w*)=([A-Za-z_]\w*)", requested)
+        if not match:
+            ap.error(f"invalid alias {requested!r}; expected SOURCE=TARGET")
+        source, destination = match.groups()
+        if source not in inputs or source in plan:
+            ap.error(f"alias source {source!r} must be a unique existing input")
+        plan[source] = destination
+    try:
+        wrapper = emit_variant_alias_wrapper(args.module, ports, plan)
+    except ValueError as exc:
+        ap.error(str(exc))
     out = Path(args.out) if args.out else rtl.with_name(f"{args.module}_aliased.v")
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(wrapper)
