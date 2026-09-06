@@ -954,6 +954,20 @@ _MERGED_ANSWERS_REL = _import_answers_rel()
 _STEP_0_5IC_DECLARE = "tapeout_declaration_gen.py"
 
 
+def _import_fetch_report_rel() -> str:
+    """The fetch's report path, read from the program that writes it."""
+    try:
+        import submission_template_fetch as _stf
+        return _stf.REPORT_REL
+    except Exception:                                       # noqa: BLE001
+        return "reports/phase1/submission_template_fetch.json"
+
+
+#: Where `submission_template_fetch` writes the record `submission_template_
+#: answers --technology-json` reads. Imported, not spelled twice.
+_ST_FETCH_REPORT_REL = _import_fetch_report_rel()
+
+
 def _step_0_5ic_answers(project: Path
                         ) -> "Tuple[Optional[Path], Optional[Dict[str, Any]], Optional[str]]":
     """(path, document, why-not) for the design's own step-0.5ic answers.
@@ -976,7 +990,33 @@ def _step_0_5ic_answers(project: Path
     return path, doc, None
 
 
-def _run_step_0_5ic(project: Path) -> int:
+def _pdk_of_this_run(extras: "Optional[List[str]]") -> str:
+    """The PDK this run targets, read out of `--pdk` WITHOUT consuming it.
+
+    `--pdk` is forwarded to this runner through `parse_known_args` extras (the
+    orchestrator adds it so a PDK-keyed spec table can be resolved), and those
+    same extras are handed on to the docs-mode delegate. Declaring an argparse
+    option for it here would take it out of `extras` and silently stop that
+    forwarding, so this reads it and leaves it in place.
+
+    `auto` is not a PDK. It is the orchestrator's word for "resolve one later",
+    and treating it as a process name would have step 0.5ic transcribe the
+    technology facts of a PDK called `auto`.
+    """
+    items = list(extras or [])
+    for i, tok in enumerate(items):
+        if tok == "--pdk" and i + 1 < len(items):
+            val = str(items[i + 1]).strip()
+            break
+        if tok.startswith("--pdk="):
+            val = tok.split("=", 1)[1].strip()
+            break
+    else:
+        return ""
+    return "" if val.lower() in ("", "auto") else val
+
+
+def _run_step_0_5ic(project: Path, pdk: str = "") -> int:
     """Run step 0.5ic's two producers, in the order the flow declares them.
 
     `submission_template_ingest` records what the OPERATOR published;
@@ -1066,8 +1106,20 @@ def _run_step_0_5ic(project: Path) -> int:
     # template `from: external` and nothing external ever went and got it. The
     # fetch is NOT_APPLICABLE for a PDK with no live shuttle and refuses only
     # when there IS an operator whose terms it could not obtain.
+    #
+    # `--pdk` REACHES THE FETCH (#2070). Two things in this step are facts of
+    # the PROCESS THIS RUN BUILDS rather than of the design: which families the
+    # design named (checked against the run's target, refused when the run is
+    # on one the design never named) and the database unit the technology
+    # declares. Neither can be answered without knowing which PDK this is, and
+    # until now step 0.5ic was never told — so the fetch fell back to a
+    # declared target that phase 1 has not written yet at this point in the
+    # dispatch order, and reported "the design declares no PDK" for designs
+    # whose L1 names two.
     fetch = [sys.executable, str(PROGRAMS_DIR / _STEP_0_5IC_FETCH),
              str(project)]
+    if isinstance(pdk, str) and pdk.strip():
+        fetch += ["--pdk", pdk.strip()]
 
     # THE OPERATOR'S TERMS, TRANSCRIBED. `tapeout_declaration_gen` refuses to
     # infer — rightly — so without this nothing could ever answer a field, and
@@ -1081,6 +1133,11 @@ def _run_step_0_5ic(project: Path) -> int:
         answers += ["--slot", slot.strip()]
     if answers_path is not None:
         answers += ["--design-answers", str(answers_path)]
+    # THE TRANSCRIPTION THE FETCH JUST WROTE. Passed as the fetch's own report
+    # rather than re-measured here: the number in the declaration has to be the
+    # number a named program read out of a named file at a named line, and a
+    # second reader of the same tech LEF is a second answer waiting to differ.
+    answers += ["--technology-json", str(project / _ST_FETCH_REPORT_REL)]
     merged_answers = project / _MERGED_ANSWERS_REL
     try:
         merged_answers.unlink()
@@ -1236,7 +1293,7 @@ def main() -> int:
     # D1: which delivery route a design is on is a property of the DESIGN, not
     # of its documents.
     print("[phase1] step 0.5ic — submission template + tape-out declaration ...")
-    rc_route = _run_step_0_5ic(project)
+    rc_route = _run_step_0_5ic(project, pdk=_pdk_of_this_run(extras))
 
     # Resolve mode. When auto-detect finds no input, fall through to
     # prompt mode so step_ingest_render emits a SKIP status (verdict

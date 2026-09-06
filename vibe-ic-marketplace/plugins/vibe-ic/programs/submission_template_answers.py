@@ -340,6 +340,15 @@ def main(argv: Optional[List[str]] = None) -> int:
                         "and a design that disagrees with them is refused by "
                         "the operator's own tool anyway. Every override is "
                         "recorded by key so the substitution is auditable.")
+    p.add_argument("--technology-json", type=Path, default=None,
+                   help="The `submission_template_fetch` report this run "
+                        "wrote. Its `technology` record carries what the tech "
+                        "LEF of the run's own PDK declares, with the "
+                        "path:line it was read at. Those facts are published "
+                        "OVER anything the design or the operator answered, "
+                        "and a design answer that disagrees with them is "
+                        "refused by name — see "
+                        "`_tapeout_declaration.ANSWERED_BY_TECHNOLOGY`.")
     p.add_argument("--out", type=Path, default=None)
     p.add_argument("--json", type=Path, dest="out_json", default=None)
     args = p.parse_args(argv)
@@ -396,6 +405,127 @@ def main(argv: Optional[List[str]] = None) -> int:
                 f"carries only its own: {', '.join(taken)}.")
         rep["answers"] = merged
         rep["_carried"] = carried
+
+    # THE TECHNOLOGY'S OWN ANSWER, PUBLISHED LAST (#2070).
+    #
+    # LAST because it is not an opinion in a precedence order. `database_unit_um`
+    # asks what a technology file declares; the design is not a party to that
+    # question and neither is the operator, so what either of them wrote about
+    # it cannot win. Measured: two designs each name TWO PDK families whose tech
+    # LEFs declare DIFFERENT units, and one answers file drives runs on both —
+    # so a single scalar there is wrong for one of the two runs, whichever it is.
+    #
+    # A DISAGREEMENT IS REFUSED BY NAME, with both values in the message, and it
+    # travels into the declaration so `tapeout_declaration_gen` exits 1 on it.
+    # AGREEMENT is accepted with a note, never with silence: a design that
+    # happens to be right about the technology is still not the authority on it,
+    # and the note is how the next reader knows which of the two we published.
+    #
+    # AND WHEN THE TECHNOLOGY DID NOT ANSWER, NEITHER DOES THE DESIGN. Measured
+    # while building this: a run whose PDK the design does not name is refused
+    # by the fetch, which then transcribes nothing — and the design's own
+    # scalar sailed through into the declaration as `database_unit_um`, read
+    # downstream as a measured technology fact. A claim that was never checked
+    # against a technology must not be published as one, so the key is STRIPPED
+    # whenever this producer was pointed at a technology record, and only a
+    # transcription puts it back. NOT_DETERMINED is the honest answer there; the
+    # design's number is kept in the report as an unpublished claim.
+    facts = {}
+    tech_why = None
+    if args.technology_json is not None:
+        if not args.technology_json.is_file():
+            rep["notes"].append(
+                f"--technology-json {args.technology_json} is not on disk, so "
+                f"no technology fact was transcribed. That is NOT the same as "
+                f"a technology that declares none")
+        else:
+            try:
+                fetched = json.loads(
+                    args.technology_json.read_text(errors="replace"))
+            except (OSError, ValueError) as exc:
+                rep["notes"].append(f"{args.technology_json} unreadable: {exc}")
+                fetched = {}
+            facts = (fetched or {}).get("technology") or {}
+            if not facts:
+                tech_why = (
+                    f"{args.technology_json} records no `technology` for this "
+                    f"run — the fetch transcribed none (see its own verdict "
+                    f"and reason). Nothing was measured, so nothing is "
+                    f"published")
+    if args.technology_json is not None:
+        merged = dict(rep.get("answers") or {})
+        # WHOSE claim is being refused, named exactly. The merge above records
+        # which keys came from the design, so a refusal says "the design"
+        # when it was the design and does not blame it when it was not.
+        _from_design = set(rep.get("from_the_design") or [])
+        claimed_by = ("the design's answers file"
+                      if _from_design & set(_decl.TECHNOLOGY_ANSWERED)
+                      else "the answers file this run assembled")
+        refusals = _decl.technology_refusals(merged, facts, claimed_by)
+        agreed, unread = [], []
+        for key in _decl.TECHNOLOGY_ANSWERED:
+            fact = facts.get(key) or {}
+            if fact.get("value") is None:
+                _why = (fact.get("unavailable") or tech_why
+                        or "the fetch recorded no fact for this key")
+                unread.append(f"{key}: NOT_DETERMINED — {_why}")
+                continue
+            said = merged.get(key)
+            if _decl.is_answered(said) and said == fact["value"]:
+                agreed.append(
+                    f"{key}: the answers file states {said!r} and the "
+                    f"technology this run targets declares the same "
+                    f"({fact.get('statement')} at {fact.get('source')} for PDK "
+                    f"{fact.get('pdk')!r}). Accepted — and published from the "
+                    f"technology, which is where it comes from either way")
+        # THE STRIP. Unconditional on this branch and BEFORE any value is
+        # written back, so a key can only ever be published by a transcription.
+        withheld = {}
+        for key in _decl.TECHNOLOGY_ANSWERED:
+            fact = facts.get(key) or {}
+            if fact.get("value") is not None:
+                continue
+            if _decl.is_answered(merged.get(key)):
+                withheld[key] = merged[key]
+            merged.pop(key, None)
+        if withheld:
+            unread.append(
+                f"withheld from the declaration: {withheld} — "
+                f"{tech_why or 'the technology this run targets was not read'}. "
+                f"{', '.join(sorted(withheld))} is answered by the TECHNOLOGY "
+                f"or by nobody; an unverified claim about it is not published")
+        rep["technology_withheld"] = withheld
+        record = dict(facts)
+        if refusals:
+            record["refusals"] = refusals
+        rep["technology"] = record
+        rep["technology_refusals"] = [r["rule"] for r in refusals]
+        rep["technology_agreed"] = agreed
+        rep["technology_unreadable"] = unread
+        rep["notes"] += agreed + unread + [r["message"] for r in refusals]
+        doc_tech = dict(rep.get("_carried") or {})
+        for key in _decl.TECHNOLOGY_ANSWERED:
+            fact = facts.get(key) or {}
+            if fact.get("value") is not None:
+                merged[key] = fact["value"]
+        rep["answers"] = merged
+        # Only a real record is published. An empty one would be a
+        # provenance block asserting that a technology was consulted.
+        if record:
+            doc_tech[_decl.TECHNOLOGY_KEY] = record
+        rep["_carried"] = doc_tech
+        if rep["verdict"] in (NOT_APPLICABLE, NOT_DETERMINED) and any(
+                (facts.get(k) or {}).get("value") is not None
+                for k in _decl.TECHNOLOGY_ANSWERED):
+            # The technology answered even though no operator did. That file
+            # must still reach the generator, or the transcription is dropped
+            # on the floor exactly like the design's own answers used to be.
+            rep["verdict"] = PASS
+            rep["reason"] = (
+                (rep["reason"] + " ") if rep["reason"] else "") + (
+                "The technology this run targets answered "
+                f"{', '.join(k for k in _decl.TECHNOLOGY_ANSWERED)}, so the "
+                "answers file carries that transcription.")
 
     if rep["verdict"] == PASS:
         out = args.out or (args.project / ANSWERS_REL)

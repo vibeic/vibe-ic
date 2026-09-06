@@ -147,6 +147,44 @@ SECTION_PAD_RING = "2B_pad_ring"
 SECTION_SEAL_RING = "2C_seal_ring"
 
 
+# --------------------------------------------------------------------------- #
+# WHO IS ENTITLED TO ANSWER A QUESTION (#2070)
+#
+# Seventeen of the eighteen questions ask the DESIGN about itself. One does
+# not. `database_unit_um` asks what the TECHNOLOGY FILE declares, and a design
+# has no standing to answer that: the number is a property of the PDK the run
+# targets, published by that PDK's own tech LEF.
+#
+# MEASURED, and this is why it is a defect and not a nicety. Two designs in the
+# corpus each name TWO open PDK families in L1, and the pinned image's tech
+# LEFs declare DIFFERENT database units for them — `DATABASE MICRONS 2000`
+# (0.0005 um) for one family, `DATABASE MICRONS 1000` (0.001 um) for the other.
+# One answers file drives run trees on BOTH, so any single scalar written there
+# is wrong for one of the two runs. The designs correctly answered
+# NOT_DETERMINED and cited both measurements — which is the right answer to a
+# question that should never have been put to them.
+#
+# So the value is TRANSCRIBED, per run, from the tech LEF of the run's own
+# `--pdk`, and carried here with the path:line it was read at. A design answer
+# that DISAGREES with the run's technology is refused BY NAME, with both values
+# in the message; one that AGREES is accepted with a note, because a design
+# that happens to be right is still not the authority.
+ANSWERED_BY_DESIGN = "the design"
+ANSWERED_BY_TECHNOLOGY = "the technology"
+
+#: The refusal a design's claim about the technology earns. Named here, beside
+#: the vocabulary it belongs to, so the producer and the validator cannot spell
+#: it two ways.
+RULE_TECHNOLOGY_FACT_FROM_DESIGN = "DATABASE_UNIT_IS_A_TECHNOLOGY_FACT"
+
+#: Where the transcription lands in the declaration. NOT inside `answers`:
+#: `answers` is what somebody ANSWERED, and this was not answered by anybody —
+#: it was read off a technology file. The answered VALUE still lands in
+#: `answers.database_unit_um`, because every consumer reads it there; this key
+#: is its provenance, and a reader that wants to know who said it can see.
+TECHNOLOGY_KEY = "from_the_technology"
+
+
 @dataclass(frozen=True)
 class Question:
     """One field of the declaration.
@@ -164,6 +202,12 @@ class Question:
     required_for: Tuple[str, ...] = DELIVERABLES
     choices: Tuple[str, ...] = ()
     note: str = ""
+    #: WHO is entitled to answer. `ANSWERED_BY_DESIGN` for the seventeen
+    #: questions about the design itself; `ANSWERED_BY_TECHNOLOGY` for the one
+    #: that asks what a technology file declares. Declared as a field rather
+    #: than kept as a list of keys somewhere else, so the entitlement travels
+    #: with the question and a new question has to state it.
+    answered_by: str = ANSWERED_BY_DESIGN
 
 
 # --------------------------------------------------------------------------- #
@@ -220,10 +264,21 @@ _2A: Tuple[Question, ...] = (
     Question(
         "database_unit_um", SECTION_DIE_SIZE,
         "What database unit, in microns, does the technology file declare?",
-        "number", "general_precheck",
+        "number", "general_precheck", answered_by=ANSWERED_BY_TECHNOLOGY,
         note="Compared against the layout's own UNITS record. A stream written "
              "at a different grid than the tech file declares is off-grid "
-             "everywhere at once, and nothing downstream says so."),
+             "everywhere at once, and nothing downstream says so. "
+             "NOT ASKED OF THE DESIGN (#2070): it is a fact of the "
+             "TECHNOLOGY the run targets, not a claim the design is entitled "
+             "to make. Step 0.5ic transcribes `DATABASE MICRONS` from the "
+             "tech LEF of the run's own `--pdk` inside the pinned image and "
+             "records the path:line it read. Measured: the two families one "
+             "design named declare DIFFERENT units (2000 vs 1000 dbu/um), so "
+             "a single scalar in a design's answers file is wrong for one of "
+             "the two runs that file drives. A design scalar that DISAGREES "
+             "with the run's technology is refused by name "
+             f"({RULE_TECHNOLOGY_FACT_FROM_DESIGN}); one that agrees is "
+             "accepted with a note."),
 )
 
 # --------------------------------------------------------------------------- #
@@ -349,7 +404,14 @@ AREA_BUDGET_NOT_APPLICABLE = "NOT_APPLICABLE"
 EXTRA_KEYS: Tuple[str, ...] = (
     FORBIDDEN_LAYERS_KEY,
     SYNTHESIS_AREA_BUDGET_KEY,
+    TECHNOLOGY_KEY,
 )
+
+#: Every question whose answer is transcribed from the technology rather than
+#: asked of the design. Derived from the questions themselves — a second list
+#: of key names is a second place to forget one.
+TECHNOLOGY_ANSWERED: Tuple[str, ...] = tuple(
+    q.key for q in QUESTIONS if q.answered_by == ANSWERED_BY_TECHNOLOGY)
 
 
 def question(key: str) -> Optional[Question]:
@@ -455,6 +517,74 @@ def merge_answers(doc: Dict[str, Any], answers: Dict[str, Any]
         else:
             doc["answers"][key] = value
     return doc, ignored
+
+
+def technology_refusals(claimed: Dict[str, Any],
+                        facts: Dict[str, Any],
+                        claimed_by: str = "the design") -> List[Dict[str, Any]]:
+    """Refuse `claimed` where it contradicts the run's own technology.
+
+    `claimed` is whatever answers file was about to be published (the design's,
+    or the design's under an operator's); `facts` is the transcription record
+    written by the fetch — `{key: {"value": ..., "source": "<path>:<line>",
+    "statement": ..., "pdk": ...}}`.
+
+    A refusal is returned only for a DISAGREEMENT, and it names BOTH values and
+    the run's PDK, because the reader's next question is always "which of the
+    two is this run?". Agreement is NOT a refusal: it earns a note from the
+    caller and the technology's value is published either way. Silence — the
+    design left the field NOT_DETERMINED, which is what both corpus designs
+    correctly did — is not a refusal either.
+
+    Returns [] when there is nothing to refuse. Never raises.
+    """
+    out: List[Dict[str, Any]] = []
+    for key in TECHNOLOGY_ANSWERED:
+        rec = (facts or {}).get(key)
+        if not isinstance(rec, dict):
+            continue
+        measured = rec.get("value")
+        if not _is_number(measured):
+            continue
+        said = (claimed or {}).get(key)
+        if not is_answered(said) or said == measured:
+            continue
+        out.append(_refusal(
+            RULE_TECHNOLOGY_FACT_FROM_DESIGN,
+            f"{claimed_by} answers {key}={said!r}, and the technology this "
+            f"run targets declares {measured!r}: "
+            f"{rec.get('statement') or '(no statement recorded)'} at "
+            f"{rec.get('source') or '(no source recorded)'} for PDK "
+            f"{rec.get('pdk')!r}. {key} is a fact of the TECHNOLOGY, not a "
+            f"claim the design is entitled to make, and the two do not agree. "
+            f"The transcribed value is what this declaration carries; the "
+            f"answered one is refused. Remove it from the answers file — a "
+            f"design that states it can only ever be right for one of the "
+            f"processes it names.",
+            key=key, answered=said, technology=measured,
+            source=rec.get("source"), pdk=rec.get("pdk"),
+            claimed_by=claimed_by))
+    return out
+
+
+def merge_technology(doc: Dict[str, Any],
+                     facts: Dict[str, Any]) -> Dict[str, Any]:
+    """Publish the transcribed technology facts into `doc`, provenance and all.
+
+    The VALUE lands in `answers`, where every consumer already reads it. The
+    RECORD lands under `TECHNOLOGY_KEY`, so the declaration says out loud that
+    this field came from a technology file and names the file and line. A fact
+    with no usable value is carried for its provenance and answers nothing —
+    "we looked and could not read it" must never arrive as a number.
+    """
+    if not isinstance(facts, dict) or not facts:
+        return doc
+    doc[TECHNOLOGY_KEY] = facts
+    for key in TECHNOLOGY_ANSWERED:
+        rec = facts.get(key)
+        if isinstance(rec, dict) and _is_number(rec.get("value")):
+            doc.setdefault("answers", {})[key] = rec["value"]
+    return doc
 
 
 def route_of(doc: Dict[str, Any], has_slots: bool) -> str:
@@ -693,6 +823,43 @@ def validate(doc: Any) -> List[Dict[str, Any]]:
                     RULE_NUMBER_INVALID,
                     f"{q.key!r} must be a positive number, got {v!r}",
                     key=q.key))
+
+    # THE TECHNOLOGY'S OWN SIDE (#2070). Two things are refused here, and
+    # nothing else about this key is:
+    #
+    #   1. A refusal the PRODUCER recorded is re-emitted, so it reaches the
+    #      reader through the same channel every other declaration refusal
+    #      does. `tapeout_declaration_gen` exits 1 on a non-empty refusal list,
+    #      which is what gives a design's contradicted claim about the
+    #      technology actual teeth instead of a note nobody reads.
+    #   2. A declaration whose published unit DISAGREES with the very
+    #      technology record it cites is malformed — not incomplete. It is the
+    #      one shape that cannot be true, and it is exactly what a partial
+    #      hand-edit of either half produces.
+    #
+    # An ABSENT `from_the_technology` is NOT refused. A declaration written
+    # before this key existed, or a run that could not read the tech LEF and
+    # said so, is incomplete — and incomplete is the consuming check's
+    # NOT_DETERMINED to report, never a malformed-evidence refusal here.
+    tech = doc.get(TECHNOLOGY_KEY)
+    if isinstance(tech, dict):
+        for rec in (tech.get("refusals") or []):
+            if isinstance(rec, dict) and rec.get("rule") and rec.get("message"):
+                out.append(dict(rec))
+        for key in TECHNOLOGY_ANSWERED:
+            fact = tech.get(key)
+            if not isinstance(fact, dict) or not _is_number(fact.get("value")):
+                continue
+            published = answers.get(key)
+            if is_answered(published) and published != fact["value"]:
+                out.append(_refusal(
+                    RULE_TECHNOLOGY_FACT_FROM_DESIGN,
+                    f"the declaration publishes {key}={published!r} while the "
+                    f"technology record it carries says {fact['value']!r} "
+                    f"(read at {fact.get('source')!r} for PDK "
+                    f"{fact.get('pdk')!r}). A declaration that contradicts its "
+                    f"own cited source cannot be read by anybody",
+                    key=key, published=published, technology=fact["value"]))
 
     budget = area_budget_resolution(doc)
     if budget["status"] == "INVALID":
