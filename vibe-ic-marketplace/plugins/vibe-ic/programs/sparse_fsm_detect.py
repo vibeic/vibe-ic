@@ -59,6 +59,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Set, Tuple
 
 from _atomic_artefact import write_text as atomic_write_text  # #1082
+from _hdl_code_text import strip_hdl_comments_and_strings  # #731
 
 # A sparse encoding is defined by its MINIMUM pairwise Hamming distance. The
 # OpenTitan generator's own floor is 3 (`sparse-fsm-encode.py -d 3`), which is
@@ -141,7 +142,15 @@ def min_pairwise_hamming(codes: Sequence[str]) -> Optional[int]:
 
 
 def _module_at(text: str, pos: int) -> str:
-    """Name of the module enclosing character offset `pos` ('' when none)."""
+    """Name of the module enclosing character offset `pos` ('' when none).
+
+    vibe-ic#731: `// this module drives the round counter` matches
+    `^\s*module\s+(\w+)` and mints an enclosing module that does not exist,
+    which mis-groups the localparam constants this answer keys. Blanked, NOT
+    deleted: `pos` is an offset into the CALLER's text, so the scan must keep
+    the same offsets or the `m.start() > pos` cut moves.
+    """
+    text = strip_hdl_comments_and_strings(text)
     last = ""
     for m in _MODULE_RE.finditer(text):
         if m.start() > pos:

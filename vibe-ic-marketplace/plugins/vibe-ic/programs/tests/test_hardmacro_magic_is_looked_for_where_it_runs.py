@@ -305,8 +305,34 @@ def test_the_runner_hands_the_producer_the_container_the_tools_are_in(
         seen["cmd"] = [str(c) for c in cmd]
         return subprocess.CompletedProcess(cmd, 0, "ok\n", "")
 
-    monkeypatch.setattr(r.subprocess, "run", fake_run)
+    # RECORD AT EVERY RUN-SHAPED SEAM THE STEP MAY DISPATCH THROUGH.
+    #
+    # v1.17.70 (measured 2026-09-07 on 8HD-4) moved this step's launch onto
+    # `_run_producer`, which dispatches through `_progress_run.run` — progress
+    # supervision instead of a wall clock — and `_progress_run` spawns with
+    # `subprocess.Popen`. Stubbing `subprocess.run` alone therefore recorded
+    # nothing at all, and this test failed with a bare `KeyError: 'cmd'`: a
+    # message about the RECORDER that read like a message about the argv.
+    #
+    # The property under test is that the step hands the producer `--container
+    # <name>`. That is true or false regardless of which helper carries the
+    # argv there, so every seam is watched at once and the assertion below
+    # names them when nothing arrives.
+    _seams = (("_progress_run.run", r._pr, "run"),
+              ("subprocess.run", r.subprocess, "run"))
+    for _name, _owner, _attr in _seams:
+        monkeypatch.setattr(_owner, _attr, fake_run)
     r.step_digital_hardmacro_gen(tmp_path, None, "eda_ctr")
+    # REFUSE BY NAME, never `seen.get("cmd", [])`: an absent recording is not
+    # an empty argv, and defaulting it would turn "I never saw the launch"
+    # into "the launch carried no --container" — a different, false finding.
+    assert "cmd" in seen, (
+        "the step launched nothing through any watched seam ("
+        + ", ".join(n for n, _o, _a in _seams) + "), so this test observed "
+        "NO argv. That is not evidence that --container was omitted; it means "
+        "the recorder and the step no longer meet. Find the seam the step "
+        "dispatches through and add it above before reading this as a defect "
+        "in step_digital_hardmacro_gen.")
     assert "--container" in seen["cmd"], seen["cmd"]
     assert seen["cmd"][seen["cmd"].index("--container") + 1] == "eda_ctr"
 

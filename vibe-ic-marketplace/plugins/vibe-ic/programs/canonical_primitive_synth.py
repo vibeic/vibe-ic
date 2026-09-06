@@ -89,6 +89,11 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+PROGRAMS_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(PROGRAMS_DIR))
+
+from _design_module_set import strip_comments  # noqa: E402 - vibe-ic#731
+
 
 # ======================================================================== helpers
 def module_name_of(desc_text: str) -> Optional[str]:
@@ -1950,6 +1955,11 @@ def _rtl_input_port_widths(rtl: str) -> Dict[str, Optional[int]]:
     a default. A name declared with two different widths in two modules is
     dropped: ambiguous is not a width either.
     """
+    # vibe-ic#731: a commented-out `input [7:0] foo,` declares nothing. Strip
+    # here rather than trusting the caller — `entry` below is sliced out of
+    # `hdr`, so both scans inherit this one strip and neither can be reached by
+    # a sentence. Offsets are not used, so the delete-style stripper is right.
+    rtl = strip_comments(rtl)
     seen: Dict[str, set] = {}
     for hdr in _HDR.finditer(rtl):
         direction = None

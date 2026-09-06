@@ -51,6 +51,43 @@ def _project(tmp_path: Path, *, cut: bool = True, clock: bool = True,
     return tmp_path
 
 
+#: Every ``subprocess.run``-shaped seam the producer is allowed to launch
+#: through, recorded TOGETHER.
+#:
+#: WHY A SET AND NOT ONE NAME (v1.17.73, measured 2026-09-07 on 8HD-4). This
+#: helper used to stub ``R.subprocess.run`` alone. v1.17.73 moved the producer's
+#: launch onto ``_progress_run.run`` — the drop-in that supervises a child on
+#: its FORWARD PROGRESS instead of a wall clock — and ``_progress_run`` spawns
+#: with ``subprocess.Popen``, which ``subprocess.run`` never sees. So all four
+#: assertions below started reading ``launched == []`` and said the producer
+#: launched NOTHING.
+#:
+#: It launches. MEASURED, not argued: driven with ``subprocess.Popen`` wrapped
+#: and DELEGATED to (so the real child really ran), the producer launched
+#: ``transition_fault_atpg_run.py`` and it wrote a real 1628-byte
+#: ``reports/phase2/dft/transition_coverage.json``
+#: (sha256 14d97abde75808df1af2e6f254bf6fe7ec8371f622b87d25bba2c944a86799a4)
+#: from a Yosys SAT proof. The capability was never lost; the RECORDER had gone
+#: blind, and a blind recorder reporting "nothing launched" is the same class of
+#: false sentence as the source-string tests this file replaced.
+#:
+#: The property these tests pin is WHICH PROGRAMS THE PRODUCER LAUNCHES, IN
+#: WHICH ORDER — not which helper carries the launch. So the recorder is put on
+#: every run-shaped seam at once. Moving the producer to any of them keeps the
+#: tests honest; moving it to a seam that is on NO list still fails loudly,
+#: because ``launched`` is empty and the message below says which seams were
+#: watched, so "the producer is silent" can never again be confused with "the
+#: recorder was looking somewhere else".
+_RUN_SEAMS = (
+    ("_progress_run.run", lambda: R._pr, "run"),
+    ("subprocess.run", lambda: R.subprocess, "run"),
+)
+
+
+def _seams_watched() -> str:
+    return ", ".join(name for name, _o, _a in _RUN_SEAMS)
+
+
 def _drive(monkeypatch, project: Path, *, boom: bool = False):
     """Run the producers, recording every program actually launched."""
     launched: list = []
@@ -64,18 +101,30 @@ def _drive(monkeypatch, project: Path, *, boom: bool = False):
         out.write_text(json.dumps({"verdict": "PASS"}))
         return _FakeProc(rc=0)
 
-    monkeypatch.setattr(R.subprocess, "run", _fake)
+    for _name, owner, attr in _RUN_SEAMS:
+        monkeypatch.setattr(owner(), attr, _fake)
     written: list = []
     notes: list = []
     R.run_at_speed_atpg_producers(project, written, notes)
     return launched, written, notes
 
 
+def _why_empty(launched: list) -> str:
+    """The sentence an empty recording has to earn before it is believed."""
+    if launched:
+        return ""
+    return (" — NOTHING was recorded at any of the seams this test watches "
+            f"({_seams_watched()}). Either the producer launched nothing, or "
+            "it launched through a seam that is on neither list; check which "
+            "before reading this as a lost capability.")
+
+
 def test_dt1_producer_invokes_transition_atpg(tmp_path, monkeypatch):
     """The DT1 producer really launches transition_fault_atpg_run.py from
     phase3 — not merely mentions it somewhere in the file."""
     launched, written, _ = _drive(monkeypatch, _project(tmp_path))
-    assert "transition_fault_atpg_run.py" in launched, launched
+    assert "transition_fault_atpg_run.py" in launched, \
+        f"{launched}{_why_empty(launched)}"
     assert str(tmp_path / R._ATPG_COVERAGE_REL["DT1"]) in written
 
 
@@ -124,7 +173,8 @@ def test_dt1_producer_runs_before_dt2(tmp_path, monkeypatch):
     launched, _, _ = _drive(monkeypatch, _project(tmp_path))
     assert launched == ["transition_fault_atpg_run.py",
                         "path_delay_fault_atpg_run.py",
-                        "sdd_atpg_run.py"], launched
+                        "sdd_atpg_run.py"], \
+        f"{launched}{_why_empty(launched)}"
 
 
 def test_dt1_producer_is_nonfatal(tmp_path, monkeypatch):
@@ -132,7 +182,8 @@ def test_dt1_producer_is_nonfatal(tmp_path, monkeypatch):
     finalize, and (since #235) must leave a record saying it exploded."""
     launched, written, notes = _drive(monkeypatch, _project(tmp_path),
                                       boom=True)
-    assert "transition_fault_atpg_run.py" in launched
+    assert "transition_fault_atpg_run.py" in launched, \
+        f"{launched}{_why_empty(launched)}"
     assert written == []
     assert notes, "a failed producer must not be completely silent"
     rec = json.loads((tmp_path / R._ATPG_NOT_RUN_REL["DT1"]).read_text())

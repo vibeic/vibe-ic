@@ -28,6 +28,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 # vibe-ic#712 — the ONE negation vocabulary. A width cell that DENIES a range
 # must not publish it; see `_signal_table_rows` and `_stated_width`.
 from _prose_polarity import is_denied as _prose_is_denied  # noqa: E402
+# vibe-ic#731 — offset-PRESERVING blanker. `_verilog_region_spans` publishes
+# offsets into the caller's text, so the delete-style stripper next to it
+# cannot be used there.
+from _hdl_code_text import strip_hdl_comments_and_strings  # noqa: E402
 
 from _specrtl_common import (  # noqa: E402
     parse_verilog_ports, _parse_md_table_ports, Port, strip_comments,
@@ -115,8 +119,15 @@ def _verilog_region_spans(text: str) -> List[tuple]:
     Verilog. Split out of `_verilog_regions` for vibe-ic#2060 so a caller can
     quote the SOURCE LINE a port was read from — evidence a reader can check
     against the input document, which a joined region string cannot give."""
+    # vibe-ic#731 — the module-span scan runs over BLANKED text: a prose
+    # sentence inside a `//` comment ("// module foo … endmodule") otherwise
+    # opens a span whose content is then read for ports. Blanked, not deleted,
+    # because the spans returned here index the CALLER's `text`; a delete-style
+    # strip would shift every offset and `_source_line` would quote the wrong
+    # line, which is a worse and quieter defect than the one being closed.
+    scanned = strip_hdl_comments_and_strings(text)
     cand = [(m.start(1), m.end(1)) for m in _FENCE.finditer(text)]
-    cand += [m.span() for m in _MODULE_SPAN.finditer(text)]
+    cand += [m.span() for m in _MODULE_SPAN.finditer(scanned)]
     # Only KEEP regions whose content is actually Verilog (see above) — a fence
     # holding logs/pseudo-code or a prose module…endmodule span is dropped, so a
     # non-Verilog region can never inject a phantom port.
