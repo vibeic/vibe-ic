@@ -49,7 +49,8 @@ import pytest
 
 _PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_PROGRAMS))
-import _eda_image as M  # noqa: E402
+import _eda_image as M
+import _eda_pin as _pin  # noqa: E402
 
 #: Every program whose rc 1 can stop a landing while being a statement about the
 #: IMAGE's contents. Each is wired in `tools/ci/repo_hygiene_gates.sh`.
@@ -60,13 +61,23 @@ _BLOCKING_IMAGE_GATES = (
 )
 
 
-def _local_only(monkeypatch, *, digest="sha256:" + "9" * 64):
-    """A host that HAS an image, with the registry made fatal to touch."""
+def _local_only(monkeypatch, *, digest=None):
+    """A host that HAS the pinned image, with the registry made fatal to touch.
+
+    THE STUB MOVED WITH THE MECHANISM, AND #927'S PROPERTY DID NOT MOVE. This
+    used to stub the local-TAG ladder, because that was how a blocking verdict
+    reached an image. It resolves the PIN now — measured 2026-09-07 on 8hd-3,
+    the tag ladder returned 0.3.16 on a host whose operator had pinned 0.3.47 —
+    and the property being asserted is if anything better served: a fixed digest
+    cannot be re-pointed by a publish AT ALL, whereas the newest local tag moved
+    the moment anything on the host pulled a newer one.
+    """
+    digest = _pin.IMAGE_DIGEST if digest is None else digest
     monkeypatch.setattr(M, "local_tags", lambda *a, **k: ["0.3.13"])
-    monkeypatch.setattr(M, "local_digest",
-                        lambda ref: (digest, "repo-digest", ""))
+    monkeypatch.setattr(_pin, "pinned_image_present",
+                        lambda env=None: (_pin.image_reference(env), ""))
     monkeypatch.setattr(M, "image_version",
-                        lambda ref: ("0.3.13", "local-label", ""))
+                        lambda ref: ("0.3.47", "local-label", ""))
     monkeypatch.setattr(M, "registry_digest", lambda *a, **k: pytest.fail(
         "the blocking resolution asked the registry"))
 
@@ -75,7 +86,7 @@ def _local_only(monkeypatch, *, digest="sha256:" + "9" * 64):
 
 def test_the_verdict_is_identical_with_and_without_a_registry(monkeypatch):
     _local_only(monkeypatch)
-    assert M.judged_image(env={}).digest == "sha256:" + "9" * 64
+    assert M.judged_image(env={}).digest == _pin.IMAGE_DIGEST
 
 
 def test_a_registry_that_published_while_we_ran_changes_nothing(monkeypatch):
@@ -84,7 +95,7 @@ def test_a_registry_that_published_while_we_ran_changes_nothing(monkeypatch):
     so a future edit that "just checks whether we are behind" cannot slip in."""
     _local_only(monkeypatch)
     monkeypatch.setenv("SOMETHING_UNRELATED", "1")
-    assert M.judged_image(env={}).source == "local"
+    assert M.judged_image(env={}).source == "pinned"
 
 
 def test_a_severed_registry_is_not_a_different_verdict(monkeypatch):
@@ -94,16 +105,18 @@ def test_a_severed_registry_is_not_a_different_verdict(monkeypatch):
     _local_only(monkeypatch)
     monkeypatch.setattr(M, "registry_version_label", _boom)
     j = M.judged_image(env={})
-    assert j.digest == "sha256:" + "9" * 64 and j.version == "0.3.13"
+    assert j.digest == _pin.IMAGE_DIGEST and j.version == "0.3.47"
 
 
 def test_reaching_the_registry_is_OPT_IN_and_nothing_else_opts_in(monkeypatch):
     """The one door, and it is the caller's to open. `--allow-pull` exists
     because `docker run` on a reference this host does not hold FETCHES it, and
     the operator — not a gate — decides whether to spend that."""
-    monkeypatch.setattr(M, "local_tags", lambda *a, **k: [])
-    monkeypatch.setattr(M, "registry_digest", lambda *a, **k: "sha256:" + "8" * 64)
-    monkeypatch.setattr(M, "image_version", lambda ref: ("0.3.19", "registry-label", ""))
+    monkeypatch.setattr(_pin, "pinned_image_present",
+                        lambda env=None: (None, "IMAGE_NOT_PRESENT: x"))
+    monkeypatch.setattr(M, "image_digest",
+                        lambda ref, **k: (_pin.IMAGE_DIGEST, "registry-manifest", ""))
+    monkeypatch.setattr(M, "image_version", lambda ref: ("0.3.47", "registry-label", ""))
     assert M.judged_image(env={}).ref is None
     assert M.judged_image(env={}, allow_pull=True).source == "registry"
 

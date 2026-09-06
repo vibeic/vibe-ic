@@ -46,11 +46,19 @@ import subprocess
 from typing import Dict, List, Optional, Tuple
 
 import _spef_coupling as SC
+import _eda_pin as _pin  # noqa: E402 — the ONE place the pin is stated
 import pdk_dielectric_fit as PF
 from _atomic_artefact import writing as atomic_writing  # vibe-ic#1082 (helper from PR #1094)
 
 UM_TO_M = 1e-6
-DEFAULT_CONTAINER = os.environ.get("VIBEIC_EDA_CONTAINER", "vibeic-eda")
+#: `_eda_pin.default_container_name()` IS this expression, plus the part
+#: that was missing: the default half derives from the pinned digest
+#: instead of being the shared literal `vibeic-eda`.  MEASURED 2026-09-07
+#: on 8hd-3 -- the container holding that shared name was running 0.3.46
+#: while the pin demanded 0.3.47, and a run that attached to it recorded
+#: image provenance PASS about the wrong image.  `VIBEIC_EDA_CONTAINER` is
+#: read exactly as before and still wins.
+DEFAULT_CONTAINER = _pin.default_container_name()
 DEFAULT_WINDOW_UM = 2.0
 DEFAULT_MAX_AGGRESSORS = 6
 DEFAULT_MAX_BOXES = 48

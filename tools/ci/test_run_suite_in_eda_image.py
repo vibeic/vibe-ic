@@ -256,16 +256,39 @@ def test_the_harness_keeps_no_literal_copy_of_the_pinned_digest():
 
 
 def test_the_pinned_image_is_a_digest_and_matches_the_landing_preflight():
-    """A floating tag is how a host ends up with a runtime nobody pinned."""
+    """A floating tag is how a host ends up with a runtime nobody pinned.
+
+    THE PREFLIGHT READS THE PIN NOW; IT NO LONGER SPELLS IT. This used to look
+    for the digest as TEXT in that file, which is the very shape the tests
+    beside it assert against: a second literal copy of a pinned value is a
+    second definition of it. The plugin's copy moved into
+    `programs/_eda_pin.py`, so what is bound here is that the two REMAINING
+    definitions -- the harness's and the plugin's -- name the same bytes, and
+    that the preflight composes its reference from the plugin's rather than
+    from a literal of its own.
+    """
     image = _pinned_image()
     assert "@sha256:" in image, image
-    preflight = (_REPO / "vibe-ic-marketplace/plugins/vibe-ic/programs"
-                 / "landing_pytest_runtime_preflight.py").read_text(
-                     encoding="utf-8")
-    digest = image.split("@sha256:")[1]
-    assert digest in preflight, (
-        "the pinned runtime and the landing runtime preflight name different "
-        "images")
+    digest = "sha256:" + image.split("@sha256:")[1]
+    programs = _REPO / "vibe-ic-marketplace/plugins/vibe-ic/programs"
+    preflight = (programs / "landing_pytest_runtime_preflight.py").read_text(
+        encoding="utf-8")
+    assert "_pin.image_reference()" in preflight, (
+        "the landing runtime preflight must READ the pin, not spell it")
+    assert digest not in preflight, (
+        "the landing runtime preflight has grown a literal digest again")
+
+    import ast
+    pin_src = (programs / "_eda_pin.py").read_text(encoding="utf-8")
+    plugin_pin = None
+    for node in ast.parse(pin_src).body:
+        if isinstance(node, ast.Assign) and any(
+                getattr(t, "id", "") == "IMAGE_DIGEST" for t in node.targets):
+            plugin_pin = ast.literal_eval(node.value)
+            break
+    assert plugin_pin == digest, (
+        "the pinned runtime and the plugin's pin name different images: "
+        f"harness {digest} vs plugin {plugin_pin}")
 
 
 def test_the_harness_composes_the_pin_from_digest_and_configured_repository():

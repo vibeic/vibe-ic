@@ -105,8 +105,13 @@ from typing import NamedTuple, Optional, Tuple
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _progress_run as _pr  # noqa: E402
+import _eda_pin as _pin  # noqa: E402 — the ONE place the pin is stated
 
-IMAGE_REPO = "ghcr.io/vibeic/vibeic-eda"
+#: The published repository, and the DEFAULT half of the one config point. Kept
+#: as a name here because this module also answers questions ABOUT a repository
+#: (`local_tags`, `registry_digest`) that are not the pin. What RUNS comes from
+#: `_eda_pin.image_reference()`, never from this constant.
+IMAGE_REPO = _pin.IMAGE_REPO_DEFAULT
 #: Last resort only. The upstream image this fork descends from; it lacks the
 #: forked tools (Fault, the patched yosys/iverilog) that most callers need.
 LEGACY_IMAGE = "hpretl/iic-osic-tools:latest"
@@ -183,14 +188,12 @@ def local_image(repo: str = IMAGE_REPO, env=None) -> Optional[str]:
         override = (env.get(key) or "").strip()
         if override:
             return override
-    tags = local_tags(repo)
-    if tags:
-        return f"{repo}:{tags[0]}"
-    try:
-        r = _run("docker", "image", "inspect", LEGACY_IMAGE)
-    except (OSError, subprocess.SubprocessError):
-        return None
-    return LEGACY_IMAGE if r.returncode == 0 else None
+    # THE PINNED BYTES, OR NOTHING. The newest local semver tag used to be the
+    # answer here, and it answers a different question -- "what does this
+    # machine happen to have?" -- which is how a host holding the pinned image
+    # still reported the 0.3.16 tag it had also kept.
+    ref, _why = _pin.pinned_image_present(env)
+    return ref
 
 
 class JudgedImage(NamedTuple):
@@ -414,29 +417,37 @@ def judged_image(env=None, *, explicit: Optional[str] = None,
         return _with_version(JudgedImage(_pinned(chosen, digest, kind), digest,
                                          kind, "override", ""))
 
-    tags = local_tags(repo)
-    if tags:
-        ref = f"{repo}:{tags[0]}"
-        digest, kind, why = local_digest(ref)
-        if digest:
-            return _with_version(JudgedImage(_pinned(ref, digest, kind),
-                                             digest, kind, "local", ""))
+    # THE PIN, RESOLVED BY DIGEST. Not the newest local tag: MEASURED
+    # 2026-09-07 on 8hd-3, this rung returned `ghcr.io/vibeic/vibeic-eda@
+    # sha256:f6b09c13…` -- the 0.3.16 tag this host also happened to keep --
+    # while the pinned bytes were present under the configured repository. The
+    # gate judged 0.3.16 and the report named it, so it read as reproducible;
+    # it was reproducibly about the wrong image.
+    ref = _pin.image_reference(env)
+    present, why_absent = _pin.pinned_image_present(env)
+    if present:
+        return _with_version(JudgedImage(present, _pin.IMAGE_DIGEST,
+                                         "repo-digest", "pinned", ""))
 
     if allow_pull:
-        remote = registry_digest(repo)
-        if remote:
-            return _with_version(JudgedImage(f"{repo}@{remote}", remote,
+        # The registry is asked about THE PINNED DIGEST, never about `latest`.
+        # Opting into a pull is opting into fetching the bytes that were
+        # pinned, and cannot become opting into whichever bytes are newest.
+        remote, _kind, _why = image_digest(ref, allow_registry=True)
+        if remote == _pin.IMAGE_DIGEST:
+            return _with_version(JudgedImage(ref, _pin.IMAGE_DIGEST,
                                              "registry-manifest", "registry", ""))
 
-    tried = (f"no {repo} image is present on this host"
-             if not tags else
-             f"the newest local {repo} image ({tags[0]}) carries no digest")
+    # NO FALLBACK. Not another tag, not another version, not the upstream
+    # image: each of those is an answer about a DIFFERENT toolchain, and
+    # returning one is what made a verdict about the wrong image possible.
+    tried = why_absent or f"{_pin.IMAGE_NOT_PRESENT}: {ref}"
     if not allow_pull:
         tried += ("; this gate does not pull, because a multi-gigabyte download "
                   "is the operator's call, not a gate's (pass --allow-pull, or "
                   "--image, if that is what you mean)")
     else:
-        tried += " and the registry could not be read"
+        tried += " and the registry could not confirm the pinned digest"
     return JudgedImage(None, None, "", "", tried)
 
 
@@ -532,28 +543,20 @@ def resolve(env=None, *, repo: str = IMAGE_REPO) -> str:
         if override:
             return override
 
-    digest = registry_digest(repo)
-    if digest:
-        return f"{repo}@{digest}"
-
-    tags = local_tags(repo)
-    if tags:
-        _note(f"registry unreachable; using the newest LOCAL {repo} tag "
-              f"({tags[0]}). It may be older than what is published.")
-        return f"{repo}:{tags[0]}"
-
-    # A LOCAL vibeic-eda TAG BEFORE THE LEGACY IMAGE, and that order is a
-    # regression I shipped and a test caught: dropping straight to upstream here
-    # runs a DFT step against a toolchain with no Fault and no patched yosys.
-    # The step above is what preserves it — being unable to ASK which image is
-    # current is not a reason to reach past a fork image this machine already
-    # holds. There is nothing below it to consult: the checkout no longer
-    # remembers a version, and a remembered version could not be pulled with the
-    # registry unreachable anyway.
-
-    _note(f"registry unreachable and no local {repo} image; falling "
-          f"back to {LEGACY_IMAGE}, which does NOT carry the forked tools.")
-    return LEGACY_IMAGE
+    # THE RUN PATH READS THE SAME PIN THE GATE PATH DOES, from the same config
+    # point. It used to ask the registry what `latest` meant and then walk down
+    # through the newest local tag to upstream iic-osic-tools -- three rungs,
+    # each naming a DIFFERENT toolchain, none of them the one anybody pinned.
+    # Composing the reference cannot fail and cannot go stale; whether this host
+    # HOLDS those bytes is `local_image()`'s question and is deliberately still
+    # a separate one, because collapsing the two turns a skip guard's local
+    # check into an unbounded fetch.
+    ref = _pin.image_reference(env)
+    if not local_image(env=env):
+        _note(f"{_pin.IMAGE_NOT_PRESENT}: {ref} is not on this host; running it "
+              f"will fetch exactly those pinned bytes. Nothing older is "
+              f"substituted.")
+    return ref
 
 
 def main(argv=None) -> int:
