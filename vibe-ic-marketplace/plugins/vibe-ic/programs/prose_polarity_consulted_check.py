@@ -118,6 +118,25 @@ _SEARCH_ATTRS = {"search", "findall", "finditer", "match", "fullmatch"}
 #: The count is printed on every run, clean or not.
 _EXEMPT_REASON_MIN = 80
 _NOT_PROSE: Dict[str, str] = {
+    "phase1_port_extract::_signal_table_rows":
+        "MARKDOWN TABLE grammar. The only things this function matches are "
+        "COLUMN HEADER LABELS -- `_NAME_HDR`, `_DIR_HDR`, `_WIDTH_HDR`, "
+        "`_DESC_HDR` against the cells of a `| Signal | Dir | Width | "
+        "Description |` header row -- and a delimiter row. There is no form in "
+        "that grammar that DENIES a column: a table cannot be written to say "
+        "`this is NOT the width column`. A header is present or the walker "
+        "declines the table, and declining is already how it reports that "
+        "(`name_col is None or dir_col is None` -> skip). "
+        "AND IT DISTILS NO VALUE FROM A SENTENCE. What it writes is the row "
+        "VERBATIM: `row` is the line, `width_cell` and `description` are the "
+        "cells copied across unread. Its own docstring binds it to that -- "
+        "'this walker adds no port and drops none; it only recovers the cells "
+        "that the `Port` record cannot carry'. The description cell IS free "
+        "prose, and the polarity question about it belongs to whichever "
+        "consumer interprets it, not to the copier that carried it intact. "
+        "Added by v1.18.1 (dc12d3465), caught the day it landed by the ratchet "
+        "this entry sits beside -- which is the mechanism working, and the "
+        "reason this is a reviewed claim rather than a baseline write.",
     "submission_template_fetch::technology_facts":
         "LEF `DATABASE MICRONS <n> ;` — the UNITS production of a PDK's own "
         "tech LEF, read inside the digest-pinned image to transcribe the "

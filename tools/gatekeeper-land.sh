@@ -601,6 +601,24 @@ else
   landing_skip "cheap:base-ancestry" "range is empty"
 fi
 run "cheap:version-sync" "marketplace <-> plugin version sync" python3 "$PROGRAMS/marketplace_version_sync_check.py"
+# vibe-ic#712 — NO LANDING MAY ADD A POLARITY-BLIND PROSE EXTRACTOR.
+#
+# Whole-tree, so it sits OUTSIDE the range block above with `version-sync`: the
+# question is what the tree that ships contains, not what this push touched.
+#
+# `--ratchet` is a MEMBERSHIP verdict against `_OFFENDER_REGISTER`, not a count.
+# MEASURED across v1.17.51..v1.17.83 the population went 212 -> 213 -> 214 ->
+# 213 -> 214 -> 215 because entries both ENTER and LEAVE, so the number moved
+# DOWN in a window where offenders were arriving; bisecting it names the wrong
+# landing. It fails on an offender that is NOT registered — a landing adding one
+# — and on a register entry that outlived its offender, so the register cannot
+# rot into a list of things that used to be true.
+#
+# It is NOT the plain no-argument mode: that one compares against a baseline
+# debt file and prints an errand naming a write flag. A landing gate must name
+# the offender and its owning lane, never a flag that banks it.
+run "cheap:prose-polarity" "prose polarity — no landing adds an unregistered offender" \
+  python3 "$PROGRAMS/prose_polarity_consulted_check.py" --ratchet
 # A landing is normally ONE commit. A batch is legitimate when several
 # independent changes land together — NO-MIX forces a benchmark-data fix and a
 # plugin change into separate commits, for instance — and the gate accepts that
