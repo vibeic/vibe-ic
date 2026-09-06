@@ -448,6 +448,7 @@ _BACKUP_WORKLIST = "needs_ai_backup.jsonl"
 _REPAIR_WORKLIST = "needs_ai_repair.jsonl"
 _ENHANCEMENT_WORKLIST = "program_enhancement_candidates.jsonl"
 _ACCEPTANCE_REPORT = "program_first_ai_review_acceptance.json"
+_REVIEW_CORRECTION_SCHEMA = "vibeic.benchmark.ai_review_correction.v1"
 
 #: A verification challenge has three substantive outcomes -- the candidate
 #: PASSed it, the candidate FAILed it, or the challenge itself is INVALID --
@@ -4189,19 +4190,269 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
     return 2 if (remaining_backup or repairs or ordered_tasks) else 1
 
 
+def _correction_path(path: str | Path, run_p: Path | None = None,
+                     *, exists: bool = True) -> Path:
+    """BLOCKING: correction evidence may not traverse a symlink or escape run."""
+    if not isinstance(path, (str, Path)) or not str(path):
+        raise ValueError("REVIEW_CORRECTION_REFUSED: malformed path")
+    path = Path(path).absolute()
+    if any(part.is_symlink() for part in [path, *path.parents]):
+        raise ValueError(f"REVIEW_CORRECTION_REFUSED: symlink path: {path}")
+    path = path.resolve()
+    if run_p is not None and not path.is_relative_to(run_p):
+        raise ValueError(f"REVIEW_CORRECTION_REFUSED: path outside run: {path}")
+    if exists and not path.is_file():
+        raise ValueError(f"REVIEW_CORRECTION_REFUSED: missing file: {path}")
+    return path
+
+
+def _correction_object(path: Path) -> tuple[dict, str]:
+    raw = path.read_bytes().decode("utf-8")
+    obj = json.loads(raw)
+    if not isinstance(obj, dict):
+        raise ValueError(f"REVIEW_CORRECTION_REFUSED: not a JSON object: {path}")
+    return obj, raw
+
+
+def _review_task_digest(task: dict) -> str:
+    return _sha256_text(json.dumps(task, ensure_ascii=False, sort_keys=True))
+
+
+def _apply_review_correction(run_p: Path, request_path: Path) -> None:
+    """Advance ONE unaccepted review, not its candidate or acceptance verdict.
+
+    BLOCKING: explicit AI attribution, prompt evidence and exact source hashes
+    are required. The old current challenge becomes an ordinary inherited
+    obligation; ONLY the existing validation/supersession/coverage predicates
+    can subsequently retire it. This operation neither proves a defect nor
+    authorizes repair, and it never reopens an accepted/published candidate.
+
+    Called only under the solve/resume coordinator lock. Immutable archives are
+    prepared first; the sole state-transition commit is the atomic worklist
+    replacement. Interruption before that commit leaves the old task active;
+    repeating the same request reuses identical archives. Interruption after it
+    leaves the new, unreviewed task active. Ordinary resume derives all other
+    worklists and the pending acceptance ledger from that authoritative task.
+    """
+    run_p = run_p.resolve()
+    request, request_raw = _correction_object(_correction_path(request_path))
+    request_sha = _sha256_text(request_raw)
+    task_path = _correction_path(run_p / _REVIEW_WORKLIST, run_p)
+    task_raw = task_path.read_text(encoding="utf-8")
+    tasks = _read_jsonl(task_path)
+    ids = [str(t.get("id")) for t in tasks]
+    pid = str(request.get("id") or "")
+    if not pid or len(set(ids)) != len(ids) or ids.count(pid) != 1:
+        raise ValueError("REVIEW_CORRECTION_REFUSED: missing or duplicate task id")
+    current = tasks[ids.index(pid)]
+    archive = run_p / "review_corrections" / _safe_problem_id(pid) / request_sha
+    transition_path = _correction_path(archive / "transition.json", run_p,
+                                       exists=False)
+    transition = None
+    if transition_path.exists():
+        transition, _ = _correction_object(transition_path)
+        task = transition.get("prior_task")
+        if not isinstance(task, dict):
+            raise ValueError("REVIEW_CORRECTION_REFUSED: invalid transition archive")
+    else:
+        task = current
+    if request.get("schema") != _REVIEW_CORRECTION_SCHEMA:
+        raise ValueError("REVIEW_CORRECTION_REFUSED: wrong request schema")
+    if task.get("schema") != _REVIEW_TASK_SCHEMA:
+        raise ValueError("REVIEW_CORRECTION_REFUSED: wrong task schema")
+    for field, expected in (
+            ("task_sha256", _review_task_digest(task)),
+            ("prompt_sha256", task.get("prompt_sha256")),
+            ("rtl_sha256", task.get("rtl_sha256"))):
+        if not re.fullmatch(r"[0-9a-f]{64}", str(request.get(field) or "")) \
+                or request[field] != expected:
+            raise ValueError(f"REVIEW_CORRECTION_REFUSED: stale {field}")
+    author = request.get("author")
+    blind = request.get("blind")
+    if (not isinstance(author, dict) or author.get("kind") != "AI"
+            or not isinstance(author.get("model"), str)
+            or author["model"].strip().lower() in {"", "unknown", "unspecified", "n/a"}
+            or not isinstance(blind, dict) or blind.get("oracle_accessed") is not False):
+        raise ValueError("REVIEW_CORRECTION_REFUSED: attributed blind AI required")
+    if not isinstance(request.get("rationale"), str) \
+            or len(request["rationale"].strip()) < 80:
+        raise ValueError("REVIEW_CORRECTION_REFUSED: rationale needs 80 characters")
+    prompt_path = _correction_path(task.get("prompt_path") or "", run_p)
+    prompt_text = prompt_path.read_text(encoding="utf-8")
+    if not _verified_prompt_evidence(request.get("prompt_evidence"), prompt_text):
+        raise ValueError("REVIEW_CORRECTION_REFUSED: prompt-bound evidence required")
+    candidate = task.get("candidate_snapshot")
+    if not isinstance(candidate, dict):
+        raise ValueError("REVIEW_CORRECTION_REFUSED: candidate snapshot missing")
+    material_paths = [prompt_path]
+    project = _correction_path(task.get("project") or "", run_p, exists=False)
+    if not project.is_dir():
+        raise ValueError("REVIEW_CORRECTION_REFUSED: missing project directory")
+    working_paths = [_correction_path(p, run_p) for p in _rtl_files(project)]
+    for field in ("rtl_paths", "working_rtl_paths"):
+        paths = task.get(field)
+        if not isinstance(paths, list) or not paths:
+            raise ValueError(f"REVIEW_CORRECTION_REFUSED: missing {field}")
+        material_paths.extend(_correction_path(p, run_p) for p in paths)
+    for field in ("completion_path", "response_payload_path", "manifest_path"):
+        material_paths.append(_correction_path(candidate.get(field) or "", run_p))
+    material_paths.extend(_correction_path(p, run_p)
+                          for p in candidate.get("rtl_paths") or [])
+    if (_validate_candidate_snapshot(candidate, pid)
+            or _current_task_material(task)[:2] != (
+                task.get("prompt_sha256"), task.get("rtl_sha256"))
+            or sorted(task["rtl_paths"]) != sorted(candidate["rtl_paths"])
+            or sorted(str(p) for p in working_paths)
+                != sorted(task["working_rtl_paths"])
+            or _sha256_text(_candidate_text(working_paths))
+                != task.get("rtl_sha256")):
+        raise ValueError("REVIEW_CORRECTION_REFUSED: prompt/candidate/working RTL drift")
+    review_path = _correction_path(task.get("review_path") or "", run_p)
+    review, review_raw = _correction_object(review_path)
+    for field in ("id", "prompt_sha256", "rtl_sha256"):
+        if review.get(field) != task.get(field):
+            raise ValueError(f"REVIEW_CORRECTION_REFUSED: prior review {field} drift")
+    if (review.get("schema") != _AI_REVIEW_SCHEMA
+            or not isinstance(review.get("reviewer"), dict)
+            or review["reviewer"].get("kind") != "AI"
+            or not isinstance(review.get("blind"), dict)
+            or review["blind"].get("oracle_accessed") is not False):
+        raise ValueError("REVIEW_CORRECTION_REFUSED: malformed prior AI review")
+    if request.get("review_sha256") != _sha256_text(review_raw):
+        raise ValueError("REVIEW_CORRECTION_REFUSED: prior review hash drift")
+    challenge_path = _correction_path(task.get("challenge_path") or "", run_p)
+    raw_test = review.get("verification_test")
+    if not isinstance(raw_test, dict):
+        raise ValueError("REVIEW_CORRECTION_REFUSED: prior challenge missing")
+    _correction_path(raw_test.get("path") or "", run_p)
+    challenge, reasons = _challenge_from_review(task, review, prompt_text)
+    if reasons or not challenge:
+        raise ValueError("REVIEW_CORRECTION_REFUSED: " + "; ".join(reasons))
+    if request.get("challenge_sha256") != challenge["sha256"]:
+        raise ValueError("REVIEW_CORRECTION_REFUSED: current challenge hash drift")
+    material_paths.extend([review_path, challenge_path])
+    inherited = task.get("verification_challenges")
+    if not isinstance(inherited, list) or not all(isinstance(c, dict) for c in inherited):
+        raise ValueError("REVIEW_CORRECTION_REFUSED: malformed inherited challenges")
+    for item in inherited:
+        path = _correction_path(item.get("path") or "", run_p)
+        if _sha256_text(path.read_text(encoding="utf-8")) != item.get("sha256"):
+            raise ValueError("REVIEW_CORRECTION_REFUSED: inherited challenge drift")
+        material_paths.append(path)
+    hashes = {str(p): hashlib.sha256(p.read_bytes()).hexdigest()
+              for p in material_paths}
+    key = f"review-correction-{request_sha}"
+    new_review = _correction_path(
+        run_p / "ai_reviews" / _safe_problem_id(pid) / f"{key}.json",
+        run_p, exists=False)
+    new_challenge = _correction_path(
+        run_p / "ai_verification_challenges" / _safe_problem_id(pid)
+        / key / "challenge_tb.sv", run_p, exists=False)
+
+    def replace_paths(value):
+        if isinstance(value, dict):
+            return {k: replace_paths(v) for k, v in value.items()}
+        if isinstance(value, list):
+            return [replace_paths(v) for v in value]
+        if value == task["challenge_path"]:
+            return str(new_challenge)
+        if value == task["review_path"]:
+            return str(new_review)
+        return value
+
+    new_task = replace_paths(task)
+    new_task["verification_challenges"] = list(inherited)
+    if not any(c.get("sha256") == challenge["sha256"] for c in inherited):
+        new_task["verification_challenges"].append(challenge)
+    new_task["review_correction"] = {
+        "schema": _REVIEW_CORRECTION_SCHEMA,
+        "request_sha256": request_sha,
+        "archive_path": str(archive),
+        "prior_review_path": str(review_path),
+        "prior_review_sha256": request["review_sha256"],
+        "prior_challenge_sha256": challenge["sha256"],
+        "status": "FRESH_REVIEW_REQUIRED",
+        "repair_authorized": False,
+    }
+    expected_transition = {"schema": _REVIEW_CORRECTION_SCHEMA,
+                           "prior_task": task, "new_task": new_task,
+                           "material_sha256": hashes,
+                           "request_sha256": request_sha}
+    if transition is not None and transition != expected_transition:
+        raise ValueError("REVIEW_CORRECTION_REFUSED: transition evidence drift")
+    if current not in (task, new_task):
+        raise ValueError("REVIEW_CORRECTION_REFUSED: current task drift")
+    already_applied = current == new_task
+    if not already_applied:
+        solve, _ = _correction_object(_correction_path(run_p / "solve_report.json", run_p))
+        results = solve.get("results")
+        matches = ([r for r in results if isinstance(r, dict) and r.get("id") == pid]
+                   if isinstance(results, list) else [])
+        if len(matches) != 1 or matches[0].get("accepted") is not False:
+            raise ValueError("REVIEW_CORRECTION_REFUSED: task must be unaccepted")
+        acceptance_path = _correction_path(run_p / _ACCEPTANCE_REPORT, run_p,
+                                          exists=False)
+        if acceptance_path.exists():
+            acceptance, _ = _correction_object(acceptance_path)
+            if pid in (acceptance.get("accepted_ids") or []):
+                raise ValueError("REVIEW_CORRECTION_REFUSED: candidate already accepted")
+        response = _correction_path(task.get("response_path") or "", run_p, exists=False)
+        if response.exists() or new_review.exists() or new_challenge.exists():
+            raise ValueError("REVIEW_CORRECTION_REFUSED: published response or occupied new path")
+    archives = {"prior_task.json": json.dumps(task, ensure_ascii=False, sort_keys=True) + "\n",
+                "prior_review.json": review_raw,
+                "prior_challenge_tb.sv": challenge_path.read_bytes().decode("utf-8"),
+                "request.json": request_raw,
+                "transition.json": json.dumps(expected_transition, ensure_ascii=False,
+                                              sort_keys=True) + "\n"}
+    for name, raw in archives.items():
+        path = _correction_path(archive / name, run_p, exists=False)
+        if path.exists():
+            if path.read_bytes().decode("utf-8") != raw:
+                raise ValueError("REVIEW_CORRECTION_REFUSED: immutable archive drift")
+        else:
+            if transition is not None:
+                raise ValueError("REVIEW_CORRECTION_REFUSED: immutable archive missing")
+            _atomic_write_text(path, raw)
+    # Recheck all source material before the one authoritative commit.
+    for path, digest in hashes.items():
+        source = _correction_path(path, run_p)
+        if hashlib.sha256(source.read_bytes()).hexdigest() != digest:
+            raise ValueError("REVIEW_CORRECTION_REFUSED: source changed during preparation")
+    if task_path.read_text(encoding="utf-8") != task_raw:
+        raise ValueError("REVIEW_CORRECTION_REFUSED: worklist changed during preparation")
+    if not already_applied:
+        tasks[ids.index(pid)] = new_task
+        _write_jsonl(task_path, tasks)
+    print(f"  {pid}: REVIEW_CORRECTION_" +
+          ("ALREADY_APPLIED" if already_applied else "APPLIED") +
+          "; same candidate; FRESH_REVIEW_REQUIRED; no repair permit")
+
+
 def cmd_resume(bench: str, dataset: str, run: str, jobs: int = 1,
                heavy_jobs: int | None = None,
-               worker_threads: int = 0) -> int:
+               worker_threads: int = 0,
+               review_correction: str | None = None) -> int:
     """Run the sole resume coordinator under an exclusive run-root lock."""
     try:
+        if review_correction is not None:
+            # Check BEFORE resolve/open of the persistent coordinator lock.
+            _correction_path(Path(run) / _COORDINATOR_LOCK,
+                             Path(run).absolute().resolve(), exists=False)
         with _run_root_coordinator_lock(Path(run), "resume"):
+            if review_correction is not None:
+                try:
+                    _apply_review_correction(Path(run).resolve(), Path(review_correction))
+                except (KeyError, TypeError, AttributeError) as exc:
+                    raise ValueError("REVIEW_CORRECTION_REFUSED: malformed evidence: "
+                                     f"{type(exc).__name__}: {exc}") from exc
             return _cmd_resume_locked(
                 bench, dataset, run, jobs=jobs, heavy_jobs=heavy_jobs,
                 worker_threads=worker_threads)
     except _CoordinatorBusy as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
-    except ValueError as exc:
+    except (ValueError, OSError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
 
@@ -4234,6 +4485,11 @@ def main():
                          "proves the frozen candidate wrong, then is re-gated "
                          "and must pass the same test plus fresh AI review; "
                          f"repeat until {_ACCEPTANCE_REPORT} is COMPLETE.")
+    ap.add_argument("--review-correction", metavar="REQUEST.json",
+                    help="with --resume: explicitly archive and advance one "
+                         "unaccepted review on unchanged RTL; requires "
+                         "hash-bound blind AI correction evidence; never "
+                         "accepts, supersedes a challenge, or permits repair")
     ap.add_argument("--limit", type=int, default=0,
                     help="with --solve: stop after N problems (0 = all)")
     ap.add_argument("--dataset", help="dataset path on disk")
@@ -4270,6 +4526,8 @@ def main():
                     help="OPT-IN: score even if the run lacks Vibe-IC runner entry evidence "
                          "(NON-CANONICAL). Default HARD-BLOCKs direct-agent authoring/patching.")
     a = ap.parse_args()
+    if a.review_correction and (not a.resume or a.solve or a.score or a.show or a.list):
+        ap.error("--review-correction requires --resume alone")
 
     if a.list:
         cmd_list()
@@ -4315,7 +4573,8 @@ def main():
             raise SystemExit("--resume requires --dataset and --run")
         sys.exit(cmd_resume(
             a.bench, a.dataset, a.run, jobs=a.jobs,
-            heavy_jobs=a.heavy_jobs, worker_threads=a.worker_threads))
+            heavy_jobs=a.heavy_jobs, worker_threads=a.worker_threads,
+            review_correction=a.review_correction))
     if a.solve:
         if not (a.dataset and a.run):
             raise SystemExit("--solve requires --dataset and --run")
