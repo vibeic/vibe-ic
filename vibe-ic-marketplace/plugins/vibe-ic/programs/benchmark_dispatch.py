@@ -1193,11 +1193,22 @@ def _challenge_from_review(task: dict, review: dict,
         reasons.append("verification test is not self-contained")
     if "module vibeic_ai_challenge_tb" not in source:
         reasons.append("verification test must define vibeic_ai_challenge_tb")
+    # These are SOURCE-TEXT checks, and the reason has to say so. A challenge
+    # written as `$display("VIBEIC_AI_CHALLENGE=%s", bad ? "FAIL" : "PASS")`
+    # prints the marker perfectly at run time and is still rejected here,
+    # because neither literal appears in the file. Telling its author the test
+    # "must print" a marker it demonstrably does print sends them to debug the
+    # wrong thing; naming the literal-vs-format-string distinction is the whole
+    # remedy.
+    _MARKER_FIX = (" as a LITERAL in the source (a $display format string such "
+                   "as \"VIBEIC_AI_CHALLENGE=%s\" prints correctly at run time "
+                   "but contains neither literal; use one $display per marker)")
     if "VIBEIC_AI_CHALLENGE=PASS" not in source:
-        reasons.append("verification test must print VIBEIC_AI_CHALLENGE=PASS")
+        reasons.append("verification test must contain VIBEIC_AI_CHALLENGE=PASS"
+                       + _MARKER_FIX)
     if "VIBEIC_AI_CHALLENGE=FAIL" not in source:
-        reasons.append("verification test must print VIBEIC_AI_CHALLENGE=FAIL "
-                       "before failing")
+        reasons.append("verification test must contain VIBEIC_AI_CHALLENGE=FAIL"
+                       + _MARKER_FIX)
     rationale = str(raw.get("rationale") or "").strip()
     expected_behavior = str(raw.get("expected_behavior") or "").strip()
     if len(rationale) < 80:
