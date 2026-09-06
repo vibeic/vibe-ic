@@ -463,13 +463,19 @@ def test_no_report_typed_spec_selects_the_rtl_header_rule():
         f"RTL header: {offenders}")
 
 
-def test_fixture_generator_no_longer_manufactures_the_header():
+def test_regenerated_fixtures_carry_no_manufactured_header():
     """The repo's own tooling used to write the unmeasured claim for you.
 
     MEASURED on origin/main: `gen_integration_fixtures.build_fixture` appended
     the RTL header to any fixture whose yaml selected `postcheck_pass_only`,
     which flipped all seven named audit cross-checks of `rtl-review` and
     `tapeout-checklist` from FAIL to PASS with zero receipts on disk.
+
+    This asserts the OUTCOME for the two real skills. It holds because those
+    nine IDs are repointed, not because of the generator guard — reverting the
+    generator alone leaves this green, which is measured and is why
+    `test_fixture_generator_suppresses_the_header_for_report_specs` exists
+    below to put a falsifiable test on the guard itself.
     """
     sys.path.insert(0, str(_PLUGIN / "_shared"))
     import gen_integration_fixtures as gif
@@ -477,6 +483,44 @@ def test_fixture_generator_no_longer_manufactures_the_header():
         text, _, _ = gif.build_fixture(skill)
         assert "// Post-checks: rtl_hygiene_lint" not in text, (
             f"{skill}: fixture generator still manufactures the header")
+
+
+def test_fixture_generator_suppresses_the_header_for_report_specs(
+        tmp_path, monkeypatch):
+    """Drive the guard directly, with a spec that would trip the old code.
+
+    A report-typed spec that still selects `postcheck_pass_only` is exactly
+    the shape the standing sweep forbids in `skills/`, so no real skill can
+    reach this branch any more — which is precisely why the guard needs its
+    own input. Both directions: the same spec typed `rtl` must still get the
+    header, or this test would pass against a generator that had simply
+    stopped emitting headers altogether.
+    """
+    sys.path.insert(0, str(_PLUGIN / "_shared"))
+    import gen_integration_fixtures as gif
+
+    def _spec_for(output_type):
+        root = tmp_path / output_type
+        (root / "probe").mkdir(parents=True, exist_ok=True)
+        (root / "probe" / "compliance.yaml").write_text(
+            f"skill: probe\noutput_type: {output_type}\n"
+            "requirements:\n"
+            "  - id: R_x\n"
+            "    description: 'x'\n"
+            "    pattern: 'x'\n"
+            "    positive_sample: 'x'\n"
+            "cross_checks:\n"
+            "  - id: X_probe\n"
+            "    description: 'names an audit'\n"
+            "    rule: postcheck_pass_only\n")
+        monkeypatch.setattr(gif, "SKILLS", root)
+        return gif.build_fixture("probe")[0]
+
+    assert "// Post-checks: rtl_hygiene_lint" not in _spec_for("report"), (
+        "generator manufactured the header for an output_type: report spec")
+    assert "// Post-checks: rtl_hygiene_lint" in _spec_for("rtl"), (
+        "generator stopped emitting the header for genuine RTL output too — "
+        "the guard must be about the output type, not about the header")
 
 
 # ---------------------------------------------------------------------------
