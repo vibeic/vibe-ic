@@ -609,8 +609,17 @@ class _Ran:
         self.emit_rc, self.emit_out = emit_rc, emit_out
         self.gate_rc, self.writes, self.layout = gate_rc, writes, layout
 
-    def run(self, argv, **kw):
+    def run(self, *args, **kw):
+        # FAITHFUL DOUBLE — refuse exactly what the real `_progress_run.run`
+        # refuses. A `**kw` stand-in is MORE PERMISSIVE than the real function:
+        # it swallows an argument the real one has no parameter for, so the test
+        # stays green while production raises TypeError. Binding the REAL
+        # signature means the NEXT argument that drifts is caught too.
+        import inspect as _inspect
         import subprocess as _sp
+        import _progress_run as _real_pr
+        _inspect.signature(_real_pr.run).bind(*args, **kw)
+        argv = args[0]
         self.argv.append([str(a) for a in argv])
         name = Path(argv[1]).name
         if name == "analog_a5_layout_emit.py":

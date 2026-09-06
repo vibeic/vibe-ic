@@ -946,7 +946,7 @@ def step_for_block(project: Path, block: Dict[str, Any], step_name: str,
                      (getattr(args, "container", None)
                       or os.environ.get("VIBEIC_ANALOG_CONTAINER",
                                         "vibeic-eda"))],
-                    capture_output=True, text=True, timeout=3600)
+                    capture_output=True, text=True)
                 for _ln in (_acp.stdout or "").splitlines():
                     if _ln.startswith("A6 DRC ATTRIBUTION") or \
                             _ln.lstrip().split(" ")[0] in (

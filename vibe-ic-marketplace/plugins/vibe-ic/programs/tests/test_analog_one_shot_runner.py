@@ -207,7 +207,18 @@ def _drive_a8(tmp_path, monkeypatch, iface_rc, iface_out):
 
     class _Gates:
         @staticmethod
-        def run(argv, **kw):
+        def run(*args, **kw):
+            # FAITHFUL DOUBLE — it must refuse exactly what the real
+            # `_progress_run.run` refuses. A `**kw` stand-in is MORE PERMISSIVE
+            # than the real function and silently swallows an argument the real
+            # one has no parameter for, so the test stays green while production
+            # raises TypeError. Binding the REAL signature — rather than
+            # rejecting one named keyword — means the NEXT argument that drifts
+            # is caught the same way.
+            import inspect as _inspect
+            import _progress_run as _real_pr
+            _inspect.signature(_real_pr.run).bind(*args, **kw)
+            argv = args[0]
             seen.append([str(a) for a in argv])
             prog = Path(argv[1]).name
             if prog == "analog_macro_rtl_interface_check.py":
@@ -262,7 +273,18 @@ def test_the_interface_check_runs_at_a8_and_only_there(tmp_path, monkeypatch):
 
     class _Gates:
         @staticmethod
-        def run(argv, **kw):
+        def run(*args, **kw):
+            # FAITHFUL DOUBLE — it must refuse exactly what the real
+            # `_progress_run.run` refuses. A `**kw` stand-in is MORE PERMISSIVE
+            # than the real function and silently swallows an argument the real
+            # one has no parameter for, so the test stays green while production
+            # raises TypeError. Binding the REAL signature — rather than
+            # rejecting one named keyword — means the NEXT argument that drifts
+            # is caught the same way.
+            import inspect as _inspect
+            import _progress_run as _real_pr
+            _inspect.signature(_real_pr.run).bind(*args, **kw)
+            argv = args[0]
             seen.append(Path(argv[1]).name)
             return _sp.CompletedProcess(argv, 0, "PASS: stubbed\n", "")
 
@@ -273,3 +295,52 @@ def test_the_interface_check_runs_at_a8_and_only_there(tmp_path, monkeypatch):
         seen.clear()
         AOSR.step_for_block(proj, {"name": "b"}, step, None)
         assert "analog_macro_rtl_interface_check.py" not in seen, (step, seen)
+
+def test_no_call_site_passes_timeout_into_the_progress_run_shim():
+    """No call site may pass `timeout=` into `_progress_run.run`.
+
+    `_progress_run` is the shim that REPLACED the timeout mechanism; it has no `timeout`
+    parameter and its own docstring prescribes converting a call site by DELETING the
+    argument. A site that keeps it raises `TypeError: run() got an unexpected keyword
+    argument 'timeout'` at run time, and the usual
+    `except (OSError, subprocess.SubprocessError)` does NOT catch a TypeError, so the
+    exception escapes whatever guard the author thought they had. Measured: exactly that
+    killed the analog runner at every A6 dispatch.
+
+    This asserts the INVARIANT over the whole `programs/` tree rather than over the one
+    call site that was found, so a re-introduction ANYWHERE is caught. It is deliberately
+    written to observe a VALUE -- the set of offending call sites, which is `[]` when the
+    invariant holds and names a file:line when it does not -- rather than to notice that
+    something is absent.
+    """
+    import ast
+    from _hostpaths import require_repo
+    # Driven by a REAL checked-in artefact (the shipped `programs/` tree), through the
+    # sanctioned accessor rather than a hand-rolled parent-walk: on the installed plugin
+    # cache, where the monorepo is not present, this SKIPS with a reason instead of
+    # silently scanning whatever tree it happens to land in.
+    programs_dir = require_repo(
+        "vibe-ic-marketplace", "plugins", "vibe-ic", "programs")
+    offenders = []
+    for py in sorted(programs_dir.rglob("*.py")):
+        try:
+            tree = ast.parse(py.read_text(errors="replace"))
+        except SyntaxError:                      # not ours to police here
+            continue
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            fn = node.func
+            if not isinstance(fn, ast.Attribute):
+                continue
+            if fn.attr not in ("run", "run_or_undetermined", "run_best_effort"):
+                continue
+            if getattr(fn.value, "id", None) not in ("_pr", "_progress_run"):
+                continue
+            for kw in node.keywords:
+                if kw.arg == "timeout":
+                    offenders.append(
+                        "%s:%d" % (py.relative_to(programs_dir), node.lineno))
+    assert offenders == [], (
+        "these call sites pass `timeout=` into _progress_run.run, which has no such "
+        "parameter, so they raise TypeError at run time: " + ", ".join(offenders))
