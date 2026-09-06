@@ -321,6 +321,11 @@ _ARM_A_DECLARED = {
     "phase3/stage3/sta/pre_pnr_timing.rpt",          # step 10
     "reports/phase3/power.rpt",                      # step 33
     "reports/phase3/si_crosstalk.rpt",               # step 27
+    # Step 23's SPEF-backed STA pass, mirrored into `reports/`. It is a
+    # `required_outputs` entry of step 23 in the flow, and a `.rpt` timing
+    # report, so the arm-A scan reads it exactly as it reads the eight above —
+    # the population legitimately GREW and this set had not been told.
+    "reports/phase3/sta_spef_based.rpt",             # step 23
 }
 
 #: Of the 8 above, the count whose EMITTER the arm-A scan could identify. Left a
