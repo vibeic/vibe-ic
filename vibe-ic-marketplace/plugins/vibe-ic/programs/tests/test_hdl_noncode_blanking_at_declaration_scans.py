@@ -212,16 +212,36 @@ def test_the_declaration_scan_gate_is_green_on_this_tree():
 
 
 def test_the_ratchet_blocks_a_landing_that_ADDS_an_unstripped_scan():
-    """DIRECTION 1: an offender not in the register fails the gate."""
+    """DIRECTION 1: an offender not in the register fails the gate.
+
+    THE OFFENDER IS PLANTED, NOT BORROWED FROM THE REGISTER. This test used to
+    empty `_OFFENDER_REGISTER` and hand its former contents back as the
+    observed population, which was exact while the register had entries and went
+    VACUOUS the moment it emptied: v1.18.24 fixed every offender this gate
+    named, `sorted(kept)` became `[]`, and a gate asked about NO offenders
+    correctly answered rc 0 — a green test proving nothing. The population a
+    ratchet judges is not the register's own contents, so the fixture must not
+    be either. Both arms are asserted here: the same name UNREGISTERED blocks
+    and REGISTERED does not, so the refusal is about membership and not about
+    the name.
+    """
     G = _load_gate()
     root = PROGRAMS.parent
+    planted = "canonical_primitive_synth::_rtl_input_port_widths::_HDR(rtl)"
     kept = dict(G._OFFENDER_REGISTER)
+    assert planted not in kept, (
+        "the planted name must not already be registered, or the first arm "
+        "below asks nothing")
     try:
         G._OFFENDER_REGISTER.clear()
-        rc = G._ratchet_verdict(sorted(kept), root)
+        rc_unregistered = G._ratchet_verdict([planted], root)
+        G._OFFENDER_REGISTER[planted] = "planted by this test"
+        rc_registered = G._ratchet_verdict([planted], root)
     finally:
+        G._OFFENDER_REGISTER.clear()
         G._OFFENDER_REGISTER.update(kept)
-    assert rc == 1, "an unregistered offender must BLOCK"
+    assert rc_unregistered == 1, "an unregistered offender must BLOCK"
+    assert rc_registered == 0, "the SAME offender, registered, must not block"
 
 
 def test_the_ratchet_refuses_an_entry_that_outlived_its_offender():
