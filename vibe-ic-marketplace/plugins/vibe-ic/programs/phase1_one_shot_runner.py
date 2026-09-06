@@ -1050,12 +1050,27 @@ def _czl9_sufficiency_gate(project: Path) -> Tuple[bool, str]:
         return False, "SKIPPED (program not present)"
     rp = _pl.report_path(project, "phase1/phase1_sufficiency.json")
     rp.parent.mkdir(parents=True, exist_ok=True)
+    argv = [sys.executable, str(chk), str(_pl.generated_docs_dir(project)),
+            "--project", str(project), "--strict-extraction-gap",
+            "--json", str(rp)]
+    # NO `timeout=`. `run_host_supervised` bounds NO PROGRESS, never runtime —
+    # a slow-but-working check on a loaded host runs to completion however long
+    # that legitimately takes, and only a tree that is idle across the grace is
+    # killed. I wrote `subprocess.run(..., timeout=300)` here first, copying the
+    # docs branch, and `test_no_runtime_bound_remains_at_either_dispatch_site`
+    # caught it by AST: a clock-based kill is the defect, and a bigger constant
+    # is the same defect restated.
+    res = _wd.run_host_supervised(argv, stall_grace_s=_TRACK_STALL_GRACE_S)
+    if res.outcome in ("stalled", "ceiling"):
+        # A STALL IS NOT A VERDICT about the design. Report it as a stall and
+        # do not let it become an extraction-gap FAIL.
+        print(f"      phase1_sufficiency_check: STALLED — no CPU, no I/O and "
+              f"no output from its process tree for the "
+              f"{_TRACK_STALL_GRACE_S}s grace, after {res.elapsed_s:.0f}s "
+              f"[ADVISORY, NOT_MEASURED]")
+        return False, "STALLED (NOT_MEASURED)"
     try:
-        cp = subprocess.run(
-            [sys.executable, str(chk), str(_pl.generated_docs_dir(project)),
-             "--project", str(project), "--strict-extraction-gap",
-             "--json", str(rp)],
-            capture_output=True, text=True, timeout=300)
+        cp = _wd.completed_process(argv, res)
     except Exception as exc:            # never let an advisory crash the run
         print(f"      phase1_sufficiency_check: SKIPPED ({exc}) [ADVISORY]")
         return False, f"SKIPPED ({exc})"
