@@ -756,7 +756,7 @@ def main(argv=None) -> int:
                   f"hard_ceiling_s={r.expr} -> {r.value:g}s")
 
     if residual:
-        print("\n--- RESIDUAL CONTAINER CLOCKS (reported, owned elsewhere) ---")
+        print("\n--- RESIDUAL CONTAINER CLOCKS (BLOCKING) ---")
         for r in residual:
             print(f"  {r.file}:{r.line} {r.callee}() still wraps its "
                   f"supervised command in a GNU `timeout`")
@@ -790,9 +790,19 @@ def main(argv=None) -> int:
                      "residual_container_clocks": len(residual)},
                     indent=1)
 
-    if offenders:
+    # CLASS (0) IS NOW BLOCKING. It was "reported, owned elsewhere" because the
+    # one residual lived in a file that kept its own copy of the supervised
+    # dispatch, so the ruling was not in force there and a clean verdict would
+    # have implied a removal nobody had made. That holder has now routed
+    # through `_docker_watchdog.run_docker_supervised` and dropped its wrap, so
+    # the population is empty and the class can do what a class is for: refuse.
+    # Reported-forever is how a known defect becomes permanent — the count was
+    # printed and the exit code said PASS, so nothing downstream could act on
+    # it. A gate that cannot go red is not a gate.
+    if offenders or residual:
         print(f"\n[FAIL] {len(offenders)} clock kill(s) / bad timeout "
-              f"argument(s) on supervised launches.")
+              f"argument(s) and {len(residual)} residual container clock(s) "
+              f"on supervised launches.")
         return 1
     print("\n[PASS] no clock may stop a supervised job: the primitives kill "
           "only on a progress stall, and no `timeout=` reaches a primitive "
