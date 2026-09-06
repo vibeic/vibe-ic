@@ -375,6 +375,7 @@ def run(cmd, *, cwd=None, env=None, input=None,  # noqa: A002
         stall_looks: int = DEFAULT_STALL_LOOKS,
         poll_s: Optional[float] = None,
         hard_ceiling_s: float = HARD_CEILING_S,
+        start_new_session: bool = False,
         _supervisor=None) -> subprocess.CompletedProcess:
     """Run `cmd` to completion, however long it legitimately takes.
 
@@ -404,6 +405,19 @@ def run(cmd, *, cwd=None, env=None, input=None,  # noqa: A002
         identically. Decoding and re-encoding would be lossy, and a caller
         splitting `git ls-files -z` on NUL or reading a blob out of
         `git cat-file --batch` must get the bytes the child actually wrote.
+      * ``start_new_session=True`` — the child becomes its own process-GROUP
+        LEADER, which is the precondition `_watchdog._default_kill` checks
+        before it signals a GROUP rather than a single pid. It is OFF by
+        default and that is not an oversight: this function injects its own
+        `popen_factory` (for `cwd`/`shell`/`stdin`), and an injected factory
+        deliberately keeps whatever launch shape its caller already had, so
+        every existing call site here is byte-for-byte unchanged. A call site
+        CONVERTING FROM a `Popen(..., start_new_session=True)` + group reap —
+        the shape `subprocess.run(timeout=)` cannot express, and the reason
+        three of the raw clock-kill sites were written by hand — passes True
+        and keeps its group semantics: `bash -lc '(sleep 3; touch m) & wait'`
+        loses the `bash` and KEEPS the `sleep` without it. Measured both ways
+        in `test_a_stall_reaps_the_whole_process_group.py`.
 
     A ``stdout=<file>`` redirect is NOT supported: it would take the output
     away from the progress meter without saying so, leaving the supervision
@@ -459,6 +473,8 @@ def run(cmd, *, cwd=None, env=None, input=None,  # noqa: A002
             kw = dict(kw, stderr=subprocess.STDOUT)
         if child_stdin is not None:
             kw["stdin"] = child_stdin
+        if start_new_session:
+            kw["start_new_session"] = True
         return subprocess.Popen(c, cwd=cwd, shell=shell, **kw)  # nosec B603,B602
 
     supervisor = _supervisor or _wd.run_supervised

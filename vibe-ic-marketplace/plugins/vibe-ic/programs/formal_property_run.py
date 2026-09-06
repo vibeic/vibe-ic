@@ -58,7 +58,6 @@ import json
 import re
 import shutil
 import os
-import signal
 import subprocess
 import sys
 from dataclasses import dataclass, field
@@ -1075,6 +1074,11 @@ def memory_limit_kb(meminfo: Optional[str] = None,
 # note — never a chip, design or PDK literal, so the classification stays
 # chip-AGNOSTIC.
 _RESOURCE_STOP_SIGNATURES = (
+    # THE STALL COMES FIRST, and the order is load-bearing: the container path
+    # still speaks coreutils `timeout` (a clock this program does not own), so
+    # both shapes can appear, and the one this host actually observed must win.
+    (re.compile(r"SOLVER STALLED: .*?after (\d+) consecutive looks"),
+     "no_progress"),
     (re.compile(r"SOLVER DEADLINE|\bTIMEOUT after \d+s"), "wall_clock"),
     (re.compile(r"std::bad_alloc|\bbad_alloc\b|\bMemoryError\b|"
                 r"[Cc]annot allocate memory|"
@@ -1087,6 +1091,10 @@ _RESOURCE_STOP_SIGNATURES = (
 #: What each resource stop MEANS, so the record says it rather than assuming the
 #: reader will infer it.
 _RESOURCE_MEANING = {
+    "no_progress": ("every readable progress signal sat still — the solver "
+                    "stopped moving, which is a finding about the run and not "
+                    "about the host; the properties may well hold and we did "
+                    "not finish"),
     "wall_clock": ("the deadline expired while the solver was still working — "
                    "the properties may well hold and we simply did not finish"),
     "memory": ("the solver hit its address-space ceiling — the properties may "
@@ -1113,7 +1121,14 @@ def classify_resource_stop(transcript: str,
         m = rx.search(text)
         if not m:
             continue
-        if resource == "wall_clock":
+        if resource == "no_progress":
+            # THE LIMIT IS READ OUT OF WHAT WAS OBSERVED, never re-derived from
+            # a constant: the number of looks is in the sentence the run wrote,
+            # and a second copy resolved here could disagree with the run that
+            # actually happened.
+            limit = int(m.group(1))
+            unit = "consecutive looks"
+        elif resource == "wall_clock":
             limit = int(timeout_s) if timeout_s is not None else None
             unit = "s"
         else:
@@ -1183,51 +1198,72 @@ def local_bounded_argv(command: str,
 
 
 # ── impure runner ──────────────────────────────────────────────────────────
-def _kill_process_group(proc: "subprocess.Popen") -> None:
-    """SIGTERM then SIGKILL the whole process GROUP.
-
-    sby is a launcher; the memory and the cores live in the yosys it spawns.
-    Signalling only the handle we hold leaves the solver running — the #623/#628
-    shape in a third place, and the one that took a 125 GB host off the network.
-    """
-    try:
-        pgid = os.getpgid(proc.pid)
-    except OSError:                       # already reaped
-        proc.kill()
-        return
-    for sig in (signal.SIGTERM, signal.SIGKILL):
-        try:
-            os.killpg(pgid, sig)
-        except OSError:
-            return
-        try:
-            proc.wait(timeout=_CE.DEFAULT_KILL_GRACE_S)
-            return
-        except subprocess.TimeoutExpired:
-            continue
+#: HOW MANY CONSECUTIVE MOTIONLESS LOOKS make the solver a stall, and how far
+#: apart to look. Read AT CALL TIME, never bound as a default argument: the
+#: failure path below is reachable in a test only if the cadence can be made
+#: small, and `gatekeeper_prepare_landing._default_census_writer` records what a
+#: bound nobody can override costs — "a bound whose failure path is unreachable,
+#: which is the same defect the bound was added to prevent, one level up".
+#: `None` means the primitive's own measured cadence, which is the shipped one.
+SOLVER_STALL_LOOKS = None      # None -> _progress_run.DEFAULT_STALL_LOOKS
+SOLVER_POLL_S = None           # None -> the host-measured poll interval
 
 
 def _run_group_bounded(argv: List[str], cwd: Path,
                        timeout: int) -> "tuple":
-    """Run `argv` in its OWN session so the deadline reaches the whole tree.
+    """Run `argv` under PROGRESS supervision, in its own session.
 
-    Returns `(rc, combined_output)`. `rc == _CE.TIMEOUT_EXPIRED_RC` (124, the
-    coreutils protocol the container path already speaks) means the deadline
-    expired and the group was signalled; no orphan survives it.
+    Returns `(rc, combined_output)`. `rc == _pr.RC_STALLED` means every readable
+    progress signal — the captured output, the process tree's CPU, its block
+    I/O — sat still for a count of consecutive looks and the whole GROUP was
+    stopped; no orphan survives it.
+
+    WHAT CHANGED, AND WHY (vibe-ic#2051, owner ruling R4). This was
+    `proc.communicate(timeout=timeout)` followed by a hand-written SIGTERM/
+    SIGKILL of the process group — a WALL CLOCK deciding to stop a job, which is
+    the one thing #2051 forbids: elapsed time answers "how long has it been",
+    never "is this working", so the same commit on a slower host came back
+    INCONCLUSIVE while a solver that was genuinely computing was killed. A SAT
+    proof that legitimately runs for hours advances CPU at every look and can
+    now never be stopped; a solver that has actually wedged is stopped SOONER
+    than the deadline would have, and is reported as a stall rather than as a
+    clock.
+
+    `timeout` is not gone and is not ignored: it is handed to the supervisor as
+    the RECORDED BUDGET (`hard_ceiling_s`), which — since #2051 — is announced
+    once when crossed and stops nothing. So the caller's declared expectation
+    still reaches the record, and no longer decides anything.
+
+    THE GROUP REAP IS PRESERVED, and it is the reason `start_new_session=True`
+    is passed: sby is a launcher and the memory lives in the yosys it spawns
+    (35.6 GB apiece on a 125 GB host, #623/#628). `_watchdog._default_kill`
+    signals a process GROUP only when the child is its own group leader, which
+    is exactly what that argument makes it.
     """
-    proc = subprocess.Popen(argv, cwd=str(cwd), stdout=subprocess.PIPE,
-                            stderr=subprocess.STDOUT, text=True,
-                            errors="replace", start_new_session=True)
     try:
-        out, _ = proc.communicate(timeout=timeout)
-        return proc.returncode, out or ""
-    except subprocess.TimeoutExpired:
-        _kill_process_group(proc)
-        try:
-            out, _ = proc.communicate(timeout=_CE.CLIENT_GRACE_S)
-        except subprocess.TimeoutExpired:  # pragma: no cover - group is dead
-            out = ""
-        return _CE.TIMEOUT_EXPIRED_RC, out or ""
+        cp = _pr.run(argv, cwd=str(cwd), stdout=subprocess.PIPE,
+                     stderr=subprocess.STDOUT, text=True, errors="replace",
+                     start_new_session=True,
+                     hard_ceiling_s=float(timeout),
+                     **_solver_supervision())
+    except _pr.Stalled as stall:
+        return _pr.RC_STALLED, (stall.stdout or "")
+    return cp.returncode, cp.stdout or ""
+
+
+def _solver_supervision() -> Dict[str, object]:
+    """The supervision cadence, resolved from the module constants at CALL TIME.
+
+    An unset knob is not passed at all, so the primitive's own default (and its
+    host measurement of the spawn floor) stands — a copied number here would be
+    a second declaration of a cadence that already has an owner.
+    """
+    kw: Dict[str, object] = {}
+    if SOLVER_STALL_LOOKS is not None:
+        kw["stall_looks"] = int(SOLVER_STALL_LOOKS)
+    if SOLVER_POLL_S is not None:
+        kw["poll_s"] = float(SOLVER_POLL_S)
+    return kw
 
 
 def _run_sby_ambient(name: str, formal_dir: Path, timeout: int,
@@ -1252,12 +1288,20 @@ def _run_sby_ambient(name: str, formal_dir: Path, timeout: int,
         rc, out = _run_group_bounded(cmd, formal_dir, int(timeout))
     except FileNotFoundError:
         return "[formal_property_run] ERROR: sby/docker not found on PATH\n"
-    if rc == _CE.TIMEOUT_EXPIRED_RC:
+    if rc == _pr.RC_STALLED:
         # Named, because an anonymous death reads as a tool crash and sends the
-        # reader to the wrong place.
-        out += (f"\n[formal_property_run] SOLVER DEADLINE: the host-side "
-                f"deadline stopped sby and its whole process group after "
-                f"{int(timeout)}s. The proof is INCONCLUSIVE — not "
+        # reader to the wrong place — and named as what it WAS. The clock that
+        # used to write "SOLVER DEADLINE ... after Ns" here is gone (#2051): a
+        # solver still moving is never stopped, so what remains to report is the
+        # one thing that did happen, that every readable progress signal sat
+        # still. The count of looks travels in the sentence because it is the
+        # observation, where the seconds were only the host.
+        looks = (int(SOLVER_STALL_LOOKS) if SOLVER_STALL_LOOKS is not None
+                 else _pr.DEFAULT_STALL_LOOKS)
+        out += (f"\n[formal_property_run] SOLVER STALLED: sby and its whole "
+                f"process group were stopped after {looks} consecutive looks "
+                f"in which the captured output, the process tree's CPU and its "
+                f"block I/O ALL sat still. The proof is INCONCLUSIVE — not "
                 f"disproved.\n")
     return out
 

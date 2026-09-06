@@ -41,6 +41,7 @@ _PROGRAMS = _HERE.parent
 sys.path.insert(0, str(_PROGRAMS))
 
 import gatekeeper_prepare_landing as G  # noqa: E402
+import _progress_run as PR  # noqa: E402
 import _watchdog  # noqa: E402
 
 
@@ -70,8 +71,16 @@ def _supervised(cmd, **kw):
 # The premise, asserted rather than assumed
 # ══════════════════════════════════════════════════════════════════════
 
-def test_a_timed_out_child_never_runs_its_finally(tmp_path):
-    """This is WHY the declaration comes back empty. Assert it, do not argue it."""
+def test_a_stopped_child_never_runs_its_finally(tmp_path):
+    """This is WHY the declaration comes back empty. Assert it, do not argue it.
+
+    THE STOP IS THE SUPERVISOR'S NOW (vibe-ic#2051, R4) and it is still a
+    SIGKILL, so the premise is unchanged — but it is asserted against the call
+    the census actually makes, not against a `subprocess.run` the census no
+    longer contains. If a future supervisor stopped a child gracefully, this
+    test fails and the workaround in the stall branch can be simplified: that
+    is the honest way for a workaround to expire.
+    """
     child = tmp_path / "child.py"
     decl = tmp_path / "written.json"
     child.write_text(
@@ -81,12 +90,12 @@ def test_a_timed_out_child_never_runs_its_finally(tmp_path):
         "finally:\n"
         "    pathlib.Path(sys.argv[1]).write_text('[\"a\"]')\n",
         encoding="utf-8")
-    with pytest.raises(subprocess.TimeoutExpired):
-        subprocess.run([sys.executable, str(child), str(decl)],
-                       capture_output=True, text=True, timeout=2)
+    with pytest.raises(PR.Stalled):
+        PR.run([sys.executable, str(child), str(decl)],
+               stall_looks=4, poll_s=0.25)
     assert not decl.exists(), (
-        "subprocess.run stopped SIGKILLing on timeout — the workaround in "
-        "_default_census_writer's TimeoutExpired branch can now be simplified")
+        "the supervisor stopped SIGKILLing a stalled child — the workaround in "
+        "_default_census_writer's stall branch can now be simplified")
 
 
 def test_read_written_reports_an_absent_declaration_as_empty(tmp_path):
@@ -97,6 +106,23 @@ def test_read_written_reports_an_absent_declaration_as_empty(tmp_path):
 # ══════════════════════════════════════════════════════════════════════
 # The behaviour, in both directions, against a real git tree
 # ══════════════════════════════════════════════════════════════════════
+
+def _tight(monkeypatch, looks=4, poll_s=0.25):
+    """Make the stall REACHABLE inside a test session, and change nothing else.
+
+    The predicate is still "captured output, the process tree's CPU and its
+    block I/O ALL sat still for `looks` consecutive looks"; only the spacing
+    moves. The writers below write once and then sleep, so they are motionless
+    on every signal — which is exactly the shape the census showed when it
+    wedged, and exactly what a merely SLOW census is not.
+
+    It is read at call time by `_default_census_writer`, for the reason that
+    function records in full: a bound nobody can override in a test is a bound
+    whose failure path is unreachable.
+    """
+    monkeypatch.setattr(G, "CENSUS_STALL_LOOKS", looks)
+    monkeypatch.setattr(G, "CENSUS_POLL_S", poll_s)
+
 
 @pytest.fixture()
 def repo(tmp_path):
@@ -126,23 +152,24 @@ def _slow_writer(repo_path: Path, target: str, seconds: int) -> Path:
     return p
 
 
-def test_a_timeout_leaves_the_tree_exactly_where_it_stood(repo, monkeypatch):
-    """THE PROMISE. A census that times out must declare nothing AND leave nothing."""
+def test_a_stall_leaves_the_tree_exactly_where_it_stood(repo, monkeypatch):
+    """THE PROMISE. A census that could not finish must declare nothing AND
+    leave nothing."""
     gen = _slow_writer(repo, "anchor.py", 30)
     monkeypatch.setattr(G, "GEN_CENSUS", gen)
-    monkeypatch.setattr(G, "CENSUS_TIMEOUT_S", 2)
+    _tight(monkeypatch)
 
     wrote, reason = G._default_census_writer(repo)
 
     assert reason and "did not finish" in reason
-    assert wrote == [], f"declared {wrote} after a timeout"
+    assert wrote == [], f"declared {wrote} after a stall"
     assert set(G.dirty_paths(repo)) == set(), (
-        "the tree is still dirty after a timeout, so the boundary check will "
+        "the tree is still dirty after a stall, so the boundary check will "
         "refuse the landing on a path nothing declared — this is #1382")
     assert (repo / "anchor.py").read_text(encoding="utf-8") == "FIGURE = 164\n"
 
 
-def test_a_timeout_does_not_revert_what_an_earlier_step_wrote(repo, monkeypatch):
+def test_a_stall_does_not_revert_what_an_earlier_step_wrote(repo, monkeypatch):
     """The paired guard for the restore: it must undo the CENSUS, nothing else.
 
     The index step runs before the census and its write is already dirty. A
@@ -152,17 +179,17 @@ def test_a_timeout_does_not_revert_what_an_earlier_step_wrote(repo, monkeypatch)
                                            encoding="utf-8")
     gen = _slow_writer(repo, "anchor.py", 30)
     monkeypatch.setattr(G, "GEN_CENSUS", gen)
-    monkeypatch.setattr(G, "CENSUS_TIMEOUT_S", 2)
+    _tight(monkeypatch)
 
     wrote, reason = G._default_census_writer(repo)
 
     assert wrote == [] and "did not finish" in (reason or "")
     assert (repo / "sub" / "index.md").read_text(encoding="utf-8").startswith("index v2"), \
-        "the timeout restore reverted the earlier index step's write"
+        "the stall restore reverted the earlier index step's write"
     assert set(G.dirty_paths(repo)) == {"sub/index.md"}, G.dirty_paths(repo)
 
 
-def test_a_timeout_kills_grandchildren_before_restoring(repo, monkeypatch):
+def test_a_stall_kills_grandchildren_before_restoring(repo, monkeypatch):
     """An orphan writer must not re-dirty the tree after the function returns."""
     delayed = repo / "_grandchild.py"
     delayed.write_text(
@@ -181,7 +208,7 @@ def test_a_timeout_kills_grandchildren_before_restoring(repo, monkeypatch):
         "time.sleep(30)\n",
         encoding="utf-8")
     monkeypatch.setattr(G, "GEN_CENSUS", gen)
-    monkeypatch.setattr(G, "CENSUS_TIMEOUT_S", 1)
+    _tight(monkeypatch)
 
     wrote, reason = G._default_census_writer(repo)
 
@@ -189,7 +216,7 @@ def test_a_timeout_kills_grandchildren_before_restoring(repo, monkeypatch):
     assert (repo / "anchor.py").read_text(encoding="utf-8") == "FIGURE = 164\n"
     time.sleep(4)
     assert (repo / "anchor.py").read_text(encoding="utf-8") == "FIGURE = 164\n", \
-        "a surviving grandchild wrote after the timeout restore"
+        "a surviving grandchild wrote after the stall restore"
     assert G.dirty_paths(repo) == set()
 
 
@@ -204,7 +231,7 @@ def test_a_writer_that_finishes_still_declares_normally(repo, monkeypatch):
         "pathlib.Path(sys.argv[i + 1]).write_text(json.dumps(['anchor.py']))\n",
         encoding="utf-8")
     monkeypatch.setattr(G, "GEN_CENSUS", gen)
-    monkeypatch.setattr(G, "CENSUS_TIMEOUT_S", 60)
+    _tight(monkeypatch)
 
     wrote, reason = G._default_census_writer(repo)
 
@@ -230,7 +257,7 @@ def test_a_partial_repair_that_finishes_nonzero_still_declares(repo, monkeypatch
         "print('census block still stale'); sys.exit(1)\n",
         encoding="utf-8")
     monkeypatch.setattr(G, "GEN_CENSUS", gen)
-    monkeypatch.setattr(G, "CENSUS_TIMEOUT_S", 60)
+    _tight(monkeypatch)
 
     wrote, reason = G._default_census_writer(repo)
 

@@ -44,6 +44,7 @@ import importlib
 import subprocess
 
 F = importlib.import_module("formal_property_run")
+PR = importlib.import_module("_progress_run")
 CE = importlib.import_module("_container_exec")
 
 
@@ -222,17 +223,27 @@ def test_the_ambient_path_omits_the_bound_when_none_can_be_derived(
     assert "sby -f formal_top.sby" in seen["argv"][2]
 
 
-def test_the_ambient_deadline_is_reported_as_inconclusive_not_a_crash(
+def test_the_ambient_stall_is_reported_as_inconclusive_not_a_crash(
         monkeypatch, tmp_path):
     """Symmetric with the container path: an anonymous death reads as a tool
-    crash and sends the reader to the wrong place."""
+    crash and sends the reader to the wrong place.
+
+    THE AMBIENT PATH NO LONGER HAS A CLIENT-SIDE CLOCK (vibe-ic#2051, R4), so
+    the rc it can come back with is `_progress_run.RC_STALLED` — every readable
+    progress signal sat still — and the transcript must name THAT. rc 124 stays
+    the container path's, where coreutils `timeout` runs inside the image and
+    is not this program's to remove.
+    """
     monkeypatch.setattr(F, "memory_limit_kb", lambda: 32952508)
     monkeypatch.setattr(F, "_run_group_bounded",
-                        lambda argv, cwd, to: (124, "[top] engine_0\n"))
+                        lambda argv, cwd, to: (PR.RC_STALLED,
+                                               "[top] engine_0\n"))
     out = F._run_sby(_sby(tmp_path), tmp_path, None, 60)
-    assert "SOLVER DEADLINE" in out
+    assert "SOLVER STALLED" in out
     assert "INCONCLUSIVE" in out
     assert "not disproved" in out
+    assert "DEADLINE" not in out, (
+        "the ambient path has no deadline left to report", out)
 
 
 def test_an_absent_sby_on_the_ambient_path_still_says_so_in_the_transcript(
@@ -250,7 +261,7 @@ def test_an_absent_sby_on_the_ambient_path_still_says_so_in_the_transcript(
         lambda argv, cwd, to: (127, "bash: line 1: exec: sby: not found\n"))
     out = F._run_sby(_sby(tmp_path), tmp_path, None, 60)
     assert "sby" in out and "not found" in out, out
-    assert "SOLVER DEADLINE" not in out, "an absent tool is not a deadline"
+    assert "SOLVER STALLED" not in out, "an absent tool is not a stall"
 
 
 def test_a_missing_shell_keeps_the_historic_not_found_message(

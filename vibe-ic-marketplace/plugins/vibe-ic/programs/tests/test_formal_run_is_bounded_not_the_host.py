@@ -44,6 +44,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 F = importlib.import_module("formal_property_run")
+PR = importlib.import_module("_progress_run")
 
 LEAF = """\
 `default_nettype none
@@ -297,36 +298,110 @@ def test_an_underivable_ceiling_emits_no_ulimit_rather_than_a_guess():
     assert "ulimit" not in F.local_bounded_argv("sby -f x.sby", 0)[2]
 
 
-# ── the deadline reaches the TREE, not the launcher we happen to hold ──────
-def test_the_deadline_kills_the_whole_process_group(tmp_path):
+# ── a STALL reaches the TREE, not the launcher we happen to hold ───────────
+def _tight_supervision(monkeypatch, looks=4, poll_s=0.25):
+    """Make the stall reachable in a test, without touching what it means.
+
+    The knobs are the run's own, read at call time, and only the CADENCE moves:
+    the predicate is still "every readable signal sat still for `looks`
+    consecutive looks". A bound that cannot be made to fire in a test is a
+    bound whose failure path is unreachable.
+    """
+    monkeypatch.setattr(F, "SOLVER_STALL_LOOKS", looks)
+    monkeypatch.setattr(F, "SOLVER_POLL_S", poll_s)
+
+
+def test_a_stalled_solver_is_stopped_with_its_whole_process_group(
+        tmp_path, monkeypatch):
     """sby is a launcher; the 35.6 GB lived in the yosys it spawned. Signalling
     only our direct child is the #623/#628 shape, and it is what let the runaway
     keep growing after the client had given up on it.
 
-    The child here backgrounds a grandchild that would touch a marker; the
-    deadline fires first, and the marker must never appear.
+    THE TRIGGER MOVED AND THE REAP DID NOT (vibe-ic#2051, R4). What stops the
+    job is no longer elapsed time — it is that captured output, the process
+    tree's CPU and its block I/O ALL sat still for a count of looks. What gets
+    stopped is still the whole GROUP, and that is asserted DIRECTLY here rather
+    than through a race between a marker's timer and the stop: the child writes
+    its backgrounded grandchild's pid down, and after the stall that pid must
+    no longer exist. `sleep 3000` outlives any test run, so a surviving orphan
+    cannot hide behind having already finished.
     """
-    marker = tmp_path / "grandchild_survived"
-    argv = ["bash", "-lc", f"(sleep 3; touch {marker}) & wait"]
-    t0 = time.time()
-    rc, _out = F._run_group_bounded(argv, tmp_path, timeout=1)
-    elapsed = time.time() - t0
-    # rc 124 IS "the deadline fired" — it is the code `_run_group_bounded`
-    # returns for exactly that and nothing else, so it states the property the
-    # wall clock was standing in for. The stopwatch added nothing and could go
-    # red on a loaded host while the deadline had fired correctly.
-    assert rc == 124, (rc, f"observed {elapsed:.1f}s")
-    time.sleep(3.2)
-    assert not marker.exists(), (
-        "the deadline killed the launcher and left its child running — the "
-        "orphan is invisible in exactly the way that matters")
+    pidfile = tmp_path / "grandchild.pid"
+    argv = ["bash", "-lc", f"sleep 3000 & echo $! > {pidfile}; wait"]
+    _tight_supervision(monkeypatch)
+    rc, _out = F._run_group_bounded(argv, tmp_path, timeout=3600)
+    assert rc == PR.RC_STALLED, (
+        rc, "a motionless child must come back as a STALL — a finding about "
+            "the run — and never as a tool verdict")
+    gpid = int(pidfile.read_text().strip())
+    # LOOKS, NOT A CLOCK. `programs/tests/` is outside the raw-kill scanner's
+    # population, so nothing would have refused a deadline here — which is
+    # exactly why it is written the other way: the rule is the rule where it is
+    # not enforced too.
+    for _ in range(50):
+        try:
+            os.kill(gpid, 0)
+        except ProcessLookupError:
+            break
+        time.sleep(0.2)
+    else:                                          # pragma: no cover - failure
+        raise AssertionError(
+            f"the stall stopped the launcher and left grandchild {gpid} "
+            f"running across 50 looks — the orphan is invisible in exactly "
+            f"the way that matters")
 
 
-def test_a_command_that_finishes_inside_the_deadline_is_untouched(tmp_path):
-    """The accept direction for the group kill."""
+def test_a_solver_that_is_still_moving_is_never_stopped(tmp_path, monkeypatch):
+    """THE OTHER DIRECTION, and the whole point of the ruling.
+
+    Same cadence, same file, ONE difference: this child keeps moving. Under the
+    wall clock it replaced this run was killed at `timeout` seconds and reported
+    INCONCLUSIVE; under the supervisor it runs to its own end and reports what
+    the tool said. It is deliberately given a budget it BLOWS THROUGH (1 s of
+    recorded budget against ~5 s of work), because a recorded budget must stop
+    nothing.
+    """
+    _tight_supervision(monkeypatch)
+    argv = ["bash", "-lc", "for i in $(seq 1 10); do echo tick $i; sleep 0.5; "
+                           "done; echo done"]
+    rc, out = F._run_group_bounded(argv, tmp_path, timeout=1)
+    assert rc == 0, (rc, out)
+    assert "done" in out and "tick 10" in out, out
+
+
+def test_a_command_that_finishes_inside_the_budget_is_untouched(tmp_path):
+    """The accept direction for the group reap, at the SHIPPED cadence."""
     rc, out = F._run_group_bounded(["bash", "-lc", "echo ok"], tmp_path,
                                    timeout=30)
     assert rc == 0 and "ok" in out
+
+
+def test_the_ambient_stall_is_named_as_a_stall_and_classified_as_one(
+        tmp_path, monkeypatch):
+    """END TO END through the reporting layer, on the real transcript.
+
+    The clock used to write "SOLVER DEADLINE ... after 30s" and the classifier
+    read that as a `wall_clock` stop. Nothing must be lost in the move: a run
+    that could not finish still has to reach the record as a resource stop, or
+    `assert_resource_honesty` never fires and an unfinished proof can be
+    recorded as proved.
+    """
+    _tight_supervision(monkeypatch, looks=3, poll_s=0.25)
+    monkeypatch.setattr(F, "memory_limit_kb", lambda: 0)
+    monkeypatch.setattr(F, "local_bounded_argv",
+                        lambda command, lim: ["bash", "-lc", "sleep 3000"])
+    out = F._run_sby_ambient("formal_top.sby", tmp_path, 3600, 0)
+    assert "SOLVER STALLED" in out and "INCONCLUSIVE" in out, out
+    assert "not disproved" in out, out
+    stop = F.classify_resource_stop(out, timeout_s=3600)
+    assert stop is not None and stop["resource"] == "no_progress", stop
+    assert stop["limit"] == 3 and stop["unit"] == "consecutive looks", stop
+    # AND THE GUARD STILL FIRES ON IT. A stop nothing downstream refuses is a
+    # stop that costs nothing: this is the executed half.
+    with pytest.raises(AssertionError, match="INCONCLUSIVE, never proved"):
+        F.assert_resource_honesty({"all_proved": True, "verdict": "PASS"}, stop)
+    assert F.assert_resource_honesty({"all_proved": False,
+                                      "verdict": "INCONCLUSIVE"}, stop) is True
 
 
 # ── nothing downstream may read INCONCLUSIVE as a pass ─────────────────────

@@ -12,6 +12,7 @@ docstring against a published run.
 """
 from __future__ import annotations
 
+import os
 import sys
 import time
 from pathlib import Path
@@ -95,9 +96,12 @@ class TestCouldNotMeasureIsReportedNotDropped:
         assert bucket == d9.ERROR
         assert "could not measure" in why and "--block" in why
 
-    def test_crash_and_timeout_are_error(self):
+    def test_crash_and_a_cell_that_stopped_moving_are_error(self):
         assert d9.classify(1, "", "Traceback (most recent call last):\n"
                                   "ValueError: x")[0] == d9.ERROR
+        assert d9.classify("STALLED", "", "")[0] == d9.ERROR
+        # The pre-#2051 marker is still READ, so a row in a published baseline
+        # measured under the old wall clock re-classifies to the bucket it had.
         assert d9.classify("TIMEOUT", "", "")[0] == d9.ERROR
 
 
@@ -207,7 +211,7 @@ class TestWiringIsStructuralNotTextual:
 
 
 class TestATimedOutCellLeavesNoOrphanWriting:
-    """A timed-out cell must take its GRANDCHILDREN with it.
+    """A cell that STOPPED MOVING must take its GRANDCHILDREN with it.
 
     Not hypothetical, and not found by review: it is what happened the first
     time the corrected population (#1012) was swept. `subprocess.run(timeout=)`
@@ -219,43 +223,98 @@ class TestATimedOutCellLeavesNoOrphanWriting:
     propagated out of the worker and killed the sweep at cell 8500 of 9202.
     """
 
-    #: A program that spawns a child which keeps writing, then blocks forever.
-    #: The child is deliberately NOT waited on — that is the shape under test.
+    #: A program that spawns a child which writes a BURST and then goes quiet,
+    #: and itself blocks forever. The child is deliberately NOT waited on —
+    #: that is the shape under test. The burst is what makes the assertion
+    #: non-vacuous (a spawner that never wrote would prove nothing); the quiet
+    #: afterwards is what lets the whole tree become motionless, which is the
+    #: only thing that may now stop a cell.
     SPAWNS_AN_ORPHAN = """
-import subprocess, sys, time
+import subprocess, sys, time, pathlib
 out = sys.argv[1]
-subprocess.Popen([sys.executable, "-u", "-c",
+child = subprocess.Popen([sys.executable, "-u", "-c",
                   "import sys,time,pathlib\\n"
                   "d=pathlib.Path(sys.argv[1])\\n"
-                  "i=0\\n"
-                  "while True:\\n"
+                  "for i in range(5):\\n"
                   "    (d/('f%d.txt' % i)).write_text('x')\\n"
-                  "    i += 1\\n"
-                  "    time.sleep(0.2)\\n", out])
+                  "    time.sleep(0.05)\\n"
+                  "time.sleep(600)\\n", out])
+(pathlib.Path(out) / "orphan.pid").write_text(str(child.pid))
 time.sleep(600)
 """
 
-    def test_timeout_kills_the_whole_process_group(self, tmp_path):
+    #: A cell that KEEPS MOVING for a while and then exits on its own. Under
+    #: the wall clock this was killed at `timeout` and recorded ERROR; under
+    #: the supervisor it is never stopped, because something advanced at every
+    #: look.
+    KEEPS_MOVING = """
+import sys, time
+for i in range(12):
+    print("tick", i, flush=True)
+    time.sleep(0.1)
+sys.exit(0)
+"""
+
+    @staticmethod
+    def _tight(monkeypatch, looks=4, poll_s=0.25):
+        """Only the SPACING moves. The predicate is still "every readable
+        signal sat still for `looks` consecutive looks"."""
+        monkeypatch.setattr(d9, "CELL_STALL_LOOKS", looks)
+        monkeypatch.setattr(d9, "CELL_POLL_S", poll_s)
+
+    def test_a_cell_that_stopped_moving_takes_its_whole_group(
+            self, tmp_path, monkeypatch):
         prog = tmp_path / "spawner.py"
         prog.write_text(self.SPAWNS_AN_ORPHAN)
         work = tmp_path / "work"
         work.mkdir()
+        self._tight(monkeypatch)
 
-        cell = d9.run_cell(prog, [str(work)], timeout=2)
-        assert cell["rc"] == "TIMEOUT"
-        assert cell["bucket"] == d9.ERROR, "a timeout is a could-not-measure"
+        cell = d9.run_cell(prog, [str(work)], timeout=3600)
+        assert cell["rc"] == "STALLED"
+        assert cell["bucket"] == d9.ERROR, (
+            "a cell that stopped moving is a could-not-measure")
 
-        # The orphan wrote while the parent ran; if the group died with the
-        # parent, the count is FROZEN from here on. Two samples 1.5s apart is
-        # ~7 write ticks of headroom over the child's 0.2s period.
-        first = len(list(work.iterdir()))
-        time.sleep(1.5)
-        second = len(list(work.iterdir()))
-        assert first > 0, ("the orphan never wrote at all -- this test would "
-                           "pass vacuously against a broken spawner")
-        assert first == second, (
-            f"orphan STILL WRITING after its cell timed out "
-            f"({first} -> {second} files); the process group survived")
+        # The orphan wrote its burst while the parent ran; if the group died
+        # with the parent, the count is FROZEN from here on — and if it did
+        # not, the orphan is a live process holding the throwaway copy open,
+        # which is the failure that killed the sweep at cell 8500 of 9202.
+        wrote = [f for f in work.iterdir() if f.name.startswith("f")]
+        assert wrote, ("the orphan never wrote at all -- this test would "
+                       "pass vacuously against a broken spawner")
+        orphan = int((work / "orphan.pid").read_text().strip())
+        # LOOKS, NOT A CLOCK, and the distinction is this repo's own: a
+        # deadline here would be a wall clock deciding a verdict inside the
+        # test that exists to remove one — and `watchdog_ceiling_semantics_check`
+        # says so by refusing it (MEASURED: this loop, written with
+        # `while time.time() < deadline`, came back OFFENDER 1
+        # `clock_guarded_kill` on this very file).
+        for _ in range(50):
+            try:
+                os.kill(orphan, 0)
+            except ProcessLookupError:
+                break
+            time.sleep(0.2)
+        else:                                      # pragma: no cover - failure
+            raise AssertionError(
+                f"orphan {orphan} still alive across 50 looks after the cell "
+                f"was stopped; the process group survived")
+
+    def test_a_cell_that_keeps_moving_is_never_stopped(
+            self, tmp_path, monkeypatch):
+        """THE OTHER DIRECTION, and the reason the clock had to go.
+
+        Same cadence, same file, ONE difference: this cell keeps producing.
+        Its RECORDED BUDGET is 1 s and it runs for about 1.2 s — under the wall
+        clock that was ERROR "timed out", a property of the machine written
+        into the corpus as a property of the checker.
+        """
+        prog = tmp_path / "worker.py"
+        prog.write_text(self.KEEPS_MOVING)
+        self._tight(monkeypatch)
+        cell = d9.run_cell(prog, [], timeout=1)
+        assert cell["rc"] == 0, cell
+        assert cell["bucket"] != d9.ERROR, cell
 
     def test_a_copy_an_orphan_holds_open_is_reported_not_raised(self, tmp_path):
         """`_rmtree_stubborn` returns a REASON; it never raises.

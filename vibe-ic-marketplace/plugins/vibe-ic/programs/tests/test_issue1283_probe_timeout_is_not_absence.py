@@ -66,74 +66,62 @@ TESTS_DIR = Path(__file__).resolve().parent
 PROGRAMS = TESTS_DIR.parent
 sys.path.insert(0, str(PROGRAMS))
 import not_verified_tier as NV  # noqa: E402
+import _progress_run as PR  # noqa: E402
 import _watchdog  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
 # 1. the three states, and which input earns which
 # ---------------------------------------------------------------------------
-class _FakeChild:
-    """The narrowest object `probe` uses: a context manager whose
-    `communicate(timeout=)` either answers or raises, plus the `pid`/`kill`
-    the reap path touches.
-
-    `pid = 0` IS DELIBERATE. `_reap_group` refuses a non-positive pid before it
-    asks the OS anything, so a stubbed timeout exercises the real reap call
-    without any signal reaching any process on the host.
-    """
-
-    pid = 0
-
-    def __init__(self, argv, kw, outcome):
-        self._argv, self._kw, self._outcome = argv, kw, outcome
-        self.returncode = None
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *exc):
-        return False
-
-    def communicate(self, timeout=None):
-        if timeout is not None:
-            self.returncode = self._outcome(self._argv, timeout=timeout,
-                                            **self._kw)
-        return (b"", b"")
-
-    def kill(self):
-        pass
-
-
 def _probe_with(monkeypatch, outcome):
-    """Drive `probe` with a stubbed child process, caching disabled.
+    """Drive `probe` with a stubbed launch, caching disabled.
 
-    THE INJECTION POINT MOVED FROM `subprocess.run` TO `subprocess.Popen`, and
-    only the injection point moved: every assertion below is unchanged, because
-    what they pin is the ROUTING of an outcome to a state, not which stdlib
-    call produced the outcome. `probe` had to stop using `subprocess.run`
-    because `TimeoutExpired` carries no pid and so the `run` form cannot reap
-    the group a timed-out probe leaves behind — see `not_verified_tier.probe`.
+    THE INJECTION POINT HAS MOVED TWICE, and only the injection point moved:
+    every assertion below is unchanged, because what they pin is the ROUTING of
+    an outcome to a state, not which call produced the outcome.
+
+      * `subprocess.run` -> `subprocess.Popen`, because `TimeoutExpired`
+        carries no pid and so the `run` form cannot reap the group a timed-out
+        probe leaves behind;
+      * `subprocess.Popen` -> `_progress_run.run` (vibe-ic#2051, R4), because
+        what ends a probe is no longer a CLOCK. "did not answer within 60s" is
+        a sentence about the host — #1283's own comments record a 60 s bound
+        with a 9x margin flipping under contention — and the supervisor asks
+        the question this function actually means: has it stopped moving.
+
+    `outcome` returns the child's rc, or raises what the launch would raise.
     """
-    def fake_popen(argv, **kw):
-        return _FakeChild(argv, {}, outcome)
+    def fake_run(argv, **kw):
+        rc = outcome(argv, timeout=kw.get("hard_ceiling_s"), **{})
+        return subprocess.CompletedProcess(argv, rc, b"", b"")
 
-    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(PR, "run", fake_run)
     monkeypatch.setattr("shutil.which", lambda exe: "/usr/bin/" + exe)
     return NV.probe(["docker", "image", "inspect", "some/image:1"],
                     timeout=7, use_cache=False)
 
 
-def test_a_probe_that_timed_out_is_UNANSWERED_not_ABSENT(monkeypatch):
+def test_a_probe_that_stopped_moving_is_UNANSWERED_not_ABSENT(monkeypatch):
     """The one assertion the whole issue reduces to."""
-    def timeout(argv, **kw):
-        raise subprocess.TimeoutExpired(argv, kw.get("timeout"))
+    def stalled(argv, **kw):
+        raise PR.Stalled(argv, 12, 30.0, 360.0,
+                         {"output": True, "cpu": True, "io": False})
 
-    state, detail = _probe_with(monkeypatch, timeout)
+    state, detail = _probe_with(monkeypatch, stalled)
     assert state == NV.PROBE_UNANSWERED, (
         "a probe that never answered was filed as a finding about the host — "
         "this is exactly the conflation vibe-ic#1283 measured, restored")
     assert state != NV.PROBE_ABSENT
-    assert "7s" in detail, detail
+    assert "12 consecutive looks" in detail and "cpu,output" in detail, (
+        "the detail must say what was OBSERVED — which signals were readable "
+        "and how many looks sat still — because a stall seen with a degraded "
+        "probe set is a weaker observation than one seen with all three",
+        detail)
+    # THE ARGV IS STILL NAMED. The detail used to carry the budget ("did not
+    # answer within 7s"); the budget no longer decides anything, so what has to
+    # survive is the other half — WHICH probe this is a statement about. A
+    # reason that does not name its subject sends the reader to the wrong host.
+    assert "docker image inspect some/image:1" in detail, detail
 
 
 def test_a_probe_that_answered_nonzero_IS_ABSENT(monkeypatch):
@@ -185,8 +173,9 @@ def test_one_session_gets_one_answer_per_probe(monkeypatch):
         return 0
 
     monkeypatch.setattr(
-        subprocess, "Popen",
-        lambda argv, **kw: _FakeChild(argv, {}, counting))
+        PR, "run",
+        lambda argv, **kw: subprocess.CompletedProcess(
+            argv, counting(argv), b"", b""))
     monkeypatch.setattr("shutil.which", lambda exe: "/usr/bin/" + exe)
     argv = ["docker", "exec", "cache-probe-fixture", "true"]
     first = NV.probe(argv)
@@ -239,7 +228,15 @@ _CHILD = textwrap.dedent(
     import sys
     sys.path.insert(0, {programs!r})
     import pytest
+    import not_verified_tier
     from not_verified_tier import PROBE_PRESENT, probe, probe_skip_reason
+
+    # THE CADENCE, NOT THE PREDICATE. The supervisor still ends this probe on
+    # the same finding — output, CPU and block I/O all motionless for N
+    # consecutive looks — and only the spacing is tightened, so the arm below
+    # is reachable inside a test session instead of six minutes from now.
+    not_verified_tier.PROBE_STALL_LOOKS = 3
+    not_verified_tier.PROBE_POLL_S = 0.25
 
     STATE, DETAIL = probe(["docker", "image", "inspect", "some/image:1"],
                           timeout=1, use_cache=False)
@@ -282,13 +279,15 @@ def _child_session(tmp_path, docker_script: str, env_extra=None):
         cmd, _watchdog.run_host_supervised(cmd, cwd=str(tmp_path), env=env))
 
 
-#: never answers within the child's 1s budget -> the probe is UNANSWERED
+#: never MOVES: no output, no CPU, no block I/O -> the probe is UNANSWERED.
+#: `sleep 30` outlives the child's stall window many times over, so what the
+#: arm observes is the stall and never the shim finishing.
 _SLOW = "#!/bin/sh\nsleep 30\n"
 #: answers immediately, non-zero -> the image is genuinely ABSENT
 _ABSENT = "#!/bin/sh\nexit 1\n"
 
 
-def test_a_timed_out_probe_reports_UNANSWERED_and_not_absence(tmp_path):
+def test_a_stalled_probe_reports_UNANSWERED_and_not_absence(tmp_path):
     res = _child_session(tmp_path, _SLOW)
     out = res.stdout + res.stderr
     assert NV.UNANSWERED_MARK in out, out

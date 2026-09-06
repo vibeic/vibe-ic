@@ -132,6 +132,7 @@ about one container to two collection sites in the same run.
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from typing import Dict, List, Sequence, Tuple
 
 #: Prefix stamped onto a declared "I could not verify" skip reason. Read back
@@ -155,11 +156,45 @@ PROBE_UNANSWERED = "UNANSWERED"
 #: the roll-up can separate the two classes without parsing prose.
 UNANSWERED_MARK = "PROBE UNANSWERED"
 
-#: Budget for one probe subprocess. 60 == 180 // 3, the ceiling this repo's
-#: harness (``--timeout=180 --timeout-method=thread``) allows an inner bound;
-#: it is a ceiling, NOT a guarantee, which is why exceeding it routes to
-#: :data:`PROBE_UNANSWERED` instead of to a verdict.
+#: RECORDED BUDGET for one probe subprocess. 60 == 180 // 3, the ceiling this
+#: repo's harness (``--timeout=180 --timeout-method=thread``) allows an inner
+#: bound. Since vibe-ic#2051 it stops nothing: it is announced once when
+#: crossed, and what ENDS a probe is the supervisor's stall predicate below.
+#: The number is kept, and kept at the harness ceiling, because it is still the
+#: honest declaration of what this call expects to cost.
 PROBE_TIMEOUT_S = 60
+
+#: THE STALL PREDICATE'S CADENCE, read AT CALL TIME so the failure path is
+#: reachable in a test — `None` means the primitive's own measured cadence,
+#: which is what ships. A bound nobody can override in a test is a bound whose
+#: failure path is unreachable, which is the defect the bound was added to
+#: prevent, one level up (`gatekeeper_prepare_landing._default_census_writer`).
+PROBE_STALL_LOOKS = None
+PROBE_POLL_S = None
+
+
+def _probe_supervision() -> Dict[str, object]:
+    """The cadence knobs, omitted entirely when unset so the primitive's own
+    host-measured default stands rather than a number copied here."""
+    kw: Dict[str, object] = {}
+    if PROBE_STALL_LOOKS is not None:
+        kw["stall_looks"] = int(PROBE_STALL_LOOKS)
+    if PROBE_POLL_S is not None:
+        kw["poll_s"] = float(PROBE_POLL_S)
+    return kw
+
+
+def _stall_sentence(stall) -> str:
+    """What the reader needs about a probe that stopped moving.
+
+    It says WHICH signals were readable, because a stall observed with a
+    degraded probe set is a weaker observation than one observed with all
+    three, and a reader deciding whether to trust it must be able to tell.
+    """
+    live = ",".join(sorted(k for k, v in stall.signals.items() if v)) or "none"
+    return (f"every readable progress signal sat still across {stall.looks} "
+            f"consecutive looks ({stall.poll_s:.2f}s apart, "
+            f"{stall.elapsed_s:.1f}s elapsed); signals readable: {live}")
 
 #: argv -> (state, detail), for the session. See "WHY NOT JUST RAISE THE BUDGET".
 _PROBE_CACHE: Dict[Tuple[str, ...], Tuple[str, str]] = {}
@@ -200,32 +235,6 @@ def not_verified_reason(reason: str, remedy: str = "") -> str:
     return f"{text} — remedy: {remedy}" if remedy else text
 
 
-def _reap_group(pid) -> None:
-    """SIGKILL the process group *pid* leads, when it leads one.
-
-    THE `pgid == pid` GUARD IS THE WHOLE SAFETY ARGUMENT. `os.getpgid(pid)` of
-    a child that is NOT its own session leader returns THIS process's group,
-    and signalling that group kills the caller. It is asked, not assumed: the
-    signal goes out only when the child leads its own group, which is exactly
-    what `start_new_session=True` made it and what a stubbed or foreign object
-    will not be.
-
-    Everything the OS refuses -- an already-reaped pid, a platform without
-    `killpg` -- is silently nothing. This is best-effort cleanup AFTER a bound
-    that has already fired and decided the answer; it must never turn an
-    UNANSWERED probe into an exception.
-    """
-    import os
-    import signal
-    if not isinstance(pid, int) or pid <= 0:
-        return
-    try:
-        if os.getpgid(pid) == pid:
-            os.killpg(pid, signal.SIGKILL)
-    except (OSError, AttributeError, ValueError):  # nosec
-        pass
-
-
 def probe(argv: Sequence[str], timeout: int = PROBE_TIMEOUT_S,
           use_cache: bool = True) -> Tuple[str, str]:
     """Ask the host a yes/no question and allow it to answer "I did not answer".
@@ -240,8 +249,12 @@ def probe(argv: Sequence[str], timeout: int = PROBE_TIMEOUT_S,
       is an established fact about the host, not a failure to look.
     * the command exits 0 -> **PRESENT**.
     * the command exits non-zero -> **ABSENT**. The probe RAN and reported.
-    * :class:`subprocess.TimeoutExpired` -> **UNANSWERED**. The image may well
-      be there; nothing was learned. This is the arm vibe-ic#1283 is about.
+    * :class:`_progress_run.Stalled` -> **UNANSWERED**. Every readable progress
+      signal sat still, so the probe stopped moving and nothing was learned.
+      The image may well be there. This is the arm vibe-ic#1283 is about, and
+      since vibe-ic#2051 what reaches it is a STALL rather than a clock: "did
+      not answer within 60s" was a sentence about the host, and a saturated
+      host answering slowly now keeps its answer.
     * :class:`OSError` (fork/exec refused — the same saturated host, one layer
       down) -> **UNANSWERED**, for the same reason.
 
@@ -250,6 +263,9 @@ def probe(argv: Sequence[str], timeout: int = PROBE_TIMEOUT_S,
     """
     import shutil
     import subprocess
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import _progress_run as _pr
 
     key = tuple(argv)
     if use_cache and key in _PROBE_CACHE:
@@ -260,16 +276,37 @@ def probe(argv: Sequence[str], timeout: int = PROBE_TIMEOUT_S,
         out = (PROBE_ABSENT, f"`{argv[0]}` is not on PATH")
     else:
         try:
-            # POPEN + `start_new_session=True`, AND THE GROUP REAP BELOW.
+            # THE PROBE IS SUPERVISED BY PROGRESS, AND IT REAPS THE GROUP.
             #
-            # `subprocess.run(argv, timeout=N)` kills the DIRECT child when the
-            # bound fires and nothing below it. A probed command that is itself
-            # a wrapper therefore leaves its work running: `sh -c 'sleep 30'`
-            # loses the `sh` and keeps the `sleep`, reparented to init.
+            # `subprocess.run(argv, timeout=N)` was wrong here twice over.
             #
-            # MEASURED at b309595f06, in the pinned image, this file's own
-            # end-to-end arms driving a `docker` shim of exactly that shape --
-            # after `1 failed, 16 passed in 20.81s`, `ps -eo pid,ppid,args`:
+            # (1) IT KILLS ON A CLOCK. A probe that "did not answer within 60s"
+            # is a sentence about the HOST, and #1283's own comments record a
+            # 60 s bound with a 9x margin flipping under contention. Elapsed
+            # time never answered the question this function asks. What does is
+            # the supervisor's: captured output, the process tree's CPU and its
+            # block I/O ALL sat still for a count of consecutive looks. A
+            # `docker` that is slowly answering on a saturated host now keeps
+            # its answer; one that has genuinely wedged is still UNANSWERED.
+            #
+            # AND THE ONE CASE THIS PROBE CAN BE LEGITIMATELY QUIET NEEDS NO
+            # CHANNEL. `docker image inspect` BLOCKED on a saturated daemon
+            # socket moves nothing a generic signal can see -- no output, no
+            # CPU, no block I/O -- which is the shape a caller normally has to
+            # answer with semantics of its own. It does not have to here,
+            # because the outcome is unchanged in KIND and strictly more
+            # patient: a blocked probe was always going to be UNANSWERED, and
+            # the only thing that moved is how long it is given first (twelve
+            # motionless looks instead of 60 s of clock). A channel would buy
+            # a different WORD for the same answer.
+            #
+            # (2) IT KILLS THE DIRECT CHILD AND NOTHING BELOW IT. A probed
+            # command that is itself a wrapper leaves its work running:
+            # `sh -c 'sleep 30'` loses the `sh` and keeps the `sleep`,
+            # reparented to init. MEASURED at b309595f06, in the pinned image,
+            # this file's own end-to-end arms driving a `docker` shim of exactly
+            # that shape -- after `1 failed, 16 passed in 20.81s`,
+            # `ps -eo pid,ppid,args`:
             #
             #     PID  PPID  ELAPSED  COMMAND
             #      32     1       19  sleep 30
@@ -279,26 +316,20 @@ def probe(argv: Sequence[str], timeout: int = PROBE_TIMEOUT_S,
             # per-file landing driver, which owns the complete descendant tree,
             # that is "pytest exited with unfinished live descendants" and the
             # WHOLE file's result is UNKNOWN however its assertions went.
+            # `start_new_session=True` is what makes the child its own group
+            # leader, which is the precondition `_watchdog._default_kill`
+            # checks before it signals a GROUP rather than a single pid --
+            # the group reap this function used to perform by hand.
             #
-            # `run` cannot be repaired in place: `TimeoutExpired` carries
-            # `cmd`/`timeout`/`output`/`stderr` and NO pid, so the form that
-            # raises it cannot name the group it has to reap. Popen is used for
-            # that one reason; the bound, the capture and the three-way routing
-            # below are what they were.
-            with subprocess.Popen(list(argv), stdout=subprocess.PIPE,
-                                  stderr=subprocess.PIPE,
-                                  start_new_session=True) as child:
-                try:
-                    child.communicate(timeout=timeout)
-                except subprocess.TimeoutExpired:
-                    _reap_group(child.pid)
-                    child.kill()
-                    child.communicate()
-                    raise
-                returncode = child.returncode
-        except subprocess.TimeoutExpired:
+            # `timeout` is not ignored: it is handed over as the RECORDED
+            # BUDGET, which since vibe-ic#2051 is announced and stops nothing.
+            cp = _pr.run(list(argv), stdout=subprocess.PIPE,
+                         stderr=subprocess.PIPE, start_new_session=True,
+                         hard_ceiling_s=float(timeout), **_probe_supervision())
+            returncode = cp.returncode
+        except _pr.Stalled as stall:
             out = (PROBE_UNANSWERED,
-                   f"`{printed}` did not answer within {timeout}s")
+                   f"`{printed}` never answered: {_stall_sentence(stall)}")
         except OSError as exc:                             # pragma: no cover
             out = (PROBE_UNANSWERED, f"`{printed}` could not be run: {exc}")
         else:

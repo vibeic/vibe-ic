@@ -85,7 +85,6 @@ import json
 import os
 import re
 import shutil
-import signal
 import subprocess
 import sys
 import shlex
@@ -116,6 +115,12 @@ sys.path.insert(0, str(PROGRAMS))
 # degraded isolation harness costs the published corpus. If this import breaks
 # the sweep must not start.
 import _run_isolation                                        # noqa: E402
+
+# The process-launch primitive that judges PROGRESS instead of elapsed time
+# (vibe-ic#2051). Hard import for the same reason as `_run_isolation`: a
+# degraded launcher does not cost a column, it decides which cells were
+# measured at all.
+import _progress_run as _pr                                  # noqa: E402
 
 # The HOUSE wiring predicate (#1012). Also a hard import, and for the same
 # reason as `_run_isolation`: a degraded wiring test does not cost a column, it
@@ -468,8 +473,18 @@ def classify(rc, out: str, err: str) -> Tuple[str, str]:
     the exit code, and the exit code decides only what is left.
     """
     both = f"{out}\n{err}"
+    if rc == "STALLED":
+        # A cell that STOPPED MOVING — output, CPU and block I/O all flat for a
+        # count of consecutive looks. ERROR is right for the same reason a
+        # timeout was: nothing was measured about the checker.
+        return ERROR, "stopped moving (no progress on any signal)"
     if rc == "TIMEOUT":
-        return ERROR, "timed out"
+        # THE OLD MARKER IS STILL READ, AND IS NO LONGER WRITTEN. `run_cell`
+        # cannot produce it since the wall clock left (vibe-ic#2051), but the
+        # published baselines that were measured under it still carry it, and a
+        # reader re-classifying one of those rows must get the same bucket it
+        # got then rather than an unrecognised rc.
+        return ERROR, "timed out (recorded under the pre-#2051 wall clock)"
     if rc == "SPAWN":
         return ERROR, "could not spawn"
     if "Traceback (most recent call last)" in both:
@@ -587,28 +602,22 @@ def probe_mutators(runs: List[str], checkers: List[Dict[str, object]],
 
 
 # ---------------------------------------------------------------------- driving
-def _kill_process_group(proc: "subprocess.Popen") -> None:
-    """SIGTERM then SIGKILL the timed-out cell's whole process group.
+#: THE STALL PREDICATE'S CADENCE for one cell, read AT CALL TIME. `None` is
+#: the primitive's own host-measured cadence, which is what a sweep uses; a
+#: test tightens the SPACING so the arm is reachable, never the predicate.
+CELL_STALL_LOOKS = None
+CELL_POLL_S = None
 
-    Best-effort by construction: the group may already be gone (ESRCH), and a
-    platform without ``killpg`` falls back to killing the direct child, which
-    is exactly the pre-existing behaviour rather than a new failure mode.
-    """
-    try:
-        pgid = os.getpgid(proc.pid)
-    except (OSError, AttributeError):
-        proc.kill()
-        return
-    for sig in (signal.SIGTERM, signal.SIGKILL):
-        try:
-            os.killpg(pgid, sig)
-        except (OSError, AttributeError):
-            break
-        try:
-            proc.wait(timeout=5)
-            return
-        except subprocess.TimeoutExpired:
-            continue
+
+def _cell_supervision() -> Dict[str, object]:
+    """The cadence knobs, omitted when unset so the primitive's own default —
+    which measures this host's spawn floor — stands rather than a copy here."""
+    kw: Dict[str, object] = {}
+    if CELL_STALL_LOOKS is not None:
+        kw["stall_looks"] = int(CELL_STALL_LOOKS)
+    if CELL_POLL_S is not None:
+        kw["poll_s"] = float(CELL_POLL_S)
+    return kw
 
 
 def _rmtree_stubborn(path: Path, tries: int = 4) -> Optional[str]:
@@ -631,46 +640,58 @@ def _rmtree_stubborn(path: Path, tries: int = 4) -> Optional[str]:
 
 
 def run_cell(program: Path, argv: List[str], timeout: int) -> Dict[str, object]:
-    """Drive ONE cell, and on timeout kill the whole PROCESS GROUP.
+    """Drive ONE cell under PROGRESS supervision, and stop its whole GROUP.
 
-    `subprocess.run(timeout=…)` kills the direct child and nothing below it.
-    That was survivable while the population was checkers; it is not once the
-    population is honest, because the corrected wiring test (#1012) admitted
-    the runner-class programs — every one of which had been excluded by a
-    substring hit — and a runner spawns children.
+    TWO PROPERTIES, AND ONLY ONE OF THEM MOVED.
 
-    MEASURED: a timed-out runner left grandchildren writing into the throwaway
+    THE GROUP REAP STAYS. `subprocess.run(timeout=…)` kills the direct child
+    and nothing below it. That was survivable while the population was
+    checkers; it is not once the population is honest, because the corrected
+    wiring test (#1012) admitted the runner-class programs — every one of which
+    had been excluded by a substring hit — and a runner spawns children.
+    MEASURED: a stopped runner left grandchildren writing into the throwaway
     copy, and the copy's cleanup then raised
     ``OSError: [Errno 39] Directory not empty: 'reports'`` — which propagated
-    out of the worker and killed the sweep at cell 8500 of 9202. So the cell
-    is started in its OWN session and the group is signalled, which ends the
-    orphans rather than leaving them racing the cleanup.
+    out of the worker and killed the sweep at cell 8500 of 9202. The cell is
+    still started in its OWN session, which is the precondition
+    `_watchdog._default_kill` checks before it signals a GROUP, so the orphans
+    still end rather than racing the cleanup.
+
+    WHAT STOPS A CELL MOVED (vibe-ic#2051, R4). It was a wall clock, and a
+    9202-cell sweep is exactly where that is worst: `--timeout 120` on a busy
+    host converts SLOW into ERROR "timed out", so the corpus records a property
+    of the machine as a property of the cell, and the same commit measured
+    twice gives two baselines. The supervisor asks the question the sweep
+    actually means — has this cell stopped moving — so a checker that is
+    genuinely grinding keeps its cell, and one that has wedged is stopped
+    sooner than the deadline would have. `timeout` is kept and handed over as
+    the RECORDED BUDGET, which is announced and stops nothing.
+
+    A CELL THAT IS BLOCKED RATHER THAN WORKING — on a lock, on a container — is
+    motionless on every generic signal, and it needs no semantic channel here
+    for the same reason `not_verified_tier.probe` does not: the outcome is
+    unchanged in KIND and strictly more patient. It was ERROR "timed out" at the
+    deadline and it is ERROR "stopped moving" after a count of motionless looks.
+    Same bucket in the published table; the only thing that moved is how long a
+    cell is given before the sweep gives up on it.
     """
     env = dict(os.environ)
     env["PYTHONDONTWRITEBYTECODE"] = "1"
     cmd = [sys.executable, str(program)] + argv
     t0 = time.time()
     try:
-        p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                             text=True, env=env, cwd=str(PROGRAMS),
-                             start_new_session=True)
+        cp = _pr.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                     text=True, env=env, cwd=str(PROGRAMS),
+                     start_new_session=True, hard_ceiling_s=float(timeout),
+                     **_cell_supervision())
+    except FileNotFoundError as exc:
+        rc, out, err = "SPAWN", "", str(exc)
     except OSError as exc:
         rc, out, err = "SPAWN", "", str(exc)
+    except _pr.Stalled as stall:
+        rc, out, err = "STALLED", stall.stdout or "", str(stall)
     else:
-        try:
-            out, err = p.communicate(timeout=timeout)
-            rc = p.returncode
-        except subprocess.TimeoutExpired:
-            _kill_process_group(p)
-            # Drain, so the pipes close and no writer is left mid-write. The
-            # group is already signalled, so this cannot block on the timeout
-            # again -- but it is bounded anyway rather than trusted.
-            try:
-                out, err = p.communicate(timeout=15)
-            except subprocess.TimeoutExpired:      # pragma: no cover
-                p.kill()
-                out, err = "", ""
-            rc = "TIMEOUT"
+        rc, out, err = cp.returncode, cp.stdout, cp.stderr
     bucket, why = classify(rc, out, err)
     cell = {"rc": rc, "bucket": bucket, "why": why,
             "secs": round(time.time() - t0, 2)}

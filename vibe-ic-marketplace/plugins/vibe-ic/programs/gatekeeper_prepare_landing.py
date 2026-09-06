@@ -131,7 +131,6 @@ import importlib.util
 import json
 import os
 import re
-import signal
 import subprocess
 import sys
 import tempfile
@@ -139,6 +138,18 @@ from pathlib import Path
 from typing import List, Optional, Sequence, Set, Tuple
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # so the sibling import below resolves however this is invoked
 from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082 (helper from PR #1094)
+import _progress_run as _pr  # vibe-ic#2051 — progress, never a clock
+
+
+def _stall_sentence(stall) -> str:
+    """What a reader needs about a child that stopped moving: how many looks
+    sat still, how far apart, and WHICH signals were readable — a stall seen
+    with a degraded probe set is a weaker observation than one seen with all
+    three, and the reason has to say which it was."""
+    live = ",".join(sorted(k for k, v in stall.signals.items() if v)) or "none"
+    return (f"no forward progress across {stall.looks} consecutive looks "
+            f"({stall.poll_s:.2f}s apart, {stall.elapsed_s:.1f}s elapsed); "
+            f"signals readable: {live}")
 
 HERE = Path(__file__).resolve().parent
 PLUGIN = HERE.parent
@@ -147,7 +158,10 @@ INDEX = HERE / "INDEX.md"
 GEN_INDEX = REPO / "tools" / "gen_programs_index.py"
 GEN_CENSUS = REPO / "tools" / "gen_flow_matrix_census.py"
 
-#: Wall-clock bound on the census re-derivation, in seconds.
+#: RECORDED BUDGET for the census re-derivation, in seconds — and since the
+#: owner ruling of 2026-09-07 (vibe-ic#2051) that is ALL it is: crossing it is
+#: announced once and stops nothing. What ends the census now is the stall
+#: predicate below.
 #:
 #: NOT the `180 // 3` harness ceiling: this program is run by
 #: `tools/gatekeeper-land.sh`, not under `pytest --timeout=180`, and the gate it
@@ -158,10 +172,29 @@ GEN_CENSUS = REPO / "tools" / "gen_flow_matrix_census.py"
 #:
 #: Sized from the measurements on vibe-ic#1382: the generator's own runs on this
 #: fleet took 102 s, ~250 s and 255 s before failing, and a successful run costs
-#: the same census. Ten minutes is roughly 2x the slowest observed run, and it
-#: MUST be able to fire — an unbounded subprocess inside the landing path would
-#: hang the gate instead of reporting that it could not re-derive.
+#: the same census. Ten minutes is roughly 2x the slowest observed run — which
+#: is the whole argument for why it was never the right instrument: 2x the
+#: slowest run THIS FLEET HAPPENED TO SHOW is a fact about these hosts, and a
+#: landing on a busier one paid for it with a step that could not start.
 CENSUS_TIMEOUT_S = 600
+
+#: THE STALL PREDICATE'S CADENCE, read AT CALL TIME (see `_default_census_writer`
+#: on why nothing here may be bound as a default argument). `None` is the
+#: primitive's own host-measured cadence, which is what the landing path uses.
+CENSUS_STALL_LOOKS = None
+CENSUS_POLL_S = None
+
+
+def _census_supervision() -> dict:
+    """The cadence knobs, omitted when unset so the primitive's own default
+    stands. A number copied here would be a second declaration of a cadence
+    that already has an owner."""
+    kw: dict = {}
+    if CENSUS_STALL_LOOKS is not None:
+        kw["stall_looks"] = int(CENSUS_STALL_LOOKS)
+    if CENSUS_POLL_S is not None:
+        kw["poll_s"] = float(CENSUS_POLL_S)
+    return kw
 
 RC_OK, RC_REFUSED, RC_UNRUNNABLE = 0, 1, 2
 
@@ -242,11 +275,21 @@ def _default_census_writer(repo: Path,
                            ) -> Tuple[List[str], Optional[str]]:
     """Re-derive the 63x8 census. Returns ``(paths written, reason it failed)``.
 
-    `timeout_s` exists because THE BOUND MUST BE ABLE TO FIRE WHERE THE CODE RUNS,
-    and this function has two callers with wall clocks an order of magnitude apart:
+    WHAT STOPS THIS CENSUS IS A STALL, NEVER A CLOCK (vibe-ic#2051, R4). The
+    supervisor watches the writer's captured output, the CPU of its whole
+    process tree and its block I/O; a census that is grinding through nested
+    pytest runs advances one of those at every look and is never stopped,
+    however long it legitimately takes. `timeout_s` is still read, still
+    overridable, and is now the RECORDED BUDGET: crossing it is announced once
+    and decides nothing.
 
-      * `tools/gatekeeper-land.sh` — no outer clock, ~90 min gate, `CENSUS_TIMEOUT_S`
-        (600 s) is right and is sized from real runs (vibe-ic#1382: 102 s, ~250 s, 255 s).
+    THE TWO CALLERS ARE WHY THE CLOCK COULD NOT BE MADE TO WORK, and the record
+    is kept because it is the argument:
+
+      * `tools/gatekeeper-land.sh` — no outer clock, ~90 min gate, and 600 s was
+        sized from real runs (vibe-ic#1382: 102 s, ~250 s, 255 s). "Twice the
+        slowest run this fleet showed" is a fact about these hosts; a busier one
+        spent it and the landing could not start.
       * `programs/tests/test_issue1129_gatekeeper_prepare_landing.py` — driven under
         `pytest --timeout=180`, so a 600 s bound CAN NEVER FIRE FIRST. The harness clock
         wins every time, and with `--timeout-method=thread` pytest cannot unwind the
@@ -255,9 +298,12 @@ def _default_census_writer(repo: Path,
         lines — a reader grepping `^FAILED` gets 0 and reads an aborted run as a clean
         one. One slow module cost the verdict for every module behind it.
 
-    Lowering `CENSUS_TIMEOUT_S` itself would be the wrong repair: it would guarantee the
-    production step can never succeed, which the constant's own comment warns about. The
-    bound is not wrong — it was being applied where a smaller one had to win.
+    Two nested wall clocks with no ordering between them is not a bound that was
+    applied in the wrong place; it is the wrong instrument. A stall predicate has
+    no such ordering to get wrong, because it does not measure elapsed time at
+    all — an inner supervisor still fits its LOOK CADENCE inside an outer stall
+    window (`_progress_run.outer_stall_window_s`), and that is a spacing, not a
+    deadline.
 
     A REASON, not an exception, because this step is best-effort by design —
     see the module docstring. Both halves of the pair are meaningful at once:
@@ -270,10 +316,13 @@ def _default_census_writer(repo: Path,
     #
     # `timeout_s: float = CENSUS_TIMEOUT_S` binds the constant ONCE, when the
     # module is imported. Three tests in
-    # `test_issue1382_census_timeout_keeps_its_promise.py` make the bound fire by
-    # monkeypatching `CENSUS_TIMEOUT_S` to a small value; against a default
-    # argument that patch has no effect at all, the real 600 s bound applies, the
-    # timeout never fires, and all three go red. v1.10.48 shipped exactly that.
+    # `test_issue1382_census_timeout_keeps_its_promise.py` used to make the bound
+    # fire by monkeypatching `CENSUS_TIMEOUT_S` to a small value; against a
+    # default argument that patch has no effect at all, the real 600 s bound
+    # applied, the timeout never fired, and all three went red. v1.10.48 shipped
+    # exactly that. The same rule now governs `CENSUS_STALL_LOOKS` /
+    # `CENSUS_POLL_S`, which those tests tighten instead — the PREDICATE is
+    # untouched, only how often we look.
     #
     # A bound nobody can override in a test is a bound whose failure path is
     # unreachable — which is the same "cannot be made to fail" defect the bound
@@ -288,37 +337,41 @@ def _default_census_writer(repo: Path,
     before = set(dirty_paths(repo))
     with tempfile.TemporaryDirectory() as td:
         written_json = Path(td) / "written.json"
-        proc = subprocess.Popen(
-            [sys.executable, str(GEN_CENSUS), str(repo), "--fix",
-             "--written-json", str(written_json)],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-            start_new_session=True)
-        timed_out = False
+        cmd = [sys.executable, str(GEN_CENSUS), str(repo), "--fix",
+               "--written-json", str(written_json)]
+        # `start_new_session=True` makes the writer its own process-GROUP
+        # LEADER, which is the precondition `_watchdog._default_kill` checks
+        # before it signals a GROUP rather than a single pid. It is not
+        # optional here: the census drives nested pytest processes, and
+        # restoring while one of them is still alive lets an orphan write the
+        # tracked tree again after this function has reported it clean.
+        stalled = None
         try:
-            stdout, stderr = proc.communicate(timeout=timeout_s)
-        except subprocess.TimeoutExpired:
-            timed_out = True
-            # Kill the WHOLE writer group, not only its Python parent.  The
-            # census drives nested pytest processes; restoring while one of
-            # them is still alive lets an orphan write the tracked tree again
-            # after this function has reported it clean.
-            try:
-                os.killpg(proc.pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
-            try:
-                stdout, stderr = proc.communicate(timeout=5)
-            except subprocess.TimeoutExpired:
-                try:
-                    os.killpg(proc.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-                stdout, stderr = proc.communicate()
-        if timed_out:
-            # THE BOUND FIRED, AND THE CHILD DOES NOT GET TO SAY WHAT IT WROTE.
+            cp = _pr.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                         text=True, start_new_session=True,
+                         hard_ceiling_s=float(timeout_s),
+                         **_census_supervision())
+            stdout, stderr, rc = cp.stdout, cp.stderr, cp.returncode
+        except _pr.Stalled as exc:
+            stalled, stdout, stderr, rc = exc, exc.stdout, exc.stderr, None
+        if stalled is not None:
+            # THE CENSUS STOPPED MOVING, AND THE CHILD DOES NOT GET TO SAY
+            # WHAT IT WROTE.
             #
-            # `subprocess.run` kills the child with SIGKILL on timeout, so the
-            # generator's own `finally: write --written-json` NEVER RUNS. This
+            # WHAT DECIDES THIS BRANCH CHANGED (vibe-ic#2051, R4) AND WHAT IT
+            # DOES DID NOT. It used to be `communicate(timeout=CENSUS_TIMEOUT_S)`
+            # — a wall clock, and on the landing path of all places: a busy host
+            # made the step fail, so the landing paid for a machine's load with
+            # a step that could not start, which is the exact failure #1382
+            # already recorded from the other end. It is now the supervisor's
+            # stall predicate: output, the writer tree's CPU and its block I/O
+            # ALL flat for a count of consecutive looks. A census that is
+            # genuinely grinding through nested pytest runs is never stopped,
+            # however long it takes; one that has wedged is stopped sooner.
+            #
+            # The stop itself is unchanged in kind: SIGKILL to the whole GROUP,
+            # so the generator's own `finally: write --written-json` STILL never
+            # runs. This
             # branch used to return `_read_written(written_json)` on the belief
             # that "anything written before it fired is still declared" — that
             # file does not exist, so the declaration came back EMPTY while the
@@ -327,20 +380,23 @@ def _default_census_writer(repo: Path,
             # `gatekeeper-land.sh` exits 1 on a refusal — so a slow host turns a
             # best-effort convenience into a landing that cannot start.
             #
-            # Measured: a child whose `finally` writes the declaration, timed out
-            # by `subprocess.run`, leaves `written.json` ABSENT.
+            # Measured: a child whose `finally` writes the declaration, stopped
+            # by a supervisor that SIGKILLs, leaves `written.json` ABSENT —
+            # `test_a_stopped_child_never_runs_its_finally` asserts that OS
+            # behaviour directly rather than trusting this reading.
             #
             # The module docstring promises a census that cannot run "leaves the
             # landing exactly where it stood before this step existed". Honour
             # that literally: restore exactly the paths that became dirty during
-            # the census, declare nothing, and report the timeout as a reason.
+            # the census, declare nothing, and report the stall as a reason.
             # Restoring is safe precisely because `before` was captured above —
             # the earlier index write is untouched.
             undone, failed = [], []
             for rel in sorted(set(dirty_paths(repo)) - before):
-                rc, _out = _git(repo, "checkout", "--", rel)
-                (undone if rc == 0 else failed).append(rel)
-            reason = f"the generator did not finish within {timeout_s}s"
+                git_rc, _out = _git(repo, "checkout", "--", rel)
+                (undone if git_rc == 0 else failed).append(rel)
+            reason = (f"the generator did not finish: it STOPPED MOVING — "
+                      f"{_stall_sentence(stalled)}")
             if undone:
                 reason += f"; reverted {len(undone)} partial write(s)"
             if failed:
@@ -351,9 +407,9 @@ def _default_census_writer(repo: Path,
                 return failed, reason
             return [], reason
         wrote = _read_written(written_json)
-        if proc.returncode != 0:
+        if rc != 0:
             tail = (stdout + stderr).strip().splitlines()
-            return wrote, (f"rc={proc.returncode}: "
+            return wrote, (f"rc={rc}: "
                            + (tail[-1][:200] if tail else "no output"))
         return wrote, None
 

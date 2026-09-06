@@ -351,18 +351,67 @@ def test_the_real_program_runs_against_this_repo_and_honours_its_boundary():
 _LAND_SH = PROGRAMS.parents[3] / "tools" / "gatekeeper-land.sh"
 
 
+def _module_level_siblings(module: Path, _seen=None) -> list:
+    """Every sibling `.py` this module imports at MODULE LEVEL, transitively.
+
+    Read off the program's own AST, so the seed carries what the program
+    actually needs and cannot fall behind it. Transitive because a helper has
+    helpers: `_progress_run` imports `_watchdog`, and a seed with the first and
+    not the second fails in exactly the same misleading way.
+    """
+    import ast as _ast
+    seen = {} if _seen is None else _seen
+    try:
+        tree = _ast.parse(module.read_text(encoding="utf-8"))
+    except (OSError, SyntaxError):
+        return list(seen.values())
+    # TOP-LEVEL STATEMENTS ONLY, and that is the whole definition: an import
+    # inside a function runs when the function runs, and the seed is only
+    # obliged to carry what importing the module requires. Walking the whole
+    # tree instead pulls in `_watchdog`'s lazy `step_input_scope`, and from
+    # there the flow-compliance closure — 300 files to prove a dirty-tree
+    # refusal (MEASURED while writing this).
+    body = list(tree.body)
+    for node in list(body):
+        if isinstance(node, _ast.Try):
+            body.extend(node.body + node.orelse + node.finalbody)
+            for handler in node.handlers:
+                body.extend(handler.body)
+    names = set()
+    for node in body:
+        if isinstance(node, _ast.Import):
+            names.update(a.name.split(".")[0] for a in node.names)
+        elif isinstance(node, _ast.ImportFrom) and node.level == 0 and node.module:
+            names.add(node.module.split(".")[0])
+    for name in sorted(names):
+        candidate = PROGRAMS / f"{name}.py"
+        if candidate.is_file() and name not in seen:
+            seen[name] = candidate
+            _module_level_siblings(candidate, seen)
+    return list(seen.values())
+
+
 @pytest.fixture()
 def landing_repo(tmp_path):
     """A scratch repo carrying the REAL script and the REAL program, dirty.
 
     Copies rather than stubs: mutate either file in this repository and these
-    tests move, which is the binding that was missing. Only
-    `gatekeeper_prepare_landing.py` is needed beside the script, and so is
-    `_atomic_artefact.py`: the program imports it at module level (vibe-ic#1082,
-    so a declared report cannot appear half-written), which makes the helper a
-    REAL dependency of the seed rather than an optional extra. Everything else
-    it imports is stdlib, and `gatekeeper_assign_version` is loaded lazily AFTER
-    the dirty check these tests stop at.
+    tests move, which is the binding that was missing.
+
+    WHAT MUST BE COPIED IS WHAT THE PROGRAM IMPORTS AT MODULE LEVEL, and that
+    list is DERIVED below rather than remembered. `_atomic_artefact.py`
+    (vibe-ic#1082, so a declared report cannot appear half-written) was the
+    first; `_progress_run.py` and the `_watchdog.py` it sits on are the second,
+    since the census stopped being bounded by a wall clock (vibe-ic#2051, R4).
+    A hand-kept list is exactly the shape that fails here: the program grew one
+    sibling import and this fixture answered `ModuleNotFoundError: No module
+    named '_progress_run'` — which the assertions read as "the dispatch points
+    at nothing", a true-looking sentence about the wrong thing. Deriving the
+    list from the program's own `import` statements means the next sibling
+    import is copied without anybody remembering to.
+
+    `gatekeeper_assign_version` is still loaded lazily AFTER the dirty check
+    these tests stop at, so it is not needed here.
     """
     assert _LAND_SH.is_file(), f"{_LAND_SH} not found — resolve the repo root"
     r = tmp_path / "landing"
@@ -372,7 +421,8 @@ def landing_repo(tmp_path):
     (r / "vibe-ic-marketplace/plugins/vibe-ic/.claude-plugin").mkdir(parents=True)
     (r / "tools/gatekeeper-land.sh").write_bytes(_LAND_SH.read_bytes())
     (prog / "gatekeeper_prepare_landing.py").write_bytes(MOD.read_bytes())
-    (prog / "_atomic_artefact.py").write_bytes(ATOMIC.read_bytes())
+    for helper in _module_level_siblings(MOD):
+        (prog / helper.name).write_bytes(helper.read_bytes())
     (r / "vibe-ic-marketplace/plugins/vibe-ic/.claude-plugin/plugin.json").write_text(
         '{"version": "1.2.3"}\n', encoding="utf-8")
     (prog / "INDEX.md").write_text("stale\n", encoding="utf-8")

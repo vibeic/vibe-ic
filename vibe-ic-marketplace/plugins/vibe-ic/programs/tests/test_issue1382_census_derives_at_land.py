@@ -357,28 +357,29 @@ def test_the_written_json_declaration_survives_a_failing_run():
 
 
 def test_the_bound_on_the_census_subprocess_can_actually_fire(repo, monkeypatch):
-    """An unbounded subprocess inside the landing path hangs the gate instead of
-    reporting that it could not re-derive. The number is not the harness's
-    `180 // 3` — nothing bounds this program with pytest — but it must exist and
-    it must be finite."""
+    """WHAT ENDS THE CENSUS MUST BE ABLE TO FIRE, and it is no longer a clock.
+
+    THE BUDGET IS STILL DECLARED AND STILL FINITE. `CENSUS_TIMEOUT_S` is now
+    the RECORDED budget (vibe-ic#2051, R4): crossing it is announced once and
+    stops nothing. It stays asserted here because a budget that is absent, or
+    longer than the whole landing gate, is a declaration nobody can read.
+
+    WHAT IS FIRED IS THE STALL. The subject below writes once and then goes
+    quiet on every signal there is — no output, no CPU, no block I/O — which is
+    the shape the census showed when it wedged, and precisely NOT the shape of
+    a census that is merely slow on a loaded host. The properties asserted are
+    the ones the clock was standing in for and are unchanged: it returns
+    promptly, it names the reason, and it declares NOTHING.
+
+    The write-capable probe operates on this test's temporary subject, never
+    REPO — `test_the_bound_probe_never_points_a_writer_at_the_shipped_tree`
+    below drives this same function to prove it.
+    """
     assert isinstance(G.CENSUS_TIMEOUT_S, int), G.CENSUS_TIMEOUT_S
     assert 0 < G.CENSUS_TIMEOUT_S <= 3600, (
-        f"CENSUS_TIMEOUT_S={G.CENSUS_TIMEOUT_S} — a bound longer than the whole "
-        f"landing gate is a bound that cannot fire")
-    src = MOD.read_text(encoding="utf-8")
+        f"CENSUS_TIMEOUT_S={G.CENSUS_TIMEOUT_S} — a recorded budget longer than "
+        f"the whole landing gate tells a reader nothing")
 
-    # ASSERTED BY BEHAVIOUR, NOT BY SPELLING.
-    #
-    # This was `assert "timeout=CENSUS_TIMEOUT_S" in src`. v1.10.48 renamed the
-    # argument to `timeout_s` (defaulting to CENSUS_TIMEOUT_S) so the bound could
-    # differ between the two callers, whose wall clocks are an order of magnitude
-    # apart. The constant still reaches the subprocess; only its spelling at the
-    # call site changed, and the old assertion could not tell those apart.
-    #
-    # The property is "a bound reaches the subprocess AND CAN FIRE", so fire it:
-    # a 1-second bound must return promptly with a named reason and zero declared
-    # paths, rather than hanging or claiming a re-derivation it did not do. The
-    # write-capable probe operates on this test's temporary subject, never REPO.
     slow = repo / "_slow_census.py"
     slow.write_text(
         "import pathlib, sys, time\n"
@@ -387,27 +388,43 @@ def test_the_bound_on_the_census_subprocess_can_actually_fire(repo, monkeypatch)
         "time.sleep(30)\n",
         encoding="utf-8")
     monkeypatch.setattr(G, "GEN_CENSUS", slow)
+    # ONLY THE CADENCE. The predicate is still "output, CPU and block I/O all
+    # flat for N consecutive looks"; N and the spacing are read at call time so
+    # this arm is reachable inside a test session instead of six minutes away.
+    monkeypatch.setattr(G, "CENSUS_STALL_LOOKS", 4)
+    monkeypatch.setattr(G, "CENSUS_POLL_S", 0.25)
 
     import time as _t
     t0 = _t.time()
     wrote, why = G._default_census_writer(repo, 1.0)
     dt = _t.time() - t0
     assert dt < 60, (
-        f"a 1s bound took {dt:.0f}s to return — the bound is declared and not "
-        f"actually applied to the subprocess")
+        f"a 4-look stall at 0.25s took {dt:.0f}s to return — what ends the "
+        f"census is declared and not actually applied to the subprocess")
     assert why and "did not finish" in why, (
-        f"the bound fired but said nothing usable: {why!r}. A refusal that cannot "
+        f"it stopped but said nothing usable: {why!r}. A refusal that cannot "
         f"name itself sends the next reader to the wrong place")
+    assert "STOPPED MOVING" in why, (
+        f"the reason must say WHAT was observed, not merely that something "
+        f"went wrong: {why!r}")
     assert wrote == [], (
-        f"the bound fired and the writer still declared {wrote} — a killed child's "
+        f"it stopped and the writer still declared {wrote} — a stopped child's "
         f"`finally` never runs, so anything declared here is a claim about work "
         f"that was not finished")
     assert (repo / MUTATED_FIGURE_REL).read_text(
         encoding="utf-8") == "original figure source\n"
 
-    assert "subprocess.TimeoutExpired" in src, (
-        "a bound with no handler takes the preparation down instead of "
-        "reporting NOT RE-DERIVED")
+    # AND THE STOP IS HANDLED, not propagated. The old spelling of this was
+    # `assert "subprocess.TimeoutExpired" in src` — a grep for the handler of
+    # the exception the clock used to raise. The clock is gone, so the grep
+    # would now pass on a program that no longer catches anything; what the
+    # sentence meant is asserted directly above instead, by the call returning
+    # `(wrote, why)` rather than raising `_progress_run.Stalled` into the
+    # caller. A stop that escapes takes the preparation down; a stop that is
+    # handled reports NOT RE-DERIVED, and only the second returns here at all.
+    assert "_progress_run" in MOD.read_text(encoding="utf-8"), (
+        "the census no longer routes its launch through the progress "
+        "supervisor, so nothing decides when it has stopped moving")
 
 
 def test_the_bound_probe_never_points_a_writer_at_the_shipped_tree(
@@ -419,7 +436,11 @@ def test_the_bound_probe_never_points_a_writer_at_the_shipped_tree(
 
     def observe_subject(repo_path: Path, timeout_s: float):
         observed.append(Path(repo_path).resolve())
-        return [], f"the generator did not finish within {timeout_s}s"
+        # The stub answers in the SHAPE the real writer answers in, because the
+        # arm above asserts that shape. A stub whose reason no longer resembles
+        # the program's would make this test pass while measuring nothing.
+        return [], ("the generator did not finish: it STOPPED MOVING — no "
+                    "forward progress across 4 consecutive looks")
 
     monkeypatch.setattr(G, "_default_census_writer", observe_subject)
     test_the_bound_on_the_census_subprocess_can_actually_fire(repo, monkeypatch)

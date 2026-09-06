@@ -213,11 +213,23 @@ def drive(argv, budget):
 
 
 def test_the_register_is_shrink_only_and_keyed_on_an_identity():
-    """The ratchet, on the SHIPPED register: nothing blessed, nothing by line."""
+    """The ratchet, on the SHIPPED register: nothing blessed, nothing by line.
+
+    THE REGISTER IS NOW EMPTY, AND THAT IS ITS BEST STATE (owner ruling R4).
+    This test used to open with `assert recorded, "an empty register would
+    refuse the whole tree silently"`. The first half of that sentence came
+    true — every one of the four recorded sites was converted, so `recorded`
+    is `{}` — and the second half was never true of an empty register: with
+    nothing recorded, a raw clock kill is not silently forgiven, it is an
+    OFFENDER, printed by name with its register key, rc 1. The assumption is
+    replaced by the executed proof below rather than deleted: emptiness is
+    only safe if the empty register still refuses, so this asserts that it
+    does. A ratchet whose terminal state fails its own test would be a
+    ratchet nobody could finish.
+    """
     doc = json.loads(
         (_PROGRAMS / W._RAW_KILL_REGISTER).read_text(encoding="utf-8"))
     recorded = doc["recorded"]
-    assert recorded, "an empty register would refuse the whole tree silently"
     for key, note in recorded.items():
         parts = key.split("::")
         assert len(parts) == 3, (
@@ -227,6 +239,26 @@ def test_the_register_is_shrink_only_and_keyed_on_an_identity():
             f"{key!r} is keyed on a LINE NUMBER, which moves whenever anything "
             f"above it is edited")
         assert note.strip(), f"{key!r} is recorded with no note"
+
+
+def test_an_empty_register_refuses_LOUDLY_rather_than_forgiving(tmp_path):
+    """The property `assert recorded` was standing in for, EXECUTED.
+
+    A register with no entries must make any raw clock kill an OFFENDER that
+    is named with its key and returns rc 1 — never a silent pass. This is the
+    same arm the four conversions were measured with: restore one kill, the
+    gate refuses it by name.
+    """
+    programs = tmp_path / "programs"
+    programs.mkdir()
+    (programs / W._RAW_KILL_REGISTER).write_text(
+        json.dumps({"recorded": {}}), encoding="utf-8")
+    (programs / "offender.py").write_text(_TIMEOUT_KILL, encoding="utf-8")
+    rows, _backstop = W.scan(programs)
+    offenders = [r for r in rows if r.verdict == "OFFENDER"]
+    assert len(offenders) == 1, [(r.file, r.line, r.verdict) for r in rows]
+    assert offenders[0].expr.endswith("::proc.kill"), offenders[0].expr
+    assert not [r for r in rows if r.verdict == "RESIDUAL_RAW_CLOCK_KILL"]
 
 
 def test_an_exemption_tag_is_the_same_one_the_rest_of_the_gate_uses(tmp_path):
