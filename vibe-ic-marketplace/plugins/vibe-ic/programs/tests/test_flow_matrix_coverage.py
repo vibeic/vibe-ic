@@ -136,6 +136,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
@@ -1667,6 +1668,53 @@ def _outcome_worker_count(n_paths: int, cap: Optional[int] = None) -> int:
     return min(derived, cap)
 
 
+#: What the LAST `_run_outcome_reports` actually did: the width it ran at and the
+#: greatest number of module runs it ever had in flight at once. Published so a
+#: test can assert on the schedule that RAN rather than on one it re-derives, and
+#: so a load-narrowed width does not make a wave-boundary check red for being
+#: right. Reset on entry to every run, so a stale pair can never be read as this
+#: run's.
+_LAST_OUTCOME_RUN: Dict[str, int] = {"width": 0, "peak_in_flight": 0}
+
+
+def _load_bounded_width(ceiling: int) -> int:
+    """Narrow `ceiling` to what THIS host can actually run at once.
+
+    A BUDGET OF PROCESSES, NEVER OF SECONDS. `_outcome_worker_count` derives a
+    ceiling from the MODULE COUNT — eight dimension modules in three waves is
+    three — and reads neither the size of the host nor what else is on it. That
+    is right as a ceiling and wrong as a floor: MEASURED on 8hd-3 (32 cores) on
+    2026-09-07, one census item's own descendant tree peaked at 47 concurrent
+    processes, because each of the three nested pytest sessions reaches modules
+    whose own fan-out is another hard-coded eight (`matrix_d4_probe._PROBE_FANOUT`,
+    `test_matrix_d6_skip_discipline`'s `min(8, len(todo))`). At a 1-minute load
+    average of 60 the same file took 765 s against 431 s alone -- 1.78x -- and it
+    contributed about 20 to that load itself.
+
+    THE CEILING IS NEVER RAISED, only lowered. A load-aware width that could grow
+    would change what an idle host does, and `_outcome_worker_count(8) == 3` is a
+    property other tests assert; this is a strict narrowing, so on an unloaded
+    host every schedule is exactly the one that ran before.
+
+    "COULD NOT LOOK" IS NOT "LOOKED AND FOUND AN IDLE HOST". A host with no
+    `getloadavg` and a host whose core count is unknown both keep the full
+    ceiling rather than being handed a made-up figure -- the same refusal
+    `NOT_MEASURED` carries elsewhere in this campaign, in the one place where
+    defaulting would be invisible.
+
+    NOT A DEADLINE, AND NOTHING HERE KILLS. A worker that is slow because the
+    host is busy still finishes; what changes is how many of them are started.
+    """
+    cpus = os.cpu_count()
+    if not cpus:
+        return ceiling
+    try:
+        load = os.getloadavg()[0]
+    except (OSError, AttributeError):
+        return ceiling
+    return max(1, min(ceiling, int(cpus - load)))
+
+
 def _outcome_worker_cap() -> Optional[int]:
     raw = os.environ.get(_OUTCOME_WORKER_CAP_ENV)
     if raw is None:
@@ -1726,7 +1774,31 @@ def _run_outcome_reports(
     file exists to refuse.
     """
     assert paths, "no module paths given to the outcome run"
-    _width = _outcome_worker_count(len(paths), _outcome_worker_cap())
+    _width = _load_bounded_width(
+        _outcome_worker_count(len(paths), _outcome_worker_cap()))
+    _LAST_OUTCOME_RUN["width"] = _width
+    _LAST_OUTCOME_RUN["peak_in_flight"] = 0
+    _in_flight = 0
+    _flight_lock = threading.Lock()
+
+    def _one(path: Path, cwd_, width_, queue_):
+        """The module run, with the in-flight census wrapped around it.
+
+        The census is HERE and not inside `_run_one_module_outcome` so that a
+        caller which substitutes that function -- `test_the_outcome_pool_waits_
+        at_each_wave_boundary` does -- still measures the real scheduler.
+        """
+        nonlocal _in_flight
+        with _flight_lock:
+            _in_flight += 1
+            if _in_flight > _LAST_OUTCOME_RUN["peak_in_flight"]:
+                _LAST_OUTCOME_RUN["peak_in_flight"] = _in_flight
+        try:
+            return _run_one_module_outcome(path, cwd_, width_, queue_)
+        finally:
+            with _flight_lock:
+                _in_flight -= 1
+
     per_path: Dict[Path, Dict[str, List[Dict]]] = {}
     completed_paths = 0
     for start in range(0, len(paths), _width):
@@ -1735,7 +1807,7 @@ def _run_outcome_reports(
         with ThreadPoolExecutor(max_workers=len(wave)) as pool:
             # `_width` is diagnostic only. It changes no liveness rule.
             futures = [pool.submit(
-                _run_one_module_outcome, p, cwd, len(wave), relay_queue)
+                _one, p, cwd, len(wave), relay_queue)
                        for p in wave]
             # Inner supervisors have their own private sidecars. Relay their
             # VALIDATED monotonic scores back to this outer pytest item via a
@@ -2113,7 +2185,8 @@ _PROBE_SLEEP_S = 2
 _PROBE_MODULE = "import time\n\n\ndef test_probe():\n    time.sleep(%d)\n"
 
 
-def test_the_outcome_loop_cannot_outlive_the_pytest_harness(tmp_path):
+def test_the_outcome_loop_cannot_outlive_the_pytest_harness(
+        monkeypatch, tmp_path):
     """A stalled child reports before the harness; progressing work may finish.
 
     The historical node id is intentionally retained for base/candidate
@@ -2151,25 +2224,54 @@ def test_the_outcome_loop_cannot_outlive_the_pytest_harness(tmp_path):
         f"{per_call_ceiling}s diagnostic window")
     n = len(dimension_module_paths())
     assert n, "no dimension modules found; the loop under test has no input"
-    workers = _outcome_worker_count(n)
+    ceiling = _outcome_worker_count(n)
 
+    # THE LOAD IS PINNED FOR THIS ITEM, and that is not a convenience. The
+    # width is deliberately load-bounded now, so on a busy landing lane it can
+    # legitimately be 1 -- and a concurrency assertion at width 1 is satisfied
+    # by a sequential loop, i.e. vacuous exactly where the census actually
+    # runs. The narrowing itself is proved by
+    # `test_the_process_budget_narrows_under_load_and_never_widens`; THIS item
+    # is about whether the schedule at its declared width is really concurrent,
+    # so it asks that question at the width the ceiling declares, on every host.
+    monkeypatch.setattr(sys.modules[__name__].os, "getloadavg",
+                        lambda: (0.0, 0.0, 0.0))
     probe = tmp_path / "probe"
     probe.mkdir()
     paths = tuple(probe / f"test_probe_{i}.py" for i in range(n))
     for path in paths:
         path.write_text(_PROBE_MODULE % _PROBE_SLEEP_S, encoding="utf-8")
-    started = time.monotonic()
     reports = _run_outcome_reports(paths, cwd=probe)
-    elapsed = time.monotonic() - started
     assert len(reports) == n, (
         f"the probe ran {n} module(s) and got {len(reports)} report(s) back; "
         f"a loop that drops a module measures nothing about the loop")
-    sequential_floor = n * _PROBE_SLEEP_S
-    assert elapsed < sequential_floor, (
-        f"{n} module(s) sleeping {_PROBE_SLEEP_S}s each took {elapsed:.1f}s, "
-        f"which is not under the {sequential_floor}s a SEQUENTIAL run must "
-        f"spend sleeping alone. The configured pool width is {workers}, so "
-        f"this says the parallel schedule is not the code that ran.")
+
+    # CONCURRENCY IS PROVED BY COUNTING PROCESSES IN FLIGHT, NOT BY A CLOCK.
+    #
+    # This was `elapsed < n * _PROBE_SLEEP_S` -- 16 s for eight 2 s sleeps --
+    # and that assertion is the shape this lane exists to remove. MEASURED on
+    # 8hd-3 on 2026-09-07 it held with about 5.5 s of headroom at a 1-minute
+    # load average of 6 and at 86 alike (8.97 s -> 10.46 s), so it was not
+    # flaking; but it is a wall clock standing in for a structural fact, and it
+    # is red BY CONSTRUCTION the moment the width is narrowed for a busy host,
+    # which is exactly the fix the same starvation calls for. A test whose
+    # premise forbids the repair is the premise that has to move.
+    #
+    # The replacement is strictly STRONGER, not weaker. The clock could be
+    # satisfied by a sequential implementation that merely happened to be fast;
+    # this cannot. It requires the scheduler to have really had `width` module
+    # runs alive at the same instant, which is the thing the old assertion was
+    # trying to infer.
+    width = _LAST_OUTCOME_RUN["width"]
+    peak = _LAST_OUTCOME_RUN["peak_in_flight"]
+    assert 1 <= width <= ceiling, (
+        f"the loop ran at width {width}; the module-count ceiling is {ceiling} "
+        f"and a width may only ever be narrowed from it, never raised")
+    assert peak == width, (
+        f"{n} module(s) at width {width} never had more than {peak} run(s) in "
+        f"flight at once. The parallel schedule is not the code that ran — and "
+        f"unlike a wall clock this says so on a fast host and a starving one "
+        f"alike.")
 
 
 def test_the_outcome_pool_waits_at_each_wave_boundary(monkeypatch, tmp_path):
@@ -2195,7 +2297,12 @@ def test_the_outcome_pool_waits_at_each_wave_boundary(monkeypatch, tmp_path):
                         "_run_one_module_outcome", fake)
     reports = _run_outcome_reports(paths, cwd=tmp_path)
     assert len(reports) == len(paths)
-    width = _outcome_worker_count(len(paths))
+    # THE WIDTH THAT RAN, not one re-derived here. `_run_outcome_reports` slices
+    # its waves at the LOAD-BOUNDED width, so a boundary arithmetic taken from
+    # the module-count ceiling alone would put the boundaries in the wrong place
+    # on a busy host and report the barrier missing when it is present.
+    width = _LAST_OUTCOME_RUN["width"]
+    assert 1 <= width <= _outcome_worker_count(len(paths))
     for boundary in range(width, len(paths), width):
         prior = paths[boundary - width:boundary]
         following = paths[boundary:boundary + width]
@@ -2203,6 +2310,121 @@ def test_the_outcome_pool_waits_at_each_wave_boundary(monkeypatch, tmp_path):
             finished[p] for p in prior), (
                 f"wave beginning at {boundary} started before the preceding "
                 f"{len(prior)} module(s) all finished")
+
+
+def test_the_process_budget_narrows_under_load_and_never_widens(monkeypatch):
+    """A budget of PROCESSES, from the host's own capacity and its 1-min load.
+
+    Both directions, on the arithmetic, because the load of a real host cannot
+    be arranged: an idle host must get the ceiling UNCHANGED, and a host with
+    less spare capacity than the ceiling must get less.
+    """
+    mod = sys.modules[__name__]
+    monkeypatch.setattr(mod.os, "cpu_count", lambda: 32)
+
+    # Idle: the ceiling survives byte-for-byte. This is the direction that keeps
+    # every existing schedule identical on a quiet machine.
+    monkeypatch.setattr(mod.os, "getloadavg", lambda: (5.0, 5.0, 5.0))
+    assert _load_bounded_width(3) == 3
+    assert _load_bounded_width(8) == 8
+
+    # Busy: narrowed to the spare capacity, and never below one -- a host with
+    # no spare capacity still makes progress, one process at a time.
+    monkeypatch.setattr(mod.os, "getloadavg", lambda: (30.0, 30.0, 30.0))
+    assert _load_bounded_width(3) == 2
+    monkeypatch.setattr(mod.os, "getloadavg", lambda: (60.0, 60.0, 60.0))
+    assert _load_bounded_width(3) == 1
+    assert _load_bounded_width(64) == 1
+
+    # It NARROWS. It can never hand back more processes than it was given, which
+    # is what keeps `_outcome_worker_count` the ceiling it is asserted to be.
+    monkeypatch.setattr(mod.os, "getloadavg", lambda: (0.0, 0.0, 0.0))
+    assert _load_bounded_width(3) == 3, (
+        "an idle 32-core host must not be handed a WIDER pool than the "
+        "module-count ceiling; a load-aware width that can grow changes what "
+        "every quiet host does")
+
+
+def test_a_host_that_cannot_be_measured_keeps_the_ceiling(monkeypatch):
+    """COULD NOT LOOK is not LOOKED AND FOUND AN IDLE HOST.
+
+    Neither refusal may invent a figure. Keeping the ceiling is the only answer
+    that is honest about having measured nothing: it is exactly the schedule the
+    tree had before any of this, so nothing is decided by a number nobody read.
+    """
+    mod = sys.modules[__name__]
+
+    def _no_loadavg():
+        raise OSError("this host does not report a load average")
+
+    monkeypatch.setattr(mod.os, "cpu_count", lambda: 32)
+    monkeypatch.setattr(mod.os, "getloadavg", _no_loadavg)
+    assert _load_bounded_width(3) == 3
+
+    monkeypatch.setattr(mod.os, "cpu_count", lambda: None)
+    monkeypatch.setattr(mod.os, "getloadavg", lambda: (60.0, 60.0, 60.0))
+    assert _load_bounded_width(3) == 3
+
+
+def test_the_flight_recorder_counts_real_overlap_and_not_a_clock(
+        monkeypatch, tmp_path):
+    """The instrument the concurrency proof rests on, proved BOTH directions.
+
+    A recorder that simply echoed the declared width would make
+    `test_the_outcome_loop_cannot_outlive_the_pytest_harness` unfalsifiable, so
+    two independent things have to move it: a NARROWER SCHEDULE must drive the
+    peak down, and FEWER PATHS THAN THE WIDTH must drive it down too. The
+    second is the one that separates "counts overlap" from "prints the width".
+
+    WHAT THIS ARM LEARNED THE HARD WAY. Its first version made the stand-in
+    hold a lock and expected the peak to collapse to one. It did not, and the
+    recorder was right: three runs had been STARTED and none had returned, so
+    three were in flight. A serial implementation of the WORK is not a serial
+    SCHEDULE, and only the schedule is what this records.
+    """
+    monkeypatch.setattr(sys.modules[__name__].os, "getloadavg",
+                        lambda: (0.0, 0.0, 0.0))
+
+    def fake(path, _cwd, _width, _q=None):
+        time.sleep(0.15)
+        return {f"{path.name}::test_probe": []}
+
+    monkeypatch.setattr(sys.modules[__name__], "_run_one_module_outcome", fake)
+
+    eight = tuple(tmp_path / f"test_flight_{i}.py" for i in range(8))
+    _run_outcome_reports(eight, cwd=tmp_path)
+    wide, wide_peak = _LAST_OUTCOME_RUN["width"], _LAST_OUTCOME_RUN["peak_in_flight"]
+    assert wide == _outcome_worker_count(8) == 3
+    assert wide_peak == 3
+
+    # NEGATIVE ARM 1 — a narrower SCHEDULE. Same eight paths, same stand-in.
+    monkeypatch.setenv(_OUTCOME_WORKER_CAP_ENV, "1")
+    _run_outcome_reports(eight, cwd=tmp_path)
+    assert (_LAST_OUTCOME_RUN["width"], _LAST_OUTCOME_RUN["peak_in_flight"]) \
+        == (1, 1), (
+            f"the pool was capped to one worker and the recorder still reported "
+            f"width={_LAST_OUTCOME_RUN['width']} "
+            f"peak={_LAST_OUTCOME_RUN['peak_in_flight']}; it is not following "
+            f"the schedule that ran")
+    monkeypatch.delenv(_OUTCOME_WORKER_CAP_ENV)
+
+    # NEGATIVE ARM 2 — the figure must not be STALE. A recorder that never
+    # reset would still be reporting the 3 from the wide run above, and every
+    # later run would inherit a concurrency it never had. Two paths make a
+    # ceiling of one, so the honest answer here is 1 and the stale answer is 3.
+    _run_outcome_reports(eight[:2], cwd=tmp_path)
+    assert (_LAST_OUTCOME_RUN["width"], _LAST_OUTCOME_RUN["peak_in_flight"]) \
+        == (1, 1), (
+            f"after a 2-path run the recorder reads "
+            f"width={_LAST_OUTCOME_RUN['width']} "
+            f"peak={_LAST_OUTCOME_RUN['peak_in_flight']}; a figure carried over "
+            f"from the previous run is a concurrency this one never had")
+
+    # WHAT THIS RECORDER MEASURES, said plainly so nobody reads more into the
+    # assertion it backs: runs SUBMITTED AND NOT YET RETURNED. That is the
+    # schedule's real width — a submit-then-wait loop peaks at 1 however fast
+    # the work is, which is the whole claim — and it is deliberately NOT a
+    # measure of how much work overlapped inside those runs.
 
 
 def norecord_foreign_red_reason(foreign_reds) -> str:
