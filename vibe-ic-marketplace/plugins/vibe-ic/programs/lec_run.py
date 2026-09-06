@@ -400,13 +400,47 @@ def attach_telemetry(report: Dict, sidecar: Path, project: Path) -> Dict:
     return report
 
 
+#: Statuses the SUPERVISOR writes to say a run was STOPPED rather than finishing.
+#: `_docker_watchdog.run_docker_supervised` owns them; nothing else may spell a
+#: stop, and nothing else may unspell one.
+_SUPERVISOR_STOP_STATUSES = ("hard_ceiling", "progress_stalled")
+
+
 def _finish_telemetry_sidecar(sidecar: Path, status: str, **extra: Any) -> None:
+    """Close the telemetry sidecar for the step.
+
+    A STOP RECORDED BY THE SUPERVISOR IS NOT OVERWRITTEN. Measured on a real
+    production sidecar: a proof SIGKILLed by its container ceiling carried
+
+        telemetry["status"]              = "complete"      <- the field a
+                                                              consumer reads
+        telemetry["returncode"]          = 124
+        telemetry["attempts"][-1].status = "hard_ceiling"  <- the truth, one
+                                                              level down
+
+    because `run_docker_supervised` had written `hard_ceiling` and this function
+    then wrote `complete` over it at step end. Two writers of one field with two
+    vocabularies — "the tool exited naturally" and "the step is done" — and the
+    later one won. The kill survived only in the nested attempt record, which is
+    written before the overwrite and which no consumer looks at first.
+
+    The supervisor is the authority on HOW A RUN ENDED, so a recorded stop now
+    stands. `step_status` carries what this function would have written, so the
+    step-completion fact is not lost — it is just no longer allowed to
+    impersonate the run's outcome. Every other status (`complete`, `cache_hit`,
+    `tool_unavailable`) is written exactly as before, and a sidecar that carries
+    no supervisor stop is byte-identical to the previous behaviour.
+    """
     try:
         doc = json.loads(Path(sidecar).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         doc = {"schema_version": LEC_TELEMETRY_SCHEMA_VERSION,
                "samples": [], "attempts": []}
-    doc["status"] = status
+    _recorded = str(doc.get("status") or "")
+    if _recorded in _SUPERVISOR_STOP_STATUSES:
+        doc["step_status"] = status
+    else:
+        doc["status"] = status
     doc["finished_timestamp"] = _utc_now()
     doc.update(extra)
     _atomic_write_json(Path(sidecar), doc)

@@ -48,6 +48,7 @@ well and would take hours to do it.
 """
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -304,6 +305,69 @@ def test_a_genuine_non_convergence_keeps_its_capability_finding():
     assert _MISATTRIBUTION in ex, (
         "a real sequential-depth gap lost its finding:\n" + ex)
     assert "STOPPED before it could finish" not in ex
+
+
+@pytest.mark.parametrize("stop", ["hard_ceiling", "progress_stalled"])
+def test_a_supervisor_recorded_stop_survives_the_step_end_write(tmp_path, stop):
+    """MEASURED ON THE REAL SIDECAR: a proof SIGKILLed at its container ceiling
+    carried `status: "complete"` at the top level — the field a consumer reads
+    first — while only the nested `attempts[-1].status` said `hard_ceiling`.
+
+    Two writers of one field with two vocabularies: `run_docker_supervised`
+    means "the tool exited naturally", `_finish_telemetry_sidecar` means "the
+    step is done", and the later one won. The supervisor is the authority on
+    HOW A RUN ENDED.
+    """
+    side = tmp_path / "lec.telemetry.json"
+    side.write_text(json.dumps({
+        "schema_version": lec_run.LEC_TELEMETRY_SCHEMA_VERSION,
+        "status": stop, "returncode": 124,
+        "samples": [], "attempts": [{"attempt": 1, "status": stop}],
+    }), encoding="utf-8")
+
+    lec_run._finish_telemetry_sidecar(side, "complete", verdict="INCONCLUSIVE")
+    doc = json.loads(side.read_text(encoding="utf-8"))
+
+    assert doc["status"] == stop, (
+        f"the step-end write turned a supervisor-recorded {stop!r} into "
+        f"{doc['status']!r} — the headline field now says the run finished")
+    # the step-completion fact is KEPT, just not allowed to impersonate the
+    # run's outcome
+    assert doc["step_status"] == "complete"
+    assert doc["verdict"] == "INCONCLUSIVE"
+    assert doc["finished_timestamp"]
+
+
+@pytest.mark.parametrize("prior", ["running", "complete", "", None])
+def test_an_ordinary_outcome_is_written_exactly_as_before(tmp_path, prior):
+    """THE CONTROL. A sidecar carrying no supervisor stop must be byte-identical
+    to the previous behaviour — otherwise the fix would be a behaviour change
+    dressed as an honesty fix."""
+    side = tmp_path / "lec.telemetry.json"
+    doc0 = {"schema_version": lec_run.LEC_TELEMETRY_SCHEMA_VERSION,
+            "samples": [], "attempts": []}
+    if prior is not None:
+        doc0["status"] = prior
+    side.write_text(json.dumps(doc0), encoding="utf-8")
+
+    lec_run._finish_telemetry_sidecar(side, "cache_hit", current_pass="cache_hit")
+    doc = json.loads(side.read_text(encoding="utf-8"))
+    assert doc["status"] == "cache_hit"
+    assert "step_status" not in doc, (
+        "an ordinary outcome grew a field it never had")
+
+
+def test_the_stop_vocabulary_is_the_supervisors_own_not_a_second_copy():
+    """The words this guard protects must be the ones the supervisor actually
+    writes. A hand-copied list would drift the first time the supervisor gained
+    a state — the exact drift shape this repo removes one gate at a time."""
+    import inspect
+    import _docker_watchdog as _dw
+    src = inspect.getsource(_dw.run_docker_supervised)
+    for word in lec_run._SUPERVISOR_STOP_STATUSES:
+        assert f'"{word}"' in src, (
+            f"{word!r} is not a status `run_docker_supervised` writes — this "
+            f"guard is protecting a word nothing produces")
 
 
 def test_a_stalled_lec_says_how_far_the_proof_had_got(monkeypatch):
