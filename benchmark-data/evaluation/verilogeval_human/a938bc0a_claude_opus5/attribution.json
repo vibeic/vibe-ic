@@ -1,0 +1,35 @@
+{
+ "program_solved": 132,
+ "ai_backup_authored": 24,
+ "ai_backup_passed": 22,
+ "failed": [
+  "Prob062_bugs_mux2",
+  "Prob093_ece241_2014_q3"
+ ],
+ "ai_backup_ids": [
+  "Prob019_m2014_q4f",
+  "Prob029_m2014_q4g",
+  "Prob036_ringer",
+  "Prob044_vectorgates",
+  "Prob058_alwaysblock2",
+  "Prob062_bugs_mux2",
+  "Prob065_7420",
+  "Prob072_thermostat",
+  "Prob074_ece241_2014_q4",
+  "Prob077_wire_decl",
+  "Prob093_ece241_2014_q3",
+  "Prob104_mt2015_muxdff",
+  "Prob123_bugs_addsubz",
+  "Prob127_lemmings1",
+  "Prob128_fsm_ps2",
+  "Prob132_always_if2",
+  "Prob133_2014_q3fsm",
+  "Prob139_2013_q2bfsm",
+  "Prob142_lemmings2",
+  "Prob148_2013_q2afsm",
+  "Prob151_review2015_fsm",
+  "Prob152_lemmings3",
+  "Prob154_fsm_ps2data",
+  "Prob155_lemmings4"
+ ]
+}

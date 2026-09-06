@@ -1,0 +1,6 @@
+/home/reyerchu/verilog-eval/dataset_code-complete-iccad2023/Prob093_ece241_2014_q3_test.sv:38: $finish called at 300 (1ps)
+Hint: Output 'mux_in' has 11 mismatches. First mismatch occurred at time 50.
+Hint: Total mismatched samples is 11 out of 60 samples
+
+Simulation finished at 300 ps
+Mismatches: 11 in 60 samples

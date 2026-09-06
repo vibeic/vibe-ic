@@ -1,0 +1,6 @@
+/home/reyerchu/verilog-eval/dataset_code-complete-iccad2023/Prob062_bugs_mux2_test.sv:47: $finish called at 570 (1ps)
+Hint: Output 'out' has 111 mismatches. First mismatch occurred at time 20.
+Hint: Total mismatched samples is 111 out of 114 samples
+
+Simulation finished at 570 ps
+Mismatches: 111 in 114 samples

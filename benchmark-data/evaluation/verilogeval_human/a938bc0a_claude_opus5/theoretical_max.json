@@ -1,0 +1,47 @@
+{
+ "schema": "vibeic.benchmark.theoretical_max.v1",
+ "benchmark": "verilogeval-human",
+ "dataset_repository": "https://github.com/NVlabs/verilog-eval.git",
+ "dataset_commit": "c498220d0a52248f8e3fdffe279075215bde2da6",
+ "dataset_subdir": "dataset_code-complete-iccad2023",
+ "total": 156,
+ "max": 154,
+ "presentation_rule": "Every published number keeps the ORIGINAL denominator (x/156). This file is bookkeeping: its only consequence is that NO enhancement is owed on a problem listed in `broken`.",
+ "oracle_use": "ORACLE-FOR-RCA, DECLARED. Each entry below reads the hidden _ref.sv/_test.sv to DEMONSTRATE the contradiction. No authoring path reads them; the candidates in the evidence scripts are derived from the prompt text alone and are quoted inline in the scripts.",
+ "measured_on": {
+  "host": "8hd-3 (192.168.1.121)",
+  "lane": "bvehuman",
+  "date": "2026-09-06",
+  "image": "ghcr.io/vibeic/vibeic-eda@sha256:06537f7e8d3c17c6c9c60c20638e94faab0421533a55656ad1819f383c373aba",
+  "simulator": "Icarus Verilog 14.0 (devel) s20260301-451-g29806b823, inside the pinned image"
+ },
+ "broken": [
+  {
+   "id": "Prob062_bugs_mux2",
+   "reason": "A2 prompt/oracle contradiction. The prompt's ONLY behavioural statement is the buggy code it prints, `assign out = (~sel & a) | (sel & b);`, which selects b when sel=1. The hidden golden is `assign out = sel ? a : b;`, which selects a when sel=1. The prompt asks to 'find the bug and fix this 8-bit wide 2-to-1 mux' -- the one defect its own text admits is the 1-bit `output out` declaration on an 8-bit mux. Repairing exactly that width defect and changing nothing else mismatches the golden in 111 of 114 samples: the golden inverts a select polarity the prompt fixes.",
+   "evidence": {
+    "rerun": "bash evidence/prob062_harness_evidence.sh",
+    "harness_output": "evidence/prob062_harness_output.txt",
+    "harness_output_sha256": "566c8b20e9d3e865f92e38a6a8705799b8dcb2d38821db4ee93e05695ac83aaf",
+    "result": "Mismatches: 111 in 114 samples",
+    "quoted_prompt_line": "assign out = (~sel & a) | (sel & b);",
+    "quoted_golden_line": "assign out = sel ? a : b;"
+   }
+  },
+  {
+   "id": "Prob093_ece241_2014_q3",
+   "reason": "A2 prompt/oracle contradiction. The hidden golden drives `mux_in[2] = ~d`. As a function of (c,d) that is (1,0,1,0); NO column of the K-map printed in the prompt has that function. Since the four mux_in indices can only be a bijection onto the four printed columns, all 4! = 24 index mappings are excluded at once. The single contradicted cell is ab=10, cd=11, where the printed map says 1 and ~d gives 0.",
+   "evidence": {
+    "rerun": "python3 evidence/prob093_kmap_proof.py   # exits 0 only when the contradiction holds",
+    "proof_output": "evidence/prob093_kmap_proof.json",
+    "proof_output_sha256": "0f4f92c6ae6bddbd7a7a5008bb0add9702f2061715f5f5f1ef32dd4f66e40a9a",
+    "corroborating_harness_rerun": "bash evidence/prob093_harness_evidence.sh",
+    "corroborating_harness_output": "evidence/prob093_harness_output.txt",
+    "result": "printed_columns_equal_to_golden_mux_in_2 = [] over 24 enumerated index mappings; the prompt-faithful candidate scores Mismatches: 11 in 60 samples",
+    "quoted_prompt_line": "11 | 1 | 0 | 1 | 1 |   (row cd=11; column ab=10 is 1)",
+    "quoted_golden_line": "assign mux_in[2] = ~d;   (gives 0 at c=1,d=1)"
+   }
+  }
+ ],
+ "corroboration": "Independently re-derived here from the prompts; it agrees with the triage already published in benchmark-data/evaluation/verilogeval_human/v1.4.81_claude_fable5/RESULT.md and reproduced across v1.3.88, v1.4.81, v1.10.45, v1.10.64 and v1.13.78, every one of which fails exactly these two. This file is the machine-readable triage record vibe-ic#1293 says was never published."
+}

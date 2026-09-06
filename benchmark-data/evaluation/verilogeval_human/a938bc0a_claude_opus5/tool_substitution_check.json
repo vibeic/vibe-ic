@@ -1,0 +1,20 @@
+{
+  "program": "tool_substitution_disclose",
+  "verdict": "PASS",
+  "emitted_rows": [
+    "Synopsys VCS sim",
+    "Synopsys Design Compiler PPA",
+    "Cadence Xcelium",
+    "nvidia/cvdp-sim:v1.0.0 Docker image",
+    "VCS-only TB construct (break;/continue;/unique-priority)",
+    "PrimeTime-POCV / statistical STA (POCV/SSTA)",
+    "RedHawk-SC / Voltus transient dynamic-IR (di/dt)",
+    "2.5D/3D advanced packaging / chiplet assembly (CoWoS/EMIB/TSV)",
+    "MBIST / LBIST + memory ATPG",
+    "Calibre xRC / StarRC-XT / QRC field-solved coupling extraction",
+    "Commercial at-speed (path-delay / small-delay-defect) ATPG",
+    "Side-channel leakage sim (DPA/CPA/EM)"
+  ],
+  "unmatched_tokens": [],
+  "table": "## Tool substitution (open-benchmark-methodology \u00a7 3)\n\n| Benchmark mandates | We substitute | Caveat |\n|---|---|---|\n| Synopsys VCS sim | iverilog 12 | Some VCS-only TB constructs (array-aggregate init, `break;`) reject under iverilog \u2192 pure tool-gap floor |\n| Synopsys Design Compiler PPA | yosys + OpenROAD (sky130/gf180) | NOT reported as PPA in benchmark RESULT (not apples-to-apples). If you DO report, label clearly |\n| Cadence Xcelium | iverilog | Same iverilog-vs-commercial gap as VCS |\n| nvidia/cvdp-sim:v1.0.0 Docker image | hpretl/iic-osic-tools (iverilog 13 + cocotb 2.0.1) | Note the substitution + cocotb version delta |\n| VCS-only TB construct (break;/continue;/unique-priority) | semantics-preserving iverilog rewrite (*_iv.v sidecar) | Closed safe subset ONLY; gated on golden-still-passes \u2014 a TB-weakening rewrite is rejected. std::randomize / $urandom_range / join_none / queue ops stay FLOOR-D. |\n| PrimeTime-POCV / statistical STA (POCV/SSTA) | none (commercial-only) \u2014 flat-OCV + AOCV is the OSS floor | Needs LVF / POCV coefficient data absent from OSS PDKs; \u22647nm within-die variation data is foundry-NDA |\n| RedHawk-SC / Voltus transient dynamic-IR (di/dt) | none (commercial-only) \u2014 VCD-vectored PSM is the OSS floor | OSS PSM is resistive/vectored only; no L\u00b7di/dt time-domain inductive-droop solve |\n| 2.5D/3D advanced packaging / chiplet assembly (CoWoS/EMIB/TSV) | none (commercial-only) \u2014 D2D protocol layer only in OSS | Multi-die assembly rules / interposer / hybrid-bond PDK absent in OSS; UCIe/CXL/HBM3 PROTOCOL RTL is synthesized |\n| MBIST / LBIST + memory ATPG | none (commercial-only) | Memory BIST insertion + memory fault models are commercial; OSS Fault does logic stuck-at ATPG only |\n| Calibre xRC / StarRC-XT / QRC field-solved coupling extraction | OpenRCX v2 -lef_rc grounded RC + analytical lateral coupling augment (_spef_coupling, step 22) + REAL 3D BEM field solve via FasterCap on a PDK-inverted fitted dielectric stack (pdk_dielectric_fit + fastercap_extract, step 22 field_solve \u2014 lateral + inter-layer crossover) | NOT foundry-calibrated: the dielectric stack is FITTED from the PDK's own area+fringe cap, not the foundry rules.C/.nxtgrd multi-dielectric profile; single fitted eps_r per solve; aggressor-victim crosstalk (SI) sign-off remains commercial |\n| Commercial at-speed (path-delay / small-delay-defect) ATPG | path_delay_fault_atpg_run (step DT2: OpenSTA K-longest on routed netlist+SPEF -> per-path LOC miter SAT, robust/non-robust graded) + sdd_atpg_run (step DT3: slack-weighted small-delay-defect grade) | Top-K longest paths only (exhaustive PDF is exponential; K disclosed); PI-launched paths are not LOC-testable and are excluded, never counted; SDD is STA-slack-graded, not a per-defect-size SPICE credit |\n| Side-channel leakage sim (DPA/CPA/EM) | none (commercial-only) | Leakage-model simulation needs a specialized engine (PROLEAD/\u2026) |\n"
+}

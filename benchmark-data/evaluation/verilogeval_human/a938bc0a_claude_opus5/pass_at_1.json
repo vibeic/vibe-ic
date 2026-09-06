@@ -1,0 +1,850 @@
+{
+  "benchmark": "VerilogEval-Human (iccad2023 code-complete)",
+  "shape": "C",
+  "tool": "iverilog 14.0 (host) substituting for Synopsys VCS / Cadence Xcelium",
+  "tool_gap_fallback": "tool-gap only: Shape B escalates to container Verilator 5.x; Shape C escalates to vibeic-eda fork-iverilog-14",
+  "tool_substitution_note": "Functional pass@1 only. PPA stage (DC) not scored \u2014 would not be apples-to-apples vs the upstream methodology. See open-benchmark-methodology skill \u00a7 3.",
+  "total": 156,
+  "passed": 154,
+  "skipped_scorer_gap": 0,
+  "pass_at_1_pct": 98.72,
+  "pass_at_1_pct_no_skip_excluded": 98.72,
+  "non_discriminating_tb_passes": 0,
+  "non_discriminating_tb_designs": [],
+  "passed_discriminating": 154,
+  "pass_at_1_discriminating_pct": 98.72,
+  "dataset_defect_count": 0,
+  "dataset_defect_problems": [],
+  "pass_at_1_excluding_dataset_defects_pct": 98.72,
+  "suspected_defective_golden_count": 2,
+  "suspected_defective_golden_problems": [
+    {
+      "problem": "Prob062_bugs_mux2",
+      "reason": "semantic_prompt_oracle_contradiction",
+      "evidence": "golden contradicts the prompt's only behavioural hint: the embedded reference `(~sel & a) | (sel & b)` selects `b` when sel=1, but the golden selects `a` when sel=1 (select polarity inverted). A width-only bug-fix cannot invert the select; the spec-faithful answer can never match this golden"
+    },
+    {
+      "problem": "Prob093_ece241_2014_q3",
+      "reason": "semantic_prompt_oracle_contradiction",
+      "evidence": "golden contradicts the prompt's full-circuit Karnaugh map: at (a=1, b=0, c=1, d=1) the K-map states output=1 but the golden's mux_in[2] (the ab=10 mux line) gives 0; the spec-faithful answer can never match"
+    }
+  ],
+  "pass_at_1_excluding_suspected_defects_pct": 100.0,
+  "no_sample_count": 0,
+  "no_sample_problems": [],
+  "pass_at_1_excluding_no_sample_pct": 98.72,
+  "partially_authored": false,
+  "attempt_census": {
+    "total": 156,
+    "attempted": 156,
+    "attempted_passed": 154,
+    "attempted_failed": 2,
+    "skipped_tool_gap": 0,
+    "never_attempted": 0,
+    "never_attempted_ids": [],
+    "identity": "attempted_passed + attempted_failed + skipped_tool_gap + never_attempted == total",
+    "identity_holds": true,
+    "accounting_violations": []
+  },
+  "harness_verdict_forgery_count": 0,
+  "harness_verdict_forgery_problems": [],
+  "scored_samples": {
+    "dir": "samples",
+    "count": 156,
+    "set_sha256": "9c75fe4ce99778650700441c9290a740a7fbfa821868baa8dbf012eedbd91ca2",
+    "files": {
+      "Prob001_zero_sample01.sv": "281b923b42e0c5462a5241002cdf1cdec767a25b803c5738b91d455e83c48b85",
+      "Prob002_m2014_q4i_sample01.sv": "01053d54a870b36b88613c903b5c4a053b7fd5f04deab37bbaaeb1721962daa8",
+      "Prob003_step_one_sample01.sv": "682325719c91166486cdd97ec50484258ea89c5090e97c08ea721dd007b21744",
+      "Prob004_vector2_sample01.sv": "2c9649a583bb53998d3a8889752f9e3e66bd3f1b86fd9fb972bb8e1c6346ed0a",
+      "Prob005_notgate_sample01.sv": "f89b74e1f49c509cbf91615b976ee62cb9a547337b32dbf0cdde497ca4d4c2f9",
+      "Prob006_vectorr_sample01.sv": "849e8a10f6887ea06fe0c2800867eeea0fcfa8485e253bfc4da7dbe79b1c3d4d",
+      "Prob007_wire_sample01.sv": "f20922f6563ad79df46be77b1c2e27cbd22b0156df4cb98bbbab822160530df8",
+      "Prob008_m2014_q4h_sample01.sv": "f20922f6563ad79df46be77b1c2e27cbd22b0156df4cb98bbbab822160530df8",
+      "Prob009_popcount3_sample01.sv": "11e8ede13efd5f269612b692c81209c95cd33933e4293bc857d50414a2a8b321",
+      "Prob010_mt2015_q4a_sample01.sv": "27af9c9a0d99179a0ac152554391959b4298e8c81567eca3832172ccc7bc597c",
+      "Prob011_norgate_sample01.sv": "ce23ac7ff09acda081cca4197023b5ceb6adceff423b1eb71fd96888dbfdc969",
+      "Prob012_xnorgate_sample01.sv": "6eff023ddd6abf8d9649dd2e6b8fe798a54db6391e47e3ac2aae6f7e381ed054",
+      "Prob013_m2014_q4e_sample01.sv": "e38b466c1be7c55ce7cf40c2a841c1bfba3aa4cbfdca1faa640715c82ccdcbf8",
+      "Prob014_andgate_sample01.sv": "719f7e3ca3669f7a5e83ef7bc2299b74a58dc1a9ff284bb23f63f19951c8684a",
+      "Prob015_vector1_sample01.sv": "c15f6fe45053599af508ad2b3d4db378aa561e1786925b1c71fe73ffe802e0d3",
+      "Prob016_m2014_q4j_sample01.sv": "b0f150c2fda14e05f2aa14ee75fb682268743c5e929510e640891987aa3b75ac",
+      "Prob017_mux2to1v_sample01.sv": "90d2373ae9b58dce32f8096532b485a19b190baa79987f63b3db4ccd12b06fc2",
+      "Prob018_mux256to1_sample01.sv": "7a6a8b9596276b242e6d2439d9bc0d602bb543ae7acdec325ac76d2fac776f8e",
+      "Prob019_m2014_q4f_sample01.sv": "5d1a30a4a56dec02afca0d784f78d17c27e57170349d50e5f1b455728249665e",
+      "Prob020_mt2015_eq2_sample01.sv": "62c7b268bb09b51dddedc83a73001aeeb7481bc46321f7eb0c6e9688053d200e",
+      "Prob021_mux256to1v_sample01.sv": "5be78353046a14c35da1f6ae8089ce3eed3f3f3c63956e31107177c3d1a28806",
+      "Prob022_mux2to1_sample01.sv": "7c128c2abd8e0b68c8e54f0e5beea0bb8a4e6da52def4c0417fa6db7d84939e2",
+      "Prob023_vector100r_sample01.sv": "46045a903a740032191188a1fd9522c172c3f44d4f9e1c8b69b4eb7b30cb1b02",
+      "Prob024_hadd_sample01.sv": "ec12ef4d1e1bb03811574cc943c9223b2d3fc83ab5d63c578caf92fc876e78d4",
+      "Prob025_reduction_sample01.sv": "39fd0332ab8d42d7ebf590e2e1991c4093fb957a4177d33c4894402ea4d83f86",
+      "Prob026_alwaysblock1_sample01.sv": "f17a3b441d3ccd979385d0450b97bf60984ebbab6d3c793215431b16050e2df4",
+      "Prob027_fadd_sample01.sv": "c49a62b7315af2534408ff3fc8f1193c3b888f00d9476afc9689c3eee59e8877",
+      "Prob028_m2014_q4a_sample01.sv": "8ff400e40c17589a2d357f5590f5c8a5f95345f10224ab302ca50e0821058020",
+      "Prob029_m2014_q4g_sample01.sv": "e9326d786f72aa4c1b0e5ed7edd2eabeb2545076bd1963fcac3340aa9761ec93",
+      "Prob030_popcount255_sample01.sv": "8bf531d49f8cf6ec67260bf2def40b609758795ff054b68240ef725a5e8c9781",
+      "Prob031_dff_sample01.sv": "fd0f617cf0055351c5d77fa56dbd251f97d6552add3392a130f9ead315b7c36e",
+      "Prob032_vector0_sample01.sv": "393445dba380b085e1f7de3fc07617f1bc01732cffba3a3efdf67a77382b1b86",
+      "Prob033_ece241_2014_q1c_sample01.sv": "f6b22c904963fbf99c82671f55e5d322cc1ac238a012569d5188a6d31bd41d34",
+      "Prob034_dff8_sample01.sv": "8b849705de97cb24a10a34d02c79af581d7e86f468c687ed9af4f8cfffdb438d",
+      "Prob035_count1to10_sample01.sv": "5d91bc3424eb502a2a57b0ccecff91dc1ac0811cb22fbaeb9f5812522184daec",
+      "Prob036_ringer_sample01.sv": "f0521e044fadf7f710c2baa02a166ef791dbbd8a4eaa689a7c299eb9f3d805f9",
+      "Prob037_review2015_count1k_sample01.sv": "a5782ddb153ba1909eade7d3425560737058dc331a200084523facd169bd767d",
+      "Prob038_count15_sample01.sv": "2f456357589b7bc827489244ca1a2e60a56991cd5dafd8267932bdfbc718859c",
+      "Prob039_always_if_sample01.sv": "7e5fd9872601117dc12c0072da4e6b05de614dba5f305647d850cefb95dfcbb2",
+      "Prob040_count10_sample01.sv": "ac37e252e17b6500ef1e1b0ddb49ce8c8bec31cdc0dbd4a1f24ae65a6b285b06",
+      "Prob041_dff8r_sample01.sv": "12f63e8b2df127e68b454a90f9a736cb03fb416b83f845f10a5d608ed2017645",
+      "Prob042_vector4_sample01.sv": "1253c8cd15b76ce3dd02939f23437951e77a4a05c1bcdcff3f4a0613e3eee4bf",
+      "Prob043_vector5_sample01.sv": "f2cfad7a917ac121ee2bf4fc5d4db93495681cb6e34b8c4116417b6aee0ba199",
+      "Prob044_vectorgates_sample01.sv": "476cbd0319d361328807e802d7ea8029ef0bcff10a7968748b4f775ffd00f629",
+      "Prob045_edgedetect2_sample01.sv": "82e4567419f8ecb3bec5ef155ef184aaf4d40f3fbe450061aa6d85b7d5034575",
+      "Prob046_dff8p_sample01.sv": "45bb42bcb0737a7a8e8cbb927b723bbe7cde16c65ae91d6f61282a85cee8c93d",
+      "Prob047_dff8ar_sample01.sv": "0e5e94a5f2f11948f92074fe6bd1c4495efd3b84a39b4cbc812eee2ac371c53d",
+      "Prob048_m2014_q4c_sample01.sv": "d07e1f2b8d83d80730e8e8373070c7598add59effcd9580b9128d390da51ea2c",
+      "Prob049_m2014_q4b_sample01.sv": "a374f06d440bf33561287930cf0ffa8236e10cc38021a98802505036f223c6a7",
+      "Prob050_kmap1_sample01.sv": "a90cb0c2b3829990f978c1dc5dbac2417fc83a2e285bc0f86191af2b20966778",
+      "Prob051_gates4_sample01.sv": "196a960974efce3bfdaf27d278d75b8fa4b086047b89132955b7f341490bd85c",
+      "Prob052_gates100_sample01.sv": "c903cf68ede73614975f0e1b732f42e836b972b85cf8f77dc6c507d678c2b4d6",
+      "Prob053_m2014_q4d_sample01.sv": "f26708bd6b6cc120c4f3b99de539e35e024572b15a88701075e96604a291d36e",
+      "Prob054_edgedetect_sample01.sv": "c1aaa71f720e6fd7ee79299a11740126ada9c2998aa06c0ce535c9fb463638c5",
+      "Prob055_conditional_sample01.sv": "f5ff369863b0b03be42a1ccde1552db69edf1ab2be5a095355190cf6cee9ac7b",
+      "Prob056_ece241_2013_q7_sample01.sv": "94f6074ab8d934de7c4b31db7dcf3227e5ac673f6f13be321d1d773adae084f6",
+      "Prob057_kmap2_sample01.sv": "61c7a3aca4d9d4d88557f575caa73475956abaaf833a98545cd5548dd5975ca2",
+      "Prob058_alwaysblock2_sample01.sv": "80e2861d18f678707206dead6009373819240b64265466613716604b333730f7",
+      "Prob059_wire4_sample01.sv": "f0092b97786a0d6d45c0453a9bd01201d5204c6ff5d06d432556e74fbbc16e18",
+      "Prob060_m2014_q4k_sample01.sv": "10225cba500853c0675e12bd8067f57e807bcdd2c50639f5419ad1c48a5c2ca7",
+      "Prob061_2014_q4a_sample01.sv": "945c1fecfb101a9e122cf9cd899d88c780b7049df1a84cd80ea790b196a766a5",
+      "Prob062_bugs_mux2_sample01.sv": "85f8a62f0147bd080c3aa9ac237c6bcc6320726c5556c2aa96d01f56dad432e3",
+      "Prob063_review2015_shiftcount_sample01.sv": "ca0a6352c2e3889aa824b0610d84884718e0a5282286da9cd8e4aa80e957cdc7",
+      "Prob064_vector3_sample01.sv": "8613a197375c4af8e6b4995575e9c92e258035197e918cb4c432d1f047cda49e",
+      "Prob065_7420_sample01.sv": "73f44387afe0129328fbc394f945bfeaef1c4bfc3bea8271c46f1b2411a3200e",
+      "Prob066_edgecapture_sample01.sv": "e1b36b7be21ad1a66a20334c7083d34f7682d523d62c6009e44b42926d9edf1c",
+      "Prob067_countslow_sample01.sv": "0234c1d71f2b0e7e0e197abc891b213bddd62b0c3753a2d0a14d2829826c410d",
+      "Prob068_countbcd_sample01.sv": "c2bb7d0e244c65e1dff6b11c14c403f294a38e440857ae42732712f12a4c9e42",
+      "Prob069_truthtable1_sample01.sv": "9a844ce29abfa83b21b0fe6deb3f30649daba646846f8d85c3748038862fc41e",
+      "Prob070_ece241_2013_q2_sample01.sv": "fbbf17b1aefaf060570fa43f7eb279e673873bfb8d258527c6e93eb606dbf69c",
+      "Prob071_always_casez_sample01.sv": "b0fa03415ff556dba53c6b2fd3dc46900f0071ae5ea16c7d758882ce704d2a49",
+      "Prob072_thermostat_sample01.sv": "ecbea5f0fc3915f6d25dcad1ad6937da0bdf244c0f62034a352bc14428fdc670",
+      "Prob073_dff16e_sample01.sv": "2a60e63ce2db382046f7c80100fffeca9f923971fe8d06b3acc5a6424b418863",
+      "Prob074_ece241_2014_q4_sample01.sv": "eb62e7c949a12a999390ec2179a6fd2868627566affb2cc69ec1513b65c0ab49",
+      "Prob075_counter_2bc_sample01.sv": "b7993b3be21acee3cb24323371c8514261db3228f95e9e4a467945ef7f4de329",
+      "Prob076_always_case_sample01.sv": "8f3a5c86dc5028424274b1b28d5425e8f4f71f09e11e5961be90028cf2bac9ed",
+      "Prob077_wire_decl_sample01.sv": "86ec909abd5d091cbec7e362b62cc9f566d60fdd0c01652c645186cb85baa080",
+      "Prob078_dualedge_sample01.sv": "982ab7fa4625734366b2ef6cabf0f7a69c775d6bbb67430001036744445ccfea",
+      "Prob079_fsm3onehot_sample01.sv": "d2f0fed694b05e3ecdbca4df703dc0bafb390dfe65c36f231f1cab6d492d19fb",
+      "Prob080_timer_sample01.sv": "be35c2d50d42862c6521bd2e802ab4e84598f30771b2a52460409b9e6badb397",
+      "Prob081_7458_sample01.sv": "42ae0d36d2f42c8aee257404e536fa71cc89ca955cd188802494e58fcb56c3c4",
+      "Prob082_lfsr32_sample01.sv": "35ed425b0b14f5ec85ade5b55a33f2356de204cb3a5c1f0278b7369aef9e5b52",
+      "Prob083_mt2015_q4b_sample01.sv": "7035f161e6cde8f1e06a143bc1988bd5770fbd43951053fabbf4e2d3d091c05f",
+      "Prob084_ece241_2013_q12_sample01.sv": "6ac6e2709472bee1cf9d268441e5b12cb2c87717f8d457a66db71a4143f07596",
+      "Prob085_shift4_sample01.sv": "18a3f627b021e0e28ecfba9b85d854a8caacca8bbfee0ac87195173f96d105d5",
+      "Prob086_lfsr5_sample01.sv": "b760414fe7ebe2384fa34ceeaabb297bee2275236cca52525f0145f4fdf8381c",
+      "Prob087_gates_sample01.sv": "5c0ee60fc32f30df40951e9bcefa4329d52cd3e24487396eff3c89d8a06740b1",
+      "Prob088_ece241_2014_q5b_sample01.sv": "4ee5dc2ae708f26e999e57b4a81e613c77f9e19f39fd27e726bf27ed20510f6f",
+      "Prob089_ece241_2014_q5a_sample01.sv": "ebbaa2f3f514d8aac981c85bd32a5fe0ed082af3b73526fea9af5d0510760b56",
+      "Prob090_circuit1_sample01.sv": "c22ed0f3ad13c3197b39e612993f10b9b4d618c77812305a33a413fa0bedfcdc",
+      "Prob091_2012_q2b_sample01.sv": "6087cecd4f9fab6450725f50626b64c1fe926a6c763c22a2e1de015fac54a2ee",
+      "Prob092_gatesv100_sample01.sv": "353b0ba8b36dadfd8b056944186e03f88ae3d48ebca981bc3aae9af93a333443",
+      "Prob093_ece241_2014_q3_sample01.sv": "4bb10edb7b3995013ee62dc985f6453ce23478e1e2ad0c3361192e5a8ec71d26",
+      "Prob094_gatesv_sample01.sv": "d034ea4d29af66d77aeadb5a1f12f4a88548c9f1e3bc8b06e54b9244291b0028",
+      "Prob095_review2015_fsmshift_sample01.sv": "4c45a2525e877a3ba7429b0cfdc15aa59ebb1c5057517ab20be635225c0c0857",
+      "Prob096_review2015_fsmseq_sample01.sv": "e931138f9ca49c7285e1151fadd7a090dbf85a3e708a3d5b002dad33666e3161",
+      "Prob097_mux9to1v_sample01.sv": "1451ca03940ac28d16d9b4ac4c55c92c5a49d0399d246f7e2f4bc4bfae214e01",
+      "Prob098_circuit7_sample01.sv": "0730a7265d34d1c1704ddce410ce56c23c0c6688a45f7932ebb8bf5a16032ce2",
+      "Prob099_m2014_q6c_sample01.sv": "16cf5f088e7f8d085360f89d079f9e20c0c42ed1bdcdde1d8787fda415365b3c",
+      "Prob100_fsm3comb_sample01.sv": "d480bde75451beb4d8940303b87edb541e6346e15b8be1176af2e92e89287c1d",
+      "Prob101_circuit4_sample01.sv": "e0bc5d17a696885d6475d0c059c6df10ccefe97683d259a42f07798efe2a0e16",
+      "Prob102_circuit3_sample01.sv": "d9d851bceaa6f8d2152cfb75ed7a68d088cd2ec44be2a42d8e3870e2ad57a47d",
+      "Prob103_circuit2_sample01.sv": "fd5980eb68d8ddab754ee4feb72509cef3d730459ab2214bd9f265102d63e64a",
+      "Prob104_mt2015_muxdff_sample01.sv": "51bd9362c85026e27ce2f2367f08599f061173159619c4854db3a677aca7c337",
+      "Prob105_rotate100_sample01.sv": "a0fa98b95d6d839a4a46eca8147af7fdb0f83ef80bfceeecc2c68ebcf6cf3c87",
+      "Prob106_always_nolatches_sample01.sv": "c26c8efb20a508cbb5830801df5422d2edf8c3bc5c2b5ae8d0e78c7192d46add",
+      "Prob107_fsm1s_sample01.sv": "49095f577b7b0bc0198b8bbbd9f06bd0299e1d0e09a5d47790160106e4ff25b0",
+      "Prob108_rule90_sample01.sv": "d26aa90918b3d4212c5548013ac5fef384c13ce82895d3cae1d6dd2fbece2d55",
+      "Prob109_fsm1_sample01.sv": "fe1461b2b1cc1aa09abd007ce4ec428ecca1ddbaa2ca92ff54e352589420863a",
+      "Prob110_fsm2_sample01.sv": "6b9b7317c0085cd786f92b64468fc8deac674d17285309bc7ac8ef88a9276dd6",
+      "Prob111_fsm2s_sample01.sv": "01a26fdff482d7904a36cfbb87dde4e5fd18b78ca80ee30a56c1cce19ce027c3",
+      "Prob112_always_case2_sample01.sv": "1488ff5e1b32836c3fc998cf90ee28efaa990d61996d58cb161f40807560d23c",
+      "Prob113_2012_q1g_sample01.sv": "de4c7f080f6c5ba80646e6bb8edafd628b2d7d0b9fee59861305af48a97c3604",
+      "Prob114_bugs_case_sample01.sv": "f49c8de3537d15bafabfda7f976f224c401c0426bbb0bad7895575e03828395a",
+      "Prob115_shift18_sample01.sv": "e8ab3476d9340ae99ffc920d84fd9cceb3bbcbd499e9907e7aef6e7a23c1227f",
+      "Prob116_m2014_q3_sample01.sv": "0f85cb36a75cfc41cfb6d804c56fcc5f3f72df10c9b646142344c8210ac1da32",
+      "Prob117_circuit9_sample01.sv": "be2fb16204ad4a755cf77166eb45eab9b231d10242c31f8710ca127bb3854661",
+      "Prob118_history_shift_sample01.sv": "6623ccae9b48ecc9e6b8fa65a14e1d7f6e5c61f346a3bf5bc69420718445b558",
+      "Prob119_fsm3_sample01.sv": "c02f669026dd58b727d414ee9f19565940e0245fadd22fd33cdf5a175ef24eef",
+      "Prob120_fsm3s_sample01.sv": "e6da36f2565bf17b89479100fd1187c7b61768e40e201b7a6ab3913eff5f9fb6",
+      "Prob121_2014_q3bfsm_sample01.sv": "e4cc177820f3bfea3585c59667234cb8d5d6619eb42ca45ecb95a20a79b7ba43",
+      "Prob122_kmap4_sample01.sv": "c3ed9bbd911c2e96292a99aae308b0c0cb6acd276151bd45307a357b425fad79",
+      "Prob123_bugs_addsubz_sample01.sv": "97f1c1c4db8e90432d17eae42447bb139519cf5b66d2e10f78eb90beed7b08bb",
+      "Prob124_rule110_sample01.sv": "18b0301a4a5ea9f3b68bb1b9e086fbe02739a0631c8cce9add51230e8edab5ed",
+      "Prob125_kmap3_sample01.sv": "ac9021a2c124418d1608bab4d2da7d387bc439173baa8b30f02f12423a80a060",
+      "Prob126_circuit6_sample01.sv": "17fc88a00e7da548176b505899143947120d5a0599b4b721575a28a8c93c365d",
+      "Prob127_lemmings1_sample01.sv": "839cd838fee28fe2c2351e8b42c5b48ab17ae8ec9852ab2df709be4c27de1e35",
+      "Prob128_fsm_ps2_sample01.sv": "f35daf7e0b22f4988c82dc2af9c6f7250eaf16ca06cfd13142386d29ea7e338f",
+      "Prob129_ece241_2013_q8_sample01.sv": "53295363cb562cd05f41919a75f8c37e886ea7b7e21706516914d479dc07a86d",
+      "Prob130_circuit5_sample01.sv": "45d8941d81921ee7f27f6024a85b8c4336ffc9d6e937406387b971e6e88538f3",
+      "Prob131_mt2015_q4_sample01.sv": "636885f43f477c989aea9c7d473115cd477a6b6472fe98c83d5babcc4b807e88",
+      "Prob132_always_if2_sample01.sv": "2f8e2ca2c564384f0c3033b4b17bc89e533fa6e34954f7f058d38f76cb5bb26f",
+      "Prob133_2014_q3fsm_sample01.sv": "463d97554f8dd5543d8a09b9218a812075b6beccf1c8c1bcd3acc5acfa2d9e21",
+      "Prob134_2014_q3c_sample01.sv": "e2853278f1023fc787adadec6718e87458d91e80c00a68b683a55de50df36306",
+      "Prob135_m2014_q6b_sample01.sv": "cdd6ebfd85084cb882499ba8576d667c0fafdccdf790a394b13be163027d28ea",
+      "Prob136_m2014_q6_sample01.sv": "0c926013d30bcba0a94155f84f0392e60803e873eac81e12271401ce3065a6be",
+      "Prob137_fsm_serial_sample01.sv": "c501a8de4680f394341285944674d481462d375880764ef392b1b5b4e6cb48ab",
+      "Prob138_2012_q2fsm_sample01.sv": "2909d25e2a6f1b51e3d7811d5ce60b75b77434a12f9e5ea44a2cdbc97fb6e7c9",
+      "Prob139_2013_q2bfsm_sample01.sv": "36ce651efd63502a1cae469e19aa9e95f89b06f6985c0fecb26b24222b48f145",
+      "Prob140_fsm_hdlc_sample01.sv": "254a97d54097130c814b139dd4c69d050245db261866c887b7c496f3cefbdac1",
+      "Prob141_count_clock_sample01.sv": "a7441de0b96d7aaa26df2100746b58c4351e1f3eb1566304aaf074fe174985c2",
+      "Prob142_lemmings2_sample01.sv": "73d0d69ecb6658bbce90db02b9d0c49568a8ba27849614b897a85838f137b247",
+      "Prob143_fsm_onehot_sample01.sv": "7a637c1b0ff0ea8cfc588545e21803690e4772b344dcc06599b0ad9ceec47e92",
+      "Prob144_conwaylife_sample01.sv": "ff04450a13735d7768759b7798d760c1a38f24d70fb92c6cd742eb1487235f62",
+      "Prob145_circuit8_sample01.sv": "942c2da51cc1fdd1f1ea9adc2e27aa451290ffb59b0703c3387e7a60b4cedff3",
+      "Prob146_fsm_serialdata_sample01.sv": "b80fda9d833eef8d2509642d3178b65661c4393dd685eeb79d6f4d7f1655bbe5",
+      "Prob147_circuit10_sample01.sv": "16dff703d0d18199595011ef177b7b7e1e2e5c7ccc9f9d11672751755e155375",
+      "Prob148_2013_q2afsm_sample01.sv": "403f0f5c2c86d0438542627bfd4915f274d2ff47590ff3baa90d915f60ab18f1",
+      "Prob149_ece241_2013_q4_sample01.sv": "bb648dda6a8ccb2f4c3360c75a9b2c20daa990e2a0edfb79b2da11bd5cec17cd",
+      "Prob150_review2015_fsmonehot_sample01.sv": "c47a445138c6d8f9dd33753cc29094d3464573423b2279fde51c7a6ea9a976ff",
+      "Prob151_review2015_fsm_sample01.sv": "0f218b215e06061c277d4e5c3aba577ed949c8967d8b51f2dc4f1ee925442fb0",
+      "Prob152_lemmings3_sample01.sv": "7126998c5f1f0ea986e90471d48601a0ced56343ca177fed5014daf2a496feb1",
+      "Prob153_gshare_sample01.sv": "212a2164d1dbe8997280bbaad1896a3c28d5c75b1cc76d9f94cc7751c9ba6138",
+      "Prob154_fsm_ps2data_sample01.sv": "d30258dd9445a7bee918fe3d1ea9c3f9c23a28e91591406a15bf0cbb744368d6",
+      "Prob155_lemmings4_sample01.sv": "efb9eb6f9d8340d3b8b6f2e5a991a763e0a818b47c19f259f1d16327e3457565",
+      "Prob156_review2015_fancytimer_sample01.sv": "bdcc6d5efe009147cfc2723b2c1ecca323aa01bd089b8909d8843cfe62581bd4"
+    }
+  },
+  "results": [
+    {
+      "problem": "Prob001_zero",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob002_m2014_q4i",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob003_step_one",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob004_vector2",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob005_notgate",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob006_vectorr",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob007_wire",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob008_m2014_q4h",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob009_popcount3",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob010_mt2015_q4a",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob011_norgate",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob012_xnorgate",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob013_m2014_q4e",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob014_andgate",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob015_vector1",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob016_m2014_q4j",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob017_mux2to1v",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob018_mux256to1",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob019_m2014_q4f",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob020_mt2015_eq2",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob021_mux256to1v",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob022_mux2to1",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob023_vector100r",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob024_hadd",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob025_reduction",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob026_alwaysblock1",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob027_fadd",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob028_m2014_q4a",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob029_m2014_q4g",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob030_popcount255",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob031_dff",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob032_vector0",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob033_ece241_2014_q1c",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob034_dff8",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob035_count1to10",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob036_ringer",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob037_review2015_count1k",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob038_count15",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob039_always_if",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob040_count10",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob041_dff8r",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob042_vector4",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob043_vector5",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob044_vectorgates",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob045_edgedetect2",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob046_dff8p",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob047_dff8ar",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob048_m2014_q4c",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob049_m2014_q4b",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob050_kmap1",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob051_gates4",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob052_gates100",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob053_m2014_q4d",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob054_edgedetect",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob055_conditional",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob056_ece241_2013_q7",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob057_kmap2",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob058_alwaysblock2",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob059_wire4",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob060_m2014_q4k",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob061_2014_q4a",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob062_bugs_mux2",
+      "verdict": "FAIL",
+      "reason": "functional_mismatch (Mismatches: 111 in 114)",
+      "dataset_defect_suspected": true,
+      "dataset_defect_reason": "semantic_prompt_oracle_contradiction",
+      "semantic_floor_evidence": "golden contradicts the prompt's only behavioural hint: the embedded reference `(~sel & a) | (sel & b)` selects `b` when sel=1, but the golden selects `a` when sel=1 (select polarity inverted). A width-only bug-fix cannot invert the select; the spec-faithful answer can never match this golden",
+      "canonical_evidence": "golden contradicts the prompt's only behavioural hint: the embedded reference `(~sel & a) | (sel & b)` selects `b` when sel=1, but the golden selects `a` when sel=1 (select polarity inverted). A width-only bug-fix cannot invert the select; the spec-faithful answer can never match this golden"
+    },
+    {
+      "problem": "Prob063_review2015_shiftcount",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob064_vector3",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob065_7420",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob066_edgecapture",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob067_countslow",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob068_countbcd",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob069_truthtable1",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob070_ece241_2013_q2",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob071_always_casez",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob072_thermostat",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob073_dff16e",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob074_ece241_2014_q4",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob075_counter_2bc",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob076_always_case",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob077_wire_decl",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob078_dualedge",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob079_fsm3onehot",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob080_timer",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob081_7458",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob082_lfsr32",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob083_mt2015_q4b",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob084_ece241_2013_q12",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob085_shift4",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob086_lfsr5",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob087_gates",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob088_ece241_2014_q5b",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob089_ece241_2014_q5a",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob090_circuit1",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob091_2012_q2b",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob092_gatesv100",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob093_ece241_2014_q3",
+      "verdict": "FAIL",
+      "reason": "functional_mismatch (Mismatches: 11 in 60)",
+      "dataset_defect_suspected": true,
+      "dataset_defect_reason": "semantic_prompt_oracle_contradiction",
+      "semantic_floor_evidence": "golden contradicts the prompt's full-circuit Karnaugh map: at (a=1, b=0, c=1, d=1) the K-map states output=1 but the golden's mux_in[2] (the ab=10 mux line) gives 0; the spec-faithful answer can never match",
+      "canonical_evidence": "golden contradicts the prompt's full-circuit Karnaugh map: at (a=1, b=0, c=1, d=1) the K-map states output=1 but the golden's mux_in[2] (the ab=10 mux line) gives 0; the spec-faithful answer can never match"
+    },
+    {
+      "problem": "Prob094_gatesv",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob095_review2015_fsmshift",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob096_review2015_fsmseq",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob097_mux9to1v",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob098_circuit7",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob099_m2014_q6c",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob100_fsm3comb",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob101_circuit4",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob102_circuit3",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob103_circuit2",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob104_mt2015_muxdff",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob105_rotate100",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob106_always_nolatches",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob107_fsm1s",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob108_rule90",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob109_fsm1",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob110_fsm2",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob111_fsm2s",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob112_always_case2",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob113_2012_q1g",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob114_bugs_case",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob115_shift18",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob116_m2014_q3",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob117_circuit9",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob118_history_shift",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob119_fsm3",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob120_fsm3s",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob121_2014_q3bfsm",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob122_kmap4",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob123_bugs_addsubz",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob124_rule110",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob125_kmap3",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob126_circuit6",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob127_lemmings1",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob128_fsm_ps2",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob129_ece241_2013_q8",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob130_circuit5",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob131_mt2015_q4",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob132_always_if2",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob133_2014_q3fsm",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob134_2014_q3c",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob135_m2014_q6b",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob136_m2014_q6",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob137_fsm_serial",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob138_2012_q2fsm",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob139_2013_q2bfsm",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob140_fsm_hdlc",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob141_count_clock",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob142_lemmings2",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob143_fsm_onehot",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob144_conwaylife",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob145_circuit8",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob146_fsm_serialdata",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob147_circuit10",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob148_2013_q2afsm",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob149_ece241_2013_q4",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob150_review2015_fsmonehot",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob151_review2015_fsm",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob152_lemmings3",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob153_gshare",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob154_fsm_ps2data",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob155_lemmings4",
+      "verdict": "PASS"
+    },
+    {
+      "problem": "Prob156_review2015_fancytimer",
+      "verdict": "PASS"
+    }
+  ]
+}

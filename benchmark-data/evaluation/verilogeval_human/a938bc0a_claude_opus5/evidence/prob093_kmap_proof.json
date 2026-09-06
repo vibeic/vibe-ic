@@ -1,0 +1,47 @@
+{
+ "problem": "Prob093_ece241_2014_q3",
+ "printed_kmap_columns_ab": [
+  "00",
+  "01",
+  "11",
+  "10"
+ ],
+ "printed_column_functions_of_cd": {
+  "00": {
+   "c=0,d=0": 0,
+   "c=0,d=1": 1,
+   "c=1,d=1": 1,
+   "c=1,d=0": 1
+  },
+  "01": {
+   "c=0,d=0": 0,
+   "c=0,d=1": 0,
+   "c=1,d=1": 0,
+   "c=1,d=0": 0
+  },
+  "11": {
+   "c=0,d=0": 0,
+   "c=0,d=1": 0,
+   "c=1,d=1": 1,
+   "c=1,d=0": 0
+  },
+  "10": {
+   "c=0,d=0": 1,
+   "c=0,d=1": 0,
+   "c=1,d=1": 1,
+   "c=1,d=0": 1
+  }
+ },
+ "golden_ref_line": "assign mux_in[2] = ~d;",
+ "golden_mux_in_2_as_fn_of_cd": {
+  "c=0,d=0": 1,
+  "c=0,d=1": 0,
+  "c=1,d=0": 1,
+  "c=1,d=1": 0
+ },
+ "printed_columns_equal_to_golden_mux_in_2": [],
+ "index_mappings_enumerated": 24,
+ "index_mappings_under_which_golden_mux_in_2_is_consistent": 0,
+ "contradicted_cell": "ab=10, cd=11: printed map says 1, golden's ~d gives 0",
+ "verdict": "BROKEN: golden mux_in[2]=~d equals no printed column, so no assignment of the four columns to the four mux_in indices makes the golden consistent with the printed K-map"
+}

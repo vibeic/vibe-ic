@@ -1,0 +1,69 @@
+{
+ "artifacts": {
+  "RESULT.md": "c24c921a8df9075f7c33cc540a58439ca5dbd0d69b8a528f86c67da670375702",
+  "attribution.json": "22f4c4b4187e95f11def7a1f2b000db6f338de938d1916ef51e528564493b816",
+  "pass_at_1.json": "441cc3c79f2fece3d06fb3c16b75decb21d1aac5e1ee4e95ee0eac42d885df05",
+  "theoretical_max.json": "64a7e9487aa9855eaf7b8470ff36525fe27b14c09426e2a8e71adefcc7c5502a"
+ },
+ "attribution": {
+  "acceptance_status": "COMPLETE",
+  "ai_backup_authored": 24,
+  "ai_backup_passed": 22,
+  "ai_reviews_accepted": 156,
+  "ai_reviews_written": 156,
+  "failed": [
+   "Prob062_bugs_mux2",
+   "Prob093_ece241_2014_q3"
+  ],
+  "note": "132 of the 154 passes are deterministic program-layer emissions; the 24 AI-authored modules account for 22 passes and the 2 proven-broken problems, which no emitter recognises.",
+  "program_layer_solved_and_passed": 132
+ },
+ "authoring_model": {
+  "display_name": "Claude Opus 5 (1M context)",
+  "folder_slug": "claude_opus5",
+  "model_id": "claude-opus-5"
+ },
+ "benchmark": "verilogeval-human",
+ "completed_on": "2026-09-06",
+ "environment": {
+  "host": "8hd-3 (192.168.1.121)",
+  "image": "ghcr.io/vibeic/vibeic-eda@sha256:06537f7e8d3c17c6c9c60c20638e94faab0421533a55656ad1819f383c373aba",
+  "image_version_label": "0.3.46",
+  "lane": "bvehuman",
+  "note": "Earlier published VerilogEval-Human cells ran on sha256:66c33ff2 = 0.3.6 with host iverilog 11/12. Numbers are not comparable across that move.",
+  "simulator": "Icarus Verilog 14.0 (devel) s20260301-451-g29806b823"
+ },
+ "landed_upstream": {
+  "commit": "310eaed34beb5aa00584306a87625f1092345e1d",
+  "note": "both fixes were landed on main while this run was in flight; threshold_ladder_synth.py on main is byte-identical to this tree",
+  "version": "v1.17.66"
+ },
+ "limitations": [
+  "Functional pass@1 only. Synthesis, physical design and PPA are N/A_NOT_MEASURED.",
+  "iverilog substitutes for Synopsys VCS / Cadence Xcelium.",
+  "Prob139_2013_q2bfsm is NOT a blind result: its hidden reference was read during a declared convergence-mode RCA before this run, and the module was then authored by the same agent. Discount that PASS.",
+  "Prob149_ece241_2013_q4's reference was also read during that RCA, but its RTL is emitted by the deterministic program layer from the prompt text."
+ ],
+ "schema": "vibeic.benchmark.run_manifest.v1",
+ "score": {
+  "metric": "single-shot functional pass@1, full 156-problem denominator",
+  "pass_at_1_pct": 98.72,
+  "passed": 154,
+  "theoretical_max": 154,
+  "theoretical_max_evidence": "theoretical_max.json",
+  "total": 156
+ },
+ "shape": "C",
+ "source_snapshot": {
+  "base_commit": "1eb2a241879688c27d1e9247523e55bf0c6226b1",
+  "base_is_origin_main_at": "1eb2a241879688c27d1e9247523e55bf0c6226b1",
+  "branch": "next/bvehuman",
+  "commit": "a938bc0ac4661a1561ff5babe81522f50f623bc4",
+  "dataset_commit": "c498220d0a52248f8e3fdffe279075215bde2da6",
+  "dataset_repository": "https://github.com/NVlabs/verilog-eval.git",
+  "dataset_subdir": "dataset_code-complete-iccad2023",
+  "plugin_repository": "https://github.com/vibeic/vibe-ic.git",
+  "tree": "edc7d6e2792587aece11e0840dca08f1492d03e9"
+ },
+ "vibe_ic_version": "UNASSIGNED \u2014 the measured tree is next/bvehuman a938bc0a (v1.17.60 + this lane's two fixes), retired as tag retired/bvehuman-0906. The two fixes themselves landed on main as 310eaed34 = v1.17.66, byte-identically for threshold_ladder_synth.py. The cell directory is named by the measured tree sha rather than by a version, because v1.17.61-65 changed other things this run never ran on; rename it at publish time if a version name is wanted."
+}

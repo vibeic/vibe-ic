@@ -1,0 +1,8 @@
+{
+  "gate": "benchmark_clean_room_check",
+  "verdict": "PASS",
+  "run_dir": "/home/reyerchu/_lane_bvehuman/run_fixed",
+  "findings_count": 0,
+  "findings": [],
+  "doctrine": "clean-room full re-run is the default; no inherited samples / memory / prior storage (user directive 2026-06-04, supersedes 2026-05-29 re-attempt default)"
+}
