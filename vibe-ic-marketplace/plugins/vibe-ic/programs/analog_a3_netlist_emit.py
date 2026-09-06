@@ -1505,6 +1505,44 @@ def emit_for_block(project: Path, entry: Dict[str, Any], pdk: str,
         f"section={pdkctx.get('typ_section')}",
         f"_provenance: role_models={pdkctx.get('role_models')}",
     ]
+    # THE UNIT ARRAYS, DECLARED — vibe-ic#2062 follow-up, the fourth red.
+    #
+    # A capacitor the PDK's gencell cannot draw is emitted as N unit devices in
+    # parallel (`ci1` -> `ci1_u0`, `ci1_u1`), and until now the ONLY trace of
+    # that in the deck was the `_u<N>` suffix on the instance names. So every
+    # consumer that needs to know "these N instances are ONE capacitor" had to
+    # scrape a name convention — and one did: a topology guard reading the
+    # capacitors welded to a summing node compared a LIST of units against a
+    # SINGLE name and went red the first time the split fired on its fixture.
+    # The netlist was right and had no way to say so.
+    #
+    # MEASURED, and it is not the split's landing that did it: v1.17.94 and
+    # v1.17.95 (which BUILT the split) both emit `xci1 vsum1 vo1 … l=39.3175`,
+    # one instance, because no ceiling was known for that family. v1.17.98 read
+    # every shipped PDK's capacitor ceiling from its own gencell tcl, 39.3 um
+    # went above the 30 um that family actually states, and the split fired
+    # here for the first time.
+    #
+    # NUMBERS AND NAMES ONLY (NDA hygiene), and emitted ONLY when an array
+    # exists — a line that appears unconditionally says nothing when it appears.
+    for _arr in ((ir.get("_provenance") or {}).get("layout_maxima")
+                 or {}).get("capacitor_arrays") or []:
+        if not isinstance(_arr, dict) or not _arr.get("device"):
+            continue
+        _n = int(_arr.get("units") or 0)
+        if _n < 2:
+            continue
+        _base = str(_arr["device"])
+        _insts = [f"{_base}_u{i}" for i in range(_n)]
+        prov_lines.append(
+            f"_provenance: capacitor_array base={_base} units={_n} "
+            f"instances={_insts} "
+            f"unit_l_um={_arr.get('unit_l_um')} "
+            f"library_l_um={_arr.get('library_l_um')} "
+            f"pdk_max_l_um={_arr.get('pdk_max_l_um')} — one capacitor the PDK "
+            f"cannot draw, realised as {_n} identical units in PARALLEL: every "
+            f"unit carries the SAME two nodes, so the array is electrically the "
+            f"single device the sizing asked for")
     # vibe-ic#903 — WHICH voltage domain elected those models. Emitted ONLY
     # when the design states one: a design that states none binds chip-globally
     # and its deck is byte-identical to before, which is the paired guard.
