@@ -124,6 +124,64 @@ def test_resolver_refuses_by_name_and_never_defaults():
     assert decl is None, (decl, why)
 
 
+def test_a_package_scoped_bound_refuses_for_the_RIGHT_REASON():
+    """`[pkg::Const-1:0]` IS a single packed dimension. Saying it is not is a
+    wrong reason, and a wrong reason sends the reader after the wrong thing.
+
+    The first version of this module split the range with a pattern that
+    forbade `:` inside the bounds, so the `::` scope operator made it fail to
+    match and report a SHAPE complaint about a perfectly ordinary width.
+    """
+    decl, why = PW.resolve("[flash_pkg::ProgTypes-1:0]", {})
+    assert decl is None
+    assert "not a single packed" not in why, why
+    assert "ProgTypes" in why or "flash_pkg" in why, why
+
+
+@pytest.mark.parametrize("cell,expect", [
+    ("[31:0]", ("31", "0")),
+    ("[aw-1:0]", ("aw-1", "0")),
+    ("[pkg::C-1:0]", ("pkg::C-1", "0")),
+    ("[3:0][7:0]", None),        # multi-dimensional
+    ("[N]", None),               # unpacked size, not a range
+    ("[a:b:c]", None),           # two separators
+    ("", None),
+])
+def test_split_range(cell, expect):
+    assert PW._split_range(cell) == expect
+
+
+def test_localparam_and_clog2_widths_resolve():
+    """A design that derives its index width once and uses it on a port states
+    that width completely; reading only `parameter` left it unknown."""
+    rtl = ("module arb #(\n"
+           "  parameter  int N    = 8,\n"
+           "  localparam int IdxW = $clog2(N)\n"
+           ") (input clk, output [IdxW-1:0] idx_o);\n"
+           "  assign idx_o = 0;\n"
+           "endmodule\n")
+    params = PW.dut_defaults(rtl, "arb")
+    assert params.get("N") == 8 and params.get("IdxW") == 3, params
+    assert PW.resolve("[IdxW-1:0]", params)[0] == " [2:0]"
+
+
+def test_a_package_FUNCTION_still_refuses():
+    """NO-LEAK. `$clog2` is admitted because it is a pure integer function with
+    fixed semantics. A USER-DEFINED package function is not, and evaluating one
+    would mean reading and running the design's own code -- so it refuses."""
+    rtl = ("module f #(\n"
+           "  parameter  int Depth = 4,\n"
+           "  localparam int PtrW  = prim_util_pkg::vbits(Depth)\n"
+           ") (input clk, output [PtrW-1:0] p);\n"
+           "  assign p = 0;\n"
+           "endmodule\n")
+    params = PW.dut_defaults(rtl, "f")
+    assert params.get("Depth") == 4
+    assert "PtrW" not in params, params
+    decl, why = PW.resolve("[PtrW-1:0]", params)
+    assert decl is None and "PtrW" in why, why
+
+
 def test_resolver_reads_the_dut_parameter_header():
     assert PW.dut_defaults(_PARAM_RTL, "core_top") == {"aw": 10, "dw": 32}
     assert PW.dut_defaults(_UNRESOLVABLE_RTL, "core_top") == {}

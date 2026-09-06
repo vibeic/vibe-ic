@@ -67,8 +67,39 @@ from __future__ import annotations
 import re
 from typing import Dict, List, Optional, Sequence, Tuple
 
-# A single packed dimension `[hi:lo]`, hi/lo arbitrary expressions.
-_ONE_RANGE_RE = re.compile(r"^\[\s*([^:\]]+?)\s*:\s*([^:\]]+?)\s*\]$")
+def _split_range(cell: str) -> Optional[Tuple[str, str]]:
+    """`(hi, lo)` for a single packed dimension `[hi:lo]`, else None.
+
+    Not a regex, because of `::`. A width bound may be package-scoped --
+    `[flash_phy_pkg::ProgTypes-1:0]` -- and a pattern that simply forbids `:`
+    inside the bounds fails to match it, which made this module report "not a
+    single packed `[hi:lo]` dimension" about something that is exactly that.
+    A wrong REASON is its own defect: the refusal must name the symbol that
+    actually blocked it, or the reader goes looking for the wrong thing.
+
+    The separator is the one `:` at bracket depth 0 that is not part of a `::`
+    scope operator. More than one `[...]` group is a multi-dimensional cell and
+    genuinely is not a single packed dimension.
+    """
+    t = (cell or "").strip()
+    if not (t.startswith("[") and t.endswith("]")):
+        return None
+    inner = t[1:-1]
+    if "[" in inner or "]" in inner:
+        return None                     # multi-dimensional / unpacked as well
+    seps = []
+    for i, ch in enumerate(inner):
+        if ch != ":":
+            continue
+        if (i and inner[i - 1] == ":") or (i + 1 < len(inner)
+                                           and inner[i + 1] == ":"):
+            continue                    # part of a `::` scope operator
+        seps.append(i)
+    if len(seps) != 1:
+        return None
+    i = seps[0]
+    hi, lo = inner[:i].strip(), inner[i + 1:].strip()
+    return (hi, lo) if hi and lo else None
 # The already-literal case, kept as its own pattern so a literal never depends
 # on the evaluator being importable.
 _LITERAL_RANGE_RE = re.compile(r"^\[\s*(\d+)\s*:\s*(\d+)\s*\]$")
@@ -88,15 +119,21 @@ def _evaluator():
 
 
 def dut_defaults(rtl_text: str, dut_module: str) -> Dict[str, int]:
-    """`{PARAM: default}` for `dut_module`'s own header — see module docstring
-    for why only the DEFAULTS are consulted. `{}` when the header is absent or
+    """`{NAME: value}` for `dut_module`'s own header — parameters and header
+    localparams — see the module docstring for why only the DEFAULTS (never an
+    instantiation override) are consulted. `{}` when the header is absent or
     unparsable (which is not an error: a module with no parameters has none)."""
     try:
         import register_bus_driver_gen as _rbdg
     except Exception:
         return {}
     try:
-        return _rbdg.dut_parameter_defaults(rtl_text or "", dut_module or "")
+        # Parameters AND header localparams: a port is declared against
+        # whatever the header defines, and a derived constant
+        # (`localparam int IdxW = $clog2(N)`) is exactly what a width is
+        # written over. Reading only `parameter` left those ports refusing on a
+        # value the design states one line above them.
+        return _rbdg.dut_header_constants(rtl_text or "", dut_module or "")
     except Exception:
         return {}
 
@@ -177,9 +214,9 @@ def resolve(width_decl: Optional[str],
         if m:
             return f" [{m.group(1)}:{m.group(2)}]", "literal width cell"
 
-        m = _ONE_RANGE_RE.match(wd)
-        if m:
-            hi_s, lo_s = m.group(1).strip(), m.group(2).strip()
+        rng = _split_range(wd)
+        if rng:
+            hi_s, lo_s = rng
             ev = _evaluator()
             if ev is None:
                 blocked = "the shared width evaluator is not importable"
