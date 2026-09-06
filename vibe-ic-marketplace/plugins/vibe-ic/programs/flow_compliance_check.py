@@ -13790,23 +13790,81 @@ def p0_gate_census(records: Optional[List[Dict[str, Any]]]
     }
 
 
+def published_failed_gate_names(
+        records: Optional[List[Dict[str, Any]]],
+        ledger: Optional[List[Dict[str, Any]]]) -> List[str]:
+    """EVERY gate that returned FAIL in this run, by name — the UNION.
+
+    vibe-ic#2069. `failed_gates` / `failed_gate_count` used to project the P0
+    structural-RTL REGISTRY and nothing else, while `gate_execution_ledger`
+    recorded what the FLOW dispatched. They are different populations and
+    neither is a subset of the other, so the published census could name a
+    strict subset of the run's failures and still be internally consistent.
+
+    MEASURED on one opentitan_aes run (lane rbaes2, v1.17.96, 8HD-8, read
+    read-only from its committed `phase23_completion_audit.json`): the file
+    published
+
+        failed_gate_count 1   failed_gates ['l8_clock_domains_typed_check']
+
+    beside a `gate_execution_ledger` holding ELEVEN further FAILs — none of
+    them in the registry, so none of them in any count in the file. Twelve
+    gates returned FAIL and the census said one. Both numbers were right about
+    different things, and the field a reader keys on answered the narrower
+    question without saying so.
+
+    "How many gates failed" has ONE answer, and it is this set. The two
+    populations stay told apart, by name, in
+    `gate_population_reconciliation`; what changes is that the published
+    census is no longer one of them.
+
+    Sorted so the artefact is byte-stable across runs; deduplicated because a
+    gate present in both populations failed once. chip-AGNOSTIC — set algebra
+    over gate names.
+    """
+    reg = {r["name"] for r in (records or [])
+           if r.get("verdict") == "FAIL" and r.get("name")}
+    led = {str(r.get("gate")) for r in (ledger or [])
+           if r.get("verdict") == "FAIL" and r.get("gate")}
+    return sorted(reg | led)
+
+
 def gate_population_reconciliation(
         records: Optional[List[Dict[str, Any]]],
-        ledger: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """The TWO gate populations this artifact carries, told apart by name.
+        ledger: List[Dict[str, Any]],
+        published_failed_gates: Optional[Sequence[str]] = None,
+        ) -> Dict[str, Any]:
+    """The TWO gate populations this artifact carries, told apart by name —
+    and a REFUSAL when the published census does not name every failure.
 
-    They are not the same set and never were. `registered/invoked/passed/
-    failed` count the P0 structural-RTL REGISTRY; `gate_execution_ledger`
-    records what the FLOW dispatched. Measured on one run: 246 registry names,
-    66 ledger names, 10 in both — and all 5 of that run's ledger FAILs were
-    outside the registry, so the artifact said `failed_gate_count: 1` beside
-    five failing gates and both numbers were right about different things.
-    "How many gates failed" had two answers and nothing in the file said why.
+    They are not the same set and never were. `registered/invoked/passed`
+    count the P0 structural-RTL REGISTRY; `gate_execution_ledger` records what
+    the FLOW dispatched. Measured on one run: 246 registry names, 66 ledger
+    names, 10 in both — and all 5 of that run's ledger FAILs were outside the
+    registry, so the artifact said `failed_gate_count: 1` beside five failing
+    gates and both numbers were right about different things. "How many gates
+    failed" had two answers and nothing in the file said why.
 
-    ADVISORY BY DECLARATION. This publishes and names; it changes no verdict.
-    Making a ledger FAIL blocking would redden runs whose gates are advisory by
-    design, and that is a ruling about policy, not a defect in arithmetic — so
-    it is stated here for a reader and for a maintainer, not enforced.
+    BLOCKING, BY OWNER RULING — vibe-ic#2069, which replaces the ADVISORY
+    declaration this function used to carry. That declaration said making a
+    ledger FAIL blocking "would redden runs whose gates are advisory by
+    design, and that is a ruling about policy". The ruling was made, and it is
+    NARROWER than the thing that objection was about: what is enforced here is
+    not "a ledger FAIL fails the run" but "the census PUBLISHES every failure
+    it has". `failed_gates` is now `published_failed_gate_names` — the union —
+    so on any run whose census is built the house way this refusal cannot
+    fire, whatever the gates returned. It fires when a published census names
+    a strict subset of the run's own failures, which is a defect in THIS
+    AUDIT, not a finding about the design — the same class as
+    `p0_gate_census`'s `closes`, and enforced down the same
+    `structural_fail_lines` path.
+
+    `published_failed_gates=None` means NOT SUPPLIED — a caller that did not
+    say what it published gets the two populations named and NO refusal. That
+    is deliberate: "could not read what was published" is not "read it and it
+    was complete", and a default here would manufacture the clean answer.
+    `[]` is a caller that published an empty census and is checked normally.
+
     chip-AGNOSTIC — set algebra over gate names.
     """
     reg = {str(r.get("name")) for r in (records or []) if r.get("name")}
@@ -13815,8 +13873,11 @@ def gate_population_reconciliation(
                        if r.get("verdict") == "FAIL" and r.get("name")})
     led_fail = sorted({str(r.get("gate")) for r in (ledger or [])
                        if r.get("verdict") == "FAIL" and r.get("gate")})
-    return {
-        "declared": "ADVISORY — names the populations; changes no verdict.",
+    every_failure = sorted(set(reg_fail) | set(led_fail))
+    out: Dict[str, Any] = {
+        "declared": (
+            "BLOCKING — refuses when the published failed-gate census does "
+            "not name every gate that returned FAIL in this run."),
         "p0_registry_gates": len(reg),
         "ledger_gates": len(led),
         "in_both": sorted(reg & led),
@@ -13826,13 +13887,38 @@ def gate_population_reconciliation(
         "ledger_failed_gates": led_fail,
         "ledger_failures_outside_the_published_census": sorted(
             set(led_fail) - set(reg_fail)),
+        "every_gate_that_failed": every_failure,
         "note": (
-            "`failed_gate_count` / `passed_gate_count` / `registered_gate_"
-            "count` / `invoked_gate_count` describe the P0 REGISTRY ONLY. "
-            "`gate_execution_ledger` is a DIFFERENT population — what the flow "
-            "dispatched. Neither is a subset of the other. A ledger FAIL "
-            "listed above appears in NO census count in this file."),
+            "`passed_gate_count` / `registered_gate_count` / `invoked_gate_"
+            "count` describe the P0 REGISTRY ONLY. `gate_execution_ledger` is "
+            "a DIFFERENT population — what the flow dispatched. Neither is a "
+            "subset of the other. `failed_gates` / `failed_gate_count` are "
+            "the UNION of both and are the one field that answers 'how many "
+            "gates failed'; `p0_registry_failed_gates` above keeps the "
+            "registry-only view the count used to be."),
     }
+    if published_failed_gates is None:
+        out["published_failed_gates"] = None
+        out["failures_missing_from_the_published_census"] = None
+        out["census_names_every_failure"] = None
+        out["refusal"] = None
+        out["not_measured"] = (
+            "the caller did not say which failed gates it published, so this "
+            "reconciliation names the populations and asserts nothing about "
+            "the census. NOT_MEASURED is not a pass.")
+        return out
+    published = sorted({str(n) for n in published_failed_gates})
+    missing = sorted(set(every_failure) - set(published))
+    out["published_failed_gates"] = published
+    out["failures_missing_from_the_published_census"] = missing
+    out["census_names_every_failure"] = not missing
+    out["refusal"] = None if not missing else (
+        f"the published failed-gate census names {len(published)} gate(s) "
+        f"where {len(every_failure)} returned FAIL in this run; "
+        f"{len(missing)} failure(s) appear in NO published count: "
+        f"{missing}. A census that reports a subset as THE count is a "
+        f"criterion that does not follow the run it describes.")
+    return out
 
 
 def completion_audit_verdict(
@@ -15334,6 +15420,29 @@ def main(argv: Optional[List[str]] = None) -> int:
             f"Every published gate count is a projection of those records; "
             f"one that is not is a defect in this audit, not in the design.")
 
+    # vibe-ic#2069 — the published failed-gate census, and the refusal that
+    # keeps it complete. BLOCKING, and declared so, in the same place and down
+    # the same path as `closes` above, for the same reason: a census that
+    # names a strict subset of the run's own failures is a defect in THIS
+    # AUDIT.
+    #
+    # Computed HERE rather than beside the audit dict so the list that is
+    # PUBLISHED and the list the refusal is computed from are the same object
+    # — a second derivation is a second place for the two to disagree, which
+    # is the defect this closes, one layer down.
+    _p0_records_for_census = (
+        _p0_gate_records(next((r for r in results if r.id == "P0"), None))
+        if any(r.id == "P0" for r in results) else None)
+    _published_failed_gates = published_failed_gate_names(
+        _p0_records_for_census, _gate_ledger_payload())
+    _gate_recon = gate_population_reconciliation(
+        _p0_records_for_census, _gate_ledger_payload(),
+        _published_failed_gates)
+    if _gate_recon.get("refusal"):
+        structural_fail_lines.append(
+            f"gate census does not name every failure: "
+            f"{_gate_recon['refusal']}")
+
     # Verdict triage. Waivers are NOT pass — they are deferred to
     # foundry sign-off / production tapeout review. Emit a distinct
     # verdict so a downstream gate / human reader cannot mistake
@@ -16076,12 +16185,27 @@ def main(argv: Optional[List[str]] = None) -> int:
             # narrows what the audit CLAIMS, never what the run IS.
             "run_status": overall,
             "gates": per_gate,
-            "failed_gates": failed_gate_names,
-            "failed_gate_count": len(failed_gate_names),
+            # vibe-ic#2069 — EVERY gate that returned FAIL in this run, by
+            # name: the UNION of the P0 registry's FAILs and the execution
+            # ledger's. This field used to project the registry alone, so on a
+            # measured run it read `1` beside twelve failing gates and nothing
+            # in the file said it had answered the narrower question. The
+            # registry-only view it used to be is kept, under its own name,
+            # immediately below — a field that changes meaning must not also
+            # take the old meaning's information with it.
+            #
+            # The SAME object the refusal above was computed from, not a second
+            # derivation of it.
+            "failed_gates": _published_failed_gates,
+            "failed_gate_count": len(_published_failed_gates),
+            "failed_gates_p0_registry": failed_gate_names,
             "passed_gate_count": passed_gate_count,
             # THE DENOMINATOR, and the part of it that never answered.
             #
-            # Every gate count above is a NUMERATOR. The population they are
+            # Every REGISTRY count above is a NUMERATOR (`failed_gate_count`
+            # is not one of them since #2069 — it is the union and has no
+            # registry denominator; `failed_gates_p0_registry` is the member
+            # of this partition). The population they are
             # counted out of appeared in this file only inside the P0 step's
             # `name` string, so a consumer of this artifact — the mcp-eda
             # pre-burn guard, any dashboard — could read `passed_gate_count: 6`
@@ -16106,11 +16230,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             # TWO POPULATIONS this file carries, told apart. See
             # `p0_gate_census` / `gate_population_reconciliation`.
             "gate_census": _gate_census,
-            "gate_population_reconciliation": gate_population_reconciliation(
-                _p0_gate_records(next((r for r in results if r.id == "P0"),
-                                      None))
-                if any(r.id == "P0" for r in results) else None,
-                _gate_ledger_payload()),
+            "gate_population_reconciliation": _gate_recon,
             "step_counts": counts,
             # vibe-ic#1969 — the tally and the records it counted travel in
             # ONE canonical artifact.  `final_report_generate` consumes

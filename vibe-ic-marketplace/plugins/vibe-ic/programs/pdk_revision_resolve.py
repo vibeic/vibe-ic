@@ -154,6 +154,27 @@ if str(_HERE) not in sys.path:                      # pragma: no cover - path se
 #: different notions of where the run's PDK record lives.
 RECORD_REL = "reports/pdk_revision.json"
 
+#: THE NAME THIS REFUSAL HAS — vibe-ic#2069.
+#:
+#: The refusal itself already existed and was already blocking; what it did not
+#: have was a NAME. `benchmark_evidence_publish` raised prose, the one-shot
+#: runner appended different prose to its advisory list, and this program
+#: printed a third wording to stderr. Three renderings of one fact, none of
+#: them greppable, so a consumer could not key on "this run was refused for a
+#: missing PDK revision" without matching English — and a reader of the record
+#: FILE alone saw `resolved: false` and no statement at all about what that
+#: costs.
+#:
+#: Defined HERE, in the program that writes the record, and imported by every
+#: reader that refuses on it, for the same reason `record_gaps` is: a token
+#: spelled in three places is three tokens.
+#:
+#: It is a REFUSAL, never a verdict about a design, and never a default. The
+#: record's `revision` stays `None` when nothing could be read — the token
+#: names the absence, it does not fill it. An `unknown` in `revision` would
+#: re-create the exact gap while looking like it had been closed.
+REFUSAL_NOT_RECORDED = "PDK_REVISION_NOT_RECORDED"
+
 SCHEMA = 1
 
 # --- source ids -------------------------------------------------------------
@@ -621,6 +642,11 @@ def build_record(trees: Sequence[Dict[str, Any]], read_in: str,
         rec["reason"] = ("; ".join(
             f"{t.get('tree')}: {t.get('reason')}" for t in unresolved)
             or "no PDK tree could be identified for this run")
+    # #2069 — the record states its own refusal, by name, so the file is
+    # legible without re-deriving the gap list from it. `None` on a complete
+    # record; the key is ALWAYS present so its absence cannot be read as
+    # "recorded".
+    rec["refusal"] = record_refusal(rec)
     return rec
 
 
@@ -656,6 +682,24 @@ def record_gaps(rec: Any) -> List[str]:
     if not rec.get("trees"):
         gaps.append("trees: the record names no PDK tree it read")
     return gaps
+
+
+def record_refusal(rec: Any) -> Optional[str]:
+    """`REFUSAL_NOT_RECORDED` when this record does not name a revision, else
+    `None`. vibe-ic#2069.
+
+    The one place the answer "is this run publishable on the PDK axis" is
+    decided, so the writer, this program's own exit code, the runner's advisory
+    and the publish gate all refuse by the SAME name for the SAME set of
+    records. `record_gaps` stays the place that says WHICH field is missing;
+    this says what the refusal is CALLED.
+
+    A record that could not be read at all is refused too: `None` reaching here
+    is "no record", which is the strongest form of not-recorded, and returning
+    `None` for it would make an absent record indistinguishable from a complete
+    one — the substitution this whole program exists to stop.
+    """
+    return REFUSAL_NOT_RECORDED if record_gaps(rec) else None
 
 
 def load_record(run: Path) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
@@ -735,8 +779,9 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     gaps = record_gaps(rec)
     if gaps:
-        print("pdk_revision_resolve: FAIL — the run's PDK revision is not "
-              "recorded:\n  - " + "\n  - ".join(gaps), file=sys.stderr)
+        print(f"pdk_revision_resolve: FAIL {REFUSAL_NOT_RECORDED} — the run's "
+              f"PDK revision is not recorded:\n  - " + "\n  - ".join(gaps),
+              file=sys.stderr)
         return 1
     print(f"pdk_revision_resolve: PASS — revision {rec['revision']}")
     return 0
