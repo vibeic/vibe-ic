@@ -130,8 +130,8 @@ def _verilog_regions(text: str) -> str:
 #: be traced back to the SHAPE it was read from. One spelling, in the module
 #: that owns the grammar, so the two Phase-1 front doors cannot drift apart on
 #: the label the way they drifted on the top-module status vocabulary (#2052).
-CODE_REGION_PORT_STRATEGY = "verilog_code_region_port_decl_v1_17_95"
-SIGNAL_TABLE_PORT_STRATEGY = "markdown_signal_table_port_row_v1_17_95"
+CODE_REGION_PORT_STRATEGY = "verilog_code_region_port_decl_issue2060"
+SIGNAL_TABLE_PORT_STRATEGY = "markdown_signal_table_port_row_issue2060"
 
 
 def _source_line(text: str, offset: int) -> str:
@@ -146,7 +146,15 @@ def _source_line(text: str, offset: int) -> str:
 #: A width cell states a width only when it states a NUMBER. `NUM_INTERRUPTS`,
 #: `$clog2(NUM_INTERRUPTS)` and `NUM_INTERRUPTS x ADDR_WIDTH` are real width
 #: cells from one real design input and none of them is 1.
-_INT_WIDTH_CELL = re.compile(r'^\s*(\d+)\s*(?:bits?)?\s*$', re.I)
+_INT_WIDTH_CELL = re.compile(r'^\s*(\d+)\s*(?:[- ]?bits?)?\s*$', re.I)
+#: A width cell that STATES a number without being only that number:
+#: `24-bit (`[23:0]`)` is a real cell from a real interface table and it
+#: declares 24. Measured: returning WIDTH_UNKNOWN for it loses a width the
+#: document gives, which is the same failure as inventing one, in the other
+#: direction. `N-bit (`[DEPTH-1:0]`)` matches NEITHER and stays UNKNOWN, which
+#: is the honest answer for a symbolic bound.
+_LEADING_BIT_COUNT = re.compile(r'^\s*(\d+)\s*[- ]?bits?\b', re.I)
+_EMBEDDED_RANGE = re.compile(r'\[\s*(\d+)\s*:\s*(\d+)\s*\]')
 #: Description-column header vocabulary. `_specrtl_common` defines the name /
 #: direction / width header vocabularies (a port table is identified by the
 #: first two); it has no description column because `Port` has no description
@@ -211,11 +219,39 @@ def _signal_table_rows(text: str) -> Dict[str, Dict[str, Any]]:
 
 
 def _stated_width(cell: str) -> int:
-    """The width a table cell STATES, or WIDTH_UNKNOWN."""
-    m = _INT_WIDTH_CELL.match(cell or "")
+    """The width a table cell STATES.
+
+    THREE answers, not two, and conflating the last two is a regression rather
+    than a tightening — measured on 162 port widths across 41 real design-input
+    documents before this distinction existed:
+
+      a NUMBER (`8`, `8 bits`, `[7:0]`)  -> that width
+      a cell that is NOT a number (`NUM_INTERRUPTS`, `$clog2(N)`, `N x M`)
+                                         -> WIDTH_UNKNOWN; the document states
+                                            a width and this reader cannot
+                                            resolve it, so it must not invent 1
+      NO width cell at all (the table has no Width column, or the row has no
+      cell for it)                       -> 1, a genuine 1-bit scalar
+
+    The last case is not ignorance, it is a DECLARATION: a port with no packed
+    dimension is 1 bit, which is the contract `parse_verilog_ports` states in
+    this same package ("no packed dimension -> genuine 1-bit scalar"). Reading
+    `| clk | input |` as an unknown width would lose a fact the document does
+    give, and `clk`/`reset_n`/`cs` in a two-column signal table are exactly the
+    rows that shape occurs on.
+    """
+    if not (cell or "").strip():
+        return 1
+    m = _INT_WIDTH_CELL.match(cell)
     if m:
         return int(m.group(1))
-    m = _BRACKET_WIDTH_CELL.match(cell or "")
+    m = _BRACKET_WIDTH_CELL.match(cell)
+    if m:
+        return abs(int(m.group(1)) - int(m.group(2))) + 1
+    m = _LEADING_BIT_COUNT.match(cell)
+    if m:
+        return int(m.group(1))
+    m = _EMBEDDED_RANGE.search(cell)
     if m:
         return abs(int(m.group(1)) - int(m.group(2))) + 1
     return WIDTH_UNKNOWN
@@ -854,7 +890,74 @@ def extract_inline_direction_bullet_ports(text: str) -> List[Dict[str, Any]]:
 # are; no chip, vendor, protocol or signal-name literal participates.
 MAX_INTERFACE_PROSE_BLOCK_CHARS = 600
 MAX_INTERFACE_PROSE_TOTAL_CHARS = 4000
-_RE_BULLET_ONLY = re.compile(r"(?m)\A(?:\s*(?:[-*+]\s+[^\n]*)?\n?)+\Z")
+# vibe-ic#2060 item 3 (from #2059's measurement) — THIS PATTERN DOES NOT RETURN.
+#
+#   (?m)\A(?:\s*(?:[-*+]\s+[^\n]*)?\n?)+\Z
+#
+# The outer `+` quantifies a body that can match the EMPTY string, and `\s*`
+# (which spans newlines) competes with `\n?` for every line separator, so on a
+# block that FAILS the engine enumerates every way to split the text between
+# them. Measured on 8HD-6 over
+# `"- item i with some ordinary text" * n + "\n---"` — an ordinary nested
+# bullet list closed by a horizontal rule, which is block 4 of a real corpus
+# input prompt:
+#
+#     indent 0:   4 lines 0.5 ms  ->  11 lines 8458 ms   (x4.0 per added line)
+#     indent 2:   4 lines 107 ms  ->   6 lines 27234 ms  (x16.0 per added line)
+#     indent 4:   4 lines 26267 ms
+#
+# A 21-line nested list never returns, and NOTHING LOOKS EXPENSIVE: the same
+# text without the closing `---` MATCHES, instantly, on the first greedy path.
+# `emit_interface_prose` runs this over blocks of a document the caller hands
+# it, so that is a hang in the Phase-1 front door.
+#
+# The answer is the SAME LANGUAGE read by a linear scanner, not a timeout and
+# not a size cap: a block is bullet-only when every NON-BLANK line of it is a
+# bullet line. A line is a bullet line when a `-`/`*`/`+` marker, after
+# optional indent, is followed by whitespace OR by the end of the line — the
+# marker is followed by whitespace ON ITS OWN LINE. `---` is not a bullet line:
+# the marker is followed by another marker. That is precisely why the real
+# block fails, and why it used to fail so expensively.
+#
+# THE ONE PLACE THE TWO DISAGREE, stated rather than discovered later. In the
+# old pattern `\s+` could match the LINE SEPARATOR, so a bare marker alone on a
+# line swallowed the NEXT line as its own text: `"-\n---"`, `"-\nprose line"`
+# and `"-\n  continued"` all read as bullet-only, and the call site DROPS a
+# bullet-only block ("the port table itself — L9 already carries it
+# structurally"). A block whose first line is a bare `-` therefore lost its
+# prose silently. Found by an exhaustive sweep of every block over a 9-symbol
+# line alphabet up to 4 lines (7381 cases), not by review — my own written
+# prediction said the two languages were identical and it was wrong. The
+# shapes are absent from all 4787 real design-input documents (corpus control
+# in the lane record), so no published document moves; where they do occur the
+# new answer keeps the prose the old one dropped.
+_RE_BULLET_LINE = re.compile(r"[ \t]*[-*+][ \t]")
+
+
+def is_bullet_only_block(text: str) -> bool:
+    """Is every non-blank line of `text` a bullet line?
+
+    The linear replacement for `_RE_BULLET_ONLY`. Cost is one application of
+    `_RE_BULLET_LINE` per non-blank line — a bound in STEPS, which is what
+    makes it a property of the code rather than of how busy the host is.
+    """
+    for line in text.splitlines():
+        if not line.strip():
+            continue
+        if not _RE_BULLET_LINE.match(line):
+            return False
+    return True
+
+
+#: BACK-COMPATIBLE NAME, and the reason it is a name and not a pattern.
+#: `phase1_doc_one_shot_runner` re-exports this symbol
+#: (`_RE_CZL9_BULLET_ONLY = _ppx._RE_BULLET_ONLY`) and that file is held by
+#: another lane, so the name must keep resolving or the docs door does not
+#: import at all. It now names the PREDICATE: the non-returning pattern is gone
+#: from the tree, not kept alive behind an alias, and there is exactly one
+#: implementation of this question. The one-line hunk that renames the
+#: re-export is written out in the lane's LAND.md.
+_RE_BULLET_ONLY = is_bullet_only_block
 
 
 def declared_port_names(content: Dict[str, Any]) -> List[str]:
@@ -971,7 +1074,7 @@ def emit_interface_prose(content: Dict[str, Any],
             take_next = wanted and body.rstrip().endswith(":")
             if not wanted:
                 continue
-            if _RE_BULLET_ONLY.match(body):
+            if is_bullet_only_block(body):
                 # the port table itself — L9 already carries it structurally.
                 continue
             if len(body) > MAX_INTERFACE_PROSE_BLOCK_CHARS:

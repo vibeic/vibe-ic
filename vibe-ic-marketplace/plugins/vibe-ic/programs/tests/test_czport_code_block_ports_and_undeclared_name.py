@@ -3,8 +3,9 @@
 table, and the directory name never reaches a published L1 string.
 
 Everything below was MEASURED on live main 6c42686565706a (v1.17.94) on 8HD-6,
-over the 18 real prompt-entry design inputs lane cz2052 named
-(`/home/reyerchu/_lane_cz2052/corpus/zeroport_inputs.txt`), BEFORE any edit:
+over the 18 real prompt-entry design inputs lane cz2052 named (its
+`corpus/zeroport_inputs.txt`; the lane record holds the list), BEFORE
+any edit:
 
     18 designs, 60 ports, 9 of them ZERO-port.
 
@@ -233,6 +234,36 @@ def test_a_signal_table_is_read_and_a_waveform_table_is_not():
     DIRECTION column, and both real inputs are in the measured 18."""
     assert _names(_SIGNAL_TABLE) == ["clk", "rst_n", "q_out"]
     assert PPX.extract_code_block_ports(_WAVEFORM_TABLE) == []
+
+
+def test_a_width_the_table_does_not_state_is_a_scalar_not_an_unknown():
+    """THREE answers, not two. A cell that is not a number is UNKNOWN — the
+    document states a width this reader cannot resolve, so it must not invent
+    1. But NO width cell at all is a DECLARATION that the port is 1 bit, the
+    same contract `parse_verilog_ports` states for a port with no packed
+    dimension. Conflating the two lost 162 real port widths across 41 design
+    inputs, on rows like `| clk | input |`."""
+    two_col = ("| Signal | Direction |\n|---|---|\n"
+               "| clk | input |\n| reset_n | input |\n")
+    assert {e["name"]: e["width"]
+            for e in PPX.extract_code_block_ports(two_col)} == {
+                "clk": 1, "reset_n": 1}
+    symbolic = ("| Signal | Direction | Width |\n|---|---|---|\n"
+                "| irq | input | NUM_INTERRUPTS |\n| clk | input | 1 |\n")
+    assert {e["name"]: e["width"]
+            for e in PPX.extract_code_block_ports(symbolic)} == {
+                "irq": 0, "clk": 1}
+    # …and the distinction is exactly which of the two the cell is
+    assert PPX._stated_width("") == 1 and PPX._stated_width("   ") == 1
+    assert PPX._stated_width("NUM_INTERRUPTS") == 0
+    assert PPX._stated_width("8") == 8 and PPX._stated_width("[7:0]") == 8
+    # a cell that STATES a number without being only that number — a real row
+    # from a real interface table. Refusing it loses a width the document
+    # gives, which is the same failure as inventing one, in the other direction.
+    assert PPX._stated_width("24-bit (`[23:0]`)") == 24
+    assert PPX._stated_width("8 bits") == 8
+    # …and a SYMBOLIC bound in the same shape stays UNKNOWN
+    assert PPX._stated_width("N-bit (`[DEPTH-1:0]`)") == 0
 
 
 def test_a_table_read_port_quotes_its_row():
