@@ -204,7 +204,10 @@ def test_absent_a4_record_is_not_measured_and_never_a_pass(tmp_path):
     project = _value_project(tmp_path, record=False)
     rep = {}
     assert A.emit_acceptance_checks(project, rep) == 1
-    assert rep["clauses"][0]["record"] is None
+    # The clause is an INPUT artefact and carries no record path: where the
+    # measurement lives is resolved when the check RUNS. See
+    # `test_a_check_emitted_before_the_analog_track_reads_the_later_record`.
+    assert "record" not in rep["clauses"][0]
     verdict, detail = A.evaluate_clause(project, rep["clauses"][0])
     assert verdict == A.NOT_MEASURED
     assert "A4" in detail and "not a pass" in detail
@@ -564,3 +567,30 @@ def test_a_declared_bound_the_record_never_measures_is_not_measured(tmp_path):
     assert hit and hit[0]["verdict"] == A.NOT_MEASURED, by_name
     assert "Rejection" in hit[0]["detail"] and ">= 40.0 dB" in hit[0]["detail"]
     assert rep["passed"] == 1 and rep["not_measured"] == 1
+
+
+# --------------------------------------------------------------------------
+# 11. The emission happens BEFORE the analog track. A check emitted then must
+#     read the record A4 writes AFTERWARDS.
+#
+#     MEASURED on the front door: an earlier revision froze the record PATH
+#     into the emitted check at emission time. Step 4 runs before the A-track,
+#     so every check was emitted pointing at nothing, and the post-A4
+#     re-evaluation re-ran nine of them and reported nine NOT_MEASURED over a
+#     record that was sitting right there.
+# --------------------------------------------------------------------------
+def test_a_check_emitted_before_the_analog_track_reads_the_later_record(tmp_path):
+    project = _value_project(tmp_path, record=False)
+    rep = {}
+    A.emit_acceptance_checks(project, rep)
+    A.run_acceptance_checks(project, rep)
+    assert rep["not_measured"] == 1 and rep["passed"] == 0
+
+    _a4(project, "block_a")            # the A-track runs, LATER
+
+    again = {}
+    A.run_acceptance_checks(project, again)   # NO re-emission
+    assert again["passed"] == 1 and again["not_measured"] == 0, (
+        "the check emitted before A4 did not read the record A4 wrote")
+    assert again["cases"][0]["record"] == (
+        "phase3/analog/block_a/corner_results.json")

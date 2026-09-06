@@ -381,8 +381,8 @@ def derive_clauses(project: Path) -> dict:
                                f"refused, never invented"),
                     "evidence": evidence})
                 continue
-            clauses.append(_value_clause(project, row_name, bname, spec,
-                                         bound, evidence, "named_quantity"))
+            clauses.append(_value_clause(row_name, bname, spec, bound,
+                                         evidence, "named_quantity"))
 
         # (B) CORNER COVERAGE — a PVT matrix this row's own prose declares.
         matrix = _l22._corner_matrix([{"method": text, "evidence": ""}])
@@ -394,7 +394,6 @@ def derive_clauses(project: Path) -> dict:
                     "kind": "corner_coverage",
                     "corner_matrix": {"process": matrix["process"],
                                       "temperature_c": matrix["temperature_c"]},
-                    "record": _record_rel(project, bname),
                     "evidence": evidence,
                     "derivation": "corner_matrix",
                 })
@@ -427,7 +426,7 @@ def derive_clauses(project: Path) -> dict:
                     if bound is None or (bname, qn) in have:
                         continue
                     clauses.append(_value_clause(
-                        project, row_name, bname, spec, bound, evidence,
+                        row_name, bname, spec, bound, evidence,
                         "block_scoped_bound"))
 
         if not clauses and not refusals:
@@ -451,14 +450,13 @@ def derive_clauses(project: Path) -> dict:
             "clauses": all_clauses, "refusals": all_refusals}
 
 
-def _value_clause(project: Path, row_name: str, bname: str, spec: dict,
+def _value_clause(row_name: str, bname: str, spec: dict,
                   bound: dict, evidence: list, derivation: str) -> dict:
     qn = _norm(spec.get("name"))
     return {
         "id": f"{row_name}__{bname}__{qn}",
         "row": row_name, "block": bname, "kind": "value_bound",
         "quantity": qn, "l5_name": spec.get("name"), "bound": bound,
-        "record": _record_rel(project, bname),
         "evidence": evidence, "derivation": derivation,
     }
 
@@ -466,7 +464,16 @@ def _value_clause(project: Path, row_name: str, bname: str, spec: dict,
 # ── clause EVALUATION (what an emitted check runs) ───────────────────────────
 def evaluate_clause(project: Path, clause: dict) -> Tuple[str, str]:
     """(verdict, detail) for one clause against the A4 record it names."""
-    rel = clause.get("record")
+    # RESOLVED AT CHECK TIME, NOT BAKED INTO THE CLAUSE.
+    #
+    # MEASURED on the front door: Step 4 runs BEFORE the A-track, so the
+    # emission that Step 4 reads happens while no A4 record exists. An earlier
+    # revision froze the record PATH into the emitted check, so the post-A4
+    # re-evaluation re-ran nine checks that still pointed at nothing and
+    # reported nine NOT_MEASURED over a record that was sitting right there.
+    # The clause is an INPUT artefact; where the measurement lives is resolved
+    # when the check runs.
+    rel = _record_rel(project, str(clause.get("block") or ""))
     if not rel:
         return NOT_MEASURED, (
             f"no A4 corner-sweep record for block {clause.get('block')!r} "
@@ -696,7 +703,8 @@ def run_acceptance_checks(project: Path, report: "dict | None" = None,
                       "detail": detail, "time": time.time() - t0,
                       "block": clause.get("block"), "row": clause["row"],
                       "clause_kind": clause.get("kind"),
-                      "record": clause.get("record")})
+                      "record": _record_rel(project,
+                                            str(clause.get("block") or ""))})
     for refusal in derived["refusals"]:
         cases.append({"name": refusal["id"], "verdict": REFUSED,
                       "detail": (f"{refusal['reason_class']}: "
