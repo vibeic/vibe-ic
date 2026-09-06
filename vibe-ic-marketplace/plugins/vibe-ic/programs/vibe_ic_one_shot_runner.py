@@ -1034,6 +1034,24 @@ def main() -> int:
     else:
         plan.append(("analog", "SKIPPED", 0))
 
+    # ORGANIC #2064 — RE-EVALUATE THE ANALOG ACCEPTANCE, NOW THAT A4 HAS RUN.
+    #
+    # `design_one_shot_runner` emits and runs the acceptance checks beside the
+    # L10 unit-TB pair, which is where Step 4 reads their JUnit — and that is
+    # BEFORE this A-track, so on a COLD project every clause is honestly
+    # NOT_MEASURED ("flow step A4 has not produced a corner record"). The
+    # checks are pure record reads with no simulator, so re-running them here,
+    # after A4 has written its records, is cheap and idempotent, and the
+    # refreshed JUnit is what the whole-flow audit below and at the end of the
+    # run actually reads. Non-blocking and byte-for-byte a no-op for a design
+    # with no analog verification plan.
+    if _analog_dispatch:
+        _acc_json = _pl.report_path(project, "analog/analog_acceptance_run.json")
+        _run_phase("ANALOG ACCEPTANCE (re-evaluated after A4)",
+                   PROGRAMS_DIR / "analog_acceptance_tb_gen.py",
+                   [str(project), "--run", "--json", str(_acc_json)],
+                   env=_phase_env)
+
     # Produce the stage-analog compliance record as part of the run, before
     # Step 14 or a later whole-flow audit consumes it.  The Step-14 gate also
     # invokes this scoped audit, but a final auditor's first write is tagged
