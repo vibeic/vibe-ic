@@ -249,7 +249,9 @@ def test_the_transition_is_reconstructable_from_records_alone(
     _gate(monkeypatch, _BENIGN)
     assert _resume(run, regate=request_path) == 2
     new = bd._read_jsonl(run / bd._REVIEW_WORKLIST)[0]
-    archive = Path(new["program_regate"]["archive_path"])
+    regate = new.get("program_regate") or {}
+    assert regate.get("archive_path"), "no re-entry was recorded on the task"
+    archive = Path(regate["archive_path"])
     transition = json.loads((archive / "transition.json").read_text())
     assert json.loads((archive / "request.json").read_text()) == request
     assert transition["prior_task"] == stuck
@@ -335,7 +337,10 @@ def test_a_program_version_that_is_not_the_running_one_is_refused(
 def test_a_missing_or_drifted_preserved_input_is_refused(
         tmp_path, monkeypatch, capsys, kind):
     run, stuck, signed, _, _ = _stuck(tmp_path, monkeypatch)
-    manifest_path = Path(stuck["pre_gate_input"]["input_manifest_path"])
+    binding = stuck.get("pre_gate_input") or {}
+    assert binding.get("input_manifest_path"), \
+        "the signed pre-gate input was never preserved"
+    manifest_path = Path(binding["input_manifest_path"])
     preserved = Path(json.loads(manifest_path.read_text())["rtl_paths"][0])
     if kind == "deleted":
         preserved.unlink()
@@ -396,7 +401,16 @@ def test_a_concurrent_coordinator_refuses_the_regate(
     before = bd._read_jsonl(run / bd._REVIEW_WORKLIST)
     with bd._run_root_coordinator_lock(Path(run), "solve"):
         assert _resume(run, regate=request_path) == 2
-    assert bd._read_jsonl(run / bd._REVIEW_WORKLIST) == before
+        assert bd._read_jsonl(run / bd._REVIEW_WORKLIST) == before
+    # The lock DELAYS the operation; it does not permanently refuse it. The
+    # identical request applies once the other coordinator lets go -- which is
+    # what makes the assertion above a statement about the lock.
+    _gate(monkeypatch, _BENIGN)
+    assert _resume(run, regate=request_path) == 2
+    applied = bd._read_jsonl(run / bd._REVIEW_WORKLIST)[0]
+    assert (applied.get("program_regate") or {}).get(
+        "status") == "FRESH_REVIEW_REQUIRED"
+    assert applied["rtl_sha256"] != before[0]["rtl_sha256"]
 
 
 @fixtures._NEEDS_SIMULATOR
