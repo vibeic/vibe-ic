@@ -32,6 +32,7 @@ from __future__ import annotations
 import argparse
 from bisect import bisect_right
 import json
+import bisect
 import re
 import sys
 from pathlib import Path
@@ -552,33 +553,52 @@ def _prose_view(text: str) -> str:
 
 def _clause_spans(prose: str):
     """[(start, end, kind)] over `prose`; kind in {imperative, narration,
-    requirement}."""
+    requirement}. Sorted by start, non-overlapping.
+
+    LINEAR, and it has to be. This file already documents one hang in the front
+    door: a 1.25 MB prompt carrying 3000 module headers once cost 12.7 SECONDS
+    because a lazy span regex backtracked quadratically. The first version of
+    THIS function reintroduced the same class of bug from a different direction
+    — it located each sentence with `prose.find(piece, pos)` and, worse, the
+    scorer then scanned every clause for every hint match. Measured before the
+    repair, on a 1.2 MB prompt of 50 000 short sentences: 5.6 ms on the previous
+    router became 60 918 ms here — 61 seconds, an order of magnitude worse than
+    the hang this file was already hardened against. Offsets now come straight
+    from the separator matches, and the scorer binary-searches this list.
+    """
     out = []
     pos = 0
-    for piece in _SENTENCE_SPLIT.split(prose):
-        start = prose.find(piece, pos)
-        if start < 0:
-            start = pos
-        end = start + len(piece)
-        pos = end
-        stripped = piece.strip()
-        if not stripped:
-            continue
-        if _REQUIREMENT_SENTENCE.search(stripped) or \
-                _SUBORDINATE_OPENER.match(stripped):
-            kind = "requirement"
-        else:
-            first = re.match(r"\W*([A-Za-z]+)", stripped)
-            word = first.group(1).lower() if first else ""
-            kind = "imperative" if (
-                word in _IMPERATIVE_VERBS
-                or any(word.startswith(v) for v in ("optimi", "modif"))
-            ) else "narration"
-        out.append((start, end, kind))
-    return out
+    n = len(prose)
+    for sep in _SENTENCE_SPLIT.finditer(prose):
+        if sep.start() > pos:
+            out.append(_classify_clause(prose, pos, sep.start()))
+        pos = sep.end()
+    if pos < n:
+        out.append(_classify_clause(prose, pos, n))
+    return [c for c in out if c is not None]
+
+
+def _classify_clause(prose: str, start: int, end: int):
+    """One (start, end, kind) triple, or None for whitespace."""
+    piece = prose[start:end]
+    stripped = piece.strip()
+    if not stripped:
+        return None
+    if _REQUIREMENT_SENTENCE.search(stripped) or \
+            _SUBORDINATE_OPENER.match(stripped):
+        kind = "requirement"
+    else:
+        first = re.match(r"\W*([A-Za-z]+)", stripped)
+        word = first.group(1).lower() if first else ""
+        kind = "imperative" if (
+            word in _IMPERATIVE_VERBS
+            or any(word.startswith(v) for v in ("optimi", "modif"))
+        ) else "narration"
+    return (start, end, kind)
 
 
 _CLAUSE_WEIGHT = {"imperative": 2, "narration": 1, "requirement": 0}
+_MAX_CLAUSE_WEIGHT = max(_CLAUSE_WEIGHT.values())
 
 
 def _hint_action_scores(text: str):
@@ -587,19 +607,29 @@ def _hint_action_scores(text: str):
     A hint that matches only inside fenced code (and so has no prose span at
     all) keeps weight 0 — it is still a candidate, just the weakest kind of
     evidence, exactly as a requirement clause is.
+
+    The clause lookup is a BINARY SEARCH, not a scan, and the match loop stops
+    at the first imperative hit. Scanning every clause for every match is what
+    turned a 1.2 MB prompt into a 61-second hang (see `_clause_spans`).
     """
     prose = _prose_view(text)
     clauses = _clause_spans(prose)
+    starts = [c[0] for c in clauses]
     scores = {}
     for name, rx in _PROSE_HINTS:
         if not rx.search(text):
             continue
         best = 0
         for m in rx.finditer(prose):
-            for start, end, kind in clauses:
-                if start <= m.start() < end:
-                    best = max(best, _CLAUSE_WEIGHT[kind])
-                    break
+            i = bisect.bisect_right(starts, m.start()) - 1
+            if i >= 0:
+                start, end, kind = clauses[i]
+                if m.start() < end:
+                    w = _CLAUSE_WEIGHT[kind]
+                    if w > best:
+                        best = w
+                        if best == _MAX_CLAUSE_WEIGHT:
+                            break  # cannot be beaten; stop scanning
         scores[name] = best
     return scores
 

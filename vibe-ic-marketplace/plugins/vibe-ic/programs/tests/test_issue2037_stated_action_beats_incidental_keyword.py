@@ -158,3 +158,71 @@ class TestNoBenchmarkSpecificRouting:
         for banned in ("cvdp", "verilogeval", "rtllm", "sha256", "md5",
                        "hashlib", "Prob0", "register_interface"):
             assert banned.lower() not in src.lower(), banned
+
+
+class TestTheHintScorerStaysLinear:
+    """The front door must not be hangable — and my first fix made it hangable.
+
+    This file's own `_MODULE_HEAD` comment records a 1.25 MB prompt that once
+    cost 12.7 SECONDS because a lazy span regex backtracked quadratically, and
+    says plainly why that matters: the router takes a prompt string from
+    whoever is calling, so a pathological input is a hang in the front door.
+
+    The first version of the action-scope scorer reintroduced exactly that,
+    from a different direction — it scanned every clause for every hint match.
+    MEASURED on 8HD-8 before the repair, on a 1.2 MB prompt of 50 000 short
+    sentences each carrying a hint word: the previous router took 5.6 ms and
+    the new one took 60 918 ms. Sixty-one seconds, an order of magnitude worse
+    than the hang this file was already hardened against.
+
+    This test asserts the SHAPE of the cost, not a wall-clock budget: a
+    wall-clock threshold is a statement about the machine, and would either be
+    flaky on a loaded host or so loose it could not fail. Doubling the input
+    must roughly double the work. Quadratic behaviour quadruples it, which no
+    tolerance below 4x can hide.
+    """
+
+    SENTENCE = "The value is incorrect. "
+
+    def _time(self, n):
+        import time
+        text = self.SENTENCE * n
+        best = None
+        for _ in range(3):
+            t0 = time.perf_counter()
+            mod._hint_action_scores(text)
+            dt = time.perf_counter() - t0
+            best = dt if best is None else min(best, dt)
+        return best
+
+    def test_doubling_the_input_does_not_quadruple_the_work(self):
+        small = self._time(12500)
+        large = self._time(25000)
+        if small < 0.005:  # too fast to time reliably on this host
+            import pytest as _p
+            _p.skip(f"baseline {small*1000:.2f}ms is below the timing floor; "
+                    f"this measures shape, and shape needs a measurable base")
+        ratio = large / small
+        assert ratio < 3.0, (
+            f"doubling the input multiplied the work by {ratio:.2f}x "
+            f"({small*1000:.1f}ms -> {large*1000:.1f}ms). Linear is ~2x; "
+            f"~4x means the clause lookup went back to scanning.")
+
+    def test_a_pathological_prompt_still_returns(self):
+        """A 1.2 MB adversarial prompt must classify, not hang."""
+        import time
+        text = self.SENTENCE * 50000
+        t0 = time.perf_counter()
+        got = mod.classify_task_nature(text, has_context=False)
+        elapsed = time.perf_counter() - t0
+        assert got["nature"] is not None or got["needs_ai_parse"]
+        # Deliberately generous: this is a hang guard, not a speed budget. The
+        # pre-repair code took 61 SECONDS here, so 30 s cannot pass by accident
+        # while still tolerating a heavily loaded host.
+        assert elapsed < 30.0, f"took {elapsed:.1f}s on a 1.2 MB prompt"
+
+    def test_clause_lookup_is_a_binary_search_not_a_scan(self):
+        """The structural half: prove the mechanism, not just the timing."""
+        import inspect
+        src = inspect.getsource(mod._hint_action_scores)
+        assert "bisect" in src, src
