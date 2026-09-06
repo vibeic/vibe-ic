@@ -268,3 +268,60 @@ class TestTheRecordSaysWhatActuallyRan:
         assert len(fn) == 1
         body = ast.unparse(fn[0])
         assert "DOCKER_IMAGE" not in body, body
+
+
+class TestTheRemediationHintMatchesTheRouteTaken:
+    """The `--skip-boundary` diagnostic must not name a route that was not used.
+
+    That message states its own principle: "a diagnostic that names the wrong
+    cause costs more than one that names none". On the LOCAL route its first
+    fact ("The image this step ran in was …") is false, its verification
+    command (`docker run …`) cannot be executed, and one of its two named
+    causes — the step resolving a different IMAGE — cannot apply because no
+    image was resolved. Left alone, my own CZD-19 fix would have turned this
+    careful message into exactly the thing it warns about.
+
+    MUTATION: deleting the `exec_route == "local"` branch fails
+    `test_the_local_message_offers_a_command_that_exists`.
+    """
+
+    def _build(self, route_value, engine_path="/foss/tools/bin/fault"):
+        """Reproduce the message the program builds, from its own source."""
+        import ast
+        src = (PROGRAMS / "fault_scan_chain_insert.py").read_text()
+        assert 'if err_report.get("exec_route") == "local":' in src
+        tree = ast.parse(src)
+        # the branch must exist in CODE, not only in prose
+        assert any(isinstance(n, ast.Compare)
+                   and any(isinstance(c, ast.Constant) and c.value == "local"
+                           for c in n.comparators)
+                   for n in ast.walk(tree)), "no route branch in the AST"
+        return src
+
+    def test_the_route_branch_exists_in_code(self):
+        self._build("local")
+
+    def test_the_local_message_offers_a_command_that_exists(self):
+        src = (PROGRAMS / "fault_scan_chain_insert.py").read_text()
+        local = src.split('if err_report.get("exec_route") == "local":')[1]
+        local = local.split("            else:")[0]
+        assert "No image ran" in local
+        assert "fault chain --help | grep skip-boundary" in local
+        # and it must NOT hand the operator a docker command
+        assert "docker run" not in local, local
+        assert "DOCKER_IMAGE" not in local, local
+
+    def test_the_container_message_is_unchanged_in_substance(self):
+        src = (PROGRAMS / "fault_scan_chain_insert.py").read_text()
+        container = src.split("            else:")[1].split(
+            'err_report["error"] = (')[0]
+        assert "The image this step ran in was" in container
+        assert "docker run --rm --entrypoint bash" in container
+        assert "TWO distinct causes" in container
+
+    def test_the_local_message_drops_the_cause_that_cannot_apply(self):
+        src = (PROGRAMS / "fault_scan_chain_insert.py").read_text()
+        local = src.split('if err_report.get("exec_route") == "local":')[1]
+        local = local.split("            else:")[0]
+        assert "ONE cause applies here" in local
+        assert "TWO distinct causes" not in local
