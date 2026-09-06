@@ -80,6 +80,13 @@ _TERMINAL_GATE_STATES = frozenset(
 LOAD_SENSITIVE_LABELS = ("63x8 census freshness",)
 DEFAULT_JOBS = 8
 DEFAULT_STALL_GRACE_S = 300
+#: The knob every other layer of the hygiene tier already reads. Named here as
+#: a constant so the resolver below and the value forwarded into each shard are
+#: the same spelling, and a rename cannot leave one half behind.
+JOBS_ENV = "GATEKEEPER_HYGIENE_JOBS"
+#: What ONE unit of this stage's budget is worth, forwarded into every shard.
+#: See `stage_process_budget` for why it is 1 and not the budget itself.
+SHARD_DISPATCH_JOBS = "1"
 DEFAULT_POLL_S = 5
 _FRESH_PREFIX = "hygiene-fresh-"
 _OWNED_REAPER_PREFIX = "hygiene-owned-reaper-"
@@ -88,6 +95,94 @@ _PENDING_REAPERS: Dict[
 ] = {}
 _PENDING_REAPERS_LOCK = threading.Lock()
 _ACTIVE_REAPER_SCRATCH: set[Path] = set()
+
+
+class BudgetRefused(ValueError):
+    """The stage was given a job count it will not guess at."""
+
+
+def stage_process_budget(explicit: int | None = None,
+                         env: Dict[str, str] | None = None) -> int:
+    """The ONE number that bounds this whole stage's concurrent gate slots.
+
+    WHAT WAS WRONG (vibe-ic#2072)
+    -----------------------------
+    Three layers each chose a width and nobody multiplied them out.
+
+      * `tools/gatekeeper-land.sh:1988` reads `GATEKEEPER_HYGIENE_JOBS` (else
+        8), subtracts the other live lanes, and hands the remainder to ONE
+        `repo_hygiene_gates.sh`. Peak on the landing path is therefore the
+        budget, whole, and that shape is why its own comment can say "peak
+        concurrent process count in the tier is 8 in every shape".
+      * This module took `--jobs` from a CLI default of 8, never looked at the
+        env, and launched `jobs * 2` shards at once (both A/B arms).
+      * Each shard is a FRESH `repo_hygiene_gates.sh`, so each one re-defaulted
+        at `tools/ci/_gate_dispatch.sh:476` to 8 of its own.
+
+    `_gate_dispatch.sh` states the invariant it believed it had — "Exactly one
+    level of this script is parallel: the outermost" — and it is true of the
+    script and false of the stage, because every shard IS an outermost
+    invocation. 8 buckets x 2 arms x 8 = 128.
+
+    MEASURED, 8HD-4 (32 cores), 2026-09-07, at v1.18.35 on a host that started
+    at load1 5.05: a direct `repo_hygiene_parallel.py` reached 108 concurrent
+    dispatch-side processes, 207 descendants, and load1 96.3. The landing path
+    at the same tree holds 8. czharness measured the same shape on 8HD-9
+    (load ~19 -> 114).
+
+    A QUEUE, NOT A CAP THAT DROPS WORK
+    ----------------------------------
+    Nothing is skipped and no budget is shortened to compensate. Every shard
+    the plan produced is still submitted; the pool runs at most `budget` of
+    them at a time and the rest WAIT. So the fan-out is:
+
+        peak concurrent gate slots = (shards running) x (each shard's width)
+                                   = budget x 1
+
+    ONE UNIT PER SHARD, AND WHY THE SECOND FACTOR IS 1 RATHER THAN A SHARE.
+    `hygiene_shard_plan` is an LPT makespan split over IDENTICAL MACHINES: it
+    balances the buckets on the assumption that a shard works through its own
+    bucket one gate at a time. Width 1 is the execution the partition was
+    computed for, and `_gate_dispatch.sh:474` records that 1 "restores the
+    exact pre-#P4 execution path, gate for gate and byte for byte" — so it is
+    the one width whose per-gate behaviour is already known not to differ.
+    Giving each shard `budget // shards` instead would have to round, and a
+    rounded share either overshoots the cap or idles the machine.
+
+    THE SOURCE, IN ORDER, AND NEVER A GUESS.
+    An explicit `--jobs` (a caller who said a number) beats the environment,
+    which beats `DEFAULT_JOBS` — the same 8 that both `gatekeeper-land.sh` and
+    `_gate_dispatch.sh` already default to, so an unset env puts this stage at
+    the landing path's width rather than at a width of its own. A malformed
+    env is REFUSED, not rounded: `_gate_dispatch.sh:483` refuses "to guess how
+    much of this run to parallelise" and a stage that guessed where the
+    dispatcher refuses would reintroduce the divergence by the back door.
+    """
+    if explicit is not None:
+        if explicit < 1:
+            raise BudgetRefused("--jobs must be a positive integer")
+        return explicit
+    raw = (os.environ if env is None else env).get(JOBS_ENV)
+    if raw is None or raw == "":
+        return DEFAULT_JOBS
+    if not raw.strip().isdigit() or int(raw.strip()) < 1:
+        raise BudgetRefused(
+            f"{JOBS_ENV}={raw!r} is not a positive integer; refusing to guess "
+            f"how many concurrent gate slots this stage may hold")
+    return int(raw.strip())
+
+
+def shard_env(base: Dict[str, str]) -> Dict[str, str]:
+    """Give one shard its OWN width, which is one unit of the stage's budget.
+
+    The forward is what makes the budget above arithmetic rather than a wish.
+    Without it a shard inherits whatever the caller set — or, with the caller
+    setting nothing, re-defaults to 8 at `_gate_dispatch.sh:476` — and the
+    stage's peak becomes the PRODUCT of two widths that were each chosen as if
+    they were the only one.
+    """
+    base[JOBS_ENV] = SHARD_DISPATCH_JOBS
+    return base
 
 
 def _legacy_empty_without_process(reference: Dict[str, Any],
@@ -1191,7 +1286,13 @@ def _completion_message(doc: Dict[str, Any], elapsed: int) -> str:
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--summary-json", type=Path, required=True)
-    ap.add_argument("--jobs", type=int, default=DEFAULT_JOBS)
+    # DEFAULT None, NOT `DEFAULT_JOBS`: argparse cannot tell "the caller asked
+    # for 8" from "the caller said nothing", and that difference is the whole
+    # precedence in `stage_process_budget`. A literal default here silently
+    # outranked `GATEKEEPER_HYGIENE_JOBS` for every caller (vibe-ic#2072).
+    ap.add_argument("--jobs", type=int, default=None,
+                    help=f"concurrent gate slots for the WHOLE stage; "
+                         f"default ${JOBS_ENV} else {DEFAULT_JOBS}")
     ap.add_argument("--stall-grace", type=int, default=DEFAULT_STALL_GRACE_S,
                     help="seconds with neither output nor a completed gate "
                          "record before a shard is classified STALLED; this "
@@ -1201,9 +1302,19 @@ def main(argv=None) -> int:
     root = Path(__file__).resolve().parents[4]
     script = root / "tools" / "ci" / "repo_hygiene_gates.sh"
     profile_path = Path(__file__).resolve().parent / "hygiene_gate_profile.json"
-    if args.jobs < 1 or args.stall_grace < 1:
-        print("[ERROR] jobs and stall-grace must be positive", file=sys.stderr)
+    if args.stall_grace < 1:
+        print("[ERROR] stall-grace must be positive", file=sys.stderr)
         return 2
+    try:
+        budget = stage_process_budget(args.jobs)
+    except BudgetRefused as exc:
+        print(f"[ERROR] {exc}", file=sys.stderr)
+        return 2
+    # SAID OUT LOUD. The peak this stage is allowed to reach is not derivable
+    # from its output otherwise, and #2072 was a stage running at sixteen times
+    # the width its own log gave a reader any way to notice.
+    print(f"[INFO] hygiene stage process budget: {budget} concurrent gate "
+          f"slot(s); each shard runs at {SHARD_DISPATCH_JOBS}")
     started = time.monotonic()
     problems: List[str] = []
 
@@ -1236,7 +1347,7 @@ def main(argv=None) -> int:
                           if label not in set(sensitive)]
         try:
             profile = load_profile(profile_path)
-            jobs = min(args.jobs, len(primary_labels))
+            jobs = min(budget, len(primary_labels))
             buckets, unprofiled = plan(primary_labels, profile, jobs)
         except (OSError, ValueError, json.JSONDecodeError) as exc:
             print(f"[ERROR] cannot construct measured shard plan: {exc}",
@@ -1323,7 +1434,7 @@ def main(argv=None) -> int:
             for arm, arm_root in (("A", root), ("B", fresh_root)):
                 summary = tmp / f"summary-{arm}-{i}.json"
                 attest = tmp / f"attest-{arm}-{i}.jsonl"
-                env = os.environ.copy()
+                env = shard_env(os.environ.copy())
                 env["GATE_DISPATCH_ATTESTATION_FILE"] = str(attest)
                 if arm == "A" and progress_path is not None:
                     env["GATE_DISPATCH_PROGRESS_FILE"] = str(progress_path)
@@ -1345,7 +1456,13 @@ def main(argv=None) -> int:
                 stall_grace_s=args.stall_grace)
             return arm, i, bucket, summary, attest, rc, out, err
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=jobs * 2) as pool:
+        # `budget`, NOT `jobs * 2`. Every one of the 2 x `jobs` shard jobs is
+        # still SUBMITTED — `pool.map` drains the whole list and returns one
+        # result per row, so membership is untouched and nothing is dropped —
+        # but at most `budget` of them hold a gate slot at any moment and the
+        # rest queue. `jobs * 2` ran both arms of every bucket at once, which
+        # is where the 16 concurrent shards of #2072 came from.
+        with concurrent.futures.ThreadPoolExecutor(max_workers=budget) as pool:
             results = list(pool.map(run_worker, workers))
 
         # Resource wave 2.  The census owns its machine while each arm runs.
@@ -1361,7 +1478,7 @@ def main(argv=None) -> int:
             for arm, arm_root in (("A", root), ("B", fresh_root)):
                 summary = tmp / f"summary-{arm}-sensitive.json"
                 attest = tmp / f"attest-{arm}-sensitive.jsonl"
-                env = os.environ.copy()
+                env = shard_env(os.environ.copy())
                 env["GATE_DISPATCH_ATTESTATION_FILE"] = str(attest)
                 if arm == "A" and progress_path is not None:
                     env["GATE_DISPATCH_PROGRESS_FILE"] = str(progress_path)
@@ -1448,7 +1565,7 @@ def main(argv=None) -> int:
             host_labels = tmp / "labels-host.txt"
             host_labels.write_text(HOST_LABEL + "\n", encoding="utf-8")
             host_summary = tmp / "summary-host.json"
-            host_env = os.environ.copy()
+            host_env = shard_env(os.environ.copy())
             host_env["GATE_DISPATCH_ATTESTATION_FILE"] = str(merged_attest)
             host_env["VIBEIC_HOST_FRESH_ATTESTATIONS"] = str(fresh_attest)
             host_env["VIBEIC_POLICY_COHORT_LOCKED"] = "1"
