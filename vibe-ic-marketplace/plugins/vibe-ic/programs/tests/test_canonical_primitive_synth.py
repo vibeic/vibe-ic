@@ -1042,3 +1042,40 @@ def test_a_word_that_merely_contains_a_tag_is_not_a_directive():
     desc = (_INLINE_POS["barrel_shifter_right_8"]
             + "The implementation must not use a demux for the select.\n")
     assert rcs.detect_shape(desc) == "barrel_shifter_right_8"
+
+
+_WRAPPED_DIRECTIVES = {
+    "wrapped mid-phrase": "The implementation must not\ninstantiate any "
+                          "submodule.\n",
+    "wrapped before the tag": "This block is a single leaf cell: the "
+                              "implementation must not use a\ngenerate block.\n",
+    "wrapped after the marker": "The design must not\nuse any muxes at all.\n",
+    "on one line": "The implementation must not instantiate any submodule.\n",
+}
+
+
+@pytest.mark.parametrize("label,text", _WRAPPED_DIRECTIVES.items())
+def test_a_directive_survives_the_line_it_is_wrapped_on(label, text):
+    """Clauses are SENTENCES, not lines.
+
+    Measured before this: the identical prohibition, wrapped across two lines the
+    way any 72-column description wraps, recorded NO directive -- the marker
+    landed in one clause and the tag in the next -- and the fixed template was
+    emitted over it. The whole architecture layer was defeated by reformatting,
+    and this lane's own exposure fixture happened to keep the phrase on one line,
+    which is exactly why it looked like it worked."""
+    assert rcs.extract_architecture_directives(text), label
+    desc = _INLINE_POS["barrel_shifter_right_8"] + text
+    assert rcs.detect_shape(desc) is None, label
+    assert rcs.route_to_ai_reason(desc)["kind"] == "architecture_conflict"
+
+
+def test_flowing_lines_together_invents_no_directive():
+    """The control for the fix: joining lines could pair a marker in one sentence
+    with a tag in another. Over the whole canonical population it does not."""
+    for shape, desc in _INLINE_POS.items():
+        assert rcs.architecture_conflict(desc, shape) is None, shape
+        assert rcs.detect_shape(desc) == shape, shape
+    # and a marker and a tag in DIFFERENT sentences still make no directive
+    assert rcs.extract_architecture_directives(
+        "The core must not stall. A mux selects the output.") == []

@@ -1752,7 +1752,15 @@ _REQUIRE_MARKERS = ("must use", "must be implemented", "must be built",
                     "implemented using", "built from", "required to use",
                     "is required to")
 
-_CLAUSE_SPLIT = re.compile(r"[.;\n]+")
+# Clauses are SENTENCES, not lines. Splitting on newlines was measured
+# 2026-09-06 to defeat the whole layer with nothing but reformatting: "the
+# implementation must not\ninstantiate any submodule" put the marker in one
+# clause and the tag in the next, no directive was recorded, and the fixed
+# template was emitted over the stated prohibition -- the original defect,
+# reachable from any description wrapped at a column width. The lane's own
+# exposure fixture had the phrase on one line, which is why the layer looked
+# like it worked.
+_CLAUSE_SPLIT = re.compile(r"[.;]+")
 
 
 def _names(phrase: str, text: str) -> bool:
@@ -1777,7 +1785,8 @@ def extract_architecture_directives(desc_text: str) -> List[Tuple[str, str, str]
     mentions a mux or a register produces nothing.
     """
     out: List[Tuple[str, str, str]] = []
-    for clause in _CLAUSE_SPLIT.split(desc_text or ""):
+    flowed = re.sub(r"\s*\n\s*", " ", desc_text or "")
+    for clause in _CLAUSE_SPLIT.split(flowed):
         low = clause.lower()
         if not low.strip():
             continue
