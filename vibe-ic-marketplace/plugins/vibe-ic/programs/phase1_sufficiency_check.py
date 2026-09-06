@@ -236,7 +236,77 @@ def _width_completeness_advisories(doc_text: str, port_names: List[str]
     return advs
 
 
-def check(path: Path, doc_text: str = "") -> Dict[str, Any]:
+
+# ── #czl9docs — "no ports" has TWO causes, and only one is legitimate ──
+#
+# Measured: a docs-mode Phase-1 over an input whose FIRST lines are
+# `- input clk` / `- output cmd_out (4 bits)` emitted an L9 with 0 ports, and
+# every downstream gate that reads L9 ports then reported PASS over an empty
+# population. The sufficiency gate said `insufficient / MISSING ['ports']` and
+# the run continued, because the gate is ADVISORY and cannot tell the two
+# causes apart:
+#
+#   (a) the INPUT declares no ports  — a pure behavioural spec. Legitimate.
+#       The design is allowed through; the gap is a question for the user.
+#   (b) the INPUT declares ports and the extractor found none — an EXTRACTION
+#       GAP. Nothing downstream can be measured, and a PASS from a port-reading
+#       gate is a verdict over zero inputs.
+#
+# This function separates them by reading the design INPUT only (§4.05 — never
+# the L-docs' own claim about the input, never a golden/reference tree). The
+# evidence it accepts is Verilog/SV direction grammar and the port-table /
+# port-heading shapes that every extractor in this repo already keys on; it is
+# deliberately NARROW, because a false (b) blocks a run.
+_INPUT_PORT_EVIDENCE = (
+    # `- input clk`, `* output data_o`, `input [7:0] x`, `inout wire sda`
+    re.compile(r"(?im)^\s*(?:[-*+]\s+)?`?(?:input|output|inout)\b`?"
+               r"(?:\s+(?:wire|reg|logic))?"
+               r"(?:\s*\[[^\]\n]{1,40}\])?"
+               r"\s+`?[A-Za-z_][A-Za-z0-9_]{1,40}`?\b"),
+    # a `Ports:` / `Top-level signals:` / `Pin table` heading
+    re.compile(r"(?im)^\s*(?:[-*+]\s+|#{1,6}\s+)?\*{0,2}"
+               r"(?:top[-_ ]?level\s+|external\s+|chip[-_ ]?level\s+)?"
+               r"(?:ports?|pinouts?|pin\s+table|signals?|pins?|i/?o\s+ports?)"
+               r"\*{0,2}\s*[:.]?\s*$"),
+    # a markdown/RST table row carrying a direction cell
+    re.compile(r"(?im)^\s*\|[^|\n]{1,60}\|\s*(?:input|output|inout|i/o)\s*\|"),
+)
+_INPUT_TEXT_SUFFIXES = {".md", ".txt", ".rst", ".markdown", ".yaml", ".yml",
+                        ".json", ".v", ".sv", ".csv"}
+
+
+def input_declares_ports(project: Path) -> Optional[bool]:
+    """Does the design INPUT itself declare at least one port?
+
+    Returns True / False, or **None** when nothing readable was found — which
+    is NOT_MEASURED and must never be collapsed to False. §4.05: reads
+    ``input/`` and the extracted ``input_doc/`` mirror only.
+    """
+    if project is None:
+        return None
+    roots = [project / "input", project / "input_doc",
+             project / "phase1" / "input_doc",
+             project / "phase1" / "input_prompt"]
+    read_any = False
+    for root in roots:
+        if not root.is_dir():
+            continue
+        for f in sorted(root.rglob("*")):
+            if not f.is_file() or f.suffix.lower() not in _INPUT_TEXT_SUFFIXES:
+                continue
+            try:
+                text = f.read_text(errors="ignore")
+            except OSError:
+                continue          # unreadable — not evidence of absence
+            read_any = True
+            for rx in _INPUT_PORT_EVIDENCE:
+                if rx.search(text):
+                    return True
+    return False if read_any else None
+
+
+def check(path: Path, doc_text: str = "",
+          project: Optional[Path] = None) -> Dict[str, Any]:
     layers = _load_layers(path)
     port_names = _collect_port_names(layers)
     has_name = _name_present(layers)
@@ -270,6 +340,18 @@ def check(path: Path, doc_text: str = "") -> Dict[str, Any]:
     # VERDICT blocks on REQUIRED facts only (name + at least one port). The
     # advisory gaps are reported for the agent's judgment, not auto-blocked.
     sufficient = not missing_required
+    # #czl9docs — separate the two causes of "no ports" (see
+    # `input_declares_ports`). `None` is NOT_MEASURED and stays None.
+    ports_in_input = input_declares_ports(project) if project else None
+    extraction_gap = (not has_ports) and ports_in_input is True
+    if has_ports:
+        ports_reason = "ports_extracted"
+    elif ports_in_input is True:
+        ports_reason = "extraction_gap"
+    elif ports_in_input is False:
+        ports_reason = "input_declares_no_ports"
+    else:
+        ports_reason = "NOT_MEASURED"
     questions = [i["question"] for i in missing_required if i["question"]]
     advisories = [i["question"] for i in missing_conditional if i["question"]]
     # width-completeness advisories from the general engine — surfaced for the
@@ -278,6 +360,10 @@ def check(path: Path, doc_text: str = "") -> Dict[str, Any]:
     advisories += [a["question"] for a in width_advisories]
     return {
         "verdict": "sufficient" if sufficient else "insufficient",
+        # #czl9docs
+        "ports_declared_in_input": ports_in_input,
+        "ports_reason": ports_reason,
+        "extraction_gap": extraction_gap,
         "sequential": sequential,
         "layers_seen": sorted(layers.keys()),
         "port_count": len(port_names),
@@ -297,6 +383,19 @@ def _fmt(rep: Dict[str, Any]) -> str:
              f"ports={rep['port_count']} sequential={rep['sequential']}"]
     if rep["missing_required"]:
         lines.append(f"  MISSING required: {rep['missing_required']}")
+    # #czl9docs — say WHICH cause, so a reader never has to guess whether a
+    # port-less L9 came from a behavioural spec or from a broken extractor.
+    if rep.get("ports_reason") == "extraction_gap":
+        lines.append("  EXTRACTION GAP: the design INPUT declares ports and "
+                     "the L documents carry none — every downstream gate that "
+                     "reads a port list would report a verdict over ZERO "
+                     "ports. This is NOT a port-less design.")
+    elif rep.get("ports_reason") == "input_declares_no_ports":
+        lines.append("  the design INPUT declares no ports either — a purely "
+                     "behavioural specification; allowed through, ask the user.")
+    elif rep.get("ports_reason") == "NOT_MEASURED":
+        lines.append("  NOT_MEASURED: no readable design input was found, so "
+                     "whether the input declares ports is unknown.")
     if rep["missing_conditional"]:
         lines.append(f"  MISSING conditional: {rep['missing_conditional']}")
     for q in rep["questions_for_user"]:
@@ -313,6 +412,14 @@ def main(argv: Optional[List[str]] = None) -> int:
                     help="write the full sufficiency report here")
     ap.add_argument("--strict", action="store_true",
                     help="exit 1 when a REQUIRED fact is missing (block)")
+    ap.add_argument("--project", type=Path, default=None,
+                    help="the project root — reads input/ + input_doc/ to tell "
+                         "an EXTRACTION GAP (input declares ports, L docs carry "
+                         "none) from a genuinely port-less behavioural spec")
+    ap.add_argument("--strict-extraction-gap", action="store_true",
+                    help="exit 1 ONLY on the extraction gap (input declares "
+                         "ports, L docs carry none). A port-less input still "
+                         "exits 0.")
     ap.add_argument("--doc", type=Path, default=None,
                     help="the original design-doc / prompt text — runs the general "
                          "completeness engine to surface unstated-width advisories")
@@ -323,12 +430,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     doc_text = ""
     if args.doc and args.doc.is_file():
         doc_text = args.doc.read_text(errors="ignore")
-    rep = check(args.layers, doc_text=doc_text)
+    rep = check(args.layers, doc_text=doc_text, project=args.project)
     if args.json:
         args.json.parent.mkdir(parents=True, exist_ok=True)
         args.json.write_text(json.dumps(rep, indent=2, ensure_ascii=False))
     print(_fmt(rep))
     if args.strict and rep["missing_required"]:
+        return 1
+    if args.strict_extraction_gap and rep.get("extraction_gap"):
         return 1
     return 0
 
