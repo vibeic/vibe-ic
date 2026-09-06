@@ -207,3 +207,249 @@ def test_a_family_with_no_measured_capacitance_constants_splits_nothing():
         devices, exprs, {}, maxima, minima, {})
     assert devs is devices and out_exprs is exprs
     assert recs == [] and refusals == []
+
+
+# ── the sizing itself is the PDK's own two-term model ────────────────────
+#
+# MEASURED across u_hawaii_adc's thirteen capacitors, at the library drawn
+# width and this family's measured constants. `l = C / (carea * w)` makes the
+# AREA term equal the target and the device's own fringe then adds on top, so
+# every capacitor realised MORE than it was sized for:
+#
+#     device      drawn l    target fF   realised fF   error
+#     ci1 / ci2   629.081     9436.215     9487.342    +0.542%
+#     c_cmc       245.341     3680.115     3700.542    +0.555%
+#     caz          34.745      521.178      524.758    +0.687%
+#     cc (ldo)     10.000      150.000      151.600    +1.067%
+#     cs / cf       3.475       52.118       53.196    +2.068%
+#
+# — every one outside the 0.1% this file holds, and NOT UNIFORM, so a RATIO
+# between two of them carried the difference between the two ends.
+
+_SIZING_ENV = {
+    "noise_budget_factor": 12.0, "kt_j_300k": 4.14e-21,
+    "farad_to_ff": 1.0e15, "enob": 12.0, "osr": 64.0, "vref": 1.2,
+    "cap_area_ff_per_um2": CAREA, "cap_perim_ff_per_um": CPERI,
+    "w_cap": 10.0,
+}
+
+
+def _sized(expr, env=None):
+    e = dict(_SIZING_ENV, **(env or {}))
+    return A2._safe_eval(expr, e)
+
+
+def test_the_sized_length_realises_its_target_on_the_pdks_own_model():
+    """GREEN. Whatever capacitance the entry asks for, the length emitted for
+    it realises that capacitance — not that capacitance plus a fringe."""
+    for scale in (1.0, 0.25, 40.0, 175.0):
+        ff = scale * _sized(A2.SAMPLING_CAP_FF_EXPR)
+        l = _sized(A2.cap_l_expr(f"{scale} * ({A2.SAMPLING_CAP_FF_EXPR})"))
+        got = A2.capacitance_ff(10.0, l, CAREA, CPERI)
+        assert abs(got - ff) / ff < 1e-12, (scale, ff, got)
+
+
+def test_the_area_only_sizing_is_outside_the_tolerance_this_file_holds():
+    """THE MUTATION ARM. Revert to `C / (carea * w)` — the expression this
+    library used — and every one of the block's capacitors falls outside the
+    tolerance again. That is what makes the two-term form a fix and not a
+    refactor."""
+    worst = 0.0
+    for scale in (1.0, 0.25, 40.0, 175.0):
+        ff = scale * _sized(A2.SAMPLING_CAP_FF_EXPR)
+        area_only = ff / (CAREA * 10.0)          # the old expression
+        got = A2.capacitance_ff(10.0, area_only, CAREA, CPERI)
+        worst = max(worst, abs(got - ff) / ff)
+    assert worst > A2.CAP_SPLIT_TOLERANCE, worst
+
+
+def test_the_error_the_old_form_left_was_not_uniform():
+    """...and so could not have been absorbed into a constant. The smallest
+    capacitor on the block carried about four times the error of the largest,
+    and a loop coefficient is a RATIO of two of them."""
+    errs = []
+    for scale in (0.25, 175.0):                  # cs/cf and ci
+        ff = scale * _sized(A2.SAMPLING_CAP_FF_EXPR)
+        area_only = ff / (CAREA * 10.0)
+        got = A2.capacitance_ff(10.0, area_only, CAREA, CPERI)
+        errs.append(abs(got - ff) / ff)
+    assert max(errs) / min(errs) > 3.0, errs
+
+
+def test_every_entry_that_sizes_a_capacitor_declares_the_constants_it_needs():
+    """The entry can no longer be sized on a family that carries the area
+    density and not the perimeter one, so it REFUSES BY NAME through the
+    admission machinery it already had, instead of resolving a term to
+    nothing and emitting a capacitor sized on a missing number.
+
+    Derived, not spot-checked: every library entry whose device expressions
+    name a constant must declare that constant, and this is the arm that
+    catches the next one too."""
+    for name, lib in A2.LIBRARY.items():
+        exprs = " ".join(str(e.get("expr", ""))
+                         for e in (lib.get("device_param_exprs") or []))
+        for grp in (lib.get("stages") or {}).get("groups", []) \
+                if isinstance(lib.get("stages"), dict) else []:
+            exprs += " " + " ".join(str(e.get("expr", ""))
+                                    for e in (grp.get("param_exprs") or []))
+        declared = set(lib.get("requires_pdk_measured") or [])
+        for const in ("cap_area_ff_per_um2", "cap_perim_ff_per_um"):
+            if const in exprs:
+                assert const in declared, (
+                    f"library entry `{name}` sizes a device with `{const}` "
+                    f"and does not declare it in requires_pdk_measured, so a "
+                    f"family that carries no such constant would be sized "
+                    f"against a name that resolves to nothing instead of "
+                    f"being refused by name")
+
+
+def test_the_delta_sigma_entry_declares_the_perimeter_constant():
+    """The specific one this change added, pinned so a revert is loud."""
+    assert "cap_perim_ff_per_um" in A2.LIBRARY["delta_sigma"][
+        "requires_pdk_measured"]
+
+
+# ── a capacitor smaller than its own fringe ──────────────────────────────
+#
+# The two-term model has a floor the area-only one did not: inverting
+# C = carea*w*l + 2*cperi*(w+l) for `l` gives a NON-POSITIVE length exactly
+# when the target is at or below 2*cperi*w — the capacitance a device of that
+# WIDTH already has before it has any length. `C / (carea * w)` returns a
+# small positive number there instead, so the old sizing could emit a
+# capacitor nobody can build and nothing upstream of A5 would notice.
+
+def _fringe_floor(w=10.0):
+    return 2.0 * CPERI * w
+
+
+def test_a_capacitor_below_its_own_fringe_is_refused_by_name():
+    """RED, and the message names the CAUSE — the drawn width — not the
+    symptom A5 would report six steps later ("below lmin")."""
+    devices = [{"name": "ctiny", "role": "cap", "w": 10.0,
+                "nets": ["a", "b"]}]
+    target = _fringe_floor() * 0.875           # below the floor
+    exprs = [{"device": "ctiny", "param": "l",
+              "expr": f"({target} - 2*{CPERI}*10.0) / (({CAREA}*10.0) "
+                      f"+ 2*{CPERI})"}]
+    maxima = {"cap": {"max_length_um": LMAX, "max_width_um": WMAX}}
+    minima = {"cap": {"min_width_um": LMIN}}
+    measured = {"cap_area_ff_per_um2": CAREA, "cap_perim_ff_per_um": CPERI}
+    devs, out_exprs, recs, refusals = A2.split_oversize_capacitors(
+        devices, exprs, {}, maxima, minima, measured)
+    assert recs == []
+    assert len(refusals) == 1, refusals
+    why = refusals[0]
+    assert "ctiny" in why
+    assert "10.0u wide" in why, why
+    assert "DRAWN WIDTH" in why, why
+    assert devs == devices and out_exprs == exprs
+
+
+def test_the_area_only_form_could_not_have_surfaced_it():
+    """THE MUTATION ARM, and the reason this guard arrives WITH the two-term
+    sizing rather than before it: for the same target the old expression
+    returns a small POSITIVE length, so there was nothing to refuse."""
+    target = _fringe_floor() * 0.875
+    area_only = target / (CAREA * 10.0)
+    two_term = (target - 2 * CPERI * 10.0) / (CAREA * 10.0 + 2 * CPERI)
+    assert area_only > 0
+    assert two_term <= 0
+
+
+def test_every_capacitor_of_the_measured_blocks_clears_the_fringe_floor():
+    """THE CONTROL. The guard must not fire on the designs this landing is
+    measured on: the smallest capacitor on either block is 52 fF against a
+    0.8 fF floor at the same drawn width, which is a factor of 65."""
+    smallest_ff = 52.1178                       # cs / cf, both blocks
+    assert smallest_ff > _fringe_floor() * 10, (smallest_ff, _fringe_floor())
+
+
+def test_the_refusal_reaches_the_caller_as_a_named_exception():
+    """It must STOP the topology, not be recorded beside it: an IR that
+    reaches disk carrying one is a topology the flow goes on to draw, and the
+    A2 gate measures vocabulary."""
+    assert issubclass(A2.CapacitorNotRealisable, ValueError)
+    exc = A2.CapacitorNotRealisable(["ctiny: too small"])
+    assert exc.refusals == ["ctiny: too small"]
+    assert "ctiny" in str(exc)
+
+
+# ── the split on EVERY family that can reach it ─────────────────────────
+#
+# The split is measured end-to-end on one family, because one family is what
+# u_hawaii_adc targets. The registry now states a capacitor ceiling for three,
+# so the solver is LIVE on families no design has driven it with — and their
+# numbers are not close: sky130A's perimeter density is four times
+# ihp-sg13g2's, which is exactly the term the two-term solve turns on. This
+# exercises it on each family's OWN constants and OWN ceiling, so "live but
+# never exercised" is at least not true at the unit level.
+
+def _family_numbers():
+    """(family, carea, cperi, lmax, wmax, lmin) for every registry family that
+    carries BOTH a capacitor ceiling and the measured constants to solve
+    against. Derived — a family added to the registry later is covered with no
+    change here."""
+    import json as _json
+    reg = _json.loads((PROGRAMS_JSON := A2.__file__.rsplit("/", 1)[0]
+                       + "/pdk_registry.json") and open(PROGRAMS_JSON).read())
+
+    def find(o, k):
+        if isinstance(o, dict):
+            if k in o:
+                return o[k]
+            for v in o.values():
+                r = find(v, k)
+                if r is not None:
+                    return r
+        return None
+
+    out = []
+    for ent in reg["pdks"]:
+        name = ent.get("name")
+        _f, roles = M.layout_maxima(name)
+        lmax, wmax = M.max_length_um(roles, "cap"), M.max_width_um(roles, "cap")
+        carea, cperi = find(ent, "cap_area_ff_per_um2"), find(ent, "cap_perim_ff_per_um")
+        if lmax is None or carea is None:
+            continue
+        rec = (ent.get("analog_device_layout_maxima") or {}).get("roles", {})
+        out.append((name, float(carea), float(cperi or 0.0), lmax, wmax,
+                    rec.get("cap", {}).get("device")))
+    return out
+
+
+def test_the_split_holds_on_every_family_that_can_reach_it():
+    """Each family's own constants, own ceiling, across the range: under it,
+    exactly at it, just over, and far over."""
+    fams = _family_numbers()
+    assert len(fams) >= 2, (
+        f"only {len(fams)} family can reach the split; this arm is meant to "
+        f"cover the ones no design drives")
+    for name, carea, cperi, lmax, wmax, device in fams:
+        for l in (lmax * 0.1, lmax, lmax * 3.7, lmax * 21.0):
+            n, lu, why = A2.unit_capacitor_split(
+                10.0, l, max_l=lmax, max_w=wmax, min_l=None,
+                carea=carea, cperi=cperi)
+            assert n is not None, (name, l, why)
+            assert lu <= lmax + 1e-9, (name, l, n, lu)
+            assert lu > 0, (name, l, n, lu)
+            target = A2.capacitance_ff(10.0, l, carea, cperi)
+            got = n * A2.capacitance_ff(10.0, lu, carea, cperi)
+            assert abs(got - target) <= A2.CAP_SPLIT_TOLERANCE * target, (
+                name, l, n, lu, target, got)
+            if l <= lmax:
+                assert n == 1, (
+                    f"{name}: a capacitor at or under the ceiling must not be "
+                    f"split, and this one became {n} units")
+
+
+def test_a_family_that_cannot_reach_the_split_is_excluded_by_MEASUREMENT():
+    """The other half: a family carrying a ceiling but no measured
+    capacitance constants cannot be solved for, and is left out of the set
+    above by that fact rather than by a name in this file."""
+    reachable = {f[0] for f in _family_numbers()}
+    _fam, roles = M.layout_maxima("gf180mcuD")
+    assert roles.get("cap"), "gf180mcuD should carry a ceiling"
+    assert "gf180mcuD" not in reachable, (
+        "gf180mcuD has no measured capacitance constants, so it must not be "
+        "in the solvable set; if it now is, someone characterised it and this "
+        "arm should be re-read rather than deleted")

@@ -401,8 +401,63 @@ SAMPLING_CAP_FF_EXPR = (
 #: role map, so neither can drift from the other.
 CAP_ROLE = "cap"
 
-SAMPLING_CAP_L_EXPR = (
-    "(" + SAMPLING_CAP_FF_EXPR + ") / (cap_area_ff_per_um2 * w_cap)")
+#: A CAPACITANCE in fF -> the DRAWN LENGTH that realises it, at the library
+#: drawn width, on the PDK's own two-term model.
+#:
+#: THE DEFECT THIS CLOSES, MEASURED (u_hawaii_adc / ihp-sg13g2, image 0.3.46).
+#: This expression used to be `C / (carea * w)` — AREA ALONE — and the PDK's
+#: own model, which `pdk_analog_characterize` measures and this registry
+#: carries as `cap_area_ff_per_um2` AND `cap_perim_ff_per_um`, is
+#:
+#:     C = carea * w * l + 2 * cperi * (w + l)
+#:
+#: A length from `C / (carea * w)` makes the AREA term equal the target and
+#: then the device's own fringe adds on top, so every capacitor this library
+#: sized realised MORE than it asked for — by exactly 2*cperi*(w+l).
+#: Inverting the real model instead:
+#:
+#:     l = (C - 2 * cperi * w) / (carea * w + 2 * cperi)
+#:
+#: The error the area-only form leaves is NOT UNIFORM, which is why it cannot
+#: be absorbed into a constant: it is 2*cperi*(w+l)/C, so it falls as the
+#: device grows. MEASURED across u_hawaii_adc's own thirteen capacitors, at
+#: the library drawn width and this family's measured constants:
+#:
+#:     ci1 / ci2  629.081 um   target 9436.215 fF   realised 9487.342  +0.542%
+#:     c_cmc      245.341 um   target 3680.115 fF   realised 3700.542  +0.555%
+#:     caz         34.745 um   target  521.178 fF   realised  524.758  +0.687%
+#:     cc  (ldo)   10.000 um   target  150.000 fF   realised  151.600  +1.067%
+#:     cs / cf      3.475 um   target   52.118 fF   realised   53.196  +2.068%
+#:
+#: every one of them outside the 0.1% this file holds elsewhere, and a RATIO
+#: between two of them — which is what a switched-capacitor loop coefficient
+#: IS — carries the difference between the two ends, about 1.5%. With the
+#: model inverted the realised value matches the target to 1e-14 relative on
+#: all thirteen.
+#:
+#: AND WHY THIS NEEDED A SIMULATOR TO CATCH, when the flow already runs a
+#: sign-off LVS that compares device parameters. MEASURED: with the layout
+#: drawn from the correct netlist and ONE capacitor made 0.5% longer on the
+#: schematic side — the smallest error the area-only form left — the PDK's own
+#: LVS answers `mismatch`. So the deck is not blind to capacitor value; it is
+#: blind to THIS defect, and could not be otherwise. A5 draws FROM the
+#: netlist, so both sides of the comparison carry the same wrong value and
+#: agree perfectly. LVS asks "is the layout what the netlist says?"; this was
+#: a defect in what the netlist ASKED FOR, one step upstream of anything that
+#: comparison can see. That is why the arbiter here is ngspice on the PDK's
+#: own model, and why fixing it moved no verdict in the flow.
+#:
+#: Every capacitor below is therefore expressed by its CAPACITANCE and
+#: converted here, rather than as a multiple of another capacitor's LENGTH.
+#: Under the old model those were the same statement; under the real one only
+#: the first is what the entry's own prose says.
+def cap_l_expr(ff_expr: str) -> str:
+    """The drawn-length expression realising `ff_expr` femtofarads."""
+    return (f"(({ff_expr}) - 2 * cap_perim_ff_per_um * w_cap) "
+            f"/ (cap_area_ff_per_um2 * w_cap + 2 * cap_perim_ff_per_um)")
+
+
+SAMPLING_CAP_L_EXPR = cap_l_expr(SAMPLING_CAP_FF_EXPR)
 
 #: The OTA's load, in farads: the integrating and compensation capacitors,
 #: expressed against the sampling capacitor the noise budget already fixed.
@@ -1662,24 +1717,24 @@ LIBRARY: Dict[str, Dict[str, Any]] = {
         "spec_knobs": [],
         "device_param_exprs": [
             {"device": "caz", "param": "l",
-             "expr": ("autozero_over_sampling_cap * ("
-                      + SAMPLING_CAP_L_EXPR + ")"),
+             "expr": cap_l_expr("autozero_over_sampling_cap * ("
+                                + SAMPLING_CAP_FF_EXPR + ")"),
              "rationale": ("the auto-zero capacitor has to DOMINATE the "
                            "quantiser's input capacitance or the level it "
                            "stores reaches the latch divided down. Measured "
                            "at one sampling capacitor: a transfer of 0.13, "
                            "and a decision that never changed")},
             {"device": "c_cmc", "param": "l",
-             "expr": ("miller_fraction_of_load * ("
-                      + SAMPLING_CAP_L_EXPR + ") * "
-                      + _LOAD_OVER_CS_DERIVED_EXPR),
+             "expr": cap_l_expr("miller_fraction_of_load * ("
+                                + SAMPLING_CAP_FF_EXPR + ") * "
+                                + _LOAD_OVER_CS_DERIVED_EXPR),
              "rationale": ("the buffer is the integrator OTA instantiated a "
                            "third time, so its compensation is the same "
                            "quantity the integrators' own is — derived, not "
                            "the number that happened to be right for an "
                            "earlier declaration")},
             {"device": "c_vcm", "param": "l",
-             "expr": "40.0 * (" + SAMPLING_CAP_L_EXPR + ")",
+             "expr": cap_l_expr("40.0 * (" + SAMPLING_CAP_FF_EXPR + ")"),
              "rationale": ("four unit sampling/DAC capacitors commutate onto "
                            "vcm every clock; holding the disturbance to a "
                            "tenth of the signal takes about forty of those "
@@ -1740,7 +1795,13 @@ LIBRARY: Dict[str, Dict[str, Any]] = {
         # that has not been characterised for them rather than sizing
         # against a number from somewhere else. `pdk_analog_characterize.py`
         # is what closes that, and the gap artefact says so.
+        # `cap_perim_ff_per_um` joins the list the day the sizing stopped
+        # modelling a capacitor by its area alone: a family that carries the
+        # area density and not the perimeter one can no longer be sized, and
+        # is refused BY NAME here rather than sized on a term that resolves
+        # to nothing.
         "requires_pdk_measured": ["cap_area_ff_per_um2",
+                                  "cap_perim_ff_per_um",
                                   "rsheet_ohm_per_sq",
                                   "vth_n_extracted_v"],
         "requires_domain": {
@@ -2275,13 +2336,14 @@ LIBRARY: Dict[str, Dict[str, Any]] = {
                                "drawn width, from the sampled kT/C budget "
                                "of the declared ENOB / OSR / Vref")},
                 {"device": "ci{i}", "param": "l",
-                 "expr": "(" + SAMPLING_CAP_L_EXPR + ") / {coeff}",
+                 "expr": cap_l_expr("(" + SAMPLING_CAP_FF_EXPR
+                                    + ") / {coeff}"),
                  "rationale": ("cs/ci IS this stage's loop coefficient, so "
                                "the integrating capacitor is the sampling "
                                "capacitor divided by it")},
                 {"device": "cc{i}", "param": "l",
-                 "expr": ("miller_fraction_of_load * ("
-                          + SAMPLING_CAP_L_EXPR + ") / {coeff}"),
+                 "expr": cap_l_expr("miller_fraction_of_load * ("
+                                    + SAMPLING_CAP_FF_EXPR + ") / {coeff}"),
                  "rationale": ("Miller compensation is a fraction of the "
                                "LOAD it has to dominate, and the load is "
                                "this stage's integrating capacitor. Held at "
@@ -3935,6 +3997,17 @@ def unit_capacitor_split(w_um: float, l_um: float, *,
         f"{target:.6g}fF at width {w_um}u")
 
 
+class CapacitorNotRealisable(ValueError):
+    """A capacitor this entry sizes cannot be drawn on this PDK at all.
+
+    Carries the per-device reasons so the honest-gap artefact names each one;
+    see `split_oversize_capacitors`."""
+
+    def __init__(self, refusals: List[str]) -> None:
+        super().__init__("; ".join(refusals))
+        self.refusals = list(refusals)
+
+
 def split_oversize_capacitors(devices: List[Dict[str, Any]],
                              param_exprs: List[Dict[str, Any]],
                              env: Dict[str, Any],
@@ -3990,6 +4063,31 @@ def split_oversize_capacitors(devices: List[Dict[str, Any]],
             # NOT MEASURED, never a default: an expression this pass cannot
             # resolve is one it has nothing to say about, and it is left
             # exactly as it was for the pass that can.
+            out_devs.append(d)
+            continue
+        if l_um <= 0:
+            # SMALLER THAN ITS OWN FRINGE. Inverting the PDK's two-term model
+            # for `l` yields a non-positive length exactly when the target
+            # capacitance is at or below `2 * cperi * w` — the capacitance a
+            # device of that WIDTH already has before it has any length at
+            # all. That is a real statement about the drawn width, not an
+            # arithmetic accident, and it is the one case the area-only form
+            # this sizing replaced could never surface: `C / (carea * w)`
+            # returns a small POSITIVE number there and a netlist carrying it
+            # is a capacitor nobody can build.
+            #
+            # Refused BY NAME here, with the width that makes it impossible,
+            # rather than emitted for A5 to reject later as "below lmin" — a
+            # message that names the symptom and not the cause.
+            floor = 2.0 * cperi * float(w)
+            refusals.append(
+                f"{d.get('name')}: this entry sizes it to "
+                f"{capacitance_ff(float(w), l_um, float(carea), cperi):.6g}fF, "
+                f"at or below the {floor:.6g}fF a device {w}u wide already "
+                f"has from its own perimeter, so no positive drawn length "
+                f"realises it at that width — the DRAWN WIDTH has to come "
+                f"down, which is a library choice this pass will not make "
+                f"for it")
             out_devs.append(d)
             continue
         n, lu, why = unit_capacitor_split(
@@ -4260,6 +4358,14 @@ def build_ir(block: str, btype: str, entry: Dict[str, Any],
     devices, param_exprs, splits, split_refusals = split_oversize_capacitors(
         devices, param_exprs, split_env, role_maxima, role_minima,
         dict(measured_params or {}))
+    # A refusal here is a device this entry cannot realise on this PDK. It is
+    # recorded in the provenance below AND raised, because an IR that reaches
+    # disk carrying one is a topology the flow will go on to draw: the A2 gate
+    # measures vocabulary and would pass it, and A5 would reject the geometry
+    # six steps later with a message about a minimum rather than about the
+    # sizing that produced it.
+    if split_refusals:
+        raise CapacitorNotRealisable(split_refusals)
 
     ir: Dict[str, Any] = {
         "ir_schema": IR_SCHEMA,
@@ -4895,10 +5001,18 @@ def emit_for_block(project: Path, entry: Dict[str, Any],
     if refusals:
         return _gap("ENTRY_REQUIREMENTS_NOT_MET", refusals)
 
-    ir = build_ir(name, btype, entry, lib, spec_values, spec_path, project,
-                  fam, params, role_minima, _minima.minima_source(pdk),
-                  measured, measured_prov,
-                  role_maxima, _minima.maxima_source(pdk))
+    try:
+        ir = build_ir(name, btype, entry, lib, spec_values, spec_path, project,
+                      fam, params, role_minima, _minima.minima_source(pdk),
+                      measured, measured_prov,
+                      role_maxima, _minima.maxima_source(pdk))
+    except CapacitorNotRealisable as exc:
+        # Same shape as an admission refusal, and for the same reason: a
+        # topology whose sizing this PDK cannot realise must not reach disk.
+        return _gap("DEVICE_NOT_REALISABLE_ON_TARGET_PDK",
+                    [{"requirement": "capacitor drawable at the library "
+                                     "drawn width", "detail": r}
+                     for r in exc.refusals])
     md = render_md(ir, lib, fam, params)
     bdir.mkdir(parents=True, exist_ok=True)
     md_path.write_text(md, encoding="utf-8")

@@ -355,6 +355,20 @@
           }
         }
       },
+      "analog_device_layout_maxima": {
+        "_comment": "Same schema, same reader and same generic role tokens as `analog_device_layout_minima`; no code path is specific to this family. A role appears ONLY where this PDK's OWN gencell states a maximum for the device that role resolves to \u2014 a role whose gencell states none, or whose flavours state DIFFERENT ones, is absent, which means NOT MEASURED and bounds nothing. A neighbouring PDK's number is never borrowed.",
+        "_measured_from": "libs.tech/magic/sky130A.tcl:1983 \u2014 `lmax 30.0 wmax 30.0` in `sky130::sky130_fd_pr__cap_mim_m3_1_defaults` (:1980). MEASURED over EVERY capacitor-class gencell this file defines, of which there are SIX: the two parameterised MiM flavours state the SAME 30.0/30.0 (`..._cap_mim_m3_2` at :1987 states it at :1989), and the other four are `cap_vpp_*` vertical-parallel-plate cells whose geometry is FIXED and named in the cell (04p4x04p6, 08p6x07p8, 11p5x11p7 x2) \u2014 they state no lmin, wmin, lmax or wmax at all, so they are not sizeable and neither bound nor contradict the ceiling recorded here. The `cap` role is therefore unambiguous on this family.",
+        "_note": "Roles deliberately ABSENT here, each because this PDK's own tcl leaves them silent or states something that is not a ceiling \u2014 not because nobody looked. MEASURED over EVERY gencell this file defines: `res` \u2014 of 22 resistor gencells only 10 state a wmax, and in every one of those ten wmax EQUALS wmin (0.35/0.35, 0.69/0.69, 1.41/1.41, 2.85/2.85, 5.73/5.73 for sky130_fd_pr__res_high_po_0p35 / _0p69 / _1p41 / _2p85 / _5p73 at :2892.. and sky130_fd_pr__res_xhigh_po_0p35 / _0p69 / _1p41 / _2p85 / _5p73 at :2940..), so the number is a FIXED drawn width \u2014 the flavour name IS the width \u2014 and not a ceiling a role could be bounded by; the generic poly resistor this family's `res` role resolves to (res_generic_po at :2875) states neither. `nmos`/`pmos` \u2014 no fet gencell in this file states a maximum at all.",
+        "roles": {
+          "cap": {
+            "max_width_um": 30.0,
+            "max_length_um": 30.0,
+            "device": "sky130_fd_pr__cap_mim_m3_1",
+            "rule": "cap_mim_m3_1.lmax/wmax",
+            "rule_text": "lmax 30.0 wmax 30.0"
+          }
+        }
+      },
       "analog_device_layout_minima": {
         "_comment": "vibe-ic#1952 — DRAWN-geometry minima, keyed by the GENERIC device ROLE tokens the analog IR uses (res/nmos/pmos/cap), so the A2 topology library can FLOOR its geometry to what the target process will actually let it draw instead of carrying one static constant across every PDK. Read via programs/pdk_analog_layout_minima.py, which contains no family name. A role is listed ONLY when its rule was read out of this PDK's own record; an ABSENT role means NOT MEASURED (floors nothing), never 'no minimum exists'.",
         "_measured_from": "libs.tech/magic/sky130A.tech:4831 — `width mrp1 330 \"mrp1 resistor width < %d (poly.3)\"`; 330 centimicrons = 0.33 um. `mrp1` is the drawn layer magic extracts as `sky130_fd_pr__res_generic_po` (:6068 `device rsubcircuit sky130_fd_pr__res_generic_po mrp1 *poly l=l w=w`), the generic poly resistor this PDK's device_models declares.",
@@ -503,6 +517,20 @@
         "vth_p_v": 0.7,
         "nominal_supply_v": 3.3,
         "note": "nfet_03v3 / pfet_03v3 typical Vth"
+      },
+      "analog_device_layout_maxima": {
+        "_comment": "Same schema, same reader and same generic role tokens as `analog_device_layout_minima`; no code path is specific to this family. A role appears ONLY where this PDK's OWN gencell states a maximum for the device that role resolves to \u2014 a role whose gencell states none, or whose flavours state DIFFERENT ones, is absent, which means NOT MEASURED and bounds nothing. A neighbouring PDK's number is never borrowed.",
+        "_measured_from": "libs.tech/magic/gf180mcuD.tcl:977 \u2014 `lmax 100.0 wmax 100.0` in `gf180mcu::cap_mim_2p0fF_defaults` (:973). MEASURED over every capacitor-class gencell this file defines: it is the ONLY one, so the `cap` role is unambiguous.",
+        "_note": "Roles deliberately ABSENT here, each because this PDK's own tcl leaves them ambiguous or silent \u2014 not because nobody looked. MEASURED over EVERY gencell this file defines: `nmos`/`pmos` \u2014 of 20 mosfet gencells exactly TWO state an lmax (nfet_05v0 0.695 at :3205, pfet_05v0 0.545 at :3161); the other eighteen, including every 03v3 (:3193, :3149), every 06v0, the 10v0_asym, the moscaps and the varactors, state none. So the role's maximum would depend on which of the family's voltage flavours a design elects, which this record does not carry \u2014 it is not a two-way 03v3-versus-05v0 split. `res` \u2014 no resistor gencell states one.",
+        "roles": {
+          "cap": {
+            "max_width_um": 100.0,
+            "max_length_um": 100.0,
+            "device": "cap_mim_2p0fF",
+            "rule": "cap_mim_2p0fF.lmax/wmax",
+            "rule_text": "lmax 100.0 wmax 100.0"
+          }
+        }
       },
       "analog_device_layout_minima": {
         "_comment": "vibe-ic#1952 — see the sky130A entry's _comment for the schema. Same generic role tokens, same reader, no code path is specific to this family.",
@@ -944,7 +972,7 @@
       "analog_device_layout_maxima": {
         "_comment": "Same schema, same reader and same generic role tokens as `analog_device_layout_minima`; no code path is specific to this family. A role absent here is NOT MEASURED and bounds nothing.",
         "_measured_from": "libs.tech/magic/ihp-sg13g2-cap.tcl \u2014 the gencell's own `_defaults` proc states `lmax 30.0 wmax 30.0` beside the `lmin 2.00 wmin 2.00` the minima record already reads, and magic writes all four into every generated cell's `string parameters` property, so a generated cell carries its own citation.",
-        "_note": "Measured on u_hawaii_adc, image 0.3.46: a gencell asked for a geometry ABOVE these does not refuse the way one below the minimum does \u2014 it CLAMPS to the maximum and draws. Eight `delta_sigma` capacitors asked for at l = 34.75 .. 629.08 um came back drawn at l = 30, twelve netlist capacitors collapsed into two drawn cells, and the only artefact that noticed was the sign-off LVS six steps later.",
+        "_note": "The `cap` role resolves to `cap_cmim` (device_map `cap_mim`), whose maximum this is; the sibling RF flavour `cap_rfcmim` (libs.tech/magic/ihp-sg13g2-cap.tcl:33) states a DIFFERENT `lmax 75.0 wmax 75.0` at :37, and is recorded nowhere here because no generic role resolves to it \u2014 said so that the 30.0 cannot later read as the only number this family states. `res`/`nmos`/`pmos` are absent because no resistor or fet gencell in this family states a maximum. ACCOUNTING FOR THE REST, so that this is not read as \"nothing else states one\": four more gencells in TWO classes the generic role vocabulary does not cover do state maxima \u2014 the varactor `SVaricap` (libs.tech/magic/ihp-sg13g2-var.tcl:25, lmax 0.8 wmax 9.74) and the three bipolar devices `npn13g2` / `npn13g2l` / `npn13g2v` (libs.tech/magic/ihp-sg13g2-bjt.tcl:35,41,48, lmax 0.9 / 2.5 / 5.0). They are recorded nowhere here because no role token resolves to them, not because they were missed. Measured on u_hawaii_adc, image 0.3.46: a gencell asked for a geometry ABOVE these does not refuse the way one below the minimum does \u2014 it CLAMPS to the maximum and draws. Eight `delta_sigma` capacitors asked for at l = 34.75 .. 629.08 um came back drawn at l = 30, twelve netlist capacitors collapsed into two drawn cells, and the only artefact that noticed was the sign-off LVS six steps later.",
         "roles": {
           "cap": {
             "max_width_um": 30.0,

@@ -50,6 +50,14 @@ import json
 
 import pytest
 
+import _plugin_tree  # noqa: F401,E402  — puts programs/ on sys.path
+import analog_a2_topology_emit as _A2M  # noqa: E402
+
+#: The tolerance the sizing itself holds. Taken FROM the producer, not typed
+#: here: these ratios are exact once the capacitor is sized on the PDK's own
+#: model, and the number that bounds "exact" is the producer's own.
+A2_TOL = _A2M.CAP_SPLIT_TOLERANCE
+
 from _analog_producer_fixture import (
     A1, A2, A3, GATE_A2, NETLIST_CHECKERS, PROGRAMS, bdir, block,
     make_project, read_json, run_prog)
@@ -204,19 +212,28 @@ def test_the_stage_count_is_reported_as_bound_from_the_spec(tmp_path):
 
 # ── the declaration reaches the DEVICE GEOMETRY ───────────────────────────
 def _cap_lengths(root, d):
-    """Render the netlist and read the DRAWN capacitor lengths back off it,
-    with a UNIT ARRAY folded back to the single device it realises.
+    """Render the netlist and read back each capacitor's CAPACITANCE in fF,
+    on the PDK's own two-term model, with a UNIT ARRAY summed into the single
+    device it realises.
+
+    IT USED TO RETURN LENGTHS, and every assertion below is about a
+    capacitor RATIO — a loop coefficient, a resolution, an oversampling
+    factor. Under the old AREA-ONLY sizing those were the same statement,
+    because capacitance was proportional to length. They are not the same
+    statement under the PDK's real model, where the fringe term is a larger
+    share of a small capacitor than of a large one: on this block the two
+    ends differ by about 1.5%, so a length ratio and a capacitance ratio are
+    two different numbers and only the second is what the prose below claims.
+    Returning capacitance makes each assertion say what it always meant, and
+    makes it EXACT rather than approximately right.
 
     A capacitor the target PDK cannot draw at the length this library sizes it
     to is emitted as N unit devices in parallel
     (`analog_a2_topology_emit.split_oversize_capacitors`), so the netlist
     carries `ci1_u0 .. ci1_u20` where it used to carry `ci1`. The properties
-    the tests below assert are about the CAPACITOR, not about how many pieces
-    it is drawn in, so the units are summed on the PDK's own two-term model
-    and inverted back to the equivalent single length. That keeps every
-    assertion below saying exactly what it said before — and it fails loudly
-    if the split ever stops preserving the value, because the folded length
-    would no longer equal the one the sizing asked for."""
+    asserted below are about the CAPACITOR, not about how many pieces it is
+    drawn in, so the units are summed. That also fails loudly if the split
+    ever stops preserving the value."""
     assert run_prog(A3, root, "--pdk", "sky130A").returncode == 0
     text = (d / f"{BLK}.sp").read_text(encoding="utf-8")
     import re as _re
@@ -238,10 +255,10 @@ def _cap_lengths(root, d):
 
     carea = _const("cap_area_ff_per_um2") or 1.0
     cperi = _const("cap_perim_ff_per_um") or 0.0
-    totals, widths, plain = {}, {}, {}
+    out = {}
     for ln in text.splitlines():
         toks = ln.split()
-        if not toks or not toks[0].startswith("x"):
+        if not toks or not toks[0].startswith("x") or "cap" not in ln:
             continue
         name = toks[0][1:]
         w = l = None
@@ -250,20 +267,11 @@ def _cap_lengths(root, d):
                 l = float(t[2:].rstrip("u"))
             elif t.startswith("w="):
                 w = float(t[2:].rstrip("u"))
-        if l is None:
+        if l is None or w is None:
             continue
         m = _re.match(r"^(.*)_u\d+$", name)
-        if m is None or w is None:
-            plain[name] = l
-            continue
-        base = m.group(1)
-        totals[base] = totals.get(base, 0.0) + _a2.capacitance_ff(
-            w, l, carea, cperi)
-        widths[base] = w
-    out = dict(plain)
-    for base, ff in totals.items():
-        w = widths[base]
-        out[base] = (ff - 2.0 * cperi * w) / (carea * w + 2.0 * cperi)
+        base = m.group(1) if m else name
+        out[base] = out.get(base, 0.0) + _a2.capacitance_ff(w, l, carea, cperi)
     return out
 
 
@@ -273,7 +281,7 @@ def test_the_sampling_capacitor_follows_the_declared_resolution(tmp_path):
     d14, _, r14 = a2(tmp_path, "e14", enob=14.0)
     d12, _, r12 = a2(tmp_path, "e12", enob=12.0)
     c14, c12 = _cap_lengths(r14, d14), _cap_lengths(r12, d12)
-    assert c14["cs1"] == pytest.approx(c12["cs1"] * 16.0, rel=1e-3)
+    assert c14["cs1"] == pytest.approx(c12["cs1"] * 16.0, rel=A2_TOL)
 
 
 def test_the_sampling_capacitor_follows_the_declared_oversampling(tmp_path):
@@ -356,8 +364,11 @@ def test_the_capacitor_ratio_is_the_loop_coefficient(tmp_path):
     caps = _cap_lengths(root, d)
     ir = read_json(d / "topology.json")
     for i, coeff in enumerate(ir["stage_expansion"]["coefficients"], start=1):
-        assert caps[f"cs{i}"] / caps[f"ci{i}"] == pytest.approx(coeff,
-                                                               rel=1e-5)
+        # EXACT now, not approximately right: it is a ratio of capacitances,
+        # which is what the claim has always been about, and the sizing
+        # realises each one on the PDK's own model.
+        assert caps[f"cs{i}"] / caps[f"ci{i}"] == pytest.approx(
+            coeff, rel=A2_TOL), (i, caps[f"cs{i}"], caps[f"ci{i}"])
 
 
 def test_a_capacitor_above_the_pdk_maximum_is_emitted_as_a_unit_array(
@@ -398,6 +409,73 @@ def test_a_capacitor_above_the_pdk_maximum_is_emitted_as_a_unit_array(
                     if ln.split() and ln.split()[0] == f"x{name}"], (
             f"the un-drawable single device {name} is still in the netlist "
             f"beside its own array")
+
+
+def test_every_capacitor_realises_the_multiple_its_entry_declares(tmp_path):
+    """EVERY capacitor, not the two a ratio test happened to cover.
+
+    The sizing was rewritten from "a multiple of another capacitor's LENGTH"
+    to "a multiple of the sampling CAPACITANCE, converted once" — seven
+    expressions, of which only `cs` and `ci` had any value coverage. A typo in
+    any of the other five (a dropped factor, the wrong sub-expression wrapped)
+    would put a wrong capacitor in the netlist and every test would still
+    pass.
+
+    So each one is checked against the multiple its OWN entry declares, read
+    out of the IR rather than restated here, and measured on the PDK's own
+    two-term model. Exact, because that is what the conversion buys."""
+    d, _, root = a2(tmp_path)
+    caps = _cap_lengths(root, d)                     # capacitance, in fF
+    ir = read_json(d / "topology.json")
+    env = {}
+    env.update({k: v for k, v in (ir.get("pdk_measured_params") or {}).items()
+                if isinstance(v, (int, float)) and not isinstance(v, bool)})
+    env.update(ir.get("constants") or {})
+    env.update({k: v for k, v in (ir.get("knobs") or {}).items()
+                if isinstance(v, (int, float))})
+    # ...and the BOUND SPEC VALUES last, which is the order
+    # `analog_a3_netlist_emit._resolve_params` seeds its own environment in.
+    # Seeding it any other way would be a second, private answer to "what does
+    # this expression resolve to", which is the thing this test exists to
+    # check against.
+    env.update(_A2M.bound_spec_values(root, BLK)[0])
+    coeffs = ir["stage_expansion"]["coefficients"]
+    cs = caps["cs1"]
+
+    expected = {}
+    for i, coeff in enumerate(coeffs, start=1):
+        expected[f"cs{i}"] = 1.0
+        expected[f"ci{i}"] = 1.0 / coeff
+        expected[f"cc{i}"] = env["miller_fraction_of_load"] / coeff
+        expected[f"cf{i}"] = 1.0
+    expected["caz"] = env["autozero_over_sampling_cap"]
+    expected["c_vcm"] = 40.0
+    expected["c_cmc"] = (env["miller_fraction_of_load"]
+                         * _A2M._safe_eval(_A2M._LOAD_OVER_CS_DERIVED_EXPR,
+                                           dict(env)))
+
+    missing = sorted(set(expected) - set(caps))
+    assert not missing, f"the netlist carries no capacitor for {missing}"
+    # `c_qdly` is the one capacitor this entry does NOT size from the
+    # sampling capacitance: it carries a library-nominal `l` and has no
+    # `device_param_exprs` entry at all, so there is no declared multiple to
+    # check it against. Excluded by that PROPERTY, read off the IR, rather
+    # than by name — a device that later gains an expression stops being
+    # excluded and starts being checked.
+    sized = {e["device"] for e in (ir.get("device_param_exprs") or [])}
+    for grp in (ir.get("stage_expansion") or {}).get("groups", []) or []:
+        sized |= {e["device"] for e in (grp.get("param_exprs") or [])}
+    unchecked = sorted((set(caps) & sized) - set(expected))
+    assert not unchecked, (
+        f"these capacitors are SIZED by an expression and this test says "
+        f"nothing about their value: {unchecked}")
+    assert "c_qdly" in caps and "c_qdly" not in sized, (
+        "c_qdly is expected to be the library-nominal capacitor; if it has "
+        "gained a sizing expression it now needs a declared multiple here")
+    for name, mult in sorted(expected.items()):
+        assert caps[name] / cs == pytest.approx(mult, rel=A2_TOL), (
+            f"{name} realises {caps[name] / cs:.6g} x the sampling capacitor "
+            f"and its entry declares {mult:.6g} x")
 
 
 def test_a3_records_the_netlist_as_design_bound_not_structure_only(tmp_path):
