@@ -1956,11 +1956,25 @@ def _port_directions(desc_text: str) -> Dict[str, str]:
     for line in (desc_text or "").splitlines():
         stripped = line.strip()
         low = stripped.lower()
-        if re.match(r"^input\s*(ports?|signals?)?\s*[:：]?\s*$", low):
+        # Heading forms seen in real descriptions: "Input ports:", "Inputs:",
+        # "Input Signals:", "INPUT PORTS:". Measured 2026-09-06: the plural
+        # "Inputs:" was NOT matched, so every port under it had no direction, the
+        # contract could not be built, and the layer silently never fired on such
+        # a description -- fail-closed, but invisible, and only because every
+        # fixture in this lane happened to use "Input ports:".
+        if re.match(r"^inputs?\s*(ports?|signals?)?\s*[:：]?\s*$", low):
             cur = "in"
             continue
-        if re.match(r"^output\s*(ports?|signals?)?\s*[:：]?\s*$", low):
+        if re.match(r"^outputs?\s*(ports?|signals?)?\s*[:：]?\s*$", low):
             cur = "out"
+            continue
+        # Any OTHER section heading ends the port block. Without this, a line in
+        # the prose that happens to look like "count: the internal counter" is
+        # registered as a port -- with the direction of whichever block was open
+        # last -- and can then be chosen as the channel's data port and land in
+        # the emitted module. Measured 2026-09-06.
+        if re.match(r"^[A-Za-z][A-Za-z /]*[:：]\s*$", stripped):
+            cur = None
             continue
         m = re.match(r"^([A-Za-z_]\w*)\s*(\[[^\]]*\])?\s*[:：(]", stripped)
         if not m:
@@ -1991,9 +2005,13 @@ def _port_width(desc_text: str, name: str) -> Optional[int]:
             b = re.match(r"\s*(\d+)\s*:\s*(\d+)\s*$", m.group(2))
             if b:
                 return abs(int(b.group(1)) - int(b.group(2))) + 1
-        w = re.search(r"(\d+)[- ]bit", line, re.I)
-        if w:
-            return int(w.group(1))
+        # Two DIFFERENT widths stated in prose on the port's own line ("the
+        # 8-bit word, packed into a 32-bit beat") is not a stated width: taking
+        # the first would be a guess, and the layer's rule is to name what the
+        # input did not settle. An explicit [hi:lo] above always wins.
+        widths = {int(m) for m in re.findall(r"(\d+)[- ]bits?\b", line, re.I)}
+        if len(widths) == 1:
+            return widths.pop()
         return None
     return None
 

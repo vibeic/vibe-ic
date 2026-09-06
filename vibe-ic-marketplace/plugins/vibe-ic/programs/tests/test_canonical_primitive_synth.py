@@ -1079,3 +1079,61 @@ def test_flowing_lines_together_invents_no_directive():
     # and a marker and a tag in DIFFERENT sentences still make no directive
     assert rcs.extract_architecture_directives(
         "The core must not stall. A mux selects the output.") == []
+
+
+_HEADING_FORMS = [("Input ports:", "Output ports:"),
+                  ("Inputs:", "Outputs:"),
+                  ("Input Signals:", "Output Signals:"),
+                  ("INPUT PORTS:", "OUTPUT PORTS:")]
+
+
+@pytest.mark.parametrize("heading,out", _HEADING_FORMS)
+def test_the_port_blocks_are_found_under_every_ordinary_heading(heading, out):
+    """Measured before this: "Inputs:" was not matched, so every port under it
+    had no direction, no contract could be built, and the layer silently never
+    fired -- fail-closed, but invisible, and only because every fixture in this
+    lane happened to use "Input ports:"."""
+    desc = (
+        "Module name:\n    stage\n" + heading + "\n"
+        " clk: Clock.\n rst_n: Active low reset.\n"
+        " up_data [7:0]: The word offered.\n up_valid: Offered.\n"
+        " dn_ready: The consumer can take a word.\n" + out + "\n"
+        " up_ready: This stage can take a word.\n"
+        " dn_data [7:0]: The word offered on.\n dn_valid: Offered.\n"
+        "Implementation:\n"
+        "The stage must register the output and buffer one additional "
+        "transfer.\n")
+    c = rcs.extract_handshake_contract(desc)
+    assert c is not None and c.kind == "elastic_stage", heading
+    assert c.unresolved == [], (heading, c.unresolved)
+
+
+def test_two_different_stated_widths_are_not_a_stated_width():
+    """Taking the first would be a guess. An explicit [hi:lo] still wins, and a
+    line that says the same width twice is not ambiguous."""
+    def w(line):
+        return rcs._port_width(
+            "Module name:\n    x\nInput ports:\n " + line + "\n", "up_data")
+    assert w("up_data: the 8-bit word, packed into a 32-bit beat.") is None
+    assert w("up_data: an 8-bit word; the bus is 8 bits wide.") == 8
+    assert w("up_data [7:0]: the 32-bit accumulator's low byte.") == 8
+    assert w("up_data: the 8-bit data word.") == 8
+
+
+def test_prose_after_the_port_blocks_is_not_read_as_ports():
+    """A line in the prose that looks like "name: description" must not become a
+    port of whichever block was open last -- it can otherwise be chosen as a
+    channel's data port and end up in the emitted module."""
+    desc = _F6_DESC + (
+        "Implementation:\n"
+        " counter: an internal counter, not a port.\n"
+        " state: the internal state register.\n")
+    dirs = rcs._port_directions(desc)
+    assert "counter" not in dirs and "state" not in dirs
+    c = rcs.extract_handshake_contract(desc)
+    assert c is not None and c.unresolved == []
+    assert c.up["data"] == "up_data" and c.down["data"] == "dn_data"
+    rtl = rcs.emit_rtl(rcs.detect_shape(desc), desc)
+    # on word boundaries: "state" is inside "stage", and this assertion failed
+    # for exactly that reason before -- the same trap the program was fixed for
+    assert not _names_word("counter", rtl) and not _names_word("state", rtl)
