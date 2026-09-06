@@ -370,7 +370,14 @@ def scan_file(filepath: Path) -> List[SVConstruct]:
 
 
 def scan_directory(rtl_dir: Path) -> List[SVConstruct]:
-    """Scan all .v and .sv files in a directory tree."""
+    """Scan all .v and .sv files in a directory tree.
+
+    #2050: `main()` re-derives the same file list for the report's
+    `files_scanned`. The report used to state only what the scan FOUND, so a
+    scan of an empty directory and a scan of twelve clean files produced
+    byte-identical `needs_sv: false` — and only one of those is a design that
+    was checked.
+    """
     all_findings: List[SVConstruct] = []
     patterns = ['**/*.v', '**/*.sv']
     files_found = set()
@@ -387,8 +394,24 @@ def scan_directory(rtl_dir: Path) -> List[SVConstruct]:
     return all_findings
 
 
-def build_report(findings: List[SVConstruct]) -> dict:
-    """Build the JSON report from findings."""
+def scanned_files(rtl_dir: Path) -> List[Path]:
+    """The files `scan_directory` reads, by the same rule (#2050)."""
+    found = set()
+    for pat in ('**/*.v', '**/*.sv'):
+        found.update(rtl_dir.glob(pat))
+    return sorted(found)
+
+
+def build_report(findings: List[SVConstruct],
+                 files_scanned: int = 0, rtl_dir: str = '') -> dict:
+    """Build the JSON report from findings.
+
+    `files_scanned` / `rtl_dir` added by #2050 and defaulted so every existing
+    caller keeps working. The default is 0, which is the truthful value for a
+    call that names no directory: it says the report is about no files, and
+    the compliance checker reports NOT_MEASURED for it rather than reading a
+    `needs_sv: false` over nothing as a clean scan.
+    """
     needs_sv = len(findings) > 0
     unpacked_port_hits = [
         f for f in findings
@@ -396,6 +419,11 @@ def build_report(findings: List[SVConstruct]) -> dict:
     ]
     return {
         'needs_sv': needs_sv,
+        # #2050 — how many files the verdict is about. A `needs_sv: false`
+        # over zero files is a pass over nothing; the compliance checker
+        # reports that as NOT_MEASURED rather than as a clean scan.
+        'files_scanned': files_scanned,
+        'rtl_dir': rtl_dir,
         'sv_constructs_found': [asdict(f) for f in findings],
         'recommendation': 'Use read_verilog -sv' if needs_sv else 'Plain Verilog OK',
         'total_constructs': len(findings),
@@ -426,7 +454,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     findings = scan_directory(rtl_dir)
-    report = build_report(findings)
+    report = build_report(findings, len(scanned_files(rtl_dir)), str(rtl_dir))
 
     report_path = out_dir / 'sv_compat_report.json'
     report_path.write_text(json.dumps(report, indent=2))

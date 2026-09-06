@@ -1,6 +1,15 @@
 # Testability level (v0.50 hybrid strategy — see _shared/TESTING_STRATEGY.md)
 testability: structured
 
+# #2050. output_type MEASURED, not assumed. This skill's declared deliverable
+# is a Markdown synthesis-triage report. A document cannot carry the RTL `//
+# Post-checks:` header that `postcheck_pass_only` looks for: it can only be
+# TYPED into one, never measured on it. No SKILL.md in this plugin documents
+# emitting that header (zero of 70, measured), and this skill's own required
+# patterns are Markdown headings. The cross-checks below are therefore bound
+# to their auditors' own receipts, exactly as #2048 did for rtl-review.
+output_type: report
+
 # Compliance spec for skill 'synth-doctor' (v0.40)
 # Enhanced: must classify error patterns, provide fix suggestions, and parse tool logs
 skill: synth-doctor
@@ -34,13 +43,24 @@ requirements:
 cross_checks:
   - id: X_synth_netlist_check
     description: "Run synth_netlist_check.py to verify netlist has reasonable cell count"
-    rule: postcheck_pass_only
+    rule: audit_receipt_evidence
+    auditor: synth_netlist_check
   - id: X_sv_compat_check
     description: "Run sv_compat_check.py to check if -sv flag is needed"
-    rule: postcheck_pass_only
+    rule: audit_receipt_evidence
+    auditor: sv_compat_check
   - id: X_mcp_execution_verify
     description: "Verify required MCP tools were actually executed (not just reported)"
-    rule: postcheck_pass_only
+    rule: audit_receipt_evidence
+    auditor: mcp_execution_verify
   - id: X_eda_log_check
     description: "Verify Yosys/OpenROAD log exists with parseable content"
-    rule: postcheck_pass_only
+    rule: audit_receipt_evidence
+    auditor: eda_log_check
+  # The other half of the output_type pairing (#2048). Repointing the audits
+  # above removes the reason to paste the RTL header; this keeps pasting one a
+  # failure, so a fabricated `// Post-checks:` line in this report cannot pass
+  # unremarked now that nothing else reacts to it.
+  - id: X_text_only_skill
+    description: "synth-doctor emits a report document, not RTL."
+    rule: text_only_report

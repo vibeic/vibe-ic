@@ -57,6 +57,9 @@ from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _audit_receipt import emit_receipt  # noqa: E402
+
 
 @dataclass
 class Finding:
@@ -178,12 +181,22 @@ def _ff_chain_length(module_text: str, signal: str) -> int:
     return max(0, len(chain) - 1)  # number of FF stages = len - 1
 
 
+def rtl_files(rtl_target: Path) -> List[Path]:
+    """The files this audit reads, in one place.
+
+    Extracted for #2050 so `main()` can state in the receipt HOW MANY files
+    were examined without re-deriving the rule and drifting from it. A verdict
+    over zero files is not a clean design; it is an audit of nothing, and the
+    receipt has to be able to say which of the two happened.
+    """
+    if rtl_target.is_file():
+        return [rtl_target]
+    return sorted(list(rtl_target.rglob("*.v")) + list(rtl_target.rglob("*.sv")))
+
+
 def audit(rtl_target: Path, top_module: str) -> List[Finding]:
     findings: List[Finding] = []
-    if rtl_target.is_file():
-        files = [rtl_target]
-    else:
-        files = sorted(list(rtl_target.rglob("*.v")) + list(rtl_target.rglob("*.sv")))
+    files = rtl_files(rtl_target)
     if not files:
         findings.append(Finding(
             "WARN", "no_rtl_files", str(rtl_target), 0,
@@ -297,6 +310,14 @@ def main(argv: Optional[List[str]] = None) -> int:
         else:
             Path(args.json).parent.mkdir(parents=True, exist_ok=True)
             Path(args.json).write_text(_txt + "\n")
+            # #2050 — producer-written receipt (programs/_audit_receipt.py).
+            # Only on a real path: `--json -` is a print to stdout, which has
+            # no directory a sibling receipt could live beside.
+            _files = rtl_files(target)
+            emit_receipt(
+                'fpga_async_input_synchronizer_check', args.json,
+                report["verdict"], len(_files), _files,
+                extra={'top': top, 'errors': report["errors"]})
     else:
         for f in findings:
             print(f"[{f.severity}] {f.rule} @ {f.file}:{f.line}: {f.message}")

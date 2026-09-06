@@ -102,7 +102,7 @@ import re
 import sys
 from dataclasses import dataclass, asdict, field
 from hashlib import sha256
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import List, Dict, Any, Callable, Optional
 
 
@@ -286,6 +286,16 @@ class Finding:
     # reported, never counted as a pass.
     state: str = ''
 
+
+# Every top-level key of a compliance.yaml that something in this repo reads.
+# `audit()` itself reads `output_type`, `requirements` and `cross_checks`;
+# `skill` names the skill in the report and in every generated test;
+# `testability` is read by `_shared/gen_integration_fixtures.py` and
+# `_shared/TESTING_STRATEGY.md`'s three-layer split. Anything else is a key
+# nobody reads — see `compliance_yaml_unread_key` in `audit()`.
+_READ_TOPLEVEL_KEYS = frozenset({
+    'skill', 'testability', 'output_type', 'requirements', 'cross_checks',
+})
 
 OUTPUT_TYPE_RTL = 'rtl'
 OUTPUT_TYPE_REPORT = 'report'
@@ -619,6 +629,130 @@ AUDIT_RECEIPTS: Dict[str, ReceiptSpec] = {
     ),
 }
 
+# ---------------------------------------------------------------------------
+# #2050 — the PRODUCER-written receipt convention.
+#
+# The five entries above exist because their producer already writes a fixed
+# filename into an `--out-dir`. Six more auditors write to a caller-chosen
+# `--json PATH` and therefore had NO name for this module to look for; #2048
+# refused to invent one here, and that refusal was right — a consumer that
+# guesses where its evidence lives is guessing.
+#
+# `programs/_audit_receipt.py` closes it from the other side: each of those
+# producers now writes `<auditor>_receipt.json` as a SIBLING of the caller's
+# own `--json` output, carrying the auditor name, the verdict, how many items
+# were examined, and a SUBJECT DIGEST. The digest is what makes a stale
+# receipt beside a fresh report detectable: it is taken over basename +
+# content hash of the audited artefacts, so it is the same in any checkout and
+# different for any other subject.
+#
+# Everything below is READ OFF `programs/_audit_receipt.py::build_receipt`,
+# exactly as the five hand-written entries are read off their producers.
+# ---------------------------------------------------------------------------
+_RECEIPT_VERSION = 1
+
+
+def _producer_receipt(auditor: str, emitted_by: str) -> ReceiptSpec:
+    """One ReceiptSpec for a producer using the shared receipt convention."""
+    return ReceiptSpec(
+        auditor=auditor,
+        filename=f'{auditor}_receipt.json',
+        emitted_by=emitted_by,
+        # `receipt_version` + `auditor` together: a receipt written by ANOTHER
+        # auditor through the same helper carries that other name and is
+        # rejected here, not read as this one's evidence.
+        identify=lambda d: (d.get('receipt_version') == _RECEIPT_VERSION
+                            and d.get('auditor') == auditor
+                            and isinstance(d.get('subject'), dict)
+                            and isinstance(d['subject'].get('sha256'), str)),
+        # Only the exact string PASS is a pass. `PASS_WITH_WAIVERS` — which
+        # `signoff_audit` emits and which rule 11 forbids collapsing onto a
+        # bare PASS — lands on the FAIL side of this line on purpose, and
+        # keeps its own spelling in the receipt for a reader.
+        verdict=lambda d: (STATE_PASS if d.get('verdict') == 'PASS'
+                           else STATE_FAIL),
+        subject=lambda d: {
+            'sha256': _d(d, 'subject', 'sha256', default=''),
+            'basis': _d(d, 'subject', 'basis', default=''),
+            'items': sorted(
+                PurePosixPath(str(i.get('path', ''))).name
+                for i in (_d(d, 'subject', 'items', default=[]) or [])
+                if isinstance(i, dict)),
+        },
+        examined=lambda d: int(d.get('examined') or 0),
+    )
+
+
+AUDIT_RECEIPTS.update({
+    # Item 4 of #2050 — the four that BLOCKED for want of a filename.
+    'gds_size_check': _producer_receipt(
+        'gds_size_check', 'programs/gds_size_check.py::main'),
+    'synth_netlist_check': _producer_receipt(
+        'synth_netlist_check', 'programs/synth_netlist_check.py::main'),
+    'tapeout_signoff_check': _producer_receipt(
+        'tapeout_signoff_check', 'programs/tapeout_signoff_check.py::main'),
+    'fpga_async_input_synchronizer_check': _producer_receipt(
+        'fpga_async_input_synchronizer_check',
+        'programs/fpga_async_input_synchronizer_check.py::main'),
+    # Item 1 of #2050 — two more of the same shape, named by the 27 sibling
+    # IDs repointed in this change.
+    'output_artifact_check': _producer_receipt(
+        'output_artifact_check', 'programs/output_artifact_check.py::main'),
+    'eda_log_check': _producer_receipt(
+        'eda_log_check', 'programs/eda_log_check.py::main'),
+})
+
+# Two of the 27 already had a filename convention of their own and need no
+# receipt helper — they are read off their producer exactly like the first
+# five.
+#
+# programs/corner_coverage_audit.py — main() writes
+#   out_dir/'corner_coverage_audit_report.json' = asdict(result) stamped
+#   {'tool': 'corner_coverage_audit'}; `verdict` is PASS / WARNING / FAIL and
+#   `total_evidence` is the population the verdict is about.
+AUDIT_RECEIPTS['corner_coverage_audit'] = ReceiptSpec(
+    auditor='corner_coverage_audit',
+    filename='corner_coverage_audit_report.json',
+    emitted_by="programs/corner_coverage_audit.py::main",
+    identify=lambda d: (d.get('tool') == 'corner_coverage_audit'
+                        and 'verdict' in d
+                        and 'total_evidence' in d),
+    # WARNING is not PASS. A partially covered corner matrix is a finding
+    # about the design, not a clean sheet.
+    verdict=lambda d: (STATE_PASS if d.get('verdict') == 'PASS'
+                       else STATE_FAIL),
+    subject=lambda d: {
+        'process_corners': sorted(d.get('process_corners') or []),
+        'voltage_points': sorted(d.get('voltage_points') or []),
+        'temperature_points': sorted(d.get('temperature_points') or []),
+    },
+    examined=lambda d: int(d.get('total_evidence') or 0),
+)
+
+# programs/sv_compat_check.py — main() writes out_dir/'sv_compat_report.json'
+#   = build_report(). `files_scanned` is added by #2050: the report recorded
+#   only what it FOUND, so a scan of an empty directory and a scan of twelve
+#   clean files produced the same bytes, and the second is a pass while the
+#   first is a pass over nothing.
+AUDIT_RECEIPTS['sv_compat_check'] = ReceiptSpec(
+    auditor='sv_compat_check',
+    filename='sv_compat_report.json',
+    emitted_by="programs/sv_compat_check.py::build_report",
+    identify=lambda d: ('needs_sv' in d
+                        and 'total_constructs' in d
+                        and 'files_scanned' in d
+                        and isinstance(d.get('sv_constructs_found'), list)),
+    # The program's own gate: plain-Verilog-clean AND no Yosys-fatal
+    # port-level unpacked array.
+    verdict=lambda d: (STATE_PASS
+                       if not d.get('needs_sv')
+                       and int(d.get('unpacked_array_port_count') or 0) == 0
+                       else STATE_FAIL),
+    subject=lambda d: {'rtl_dir': d.get('rtl_dir', '')},
+    examined=lambda d: int(d.get('files_scanned') or 0),
+)
+
+
 # Auditors that a compliance.yaml legitimately names but whose receipt
 # contract cannot be registered yet, with the measured reason. They are NOT
 # given a guessed entry above: `audit_receipt_evidence` reports an
@@ -626,17 +760,31 @@ AUDIT_RECEIPTS: Dict[str, ReceiptSpec] = {
 # missing, which is the honest state. Inventing a receipt filename here would
 # be the same unmeasured claim this module exists to remove.
 #
-#   gds_size_check                       --json PATH, caller-chosen; no
-#   synth_netlist_check                    filename convention exists in this
-#   fpga_async_input_synchronizer_check    tree to read off.
-#   tapeout_signoff_check                22-line shim over `signoff_audit
-#                                          --mode tapeout`; the receipt is
-#                                          whatever the caller's --json says.
+# #2050 emptied and refilled this tuple. The four that were here — gds_size_check,
+# synth_netlist_check, fpga_async_input_synchronizer_check, tapeout_signoff_check —
+# are registered above: their producers now write the receipt themselves.
+#
+# The four that replace them are the `eda_report_audit` wrappers. They have the
+# same caller-chosen `--json` shape, and the same fix would work, but they sit
+# INSIDE phase-3 sign-off: `sta_report_check` is invoked by
+# `phase3_one_shot_runner.step_declared_signoff_gates` and its `--json` file is
+# step 23's own `required_outputs` entry; `drc_report_check` and
+# `ir_drop_report_check` record in their own docstrings that merely honouring
+# `--json` already made evaluating a step write into the project and dirty a
+# published `benchmark-data/` audit. Adding a second artefact beside a declared
+# sign-off output changes that accounting, and doing it blind is how a gate
+# starts reporting the filesystem instead of the design. So they stay
+# unregistered, blocking, and NAMED — which is the honest state, not a guess.
+#
+#   drc_report_check       wrappers over `eda_report_audit`; the receipt is
+#   lvs_report_check         whatever the caller's --json says, and the
+#   ir_drop_report_check     directory it says is a declared phase-3 sign-off
+#   sta_report_check         output whose contents are accounted elsewhere.
 UNREGISTERED_AUDITORS = (
-    'gds_size_check',
-    'synth_netlist_check',
-    'fpga_async_input_synchronizer_check',
-    'tapeout_signoff_check',
+    'drc_report_check',
+    'ir_drop_report_check',
+    'lvs_report_check',
+    'sta_report_check',
 )
 
 
@@ -956,6 +1104,19 @@ def audit(text: str, compliance: Dict[str, Any],
     if not ctx.output_type and declared:
         ctx.output_type = declared
     findings: List[Finding] = []
+    unread = sorted(k for k in compliance if k not in _READ_TOPLEVEL_KEYS)
+    if unread:
+        findings.append(Finding(
+            'compliance_yaml_unread_key', 'FAIL',
+            'compliance.yaml declares top-level key(s) nothing reads: '
+            + ', '.join(repr(k) for k in unread) + '.',
+            'A key that looks like configuration but is read by no one is '
+            'worse than an absent one: it reads as enforced. MEASURED on '
+            '#2050: skills/phase1/compliance.yaml carried two cross-checks '
+            'under a top-level `postchecks:` key for as long as the file has '
+            'existed, with a comment explaining what they no-op to — they '
+            'were never executed at all. Move the entries under '
+            '`cross_checks:` where they are read, or delete the key.'))
     if declared and declared not in _KNOWN_OUTPUT_TYPES:
         findings.append(Finding(
             'output_type_unknown', 'FAIL',

@@ -22,6 +22,9 @@ assert DRIVER.exists(), f"driver missing: {DRIVER}"
 
 sys.path.insert(0, str(DRIVER.parent))
 import skill_compliance_check as scc  # noqa: E402
+import synthetic_fixture_limits as LIMITS  # noqa: E402
+
+SKILL_NAME = "ppa-measure"
 
 
 def load_requirements():
@@ -103,19 +106,36 @@ def test_empty_output_fails_audit(tmp_path):
 def test_good_output_passes_all_required(tmp_path):
     """A synthetic good-output built from all patterns satisfies the checker.
 
-    If this fails, either (a) a pattern in compliance.yaml is too strict
-    for synthetic generation and the test must be customized, or (b) the
-    driver has a bug.
+    #2050 — THIS TEST USED TO SKIP BEFORE ITS ASSERT. When the synthetic
+    document failed any required pattern it called `pytest.skip()`, so on 53
+    of the 69 skills that ship this file the assert below never ran and the
+    suite still reported green. That is how #2048 survived: the acceptance
+    command in that issue gave byte-identical node-id sets on both arms.
+
+    The blanket skip is replaced by a NAMED list, per skill, of the exact
+    requirement IDs the generator cannot satisfy — and the list is checked
+    both ways. If the measured set differs from the declared set in EITHER
+    direction the test FAILS and says which way, so a pattern that quietly
+    becomes unreachable cannot hide and a repaired one cannot be left on the
+    list forever. A skill absent from the list asserts PASS outright.
     """
     spec = load_requirements()
     text = build_good_output(spec)
     res, data = run_driver(tmp_path, text)
     # We only require that all REQUIRED elements (not cross-checks) pass
-    req_fails = [f for f in data["findings"]
-                 if f["severity"] == "FAIL" and f["id"].startswith("R")]
-    if req_fails:
-        pytest.skip(
-            "Synthetic good-output did not satisfy all required regex patterns; "
-            "this skill's compliance.yaml likely needs hand-tailored test "
-            f"fixture. Unsatisfied: {[f['id'] for f in req_fails]}")
+    req_fails = sorted(f["id"] for f in data["findings"]
+                       if f["severity"] == "FAIL" and f["id"].startswith("R"))
+    declared = sorted(LIMITS.SYNTHETIC_FIXTURE_LIMITATIONS.get(SKILL_NAME, ()))
+
+    assert req_fails == declared, (
+        f"{SKILL_NAME}: the named synthetic-fixture limitation list in "
+        "_shared/synthetic_fixture_limits.py no longer matches what is "
+        f"measured. declared={declared} measured={req_fails}. "
+        "If the measured set GREW, a required pattern just became unreachable "
+        "for the generator — fix the pattern or the generator, do not extend "
+        "the list to silence this. If it SHRANK, delete the repaired IDs from "
+        "the list; that is the list getting shorter, which is the point.")
+
+    if declared:
+        pytest.xfail(LIMITS.reason_for(SKILL_NAME))
     assert data["verdict"] == "PASS"

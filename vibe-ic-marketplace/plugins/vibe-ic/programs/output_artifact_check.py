@@ -34,6 +34,9 @@ from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import List, Tuple
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _audit_receipt import emit_receipt  # noqa: E402
+
 
 # ---------------------------------------------------------------------------
 # Data structures
@@ -168,6 +171,20 @@ def main(argv: list = None) -> int:
     if args.json:
         Path(args.json).parent.mkdir(parents=True, exist_ok=True)
         Path(args.json).write_text(report_json)
+        # #2050 — producer-written receipt (see programs/_audit_receipt.py).
+        # `examined` is the DECLARED population: the artefacts the caller
+        # named plus the glob if one was given. A run with neither passes
+        # today over nothing at all, and that run must read NOT_MEASURED
+        # rather than as an artefact check that succeeded.
+        emit_receipt(
+            'output_artifact_check', args.json,
+            'PASS' if report["summary"]["pass"] else 'FAIL',
+            len(info["checked_artifacts"]) + (1 if args.pattern else 0),
+            [base_dir / a for a in info["checked_artifacts"]]
+            + [Path(m) for m in info["glob_matches"]],
+            extra={'glob_pattern': info["glob_pattern"],
+                   'glob_match_count': len(info["glob_matches"]),
+                   'min_count': args.min_count})
 
     print(report_json)
     return 0 if report["summary"]["pass"] else 1

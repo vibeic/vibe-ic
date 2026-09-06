@@ -401,20 +401,33 @@ def test_rtl_review_binds_all_three_audits_to_their_own_receipts():
 
 
 def test_unregistered_auditors_are_named_and_all_exist():
-    """The four obligations that cannot be evidence-bound yet, by name.
+    """The obligations that cannot be evidence-bound yet, by name.
 
     They are enumerated rather than left implicit so that registering one is a
-    diff against this list, and so that nobody can quietly add a fifth.
+    diff against this list, and so that nobody can quietly add another.
+
+    #2050 emptied and refilled this tuple. The four that used to be here got a
+    producer-written receipt (`programs/_audit_receipt.py`) and are asserted
+    below to have LEFT the list — so this test fails in both directions: if a
+    registered auditor is put back on the unregistered list, and if a member
+    of the list is registered without being removed from it.
     """
     assert scc.UNREGISTERED_AUDITORS == (
-        "gds_size_check",
-        "synth_netlist_check",
-        "fpga_async_input_synchronizer_check",
-        "tapeout_signoff_check")
+        "drc_report_check",
+        "ir_drop_report_check",
+        "lvs_report_check",
+        "sta_report_check")
     for name in scc.UNREGISTERED_AUDITORS:
         assert (_PLUGIN / "programs" / f"{name}.py").is_file(), name
         assert name not in scc.AUDIT_RECEIPTS, (
             f"{name} is registered now — remove it from UNREGISTERED_AUDITORS")
+    for name in ("gds_size_check", "synth_netlist_check",
+                 "tapeout_signoff_check",
+                 "fpga_async_input_synchronizer_check"):
+        assert name in scc.AUDIT_RECEIPTS, (
+            f"{name} was given a producer receipt by #2050 and must stay "
+            "registered")
+        assert name not in scc.UNREGISTERED_AUDITORS, name
 
 
 def test_every_audit_receipt_evidence_id_names_a_known_or_declared_auditor():
@@ -431,13 +444,32 @@ def test_every_audit_receipt_evidence_id_names_a_known_or_declared_auditor():
     assert unknown == [], unknown
 
 
-def test_unregistered_auditor_binding_blocks_and_says_what_is_missing(tmp_path):
-    """The six repointed sibling IDs must not be able to pass on a header."""
+def test_repointed_sibling_ids_cannot_pass_on_a_header(tmp_path):
+    """The repointed sibling IDs must not be able to pass on a header.
+
+    #2050 changed the STATE these four report, not the outcome. Their auditors
+    now have a registered receipt contract, so with no receipt on disk each one
+    is NOT_MEASURED — naming the file it looked for — instead of a
+    `_unknown_auditor` configuration error. Both block; the second says what to
+    fix in the yaml, the first says what to run.
+    """
     yml = _PLUGIN / "skills" / "tapeout-checklist" / "compliance.yaml"
     r, data = _drive(tmp_path, _REVIEW + _RTL_HEADER, None, yml=yml)
+    for cid in ("X_gds_size_check", "X_synth_netlist_check",
+                "X_tapeout_signoff_check", "X_mcp_execution_verify"):
+        assert _state(data, cid) == ("FAIL", "NOT_MEASURED"), cid
     ids = [f["id"] for f in data["findings"] if f["severity"] == "FAIL"]
-    assert "X_gds_size_check_unknown_auditor" in ids
-    assert "X_tapeout_signoff_check_unknown_auditor" in ids
+    assert "X_text_only_skill" in ids, "the fabricated header is still a failure"
+    assert r.returncode == 1
+
+
+def test_a_still_unregistered_auditor_blocks_and_says_what_is_missing(tmp_path):
+    """The other half: an auditor with NO registered contract is a config
+    error naming what is missing, and is never assumed to have passed."""
+    yml = _PLUGIN / "skills" / "drc-fix" / "compliance.yaml"
+    r, data = _drive(tmp_path, _REVIEW + _RTL_HEADER, None, yml=yml)
+    ids = [f["id"] for f in data["findings"] if f["severity"] == "FAIL"]
+    assert "X_drc_report_check_unknown_auditor" in ids
     assert "X_text_only_skill" in ids, "the fabricated header is still a failure"
     assert r.returncode == 1
 
