@@ -274,6 +274,57 @@ def test_the_module_is_found_in_whichever_source_declares_it():
     assert PW.defaults_from_sources(srcs, "imp").get("NumRegs") == 4
 
 
+def test_a_package_that_is_NOT_imported_does_not_leak_its_name():
+    """THE CASE THAT MAKES IMPORT-SCOPING LOAD BEARING, not bookkeeping.
+
+    A name can be defined by several packages at once with DIFFERENT values.
+    Flattening every package in the source set into one unqualified scope would
+    resolve the width to whichever definition happened to be reachable, and the
+    resulting number is not a guess a reader would ever see -- it is a plain
+    wrong bus width that says PASS.
+
+    Three packages define `NumAlerts` here. The module imports exactly one, and
+    that one is the answer; the other two are visible only under their scope.
+    """
+    p_two = "package two_pkg;\n  parameter int NumAlerts = 2;\nendpackage\n"
+    p_three = "package three_pkg;\n  parameter int NumAlerts = 3;\nendpackage\n"
+    p_four = "package four_pkg;\n  parameter int NumAlerts = 4;\nendpackage\n"
+    rtl = ("module m\n  import two_pkg::*;\n"
+           "  (input [NumAlerts-1:0] alert_rx_i);\nendmodule\n")
+    srcs = [("a.sv", p_two), ("b.sv", p_three), ("c.sv", p_four),
+            ("m.sv", rtl)]
+    params = PW.defaults_from_sources(srcs, "m")
+    assert params["NumAlerts"] == 2, params
+    assert params["three_pkg::NumAlerts"] == 3
+    assert params["four_pkg::NumAlerts"] == 4
+    assert PW.resolve("[NumAlerts-1:0]", params)[0] == " [1:0]"
+
+    # ...and importing a different one gives that one's number, which is what
+    # proves the line above reads the IMPORT and not the source order.
+    other = rtl.replace("two_pkg::*", "three_pkg::*")
+    p2 = PW.defaults_from_sources(
+        [("a.sv", p_two), ("b.sv", p_three), ("c.sv", p_four),
+         ("m.sv", other)], "m")
+    assert p2["NumAlerts"] == 3, p2
+    assert PW.resolve("[NumAlerts-1:0]", p2)[0] == " [2:0]"
+
+
+def test_a_constant_derived_ACROSS_packages_and_over_a_slash():
+    """The two additions meeting in one constant, which is the shape that
+    actually occurs: a package states a value over ANOTHER package's constant
+    and Verilog's integer `/`."""
+    a = "package a_pkg;\n  parameter int NumRegsIv = 4;\nendpackage\n"
+    b = ("package b_pkg;\n  parameter int unsigned SliceSize = 16;\n"
+         "  parameter int unsigned NumSlices = a_pkg::NumRegsIv * 32 "
+         "/ SliceSize;\nendpackage\n")
+    rtl = ("module m\n  import b_pkg::*;\n"
+           "  (output [NumSlices-1:0] we_o);\nendmodule\n")
+    params = PW.defaults_from_sources(
+        [("a.sv", a), ("b.sv", b), ("m.sv", rtl)], "m")
+    assert params["NumSlices"] == 8, params
+    assert PW.resolve("[NumSlices-1:0]", params)[0] == " [7:0]"
+
+
 # ── Verilog integer arithmetic ───────────────────────────────────────────────
 
 @pytest.mark.parametrize("expr,want", [
