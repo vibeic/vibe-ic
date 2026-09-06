@@ -47,9 +47,28 @@ def read_target(text, out):
 '''
 
 
+#: 60 s, WHICH IS THE HARNESS CEILING AND NOT A ROUND NUMBER.
+#: `ci_harness_timeout_ceiling_check.py` resolves the binding pytest bound from
+#: `.github/workflows/*.yml` — MIN(180, 300) = 180 — and divides it by 3, so any
+#: bound above 60 s here can never FIRE: `--timeout-method=thread` takes the
+#: whole SESSION down at 180 s first, and every other file in the selection
+#: loses its verdict with it. This file first shipped `timeout=900`, which that
+#: gate flagged by name (`test_the_two_trees_use_different_globs_for_a_measured
+#: _reason`), and 900 was a number nobody had measured.
+#:
+#: MEASURED, with the load average beside it as that gate's own advisory census
+#: asks: the widest call this helper makes is the WHOLE-TREE `--ratchet` run in
+#: `test_the_ratchet_passes_the_tree_that_ships`, at 26.7 / 27.1 / 27.3 s on
+#: 8HD-4 under a 5-minute load average of 64. The synthetic-tree calls are under
+#: a second. So 60 s is ~2.2x the widest observed call on a host running at
+#: eight times its core count, and the bound can still fire inside the harness.
+_GATE_TIMEOUT_S = 60
+
+
 def _run_gate(*args: str) -> subprocess.CompletedProcess:
     return subprocess.run([sys.executable, str(_GATE), *args],
-                          capture_output=True, text=True, timeout=900)
+                          capture_output=True, text=True,
+                          timeout=_GATE_TIMEOUT_S)
 
 
 # ── the WIRING: red before it exists ──────────────────────────────────────

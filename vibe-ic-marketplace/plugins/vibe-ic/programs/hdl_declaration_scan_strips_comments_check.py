@@ -347,6 +347,26 @@ _OFFENDER_REGISTER = {
         "OWNER: lane czlecresume. ADDED BY v1.17.62 (364d3cc75). Also the "
         "polarity gate's offender — same pairing as above. Delete this entry in "
         "the commit that fixes it.",
+    "sparse_fsm_detect::_module_at::_MODULE_RE(text)":
+        "OWNER: lane czfsm (8HD-8). ADDED BY v1.18.14 (e11665f5e, 'OpenTitan's "
+        "sparse FSM encodings survive synthesis', #2067), which landed while "
+        "this branch was rebasing -- so this entry is the ratchet doing the one "
+        "thing it was built for, catching an offender the landing after mine "
+        "added, by name and by owner. "
+        "MEASURED, because the entry has to be honest about what is and is not "
+        "wrong today: EVERY call path currently reaches `_module_at` with "
+        "stripped text -- `detect` does `text = _strip_macro_definitions("
+        "_strip_comments(text))` at :216 and hands that same value to "
+        "`_regs_of_type` (:246) and `_sparse_localparam_groups` (:251), and the "
+        "second entry point strips at :295. So no phantom module is being minted "
+        "on this tree. What the finding names is a helper whose correctness is a "
+        "property of its FIVE callers rather than of itself, with no precondition "
+        "saying so; `phase1_port_extract::_verilog_region_spans` was the same "
+        "shape and is fixed in this same branch by stripping inside the function. "
+        "NOT exempted: `_NOT_HDL_DECLARATION` is for a regex that does not parse "
+        "HDL, and `module\\s+(\\w+)` parses exactly that. Delete this entry in "
+        "the commit that gives the function the strip or the precondition -- it "
+        "belongs to the lane that wrote it, not to a lane guessing from outside.",
     "phase1_doc_one_shot_runner::_doc_module_name_label_or_inline::"
     "_RE_DOC_TOP_MODULE_TOP_IS_NAMED(text)":
         "OWNER: lane czadcl10, which owns the phase-1 doc path. The function "
