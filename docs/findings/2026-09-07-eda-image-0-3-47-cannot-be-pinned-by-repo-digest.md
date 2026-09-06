@@ -75,14 +75,53 @@ campaign's measurement runtime are forty patch releases apart, today, before
 
 That is worth a ruling on its own and is independent of everything above.
 
-## The two candidate designs, for the ruling
+## AND THE LOADED ID IS NOT ONE VALUE — IT IS TWO, BY IMAGE STORE
 
-1. **Identity by content.** Pin `sha256:<image id>` and verify `Id` plus the
-   `org.opencontainers.image.version` label, accepting an empty `RepoDigests`
-   when the reference is a bare image ID. An image ID is the digest of the image
-   config, so it is not weaker than a repo digest — but it is not re-pullable,
-   and every host must be given the bytes. The tarball sha256 becomes part of the
-   provenance record rather than an aside.
+Measured after distributing to all five hosts. The brief expected all five to
+agree. They do not, and the split is exact:
+
+| host | docker | image store | image ID | RepoDigests |
+|---|---|---|---|---|
+| 8HD-4 `.120` (built here) | 29.1.3 | `overlay2` | `sha256:f7aa4c31…` | `[]` |
+| 8HD-9 `.105` | 29.1.3 | `overlay2` | `sha256:f7aa4c31…` | `[]` |
+| 8HD-6 `.108` | 29.1.3 | `overlay2` | `sha256:f7aa4c31…` | `[]` |
+| 8HD-8 `.114` | 29.7.2 | `overlayfs` | `sha256:c23c6487…` | `[vibeic-eda@sha256:c23c6487…]` |
+| 8hd-3 `.121` | 29.8.0 | `overlayfs` | `sha256:c23c6487…` | `[vibeic-eda@sha256:c23c6487…]` |
+
+Same tarball, sha256-verified on every target before loading; same labels
+everywhere. The classic graph driver reports the image CONFIG digest and gives a
+loaded image no repo digest; the containerd snapshotter reports the OCI MANIFEST
+digest and synthesises `vibeic-eda@<that digest>`. Two names for the same bytes.
+
+This was predicted from the docker versions before the last three loads returned
+and came back exactly as predicted (`PREDICTION_loaded_ids.txt` in the lane).
+
+Two consequences, and they pull in opposite directions:
+
+* **Pinning by image ID is not fleet-wide.** A single literal cannot match both
+  halves of this fleet. Whichever value is chosen, three hosts or two are wrong.
+* **On the containerd half only, the pin shape would already work.**
+  `vibeic-eda@sha256:c23c6487…` satisfies `IMAGE_RE`'s
+  `[a-z0-9./_-]+@sha256:[0-9a-f]{64}` — so those two hosts could be pinned today
+  and the other three could not. A pin that is valid on part of the fleet is
+  worse than one that is valid on none, because it fails silently on the rest.
+
+What IS identical on all five: the tarball sha256
+`0fce7566d3a8…`, `org.opencontainers.image.version=0.3.47`, the base-digest
+label, and `io.vibeic.derived.openroad.commit`. Verified on one host of each
+store family: `openroad -version` = `26Q3-2065-gcad013df98`, both cap_cmom OSDI
+objects present, `from sealring_cells import gf180mcu_sealring` constructs.
+
+## The candidate designs, for the ruling
+
+1. **Identity by content, and NOT by image ID.** The table above rules out a
+   single ID literal. What is invariant across the fleet is the tarball sha256
+   and the image's own labels, so this option means: pin the tarball sha256 as
+   the artefact's identity, and have the runtime check assert the LABELS
+   (`org.opencontainers.image.version`, the base digest, the openroad commit) of
+   whatever image carries that tag — accepting either an empty `RepoDigests` or a
+   locally synthesised one. That is a different assertion from today's, not a
+   loosened one, and it is exactly the part the owner has to rule on.
 2. **Publish it after all.** Push 0.3.47 to ghcr and keep every line above
    exactly as it is. This contradicts the 2026-09-07 ruling, so it is a change of
    ruling, not an implementation choice.
