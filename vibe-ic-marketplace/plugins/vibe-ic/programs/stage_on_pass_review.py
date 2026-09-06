@@ -524,6 +524,17 @@ def proof_is_inside_the_run(project: Path, test_value: Any) -> bool:
 
 #: The intent field L9 uses to disclose that it could not read a top out of the
 #: design input, and the strategy value that goes with it.
+#:
+#: #2052 — Phase 1 NO LONGER EMITS THIS. The docs front door used to publish the
+#: invented name `chip_top` with this strategy when no extractor found a top; it
+#: now publishes `top_module: null` with `top_module_extraction_strategy:
+#: top_undeclared` and `top_module_status: top_undeclared`, the same refusal the
+#: other front door publishes. Both readers below already handle that shape —
+#: `read_intent_top` keys `declares_no_top` on `no_top_module_in_input` (still
+#: stamped True on exactly that branch), and R2 returns NOT_CHECKED on a
+#: non-string `top_module` before it reaches the disarm. This constant is kept
+#: because L9 documents PUBLISHED BEFORE #2052 are still on disk and still carry
+#: the placeholder; a review that reads them must keep disarming on it.
 _SENTINEL_STRATEGY = "canonical_chip_top_sentinel"
 
 #: The flow's OWN chip-top wrapper name — the module `design_one_shot_runner`

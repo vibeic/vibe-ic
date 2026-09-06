@@ -16,6 +16,11 @@ Both modes write to `phase1/generated_docs/L*.json` + `phase1/human_docs/L*.md`.
 The runner auto-detects the mode by probing for input files, and dispatches
 to the appropriate backend. Callers may force the mode via `--mode`.
 
+ONE FRONT DOOR (#2052): `--mode prompt` is a request, not an override. When the
+detector says the staged input belongs to the doc-extraction track, the request
+is resolved to `docs` and announced — the `phase1_engine` reverse-extractor is
+not a second entry for raw design input. See `_resolve_mode`.
+
 Outputs:
   - <project>/phase1/generated_docs/L1..L13.json
   - <project>/phase1/human_docs/L*.md
@@ -189,6 +194,64 @@ def _detect_input_mode(project: Path) -> str:
     if (project / "input" / "phase1_prompt.md").is_file():
         return "docs"
     return "none"
+
+
+# ── ONE front door (#2052) ──────────────────────────────────
+
+#: The mode a caller may ask for on the command line.
+REQUESTABLE_MODES = ("auto", "docs", "prompt")
+
+#: The name BOTH branches report for canonical flow step D1 — read the design
+#: input and render the L documents. It was two names for one step (#2052).
+D1_STEP_NAME = "phase1_ingest_render"
+
+
+def _resolve_mode(requested: str, detected: str) -> "Tuple[str, Optional[str]]":
+    """Which backend actually runs, and — when that is not what the caller
+    typed — why.
+
+    Returns ``(mode, redirect_note_or_None)``.
+
+    WHAT THIS CHANGES, AND WHAT IT DELIBERATELY DOES NOT
+    ---------------------------------------------------
+    ``--mode prompt`` used to be an ENTRY into ``phase1_engine``'s
+    ``_stub_l_docs_from_prose`` for ANY staged input, including raw design
+    prose that ``_detect_input_mode`` had already ruled belongs to the
+    doc-extraction track. Measured on one 409-byte ``input/phase1_prompt.md``
+    (8HD-6, v1.17.80): the AUTO/docs door published 28 L documents, 4 ports
+    and a sufficient verdict at rc 0, while ``--mode prompt`` over the SAME
+    bytes published 13 L documents, 0 ports, an EXTRACTION GAP and rc 1. One
+    input, two doors, two different designs — and the flow says there is one
+    canonical front door.
+
+    So a REQUEST for the prompt backend no longer overrides the detector when
+    the detector says the input belongs to the docs track: the prompt is staged
+    exactly as AUTO stages it and goes through the docs door, so every layer has
+    ONE derivation. ``phase1_engine`` remains reachable, and remains a LIBRARY
+    the docs door itself calls (v1.17.74's shared port extractor, v1.17.80's
+    shared top-module derivation) — what it stops being is a second front door
+    for raw design input.
+
+    AUTO IS UNCHANGED BY CONSTRUCTION: the ``auto`` branch below is the
+    pre-existing expression, untouched. The engine still runs exactly where the
+    DETECTOR itself answers "prompt" (an ``input/docs/`` that already holds
+    pre-structured ``L*.json`` — the reverse-extractor's actual job) and where
+    nothing is staged at all (the SKIP that reports "nothing to do").
+
+    Pure: takes two strings, reads no filesystem, returns two. chip-AGNOSTIC.
+    """
+    if requested == "auto":
+        # UNCHANGED — the pre-#2052 expression, verbatim.
+        return (detected if detected != "none" else "prompt"), None
+    if requested == "prompt" and detected == "docs":
+        return "docs", (
+            "requested --mode prompt; the staged input is a doc-extraction "
+            "input (_detect_input_mode='docs'), so it was routed through the "
+            "canonical docs front door. The phase1_engine reverse-extractor "
+            "is not a second entry for raw design input (#2052); it stays "
+            "reachable for a pre-structured L*.json corpus, and its "
+            "extractors remain a library the docs door calls.")
+    return requested, None
 
 
 # ── Prompt mode (IC Expert Agent / dialogue → phase1_engine) ───────
@@ -1146,9 +1209,14 @@ def main() -> int:
     p.add_argument("project", type=Path)
     p.add_argument("--ic-name", default="UNNAMED_CHIP")
     p.add_argument("--mode",
-                   choices=["auto", "docs", "prompt"],
+                   choices=REQUESTABLE_MODES,
                    default="auto",
-                   help="input mode: auto-detect (default), force docs, or force prompt")
+                   help="input mode: auto-detect (default), force docs, or "
+                        "request prompt. #2052: a `prompt` REQUEST over an "
+                        "input the detector routes to the doc-extraction "
+                        "track is resolved to `docs` and announced — the "
+                        "engine reverse-extractor is not a second front door "
+                        "for raw design input.")
     args, extras = p.parse_known_args()
     project = args.project.resolve()
     if not project.is_dir():
@@ -1175,11 +1243,11 @@ def main() -> int:
     # PASS_WITH_WAIVERS rc=0). This matches the legacy behaviour where
     # an empty project gracefully reports "nothing to do" rather than
     # exiting non-zero.
-    if args.mode == "auto":
-        detected = _detect_input_mode(project)
-        mode = detected if detected != "none" else "prompt"
-    else:
-        mode = args.mode
+    detected = _detect_input_mode(project)
+    mode, mode_redirect = _resolve_mode(args.mode, detected)
+    if mode_redirect:
+        # A route the caller did not type is announced, never silent.
+        print(f"[phase1] mode: {mode_redirect}")
 
     # Docs mode: delegate to phase1_doc_one_shot_runner
     if mode == "docs":
@@ -1190,9 +1258,14 @@ def main() -> int:
         # `phase1/input_{doc,prompt}/`. Without this, a project with nothing
         # staged ran the whole 17-skill doc-extraction track over an empty
         # tree and reported a verdict about the L-docs it "produced".
+        # ONE NAME FOR ONE FLOW STEP (#2052). D1 was `phase1_doc_extract` here
+        # and `phase1_ingest_render` on the prompt branch — one step, two names,
+        # so a reader comparing two runs of the same design could not join them.
+        # Now that `--mode prompt` resolves to this door, the name a run reports
+        # for D1 must not depend on which door it came through either.
         _pf = _spf.gate(
             project, "phase1_one_shot_runner", "doc_extract",
-            _preflight_refusal("phase1_doc_extract"),
+            _preflight_refusal(D1_STEP_NAME),
             _run_docs_mode, project, args.ic_name, extras)
         # `_run_docs_mode` returns an int rc; the refusal factory returns a
         # StepResult. The TYPE is the discriminator, and it is exact — there is
@@ -1222,15 +1295,37 @@ def main() -> int:
             "ic_name": args.ic_name,
             "delegated_to": "phase1_doc_one_shot_runner",
             "delegated_rc": rc,
+            "mode_requested": args.mode,
+            "mode_detected": detected,
+            "mode_redirect": mode_redirect,
             "duration_s": time.time() - t0,
             "verdict": verdict,
             "second_track": second_track,
         }
+        # THE REPORT SHAPE IS THE SAME ON BOTH DOORS (#2052). A refusal was
+        # already reported here as a `steps` list; a COMPLETED run was not, so
+        # `reports/phase1_one_shot.json` carried a `steps` key on one door and
+        # not on the other for the same design — a divergence about the doors,
+        # not about the design, in the file every caller reads. Both branches
+        # now report the same two rows: D1, and the independent expert track.
+        _t_docs = time.time() - t0
         if refused:
             # A refusal must be readable AS a refusal, not as "the delegate
             # returned 1". Same shape as the prompt branch's `steps` list.
             summary["steps"] = [asdict(_pf)]
             summary["preflight_ledger"] = _spf.LEDGER_REL
+        else:
+            summary["steps"] = [
+                asdict(StepResult(
+                    D1_STEP_NAME, "PASS" if rc == 0 else "FAIL", _t_docs,
+                    f"delegated to phase1_doc_one_shot_runner (rc={rc}); "
+                    f"L documents under "
+                    f"{_pl.generated_docs_dir(project).name}/")),
+                asdict(StepResult(
+                    "phase1_expert_parse_track",
+                    "PASS" if rc == 0 else "FAIL", 0.0,
+                    str(second_track)[:400])),
+            ]
         # Per-step output view — see the prompt-mode call below. BOTH exits of
         # this main() get it; wiring only one would leave the docs entry (Path
         # A, the vendor-document front door) without a steps tree.
@@ -1249,7 +1344,7 @@ def main() -> int:
     # the shape of the gap this closes.
     plan.append(_spf.gate(
         project, "phase1_one_shot_runner", "doc_extract",
-        _preflight_refusal("phase1_ingest_render"),
+        _preflight_refusal(D1_STEP_NAME),
         step_ingest_render, project, args.ic_name))
     plan.append(step_human_docs(project))
 
@@ -1275,6 +1370,9 @@ def main() -> int:
     summary = {
         "phase": 1,
         "mode": mode,
+        "mode_requested": args.mode,
+        "mode_detected": detected,
+        "mode_redirect": mode_redirect,
         "project": str(project),
         "ic_name": args.ic_name,
         "steps": [asdict(s) for s in plan],
