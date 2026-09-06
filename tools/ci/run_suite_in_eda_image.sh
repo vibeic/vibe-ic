@@ -292,6 +292,21 @@ UID_NOW="$(id -u)"; GID_NOW="$(id -g)"
 { grep -v "^designer:" "$PASSWD.image" || true
   echo "designer:x:$UID_NOW:$GID_NOW:designer:$HOME_IN:/bin/bash"; } > "$PASSWD"
 
+# The HOME this harness supplies must carry the image's own `.bashrc`.
+# `/dockerstartup/scripts/ui_startup.sh:34` is `source "$HOME/.bashrc"` under
+# `set -e`, and it runs BEFORE the `--skip` branch at line 37 — so an empty HOME
+# makes the entrypoint exit before it ever looks at the command, with
+# `line 34: <home>/.bashrc: No such file or directory`. Taken FROM THE IMAGE
+# rather than written here, for the same reason /etc/passwd above is: the file
+# the image ships is the one its own startup expects to source.
+if [ ! -f "$HOME_IN/.bashrc" ]; then
+  "${DOCKER_BIN:-docker}" run --rm --entrypoint /bin/cat "$IMAGE" \
+    /headless/.bashrc > "$HOME_IN/.bashrc.tmp" 2>/dev/null \
+    || die "cannot read /headless/.bashrc from $IMAGE, which the image's own
+    entrypoint sources before it will run anything"
+  mv "$HOME_IN/.bashrc.tmp" "$HOME_IN/.bashrc"
+fi
+
 DOCKER_ARGS=(
   --rm --platform linux/amd64
   --user "$UID_NOW:$GID_NOW"
@@ -301,6 +316,7 @@ DOCKER_ARGS=(
   -w "$REPO_ROOT/vibe-ic-marketplace/plugins/vibe-ic"
   -e "HOME=$HOME_IN"
   -e "TMPDIR=$SCRATCH/tmp"
+  -e "VIBEIC_SUITE_NSS=$SCRATCH"
   -e PYTHONDONTWRITEBYTECODE=1
   -e PYTEST_DISABLE_PLUGIN_AUTOLOAD=1
   -e GIT_CONFIG_GLOBAL=/dev/null
@@ -330,7 +346,7 @@ fi
 # socket that is bound but unusable (group, SELinux, a stopped daemon) produces
 # the identical NORECORD, and "I could not look" must not be reported as red.
 if [ "$ENGINE" = "1" ]; then
-  if ! "$DOCKER_BIN" run "${DOCKER_ARGS[@]}" --entrypoint /bin/sh "$IMAGE" \
+  if ! "$DOCKER_BIN" run "${DOCKER_ARGS[@]}" "$IMAGE" --skip bash \
         -c 'command -v docker >/dev/null && docker version --format "{{.Server.Version}}"' \
         >"$SCRATCH/engine-probe.txt" 2>&1; then
     sed 's/^/    /' "$SCRATCH/engine-probe.txt" >&2
@@ -341,7 +357,80 @@ if [ "$ENGINE" = "1" ]; then
   echo "$PROG: engine inside the container: server $(cat "$SCRATCH/engine-probe.txt")" >&2
 fi
 
-"${DOCKER_BIN:-docker}" run "${DOCKER_ARGS[@]}" --entrypoint /bin/sh "$IMAGE" \
-  -c 'exec python3 -m pytest "$@"' sh "$@"
+# THROUGH THE IMAGE'S OWN ENTRYPOINT, and `--skip` FIRST because the entrypoint's
+# own help says that flag is ignored anywhere else.
+#
+# This used to be `--entrypoint /bin/sh`, which starts the container without ever
+# running the image's setup. The image's `ENV` layer survives that, so `PATH` and
+# a one-entry `PYTHONPATH` looked right and the bypass was invisible. What the
+# entrypoint ADDS, measured 2026-09-07 on 8HD-9 by diffing `env | sort` between
+# the two shapes on digest 06537f7e (label 0.3.46), 29 variables against 57:
+#
+#   PYTHONPATH   gains /opt/vibeic-forks/cocotb/src, /opt/vibeic-forks/pyuvm/src,
+#                /foss/tools/klayout/pymod and the dist-packages chain. THE FORKED
+#                cocotb AND pyuvm ARE NOT IMPORTABLE WITHOUT IT.
+#   PDK          ihp-sg13g2, with PDKPATH, STD_CELL_LIBRARY and SPICE_USERINIT_DIR
+#   LD_LIBRARY_PATH  klayout, ngspice, iverilog, openems, kactus2, gtkwave, kepler-formal
+#   KLAYOUT_HOME / KLAYOUT_PATH, CPATH and LIBRARY_PATH for ghdl,
+#   PYTHONPYCACHEPREFIX, USER, XDG_*, and FOSS_INIT_DONE=1 — the sentinel that
+#   says the setup ran at all.
+#
+# A suite must run in the environment the image ships. Anything measured through
+# the bypass was measured against a different one.
+#
+# AND THEN IT TAKES ITS OWN COPY OF THE nss_wrapper FILES, which is not a
+# bypass — it runs entirely AFTER the entrypoint, on what the entrypoint wrote.
+#
+# `generate_container_user.sh:17` HARDCODES `NSS_WRAPPER_PASSWD=/tmp/passwd`
+# (a preset value is overwritten, so `-e` cannot move it) and line 21 is
+# `install -m 0644 /etc/passwd /tmp/passwd`. This harness binds the HOST's
+# `/tmp` at its own path, so `/tmp/passwd` is one shared mutable file and the
+# last container to start wins it — for every lane on the box, not just ours.
+#
+# MEASURED 2026-09-07 on 8HD-9, and it is not theoretical: an A/B of this suite
+# through the entrypoint against `--entrypoint /bin/sh`, same tree, same 377
+# nodes, moved ELEVEN nodes from passed to skipped, all of them in
+# `test_issue1446_scratch_root_guard.py`, all with one reason —
+#     "cannot resolve the host account home: [Errno 2] ... '/var/tmp/czh_pr1'"
+# `/var/tmp/czh_pr1` was ANOTHER container of this lane, started seconds
+# earlier. The session resolved its account home out of a file a different run
+# owned, and eleven checks about the account home reported SKIPPED rather than
+# saying they had been handed someone else's answer.
+#
+# So the session copies the entrypoint's own output to a per-run path under the
+# scratch and re-points nss_wrapper at the copy, then CHECKS that the home it
+# resolves is the one this run supplied and refuses by name if it is not. A
+# later writer to /tmp/passwd can no longer change what this session sees.
+"${DOCKER_BIN:-docker}" run "${DOCKER_ARGS[@]}" "$IMAGE" \
+  --skip bash -c '
+    set -e
+    # THE passwd COMES FROM /etc/passwd, NOT FROM /tmp/passwd. Both carry the
+    # same designer line when nothing has raced; only one of them CANNOT be
+    # raced. /etc/passwd is the file THIS harness bind-mounts read-only a few
+    # lines above, carrying the account home this run supplied, so taking it
+    # here closes the window entirely rather than narrowing it. The GROUP is
+    # taken from the entrypoint, which is where the designers line is
+    # appended, and a group carries no per-run state to corrupt.
+    # NOTE FOR ANYONE EDITING THIS BLOCK: it is inside a single-quoted
+    # bash -c body. An apostrophe here ends the string.
+    # NAMED nss-passwd / nss-group, NOT passwd / group: $VIBEIC_SUITE_NSS is
+    # $SCRATCH, and $SCRATCH/passwd is the very file this harness bind-mounts
+    # AT /etc/passwd. Copying onto it is cp refusing "the same file".
+    cp /etc/passwd "$VIBEIC_SUITE_NSS/nss-passwd"
+    cp "$NSS_WRAPPER_GROUP"  "$VIBEIC_SUITE_NSS/nss-group"
+    export NSS_WRAPPER_PASSWD="$VIBEIC_SUITE_NSS/nss-passwd"
+    export NSS_WRAPPER_GROUP="$VIBEIC_SUITE_NSS/nss-group"
+    got=$(python3 -c "import os,pwd; print(pwd.getpwuid(os.getuid()).pw_dir)")
+    if [ "$got" != "$HOME" ]; then
+      echo "run_suite_in_eda_image.sh: REFUSED — the account home this session" >&2
+      echo "    resolves is $got, but this run supplied HOME=$HOME." >&2
+      echo "    This should be unreachable: the passwd this session uses is" >&2
+      echo "    copied from the read-only /etc/passwd this harness mounts, not" >&2
+      echo "    from the shared /tmp/passwd. NOTHING WAS" >&2
+      echo "    RUN: a suite whose account home belongs to another run is not a" >&2
+      echo "    verdict about this tree." >&2
+      exit 2
+    fi
+    exec python3 -m pytest "$@"' bash "$@"
 EXIT_RC=$?
 exit "$EXIT_RC"

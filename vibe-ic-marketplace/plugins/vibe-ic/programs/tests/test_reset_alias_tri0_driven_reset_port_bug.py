@@ -32,6 +32,9 @@ import pytest
 
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from not_verified_tier import skip_not_verified  # noqa: E402
+
 import _progress_run as _pr  # noqa: E402
 
 SCRIPT = Path(__file__).resolve().parents[1] / "reset_clock_variant_alias.py"
@@ -214,7 +217,10 @@ def test_sv2v_with_dyosys_strips_tri_from_wrapper(tmp_path):
     emits NO tri0/tri1 token (yosys-safe); WITHOUT it the tri survives
     (the defect shape) — stay-effective both ways."""
     if not shutil.which("docker"):
-        pytest.skip("docker not available")
+        skip_not_verified(
+            "docker engine not bound in this run",
+            remedy="run through tools/ci/run_suite_in_eda_image.sh, which "
+                   "binds the host docker CLI and socket into the container")
     import os
     container = os.environ.get("VIBEIC_IVERILOG13_CONTAINER", "vibeic-eda")
     probe = subprocess.run(["docker", "exec", container, "sh", "-c",

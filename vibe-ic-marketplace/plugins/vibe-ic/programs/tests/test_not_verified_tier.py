@@ -241,6 +241,15 @@ def _undeclared_infra_skips():
 #: `test_fault_atpg_run.py: 1 -> 0` — and could not be seen because the
 #: `new_files` assertion above it fired first on three other files. Removing the
 #: row lowers the frontier, which is the only direction it may move.
+#: 2026-09-07 (#2066 CZH-14 follow-up): the four docker-CLI sites in
+#: `test_reset_alias_tri0_driven_reset_port_bug.py` (1),
+#: `test_v1_3_85_chip_top_vl_tri_outermost.py` (2) and
+#: `test_v1_3_88_issue119_chip_top_reemit_pull_restore.py` (1) are CONVERTED and
+#: their rows LOWERED per the rule above — 2->1, 4->2, 2->1. They skipped bare on
+#: `not shutil.which("docker")`, which is always true inside the pinned image
+#: (it ships no CLI) and in any engine-less run, so four verifications reported
+#: SKIPPED for a condition belonging to the RUN. They now declare through this
+#: tier. MEASURED with the detector below on 9cf22c191c: 45 sites before, 41 after.
 RESIDUAL_UNDECLARED: dict = {
     "test_gds_geometry_signoff_wiring.py": 1,
     "test_hspice_lib_ngspice_normalize.py": 1,
@@ -249,7 +258,7 @@ RESIDUAL_UNDECLARED: dict = {
     "test_lec_post_layout_check.py": 1,
     "test_lec_run.py": 6,
     "test_phase3_routability_driven_placement.py": 1,
-    "test_reset_alias_tri0_driven_reset_port_bug.py": 2,
+    "test_reset_alias_tri0_driven_reset_port_bug.py": 1,
     "test_score_cocotb_functional_verdict_parser.py": 2,
     "test_staged_macro_aware_synth_define.py": 1,
     "test_v1_0_52_gap1_via_analyzer_sky130_unnumbered_cut.py": 1,
@@ -261,8 +270,8 @@ RESIDUAL_UNDECLARED: dict = {
     "test_v1_0_86_issue771_ppa_metric_window.py": 1,
     "test_v1_3_52_r6_sparse_die_welltie.py": 1,
     "test_v1_3_83_fork_iverilog_escalation.py": 1,
-    "test_v1_3_85_chip_top_vl_tri_outermost.py": 4,
-    "test_v1_3_88_issue119_chip_top_reemit_pull_restore.py": 2,
+    "test_v1_3_85_chip_top_vl_tri_outermost.py": 2,
+    "test_v1_3_88_issue119_chip_top_reemit_pull_restore.py": 1,
 }
 
 

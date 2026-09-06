@@ -1781,25 +1781,43 @@ def parallel_audit(repo_root: Path, jobs: int,
                 text=True)))
 
         def collect(row):
+            """Wait for one worker. NO STOPWATCH — see below.
+
+            This used to wait `max(timeout * len(labels), timeout)` and KILL
+            the worker on expiry, which turned every busy host into
+            PARALLEL_INCOMPLETE: a killed worker writes no record, so its
+            labels are then reported as "driven by no worker" and the whole
+            gate returns a NON-VERDICT. The configuration it was asked about
+            was never checked, and the reason had nothing to do with the tree.
+
+            MEASURED 2026-09-07 on 8HD-9 at 18cb660e3b01, `--jobs 8`, load 62:
+            the arm with no corpus pointer bound — the arm that is supposed to
+            PASS — returned rc 2 `PARALLEL_INCOMPLETE`, "worker 0 exceeded its
+            600s process budget", "labels driven by no worker: an argued
+            direction is pinned", after 1915 s. A deadline that fires on load
+            is a measurement of the machine, and this gate exists to measure
+            the TREE.
+
+            This is the move `matrix_mutation_ledger.replay` already made for
+            the same reason, in this same repository: "``timeout`` NO LONGER
+            BOUNDS A CELL … one that is merely slow on a busy host runs to
+            completion instead of being killed and recorded as unreadable."
+
+            Nothing is lost by waiting. A worker that dies still returns, and
+            the branch below already names it — "exited {rc} without a machine
+            record" — so a genuine failure is reported BY NAME rather than
+            inferred from a clock. What is gained is that a slow run reports a
+            verdict about the tree, late, instead of no verdict at all.
+            """
             i, labels, json_path, proc = row
-            try:
-                out, err = proc.communicate(timeout=max(timeout * len(labels),
-                                                        timeout))
-                return i, labels, json_path, proc.returncode, out, err, None
-            except subprocess.TimeoutExpired as exc:
-                proc.kill()
-                out, err = proc.communicate()
-                return i, labels, json_path, proc.returncode, out, err, exc
+            out, err = proc.communicate()
+            return i, labels, json_path, proc.returncode, out, err, None
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as pool:
             rows = list(pool.map(collect, procs))
 
         for i, labels, json_path, rc, out, err, exc in sorted(rows):
-            if exc is not None:
-                problems.append(
-                    f"worker {i} exceeded its {max(timeout * len(labels), timeout)}s "
-                    "process budget")
-                continue
+            assert exc is None                 # no stopwatch — see `collect`
             if not json_path.is_file():
                 tail = ((err or out).strip().splitlines() or ["no output"])[-1]
                 problems.append(

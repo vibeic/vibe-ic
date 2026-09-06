@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import importlib
 import json
+import resource
 import shutil
 import subprocess
 import sys
@@ -329,20 +330,61 @@ def _says_signal(text: str) -> bool:
 # ---------------------------------------------------------------------------
 # THE SIGNAL PATH — measured, not assumed
 # ---------------------------------------------------------------------------
-def test_a_process_killed_by_a_signal_reaches_the_runner_as_128_plus_n():
+def _no_core_dumps() -> None:
+    """Child-side: refuse to write a core file however the host is configured.
+
+    Set in the CHILD because `RLIMIT_CORE` is inherited, and inherited is
+    exactly the problem — `ulimit -c` is 0 on this fleet's hosts and
+    `unlimited` inside the pinned image, so the same test writes a core file in
+    one place and not the other.
+    """
+    resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+
+
+def test_a_process_killed_by_a_signal_reaches_the_runner_as_128_plus_n(
+        tmp_path):
     """The premise the whole fix rests on, EXERCISED rather than described: a
     real process that dies on SIGSEGV inside the exact pipeline shape
     `_docker_exec` builds (`<tool> 2>&1 | tee <log>` under `set -o pipefail`)
     is reported to the caller as 128+11.
 
     This one is true of the pre-fix runner too — that is the point. The signal
-    was always arriving as 139; nothing was reading it as a signal."""
+    was always arriving as 139; nothing was reading it as a signal.
+
+    IT REALLY SEGFAULTS A PROCESS, so it really produces a core file wherever
+    the kernel is told to put one. `/proc/sys/kernel/core_pattern` is the bare
+    relative name `core` on this fleet, which means THE DYING PROCESS'S CWD,
+    and this test used to inherit pytest's — the plugin root, inside the git
+    tree. MEASURED 2026-09-07 on 8HD-9 through the repo's own container
+    harness: `core.39`, 557056 bytes, left in
+    `vibe-ic-marketplace/plugins/vibe-ic/`, where `suite_write_guard` named it
+    and a later chip-agnostic scan reads it as tree content. It did not appear
+    on the host arm because `ulimit -c` is 0 there and `unlimited` in the
+    image — so the host arm is not evidence that this is clean.
+
+    Three things, because none of them is sufficient alone: the child drops its
+    own `RLIMIT_CORE` (the host's `core_pattern` is not ours to set), the child
+    runs in `tmp_path` so a dump the kernel writes anyway lands outside the
+    tree, and the tree is CHECKED afterwards rather than assumed."""
     inner = "bash -c 'kill -SEGV $$' 2>&1 | tee /dev/null"
     wrapped = mod._tool_status_not_the_log_sinks(inner)
     assert wrapped.startswith("set -o pipefail")
+    plugin_root = Path(mod.__file__).resolve().parent.parent
+    before = {p.name for p in plugin_root.glob("core*")}
     rc = subprocess.run(["bash", "-lc", wrapped],
-                        capture_output=True).returncode
+                        capture_output=True, cwd=str(tmp_path),
+                        preexec_fn=_no_core_dumps).returncode
     assert rc == 139, "a SIGSEGV in the tee pipeline must surface as 128+11"
+    after = {p.name for p in plugin_root.glob("core*")}
+    assert after == before, (
+        f"this test segfaults a process and left {sorted(after - before)} in "
+        f"{plugin_root}. A test that writes into the tree it is measuring "
+        f"poisons every later scan of the same checkout.")
+    dumped = sorted(p.name for p in tmp_path.glob("core*"))
+    assert not dumped, (
+        f"RLIMIT_CORE was set to 0 in the child and it dumped anyway: {dumped}. "
+        f"The dump is outside the tree, so nothing is poisoned, but the limit "
+        f"is not doing what this test says it does.")
 
 
 def test_a_watchdog_kill_is_not_reported_as_a_tool_crash(
