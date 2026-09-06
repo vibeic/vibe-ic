@@ -49165,6 +49165,27 @@ _czl9_emit_interface_prose = _ppx.emit_interface_prose
 # were: this mirrors a value the caller already has, and failing to mirror must
 # never take the layer down.
 #
+# ONE SIDE EFFECT, DECLARED HERE BECAUSE IT LOOKS LIKE A WIN AND IS NOT.
+# Extracting these writes moved `phase1_doc_one_shot_runner::gen_l9_integration_
+# spec` OUT of `prose_polarity_consulted_check`'s polarity-blind register
+# (216 -> 214 over the plugin, two departures where this lane fixed ONE).
+# It did not learn anything. `_writes_a_declared_value` asks whether a
+# subscript assignment writes a value that is MATCH-DERIVED INSIDE THE SAME
+# FUNCTION, and `tm["top_cell"] = _v1_6_405_top_module` was the last such write
+# in that 1000-line function. Here the name arrives as a PARAMETER, so its
+# provenance is invisible and neither function is in the population any more:
+#
+#     gen_l9_integration_spec   searches_prose=True  writes_value=True -> False
+#     _v2060_mirror_top_cell    searches_prose=False (it reads no sentence)
+#
+# The function is exactly as polarity-blind about the top module as it was —
+# `_consults_polarity` is still False for it, and a test pins that so the
+# departure can never be recorded as a tightening. Two things follow, and both
+# are reported rather than banked: this lane's register shrink is ONE entry, not
+# two; and the gate has a blind spot worth its own fix — a write extracted into
+# a helper leaves the population without anything being fixed, which is the
+# count-not-membership shape that gate's own docstring warns about.
+#
 # chip-AGNOSTIC: a status vocabulary and a field name; no chip, PDK or vendor
 # literal.
 def _v2060_mirror_top_cell(project, top_module, top_module_status) -> bool:
@@ -51451,7 +51472,7 @@ def _harvest_test_cases_from_input_tables(
                             # `holds: <scenario>` for that cell. When a cell
                             # both affirms and denies, nothing is published:
                             # the cell is kept verbatim and the oracle-anchor
-                            # gate judges it, which is the conservative half.
+                            # gate judges it, which is the cautious half.
                             and not _polarity_word
                             and _no_substantive_tail
                             and _scenario_usable)

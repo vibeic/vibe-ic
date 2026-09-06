@@ -647,3 +647,37 @@ def test_there_is_exactly_ONE_writer_of_the_field_in_this_module():
     assert len(writers) == 1, (
         f"{len(writers)} statements assign tapeout_metadata['top_cell'] at "
         f"lines {[w.lineno for w in writers]} — the mirror was copied again")
+
+
+def test_the_l9_generator_departure_is_a_scope_artefact_not_a_fix():
+    """It left the polarity-blind register WITHOUT learning anything.
+
+    Extracting the top-cell writes into `_v2060_mirror_top_cell` moved
+    `gen_l9_integration_spec` out of `prose_polarity_consulted_check`'s
+    population, because `_writes_a_declared_value` asks whether a subscript
+    assignment writes a value that is match-derived IN THE SAME FUNCTION and
+    the name now arrives as a parameter.  That is a scope artefact, not a
+    tightening, and this arm exists so it can never be recorded as one: the
+    function still reads prose and still never asks whether the sentence
+    denies the top it just read.
+    """
+    import ast as _ast
+    import prose_polarity_consulted_check as G  # noqa: WPS433
+    src = (_PROGRAMS / "phase1_doc_one_shot_runner.py").read_text(
+        errors="replace")
+    tree = _ast.parse(src)
+    aliases = G._aliases(tree)
+    fns = {n.name: n for n in _ast.walk(tree)
+           if isinstance(n, (_ast.FunctionDef, _ast.AsyncFunctionDef))}
+    l9 = fns["gen_l9_integration_spec"]
+    assert G._searches_prose(l9) is True, (
+        "the fixture is invalid: the generator no longer reads prose at all, "
+        "so this arm is about nothing")
+    assert G._consults_polarity(l9, aliases) is False, (
+        "gen_l9_integration_spec now consults polarity — that IS a fix, and "
+        "this arm must be replaced by one that pins the fix instead of the "
+        "honest disclosure of a scope artefact")
+    mirror = fns["_v2060_mirror_top_cell"]
+    assert G._searches_prose(mirror) is False, (
+        "the mirror reads a sentence — then it owes a polarity consult like "
+        "any other prose extractor")
