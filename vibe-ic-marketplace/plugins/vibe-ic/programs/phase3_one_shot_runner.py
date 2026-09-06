@@ -997,6 +997,105 @@ def _tool_status_not_the_log_sinks(cmd: str) -> str:
     return _PIPEFAIL_PREFIX + cmd
 
 
+#: Cached answer to "is there any route from this process to an EDA container?"
+#: `None` = not yet asked. Reset it to `None` to re-ask (tests do).
+_LOCAL_EXEC_MODE = None  # type: Optional[bool]
+
+
+def _local_exec_mode() -> bool:
+    """True when this process must run its EDA tools ON ITS OWN FILESYSTEM
+    because there is NO route from here to a container.
+
+    WHY THIS EXISTS. Every Phase-3 step reaches its tool through
+    `docker exec <$EDA_CONTAINER> bash -lc ...` — a container this runner
+    never starts and only ever enters. That is correct when the runner sits
+    on the host BESIDE the image, and it is unreachable when the runner is
+    ALREADY RUNNING INSIDE that image: there is no `docker` binary in there,
+    so the very first tool call returns
+    `127 COMMAND_NOT_FOUND: ... 'docker'` and every later step is BLOCKED on
+    an artefact the first one never wrote. MEASURED 2026-09-06, subservient
+    through the canonical front door (`vibe_ic_one_shot_runner.py`,
+    --pdk gf180mcuD) inside ghcr.io/vibeic/vibeic-eda 0.3.46: phase1 PASS,
+    phase2 PASS_WITH_WAIVERS, Phase 3 opened 15 steps and died at its first
+    act with `FAIL synth rc=127 COMMAND_NOT_FOUND: 'docker'`; `yosys`,
+    `openroad` and `klayout` were all on PATH in that same process
+    (/foss/tools/bin/yosys, /foss/tools/bin/openroad,
+    /foss/tools/klayout/klayout). The tools were under the process's own root
+    the whole time; only the ACCESS ROUTE was missing.
+
+    This is the third resolver in this file to learn the same lesson, and it
+    is deliberately the same shape as the two that came before it —
+    `_read_pdk_text` ("Host read first ... then the container") and, since
+    v1.17.79, `_registry_glob_one_local`. Those two taught the PDK to resolve
+    in-image; this one teaches the TOOLS to run there.
+
+    THE PREDICATE IS "NO ROUTE", NOT "IN AN IMAGE".  Local mode is taken only
+    when BOTH hold:
+      * `$EDA_CONTAINER` is unset/empty — nobody NAMED a container. When an
+        operator names one, that naming is the instruction and it is obeyed
+        even if the exec then fails; the failure is about the container they
+        asked for, which is the honest answer.
+      * `docker` is not on PATH — there is no client that could reach one.
+    On every host that has docker, and in every run that names a container,
+    this returns False and the argv below is BYTE-IDENTICAL to what it has
+    always been. There is no host-side behaviour change by construction.
+
+    DEGRADES LOUDLY. In local mode a tool that is genuinely absent is not
+    silently substituted: `bash` reports `<tool>: command not found` and
+    `_annotate_local_exec` names the route that was taken, so a reader can
+    tell "the tool is missing here" apart from "the flow could not reach a
+    tool". Tool/PDK/chip-AGNOSTIC: nothing here names a tool or a PDK."""
+    global _LOCAL_EXEC_MODE
+    if _LOCAL_EXEC_MODE is None:
+        _LOCAL_EXEC_MODE = (not os.environ.get("EDA_CONTAINER")
+                            and shutil.which("docker") is None)
+    return bool(_LOCAL_EXEC_MODE)
+
+
+def _exec_argv(container: str, wrapped: str) -> List[str]:
+    """The argv that runs `wrapped` in a LOGIN shell where the tools live.
+
+    ONE seam, used by both `_docker_exec_raw` and the supervised branch of
+    `_docker_exec`, so the two can never drift into disagreeing about where a
+    tool runs. Container route (the default) is unchanged, `-e
+    IIC_OSIC_TOOLS_QUIET=1` included.
+
+    In local mode the `-e` cannot be passed as a docker flag, and the knob has
+    to be in the ENVIRONMENT before the login shell sources
+    /etc/profile.d/iic-osic-tools-setup.sh (that is where the image's startup
+    banner is printed). `setdefault` reproduces exactly what `docker exec -e`
+    does for the child, and leaves an operator's own value alone."""
+    if _local_exec_mode():
+        os.environ.setdefault("IIC_OSIC_TOOLS_QUIET", "1")
+        return ["bash", "-lc", wrapped]
+    return ["docker", "exec",
+            # The vibeic-eda image's profile prints a startup banner
+            # ("[INFO] Final PATH variable: ...") to STDOUT on every LOGIN
+            # shell, ahead of the command output. `IIC_OSIC_TOOLS_QUIET` is
+            # the image's OWN documented knob for it
+            # (/etc/profile.d/iic-osic-tools-setup.sh guards both echoes on
+            # it), so suppressing at SOURCE keeps every probe's stdout
+            # clean instead of filtering the noise at each consumer.
+            "-e", "IIC_OSIC_TOOLS_QUIET=1",
+            container, "bash", "-lc", wrapped]
+
+
+def _annotate_local_exec(rc: int, err: str) -> str:
+    """Name the route when a LOCAL run reports 127.
+
+    Without this, `yosys: command not found` inside the image and
+    `No such file or directory: 'docker'` on a host without one are two
+    completely different diagnoses that a reader cannot tell apart from the
+    rc alone. Bounded: one line, appended, never replacing what the shell
+    said. A no-op outside local mode and for every rc but 127."""
+    if rc != 127 or not _local_exec_mode():
+        return err
+    note = ("LOCAL_EXEC: no $EDA_CONTAINER named and no docker on PATH, so "
+            "this ran on THIS filesystem; 127 means the tool is not on PATH "
+            "here either (it does NOT mean a container was unreachable).")
+    return (err + ("\n" if err and not err.endswith("\n") else "") + note)
+
+
 def _docker_exec_raw(container: str, cmd: str, timeout: int = 1800
                      ) -> Tuple[int, str, str]:
     """Run shell cmd inside a Docker container with a SIMPLE container-side
@@ -1018,16 +1117,7 @@ def _docker_exec_raw(container: str, cmd: str, timeout: int = 1800
         f"exec timeout --kill-after=5 {_inner} bash -lc {shlex.quote(cmd)}; "
         f"else exec bash -lc {shlex.quote(cmd)}; fi"
     )
-    full = ["docker", "exec",
-            # The vibeic-eda image's profile prints a startup banner
-            # ("[INFO] Final PATH variable: ...") to STDOUT on every LOGIN
-            # shell, ahead of the command output. `IIC_OSIC_TOOLS_QUIET` is
-            # the image's OWN documented knob for it
-            # (/etc/profile.d/iic-osic-tools-setup.sh guards both echoes on
-            # it), so suppressing at SOURCE keeps every probe's stdout
-            # clean instead of filtering the noise at each consumer.
-            "-e", "IIC_OSIC_TOOLS_QUIET=1",
-            container, "bash", "-lc", _wrapped]
+    full = _exec_argv(container, _wrapped)
 
     # v0.2.36 — on TimeoutExpired, subprocess may hand back partial
     # `stdout`/`stderr` as BYTES even though `text=True` was requested
@@ -1043,7 +1133,8 @@ def _docker_exec_raw(container: str, cmd: str, timeout: int = 1800
     try:
         cp = subprocess.run(full, capture_output=True, text=True,
                             timeout=timeout)
-        return cp.returncode, _as_text(cp.stdout), _as_text(cp.stderr)
+        return (cp.returncode, _as_text(cp.stdout),
+                _annotate_local_exec(cp.returncode, _as_text(cp.stderr)))
     except subprocess.TimeoutExpired as e:
         return (124, _as_text(e.stdout),
                 f"TIMEOUT after {timeout}s: {e}")
@@ -1106,16 +1197,7 @@ def _docker_exec(container: str, cmd: str, timeout: int = 1800, *,
     _pidfile = _dwd.new_job_pidfile()
     _wrapped = _dwd.wrap_with_container_timeout(cmd, ceiling,
                                                 pidfile=_pidfile)
-    full = ["docker", "exec",
-            # The vibeic-eda image's profile prints a startup banner
-            # ("[INFO] Final PATH variable: ...") to STDOUT on every LOGIN
-            # shell, ahead of the command output. `IIC_OSIC_TOOLS_QUIET` is
-            # the image's OWN documented knob for it
-            # (/etc/profile.d/iic-osic-tools-setup.sh guards both echoes on
-            # it), so suppressing at SOURCE keeps every probe's stdout
-            # clean instead of filtering the noise at each consumer.
-            "-e", "IIC_OSIC_TOOLS_QUIET=1",
-            container, "bash", "-lc", _wrapped]
+    full = _exec_argv(container, _wrapped)
 
     def _cpu_probe(_proc):
         return _container_cpu_seconds(container, marker, pidfile=_pidfile)
@@ -1148,7 +1230,7 @@ def _docker_exec(container: str, cmd: str, timeout: int = 1800, *,
     _log_invocation(cmd, res.rc if res.rc is not None else -1,
                     int((time.monotonic() - _t0) * 1000), marker=marker,
                     container=container, outputs=outputs)
-    return res.rc, res.out, res.err
+    return res.rc, res.out, _annotate_local_exec(res.rc, res.err)
 
 
 def _docker_timeout_isolate(outputs: List[Path]) -> None:

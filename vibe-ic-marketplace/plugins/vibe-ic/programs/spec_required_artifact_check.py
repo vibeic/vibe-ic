@@ -277,24 +277,139 @@ def _collect_clauses(run_dir: Path) -> tuple[list[dict], list[dict]]:
 # Assertion
 # ---------------------------------------------------------------------------
 
+# --- SUBSTANCE ------------------------------------------------------------- #
+#
+# WHY PRESENCE IS NOT ENOUGH.  This gate used to ask two questions of a
+# spec-declared artifact: does the path exist, and is `st_size > 0`.  `{}` is
+# three bytes.  A declaration file containing `{}` therefore satisfied a clause
+# that says the plugin MUST DECLARE these choices, while declaring none of
+# them — and the program that CAN tell the difference has existed the whole
+# time.  `spec_declaration_emit --verify`'s own help text says so verbatim:
+# "This is the SUBSTANCE check the required-artifact gate cannot make: it
+# scores presence and byte count, and `{}` is 3 bytes."  It was invoked by
+# nothing.  MEASURED 2026-09-06: `--verify` appears in no runner, no flow step,
+# no gate and no YAML in this tree.
+#
+# TWO QUESTIONS, IN THIS ORDER, AND NEITHER INVENTS A REQUIREMENT:
+#   1. THE SPEC'S OWN CONTRACT.  If the project's Phase-1 docs declare a field
+#      table for THIS artifact, the required-ness comes from the spec — an
+#      input this gate did not write — and `verify_declaration` names each
+#      REQUIRED field that is missing or a placeholder.  That is where "refused
+#      with the key named" comes from: the key is the spec's, not ours.
+#   2. THE GENERIC EMPTY-CONTAINER TEST.  With no contract there is no key to
+#      name, but `{}` / `[]` / unparseable JSON is still not a declaration of
+#      anything.  This asks only what the file's own format already answers, so
+#      it names no field, no design, no PDK and no tool.
+#
+# A PROBE THAT COULD NOT RUN IS NOT A PASS AND NOT A FAIL.  Every failure to
+# ask (module absent, extraction raised, file unreadable) returns NOT_MEASURED
+# and the artifact keeps the presence verdict it already had — the gate says
+# what it could not read instead of supplying a default for it.
+_SUBSTANCE_CONTRACT_CACHE: dict = {}
+
+
+def _project_contract(run_dir: Path, artifact_path: str):
+    """(contract|None, why). Cached per (run_dir, artifact) — contract
+    extraction re-reads every input doc, and this gate asks once per clause."""
+    key = (str(run_dir), artifact_path)
+    if key in _SUBSTANCE_CONTRACT_CACHE:
+        return _SUBSTANCE_CONTRACT_CACHE[key]
+    here = str(Path(__file__).resolve().parent)
+    if here not in sys.path:
+        sys.path.insert(0, here)
+    try:
+        import spec_declaration_emit as _sde  # noqa: PLC0415 — optional peer
+        got = _sde.select_contract(run_dir, artifact_path, [])
+        ans = (got[0], got[1])
+    except Exception as exc:  # noqa: BLE001
+        ans = (None, "NOT_MEASURED: %s" % exc)
+    _SUBSTANCE_CONTRACT_CACHE[key] = ans
+    return ans
+
+
+def _substance_of(run_dir: Path, artifact_path: str, resolved: Path):
+    """(status|None, reason, source).
+
+    `status` is None when no substance question could be asked, in which case
+    the caller keeps the presence verdict. `source` records WHICH question was
+    asked so a reader can tell a real pass from an unasked one."""
+    contract, why = _project_contract(run_dir, artifact_path)
+    if contract is not None:
+        try:
+            import spec_declaration_emit as _sde  # noqa: PLC0415
+            rep = _sde.verify_declaration(run_dir, contract, resolved)
+        except Exception as exc:  # noqa: BLE001
+            return None, "NOT_MEASURED: verify raised %s" % exc, "CONTRACT"
+        if rep.get("verdict") in ("PASS", "PASS_INFORMATIONAL"):
+            return "PASS", rep.get("note", ""), "CONTRACT"
+        bits = []
+        for name in rep.get("missing_required", []):
+            bits.append("%s: REQUIRED by %s, absent from the declaration"
+                        % (name, contract["source"]))
+        for item in rep.get("placeholder_required", []):
+            bits.append("%s: %s" % (item["field"], item["reason"]))
+        reason = "%s — %s" % (rep.get("verdict"), rep.get("note", ""))
+        if bits:
+            reason += "; " + "; ".join(bits)
+        # Carry the verify verdict through when it is more specific than
+        # "did not satisfy": FAIL_ABSENT and FAIL_UNPARSEABLE are different
+        # facts from "a required key is missing", and a status that flattens
+        # all three is the same loss of information this whole item is about.
+        _v = rep.get("verdict") or ""
+        status = _v if _v.startswith("FAIL_") else "FAIL_UNSATISFIED"
+        return status, reason, "CONTRACT"
+
+    if resolved.suffix.lower() != ".json":
+        return (None,
+                "no declaration contract (%s) and not a JSON artifact, so "
+                "its substance is not a question this gate can ask" % why,
+                "NONE")
+    try:
+        loaded = json.loads(resolved.read_text())
+    except Exception as exc:  # noqa: BLE001
+        return ("FAIL_UNPARSEABLE",
+                "the declared artifact is not readable JSON: %s" % exc,
+                "JSON")
+    if isinstance(loaded, (dict, list, str)) and len(loaded) == 0:
+        return ("FAIL_VACUOUS",
+                "the declared artifact parses as an EMPTY %s — it is present, "
+                "it is %d byte(s), and it declares nothing"
+                % (type(loaded).__name__, resolved.stat().st_size),
+                "JSON")
+    return "PASS", "parses as a non-empty JSON %s" % type(loaded).__name__, "JSON"
+
+
 def _check_artifact(run_dir: Path, artifact_path: str) -> dict:
-    """Return {artifact_path, resolved, exists, non_empty, status}."""
+    """Return {artifact_path, resolved, exists, non_empty, status, ...}.
+
+    Presence first, then SUBSTANCE (see the block above). An artifact that is
+    absent or zero-length is already refused and no substance question is
+    asked of it — there is nothing to read."""
     resolved = run_dir / artifact_path
     exists = resolved.exists()
-    non_empty = exists and resolved.stat().st_size > 0
-    if exists and non_empty:
-        status = "PASS"
-    elif exists and not non_empty:
-        status = "FAIL_EMPTY"
-    else:
-        status = "FAIL_ABSENT"
-    return {
+    non_empty = exists and resolved.is_file() and resolved.stat().st_size > 0
+    out = {
         "artifact_path": artifact_path,
         "resolved": str(resolved),
         "exists": exists,
         "non_empty": non_empty,
-        "status": status,
     }
+    if not exists:
+        out["status"] = "FAIL_ABSENT"
+        return out
+    if not non_empty:
+        out["status"] = "FAIL_EMPTY"
+        return out
+    sub_status, sub_reason, sub_source = _substance_of(
+        run_dir, artifact_path, resolved)
+    out["substance_source"] = sub_source
+    out["substance_reason"] = sub_reason
+    out["status"] = sub_status if sub_status is not None else "PASS"
+    if sub_status is None:
+        out["substance_status"] = "NOT_MEASURED"
+    else:
+        out["substance_status"] = sub_status
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -381,10 +496,31 @@ def main(argv: list[str] | None = None) -> int:
                      f"{', '.join(sorted(t['artifact_path'] for t in ignored)[:8])})")
     elif fails:
         verdict = "FAIL"
-        note = f"{len(fails)} declared artifact(s) absent or empty."
+        # NAME THEM. "1 declared artifact(s) absent or empty." was the whole
+        # message a reader got, and once substance is asked it is not even
+        # accurate — an artifact can now fail while being present and
+        # non-empty. Each line says which artifact, which of the three
+        # questions refused it, and why.
+        note = "%d declared artifact(s) did not satisfy the spec: %s" % (
+            len(fails),
+            "; ".join(
+                "%s [%s]%s" % (
+                    r["artifact_path"], r["status"],
+                    (" " + r["substance_reason"])
+                    if r.get("substance_reason") else "")
+                for r in fails[:8]))
+        if len(fails) > 8:
+            note += " (+%d more, see the report)" % (len(fails) - 8)
     else:
         verdict = "PASS"
-        note = f"All {len(results)} declared artifact(s) present and non-empty."
+        note = (f"All {len(results)} declared artifact(s) present, non-empty "
+                f"and substantive "
+                f"({sum(1 for r in results if r.get('substance_source') == 'CONTRACT')}"
+                f" checked against the spec's own field contract, "
+                f"{sum(1 for r in results if r.get('substance_source') == 'JSON')}"
+                f" against JSON emptiness, "
+                f"{sum(1 for r in results if r.get('substance_status') == 'NOT_MEASURED')}"
+                f" NOT_MEASURED).")
 
     report = {
         "schema_version": 1,
