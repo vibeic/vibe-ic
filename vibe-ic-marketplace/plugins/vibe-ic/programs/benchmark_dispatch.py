@@ -1345,6 +1345,32 @@ _CHALLENGE_FORBIDDEN = re.compile(
     re.I,
 )
 
+#: `//` to end of line, and `/* ... */` including newlines. Applied before the
+#: forbidden-construct scan so a COMMENT cannot decide the verdict.
+_CHALLENGE_COMMENT = re.compile(r"//[^\n]*|/\*.*?\*/", re.S)
+
+
+def _challenge_forbidden_hit(source: str):
+    """The forbidden-construct scan, run on CODE rather than on raw text.
+
+    MEASURED 2026-09-06, RTLLM clean-room run. Ten reviews were rejected with
+    `verification test is not self-contained` while every one of the ten
+    challenge files was clean. The reviewer had written the header comment the
+    contract asks for --
+
+        // Self-contained: no `include, no $readmem, no file/system/DPI access.
+
+    -- and that COMMENT contains the literal tokens the pattern looks for, so a
+    test was rejected for DECLARING its compliance. Stripping comments made all
+    ten clean, and the pattern still catches the real constructs.
+
+    A guard that a comment can flip is not a guard: editing prose must never
+    change a verdict about code. Comments are removed first; string literals are
+    deliberately NOT removed, because `$readmemh("f.hex", m)` is a real call and
+    a path inside a string is exactly what makes it one.
+    """
+    return _CHALLENGE_FORBIDDEN.search(_CHALLENGE_COMMENT.sub(" ", source or ""))
+
 
 def _verified_prompt_evidence(items, prompt_text: str) -> list[dict]:
     """Keep only exact normalized excerpts tied to a non-trivial claim."""
@@ -1390,7 +1416,7 @@ def _challenge_from_review(task: dict, review: dict,
     source_hash = _sha256_text(source)
     if raw.get("sha256") != source_hash:
         reasons.append("verification_test.sha256 is stale or wrong")
-    if _CHALLENGE_FORBIDDEN.search(source):
+    if _challenge_forbidden_hit(source):
         reasons.append("verification test is not self-contained")
     if "module vibeic_ai_challenge_tb" not in source:
         reasons.append("verification test must define vibeic_ai_challenge_tb")
@@ -1533,7 +1559,7 @@ def _run_verification_challenge(candidate: dict, challenge: dict) -> dict:
         return {"status": "INVALID", "reasons": [f"challenge unreadable: {exc}"]}
     if _sha256_text(source) != challenge.get("sha256"):
         return {"status": "INVALID", "reasons": ["challenge hash changed"]}
-    if _CHALLENGE_FORBIDDEN.search(source):
+    if _challenge_forbidden_hit(source):
         return {"status": "INVALID",
                 "reasons": ["challenge is not self-contained"]}
     iverilog, vvp = shutil.which("iverilog"), shutil.which("vvp")
