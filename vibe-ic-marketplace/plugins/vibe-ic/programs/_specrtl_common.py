@@ -218,8 +218,26 @@ class Port:
 # every bare case pinned in the suite uses a built-in keyword already listed
 # above — while making it impossible for an unqualified prose word to be eaten
 # as a type.  It is strictly narrower than v1.17.18, so it cannot introduce a
-# new false-FIRE either.  A bare user-defined type (`output word_t result_o`)
-# is not parsed and was not parsed before v1.17.18; nothing pins it.
+# new false-FIRE either.
+#
+# WHAT THIS GIVES UP, SAID PLAINLY.  v1.17.18 DID read a bare user-defined type
+# correctly, and this narrowing hands that back.  MEASURED, the three regexes
+# over the same five declarations (group 3, the name):
+#
+#     declaration                        pre-1.17.18   v1.17.18    here
+#     output word_t result_o             word_t        result_o    word_t
+#     output tlul_pkg::tl_d2h_t tl_o     tlul_pkg      tl_o        tl_o
+#     input clk the clock,               clk           the         clk
+#     input logic [7:0] data_i           data_i        data_i      data_i
+#     input a, b                         a, b          a, b        a, b
+#
+# So this is pre-1.17.18 behaviour PLUS v1.17.18's package-qualified fix, and
+# the bare-type row is the price.  It is the right way round: nothing in the
+# suite pins a bare user type, every typed-port case that IS pinned carries
+# `::`, and the row it buys back (`input clk the clock,`) is a REAL port being
+# dropped in favour of a prose word — the false-SKIP direction.  Reading a bare
+# type safely needs the port name anchored by a following terminator, which a
+# truncated header does not have; that is a separate change and not this one.
 # chip-AGNOSTIC: SystemVerilog declaration grammar only.
 _PORT_DECL = re.compile(
     r'\b(input|output|inout)\b\s*'
