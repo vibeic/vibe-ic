@@ -118,3 +118,73 @@ def test_a_corrected_round_can_itself_be_corrected_and_obligations_accumulate(
         request["challenge_sha256"]
     assert correction._digest(first["challenge_path"]) == \
         second["challenge_sha256"]
+
+
+def test_a_correction_round_is_reconstructible_from_its_archive_alone(tmp_path):
+    """Auditability is the product: a round nobody can reconstruct is a way to
+    launder a review, and issue #2040 asks for the author, the reason, the
+    parent review hash and the transition to be recorded.
+
+    The landed suite checks that two archived files are byte-equal to their
+    sources. This checks the CLOSURE: that the five archive files plus the
+    advanced worklist row answer, on their own, which challenge was superseded,
+    by whom, why, and that the candidate was byte-identical across the round --
+    with every hash recomputed here rather than read back from the record that
+    asserts it.
+    """
+    run, old, request_path, request = correction._case(tmp_path)
+    assert correction._resume(run, request_path) == 2
+    advanced = bd._read_jsonl(run / bd._REVIEW_WORKLIST)[0]
+    archive = Path(advanced["review_correction"]["archive_path"])
+
+    request_raw = (archive / "request.json").read_text()
+    prior_task = json.loads((archive / "prior_task.json").read_text())
+    prior_review_raw = (archive / "prior_review.json").read_text()
+    prior_review = json.loads(prior_review_raw)
+    prior_test = (archive / "prior_challenge_tb.sv").read_text()
+    transition = json.loads((archive / "transition.json").read_text())
+    archived = json.loads(request_raw)
+
+    # WHO, and WHY, without consulting anything the operation still controls.
+    assert archived["author"]["kind"] == "AI"
+    assert archived["author"]["model"].strip()
+    assert archived["blind"]["oracle_accessed"] is False
+    assert len(archived["rationale"].strip()) >= 80
+    assert archived["prompt_evidence"]
+    assert archive.name == bd._sha256_text(request_raw)
+
+    # WHICH challenge was superseded -- archived bytes, live bytes and the
+    # hash the request names all agree, so none of the three can drift alone.
+    assert bd._sha256_text(prior_review_raw) == archived["review_sha256"]
+    assert correction._digest(prior_task["review_path"]) == \
+        archived["review_sha256"]
+    assert bd._sha256_text(prior_test) == archived["challenge_sha256"]
+    assert correction._digest(prior_task["challenge_path"]) == \
+        archived["challenge_sha256"]
+    assert prior_review["verification_test"]["sha256"] == \
+        archived["challenge_sha256"]
+
+    # The candidate did not move across the round.
+    snapshot = prior_task["candidate_snapshot"]
+    completion = Path(snapshot["completion_path"]).read_text()
+    assert bd._sha256_text(completion) == prior_task["rtl_sha256"]
+    assert archived["rtl_sha256"] == prior_task["rtl_sha256"]
+    assert advanced["rtl_sha256"] == prior_task["rtl_sha256"]
+    assert advanced["candidate_snapshot"] == snapshot
+    assert bd._sha256_text(Path(prior_task["prompt_path"]).read_text()) == \
+        prior_task["prompt_sha256"]
+    assert advanced["prompt_sha256"] == prior_task["prompt_sha256"]
+
+    # The TRANSITION: both endpoints are named, and every source the
+    # preparation hashed still hashes to what the record says it did.
+    assert transition["request_sha256"] == bd._sha256_text(request_raw)
+    assert transition["prior_task"] == prior_task
+    assert transition["new_task"] == advanced
+    assert transition["material_sha256"]
+    assert all(correction._digest(path) == digest
+               for path, digest in transition["material_sha256"].items())
+    assert prior_task["review_path"] in transition["material_sha256"]
+    assert prior_task["challenge_path"] in transition["material_sha256"]
+    assert advanced["verification_challenges"][-1]["sha256"] == \
+        archived["challenge_sha256"]
+    assert advanced["review_correction"]["repair_authorized"] is False
