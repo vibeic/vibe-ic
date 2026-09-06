@@ -1557,19 +1557,62 @@ def parse_equiv_output(text: str) -> Dict:
         elif _noconv and not _has_ctrex and (unproven or 0) > 0:
             equivalent = False
             verdict = "INCONCLUSIVE"
-            verdict_explanation = (
-                f"{proven if proven is not None else 0}/"
-                f"{total if total is not None else '?'} proven, "
-                f"{unproven if unproven is not None else '?'} unproven — but "
-                "equiv_induct did NOT converge "
-                f"({_noconv_ev}) and NO counterexample was recorded "
-                "(non_equivalent_points=0). Non-convergence is NOT "
-                "non-equivalence: a real difference produces a counterexample. "
-                "→ INCONCLUSIVE (a disclosed sequential-depth capability gap), "
-                "never a false NOT_EQUIVALENT. Close the remainder with sign-off "
-                "LEC (Conformal/VC LEC), which handles deep sequential "
-                "induction. Visible non-PASS (equivalent:false) — never a "
-                "vacuous PASS a regression could hide behind.")
+            # A TIMEOUT IS A BUDGET OUTCOME, NOT A CAPABILITY GAP — vibe-ic#581,
+            # and this branch was asserting the opposite on a real run.
+            #
+            # MEASURED 2026-09-06 on an open benchmark IC (reports/lec.json,
+            # captured read-only): a proof holding a full core for the whole
+            # budget was killed at 7195.77 s of 7200 s with
+            # `killed_by_budget: true`, and this branch booked it
+            # "1060/2130 proven, 1070 unproven — but equiv_induct did NOT
+            # converge (THE WALL-CLOCK BUDGET STOPPED YOSYS MID-PROOF, before
+            # equiv_induct ran) ... → INCONCLUSIVE (A DISCLOSED
+            # SEQUENTIAL-DEPTH CAPABILITY GAP) ... Close the remainder with
+            # sign-off LEC, which handles deep sequential induction."
+            #
+            # THE RECORD CONTRADICTED ITSELF IN ONE SENTENCE. Its own evidence
+            # string said the clock stopped the proof; the label beside it
+            # blamed the engine's depth, and the remedy it recommended was a
+            # commercial tool. equiv_induct had not failed to converge — by the
+            # same sentence's admission it had NOT YET RUN.
+            #
+            # So the label now follows the evidence. `_execution_stopped` is
+            # already computed above from `_EXECUTION_STOP_RE`, which only this
+            # producer's kill paths write, and `_stop_kind` already says WHICH
+            # kill it was. A run that was STOPPED gets the stopped wording; a
+            # run that genuinely walked the induction ladder to exhaustion keeps
+            # the capability-gap wording, because for that run it is TRUE.
+            if _execution_stopped:
+                verdict_explanation = (
+                    f"{proven if proven is not None else 0}/"
+                    f"{total if total is not None else '?'} proven, "
+                    f"{unproven if unproven is not None else '?'} unproven — "
+                    f"and the proof was STOPPED before it could finish "
+                    f"({_noconv_ev}), with NO counterexample recorded "
+                    "(non_equivalent_points=0). This is NOT a statement about "
+                    "the engine's sequential depth and NOT a capability gap: "
+                    "the remainder was never attempted, so nothing about it was "
+                    "learned. → INCONCLUSIVE (the run was cut off), never a "
+                    "false NOT_EQUIVALENT. The remedy is to let the proof RUN "
+                    "— it was making forward progress when it was stopped; "
+                    "reach for sign-off LEC only if it is allowed to finish and "
+                    "then genuinely does not converge. Visible non-PASS "
+                    "(equivalent:false) — never a vacuous PASS a regression "
+                    "could hide behind.")
+            else:
+                verdict_explanation = (
+                    f"{proven if proven is not None else 0}/"
+                    f"{total if total is not None else '?'} proven, "
+                    f"{unproven if unproven is not None else '?'} unproven — but "
+                    "equiv_induct did NOT converge "
+                    f"({_noconv_ev}) and NO counterexample was recorded "
+                    "(non_equivalent_points=0). Non-convergence is NOT "
+                    "non-equivalence: a real difference produces a counterexample. "
+                    "→ INCONCLUSIVE (a disclosed sequential-depth capability gap), "
+                    "never a false NOT_EQUIVALENT. Close the remainder with sign-off "
+                    "LEC (Conformal/VC LEC), which handles deep sequential "
+                    "induction. Visible non-PASS (equivalent:false) — never a "
+                    "vacuous PASS a regression could hide behind.")
         else:
             equivalent = False
             verdict = "FAIL"

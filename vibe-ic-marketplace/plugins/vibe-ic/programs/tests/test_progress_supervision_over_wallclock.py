@@ -244,6 +244,68 @@ def test_rc_stalled_is_wired_into_the_producers_stall_set(monkeypatch):
         "stalled proof is booked as a non-equivalence")
 
 
+_MISATTRIBUTION = "a disclosed sequential-depth capability gap"
+_STOPPED_LOG_BODY = (
+    "Yosys 0.68\n9.2. Executing EQUIV_SIMPLE pass.\n"
+    "Proved 1060 previously unproven $equiv cells.\n"
+    "9.3. Executing EQUIV_INDUCT pass.\n"
+    "Found 1070 unproven $equiv cells in module equiv:\n")
+
+
+@pytest.mark.parametrize("marker_attr", ["_TIMEOUT_MARKER", "_STALL_MARKER"])
+def test_a_stopped_proof_is_not_booked_as_an_engine_capability_gap(marker_attr):
+    """MEASURED ON A REAL PRODUCTION ARTEFACT, 2026-09-06 (reports/lec.json,
+    captured read-only into the lane's evidence directory).
+
+    A proof holding a full core for its whole budget was killed at 7195.77 s of
+    7200 s with `killed_by_budget: true`, and the classifier booked it:
+
+        "1060/2130 proven, 1070 unproven — but equiv_induct did NOT converge
+         (THE WALL-CLOCK BUDGET STOPPED YOSYS MID-PROOF, before equiv_induct
+         ran) ... → INCONCLUSIVE (A DISCLOSED SEQUENTIAL-DEPTH CAPABILITY GAP)
+         ... Close the remainder with sign-off LEC, which handles deep
+         sequential induction."
+
+    The record contradicted itself inside one sentence: its own evidence said
+    the CLOCK stopped the proof, the label beside it blamed the ENGINE's depth,
+    and the recommended remedy was a commercial tool. equiv_induct had not
+    failed to converge — by that same sentence's admission it had not yet run.
+    "A timeout is a budget outcome, not a capability gap" (vibe-ic#581), here
+    asserted in the opposite direction on a live run.
+    """
+    log = _STOPPED_LOG_BODY + getattr(lec_run, marker_attr)
+    rep = lec_run.parse_equiv_output(log)
+    ex = rep["verdict_explanation"]
+    assert rep["verdict"] == "INCONCLUSIVE"
+    assert _MISATTRIBUTION not in ex, (
+        "a proof that was STOPPED is still booked as an engine capability "
+        "gap:\n" + ex)
+    assert "Conformal" not in ex, (
+        "the record still recommends buying a commercial LEC for a proof that "
+        "was merely cut off")
+    assert "STOPPED before it could finish" in ex
+    assert "the remedy is to let the proof RUN" in ex.lower() or \
+        "remedy is to let the proof RUN" in ex
+
+
+def test_a_genuine_non_convergence_keeps_its_capability_finding():
+    """THE POSITIVE CONTROL, and the reason the change above is not an erasure.
+
+    A run that actually walked the induction ladder and proved nothing new on
+    it HAS hit the engine's sequential depth, and that finding must survive
+    verbatim — otherwise the fix would launder a true capability gap into
+    "we cut it off"."""
+    genuine = (_STOPPED_LOG_BODY +
+               "9.4. Executing EQUIV_INDUCT pass.\n"
+               "Proved 0 previously unproven $equiv cells.\n"
+               "9.5. Executing EQUIV_INDUCT pass.\n"
+               "Proved 0 previously unproven $equiv cells.\n")
+    ex = lec_run.parse_equiv_output(genuine)["verdict_explanation"]
+    assert _MISATTRIBUTION in ex, (
+        "a real sequential-depth gap lost its finding:\n" + ex)
+    assert "STOPPED before it could finish" not in ex
+
+
 def test_a_stalled_lec_says_how_far_the_proof_had_got(monkeypatch):
     """MEASURED ON A REAL KILL, 2026-09-06, an open benchmark IC on 8HD-8.
 
