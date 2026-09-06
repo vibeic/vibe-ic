@@ -456,6 +456,53 @@ def _classify_polarity(cond: str) -> Tuple[Optional[str], Optional[str]]:
     return None, None
 
 
+def _strip_outer_parens(text: str) -> str:
+    """Drop ONE balanced wrapping paren pair: `(~resetn)` -> `~resetn`."""
+    text = text.strip()
+    while text.startswith('(') and text.endswith(')'):
+        depth = 0
+        for i, ch in enumerate(text):
+            if ch == '(':
+                depth += 1
+            elif ch == ')':
+                depth -= 1
+                if depth == 0 and i != len(text) - 1:
+                    return text
+        text = text[1:-1].strip()
+    return text
+
+
+def _conditional_reset(block: str) -> Tuple[Optional[str], Optional[str]]:
+    """(reset_signal, polarity) for a reset written as a CONDITIONAL EXPRESSION.
+
+    A reset does not have to be an `if`. `state <= (~resetn) ? A : next;` is a
+    synchronous active-low reset, and `q <= rst ? 1'b0 : d;` is the same shape.
+    The `if`-only classifier saw NO reset in such a block, so `spec_conformance_
+    check` reported `reset-not-found` on a spec-faithful design and a --strict
+    caller rejected it (measured on VerilogEval-Human Prob139_2013_q2bfsm, whose
+    ternary-reset answer scores 0 mismatches against the official golden).
+
+    Only the block's FIRST assignment is considered, and only its top-level
+    condition (the text before the `?` at paren depth 0) — a `?:` used deeper in
+    an expression, or in a later statement, is ordinary datapath and is ignored.
+    """
+    m = re.search(r'(?:<=|(?<![<>=!+\-*/%&|^~])=(?!=))', block)
+    if not m:
+        return None, None
+    rest = block[m.end():]
+    depth = 0
+    for i, ch in enumerate(rest):
+        if ch in '([{':
+            depth += 1
+        elif ch in ')]}':
+            depth -= 1
+        elif depth == 0 and ch == ';':
+            return None, None
+        elif depth == 0 and ch == '?':
+            return _classify_polarity(_strip_outer_parens(rest[:i]))
+    return None, None
+
+
 def classify_rtl_resets(body: str) -> Dict[str, Dict[str, Set[str]]]:
     """Per reset signal, the set of modes ('synchronous'/'asynchronous') and
     polarities ('active-high'/'active-low') it is used with across the module's
@@ -479,11 +526,19 @@ def classify_rtl_resets(body: str) -> Dict[str, Dict[str, Set[str]]]:
         rst_sig, pol = (None, None)
         if ifm:
             rst_sig, pol = _classify_polarity(ifm.group(1))
+        # A reset expressed as a conditional expression rather than an `if`.
+        # Tried ONLY when the `if` form yielded nothing, so every block that
+        # already classified keeps its exact previous answer.
+        cond_form = False
+        if not rst_sig:
+            rst_sig, pol = _conditional_reset(block)
+            cond_form = rst_sig is not None
         mode = None
         if rst_sig and rst_sig in edges:
             mode = 'asynchronous'
-        elif (rst_sig and rst_sig not in edges and pol is not None and ifm
-              and ifm.start() < 60 and _RESET_NAME.search(rst_sig)):
+        elif (rst_sig and rst_sig not in edges and pol is not None
+              and _RESET_NAME.search(rst_sig)
+              and (cond_form or (ifm and ifm.start() < 60))):
             mode = 'synchronous'
         if rst_sig and mode:
             rec = out.setdefault(rst_sig, {'mode': set(), 'polarity': set()})

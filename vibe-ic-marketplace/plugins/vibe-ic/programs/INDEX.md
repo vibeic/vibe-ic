@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1273
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1273)
+- **Total programs (excluding helpers / shims):** 1274
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1274)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1264 |
+| `any` | 1265 |
 
 ## Alphabetical listing
 
@@ -1205,6 +1205,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `tester_oracle_health_check` | any | v0.45 | Prove the tester works before iterating RTL. |
 | `tester_verdict_frame_decode` | any | — | Chip-agnostic, tester-agnostic post-processor that decodes raw tester |
 | `thermal_screen_check` | any | — | power-density / junction-temperature screen. |
+| `threshold_ladder_synth` | any | — | deterministic SOLVER for the SENSOR THRESHOLD LADDER WITH CHANGE-DIRECTION OUTPUT family (spec -> RTL). |
 | `threshold_range_contiguity_check` | any | — | Discrete classification ranges must be contiguous. |
 | `tier_d_interconnect_detect` | any | v0.1.90 | Tier-D advanced-interconnect detection predicates (v0.1.90). |
 | `tilelink_protocol_synth` | any | v0.1.84 | TileLink-class protocol synth helper. |
@@ -1345,7 +1346,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1264 programs)
+### `any` (1265 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `absence_verdict_names_its_search_space_check` — "not found" must say WHERE it looked.
@@ -2519,6 +2520,7 @@ _(no programs in this group)_
 - `tester_oracle_health_check` — Prove the tester works before iterating RTL.  _[v0.45]_
 - `tester_verdict_frame_decode` — Chip-agnostic, tester-agnostic post-processor that decodes raw tester
 - `thermal_screen_check` — power-density / junction-temperature screen.
+- `threshold_ladder_synth` — deterministic SOLVER for the SENSOR THRESHOLD LADDER WITH CHANGE-DIRECTION OUTPUT family (spec -> RTL).
 - `threshold_range_contiguity_check` — Discrete classification ranges must be contiguous.
 - `tier_d_interconnect_detect` — Tier-D advanced-interconnect detection predicates (v0.1.90).  _[v0.1.90]_
 - `tilelink_protocol_synth` — TileLink-class protocol synth helper.  _[v0.1.84]_
