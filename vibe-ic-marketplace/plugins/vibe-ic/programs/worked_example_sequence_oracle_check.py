@@ -19,13 +19,23 @@ WHAT it does — given the spec prose + the authored RTL:
   1. Parse a HIGH-CONFIDENCE worked example: `if <inport> is <bits>, ... <outport> is <bits>`
      with two EQUAL-LENGTH ≥3-bit [01] strings, where <inport>/<outport> are real 1-bit
      ports of the module (one input, one output) and a clk + reset port exist.
-  2. Build a tiny self-TB that releases reset and replays the disclosed trace.  When the
-     spec mentions positive-edge output generation, measure BOTH the pre-edge convention
-     used by same-timestamp dataset checkers and the post-NBA edge convention used by other
-     checkers.  Otherwise retain the original same-cycle combinational interpretation.
-  3. iverilog/vvp it.  For the dual-phase branch, BLOCK (rc 1) only when BOTH phases
-     mismatch.  A one-phase match is timing-ambiguous and therefore SKIPs (rc 0); the
-     oracle's contract is never to false-block by guessing the host's sampling phase.
+  2. Build a tiny self-TB that releases reset and replays the disclosed trace AT THE
+     EXAMPLE'S OWN ALIGNMENT: in[i] is presented and out[i] is read with NO active clock
+     edge in between.  Prose about WHERE the output is assigned ("inside an always block",
+     "output generation") selects the TB's DRIVE style (negedge-driven, so the first vector
+     is present when reset releases) — it never moves the alignment the verdict is read at,
+     because the alignment is a property of the EXAMPLE, not of the code's shape.
+  3. iverilog/vvp it.  BLOCK (rc 1) on a mismatch at that alignment.  A second,
+     one-cycle-SHIFTED replay ("post-edge": out[i] read after the edge that consumed in[i])
+     is run for DIAGNOSTICS ONLY: when it passes while the aligned replay blocks, the RTL
+     is exactly one cycle late and `one_cycle_late` says so, which is what names the repair
+     direction for `gate_directed_rtl_repair`.  It is never an escape from the verdict.
+
+     WHY THE ALIGNED REPLAY IS NOT "MEALY-PREFERRING" (measured, 4 of 4 cells):
+       example 01010 -> 00101 (same-cycle):  Mealy RTL PASS,  registered RTL BLOCK
+       example 01010 -> 00010 (one late):    Mealy RTL BLOCK, registered RTL PASS
+     The aligned replay lets the disclosed TRACE decide whether out[i] may use in[i]; the
+     shifted replay hard-codes one cycle of latency and is wrong in 2 of those 4 cells.
 
 §4.05 SAFETY — the load-bearing half is the NEGATIVE no-leak: the gate SKIPs (rc 0, advisory)
 unless it can build an UNAMBIGUOUS oracle that drives EVERY relevant input. It BLOCKs ONLY when:
@@ -45,8 +55,8 @@ Otherwise → SKIP. Under these conditions a design that reproduces the disclose
 the conservative gating means a phase ambiguity / mis-parse / undriveable input / tool failure
 SKIPs rather than false-blocks a correct design.
 
-DECLARED ENFORCEMENT: BLOCKING only for an unambiguous mismatch in every measured
-sampling phase; PASS and explicit SKIP records continue the flow.
+DECLARED ENFORCEMENT: BLOCKING for an unambiguous mismatch at the example's own
+index alignment; PASS and explicit SKIP records continue the flow.
 
 chip-AGNOSTIC, prompt-blind (reads only the spec the author already reads + the authored RTL),
 deterministic.
@@ -317,7 +327,7 @@ def analyze(rtl: str, spec: str) -> dict:
     clocked_output = _requires_clocked_output(spec, outp)
     res.update(applicable=True, inport=inp, outport=outp, in_bits=in_bits,
                out_bits=out_bits, clk=clk, rst=rst, pol=pol, module=modname,
-               sampling_semantics=("dual-phase-pre-and-post-edge"
+               sampling_semantics=("index-aligned-replay-clocked-drive"
                                    if clocked_output
                                    else "same-cycle-combinational"))
     with tempfile.TemporaryDirectory() as td:
@@ -341,23 +351,35 @@ def analyze(rtl: str, spec: str) -> dict:
     res["phase_verdicts"] = {
         phase: result["verdict"] for phase, result in phase_results.items()
     }
-    skipped = [(phase, result) for phase, result in phase_results.items()
-               if result["verdict"] == "SKIP"]
-    if skipped:
-        phase, result = skipped[0]
+    # THE VERDICT IS THE INDEX-ALIGNED REPLAY'S. `pre-edge` presents in[0..i] and
+    # reads out[i] with NO active clock edge in between, so it replays the example
+    # AT THE ALIGNMENT THE EXAMPLE STATES and lets the TRACE — not the harness —
+    # decide whether out[i] may use in[i]. `post-edge` reads out[i] after the edge
+    # that consumed in[i], i.e. it builds a one-cycle shift into the harness, so it
+    # answers a question the example did not ask. It is kept as DIAGNOSTIC evidence
+    # (it names the repair direction) and never as an escape from the verdict.
+    primary = phase_results["pre-edge"]
+    shifted = phase_results["post-edge"]
+    one_cycle_late = (primary["verdict"] == "BLOCK"
+                      and shifted["verdict"] == "PASS")
+    res["one_cycle_late"] = one_cycle_late
+    if primary["verdict"] == "SKIP":
         res.update(verdict="SKIP",
-                   reason=f"{phase} sampling unavailable: {result.get('reason', 'skip')}")
-    elif all(result["verdict"] == "PASS" for result in phase_results.values()):
+                   reason=f"pre-edge sampling unavailable: "
+                          f"{primary.get('reason', 'skip')}")
+    elif primary["verdict"] == "PASS":
         res["verdict"] = "PASS"
-    elif all(result["verdict"] == "BLOCK" for result in phase_results.values()):
+    else:
         res["verdict"] = "BLOCK"
         res["log"] = "\n".join(
-            f"[{phase}] {result.get('log', '')}" for phase, result in phase_results.items())[:800]
-    else:
-        res.update(
-            verdict="SKIP",
-            reason="phase-ambiguous: the worked example matches exactly one of "
-                   "pre-edge and post-edge sampling; never choose the host phase by guess")
+            f"[{phase}] {result.get('log', '')}"
+            for phase, result in phase_results.items())[:800]
+        res["reason"] = (
+            "the RTL reproduces the disclosed trace ONE CYCLE LATE (a registered "
+            "output where the example asserts it in the same cycle as its trigger)"
+            if one_cycle_late else
+            "the RTL does not reproduce the disclosed trace at the example's own "
+            "cycle alignment")
     return res
 
 
