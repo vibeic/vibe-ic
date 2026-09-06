@@ -25,7 +25,46 @@ Every one of those is the gate that would have caught a defect found by hand.
 layout, the strongest form of this defect — was a fifth, and is now run per
 published cell from `tools/ci/repo_hygiene_gates.sh`.
 
-A NAME IS NOT A CALL, AND THIS GATE LEARNED IT TWICE.
+A NAME IS NOT A CALL — AND THE THIRD TIME, THE RULE ITSELF WAS THE HOLE
+-----------------------------------------------------------------------
+vibe-ic#2065 shipped `counter_decode_lookahead_phase_check` with its own tests
+and NO caller. This gate said so, once. Then the gate was WIRED — and the
+measurement that followed is the reason this file now reads INVOCATIONS:
+
+    delete BOTH invocations (the runner import, the router import), leave the
+    flow Step-2 `programs:` entry and the CAPTURE_ROUTING row exactly as they
+    are  ->  under the old rule:  unwired 26 (baseline 26)  [PASS]  rc 0
+
+A register that credits a NAME cannot see an unwired gate, which is the one
+thing it exists to see. Its own "A NAME IS NOT A CALL" argument below was true
+and too narrow: it covered COMMENTS and DOCSTRINGS, and a `programs:` list
+entry, a routing-table row and a sentence of advice inside a string are all
+none of those.
+
+RULED (owner, 2026-09-07): wired-ness is derived from an INVOCATION — a call
+site reachable from a runner step — never from a declaration alone. That is
+`_RULE_ID = "invocation.v1"`, and it is what `py_invocations`,
+`flow_invocations` and `shell_invocations` each define for their own file kind:
+
+    python   an import that is then REFERENCED, or the entry named as a whole
+             string literal in a file that can spawn (a filename anywhere; a
+             bare stem only inside a name table, an argument or a composed path)
+    flow     a GATE CLAUSE whose command names it as the entry. NOT `programs:`.
+    shell    an argv `"$PG/foo_check.py"`, or a bare stem in a dispatch array
+    json/md  nothing. A routing table and a page execute nothing at all.
+
+MEASURED over the shipped tree, 655 gates: 26 unwired under the name rule, 36
+under this one, and the set is a strict SUPERSET — no gate the old rule accused
+is credited by the new one. Every one of the ten made visible was credited
+only by a declaration or by prose inside a string; each was read by hand, and
+they are named in the register. Four shapes had to be got right before the
+number was honest, and each was found by a false accusation the probe made
+first: parsing the comment-stripped copy instead of the source (21 gates), the
+flow's clause grammar carrying its command as the clause VALUE (47), a checker
+handed to a driver rather than called (`cvdp_gate`), and a bash dispatch array
+of bare stems (`run_plugin_self_audit.sh`).
+
+A NAME IS NOT A CALL, AND THIS GATE LEARNED IT TWICE BEFORE THAT.
 
   1. Its own docstring names its subjects, and counting that as wiring made all
      of them read as consulted: 34 instead of 38.
@@ -179,11 +218,26 @@ import _ratchet_baseline as _ratchet  # noqa: E402
 _GATE_RE = re.compile(r"_(check|lint|audit|guard|gate)$")
 _BASELINE_NAME = "gate_is_wired_baseline.json"
 
+#: THE RULE ID THIS REGISTER WAS MEASURED UNDER.
+#:
+#: It is written into the baseline document and compared on every run. It is
+#: what makes a POPULATION CHANGE — the instrument starting to measure a
+#: different question — distinguishable from a debt that grew, and it is the
+#: only condition under which `--write-baseline` may ADD. See `main`.
+_RULE_ID = "invocation.v1"
+
 #: Where a reference means the gate can be REACHED without a human choosing to.
 #: `skills/` is deliberately NOT here — see the module docstring.
 _EXECUTABLE_GLOBS = (
     "flow/*.yaml", "flow/*.yml",
-    "benchmark/*.json",
+    # `benchmark/*.json` USED TO BE HERE AND IS NOT ANY MORE (vibe-ic#2065
+    # ruling). A JSON file executes nothing. `CAPTURE_ROUTING.json` is a
+    # routing TABLE an agent reads, and crediting an entry there as a call is
+    # precisely the hole this file's INVOCATION section describes: the gate
+    # #2065 shipped unwired was named there and read as consulted. MEASURED
+    # before dropping it: the only other json in that directory,
+    # `BENCHMARK_REGISTRY.json`, names no gate-shaped program at all, so
+    # nothing loses its only caller. The `.py` beside them stays — see below.
     # `benchmark/*.py` as well as its json. That directory is not data and it is
     # not test scaffolding — `cvdp_gate.py`, `score_iverilog_tb.py` and
     # `gates_atomic.py` are the live scoring and emit paths, and they import
@@ -225,6 +279,203 @@ _SKILL_GLOBS = ("skills/**/*.md", "agents/**/*.md", "commands/**/*.md")
 #:
 #: Named by the constant its owner exports, so a move renames it here too.
 _NOT_A_RUNNER = ("tools/ci/gate_red_since.json",)
+
+
+#: Suffixes that DECLARE rather than execute. A `.json` routing table, a `.md`
+#: page and a `.tsv` ledger all name programs; none of them runs one.
+_DECLARATION_SUFFIXES = (".json", ".md", ".tsv", ".txt", ".csv")
+
+#: Tokens whose presence means a file can START A PROCESS. A `.py` that names a
+#: gate as a bare string constant is a DISPATCH TABLE only if it can also spawn;
+#: without one of these the same literal is a data row.
+_SPAWN_TOKENS = ("subprocess", "sys.executable", "os.exec", "os.spawn",
+                 "runpy", "import_module", "_progress_run", "_pr.run",
+                 "check_output", "Popen")
+
+
+def _entry_stem(token: str) -> str:
+    """The program a command token names: basename, `.py` optional."""
+    base = token.rsplit("/", 1)[-1]
+    return base[:-3] if base.endswith(".py") else base
+
+
+def py_invocations(text: str, names: Set[str]) -> Dict[str, str]:
+    """{gate: how} for the gates THIS python source invokes.
+
+    Parsed from the ORIGINAL source, never from the comment-stripped copy:
+    `executable_text` blanks a docstring to empty LINES, which can leave a
+    function with an empty body, and the re-parse then raises IndentationError.
+    MEASURED while this rule was being written — a probe that stripped first
+    reported `phase3_one_shot_runner.py` as invoking NOTHING and would have
+    accused 21 gates it demonstrably spawns. `ast` already excludes comments;
+    docstrings are excluded by NODE below.
+
+    Two forms, and only two:
+
+    * IMPORTED **AND REFERENCED**. Not "and called": `benchmark/cvdp_gate.py`
+      does `from valid_ready_independence_check import check_text as _f` and
+      then `_structural_finding_gate(_f, ...)` — the checker is handed to a
+      driver that calls it, an invocation with no Call node of its own.
+      Requiring a direct call would have accused it. A DEAD import, bound and
+      never referenced, is still not an invocation and is still refused.
+
+    * NAMED AS A BARE ENTRY in a file that can spawn. `flow_compliance_check`
+      holds 246 gate names as plain string constants and builds
+      `PROGRAMS_DIR / f"{name}.py"` from them; that is a real dispatch and the
+      literal is the only trace of it. The literal must be the WHOLE string
+      (`"foo_check"` or `".../foo_check.py"`), which is what separates a
+      dispatch row from advice prose — measured on six gates whose only credit
+      under the old rule was a sentence like "matching ir_drop_budget_check".
+    """
+    out: Dict[str, str] = {}
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return out
+    doc_ids = set()
+    for n in ast.walk(tree):
+        body = getattr(n, "body", None)
+        if isinstance(body, list) and isinstance(
+                n, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef,
+                    ast.ClassDef)):
+            first = body[0] if body else None
+            if (isinstance(first, ast.Expr)
+                    and isinstance(first.value, ast.Constant)
+                    and isinstance(first.value.value, str)):
+                doc_ids.add(id(first.value))
+        if (isinstance(n, ast.Expr) and isinstance(n.value, ast.Constant)
+                and isinstance(n.value.value, str)):
+            doc_ids.add(id(n.value))
+    bound: Dict[str, str] = {}
+    import_lines = set()
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Import):
+            import_lines.add(n.lineno)
+            for al in n.names:
+                if al.name in names:
+                    bound.setdefault(al.asname or al.name, al.name)
+        elif isinstance(n, ast.ImportFrom):
+            import_lines.add(n.lineno)
+            if n.module in names:
+                for al in n.names:
+                    bound.setdefault(al.asname or al.name, n.module)
+    for n in ast.walk(tree):
+        if (isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)
+                and n.lineno not in import_lines):
+            g = bound.get(n.id)
+            if g:
+                out.setdefault(g, "imported+referenced")
+    if any(tok in text for tok in _SPAWN_TOKENS):
+        parent = {}
+        for node in ast.walk(tree):
+            for kid in ast.iter_child_nodes(node):
+                parent[id(kid)] = node
+        for n in ast.walk(tree):
+            if not (isinstance(n, ast.Constant)
+                    and isinstance(n.value, str)) or id(n) in doc_ids:
+                continue
+            raw = n.value.strip()
+            stem = _entry_stem(raw)
+            if stem not in names:
+                continue
+            if raw.rsplit("/", 1)[-1].endswith(".py"):
+                # A FILENAME literal has one use: it names a file to run.
+                out.setdefault(stem, "spawned entry literal")
+                continue
+            # A BARE STEM is credited only where a dispatch puts one: an
+            # element of a name TABLE, an argument, or a piece of a path being
+            # composed. MEASURED — without this the arm credited
+            #     lookahead_extra["gate"] = "counter_decode_lookahead_phase_check"
+            # a LABEL in a report row, and a gate whose every invocation had
+            # been deleted still read as wired on the strength of it. The
+            # 246-entry `_STRUCTURAL_RTL_GATES` tuple in `flow_compliance_check`
+            # is the shape this arm exists for and it is a Tuple of Constants,
+            # so it is untouched.
+            if isinstance(parent.get(id(n)),
+                          (ast.List, ast.Tuple, ast.Set, ast.Dict, ast.Call,
+                           ast.BinOp, ast.JoinedStr)):
+                out.setdefault(stem, "spawned entry literal")
+    return out
+
+
+def _gate_blocks(node):
+    """Every `gate:` block in the flow, wherever it sits.
+
+    ONLY `gate:`. The flow also carries `final_gate:` blocks, and its own prose
+    records that NOTHING EXECUTES `final_gate` — crediting one would be this
+    same defect one level along.
+    """
+    if isinstance(node, dict):
+        for k, v in node.items():
+            if k == "gate":
+                yield v
+            else:
+                yield from _gate_blocks(v)
+    elif isinstance(node, list):
+        for v in node:
+            yield from _gate_blocks(v)
+
+
+def _all_strings(node):
+    if isinstance(node, str):
+        yield node
+    elif isinstance(node, dict):
+        for v in node.values():
+            yield from _all_strings(v)
+    elif isinstance(node, list):
+        for v in node:
+            yield from _all_strings(v)
+
+
+def flow_invocations(text: str, names: Set[str]) -> Dict[str, str]:
+    """A gate is invoked by the flow when a GATE CLAUSE names it as the ENTRY
+    of its command.
+
+    A `programs:` / `mcp_tools:` / `skills:` list entry is a DECLARATION and is
+    NOT credited. That is the whole of the vibe-ic#2065 ruling: the gate that
+    shipped with no caller was named in a `programs:` list and in
+    `CAPTURE_ROUTING.json`, and a register that credits a NAME cannot see an
+    unwired gate.
+
+    Schema-agnostic on purpose. Every string inside a `gate:` subtree is read
+    and its FIRST token taken as the command entry, rather than hand-listing
+    the clause kinds (`program_exit_zero`, `advisory_program_exit_zero`,
+    `optional_program_exit_zero`, `program`, a nested `command:`) — a new
+    clause kind must not silently stop counting. Prose inside the block
+    (`advisory_reason:`) is harmless: its first token is an English word.
+    """
+    out: Dict[str, str] = {}
+    try:
+        import yaml                                   # noqa: PLC0415
+        doc = yaml.safe_load(text)
+    except Exception:                                 # noqa: BLE001
+        return out
+    for blk in _gate_blocks(doc):
+        for sval in _all_strings(blk):
+            toks = sval.split()
+            if toks and _entry_stem(toks[0]) in names:
+                out.setdefault(_entry_stem(toks[0]), "flow gate clause")
+    return out
+
+
+def shell_invocations(text: str, names: Set[str]) -> Dict[str, str]:
+    """A shell / unit file in this corpus EXISTS to run things.
+
+    It names its subjects two ways and both are real: `"$PG/foo_check.py"`, and
+    a BARE STEM in a dispatch array — `tools/ci/run_plugin_self_audit.sh` holds
+    `GATES=( "emitter_failure_mode_check" ... )` and loops it as
+    `"$PROGRAMS/$g.py"`. Requiring the `.py` would have accused both of that
+    file's gates. Comments are already stripped by `executable_text`.
+    """
+    out: Dict[str, str] = {}
+    for m in re.finditer(r"([A-Za-z0-9_\-./$]*[a-z0-9_]+)\.py\b", text):
+        stem = m.group(1).rsplit("/", 1)[-1]
+        if stem in names:
+            out[stem] = "shell argv"
+    for m in re.finditer(r"[A-Za-z0-9_]+", text):
+        if m.group(0) in names:
+            out.setdefault(m.group(0), "shell dispatch")
+    return out
 
 
 def gates(plugin: Path) -> Set[str]:
@@ -370,24 +621,45 @@ def wiring_sources(plugin: Path, repo: Path) -> Tuple[int, int]:
 
 
 def wiring(plugin: Path, repo: Path) -> Dict[str, Dict[str, List[str]]]:
-    """{gate: {"executable": [...], "skill": [...]}} — where each is named."""
+    """{gate: {"executable": [...], "skill": [...]}} — where each is INVOKED.
+
+    `executable` holds `<path>::<how>` for every INVOCATION found, and an
+    invocation is what `py_invocations`, `flow_invocations` and
+    `shell_invocations` each define for their own file kind. A DECLARATION —
+    a `programs:` list entry, a routing-table row, a `.md` page — is not one,
+    and files whose whole format is declaration are not read at all.
+    """
     g = gates(plugin)
     execs = _texts(plugin, repo, _EXECUTABLE_GLOBS, _REPO_GLOBS)
     skills = _texts(plugin, repo, _SKILL_GLOBS)
-    out = {name: {"executable": [], "skill": []} for name in g}
+    out: Dict[str, Dict[str, List[str]]] = {
+        name: {"executable": [], "skill": []} for name in g}
+    self_stem = Path(__file__).stem
     for f, t in execs:
         # THIS program names its subjects — six of them, in the docstring above.
         # Counting that as wiring made all six read as consulted, which is the
         # exact defect this gate exists to find, committed by the gate itself.
         # An auditor naming what it audits is not a caller.
-        if f.stem == Path(__file__).stem:
+        if f.stem == self_stem:
             continue
-        for name in g:
-            # A gate's OWN file does not wire it, and neither does its own test.
-            if f.stem == name or f.stem == f"test_{name}":
+        if f.suffix in _DECLARATION_SUFFIXES:
+            continue
+        # A gate's OWN file does not wire it, and neither does its own test.
+        names = {n for n in g if f.stem != n and f.stem != f"test_{n}"}
+        if not names:
+            continue
+        if f.suffix == ".py":
+            # The ORIGINAL bytes, not `t`: see `py_invocations`.
+            try:
+                found = py_invocations(f.read_text(errors="replace"), names)
+            except OSError:
                 continue
-            if name in t:
-                out[name]["executable"].append(str(f))
+        elif f.suffix in (".yaml", ".yml"):
+            found = flow_invocations(t, names)
+        else:
+            found = shell_invocations(t, names)
+        for name, how in found.items():
+            out[name]["executable"].append(f"{f}::{how}")
     for f, t in skills:
         for name in g:
             if name in t:
@@ -407,6 +679,21 @@ def _load_baseline(p: Path) -> Optional[List[str]]:
         return None
     v = d.get("unwired") if isinstance(d, dict) else d
     return sorted(v) if isinstance(v, list) else None
+
+
+def _baseline_rule(p: Path) -> Optional[str]:
+    """The rule id the register on disk was MEASURED under, or None.
+
+    A register measured under a different rule is answering a different
+    question, and comparing the two as debt is a category error — the set can
+    legitimately grow without any gate having become unwired. This is the ONLY
+    condition under which `--write-baseline` may add; see `main`.
+    """
+    try:
+        d = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return d.get("measured_under") if isinstance(d, dict) else None
 
 
 def main(argv=None) -> int:
@@ -466,7 +753,14 @@ def main(argv=None) -> int:
 
     bpath = Path(a.baseline) if a.baseline else plugin / "programs" / _BASELINE_NAME
     if a.write_baseline or a.record_shrink:
-        prev = _load_baseline(bpath) or []
+        # `have_prev` is "a register EXISTS and parsed", not "it holds names".
+        # An EMPTY register used to take the same branch as a missing one and
+        # skipped the subset check entirely, so emptying the file was a second
+        # door onto the write path. `None` — no readable register at all — is
+        # the only bootstrap.
+        _prev_read = _load_baseline(bpath)
+        have_prev = _prev_read is not None
+        prev = _prev_read or []
         # THE RECORDED SET, BY THE TWO PATHS THAT MAY PRODUCE IT.
         #
         # `--record-shrink` writes `previous & current`, which is a subset of
@@ -477,28 +771,67 @@ def main(argv=None) -> int:
         # a one-out-one-in swap passed at constant size.
         record = _ratchet.shrunk(prev, now) if a.record_shrink else now
         left = _ratchet.departed(prev, record)
-        if prev and a.record_shrink and not left:
+        if have_prev and a.record_shrink and not left:
             print(f"nothing to record: {bpath} already holds the tightened set "
                   f"({len(prev)} unwired)")
             return 0
         doc = {
-            "_comment": "Gates no automatic verdict consults (vibe-ic#693). "
-                        "MAY ONLY SHRINK. A gate here produces no verdict, and "
-                        "the tree looks the same either way. `skill_only` is "
-                        "recorded because a skill mention runs the gate only "
-                        "if an agent remembers to — which for a gate that "
-                        "catches a vacuous pass is the same as absent at the "
-                        "moment it matters.",
+            "_comment": "Gates no automatic verdict INVOKES (vibe-ic#693, rule "
+                        "re-derived under vibe-ic#2065). MAY ONLY SHRINK. A "
+                        "gate here produces no verdict, and the tree looks the "
+                        "same either way. `skill_only` is recorded because a "
+                        "skill mention runs the gate only if an agent remembers "
+                        "to — which for a gate that catches a vacuous pass is "
+                        "the same as absent at the moment it matters.",
+            "measured_under": _RULE_ID,
             "unwired": record,
             "skill_only": sorted(n for n in record if w.get(n, {}).get("skill")),
         }
+        # A POPULATION CHANGE IS NOT A DEBT THAT GREW, AND IT IS THE ONE
+        # CONDITION UNDER WHICH THIS MAY ADD.
+        #
+        # When the rule itself changes, the register on disk answers a
+        # different question: gates it never counted become visible without any
+        # gate having become unwired. Refusing the write would leave the
+        # instrument permanently red and un-landable, which is how a gate ends
+        # up turned off; allowing it unconditionally would restore the
+        # laundering flag this file spent vibe-ic#900 removing.
+        #
+        # So the write is allowed to ADD exactly when the recorded
+        # `measured_under` differs from the rule this build measures — and the
+        # additions are PRINTED BY NAME, never summarised as a count. The
+        # moment the stamp matches, the ratchet is back and adding is refused
+        # again. Re-running this flag a second time therefore cannot launder
+        # anything: the second run compares like with like.
+        prev_rule = _baseline_rule(bpath)
+        # PRESENT **AND DIFFERENT**, never merely absent. An absent stamp is
+        # how a register would be laundered under this door: delete one line
+        # and every new offender records itself as accepted debt. MEASURED —
+        # the first version of this branch allowed it, and
+        # `test_the_shipped_register_still_refuses_to_GROW` (whose synthetic
+        # register carries no stamp, as any hand-written one would not) went
+        # from refusing to writing. The shipped register carries the stamp from
+        # this change onward, so a future rule change migrates by BUMPING
+        # `_RULE_ID` — present and different — and nothing else opens the door.
+        rederive = (have_prev and a.write_baseline
+                    and prev_rule is not None and prev_rule != _RULE_ID)
+        added = sorted(set(record) - set(prev))
+        if rederive and added:
+            print(f"[POPULATION CHANGE] the register on disk was measured under "
+                  f"{prev_rule} and this build measures "
+                  f"{_RULE_ID}. {len(added)} gate(s) become visible that the "
+                  f"previous rule could not see — every one of them is a gate "
+                  f"NOTHING INVOKES, not a gate that stopped being invoked:")
+            for n in added:
+                print(f"   + {n}")
         try:
             # The subset property is re-established on the DOCUMENT, so a
             # future edit that builds `unwired` from something other than the
             # two expressions above is refused here rather than trusted.
             _ratchet.write_shrunk(bpath, doc,
-                                  previous_by_register={"unwired": prev}
-                                  if prev else {})
+                                  previous_by_register={}
+                                  if rederive else
+                                  ({"unwired": prev} if have_prev else {}))
         except _ratchet.ShrinkRefused as exc:
             print(f"[FAIL] gate_is_wired baseline: {exc}", file=sys.stderr)
             return 1
@@ -523,8 +856,18 @@ def main(argv=None) -> int:
     new = sorted(set(now) - set(base))
     gone = sorted(set(base) - set(now))
     skill_only = sorted(n for n in now if w[n]["skill"])
+    recorded_rule = _baseline_rule(bpath)
     print(f"  gates: {len(gates(plugin))}   unwired: {len(now)} "
-          f"(baseline {len(base)})   of those named in a skill: {len(skill_only)}")
+          f"(baseline {len(base)})   of those named in a skill: {len(skill_only)}"
+          f"   rule: {_RULE_ID}")
+    if recorded_rule != _RULE_ID:
+        # SAID OUT LOUD, ALWAYS. A register measured under another rule can be
+        # compared to this run's set only as a category error; the reader has to
+        # know that before reading the numbers above.
+        print(f"  [RULE MISMATCH] the register records measured_under="
+              f"{recorded_rule!r}; this build measures {_RULE_ID!r}. The two "
+              f"sets answer different questions. Re-derive once with "
+              f"--write-baseline, which prints every addition by name.")
     if gone:
         # A TIGHTENING IS NEVER A FAILURE AND NEVER AN ERRAND. It is reported
         # in full — which gates left, and by how much — and the register is
@@ -548,9 +891,11 @@ def main(argv=None) -> int:
             print(f"   {n}"
                   + (f"  (named only in {where[0]})" if where else ""))
         print("\n  A gate nothing invokes produces no verdict, and the tree "
-              "looks the same\n  either way. Wire it into the flow yaml, "
-              "CAPTURE_ROUTING, a runner, or\n  tools/ci — a skill mention runs "
-              "it only if an agent remembers to.")
+              "looks the same either\n  way. INVOKE it: a flow GATE CLAUSE "
+              "whose command names it as the entry, an\n  import that is then "
+              "referenced, a spawned argv naming it, or a tools/ci\n  runner. "
+              "A `programs:` list entry, a CAPTURE_ROUTING row and a skill\n"
+              "  mention are DECLARATIONS — none of them runs anything.")
         return 1
     if len(now) > len(base):
         print(f"\n[FAIL] the unwired set grew {len(base)} -> {len(now)} with no "

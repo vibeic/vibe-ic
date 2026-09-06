@@ -375,6 +375,48 @@ def test_the_reference_is_an_import_not_a_sentence(consumer):
         f"{consumer} must IMPORT the checker; a mention is not a runner")
 
 
+def test_the_wiring_that_counts_is_the_INVOCATION_not_the_DECLARATION():
+    """vibe-ic#2065's ruling, measured on the SHIPPED files rather than a
+    fixture.
+
+    The hole was that `gate_is_wired_check` credited a NAME: this gate was
+    listed in flow Step 2's `programs:` and in `CAPTURE_ROUTING.json` and read
+    as consulted while nothing ran it. The register now derives wired-ness from
+    INVOCATIONS, and this arm pins both halves of that on the real bytes —
+    the two runners DO invoke it, and neither declaration does.
+
+    MEASURED end to end on the real tree while the rule was written: with both
+    invocations deleted and the flow entry and routing row left in place, the
+    register goes `unwired: 37 (baseline 36)` rc 1 and names this gate;
+    restoring them returns it to `36 (baseline 36)` rc 0.
+
+    Fast on purpose — it hands each file's own source to the reader that owns
+    its kind instead of sweeping ~1500 wiring sources."""
+    import gate_is_wired_check as GIW
+    names = {"counter_decode_lookahead_phase_check"}
+
+    for consumer in ("design_one_shot_runner.py", "gate_directed_rtl_repair.py"):
+        found = GIW.py_invocations(
+            (_PROGRAMS / consumer).read_text(encoding="utf-8"), names)
+        assert "counter_decode_lookahead_phase_check" in found, (
+            f"{consumer} no longer INVOKES the checker; a mention would not "
+            f"bring it back")
+
+    flow = (_PROGRAMS.parent / "flow" / "phase1_phase2_phase3.yaml")
+    text = flow.read_text(encoding="utf-8")
+    assert "counter_decode_lookahead_phase_check" in text, (
+        "the flow no longer declares it at all — this arm would be vacuous")
+    assert GIW.flow_invocations(text, names) == {}, (
+        "a `programs:` declaration was credited as an invocation, which is the "
+        "exact hole #2065 exposed")
+
+    routing = _PROGRAMS.parent / "benchmark" / "CAPTURE_ROUTING.json"
+    assert "counter_decode_lookahead_phase_check" in routing.read_text(), (
+        "the routing entry is gone — this arm would be vacuous")
+    assert routing.suffix in GIW._DECLARATION_SUFFIXES, (
+        "CAPTURE_ROUTING.json is being read as an execution corpus again")
+
+
 def test_the_flow_names_it_at_the_step_whose_subject_it_reads():
     """`flow/phase1_phase2_phase3.yaml` is the single source of truth for which
     programs a step runs. Step 2 is RTL validation — the step whose input is the

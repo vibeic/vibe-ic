@@ -22,14 +22,32 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import _progress_run as _pr  # noqa: E402
 
 
-def _tree(root: Path, *, gates=(), flow_names=(), skill_names=(), ci_names=()):
-    """A minimal plugin+repo: `gates` exist, the others NAME some of them."""
+def _tree(root: Path, *, gates=(), flow_names=(), flow_declared=(),
+          skill_names=(), ci_names=()):
+    """A minimal plugin+repo: `gates` exist, the others name some of them.
+
+    TWO FLOW SHAPES, because the difference between them is the whole rule
+    (vibe-ic#2065). `flow_names` writes a real GATE CLAUSE — a command whose
+    entry is the gate — and is an invocation. `flow_declared` writes a
+    `programs:` list entry, which is a DECLARATION and runs nothing.
+    """
     (root / "programs").mkdir(parents=True, exist_ok=True)
     for g in gates:
         (root / "programs" / f"{g}.py").write_text("# a gate\n")
     (root / "flow").mkdir(exist_ok=True)
+    steps = []
+    for n in flow_names:
+        steps.append(
+            f"  - id: s_{n}\n"
+            f"    gate:\n"
+            f"      all_of:\n"
+            f'        - program_exit_zero: "{n} . --json reports/{n}.json"\n')
+    for n in flow_declared:
+        steps.append(f"  - id: d_{n}\n"
+                     f"    programs:\n"
+                     f"      - {n}\n")
     (root / "flow" / "phase1_phase2_phase3.yaml").write_text(
-        "".join(f"  - run: {n}.py\n" for n in flow_names) or "steps: []\n")
+        ("steps:\n" + "".join(steps)) if steps else "steps: []\n")
     (root / "skills" / "s").mkdir(parents=True, exist_ok=True)
     (root / "skills" / "s" / "SKILL.md").write_text(
         "".join(f"run `{n}.py`\n" for n in skill_names) or "nothing\n")
@@ -51,9 +69,29 @@ def _run(root: Path, *args):
 
 # --------------------------------------------------------------- what it reads
 
-def test_a_flow_reference_counts_as_wired(tmp_path):
+def test_a_flow_GATE_CLAUSE_counts_as_wired(tmp_path):
+    """The flow invokes a gate when a CLAUSE names it as its command entry."""
     root = _tree(tmp_path, gates=["a_check"], flow_names=["a_check"])
     assert giw.unwired(root, root)[0] == []
+
+
+def test_a_flow_programs_DECLARATION_does_NOT_count_as_wired(tmp_path):
+    """THE RULING, vibe-ic#2065, and the hole it closes.
+
+    `counter_decode_lookahead_phase_check` shipped in v1.18.3 with its own
+    tests and NO caller. It was named in a step's `programs:` list and in
+    `benchmark/CAPTURE_ROUTING.json`, and this register — which then credited a
+    NAME in any file that could execute — read it as consulted. A register that
+    credits a declaration cannot see an unwired gate, which is the one thing it
+    exists to see.
+
+    Neither list runs anything: `programs:` is what a step DECLARES it uses,
+    and the routing table is read by an agent choosing what to consult."""
+    root = _tree(tmp_path, gates=["a_check"], flow_declared=["a_check"])
+    names, w = giw.unwired(root, root)
+    assert names == ["a_check"], (
+        "a `programs:` declaration was credited as an invocation")
+    assert not w["a_check"]["executable"]
 
 
 def test_a_ci_reference_counts_as_wired(tmp_path):
@@ -347,6 +385,58 @@ def test_the_shipped_register_still_refuses_to_GROW(tmp_path):
         "the write path refused without naming the entry it refused")
     # the refusal left the register it was pointed at untouched
     assert json.loads(short.read_text())["unwired"] == sorted(now)[1:]
+
+
+# ---- the rule stamp, and the one door through which the register may GROW ---
+
+def test_the_shipped_register_is_stamped_with_the_rule_it_was_measured_under():
+    """Without the stamp there is no way to tell a POPULATION CHANGE — the
+    instrument starting to measure a different question — from a debt that
+    grew, and the two need opposite responses."""
+    plugin = _real_plugin()
+    doc = json.loads((plugin / "programs" / "gate_is_wired_baseline.json")
+                     .read_text(encoding="utf-8"))
+    assert doc.get("measured_under") == giw._RULE_ID, doc.get("measured_under")
+
+
+def test_a_register_with_NO_stamp_may_still_not_GROW(tmp_path):
+    """THE HOLE THIS ARM WAS WRITTEN FROM, and it was open for one commit.
+
+    The re-derivation door first opened on `recorded rule != this rule`, and an
+    ABSENT stamp satisfies that — so deleting one line from the register turned
+    `--write-baseline` back into the laundering flag vibe-ic#900 removed. It
+    was caught by `test_the_shipped_register_still_refuses_to_GROW`, whose
+    synthetic register carries no stamp, going from refusing to writing.
+
+    The door now needs the stamp PRESENT and DIFFERENT. A future rule change
+    migrates by bumping `_RULE_ID`; nothing else opens it."""
+    root = _tree(tmp_path, gates=["a_check", "b_check"], flow_names=["a_check"])
+    bl = tmp_path / "unstamped.json"
+    bl.write_text(json.dumps({"unwired": []}))          # no measured_under
+    rc, out = _run(root, "--baseline", str(bl), "--write-baseline")
+    assert rc == 1, out
+    assert "b_check" in out, out
+    assert json.loads(bl.read_text())["unwired"] == []
+
+
+def test_a_register_stamped_with_ANOTHER_rule_may_be_re_derived(tmp_path):
+    """The other direction — the door must actually open, and must name every
+    entry it adds rather than reporting a count."""
+    root = _tree(tmp_path, gates=["a_check", "b_check"], flow_names=["a_check"])
+    bl = tmp_path / "old_rule.json"
+    bl.write_text(json.dumps({"measured_under": "name.v0", "unwired": ["z_check"]}))
+    rc, out = _run(root, "--baseline", str(bl), "--write-baseline")
+    assert rc == 0, out
+    assert "POPULATION CHANGE" in out, out
+    assert "+ b_check" in out, out
+    after = json.loads(bl.read_text())
+    assert after["unwired"] == ["b_check"], after
+    assert after["measured_under"] == giw._RULE_ID
+    # and the door has closed behind it
+    (root / "programs" / "c_check.py").write_text("# added later\n")
+    rc2, out2 = _run(root, "--baseline", str(bl), "--write-baseline")
+    assert rc2 == 1, out2
+    assert "c_check" in out2, out2
 
 
 # ------------- the corpus the verdict depends on, and saying so (#1467) ------
