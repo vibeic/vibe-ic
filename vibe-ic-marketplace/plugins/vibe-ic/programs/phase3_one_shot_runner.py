@@ -318,7 +318,37 @@ def _container_mounts(container: str) -> List[Tuple[str, str]]:
                     out.append((src.rstrip("/"), dst.rstrip("/")))
     except Exception:
         pass
-    out.sort(key=lambda t: len(t[0]), reverse=True)
+    # THE TIE-BREAK IS A SEMANTIC CHOICE, NOT A SORT KEY — issue #2061 / R-02.
+    #
+    # Longest-source-first is right and is unchanged: a nested mount must win
+    # over the parent that contains it. But when two mounts have sources of
+    # EQUAL LENGTH the old `sort(key=len, reverse=True)` was stable, so the tie
+    # fell through to whatever order `docker inspect` happened to emit — and
+    # that order is NOT STABLE. Lane rbspm2 measured it over 50 calls per
+    # container: the host-unreadable `/foss/designs` won the tie 18 % of the
+    # time on one container and 10 % on another.
+    #
+    # WHAT IT COST. `_to_container_path` returns the FIRST covering mount, and
+    # consumers that must read the mapped file ON THE HOST — `dfm_screen_check`
+    # resolves via cuts from the LEFs the run's pnr tcl names — then read a path
+    # that exists only inside the container. MEASURED: two runs of ONE tree
+    # published OPPOSITE `dfm_screen.json` verdicts (3550 vias UNRESOLVED /
+    # redundancy UNMEASURED, versus resolved with `single_cut_fraction 1.0` and
+    # VIA_REDUNDANCY_LOW). A verdict that flips on a coin toss is worse than
+    # either answer, because nothing in the record says a toss happened.
+    #
+    # SO THE TIE IS DECIDED BY WHAT THE ANSWER IS FOR: prefer a destination that
+    # EXISTS ON THIS HOST, because that is the one a host-side reader can open.
+    # The third key makes the order TOTAL, so two equal-length sources whose
+    # destinations are both present (or both absent) still resolve identically
+    # on every call — no residual dependence on the daemon's ordering.
+    #
+    # Unchanged whenever sources differ in length, which is the ordinary case.
+    def _mount_rank(t: Tuple[str, str]) -> Tuple[int, int, str]:
+        src, dst = t
+        return (-len(src), 0 if os.path.exists(dst) else 1, dst)
+
+    out.sort(key=_mount_rank)
     _CONTAINER_MOUNTS_CACHE[container] = out
     return out
 
