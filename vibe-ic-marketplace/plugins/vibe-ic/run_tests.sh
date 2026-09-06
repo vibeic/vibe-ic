@@ -54,25 +54,48 @@ echo "==========================================================="
 echo ""
 fi
 
+# A TIER IS A DIRECTORY THAT HOLDS TESTS, not one that merely exists.
+#
+# The `skills/*/tests` discovery below always asked the second question; the
+# fixed entries above it asked only the first, and they drifted apart. MEASURED
+# on e1814e28d: `<plugin>/tests` holds exactly one file,
+# `tests/fixtures/real_benchmark/log2_width_helper.md`, and NO test file at all
+# — so `--list-tiers` named a tier that collects zero tests, while the
+# git-derived population correctly implied it was not one, and
+# `test_full_suite_run_check.py::test_the_derived_tiers_are_the_tiers_the_runner
+# _discovers` reported the disagreement ("only the runner lists ['tests']").
+#
+# Asking one question everywhere is the fix, rather than deleting the `tests`
+# line by hand: a hand-deleted literal drifts back the next time the directory
+# is repopulated, and this predicate simply starts answering yes again.
+# The patterns are pytest's OWN `python_files` defaults, so a tier is a tier
+# exactly when pytest would collect something from it.
+_has_tests() {
+    [ -d "$1" ] || return 1
+    compgen -G "$1/test_*.py" > /dev/null && return 0
+    compgen -G "$1/*_test.py" > /dev/null && return 0
+    return 1
+}
+
 mapfile -t TEST_DIRS < <(
     # Plugin-level tests
-    [ -d tests ] && echo tests
+    _has_tests tests && echo tests
 
     # Program tests
-    [ -d programs/tests ] && echo programs/tests
+    _has_tests programs/tests && echo programs/tests
 
     # Phase-1 engine tests. Collected by NOTHING before #1391 — not by this
     # script, and not by pytest.ini, which declares ONE testpath by design.
     # It carried two failing tests on main that no suite reported. The
     # repo-root copy is unreachable from here (this script cds into the
     # plugin); `test_both_engine_copies_agree` keeps the copies together.
-    [ -d tools/phase1_engine/tests ] && echo tools/phase1_engine/tests
+    _has_tests tools/phase1_engine/tests && echo tools/phase1_engine/tests
 
     # MCP EDA server sub-project. Named by the PR template and CONTRIBUTING as
     # a SEPARATE `pytest -q mcp-eda/test`, and by no runner at all — prose in a
     # checklist is not automation, so its 201 tests ran only when a human
     # remembered. 193 pass / 8 tool-gated skips.
-    [ -d mcp-eda/test ] && echo mcp-eda/test
+    _has_tests mcp-eda/test && echo mcp-eda/test
 
     # Per-skill tests
     find skills -type d -name tests 2>/dev/null | while read -r d; do

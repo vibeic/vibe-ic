@@ -27,6 +27,7 @@ chip-AGNOSTIC: standard-SDC syntax + set-membership on port spellings; no chip
 names. The real #618 discriminating SDC line (`set clk_port_name clk_i`) is
 embedded verbatim.
 """
+import json
 import sys
 from pathlib import Path
 
@@ -54,6 +55,30 @@ def _stage_sdc(proj, text):
     c = proj / "input/constraints"
     c.mkdir(parents=True, exist_ok=True)
     (c / "constraint.sdc").write_text(text)
+
+
+def _request_interface(proj, *ports, top="chip_top"):
+    """Declare the public target interface this case intentionally asks for.
+
+    RULED by v1.17.48 (76e5960ee, "require a requested interface before aliasing
+    reset/clock names"): automatic adaptation now needs an authoritative
+    interface that NAMES THE DESTINATION spelling and does NOT require the
+    source spelling. Without one the step refuses before it ever looks at the
+    SDC — MEASURED on e1814e28d, all three step-level cases below returned the
+    same "no authoritative interface requests an equivalent reset/clock
+    spelling" SKIP, so the #618 SDC guard decided nothing and this file's three
+    outcomes had collapsed into one.
+
+    That ruling is about WHO may ask for a rename. #618 is about a design whose
+    own staged SDC pins the spelling being renamed, which is a different
+    question and the one these cases exist to ask. Staging the request puts the
+    SDC guard back in the position of deciding, exactly as v1.17.48 did for the
+    eleven wrapping fixtures it updated itself.
+    """
+    docs = proj / "phase1" / "generated_docs"
+    docs.mkdir(parents=True, exist_ok=True)
+    (docs / "L9_INTEGRATION_SPEC.json").write_text(json.dumps({
+        "top_module": top, "top_ports": list(ports)}))
 
 
 def _stage_rtl(proj, text, name="chip_top.sv"):
@@ -95,6 +120,9 @@ def test_staged_ports_includes_data_ports_harmlessly(tmp_path):
 def test_step_skips_rename_when_sdc_pins_original(tmp_path):
     # POSITIVE #618: staged SDC pins clk_i -> no rename.
     _stage_sdc(tmp_path, REAL_618_SDC)
+    # `clk` is requested (the destination); `rst_ni` is requested as itself, so
+    # only the CLOCK alias is on the table and #618 is what decides it.
+    _request_interface(tmp_path, "clk", "rst_ni", "o_data")
     chip = _stage_rtl(tmp_path, CHIP_TOP_CLK_I)
     res = R.step_reset_clock_variant_aliases(tmp_path, "chip_top")
     assert res.status == "SKIP"
@@ -106,6 +134,7 @@ def test_step_skips_rename_when_sdc_pins_original(tmp_path):
 
 def test_step_renames_when_no_staged_sdc(tmp_path):
     # NO-LEAK (#518): no staged SDC -> the alias rename still fires.
+    _request_interface(tmp_path, "clk", "rst_ni", "o_data")
     chip = _stage_rtl(tmp_path, CHIP_TOP_CLK_I)
     res = R.step_reset_clock_variant_aliases(tmp_path, "chip_top")
     assert res.status == "PASS"
@@ -117,6 +146,9 @@ def test_step_partial_pin_keeps_aliasing_unpinned(tmp_path):
     # NO-LEAK: SDC pins clk_i only; the unpinned reset_n -> rst_n alias fires,
     # clk_i is preserved (partial suppression, not a blanket skip).
     _stage_sdc(tmp_path, "create_clock -name c -period 10 [get_ports {clk_i}]\n")
+    # BOTH destinations requested, NEITHER source: the two aliases are on the
+    # table together, so the SDC pinning clk_i alone is what splits them.
+    _request_interface(tmp_path, "clk", "rst_n", "o_data")
     chip = _stage_rtl(
         tmp_path,
         "module chip_top (\n  input  clk_i,\n  input  reset_n,\n"

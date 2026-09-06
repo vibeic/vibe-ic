@@ -165,6 +165,15 @@ def _stage_project(tmp_path, spec, rtl_text, design="synchronizer"):
     return proj, rtl
 
 
+def _request_interface(proj, top, *ports):
+    """The public target interface a case intentionally asks for (v1.17.48)."""
+    import json
+    docs = proj / "phase1" / "generated_docs"
+    docs.mkdir(parents=True, exist_ok=True)
+    (docs / "L9_INTEGRATION_SPEC.json").write_text(json.dumps({
+        "top_module": top, "top_ports": list(ports)}))
+
+
 def test_runner_gate_suppresses_arstn_rename_with_colon_spec(tmp_path):
     """END-STATE (#792 ADDITIVE doctrine): the runner gate (invoked as the
     orchestrator does, with the default auto-wrapper top name 'chip_top')
@@ -174,12 +183,20 @@ def test_runner_gate_suppresses_arstn_rename_with_colon_spec(tmp_path):
     pull, AND-combine). The contract spelling is never destructively renamed; the
     arstn-binding hidden TB still elaborates (see the elaborate test below)."""
     proj, rtl = _stage_project(tmp_path, _SPEC_COLON, _RTL_SYNC)
+    before = rtl.read_text()
     res = R.step_reset_clock_variant_aliases(proj, "chip_top")
-    assert res.status == "PASS", (res.status, res.detail)
-    assert "additive" in res.detail.lower(), res.detail
+    # RULED by v1.17.48 (76e5960ee): "Automatic flow never constructs additive
+    # aliases." The additive half of the #792 doctrine this case pinned is gone
+    # from the automatic path and lives behind the retained
+    # `emit_variant_alias_wrapper(additive_reset_map=...)` API. What this case is
+    # ACTUALLY about — the contract spelling is never destructively renamed — is
+    # preserved and in fact stronger: nothing is added either.
+    assert res.status == "SKIP", (res.status, res.detail)
+    assert "#689" in res.detail, res.detail
     txt = rtl.read_text()
+    assert txt == before, "the ruling promises the authored RTL is unchanged"
     assert "arstn" in txt, txt          # spec port preserved (still bindable)
-    assert "rst_n" in txt, txt          # canonical ALSO exposed additively (#792)
+    assert "rst_n" not in txt, txt      # and no synonym grafted beside it
 
 
 @pytest.mark.skipif(not _HAS_IVERILOG, reason="iverilog unavailable")
@@ -211,10 +228,18 @@ def test_runner_control_no_contract_renames_and_breaks_arstn_bind(tmp_path):
     the field-verified canonical bet — and it is exactly what the colon-form
     contract now correctly SUPPRESSES when the spec declares the port."""
     proj, rtl = _stage_project(tmp_path, "", _RTL_SYNC)  # empty spec → no contract
+    before = rtl.read_text()
     res = R.step_reset_clock_variant_aliases(proj, "chip_top")
-    assert res.status == "PASS", (res.status, res.detail)
+    # RULED by v1.17.48 (76e5960ee): the historical #518 doctrine was a GUESS at
+    # a binding nobody stated. With no contract there is no authority to rename,
+    # so the authored ports are preserved and the step reports an advisory SKIP.
+    # Pinned by its own reason so it stays distinguishable from the #689 refusal
+    # in the case above — after the ruling both are SKIP on unchanged bytes.
+    assert res.status == "SKIP", (res.status, res.detail)
+    assert "no authoritative interface requests" in res.detail, res.detail
     txt = rtl.read_text()
-    assert "rst_n" in txt, txt          # canonical alias fired (no-leak intact)
+    assert txt == before, "the ruling promises the authored RTL is unchanged"
+    assert "rst_n" not in txt, txt
 
 
 def test_runner_gate_genuine_typo_reset_still_aliases(tmp_path):
@@ -231,6 +256,11 @@ def test_runner_gate_genuine_typo_reset_still_aliases(tmp_path):
         "endmodule\n")
     proj, rtl = _stage_project(tmp_path, _SPEC_COLON_NO_RESET, rtl_text,
                                design="counter")
+    # v1.17.48 requires the request to be stated rather than guessed; the
+    # substance of this case — a reset the contract does NOT pin is still
+    # aliasable — is unchanged, and this is the file's remaining PASS arm, so
+    # the two SKIPs above cannot both be satisfied by a dead aliaser.
+    _request_interface(proj, "counter", "clk", "en", "rst_n", "cnt")
     res = R.step_reset_clock_variant_aliases(proj, "chip_top")
     assert res.status == "PASS", (res.status, res.detail)
     assert "rst_n" in rtl.read_text()   # reset_n -> rst_n alias fired
@@ -249,11 +279,20 @@ def test_518_endstate_alias_program_runs_on_arstn(tmp_path):
         "  always @(posedge clk or negedge arstn)\n"
         "    if(!arstn) q<=0; else q<=1;\nendmodule\n")
     prog = _PROGRAMS / "reset_clock_variant_alias.py"
-    cp = subprocess.run([sys.executable, str(prog),
-                         "--rtl", str(tmp_path / "core.sv"),
-                         "--module", "core"], capture_output=True, text=True)
+    # RULED by v1.17.48 (76e5960ee): "CLI mutation requires an explicit
+    # `--alias SOURCE=TARGET`". The intentional caller states the mapping; the
+    # program no longer infers one.
+    base = [sys.executable, str(prog), "--rtl", str(tmp_path / "core.sv"),
+            "--module", "core"]
+    cp = subprocess.run(base + ["--alias", "arstn=rst_n"],
+                        capture_output=True, text=True)
     assert cp.returncode == 0, (cp.returncode, cp.stdout, cp.stderr)
     assert "ok" in cp.stdout.lower()
+    # AND THE OTHER DIRECTION, so this cannot pass against a program that
+    # aliases whatever it likes: without the explicit mapping it must REFUSE.
+    ref = subprocess.run(base, capture_output=True, text=True)
+    assert ref.returncode != 0, (ref.returncode, ref.stdout, ref.stderr)
+    assert "--alias" in (ref.stdout + ref.stderr)
 
 
 if __name__ == "__main__":  # pragma: no cover

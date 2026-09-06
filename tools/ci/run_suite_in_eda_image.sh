@@ -136,7 +136,44 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)" \
 # `tools/ci/protected_landing_transition.json` and
 # `programs/landing_pytest_runtime_preflight.py` spell it: a floating tag is how
 # a host ends up with a runtime nobody pinned.
-IMAGE_DEFAULT="ghcr.io/vibeic/vibeic-eda@sha256:66c33ff2e05781758f596d82bff61ad8a404ef0a7eae3d21ab8a9d55df0d01ff"
+# THE DIGEST IS READ, NEVER COPIED. `tools/ci/hermetic_candidate_runner.py`
+# pins the runtime image as `IMAGE`, and that is the one place the fleet moves
+# when the image moves. This file used to carry its OWN literal of the same
+# digest, and the two drifted: measured 2026-09-06, the owner had ruled the
+# image forward to the 0.3.47-era build while this line still named 0.3.6 —
+# forty patch releases behind — so every operator who did not pass `--image`
+# measured a toolchain nobody had pinned, and said nothing about it.
+#
+# Parsed with `ast`, not imported: this must not run that module's imports, and
+# it must not execute anything to learn a constant. A read that fails is a
+# REFUSAL, never a fallback literal, because a fallback is how the second copy
+# comes back.
+_PIN_SRC="$REPO_ROOT/tools/ci/hermetic_candidate_runner.py"
+IMAGE_DEFAULT="$(python3 - "$_PIN_SRC" <<'PY' || true
+import ast, sys
+try:
+    tree = ast.parse(open(sys.argv[1], encoding="utf-8").read())
+except Exception:
+    sys.exit(1)
+for node in tree.body:
+    if isinstance(node, ast.Assign) and any(
+            getattr(t, "id", "") == "IMAGE" for t in node.targets):
+        try:
+            print(ast.literal_eval(node.value))
+        except Exception:
+            sys.exit(1)
+        break
+else:
+    sys.exit(1)
+PY
+)"
+case "$IMAGE_DEFAULT" in
+  *"@sha256:"*) ;;
+  *) die "cannot read the pinned runtime image (IMAGE) from $_PIN_SRC.
+    That constant is the single place this repo pins the runtime, and this
+    harness reads it rather than keeping a copy that can drift. Fix the pin, or
+    pass --image explicitly; there is deliberately no fallback literal here." ;;
+esac
 IMAGE="${VIBEIC_SUITE_IMAGE:-$IMAGE_DEFAULT}"
 SCRATCH_DEFAULT="/tmp/vibeic-suite"
 SCRATCH="${VIBEIC_SUITE_SCRATCH:-$SCRATCH_DEFAULT}"

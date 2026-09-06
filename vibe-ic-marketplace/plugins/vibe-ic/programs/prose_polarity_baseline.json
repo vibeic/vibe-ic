@@ -1,5 +1,5 @@
 {
-  "_comment": "Prose extractors that never consult the polarity of the sentence they read (vibe-ic#712). MAY ONLY SHRINK. A denied value published as a declaration is how a design gets hard-sized onto another chip's die while citing its own document as the authority.",
+  "_comment": "Prose extractors that never consult the polarity of the sentence they read (vibe-ic#712). MAY ONLY SHRINK. A denied value published as a declaration is how a design gets hard-sized onto another chip's die while citing its own document as the authority.  2026-09-06 (czmainred): the entry for phase3_one_shot_runner::_def_net_orphan_instances is DELETED AS SOURCE, reviewed like code \u2014 it became polarity-aware and the gate had been printing an errand pointing at --record-shrink, which is a baseline write and is refused. A register shrinks by a reviewed deletion, never by a flag.",
   "known": [
     "_spef_coupling::parse_spef_name_map",
     "_spef_coupling::representative_nodes",
@@ -143,7 +143,6 @@
     "phase1_protocol_spec_extract::extract_l6_control_logic",
     "phase1_protocol_spec_extract::extract_l8_protocol_widths",
     "phase3_one_shot_runner::_build_clock_records_from_sdcs",
-    "phase3_one_shot_runner::_def_net_orphan_instances",
     "phase3_one_shot_runner::_discover_via_resistances",
     "phase3_one_shot_runner::_ensure_staged_sdc_drv",
     "phase3_one_shot_runner::_liberty_drv_limits",
