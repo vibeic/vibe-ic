@@ -1805,6 +1805,86 @@ def _param_passthrough_retry_shape_b(
             "reason": f"functional_mismatch ({m.group(0) if m else 'test failed'})"}
 
 
+def _primary_tool_disqualified_escalation(design: str, samples: Path, dataset: Path,
+                                          layout: dict, args: dict):
+    """The primary simulator could not pass this problem's OWN reference, so it is
+    not a qualified judge FOR THIS PROBLEM. Re-decide on the escalation rung the
+    scorer already owns -- the GOLDEN first (does the higher rung actually qualify?),
+    and only then the candidate.
+
+    Why this cannot launder a wrong candidate:
+      * the trigger is the GOLDEN failing under the primary tool, NEVER the
+        candidate failing;
+      * after escalating, the candidate must still print the benchmark's own
+        pass marker on its own, judged by the same official TB;
+      * if the higher rung ALSO cannot pass the golden, we escalate nothing and the
+        caller keeps its existing suspected-defect disclosure and the FAIL.
+
+    Returns a replacement result dict, or None for "no determination".
+
+    chip-AGNOSTIC: driven by registry layout.ref_glob/tb_filename plus scorer_args
+    regexes; no design name, no benchmark dispatch, no expected value.
+    """
+    ref_glob = layout.get("ref_glob")
+    tb_name = layout.get("tb_filename")
+    if not ref_glob or not tb_name:
+        return None
+    design_dir = dataset / design
+    tb = design_dir / tb_name
+    if not tb.is_file():
+        return None
+    refs = sorted(design_dir.glob(ref_glob))
+    # _verilator_run_text stages ONE text; a multi-file golden cannot be replayed
+    # through it, so we make no determination rather than a partial one.
+    if len(refs) != 1:
+        return None
+    pass_re = re.compile(args["pass_regex"])
+    fail_re = re.compile(args["fail_regex"]) if args.get("fail_regex") else None
+    with tempfile.TemporaryDirectory() as td:
+        aliased_srcs, _ports = _aliased_golden_srcs(design, dataset, layout, refs, td)
+        if aliased_srcs is None:
+            return None
+        try:
+            golden_text = Path(aliased_srcs[0]).read_text(errors="ignore")
+        except OSError:
+            return None
+    built, golden_passes = _verilator_run_text(
+        golden_text, design, tb, design_dir, pass_re, "qualify_golden")
+    if not built or not golden_passes:
+        # Higher rung is unavailable, or it agrees the golden is bad. Either way we
+        # have NOT established a qualified judge -> no determination.
+        return None
+    sample = _resolve_sample_b(design, samples, dataset, layout)
+    if sample is None:
+        return None
+    # ANTI-CHEAT (measured, and it fired): a rung that passes the golden may still
+    # be unable to REJECT a deliberately-wrong design. RTLLM ring_counter's official
+    # TB passes its golden under Verilator AND passes a constant-0 stub there, so a
+    # PASS on that rung certifies nothing. Escalation is only legitimate onto a rung
+    # that both ACCEPTS the reference and REJECTS garbage; otherwise we make no
+    # determination and the caller keeps its FAIL plus the defect disclosure.
+    stub = _build_zero_stub(Path(sample).read_text(errors="replace"))
+    if stub is None:
+        return None
+    stub_built, stub_passes = _verilator_run_text(
+        stub, design, tb, design_dir, pass_re, "qualify_stub")
+    if not stub_built or stub_passes:
+        return None
+    with tempfile.TemporaryDirectory() as td2:
+        sample_c = _power_up_fixed(sample, td2)
+        v = _verilator_compile_run(design, sample_c, tb, design_dir,
+                                   pass_re, fail_re)
+    if not isinstance(v, dict) or v.get("verdict") not in {"PASS", "FAIL"}:
+        return None
+    note = ("primary simulator could not pass this problem's own reference; "
+            "re-decided on the qualified escalation rung (verilator)")
+    out = {"design": design, "verdict": v["verdict"],
+           "reason": f"{v.get('reason', '')} [{note}]".strip(),
+           "tool_escalation": "verilator",
+           "tool_escalation_trigger": "golden_ref_fails_own_tb_runtime"}
+    return out
+
+
 def _score_shape_b(design: str, samples: Path, dataset: Path,
                    layout: dict, args: dict) -> dict:
     """Shape-B scorer wrapper (#679 + #690): run the core scorer, then audit the
@@ -1842,6 +1922,13 @@ def _score_shape_b(design: str, samples: Path, dataset: Path,
     else:
         gref = _golden_ref_fails_own_tb_runtime(design, dataset, layout, args)
         if gref is True:
+            # The primary tool failed this problem's OWN reference, so it is not a
+            # qualified judge here. Try the escalation rung BEFORE charging the FAIL
+            # to the model. Gated on the GOLDEN, never on the candidate.
+            escalated = _primary_tool_disqualified_escalation(
+                design, samples, dataset, layout, args)
+            if escalated is not None:
+                return escalated
             # DISCLOSURE-ONLY (suspected), NOT auto-exclude. A golden that COMPILES
             # but FAILs its own TB at RUNTIME proves only that the shipped GOLDEN is
             # buggy — it is NOT sound proof that the design is unsatisfiable by
