@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1275
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1275)
+- **Total programs (excluding helpers / shims):** 1277
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1277)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1266 |
+| `any` | 1268 |
 
 ## Alphabetical listing
 
@@ -1108,6 +1108,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `spacewire_protocol_synth` | any | — | SpaceWire protocol synth helper (ECSS-E-ST-50-12C). |
 | `spare_cell_coverage_check` | any | — | Design-for-ECO READINESS gate (Step 18). |
 | `spare_cell_preservation_check` | any | — | Design-for-ECO PRESERVATION gate. |
+| `sparse_fsm_detect` | any | — | find SPARSE FSM state registers in the design INPUT. |
+| `sparse_fsm_encoding_check` | any | — | did synthesis KEEP the sparse FSM encoding? |
 | `spawned_gate_whose_status_is_discarded` | any | — | A gate spawned as a subprocess whose verdict reaches nothing. |
 | `spdif_protocol_synth` | any | v0.1.84 | S/PDIF-class protocol synth helper. |
 | `spec_analog_iface_extract` | any | — | PROGRAM-FIRST structural extractor for the L5 ANALOG/DIGITAL INTERFACE (ADI) facet of a design doc / prompt (chip-AGNOSTIC, §4.05 no-leak). |
@@ -1347,7 +1349,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1266 programs)
+### `any` (1268 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `absence_verdict_names_its_search_space_check` — "not found" must say WHERE it looked.
@@ -2424,6 +2426,8 @@ _(no programs in this group)_
 - `spacewire_protocol_synth` — SpaceWire protocol synth helper (ECSS-E-ST-50-12C).
 - `spare_cell_coverage_check` — Design-for-ECO READINESS gate (Step 18).
 - `spare_cell_preservation_check` — Design-for-ECO PRESERVATION gate.
+- `sparse_fsm_detect` — find SPARSE FSM state registers in the design INPUT.
+- `sparse_fsm_encoding_check` — did synthesis KEEP the sparse FSM encoding?
 - `spawned_gate_whose_status_is_discarded` — A gate spawned as a subprocess whose verdict reaches nothing.
 - `spdif_protocol_synth` — S/PDIF-class protocol synth helper.  _[v0.1.84]_
 - `spec_analog_iface_extract` — PROGRAM-FIRST structural extractor for the L5 ANALOG/DIGITAL INTERFACE (ADI) facet of a design doc / prompt (chip-AGNOSTIC, §4.05 no-leak).
