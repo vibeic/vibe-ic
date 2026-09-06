@@ -42,6 +42,7 @@ are written over, exactly two appear: `$clog2` and `$bits`.
 chip-AGNOSTIC: every module, parameter and package name below is ordinary
 Verilog; no chip, SKU, vendor or PDK literal appears.
 """
+import json
 import sys
 from pathlib import Path
 
@@ -53,6 +54,33 @@ if str(_PROGRAMS) not in sys.path:
 
 import _port_width as PW              # noqa: E402
 import register_bus_driver_gen as RB  # noqa: E402
+import design_one_shot_runner as P2   # noqa: E402
+import testbench_gen as TBG           # noqa: E402
+
+
+# The L9 extraction for the DUT below. It carries NO msb/lsb, on purpose: this
+# file is about resolving the width from the RTL's own constants, and supplying
+# L9 numbers would let the resolver answer from those instead and hide whether
+# the harvest works at all.
+_L9 = {"top_module": "core_top", "top_ports": [
+    {"name": "clk", "direction": "input"},
+    {"name": "rst_n", "direction": "input"},
+    {"name": "adr", "direction": "input"},
+    {"name": "wdat", "direction": "input"},
+    {"name": "rdat", "direction": "output"},
+    {"name": "ack", "direction": "output"}]}
+
+
+def _seed(tmp_path, rtl_text, name="core_top"):
+    """A minimal project: L9 beside one RTL file, the shape both generators read."""
+    proj = tmp_path / "proj"
+    gd = P2._pl.generated_docs_dir(proj)
+    gd.mkdir(parents=True)
+    (gd / "L9_INTEGRATION_SPEC.json").write_text(json.dumps(_L9))
+    rtl = P2._pl.rtl_dir(proj)
+    rtl.mkdir(parents=True)
+    (rtl / f"{name}.v").write_text(rtl_text)
+    return proj, rtl
 
 
 # ── body constants: the shape with no parameter header at all ────────────────
@@ -471,6 +499,101 @@ def test_an_unresolvable_expression_is_still_the_third_state():
         decl, why = PW.resolve(cell, {"Known": 4})
         assert decl is None, (cell, decl)
         assert why, cell
+
+
+# ── the two CONSUMERS, not just the resolver ─────────────────────────────────
+#
+# A resolver that returns the right string and a GENERATOR that emits it are two
+# different claims. These drive the shipped entry points end to end, on the two
+# shapes this change added, so a future refactor that stops passing the source
+# set through cannot pass on the unit tests alone.
+
+_V1995_RTL = (
+    "module core_top (clk, rst_n, adr, wdat, rdat, ack);\n"
+    "   parameter BITS = 39;\n"
+    "   parameter ADDR_WIDTH = 11;\n"
+    "   input                    clk;\n"
+    "   input                    rst_n;\n"
+    "   input  [ADDR_WIDTH-1:0]  adr;\n"
+    "   input  [BITS-1:0]        wdat;\n"
+    "   output [BITS-1:0]        rdat;\n"
+    "   output                   ack;\n"
+    "   assign rdat = wdat;\n"
+    "   assign ack  = 1'b1;\n"
+    "endmodule\n"
+)
+
+_PKG_RTL = (
+    "package w_pkg;\n"
+    "  localparam int DW = 32;\n"
+    "  localparam int AW = DW/4;\n"
+    "endpackage\n"
+)
+_PKG_DUT = (
+    "module core_top\n  import w_pkg::*;\n"
+    "  (input clk,\n   input rst_n,\n"
+    "   input  [AW-1:0] adr,\n"
+    "   input  [w_pkg::DW-1:0] wdat,\n"
+    "   output [DW-1:0] rdat,\n"
+    "   output ack);\n"
+    "  assign rdat = wdat;\n  assign ack = 1'b1;\n"
+    "endmodule\n"
+)
+
+
+def test_unit_tb_resolves_a_verilog_1995_body_width(tmp_path):
+    proj, _ = _seed(tmp_path, _V1995_RTL)
+    mod, ports, why = TBG.resolve_dut(proj, "core_top")
+    assert mod == "core_top", why
+    widths = {n: w for _d, w, n in ports}
+    assert widths["adr"] == "[10:0]", widths
+    assert widths["wdat"] == "[38:0]", widths
+    assert widths["rdat"] == "[38:0]", widths
+    assert widths["clk"] == "", widths
+
+
+def test_full_stack_tb_declares_a_verilog_1995_bus_at_its_real_width(tmp_path):
+    proj, _ = _seed(tmp_path, _V1995_RTL)
+    res = P2.step_full_stack_tb_gen(proj, "chip_top")
+    assert res.status != "FAIL", res.detail
+    body = list(P2._pl.sim_full_stack_dir(proj).glob("tb_*_full.v"))[0].read_text()
+    assert "reg [10:0] adr = 0;" in body, body
+    assert "reg [38:0] wdat = 0;" in body, body
+    assert "wire [38:0] rdat;" in body, body
+    # the pre-fix text: a wide bus bound ONE BIT wide, which still said PASS
+    assert "reg adr = 0;" not in body
+    assert "reg wdat = 0;" not in body
+
+
+def test_both_consumers_resolve_a_package_width_the_same_way(tmp_path):
+    proj, rtl = _seed(tmp_path, _PKG_DUT)
+    (rtl / "w_pkg.sv").write_text(_PKG_RTL)
+    mod, ports, why = TBG.resolve_dut(proj, "core_top")
+    assert mod == "core_top", why
+    widths = {n: w for _d, w, n in ports}
+    assert widths["adr"] == "[7:0]", widths          # AW = DW/4 = 8
+    assert widths["wdat"] == "[31:0]", widths        # scope-qualified
+    assert widths["rdat"] == "[31:0]", widths        # imported unqualified
+
+    res = P2.step_full_stack_tb_gen(proj, "chip_top")
+    assert res.status != "FAIL", res.detail
+    body = list(P2._pl.sim_full_stack_dir(proj).glob("tb_*_full.v"))[0].read_text()
+    assert "reg [7:0] adr = 0;" in body, body
+    assert "reg [31:0] wdat = 0;" in body, body
+    assert "wire [31:0] rdat;" in body, body
+
+
+def test_the_package_file_is_what_makes_that_work(tmp_path):
+    """THE OTHER DIRECTION, at the CONSUMER. Same DUT, package file absent:
+    both generators must REFUSE, naming the port — not emit a one-bit bus."""
+    proj, _rtl = _seed(tmp_path, _PKG_DUT)
+    mod, ports, why = TBG.resolve_dut(proj, "core_top")
+    assert mod is None, (mod, ports, why)
+    assert "adr" in why or "wdat" in why or "rdat" in why, why
+
+    res = P2.step_full_stack_tb_gen(proj, "chip_top")
+    assert res.status == "FAIL", res.detail
+    assert "not derivable" in res.detail, res.detail
 
 
 # ── the control: nothing that resolved before resolves differently now ───────
