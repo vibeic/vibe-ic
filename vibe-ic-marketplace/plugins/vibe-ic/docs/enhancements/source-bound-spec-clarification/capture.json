@@ -1,0 +1,23 @@
+[
+  {
+    "step": "phase1.spec_review",
+    "design": "public-spec-contract-gap",
+    "bucket": "A",
+    "rule_name": "source_bound_spec_clarification",
+    "docstring": "Validate source-bound questions about missing definitions without inferring a behavior predicate or authorizing an RTL repair.",
+    "expected_signal": "WARN",
+    "fix_action": "Check the complete source hash set and verbatim obligation evidence, expose a dedicated clarification worklist, and preserve acceptance and scorer refusal until ordinary review can establish a verdict.",
+    "capture_kind": "FLOW_DIAGNOSTIC_ENHANCEMENT",
+    "recovered_rtl_case": false,
+    "status": "IMPLEMENTED_PENDING_GATEKEEPER",
+    "automatic_enforcement_points": [
+      "spec_review_lint.main: conventional reports/spec_clarification_review.json consumption at ordinary D1",
+      "benchmark_dispatch._make_ai_review_task: emitted conditional review envelope",
+      "benchmark_dispatch._validate_ai_review: shared source-bound request validation",
+      "benchmark_dispatch._cmd_resume_locked: dedicated worklist, no acceptance or repair",
+      "benchmark_dispatch._require_program_first_ai_acceptance: existing scorer refusal"
+    ],
+    "eda_disposition": "No reproducible simulator/tool defect in this capture; a simulator cannot supply a missing normative predicate. No EDA change proposed.",
+    "benchmark_result_change": "NONE"
+  }
+]

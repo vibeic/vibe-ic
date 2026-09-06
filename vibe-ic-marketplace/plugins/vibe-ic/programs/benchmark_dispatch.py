@@ -566,6 +566,7 @@ _AI_REPAIR_RECORD_SCHEMA = "vibeic.benchmark.ai_repair_record.v1"
 _REVIEW_WORKLIST = "needs_ai_review.jsonl"
 _BACKUP_WORKLIST = "needs_ai_backup.jsonl"
 _REPAIR_WORKLIST = "needs_ai_repair.jsonl"
+_CLARIFICATION_WORKLIST = "needs_spec_clarification.jsonl"
 _ENHANCEMENT_WORKLIST = "program_enhancement_candidates.jsonl"
 _ACCEPTANCE_REPORT = "program_first_ai_review_acceptance.json"
 _REVIEW_CORRECTION_SCHEMA = "vibeic.benchmark.ai_review_correction.v1"
@@ -1119,12 +1120,28 @@ def _make_ai_review_task(problem_id: str, project: Path, got: dict,
                                   "to equal program_routing.nature>"),
                 },
                 "semantic_review": {
-                    "verdict": "<PASS or FAIL>",
+                    "verdict": "<PASS, FAIL, or NEEDS_CLARIFICATION>",
                     "findings": ["<list; must be non-empty when the verdict "
                                  "is FAIL>"],
                     "rationale": ("<the review basis; at least 16 "
                                   "characters>"),
                     "prompt_evidence": [dict(evidence_item_shape)],
+                },
+                "spec_clarification": {
+                    "_required_when": "semantic_review.verdict is NEEDS_CLARIFICATION; omit otherwise",
+                    "schema": "vibeic.spec_clarification.v1",
+                    "source_sha256": [prompt_sha],
+                    "requests": [{
+                        "source_sha256": prompt_sha,
+                        "excerpt": "<verbatim prompt obligation needing a missing definition>",
+                        "missing_information": "<concrete missing definition; at least 16 characters>",
+                        "question": "<specific question for the spec owner; at least 16 characters>",
+                    }],
+                    "_effect": (
+                        "hold acceptance and scoring; no RTL repair is authorized. "
+                        "Do not infer a predicate from a standard or hidden oracle. "
+                        "A clarified prompt requires a fresh canonical run/review; "
+                        "never rewrite the frozen prompt or waive inherited tests."),
                 },
                 "override": {
                     "_required_when": "routing.verdict is OVERRIDE_PROGRAM",
@@ -1920,8 +1937,10 @@ def _validate_ai_review(task: dict) -> dict:
     semantic_evidence = semantic.get("prompt_evidence") or []
     verified_semantic_evidence = _verified_prompt_evidence(
         semantic_evidence, prompt_text)
-    if semantic_verdict not in {"PASS", "FAIL"}:
-        reasons.append("AI semantic_review verdict must be PASS or FAIL")
+    if semantic_verdict not in {"PASS", "FAIL", "NEEDS_CLARIFICATION"}:
+        reasons.append("AI semantic_review verdict must be PASS or FAIL, or NEEDS_CLARIFICATION")
+    if semantic_verdict != "NEEDS_CLARIFICATION" and "spec_clarification" in review:
+        reasons.append("unresolved spec_clarification is only valid with NEEDS_CLARIFICATION")
     if not isinstance(findings, list):
         reasons.append("semantic_review.findings must be a list")
         findings = []
@@ -1951,6 +1970,42 @@ def _validate_ai_review(task: dict) -> dict:
     if confirmation_required != (functional_evidence != "PASS"):
         reasons.append(
             "functional confirmation requirement contradicts Program evidence")
+    if semantic_verdict == "NEEDS_CLARIFICATION":
+        from spec_review_lint import validate_spec_clarification
+
+        clarification = validate_spec_clarification(
+            review.get("spec_clarification"), {str(prompt_path): prompt_text})
+        reasons.extend(clarification["errors"])
+        if clarification["status"] != "SPEC_CLARIFICATION_REQUIRED":
+            reasons.append("NEEDS_CLARIFICATION requires a valid source-bound question")
+        if review.get("challenge_supersessions"):
+            reasons.append("spec clarification cannot supersede verification challenges")
+        inherited = task.get("verification_challenges") or []
+        if not isinstance(inherited, list) or any(not isinstance(item, dict) for item in inherited):
+            reasons.append("inherited verification challenges must be a list of objects")
+            inherited = []
+        # No simulation can supply a missing requirement. Preserve all existing
+        # tests for the next review; do not execute, waive, or reclassify them.
+        status = "REJECTED" if reasons else "SPEC_CLARIFICATION_REQUIRED"
+        return {
+            "status": status, "review_path": str(review_path), "reasons": reasons,
+            "decision_reasons": reasons or [
+                "The AI requests a missing spec definition; this is not a proven "
+                "RTL defect. Obtain an owner clarification before a fresh review."],
+            "reviewer_model": model or None, "routing_verdict": routing_verdict,
+            "ai_nature": routing.get("ai_nature"), "semantic_verdict": semantic_verdict,
+            "semantic_findings": len(findings), "semantic_findings_detail": findings,
+            "semantic_rationale": rationale,
+            "verified_semantic_prompt_evidence": verified_semantic_evidence,
+            "spec_clarification": clarification,
+            "verified_challenge": None, "challenge_result": None,
+            "inherited_challenge_results": [
+                {"status": "NOT_RUN", "reason": "awaiting spec clarification",
+                 "challenge_sha256": item.get("sha256")}
+                for item in inherited],
+            "challenge_supersessions": [], "program_review_coverage": None,
+            "unmeasurable": [], "override": None,
+        }
     #: Reasons this host could not ADJUDICATE, kept apart from `reasons`, which
     #: are findings against the review or the candidate. The two must never be
     #: mixed: one says "this is wrong", the other says "we did not look".
@@ -2218,6 +2273,16 @@ def _attach_ai_review_attribution(result: dict, verdict: dict,
                         "return through PROGRAM gates and a fresh AI review"),
                 "physical_eco": False,
             }
+    if status == "SPEC_CLARIFICATION_REQUIRED":
+        debugging = phases.setdefault("phase4_debugging", {})
+        previous = debugging.get("ai_semantic_repair_handoff")
+        if isinstance(previous, dict):
+            # Preserve earlier evidence without advertising it as a current
+            # repair instruction after the new review asks for missing input.
+            previous.setdefault("prior_status", previous.get("status"))
+            previous.update({"active": False, "status": "ON_HOLD_FOR_SPEC_CLARIFICATION"})
+    phases["phase3_verifying"]["ai_semantic_review"]["spec_clarification"] = verdict.get(
+        "spec_clarification")
     repair = task.get("repair_provenance") or {}
     if task.get("candidate_origin") == "AI_REPAIR" and repair:
         phases.setdefault("phase4_debugging", {})[
@@ -4458,7 +4523,9 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
     accepted_ids: list[str] = []
     review_outcomes: list[dict] = []
     not_measured: list[dict] = []
+    clarifications: list[dict] = []
     for pid, result in result_by_id.items():
+        result["awaiting_spec_clarification"] = False
         task = task_by_id.get(pid)
         if task is None:
             result["accepted"] = False
@@ -4475,6 +4542,24 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
                 str(task.get("rtl_sha256")),
                 str(verdict.get("semantic_verdict")),
             )] = enhancement
+        if verdict["status"] == "SPEC_CLARIFICATION_REQUIRED":
+            clarifications.append({
+                "schema": "vibeic.benchmark.spec_clarification_task.v1",
+                "id": pid, "project": task.get("project"),
+                "status": verdict["status"], "review_path": task.get("review_path"),
+                "prompt_sha256": task.get("prompt_sha256"),
+                "reviewed_rtl_sha256": task.get("rtl_sha256"),
+                "spec_clarification": verdict["spec_clarification"],
+                "required_next": (
+                    "obtain the spec owner's missing definition; keep this frozen "
+                    "run intact. A changed prompt must enter a fresh canonical "
+                    "run and review. No repair, test waiver, or scoring is authorized."),
+            })
+            result.update({"accepted": False, "awaiting_ai": False,
+                           "awaiting_ai_review": False, "ai_repair_required": False,
+                           "not_measured": False, "awaiting_spec_clarification": True})
+            print(f"  {pid:44s} SPEC_CLARIFICATION_REQUIRED -- obtain the missing definition")
+            continue
         if verdict["status"] == _NOT_MEASURED:
             # Not accepted -- nothing was established, so nothing is scored --
             # but this is NOT a repair task and NOT an AI failure. It waits on
@@ -4632,6 +4717,7 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
     _write_jsonl(run_p / _BACKUP_WORKLIST, remaining_backup)
     _write_jsonl(run_p / _REVIEW_WORKLIST, ordered_tasks)
     _write_jsonl(run_p / _REPAIR_WORKLIST, repairs)
+    _write_jsonl(run_p / _CLARIFICATION_WORKLIST, clarifications)
     enhancements = sorted(enhancement_by_key.values(),
                           key=lambda row: (str(row.get("id")),
                                            str(row.get("rtl_sha256"))))
@@ -4656,6 +4742,7 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
         "review_outcomes": review_outcomes,
         "pending_backup": len(remaining_backup),
         "pending_repair": len(repairs),
+        "pending_spec_clarification": len(clarifications),
         "not_measured": len(not_measured),
         "not_measured_detail": not_measured,
         "pending_review": sum(1 for o in review_outcomes
