@@ -145,18 +145,42 @@ def _row_kind_disclosure(project: Path) -> str:
     rows = [r for r in rows if isinstance(r, dict)]
     if not rows:
         return ""
+    # ORGANIC #2064 — THE SCAFFOLD SCOPE IS NOT THE FLOW'S SCOPE ANY MORE.
+    #
+    # This sentence ended "the rest carry no stimulus ANY PRODUCER IN THE FLOW
+    # is scoped to drive", and computed that claim by summing over ONE
+    # producer's `SCAFFOLD_KINDS`. That was true while `testbench_gen` was the
+    # only producer, and false the moment `analog_acceptance_tb_gen` began
+    # authoring an executable acceptance for `verification_intent` rows.
+    # MEASURED on u_hawaii_adc with that producer on the tree: this sentence
+    # printed "0 of 4" while the flow could author 2 of the 4.
+    #
+    # The union comes from `testbench_gen.flow_authorable`, the ONE accessor
+    # both readers share — the #761 two-private-scopes shape, refused a fourth
+    # time. `analog_acceptance` is ABSENT (not zero) from that dict when that
+    # producer could not be asked, and the sentence says so rather than
+    # reporting a 0 nobody measured.
     try:
         hist = _tb.kind_histogram(rows)
         scope = _tb.SCAFFOLD_KINDS
-        authorable = sum(1 for r in rows if _tb.case_kind(r) in scope)
+        flow = _tb.flow_authorable(project, rows)
+        authorable = int(flow["authorable"])
     except Exception:
         return ""
     kinds = ", ".join(f"{k} {v}" for k, v in hist.items()) or "(none)"
-    return (f" [{kinds}]; {authorable} of {len(rows)} row(s) fall inside the "
-            f"TB producer's scaffold scope "
-            f"{{{', '.join(sorted(scope))}}} — the rest carry no stimulus any "
-            f"producer in the flow is scoped to drive, so this shortfall is "
-            f"NOT a statement about the RTL")
+    by = [f"{flow['scaffold']} inside the TB producer's scaffold scope "
+          f"{{{', '.join(sorted(scope))}}}"]
+    if "analog_acceptance" in flow:
+        by.append(f"{flow['analog_acceptance']} by analog_acceptance_tb_gen")
+    else:
+        by.append("the analog-acceptance producer could NOT be asked, so its "
+                  "share is unmeasured, not zero")
+    left = flow.get("unauthorable_kinds") or {}
+    return (f" [{kinds}]; {authorable} of {len(rows)} row(s) are authorable by "
+            f"some producer in the flow (" + "; ".join(by) + ") — the "
+            f"remaining {left or '(none)'} carry no stimulus any producer is "
+            f"scoped to drive, so that part of the shortfall is NOT a "
+            f"statement about the RTL")
 
 
 def _row_kind_denominator(project: Path) -> dict:
@@ -178,12 +202,22 @@ def _row_kind_denominator(project: Path) -> dict:
                          ("sequences", "behavioral_sequences")))
         if isinstance(r, dict)]
     try:
-        return {
+        flow = _tb.flow_authorable(project, rows)
+        out = {
             "declared_row_kinds": _tb.kind_histogram(rows),
             "rows_inside_tb_producer_scaffold_scope": sum(
                 1 for r in rows if _tb.case_kind(r) in _tb.SCAFFOLD_KINDS),
             "tb_producer_scaffold_scope": sorted(_tb.SCAFFOLD_KINDS),
+            # ORGANIC #2064 — the FLOW's answer beside this one producer's.
+            # The scaffold key above keeps meaning exactly what its name says.
+            "rows_authorable_by_any_producer": int(flow["authorable"]),
+            "rows_not_authorable_by_any_producer": flow.get(
+                "unauthorable_kinds") or {},
         }
+        if "analog_acceptance" in flow:
+            out["rows_authorable_by_analog_acceptance"] = int(
+                flow["analog_acceptance"])
+        return out
     except Exception:
         return {}
 

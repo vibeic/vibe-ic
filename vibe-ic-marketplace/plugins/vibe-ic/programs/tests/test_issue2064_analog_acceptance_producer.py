@@ -594,3 +594,41 @@ def test_a_check_emitted_before_the_analog_track_reads_the_later_record(tmp_path
         "the check emitted before A4 did not read the record A4 wrote")
     assert again["cases"][0]["record"] == (
         "phase3/analog/block_a/corner_results.json")
+
+
+# --------------------------------------------------------------------------
+# 12. Step 4's own blocking SENTENCE counts this producer.
+#
+#     `cpu_functional_oracle_waiver_check._row_kind_disclosure` (#2055) ends
+#     "the rest carry no stimulus ANY PRODUCER IN THE FLOW is scoped to drive"
+#     and used to compute that claim by summing over `testbench_gen.
+#     SCAFFOLD_KINDS` alone. MEASURED on the real design with this producer on
+#     the tree: it printed "0 of 4" while the flow could author 2 of the 4.
+# --------------------------------------------------------------------------
+def test_step4_sentence_counts_the_analog_acceptance_producer(tmp_path):
+    import cpu_functional_oracle_waiver_check as W
+    project = _value_project(tmp_path)
+    text = W._row_kind_disclosure(project)
+    assert "1 of 1 row(s) are authorable" in text, text
+    assert "by analog_acceptance_tb_gen" in text, text
+    assert "0 of 1" not in text, (
+        "the sentence still reports one producer's scope as the whole flow's")
+    denom = W._row_kind_denominator(project)
+    assert denom["rows_authorable_by_any_producer"] == 1
+    assert denom["rows_authorable_by_analog_acceptance"] == 1
+    # The scaffold key keeps meaning exactly what its name says.
+    assert denom["rows_inside_tb_producer_scaffold_scope"] == 0
+
+
+def test_step4_sentence_says_unmeasured_not_zero_when_the_producer_is_absent(
+        tmp_path, monkeypatch):
+    """MUTATION of the environment, not of the code: with the analog producer
+    unreachable the sentence must NOT print a 0 nobody measured."""
+    import cpu_functional_oracle_waiver_check as W
+    project = _value_project(tmp_path)
+    monkeypatch.setattr(T, "acceptance_authorable_rows", lambda p: None)
+    text = W._row_kind_disclosure(project)
+    assert "could NOT be asked" in text and "not zero" in text, text
+    assert "by analog_acceptance_tb_gen" not in text
+    denom = W._row_kind_denominator(project)
+    assert "rows_authorable_by_analog_acceptance" not in denom
