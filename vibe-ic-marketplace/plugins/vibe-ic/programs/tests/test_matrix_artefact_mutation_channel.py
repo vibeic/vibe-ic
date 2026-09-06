@@ -524,6 +524,17 @@ def test_the_replay_never_mutates_the_published_run():
     "the corpus was not modified" when there was no corpus to modify is the
     exact shape of gate this campaign exists to remove, so it skips instead.
 
+    AND FOR EVERY LANDING SINCE, THE DECORATOR THAT DOES THAT WAS NOT THERE.
+    The paragraph above is the whole of the guarantee — the marker was never
+    applied, so on a checkout with no corpus this item did not skip: it reached
+    ``published_runs_git_status`` and died on the operating system's errno-2 for
+    the absent ``<repo>/benchmark-data``. That is the reverse of the intent
+    stated here (a false RED where the text promises a skip), and it is a red
+    resident on ``main`` since before v1.17.43. MEASURED on a pristine v1.18.29
+    clone in the pinned image, 8HD-8, 2026-09-07: ``1 failed, 17 passed, 19
+    skipped``, and this was the 1 — the other 19 are the items that DO carry
+    the marker. The prose is unchanged; only the marker it describes is added.
+
     ``replay_artefact`` raises if its own stat manifest moves, so reaching this
     line already means it did not. The assertion here is the independent one:
     a manifest taken AFTER the whole replay set still matches the sizes and
@@ -679,6 +690,43 @@ def test_control_the_baseline_must_pass_or_the_entry_is_already_red(
     assert not r.as_recorded, (
         "an ALREADY_RED replay reported as_recorded=True, so a pre-existing "
         "failure would be banked as proof")
+
+
+def test_an_absent_corpus_is_refused_by_name_and_not_by_errno(
+        tmp_path, monkeypatch):
+    """THE PRODUCER SIDE of the skip above, pinned in both directions.
+
+    `_published_run_git_subjects` undertakes in its own docstring to report "a
+    missing/non-Git corpus" as an instrument error. It could not do that for the
+    missing half: the check reads the child's return code, and a `cwd=` that does
+    not exist fails in the fork, so the caller received the operating system's
+    `FileNotFoundError` naming a bare path. A refusal nobody can reach is the
+    shape this campaign removes, and it is why the marker above was the whole of
+    the repair and not all of it.
+
+    BOTH ARMS ARE HERE BECAUSE ONLY THE PAIR IS EVIDENCE. The second arm is a
+    directory that exists and is not a worktree; it takes the ORIGINAL branch,
+    unchanged, and its presence is what shows the new one narrowed nothing.
+    """
+    absent = tmp_path / "not-a-corpus"
+    monkeypatch.setenv(L.BENCHMARK_DATA_ENV, str(absent))
+    runs = sorted({m.run_dir for m in L.ARTEFACT_MUTATIONS})
+    with pytest.raises(RuntimeError) as absent_err:
+        L.published_runs_git_status(runs)
+    assert "not present" in str(absent_err.value), (
+        f"an absent corpus was refused without saying it was absent: "
+        f"{absent_err.value}")
+    assert str(absent) in str(absent_err.value), (
+        "the refusal does not name the path it could not read")
+
+    present = tmp_path / "present-but-not-a-worktree"
+    present.mkdir()
+    monkeypatch.setenv(L.BENCHMARK_DATA_ENV, str(present))
+    with pytest.raises(RuntimeError) as worktree_err:
+        L.published_runs_git_status(runs)
+    assert "not in a Git worktree" in str(worktree_err.value), (
+        f"a present non-worktree corpus stopped reaching the branch that was "
+        f"already there: {worktree_err.value}")
 
 
 # ══════════════════════════════════════════════════════════════════════
