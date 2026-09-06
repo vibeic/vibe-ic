@@ -206,13 +206,64 @@ def test_signalling_no_children_is_zero_not_an_error(monkeypatch):
 
 
 def test_a_finished_run_leaves_no_child_to_signal(tmp_path):
-    """The population is the kernel's, so it empties itself: a run that has
-    returned has no children, and the exit handler signals nobody."""
+    """A run that has RETURNED leaves nothing behind, stated as a DELTA.
+
+    This asserted `_kill_live_runner_groups() == 0` and was a red on main
+    (v1.17.96, reported from a pinned-image run over four modules). That form
+    is a claim about the WHOLE PROCESS, not about the run: the guard counts
+    every child of this pytest process that sits in its own process group, and
+    in a shared session such a child routinely exists for reasons that have
+    nothing to do with a Program re-entry.
+
+    MEASURED on main e812321b0, in the pinned image on a clean clone: with ONE
+    unrelated foreign-group child alive, the old form reads 1 and FAILS, while
+    the delta form below passes. The production guard is correct -- signalling
+    every runner group is exactly its job when the coordinator is dying; only
+    the assertion was wrong about what it measured.
+
+    The old form was also destructive: calling the guard SIGTERMed that
+    unrelated child. A test must not signal a process it did not start.
+    """
     sys.path.insert(0, str(PROGRAMS))
     import benchmark_dispatch as bd                      # noqa: PLC0415
+    before = set(bd._own_child_pids())
     outcome = bd._RunnerBudget(1, 1, 0).run([sys.executable, "-c", "pass"])
     assert outcome.rc == 0
-    assert bd._kill_live_runner_groups() == 0
+    leaked = set(bd._own_child_pids()) - before
+    assert leaked == set(), (
+        "the finished run left a child behind: "
+        + "; ".join(_survivors(sorted(leaked))))
+
+
+def test_the_finished_run_test_does_not_signal_anyone(monkeypatch):
+    """The guard is never CALLED to prove a run is finished.
+
+    Pinning the fix, not just the symptom: the sibling above asks the kernel
+    who this process's children are and compares two sets. If it ever went back
+    to calling `_kill_live_runner_groups()`, it would resume signalling
+    processes it did not start -- which is how it became a red on someone
+    else's machine rather than on mine.
+    """
+    sys.path.insert(0, str(PROGRAMS))
+    import benchmark_dispatch as bd                      # noqa: PLC0415
+    signalled = []
+    monkeypatch.setattr(bd.os, "killpg",
+                        lambda pgid, sig: signalled.append((pgid, sig)))
+    stray = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"],
+                             start_new_session=True)
+    try:
+        before = set(bd._own_child_pids())
+        assert stray.pid in before
+        outcome = bd._RunnerBudget(1, 1, 0).run([sys.executable, "-c", "pass"])
+        assert outcome.rc == 0
+        # The run is finished and nothing it started remains ...
+        assert set(bd._own_child_pids()) - before == set()
+        # ... and establishing that signalled NOBODY, stray included.
+        assert signalled == [], signalled
+        assert _alive(stray.pid), "the test killed a process it did not start"
+    finally:
+        stray.kill()
+        stray.wait(timeout=10)
 
 
 def test_the_children_population_is_the_kernels_not_a_name_pattern():
