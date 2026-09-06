@@ -652,9 +652,268 @@ def scan_supervised_dispatch(path: Path, *, primitive: bool,
     return rows
 
 
+#: The register of raw clock-kill sites this tree already carried when the class
+#: below was written. A RATCHET BY MEMBERSHIP, exactly like
+#: `gate_is_wired_baseline.json`: it may only ever SHRINK, and any site not in it
+#: is refused. It is NOT an exemption list — nothing in it is blessed, every entry
+#: is printed on every run with its remedy, and a landing that removes one is
+#: required to remove its entry too.
+_RAW_KILL_REGISTER = "watchdog_raw_clock_kill_baseline.json"
+
+#: A signal that stops a job. `kill` is matched as a SUBSTRING because the real
+#: call sites spell it `os.killpg`, `_kill_process_group`, `proc.kill` — the same
+#: substring test `_is_ceiling_kill` already uses one class up.
+_STOP_CALLS = ("terminate", "send_signal")
+
+#: The exceptions a WALL CLOCK raises. Catching one of these and then stopping
+#: the job is the shape: the decision to stop was made by elapsed time.
+_TIMEOUT_EXCS = ("TimeoutExpired", "TimeoutError")
+
+#: Names that make an expression a WALL-CLOCK read. `deadline` is included
+#: because a deadline compared against anything is a clock whatever it is
+#: spelled with.
+_WALL_CLOCK_CALLS = ("monotonic", "perf_counter")
+
+#: ...and the names that make it a PROGRESS read instead, which is the one
+#: legitimate reason to stop a job (vibe-ic#2051). `_watchdog`'s own stall loop
+#: compares `since_last_progress_s >= stall_grace_s`; that is the ruling being
+#: obeyed, not broken, and it must not be flagged.
+_PROGRESS_WORDS = ("progress", "stall", "grace", "idle", "poll", "look")
+
+
+def _is_stop_call(node: ast.AST) -> bool:
+    if not isinstance(node, ast.Call):
+        return False
+    name = _call_name(node).lower()
+    return "kill" in name or name in _STOP_CALLS
+
+
+def _catches_a_clock(handler: ast.ExceptHandler) -> bool:
+    if handler.type is None:
+        return False
+    return any(
+        (n.attr if isinstance(n, ast.Attribute) else n.id) in _TIMEOUT_EXCS
+        for n in ast.walk(handler.type)
+        if isinstance(n, (ast.Name, ast.Attribute)))
+
+
+def _wall_clock_test(expr: ast.AST) -> Optional[str]:
+    """The test's source iff it reads ELAPSED TIME, else None.
+
+    A test naming progress, a stall, a grace, an idle window, a poll or a look
+    is the SUPERVISOR'S OWN predicate and is never a wall clock, however much
+    arithmetic on `time.monotonic()` it contains underneath.
+    """
+    text = ast.unparse(expr)
+    low = text.lower()
+    if any(w in low for w in _PROGRESS_WORDS):
+        return None
+    for n in ast.walk(expr):
+        if isinstance(n, ast.Call):
+            fname = _call_name(n)
+            mod = getattr(getattr(n.func, "value", None), "id", "")
+            if fname in _WALL_CLOCK_CALLS or (mod == "time" and fname == "time"):
+                return text
+        if isinstance(n, ast.Name) and "deadline" in n.id.lower():
+            return text
+    return None
+
+
+def _register_key(rel: str, fn_name: str, callee: str) -> str:
+    """The identity a register entry is keyed on.
+
+    NOT the line number. A recorded site keyed on a line moves every time
+    anything above it is edited, so the register would go stale on unrelated
+    landings and the ratchet would report churn as a finding. File + enclosing
+    function + the call as written is stable under every edit that does not move
+    the site itself.
+    """
+    return f"{rel}::{fn_name}::{callee}"
+
+
+def scan_raw_clock_kill(path: Path, rel: str, *, tree: ast.AST,
+                        src_lines: List[str]) -> List[Row]:
+    """Class (0), second shape: A RAW SUBPROCESS KILL ON A CLOCK — **blocking**.
+
+    WHY THIS SHAPE HAD TO BE ADDED. Until now class (0) looked only inside the
+    supervision PRIMITIVES, for a `kill(..., "ceiling")` and for an outer GNU
+    `timeout` on the shared supervised dispatch. MEASURED on this tree: the gate
+    reported `OFFENDER 0` and `[PASS]` on a checkout that still carried
+    `proc.communicate(timeout=max(600 * len(labels), 600))` followed by
+    `proc.kill()` in `gate_host_independence_check.parallel_audit` — taken by
+    swapping that one file back to its pre-fix blob `488ad4a4` and re-running:
+    `CLEAN 241 BUDGET 0 EXEMPT 0 UNJUDGED 2 RESIDUAL 1 OFFENDER 0`, identical to
+    the fixed tree. The gate was right about what it looked at; the sentence on
+    the tin — "no clock may stop a supervised job" — was wider than its
+    population. A raw `subprocess.Popen` never routed through a supervisor was
+    outside it, and that is exactly where the deadline had survived.
+
+    THE SHAPES, all of them "elapsed time decided to stop a job":
+
+      * TIMEOUT_KILL — an `except TimeoutExpired:` handler that stops the job.
+        This is the deadline CZH-14 removed, verbatim.
+      * CLOCK_GUARDED_KILL — a stop inside an `if`/`while` whose test reads
+        elapsed time or a deadline.
+      * SLEEP_THEN_KILL — a stop that follows a `time.sleep(...)` in the SAME
+        block. "Wait a bit, then kill it" is a deadline with the arithmetic
+        written out by hand.
+
+    THE OUTERMOST DECISION ONLY. A second `except TimeoutExpired` INSIDE an
+    already-flagged handler is the escalation of a kill that has already been
+    decided — SIGTERM then SIGKILL, or a bounded drain so the pipes close — not
+    a second clock deciding a second time. Reporting both would double every
+    finding and invite the wrong repair.
+
+    WHAT IS NOT THIS SHAPE, and is therefore not touched: a `finally: proc.kill()`
+    (cleanup, no clock), a stop under a PROGRESS predicate (`stall`, `grace`,
+    `idle` — that is #2051 being obeyed), and the whole of `programs/tests/`. That
+    last exclusion is MEASURED, not assumed: sweeping the tests too found ten
+    further sites, every one of them a test reaping a child it planted itself,
+    including this campaign's own negative arm — which rebuilds the deleted
+    deadline ON PURPOSE so that the check that forbids it can be proved able to
+    fire. A gate that reddened that arm would forbid proving itself.
+    """
+    rows: List[Row] = []
+    fns = [n for n in ast.walk(tree)
+           if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
+    enclosing = _enclosing_functions(fns)
+    flagged: List[Tuple[int, int]] = []
+
+    def _inside_flagged(node: ast.AST) -> bool:
+        return any(a <= node.lineno <= b for a, b in flagged)
+
+    def _emit(kind: str, node: ast.Call, detail: str) -> None:
+        fn = enclosing.get(node.lineno)
+        fn_name = getattr(fn, "name", "<module>")
+        callee = ast.unparse(node.func)
+        rows.append(Row(rel, node.lineno, callee, kind,
+                        _register_key(rel, fn_name, callee), None,
+                        "PENDING", detail))
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Try):
+            for h in node.handlers:
+                if not _catches_a_clock(h) or _inside_flagged(h):
+                    continue
+                stops = [n for n in ast.walk(ast.Module(body=h.body,
+                                                        type_ignores=[]))
+                         if _is_stop_call(n)]
+                if not stops:
+                    continue
+                flagged.append((h.lineno, h.end_lineno or h.lineno))
+                _emit("raw_timeout_kill", stops[0],
+                      "a wall-clock `timeout=` expired and the job was "
+                      "STOPPED. Only a progress stall may stop a job "
+                      "(vibe-ic#2051): route the launch through "
+                      "`_progress_run.run` (delete the `timeout=` argument) "
+                      "and report `Stalled` by name.")
+        if isinstance(node, (ast.If, ast.While)):
+            why = _wall_clock_test(node.test)
+            if why:
+                for n in ast.walk(ast.Module(body=node.body, type_ignores=[])):
+                    if _is_stop_call(n) and not _inside_flagged(n):
+                        _emit("clock_guarded_kill", n,
+                              f"the job is STOPPED under `{why[:110]}`, which "
+                              f"is elapsed time. Use the progress supervisor: "
+                              f"`_progress_run.run` / `_watchdog.run_supervised`.")
+        for field in ("body", "orelse", "finalbody"):
+            block = getattr(node, field, None)
+            if not isinstance(block, list):
+                continue
+            slept: Optional[int] = None
+            for stmt in block:
+                if (isinstance(stmt, ast.Expr)
+                        and isinstance(stmt.value, ast.Call)
+                        and _call_name(stmt.value) == "sleep"):
+                    slept = stmt.lineno
+                elif slept is not None:
+                    for n in ast.walk(stmt):
+                        if _is_stop_call(n) and not _inside_flagged(n):
+                            _emit("sleep_then_kill", n,
+                                  f"the job is STOPPED after a `time.sleep` at "
+                                  f"line {slept} — a deadline with its "
+                                  f"arithmetic written out by hand.")
+    # A site may DECLARE itself out, on its own line or the one above, with the
+    # gate's existing `# ceiling-exempt: <reason>` tag. Same marker as every
+    # other class here, so a reader learns one convention and not two.
+    for r in rows:
+        node = ast.parse("pass").body[0]
+        node.lineno = node.end_lineno = r.line
+        why = _exempted(src_lines, node)
+        if why:
+            r.verdict, r.detail = "EXEMPT", why
+    return rows
+
+
+def _load_raw_kill_register(programs_dir: Path) -> Tuple[Dict[str, str], str]:
+    """``({key: remedy note}, problem)`` from the shrink-only register."""
+    path = programs_dir / _RAW_KILL_REGISTER
+    try:
+        doc = json.loads(path.read_text(encoding="utf-8"))
+    except OSError:
+        return {}, f"{_RAW_KILL_REGISTER} is not present; every site is refused"
+    except ValueError as exc:
+        return {}, f"{_RAW_KILL_REGISTER} is unreadable ({exc}); every site is refused"
+    entries = doc.get("recorded")
+    if not isinstance(entries, dict):
+        return {}, f"{_RAW_KILL_REGISTER} has no `recorded` object"
+    return {str(k): str(v) for k, v in entries.items()}, ""
+
+
+def _raw_kill_population(programs_dir: Path) -> List[Tuple[Path, str]]:
+    """`(path, repo-relative name)` for the class-(0) raw-kill scan.
+
+    `programs/*.py` — the population every other class here already judges —
+    PLUS the whole of `tools/`, because a clock that stops a job is the same
+    defect wherever it is written and `tools/ci` is where landings run. The
+    repo root is derived from `programs_dir` rather than taken as an argument,
+    so the CLI keeps the one it has; when the layout does not match, the
+    `tools/` half is simply empty and the `programs/` half still runs.
+    """
+    out = [(p, p.name) for p in sorted(programs_dir.glob("*.py"))
+           if p.name != _SELF]
+    root = programs_dir.parents[3] if len(programs_dir.parents) >= 4 else None
+    tools = (root / "tools") if root is not None else None
+    if tools is not None and tools.is_dir():
+        out += [(p, str(p.relative_to(root))) for p in sorted(tools.rglob("*.py"))]
+    return out
+
+
 def scan(programs_dir: Path) -> Tuple[List[Row], float]:
     backstop = _default_hard_ceiling_s(programs_dir)
     rows: List[Row] = []
+    recorded, register_problem = _load_raw_kill_register(programs_dir)
+    seen_keys: set = set()
+    for path, rel in _raw_kill_population(programs_dir):
+        try:
+            src = path.read_text(encoding="utf-8", errors="replace")
+            tree = ast.parse(src)
+        except (OSError, SyntaxError):
+            continue
+        for r in scan_raw_clock_kill(path, rel, tree=tree,
+                                     src_lines=src.splitlines()):
+            if r.verdict == "EXEMPT":
+                rows.append(r)
+                continue
+            seen_keys.add(r.expr)
+            if r.expr in recorded:
+                r.verdict = "RESIDUAL_RAW_CLOCK_KILL"
+                r.detail = f"{recorded[r.expr]} {r.detail}"
+            else:
+                r.verdict = "OFFENDER"
+                if register_problem:
+                    r.detail = f"{register_problem}. {r.detail}"
+            rows.append(r)
+    # THE RATCHET, in the direction that matters: a recorded site that is GONE
+    # must leave the register too, or the register slowly becomes a licence for
+    # sites nobody can find. Printed as an instruction, never as a refusal —
+    # refusing here would punish exactly the landing that did the work.
+    for key in sorted(set(recorded) - seen_keys):
+        rows.append(Row(key.split("::")[0], 0, "-", "raw_clock_kill_register",
+                        key, None, "TIGHTEN",
+                        f"recorded in {_RAW_KILL_REGISTER} but no longer "
+                        f"present in the tree — remove this entry; the "
+                        f"register may only ever shrink"))
     for path in sorted(programs_dir.glob("*.py")):
         if path.name == _SELF:
             continue
@@ -725,6 +984,8 @@ def main(argv=None) -> int:
     exempt = [r for r in rows if r.verdict == "EXEMPT"]
     budgets = [r for r in rows if r.verdict == "BUDGET"]
     residual = [r for r in rows if r.verdict == "RESIDUAL_CONTAINER_CLOCK"]
+    raw_residual = [r for r in rows if r.verdict == "RESIDUAL_RAW_CLOCK_KILL"]
+    tighten = [r for r in rows if r.verdict == "TIGHTEN"]
     clean = [r for r in rows if r.verdict == "CLEAN"]
 
     print(f"watchdog_ceiling_semantics_check — {pdir}")
@@ -735,7 +996,8 @@ def main(argv=None) -> int:
     print(f"  supervised launches + primitive calls examined: {len(rows)}")
     print(f"    CLEAN {len(clean)}   BUDGET {len(budgets)}   "
           f"EXEMPT {len(exempt)}   UNJUDGED {len(unjudged)}   "
-          f"RESIDUAL {len(residual)}   OFFENDER {len(offenders)}")
+          f"RESIDUAL {len(residual)}   RAW_CLOCK_KILL {len(raw_residual)}   "
+          f"OFFENDER {len(offenders)}")
 
     if args.table:
         print("\n--- CENSUS ---")
@@ -762,6 +1024,21 @@ def main(argv=None) -> int:
                   f"supervised command in a GNU `timeout`")
             print(f"      {r.detail}")
 
+    if raw_residual:
+        # RECORDED, NEVER BLESSED. Every one is printed on every run with its
+        # remedy, and the register it is in can only shrink.
+        print(f"\n--- RAW CLOCK KILLS ALREADY ON THE RECORD "
+              f"({_RAW_KILL_REGISTER}, shrink-only) ---")
+        for r in raw_residual:
+            print(f"  {r.file}:{r.line} {r.callee}  [{r.kind}]")
+            print(f"      {r.detail}")
+
+    if tighten:
+        print("\n--- TIGHTEN THE REGISTER (a recorded site is gone) ---")
+        for r in tighten:
+            print(f"  {r.expr}")
+            print(f"      {r.detail}")
+
     if unjudged:
         print("\n--- UNJUDGED (printed, never silently cleared) ---")
         for r in unjudged:
@@ -771,8 +1048,16 @@ def main(argv=None) -> int:
     if offenders:
         print("\n--- OFFENDERS ---")
         for r in offenders:
-            print(f"\n  {r.file}:{r.line}  {r.callee}({r.kind}={r.expr})")
-            print(f"      {r.detail}")
+            if r.kind.endswith("_kill"):
+                # A raw clock kill's `expr` is its REGISTER KEY, not a ceiling
+                # expression. Print it on its own line and say what it is for,
+                # so a maintainer can paste it rather than reconstruct it.
+                print(f"\n  {r.file}:{r.line}  {r.callee}(...)  [{r.kind}]")
+                print(f"      {r.detail}")
+                print(f"      register key: {r.expr}")
+            else:
+                print(f"\n  {r.file}:{r.line}  {r.callee}({r.kind}={r.expr})")
+                print(f"      {r.detail}")
 
     if args.json:
         # vibe-ic#1082: this program's DECLARED report destination is written
@@ -787,7 +1072,9 @@ def main(argv=None) -> int:
                      "rows": [r.as_dict() for r in rows],
                      "offenders": len(offenders), "unjudged": len(unjudged),
                      "budgets": len(budgets),
-                     "residual_container_clocks": len(residual)},
+                     "residual_container_clocks": len(residual),
+                     "raw_clock_kills_recorded": len(raw_residual),
+                     "register_entries_to_remove": len(tighten)},
                     indent=1)
 
     # CLASS (0) IS NOW BLOCKING. It was "reported, owned elsewhere" because the
@@ -804,9 +1091,10 @@ def main(argv=None) -> int:
               f"argument(s) and {len(residual)} residual container clock(s) "
               f"on supervised launches.")
         return 1
-    print("\n[PASS] no clock may stop a supervised job: the primitives kill "
-          "only on a progress stall, and no `timeout=` reaches a primitive "
-          "that has none.")
+    print(f"\n[PASS] no clock may stop a job: the primitives kill only on a "
+          f"progress stall, no `timeout=` reaches a primitive that has none, "
+          f"and no raw subprocess kill on a clock exists outside the "
+          f"{len(raw_residual)} already on the shrink-only record.")
     return 0
 
 

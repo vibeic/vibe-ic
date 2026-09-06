@@ -233,8 +233,18 @@ def test_progress_plan_interleaves_only_parent_owned_matrix_module_units():
     # face of that pin that does NOT read `spec` for its total, so it does not
     # follow on its own; the two are asserted separately here precisely so a
     # re-pin that moved one and forgot the other cannot pass.
+    #
+    # 64 -> 67, AND AGAIN THE DOMAIN SUM DOES NOT MOVE. It is still 4 + 9 + 8 +
+    # 9 + 1 = 31, because the dimension population is still nine modules and the
+    # one item added to `domains` this time is not there at all -- the new
+    # `test_the_flight_recorder_counts_real_overlap_and_not_a_clock` drives
+    # `_run_outcome_reports` three times and so carries no single monotonic
+    # schedule, and it is registered in `producer_items_without_schedule`
+    # instead. The whole of this move is therefore the item term: `items`
+    # 33 -> 36 for the three functions the load-bounded process budget added to
+    # the coverage file.
     assert sum(row[3] for row in spec["domains"]) == 31
-    assert len(expected) == 31 + spec["items"] == 64
+    assert len(expected) == 31 + spec["items"] == 67
     assert len(expected) == len(set(expected))
 
 
