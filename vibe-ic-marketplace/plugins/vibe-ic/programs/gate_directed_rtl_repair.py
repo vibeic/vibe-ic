@@ -82,6 +82,19 @@ names two designs on OPPOSITE sides of that split that are structurally
 identical — so the split is not decidable from the text, no oracle here can
 accept a candidate, and the class routes to the author.
 
+`counter-decode-lookahead-phase` — a level decoded from a counter LOOKAHEAD
+(`cnt + 1`, or a wire defined as such) registered on the very edge that advances
+that counter, so the level is published one source cycle early relative to the
+counter it names. Its gate, `counter_decode_lookahead_phase_check`, names a
+one-token transform, and the obstacle is again ACCEPTANCE rather than the
+candidate: whether the level is MEANT to lead by one cycle is a spec fact, and
+the two designs the signature was distilled from are exactly the two the
+existing oracles could not separate — `clock_divider_ratio_oracle_check`
+measures period, duty and reset value, all identical on both sides of the
+transform, and a write-then-read FIFO testbench passes both sides because the
+flags round-trip self-consistently. That is why the checker is advisory by its
+own default, and why it routes here instead of to a FAIL.
+
 THIS IS THE ROUTER, NOT THE EMIT GATE, and that is what makes the wiring
 admissible. `ESCALATE`/rc 1 here discards nothing and refuses no delivery — it
 says a defect stands unrepaired and names who decides. A signature with a
@@ -163,6 +176,33 @@ NOT_REPAIRABLE: Dict[str, Dict[str, str]] = {
             "reset releases; if it can, reset the history register as "
             "`prev <= sig` and discard the first measured interval after reset "
             "before any threshold verdict.",
+    },
+    "counter-decode-lookahead-phase": {
+        "gate": "counter_decode_lookahead_phase_check",
+        "why_not_bucket_a":
+            "Unlike the divider class the CANDIDATE is trivial — the gate names "
+            "the lookahead term, and dropping it (`cnt + 1` -> `cnt`, "
+            "`bin2gray(b + wen)` -> `bin2gray(b)`) is a one-token transform. "
+            "The ACCEPTANCE is what does not exist. The property at stake is "
+            "whether the level is MEANT to lead the counter it names by one "
+            "cycle, and that lives in the spec prose: a pre-emptive "
+            "almost_full and a one-cycle-early enable are both correct in this "
+            "exact shape. No oracle in this tree can decide it, and that is a "
+            "measurement rather than a worry — the two designs this signature "
+            "was distilled from, in one clean-room run, are precisely the "
+            "two the existing oracles could not separate: "
+            "clock_divider_ratio_oracle_check measures period, duty and reset "
+            "value, all three of which are IDENTICAL on both sides of the "
+            "transform, and a write-then-read FIFO testbench passes both "
+            "because the flags round-trip self-consistently. An oracle that is "
+            "blind to the property by construction cannot accept a repair of "
+            "it; a green from one would mean only that it was never looking.",
+        "escalate_to":
+            "the RTL author (and agents/lessons/ic_expert_L9, RTL authoring "
+            "craft) — read the SPEC for whether this level is required to lead "
+            "the counter it names. If it is not, decode the PRE-increment "
+            "value, because the `always @(posedge)` block already registers; "
+            "if it is, the lookahead is the intent and nothing needs changing.",
     },
 }
 
@@ -609,6 +649,38 @@ def repair(rtl: str, spec: str) -> dict:
                                              "line": f0.line,
                                              "message": f0.message},
                                  "further_findings": len(_findings) - 1},
+                       why_not_bucket_a=info["why_not_bucket_a"],
+                       escalate_to=info["escalate_to"])
+            return res
+    except Exception:
+        pass
+
+    # ── non-repairable class: a level decoded from a counter LOOKAHEAD on the
+    # very edge that advances that counter, so it is published one source cycle
+    # early relative to the counter it names. vibe-ic#2065 shipped this checker
+    # with its own tests and NO caller; this branch and the phase-2 dispatch in
+    # `design_one_shot_runner.step_determinism_gates` are the two places that
+    # now read its verdict.
+    #
+    # Ordered LAST, after both classes that were here first, for the same
+    # reason the edge-history branch is ordered after the divider one: a design
+    # that trips two signatures keeps the routing it already had.
+    #
+    # ESCALATE and not a repair, and not a FAIL. The transform is namable but
+    # unacceptable-by-construction (see NOT_REPAIRABLE above), and the checker
+    # is advisory by its own default because a lookahead decode is legitimate
+    # when the spec asks for the level to lead — so it may not reach
+    # `step_determinism_gates`' FAIL list either.
+    try:
+        import counter_decode_lookahead_phase_check as _cdl
+        _lookahead = _cdl.scan(rtl)
+        if _lookahead:
+            info = NOT_REPAIRABLE["counter-decode-lookahead-phase"]
+            res.update(verdict="ESCALATE",
+                       defect="counter-decode-lookahead-phase",
+                       evidence={"gate": info["gate"],
+                                 "finding": _lookahead[0],
+                                 "further_findings": len(_lookahead) - 1},
                        why_not_bucket_a=info["why_not_bucket_a"],
                        escalate_to=info["escalate_to"])
             return res

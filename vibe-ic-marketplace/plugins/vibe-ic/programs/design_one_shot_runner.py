@@ -4754,8 +4754,8 @@ def step_determinism_gates(project: Path, top_name: str = "") -> StepResult:
     exactly what
     the benchmark path blocks emit on; both gates self-skip otherwise.
 
-    ONE ADVISORY MEMBER, AND IT MAY NEVER JOIN THE FOUR ABOVE
-    ----------------------------------------------------------
+    TWO ADVISORY MEMBERS, AND NEITHER MAY EVER JOIN THE FOUR ABOVE
+    ---------------------------------------------------------------
     `edge_history_reset_phantom_check` runs here too — a history register whose
     reset arm assigns a CONSTANT while an edge term over (sig, prev) exists
     fabricates an edge the moment reset releases, which arms counters and starts
@@ -4781,7 +4781,36 @@ def step_determinism_gates(project: Path, top_name: str = "") -> StepResult:
     missing evidence. That router's verdict DOES change on this checker in both
     directions — ESCALATE/rc 1 on the constant reset arm, NOT_APPLICABLE/rc 0
     once it reads `prev <= sig` — which is the whole point of consulting it here
-    instead of printing a warning."""
+    instead of printing a warning.
+
+    THE SECOND ADVISORY MEMBER — `counter_decode_lookahead_phase_check`. A level
+    decoded from a counter LOOKAHEAD (`cnt + 1`, or a wire defined as such) and
+    registered on the very edge that advances that counter is published one
+    source cycle early relative to the counter it names. It landed in v1.18.3
+    with its own tests and NOTHING invoked it: no flow step, no routing entry,
+    no runner — so a checker distilled from two designs that failed one
+    clean-room run for this exact reason produced no verdict anywhere, and the
+    tree looked identical either way. This dispatch and the router branch in
+    `gate_directed_rtl_repair` are the two places that now read it.
+
+    It is ADVISORY for a reason the checker states about itself rather than out
+    of caution: a lookahead decode is LEGITIMATE when the spec asks for the
+    level to lead (a pre-emptive `almost_full`, a one-cycle-early enable), and
+    nothing in this tree can decide which case it is looking at. Its `--strict`
+    flag exists for a caller who holds that spec fact; this step does not, so it
+    takes the checker's advisory default. Same routing as above: the finding is
+    handed to `gate_directed_rtl_repair`, whose `counter-decode-lookahead-phase`
+    entry decides ESCALATE and names who holds the missing evidence, and that
+    verdict moves in both directions on this checker alone — ESCALATE/rc 1 on
+    `bin2gray(b + wen)`, NOT_APPLICABLE/rc 0 on `bin2gray(b)`.
+
+    ITS ROW IS WRITTEN ON EVERY RUN THAT HAD RTL TO READ, clean or not, which
+    the first advisory member's is not. That asymmetry is deliberate and it is
+    the finding itself: a checker that shipped with no caller left a published
+    record indistinguishable from one that ran and found nothing, so a row that
+    only appears on a finding would not have caught it either. `verdict` is
+    PASS or FINDING and `router_verdict` is NOT_APPLICABLE or ESCALATE; the row
+    is absent only when the step never scanned an RTL file at all."""
     t0 = time.time()
     rtl_dir = _pl.rtl_dir(project)
     if not rtl_dir.is_dir():
@@ -4800,12 +4829,14 @@ def step_determinism_gates(project: Path, top_name: str = "") -> StepResult:
         import worked_example_sequence_oracle_check as _wex  # noqa: E402
         import clock_divider_ratio_oracle_check as _cdr  # noqa: E402
         import edge_history_reset_phantom_check as _ehr  # noqa: E402
+        import counter_decode_lookahead_phase_check as _cdl  # noqa: E402
     except Exception as e:  # pragma: no cover — defensive import guard
         return StepResult("determinism_gates", "SKIP", time.time() - t0,
                           f"gate modules unavailable: {e}")
     spec_text = _gather_spec_text(project)
     findings: List[str] = []
     advisories: List[Dict[str, object]] = []
+    lookahead_advisories: List[Dict[str, object]] = []
     repairs: List[str] = []
     worked_example_skip: Optional[Dict[str, object]] = None
     n_checked = 0
@@ -4845,6 +4876,18 @@ def step_determinism_gates(project: Path, top_name: str = "") -> StepResult:
                                    "line": _f.line, "rule": _f.rule,
                                    "severity": _f.severity,
                                    "message": _f.message})
+        except Exception:
+            pass
+        # SECOND ADVISORY member — a level decoded from a counter LOOKAHEAD on
+        # the edge that advances the counter, published one source cycle early.
+        # Per FILE for the same reason as the two above: the defect is the same
+        # in a submodule as in the top. ADVISORY for a reason the checker states
+        # itself — a lookahead decode is legitimate when the spec asks for the
+        # level to LEAD (a pre-emptive almost_full, a one-cycle-early enable) —
+        # so the result goes to `lookahead_advisories`, NEVER to `findings`.
+        try:
+            for _f in _cdl.scan(txt):
+                lookahead_advisories.append(dict(_f, file=f.name))
         except Exception:
             pass
     # spec WORKED-EXAMPLE oracle runs ONCE, on the TOP/DUT module ONLY. The
@@ -4969,6 +5012,60 @@ def step_determinism_gates(project: Path, top_name: str = "") -> StepResult:
                         for a in advisories[:4])
             + (f" (+{len(advisories) - 4} more)" if len(advisories) > 4 else ""))
 
+    # SAME SHAPE, SECOND CLASS, WITH ONE DELIBERATE DIFFERENCE: THE ROW IS
+    # WRITTEN EVEN WHEN THE SCAN IS CLEAN.
+    #
+    # This is the rule this very step's flow entry already states about its
+    # sibling output — "Always written, including NOT_APPLICABLE, so `no
+    # cross-layer search` remains distinct from `the fidelity check never ran`"
+    # (flow Step 2, required_outputs). It is the whole finding this wiring
+    # repairs: the checker shipped in v1.18.3 and NOTHING invoked it, and the
+    # published record looked exactly the same as it would have if the checker
+    # had run and found nothing. A row that only appears on a finding cannot
+    # tell those two apart either, so it appears on every run that had RTL to
+    # read, carrying its own verdict.
+    #
+    # The routing is read from `gate_directed_rtl_repair`'s own register rather
+    # than restated here, so deleting that entry breaks this dispatch loudly
+    # instead of leaving the step printing a route nobody honours any more.
+    lookahead_extra: Optional[Dict[str, object]] = None
+    if n_checked:
+        lookahead_extra = {
+            "defect": "counter-decode-lookahead-phase",
+            "verdict": "FINDING" if lookahead_advisories else "PASS",
+            "files_scanned": n_checked,
+            "blocking": False,
+            "findings": lookahead_advisories,
+        }
+        try:
+            import gate_directed_rtl_repair as _gdr2  # noqa: E402
+            _route2 = _gdr2.NOT_REPAIRABLE["counter-decode-lookahead-phase"]
+            lookahead_extra["gate"] = _route2["gate"]
+            # The router's own verdict for this class, and it moves on this
+            # checker alone: ESCALATE for every input that reaches it, and
+            # NOT_APPLICABLE the moment the decode reads the PRE-increment
+            # value — the direction that makes this a wiring and not a label.
+            lookahead_extra["router_verdict"] = (
+                "ESCALATE" if lookahead_advisories else "NOT_APPLICABLE")
+            lookahead_extra["why_advisory_here"] = (
+                "a lookahead decode is legitimate when the spec asks for the "
+                "level to lead, and no oracle in this tree can decide which it "
+                "is; see gate_directed_rtl_repair.NOT_REPAIRABLE")
+            lookahead_extra["why_not_bucket_a"] = _route2["why_not_bucket_a"]
+            lookahead_extra["escalate_to"] = _route2["escalate_to"]
+        except Exception:
+            lookahead_extra["gate"] = "counter_decode_lookahead_phase_check"
+            lookahead_extra["router_verdict"] = "UNAVAILABLE"
+    if lookahead_advisories:
+        advisory_note += (
+            " | ADVISORY (never changes this verdict) — level decoded from a "
+            "counter lookahead on the counter's own edge, routed ESCALATE by "
+            "gate_directed_rtl_repair: "
+            + "; ".join(f"{a['file']}:{a['signal']}<-{a['counter']}"
+                        for a in lookahead_advisories[:4])
+            + (f" (+{len(lookahead_advisories) - 4} more)"
+               if len(lookahead_advisories) > 4 else ""))
+
     if findings:
         _extras: Dict[str, object] = {
             "gate": "determinism_gates",
@@ -4976,6 +5073,8 @@ def step_determinism_gates(project: Path, top_name: str = "") -> StepResult:
                       "(promoted to the shared phase-2 chain)"}
         if advisory_extra:
             _extras["edge_history_reset_advisory"] = advisory_extra
+        if lookahead_extra:
+            _extras["counter_decode_lookahead_advisory"] = lookahead_extra
         if worked_example_skip:
             _extras["worked_example_oracle"] = worked_example_skip
         return StepResult(
@@ -4999,6 +5098,8 @@ def step_determinism_gates(project: Path, top_name: str = "") -> StepResult:
         pass_extras["gate_directed_repairs"] = repairs
     if advisory_extra:
         pass_extras["edge_history_reset_advisory"] = advisory_extra
+    if lookahead_extra:
+        pass_extras["counter_decode_lookahead_advisory"] = lookahead_extra
     if worked_example_skip:
         pass_extras["worked_example_oracle"] = worked_example_skip
     return StepResult("determinism_gates", "PASS", time.time() - t0, detail,

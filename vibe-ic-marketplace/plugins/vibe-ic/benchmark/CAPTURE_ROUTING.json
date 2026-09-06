@@ -47,6 +47,7 @@
       "bucket_A_related": [
         "programs/shape_b_sample_export.py",
         "programs/clock_divider_phase_form_check.py",
+        "programs/counter_decode_lookahead_phase_check.py",
         "programs/buffer_occupancy_flag_latency_check.py"
       ],
       "bucket_B_skill_file": "agents/ic-expert-agent.md",
