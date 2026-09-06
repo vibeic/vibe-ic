@@ -1684,6 +1684,87 @@ def precomputed_audit(repo_root: Path, checkout_attestations: Path,
                  None, pointer)
 
 
+def run_workers_supervised(specs, jobs: int, run_fn=None):
+    """Launch and supervise every parallel worker BY FORWARD PROGRESS.
+
+    THE WATCHDOG KILLS ONLY A JOB THAT HAS STOPPED. There is no wall clock here
+    and there is no bound on how long a worker may legitimately take.
+
+    WHAT WAS HERE, AND WHY IT WENT (CZH-14, and this is its consequence half).
+    This was ``proc.communicate(timeout=max(timeout * len(labels), timeout))``
+    followed by ``proc.kill()``, reported as "worker i exceeded its Ns process
+    budget". MEASURED on this tree from the repo's OWN
+    ``hygiene_gate_profile.json``: the shipped wiring is ``--jobs 8`` and
+    ``hygiene_shard_plan`` is LPT, so it isolates the largest gate on a shard of
+    its own — worker 0 carries ONE label, ``an argued direction is pinned``,
+    which that profile records at **646 s**, and its budget was ``max(600 x 1,
+    600)`` = **600 s**. Forty-six seconds below the cost of the work ON AN IDLE
+    HOST. MEASURED end to end at 2fbb2932a8a3, `--jobs 8`, real wiring::
+
+        base   rc 2  1802.87 s  PARALLEL_INCOMPLETE
+               "worker 0 exceeded its 600s process budget"
+               "worker 1 exceeded its 600s process budget"
+               "labels driven by no worker: an argued direction is pinned,
+                                            gates disclose their denominator"
+        after  rc 2  1634.79 s at loadavg 4.1
+               NO_STIMULUS, all 144 probed gates driven, 0 workers killed
+
+    ``PARALLEL_INCOMPLETE`` exits 2 and the wiring is
+    ``run_tolerating_uncheckable``, whose contract is that rc 2 is LOUD AND
+    NON-FATAL — so one killed worker turned the whole 144-gate audit into "could
+    not check": announced, blocking nothing, and leaving the sweep with no
+    verdict about host independence at all.
+
+    AND "NOTHING" IS NOT THE REPLACEMENT FOR A DEADLINE. Deleting the clock and
+    waiting forever trades a worker killed while working for a worker nobody
+    stops when it has genuinely wedged, and the second is not obviously the
+    better failure — it is the same non-verdict, arriving later and with no
+    reason attached. The replacement is the repo's own primitive: ``_pr.run``
+    (``_progress_run`` over ``_watchdog``) stops a child ONLY when every
+    readable forward-progress signal — captured output, the process tree's CPU,
+    its block I/O — sat still for ``DEFAULT_STALL_LOOKS`` (12) CONSECUTIVE
+    looks. That is a COUNT OF OBSERVATIONS, not a duration, and it does not grow
+    with how long the child has been running. A gate that is slow because the
+    host is busy is advancing CPU on every look and is never touched; a worker
+    that has stopped is reported with ``Stalled``, which names WHICH signals
+    were readable — so a stall seen with a degraded probe set can be told from a
+    full one, and the reason travels with the refusal.
+
+    THE BUDGET IS PROCESSES. ``jobs`` is the pool width and the only budget this
+    function has; the workers are launched INSIDE the pool rather than all
+    Popen'd first, so the width is what is actually in flight and not merely
+    what is collected.
+
+    Returns ``[(index, labels, json_path, rc, stdout, stderr, stall_reason)]``,
+    ONE ROW PER SPEC and never fewer — the caller's completeness check is a
+    membership check over these rows, so a row this function declined to return
+    would be a set of labels nobody reports. ``stall_reason`` is empty on every
+    natural exit, including a failing one: a worker that ran and returned 1 is a
+    finding about the tree, and only a worker that STOPPED is a finding about
+    the machine.
+
+    ``run_fn`` IS AN OBSERVATION-CADENCE SEAM, NOT A DEADLINE KNOB. It exists so
+    a test can drive the REAL supervisor at a fast sampling cadence instead of
+    waiting out the production one (12 looks, about six minutes of total
+    stillness). ``_progress_run`` is explicit that this is safe in the only
+    direction that matters — "sampling more often never kills a working job
+    sooner" — so nothing a caller can pass here can shorten the life of a
+    worker that is still moving. Production passes nothing.
+    """
+    launch = run_fn if run_fn is not None else _pr.run
+
+    def one(spec):
+        i, labels, json_path, argv = spec
+        try:
+            cp = launch(argv, capture_output=True, text=True)
+        except _pr.Stalled as exc:
+            return i, labels, json_path, None, "", "", str(exc)
+        return i, labels, json_path, cp.returncode, cp.stdout, cp.stderr, ""
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as pool:
+        return sorted(pool.map(one, specs), key=lambda row: row[0])
+
+
 def parallel_audit(repo_root: Path, jobs: int,
                    checkout_attestations: Optional[Path],
                    timeout: int = 600) -> Audit:
@@ -1765,7 +1846,7 @@ def parallel_audit(repo_root: Path, jobs: int,
     verdicts: List[str] = []
     with tempfile.TemporaryDirectory(prefix="hostindep-plan-") as td:
         tmp = Path(td)
-        procs = []
+        specs = []
         for i, labels in enumerate(buckets):
             labels_path = tmp / f"labels-{i}.txt"
             labels_path.write_text("\n".join(labels) + "\n", encoding="utf-8")
@@ -1776,52 +1857,27 @@ def parallel_audit(repo_root: Path, jobs: int,
             if checkout_attestations is not None:
                 argv += ["--checkout-attestations",
                          str(Path(checkout_attestations).resolve())]
-            procs.append((i, labels, json_path, subprocess.Popen(
-                argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                text=True)))
+            specs.append((i, labels, json_path, argv))
 
-        def collect(row):
-            """Wait for one worker. NO STOPWATCH — see below.
+        rows = run_workers_supervised(specs, jobs)
 
-            This used to wait `max(timeout * len(labels), timeout)` and KILL
-            the worker on expiry, which turned every busy host into
-            PARALLEL_INCOMPLETE: a killed worker writes no record, so its
-            labels are then reported as "driven by no worker" and the whole
-            gate returns a NON-VERDICT. The configuration it was asked about
-            was never checked, and the reason had nothing to do with the tree.
-
-            MEASURED 2026-09-07 on 8HD-9 at 18cb660e3b01, `--jobs 8`, load 62:
-            the arm with no corpus pointer bound — the arm that is supposed to
-            PASS — returned rc 2 `PARALLEL_INCOMPLETE`, "worker 0 exceeded its
-            600s process budget", "labels driven by no worker: an argued
-            direction is pinned", after 1915 s. A deadline that fires on load
-            is a measurement of the machine, and this gate exists to measure
-            the TREE.
-
-            This is the move `matrix_mutation_ledger.replay` already made for
-            the same reason, in this same repository: "``timeout`` NO LONGER
-            BOUNDS A CELL … one that is merely slow on a busy host runs to
-            completion instead of being killed and recorded as unreadable."
-
-            Nothing is lost by waiting. A worker that dies still returns, and
-            the branch below already names it — "exited {rc} without a machine
-            record" — so a genuine failure is reported BY NAME rather than
-            inferred from a clock. What is gained is that a slow run reports a
-            verdict about the tree, late, instead of no verdict at all.
-            """
-            i, labels, json_path, proc = row
-            out, err = proc.communicate()
-            return i, labels, json_path, proc.returncode, out, err, None
-
-        with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as pool:
-            rows = list(pool.map(collect, procs))
-
-        for i, labels, json_path, rc, out, err, exc in sorted(rows):
-            assert exc is None                 # no stopwatch — see `collect`
+        for i, labels, json_path, rc, out, err, stall in sorted(
+                rows, key=lambda r: r[0]):
+            if stall:
+                problems.append(
+                    f"worker {i} NOT_COMPLETED: the progress supervisor "
+                    f"stopped it as a job that had STOPPED, carrying "
+                    f"{len(labels)} label(s) "
+                    f"({', '.join(sorted(labels)[:4])}"
+                    f"{', ...' if len(labels) > 4 else ''}). {stall}")
+                continue
             if not json_path.is_file():
                 tail = ((err or out).strip().splitlines() or ["no output"])[-1]
                 problems.append(
-                    f"worker {i} exited {rc} without a machine record: {tail[:180]}")
+                    f"worker {i} exited {rc} NOT_COMPLETED without a machine "
+                    f"record, carrying {len(labels)} label(s) "
+                    f"({', '.join(sorted(labels)[:4])}"
+                    f"{', ...' if len(labels) > 4 else ''}): {tail[:180]}")
                 continue
             try:
                 doc = json.loads(json_path.read_text(encoding="utf-8"))

@@ -31,13 +31,27 @@ contract is that rc 2 is LOUD AND NON-FATAL. One killed worker therefore turned
 the whole 144-gate audit into `could not check`: announced, blocking nothing, and
 leaving the sweep with no verdict at all about host independence.
 
+AND "NOTHING" IS NOT THE REPLACEMENT. Deleting the clock and waiting forever
+trades a worker killed while working for a worker nobody stops when it has
+genuinely wedged. The replacement is the repo's own primitive: the watchdog kills
+only a job that has STOPPED — every readable forward-progress signal (captured
+output, the process tree's CPU, its block I/O) flat for a COUNT of consecutive
+looks, never a duration.
+
 WHAT THIS FILE LOCKS
 ====================
-1. ``await_workers`` WAITS. A worker that outlives any budget a caller might have
-   guessed still returns its record and its own exit status.
-2. It returns ONE ROW PER LAUNCHED WORKER. A wait that silently dropped a row
+1. ``run_workers_supervised`` WAITS for a worker that is still moving. One that
+   outlives any budget a caller might have guessed still returns its record and
+   its own exit status.
+2. A WEDGED worker IS stopped, and the reason is NAMED. Silent, no CPU, no I/O
+   across the looks -> ``Stalled``, quoting which signals were readable.
+3. THE TWO ARE PROVED IN ONE CALL, at one cadence, against one supervisor. A
+   wedged child and a slow-but-progressing child handed to the same pool must
+   come back with opposite verdicts, or the discrimination is asserted rather
+   than measured.
+4. It returns ONE ROW PER LAUNCHED WORKER. A wait that silently dropped a row
    would be a set of labels nobody reports.
-3. THE NEGATIVE ARM IS THE DELETED CODE ITSELF. The pre-fix wait is rebuilt here
+5. THE NEGATIVE ARM IS THE DELETED CODE ITSELF. The pre-fix wait is rebuilt here
    and driven against the SAME children, and it must LOSE the record. Without it
    this file would pass just as happily against a wait that still killed, because
    a short-lived child never crosses a budget.
@@ -63,6 +77,7 @@ _PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_PROGRAMS))
 
 import gate_host_independence_check as G                    # noqa: E402
+import _progress_run as _pr                                 # noqa: E402
 
 #: Long enough that the pre-fix budget below is crossed determinately on any
 #: host, short enough that this file costs a couple of seconds. It is a property
@@ -81,20 +96,63 @@ json.dump({"selected_labels": [sys.argv[3]], "gates_declared": 1}, open(sys.argv
 """
 
 
+#: The OBSERVATION CADENCE this file drives the real supervisor at. Production
+#: looks 12 times at its own measured cadence — about six minutes of total
+#: stillness — and waiting that out per arm would make this file unrunnable.
+#: `_progress_run` is explicit that this direction is safe: "sampling more often
+#: never kills a working job sooner". So the cadence is fast and the SUPERVISOR
+#: is the real one; nothing here is stubbed.
+_LOOKS = 3
+_POLL_S = 0.4
+_STALL_WINDOW_S = _LOOKS * _POLL_S            # 1.2 s of total stillness
+
+#: The progressing arm runs for many multiples of that window, so a red here is
+#: a real discrimination failure and never a race with it.
+_PROGRESSING_S = 8.0
+
+#: A child that BURNS CPU and says nothing: no output, no block I/O, no writes
+#: until the very end. It is the shape a real gate has — `an argued direction is
+#: pinned` produces no output for the 646 s it is inside its own drive — and it
+#: is the shape a naive "did it print lately?" supervisor would murder.
+_PROGRESSING = """
+import json, sys, time
+t = time.monotonic(); x = 0
+while time.monotonic() - t < float(sys.argv[2]):
+    x = (x * x + 1) % 1000003
+json.dump({"selected_labels": [sys.argv[3]], "gates_declared": 1, "x": x},
+          open(sys.argv[1], "w"))
+"""
+
+#: A child that has STOPPED: asleep, silent, no CPU, no I/O, forever.
+_WEDGED = "import time\ntime.sleep(36000)\n"
+
+
+def _fast(argv, **kw):
+    """The REAL supervisor, sampled fast. Not a stub — `_pr.run` itself."""
+    return _pr.run(argv, stall_looks=_LOOKS, poll_s=_POLL_S, **kw)
+
+
 def _launch(tmp_path: Path, n: int):
-    """`n` real children, each writing its record only AFTER it has slept."""
-    procs = []
-    for i in range(n):
-        rec = tmp_path / f"worker-{i}.json"
-        procs.append((i, [f"label-{i}"], rec, subprocess.Popen(
-            [sys.executable, "-c", _WORKER, str(rec), str(_WORKER_SECONDS),
-             f"label-{i}"],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)))
-    return procs
+    """`n` worker SPECS, each writing its record only AFTER it has slept.
+
+    Specs, not live processes: `run_workers_supervised` owns the launch, which
+    is what makes the pool width a budget of PROCESSES rather than a count of
+    things already started.
+    """
+    return [(i, [f"label-{i}"], tmp_path / f"worker-{i}.json",
+             [sys.executable, "-c", _WORKER,
+              str(tmp_path / f"worker-{i}.json"), str(_WORKER_SECONDS),
+              f"label-{i}"])
+            for i in range(n)]
+
 
 
 def _reap(procs) -> None:
-    """Kill what this test spawned, by RECORDED pid -- never a name pattern."""
+    """Kill what THIS TEST spawned, by RECORDED pid -- never a name pattern.
+
+    Used only by the negative arm below, which Popens its own children in order
+    to drive the DELETED wait against them.
+    """
     for _, _, _, proc in procs:
         if proc.poll() is None:
             proc.kill()
@@ -104,33 +162,135 @@ def _reap(procs) -> None:
             pass
 
 
+
 def test_a_worker_that_outlives_any_guessed_budget_is_waited_for(tmp_path):
-    """The property, on real processes: no clock decides whether work is kept."""
+    """At the PRODUCTION cadence, on real processes: no clock cuts them short.
+
+    Deliberately NOT `_fast`. This arm is about the shipped configuration —
+    twelve looks at the supervisor's own measured cadence — and three children
+    that sleep past any per-worker budget a caller might once have guessed.
+    """
     procs = _launch(tmp_path, 3)
-    try:
-        started = time.monotonic()
-        rows = G.await_workers(procs, jobs=3)
-        elapsed = time.monotonic() - started
-    finally:
-        _reap(procs)
+    started = time.monotonic()
+    rows = G.run_workers_supervised(procs, jobs=3)
+    elapsed = time.monotonic() - started
 
     assert elapsed >= _WORKER_SECONDS, (
-        f"the wait returned after {elapsed:.2f}s, before children that sleep "
+        f"the pool returned after {elapsed:.2f}s, before children that sleep "
         f"{_WORKER_SECONDS}s could have finished — so it did not wait for them, "
         f"and this file is measuring nothing")
     assert [r[0] for r in rows] == [0, 1, 2], (
-        f"await_workers returned rows {[r[0] for r in rows]} for 3 launched "
-        f"workers. One row per worker is what makes the caller's completeness "
-        f"check a MEMBERSHIP check; a dropped row is a label nobody reports.")
-    for i, labels, rec, rc, _out, _err in rows:
+        f"run_workers_supervised returned rows {[r[0] for r in rows]} for 3 "
+        f"launched workers. One row per worker is what makes the caller's "
+        f"completeness check a MEMBERSHIP check; a dropped row is a set of "
+        f"labels nobody reports.")
+    for i, labels, rec, rc, _out, _err, stall in rows:
+        assert not stall, (
+            f"worker {i} was stopped: {stall}. It was sleeping, which is the "
+            f"one thing a wall clock and a progress supervisor disagree about — "
+            f"and at {_WORKER_SECONDS}s it is nowhere near twelve looks.")
         assert rc == 0, (
             f"worker {i} exited {rc}. A worker still doing its work must be "
-            f"waited for, never signalled: killing unfinished work cannot turn "
-            f"it green.")
+            f"waited for, never signalled.")
         assert rec.is_file(), (
             f"worker {i} left no machine record, so its {len(labels)} label(s) "
             f"would be reported by nobody")
         assert json.loads(rec.read_text())["selected_labels"] == labels
+
+
+
+def test_a_wedged_worker_is_stopped_and_the_reason_is_named(tmp_path):
+    """A job that has STOPPED is reaped, and the refusal says how that was seen.
+
+    Not "it took too long" — every readable signal sat still, `_LOOKS` times
+    running. The distinction is the whole of vibe-ic#2051 and it has to survive
+    into the message a reader gets.
+    """
+    rec = tmp_path / "wedged.json"
+    specs = [(0, ["a planted gate that sleeps forever"], rec,
+              [sys.executable, "-c", _WEDGED])]
+    started = time.monotonic()
+    rows = G.run_workers_supervised(specs, 1, run_fn=_fast)
+    elapsed = time.monotonic() - started
+
+    assert len(rows) == 1
+    i, labels, json_path, rc, _out, _err, stall = rows[0]
+    assert rc is None and stall, (
+        f"the wedged worker came back rc={rc!r} with stall={stall!r}; a child "
+        f"asleep for ten hours has stopped, and a supervisor that did not "
+        f"notice is not supervising")
+    assert "STALLED" in stall and "signals readable" in stall, (
+        f"the refusal does not say WHAT was seen: {stall}")
+    assert str(_LOOKS) in stall, (
+        f"the refusal does not name the number of looks it spent: {stall}")
+    assert not json_path.is_file(), (
+        "a stopped worker wrote a machine record, so it was not wedged and "
+        "this arm is measuring something else")
+    assert elapsed >= _STALL_WINDOW_S, (
+        f"the supervisor returned after {elapsed:.2f}s, inside its own "
+        f"{_STALL_WINDOW_S:.2f}s window — it did not spend the looks it claims")
+
+
+def test_a_slow_but_progressing_worker_is_never_stopped(tmp_path):
+    """The 646 s gate, in miniature: quiet, CPU-bound, far past the window.
+
+    THIS IS THE ARM THE OLD DEADLINE FAILED. It produces no output at all until
+    it is finished, so only the CPU signal keeps it alive — which is exactly the
+    signal `_watchdog`'s own docstring says a "CPU-bound-but-quiet phase" needs.
+    """
+    rec = tmp_path / "slow.json"
+    specs = [(0, ["a slow but progressing gate"], rec,
+              [sys.executable, "-c", _PROGRESSING, str(rec),
+               str(_PROGRESSING_S), "a slow but progressing gate"])]
+    started = time.monotonic()
+    rows = G.run_workers_supervised(specs, 1, run_fn=_fast)
+    elapsed = time.monotonic() - started
+
+    i, labels, json_path, rc, _out, _err, stall = rows[0]
+    assert not stall, (
+        f"a worker that burned CPU for {_PROGRESSING_S}s — "
+        f"{_PROGRESSING_S / _STALL_WINDOW_S:.0f}x the {_STALL_WINDOW_S:.2f}s "
+        f"stall window — was stopped anyway: {stall}. That is the deadline "
+        f"back under another name.")
+    assert rc == 0, f"the progressing worker exited {rc}"
+    assert json_path.is_file()
+    assert json.loads(json_path.read_text())["selected_labels"] == labels
+    assert elapsed >= _PROGRESSING_S, (
+        f"the arm returned in {elapsed:.2f}s but the child was asked for "
+        f"{_PROGRESSING_S}s of work; it did not run, so nothing was proved")
+
+
+def test_the_same_supervisor_at_one_cadence_tells_the_two_apart(tmp_path):
+    """BOTH DIRECTIONS IN ONE CALL — the arm that makes the two above evidence.
+
+    Separately, each is consistent with a supervisor that always stops, or one
+    that never does, plus a coincidence. Handed to ONE pool at ONE cadence, a
+    supervisor that cannot discriminate must get one of them wrong.
+    """
+    wedged_rec = tmp_path / "w.json"
+    slow_rec = tmp_path / "s.json"
+    specs = [
+        (0, ["a planted gate that sleeps forever"], wedged_rec,
+         [sys.executable, "-c", _WEDGED]),
+        (1, ["a slow but progressing gate"], slow_rec,
+         [sys.executable, "-c", _PROGRESSING, str(slow_rec),
+          str(_PROGRESSING_S), "a slow but progressing gate"]),
+    ]
+    rows = G.run_workers_supervised(specs, 2, run_fn=_fast)
+
+    assert [r[0] for r in rows] == [0, 1], (
+        f"rows came back as {[r[0] for r in rows]}; one row per spec, in index "
+        f"order, is what makes the caller's completeness check a membership "
+        f"check")
+    wedged, slow = rows
+    assert wedged[6] and wedged[3] is None, (
+        f"the wedged worker survived: rc={wedged[3]!r} stall={wedged[6]!r}")
+    assert not slow[6] and slow[3] == 0, (
+        f"the progressing worker was stopped: rc={slow[3]!r} "
+        f"stall={slow[6]!r}")
+    assert not wedged_rec.is_file() and slow_rec.is_file(), (
+        "the two arms did not leave opposite records, so the pool did not "
+        "actually run them differently")
 
 
 def test_the_deleted_wall_clock_kill_would_lose_the_record(tmp_path):
@@ -141,7 +301,13 @@ def test_the_deleted_wall_clock_kill_would_lose_the_record(tmp_path):
     against these children and the positive test could not have failed either —
     a check that cannot fail is not a check.
     """
-    procs = _launch(tmp_path, 3)
+    procs = [(i, [f"label-{i}"], tmp_path / f"worker-{i}.json",
+              subprocess.Popen(
+                  [sys.executable, "-c", _WORKER,
+                   str(tmp_path / f"worker-{i}.json"), str(_WORKER_SECONDS),
+                   f"label-{i}"],
+                  stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True))
+             for i in range(3)]
 
     def prefix_collect(row):
         i, labels, rec, proc = row
@@ -172,25 +338,23 @@ def test_the_deleted_wall_clock_kill_would_lose_the_record(tmp_path):
             f"kill was not destroying evidence and this arm is vacuous")
 
 
-def test_the_shipped_wait_carries_no_wall_clock_at_all(tmp_path):
-    """A budget of PROCESSES, never of seconds — asserted on the behaviour.
+def test_the_shipped_wait_carries_no_seconds_parameter_at_all(tmp_path):
+    """A budget of PROCESSES, never of seconds — asserted on the interface.
 
-    Driven by making the children outlive `_PREFIX_BUDGET_S` by a wide margin
-    while the caller passes NO budget of any kind: there is no parameter on
-    ``await_workers`` through which one could be supplied.
+    `jobs` is a pool width. `run_fn` is an observation CADENCE seam and
+    `_progress_run` is explicit that it is safe in the only direction that
+    matters: "sampling more often never kills a working job sooner". Neither is
+    a duration a worker's life depends on, and there is no third parameter.
     """
     import inspect
-    params = set(inspect.signature(G.await_workers).parameters)
-    assert params == {"procs", "jobs"}, (
-        f"await_workers takes {sorted(params)}. `jobs` is a budget of "
-        f"PROCESSES and is the only budget this wait may have; a seconds "
+    params = set(inspect.signature(G.run_workers_supervised).parameters)
+    assert params == {"specs", "jobs", "run_fn"}, (
+        f"run_workers_supervised takes {sorted(params)}. `jobs` is a budget of "
+        f"PROCESSES and is the only budget this launcher may have; a seconds "
         f"parameter is the deadline this file exists to keep out.")
     procs = _launch(tmp_path, 1)
-    try:
-        rows = G.await_workers(procs, jobs=1)
-    finally:
-        _reap(procs)
-    assert rows[0][3] == 0 and rows[0][2].is_file()
+    rows = G.run_workers_supervised(procs, jobs=1)
+    assert rows[0][3] == 0 and rows[0][2].is_file() and not rows[0][6]
 
 
 def test_no_wall_clock_kill_survives_in_the_parallel_wait(tmp_path):
@@ -209,11 +373,11 @@ def test_no_wall_clock_kill_survives_in_the_parallel_wait(tmp_path):
     # WRITTEN SO THE PRE-FIX TREE CAN ANSWER IT. `parallel_audit` exists on both
     # sides and `ast.walk` descends into the nested `collect` the deadline used
     # to live in, so the control arm reports the KILL rather than an
-    # AttributeError about a function it has never heard of. `await_workers` is
-    # included when present and is not required to be.
+    # AttributeError about a function it has never heard of.
+    # `run_workers_supervised` is included when present and is not required.
     owners = {n.name: n for n in ast.walk(tree)
               if isinstance(n, ast.FunctionDef)
-              and n.name in ("await_workers", "parallel_audit")}
+              and n.name in ("run_workers_supervised", "parallel_audit")}
     assert "parallel_audit" in owners, (
         f"the parallel driver is not in this file any more (found "
         f"{sorted(owners)}); a renamed owner is a wait this check stopped "
@@ -260,21 +424,23 @@ def test_the_ast_check_above_can_actually_see_a_reintroduced_deadline(tmp_path):
     src = (_PROGRAMS / "gate_host_independence_check.py").read_text(
         encoding="utf-8")
     mutated = src.replace(
-        "        out, err = proc.communicate()\n"
-        "        return i, labels, json_path, proc.returncode, out, err\n",
-        "        try:\n"
-        "            out, err = proc.communicate(timeout=600)\n"
-        "        except subprocess.TimeoutExpired:\n"
-        "            proc.kill()\n"
-        "            out, err = proc.communicate()\n"
-        "        return i, labels, json_path, proc.returncode, out, err\n",
+        "            cp = launch(argv, capture_output=True, text=True)\n",
+        "            proc = subprocess.Popen(argv)\n"
+        "            try:\n"
+        "                out, err = proc.communicate(timeout=600)\n"
+        "            except subprocess.TimeoutExpired:\n"
+        "                proc.kill()\n"
+        "                out, err = proc.communicate()\n"
+        "            cp = subprocess.CompletedProcess(argv, proc.returncode,\n"
+        "                                             out, err)\n",
         1)
     assert mutated != src, (
-        "the mutation did not apply — the wait no longer has the shape this "
+        "the mutation did not apply — the launch no longer has the shape this "
         "arm knows how to break, so it is proving nothing about the check")
 
     fn = next(n for n in ast.walk(ast.parse(mutated))
-              if isinstance(n, ast.FunctionDef) and n.name == "await_workers")
+              if isinstance(n, ast.FunctionDef)
+              and n.name == "run_workers_supervised")
     signals = [n for n in ast.walk(fn) if isinstance(n, ast.Call)
                and getattr(n.func, "attr", None) in
                ("kill", "terminate", "send_signal")]
