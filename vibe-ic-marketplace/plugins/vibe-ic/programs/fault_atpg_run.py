@@ -67,6 +67,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -1199,6 +1200,88 @@ def atpg_container_deadline(timeout: int,
     return max(1, int(timeout) + max(0, int(flush_grace_s)))
 
 
+#: The two mount points `_run_docker` establishes, and what they are mounts OF.
+#: Callers all over this file build container-absolute strings ("/work/<rel>",
+#: "/pdk/..."), so a LOCAL run has to say the same thing about the same files.
+_WORK_MOUNT = "/work"
+_PDK_MOUNT = "/pdk"
+
+#: Announced ONCE per process, so a transcript records which route was taken
+#: without one line per tool call.
+_LOCAL_ATPG_ROUTE_ANNOUNCED = False
+
+
+def _localise_mounted_paths(shell: str, project: Path,
+                            pdk_dir: "Path | None") -> str:
+    """Rewrite the container-absolute paths in `shell` to this filesystem.
+
+    `_run_docker` mounts the project at /work and (optionally) the PDK at /pdk;
+    every command it is handed is written against those mount points. Running
+    the same command locally means the same files under their REAL paths, so
+    the two prefixes are substituted and nothing else is touched.
+
+    Anchored on the mount point followed by `/` or by a word boundary, so a
+    token that merely CONTAINS "/work" (a design named `network`, a path like
+    `/opt/workspace`) is not rewritten. Substitution is longest-prefix-first
+    for the same reason `_to_container_path` sorts its mounts."""
+    subs = [(_WORK_MOUNT, str(project))]
+    if pdk_dir is not None:
+        subs.append((_PDK_MOUNT, str(pdk_dir)))
+    subs.sort(key=lambda t: len(t[0]), reverse=True)
+    for mount, real in subs:
+        shell = re.sub(re.escape(mount) + r"(?=/|\b)", real.rstrip("/"), shell)
+    return shell
+
+
+def _announce_local_atpg_route(project: Path) -> None:
+    global _LOCAL_ATPG_ROUTE_ANNOUNCED
+    if _LOCAL_ATPG_ROUTE_ANNOUNCED:
+        return
+    _LOCAL_ATPG_ROUTE_ANNOUNCED = True
+    # Deliberately does NOT name `DOCKER_IMAGE`: in-image that constant is
+    # whatever `_resolve_docker_image` fell back to when the registry was
+    # unreachable, and naming it would put a wrong image in the transcript.
+    print("[dft] EXEC ROUTE = LOCAL: no docker client on PATH, so the ATPG "
+          "engine runs on THIS filesystem (fault=%s) instead of in a sibling "
+          "container. The project is read at %s, not at %s."
+          % (shutil.which("fault") or "NOT ON PATH", project, _WORK_MOUNT),
+          file=sys.stderr)
+
+
+def atpg_engine_identity() -> dict:
+    """WHAT ACTUALLY PRODUCED THIS MEASUREMENT — never a name that was not used.
+
+    `scan_chain.json` and the ATPG error report record `image: DOCKER_IMAGE` as
+    the coverage number's provenance. On the LOCAL route no image is started at
+    all, and worse, `DOCKER_IMAGE` is resolved by asking a registry
+    (`_resolve_docker_image`) which is unreachable from inside the image:
+    MEASURED 2026-09-06 in a in-image run,
+
+        _eda_image: registry unreachable and no local ghcr.io/vibeic/vibeic-eda
+        image; falling back to hpretl/iic-osic-tools:latest, which does NOT
+        carry the forked tools.
+
+    So recording `DOCKER_IMAGE` on the local route would stamp the scan netlist
+    with an image that was never run AND is the wrong image — a false
+    provenance record introduced by the very fix that made the step work. That
+    is the failure mode this repo keeps paying for, so the record says which
+    ROUTE ran and identifies the engine by what is actually on PATH.
+
+    `image` is kept as a key on both routes so an existing consumer never
+    KeyErrors; on the local route it is None, which is a readable "there was no
+    image" rather than a plausible-looking lie."""
+    if _CE.no_container_route():
+        return {
+            "exec_route": "local",
+            "image": None,
+            "engine_path": shutil.which("fault"),
+            "image_note": ("no docker client on PATH: the engine ran on this "
+                           "filesystem, not in a container, so there is no "
+                           "image digest to record"),
+        }
+    return {"exec_route": "container", "image": DOCKER_IMAGE}
+
+
 def _run_docker(
     project: Path,
     cmd: list[str],
@@ -1249,18 +1332,60 @@ def _run_docker(
     unbounded behind a deadline that exists only in the caller's belief.
     """
     deadline = atpg_container_deadline(timeout, flush_grace_s)
+    _inner = ENV_PREAMBLE + " ".join(cmd)
+    _pdk = pdk_dir if (pdk_dir is not None and pdk_dir.exists()) else None
+
+    # LOCAL ROUTE — see `_container_exec.no_container_route`. With no docker
+    # client there is no route to ANY container, so the sibling container this
+    # would otherwise start cannot be started and every ATPG call returned
+    # `127 docker binary not found in PATH`. MEASURED 2026-09-06 in-image:
+    # `reports/phase2/dft/scan_chain.json` recorded exactly that, and the step
+    # disclosed-skipped, so the run routed the PRE-SCAN netlist while the same
+    # tree run host-side routed the SCAN netlist.
+    #
+    # THE IMAGE IT WOULD START IS THE IMAGE IT IS ALREADY IN. `DOCKER_IMAGE`
+    # resolves to ghcr.io/vibeic/vibeic-eda, whose local id
+    # (sha256:891063f1…, label version 0.3.46) is the digest a host-side run
+    # records as the ATPG tool's provenance — so running locally is the SAME
+    # build, not a substitute for it. `ENV_PREAMBLE` exports absolute
+    # FAULT_IVERILOG / FAULT_YOSYS paths that resolve on that same filesystem.
+    #
+    # The deadline is UNCHANGED: coreutils `timeout` is still the engine's own
+    # parent, so it is still signalled where it lives; it simply lives here.
+    # A host WITH a docker client takes the branch below and the argv is
+    # byte-identical to what it has always been.
+    if _CE.no_container_route():
+        _announce_local_atpg_route(project)
+        local_cmd = [
+            "bash", "-c",
+            (f"timeout -k {_CE.DEFAULT_KILL_GRACE_S} {deadline} bash -c "
+             + shlex.quote(_localise_mounted_paths(_inner, project, _pdk))),
+        ]
+        try:
+            r = subprocess.run(local_cmd, capture_output=True, text=True,
+                               timeout=deadline + _CE.CLIENT_GRACE_S)
+            return r.returncode, r.stdout, r.stderr
+        except subprocess.TimeoutExpired:
+            return 124, "", (
+                f"local backstop fired after {deadline + _CE.CLIENT_GRACE_S}s: "
+                f"the in-process deadline ({deadline}s) did not fire first")
+        except FileNotFoundError:
+            return 127, "", (
+                "no docker client and no `bash` on PATH — the ATPG engine "
+                "could not be reached by either route")
+
     docker_cmd = [
         "docker", "run", "--rm",
         *_dmem.docker_memory_flags(),
         "--entrypoint", "bash",
         "-v", f"{project}:/work",
     ]
-    if pdk_dir is not None and pdk_dir.exists():
-        docker_cmd += ["-v", f"{pdk_dir}:/pdk"]
+    if _pdk is not None:
+        docker_cmd += ["-v", f"{_pdk}:/pdk"]
     docker_cmd += [
         DOCKER_IMAGE,
         "-c", (f"timeout -k {_CE.DEFAULT_KILL_GRACE_S} {deadline} bash -c "
-               + shlex.quote(ENV_PREAMBLE + " ".join(cmd))),
+               + shlex.quote(_inner)),
     ]
     try:
         r = subprocess.run(docker_cmd, capture_output=True, text=True,

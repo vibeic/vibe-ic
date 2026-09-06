@@ -164,6 +164,7 @@ def test_the_backstop_firing_names_what_it_means(monkeypatch, tmp_path):
     """A merely-slow engine can no longer reach this branch, so reaching it is
     information: the CONTAINER is unresponsive, not the tool. "docker command
     timed out" pointed at the tool and sent the reader to the wrong place."""
+    _force_container_route(monkeypatch)
     rc, _out, err = _drive(monkeypatch, tmp_path, _Rec(raise_timeout=True),
                            timeout=10, flush_grace_s=5)
     assert rc == 124
@@ -171,12 +172,67 @@ def test_the_backstop_firing_names_what_it_means(monkeypatch, tmp_path):
     assert "docker command timed out" not in err
 
 
+def test_the_local_backstop_does_not_blame_a_container(monkeypatch, tmp_path):
+    """Same event, other route, and the wording must NOT be copied across: on
+    the local route there IS no container, so "the container is unresponsive"
+    would send the reader to look at something that was never started. Both
+    messages have to name the deadline that did not fire; only one of them may
+    name a container."""
+    _force_local_route(monkeypatch)
+    rc, _out, err = _drive(monkeypatch, tmp_path, _Rec(raise_timeout=True),
+                           timeout=10, flush_grace_s=5)
+    assert rc == 124
+    assert "local backstop" in err, err
+    assert "container" not in err, err
+
+
+# ── WHICH ROUTE ARE WE MEASURING? ───────────────────────────────────────────
+# `fault_atpg_run._run_docker` gained a LOCAL route: with no `docker` client on
+# PATH there is no route to any container, so it runs the engine on this
+# filesystem instead of returning 127 for every ATPG call (measured in-image:
+# `scan_chain.json` recorded `"exit": 127, "docker binary not found in PATH"`
+# and Step 11 disclosed-skipped). Inside the EDA image — where this suite runs —
+# that means the DEFAULT route is now local, and a test that asserts a docker
+# argv without saying so is measuring WHICH HOST IT IS ON, not the property it
+# names. Each test below now drives the route it means to measure.
+def _force_container_route(monkeypatch):
+    import shutil as _sh
+    _real = _sh.which
+    monkeypatch.setattr(F._CE.shutil, "which",
+                        lambda n, *a, **k: ("/usr/bin/docker" if n == "docker"
+                                            else _real(n, *a, **k)))
+
+
+def _force_local_route(monkeypatch):
+    import shutil as _sh
+    _real = _sh.which
+    monkeypatch.setattr(F._CE.shutil, "which",
+                        lambda n, *a, **k: (None if n == "docker"
+                                            else _real(n, *a, **k)))
+    monkeypatch.setattr(F, "_LOCAL_ATPG_ROUTE_ANNOUNCED", True, raising=False)
+
+
 def test_a_missing_docker_still_says_so(monkeypatch, tmp_path):
+    """A client that IS on PATH and then vanishes is still reported."""
+    _force_container_route(monkeypatch)
+
     def boom(*_a, **_k):
         raise FileNotFoundError()
     monkeypatch.setattr(F.subprocess, "run", boom)
     rc, _o, err = F._run_docker(tmp_path, ["x"], timeout=5)
     assert rc == 127 and "docker binary not found" in err
+
+
+def test_no_client_at_all_runs_locally_and_says_which_route(monkeypatch,
+                                                            tmp_path):
+    """The OTHER half of the same question. With no client there is nothing to
+    report as missing — there is a route to take — so the honest outcome is a
+    local run, and 127 then means the TOOL is absent, not the container."""
+    _force_local_route(monkeypatch)
+    rec = _Rec()
+    monkeypatch.setattr(F.subprocess, "run", rec)
+    F._run_docker(tmp_path, ["x"], timeout=5)
+    assert rec.argv[0] == "bash" and "docker" not in rec.argv, rec.argv
 
 
 # ── the ordinary paths are unchanged ────────────────────────────────────────
@@ -196,12 +252,32 @@ def test_an_expired_container_deadline_arrives_as_an_ordinary_rc(
 
 
 def test_the_pdk_mount_is_still_wired(monkeypatch, tmp_path):
+    """CONTAINER route: the PDK is reached by a bind mount."""
+    _force_container_route(monkeypatch)
     pdk = tmp_path / "pdk"
     pdk.mkdir()
     rec = _Rec()
     monkeypatch.setattr(F.subprocess, "run", rec)
     F._run_docker(tmp_path, ["x"], timeout=5, pdk_dir=pdk)
     assert f"{pdk}:/pdk" in rec.argv
+
+
+def test_the_pdk_is_reached_without_a_mount_on_the_local_route(monkeypatch,
+                                                               tmp_path):
+    """LOCAL route: there is no mount to wire, so the SAME files must be
+    reached by rewriting `/pdk` to where they actually are. Mounting and
+    rewriting are the two shapes of one requirement — the engine sees the
+    PDK — and this is the half the mount test cannot cover."""
+    _force_local_route(monkeypatch)
+    pdk = tmp_path / "foundry_kit"
+    pdk.mkdir()
+    rec = _Rec()
+    monkeypatch.setattr(F.subprocess, "run", rec)
+    F._run_docker(tmp_path, ["x", "--lib", "/pdk/cells.lib"], timeout=5,
+                  pdk_dir=pdk)
+    shell = rec.argv[-1]
+    assert f"{pdk}/cells.lib" in shell, shell
+    assert " /pdk/" not in shell, shell
 
 
 def test_an_image_without_timeout_degrades_loudly(monkeypatch, tmp_path):

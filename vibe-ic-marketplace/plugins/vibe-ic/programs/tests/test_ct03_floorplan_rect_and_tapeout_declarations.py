@@ -138,9 +138,21 @@ def test_the_floorplan_geometry_itself_is_UNTOUCHED():
     TWICE, the core as the die deletes the router's tracks outside it and spm
     did not converge in either arm (1 violation, then 3), where the same design
     with the die stated whole routes clean."""
+    # FP-09: `-core_area` takes COORDINATES and this builder was printing the
+    # core WIDTH as the upper right, insetting 381 um at left/bottom and 762 at
+    # right/top. The pinned string moved with the fix; the PROPERTY this test is
+    # about — CT-03 does not move `-die_area` — is asserted below and unchanged.
+    # The upper right is now `die - core_pad` (3162-381 = 2781), which is the
+    # identity that makes it checkable rather than merely a different number.
     assert r._floorplan_geometry_tcl(3162, 3162, 381, 2400, 2400) == (
         'initialize_floorplan -die_area "0 0 3162 3162" \\\n'
-        '                      -core_area "381 381 2400 2400"')
+        '                      -core_area "381 381 2781 2781"')
+    assert 2781 == 3162 - 381
+    # AND the inset is now SYMMETRIC — the defect was that it was not.
+    _line = r._floorplan_geometry_tcl(3162, 3162, 381, 2400, 2400).splitlines()[-1]
+    _llx, _lly, _urx, _ury = [int(v) for v in
+                              _line.split('"')[1].split()]
+    assert _llx == 3162 - _urx and _lly == 3162 - _ury, _line
     tcl = r._floorplan_geometry_tcl(3162, 3162, 381, 2400, 2400,
                                     [442, 442, 1494, 2089])
     assert '-die_area "442 442 1494 2089"' in tcl

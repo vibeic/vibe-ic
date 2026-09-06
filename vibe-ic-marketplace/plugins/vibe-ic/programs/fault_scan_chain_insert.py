@@ -687,31 +687,63 @@ def run_chain(project: Path, netlist_rel: str, clock: str,
             # wrong cause costs more than one that names none, so this states
             # the image identity as the FIRST fact and offers the version
             # explanation only as one of the possibilities.
-            err_report["image_used"] = _fatpg.DOCKER_IMAGE
+            err_report.update(_fatpg.atpg_engine_identity())
+            err_report["image_used"] = err_report.get("image")
+            # THE FIRST FACT IS ROUTE-DEPENDENT. This message's own reasoning
+            # is that "a diagnostic that names the wrong cause costs more than
+            # one that names none" — so on the LOCAL route it must not open by
+            # naming an image (none ran) and must not hand the operator a
+            # `docker run` command (there is no docker client). Cause (2) is
+            # about image RESOLUTION and cannot apply when no image was
+            # resolved, so it is dropped there rather than left to mislead.
+            if err_report.get("exec_route") == "local":
+                _ran_in = (
+                    f"No image ran: there is no docker client on PATH, so the "
+                    f"engine executed on this filesystem at "
+                    f"{err_report.get('engine_path')!r} — verify it with "
+                    f"`fault chain --help | grep skip-boundary`")
+                _causes = (
+                    f"ONE cause applies here: the `fault` on this filesystem is "
+                    f"a build that predates the flag (added to the fork after "
+                    f"0.2.52; MEASURED absent on 0.2.52, present on 0.2.54+). "
+                    f"The image-resolution cause cannot apply — no image was "
+                    f"resolved or started.")
+                _remedies = (
+                    f"Remedies: (a) run in an image whose `fault chain --help` "
+                    f"lists the flag (>=0.2.54); or (b) set "
+                    f"VIBEIC_DFT_SKIP_BOUNDARY=off to accept legacy "
+                    f"boundary-scan insertion")
+            else:
+                _ran_in = (
+                    f"The image this step ran in was {_fatpg.DOCKER_IMAGE!r} — "
+                    f"verify it with `docker run --rm --entrypoint bash "
+                    f"{_fatpg.DOCKER_IMAGE} -lc 'fault chain --help' | grep "
+                    f"skip-boundary`")
+                _causes = (
+                    f"TWO distinct causes produce this exact error: (1) the "
+                    f"image is a build that predates the flag (added to the "
+                    f"fork after 0.2.52; MEASURED absent on 0.2.52, present on "
+                    f"0.2.54+); or (2) THIS STEP RAN A DIFFERENT IMAGE THAN THE "
+                    f"RUN DECLARED — it resolves an image of its own by "
+                    f"local-tag presence and falls back to the upstream "
+                    f"distribution, which ships stock tools without this "
+                    f"project's forks, so a run pinned to a new-enough image "
+                    f"can still land here. Compare the value above against "
+                    f"reports/container_image.json:image_ref.")
+                _remedies = (
+                    f"Remedies: (a) make this step use the run's image — set "
+                    f"VIBEIC_fatpg.DOCKER_IMAGE to it (the one-shot runner now "
+                    f"exports this automatically from the verified container); "
+                    f"(b) run in an image whose `fault chain --help` lists the "
+                    f"flag (>=0.2.54); or (c) set VIBEIC_DFT_SKIP_BOUNDARY=off "
+                    f"to accept legacy boundary-scan insertion")
             err_report["error"] = (
-                f"`fault chain` rejected `--skip-boundary`. The image this step "
-                f"ran in was {_fatpg.DOCKER_IMAGE!r} — verify it with "
-                f"`docker run --rm --entrypoint bash {_fatpg.DOCKER_IMAGE} -lc "
-                f"'fault chain --help' | grep skip-boundary` before concluding "
-                f"anything about the binary's age. TWO distinct causes produce "
-                f"this exact error: (1) the image is a build that predates the "
-                f"flag (added to the fork after 0.2.52; MEASURED absent on "
-                f"0.2.52, present on 0.2.54+); or (2) THIS STEP RAN A DIFFERENT "
-                f"IMAGE THAN THE RUN DECLARED — it resolves an image of its own "
-                f"by local-tag presence and falls back to the upstream "
-                f"distribution, which ships stock tools without this project's "
-                f"forks, so a run pinned to a new-enough image can still land "
-                f"here. Compare the value above against "
-                f"reports/container_image.json:image_ref. The fixed-pinout "
-                f"wrapper's correct DFT is internal-scan-only, which needs "
-                f"`--skip-boundary`. Remedies: (a) make this step use the run's "
-                f"image — set VIBEIC_fatpg.DOCKER_IMAGE to it (the one-shot runner now "
-                f"exports this automatically from the verified container); "
-                f"(b) run in an image whose `fault chain --help` lists the flag "
-                f"(>=0.2.54); or (c) set VIBEIC_DFT_SKIP_BOUNDARY=off to accept "
-                f"legacy boundary-scan insertion — but on a fixed-pinout wrapper "
-                f"that re-introduces the SS-corner setup violation (#604) and a "
-                f"large area blow-up.")
+                f"`fault chain` rejected `--skip-boundary`. {_ran_in} before "
+                f"concluding anything about the binary's age. {_causes} The "
+                f"fixed-pinout wrapper's correct DFT is internal-scan-only, "
+                f"which needs `--skip-boundary`. {_remedies} — but on a "
+                f"fixed-pinout wrapper that re-introduces the SS-corner setup "
+                f"violation (#604) and a large area blow-up.")
             return 1, err_report
         _missing_hdr = chain_resynth_missing_header_ports(log)
         if _missing_hdr:
@@ -817,7 +849,10 @@ def run_chain(project: Path, netlist_rel: str, clock: str,
 
     report = {
         "tool": "fault chain",
-        "image": _fatpg.DOCKER_IMAGE,
+        # WHAT RAN, not what would have. On the local route there is no
+        # image and `DOCKER_IMAGE` is a registry-fallback name that was
+        # never used — see `_fatpg.atpg_engine_identity`.
+        **_fatpg.atpg_engine_identity(),
         "input_netlist": netlist_rel,
         "input_netlist_switch_note": switch_note,
         "output_netlist": SCAN_NETLIST_REL,

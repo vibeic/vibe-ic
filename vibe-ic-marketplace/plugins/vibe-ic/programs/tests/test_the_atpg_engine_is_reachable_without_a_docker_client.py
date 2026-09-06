@@ -1,0 +1,360 @@
+"""The ATPG engine must be reachable when there is no docker client either.
+
+WHY THIS FILE EXISTS.  `phase3_one_shot_runner` learned a LOCAL exec route, and
+the in-image run then reached PnR — but Step 11 still recorded, in its own
+`reports/phase2/dft/scan_chain.json`:
+
+    "exit": 127,
+    "log_tail": "\\ndocker binary not found in PATH",
+    "error": "`fault chain` produced no scan netlist"
+
+because `fault_atpg_run._run_docker` enters a container the OTHER way: `docker
+run` of a fresh sibling container rather than `docker exec` into a named one.
+MEASURED consequence: the in-image run routed the PRE-SCAN netlist while the
+same tree run host-side routed the SCAN netlist, so the two disagreed about
+which Phase-3 steps even opened (22 names vs 25).
+
+THE IMAGE IT STARTS IS THE IMAGE IT IS ALREADY IN.
+`docker image inspect ghcr.io/vibeic/vibeic-eda@sha256:06537f7e… --format
+'{{.Id}}'` is `sha256:891063f1473b9c0ae8b0b6dfc442511df059a78e75972928e454181d588dc9be`
+— exactly the digest a host-side run records as this tool's provenance. So the
+local route runs the SAME build; it is not a substitution.
+
+MUTATIONS THESE TESTS MUST KILL:
+  * Deleting the local branch of `_run_docker` fails
+    `test_the_local_route_is_taken_when_there_is_no_client`.
+  * Deleting the CONTAINER branch fails
+    `test_the_container_route_is_byte_identical_when_a_client_exists`.
+  * Dropping `_localise_mounted_paths` (running the /work-absolute command as
+    written) fails `test_the_mounted_paths_are_rewritten_to_this_filesystem`.
+  * Widening the mount-prefix match to a bare `str.replace` fails
+    `test_a_token_that_merely_contains_the_mount_name_is_untouched`.
+  * Dropping the deadline on the local route fails
+    `test_the_deadline_survives_on_both_routes`.
+  * Re-introducing a second copy of the route predicate in either program
+    fails `test_one_definition_of_the_route_question`.
+"""
+
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+PROGRAMS = Path(__file__).resolve().parents[1]
+if str(PROGRAMS) not in sys.path:
+    sys.path.insert(0, str(PROGRAMS))
+
+import _container_exec as CE          # noqa: E402
+import fault_atpg_run as F            # noqa: E402
+
+
+class _Recorder:
+    def __init__(self, rc=0, out="", err=""):
+        self.argv = None
+        self._r = (rc, out, err)
+
+    def __call__(self, argv, **kw):
+        self.argv = argv
+        rc, out, err = self._r
+        return subprocess.CompletedProcess(argv, rc, out, err)
+
+
+@pytest.fixture
+def route(monkeypatch):
+    """Drive the ONE predicate, both ways."""
+    def _set(docker_path):
+        real = CE.shutil.which
+        monkeypatch.setattr(
+            CE.shutil, "which",
+            lambda n, *a, **k: (docker_path if n == "docker"
+                                else real(n, *a, **k)))
+        monkeypatch.setattr(F, "_LOCAL_ATPG_ROUTE_ANNOUNCED", False,
+                            raising=False)
+    yield _set
+    F._LOCAL_ATPG_ROUTE_ANNOUNCED = False
+
+
+def test_the_predicate_answers_the_route_question():
+    real = CE.shutil.which
+    try:
+        CE.shutil.which = lambda n, *a, **k: None if n == "docker" else real(n)
+        assert CE.no_container_route() is True
+        CE.shutil.which = lambda n, *a, **k: "/usr/bin/docker" if n == "docker" else real(n)
+        assert CE.no_container_route() is False
+    finally:
+        CE.shutil.which = real
+
+
+def test_the_container_route_is_byte_identical_when_a_client_exists(
+        route, monkeypatch, tmp_path):
+    """THE HOST-SIDE CONTROL."""
+    route("/usr/bin/docker")
+    rec = _Recorder()
+    monkeypatch.setattr(F.subprocess, "run", rec)
+    F._run_docker(tmp_path, ["fault", "chain", "/work/net.v"], timeout=60)
+    argv = rec.argv
+    assert argv[:3] == ["docker", "run", "--rm"], argv
+    assert "-v" in argv and f"{tmp_path}:/work" in argv
+    assert F.DOCKER_IMAGE in argv
+    # the command still speaks the CONTAINER's paths, untouched
+    assert "/work/net.v" in argv[-1]
+    assert str(tmp_path) not in argv[-1]
+
+
+def test_the_local_route_is_taken_when_there_is_no_client(
+        route, monkeypatch, tmp_path):
+    route(None)
+    rec = _Recorder()
+    monkeypatch.setattr(F.subprocess, "run", rec)
+    F._run_docker(tmp_path, ["fault", "chain", "/work/net.v"], timeout=60)
+    argv = rec.argv
+    assert argv[0] == "bash", argv
+    assert "docker" not in argv
+    assert F.DOCKER_IMAGE not in argv
+
+
+def test_the_mounted_paths_are_rewritten_to_this_filesystem(
+        route, monkeypatch, tmp_path):
+    """A command written against /work must name the REAL files locally."""
+    route(None)
+    rec = _Recorder()
+    monkeypatch.setattr(F.subprocess, "run", rec)
+    # deliberately NOT named "pdk": a real rewrite must be visible without the
+    # destination happening to spell the mount point back again (the first
+    # version of this test asserted `"/pdk/" not in shell` and failed on a
+    # CORRECT rewrite into a directory called `pdk`).
+    pdk = tmp_path / "foundry_kit"
+    pdk.mkdir()
+    F._run_docker(tmp_path, ["fault", "chain", "-o", "/work/out/scan.v",
+                             "/work/net.v", "--lib", "/pdk/cells.lib"],
+                  timeout=60, pdk_dir=pdk)
+    shell = rec.argv[-1]
+    assert f"{tmp_path}/out/scan.v" in shell, shell
+    assert f"{tmp_path}/net.v" in shell, shell
+    assert f"{pdk}/cells.lib" in shell, shell
+    # no container-absolute argument survives (they all follow a space here)
+    assert " /work/" not in shell, shell
+    assert " /pdk/" not in shell, shell
+
+
+def test_a_token_that_merely_contains_the_mount_name_is_untouched():
+    """A bare `replace` would corrupt a design called `network`."""
+    out = F._localise_mounted_paths(
+        "echo network /opt/workspace /workflow /work/real",
+        Path("/p/proj"), None)
+    assert "network" in out
+    assert "/opt/workspace" in out
+    assert "/workflow" in out
+    assert "/p/proj/real" in out
+
+
+def test_pdk_is_only_rewritten_when_one_was_mounted():
+    out = F._localise_mounted_paths("--lib /pdk/x.lib", Path("/p/proj"), None)
+    assert out == "--lib /pdk/x.lib"
+
+
+def test_the_deadline_survives_on_both_routes(route, monkeypatch, tmp_path):
+    """The engine keeps a deadline it is the child of, on either route."""
+    seen = {}
+    for client, key in (("/usr/bin/docker", "container"), (None, "local")):
+        route(client)
+        rec = _Recorder()
+        monkeypatch.setattr(F.subprocess, "run", rec)
+        F._run_docker(tmp_path, ["fault", "chain"], timeout=60)
+        seen[key] = rec.argv[-1]
+    for key, shell in seen.items():
+        assert re.search(r"timeout -k \d+ \d+ bash -c", shell), (key, shell)
+
+
+def test_the_route_is_announced_once(route, monkeypatch, tmp_path, capsys):
+    route(None)
+    monkeypatch.setattr(F.subprocess, "run", _Recorder())
+    F._run_docker(tmp_path, ["fault", "chain"], timeout=60)
+    err = capsys.readouterr().err
+    assert "EXEC ROUTE = LOCAL" in err, err
+    F._run_docker(tmp_path, ["fault", "chain"], timeout=60)
+    assert "EXEC ROUTE = LOCAL" not in capsys.readouterr().err
+
+
+def test_the_container_route_announces_nothing(route, monkeypatch, tmp_path,
+                                               capsys):
+    route("/usr/bin/docker")
+    monkeypatch.setattr(F.subprocess, "run", _Recorder())
+    F._run_docker(tmp_path, ["fault", "chain"], timeout=60)
+    assert "EXEC ROUTE" not in capsys.readouterr().err
+
+
+def test_one_definition_of_the_route_question():
+    """Two programs enter a container two different ways; ONE predicate.
+
+    A second copy is how they would come to disagree about which route a run
+    took — which is exactly the state this pair of fixes was measured in."""
+    for name in ("phase3_one_shot_runner.py", "fault_atpg_run.py"):
+        src = (PROGRAMS / name).read_text()
+        assert 'which("docker")' not in src, (
+            f"{name} defines its own route predicate; the ONE definition is "
+            f"_container_exec.no_container_route")
+        assert "no_container_route()" in src, name
+    assert (PROGRAMS / "_container_exec.py").read_text().count(
+        'shutil.which("docker")') == 1
+
+
+class TestTheRecordSaysWhatActuallyRan:
+    """A fix that makes a step RUN must not make its record LIE.
+
+    `scan_chain.json` records the coverage number's provenance as
+    `image: DOCKER_IMAGE`. Two things are true on the local route and neither
+    was accounted for: no image is started at all, and `DOCKER_IMAGE` is
+    resolved by asking a registry that is UNREACHABLE from inside the image —
+    MEASURED, in the aborted first RUN C:
+
+        _eda_image: registry unreachable and no local ghcr.io/vibeic/vibeic-eda
+        image; falling back to hpretl/iic-osic-tools:latest, which does NOT
+        carry the forked tools.
+
+    So the naive fix would have stamped every in-image scan netlist with an
+    image that was never run and is the wrong image. I killed that run rather
+    than publish its record.
+
+    MUTATIONS THESE MUST KILL:
+      * `"image": _fatpg.DOCKER_IMAGE` restored at the consumer fails
+        `test_the_consumer_records_the_route_not_a_name`.
+      * `atpg_engine_identity` returning `DOCKER_IMAGE` on the local route
+        fails `test_the_local_route_records_no_image`.
+      * Dropping `image` from the local dict fails
+        `test_the_image_key_is_present_on_both_routes`.
+    """
+
+    def test_the_local_route_records_no_image(self, route):
+        route(None)
+        idy = F.atpg_engine_identity()
+        assert idy["exec_route"] == "local"
+        assert idy["image"] is None, idy
+        assert "engine_path" in idy
+        assert "no docker client" in idy["image_note"]
+
+    def test_the_container_route_records_the_image(self, route):
+        route("/usr/bin/docker")
+        idy = F.atpg_engine_identity()
+        assert idy["exec_route"] == "container"
+        assert idy["image"] == F.DOCKER_IMAGE
+
+    def test_the_image_key_is_present_on_both_routes(self, route):
+        """An existing consumer reading `image` must never KeyError."""
+        for client in ("/usr/bin/docker", None):
+            route(client)
+            assert "image" in F.atpg_engine_identity()
+
+    def test_the_consumer_records_the_route_not_a_name(self):
+        """The record writer must go through the identity, not the constant."""
+        src = (PROGRAMS / "fault_scan_chain_insert.py").read_text()
+        assert '"image": _fatpg.DOCKER_IMAGE' not in src
+        assert "_fatpg.atpg_engine_identity()" in src
+
+    def test_the_announcement_does_not_name_the_resolved_image(self):
+        """In-image `DOCKER_IMAGE` is a registry fallback; printing it puts a
+        wrong image in the transcript."""
+        # over the PARSED body, not the characters: the comment above the
+        # print explains why the constant is not named, and a text search
+        # cannot tell an explanation from a use (the same trap as
+        # `out.splitlines()[-25:]` surviving in prose elsewhere in this tree).
+        import ast
+        src = (PROGRAMS / "fault_atpg_run.py").read_text()
+        fn = [n for n in ast.walk(ast.parse(src))
+              if isinstance(n, ast.FunctionDef)
+              and n.name == "_announce_local_atpg_route"]
+        assert len(fn) == 1
+        body = ast.unparse(fn[0])
+        assert "DOCKER_IMAGE" not in body, body
+
+
+class TestTheRemediationHintMatchesTheRouteTaken:
+    """The `--skip-boundary` diagnostic must not name a route that was not used.
+
+    That message states its own principle: "a diagnostic that names the wrong
+    cause costs more than one that names none". On the LOCAL route its first
+    fact ("The image this step ran in was …") is false, its verification
+    command (`docker run …`) cannot be executed, and one of its two named
+    causes — the step resolving a different IMAGE — cannot apply because no
+    image was resolved. Left alone, my own CZD-19 fix would have turned this
+    careful message into exactly the thing it warns about.
+
+    MUTATION: deleting the `exec_route == "local"` branch fails
+    `test_the_local_message_offers_a_command_that_exists`.
+    """
+
+    def _build(self, route_value, engine_path="/foss/tools/bin/fault"):
+        """Reproduce the message the program builds, from its own source."""
+        import ast
+        src = (PROGRAMS / "fault_scan_chain_insert.py").read_text()
+        assert 'if err_report.get("exec_route") == "local":' in src
+        tree = ast.parse(src)
+        # the branch must exist in CODE, not only in prose
+        assert any(isinstance(n, ast.Compare)
+                   and any(isinstance(c, ast.Constant) and c.value == "local"
+                           for c in n.comparators)
+                   for n in ast.walk(tree)), "no route branch in the AST"
+        return src
+
+    def test_the_route_branch_exists_in_code(self):
+        self._build("local")
+
+    def test_the_local_message_offers_a_command_that_exists(self):
+        src = (PROGRAMS / "fault_scan_chain_insert.py").read_text()
+        local = src.split('if err_report.get("exec_route") == "local":')[1]
+        local = local.split("            else:")[0]
+        assert "No image ran" in local
+        assert "fault chain --help | grep skip-boundary" in local
+        # and it must NOT hand the operator a docker command
+        assert "docker run" not in local, local
+        assert "DOCKER_IMAGE" not in local, local
+
+    def test_the_container_message_is_unchanged_in_substance(self):
+        src = (PROGRAMS / "fault_scan_chain_insert.py").read_text()
+        container = src.split("            else:")[1].split(
+            'err_report["error"] = (')[0]
+        assert "The image this step ran in was" in container
+        assert "docker run --rm --entrypoint bash" in container
+        assert "TWO distinct causes" in container
+
+    def test_the_local_message_drops_the_cause_that_cannot_apply(self):
+        src = (PROGRAMS / "fault_scan_chain_insert.py").read_text()
+        local = src.split('if err_report.get("exec_route") == "local":')[1]
+        local = local.split("            else:")[0]
+        assert "ONE cause applies here" in local
+        assert "TWO distinct causes" not in local
+
+
+class TestTheTwoRoutesAgreeOnWHICHFilesExist:
+    """Edges where the two routes could quietly disagree about the inputs.
+
+    These are not hypotheticals: `_run_docker` decides what to MOUNT from
+    `pdk_dir is not None and pdk_dir.exists()`, and the local route has to make
+    the SAME decision or the tool sees a different set of files depending on
+    which route ran — which is precisely the class of divergence this whole
+    change set exists to remove.
+    """
+
+    def test_a_pdk_dir_that_does_not_exist_is_mounted_by_neither(
+            self, route, monkeypatch, tmp_path):
+        absent = tmp_path / "no_such_pdk"
+        for client, expect_mount in (("/usr/bin/docker", False), (None, False)):
+            route(client)
+            rec = _Recorder()
+            monkeypatch.setattr(F.subprocess, "run", rec)
+            F._run_docker(tmp_path, ["fault", "chain", "--lib", "/pdk/x.lib"],
+                          timeout=60, pdk_dir=absent)
+            argv = rec.argv
+            assert (f"{absent}:/pdk" in argv) is expect_mount, argv
+            # and neither route rewrites /pdk when nothing was mounted there,
+            # so both fail the same way on the same missing file
+            assert "/pdk/x.lib" in argv[-1], argv[-1]
+
+    def test_the_env_preamble_needs_no_translation(self):
+        """It exports only image-absolute paths, identical on both routes."""
+        assert "/work" not in F.ENV_PREAMBLE
+        assert "/pdk" not in F.ENV_PREAMBLE
+        out = F._localise_mounted_paths(F.ENV_PREAMBLE, Path("/p/proj"), None)
+        assert out == F.ENV_PREAMBLE

@@ -18876,6 +18876,109 @@ def parse_structural_measurement(stdout: str
             "no_verdict": _i(m.group(3))}
 
 
+#: How many lines of the `Overall:` verdict block `_final_audit_detail` will
+#: carry.  It is a CAP, not a window: when it bites, the elision says how many
+#: gating lines it dropped and where they are, so nobody can read the shown
+#: subset as "these are all of them".
+_FINAL_AUDIT_VERDICT_MAX_LINES = 60
+
+#: The tail this step has always carried.  Kept EXACTLY as it was so the
+#: verdict block is an ADDITION, never a replacement.
+_FINAL_AUDIT_TAIL_LINES = 25
+
+
+def _final_audit_verdict_block(lines):
+    """The `Overall:` line and the lines that qualify it, as a (start, block).
+
+    THE RULE. `flow_compliance_check` prints its verdict as one contiguous
+    paragraph: a line beginning `Overall:` followed by the lines that say WHY
+    — under `--strict-structural` those are "N structural gates FAILed" and
+    one indented line naming each gate that gates. The paragraph ends at the
+    first blank line; everything after it is explicitly labelled
+    "informational, not gating". So the block is delimited by the report's own
+    structure, which is why this is a rule and not another tail.
+
+    Returns (-1, []) when the report never says `Overall:` — that is a real
+    state (a crash, an empty transcript) and it must not be given a default.
+    """
+    start = -1
+    for i, ln in enumerate(lines):
+        if ln.startswith("Overall:"):
+            start = i          # LAST one wins: a nested sub-audit may print
+                               # its own, and the run's verdict is the final.
+    if start < 0:
+        return -1, []
+    block = [lines[start]]
+    for ln in lines[start + 1:]:
+        if not ln.strip():
+            break
+        block.append(ln)
+    return start, block
+
+
+def _final_audit_detail(out: str, transcript) -> str:
+    """What `step_final_audit` puts in its step record.
+
+    WHY THIS EXISTS. The detail used to be `out.splitlines()[-25:]` and
+    nothing else. MEASURED on subservient's own transcript
+    (`reports/audit/flow_compliance_check.log`, 394 lines, 2026-09-06): the
+    verdict `Overall: FAIL  (strict=True)` and the two lines naming the gates
+    that produced it — `l9_rtl_pin_consistency_check` and
+    `spec_required_artifact_check` — sit at lines 228-231. The 25-line window
+    starts at line 370. It contained twenty-four `GATE_RAN` lines and one
+    `STRUCTURAL MEASUREMENT` line, i.e. the per-gate LEDGER, which lists every
+    gate that ran and says nothing about which of them gated. That is why
+    every lane that read this step's record saw `final_audit FAIL` and learned
+    nothing: the reason was in the transcript the whole time and the record
+    carried the 141 lines that came after it.
+
+    A tail cannot fix that, because the distance from the verdict to the end
+    of the report is a property of the report, not a constant. So the verdict
+    block is selected by the report's OWN delimiters (see
+    `_final_audit_verdict_block`) and the historical tail is kept underneath
+    it unchanged.
+
+    BYTE-IDENTICAL WHEN THE OLD DETAIL ALREADY HELD THE VERDICT. If the block
+    starts inside the last `_FINAL_AUDIT_TAIL_LINES` lines — which is every
+    report short enough to fit in the window, including every report under 25
+    lines — the tail already says everything this would add, and the returned
+    string is exactly what it was before. Same when the report never says
+    `Overall:` at all. Chip-, PDK- and tool-AGNOSTIC: this reads one
+    program's own output format and names nothing else.
+    """
+    lines = out.splitlines()
+    tail_start = max(0, len(lines) - _FINAL_AUDIT_TAIL_LINES)
+    tail = "\n".join(lines[tail_start:])
+    start, block = _final_audit_verdict_block(lines)
+    if start < 0 or start >= tail_start:
+        return tail
+    dropped = 0
+    if len(block) > _FINAL_AUDIT_VERDICT_MAX_LINES:
+        dropped = len(block) - _FINAL_AUDIT_VERDICT_MAX_LINES
+        block = block[:_FINAL_AUDIT_VERDICT_MAX_LINES]
+    parts = list(block)
+    if dropped:
+        parts.append(f"  … {dropped} further gating line(s) NOT shown here — "
+                     f"all of them are in {transcript} …")
+    # WHERE THE BLOCK ACTUALLY ENDS, cap included: `block` may have been
+    # truncated, but `dropped` lines still belong to it in the transcript.
+    full_end = start + len(block) + dropped
+    # THE BLOCK CAN RUN INTO THE TAIL WINDOW. MEASURED on a 92-line report
+    # whose verdict paragraph starts at line 50 and the window at line 67: the
+    # first version of this function emitted the block, then a marker reading
+    # "0 line(s) elided", then the tail — which REPEATED 14 gating lines and
+    # invited the reader to treat two overlapping views as one continuous
+    # passage. Resuming at `full_end` when the two meet or overlap emits each
+    # line exactly once, and the marker is then printed only when there really
+    # is a gap, so "elided" never means zero.
+    rest_start = max(full_end, tail_start)
+    if rest_start > full_end:
+        parts.append(f"… {rest_start - full_end} line(s) of the transcript "
+                     f"elided here (full text: {transcript}) …")
+    parts.append("\n".join(lines[rest_start:]))
+    return "\n".join(parts)
+
+
 def step_final_audit(project: Path, phase: int = 3,
                      skip_analog: bool = False) -> StepResult:
     t0 = time.time()
@@ -18916,7 +19019,7 @@ def step_final_audit(project: Path, phase: int = 3,
     transcript = _pl.report_path(project, "flow_compliance_check.log")
     transcript.parent.mkdir(parents=True, exist_ok=True)
     transcript.write_text(out + "\n" + err)
-    head = "\n".join(out.splitlines()[-25:])
+    head = _final_audit_detail(out, transcript)
     # #525 — TIMEOUT is NOT a verdict. Name it explicitly (mirrors the
     # #477/#524 incomplete-vs-FAIL doctrine): the step still FAILs (an audit
     # that did not finish cannot pass) but the detail says the project was

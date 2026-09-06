@@ -68,6 +68,7 @@ import _reference_flow_boundary as _rfb
 import _source_record_merge as _srm  # per-source merge: silence cannot erase
 import floorplan_contract as _fpc  # design-declared fixed floorplan + DRV limits
 from _rtl_include_hub import drop_include_hubs as _drop_include_hubs  # shared aggregator filter
+import _container_exec as _cex  # the ONE 'is there a route to a container' predicate
 import _watchdog as _wd  # v1.3.47 — plugin-wide progress-stall supervision
 import _docker_watchdog as _dwd  # shared in-container CPU probe (tree-aware)
 import _runner_lock  # ORGANIC #588 — single-driver lock (all 4 runners)
@@ -317,7 +318,37 @@ def _container_mounts(container: str) -> List[Tuple[str, str]]:
                     out.append((src.rstrip("/"), dst.rstrip("/")))
     except Exception:
         pass
-    out.sort(key=lambda t: len(t[0]), reverse=True)
+    # THE TIE-BREAK IS A SEMANTIC CHOICE, NOT A SORT KEY — issue #2061 / R-02.
+    #
+    # Longest-source-first is right and is unchanged: a nested mount must win
+    # over the parent that contains it. But when two mounts have sources of
+    # EQUAL LENGTH the old `sort(key=len, reverse=True)` was stable, so the tie
+    # fell through to whatever order `docker inspect` happened to emit — and
+    # that order is NOT STABLE. Lane rbspm2 measured it over 50 calls per
+    # container: the host-unreadable `/foss/designs` won the tie 18 % of the
+    # time on one container and 10 % on another.
+    #
+    # WHAT IT COST. `_to_container_path` returns the FIRST covering mount, and
+    # consumers that must read the mapped file ON THE HOST — `dfm_screen_check`
+    # resolves via cuts from the LEFs the run's pnr tcl names — then read a path
+    # that exists only inside the container. MEASURED: two runs of ONE tree
+    # published OPPOSITE `dfm_screen.json` verdicts (3550 vias UNRESOLVED /
+    # redundancy UNMEASURED, versus resolved with `single_cut_fraction 1.0` and
+    # VIA_REDUNDANCY_LOW). A verdict that flips on a coin toss is worse than
+    # either answer, because nothing in the record says a toss happened.
+    #
+    # SO THE TIE IS DECIDED BY WHAT THE ANSWER IS FOR: prefer a destination that
+    # EXISTS ON THIS HOST, because that is the one a host-side reader can open.
+    # The third key makes the order TOTAL, so two equal-length sources whose
+    # destinations are both present (or both absent) still resolve identically
+    # on every call — no residual dependence on the daemon's ordering.
+    #
+    # Unchanged whenever sources differ in length, which is the ordinary case.
+    def _mount_rank(t: Tuple[str, str]) -> Tuple[int, int, str]:
+        src, dst = t
+        return (-len(src), 0 if os.path.exists(dst) else 1, dst)
+
+    out.sort(key=_mount_rank)
     _CONTAINER_MOUNTS_CACHE[container] = out
     return out
 
@@ -843,6 +874,11 @@ def _log_invocation(cmd: str, rc: int, duration_ms: int,
                             "NOT CAPTURED — no version flag answered, or no "
                             "container was supplied to the logger"),
         "command": cmd[:400],
+        # WHERE IT RAN. A ledger that names a container the run never entered
+        # is a false provenance record, and this file learned that the hard
+        # way when Phase 3 began running its tools locally (see
+        # `_local_exec_mode`). One field, two values, never absent.
+        "exec_route": "local" if _local_exec_mode() else "container",
         "exit_code": int(rc),
         "duration_ms": int(duration_ms),   # MEASURED, not a placeholder
         "duration_s": round(int(duration_ms) / 1000.0, 3),
@@ -997,6 +1033,124 @@ def _tool_status_not_the_log_sinks(cmd: str) -> str:
     return _PIPEFAIL_PREFIX + cmd
 
 
+#: Cached answer to "is there any route from this process to an EDA container?"
+#: `None` = not yet asked. Reset it to `None` to re-ask (tests do).
+_LOCAL_EXEC_MODE = None  # type: Optional[bool]
+
+
+def _local_exec_mode() -> bool:
+    """True when this process must run its EDA tools ON ITS OWN FILESYSTEM
+    because there is NO route from here to a container.
+
+    WHY THIS EXISTS. Every Phase-3 step reaches its tool through
+    `docker exec <$EDA_CONTAINER> bash -lc ...` — a container this runner
+    never starts and only ever enters. That is correct when the runner sits
+    on the host BESIDE the image, and it is unreachable when the runner is
+    ALREADY RUNNING INSIDE that image: there is no `docker` binary in there,
+    so the very first tool call returns
+    `127 COMMAND_NOT_FOUND: ... 'docker'` and every later step is BLOCKED on
+    an artefact the first one never wrote. MEASURED 2026-09-06, subservient
+    through the canonical front door (`vibe_ic_one_shot_runner.py`,
+    --pdk gf180mcuD) inside ghcr.io/vibeic/vibeic-eda 0.3.46: phase1 PASS,
+    phase2 PASS_WITH_WAIVERS, Phase 3 opened 15 steps and died at its first
+    act with `FAIL synth rc=127 COMMAND_NOT_FOUND: 'docker'`; `yosys`,
+    `openroad` and `klayout` were all on PATH in that same process
+    (/foss/tools/bin/yosys, /foss/tools/bin/openroad,
+    /foss/tools/klayout/klayout). The tools were under the process's own root
+    the whole time; only the ACCESS ROUTE was missing.
+
+    This is the third resolver in this file to learn the same lesson, and it
+    is deliberately the same shape as the two that came before it —
+    `_read_pdk_text` ("Host read first ... then the container") and, since
+    v1.17.79, `_registry_glob_one_local`. Those two taught the PDK to resolve
+    in-image; this one teaches the TOOLS to run there.
+
+    THE PREDICATE IS "NO ROUTE EXISTS", AND IT IS EXACTLY ONE QUESTION:
+    is there a `docker` client on PATH? With no client there is no route to
+    ANY container, whoever named it, so there is no second toolchain this
+    could be choosing between — the local one is the only one that exists.
+
+    IT IS DELIBERATELY NOT "AND NOBODY NAMED A CONTAINER". That was this
+    function's first predicate and it was WRONG, measured before it shipped:
+    `phase3_one_shot_runner`'s own `--container` argument DEFAULTS to
+    "vibeic-eda" and `main()` publishes it unconditionally
+    (`os.environ["EDA_CONTAINER"] = args.container`), so `$EDA_CONTAINER` is
+    ALWAYS set by the time any step runs and the env test could never fire
+    through the real front door. A default is not an operator's choice. What
+    the operator's naming buys is a NAME IN THE DIAGNOSTIC, not a route —
+    see `_annotate_local_exec`.
+
+    HOST-SIDE IS UNCHANGED BY CONSTRUCTION. Every host that runs this flow
+    beside a container has a docker client; there, this returns False and the
+    argv below is byte-identical to what it has always been.
+
+    DEGRADES LOUDLY, NEVER SILENTLY. The route is announced ONCE on stderr the
+    first time it is decided, so every transcript records which one this run
+    took; and a tool that is genuinely absent is not silently substituted —
+    `bash` reports `<tool>: command not found` and `_annotate_local_exec`
+    names the route. Tool/PDK/chip-AGNOSTIC: nothing here names either."""
+    global _LOCAL_EXEC_MODE
+    if _LOCAL_EXEC_MODE is None:
+        # ONE definition of the question, shared with the OTHER way this repo
+        # enters a container (`fault_atpg_run._run_docker`, a `docker run` of a
+        # sibling container). A second copy here is how the two would come to
+        # disagree about which route a run took.
+        _LOCAL_EXEC_MODE = _cex.no_container_route()
+        if _LOCAL_EXEC_MODE:
+            _named = os.environ.get("EDA_CONTAINER") or "<none named>"
+            print("[phase3] EXEC ROUTE = LOCAL: no docker client on PATH, so "
+                  "every tool command runs on THIS filesystem. The container "
+                  "named for this run (%s) was not entered and nothing was "
+                  "executed in it." % _named, file=sys.stderr)
+    return bool(_LOCAL_EXEC_MODE)
+
+
+def _exec_argv(container: str, wrapped: str) -> List[str]:
+    """The argv that runs `wrapped` in a LOGIN shell where the tools live.
+
+    ONE seam, used by both `_docker_exec_raw` and the supervised branch of
+    `_docker_exec`, so the two can never drift into disagreeing about where a
+    tool runs. Container route (the default) is unchanged, `-e
+    IIC_OSIC_TOOLS_QUIET=1` included.
+
+    In local mode the `-e` cannot be passed as a docker flag, and the knob has
+    to be in the ENVIRONMENT before the login shell sources
+    /etc/profile.d/iic-osic-tools-setup.sh (that is where the image's startup
+    banner is printed). `setdefault` reproduces exactly what `docker exec -e`
+    does for the child, and leaves an operator's own value alone."""
+    if _local_exec_mode():
+        os.environ.setdefault("IIC_OSIC_TOOLS_QUIET", "1")
+        return ["bash", "-lc", wrapped]
+    return ["docker", "exec",
+            # The vibeic-eda image's profile prints a startup banner
+            # ("[INFO] Final PATH variable: ...") to STDOUT on every LOGIN
+            # shell, ahead of the command output. `IIC_OSIC_TOOLS_QUIET` is
+            # the image's OWN documented knob for it
+            # (/etc/profile.d/iic-osic-tools-setup.sh guards both echoes on
+            # it), so suppressing at SOURCE keeps every probe's stdout
+            # clean instead of filtering the noise at each consumer.
+            "-e", "IIC_OSIC_TOOLS_QUIET=1",
+            container, "bash", "-lc", wrapped]
+
+
+def _annotate_local_exec(rc: int, err: str) -> str:
+    """Name the route when a LOCAL run reports 127.
+
+    Without this, `yosys: command not found` inside the image and
+    `No such file or directory: 'docker'` on a host without one are two
+    completely different diagnoses that a reader cannot tell apart from the
+    rc alone. Bounded: one line, appended, never replacing what the shell
+    said. A no-op outside local mode and for every rc but 127."""
+    if rc != 127 or not _local_exec_mode():
+        return err
+    note = ("LOCAL_EXEC: no docker client on PATH, so this ran on THIS "
+            "filesystem (container named for the run: %s, not entered); 127 "
+            "means the tool is not on PATH here either — it does NOT mean a "
+            "container was unreachable."
+            % (os.environ.get("EDA_CONTAINER") or "<none named>"))
+    return (err + ("\n" if err and not err.endswith("\n") else "") + note)
+
+
 def _docker_exec_raw(container: str, cmd: str, timeout: int = 1800
                      ) -> Tuple[int, str, str]:
     """Run shell cmd inside a Docker container with a SIMPLE container-side
@@ -1018,16 +1172,7 @@ def _docker_exec_raw(container: str, cmd: str, timeout: int = 1800
         f"exec timeout --kill-after=5 {_inner} bash -lc {shlex.quote(cmd)}; "
         f"else exec bash -lc {shlex.quote(cmd)}; fi"
     )
-    full = ["docker", "exec",
-            # The vibeic-eda image's profile prints a startup banner
-            # ("[INFO] Final PATH variable: ...") to STDOUT on every LOGIN
-            # shell, ahead of the command output. `IIC_OSIC_TOOLS_QUIET` is
-            # the image's OWN documented knob for it
-            # (/etc/profile.d/iic-osic-tools-setup.sh guards both echoes on
-            # it), so suppressing at SOURCE keeps every probe's stdout
-            # clean instead of filtering the noise at each consumer.
-            "-e", "IIC_OSIC_TOOLS_QUIET=1",
-            container, "bash", "-lc", _wrapped]
+    full = _exec_argv(container, _wrapped)
 
     # v0.2.36 — on TimeoutExpired, subprocess may hand back partial
     # `stdout`/`stderr` as BYTES even though `text=True` was requested
@@ -1043,7 +1188,8 @@ def _docker_exec_raw(container: str, cmd: str, timeout: int = 1800
     try:
         cp = subprocess.run(full, capture_output=True, text=True,
                             timeout=timeout)
-        return cp.returncode, _as_text(cp.stdout), _as_text(cp.stderr)
+        return (cp.returncode, _as_text(cp.stdout),
+                _annotate_local_exec(cp.returncode, _as_text(cp.stderr)))
     except subprocess.TimeoutExpired as e:
         return (124, _as_text(e.stdout),
                 f"TIMEOUT after {timeout}s: {e}")
@@ -1106,16 +1252,7 @@ def _docker_exec(container: str, cmd: str, timeout: int = 1800, *,
     _pidfile = _dwd.new_job_pidfile()
     _wrapped = _dwd.wrap_with_container_timeout(cmd, ceiling,
                                                 pidfile=_pidfile)
-    full = ["docker", "exec",
-            # The vibeic-eda image's profile prints a startup banner
-            # ("[INFO] Final PATH variable: ...") to STDOUT on every LOGIN
-            # shell, ahead of the command output. `IIC_OSIC_TOOLS_QUIET` is
-            # the image's OWN documented knob for it
-            # (/etc/profile.d/iic-osic-tools-setup.sh guards both echoes on
-            # it), so suppressing at SOURCE keeps every probe's stdout
-            # clean instead of filtering the noise at each consumer.
-            "-e", "IIC_OSIC_TOOLS_QUIET=1",
-            container, "bash", "-lc", _wrapped]
+    full = _exec_argv(container, _wrapped)
 
     def _cpu_probe(_proc):
         return _container_cpu_seconds(container, marker, pidfile=_pidfile)
@@ -1148,7 +1285,7 @@ def _docker_exec(container: str, cmd: str, timeout: int = 1800, *,
     _log_invocation(cmd, res.rc if res.rc is not None else -1,
                     int((time.monotonic() - _t0) * 1000), marker=marker,
                     container=container, outputs=outputs)
-    return res.rc, res.out, res.err
+    return res.rc, res.out, _annotate_local_exec(res.rc, res.err)
 
 
 def _docker_timeout_isolate(outputs: List[Path]) -> None:
@@ -17228,9 +17365,22 @@ def _floorplan_geometry_tcl(die_w: int, die_h: int, core_pad: int,
         llx, lly, urx, ury = (int(v) for v in fp_rect)
         return (f'initialize_floorplan -die_area "{llx} {lly} {urx} {ury}" \\\n'
                 f'                      -core_area "{llx} {lly} {urx} {ury}"')
+    # `-core_area` takes `llx lly urx ury` — COORDINATES. `core_w`/`core_h` are
+    # WIDTHS (`core_w = die_w - 2*core_pad`, six call sites), and printing a
+    # width where a coordinate is required insets the core by `core_pad` on the
+    # low sides and by `2*core_pad` on the high ones. MEASURED on spm (die 3162,
+    # core_pad 381, lane czspmfp2): `-core_area "381 381 2400 2400"` — 381 um of
+    # inset at left and bottom, 762 um at right and top. That is `core_pad` um
+    # of die thrown away on the top and right of EVERY no-slot design.
+    #
+    # The upper right is the origin PLUS the width, which is the same number as
+    # `die - core_pad` — and that identity is what makes it checkable rather
+    # than merely different. The slot arm above (`fp_rect is not None`) never
+    # reaches this expression and is untouched; with `core_pad == 0` this emits
+    # exactly what it always did.
     return (f'initialize_floorplan -die_area "0 0 {die_w} {die_h}" \\\n'
             f'                      -core_area "{core_pad} {core_pad} '
-            f'{core_w} {core_h}"')
+            f'{core_pad + core_w} {core_pad + core_h}"')
 
 
 def _rewrite_pnr_floorplan_die(tcl_text: str, die_w: int, die_h: int,
@@ -22531,6 +22681,30 @@ def _antenna_repair_tcl(pdk: "PdkConfig",
         "    if {[llength $out] != $n} { return {} }\n"
         "    return $out\n"
         "  }\n"
+        # WRITE THE REAL REPORT OR NONE — NEVER AN EMPTY FILE.
+        # `check_antennas -report_violating_nets -report_file F` CREATES F and
+        # writes ZERO BYTES when nothing violates, so a converged iteration
+        # leaves a file that exists and says nothing. MEASURED on spm (lane
+        # czspmfp2): `phase3/stage3/pnr/antenna_iter_0.rpt` and `_1.rpt` are
+        # both 0 bytes on a run whose antenna sequence converged [1, 0], and
+        # `eda_report_audit` discovers them, judges them and writes four ERROR
+        # findings about them. Since v1.17.103 a verdict over a report holding
+        # no bytes is NOT_MEASURED, so those two unreadable reports cost spm its
+        # `Checker.KLayoutAntenna` row outright.
+        #
+        # A 0-byte report is the ONE state a consumer cannot read as either
+        # "clean" or "absent" — the two answers it is entitled to. Absent is a
+        # legitimate, readable state; empty is not. So the empty file is removed
+        # and the iteration simply has no report, which is true.
+        #
+        # A report WITH CONTENT is never touched: the guard is `file size == 0`,
+        # so a run that has violations still writes and keeps its report — that
+        # is the control, and `_vic_ant_nets` above is what reads it.
+        "  proc _vic_ant_rm_empty {f} {\n"
+        "    if {[file exists $f] && [file size $f] == 0} {\n"
+        "      catch {file delete -- $f}\n"
+        "    }\n"
+        "  }\n"
         "  set _ant_cap 6\n"
         "  set _ant_margin 0\n"
         f"  set _ant_dir {out_dir_c}\n"
@@ -22547,9 +22721,11 @@ def _antenna_repair_tcl(pdk: "PdkConfig",
         "-report_file $_ant_rf]} _ac]} {\n"
         "      puts \"ANTENNA_LOOP_CHECK_NONFATAL: $_ac\"\n"
         "      set _ant_stop CHECK_FAILED\n"
+        "      _vic_ant_rm_empty $_ant_rf\n"
         "      break\n"
         "    }\n"
         "    set _ant_now [_vic_ant_nets $_ant_rf $_nv]\n"
+        "    _vic_ant_rm_empty $_ant_rf\n"
         "    if {$_nv > 0 && [llength $_ant_now] == 0} {\n"
         "      if {$_ant_membership} {\n"
         "        puts \"ANTENNA_LOOP_MEMBERSHIP_UNAVAILABLE: iter=$_i -- the "
@@ -22637,6 +22813,7 @@ def _antenna_repair_tcl(pdk: "PdkConfig",
         "      puts \"ANTENNA_POSTROUTE_CHECK_NONFATAL: $_ra_chk\"\n"
         "    } else {\n"
         "      set _ant_now [_vic_ant_nets $_ant_rf $_nv]\n"
+        "      _vic_ant_rm_empty $_ant_rf\n"
         "      lappend _ant_seq $_nv\n"
         "      lappend _ant_sets $_ant_now\n"
         "      puts \"ANTENNA_LOOP_ITER: iter=final nets=$_nv "
@@ -39209,13 +39386,27 @@ _DECLARED_SIGNOFF_GATES = (
     # all seven published layouts carry GUARD_RING_MK = 0 and not one matches
     # any slot, and no run ever said so.
     #
-    # IT TAKES NO ARGV, AND THAT IS THE POINT. `--pdk` already resolved itself
-    # from the design's own declaration (`resolve_pdk`); `--slot` now does the
-    # same (`resolve_slot`) instead of defaulting to "1x1" and handing a slot
-    # the design never bought to the one arm we cannot edit. This table cannot
-    # pass per-run values — `step_declared_signoff_gates` takes only `project`
-    # — so a gate that needed them would have had to be given a default, which
-    # is the defect, not the fix.
+    # ITS ARGV TAIL IS EMPTY HERE, AND `--pdk` IS FORWARDED AT THE CALL SITE.
+    # `--slot` still resolves itself (`resolve_slot`) rather than defaulting to
+    # "1x1" and handing a slot the design never bought to the one arm we cannot
+    # edit. `--pdk` cannot: this table is a module CONSTANT and the PDK is
+    # resolved per RUN, so the value is forwarded by
+    # `step_declared_signoff_gates` — see `_PDK_AWARE_SIGNOFF_GATES` below.
+    #
+    # THIS COMMENT USED TO SAY "IT TAKES NO ARGV, AND THAT IS THE POINT",
+    # on the grounds that `--pdk` "already resolved itself from the design's own
+    # declaration". MEASURED (lane czspmfp, spm x gf180mcuD, run invoked
+    # `--pdk gf180mcuD`): with nothing passed, `resolve_pdk` falls back to
+    # scraping the run's tool logs and yields the FAMILY, `gf180mcu`.
+    # `windows_for_pdk` then answers
+    #   gf180mcuD -> status=stated, 6 layers, metal1 min 0.30
+    #   gf180mcu  -> status=unknown-pdk, 0 layers
+    # (re-measured here on this tree). So `general_precheck` forwarded
+    # `gf180mcu` to `metal_layer_density_check`, all five metal layers came back
+    # UNCHECKED, and `Checker.KLayoutDensity` FAILED a die whose measured
+    # densities are 0.4175 .. 0.4594 — comfortably INSIDE the foundry's own
+    # 0.30 minimum. The gate did resolve a PDK; it resolved a LESS SPECIFIC one
+    # than the run was told to build, and "self-resolving" hid that.
     #
     # IT BREAKS THE "READS REPORTS ONLY" PROPERTY ABOVE, DELIBERATELY AND
     # NAMED. Five of these six read reports and cannot hit an ENV_UNAVAILABLE.
@@ -39422,10 +39613,41 @@ def _run_declared_signoff_gate(project: Path, name: str, program: str,
         name, t0, f"{reason} (rc={cp.returncode}): {detail}", outputs)
 
 
-def step_declared_signoff_gates(project: Path) -> List[StepResult]:
-    """Every flow-declared step-23/25 sign-off gate, one StepResult each."""
-    return [_run_declared_signoff_gate(project, *g) for g in
-            _DECLARED_SIGNOFF_GATES]
+#: Declared sign-off gates whose VERDICT can change when the run's PDK is named.
+#: A NAMED SET rather than "pass it to everything", for the same reason
+#: `general_precheck._PDK_AWARE_DELEGATES` is one: a gate that does not take
+#: `--pdk` would die on an unrecognised argument, and a gate that takes it but
+#: does not use it would gain a difference this table cannot account for.
+_PDK_AWARE_SIGNOFF_GATES = frozenset({"tapeout_precheck"})
+
+
+def step_declared_signoff_gates(project: Path,
+                                pdk_name: str = "") -> List[StepResult]:
+    """Every flow-declared step-23/25 sign-off gate, one StepResult each.
+
+    `pdk_name` is the run's OWN `PdkConfig.name` — the distribution the flow was
+    told to build (e.g. `gf180mcuD`), not a family. It is forwarded ONLY to the
+    gates in `_PDK_AWARE_SIGNOFF_GATES`, and only when it is non-empty, so every
+    other gate's argv is byte-identical to what it has always been and a caller
+    that does not supply it gets exactly the previous behaviour.
+
+    FORWARDED HERE RATHER THAN FROZEN INTO THE TABLE because the PDK is resolved
+    per RUN, not per step — the identical shape, and the identical reason, as
+    `general_precheck._step_delegate`, which records the same defect one level
+    down: "with no PDK named, `metal_layer_density_check` has no per-layer
+    windows, every metal layer comes back UNCHECKED and the step FAILs — on a
+    die whose densities were measured and are comfortably inside the foundry's
+    own rule."  NO SECOND RESOLVER: this passes the value the run already
+    resolved; `tapeout_precheck.resolve_pdk` still owns deciding what to do when
+    nobody says.
+    """
+    out: List[StepResult] = []
+    for name, program, out_rel, extra_argv in _DECLARED_SIGNOFF_GATES:
+        if pdk_name and name in _PDK_AWARE_SIGNOFF_GATES:
+            extra_argv = tuple(extra_argv) + ("--pdk", pdk_name)
+        out.append(_run_declared_signoff_gate(
+            project, name, program, out_rel, extra_argv))
+    return out
 
 
 #: Every step name this module plans as a DECLARED sign-off gate, in plan order.
@@ -52638,7 +52860,7 @@ def main() -> int:
     # what emits `phase3/stage3/sta/*.rpt` and `reports/phase3/em.rpt`, and
     # BEFORE the derived-artefact generators build the hand-off pack and
     # tape-out checklist on top of a sign-off nobody checked.
-    plan.extend(step_declared_signoff_gates(project))
+    plan.extend(step_declared_signoff_gates(project, pdk.name))
 
     # ORDERING (measured on `spm`, image 0.3.46, plugin v1.17.42): the
     # sign-off gates below WRITE three of the reports the sign-off metrics

@@ -178,10 +178,37 @@ def test_the_skip_boundary_error_names_the_image_that_actually_ran():
     a different one ran. A diagnostic naming the wrong cause is worse than one
     naming none — the reader checks their image, finds it new enough, and
     stops."""
-    i = _SCAN_SRC.index('err_report["image_used"]')
-    seg = _SCAN_SRC[i:i + 2400]
+    # RE-ANCHORED on the CONTAINER branch. The message is now route-branched:
+    # on the LOCAL route no image runs at all, so naming one would be the very
+    # defect this test exists to prevent, pointing the other way. A fixed-width
+    # slice from `image_used` no longer spans the right text, so the branch is
+    # located by its own delimiter instead of by character arithmetic.
+    seg = _container_arm(_SCAN_SRC)
     assert "_fatpg.DOCKER_IMAGE" in seg, "the error must name the image used"
     assert "reports/container_image.json" in seg, "and what to compare it to"
+
+
+def _container_arm(src: str) -> str:
+    """The `--skip-boundary` diagnostic's CONTAINER branch, by delimiter."""
+    assert 'if err_report.get("exec_route") == "local":' in src, (
+        "the diagnostic is no longer route-branched")
+    return src.split('if err_report.get("exec_route") == "local":')[1]               .split("            else:")[1]
+
+
+def _local_arm(src: str) -> str:
+    return src.split('if err_report.get("exec_route") == "local":')[1]               .split("            else:")[0]
+
+
+def test_the_local_route_names_no_image_and_no_docker_command():
+    """The mirror of the test above, and the reason it had to be re-anchored:
+    with no docker client no image is started, and `DOCKER_IMAGE` is whatever
+    the resolver fell back to when the registry was unreachable. Naming it, or
+    offering a `docker run` the reader cannot execute, is a diagnostic naming
+    the wrong cause — which this file exists to refuse."""
+    seg = _local_arm(_SCAN_SRC)
+    assert "No image ran" in seg
+    assert "DOCKER_IMAGE" not in seg, seg
+    assert "docker run" not in seg, seg
 
 
 def test_the_error_lists_BOTH_causes_not_just_the_age_one():
@@ -189,8 +216,7 @@ def test_the_error_lists_BOTH_causes_not_just_the_age_one():
     real cause; it just is not the only one that produces this error, and it
     was not the one that produced it on the measured run. The report must
     carry both so the reader checks the image identity before the version."""
-    i = _SCAN_SRC.index('err_report["image_used"]')
-    seg = _SCAN_SRC[i:i + 2400]
+    seg = _container_arm(_SCAN_SRC)
     assert "predates" in seg, "the age cause is still offered"
     assert "DIFFERENT " in seg.upper() or "different image" in seg.lower(), \
         "the wrong-image cause must be offered too"

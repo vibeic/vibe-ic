@@ -749,12 +749,22 @@ def test_one_informational_field_declared_still_emits(tmp_path):
     assert _run_emit(p, "--verify").returncode == 0
 
 
-def test_verify_fails_an_empty_declaration_the_presence_gate_passes(tmp_path):
-    """The substance check the presence gate cannot make.
+def test_verify_and_the_presence_gate_both_refuse_an_empty_declaration(tmp_path):
+    """The substance check, and the gate that now asks it.
 
-    `spec_required_artifact_check` is NOT modified to close this: it answers
-    "does the declared artifact exist and is it non-empty", and that is the
-    right question for it to answer.  `--verify` answers the different one.
+    THIS TEST WAS RENAMED AND ITS PRECONDITIONS INVERTED, deliberately, and the
+    change is a STRENGTHENING — it is written down here rather than left to be
+    found.  It used to be called
+    `test_verify_fails_an_empty_declaration_the_presence_gate_passes` and its
+    docstring said "`spec_required_artifact_check` is NOT modified to close
+    this: it answers 'does the declared artifact exist and is it non-empty',
+    and that is the right question for it to answer."  Under that reading `{}`
+    satisfied a spec clause saying the plugin MUST DECLARE these choices, and
+    `--verify` — the one program that could say otherwise — was invoked by
+    NOTHING, so the flow never asked.  The gate now asks the spec's OWN field
+    contract, so both programs refuse `{}` and the assertions below say so.
+    `--verify` is still the one that NAMES the fields, which is why every
+    field assertion here is unchanged.
     """
     # (i) a contract WITH required fields: `{}` fails as missing-required.
     p = _make_project(tmp_path, ZH_CONTRACT, "verifyempty")
@@ -762,7 +772,10 @@ def test_verify_fails_an_empty_declaration_the_presence_gate_passes(tmp_path):
     out.parent.mkdir(parents=True)
     out.write_text("{}")
 
-    assert _run_gate(p).returncode == 0, "precondition: 3 bytes passes presence"
+    # The presence gate REFUSES it too now, and names the same fields.
+    g = _run_gate(p)
+    assert g.returncode == 1, (g.stdout, g.stderr)
+    assert "bit_order" in g.stdout and "latency_cycles" in g.stdout
     r = _run_emit(p, "--verify")
     assert r.returncode == 1, (r.stdout, r.stderr)
     assert "bit_order" in r.stderr and "latency_cycles" in r.stderr
@@ -776,7 +789,11 @@ def test_verify_fails_an_empty_declaration_the_presence_gate_passes(tmp_path):
     qout = q / DECL_PATH
     qout.parent.mkdir(parents=True)
     qout.write_text("{}")
-    assert _run_gate(q).returncode == 0, "precondition: 3 bytes passes presence"
+    # No REQUIRED field to miss, so the contract route reports FAIL_VACUOUS and
+    # the gate carries that verdict through rather than flattening it.
+    g = _run_gate(q)
+    assert g.returncode == 1, (g.stdout, g.stderr)
+    assert "FAIL_VACUOUS" in g.stdout, g.stdout
     r = _run_emit(q, "--verify")
     assert r.returncode == 1, (r.stdout, r.stderr)
     assert "FAIL_VACUOUS" in r.stderr
@@ -797,9 +814,12 @@ def test_verify_fails_a_missing_required_field_and_passes_a_real_one(tmp_path):
     assert r.returncode == 0, (r.stdout, r.stderr)
     assert "PASS" in r.stdout
 
-    # A placeholder passes presence and byte count; it must not pass substance.
+    # A placeholder passes presence and byte count; it must not pass substance
+    # — and since the gate now ASKS substance, the gate refuses it as well.
     out.write_text(json.dumps({"bit_order": "TBD", "latency_cycles": 3}))
-    assert _run_gate(p).returncode == 0
+    g = _run_gate(p)
+    assert g.returncode == 1, (g.stdout, g.stderr)
+    assert "bit_order" in g.stdout, g.stdout
     assert _run_emit(p, "--verify").returncode == 1
 
 
@@ -1057,9 +1077,12 @@ def test_json_null_does_not_satisfy_a_required_field(tmp_path, planted, label):
     assert report["verdict"].startswith("FAIL")
     assert [e["field"] for e in report["placeholder_required"]]
 
-    # The presence gate still PASSES on the same bytes — the two checks are
-    # provably measuring different quantities.
-    assert _run_gate(p).returncode == 0
+    # The presence gate refuses the same bytes, for the same reason and by
+    # asking the same contract. (It used to PASS them, and this line used to
+    # assert that it did — see the note on
+    # `test_verify_and_the_presence_gate_both_refuse_an_empty_declaration`.)
+    g = _run_gate(p)
+    assert g.returncode == 1, (label, g.stdout, g.stderr)
 
 
 def test_null_is_refused_through_every_door(tmp_path):

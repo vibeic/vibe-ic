@@ -265,9 +265,25 @@ def test_runner_exposes_every_declared_signoff_gate():
 def test_runner_actually_calls_the_gates_in_its_plan():
     """Defining the step is not wiring it. The verdict must land in `plan`,
     which is what `_aggregate_verdict` reads."""
+    # Pinned on the CALL, not on its exact argument list: FP-20 added the run's
+    # own PDK (`step_declared_signoff_gates(project, pdk.name)`) because the
+    # gate resolved the FAMILY and every metal layer came back UNCHECKED. The
+    # property this test exists for is "the verdict lands in `plan`", which an
+    # added argument does not touch — so it is asserted over the parsed call,
+    # and the argument itself is pinned by
+    # test_the_signoff_gate_is_told_which_pdk_the_run_built.
+    import ast
     src = _RUNNER_SRC.read_text(errors="replace")
-    assert "plan.extend(step_declared_signoff_gates(project))" in src, (
-        "the sign-off gates are defined but never appended to `plan`")
+    calls = [n for n in ast.walk(ast.parse(src))
+             if isinstance(n, ast.Call)
+             and isinstance(n.func, ast.Attribute) and n.func.attr == "extend"
+             and n.args and isinstance(n.args[0], ast.Call)
+             and isinstance(n.args[0].func, ast.Name)
+             and n.args[0].func.id == "step_declared_signoff_gates"]
+    assert len(calls) == 1, (
+        "the sign-off gates are defined but never appended to `plan` "
+        "(or are appended more than once)")
+    assert ast.unparse(calls[0].func.value) == "plan", ast.unparse(calls[0])
 
 
 def test_blast_radius_is_stated_where_the_wiring_is():

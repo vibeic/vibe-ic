@@ -1137,6 +1137,48 @@ def stage_contract(project: Path) -> Tuple[Path, List[Dict[str, Any]]]:
     return out_path, contracts
 
 
+def select_contract(project: Path, artifact: Optional[str] = None,
+                    rejected: Optional[List[Dict[str, Any]]] = None
+                    ) -> Tuple[Optional[Dict[str, Any]], str, List[str]]:
+    """The ONE merged declaration contract this project declares.
+
+    Returns ``(contract, reason, artifact_paths)`` with reason in
+    ``OK`` / ``NO_CONTRACT`` / ``NO_SUCH_ARTIFACT`` / ``AMBIGUOUS``.
+
+    THIS SELECTION USED TO LIVE INLINE IN ``main()`` and nowhere else, which is
+    why the only way to ask "does the declaration on disk satisfy the spec?"
+    was to spawn this program. A CONSUMER can now ask the same question in
+    process — see ``spec_required_artifact_check``, the gate whose own
+    ``--verify`` help text has always said it "scores presence and byte count,
+    and `{}` is 3 bytes". Extracted rather than copied: a second copy of the
+    merge below would disagree with this one the first time a contract schema
+    changes.
+
+    The merge itself is unchanged: the same clause can appear in BOTH Phase-1
+    doc roots, and where two records name the same field the REQUIRED one
+    wins."""
+    rej = rejected if rejected is not None else []
+    contracts = extract_contracts(project, rej)
+    if not contracts:
+        return None, "NO_CONTRACT", []
+    if artifact:
+        contracts = [c for c in contracts if c["artifact_path"] == artifact]
+        if not contracts:
+            return None, "NO_SUCH_ARTIFACT", []
+    paths = sorted({c["artifact_path"] for c in contracts})
+    if len(paths) > 1:
+        return None, "AMBIGUOUS", paths
+    merged_fields: Dict[str, Dict[str, Any]] = {}
+    for c in contracts:
+        for f in c["fields"]:
+            prev = merged_fields.get(f["name"])
+            if prev is None or (f["required"] and not prev["required"]):
+                merged_fields[f["name"]] = f
+    return ({**contracts[0], "fields": list(merged_fields.values())},
+            "OK", paths)
+
+
+
 # --------------------------------------------------------------------------- #
 # --verify: the SUBSTANCE assertion the presence gate cannot make
 # --------------------------------------------------------------------------- #
@@ -1317,39 +1359,30 @@ def main(argv: Optional[List[str]] = None) -> int:
         _print_contract(contracts, out_path, rejected_contracts)
         return 0
 
-    contracts = extract_contracts(project, rejected_contracts)
+    # The selection below is `select_contract`, extracted so the CONSUMER of
+    # the declaration can make the identical one in process (see that
+    # function). Same order, same messages, same exit codes.
+    contract, _why, _paths = select_contract(project, args.artifact,
+                                             rejected_contracts)
     for r in rejected_contracts:
         print("spec_declaration_emit: REJECTED CLAUSE %s (from %s) — %s"
               % (r["artifact_path"], r["source"], r["reason"]), file=sys.stderr)
 
-    if not contracts:
+    if _why == "NO_CONTRACT":
         print("spec_declaration_emit: NO_CONTRACT — this project's Phase-1 "
               "docs declare no field table under any MUST-declare clause; "
               "nothing was written.", file=sys.stderr)
         return 3
-
-    if args.artifact:
-        contracts = [c for c in contracts if c["artifact_path"] == args.artifact]
-        if not contracts:
-            print("ERROR: no declaration contract for artifact %r"
-                  % args.artifact, file=sys.stderr)
-            return 2
-    paths = sorted({c["artifact_path"] for c in contracts})
-    if len(paths) > 1:
+    if _why == "NO_SUCH_ARTIFACT":
+        print("ERROR: no declaration contract for artifact %r"
+              % args.artifact, file=sys.stderr)
+        return 2
+    if _why == "AMBIGUOUS":
         print("ERROR: spec declares %d declaration artifacts (%s) — select one "
-              "with --artifact." % (len(paths), ", ".join(paths)),
+              "with --artifact." % (len(_paths), ", ".join(_paths)),
               file=sys.stderr)
         return 2
-
-    # Merge every contract that targets the same artifact (the same clause can
-    # appear in both the canonical and the legacy doc root).
-    merged_fields: Dict[str, Dict[str, Any]] = {}
-    for c in contracts:
-        for f in c["fields"]:
-            prev = merged_fields.get(f["name"])
-            if prev is None or (f["required"] and not prev["required"]):
-                merged_fields[f["name"]] = f
-    contract = {**contracts[0], "fields": list(merged_fields.values())}
+    assert contract is not None
 
     out_path = _contained_artifact_path(project, contract["artifact_path"])
     if out_path is None:

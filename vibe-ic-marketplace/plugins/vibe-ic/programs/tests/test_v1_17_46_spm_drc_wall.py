@@ -147,7 +147,9 @@ def test_declared_signoff_gates_run_before_the_metrics_record():
     not exist yet -- 7 of 18 keys NOT_MEASURED, its own `--check` green because
     both sides were empty, and rc=1 FAIL in the SAME run's gate ledger."""
     src = (PROGS / "phase3_one_shot_runner.py").read_text()
-    gates = src.index("plan.extend(step_declared_signoff_gates(project))")
+    # `step_declared_signoff_gates(project, pdk.name)` since FP-20 — this test
+    # is about ORDER, so it locates the call by name and not by its arguments.
+    gates = src.index("plan.extend(step_declared_signoff_gates(")
     record = src.index("plan.append(step_signoff_metrics_aggregate(project))")
     assert gates < record, (
         "the gates that write post_route_signoff_corner.json, "
