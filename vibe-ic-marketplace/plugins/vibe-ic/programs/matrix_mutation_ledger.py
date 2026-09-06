@@ -345,6 +345,30 @@ def _published_run_git_subjects(
     evidence about either publication or mutation.
     """
     corpus = benchmark_data_root().resolve()
+    # THE REFUSAL BELOW COULD NOT FIRE FOR THE COMMONEST CAUSE IT NAMES. This
+    # function's own docstring undertakes to report "a missing/non-Git corpus"
+    # as an instrument error, and the check that does it reads `owner.returncode`
+    # — which requires the child to have started. When the corpus DIRECTORY does
+    # not exist, `cwd=` fails in the fork and the caller gets the operating
+    # system's bare `FileNotFoundError: [Errno 2] ... '<repo>/benchmark-data'`
+    # instead, naming a path with no statement of what it was for.
+    #
+    # MEASURED on a pristine v1.18.29 clone in the pinned image, 8HD-8,
+    # 2026-09-07: that errno-2 is the whole of
+    # `test_the_replay_never_mutates_the_published_run`'s red. `benchmark-data`
+    # left this repository at `c5d7f2d00` ON PURPOSE, so the absent directory is
+    # this repo obeying its own rule, and rendering it as an unexplained OS error
+    # is the "could not look" reported as a defect that this campaign removes.
+    #
+    # Absence is answered HERE, before the child, in the same sentence and the
+    # same exception class as the not-a-worktree case it was always meant to
+    # share an outcome with. Nothing is made green: the caller still raises.
+    if not corpus.is_dir():
+        raise RuntimeError(
+            f"benchmark corpus is not present at {corpus}: the published runs "
+            f"live in vibeic/benchmark-data and are not in this checkout. This "
+            f"is 'I could not look', not a finding about any published run — "
+            f"point {BENCHMARK_DATA_ENV} at a clone to measure them.")
     owner = subprocess.run(
         ["git", "rev-parse", "--show-toplevel"], cwd=str(corpus),
         capture_output=True, text=True)
