@@ -22704,6 +22704,57 @@ def gen_l1_datasheet(project: Path,
 
     # ORGANIC-20260606 #455 — final pin pass: ALL-CAPS-prose deny +
     # banked-range backticked-interface merge (analog-datasheet shape).
+    # ORGANIC #2060 HUNK A — the docs door reads a port list written as a
+    # VERILOG CODE BLOCK or a SIGNAL TABLE.
+    #
+    # `phase1_port_extract.extract_code_block_ports` (v1.17.102, lane czport)
+    # is the shared grammar for both: a direction, an optional width and an
+    # RTL-shaped identifier standing where Verilog declares a port, or a table
+    # row under a header carrying both a name and a DIRECTION column. A prose
+    # sentence yields nothing and a waveform table — which has no direction
+    # column — yields nothing. It lands with EVIDENCE: every entry carries the
+    # source line it was read from, so a published port can be checked against
+    # the document that stated it.
+    #
+    # It had no production caller on the branch that authored it. This is that
+    # caller for the docs door, placed BEFORE the #455 sanitise/merge pass so a
+    # code-block port is de-duplicated against the same doc's prose pins by the
+    # same rule as every other source, and AFTER the existing harvests so a pin
+    # already found keeps its original provenance.
+    #
+    # IT IS ONLY SAFE BESIDE HUNK B. Every entry carries
+    # `CODE_REGION_PORT_STRATEGY` / `SIGNAL_TABLE_PORT_STRATEGY`, and neither
+    # is in `_PORT_TABLE_STRATEGIES` — the name allow-list this branch already
+    # replaced with `_v2060_record_declares_a_port_table`, which corroborates
+    # both by SHAPE. Without that, `_pin_has_port_like_evidence` refuses them
+    # and the L1.pin_table -> L9.top_ports promoter drops every one of them
+    # with no diagnostic.
+    #
+    # chip-AGNOSTIC: a Verilog port-declaration grammar and a table-header
+    # role; no chip, PDK or vendor literal.
+    _v2060_seen_pins = {str(p.get("name") or "").strip().lower()
+                        for p in pins if isinstance(p, dict)}
+    for _fname, _text in (extracted or {}).items():
+        if not isinstance(_text, str) or not _text:
+            continue
+        try:
+            _cb = _ppx.extract_code_block_ports(_text)
+        except Exception:
+            continue
+        for _entry in _cb or []:
+            if not isinstance(_entry, dict):
+                continue
+            _nm = str(_entry.get("name") or "").strip()
+            if not _nm or _nm.lower() in _v2060_seen_pins:
+                continue
+            _v2060_seen_pins.add(_nm.lower())
+            _pin = dict(_entry)
+            _pin.setdefault("evidence", f"input/docs/{_fname}")
+            # The record SAYS it carries a port table — the #2060 contract, so
+            # this never depends on its strategy name being on a list.
+            _pin["from_port_table"] = True
+            pins.append(_pin)
+
     pins = _v455_sanitize_and_merge_pins(pins, extracted, ic_name)
 
     content = {

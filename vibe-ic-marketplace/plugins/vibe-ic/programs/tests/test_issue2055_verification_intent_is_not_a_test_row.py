@@ -817,42 +817,6 @@ def test_the_shape_rule_does_not_admit_a_non_port_strategy(strategy):
     """NO-LEAK.  It is a SHAPE, not "anything with an underscore"."""
     assert P._v2060_record_declares_a_port_table(
         {"name": "sig9", "extraction_strategy": strategy}) is False
-
-
-def test_hunk_A_is_recorded_as_NOT_APPLICABLE_on_this_base():
-    """"Could not apply it" is not "applied it" — and it is not "not needed".
-
-    This arm exists so the claim is checked rather than believed: HUNK A calls
-    into `phase1_port_extract` symbols that do not exist on any tree this branch
-    is built from.  The day they do, this arm fails and whoever lands them is
-    told to apply HUNK A rather than inheriting a stale note.
-    """
-    import phase1_port_extract as _ppx  # noqa: WPS433
-    absent = [n for n in ("extract_code_block_ports",
-                          "CODE_REGION_PORT_STRATEGY",
-                          "SIGNAL_TABLE_PORT_STRATEGY")
-              if not hasattr(_ppx, n)]
-    assert absent == ["extract_code_block_ports",
-                      "CODE_REGION_PORT_STRATEGY",
-                      "SIGNAL_TABLE_PORT_STRATEGY"], (
-        "phase1_port_extract now carries the czport #2060 extractor "
-        f"(present: {sorted(set(('extract_code_block_ports', 'CODE_REGION_PORT_STRATEGY', 'SIGNAL_TABLE_PORT_STRATEGY')) - set(absent))}) "
-        "— HUNK A (the docs door's call site) is applicable and must be applied; "
-        "HUNK B is already in place, so the ports will not be dropped in the "
-        "meantime.")
-
-
-# ---------------------------------------------------------------------------
-# 8. the oracle vocabulary does not read as an HDL declaration
-#
-# `hdl_declaration_scan_strips_comments_check` reads a regex SOURCE and asks
-# whether it names an HDL declaration keyword (`module|input|output|inout`).  A
-# pattern that does, scanned over a string no comment-stripper touched, is a
-# real defect class: `// This module controls the counter` mints a module named
-# `controls`.  `_V2055_ORACLE_ARTEFACT_RE` reads a MARKDOWN BULLET and never
-# parses HDL, so the finding was a false positive — and the honest way out is
-# not an exemption, it is not to write the token.
-# ---------------------------------------------------------------------------
 def _decl_gate():
     import hdl_declaration_scan_strips_comments_check as G  # noqa: WPS433
     return G
@@ -926,3 +890,211 @@ def test_the_declaration_scan_does_not_name_this_lanes_regex():
         "the finding was recorded as accepted debt instead of removed")
     assert not [k for k in G._NOT_HDL_DECLARATION if "_V2055" in k], (
         "the finding was exempted as non-HDL instead of removed")
+
+
+# ---------------------------------------------------------------------------
+# 9. HUNK A — the docs door reads a code-block / signal-table port list
+#
+# `phase1_port_extract.extract_code_block_ports` landed with czport (v1.18.1)
+# carrying NO production call site — only tests.  This is that caller for the
+# docs door, and it is the half that is unsafe without HUNK B: every entry
+# carries `CODE_REGION_PORT_STRATEGY` / `SIGNAL_TABLE_PORT_STRATEGY`, neither of
+# which is in `_PORT_TABLE_STRATEGIES`, so `_pin_has_port_like_evidence` would
+# refuse them and the L1.pin_table -> L9.top_ports promoter would drop them.
+#
+# MEASURED, base `dc12d3465` (v1.18.1, extractor present but not wired) vs this
+# branch, over 60 staged prompt-entry design inputs:
+#     ports 203 -> 273 (+70), zero-port 36 -> 28, LOST 0 by membership.
+# ---------------------------------------------------------------------------
+def _pins_of(text):
+    root = Path(tempfile.mkdtemp(prefix="i2060_a_"))
+    (root / "phase1" / "generated_docs").mkdir(parents=True)
+    (root / "input" / "docs").mkdir(parents=True)
+    (root / "input" / "docs" / "SPEC.md").write_text(text)
+    P.gen_l1_datasheet(root, {"SPEC.md": text})
+    l1 = json.loads((root / "phase1" / "generated_docs" / "L1_DATASHEET.json")
+                    .read_text(errors="replace"))
+    f = l1.get("fields", l1)
+    return sorted({str(p.get("name") or "").strip()
+                   for p in (f.get("pin_table") or [])
+                   if isinstance(p, dict) and str(p.get("name") or "").strip()})
+
+
+_CODE_BLOCK = (
+    "# binary to BCD\n\nThe module converts a binary value.\n\n"
+    "```verilog\nmodule binary_to_BCD (\n"
+    "  input  logic [7:0] binary_in,   // 8-bit binary input\n"
+    "  input  logic       clk,\n"
+    "  output logic [3:0] bcd_ones,\n"
+    "  output logic       done\n"
+    ");\nendmodule\n```\n")
+
+
+def test_a_port_declared_only_in_a_code_block_reaches_the_pin_table():
+    """THE WITNESS czport named: `input logic [7:0] binary_in,  // ...`.
+
+    Measured on the base tree the other harvesters already find the rest of
+    that header; `binary_in` — the one carrying a trailing comment after the
+    comma — is the port HUNK A adds.
+    """
+    pins = _pins_of(_CODE_BLOCK)
+    assert "binary_in" in pins, (
+        f"the port declared in the ```verilog fence never reached the pin "
+        f"table: {pins}")
+    for other in ("clk", "bcd_ones", "done"):
+        assert other in pins, (other, pins)
+
+
+def test_a_signal_table_with_a_direction_column_reaches_the_pin_table():
+    pins = _pins_of(
+        "# spec\n\n| Signal | Direction | Width | Description |\n|---|---|---|---|\n"
+        "| data_in | input | 8 | payload |\n| result | output | 8 | out |\n")
+    assert {"data_in", "result"} <= set(pins), pins
+
+
+@pytest.mark.parametrize("text,why", [
+    ("# lint review\n\nPlease review this module for area. It should be\n"
+     "optimised; see the report.\nendmodule is mentioned in prose.\n",
+     "a prose sentence saying 'module' is not a port list"),
+    ("# timing\n\n| Clock Cycle | clk | rst_n | data_in |\n|---|---|---|---|\n"
+     "| 0 | 0 | 1 | 8'h00 |\n",
+     "a waveform table has no DIRECTION column"),
+])
+def test_hunk_A_invents_no_port(text, why):
+    """NO-LEAK.  The grammar refuses what it should refuse — and this is the
+    arm that matters, because the whole change is ADDITIVE: it can only add
+    ports, so what it adds must be real."""
+    assert _pins_of(text) == [], why
+
+
+def test_the_code_block_ports_are_corroborated_by_HUNK_B():
+    """A and B are one change.  Without B these ports are dropped in silence.
+
+    Asserted through the corroboration predicate itself over the real
+    extractor's real output, not over a hand-written strategy string.
+    """
+    import phase1_port_extract as _ppx  # noqa: WPS433
+    entries = _ppx.extract_code_block_ports(_CODE_BLOCK)
+    assert entries, "the extractor returned nothing — the fixture is invalid"
+    for entry in entries:
+        strategy = entry.get("extraction_strategy")
+        assert strategy, entry
+        # the record as HUNK A stores it
+        assert P._v2060_record_declares_a_port_table(
+            {**entry, "from_port_table": True}) is True
+        # and by SHAPE alone, without the flag — so a future extractor that
+        # forgets the flag is still corroborated
+        assert P._v2060_record_declares_a_port_table(
+            {"name": entry.get("name"), "extraction_strategy": strategy}
+        ) is True, strategy
+
+
+# ---------------------------------------------------------------------------
+# 10. a width cell that DENIES its range does not publish it
+#
+# `phase1_port_extract::_signal_table_rows` arrived as a polarity offender with
+# czport's v1.18.1 (the table width cell).  MEASURED on origin/main 45e2b9974
+# BEFORE the consult existed:
+#
+#     'not [7:0]'            -> width 8
+#     'no longer [7:0]'      -> width 8
+#     'removed, was [7:0]'   -> width 8
+#     'superseded by [15:0]' -> width 16
+#     'obsolete: [3:0]'      -> width 4
+#
+# `_EMBEDDED_RANGE` searches ANYWHERE in the cell, so a row that RETIRES a range
+# republished it as a declaration — #711's `die_area_budget_um` one field over.
+# `not stated` / `no width` / `N/A` already came back WIDTH_UNKNOWN, but only
+# because they carry no digits: nothing asked.
+# ---------------------------------------------------------------------------
+def _ppx_mod():
+    import phase1_port_extract as _ppx  # noqa: WPS433
+    return _ppx
+
+
+@pytest.mark.parametrize("cell", [
+    "not [7:0]", "no longer [7:0]", "removed, was [7:0]",
+    "superseded by [15:0]", "obsolete: [3:0]",
+])
+def test_a_denied_range_is_not_published_as_a_width(cell):
+    """THE DEFECT.  A denied width is not a width — it is WIDTH_UNKNOWN."""
+    _ppx = _ppx_mod()
+    assert _ppx._stated_width(cell) == _ppx.WIDTH_UNKNOWN, (
+        f"the cell {cell!r} denies the range it contains and the reader "
+        f"published {_ppx._stated_width(cell)} anyway")
+
+
+@pytest.mark.parametrize("cell", ["not stated", "no width", "N/A", "n/a",
+                                  "none", "unspecified"])
+def test_a_cell_that_states_no_width_publishes_no_width(cell):
+    """The control the ruling named.  True on both trees — and now for a
+    REASON: it is asked, rather than falling out of the cell having no digit."""
+    _ppx = _ppx_mod()
+    assert _ppx._stated_width(cell) == _ppx.WIDTH_UNKNOWN
+
+
+@pytest.mark.parametrize("cell,width", [
+    ("8", 8), ("8 bits", 8), ("8-bit", 8), ("[7:0]", 8), ("[31:0]", 32),
+    ("[0:0]", 1), ("1", 1), ("32", 32), ("16 bits wide", 16), ("64 bit", 64),
+    ("2", 2),
+])
+def test_a_real_width_cell_is_unchanged(cell, width):
+    """NO-LEAK.  29 of 34 cells in the lane's corpus did not move; these are
+    the ones that state a width and must keep stating it."""
+    assert _ppx_mod()._stated_width(cell) == width
+
+
+def test_an_empty_cell_is_still_a_declared_one_bit_scalar():
+    """The third answer must survive.  NO cell is a declaration of a 1-bit
+    scalar; it is not a denial of anything, so the consult must not touch it."""
+    _ppx = _ppx_mod()
+    assert _ppx._stated_width("") == 1
+    assert _ppx._stated_width("   ") == 1
+
+
+@pytest.mark.parametrize("cell,width", [
+    ("8 bits (not used)", 8),
+    ("[7:0] (reserved)", 8),
+    ("8 bits (not stated elsewhere)", 8),
+])
+def test_a_bracketed_qualifier_does_not_deny_the_width(cell, width):
+    """#711's bracket rule reaches here through the shared helper.
+
+    A qualifier in brackets carries a caveat, not the statement's polarity, so
+    a cell that states a width and parenthesises a "not" still states it.  The
+    cells are chosen so the width PARSES in the first place: `8 (not used)` is
+    WIDTH_UNKNOWN on both trees because no rule reads a bare number followed by
+    prose, which would make it a vacuous arm about nothing.
+    """
+    assert _ppx_mod()._stated_width(cell) == width
+
+
+def test_the_row_walker_records_the_denial_word_it_found():
+    """A refusal that names its evidence is checkable; a bare flag is not."""
+    _ppx = _ppx_mod()
+    rows = _ppx._signal_table_rows(
+        "| Signal | Direction | Width |\n|---|---|---|\n"
+        "| a | input | not [7:0] |\n| b | input | [3:0] |\n")
+    assert rows["a"]["width_cell_denial"], rows["a"]
+    assert rows["b"]["width_cell_denial"] is None, rows["b"]
+
+
+def test_the_polarity_ratchet_passes_on_this_tree():
+    """`--ratchet` rc=0: offenders are EXACTLY the register, by membership.
+
+    And the register shrank the way the gate demands — the entry this lane
+    fixed was deleted in the commit that fixed it, not left to rot.
+    """
+    import subprocess
+    import prose_polarity_consulted_check as G  # noqa: WPS433
+    plugin = _PROGRAMS.parent
+    proc = subprocess.run(
+        [sys.executable, str(_PROGRAMS / "prose_polarity_consulted_check.py"),
+         "--root", str(plugin), "--ratchet"],
+        capture_output=True, text=True, timeout=1800)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "phase1_port_extract::_signal_table_rows" not in G._OFFENDER_REGISTER, (
+        "the new offender was put in the register instead of being fixed")
+    assert ("phase1_doc_one_shot_runner::_harvest_test_cases_from_input_tables"
+            not in G._OFFENDER_REGISTER), (
+        "the entry this lane fixed outlived its offender")
