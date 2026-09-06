@@ -33,6 +33,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import time
 from pathlib import Path
@@ -627,6 +628,23 @@ def _write_drc_report(bdir: Path, block: str, violations: int,
         f"result: {verdict}",
         "",
     ]
+    # WHICH ENGINE GRADED WHICH RULE. The count above is now two engines'
+    # and a reader must be able to take it apart: the sign-off deck's own
+    # number, and the rules it does not grade at all, graded by the engine
+    # that does. Rule IDS only, never geometry — the same NDA hygiene as the
+    # rest of this report.
+    se = meta.get("second_engine")
+    if isinstance(se, dict):
+        lines[-1:] = [
+            f"# second engine: {se.get('engine', '?')} — adjudicates ONLY "
+            f"rules the sign-off deck does not grade, and only violations "
+            f"attributed to this flow's own paint",
+            f"second_engine_result: {se.get('result', 'MEASURED')}",
+            f"second_engine_violations: {se.get('violations', 0)}",
+            f"second_engine_rules: "
+            f"{','.join(sorted((se.get('own_paint_rules_the_signoff_deck_does_not_grade') or {}))) or '-'}",
+            "",
+        ]
     rpt.write_text("\n".join(lines))
     return rpt
 
@@ -665,12 +683,140 @@ def _write_lvs_report(bdir: Path, block: str, verdict: str,
     return comp
 
 
+# ── the second engine, and the rules the sign-off deck does not grade ────
+#
+# THE DEFECT THIS CLOSES, MEASURED (ihp-sg13g2, image 0.3.46, u_hawaii_adc).
+# A6's verdict is the staged KLayout runset's, and that runset does not grade
+# every rule the PDK writes. On this PDK the MiM capacitor family is almost
+# entirely absent — `%include rule_decks/beol/6_11_mim.drc` is commented out
+# in the shipped deck, so of MIM.a..MIM.i the 560 graded categories contain
+# only `MIM.c` and `MIM.d`. "0 violations of 560 rules" was therefore SILENCE
+# about the capacitor, not a clean bill: while it said that, `delta_sigma`
+# carried eight `Via4 cannot contact MiM cap bottom plate (MIM.i)` — this
+# flow's OWN paint on the capacitor's plate — and magic, which does grade
+# MIM.i, was the only engine in the image that could see them.
+#
+# So a rule the sign-off deck DOES NOT GRADE AT ALL is adjudicated by the
+# engine that does. Two conditions, and both are necessary:
+#
+#   * the rule is absent from the sign-off deck's own graded category set —
+#     where both engines grade a rule the SIGN-OFF engine is the authority
+#     and the second engine's disagreement is a separate question (measured:
+#     the two engines count rectangles and polygons differently);
+#   * the second engine attributes the violating geometry to THIS FLOW'S OWN
+#     PAINT. A rule the PDK's own gencell breaks when generated ALONE is the
+#     PDK's business and no routing change removes it — it is reported, never
+#     verdicted. Measured on `ldo`: 60 rectangles of `M2.d`, a rule the
+#     KLayout deck also does not grade, every one of them inside the PDK's
+#     own cells. Verdicting those would fail every block on this PDK for a
+#     cell nobody in this flow drew.
+#
+# Nothing here names a rule, a family, a layer or a PDK: the join key is the
+# rule id the PDK itself writes in both engines' output, and the attribution
+# is `analog_a6_drc_attribute`'s, which is read, never re-implemented.
+
+#: A rule id as a PDK writes it — `MIM.i`, `M2.d`, `V1.c1` — taken from the
+#: LAST parenthesised token of an engine's message.
+_RULE_ID_RE = re.compile(r"\(([A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z0-9_]+)+)\)")
+
+
+def rule_id(message: str) -> Optional[str]:
+    """The PDK's own rule id inside an engine's message, or None."""
+    hits = _RULE_ID_RE.findall(message or "")
+    return hits[-1] if hits else None
+
+
+def graded_rule_ids(lyrdb_text: str) -> set:
+    """Every rule the sign-off deck actually GRADED, by id, from its own
+    report. A deck that produced no report grades nothing this function will
+    claim — "could not read it" is not "read it and it was empty"."""
+    return {c.strip() for c in
+            re.findall(r"<category>\s*<name>(.*?)</name>", lyrdb_text or "",
+                       re.S) if c.strip()}
+
+
+def unadjudicated_rules(attribution: Dict[str, Any], graded: set
+                        ) -> Dict[str, int]:
+    """{rule id: violating rectangles} for rules the sign-off deck does not
+    grade AND the second engine attributes to this flow's own paint.
+
+    Reads `analog_a6_drc_attribute`'s report; both conditions above must
+    hold, and a rule whose id cannot be read is NOT counted — it is returned
+    by `unreadable_rule_messages` so a reader is told what was skipped rather
+    than handed a silent zero."""
+    out: Dict[str, int] = {}
+    own = ((attribution or {}).get("by_class_and_rule") or {}).get("LAYOUT") or {}
+    for message, count in own.items():
+        rid = rule_id(message)
+        if rid is None or rid in graded:
+            continue
+        out[rid] = out.get(rid, 0) + int(count)
+    return out
+
+
+def unreadable_rule_messages(attribution: Dict[str, Any]) -> List[str]:
+    """Messages the second engine produced whose rule id this program cannot
+    read. NOT_MEASURED, never a default."""
+    own = ((attribution or {}).get("by_class_and_rule") or {}).get("LAYOUT") or {}
+    return sorted(m for m in own if rule_id(m) is None)
+
+
+def second_engine_drc(project: Path, block: str, container: str,
+                      lyrdb_text: str, *, runner: Optional[Callable] = None
+                      ) -> Optional[Dict[str, Any]]:
+    """Grade, with the second engine, the rules the sign-off deck does not.
+
+    Returns None when the second engine could not run — the caller then says
+    so instead of crediting silence as cleanliness."""
+    run = runner
+    if run is None:
+        def run(proj, blk, ctn):
+            # The attribution program is INVOKED, not re-implemented and not
+            # partially re-spelled: its own CLI carries its own magicrc
+            # default, so no PDK path literal appears in this file.
+            import analog_a6_drc_attribute as _attr
+            import tempfile as _tf
+            host = Path(_tf.mkdtemp(prefix="a6_second_engine."))
+            out = host / "attribution.json"
+            try:
+                _attr.main([str(proj), "--block", blk,
+                            "--container", ctn, "--json", str(out)])
+                if not out.is_file():
+                    return None, "the attribution program wrote no report"
+                return json.loads(out.read_text()), ""
+            except (OSError, ValueError, SystemExit) as exc:
+                return None, f"the second engine did not run: {exc}"
+            finally:
+                shutil.rmtree(host, ignore_errors=True)
+    attribution, why = run(str(project), block, container)
+    if attribution is None:
+        return None
+    if isinstance(attribution.get("blocks"), dict):
+        attribution = attribution["blocks"].get(block, attribution)
+    graded = graded_rule_ids(lyrdb_text)
+    adjudicated = unadjudicated_rules(attribution, graded)
+    return {
+        "engine": "magic drc(full)",
+        "signoff_rules_graded": len(graded),
+        "own_paint_rules_the_signoff_deck_does_not_grade":
+            dict(sorted(adjudicated.items())),
+        "violations": sum(adjudicated.values()),
+        "unreadable_rule_messages": unreadable_rule_messages(attribution),
+        "attribution_result": attribution.get("result"),
+        "note": ("only rules the sign-off deck does not grade AT ALL, and "
+                 "only violations this engine attributes to the flow's own "
+                 "paint, are adjudicated here; a rule the PDK's own gencell "
+                 "breaks alone is reported by that program, never verdicted"),
+    }
+
+
 def run_block_pv(project: Path, block: str, res: Dict[str, Any],
                  container: str = "vibeic-eda", *,
                  drc_runner: Optional[Callable] = None,
                  lvs_runner: Optional[Callable] = None,
                  gds_finder: Optional[Callable] = None,
                  netlist_finder: Optional[Callable] = None,
+                 second_engine_runner: Optional[Callable] = None,
                  layermap: Optional[str] = None) -> Dict[str, Any]:
     """Produce REAL per-block DRC + LVS evidence when the resolver resolves the
     staged sign-off decks (rung 1/2). Writes `drc.report` + `comp.json` into the
@@ -728,12 +874,33 @@ def run_block_pv(project: Path, block: str, res: Dict[str, Any],
             meta = dict(meta or {})
             if raw.is_file():
                 meta["raw_report"] = str(raw.relative_to(project))
-            _write_drc_report(bdir, block, int(violations), meta)
+            # THE RULES THE SIGN-OFF DECK DOES NOT GRADE. See
+            # `second_engine_drc`: a rule this deck never asks about is not
+            # answered by its silence, and the engine that does ask is
+            # evidence. Reported by MEMBERSHIP beside the deck's own graded
+            # set, and NOT_MEASURED when the second engine cannot run.
+            lyrdb_text = raw.read_text(errors="replace") if raw.is_file() else ""
+            second = second_engine_drc(project, block, container, lyrdb_text,
+                                       runner=second_engine_runner)
+            total = int(violations)
+            if second is None:
+                meta["second_engine"] = {
+                    "engine": "magic drc(full)", "result": "NOT_MEASURED",
+                    "reason": ("the second engine could not run; the rules "
+                               "the sign-off deck does not grade are "
+                               "UNGRADED, not clean"),
+                }
+            else:
+                meta["second_engine"] = second
+                total += int(second["violations"])
+            _write_drc_report(bdir, block, total, meta)
             ran = True
-            drc_result = {"executed": True, "violations": int(violations),
-                          "verdict": "PASS" if violations == 0 else "FAIL",
+            drc_result = {"executed": True, "violations": total,
+                          "signoff_violations": int(violations),
+                          "verdict": "PASS" if total == 0 else "FAIL",
                           "report": str((bdir / "drc.report").relative_to(project)),
-                          "raw_report": meta.get("raw_report")}
+                          "raw_report": meta.get("raw_report"),
+                          "second_engine": meta["second_engine"]}
 
     # ── LVS: block source netlist vs block GDS → klayout_pdk_lvs compare ──
     lvs_deck = res.get("lvs_deck")

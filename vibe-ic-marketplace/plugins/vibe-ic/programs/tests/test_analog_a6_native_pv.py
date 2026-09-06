@@ -180,3 +180,79 @@ def test_drc_report_is_numbers_only(tmp_path):
 if __name__ == "__main__":
     import pytest
     raise SystemExit(pytest.main([__file__, "-q"]))
+
+
+# ── THE RULES THE SIGN-OFF DECK DOES NOT GRADE ──────────────────────────
+#
+# MEASURED (ihp-sg13g2, image 0.3.46, u_hawaii_adc `delta_sigma` as A5 drew
+# it before v1.17.88). The staged KLayout runset grades 560 rules and reports
+# 0 violations — and of the PDK's MIM.a..MIM.i family its graded set contains
+# only `MIM.c` and `MIM.d`, because the shipped deck comments out its own
+# `%include` of the MiM rule file. While it said "0 of 560" that block
+# carried eight `Via4 cannot contact MiM cap bottom plate (MIM.i)`, every one
+# of them this flow's own paint on the capacitor's plate, and magic — which
+# does grade MIM.i — was the only engine in the image that could see them.
+#
+# Both arms below run the REAL `run_block_pv` bookkeeping over a faked
+# attribution, so what is under test is the ADJUDICATION RULE and not magic.
+
+_LYRDB = ("<report><categories>"
+          "<category><name>MIM.c</name></category>"
+          "<category><name>MIM.d</name></category>"
+          "<category><name>M2.b</name></category>"
+          "</categories></report>")
+
+_MIM_I = "Via4 cannot contact MiM cap bottom plate (MIM.i)"
+_M2_D = "Metal2 minimum area < 0.144um^2 (M2.d)"
+_M2_B = "Metal2 spacing < 0.21um (M2.b)"
+
+
+def _attr(layout_rules):
+    return {"result": "LAYOUT_OWNS" if layout_rules else "DEVICE_ONLY",
+            "by_class_and_rule": {"LAYOUT": dict(layout_rules)}}
+
+
+def test_second_engine_adjudicates_a_rule_the_signoff_deck_never_grades():
+    got = PV.unadjudicated_rules(_attr({_MIM_I: 8}),
+                                 PV.graded_rule_ids(_LYRDB))
+    assert got == {"MIM.i": 8}
+
+
+def test_second_engine_defers_where_the_signoff_deck_does_grade():
+    """THE CONTROL that keeps the sign-off engine the authority. Both engines
+    grade M2.b; the deck says 0 and that stands. Two engines counting the
+    same rule differently is a separate question and not this one."""
+    assert PV.unadjudicated_rules(_attr({_M2_B: 99}),
+                                 PV.graded_rule_ids(_LYRDB)) == {}
+
+
+def test_second_engine_never_verdicts_the_pdks_own_cell():
+    """THE OTHER CONTROL, and the one that stops this failing every block on
+    this PDK. `M2.d` is ungraded by the deck too, and `ldo` carries 60
+    rectangles of it — every one inside the PDK's own gencells, which is why
+    the attribution puts them in a class this reader does not look at."""
+    attribution = {"result": "DEVICE_ONLY",
+                   "by_class_and_rule": {"DEVICE_CELL": {_M2_D: 60},
+                                         "LAYOUT": {}}}
+    assert PV.unadjudicated_rules(attribution, PV.graded_rule_ids(_LYRDB)) == {}
+
+
+def test_a_rule_id_that_cannot_be_read_is_named_not_defaulted():
+    attribution = _attr({"a message with no rule id": 3})
+    assert PV.unadjudicated_rules(attribution, PV.graded_rule_ids(_LYRDB)) == {}
+    assert PV.unreadable_rule_messages(attribution) == [
+        "a message with no rule id"]
+
+
+def test_graded_set_of_an_absent_report_claims_nothing():
+    """"Could not read it" is not "read it and it was empty": an unreadable
+    report grades nothing, so nothing is deferred to it."""
+    assert PV.graded_rule_ids("") == set()
+    assert PV.unadjudicated_rules(_attr({_M2_B: 4}), PV.graded_rule_ids("")) \
+        == {"M2.b": 4}
+
+
+def test_rule_id_is_the_pdks_own_token_in_either_engines_message():
+    assert PV.rule_id(_MIM_I) == "MIM.i"
+    assert PV.rule_id("Metal1 overlap of Via1 < 0.045um (V1.c1)") == "V1.c1"
+    assert PV.rule_id("no id here") is None

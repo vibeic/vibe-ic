@@ -126,6 +126,16 @@ Failure rules:
   A5_LAYOUT_DRAWN_SHORT    — the producer's own record says two routed nets
                              are ONE conductor in this layout, with the chain
                              of rectangles that joins them
+  A5_DEVICE_ABOVE_PDK_MAXIMUM
+                           — the producer's own record says a device was asked
+                             for above the PDK's stated maximum. A magic
+                             gencell does not refuse that: it CLAMPS and
+                             draws, so the drawn device is not the netlist's.
+                             MEASURED: eight `delta_sigma` capacitors asked
+                             for at l = 34.75 .. 629.08 um against a gencell
+                             `lmax 30.0` were all drawn at 30 um, and the LVS
+                             cross-reference named those eight and only those
+                             eight, differing in `l` alone.
 
 A DRAWN SHORT IS NOT A CLEARANCE PREDICTION. Every other number in
 `layout_provenance.json` is a distance this gate deliberately does NOT judge:
@@ -179,6 +189,16 @@ MIN_LAYOUT_BYTES = 200
 #: twice so the gate and the producer cannot drift apart.
 PROVENANCE_NAME = "layout_provenance.json"
 SHORT_QUANTITY = "routed_nets_per_conductor"
+OVER_MAXIMUM_QUANTITY = "device_geometry_above_pdk_maximum"
+
+#: quantity -> the rule this gate reports it under. Every entry is a
+#: deviation that says the producer did NOT draw the netlist it was given —
+#: not a clearance A6's deck adjudicates. Keyed by the producer's own
+#: `analog_a5_layout_emit.BLOCKING_QUANTITIES`, so the two cannot drift.
+BLOCKING_RULES = {
+    SHORT_QUANTITY: "A5_LAYOUT_DRAWN_SHORT",
+    OVER_MAXIMUM_QUANTITY: "A5_DEVICE_ABOVE_PDK_MAXIMUM",
+}
 
 
 # Project-level INCOMPLETE (exit 1) — some declared blocks produced a layout
@@ -260,7 +280,7 @@ def _layout_has_real_geometry(path: Path) -> tuple[bool, str]:
 
 
 def _drawn_shorts(project: Path, bdir: Path, block: str) -> List[dict]:
-    """A5_LAYOUT_DRAWN_SHORT findings, out of the producer's own record.
+    """The producer's BLOCKING deviations, out of its own record.
 
     Silent when there is no record and when the record is unreadable — this
     gate reports what a record SAYS, and "could not read it" is not "read it
@@ -278,13 +298,16 @@ def _drawn_shorts(project: Path, bdir: Path, block: str) -> List[dict]:
         return []
     out: List[dict] = []
     for d in devs:
-        if not isinstance(d, dict) or d.get("quantity") != SHORT_QUANTITY:
+        if not isinstance(d, dict):
+            continue
+        rule = BLOCKING_RULES.get(d.get("quantity"))
+        if rule is None:
             continue
         out.append({
-            "block": block, "rule": "A5_LAYOUT_DRAWN_SHORT",
+            "block": block, "rule": rule,
             "rel_path": str(rec.relative_to(project)),
             "detail": str(d.get("detail")
-                          or "two routed nets are one conductor"),
+                          or "the producer did not draw this netlist"),
         })
     return out
 

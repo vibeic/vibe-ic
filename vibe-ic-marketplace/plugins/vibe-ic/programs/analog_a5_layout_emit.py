@@ -250,6 +250,59 @@ class PdkFacts:
         return lmin, wmin, src
 
 
+def _maxima_for(facts: "PdkFacts", model: str
+                ) -> Tuple[Optional[float], Optional[float], Optional[str]]:
+    """(lmax_um, wmax_um, the file that stated them) or (None, None, None).
+
+    The mirror of `PdkFacts.limits_for`. A maximum the PDK does not state is
+    ABSENT and nothing is checked against it — never a default."""
+    rec = facts.gencells.get(model)
+    if not rec:
+        return None, None, None
+    return rec.get("lmax"), rec.get("wmax"), rec.get("source")
+
+
+def over_maxima(devs: Sequence[dict], facts: PdkFacts) -> List[dict]:
+    """Every device the PDK's own gencell CANNOT DRAW AT THE SIZE ASKED FOR.
+
+    THE DEFECT THIS CLOSES, MEASURED (u_hawaii_adc / ihp-sg13g2, image
+    0.3.46).  `forbidden_geometries` above reads the PDK's stated MINIMA and
+    refuses a device below them.  The same `_defaults` proc states MAXIMA and
+    nobody read them.  A magic gencell asked for a geometry above its maximum
+    does not refuse — it CLAMPS and draws.  So `delta_sigma`'s eight large
+    MiM capacitors, asked for at l = 34.75 .. 629.08 um against the gencell's
+    `lmax 30.0`, were every one of them drawn at l = 30 um: twelve netlist
+    capacitors collapsed into TWO drawn cells, the largest device 21x smaller
+    than the netlist asks for, DRC clean, the A5 gate PASS, magic
+    DEVICE_ONLY — and the per-block LVS answering `mismatch` with no flow
+    artefact able to say why.  The witness, from the PDK's own LVS
+    cross-reference: 8 device pairs `MatchWithWarning`, every one a
+    `cap_cmim`, differing in `l` alone, and the 11 mismatched nets are
+    EXACTLY the nets those eight capacitors sit on.
+
+    Returned as records, not raised: the layout is still drawn, because a
+    reader repairing this needs the geometry.  The caller makes it BLOCKING
+    (`blocking_deviations`), which is the difference between a wrong chip
+    that looks right and one that says so."""
+    out: List[dict] = []
+    for dev in devs:
+        lmax, wmax, src = _maxima_for(facts, dev["model"])
+        for key, cap in (("l", lmax), ("w", wmax)):
+            got = dev["pars"].get(key)
+            if got is None or cap is None or got <= cap + 1e-9:
+                continue
+            out.append({
+                "device": dev["name"], "model": dev["model"], "parameter": key,
+                "requested_um": got, "pdk_maximum_um": cap, "source": src,
+                "detail": (f"{dev['name']} ({dev['model']}): {key}={got}u is "
+                           f"above the PDK maximum {key}max={cap}u ({src}). "
+                           f"The gencell does not refuse it — it CLAMPS to "
+                           f"{cap}u and draws, so the drawn device is not the "
+                           f"one this netlist asks for."),
+            })
+    return out
+
+
 def read_pdk(stage: Stage, pdk_root: str, family: str,
              gencell_tcl: Optional[str], drc_tech: Optional[str],
              magic_tech: Optional[str] = None
@@ -2140,7 +2193,9 @@ def emit_block(project: Path, block: str, stage: Stage, magicrc: str,
     limits_used = {}
     for model in sorted({d["model"] for d in devs}):
         lmin, wmin, src = facts.limits_for(model)
+        lmax, wmax, _ = _maxima_for(facts, model)
         limits_used[model] = {"lmin_um": lmin, "wmin_um": wmin,
+                              "lmax_um": lmax, "wmax_um": wmax,
                               "class": facts.gencells[model].get("class"),
                               "source": src}
     report["pdk_limits"] = limits_used
@@ -2177,6 +2232,14 @@ def emit_block(project: Path, block: str, stage: Stage, magicrc: str,
 
     plan = build_plan(devs, ports, cells, facts, geo, tap_clear)
     clearance_deviations(plan, geo, devs)
+    # A GEOMETRY THE PDK'S GENCELL CLAMPED. Recorded like every other
+    # measurement this emitter makes, and blocking like the short: see
+    # `over_maxima`. The device is in `cells` already — magic drew the
+    # clamped one — so this is written where the rest of the record is.
+    owner = {d["name"]: d for d in devs}
+    for hit in over_maxima(devs, facts):
+        plan.deviate(owner[hit["device"]], OVER_MAXIMUM_QUANTITY,
+                     hit["pdk_maximum_um"], hit["requested_um"], hit["detail"])
 
     bdir.mkdir(parents=True, exist_ok=True)
     magic_run(stage, magicrc,
@@ -2230,15 +2293,29 @@ def emit_block(project: Path, block: str, stage: Stage, magicrc: str,
     # reported — a reader repairing this needs the geometry — but the exit
     # code says the emitter did not draw this netlist. See `blocking_shorts`.
     shorts = blocking_shorts(plan.deviations)
-    if shorts:
-        report["result"] = "SHORTED"
-        report["shorts"] = shorts
+    over = [d for d in plan.deviations
+            if d.get("quantity") == OVER_MAXIMUM_QUANTITY]
+    if shorts or over:
+        report["result"] = "SHORTED" if shorts else "CLAMPED_GEOMETRY"
+        if shorts:
+            report["shorts"] = shorts
+        if over:
+            report["clamped_devices"] = over
+        parts = []
+        if shorts:
+            parts.append(f"{len(shorts)} pair(s) of routed nets are ONE "
+                         f"conductor in the layout this emitter drew, each "
+                         f"recorded above with the chain of rectangles that "
+                         f"joins them")
+        if over:
+            parts.append(f"{len(over)} device(s) were asked for above the "
+                         f"PDK's own stated maximum, which the gencell does "
+                         f"not refuse but CLAMPS, so the drawn device is not "
+                         f"the one this netlist asks for")
         report["reason"] = (
-            f"{len(shorts)} pair(s) of routed nets are ONE conductor in the "
-            f"layout this emitter drew; each is recorded above with the "
-            f"chain of rectangles that joins them. The layout and its GDS "
-            f"are written so the geometry can be read, and the exit code is "
-            f"non-zero because the netlist was not drawn.")
+            "; ".join(parts) + ". The layout and its GDS are written so the "
+            "geometry can be read, and the exit code is non-zero because the "
+            "netlist was not drawn.")
         return RC_FORBIDDEN, report
     return RC_OK, report
 
@@ -2247,6 +2324,26 @@ def emit_block(project: Path, block: str, stage: Stage, magicrc: str,
 #: One name, used by the producer's exit code and by the A5 gate, so the two
 #: cannot drift apart.
 SHORT_QUANTITY = "routed_nets_per_conductor"
+
+#: The deviation quantity `over_maxima` writes for a device the PDK's gencell
+#: cannot draw at the size the netlist asks for.
+OVER_MAXIMUM_QUANTITY = "device_geometry_above_pdk_maximum"
+
+#: Every quantity that is NOT a clearance the sign-off deck adjudicates.
+#: Each one says the emitter did not draw THIS netlist, so each one is
+#: blocking, and the A5 gate reads the same set out of the same record.
+BLOCKING_QUANTITIES = (SHORT_QUANTITY, OVER_MAXIMUM_QUANTITY)
+
+
+def blocking_deviations(deviations: Sequence[dict]) -> List[dict]:
+    """Every deviation that says the emitter did not draw THIS netlist.
+
+    See `blocking_shorts` for why a short is not a clearance; a device the
+    PDK's gencell silently CLAMPED is the same kind of statement, measured
+    the same way and in the same record — the geometry on disk is not the
+    geometry the netlist asked for, and no deck adjudicates that away."""
+    return [d for d in deviations
+            if d.get("quantity") in BLOCKING_QUANTITIES]
 
 
 def blocking_shorts(deviations: Sequence[dict]) -> List[dict]:

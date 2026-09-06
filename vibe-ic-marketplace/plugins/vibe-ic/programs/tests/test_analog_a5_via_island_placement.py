@@ -519,3 +519,95 @@ def test_i_a_mosfet_is_matched_by_letter_and_never_reaches_this_rule():
     assert got == {"d": ["D"], "s": ["S"], "b": ["B"]}
     assert unmapped == ["G->g"], (
         "an absent label is named as unmapped, never silently dropped")
+
+
+# ── 10. the PDK states two ends and only one was read ───────────────────
+#
+# MEASURED (u_hawaii_adc / ihp-sg13g2 / image 0.3.46). The KLayout LVS
+# cross-reference for `delta_sigma`, after v1.17.88 had taken its drawn
+# shorts to 0 and its connectivity to 122/122 nets and 294/294 devices:
+#
+#     device pairs   286 Match, 8 MatchWithWarning
+#     net pairs      111 Match, 11 Mismatch
+#     pin pairs        7 Match
+#
+# Every one of the 8 warned devices is a `cap_cmim` differing in `l` ALONE —
+# layout 30.0 um against a schematic 34.75 / 60.0 / 138.98 / 188.72 (x2) /
+# 245.34 / 629.08 (x2) — and the 11 mismatched nets are EXACTLY the nets
+# those 8 capacitors sit on. Twelve netlist capacitors had collapsed into TWO
+# drawn cells. The cause is one unread pair of numbers: the gencell states
+# `lmax 30.0 wmax 30.0` in the same `_defaults` proc as `lmin`/`wmin`, and a
+# magic gencell asked for more does not refuse — it CLAMPS and draws.
+#
+# This also answers, by measurement, whether the mismatch was downstream of
+# the dead bulk-tap subsystem: it was not. All 286 plain-Match devices
+# include every MOS, and every bulk terminal is on the same net on both
+# sides.
+
+CAP_TCL = """
+proc pdkns::xx_cap_defaults {} {
+    return {w 10 l 10 nx 1 ny 1 lmin 2.00 wmin 2.00 lmax 30.0 wmax 30.0 \\
+\t\tclass capacitor doports 1}
+}
+proc pdkns::xx_res_defaults {} {
+    return {w 0.5 l 2.0 wmin 0.50 lmin 0.50 class resistor doports 1}
+}
+"""
+
+
+def _facts_with_maxima():
+    f = A5E.PdkFacts()
+    f.gencells = A5L.gencell_defaults(CAP_TCL, "/pdk/x-cap.tcl")
+    return f
+
+
+def test_j_the_gencell_states_both_ends_and_both_are_read():
+    rec = A5L.gencell_defaults(CAP_TCL, "/pdk/x-cap.tcl")["xx_cap"]
+    assert (rec["lmin"], rec["wmin"]) == (2.0, 2.0)
+    assert (rec["lmax"], rec["wmax"]) == (30.0, 30.0)
+    # AND A MAXIMUM THE PDK DOES NOT STATE IS ABSENT, never a default: the
+    # resistor block above states neither, and nothing is checked against it.
+    res = A5L.gencell_defaults(CAP_TCL, "/pdk/x-cap.tcl")["xx_res"]
+    assert res["lmax"] is None and res["wmax"] is None
+
+
+def test_j_a_device_above_the_stated_maximum_is_named_with_the_rule_and_file():
+    facts = _facts_with_maxima()
+    devs = [{"name": "ci1", "model": "xx_cap", "nets": [], "pars": {"w": 10.0, "l": 629.081}},
+            {"name": "caz", "model": "xx_cap", "nets": [], "pars": {"w": 10.0, "l": 34.7452}}]
+    hits = A5E.over_maxima(devs, facts)
+    assert [h["device"] for h in hits] == ["ci1", "caz"]
+    assert hits[0]["parameter"] == "l"
+    assert hits[0]["pdk_maximum_um"] == 30.0
+    assert hits[0]["requested_um"] == 629.081
+    assert "/pdk/x-cap.tcl" in hits[0]["detail"], (
+        "the record must name the FILE that stated the maximum")
+    assert "CLAMPS" in hits[0]["detail"], (
+        "and must say what the gencell actually does, which is not refuse")
+
+
+def test_j_at_and_below_the_maximum_nothing_is_named():
+    """THE CONTROL. The same devices, the same deck, sizes the PDK permits."""
+    facts = _facts_with_maxima()
+    devs = [{"name": "cs1", "model": "xx_cap", "nets": [], "pars": {"w": 10.0, "l": 3.47452}},
+            {"name": "cedge", "model": "xx_cap", "nets": [], "pars": {"w": 30.0, "l": 30.0}}]
+    assert A5E.over_maxima(devs, facts) == []
+
+
+def test_j_a_model_with_no_stated_maximum_is_not_checked_against_one():
+    """ABSENT is not zero and not infinity: a maximum the PDK does not state
+    is one this program has nothing to say about."""
+    facts = _facts_with_maxima()
+    devs = [{"name": "r1", "model": "xx_res", "nets": [],
+             "pars": {"w": 0.5, "l": 9999.0}}]
+    assert A5E.over_maxima(devs, facts) == []
+
+
+def test_j_a_clamped_device_is_blocking_and_a_short_still_is():
+    devs = [{"quantity": A5E.OVER_MAXIMUM_QUANTITY, "detail": "x"},
+            {"quantity": A5E.SHORT_QUANTITY, "detail": "y"},
+            {"quantity": "metal2_space_to_device_lambda", "detail": "z"}]
+    got = [d["quantity"] for d in A5E.blocking_deviations(devs)]
+    assert got == [A5E.OVER_MAXIMUM_QUANTITY, A5E.SHORT_QUANTITY]
+    # the older, narrower reader still answers about shorts only
+    assert [d["quantity"] for d in A5E.blocking_shorts(devs)] == [A5E.SHORT_QUANTITY]
