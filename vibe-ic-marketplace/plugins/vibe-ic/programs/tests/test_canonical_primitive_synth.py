@@ -1207,3 +1207,71 @@ def test_the_ratio_counter_is_sized_from_its_own_parameter():
         assert "reg [$clog2(RATIO + 1) - 1:0] count;" in rtl
         # no width literal derived from the stated ratio survives in the counter
         assert "count <= 0;" in rtl
+
+
+_ELASTIC_MATRIX_RESETS = [
+    ("rst_n", "Active low reset.", "", True, None),
+    ("rst", "Active high reset.", "", False, None),
+    ("rst", "Active high reset.", " The reset is a synchronous reset.", False, True),
+    ("rst_n", "Active low reset.", " The reset is a synchronous reset.", True, True),
+]
+
+
+def _elastic_desc(rst_name, rst_line, extra, width_phrase):
+    return ("Module name:\n    elastic_stage\nAn elastic pipeline stage.\n"
+            "Input ports:\n clk: Clock.\n"
+            f" {rst_name}: {rst_line}\n"
+            f" up_data{width_phrase}: The word offered by the producer.\n"
+            " up_valid: Offered.\n"
+            " dn_ready: The consumer can take a word.\n"
+            "Output ports:\n up_ready: This stage can take a word.\n"
+            f" dn_data{width_phrase}: The word offered on.\n dn_valid: Offered.\n"
+            "Implementation:\nA transfer happens when valid and ready are both "
+            "high. The stage must register the output and buffer one additional "
+            "transfer so the producer is only stalled when no slot is free. No "
+            "word that was not accepted may be captured, no accepted word may be "
+            "lost, and accepted words must leave in the order they arrived."
+            + extra + "\n")
+
+
+@pytest.mark.parametrize("rst_name,rst_line,extra,low,sync",
+                         _ELASTIC_MATRIX_RESETS)
+@pytest.mark.parametrize("width_phrase,width", [(" [7:0]", 8), (" [31:0]", 32)])
+def test_the_elastic_stage_composes_across_reset_styles_and_widths(
+        rst_name, rst_line, extra, low, sync, width_phrase, width):
+    """Everything in this branch had composed ONE combination: 8 bits, active-low
+    asynchronous reset. Synchronous and active-high resets had never been
+    emitted, let alone simulated."""
+    desc = _elastic_desc(rst_name, rst_line, extra, width_phrase)
+    c = rcs.extract_handshake_contract(desc)
+    assert c is not None and c.unresolved == []
+    assert (c.reset, c.reset_active_low, c.reset_sync) == (rst_name, low, sync)
+    assert c.width == width
+    rtl = rcs.emit_rtl(rcs.detect_shape(desc), desc)
+    if sync:
+        assert f"always @(posedge {c.clock}) begin" in rtl
+        assert "negedge" not in rtl and "or posedge" not in rtl
+    else:
+        edge = "negedge" if low else "posedge"
+        assert f"always @(posedge {c.clock} or {edge} {rst_name}) begin" in rtl
+    assert f"if ({'!' if low else ''}{rst_name}) begin" in rtl
+    assert f"[{width - 1}:0] " in rtl
+
+
+def test_a_one_bit_width_stated_in_words_is_a_stated_width():
+    """A single-bit port is idiomatically written in WORDS here ("data_in:
+    One-bit input."), and that is still a width the input stated. Measured: it
+    was previously unresolved, so no single-bit elastic stage could compose."""
+    desc = _elastic_desc("rst_n", "Active low reset.", "", "").replace(
+        "up_data: The word", "up_data: One-bit word").replace(
+        "dn_data: The word", "dn_data: One-bit word")
+    c = rcs.extract_handshake_contract(desc)
+    assert c is not None and c.unresolved == [] and c.width == 1
+    rtl = rcs.emit_rtl(rcs.detect_shape(desc), desc)
+    assert "input  wire up_data," in rtl and "[0:0]" not in rtl
+    # a width written in words that this reader does NOT parse stays unresolved
+    # and is NAMED -- it is not guessed
+    four = _elastic_desc("rst_n", "Active low reset.", "", "").replace(
+        "up_data: The word", "up_data: Four-bit word")
+    c4 = rcs.extract_handshake_contract(four)
+    assert c4.width is None and any("width" in u for u in c4.unresolved)

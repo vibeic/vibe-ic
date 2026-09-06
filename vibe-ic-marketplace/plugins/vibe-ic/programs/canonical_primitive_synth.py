@@ -2010,6 +2010,14 @@ def _port_width(desc_text: str, name: str) -> Optional[int]:
         # the first would be a guess, and the layer's rule is to name what the
         # input did not settle. An explicit [hi:lo] above always wins.
         widths = {int(m) for m in re.findall(r"(\d+)[- ]bits?\b", line, re.I)}
+        # A single-bit port is idiomatically written in WORDS in these
+        # descriptions ("data_in: One-bit input."), and a width stated in words
+        # is still a width the input stated. Only 1 is read this way: "four-bit"
+        # is left unresolved and NAMED rather than guessed, because a general
+        # word-number reader is a different thing from reading what this corpus
+        # actually writes.
+        if re.search(r"\b(?:one|single)[- ]bit\b", line, re.I):
+            widths.add(1)
         if len(widths) == 1:
             return widths.pop()
         return None
