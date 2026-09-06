@@ -29,7 +29,7 @@ _RUNNER = {
     "profile_id": "vibeic-landing-hermetic-v1",
     "engine": "docker",
     "image": ("ghcr.io/vibeic/vibeic-eda@sha256:"
-              "66c33ff2e05781758f596d82bff61ad8a404ef0a7eae3d21ab8a9d55df0d01ff"),
+              "8da785a8d3275884ad0d0ee0fb10f7e90d8b7bf11a08d38e9559b0764112480f"),
     "platform": "linux/amd64",
     "user": "65534:65534",
     "network": "none",

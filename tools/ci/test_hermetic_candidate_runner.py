@@ -33,7 +33,7 @@ import sys
 import time
 from pathlib import Path
 
-IMAGE = "ghcr.io/vibeic/vibeic-eda@sha256:66c33ff2e05781758f596d82bff61ad8a404ef0a7eae3d21ab8a9d55df0d01ff"
+IMAGE = "ghcr.io/vibeic/vibeic-eda@sha256:8da785a8d3275884ad0d0ee0fb10f7e90d8b7bf11a08d38e9559b0764112480f"
 IMAGE_ID = "sha256:" + "1" * 64
 CID = "2" * 64
 PREFIX = "VIBEIC_PROGRESS "
@@ -1022,3 +1022,123 @@ def test_a_writable_parent_owned_bind_is_refused_before_the_candidate_runs(
         proc.stdout + proc.stderr)
     assert not case["receipt"].exists(), (
         "a run that could not vouch for its own mounts must leave NO receipt")
+
+
+# ---------------------------------------------------------------------------
+# The pin: the DIGEST is the identity, the REPOSITORY is deployment config.
+#
+# `_image_profile` is the gate that binds the runtime. It must accept exactly one
+# thing -- an image whose RepoDigests contains `<configured repo>@<pinned digest>`
+# -- and refuse everything else. The two cases worth naming are the ones that are
+# "nearly right", because those are the ones a careless change makes pass:
+# the right bytes offered under a repository nobody configured, and the
+# configured repository offering the wrong bytes.
+# ---------------------------------------------------------------------------
+
+PINNED_DIGEST = runner.IMAGE_DIGEST
+OTHER_DIGEST = "sha256:" + "b" * 64
+
+
+class _StubDocker:
+    """Answers `image inspect` with a document under test; records nothing else."""
+
+    def __init__(self, doc, returncode=0):
+        self._doc = doc
+        self._rc = returncode
+
+    def call(self, args):
+        payload = json.dumps([self._doc]).encode() if self._doc is not None else b""
+        return subprocess.CompletedProcess(list(args), self._rc, payload, b"")
+
+
+def _inspect_doc(repo_digests, image_id="sha256:" + "1" * 64):
+    return {"Architecture": "amd64", "Id": image_id, "Os": "linux",
+            "RepoDigests": list(repo_digests)}
+
+
+def _fresh_runner(monkeypatch, repo=None):
+    """Re-import the runner so the module-level pin resolves under a given env."""
+    if repo is None:
+        monkeypatch.delenv("VIBEIC_EDA_IMAGE_REPO", raising=False)
+    else:
+        monkeypatch.setenv("VIBEIC_EDA_IMAGE_REPO", repo)
+    spec = importlib.util.spec_from_file_location(
+        "_repinned_hermetic_runner", RUNNER_PATH)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_image_profile_accepts_the_configured_repo_at_the_pinned_digest():
+    profile = runner._image_profile(_StubDocker(_inspect_doc([runner.IMAGE])))
+    assert profile["repo_digest"] == runner.IMAGE
+    assert profile["reference"] == runner.IMAGE
+
+
+def test_image_profile_refuses_the_right_digest_under_the_wrong_repository():
+    """Right bytes, repository nobody configured. The digest matching is not
+    enough: an unconfigured registry is an unreviewed distribution path."""
+    wrong = f"registry.example.invalid/vibeic-eda@{PINNED_DIGEST}"
+    assert wrong != runner.IMAGE
+    with pytest.raises(runner.Refusal, match="does not bind the requested digest"):
+        runner._image_profile(_StubDocker(_inspect_doc([wrong])))
+
+
+def test_image_profile_refuses_the_right_repository_at_the_wrong_digest():
+    """Configured repository, wrong bytes. This is the one that matters most:
+    it is what a re-tagged or re-pushed image looks like."""
+    wrong = f"{runner.image_repo()}@{OTHER_DIGEST}"
+    assert wrong != runner.IMAGE
+    with pytest.raises(runner.Refusal, match="does not bind the requested digest"):
+        runner._image_profile(_StubDocker(_inspect_doc([wrong])))
+
+
+def test_image_profile_refuses_an_image_that_carries_no_repo_digest_at_all():
+    """A `docker load`ed image has RepoDigests == []. Measured 2026-09-07 on
+    three of five fleet hosts. It must not be accepted just because its Id is
+    right -- an Id is not a name anyone can re-obtain the bytes by."""
+    with pytest.raises(runner.Refusal, match="does not bind the requested digest"):
+        runner._image_profile(_StubDocker(_inspect_doc([])))
+
+
+def test_image_profile_still_refuses_a_foreign_platform():
+    doc = _inspect_doc([runner.IMAGE])
+    doc["Architecture"] = "arm64"
+    with pytest.raises(runner.Refusal, match="platform"):
+        runner._image_profile(_StubDocker(doc))
+
+
+def test_image_profile_still_refuses_an_image_with_no_content_id():
+    doc = _inspect_doc([runner.IMAGE], image_id="not-a-digest")
+    with pytest.raises(runner.Refusal, match="exact content ID"):
+        runner._image_profile(_StubDocker(doc))
+
+
+def test_the_configured_repository_moves_what_is_accepted_but_never_the_digest(
+        monkeypatch):
+    """The one config point does exactly one thing: it changes WHERE the bytes
+    may come from. It cannot change WHICH bytes."""
+    lan = _fresh_runner(monkeypatch, repo="registry.example.invalid:5000/vibeic-eda")
+    assert lan.IMAGE_DIGEST == PINNED_DIGEST, "the env must not move the digest"
+    assert lan.IMAGE == f"registry.example.invalid:5000/vibeic-eda@{PINNED_DIGEST}"
+
+    # accepted under the configured repository ...
+    assert lan._image_profile(_StubDocker(_inspect_doc([lan.IMAGE])))
+    # ... and the PUBLISHED repository is now the wrong one, at the same digest.
+    published = f"{lan.IMAGE_REPO_DEFAULT}@{PINNED_DIGEST}"
+    with pytest.raises(lan.Refusal, match="does not bind the requested digest"):
+        lan._image_profile(_StubDocker(_inspect_doc([published])))
+
+
+def test_with_no_env_the_pin_is_the_published_repository(monkeypatch):
+    default = _fresh_runner(monkeypatch, repo=None)
+    assert default.IMAGE == f"{default.IMAGE_REPO_DEFAULT}@{PINNED_DIGEST}"
+    assert default.IMAGE_REPO_DEFAULT == "ghcr.io/vibeic/vibeic-eda"
+
+
+def test_an_empty_repo_env_is_not_a_repository(monkeypatch):
+    """Empty must fall back to the published default, not compose `@sha256:...`
+    onto nothing."""
+    blank = _fresh_runner(monkeypatch, repo="")
+    assert blank.IMAGE == f"{blank.IMAGE_REPO_DEFAULT}@{PINNED_DIGEST}"

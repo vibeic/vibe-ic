@@ -35,10 +35,48 @@ from typing import Any, BinaryIO, Iterable, Sequence
 
 
 SCHEMA = 1
-IMAGE = (
-    "ghcr.io/vibeic/vibeic-eda@sha256:"
-    "66c33ff2e05781758f596d82bff61ad8a404ef0a7eae3d21ab8a9d55df0d01ff"
+#: THE PIN IS THE DIGEST.  THE REPOSITORY IS DEPLOYMENT CONFIGURATION.
+#:
+#: These are two different questions and they used to be one string.  The digest
+#: names the bytes and is the identity: it is what makes a runtime immutable and
+#: it is what every check below actually asserts.  The repository names a place
+#: those bytes can be fetched from, and which place a given host can reach is a
+#: fact about the network, not about the runtime.  MEASURED 2026-09-07: the same
+#: image, distributed to five hosts, carries the SAME repo digest on every host
+#: that pulled it, while its image Id differs by storage driver -- so the repo
+#: digest is the thing to bind, and the repository half of it has to be
+#: configurable or hosts that cannot reach the published registry cannot be
+#: pinned at all.
+#:
+#: So: the digest is a literal here, in ONE place, and the repository comes from
+#: ONE config point that defaults to the published repository.  A deployment
+#: that serves the same bytes from elsewhere sets the env; it does NOT edit this
+#: file, and it CANNOT change which bytes are demanded.
+IMAGE_DIGEST = (
+    "sha256:8da785a8d3275884ad0d0ee0fb10f7e90d8b7bf11a08d38e9559b0764112480f"
 )
+IMAGE_REPO_DEFAULT = "ghcr.io/vibeic/vibeic-eda"
+IMAGE_REPO_ENV = "VIBEIC_EDA_IMAGE_REPO"
+
+
+def image_repo() -> str:
+    """The repository half of the pinned reference.
+
+    Deployment configuration, read from one env.  Empty or unset means the
+    published repository.
+    """
+    return os.environ.get(IMAGE_REPO_ENV) or IMAGE_REPO_DEFAULT
+
+
+def image_reference() -> str:
+    """`<configured repo>@<pinned digest>` -- the only reference this runner uses."""
+    return f"{image_repo()}@{IMAGE_DIGEST}"
+
+
+#: Resolved once, at import, so that every check in this module and every
+#: container it inspects are talking about the same string for the life of the
+#: process.  `_image_profile` binds this against the image's own RepoDigests.
+IMAGE = image_reference()
 IMAGE_REPO_DIGEST = IMAGE
 USER = "65534:65534"
 PLATFORM = "linux/amd64"

@@ -148,28 +148,52 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)" \
 # it must not execute anything to learn a constant. A read that fails is a
 # REFUSAL, never a fallback literal, because a fallback is how the second copy
 # comes back.
+#
+# TWO constants are read now, not one, because the pin was split: the DIGEST is
+# the identity and the REPOSITORY is deployment configuration. This composes them
+# exactly as `hermetic_candidate_runner.image_reference()` does -- same env, same
+# default -- so the harness and the runner cannot disagree about which bytes are
+# demanded, and a host that reaches those bytes at a different registry sets
+# VIBEIC_EDA_IMAGE_REPO instead of editing either file.
 _PIN_SRC="$REPO_ROOT/tools/ci/hermetic_candidate_runner.py"
-IMAGE_DEFAULT="$(python3 - "$_PIN_SRC" <<'PY' || true
+_PIN_PARTS="$(python3 - "$_PIN_SRC" <<'PY' || true
 import ast, sys
+WANTED = ("IMAGE_DIGEST", "IMAGE_REPO_DEFAULT")
 try:
     tree = ast.parse(open(sys.argv[1], encoding="utf-8").read())
 except Exception:
     sys.exit(1)
+found = {}
 for node in tree.body:
-    if isinstance(node, ast.Assign) and any(
-            getattr(t, "id", "") == "IMAGE" for t in node.targets):
-        try:
-            print(ast.literal_eval(node.value))
-        except Exception:
-            sys.exit(1)
-        break
-else:
+    if not isinstance(node, ast.Assign):
+        continue
+    for target in node.targets:
+        name = getattr(target, "id", "")
+        if name in WANTED and name not in found:
+            try:
+                value = ast.literal_eval(node.value)
+            except Exception:
+                sys.exit(1)
+            if not isinstance(value, str) or not value:
+                sys.exit(1)
+            found[name] = value
+if len(found) != len(WANTED):
     sys.exit(1)
+print(found["IMAGE_DIGEST"])
+print(found["IMAGE_REPO_DEFAULT"])
 PY
 )"
+_PIN_DIGEST="$(printf '%s\n' "$_PIN_PARTS" | sed -n 1p)"
+_PIN_REPO_DEFAULT="$(printf '%s\n' "$_PIN_PARTS" | sed -n 2p)"
+_PIN_REPO="${VIBEIC_EDA_IMAGE_REPO:-$_PIN_REPO_DEFAULT}"
+if [ -n "$_PIN_DIGEST" ] && [ -n "$_PIN_REPO" ]; then
+  IMAGE_DEFAULT="${_PIN_REPO}@${_PIN_DIGEST}"
+else
+  IMAGE_DEFAULT=""
+fi
 case "$IMAGE_DEFAULT" in
   *"@sha256:"*) ;;
-  *) die "cannot read the pinned runtime image (IMAGE) from $_PIN_SRC.
+  *) die "cannot read the pinned runtime image (IMAGE_DIGEST + IMAGE_REPO_DEFAULT) from $_PIN_SRC.
     That constant is the single place this repo pins the runtime, and this
     harness reads it rather than keeping a copy that can drift. Fix the pin, or
     pass --image explicitly; there is deliberately no fallback literal here." ;;

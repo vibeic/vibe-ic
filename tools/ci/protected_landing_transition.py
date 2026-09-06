@@ -89,11 +89,26 @@ ID_RE = re.compile(r"[a-z0-9][a-z0-9._-]{0,63}\Z")
 HEX_RE = re.compile(r"[0-9a-f]+\Z")
 SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
 OID_RE = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})\Z")
+#: An immutable reference: an OPTIONAL registry host (which may carry a port)
+#: followed by a repository path, then the digest.  The digest half is the
+#: assertion and is unchanged -- `@sha256:` plus exactly 64 hex.  The host half
+#: is widened only to admit a `host:port` registry, because the previous
+#: `[a-z0-9./_-]+` silently excluded every registry that is not on port 443 and
+#: so made "serve the same bytes from somewhere this host can reach"
+#: unexpressible.  A TAG is still not a reference: `repo:latest` has no `@sha256:`
+#: and is refused, which `test_runner_requires_digest_and_exact_hermetic_profile`
+#: pins.
 IMAGE_RE = re.compile(
-    r"[a-z0-9./_-]+@sha256:[0-9a-f]{64}\Z")
+    r"(?:[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?(?::[0-9]{1,5})?/)?"
+    r"[a-z0-9._-]+(?:/[a-z0-9._-]+)*@sha256:[0-9a-f]{64}\Z")
+
+#: The runner image, resolved exactly the way `hermetic_candidate_runner` does:
+#: pinned digest, configurable repository, one env, same default.  The digest is
+#: the identity; `test_manifest_and_runtime_use_one_exact_base_owned_image`
+#: enforces that this string, the runner module's, and the manifest's are one.
 RUNNER_IMAGE = (
-    "ghcr.io/vibeic/vibeic-eda@"
-    "sha256:66c33ff2e05781758f596d82bff61ad8a404ef0a7eae3d21ab8a9d55df0d01ff"
+    (os.environ.get("VIBEIC_EDA_IMAGE_REPO") or "ghcr.io/vibeic/vibeic-eda")
+    + "@sha256:8da785a8d3275884ad0d0ee0fb10f7e90d8b7bf11a08d38e9559b0764112480f"
 )
 
 #: THE RUNNER PROFILE, ONCE.  `_runner_profile` VALIDATES against this and
