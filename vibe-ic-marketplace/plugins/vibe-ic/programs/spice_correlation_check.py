@@ -66,6 +66,8 @@ import _vacuous_exit as _vx
 import _commercial_pdk as _cpdk  # config-driven commercial-PDK id (NDA: no SKU in source)
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _container_exec as _ce  # noqa: E402 — the ONE guarded docker-exec argv
+import _eda_pin as _pin  # noqa: E402 — the ONE place the pin is stated
 import _progress_run as _pr  # noqa: E402
 
 
@@ -474,7 +476,7 @@ def check_analog_coverage(
 # The whole driver self-skips (returns None) when the bridge shim is absent
 # (design without the bridge shim) or ngspice is unreachable — it NEVER fabricates numbers.
 
-_DEFAULT_CONTAINER = "vibeic-eda"
+_DEFAULT_CONTAINER = _pin.default_container_name()
 # Whole-word device-model rename: the LVS-extracted netlist uses generic
 # nmos/pmos (LVS device names); the ngspice bridge shim binds W/L-binned
 # BSIM models named nch_tn / pch_tn for the 1.8 V core devices.
@@ -1097,8 +1099,7 @@ def _resolve_ngspice(container: str) -> Optional[str]:
                       "ls /foss/tools/bin/ngspice 2>/dev/null | head -1",
                       "ls /foss/tools/*/bin/ngspice 2>/dev/null | head -1"):
             try:
-                r = subprocess.run(["docker", "exec", container, "bash", "-lc",
-                                    probe], capture_output=True, text=True,
+                r = subprocess.run(_ce.docker_exec_argv(container, "bash", "-lc", probe), capture_output=True, text=True,
                                    timeout=60)
             except Exception:
                 return None
@@ -1117,7 +1118,7 @@ def _run_ngspice_in(container: str, cwd_dir: str, deck_path: str,
     cmd = (f"export PATH=/foss/tools/bin:$PATH; cd {shlex.quote(cwd_dir)} && "
            f"{shlex.quote(ngspice)} -b {shlex.quote(deck_path)} 2>&1")
     try:
-        cp = _pr.run(["docker", "exec", container, "bash", "-lc", cmd],
+        cp = _pr.run(_ce.docker_exec_argv(container, "bash", "-lc", cmd),
                             capture_output=True, text=True)
     except Exception as e:  # pragma: no cover - env dependent
         return False, f"docker/ngspice invocation failed: {e}"
@@ -1127,7 +1128,7 @@ def _run_ngspice_in(container: str, cwd_dir: str, deck_path: str,
 def _container_stdout(container: str, command: str,
                       timeout: int = 120) -> Optional[str]:
     try:
-        cp = _pr.run(["docker", "exec", container, "bash", "-lc", command],
+        cp = _pr.run(_ce.docker_exec_argv(container, "bash", "-lc", command),
                      capture_output=True, text=True)
     except Exception:
         return None
@@ -2840,8 +2841,7 @@ def _resolve_opensta(container: str) -> Optional[str]:
                   "ls /foss/tools/bin/sta 2>/dev/null | head -1",
                   "ls /foss/tools/*/bin/sta 2>/dev/null | head -1"):
         try:
-            r = subprocess.run(["docker", "exec", container, "bash", "-lc",
-                                probe], capture_output=True, text=True,
+            r = subprocess.run(_ce.docker_exec_argv(container, "bash", "-lc", probe), capture_output=True, text=True,
                                timeout=60)
         except Exception:
             return None
@@ -2859,7 +2859,7 @@ def _run_opensta_in(container: str, cwd_dir: str, tcl_path: str,
     cmd = (f"export PATH=/foss/tools/bin:$PATH; cd {shlex.quote(cwd_dir)} && "
            f"{shlex.quote(sta)} -no_init -exit {shlex.quote(tcl_path)} 2>&1")
     try:
-        cp = _pr.run(["docker", "exec", container, "bash", "-lc", cmd],
+        cp = _pr.run(_ce.docker_exec_argv(container, "bash", "-lc", cmd),
                             capture_output=True, text=True)
     except Exception as e:  # pragma: no cover - env dependent
         return False, f"docker/opensta invocation failed: {e}"

@@ -66,6 +66,7 @@ from pathlib import Path
 from typing import Dict, Optional, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _container_exec as _ce  # noqa: E402 — the ONE guarded docker-exec argv
 import _atomic_artefact as _aa  # noqa: E402 — vibe-ic#1082
 
 # Where a magic-based PDK keeps the two files this program reads. Both are
@@ -78,7 +79,7 @@ MAGIC_TECH = "{root}/{family}/libs.tech/magic/{family}.tech"
 def _read(path: str, container: Optional[str]) -> Optional[str]:
     """Read a PDK file. It usually lives in the EDA image, not on the host."""
     if container:
-        cp = subprocess.run(["docker", "exec", container, "cat", path],
+        cp = subprocess.run(_ce.docker_exec_argv(container, "cat", path),
                             capture_output=True, text=True, timeout=120)
         return cp.stdout if cp.returncode == 0 and cp.stdout else None
     try:

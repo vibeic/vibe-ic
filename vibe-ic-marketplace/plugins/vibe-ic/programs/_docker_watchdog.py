@@ -38,6 +38,9 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Set, Tuple
 
 import _watchdog as _wd
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _container_exec as _ce  # noqa: E402 — the ONE guarded docker-exec argv
 
 DEFAULT_POLL_S = _wd.DEFAULT_POLL_S
 DEFAULT_STALL_GRACE_S = _wd.DEFAULT_STALL_GRACE_S
@@ -601,7 +604,7 @@ def run_docker_supervised(container: str, cmd: str, marker: str, *,
     if container in ("", "host"):
         full = ["bash", "-lc", wrapped]
     else:
-        full = ["docker", "exec", container, "bash", "-lc", wrapped]
+        full = _ce.docker_exec_argv(container, "bash", "-lc", wrapped)
 
     stage_log_offset = 0
     stage_evidence = ""

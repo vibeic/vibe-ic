@@ -68,7 +68,8 @@ import _reference_flow_boundary as _rfb
 import _source_record_merge as _srm  # per-source merge: silence cannot erase
 import floorplan_contract as _fpc  # design-declared fixed floorplan + DRV limits
 from _rtl_include_hub import drop_include_hubs as _drop_include_hubs  # shared aggregator filter
-import _container_exec as _cex  # the ONE 'is there a route to a container' predicate
+import _container_exec as _cex  # the ONE route predicate AND the ONE guarded
+                                # docker-exec argv builder — one module, one alias
 import _watchdog as _wd  # v1.3.47 — plugin-wide progress-stall supervision
 import _docker_watchdog as _dwd  # shared in-container CPU probe (tree-aware)
 import _runner_lock  # ORGANIC #588 — single-driver lock (all 4 runners)
@@ -1124,16 +1125,30 @@ def _exec_argv(container: str, wrapped: str) -> List[str]:
     if _local_exec_mode():
         os.environ.setdefault("IIC_OSIC_TOOLS_QUIET", "1")
         return ["bash", "-lc", wrapped]
-    return ["docker", "exec",
-            # The vibeic-eda image's profile prints a startup banner
-            # ("[INFO] Final PATH variable: ...") to STDOUT on every LOGIN
-            # shell, ahead of the command output. `IIC_OSIC_TOOLS_QUIET` is
-            # the image's OWN documented knob for it
-            # (/etc/profile.d/iic-osic-tools-setup.sh guards both echoes on
-            # it), so suppressing at SOURCE keeps every probe's stdout
-            # clean instead of filtering the noise at each consumer.
-            "-e", "IIC_OSIC_TOOLS_QUIET=1",
-            container, "bash", "-lc", wrapped]
+    # TWO DECISIONS, ONE EACH, COMPOSED HERE.
+    #
+    # The branch above decides WHERE a tool runs — in this image, or in a
+    # container — and that is this seam's question. WHICH BYTES the container
+    # holds is a different one, and it is `_container_exec.docker_exec_argv`'s:
+    # a name is a label whichever process got there first is holding, and a run
+    # that attaches to another run's container records provenance about the
+    # wrong image. So the route is chosen here and the argv is built there, by
+    # the one constructor that carries the attach check.
+    #
+    # The argv is UNCHANGED by that: `docker_exec_argv` puts `opts` between
+    # `exec` and the container exactly where these two flags already were.
+    # Local mode reaches none of this — nothing is being attached to, so there
+    # is nothing to check.
+    return _cex.docker_exec_argv(
+        container, "bash", "-lc", wrapped,
+        # The vibeic-eda image's profile prints a startup banner
+        # ("[INFO] Final PATH variable: ...") to STDOUT on every LOGIN
+        # shell, ahead of the command output. `IIC_OSIC_TOOLS_QUIET` is
+        # the image's OWN documented knob for it
+        # (/etc/profile.d/iic-osic-tools-setup.sh guards both echoes on
+        # it), so suppressing at SOURCE keeps every probe's stdout
+        # clean instead of filtering the noise at each consumer.
+        opts=("-e", "IIC_OSIC_TOOLS_QUIET=1"))
 
 
 def _annotate_local_exec(rc: int, err: str) -> str:
@@ -10426,7 +10441,7 @@ def _assert_pdk_name_resolvable(override: Optional[str]) -> None:
 def _container_file_text(container: str, path: str) -> Optional[str]:
     """PR-A1 — read a text file from the EDA container (docker exec cat)."""
     try:
-        cp = subprocess.run(["docker", "exec", container, "cat", path],
+        cp = subprocess.run(_cex.docker_exec_argv(container, "cat", path),
                             capture_output=True, text=True, timeout=120)
         return cp.stdout if cp.returncode == 0 else None
     except Exception:
@@ -10521,8 +10536,7 @@ def _stage_asap7_merged_liberty(project: Path, container: str,
     """
     import hashlib as _hl
     cp = _pr.run(
-        ["docker", "exec", container, "bash", "-lc",
-         f"ls {reg['container_path']}/{reg['liberty_glob']}"],
+        _cex.docker_exec_argv(container, "bash", "-lc", f"ls {reg['container_path']}/{reg['liberty_glob']}"),
         capture_output=True, text=True)
     files = sorted(f for f in cp.stdout.split() if f.endswith(".lib"))
     if not files:
@@ -10808,7 +10822,7 @@ def _pdk_config_from_registry(project: Path, reg: Dict[str, Any]
 
     Returns None when the mandatory assets (liberty + both LEFs) cannot be
     resolved, so the caller can refuse rather than substitute. PDK-AGNOSTIC."""
-    container = os.environ.get("EDA_CONTAINER", "vibeic-eda")
+    container = os.environ.get("EDA_CONTAINER") or _pin.default_container_name()
     root = reg.get("container_path") or ""
     if not root:
         return None
@@ -10966,7 +10980,7 @@ def _detect_pdk(project: Path, override: Optional[str] = None
                          "sky130_fd_sc_hd/techlef/sky130_fd_sc_hd__nom.tlef")
             _mlibs, _mlefs, _mgds, _mv = _discover_local_macros(
                 project, _tlef_sky,
-                os.environ.get("EDA_CONTAINER", "vibeic-eda"))
+                os.environ.get("EDA_CONTAINER") or _pin.default_container_name())
             return PdkConfig(
                 name="sky130A",
                 liberty=f"{PDKS_IN_CONTAINER}/sky130A/libs.ref/sky130_fd_sc_hd/"
@@ -11012,7 +11026,7 @@ def _detect_pdk(project: Path, override: Optional[str] = None
             ng = f"{PDKS_IN_CONTAINER}/nangate45/libs.ref/NangateOpenCellLibrary"
             _mlibs, _mlefs, _mgds, _mv = _discover_local_macros(
                 project, f"{ng}/techlef/NangateOpenCellLibrary.tech.lef",
-                os.environ.get("EDA_CONTAINER", "vibeic-eda"))
+                os.environ.get("EDA_CONTAINER") or _pin.default_container_name())
             return PdkConfig(
                 name="nangate45",
                 liberty=f"{ng}/lib/NangateOpenCellLibrary_typical.lib",
@@ -11063,7 +11077,7 @@ def _detect_pdk(project: Path, override: Optional[str] = None
                     "[FAIL] --pdk asap7: pdk_registry.json carries no "
                     "'asap7' entry (payload corrupt?) — REFUSING a silent "
                     "fallback to another PDK.")
-            _container = os.environ.get("EDA_CONTAINER", "vibeic-eda")
+            _container = os.environ.get("EDA_CONTAINER") or _pin.default_container_name()
             _lib = _stage_asap7_merged_liberty(project, _container, reg)
             _tlef = _stage_normalized_techlef(project, _container, reg)
             _mlibs, _mlefs, _mgds, _mv = _discover_local_macros(
@@ -11140,7 +11154,7 @@ def _detect_pdk(project: Path, override: Optional[str] = None
                 raise SystemExit(
                     f"[FAIL] --pdk {override}: declared in pdk_registry.json "
                     f"but its assets could not be resolved inside container "
-                    f"'{os.environ.get('EDA_CONTAINER', 'vibeic-eda')}' "
+                    f"'{os.environ.get('EDA_CONTAINER') or _pin.default_container_name()}' "
                     f"(container_path={_reg.get('container_path')!r}). "
                     f"REFUSING to fall back to sky130A — that would emit "
                     f"sign-off reports for a PDK you did not ask for. Fix the "
@@ -11555,7 +11569,7 @@ def _v1_6_604_read_text_or_container_cat(
         return None
     try:
         r = subprocess.run(
-            ["docker", "exec", container, "cat", path],
+            _cex.docker_exec_argv(container, "cat", path),
             capture_output=True, text=True, timeout=30,
             errors="ignore",
         )
@@ -12072,6 +12086,7 @@ import synth_frontend as _sf
 # Staged-adder-map recipe + post-run "did it actually bind?" verification.
 import adder_map_techmap as _amt
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _eda_pin as _pin  # noqa: E402 — the ONE place the pin is stated
 import _atomic_artefact as _aa  # noqa: E402  (vibe-ic#1082)
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -16072,7 +16087,7 @@ def _flow_default_max_fanout(project: Path, pdk: str):
         if not container:
             return None, ""
         out = subprocess.run(
-            ["docker", "exec", container, "cat", _FLOW_PDK_DEFAULTS_PATH],
+            _cex.docker_exec_argv(container, "cat", _FLOW_PDK_DEFAULTS_PATH),
             capture_output=True, text=True, timeout=60)
         if out.returncode != 0:
             return None, ""
@@ -52088,7 +52103,7 @@ def main() -> int:
                    help=("design identity forwarded by the canonical product "
                          "runner; distinct from a structurally resolved RTL "
                          "top module"))
-    p.add_argument("--container", default="vibeic-eda")
+    p.add_argument("--container", default=_pin.default_container_name())
     p.add_argument("--die-um", default="auto",
                    help="Die size W x H in microns, or 'auto' (default) to size "
                         "the die from the synth cell count + PDK site area + "

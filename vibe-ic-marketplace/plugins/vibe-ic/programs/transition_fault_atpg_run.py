@@ -117,6 +117,8 @@ if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
 import _watchdog as _wd  # noqa: E402  progress-stall supervision (v1.3.47)
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _container_exec as _ce  # noqa: E402 — the ONE guarded docker-exec argv
 
 try:  # sibling module; programs/ is on sys.path when run as a script
     import _docker_memory as _dmem
@@ -561,8 +563,7 @@ def _run_in_docker(project: Path, shell_cmd: str, timeout: int,
         # of defect).
         try:
             r = subprocess.run(
-                ["docker", "exec", cname, "sh", "-c",
-                 "cat /proc/[0-9]*/stat 2>/dev/null"],
+                _ce.docker_exec_argv(cname, "sh", "-c", "cat /proc/[0-9]*/stat 2>/dev/null"),
                 capture_output=True, text=True, timeout=15)
         except Exception:  # nosec — a probe failure is just "no reading"
             return None

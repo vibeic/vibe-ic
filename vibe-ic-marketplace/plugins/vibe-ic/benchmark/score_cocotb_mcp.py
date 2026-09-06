@@ -35,6 +35,14 @@ from __future__ import annotations
 import argparse, json, subprocess, shutil, time, re
 import xml.etree.ElementTree as ET
 from pathlib import Path
+import sys
+# The helpers live in `programs/`, NOT beside this file. A bootstrap
+# pointing at this directory imports nothing and the gate dies at
+# start-up with ModuleNotFoundError -- measured, as a SCRIPT, which is
+# the only way this file is ever run.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "programs"))
+import _container_exec as _ce  # noqa: E402 — the ONE guarded docker-exec argv
+import _eda_pin as _pin  # noqa: E402 — the ONE place the pin is stated
 
 
 def _docker_path(host_path: Path, mount_host: Path, mount_container: str = "/foss/designs") -> str:
@@ -99,7 +107,7 @@ def main():
                          "Pass --rtl explicitly to score a non-canonical RTL file.")
     ap.add_argument("--mount-root", required=True, help="host path mounted into the container as /foss/designs (e.g. /home/<user>/<your-designs-dir>)")
     ap.add_argument("--mount-container", default="/foss/designs")
-    ap.add_argument("--container", default="vibeic-eda")
+    ap.add_argument("--container", default=_pin.default_container_name())
     ap.add_argument("--simulator", default="icarus")
     ap.add_argument("--waves", type=int, default=0,
                     help="WAVES env for the cocotb runner (0=off default, 1=dump FST/VCD). "
@@ -200,7 +208,7 @@ def main():
         f"export PYTHONPATH={work_c}:${{PYTHONPATH:-}}; "
         f"cd {work_c} && python3 -m pytest -rA -s test_runner.py"
     )
-    cmd = ["docker", "exec", a.container, "bash", "-lc", inner]
+    cmd = _ce.docker_exec_argv(a.container, "bash", "-lc", inner)
     t0 = time.time()
     p = subprocess.run(cmd, capture_output=True, text=True, timeout=a.timeout)
     elapsed = time.time() - t0

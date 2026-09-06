@@ -32,6 +32,9 @@ from dataclasses import dataclass, field
 import subprocess
 from pathlib import Path
 from typing import Any, Callable, Dict, List, NamedTuple, Optional, Tuple
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _container_exec as _ce  # noqa: E402 — the ONE guarded docker-exec argv
 
 # ── canonical sky130 device tokens the corner templates are authored against ──
 # These are the tokens the deck emitter REMAPS to the resolved family's device
@@ -1008,7 +1011,7 @@ def container_reader(container: str) -> Callable[[str], Optional[str]]:
         if not container:
             return None
         try:
-            r = subprocess.run(["docker", "exec", container, "cat", path],
+            r = subprocess.run(_ce.docker_exec_argv(container, "cat", path),
                                capture_output=True, text=True, timeout=30,
                                errors="replace")
             if r.returncode == 0:

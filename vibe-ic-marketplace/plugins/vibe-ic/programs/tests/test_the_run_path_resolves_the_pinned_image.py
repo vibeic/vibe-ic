@@ -31,6 +31,7 @@ and green after.
 from __future__ import annotations
 
 import ast
+import json
 import pathlib
 import re
 import subprocess
@@ -406,6 +407,233 @@ def test_the_refusal_rc_is_distinct_from_every_other_outcome():
     codes = {CE.IMAGE_MISMATCH_RC, CE.TIMEOUT_EXPIRED_RC,
              CE.TIMEOUT_UNAVAILABLE_RC, 0}
     assert len(codes) == 4
+
+
+# ── 4. every path into a container goes through the guarded builder ─────────
+#
+# `run_in_container` refused to attach to the wrong bytes from v1.18.18, but it
+# was never the only way in: MEASURED 2026-09-07, SIXTY-FIVE argv constructions
+# in THIRTY shipped files spelled `["docker", "exec", …]` by hand, and the
+# guarantee held on none of them. A guard each caller must remember to call is a
+# guard that decays; the guard lives in the constructor now, so there is nothing
+# else to call.
+
+_PLUGIN = _PROGRAMS.parent
+_SHARED_CONTAINER_LITERAL = "vibeic-eda"
+
+
+def _shipped_py():
+    """Every shipped (non-test) .py under the plugin, as (rel, source).
+
+    DERIVED FROM THE TREE. A hand-written list of "the files that do this" omits
+    whatever the tree grows next, which is the whole failure mode these two
+    population tests exist to close.
+    """
+    for path in sorted(_PLUGIN.rglob("*.py")):
+        rel = path.relative_to(_PLUGIN)
+        if "tests" in rel.parts or "test" in rel.parts or path.name.startswith("test_"):
+            continue
+        yield rel.as_posix(), path.read_text(encoding="utf-8", errors="replace")
+
+
+def test_no_shipped_file_hand_builds_a_docker_exec_argv():
+    """THE POPULATION TEST for item (b). Sixty-five before, one after — and the
+    one is the builder itself, which has to spell the argv or nothing could."""
+    offenders = []
+    for rel, src in _shipped_py():
+        if '"docker"' not in src or '"exec"' not in src:
+            continue                              # cheap pre-filter, then AST
+        try:
+            tree = ast.parse(src)
+        except SyntaxError:
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.List, ast.Tuple)) and len(node.elts) >= 2:
+                a, b = node.elts[0], node.elts[1]
+                if isinstance(a, ast.Constant) and a.value == "docker" and \
+                        isinstance(b, ast.Constant) and b.value == "exec":
+                    offenders.append(f"{rel}:{node.lineno}")
+    # The builder's own file is the ONE place the argv may be spelled: it is
+    # where it is defined. Assert that positively, so an empty `offenders` --
+    # which would mean the scan found nothing at all and is a broken instrument,
+    # not a clean tree -- cannot read as a pass.
+    assert any(o.startswith("programs/_container_exec.py") for o in offenders), (
+        "the scan found no `docker exec` argv anywhere, not even the builder's "
+        "own — the instrument is broken, so its zero means nothing")
+    outside = [o for o in offenders if not o.startswith("programs/_container_exec.py")]
+    assert not outside, (
+        "these build a `docker exec` argv by hand, so the attach check does not "
+        f"cover them — call _container_exec.docker_exec_argv: {outside}")
+
+
+def test_no_shipped_file_names_the_shared_container_literal():
+    """THE POPULATION TEST for item (a). Forty-two before, one after — and the
+    one is `_eda_pin.CONTAINER_NAME_PREFIX`, which is where the name is DEFINED.
+
+    A shared name is not an identity: whichever process got there first is
+    holding it, and on 8hd-3 that was a 0.3.46 container while the pin demanded
+    0.3.47."""
+    offenders = []
+    for rel, src in _shipped_py():
+        if _SHARED_CONTAINER_LITERAL not in src:
+            continue
+        try:
+            tree = ast.parse(src)
+        except SyntaxError:
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Constant) and node.value == _SHARED_CONTAINER_LITERAL:
+                offenders.append(f"{rel}:{node.lineno}")
+    # SAME EMPTY-DENOMINATOR GUARD as the sibling above, and it is here because
+    # mutation N7 caught its absence: blinding the scan left THIS test green
+    # while the other one went red. A scan that finds nothing has not proved the
+    # tree is clean, it has proved nothing.
+    assert any(o.startswith("programs/_eda_pin.py") for o in offenders), (
+        "the scan found the shared literal nowhere, not even where it is "
+        "DEFINED — the instrument is broken, so its zero means nothing")
+    outside = [o for o in offenders if not o.startswith("programs/_eda_pin.py")]
+    assert not outside, (
+        "these name the shared container literal instead of deriving it from "
+        f"the pin — call _eda_pin.default_container_name(): {outside}")
+
+
+def test_docker_exec_argv_builds_exactly_the_argv_it_replaced(monkeypatch):
+    monkeypatch.setattr(P, "container_attach_refusal", lambda c, env=None: "")
+    assert CE.docker_exec_argv("c", "bash", "-lc", "echo hi") == \
+        ["docker", "exec", "c", "bash", "-lc", "echo hi"]
+    # flags that must PRECEDE the container are a separate parameter, so the
+    # container is always an identified argument and can always be checked
+    assert CE.docker_exec_argv("c", "sh", "-c", "x", opts=("-w", "/w")) == \
+        ["docker", "exec", "-w", "/w", "c", "sh", "-c", "x"]
+
+
+def test_docker_exec_argv_REFUSES_a_measured_mismatch(monkeypatch):
+    monkeypatch.setattr(P, "container_attach_refusal",
+                        lambda c, env=None: f"{P.CONTAINER_IMAGE_MISMATCH}: bad")
+    with pytest.raises(CE.ContainerImageMismatch) as exc:
+        CE.docker_exec_argv("c", "bash", "-lc", "echo hi")
+    assert P.CONTAINER_IMAGE_MISMATCH in str(exc.value)
+
+
+def test_docker_exec_argv_does_NOT_refuse_an_unreadable_digest(monkeypatch):
+    """Ruling 3: an unreadable digest is NOT_MEASURED provenance. Work may
+    proceed — docker reports its own failure — it simply cannot be credited."""
+    monkeypatch.setattr(P, "container_image_digest",
+                        lambda c: (None, "no container named c"))
+    assert CE.docker_exec_argv("c", "bash", "-lc", "x")[:3] == ["docker", "exec", "c"]
+
+
+def test_the_deadline_argv_is_guarded_too(monkeypatch):
+    """The deadline path is a `docker exec` like any other and must not be a
+    hole in the guard."""
+    monkeypatch.setattr(P, "container_attach_refusal",
+                        lambda c, env=None: f"{P.CONTAINER_IMAGE_MISMATCH}: bad")
+    with pytest.raises(CE.ContainerImageMismatch):
+        CE.container_deadline_argv("c", "echo hi", 5)
+
+
+def test_the_refusal_path_RETURNS_rc_and_never_RAISES(monkeypatch):
+    """A REGRESSION I WROTE AND THIS CAUGHT.
+
+    Routing `container_deadline_argv` through the guard made `run_in_container`'s
+    refusal branch ask the guard a SECOND time — from inside the very branch
+    whose contract is to RETURN `IMAGE_MISMATCH_RC`. It raised instead, turning
+    a landed, tested refusal into an exception its callers had never seen.
+    """
+    monkeypatch.setattr(P, "container_attach_refusal",
+                        lambda c, env=None: f"{P.CONTAINER_IMAGE_MISMATCH}: bad")
+    cp = CE.run_in_container("c", "echo hi", deadline_s=5)
+    assert cp.returncode == CE.IMAGE_MISMATCH_RC
+    assert cp.args[:3] == ["docker", "exec", "c"]
+    assert P.CONTAINER_IMAGE_MISMATCH in cp.stderr
+
+
+# ── 5. the pin has FOUR copies and they are all bound ───────────────────────
+
+def test_every_copy_of_the_pinned_digest_is_bound_to_every_other():
+    """THE QUESTION I GOT WRONG, answered in one place.
+
+    I reported `tools/ci/protected_landing_transition.py` as an UNBOUND third
+    copy of the digest. It was not: `test_manifest_and_runtime_use_one_exact_
+    base_owned_image` had bound it to the runner and to the manifest all along.
+    The chain is a star around `hermetic_candidate_runner.IMAGE_DIGEST`, and a
+    reader should not have to reconstruct it from two files to see that.
+    """
+    repo = _repo_root()
+    runner = _runner_pin()["IMAGE_DIGEST"]
+    copies = {"tools/ci/hermetic_candidate_runner.py": runner,
+              "programs/_eda_pin.py": P.IMAGE_DIGEST}
+
+    plt = (repo / "tools/ci/protected_landing_transition.py").read_text(
+        encoding="utf-8")
+    m = re.search(r'"@(sha256:[0-9a-f]{64})"', plt)
+    assert m, "protected_landing_transition.py names no digest"
+    copies["tools/ci/protected_landing_transition.py"] = m.group(1)
+
+    manifest = json.loads(
+        (repo / "tools/ci/protected_landing_transition.json").read_text(
+            encoding="utf-8"))
+    image = manifest.get("runner", {}).get("image", "")
+    assert "@" in image, f"manifest runner image is not digest-pinned: {image!r}"
+    copies["tools/ci/protected_landing_transition.json"] = image.split("@", 1)[1]
+
+    assert len(set(copies.values())) == 1, (
+        f"the pinned digest has drifted between its copies: {copies}")
+
+
+# ── 6. the route and the argv are two decisions, composed ───────────────────
+
+def _phase3():
+    import importlib
+    return importlib.import_module("phase3_one_shot_runner")
+
+
+def test_the_route_seam_and_the_argv_builder_compose(monkeypatch):
+    """TWO LANDINGS, TWO QUESTIONS, ONE CALL — and neither answers the other's.
+
+    v1.18.20 (lane czsubdock) taught `phase3_one_shot_runner._exec_argv` to
+    decide WHERE a tool runs: in this image when there is no docker client, in a
+    container otherwise. This lane's `_container_exec.docker_exec_argv` decides
+    HOW a container is addressed — which bytes it must hold. They met in the
+    same three lines and they compose: the seam picks the route, and the
+    container branch hands the argv to the one constructor that carries the
+    attach check.
+
+    LOCAL MODE REACHES NO CHECK, deliberately. Nothing is being attached to
+    there, so there is no container whose image could be wrong; asking would be
+    inventing a question the route does not raise.
+    """
+    R = _phase3()
+    monkeypatch.setattr(R, "_LOCAL_EXEC_MODE", True)
+    assert R._exec_argv("anything", "yosys -V") == ["bash", "-lc", "yosys -V"]
+
+    monkeypatch.setattr(R, "_LOCAL_EXEC_MODE", False)
+    monkeypatch.setattr(P, "container_attach_refusal", lambda c, env=None: "")
+    # the container argv is UNCHANGED from what v1.18.27 built inline, flag
+    # placement included — `opts` go between `exec` and the container
+    assert R._exec_argv("c", "yosys -V") == [
+        "docker", "exec", "-e", "IIC_OSIC_TOOLS_QUIET=1", "c",
+        "bash", "-lc", "yosys -V"]
+
+
+def test_the_route_seam_still_REFUSES_the_wrong_image(monkeypatch):
+    """The half that would be lost if the seam ever rebuilt the argv itself."""
+    R = _phase3()
+    monkeypatch.setattr(R, "_LOCAL_EXEC_MODE", False)
+    monkeypatch.setattr(P, "container_attach_refusal",
+                        lambda c, env=None: f"{P.CONTAINER_IMAGE_MISMATCH}: bad")
+    with pytest.raises(CE.ContainerImageMismatch):
+        R._exec_argv("someone-elses-container", "yosys -V")
+
+
+def test_phase3_imports_the_container_helper_under_ONE_alias():
+    """One module, one name. The rebase briefly carried both `_cex` (the route
+    predicate) and `_ce` (the argv builder) for the same module — two names for
+    one thing is how two call sites come to believe they are talking about
+    different modules."""
+    src = (_PROGRAMS / "phase3_one_shot_runner.py").read_text(encoding="utf-8")
+    aliases = set(re.findall(r"^import _container_exec as (\w+)", src, re.M))
+    assert len(aliases) == 1, f"phase3 imports _container_exec as {aliases}"
 
 
 if __name__ == "__main__":

@@ -53,6 +53,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 import _path_layout as _pl
 import _runner_lock
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _eda_pin as _pin  # noqa: E402 — the ONE place the pin is stated
 
 
 PROGRAMS_DIR = Path(__file__).resolve().parent
@@ -591,7 +593,7 @@ def main() -> int:
     p = argparse.ArgumentParser()
     p.add_argument("project", type=Path)
     p.add_argument("--top-name", default=_TOP_NAME_DEFAULT)
-    p.add_argument("--container", default="vibeic-eda")
+    p.add_argument("--container", default=_pin.default_container_name())
     # `--container` names a CONTAINER (every step is `docker exec <container>`),
     # so nothing here ever asked which IMAGE that container was started from.
     # The identity is now RECORDED unconditionally (see the capture below) and

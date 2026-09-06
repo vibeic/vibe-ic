@@ -48,6 +48,12 @@ import sys
 import tempfile
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+# The helpers live in `programs/`, NOT beside this file. A bootstrap
+# pointing at this directory imports nothing and the gate dies at
+# start-up with ModuleNotFoundError -- measured, as a SCRIPT, which is
+# the only way this file is ever run.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "programs"))
+import _eda_pin as _pin  # noqa: E402 — the ONE place the pin is stated
 
 HARNESS_DIR = Path(__file__).resolve().parent
 PROGRAMS_DIR = HARNESS_DIR.parent / "programs"
@@ -2761,9 +2767,7 @@ def latency_contract_from_prompt(prompt_text):
 # own measured BLOCK verdict (rc 1); a missing baseline / absent yosys-in-
 # container / unparseable threshold / ambiguous top ALL resolve to advisory-PASS
 # (#729 returns NOT_APPLICABLE rc 0), never a false block on a missing input.
-_AREA_CONTAINER = "vibeic-eda"
-
-
+_AREA_CONTAINER = _pin.default_container_name()
 def _area_top(baseline_rtls, completion, harness_top=None):
     """The single module shared by the ORIGINAL baseline (input.context RTL) and
     the OPTIMIZED completion — the synth top for the #729 area measurement. A

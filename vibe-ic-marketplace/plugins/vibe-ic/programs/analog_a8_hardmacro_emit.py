@@ -55,6 +55,9 @@ PROGRAMS_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(PROGRAMS_DIR))
 
 from _atomic_artefact import write_json  # noqa: E402 - vibe-ic#1082
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _container_exec as _ce  # noqa: E402 — the ONE guarded docker-exec argv
+import _eda_pin as _pin  # noqa: E402 — the ONE place the pin is stated
 
 
 def _docker_exec_raw(container: str, cmd: str, timeout: int = 900
@@ -72,7 +75,14 @@ def _docker_exec_raw(container: str, cmd: str, timeout: int = 900
     #     '[INFO] Final ...python\nprobe'   !=   'probe'
     # A short probe (`ls`, `test -e`, `echo`) needs no profile, and a reader of
     # its output must not have to know which banner today's image prints.
-    argv = (["docker", "exec", container, "bash", "-lc", cmd] if container
+    #
+    # The `-l`/no-`-l` split above is that landing's, unchanged. What moved is
+    # only WHO BUILDS the container argv: `_container_exec.docker_exec_argv` is
+    # the one constructor, and it carries the attach check that keeps this probe
+    # from reading `magic` out of a container holding bytes nobody pinned. The
+    # argv it returns is identical, `-lc` included; the host branch never
+    # reaches it, because there is no container there to check.
+    argv = (_ce.docker_exec_argv(container, "bash", "-lc", cmd) if container
             else ["bash", "-c", cmd])
     try:
         cp = subprocess.run(argv, capture_output=True, text=True,
@@ -463,7 +473,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("project")
     ap.add_argument("--block", action="append")
-    ap.add_argument("--container", default="vibeic-eda")
+    ap.add_argument("--container", default=_pin.default_container_name())
     ap.add_argument("--pdk-root", default="/foss/pdks")
     ap.add_argument("--json")
     a = ap.parse_args(argv)

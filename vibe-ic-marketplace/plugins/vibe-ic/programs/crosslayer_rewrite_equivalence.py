@@ -100,6 +100,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _eda_pin as _pin  # noqa: E402 — the ONE place the pin is stated
 
 from _design_module_set import (  # noqa: E402 — vibe-ic#712 comment strip
     strip_comments as _strip_hdl_comments,
@@ -114,7 +115,7 @@ from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082/#14
 
 PROGRAM = "crosslayer_rewrite_equivalence"
 
-DEFAULT_CONTAINER = "vibeic-eda"
+DEFAULT_CONTAINER = _pin.default_container_name()
 DEFAULT_JSON_REL = "reports/crosslayer_rewrite_equivalence.json"
 DEFAULT_RPT_REL = "reports/crosslayer_rewrite_equivalence.rpt"
 DEFAULT_TIMEOUT_S = 1800

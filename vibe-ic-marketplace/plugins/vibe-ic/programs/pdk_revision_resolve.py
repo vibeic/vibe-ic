@@ -144,6 +144,8 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _container_exec as _ce  # noqa: E402 — the ONE guarded docker-exec argv
 
 _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:                      # pragma: no cover - path setup
@@ -240,7 +242,7 @@ class Fs:
     def _sh(self, script: str, timeout: int = _PROBE_TIMEOUT
             ) -> Tuple[int, str]:
         if self.container:
-            cmd = ["docker", "exec", self.container, "sh", "-c", script]
+            cmd = _ce.docker_exec_argv(self.container, "sh", "-c", script)
         else:
             cmd = ["sh", "-c", script]
         try:

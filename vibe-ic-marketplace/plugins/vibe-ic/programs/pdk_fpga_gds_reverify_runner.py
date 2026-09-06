@@ -56,6 +56,7 @@ from pathlib import Path
 from typing import List, Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _eda_pin as _pin  # noqa: E402 — the ONE place the pin is stated
 import _progress_run as _pr  # noqa: E402
 
 
@@ -299,7 +300,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--bus-prefix", default="id_bus")
     ap.add_argument("--mif-name", default="otp_init",
                     help="MIF filename stem (no extension)")
-    ap.add_argument("--container", default="vibeic-eda")
+    ap.add_argument("--container", default=_pin.default_container_name())
     ap.add_argument("--quartus-bin",
                     default="/mnt/2a6ff798-a964-4a91-b131-e34fd4ca66ed/"
                             "eda/quartus/quartus/bin/quartus_sh")

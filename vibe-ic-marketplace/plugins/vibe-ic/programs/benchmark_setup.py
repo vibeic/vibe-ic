@@ -14,6 +14,9 @@ Usage:
 from __future__ import annotations
 import argparse, json, os, shutil, subprocess, sys
 from pathlib import Path
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _eda_pin as _pin  # noqa: E402 — the ONE place the pin is stated
 
 HARNESS = Path(__file__).resolve().parent.parent / "benchmark"
 REGISTRY = HARNESS / "BENCHMARK_REGISTRY.json"
@@ -47,7 +50,10 @@ def env_summary() -> dict:
         "iverilog": _has("iverilog"),
         "yosys": _has("yosys"),
         "docker": _has("docker"),
-        "iic_eda_running": "vibeic-eda" in ps,
+        # THE PINNED CONTAINER, not "something called vibeic-eda". The derived
+            # name carries the digest, so this now answers the question the
+            # operator actually has: is the toolchain I pinned running here?
+            "iic_eda_running": _pin.default_container_name() in ps,
         "mcp_server_alive": _mcp_alive(),
         "git": _has("git"),
         "python3": _has("python3"),

@@ -47,6 +47,7 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _container_exec as _ce  # noqa: E402 — the ONE guarded docker-exec argv
 import _atomic_artefact as _aa  # noqa: E402  (vibe-ic#1082)
 import _eda_pin as _pin  # noqa: E402 — the ONE place the pin is stated
 
@@ -804,7 +805,7 @@ def _run_reused_testbench(project: Path, top: str, container: str,
 
 def _docker(container: str, cmd: str, timeout: int = 600):
     return _pr.run(
-        ["docker", "exec", container, "bash", "-lc", _TOOL_PATH + cmd],
+        _ce.docker_exec_argv(container, "bash", "-lc", _TOOL_PATH + cmd),
         capture_output=True, text=True)
 
 

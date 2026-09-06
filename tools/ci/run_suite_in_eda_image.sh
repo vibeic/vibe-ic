@@ -321,6 +321,25 @@ DOCKER_ARGS=(
   -e PYTEST_DISABLE_PLUGIN_AUTOLOAD=1
   -e GIT_CONFIG_GLOBAL=/dev/null
   -e GIT_CONFIG_NOSYSTEM=1
+  # THE ONE CONFIG POINT, FORWARDED — the variable, never the address.
+  #
+  # This harness already resolves the pin with `${VIBEIC_EDA_IMAGE_REPO:-...}`
+  # on the HOST, and then started a container that could not see it. MEASURED
+  # 2026-09-07 on 8hd-3 (lane czto12, reproduced here through this script): a
+  # nested resolve INSIDE the harness reported
+  #     VIBEIC_EDA_IMAGE_REPO = None
+  #     ghcr.io/vibeic/vibeic-eda@sha256:8da785a8… -> IMAGE_NOT_PRESENT
+  # while the identical resolve on the host names the fleet registry and finds
+  # the image. A deployment that serves the pinned bytes from somewhere else
+  # could configure the host and still have everything inside the harness fall
+  # back to a repository it cannot reach.
+  #
+  # The BARE `-e NAME` form is deliberate and is the reason no address appears
+  # here: docker copies the value from this process's environment when it is
+  # set, and does NOT create the variable at all when it is not — verified both
+  # ways on this host — so an unset host env cannot inject an empty value that
+  # would shadow the default inside the container.
+  -e VIBEIC_EDA_IMAGE_REPO
 )
 # `/tmp` is already shared above; a scratch root elsewhere needs its own bind at
 # its own path, for the same reason.

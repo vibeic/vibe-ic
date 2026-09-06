@@ -150,6 +150,9 @@ from typing import Dict, List, Optional, Tuple
 
 from _ppa import cli_exit  # PPA_INTERFACES §1: argparse exits 2; a bad invocation is 3
 from _ppa import area as _ppa_area  # noqa: E402  (PPA-009 taxonomy labels)
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _container_exec as _ce  # noqa: E402 — the ONE guarded docker-exec argv
+import _eda_pin as _pin  # noqa: E402 — the ONE place the pin is stated
 
 # ─── WHAT CLASS OF NUMBER THIS GATE PRODUCES (PPA-009, spec §7.3) ────────────
 # Everything this program measures is a COUNT off a yosys netlist: cells and
@@ -1097,8 +1100,7 @@ def _docker_exec_raw(container: str, cmd: str, timeout: int = 600
     kills only the `docker exec` CLIENT and ORPHANS the tool in the container
     (see `_docker_watchdog.wrap_with_container_timeout`). Chip-AGNOSTIC."""
     import _docker_watchdog as _dw
-    full = ["docker", "exec", container, "bash", "-lc",
-            _dw.wrap_with_container_timeout(cmd, timeout)]
+    full = _ce.docker_exec_argv(container, "bash", "-lc", _dw.wrap_with_container_timeout(cmd, timeout))
     try:
         cp = subprocess.run(full, capture_output=True, text=True,
                             timeout=timeout)
@@ -1423,7 +1425,7 @@ def main(argv=None) -> int:
     ap.add_argument("--metric", default=None, choices=_VALID_METRICS,
                     help="which metric the threshold binds (default: parsed "
                          "from the prompt, else 'both')")
-    ap.add_argument("--container", default="vibeic-eda",
+    ap.add_argument("--container", default=_pin.default_container_name(),
                     help="docker container with yosys (default vibeic-eda)")
     ap.add_argument("--json", default=None, help="optional JSON report path")
     args, _rc = cli_exit.parse_or_refuse(ap, argv)

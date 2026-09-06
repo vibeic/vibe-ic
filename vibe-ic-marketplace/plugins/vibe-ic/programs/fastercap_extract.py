@@ -49,6 +49,10 @@ import _spef_coupling as SC
 import _eda_pin as _pin  # noqa: E402 — the ONE place the pin is stated
 import pdk_dielectric_fit as PF
 from _atomic_artefact import writing as atomic_writing  # vibe-ic#1082 (helper from PR #1094)
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _container_exec as _ce  # noqa: E402 — the ONE guarded docker-exec argv
 
 UM_TO_M = 1e-6
 #: `_eda_pin.default_container_name()` IS this expression, plus the part
@@ -504,8 +508,7 @@ def _fastercap_available(runner: str, container: str) -> Tuple[bool, str]:
     if runner in ("auto", "docker"):
         try:
             r = subprocess.run(
-                ["docker", "exec", container, "bash", "-lc",
-                 "command -v FasterCap"],
+                _ce.docker_exec_argv(container, "bash", "-lc", "command -v FasterCap"),
                 capture_output=True, text=True, timeout=30)
             if r.returncode == 0 and r.stdout.strip():
                 return True, "docker"
@@ -524,7 +527,7 @@ def _run_fastercap(workdir: str, lst_name: str, mode: str, container: str,
             r = subprocess.run(["bash", "-lc", inner],
                                capture_output=True, text=True, timeout=timeout)
         else:
-            r = subprocess.run(["docker", "exec", container, "bash", "-lc", inner],
+            r = subprocess.run(_ce.docker_exec_argv(container, "bash", "-lc", inner),
                                capture_output=True, text=True, timeout=timeout)
         return (r.stdout or "") + (r.stderr or "")
     except Exception:
