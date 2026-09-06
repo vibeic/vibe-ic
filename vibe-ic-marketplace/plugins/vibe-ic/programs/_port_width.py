@@ -246,12 +246,14 @@ def dut_defaults(rtl_text: str, dut_module: str) -> Dict[str, int]:
     if m is None:
         return {}
     try:
-        own = m.dut_scope_constants(rtl_text or "", dut_module or "")
         pkgs = m.package_constants([("<text>", rtl_text or "")])
         imported = m.dut_imported_packages(rtl_text or "", dut_module or "")
+        out = _package_scope(pkgs, imported)
+        # SEEDED: a module's own default is legitimately written over a package
+        # constant (`parameter int DATA_WIDTH = top_pkg::TL_DW`).
+        own = m.dut_scope_constants(rtl_text or "", dut_module or "", seed=out)
     except Exception:
         return {}
-    out = _package_scope(pkgs, imported)
     out.update(own)          # the module's own declarations win
     return out
 
@@ -281,8 +283,10 @@ def defaults_from_sources(sources: Sequence[Tuple[object, str]],
         if not _declares(text or "", dut_module):
             continue
         try:
-            own = m.dut_scope_constants(text or "", dut_module or "")
             imported = m.dut_imported_packages(text or "", dut_module or "")
+            own = m.dut_scope_constants(
+                text or "", dut_module or "",
+                seed=_package_scope(pkgs, imported))
         except Exception:
             own, imported = {}, []
         if own or imported:

@@ -801,7 +801,8 @@ def _trim_value(text: str) -> str:
     return text.strip()
 
 
-def _harvest(header: str, *regexes) -> Dict[str, int]:
+def _harvest(header: str, *regexes,
+             seed: Optional[Dict[str, int]] = None) -> Dict[str, int]:
     """`{NAME: value}` for every declaration `regexes` match, IN SOURCE ORDER.
 
     Order is the point: a derived constant is written after the things it is
@@ -809,14 +810,23 @@ def _harvest(header: str, *regexes) -> Dict[str, int]:
     so feeding the accumulated map back in as it grows resolves the chain in
     one pass. A declaration that does not resolve is simply absent -- never a
     default -- so a width over it refuses by name.
+
+    `seed` is what is in scope BEFORE the module's own declarations: the
+    packages it imports and every package constant under its scoped name. A
+    module's own default is legitimately written over one of those --
+    `parameter int DATA_WIDTH = top_pkg::TL_DW` -- and harvesting the header
+    against nothing but itself left DATA_WIDTH unknown, and every port declared
+    over it refusing, on a number stated in a file the same run had already
+    read. The module's OWN names still win: `out` is layered over `seed`.
     """
     hits = []
     for rx in regexes:
         for m in rx.finditer(header):
             hits.append((m.start(), m.group(1), _trim_value(m.group(2))))
+    base = dict(seed or {})
     out: Dict[str, int] = {}
     for _pos, name, expr in sorted(hits):
-        val = _int_expr(expr, out)
+        val = _int_expr(expr, {**base, **out})
         if val is not None:
             out[name] = val
     return out
@@ -832,7 +842,9 @@ def dut_parameter_defaults(rtl_text: str, dut_module: str) -> Dict[str, int]:
     return _harvest(_dut_header_text(rtl_text, dut_module), _PARAM_DECL_RE)
 
 
-def dut_header_constants(rtl_text: str, dut_module: str) -> Dict[str, int]:
+def dut_header_constants(rtl_text: str, dut_module: str,
+                         seed: Optional[Dict[str, int]] = None
+                         ) -> Dict[str, int]:
     """`{NAME: value}` for the DUT header's parameters AND its localparams.
 
     This is what a port declaration is actually written against. A design that
@@ -850,7 +862,7 @@ def dut_header_constants(rtl_text: str, dut_module: str) -> Dict[str, int]:
     instantiation overrides, and overriding a localparam is not a thing.
     """
     return _harvest(_dut_header_text(rtl_text, dut_module),
-                    _PARAM_DECL_RE, _LOCALPARAM_DECL_RE)
+                    _PARAM_DECL_RE, _LOCALPARAM_DECL_RE, seed=seed)
 
 
 #: A PACKAGE is where a design puts the constants more than one module is
@@ -903,7 +915,9 @@ def _dut_body_text(rtl_text: str, dut_module: str) -> str:
     return body
 
 
-def dut_body_constants(rtl_text: str, dut_module: str) -> Dict[str, int]:
+def dut_body_constants(rtl_text: str, dut_module: str,
+                       seed: Optional[Dict[str, int]] = None
+                       ) -> Dict[str, int]:
     """`{NAME: value}` for constants `dut_module` declares in its BODY.
 
     Verilog-1995 has NO parameter header at all. The width is stated completely,
@@ -930,10 +944,11 @@ def dut_body_constants(rtl_text: str, dut_module: str) -> Dict[str, int]:
     for rx in (_PARAM_DECL_RE, _LOCALPARAM_DECL_RE):
         for m in rx.finditer(body):
             hits.append((m.start(), m.group(1), _trim_value(m.group(2))))
+    base = dict(seed or {})
     out: Dict[str, int] = {}
     seen: Dict[str, List[Optional[int]]] = {}
     for _pos, name, expr in sorted(hits):
-        val = _int_expr(expr, out)
+        val = _int_expr(expr, {**base, **out})
         seen.setdefault(name, []).append(val)
         if val is not None:
             out[name] = val
@@ -943,15 +958,17 @@ def dut_body_constants(rtl_text: str, dut_module: str) -> Dict[str, int]:
     return out
 
 
-def dut_scope_constants(rtl_text: str, dut_module: str) -> Dict[str, int]:
+def dut_scope_constants(rtl_text: str, dut_module: str,
+                        seed: Optional[Dict[str, int]] = None
+                        ) -> Dict[str, int]:
     """Every constant visible where `dut_module`'s ports are declared, from
     THIS text alone: its parameter header, then its body.
 
     The header WINS a name clash: it is the module's interface, and a body
     declaration of the same name is either a shadow or a duplicate.
     """
-    out = dict(dut_body_constants(rtl_text, dut_module))
-    out.update(dut_header_constants(rtl_text, dut_module))
+    out = dict(dut_body_constants(rtl_text, dut_module, seed=seed))
+    out.update(dut_header_constants(rtl_text, dut_module, seed=seed))
     return out
 
 

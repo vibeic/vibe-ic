@@ -325,6 +325,60 @@ def test_a_constant_derived_ACROSS_packages_and_over_a_slash():
     assert PW.resolve("[NumSlices-1:0]", params)[0] == " [7:0]"
 
 
+def test_a_module_default_written_over_a_PACKAGE_constant_resolves():
+    """The seam between the two harvests, and it was a hole.
+
+    `parameter int DATA_WIDTH = top_pkg::TL_DW` is a module's OWN default
+    stated over a PACKAGE constant. Harvesting the header against nothing but
+    itself left DATA_WIDTH unknown and every port declared over it refusing, on
+    a number stated in a file the same run had already read. The header and body
+    harvests are seeded with what is in scope before them.
+    """
+    rtl = ("module m\n  import bus_pkg::*;\n"
+           "#(parameter int DATA_WIDTH = bus_pkg::BUS_DW,\n"
+           "  parameter int MASK_WIDTH = DATA_WIDTH/8)\n"
+           "  (input [DATA_WIDTH-1:0] d, input [MASK_WIDTH-1:0] be);\n"
+           "endmodule\n")
+    params = PW.defaults_from_sources([("p.sv", _PKG), ("m.sv", rtl)], "m")
+    assert params["DATA_WIDTH"] == 32, params
+    assert params["MASK_WIDTH"] == 4, params          # ...and over `/` as well
+    assert PW.resolve("[DATA_WIDTH-1:0]", params)[0] == " [31:0]"
+    assert PW.resolve("[MASK_WIDTH-1:0]", params)[0] == " [3:0]"
+
+
+def test_without_the_package_that_same_default_refuses():
+    """THE OTHER DIRECTION. Take the package out of the source set and both
+    constants go back to unknown -- and the port refuses BY NAME, which is what
+    proves the line above reads the package and not a default."""
+    rtl = ("module m\n  import bus_pkg::*;\n"
+           "#(parameter int DATA_WIDTH = bus_pkg::BUS_DW)\n"
+           "  (input [DATA_WIDTH-1:0] d);\nendmodule\n")
+    params = PW.defaults_from_sources([("m.sv", rtl)], "m")
+    assert "DATA_WIDTH" not in params, params
+    decl, why = PW.resolve("[DATA_WIDTH-1:0]", params)
+    assert decl is None and "DATA_WIDTH" in why, (decl, why)
+
+
+def test_the_modules_own_name_still_wins_over_the_seed():
+    """Seeding must not let a package silently redefine the module's own
+    parameter. The seed is what is in scope BEFORE the module speaks."""
+    rtl = ("module m\n  import bus_pkg::*;\n"
+           "#(parameter int NumRegs = 9)\n"
+           "  (input [NumRegs-1:0] q);\nendmodule\n")
+    params = PW.defaults_from_sources([("p.sv", _PKG), ("m.sv", rtl)], "m")
+    assert params["NumRegs"] == 9, params             # not the package's 4
+    assert PW.resolve("[NumRegs-1:0]", params)[0] == " [8:0]"
+
+
+def test_a_body_constant_may_also_be_written_over_a_package_constant():
+    rtl = ("module m\n  import bus_pkg::*;\n  (input [LOCAL_W-1:0] d);\n"
+           "  localparam int LOCAL_W = bus_pkg::BUS_DW/2;\n"
+           "endmodule\n")
+    params = PW.defaults_from_sources([("p.sv", _PKG), ("m.sv", rtl)], "m")
+    assert params["LOCAL_W"] == 16, params
+    assert PW.resolve("[LOCAL_W-1:0]", params)[0] == " [15:0]"
+
+
 # ── Verilog integer arithmetic ───────────────────────────────────────────────
 
 @pytest.mark.parametrize("expr,want", [
