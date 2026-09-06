@@ -437,6 +437,27 @@ def _waived(project: Path) -> bool:
     return isinstance(v, str) and len(v.strip()) >= WAIVER_MIN_LEN
 
 
+def _declared_range_covers(pin: Dict[str, Any], index: int) -> bool:
+    """Does the pin's DECLARED bit range contain the index the design uses?
+
+    `lower` above is a minimum WIDTH derived from the highest index the design's
+    own text touches, and that derivation silently assumes lsb 0. A spec that
+    writes `A[32:1]: 32-bit input operand A` states a 32-bit port whose bits run
+    1..32 — it indexes bit 32 and is NOT 33 bits wide, and reading its width
+    against a 0-based bound reported "the design's own inputs index bit 32 of A
+    (>= 33 bits) but L1 declares 32 bits" about a row that came verbatim from
+    that same sentence. When the row carries real msb/lsb integers the honest
+    test is containment, not a width count. A row that declares no range still
+    falls through to the width test, and a declared range that does NOT reach
+    the index (`[30:1]` against bit 32) still violates.
+    """
+    msb, lsb = pin.get("msb"), pin.get("lsb")
+    if (not isinstance(msb, int) or not isinstance(lsb, int)
+            or isinstance(msb, bool) or isinstance(lsb, bool)):
+        return False
+    return min(msb, lsb) <= index <= max(msb, lsb)
+
+
 def evaluate(project: Path) -> Dict[str, Any]:
     l1_path = _pl.generated_docs_dir(project) / "L1_DATASHEET.json"
     if not l1_path.is_file():
@@ -498,7 +519,7 @@ def evaluate(project: Path) -> Dict[str, Any]:
                         f"msb={pin.get('msb')!r} / lsb={pin.get('lsb')!r} — "
                         f"a conforming phase 2 would emit a 1-bit port."),
                 })
-            elif got < lower:
+            elif got < lower and not _declared_range_covers(pin, lower - 1):
                 violations.append({
                     "pin": name, "kind": "bus_width_below_input_bound",
                     "derived_from": "numeric bit range in design inputs",
