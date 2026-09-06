@@ -399,8 +399,20 @@ def test_geometry_deck_catches_what_the_router_report_path_misses(runner,
     (proj / "reports" / "phase3").mkdir(parents=True, exist_ok=True)
     (proj / "reports" / "phase3" / "antenna.rpt").write_text(ROUTER_CLEAN_RPT)
 
+    # ABSOLUTE, and inside the project under test. `_run` does not set `cwd`,
+    # and `eda_report_audit` resolves `--json` against the PROCESS CWD — which
+    # under pytest is the tree itself. A relative path here therefore wrote
+    # `programs/reports/phase3/antenna.json`, a TRACKED file, on every run of
+    # this module: MEASURED at v1.17.90, `pytest tests/test_gds_geometry_
+    # signoff_wiring.py` = 29 passed and rc 1, `suite_write_guard` naming that
+    # path. Production is unaffected — `flow_compliance_check` launches the
+    # gate with `cwd=project`, so step 26's declared relative
+    # `reports/phase3/antenna_signoff.json` lands inside the project. Only a
+    # caller that does NOT chdir has to name the path in full, and that is
+    # every test. `test_a_test_may_not_write_the_tree_through_a_report_audit`
+    # keeps this at population 0.
     router = _run(PROGRAMS / "antenna_report_check.py", proj,
-                  "--json", "reports/phase3/antenna.json")
+                  "--json", proj / "reports" / "phase3" / "antenna_signoff.json")
     assert router.returncode == 0, \
         "precondition: the router-report path must find this design clean"
 

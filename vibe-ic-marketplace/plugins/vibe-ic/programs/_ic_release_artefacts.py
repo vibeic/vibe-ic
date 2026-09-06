@@ -83,6 +83,12 @@ from lvs_def_port_seed import parse_def_pins
 #: and this reader cannot spell "we did not look" three different ways.
 from _release_docs_contract import NOT_MEASURED
 
+import sys as _sys                                             # noqa: E402
+from pathlib import Path as _Path                              # noqa: E402
+if str(_Path(__file__).resolve().parent) not in _sys.path:
+    _sys.path.insert(0, str(_Path(__file__).resolve().parent))
+import _declared_die as _dd                                    # noqa: E402
+
 #: DEF `USE` tokens that make a pin a supply rather than a signal. The same
 #: split `digital_hardmacro_gen.read_interface` already makes off the same
 #: section, for the same reason: DIRECTION is INPUT/OUTPUT/INOUT and can never
@@ -326,9 +332,26 @@ def _def_class(project: Path, release: str = "") -> ClassState:
         ys = [float(y) for _x, y in points]
         width = (max(xs) - min(xs)) / scale
         height = (max(ys) - min(ys)) / scale
+        # A RELEASE RECORD PRINTS THE DIE (vibe-ic#2058 FP-15). On a SLOT run
+        # the DEF's DIEAREA is the placeable CORE — `ppl place_pins` puts pins
+        # on the die boundary and has no core-boundary mode, so the runner
+        # hands OpenROAD the core as `-die_area`. A datasheet printing that
+        # rectangle prints the core under the word "die". The run's own
+        # floorplan record answers first and `die_basis` names which source
+        # this release is quoting; the DEF's own numbers stay, under their own
+        # keys, so the two can be compared instead of one replacing the other.
+        _die = _dd.resolve(project,
+                           def_rect_um=[min(xs) / scale, min(ys) / scale,
+                                        max(xs) / scale, max(ys) / scale])
+        state.facts["def_diearea_width_um"] = round(width, 3)
+        state.facts["def_diearea_height_um"] = round(height, 3)
+        if _die.rect is not None:
+            width, height = _die.width_um(), _die.height_um()
         state.facts["die_width_um"] = round(width, 3)
         state.facts["die_height_um"] = round(height, 3)
         state.facts["die_area_um2"] = round(width * height, 3)
+        state.facts["die_source"] = _die.source
+        state.facts["die_basis"] = _die.basis
 
     components = _DEF_COMPONENTS_RE.search(text)
     if components is None:

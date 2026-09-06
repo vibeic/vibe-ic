@@ -50,6 +50,7 @@ import _signoff_drc_format as _sdf  # the ONE producer/dialect answer
 import sta_corner_record_completeness_check as _sta_slack
 
 import _sta_basis
+from _mcp_measurement import strip_stamp as _meas_strip
 
 
 # ---------------------------------------------------------------------------
@@ -3172,10 +3173,89 @@ def _check_antenna(project_dir: Path) -> AuditResult:
         result.passed = False
     else:
         result.passed = authentic and own_design
+    # A VERDICT MAY NOT IGNORE A REPORT IT COULD NOT READ.
+    #
+    # MEASURED, spm x gf180mcuD, image label 0.3.46, through the front door
+    # (lane czspmfp, FP-18). `reports/phase3/antenna_signoff.json`:
+    #
+    #     "passed": true,   rc 0
+    #     ANTENNA_REPORT_TOO_SMALL   ERROR  phase3/stage3/pnr/antenna_iter_0.rpt
+    #     ANTENNA_NO_TOOL_SIGNATURE  ERROR  (same file)
+    #     ANTENNA_REPORT_TOO_SMALL   ERROR  phase3/stage3/pnr/antenna_iter_1.rpt
+    #     ANTENNA_NO_TOOL_SIGNATURE  ERROR  (same file)
+    #     "summary": {"files_found": 4, "tool_authentic": true, ...}
+    #
+    # Both blamed files are ZERO BYTES, and `Checker.KLayoutAntenna` read PASS
+    # off this document. `_check_tool_authenticity` returns True as soon as ONE
+    # candidate is genuine, and the verdict consulted only that boolean — so the
+    # audit discovered two empty files, wrote down that they are not antenna
+    # tool output, and then formed a verdict as though it had never looked.
+    #
+    # 0 BYTES IS NOT 0 VIOLATIONS. An empty report is "could not read it", not
+    # "read it and it was clean", so the honest tier is NOT_MEASURED. This is
+    # the same gate `_check_drc` already applies through its own `unreadable`
+    # list, arriving at the antenna checker through a different door.
+    #
+    # THE RULE IS ABOUT UNREAD FILES, NOT ABOUT FINDINGS IN GENERAL, and the
+    # narrowing is measured rather than cautious. A first version of this gated
+    # on ANY severity=ERROR finding and turned `tests/test_wrapper_argv_
+    # forwarding.py` red on a 144 B `reports/phase3/antenna.json` — the
+    # RUNNER's own summary, sitting beside a genuine 3319 B `antenna.rpt`,
+    # read without difficulty, and accused of being a hand-typed stub purely by
+    # the byte floor. This module already records why that accusation must not
+    # gate: `test_ir_drop_compact_report_strong_signature` measured 16 of 16
+    # authentic `openroad-psm` ir_drop.json in the corpus at 197-611 B, under
+    # their own floor. A compact summary is mis-accused; an empty file was
+    # never read. Only the second is NOT_MEASURED.
+    _unread: List[str] = []
+    for fp in files:
+        try:
+            if fp.stat().st_size == 0:
+                _unread.append(str(fp))
+                continue
+            _t = fp.read_text(errors="replace")
+        except OSError as _exc:
+            _unread.append(f"{fp} ({_exc})")
+            continue
+        # A `# MCP_MEASUREMENT:` stamp is metadata ABOUT the report, not part
+        # of it — the same strip `_check_tool_authenticity` applies, so a file
+        # holding nothing but a stamp is empty here too.
+        _t, _ = _meas_strip(_t)
+        if not _t.strip():
+            _unread.append(str(fp))
+    if result.passed and _unread:
+        result.passed = False
+        result.verdict = "NOT_MEASURED"
+        result.findings.append(Finding(
+            rule="ANTENNA_REPORT_NOT_READ", severity="ERROR",
+            message=(f"{len(_unread)} of the {len(files)} discovered antenna "
+                     f"report(s) hold no bytes at all and were NOT MEASURED — "
+                     f"not zero, not clean. The count above is a statement "
+                     f"about the reports that COULD be read, and a sign-off "
+                     f"may not pass over evidence it never opened: "
+                     f"{', '.join(_unread)}"),
+            file=_unread[0].split(" (")[0]))
+
+    # BOTH SIDES, and the ORDER is the point (#2057 x #2058). `subject_files` is
+    # "THE POPULATION `summary.files_found` COUNTS, by name … set on the same
+    # line as that count, from the same list, so the two can never describe
+    # different things" — its own words. The tier above changes the VERDICT over
+    # that population, never the population, so it runs first and this stays
+    # where #2057 put it: immediately before the summary it names. A reader of
+    # the emitted receipt sees the same file list the count was taken from, and
+    # a NOT_MEASURED verdict about it.
     result.subject_files = [str(f) for f in files]
     result.summary = {"files_found": len(files), "violations": total_viol,
                       "design_binding": design_binding,
-                      "clean": clean_flag, "tool_authentic": authentic}
+                      "clean": clean_flag, "tool_authentic": authentic,
+                      # Two counts a reader would otherwise have to derive by
+                      # filtering the findings list themselves. `unread_files`
+                      # is the gating one; `own_error_findings` is taken from
+                      # the FINAL list so it agrees with the document it is
+                      # published in rather than with an intermediate state.
+                      "unread_files": len(_unread),
+                      "own_error_findings": sum(
+                          1 for f in result.findings if f.severity == "ERROR")}
     return result
 
 
