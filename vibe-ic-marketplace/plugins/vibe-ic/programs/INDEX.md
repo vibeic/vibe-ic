@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1274
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1274)
+- **Total programs (excluding helpers / shims):** 1275
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1275)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1265 |
+| `any` | 1266 |
 
 ## Alphabetical listing
 
@@ -245,6 +245,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `corner_yield_vs_spec_check` | any | — | independent yield-vs-spec.json gate + worst-corner identification (analog-sizing-loop rules 2 & 4). |
 | `corpus_cardinality_pin_scan` | any | — | find assertions pinned to a CORPUS CENSUS. |
 | `counter_advanced_synth` | any | — | deterministic SOLVER for the SUBTLE counter / timer / clock family (bucket-② spec -> bucket-① RTL, blind). |
+| `counter_decode_lookahead_phase_check` | any | — | a level decoded from the NEXT counter value, registered on the same edge that advances the counter. |
 | `counter_popcount_synth` | any | — | deterministic SOLVER for the counter / popcount / parity-reduction family (bucket-② spec -> bucket-① RTL, blind). |
 | `coverage_closure` | any | — | coverage GAP ANALYSIS over the MEASURED artefact. |
 | `coverage_metric_check` | any | — | coverage_metric_check.py -- Deterministic coverage report metric checker. |
@@ -1346,7 +1347,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1265 programs)
+### `any` (1266 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `absence_verdict_names_its_search_space_check` — "not found" must say WHERE it looked.
@@ -1565,6 +1566,7 @@ _(no programs in this group)_
 - `corner_yield_vs_spec_check` — independent yield-vs-spec.json gate + worst-corner identification (analog-sizing-loop rules 2 & 4).
 - `corpus_cardinality_pin_scan` — find assertions pinned to a CORPUS CENSUS.
 - `counter_advanced_synth` — deterministic SOLVER for the SUBTLE counter / timer / clock family (bucket-② spec -> bucket-① RTL, blind).
+- `counter_decode_lookahead_phase_check` — a level decoded from the NEXT counter value, registered on the same edge that advances the counter.
 - `counter_popcount_synth` — deterministic SOLVER for the counter / popcount / parity-reduction family (bucket-② spec -> bucket-① RTL, blind).
 - `coverage_closure` — coverage GAP ANALYSIS over the MEASURED artefact.
 - `coverage_metric_check` — coverage_metric_check.py -- Deterministic coverage report metric checker.

@@ -3657,3 +3657,75 @@ _Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db dis
 **Why this is GENERAL**: Level-vs-edge interrupt confusion and write-clear-priority races are a universal MMIO peripheral bug class, applicable to any counter, timer, or status-flag register with a software-clear path.
 
 _Captured by benchmark-enhancement-capture 2026-07-04 (cvdp solved-design-db distill cross-check)._
+
+### Skill: async FIFO gray pointer — register the CURRENT binary address, never the next one
+The gray pointer a CDC synchronizer carries must be the gray encoding of the binary address the
+FIFO is at RIGHT NOW, registered in the same edge that updates that binary address:
+`wptr <= bin2gray(waddr_bin);` beside `waddr_bin <= waddr_bin + wen;`. Do NOT pre-compute the
+next address into the pointer (`wptr <= bin2gray(waddr_bin + wen)`). Both forms look correct and
+both self-consistently round-trip, but the pre-computed form publishes the pointer ONE CYCLE EARLY
+into the other clock domain, so `wfull` asserts a cycle late and `rempty` de-asserts a cycle early —
+the depth-check equations `wfull = (wptr == {~rptr_syn[MSB:MSB-1], rptr_syn[MSB-2:0]})` and
+`rempty = (rptr == wptr_syn)` are written against the CURRENT pointer, not a lookahead.
+A functional testbench that only writes then only reads will still pass; the failure needs
+back-to-back traffic near the full/empty boundary to appear.
+**Worked pattern** (anonymized): a Cummings-style async FIFO registered `bin2gray(addr + inc)`.
+Cycle-by-cycle comparison against the reference showed `wfull` low where 1 was expected at the 2nd
+and 3rd samples and `rempty` high where 0 was expected 28 samples later — both symptoms of one
+pointer being a cycle ahead. Changing both pointers to `bin2gray(addr)` fixed every sample.
+**Why this is GENERAL**: every gray-code CDC pointer in every dual-clock FIFO, and the same
+"register the current value, not the lookahead" rule applies to any value crossing a clock domain
+whose consumer compares it against a same-domain current value.
+
+### Skill: pulse / edge detector — the state holds only the PREVIOUS sample, and reset is a real baseline
+For "detect a 0→1→0 pulse and assert at its END cycle", the state register holds ONLY the previous
+sampled input; two states suffice (`last-was-0`, `last-was-1`). Reset puts the machine in the
+`last-was-0` baseline, and that baseline IS a legitimate leading zero: a pulse whose leading 0 is
+the reset value must still be detected. Do NOT add a third "nothing seen yet" state to suppress it
+unless the spec asks for one — that extra state silently drops the first pulse after reset.
+When the spec's worked example shows the indicator in the SAME cycle as the input that completes
+the pulse, drive it combinationally from the state (`data_out = (state==SAW_ONE) & ~data_in`);
+registering it inside the sequential block delays it one cycle and shifts the whole output word.
+**Worked pattern** (anonymized): a pulse detector added an `EMPTY` state so reset could not
+"manufacture" a leading zero, and registered the output. Against the spec's own example
+`in=01010 → out=00101` it produced a shifted word, and the reference testbench failed. Collapsing
+to two states and making the output combinational matched both the spec example and the harness.
+**Why this is GENERAL**: applies to every edge/pulse/sequence detector — the questions "how much
+history does the state actually need" and "is the indicator Mealy or Moore" are the two decisions
+this class turns on, and both are answerable from the spec's worked example alone.
+
+### Skill: serial→parallel converter — "the NEXT clock cycle" means a real extra output state
+When a spec says the assembled word is presented and its valid asserts on the cycle AFTER the last
+input bit ("Every eight valid inputs, dout will output on the following clock cycle"; "the next
+clock cycle sets the valid output signal to 1"), that sentence mandates a dedicated one-cycle
+output state — a `output_pending` flag set when the counter reaches its last bit, and a branch that
+next edge drives `dout_valid <= 1` and loads the word. Collapsing that into the same edge that
+captures the final bit makes valid assert one cycle early. The same paragraph usually also says
+the input in that output cycle is IGNORED and the next group starts after it; that is the same
+state, and honoring one half without the other splits one stated cycle into two.
+**Worked pattern** (anonymized): a serial-to-parallel converter had the extra output state, and a
+"simplification" pass removed it on the belief that output and ignored-input had to share a cycle.
+The reference testbench then timed out waiting for a valid that arrived a cycle early relative to
+its sampling. Restoring the pending state passed.
+**Why this is GENERAL**: any protocol whose spec names a cycle relative to another event
+("the following clock cycle", "one cycle after") is stating a pipeline depth. Read it as a
+structural requirement, not as prose to be optimized away.
+
+### Skill: odd-ratio clock divider — decode the phase from the PRE-increment counter
+For an odd divider built from two counters (one per clock edge) OR-ed together, the output level
+registered on an edge must be decoded from the counter value that edge is LEAVING, not the value it
+is moving to: `clk_div1 <= (cnt1 < NUM_DIV/2); cnt1 <= cnt1 + 1;` in the same block. Rewriting it
+as `clk_div1 <= (cnt1_next < NUM_DIV/2)` shifts the whole divided clock one source cycle relative to
+reset — the period and the duty stay correct, so a ratio/duty oracle cannot see it; only a check
+anchored to the reset instant can. Reset drives the counters to 0 and the divider outputs HIGH,
+because counter value 0 lies in the first half.
+**Worked pattern** (anonymized): an odd divider was "fixed" from the pre-increment to the
+post-increment form on the reasoning that a flop should describe the value it holds. Period and
+duty were still exactly right; the reference testbench failed 7 of 20 sampled points, all of them
+phase.
+**Why this is GENERAL**: the pre- vs post-increment decode choice appears in every counter-derived
+waveform (dividers, PWM, strobe generators). Period-and-duty measurement is blind to it, so pin the
+phase against reset explicitly whenever a spec fixes the reset output value.
+
+_Captured by benchmark-enhancement-capture 2026-09-07 (RTLLM clean-room run; all four verified
+against the official harness)._
