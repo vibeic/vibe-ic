@@ -189,7 +189,7 @@ def publish(repo_slug: str, sha: str, state: str, target_url: str,
         return 0
     # A `gh` THAT CANNOT BE EXECUTED IS THE SAME FACT AS A `gh` THAT REFUSED —
     # no status is standing — AND IT WAS THE UNHANDLED ONE. MEASURED on the
-    # v1.18.24 exact-tree stamp (repo b495bbc9d, tree cd2d7767f, pinned image
+    # v1.18.25 exact-tree stamp (repo b495bbc9d, tree cd2d7767f, pinned image
     # …66c33ff2): `gh` is not installed in that image (`command -v gh` exits 1
     # while `/usr/bin/git` is present), so this call raised
     # `FileNotFoundError: [Errno 2] No such file or directory: 'gh'` and the

@@ -171,6 +171,18 @@ def build(project: Path, answers_path: Optional[Path]) -> Dict[str, Any]:
                         merged[key] = raw[key]
                 doc, ignored = TD.merge_answers(doc, merged)
                 source["ignored_keys"] = ignored
+                # #2070 — a transcribed TECHNOLOGY fact answers its question.
+                # `merge_answers` carried the provenance record through as an
+                # extra key; this is what makes the VALUE land in `answers`
+                # where every consumer reads it, from the one record, so a
+                # declaration can never carry the provenance of a number it
+                # does not publish. Idempotent when the producer already wrote
+                # the value (it does), and the single source of the rule when
+                # some other producer does not.
+                doc = TD.merge_technology(doc, doc.get(TD.TECHNOLOGY_KEY)
+                                          if isinstance(
+                                              doc.get(TD.TECHNOLOGY_KEY), dict)
+                                          else {})
 
     slots = sorted((project / ST.SLOTS_DIR_REL).glob("*.yaml")) + \
         sorted((project / ST.SLOTS_DIR_REL).glob("*.yml"))
