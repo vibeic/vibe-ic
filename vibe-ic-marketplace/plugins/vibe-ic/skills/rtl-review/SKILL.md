@@ -9,7 +9,8 @@ description: Audit RTL code for lint violations, synthesis hazards, coding-style
 >
 > The 6-category checklist + 0-10 scoring rubric that previously lived
 > in this skill prose is now in **`programs/rtl_review_aggregate.py`**
-> (37 pytest cases pin every category mapping + scoring boundary).
+> (54 pytest cases pin every category mapping + scoring boundary, and pin that an
+> unreadable producer is REFUSED rather than scored as clean).
 >
 > **You run the program first.** Claude is the backstop for residual
 > prose, NOT the rule applicator.
@@ -79,7 +80,7 @@ in `rtl_review_aggregate.py`, pinned by pytest:
 ## Technical basis
 
 `programs/rtl_review_aggregate.py` + `programs/tests/test_rtl_review_aggregate.py`
-(37 pytest cases). The 3 sub-programs all pre-existed; this skill's
+(54 pytest cases). The 3 sub-programs all pre-existed; this skill's
 former 159-line prose checklist is now a 14-line wrapper because the
 rules moved from prompt-space to tool-space.
 
