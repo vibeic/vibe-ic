@@ -65,6 +65,7 @@ it is given.
 """
 from __future__ import annotations
 
+import os
 import shlex
 import shutil
 import subprocess
@@ -79,6 +80,8 @@ import _eda_pin as _pin  # noqa: E402 — the ONE place the pin is stated
 __all__ = [
     "run_in_container",
     "container_deadline_argv",
+    "container_tree_probe",
+    "container_id",
     "docker_exec_argv",
     "ContainerImageMismatch",
     "TIMEOUT_EXPIRED_RC",
@@ -166,6 +169,144 @@ def _unguarded_exec_argv(container: str, *rest: str,
     return ["docker", "exec", *opts, container, *rest]
 
 
+# ---------------------------------------------------------------------------
+# THE PROGRESS SIGNAL HAS TO POINT AT THE TOOL, NOT AT THE CLIENT
+# ---------------------------------------------------------------------------
+#
+# The deadline defect this module opens with has a twin, and it was measured on
+# the same shape. `docker exec` supervision watches the LOCAL CLIENT: its CPU,
+# its I/O, and the bytes it relays. The tool is not its child -- it is parented
+# by the container runtime's shim -- so none of those three counters describe
+# the work at all.
+#
+# MEASURED 2026-09-07 on 8HD-8 (vibe-ic#2083), a magic LEF extraction of a
+# 35 MB GDS through this exact call, sampled every 5 s from the host:
+#
+#     t+29s  magic cpu= 28.8s rss=1.15GB | client cpu=0.01 io=0/0 out=0 new bytes
+#     t+99s  magic cpu= 99.2s rss=2.35GB | client cpu=0.01 io=0/0 out=0 new bytes
+#     t+124s magic cpu=124.3s rss=2.31GB | client cpu=0.01 io=0/0 out=0 new bytes
+#
+# magic was pinned at a full 1.00 CPU-second per second and growing its heap by
+# tens of megabytes a second. Every signal the supervisor could see sat exactly
+# still, and after twelve consecutive looks the run was declared
+# `STALLED: no forward progress ...` and the hard macro was never produced.
+# The tool was never the subject of that verdict; the client was.
+#
+# So a `docker exec` launch supervises the CONTAINER as well. The probe below
+# sums CPU and I/O over the host processes that belong to this container and
+# that started after the launch -- the exec's own work, not the container's
+# idle main process and not a sibling that was already running. It is fused
+# with the client probe rather than replacing it, so this can only ever add a
+# reason to keep waiting.
+#
+# DEGRADE LOUDLY. `container_id` failing is recorded as the `container` signal
+# staying False, and `Stalled` already prints which signals were readable, so a
+# stall observed with no container channel reads differently from one observed
+# with it.
+
+_CLK_TCK = float(os.sysconf("SC_CLK_TCK")) if hasattr(os, "sysconf") else 100.0
+
+
+def container_id(container: str) -> Optional[str]:
+    """The container's full id, or None when it cannot be read.
+
+    None is NOT "no such container" -- it is "I could not tell", which is why
+    the caller degrades to the client-only signals and says so rather than
+    treating the container as empty.
+    """
+    if not container or container == "host":
+        return None
+    try:
+        cp = subprocess.run(  # nosec B603,B607 — fixed argv, no shell
+            ["docker", "inspect", "-f", "{{.Id}}", container],
+            capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    cid = (cp.stdout or "").strip()
+    return cid if cp.returncode == 0 and len(cid) >= 12 else None
+
+
+def _uptime_ticks() -> Optional[float]:
+    try:
+        with open("/proc/uptime", "rb") as fh:
+            return float(fh.read().split()[0]) * _CLK_TCK
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def _in_container(pid: int, cid: str) -> bool:
+    try:
+        with open(f"/proc/{pid}/cgroup", "rb") as fh:
+            return cid.encode("ascii") in fh.read()
+    except OSError:
+        return False
+
+
+def _stat_fields(pid: int):
+    try:
+        with open(f"/proc/{pid}/stat", "rb") as fh:
+            data = fh.read()
+        return data[data.rfind(b")") + 2:].split()
+    except (OSError, IndexError):
+        return None
+
+
+def container_tree_probe(container: str):
+    """A `_progress_run` probe factory watching the WORK inside `container`.
+
+    Returns ``factory(signals) -> probe(proc)``; the ``container`` key of
+    ``signals`` records whether the channel was actually readable, so a stall
+    reported with it missing can be told from one reported with it present.
+    """
+    def factory(signals):
+        cid = container_id(container)
+        # The launch instant, in the same units /proc/<pid>/stat field 22 uses.
+        # Processes older than this belong to somebody else's work in the same
+        # container and must not vouch for ours.
+        since = _uptime_ticks()
+
+        def probe(_proc) -> Optional[float]:
+            if cid is None or since is None:
+                return None
+            total, seen = 0.0, False
+            try:
+                pids = [int(e) for e in os.listdir("/proc") if e.isdigit()]
+            except OSError:
+                return None
+            for pid in pids:
+                f = _stat_fields(pid)
+                if not f or len(f) < 22:
+                    continue
+                try:
+                    if float(f[19]) < since:      # field 22: starttime
+                        continue
+                except ValueError:
+                    continue
+                if not _in_container(pid, cid):
+                    continue
+                try:
+                    total += (int(f[11]) + int(f[12])) / _CLK_TCK
+                    seen = True
+                except (ValueError, IndexError):
+                    continue
+                try:
+                    with open(f"/proc/{pid}/io", "rb") as fh:
+                        for line in fh:
+                            if line.startswith((b"read_bytes:", b"write_bytes:")):
+                                total += float(line.split()[1]) / 1e6
+                except (OSError, ValueError, IndexError):
+                    # Another uid's process: /proc/<pid>/io is 0400. CPU from
+                    # `stat` is world-readable and still counts, which is the
+                    # measured case -- the tool runs as the image's own user.
+                    pass
+            if seen:
+                signals["container"] = True
+                return total
+            return None
+        return probe
+    return factory
+
+
 def container_deadline_argv(container: str,
                             cmd: str,
                             deadline_s: int,
@@ -226,7 +367,8 @@ def run_in_container(container: str,
             stderr=f"_container_exec: refused, nothing was run: {why}\n")
     return _pr.run(
         container_deadline_argv(container, cmd, deadline_s, kill_grace_s, shell),
-        capture_output=True, text=True, errors="replace")
+        capture_output=True, text=True, errors="replace",
+        progress_probe=container_tree_probe(container))
 
 
 def describe_result(cp: subprocess.CompletedProcess,

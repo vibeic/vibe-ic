@@ -74,6 +74,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _watchdog as _wd  # noqa: E402
 
 __all__ = ["Stalled", "run", "run_or_undetermined", "run_best_effort",
+           "fuse_probes",
            "exit_undetermined_on_stall", "spawn_floor_s",
            "DEFAULT_STALL_LOOKS", "RC_UNDETERMINED", "RC_STALLED"]
 
@@ -310,6 +311,26 @@ def _host_probe(signals: Dict[str, bool]) -> Callable[[object], Optional[float]]
     return probe
 
 
+def fuse_probes(*probes):
+    """One probe whose score advances when ANY constituent advances.
+
+    Progress is a DISJUNCTION — a child that is moving on any readable channel
+    is moving — so the fused score is the sum of the parts, and a part that is
+    momentarily unreadable contributes 0 rather than erasing the others. All
+    None (nothing readable anywhere) stays None, so `_watchdog` carries the
+    last value forward instead of reading an outage as movement.
+    """
+    def probe(proc):
+        total, seen = 0.0, False
+        for part in probes:
+            v = part(proc)
+            if v is not None:
+                total += float(v)
+                seen = True
+        return total if seen else None
+    return probe
+
+
 class Stalled(RuntimeError):
     """The child made NO forward progress across N consecutive looks.
 
@@ -375,6 +396,9 @@ def run(cmd, *, cwd=None, env=None, input=None,  # noqa: A002
         stall_looks: int = DEFAULT_STALL_LOOKS,
         poll_s: Optional[float] = None,
         hard_ceiling_s: float = HARD_CEILING_S,
+        progress_probe: Optional[Callable[[Dict[str, bool]],
+                                          Callable[[object], Optional[float]]]]
+        = None,
         _supervisor=None) -> subprocess.CompletedProcess:
     """Run `cmd` to completion, however long it legitimately takes.
 
@@ -449,6 +473,22 @@ def run(cmd, *, cwd=None, env=None, input=None,  # noqa: A002
             poll_s = max(min(poll_s, budget), spawn_floor_s() * 2.0)
     signals: Dict[str, bool] = {"output": capture_output, "cpu": False,
                                 "io": False}
+    # WHERE THE WORK IS, NOT WHERE THE CLIENT IS. `_host_probe` reads the
+    # child's own /proc tree, which is the whole story only when the work is a
+    # descendant of the child. It is not when the child is a `docker exec`
+    # CLIENT: the tool runs under the container runtime's shim, so it is
+    # reachable from no ppid link the client owns, and the client's own CPU,
+    # I/O and output all sit flat while the tool computes. MEASURED 2026-09-07
+    # on 8HD-8 (vibe-ic#2083): a magic LEF extraction at a steady 1.00 CPU-s/s
+    # with RSS climbing 30 MB/s was, on every host-side signal the client
+    # exposes, indistinguishable from a corpse — cpu .01, io 0/0, not one byte
+    # of output for the whole window — and was reported STALLED. A caller that
+    # knows where its work really lives injects a probe that looks THERE; the
+    # two are fused, so the client's own signals still count and the added
+    # channel can only ever make this supervisor more patient, never less.
+    probe = _host_probe(signals)
+    if progress_probe is not None:
+        probe = fuse_probes(probe, progress_probe(signals))
     child_stdin, to_close = _stdin_from(input, stdin)
 
     def popen_factory(c, **kw):
@@ -470,7 +510,7 @@ def run(cmd, *, cwd=None, env=None, input=None,  # noqa: A002
             stall_grace_s=stall_looks * poll_s,
             poll_s=poll_s,
             hard_ceiling_s=hard_ceiling_s,
-            cpu_probe=_host_probe(signals),
+            cpu_probe=probe,
             popen_factory=popen_factory,
             env=env,
             as_text=text,
