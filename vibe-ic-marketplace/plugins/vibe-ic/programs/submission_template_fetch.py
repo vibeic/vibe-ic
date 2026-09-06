@@ -163,6 +163,23 @@ def _in_image(digest: str, script: str, mount: Path, interpreter: str,
     there rather than assumed here; an operator that ships a different one only
     changes its own registry row.
     """
+    # THE MOUNT IS RESOLVED BEFORE IT IS SPELLED (#2070 O2). `mount` is derived
+    # from the caller's `project`, and a caller who passed a RELATIVE project
+    # produced the spec `input:input`, which docker refuses outright:
+    #
+    #     rc=125  invalid volume specification: 'input:input': invalid mount
+    #             config for type "volume": invalid mount path: 'input' mount
+    #             path must be absolute
+    #
+    # reported by this program as "the operator's image did not yield its
+    # template" — an operator refusal for what was our own argument. It never
+    # bit through `phase1_one_shot_runner`, which resolves the project first, so
+    # it was invisible to every driven run and hit only a direct call. Resolved
+    # HERE rather than at each call site: one adapter remembering and the next
+    # forgetting is the same defect with a different author. `resolve()` also
+    # collapses `..` and symlinks, so what the container sees is what the host
+    # named.
+    mount = Path(mount).resolve()
     return _run(["docker", "run", "--rm", *_dmem.docker_memory_flags(),
                  "-v", f"{mount}:{mount}",
                  digest, interpreter, "-c", script], timeout=timeout)
@@ -625,6 +642,42 @@ def resolve_pdk(project: Path, explicit: str = "") -> Tuple[Optional[str],
         return None, None
 
 
+def design_route(project: Path) -> Dict[str, Any]:
+    """What the DESIGN itself says it delivers, and which slot it bought.
+
+    Read from the design's OWN answers file, not from the declaration: this
+    program runs FIRST in step 0.5ic's chain (fetch -> ingest -> answers ->
+    declare), so the declaration on disk at this moment is the PREVIOUS run's
+    and must not be believed about THIS one. The design's staged answers are
+    its own words and are there before anything in the step runs.
+
+    Nothing is inferred. A design that has staged no answers, or answered no
+    `deliverable`, gets `None` and this program says nothing about its route.
+    """
+    rec: Dict[str, Any] = {"deliverable": None, "slot": None,
+                           "source": _st.DESIGN_ANSWERS_REL}
+    path = project / _st.DESIGN_ANSWERS_REL
+    if not path.is_file():
+        rec["source"] = None
+        return rec
+    try:
+        doc = json.loads(path.read_text(encoding="utf-8", errors="replace"))
+    except (OSError, ValueError):
+        return rec
+    if not isinstance(doc, dict):
+        return rec
+    answers = doc.get("answers") if isinstance(doc.get("answers"), dict) else {}
+    d = answers.get("deliverable")
+    if isinstance(d, str) and d.strip() and d.strip() != "NOT_DETERMINED":
+        rec["deliverable"] = d.strip()
+    operator = doc.get("operator_template")
+    if isinstance(operator, dict):
+        s = operator.get("slot")
+        if isinstance(s, str) and s.strip():
+            rec["slot"] = s.strip()
+    return rec
+
+
 def fetch(project: Path, pdk: str = "", image: str = "",
           allow_pull: bool = False, technology_image: str = "") -> Dict[str, Any]:
     rep: Dict[str, Any] = {"program": ATTRIBUTION, "project": str(project),
@@ -734,6 +787,19 @@ def fetch(project: Path, pdk: str = "", image: str = "",
     rep["files"] = {
         p.name: hashlib.sha256(p.read_bytes()).hexdigest()
         for p in sorted(dest.glob("*.json"))}
+    # AN OPERATOR THAT EXISTS AND IS NOT BEING USED IS REPORTED, NOT REFUSED
+    # (#2070 O1, owner ruling 2026-09-07). A live shuttle on the PDK the design
+    # names is INFORMATION. Saying so here is what lets step 0.5ic's first gate
+    # clause stop owing the slot contract without anybody losing the fact that
+    # a shuttle was available and this design did not take it.
+    route = design_route(project)
+    rep["design_route"] = route
+    if route["deliverable"] and route["slot"] is None:
+        rep["route_note"] = (
+            f"an operator shuttle exists on {resolved_pdk} "
+            f"({len(written)} slots); the design declares "
+            f"{route['deliverable']} and names none; route = "
+            f"{route['deliverable']}")
     rep["verdict"] = PASS
     rep["reason"] = (
         f"{len(written)} slot(s) fetched from {shuttle.shuttle_id} at {digest} "
@@ -785,6 +851,8 @@ def main(argv: Optional[List[str]] = None) -> int:
              if rep.get("pdk_families_source") else
              f" (searched {rep.get('pdk_families_searched')})")
           + (f"; this run resolves to {_fam!r}" if _fam else ""))
+    if rep.get("route_note"):
+        print(f"  {rep['route_note']}")
     _dbu = (rep.get("technology") or {}).get("database_unit_um") or {}
     if _dbu.get("value") is not None:
         print(f"  database_unit_um = {_dbu['value']} um, transcribed from the "
