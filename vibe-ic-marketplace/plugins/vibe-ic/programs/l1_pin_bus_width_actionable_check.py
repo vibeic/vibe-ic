@@ -455,6 +455,20 @@ def _declared_range_covers(pin: Dict[str, Any], index: int) -> bool:
     if (not isinstance(msb, int) or not isinstance(lsb, int)
             or isinstance(msb, bool) or isinstance(lsb, bool)):
         return False
+    # THE RANGE MUST AGREE WITH THE WIDTH THE ROW RESOLVES TO, or it is not
+    # evidence about this row at all. `_resolved_width` prefers an integer
+    # `width` over the msb/lsb pair, so a row carrying width=2 BESIDE a [31:0]
+    # range resolves to 2 while this range answers True for every bit up to 31 —
+    # and the clause that calls this would then SUPPRESS a real violation on the
+    # strength of a field the same row contradicts. Measured on this base:
+    # {"width": 2, "msb": 31, "lsb": 0} resolved to 2 bits and covered bit 5.
+    # A range only excuses an index bound when the row is self-consistent, which
+    # is exactly the case the escape was written for (`A[32:1]` declaring 32
+    # bits and reaching bit 32). An inconsistent row falls through and is
+    # reported, which is the honest answer for a row that disagrees with itself.
+    got = _resolved_width(pin)
+    if got is not None and got != abs(msb - lsb) + 1:
+        return False
     return min(msb, lsb) <= index <= max(msb, lsb)
 
 

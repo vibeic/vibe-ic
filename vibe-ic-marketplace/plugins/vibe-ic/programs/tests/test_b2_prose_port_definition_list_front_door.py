@@ -324,6 +324,21 @@ def test_width_gate_accepts_a_declared_range_that_covers_the_index():
     assert G._declared_range_covers({"msb": 32, "lsb": 1, "width": 32}, 32)
 
 
+def test_width_gate_refuses_a_range_the_same_row_contradicts():
+    G = _gate()
+    # The escape is evidence about THIS row, so the row has to agree with
+    # itself. `_resolved_width` prefers an integer `width` over the msb/lsb
+    # pair, so width=2 beside a [31:0] range resolves to 2 bits while the range
+    # answers True for every bit up to 31 — and the caller would then suppress a
+    # real violation on the strength of a field the same row contradicts.
+    assert not G._declared_range_covers({"width": 2, "msb": 31, "lsb": 0}, 5)
+    # the self-consistent row the escape exists for is unaffected
+    assert G._declared_range_covers({"width": 32, "msb": 32, "lsb": 1}, 32)
+    # a row with a range and NO width field is still self-consistent by
+    # construction (`_resolved_width` then derives the width from the range)
+    assert G._declared_range_covers({"msb": 15, "lsb": 8}, 12)
+
+
 def test_width_gate_still_rejects_a_declared_range_that_does_not_reach():
     G = _gate()
     assert not G._declared_range_covers({"msb": 30, "lsb": 1, "width": 30}, 32)
