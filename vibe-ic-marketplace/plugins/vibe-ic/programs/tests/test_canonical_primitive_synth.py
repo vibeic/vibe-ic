@@ -862,16 +862,23 @@ def _detector_literals(shape):
     raise AssertionError(f"detector source for {shape} not found")
 
 
+def _names_word(phrase, text):
+    """Word-boundary containment. `"signed" in "unsigned"` and `"mux" in "demux"`
+    are both true and both wrong, so this module asks the same question the
+    program now asks."""
+    return re.search(r"\b" + re.escape(phrase) + r"\b", text) is not None
+
+
 @pytest.mark.parametrize("shape,desc", _INLINE_POS.items())
 def test_a_stated_polar_dimension_is_one_the_detector_examines(shape, desc):
     examined = " | ".join(sorted(_detector_literals(shape)))
     low = desc.lower()
     for dim, words in _POLAR_DIMENSIONS.items():
-        if not any(w in low for w in words):
+        if not any(_names_word(w, low) for w in words):
             continue                      # the input states nothing here
         if (shape, dim) in _KNOWN_UNEXAMINED:
             continue                      # the recorded exception, above
-        assert any(w in examined for w in words), (
+        assert any(_names_word(w, examined) for w in words), (
             f"{shape} answers a description that states {dim}, but its detector "
             f"never examines that dimension: an input stating the other pole "
             f"would get this template anyway")
@@ -885,8 +892,8 @@ def test_the_known_blind_spot_is_still_exactly_one():
         examined = " | ".join(sorted(_detector_literals(shape)))
         low = desc.lower()
         for dim, words in _POLAR_DIMENSIONS.items():
-            if any(w in low for w in words) and not any(w in examined
-                                                        for w in words):
+            if (any(_names_word(w, low) for w in words)
+                    and not any(_names_word(w, examined) for w in words)):
                 blind.add((shape, dim))
     assert blind == _KNOWN_UNEXAMINED
 
@@ -1008,3 +1015,30 @@ def test_the_inline_population_is_every_shape():
     dataset-backed tests that would have covered the rest SKIP wherever the
     corpus is absent -- which is where the bug above was hiding."""
     assert set(_INLINE_POS) == {shape for shape, _ in rcs._DETECTORS}
+
+
+def test_a_word_that_merely_contains_a_tag_is_not_a_directive():
+    """The async/sync substring bug was one instance of a class, so the class was
+    swept. Measured before the fix: `must not use a demux` and `a premuxed input`
+    both tagged multiplexer_stages and `a genvariable name` tagged generate_block,
+    and each silently WITHDREW a template the input never objected to."""
+    for text in ("The implementation must not use a demux for the select.",
+                 "The design must not use a premuxed input.",
+                 "The implementation must not use a genvariable name."):
+        assert rcs.extract_architecture_directives(text) == [], text
+    # the real words still register, including the plural forms
+    for text, tag in (("The implementation must not use a mux.",
+                       "multiplexer_stages"),
+                      ("The implementation must not use any muxes.",
+                       "multiplexer_stages"),
+                      ("The implementation must not use a generate block.",
+                       "generate_block"),
+                      ("This must not instantiate any submodule.",
+                       "submodule_instantiation")):
+        found = rcs.extract_architecture_directives(text)
+        assert [t for _, t, _ in found] == [tag], text
+    # and the end-to-end consequence: an unrelated constraint no longer costs a
+    # canonical design its template
+    desc = (_INLINE_POS["barrel_shifter_right_8"]
+            + "The implementation must not use a demux for the select.\n")
+    assert rcs.detect_shape(desc) == "barrel_shifter_right_8"

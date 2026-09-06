@@ -1755,6 +1755,18 @@ _REQUIRE_MARKERS = ("must use", "must be implemented", "must be built",
 _CLAUSE_SPLIT = re.compile(r"[.;\n]+")
 
 
+def _names(phrase: str, text: str) -> bool:
+    """Whether `text` NAMES `phrase`, on word boundaries.
+
+    A plain substring test is wrong here for the same reason it was wrong for
+    "asynchronous reset": measured 2026-09-06, `must not use a demux` tagged
+    multiplexer_stages, `a premuxed input` did too, and `a genvariable name`
+    tagged generate_block -- each of which silently WITHDREW a template that the
+    input never objected to.
+    """
+    return re.search(r"\b" + re.escape(phrase) + r"\b", text) is not None
+
+
 def extract_architecture_directives(desc_text: str) -> List[Tuple[str, str, str]]:
     """Structural implementation directives STATED in the description.
 
@@ -1779,7 +1791,7 @@ def extract_architecture_directives(desc_text: str) -> List[Tuple[str, str, str]
             continue
         pol = "forbid" if forbid else "require"
         for tag, phrases in _ARCH_TAG_PHRASES.items():
-            if any(p in low for p in phrases):
+            if any(_names(p, low) for p in phrases):
                 out.append((pol, tag, clause.strip()))
     return out
 
