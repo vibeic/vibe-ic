@@ -900,6 +900,19 @@ _STALL_RE = re.compile(re.escape(_STALL_MARKER))
 _EXECUTION_STOP_RE = re.compile(
     f"(?:{re.escape(_TIMEOUT_MARKER)}|{re.escape(_STALL_MARKER)})")
 
+
+def run_was_stopped(raw: str) -> bool:
+    """Was this run CUT OFF, or did it finish and decide?
+
+    The two markers `_EXECUTION_STOP_RE` matches are written by THIS PRODUCER's
+    own kill paths and by nothing else, so this is an observable about the run
+    and never a reading of the tool's prose — which is why it is a predicate
+    with a name rather than a `bool(RE.search(...))` spelled at each call site.
+    Three places ask this question; they must not be able to answer it
+    differently. PURE.
+    """
+    return bool(_EXECUTION_STOP_RE.search(raw or ""))
+
 # A wall-budget kill reaches run_yosys_equiv by TWO paths that must be treated
 # identically:
 #   (1) the HOST `subprocess.run(timeout=…)` raises subprocess.TimeoutExpired; or
@@ -4356,6 +4369,15 @@ def main(argv: Optional[List[str]] = None) -> int:
     # invocation attestation lives in lec.json and its unique telemetry file.
     _atomic_write_bytes(rpt_out, raw.encode("utf-8"))
 
+    # WAS THIS RUN STOPPED? Asked ONCE, of this run's own log, through the
+    # predicate that owns the question. Spelled inline as
+    # `bool(_EXECUTION_STOP_RE.search(raw))` the match sat inside the expression
+    # assigned to `report`, which makes `report` a match-derived name for every
+    # later reader of it — `prose_polarity_consulted_check` reported exactly
+    # that, correctly, about the shape. One predicate, asked once, also cannot
+    # answer differently at the two call sites below.
+    stopped_this_run = run_was_stopped(raw)
+
     if not launched:
         print(f"[lec_run] ERROR: yosys did not run in '{container}' "
               "— runner should disclosed-skip. Raw log at reports/lec.rpt.",
@@ -4370,8 +4392,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                  "Yosys/Docker could not run — no equivalence evidence "
                  "produced. See reports/lec.rpt.")},
             resolved_top, gate_abs, liberty, liberty_source)
-        diag = annotate_step_budget(
-            diag, budget, stopped=bool(_EXECUTION_STOP_RE.search(raw)))
+        diag = annotate_step_budget(diag, budget, stopped=stopped_this_run)
         diag["lec_resume"] = resume_record
         _telemetry_finish("tool_unavailable", verdict=diag["verdict"],
                           equivalent=False,
@@ -4405,8 +4426,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         # `stopped` is MEASURED from this run's own log -- the producer writes
         # those two markers itself and nothing else can -- so the budget
         # sentence follows the evidence rather than the verdict word.
-        report = annotate_step_budget(
-            report, budget, stopped=bool(_EXECUTION_STOP_RE.search(raw)))
+        report = annotate_step_budget(report, budget,
+                                      stopped=stopped_this_run)
         report["gold_rtl_files"] = [Path(f).name for f in gold_files]
         report["gold_frontend"] = gold_frontend
         report["gold_defines"] = (
