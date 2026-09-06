@@ -125,6 +125,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import math
 import hashlib
 import json
 import re
@@ -395,6 +396,11 @@ SAMPLING_CAP_FF_EXPR = (
 #: in `build_ir`, and a `device_param_exprs` entry is resolved one step later
 #: in `analog_a3_netlist_emit`, so a width written here would step over the
 #: floor that `floor_geometry_to_pdk` had already applied.
+#: The generic role token a capacitor carries in this library's device
+#: records. One spelling, shared by the split above and the registry's own
+#: role map, so neither can drift from the other.
+CAP_ROLE = "cap"
+
 SAMPLING_CAP_L_EXPR = (
     "(" + SAMPLING_CAP_FF_EXPR + ") / (cap_area_ff_per_um2 * w_cap)")
 
@@ -3825,6 +3831,222 @@ def expand_stages(lib: Dict[str, Any], spec_values: Dict[str, float]
 
 
 # ── artefacts ─────────────────────────────────────────────────────────────
+# ── unit capacitors: a device the PDK cannot draw becomes N that it can ──
+#
+# THE DEFECT THIS CLOSES, MEASURED (u_hawaii_adc / ihp-sg13g2 / image 0.3.46).
+# This library sized `delta_sigma`'s capacitors from the noise budget and got
+# lengths of 34.75 to 629.08 um. The PDK's own gencell states `lmax 30.0`, and
+# a magic gencell asked for more does not refuse the way one below `lmin`
+# does: it CLAMPS to the maximum and draws. So twelve netlist capacitors came
+# back as TWO drawn cells, the largest device 21x smaller than the netlist
+# asks for; DRC was clean, the A5 gate passed, and the only artefact that
+# noticed was the sign-off LVS six steps later, whose cross-reference named
+# exactly those eight devices as differing in `l` alone.
+#
+# A capacitor above the gencell's maximum is not a broken design. It is the
+# ordinary analog answer — N unit devices in parallel — and the place to say
+# so is HERE, where the netlist is still being decided, so that the netlist
+# and the layout agree device for device instead of disagreeing at LVS.
+#
+# The unit length is solved against the PDK's OWN measured capacitance
+# constants, area AND perimeter, because N units do not have the same
+# perimeter as one: splitting 10 x 629.08 into 21 x 29.96 adds 400 um of edge.
+# Solving on area alone (`l/N`, which is what this library's own sizing
+# expression uses) would move the realised value by the whole fringe term.
+#
+#   C(w, l)      = carea * w * l + 2 * cperi * (w + l)
+#   N * C(w, lu) = C(w, l)
+#   =>  lu = (C(w, l)/N - 2*cperi*w) / (carea*w + 2*cperi)
+#
+# `lu` falls as N rises, so the smallest legal N is the first one whose `lu`
+# is at or under the maximum; a `lu` under the PDK's own MINIMUM means no unit
+# set exists and the block is refused BY NAME rather than drawn wrong.
+
+#: The relative error this split is allowed to leave in a capacitor's value.
+#: The solve above is exact in real arithmetic; what this bounds is the
+#: rounding of the emitted length and any family whose constants make the
+#: closed form degenerate. 0.1% is two orders of magnitude above what the
+#: measured split actually leaves (below 1e-9 on every capacitor of
+#: u_hawaii_adc's two blocks) and two orders BELOW the ~5% a MiM capacitor's
+#: own process tolerance carries, so it is a real bound and not a ceremonial
+#: one. Held in `tests/test_analog_a2_unit_capacitor_split.py`.
+CAP_SPLIT_TOLERANCE = 1e-3
+
+
+def capacitance_ff(w_um: float, l_um: float, carea: float, cperi: float
+                   ) -> float:
+    """The PDK's own two-term capacitance model, in fF for microns.
+
+    Both constants come from `pdk_registry.json`'s measured record
+    (`cap_area_ff_per_um2`, `cap_perim_ff_per_um`), which
+    `pdk_analog_characterize` derives by simulating the PDK's own model at two
+    sizes. A family that carries neither is not split — see `split_records`.
+    """
+    return carea * w_um * l_um + 2.0 * cperi * (w_um + l_um)
+
+
+def unit_capacitor_split(w_um: float, l_um: float, *,
+                         max_l: Optional[float], max_w: Optional[float],
+                         min_l: Optional[float], carea: float, cperi: float,
+                         tolerance: float = CAP_SPLIT_TOLERANCE,
+                         limit: int = 4096
+                         ) -> Tuple[Optional[int], Optional[float], str]:
+    """`(n, unit_length_um, why)` for one capacitor.
+
+    `(None, None, <reason>)` when no legal unit set reaches the value within
+    `tolerance` — the caller REFUSES BY NAME on that; it never draws the
+    nearest thing it can. `(1, l_um, "")` when the device is already legal, so
+    a design that needs no split takes a path that changes nothing.
+    """
+    if max_w is not None and w_um > max_w + 1e-12:
+        return None, None, (
+            f"drawn width {w_um}u is above the PDK maximum {max_w}u and this "
+            f"split divides LENGTH only; a width above the maximum is a "
+            f"device this library cannot realise")
+    if max_l is None or l_um <= max_l + 1e-12:
+        return 1, l_um, ""
+    target = capacitance_ff(w_um, l_um, carea, cperi)
+    denom = carea * w_um + 2.0 * cperi
+    if denom <= 0 or target <= 0:
+        return None, None, (
+            f"the family's measured capacitance constants (area {carea}, "
+            f"perimeter {cperi}) do not define a length for this width")
+    n = max(2, int(math.ceil(l_um / max_l)))
+    while n <= limit:
+        lu = (target / n - 2.0 * cperi * w_um) / denom
+        if lu > max_l + 1e-12:
+            n += 1
+            continue
+        if min_l is not None and lu < min_l - 1e-12:
+            return None, None, (
+                f"the smallest unit that stays under the PDK maximum "
+                f"{max_l}u is {lu:.6g}u, below the PDK minimum {min_l}u: no "
+                f"array of legal units realises {target:.6g}fF at width "
+                f"{w_um}u")
+        got = n * capacitance_ff(w_um, lu, carea, cperi)
+        if abs(got - target) <= tolerance * target:
+            return n, lu, ""
+        return None, None, (
+            f"{n} units of {lu:.6g}u realise {got:.6g}fF against a target of "
+            f"{target:.6g}fF, outside the {tolerance:.3g} relative tolerance "
+            f"this split holds")
+    return None, None, (
+        f"no array of at most {limit} units of at most {max_l}u realises "
+        f"{target:.6g}fF at width {w_um}u")
+
+
+def split_oversize_capacitors(devices: List[Dict[str, Any]],
+                             param_exprs: List[Dict[str, Any]],
+                             env: Dict[str, Any],
+                             role_maxima: Dict[str, Any],
+                             role_minima: Dict[str, Any],
+                             measured: Dict[str, float],
+                             ) -> Tuple[List[Dict[str, Any]],
+                                        List[Dict[str, Any]],
+                                        List[Dict[str, Any]],
+                                        List[str]]:
+    """Replace every capacitor the PDK cannot draw with N that it can.
+
+    Returns `(devices, param_exprs, records, refusals)`. `records` is one
+    entry per device that was split, with N, the unit length, the constants it
+    was solved against and the relative value error left — the artefact then
+    STATES the array instead of a reader having to notice N identical devices.
+    `refusals` are devices no legal unit set realises; the caller refuses the
+    block by name on those and emits nothing.
+
+    A family whose registry record carries no capacitor maximum, or no
+    measured capacitance constants, is NOT SPLIT and is not silently passed
+    either: `records` is empty and the caller's provenance says the maxima
+    were unavailable, the same way it already says whether the minima were.
+    """
+    lmax = _minima.max_length_um(role_maxima, CAP_ROLE)
+    wmax = _minima.max_width_um(role_maxima, CAP_ROLE)
+    lmin = _minima.min_width_um(role_minima, CAP_ROLE)
+    carea = measured.get("cap_area_ff_per_um2")
+    cperi = measured.get("cap_perim_ff_per_um")
+    if lmax is None or not isinstance(carea, (int, float)) or carea <= 0:
+        return devices, param_exprs, [], []
+    cperi = float(cperi) if isinstance(cperi, (int, float)) else 0.0
+
+    by_dev: Dict[str, Dict[str, Any]] = {}
+    for e in param_exprs:
+        if e.get("param") == "l":
+            by_dev[str(e.get("device"))] = e
+
+    out_devs: List[Dict[str, Any]] = []
+    out_exprs = [e for e in param_exprs]
+    records: List[Dict[str, Any]] = []
+    refusals: List[str] = []
+    for d in devices:
+        expr = by_dev.get(str(d.get("name")))
+        w = d.get("w")
+        if d.get("role") != CAP_ROLE or expr is None \
+                or not isinstance(w, (int, float)):
+            out_devs.append(d)
+            continue
+        try:
+            l_um = float(_safe_eval(str(expr["expr"]), dict(env)))
+        except Exception:
+            # NOT MEASURED, never a default: an expression this pass cannot
+            # resolve is one it has nothing to say about, and it is left
+            # exactly as it was for the pass that can.
+            out_devs.append(d)
+            continue
+        n, lu, why = unit_capacitor_split(
+            float(w), l_um, max_l=lmax, max_w=wmax, min_l=lmin,
+            carea=float(carea), cperi=cperi)
+        if n is None:
+            refusals.append(f"{d.get('name')}: {why}")
+            out_devs.append(d)
+            continue
+        if n == 1:
+            out_devs.append(d)
+            continue
+        # THE UNIT LENGTH STAYS DERIVED FROM THE SPEC. The original length
+        # expression is kept whole inside the closed form, so a reader can
+        # still follow the capacitor back to the noise budget that sized it;
+        # only the PDK constants are substituted numerically, because they are
+        # what this pass has already measured the split against and a NAME
+        # that a family does not carry would resolve to nothing downstream.
+        base = str(expr["expr"])
+        wt = repr(float(w))
+        at, bt = repr(float(carea)), repr(cperi)
+        lu_expr = (f"(({at} * {wt} * ({base}) + 2 * {bt} * ({wt} + ({base}))) "
+                   f"/ {n} - 2 * {bt} * {wt}) / ({at} * {wt} + 2 * {bt})")
+        out_exprs = [e for e in out_exprs if e is not expr]
+        for i in range(n):
+            unit = dict(d)
+            unit["name"] = f"{d['name']}_u{i}"
+            out_devs.append(unit)
+            e = dict(expr)
+            e["device"] = unit["name"]
+            e["expr"] = lu_expr
+            e["rationale"] = (
+                f"unit {i + 1} of {n} in parallel — the drawn length this "
+                f"block's sizing asks for is above the PDK's stated maximum "
+                f"for this device, so the capacitor is realised as {n} legal "
+                f"units and the unit length is solved from the PDK's own "
+                f"area and perimeter capacitance so the total is preserved"
+                + (f"; {expr.get('rationale')}" if expr.get("rationale")
+                   else ""))
+            out_exprs.append(e)
+        target = capacitance_ff(float(w), l_um, float(carea), cperi)
+        got = n * capacitance_ff(float(w), lu, float(carea), cperi)
+        records.append({
+            "device": d.get("name"), "role": CAP_ROLE,
+            "units": n, "unit_w_um": float(w), "unit_l_um": lu,
+            "library_l_um": l_um,
+            "pdk_max_l_um": lmax, "pdk_max_w_um": wmax,
+            "target_ff": target, "realised_ff": got,
+            "relative_value_error": (abs(got - target) / target
+                                     if target else None),
+            "tolerance": CAP_SPLIT_TOLERANCE,
+            "cap_area_ff_per_um2": float(carea),
+            "cap_perim_ff_per_um": cperi,
+        })
+    return out_devs, out_exprs, records, refusals
+
+
 def floor_geometry_to_pdk(lib: Dict[str, Any], constants: Dict[str, Any],
                           devices: List[Dict[str, Any]],
                           role_minima: Dict[str, Any]
@@ -3982,6 +4204,8 @@ def build_ir(block: str, btype: str, entry: Dict[str, Any],
              minima_source: Optional[str] = None,
              measured_params: Optional[Dict[str, float]] = None,
              measured_provenance: Optional[Dict[str, Any]] = None,
+             role_maxima: Optional[Dict[str, Any]] = None,
+             maxima_source: Optional[str] = None,
              ) -> Dict[str, Any]:
     knobs: Dict[str, Any] = {}
     knob_sources: Dict[str, str] = {}
@@ -4016,6 +4240,26 @@ def build_ir(block: str, btype: str, entry: Dict[str, Any],
         if isinstance(_grec, dict) and _grec.get("window_clocks"):
             constants["window_clocks"] = float(_grec["window_clocks"])
     clamps = floor_geometry_to_pdk(lib, constants, devices, role_minima)
+
+    # A DEVICE THE PDK CANNOT DRAW BECOMES N THAT IT CAN — see
+    # `split_oversize_capacitors`. Run AFTER the widths are floored, because
+    # the split solves the unit length AT the drawn width and a width the
+    # floor was about to raise would be solved against the wrong one. The
+    # environment is the one `analog_a3_netlist_emit` resolves these same
+    # expressions in, seeded in the same order, so the length this pass reads
+    # is the length that pass will render.
+    role_maxima = dict(role_maxima or {})
+    split_env: Dict[str, Any] = {}
+    split_env.update({k: v for k, v in (measured_params or {}).items()
+                      if isinstance(v, (int, float))
+                      and not isinstance(v, bool)})
+    split_env.update(constants)
+    split_env.update({k: v for k, v in knobs.items()
+                      if isinstance(v, (int, float))})
+    split_env.update(spec_values)
+    devices, param_exprs, splits, split_refusals = split_oversize_capacitors(
+        devices, param_exprs, split_env, role_maxima, role_minima,
+        dict(measured_params or {}))
 
     ir: Dict[str, Any] = {
         "ir_schema": IR_SCHEMA,
@@ -4095,6 +4339,33 @@ def build_ir(block: str, btype: str, entry: Dict[str, Any],
             # and "this family declares no measured minimum, so NOTHING was
             # floored" — a reader that cannot tell those apart will read the
             # second as the first.
+            # The OTHER end of the same statement. A gencell below its
+            # minimum refuses; one ABOVE its maximum clamps and draws, so a
+            # reader must be able to tell "checked, nothing was above the
+            # ceiling" from "this family declares no ceiling, so nothing was
+            # checked" — the same distinction `minima_available` makes.
+            "layout_maxima": {
+                "path": "programs/pdk_registry.json",
+                "field": "analog_device_layout_maxima",
+                "reader": "programs/pdk_analog_layout_minima.py",
+                "family": pdk_family,
+                "maxima_available": bool(role_maxima),
+                "measured_from": maxima_source,
+                "roles": role_maxima or None,
+                "capacitor_arrays": splits,
+                "refusals": split_refusals,
+                "note": (
+                    "a capacitor whose drawn length is above the PDK's own "
+                    "stated maximum is realised as N unit devices in "
+                    "parallel, N and the unit length solved from the PDK's "
+                    "measured area AND perimeter capacitance so the total "
+                    "value is preserved; a device no legal unit set realises "
+                    "is refused by name, never drawn at the maximum"
+                    if role_maxima else
+                    "this family declares no measured device maximum in the "
+                    "registry, so NOTHING was checked against one and no "
+                    "capacitor was split"),
+            },
             "layout_minima": {
                 "path": "programs/pdk_registry.json",
                 "field": "analog_device_layout_minima",
@@ -4611,6 +4882,7 @@ def emit_for_block(project: Path, entry: Dict[str, Any],
     # matcher, so a family whose Vth is quoted can never be a family whose
     # layout minima — or whose measured constants — were silently skipped.
     _minima_fam, role_minima = _minima.layout_minima(pdk)
+    _maxima_fam, role_maxima = _minima.layout_maxima(pdk)
     measured, measured_prov = pdk_measured_params(pdk, project)
 
     # An entry may refuse ITSELF. Checked BEFORE `build_ir`, because the
@@ -4625,7 +4897,8 @@ def emit_for_block(project: Path, entry: Dict[str, Any],
 
     ir = build_ir(name, btype, entry, lib, spec_values, spec_path, project,
                   fam, params, role_minima, _minima.minima_source(pdk),
-                  measured, measured_prov)
+                  measured, measured_prov,
+                  role_maxima, _minima.maxima_source(pdk))
     md = render_md(ir, lib, fam, params)
     bdir.mkdir(parents=True, exist_ok=True)
     md_path.write_text(md, encoding="utf-8")
