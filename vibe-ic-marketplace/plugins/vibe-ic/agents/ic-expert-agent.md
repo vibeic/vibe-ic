@@ -1916,45 +1916,6 @@ _Captured by benchmark-enhancement-capture 2026-06-05._
 
 _Captured by benchmark-enhancement-capture 2026-06-05._
 
-### Skill: hysteresis level-controller — the held flag's FULL structure (reset-equivalence + boundary-row anchored)
-
-For thermometer-sensor level controllers (tank / reservoir class) whose supplemental/direction
-output depends on "the level previous to the last sensor change", FOUR elements are pinned
-simultaneously — three lesson-guided blind sweeps that each got a different ONE wrong all failed
-the oracle while passing their own TBs, so name all four explicitly before writing RTL:
-
-1. **Registered level, Moore decode.** Register the decoded level (count of asserted thermometer
-   sensors; non-thermometer codes HOLD the previous level). EVERY output — the nominal per-band
-   outputs AND the supplemental flag — decodes from the REGISTERED level, never combinationally
-   from the raw sensor inputs. (Observed fail: correct flag polarity but nominal outputs decoded
-   `~s[k]` straight off the sensors — every value right, one cycle early, oracle-FAIL.)
-2. **The flag is a HELD register whose update set is exactly {level CHANGE}.** fall (new<cur) → 1
-   (open supplemental), rise (new>cur) → 0, dwell (new==cur) → HOLD through arbitrarily long
-   dwells. Compare new_level against the REGISTERED level and update on the same clock edge the
-   level register absorbs the change.
-3. **Polarity comes from the behaviourally-pinned anchors, NOT from the relative direction
-   sentence.** Such prompts often carry "if the previous level was lower than the current, open
-   the supplemental valve" — the literal antecedent reads RISE→open. Do NOT implement that
-   literal reading when the spec also pins: (a) the reset-equivalence sentence ("reset == level
-   low for a long time, ALL outputs asserted") — flag=1 while at/falling-to the bottom; and
-   (b) the boundary table rows — bottom row "maximum flow, both valves open" (flag=1), top row
-   "flow zero" (flag=0). Bottom is only reached by FALLING, top only by RISING, so the anchors
-   fix FALL→1 / RISE→0 — the OPPOSITE of the literal sentence. Behaviourally-pinned anchors
-   (reset equivalence + boundary rows) outrank a relative prose sentence with an ambiguous
-   antecedent. (Observed fail: paired direction-states, everything right except literal
-   RISE→open polarity — oracle-FAIL on more than half the vectors.)
-4. **Output-vector mapping per band** (registered level L, bands 0=bottom..N=top): nominal
-   outputs are monotone threshold decodes (`out_k = (L <= threshold_k)`) read row-by-row from the
-   spec's table; supplemental = the held flag, optionally with boundary overrides bottom→1 /
-   top→0 — the overrides are behaviourally redundant given elements 2+3 (any reachable arrival
-   at bottom set the flag; at top cleared it) and overrides ALONE rescue nothing if another
-   element is wrong; what is NOT optional is the HOLD through dwells.
-
-Paired direction-states (split each interior band into arrived-from-below / arrived-from-above)
-are an EQUIVALENT encoding — but only with element-3 polarity (the fell-into states carry
-flag=1). The held-flag form is smaller and harder to get wrong. Both verified-passing readings
-of this class use: registered level + held flag + fall→1 + Moore decode.
-
 ### Skill: A waveform that enumerates ALL input combinations is a COMPLETE truth table — fit every row, never adopt a don't-care reading
 
 **Pattern**: When a combinational reverse-engineering waveform covers every input combination (16 rows for 4 inputs), there are NO don't-cares: a candidate that treats any input as irrelevant (e.g. a majority-of-three over four inputs) can match most rows while missing exactly the rows that distinguish it. The correct discipline is to tabulate ALL rows and require a candidate to match every one; with full coverage the function is UNIQUE, so any mismatch (even one row) eliminates the candidate.
@@ -3729,3 +3690,49 @@ phase against reset explicitly whenever a spec fixes the reset output value.
 
 _Captured by benchmark-enhancement-capture 2026-09-07 (RTLLM clean-room run; all four verified
 against the official harness)._
+
+### Skill: Testbench time-zero initialisation — clock in the DECLARATION, asynchronous reset from an INITIAL block
+
+**Pattern**: Two opposite initialisation mistakes both turn a CORRECT design into a
+failing testbench run, and a false FAIL is worse than a slow review because it
+authorises a repair to code that was already right.
+
+* **Clock, spurious edge.** `initial clk = 1'b1;` leaves `clk` at `x` until time
+  zero, so the `x -> 1` transition IS a real `posedge`. The DUT clocks once
+  before the reset window is observed, and every first-cycle or post-reset
+  assertion fails for a testbench reason. (`x -> 0` is a `negedge`, so the trap
+  is polarity-dependent and bites posedge designs initialised to 1.)
+* **Asynchronous reset, missing edge.** The mirror image: `reg areset = 1;` in the
+  declaration means `areset` starts asserted and NEVER TRANSITIONS, so
+  `always @(posedge clk, posedge areset)` never fires on it. The state reads back
+  `x` and the design looks broken when it is not.
+
+**When to apply**: Any testbench asserting the reset state, the power-up state, or
+the exact cycle on which an output first asserts — including every prompt-derived
+verification challenge for a clocked design.
+
+**What to do**:
+
+```verilog
+reg clk    = 1'b0;   // in the DECLARATION: no time-zero edge in either direction
+reg areset = 1'b0;   // starts DEasserted so the assertion below is a real edge
+initial begin
+  #1 areset = 1'b1;  // 0 -> 1 is a genuine posedge an async reset must act on
+  #1 if (state !== EXPECTED) ...
+end
+```
+
+Initialise the clock where it cannot generate an edge; drive an asynchronous
+reset where it must generate one. Then check the first observed rising edge is
+genuinely the first clocked event (`@(negedge clk)` before the first
+`@(posedge clk)` is a cheap way to be sure).
+
+**Worked pattern** (anonymized): in one 156-problem blind review campaign these two
+mistakes cost three separate reviewers a failed attempt each. In every case the
+candidate was correct and the testbench was wrong; the giveaway was a reset-state
+or first-cycle assertion failing while a full reference-model comparison over the
+remaining cycles agreed with the candidate throughout.
+
+**Why this is GENERAL**: it is simulator-semantics craft about `x`-to-value
+transitions at time zero, independent of design, PDK, vendor or benchmark. It
+applies to any Verilog testbench that reasons about the first edge.

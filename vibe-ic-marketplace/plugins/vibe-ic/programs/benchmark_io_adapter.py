@@ -200,7 +200,8 @@ def stage(fmt_name: str, problem: Dict[str, Any], project: Path) -> Dict[str, An
 
 
 def collect(fmt_name: str, problem_id: str, project: Path, *,
-            supplied_rtl: bool = False) -> Dict[str, Any]:
+            supplied_rtl: bool = False,
+            required_top: Optional[str] = None) -> Dict[str, Any]:
     """The answer artefact, in the shape the scorer reads — or a refusal.
 
     Always step 1's RTL (`phase2/stage1/rtl/*`) — measured: every open RTL
@@ -221,6 +222,25 @@ def collect(fmt_name: str, problem_id: str, project: Path, *,
     the hash-bound supplied bytes.  Callers must opt into that exception with
     ``supplied_rtl=True``; an ordinary solve can therefore never promote a
     scaffold merely because its generation step was skipped.
+
+    NOR IS THE WRONG MODULE NAME AN ANSWER. When the benchmark's scorer
+    instantiates one fixed top module (``module_name_strategy``), an artefact
+    that never declares that module cannot be scored at all: the grading
+    testbench fails to elaborate. Callers that know the required name pass it as
+    ``required_top`` and this refuses the artefact, with `ok=False`, exactly as
+    it refuses a scaffold.
+
+    Refusing HERE is the whole point. The identical check already existed at the
+    sample-export step, which is the last step of the run -- far past the point
+    where anything could act on it. Measured on a 156-problem VerilogEval-v2
+    run: one candidate was emitted as `module chip_top` with correct logic, and
+    because the check lived only at export, (a) it was sent for AI review, where
+    it CANNOT be failed, since the review contract requires a challenge
+    testbench instantiating the missing module and such a testbench cannot
+    elaborate, and (b) the all-or-nothing export then blocked the ENTIRE run's
+    score. A defect the program can detect deterministically must be detected
+    where the flow can still act on it -- here, which routes it to AI backup for
+    re-authoring, the correct remedy.
     """
     project = Path(project)
     rtl_dir = project / "phase2" / "stage1" / "rtl"
@@ -244,9 +264,28 @@ def collect(fmt_name: str, problem_id: str, project: Path, *,
                           f"{verdict['detail'][:180]}"}
 
     text = "\n".join(f.read_text(errors="replace") for f in rtl)
+    if required_top and required_top not in _declared_module_names(text):
+        return {"id": problem_id, "ok": False, "rtl_gen": verdict["status"],
+                "declared_modules": _declared_module_names(text),
+                "reason": (f"the scorer instantiates {required_top!r}, and this "
+                           f"artefact declares no such module "
+                           f"(declares: {', '.join(_declared_module_names(text)) or 'none'})"
+                           " — the grading testbench could not elaborate against it")}
     return {"id": problem_id, "ok": True, "completion": text,
             "rtl_gen": verdict["status"], "supplied_rtl": supplied_rtl,
             "files": [f.name for f in rtl]}
+
+
+def _declared_module_names(text: str) -> List[str]:
+    """Every module this source declares, in order, ignoring comments.
+
+    Deliberately does NOT treat an instantiation as a declaration: `TopModule
+    u0(...)` inside another module must not satisfy a requirement to DECLARE
+    TopModule.
+    """
+    stripped = re.sub(r"/\*.*?\*/", " ", text, flags=re.S)
+    stripped = re.sub(r"//[^\n]*", " ", stripped)
+    return re.findall(r"\bmodule\s+([A-Za-z_]\w*)", stripped)
 
 
 def _rtl_gen_verdict(project: Path) -> Optional[Dict[str, str]]:
