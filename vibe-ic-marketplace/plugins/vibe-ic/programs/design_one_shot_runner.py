@@ -3954,6 +3954,41 @@ class _Phase1RtlPublication:
                     pass
 
 
+#: the last emitter-side timescale decision, so the step that publishes RTL can
+#: report the NAMED refusal instead of shipping a unit-less file in silence.
+_LAST_TIMESCALE_DECISION: Optional[Dict[str, object]] = None
+
+
+def _stamp_declared_timescale(project: Path, rtl: str) -> str:
+    """State the emitted RTL's TIME UNIT when the design input declares one.
+
+    #2053 (emitter half). A file with no `timescale has no time unit of its own:
+    it inherits the unit of whatever source the simulator compiled first, so a
+    candidate whose behaviour is defined by delay controls is read in a different
+    unit depending on argv order — MEASURED as a FAIL/PASS flip on one frozen
+    clkgenerator candidate against one frozen challenge (lane brtllm, BR-08).
+
+    A unit is never invented: `rtl_timescale_stamp` prepends one ONLY when the
+    DESIGN INPUT declares it, and otherwise returns the text byte-identical with
+    the refusal recorded BY NAME in `_LAST_TIMESCALE_DECISION` for the caller to
+    publish. Guessing `1ns/1ps` would silently redefine every delay in the file.
+    """
+    global _LAST_TIMESCALE_DECISION
+    try:
+        import rtl_timescale_stamp as _ts  # noqa: PLC0415
+        res = _ts.stamp_rtl(rtl, project)
+    except Exception as exc:              # never let this block an emit
+        _LAST_TIMESCALE_DECISION = {"reason": "STAMP_UNAVAILABLE",
+                                    "detail": repr(exc)}
+        return rtl
+    _LAST_TIMESCALE_DECISION = {
+        "reason": res["reason"], "timescale": res["timescale"],
+        "source": res["source"],
+        "refusal": _ts.refusal_sentence(res),
+    }
+    return str(res["rtl"])
+
+
 def _publish_phase1_rtl_no_clobber(
         project: Path, out: Path, rtl: str,
         project_binding: Optional[_Phase1ProjectBinding] = None,
@@ -3965,6 +4000,9 @@ def _publish_phase1_rtl_no_clobber(
     pathname during that interval.
     """
     project = Path(project)
+    # The ONE choke point every deterministic emit passes through, which is why
+    # the time-unit decision is taken here and not in each emitter.
+    rtl = _stamp_declared_timescale(project, rtl)
     open_flags = os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0)
     fds: List[int] = []
     output_fd: Optional[int] = None

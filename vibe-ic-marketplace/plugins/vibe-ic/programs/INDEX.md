@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1274
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1274)
+- **Total programs (excluding helpers / shims):** 1275
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1275)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1265 |
+| `any` | 1266 |
 
 ## Alphabetical listing
 
@@ -1020,6 +1020,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `rtl_review_aggregate` | any | v0.1.50 | rtl-review skill backing aggregator (Pattern-B → program). |
 | `rtl_scan_scope` | any | — | shared authoritative-RTL scan-scope policy (ORGANIC #545). |
 | `rtl_signal_name_semantic_check` | any | — | v1.6.232 (merged v229+v231). |
+| `rtl_timescale_stamp` | any | — | state an emitted candidate's TIME UNIT, or refuse by name. |
 | `rtl_transitive_cone` | any | — | Deterministic transitive-cone reduction for a staged RTL source tree. |
 | `rtl_unit_test_coverage_check` | any | v0.50.2 | v0.50.2 plugin gate |
 | `run_entry_manifest` | any | — | record WHICH STEP a run entered the flow at. |
@@ -1346,7 +1347,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1265 programs)
+### `any` (1266 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `absence_verdict_names_its_search_space_check` — "not found" must say WHERE it looked.
@@ -2336,6 +2337,7 @@ _(no programs in this group)_
 - `rtl_review_aggregate` — rtl-review skill backing aggregator (Pattern-B → program).  _[v0.1.50]_
 - `rtl_scan_scope` — shared authoritative-RTL scan-scope policy (ORGANIC #545).
 - `rtl_signal_name_semantic_check` — v1.6.232 (merged v229+v231).
+- `rtl_timescale_stamp` — state an emitted candidate's TIME UNIT, or refuse by name.
 - `rtl_transitive_cone` — Deterministic transitive-cone reduction for a staged RTL source tree.
 - `rtl_unit_test_coverage_check` — v0.50.2 plugin gate  _[v0.50.2]_
 - `run_entry_manifest` — record WHICH STEP a run entered the flow at.
