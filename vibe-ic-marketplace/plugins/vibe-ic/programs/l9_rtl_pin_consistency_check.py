@@ -558,9 +558,15 @@ def _reconcile_l3_doc_aliases(only_l9: list, only_rtl: list,
 
     Returns (only_l9', only_rtl', advisory_list). `advisory_list` entries
     are human-readable "<residual> (side, doc-aliased to `<anchor>`)"
-    strings for the PASS-path advisory print. Never removes a pin whose
-    alias partner is not itself a matched anchor, or whose direction
-    disagrees — no-leak."""
+    strings for the PASS-path advisory print.
+
+    Round-2 adds the CROSS-SIDE pair: when NO member of a documented group is
+    a matched anchor, but exactly one member is an unmatched L9 residual and
+    the OTHER member is an unmatched RTL residual with the SAME direction,
+    the two are one pin under the two spellings the doc authorised, and both
+    cancel. Never removes a pin outside a documented alias group, a pair whose
+    directions disagree, or a residual whose alias partner is absent from the
+    other side — no-leak."""
     if not alias_groups:
         return only_l9, only_rtl, []
     advisory: list = []
@@ -578,6 +584,40 @@ def _reconcile_l3_doc_aliases(only_l9: list, only_rtl: list,
                     anchor_dir = rd
                     break
         if anchor is None:
+            # ORGANIC #778 round-2 — the CROSS-SIDE alias pair.
+            #
+            # Round-1 could only cancel a residual whose alias partner was an
+            # ANCHOR: the same spelling present in BOTH L9 and the RTL top.
+            # That covers a top which exposes BOTH documented spellings as
+            # literal ports, and nothing else. MEASURED: it does not cover the
+            # ordinary reading of the grammar it is built on. When L3 writes
+            # `` `a` (or `b`) `` and the designer picks ONE — L9 carrying `a`,
+            # the RTL top carrying `b` — neither name is on both sides, so
+            # `anchor` is None, the group is skipped, and the gate reports the
+            # pair as a missing pin AND an extra port. The flow refused a
+            # design for taking an alternative its own input doc authorised.
+            #
+            # NO-LEAK, and every clause is load-bearing:
+            #   * the pair must come from a group the design's OWN L3 doc
+            #     wrote in the explicit `` `a` (or `b`) `` grammar;
+            #   * EXACTLY ONE member is an unmatched L9 residual and the OTHER
+            #     is an unmatched RTL residual — if both sit on one side the
+            #     RTL exposes neither spelling and both still FAIL;
+            #   * their DIRECTIONS must agree, so an input/output swap under
+            #     two documented names is still a mismatch.
+            # A pin outside any documented alias group is untouched.
+            l9_side = [n for n in names if n in kept_l9]
+            rtl_side = [n for n in names if n in kept_rtl]
+            if (len(l9_side) == 1 and len(rtl_side) == 1
+                    and l9_side[0] != rtl_side[0]):
+                a_l9, b_rtl = l9_side[0], rtl_side[0]
+                ld, rd = l9_dir_map.get(a_l9), rtl_dir_map.get(b_rtl)
+                if ld and rd and ld == rd:
+                    kept_l9.remove(a_l9)
+                    kept_rtl.remove(b_rtl)
+                    advisory.append(
+                        f"{a_l9} (L9) <-> {b_rtl} (RTL), doc-aliased pair, "
+                        f"direction {ld}")
             continue
         for n in names:
             if n == anchor:
