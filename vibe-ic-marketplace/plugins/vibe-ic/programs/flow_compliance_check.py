@@ -8310,9 +8310,10 @@ def _p0_umbrella_status(executed: Optional[bool],
         nothing and cannot disagree with the bucket it came from.
       * no FAIL, but at least one registered gate returned NO VERDICT
                                -> ``INCOMPLETE``.
-      * no FAIL, and NO gate returned any verdict at all (an empty ``records``)
-                               -> ``INCOMPLETE``. See THE EMPTY DENOMINATOR
-        below.
+      * no FAIL, and NO gate returned any verdict at all (an empty ``records``,
+        or records in which every one is non-decisive)
+                               -> ``NOT-MEASURED`` (RB2-03, #2063). See THE
+        EMPTY DENOMINATOR below.
       * no FAIL, every registered gate answered -> ``PASS``.
 
     WHY THE THIRD BRANCH EXISTS.  The verdict was ``len(fails) == 0``, computed
@@ -8377,14 +8378,38 @@ def _p0_umbrella_status(executed: Optional[bool],
         return "SKIPPED-CONDITION"
     if not executed:
         return "FAIL"
-    if executed and not records:
-        return "INCOMPLETE"
+    # RB2-03 (#2063) — ZERO ANSWERED IS NOT "PARTIALLY ANSWERED". `INCOMPLETE`
+    # says "the input WAS applicable and was NOT examined", which is the right
+    # sentence about a population some of which answered. When NOT ONE
+    # registered gate returned a verdict there is no population: nothing was
+    # measured, and the disclosure line right above this function has always
+    # said so in its own words ("NONE of the N registered structural sub-gate(s)
+    # returned a verdict") while the VERDICT — the field a consumer reads —
+    # said the same word as a 245-of-246 run. `NOT-MEASURED` is adjudicated
+    # identically to `INCOMPLETE` (`_flow_verdict_tiers`: a qualified
+    # done-claim, in neither EXCUSED nor NON_GREEN), so no run's greenness
+    # moves; the word now distinguishes the two.
+    #
+    # The empty-records case is the same statement with the registry empty too,
+    # and is stated separately for the reason THE EMPTY DENOMINATOR gives: this
+    # function is the ONE OWNER of the verdict for every caller, including the
+    # next one.
+    if not records:
+        return "NOT-MEASURED"
     nonverdict_classes = [
         str(r.get("reason_class") or "") for r in records
         if r.get("verdict") in _P0_NONDECISIVE_VERDICTS
     ]
     if (_reason_taxonomy.p0_tier_for_reason_classes(nonverdict_classes)
             == "INCOMPLETE"):
+        # The reason classes decide WHETHER the population is short; the count
+        # of decisive verdicts decides whether there IS a population. A gate
+        # that answered `DESIGN_DECLARED_NA` HAS spoken about the design and is
+        # never reclassified here — that arm returns PASS above/below exactly
+        # as before.
+        if not any(r.get("verdict") not in _P0_NONDECISIVE_VERDICTS
+                   for r in records):
+            return "NOT-MEASURED"
         return "INCOMPLETE"
     return "PASS"
 
@@ -15193,7 +15218,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         )
 
     _icon = {"PASS": "✓", "FAIL": "✗", "MISSING": "·", "WAIVED": "~",
-             "INCOMPLETE": "…",
+             "INCOMPLETE": "…", "NOT-MEASURED": "…",
              "DEFERRED-BY-UPSTREAM": "~",
              "SKIPPED-CONDITION": "-", "SKIPPED-SETUP-REQUIRED": "!",
              "VACUOUS_PASS": "○", "PARTIALLY-VACUOUS": "◔",
@@ -15207,7 +15232,8 @@ def main(argv: Optional[List[str]] = None) -> int:
               "PARTIALLY-VACUOUS": "PARTIALLY-VACUOUS",
               "PASS_VOIDED_BY_DEPENDENCY": "PASS-VOIDED",
               "STRUCTURE-ONLY": "STRUCTURE-ONLY",
-              "INCOMPLETE": "INCOMPLETE"}
+              "INCOMPLETE": "INCOMPLETE",
+              "NOT-MEASURED": "NOT-MEASURED"}
     for r in results:
         icon = _icon.get(r.status, "?")
         label = _label.get(r.status, r.status)
@@ -15420,8 +15446,13 @@ def main(argv: Optional[List[str]] = None) -> int:
         # produced. `_no_verdict_ids` is built from `scoped`, so it is a SUBSET
         # of `_scoped_ids` by construction and this stays a no-op in every mode
         # that does not narrow the scope.
+        # RB2-03 (#2063) — DERIVED, not a literal. This set used to read
+        # `r.status == "INCOMPLETE"`; the moment a second word for "this step
+        # measured nothing" existed (`NOT-MEASURED`), the P0 violation was
+        # printed and gated NOTHING. `_flow_verdict_tiers` owns the membership.
         _no_verdict_ids = {str(r.id) for r in scoped
-                           if r.status == "INCOMPLETE"}
+                           if _T.says_nothing_was_measured(
+                               r.status)}
         ordering_gating_lines = [
             line for line, v in zip(ordering_fail_lines, _ordering_violations)
             if str(v['signoff_id']) in _scoped_ids

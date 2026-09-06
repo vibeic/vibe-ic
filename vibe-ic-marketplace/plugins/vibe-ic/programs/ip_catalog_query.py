@@ -1444,19 +1444,114 @@ def _entry_identity_tokens(mt: CatalogMatch,
     return toks
 
 
-def _self_match_reason(mt: CatalogMatch, manifest: Dict[str, Any],
-                       ic_ident: set) -> str:
-    """Non-empty reason when the catalog entry would hand back the IC's OWN
-    design (its top/name identity intersects the IC identity); "" for a
-    legitimate leaf COMPONENT IP. #187 benchmark integrity."""
-    if not ic_ident:
+#: A `reference/` or `reference_<name>/` path in an input doc's source list is
+#: this flow's written convention for "the tree this design ORIGINATES from".
+#: RB2-02 (#2063).
+_ORIGIN_REF_RE = re.compile(r'\breference[_\-/]([A-Za-z0-9][A-Za-z0-9_\-]*)')
+
+#: Non-identifying words that follow `reference/` in a doc path and name a FILE,
+#: not an origin repo. Dropped so a `reference/README.md` citation can never
+#: refuse a catalog entry that happens to be called `readme`.
+_ORIGIN_FILE_STOP = frozenset({
+    "readme", "doc", "docs", "license", "notice", "makefile", "index",
+    "images", "img", "fig", "figures", "test", "tests", "sim", "build"})
+
+
+def _declared_origin_idents(facts: Dict[str, Any]) -> set:
+    """The repo identities the INPUT DOCS state this design ORIGINATES from.
+
+    RB2-02 (#2063). Read ONLY from the input-derived text (`_full_text`, which
+    `load_project_facts` builds from `phase1/generated_docs/L*.json` and
+    `input/docs/L*.md`) — §4.05: the design INPUT, never an oracle.
+
+    THE GRAMMAR, and why it is this one. A doc's source list cites the tree the
+    design comes from by a `reference/...` or `reference_<name>/...` path — the
+    convention this flow's own Phase-1 docs already use (`reference_serv/doc/
+    interface.rst`, `reference/subservient.core`). That prefix is what
+    distinguishes an ORIGIN from a component the docs merely recommend reusing:
+    a doc that says "drive it with an off-the-shelf UART" names an IP, a doc
+    that cites `reference_x/` says where this design came from. Only the origin
+    form is collected, so this guard can never refuse a legitimate component IP
+    the input happens to mention.
+    """
+    text = str((facts or {}).get("_full_text") or "")
+    if not text:
+        return set()
+    out: set = set()
+    for m in _ORIGIN_REF_RE.finditer(text):
+        t = _norm_ident(m.group(1))
+        if not t or t in _GENERIC_IDENT_STOP or t in _ORIGIN_FILE_STOP:
+            continue
+        out.add(t)
+    return out
+
+
+def declared_reuse_idents(project: Path) -> set:
+    """The identity tokens the INPUT DOCS name as REUSED IP. RB2-01 (#2063).
+
+    Read from the input-derived text only (§4.05). A catalog MATCH is a
+    heuristic guess made from L1-L23 predicates; the input docs naming an IP is
+    the design's own statement that this IP is part of it. The runner uses the
+    difference to decide whether a catalog match may override the class
+    registry's declared `fallback_skill` — see
+    `design_one_shot_runner.step_rtl_gen`.
+
+    Deliberately a MEMBERSHIP test over the docs' own words, not a scoring
+    heuristic: the question here is only "did the input mention this IP at
+    all", and an IP the input never mentions cannot be its declared reuse.
+    """
+    facts = load_project_facts(project)
+    text = str((facts or {}).get("_full_text") or "").lower()
+    if not text:
+        return set()
+    toks = set(re.findall(r"[a-z0-9][a-z0-9_\-]*", text))
+    return {t for t in toks if t not in _GENERIC_IDENT_STOP}
+
+
+def _origin_match_reason(mt: CatalogMatch, manifest: Dict[str, Any],
+                         origin_idents: set) -> str:
+    """Non-empty reason when the entry's UPSTREAM REPO is the design's own
+    stated origin. RB2-02 (#2063).
+
+    MEASURED on the subservient cell (lane rbsub2, 2026-09-06): the token-only
+    guard refused `shared_sram_rf` (it shares a name token with the IC) and let
+    `serv` through — whose `canonical_url` is the very upstream that cell's own
+    L2/L8 cite as `reference_serv`. The token arm cannot see that, because an
+    origin's repo name need not share a single character with the design's
+    name; here it is a strict SUBSTRING of it and still did not intersect as a
+    token. Pulling a design's own origin repo through the catalog hands the
+    generation the answer key exactly as a self-match does, so it is refused on
+    its own axis — the repo identity — and the token arm stays as the FIRST
+    refusal, never the only one.
+    """
+    if not origin_idents:
         return ""
-    inter = sorted(_entry_identity_tokens(mt, manifest) & ic_ident)
+    ids = {_norm_ident(mt.canonical_url)}
+    if isinstance(manifest, dict):
+        ids.add(_norm_ident(manifest.get("upstream")
+                            or manifest.get("upstream_repo")))
+    ids.discard("")
+    inter = sorted(ids & origin_idents)
     if not inter:
         return ""
-    return ("catalog entry supplies the IC-under-test's OWN design (shared "
-            f"top/identity token(s): {', '.join(inter)}) — offering it would "
-            "hand back the reference design; REFUSED (#187 benchmark integrity)")
+    return ("catalog entry's upstream repo IS the design origin the INPUT docs "
+            f"state (repo identity: {', '.join(inter)}) — offering it would "
+            "hand back the design's own origin; REFUSED (RB2-02 #2063 "
+            "benchmark integrity)")
+
+
+def _self_match_reason(mt: CatalogMatch, manifest: Dict[str, Any],
+                       ic_ident: set, origin_idents: set | None = None) -> str:
+    """Non-empty reason when the catalog entry would hand back the IC's OWN
+    design — either because its top/name identity intersects the IC identity
+    (#187), or because its upstream repo is the origin the input docs state
+    (RB2-02 #2063). "" for a legitimate leaf COMPONENT IP."""
+    inter = sorted(_entry_identity_tokens(mt, manifest) & ic_ident) if ic_ident else []
+    if inter:
+        return ("catalog entry supplies the IC-under-test's OWN design (shared "
+                f"top/identity token(s): {', '.join(inter)}) — offering it would "
+                "hand back the reference design; REFUSED (#187 benchmark integrity)")
+    return _origin_match_reason(mt, manifest, origin_idents or set())
 
 
 def query_catalog(project: Path,
@@ -1477,6 +1572,7 @@ def query_catalog(project: Path,
 
     facts = load_project_facts(project)
     ic_ident = _ic_identity_tokens(project, facts, ic_name)
+    origin_idents = _declared_origin_idents(facts)   # RB2-02 (#2063)
     by_name: Dict[str, Dict[str, Any]] = {
         m.get("ip_name", ""): m for m in manifests if m.get("ip_name")
     }
@@ -1507,7 +1603,7 @@ def query_catalog(project: Path,
                 print(f"ip_catalog_query: REFUSED unreadable manifest shape "
                       f"{ip_name!r} — {_shape_reason}", file=sys.stderr)
                 continue
-            reason = _self_match_reason(mt, m, ic_ident)
+            reason = _self_match_reason(mt, m, ic_ident, origin_idents)
             if reason:
                 mt.self_match = True
                 mt.self_match_reason = reason
@@ -1546,7 +1642,8 @@ def query_catalog(project: Path,
             continue
         # #187 — the self-match guard applies to auto-included dependencies too:
         # a dependency that is itself the IC's own design is refused.
-        _dep_reason = _self_match_reason(dep_match, dm, ic_ident)
+        _dep_reason = _self_match_reason(dep_match, dm, ic_ident,
+                                         origin_idents)
         if _dep_reason:
             dep_match.self_match = True
             dep_match.self_match_reason = _dep_reason

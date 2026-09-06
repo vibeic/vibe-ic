@@ -94,6 +94,21 @@ PRODUCER_STATUSES: Set[str] = {
     # word by SUBTRACTION: a status in neither negative set silently becomes a
     # DONE-CLAIM, which for "we never ran this" would be the exact inversion.
     "OUT-OF-SCOPE-BY-ENTRY",
+    # RB2-03 (#2063), 2026-09-06 — the step ran, and NOT ONE of its registered
+    # sub-gates returned a verdict. Split out of INCOMPLETE, whose sentence is
+    # "the input WAS applicable and was NOT examined" over a PARTIAL
+    # population: on a 0-of-N run there is no population at all, and a reader
+    # cannot tell "245 of 246 answered" from "none did" when both wear the same
+    # word. MEASURED on the subservient cell (lane rbsub2, 8HD-8): a no-RTL run
+    # printed INCOMPLETE over "0 of 246 structural sub-gate(s) returned a
+    # verdict".
+    #
+    # CLASSIFIED HERE, at the commit that introduces it, and DELIBERATELY given
+    # the SAME adjudication as INCOMPLETE — in neither EXCUSED nor NON_GREEN,
+    # therefore a QUALIFIED done-claim. It only ever replaces INCOMPLETE, which
+    # sits in neither set either, so no run's greenness moves; what changes is
+    # that the word now says which of the two situations happened.
+    "NOT-MEASURED",
 }
 
 #: The step is NOT claimed as done and is not held against the run — the
@@ -156,8 +171,26 @@ def is_full_pass(status: Optional[str]) -> bool:
 
 def is_qualified_done(status: Optional[str]) -> bool:
     """A done-claim that is not a full pass: VACUOUS-PASS, PARTIALLY-VACUOUS,
-    STRUCTURE-ONLY, INCOMPLETE, and any tier added later."""
+    STRUCTURE-ONLY, INCOMPLETE, NOT-MEASURED, and any tier added later."""
     return is_done_claim(status) and not is_full_pass(status)
+
+
+#: The done-claims that state, in the word itself, that the step measured
+#: NOTHING about the design in its own scope. RB2-03 (#2063).
+#:
+#: WHY THIS SET IS HERE AND NOT IN THE CONSUMER. `flow_compliance_check`'s #1446
+#: ordering guard built its "no verdict" population as
+#: `{r.id for r in scoped if r.status == "INCOMPLETE"}` — a literal, in a
+#: reader, of exactly the kind this module exists to delete. Introducing
+#: `NOT-MEASURED` beside `INCOMPLETE` walked straight through it: MEASURED on
+#: this tree, the P0 violation line was PRINTED and the gating list came back
+#: empty. It is stated once, here, next to the classification it belongs to.
+NO_VERDICT_IN_SCOPE: Set[str] = {"INCOMPLETE", "NOT-MEASURED"}
+
+
+def says_nothing_was_measured(status: Optional[str]) -> bool:
+    """The step claimed done and measured nothing in its own scope."""
+    return normalize(status) in NO_VERDICT_IN_SCOPE
 
 
 def done_claims_in(statuses) -> Set[str]:

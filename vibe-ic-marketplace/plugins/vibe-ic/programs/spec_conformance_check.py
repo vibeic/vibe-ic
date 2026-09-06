@@ -1987,11 +1987,94 @@ def _frame_contract_findings(input_prose: str, rtl_body: str,
     return f
 
 
+# ══════════════════════════════════════════════════════════════════════════
+# RB2-04 (#2063) — A NAME THE INPUT OFFERS TWO SPELLINGS FOR
+# ══════════════════════════════════════════════════════════════════════════
+# An input doc may write an interface name as an alternative and defer the
+# choice to the design's own declaration:
+#
+#     | `o_sram_data` (or `o_sram_wdata`) | 8-bit | output | write data |
+#     ...具體訊號名稱由 Plugin 在 declaration.json 聲明
+#
+# Phase 1 extracts ONE of the two into L9, and this gate then hard-ERRORed
+# `port-missing o_sram_data` + `port-extra o_sram_wdata` against RTL that
+# implements the other spelling the SAME SENTENCE offers (MEASURED on the
+# subservient cell, lane rbsub2, 2026-09-06). The input authorised both names;
+# the gate read only one and called the other a defect.
+#
+# This is the same shape as the SOURCE_MANIFEST rename reconciliation below and
+# is ACCEPTED on the same terms, never SUPPRESSED: the alternative must be
+# stated BY THE INPUT, the RTL name must be genuinely absent from the spec, and
+# direction and (when both literal) width must match. And when
+# `plugin_output/declaration.json` declares a spelling for that port, THE
+# DECLARED ONE is the one the RTL must carry — declaring one name and shipping
+# another is a new ERROR, not a free pass. With no alternative stated and no
+# declaration, every finding is exactly as it was.
+_ALT_SPELLING_RE = __import__('re').compile(
+    r'`(\w+)`\s*[\(（]\s*(?:or|OR|或)\s*`(\w+)`\s*[\)）]')
+
+
+def _project_root_of(files, marker: str) -> Optional[Path]:
+    """The first ancestor of any collected RTL file that carries `marker`.
+
+    Derived from the RESOLVED FILES, never from which ARG SHAPE the caller
+    used — keying on `--rtl-dir` once made the verdict depend on HOW the gate
+    was invoked. No ancestor carries it ⇒ None ⇒ the caller keeps its
+    unrelaxed comparison (fail-closed).
+    """
+    for _f in files or []:
+        for _anc in Path(_f).resolve().parents:
+            if (_anc / marker).exists():
+                return _anc
+    return None
+
+
+def _input_stated_alternatives(text: str) -> List[tuple]:
+    """[(primary, alternative)] pairs the INPUT itself offers. §4.05: this is
+    read from the design input only."""
+    if not text:
+        return []
+    out, seen = [], set()
+    for m in _ALT_SPELLING_RE.finditer(text):
+        a, b = m.group(1), m.group(2)
+        if a == b or (a, b) in seen:
+            continue
+        seen.add((a, b))
+        out.append((a, b))
+    return out
+
+
+def _declared_spellings(project: Optional[Path]) -> set:
+    """Identifier-valued choices in `plugin_output/declaration.json`.
+
+    The declaration is the design's own answer to a question the input left
+    open. Absent file / unreadable JSON ⇒ an EMPTY set, and every finding stays
+    visible — "could not read it" is not "read it and it declared nothing".
+    """
+    if project is None:
+        return set()
+    dp = project / "plugin_output" / "declaration.json"
+    if not dp.is_file():
+        return set()
+    try:
+        data = json.loads(dp.read_text(errors='replace'))
+    except Exception:  # noqa: BLE001 — unreadable ⇒ nothing declared
+        return set()
+    out: set = set()
+    if isinstance(data, dict):
+        for v in data.values():
+            if isinstance(v, str) and v.isidentifier():
+                out.add(v)
+    return out
+
+
 def check(spec: SpecContract, rtl_name: str, rtl_ports: List[Port],
           rtl_resets: dict, rtl_registered: Optional[bool],
           path: str, rtl_body: str = '', spec_text: str = '',
           renamed_groups: Optional[List[tuple]] = None,
-          input_prose: str = '') -> List[Finding]:
+          input_prose: str = '',
+          alt_spellings: Optional[List[tuple]] = None,
+          declared_spellings: Optional[set] = None) -> List[Finding]:
     f: List[Finding] = []
 
     # ---- structural sanity: zero output-capable ports -----------------------
@@ -2207,6 +2290,53 @@ def check(spec: SpecContract, rtl_name: str, rtl_ports: List[Port],
             f"spec port(s) {sorted(l9_set)} are delivered as RTL port(s) "
             f"{sorted(rtl_set)}, declared in SOURCE_MANIFEST.renamed_interfaces "
             f"with matching direction and width — an accepted declared rename."))
+
+    # ---- RB2-04 (#2063): the alternative spelling the INPUT itself offers ---
+    _decl = declared_spellings or set()
+    for _a, _b in (alt_spellings or []):
+        # exactly one of the pair is the spec port and the other is the RTL port
+        for _spec_nm, _rtl_nm in ((_a, _b), (_b, _a)):
+            if _spec_nm not in smap or _spec_nm in rmap:
+                continue
+            if _rtl_nm not in rmap or _rtl_nm in smap:
+                continue
+            _sp, _rp = smap[_spec_nm], rmap[_rtl_nm]
+            if _sp.direction != _rp.direction:
+                f.append(Finding(path, 'ERROR', 'port-alternative-direction-mismatch',
+                    _rtl_nm,
+                    f"the input offers '{_spec_nm}' / '{_rtl_nm}' as alternative "
+                    f"spellings of one port, but their directions differ "
+                    f"(spec={_sp.direction}, RTL={_rp.direction}) — an "
+                    f"alternative spelling may not change direction."))
+                continue
+            if (_sp.width != WIDTH_UNKNOWN and _rp.width != WIDTH_UNKNOWN
+                    and _sp.width != _rp.width):
+                f.append(Finding(path, 'ERROR', 'port-alternative-width-mismatch',
+                    _rtl_nm,
+                    f"the input offers '{_spec_nm}' / '{_rtl_nm}' as alternative "
+                    f"spellings of one port, but their widths differ "
+                    f"(spec={_sp.width}, RTL={_rp.width})."))
+                continue
+            # The declaration decides WHICH spelling, when it names one.
+            _declared_here = {_spec_nm, _rtl_nm} & _decl
+            if _declared_here and _rtl_nm not in _declared_here:
+                f.append(Finding(path, 'ERROR', 'port-declared-spelling-mismatch',
+                    _rtl_nm,
+                    f"plugin_output/declaration.json declares this port as "
+                    f"{sorted(_declared_here)}, and the RTL implements "
+                    f"'{_rtl_nm}' — the design must ship the spelling it "
+                    f"declared."))
+                continue
+            renamed_ok_spec.add(_spec_nm)
+            renamed_ok_rtl.add(_rtl_nm)
+            _how = ("declared in plugin_output/declaration.json"
+                    if _declared_here else
+                    "no declaration.json entry names this port; the INPUT "
+                    "offers both spellings")
+            f.append(Finding(path, 'INFO', 'port-alternative-spelling', _spec_nm,
+                f"spec port '{_spec_nm}' is delivered as RTL port '{_rtl_nm}' — "
+                f"the input states them as alternative spellings of one port "
+                f"({_how}), with matching direction and width."))
 
     for nm, sp in smap.items():
         if nm in renamed_ok_spec:
@@ -2706,24 +2836,41 @@ def main(argv: Optional[List[str]] = None) -> int:
         # ancestors and accept the first that actually carries the manifest at
         # the layout path; no match ⇒ no groups ⇒ exact-name comparison
         # (fail-closed). chip-AGNOSTIC: path layout only, no chip literal.
-        _proj = None
-        for _f in files:
-            for _anc in Path(_f).resolve().parents:
-                if (_anc / "phase2" / "stage1" / "rtl"
-                        / "SOURCE_MANIFEST.json").is_file():
-                    _proj = _anc
-                    break
-            if _proj is not None:
-                break
+        _proj = _project_root_of(files, "phase2/stage1/rtl/SOURCE_MANIFEST.json")
         _mf = _l9pin.load_source_manifest(_proj) if _proj else None
         if _mf:
             _renamed_groups = _l9pin._manifest_renamed_groups(_mf)
     except Exception:  # noqa: BLE001 — no manifest ⇒ no relaxation
         _renamed_groups = []
 
+    # RB2-04 (#2063) — the alternative spellings the INPUT states, and the
+    # design's own declared choice. Read from `input/docs/` and
+    # `plugin_output/declaration.json` — the design INPUT and the design's own
+    # declaration, never an oracle (§4.05). Anything unreadable yields an EMPTY
+    # population, and every port finding stays exactly as it was.
+    _alt_spellings: List[tuple] = []
+    _declared: set = set()
+    _iproj = _project_root_of(files, "input/docs") or _project_root_of(
+        files, "plugin_output/declaration.json")
+    if _iproj is not None:
+        _doc_text = []
+        _docs_dir = _iproj / "input" / "docs"
+        if _docs_dir.is_dir():
+            for _md in sorted(_docs_dir.rglob("*.md")):
+                try:
+                    _doc_text.append(_md.read_text(errors='replace'))
+                except Exception:  # noqa: BLE001 — an unreadable doc states nothing
+                    continue
+        _alt_spellings = _input_stated_alternatives("\n".join(_doc_text))
+        _declared = _declared_spellings(_iproj)
+    # The spec body itself can state the alternative too (a prompt/markdown spec).
+    _alt_spellings += [pr for pr in _input_stated_alternatives(spec_body)
+                       if pr not in _alt_spellings]
+
     findings = check(spec, rtl_name, rtl_ports, rtl_resets, rtl_registered, chosen,
                      rtl_body, spec_text=spec_body,
-                     renamed_groups=_renamed_groups, input_prose=input_prose)
+                     renamed_groups=_renamed_groups, input_prose=input_prose,
+                     alt_spellings=_alt_spellings, declared_spellings=_declared)
 
     # Per the semantic-confirm rule: a finding resting on a prose-inferred field that an
     # LLM has NOT confirmed is a CANDIDATE, not truth — annotate it so the agent confirms.

@@ -82,6 +82,12 @@ def test_record_constructor_refuses_unsafe_skip_pairing(reason_class, expected):
 ])
 def test_each_reason_class_changes_the_top_level_p0_tier(
         reason_class, expected):
+    """RB2-03 (#2063) note: the fixture now carries one gate that ANSWERED
+    beside the one under test. Without it the record set has a zero decisive
+    population and the umbrella says `NOT-MEASURED` — a true statement about
+    such a run, but not the property this test is about, which is that the
+    REASON CLASS alone moves the top-level tier. The answering gate is
+    identical in every row, so it changes no row's expected value."""
     # Keep the old ambiguous SKIP token fixed.  The reason class alone must
     # change the top-level answer, proving the class is consumed rather than
     # decorative metadata.
@@ -92,7 +98,24 @@ def test_each_reason_class_changes_the_top_level_p0_tier(
     record = {"name": "same_gate", "verdict": "SKIP",
               "reason_class": reason_class, "message": "same message",
               "evidence": {"exit_code": 2}}
-    assert F._p0_umbrella_status(True, [record]) == expected
+    answered = {"name": "another_gate", "verdict": "PASS"}
+    assert F._p0_umbrella_status(True, [record, answered]) == expected
+
+
+@pytest.mark.parametrize("reason_class", [
+    T.BLOCKED_BY_UPSTREAM, T.EXECUTION_ERROR, T.ZERO_DENOMINATOR,
+])
+def test_a_short_population_with_NOTHING_decisive_is_not_measured(reason_class):
+    """RB2-03 (#2063). The same record with no answering gate beside it is a
+    run in which not one registered gate returned a verdict. `INCOMPLETE` — "the
+    input WAS applicable and was NOT examined" — is the sentence about a
+    PARTIAL population; over a zero population the honest word is
+    `NOT-MEASURED`, and a reader could not previously tell 245-of-246 from
+    0-of-246 because both wore the same one."""
+    record = {"name": "same_gate", "verdict": "SKIP",
+              "reason_class": reason_class, "message": "m",
+              "evidence": {"exit_code": 2}}
+    assert F._p0_umbrella_status(True, [record]) == "NOT-MEASURED"
 
 
 def test_caller_error_zero_denominator_and_missing_upstream_are_not_skips():
