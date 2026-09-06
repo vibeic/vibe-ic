@@ -83,3 +83,73 @@ def test_kmap_clean_still_fires():
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))
+
+
+# ── K-map → external-mux DECOMPOSITION (Shannon expansion) ───────────────────
+# The grid's columns are printed in GRAY order (00 01 11 10) while a mux data
+# input is indexed by the plain BINARY value of the selector. Reading the
+# columns left-to-right into mux_in[0..3] swaps the last two data inputs. This
+# fixture is built so the two readings DISAGREE, so the assertions discriminate.
+
+_KMAP_MUX_DECOMP = """
+Implement a module named TopModule.
+ - input  c
+ - input  d
+ - output mux_in (4 bits)
+
+The module should implement the function shown in the Karnaugh map below,
+supplying the data inputs of an external 4-to-1 multiplexer whose select
+inputs are {a,b}; ab = 00 is connected to mux_in[0], ab = 01 to mux_in[1],
+and so on.
+
+      ab
+  cd  00  01  11  10
+  00 | 0 | 1 | 1 | 0 |
+  01 | 0 | 1 | 0 | 1 |
+  11 | 0 | 1 | 0 | 0 |
+  10 | 0 | 1 | 0 | 0 |
+"""
+
+
+def test_kmap_mux_decomposition_fires():
+    """RED before the mux-decomposition branch existed: synth returned None
+    (SKIP) for this whole family, so a coin-flipping blind author decided the
+    index mapping instead of the program."""
+    assert K.synth(_KMAP_MUX_DECOMP, "TopModule") is not None
+
+
+def test_kmap_mux_decomposition_indexes_by_binary_not_gray():
+    """GREEN: each data input is the column for that SELECTOR VALUE.
+
+    Column ab=11 (binary 3) is 1 only at cd=00, and column ab=10 (binary 2) is
+    1 only at cd=01. Indexing by print position instead would swap them -- the
+    exact defect this branch removes."""
+    rtl = K.synth(_KMAP_MUX_DECOMP, "TopModule")
+    body = {ln.split("=")[0].strip(): ln.split("=", 1)[1].strip()
+            for ln in rtl.splitlines() if ln.strip().startswith("assign")}
+    assert body["assign mux_in[0]"] == "1'b0;"                    # all-zero column
+    assert body["assign mux_in[1]"].count("|") == 3               # all-ones column
+    assert body["assign mux_in[3]"] == "(~c & ~d);"               # ab=11 -> index 3
+    assert body["assign mux_in[2]"] == "(~c & d);"                # ab=10 -> index 2
+    # and the two are genuinely different, so the assertion above discriminates
+    assert body["assign mux_in[2]"] != body["assign mux_in[3]"]
+
+
+def test_kmap_mux_decomposition_skips_when_selectors_are_ports():
+    """Envelope: if EVERY axis variable is a declared port this is an ordinary
+    K-map, not a mux decomposition, and the vector output must still SKIP."""
+    p = _KMAP_MUX_DECOMP.replace(" - input  c", " - input  a\n - input  b\n - input  c")
+    assert K.synth(p, "TopModule") is None
+
+
+def test_kmap_mux_decomposition_skips_on_dont_care():
+    """An under-determined grid stays a FLOOR (§4.05), decomposition or not."""
+    p = _KMAP_MUX_DECOMP.replace("  01 | 0 | 1 | 0 | 1 |", "  01 | 0 | 1 | 0 | d |")
+    assert K.synth(p, "TopModule") is None
+
+
+def test_kmap_mux_decomposition_skips_on_width_mismatch():
+    """Output width must equal 2**(number of selector bits), else the reading
+    that each bit is one selector value does not hold."""
+    p = _KMAP_MUX_DECOMP.replace("mux_in (4 bits)", "mux_in (8 bits)")
+    assert K.synth(p, "TopModule") is None

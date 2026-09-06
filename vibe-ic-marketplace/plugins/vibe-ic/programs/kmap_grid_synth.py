@@ -138,6 +138,83 @@ def _parse_kmap(prompt: str) -> Optional[Tuple[List[str], List[str], List[str], 
     return col_bits, row_bits, col_codes, (row_codes, grid)
 
 
+def _synth_mux_decomp(prompt: str, top: str, ports, out: str, out_w: int):
+    """K-map -> external-mux DECOMPOSITION (Shannon expansion).
+
+    Some K-map prompts do not ask for the function itself but for the DATA
+    INPUTS of an external multiplexer whose SELECT lines are the K-map's
+    column-axis variables. The output is then a vector with one bit per
+    selector value, and each bit is the K-map COLUMN for that value, read as a
+    function of the remaining (row-axis) variables.
+
+    THE TRAP THIS CLOSES.  A K-map's columns are printed in GRAY order
+    (00 01 11 10), while the mux data input index is the plain BINARY value of
+    the selector. Reading the columns left-to-right into out[0..3] therefore
+    swaps the last two data inputs and yields a function that is wrong in
+    exactly the two cells where the Gray and binary orders disagree. We index
+    each column by ``int(code, 2)`` — the selector's own binary value — so the
+    print order of the grid cannot influence the result.
+
+    ENVELOPE (all checks are structural and prompt-derived; SKIP otherwise):
+      * grid parses, and is don't-care FREE (an under-determined grid is a
+        FLOOR, never absorbable — §4.05);
+      * the ROW-axis variables are all declared input ports;
+      * the COLUMN-axis variables are NOT declared ports (they are the external
+        mux's selectors) — this is what distinguishes the decomposition family
+        from an ordinary K-map, where every axis variable is a port;
+      * the output width equals 2**(number of column-axis bits), and the column
+        codes' binary values are exactly {0 .. width-1} (MEMBERSHIP, not count),
+        so every data input is driven exactly once.
+    chip-AGNOSTIC: pure boolean decomposition of the prompt's own grid.
+    """
+    parsed = _parse_kmap(prompt)
+    if not parsed:
+        return None
+    col_bits, row_bits, col_codes, (row_codes, grid) = parsed
+    if not col_bits or not row_bits:
+        return None
+    _in_orig = {orig for (d, _w, orig) in ports.values() if d == "input"}
+
+    def _axis_base(tok: str) -> str:
+        mm = re.match(r"([A-Za-z_]\w*)", tok)
+        return mm.group(1) if mm else tok
+    # row axis must be ports; column axis must NOT be (they are mux selects)
+    if any(_axis_base(b) not in _in_orig for b in row_bits):
+        return None
+    if any(_axis_base(b) in _in_orig for b in col_bits):
+        return None
+    if out_w != 2 ** len(col_bits):
+        return None
+    try:
+        idx = [int(c, 2) for c in col_codes]
+    except ValueError:
+        return None
+    if sorted(idx) != list(range(out_w)):   # membership, not count
+        return None
+    # each data input = the column's own function of the row variables
+    terms_by_idx = {}
+    for j, ccode in enumerate(col_codes):
+        prods = []
+        for i, rcode in enumerate(row_codes):
+            v = grid[i][j].lower()
+            if v in ("d", "-", "x"):
+                return None      # under-determined -> FLOOR (§4.05)
+            if v not in ("0", "1"):
+                return None
+            if v == "1":
+                lits = [(b if val == "1" else f"~{b}")
+                        for b, val in zip(row_bits, rcode)]
+                prods.append("(" + " & ".join(lits) + ")")
+        terms_by_idx[int(ccode, 2)] = " | ".join(prods) if prods else "1'b0"
+    decl = []
+    for nm, (d, w, orig) in ports.items():
+        rng = _decl_range(prompt, orig, w)
+        decl.append(f"    {d:<6} {rng}{orig}")
+    body = "\n".join(f"  assign {out}[{k}] = {terms_by_idx[k]};"
+                      for k in range(out_w))
+    return f"module {top} (\n" + ",\n".join(decl) + "\n);\n\n" + body + "\nendmodule\n"
+
+
 def synth(prompt: str, top: str = "TopModule") -> Optional[str]:
     if "karnaugh" not in prompt.lower():
         return None
@@ -147,16 +224,17 @@ def synth(prompt: str, top: str = "TopModule") -> Optional[str]:
     outs = [n for n, v in ports.items() if v[0] == "output"]
     if len(outs) != 1:
         return None  # multi-output (mux decomposition) -> out of envelope
-    if ports[outs[0]][1] != 1:
-        # A K-map is a single-bit boolean function. A MULTI-BIT output declared
-        # `output [3:0] q` driven by the 1-bit SOP (`assign q = <sop>`) is a
-        # width-broken emit that compiles clean (q[3:1] tie 0) and PASSes
-        # spec_conformance (decl width matches) → it would ship SILENTLY. SKIP.
-        # (Step-2.7 §4.05 — never emit a wrong sample.)
-        return None
     out = ports[outs[0]][2]  # original-case output name
-    if "mux_in" in prompt:  # external-mux decomposition family -> SKIP
-        return None
+    out_w = ports[outs[0]][1]
+    if out_w != 1:
+        # A MULTI-BIT output is a K-map only in the mux-DECOMPOSITION family,
+        # where the output vector carries one data input per value of the
+        # selector variables. _synth_mux_decomp validates that reading against
+        # the grid's own axes and returns None if it does not hold; anything
+        # else multi-bit stays SKIPped (a 1-bit SOP driving `output [3:0] q`
+        # compiles clean and PASSes spec_conformance while being wrong).
+        # (Step-2.7 §4.05 — never emit a wrong sample.)
+        return _synth_mux_decomp(prompt, top, ports, out, out_w)
     parsed = _parse_kmap(prompt)
     if not parsed:
         return None
