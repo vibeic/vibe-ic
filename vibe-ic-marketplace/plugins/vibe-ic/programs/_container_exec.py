@@ -289,3 +289,151 @@ def no_container_route() -> bool:
     cache already have one, and a module-level cache here would have to stay
     coherent with theirs. Tool/PDK/chip-AGNOSTIC."""
     return shutil.which("docker") is None
+
+# -------------------------------------------------------------------------
+# THE SHARED IN-IMAGE ROUTE
+#
+# `no_container_route()` above answers the ONE question ("is there a route to
+# any container from here"). Everything below is the small amount of argv and
+# file-staging shaping that follows from that answer, kept HERE so that every
+# runner which enters a container gets the same answer AND the same behaviour
+# from it. `phase3_one_shot_runner` learned this first and carries its own
+# copies of the shaping (landed as v1.18.20); `design_one_shot_runner` is the
+# THIRD exec surface and uses these. The predicate is not duplicated — both
+# call `no_container_route()` — so the two can disagree about wording but
+# never about which route a run took.
+# -------------------------------------------------------------------------
+
+_ANNOUNCED: set = set()
+
+
+def local_exec_mode(tag: str = "runner") -> bool:
+    """True when this process must run its tools ON ITS OWN FILESYSTEM.
+
+    Delegates to `no_container_route()` — there is exactly one definition of
+    the question. `tag` names the announcing runner in the one-line stderr
+    notice so a transcript records WHICH surface decided, and the notice is
+    printed once per tag per process (a route silently taken is a route nobody
+    can audit afterwards).
+
+    Tool/PDK/chip-AGNOSTIC: nothing here names a tool, a PDK or a design."""
+    local = no_container_route()
+    if local and tag not in _ANNOUNCED:
+        _ANNOUNCED.add(tag)
+        import os
+        named = os.environ.get("EDA_CONTAINER") or "<none named>"
+        print("[%s] EXEC ROUTE = LOCAL: no docker client on PATH, so every "
+              "tool command runs on THIS filesystem. The container named for "
+              "this run (%s) was not entered and nothing was executed in it."
+              % (tag, named), file=sys.stderr)
+    return bool(local)
+
+
+def exec_argv(container: str, wrapped: str, *,
+              workdir: Optional[str] = None,
+              shell: str = "bash",
+              quiet: bool = True,
+              login: bool = True,
+              tag: str = "runner") -> list:
+    """The argv that runs `wrapped` in a shell where the tools live.
+
+    ONE seam for every `docker exec ... <shell> -c` site, so no two of them
+    can drift into disagreeing about where a tool runs.
+
+    CONTAINER ROUTE (the default, and byte-identical to what these sites have
+    always emitted): `docker exec [-w <dir>] [-e IIC_OSIC_TOOLS_QUIET=1]
+    <container> <shell> -lc <wrapped>`.
+
+    LOCAL ROUTE: the same command in the same kind of LOGIN shell on this
+    filesystem. `-w` has no docker to interpret it, so the workdir becomes an
+    explicit `cd` — quoted, and `&&` so a missing directory FAILS the command
+    instead of silently running it somewhere else. `-e` likewise cannot be a
+    docker flag, so the knob goes into the environment before the login shell
+    sources the image's profile; `setdefault` reproduces what `docker exec -e`
+    does for the child and leaves an operator's own value alone.
+
+    `login=False` keeps a plain `-c` for the sites that use one (a bare
+    capability probe does not want a profile), so the container argv this
+    returns is byte-identical to what each site emitted before."""
+    if local_exec_mode(tag):
+        if quiet:
+            import os
+            os.environ.setdefault("IIC_OSIC_TOOLS_QUIET", "1")
+        if workdir:
+            wrapped = "cd %s && %s" % (shlex.quote(str(workdir)), wrapped)
+        return [shell, "-lc" if login else "-c", wrapped]
+    # DELEGATED to `docker_exec_argv`, which is the ONE place a `docker exec`
+    # argv is built AND the place the attach guard lives: it refuses to attach
+    # to a container running bytes other than the pinned ones. Building the
+    # argv here instead would have produced the same list and BYPASSED that
+    # guard, which is the whole reason the builder exists. This function keeps
+    # only what is its own — WHICH ROUTE the command takes — and the container
+    # route it returns is byte-identical to what each site emitted before.
+    opts: list = []
+    if workdir:
+        opts += ["-w", str(workdir)]
+    if quiet:
+        opts += ["-e", "IIC_OSIC_TOOLS_QUIET=1"]
+    return docker_exec_argv(container, shell, "-lc" if login else "-c",
+                            wrapped, opts=tuple(opts))
+
+
+def annotate_local_exec(rc: int, err: str, tag: str = "runner") -> str:
+    """Name the route when a LOCAL run reports 127.
+
+    `yosys: command not found` inside the image and `No such file or
+    directory: 'docker'` on a host without a client are two different
+    diagnoses that the rc alone cannot tell apart. Bounded: one line,
+    appended, never replacing what the shell said. A no-op outside local mode
+    and for every rc but 127."""
+    if rc != 127 or not local_exec_mode(tag):
+        return err
+    import os
+    note = ("LOCAL_EXEC: no docker client on PATH, so this ran on THIS "
+            "filesystem (container named for the run: %s, not entered); 127 "
+            "means the tool is not on PATH here either — it does NOT mean a "
+            "container was unreachable."
+            % (os.environ.get("EDA_CONTAINER") or "<none named>"))
+    return (err + "\n" + note) if err else note
+
+
+def strip_container_prefix(spec: str, container: str) -> str:
+    """`container:/some/path` -> `/some/path`; anything else unchanged.
+
+    `docker cp` addresses one side of the copy with a `<container>:` prefix.
+    In the local route that prefix names the filesystem this process is
+    ALREADY ON, so removing it yields the real path. Only the declared
+    container's own prefix is stripped, so a host path that merely contains a
+    colon is left alone."""
+    pre = "%s:" % container
+    return spec[len(pre):] if container and spec.startswith(pre) else spec
+
+
+def local_copy(src: str, dst: str, container: str = "") -> tuple:
+    """The LOCAL equivalent of `docker cp src dst`: a real copy, both ways.
+
+    `docker cp` is used here to STAGE a file where the tool will read it, and
+    to RETRIEVE a produced file afterwards. In the image both endpoints are
+    paths on this one filesystem, so the equivalent is a copy — NOT a no-op
+    and NOT a removal. A no-op would leave the tool reading a file that is not
+    there; a removal would destroy the input.
+
+    Copies INTO the destination directory, creating it if needed, and
+    preserves mtime/mode (`copy2`) because downstream freshness checks compare
+    timestamps. When both sides resolve to the SAME file the copy is already
+    satisfied and this is a success, not a `SameFileError`.
+
+    Returns the `(rc, out, err)` triple the callers' `_run` returns."""
+    s = strip_container_prefix(str(src), container)
+    d = strip_container_prefix(str(dst), container)
+    try:
+        sp, dp = Path(s), Path(d)
+        if dp.is_dir():
+            dp = dp / sp.name
+        if sp.resolve() == dp.resolve():
+            return 0, "", ""
+        dp.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(sp, dp)
+        return 0, "", ""
+    except Exception as e:                                   # noqa: BLE001
+        return 1, "", "LOCAL_COPY failed %s -> %s: %s" % (s, d, e)

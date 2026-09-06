@@ -413,6 +413,17 @@ def _docker_exec_argv_with_deadline(cmd: List[str],
     Rewrites only the true `docker exec … bash -lc <script>` shape; any other
     argv (notably `docker cp`) is returned untouched. chip/tool-AGNOSTIC.
     """
+    # LOCAL ROUTE: `[bash, -lc, <script>]`. The orphan this function exists
+    # to prevent is NOT a container phenomenon — a host `subprocess.run`
+    # timeout kills the shell it started and leaves the tool it spawned
+    # running just the same — so the script gets its own deadline here too.
+    if len(cmd) == 3 and cmd[0] in ("bash", "sh") and cmd[1] in ("-lc", "-c"):
+        try:
+            import _docker_watchdog as _dw
+            return [cmd[0], cmd[1],
+                    _dw.wrap_with_container_timeout(cmd[2], timeout)]
+        except Exception:  # nosec — never let hardening break the call
+            return cmd
     if len(cmd) < 5 or cmd[0] != "docker" or cmd[1] != "exec":
         return cmd
     if cmd[-2] != "-lc" or cmd[-3] not in ("bash", "sh"):
@@ -546,6 +557,13 @@ def _container_mounts(container: str) -> List[Tuple[str, str]]:
     if container in _CONTAINER_MOUNTS_CACHE:
         return _CONTAINER_MOUNTS_CACHE[container]
     out: List[Tuple[str, str]] = []
+    if _local_exec_mode():
+        # No client, so no mount table — and none is needed: every path is
+        # already the path the tool will open. Stated here rather than left to
+        # the `except` below, so the empty list is a MEASURED answer and not
+        # an error that happens to look like one.
+        _CONTAINER_MOUNTS_CACHE[container] = out
+        return out
     try:
         cp = subprocess.run(
             ["docker", "inspect", container,
@@ -587,11 +605,60 @@ def _to_container_path(host_path: str, container: str) -> str:
 def _path_in_container(host_path: str, container: str) -> bool:
     """True iff `host_path` is covered by a bind-mount of `container`
     (i.e. the container can actually see the file)."""
+    # IN-IMAGE THIS IS THE WHOLE ANSWER. `_container_mounts` asks the daemon,
+    # and with no docker client that call raises and is swallowed into an
+    # EMPTY mount list — so this returned False for a path sitting on the
+    # runner's OWN filesystem, and the caller then staged the file into a
+    # container that does not exist. The question this function is really
+    # asking is "can the process that will read this file see it", and when
+    # the tool runs here the answer is yes.
+    if _local_exec_mode():
+        return True
     p = str(host_path)
     for src, _dst in _container_mounts(container):
         if p == src or p.startswith(src + "/"):
             return True
     return False
+
+
+def _local_exec_mode() -> bool:
+    """True when this runner must reach its tools on ITS OWN filesystem.
+
+    THE THIRD EXEC SURFACE. Phase 3 was taught this first; this file is the
+    other half of the same defect and was measured still broken after that fix
+    landed: run in-image, `design_one_shot_runner` reaches its tools through
+    `docker exec <container>` at six sites and stages their inputs with
+    `docker cp` at twelve more, none of which exist inside the image, so the
+    steps those sites feed never open. Delegates to the ONE predicate in
+    `_container_exec` — never a second copy, which is how two surfaces come to
+    disagree about which route a run took. Tool/PDK/chip-AGNOSTIC."""
+    return _ce.local_exec_mode("design")
+
+
+def _exec_argv(container: str, wrapped: str, *,
+               workdir: Optional[str] = None,
+               shell: str = "bash", quiet: bool = True) -> List[str]:
+    """The ONE argv seam for every `docker exec` site in this file."""
+    return _ce.exec_argv(container, wrapped, workdir=workdir,
+                          shell=shell, quiet=quiet, tag="design")
+
+
+def _docker_cp(container: str, src: str, dst: str,
+               timeout: int = 120) -> Tuple[int, str, str]:
+    """Stage a file where the tool will read it — by whichever route exists.
+
+    CONTAINER ROUTE: `docker cp src dst`, unchanged.
+
+    LOCAL ROUTE: a real `shutil.copy2` between the two paths, with the
+    `<container>:` prefix stripped because in the image it names the
+    filesystem this process is already on. Deliberately a COPY and not a
+    no-op: these twelve sites stage an input the next command reads and
+    retrieve an output the next STEP reads, so skipping them leaves a tool
+    pointed at a file that is not there. Deliberately not a removal either —
+    the source is the run's own input."""
+    if _local_exec_mode():
+        return _ce.local_copy(src, dst, container)
+    return _run(["docker", "cp", src, dst], timeout=timeout)
 
 
 def _docker_exec_raw(container: str, cmd: str, timeout: int = 600
@@ -610,7 +677,21 @@ def _docker_exec_raw(container: str, cmd: str, timeout: int = 600
     still able to overwrite that step's output netlist. Chip-AGNOSTIC."""
     import _docker_watchdog as _dw
     _wrapped = _dw.wrap_with_container_timeout(cmd, timeout)
-    full = _ce.docker_exec_argv(container, "bash", "-lc", _wrapped, opts=("-e", "IIC_OSIC_TOOLS_QUIET=1"))
+    # ONE seam (`_exec_argv`), so this site and the five others in this file
+    # cannot drift about where a tool runs. The container route it returns is
+    # byte-identical to the argv that stood here, `-e IIC_OSIC_TOOLS_QUIET=1`
+    # included: the vibeic-eda image is entered through a LOGIN shell whose
+    # profile prints a two-line banner ("[INFO] Final PATH variable: ...") to
+    # STDOUT ahead of the command output, and that env var is the image's OWN
+    # documented knob for it (/etc/profile.d/iic-osic-tools-setup.sh guards
+    # both echoes on it). This path was cold for simulation until #902 moved
+    # iverilog/vvp dispatch INTO the container; MEASURED on a converged cell,
+    # the banner then landed at the TOP of the sim transcript
+    # (`sim_full_stack/oracle_run/oracle.log` grew from 4 lines to 6).
+    # Suppressing at SOURCE keeps every consumer clean instead of asking each
+    # one to remember to filter. In the local route the same knob is exported
+    # before the login shell starts, which is what `docker exec -e` does.
+    full = _exec_argv(container, _wrapped)
     try:
         cp = subprocess.run(full, capture_output=True, text=True,
                             timeout=timeout)
@@ -1221,6 +1302,8 @@ def _container_image_id(container: str) -> Optional[str]:
     way a `:latest` tag can between the exec that was verified and the run that
     is dispatched. Falls back to the configured reference. None when docker or
     the container is not there."""
+    if _local_exec_mode():
+        return None          # no client, no container, no image id to resolve
     for fmt in ("{{.Image}}", "{{.Config.Image}}"):
         try:
             cp = subprocess.run(["docker", "inspect", container,
@@ -1468,7 +1551,8 @@ def _container_has_quartus_sh(container: str) -> bool:
     if container in _CONTAINER_QUARTUS_CACHE:
         return _CONTAINER_QUARTUS_CACHE[container]
     rc, out, _ = _run(
-        _ce.docker_exec_argv(container, "sh", "-c", "command -v quartus_sh"),
+        _exec_argv(container, "command -v quartus_sh",
+                   shell="sh", quiet=False, login=False),
         timeout=10,
     )
     ok = (rc == 0) and bool(out.strip())
@@ -9442,9 +9526,8 @@ def _verilator_sim_escape(
     for p in _src:
         if not p.is_file():
             continue
-        rc_c, _o, _e = _run(
-            ["docker", "cp", str(p), f"{container}:{stage}/{p.name}"],
-            timeout=60)
+        rc_c, _o, _e = _docker_cp(
+            container, str(p), f"{container}:{stage}/{p.name}", timeout=60)
         if rc_c != 0:
             _docker_exec(container, f"rm -rf {stage}", timeout=30)
             return 1, "", f"docker cp {p.name} → container failed", \
@@ -9460,8 +9543,8 @@ def _verilator_sim_escape(
         for pat in ("*.svh", "*.vh", "*.h", "*_pkg.sv", "*_pkg.v"):
             for hp in sorted(d.rglob(pat)):
                 if hp.is_file() and hp.name not in {x.name for x in _src}:
-                    _run(["docker", "cp", str(hp),
-                          f"{container}:{stage}/{hp.name}"], timeout=60)
+                    _docker_cp(container, str(hp),
+                               f"{container}:{stage}/{hp.name}", timeout=60)
     obj = f"{stage}/obj_dir"
 
     # verilator --binary builds a standalone simulation executable from the
@@ -9774,9 +9857,8 @@ def _iverilog_compile_with_sv_fallback(
         return rc, out, err, "iverilog_g2012"
     container_sv: List[str] = []
     for p in sv_files:
-        rc_c, _o, _e = _run(
-            ["docker", "cp", str(p), f"{container}:{stage}/{p.name}"],
-            timeout=60)
+        rc_c, _o, _e = _docker_cp(
+            container, str(p), f"{container}:{stage}/{p.name}", timeout=60)
         if rc_c != 0:
             _docker_exec(container, f"rm -rf {stage}", timeout=30)
             return rc, out, err, "iverilog_g2012"
@@ -9822,8 +9904,8 @@ def _iverilog_compile_with_sv_fallback(
             _seen_extra.add(rp)
             closure_extra.append(hp)
     for hp in closure_extra:
-        _run(["docker", "cp", str(hp), f"{container}:{stage}/{hp.name}"],
-             timeout=60)
+        _docker_cp(container, str(hp), f"{container}:{stage}/{hp.name}",
+                   timeout=60)
     # (2) Pick the sv2v define-set STRUCTURALLY (chip-AGNOSTIC): if the
     #     `include closure has a hole under -DSIMULATION that -DSYNTHESIS
     #     resolves cleanly, convert under -DSYNTHESIS so the staged arm is
@@ -9853,8 +9935,8 @@ def _iverilog_compile_with_sv_fallback(
     if _rc_e == 0 and _o_e:
         _sv2v_err_txt = _sv2v_err_txt + "\n" + _o_e
     if rc_s == 0:
-        rc_cp, _o, e_cp = _run(
-            ["docker", "cp", f"{container}:{conv_c}", str(converted_host)],
+        rc_cp, _o, e_cp = _docker_cp(
+            container, f"{container}:{conv_c}", str(converted_host),
             timeout=60)
         if rc_cp != 0:
             rc_s = rc_cp
@@ -13028,8 +13110,8 @@ def _phase2_sv_synth_fallback(project: Path, container: str,
             hp = Path(f)
             if not hp.is_file():
                 continue
-            rc, _o, _e = _run(
-                ["docker", "cp", str(hp), f"{container}:{workdir}/{hp.name}"],
+            rc, _o, _e = _docker_cp(
+                container, str(hp), f"{container}:{workdir}/{hp.name}",
                 timeout=60)
             if rc != 0:
                 return (rc, "", f"docker cp {hp.name} → container failed: "
@@ -13041,8 +13123,8 @@ def _phase2_sv_synth_fallback(project: Path, container: str,
         # packages staged here are already in rtl_file_strs when they are
         # real sources — this only backfills ones the source glob missed).
         for hp in closure_extra:
-            _run(["docker", "cp", str(hp),
-                  f"{container}:{workdir}/{hp.name}"], timeout=60)
+            _docker_cp(container, str(hp),
+                       f"{container}:{workdir}/{hp.name}", timeout=60)
     else:
         container_rtl = [_to_container_path(f, container)
                          for f in rtl_file_strs if Path(f).is_file()]
@@ -13171,14 +13253,13 @@ def _phase2_sv_synth_fallback(project: Path, container: str,
                 # staging, pull the converted file out, fix, push back.
                 _host_conv = synth_dir / f"{synth_top}_sv2v.v"
                 if needs_staging:
-                    _run(["docker", "cp",
-                          f"{container}:{sv2v_out}", str(_host_conv)],
-                         timeout=60)
+                    _docker_cp(container, f"{container}:{sv2v_out}",
+                               str(_host_conv), timeout=60)
                 if _host_conv.is_file():
                     _mdf.fixup_file(_host_conv)
                     if needs_staging:
-                        _run(["docker", "cp", str(_host_conv),
-                              f"{container}:{sv2v_out}"], timeout=60)
+                        _docker_cp(container, str(_host_conv),
+                                   f"{container}:{sv2v_out}", timeout=60)
             except Exception:  # nosec — fixup is best-effort
                 pass
             yosys_cmd = (
@@ -13219,9 +13300,8 @@ def _phase2_retrieve_netlist(container: str, netlist_c: str,
     on the host (the container wrote through the bind-mount). Returns True
     iff out_v now exists and is non-empty."""
     if needs_staging:
-        rc, _o, _e = _run(
-            ["docker", "cp", f"{container}:{netlist_c}", str(out_v)],
-            timeout=60)
+        rc, _o, _e = _docker_cp(
+            container, f"{container}:{netlist_c}", str(out_v), timeout=60)
         if rc != 0:
             return False
     return out_v.is_file() and out_v.stat().st_size > 0
@@ -14964,7 +15044,8 @@ def step_yosys_synth(project: Path, top_name: str = "chip_top",
         # opaque OCI "chdir to cwd ... no such file or directory".
         if _path_in_container(str(synth_dir), container):
             rc, out, err = _run(
-                _ce.docker_exec_argv(container, "bash", "-lc", f"yosys -p '{script}'", opts=("-w", str(synth_dir))),
+                _exec_argv(container, f"yosys -p '{script}'",
+                           workdir=str(synth_dir), quiet=False),
                 timeout=_synth_to)
         else:
             cont_wd, _needs = _phase2_container_workdir(
@@ -14979,9 +15060,9 @@ def step_yosys_synth(project: Path, top_name: str = "chip_top",
                 cp_err = ""
                 for i, f in enumerate(rtl_files):
                     base = f"{i:02d}_{Path(str(f)).name}"
-                    rcc, _o, _ce = _run(
-                        ["docker", "cp", str(f),
-                         f"{container}:{cont_wd}/{base}"], timeout=60)
+                    rcc, _o, _ce = _docker_cp(
+                        container, str(f), f"{container}:{cont_wd}/{base}",
+                        timeout=60)
                     if rcc != 0:
                         cp_err = _ce
                         break
@@ -14990,10 +15071,9 @@ def step_yosys_synth(project: Path, top_name: str = "chip_top",
                     # aux files the script resolves relative to cwd
                     # ($readmemh hex stubs staged into synth_dir above)
                     for aux in sorted(synth_dir.glob("*.hex")):
-                        rcc, _o, _ce = _run(
-                            ["docker", "cp", str(aux),
-                             f"{container}:{cont_wd}/{aux.name}"],
-                            timeout=60)
+                        rcc, _o, _ce = _docker_cp(
+                            container, str(aux),
+                            f"{container}:{cont_wd}/{aux.name}", timeout=60)
                         if rcc != 0:
                             cp_err = _ce
                             break
@@ -15009,7 +15089,8 @@ def step_yosys_synth(project: Path, top_name: str = "chip_top",
                         script_c = script_c.replace(hp, stage_map[hp])
                     script_c = script_c.replace(str(out_v), netlist_c)
                     rc, out, err = _run(
-                        _ce.docker_exec_argv(container, "bash", "-lc", f"yosys -p '{script_c}'", opts=("-w", cont_wd)),
+                        _exec_argv(container, f"yosys -p '{script_c}'",
+                                   workdir=cont_wd, quiet=False),
                         timeout=_synth_to)
                     if rc == 0:
                         if not _phase2_retrieve_netlist(
@@ -15017,7 +15098,15 @@ def step_yosys_synth(project: Path, top_name: str = "chip_top",
                             rc = 1
                             err += ("\nyosys docker fallback: netlist "
                                     "retrieval from staging failed")
-                    _run(_ce.docker_exec_argv(container, "bash", "-lc", f"rm -rf {cont_wd}"), timeout=30)
+                    # Container route only. This removes a STAGING dir that
+                    # only the container route ever creates; in the local
+                    # route `_path_in_container` is True, the fallback is
+                    # never entered, and `cont_wd` would name a real directory
+                    # on this filesystem. A route change must not become a
+                    # delete.
+                    if not _local_exec_mode():
+                        _run(_exec_argv(container, f"rm -rf {cont_wd}",
+                                        quiet=False), timeout=30)
     log = synth_dir / "yosys.log"
     log.write_text(out + "\n" + err)
 
@@ -15626,8 +15715,11 @@ def step_fpga_compile(project: Path, top_name: str,
                f"cd {fpga_dir} && {host_quartus_sh} --flow compile {base} "
                f"2>&1 | tee compile.log"]
     elif _container_has_quartus_sh(container):
-        cmd = _ce.docker_exec_argv(container, "bash", "-lc", f"cd {project.as_posix()}/fpga && "
-               f"quartus_sh --flow compile {base} 2>&1 | tee compile.log")
+        cmd = _exec_argv(
+            container,
+            f"cd {project.as_posix()}/fpga && "
+            f"quartus_sh --flow compile {base} 2>&1 | tee compile.log",
+            quiet=False)
     else:
         return StepResult(
             "fpga_compile", "SKIP",
