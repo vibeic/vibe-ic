@@ -728,3 +728,28 @@ def test_the_no_contract_emission_is_byte_identical_to_origin_main():
     assert after == before, (
         "a design whose widths do not resolve is no longer driven as it was "
         f"before this change: {len(before)} bytes -> {len(after)} bytes")
+
+
+# --- The COMMENT case for the parameter HEADER, required by the ruling on the
+# `_NOT_PROSE` entry for `parameter_overrides`. The instantiation half is held by
+# `test_a_commented_out_instantiation_is_not_an_override` and
+# `test_a_commented_out_instantiation_does_not_manufacture_a_conflict`; the header
+# half had no test of its own. A COMMENT is the one construct in HDL that reads as
+# a denial, so the claim that this grammar cannot deny a value is only honest if
+# commented-out text is excluded -- measured here, not asserted.
+def test_a_commented_out_parameter_default_is_not_a_default():
+    live = "module dut_mod #(parameter int W = 8) (input clk); endmodule\n"
+    with_comment = ("module dut_mod #(\n"
+                    "  // parameter int W = 99,\n"
+                    "  parameter int W = 8\n"
+                    ") (input clk); endmodule\n")
+    assert D.dut_parameter_defaults(live, "dut_mod") == {"W": 8}
+    # the commented 99 must not be seen, and must not displace the live 8
+    assert D.dut_parameter_defaults(with_comment, "dut_mod") == {"W": 8}
+
+
+def test_a_default_that_exists_ONLY_in_a_comment_yields_no_parameter():
+    """Over-reach control in the other direction: blanking must not invent one."""
+    only_comment = ("module dut_mod #(\n  // parameter int W = 99\n"
+                    ") (input clk); endmodule\n")
+    assert D.dut_parameter_defaults(only_comment, "dut_mod") == {}
