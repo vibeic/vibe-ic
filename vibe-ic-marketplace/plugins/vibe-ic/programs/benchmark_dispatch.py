@@ -979,6 +979,14 @@ def _archive_repair_input(problem_id: str, project: Path, run_p: Path,
     return candidate
 
 
+def _required_scorer_top(entry: dict) -> str | None:
+    """The one module name this benchmark's scorer will instantiate, if it
+    fixes one. Driven by the registry's `module_name_strategy`; no per-benchmark
+    branch and no problem-specific knowledge."""
+    strategy = ((entry or {}).get("layout") or {}).get("module_name_strategy")
+    return "TopModule" if strategy == "always_TopModule" else None
+
+
 def _make_ai_review_task(problem_id: str, project: Path, got: dict,
                          routing: dict, runner_rc: int, run_p: Path,
                          candidate_origin: str, *,
@@ -3354,8 +3362,19 @@ def _declared_route_ai_backup(routing: dict) -> dict:
 
 def _make_ai_backup_task(problem_id: str, project: Path, skills: list[str],
                          source: str, detail: str, bench: str,
-                         dataset: Path, run_p: Path) -> dict:
-    """Build one prompt-bound handoff into the runner-owned RTL directory."""
+                         dataset: Path, run_p: Path,
+                         required_top: str | None = None) -> dict:
+    """Build one prompt-bound handoff into the runner-owned RTL directory.
+
+    `required_top` carries the module name the benchmark's SCORER will
+    instantiate, when the benchmark fixes one. This is a LAYOUT fact from the
+    registry, not design knowledge and not oracle content, and the author cannot
+    always derive it: measured on VerilogEval-v2, 155 of 156 prompts state the
+    name themselves and exactly ONE never mentions it, which is precisely the
+    problem whose candidate came back named `chip_top` and was unscoreable.
+    Refusing such an artefact without telling the author the required name would
+    make the re-authoring loop unresolvable, so the requirement travels WITH the
+    task."""
     project = Path(project).resolve()
     dataset = Path(dataset).resolve()
     run_p = Path(run_p).resolve()
@@ -3378,6 +3397,16 @@ def _make_ai_backup_task(problem_id: str, project: Path, skills: list[str],
         "runner_said": str(detail or "")[:600],
         "regate_entry_step": "2",
         "review_required_after_regating": True,
+        # The scorer-facing top module name, when the benchmark fixes one.
+        # Absent (None) for benchmarks that take the name from the description.
+        "required_top_module": required_top,
+        "required_top_module_note": (
+            None if not required_top else
+            f"This benchmark's scorer instantiates {required_top!r}. Declare the "
+            f"top-level module with exactly that name. This is a benchmark "
+            f"LAYOUT requirement, not design content — the prompt may not state "
+            f"it, and an artefact that declares any other top name cannot be "
+            f"elaborated by the grading testbench and will be refused."),
         "resume_with": (f"benchmark_dispatch.py {bench} --resume "
                         f"--dataset {dataset} --run {run_p}"),
     }
@@ -3563,7 +3592,8 @@ def _cmd_solve_locked(bench: str, dataset: str, run: str, limit: int = 0,
             if process.error is not None:
                 raise RuntimeError(process.error)
             rc = int(process.rc)
-            got = bio.collect(fmt, pid, proj)
+            got = bio.collect(fmt, pid, proj,
+                              required_top=_required_scorer_top(entry))
             waive = _rtl_gen_waive(proj)
             backup_source = None
             backup_skills: list[str] = []
@@ -3616,7 +3646,8 @@ def _cmd_solve_locked(bench: str, dataset: str, run: str, limit: int = 0,
             elif awaiting_backup:
                 backup_task = _make_ai_backup_task(
                     pid, proj, backup_skills, str(backup_source),
-                    backup_detail, bench, ds, run_p)
+                    backup_detail, bench, ds, run_p,
+                    required_top=_required_scorer_top(entry))
             state = ("candidate->AI-review" if got.get("ok")
                      else ("WAIVE->AI" if backup_source == "rtl_gen_waive"
                            else ("route-declared->AI" if awaiting_backup
@@ -3904,7 +3935,8 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
                 problem_id=pid, rc=None, collected_json=None,
                 error=process.error)
         try:
-            got = bio.collect(fmt, pid, proj, supplied_rtl=supplied_rtl)
+            got = bio.collect(fmt, pid, proj, supplied_rtl=supplied_rtl,
+                              required_top=_required_scorer_top(entry))
             payload = json.dumps(got)
         except Exception as exc:                          # noqa: BLE001
             return _ResumeRunnerOutcome(
@@ -4022,7 +4054,8 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
         if backup_source and pid not in existing_backup_ids:
             backup.append(_make_ai_backup_task(
                 pid, proj, backup_skills, str(backup_source), backup_detail,
-                bench, Path(dataset).resolve(), run_p))
+                bench, Path(dataset).resolve(), run_p,
+                required_top=_required_scorer_top(entry)))
             existing_backup_ids.add(pid)
         print(f"  {pid:44s} Program worker retry completed (rc={rc})")
 
@@ -4504,7 +4537,8 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
             "AI_BACKUP", "AI_REPAIR"}
         got = bio.collect(
             fmt, pid, Path(str(task.get("project") or "")),
-            supplied_rtl=supplied_rtl)
+            supplied_rtl=supplied_rtl,
+            required_top=_required_scorer_top(entry))
         if (not got.get("ok")
                 or _sha256_text(str(got.get("completion") or ""))
                 != task.get("rtl_sha256")):
