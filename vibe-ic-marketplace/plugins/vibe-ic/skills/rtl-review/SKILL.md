@@ -62,12 +62,22 @@ in `rtl_review_aggregate.py`, pinned by pytest:
 
 | Score | Condition | Verdict |
 |---|---|---|
-| 10 | 0 errors, 0 warns, 0 infos | PASS |
+| 10 | 0 errors, 0 warns, 0 infos, over the auditors that ran; `auditors_not_run` is printed beside it | PASS |
 | 8–9 | 0 errors, 0 warns, INFO-only | PASS |
 | 6–7 | 0 errors, 1–4 warns | WARN |
 | 4–5 | 0–1 errors OR ≥ 5 warns | FAIL |
 | 2–3 | 2+ errors | FAIL |
 | 0–1 | not synthesizable | FAIL |
+
+**The score is over the auditors that RAN (ruling F2036-H).** A skipped
+auditor is a fact about the invocation, not a finding about the RTL, so it
+does not move the score — and it is never silent either: the report carries
+`auditors_not_run` (name + reason), the Score and Verdict lines print it
+beside the number, and `--strict` refuses to certify PASS while it is
+non-empty. **Never quote the score without that clause.** `10/10` while a
+check did not run, quoted bare, is the same defect one level up as reading a
+producer that wrote nothing as a clean file.
+
 
 ## Anti-patterns
 
@@ -76,6 +86,8 @@ in `rtl_review_aggregate.py`, pinned by pytest:
 - ❌ **Skipping the program because "it's a small file".** The program
   is the audit trail. Run it on every review request.
 - ❌ **Claiming PASS when the JSON output says `verdict: FAIL`.**
+- ❌ **Quoting the score without `auditors_not_run`.** A bare `10/10` when an
+  auditor did not run states a coverage the run does not have.
 
 ## Technical basis
 
