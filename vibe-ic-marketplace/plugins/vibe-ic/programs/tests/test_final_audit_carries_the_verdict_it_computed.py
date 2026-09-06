@@ -223,3 +223,58 @@ def test_a_short_transcript_record_is_byte_identical(tmp_path, monkeypatch):
     out = "Overall: FAIL  (strict=True)\n  because\n\ntail\n"
     r = _drive(tmp_path, monkeypatch, out, 1)
     assert r.detail == "\n".join(out.splitlines()[-25:])
+
+
+class TestTheBlockCanRunIntoTheWindow:
+    """The verdict paragraph and the 25-line tail can OVERLAP.
+
+    MEASURED on my own first version of `_final_audit_detail`, with a 92-line
+    report whose verdict paragraph starts at line 50 and whose window starts at
+    line 67: it emitted the block, then a marker reading "0 line(s) of the
+    transcript elided here", then the tail — REPEATING 14 gating lines and
+    presenting two overlapping views as one continuous passage. A reader
+    counting gates in that record would have counted some of them twice.
+
+    MUTATION: restoring `elided = tail_start - (start + len(block) + dropped)`
+    with an unconditional marker and `parts.append(tail)` fails
+    `test_no_line_is_emitted_twice` and `test_no_marker_when_there_is_no_gap`.
+    """
+
+    def _overlapping(self, n_gates=30, n_pad=50, n_tail=10):
+        block = (["Overall: FAIL  (strict=True)"]
+                 + ["  gate_%d — why" % i for i in range(n_gates)])
+        return "\n".join(["pad %d" % i for i in range(n_pad)] + block + [""]
+                         + ["t%d" % i for i in range(n_tail)])
+
+    def test_the_fixture_really_overlaps(self):
+        """Negative control for the FIXTURE: if the block did not reach the
+        window, everything below would be vacuous."""
+        out = self._overlapping()
+        lines = out.splitlines()
+        start, block = D._final_audit_verdict_block(lines)
+        tail_start = len(lines) - D._FINAL_AUDIT_TAIL_LINES
+        assert start < tail_start, (start, tail_start)
+        assert start + len(block) > tail_start, "fixture does not overlap"
+
+    def test_no_line_is_emitted_twice(self):
+        from collections import Counter
+        d = D._final_audit_detail(self._overlapping(), "/x")
+        c = Counter(l for l in d.splitlines() if "— why" in l)
+        assert [k for k, v in c.items() if v > 1] == [], c
+        assert len(c) == 30, "every gating line must still be present"
+
+    def test_no_marker_when_there_is_no_gap(self):
+        d = D._final_audit_detail(self._overlapping(), "/x")
+        assert not [l for l in d.splitlines() if "elided here" in l], d
+        # "0 line(s) elided" is the specific lie this replaces
+        assert "0 line(s) of the transcript elided" not in d
+
+    def test_a_real_gap_still_reports_its_real_size(self):
+        block = (["Overall: FAIL  (strict=True)"]
+                 + ["  gate_%d — why" % i for i in range(30)])
+        out = "\n".join(["pad %d" % i for i in range(220)] + block + [""]
+                        + ["g%d" % i for i in range(140)])
+        d = D._final_audit_detail(out, "/x")
+        mk = [l for l in d.splitlines() if "elided here" in l]
+        assert len(mk) == 1 and " 116 line(s)" in mk[0], mk
+        assert d.endswith(_base_detail(out))

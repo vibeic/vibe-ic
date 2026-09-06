@@ -18656,10 +18656,22 @@ def _final_audit_detail(out: str, transcript) -> str:
     if dropped:
         parts.append(f"  … {dropped} further gating line(s) NOT shown here — "
                      f"all of them are in {transcript} …")
-    elided = tail_start - (start + len(block) + dropped)
-    parts.append(f"… {max(0, elided)} line(s) of the transcript elided here "
-                 f"(full text: {transcript}) …")
-    parts.append(tail)
+    # WHERE THE BLOCK ACTUALLY ENDS, cap included: `block` may have been
+    # truncated, but `dropped` lines still belong to it in the transcript.
+    full_end = start + len(block) + dropped
+    # THE BLOCK CAN RUN INTO THE TAIL WINDOW. MEASURED on a 92-line report
+    # whose verdict paragraph starts at line 50 and the window at line 67: the
+    # first version of this function emitted the block, then a marker reading
+    # "0 line(s) elided", then the tail — which REPEATED 14 gating lines and
+    # invited the reader to treat two overlapping views as one continuous
+    # passage. Resuming at `full_end` when the two meet or overlap emits each
+    # line exactly once, and the marker is then printed only when there really
+    # is a gap, so "elided" never means zero.
+    rest_start = max(full_end, tail_start)
+    if rest_start > full_end:
+        parts.append(f"… {rest_start - full_end} line(s) of the transcript "
+                     f"elided here (full text: {transcript}) …")
+    parts.append("\n".join(lines[rest_start:]))
     return "\n".join(parts)
 
 
