@@ -61,6 +61,9 @@ class Deprecation:
     pattern: re.Pattern # compiled regex; must use a word boundary
     version: str        # OpenROAD version where the token was removed
     replacement: str    # human-readable replacement hint
+    kind: str = "command"   # "command" (must sit in TCL command position)
+                            # or "flag" (an option word, never in command
+                            # position -- position tells us nothing).
 
 
 # v0.69 Item 4 commission specified two mandatory entries and invited "up to
@@ -82,6 +85,7 @@ _DEPRECATIONS: Tuple[Deprecation, ...] = (
             "use `set_routing_layers -signal <bottom>-<top>` OR "
             "`global_route -congestion_iterations` (flag removed)"
         ),
+        kind="flag",
     ),
     Deprecation(
         token="-top_routing_layer",
@@ -91,6 +95,7 @@ _DEPRECATIONS: Tuple[Deprecation, ...] = (
             "use `set_routing_layers -signal <bottom>-<top>` OR "
             "`global_route -congestion_iterations` (flag removed)"
         ),
+        kind="flag",
     ),
     Deprecation(
         token="write_gds",
@@ -233,15 +238,172 @@ def _is_data_key(line: str, start: int, end: int) -> bool:
     return bool(_DATA_KEY_TAIL.match(line, end + 1))
 
 
+# ---------------------------------------------------------------------------
+# CONTEXT, NOT BASENAME.
+#
+# MEASURED 2026-09-07 on main 4fc47b3ef (v1.18.13), host 8HD-8. v1.18.9 added
+# `programs/tests/test_the_technology_answers_the_precheck_not_the_declaration.py`,
+# whose line 59 is the continuation of a plain Python import:
+#
+#     from test_general_precheck import (
+#         write_gds, _rect, _project, _step, _NEVER_RAN)
+#
+# `write_gds` there is a PYTHON IDENTIFIER -- a name bound in a sibling test
+# module. This gate read it as a deprecated OpenROAD TCL command, so the P0
+# structural umbrella FAILED, `flow_compliance_check` returned rc=1, phase 2
+# halted and NO design on main reached phase 3. That is the THIRD file of this
+# class (after `write_gds(` call/def syntax, 1910a37ca, and the quoted dict key
+# `{"write_gds": ...}`, 2026-09-03); each previous repair added the offending
+# FILE to a basename allowlist, which by construction cannot see the fourth
+# file. This repair is by CONTEXT instead, so there is no fourth file to add.
+#
+# The distinction the gate now makes:
+#
+#   * a `.tcl` file  -- every line is TCL source. Scanned whole, exactly as
+#                       before. No power is given up.
+#   * a `.py` file   -- TCL can only reach an OpenROAD interpreter from a
+#                       STRING LITERAL (the shape the runners emit into their
+#                       scripts). Python identifiers, imports, attributes,
+#                       keywords, argument names and comments are tokenized
+#                       and are never TCL.
+#   * `.md`/`.yaml`/`.yml`/`.js`
+#                    -- no reliable grammar to tokenize; unchanged line scan.
+#
+# Inside a `.py` string literal a COMMAND token additionally has to sit in TCL
+# COMMAND POSITION -- start of the string's content, start of a line inside a
+# triple-quoted / escaped-newline string, or straight after `;`, `[` or `{`.
+# That is where a TCL interpreter looks for a command word and nowhere else, so
+# the token named mid-expression inside a regex is not a call while
+# `f"write_gds {out}"` still is. A `kind="flag"` token is an OPTION word which
+# by definition never occupies command position, so for flags the
+# string-literal restriction is the whole rule.
+#
+# chip / PDK / vendor-AGNOSTIC: pure source grammar, no design literals.
+# ---------------------------------------------------------------------------
+
+# Opening prefix + quote of a Python string token, e.g. rb\"\"\", f', ".
+_PY_STR_OPEN = re.compile(r"^[A-Za-z]*('''|\"\"\"|'|\")")
+
+
+def _py_string_content_mask(text: str) -> Dict[int, List[Tuple[int, int]]]:
+    """Map 1-based line number -> the column spans that are the CONTENT of a
+    Python string literal on that line (quotes and prefix excluded).
+
+    Raises whatever ``tokenize`` raises on an unparsable file; the caller then
+    falls back to the plain line scan rather than silently exempting it -- an
+    unparsable file must never become a blind spot.
+    """
+    import io
+    import tokenize as _tk
+
+    spans: Dict[int, List[Tuple[int, int]]] = {}
+
+    lines = text.splitlines()
+
+    def _linelen(row: int) -> int:
+        return len(lines[row - 1]) if 1 <= row <= len(lines) else 0
+
+    def _add(row: int, c0: int, c1: int) -> None:
+        if c1 > c0:
+            spans.setdefault(row, []).append((c0, c1))
+
+    def _add_range(srow, scol, erow, ecol):
+        if srow == erow:
+            _add(srow, scol, ecol)
+        else:
+            _add(srow, scol, _linelen(srow))
+            for r in range(srow + 1, erow):
+                _add(r, 0, _linelen(r))
+            _add(erow, 0, ecol)
+
+    fstring_middle = getattr(_tk, "FSTRING_MIDDLE", None)
+    for tok in _tk.generate_tokens(io.StringIO(text).readline):
+        if fstring_middle is not None and tok.type == fstring_middle:
+            # Python 3.12+ hands back the f-string's literal text directly,
+            # already free of prefix and quotes.
+            _add_range(tok.start[0], tok.start[1], tok.end[0], tok.end[1])
+            continue
+        if tok.type != _tk.STRING:
+            continue
+        m = _PY_STR_OPEN.match(tok.string)
+        if not m:
+            continue
+        open_len = m.end()
+        close_len = len(m.group(1))
+        (srow, scol), (erow, ecol) = tok.start, tok.end
+        if srow == erow:
+            _add(srow, scol + open_len, ecol - close_len)
+        else:
+            _add(srow, scol + open_len, _linelen(srow))
+            for r in range(srow + 1, erow):
+                _add(r, 0, _linelen(r))
+            _add(erow, 0, ecol - close_len)
+    return spans
+
+
+def _in_span(spans: List[Tuple[int, int]], start: int, end: int) -> bool:
+    """Is [start, end) wholly inside one string-literal content span?"""
+    return any(c0 <= start and end <= c1 for c0, c1 in spans)
+
+
+def _col_in_span(spans: List[Tuple[int, int]], col: int) -> bool:
+    return any(c0 <= col < c1 for c0, c1 in spans)
+
+
+def _is_tcl_command_position(line: str, spans: List[Tuple[int, int]],
+                             start: int) -> bool:
+    """Does the match at column ``start`` sit where a TCL interpreter reads a
+    COMMAND WORD? True at the start of the enclosing string literal's content
+    on this physical line (which is also the start of every line of a
+    triple-quoted script), after a source-level newline escape, or straight
+    after ``;``, ``[`` or ``{``."""
+    j = start - 1
+    while j >= 0 and line[j] in " \t":
+        j -= 1
+    if j < 0:
+        return True
+    if not _col_in_span(spans, j):
+        # Walked out of the string literal: everything to the left on this
+        # line is the opening quote/prefix, so this IS the content start.
+        return True
+    if line[j] in ";[{":
+        return True
+    if line[j] == "n" and j >= 1 and line[j - 1] == "\\":
+        return True
+    return False
+
+
 def _self_exempt(path_str: str) -> bool:
-    """This program's own source file + its test fixtures both necessarily
-    mention the deprecated tokens. Exempt them so the plugin self-check
-    passes."""
-    basename = os.path.basename(path_str)
-    return basename in (
-        "openroad_tcl_deprecation_check.py",
-        "test_openroad_tcl_deprecation_check.py",
-    )
+    """The two files that CONTEXT CANNOT DECIDE, and only those two.
+
+    Both must spell the deprecated tokens as ordinary Python string literals in
+    positions byte-for-byte identical to a real emission, so no grammar rule
+    can separate them from one:
+
+      * ``programs/openroad_tcl_deprecation_check.py`` -- this program. Its
+        rule table declares ``token=`` <the token>; that literal is the same
+        string a runner would emit as a one-word TCL command. Matched by FILE
+        IDENTITY (``samefile``), not by name, so a copy placed elsewhere is
+        still judged and an unrelated file that happens to share the name is
+        not exempt.
+      * ``programs/tests/test_openroad_tcl_deprecation_check.py`` -- this
+        program's own test. Its fixtures exist precisely to prove the gate
+        still flags a real emission, so they MUST look like one. Matched on
+        the full relative path ``programs/tests/<name>``, not the bare
+        basename, so a new file elsewhere cannot inherit the exemption by
+        choosing a name.
+
+    Nothing else is exempt. A fourth file of this class is now judged by
+    grammar, which is what the previous three repairs each failed to do.
+    """
+    try:
+        if os.path.samefile(path_str, os.path.abspath(__file__)):
+            return True
+    except OSError:
+        pass
+    norm = os.path.normpath(path_str).replace(os.sep, "/")
+    return norm.endswith(
+        "programs/tests/test_openroad_tcl_deprecation_check.py")
 
 
 def scan(search_dir: Path) -> Tuple[List[Finding], int]:
@@ -273,6 +435,25 @@ def scan(search_dir: Path) -> Tuple[List[Finding], int]:
             continue
         examined += 1
         suffix = fpath.suffix.lower()
+        # A .py file is TCL only inside a string literal (see "CONTEXT, NOT
+        # BASENAME" above). str_spans is None for every other suffix, and
+        # also for a .py file we could not tokenize -- in which case we fall
+        # back to the unrestricted line scan, because an unparsable file must
+        # stay VISIBLE to the gate rather than become a silent blind spot.
+        str_spans: Optional[Dict[int, List[Tuple[int, int]]]] = None
+        if suffix == ".py":
+            try:
+                str_spans = _py_string_content_mask("".join(lines))
+            except Exception as exc:   # noqa: BLE001 - see below
+                # Deliberately broad: tokenize raises SyntaxError,
+                # IndentationError AND tokenize.TokenError ("unexpected EOF in
+                # multi-line statement"), and a NEW failure mode must degrade
+                # to the unrestricted line scan, never to an unhandled
+                # traceback and never to a silent exemption.
+                print(f"[openroad_tcl_deprecation_check] WARN: cannot "
+                      f"tokenize {fpath} ({exc}); scanning it line-wise "
+                      f"without Python context", file=sys.stderr)
+                str_spans = None
         for idx, raw in enumerate(lines, start=1):
             line = raw.rstrip("\n")
             if _is_in_comment(line, suffix):
@@ -281,10 +462,16 @@ def scan(search_dir: Path) -> Tuple[List[Finding], int]:
                 # Line is discussing the removal (docstring, SKILL.md prose,
                 # changelog entry) — not a live invocation. Skip.
                 continue
+            spans = None if str_spans is None else str_spans.get(idx, [])
             for dep in _DEPRECATIONS:
                 m = next(
                     (mm for mm in dep.pattern.finditer(line)
-                     if not _is_data_key(line, mm.start(), mm.end())),
+                     if not _is_data_key(line, mm.start(), mm.end())
+                     and (spans is None or (
+                         _in_span(spans, mm.start(), mm.end())
+                         and (dep.kind != "command"
+                              or _is_tcl_command_position(
+                                  line, spans, mm.start()))))),
                     None)
                 if m is not None:
                     findings.append(Finding(

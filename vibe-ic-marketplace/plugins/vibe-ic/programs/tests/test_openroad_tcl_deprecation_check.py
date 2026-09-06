@@ -254,3 +254,149 @@ def test_a_real_tcl_emission_is_still_flagged_after_that_exclusion(tmp_path):
         code, out, err = _run(["--search-dir", str(d)])
         assert code == 1, f"a real emission went unflagged: {body!r}"
         assert "write_gds" in (out + err)
+
+
+# ---------------------------------------------------------------------------
+# A PYTHON IDENTIFIER IS NOT A TCL CALL.
+#
+# MEASURED 2026-09-07 on main 4fc47b3ef (v1.18.13), host 8HD-8, lane czp0.
+# v1.18.9 landed
+# `programs/tests/test_the_technology_answers_the_precheck_not_the_declaration.py`
+# whose line 59 is the continuation line of a plain Python import:
+#
+#     from test_general_precheck import (
+#         write_gds, _rect, _project, _step, _NEVER_RAN)
+#
+# On the tree as landed this gate reported `FAIL: 1 ... write_gds`, which fails
+# a P0 STRUCTURAL gate, so `flow_compliance_check` returned rc=1, phase 2
+# halted, and NO design on main reached phase 3 -- over a tree with no OpenROAD
+# TCL problem at all. It was the THIRD file of this class, and each earlier
+# repair added the offending FILE to a basename allowlist, which cannot see a
+# fourth file. The repair is by CONTEXT: in a .py file only a STRING LITERAL
+# can carry TCL, and a command token must additionally sit in TCL command
+# position.
+#
+# Both directions are pinned here, because a rule that only ever suppresses is
+# indistinguishable from deleting the gate.
+# ---------------------------------------------------------------------------
+def test_a_python_identifier_is_never_a_tcl_call(tmp_path):
+    """Every Python position in which the bare name can legally appear."""
+    _write(tmp_path, "ident.py", '\n'.join([
+        "from test_general_precheck import (",
+        "    write_gds, _rect, _project, _step, _NEVER_RAN)",
+        "import helpers",
+        "",
+        "def use():",
+        "    fn = write_gds",
+        "    helpers.write_gds",
+        "    return dispatch(handler=write_gds)",
+        "",
+        "def write_gds_wrapper(write_gds=None):",
+        "    return write_gds",
+        '']))
+    code, out, err = _run(["--search-dir", str(tmp_path)])
+    assert code == 0, (
+        "a Python identifier was read as an OpenROAD TCL command: "
+        f"{out!r} {err!r}")
+    assert "no OpenROAD TCL deprecations" in out
+
+
+def test_the_exact_v1_18_9_file_shape_is_green(tmp_path):
+    """The literal two lines that took main's phase 2 down."""
+    _write(tmp_path, "test_the_technology_answers.py",
+           "from test_general_precheck import (                # noqa: E402\n"
+           "    write_gds, _rect, _project, _step, _NEVER_RAN)\n")
+    code, out, err = _run(["--search-dir", str(tmp_path)])
+    assert code == 0, f"the v1.18.9 P0 shape is still red: {out!r} {err!r}"
+
+
+def test_a_real_tcl_file_is_still_flagged_after_the_context_rule(tmp_path):
+    """.tcl is TCL source everywhere; the context rule gives up no power."""
+    _write(tmp_path, "dump.tcl",
+           "read_def routed.def\n"
+           "write_gds $::env(RESULT_GDS)\n")
+    code, out, err = _run(["--search-dir", str(tmp_path)])
+    assert code == 1, f"a real .tcl call went unflagged: {out!r} {err!r}"
+    assert "write_gds" in (out + err)
+
+
+def test_emitted_tcl_in_a_python_string_is_still_flagged(tmp_path):
+    """The shape the runners actually emit into their scripts."""
+    for i, body in enumerate((
+            'script = """\nread_def routed.def\nwrite_gds $out\n"""\n',
+            'fh.write("write_gds %s\\n" % out)\n',
+            'tcl = f"write_gds {out}"\n',
+            'line = "read_def d.def; write_gds out.gds"\n',
+            'cmd = "puts [write_gds out.gds]"\n')):
+        d = tmp_path / f"emit{i}"
+        _write(d, "emit.py", body)
+        code, out, err = _run(["--search-dir", str(d)])
+        assert code == 1, f"emitted TCL went unflagged: {body!r}"
+        assert "write_gds" in (out + err)
+
+
+def test_a_flag_token_inside_an_emitted_string_is_still_flagged(tmp_path):
+    """A `kind="flag"` token is an OPTION word, so it never sits in command
+    position -- the string-literal restriction is its whole context rule and
+    must not have made it unreachable."""
+    _write(tmp_path, "gr.py",
+           'cmd = "global_route -bottom_routing_layer MET1 '
+           '-top_routing_layer MET5"\n')
+    code, out, err = _run(["--search-dir", str(tmp_path)])
+    assert code == 1, f"an emitted deprecated flag went unflagged: {err!r}"
+    assert "-bottom_routing_layer" in (out + err)
+    assert "-top_routing_layer" in (out + err)
+
+
+def test_an_unparsable_python_file_is_not_a_blind_spot(tmp_path):
+    """If tokenize cannot read the file we fall back to the unrestricted line
+    scan. A file the gate cannot parse must stay VISIBLE, never exempt."""
+    _write(tmp_path, "broken.py",
+           "def broken(:\n"
+           "write_gds $out\n")
+    code, out, err = _run(["--search-dir", str(tmp_path)])
+    assert code == 1, f"an unparsable .py became a blind spot: {out!r}"
+    assert "write_gds" in (out + err)
+
+
+def test_only_two_files_are_exempt_and_neither_by_bare_basename(tmp_path):
+    """The allowlist that caused this P0 is gone. What remains is the two
+    files whose literals context genuinely cannot separate from an emission --
+    this program and this program's own test -- and NEITHER is matched by a
+    bare basename, so a new file cannot inherit an exemption by name."""
+    sys.path.insert(0, str(PROG.parent))
+    import openroad_tcl_deprecation_check as OTD     # noqa: E402
+
+    # This program: by file IDENTITY, so a copy elsewhere is NOT exempt.
+    assert OTD._self_exempt(str(PROG))
+    copy = _write(tmp_path, "openroad_tcl_deprecation_check.py",
+                  PROG.read_text())
+    assert not OTD._self_exempt(str(copy)), (
+        "a same-named copy elsewhere inherited the exemption")
+
+    # This program's own test: by FULL RELATIVE PATH, not basename.
+    own_test = PROG.parent / "tests" / "test_openroad_tcl_deprecation_check.py"
+    assert OTD._self_exempt(str(own_test))
+    assert not OTD._self_exempt(
+        str(tmp_path / "test_openroad_tcl_deprecation_check.py"))
+
+    # The file that took main down is judged, not exempted.
+    assert not OTD._self_exempt(
+        "programs/tests/"
+        "test_the_technology_answers_the_precheck_not_the_declaration.py")
+
+
+def test_a_mid_expression_mention_inside_a_string_is_not_a_command(tmp_path):
+    """A string literal is TCL only where a TCL interpreter reads a COMMAND
+    WORD. A token named mid-expression -- in a diagnostic message, a regex, a
+    path -- is a mention, not an invocation. This is the clause that lets the
+    string-literal rule be narrow instead of trading one false-positive class
+    for another; its opposite direction is
+    `test_emitted_tcl_in_a_python_string_is_still_flagged`."""
+    _write(tmp_path, "mention.py", '\n'.join([
+        'raise RuntimeError("unsupported command write_gds in %s" % f)',
+        'PAT = re.compile(r"^\\\\s*write_gds\\\\b")',
+        'path = "artifacts/write_gds.log"',
+        '']))
+    code, out, err = _run(["--search-dir", str(tmp_path)])
+    assert code == 0, f"a mid-expression mention was read as a call: {err!r}"
