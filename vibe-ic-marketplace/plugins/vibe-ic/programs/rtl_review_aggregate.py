@@ -235,16 +235,50 @@ def _run_program_json(program_name: str, args: List[str],
         return 127, "", f"program not found: {program_name}"
 
 
-def _load_hygiene_findings(json_path: Path) -> List[Finding]:
-    """Parse rtl_hygiene_lint --json output into Finding list."""
-    if not json_path.exists():
-        return []
+def _load_finding_array(json_path: Path, source: str,
+                        invalid_rule: str) -> Tuple[List[dict], List[Finding]]:
+    """Read producer arrays or legacy envelopes, without hiding invalid evidence.
+
+    Invalid input is an ERROR finding (FAIL verdict), not a clean empty list.
+    CLI exit policy is unchanged: ADVISORY by default, BLOCKING with --strict.
+    """
+    def invalid(reason: str) -> Finding:
+        return Finding(
+            category="correctness_smells", severity="ERROR",
+            rule_id=invalid_rule, file=str(json_path), line=0,
+            message=f"{source} evidence is unavailable or invalid: {reason}",
+            source=source,
+        )
+
     try:
         data = json.loads(json_path.read_text(encoding="utf-8"))
-    except Exception:
-        return []
+    except (OSError, ValueError) as exc:
+        return [], [invalid(str(exc))]
+    items = data.get("findings") if isinstance(data, dict) else data
+    if not isinstance(items, list):
+        return [], [invalid("expected an array or an object containing a findings array")]
+    records: List[dict] = []
     out: List[Finding] = []
-    for item in data.get("findings", []):
+    for index, item in enumerate(items):
+        if not isinstance(item, dict):
+            out.append(invalid(f"finding {index} is not an object"))
+            continue
+        if (not all(isinstance(item.get(k), str) for k in ("rule", "file", "message"))
+                or type(item.get("line")) is not int or item["line"] < 0):
+            out.append(invalid(f"finding {index} lacks valid rule/file/line/message fields"))
+            continue
+        if item.get("severity") not in ("ERROR", "WARN", "INFO"):
+            out.append(invalid(f"finding {index} has an unknown severity"))
+            continue
+        records.append(item)
+    return records, out
+
+
+def _load_hygiene_findings(json_path: Path) -> List[Finding]:
+    """Parse the shipped hygiene array and legacy findings envelope."""
+    records, out = _load_finding_array(
+        json_path, "rtl_hygiene_lint", "hygiene_report_invalid")
+    for item in records:
         rule_id = item.get("rule", "unknown")
         category = HYGIENE_RULE_CATEGORY.get(rule_id, "style_readability")
         out.append(Finding(
@@ -260,15 +294,10 @@ def _load_hygiene_findings(json_path: Path) -> List[Finding]:
 
 
 def _load_reset_findings(json_path: Path) -> List[Finding]:
-    """Parse reset_discipline_check --json output."""
-    if not json_path.exists():
-        return []
-    try:
-        data = json.loads(json_path.read_text(encoding="utf-8"))
-    except Exception:
-        return []
-    out: List[Finding] = []
-    for item in data.get("findings", []):
+    """Parse the shipped reset array and legacy findings envelope."""
+    records, out = _load_finding_array(
+        json_path, "reset_discipline_check", "reset_report_invalid")
+    for item in records:
         out.append(Finding(
             category="reset_clock_hygiene",
             severity=item.get("severity", "WARN"),
@@ -283,17 +312,55 @@ def _load_reset_findings(json_path: Path) -> List[Finding]:
 
 def _load_precheck_findings(json_path: Path) -> List[Finding]:
     """Parse rtl_precheck_gate --json output."""
-    if not json_path.exists():
-        return []
+    def invalid(reason: str) -> Finding:
+        return Finding("correctness_smells", "ERROR", "precheck_report_invalid",
+                       str(json_path), 0, reason, "rtl_precheck_gate")
+
     try:
         data = json.loads(json_path.read_text(encoding="utf-8"))
-    except Exception:
-        return []
+    except (OSError, ValueError) as exc:
+        return [invalid(str(exc))]
+    if not isinstance(data, dict) or "auditors" not in data:
+        return [invalid("expected an object containing auditors")]
     out: List[Finding] = []
-    # rtl_precheck_gate emits {auditor: {findings: [...], verdict: ...}}
-    auditors = data.get("auditors", {})
+    auditors = data["auditors"]
+    # The shipped producer emits AuditorResult records, not nested findings.
+    if isinstance(auditors, list):
+        if not auditors:
+            return [invalid("empty auditors array: no auditor was measured")]
+        for index, auditor in enumerate(auditors):
+            if (not isinstance(auditor, dict)
+                    or not isinstance(auditor.get("name"), str)
+                    or type(auditor.get("passed")) is not bool
+                    or type(auditor.get("exit_code")) is not int):
+                out.append(invalid(f"auditor {index} has invalid result fields"))
+                continue
+            name = auditor["name"]
+            if not auditor["passed"] or auditor["exit_code"] != 0:
+                out.append(Finding(
+                    "correctness_smells", "ERROR", name, str(json_path), 0,
+                    f"Auditor failed (exit {auditor['exit_code']}): "
+                    f"{auditor.get('stdout_tail', '')} {auditor.get('stderr_tail', '')}",
+                    f"rtl_precheck_gate.{name}"))
+            elif auditor.get("skipped"):
+                out.append(Finding(
+                    "correctness_smells", "INFO", f"{name}_not_measured",
+                    str(json_path), 0,
+                    f"NOT_MEASURED: {auditor.get('skip_reason', 'auditor skipped')}",
+                    f"rtl_precheck_gate.{name}"))
+        return out
+    if not isinstance(auditors, dict):
+        return [invalid("auditors must be an array or legacy mapping")]
+    # Compatibility for historical {auditor: {findings: [...]}} reports.
     for auditor_name, auditor_d in auditors.items():
+        if (not isinstance(auditor_d, dict)
+                or not isinstance(auditor_d.get("findings", []), list)):
+            out.append(invalid(f"auditor {auditor_name} has invalid findings"))
+            continue
         for item in auditor_d.get("findings", []):
+            if not isinstance(item, dict):
+                out.append(invalid(f"auditor {auditor_name} has a non-object finding"))
+                continue
             # Map auditor name to category — most precheck auditors target
             # § 4 correctness smells, but specific ones target § 1 or § 2.
             cat = "correctness_smells"
