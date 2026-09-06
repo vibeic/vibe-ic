@@ -250,6 +250,14 @@
       "_note": "Bucket A target TBD — analog sizing loop currently has no single dedicated check program; the closest is the analog-sizing-loop skill itself. File a backlog if a deterministic sizing-loop checker is authored.",
       "bucket_B_skill_file": "skills/analog-sizing-loop/SKILL.md"
     },
+    "benchmark.program_retry": {
+      "description": "Explicit provenance-bound retry of a corrected Program validation step from preserved signed input, through the shared coordinator and ordinary declared validation route. Preserve prior output and proof; require a fresh independent review. This is neither an AI repair nor acceptance.",
+      "bucket_A_program": "programs/benchmark_dispatch.py",
+      "bucket_A_related": [
+        "programs/vibe_ic_one_shot_runner.py"
+      ],
+      "bucket_B_skill_file": "skills/open-benchmark-methodology/SKILL.md"
+    },
     "benchmark.scoring": {
       "description": "Host scorers (score_iverilog_tb.py / score_cocotb_mcp.py) — cwd=design_dir, substitution disclosures, etc.",
       "bucket_A_program": "benchmark/score_iverilog_tb.py",
