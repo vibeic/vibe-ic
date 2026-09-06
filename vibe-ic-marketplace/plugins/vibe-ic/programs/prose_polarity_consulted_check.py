@@ -118,6 +118,30 @@ _SEARCH_ATTRS = {"search", "findall", "finditer", "match", "fullmatch"}
 #: The count is printed on every run, clean or not.
 _EXEMPT_REASON_MIN = 80
 _NOT_PROSE: Dict[str, str] = {
+    "sparse_fsm_detect::_sparse_enum_types":
+        "SYSTEMVERILOG `typedef enum` DECLARATION grammar, read to learn the "
+        "state constants a design declared so #2067 can tell a sparse "
+        "(Hamming-separated) encoding from an ordinary one. Both productions "
+        "it matches are HDL syntax -- `typedef enum logic [N-1:0] { NAME = "
+        "W'bBITS, ... } type_e;` and the sized based literals inside it -- and "
+        "there is no form in that grammar that DENIES a constant: "
+        "SystemVerilog gives no way to write `CTR_IDLE is NOT 5'b01110`. A "
+        "constant is declared or it is absent, and ABSENT IS ALREADY HOW THIS "
+        "FUNCTION REPORTS IT: the name never enters `states`, the type never "
+        "enters the returned map, and a group that is too small or whose "
+        "minimum pairwise Hamming distance is under the floor is simply not "
+        "returned -- the caller then declares nothing sparse and the synth "
+        "step emits its pre-#2067 byte-identical script. The one place natural "
+        "language appears in this input is the comment block in which "
+        "OpenTitan documents the encoding's Hamming histogram, and the "
+        "function strips comments ITSELF before its first match, so no "
+        "sentence reaches these regexes at all; a comment could not un-declare "
+        "the enum the next line declares in any case. The direct precedents "
+        "are the other HDL-declaration readers in this register, "
+        "`testbench_gen::package_first_order` and "
+        "`spec_conformance_check::_frame_contract_findings`. Falsifier: "
+        "`test_issue2067_sparse_fsm_encoding_preserved.py"
+        "::test_the_not_prose_claim_for_the_enum_reader_is_falsifiable`.",
     "spec_conformance_check::_frame_contract_findings":
         "VERILOG DECLARATION grammar. The only text this function searches "
         "ITSELF is `rtl_body`, with one `re.findall` over "

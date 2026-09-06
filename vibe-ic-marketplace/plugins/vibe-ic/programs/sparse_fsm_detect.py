@@ -152,7 +152,17 @@ def _module_at(text: str, pos: int) -> str:
 
 def _sparse_enum_types(text: str) -> Dict[str, dict]:
     """{enum type name: evidence} for every enum whose constants are
-    Hamming-separated."""
+    Hamming-separated.
+
+    READS SYSTEMVERILOG DECLARATION GRAMMAR, NEVER PROSE. The only natural
+    language anywhere in this input is the comment block in which OpenTitan
+    documents its Hamming histogram, and this function strips comments ITSELF
+    before the first match rather than trusting its callers to have done it —
+    so the claim "no sentence reaches these regexes" is a property of the
+    function, not of the two call sites. `_strip_comments` is idempotent, so
+    the callers that already strip lose nothing. See the `_NOT_PROSE` entry
+    for this function in `prose_polarity_consulted_check.py`."""
+    text = _strip_comments(text)
     out: Dict[str, dict] = {}
     for m in _ENUM_RE.finditer(text):
         consts = [(c.group("name"), c.group("bits").replace("_", ""))

@@ -300,3 +300,71 @@ def test_the_audit_has_a_runner():
     assert "reports\" / \"sparse_fsm_encoding.json" in src or \
         '"sparse_fsm_encoding.json"' in src, "the report path must be written"
     assert "_sfec.check(" in src
+
+
+# --------------------------------------------------------------------------
+# 4. THE `_NOT_PROSE` CLAIM — its falsifier.
+# --------------------------------------------------------------------------
+# `prose_polarity_consulted_check._NOT_PROSE` classifies
+# `sparse_fsm_detect::_sparse_enum_types` as reading a formal grammar rather
+# than prose, so it is exempt from consulting the polarity vocabulary. That is
+# a CLASSIFICATION, not an allowlist, and it has to be checkable: OpenTitan
+# documents its Hamming histogram in a COMMENT directly above the enum, which
+# is the one place natural language appears in this input. If a sentence there
+# could change what the reader publishes, the classification is false and the
+# instruction is to DELETE THE ENTRY — never to relax the assertion below.
+_ENUM_WITH_A_DENYING_COMMENT = """
+// Minimum Hamming distance: 3
+typedef enum logic [4:0] {
+  CTR_IDLE  = 5'b01110,
+  // This state is NOT part of the encoding and is REMOVED, not translated:
+  // CTR_FAKE = 5'b01111,
+  CTR_INCR  = 5'b11000,
+  CTR_ERROR = 5'b00001
+} aes_ctr_e;
+"""
+
+_ENUM_PLAIN = """
+typedef enum logic [4:0] {
+  CTR_IDLE  = 5'b01110,
+  CTR_INCR  = 5'b11000,
+  CTR_ERROR = 5'b00001
+} aes_ctr_e;
+"""
+
+
+def test_the_not_prose_claim_for_the_enum_reader_is_falsifiable():
+    """No sentence reaches these regexes: the function strips comments itself,
+    so the denial and its absence answer alike — which is exactly why the
+    polarity question has no referent here. The claim is NOT that the prose is
+    read and correctly overruled; it is that it is never read.
+
+    THE FIXTURE IS CHOSEN SO THE CLAIM CARRIES THE RESULT. `CTR_FAKE =
+    5'b01111` sits inside the enum body, commented out and explicitly denied.
+    Read as a declaration it is 1 bit from CTR_IDLE, which drops the group's
+    minimum pairwise Hamming distance to 1 and the whole enum stops being
+    reported sparse — i.e. a denied constant would silently withdraw the
+    encoding this issue exists to preserve. MEASURED: with the strip removed
+    this test goes red, which is what makes it a falsifier rather than a
+    restatement."""
+    denied = det._sparse_enum_types(_ENUM_WITH_A_DENYING_COMMENT)
+    plain = det._sparse_enum_types(_ENUM_PLAIN)
+    assert denied == plain, (
+        "a comment changed what the enum reader published; the `_NOT_PROSE` "
+        "entry for sparse_fsm_detect::_sparse_enum_types claims no prose "
+        "reaches it, and that claim is now false — delete the entry rather "
+        "than this assertion")
+    # ...and the grammar half of the claim: what it publishes is the DECLARED
+    # constants, keyed by the declared type.
+    assert plain["aes_ctr_e"]["min_hamming"] == 3
+    assert plain["aes_ctr_e"]["states"]["CTR_IDLE"] == "01110"
+    assert "CTR_FAKE" not in denied["aes_ctr_e"]["states"]
+
+
+def test_the_enum_reader_strips_comments_itself_not_via_its_callers():
+    """The claim must be a property of the FUNCTION. Called directly, with no
+    caller to pre-strip, a commented-out constant inside the body must not
+    reach the match."""
+    got = det._sparse_enum_types(_ENUM_WITH_A_DENYING_COMMENT)
+    assert list(got["aes_ctr_e"]["states"]) == ["CTR_IDLE", "CTR_INCR",
+                                                "CTR_ERROR"]
