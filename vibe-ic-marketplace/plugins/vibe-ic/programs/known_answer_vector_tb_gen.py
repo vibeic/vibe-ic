@@ -335,15 +335,32 @@ def emit_case_register_bus(project, case: dict, dut_module: str,
             _c = _rbd.inactive_tieoff(_pt, _srcs)
             if _c:
                 tieoffs[_pn] = _c
-        text_out = _rbd.emit_sequence_tb(
-            case, plan, bus, dut_module, h2d_port, d2h_port, clk, rst,
-            rst_active_low=_norm(rst).endswith(("n", "ni")),
-            ports=ports, intg_gen=gen, env_pairs=env_pairs,
-            tieoffs=tieoffs)
+        # PARAMETER-BOUND WIDTHS (#2035 family 3). The widths the driver binds
+        # to are READ out of the design's own module header and bus package —
+        # an instantiation override beating the module default — so a design
+        # whose bus is not 32 bits wide is not silently driven as if it were.
+        # An unresolved width returns None and the emission is unchanged, with
+        # the blocking symbol NAMED in the reason string.
+        _widths, _wwhy = _rbd.resolve_bus_widths(
+            _staged_bus_packages(root) + _srcs, rtl_text, dut_module, bus)
+        try:
+            text_out = _rbd.emit_sequence_tb(
+                case, plan, bus, dut_module, h2d_port, d2h_port, clk, rst,
+                rst_active_low=_norm(rst).endswith(("n", "ni")),
+                ports=ports, intg_gen=gen, env_pairs=env_pairs,
+                tieoffs=tieoffs, widths=_widths)
+        except ValueError as e:
+            # The design's register map contradicts the bus width it declares.
+            # Fail CLOSED with the conflict named, exactly like every other
+            # refusal in this module — never a testbench that silently
+            # truncates an address and reports itself green.
+            reasons.append(f"{path}: {e}")
+            continue
         _env = ", ".join(p["base"] for p in env_pairs) or "none"
         return text_out, ((f"host integrity generator: {gen['file']}"
                            if gen else f"no integrity generator ({gwhy})")
-                          + f"; declared tb_env responders: {_env}")
+                          + f"; declared tb_env responders: {_env}"
+                          + f"; bus widths: {_wwhy}")
     if not reasons:
         return None, ("no staged package declares a host->device / "
                       "device->host bus struct pair")
