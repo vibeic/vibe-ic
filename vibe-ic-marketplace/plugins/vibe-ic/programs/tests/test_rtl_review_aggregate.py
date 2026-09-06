@@ -243,3 +243,266 @@ class TestDoctrineCompliance:
         rep = mod.aggregate([_f("latch_inferred", "ERROR")])
         d = rep.as_dict()
         assert set(d["per_category"].keys()) == set(mod.CATEGORY_NAMES)
+
+
+# ---------------------------------------------------------------------------
+# Issue #2036 — consumers that mis-read their own producer
+#
+# `_load_hygiene_findings` called `data.get("findings", [])` while
+# `rtl_hygiene_lint.py --json` writes a BARE ARRAY (`[]` for a clean file).
+# `AttributeError: 'list' object has no attribute 'get'` took the whole
+# aggregate down with exit 1 and NO report and NO score — on an ordinary clean
+# flip-flop. The sibling loaders had the same class of mismatch, unreached only
+# because the hygiene loader raised first.
+#
+# The other half of this, and the load-bearing half: an unreadable producer must
+# NOT become an empty finding set. "I could not read it" is not "there was
+# nothing to report", and a review that scores 10/10 because its tools crashed
+# is worse than no review.
+# ---------------------------------------------------------------------------
+REGISTER_SLICE = """module register_slice(input wire clk, input wire rst_n, input wire d, output reg q);
+always @(posedge clk or negedge rst_n) begin
+  if (!rst_n) q <= 1'b0;
+  else q <= d;
+end
+endmodule
+"""
+
+_HYGIENE_RECORD = {"file": "dut.v", "line": 3, "severity": "WARN",
+                   "rule": "blocking_in_seq", "symbol": "q",
+                   "message": "blocking assignment in a sequential block"}
+
+
+class TestProducerArraySchema:
+    def test_hygiene_bare_empty_array_is_a_clean_result(self, tmp_path):
+        j = tmp_path / "hygiene.json"
+        j.write_text("[]")
+        assert mod._load_hygiene_findings(j, rc=0) == []
+
+    def test_hygiene_bare_array_findings_are_preserved(self, tmp_path):
+        j = tmp_path / "hygiene.json"
+        j.write_text(json.dumps([_HYGIENE_RECORD]))
+        got = mod._load_hygiene_findings(j, rc=1)
+        assert len(got) == 1
+        f = got[0]
+        assert f.rule_id == "blocking_in_seq"
+        assert f.severity == "WARN"
+        assert f.file == "dut.v"
+        assert f.line == 3
+        assert f.message == "blocking assignment in a sequential block"
+        assert f.source == "rtl_hygiene_lint"
+
+    def test_hygiene_object_envelope_is_also_accepted(self, tmp_path):
+        j = tmp_path / "hygiene.json"
+        j.write_text(json.dumps({"findings": [_HYGIENE_RECORD]}))
+        got = mod._load_hygiene_findings(j, rc=1)
+        assert [f.rule_id for f in got] == ["blocking_in_seq"]
+
+    def test_reset_bare_array_is_consumed(self, tmp_path):
+        j = tmp_path / "reset.json"
+        j.write_text(json.dumps([{"file": "dut.v", "line": 7,
+                                  "severity": "ERROR", "rule": "async_mix",
+                                  "message": "mixed reset polarity"}]))
+        got = mod._load_reset_findings(j, rc=1)
+        assert len(got) == 1
+        assert got[0].category == "reset_clock_hygiene"
+        assert got[0].rule_id == "async_mix"
+        assert got[0].message == "mixed reset polarity"
+
+    def test_precheck_real_auditor_list_shape(self, tmp_path):
+        """`rtl_precheck_gate` emits `auditors` as a LIST of AuditorResult."""
+        j = tmp_path / "precheck.json"
+        j.write_text(json.dumps({"summary": {}, "auditors": [
+            {"name": "latch_check", "passed": False, "exit_code": 1,
+             "skipped": False, "stdout_tail": "inferred latch on q"},
+            {"name": "port_check", "passed": True, "exit_code": 0,
+             "skipped": False},
+            {"name": "reset_discipline_check", "passed": True, "exit_code": 0,
+             "skipped": True, "skip_reason": "no L12 JSON supplied"},
+        ]}))
+        got = mod._load_precheck_findings(j, rc=1)
+        by_rule = {f.rule_id: f for f in got}
+        assert set(by_rule) == {"latch_check", "reset_discipline_check"}
+        assert by_rule["latch_check"].severity == "ERROR"
+        assert by_rule["latch_check"].category == "synthesis_hazards"
+        assert "inferred latch on q" in by_rule["latch_check"].message
+        # a check that did not run is reported, never counted as a pass
+        assert by_rule["reset_discipline_check"].severity == "INFO"
+        assert "did not run" in by_rule["reset_discipline_check"].message
+
+    def test_precheck_object_envelope_is_also_accepted(self, tmp_path):
+        j = tmp_path / "precheck.json"
+        j.write_text(json.dumps({"auditors": {
+            "latch_check": {"passed": False, "exit_code": 1,
+                            "stdout_tail": "inferred latch"}}}))
+        got = mod._load_precheck_findings(j, rc=1)
+        assert [f.rule_id for f in got] == ["latch_check"]
+
+
+class TestUnreadableIsNotEmpty:
+    """Every arm here must RAISE. None may return `[]`."""
+
+    def test_missing_file_refuses(self, tmp_path):
+        with pytest.raises(mod.ProducerOutputError) as e:
+            mod._load_hygiene_findings(tmp_path / "absent.json", rc=0)
+        assert "not empty" in str(e.value)
+
+    def test_unparseable_json_refuses(self, tmp_path):
+        j = tmp_path / "hygiene.json"
+        j.write_text("{not json")
+        with pytest.raises(mod.ProducerOutputError):
+            mod._load_hygiene_findings(j, rc=0)
+
+    def test_unknown_shape_refuses(self, tmp_path):
+        j = tmp_path / "hygiene.json"
+        j.write_text(json.dumps({"summary": "all good"}))
+        with pytest.raises(mod.ProducerOutputError):
+            mod._load_hygiene_findings(j, rc=0)
+
+    def test_non_object_records_refuse(self, tmp_path):
+        j = tmp_path / "hygiene.json"
+        j.write_text(json.dumps(["blocking_in_seq"]))
+        with pytest.raises(mod.ProducerOutputError):
+            mod._load_hygiene_findings(j, rc=0)
+
+    def test_producer_that_reached_no_verdict_refuses(self, tmp_path):
+        """rc=2 is `rtl_hygiene_lint`'s UNDETERMINED, and 124/127 are timeout
+        and missing-program. A clean `[]` on disk must not launder them."""
+        j = tmp_path / "hygiene.json"
+        j.write_text("[]")
+        for rc in (2, 124, 127):
+            with pytest.raises(mod.ProducerOutputError) as e:
+                mod._load_hygiene_findings(j, rc=rc, stderr="tool stalled")
+            assert "without reaching a verdict" in str(e.value)
+
+    def test_result_exit_codes_are_not_refusals(self, tmp_path):
+        j = tmp_path / "hygiene.json"
+        j.write_text("[]")
+        for rc in (0, 1):
+            assert mod._load_hygiene_findings(j, rc=rc) == []
+
+    def test_reset_and_precheck_refuse_too(self, tmp_path):
+        with pytest.raises(mod.ProducerOutputError):
+            mod._load_reset_findings(tmp_path / "absent.json", rc=0)
+        with pytest.raises(mod.ProducerOutputError):
+            mod._load_precheck_findings(tmp_path / "absent.json", rc=0)
+        j = tmp_path / "precheck.json"
+        j.write_text(json.dumps({"summary": {}}))
+        with pytest.raises(mod.ProducerOutputError):
+            mod._load_precheck_findings(j, rc=0)
+
+
+class TestEndToEndOnANeutralModule:
+    def _write(self, tmp_path):
+        d = tmp_path / "rtl"
+        d.mkdir()
+        (d / "register_slice.sv").write_text(REGISTER_SLICE)
+        return d
+
+    def test_clean_flipflop_produces_a_report(self, tmp_path):
+        """The issue's own reproduction: this used to exit 1 with no report."""
+        rtl = self._write(tmp_path)
+        rep = mod.review_rtl_dir(rtl, tmp_path / "ev")
+        assert rep.files_reviewed == ["register_slice.sv"]
+        assert rep.total_errors == 0
+        assert rep.verdict in ("PASS", "WARN")
+        assert rep.score >= 7
+
+    def test_cli_emits_both_artifacts(self, tmp_path):
+        import subprocess
+        import sys
+        rtl = self._write(tmp_path)
+        out_md, out_json = tmp_path / "r.md", tmp_path / "r.json"
+        r = subprocess.run(
+            [sys.executable, str(mod.PROGRAMS_DIR / "rtl_review_aggregate.py"),
+             "--rtl-dir", str(rtl), "--tmp-dir", str(tmp_path / "ev"),
+             "--out-md", str(out_md), "--out-json", str(out_json)],
+            capture_output=True, text=True, timeout=600)
+        assert r.returncode == 0, r.stderr
+        assert out_md.is_file() and out_json.is_file()
+        assert json.loads(out_json.read_text())["score"] >= 7
+
+    def test_cli_refuses_loudly_and_writes_nothing_when_a_producer_is_unreadable(
+            self, tmp_path):
+        """The trap: a crash must not become an empty finding set or a PASS.
+
+        The evidence directory is made unwritable, so the sub-program cannot
+        deposit its JSON at all. The CLI must exit 3 naming the producer, and
+        must write NEITHER report.
+        """
+        import subprocess
+        import sys
+        rtl = self._write(tmp_path)
+        ev = tmp_path / "ev"
+        ev.mkdir()
+        ev.chmod(0o555)
+        out_md, out_json = tmp_path / "r.md", tmp_path / "r.json"
+        try:
+            r = subprocess.run(
+                [sys.executable,
+                 str(mod.PROGRAMS_DIR / "rtl_review_aggregate.py"),
+                 "--rtl-dir", str(rtl), "--tmp-dir", str(ev),
+                 "--out-md", str(out_md), "--out-json", str(out_json)],
+                capture_output=True, text=True, timeout=600)
+        finally:
+            ev.chmod(0o755)
+        assert r.returncode == 3, (r.returncode, r.stdout, r.stderr)
+        assert "REFUSING" in r.stderr and "rtl_hygiene_lint" in r.stderr
+        assert not out_md.exists() and not out_json.exists()
+
+    def test_findings_from_the_real_producers_reach_the_report(self, tmp_path):
+        """The NON-EMPTY arm, driven by the REAL sub-programs.
+
+        Every other field-preservation test in this file feeds the loaders
+        SYNTHETIC records. If the real producers named their fields differently,
+        those tests would all still pass while the aggregate silently dropped
+        the data. This one runs the actual chain on RTL that really does trip
+        the linters, and asserts the findings arrive populated.
+
+        Measured on the base code, this same directory raised
+        `AttributeError` and produced no report at all, so nothing below was
+        reachable before the fix.
+
+        Deliberately NOT pinned to specific rule names — those are the linters'
+        business and may change. What is pinned is that findings survive the
+        loaders with their fields intact, that more than one producer
+        contributes, and that the score responds.
+        """
+        d = tmp_path / "rtl"
+        d.mkdir()
+        (d / "dirty_block.v").write_text(
+            "module dirty_block(input clk, input rst, input [3:0] a,\n"
+            "                   output reg [3:0] y, output reg z);\n"
+            "  reg [3:0] tmp;\n"
+            "  always @(posedge clk) begin\n"
+            "    tmp = a + 1;\n"
+            "    y <= tmp;\n"
+            "  end\n"
+            "  always @(*) begin\n"
+            "    if (a[0]) z = 1'b1;\n"
+            "  end\n"
+            "endmodule\n")
+        rep = mod.review_rtl_dir(d, tmp_path / "ev")
+
+        got = [f for cat in rep.per_category.values() for f in cat.findings]
+        assert got, "the real producers reported nothing on RTL that trips them"
+
+        # the producer really did emit a non-empty array — otherwise this test
+        # would pass on a chain that reported nothing
+        produced = json.loads((tmp_path / "ev" / "hygiene.json").read_text())
+        assert isinstance(produced, list) and produced, produced
+
+        for f in got:
+            assert f.rule_id and f.severity and f.message and f.source, f.as_dict()
+        # EACH of the three loaders must contribute by NAME. A bare
+        # "at least two distinct sources" assertion is too weak and I proved
+        # it: neutering `_load_reset_findings` to `return []` left two sources
+        # standing (hygiene + precheck) and the test still passed. All three
+        # loaders were broken, so all three are named here.
+        sources = {f.source.split(".")[0] for f in got}
+        for producer in ("rtl_hygiene_lint", "reset_discipline_check",
+                         "rtl_precheck_gate"):
+            assert producer in sources, (producer, sorted(sources))
+        # and the score responds to them rather than staying at the clean value
+        assert rep.score < 9, rep.score
+        assert rep.total_errors + rep.total_warns >= 1
