@@ -108,7 +108,7 @@ IMAGE_RE = re.compile(
 #: enforces that this string, the runner module's, and the manifest's are one.
 RUNNER_IMAGE = (
     (os.environ.get("VIBEIC_EDA_IMAGE_REPO") or "ghcr.io/vibeic/vibeic-eda")
-    + "@sha256:8da785a8d3275884ad0d0ee0fb10f7e90d8b7bf11a08d38e9559b0764112480f"
+    + "@sha256:8c5694abdf5c269c1d9def5368704e0c4b51c869d1d9c9380e123e07657fe9eb"
 )
 
 #: THE RUNNER PROFILE, ONCE.  `_runner_profile` VALIDATES against this and
