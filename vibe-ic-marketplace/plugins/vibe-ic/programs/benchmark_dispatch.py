@@ -4627,10 +4627,35 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
 
 _CORRECTION_REFUSED = "REVIEW_CORRECTION_REFUSED"
 _REGATE_REFUSED = "PROGRAM_REGATE_REFUSED"
-_PROGRAM_RETRY_DEPRECATION = (
-    "DEPRECATED: --program-retry is now an alias of --program-regate and will "
-    "be removed one version after v1.17.75 (issue #2047 merged the two "
-    "Program re-entry operations into one). Re-run with --program-regate.")
+def _program_retry_removal_clause() -> str:
+    """"removed one version after <the version the MANIFEST reports>".
+
+    One clause, used by both the deprecation line and the `--help` text, so
+    the two can never name different versions -- and neither carries a typed
+    literal that the landing version can contradict.
+    """
+    running = _program_version()
+    since = f"v{running}" if running else (
+        "this plugin's current version (UNREADABLE from the manifest)")
+    return f"removed one version after {since}"
+
+
+def _program_retry_deprecation() -> str:
+    """The alias's deprecation line, naming the version from the MANIFEST.
+
+    A typed version literal here is a claim that goes stale the moment the
+    merge lands under a different number than whoever wrote it guessed -- and
+    the landing version is assigned at landing, not by the author. The running
+    version is read from `.claude-plugin/plugin.json` instead, so the line
+    cannot disagree with the plugin printing it.
+
+    An unreadable manifest degrades LOUDLY: the sentence says the version could
+    not be read rather than quoting a number nobody measured.
+    """
+    return ("DEPRECATED: --program-retry is now an alias of --program-regate "
+            f"and will be {_program_retry_removal_clause()} (issue #2047 "
+            "merged the two Program re-entry operations into one). Re-run "
+            "with --program-regate.")
 
 
 def _correction_path(path: str | Path, run_p: Path | None = None,
@@ -5450,7 +5475,7 @@ def cmd_resume(bench: str, dataset: str, run: str, jobs: int = 1,
             raise ValueError(f"{_REGATE_REFUSED}: --program-retry is the "
                              "deprecated alias of --program-regate; give one")
         if program_retry is not None:
-            print(_PROGRAM_RETRY_DEPRECATION, file=sys.stderr)
+            print(_program_retry_deprecation(), file=sys.stderr)
             program_regate, program_retry = program_retry, None
         if review_correction is not None and program_regate is not None:
             raise ValueError(f"{_REGATE_REFUSED}: cannot combine with review correction")
@@ -5536,8 +5561,8 @@ def main():
                     help="DEPRECATED alias of --program-regate (issue #2047 "
                          "merged the two Program re-entry operations into "
                          "one). Runs the merged operation and prints a "
-                         "deprecation line; removed one version after "
-                         "v1.17.75.")
+                         "deprecation line; "
+                         + _program_retry_removal_clause() + ".")
     ap.add_argument("--limit", type=int, default=0,
                     help="with --solve: stop after N problems (0 = all)")
     ap.add_argument("--dataset", help="dataset path on disk")

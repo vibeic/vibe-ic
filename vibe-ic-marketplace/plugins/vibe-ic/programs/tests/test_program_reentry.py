@@ -33,6 +33,7 @@ import hashlib
 import inspect
 import json
 import os
+import re
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -1057,7 +1058,66 @@ def test_the_alias_and_the_name_together_are_refused_not_ordered(
 def test_the_alias_is_declared_deprecated_in_the_help_text():
     source = Path(bd.__file__).read_text()
     assert "DEPRECATED alias of --program-regate" in source
-    assert bd._PROGRAM_RETRY_DEPRECATION.startswith("DEPRECATED: --program-retry")
+    assert bd._program_retry_deprecation().startswith("DEPRECATED: --program-retry")
+
+
+#: The version this lane's author typed while the merge was being written. The
+#: branch lands under a DIFFERENT number -- landing versions are assigned at
+#: landing -- so any occurrence of this literal is a forward claim the plugin
+#: itself can contradict.
+_GUESSED_LANDING_VERSION = "1.17." + "75"
+
+_SKILL = (Path(bd.__file__).resolve().parents[1]
+          / "skills" / "open-benchmark-methodology" / "SKILL.md")
+
+
+@pytest.mark.parametrize("name", ["program", "skill"])
+def test_the_removal_window_carries_no_typed_version_literal(name):
+    """The deprecation window is read, not typed.
+
+    A literal here is a claim about a version nobody has assigned yet: the
+    merge's landing number is decided at landing. Both surfaces must therefore
+    be free of the guess, and the program's own line must come from the
+    manifest instead.
+    """
+    path = Path(bd.__file__) if name == "program" else _SKILL
+    text = path.read_text()
+    assert _GUESSED_LANDING_VERSION not in text, (
+        f"{path.name} still carries the guessed landing version "
+        f"{_GUESSED_LANDING_VERSION}")
+
+
+def test_the_removal_window_names_the_version_the_manifest_reports():
+    """Read, and read from the RIGHT place: the running plugin's manifest."""
+    running = bd._program_version()
+    assert running, "NOT_MEASURED: this tree's plugin manifest has no version"
+    clause = bd._program_retry_removal_clause()
+    assert clause == f"removed one version after v{running}", clause
+    assert clause in bd._program_retry_deprecation()
+
+
+def test_an_unreadable_manifest_degrades_loudly(monkeypatch):
+    """"Could not read it" is never a quoted number nobody measured."""
+    monkeypatch.setattr(bd, "_program_version", lambda: "")
+    clause = bd._program_retry_removal_clause()
+    assert "UNREADABLE from the manifest" in clause, clause
+    assert not re.search(r"v\d+\.\d+\.\d+", clause), clause
+
+
+def test_the_help_text_and_the_deprecation_line_cannot_disagree(capsys):
+    """One clause feeds both, so they cannot name different versions."""
+    monkeypatch_argv = ["benchmark_dispatch.py", "--help"]
+    import contextlib                                    # noqa: PLC0415
+    saved = bd.sys.argv
+    bd.sys.argv = monkeypatch_argv
+    try:
+        with contextlib.suppress(SystemExit):
+            bd.main()
+    finally:
+        bd.sys.argv = saved
+    help_text = " ".join(capsys.readouterr().out.split())
+    clause = bd._program_retry_removal_clause()
+    assert clause in help_text, (clause, help_text[-400:])
 
 
 # ── the merge lost nothing: membership, not counts ────────────────────

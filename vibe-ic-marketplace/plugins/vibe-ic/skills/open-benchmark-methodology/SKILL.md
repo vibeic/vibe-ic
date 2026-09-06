@@ -160,10 +160,18 @@ python3 programs/benchmark_dispatch.py <bench> --resume \
 ```
 
 `--program-retry` is a DEPRECATED alias of `--program-regate`: it runs the same
-merged operation and prints a deprecation line on stderr. It is removed one
-version after v1.17.75. Giving both names in one resume is refused, not ordered.
-Until v1.17.75 these were TWO operations (`--program-regate`, v1.17.63, and
-`--program-retry`, v1.17.71) for one job; issue #2047 merged them.
+merged operation and prints a deprecation line on stderr. That line names the
+removal window, and it reads the version from the plugin's own manifest rather
+than a literal typed here — the merge's landing version is assigned at landing,
+so any number written into this page would be a guess that the plugin itself
+could contradict. Run `--program-retry`, or `benchmark_dispatch.py --help`, to
+see which version applies to the plugin you are actually running. Giving both
+names in one resume is refused, not ordered.
+
+Before the merge these were TWO operations (`--program-regate`, landed v1.17.63,
+and `--program-retry`, landed v1.17.71) for one job; issue #2047 merged them.
+Those two numbers are history — where each operation actually landed — and stay
+written down; the removal window is a forward claim and is not.
 
 **BOTH identities, always.** The merged operation refuses unless the Program
 moved in BOTH senses, because neither is necessary or sufficient for the other:
