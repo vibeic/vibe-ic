@@ -1753,3 +1753,80 @@ def test_a_bound_source_changing_during_preparation_is_refused(
     assert "source changed during preparation" in err
     assert str(working) in err, err
     assert bd._read_jsonl(run / bd._REVIEW_WORKLIST)[0] == old
+
+
+# ── the six refusals a PARALLEL census wrongly reported as reached ─────
+#
+# The original mutation sweep ran 4-way parallel at load 20-30 and reported
+# 66/66 sites reached. Re-run SEQUENTIALLY at load ~3 on the landed tree, six
+# of those verdicts do not reproduce: the sites below are reached by no test.
+# The brief's rule -- re-run a candidate red ALONE at low load -- had been
+# applied to the UNREACHED direction only, and a false REACHED is just as
+# damaging: it closes the census on a refusal nothing pins.
+#
+# Independently corroborated: these six are also exactly the sites whose
+# message no test names, found by a separate ast scan of the module's string
+# literals. Two methods, one answer.
+
+def test_a_request_that_is_not_a_json_object_is_refused(
+        tmp_path, monkeypatch, capsys):
+    """A JSON list parses fine and has no fields. Deleting this refusal lets it
+    through to an AttributeError, which the front door reports as "malformed
+    evidence" -- still rc=2, still state-preserving, so a test that asserted
+    only those would never notice."""
+    run, stuck, signed, path, request = _stuck_request(tmp_path, monkeypatch)
+    path.write_text(json.dumps(["not", "an", "object"]))
+    assert _resume(run, path) == 2
+    assert "expected a JSON object" in _refusal(capsys)
+
+
+def test_a_task_with_the_wrong_schema_is_refused(tmp_path, monkeypatch, capsys):
+    run, stuck, signed, path, request = _stuck_request(tmp_path, monkeypatch)
+    _rebind(run, stuck, request, path, schema="vibeic.benchmark.review_task.v0")
+    assert _resume(run, path) == 2
+    assert "wrong task schema" in _refusal(capsys)
+
+
+def test_a_task_without_its_repair_provenance_is_refused(
+        tmp_path, monkeypatch, capsys):
+    """The signed input's provenance is what the whole operation is about; a
+    task that carries none has nothing to re-enter FROM."""
+    run, stuck, signed, path, request = _stuck_request(tmp_path, monkeypatch)
+    _rebind(run, stuck, request, path, repair_provenance=None)
+    assert _resume(run, path) == 2
+    assert "task lacks its AI repair provenance" in _refusal(capsys)
+
+
+def test_a_project_that_is_not_the_runner_owned_one_is_refused(
+        tmp_path, monkeypatch, capsys):
+    """The operation re-runs the Program over the RUNNER's project. A task
+    pointing at some other directory -- even one inside the run -- is naming a
+    tree whose contents nothing in this run vouches for."""
+    run, stuck, signed, path, request = _stuck_request(tmp_path, monkeypatch)
+    elsewhere = Path(run) / "not_the_project"
+    elsewhere.mkdir()
+    _rebind(run, stuck, request, path, project=str(elsewhere))
+    assert _resume(run, path) == 2
+    assert "project is not the runner-owned project" in _refusal(capsys)
+
+
+def test_drifted_phase1_provenance_is_refused(tmp_path, monkeypatch, capsys):
+    """The prompt is bound separately; this is the REST of the Phase-1 input.
+    A task whose recorded provenance no longer describes the project is
+    describing a different design."""
+    run, stuck, signed, path, request = _stuck_request(tmp_path, monkeypatch)
+    _rebind(run, stuck, request, path,
+            phase1_provenance={"schema": "forged", "inputs": []})
+    assert _resume(run, path) == 2
+    assert "Phase-1 provenance drift" in _refusal(capsys)
+
+
+def test_a_project_holding_an_unsupported_file_kind_is_refused(
+        tmp_path, monkeypatch, capsys):
+    """The project tree is bound file by file. Something that is neither a
+    regular file, a directory nor a symlink cannot be hashed, and a tree that
+    cannot be hashed cannot be compared before and after the run."""
+    run, stuck, signed, path, request = _stuck_request(tmp_path, monkeypatch)
+    os.mkfifo(Path(stuck["project"]) / "a_named_pipe")
+    assert _resume(run, path) == 2
+    assert "unsupported project file" in _refusal(capsys)
