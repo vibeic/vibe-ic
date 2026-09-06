@@ -1784,6 +1784,51 @@ def extract_architecture_directives(desc_text: str) -> List[Tuple[str, str, str]
     return out
 
 
+# Reset behaviour a template's CODE commits to, and the opposite of each. These
+# are not architecture directives -- an input states them as plain fact ("rst_n:
+# Active low reset") rather than as a "must not" -- but they are decidable on
+# both sides: the input states one pole, and the template's own always-block and
+# reset test show which pole it implements. Measured on the base: 11 of the 16
+# templates reset asynchronously and 3 synchronously, and nothing checked that
+# against what the input said.
+_OPPOSITE_POLE = {
+    "async_reset": "sync_reset",
+    "sync_reset": "async_reset",
+    "active_low_reset": "active_high_reset",
+    "active_high_reset": "active_low_reset",
+}
+
+_RESET_TOKEN = re.compile(r"\b\w*(?:rst|reset)\w*\b", re.I)
+
+
+def extract_stated_reset_poles(desc_text: str) -> set:
+    """Reset timing/polarity poles the INPUT states, as a set of pole tags.
+
+    A pole counts only when the phrase sits on a line that also names a reset
+    signal, so an "active low" said about some other pin is not read as a
+    statement about reset. When a text states BOTH poles of a pair it is
+    ambiguous and neither is recorded.
+    """
+    poles = set()
+    for line in (desc_text or "").splitlines():
+        low = line.lower()
+        if not _RESET_TOKEN.search(low):
+            continue
+        if "asynchronous reset" in low or "async reset" in low:
+            poles.add("async_reset")
+        if "synchronous reset" in low or "sync reset" in low:
+            poles.add("sync_reset")
+        if "active low" in low or "active-low" in low:
+            poles.add("active_low_reset")
+        if "active high" in low or "active-high" in low:
+            poles.add("active_high_reset")
+    for a, b in (("async_reset", "sync_reset"),
+                 ("active_low_reset", "active_high_reset")):
+        if a in poles and b in poles:
+            poles -= {a, b}
+    return poles
+
+
 def _rtl_commitments(rtl: str) -> set:
     """Which structural properties a piece of emitted RTL actually commits to.
 
@@ -1808,6 +1853,21 @@ def _rtl_commitments(rtl: str) -> set:
         tags.add("for_loop")
     if "gray" in low:
         tags.add("gray_code")
+    # reset poles, read from the code: the sensitivity list says whether reset is
+    # asynchronous, and the reset test says which level asserts it.
+    sens = re.findall(r"always\s*@\s*\(([^)]*)\)", rtl)
+    seq = [e for e in sens if "edge" in e]
+    if seq:
+        if any(re.search(r"edge\s+\w*(?:rst|reset)\w*", e, re.I) for e in seq):
+            tags.add("async_reset")
+        else:
+            tags.add("sync_reset")
+        tests = re.findall(r"if\s*\(\s*(!?)\s*(\w*(?:rst|reset)\w*)\s*\)",
+                           rtl, re.I)
+        levels = {("active_low_reset" if bang else "active_high_reset")
+                  for bang, _ in tests}
+        if len(levels) == 1:
+            tags |= levels
     return tags
 
 
@@ -1826,6 +1886,14 @@ def architecture_conflict(desc_text: str, shape: str) -> Optional[Dict[str, str]
     if shape not in _TEMPLATES:
         return None
     have = template_commitments(shape)
+    for pole in sorted(extract_stated_reset_poles(desc_text)):
+        if _OPPOSITE_POLE[pole] in have and pole not in have:
+            return {"shape_declined": shape, "polarity": "stated",
+                    "property": pole,
+                    "stated": f"the input states {pole.replace('_', ' ')}",
+                    "reason": "the input states a reset behaviour that the "
+                              "canonical topology for this shape implements "
+                              "the other way"}
     for pol, tag, clause in extract_architecture_directives(desc_text):
         if pol == "forbid" and tag in have:
             return {"shape_declined": shape, "polarity": "forbid",

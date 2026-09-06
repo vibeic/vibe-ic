@@ -536,3 +536,111 @@ def test_contract_layer_does_not_mis_fire_on_near_misses(desc):
     template claimed the input, and it declines everything that states no
     handshake."""
     assert rcs.detect_shape(desc) is None
+
+
+# ============================================================================
+# The second half of the same exposure: a STATED BEHAVIOUR, not a stated
+# architecture. An input that matches a shape's words while stating the other
+# reset behaviour used to be answered with the template anyway.
+#
+# Measured on the base, independently of the program (a raw scan of the sixteen
+# template texts): 11 templates reset ASYNCHRONOUSLY, 3 SYNCHRONOUSLY, and 2 are
+# combinational -- and nothing compared that with what the description said.
+# Both sides are decidable here, which is why this dimension is closed and the
+# shift-direction one (see the lane's LAND.md) is not: the pole is read out of
+# the template's own always-block and reset test, never out of its prose.
+# ============================================================================
+
+_ASYNC_TEMPLATES = {
+    "async_gray_fifo", "frac_clock_divider_3p5", "mealy_seq_detector_10011",
+    "odd_clock_divider", "parallel_to_serial_4", "pipelined_ripple_adder_64",
+    "pipelined_unsigned_multiplier_8", "pulse_detect_0to1to0",
+    "serial_to_parallel_8", "traffic_light_fsm", "triangle_wave_generator_5",
+}
+_SYNC_TEMPLATES = {
+    "ieee754_single_multiplier", "lfsr4_xnor_left", "radix2_signed_divider",
+}
+_COMBINATIONAL_TEMPLATES = {
+    "barrel_shifter_right_8", "combinational_long_divider",
+}
+
+
+def test_reset_poles_are_derived_from_the_template_code():
+    """Compared by MEMBERSHIP against a partition established by reading the
+    template texts directly, so a template that is re-authored to reset the
+    other way moves its own commitment with it."""
+    derived_async = {k for k in rcs._TEMPLATES
+                     if "async_reset" in rcs.template_commitments(k)}
+    derived_sync = {k for k in rcs._TEMPLATES
+                    if "sync_reset" in rcs.template_commitments(k)}
+    derived_none = {k for k in rcs._TEMPLATES
+                    if not {"async_reset", "sync_reset"}
+                    & rcs.template_commitments(k)}
+    assert derived_async == _ASYNC_TEMPLATES
+    assert derived_sync == _SYNC_TEMPLATES
+    assert derived_none == _COMBINATIONAL_TEMPLATES
+    assert "active_low_reset" in rcs.template_commitments("odd_clock_divider")
+    assert "active_high_reset" in rcs.template_commitments("lfsr4_xnor_left")
+
+
+def test_no_canonical_description_conflicts_with_its_own_template():
+    """Zero false positives on the population that must never move, and NOT
+    vacuous: several of these descriptions really do state a pole, and it
+    agrees."""
+    stated = 0
+    for shape, desc in _INLINE_POS.items():
+        poles = rcs.extract_stated_reset_poles(desc)
+        stated += bool(poles)
+        assert rcs.architecture_conflict(desc, shape) is None, shape
+        assert rcs.detect_shape(desc) == shape
+    assert stated >= 6
+
+
+def _flip_reset_pole(desc, pole):
+    """Rewrite a description to state the OPPOSITE pole of `pole`."""
+    if pole == "active_low_reset":
+        return re.sub(r"[Aa]ctive[- ]low", "Active high", desc)
+    if pole == "active_high_reset":
+        flipped = re.sub(r"[Aa]ctive[- ]high", "Active low", desc)
+        return flipped if flipped != desc else desc + "rst: Active low reset.\n"
+    if pole == "async_reset":
+        return desc + "The reset is a synchronous reset.\n"
+    return desc + "The reset is an asynchronous reset.\n"
+
+
+_POLE_CASES = [(shape, pole)
+               for shape, desc in _INLINE_POS.items()
+               for pole in sorted(p for p in rcs.template_commitments(shape)
+                                  if p.endswith("_reset"))
+               if _flip_reset_pole(desc, pole) != desc]
+
+
+@pytest.mark.parametrize("shape,pole", _POLE_CASES)
+def test_stating_the_opposite_reset_pole_withdraws_the_template(shape, pole):
+    """The other direction, per shape: state the pole the template does NOT
+    implement and the template is withdrawn and the pole is NAMED."""
+    flipped = _flip_reset_pole(_INLINE_POS[shape], pole)
+    conflict = rcs.architecture_conflict(flipped, shape)
+    assert conflict is not None and conflict["polarity"] == "stated"
+    assert conflict["property"] == rcs._OPPOSITE_POLE[pole]
+    assert rcs.detect_shape(flipped) is None
+    why = rcs.route_to_ai_reason(flipped)
+    assert why is not None and why["property"] == rcs._OPPOSITE_POLE[pole]
+
+
+def test_a_description_stating_both_poles_records_neither():
+    """Contradictory input is not a licence to pick: when both poles of a pair
+    are stated the program records no pole and keeps its previous behaviour."""
+    both = (_INLINE_POS["odd_clock_divider"]
+            + "rst_n: Active high reset.\n")
+    assert "active low" in both.lower() and "active high" in both.lower()
+    assert rcs.extract_stated_reset_poles(both) == set()
+    assert rcs.detect_shape(both) == "odd_clock_divider"
+
+
+def test_a_pole_said_about_another_signal_is_not_a_reset_statement():
+    """`active low` on a non-reset pin must not be read as a reset statement."""
+    desc = (_INLINE_POS["odd_clock_divider"]
+            + " enable_n: An active high enable that gates the divider.\n")
+    assert rcs.extract_stated_reset_poles(desc) == {"active_low_reset"}
+    assert rcs.detect_shape(desc) == "odd_clock_divider"
