@@ -188,7 +188,29 @@ _LEDGER = frozenset({
     "_clock_port_against_the_design",
     "_clock_port_sink_count", "_compute_downsized_die",
     "_compute_loosened_die", "_compute_resized_die",
-    "_compute_spare_density", "_def_pdn_evidence",
+    "_compute_spare_density",
+    # RECORDED with the commit that adds it (CT-03). `declared_die_rect`
+    # answers "which rectangle is the DIE on this run" by READING the record
+    # `step_pnr` wrote — the shuttle slot's own `DIE_AREA` first, then
+    # `reports/phase3/floorplan_rectangles.json` — and returning it beside the
+    # basis that produced it. Its `die` token is the only thing that makes the
+    # name look like PPA logic.
+    #
+    # WHY IT IS NOT `_ppa/area.py`, from that module's own rules. That module
+    # is a RECORDS module: it takes METRIC RECORDS in and emits an area
+    # verdict. This function emits no verdict and computes no area; it is the
+    # ONE place that resolves an ARTEFACT PATH into the rectangle four
+    # DOWNSTREAM RUNNER CALL SITES must pass to their subprocesses — the seal
+    # ring, the die-wide density fill, the per-layer density measurement and
+    # the metrics aggregate. That is argv construction, which is exactly what
+    # the message below calls orchestration: "passes artefact paths".
+    #
+    # Precedent, not a one-off: `_slot_geometry`, the predicate it REPLACES at
+    # three of those four call sites, has never been in this ledger because its
+    # name carries no domain token — the same function doing the same job,
+    # ledgered or not by its spelling alone.
+    "declared_die_rect",
+    "_def_pdn_evidence",
     # RECORDED after 6dd97611e, which added this emitter without the ledger
     # decision this blocking test requires. `_cts_master_bound_check_tcl`
     # produces a report-only Tcl fragment inside the adjacent live
