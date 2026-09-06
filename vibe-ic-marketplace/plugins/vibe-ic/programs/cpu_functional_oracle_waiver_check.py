@@ -104,6 +104,90 @@ def _waiver_track_class_label(xml: str) -> str:
 _NON_EXECUTABLE_TEST_KINDS = frozenset({"verification_checklist"})
 
 
+# ORGANIC #2055 — NAME THE ROW KIND THE STEP COULD NOT RUN.
+#
+# MEASURED, u_hawaii_adc at v1.17.83 (lane czadc28, front door, image 0.3.46):
+# this gate's blocking sentence read "0 functional tests ran for 4 declared
+# L10/L12 row(s). Connectivity is not a functional oracle." Every one of those
+# four rows was `kind: verification_intent` — analog acceptance prose harvested
+# from the input's `## Verification intent` list — and the TB producer had
+# already said so in its own SKIP ("0 in scope, 4 out of scope"). The sentence
+# named neither fact, so three separate lanes read the wall as a defect in the
+# RTL and re-authored a testbench that was never the missing piece.
+#
+# The numerator and the denominator are both kept exactly as they were; this
+# adds the two facts a reader needs to act: WHAT KIND the declared rows are,
+# and HOW MANY of them any producer in the flow is scoped to author. The
+# producer's scope is IMPORTED from `testbench_gen`, which owns it, rather than
+# respelled here — the #761 two-private-scopes shape, refused a third time.
+#
+# chip-AGNOSTIC: a declared `kind` vocabulary, never a chip/vendor/SKU literal.
+def _row_kind_disclosure(project: Path) -> str:
+    """`" [verification_intent 2]; 0 of 2 authorable ..."` for the blocking
+    sentence, or `""` when the rows or the producer scope cannot be read.
+
+    "Could not read it" is not "read it and it was empty": on any failure this
+    returns the empty string and the sentence keeps exactly the wording it had
+    before, rather than asserting a breakdown nobody measured.
+    """
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import testbench_gen as _tb
+    except Exception:
+        return ""
+    rows: list = []
+    gd = _pl.generated_docs_dir(project)
+    rows.extend(_declared_rows(
+        gd / "L10_TEST_CASES.json", ("test_cases", "cases", "vectors")))
+    rows.extend(_declared_rows(
+        gd / "L12_BEHAVIORAL_SEQUENCES.json",
+        ("sequences", "behavioral_sequences")))
+    rows = [r for r in rows if isinstance(r, dict)]
+    if not rows:
+        return ""
+    try:
+        hist = _tb.kind_histogram(rows)
+        scope = _tb.SCAFFOLD_KINDS
+        authorable = sum(1 for r in rows if _tb.case_kind(r) in scope)
+    except Exception:
+        return ""
+    kinds = ", ".join(f"{k} {v}" for k, v in hist.items()) or "(none)"
+    return (f" [{kinds}]; {authorable} of {len(rows)} row(s) fall inside the "
+            f"TB producer's scaffold scope "
+            f"{{{', '.join(sorted(scope))}}} — the rest carry no stimulus any "
+            f"producer in the flow is scoped to drive, so this shortfall is "
+            f"NOT a statement about the RTL")
+
+
+def _row_kind_denominator(project: Path) -> dict:
+    """The machine-readable half of `_row_kind_disclosure`.
+
+    Returns ``{}`` — the keys ABSENT, not zeroed — when the rows or the
+    producer scope could not be read, so a consumer can tell "nothing was
+    declared" from "nothing could be measured"."""
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import testbench_gen as _tb
+    except Exception:
+        return {}
+    gd = _pl.generated_docs_dir(project)
+    rows = [r for r in (
+        _declared_rows(gd / "L10_TEST_CASES.json",
+                       ("test_cases", "cases", "vectors"))
+        + _declared_rows(gd / "L12_BEHAVIORAL_SEQUENCES.json",
+                         ("sequences", "behavioral_sequences")))
+        if isinstance(r, dict)]
+    try:
+        return {
+            "declared_row_kinds": _tb.kind_histogram(rows),
+            "rows_inside_tb_producer_scaffold_scope": sum(
+                1 for r in rows if _tb.case_kind(r) in _tb.SCAFFOLD_KINDS),
+            "tb_producer_scaffold_scope": sorted(_tb.SCAFFOLD_KINDS),
+        }
+    except Exception:
+        return {}
+
+
 def _split_executable(rows: list) -> "tuple[list, list]":
     """(executable, process_only) over declared test rows."""
     executable, process_only = [], []
@@ -233,6 +317,10 @@ def _evidence_summary(project: Path) -> dict:
                 "testbench can drive"),
             "l12_behavioral_sequences": l12,
             "total_declared_rows": l10 + l12,
+            # ORGANIC #2055 — the same two facts the blocking sentence now
+            # carries, in machine-readable form. Absent (not zero) when the
+            # rows or the producer scope could not be read.
+            **_row_kind_denominator(project),
         },
         "functional_test_denominator": functional,
         "coverage": coverage,
@@ -375,13 +463,15 @@ def _evaluate(project: Path) -> "tuple[int, str]":
             f"tests={summ['tests']} passed={summ['passed']} "
             f"failures={summ['failures']} errors={summ['errors']} "
             f"(errors = testbenches that never ran) for "
-            f"{denom['total_declared_rows']} declared L10/L12 row(s). "
+            f"{denom['total_declared_rows']} declared L10/L12 row(s)"
+            f"{_row_kind_disclosure(project)}. "
             f"No waiver is granted.")
     return 1, (
         f"INCOMPLETE: {_waiver_track_class_label(xml)} — connectivity-only "
         f"evidence reached FULL_STACK_TB_DONE (evidence: {evidence}), but 0 "
         f"functional tests ran for {denom['total_declared_rows']} declared "
-        "L10/L12 row(s). Connectivity is not a functional oracle. Run the "
+        f"L10/L12 row(s){_row_kind_disclosure(project)}. Connectivity is not "
+        "a functional oracle. Run the "
         "program-first professional_tb_gen route, then fill unsupported "
         "design-specific reference semantics with the testbench-gen expert "
         "fallback and re-run Step 4. No waiver is granted.")

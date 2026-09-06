@@ -118,6 +118,12 @@ import floorplan_contract as _fpc
 from l_doc_consumer_contract import project_relative_source
 from _prose_polarity import is_denied as _prose_is_denied
 from _prose_polarity import sentence_scope as _prose_sentence_scope
+# ORGANIC #2055 — the two TIERS, which are not interchangeable: a bare
+# "no"/"not" DENIES the proposition, while "n/a"/"removed"/"superseded"
+# RETIRES a row the document still prints. `_harvest_test_cases_from_input_
+# tables` acts differently on each; see `_v2055_oracle_cell_polarity`.
+from _prose_polarity import DENIAL_CORE_RE as _PROSE_DENIAL_CORE_RE
+from _prose_polarity import blank_bracketed as _prose_blank_bracketed
 from _specrtl_common import strip_comments as _strip_hdl_comments
 # THE L-document write chokepoint. Every path in this file that writes a
 # `generated_docs/*.json` goes through `_stamp.dump`, which records the
@@ -14409,6 +14415,100 @@ def _segment_is_port_stem(seg: str) -> bool:
     return False
 
 
+# ORGANIC #2060 — A RECORD SAYS WHETHER IT CAME FROM A PORT TABLE.
+#
+# `_PORT_TABLE_STRATEGIES` is an ALLOW-LIST KEYED ON A NAME. Every port-table
+# extractor added since it was written had to be remembered and added to it, and
+# the failure when nobody remembers is SILENT: form 2 of the corroboration below
+# simply does not fire, the pin fails `_pin_has_port_like_evidence`, and the
+# L1.pin_table -> L9 promoter drops a real port with no diagnostic. The pin does
+# not appear anywhere as refused; it is absent.
+#
+# MEASURED, and this is why the mechanism is being replaced rather than the list
+# extended: lane czport's #2060 work adds two new port-table extractors to
+# `phase1_port_extract` — a Verilog code-region port declaration and a markdown
+# signal-table row. Both mint their own strategy string. Neither string can be
+# in a frozenset written before they existed, so on the day that lands, every
+# port either of them finds is dropped here unless this file was edited in the
+# same breath. That coupling between two files in two lanes is the defect; the
+# list is only where it shows.
+#
+# THE RULING (owner, this lane): ask the RECORD, not the name. An extractor that
+# read a port table says so ON THE RECORD IT PRODUCES, and this predicate reads
+# that. A new extractor is then corroborated the day it is written, by declaring
+# a fact about its own output, with no second file to remember.
+#
+# THE NAME LIST IS KEPT AS A COMPATIBILITY FALLBACK AND IS NOT THE CONTRACT ANY
+# MORE. Every record the list corroborates today is still corroborated, so this
+# change cannot drop a port; it can only stop dropping ones it should never have
+# dropped. That direction is the whole safety argument, and a test asserts it
+# over the full roster rather than over a sample.
+#
+# chip-AGNOSTIC: a record flag and a strategy-name convention; no chip, PDK or
+# vendor literal.
+
+#: Keys through which a producer declares "this record came from a port table".
+#: Read as a BOOLEAN fact about the record. Several spellings are accepted
+#: because the producers are several, and demanding one spelling is how the
+#: name-list coupling would come back one level down.
+_V2060_PORT_TABLE_FLAG_KEYS = (
+    "from_port_table", "port_table_row", "is_port_table_row",
+    "structured_port_row",
+)
+
+#: A strategy name that DECLARES ITS OWN SHAPE. An extractor whose strategy
+#: string says it read a port declaration, a port/signal/pin table or an
+#: interface table has stated the fact this predicate is asking about — it does
+#: not also need to be entered in a frozenset in another file.
+#:
+#: This is the SAME KIND of rule the evidence branch of
+#: `_pin_has_port_like_evidence` has always applied to the `evidence` string
+#: ("pipe", "table row", "port decl", "signal", ...); it is applied to the
+#: strategy string here because that is where the newer extractors put it.
+#: Strictly ADDITIVE — it can only corroborate more records, never fewer, which
+#: is the only direction that cannot drop a port.
+#:
+#: MEASURED against the two strategies lane czport's #2060 work mints,
+#: `verilog_code_region_port_decl_issue2060` and
+#: `markdown_signal_table_port_row_issue2060`: both are recognised by shape, so
+#: the day that extractor lands its ports are corroborated here without this
+#: file being edited in the same breath. That coupling is the defect being
+#: removed, so leaving it in place for the very change that exposed it would be
+#: fixing the instance and keeping the mechanism.
+_V2060_SELF_DECLARING_STRATEGY_RE = re.compile(
+    r"(?i)port[_\- ]?decl|port[_\- ]?row|port[_\- ]?table|"
+    r"signal[_\- ]?table|pin[_\- ]?table|interface[_\- ]?table|"
+    r"port[_\- ]?bullet|port[_\- ]?bind")
+
+
+def _v2060_record_declares_a_port_table(rec) -> bool:
+    """Does THIS RECORD say it carries a port-table row?
+
+    The flag first — that is the contract — then the legacy strategy-name
+    allow-list, so nothing that is corroborated today stops being corroborated.
+    A strategy may be ANNOTATED with a `+<annotation>` suffix (the canonical
+    `rst_grid_interface_table+width_parametric_v1_6_423` form), so the base
+    strategy is tested too, exactly as the #664 site already does.
+    """
+    if not isinstance(rec, dict):
+        return False
+    for key in _V2060_PORT_TABLE_FLAG_KEYS:
+        if rec.get(key) is True:
+            return True
+    for key in ("_extraction", "extraction_strategy"):
+        strat = rec.get(key)
+        if not strat:
+            continue
+        strat = str(strat).strip()
+        if strat in _PORT_TABLE_STRATEGIES:
+            return True
+        if strat.split("+", 1)[0] in _PORT_TABLE_STRATEGIES:
+            return True
+        if _V2060_SELF_DECLARING_STRATEGY_RE.search(strat):
+            return True
+    return False
+
+
 def _pin_has_port_like_evidence(pin) -> bool:
     """ORGANIC #475 (c) — positive corroboration gate. Return True iff
     `pin` (a dict from L1.pin_table) carries port-like evidence per the
@@ -14424,12 +14524,11 @@ def _pin_has_port_like_evidence(pin) -> bool:
     # Form 1 — direction-affix naming convention.
     if _PORT_DIR_PREFIX_RE.match(name) or _PORT_DIR_SUFFIX_RE.search(name):
         return True
-    # Form 2 — structured port-table-row source.
-    es = str(pin.get("extraction_strategy") or "").strip()
-    if es in _PORT_TABLE_STRATEGIES:
-        return True
-    ex = str(pin.get("_extraction") or "").strip()
-    if ex in _PORT_TABLE_STRATEGIES:
+    # Form 2 — the RECORD says it carries a port-table row. #2060: this asks
+    # the record, and falls back to the legacy strategy-name allow-list, so an
+    # extractor written after that list cannot have its ports dropped in
+    # silence. See `_v2060_record_declares_a_port_table`.
+    if _v2060_record_declares_a_port_table(pin):
         return True
     ev = str(pin.get("evidence") or "").strip().lower()
     # A structural evidence string (names a real row source). The bare
@@ -14505,9 +14604,10 @@ def _is_real_port_token(tok, l1_chip_name=None, pin=None):
     # (everything before the first `+`) so the provenance survives the
     # annotation. Chip-AGNOSTIC: pure strategy-name convention.
     _strat_base = (str(_strat).split("+", 1)[0] if _strat else _strat)
-    _has_port_table_provenance = (
-        _strat in _PORT_TABLE_STRATEGIES
-        or _strat_base in _PORT_TABLE_STRATEGIES)
+    # #2060 — the SAME question, asked of the record, at the second site that
+    # asks it. Two private spellings of one predicate is how the first one
+    # drifted; there is one now, and the `+annotation` handling lives inside it.
+    _has_port_table_provenance = _v2060_record_declares_a_port_table(_pin)
     _dir = str(_pin.get("mode") or _pin.get("direction") or "").strip().lower()
     _has_functional_dir = _dir in ("input", "output", "inout", "in", "out")
     if up in _POWER_RAIL_TOKENS and not _has_functional_dir:
@@ -22604,6 +22704,57 @@ def gen_l1_datasheet(project: Path,
 
     # ORGANIC-20260606 #455 — final pin pass: ALL-CAPS-prose deny +
     # banked-range backticked-interface merge (analog-datasheet shape).
+    # ORGANIC #2060 HUNK A — the docs door reads a port list written as a
+    # VERILOG CODE BLOCK or a SIGNAL TABLE.
+    #
+    # `phase1_port_extract.extract_code_block_ports` (v1.17.102, lane czport)
+    # is the shared grammar for both: a direction, an optional width and an
+    # RTL-shaped identifier standing where Verilog declares a port, or a table
+    # row under a header carrying both a name and a DIRECTION column. A prose
+    # sentence yields nothing and a waveform table — which has no direction
+    # column — yields nothing. It lands with EVIDENCE: every entry carries the
+    # source line it was read from, so a published port can be checked against
+    # the document that stated it.
+    #
+    # It had no production caller on the branch that authored it. This is that
+    # caller for the docs door, placed BEFORE the #455 sanitise/merge pass so a
+    # code-block port is de-duplicated against the same doc's prose pins by the
+    # same rule as every other source, and AFTER the existing harvests so a pin
+    # already found keeps its original provenance.
+    #
+    # IT IS ONLY SAFE BESIDE HUNK B. Every entry carries
+    # `CODE_REGION_PORT_STRATEGY` / `SIGNAL_TABLE_PORT_STRATEGY`, and neither
+    # is in `_PORT_TABLE_STRATEGIES` — the name allow-list this branch already
+    # replaced with `_v2060_record_declares_a_port_table`, which corroborates
+    # both by SHAPE. Without that, `_pin_has_port_like_evidence` refuses them
+    # and the L1.pin_table -> L9.top_ports promoter drops every one of them
+    # with no diagnostic.
+    #
+    # chip-AGNOSTIC: a Verilog port-declaration grammar and a table-header
+    # role; no chip, PDK or vendor literal.
+    _v2060_seen_pins = {str(p.get("name") or "").strip().lower()
+                        for p in pins if isinstance(p, dict)}
+    for _fname, _text in (extracted or {}).items():
+        if not isinstance(_text, str) or not _text:
+            continue
+        try:
+            _cb = _ppx.extract_code_block_ports(_text)
+        except Exception:
+            continue
+        for _entry in _cb or []:
+            if not isinstance(_entry, dict):
+                continue
+            _nm = str(_entry.get("name") or "").strip()
+            if not _nm or _nm.lower() in _v2060_seen_pins:
+                continue
+            _v2060_seen_pins.add(_nm.lower())
+            _pin = dict(_entry)
+            _pin.setdefault("evidence", f"input/docs/{_fname}")
+            # The record SAYS it carries a port table — the #2060 contract, so
+            # this never depends on its strategy name being on a list.
+            _pin["from_port_table"] = True
+            pins.append(_pin)
+
     pins = _v455_sanitize_and_merge_pins(pins, extracted, ic_name)
 
     content = {
@@ -38751,6 +38902,197 @@ def _v634_harvest_verification_intent(
     return out
 
 
+# ORGANIC #2055 — A VERIFICATION-INTENT SENTENCE IS NOT A FUNCTIONAL-TEST ROW.
+#
+# MEASURED, u_hawaii_adc at v1.17.83 (lane czadc28, front door, image 0.3.46):
+# Phase 2 halted at `step4_functional_evidence` on "0 functional tests ran for
+# 4 declared L10/L12 row(s)". All four rows were `kind: verification_intent`,
+# promoted here from the input's `## Verification intent` bullet list, and two
+# of them were not verification statements at all:
+#
+#   * a TOOL-DISCLOSURE paragraph — which corner libraries the PDK ships and
+#     that the results are simulated, not silicon;
+#   * a GOLDEN CROSS-CHECK note — compare the design against a fabricated part
+#     and its extracted netlist, which §4.05 forbids reading at DESIGN time.
+#
+# Neither testbench producer could author them (`l10_unit_tb_gen`: "0 in
+# scope, 4 out of scope"), so Step 4 demanded execution of four things, two of
+# which can never be executed by construction, and reported the shortfall as
+# though the RTL had failed. Three lanes read that wall as an RTL defect.
+#
+# The rule, stated positively: a bullet becomes an L10 test row only when it
+# states something FALSIFIABLE about the design. It is refused when it is
+#   (1) an ORACLE CROSS-CHECK — a comparison verb bound to a golden / oracle /
+#       fabricated-part / silicon / sign-off artefact. Refused with §4.05
+#       NAMED, because the artefact is the oracle and design time may not read
+#       it; or
+#   (2) a DISCLOSURE or METHOD NOTE — the bullet opens with a `<Label>:`
+#       prefix whose label carries a documentation-role word (disclosure,
+#       note, caveat, assumption, limitation, correction, methodology, …).
+#
+# Both families are POSITIVE evidence: the sentence says what it is. There is
+# deliberately no absence-based family — see the note inside the predicate for
+# the round-1 attempt at one and the two real acceptance rows it deleted.
+#
+# A refused sentence is RECORDED, never silently dropped: it lands in
+# `L10.verification_intent_refusals` with the sentence, the reason code and the
+# reason, so a reader sees what the input declared and why it is not a test.
+# The L7 `verification_strategy` harvest (the same helper, a different reader)
+# is untouched — the sentence is still verification INTENT, it is just not a
+# test CASE, and L7 is where intent belongs.
+#
+# chip-AGNOSTIC: documentation-role English, comparison verbs and oracle-role
+# nouns; no chip, vendor, SKU, PDK or process literal anywhere below.
+
+#: Words that make a `<Label>:` prefix a DOCUMENTATION role rather than a test
+#: name. Matched word-wise against the label, so `**Tool disclosure:**` is
+#: refused on `disclosure` while `Multi-corner:` (a real corner campaign) is
+#: not. Documentation English only.
+_V2055_DOC_ROLE_WORDS = frozenset({
+    "disclosure", "disclosures", "disclaimer", "disclaimers",
+    "note", "notes", "caveat", "caveats", "caution", "warning",
+    "assumption", "assumptions", "limitation", "limitations",
+    "correction", "corrected", "errata", "erratum",
+    "methodology", "method", "rationale", "background", "context",
+    "convention", "conventions", "terminology", "glossary", "definition",
+    "definitions", "provenance", "attribution", "reference", "references",
+    "remark", "remarks", "comment", "aside", "policy", "scope",
+})
+#: A leading `<Label>: <rest>` prefix on the bullet's own line. Bounded to 64
+#: characters so a prose sentence that merely contains a colon later on is not
+#: read as a label.
+_V2055_LABEL_RE = re.compile(r"^\s*([^:;.]{1,64}?)\s*:\s+\S")
+#: A COMPARISON act — the verb half of a cross-check instruction.
+_V2055_COMPARE_RE = re.compile(
+    r"(?i)\b(?:cross[-\s]?check(?:ed|s|ing)?|compare[sd]?|comparing|"
+    r"comparison|correlat(?:e|ed|es|ion)|"
+    r"verif(?:y|ied|ies|ication)\s+(?:against|with|versus|vs\.?)|"
+    r"check(?:ed|s)?\s+against|match(?:ed|es)?\s+against|"
+    r"diff(?:ed|s)?\s+against|back[-\s]?annotat\w*)\b")
+#: The ORACLE half — an artefact that IS the answer. §4.05 forbids reading any
+#: of these at design time, which is why a comparison bound to one can never
+#: become a design-time test row.
+# THE WORD `output` IS NOT IN THIS VOCABULARY, AND THAT IS DELIBERATE.
+# `hdl_declaration_scan_strips_comments_check` reads a regex SOURCE and asks
+# whether it names an HDL declaration keyword (`module|input|output|inout`); a
+# pattern that does, scanned over a string no comment-stripper touched, is a
+# real defect class — `// This module controls the counter` mints a module
+# called `controls`. This regex reads a MARKDOWN BULLET and never parses HDL,
+# so the finding would be a false positive — and the honest way out is not an
+# exemption, it is not to write the token. `reference output` and `expected
+# output file` were dropped and `reference result(s) / vector(s)` and
+# `expected answer file` say the same thing about the same artefact.
+#
+# AND A BLIND SPOT IN THAT GATE, FOUND WHILE PROVING THIS FIX BOTH WAYS AND
+# REPORTED RATHER THAN USED. Its `_META` blanks `(?:...)` before it looks, so a
+# declaration keyword INSIDE an alternation is invisible to it:
+#
+#     r"(?i)\breference\s+(?:model|output|result)\b"   declares_hdl -> False
+#     r"(?i)expected[-\s]?output\s+file"               declares_hdl -> True
+#
+# Only the second occurrence was ever the finding, so this vocabulary could have
+# kept the word by moving it inside the group and the gate would have gone
+# quiet. That is an exemption written in regex syntax, and it is not what
+# happened here: the token is gone from the pattern entirely. A real HDL scan
+# written `(?:module|input)\s+(\w+)` is the case that gate cannot currently
+# see, and its owner should hear that from this lane rather than from a defect.
+#
+# MEASURED before the swap, over every sentence this lane has: the golden
+# cross-check, the fabricated-part compare, "verify against the golden reference
+# output", the two half-arms (a compare with no oracle, an oracle noun with no
+# compare), the sign-off matrix and the tool disclosure — ZERO verdict
+# differences. What is given up is a bullet that names a reference OUTPUT and
+# nothing else oracle-shaped; every such sentence in the corpus also says
+# `golden`.
+_V2055_ORACLE_ARTEFACT_RE = re.compile(
+    r"(?i)\b(?:golden|oracle|harness|"
+    r"reference\s+(?:model|netlist|design|result|results|vector|vectors|"
+    r"implementation|waveform|waveforms|layout|gds)|"
+    r"fabricat(?:ed|ion)|silicon|taped?[-\s]?out|sign[-\s]?off|"
+    r"expected[-\s]?answer\s+file)\b")
+
+
+def _v2055_refuse_verification_intent(desc, observables):
+    """Why this `Verification intent` bullet is NOT an L10 test row, or None.
+
+    Returns ``(reason_code, reason)`` when the sentence must be refused and
+    ``None`` when it may become a row. See the block comment above for the
+    three refusal families and why each exists. Pure function; `observables`
+    is the design's own name vocabulary (see
+    `l10_test_case_oracle_anchor_check.harvest_observables`).
+    """
+    text = (desc or "").strip()
+    if not text:
+        return ("EMPTY_SENTENCE", "the bullet carries no text")
+    # (1) An ORACLE CROSS-CHECK. Both halves must be present — a comparison
+    # act AND the artefact it compares against — so an ordinary analog
+    # acceptance that merely says "compare to the declared limit" is not
+    # swept up, and a bare mention of the word "golden" is not either.
+    if _V2055_COMPARE_RE.search(text) and _V2055_ORACLE_ARTEFACT_RE.search(
+            text):
+        return ("ORACLE_CROSS_CHECK_4_05",
+                "REFUSED at extraction under §4.05: the sentence instructs a "
+                "comparison against an ORACLE artefact (a golden / reference "
+                "/ fabricated-part / sign-off result). Design time reads only "
+                "the design INPUT, never the oracle, so this can never be a "
+                "design-time functional-test row. It stays declared here as "
+                "verification INTENT for the verify stage.")
+    # (2) A DISCLOSURE or METHOD NOTE, recognised by its own `<Label>:`
+    # prefix. The label states the sentence's documentation ROLE; nothing
+    # about the design is asserted, so there is nothing to drive or observe.
+    m = _V2055_LABEL_RE.match(text)
+    if m:
+        label = m.group(1)
+        words = {w for w in re.split(r"[^A-Za-z]+", label.lower()) if w}
+        hit = sorted(words & _V2055_DOC_ROLE_WORDS)
+        if hit:
+            return ("DISCLOSURE_OR_METHOD_NOTE",
+                    f"REFUSED at extraction: the bullet declares its own "
+                    f"documentation role in its label ({label.strip()!r}, on "
+                    f"{', '.join(hit)}). It records how the work is done or "
+                    f"what a tool provides; it asserts nothing about the "
+                    f"design that a testbench could drive or observe.")
+    # THERE IS NO THIRD, ABSENCE-BASED FAMILY, AND THE ATTEMPT IS RECORDED HERE
+    # BECAUSE IT WAS MEASURED WRONG.
+    #
+    # Round 1 of this fix carried a third refusal: a bullet with no literal, no
+    # relation and no name from the design's own L-docs — `classify_anchor`
+    # returning None — was refused as UNANCHORED. It found nothing on the
+    # corpus (0 of 853 harvested row instances) and it deleted two GENUINE
+    # acceptance rows from this repo's own #634 converter fixture:
+    #
+    #     "DC operating-point check across the analog front-end (bias, ...)"
+    #     "SNDR / ENOB transient with an input sine sweep at multiple ..."
+    #
+    # Both are real analog acceptances. They carry no digital literal and name
+    # no port, because that is how an analog acceptance is written — and
+    # `test_v1_0_34_issue634_generation_side_extract` then failed on the L10
+    # floor ("must carry >=2 typed test cases; have 1"), which is the same wall
+    # this fix exists to move, one layer earlier.
+    #
+    # So the refusal is POSITIVE EVIDENCE ONLY. A sentence is refused when it
+    # says what it is — a documentation role in its own label, or a comparison
+    # against an oracle — never merely because nothing in it was recognised.
+    # Absence of a recognised anchor is a statement about the recogniser.
+    return None
+
+
+def _v2055_observables(project):
+    """The design's own name vocabulary, from its already-emitted L-docs.
+
+    Kept beside the predicate because the refusal reasons are read by a human
+    who may want to know what the design DID declare; the predicate itself no
+    longer decides anything on absence. See the note in
+    `_v2055_refuse_verification_intent`.
+    """
+    try:
+        import l10_test_case_oracle_anchor_check as _anchor
+        return _anchor.harvest_observables(
+            Path(project) / "phase1" / "generated_docs")
+    except Exception:
+        return set()
+
+
 # v1.0.44 — for #670 ORGANIC. DV / verification CHECKLIST table harvester.
 # A no-command-protocol / sparse-control REUSED-IP class (crypto accelerator,
 # CPU core, …) carries NO chip-level command/test-vector table, so the
@@ -48956,6 +49298,100 @@ _czl9_block_mentions_port = _ppx.block_mentions_port
 _czl9_emit_interface_prose = _ppx.emit_interface_prose
 
 
+# ORGANIC #2060 item 3 — ONE PLACE WRITES THE TOP CELL OF RECORD.
+#
+# `L1.tapeout_metadata.top_cell` was mirrored by THREE of the branches that
+# resolve `top_module`, each with its own copy of the same eight lines, and by
+# none of the other three. Derived from the tree rather than from memory — every
+# site that assigns `top_module_extraction_strategy` inside
+# `gen_l9_integration_spec`:
+#
+#   rtl_filesystem_scan            no mirror
+#   staged_rtl_structural_top      no mirror
+#   doc_module_decl_or_heading     no mirror
+#   rtl_top_prose_v1_6_545         mirrored, but ONLY when the evidence also
+#                                  carried the `top cell: NAME` sign-off form
+#   doc_prose_top_cell_v1_6_398    mirrored
+#   doc_prose_top_module_v1_6_409  mirrored
+#   l1_ic_name_fallback            no mirror  (and must stay that way)
+#   top_undeclared                 no mirror  (and must stay that way)
+#
+# So whether a design's L1 carries its own top cell depended on WHICH extractor
+# happened to win — and the three that do not mirror are the HIGHER-priority
+# ones, which is the wrong way round: the better the evidence, the more likely
+# the field vanished. MEASURED on the IC whose top moved from a `_top` name to a
+# `_core` name: the win moved from the last-resort prose walker to a
+# higher-priority stated-top branch and `tapeout_metadata.top_cell` disappeared
+# from L1 without anything going red.
+#
+# The mirror now runs ONCE, after the cascade converges, keyed on the STATUS the
+# cascade already computes rather than on a re-spelled list of strategy names —
+# so a branch added later is covered the day it is added, and cannot be added to
+# a list nobody remembers to update.
+#
+# IT IS GATED ON `TOP_MODULE_STATUS_DECLARED`, AND THAT IS THE WHOLE SAFETY
+# ARGUMENT. `tapeout_metadata.top_cell` is the top cell OF RECORD. A name the
+# flow DERIVED from the chip's identifier (`l1_ic_name_fallback`, status
+# `derived_from_chip_name`) is not one, and a design that declared no top at all
+# (`top_undeclared`) certainly is not; writing either would publish a
+# fabricated tape-out fact, which is the failure #2049 and #2052 have both just
+# been spent removing from this same cascade. Those two statuses write nothing,
+# exactly as before.
+#
+# Defensive no-op on a missing / unreadable / non-dict L1, as all three copies
+# were: this mirrors a value the caller already has, and failing to mirror must
+# never take the layer down.
+#
+# ONE SIDE EFFECT, DECLARED HERE BECAUSE IT LOOKS LIKE A WIN AND IS NOT.
+# Extracting these writes moved `phase1_doc_one_shot_runner::gen_l9_integration_
+# spec` OUT of `prose_polarity_consulted_check`'s polarity-blind register
+# (216 -> 214 over the plugin, two departures where this lane fixed ONE).
+# It did not learn anything. `_writes_a_declared_value` asks whether a
+# subscript assignment writes a value that is MATCH-DERIVED INSIDE THE SAME
+# FUNCTION, and `tm["top_cell"] = _v1_6_405_top_module` was the last such write
+# in that 1000-line function. Here the name arrives as a PARAMETER, so its
+# provenance is invisible and neither function is in the population any more:
+#
+#     gen_l9_integration_spec   searches_prose=True  writes_value=True -> False
+#     _v2060_mirror_top_cell    searches_prose=False (it reads no sentence)
+#
+# The function is exactly as polarity-blind about the top module as it was —
+# `_consults_polarity` is still False for it, and a test pins that so the
+# departure can never be recorded as a tightening. Two things follow, and both
+# are reported rather than banked: this lane's register shrink is ONE entry, not
+# two; and the gate has a blind spot worth its own fix — a write extracted into
+# a helper leaves the population without anything being fixed, which is the
+# count-not-membership shape that gate's own docstring warns about.
+#
+# chip-AGNOSTIC: a status vocabulary and a field name; no chip, PDK or vendor
+# literal.
+def _v2060_mirror_top_cell(project, top_module, top_module_status) -> bool:
+    """Mirror `top_module` into `L1.tapeout_metadata.top_cell`. True if written.
+
+    Returns whether the write happened so a caller — and a test — can tell
+    "declined because the top is not declared" from "tried and could not".
+    """
+    if not top_module or top_module_status != TOP_MODULE_STATUS_DECLARED:
+        return False
+    try:
+        l1_path = _pl.generated_docs_dir(project) / "L1_DATASHEET.json"
+        if not l1_path.exists():
+            return False
+        l1 = json.loads(l1_path.read_text(encoding="utf-8"))
+        if not isinstance(l1, dict):
+            return False
+        tm = l1.get("tapeout_metadata")
+        if not isinstance(tm, dict):
+            tm = {}
+        tm["top_cell"] = top_module
+        l1["tapeout_metadata"] = tm
+        l1["no_tapeout_metadata_in_input"] = False
+        _stamp.dump(l1_path, l1)
+        return True
+    except Exception:
+        return False
+
+
 def gen_l9_integration_spec(project: Path,
                             extracted: Dict[str, str],
                             l3: dict) -> LDocResult:
@@ -49918,45 +50354,10 @@ def gen_l9_integration_spec(project: Path,
                 top_module_extraction_strategy = (
                     "rtl_top_prose_v1_6_545"
                 )
-                # v1.6.398 mirror, applied on the v1.6.545 path too.
-                # The RTL-top prose walker now intercepts the foundry/
-                # PV-tool `top cell: NAME` sign-off prose that the
-                # v1.6.398 helper used to catch (the `top ... cell`
-                # anchor is part of the v1.6.545 regex). When the hit
-                # carries that top-cell-of-record form, mirror it into
-                # L1.tapeout_metadata.top_cell so the L1 consumer sees
-                # the same single source of truth. Defensive no-op on
-                # missing / malformed L1. Chip-AGNOSTIC.
-                _v1_6_545_evid = ""
-                try:
-                    _v1_6_545_evid = str(_v1_6_545_top_hit[1] or "")
-                except Exception:
-                    _v1_6_545_evid = ""
-                if _V1_6_398_RE_TOP_CELL.search(_v1_6_545_evid):
-                    try:
-                        _v1_6_545_l1_path = (
-                            _pl.generated_docs_dir(project)
-                            / "L1_DATASHEET.json"
-                        )
-                        if _v1_6_545_l1_path.exists():
-                            _v1_6_545_l1 = json.loads(
-                                _v1_6_545_l1_path.read_text(
-                                    encoding="utf-8"))
-                            if isinstance(_v1_6_545_l1, dict):
-                                _v1_6_545_tm = (
-                                    _v1_6_545_l1.get("tapeout_metadata")
-                                )
-                                if not isinstance(_v1_6_545_tm, dict):
-                                    _v1_6_545_tm = {}
-                                _v1_6_545_tm["top_cell"] = top_module
-                                _v1_6_545_l1["tapeout_metadata"] = (
-                                    _v1_6_545_tm
-                                )
-                                _v1_6_545_l1[
-                                    "no_tapeout_metadata_in_input"] = False
-                                _stamp.dump(_v1_6_545_l1_path, _v1_6_545_l1)
-                    except Exception:
-                        pass
+                # ORGANIC #2060 item 3 — the top-cell mirror that stood
+                # here (and was gated on the evidence ALSO carrying a
+                # `top cell:` sign-off line) now runs once for every branch,
+                # after the cascade converges. See `_v2060_mirror_top_cell`.
     if top_module is None:
         # Fall back to L1.ic_name — the chip's own identifier is a better
         # honest answer than the canonical sentinel when no module-decl
@@ -50033,33 +50434,8 @@ def gen_l9_integration_spec(project: Path,
             top_module_extraction_strategy = (
                 "doc_prose_top_cell_v1_6_398"
             )
-            # Mirror into L1.tapeout_metadata.top_cell so the L1
-            # consumer (datasheet readers, foundry-handoff gates)
-            # sees the LVS/DRC top-cell of record alongside the L9
-            # override. Updates L1 on disk in-place (already written
-            # by gen_l1_datasheet). Safe no-op on missing / non-dict
-            # / malformed L1.
-            try:
-                _v1_6_398_l1_path = (
-                    _pl.generated_docs_dir(project) / "L1_DATASHEET.json"
-                )
-                if _v1_6_398_l1_path.exists():
-                    _v1_6_398_l1 = json.loads(
-                        _v1_6_398_l1_path.read_text(encoding="utf-8"))
-                    if isinstance(_v1_6_398_l1, dict):
-                        _v1_6_398_tm = (
-                            _v1_6_398_l1.get("tapeout_metadata")
-                        )
-                        if not isinstance(_v1_6_398_tm, dict):
-                            _v1_6_398_tm = {}
-                        _v1_6_398_tm["top_cell"] = _v1_6_398_top_cell
-                        _v1_6_398_l1["tapeout_metadata"] = _v1_6_398_tm
-                        _v1_6_398_l1["no_tapeout_metadata_in_input"] = (
-                            False
-                        )
-                        _stamp.dump(_v1_6_398_l1_path, _v1_6_398_l1)
-            except Exception:
-                pass
+            # ORGANIC #2060 item 3 — mirrored once after the cascade, for
+            # every branch that publishes a declared top.
     # v1.6.405 — for #294 P2: when v1.6.398 returned None too (or did
     # not fire because we still have a weak `l1_ic_name_fallback`
     # strategy), try prose-form `top module: NAME` / `main module is
@@ -50083,30 +50459,8 @@ def gen_l9_integration_spec(project: Path,
             top_module_extraction_strategy = (
                 "doc_prose_top_module_v1_6_409"
             )
-            # Mirror into L1.tapeout_metadata.top_cell so downstream
-            # consumers see a single source of truth. Same defensive
-            # no-op pattern as the v1.6.398 mirror above.
-            try:
-                _v1_6_405_l1_path = (
-                    _pl.generated_docs_dir(project) / "L1_DATASHEET.json"
-                )
-                if _v1_6_405_l1_path.exists():
-                    _v1_6_405_l1 = json.loads(
-                        _v1_6_405_l1_path.read_text(encoding="utf-8"))
-                    if isinstance(_v1_6_405_l1, dict):
-                        _v1_6_405_tm = (
-                            _v1_6_405_l1.get("tapeout_metadata")
-                        )
-                        if not isinstance(_v1_6_405_tm, dict):
-                            _v1_6_405_tm = {}
-                        _v1_6_405_tm["top_cell"] = _v1_6_405_top_module
-                        _v1_6_405_l1["tapeout_metadata"] = _v1_6_405_tm
-                        _v1_6_405_l1["no_tapeout_metadata_in_input"] = (
-                            False
-                        )
-                        _stamp.dump(_v1_6_405_l1_path, _v1_6_405_l1)
-            except Exception:
-                pass
+            # ORGANIC #2060 item 3 — mirrored once after the cascade, for
+            # every branch that publishes a declared top.
     # v1.6.189 (#76 P1) fell back to the canonical `chip_top` default here so
     # `L9.top_module` was NEVER null, because a null cascaded into
     # `foundry_handoff_package_check` via v1.6.174 (the bracket-variant matrix
@@ -50138,6 +50492,10 @@ def gen_l9_integration_spec(project: Path,
                          if top_module_default_applied
                          else _top_module_status_for(
                              top_module_extraction_strategy))
+    # ORGANIC #2060 item 3 — the ONE mirror. Keyed on the status the cascade
+    # just computed, so every branch that publishes a DECLARED top writes the
+    # top cell of record, and a derived or undeclared top writes nothing.
+    _v2060_mirror_top_cell(project, top_module, top_module_status)
     no_top_module_in_input = _flag_no_X_in_input(
         top_module if not top_module_default_applied else None,
         evidence, "top_module")
@@ -51034,6 +51392,82 @@ _L10_TC_AFFIRM_LED = re.compile(
 _L10_TC_SUBSTANTIVE_TAIL = re.compile(r'[0-9]|[<>≤≥]|<=|>=|==')
 
 
+# ORGANIC #2055 — THE ORACLE CELL'S POLARITY, ASKED BEFORE IT IS BELIEVED.
+#
+# `prose_polarity_consulted_check` has named
+# `phase1_doc_one_shot_runner::_harvest_test_cases_from_input_tables` since
+# v1.17.79: it reads a value out of a verification-plan table cell and writes it
+# into `L10.test_cases[].expected` as a declaration, without ever asking whether
+# that cell DENIES the proposition it is about. That is the #706 / #711 shape —
+# "This block is NOT targeted at <PDK>" publishing the PDK — one layer over.
+#
+# The concrete instance in this function is the ASSERTION ROW. A
+# `| scenario | expected |` table whose oracle cell carries only an affirmation
+# ("OK", "Yes", a tick) states that the SCENARIO holds, and the harvester emits
+# `expected = "holds: <scenario>"`. `_L10_TC_AFFIRM_LED` is a one-sided
+# vocabulary: it recognises the word that says YES and nothing that says NO. So
+# a cell reading `OK — not required for this revision` is affirmation-led, has
+# no digit and no relation in its tail, and is published as `holds: <scenario>`
+# — the design's own table says the scenario is NOT required and L10 declares it
+# must hold. Nothing downstream can recover that; the anchor gate sees a
+# well-formed predicate.
+#
+# So the affirmation is asked. THE VOCABULARY IS NOT COPIED HERE: `_prose_
+# polarity` owns the list of words that mean "no", and this function imports it,
+# because three private copies of it is how #712 happened.
+#
+# The two tiers are used as the module says they must be:
+#   * CORE  ("no", "not", "none", "never", 不/否/非/无/無) DENIES the
+#     proposition. On a cell that is NOTHING BUT that denial, the row states a
+#     real negative and is emitted as `does not hold: <scenario>` — the exact
+#     mirror of the affirmation branch, so the input's stated NO becomes a
+#     checkable predicate instead of a bare marker the anchor gate refuses.
+#   * RETIRED ("n/a", "removed", "superseded", "deprecated", "no longer") says
+#     the row DOES NOT APPLY. That is not a false proposition and must not be
+#     emitted as one; the row keeps the cell verbatim and is marked
+#     `oracle_retired_by_input`, beside the existing `oracle_absent`, so the
+#     absence is visible rather than graded.
+#
+# THE BOUND THAT KEEPS A REAL ORACLE SAFE. A denial word inside a SUBSTANTIVE
+# oracle is part of the answer, not its polarity — `expected = "no response
+# frame"` is a perfectly good golden value and must survive byte-identical. So
+# the denial branches fire ONLY when the cell is nothing but the marker: with
+# bracketed qualifiers blanked (per #711) and the denial word removed, no
+# alphanumeric character is left. `no response frame` leaves `response frame`
+# and is untouched; `N/A` and `No` leave nothing and are claimed.
+#
+# NOT CLAIMED, AND DELIBERATELY. A cell reading only `X` or a cross glyph is a
+# denial to a human and is NOT in `_prose_polarity`'s vocabulary, which is
+# WORDS. Adding a private symbol roster here is precisely the divergence #712
+# exists to end, so those cells fall through unchanged and are reported by the
+# oracle-anchor gate as it already reports them.
+#
+# chip-AGNOSTIC: one imported negation vocabulary and pure cell structure.
+_V2055_ORACLE_RESIDUE_RE = re.compile(r"[0-9A-Za-z\u4e00-\u9fff]")
+
+
+def _v2055_oracle_denial_tier(cell, word):
+    """"denied" | "retired" | None, given the denial `word` the CALLER found.
+
+    The question — "does this cell deny?" — is asked BY THE EXTRACTOR, with
+    `_prose_is_denied`, at the site where the value is read. This function only
+    classifies the answer into the module's two tiers, and applies the bound
+    that keeps a substantive oracle safe: a verdict is returned only when the
+    cell is NOTHING BUT that denial. `expected = "no response frame"` leaves
+    `response frame` behind and is left exactly as it is.
+    """
+    text = (cell or "").strip()
+    if not text or not word:
+        return None
+    # Blank the bracketed qualifiers (#711), drop the denial word itself, and
+    # ask whether any substance is left. Anything left means the denial was
+    # part of an answer, not the whole of it.
+    residue = _prose_blank_bracketed(text).replace(word, " ")
+    if _V2055_ORACLE_RESIDUE_RE.search(residue):
+        return None
+    return "denied" if _PROSE_DENIAL_CORE_RE.search(word) else "retired"
+
+
 def _harvest_test_cases_from_input_tables(
         extracted: Dict[str, str]) -> List[Dict[str, Any]]:
     """Harvest typed test cases from verification-plan tables in the input
@@ -51190,13 +51624,50 @@ def _harvest_test_cases_from_input_tables(
                         _expected = last
                         _affirm_led = bool(
                             last and _L10_TC_AFFIRM_LED.match(last))
+                        # ORGANIC #2055 — ASK THE CELL'S POLARITY BEFORE
+                        # BELIEVING IT. The question is asked HERE, at the site
+                        # that reads the value, with the ONE shared vocabulary;
+                        # `_v2055_oracle_denial_tier` only classifies the answer.
+                        _polarity_word = _prose_is_denied(last) or ""
+                        _polarity = _v2055_oracle_denial_tier(
+                            last, _polarity_word)
+                        _no_substantive_tail = not (
+                            _L10_TC_SUBSTANTIVE_TAIL.search(
+                                _L10_TC_AFFIRM_LED.sub('', last, count=1)))
+                        _scenario_usable = bool(
+                            re.search(r'[0-9A-Za-z]', first))
                         _assertion_row = bool(
                             _affirm_led
-                            and not _L10_TC_SUBSTANTIVE_TAIL.search(
-                                _L10_TC_AFFIRM_LED.sub('', last, count=1))
-                            and re.search(r'[0-9A-Za-z]', first))
+                            # An affirmation that carries a denial ANYWHERE in
+                            # the same cell ("OK - not required for this
+                            # revision") affirms nothing, and this guard takes
+                            # the RAW question, not the bare-cell tier below:
+                            # the tier's bound exists to protect a substantive
+                            # ORACLE from being rewritten, and using it here
+                            # would let exactly the substantive denial through
+                            # — measured, this branch published
+                            # `holds: <scenario>` for that cell. When a cell
+                            # both affirms and denies, nothing is published:
+                            # the cell is kept verbatim and the oracle-anchor
+                            # gate judges it, which is the cautious half.
+                            and not _polarity_word
+                            and _no_substantive_tail
+                            and _scenario_usable)
+                        # The mirror of the affirmation branch: a cell that is
+                        # nothing but a CORE denial states that the scenario
+                        # does NOT hold, which is a predicate a testbench can
+                        # check.
+                        _denial_row = bool(
+                            _polarity == "denied"
+                            and not _affirm_led
+                            and _scenario_usable)
+                        # RETIRED is not a false proposition — the row does not
+                        # apply. Kept verbatim and MARKED, never graded.
+                        _oracle_retired = bool(_polarity == "retired")
                         if _assertion_row:
                             _expected = f"holds: {first}"
+                        elif _denial_row:
+                            _expected = f"does not hold: {first}"
                         _case = {
                             "name": name,
                             "kind": "functional_vector",
@@ -51209,6 +51680,14 @@ def _harvest_test_cases_from_input_tables(
                         if _assertion_row:
                             _case["oracle_from_assertion_row"] = True
                             _case["assertion_affirmation"] = last
+                        if _denial_row:
+                            # ORGANIC #2055 — a refusal that names its evidence
+                            # is checkable; a bare flag is not.
+                            _case["oracle_from_denial_row"] = True
+                            _case["denial_word"] = _polarity_word
+                        if _oracle_retired:
+                            _case["oracle_retired_by_input"] = True
+                            _case["denial_word"] = _polarity_word
                         if _oracle_absent:
                             _case["oracle_absent"] = True
                         out.append(_case)
@@ -51359,8 +51838,32 @@ def gen_l10_test_cases(project: Path,
     # as a prose bullet list, not a verification-plan TABLE, so the
     # table harvester above never reaches it. No-fabrication: empty when
     # no Verification-intent section exists. chip-AGNOSTIC.
+    # ORGANIC #2055 — a verification-INTENT sentence is never a functional-test
+    # row. See `_v2055_refuse_verification_intent` for the three refusal
+    # families and the measurement that produced them. A refused sentence is
+    # RECORDED below, never silently dropped.
+    _v2055_observable_vocab = _v2055_observables(project)
+    _v2055_refusals: List[Dict[str, Any]] = []
     for _vi in _v634_harvest_verification_intent(extracted):
         if _vi["name"] in _existing_names:
+            continue
+        _v2055_refused = _v2055_refuse_verification_intent(
+            _vi["description"], _v2055_observable_vocab)
+        if _v2055_refused is not None:
+            _code, _why = _v2055_refused
+            _v2055_refusals.append({
+                "name": _vi["name"],
+                "sentence": _vi["description"],
+                "reason_code": _code,
+                "reason": _why,
+                "evidence": _vi["evidence"],
+                "extraction_strategy": _vi["extraction_strategy"],
+            })
+            evidence.setdefault("refused_verification_intent", []).append({
+                "literal": _vi["description"][:120],
+                "label": (f"{_code}: verification intent, NOT a "
+                          f"functional test case"),
+            })
             continue
         _existing_names.add(_vi["name"])
         cases.append({
@@ -51549,6 +52052,18 @@ def gen_l10_test_cases(project: Path,
              "rows_refused", "transport", "error")
             if _kav_census.get(k) is not None},
         "known_answer_vector_count": len(_kav_vectors),
+        # ORGANIC #2055 — the `## Verification intent` sentences that were
+        # REFUSED as test rows, each with the reason. Published whether or not
+        # any were refused, so a reader can tell "the input declared none"
+        # from "one was declared and something dropped it", exactly as
+        # `known_answer_vector_census.rows_refused` does one field up.
+        # A LIST, and no scalar count beside it. A count is `len()` of the
+        # list, and a redundant scalar is a second place for the same fact to
+        # be wrong; it also reads as a cross-design fingerprint when it is 0 on
+        # two unrelated thin-input projects (`test_phase1_issue12_cross_ic_
+        # fingerprint`), which is a true statement about a redundant field, not
+        # something to exempt.
+        "verification_intent_refusals": _v2055_refusals,
     }
     return _write_l_doc(
         project, "L10_TEST_CASES", content, evidence,

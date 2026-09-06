@@ -25,6 +25,10 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+# vibe-ic#712 — the ONE negation vocabulary. A width cell that DENIES a range
+# must not publish it; see `_signal_table_rows` and `_stated_width`.
+from _prose_polarity import is_denied as _prose_is_denied  # noqa: E402
+
 from _specrtl_common import (  # noqa: E402
     parse_verilog_ports, _parse_md_table_ports, Port, strip_comments,
     _strip_subprograms, _PORT_DECL as _PORT_DECL_SPAN, _parse_module_params,
@@ -204,11 +208,38 @@ def _signal_table_rows(text: str) -> Dict[str, Dict[str, Any]]:
             if len(cells) == len(header):
                 nm = _strip_md_emphasis(cells[name_col])
                 if nm and nm not in out:
+                    _wcell = (cells[width_col].strip()
+                              if width_col is not None
+                              and width_col < len(cells) else "")
+                    # DOES THE CELL DENY THE WIDTH IT CONTAINS? (#712, #2060)
+                    #
+                    # MEASURED on this reader before the consult existed:
+                    #
+                    #     `not [7:0]`           -> width 8
+                    #     `no longer [7:0]`     -> width 8
+                    #     `removed, was [7:0]`  -> width 8
+                    #
+                    # `_EMBEDDED_RANGE` searches ANYWHERE in the cell, so a row
+                    # that retires a range republished it as a declaration —
+                    # #711's `die_area_budget_um` ("has NO meaning here and is
+                    # REMOVED, not translated" re-declared that exact
+                    # rectangle) one field over. `not stated` / `no width` /
+                    # `N/A` already came back WIDTH_UNKNOWN, but only because
+                    # they carry no digits: nothing asked.
+                    #
+                    # The question is asked HERE, at the site that reads the
+                    # cell, with the shared vocabulary — imported, never copied,
+                    # because three private copies of it is how #712 happened.
+                    # The denial WORD is recorded, not a bare flag: a refusal
+                    # that names its evidence is checkable.
+                    #
+                    # Bracketed qualifiers are blanked by `is_denied` (#711), so
+                    # a legitimate `1 (not used)` still reads as width 1.
+                    _wdenial = _prose_is_denied(_wcell) if _wcell else None
                     out[nm] = {
                         "row": lines[j].strip(),
-                        "width_cell": (cells[width_col].strip()
-                                       if width_col is not None
-                                       and width_col < len(cells) else ""),
+                        "width_cell": _wcell,
+                        "width_cell_denial": _wdenial,
                         "description": (_strip_md_emphasis(cells[desc_col])
                                         if desc_col is not None
                                         and desc_col < len(cells) else ""),
@@ -242,6 +273,14 @@ def _stated_width(cell: str) -> int:
     """
     if not (cell or "").strip():
         return 1
+    # A DENIED WIDTH IS NOT A WIDTH. The cell states one and takes it back, so
+    # the document does not give a width this reader may publish — that is
+    # WIDTH_UNKNOWN, the same answer a symbolic dimension gets, and never the
+    # number standing inside the denial. See the measurement in
+    # `_signal_table_rows`. An EMPTY cell is untouched above: no cell is a
+    # declaration of a 1-bit scalar, not a denial of anything.
+    if _prose_is_denied(cell):
+        return WIDTH_UNKNOWN
     m = _INT_WIDTH_CELL.match(cell)
     if m:
         return int(m.group(1))

@@ -944,12 +944,6 @@ _OFFENDER_REGISTER: Dict[str, str] = {
         "naming an excluded variant is derived or refused'). Delete this entry "
         "in the commit that fixes it -- an entry that outlives its offender is "
         "itself an offender and this gate refuses it.",
-    "phase1_doc_one_shot_runner::_harvest_test_cases_from_input_tables":
-        "OWNER: lane czadcl10, which owns the L10 path. ADDED BY v1.17.79 "
-        "(8982e2646); the function itself dates from v1.0.0, so that landing "
-        "changed what it DOES with what it reads rather than introducing new "
-        "code. Delete this entry in the commit that fixes it -- an entry that "
-        "outlives its offender is itself an offender and this gate refuses it.",
     "lec_run::lec_proved_points_from_output":
         "OWNER: lane czlecresume (landed v1.17.62, 364d3cc75). Reads the LEC "
         "tool's own output to decide which proof points were proved, and writes "
