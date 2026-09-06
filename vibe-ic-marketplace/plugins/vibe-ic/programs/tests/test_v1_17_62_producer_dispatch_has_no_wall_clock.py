@@ -226,18 +226,46 @@ def test_the_converted_steps_carry_no_literal_wall_clock():
     assert offenders == [], offenders
 
 
-def test_phase3_carries_no_literal_wall_clock_at_all():
-    """The whole file, not a named subset.
+def test_no_runner_carries_a_literal_wall_clock_at_all():
+    """THE WHOLE POPULATION, by file, not a named subset.
 
-    `phase3_one_shot_runner` held 10 of the 20 literal
-    `subprocess.run(timeout=N>=300)` sites in the runner population; it now
-    holds none.  Asserted over the FILE so a new one cannot be added quietly,
-    and reported by (line, value) so a failure says WHICH rather than how many.
+    MEASURED on this lane's base (`origin/next/cztimeout` @ fa88faa424): 20
+    `subprocess.run(timeout=<literal>)` sites at >= 300 s across these four
+    files -- phase3 10, design 3, analog 5, phase1_doc 2. (The lane brief says
+    25, distributed 11/7/5/2; this census reproduces the previous lane's own
+    published table exactly at 20, and the measurement is what is used.)
+
+    All 20 are gone. Asserted over the FILES so a new one cannot be added
+    quietly, and reported by (file, line, value) so a failure says WHICH rather
+    than how many. The denominator is asserted too: every file must be present
+    and parse, or "no offenders" is a statement about a population that was
+    never read.
     """
-    offenders = [(ln, v) for ln, v in
-                 _literal_wall_clocks(PROGRAMS / "phase3_one_shot_runner.py")
-                 if v >= 300]
+    offenders, seen = [], []
+    for name in RUNNERS:
+        path = PROGRAMS / name
+        assert path.is_file(), name
+        seen.append(name)
+        offenders += [(name, ln, v) for ln, v in _literal_wall_clocks(path)
+                      if v >= 300]
+    assert sorted(seen) == sorted(RUNNERS), seen
     assert offenders == [], offenders
+
+
+def test_the_literal_census_can_still_see_one():
+    """THE CENSUS ITSELF, PROVED ABLE TO FIRE. A population reader that has
+    quietly stopped matching reports an empty offender list forever, and an
+    empty answer from a broken reader is byte-identical to a clean tree."""
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        f = Path(d) / "planted.py"
+        f.write_text(
+            "import subprocess\n"
+            "subprocess.run(['x'], timeout=600)\n"
+            "subprocess.run(['y'], timeout=10)\n")
+        found = _literal_wall_clocks(f)
+    assert found == [(2, 600), (3, 10)], found
+    assert [(ln, v) for ln, v in found if v >= 300] == [(2, 600)], found
 
 
 def test_the_em_authority_emitter_survives_a_stall(monkeypatch, tmp_path):

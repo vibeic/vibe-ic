@@ -66018,10 +66018,17 @@ def main() -> int:
         try:
             _rp = _pl.report_path(project, _rel_report)
             _rp.parent.mkdir(parents=True, exist_ok=True)
-            _cp = subprocess.run(
+            # CZT-11 — a 300 s literal decided a SEMANTIC LAYER GATE's
+            # participation by elapsed time: on a busy host the gate was
+            # killed, the `except` printed SKIPPED, and the layer went
+            # unjudged with nothing distinguishing that from a gate that
+            # self-skipped. Supervised instead; a genuine STALL still reaches
+            # this same arm and now SAYS "STALLED: no forward progress"
+            # rather than naming a clock.
+            _cp = _pr.run(
                 [sys.executable, str(_gate_path), str(project),
                  "--json", str(_rp)],
-                capture_output=True, text=True, timeout=300,
+                capture_output=True, text=True,
             )
         except Exception as _exc:      # never let a gate crash the runner
             print(f"      {_gate_name}: SKIPPED ({_exc})")
@@ -66075,10 +66082,14 @@ def main() -> int:
         try:
             _rp = _pl.report_path(project, _rel_report)
             _rp.parent.mkdir(parents=True, exist_ok=True)
-            _cp = subprocess.run(
+            # CZT-11 — same shape as the layer gate above; supervised, not
+            # clocked. DEGRADE LOUDLY is already this block's stated policy
+            # two lines up, and a clock expiry printed under the same word as
+            # a genuine self-skip was the one degradation it did not state.
+            _cp = _pr.run(
                 [sys.executable, str(_chk_path), *_chk_args,
                  "--json", str(_rp)],
-                capture_output=True, text=True, timeout=300,
+                capture_output=True, text=True,
             )
         except Exception as _exc:      # never let an advisory crash the run
             print(f"      {_chk_name}: SKIPPED ({_exc}) [ADVISORY]")
