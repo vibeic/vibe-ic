@@ -4810,7 +4810,11 @@ def step_determinism_gates(project: Path, top_name: str = "") -> StepResult:
     record indistinguishable from one that ran and found nothing, so a row that
     only appears on a finding would not have caught it either. `verdict` is
     PASS or FINDING and `router_verdict` is NOT_APPLICABLE or ESCALATE; the row
-    is absent only when the step never scanned an RTL file at all."""
+    is absent only when THIS CHECKER read no file. The count is taken at the
+    checker's own call site and never by the loop around it: a row keyed on the
+    loop keeps printing "scanned 1 file, found nothing" after the invocation
+    itself has been deleted — MEASURED, by deleting it and re-running a real
+    project — which is the identical false record the unwired gate produced."""
     t0 = time.time()
     rtl_dir = _pl.rtl_dir(project)
     if not rtl_dir.is_dir():
@@ -4837,6 +4841,12 @@ def step_determinism_gates(project: Path, top_name: str = "") -> StepResult:
     findings: List[str] = []
     advisories: List[Dict[str, object]] = []
     lookahead_advisories: List[Dict[str, object]] = []
+    # Files THIS CHECKER actually read, counted at the checker's own call site
+    # and never by the loop around it. A row keyed on the loop reads
+    # "scanned 1 file, found nothing" even after the invocation has been
+    # deleted, which is the identical false record this wiring exists to remove
+    # — MEASURED by deleting the invocation and re-running a real project.
+    lookahead_scanned = 0
     repairs: List[str] = []
     worked_example_skip: Optional[Dict[str, object]] = None
     n_checked = 0
@@ -4886,7 +4896,9 @@ def step_determinism_gates(project: Path, top_name: str = "") -> StepResult:
         # level to LEAD (a pre-emptive almost_full, a one-cycle-early enable) —
         # so the result goes to `lookahead_advisories`, NEVER to `findings`.
         try:
-            for _f in _cdl.scan(txt):
+            _hits = _cdl.scan(txt)
+            lookahead_scanned += 1
+            for _f in _hits:
                 lookahead_advisories.append(dict(_f, file=f.name))
         except Exception:
             pass
@@ -5029,11 +5041,11 @@ def step_determinism_gates(project: Path, top_name: str = "") -> StepResult:
     # than restated here, so deleting that entry breaks this dispatch loudly
     # instead of leaving the step printing a route nobody honours any more.
     lookahead_extra: Optional[Dict[str, object]] = None
-    if n_checked:
+    if lookahead_scanned:
         lookahead_extra = {
             "defect": "counter-decode-lookahead-phase",
             "verdict": "FINDING" if lookahead_advisories else "PASS",
-            "files_scanned": n_checked,
+            "files_scanned": lookahead_scanned,
             "blocking": False,
             "findings": lookahead_advisories,
         }

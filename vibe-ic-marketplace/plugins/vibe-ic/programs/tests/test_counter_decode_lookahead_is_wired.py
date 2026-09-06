@@ -267,6 +267,33 @@ def test_the_row_is_written_on_the_clean_arm_too(tmp_path):
     assert "counter lookahead" not in res.detail
 
 
+def test_the_row_counts_the_checker_s_own_reads_not_the_loop_s(monkeypatch, tmp_path):
+    """THE ARM THAT CAUGHT THE FIRST VERSION OF THIS ROW.
+
+    The row was keyed on the step's own file counter, so with the invocation
+    DELETED the published record still read `files_scanned: 1, verdict: PASS` —
+    "the checker looked and found nothing" over a checker that had not run. That
+    is byte-for-byte the false record the unwired gate produced, reintroduced by
+    the repair for it. MEASURED on a real project before it was keyed to the
+    checker's own call site instead.
+
+    Here the deletion is simulated by making the checker unreachable: `scan`
+    raises, the call site's `except` swallows it exactly as it does for any
+    other checker fault, and the row must be GONE rather than green."""
+    import design_one_shot_runner as R
+
+    def _explode(_src):
+        raise RuntimeError("the checker did not run")
+
+    monkeypatch.setattr(CDL, "scan", _explode)
+    res = R.step_determinism_gates(_write_project(tmp_path, RTL_DEFECT),
+                                   "fifo_wptr")
+    assert res.status == "PASS", res           # a checker fault may not block
+    assert (res.extras or {}).get("counter_decode_lookahead_advisory") is None, (
+        "the row survived the checker not running — it is counting the loop, "
+        "not the checker")
+
+
 def test_the_row_is_absent_only_when_nothing_was_scanned(tmp_path):
     """The one state that must NOT produce a row: the step never read an RTL
     file, so the checker has said nothing about anything. Without this arm the
