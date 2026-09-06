@@ -872,3 +872,53 @@ def test_neither_scoreboard_can_pass_vacuously():
     tb7 = rcs.emit_scoreboard_tb(rcs.extract_handshake_contract(_F7_DESC))
     assert "if (n_in == 0) begin" in tb7
     assert "vacuous" in tb7
+
+
+# ============================================================================
+# The near-miss control above uses descriptions that are FAR from any handshake,
+# so no plausible loosening of the contract layer can make it fire -- a control
+# that cannot fail. These sit on the layer's actual boundary instead: each states
+# almost a contract, and each must still DEFER, naming what it did not state.
+# ============================================================================
+
+_BOUNDARY_NEAR_MISSES = {
+    "ratio with no ratio stated": (
+        "Module name:\n    event_thinner\n"
+        "A block that forwards some input events to the output.\n"
+        "Input ports:\n clk: Clock.\n rst_n: Active low reset.\n"
+        " in_valid: Pulses on an input event.\n"
+        "Output ports:\n out_valid: Pulses on an output event.\n"
+        "Implementation:\nIt divides the event stream.\n"),
+    "elastic with no clock stated": (
+        "Module name:\n    no_clock_stage\n"
+        "A stage between a producer and a consumer.\n"
+        "Input ports:\n up_data [7:0]: The word offered.\n up_valid: Offered.\n"
+        " dn_ready: The consumer can take a word.\n"
+        "Output ports:\n up_ready: This stage can take a word.\n"
+        " dn_data [7:0]: The word offered on.\n dn_valid: Offered.\n"
+        "Implementation:\nThe stage must register the output and buffer one\n"
+        "additional transfer.\n"),
+    "half a handshake": (
+        "Module name:\n    sink_only\n"
+        "A block that consumes a stream and reports a total.\n"
+        "Input ports:\n clk: Clock.\n rst_n: Active low reset.\n"
+        " up_data [7:0]: The word offered.\n up_valid: Offered.\n"
+        "Output ports:\n up_ready: This block can take a word.\n"
+        " total [15:0]: The running sum.\n"
+        "Implementation:\nA transfer happens when up_valid and up_ready are\n"
+        "both high; there is no downstream interface.\n"),
+}
+
+
+@pytest.mark.parametrize("label,desc", _BOUNDARY_NEAR_MISSES.items())
+def test_contract_layer_declines_on_its_own_boundary(label, desc):
+    assert rcs.detect_shape(desc) is None, label
+
+
+def test_the_boundary_cases_say_what_was_missing_where_they_can():
+    """Not merely a DEFER: for the two that DO state a handshake, the program
+    names the unstated field rather than guessing it."""
+    why = rcs.route_to_ai_reason(_BOUNDARY_NEAR_MISSES["ratio with no ratio stated"])
+    assert why is not None and any("ratio" in u for u in why["unresolved"])
+    why = rcs.route_to_ai_reason(_BOUNDARY_NEAR_MISSES["elastic with no clock stated"])
+    assert why is not None and any("clock" in u for u in why["unresolved"])
