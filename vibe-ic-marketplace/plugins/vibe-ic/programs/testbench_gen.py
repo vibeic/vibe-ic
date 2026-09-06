@@ -172,9 +172,9 @@ def _resolve_widths(project: Path,
         return None, (
             f"DUT {module!r} declares {len(refusals)} port(s) whose width is "
             f"not derivable from its own parameter defaults "
-            f"({params or 'none declared'}): " + "; ".join(refusals)
+            f"({_port_width.scope_summary(params)}): " + "; ".join(refusals)
             + " -- refusing to emit a TB rather than declaring them 1 bit")
-    return resolved, f"widths resolved over {params or 'no parameters'}"
+    return resolved, f"widths resolved over {_port_width.scope_summary(params)}"
 
 
 def resolve_dut(project: Path, top: str) -> Tuple[Optional[str],

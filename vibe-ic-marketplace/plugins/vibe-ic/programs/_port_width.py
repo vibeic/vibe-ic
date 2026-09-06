@@ -52,12 +52,31 @@ place this module departs from ``register_bus_driver_gen.resolve_bus_widths``,
 which resolves widths for a driver bound INSIDE the design and therefore must
 honour the overrides.
 
-NO FOURTH EVALUATOR.  The expression arithmetic and the parameter-header
-harvest are ``register_bus_driver_gen._int_expr`` and
-``register_bus_driver_gen.dut_parameter_defaults`` — the AST-based, bounded,
-refuse-on-unknown-identifier pair already in the tree.  This module adds the
-port-declaration shape around them and nothing else.  If that evaluator gains a
-form, both TB generators gain it on the same day.
+WHERE A WIDTH IS STATED.  Not one place — four, and a resolver that reads only
+the first refuses on numbers the design states in full:
+
+  * the module's ``#( ... )`` parameter header, parameters and its localparams
+    (``localparam int IdxW = $clog2(N)``);
+  * the module BODY — Verilog-1995 has no header at all and states the width
+    one line below the port list (``parameter BITS = 39;``);
+  * a PACKAGE, reached by SCOPE (``[top_pkg::TL_DW-1:0]``) or by IMPORT
+    (``module m import aes_reg_pkg::*; #(...) ( ... [NumRegsData-1:0] ... )``);
+  * and the module's OWN default written over one of those
+    (``parameter int DATA_WIDTH = top_pkg::TL_DW``), which is why the header and
+    body harvests are SEEDED with what is in scope before them.
+
+Precedence runs the other way: the module's own names win over an imported one,
+and a name two IMPORTED packages define DIFFERENTLY is ambiguous and is dropped
+— an ambiguous width is not a known width.
+
+NO FOURTH EVALUATOR.  The expression arithmetic and every harvest above are
+``register_bus_driver_gen._int_expr``, ``dut_scope_constants``,
+``package_constants`` and ``dut_imported_packages`` — the AST-based, bounded,
+refuse-on-unknown-identifier machinery already in the tree, extended in place.
+(``dut_parameter_defaults`` stays parameters-only over the module's own header,
+because ``resolve_bus_widths`` merges instantiation overrides onto it.)  This
+module adds the port-declaration shape around them and nothing else.  If that
+evaluator gains a form, both TB generators gain it on the same day.
 
 chip-AGNOSTIC: no chip, SKU, vendor, PDK or design literal appears here; every
 number comes out of the design's own RTL.
@@ -105,6 +124,52 @@ def _split_range(cell: str) -> Optional[Tuple[str, str]]:
 _LITERAL_RANGE_RE = re.compile(r"^\[\s*(\d+)\s*:\s*(\d+)\s*\]$")
 
 
+#: An identifier in a width bound, SCOPE OPERATOR INCLUDED. Splitting
+#: `flash_phy_pkg::ProgTypes` into two bare names made the refusal name two
+#: things that are not the symbol, and a reader who greps for either finds the
+#: wrong file.
+_SYMBOL_RE = re.compile(r"[A-Za-z_]\w*(?:\s*::\s*[A-Za-z_]\w*)*")
+
+
+def scope_summary(params: Optional[Dict[str, int]]) -> str:
+    """A BOUNDED description of the constants a width was evaluated against.
+
+    The scope a port is declared in now legitimately holds every constant every
+    package in the design exports -- hundreds of entries. Printing the map
+    printed all of them into a step's FAIL text and buried the one name the
+    reader needs. The DUT's OWN names are listed (there are a handful and they
+    are the ones a reader can act on); the package-scoped ones are counted.
+    """
+    params = params or {}
+    own = sorted(k for k in params if "::" not in str(k))
+    extra = len(params) - len(own)
+    if not own and not extra:
+        return ("no constants at all (the DUT declares no parameter header "
+                "and no body constant, and no package is in scope)")
+    where = (f"the DUT's own constants {own}" if own
+             else "no constant of the DUT's own")
+    if extra:
+        where += f" plus {extra} package-scoped constant(s)"
+    return where
+
+
+def _unresolved_symbols(cell: str, params: Dict[str, int]) -> List[str]:
+    """The symbols in `cell` that `params` does not define, scoped names kept
+    whole. `$clog2` and the other admitted constant functions are not symbols
+    and are not listed; a `$` function that is NOT admitted is, because that is
+    exactly what blocked the width."""
+    out = []
+    for m in _SYMBOL_RE.finditer(cell or ""):
+        t = re.sub(r"\s*::\s*", "::", m.group(0))
+        if t in params or t in out:
+            continue
+        out.append(t)
+    for m in re.finditer(r"\$[A-Za-z_]\w*", cell or ""):
+        if m.group(0) not in out:
+            out.append(m.group(0))
+    return sorted(out)
+
+
 def _evaluator():
     """`register_bus_driver_gen._int_expr`, or None when it cannot be imported.
 
@@ -118,40 +183,136 @@ def _evaluator():
     return getattr(_rbdg, "_int_expr", None)
 
 
+def _rbdg():
+    """`register_bus_driver_gen`, or None. Imported lazily and by NAME so that a
+    missing sibling degrades to an honest refusal, never to a silent width."""
+    try:
+        import register_bus_driver_gen as _m
+    except Exception:
+        return None
+    return _m
+
+
+def _declares(text: str, dut_module: str) -> bool:
+    """True when `text` declares `module <dut_module>`.
+
+    Comments are blanked FIRST. A sentence in a comment that says the module's
+    name -- `// see module foo` -- is not a declaration, and a scan that counts
+    one mints a module that does not exist (#731). The blanker preserves
+    offsets, so nothing else shifts.
+    """
+    m = _rbdg()
+    code = text or ""
+    if m is not None:
+        try:
+            code = m._hdl_code_text.strip_hdl_comments_and_strings(code)
+        except Exception:
+            code = text or ""
+    return bool(re.search(r"\bmodule\s+" + re.escape(dut_module) + r"\b",
+                          code))
+
+
+def _package_scope(pkgs: Dict[str, Dict[str, int]],
+                   imported: Sequence[str]) -> Dict[str, int]:
+    """The names a module's port declarations can see from PACKAGES.
+
+    Two access paths, and they are not the same:
+
+      * SCOPED  — `pkg::NAME` is visible whether or not the module imports the
+                  package, so every package constant is offered under its full
+                  scoped key.
+      * IMPORTED — `import pkg::*;` also puts the package's names in scope
+                  UNQUALIFIED. Only the packages this module actually imports
+                  contribute those.
+
+    A name two IMPORTED packages define with DIFFERENT values is AMBIGUOUS. It
+    is dropped rather than resolved by import order, so a width over it refuses
+    by name — an ambiguous width is not a known width.
+    """
+    out: Dict[str, int] = {}
+    for pkg, consts in (pkgs or {}).items():
+        for name, val in consts.items():
+            out[f"{pkg}::{name}"] = val
+    plain: Dict[str, set] = {}
+    for pkg in imported or []:
+        for name, val in (pkgs or {}).get(pkg, {}).items():
+            plain.setdefault(name, set()).add(val)
+    for name, vals in plain.items():
+        if len(vals) == 1:
+            out[name] = next(iter(vals))
+    return out
+
+
 def dut_defaults(rtl_text: str, dut_module: str) -> Dict[str, int]:
-    """`{NAME: value}` for `dut_module`'s own header — parameters and header
-    localparams — see the module docstring for why only the DEFAULTS (never an
-    instantiation override) are consulted. `{}` when the header is absent or
-    unparsable (which is not an error: a module with no parameters has none)."""
-    try:
-        import register_bus_driver_gen as _rbdg
-    except Exception:
+    """`{NAME: value}` for every constant visible where `dut_module` declares
+    its ports, read out of THIS ONE text.
+
+    See the module docstring for why only the DEFAULTS (never an instantiation
+    override) are consulted. `{}` when nothing is declared — which is not an
+    error: a module with no constants has none.
+
+    Three scopes, in the order a port declaration sees them:
+
+      * the `#( ... )` parameter header — parameters and its localparams. A
+        derived constant (`localparam int IdxW = $clog2(N)`) is exactly what a
+        width is written over.
+      * the module BODY — Verilog-1995 has no header at all and states the
+        width there instead (`parameter BITS = 39;`).
+      * PACKAGES this text declares, scoped (`top_pkg::TL_DW`) and, for the
+        packages this module imports, unqualified as well.
+    """
+    m = _rbdg()
+    if m is None:
         return {}
     try:
-        # Parameters AND header localparams: a port is declared against
-        # whatever the header defines, and a derived constant
-        # (`localparam int IdxW = $clog2(N)`) is exactly what a width is
-        # written over. Reading only `parameter` left those ports refusing on a
-        # value the design states one line above them.
-        return _rbdg.dut_header_constants(rtl_text or "", dut_module or "")
+        pkgs = m.package_constants([("<text>", rtl_text or "")])
+        imported = m.dut_imported_packages(rtl_text or "", dut_module or "")
+        out = _package_scope(pkgs, imported)
+        # SEEDED: a module's own default is legitimately written over a package
+        # constant (`parameter int DATA_WIDTH = top_pkg::TL_DW`).
+        own = m.dut_scope_constants(rtl_text or "", dut_module or "", seed=out)
     except Exception:
         return {}
+    out.update(own)          # the module's own declarations win
+    return out
 
 
 def defaults_from_sources(sources: Sequence[Tuple[object, str]],
                           dut_module: str) -> Dict[str, int]:
-    """`dut_defaults` over every RTL source, taking the FIRST file that actually
-    declares a parameter header for `dut_module`.
+    """`dut_defaults` for `dut_module`, with PACKAGES read from EVERY source.
 
-    A module is defined once; scanning them all just means the caller does not
-    have to know which file holds it. An empty result is returned when no file
-    declares a parameterised header — again not an error.
+    A package is declared in a file of its own, so a module's own text can
+    never state the constants it imports. Harvesting packages across the whole
+    source set is what makes `[top_pkg::TL_DW-1:0]` and `[NumRegsData-1:0]`
+    resolvable at all; the module's own header and body still WIN any clash.
+
+    An empty result is returned when no file declares the module — again not an
+    error, and the caller then refuses on the width cell alone.
     """
+    m = _rbdg()
+    if m is None:
+        return {}
+    try:
+        pkgs = m.package_constants(sources or [])
+    except Exception:
+        pkgs = {}
+    own: Dict[str, int] = {}
+    imported: Sequence[str] = []
     for _path, text in sources or []:
-        got = dut_defaults(text, dut_module)
-        if got:
-            return got
-    return {}
+        if not _declares(text or "", dut_module):
+            continue
+        try:
+            imported = m.dut_imported_packages(text or "", dut_module or "")
+            own = m.dut_scope_constants(
+                text or "", dut_module or "",
+                seed=_package_scope(pkgs, imported))
+        except Exception:
+            own, imported = {}, []
+        if own or imported:
+            break
+    out = _package_scope(pkgs, imported)
+    out.update(own)
+    return out
 
 
 def resolve(width_decl: Optional[str],
@@ -229,12 +390,15 @@ def resolve(width_decl: Optional[str],
                     return (f" [{a}:{b}]" if a != b else "",
                             f"evaluated {wd!r} over the DUT's own parameter "
                             f"defaults {params!r}")
-                unknown = sorted(
-                    {t for t in re.findall(r"[A-Za-z_]\w*", wd)
-                     if t not in params})
-                blocked = (f"{wd!r} does not evaluate over the DUT's own "
-                           f"parameter defaults "
-                           f"{params if params else '{} (the DUT declares no parameter header)'}"
+                unknown = _unresolved_symbols(wd, params)
+                # NAME THE SYMBOL, NOT THE MAP. The scope a port is declared in
+                # now legitimately holds every constant every package in the
+                # design exports, so printing the map printed hundreds of
+                # entries and buried the one name the reader needs. The map is
+                # reported by SIZE and by the DUT's own unscoped names; the
+                # thing that blocked the width is named in full.
+                blocked = (f"{wd!r} does not evaluate over "
+                           f"{scope_summary(params)}"
                            + (f"; unresolved symbol(s): {unknown}" if unknown
                               else "; the expression form is not supported"))
         else:

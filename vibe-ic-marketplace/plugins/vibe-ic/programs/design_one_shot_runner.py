@@ -8434,7 +8434,7 @@ def step_full_stack_tb_gen(project: Path,
             f"cannot declare the DUT surface of {top_module!r}: "
             f"{len(_v643_unresolved)} port(s) state a width that is not "
             f"derivable from the DUT's own parameter defaults "
-            f"({_v643_params or 'none declared'}) — "
+            f"({_port_width.scope_summary(_v643_params)}) — "
             + "; ".join(_v643_unresolved)
             + ". Refusing rather than declaring them 1 bit: a narrowed port "
               "binds bit 0 of a bus and still reports CONNECTIVITY_PASS.")
