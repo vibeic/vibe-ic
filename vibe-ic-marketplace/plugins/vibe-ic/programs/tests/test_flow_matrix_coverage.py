@@ -2408,17 +2408,21 @@ def test_the_flight_recorder_counts_real_overlap_and_not_a_clock(
             f"the schedule that ran")
     monkeypatch.delenv(_OUTCOME_WORKER_CAP_ENV)
 
-    # NEGATIVE ARM 2 — the figure must not be STALE. A recorder that never
-    # reset would still be reporting the 3 from the wide run above, and every
-    # later run would inherit a concurrency it never had. Two paths make a
-    # ceiling of one, so the honest answer here is 1 and the stale answer is 3.
-    _run_outcome_reports(eight[:2], cwd=tmp_path)
+    # NEGATIVE ARM 2 — a THIRD schedule, so neither a constant nor a stale
+    # figure can survive. A recorder that never reset would still be reporting
+    # the 3 from the wide run; one that echoed the last cap would report 1.
+    # THE SAME EIGHT PATHS every time, deliberately: this item's nested
+    # progress total is `len(paths)` and a varying path count would make one
+    # item declare three different totals to the landing supervisor.
+    monkeypatch.setenv(_OUTCOME_WORKER_CAP_ENV, "2")
+    _run_outcome_reports(eight, cwd=tmp_path)
     assert (_LAST_OUTCOME_RUN["width"], _LAST_OUTCOME_RUN["peak_in_flight"]) \
-        == (1, 1), (
-            f"after a 2-path run the recorder reads "
+        == (2, 2), (
+            f"the pool was capped to two and the recorder reads "
             f"width={_LAST_OUTCOME_RUN['width']} "
-            f"peak={_LAST_OUTCOME_RUN['peak_in_flight']}; a figure carried over "
-            f"from the previous run is a concurrency this one never had")
+            f"peak={_LAST_OUTCOME_RUN['peak_in_flight']}; it is reporting a "
+            f"constant, or a figure carried over from the previous run")
+    monkeypatch.delenv(_OUTCOME_WORKER_CAP_ENV)
 
     # WHAT THIS RECORDER MEASURES, said plainly so nobody reads more into the
     # assertion it backs: runs SUBMITTED AND NOT YET RETURNED. That is the

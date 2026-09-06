@@ -172,7 +172,20 @@ HERMETIC_TEST_PROGRESS = {
         # re-checked against the live collection rather than assumed; only 31
         # is after it and shifts by exactly one. The domain TOTALS are unmoved
         # too: they count `test_matrix_d[1-9]_*.py`, still 9 modules.
-        "items": 33,
+        #
+        # 33 -> 36, re-derived from the live collection at `d011ef9e9` with
+        # `pytest --collect-only -q` from the plugin root, autoload and bytecode
+        # writes off -- the same command this file's own check runs. The three
+        # added items are `test_the_process_budget_narrows_under_load_and_never_
+        # widens` (#27), `test_a_host_that_cannot_be_measured_keeps_the_ceiling`
+        # (#28) and `test_the_flight_recorder_counts_real_overlap_and_not_a_clock`
+        # (#29). BOTH NUMBERS MOVE OR NEITHER DOES: the three land at 27-29, so
+        # the ordinals BEFORE them -- 21, 25, 26 -- are unmoved and were each
+        # re-read from that collection rather than assumed, and the two after
+        # shift by exactly three, 28 -> 31 and 32 -> 35. The domain TOTALS are
+        # unmoved: they still count `test_matrix_d[1-9]_*.py`, still 9 modules,
+        # and the wave-boundary item still drives its own 8 synthetic paths.
+        "items": 36,
         # EVERY PRODUCER ITEM MUST APPEAR IN EXACTLY ONE OF TWO LISTS, and
         # this is the second. It is NOT a claim that these items are short:
         # it is the MEASURED set of producer items carrying no schedule at
@@ -190,6 +203,18 @@ HERMETIC_TEST_PROGRESS = {
             "test_nested_outcome_run_is_killed_when_no_item_can_renew_the_window",
             "test_no_cell_is_counted_enforced_while_its_predicate_is_red",
             "test_the_enforcement_census_is_reported_for_humans",
+            # ADDED HERE AND NOT AS A DOMAIN ROW, and the reason is the protocol
+            # rather than the cost. This item drives `_run_outcome_reports`
+            # THREE times over the same eight synthetic paths -- once at the
+            # derived width, once capped to one, once capped to two -- because
+            # its whole subject is that the in-flight census follows the
+            # schedule that ran. Each call emits `matrix-outcome-modules` from 1
+            # to 8, so a domain row for it would declare one monotonic 1..8 lease
+            # against a stream that restarts twice, and the supervisor would be
+            # right to refuse it. The item is a stand-in-driven scheduler probe:
+            # `_run_one_module_outcome` is monkeypatched to a 0.15 s fake, no
+            # nested process is launched, and the whole item is about 1.5 s.
+            "test_the_flight_recorder_counts_real_overlap_and_not_a_clock",
         ),
         "producer_profiles": (
             ("_run_outcome_reports", "enforcement_census"),
@@ -206,10 +231,10 @@ HERMETIC_TEST_PROGRESS = {
             (26, HERMETIC_MATRIX_FILE
              + "::test_the_outcome_pool_waits_at_each_wave_boundary",
              "matrix-outcome-modules", 8),
-            (28, HERMETIC_MATRIX_FILE
+            (31, HERMETIC_MATRIX_FILE
              + "::test_every_cell_has_a_live_outcome_and_the_outcome_run_is_not_starved",
              "matrix-outcome-modules", 9),
-            (32, HERMETIC_MATRIX_FILE
+            (35, HERMETIC_MATRIX_FILE
              + "::test_the_second_axis_downgrades_a_red_cell_that_the_state_axis_counts",
              "matrix-outcome-modules", 1),
         ),
