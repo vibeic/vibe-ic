@@ -506,3 +506,48 @@ class TestEndToEndOnANeutralModule:
         # and the score responds to them rather than staying at the clean value
         assert rep.score < 9, rep.score
         assert rep.total_errors + rep.total_warns >= 1
+
+    def test_a_skipped_auditor_is_reported_and_caps_the_score(self, tmp_path):
+        """PINS A JUDGEMENT CALL THAT NEEDS A RULING — see LAND.md F2036-H.
+
+        `_load_precheck_findings` emits an INFO for every auditor that did not
+        run, on the principle this repo applies everywhere: a check that did not
+        run is reported, never counted as a pass.
+
+        MEASURED CONSEQUENCE, which the issue did not ask for and which I did
+        not intend: `review_rtl_dir` invokes `rtl_precheck_gate` with no
+        `--l12-json`, so `l12_sequence_implementation_check` ALWAYS skips, so
+        there is ALWAYS at least one INFO, so `compute_score` can never return
+        10 through this program — and `skills/rtl-review/SKILL.md` documents
+        `10 | 0 errors, 0 warns, 0 infos | PASS` as a reachable row. It is now
+        unreachable here.
+
+        Two defensible readings:
+          (a) KEEP — a 10/10 would overstate confidence when a check was not
+              run, and capping at 9 signals incomplete coverage honestly;
+          (b) SEPARATE — a skipped auditor is a fact about the INVOCATION, not
+              about the RTL, so it belongs in its own report field rather than
+              moving a score that is defined over code findings.
+        (b) would RAISE a score, so I did not choose it unilaterally. This test
+        pins (a), today's behaviour, so whichever way it is ruled the change is
+        deliberate and visible rather than silent.
+        """
+        d = tmp_path / "rtl"
+        d.mkdir()
+        (d / "register_slice.sv").write_text(REGISTER_SLICE)
+        rep = mod.review_rtl_dir(d, tmp_path / "ev")
+
+        skipped = [f for cat in rep.per_category.values() for f in cat.findings
+                   if f.source.startswith("rtl_precheck_gate")
+                   and "did not run" in f.message]
+        assert skipped, "a skipped auditor must be visible in the report"
+        assert all(f.severity == "INFO" for f in skipped), skipped
+        # it is reported as absence, not as a finding about the RTL
+        assert all(f.line == 0 and not f.file for f in skipped)
+        # and the documented 10 row is consequently not reachable here
+        assert rep.total_errors == 0 and rep.total_warns == 0
+        assert rep.total_infos >= 1
+        assert rep.score == 9, (
+            "clean RTL scores 9, not 10, purely because an auditor was skipped "
+            "— that is the consequence under ruling in F2036-H")
+        assert rep.verdict == "PASS"
