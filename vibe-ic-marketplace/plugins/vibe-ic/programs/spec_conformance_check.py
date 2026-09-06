@@ -1488,10 +1488,509 @@ def _ordered_phase_monitoring_early(spec_text: str, rtl_body: str):
     return out
 
 
+# ---------------------------------------------------------------------------
+# FRAME CONTRACT (vibe-ic#2035 family F4) — mapping + temporal composition
+#
+# "Framed serial receiver forwards raw fields, adds latency or ignores
+#  inter-frame space" packs THREE defects into one sentence, and this block
+# keeps them apart because a single boolean is not a verdict a reader can act
+# on:
+#
+#   1. MAPPING      the receiver hands on the raw field instead of applying the
+#                   decode table the INPUT declares;
+#   2. LATENCY      the output appears later than the contract states;
+#   3. INTER-FRAME  the gap BETWEEN frames is part of the protocol and is not
+#                   enforced, so back-to-back frames are accepted.
+#
+# (2) and (3) are two constraints on the SAME time axis, so a checker that only
+# ever tests one of them at a time passes a design that violates their
+# COMBINATION. They are therefore evaluated together and reported together in
+# one `frame-contract-composition` line that names each element's state; each
+# VIOLATED element additionally gets its own ERROR naming which half failed.
+#
+# The input side lives in `_frame_contract.py` (a shared library, so a table or
+# counter emitter can consume the SAME typed contract this gate judges against).
+# It never defaults a unit: a temporal claim needs a unit, a bound and an event
+# pair, and any element the input does not structurally state is surfaced BY
+# NAME as AI_REQUIRED instead of being completed with a guess.
+#
+# chip-AGNOSTIC: protocol English plus Verilog literal/assignment structure. No
+# IC name, vendor, node, SKU or benchmark identifier.
+# ---------------------------------------------------------------------------
+
+_ASSIGN_STMT_RE = __import__('re').compile(
+    r'\bassign\b\s+(?:#\s*\([^)]*\)\s*)?([A-Za-z_]\w*)\s*(?:\[[^\]]*\])?\s*='
+    r'(?!=)([^;]*);')
+
+
+def _rtl_regions(body: str):
+    """Split the module body into (kind, text) regions.
+
+    kind is 'seq' for an edge-sensitive always / always_ff and 'comb' for
+    `always @(*)` / `always_comb`. A region runs to the next top-level always /
+    assign / endmodule rather than a fixed character window, so a long clocked
+    block is not silently truncated mid-way."""
+    import re
+    marks = []
+    for m in re.finditer(r'\balways(?:_ff|_comb|_latch)?\b\s*(@\s*\(([^)]*)\))?',
+                         body):
+        sens = m.group(2) or ''
+        kind = 'seq' if re.search(r'\b(?:pos|neg)edge\b', sens) else 'comb'
+        if m.group(0).rstrip().endswith('always_ff'):
+            kind = 'seq'
+        marks.append((m.start(), m.end(), kind))
+    for m in re.finditer(r'\bassign\b', body):
+        marks.append((m.start(), m.start(), 'assign'))
+    for m in re.finditer(r'\bendmodule\b', body):
+        marks.append((m.start(), m.start(), 'end'))
+    marks.sort()
+    out = []
+    for i, (st, en, kind) in enumerate(marks):
+        if kind in ('assign', 'end'):
+            continue
+        stop = len(body)
+        for st2, _, _ in marks[i + 1:]:
+            if st2 > st:
+                stop = st2
+                break
+        out.append((kind, body[en:stop]))
+    return out
+
+
+def _rtl_drivers(body: str):
+    """name -> [(kind, rhs_text)] over the whole module.
+
+    kind is 'seq' when the assignment is a nonblocking assignment inside an
+    edge-sensitive block (one clock of latency) and 'comb' otherwise."""
+    import re
+    drivers = {}
+
+    def add(nm, kind, rhs):
+        drivers.setdefault(nm, []).append((kind, rhs.strip()))
+
+    for m in _ASSIGN_STMT_RE.finditer(body):
+        add(m.group(1), 'comb', m.group(2))
+    for kind, text in _rtl_regions(body):
+        if kind == 'seq':
+            # A clocked assignment ARRIVES when its enable fires, not only when
+            # its data changes, so the nearest enclosing `if (...)` / `case (...)`
+            # condition is a real timing dependency and is recorded as one.
+            # Without it a receiver that registers its output UNDER the
+            # frame-done pulse shows no structural relation to that pulse at all,
+            # and the whole latency question becomes undecidable exactly where it
+            # matters. Clock/reset names are excluded: they gate every register.
+            heads = [(m.start(), m.group(1))
+                     for m in re.finditer(r'\b(?:if|case[zx]?)\s*\(([^;]*?)\)',
+                                          text)]
+            for m in re.finditer(
+                    r'\b([A-Za-z_]\w*)\s*(?:\[[^\]]*\])?\s*<=\s*'
+                    r'(?:#\s*\d+\s*)?([^;]*);', text):
+                add(m.group(1), 'seq', m.group(2))
+                near = [h for h in heads if h[0] < m.start()]
+                if near:
+                    for ident in _rhs_idents(near[-1][1]):
+                        if not _CLKRST_NAME.match(ident):
+                            add(m.group(1), 'seq', ident)
+        else:
+            for m in re.finditer(
+                    r'\b([A-Za-z_]\w*)\s*(?:\[[^\]]*\])?\s*=(?!=)([^;]*);',
+                    text):
+                add(m.group(1), 'comb', m.group(2))
+    return drivers
+
+
+_IDENT_ONLY_RE = __import__('re').compile(
+    r'([A-Za-z_]\w*)\s*(?:\[[^\]]*\])?')
+
+
+def _rhs_idents(rhs: str):
+    """Identifiers READ by an RHS expression, Verilog keywords removed."""
+    import re
+    kw = {'begin', 'end', 'if', 'else', 'case', 'endcase', 'default', 'posedge',
+          'negedge', 'or', 'and', 'not', 'xor', 'nand', 'nor', 'xnor',
+          'signed', 'unsigned'}
+    return [t for t in re.findall(r"(?<![\w'])([A-Za-z_]\w*)", rhs)
+            if t not in kw]
+
+
+_LITERAL_ONLY_RE = __import__('re').compile(
+    r"(?:\d+\s*)?'\s*[bBoOdDhH]\s*[0-9a-fA-FxXzZ_]+|0[xX][0-9a-fA-F_]+|\d+")
+
+
+def _forward_source(rhs: str) -> Optional[str]:
+    """The single signal `rhs` FORWARDS verbatim, or None if it computes.
+
+    Three shapes forward a field unchanged and all three occur in real
+    receivers, so all three are one hop:
+      * a bare read, optionally bit-selected      `ftype` / `sh[2:0]`
+      * a QUALIFIED read                          `done ? ftype : 4'h0`
+      * a width-adjusting concat                  `{1'b0, ftype}`
+    Reading only the first of them was measured to miss a genuine raw-field
+    forward on this branch: the qualified form reported "computed, not
+    forwarded" and the mapping rule went silent on a design that plainly
+    forwarded the field. A shape with TWO identifiers is a computation and is
+    not a hop."""
+    import re
+    rhs = rhs.strip()
+    while rhs.startswith('(') and rhs.endswith(')'):
+        rhs = rhs[1:-1].strip()
+    m = _IDENT_ONLY_RE.fullmatch(rhs)
+    if m:
+        return m.group(1)
+    tern = re.match(r'^[^?]*\?([^:]*):(.*)$', rhs)
+    if tern:
+        a, b = tern.group(1).strip(), tern.group(2).strip()
+        for x, y in ((a, b), (b, a)):
+            mx = _IDENT_ONLY_RE.fullmatch(x)
+            if mx and _LITERAL_ONLY_RE.fullmatch(y):
+                return mx.group(1)
+        return None
+    if rhs.startswith('{') and rhs.endswith('}'):
+        parts = [q.strip() for q in rhs[1:-1].split(',')]
+        idents = [q for q in parts if _IDENT_ONLY_RE.fullmatch(q)]
+        lits = [q for q in parts if _LITERAL_ONLY_RE.fullmatch(q)]
+        if len(idents) == 1 and len(idents) + len(lits) == len(parts):
+            return _IDENT_ONLY_RE.fullmatch(idents[0]).group(1)
+    return None
+
+
+def _identity_forward_chain(drivers, dst: str, limit: int = 8):
+    """[dst, a, b, ...] following SOLE drivers that FORWARD one signal.
+
+    A chain of length >= 2 means `dst` carries another signal's bits VERBATIM —
+    which is exactly "forwards the raw field" when the input declared a table."""
+    chain = [dst]
+    cur = dst
+    for _ in range(limit):
+        ds = drivers.get(cur, [])
+        if len(ds) != 1:
+            break
+        nxt = _forward_source(ds[0][1])
+        if not nxt or nxt in chain:
+            break
+        chain.append(nxt)
+        cur = nxt
+    return chain
+
+
+def _assigned_inside_case(body: str, names) -> bool:
+    """True if any of `names` is assigned inside a case/casez/casex statement —
+    the canonical shape of an APPLIED lookup table."""
+    import re
+    want = set(names)
+    for m in re.finditer(r'\bcase[zx]?\b\s*\(', body):
+        end = body.find('endcase', m.end())
+        seg = body[m.end():end if end != -1 else len(body)]
+        for nm in re.findall(r'\b([A-Za-z_]\w*)\s*(?:\[[^\]]*\])?\s*<?=(?!=)',
+                             seg):
+            if nm in want:
+                return True
+    return False
+
+
+def _rtl_contains_value(body: str, value: int) -> bool:
+    """Does this RTL carry `value` as a numeric constant in ANY radix?
+
+    Deliberately generous: a HIT only ever makes the caller STAY SILENT, so
+    over-matching can suppress a finding but can never manufacture one.
+
+    Bare decimals are matched against a body with every `[...]` removed: a
+    `reg [3:0] q` declaration contains the digit 3 and would otherwise be read
+    as evidence that the constant 3 is used as a VALUE. A sized literal
+    (`4'h3`) and a C hex are unambiguous and are matched anywhere."""
+    import re
+    try:
+        from _frame_contract import literal_forms
+    except ImportError:
+        return True                      # cannot tell -> never accuse
+    debracketed = re.sub(r'\[[^\]]*\]', ' ', body)
+    for form in literal_forms(value):
+        if form.startswith("'"):
+            if re.search(r"'\s*" + re.escape(form[1]) + r"\s*0*"
+                         + re.escape(form[2:]) + r"\b", body, re.IGNORECASE):
+                return True
+        elif form.startswith('0x'):
+            if re.search(re.escape(form) + r'\b', body, re.IGNORECASE):
+                return True
+        else:
+            if re.search(r'(?<![\w.\'])' + re.escape(form) + r'(?![\w.])',
+                         debracketed):
+                return True
+    return False
+
+
+def _clocked_hop_depths(drivers, src: str, dst: str, limit: int = 12):
+    """The SET of clocked-hop counts on every simple path src -> ... -> dst.
+
+    A single-element set is an unambiguous latency in clock cycles. An empty set
+    means `dst` does not structurally depend on `src` at all; more than one
+    element means the design offers several depths and the relative timing is
+    NOT decidable from structure — both are reported as such, never rounded to a
+    number."""
+    # `frame_done` is frequently a comb alias of an internal `done_q`, and the
+    # data path names the internal one. Reaching any COMBINATIONAL alias of the
+    # event is reaching the event; a SEQUENTIAL alias is NOT one, because it sits
+    # a cycle away and folding it in would understate the measured latency.
+    aliases = {src}
+    cur = src
+    for _ in range(8):
+        ds = drivers.get(cur, [])
+        if len(ds) != 1 or ds[0][0] != 'comb':
+            break
+        m = _IDENT_ONLY_RE.fullmatch(ds[0][1].strip())
+        if not m or m.group(1) in aliases:
+            break
+        cur = m.group(1)
+        aliases.add(cur)
+
+    seen_states = {}
+
+    def walk(node, path):
+        if node in aliases:
+            return {0}
+        if node in path or len(path) > limit:
+            return set()
+        key = (node, frozenset(path))
+        if key in seen_states:
+            return seen_states[key]
+        acc = set()
+        for kind, rhs in drivers.get(node, []):
+            add = 1 if kind == 'seq' else 0
+            for ident in _rhs_idents(rhs):
+                for d in walk(ident, path | {node}):
+                    acc.add(d + add)
+        seen_states[key] = acc
+        return acc
+
+    return walk(dst, frozenset())
+
+
+_GAP_NAME_RE = __import__('re').compile(
+    r'\b\w*(?:gap|idle|ifg|inter_?frame|dwell|guard|quiet|space)\w*\b',
+    __import__('re').IGNORECASE)
+
+
+def _rtl_interframe_evidence(body: str, value: int):
+    """Evidence that this RTL enforces an inter-frame gap of `value`, or None.
+
+    Two independent forms count, because legitimate architectures spell the same
+    rule differently: a gap/idle/quiet/guard-named parameter, state or register;
+    or the bound (or its off-by-one terminal-count neighbours) used as an operand
+    of a COMPARISON, which is how a dwell is actually enforced.
+
+    "the constant appears ANYWHERE" was the first version of the second leg and
+    it was measured wrong on this branch: a decode table containing `4'h3`
+    silently supplied evidence for a stated gap of 3 and the rule went quiet on
+    a receiver with no inter-frame logic at all. A constant is evidence of a
+    DURATION only where it is compared against."""
+    import re
+    m = _GAP_NAME_RE.search(body)
+    if m:
+        return f"gap/idle-named identifier '{m.group(0)}'"
+    try:
+        from _frame_contract import literal_forms
+    except ImportError:
+        return "constant scan unavailable"          # cannot tell -> never accuse
+    ops = r'(?:==|!=|>=|<=|>|<)'
+    for v in (value, value - 1, value + 1):
+        if v < 2:
+            continue
+        for form in literal_forms(v):
+            lit = (r"\d*'\s*" + re.escape(form[1]) + r"\s*0*" + re.escape(form[2:])
+                   if form.startswith("'")
+                   else re.escape(form))
+            if re.search(ops + r'\s*' + lit + r'\b', body, re.IGNORECASE) or \
+               re.search(lit + r'\s*' + ops, body, re.IGNORECASE):
+                return (f"constant {v} compared against (the stated bound or its "
+                        f"terminal-count neighbour)")
+    return None
+
+
+def _frame_contract_findings(input_prose: str, rtl_body: str,
+                             rtl_ports: List[Port], path: str,
+                             rtl_name: str) -> List['Finding']:
+    """Judge the whole frame contract at once and report it COMPOSED.
+
+    Returns one ERROR per VIOLATED element (so a reader is told WHICH of the
+    three failed, and both are named when two fail together) plus a single
+    `frame-contract-composition` INFO carrying the joint verdict."""
+    try:
+        import _frame_contract as _fc
+    except ImportError:                       # noqa: BLE001 — library absent
+        return []
+    if not input_prose or not rtl_body:
+        return []
+    ins = [p.name for p in rtl_ports if p.direction == 'input']
+    outs = [p.name for p in rtl_ports if p.direction in ('output', 'inout')]
+    internals = sorted(set(__import__('re').findall(
+        r'\b(?:reg|wire|logic)\b(?:\s*\[[^\]]*\])?\s+([A-Za-z_]\w*)',
+        rtl_body)))
+    contract = _fc.extract_frame_contract(input_prose, ins, outs, internals)
+    if not contract.any_stated():
+        return []
+
+    drivers = _rtl_drivers(rtl_body)
+    f: List[Finding] = []
+    states = {}
+    details = {}
+
+    # ---- 1. MAPPING: is the declared decode table APPLIED, or forwarded raw?
+    fm = contract.mapping
+    if fm is not None:
+        if fm.missing:
+            states['mapping'] = _fc.AI_REQUIRED
+            details['mapping'] = ("declared table not machine-checkable — "
+                                  + "; ".join(fm.missing))
+        else:
+            chain = _identity_forward_chain(drivers, fm.dst)
+            vals = fm.evidencable_outputs
+            present = [v for v in vals if _rtl_contains_value(rtl_body, v)]
+            has_case = _assigned_inside_case(rtl_body, chain)
+            if len(chain) < 2:
+                states['mapping'] = _fc.SATISFIED
+                details['mapping'] = (
+                    f"'{fm.dst}' is computed, not forwarded")
+            elif present or has_case:
+                _how = ('case/casez lookup' if has_case
+                        else 'mapped values '
+                             + ', '.join(str(v) for v in present))
+                states['mapping'] = _fc.SATISFIED
+                details['mapping'] = (
+                    f"table evidence present in the RTL ({_how})")
+            else:
+                states['mapping'] = _fc.VIOLATED
+                details['mapping'] = (
+                    f"'{fm.dst}' forwards '{chain[-1]}' verbatim")
+                f.append(Finding(path, 'ERROR', 'frame-field-mapping-not-applied',
+                    fm.dst,
+                    f"the input declares a {len(fm.entries)}-entry decode table "
+                    f"for '{fm.dst}'"
+                    + (f" from '{fm.src}'" if fm.src else "")
+                    + f", but the RTL drives '{fm.dst}' by forwarding "
+                    f"'{chain[-1]}' verbatim ({' <- '.join(chain)}) and carries "
+                    f"none of the mapped output values "
+                    f"({', '.join(str(v) for v in vals)}) anywhere in the "
+                    f"module. The receiver hands on the RAW FIELD; apply the "
+                    f"declared table (a case/casez over the field, or a "
+                    f"constant lookup array) before driving '{fm.dst}'."))
+    else:
+        states['mapping'] = _fc.NOT_STATED
+
+    # ---- 2. LATENCY: does the output arrive LATER than the contract states?
+    tb = contract.latency
+    if tb is not None:
+        if tb.missing:
+            states['latency'] = _fc.AI_REQUIRED
+            details['latency'] = ("temporal bound incomplete — "
+                                  + "; ".join(tb.missing)
+                                  + " [route to AI: do NOT default it]")
+        elif not tb.comparable_to_cycles:
+            states['latency'] = _fc.AI_REQUIRED
+            details['latency'] = (
+                f"stated in {tb.unit}s, and the input does not state the "
+                f"oversampling ratio, so it cannot be compared against a "
+                f"register-stage count [route to AI]")
+        else:
+            depths = _clocked_hop_depths(drivers, tb.event_from, tb.event_to)
+            if not depths:
+                states['latency'] = _fc.AI_REQUIRED
+                details['latency'] = (
+                    f"no structural path '{tb.event_from}' -> '{tb.event_to}' "
+                    f"in the RTL, so their relative timing is not decidable "
+                    f"from structure [route to AI]")
+            elif len(depths) > 1:
+                states['latency'] = _fc.AI_REQUIRED
+                details['latency'] = (
+                    f"the RTL offers several depths {sorted(depths)} from "
+                    f"'{tb.event_from}' to '{tb.event_to}'; not decidable "
+                    f"from structure [route to AI]")
+            else:
+                d = next(iter(depths))
+                over = (d > tb.value) if tb.bound in ('exactly', 'at_most') \
+                    else False
+                under = (d < tb.value) if tb.bound in ('exactly', 'at_least') \
+                    else False
+                if over:
+                    states['latency'] = _fc.VIOLATED
+                    details['latency'] = (
+                        f"{d} cycle(s) measured vs {tb.bound} {tb.value}")
+                    f.append(Finding(path, 'ERROR',
+                        'frame-output-latency-added', tb.event_to,
+                        f"the input states '{tb.event_to}' is valid "
+                        f"{tb.bound.replace('_', ' ')} {tb.value} clock "
+                        f"cycle(s) after '{tb.event_from}', but the RTL's "
+                        f"clocked-assignment path '{tb.event_from}' -> "
+                        f"'{tb.event_to}' carries {d} register stage(s) — the "
+                        f"receiver ADDS {d - tb.value} cycle(s) of latency. "
+                        f"Drive '{tb.event_to}' from the same stage that "
+                        f"produces '{tb.event_from}' instead of registering it "
+                        f"again. Input clause: \"{tb.raw.strip()}\""))
+                elif under:
+                    states['latency'] = _fc.VIOLATED
+                    details['latency'] = (
+                        f"{d} cycle(s) measured vs {tb.bound} {tb.value}")
+                    f.append(Finding(path, 'INFO',
+                        'frame-output-latency-short', tb.event_to,
+                        f"the input states '{tb.event_to}' is valid "
+                        f"{tb.bound.replace('_', ' ')} {tb.value} clock "
+                        f"cycle(s) after '{tb.event_from}'; the RTL path "
+                        f"carries only {d}. Advisory: too EARLY is a different "
+                        f"defect from the one this rule owns."))
+                else:
+                    states['latency'] = _fc.SATISFIED
+                    details['latency'] = (
+                        f"{d} cycle(s) measured, contract {tb.bound} "
+                        f"{tb.value}")
+    else:
+        states['latency'] = _fc.NOT_STATED
+
+    # ---- 3. INTER-FRAME SPACE: is the gap between frames enforced at all?
+    ib = contract.interframe
+    if ib is not None:
+        if ib.missing:
+            states['interframe'] = _fc.AI_REQUIRED
+            details['interframe'] = ("inter-frame bound incomplete — "
+                                     + "; ".join(ib.missing)
+                                     + " [route to AI: do NOT default it]")
+        elif ib.value < 2:
+            states['interframe'] = _fc.AI_REQUIRED
+            details['interframe'] = (
+                f"a stated gap of {ib.value} cannot be evidenced in source: "
+                f"0 and 1 occur in every module [route to AI]")
+        else:
+            ev = _rtl_interframe_evidence(rtl_body, ib.value)
+            if ev:
+                states['interframe'] = _fc.SATISFIED
+                details['interframe'] = f"enforcement evidence: {ev}"
+            else:
+                states['interframe'] = _fc.VIOLATED
+                details['interframe'] = "no gap enforcement found"
+                f.append(Finding(path, 'ERROR',
+                    'frame-interframe-space-unenforced',
+                    rtl_name or '<module>',
+                    f"the input requires consecutive frames to be separated by "
+                    f"{ib.bound.replace('_', ' ')} {ib.value} {ib.unit}(s), but "
+                    f"the RTL carries NO inter-frame enforcement: no gap/idle/"
+                    f"guard-named parameter, state or register, and none of the "
+                    f"constants {ib.value - 1}/{ib.value}/{ib.value + 1} appears "
+                    f"anywhere in the module. Back-to-back frames the input "
+                    f"forbids are therefore accepted. The gap is part of the "
+                    f"protocol, not of the testbench. Input clause: "
+                    f"\"{ib.raw.strip()}\""))
+    else:
+        states['interframe'] = _fc.NOT_STATED
+
+    f.append(Finding(path, 'INFO', 'frame-contract-composition',
+                     rtl_name or '<module>',
+                     _fc.FrameContract.composition_line(states, details)))
+    return f
+
+
 def check(spec: SpecContract, rtl_name: str, rtl_ports: List[Port],
           rtl_resets: dict, rtl_registered: Optional[bool],
           path: str, rtl_body: str = '', spec_text: str = '',
-          renamed_groups: Optional[List[tuple]] = None) -> List[Finding]:
+          renamed_groups: Optional[List[tuple]] = None,
+          input_prose: str = '') -> List[Finding]:
     f: List[Finding] = []
 
     # ---- structural sanity: zero output-capable ports -----------------------
@@ -1976,6 +2475,13 @@ def check(spec: SpecContract, rtl_name: str, rtl_ports: List[Port],
                                      _v.get('detail', '')))
         except Exception:  # nosec — advisory pass is best-effort
             pass
+
+    # ---- frame contract: mapping + temporal composition (#2035 F4) ---------
+    # `input_prose` defaults to `spec_text` so every existing caller keeps its
+    # behaviour byte-for-byte; only `main()` supplies a DIFFERENT channel, for
+    # the JSON contract case where `spec_text` is deliberately empty.
+    f += _frame_contract_findings(input_prose or spec_text, rtl_body,
+                                  rtl_ports, path, rtl_name)
     return f
 
 
@@ -2005,6 +2511,31 @@ def main(argv: Optional[List[str]] = None) -> int:
     # prompt prose, not just the extracted contract. A JSON contract carries no
     # prose body, so pass it only for natural-language / markdown / Verilog specs.
     spec_body = '' if spec_path.suffix == '.json' else spec_raw
+
+    # A JSON CONTRACT IS NOT PROSE-FREE, and treating it as prose-free left
+    # every prose-derived rule in this gate structurally DORMANT on the flow's
+    # own invocation. Measured on this base, 2026-09-06, with one RTL body and
+    # one wording carried in two containers:
+    #   --spec spec.md   -> FAIL, 1 error (msbfirst-direction-mismatch)
+    #   --spec spec.json -> PASS, 0 findings          (same RTL, same sentence)
+    # and flow/phase1_phase2_phase3.yaml step 2 passes
+    # `--spec phase1/generated_docs/L9_INTEGRATION_SPEC.json`. An L9 integration
+    # spec carries a `description` on every port whose sibling `evidence` field
+    # names the input doc it was recovered from; `main()` discarded all of it.
+    #
+    # `input_prose` is a SEPARATE channel from `spec_body` on purpose. The
+    # existing prose rules were tuned against PROMPT prose and their false-fire
+    # behaviour on L9 description fields is unmeasured, so opening that channel
+    # to them wholesale is a change no measurement here supports. Only the
+    # frame-contract rules — which are swept over the corpus in this same change
+    # — read it. Widening it later is a separate decision with its own evidence.
+    input_prose = spec_body
+    if not input_prose:
+        try:
+            from _frame_contract import input_prose_from_json
+            input_prose = input_prose_from_json(spec_raw)
+        except ImportError:                      # library absent: no channel
+            input_prose = ''
 
     top = args.top or spec.module
     files = collect_rtl_files(args.paths, args.rtl_dir)
@@ -2083,7 +2614,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     findings = check(spec, rtl_name, rtl_ports, rtl_resets, rtl_registered, chosen,
                      rtl_body, spec_text=spec_body,
-                     renamed_groups=_renamed_groups)
+                     renamed_groups=_renamed_groups, input_prose=input_prose)
 
     # Per the semantic-confirm rule: a finding resting on a prose-inferred field that an
     # LLM has NOT confirmed is a CANDIDATE, not truth — annotate it so the agent confirms.
