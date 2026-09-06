@@ -103,11 +103,45 @@ $(docker images "${IMAGE_REPO}" --format '       {{.Repository}}:{{.Tag}} {{.ID}
 TARGET_ID="$(docker image inspect "$IMAGE" --format '{{.Id}}')"
 echo "   image id     : ${TARGET_ID}"
 
+
 # --- capture existing container config (or fall back to canonical defaults) --
+#
+# MOUNTS ARE DECLARED IN TWO PLACES, NOT ONE. A container created with `-v`
+# records its declarations in `.HostConfig.Binds`; a container created with
+# `--mount` records them in `.HostConfig.Mounts` and leaves `Binds` NULL. This
+# script used to read `Binds` alone, so recreating a `--mount`-declared
+# container produced an EMPTY mount array. Measured 2026-09-06 on a fleet host:
+# a container declaring two writable binds (`binds=0 mounts=2`) was replaced by
+# one with none — silently, while cmd, user, workdir and the memory ceiling were
+# all carried over correctly, and the health check still reported healthy because
+# it does not look at mounts. Both declaration forms are cloned now, deduplicated
+# by DESTINATION, retaining read-only and propagation settings.
 declare -a BINDS=() CMD=()
-USER_SPEC="" WORKDIR=""
+declare -a MOUNT_SRC=() MOUNT_DST=() MOUNT_RO=() MOUNT_TYPE=()
+USER_SPEC="" WORKDIR="" HAVE_OLD=0
+
+# add_mount SOURCE DESTINATION OPTS [TYPE] — first declaration of a destination
+# wins, so a legacy Bind and a structured Mount naming the same target produce
+# one argument rather than two conflicting ones.
+add_mount() {
+  local src="$1" dst="$2" opts="$3" type="${4:-bind}" i
+  [[ -n "$dst" ]] || return 0
+  for ((i = 0; i < ${#MOUNT_DST[@]}; i++)); do
+    [[ "${MOUNT_DST[i]}" == "$dst" ]] && return 0
+  done
+  MOUNT_SRC+=( "$src" ); MOUNT_DST+=( "$dst" ); MOUNT_TYPE+=( "$type" )
+  if [[ ",${opts}," == *",ro,"* ]]; then MOUNT_RO+=( ro ); else MOUNT_RO+=( rw ); fi
+  if [[ "$type" == "tmpfs" ]]; then
+    BINDS+=( --tmpfs "$dst" )
+  elif [[ -n "$opts" ]]; then
+    BINDS+=( -v "${src}:${dst}:${opts}" )
+  else
+    BINDS+=( -v "${src}:${dst}" )
+  fi
+}
 
 if docker container inspect "$NAME" >/dev/null 2>&1; then
+  HAVE_OLD=1
   OLD_IMG="$(docker inspect "$NAME" --format '{{.Config.Image}}')"
   echo "== existing container '${NAME}' found (image: ${OLD_IMG}) — cloning its config"
 
@@ -121,8 +155,25 @@ if docker container inspect "$NAME" >/dev/null 2>&1; then
     echo "-- FORCE=1: recreating despite a running EDA job."
   fi
 
-  while IFS= read -r b; do [[ -n "$b" ]] && BINDS+=( -v "$b" ); done \
-    < <(docker inspect "$NAME" --format '{{range .HostConfig.Binds}}{{println .}}{{end}}')
+  # legacy `-v` declarations: SOURCE:DESTINATION[:OPTIONS]
+  while IFS= read -r b; do
+    [[ -n "$b" ]] || continue
+    _bsrc="${b%%:*}"; _brest="${b#*:}"; _bdst="${_brest%%:*}"
+    if [[ "$_brest" == *:* ]]; then _bopts="${_brest#*:}"; else _bopts=""; fi
+    add_mount "$_bsrc" "$_bdst" "$_bopts" bind
+  done < <(docker inspect "$NAME" --format '{{range .HostConfig.Binds}}{{println .}}{{end}}')
+
+  # structured `--mount` declarations, which leave `Binds` null.
+  while IFS='|' read -r _mtype _msrc _mdst _mro _mprop; do
+    [[ -n "$_mdst" ]] || continue
+    _mopts=""
+    [[ "$_mro" == "true" ]] && _mopts="ro"
+    if [[ -n "$_mprop" && "$_mprop" != "<no value>" ]]; then
+      _mopts="${_mopts:+${_mopts},}${_mprop}"
+    fi
+    add_mount "$_msrc" "$_mdst" "$_mopts" "${_mtype:-bind}"
+  done < <(docker inspect "$NAME" --format '{{range .HostConfig.Mounts}}{{.Type}}|{{.Source}}|{{.Target}}|{{.ReadOnly}}|{{if .BindOptions}}{{.BindOptions.Propagation}}{{end}}{{println}}{{end}}')
+
   USER_SPEC="$(docker inspect "$NAME" --format '{{.Config.User}}')"
   WORKDIR="$(docker inspect "$NAME"  --format '{{.Config.WorkingDir}}')"
   while IFS= read -r c; do [[ -n "$c" ]] && CMD+=( "$c" ); done \
@@ -140,19 +191,32 @@ else
     "DESIGNS_DIR must be an absolute path (got '${DESIGNS_DIR}') — a relative path would become a docker named volume, not a bind mount"
   [[ -d "$DESIGNS_DIR" ]] || die \
     "DESIGNS_DIR '${DESIGNS_DIR}' does not exist — create it deliberately first (the installer never creates a workspace for you)"
-  BINDS=( -v "${DESIGNS_DIR}:${DESIGNS_DIR}" -v "${DESIGNS_DIR}:/foss/designs" )
+  add_mount "$DESIGNS_DIR" "$DESIGNS_DIR" "" bind
+  add_mount "$DESIGNS_DIR" "/foss/designs" "" bind
   USER_SPEC="$(id -u)"
   WORKDIR="/foss/designs"
   CMD=( --skip sleep infinity )
 fi
 
 echo "   binds        : ${BINDS[*]:-<none>}"
+echo "   mounts       : ${#MOUNT_DST[@]} declared"
+for ((_i = 0; _i < ${#MOUNT_DST[@]}; _i++)); do
+  printf '                  %s -> %s (%s, %s)\n' \
+    "${MOUNT_SRC[_i]:-<anonymous>}" "${MOUNT_DST[_i]}" "${MOUNT_TYPE[_i]}" "${MOUNT_RO[_i]}"
+done
 echo "   user/workdir : ${USER_SPEC:-<image default>} / ${WORKDIR:-<image default>}"
 echo "   cmd          : ${CMD[*]:-<image default>}   (entrypoint stays image-baked)"
 
-# --- recreate --------------------------------------------------------------
-echo "== removing old container (if any)"
-docker rm -f "$NAME" >/dev/null 2>&1 || true
+# --- PREFLIGHT: everything that can refuse must refuse BEFORE anything is
+# destroyed. The memory ceiling used to be derived AFTER `docker rm -f`, so a
+# refusal there left the host with no container at all.
+for ((_i = 0; _i < ${#MOUNT_DST[@]}; _i++)); do
+  [[ "${MOUNT_TYPE[_i]}" == "bind" ]] || continue   # named volumes/tmpfs have no host path
+  _msrc="${MOUNT_SRC[_i]}"
+  [[ "$_msrc" == /* ]] || continue                  # a bare name is a named volume
+  [[ -e "$_msrc" ]] || die \
+    "mount source '${_msrc}' (for ${MOUNT_DST[_i]}) does not exist — refusing to recreate '${NAME}'. Nothing was stopped or removed." 4
+done
 
 # --- memory ceiling --------------------------------------------------------
 # MEASURED 2026-08-19 across a seven-machine fleet: 45 EDA containers were
@@ -190,20 +254,80 @@ declare -a RUN=( docker run -d --name "$NAME" )
 [[ -n "$USER_SPEC" ]] && RUN+=( -u "$USER_SPEC" )
 [[ -n "$WORKDIR"  ]] && RUN+=( -w "$WORKDIR" )
 [[ ${#MEMFLAGS[@]} -gt 0 ]] && RUN+=( "${MEMFLAGS[@]}" )
-RUN+=( "${BINDS[@]}" "$IMAGE" )
+[[ ${#BINDS[@]} -gt 0 ]] && RUN+=( "${BINDS[@]}" )
+RUN+=( "$IMAGE" )
 [[ ${#CMD[@]} -gt 0 ]] && RUN+=( "${CMD[@]}" )
 
+# --- recreate, keeping the old container until readback passes --------------
+ROLLBACK=""
+restore_rollback() {
+  [[ -n "$ROLLBACK" ]] || return 0
+  docker rm -f "$NAME" >/dev/null 2>&1 || true
+  docker rename "$ROLLBACK" "$NAME" >/dev/null 2>&1 || true
+  docker start "$NAME" >/dev/null 2>&1 || true
+  echo "-- rolled back: the previous '${NAME}' container was restored" >&2
+}
+
+if [[ "$HAVE_OLD" == "1" ]]; then
+  ROLLBACK="${NAME}-rollback-$$"
+  docker rm -f "$ROLLBACK" >/dev/null 2>&1 || true
+  docker rename "$NAME" "$ROLLBACK" >/dev/null || die \
+    "could not rename existing '${NAME}' aside — nothing was destroyed" 5
+  docker stop "$ROLLBACK" >/dev/null 2>&1 || true
+  echo "== old container kept as '${ROLLBACK}' until readback passes"
+else
+  docker rm -f "$NAME" >/dev/null 2>&1 || true
+fi
+
 echo "== ${RUN[*]}"
-"${RUN[@]}" >/dev/null
+if ! "${RUN[@]}" >/dev/null; then
+  restore_rollback
+  die "docker run failed" 6
+fi
 
 # --- verify ----------------------------------------------------------------
+# The readback checks the MOUNTS as well as the image id. An image-id check that
+# passes while every mount is gone is exactly how the 2026-09-06 loss reached a
+# host: `== OK: container image id matches` was printed over an empty mount set.
 NEW_ID="$(docker inspect "$NAME" --format '{{.Image}}')"
 echo
 docker ps --filter "name=^/${NAME}$" --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}'
-if [[ "$NEW_ID" == "$TARGET_ID" ]]; then
-  echo "== OK: container image id matches ${IMAGE}"
-else
-  die "container image id ${NEW_ID} != target ${TARGET_ID}" 3
+
+READBACK_FAIL=""
+_fail() { READBACK_FAIL="${READBACK_FAIL:+${READBACK_FAIL}; }$*"; }
+[[ "$NEW_ID" == "$TARGET_ID" ]] || _fail "container image id ${NEW_ID} != target ${TARGET_ID}"
+
+declare -A GOT_SRC=() GOT_RW=()
+while IFS='|' read -r _gdst _gsrc _grw; do
+  [[ -n "$_gdst" ]] || continue
+  GOT_SRC["$_gdst"]="$_gsrc"; GOT_RW["$_gdst"]="$_grw"
+done < <(docker inspect "$NAME" --format '{{range .Mounts}}{{.Destination}}|{{.Source}}|{{.RW}}{{println}}{{end}}')
+
+for ((_i = 0; _i < ${#MOUNT_DST[@]}; _i++)); do
+  _d="${MOUNT_DST[_i]}"
+  if [[ -z "${GOT_SRC[$_d]+x}" ]]; then
+    _fail "declared mount ${_d} is absent from the recreated container"
+    continue
+  fi
+  if [[ "${MOUNT_TYPE[_i]}" == "bind" && "${MOUNT_SRC[_i]}" == /* \
+        && "${GOT_SRC[$_d]}" != "${MOUNT_SRC[_i]}" ]]; then
+    _fail "mount ${_d} came back from '${GOT_SRC[$_d]}', not '${MOUNT_SRC[_i]}'"
+  fi
+  _want_rw=true; [[ "${MOUNT_RO[_i]}" == "ro" ]] && _want_rw=false
+  if [[ -n "${GOT_RW[$_d]}" && "${GOT_RW[$_d]}" != "$_want_rw" ]]; then
+    _fail "mount ${_d} came back RW=${GOT_RW[$_d]}, expected ${_want_rw}"
+  fi
+done
+
+if [[ -n "$READBACK_FAIL" ]]; then
+  restore_rollback
+  die "readback failed: ${READBACK_FAIL}" 3
+fi
+
+echo "== OK: container image id matches ${IMAGE}"
+echo "== OK: all ${#MOUNT_DST[@]} declared mount(s) present after readback"
+if [[ -n "$ROLLBACK" ]]; then
+  docker rm -f "$ROLLBACK" >/dev/null 2>&1 || true
 fi
 echo
 echo "Next: in Claude Code run the MCP tool  eda_doctor (skip_versions=false)"

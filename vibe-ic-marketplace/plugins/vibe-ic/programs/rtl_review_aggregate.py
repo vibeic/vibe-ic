@@ -235,16 +235,93 @@ def _run_program_json(program_name: str, args: List[str],
         return 127, "", f"program not found: {program_name}"
 
 
-def _load_hygiene_findings(json_path: Path) -> List[Finding]:
-    """Parse rtl_hygiene_lint --json output into Finding list."""
+class ProducerOutputError(RuntimeError):
+    """A sub-program's output could not be consumed.
+
+    ISSUE #2036. Every loader here used to answer three very different
+    questions with the same value — an empty list:
+
+      * the producer ran and legitimately found nothing;
+      * the producer's JSON file was absent;
+      * the JSON parsed but was a shape this consumer does not understand.
+
+    "I could not read this" is not "there was nothing to report". Collapsing
+    them turns a broken tool chain into a clean review with a high score, which
+    is the one failure mode this repo refuses everywhere. The unreadable cases
+    now raise, and the CLI reports the refusal by name and exits non-zero.
+    """
+
+
+#: Exit codes a producer may return while still having written a usable report.
+#: `rtl_hygiene_lint` and `reset_discipline_check` return 1 when they FOUND
+#: something and `rtl_precheck_gate` returns 1 when a verdict failed — those are
+#: results. Anything else (2 = UNDETERMINED/usage, 124 = timeout, 127 = missing)
+#: means no verdict was reached, and no verdict is not a clean file.
+_PRODUCER_RESULT_RCS = (0, 1)
+
+
+def _read_producer_json(json_path: Path, program: str, rc: Optional[int] = None,
+                        stderr: str = "") -> Any:
+    """Read a sub-program's `--json` artifact, or refuse loudly.
+
+    Never returns a default. Raises `ProducerOutputError` naming the program and
+    the reason, so the difference between "clean" and "unreadable" survives.
+    """
+    if rc is not None and rc not in _PRODUCER_RESULT_RCS:
+        tail = (stderr or "").strip().splitlines()
+        detail = f": {tail[-1]}" if tail else ""
+        raise ProducerOutputError(
+            f"{program} exited {rc} without reaching a verdict{detail}")
     if not json_path.exists():
-        return []
+        raise ProducerOutputError(
+            f"{program} wrote no JSON at {json_path} — its findings are "
+            f"unknown, not empty")
     try:
-        data = json.loads(json_path.read_text(encoding="utf-8"))
-    except Exception:
-        return []
+        return json.loads(json_path.read_text(encoding="utf-8"))
+    except Exception as exc:  # noqa: BLE001 - reported, never swallowed
+        raise ProducerOutputError(
+            f"{program} JSON at {json_path} is unparseable: {exc}") from exc
+
+
+def _finding_records(data: Any, program: str, key: str = "findings") -> List[dict]:
+    """Normalize a producer's payload to a list of finding records.
+
+    MEASURED against the producers themselves, not against a doc:
+    `rtl_hygiene_lint.py --json` writes `json.dumps([asdict(f) for f in ...])`
+    and `reset_discipline_check.py --json` does the same — a BARE ARRAY, `[]`
+    for a clean file. The object envelope `{"findings": [...]}` is accepted as
+    well so a producer that grows a header does not break this consumer. Any
+    OTHER shape is refused by name rather than read as empty.
+    """
+    if isinstance(data, list):
+        records = data
+    elif isinstance(data, dict) and isinstance(data.get(key), list):
+        records = data[key]
+    else:
+        raise ProducerOutputError(
+            f"{program} JSON is a {type(data).__name__}, not a list of "
+            f"findings nor an object with a '{key}' list — refusing to read it "
+            f"as an empty result")
+    bad = [r for r in records if not isinstance(r, dict)]
+    if bad:
+        raise ProducerOutputError(
+            f"{program} JSON contains {len(bad)} non-object finding record(s) "
+            f"(first: {bad[0]!r}) — refusing to read them as an empty result")
+    return records
+
+
+def _load_hygiene_findings(json_path: Path, rc: Optional[int] = None,
+                           stderr: str = "") -> List[Finding]:
+    """Parse `rtl_hygiene_lint --json` output into a Finding list.
+
+    The producer emits a BARE ARRAY (`[]` for a clean file). Reading it as
+    `data.get("findings", [])` raised `AttributeError: 'list' object has no
+    attribute 'get'` and took the whole aggregate down with exit 1 and no report
+    at all — on an ordinary clean flip-flop (issue #2036).
+    """
+    data = _read_producer_json(json_path, "rtl_hygiene_lint", rc, stderr)
     out: List[Finding] = []
-    for item in data.get("findings", []):
+    for item in _finding_records(data, "rtl_hygiene_lint"):
         rule_id = item.get("rule", "unknown")
         category = HYGIENE_RULE_CATEGORY.get(rule_id, "style_readability")
         out.append(Finding(
@@ -259,16 +336,17 @@ def _load_hygiene_findings(json_path: Path) -> List[Finding]:
     return out
 
 
-def _load_reset_findings(json_path: Path) -> List[Finding]:
-    """Parse reset_discipline_check --json output."""
-    if not json_path.exists():
-        return []
-    try:
-        data = json.loads(json_path.read_text(encoding="utf-8"))
-    except Exception:
-        return []
+def _load_reset_findings(json_path: Path, rc: Optional[int] = None,
+                         stderr: str = "") -> List[Finding]:
+    """Parse `reset_discipline_check --json` output.
+
+    Same producer shape as the hygiene lint — a bare array — and so the same
+    latent crash; it was simply never reached, because the hygiene loader threw
+    first.
+    """
+    data = _read_producer_json(json_path, "reset_discipline_check", rc, stderr)
     out: List[Finding] = []
-    for item in data.get("findings", []):
+    for item in _finding_records(data, "reset_discipline_check"):
         out.append(Finding(
             category="reset_clock_hygiene",
             severity=item.get("severity", "WARN"),
@@ -281,37 +359,80 @@ def _load_reset_findings(json_path: Path) -> List[Finding]:
     return out
 
 
-def _load_precheck_findings(json_path: Path) -> List[Finding]:
-    """Parse rtl_precheck_gate --json output."""
-    if not json_path.exists():
-        return []
-    try:
-        data = json.loads(json_path.read_text(encoding="utf-8"))
-    except Exception:
-        return []
+def _load_precheck_findings(json_path: Path, rc: Optional[int] = None,
+                            stderr: str = "") -> List[Finding]:
+    """Parse `rtl_precheck_gate --json` output.
+
+    THE ENVELOPE THIS USED TO ASSUME NEVER EXISTED. The comment here claimed
+    `{auditor: {findings: [...], verdict: ...}}` and the code called
+    `data.get("auditors", {}).items()`. `rtl_precheck_gate.run_gate` in fact
+    emits `"auditors": [r.as_dict() for r in results]` — a LIST of
+    `AuditorResult` records (`name` / `passed` / `exit_code` / `skipped` /
+    `skip_reason` / `stdout_tail` / `stderr_tail`), with no per-finding array at
+    all. `.items()` on a list is the same `AttributeError` class as #2036; it
+    was simply never reached, because the hygiene loader raised first.
+
+    One Finding is emitted per FAILED auditor, and a SKIPPED auditor becomes an
+    INFO — a check that did not run is reported, never counted as a pass.
+    """
+    data = _read_producer_json(json_path, "rtl_precheck_gate", rc, stderr)
+    if not isinstance(data, dict):
+        raise ProducerOutputError(
+            f"rtl_precheck_gate JSON is a {type(data).__name__}, not the "
+            f"documented report object — refusing to read it as an empty result")
+    auditors = data.get("auditors")
+    if isinstance(auditors, dict):
+        # An object envelope keyed by auditor name is accepted too, so a future
+        # producer change does not silently zero this consumer out.
+        records = [dict(v, name=k) for k, v in auditors.items()
+                   if isinstance(v, dict)]
+        if len(records) != len(auditors):
+            raise ProducerOutputError(
+                "rtl_precheck_gate 'auditors' object holds non-object values "
+                "— refusing to read it as an empty result")
+    elif isinstance(auditors, list):
+        records = [a for a in auditors if isinstance(a, dict)]
+        if len(records) != len(auditors):
+            raise ProducerOutputError(
+                "rtl_precheck_gate 'auditors' list holds non-object entries "
+                "— refusing to read it as an empty result")
+    else:
+        raise ProducerOutputError(
+            f"rtl_precheck_gate JSON has no usable 'auditors' collection "
+            f"(got {type(auditors).__name__}) — refusing to read it as an "
+            f"empty result")
+
     out: List[Finding] = []
-    # rtl_precheck_gate emits {auditor: {findings: [...], verdict: ...}}
-    auditors = data.get("auditors", {})
-    for auditor_name, auditor_d in auditors.items():
-        for item in auditor_d.get("findings", []):
-            # Map auditor name to category — most precheck auditors target
-            # § 4 correctness smells, but specific ones target § 1 or § 2.
-            cat = "correctness_smells"
-            if "reset" in auditor_name.lower():
-                cat = "reset_clock_hygiene"
-            elif "port" in auditor_name.lower():
-                cat = "port_fidelity"
-            elif "synth" in auditor_name.lower() or "latch" in auditor_name.lower():
-                cat = "synthesis_hazards"
+    for rec in records:
+        auditor_name = str(rec.get("name", "unknown"))
+        # Map auditor name to category — most precheck auditors target
+        # § 4 correctness smells, but specific ones target § 1 or § 2.
+        cat = "correctness_smells"
+        low = auditor_name.lower()
+        if "reset" in low:
+            cat = "reset_clock_hygiene"
+        elif "port" in low:
+            cat = "port_fidelity"
+        elif "synth" in low or "latch" in low:
+            cat = "synthesis_hazards"
+
+        if rec.get("skipped"):
+            reason = str(rec.get("skip_reason", "")).strip() or "no reason given"
             out.append(Finding(
-                category=cat,
-                severity=item.get("severity", "WARN"),
-                rule_id=item.get("rule", auditor_name),
-                file=item.get("file", ""),
-                line=item.get("line", 0),
-                message=item.get("message", ""),
-                source=f"rtl_precheck_gate.{auditor_name}",
-            ))
+                category=cat, severity="INFO", rule_id=auditor_name,
+                file="", line=0,
+                message=f"auditor did not run: {reason}",
+                source=f"rtl_precheck_gate.{auditor_name}"))
+            continue
+        if rec.get("passed"):
+            continue
+        tail = str(rec.get("stderr_tail") or rec.get("stdout_tail") or "").strip()
+        detail = tail.splitlines()[-1] if tail else "no output captured"
+        out.append(Finding(
+            category=cat, severity="ERROR", rule_id=auditor_name,
+            file="", line=0,
+            message=f"auditor failed (exit {rec.get('exit_code', '?')}): {detail}",
+            source=f"rtl_precheck_gate.{auditor_name}"))
     return out
 
 
@@ -387,7 +508,14 @@ def aggregate(
 
 
 def review_rtl_dir(rtl_dir: Path, tmp_dir: Path) -> ReviewReport:
-    """Drive the 3 sub-programs over a directory of RTL files and aggregate."""
+    """Drive the 3 sub-programs over a directory of RTL files and aggregate.
+
+    Each sub-program's EXIT CODE is now carried into its loader. It used to be
+    discarded, so a producer that crashed, timed out or was missing entirely
+    contributed an empty finding list indistinguishable from a clean file
+    (#2036). A producer that reached no verdict now raises
+    `ProducerOutputError` rather than improving the score.
+    """
     files = sorted([p for p in rtl_dir.rglob("*")
                     if p.suffix in (".v", ".sv") and p.is_file()])
     findings: List[Finding] = []
@@ -395,27 +523,27 @@ def review_rtl_dir(rtl_dir: Path, tmp_dir: Path) -> ReviewReport:
     if files:
         # rtl_hygiene_lint files...
         hygiene_json = tmp_dir / "hygiene.json"
-        _run_program_json(
+        rc, _out, err = _run_program_json(
             "rtl_hygiene_lint.py",
             [str(f) for f in files],
             hygiene_json)
-        findings.extend(_load_hygiene_findings(hygiene_json))
+        findings.extend(_load_hygiene_findings(hygiene_json, rc, err))
 
     # reset_discipline_check directory-recursive
     reset_json = tmp_dir / "reset.json"
-    _run_program_json(
+    rc, _out, err = _run_program_json(
         "reset_discipline_check.py",
         ["--rtl-dir", str(rtl_dir)],
         reset_json)
-    findings.extend(_load_reset_findings(reset_json))
+    findings.extend(_load_reset_findings(reset_json, rc, err))
 
     # rtl_precheck_gate aggregate
     precheck_json = tmp_dir / "precheck.json"
-    _run_program_json(
+    rc, _out, err = _run_program_json(
         "rtl_precheck_gate.py",
         ["--rtl-dir", str(rtl_dir)],
         precheck_json)
-    findings.extend(_load_precheck_findings(precheck_json))
+    findings.extend(_load_precheck_findings(precheck_json, rc, err))
 
     return aggregate(
         findings,
@@ -529,7 +657,15 @@ def _cli() -> int:
     tmp_dir = args.tmp_dir or (args.rtl_dir / ".review")
     tmp_dir.mkdir(parents=True, exist_ok=True)
 
-    report = review_rtl_dir(args.rtl_dir, tmp_dir)
+    # #2036: an unreadable producer is a REFUSAL, never a clean review. It
+    # exits 3 (distinct from 1 = "reviewed, verdict not PASS" and 2 = usage) and
+    # writes NO report, so nothing downstream can mistake it for a score.
+    try:
+        report = review_rtl_dir(args.rtl_dir, tmp_dir)
+    except ProducerOutputError as exc:
+        print(f"rtl_review_aggregate: REFUSING to emit a review — {exc}",
+              file=sys.stderr)
+        return 3
     md = report_to_markdown(report)
 
     if args.out_md:

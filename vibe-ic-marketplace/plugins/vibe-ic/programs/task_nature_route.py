@@ -488,6 +488,140 @@ _PROSE_HINTS = (
 )
 
 
+# ── WHICH HINT IS ABOUT THE ACTION BEING REQUESTED? ─────────────────────────
+# ISSUE #2037. `next((n for n, rx in _PROSE_HINTS if rx.search(text)), None)`
+# takes the FIRST tuple that matches anywhere in the prompt, and `debug` is
+# declared first. So this prompt —
+#
+#   Complete the given partial SystemVerilog code for the register interface.
+#   When the stored key format is incorrect, the error output must be high.
+#
+# — routed to `debug`, on the word `incorrect`, which is not a description of
+# the task at all: it is part of the SPECIFICATION OF THE DESIRED ERROR
+# BEHAVIOUR. The stated action, in the leading imperative, is completion. Both
+# hints matched; tuple order decided, and tuple order knows nothing about what
+# is being asked.
+#
+# The fix is a precedence, not a new route and not a suppression:
+#
+#   2  the hint matches inside an IMPERATIVE clause — a sentence that opens with
+#      a verb addressed to the implementer ("Complete the …", "Fix the …").
+#      That is what the requester is asking for.
+#   1  the hint matches in ordinary narration ("The module below has an
+#      incorrect implementation of the counter.") — evidence, but weaker than a
+#      stated action.
+#   0  the hint matches ONLY inside a REQUIREMENT clause — a `when`/`if` clause,
+#      or a `must`/`shall`/`should` sentence. Prose of that shape describes how
+#      the finished circuit has to behave, never what the requester wants done.
+#
+# Ties fall back to `_PROSE_HINTS` declaration order, so a prompt with a single
+# matching hint — the overwhelming majority — routes EXACTLY as before. No
+# debug word is ignored: a genuine "Fix the incorrect counter" still scores 2 on
+# `debug` and still routes to `debug`. Nothing here keys off a benchmark, a
+# design identifier or a prompt hash.
+_FENCED_CODE = re.compile(r"```.*?(?:```|\Z)", re.S)
+_SENTENCE_SPLIT = re.compile(r"(?<=[.!?;:])\s+|\n+")
+
+#: Verbs a requester uses to name the action. Generic engineering-request
+#: vocabulary — no design, vendor or benchmark term appears here.
+_IMPERATIVE_VERBS = frozenset("""
+complete finish fill implement write design create build add append
+modify change update extend refactor rewrite replace remove delete
+fix debug correct repair resolve address
+optimi optimize optimise reduce shrink minimise minimize
+generate produce develop provide give make insert
+""".split())
+
+#: A clause that states how the finished design must BEHAVE, not what to do.
+_REQUIREMENT_SENTENCE = re.compile(
+    r"\b(must|shall|should|has\s+to|have\s+to|is\s+required|are\s+required)\b",
+    re.I)
+_SUBORDINATE_OPENER = re.compile(
+    r"^\W*(when|whenever|if|unless|while|once|after|before|during|in\s+case)\b",
+    re.I)
+
+
+def _prose_view(text: str) -> str:
+    """`text` with fenced code blanked to spaces, so offsets stay aligned.
+
+    Scoring looks at PROSE only; candidacy still searches the whole prompt, so
+    no hint that fires today stops firing.
+    """
+    return _FENCED_CODE.sub(lambda m: " " * (m.end() - m.start()), text)
+
+
+def _clause_spans(prose: str):
+    """[(start, end, kind)] over `prose`; kind in {imperative, narration,
+    requirement}."""
+    out = []
+    pos = 0
+    for piece in _SENTENCE_SPLIT.split(prose):
+        start = prose.find(piece, pos)
+        if start < 0:
+            start = pos
+        end = start + len(piece)
+        pos = end
+        stripped = piece.strip()
+        if not stripped:
+            continue
+        if _REQUIREMENT_SENTENCE.search(stripped) or \
+                _SUBORDINATE_OPENER.match(stripped):
+            kind = "requirement"
+        else:
+            first = re.match(r"\W*([A-Za-z]+)", stripped)
+            word = first.group(1).lower() if first else ""
+            kind = "imperative" if (
+                word in _IMPERATIVE_VERBS
+                or any(word.startswith(v) for v in ("optimi", "modif"))
+            ) else "narration"
+        out.append((start, end, kind))
+    return out
+
+
+_CLAUSE_WEIGHT = {"imperative": 2, "narration": 1, "requirement": 0}
+
+
+def _hint_action_scores(text: str):
+    """{hint_name: best clause weight} for every hint that matches `text`.
+
+    A hint that matches only inside fenced code (and so has no prose span at
+    all) keeps weight 0 — it is still a candidate, just the weakest kind of
+    evidence, exactly as a requirement clause is.
+    """
+    prose = _prose_view(text)
+    clauses = _clause_spans(prose)
+    scores = {}
+    for name, rx in _PROSE_HINTS:
+        if not rx.search(text):
+            continue
+        best = 0
+        for m in rx.finditer(prose):
+            for start, end, kind in clauses:
+                if start <= m.start() < end:
+                    best = max(best, _CLAUSE_WEIGHT[kind])
+                    break
+        scores[name] = best
+    return scores
+
+
+def resolve_prose_hint(text: str):
+    """Return (hint_name | None, ambiguous: bool).
+
+    `ambiguous` is True when two DIFFERENT categories are both stated as the
+    action with equal force. The router raises `needs_ai_parse` for that case
+    rather than emitting a confident hint it cannot justify.
+    """
+    scores = _hint_action_scores(text)
+    if not scores:
+        return None, False
+    order = {name: i for i, (name, _rx) in enumerate(_PROSE_HINTS)}
+    best = max(scores.values())
+    winners = sorted((n for n, s in scores.items() if s == best),
+                     key=lambda n: order[n])
+    ambiguous = best >= 2 and len(winners) > 1
+    return winners[0], ambiguous
+
+
 # ── DOES THE PROMPT ITSELF CARRY THE RTL? ───────────────────────────────────
 # `has_context` answers "did the caller hand me a FILE PATH". That is a question
 # about the CALL, not about the TASK. Someone who pastes their module into the
@@ -668,7 +802,7 @@ def classify_task_nature(prompt: str,
                 "source": "declared", "needs_ai_parse": False}
 
     text = prompt or ""
-    hinted = next((n for n, rx in _PROSE_HINTS if rx.search(text)), None)
+    hinted, hint_ambiguous = resolve_prose_hint(text)
     embedded = prompt_embeds_rtl(text)
     if hinted == "completion" and not embedded:
         embedded = prompt_embeds_partial_rtl(text)
@@ -680,7 +814,7 @@ def classify_task_nature(prompt: str,
         return {"nature": n, "entry_nature": entry_nature, "route": t["route"],
                 "plugin_entry": t["plugin_entry"],
                 "source": "context_prose_hint" if hinted else "context_heuristic",
-                "needs_ai_parse": not hinted}
+                "needs_ai_parse": (not hinted) or hint_ambiguous}
 
     # No context supplied as a PATH. Only a hint that INHERENTLY needs existing
     # RTL would be wrong here — but "no path" is not "no RTL", so before saying
@@ -696,7 +830,7 @@ def classify_task_nature(prompt: str,
                     "route": t["route"],
                     "plugin_entry": t["plugin_entry"],
                     "source": "embedded_rtl_prose_hint",
-                    "needs_ai_parse": False}
+                    "needs_ai_parse": hint_ambiguous}
         if hinted == "completion":
             # Completion is a transform of an existing artefact.  A prose
             # occurrence without a supplied path or embedded module cannot
