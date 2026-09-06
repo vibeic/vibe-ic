@@ -1001,29 +1001,42 @@ def package_constants(sources: Sequence[Tuple[object, str]]
     resolves, so a genuinely circular or unresolvable constant is simply ABSENT
     and every width over it refuses by name.
     """
-    bodies: Dict[str, str] = {}
+    bodies: Dict[str, List[str]] = {}
     for _path, raw in sources or []:
         code = _hdl_code_text.strip_hdl_comments_and_strings(raw or "")
         for m in _PACKAGE_RE.finditer(code):
-            bodies.setdefault(m.group(1), m.group(2))
+            bodies.setdefault(m.group(1), []).append(m.group(2))
     out: Dict[str, Dict[str, int]] = {p: {} for p in bodies}
     for _round in range(len(bodies) + 1):
         changed = False
         scoped = {f"{p}::{k}": v for p, d in out.items() for k, v in d.items()}
-        for pkg, body in bodies.items():
+        for pkg, blist in bodies.items():
             local = out[pkg]
-            hits = []
-            for rx in (_PARAM_DECL_RE, _LOCALPARAM_DECL_RE):
-                for m in rx.finditer(body):
-                    hits.append((m.start(), m.group(1),
-                                 _trim_value(m.group(2))))
-            for _pos, name, expr in sorted(hits):
-                if name in local:
+            # ONE NAME, TWO DECLARATIONS, TWO VALUES -> AMBIGUOUS, NOT FIRST-WINS.
+            # A source set can legitimately contain the same package twice --
+            # measured: a vendor copy and a docs copy of one package that agree
+            # on 17 constants and DISAGREE on one. Keeping whichever file sorted
+            # first would resolve a width to a number the other copy contradicts,
+            # silently. Every body is harvested; a name survives only if the
+            # bodies that resolve it AGREE.
+            seen: Dict[str, set] = {}
+            for body in blist:
+                hits = []
+                for rx in (_PARAM_DECL_RE, _LOCALPARAM_DECL_RE):
+                    for m in rx.finditer(body):
+                        hits.append((m.start(), m.group(1),
+                                     _trim_value(m.group(2))))
+                acc = dict(local)
+                for _pos, name, expr in sorted(hits):
+                    val = _int_expr(expr, {**scoped, **acc})
+                    if val is not None:
+                        acc[name] = val
+                        seen.setdefault(name, set()).add(val)
+            for name, vals in seen.items():
+                if name in local or len(vals) != 1:
                     continue
-                val = _int_expr(expr, {**scoped, **local})
-                if val is not None:
-                    local[name] = val
-                    changed = True
+                local[name] = next(iter(vals))
+                changed = True
         if not changed:
             break
     return out

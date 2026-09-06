@@ -407,6 +407,44 @@ def test_a_body_constant_may_also_be_written_over_a_package_constant():
     assert PW.resolve("[LOCAL_W-1:0]", params)[0] == " [15:0]"
 
 
+def test_one_package_declared_TWICE_with_two_values_is_ambiguous():
+    """MEASURED IN THE CORPUS, not invented: a source set can contain the same
+    package twice — a vendor copy and a docs copy — agreeing on most constants
+    and DISAGREEING on one. Keeping whichever file sorted first would resolve a
+    width to a number the other copy contradicts, and nothing would say so.
+
+    The names the two copies AGREE on are still resolved. Only the contested one
+    is dropped, so a width over it refuses BY NAME.
+    """
+    a = ("package dup_pkg;\n  parameter int SAME = 8;\n"
+         "  parameter int CONTESTED = 2;\nendpackage\n")
+    b = ("package dup_pkg;\n  parameter int SAME = 8;\n"
+         "  parameter int CONTESTED = 1;\nendpackage\n")
+    got = RB.package_constants([("a.sv", a), ("b.sv", b)])
+    assert got["dup_pkg"]["SAME"] == 8, got
+    assert "CONTESTED" not in got["dup_pkg"], got
+
+    rtl = ("module m\n  import dup_pkg::*;\n"
+           "  (input [SAME-1:0] ok, input [CONTESTED-1:0] bad);\nendmodule\n")
+    params = PW.defaults_from_sources(
+        [("a.sv", a), ("b.sv", b), ("m.sv", rtl)], "m")
+    assert PW.resolve("[SAME-1:0]", params)[0] == " [7:0]"
+    decl, why = PW.resolve("[CONTESTED-1:0]", params)
+    assert decl is None and "CONTESTED" in why, (decl, why)
+
+
+def test_one_package_declared_twice_that_AGREES_still_resolves():
+    """The control: what is refused is the DISAGREEMENT, not the duplication."""
+    a = "package dup_pkg;\n  parameter int W = 8;\nendpackage\n"
+    got = RB.package_constants([("a.sv", a), ("b.sv", a)])
+    assert got["dup_pkg"]["W"] == 8, got
+    rtl = ("module m\n  import dup_pkg::*;\n"
+           "  (input [W-1:0] d);\nendmodule\n")
+    params = PW.defaults_from_sources(
+        [("a.sv", a), ("b.sv", a), ("m.sv", rtl)], "m")
+    assert PW.resolve("[W-1:0]", params)[0] == " [7:0]"
+
+
 # ── Verilog integer arithmetic ───────────────────────────────────────────────
 
 @pytest.mark.parametrize("expr,want", [
