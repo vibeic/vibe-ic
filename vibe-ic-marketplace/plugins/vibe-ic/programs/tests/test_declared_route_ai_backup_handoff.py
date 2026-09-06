@@ -84,7 +84,7 @@ def _fake_runner(*, program_ids: set[str] | None = None,
             rtl = project / "phase2" / "stage1" / "rtl"
             rtl.mkdir(parents=True, exist_ok=True)
             (rtl / "top_module.v").write_text(
-                "module top_module(input wire a, output wire y); "
+                "module TopModule(input wire a, output wire y); "
                 "assign y = a; endmodule\n")
             _write_rtl_gen_report(project, "PASS")
             return SimpleNamespace(returncode=0)
@@ -245,7 +245,7 @@ def test_backup_prompt_hash_change_blocks_before_regating(tmp_path,
     rtl = Path(task["write_rtl_to"])
     rtl.mkdir(parents=True)
     (rtl / "top_module.v").write_text(
-        "module top_module(input wire a, output wire y); "
+        "module TopModule(input wire a, output wire y); "
         "assign y = a; endmodule\n")
     Path(task["read_prompt_from"]).write_text("changed prompt\n")
 
