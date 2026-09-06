@@ -1,5 +1,5 @@
 {
-  "_comment": "Declaration regexes scanned over text no stripper touched (vibe-ic#731). MAY ONLY SHRINK. A comment sentence matching `module\\s+(\\w+)` mints a module that does not exist \u2014 24 of them, measured, in #729.  2026-09-06 (czmainred): six entries DELETED AS SOURCE, reviewed like code \u2014 their scans became comment-stripped, so the entries no longer named an offender. The gate had been printing an errand pointing at --write-baseline; a debt register shrinks by a reviewed deletion, never by a flag.",
+  "_comment": "Declaration regexes scanned over text no stripper touched (vibe-ic#731). MAY ONLY SHRINK. A comment sentence matching `module\\s+(\\w+)` mints a module that does not exist \u2014 24 of them, measured, in #729.  2026-09-06 (czmainred): six entries DELETED AS SOURCE, reviewed like code \u2014 their scans became comment-stripped, so the entries no longer named an offender. The gate had been printing an errand pointing at --write-baseline; a debt register shrinks by a reviewed deletion, never by a flag. 2026-09-07 (czmainred3): three more DELETED AS SOURCE after rebasing onto v1.18.24 (83af0e54b, #731), which comment-stripped their scans; the entries no longer named an offender. Same rule, applied to somebody else's fix.",
   "known": [
     "_dft_netlist_ports::restore_inout_ports::hdr(chained_text)",
     "_dft_netlist_ports::strip_inout_ports::hdr_re(text)",
@@ -84,8 +84,6 @@
     "pdk_udp_synth_shim_gen::_module_blocks::_MODULE_RE(src)",
     "phase1_doc_one_shot_runner::_classify_side::_RX_TOKENS_RE(ctx)",
     "phase1_doc_one_shot_runner::_classify_side::_TX_TOKENS_RE(ctx)",
-    "phase1_doc_one_shot_runner::_doc_module_name_label_or_inline::_RE_DOC_TOP_MODULE_INLINE_BACKTICK(text)",
-    "phase1_doc_one_shot_runner::_doc_module_name_label_or_inline::_RE_DOC_TOP_MODULE_NAME_LABEL(text)",
     "phase1_doc_one_shot_runner::_doc_real_module_decl_name::_RE_DOC_TOP_MODULE_REAL_DECL(text)",
     "phase1_doc_one_shot_runner::_harvest_test_cases_from_input_tables::_L10_TC_IN_COL(hjoin)",
     "phase1_doc_one_shot_runner::_l9_heading_submodule_extract::_RE_L9_SUBMOD_DOC_CTX(text)",
@@ -97,7 +95,6 @@
     "phase1_doc_one_shot_runner::gen_l8_timing_waveform::_RE_WIDTH_ROLE(text)",
     "phase1_parity_source_tier_check::_cited_paths::CITED_INPUT_RE(s)",
     "phase1_port_extract::_looks_like_verilog::_VERILOG_MODULE_HDR(region)",
-    "phase1_port_extract::_verilog_regions::_MODULE_SPAN(text)",
     "phase3_one_shot_runner::_instantiated::pat(b)",
     "phase3_one_shot_runner::_resolve_asic_top_structural::pat(b)",
     "phase3_one_shot_runner::_v0_3_14_apply_top_port_aliases::pat(ln)",
