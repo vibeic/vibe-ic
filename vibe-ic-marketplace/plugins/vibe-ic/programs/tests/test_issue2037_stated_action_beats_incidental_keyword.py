@@ -226,3 +226,55 @@ class TestTheHintScorerStaysLinear:
         import inspect
         src = inspect.getsource(mod._hint_action_scores)
         assert "bisect" in src, src
+
+
+class TestHintWordsInsidePastedCode:
+    """A DELIBERATE behaviour change beyond the reported prompt — pinned here
+    so it is a decision on the record, not a side effect nobody noticed.
+
+    Scoring reads PROSE only: `_prose_view` blanks fenced code before the
+    clause pass. So a hint word that appears ONLY inside the user's pasted
+    module is the weakest kind of evidence, exactly like one buried in a
+    requirement clause. That is the same principle the issue asks for — the
+    requester's stated action governs, and a word inside code they pasted is
+    not a statement about what they want done.
+
+    MEASURED against the base router on constructed inputs (no corpus prompt
+    exercises this shape, which is why it needed constructing):
+      prose "Complete ..." + `// TODO: fix the bug` in the code
+          base -> debug          fixed -> completion   CHANGED, and correct
+      hint word in code and nothing in prose
+          base -> debug          fixed -> debug        unchanged
+      debug in prose, completion word in code
+          base -> debug          fixed -> debug        unchanged
+
+    The middle case is the conservative half and matters most: a code-only
+    hint is DEMOTED, never DISCARDED. When it is the only evidence there is,
+    it still decides.
+    """
+
+    def test_prose_action_beats_a_hint_word_inside_the_code(self):
+        prompt = ("Complete the given partial Verilog code below.\n\n"
+                  "```verilog\nmodule m();\n"
+                  "// TODO: fix the bug in the counter\nendmodule\n```")
+        assert _hint(prompt) == "completion"
+        assert _classify(prompt)["nature"] == "completion"
+
+    def test_a_code_only_hint_still_decides_when_it_is_all_there_is(self):
+        """Demoted, not discarded."""
+        prompt = ("Here is the module.\n\n```verilog\nmodule m();\n"
+                  "// fix the bugs here\nendmodule\n```")
+        assert _hint(prompt) == "debug"
+
+    def test_prose_debug_is_not_displaced_by_a_completion_word_in_code(self):
+        prompt = ("Fix the bugs in the module below.\n\n"
+                  "```verilog\nmodule m();\n"
+                  "// complete the code here\nendmodule\n```")
+        assert _hint(prompt) == "debug"
+
+    def test_unfenced_code_is_not_blanked(self):
+        """`_prose_view` only blanks FENCED blocks. A prompt that pastes a
+        module without fences keeps that text as prose — stated so the limit
+        is explicit rather than discovered later."""
+        prose = mod._prose_view("module m();\n// fix the bug\nendmodule")
+        assert "fix the bug" in prose
