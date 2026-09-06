@@ -14415,6 +14415,100 @@ def _segment_is_port_stem(seg: str) -> bool:
     return False
 
 
+# ORGANIC #2060 — A RECORD SAYS WHETHER IT CAME FROM A PORT TABLE.
+#
+# `_PORT_TABLE_STRATEGIES` is an ALLOW-LIST KEYED ON A NAME. Every port-table
+# extractor added since it was written had to be remembered and added to it, and
+# the failure when nobody remembers is SILENT: form 2 of the corroboration below
+# simply does not fire, the pin fails `_pin_has_port_like_evidence`, and the
+# L1.pin_table -> L9 promoter drops a real port with no diagnostic. The pin does
+# not appear anywhere as refused; it is absent.
+#
+# MEASURED, and this is why the mechanism is being replaced rather than the list
+# extended: lane czport's #2060 work adds two new port-table extractors to
+# `phase1_port_extract` — a Verilog code-region port declaration and a markdown
+# signal-table row. Both mint their own strategy string. Neither string can be
+# in a frozenset written before they existed, so on the day that lands, every
+# port either of them finds is dropped here unless this file was edited in the
+# same breath. That coupling between two files in two lanes is the defect; the
+# list is only where it shows.
+#
+# THE RULING (owner, this lane): ask the RECORD, not the name. An extractor that
+# read a port table says so ON THE RECORD IT PRODUCES, and this predicate reads
+# that. A new extractor is then corroborated the day it is written, by declaring
+# a fact about its own output, with no second file to remember.
+#
+# THE NAME LIST IS KEPT AS A COMPATIBILITY FALLBACK AND IS NOT THE CONTRACT ANY
+# MORE. Every record the list corroborates today is still corroborated, so this
+# change cannot drop a port; it can only stop dropping ones it should never have
+# dropped. That direction is the whole safety argument, and a test asserts it
+# over the full roster rather than over a sample.
+#
+# chip-AGNOSTIC: a record flag and a strategy-name convention; no chip, PDK or
+# vendor literal.
+
+#: Keys through which a producer declares "this record came from a port table".
+#: Read as a BOOLEAN fact about the record. Several spellings are accepted
+#: because the producers are several, and demanding one spelling is how the
+#: name-list coupling would come back one level down.
+_V2060_PORT_TABLE_FLAG_KEYS = (
+    "from_port_table", "port_table_row", "is_port_table_row",
+    "structured_port_row",
+)
+
+#: A strategy name that DECLARES ITS OWN SHAPE. An extractor whose strategy
+#: string says it read a port declaration, a port/signal/pin table or an
+#: interface table has stated the fact this predicate is asking about — it does
+#: not also need to be entered in a frozenset in another file.
+#:
+#: This is the SAME KIND of rule the evidence branch of
+#: `_pin_has_port_like_evidence` has always applied to the `evidence` string
+#: ("pipe", "table row", "port decl", "signal", ...); it is applied to the
+#: strategy string here because that is where the newer extractors put it.
+#: Strictly ADDITIVE — it can only corroborate more records, never fewer, which
+#: is the only direction that cannot drop a port.
+#:
+#: MEASURED against the two strategies lane czport's #2060 work mints,
+#: `verilog_code_region_port_decl_issue2060` and
+#: `markdown_signal_table_port_row_issue2060`: both are recognised by shape, so
+#: the day that extractor lands its ports are corroborated here without this
+#: file being edited in the same breath. That coupling is the defect being
+#: removed, so leaving it in place for the very change that exposed it would be
+#: fixing the instance and keeping the mechanism.
+_V2060_SELF_DECLARING_STRATEGY_RE = re.compile(
+    r"(?i)port[_\- ]?decl|port[_\- ]?row|port[_\- ]?table|"
+    r"signal[_\- ]?table|pin[_\- ]?table|interface[_\- ]?table|"
+    r"port[_\- ]?bullet|port[_\- ]?bind")
+
+
+def _v2060_record_declares_a_port_table(rec) -> bool:
+    """Does THIS RECORD say it carries a port-table row?
+
+    The flag first — that is the contract — then the legacy strategy-name
+    allow-list, so nothing that is corroborated today stops being corroborated.
+    A strategy may be ANNOTATED with a `+<annotation>` suffix (the canonical
+    `rst_grid_interface_table+width_parametric_v1_6_423` form), so the base
+    strategy is tested too, exactly as the #664 site already does.
+    """
+    if not isinstance(rec, dict):
+        return False
+    for key in _V2060_PORT_TABLE_FLAG_KEYS:
+        if rec.get(key) is True:
+            return True
+    for key in ("_extraction", "extraction_strategy"):
+        strat = rec.get(key)
+        if not strat:
+            continue
+        strat = str(strat).strip()
+        if strat in _PORT_TABLE_STRATEGIES:
+            return True
+        if strat.split("+", 1)[0] in _PORT_TABLE_STRATEGIES:
+            return True
+        if _V2060_SELF_DECLARING_STRATEGY_RE.search(strat):
+            return True
+    return False
+
+
 def _pin_has_port_like_evidence(pin) -> bool:
     """ORGANIC #475 (c) — positive corroboration gate. Return True iff
     `pin` (a dict from L1.pin_table) carries port-like evidence per the
@@ -14430,12 +14524,11 @@ def _pin_has_port_like_evidence(pin) -> bool:
     # Form 1 — direction-affix naming convention.
     if _PORT_DIR_PREFIX_RE.match(name) or _PORT_DIR_SUFFIX_RE.search(name):
         return True
-    # Form 2 — structured port-table-row source.
-    es = str(pin.get("extraction_strategy") or "").strip()
-    if es in _PORT_TABLE_STRATEGIES:
-        return True
-    ex = str(pin.get("_extraction") or "").strip()
-    if ex in _PORT_TABLE_STRATEGIES:
+    # Form 2 — the RECORD says it carries a port-table row. #2060: this asks
+    # the record, and falls back to the legacy strategy-name allow-list, so an
+    # extractor written after that list cannot have its ports dropped in
+    # silence. See `_v2060_record_declares_a_port_table`.
+    if _v2060_record_declares_a_port_table(pin):
         return True
     ev = str(pin.get("evidence") or "").strip().lower()
     # A structural evidence string (names a real row source). The bare
@@ -14511,9 +14604,10 @@ def _is_real_port_token(tok, l1_chip_name=None, pin=None):
     # (everything before the first `+`) so the provenance survives the
     # annotation. Chip-AGNOSTIC: pure strategy-name convention.
     _strat_base = (str(_strat).split("+", 1)[0] if _strat else _strat)
-    _has_port_table_provenance = (
-        _strat in _PORT_TABLE_STRATEGIES
-        or _strat_base in _PORT_TABLE_STRATEGIES)
+    # #2060 — the SAME question, asked of the record, at the second site that
+    # asks it. Two private spellings of one predicate is how the first one
+    # drifted; there is one now, and the `+annotation` handling lives inside it.
+    _has_port_table_provenance = _v2060_record_declares_a_port_table(_pin)
     _dir = str(_pin.get("mode") or _pin.get("direction") or "").strip().lower()
     _has_functional_dir = _dir in ("input", "output", "inout", "in", "out")
     if up in _POWER_RAIL_TOKENS and not _has_functional_dir:

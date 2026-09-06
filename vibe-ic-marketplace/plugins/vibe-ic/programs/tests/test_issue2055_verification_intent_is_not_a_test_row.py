@@ -681,3 +681,162 @@ def test_the_l9_generator_departure_is_a_scope_artefact_not_a_fix():
     assert G._searches_prose(mirror) is False, (
         "the mirror reads a sentence — then it owes a polarity consult like "
         "any other prose extractor")
+
+
+# ---------------------------------------------------------------------------
+# 7. a record says whether it carries a port table   (#2060, HUNK B)
+#
+# `_PORT_TABLE_STRATEGIES` is an allow-list keyed on a NAME, and the failure
+# when a new extractor is not added to it is SILENT: form 2 of
+# `_pin_has_port_like_evidence` does not fire, the pin fails corroboration, and
+# the L1.pin_table -> L9 promoter drops a real port with no diagnostic.  Lane
+# czport's #2060 work adds two port-table extractors that mint their own
+# strategy strings; neither can be in a frozenset written before they existed.
+# ---------------------------------------------------------------------------
+def _port_table_names():
+    """The legacy roster, read from the module — never retyped here."""
+    return sorted(P._PORT_TABLE_STRATEGIES)
+
+
+@pytest.mark.parametrize("flag", list(P._V2060_PORT_TABLE_FLAG_KEYS))
+def test_a_record_that_declares_a_port_table_is_corroborated_by_its_flag(flag):
+    """THE RULING. A strategy name nobody has ever seen, plus the record's own
+    declaration, is enough — that is the point: no second file to remember."""
+    pin = {"name": "sig9", "extraction_strategy": "an_extractor_written_later",
+           flag: True}
+    assert P._v2060_record_declares_a_port_table(pin) is True
+    assert P._pin_has_port_like_evidence(pin) is True
+
+
+def test_a_new_extractors_ports_are_dropped_without_the_flag_or_the_list():
+    """THE DEFECT, stated as a fact about the mechanism.
+
+    A record from an extractor that is in neither the roster nor flagged, whose
+    name carries no direction affix and no conventional stem, fails
+    corroboration — which is exactly what happens to a new port-table extractor
+    that the allow-list has never heard of.
+    """
+    pin = {"name": "sig9", "extraction_strategy": "an_extractor_written_later"}
+    assert P._v2060_record_declares_a_port_table(pin) is False
+    assert P._pin_has_port_like_evidence(pin) is False
+
+
+@pytest.mark.parametrize("strategy", _port_table_names())
+def test_every_legacy_roster_entry_is_still_corroborated(strategy):
+    """NO-LEAK, over the FULL roster rather than a sample.
+
+    The flag is added ahead of the list, never in place of it: this change can
+    only stop dropping ports it should never have dropped.
+    """
+    for key in ("extraction_strategy", "_extraction"):
+        assert P._v2060_record_declares_a_port_table(
+            {"name": "sig9", key: strategy}) is True, (key, strategy)
+
+
+@pytest.mark.parametrize("strategy", _port_table_names()[:4])
+def test_an_annotated_strategy_keeps_its_provenance(strategy):
+    """The `+<annotation>` form (#664) must survive, at BOTH call sites."""
+    annotated = f"{strategy}+width_parametric_v1_6_423"
+    assert P._v2060_record_declares_a_port_table(
+        {"name": "sig9", "_extraction": annotated}) is True
+
+
+def test_a_record_with_no_provenance_at_all_is_not_corroborated():
+    assert P._v2060_record_declares_a_port_table({}) is False
+    assert P._v2060_record_declares_a_port_table(None) is False
+    assert P._v2060_record_declares_a_port_table(
+        {"name": "sig9", "extraction_strategy": ""}) is False
+    # A FALSE flag is a declaration too, and it declares the opposite.
+    assert P._v2060_record_declares_a_port_table(
+        {"name": "sig9", "from_port_table": False}) is False
+
+
+def test_both_call_sites_ask_the_same_predicate():
+    """Two private spellings of one question is how the first one drifted.
+
+    Parsed, not grepped: every site that tests port-table provenance must go
+    through the one predicate, so `_PORT_TABLE_STRATEGIES` is no longer read
+    directly by a decision.
+    """
+    import ast as _ast
+    src = (_PROGRAMS / "phase1_doc_one_shot_runner.py").read_text(
+        errors="replace")
+    tree = _ast.parse(src)
+    readers = [
+        n.lineno for n in _ast.walk(tree)
+        if isinstance(n, _ast.Compare)
+        and any(isinstance(op, _ast.In) for op in n.ops)
+        and any(isinstance(c, _ast.Name)
+                and c.id == "_PORT_TABLE_STRATEGIES" for c in n.comparators)
+    ]
+    inside = [
+        n for n in _ast.walk(tree)
+        if isinstance(n, (_ast.FunctionDef, _ast.AsyncFunctionDef))
+        and n.name == "_v2060_record_declares_a_port_table"
+    ]
+    assert len(inside) == 1
+    lo, hi = inside[0].lineno, max(
+        getattr(x, "lineno", inside[0].lineno) for x in _ast.walk(inside[0]))
+    stray = [ln for ln in readers if not (lo <= ln <= hi)]
+    assert not stray, (
+        f"`_PORT_TABLE_STRATEGIES` is still consulted directly at lines "
+        f"{stray} — the name list is a fallback INSIDE the predicate, not a "
+        f"contract other code reads")
+
+
+@pytest.mark.parametrize("strategy", [
+    # The two strategies lane czport's #2060 work mints. Named here as DATA the
+    # predicate must handle, not as a list the predicate reads: the point is
+    # that neither had to be entered anywhere for its ports to be corroborated.
+    "verilog_code_region_port_decl_issue2060",
+    "markdown_signal_table_port_row_issue2060",
+    # and the shape generally
+    "some_future_signal_table_row_reader",
+    "whatever_pin_table_walker_v9",
+])
+def test_a_strategy_that_declares_its_own_shape_needs_no_allow_list(strategy):
+    """HUNK A, made land-ready without carrying another lane's unlanded file.
+
+    `extract_code_block_ports` and both strategy constants live only on
+    `next/czport` and cannot be imported here, so HUNK A itself is not
+    applicable on this base.  What CAN be done today — and is the ruling's whole
+    point — is to remove the coupling that made HUNK A dangerous without HUNK B:
+    a strategy whose name says it read a port declaration or a port/signal/pin
+    table has stated the fact, and is corroborated by shape.
+    """
+    pin = {"name": "sig9", "extraction_strategy": strategy}
+    assert P._v2060_record_declares_a_port_table(pin) is True
+    assert P._pin_has_port_like_evidence(pin) is True
+
+
+@pytest.mark.parametrize("strategy", [
+    "an_extractor_written_later", "sdc_directive_scan",
+    "stdcell_library_shape", "narrative_prose_walk",
+])
+def test_the_shape_rule_does_not_admit_a_non_port_strategy(strategy):
+    """NO-LEAK.  It is a SHAPE, not "anything with an underscore"."""
+    assert P._v2060_record_declares_a_port_table(
+        {"name": "sig9", "extraction_strategy": strategy}) is False
+
+
+def test_hunk_A_is_recorded_as_NOT_APPLICABLE_on_this_base():
+    """"Could not apply it" is not "applied it" — and it is not "not needed".
+
+    This arm exists so the claim is checked rather than believed: HUNK A calls
+    into `phase1_port_extract` symbols that do not exist on any tree this branch
+    is built from.  The day they do, this arm fails and whoever lands them is
+    told to apply HUNK A rather than inheriting a stale note.
+    """
+    import phase1_port_extract as _ppx  # noqa: WPS433
+    absent = [n for n in ("extract_code_block_ports",
+                          "CODE_REGION_PORT_STRATEGY",
+                          "SIGNAL_TABLE_PORT_STRATEGY")
+              if not hasattr(_ppx, n)]
+    assert absent == ["extract_code_block_ports",
+                      "CODE_REGION_PORT_STRATEGY",
+                      "SIGNAL_TABLE_PORT_STRATEGY"], (
+        "phase1_port_extract now carries the czport #2060 extractor "
+        f"(present: {sorted(set(('extract_code_block_ports', 'CODE_REGION_PORT_STRATEGY', 'SIGNAL_TABLE_PORT_STRATEGY')) - set(absent))}) "
+        "— HUNK A (the docs door's call site) is applicable and must be applied; "
+        "HUNK B is already in place, so the ports will not be dropped in the "
+        "meantime.")
