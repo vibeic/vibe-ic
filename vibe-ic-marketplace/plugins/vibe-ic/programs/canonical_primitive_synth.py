@@ -1356,7 +1356,13 @@ module asyn_fifo #(
             wptr      <= {PW{1'b0}};
         end else begin
             waddr_bin <= waddr_bin + wen;
-            wptr      <= bin2gray(waddr_bin + wen);
+            // The gray pointer STORES the conversion of the binary pointer,
+            // never of the value that pointer is about to take: converting the
+            // next value makes the gray pointer LEAD waddr_bin by a cycle, and
+            // every flag compared against it then moves one cycle earlier than
+            // the register the spec names. The gate for that class is
+            // `spec_conformance_check.derived-register-leads-named-source`.
+            wptr      <= bin2gray(waddr_bin);
         end
     end
 
@@ -1369,7 +1375,7 @@ module asyn_fifo #(
             rptr      <= {PW{1'b0}};
         end else begin
             raddr_bin <= raddr_bin + ren;
-            rptr      <= bin2gray(raddr_bin + ren);
+            rptr      <= bin2gray(raddr_bin);   // see the write side above
         end
     end
 
