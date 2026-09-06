@@ -700,3 +700,56 @@ def test_template_shapes_publish_no_scoreboard(tmp_path):
     assert not (proj / "phase2" / "stage1" / "tb").exists()
     assert res.output_files == [
         str(proj / "phase2" / "stage1" / "rtl" / "pulse_detect.v")]
+
+
+# ============================================================================
+# The published scoreboard lands in phase2/stage1/tb/, which `l12_tb_coverage_
+# check` READS. Measured on a composed project: that gate goes from rc=2 ("TB
+# dir not found" -- it measured nothing) to rc=1 (it measured, and the design is
+# genuinely short of the L12 sequences). That is the honest direction, but the
+# property that must never rot is that a generic scoreboard is not mistaken for
+# coverage of a named behavioural sequence.
+# ============================================================================
+
+def _run_l12(project):
+    return subprocess.run(
+        [sys.executable, str(PROGRAMS / "l12_tb_coverage_check.py"), str(project)],
+        capture_output=True, text=True)
+
+
+def _composed_project_with_l12(tmp_path, sequence_ids):
+    R = _load_runner()
+    proj = _mk_contract_project(tmp_path / "p", _F6_DESC)
+    res = R._try_canonical_primitive_rtl(proj, 0.0)
+    assert res is not None and res.status == "PASS"
+    gd = proj / "phase1" / "generated_docs"
+    gd.mkdir(parents=True, exist_ok=True)
+    (gd / "L12_BEHAVIORAL_SEQUENCES.json").write_text(json.dumps(
+        {"sequences": [{"id": s, "description": s.lower()} for s in sequence_ids]}))
+    return proj
+
+
+def test_scoreboard_is_not_mistaken_for_l12_sequence_coverage(tmp_path):
+    proj = _composed_project_with_l12(
+        tmp_path, ["BACKPRESSURE_STALL_RECOVERY", "RESET_MID_TRANSFER"])
+    run = _run_l12(proj)
+    assert run.returncode == 1, run.stdout + run.stderr
+    report = json.loads(
+        (proj / "reports" / "phase2" / "gates" / "l12_tb_coverage.json").read_text())
+    assert report["tb_dir"].endswith("phase2/stage1/tb")
+    assert report["total_sequences"] == 2
+    assert report["covered_sequences"] == 0
+
+
+def test_the_l12_gate_really_can_see_that_directory(tmp_path):
+    """The control for the test above: if the gate could not read the published
+    scoreboard at all, 'zero coverage' would prove nothing. A sequence whose id
+    the scoreboard does contain IS reported covered."""
+    proj = _composed_project_with_l12(tmp_path, ["TB_ELASTIC_STAGE"])
+    tb = proj / "phase2" / "stage1" / "tb" / "tb_elastic_stage.v"
+    assert "tb_elastic_stage" in tb.read_text()
+    run = _run_l12(proj)
+    report = json.loads(
+        (proj / "reports" / "phase2" / "gates" / "l12_tb_coverage.json").read_text())
+    assert report["covered_sequences"] == 1, run.stdout + run.stderr
+    assert run.returncode == 0
