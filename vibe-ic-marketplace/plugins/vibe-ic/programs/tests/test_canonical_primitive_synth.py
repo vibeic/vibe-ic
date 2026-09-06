@@ -848,7 +848,13 @@ def test_the_known_blind_spot_is_still_exactly_one():
 #   * a stage whose reset never clears passed with ZERO transfers observed --
 #     a vacuous pass, the checker reporting success on a run that did nothing.
 # (The third, an unconditional capture inside the branch where up_ready is
-# already high, is semantically EQUIVALENT and survives correctly.)
+# already high, survives CORRECTLY -- and the claim is bounded-PROVED rather than
+# argued: yosys `miter -equiv` + `sat -seq 24 -set-init-zero -prove-asserts`
+# reports SUCCESS on the OBSERVABLE interface {up_ready, dn_valid, dn_data
+# qualified by dn_valid}. The unqualified comparison does NOT prove -- dn_data
+# genuinely differs while dn_valid is low -- so "equivalent" here means
+# observationally equivalent, not bit-identical. The same harness FAILS on the
+# m6 stall mutant, so it is not a proof that proves anything.)
 # Both holes are closed in the generator, so every composed design gets the
 # stronger check; the kill rate is now 12 of 13. Evidence: the lane's killtest/.
 # ============================================================================
