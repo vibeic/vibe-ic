@@ -34,8 +34,15 @@ def test_log2_width_helper_is_not_runtime_rounding(name):
 
 def test_real_completion_document_width_helper():
     from _hostpaths import require_repo
-    path = require_repo("vibe-ic-marketplace", "plugins", "vibe-ic", "tests",
-                        "fixtures", "real_benchmark", "log2_width_helper.md")
+    # Lives with its sibling fixtures under `programs/tests/fixtures/`. It was
+    # added at `plugins/vibe-ic/tests/fixtures/` by v1.17.39 (5fc0b5bea), which
+    # is the ONLY tracked file that directory has ever held — and that broke two
+    # unrelated things at once: `picker_fixture_thrash_guard`'s premise test
+    # (`the phantom tests directory is still absent`) and `run_tests.sh`, which
+    # then listed a `tests` tier that collects no tests at all.
+    path = require_repo("vibe-ic-marketplace", "plugins", "vibe-ic",
+                        "programs", "tests", "fixtures", "real_benchmark",
+                        "log2_width_helper.md")
     text = path.read_text()
     assert "Function to calculate the ceiling of log2" in text
     assert M._detect_rounding_modes(text) == []

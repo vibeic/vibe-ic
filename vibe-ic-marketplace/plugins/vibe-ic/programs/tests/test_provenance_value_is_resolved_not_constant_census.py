@@ -172,5 +172,20 @@ def test_the_census_never_blocks_by_default():
         f"the census refused by default (rc={r.returncode}); it must report\n"
         f"{r.stdout}\n{r.stderr}")
     assert "[CENSUS]" in r.stdout
-    assert "the gate is programs/%s.py" % _RULE in r.stdout, (
+    # NAMED, not PHRASED. The census has two exits and both name the gate:
+    #   rc == 0  -> "... a count, not a verdict — the gate is programs/X.py."
+    #   found    -> "CENSUS: reported, not refused. The gate for this rule is
+    #                programs/X.py — run that for a verdict."
+    # This used to pin the FIRST sentence verbatim, which made it accidentally
+    # branch-specific: it could only hold on a tree where the census found
+    # NOTHING — the one case where being told which gate refuses matters least.
+    # On a tree with findings the second exit fires, the wording differs, and
+    # the assertion failed while the claim in this test's own docstring ("the
+    # output says so and names the gate that does refuse") was perfectly true.
+    # Pinned to that claim instead: the gate is NAMED, and the output says it is
+    # not itself a verdict. Both halves hold on either exit.
+    assert "programs/%s.py" % _RULE in r.stdout, (
         "the census must name the gate that does the refusing")
+    assert ("not a verdict" in r.stdout or "not refused" in r.stdout), (
+        "the census must say that it is a count and not a verdict, or the next "
+        "reader wires its exit code as a gate")
