@@ -419,6 +419,7 @@ def test_without_membership_the_old_count_rule_is_kept_byte_for_byte():
 
 def test_the_report_carries_what_the_loop_did_not_just_where_it_stopped():
     trace = r.antenna_loop_trace(
+        "ANTENNA_LOOP_ITER: iter=0 nets=3 violating={a b c}\n"
         "ANTENNA_LOOP_SEQUENCE: 3 2 3\n"
         "ANTENNA_LOOP_BEST: iter=1 nets=2\n"
         "ANTENNA_LOOP_NOT_CONVERGED: stop=REGRESSED membership=1 "
@@ -652,3 +653,33 @@ def test_the_deck_and_the_report_read_the_load_from_one_function():
     driver = inspect.getsource(scc.run_installed_pdk_path_correlation)
     assert "per_stage_load_source" in driver
     assert "stagewise_stage_load_pf(" in driver
+
+
+def test_the_trace_describes_the_LAST_antenna_window_not_the_first():
+    """A PnR session runs the block once per antenna window — spm runs two —
+    and `_emit_antenna_report` already takes the LAST `Found N` pair as the
+    count. Publishing window 1's sequence beside window 2's count would be two
+    different runs in one sentence. MEASURED on spm's own log: window 1 is
+    [22, 7, 6, 5, 4, 2, 2] stop=CAP; window 2 is [2, 2] stop=FIXED_POINT, and
+    window 2's state is the one that ships."""
+    log = (
+        "ANTENNA_LOOP_ITER: iter=0 nets=22 violating={a}\n"
+        "ANTENNA_LOOP_SEQUENCE: 22 7 6 5 4 2 2\n"
+        "ANTENNA_LOOP_BEST: iter=5 nets=2\n"
+        "ANTENNA_LOOP_NOT_CONVERGED: stop=CAP membership=1 sequence={22 7 6 5 4 2 2} "
+        "best=2@iter5 last=2 remaining={q}\n"
+        "ANTENNA_PIN_FEEDER_OUTSIDE_ROWS: net=x[7] pin_y=3161.48 um "
+        "rows_y=384.16..2399.04 um gap=762.44 um -- because\n"
+        "ANTENNA_LOOP_ITER: iter=0 nets=2 violating={q}\n"
+        "ANTENNA_LOOP_SEQUENCE: 2 2\n"
+        "ANTENNA_LOOP_BEST: iter=0 nets=2\n"
+        "ANTENNA_LOOP_NOT_CONVERGED: stop=FIXED_POINT membership=1 "
+        "sequence={2 2} best=2@iter0 last=2 remaining={q}\n"
+        "ANTENNA_PIN_FEEDER_OUTSIDE_ROWS: net=x[7] pin_y=3161.48 um "
+        "rows_y=384.16..2399.04 um gap=762.44 um -- because\n")
+    trace = r.antenna_loop_trace(log)
+    assert trace["repair_windows"] == 2
+    assert trace["sequence"] == [2, 2]                 # the LAST window
+    assert trace["stop_reason"] == "FIXED_POINT"
+    # …and the feeder membership is deduped: two windows report the same pin.
+    assert [f["net"] for f in trace["pins_outside_cell_rows"]] == ["x[7]"]

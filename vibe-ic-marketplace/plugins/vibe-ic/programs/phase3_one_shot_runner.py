@@ -47037,6 +47037,19 @@ def antenna_loop_trace(log_txt: str) -> Dict[str, Any]:
     default: `converged: None` is "the loop left no trace", which is not the
     same fact as "it did not converge".
     """
+    # THE LAST WINDOW IS THE ONE THAT SHIPS. A PnR session runs this block
+    # once per antenna window (spm runs two: after the main route and after the
+    # post-route timing repair), and `_emit_antenna_report` already takes the
+    # LAST `Found N` pair as the count. Reading the FIRST sequence beside the
+    # LAST count would publish window 1's history against window 2's state --
+    # on spm, `[22, 7, 6, 5, 4, 2, 2]` beside a count of 2 that window 2
+    # produced. Every field below is scoped to the last window, and the number
+    # of windows is published so the reader knows there were more.
+    whole = log_txt or ""
+    _starts = [m.start() for m in
+               re.finditer(r"^ANTENNA_LOOP_ITER:\s*iter=0\b", whole, re.MULTILINE)]
+    windows = len(_starts)
+    log_txt = whole[_starts[-1]:] if _starts else whole
     seq: List[int] = []
     m = _ANT_LOOP_SEQ_RE.search(log_txt or "")
     if m:
@@ -47056,12 +47069,20 @@ def antenna_loop_trace(log_txt: str) -> Dict[str, Any]:
         converged = False
     elif _ANT_LOOP_CONV_RE.search(log_txt or ""):
         converged = True
-    feeders = [
-        {"net": f[0], "pin_y_um": float(f[1]),
-         "rows_y_um": [float(f[2]), float(f[3])], "gap_um": float(f[4])}
-        for f in _ANT_FEEDER_RE.findall(log_txt or "")
-    ]
+    # MEMBERSHIP, deduped by net. The block runs once per antenna WINDOW and a
+    # PnR session has two, so the same pin is reported by each — a reader
+    # counting lines would read four pins where the design has two.
+    feeders: List[Dict[str, Any]] = []
+    _seen_feeder: Set[str] = set()
+    for f in _ANT_FEEDER_RE.findall(log_txt or ""):
+        if f[0] in _seen_feeder:
+            continue
+        _seen_feeder.add(f[0])
+        feeders.append({"net": f[0], "pin_y_um": float(f[1]),
+                        "rows_y_um": [float(f[2]), float(f[3])],
+                        "gap_um": float(f[4])})
     return {
+        "repair_windows": windows,
         "sequence": seq,
         "best_iteration": best_i,
         "best_net_violations": best_n,
