@@ -1876,6 +1876,147 @@ def _analog_rtl_track_absent(project: Path,
             f"its top interface is not all-analog)")
 
 
+#: `//` to end of line, and `/* ... */` including newlines. Stripped before a
+#: `timescale scan so a directive that is COMMENTED OUT stays prose. Mirrors
+#: `benchmark_dispatch._CHALLENGE_COMMENT` — the AI-challenge boundary reads
+#: the declared unit with exactly this shape, and an emitter that read it any
+#: other way would state a unit the boundary does not agree it saw.
+_RTL_COMMENT = re.compile(r"//[^\n]*|/\*.*?\*/", re.S)
+
+#: Mirrors `benchmark_dispatch._TIMESCALE`.
+_RTL_TIMESCALE = re.compile(
+    r"`timescale\s*(\d+)\s*([munpf]?s)\s*/\s*(\d+)\s*([munpf]?s)")
+
+
+def _declared_timescale(source: str) -> Optional[str]:
+    """The `timescale a source DECLARES, normalized, or None.
+
+    Read from the source text, never guessed. The FIRST declaration is the one
+    in force at the top of the file, which is what "the declared unit" means
+    for the modules that follow it.
+    """
+    match = _RTL_TIMESCALE.search(_RTL_COMMENT.sub(" ", source or ""))
+    if match is None:
+        return None
+    return f"{match.group(1)}{match.group(2)}/{match.group(3)}{match.group(4)}"
+
+
+def _declared_timescale_sources(project: Path) -> List[Path]:
+    """Every file this project DECLARES a simulation unit in, deterministically.
+
+    The testbench/harness dirs only. RTL is excluded on purpose: the emitted
+    candidate is RTL, and a candidate may not take its unit from another
+    candidate — the unit has to come from the side that declares it.
+    """
+    dirs: List[Path] = []
+    try:
+        dirs.extend(Path(d) for d in _pl.resolve_tb_dirs(project))
+    except Exception:                                   # noqa: BLE001
+        pass
+    for extra in (_pl.tb_dir(project), _pl.sim_dir(project),
+                  _pl.sim_full_stack_dir(project)):
+        if extra not in dirs:
+            dirs.append(extra)
+    out: List[Path] = []
+    for d in dirs:
+        if not d.is_dir():
+            continue
+        for f in sorted(d.rglob("*")):
+            if f.is_file() and f.suffix in (".v", ".sv", ".vh", ".svh"):
+                out.append(f)
+    return out
+
+
+def _project_declared_timescale(project: Path):
+    """(unit, refusal) for the unit an emitted candidate must STATE.
+
+    #2053: the AI-challenge boundary compiles the candidate and the challenge
+    testbench together, so a candidate that declares NO unit inherits whichever
+    one argument order happens to put first — the same candidate then passes or
+    fails on compile order alone. The emitter's half of the fix is to STATE the
+    unit, and the only unit it may state is the one the project DECLARES.
+
+    Returns the declared unit and no refusal, or None and a named refusal:
+    RTL_TIMESCALE_NOT_DECLARED (nothing declares one) or
+    RTL_TIMESCALE_DECLARATIONS_DISAGREE (two testbenches declare different
+    units, so there is no single answer to impose). A refusal never guesses a
+    default and never blocks the emit: the file is emitted exactly as the
+    emitter wrote it, and the refusal is published by name.
+    """
+    seen: Dict[str, List[str]] = {}
+    scanned = 0
+    for f in _declared_timescale_sources(project):
+        try:
+            unit = _declared_timescale(f.read_text(errors="replace"))
+        except OSError:
+            continue
+        scanned += 1
+        if unit is not None:
+            seen.setdefault(unit, []).append(f.name)
+    if not seen:
+        return None, (f"RTL_TIMESCALE_NOT_DECLARED: no testbench/harness "
+                      f"source declares a `timescale ({scanned} scanned); "
+                      f"the emitted candidate states no unit")
+    if len(seen) > 1:
+        detail = "; ".join(f"{u} ({', '.join(sorted(n))})"
+                           for u, n in sorted(seen.items()))
+        return None, (f"RTL_TIMESCALE_DECLARATIONS_DISAGREE: {detail}")
+    return next(iter(seen)), None
+
+
+def _state_declared_timescale(rtl: str, unit: Optional[str]) -> str:
+    """Prepend the DECLARED unit to emitted RTL that states none of its own."""
+    if not unit or _declared_timescale(rtl) is not None:
+        return rtl
+    return f"`timescale {unit}\n{rtl}"
+
+
+def _evidence_head(text: str, limit: int = 200) -> str:
+    """A window that starts and ends on a TOKEN, never mid-token.
+
+    #2061 R-01: `(out + err).strip()[:200]` cut `sdc_gen`'s own PASS line in the
+    middle of a path, so what got published depended on how long the project
+    path happened to be. A window is made of WHOLE LINES that fit the budget;
+    when not even the first line fits, the first line is kept WHOLE, because a
+    path is one token and half a path is not evidence. A string already inside
+    the budget comes back byte-identical.
+    """
+    text = text or ""
+    if len(text) <= limit:
+        return text
+    kept: List[str] = []
+    used = 0
+    for line in text.splitlines():
+        nxt = used + len(line) + (1 if kept else 0)
+        if kept and nxt > limit:
+            break
+        kept.append(line)
+        used = nxt
+        if used >= limit:
+            break
+    return "\n".join(kept)
+
+
+def _evidence_tail(text: str, limit: int = 400) -> str:
+    """The tail of `text` as WHOLE LINES, never starting mid-token.
+
+    Same rule as `_evidence_head`, from the other end: the cut is advanced to
+    the next line boundary so the published evidence never begins in the middle
+    of a path. When the last line alone is longer than the budget the cut is
+    advanced to the next whitespace instead, so it still begins on a token.
+    A string already inside the budget comes back byte-identical.
+    """
+    text = text or ""
+    if len(text) <= limit:
+        return text
+    cut = text[-limit:]
+    nl = cut.find("\n")
+    if nl != -1:
+        return cut[nl + 1:]
+    m = re.search(r"\s", cut)
+    return cut[m.end():] if m else cut
+
+
 def _try_spec_artifact_registry_rtl(
         project: Path, t0: float,
         phase1_plain_text: str = "") -> Optional[StepResult]:
@@ -1936,14 +2077,24 @@ def _try_spec_artifact_registry_rtl(
     out_dir = project / "phase2" / "stage1" / "rtl"
     out_dir.mkdir(parents=True, exist_ok=True)
     out = out_dir / f"{top}.sv"
-    out.write_text(rtl)
+    # #2053 — STATE the simulation unit. A candidate with no `timescale of its
+    # own inherits the unit of whatever the compiler read first, which made the
+    # verdict on a correct candidate depend on iverilog's argument order.
+    unit, ts_refusal = _project_declared_timescale(project)
+    out.write_text(_state_declared_timescale(rtl, unit))
+    ev = (f"deterministic emit from a parse-complete prompt via "
+          f"deterministic_emit_chain[{kind}] -> {out.relative_to(project)}")
+    extras = {"deterministic_generator": kind,
+              "chain": _chain.which_emitters(), "source": "phase1_plain_text"}
+    if unit:
+        extras["declared_timescale"] = unit
+        ev += f"; states the declared `timescale {unit}"
+    else:
+        extras["timescale_refusal"] = ts_refusal
+        ev += f"; {ts_refusal}"
     return StepResult(
-        "rtl_gen", "PASS", time.time() - t0,
-        f"deterministic emit from a parse-complete prompt via "
-        f"deterministic_emit_chain[{kind}] -> {out.relative_to(project)}",
-        output_files=[str(out)],
-        extras={"deterministic_generator": kind,
-                "chain": _chain.which_emitters(), "source": "phase1_plain_text"})
+        "rtl_gen", "PASS", time.time() - t0, ev,
+        output_files=[str(out)], extras=extras)
 
 
 def _try_deterministic_rtl_dispatch(project: Path, t0: float) -> Optional[StepResult]:
@@ -15107,7 +15258,7 @@ def step_qsf_gen(project: Path, top_name: str = "chip_top",
     if rc == 0 and qsf is not None:
         return StepResult("qsf_gen", "PASS",
                           time.time() - t0,
-                          f"emitted {qsf.name} ({(out + err).strip()[:200]})",
+                          f"emitted {qsf.name} ({_evidence_head((out + err).strip())})",
                           [str(qsf)])
     return StepResult("qsf_gen", "FAIL",
                       time.time() - t0,
@@ -15158,7 +15309,7 @@ def step_sdc_gen(project: Path, top_name: str = "chip_top",
     if rc == 0 and sdc is not None:
         return StepResult("sdc_gen", "PASS",
                           time.time() - t0,
-                          f"emitted {sdc.name} ({(out + err).strip()[:200]})",
+                          f"emitted {sdc.name} ({_evidence_head((out + err).strip())})",
                           [str(sdc)])
     return StepResult("sdc_gen", "FAIL",
                       time.time() - t0,
