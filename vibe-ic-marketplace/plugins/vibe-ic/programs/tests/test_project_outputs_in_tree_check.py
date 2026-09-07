@@ -154,11 +154,21 @@ def test_skip_unrelated_files(tmp_path):
     assert "read 0 file(s)" in r.stdout
 
 
-# -- Test 5: WARN — dangling /tmp reference (file gone) --
+# -- Test 5: FAIL — dangling /tmp reference (file gone) --
 
 def test_dangling_tmp_reference(tmp_path):
-    """Reference to /tmp/<file> that no longer exists → still FAIL
-    (because findings list is non-empty), with WARN sub-line."""
+    """Reference to /tmp/<file> that no longer exists → FAIL, stated as one.
+
+    #2084 STRENGTHENED THIS ASSERTION, deliberately: `[WARN]` -> `[FAIL]`.
+    The exit code did not move — it has always been 1 here, because
+    `fail_count = len(live) + len(dangling)` — but the only tagged line the
+    gate emitted for this case was `[WARN]`, so its own output said the worst
+    thing present was a warning while it handed the umbrella a blocking exit.
+    That is the disagreement #2084 is about, and a dangling reference is the
+    WORSE of the two halves: the artefact is already gone, so unlike a live
+    one there is nothing left to copy in. The gate now tags it at the
+    severity it exits with.
+    """
     (tmp_path / "RESULT.md").write_text(
         "# Lost results\n"
         "Used /tmp/dead_artifact_xyz_does_not_exist_anywhere.gds\n"
@@ -166,7 +176,9 @@ def test_dangling_tmp_reference(tmp_path):
     r = _run(tmp_path)
     assert r.returncode == 1, r.stdout + r.stderr
     # No live findings, but dangling counted in fail_count.
-    assert "[WARN]" in r.stdout
+    assert "[FAIL]" in r.stdout
+    assert "[WARN]" not in r.stdout, (
+        "a blocking exit may not be topped by a warning")
     assert "dangling external-path" in r.stdout
 
 

@@ -20,11 +20,25 @@ This gate is **chip-AGNOSTIC**:
 
     Scan the project's waivers.json + RESULT.md + reports/*.json for
     any reference to absolute paths starting with /tmp/, /var/tmp/,
-    or any path explicitly outside the project root. FAIL when found
-    AND the referenced file actually exists at that path (i.e. the
-    artifact got produced but was left outside the project tree).
+    or any path explicitly outside the project root. FAIL when one is
+    found in a canonical declaration file, whether or not the file is
+    still on disk:
 
-    The fix is for the agent to copy those artifacts to canonical
+      * still on disk  — the artifact got produced but was left outside
+        the project tree. Recoverable: copy it in.
+      * already gone   — the reference is dangling, so the artifact was
+        produced and then swept. Worse, and NOT recoverable.
+
+    #2084: this paragraph used to read "FAIL when found AND the
+    referenced file actually exists", which described only the first of
+    the two while `main()` has always exited 1 on both (`fail_count =
+    len(live) + len(dangling)`). The prose was the narrower of two
+    classifications the file carried at once; the code's is the one that
+    decides, so the prose is corrected to it rather than the reverse —
+    a dangling reference names evidence that is already lost, which is
+    not the half of this finding to stop blocking on.
+
+    The fix is for the agent to copy live artifacts to canonical
     locations under <project>/ before claiming completion.
 
 Honors waiver ``project_artifacts_external_storage_intentional`` (>=60
@@ -36,7 +50,13 @@ Usage:
 Exit codes:
     0  PASS (>=1 declaration file was READ and none cites external storage,
        OR every citation is waived)
-    1  FAIL (/tmp references found AND artifacts still on disk)
+    1  FAIL (a /tmp-class reference in a canonical declaration file — live
+       (artifact still on disk, copy it in) or dangling (already swept, the
+       evidence is gone). Both block; the split states the remedy, not
+       whether there is a finding. The FIRST line of stdout is always the
+       `[FAIL]` line naming the blocking population, because
+       `flow_compliance_check._p0_first_line` publishes line 0 as the
+       failed gate's reason — see the #2084 block in `main()`)
     2  NOT_CHECKED — IO / parse error, OR the scan opened ZERO declaration
        files: nothing was read, so nothing is vouched for (#619; the argument
        is written out at the `scanned == 0` branch of main())
@@ -333,49 +353,107 @@ def main() -> int:
     ephemeral = [(f, p, e) for (f, p, e, lg) in findings if lg]
     nonlog = [(f, p, e) for (f, p, e, lg) in findings if not lg]
 
+    # ── #2084 — ONE CLASSIFICATION, AND THE LINE THAT CARRIES IT COMES FIRST ─
+    #
+    # MEASURED (lane rbsha2, 2026-09-07, plugin v1.17.62): the completion audit
+    # read 246 invoked / 182 passed / 1 failed, and the message it published for
+    # the ONE failed gate was this gate's
+    #
+    #     "[INFO] … 2 ephemeral process-marker reference(s) — non-blocking (the
+    #      supervised watchdog removes these pidfiles after child exit; they are
+    #      runtime metadata, not project outputs)"
+    #
+    # — a sentence that declares, in the same breath, that the finding does not
+    # matter and that the run failed on it.
+    #
+    # THE CLASSIFICATION WAS NEVER DOUBLE. Reproduced on this tip (8HD-4, lane
+    # cz2084, pinned image): the four non-blocking classes above — in-tree self
+    # references, R7 pinned plugin sources, watchdog process markers, log-sourced
+    # ephemeral tool paths — are each `continue`d before the finding is recorded,
+    # so a marker CANNOT reach `nonlog` and CANNOT contribute to the exit code. A
+    # project whose ONLY volatile references are two watchdog pidfiles exits 0.
+    # What failed the run was a separate, genuinely blocking reference in the same
+    # tree; the audit simply never said so.
+    #
+    # TWO REPORTING DEFECTS PRODUCED THAT, AND BOTH ARE FIXED HERE.
+    #
+    #   (1) THE DECIDING LINE WAS NOT FIRST. `flow_compliance_check._p0_first_line`
+    #       records a failed gate's FIRST output line as its message, and the four
+    #       non-blocking [INFO] disclosures were printed BEFORE the verdict line.
+    #       Line 0 of a FAIL was therefore whichever disclosure happened to sort
+    #       first — a note whose own text says "non-blocking". The gate is the half
+    #       that must fix this: a reader taking the first line is taking the line a
+    #       program is entitled to treat as the reason, so the reason has to BE
+    #       first. Disclosures follow the verdict now, unchanged in wording.
+    #
+    #   (2) A DANGLING-ONLY FAILURE PRINTED NO FAILING LINE AT ALL. `live` empty +
+    #       `dangling` non-empty exits 1 (it always has: `fail_count = len(live) +
+    #       len(dangling)`), yet the only line the gate emitted for it was tagged
+    #       `[WARN]`. So even a reader holding the FULL stdout was told the highest
+    #       severity present was a warning, and handed a blocking exit code. The
+    #       severity a gate prints must be the severity it exits with; a dangling
+    #       reference is now stated as what it is — blocking, and worse than a live
+    #       one, because the artefact is already gone and cannot be copied back.
+    #
+    # NEITHER HALF MOVES A VERDICT. Every exit code this function can return is
+    # byte-identical to before; what changed is which sentence a reader — human or
+    # `_p0_first_line` — gets when it asks WHY. chip-AGNOSTIC: pure classification
+    # and output ordering, no design, PDK or vendor literal anywhere in it.
+    #
+    # The non-blocking disclosures are BUILT here and PRINTED after the verdict.
+    notes: List[str] = []
+
     # R7 — a pinned plugin worktree path (…/vibe-ic-marketplace/plugins/vibe-ic/
     # … under a `.claude/worktrees` or `wt-*` dir, with a real plugin.json) is a
     # legitimate plugin SOURCE, not a volatile project OUTPUT. Disclosed, never
     # FAILs — it is only cited because the plugin itself was pinned there.
     if plugin_src:
-        print(f"[INFO] project_outputs_in_tree_check: "
-              f"{len(plugin_src)} pinned plugin-source reference(s) "
-              f"(vibe-ic plugin pinned under a worktree/scratch dir; a "
-              f"legitimate plugin source, NOT a volatile project output — "
-              f"non-blocking):")
+        block = [f"[INFO] project_outputs_in_tree_check: "
+                 f"{len(plugin_src)} pinned plugin-source reference(s) "
+                 f"(vibe-ic plugin pinned under a worktree/scratch dir; a "
+                 f"legitimate plugin source, NOT a volatile project output — "
+                 f"non-blocking):"]
         for f, p in plugin_src[:5]:
-            print(f"  - {f} → {p}")
+            block.append(f"  - {f} → {p}")
         if len(plugin_src) > 5:
-            print(f"  ... +{len(plugin_src)-5} more")
+            block.append(f"  ... +{len(plugin_src)-5} more")
+        notes.append("\n".join(block))
 
     if in_tree_self:
-        print(f"[INFO] project_outputs_in_tree_check: "
-              f"{in_tree_self} in-tree self-reference(s) under the project "
-              f"root {project} — in-tree by definition, non-blocking (the "
-              f"project itself lives at a volatile path; these are its OWN "
-              f"files, not external storage)")
+        notes.append(f"[INFO] project_outputs_in_tree_check: "
+                     f"{in_tree_self} in-tree self-reference(s) under the "
+                     f"project root {project} — in-tree by definition, "
+                     f"non-blocking (the project itself lives at a volatile "
+                     f"path; these are its OWN files, not external storage)")
 
     if process_markers:
-        print(f"[INFO] project_outputs_in_tree_check: "
-              f"{len(process_markers)} ephemeral process-marker "
-              f"reference(s) — non-blocking (the supervised watchdog "
-              f"removes these pidfiles after child exit; they are runtime "
-              f"metadata, not project outputs):")
+        block = [f"[INFO] project_outputs_in_tree_check: "
+                 f"{len(process_markers)} ephemeral process-marker "
+                 f"reference(s) — non-blocking (the supervised watchdog "
+                 f"removes these pidfiles after child exit; they are runtime "
+                 f"metadata, not project outputs):"]
         for f, p in process_markers[:5]:
-            print(f"  - {f} → {p}")
+            block.append(f"  - {f} → {p}")
         if len(process_markers) > 5:
-            print(f"  ... +{len(process_markers)-5} more")
+            block.append(f"  ... +{len(process_markers)-5} more")
+        notes.append("\n".join(block))
 
     if ephemeral:
-        print(f"[INFO] project_outputs_in_tree_check: "
-              f"{len(ephemeral)} ephemeral tool-path reference(s) inside "
-              f"log file(s) — non-blocking (logs cite transient /tmp tool "
-              f"paths by nature; not project outputs):")
+        block = [f"[INFO] project_outputs_in_tree_check: "
+                 f"{len(ephemeral)} ephemeral tool-path reference(s) inside "
+                 f"log file(s) — non-blocking (logs cite transient /tmp tool "
+                 f"paths by nature; not project outputs):"]
         for f, p, e in ephemeral[:5]:
-            print(f"  - {f} → {p} "
-                  f"({'still present' if e else 'swept'})")
+            block.append(f"  - {f} → {p} "
+                         f"({'still present' if e else 'swept'})")
         if len(ephemeral) > 5:
-            print(f"  ... +{len(ephemeral)-5} more")
+            block.append(f"  ... +{len(ephemeral)-5} more")
+        notes.append("\n".join(block))
+
+    def _emit_notes() -> None:
+        """The non-blocking disclosures, AFTER the verdict line that decides."""
+        for note in notes:
+            print(note)
 
     if not nonlog:
         # The scan size leads, and the sentence that follows is phrased so it
@@ -389,9 +467,11 @@ def main() -> int:
               f"/var/tmp / /dev/shm / /run paths referenced in RESULT.md / "
               f"waivers.json / reports/ / generated_docs/ (log-only ephemeral "
               f"tool paths and supervised watchdog pidfiles excluded)")
+        _emit_notes()
         return 0
 
-    # Split: live (file exists at /tmp) vs. dangling (referenced but gone)
+    # Split: live (file exists at /tmp) vs. dangling (referenced but gone).
+    # BOTH block. The split says what the fix is, not whether there is one.
     live = [(f, p) for (f, p, e) in nonlog if e]
     dangling = [(f, p) for (f, p, e) in nonlog if not e]
 
@@ -403,7 +483,18 @@ def main() -> int:
               f"project_outputs_in_tree_check: "
               f"{fail_count} external-path reference(s) but {waiver_n} "
               f"waiver(s) under '{WAIVER_KEY}'.")
+        _emit_notes()
         return 0
+
+    # THE DECIDING LINE (#2084). First, and tagged with the severity this
+    # function is about to exit with. It states the blocking population — the
+    # number the exit code is a function of — so a reader that takes only this
+    # line still gets the reason and the size of it.
+    print(f"[FAIL] project_outputs_in_tree_check: "
+          f"{fail_count} blocking external-storage reference(s) in this "
+          f"project's own declaration file(s) "
+          f"({len(live)} live, {len(dangling)} dangling) — this is what the "
+          f"gate exits 1 on:")
 
     if live:
         print(f"[FAIL] project_outputs_in_tree_check: "
@@ -416,13 +507,20 @@ def main() -> int:
             print(f"  ... +{len(live)-8} more")
 
     if dangling:
-        print(f"[WARN] project_outputs_in_tree_check: "
+        # Tagged [FAIL], not [WARN] (#2084 defect 2). It exits 1 either way; a
+        # dangling reference is the WORSE of the two — the artefact is already
+        # gone, so there is nothing left to copy — and printing the milder word
+        # for the worse finding is precisely the disagreement this issue names.
+        print(f"[FAIL] project_outputs_in_tree_check: "
               f"{len(dangling)} dangling external-path reference(s) "
-              f"(file no longer exists — likely lost to /tmp sweep):")
+              f"(file no longer exists — likely lost to /tmp sweep; "
+              f"unrecoverable, so copying it in is no longer an option):")
         for f, p in dangling[:5]:
             print(f"  - {f} → {p} (NOT found on disk)")
         if len(dangling) > 5:
             print(f"  ... +{len(dangling)-5} more")
+
+    _emit_notes()
 
     print(f"\nFix: copy live artifacts to canonical project paths and "
           f"update references. Then re-run audit. To accept volatile "
