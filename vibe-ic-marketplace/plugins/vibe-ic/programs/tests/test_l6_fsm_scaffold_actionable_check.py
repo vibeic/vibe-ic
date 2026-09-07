@@ -129,10 +129,28 @@ def test_honest_no_fsm_in_input_skips(tmp_path):
     assert "[SKIP]" in r.stdout
 
 
+def _stage_as_input(project: Path) -> None:
+    """Record that ``phase2/stage1/rtl`` was populated FROM the design's input.
+
+    #2087. Every #1977 fixture below is named for STAGED RTL, and staged RTL is
+    what the AES design #1977 measured actually had — but the fixtures only ever
+    wrote files into ``phase2/stage1/rtl``, which is also where the flow puts
+    RTL it AUTHORED itself. This is the keystone artefact the two real staging
+    paths leave behind (``ip_catalog_pull`` on the catalog-pull path,
+    ``staged_rtl_reused_ip_manifest_emit`` on the pre-staged path), so writing
+    it is what makes the fixture the shape its name claims. Every assertion in
+    every #1977 test below is unchanged."""
+    rtl = project / "phase2" / "stage1" / "rtl"
+    rtl.mkdir(parents=True, exist_ok=True)
+    (rtl / "SOURCE_MANIFEST.json").write_text(
+        json.dumps({"reused_ip": True}), encoding="utf-8")
+
+
 def _write_structural_fsm(project: Path, filename: str,
                           clock: str = "clk_i") -> None:
     rtl = project / "phase2" / "stage1" / "rtl"
     rtl.mkdir(parents=True, exist_ok=True)
+    _stage_as_input(project)
     (rtl / filename).write_text(
         "module control(input logic " + clock + ");\n"
         "  typedef enum logic [1:0] {ST_A, ST_B, ST_C} ctrl_state_e;\n"
@@ -214,6 +232,7 @@ def test_issue1977_real_checked_state_register_blocks_false_skip(tmp_path):
     rtl = proj / "phase2" / "stage1" / "rtl"
     rtl.mkdir(parents=True)
     (rtl / "checked_example.v").write_bytes(source.read_bytes())
+    _stage_as_input(proj)
 
     r = _run(proj)
     assert r.returncode == 1, r.stdout + r.stderr
