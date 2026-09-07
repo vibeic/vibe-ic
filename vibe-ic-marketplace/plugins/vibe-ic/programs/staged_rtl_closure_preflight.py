@@ -24,10 +24,35 @@ reference that resolves to no staged module, classifying each:
 
 Exit codes: 0 = closure complete, 1 = dangling references found,
 2 = input error. Chip-AGNOSTIC: pure Verilog/SV structure.
+
+WHERE AN INSTANTIATION CAN BE (vibe-ic#2093)
+--------------------------------------------
+``_INST_FULL_RE`` matches ``<id> <id> (`` ANYWHERE in the file. Two
+constructs have that exact shape and are not instantiations:
+
+    `define MACRO(a, b)            a compiler directive
+    function automatic ret_t f(x)  a function/task header
+
+MEASURED on a staged OpenTitan-AES set (131 files): 36 FAIL rows, of which
+35 were one of those two -- 32 SV package-function headers returning a
+typedef (``mubi4_t``, ``secded_39_32_t``, ``tl_h2d_cmd_intg_t``, ...), a
+function header inside a module generate block (``matrix_col_t``), and 3
+``define``. Every one printed "instantiated outside any generate
+conditional ... genuine hole", which is a confident instruction to stage a
+type. The one true finding was buried under them.
+
+The fix is positional, not a name blacklist: a module instantiation is a
+module ITEM, so a candidate counts only when the innermost enclosing
+``module``/``endmodule``-style region is a MODULE -- never a package, a
+function, a task, a class or an interface -- and never inside a compiler
+directive line (or its backslash continuations). A name blacklist would
+have to enumerate every typedef in every vendor package and would still
+miss the next one; the position is decidable from the grammar.
 """
 from __future__ import annotations
 
 import argparse
+import bisect
 import json
 import re
 import sys
@@ -79,6 +104,19 @@ _ELSE_GUARD_RE = re.compile(r"\belse\s*$")
 _EQ_COND_RE = re.compile(rf"^\s*({_ID})\s*==\s*([\w:'\[\]]+)\s*$")
 _BARE_COND_RE = re.compile(rf"^\s*({_ID})\s*$")
 _FALSEY = {"0", "1'b0", "'0", "1'B0", "false"}
+
+#: Region openers whose closer is unambiguous. `property`/`sequence`/
+#: `covergroup` are deliberately ABSENT: `assert property (...)` uses the
+#: keyword with no `endproperty`, so tracking it would corrupt the stack for
+#: the rest of the file.
+_REGION_PAIRS = {
+    "module": "endmodule", "package": "endpackage",
+    "function": "endfunction", "task": "endtask",
+    "class": "endclass", "interface": "endinterface",
+}
+_REGION_TOKEN_RE = re.compile(
+    r"\b(module|endmodule|package|endpackage|function|endfunction"
+    r"|task|endtask|class|endclass|interface|endinterface)\b")
 
 
 def _enclosing_if_generate(text: str, pos: int):
@@ -178,12 +216,84 @@ def _gather(targets: List[str]) -> Dict[str, str]:
     return out
 
 
+def _directive_spans(text: str) -> List[Tuple[int, int]]:
+    """(start, end) of every compiler-directive line and its continuations.
+
+    A backtick-define of a macro with arguments is ``<id> <id> (`` and matched the
+    instantiation pattern; three macro names were reported as missing
+    modules on the measured set. A macro BODY continued with a trailing
+    backslash is part of the directive too, so the continuation lines are
+    included rather than re-scanned as module items.
+    """
+    spans: List[Tuple[int, int]] = []
+    off = 0
+    continuing = False
+    for line in text.split("\n"):
+        start = off
+        off += len(line) + 1
+        if line.lstrip().startswith("`"):
+            continuing = True
+        if continuing:
+            spans.append((start, off))
+            if not line.rstrip().endswith("\\"):
+                continuing = False
+    return spans
+
+
+def _region_events(text: str) -> List[Tuple[int, Optional[str]]]:
+    """[(offset, innermost_open_region_kind)] after each region token.
+
+    The text is passed through the comment stripper first. `_gather` has
+    already stripped it, so this is the identity on that path and costs
+    nothing; it also makes the helper correct when called on raw HDL, which
+    is where the phantom-declaration class of defect comes from.
+
+    An unmatched ``end<x>`` is ignored rather than treated as a pop, so a
+    file this scanner cannot follow degrades to "no module region" and its
+    candidates are dropped -- never silently promoted to findings.
+    """
+    code = _strip_comments(text)
+    stack: List[str] = []
+    events: List[Tuple[int, Optional[str]]] = []
+    for m in _REGION_TOKEN_RE.finditer(code):
+        tok = m.group(1)
+        if tok in _REGION_PAIRS:
+            stack.append(tok)
+        else:
+            opener = tok[3:]
+            if opener in stack:
+                del stack[len(stack) - 1 - stack[::-1].index(opener):]
+        events.append((m.end(), stack[-1] if stack else None))
+    return events
+
+
+def _innermost_region(events, offsets, pos: int) -> Optional[str]:
+    """Region kind in force at `pos`: the state left by the last region
+    token at or before it. `offsets` is bisected rather than `events`
+    because an event's second element may be None and tuple comparison
+    against None raises."""
+    idx = bisect.bisect_right(offsets, pos) - 1
+    return events[idx][1] if idx >= 0 else None
+
+
 def _instantiations(text: str) -> List[Tuple[str, int]]:
-    """[(module_ref, offset)] of plausible instantiations."""
+    """[(module_ref, offset)] of plausible instantiations.
+
+    A module instantiation is a MODULE ITEM (vibe-ic#2093): the innermost
+    enclosing region must be a module, so a function/task header inside a
+    package or inside a module, and anything at package scope, is not one.
+    """
+    events = _region_events(text)
+    offsets = [e[0] for e in events]
+    directives = _directive_spans(text)
     out: List[Tuple[str, int]] = []
     for m in _INST_FULL_RE.finditer(text):
         ref, inst = m.group(1), m.group(2)
         if ref in _NON_MODULE_KEYWORDS or inst in _NON_MODULE_KEYWORDS:
+            continue
+        if _innermost_region(events, offsets, m.start()) != "module":
+            continue
+        if any(a <= m.start() < b for a, b in directives):
             continue
         # skip function-style calls `name (` with the "instance" being
         # actually the open paren of a task/if/for — inst must not be a
