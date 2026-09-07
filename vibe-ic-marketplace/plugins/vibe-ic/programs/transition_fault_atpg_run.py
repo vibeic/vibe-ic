@@ -118,7 +118,7 @@ if str(_HERE) not in sys.path:
 
 import _watchdog as _wd  # noqa: E402  progress-stall supervision (v1.3.47)
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import _container_exec as _ce  # noqa: E402 — the ONE guarded docker-exec argv
+import _docker_watchdog as _dwd  # noqa: E402 — the ephemeral-container probe + reap
 
 try:  # sibling module; programs/ is on sys.path when run as a script
     import _docker_memory as _dmem
@@ -500,7 +500,7 @@ def _run_in_docker(project: Path, shell_cmd: str, timeout: int,
     # inside the container orphaned and burning a full CPU indefinitely
     # (observed). Naming it lets the kill handler `docker rm -f` the orphan by
     # IDENTITY, never by matching a command line.
-    cname = f"vibeic_tdf_{os.getpid()}_{time.time_ns() & 0xFFFFFFFF:x}"
+    cname = _dwd.ephemeral_container_name("vibeic_tdf")
     docker_cmd = [
         "docker", "run", "--rm", "--name", cname,
         *_dmem.docker_memory_flags(),
@@ -520,71 +520,22 @@ def _run_in_docker(project: Path, shell_cmd: str, timeout: int,
     )
     docker_cmd += [_far.DOCKER_IMAGE, "-c", preamble + shell_cmd]
 
-    def _reap(proc, reason: str) -> None:
-        """Kill the `docker run` CLIENT *and* the orphan it leaves behind.
-
-        `run_host_supervised`'s default kill reaches only the client; the
-        yosys inside the named container survives it and burns a CPU. The
-        victim is selected by the unique `--name` this call minted, never by
-        matching a command line, so a sibling run's healthy container can
-        never be caught (see _watchdog's kill-by-IDENTITY note)."""
-        try:
-            proc.kill()
-        except Exception:  # nosec — already gone
-            pass
-        try:
-            # Cleanup only: nothing is recorded from this call's outcome, so
-            # its bound cannot become a verdict about the subject.
-            subprocess.run(["docker", "rm", "-f", cname],
-                           capture_output=True, text=True, timeout=30)
-        except Exception:
-            pass
-
-    def _cpu_probe(_proc):
-        # MEASURED: the launched process here is the `docker run` CLIENT, and
-        # its own /proc CPU sits FLAT for the whole run even while the
-        # container burns a full core — over a 12s silent-CPU container job
-        # the host-level probe read 0.00/0.00/0.01/0.01/0.01/0.01 (essentially
-        # no signal at all: containerd-shim reparents the actual process, so
-        # it is never a ppid-chain DESCENDANT of the CLI on the host's own
-        # /proc). `run_host_supervised`'s default `cpu_probe` reads the
-        # LAUNCHED PROCESS's own tree, which is exactly wrong for `docker
-        # run`. `_watchdog`'s own module docstring names the fix — "docker
-        # exec ps in-container" — read via `/proc` directly (no `ps` package
-        # dependency inside the tool image) using the SAME utime+stime field
-        # position `_watchdog._pid_cpu_s` reads on the host. The container is
-        # `--rm --name cname` and EXCLUSIVELY this call's own, so every pid
-        # inside it is this job's — no marker/identity filtering needed.
-        # Without this, captured OUTPUT is the only signal, and yosys's
-        # miter-flatten phase on a large design is exactly the quiet-but-
-        # working stretch that signal cannot see either (`_docker_watchdog`'s
-        # own `yosys-abc` finding: a healthy 1.8M-cell synth was killed by
-        # output-only accounting during ABC's silent phase — the same shape
-        # of defect).
-        try:
-            r = subprocess.run(
-                _ce.docker_exec_argv(cname, "sh", "-c", "cat /proc/[0-9]*/stat 2>/dev/null"),
-                capture_output=True, text=True, timeout=15)
-        except Exception:  # nosec — a probe failure is just "no reading"
-            return None
-        if r.returncode != 0 or not (r.stdout or "").strip():
-            return None
-        tck = _wd._clk_tck()
-        total = 0.0
-        seen = False
-        for line in r.stdout.splitlines():
-            cut = line.rfind(")")
-            if cut < 0:
-                continue
-            rest = line[cut + 2:].split()
-            if len(rest) < 13:
-                continue
-            try:
-                total += (float(rest[11]) + float(rest[12])) / tck
-                seen = True
-            except ValueError:  # nosec
-                continue
-        return total if seen else None
+    # THE PROBE AND THE REAP AN EPHEMERAL `docker run` NEEDS, both taken from
+    # `_docker_watchdog` rather than written here (vibe-ic#2082). They were
+    # authored in this file, for this defect; the stuck-at producer needed the
+    # identical pair, and two copies of a supervision probe is how the two
+    # engines drift apart -- the same reasoning that already made
+    # `_scaled_wall_budget` and `parse_cut_ports` imports rather than copies.
+    #
+    # MOVING IT ALSO FIXED IT, and the defect was in the copy this file
+    # shipped: the probe returned None whenever `cat /proc/[0-9]*/stat` exited
+    # non-zero, which it does whenever ANY pid in the container vanishes
+    # mid-read -- measured at 7 of 12 looks against a real engine, each of those
+    # looks carrying 27-38 kB of good stat lines that were discarded. So this
+    # producer's CPU signal has been unavailable most of the time, leaving the
+    # supervision resting on captured OUTPUT alone during exactly the long
+    # silent solve this probe was written to see. See the helper for the
+    # measurement.
 
     # PROGRESS supervision, not a runtime guess (v1.3.47 / owner directive).
     # `timeout` becomes the STALL GRACE: how long every forward-progress
@@ -593,8 +544,10 @@ def _run_in_docker(project: Path, shell_cmd: str, timeout: int,
     # case a fixed wall destroyed, booking a false exit-124 ERROR — now runs
     # to completion however long it legitimately takes, while a genuine
     # deadlock is still killed and reported as such under its OWN rc.
-    res = _wd.run_host_supervised(docker_cmd, stall_grace_s=float(timeout),
-                                  kill=_reap, cpu_probe=_cpu_probe)
+    res = _wd.run_host_supervised(
+        docker_cmd, stall_grace_s=float(timeout),
+        kill=_dwd.ephemeral_container_reap(cname),
+        cpu_probe=_dwd.ephemeral_container_cpu_probe(cname))
     if res.outcome == "launch_error":
         return 127, "", "docker binary not found in PATH"
     # On a stall the partial stdout yosys emitted before the kill is still

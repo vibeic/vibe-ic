@@ -70,10 +70,13 @@ import shlex
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 import _path_layout as _pl
 import _commercial_pdk as _cpdk  # config-driven commercial-PDK id (NDA: no SKU in source)
 import _container_exec as _CE  # vibe-ic#623 — the deadline goes INSIDE the container
+import _watchdog as _wd        # vibe-ic#2082 — progress supervision, not a clock
+import _docker_watchdog as _dwd  # the ephemeral-container probe + reap
 try:  # sibling module; programs/ is on sys.path when run as a script
     import _docker_memory as _dmem
 except ImportError:  # pragma: no cover - packaged/flattened layouts
@@ -954,7 +957,17 @@ def atpg_exit_is_signal_death(exit_code: int, engine_log: str) -> bool:
 
     Below the floor it never is. At or above the floor it is — UNLESS the
     engine printed its own error diagnosis, which a signal-killed process
-    cannot have done. Pure; no I/O."""
+    cannot have done. Pure; no I/O.
+
+    `_watchdog.RC_STALLED` is excluded FIRST and by name (vibe-ic#2082). It is
+    the SUPERVISOR's own return code for "every readable forward-progress
+    signal sat still", not anything the engine returned, and it happens to sit
+    above the floor (199 = 128 + 71, and there is no signal 71). Left in, a
+    stalled engine would be read as a transient crash and RETRIED — three times
+    — which is the most expensive possible response to a job that is already
+    known to be going nowhere."""
+    if exit_code == _wd.RC_STALLED:
+        return False
     if exit_code < _ATPG_SIGNAL_DEATH_FLOOR:
         return False
     return not _ATPG_ENGINE_DIAGNOSTIC_RE.search(engine_log or "")
@@ -1200,6 +1213,56 @@ def atpg_container_deadline(timeout: int,
     return max(1, int(timeout) + max(0, int(flush_grace_s)))
 
 
+#: THE VALUE THAT MEANS "NO DEADLINE", and the one caller entitled to it.
+#:
+#: GNU `timeout` documents DURATION 0 as "disable the associated timeout", and
+#: that is the whole mechanism by which a supervised launch has no clock while
+#: keeping the SAME container-side argv every other call uses. MEASURED both
+#: directions in the pinned image (coreutils 9.4):
+#:
+#:     timeout -k 5 3 sleep 8   ->  rc 124            (the clock kills)
+#:     timeout -k 5 0 sleep 8   ->  rc 0, 8 s elapsed (the clock is disabled)
+#:
+#: `atpg_container_deadline` still CANNOT produce it — its `max(1, …)` clamp is
+#: untouched and still tested — because a deadline that vanished by arithmetic
+#: is the accident that clamp exists to prevent. This is the opposite: an
+#: explicit, argued request from a caller that has put a real supervisor in the
+#: clock's place, exactly as `analog_real_corner_sweep._run_ngspice` does for
+#: the same reason (vibe-ic#2062).
+ATPG_NO_CONTAINER_DEADLINE = 0
+
+#: The `timeout=` default of `_run_docker`. Named so the supervised branch can
+#: tell "the caller said nothing" from "the caller handed me a budget I am
+#: about to ignore", and REFUSE the second — the `_progress_run` precedent: a
+#: primitive that has no deadline does not accept and quietly drop one.
+ATPG_DEFAULT_CLIENT_TIMEOUT_S = 600
+
+
+def _atpg_supervision_kw(ceiling_s, ceiling_notice,
+                        stall_grace_s=None) -> dict:
+    """The `run_host_supervised` keywords that carry a RECORDED ceiling.
+
+    `hard_ceiling_s` has not stopped anything since vibe-ic#2051: the
+    supervisor notes the crossing, calls `ceiling_notice` ONCE, and the job
+    runs on. Passing the design's declared wall here is therefore not a
+    disguised deadline — it is the only way the number keeps meaning something
+    (a budget that was crossed, announced and recorded) instead of being
+    deleted along with the kill it used to drive.
+
+    `stall_grace_s` is the primitive's ONE tunable — "how long may the job be
+    silent AND idle before we call it hung" — and is NOT a runtime bound: a job
+    that is progressing resets it at every look and can never reach it, at any
+    value. Left unset it is `_watchdog`'s calibrated default."""
+    kw: dict = {}
+    if ceiling_s is not None:
+        kw["hard_ceiling_s"] = float(ceiling_s)
+    if ceiling_notice is not None:
+        kw["ceiling_notice"] = ceiling_notice
+    if stall_grace_s is not None:
+        kw["stall_grace_s"] = float(stall_grace_s)
+    return kw
+
+
 #: The two mount points `_run_docker` establishes, and what they are mounts OF.
 #: Callers all over this file build container-absolute strings ("/work/<rel>",
 #: "/pdk/..."), so a LOCAL run has to say the same thing about the same files.
@@ -1285,9 +1348,13 @@ def atpg_engine_identity() -> dict:
 def _run_docker(
     project: Path,
     cmd: list[str],
-    timeout: int = 600,
+    timeout: int = ATPG_DEFAULT_CLIENT_TIMEOUT_S,
     pdk_dir: Path | None = None,
     flush_grace_s: int = ATPG_FLUSH_GRACE_S,
+    supervised: bool = False,
+    ceiling_s: float | None = None,
+    ceiling_notice=None,
+    stall_grace_s: float | None = None,
 ) -> tuple[int, str, str]:
     """Run a command inside iic-osic-tools.
     - project mounted at /work
@@ -1330,8 +1397,47 @@ def _run_docker(
     DEGRADES LOUDLY: an image without `timeout` returns 127 from the shell, so
     the caller learns the deadline could NOT be enforced instead of running
     unbounded behind a deadline that exists only in the caller's belief.
+
+    ``supervised=True`` — NO DEADLINE AT ALL, AND A REAL SUPERVISOR INSTEAD
+    ======================================================================
+    vibe-ic#2082. Everything above is the right answer to "the deadline must
+    reach the tool"; it is not an answer to "should there be a deadline". On
+    the design that raised the issue there should not have been: the engine was
+    still grading when a size-independent constant expired, the container-side
+    `timeout` signalled it exactly as designed, and the step recorded that the
+    stuck-at measurement DOES NOT EXIST — on the same design whose at-speed
+    ATPG ran 52 minutes and passed. A clock decided that a progressing job had
+    no product.
+
+    Under ``supervised=True`` the container-side deadline is DISABLED
+    (`ATPG_NO_CONTAINER_DEADLINE`, the same argv, no second execution path) and
+    the host-side wait becomes `_watchdog.run_host_supervised`: the job is
+    stopped only when EVERY readable forward-progress signal has sat still for
+    the stall grace, and never on elapsed time. `ceiling_s` is then a RECORDED
+    budget — announced once when crossed, never a terminator.
+
+    The two things a `docker run` needs and a host subprocess does not are
+    injected from `_docker_watchdog`, which is where the same pair already had
+    to be written for the sibling at-speed producer:
+      * the CPU probe reads the CONTAINER's /proc, because the launched process
+        is the docker CLIENT and its own tree is flat while the engine burns a
+        core (measured: 0.00/0.00/0.01/0.01 over a 12 s CPU-bound job);
+      * the reap kills the client AND the container, selected by the unique
+        `--name` this call mints — an identity, never a command-line match.
+
+    An explicit ``timeout=`` is REFUSED here rather than accepted and ignored:
+    a supervised launch has no deadline, and silently dropping a number the
+    caller passed is how a deadline comes to exist only in a caller's belief —
+    which is the defect the whole rest of this docstring is about.
     """
-    deadline = atpg_container_deadline(timeout, flush_grace_s)
+    if supervised and timeout != ATPG_DEFAULT_CLIENT_TIMEOUT_S:
+        raise TypeError(
+            f"_run_docker(supervised=True) has NO deadline, so timeout="
+            f"{timeout!r} would be accepted and then not honoured. Pass the "
+            f"number as ceiling_s= to have it RECORDED, or drop it.")
+    deadline = (ATPG_NO_CONTAINER_DEADLINE if supervised
+                else atpg_container_deadline(timeout, flush_grace_s))
+    _sup_kw = _atpg_supervision_kw(ceiling_s, ceiling_notice, stall_grace_s)
     _inner = ENV_PREAMBLE + " ".join(cmd)
     _pdk = pdk_dir if (pdk_dir is not None and pdk_dir.exists()) else None
 
@@ -1361,6 +1467,16 @@ def _run_docker(
             (f"timeout -k {_CE.DEFAULT_KILL_GRACE_S} {deadline} bash -c "
              + shlex.quote(_localise_mounted_paths(_inner, project, _pdk))),
         ]
+        if supervised:
+            # The engine IS a descendant here, so the DEFAULT host probe reads
+            # it directly and the default kill reaches the whole process group
+            # (`run_supervised`'s own factory sets start_new_session=True).
+            res = _wd.run_host_supervised(local_cmd, **_sup_kw)
+            if res.outcome == "launch_error":
+                return 127, "", (
+                    "no docker client and no `bash` on PATH — the ATPG engine "
+                    "could not be reached by either route")
+            return res.rc, res.out, res.err
         try:
             r = subprocess.run(local_cmd, capture_output=True, text=True,
                                timeout=deadline + _CE.CLIENT_GRACE_S)
@@ -1374,8 +1490,15 @@ def _run_docker(
                 "no docker client and no `bash` on PATH — the ATPG engine "
                 "could not be reached by either route")
 
+    # A unique name ONLY when there is a supervisor that might have to reap it.
+    # `--rm` looks self-cleaning and is not: killing the client leaves the
+    # engine inside the container holding its cores. The name is this
+    # invocation's own identity, never a pattern that could match a sibling.
+    cname = (_dwd.ephemeral_container_name("vibeic_atpg") if supervised
+             else None)
     docker_cmd = [
         "docker", "run", "--rm",
+        *(["--name", cname] if cname else []),
         *_dmem.docker_memory_flags(),
         "--entrypoint", "bash",
         "-v", f"{project}:/work",
@@ -1387,6 +1510,20 @@ def _run_docker(
         "-c", (f"timeout -k {_CE.DEFAULT_KILL_GRACE_S} {deadline} bash -c "
                + shlex.quote(_inner)),
     ]
+    if supervised:
+        res = _wd.run_host_supervised(
+            docker_cmd,
+            kill=_dwd.ephemeral_container_reap(cname),
+            cpu_probe=_dwd.ephemeral_container_cpu_probe(cname),
+            **_sup_kw)
+        if res.outcome == "launch_error":
+            return 127, "", "docker binary not found in PATH"
+        # On a stall the partial stdout the engine emitted before the reap is
+        # SALVAGED (captured to a file, not lost with an exception), and
+        # `res.rc` is the watchdog's own distinct RC_STALLED — never the old
+        # wall-clock 124 — so a reader can tell "no forward progress across the
+        # whole grace window" from "the runtime guess was too small".
+        return res.rc, res.out, res.err
     try:
         r = subprocess.run(docker_cmd, capture_output=True, text=True,
                            timeout=deadline + _CE.CLIENT_GRACE_S)
@@ -1923,9 +2060,33 @@ def run_fault(
     except Exception:
         pass          # unreadable cut -> the floor, never a guess
 
+    _atpg_wall_basis = (
+        f"floor 1800 s + per-flop term on {_atpg_scan_flops} scan flop(s)"
+        if _atpg_scan_flops else "floor 1800 s (no cut flops resolved)")
+
+    # ── WHAT THE BUDGET NOW DOES (vibe-ic#2082) ───────────────────────────
+    # It is RECORDED and announced. It stops nothing. The number above is
+    # unchanged — not raised, not removed — because the change is to what it
+    # MEANS, and a bigger constant would have been the same defect with a later
+    # date. The engine is supervised on its own forward progress instead: it
+    # runs to completion however long that legitimately takes, and is stopped
+    # only when every readable signal has sat still for the stall grace.
+    _atpg_ceiling: dict = {}
+
+    def _ceiling_notice(elapsed_s: float) -> None:
+        """Called ONCE, at the crossing, by the supervisor. The job continues."""
+        _atpg_ceiling["crossed"] = True
+        _atpg_ceiling["at_s"] = round(float(elapsed_s), 1)
+        print(f"[fault_atpg_run] RECORDED CEILING CROSSED at "
+              f"{_atpg_ceiling['at_s']}s (declared budget {_atpg_wall}s, "
+              f"{_atpg_wall_basis}). The engine is still making forward "
+              f"progress and is NOT stopped: the budget is a record, not a "
+              f"terminator (vibe-ic#2082).", flush=True)
+
     _ATPG_MAX_ATTEMPTS = 3
     atpg_attempts: list[int] = []
     ec, out, err = -1, "", ""
+    _atpg_t0 = time.monotonic()
     for _attempt in range(1, _ATPG_MAX_ATTEMPTS + 1):
         # Clear the metadata BEFORE each attempt so its presence afterwards is
         # evidence about THIS attempt. Without this, a partial file left by a
@@ -1935,15 +2096,23 @@ def run_fault(
             (project / cov_out).unlink()
         except OSError:
             pass
-        ec, out, err = _run_docker(project, [atpg_shell], timeout=_atpg_wall,
-                                   pdk_dir=pdk_dir)
+        ec, out, err = _run_docker(project, [atpg_shell], pdk_dir=pdk_dir,
+                                   supervised=True, ceiling_s=_atpg_wall,
+                                   ceiling_notice=_ceiling_notice)
         atpg_attempts.append(ec)
+        if ec == _wd.RC_STALLED:
+            # A stall is a finding ABOUT THIS RUN, already established by
+            # looking at the engine. Retrying it would spend the same hours
+            # again on the least promising input the run has.
+            break
         if not atpg_exit_is_signal_death(ec, out + "\n" + err):
             break            # clean exit (0 or a considered non-zero) — done
         if (project / cov_out).exists():
             break            # died late but the metadata landed — keep it
+    _atpg_elapsed_s = round(time.monotonic() - _atpg_t0, 1)
     atpg_log = (out + "\n" + err)[-2000:]
     atpg_signal_death = atpg_exit_is_signal_death(ec, out + "\n" + err)
+    atpg_stopped_as = "STALLED" if ec == _wd.RC_STALLED else None
 
     cov_file = project / cov_out
     cov_text = cov_file.read_text() if cov_file.exists() else ""
@@ -2076,9 +2245,21 @@ def run_fault(
             # sized from. "exceeded its wall budget" without the number is a
             # verdict nobody downstream can check or re-plan against.
             "atpg_wall_budget_s": _atpg_wall,
-            "atpg_wall_budget_basis": (
-                f"floor 1800 s + per-flop term on {_atpg_scan_flops} scan flop(s)"
-                if _atpg_scan_flops else "floor 1800 s (no cut flops resolved)"),
+            "atpg_wall_budget_basis": _atpg_wall_basis,
+            # vibe-ic#2082 — WHAT THE NUMBER ABOVE DOES. Without this a reader
+            # (and every consumer) has to guess whether an absent measurement
+            # means the engine was cut off at that number or ran past it.
+            "atpg_wall_budget_role": (
+                "RECORDED ceiling: announced once when crossed, never a "
+                "terminator (vibe-ic#2082). Only a progress STALL stops the "
+                "engine, and it is reported as atpg_stopped_as=STALLED."),
+            "atpg_wall_budget_crossed": bool(_atpg_ceiling.get("crossed")),
+            "atpg_wall_budget_crossed_at_s": _atpg_ceiling.get("at_s"),
+            "atpg_elapsed_s": _atpg_elapsed_s,
+            # None on every ordinary path. "STALLED" is the ONLY way this
+            # producer stops an engine, and it is a measurement: every readable
+            # forward-progress signal flat across the whole grace window.
+            "atpg_stopped_as": atpg_stopped_as,
             "atpg_signal_death": atpg_signal_death,
             "log_tail": atpg_log[-500:],
         }

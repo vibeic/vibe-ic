@@ -32,6 +32,7 @@ import json
 import os
 import secrets
 import shlex
+import subprocess  # nosec B404 — the ephemeral-container probe/reap below
 import sys
 import time
 from pathlib import Path
@@ -447,6 +448,138 @@ def cleanup_job_pidfile(container: str, pidfile: str,
                         timeout=timeout)
     except Exception:  # nosec
         pass
+
+
+# ===========================================================================
+# THE OTHER CONTAINER SHAPE — an EPHEMERAL `docker run`, not a `docker exec`.
+#
+# Everything above serves a PERSISTENT container a runner execs into. A
+# producer that starts its own `docker run --rm` container per invocation has
+# the same two needs and neither of the answers above fits:
+#
+#   * THE PROGRESS PROBE. `run_host_supervised`'s default `cpu_probe` reads the
+#     LAUNCHED process's own /proc tree, and for `docker run` that process is
+#     the CLIENT. MEASURED (transition_fault_atpg_run, over a 12 s
+#     silent-but-CPU-burning container job): the host-level probe read
+#     0.00/0.00/0.01/0.01/0.01/0.01 while the container burned a full core --
+#     containerd-shim reparents the real work, so it is never a ppid-chain
+#     descendant of the client. Supervising on that reading is supervising a
+#     process that does nothing, and captured OUTPUT is then the only live
+#     signal -- which is exactly the signal a long quiet compute phase does not
+#     produce. `_sum_marked_tree_cpu`'s own `yosys-abc` finding is the same
+#     shape: output-only accounting killed a healthy 1.8M-cell synth.
+#
+#   * THE REAP. Killing the `docker run` client leaves the tool inside the
+#     container running and holding its cores; `--rm` then makes the leak look
+#     like self-cleaning. The victim is selected by the unique `--name` the
+#     CALLER minted for this one invocation -- an identity it owns, never a
+#     command-line match, which is the rule `_watchdog`'s docstring states and
+#     which one run's watchdog once broke by SIGTERMing another run's healthy
+#     tool in a shared container.
+#
+# Both are two dozen lines that were written once, in one producer, for a
+# defect every ephemeral-container producer has. They live here for the same
+# reason the rest of this module does: so the two engines cannot drift apart.
+# chip/tool-AGNOSTIC -- process accounting and container identity only.
+# ===========================================================================
+
+def ephemeral_container_name(prefix: str) -> str:
+    """A container name that is THIS invocation's and no other's.
+
+    pid + a nanosecond-derived suffix: two runs of the same producer in the
+    same second, and two producers in the same process, all get distinct
+    names. The name is the identity the reap below signals, so a collision
+    would be a run killing a stranger."""
+    return f"{prefix}_{os.getpid()}_{time.time_ns() & 0xFFFFFFFF:x}"
+
+
+def ephemeral_container_cpu_probe(container: str, *, runner=None,
+                                  timeout: int = 15):
+    """`cpu_probe` for `run_supervised` over an EPHEMERAL `docker run`.
+
+    Returns a callable with the signature `run_supervised` calls -- it is
+    handed the live client proc and returns a monotonic reading, or None when
+    the container cannot be read (not started yet, already gone, no docker).
+    None is NOT zero: `ProgressMeter` carries an unavailable signal forward, so
+    a probe that flaps can never be mistaken for progress in either direction.
+
+    The reading is the SUM OF utime+stime OVER EVERY PROCESS IN THE CONTAINER,
+    read from the container's own /proc at the same field positions
+    `_watchdog._pid_cpu_s` reads on the host. No marker or identity filtering
+    is needed and none is done: the container was started `--rm` for this one
+    invocation, so every pid inside it is this job's. `/proc/[0-9]*/stat` is
+    read with `cat` rather than `ps` because the tool image is not required to
+    ship procps.
+    """
+    _run = runner or subprocess.run
+
+    def probe(_proc):
+        try:
+            r = _run(_ce.docker_exec_argv(
+                container, "sh", "-c", "cat /proc/[0-9]*/stat 2>/dev/null"),
+                capture_output=True, text=True, timeout=timeout)
+        except Exception:  # nosec — a probe failure is "no reading", never 0
+            return None
+        # THE EXIT CODE IS NOT THE QUESTION, AND USING IT MADE THIS PROBE BLIND.
+        # MEASURED 2026-09-07 on 8HD-9, sampling a real `fault atpg` container
+        # every 3 s: `cat /proc/[0-9]*/stat` returned rc=1 on 7 of 12 looks
+        # while handing back 27-38 kB of perfectly good stat lines. The glob is
+        # expanded by the shell and then `cat` opens the files one at a time;
+        # in a container that starts and reaps short-lived helpers (which is
+        # every EDA tool) at least one pid is always gone by the time its turn
+        # comes, and `cat` exits non-zero for that ONE file. Judging the reading
+        # by that exit code discarded the other 200, so the CPU signal was
+        # unavailable most of the time and the supervisor was left with output
+        # alone -- exactly the blindness this probe exists to remove, and it
+        # fails SILENTLY, in the direction that kills a working job.
+        #
+        # The honest predicate is whether anything PARSED, which is what the
+        # `seen` flag below already answers: a container that is gone returns no
+        # stat lines and still yields None.
+        tck = _wd._clk_tck()
+        total = 0.0
+        seen = False
+        for line in r.stdout.splitlines():
+            cut = line.rfind(")")
+            if cut < 0:
+                continue
+            rest = line[cut + 2:].split()
+            if len(rest) < 13:
+                continue
+            try:
+                total += (float(rest[11]) + float(rest[12])) / tck
+                seen = True
+            except ValueError:  # nosec
+                continue
+        return total if seen else None
+
+    return probe
+
+
+def ephemeral_container_reap(container: str, *, runner=None,
+                             timeout: int = 30):
+    """`kill` for `run_supervised` over an EPHEMERAL `docker run`.
+
+    Kills the client AND the container it left behind, in that order, and
+    selects the container by the unique `--name` the caller minted -- never by
+    matching a command line, so a sibling run's healthy container can never be
+    caught. Best-effort throughout: this is cleanup, and nothing is RECORDED
+    from its outcome, so its own bound can never become a verdict about the
+    subject."""
+    _run = runner or subprocess.run
+
+    def reap(proc, _reason: str) -> None:
+        try:
+            proc.kill()
+        except Exception:  # nosec — already gone
+            pass
+        try:
+            _run(["docker", "rm", "-f", container],
+                 capture_output=True, text=True, timeout=timeout)
+        except Exception:  # nosec
+            pass
+
+    return reap
 
 
 def wrap_with_container_timeout(cmd: str, timeout_s: float,

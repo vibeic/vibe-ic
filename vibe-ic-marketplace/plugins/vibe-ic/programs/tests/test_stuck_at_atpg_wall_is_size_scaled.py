@@ -73,23 +73,37 @@ def test_the_stuck_at_runner_no_longer_hard_codes_the_wall():
     the old constant — including the comment explaining why it was removed. A
     guard that fires on its subject being DISCUSSED is the same defect it is
     guarding against, and this repo already fixed one of those today.
+
+    THE KEYWORD MOVED, THE PROPERTY DID NOT (vibe-ic#2082). The sized number no
+    longer reaches the launcher as `timeout=`, because it is no longer a
+    deadline: it is passed as `ceiling_s=`, RECORDED and announced when
+    crossed, and nothing terminates on it. Both spellings are accepted here so
+    the test measures what it always measured — that the size-scaled value is
+    computed AND CONSUMED, rather than being a helper nobody calls — and the
+    refusal of a hard-coded 1800 now covers the new keyword too, so the defect
+    cannot come back through the door this change opened.
     """
     import ast
     tree = ast.parse((PROGRAMS / "fault_atpg_run.py").read_text(encoding="utf-8"))
+    _CONSUMERS = ("timeout", "ceiling_s")
     literal_walls, scaled_walls = [], []
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
         for kw in node.keywords:
-            if kw.arg != "timeout":
+            if kw.arg not in _CONSUMERS:
                 continue
             if isinstance(kw.value, ast.Constant) and kw.value.value == 1800:
-                literal_walls.append(node.lineno)
+                literal_walls.append((kw.arg, node.lineno))
             if isinstance(kw.value, ast.Name) and kw.value.id == "_atpg_wall":
-                scaled_walls.append(node.lineno)
-    assert scaled_walls, "no call passes the scaled wall to the launcher"
+                scaled_walls.append((kw.arg, node.lineno))
+    assert scaled_walls, (
+        "no call passes the scaled wall to the launcher — as a deadline "
+        "(`timeout=`) or, since vibe-ic#2082, as a recorded ceiling "
+        "(`ceiling_s=`). A helper that exists and is not called is the same "
+        "defect with extra steps.")
     assert not literal_walls, (
-        f"a hard-coded 1800 s wall still reaches a launcher at line(s) "
+        f"a hard-coded 1800 s wall still reaches a launcher at "
         f"{literal_walls}")
 
 
