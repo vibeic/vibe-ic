@@ -245,3 +245,40 @@ def test_the_docstring_no_longer_declares_a_narrower_rule_than_the_code():
         not in doc
     assert "dangling" in doc, (
         "the exit-code table must name the dangling half it blocks on")
+
+
+def test_the_deciding_line_survives_the_published_message_cap(tmp_path,
+                                                              stray):
+    """`_p0_first_line` truncates to 200 chars, so the reason must FIT.
+
+    The whole point of putting the verdict on line 0 is that the audit
+    publishes line 0. A deciding line that overflows the cap is published
+    cut mid-sentence — which is how `testbench_exists_check` came to publish
+    `"{"` (see `_p0_first_line`'s own docstring). Measured here rather than
+    argued: the sentence is fixed-length apart from three integers, so the
+    worst realistic case is a large count, and it still fits.
+    """
+    proj = _project(tmp_path, [f"gds at {stray}",
+                               "def at /tmp/i2084-gone/floor.def"])
+    r = _run(proj)
+    assert r.returncode == 1, r.stdout + r.stderr
+    published = F._p0_first_line(r.stdout)
+    head = r.stdout.splitlines()[0]
+    assert published == head, (
+        "the published reason is not the whole deciding line — it was "
+        f"truncated at {len(published)} chars:\n{published}")
+    assert head.endswith(":"), head
+
+
+def test_the_deciding_line_still_fits_when_the_counts_are_large():
+    """The same cap, at a count no real run reaches, so a future edit that
+    lengthens the sentence is caught before a real run truncates on it."""
+    import project_outputs_in_tree_check as gate  # noqa: F401 — contract check
+    line = ("[FAIL] project_outputs_in_tree_check: 9999 blocking "
+            "external-storage reference(s) in this project's own declaration "
+            "file(s) (9998 live, 1 dangling) — this is what the gate exits "
+            "1 on:")
+    assert len(line) <= 200, (
+        f"the deciding line is {len(line)} chars and `_p0_first_line` caps "
+        f"at 200 — the audit would publish it truncated")
+    assert F._p0_first_line(line) == line
