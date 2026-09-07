@@ -103,6 +103,70 @@ def human_docs_dir(project: Path) -> Path:
     return project / "phase1/human_docs"
 
 
+# ─── the design's natural-language spec text ─────────────────────────────
+#
+# ONE gather, ONE order, ONE denominator (vibe-ic#2086).
+#
+# WHY THIS LIVES HERE. Two consumers score against "this design's spec": the
+# spec-to-rtl WAIVE handoff in `design_one_shot_runner`, which tells the author
+# how many staged lesson sections strongly match, and `lesson_consumption_check`
+# which the author then runs to VERIFY that number. Measured on 8HD-9 (#2086):
+# the runner scored 202 strong matches against the gathered text while the
+# command it printed took `--prompt <one spec-file>` and scored 0 of 212 — and
+# both exited 0, because the gate had no way to notice it had been handed a
+# different, smaller input. Two numbers that must agree cannot be computed by
+# two functions; they are computed here, once, and every consumer calls this.
+
+def spec_text_sources(project: Path):
+    """The design's natural-language spec sources, in the ONE canonical order.
+
+    Operator prose first (`input_prompt/` then `input_doc/`, `*.md` / `*.txt`),
+    then the generated L-doc JSON. Deterministic and total: a consumer that
+    reports a denominator over this set can name every file that produced it.
+    """
+    out = []
+    for d in (input_prompt_dir(project), input_doc_dir(project)):
+        if d.is_dir():
+            for f in sorted(d.rglob("*")):
+                if f.is_file() and f.suffix.lower() in (".md", ".txt"):
+                    out.append(f)
+    gd = generated_docs_dir(project)
+    if gd.is_dir():
+        for f in sorted(gd.glob("L*.json")):
+            out.append(f)
+    return out
+
+
+def gather_spec_text(project: Path, phase1_plain_text=None) -> str:
+    """Concatenate the design's spec sources so a spec-PROSE consumer reads the
+    SAME text every other consumer read. Best-effort + bounded; returns "" when
+    no text source exists.
+
+    ``phase1_plain_text`` is the immutable result of a strict pre-write gather
+    (``design_one_shot_runner.step_rtl_gen``). When supplied — including an
+    honestly empty string — do not re-read operator prose after that provenance
+    check; only append generated L-docs, which live on the separate
+    structured-spec side of the boundary.
+    """
+    chunks = []
+    generated = []
+    gd = generated_docs_dir(project)
+    if gd.is_dir():
+        generated = sorted(gd.glob("L*.json"))
+    if phase1_plain_text is not None:
+        if phase1_plain_text:
+            chunks.append(phase1_plain_text)
+        files = generated
+    else:
+        files = spec_text_sources(project)
+    for f in files:
+        try:
+            chunks.append(f.read_text(errors="replace"))
+        except OSError:
+            pass
+    return "\n\n".join(chunks)
+
+
 # ─── phase2 ──────────────────────────────────────────────────────────────
 
 def phase2_dir(project: Path) -> Path:

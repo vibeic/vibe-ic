@@ -58,21 +58,47 @@ chip-AGNOSTIC / no-cheat: reads only the prompt and already-captured general
 patterns. It never reads a golden, a testbench, or any oracle, so it cannot leak
 solution knowledge and is safe inside a blind authoring loop.
 
+THE DENOMINATOR MUST BE THE ONE THAT WAS SCORED (vibe-ic#2086)
+--------------------------------------------------------------
+This gate used to take `--prompt <file>` and nothing else, so it could not tell
+"I examined this design's spec and nothing applied" from "you handed me one file
+out of nine and I examined almost nothing". Measured on 8HD-9: the spec-to-rtl
+WAIVE handoff scored 202 strong matches against `_gather_spec_text(project)` and
+in the same breath printed a verification command taking `--prompt <spec-file>`;
+run literally on one input doc that command scored 0 of 212 and printed
+`PASS: no strongly-matched lesson section` with rc 0. All three of one-file,
+nine-docs and the gathered text exited 0 with 0, 17 and 202 matches.
+
+Two repairs, and both are needed:
+  * `--project <dir>` scores `_path_layout.gather_spec_text(project)` — the SAME
+    function the runner scores, so the denominator is reproducible by
+    construction rather than by the author picking the right file; and
+  * `--scoring-record <json>` pins what the runner actually scored (the digest's
+    section count, the sha256 and byte length of the spec text, its source list,
+    and the strongly-matched section titles it NAMED to the author). When the
+    text this run scored is not that text, the gate REFUSES with rc 2 and says
+    which — a strict subset of the project's input, or a different spec
+    altogether. A PASS that examined nothing is the defect; refusing is the fix.
+
 EXIT CODES
 ----------
   0 = no strong match, or every strong match acknowledged, or advisory mode
   1 = --strict and >=1 strongly-matched section unacknowledged
-  2 = IO / usage error
+  2 = IO / usage error, or REFUSED / NOT_MEASURED — never a vacuous pass
 """
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import re
 import sys
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _path_layout as _pl  # noqa: E402  — the ONE spec-text gather (#2086)
 
 SECTION_RE = re.compile(r"^###\s+Skill:\s*(.+?)\s*$", re.M)
 # A "term" is an alphabetic token of >=4 chars; short tokens are almost always
@@ -198,11 +224,155 @@ def check_acknowledgement(matches: List[Dict], ack: dict) -> List[Dict]:
     return missing
 
 
+#: The runner writes this next to the digest it rendered; the gate reads it.
+SCORING_RECORD_NAME = "lessons_scoring_record.json"
+
+
+def spec_identity(spec_text: str) -> Dict:
+    """CONTENT identity of the text that was scored. GENERAL CORE.
+
+    sha256 over the exact bytes, plus the length, so a refusal can say HOW the
+    two inputs differ and not merely THAT they differ. Never mtime: this corpus
+    is distributed by clone/copy/rsync, none of which preserve mtimes.
+    """
+    data = spec_text.encode("utf-8", "replace")
+    return {"spec_bytes": len(data),
+            "spec_sha256": hashlib.sha256(data).hexdigest()}
+
+
+def spec_subset_relation(text: str, full: str) -> str:
+    """Is `text` the whole spec, a strict SUBSET of it, or something else?
+    GENERAL CORE — pure strings, no project layout.
+
+    Two ways to be a subset, because a caller may hand over the bytes of one
+    source file (literally contained) or a re-concatenation of several of them
+    (not byte-contained, but contributing no term the whole gather does not
+    already carry). Both are the #2086 defect: a run that scored less than the
+    spec the scorer scored, printing a verdict that reads like the whole.
+    """
+    if text == full:
+        return "SAME"
+    if not text or not full:
+        return "DIFFERENT"
+    if text in full:
+        return "STRICT_SUBSET"
+    t, f = _terms(text), _terms(full)
+    if t and t < f:
+        return "STRICT_SUBSET"
+    return "DIFFERENT"
+
+
+def build_scoring_record(project, digest_path: str, sections: List[Dict],
+                         matches: List[Dict], spec_text: str) -> Dict:
+    """What the SCORER scored, written at the moment it scored it. GENERAL CORE.
+
+    The record exists so the verification command the scorer prints can be
+    checked against the scoring it is verifying. Without it the author's run and
+    the scorer's run are two unrelated measurements that happen to share a
+    digest (#2086).
+    """
+    rec = {
+        "gate": "lesson_consumption_check",
+        "record_version": 1,
+        "digest": str(digest_path),
+        "sections_in_digest": len(sections),
+        "strong_sections": [m["section"] for m in matches if m.get("strong")],
+        "spec_sources": [],
+    }
+    rec["strong_matches"] = len(rec["strong_sections"])
+    if project is not None:
+        rec["project"] = str(project)
+        try:
+            rec["spec_sources"] = [str(f) for f in _pl.spec_text_sources(Path(project))]
+        except OSError:
+            rec["spec_sources"] = []
+    rec.update(spec_identity(spec_text))
+    return rec
+
+
+def record_disagreement(record: Dict, sections: List[Dict], spec_text: str,
+                        prompt_path: Optional[str] = None) -> Optional[str]:
+    """Why this run is NOT a verification of `record`, by name. GENERAL CORE.
+
+    Returns None when the two agree, otherwise a one-line reason. Every branch
+    is a REFUSAL, never a downgrade to a pass: the whole point is that "I
+    matched nothing" and "there was nothing to match" must not print the same.
+    """
+    if not isinstance(record, dict) or record.get("gate") != "lesson_consumption_check":
+        return ("the scoring record is not a lesson_consumption_check record "
+                "(no `gate` field naming this gate)")
+    want_sections = record.get("sections_in_digest")
+    if isinstance(want_sections, int) and want_sections != len(sections):
+        return (f"the digest moved under the record: it was scored over "
+                f"{want_sections} '### Skill:' section(s), this run parsed "
+                f"{len(sections)}")
+    here = spec_identity(spec_text)
+    want_sha = record.get("spec_sha256")
+    if want_sha and want_sha != here["spec_sha256"]:
+        want_bytes = record.get("spec_bytes")
+        sources = [str(x) for x in (record.get("spec_sources") or [])]
+        named = ""
+        if prompt_path:
+            for i, src in enumerate(sources, 1):
+                if Path(src).name == Path(prompt_path).name:
+                    named = (f" — it is source {i} of {len(sources)} in that "
+                             f"gather ({src})")
+                    break
+        subset = ""
+        proj = record.get("project")
+        if proj:
+            try:
+                full = _pl.gather_spec_text(Path(proj))
+            except OSError:
+                full = ""
+            if spec_subset_relation(spec_text, full) == "STRICT_SUBSET":
+                subset = "STRICT SUBSET — "
+        return (f"{subset}the text this run scored is not the text the record "
+                f"was scored over ({here['spec_bytes']} bytes vs "
+                f"{want_bytes} bytes){named}. Score the SAME source with "
+                f"`--project {proj or '<project>'}`, or re-score the record.")
+    return None
+
+
+def strong_set_disagreement(record: Dict, strong: List[Dict]) -> Optional[str]:
+    """The two numbers that must agree: the count the scorer NAMED to the author
+    and the count this verification reproduces. MEMBERSHIP, not count — a
+    substitution of equal size is exactly what a count cannot see. GENERAL CORE.
+    """
+    want = record.get("strong_sections")
+    if not isinstance(want, list):
+        return None
+    got = {m["section"] for m in strong}
+    want_set = {str(x) for x in want}
+    if got == want_set:
+        return None
+    missing = sorted(want_set - got)
+    extra = sorted(got - want_set)
+    return (f"this run reproduces {len(got)} strongly-matched "
+            f"section(s), the record names {len(want_set)}; "
+            f"{len(missing)} in the record are absent here"
+            + (f" (e.g. {missing[0][:60]!r})" if missing else "")
+            + f" and {len(extra)} here are absent from the record"
+            + (f" (e.g. {extra[0][:60]!r})" if extra else "")
+            + ". The number you were handed and the number you can reproduce "
+              "must be the same number.")
+
+
 def main(argv: List[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
         description="Verify that a strongly-matched captured lesson was CONSUMED, "
                     "not merely staged (ORGANIC #733 enforced program-first).")
-    ap.add_argument("--prompt", required=True, help="prompt / spec text file")
+    ap.add_argument("--prompt", help="prompt / spec text file")
+    ap.add_argument("--project",
+                    help="score this design's WHOLE gathered spec text — the same "
+                         "`_path_layout.gather_spec_text` the runner scored (#2086). "
+                         "With --prompt as well, the named file is REFUSED when it "
+                         "is a strict subset of that gather.")
+    ap.add_argument("--scoring-record",
+                    help="the record the scorer wrote when it named the strong "
+                         "matches to the author (phase2/stage1/"
+                         + SCORING_RECORD_NAME + "). The gate REFUSES when what it "
+                         "scored is not what the record was scored over.")
     ap.add_argument("--digest", required=True, help="rendered lesson digest (lessons.md)")
     ap.add_argument("--ack", help="acknowledgement JSON written by the author")
     ap.add_argument("--strict", action="store_true",
@@ -216,12 +386,58 @@ def main(argv: List[str] | None = None) -> int:
     ap.add_argument("--json", help="write the evidence report here (dual-track input)")
     a = ap.parse_args(argv)
 
+    if not a.prompt and not a.project:
+        print("error: name a spec source — --project <dir> (the whole gathered "
+              "spec, what the scorer scored) or --prompt <file>", file=sys.stderr)
+        return 2
     try:
-        prompt = Path(a.prompt).read_text(errors="ignore")
         digest = Path(a.digest).read_text(errors="ignore")
     except OSError as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
+    # THE SPEC SOURCE. --project is the canonical one: it is the same gather the
+    # scorer scored, so the author cannot reproduce a different denominator by
+    # picking a different file (#2086).
+    project_text = None
+    if a.project:
+        try:
+            project_text = _pl.gather_spec_text(Path(a.project))
+        except OSError as e:
+            print(f"error: could not gather the project's spec text: {e}",
+                  file=sys.stderr)
+            return 2
+        if not project_text:
+            print(f"NOT_MEASURED: {a.project} carries no spec text source "
+                  f"(phase1/input_prompt, phase1/input_doc, "
+                  f"phase1/generated_docs) — refusing rather than scoring an "
+                  f"empty prompt.", file=sys.stderr)
+            return 2
+    if a.prompt:
+        try:
+            prompt = Path(a.prompt).read_text(errors="ignore")
+        except OSError as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 2
+        # A FILE NAMED ALONGSIDE A PROJECT IS THE DEFECT ITSELF. Scoring one
+        # input doc out of nine printed `PASS: no strongly-matched lesson
+        # section` at 0 of 212 (#2086) — indistinguishable, in its own output,
+        # from a design nothing applies to.
+        rel = spec_subset_relation(prompt, project_text) if project_text is not None else "SAME"
+        if rel == "STRICT_SUBSET":
+            n_src = len(_pl.spec_text_sources(Path(a.project)))
+            print(f"REFUSED: STRICT SUBSET — --prompt {a.prompt} is "
+                  f"{len(prompt)} bytes of the {len(project_text)} bytes this "
+                  f"project's {n_src} spec source(s) gather to. Scoring a "
+                  f"subset cannot verify the whole; drop --prompt and let "
+                  f"--project name the spec.", file=sys.stderr)
+            return 2
+        if rel == "DIFFERENT":
+            print(f"REFUSED: --prompt {a.prompt} ({len(prompt)} bytes) is not "
+                  f"the text --project {a.project} gathers ({len(project_text)} "
+                  f"bytes). Name ONE spec source.", file=sys.stderr)
+            return 2
+    else:
+        prompt = project_text
     ack = {}
     if a.ack and Path(a.ack).is_file():
         try:
@@ -230,13 +446,36 @@ def main(argv: List[str] | None = None) -> int:
             print(f"error: unreadable acknowledgement record: {e}", file=sys.stderr)
             return 2
 
+    # THE RECORD THE SCORER WROTE. An unreadable one is NOT_MEASURED, never a
+    # pass: a verification whose subject cannot be read has verified nothing.
+    record = None
+    if a.scoring_record:
+        try:
+            record = json.loads(Path(a.scoring_record).read_text())
+        except (OSError, ValueError) as e:
+            print(f"NOT_MEASURED: unreadable scoring record "
+                  f"{a.scoring_record}: {e}", file=sys.stderr)
+            return 2
+
     sections = parse_digest(digest)
+    if record is not None:
+        why = record_disagreement(record, sections, prompt, a.prompt)
+        if why:
+            print(f"NOT_MEASURED (refusing — a PASS that examined something "
+                  f"else is not a PASS): {why}", file=sys.stderr)
+            return 2
     if not sections:
         print("NOTICE: digest carries no '### Skill:' sections — nothing to enforce.")
         return 0
     matches = match_sections(prompt, sections, a.threshold, a.min_distinctive,
                              a.distinctive_isf)
     strong = [m for m in matches if m["strong"]]
+    if record is not None:
+        why = strong_set_disagreement(record, strong)
+        if why:
+            print(f"NOT_MEASURED (refusing — a PASS that examined something "
+                  f"else is not a PASS): {why}", file=sys.stderr)
+            return 2
     missing = check_acknowledgement(matches, ack)
 
     report = {
@@ -244,9 +483,14 @@ def main(argv: List[str] | None = None) -> int:
         "sections_in_digest": len(sections),
         "strong_matches": len(strong),
         "unacknowledged": len(missing),
+        # WHAT WAS SCORED — so a later reader can tell a verification of this
+        # design's spec from a verification of one file out of nine (#2086).
+        "spec_source": ("project:" + str(a.project)) if a.project else ("prompt:" + str(a.prompt)),
+        "verified_against_record": str(a.scoring_record) if a.scoring_record else None,
         # DUAL-TRACK: the raw evidence this verdict was judged on.
         "evidence": matches[:max(a.top, len(strong))],
     }
+    report.update(spec_identity(prompt))
     if a.json:
         Path(a.json).parent.mkdir(parents=True, exist_ok=True)
         Path(a.json).write_text(json.dumps(report, indent=2) + "\n")

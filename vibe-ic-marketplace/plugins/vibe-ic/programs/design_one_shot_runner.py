@@ -4703,37 +4703,16 @@ def _enforce_power_up_determinism(rtl_dir: Path) -> int:
 
 def _gather_spec_text(
         project: Path, phase1_plain_text: Optional[str] = None) -> str:
-    """Concatenate the design's natural-language spec sources (input prompt,
-    input docs, and the generated L-doc JSON) so a spec-PROSE gate (e.g. the
-    worked-example oracle) can read the SAME worked-example prose the author
-    saw. Best-effort + bounded; returns "" when no text source exists.
+    """The design's natural-language spec text — DELEGATED, never a second copy.
 
-    ``phase1_plain_text`` is the immutable result of the strict pre-write gather
-    in ``step_rtl_gen``.  When supplied (including an honestly empty string), do
-    not re-read operator prose after that provenance check; only append generated
-    L-docs, which live on the separate structured-spec side of the boundary.
+    vibe-ic#2086: this runner scored the staged lesson digest against this text
+    and printed a verification command that scored ONE file, so the number it
+    handed the author and the number the author could reproduce were computed
+    from different inputs by construction. The gather now lives in
+    `_path_layout.gather_spec_text`, which `lesson_consumption_check --project`
+    calls as well, so the two denominators cannot drift apart again.
     """
-    chunks: List[str] = []
-    if phase1_plain_text is not None:
-        if phase1_plain_text:
-            chunks.append(phase1_plain_text)
-    else:
-        for d in (_pl.input_prompt_dir(project), _pl.input_doc_dir(project)):
-            if d.is_dir():
-                for f in sorted(d.rglob("*")):
-                    if f.is_file() and f.suffix.lower() in (".md", ".txt"):
-                        try:
-                            chunks.append(f.read_text(errors="replace"))
-                        except OSError:
-                            pass
-    gd = _pl.generated_docs_dir(project)
-    if gd.is_dir():
-        for f in sorted(gd.glob("L*.json")):
-            try:
-                chunks.append(f.read_text(errors="replace"))
-            except OSError:
-                pass
-    return "\n\n".join(chunks)
+    return _pl.gather_spec_text(project, phase1_plain_text)
 
 
 _DETERMINISM_MODULE_RE = re.compile(r"\bmodule\b\s+(\w+).*?\bendmodule\b", re.S)
@@ -6297,6 +6276,7 @@ def _stage_author_knowledge_digests(project: Path) -> Tuple[str, Dict[str, Any]]
     # and the terms that drove each one out. No verdict is taken here and no
     # WAIVE is blocked; best-effort exactly like the digests above.
     strong_titles: List[str] = []
+    scoring_record_path = ""
     try:
         ack_path = str(_pl.phase2_stage1_dir(project) / "lessons_ack.json")
     except Exception:
@@ -6305,9 +6285,23 @@ def _stage_author_knowledge_digests(project: Path) -> Tuple[str, Dict[str, Any]]
         try:
             _sections = _lesson_consumed.parse_digest(
                 Path(digest_path).read_text(errors="ignore"))
-            _matches = _lesson_consumed.match_sections(
-                _gather_spec_text(project), _sections)
+            _spec_scored = _gather_spec_text(project)
+            _matches = _lesson_consumed.match_sections(_spec_scored, _sections)
             strong_titles = [m["section"] for m in _matches if m["strong"]]
+            # WHAT WAS SCORED, WRITTEN DOWN (vibe-ic#2086). The count above is
+            # computed over the WHOLE gathered spec; the command printed below
+            # is what the author runs to check it. Until this record existed the
+            # two could not be compared at all — one input doc scored 0 of 212
+            # and printed a clean PASS. The record pins the digest's section
+            # count, the sha256/length of the text scored, its source list and
+            # the titles named here, and `--scoring-record` REFUSES a run whose
+            # subject is not that one.
+            _rec = _lesson_consumed.build_scoring_record(
+                project, digest_path, _sections, _matches, _spec_scored)
+            _rec_p = (_pl.phase2_stage1_dir(project)
+                      / _lesson_consumed.SCORING_RECORD_NAME)
+            _aa.write_json(_rec_p, _rec)
+            scoring_record_path = str(_rec_p)
         except Exception as _lc_err:
             # BEST-EFFORT, BUT NEVER SILENT. This block degrading to "off" is
             # indistinguishable, in the handoff text, from a design with no
@@ -6363,16 +6357,25 @@ def _stage_author_knowledge_digests(project: Path) -> Tuple[str, Dict[str, Any]]
            f'    {{"lessons_applied": [{{"section": "<title>", '
            f'"applied": true, "note": "<how it changed the RTL, or why it '
            f'does not apply>"}}]}}\n'
-           f"Then VERIFY, rather than asserting it:\n"
+           f"Then VERIFY, rather than asserting it — this command scores the "
+           f"SAME spec text the {len(strong_titles)} above was scored over "
+           f"(`--project`, not one file out of the set; #2086):\n"
            f"    python3 plugins/vibe-ic/programs/lesson_consumption_check.py "
-           f"--prompt <spec-file> --digest {digest_path} --ack {ack_path} "
-           f"--strict")
+           f"--project {project} --digest {digest_path} --ack {ack_path}"
+         + (f" \\\n        --scoring-record {scoring_record_path}"
+            if scoring_record_path else "")
+         + f" --strict"
+         + ("" if scoring_record_path else
+            "\n    (the scoring record could not be written, so the gate cannot "
+            "cross-check this run's denominator against the one above)"))
         if strong_titles and ack_path else "")
     extras: Dict[str, Any] = {"lessons_digest": digest_path,
                               "lessons_count": n_lessons}
     if strong_titles:
         extras["lessons_strong_matches"] = strong_titles
         extras["lessons_ack_path"] = ack_path
+    if scoring_record_path:
+        extras["lessons_scoring_record"] = scoring_record_path
     if db_digest_path:
         extras["ic_expert_db_digest"] = db_digest_path
         extras["ic_expert_db_count"] = n_db
