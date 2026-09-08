@@ -2130,6 +2130,46 @@ def architecture_conflict(desc_text: str, shape: str) -> Optional[Dict[str, str]
 
 _VALID_SUF = re.compile(r"^(.*?)_?(valid|vld)$", re.I)
 _READY_SUF = re.compile(r"^(.*?)_?(ready|rdy)$", re.I)
+_DIRECTIONAL_HANDSHAKE = re.compile(r"^(valid|vld|ready|rdy)_([io])$", re.I)
+
+
+def _directional_handshake_channels(dirs: Dict[str, str]) -> Tuple[
+        Dict[str, Dict[str, str]], List[str]]:
+    """Resolve bare role_i/role_o names from their declared port directions.
+
+    This is an ADVISORY authoring recognizer, not an acceptance gate: ambiguity
+    produces named DEFER-to-AI reasons and emits no RTL. It does not bypass any
+    downstream verification. Named/multiple channels remain outside this alias
+    rule; mixing them with bare roles is deliberately not guessed.
+    """
+    channels: Dict[str, Dict[str, str]] = {}
+    unresolved: List[str] = []
+    for name, direction in dirs.items():
+        match = _DIRECTIONAL_HANDSHAKE.fullmatch(name)
+        if not match:
+            continue
+        role = "valid" if match[1].lower() in {"valid", "vld"} else "ready"
+        stated = "in" if match[2].lower() == "i" else "out"
+        if direction != stated:
+            unresolved.append(f"handshake direction conflict for {name}: "
+                              f"suffix states {stated}, declaration {direction}")
+            continue
+        side = "up" if (role == "valid") == (direction == "in") else "down"
+        channel = channels.setdefault(side, {})
+        if role in channel:
+            unresolved.append(f"ambiguous {side}stream {role}: "
+                              f"{channel[role]} and {name}")
+            continue
+        channel[role] = name
+        channel[role + "_dir"] = direction
+    for side in ("up", "down"):
+        for role in ("valid", "ready"):
+            if role not in channels.get(side, {}):
+                unresolved.append(f"incomplete {side}stream {role} channel")
+    if any(_VALID_SUF.match(p) or _READY_SUF.match(p) for p in dirs):
+        unresolved.append("mixed bare direction-suffix and named handshake "
+                          "channels (pairing not unambiguous)")
+    return channels, unresolved
 
 
 def _port_directions(desc_text: str) -> Dict[str, str]:
@@ -2299,6 +2339,7 @@ def _data_port_for(prefix: str, dirs: Dict[str, str], want_dir: str,
     cands = [p for p, d in dirs.items()
              if d == want_dir and p not in taken
              and not _VALID_SUF.match(p) and not _READY_SUF.match(p)
+             and not _DIRECTIONAL_HANDSHAKE.fullmatch(p)
              and not _is_clock_or_reset(p)]
     if not cands:
         return None
@@ -2325,7 +2366,15 @@ def extract_handshake_contract(desc_text: str) -> Optional[HandshakeContract]:
     c = HandshakeContract(module_name_of(desc_text))
     c.clock, c.reset, c.reset_active_low, c.reset_sync = _clock_and_reset(
         desc_text, dirs)
-    chans = _channel_pairs(dirs)
+    directional = any(_DIRECTIONAL_HANDSHAKE.fullmatch(p) for p in dirs)
+    if directional:
+        chans, unresolved = _directional_handshake_channels(dirs)
+        if unresolved:
+            c.kind = "elastic_stage"
+            c.unresolved.extend(unresolved)
+            return c
+    else:
+        chans = _channel_pairs(dirs)
     up_pref = [k for k, v in chans.items()
                if v.get("valid_dir") == "in" and v.get("ready_dir") == "out"]
     dn_pref = [k for k, v in chans.items()
@@ -2336,10 +2385,12 @@ def extract_handshake_contract(desc_text: str) -> Optional[HandshakeContract]:
         up, dn = chans[up_pref[0]], chans[dn_pref[0]]
         taken = {up["valid"], up["ready"], dn["valid"], dn["ready"]}
         c.up = {"valid": up["valid"], "ready": up["ready"],
-                "data": _data_port_for(up_pref[0], dirs, "in", taken)}
+                "data": _data_port_for("" if directional else up_pref[0],
+                                       dirs, "in", taken)}
         taken.add(c.up["data"] or "")
         c.down = {"valid": dn["valid"], "ready": dn["ready"],
-                  "data": _data_port_for(dn_pref[0], dirs, "out", taken)}
+                  "data": _data_port_for("" if directional else dn_pref[0],
+                                         dirs, "out", taken)}
         for side, name in (("up", c.up), ("down", c.down)):
             if not name["data"]:
                 c.unresolved.append(f"{side}stream data port (not stated "
