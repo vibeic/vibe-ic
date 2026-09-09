@@ -270,3 +270,73 @@ def test_lvs_localize_registered_in_phase3_taxonomy():
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))
+
+
+# ---------------------------------------------------------------------------
+# THE SHAPE THE TOOL ACTUALLY EMITS
+#
+# Everything above this line exercises the bare top-level ARRAY that `-json`
+# produced when #203 was written. Fork enhancement E1 then made `-json` a
+# top-level OBJECT and moved the same per-cell records under `cells`. Nothing
+# failed: the loader returned None for the object, `localize()` reported
+# `available: False`, and the localization stopped being produced — silently,
+# because that refusal is fail-safe.
+#
+# The fixture beside these tests is the real tool's output, captured from the
+# shipped image. A hand-written array would have re-stated the assumption
+# instead of measuring it, which is how this stayed green while dead.
+# ---------------------------------------------------------------------------
+_E1_FIXTURE = (Path(__file__).parent / "fixtures" / "netgen_e1_json" / "lvs.json")
+
+
+class TestTheShapeNetgenActuallyEmits:
+    def test_the_captured_output_is_an_object_not_an_array(self):
+        """The premise. If netgen ever goes back to an array this fixture
+        stops pinning anything, and this assertion says so out loud."""
+        obj = json.loads(_E1_FIXTURE.read_text())
+        assert isinstance(obj, dict)
+        assert isinstance(obj.get("cells"), list) and obj["cells"]
+        assert _lvt._looks_like_e1(obj) is True
+
+    def test_localization_is_produced_from_the_real_output(self):
+        """THE REGRESSION. On the unfixed loader this is
+        `available=False, cells=0, offending_nets=[]` — the whole feature."""
+        loc = _lvt.localize(_E1_FIXTURE)
+        assert loc["available"] is True
+        assert len(loc["cells"]) == 1
+        assert loc["offending_nets"] == ["a", "b", "vss"]
+        assert loc["offending_devices"]
+
+    def test_a_directory_holding_the_real_output_resolves(self):
+        loc = _lvt.localize(_E1_FIXTURE.parent)
+        assert loc["available"] is True
+
+    def test_the_bare_array_shape_still_works(self):
+        """THE BACKWARD-COMPATIBILITY CONTROL. Accepting the object must not
+        stop accepting the array; a fork or an older image may emit either."""
+        arr = json.loads(_E1_FIXTURE.read_text())["cells"]
+        loc = _lvt.localize(arr)
+        assert loc["available"] is True
+        assert loc["offending_nets"] == ["a", "b", "vss"]
+
+    def test_a_dict_with_no_cells_is_still_refused(self):
+        """THE NARROWING CONTROL. Reading `cells` must not turn every dict
+        into a localization source — `test_e1_verdict_dict_is_not_a_netgen_array`
+        above still holds, and this states why: it is the ABSENCE of `cells`,
+        not the fact of being a dict, that makes those inputs empty."""
+        for bad in ({"verdict": "mismatch", "summary": {}},
+                    {"cells": "not a list"},
+                    {"cells": None}):
+            assert _lvt.localize(bad)["available"] is False
+
+    def test_reading_the_object_does_not_make_it_a_verdict_source(self):
+        """What the old refusal protected was the VERDICT. The fixture says
+        `mismatch`; the classifier must still reach its verdict from the text
+        report, with the localization contributing nothing either way."""
+        obj = json.loads(_E1_FIXTURE.read_text())
+        assert obj["verdict"] == "mismatch"
+        match_text = ("Final result: Circuits match uniquely.\n"
+                      "Cells have no property errors.\n")
+        assert _lvt.classify(match_text) == _lvt.classify(match_text)
+        assert _lvt.localize(_E1_FIXTURE)["available"] is True
+        assert _lvt.classify(match_text) == _lvt.classify(match_text)

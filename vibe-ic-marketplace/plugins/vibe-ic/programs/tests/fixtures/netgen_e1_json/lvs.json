@@ -1,0 +1,134 @@
+{
+  "verdict": "mismatch",
+  "verdict_reason": "circuits are not a unique match (verify status 0)",
+  "summary": {
+    "devices": {"ckt1": 1, "ckt2": 2},
+    "nets": {"ckt1": 3, "ckt2": 3},
+    "unmatched_nets": {"ckt1": 3, "ckt2": 3},
+    "unmatched_devices": {"ckt1": 2, "ckt2": 2},
+    "property_error_count": 0,
+    "property_error_cells": [],
+    "failed_subcells": []
+  },
+  "shorts": [],
+  "opens": [],
+  "filtered_devices": {"total": 0, "rules": []},
+  "pin_mismatches": [],
+  "property_mismatches": [],
+  "worst_property_mismatch": null,
+  "cells": [
+  {
+   "name": [
+      "top",
+      "top"
+   ],
+   "devices": [
+       [
+         ["nfet", 1 ]
+       ], [
+         ["nfet", 2 ]
+       ]
+   ],
+   "nets": [
+    3,
+    3
+   ],
+   "badnets": [
+      [
+        [
+          [
+            "a",
+            [
+              [ "nfet", "drain", 1 ]
+            ]
+          ],
+          [
+            "b",
+            [
+              [ "nfet", "gate", 1 ]
+            ]
+          ],
+          [
+            "vss",
+            [
+              [ "nfet", "source", 1 ],
+              [ "nfet", "bulk", 1 ]
+            ]
+          ]
+        ], [
+          [
+            "a",
+            [
+              [ "nfet", "drain", 1 ],
+              [ "nfet", "gate", 1 ]
+            ]
+          ],
+          [
+            "b",
+            [
+              [ "nfet", "gate", 1 ],
+              [ "nfet", "drain", 1 ]
+            ]
+          ],
+          [
+            "vss",
+            [
+              [ "nfet", "source", 2 ],
+              [ "nfet", "bulk", 2 ]
+            ]
+          ]
+        ]
+      ]
+   ],
+   "badelements": [
+      [
+        [
+          [
+            "nfet:1",
+            [
+              [ "drain", 1 ],
+              [ "gate", 1 ],
+              [ "source", 2 ],
+              [ "bulk", 2 ]
+            ]
+          ],
+          [
+            "(no matching instance)",
+            [
+              [ "", 0 ]
+            ]
+          ]
+        ], [
+          [
+            "nfet:1",
+            [
+              [ "drain", 2 ],
+              [ "gate", 2 ],
+              [ "source", 4 ],
+              [ "bulk", 4 ]
+            ]
+          ],
+          [
+            "nfet:2",
+            [
+              [ "drain", 2 ],
+              [ "gate", 2 ],
+              [ "source", 4 ],
+              [ "bulk", 4 ]
+            ]
+          ]
+        ]
+      ]
+   ],
+   "pins": [
+      [
+        "a",
+        "b"
+      ], [
+        "a",
+        "b"
+      ]
+   ]
+  }
+  ]
+}

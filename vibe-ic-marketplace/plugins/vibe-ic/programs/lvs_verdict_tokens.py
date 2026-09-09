@@ -637,21 +637,35 @@ def pin_mismatch_evidence(blob: str, max_lines: int = 8) -> List[str]:
 #
 # PURELY ADDITIVE — LOAD-BEARING: the result NEVER feeds `classify()` /
 # `mismatch_class()`. The LVS verdict is unchanged; the #189 classifier and the
-# Step-31 gate both read only the (byte-identical) text report. netgen's `-json`
-# is a top-level ARRAY, never the E1 verdict dict `_looks_like_e1` accepts, so it
-# can never be mistaken for an authoritative verdict source. FAIL-SAFE: an absent
-# / unreadable / non-array json yields ``available=False`` and never raises — a
-# missing localization can only cost triage detail, never move a verdict.
+# Step-31 gate both read only the (byte-identical) text report.
+#
+# THE SHAPE THIS READS CHANGED UNDER IT. When #203 was written, `-json` was a
+# bare top-level ARRAY, and this parser refused a dict so the E1 verdict could
+# never be mistaken for a localization source. Fork enhancement E1 then made
+# `-json` a top-level OBJECT and moved the same per-cell records under `cells`,
+# so from that point the parser refused every real file and the localization
+# was never produced again — silently, because the refusal is fail-safe.
+# `_cells_of` now reads both shapes. It stays additive: what the refusal
+# protected was the VERDICT, and the verdict still comes from the E1 field and
+# the text report, never from here.
+#
+# FAIL-SAFE: an absent / unreadable / shapeless json yields ``available=False``
+# and never raises — a missing localization can only cost triage detail, never
+# move a verdict.
 # chip-AGNOSTIC: pure structural parse, no design/cell literal.
 _NET_PLACEHOLDER_RE = re.compile(
     r"^\(no matching net\)$|^\(no pin\b|^\(none\)$", re.I)
 
 
 def _load_netgen_json_array(source: JsonSource) -> Optional[List[Any]]:
-    """Resolve netgen's `-json` output (a top-level ARRAY of per-cell records)
-    from a list, a file, or a directory holding one. Returns None for anything
-    that is not a netgen `-json` array — including an E1 verdict DICT, which is a
-    different, authoritative artifact this parser must never touch."""
+    """Resolve netgen's `-json` per-cell records from a list, a file, or a
+    directory holding one.
+
+    Accepts BOTH shapes netgen has emitted: the bare top-level ARRAY #203 was
+    written against, and the E1 top-level OBJECT that superseded it, whose
+    `cells` list holds the same records. Anything else yields None. See
+    `_cells_of` for why reading the object is not the thing the old refusal
+    protected."""
     if source is None or isinstance(source, dict):
         return None
     if isinstance(source, list):
@@ -669,7 +683,38 @@ def _load_netgen_json_array(source: JsonSource) -> Optional[List[Any]]:
         obj = json.loads(p.read_text(errors="replace"))
     except (OSError, ValueError):
         return None
-    return obj if isinstance(obj, list) else None
+    return _cells_of(obj)
+
+
+def _cells_of(obj: Any) -> Optional[List[Any]]:
+    """The per-cell records, from EITHER shape netgen has emitted.
+
+    #203 was written when `-json` produced a bare top-level ARRAY of per-cell
+    records, and it refused a dict so it could never be mistaken for the
+    authoritative verdict. Fork enhancement E1 then made `-json` a top-level
+    OBJECT — `{"verdict": ..., "summary": ..., "cells": [...]}` — and the same
+    per-cell records moved INSIDE it, under `cells`.
+
+    Nothing failed. `_load_netgen_json_array` returned None for the object,
+    `localize()` returned `available: False`, and the localization silently
+    stopped being produced. MEASURED 2026-09-10 against the shipped image: a
+    real `netgen -batch lvs ... -json` writes a dict whose `_looks_like_e1` is
+    True and whose `cells[0]` carries exactly the `name`/`nets`/`badnets`/
+    `badelements`/`pins` this parser reads.
+
+    Reading `cells` does NOT make this an authoritative source. `localize()`
+    is unchanged and still never feeds `classify()` / `mismatch_class()`; the
+    verdict continues to come from the E1 verdict field and the text report.
+    What the old refusal protected was the VERDICT, not the cell records.
+
+    Any other dict — one without a `cells` list — still yields None.
+    """
+    if isinstance(obj, list):
+        return obj
+    if isinstance(obj, dict):
+        cells = obj.get("cells")
+        return cells if isinstance(cells, list) else None
+    return None
 
 
 def _dedupe(items: List[str]) -> List[str]:
