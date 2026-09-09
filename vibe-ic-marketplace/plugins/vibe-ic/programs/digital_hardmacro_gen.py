@@ -619,7 +619,13 @@ def build_lef_tcl(top: str, gds: str, def_file: str, out_lef: str,
             f"load {top}\n"
             f"select top cell\n"
             f"lef write {out_lef}{tail}\n"
-            f"puts stdout \"DIGITAL_LEF_WRITE_DONE {top}\"\n")
+            f"puts stdout \"DIGITAL_LEF_WRITE_DONE {top}\"\n"
+            # TERMINATE THE SCRIPT -- see magic_port_extract_emit for the
+            # measurement. Without this, magic finishes the write and then
+            # falls into its text console, which re-prints its prompt for
+            # every unparseable stdin byte (4.0 MB in 6 s, measured). The
+            # DONE marker above is still emitted before the quit.
+            f"quit -noprompt\n")
 
 
 def _magicrc_for(pdk_root: str) -> Optional[str]:

@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1301
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1301)
+- **Total programs (excluding helpers / shims):** 1302
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1302)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1292 |
+| `any` | 1293 |
 
 ## Alphabetical listing
 
@@ -236,6 +236,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `competing_pr_claim_groups` | any | — | Group open PRs by the ISSUE they claim, and name the groups that a merge conflict can never surface (vibe-ic#1411). |
 | `compose_synth` | any | — | a CVDP DECOMPOSE -> SOLVE-EACH -> COMPOSE engine. |
 | `connect_vs_send_test_parity_check` | any | Wave 27 | Wave 27 (v0.119.59) gate. |
+| `console_tool_termination_check` | any | — | an EDA tool that can drop into its own text console must be stopped by something that TRAVELS WITH THE COMMAND. |
 | `constants_validation` | any | — | Deterministic compliance check for rtl-constants-gen. |
 | `constraint_prose_tokens` | any | — | the ONE reader for constraint declarations that a design states in PROSE rather than in a machine-readable deck. |
 | `container_exec_deadline_check` | any | — | A `docker exec` whose deadline bounds the CLIENT and not the tool. |
@@ -1373,7 +1374,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1292 programs)
+### `any` (1293 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `absence_verdict_names_its_search_space_check` — "not found" must say WHERE it looked.
@@ -1583,6 +1584,7 @@ _(no programs in this group)_
 - `competing_pr_claim_groups` — Group open PRs by the ISSUE they claim, and name the groups that a merge conflict can never surface (vibe-ic#1411).
 - `compose_synth` — a CVDP DECOMPOSE -> SOLVE-EACH -> COMPOSE engine.
 - `connect_vs_send_test_parity_check` — Wave 27 (v0.119.59) gate.  _[Wave 27]_
+- `console_tool_termination_check` — an EDA tool that can drop into its own text console must be stopped by something that TRAVELS WITH THE COMMAND.
 - `constants_validation` — Deterministic compliance check for rtl-constants-gen.
 - `constraint_prose_tokens` — the ONE reader for constraint declarations that a design states in PROSE rather than in a machine-readable deck.
 - `container_exec_deadline_check` — A `docker exec` whose deadline bounds the CLIENT and not the tool.

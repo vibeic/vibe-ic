@@ -190,6 +190,17 @@ def build_extraction_tcl(
         .replace("{top}", top_cell)
     )
     out.append(f"puts stdout \"MAGIC_PORT_EXTRACT_DONE {top_cell} -> {out_spice}\"")
+    # TERMINATE THE SCRIPT. magic run with `-noconsole` and no terminal
+    # `quit` finishes the script and then falls into its own text
+    # console, which re-prints its prompt for every byte of stdin it
+    # cannot parse. MEASURED 2026-09-09 in the shipped image: with
+    # stdin attached that is 4.0 MB in 6 s -- the shape that left a
+    # 102 GB netgen log on this host. Today the only thing preventing
+    # it is that `docker_exec_argv` omits `-i`, which is a property of
+    # the CALLER's argv and changeable elsewhere; `quit` travels with
+    # the script. Verified not to truncate: the GDS this writes is
+    # byte-identical (182 B) with and without the quit.
+    out.append("quit -noprompt")
     return "\n".join(out) + "\n"
 
 
@@ -233,6 +244,17 @@ def build_gds_write_tcl(top_cell: str, layout_mag: str, out_gds: str) -> str:
     out.append("select top cell")
     out.append(f"gds write {gds}")
     out.append(f"puts stdout \"MAGIC_GDS_WRITE_DONE {top} -> {gds}\"")
+    # TERMINATE THE SCRIPT. magic run with `-noconsole` and no terminal
+    # `quit` finishes the script and then falls into its own text
+    # console, which re-prints its prompt for every byte of stdin it
+    # cannot parse. MEASURED 2026-09-09 in the shipped image: with
+    # stdin attached that is 4.0 MB in 6 s -- the shape that left a
+    # 102 GB netgen log on this host. Today the only thing preventing
+    # it is that `docker_exec_argv` omits `-i`, which is a property of
+    # the CALLER's argv and changeable elsewhere; `quit` travels with
+    # the script. Verified not to truncate: the GDS this writes is
+    # byte-identical (182 B) with and without the quit.
+    out.append("quit -noprompt")
     return "\n".join(out) + "\n"
 
 
@@ -303,6 +325,17 @@ def build_lef_write_tcl(
             out.append(f"lef setlayer {ly}")
     out.append(f"lef write {lef}")
     out.append(f"puts stdout \"MAGIC_LEF_WRITE_DONE {top} -> {lef}\"")
+    # TERMINATE THE SCRIPT. magic run with `-noconsole` and no terminal
+    # `quit` finishes the script and then falls into its own text
+    # console, which re-prints its prompt for every byte of stdin it
+    # cannot parse. MEASURED 2026-09-09 in the shipped image: with
+    # stdin attached that is 4.0 MB in 6 s -- the shape that left a
+    # 102 GB netgen log on this host. Today the only thing preventing
+    # it is that `docker_exec_argv` omits `-i`, which is a property of
+    # the CALLER's argv and changeable elsewhere; `quit` travels with
+    # the script. Verified not to truncate: the GDS this writes is
+    # byte-identical (182 B) with and without the quit.
+    out.append("quit -noprompt")
     return "\n".join(out) + "\n"
 
 
