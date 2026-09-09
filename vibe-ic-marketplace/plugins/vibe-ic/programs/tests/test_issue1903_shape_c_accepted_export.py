@@ -223,7 +223,7 @@ def test_malformed_candidate_snapshot_blocks_without_sample(
     (run / "needs_ai_review.jsonl").write_text(json.dumps(task) + "\n")
     obligation_inputs = []
 
-    def record_obligation_input(_prompt, candidate):
+    def record_obligation_input(_prompt, candidate, _project=None):
         obligation_inputs.append(candidate)
         return task["program_review_obligations"]
 

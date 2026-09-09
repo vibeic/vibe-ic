@@ -42,7 +42,7 @@ import threading
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Iterable, TypeVar
+from typing import Callable, Iterable, Optional, TypeVar
 
 from _atomic_artefact import write_json as _atomic_write_json
 from _atomic_artefact import write_text as _atomic_write_text
@@ -619,6 +619,17 @@ def _sha256_text(text: str) -> str:
     return hashlib.sha256(str(text).encode("utf-8")).hexdigest()
 
 
+def _task_project(task: dict) -> Optional[Path]:
+    """The review task's own project directory, or None.
+
+    The three sites that derive `program_review_obligations` compare their
+    results against each other, so they must read the project the SAME way or
+    every task reads as stale.
+    """
+    raw = str((task or {}).get("project") or "")
+    return Path(raw) if raw else None
+
+
 def _review_obligation_id(item: dict) -> str:
     """Stable identity for one Program-extracted review obligation."""
     material = json.dumps({
@@ -629,8 +640,128 @@ def _review_obligation_id(item: dict) -> str:
     return _sha256_text(material)[:16]
 
 
+#: An advisory gate verdict the runner ROUTED and nothing consumed.
+#:
+#: `gate_directed_rtl_repair` classifies a gate finding it cannot mechanically
+#: repair as ESCALATE: the gate is confident about the SHAPE but only a spec can
+#: say whether that shape is a defect here. The runner records the verdict under
+#: the step's `extras` and moves on, so an ESCALATE reaches no consumer at all —
+#: not the repairer, by design, and not the reviewer, by omission.
+#:
+#: RTLLM 2026-09-07, `asyn_fifo`. `counter_decode_lookahead_phase_check` ran in
+#: `determinism_gates` and named both signals exactly:
+#:
+#:     defect: counter-decode-lookahead-phase   verdict: FINDING
+#:     router_verdict: ESCALATE                 blocking: false
+#:       wptr <- lookahead of waddr_bin:  wptr <= bin2gray(waddr_bin + wen);
+#:       rptr <- lookahead of raddr_bin:  rptr <= bin2gray(raddr_bin + ren);
+#:
+#: The gate was RIGHT. The reference registers the gray code of the CURRENT
+#: binary value; this candidate registered the gray of the LOOKAHEAD, publishing
+#: both pointers one cycle early, and it failed the official testbench. Nothing
+#: repaired it — correctly, since a leading level is legal when a spec asks for
+#: one. But the blind reviewer was never told either, so its FIFO challenge never
+#: drove the full/empty boundary where the phase is observable, and it recorded a
+#: semantic PASS on a candidate the Program had already described in writing.
+#:
+#: Routing these to the reviewer costs nothing and is the difference between a
+#: measurement taken and a measurement thrown away.
+_ROUTED_ESCALATION_VERDICTS = frozenset({"FINDING", "ESCALATE"})
+
+
+def _program_gate_escalations(project: Optional[Path]) -> list:
+    """Advisory gate findings this project raised that nothing acted on.
+
+    §4.05 NO-LEAK, and why this is admissible: every value read here is derived
+    by a gate from the CANDIDATE RTL and the PROMPT, the two artefacts the
+    reviewer already holds. No oracle, golden, hidden harness, official
+    testbench or score is opened. The reviewer learns what the Program SUSPECTS
+    ABOUT THE BYTES IT IS REVIEWING — never what the answer is.
+
+    Deterministic: the result is part of a hashed contract recomputed
+    independently at three call sites, so findings are emitted in a stable
+    order. Missing or unreadable evidence yields [] — an absent record is not a
+    finding, and inventing an obligation from one would block a candidate on
+    nothing.
+    """
+    if project is None:
+        return []
+    try:
+        doc = json.loads(
+            (Path(project) / "reports" / "orchestrator"
+             / "phase2_one_shot.json").read_text(errors="replace"))
+    except (OSError, ValueError):
+        return []
+    if not isinstance(doc, dict):
+        return []
+    out = []
+    for step in doc.get("steps") or []:
+        if not isinstance(step, dict):
+            continue
+        extras = step.get("extras")
+        if not isinstance(extras, dict):
+            continue
+        for advisory in extras.values():
+            if not isinstance(advisory, dict):
+                continue          # e.g. `advisory_only: true`, a bare flag
+            gate = advisory.get("gate")
+            findings = advisory.get("findings")
+            if not (isinstance(gate, str) and gate):
+                continue
+            if not (isinstance(findings, list) and findings):
+                continue
+            routed = str(advisory.get("router_verdict") or "") == "ESCALATE"
+            unconsumed = (
+                str(advisory.get("verdict") or "") in _ROUTED_ESCALATION_VERDICTS
+                and advisory.get("blocking") is False)
+            if not (routed or unconsumed):
+                continue          # a BLOCKING finding already stopped the step
+            named = []
+            for f in findings:
+                if not isinstance(f, dict):
+                    continue
+                signal = f.get("signal")
+                if not (isinstance(signal, str) and signal):
+                    continue
+                statement = f.get("statement")
+                named.append((signal,
+                              statement if isinstance(statement, str) else ""))
+            if not named:
+                continue
+            out.append({
+                "gate": gate,
+                "defect": str(advisory.get("defect") or gate),
+                "step": str(step.get("name") or ""),
+                "signals": sorted(set(named)),
+            })
+    out.sort(key=lambda e: (e["gate"], e["step"]))
+    return out
+
+
+def _gate_escalation_obligation(escalation: dict) -> dict:
+    """One routed escalation, as an obligation a test must DISCRIMINATE."""
+    signals = ", ".join(sig for sig, _ in escalation["signals"])
+    return {
+        "kind": "gate_escalation",
+        "requirement": (
+            f"PROGRAM gate {escalation['gate']} reports "
+            f"{escalation['defect']} on this exact candidate, naming "
+            f"{signals}. The gate is ADVISORY, so nothing repaired it and the "
+            f"candidate still carries the shape described. Your executable "
+            f"test must reach the behaviour that would DIFFER if the finding "
+            f"is real; a test that never exercises it does not discharge this "
+            f"obligation. If the prompt sanctions that shape, say so in "
+            f"findings and quote the prompt line that does."),
+        "evidence": "; ".join(
+            f"{sig}: {stmt}" for sig, stmt in escalation["signals"])[:400],
+        "coverage_tokens": [sig for sig, _ in escalation["signals"]],
+        "source_step": escalation["step"],
+    }
+
+
 def _program_review_obligation_contract(prompt_text: str,
-                                        candidate: dict) -> dict:
+                                        candidate: dict,
+                                        project: Optional[Path] = None) -> dict:
     """Extract the structural minimum an AI PASS test must cover.
 
     ``spec_coverage_check`` is the existing benchmark-agnostic Program reader.
@@ -655,9 +786,19 @@ def _program_review_obligation_contract(prompt_text: str,
         }
         row["id"] = _review_obligation_id(row)
         obligations.append(row)
+    # Gate escalations the runner ROUTED and nothing consumed. APPENDED, never
+    # replacing the structural minimum: the two answer different questions, and
+    # a project with no escalation must produce the identical contract it
+    # produced before this existed.
+    escalations = _program_gate_escalations(project)
+    for escalation in escalations:
+        row = _gate_escalation_obligation(escalation)
+        row["id"] = _review_obligation_id(row)
+        obligations.append(row)
     core = {
         "schema": "vibeic.benchmark.program_review_obligations.v1",
-        "actor": "programs/spec_coverage_check.py",
+        "actor": ("programs/spec_coverage_check.py" + (
+            " + routed PROGRAM gate escalations" if escalations else "")),
         "policy": "BLOCKING_STRUCTURAL_MINIMUM",
         "obligation_count": len(obligations),
         "obligations": obligations,
@@ -1062,7 +1203,7 @@ def _make_ai_review_task(problem_id: str, project: Path, got: dict,
     public_paths = [str(project / "input" / "public_original" / "files" /
                         row["relative_path"]) for row in public_input["files"]]
     program_review_obligations = _program_review_obligation_contract(
-        prompt.read_text(errors="replace"), candidate)
+        prompt.read_text(errors="replace"), candidate, project)
     evidence_item_shape = {
         "excerpt": ("<exact prompt excerpt; at least 8 characters and a "
                     "whitespace-normalized substring of prompt_path>"),
@@ -1155,6 +1296,33 @@ def _make_ai_review_task(problem_id: str, project: Path, got: dict,
                     "rationale": ("<the review basis; at least 16 "
                                   "characters>"),
                     "prompt_evidence": [dict(evidence_item_shape)],
+                },
+                "gate_escalation_dispositions": {
+                    "_required_when": (
+                        "semantic_review.verdict is PASS and "
+                        "program_review_obligations contains an obligation "
+                        "of kind gate_escalation; omit otherwise"),
+                    "_shape": ("a LIST of the item below, one per such "
+                               "obligation"),
+                    "_item": {
+                        "obligation_id": "<the obligation's id, verbatim>",
+                        "disposition": (
+                            f"<{_ESCALATION_DISCRIMINATED} or "
+                            f"{_ESCALATION_SANCTIONED}>"),
+                        "how": (f"<required for {_ESCALATION_DISCRIMINATED}: "
+                                "what your active test drives that would "
+                                "DIFFER if the gate's finding is real; at "
+                                "least 24 characters>"),
+                        "prompt_evidence": [dict(evidence_item_shape)],
+                    },
+                    "_effect": (
+                        "a PROGRAM gate named a suspected defect in the "
+                        "exact candidate you are reviewing, and nothing "
+                        "repaired it. Both dispositions are always "
+                        "available: either your test discriminates the "
+                        "finding, or the prompt asks for that shape and "
+                        "you quote the line. An undisposed escalation "
+                        "blocks a semantic PASS."),
                 },
                 "spec_clarification": {
                     "_required_when": "semantic_review.verdict is NEEDS_CLARIFICATION; omit otherwise",
@@ -1360,7 +1528,8 @@ def _refresh_program_review_obligations(task: dict) -> bool:
     try:
         prompt_text = prompt_path.read_text(errors="replace")
         expected = _program_review_obligation_contract(
-            prompt_text, task.get("candidate_snapshot") or {})
+            prompt_text, task.get("candidate_snapshot") or {},
+            _task_project(task))
     except (ImportError, OSError, ValueError):
         return False
     prior = task.get("program_review_obligations")
@@ -1565,6 +1734,95 @@ def _verified_prompt_evidence(items, prompt_text: str) -> list[dict]:
                 and len(supports) >= 12):
             verified.append({"excerpt": excerpt, "supports": supports})
     return verified
+
+
+#: Dispositions a reviewer may return for a routed gate escalation. Both are
+#: always available, which is the point: this obligation can never become a
+#: blocking condition a correct candidate is unable to clear.
+_ESCALATION_DISCRIMINATED = "DISCRIMINATED"
+_ESCALATION_SANCTIONED = "SANCTIONED_BY_PROMPT"
+
+
+def _gate_escalation_obligations(task: dict) -> list:
+    """The routed-escalation rows of this task's Program contract."""
+    contract = task.get("program_review_obligations")
+    if not isinstance(contract, dict):
+        return []
+    return [row for row in (contract.get("obligations") or [])
+            if isinstance(row, dict) and row.get("kind") == "gate_escalation"]
+
+
+def _gate_escalation_disposition_reasons(task: dict, review: dict,
+                                         prompt_text: str) -> list:
+    """A semantic PASS must dispose of every routed gate escalation.
+
+    WHY THIS IS ENFORCED AND NOT MERELY ANNOUNCED. Putting the escalation into
+    the task contract tells the reviewer it exists; nothing about that obliges
+    the reviewer to look. An advisory that only reaches a second reader who may
+    also ignore it has moved, not landed — and the run that motivated this had
+    already demonstrated exactly that: the finding was recorded in writing, in
+    the project, and a semantic PASS was issued anyway.
+
+    WHY IT CANNOT BECOME AN UNCLEARABLE GATE — the property that decided the
+    design. Coverage here is NOT measured by matching the gate's signal names
+    against the challenge text. `wptr` and `rptr` are INTERNAL to the design
+    under review, and a challenge that correctly drives only the module's ports
+    would never name them, so a token match would refuse good reviews forever.
+    What is required instead is a DISPOSITION, and both dispositions are
+    reachable from any candidate:
+
+      DISCRIMINATED         the active test reaches the behaviour that would
+                            DIFFER if the finding is real — say what it drives.
+      SANCTIONED_BY_PROMPT  the prompt asks for exactly the shape the gate
+                            named — quote the line, verified against the frozen
+                            prompt by the same `_verified_prompt_evidence` that
+                            checks every other prompt claim in a review.
+
+    A reviewer who genuinely looked can always answer one of the two. A
+    reviewer who did not, cannot.
+    """
+    obligations = _gate_escalation_obligations(task)
+    if not obligations:
+        return []
+    raw = review.get("gate_escalation_dispositions")
+    by_id = {}
+    if isinstance(raw, list):
+        for item in raw:
+            if isinstance(item, dict) \
+                    and isinstance(item.get("obligation_id"), str):
+                by_id[item["obligation_id"]] = item
+    reasons = []
+    for row in obligations:
+        oid = str(row.get("id"))
+        item = by_id.get(oid)
+        if item is None:
+            reasons.append(
+                "semantic PASS does not dispose of PROGRAM gate escalation "
+                f"{oid}: add a gate_escalation_dispositions entry stating "
+                f"{_ESCALATION_DISCRIMINATED} or {_ESCALATION_SANCTIONED}")
+            continue
+        disposition = str(item.get("disposition") or "")
+        if disposition == _ESCALATION_DISCRIMINATED:
+            how = str(item.get("how") or "").strip()
+            if len(how) < 24:
+                reasons.append(
+                    f"gate escalation {oid} is claimed "
+                    f"{_ESCALATION_DISCRIMINATED} without saying what the test "
+                    "drives that would differ if the finding is real "
+                    "(how: at least 24 characters)")
+        elif disposition == _ESCALATION_SANCTIONED:
+            if not _verified_prompt_evidence(item.get("prompt_evidence"),
+                                             prompt_text):
+                reasons.append(
+                    f"gate escalation {oid} is claimed "
+                    f"{_ESCALATION_SANCTIONED} without a prompt excerpt that "
+                    "verifies against the frozen prompt")
+        else:
+            reasons.append(
+                f"gate escalation {oid} carries an unknown disposition "
+                f"{disposition!r}; expected {_ESCALATION_DISCRIMINATED} or "
+                f"{_ESCALATION_SANCTIONED}")
+    return reasons
 
 
 def _challenge_from_review(task: dict, review: dict,
@@ -1940,7 +2198,7 @@ def _validate_ai_review(task: dict) -> dict:
     reasons.extend(_validate_embedded_repair_provenance(task))
     try:
         expected_obligations = _program_review_obligation_contract(
-            prompt_text, candidate)
+            prompt_text, candidate, _task_project(task))
     except (ImportError, OSError, ValueError) as exc:
         expected_obligations = None
         reasons.append(
@@ -2220,6 +2478,12 @@ def _validate_ai_review(task: dict) -> dict:
                     "AI semantic PASS leaves structural prompt obligation(s) "
                     "uncovered by its active executable tests: "
                     + ", ".join(gap_ids))
+    if semantic_verdict == "PASS":
+        # Disposed of separately from coverage: the gate names signals INTERNAL
+        # to the design, which a correct port-driving challenge would never
+        # mention, so this asks the reviewer for a verdict, not a token match.
+        reasons.extend(_gate_escalation_disposition_reasons(
+            task, review, prompt_text))
     if reasons:
         # A finding against the review outranks an unrunnable proof: a
         # malformed review is wrong on every host, simulator or not.
