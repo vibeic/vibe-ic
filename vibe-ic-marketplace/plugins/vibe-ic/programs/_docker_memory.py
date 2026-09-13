@@ -18,9 +18,34 @@ container, the tool's log ends in "Killed", and the host keeps its cushion.
 host's swap either; the minutes of "frozen" that preceded the crash were swap
 thrash, not the kill.
 
-This is deliberately NOT a budget. Each container gets the same ceiling, so N
-concurrent containers can still exceed the host between them. What it removes
-is the failure that actually happened: ONE tool, unattended, taking everything.
+This is deliberately NOT a budget by default. Each container gets the same
+ceiling, so N concurrent containers can still exceed the host between them.
+What it removes is the failure that actually happened: ONE tool, unattended,
+taking everything.
+
+MEASURED 2026-09-14 on 8HD-8, that deferred case arrived. Three containers,
+one ngspice apiece at 25.3 / 24.8 / 23.8 GB, each correctly under its own
+88 GB ceiling on a 126 GB host -- promised 264 GB between them:
+
+    host memory  127,626 MB used of 128,721  ->  38 MB available
+    host swap    2,047 of 2,047 MB           ->   0 B free
+    host load    220 -> 24 (the CPU recovered; the memory never did)
+
+It does not present as a memory failure. Every TCP port still completed its
+handshake, so every liveness probe read the host as healthy while no userspace
+process could answer: sshd took the connection and never sent its banner, and
+the six production sites that host also serves returned nothing for forty
+minutes. journalctl never broke and uptime never reset; the machine was never
+down, it was starved.
+
+VIBEIC_DOCKER_MEMORY_SHARED=1 turns the ceiling into a budget: what the
+RUNNING containers have already been promised comes off the share first. It is
+OPT-IN and stays that way, because subtracting a SIBLING'S CEILING is not the
+same as subtracting what the sibling uses -- an idle container holding an 88 GB
+promise would leave the next job the floor, and a ceiling that starves honest
+work is the failure this module exists to avoid. Enable it where a dispatcher
+is known to place several jobs per host; the durable fix is admission control
+at the placement layer, which cannot live in this file.
 
 Chip-AGNOSTIC and PDK-AGNOSTIC: nothing here reads a design, a tool name or a
 technology.
@@ -31,16 +56,20 @@ Environment:
                                     0 / unlimited / none to opt out entirely
     VIBEIC_DOCKER_MEMORY_FRACTION   percent of physical RAM when the above is
                                     unset (default 70)
+    VIBEIC_DOCKER_MEMORY_SHARED     1/on/yes/true to subtract what the running
+                                    containers already hold (default: off)
 """
 from __future__ import annotations
 
 import os
+import subprocess
 from typing import List, Optional
 
 DEFAULT_FRACTION = 70
 #: Below this a ceiling only breaks tools without protecting anything.
 FLOOR_BYTES = 2 * 1024 ** 3
 _OPT_OUT = {"0", "unlimited", "none", "off"}
+_SHARING_ON = {"1", "on", "yes", "true"}
 
 
 def physical_memory_bytes() -> Optional[int]:
@@ -61,6 +90,51 @@ def physical_memory_bytes() -> Optional[int]:
         return None
     total = pages * size
     return total if total > 0 else None
+
+
+def reserved_by_running_containers(runner=None) -> int:
+    """Bytes already promised to RUNNING containers that carry a ceiling.
+
+    A ZERO IS "I COULD NOT ASK", NEVER "THERE ARE NONE". When docker cannot be
+    reached the caller is left with exactly the share it had without this
+    function, because a guard that refuses a container on a host where docker
+    is not installed is worse than the gap it closes.
+
+    Reads `HostConfig.Memory`, which is the PROMISE, not the usage -- see the
+    module docstring for why that distinction keeps this opt-in.
+    """
+    run = subprocess.run if runner is None else runner
+    try:
+        ps = run(["docker", "ps", "-q"], capture_output=True, text=True, timeout=10)
+    except Exception:
+        return 0
+    if getattr(ps, "returncode", 1) != 0:
+        return 0
+    ids = [i for i in (ps.stdout or "").split() if i]
+    if not ids:
+        return 0
+    try:
+        insp = run(["docker", "inspect", "-f", "{{.HostConfig.Memory}}", *ids],
+                   capture_output=True, text=True, timeout=15)
+    except Exception:
+        return 0
+    if getattr(insp, "returncode", 1) != 0:
+        return 0
+    total = 0
+    for tok in (insp.stdout or "").split():
+        try:
+            v = int(tok)
+        except ValueError:
+            continue
+        if v > 0:
+            total += v
+    return total
+
+
+def sharing_enabled(env=None) -> bool:
+    """True when the operator asked for a budget rather than a per-container cap."""
+    env = os.environ if env is None else env
+    return (env.get("VIBEIC_DOCKER_MEMORY_SHARED") or "").strip().lower() in _SHARING_ON
 
 
 def memory_limit(env=None) -> Optional[str]:
@@ -91,8 +165,12 @@ def memory_limit(env=None) -> Optional[str]:
         # host-killing configuration it would be on Linux. Say nothing and let
         # the operator set VIBEIC_DOCKER_MEMORY if they want one anyway.
         return None
-    limit = total * fraction // 100
-    limit = max(limit, FLOOR_BYTES)
+    budget = total * fraction // 100
+    if sharing_enabled(env):
+        reserved = reserved_by_running_containers()
+        if reserved > 0:
+            budget -= reserved
+    limit = max(budget, FLOOR_BYTES)
     limit = min(limit, total)
     return str(limit)
 

@@ -291,3 +291,105 @@ def test_the_installer_script_refuses_without_the_helper(tmp_path):
         "a missing helper must be a refusal, not an unbounded container")
     assert "MEMFLAGS" in body and 'RUN+=( "${MEMFLAGS[@]}" )' in body, (
         "the flags are computed but never reach the `docker run` argv")
+
+
+# ── the budget is OPT-IN, and the default must not move ────────────────────
+#
+# Added 2026-09-14 after 8HD-8 (192.168.1.114) was promised 264 GB of a 126 GB
+# host: three containers, one ngspice apiece at ~25 GB, each correctly under
+# its own 88 GB ceiling. 38 MB available, swap 100 % full, load 220. Every TCP
+# port still answered its handshake, so every liveness probe read the host as
+# healthy while no userspace process could reply, for forty minutes.
+#
+# The module's own docstring had already named this case and deferred it on
+# purpose. These tests hold the line it drew: the arithmetic exists, and the
+# DEFAULT does not change.
+
+_REAL_RESERVED = dm.reserved_by_running_containers
+
+
+class _FakeRun:
+    """A `subprocess.run` that answers the two calls the helper makes."""
+
+    def __init__(self, ids, limits, rc=0, boom=False):
+        self._ids, self._limits, self._rc, self._boom = ids, limits, rc, boom
+
+    def __call__(self, argv, **kw):
+        if self._boom:
+            raise OSError("docker is not installed")
+        out = " ".join(self._ids) if argv[:2] == ["docker", "ps"] \
+            else "\n".join(str(v) for v in self._limits)
+        return subprocess.CompletedProcess(argv, self._rc, out, "")
+
+
+def test_a_running_sibling_is_counted():
+    four_gb = 4 * 1024 ** 3
+    assert _REAL_RESERVED(_FakeRun(["a"], [four_gb])) == four_gb
+
+
+def test_a_sibling_with_no_ceiling_of_its_own_counts_for_nothing():
+    # HostConfig.Memory is 0 for an unbounded container. It is consuming real
+    # memory, but docker never PROMISED it anything, so there is no promise to
+    # deduct and 0 is the only honest answer.
+    assert _REAL_RESERVED(_FakeRun(["a"], [0])) == 0
+
+
+def test_nothing_running_reserves_nothing():
+    assert _REAL_RESERVED(_FakeRun([], [])) == 0
+
+
+def test_docker_unreachable_counts_zero_rather_than_refusing():
+    assert _REAL_RESERVED(_FakeRun([], [], boom=True)) == 0
+    assert _REAL_RESERVED(_FakeRun(["a"], [1], rc=1)) == 0
+
+
+def test_the_default_is_still_a_per_container_ceiling_not_a_budget(monkeypatch):
+    """The load-bearing regression guard: opting in must be a CHOICE."""
+    total = 128 * 1024 ** 3
+    monkeypatch.setattr(dm, "physical_memory_bytes", lambda: total)
+    monkeypatch.setattr(dm, "reserved_by_running_containers",
+                        lambda *a, **k: 40 * 1024 ** 3)
+    assert int(dm.memory_limit({})) == total * dm.DEFAULT_FRACTION // 100
+
+
+def test_opting_in_subtracts_what_the_siblings_already_hold(monkeypatch):
+    total = 128 * 1024 ** 3
+    monkeypatch.setattr(dm, "physical_memory_bytes", lambda: total)
+    monkeypatch.setattr(dm, "reserved_by_running_containers",
+                        lambda *a, **k: 40 * 1024 ** 3)
+    on = int(dm.memory_limit({"VIBEIC_DOCKER_MEMORY_SHARED": "1"}))
+    assert on == total * dm.DEFAULT_FRACTION // 100 - 40 * 1024 ** 3
+
+
+def test_opted_in_three_siblings_cannot_be_promised_more_than_the_host(monkeypatch):
+    """The incident, as arithmetic."""
+    total = 128 * 1024 ** 3
+    monkeypatch.setattr(dm, "physical_memory_bytes", lambda: total)
+    env = {"VIBEIC_DOCKER_MEMORY_SHARED": "1"}
+    handed_out = 0
+    for _ in range(3):
+        taken = handed_out
+        monkeypatch.setattr(dm, "reserved_by_running_containers",
+                            lambda *a, _t=taken, **k: _t)
+        handed_out += int(dm.memory_limit(env))
+    assert handed_out <= total, (
+        "three containers were promised %.0f GB of a %.0f GB host"
+        % (handed_out / 1024 ** 3, total / 1024 ** 3))
+
+
+def test_an_explicit_ceiling_wins_over_the_budget_arithmetic(monkeypatch):
+    # A job that genuinely needs the machine must keep getting it. The budget
+    # narrows the DERIVED share only.
+    monkeypatch.setattr(dm, "reserved_by_running_containers",
+                        lambda *a, **k: 120 * 1024 ** 3)
+    env = {"VIBEIC_DOCKER_MEMORY_SHARED": "1", "VIBEIC_DOCKER_MEMORY": "110g"}
+    assert dm.memory_limit(env) == "110g"
+    env["VIBEIC_DOCKER_MEMORY"] = "unlimited"
+    assert dm.memory_limit(env) is None
+
+
+def test_the_budget_never_falls_below_the_floor_however_full_the_host(monkeypatch):
+    total = 128 * 1024 ** 3
+    monkeypatch.setattr(dm, "physical_memory_bytes", lambda: total)
+    monkeypatch.setattr(dm, "reserved_by_running_containers", lambda *a, **k: total)
+    assert int(dm.memory_limit({"VIBEIC_DOCKER_MEMORY_SHARED": "1"})) == dm.FLOOR_BYTES

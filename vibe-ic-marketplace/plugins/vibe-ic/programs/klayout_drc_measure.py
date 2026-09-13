@@ -12,6 +12,10 @@ import argparse
 import hashlib
 import json
 import subprocess
+import sys as _sys
+from pathlib import Path as _Path
+_sys.path.insert(0, str(_Path(__file__).resolve().parent))  # so the sibling import below resolves however this is invoked
+import _docker_memory as _dmem  # noqa: E402 — every `docker run` carries the ceiling
 import sys
 from pathlib import Path
 
@@ -70,10 +74,19 @@ def measure(args: argparse.Namespace) -> int:
 
     cgds = "/project/" + gds_rel
     creport = "/project/" + report_rel
+    # The ceiling comes from `_docker_memory` so this call site cannot drift from
+    # the shell and the other `docker run` callers; `--memory` stays as an
+    # explicit operator override for a deck that genuinely needs more. It is
+    # spliced in right after the run verb, where `test_no_docker_run_escapes_
+    # the_ceiling` looks for it — that guard reads a 400-character window, so a
+    # comment placed between the verb and the flags puts them out of its reach.
+    _mem = (["--memory", args.memory, "--memory-swap", args.memory]
+            if args.memory else None)
     command = [
-        "docker", "run", "--rm", "--init", "--network", "none",
-        "--cpus", str(args.cpus), "--memory", args.memory,
-        "--memory-swap", args.memory,
+        "docker", "run", "--rm",
+        *(_mem if _mem is not None else _dmem.docker_memory_flags()),
+        "--init", "--network", "none",
+        "--cpus", str(args.cpus),
         "-v", f"{project}:/project", "-w", "/project", args.image,
         "--skip", "klayout", "-b", "-r", args.deck,
         "-rd", f"input={cgds}", "-rd", f"report={creport}",
@@ -117,7 +130,10 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--top", required=True)
     p.add_argument("--image", required=True)
     p.add_argument("--cpus", type=int, default=2)
-    p.add_argument("--memory", default="4g")
+    p.add_argument("--memory", default=None,
+                   help="explicit container ceiling; default is the shared "
+                        "one from _docker_memory (VIBEIC_DOCKER_MEMORY / "
+                        "VIBEIC_DOCKER_MEMORY_FRACTION)")
     args = p.parse_args(argv)
     try:
         return measure(args)
