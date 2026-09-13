@@ -32,6 +32,7 @@ SKU, PDK or IC literal anywhere.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import sys
@@ -430,6 +431,29 @@ def _plant_signoff_evidence(proj: Path):
     gds = proj / "phase3" / "stage3" / "pnr"
     gds.mkdir(parents=True, exist_ok=True)
     (gds / "chip_top.gds").write_bytes(b"\x00\x06\x00\x02\x00\x07")
+
+    # v1.20.61 ("a sign-off DRC zero that NOTHING corroborated is
+    # NOT_MEASURED, not clean") is right that an RDB with an empty <items>
+    # is not a certificate by itself. A real step-31 run does not stop there:
+    # the KLayout runner writes its transcript and an append-only invocation
+    # record binding GDS input, RDB and transcript by digest. That record is
+    # what `_measured_klayout_receipt_files` accepts, so this fixture carries
+    # it -- carrying what a real run carries, not relaxing the gate. The RDB
+    # must already be on disk here, because the receipt digests it.
+    report = proj / "reports" / "phase3" / "drc_signoff.rpt"
+    if report.is_file():
+        transcript = report.with_suffix(".log")
+        transcript.write_text("KLayout completed deck execution\n")
+        gds_file = gds / "chip_top.gds"
+        _sha = lambda q: "sha256:" + hashlib.sha256(q.read_bytes()).hexdigest()
+        rel = lambda q: q.relative_to(proj).as_posix()
+        record = {"record": "invocation", "measured": True, "tool": "klayout",
+                  "exit_code": 0,
+                  "inputs": {rel(gds_file): _sha(gds_file)},
+                  "outputs": {rel(report): _sha(report),
+                              rel(transcript): _sha(transcript)}}
+        with (proj / "provenance.jsonl").open("a") as fh:
+            fh.write(json.dumps(record) + "\n")
 
 
 def _plant_in_scope(proj: Path, cmd: str, body: str = None):

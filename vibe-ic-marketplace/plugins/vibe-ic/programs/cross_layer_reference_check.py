@@ -1743,6 +1743,18 @@ def main(argv: Optional[List[str]] = None) -> int:
                       file=sys.stderr)
             return 1
         if transition_status not in ("NOT_NEEDED", "OK"):
+            # THE MEASUREMENT FIRST, THEN THE CONTRACT. `shrunk` holds only
+            # SMALLER POPULATION rows here -- that is the condition under
+            # which the contract was consulted at all -- and they are what
+            # the sweep MEASURED; the transition status is why that shrink is
+            # not accepted as intentional. Printing the status alone told a
+            # reader that a contract was missing and never that a population
+            # shrank, which dropped the one sentence this verdict owes
+            # (`test_a_smaller_corpus_is_not_reported_as_an_emitter_rename`)
+            # the moment 107a1a9f3 put the contract in front of it.
+            for line in shrunk:
+                print(f"[FAIL] cross-layer reference sweep {line}",
+                      file=sys.stderr)
             print(f"[FAIL] cross-layer population transition: "
                   f"{transition_status}: {transition_detail}",
                   file=sys.stderr)

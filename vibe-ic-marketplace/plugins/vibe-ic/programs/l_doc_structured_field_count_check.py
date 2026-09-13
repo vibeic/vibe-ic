@@ -701,13 +701,25 @@ _NO_PROTOCOL_FAIL_CLOSED = frozenset({"bare_fpga", "unknown_protocol_class"})
 def _class_no_cmd_protocol(ic_class: str) -> bool:
     """ORGANIC-20260606-structured-field-count-no-protocol-class (#428):
     classes the runner's OWN registry marks `command_protocol_applicable=
-    False` AND that have no deterministic rtl_gen (pure datapath / compute
-    transforms) have no source for opcodes / registers / OTP — phase1
-    cannot synthesize protocol fields the spec does not contain, so the
-    protocol-chip minimums switch to an N/A-SKIPPED-CONDITION for them
-    (not a FAIL, not a waiver). Reuses the registry instead of a hardcoded
-    class list; falls back to the legacy datapath list when the registry
-    is unreadable. bare_fpga / unknown stay fail-closed per Wave 36."""
+    False` (pure datapath / compute transforms, converters) have no source
+    for opcodes / registers / OTP — phase1 cannot synthesize protocol
+    fields the spec does not contain, so the protocol-chip minimums switch
+    to an N/A-SKIPPED-CONDITION for them (not a FAIL, not a waiver). Reuses
+    the registry instead of a hardcoded class list; falls back to the
+    legacy datapath list when the registry is unreadable. bare_fpga /
+    unknown stay fail-closed per Wave 36.
+
+    THE REGISTRY FLAG ALONE DECIDES. This used to also require
+    `rtl_gen is None`, as a proxy for "pure datapath" -- a conjunct no class
+    in the registry ever tripped, until #2197 (4efcc9123) gave
+    `data_converter` a deterministic datapath generator and it tripped the
+    wrong one: a converter whose registry entry still says "no SW-visible
+    command protocol and no control FSM" was held to the ≥5-opcode / ≥5-
+    test-case protocol-chip floors, and the rich-converter spec of #634
+    that had cleared the gate since v1.0.34 went red. Whether a class has a
+    generator says nothing about whether its SPEC carries a command
+    protocol; `command_protocol_applicable` is the flag that says that, and
+    it is the one the docstring above always named."""
     if ic_class in _NO_PROTOCOL_FAIL_CLOSED:
         return False
     try:
@@ -717,8 +729,7 @@ def _class_no_cmd_protocol(ic_class: str) -> bool:
         for e in reg.get("classes", []):
             if (e.get("name") == ic_class
                     or ic_class in (e.get("synonyms") or [])):
-                return (e.get("command_protocol_applicable") is False
-                        and e.get("rtl_gen") is None)
+                return e.get("command_protocol_applicable") is False
     except (OSError, ValueError):
         pass
     return ic_class in _DATAPATH_COMPUTE_CLASSES

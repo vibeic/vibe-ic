@@ -22,6 +22,7 @@ quietly restoring the hole.
 chip-AGNOSTIC and NDA-clean: every fixture is synthesised from report GRAMMAR.
 No design name, PDK SKU, foundry or part number appears here.
 """
+import hashlib
 import importlib
 import io
 import json
@@ -141,6 +142,31 @@ def prov(proj, tools):
     return rc, out.getvalue()
 
 
+def measured_klayout_receipt(proj, gds_rel="phase3/stage3/pnr/top.gds"):
+    """Carry what a real step-31 run carries beside a clean RDB.
+
+    v1.20.61 is right that an RDB with an empty <items> certifies nothing by
+    itself -- the sha256 sign-off shipped exactly that shape and was never
+    measured. A real run does not stop at the RDB: the KLayout runner writes
+    its transcript and an append-only invocation record binding GDS input,
+    RDB and transcript by digest, and `_measured_klayout_receipt_files` credits
+    a zero only through that record. The RDB and GDS must already be on disk,
+    because the receipt digests both.
+    """
+    report = proj / "reports" / "phase3" / "drc_signoff.rpt"
+    transcript = report.with_suffix(".log")
+    transcript.write_text("KLayout completed deck execution\n")
+    gds = proj / gds_rel
+    sha = lambda q: "sha256:" + hashlib.sha256(q.read_bytes()).hexdigest()
+    rel = lambda q: q.relative_to(proj).as_posix()
+    record = {"record": "invocation", "measured": True, "tool": "klayout",
+              "exit_code": 0,
+              "inputs": {rel(gds): sha(gds)},
+              "outputs": {rel(report): sha(report), rel(transcript): sha(transcript)}}
+    with (proj / "provenance.jsonl").open("a") as fh:
+        fh.write(json.dumps(record) + "\n")
+
+
 def rules(payload):
     return [f["rule"] for f in payload.get("findings", [])]
 
@@ -247,6 +273,7 @@ def test_a_pdk_or_macro_gds_is_not_the_design_layout(tmp_path):
 
 def test_positive_a_deck_report_over_a_streamed_layout_passes(tmp_path):
     proj = project(tmp_path, klayout_rdb(top="top"), gds_stem="top")
+    measured_klayout_receipt(proj)
     rc, payload, err = gate(proj, "--signoff")
     assert rc == 0, err
     assert payload["passed"] is True
@@ -255,10 +282,22 @@ def test_positive_a_deck_report_over_a_streamed_layout_passes(tmp_path):
 
 
 def test_declared_tier_is_accepted_and_disclosed(tmp_path):
-    proj = project(tmp_path, klayout_rdb(top="top"))
+    # Two rulings compose here and neither overrides the other. 8d0e3e23f
+    # answers "is there a layout?": a provenance DECLARATION is a real tier,
+    # ranked below `invocation`, and it is accepted -- and DISCLOSED. v1.20.61
+    # answers "was the ZERO measured?": an RDB whose <items> is empty
+    # certifies nothing by itself, so the clean run must also carry the
+    # digest-bound KLayout receipt a real step-31 run writes. That receipt
+    # names the GDS as the deck's INPUT, not as a streamout, so it does not
+    # promote the layout tier: the layout is still only DECLARED.
+    proj = project(tmp_path, klayout_rdb(top="top"), gds_stem="top")
+    gds = proj / "phase3" / "stage3" / "pnr" / "top.gds"
     (proj / "provenance.jsonl").write_text(json.dumps({
         "tool": "magic", "exit_code": 0, "timestamp": "2020-01-01T00:00:00Z",
-        "outputs": {"phase3/stage3/pnr/top.gds": "sha256:" + "0" * 64}}) + "\n")
+        "outputs": {"phase3/stage3/pnr/top.gds":
+                    "sha256:" + hashlib.sha256(gds.read_bytes()).hexdigest()}})
+        + "\n")
+    measured_klayout_receipt(proj)
     rc, payload, err = gate(proj, "--signoff")
     assert rc == 0, err
     assert payload["summary"]["layout_evidence_tier"] == "declared"

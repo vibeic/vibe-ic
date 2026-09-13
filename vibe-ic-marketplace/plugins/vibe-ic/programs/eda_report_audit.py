@@ -1678,7 +1678,27 @@ def _check_drc(project_dir: Path) -> AuditResult:
         "via": re.compile(r"\bvia\b", re.I),
         "enclosure": re.compile(r"enclos", re.I),
     }
-    count_re = re.compile(r"\b(\d+)\s*(violation|error|issue|total)", re.I)
+    # A STATED COUNT, IN EITHER WORD ORDER.
+    # This was `\b(\d+)\s*(violation|error|issue|total)` alone, which
+    # requires the NUMBER FIRST: it sees "0 violations" and misses "total
+    # violations: 0", "violation count summary: 0" and "DRC errors found:
+    # 0" -- the forms KLayout and Magic actually write, and three of the
+    # five `_drc_real_violation_count` reads. While the gap was only a
+    # WARNING it cost nothing; once v1.20.61 made an uncorroborated zero
+    # DRC_ZERO_NOT_MEASURED it refused every legitimately clean KLayout or
+    # Magic report, because the gate believed no count had been stated
+    # while holding the count it had just parsed out of that very line.
+    #
+    # STATED, NOT INFERRED, and the distinction is the whole ruling: the
+    # sha256 case v1.20.61 was written for is an RDB whose count is
+    # INFERRED from zero <item> elements -- a zero produced by not
+    # looking. Nothing textual is added for that dialect here, so it stays
+    # uncorroborated and stays refused.
+    count_re = re.compile(
+        r"\b(\d+)\s*(?:violation|error|issue|total)"
+        r"|(?:total\s+violations?|violation\s+count\s+summary"
+        r"|violation\s+report|DRC\s+errors?\s+found)\s*[:=]?\s*\d+",
+        re.I)
     cats_found: List[str] = []
     has_count = False
     best_file = ""
@@ -1727,7 +1747,12 @@ def _check_drc(project_dir: Path) -> AuditResult:
         for cat, regex in categories_re.items():
             if regex.search(text) and cat not in cats_found:
                 cats_found.append(cat)
-        if count_re.search(text):
+        # A per-rule SVRF tally STATES its count -- once per rule, in the
+        # tool's own grammar -- so it is a stated count, not an inferred
+        # one. `_drc_real_violation_count` already reads it through
+        # `_sdf.svrf_fail_count`; the same dialect answer decides here,
+        # rather than a second grammar that could drift from it.
+        if count_re.search(text) or _sdf.SVRF_RESULT_RE.search(text):
             has_count = True
         if not best_file:
             best_file = str(fp)
@@ -2528,17 +2553,43 @@ def _check_ir_drop(project_dir: Path) -> AuditResult:
             jd = json.loads(jp.read_text(errors="replace"))
         except (OSError, ValueError):
             continue
+        # THE NUMBER FIRST: the coverage reading below depends on it.
+        over_budget = False
+        if isinstance(jd, dict) and isinstance(
+                jd.get("worst_ir_uv"), (int, float)) and isinstance(
+                jd.get("budget_uv"), (int, float)):
+            worst_uv, budget_uv = float(jd["worst_ir_uv"]), float(jd["budget_uv"])
+            if worst_uv > budget_uv:
+                over_budget = True
+                budget_ok = False
+                result.findings.append(Finding(
+                    rule="IR_OVER_BUDGET", severity="ERROR",
+                    message=(f"worst IR drop {worst_uv:.3g} µV exceeds the "
+                             f"{budget_uv:.3g} µV budget (#444)"),
+                    file=rel))
         if isinstance(jd, dict):
             raw_failed = jd.get("nets_analysis_failed")
             if isinstance(raw_failed, list) and raw_failed:
                 nets_failed = [str(n) for n in raw_failed]
             producer_verdict = jd.get("verdict")
-            if nets_failed or producer_verdict == "FAIL":
+            # A PRODUCER FAIL HAS THREE CAUSES, and the producer's own rule
+            # (`psm_analysis_coverage.ir_verdict`) ranks them: an unreached
+            # terminal, a refused net, and only then the budget. A FAIL beside
+            # a number that is itself OVER budget is explained by the number.
+            # A FAIL beside a number WITHIN budget can only be coverage -- the
+            # producer refused a net or could not reach a terminal, whether or
+            # not it named one -- and that is the case 5dc74b88f was written
+            # for. Reading EVERY FAIL as coverage-incomplete turned a plainly
+            # over-budget run (120 µV against 35) into NOT_MEASURED, which
+            # hid the one thing the run had established.
+            if nets_failed or (producer_verdict == "FAIL" and not over_budget):
                 ir_coverage_complete = False
                 because = (
                     f"the grid analysis REFUSED {len(nets_failed)} power net(s) "
                     f"({', '.join(nets_failed)})" if nets_failed
-                    else "the producer recorded verdict FAIL")
+                    else "the producer recorded verdict FAIL on a number within "
+                         "budget, which its own rule reserves for a refused net "
+                         "or an unreached terminal")
                 result.findings.append(Finding(
                     rule="IR_COVERAGE_INCOMPLETE", severity="ERROR",
                     message=(
@@ -2547,17 +2598,6 @@ def _check_ir_drop(project_dir: Path) -> AuditResult:
                         f"about the design. Recorded NOT_MEASURED: a refused "
                         f"net makes the number smaller and the budget likelier "
                         f"to pass."),
-                    file=rel))
-        if isinstance(jd, dict) and isinstance(
-                jd.get("worst_ir_uv"), (int, float)) and isinstance(
-                jd.get("budget_uv"), (int, float)):
-            worst_uv, budget_uv = float(jd["worst_ir_uv"]), float(jd["budget_uv"])
-            if worst_uv > budget_uv:
-                budget_ok = False
-                result.findings.append(Finding(
-                    rule="IR_OVER_BUDGET", severity="ERROR",
-                    message=(f"worst IR drop {worst_uv:.3g} µV exceeds the "
-                             f"{budget_uv:.3g} µV budget (#444)"),
                     file=rel))
         break
 
@@ -2568,8 +2608,15 @@ def _check_ir_drop(project_dir: Path) -> AuditResult:
                       "design_binding": design_binding,
                       "tool_authentic": authentic,
                       "worst_ir_uv": worst_uv, "budget_uv": budget_uv,
-                      "ir_within_budget": (budget_ok if ir_coverage_complete
-                                           else None),
+                      # OVER budget is decided on the nets that WERE analysed
+                      # and cannot be undone by the ones that were not: a
+                      # refused net can only RAISE the worst case. So False
+                      # stands on any coverage; only a pass needs every net,
+                      # and a within-budget number over an incomplete
+                      # population is None (NOT_MEASURED), as 5dc74b88f ruled.
+                      "ir_within_budget": (False if not budget_ok
+                                           else (True if ir_coverage_complete
+                                                 else None)),
                       "ir_coverage_complete": ir_coverage_complete,
                       "ir_nets_analysis_failed": nets_failed,
                       "ir_producer_verdict": producer_verdict}
