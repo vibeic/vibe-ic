@@ -85,19 +85,51 @@ def test_preexisting_reservations_reduce_admission(tmp_path):
     with pytest.raises(aca.AdmissionRefused): l.reserve("three", 32 * G)
 
 def test_live_docker_tokens_matching_ledger_entries_are_counted_once(tmp_path):
+    # Model the actual Docker discovery protocol.  Each running container has
+    # the durable reservation token label applied by docker_run_argv().
     active = {}
-    l = ledger(tmp_path, active_reservations=lambda: dict(active))
-    tokens = []
-    for index in range(3):
-        token = l.reserve(f"corner-{index}", 32 * G)
-        tokens.append(token)
-        # Simulate the labelled container after docker run has started. Its
-        # token is the durable reservation token, not a second promise.
-        active[token] = 32 * G
+    docker_calls = []
+
+    def docker(argv, **_):
+        docker_calls.append(argv)
+        if argv[1:3] == ["ps", "-q"]:
+            return subprocess.CompletedProcess(argv, 0, "\n".join(active) + "\n", "")
+        assert argv[1:4] == ["inspect", "-f", "{{.Id}}\\t{{.HostConfig.Memory}}\\t{{index .Config.Labels \\\"vibeic.corner.token\\\"}}"]
+        return subprocess.CompletedProcess(
+            argv, 0,
+            "\n".join(f"{container}\t{32 * G}\t{token}"
+                      for container, token in active.items()) + "\n", "")
+
+    l = ledger(tmp_path, active_reservations=lambda: aca.docker_active_reservations(docker))
+    admitted = []
+    for index in range(4):
+        try:
+            token = l.reserve(f"corner-{index}", 32 * G)
+        except aca.AdmissionRefused:
+            break
+        admitted.append(token)
+        # The container has started before the next admission attempt.
+        active[f"container-{index}"] = token
+
+    assert len(admitted) == 3
     assert l.plan([{"id": str(i)} for i in range(5)], 32 * G)["safe_concurrency"] == 0
     assert l.reserved_bytes() == 3 * 32 * G
     with pytest.raises(aca.AdmissionRefused, match="aggregate RAM"):
         l.reserve("corner-4", 32 * G)
+    assert any(call[1:3] == ["ps", "-q"] for call in docker_calls)
+    assert any(call[1] == "inspect" for call in docker_calls)
+
+
+def test_unlabelled_live_containers_are_not_collapsed_by_docker_no_value(tmp_path):
+    def docker(argv, **_):
+        if argv[1:3] == ["ps", "-q"]:
+            return subprocess.CompletedProcess(argv, 0, "legacy-a\nlegacy-b\n", "")
+        return subprocess.CompletedProcess(argv, 0,
+                                           f"legacy-a\t{32 * G}\t<no value>\n"
+                                           f"legacy-b\t{32 * G}\t<no value>\n", "")
+
+    l = ledger(tmp_path, active_reservations=lambda: aca.docker_active_reservations(docker))
+    assert l.reserved_bytes() == 2 * 32 * G
 
 def test_host_scoped_ledgers_from_distinct_projects_contend_for_three_total_slots(tmp_path):
     host = tmp_path / "one-host-state"

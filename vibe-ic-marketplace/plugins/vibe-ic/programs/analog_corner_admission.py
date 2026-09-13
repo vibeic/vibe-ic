@@ -113,7 +113,11 @@ def docker_active_reservations(runner=subprocess.run) -> dict[str, int]:
             raise AdmissionRefused("active corner reservation is malformed") from exc
         if not ident or amount <= 0:
             raise AdmissionRefused("active corner reservation is malformed")
-        key = token or f"legacy:{ident}"
+        # Docker renders a missing map entry as ``<no value>``.  Treat it as
+        # legacy just like an empty label: otherwise unrelated legacy
+        # containers would collapse onto one pseudo-token and could be
+        # under-counted.
+        key = token if token and token != "<no value>" else f"legacy:{ident}"
         # Duplicate tokens are not normal; charging both is the safe response.
         out[key] = out.get(key, 0) + amount
     return out
