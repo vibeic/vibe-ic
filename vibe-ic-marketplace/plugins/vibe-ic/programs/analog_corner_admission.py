@@ -79,8 +79,13 @@ def headroom_bytes(env=None) -> int:
     return parse_bytes(env.get("VIBEIC_ANALOG_CORNER_HEADROOM", "16GiB"))
 
 
-def docker_reserved_bytes(runner=subprocess.run) -> int:
-    """Return active labelled corner reservations; a Docker error is a refusal."""
+def docker_active_reservations(runner=subprocess.run) -> dict[str, int]:
+    """Return active labelled reservations keyed by their durable token.
+
+    A pre-token legacy container gets an id-derived key and remains fully
+    charged. A token that is also in the ledger is reconciled by
+    :meth:`AdmissionLedger._accounted_bytes` rather than charged twice.
+    """
     try:
         ps = runner(["docker", "ps", "-q", "--filter", "label=vibeic.corner.admission=1"],
                     capture_output=True, text=True, check=False, timeout=15)
@@ -90,21 +95,39 @@ def docker_reserved_bytes(runner=subprocess.run) -> int:
         raise AdmissionRefused("cannot inspect active corner reservations")
     ids = (ps.stdout or "").split()
     if not ids:
-        return 0
-    cp = runner(["docker", "inspect", "-f", "{{.HostConfig.Memory}}", *ids],
+        return {}
+    fmt = "{{.Id}}\\t{{.HostConfig.Memory}}\\t{{index .Config.Labels \\\"vibeic.corner.token\\\"}}"
+    cp = runner(["docker", "inspect", "-f", fmt, *ids],
                 capture_output=True, text=True, check=False, timeout=15)
     if cp.returncode:
         raise AdmissionRefused("cannot inspect active corner memory reservations")
-    try:
-        return sum(int(x) for x in (cp.stdout or "").split() if int(x) > 0)
-    except ValueError as exc:
-        raise AdmissionRefused("active corner reservation is malformed") from exc
+    out = {}
+    for line in (cp.stdout or "").splitlines():
+        parts = line.split("\t")
+        if len(parts) != 3:
+            raise AdmissionRefused("active corner reservation is malformed")
+        ident, raw, token = (part.strip() for part in parts)
+        try:
+            amount = int(raw)
+        except ValueError as exc:
+            raise AdmissionRefused("active corner reservation is malformed") from exc
+        if not ident or amount <= 0:
+            raise AdmissionRefused("active corner reservation is malformed")
+        key = token or f"legacy:{ident}"
+        # Duplicate tokens are not normal; charging both is the safe response.
+        out[key] = out.get(key, 0) + amount
+    return out
+
+
+def docker_reserved_bytes(runner=subprocess.run) -> int:
+    """Compatibility total for callers that do not reconcile ledger tokens."""
+    return sum(docker_active_reservations(runner).values())
 
 
 class AdmissionLedger:
     """Host-authoritative, flock-protected reservations plus project receipts."""
     def __init__(self, project: Path, *, ram_bytes=None, headroom=None, active_bytes=None,
-                 state_dir=None):
+                 active_reservations=None, state_dir=None):
         self.root = Path(project) / "reports" / "analog" / "corner-admission"
         self.root.mkdir(parents=True, exist_ok=True)
         # The state/lock are deliberately NOT beneath project. Different A4
@@ -115,7 +138,15 @@ class AdmissionLedger:
         self.lock = self.host_root / "reservations.lock"
         self.ram_bytes = physical_ram_bytes() if ram_bytes is None else ram_bytes
         self.headroom = headroom_bytes() if headroom is None else headroom
-        self.active_bytes = docker_reserved_bytes if active_bytes is None else active_bytes
+        if active_reservations is not None:
+            self.active_reservations = active_reservations
+        elif active_bytes is not None:
+            # Keep old test/consumer injection usable; an integer has no
+            # token identity, so it is conservatively external.
+            self.active_reservations = lambda: (
+                {"legacy:injected": active_bytes()} if active_bytes() > 0 else {})
+        else:
+            self.active_reservations = docker_active_reservations
         if self.ram_bytes <= self.headroom:
             raise AdmissionRefused("configured headroom leaves no physical-RAM budget")
 
@@ -141,20 +172,46 @@ class AdmissionLedger:
             f.flush()
             os.fsync(f.fileno())
 
+    def _accounted_bytes(self, data):
+        """Count every promise exactly once across ledger and live Docker.
+
+        Matching token entries represent the same launch. If Docker reports a
+        larger value than the durable reservation, retain the larger amount so
+        reconciliation cannot turn a mismatch into over-admission.
+        """
+        reservations = data.get("reservations", {})
+        active = self.active_reservations()
+        if not isinstance(active, dict) or any(not isinstance(v, int) or v <= 0
+                                               for v in active.values()):
+            raise AdmissionRefused("active corner reservation accounting is invalid")
+        total = 0
+        seen = set()
+        for token, record in reservations.items():
+            if record.get("state") != "reserved":
+                continue
+            try:
+                promised = int(record["bytes"])
+            except (KeyError, TypeError, ValueError) as exc:
+                raise AdmissionRefused("durable reservation is malformed") from exc
+            if promised <= 0:
+                raise AdmissionRefused("durable reservation is malformed")
+            total += max(promised, active.get(token, 0))
+            seen.add(token)
+        total += sum(amount for token, amount in active.items() if token not in seen)
+        return total, sum(active.values())
+
     def plan(self, jobs: Iterable[dict], reservation: int):
         jobs = list(jobs)
         if not jobs or reservation <= 0:
             raise AdmissionRefused("every launch plan needs non-empty jobs and a positive reservation")
-        active = self.active_bytes()
+        with self._locked() as data:
+            accounted, active_total = self._accounted_bytes(data)
         budget = self.ram_bytes - self.headroom
-        local = self.reserved_bytes()
-        if active < 0 or local < 0:
-            raise AdmissionRefused("reservation accounting is invalid")
-        available = max(0, budget - active - local)
+        available = max(0, budget - accounted)
         concurrency = available // reservation
         record = {"timestamp": time.time(), "ram_bytes": self.ram_bytes,
                   "headroom_bytes": self.headroom, "budget_bytes": budget,
-                  "docker_active_bytes": active, "ledger_reserved_bytes": local,
+                  "docker_active_bytes": active_total, "accounted_reserved_bytes": accounted,
                   "reservation_bytes": reservation, "jobs": [j["id"] for j in jobs],
                   "safe_concurrency": concurrency, "swap_bytes": None}
         self._receipt("plans.jsonl", record)
@@ -162,18 +219,16 @@ class AdmissionLedger:
 
     def reserved_bytes(self):
         with self._locked() as data:
-            return sum(int(v["bytes"]) for v in data.get("reservations", {}).values()
-                       if v.get("state") == "reserved")
+            return self._accounted_bytes(data)[0]
 
     def reserve(self, job_id: str, reservation: int):
         if not job_id or reservation <= 0:
             raise AdmissionRefused("corner id and positive reservation are required")
         with self._locked() as data:
             reservations = data.setdefault("reservations", {})
-            local = sum(int(v["bytes"]) for v in reservations.values() if v.get("state") == "reserved")
-            active = self.active_bytes()
+            accounted, _active_total = self._accounted_bytes(data)
             budget = self.ram_bytes - self.headroom
-            if active + local + reservation > budget:
+            if accounted + reservation > budget:
                 raise AdmissionRefused("aggregate RAM budget exhausted before Docker launch")
             token = uuid.uuid4().hex
             reservations[token] = {"job_id": job_id, "project": str(self.root.parent.parent.parent), "bytes": reservation,
@@ -193,11 +248,14 @@ class AdmissionLedger:
 
 
 def docker_run_argv(*, image: str, reservation: str, project: Path,
-                   workdir: Path, simulation_args: list[str], name: str | None = None) -> list[str]:
+                   workdir: Path, simulation_args: list[str], name: str | None = None,
+                   token: str | None = None) -> list[str]:
     """The one canonical independent-corner invocation; args stay untouched."""
     parse_bytes(reservation)
     argv = ["docker", "run", "--rm", "--init", "--label", "vibeic.corner.admission=1",
             "--memory", reservation, "--memory-swap", reservation]
+    if token:
+        argv += ["--label", f"vibeic.corner.token={token}"]
     if name:
         argv += ["--name", name]
     argv += ["-v", f"{Path(project).resolve()}:{Path(project).resolve()}",
@@ -213,7 +271,7 @@ def launch(ledger: AdmissionLedger, *, job_id: str, reservation: str,
     token = ledger.reserve(job_id, amount)
     argv = docker_run_argv(image=image, reservation=reservation, project=project,
                            workdir=workdir, simulation_args=simulation_args,
-                           name=f"vibeic-corner-{token[:12]}")
+                           name=f"vibeic-corner-{token[:12]}", token=token)
     try:
         cp = runner(argv, capture_output=True, text=True, check=False)
         ledger.release(token, outcome=f"docker_rc_{cp.returncode}")

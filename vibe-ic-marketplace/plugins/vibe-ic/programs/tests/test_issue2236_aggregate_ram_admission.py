@@ -18,9 +18,10 @@ def load_sweep():
     spec.loader.exec_module(module)
     return module
 
-def ledger(tmp_path, active=0, state_dir=None):
+def ledger(tmp_path, active=0, state_dir=None, active_reservations=None):
     return aca.AdmissionLedger(tmp_path, ram_bytes=126 * G, headroom=16 * G,
                                active_bytes=lambda: active,
+                               active_reservations=active_reservations,
                                state_dir=state_dir or tmp_path / "host-state")
 
 def test_five_32g_corners_admit_exactly_three_then_release_unblocks_fourth(tmp_path):
@@ -83,6 +84,21 @@ def test_preexisting_reservations_reduce_admission(tmp_path):
     assert l.reserve("two", 32 * G)
     with pytest.raises(aca.AdmissionRefused): l.reserve("three", 32 * G)
 
+def test_live_docker_tokens_matching_ledger_entries_are_counted_once(tmp_path):
+    active = {}
+    l = ledger(tmp_path, active_reservations=lambda: dict(active))
+    tokens = []
+    for index in range(3):
+        token = l.reserve(f"corner-{index}", 32 * G)
+        tokens.append(token)
+        # Simulate the labelled container after docker run has started. Its
+        # token is the durable reservation token, not a second promise.
+        active[token] = 32 * G
+    assert l.plan([{"id": str(i)} for i in range(5)], 32 * G)["safe_concurrency"] == 0
+    assert l.reserved_bytes() == 3 * 32 * G
+    with pytest.raises(aca.AdmissionRefused, match="aggregate RAM"):
+        l.reserve("corner-4", 32 * G)
+
 def test_host_scoped_ledgers_from_distinct_projects_contend_for_three_total_slots(tmp_path):
     host = tmp_path / "one-host-state"
     ledgers = [ledger(tmp_path / f"project-{i}", state_dir=host) for i in range(5)]
@@ -106,6 +122,12 @@ def test_docker_command_preserves_limit_init_and_simulation_args(tmp_path):
     assert argv[argv.index("--memory") + 1] == "32g"
     assert argv[argv.index("--memory-swap") + 1] == "32g"
     assert argv[-len(args):] == args
+
+def test_docker_command_carries_reservation_token_label(tmp_path):
+    argv = aca.docker_run_argv(image="immutable@sha256:abc", reservation="32g",
+                               project=tmp_path, workdir=tmp_path,
+                               simulation_args=["--skip", "ngspice"], token="tok")
+    assert "vibeic.corner.token=tok" in argv
 
 def test_receipts_are_machine_readable_and_swap_is_not_budgeted(tmp_path):
     l = ledger(tmp_path)

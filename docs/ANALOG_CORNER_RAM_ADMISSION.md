@@ -21,7 +21,9 @@ host-wide state directory; it defaults to `/var/tmp/vibeic-analog-corner-admissi
 The scheduler uses physical RAM only: `physical RAM - headroom - active
 labelled corner reservations - durable host reservations`. The host lock/state
 is shared by every project on that Docker host, while each project retains its
-own receipts. Swap is never allocatable. It refuses a missing, zero, malformed,
+own receipts. Each launched container carries its durable reservation token;
+reconciliation counts a matching live-container/ledger token exactly once
+(and conservatively charges unmatched or larger live declarations). Swap is never allocatable. It refuses a missing, zero, malformed,
 or over-budget declaration before `docker run`. For 126 GiB RAM, a 16 GiB headroom and 32 GiB reservations,
 the safe concurrency is three; a fourth corner waits for/requires a released
 reservation rather than raising the host commitment to 128 GiB.
