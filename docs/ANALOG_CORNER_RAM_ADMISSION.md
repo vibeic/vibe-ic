@@ -12,10 +12,17 @@ export VIBEIC_ANALOG_CORNER_MEMORY=32GiB
 export VIBEIC_ANALOG_CORNER_HEADROOM=16GiB
 ```
 
+If neither memory environment variable is set, A4 reads the selected
+container's non-zero `HostConfig.Memory` byte declaration and uses that exact
+value. A zero, absent, or malformed container declaration is refused before
+Docker. Set `VIBEIC_ANALOG_CORNER_ADMISSION_STATE_DIR` only to override the
+host-wide state directory; it defaults to `/var/tmp/vibeic-analog-corner-admission`.
+
 The scheduler uses physical RAM only: `physical RAM - headroom - active
-labelled corner reservations - durable local reservations`.  Swap is never
-allocatable.  It refuses a missing, zero, malformed, or over-budget declaration
-before `docker run`.  For 126 GiB RAM, a 16 GiB headroom and 32 GiB reservations,
+labelled corner reservations - durable host reservations`. The host lock/state
+is shared by every project on that Docker host, while each project retains its
+own receipts. Swap is never allocatable. It refuses a missing, zero, malformed,
+or over-budget declaration before `docker run`. For 126 GiB RAM, a 16 GiB headroom and 32 GiB reservations,
 the safe concurrency is three; a fourth corner waits for/requires a released
 reservation rather than raising the host commitment to 128 GiB.
 

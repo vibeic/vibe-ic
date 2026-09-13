@@ -1035,6 +1035,24 @@ def _corner_image(container):
     return image
 
 
+def _corner_reservation(container):
+    """Use an explicit env declaration, else the selected A4 ceiling.
+
+    ``HostConfig.Memory`` is Docker's authoritative configured byte value. A
+    zero, absent, or non-numeric value is not a reservation and fails closed
+    before an independent corner container is launched.
+    """
+    env_declared = (os.environ.get("VIBEIC_ANALOG_CORNER_MEMORY")
+                    or os.environ.get("VIBEIC_DOCKER_MEMORY"))
+    if env_declared:
+        return _aca.declared_reservation()
+    cp = subprocess.run(["docker", "inspect", "-f", "{{.HostConfig.Memory}}", container],
+                        capture_output=True, text=True)
+    if cp.returncode:
+        raise _aca.AdmissionRefused("cannot read selected A4 container memory declaration")
+    return _aca.declared_reservation(container_memory=(cp.stdout or "").strip())
+
+
 def _run_ngspice(container, sp_in_container, cwd=None, deck_text=None,
                  run_to_completion=False, corner_job=None):
     """Run ngspice -b on a deck. `cwd` (optional) runs ngspice FROM that
@@ -1095,7 +1113,7 @@ def _run_ngspice(container, sp_in_container, cwd=None, deck_text=None,
         # #2236: THIS is the canonical A4 producer's independent-corner path.
         # Reservation happens inside launch() before Docker is invoked; the
         # image, --init, exact declared limit and simulator argv are preserved.
-        reservation, _bytes = _aca.declared_reservation()
+        reservation, _bytes = _corner_reservation(container)
         ledger = _aca.AdmissionLedger(corner_job["project"])
         cp = _aca.launch(
             ledger, job_id=corner_job["id"], reservation=reservation,
@@ -2181,7 +2199,7 @@ def _run_pvt_corners(project, container, host_root, sl_dir, btype, block, pdk,
     # RAM permits; this is deliberately not a serial workaround.  The ledger
     # reserves each exact Docker ceiling before its corresponding docker run.
     try:
-        reservation, reservation_bytes = _aca.declared_reservation()
+        reservation, reservation_bytes = _corner_reservation(container)
         ledger = _aca.AdmissionLedger(project)
         plan = ledger.plan([{"id": f"{block}:{proc}:{tlbl}"}
                             for proc, tlbl, _deck, _sp in pending], reservation_bytes)

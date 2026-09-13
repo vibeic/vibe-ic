@@ -2,6 +2,7 @@
 from __future__ import annotations
 import importlib.util
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import pytest
 
@@ -10,9 +11,17 @@ spec = importlib.util.spec_from_file_location("aca", PROG)
 aca = importlib.util.module_from_spec(spec); spec.loader.exec_module(aca)
 G = 1024 ** 3
 
-def ledger(tmp_path, active=0):
+def load_sweep():
+    sweep = PROG.parent / "analog_real_corner_sweep.py"
+    spec = importlib.util.spec_from_file_location("issue2236_sweep", sweep)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+def ledger(tmp_path, active=0, state_dir=None):
     return aca.AdmissionLedger(tmp_path, ram_bytes=126 * G, headroom=16 * G,
-                               active_bytes=lambda: active)
+                               active_bytes=lambda: active,
+                               state_dir=state_dir or tmp_path / "host-state")
 
 def test_five_32g_corners_admit_exactly_three_then_release_unblocks_fourth(tmp_path):
     l = ledger(tmp_path)
@@ -40,12 +49,54 @@ def test_no_explicit_corner_reservation_is_refused():
     with pytest.raises(aca.AdmissionRefused):
         aca.declared_reservation({})
 
+def test_selected_container_memory_is_the_no_env_reservation_fallback():
+    raw, amount = aca.declared_reservation({}, container_memory=str(32 * G))
+    assert raw == str(32 * G)
+    assert amount == 32 * G
+
+def test_a4_reads_selected_container_memory_when_env_is_unset(monkeypatch):
+    sweep = load_sweep()
+    monkeypatch.delenv("VIBEIC_ANALOG_CORNER_MEMORY", raising=False)
+    monkeypatch.delenv("VIBEIC_DOCKER_MEMORY", raising=False)
+    monkeypatch.setattr(sweep.subprocess, "run", lambda *args, **kwargs:
+                        subprocess.CompletedProcess(args[0], 0, str(32 * G) + "\n", ""))
+    assert sweep._corner_reservation("selected-a4") == (str(32 * G), 32 * G)
+
+def test_a4_refuses_zero_container_memory_before_launch(monkeypatch):
+    sweep = load_sweep()
+    monkeypatch.delenv("VIBEIC_ANALOG_CORNER_MEMORY", raising=False)
+    monkeypatch.delenv("VIBEIC_DOCKER_MEMORY", raising=False)
+    monkeypatch.setattr(sweep.subprocess, "run", lambda *args, **kwargs:
+                        subprocess.CompletedProcess(args[0], 0, "0\n", ""))
+    with pytest.raises(sweep._aca.AdmissionRefused):
+        sweep._corner_reservation("selected-a4")
+
+@pytest.mark.parametrize("value", ["", "0", "-1", "not-a-number"])
+def test_missing_or_invalid_container_memory_fallback_is_refused(value):
+    with pytest.raises(aca.AdmissionRefused):
+        aca.declared_reservation({}, container_memory=value)
+
 def test_preexisting_reservations_reduce_admission(tmp_path):
     l = ledger(tmp_path, active=32 * G)
     assert l.plan([{"id": str(i)} for i in range(5)], 32 * G)["safe_concurrency"] == 2
     assert l.reserve("one", 32 * G)
     assert l.reserve("two", 32 * G)
     with pytest.raises(aca.AdmissionRefused): l.reserve("three", 32 * G)
+
+def test_host_scoped_ledgers_from_distinct_projects_contend_for_three_total_slots(tmp_path):
+    host = tmp_path / "one-host-state"
+    ledgers = [ledger(tmp_path / f"project-{i}", state_dir=host) for i in range(5)]
+    def reserve(i):
+        try:
+            return ledgers[i].reserve(f"corner-{i}", 32 * G)
+        except aca.AdmissionRefused:
+            return None
+    with ThreadPoolExecutor(max_workers=5) as pool:
+        tokens = list(pool.map(reserve, range(5)))
+    assert sum(token is not None for token in tokens) == 3
+    assert sum(token is None for token in tokens) == 2
+    assert ledgers[0].reserved_bytes() == 3 * 32 * G
+    assert ledgers[0].state == ledgers[4].state == host / "reservations.json"
 
 def test_docker_command_preserves_limit_init_and_simulation_args(tmp_path):
     args = ["--skip", "bash", "-lc", "ngspice -b /w/pvt.sp"]
@@ -71,3 +122,5 @@ def test_canonical_a4_producer_is_wired_to_the_admission_api():
     assert "ThreadPoolExecutor(max_workers=workers" in source
     assert "_aca.launch(" in source
     assert '"id": f"{block}:{typ_section}:27c-base"' in source
+    assert "def _corner_reservation(container):" in source
+    assert "{{.HostConfig.Memory}}" in source
