@@ -70,3 +70,4 @@ def test_canonical_a4_producer_is_wired_to_the_admission_api():
     assert "import analog_corner_admission as _aca" in source
     assert "ThreadPoolExecutor(max_workers=workers" in source
     assert "_aca.launch(" in source
+    assert '"id": f"{block}:{typ_section}:27c-base"' in source

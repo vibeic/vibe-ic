@@ -3273,7 +3273,9 @@ def _run_block(project, block, container, pdk, topology_override):
         sp_host.write_text(tb)
         ok, meas, raw, sim_status = _run_ngspice(
             container, _container_path(container, host_root, sp_host),
-            deck_text=tb, run_to_completion=True)
+            deck_text=tb, run_to_completion=True,
+            corner_job={"id": f"{block}:{typ_section}:27c-base",
+                        "project": project, "workdir": sl_dir})
         # ORGANIC-20260606 #438(a): persist the ngspice invocation log —
         # `simulator_run: true` is only claimable for corners whose
         # invocation log exists on disk.
