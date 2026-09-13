@@ -60,12 +60,14 @@ Falls back rc=2 if simulator unreachable. chip-AGNOSTIC.
 """
 from __future__ import annotations
 import argparse, hashlib, json, os, re, shlex, subprocess, sys, time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _eda_pin as _pin  # noqa: E402 — the ONE place the pin is stated
 import _atomic_artefact as _aa  # noqa: E402  (vibe-ic#1082)
 import _designs_root as _dr  # noqa: E402  (host mount root, measured)
 import analog_resolution_stimulus as _ars  # noqa: E402  (vibe-ic#2188)
+import analog_corner_admission as _aca  # noqa: E402  (#2236 placement admission)
 
 try:
     from . import _container_exec                            # type: ignore
@@ -1019,8 +1021,22 @@ def sim_deadline_s(deck_text: str) -> int:
     return int(min(max(SIM_DEADLINE_FLOOR_S, scaled), SIM_DEADLINE_CEILING_S))
 
 
+def _corner_image(container):
+    """Resolve the image of the maintained A4 container for a fresh corner.
+
+    A4 used to execute inside a shared container.  Independent corner jobs
+    must name that same image, not an unpinned replacement guessed by a helper.
+    """
+    cp = subprocess.run(["docker", "inspect", "-f", "{{.Config.Image}}", container],
+                        capture_output=True, text=True)
+    image = (cp.stdout or "").strip()
+    if cp.returncode or not image:
+        raise _aca.AdmissionRefused("cannot resolve the A4 container image before corner launch")
+    return image
+
+
 def _run_ngspice(container, sp_in_container, cwd=None, deck_text=None,
-                 run_to_completion=False):
+                 run_to_completion=False, corner_job=None):
     """Run ngspice -b on a deck. `cwd` (optional) runs ngspice FROM that
     directory — the model lib's own directory, so any deck-relative output /
     scratch file lands beside it.
@@ -1071,10 +1087,22 @@ def _run_ngspice(container, sp_in_container, cwd=None, deck_text=None,
         json_path = f"{sp_in_container}.measure.json"
         json_flag = f"--json-measure={shlex.quote(json_path)} "
     deadline = 0 if run_to_completion else sim_deadline_s(deck_text or "")
-    cp = _docker(container,
-                 f"{prefix}{shlex.quote(ngspice_bin)} -b {json_flag}"
-                 f"{shlex.quote(sp_in_container)} 2>&1",
-                 timeout=deadline)
+    command = (f"{prefix}{shlex.quote(ngspice_bin)} -b {json_flag}"
+               f"{shlex.quote(sp_in_container)} 2>&1")
+    if corner_job is None:
+        cp = _docker(container, command, timeout=deadline)
+    else:
+        # #2236: THIS is the canonical A4 producer's independent-corner path.
+        # Reservation happens inside launch() before Docker is invoked; the
+        # image, --init, exact declared limit and simulator argv are preserved.
+        reservation, _bytes = _aca.declared_reservation()
+        ledger = _aca.AdmissionLedger(corner_job["project"])
+        cp = _aca.launch(
+            ledger, job_id=corner_job["id"], reservation=reservation,
+            image=_corner_image(container), project=corner_job["project"],
+            workdir=corner_job["workdir"],
+            simulation_args=["--skip", "bash", "-lc", command],
+        )
     txt = cp.stdout
     # A KILLED RUN IS NOT AN ABSENT ONE. `_container_exec` returns 124 when
     # the deadline fires, and everything below this point reads a truncated
@@ -2114,6 +2142,7 @@ def _run_pvt_corners(project, container, host_root, sl_dir, btype, block, pdk,
     if base_tt is not None:
         real_sims[(typ_section, "27c")] = base_tt
     tkey = metric_key or TARGETS.get(btype, {}).get("key", "vout")
+    pending = []
     for proc, _po in corners:
         if not _pdk_has_section(container, pdk_lib, proc):
             continue                      # section absent → all its temps derive
@@ -2146,17 +2175,57 @@ def _run_pvt_corners(project, container, host_root, sl_dir, btype, block, pdk,
                 resolution_records if resolution_records is not None else [])
             sp.write_text(deck_origin_header(origin or {})
                           + (subst_header or "") + deck)
-            # THE DECK REACHES THE CALL. MEASURED (vibe-ic#2062): this call
-            # site omitted `deck_text`, so `sim_deadline_s("")` returned the
-            # 120 s FLOOR for every PVT corner while the sized base run one
-            # function away passed `deck_text=tb` and got 7200 — the same decks,
-            # read back off disk, compute 7200. Eight of nine corners of a
-            # 51.2 us transient were cut at 120 s and published as arithmetic.
-            # The deck is handed over here so the disclosure can name the span;
-            # `run_to_completion` is what makes sure no clock ends the run.
-            ok, meas, raw, _ss = _run_ngspice(
-                container, _container_path(container, host_root, sp),
-                deck_text=deck, run_to_completion=True)
+            pending.append((proc, tlbl, deck, sp))
+
+    # The canonical producer schedules as many independent runs as physical
+    # RAM permits; this is deliberately not a serial workaround.  The ledger
+    # reserves each exact Docker ceiling before its corresponding docker run.
+    try:
+        reservation, reservation_bytes = _aca.declared_reservation()
+        ledger = _aca.AdmissionLedger(project)
+        plan = ledger.plan([{"id": f"{block}:{proc}:{tlbl}"}
+                            for proc, tlbl, _deck, _sp in pending], reservation_bytes)
+        workers = min(len(pending), int(plan["safe_concurrency"]))
+    except _aca.AdmissionRefused as exc:
+        for proc, tlbl, deck, _sp in pending:
+            not_completed[(proc, tlbl)] = {
+                "reason_class": "RAM_ADMISSION_REFUSED", "cause": [str(exc)],
+                "simulator_rc": None, "deadline_s": None,
+                "run_to_completion": True, "failed_analyses": None,
+                "ngspice_log": None}
+        return real_sims, not_completed
+    if workers <= 0:
+        for proc, tlbl, _deck, _sp in pending:
+            not_completed[(proc, tlbl)] = {
+                "reason_class": "RAM_ADMISSION_REFUSED",
+                "cause": ["aggregate RAM budget has no available corner slot"],
+                "simulator_rc": None, "deadline_s": None,
+                "run_to_completion": True, "failed_analyses": None,
+                "ngspice_log": None}
+        return real_sims, not_completed
+
+    def run_one(item):
+        proc, tlbl, deck, sp = item
+        return item, _run_ngspice(
+            container, _container_path(container, host_root, sp), deck_text=deck,
+            run_to_completion=True, corner_job={"id": f"{block}:{proc}:{tlbl}",
+                                                "project": project, "workdir": sl_dir})
+
+    with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="pvt-corner") as pool:
+        futures = {pool.submit(run_one, item): item for item in pending}
+        for future in as_completed(futures):
+            try:
+                (proc, tlbl, deck, _sp), (ok, meas, raw, _ss) = future.result()
+            except _aca.AdmissionRefused as exc:
+                # A concurrent launcher may have acquired a reservation first;
+                # it never reaches Docker on refusal and is recorded honestly.
+                proc, tlbl, _deck, _sp = futures[future]
+                not_completed[(proc, tlbl)] = {
+                    "reason_class": "RAM_ADMISSION_REFUSED", "cause": [str(exc)],
+                    "simulator_rc": None, "deadline_s": None,
+                    "run_to_completion": True, "failed_analyses": None,
+                    "ngspice_log": None}
+                continue
             log = sl_dir / f"pvt_{proc}_{tlbl}.ngspice.log"
             log.write_text(deck_library_header(deck) + raw)
             v = meas.get(tkey)
@@ -2167,9 +2236,7 @@ def _run_pvt_corners(project, container, host_root, sl_dir, btype, block, pdk,
                         break
             log_rel = str(log.relative_to(project))
             if ok and v is not None:
-                real_sims[(proc, tlbl)] = {
-                    "value": v, "ok": True, "log": log_rel,
-                }
+                real_sims[(proc, tlbl)] = {"value": v, "ok": True, "log": log_rel}
             else:
                 nc = not_completed_record(raw, _ss, ok, v, log_rel)
                 if nc is not None:
