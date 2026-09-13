@@ -1,4 +1,4 @@
-"""test_cy2221_a_gds_carries_its_own_clock.py — #2221, both directions.
+"""test_cy2221_identity_compares_two_gds_on_the_clock_free_digest.py — #2221, both directions.
 
 THE DEFECT, MEASURED BEFORE IT WAS REPAIRED (2026-09-10, 8HD-6, image
 `ghcr.io/vibeic/vibeic-eda:0.3.41`, corpus `8c4b608`): one layout

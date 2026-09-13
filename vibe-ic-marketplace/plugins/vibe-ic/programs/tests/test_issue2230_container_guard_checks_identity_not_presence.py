@@ -63,7 +63,15 @@ _OTHER = "sha256:" + "de" * 32
 #: from its guard. The flag is what a `skipif` consumes, so it is the thing
 #: whose value decides RED-or-SKIP.
 _GUARDED = [
-    ("test_v0_2_97_issue472_473_476_phase2", "_HAVE_PINNED_CONTAINER"),
+    # REMOVED 2026-09-14. `980e7d877` ("run firmware staging verification in
+    # the selected runtime") deleted this module's
+    # `_HAVE_PINNED_CONTAINER = _cg.container_usable(_ORACLE_CONTAINER)` and
+    # the skipif that consumed it: it no longer reaches for a SECOND named
+    # container, it runs in the runtime it was invoked in and skips on tool
+    # availability instead. There is no container guard left here to audit,
+    # and naming one that does not exist made this file raise
+    # AttributeError twice rather than checking the six that do.
+    # Do not re-add without first confirming the module grew a guard back.
     ("test_v1_0_78_issue729_ppa_area_threshold", "_HAVE_CONTAINER"),
     ("test_v1_0_80_issue739_ppa_unreachable_target_escape", "_HAVE_CONTAINER"),
     ("test_v1_0_83_issue756_ppa_disjunctive_clauses", "_HAVE_CONTAINER"),

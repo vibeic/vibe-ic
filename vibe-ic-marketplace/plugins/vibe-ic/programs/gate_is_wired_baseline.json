@@ -1,5 +1,5 @@
 {
-  "_comment": "Gates no automatic verdict INVOKES (vibe-ic#693, rule re-derived under vibe-ic#2141). MAY ONLY SHRINK once recorded. A gate here produces no verdict, and the tree looks the same either way.",
+  "_comment": "Gates no automatic verdict INVOKES (vibe-ic#693, rule re-derived under vibe-ic#2065). MAY ONLY SHRINK. A gate here produces no verdict, and the tree looks the same either way. `skill_only` is recorded because a skill mention runs the gate only if an agent remembers to \u2014 which for a gate that catches a vacuous pass is the same as absent at the moment it matters.",
   "measured_under": "invocation.v2",
   "unwired": [
     "acceptance_evidence_in_fix_comment_check",
@@ -28,7 +28,6 @@
     "organic_issue_body_lint",
     "page_states_one_figure_twice_check",
     "phase1_loop_stop_condition_check",
-    "plugin_change_pytest_gate",
     "regression_issue_intake_check",
     "reports_subfolder_taxonomy_check",
     "rtl_signal_name_semantic_check",
@@ -62,7 +61,6 @@
     "ir_drop_budget_check",
     "organic_issue_body_lint",
     "phase1_loop_stop_condition_check",
-    "plugin_change_pytest_gate",
     "regression_issue_intake_check",
     "reports_subfolder_taxonomy_check",
     "signaltap_stp_completeness_check",

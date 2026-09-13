@@ -41,6 +41,8 @@ import importlib.util
 import json
 from pathlib import Path
 
+import pytest
+
 _HERE = Path(__file__).resolve().parent
 _PROG = _HERE.parent / "cross_layer_reference_check.py"
 _MANIFEST = _HERE.parent / "cross_layer_references.json"
@@ -58,6 +60,31 @@ FOURTH_CARRIER = "top_module_pins"
 
 
 # ─────────────────────────────────────────────────────────── fixtures
+@pytest.fixture(autouse=True)
+def _no_shipped_transition_contract(tmp_path, monkeypatch):
+    """Keep the SHIPPED transition contract out of these tmp scenarios.
+
+    `population_transition_path` is "split out for test injection" in its own
+    docstring, and `test_cross_layer_reference_check.py` injects it in four
+    places. This file never did, so when `107a1a9f3` ("attest intentional
+    cross-layer corpus transition") added the shipped
+    `cross_layer_reference_population_transition.json`, the checker began
+    reading a contract whose `baseline_seal` binds the SHIPPED debt register
+    against a baseline these tests write into `tmp_path` -- two different
+    registers, so the seals could never agree. The sweep then returned
+    BASELINE_MISMATCH before it could reach the verdict under test, and
+    `test_a_smaller_corpus_is_not_reported_as_an_emitter_rename` stopped seeing
+    the SMALLER POPULATION it exists to demand.
+
+    Pointing the contract at a path that does not exist is what "no transition
+    was attested for THIS corpus" looks like, which is the truth for every
+    scenario in this file. It narrows nothing: the tests that are ABOUT the
+    contract live in `test_cross_layer_reference_check.py` and inject their own.
+    """
+    monkeypatch.setattr(mod, "population_transition_path",
+                        lambda: tmp_path / "no-such-transition-contract.json")
+
+
 def _ports(width_symbolic="ACCUM_W-1:0", width=1):
     return [
         {"name": "clk_in", "mode": "input", "direction": "input", "width": 1},
