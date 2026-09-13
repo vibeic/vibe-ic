@@ -509,7 +509,18 @@ def run(caller_argv, _audit=None) -> int:
                   f"{f['message']}", file=sys.stderr)
 
     signoff_refused = False
-    if signoff and rc == RC_PASS and not required_absent:
+    # WHETHER THE CERTIFICATE IS ONE is independent of what it counted.
+    # This read `signoff and rc == RC_PASS and not required_absent`, so the
+    # producer questions -- is this a recognised sign-off deck, does it name
+    # its rule set, is there layout evidence -- were only ever asked of a
+    # report that had ALREADY passed the count check. v1.20.61 then made an
+    # uncorroborated zero NOT_MEASURED (correctly), which drops rc below
+    # RC_PASS, and with it every one of those refusals became unreachable:
+    # the seven tests in test_signoff_drc_producer_is_a_signoff_deck.py
+    # stopped seeing the token they exist to demand. A guard no input can
+    # reach is not a guard. A report from an unrecognised producer is
+    # refused whether it claims zero violations or five hundred.
+    if signoff and not required_absent:
         sf, sadd = signoff_verdict(payload, project_dir)
         errors = [f for f in sf if f.get("severity") == "ERROR"]
         if isinstance(payload, dict):
@@ -520,7 +531,10 @@ def run(caller_argv, _audit=None) -> int:
                 payload["summary"] = sadd
             if errors:
                 payload["passed"] = False
-                payload["summary"]["terminal_verdict"] = "SIGNOFF_REFUSED"
+                # Never overwrite a MORE SPECIFIC terminal verdict the
+                # count half already reached.
+                payload["summary"].setdefault(
+                    "terminal_verdict", "SIGNOFF_REFUSED")
             payload_text = json.dumps(payload, indent=2,
                                       ensure_ascii=False) + "\n"
         signoff_refused = bool(errors)

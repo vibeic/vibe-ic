@@ -86,7 +86,7 @@ def _assert_not_enforced() -> None:
     assert observed_hits == [False, False], (
         "mutable record bytes changed the two concrete required-output "
         f"answers: observed_hits={observed_hits}")
-    missing, details = D3.audit_step(STEP)
+    missing, details, _unmeasured = D3.audit_step(STEP)
     assert missing, (
         "mutable or absent record bytes still produced a green D3 predicate: "
         + repr(details))

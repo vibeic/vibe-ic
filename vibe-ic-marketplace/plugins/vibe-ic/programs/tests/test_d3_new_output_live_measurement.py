@@ -51,7 +51,7 @@ def test_new_output_requires_real_measured_production(monkeypatch, case, produce
             old.write_text('{"verdict":"PASS","historical":true}\n')
             commit(OUTPUT)
         d3._probe_only(monkeypatch, "tracked-probe", root)
-        missing, details = d3.audit_step("23")
+        missing, details, _unmeasured = d3.audit_step("23")
         assert (not missing) is produced, (missing, details)
         if status is None:
             assert calls == []
@@ -70,14 +70,14 @@ def test_new_output_requires_real_measured_production(monkeypatch, case, produce
 def test_new_output_without_a_unique_declared_owner_remains_unmeasured(monkeypatch):
     _new_entry(monkeypatch)
     monkeypatch.setattr(d3.F, "gate_programs", lambda sid: ())
-    missing, _ = d3.audit_step("23")
+    missing, _, _ = d3.audit_step("23")
     assert missing and "no unique declared inline producer" in missing[0]
 
 
 def test_removed_required_output_still_fails_manifest_drift(monkeypatch):
     monkeypatch.setattr(d3.F, "required_outputs", lambda sid: ())
     monkeypatch.setattr(d3, "step_record", lambda sid: {"entries": {OUTPUT: {}}})
-    missing, _ = d3.audit_step("23")
+    missing, _, _ = d3.audit_step("23")
     assert missing and "removed" in missing[0] and OUTPUT in missing[0]
 
 
@@ -90,7 +90,7 @@ def test_written_report_must_reach_the_real_consumer_path(monkeypatch):
         target.write_text(_MET)
         commit(INPUT)
         d3._probe_only(monkeypatch, "consumer-probe", root)
-        missing, _ = d3.audit_step("23")
+        missing, _, _ = d3.audit_step("23")
         assert missing and "did not write the declared regular file" in missing[0]
 
 
@@ -98,5 +98,5 @@ def test_two_inline_owners_do_not_authorize_an_ambiguous_measurement(monkeypatch
     _new_entry(monkeypatch)
     owner = next(row for row in runner._DECLARED_SIGNOFF_GATES if row[2] == OUTPUT)
     monkeypatch.setattr(runner, "_DECLARED_SIGNOFF_GATES", (owner, owner))
-    missing, _ = d3.audit_step("23")
+    missing, _, _ = d3.audit_step("23")
     assert missing and "no unique declared inline producer" in missing[0]
