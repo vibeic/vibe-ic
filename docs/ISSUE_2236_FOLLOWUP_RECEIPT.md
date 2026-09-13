@@ -1,6 +1,6 @@
 # Issue #2236 follow-up receipt
 
-**Base:** `12603a530833c42484eb93e5a3623ff5d9b01218`  
+**Base:** `12603a530833c42484eb93e5a3623ff5d9b01218`
 **Implementation head:** `c6576925a83279712507719dad4c8f2e70037d04`
 
 ## Delivered
