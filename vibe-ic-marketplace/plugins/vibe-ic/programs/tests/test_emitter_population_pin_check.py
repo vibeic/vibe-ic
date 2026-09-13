@@ -273,8 +273,16 @@ def test_no_counter_with_a_threshold_is_silently_missed():
                                     script))
             if sites < E.MIN_POPULATION:
                 continue
-            if not _re.search(r"\$" + _re.escape(name) + r"\s*(>=|==)\s*\d+",
-                              script):
+            # A LITERAL THRESHOLD, on the guard's own terms too. `counters_of`
+            # only pairs a counter with a denominator of MIN_POPULATION or
+            # more -- `$_n == 0` is an emptiness check ("nothing parsed out of
+            # a non-empty report"), not a population stated twice. This probe
+            # matched any digit, so the router-report reader's `$_n == 0`
+            # made it accuse the guard of not comparing a denominator the
+            # guard is right to ignore. Same floor here as there.
+            if not any(int(v) >= E.MIN_POPULATION for v in _re.findall(
+                    r"\$" + _re.escape(name) + r"\s*(?:>=|==)\s*(\d+)",
+                    script)):
                 continue
             considered.append((prog.name, name))
             rows, _refused = E.counters_of(tree)

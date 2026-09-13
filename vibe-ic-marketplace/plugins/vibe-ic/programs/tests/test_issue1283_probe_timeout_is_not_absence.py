@@ -56,6 +56,8 @@ WHAT THIS FILE PINS
 from __future__ import annotations
 
 import ast
+
+_TRY_NODES = (ast.Try,) + ((ast.TryStar,) if hasattr(ast, "TryStar") else ())
 import os
 import subprocess
 import sys
@@ -380,7 +382,10 @@ def _swallowing_probe_sites(directory: Path):
         except SyntaxError:                                # pragma: no cover
             continue
         for try_node in ast.walk(tree):
-            if not isinstance(try_node, (ast.Try, ast.TryStar)):
+            # `ast.TryStar` (`try/except*`) exists from Python 3.11; this
+            # fleet's hosts run 3.10, where naming it is an AttributeError
+            # that reads as four reds about probes. Walk it where it exists.
+            if not isinstance(try_node, _TRY_NODES):
                 continue
 
             # Only calls inside THIS try's protected body can be caught by its

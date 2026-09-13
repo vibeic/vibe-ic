@@ -126,9 +126,19 @@ def test_a_clean_count_beside_a_0_byte_report_is_not_a_pass(tmp_path):
     assert r.summary["violations"] == 0, \
         "the substantive antenna measurement is unchanged — this is a tier, " \
         "not a new violation"
-    # four accusations + the one refusal the tier appends, and the published
-    # count must agree with the published list it is printed beside
-    assert len(errors) == 5, [f.rule for f in errors]
+    # ONLY the refusal the tier appends. When this test was written the two
+    # empty files also drew ANTENNA_REPORT_TOO_SMALL and
+    # ANTENNA_NO_TOOL_SIGNATURE each -- four accusations of being a
+    # hand-typed stub -- and the count here was 5. 780bc7484 (v1.20.28)
+    # ruled that a 0-byte report is NOT a hand-typed stub (it is every
+    # clean route) and stopped accusing it; what remains is the one honest
+    # sentence about an empty file: it was never read. Both rulings hold at
+    # once, and the list is asserted rather than its length so a returning
+    # accusation, or a second refusal, is seen and not merely counted.
+    assert [f.rule for f in errors] == ["ANTENNA_REPORT_NOT_READ"], (
+        [f.rule for f in errors])
+    # the published count must agree with the published list it is printed
+    # beside
     assert r.summary["own_error_findings"] == len(errors)
     assert r.summary["unread_files"] == 2, r.summary
 

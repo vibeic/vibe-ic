@@ -163,6 +163,10 @@ def _scan_project(tmp_path: Path, with_chain: bool = True) -> Path:
     (meta / "scan_chain.json").write_text(json.dumps({
         "published": bool(with_chain),
         "chain_length_matches_flop_count": bool(with_chain),
+        # ce4fd747f: PnR routes the scan netlist only when the L20 contract
+        # authorized the DFT interface. This fixture describes a chain that
+        # WAS routed, so it carries the authorization the selector now reads.
+        "authorized_by_l20_contract": bool(with_chain),
         "dft_ports": ["sin", "shift", "sout"],
         "internal_chain_length": 65, "boundary_chain_length": 34,
         "area_instances_delta": 201, "area_instances_delta_pct": 70.0,

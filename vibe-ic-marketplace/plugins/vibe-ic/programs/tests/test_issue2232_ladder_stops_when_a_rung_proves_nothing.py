@@ -51,7 +51,13 @@ import lec_run  # noqa: E402
 # The rung ladder as this suite expects to find it. Spelled out on purpose: a
 # rung added or reordered must update these tests DELIBERATELY rather than let
 # them silently agree with whatever the code now emits.
-_RUNGS = ("equiv_simple_full", "equiv_induct_seq4",
+# 6dc565435 split the combined simple rung into `equiv_simple_short` and
+# `equiv_simple_full`, each its own process and checkpoint, so the ladder is
+# five rungs. The two simple rungs are EXEMPT from the no-progress stop (a
+# plateau there must still be allowed to reach induction); every expectation
+# below therefore gives them a share of what the combined rung used to prove
+# and lets the induction rungs decide the stop, exactly as before.
+_RUNGS = ("equiv_simple_short", "equiv_simple_full", "equiv_induct_seq4",
           "equiv_induct_seq16", "equiv_induct_seq64")
 
 
@@ -121,9 +127,11 @@ class _FakeYosys:
         if lines and lines[0].startswith("read_rtlil"):
             # A resumed leg STATES the position it read back, FIRST.
             self._status_block(out)
-        # ONE gain per RUNG, not per command line: rung `equiv_simple_full`
-        # is TWO yosys commands (`equiv_simple -short` then `equiv_simple`),
-        # and charging the gain twice would let a 60-point rung prove 120.
+        # ONE gain per RUNG, not per command line. Before 6dc565435 rung
+        # `equiv_simple_full` was TWO yosys commands (`equiv_simple -short`
+        # then `equiv_simple`) and charging the gain twice would have let a
+        # 60-point rung prove 120; the rule is kept so a rung that grows a
+        # second command line cannot double its gain silently.
         gain = min(self.gains.get(rung, self.default_gain),
                    self.total - self.proved)
         for ln in lines:
@@ -197,7 +205,8 @@ def _drive(monkeypatch, fake) -> tuple:
 # The measured shape: equiv_simple carries most of it, -seq 4 finishes the
 # work it can, and -seq 16 runs to completion having proved NOTHING NEW with a
 # residual still standing.
-_FLAT_AT_SEQ16 = {"equiv_simple_full": 60, "equiv_induct_seq4": 38,
+_FLAT_AT_SEQ16 = {"equiv_simple_short": 20, "equiv_simple_full": 40,
+                  "equiv_induct_seq4": 38,
                   "equiv_induct_seq16": 0, "equiv_induct_seq64": 0}
 
 # What a stop OWES its reader: which rung stopped it, and the two counts it was
@@ -216,12 +225,12 @@ def test_a_rung_that_proved_nothing_new_does_not_earn_the_next_one(monkeypatch):
     _rc, report = _drive(monkeypatch, fake)
     ladder = report["lec_ladder"]
     climbed = [lg["rung"] for lg in ladder["legs"]]
-    assert climbed == ["equiv_simple_full", "equiv_induct_seq4",
-                       "equiv_induct_seq16"], climbed
+    assert climbed == ["equiv_simple_short", "equiv_simple_full",
+                       "equiv_induct_seq4", "equiv_induct_seq16"], climbed
     assert "equiv_induct_seq64" not in fake.rungs_run, (
         "the deepest rung was launched after the rung below it proved 0 — "
         "that is #2232's 7.5 h, exactly")
-    assert len(fake.scripts) == 3, (
+    assert len(fake.scripts) == 4, (
         f"{len(fake.scripts)} yosys process(es) ran; the ladder was supposed "
         "to stop at the rung that proved nothing")
 
@@ -290,7 +299,8 @@ def test_a_ladder_that_is_still_proving_climbs_every_rung(monkeypatch):
     """THE CONTROL. Every rung proves something, so every rung is earned. A
     guard that truncated a progressing ladder would buy the wall clock back by
     throwing away proofs — it is the opposite defect and it is worse."""
-    fake = _FakeYosys(total=200, gains={"equiv_simple_full": 60,
+    fake = _FakeYosys(total=200, gains={"equiv_simple_short": 30,
+                                        "equiv_simple_full": 30,
                                         "equiv_induct_seq4": 30,
                                         "equiv_induct_seq16": 20,
                                         "equiv_induct_seq64": 10})
@@ -311,7 +321,8 @@ def test_a_fully_proven_ladder_is_not_a_flat_wall(monkeypatch):
     the residual is ZERO every deeper rung necessarily prints `Proved 0` — the
     guard's own signature — because there is nothing left to prove. That is a
     finished proof, not a wall, and the run must still reach PASS."""
-    fake = _FakeYosys(gains={"equiv_simple_full": 100, "equiv_induct_seq4": 0,
+    fake = _FakeYosys(gains={"equiv_simple_short": 40, "equiv_simple_full": 60,
+                             "equiv_induct_seq4": 0,
                              "equiv_induct_seq16": 0, "equiv_induct_seq64": 0})
     rc, report = _drive(monkeypatch, fake)
     ladder = report["lec_ladder"]
@@ -347,18 +358,19 @@ def test_a_fully_proven_ladder_is_not_a_flat_wall(monkeypatch):
 # file's landed sibling and by the `None not in (...)` guard at the call site.
 
 @pytest.mark.parametrize("flat_at, climbed", [
-    ("equiv_induct_seq4", ["equiv_simple_full", "equiv_induct_seq4"]),
-    ("equiv_induct_seq16", ["equiv_simple_full", "equiv_induct_seq4",
-                            "equiv_induct_seq16"]),
+    ("equiv_induct_seq4", ["equiv_simple_short", "equiv_simple_full",
+                           "equiv_induct_seq4"]),
+    ("equiv_induct_seq16", ["equiv_simple_short", "equiv_simple_full",
+                            "equiv_induct_seq4", "equiv_induct_seq16"]),
 ])
 def test_the_ladder_stops_at_the_FIRST_rung_that_proves_nothing(
         monkeypatch, flat_at, climbed):
     """WHICH rung stops it is decided by the evidence, not by a position in the
     list. Both arms read the same field — the rungs the ladder actually ran —
     so a tree without the guard answers with its own four."""
-    gains = {"equiv_simple_full": 60}
+    gains = {"equiv_simple_short": 20, "equiv_simple_full": 40}
     seen_flat = False
-    for rung in _RUNGS[1:]:
+    for rung in _RUNGS[2:]:
         if rung == flat_at:
             seen_flat = True
         gains[rung] = 0 if seen_flat else 10
@@ -381,7 +393,8 @@ def test_a_leg_KILLED_mid_rung_is_not_re_labelled_a_flat_wall(monkeypatch):
     trade a real, honest exhaustion for a capability-gap sentence. The
     checkpoint separates them: `write_rtlil` and its sentinel run only after
     the pass returns."""
-    fake = _FakeYosys(gains={"equiv_simple_full": 60, "equiv_induct_seq4": 20},
+    fake = _FakeYosys(gains={"equiv_simple_short": 20, "equiv_simple_full": 40,
+                             "equiv_induct_seq4": 20},
                       die_at="equiv_induct_seq16")
     _rc, report = _drive(monkeypatch, fake)
     ladder = report["lec_ladder"]

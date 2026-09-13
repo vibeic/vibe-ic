@@ -256,7 +256,12 @@ class TestLocalNetgenSetupGlobalisesPower:
         # NO signal net is globalised (globalisation can only merge power rails,
         # never hide a signal-net mismatch).
         body = self._emit(tmp_path)
-        globals_ = re.findall(r"^global\s+(\S+)\s*$", body, re.M)
+        # The emitter now spells the command `::netgen::global`, qualified so
+        # that inside a proc it reaches netgen's command and not Tcl's own
+        # `global` builtin. Either spelling is the same declaration; the
+        # question here is WHICH nets it names, so both are read.
+        globals_ = re.findall(r"^(?:::netgen::)?global\s+(\S+)\s*$", body,
+                              re.M)
         assert globals_, "expected some global power-net declarations"
         rail_re = re.compile(
             r"^(?:VPWR|VGND|VPB|VNB|vcc\w*|vss\w*|vdd\w*|vddio|vssio|VDD|VSS)$",

@@ -394,6 +394,16 @@ def test_docker_exec_forwards_the_abort_probe_to_the_supervisor(monkeypatch):
     monkeypatch.setattr(R._wd, "run_supervised", fake_supervised)
     monkeypatch.setattr(R._dwd, "new_job_pidfile", lambda: "/tmp/x.pid")
     monkeypatch.setattr(R._dwd, "cleanup_job_pidfile", lambda *a, **k: None)
+    # THE ATTACH CHECK IS STUBBED. Since 1b0cbca8a every path into a
+    # container goes through `_container_exec.docker_exec_argv`, which asks
+    # `_eda_pin.container_attach_refusal` whether `vibeic-eda` RUNS THE
+    # PINNED IMAGE before the argv is built. That is a question about the
+    # host this test happens to run on; this test is about the one-line
+    # pass-through of `abort_probe`. Unstubbed, it read the host's live
+    # container and went red (CONTAINER_IMAGE_MISMATCH) on any host whose
+    # `vibeic-eda` is not the pin -- a verdict about the host, not the link.
+    import _eda_pin
+    monkeypatch.setattr(_eda_pin, "container_attach_refusal", lambda c: "")
     probe = lambda: None                                    # noqa: E731
     R._docker_exec("vibeic-eda", "svrfdrc deck.rule a.gds a.rpt",
                    marker="a.gds", abort_probe=probe)

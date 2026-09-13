@@ -9,6 +9,7 @@ with a missing code_coverage.json must still be PENDING (no silent pass).
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import subprocess
 import sys
@@ -58,21 +59,55 @@ def _func_cov_100(project: Path) -> None:
         ]}))
 
 
+def _sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _reference_for(project: Path) -> Path:
+    return project.parent / f"{project.name}-reference"
+
+
 def _crosschecks(project: Path) -> None:
-    """Write a passing verdict for D1 + every analog A*/M* step so Pillar 2's
-    applicable set (analog-only) is all-PASS."""
+    """Write a passing, BOUND receipt for D1 + every analog A*/M* step so
+    Pillar 2's applicable set (analog-only) is all-PASS.
+
+    466980242 ruled that prose is not executable evidence: a step verdict is
+    read only from a `step_<id>.json` receipt whose subject and reference
+    artefacts and producer log are bound by digest, against a reference
+    project named on the command line. This fixture used to write
+    `step_<id>.md` with `Verdict: PASS`, which is exactly the hand-typed
+    PASS that ruling stopped accepting, so it now carries what a real
+    cross-check carries. The analog-only claim under test is untouched."""
+    ref = _reference_for(project)
+    (ref / "artifacts").mkdir(parents=True, exist_ok=True)
+    (ref / "artifacts" / "reference.bin").write_text("reference\n")
+    (project / "artifacts").mkdir(parents=True, exist_ok=True)
+    (project / "artifacts" / "subject.bin").write_text("subject\n")
+    (project / "reports").mkdir(parents=True, exist_ok=True)
+    (project / "reports" / "cross-check.log").write_text("comparison completed\n")
     cc = project / "cross_check" / "analog"
     cc.mkdir(parents=True, exist_ok=True)
     ids = ["D1"] + [f"A{i}" for i in range(1, 10)] + [f"M{i}" for i in range(1, 5)]
     for sid in ids:
-        (cc / f"step_{sid}.md").write_text(
-            f"# Step {sid}\nVerdict: PASS\n")
+        (cc / f"step_{sid}.json").write_text(json.dumps({
+            "schema": "vibeic.cross_check_receipt.v1", "step_id": sid,
+            "verdict": "PASS",
+            "subject": {"path": "artifacts/subject.bin",
+                        "sha256": _sha256(project / "artifacts" / "subject.bin")},
+            "reference": {"path": "artifacts/reference.bin",
+                          "sha256": _sha256(ref / "artifacts" / "reference.bin")},
+            "producer": {"program": "benchmark_verify_report.py", "exit_code": 0,
+                         "log": "reports/cross-check.log",
+                         "log_sha256": _sha256(project / "reports" / "cross-check.log")},
+        }))
 
 
 def _run(project: Path):
     cmd = [sys.executable, str(PROG), str(project)]
     if FLOW.is_file():
         cmd += ["--flow", str(FLOW)]
+    if _reference_for(project).is_dir():
+        cmd += ["--ref", str(_reference_for(project))]
     return subprocess.run(cmd, capture_output=True, text=True)
 
 
