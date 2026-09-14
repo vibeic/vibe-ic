@@ -151,6 +151,27 @@ def test_indexed_input_write_is_not_a_memory_read(tmp_path):
     assert out["total_findings"] == 0
 
 
+def test_indexed_packed_register_write_is_not_a_memory_read(tmp_path):
+    """A packed state vector is not an unpacked RAM.
+
+    This is the minimal form of a real false positive: the old lexical
+    matcher treated ``state[0]`` as ``mem[addr]`` and reported a fictitious
+    read-latency obligation.  A genuine unpacked ``reg [...] mem [...]`` is
+    covered by ``test_registered_read_without_doc_or_valid_flagged`` above;
+    this test guards only the missing storage-kind distinction.
+    """
+    src = """
+    module peripheral(input clk, input [7:0] addr, output reg gpio_out);
+        reg [31:0] state;
+        always @(posedge clk) gpio_out <= state[0];
+    endmodule
+    """
+    rc, out = _run(tmp_path, src)
+    assert rc == 0
+    assert out["verdict"] == "PASS"
+    assert out["total_findings"] == 0
+
+
 def test_registered_keyword_doc_passes(tmp_path):
     """Doc matches 'registered read'."""
     src = """

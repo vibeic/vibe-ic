@@ -127,6 +127,17 @@ REGISTERED_READ_RE = re.compile(
     r"\b([A-Za-z_][A-Za-z0-9_]*)\s*<=\s*([A-Za-z_][A-Za-z0-9_]*)\s*\[[^\]]+\]\s*;",
 )
 
+# A packed vector is indexed with the same ``name[index]`` syntax as an
+# unpacked Verilog memory.  Only the latter has a memory-read latency
+# contract.  For example, ``gpio_out <= shift_reg[0]`` is an ordinary
+# registered bit selection, not a RAM read, even though the older pattern
+# matched it.  Keep this deliberately declaration-driven: inferring memory
+# from a signal name (``mem``, ``ram``...) would be a design-specific rule.
+UNPACKED_STORAGE_RE = re.compile(
+    r"\b(?:reg|logic)\s+(?:signed\s+)?(?:\[[^\]]+\]\s+)?"
+    r"([A-Za-z_][A-Za-z0-9_]*)\s*\[[^\]]+\]\s*;"
+)
+
 # Combinational read form: `assign <DATA> = mem[addr];`
 COMB_READ_RE = re.compile(
     r"\bassign\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([A-Za-z_][A-Za-z0-9_]*)\s*\[[^\]]+\]\s*;",
@@ -188,6 +199,7 @@ def check_file(path: Path) -> list[Finding]:
         output_regs = {m.group(1) for m in OUTPUT_REG_RE.finditer(combined)}
         output_wires = {m.group(1) for m in OUTPUT_WIRE_RE.finditer(combined)}
         input_ports = {m.group(1) for m in INPUT_PORT_RE.finditer(combined)}
+        unpacked_storage = {m.group(1) for m in UNPACKED_STORAGE_RE.finditer(combined)}
         # output_wires includes output reg in some regex greediness; strip.
         output_wires -= output_regs
 
@@ -199,7 +211,8 @@ def check_file(path: Path) -> list[Finding]:
             # registered write from a bus into a peripheral, not a memory
             # read.  Only locally held arrays can carry the read-latency
             # contract this checker enforces.
-            if out_name in output_regs and arr_name not in input_ports:
+            if (out_name in output_regs and arr_name not in input_ports
+                    and arr_name in unpacked_storage):
                 reg_reads.append((out_name, arr_name, rm.start()))
 
         if not reg_reads:
@@ -232,7 +245,7 @@ def check_file(path: Path) -> list[Finding]:
                 # Both reg and comb — ambiguous; flag.
                 findings.append(Finding(
                     "WARN", "mixed_read_semantics",
-                    str(path), _line_of(src, off), mod_name,
+                    str(path), _line_of(src, mod_start + off), mod_name,
                     f"Port `{out_name}` has both `<= mem[...]` (registered) "
                     f"and `assign {out_name} = mem[...]` (combinational). "
                     f"Consumer cannot know the latency. Pick one.",
@@ -244,7 +257,7 @@ def check_file(path: Path) -> list[Finding]:
 
             findings.append(Finding(
                 "WARN", "registered_read_undocumented",
-                str(path), _line_of(src, off), mod_name,
+                str(path), _line_of(src, mod_start + off), mod_name,
                 f"Module `{mod_name}` has registered read `{out_name} "
                 f"<= {arr_name}[addr];` which means `{out_name}` lags "
                 f"`addr` by 1 cycle. Consumer may incorrectly read it as "
