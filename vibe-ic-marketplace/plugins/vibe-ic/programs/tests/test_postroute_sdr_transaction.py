@@ -76,25 +76,24 @@ def test_accepts_drv_candidate_when_clean_router_drc_is_preserved(tmp_path):
 
 
 @needs_tclsh
-def test_rolls_back_when_router_drc_does_not_strictly_improve(tmp_path):
+def test_rejects_when_router_drc_does_not_strictly_improve(tmp_path):
     run, out = _run(tmp_path, before=4, after=4)
-    assert run.returncode == 0, run.stderr
-    assert "SDR_ROLLBACK: reason=router_drc_not_strictly_improved" in run.stdout
-    assert "FINAL:BASE ABORT:1" in run.stdout
+    assert run.returncode != 0
+    assert "SDR_TRANSACTION_REJECTED_UNRESTORABLE: reason=router_drc_not_strictly_improved" in run.stdout
+    assert "ODB-0251" not in run.stderr
     tx = out / "sdr_transaction"
     assert (tx / "pre_repair.def").read_text() == "BASE"
-    assert (tx / "restored.def").read_text() == "BASE"
-    assert "ROLLED_BACK\trouter_drc_not_strictly_improved\t4\t4" in (
+    assert "REJECTED_UNRESTORABLE\trouter_drc_not_strictly_improved\t4\t4" in (
         tx / "receipt.tsv").read_text()
 
 
 @needs_tclsh
 def test_nonfatal_error_refuses_candidate_even_when_count_improves(tmp_path):
     run, out = _run(tmp_path, before=4, after=1, nonfatal=True)
-    assert run.returncode == 0, run.stderr
-    assert "SDR_ROLLBACK: reason=nonfatal_or_route_error" in run.stdout
-    assert "FINAL:BASE ABORT:1" in run.stdout
-    assert "ROLLED_BACK\tnonfatal_or_route_error\t4\t-1" in (
+    assert run.returncode != 0
+    assert "SDR_TRANSACTION_REJECTED_UNRESTORABLE: reason=nonfatal_or_route_error" in run.stdout
+    assert "ODB-0251" not in run.stderr
+    assert "REJECTED_UNRESTORABLE\tnonfatal_or_route_error\t4\t-1" in (
         out / "sdr_transaction" / "receipt.tsv").read_text()
 
 

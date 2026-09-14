@@ -24660,10 +24660,11 @@ def _postroute_sdr_transaction_begin_tcl(out_dir_c: str) -> str:
 
     ``repair_design`` changes instances and nets, so the wire-only transaction
     used by targeted DRC repair is deliberately insufficient here.  The
-    immutable DEF checkpoint is the recovery authority: a candidate may change
-    the live database only until routing, connectivity, and a fresh router DRC
-    report prove it is strictly better.  A missing/unreadable router report is
-    a refusal, never an invented zero.
+    immutable DEF checkpoint preserves the candidate evidence.  OpenROAD cannot
+    reload that DEF into an already-owned live ODB, so a rejected mutable
+    candidate must stop the session rather than pretend it restored the live
+    database.  A missing/unreadable router report is a refusal, never an
+    invented zero.
     """
     report = f"{out_dir_c}/{ROUTER_DRC_REPORT_NAME}"
     return (
@@ -24697,17 +24698,18 @@ def _postroute_sdr_transaction_begin_tcl(out_dir_c: str) -> str:
         "    puts $_fh \"$_status\\t$_reason\\t$_before\\t$_after\"\n"
         "    close $_fh\n"
         "  }\n"
-        "  proc _sdr_tx_rollback {_reason _before _after} {\n"
+        "  proc _sdr_tx_reject_unrestorable {_reason _before _after} {\n"
         "    global _sdr_tx_dir _sdr_tx_report\n"
         "    if {[file exists $_sdr_tx_report]} {\n"
         "      file copy -force $_sdr_tx_report $_sdr_tx_dir/rejected_router.drc.rpt\n"
         "    }\n"
         "    write_def $_sdr_tx_dir/rejected.def\n"
-        "    read_def $_sdr_tx_dir/pre_repair.def\n"
-        "    write_def $_sdr_tx_dir/restored.def\n"
-        "    _sdr_tx_receipt ROLLED_BACK $_reason $_before $_after\n"
+        "    # A second bare read_def after route triggers ODB-0251; db rebuild\n"
+        "    # alternatives destroy the live STA graph. Preserve evidence and stop.\n"
+        "    _sdr_tx_receipt REJECTED_UNRESTORABLE $_reason $_before $_after\n"
         "    set ::_vic_postroute_transaction_failed 1\n"
-        "    puts \"SDR_ROLLBACK: reason=$_reason before=$_before after=$_after\"\n"
+        "    puts \"SDR_TRANSACTION_REJECTED_UNRESTORABLE: reason=$_reason before=$_before after=$_after\"\n"
+        "    error \"SDR_TRANSACTION_REJECTED_UNRESTORABLE: $_reason\"\n"
         "  }\n"
         "  if {[catch {\n"
         "    if {[file exists $_sdr_tx_dir]} { file delete -force $_sdr_tx_dir }\n"
@@ -24727,20 +24729,21 @@ def _postroute_sdr_transaction_begin_tcl(out_dir_c: str) -> str:
 
 
 def _postroute_sdr_transaction_finish_tcl() -> str:
-    """Commit a safe SDR candidate or restore a regressing one.
+    """Commit a safe SDR candidate or stop before an unsafe pseudo-rollback.
 
     Router DRC is a *safety invariant* for this DRV-focused repair, not its
     objective.  A clean route therefore remains clean (0 -> 0) while
     ``repair_design`` removes slew/capacitance/fanout violations.  Treating
     that as a failed transaction used to invoke ``read_def`` in the already
     populated OpenROAD database, which is rejected as ODB-0251 and discarded a
-    valid DRV repair.  A non-clean non-improvement is still rolled back.
+    valid DRV repair.  A non-clean non-improvement is explicitly rejected;
+    no in-session DEF reload is attempted.
     """
     return (
         "  if {$_sdr_tx_ready && $_sdr_tx_mutated} {\n"
         "    puts \"SDR_TRANSACTION_DECISION: error=$_sdr_tx_error route_ok=$_sdr_tx_route_ok router_drc_before=$_sdr_tx_before\"\n"
         "    if {$_sdr_tx_error || !$_sdr_tx_route_ok} {\n"
-        "      _sdr_tx_rollback nonfatal_or_route_error $_sdr_tx_before -1\n"
+        "      _sdr_tx_reject_unrestorable nonfatal_or_route_error $_sdr_tx_before -1\n"
         # `check_connectivity` is not an OpenROAD command in the pinned image
         # (26Q3-2075): calling it merely raises "invalid command name" and then
         # tries an illegal in-session DEF reload.  The PnR transaction retains
@@ -24749,7 +24752,7 @@ def _postroute_sdr_transaction_finish_tcl() -> str:
         # consumer, which runs on the emitted routed DEF.
         "    } elseif {[catch {set _sdr_tx_after [_sdr_tx_count_router_drc $_sdr_tx_report]} _sdr_tx_count_e]} {\n"
         "      puts \"SDR_TRANSACTION_ROUTER_DRC_UNREADABLE: $_sdr_tx_count_e\"\n"
-        "      _sdr_tx_rollback unreadable_candidate_router_drc $_sdr_tx_before -1\n"
+        "      _sdr_tx_reject_unrestorable unreadable_candidate_router_drc $_sdr_tx_before -1\n"
         "    } else {\n"
         "      puts \"SDR_TRANSACTION_ROUTER_DRC: before=$_sdr_tx_before after=$_sdr_tx_after\"\n"
         "      if {$_sdr_tx_after == 0 && $_sdr_tx_before == 0} {\n"
@@ -24757,7 +24760,7 @@ def _postroute_sdr_transaction_finish_tcl() -> str:
         "        _sdr_tx_receipt ACCEPTED router_drc_preserved_clean $_sdr_tx_before $_sdr_tx_after\n"
         "        puts \"SDR_TRANSACTION_ACCEPTED: router_drc clean-preserved ($_sdr_tx_before -> $_sdr_tx_after)\"\n"
         "      } elseif {$_sdr_tx_after >= $_sdr_tx_before} {\n"
-        "        _sdr_tx_rollback router_drc_not_strictly_improved $_sdr_tx_before $_sdr_tx_after\n"
+        "        _sdr_tx_reject_unrestorable router_drc_not_strictly_improved $_sdr_tx_before $_sdr_tx_after\n"
         "      } else {\n"
         "        file copy -force $_sdr_tx_report $_sdr_tx_dir/accepted_router.drc.rpt\n"
         "        _sdr_tx_receipt ACCEPTED strict_router_drc_improvement $_sdr_tx_before $_sdr_tx_after\n"
