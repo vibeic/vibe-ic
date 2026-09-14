@@ -32,6 +32,8 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+
+from _a4_corner_launch_stub import stub_independent_corner_launch  # noqa: E402
 from pathlib import Path
 
 import pytest
@@ -162,8 +164,11 @@ def _fake_docker(meas="MEAS vout=1.800000e+00\n", decks=None, calls=None):
 def _sweep(monkeypatch, *, meas="MEAS vout=1.800000e+00\n", decks=None,
            calls=None):
     import analog_real_corner_sweep as S
-    monkeypatch.setattr(S, "_docker",
-                        _fake_docker(meas=meas, decks=decks, calls=calls))
+    fake = _fake_docker(meas=meas, decks=decks, calls=calls)
+    monkeypatch.setattr(S, "_docker", fake)
+    # #2238 runs each corner in an independent container through three
+    # host-side docker calls; keep this in-process sweep on the fake.
+    stub_independent_corner_launch(monkeypatch, S, fake)
     S._NGSPICE_CACHE.clear()
     S._CONTAINER_PATH_CACHE.clear()
     S._JSON_MEASURE_SUPPORT.clear()

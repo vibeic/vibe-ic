@@ -30,6 +30,7 @@ behaviour, and a deliberate break that must turn it red again.
        refuse to stage it. The log now carries what the deck loaded.
 """
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -166,8 +167,13 @@ def test_R12_the_corner_call_site_hands_the_deck_over():
     one, so the guard passed through the whole defect. Both sites are named
     here, by their own kwargs."""
     src = (_PROGRAMS / "analog_real_corner_sweep.py").read_text()
-    assert "deck_text=tb, run_to_completion=True" in src     # base run
-    assert "deck_text=deck, run_to_completion=True" in src   # PVT corner
+    # The kwargs are the pin, not the line they sit on: #2238 (0be153f26)
+    # added `corner_job=` to the PVT call and the formatter wrapped the line
+    # between `deck_text=deck,` and `run_to_completion=True`, which turned a
+    # substring match into a red about layout. Whitespace between the two
+    # kwargs is nothing this test measures.
+    assert re.search(r"deck_text=tb,\s*run_to_completion=True", src)     # base run
+    assert re.search(r"deck_text=deck,\s*run_to_completion=True", src)   # PVT corner
 
 
 # ── R12c: an attempted corner that produced nothing says why ──────────────

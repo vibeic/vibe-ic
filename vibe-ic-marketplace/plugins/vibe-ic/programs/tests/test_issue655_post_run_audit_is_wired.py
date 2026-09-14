@@ -36,12 +36,23 @@ if str(_PROGRAMS) not in sys.path:
 
 _spec = importlib.util.spec_from_file_location(
     "phase3_one_shot_runner", _PROGRAMS / "phase3_one_shot_runner.py")
-P = importlib.util.module_from_spec(_spec)
-sys.modules["phase3_one_shot_runner"] = P
-try:
-    _spec.loader.exec_module(P)
-except SystemExit:
-    pass
+# REUSE THE OBJECT EVERY OTHER MODULE ALREADY HOLDS. Registering a fresh
+# copy under the real name replaced `sys.modules["phase3_one_shot_runner"]`
+# for everything collected AFTER this file: a test that bound the runner
+# earlier and monkeypatches it was then patching an object nobody else
+# resolved any more. MEASURED: collecting this file after
+# test_d3_new_output_live_measurement turned six of its probes red ("never
+# measured by a valid producer execution") while both were green alone. The
+# load-by-path, SystemExit-tolerant fallback stays for a session in which
+# nothing has imported the runner yet.
+P = sys.modules.get("phase3_one_shot_runner")
+if P is None:
+    P = importlib.util.module_from_spec(_spec)
+    sys.modules["phase3_one_shot_runner"] = P
+    try:
+        _spec.loader.exec_module(P)
+    except SystemExit:
+        pass
 
 
 def test_the_checker_is_registered_as_a_post_run_audit():

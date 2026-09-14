@@ -40,12 +40,23 @@ for _p in (str(_PROGRAMS), str(_PROGRAMS / "tests")):
 
 _spec = importlib.util.spec_from_file_location(
     "phase3_one_shot_runner", _PROGRAMS / "phase3_one_shot_runner.py")
-R = importlib.util.module_from_spec(_spec)
-sys.modules["phase3_one_shot_runner"] = R
-try:
-    _spec.loader.exec_module(R)
-except SystemExit:
-    pass
+# REUSE THE OBJECT EVERY OTHER MODULE ALREADY HOLDS. Registering a fresh
+# copy under the real name replaced `sys.modules["phase3_one_shot_runner"]`
+# for everything collected AFTER this file: a test that bound the runner
+# earlier and monkeypatches it was then patching an object nobody else
+# resolved any more. MEASURED: collecting this file after
+# test_d3_new_output_live_measurement turned six of its probes red ("never
+# measured by a valid producer execution") while both were green alone. The
+# load-by-path, SystemExit-tolerant fallback stays for a session in which
+# nothing has imported the runner yet.
+R = sys.modules.get("phase3_one_shot_runner")
+if R is None:
+    R = importlib.util.module_from_spec(_spec)
+    sys.modules["phase3_one_shot_runner"] = R
+    try:
+        _spec.loader.exec_module(R)
+    except SystemExit:
+        pass
 
 _t = importlib.util.spec_from_file_location(
     "_pdnfix", _PROGRAMS / "tests/test_macro_pdn_grid.py")

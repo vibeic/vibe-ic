@@ -103,6 +103,14 @@ def _install_docker_shim(monkeypatch, ngspice_log):
         return _CP(0, "")
 
     monkeypatch.setattr(M, "_docker", fake_docker)
+
+    # #2238 runs each corner in an independent container through three
+
+    # host-side docker calls; keep this in-process sweep on the fake.
+
+    from _a4_corner_launch_stub import stub_independent_corner_launch
+
+    stub_independent_corner_launch(monkeypatch, M, M._docker)
     monkeypatch.setattr(M, "_resolve_ngspice", lambda c: "/usr/bin/ngspice")
     # Reset caches that may have been seeded by an earlier test.
     M._NGSPICE_CACHE.clear()

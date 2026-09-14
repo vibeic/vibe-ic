@@ -14,6 +14,8 @@ import json
 import os
 import re
 import subprocess
+
+import _docker_memory as _dmem  # noqa: E402 -- the ONE place a `docker run` gets its ceiling
 import time
 import uuid
 from contextlib import contextmanager
@@ -256,8 +258,17 @@ def docker_run_argv(*, image: str, reservation: str, project: Path,
                    token: str | None = None) -> list[str]:
     """The one canonical independent-corner invocation; args stay untouched."""
     parse_bytes(reservation)
+    # THE CEILING COMES FROM THE ONE HELPER, with the reservation as the
+    # explicit limit. #2235 made `_docker_memory.docker_memory_flags` the
+    # single place a `docker run` gets its memory flags (both `--memory`
+    # and `--memory-swap`, or neither -- `--memory` alone leaves the host's
+    # swap open, which is the half of the incident that froze the machine),
+    # and `test_no_docker_run_escapes_the_ceiling` holds every run site to
+    # it with no allowlist. This site wrote the same two flags by hand; the
+    # bytes were right and the door was wrong. `memory_limit` returns an
+    # explicit VIBEIC_DOCKER_MEMORY verbatim, so the argv is unchanged.
     argv = ["docker", "run", "--rm", "--init", "--label", "vibeic.corner.admission=1",
-            "--memory", reservation, "--memory-swap", reservation]
+            *_dmem.docker_memory_flags({"VIBEIC_DOCKER_MEMORY": reservation})]
     if token:
         argv += ["--label", f"vibeic.corner.token={token}"]
     if name:

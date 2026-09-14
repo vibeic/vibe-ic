@@ -216,6 +216,10 @@ def test_the_run_record_names_the_circuit_a4_measured(tmp_path, monkeypatch):
         return subprocess.CompletedProcess(cmd, 0, "", "")
 
     monkeypatch.setattr(S, "_docker", fake_docker)
+    # #2238 runs each corner in an independent container through three
+    # host-side docker calls; keep this in-process sweep on the fake.
+    from _a4_corner_launch_stub import stub_independent_corner_launch
+    stub_independent_corner_launch(monkeypatch, S, fake_docker)
     S._NGSPICE_CACHE.clear()
     S._CONTAINER_PATH_CACHE.clear()
     S._JSON_MEASURE_SUPPORT.clear()
