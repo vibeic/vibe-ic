@@ -34551,9 +34551,15 @@ if _ring_masters and _ring_ref_out:
     print("RING_REFERENCE_WRITTEN instances=%d" % _written)
 # Flatten so abutting geometry across cell-instance boundaries becomes
 # co-resident in one cell and merges (a hierarchical merge would not union
-# a cell pin against a top-level route).
-for tc in ly.top_cells():
-    tc.flatten(-1, True)
+# a cell pin against a top-level route). KEEP_HIERARCHY=1 is set only when
+# the deck in hand has been MEASURED to merge across the hierarchy already
+# (see _deck_merges_across_hierarchy); the per-layer merge below still runs
+# on the top cell's own shapes.
+_keep_hier = os.environ.get("KEEP_HIERARCHY") == "1"
+if not _keep_hier:
+    for tc in ly.top_cells():
+        tc.flatten(-1, True)
+print("GDS_LAYER_MERGE_HIERARCHY %s" % ("kept" if _keep_hier else "flattened"))
 merged_layers = 0
 for tc in ly.top_cells():
     for li in ly.layer_indexes():
@@ -34575,6 +34581,203 @@ for tc in ly.top_cells():
 ly.write(gds_out)
 print("GDS_LAYER_MERGE_DONE layers=%d" % merged_layers)
 '''
+
+
+
+# ── DOES THIS DECK NEED THE FLATTEN AT ALL?  (icspm5, measured 2026-09-18) ───
+# #601 flattens every KLayout stream-out before the per-layer merge, because a
+# deck that does NOT merge across a cell-instance boundary reads two abutting
+# same-layer polygons as a zero-spacing edge pair. That is a property of the
+# DECK AND THE TOOL, not a law, and it is measurable in under ten seconds.
+#
+# MEASURED on spm x gf180mcuD (v1.22.10, klayout 0.30.9, the pinned image),
+# with the PDK's own deck in its default deep mode: two 2x2 um Metal1 rects
+# abutting across a cell-instance boundary -> 0 violations; and two rects each
+# 0.2 um wide (BELOW the 0.23 um min width), abutting across the same
+# boundary, so ONLY a merge makes them legal -> M1.1 does not fire, 0
+# violations. The deck already merges across the hierarchy.
+#
+# What that flatten costs on a die, same DEF, same deck: GDS 1,136,500,018 B
+# flat vs 81,021,436 B hierarchical (14x), sign-off DRC 2554 s / 26 GB vs
+# 318 s / 2.9 GB (8x / 9x), plus 1.75 h of `magic lef write` reading the flat
+# stream in `digital_hardmacro_gen` and three 1.1 GB copies in the pnr dir.
+#
+# So the flatten is CONDITIONAL on the answer this probe measures, never on a
+# name: the probe builds its geometry from THIS PDK's own layer map and tech
+# LEF, runs THIS PDK's own deck twice, and compares. Anything unreadable --
+# no deck, no layer map, no min width, a probe that will not run -- returns
+# None and the flatten happens exactly as before. A deck that DOES need the
+# merge measures a violation on the hierarchical arm and keeps it.
+_MERGE_PROBE_PY = r'''
+import os
+import pya
+
+out_dir = os.environ["PROBE_DIR"]
+layer = int(os.environ["PROBE_LAYER"])
+dtype = int(os.environ["PROBE_DATATYPE"])
+w_dbu = int(os.environ["PROBE_WIDTH_DBU"])     # HALF the min width, per rect
+h_dbu = int(os.environ["PROBE_LENGTH_DBU"])
+
+ly = pya.Layout()
+ly.dbu = 0.001
+li = ly.layer(pya.LayerInfo(layer, dtype))
+cell = ly.create_cell("PROBE_CELL")
+cell.shapes(li).insert(pya.Box(0, 0, w_dbu, h_dbu))
+top = ly.create_cell("PROBE")
+top.insert(pya.CellInstArray(cell.cell_index(), pya.Trans(0, False, 0, 0)))
+top.insert(pya.CellInstArray(cell.cell_index(), pya.Trans(0, False, w_dbu, 0)))
+ly.write(os.path.join(out_dir, "probe_hier.gds"))
+top.flatten(-1, True)
+reg = pya.Region(top.shapes(li))
+reg.merge()
+top.shapes(li).clear()
+top.shapes(li).insert(reg)
+ly.write(os.path.join(out_dir, "probe_flat.gds"))
+print("MERGE_PROBE_WRITTEN %d/%d %d x %d dbu" % (layer, dtype, w_dbu, h_dbu))
+'''
+
+
+#: One answer per (deck, layer) in a process: the probe is a property of the
+#: technology, not of the design, and a run has one of each.
+_MERGE_PROBE_CACHE: Dict[Tuple[str, str], Dict[str, Any]] = {}
+
+
+def _probe_routing_layer(pdk: "PdkConfig", container: str
+                         ) -> Tuple[Optional[str], Optional[Tuple[int, int]],
+                                    Optional[float], str]:
+    """(LEF layer name, its GDS pair, its min width um, why-not).
+
+    All three come from THIS PDK's own files: the layer map the stream-out
+    already uses for name -> number, and the tech LEF for the width. No layer
+    number, no width and no PDK name is written here."""
+    name = f"{getattr(pdk, 'metal_prefix', '') or ''}1"
+    if not name.strip("1"):
+        return None, None, None, "this PDK declares no metal prefix"
+    mp = getattr(pdk, "lefdef_layermap", None)
+    text = _read_pdk_text(str(mp), container) if mp else ""
+    pair = None
+    if text:
+        for line in text.splitlines():
+            parts = line.split()
+            if len(parts) >= 4 and parts[0] == name and parts[-2].isdigit() \
+                    and parts[-1].isdigit():
+                pair = (int(parts[-2]), int(parts[-1]))
+                break
+    if pair is None:
+        return name, None, None, (
+            f"no GDS layer/datatype for {name!r} in the PDK's layer map "
+            f"({mp or 'none declared'})")
+    tlef = _read_pdk_text(str(getattr(pdk, "tech_lef", "")), container)
+    width = None
+    if tlef:
+        m = re.search(r"(?ims)^\s*LAYER\s+" + re.escape(name)
+                      + r"\b(.*?)^\s*END\s+" + re.escape(name), tlef)
+        if m:
+            w = re.search(r"(?im)^\s*WIDTH\s+([0-9.]+)\s*;", m.group(1))
+            if w:
+                try:
+                    width = float(w.group(1))
+                except ValueError:
+                    width = None
+    if not width or width <= 0:
+        return name, pair, None, (
+            f"the tech LEF states no WIDTH for layer {name!r}")
+    return name, pair, width, ""
+
+
+def _deck_merges_across_hierarchy(project: Path, pdk: "PdkConfig",
+                                  container: str) -> Dict[str, Any]:
+    """Does THIS deck already merge same-layer geometry across the hierarchy?
+
+    Returns a record whose `answer` is True (it merges -- the flatten buys
+    nothing), False (it does not -- the flatten is load-bearing) or None (not
+    measured, and then the caller flattens exactly as before)."""
+    deck = _signoff_drc_deck(getattr(pdk, "calibre_drc", None),
+                             getattr(pdk, "drc_deck", None))
+    rec: Dict[str, Any] = {"answer": None, "deck": deck, "reason": ""}
+    if not deck:
+        rec["reason"] = "this PDK runs no sign-off DRC deck"
+        return rec
+    if not str(deck).endswith((".drc", ".lydrc")):
+        rec["reason"] = f"the sign-off deck {deck} is not a KLayout DSL deck"
+        return rec
+    key = (str(getattr(pdk, "name", "")), str(deck))
+    if key in _MERGE_PROBE_CACHE:
+        return _MERGE_PROBE_CACHE[key]
+    name, pair, width, why = _probe_routing_layer(pdk, container)
+    rec.update({"layer": name, "gds_pair": list(pair) if pair else None,
+                "min_width_um": width})
+    if pair is None or not width:
+        rec["reason"] = why
+        _MERGE_PROBE_CACHE[key] = rec
+        return rec
+    if not _tool_in_path(container, "klayout"):
+        rec["reason"] = "klayout is not in the container PATH"
+        _MERGE_PROBE_CACHE[key] = rec
+        return rec
+    pdir = _pl.pnr_dir(project) / "merge_probe"
+    pdir.mkdir(parents=True, exist_ok=True)
+    script = pdir / "merge_probe.py"
+    script.write_text(_MERGE_PROBE_PY)
+    half = max(1, int(round(width * 1000 / 2.0)))   # each rect UNDER min width
+    length = max(half * 10, 1000)
+    pdir_c = _to_container_path(str(pdir), container)
+    cmd = (f"export QT_QPA_PLATFORM=offscreen && "
+           f"export PROBE_DIR={pdir_c} PROBE_LAYER={pair[0]} "
+           f"PROBE_DATATYPE={pair[1]} PROBE_WIDTH_DBU={half} "
+           f"PROBE_LENGTH_DBU={length} && "
+           f"klayout -zz -b -r {_to_container_path(str(script), container)}")
+    rc, out, err = _docker_exec(container, cmd,
+                                marker=_to_container_path(str(script), container))
+    if rc != 0 or not (pdir / "probe_hier.gds").is_file():
+        rec["reason"] = f"probe layout not written (rc={rc}): {(out + err)[-200:]}"
+        _MERGE_PROBE_CACHE[key] = rec
+        return rec
+    counts: Dict[str, Optional[int]] = {}
+    for arm in ("hier", "flat"):
+        gds = pdir / f"probe_{arm}.gds"
+        rdb = pdir / f"probe_{arm}.lyrdb"
+        cmd = (f"klayout -b -r {_to_container_path(str(deck), container)} "
+               f"-rd input={_to_container_path(str(gds), container)} "
+               f"-rd report={_to_container_path(str(rdb), container)} "
+               f"-rd top_cell=PROBE")
+        rc, out, err = _docker_exec(container, cmd, marker=str(gds))
+        try:
+            counts[arm] = (rdb.read_text(errors="replace").count("<item>")
+                           if rdb.is_file() else None)
+        except OSError:
+            counts[arm] = None
+        if counts[arm] is None:
+            rec["reason"] = (f"the {arm} arm produced no report (rc={rc}): "
+                             f"{(out + err)[-200:]}")
+            rec["violations"] = counts
+            _MERGE_PROBE_CACHE[key] = rec
+            return rec
+    rec["violations"] = counts
+    # STRICTLY THREE ANSWERS, and the middle one is not a guess. The two arms
+    # are the SAME geometry; the only difference is whether the tool was shown
+    # it across a cell boundary. Equal counts mean the boundary cost nothing —
+    # the deck merged it already. MORE on the hierarchical arm is the defect
+    # #601 was written for, and the flatten stays. FEWER is a third thing
+    # nobody has explained, so it is not classified as either.
+    if counts["hier"] == counts["flat"]:
+        rec["answer"] = True
+        _verdict = " — this deck already merges across the hierarchy"
+    elif counts["hier"] > counts["flat"]:
+        rec["answer"] = False
+        _verdict = " — this deck needs the flatten to see them as one shape"
+    else:
+        rec["answer"] = None
+        _verdict = (" — fewer violations WITHOUT the merge is not a result "
+                    "this probe can classify, so it decides nothing")
+    rec["reason"] = (
+        f"two abutting {width}um-min-width rects of {half/1000.0}um each, "
+        f"split across a cell-instance boundary on {name} "
+        f"({pair[0]}/{pair[1]}): the hierarchical arm reports "
+        f"{counts['hier']} violation(s), the flattened+merged arm "
+        f"{counts['flat']}" + _verdict)
+    _MERGE_PROBE_CACHE[key] = rec
+    return rec
 
 
 def _klayout_merge_layers(project: Path, top: str, pdk: PdkConfig,
@@ -34600,6 +34803,15 @@ def _klayout_merge_layers(project: Path, top: str, pdk: PdkConfig,
         ring_ref.unlink()           # never let a previous run's placement stand
     except OSError:
         pass
+    # THE FLATTEN IS CONDITIONAL ON THE DECK, and the deck is asked.
+    _merge_probe = _deck_merges_across_hierarchy(project, pdk, container)
+    _keep_hier = bool(_merge_probe.get("answer") is True)
+    try:
+        _probe_out = project / "reports" / "phase3" / "signoff_merge_probe.json"
+        _probe_out.parent.mkdir(parents=True, exist_ok=True)
+        _aa.write_text(_probe_out, json.dumps(_merge_probe, indent=2) + "\n")
+    except OSError:
+        pass
     ring_masters = _padring_record_masters(project)
     ring_env = (f"RING_MASTERS={','.join(sorted(ring_masters))} "
                 f"RING_REF_OUT={_to_container_path(str(ring_ref), container)} "
@@ -34608,6 +34820,7 @@ def _klayout_merge_layers(project: Path, top: str, pdk: PdkConfig,
         f"export QT_QPA_PLATFORM=offscreen && "
         f"export GDS_IN={_to_container_path(str(gds_path), container)} "
         f"GDS_OUT={_to_container_path(str(merged), container)} "
+        f"{'KEEP_HIERARCHY=1 ' if _keep_hier else ''}"
         f"{ring_env}&& "
         f"klayout -zz -b -r {_to_container_path(str(script), container)}"
     )
@@ -34617,7 +34830,10 @@ def _klayout_merge_layers(project: Path, top: str, pdk: PdkConfig,
             merged.replace(gds_path)
         except Exception as exc:
             return False, f"merge wrote {merged.name} but swap failed: {exc}"
-        return True, "klayout-native per-layer merge applied (#601)"
+        return True, ("klayout-native per-layer merge applied (#601); "
+                      + ("hierarchy KEPT — " if _keep_hier
+                         else "flattened — ")
+                      + str(_merge_probe.get("reason") or "deck not probed"))
     return False, f"layer-merge NONFATAL: rc={rc} {(out + err)[-300:]}"
 
 
