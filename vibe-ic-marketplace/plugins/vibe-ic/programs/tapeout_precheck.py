@@ -787,8 +787,12 @@ def evaluate(project: Path,
              allow_pull: bool = False,
              runner: Optional[Runner] = None,
              programs_dir: Optional[Path] = None,
-             timeout: Optional[float] = 7200.0) -> MergedReport:
-    """Run both arms — or say, in writing, why one of them did not run."""
+             timeout: Optional[float] = 7200.0,
+             pdk_container: str = "") -> MergedReport:
+    """Run both arms — or say, in writing, why one of them did not run.
+
+    `pdk_container` is forwarded to OUR arm only: `general_precheck` reads the
+    PDK volume, whose paths are container paths, from a host process."""
     run = runner or default_runner
     pdir = programs_dir or _HERE
     resolved_pdk, pdk_source = resolve_pdk(project, pdk)
@@ -852,6 +856,12 @@ def evaluate(project: Path,
     # no windows, and nothing is laundered into a clean density result.
     if resolved_pdk:
         cmd += ["--pdk", resolved_pdk]
+    # AND WHOSE FILESYSTEM THE PDK IS ON. Our ladder's technology rungs read
+    # the PDK volume, whose paths are CONTAINER paths, from a HOST process —
+    # see `general_precheck.evaluate`'s `pdk_container`. Forwarded only when
+    # the caller named one; absent, the reading is local exactly as before.
+    if pdk_container:
+        cmd += ["--pdk-container", pdk_container]
     if layout is not None:
         cmd += ["--gds", str(layout)]
     if declaration_path is not None:
@@ -1102,6 +1112,11 @@ def main(argv: Optional[List[str]] = None) -> int:
                    help="Seconds to allow each arm (default: %(default)s). A "
                         "real DRC ladder takes minutes to hours; a short "
                         "timeout reports zeros that look like success.")
+    p.add_argument("--pdk-container", default="", dest="pdk_container",
+                   help="Container whose filesystem holds the PDK volume, "
+                        "forwarded to our own arm (general_precheck). The "
+                        "registry's PDK paths are container paths and this "
+                        "program runs on the host.")
     p.add_argument("--json", type=Path, dest="out_json", default=None,
                    help="Write the merged verdict JSON here (default: "
                         "<project>/" + MERGED_ARTEFACT + ").")
@@ -1116,7 +1131,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                    declaration_path=args.declaration, slot=args.slot,
                    cob=args.cob, top=args.top, die_id=args.die_id,
                    image=args.image, allow_pull=args.pull,
-                   timeout=args.timeout)
+                   timeout=args.timeout, pdk_container=args.pdk_container)
     payload = rep.as_dict()
     out_json = args.out_json or (args.project / MERGED_ARTEFACT)
     out_json.parent.mkdir(parents=True, exist_ok=True)

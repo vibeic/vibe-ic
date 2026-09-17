@@ -74,6 +74,7 @@ from __future__ import annotations
 
 import os
 import re
+import shlex
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
@@ -93,6 +94,100 @@ _PAIR_RE = re.compile(r"(?:^|\s)(\d+)\s*/\s*(\d+)\s*$")
 LayerKey = Tuple[int, int]
 
 
+# ---------------------------------------------------------------------------
+# WHOSE FILESYSTEM IS THE PDK ON?  (icspm5, measured 2026-09-18)
+#
+# Every path this module has to look at is a CONTAINER path: the registry's
+# `container_path` and `$PDK_ROOT/<name>` both name `/foss/pdks/...`, which is
+# where the pinned image keeps its volumes. `general_precheck` runs on the
+# HOST, spawned by `tapeout_precheck`, and on this fleet the host has no
+# `/foss` at all. MEASURED on spm x gf180mcuD (v1.22.10, run5):
+#
+#     volume_resolution: "no volume for 'gf180mcuD' in the registry or under
+#                         $PDK_ROOT"
+#     volume_tried:      ["/foss/pdks/gf180mcuD", "/foss/pdks/gf180mcuD"]
+#
+# so `General.ForbiddenLayers` reported NOT_DETERMINED over 37 layer/datatype
+# pairs and `General.SealRing` could not reach the facility question either --
+# on every host-side run, for every PDK. The module's own six-volume
+# measurement in the docstring above was taken INSIDE the image, which is the
+# only place these calls ever worked.
+#
+# So the filesystem is a SEAM. `LocalReader` is what every caller had before
+# and stays the default; a caller that knows which container holds the PDK
+# passes `container_reader(name)` and the same three functions answer from
+# there. Nothing is defaulted when a reader cannot see a path: the answer is
+# still None with `tried` naming what was looked for.
+# ---------------------------------------------------------------------------
+
+
+class LocalReader:
+    """The process's own filesystem — the pre-seam behaviour, unchanged."""
+
+    name = "local"
+
+    def is_dir(self, path: str) -> bool:
+        return Path(path).is_dir()
+
+    def is_file(self, path: str) -> bool:
+        return Path(path).is_file()
+
+    def glob(self, root: str, pattern: str) -> List[str]:
+        return sorted(str(p) for p in Path(root).glob(pattern))
+
+    def read_text(self, path: str) -> Optional[str]:
+        try:
+            return Path(path).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return None
+
+
+class ContainerReader:
+    """A running container's filesystem, read with `docker exec`.
+
+    Every answer is the container's own `test`/`ls`/`cat`; an unreadable path
+    is None or False, never a default. The container name is the caller's --
+    this module never discovers or starts one."""
+
+    def __init__(self, container: str, runner=None) -> None:
+        self.container = str(container)
+        self.name = f"container:{self.container}"
+        self._run = runner or self._docker
+
+    @staticmethod
+    def _docker(container: str, argv: List[str]) -> Tuple[int, str]:
+        import subprocess
+        try:
+            cp = subprocess.run(["docker", "exec", container] + argv,
+                                capture_output=True, text=True, timeout=120)
+        except (OSError, subprocess.SubprocessError):
+            return 127, ""
+        return cp.returncode, cp.stdout
+
+    def is_dir(self, path: str) -> bool:
+        return self._run(self.container, ["test", "-d", path])[0] == 0
+
+    def is_file(self, path: str) -> bool:
+        return self._run(self.container, ["test", "-f", path])[0] == 0
+
+    def glob(self, root: str, pattern: str) -> List[str]:
+        rc, out = self._run(self.container,
+                            ["bash", "-lc",
+                             f"ls -1d {shlex.quote(root)}/{pattern} 2>/dev/null"])
+        if rc != 0:
+            return []
+        return sorted(line for line in out.splitlines() if line.strip())
+
+    def read_text(self, path: str) -> Optional[str]:
+        rc, out = self._run(self.container, ["cat", path])
+        return out if rc == 0 else None
+
+
+def container_reader(container: Optional[str]):
+    """`ContainerReader` for a named container, or the local one for None."""
+    return ContainerReader(container) if container else LocalReader()
+
+
 def _registry(path: Optional[Path] = None) -> List[Dict[str, Any]]:
     import json
     p = path or (_HERE / "pdk_registry.json")
@@ -106,13 +201,15 @@ def _registry(path: Optional[Path] = None) -> List[Dict[str, Any]]:
 
 def resolve_volume(pdk: Optional[str],
                    registry_path: Optional[Path] = None,
-                   environ: Optional[Dict[str, str]] = None
+                   environ: Optional[Dict[str, str]] = None,
+                   reader=None
                    ) -> Tuple[Optional[Path], str, List[str]]:
     """(volume, how it was found, every candidate tried).
 
     `volume` is a directory that EXISTS. An unresolvable name is not an error
     and not a default — it is None, and `tried` says where we looked.
     """
+    rd = reader or LocalReader()
     tried: List[str] = []
     if not pdk or not str(pdk).strip():
         return None, "no PDK was named", tried
@@ -123,8 +220,7 @@ def resolve_volume(pdk: Optional[str],
         if not isinstance(cp, str) or not cp:
             return None
         tried.append(cp)
-        p = Path(cp)
-        return p if p.is_dir() else None
+        return Path(cp) if rd.is_dir(cp) else None
 
     for e in entries:
         if e.get("name") == name:
@@ -155,7 +251,7 @@ def resolve_volume(pdk: Optional[str],
     if root:
         cand = Path(root) / name
         tried.append(str(cand))
-        if cand.is_dir():
+        if rd.is_dir(str(cand)):
             return cand, "$PDK_ROOT/<name>", tried
     return None, f"no volume for {name!r} in the registry or under $PDK_ROOT", tried
 
@@ -171,22 +267,22 @@ def parse_layer_table(text: str) -> Set[LayerKey]:
     return pairs
 
 
-def layer_table(volume: Optional[Path]
+def layer_table(volume: Optional[Path], reader=None
                 ) -> Tuple[Optional[Set[LayerKey]], Optional[str], List[str]]:
     """(the allowed pairs, the file that supplied them, every path tried).
 
     None means NOT DETERMINED, never "the empty set": a technology whose table
     could not be read has not declared every layer forbidden.
     """
+    rd = reader or LocalReader()
     tried: List[str] = []
     if volume is None:
         return None, None, tried
     for glob in _LYP_GLOBS:
-        for cand in sorted(volume.glob(glob)):
+        for cand in rd.glob(str(volume), glob):
             tried.append(str(cand))
-            try:
-                text = cand.read_text(encoding="utf-8", errors="replace")
-            except OSError:
+            text = rd.read_text(str(cand))
+            if text is None:
                 continue
             pairs = parse_layer_table(text)
             if pairs:
@@ -194,7 +290,7 @@ def layer_table(volume: Optional[Path]
     return None, None, tried
 
 
-def seal_ring_facility(volume: Optional[Path]
+def seal_ring_facility(volume: Optional[Path], reader=None
                        ) -> Tuple[Optional[bool], Optional[str], List[str]]:
     """(does this technology ship a seal-ring generator, the path, tried).
 
@@ -203,12 +299,13 @@ def seal_ring_facility(volume: Optional[Path]
     has no seal-ring facility and a seal ring is not applicable to it.
     """
     from die_finishing_gen import _PDK_SCRIPT_REL as REL
+    rd = reader or LocalReader()
     tried: List[str] = []
     if volume is None:
         return None, None, tried
     cand = volume / REL
     tried.append(str(cand))
-    if cand.is_file():
+    if rd.is_file(str(cand)):
         return True, str(cand), tried
     return False, None, tried
 

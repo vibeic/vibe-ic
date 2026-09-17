@@ -145,7 +145,16 @@ def test_the_gate_actually_accepts_the_flag():
 #: exactly that shape, and it is the defect this file exists to catch: what the
 #: gate is told must be the pdk the RUN BUILT, never the word the operator
 #: typed.
-_EXPECTED_CALL_ARGS = ("project", "pdk.name")
+#: THIRD MEMBER RECORDED with the commit that adds it (icspm5, 2026-09-18).
+#: `args.container` is the same shape of fact as `pdk.name` and is forwarded
+#: for the same reason: the precheck's technology rungs read the PDK volume,
+#: whose paths are CONTAINER paths, from a HOST process. MEASURED on spm x
+#: gf180mcuD (v1.22.10, run5): both attempts were `/foss/pdks/gf180mcuD`, the
+#: host has no `/foss`, and `General.ForbiddenLayers` reported NOT_DETERMINED
+#: over 37 layer/datatype pairs. The member SET is what this pin guards, so a
+#: new member is added here, in the same edit, with its reason — never by
+#: loosening the comparison to a count.
+_EXPECTED_CALL_ARGS = ("project", "pdk.name", "args.container")
 
 
 def _signoff_gate_call_args():
@@ -166,7 +175,7 @@ def test_the_call_site_passes_the_runs_pdk():
     The MEMBER SET first, then the count as `len()` of it. Comparing the whole
     tuple in one assertion is what makes a same-count substitution visible:
     a positional swap, a renamed source, or a second argument replaced by
-    another expression all leave `len(...) == 2` true and this assertion false.
+    another expression all leave the COUNT true and this assertion false.
     """
     got = _signoff_gate_call_args()
     assert got == _EXPECTED_CALL_ARGS, (
@@ -187,10 +196,11 @@ def test_a_same_count_substitution_is_caught():
     """
     real = _signoff_gate_call_args()
     assert real == _EXPECTED_CALL_ARGS, "the fixture must start from the truth"
-    for mutant in (("project", "args.pdk"),      # the REQUEST, not the build
-                   ("project", "pdk"),           # the object, not its name
-                   ("pdk.name", "project"),      # positions swapped
-                   ("run_dir", "pdk.name")):     # the first member replaced
+    for mutant in (("project", "args.pdk", "args.container"),   # the REQUEST
+                   ("project", "pdk", "args.container"),        # not its name
+                   ("pdk.name", "project", "args.container"),   # swapped
+                   ("run_dir", "pdk.name", "args.container"),   # first replaced
+                   ("project", "pdk.name", "args.image")):      # third replaced
         assert len(mutant) == len(_EXPECTED_CALL_ARGS), mutant
         assert mutant != _EXPECTED_CALL_ARGS, mutant
 

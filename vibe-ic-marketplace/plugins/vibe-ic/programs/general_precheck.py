@@ -1235,7 +1235,8 @@ def evaluate(project: Path,
              runner: Optional[Runner] = None,
              programs_dir: Optional[Path] = None,
              timeout: Optional[float] = 3600.0,
-             pdk: Optional[str] = None) -> PrecheckReport:
+             pdk: Optional[str] = None,
+             pdk_container: Optional[str] = None) -> PrecheckReport:
     """Run the general ladder and report what came back — including nothing.
 
     `pdk` is forwarded to the delegates in `_PDK_AWARE_DELEGATES`, which judge
@@ -1243,6 +1244,15 @@ def evaluate(project: Path,
     told which one. None is a legitimate state and stays honest: the delegate
     is invoked without `--pdk`, has no windows, and the step reports that it
     could not be judged — it is never credited as a pass.
+
+    `pdk_container` names the container whose filesystem holds the PDK volume.
+    The registry's paths are CONTAINER paths and this program runs on the HOST:
+    MEASURED on spm x gf180mcuD (v1.22.10, run5) the volume resolution tried
+    `/foss/pdks/gf180mcuD` twice, found no directory because the host has no
+    `/foss`, and `General.ForbiddenLayers` reported NOT_DETERMINED over 37
+    layer/datatype pairs — on every host-side run, for every PDK. With a
+    container named, the same three readings are taken through it. None keeps
+    the local filesystem and the previous behaviour exactly.
     """
     run = runner or default_runner
     pdir = programs_dir or _HERE
@@ -1324,9 +1334,13 @@ def evaluate(project: Path,
     # tier and the forbidden-layer complement — are statements about the
     # PROCESS, so the volume is resolved a single time and every attempt is
     # carried into the evidence of whichever rung needed it.
-    volume, volume_why, _volume_tried = _pdkauth.resolve_volume(pdk)
-    allowed, layer_authority, layer_tried = _pdkauth.layer_table(volume)
-    seal_facility, seal_path, seal_tried = _pdkauth.seal_ring_facility(volume)
+    _pdk_reader = _pdkauth.container_reader(pdk_container)
+    volume, volume_why, _volume_tried = _pdkauth.resolve_volume(
+        pdk, reader=_pdk_reader)
+    allowed, layer_authority, layer_tried = _pdkauth.layer_table(
+        volume, reader=_pdk_reader)
+    seal_facility, seal_path, seal_tried = _pdkauth.seal_ring_facility(
+        volume, reader=_pdk_reader)
     # What THIS FLOW declares it writes into a stream. Derived from the writer's
     # own constants, asked once, consumed by two rungs.
     flow_markers = _pdkauth.flow_marker_layers()
@@ -1335,6 +1349,7 @@ def evaluate(project: Path,
         "exact_pairs": sorted(f"{l}/{d}" for l, d in flow_markers[0]),
         "label_layer": flow_markers[1], "tried": list(flow_markers[3])}
     rep.technology = {"pdk": pdk, "volume": str(volume) if volume else None,
+                      "volume_read_through": _pdk_reader.name,
                       "volume_resolution": volume_why,
                       "volume_tried": _volume_tried,
                       "layer_table": layer_authority,
@@ -1444,6 +1459,12 @@ def main(argv: Optional[List[str]] = None) -> int:
                         "has no windows, every layer is UNCHECKED and the step "
                         "cannot reach a verdict — so an absent --pdk is "
                         "reported, never treated as a clean result.")
+    p.add_argument("--pdk-container", default=None, dest="pdk_container",
+                   help="Container whose filesystem holds the PDK volume. The "
+                        "registry's paths are container paths; without this "
+                        "the technology's layer table and seal-ring facility "
+                        "are unreadable from the host and both rungs report "
+                        "NOT_DETERMINED.")
     p.add_argument("--timeout", type=float, default=3600.0,
                    help="Seconds to allow each delegated checker "
                         "(default: %(default)s).")
@@ -1458,7 +1479,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 2
 
     rep = evaluate(project=args.project, layout=args.layout, pdk=args.pdk,
-                   declaration_path=args.declaration, timeout=args.timeout)
+                   declaration_path=args.declaration, timeout=args.timeout,
+                   pdk_container=args.pdk_container)
     payload = rep.as_dict()
     out_json = args.out_json or (args.project / PRECHECK_ARTEFACT)
     out_json.parent.mkdir(parents=True, exist_ok=True)

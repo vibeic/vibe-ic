@@ -46104,7 +46104,8 @@ _PDK_AWARE_SIGNOFF_GATES = frozenset({"tapeout_precheck"})
 
 
 def step_declared_signoff_gates(project: Path,
-                                pdk_name: str = "") -> List[StepResult]:
+                                pdk_name: str = "",
+                                container: str = "") -> List[StepResult]:
     """Every flow-declared step-23/25 sign-off gate, one StepResult each.
 
     `pdk_name` is the run's OWN `PdkConfig.name` — the distribution the flow was
@@ -46169,6 +46170,14 @@ def step_declared_signoff_gates(project: Path,
                       f"{_exc}")
         if pdk_name and name in _PDK_AWARE_SIGNOFF_GATES:
             extra_argv = tuple(extra_argv) + ("--pdk", pdk_name)
+        # AND WHOSE FILESYSTEM THE PDK IS ON. The precheck's technology rungs
+        # read the PDK volume at its CONTAINER path from a HOST process:
+        # MEASURED on spm x gf180mcuD (v1.22.10, run5) both attempts were
+        # `/foss/pdks/gf180mcuD`, the host has no `/foss`, and
+        # `General.ForbiddenLayers` reported NOT_DETERMINED over 37 pairs.
+        # Forwarded to the same named set, for the same reason `--pdk` is.
+        if container and name in _PDK_AWARE_SIGNOFF_GATES:
+            extra_argv = tuple(extra_argv) + ("--pdk-container", container)
         out.append(_run_declared_signoff_gate(
             project, name, program, out_rel, extra_argv))
     return _reconcile_sta_verdict(out)
@@ -60964,7 +60973,7 @@ def main() -> int:
     # what emits `phase3/stage3/sta/*.rpt` and `reports/phase3/em.rpt`, and
     # BEFORE the derived-artefact generators build the hand-off pack and
     # tape-out checklist on top of a sign-off nobody checked.
-    plan.extend(step_declared_signoff_gates(project, pdk.name))
+    plan.extend(step_declared_signoff_gates(project, pdk.name, args.container))
 
     # ORDERING (measured on `spm`, image 0.3.46, plugin v1.17.42): the
     # sign-off gates below WRITE three of the reports the sign-off metrics
