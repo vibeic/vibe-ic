@@ -39408,6 +39408,55 @@ def _declared_forbidden_layers(project: Path) -> Tuple[Optional[List[str]], str]
                     "different facts and only one of them can be checked")
 
 
+def _declared_answer_is_the_core_this_die_wraps(
+        project: Path, key: str, declared: Any, derived: Any
+        ) -> Tuple[bool, str]:
+    """May this derivation supersede the declared answer? Only for `top_cell`,
+    only on a DIE, and only when THIS flow's own wrapper record proves the
+    declared name is the CORE it wrapped.
+
+    MEASURED on spm x gf180mcuD, DIE route (v1.22.10): the design's answers
+    file says `top_cell = spm` -- L8's RTL module, and NOT owner-attested --
+    while the flow generated the physical wrapper `chip_top` around it, routed
+    it, streamed it and named the DEF `DESIGN chip_top`. The declaration kept
+    `spm`, so `general_precheck`'s `KLayout.CheckTopLevel` compared the streamed
+    top against the CORE's name and refused: "the top-level cell is 'chip_top';
+    the declaration names 'spm'. This layout is not this design." Both names
+    are right about different artefacts; the rung asks about the LAYOUT.
+
+    The supersede is refused unless every link holds: the key is `top_cell`,
+    the delivery is a DIE, `io_pad_chip_top_gen` recorded verdict WROTE with
+    `core_module` == the declared answer and `chip_top_module` == the derived
+    one. Anything else -- a declaration that already names the physical top, a
+    hardmacro, an unreadable or disagreeing record -- keeps the old rule, under
+    which the declared answer always wins."""
+    if key != "top_cell" or not isinstance(declared, str) or not isinstance(derived, str):
+        return False, ""
+    if declared == derived:
+        return False, ""
+    _here = str(Path(__file__).resolve().parent)
+    if _here not in sys.path:
+        sys.path.insert(0, _here)
+    import _tapeout_declaration as _td3                        # noqa: PLC0415
+    if _effective_deliverable(project, None) != _td3.DELIVERABLE_DIE:
+        return False, ""
+    rec_path = project / "reports" / "phase3" / "io_pad_chip_top.json"
+    try:
+        wrapper = json.loads(rec_path.read_text(errors="replace"))
+    except (OSError, ValueError):
+        return False, ""
+    if (not isinstance(wrapper, dict) or wrapper.get("verdict") != "WROTE"
+            or wrapper.get("core_module") != declared
+            or wrapper.get("chip_top_module") != derived):
+        return False, ""
+    return True, (
+        f"the declaration's {declared!r} is the CORE module this delivery "
+        f"wraps: {rec_path.name} records verdict=WROTE, core_module="
+        f"{declared!r}, chip_top_module={derived!r}, and this is a DIE, whose "
+        f"layout is topped by the wrapper. The layout's top cell is published; "
+        f"the core's name is unchanged everywhere it is the right answer")
+
+
 def publish_tapeout_declarations(project: Path, pdk: "PdkConfig",
                                  container: str, def_file: Path,
                                  def_top: str) -> Dict[str, Any]:
@@ -39595,11 +39644,16 @@ def publish_tapeout_declarations(project: Path, pdk: "PdkConfig",
                 for key, info in derived.items():
                     already = _td.answer(doc, key)
                     if _td.is_answered(already):
-                        rec["already_answered"][key] = (
-                            f"the declaration already answers {key}="
-                            f"{already!r}, and that answer outranks this "
-                            f"derivation")
-                        continue
+                        _super, _why = _declared_answer_is_the_core_this_die_wraps(
+                            project, key, already, info["value"])
+                        if not _super:
+                            rec["already_answered"][key] = (
+                                f"the declaration already answers {key}="
+                                f"{already!r}, and that answer outranks this "
+                                f"derivation")
+                            continue
+                        rec["superseded"] = dict(rec.get("superseded") or {},
+                                                 **{key: _why})
                     merge[key] = info["value"]
                 if merge:
                     doc, ignored = _td.merge_answers(doc, merge)
