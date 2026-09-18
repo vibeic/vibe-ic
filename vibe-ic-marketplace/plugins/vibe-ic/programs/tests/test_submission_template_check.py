@@ -1127,3 +1127,119 @@ def test_a_design_with_an_operator_template_must_still_supply_its_slot(tmp_path)
     assert _drive_step_0_5ic(proj) == 0
     rc1, rc2 = _step_0_5ic_verdicts(proj)
     assert (rc1, rc2) == (0, 0)
+
+# SPM1220: the real fetch adapter -> ingest -> checker contract; only the
+# external image extraction is replaced with neutral declared operator data.
+def _operator_slot(tmp_path, monkeypatch, ring=26, width=1000, height=2000):
+    from types import SimpleNamespace
+    import submission_template_fetch as FETCH
+    root = tmp_path / 'operator'
+    root.mkdir()
+    raw = {'constants': {'SEAL_RING_SIZE': ring},
+           'slots': {'neutral': {'width':width,'height':height,'div_x':1,'div_y':1}},
+           'pad_masks': {}, 'layers': {}}
+    monkeypatch.setattr(FETCH, '_in_image', lambda *args: (0,'VIBEIC_TEMPLATE='+json.dumps(raw),' '))
+    slots, refusals, _ = FETCH._adapt_wafer_space(tmp_path, 'fixture-image',
+        SimpleNamespace(entrypoint=('python',),shuttle_id='neutral-operator'),root)
+    assert slots == ['neutral'] and not refusals
+    path = root / 'neutral.json'
+    mapping = json.loads(path.read_text())
+    return root,path,mapping
+
+
+def test_operator_die_and_ring_are_not_design_core(tmp_path,monkeypatch):
+    root,path,mapping=_operator_slot(tmp_path,monkeypatch)
+    record=ST.slot_record(path,mapping,root)
+    assert CHK.check_slot_geometry(record)==[]
+    assert 'CORE_AREA' not in mapping and record['core_area'] is None
+    assert json.loads(path.read_text())==mapping
+
+
+def test_operator_fetch_ingest_consumed_without_core_fabrication(tmp_path,monkeypatch):
+    root,path,mapping=_operator_slot(tmp_path,monkeypatch)
+    project=tmp_path/'design';project.mkdir()
+    _ingest(project,'--template',str(root),'--slot','neutral')
+    rc,check,doc=_check(project)
+    # Pad metadata is a separate refusal in the exact adapter output.
+    # Repairing slot geometry must neither hide it nor fabricate a pad list.
+    assert rc==1 and _rules(check)=={'PAD_LIST_UNREAD'},check
+    assert doc['ingest']['slots'][0]['core_area'] is None
+    assert json.loads(path.read_text())==mapping
+
+
+def test_operator_geometry_does_not_select_purchased_slot(tmp_path,monkeypatch):
+    root,_,_=_operator_slot(tmp_path,monkeypatch)
+    project=tmp_path/'design';project.mkdir()
+    _ingest(project,'--template',str(root))
+    rc,check,doc=_check(project)
+    assert rc==1 and 'SLOT_NOT_DECLARED' in _rules(check)
+    assert doc['ingest']['declared_slot'] is None
+    assert 'SLOT_GEOMETRY_INCOMPLETE' not in _rules(check)
+
+
+@pytest.mark.parametrize('case', ['missing-ring','invalid-ring','negative-ring','nan-ring',
+    'infinite-ring','ring-collapses-width','ring-exceeds-height','degenerate-die',
+    'missing-die','explicit-core-outside','explicit-core-wrong-ring'])
+def test_operator_geometry_refusals_remain(tmp_path,monkeypatch,case):
+    root,path,mapping=_operator_slot(tmp_path,monkeypatch)
+    if case=='missing-ring':mapping.pop('SEAL_RING_WIDTH')
+    if case=='invalid-ring':mapping['SEAL_RING_WIDTH']='unknown'
+    if case=='negative-ring':mapping['SEAL_RING_WIDTH']=-1
+    if case=='nan-ring':mapping['SEAL_RING_WIDTH']='NaN'
+    if case=='infinite-ring':mapping['SEAL_RING_WIDTH']='Infinity'
+    if case=='ring-collapses-width':mapping['SEAL_RING_WIDTH']=500
+    if case=='ring-exceeds-height':mapping['SEAL_RING_WIDTH']=1100
+    if case=='degenerate-die':mapping['DIE_AREA']='0 0 0 2000'
+    if case=='missing-die':mapping.pop('DIE_AREA')
+    if case=='explicit-core-outside':mapping['CORE_AREA']=[-1,26,974,1974]
+    if case=='explicit-core-wrong-ring':mapping['CORE_AREA']=[26,26,974,1973]
+    refusals=CHK.check_slot_geometry(ST.slot_record(path,mapping,root))
+    assert refusals,case
+    if case=='explicit-core-outside':assert refusals[0]['rule']=='CORE_NOT_INSIDE_DIE'
+    if case=='explicit-core-wrong-ring':assert refusals[0]['rule']=='RING_DISAGREES'
+
+
+def test_operator_same_name_different_ring_is_collision(tmp_path,monkeypatch):
+    root,path,mapping=_operator_slot(tmp_path,monkeypatch)
+    other=dict(mapping,SEAL_RING_WIDTH=30)
+    (root/'other.json').write_text(json.dumps(other))
+    project=tmp_path/'design';project.mkdir()
+    _ingest(project,'--template',str(root),'--slot','neutral')
+    rc,check,_=_check(project)
+    assert rc==1 and 'SLOT_NAME_COLLISION' in _rules(check),check
+
+
+def test_operator_zero_ring_has_nonempty_usable_area(tmp_path,monkeypatch):
+    root,path,mapping=_operator_slot(tmp_path,monkeypatch,ring=0)
+    assert CHK.check_slot_geometry(ST.slot_record(path,mapping,root))==[]
+
+
+@pytest.mark.parametrize('case',['nan-die','infinite-die','invalid-explicit-core'])
+def test_operator_malformed_explicit_geometry_refused(tmp_path,monkeypatch,case):
+    root,path,mapping=_operator_slot(tmp_path,monkeypatch)
+    if case=='nan-die':mapping['DIE_AREA']='0 0 NaN 2000'
+    if case=='infinite-die':mapping['DIE_AREA']='0 0 Infinity 2000'
+    if case=='invalid-explicit-core':mapping['CORE_AREA']='not a rectangle'
+    assert CHK.check_slot_geometry(ST.slot_record(path,mapping,root))
+
+
+def test_operator_emitted_ring_change_refused(tmp_path,monkeypatch):
+    root,_,_=_operator_slot(tmp_path,monkeypatch)
+    project=tmp_path/'design';project.mkdir()
+    _ingest(project,'--template',str(root),'--slot','neutral')
+    output=next((project/ST.SLOTS_DIR_REL).glob('*.yaml'))
+    record=json.loads(output.read_text());record['ring']['value']='30';record['ring']['raw']=30
+    output.write_text(json.dumps(record))
+    rc,check,_=_check(project)
+    assert rc==1 and 'SLOT_FILE_DISAGREES_WITH_RECORD' in _rules(check),check
+
+
+def test_operator_duplicate_missing_ring_is_refused_not_exception(tmp_path,monkeypatch):
+    root,_,mapping=_operator_slot(tmp_path,monkeypatch)
+    missing=dict(mapping);missing.pop('SEAL_RING_WIDTH')
+    (root/'other.json').write_text(json.dumps(missing))
+    project=tmp_path/'design';project.mkdir()
+    _ingest(project,'--template',str(root),'--slot','neutral')
+    rc,check,_=_check(project)
+    assert rc==1 and 'SLOT_GEOMETRY_INCOMPLETE' in _rules(check),check
+    assert 'SLOT_NAME_COLLISION' in _rules(check),check

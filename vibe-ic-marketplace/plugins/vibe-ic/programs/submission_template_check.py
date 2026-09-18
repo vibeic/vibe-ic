@@ -174,7 +174,8 @@ def _rect(field: Optional[dict]) -> Optional[List[Decimal]]:
     if not field or not field.get("rect"):
         return None
     try:
-        return [Decimal(str(c)) for c in field["rect"]]
+        rect = [Decimal(str(c)) for c in field["rect"]]
+        return rect if len(rect) == 4 and all(c.is_finite() for c in rect) else None
     except Exception:                                        # noqa: BLE001
         return None
 
@@ -196,12 +197,33 @@ def check_slot_geometry(slot: dict) -> List[Dict[str, Any]]:
             slot=name, source_file=src))
         return out
     if core_f is None:
-        out.append(_refusal(
-            "SLOT_GEOMETRY_INCOMPLETE",
-            f"slot {name!r} ({src}) pins {ST.DIE_AREA_KEY} and no "
-            f"{ST.CORE_AREA_KEY}, so its die cannot be checked against its own "
-            f"core. An unverifiable slot is not a verified one.",
-            slot=name, source_file=src))
+        # An operator's slot boundary and seal ring define its usable inside
+        # rectangle, not the design's placement core. Do not manufacture a
+        # CORE_AREA or choose a slot; only verify this declared envelope.
+        die = _rect(die_f)
+        if die is None or min(ST.rect_wh(die)) <= 0:
+            return [_refusal(
+                "SLOT_GEOMETRY_DEGENERATE",
+                f"slot {name!r} ({src}) has no finite positive die rectangle",
+                slot=name, source_file=src)]
+        ring = slot.get("ring")
+        width = ST._dec((ring or {}).get("value"))
+        if ring is None:
+            return [_refusal(
+                "SLOT_GEOMETRY_INCOMPLETE",
+                f"slot {name!r} ({src}) declares neither {ST.CORE_AREA_KEY} "
+                "nor a ring width defining its operator usable boundary",
+                slot=name, source_file=src)]
+        if width is None or not width.is_finite() or width < 0:
+            return [_refusal(
+                "SLOT_GEOMETRY_DEGENERATE",
+                f"slot {name!r} ({src}) has an invalid ring width {ring.get('raw')!r}",
+                slot=name, source_file=src)]
+        if min(ST.rect_wh(die)) <= 2 * width:
+            return [_refusal(
+                "SLOT_GEOMETRY_DEGENERATE",
+                f"slot {name!r} ({src}) ring consumes its operator usable area",
+                slot=name, source_file=src)]
         return out
 
     die, core = _rect(die_f), _rect(core_f)
@@ -239,8 +261,13 @@ def check_slot_geometry(slot: dict) -> List[Dict[str, Any]]:
         return out
 
     ring = slot.get("ring")
-    if ring and ring.get("value") is not None:
-        want = Decimal(str(ring["value"]))
+    if ring is not None:
+        want = ST._dec(ring.get("value"))
+        if want is None or not want.is_finite() or want < 0:
+            return [_refusal(
+                "SLOT_GEOMETRY_DEGENERATE",
+                f"slot {name!r} ({src}) has an invalid declared ring width",
+                slot=name, source_file=src)]
         if not (left == bottom == right == top == want):
             out.append(_refusal(
                 "RING_DISAGREES",
@@ -394,7 +421,11 @@ def catalogue_selects_ip(project: Path) -> Tuple[bool, str]:
 
 def _geometry_key(slot: dict) -> tuple:
     die, core = slot.get("die_area") or {}, slot.get("core_area") or {}
-    return (tuple(die.get("rect") or ()), tuple(core.get("rect") or ()))
+    ring = slot.get("ring") or {}
+    # Without a design core the operator envelope depends on the ring too.
+    # Bind it in BOTH duplicate-name and emitted-file consistency checks.
+    return (tuple(die.get("rect") or ()), tuple(core.get("rect") or ()),
+            (bool(ring), str(ring.get("key") or ""), str(ring.get("value") or "")))
 
 
 # --------------------------------------------------------------------------- #
