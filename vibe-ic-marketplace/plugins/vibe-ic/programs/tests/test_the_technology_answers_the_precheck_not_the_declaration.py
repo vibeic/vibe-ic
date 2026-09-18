@@ -441,3 +441,111 @@ def test_THE_MUTATION_dropping_the_derived_declaration_re_reddens_our_markers(
     info = _step(rep, "General.FlowMarkerLayers")
     assert info.verdict == GP.NOT_DETERMINED, info.evidence
     assert "could not be derived" in info.evidence
+
+
+@pytest.fixture
+def remote_technology(tmp_path, monkeypatch):
+    """Execute the real filesystem probe in a separate filesystem namespace.
+
+    Only docker transport is replaced; the probe's Python and XML parser run.
+    The host and the selected EDA container deliberately disagree at one path.
+    """
+    import _container_exec as cex
+
+    host = tmp_path / "host"
+    remote = tmp_path / "container"
+    host.mkdir()
+    remote.mkdir()
+    monkeypatch.setenv("EDA_CONTAINER", "selected-run")
+    monkeypatch.setenv("PDK_ROOT", str(host))
+    monkeypatch.setattr(cex, "no_container_route", lambda: False)
+    calls = []
+
+    def transport(container, *args, **kwargs):
+        assert container == "selected-run"
+        calls.append(args)
+        return [sys.executable if a == "python3" else
+                str(a).replace(str(host), str(remote)) for a in args]
+
+    monkeypatch.setattr(cex, "docker_exec_argv", transport)
+    return host, remote, calls
+
+
+@pytest.mark.parametrize("unmapped", [False, True])
+def test_selected_container_decides_the_layer_verdict(
+        tmp_path, remote_technology, unmapped):
+    host, remote, calls = remote_technology
+    _technology(remote, "transporttech", pairs=[MAPPED], sealring=True)
+    # A conflicting host table must not decide the selected toolchain's rules.
+    _technology(host, "transporttech", pairs=[UNMAPPED], sealring=False)
+    proj = _project(tmp_path / "project",
+                    lambda p: _die(p, layers=(UNMAPPED if unmapped else MAPPED,)),
+                    {"deliverable": "DIE", "top_cell": "chip_top"})
+    rep = GP.evaluate(proj, runner=_NEVER_RAN, pdk="transporttech")
+    ev = _step(rep, "General.ForbiddenLayers")
+    assert ev.verdict == (GP.FAIL if unmapped else GP.PASS), ev.evidence
+    assert rep.technology["seal_ring_facility"] is True
+    assert calls
+
+
+def test_container_only_volume_can_supply_the_table(tmp_path, remote_technology):
+    host, remote, calls = remote_technology
+    _technology(remote, "transporttech", pairs=[MAPPED], sealring=False)
+    proj = _project(tmp_path / "project", _die,
+                    {"deliverable": "DIE", "top_cell": "chip_top"})
+    rep = GP.evaluate(proj, runner=_NEVER_RAN, pdk="transporttech")
+    ev = _step(rep, "General.ForbiddenLayers")
+    assert ev.verdict == GP.PASS, ev.evidence
+    assert rep.technology["seal_ring_facility"] is False
+    assert calls
+
+
+def test_unreachable_container_does_not_borrow_a_host_table(
+        tmp_path, remote_technology, monkeypatch):
+    import _container_exec as cex
+    host, _, _ = remote_technology
+    _technology(host, "transporttech", pairs=[MAPPED], sealring=False)
+    monkeypatch.setattr(cex, "docker_exec_argv",
+                        lambda *a, **k: [sys.executable, "-c", "raise SystemExit(7)"])
+    proj = _project(tmp_path / "project", _die,
+                    {"deliverable": "DIE", "top_cell": "chip_top"})
+    rep = GP.evaluate(proj, runner=_NEVER_RAN, pdk="transporttech")
+    ev = _step(rep, "General.ForbiddenLayers")
+    assert ev.verdict == GP.NOT_DETERMINED, ev.evidence
+    assert rep.technology["seal_ring_facility"] is None
+
+
+@pytest.mark.parametrize("operation", ["glob", "read", "is_file"])
+def test_a_failed_remote_read_stays_unknown(
+        tmp_path, remote_technology, monkeypatch, operation):
+    import _container_exec as cex
+    host, remote, _ = remote_technology
+    _technology(remote, "transporttech", pairs=[MAPPED], sealring=True)
+    transport = cex.docker_exec_argv
+
+    def fail_read(container, *args, **kwargs):
+        if args[-2] == operation:
+            return [sys.executable, "-c", "raise SystemExit(9)"]
+        return transport(container, *args, **kwargs)
+
+    monkeypatch.setattr(cex, "docker_exec_argv", fail_read)
+    volume, _, _ = AUTH.resolve_volume("transporttech")
+    assert volume is not None
+    if operation == "is_file":
+        result, _, tried = AUTH.seal_ring_facility(volume)
+    else:
+        result, _, tried = AUTH.layer_table(volume)
+    assert result is None
+    assert any("rc=9" in p for p in tried)
+
+
+def test_an_in_image_invocation_reads_locally_even_with_a_container_name(
+        tmp_path, monkeypatch):
+    import _container_exec as cex
+    _technology(tmp_path, "localtech", pairs=[MAPPED], sealring=True)
+    monkeypatch.setenv("PDK_ROOT", str(tmp_path))
+    monkeypatch.setenv("EDA_CONTAINER", "no-nested-docker")
+    monkeypatch.setattr(cex, "no_container_route", lambda: True)
+    volume, _, _ = AUTH.resolve_volume("localtech")
+    assert AUTH.layer_table(volume)[0] == {MAPPED}
+    assert AUTH.seal_ring_facility(volume)[0] is True
