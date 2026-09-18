@@ -198,9 +198,48 @@ def _is_tap_tokened(master: str) -> bool:
     return bool(_p._WELLTAP_TOKEN_RE.search(master.lower()))
 
 
-def _is_std_cell(master: str) -> bool:
+def _recorded_noncore_masters(def_file: Path) -> set[str]:
+    """Reopen this run's declared IO LEFs; never infer class from pad names.
+
+    Unreadable metadata grants no exclusions. Conflicting declarations (even
+    within one LEF) cannot remove a master from the conservative core screen.
+    """
+    from _pad_ring import parse_lef_macro_classes
+
+    dp = def_file.absolute()
+    if len(dp.parents) < 4 or dp.parents[2].name != "phase3":
+        return set()
+    project = dp.parents[3]
+    try:
+        record = json.loads((project / "reports/phase3/io_pad_chip_top.json").read_text())
+        if not isinstance(record, dict) or record.get("verdict") != "WROTE":
+            return set()
+        paths = record.get("io_library_lefs")
+        if not isinstance(paths, list) or not paths:
+            return set()
+        classes: Dict[str, set[str]] = {}
+        for path in paths:
+            if not isinstance(path, str) or not path:
+                return set()
+            lef = Path(path)
+            if not lef.is_absolute():
+                lef = project / lef
+            # Parse declarations separately: a later duplicate must not silently
+            # overwrite an earlier CORE class with PAD/ENDCAP.
+            for body in re.split(r"(?m)(?=^\s*MACRO\s+\S+)", lef.read_text()):
+                for master, cls in parse_lef_macro_classes(body).items():
+                    classes.setdefault(master, set()).add(cls)
+        return {master for master, values in classes.items()
+                if len(values) == 1 and next(iter(values)).partition(" ")[0] in {"PAD", "ENDCAP"}}
+    except (OSError, ValueError, UnicodeError):
+        return set()
+
+
+def _is_std_cell(master: str, noncore_masters: Optional[set[str]] = None) -> bool:
     """Transistor-bearing std cell (same exclusion rule as the shipped presence
     check: drop tap / fill / decap / diode / endcap / boundary / antenna)."""
+    if noncore_masters and master in noncore_masters:
+        return False
     ml = master.lower()
     if _p._WELLTAP_TOKEN_RE.search(ml) or _is_rated_tap(master):
         return False
@@ -364,7 +403,10 @@ def _latchup_tap_spacing_check(def_file: Path,
                        def_rect_um=list(def_die) if def_die else None)
     die = tuple(_die.rect) if _die.rect else None
     geom = _parse_placed_geometry(text)
-    std = [(x / units, y / units) for _i, m, x, y in geom if _is_std_cell(m)]
+    noncore = _recorded_noncore_masters(def_file)
+    std = [(x / units, y / units) for _i, m, x, y in geom
+           if _is_std_cell(m, noncore)]
+    base["lef_noncore_masters"] = sorted(noncore & {m for _i, m, _x, _y in geom})
     taps = [(x / units, y / units) for _i, m, x, y in geom
             if _is_rated_tap(m, rated_tap_masters)]
     unknown_taps = sorted({m for _i, m, _x, _y in geom

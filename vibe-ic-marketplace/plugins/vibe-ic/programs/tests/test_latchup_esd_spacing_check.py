@@ -464,3 +464,70 @@ def test_run_geometry_layer_threads_tapless_flag(tmp_path):
     d = _write(tmp_path, "api.def", _def(_std_rows(364)))
     assert L.run_geometry_layer(str(d), tapless_pdk=False)["any_conclusive_gap"] is True
     assert L.run_geometry_layer(str(d), tapless_pdk=True)["any_conclusive_gap"] is False
+
+
+@pytest.mark.parametrize('case', [
+    'pad', 'endcap', 'core', 'missing_record', 'bad_record',
+    'missing_lef', 'conflict', 'duplicate_conflict', 'zero_taps',
+])
+def test_recorded_lef_class_geometry_consumer(tmp_path, case):
+    """Only declared non-core classes remove a distant placement from the screen."""
+    import json
+    project = tmp_path / 'project'
+    route = project / 'phase3/stage3/pnr'
+    route.mkdir(parents=True)
+    reports = project / 'reports/phase3'
+    reports.mkdir(parents=True)
+    cls = {'pad': 'PAD', 'endcap': 'ENDCAP'}.get(case, 'CORE')
+    if case in ('conflict', 'duplicate_conflict', 'missing_lef'):
+        cls = 'PAD'
+    lef = project / 'cells.lef'
+    body = f'MACRO edge_cell\n CLASS {cls} ;\nEND edge_cell\n'
+    if case == 'duplicate_conflict':
+        body += 'MACRO edge_cell\n CLASS CORE ;\nEND edge_cell\n'
+    lef.write_text(body)
+    paths = [str(lef)]
+    if case == 'conflict':
+        other = project / 'other.lef'
+        other.write_text('MACRO edge_cell\n CLASS CORE ;\nEND edge_cell\n')
+        paths.append(str(other))
+    if case == 'missing_lef':
+        paths.append(str(project / 'absent.lef'))
+    record = reports / 'io_pad_chip_top.json'
+    if case != 'missing_record':
+        record.write_text('{broken' if case == 'bad_record' else
+                          json.dumps({'verdict': 'WROTE', 'io_library_lefs': paths}))
+    rows = _std_rows(60, step=100, master='logic_cell')
+    rows += ['- edge edge_cell + PLACED ( 100000 100000 ) N ;']
+    if case != 'zero_taps':
+        rows += _tap_rows(1)
+    routed = route / 'design.def'
+    routed.write_text(_def(rows))
+    result = L.run_geometry_layer(str(routed))
+    spacing = result['spacing']
+    if case in ('pad', 'endcap'):
+        assert spacing['status'] == 'SPACING_OK_NECESSARY_NOT_SUFFICIENT'
+        assert spacing['n_std'] == 60
+        assert not result['any_conclusive_gap']
+    else:
+        assert spacing['status'] == 'WELLTAP_SPACING_GAP'
+        assert spacing['reason'] == ('ZERO_TAPS' if case == 'zero_taps' else 'UNTAPPED_REGION')
+        assert spacing['n_std'] == 61
+        assert result['any_conclusive_gap']
+
+
+def test_empty_lef_class_keeps_untapped_logic_failure(tmp_path):
+    route = tmp_path / 'phase3/stage3/pnr'
+    route.mkdir(parents=True)
+    reports = tmp_path / 'reports/phase3'
+    reports.mkdir(parents=True)
+    lef = tmp_path / 'empty.lef'
+    lef.write_text('MACRO logic_cell\n CLASS   ;\nEND logic_cell\n')
+    (reports / 'io_pad_chip_top.json').write_text(json.dumps({
+        'verdict': 'WROTE', 'io_library_lefs': [str(lef)]}))
+    routed = route / 'design.def'
+    routed.write_text(_def(_std_rows(60, master='logic_cell')))
+    result = L.run_geometry_layer(str(routed))
+    assert result['spacing']['status'] == 'WELLTAP_SPACING_GAP'
+    assert result['spacing']['reason'] == 'ZERO_TAPS'
+    assert result['any_conclusive_gap']
