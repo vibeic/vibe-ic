@@ -39643,23 +39643,68 @@ def _effective_deliverable(project: Path,
 
     The declaration's OWN answer first — that is the party who has to accept
     the result, and `publish_tapeout_declarations` already refuses to overwrite
-    it — then the derivation. Returns None when neither has said, which is the
-    only safe answer: an UNDECLARED delivery owes every question, exactly as
-    `_tapeout_declaration.applicable` says.
+    it — then the derivation ONLY when there is no declaration. An unreadable
+    or unattested declaration must not regain its refused value through an
+    old router marker. Standalone Phase 3 also checks this before any PDK/EDA
+    work in `_delivery_admission_refusal`.
     """
     _here = str(Path(__file__).resolve().parent)
     if _here not in sys.path:
         sys.path.insert(0, _here)
     try:
         import _tapeout_declaration as _td                      # noqa: PLC0415
-        doc, err = _td.load(project / _td.DECLARATION_REL)
+        path = project / _td.DECLARATION_REL
+        if not path.exists():
+            return derived
+        doc, err = _td.load(path)
         if err is None and isinstance(doc, dict):
             got = _td.answer(doc, "deliverable")
             if _td.is_answered(got):
-                return str(got)
+                return str(got).strip().upper()
     except Exception:                                          # noqa: BLE001
         pass
-    return derived
+    return None
+
+
+def _delivery_admission_refusal(project: Path) -> Optional[str]:
+    """BLOCKING: a resumed backend needs a current, owner-declared route.
+
+    A copied project can carry new design answers alongside old declaration
+    and router files. Do not regenerate them here or infer a replacement:
+    step 0.5ic owns that transition. Compare the delivery answer and its owner
+    provenance, not unrelated physical fields filled by later producers.
+    An attested declaration may stand alone when no raw answers file exists.
+    """
+    import _submission_template as _st                         # noqa: PLC0415
+    import _tapeout_declaration as _td                          # noqa: PLC0415
+
+    def read_delivery(rel: str) -> Tuple[Dict[str, Any], str]:
+        doc, err = _td.load(project / rel)
+        if (err or not isinstance(doc, dict)
+                or not isinstance(doc.get("answers"), dict)):
+            raise ValueError(f"{rel}: {err or 'invalid answer mapping'}")
+        answer = str(_td.answer(doc, "deliverable")).strip().upper()
+        if answer not in _td.DELIVERABLES:
+            raise ValueError(f"{rel}: no owner-attested DIE or HARDMACRO answer")
+        return doc, answer
+
+    try:
+        declaration, delivery = read_delivery(_td.DECLARATION_REL)
+        if (project / _st.DESIGN_ANSWERS_REL).exists():
+            raw, current = read_delivery(_st.DESIGN_ANSWERS_REL)
+            if (current != delivery or
+                    _td.attestation_of(raw, "deliverable") !=
+                    _td.attestation_of(declaration, "deliverable")):
+                raise ValueError(
+                    f"{_td.DECLARATION_REL}: delivery or owner provenance "
+                    f"does not match {_st.DESIGN_ANSWERS_REL}")
+        routed, basis = _declared_deliverable(project)
+        if routed != delivery:
+            raise ValueError(f"declaration says {delivery}, but router says "
+                             f"{routed!r}: {basis}")
+    except (OSError, ValueError, TypeError, AttributeError) as exc:
+        return f"{exc}; refresh step 0.5ic before starting Phase 3"
+    return None
 
 
 def _declared_seal_ring_required(project: Path, pdk: "PdkConfig",
@@ -60875,6 +60920,21 @@ def main() -> int:
     _lock = _runner_lock.acquire_or_reenter(project, "phase3_one_shot_runner")
     if _lock is None:
         return 3
+
+    _delivery_refusal = _delivery_admission_refusal(project)
+    if _delivery_refusal:
+        _delivery_record = {
+            "program": "phase3_one_shot_runner",
+            "verdict": "REFUSED",
+            "reason": "DELIVERY_AUTHORITY_STALE_OR_UNDECLARED",
+            "detail": _delivery_refusal,
+        }
+        print(f"REFUSED: {_delivery_record['reason']}: {_delivery_refusal}",
+              file=sys.stderr)
+        _delivery_report = _pl.reports_phase3_dir(project) / "delivery_admission.json"
+        _delivery_report.parent.mkdir(parents=True, exist_ok=True)
+        _delivery_report.write_text(json.dumps(_delivery_record, indent=2) + "\n")
+        return 2
 
     _canonical = _canonical_admission.admit_span(
         project, "phase3", PROGRAMS_DIR, args.container,
