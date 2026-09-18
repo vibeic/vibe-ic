@@ -188,6 +188,7 @@ if _os.path.dirname(_os.path.abspath(__file__)) not in _sys.path:
 
 
 import argparse
+import hashlib
 import json
 import re
 import sys
@@ -313,6 +314,20 @@ def _input_plan(project: Path) -> _routed_progress.FiniteInputPlan:
         lambda relative: relative.endswith(".lef"),
         _default_macro_lef_population(project),
         population="macro OBS LEF population")
+    planned_paths = {item.path.resolve() for item in lefs}
+    for path in _inventory_declared_paths(project):
+        if not path.is_file() or path.resolve() in planned_paths:
+            continue
+        st = path.stat()
+        payload = path.read_bytes()
+        h = hashlib.new(index.object_format)
+        h.update(f"blob {len(payload)}\0".encode("ascii"))
+        h.update(payload)
+        lefs.append(_routed_progress.TrackedFile(
+            path.parent, path, path.name, str(path), "100644", h.hexdigest(),
+            index.object_format, st.st_dev, st.st_ino, st.st_size,
+            st.st_mtime_ns, st.st_ctime_ns))
+        planned_paths.add(path.resolve())
     reads = [
         *_routed_progress.planned_reads("routed-def", routed),
         *_routed_progress.planned_reads("macro-lef", lefs),
@@ -1046,6 +1061,56 @@ def discover_macro_lefs(proj: Path) -> List[Path]:
     return out
 
 
+def _inventory_declared_paths(proj: Path) -> List[Path]:
+    record = proj / "reports" / "phase3" / "physical_view_inventory.json"
+    try:
+        doc = json.loads(record.read_text(errors="replace"))
+    except (OSError, ValueError):
+        return []
+    if not isinstance(doc, dict):
+        return []
+    raw = doc.get("read_lef_paths")
+    if not isinstance(raw, list) or not all(isinstance(x, str) for x in raw):
+        return []
+    return [Path(x) for x in raw]
+
+
+def _recorded_physical_view_lefs(proj: Path):
+    """Read the producer's exact PnR LEF list, refusing incomplete records."""
+    record = proj / "reports" / "phase3" / "physical_view_inventory.json"
+    if not record.is_file():
+        return None
+    try:
+        doc = json.loads(record.read_text(errors="replace"))
+    except (OSError, ValueError) as exc:
+        return [], f"physical view inventory is unreadable: {exc}"
+    if not isinstance(doc, dict):
+        return [], "physical view inventory is not a JSON object"
+    if (doc.get("schema") != "vibe-ic/physical-view-inventory/1"
+            or doc.get("verdict") != "RECORDED"
+            or doc.get("scope") != "pnr_read_lef_inputs"):
+        return [], "physical view inventory has an unrecognised schema or scope"
+    raw = doc.get("read_lef_paths")
+    if not isinstance(raw, list) or not raw or not all(isinstance(x, str) and x
+                                                        for x in raw):
+        return [], "physical view inventory has no complete read_lef path list"
+    paths = [Path(x) for x in raw]
+    missing = [p for p in paths if not p.is_file()]
+    unreadable = []
+    for p in paths:
+        if p in missing:
+            continue
+        try:
+            _read_input_text(p)
+        except OSError as exc:
+            unreadable.append(f"{p} ({exc})")
+    if missing or unreadable:
+        details = [*(str(p) for p in missing), *unreadable]
+        return [], (f"physical view inventory is incomplete: {len(details)} "
+                    f"LEF view(s) missing or unreadable ({', '.join(details[:6])})")
+    return paths, ""
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("project_dir", type=Path)
@@ -1120,7 +1185,18 @@ def _main_parsed(a) -> int:
                 a.json_out, "macro_obs_geometry_intersect",
                 _reason_taxonomy.BLOCKED_BY_UPSTREAM, reason)
     if not lefs:
-        lefs = discover_macro_lefs(proj)
+        recorded = _recorded_physical_view_lefs(proj)
+        if recorded is not None:
+            lefs, inventory_issue = recorded
+            if inventory_issue:
+                reason = f"{inventory_issue}. NOT a pass."
+                print(f"[CANNOT DETERMINE] macro_obs_geometry_intersect: {reason}",
+                      file=sys.stderr)
+                return _typed_refusal(
+                    a.json_out, "macro_obs_geometry_intersect",
+                    _reason_taxonomy.BLOCKED_BY_UPSTREAM, reason)
+        else:
+            lefs = discover_macro_lefs(proj)
     texts = []
     labels = []
     for p in lefs:
