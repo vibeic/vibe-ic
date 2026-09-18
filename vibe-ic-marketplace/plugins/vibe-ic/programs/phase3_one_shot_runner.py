@@ -50127,6 +50127,10 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                 _dyn_lef_args += ["--tech-lef", str(pdk.tech_lef)]
             if getattr(pdk, "cell_lef", None):
                 _dyn_lef_args += ["--cell-lef", str(pdk.cell_lef)]
+            # The routed DEF also instantiates hardmacro/IO masters. The pad
+            # producer adds its resolved physical views to this same inventory.
+            for _dyn_macro_lef in (getattr(pdk, "macro_lefs", None) or []):
+                _dyn_lef_args += ["--macro-lef", str(_dyn_macro_lef)]
             if getattr(pdk, "liberty", None):
                 _dyn_lef_args += ["--liberty", str(pdk.liberty)]
             # CZT-11 — a transient PSM solve is exactly the shape a wall

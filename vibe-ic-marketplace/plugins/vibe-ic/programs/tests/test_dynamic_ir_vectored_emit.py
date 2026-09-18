@@ -216,6 +216,10 @@ def _emit_on_log(tmp_path, log_text, static_json=None):
     def_file = tmp_path / "routed.def"
     def_file.write_text("SPECIALNETS 1 ;\n    - VDD ( * VDD ) + USE POWER\nEND SPECIALNETS\n")
     out_json = tmp_path / "reports" / "dynamic_ir.json"
+    # Real readable physical inputs; only the native tool is stubbed.
+    (tmp_path / "t.lef").write_text("VERSION 5.8 ;\n")
+    (tmp_path / "c.lef").write_text("MACRO CORE_BUF\nEND CORE_BUF\n")
+    (tmp_path / "l.lib").write_text("library(neutral) {}\n")
     real_run = E._dw.run_docker_supervised
     E._dw.run_docker_supervised = _fake_supervised
     try:
@@ -438,3 +442,137 @@ def test_discover_vcd_scope_still_works():
     vcd = ("$scope module tb $end\n$scope module u_dut $end\n"
            "$upscope $end\n$upscope $end\n")
     assert E.discover_vcd_scope(vcd) == "tb/u_dut"
+
+# Declared physical views must reach the dynamic IR consumer before read_def.
+# Synthetic inputs only; no OpenROAD, PDK, benchmark oracle or native solver.
+def _physical_views_fixture(tmp_path, monkeypatch, fault=None):
+    from types import SimpleNamespace
+    tech = tmp_path / 'tech.lef'
+    tech.write_text('VERSION 5.8 ;\nLAYER M1\n TYPE ROUTING ;\nEND M1\n')
+    cell = tmp_path / 'cells.lef'
+    cell.write_text('MACRO CORE_BUF\n CLASS CORE ;\nEND CORE_BUF\n')
+    block = tmp_path / 'block.lef'
+    block.write_text('MACRO BLOCK\n CLASS BLOCK ;\nEND BLOCK\n')
+    pad = tmp_path / 'io.lef'
+    pad.write_text('MACRO IO_PAD\n CLASS PAD ;\nEND IO_PAD\n')
+    lib = tmp_path / 'cells.lib'
+    lib.write_text('library(neutral) {}\n')
+    d = tmp_path / 'neutral.def'
+    d.write_text('DESIGN neutral ;\nCOMPONENTS 3 ;\n'
+                 '- u0 CORE_BUF + PLACED ( 0 0 ) N ;\n'
+                 '- u1 BLOCK + PLACED ( 10 0 ) N ;\n'
+                 '- u2 IO_PAD + PLACED ( 20 0 ) N ;\n'
+                 'END COMPONENTS\nSPECIALNETS 1 ;\n'
+                 '- VDD ( * VDD ) + USE POWER ;\nEND SPECIALNETS\nEND DESIGN\n')
+    macros = [block, pad]
+    if fault == 'omitted':
+        macros = [block]
+    elif fault == 'property_coverage':
+        macros = [block]
+        tech.write_text(tech.read_text() + 'PROPERTYDEFINITIONS\n MACRO IO_PAD STRING ;\nEND PROPERTYDEFINITIONS\n')
+    elif fault == 'property_valid':
+        for view in [tech, cell]:
+            view.write_text('PROPERTYDEFINITIONS\n MACRO note STRING ;\nEND PROPERTYDEFINITIONS\n' + view.read_text())
+    elif fault == 'missing':
+        pad.unlink()
+    elif fault == 'ambiguous':
+        other = tmp_path / 'conflicting.lef'
+        other.write_text('MACRO IO_PAD\n CLASS CORE ;\nEND IO_PAD\n')
+        macros.append(other)
+    elif fault == 'lexical':
+        pad.write_text('# MACRO decoy\nVERSION 5.8 ; MACRO IO_PAD CLASS PAD ; END IO_PAD\n')
+        d.write_text(d.read_text().replace('- u2 IO_PAD', '- u2\n IO_PAD'))
+    elif fault == 'duplicate_path':
+        macros += [block, cell, tech]
+    launched = []
+    def pdk_text(path, container=None):
+        if fault == 'unreadable' and Path(path) == pad:
+            return ''
+        try:
+            return Path(path).read_text()
+        except OSError:
+            return ''
+    monkeypatch.setattr(E, '_pdk_text', pdk_text)
+    def tool(*args, **kwargs):
+        launched.append((tmp_path / 'reports/phase3/dynamic_ir_transient.tcl').read_text())
+        return 0, _TRANSIENT_LOG, ''
+    monkeypatch.setattr(E._dw, 'run_docker_supervised', tool)
+    return SimpleNamespace(tech_lef=tech, cell_lef=cell, liberty=lib,
+                           macro_lefs=macros), d, launched
+
+
+def _run_dynamic_ir_call_block(project, pdk, primary_def):
+    """Execute the shipped runner's dynamic IR call block, not a mirrored argv."""
+    import ast
+    from types import SimpleNamespace
+    tree = ast.parse((_PROGRAMS / 'phase3_one_shot_runner.py').read_text())
+    func = next(n for n in tree.body if isinstance(n, ast.FunctionDef)
+                and n.name == 'step_canonicalize_artefacts')
+    index = next(i for i, n in enumerate(func.body) if isinstance(n, ast.Assign)
+                 and any(isinstance(t, ast.Name) and t.id == 'dyn_ir_json'
+                         for t in n.targets))
+    block = ast.Module(body=func.body[index:index + 2], type_ignores=[])
+    calls = []
+    def run(argv, **kwargs):
+        calls.append((argv, E.main(argv[2:])))
+    env = dict(project=project, pdk=pdk, primary_def=primary_def,
+               rpt_phase3=project / 'reports/phase3', container='fixture',
+               _signoff_regen=lambda *_: True, _pr=SimpleNamespace(run=run),
+               sys=sys, PROGRAMS_DIR=_PROGRAMS, written=[], notes=[])
+    exec(compile(block, str(_PROGRAMS / 'phase3_one_shot_runner.py'), 'exec'), env)
+    assert env['notes'] == [], env['notes']
+    assert len(calls) == 1
+    return calls[0]
+
+
+def test_declared_views_runner_forwards_complete_inventory(tmp_path, monkeypatch):
+    pdk, d, launched = _physical_views_fixture(tmp_path, monkeypatch)
+    # Existing auto-discovery chooses this single DEF; identity is outside scope.
+    pnr = tmp_path / 'phase3/stage3/pnr'
+    pnr.mkdir(parents=True)
+    d.rename(pnr / d.name)
+    argv, rc = _run_dynamic_ir_call_block(tmp_path, pdk, pnr / d.name)
+    assert rc == 0
+    assert len(launched) == 1
+    for view in [pdk.tech_lef, pdk.cell_lef] + pdk.macro_lefs:
+        assert str(view) in launched[0].split('read_def')[0]
+        if view in pdk.macro_lefs:
+            assert any(argv[i:i + 2] == ['--macro-lef', str(view)]
+                       for i in range(len(argv) - 1))
+
+
+import pytest
+
+
+@pytest.mark.parametrize('fault', ['omitted', 'missing', 'unreadable', 'ambiguous', 'property_coverage'])
+def test_declared_views_refuse_bad_inventory(tmp_path, monkeypatch, fault):
+    pdk, d, launched = _physical_views_fixture(tmp_path, monkeypatch, fault)
+    out = tmp_path / 'reports/phase3/dynamic_ir.json'
+    argv = ['--def', str(d), '--tech-lef', str(pdk.tech_lef),
+            '--cell-lef', str(pdk.cell_lef), '--liberty', str(pdk.liberty),
+            '--out', str(out), '--container', 'fixture']
+    for view in pdk.macro_lefs:
+        argv += ['--macro-lef', str(view)]
+    rc = E.main(argv)
+    payload = json.loads(out.read_text())
+    assert rc != 0, payload
+    assert not launched, 'bad views must be refused before OpenROAD/PSM'
+    assert payload['dynamic_ir_report_emitted'] is False
+    assert payload['status'] == 'ERROR_INPUT_VIEWS'
+    assert 'IO_PAD' in payload['reason'] or str(tmp_path / 'io.lef') in payload['reason']
+    assert G.main([str(out)]) != 0
+
+
+@pytest.mark.parametrize("fault", [None, "duplicate_path", "lexical", "property_valid"])
+def test_declared_views_complete_control_deduplicates_paths(tmp_path, monkeypatch, fault):
+    pdk, d, launched = _physical_views_fixture(tmp_path, monkeypatch, fault)
+    out = tmp_path / 'reports/phase3/dynamic_ir.json'
+    rc, payload = E.emit(d, pdk.tech_lef, pdk.cell_lef, pdk.liberty,
+                         pdk.macro_lefs, None, out, None, 'fixture', 'M',
+                         None, 15.0, 10.0, 100, None)
+    assert rc == 0
+    assert payload['max_dynamic_drop_mv'] == 106.0  # canned log; not measurement
+    assert len(launched) == 1
+    reads = [line for line in launched[0].splitlines() if line.startswith('read_lef ')]
+    assert len(reads) == 4
+    assert len(reads) == len(set(reads))

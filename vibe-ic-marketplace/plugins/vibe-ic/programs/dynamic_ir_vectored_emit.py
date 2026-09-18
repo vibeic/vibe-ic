@@ -547,6 +547,75 @@ def skip_result(reason: str, status: str = "SKIPPED_MISSING_INPUTS"
 
 # ── DOCKER / OPENROAD RUN (side-effecting; not unit-tested) ─────────────────────
 
+def _view_tokens(text: str) -> List[str]:
+    """Inventory tokens, excluding comments and quoted property values.
+
+    This is not a geometry parser. Whitespace may wrap a record; escaped name
+    characters stay in one token. Full syntax remains OpenROAD's responsibility.
+    """
+    return [m.group(0) for m in re.finditer(
+        r'"(?:\\.|[^"\\])*"|\#[^\n]*|(?:\\.|[^\s;])+|;', text)
+        if not m.group(0).startswith(('"', '#'))]
+
+
+def _physical_lefs(tech_lef: Path, cell_lef: Path,
+                   macro_lefs: List[Path]) -> List[Path]:
+    # Repeated declarations of the same file are harmless; different files
+    # defining the same master are not an ordering decision we can make.
+    return list(dict.fromkeys(Path(p).resolve()
+                              for p in [tech_lef, cell_lef, *macro_lefs]))
+
+
+def _validate_physical_views(def_file: Path, lefs: List[Path],
+                             container: str) -> None:
+    owners: Dict[str, Path] = {}
+    for lef in lefs:
+        text = _pdk_text(lef, container)
+        if not text.strip():
+            raise ValueError(f"missing, empty or unreadable declared LEF: {lef}")
+        tokens = _view_tokens(text)
+        property_definitions = False
+        for i, token in enumerate(tokens[:-1]):
+            # MACRO is also a property *scope*, not a physical declaration.
+            if token == "PROPERTYDEFINITIONS":
+                property_definitions = not (i and tokens[i - 1] == "END")
+                continue
+            if property_definitions:
+                continue
+            if token != "MACRO":
+                continue
+            name = re.sub(r"\\(.)", r"\1", tokens[i + 1])
+            if name in owners:
+                raise ValueError(f"ambiguous MACRO {name}: {owners[name]} and {lef}")
+            owners[name] = lef
+    tokens = _view_tokens(def_file.read_text())
+    required = set()
+    for i, token in enumerate(tokens):
+        if token != "COMPONENTS" or (i and tokens[i - 1] == "END"):
+            continue
+        # Only statement starts in this section count; net connections are
+        # not component declarations.
+        j = i + 1
+        while j < len(tokens) and tokens[j:j + 2] != ["END", "COMPONENTS"]:
+            if tokens[j] == "-" and j and tokens[j - 1] == ";":
+                if j + 2 < len(tokens):
+                    required.add(re.sub(r"\\(.)", r"\1", tokens[j + 2]))
+            j += 1
+        break
+    missing = sorted(required - owners.keys())
+    if missing:
+        raise ValueError("DEF component master(s) missing from declared LEFs: "
+                         + ", ".join(missing))
+
+
+def _lef_tcl_word(path: Path) -> str:
+    # Tcl double-quoted word: preserve spaces and prevent substitution in paths.
+    text = str(path)
+    for char in ('\\', '"', '$', '[', ']'):
+        text = text.replace(char, '\\' + char)
+    return '"' + text.replace('\n', '\\n').replace('\r', '\\r') + '"'
+
+
 def _build_transient_tcl(def_file: Path, tech_lef: Path, cell_lef: Path,
                          liberty: Path, macro_lefs: List[Path],
                          sdc: Optional[Path], power_net: str,
@@ -559,17 +628,15 @@ def _build_transient_tcl(def_file: Path, tech_lef: Path, cell_lef: Path,
     Mirrors the static grid setup that already produces a real IR number on the
     routed PDN, then appends `-transient -period <ns> -steps <N>` (no VCD needed —
     the solver derives di/dt from the clock period)."""
-    macro_tcl = "\n".join(f"read_lef {f}" for f in macro_lefs)
+    lef_tcl = "".join(f"read_lef {_lef_tcl_word(f)}\n"
+                      for f in _physical_lefs(tech_lef, cell_lef, macro_lefs))
     sdc_tcl = f"catch {{read_sdc {sdc}}}\n" if sdc else ""
     via_tcl = "".join(f"catch {{set_layer_rc -via {c} -resistance {r}}}\n"
                       for c, r in sorted(via_res.items()))
     decap_arg = f" -decap_cap {decap_cap}" if decap_cap else ""
     _oc = liberty_operating_condition(liberty, container)
     return (
-        f"read_lef {tech_lef}\n"
-        f"read_lef {cell_lef}\n"
-        f"{macro_tcl}\n"
-        f"read_liberty {liberty}\n"
+        lef_tcl + f"read_liberty {liberty}\n"
         # vibe-ic#362 — select the library's own operating condition when it
         # declares one but names no default; without it PSM aborts PSM-0079
         # and the transient run produces nothing. Emitted only when a block
@@ -672,6 +739,17 @@ def emit(def_file: Path, tech_lef: Path, cell_lef: Path, liberty: Path,
         out_json.write_text(json.dumps(payload, indent=2) + "\n")
         return 0, payload
     net = nets[0]
+    try:
+        _validate_physical_views(
+            def_file, _physical_lefs(tech_lef, cell_lef, macro_lefs), container)
+    except (OSError, ValueError) as exc:
+        payload = {
+            "status": "ERROR_INPUT_VIEWS",
+            "dynamic_ir_report_emitted": False,
+            "reason": str(exc),
+        }
+        out_json.write_text(json.dumps(payload, indent=2) + "\n")
+        return 1, payload
     if period_ns is None:
         period_ns, period_source = derive_period_ns(sdc)
     else:
