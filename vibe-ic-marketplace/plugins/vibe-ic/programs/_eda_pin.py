@@ -747,7 +747,13 @@ def container_pin_state(container: str, env=None) -> Tuple[str, str]:
     got, why = container_image_digest(container)
     if got is None:
         return "UNREADABLE", (why or f"{CONTAINER_ABSENT}: {container}")
-    required = resolved_image_digest(env)
+    try:
+        required = resolved_image_digest(env)
+    except ImageNotResolvable as exc:
+        # Both identities must be readable to measure a disagreement. Keep
+        # resolution failure in the same third state as an unreadable container:
+        # attach may proceed, but container_matches_pin cannot certify it.
+        return "UNREADABLE", str(exc)
     if got == required:
         return "MATCH", ""
     return "MISMATCH", (

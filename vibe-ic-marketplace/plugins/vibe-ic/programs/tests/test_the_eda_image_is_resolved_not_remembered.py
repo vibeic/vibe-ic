@@ -1140,3 +1140,88 @@ def test_the_real_image_resolves_to_a_digest_and_names_its_own_version():
     assert j.ref.endswith("@" + j.digest)
     assert j.version, j.version_why_not
     assert j.version_source in ("local-label", "registry-label")
+
+
+@pytest.mark.parametrize("scenario", [
+    "listing_unusable", "identity_absent", "newer_image", "swapped_container",
+    "child_inherits_digest",
+])
+def test_resolver_attach_preserves_three_states_and_frozen_identity(monkeypatch, scenario):
+    """Exercise the real attach consumer; Docker supplies only metadata fixtures.
+
+    A known container plus an unreadable required identity is UNREADABLE,
+    never a mismatch or a resolver exception escaping into a tool step.
+    A new local release must not move an already resolved parent/child run.
+    """
+    import _container_exec as ce
+
+    old = "sha256:" + "1" * 64
+    new = "sha256:" + "2" * 64
+    image_id = "sha256:" + "a" * 64  # image ID deliberately differs from RepoDigest
+    repo = "registry.example/vibeic-eda"
+    alias = "mirror.example/vibeic-eda"
+    host = {"new": False, "container": old}
+    calls = []
+    for key in ("VIBEIC_EDA_IMAGE", "IIC_EDA_IMAGE", "VIBEIC_EDA_IMAGE_REPO"):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("VIBEIC_EDA_IMAGE_REPO", repo)
+    monkeypatch.setattr(_pin, "_RESOLVED", {})
+
+    def docker(*args, **kwargs):
+        calls.append(args)
+        if args == ("inspect", "--format", "{{.Image}}\t{{.Config.Image}}", "fixture"):
+            return 0, f"{image_id}\t{alias}:latest\n", ""
+        if args == ("image", "inspect", "--format", "{{json .RepoDigests}}", image_id):
+            return 0, json.dumps([f"{alias}@{host['container']}"]), ""
+        if args[:2] == ("image", "ls"):
+            if scenario == "listing_unusable":
+                return -1, "", "fixture: image listing unavailable"
+            if scenario == "identity_absent":
+                return 0, "", ""
+            rows = f"{repo}\t{old}\told-id\n"
+            if host["new"]:
+                rows += f"{alias}\t{new}\tnew-id\n"
+            return 0, rows, ""
+        if args == ("image", "inspect", "--format", "{{json .RepoDigests}}", repo):
+            return 1, "", "fixture: configured image absent"
+        if args[:3] == ("image", "inspect", "--format") and "Labels" in args[3]:
+            assert args[-1] in ("old-id", "new-id")
+            return 0, ("1.0.0" if args[-1] == "old-id" else "1.1.0"), ""
+        raise AssertionError(f"unmodelled Docker operation: {args}")
+
+    monkeypatch.setattr(_pin, "_docker", docker)
+    expected = ["docker", "exec", "fixture", "true"]
+    if scenario in ("listing_unusable", "identity_absent"):
+        try:
+            observed = ce.docker_exec_argv("fixture", "true")
+        except _pin.ImageNotResolvable as exc:
+            observed = (type(exc).__name__, str(exc))
+        assert observed == expected, observed
+        state, detail = _pin.container_pin_state("fixture")
+        assert state == "UNREADABLE"
+        assert _pin.IMAGE_NOT_RESOLVABLE in detail
+        assert _pin.container_matches_pin("fixture") == detail
+        assert _pin.container_attach_refusal("fixture") == ""
+    else:
+        assert ce.docker_exec_argv("fixture", "true") == expected
+        assert _pin.resolved_image_digest() == old
+        inherited = os.environ["VIBEIC_EDA_IMAGE"]
+        assert _pin.reference_digest(inherited) == old
+        initial_listings = sum(c[:2] == ("image", "ls") for c in calls)
+        host["new"] = True
+        if scenario == "swapped_container":
+            host["container"] = new
+            with pytest.raises(ce.ContainerImageMismatch) as exc:
+                ce.docker_exec_argv("fixture", "true")
+            assert old in str(exc.value) and new in str(exc.value)
+        else:
+            if scenario == "child_inherits_digest":
+                # A fresh process has no module cache, but inherits the export.
+                monkeypatch.setattr(_pin, "_RESOLVED", {})
+            assert ce.docker_exec_argv("fixture", "true") == expected
+            assert _pin.resolved_image_digest() == old
+        assert sum(c[:2] == ("image", "ls") for c in calls) == initial_listings
+        # A genuinely NEW run still selects the newer release (no source pin).
+        monkeypatch.setattr(_pin, "_RESOLVED", {})
+        monkeypatch.delenv("VIBEIC_EDA_IMAGE")
+        assert _pin.resolved_image_digest() == new
