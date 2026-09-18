@@ -27483,6 +27483,108 @@ def _clock_path_drive_sizing_tcl(marker: str = CLKPATH_SIZE_MARKER) -> str:
         f"}} else {{ puts \"{m}_LEGALIZE_OK disp=default\" }}\n")
 
 
+def _pnr_sta_corner_binding_tcl(report: str, primary_reads: str,
+                                extra_reads: str) -> str:
+    """Bind each native path to its loaded primary Liberty, preserving order.
+
+    The report's Corner selects the mapping, not active PDK/SS preference or
+    declaration order. Unsupported/contradictory declarations remain unbound.
+    Extra IO/macro views are disclosed separately from the core model basis.
+    This session can contain estimates or extracted RC; neither is attested
+    here. In particular, another signoff report's max/min SPEF is not its RC.
+    """
+    def word(value: str) -> str:
+        return '"' + ''.join('\\' + c if c in '\\"$[]' else
+                              '\\n' if c == '\n' else c for c in value) + '"'
+
+    declared = []
+    reads = {}
+    bare = []
+    valid = True
+    for line in primary_reads.splitlines():
+        tokens = line.split()
+        if not tokens:
+            continue
+        if tokens[0] == "define_corners" and len(tokens) > 1 and not declared:
+            declared = tokens[1:]
+        elif len(tokens) == 4 and tokens[:2] == ["read_liberty", "-corner"]:
+            reads.setdefault(tokens[2], set()).add(tokens[3])
+        elif len(tokens) == 2 and tokens[0] == "read_liberty":
+            bare.append(tokens[1])
+        else:
+            valid = False
+    if declared:
+        valid = valid and not bare and len(set(declared)) == len(declared)
+        valid = valid and set(reads) == set(declared)
+    else:
+        valid = valid and not reads and len(bare) == 1
+    mapping = {k: next(iter(v)) for k, v in reads.items() if len(v) == 1} if valid else {}
+    single = bare[0] if valid and not declared else ""
+    pairs = " ".join(word(x) for pair in mapping.items() for x in pair)
+    return (f"set _vic_sta_map [dict create {pairs}]\n"
+            f"set _vic_sta_single {word(single)}\n"
+            f"set _vic_sta_extra {word(extra_reads)}\n"
+            f"set _vic_sta_file {word(report)}\n" + r'''
+# report_checks selects the paths first; bind its actual per-path Corner.
+proc _vic_stamp_sta_path {f chunk mapping single extra} {
+    set corners {}
+    foreach {match value} [regexp -all -inline -line {^Corner:[ \t]*([^\n]+)$} $chunk] {
+        lappend corners [string trim $value]
+    }
+    set kinds {}
+    foreach {match value} [regexp -all -inline -line {^Path Type:[ \t]*([^\n]+)$} $chunk] {
+        lappend kinds [string trim $value]
+    }
+    set lib ""
+    if {$kinds eq "max"} {
+        if {[llength $corners] == 1 && [dict exists $mapping [lindex $corners 0]]} {
+            set lib [dict get $mapping [lindex $corners 0]]
+        } elseif {[llength $corners] == 0 && $single ne ""} {
+            set lib $single
+        }
+    }
+    if {$lib ne ""} {
+        puts $f "=== SETUP corner: native_path ==="
+        puts $f "STA_BASIS_LIBERTY: $lib"
+        puts $f "STA_CORNER_BINDING_SOURCE: loaded_primary_liberty/native_path_corner"
+    } else {
+        puts $f "=== UNVERIFIED corner: native_path ==="
+        puts $f "STA_CORNER_BINDING_REFUSED: missing_unknown_or_conflicting_setup_basis"
+    }
+    puts $f "STA_PARASITICS_PROVENANCE: PNR_SESSION_UNVERIFIED"
+    foreach line [split $extra "\n"] {
+        if {$line ne ""} { puts $f "STA_EXTRA_LIBERTY_READ: $line" }
+    }
+    puts -nonewline $f $chunk
+}
+set _vic_sta_f [open $_vic_sta_file r]
+set _vic_sta_text [read $_vic_sta_f]
+close $_vic_sta_f
+set _vic_sta_f [open $_vic_sta_file w]
+set _vic_sta_chunk ""
+set _vic_sta_in_path 0
+foreach line [split [string trimright $_vic_sta_text "\n"] "\n"] {
+    if {[string match "Startpoint:*" $line]} {
+        if {$_vic_sta_in_path} {
+            _vic_stamp_sta_path $_vic_sta_f $_vic_sta_chunk $_vic_sta_map $_vic_sta_single $_vic_sta_extra
+        } else {
+            puts -nonewline $_vic_sta_f $_vic_sta_chunk
+        }
+        set _vic_sta_chunk ""
+        set _vic_sta_in_path 1
+    }
+    append _vic_sta_chunk $line "\n"
+}
+if {$_vic_sta_in_path} {
+    _vic_stamp_sta_path $_vic_sta_f $_vic_sta_chunk $_vic_sta_map $_vic_sta_single $_vic_sta_extra
+} else {
+    puts -nonewline $_vic_sta_f $_vic_sta_chunk
+}
+close $_vic_sta_f
+rename _vic_stamp_sta_path {}
+''')
+
+
 def _build_pnr_tcl_text(*, tech_lef_c: str, cell_lef_c: str,
                         macro_lefs_tcl: str, liberty_c: str,
                         macro_libs_tcl: str, netlist_c: str, top: str,
@@ -28011,8 +28113,8 @@ if {{![info exists ::_vic_postroute_transaction_failed] || !$::_vic_postroute_tr
 }}
 write_def {out_dir_c}/{top}.def
 write_verilog {out_dir_c}/{top}_pnr.v
-report_checks > {out_dir_c}/sta.rpt
-report_design_area > {out_dir_c}/area.rpt
+report_checks -path_delay max > {out_dir_c}/sta.rpt
+{_pnr_sta_corner_binding_tcl(out_dir_c + "/sta.rpt", _corner_lib_stanza, macro_libs_tcl)}report_design_area > {out_dir_c}/area.rpt
 # === #147 — post-route real-SPEF setup-repair ESTIMATE (LAST — after every
 # shipped artifact + the authoritative clean sta.rpt, so it can only MEASURE the
 # recoverable setup, never modify routed.def/<top>.def/<top>_pnr.v). Empty on
