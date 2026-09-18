@@ -1741,6 +1741,49 @@ def characterise_liberty(project: Path, design: str, container: str,
     rec: Dict[str, Any] = {"method": "opensta:write_timing_model",
                            "netlist": str(netlist), "sdc": str(sdc),
                            "spef": str(spef), "sta_report": str(rpt)}
+    # The physical module and the producer's file stem need not be equal.
+    # Read only the SETUP stanza; HOLD legitimately names another SPEF.
+    if rpt.is_file():
+        report = rpt.read_text(errors="replace")
+        banners = list(_STA_LIB_RE.finditer(report))
+        setup_text = "\n".join(
+            report[m.end():banners[i + 1].start() if i + 1 < len(banners) else len(report)]
+            for i, m in enumerate(banners) if m.group(1) == "SETUP")
+        fields = {key: set(re.findall(r"^" + key + r":\s*(\S+)\s*$",
+                                     setup_text, re.M))
+                  for key in ("STA_BASIS_NETLIST", "STA_BASIS_SPEF")}
+        if any(fields.values()):
+            def recorded_path(key: str, directory: Path) -> Path:
+                values = fields[key]
+                if len(values) != 1:
+                    raise ValueError(f"{key} must name exactly one artifact: {sorted(values)}")
+                name = next(iter(values))
+                # The producer records basenames. No sibling scan or invented stem.
+                if Path(name).name != name or not re.fullmatch(r"[A-Za-z0-9_.-]+", name):
+                    raise ValueError(f"{key} is not a producer artifact basename: {name}")
+                path = directory / name
+                if path.resolve().parent != directory.resolve():
+                    raise ValueError(f"{key} escapes its artifact directory")
+                return path
+            try:
+                netlist = recorded_path("STA_BASIS_NETLIST", pnr)
+                spef = recorded_path("STA_BASIS_SPEF", project / "phase3/stage3/extracted/spef_corners")
+                basis = set(re.findall(r"^STA_BASIS:\s*(\S+)\s*$", setup_text, re.M))
+                if basis and basis != {"POST_ROUTE_SPEF"}:
+                    raise ValueError("SETUP inputs are not POST_ROUTE_SPEF")
+                declared_spefs = {re.search(r"SPEF=(\S+) ===", m.group(0)).group(1)
+                                  for m in banners if m.group(1) == "SETUP"}
+                if declared_spefs != {spef.name}:
+                    raise ValueError("SETUP banner and STA_BASIS_SPEF disagree")
+                if netlist.is_file():
+                    code = re.sub(r"/\*.*?\*/|//[^\n]*", "", netlist.read_text(errors="replace"), flags=re.S)
+                    if not re.search(r"\bmodule\s+(?:automatic\s+)?\\?" + re.escape(design)
+                                     + r"(?=[\s(#;])", code):
+                        raise ValueError(f"recorded netlist does not declare physical module {design!r}")
+            except ValueError as exc:
+                rec.update(characterised=False, reason_class="BLOCKED_BY_UPSTREAM", why=str(exc))
+                return None, rec
+            rec.update(netlist=str(netlist), spef=str(spef), artifact_identity_source="STA_BASIS")
     missing = [str(x) for x in (netlist, sdc, spef, rpt) if not x.is_file()]
     if missing:
         rec.update(characterised=False, reason_class="BLOCKED_BY_UPSTREAM",

@@ -523,3 +523,50 @@ def test_the_same_payload_as_CODE_does_move_the_answer():
     lines.insert(8, "  PIN rst\n    DIRECTION INPUT ;\n  END rst\n")
     _out, rep = M("".join(lines))
     assert rep["pin_declarations"] == ref["pin_declarations"] + 1, (ref, rep)
+
+
+@pytest.mark.parametrize("case", ["recorded", "wrong_module", "missing", "conflicting", "escape", "legacy"])
+def test_characterise_uses_recorded_artifacts_not_module_stem(tmp_path, monkeypatch, case):
+    """Physical module identity and producer artifact names are separate inputs."""
+    pnr = tmp_path / "phase3/stage3/pnr"
+    pnr.mkdir(parents=True)
+    sp = tmp_path / "phase3/stage3/extracted/spef_corners"
+    sp.mkdir(parents=True)
+    reports = tmp_path / "reports/phase3"
+    reports.mkdir(parents=True)
+    stem = "macro_a" if case == "legacy" else "payload"
+    module = "wrong_cell" if case == "wrong_module" else "macro_a"
+    (pnr / f"{stem}_pnr.v").write_text(f"module {module}; endmodule\n")
+    (pnr / "constraint.sdc").write_text("create_clock -period 10 clk\n")
+    (sp / f"{stem}.max.spef").write_text('*SPEF "IEEE 1481-1998"\n*DESIGN "macro_a"\n')
+    basis = "" if case == "legacy" else (
+        f"STA_BASIS_NETLIST: {stem}_pnr.v\nSTA_BASIS_SPEF: {stem}.max.spef\n")
+    if case == "conflicting":
+        basis += "STA_BASIS_NETLIST: other_pnr.v\n"
+    if case == "escape":
+        basis = "STA_BASIS_NETLIST: ../payload_pnr.v\nSTA_BASIS_SPEF: payload.max.spef\n"
+    (reports / "sta_mcorner_ocv.rpt").write_text(
+        f"=== SETUP corner: process=SS liberty=/pdk/ss.lib, SPEF={stem}.max.spef ===\n"
+        + basis + "STA_BASIS_CORNER: max\n"
+        + "=== HOLD corner: process=FF liberty=/pdk/ff.lib, SPEF=payload.min.spef ===\n")
+    if case == "missing":
+        (pnr / f"{stem}_pnr.v").unlink()
+    calls = []
+    def fake_sta(argv, *args, **kwargs):
+        tcl = Path(argv[-1].split()[-1])
+        body = tcl.read_text()
+        calls.append(body)
+        assert f"read_verilog {pnr / (stem + '_pnr.v')}" in body
+        assert f"read_spef {sp / (stem + '.max.spef')}" in body
+        assert "link_design macro_a" in body
+        Path(body.split()[-1]).write_text('library (x) { cell (macro_a) { pin (q) { timing () {} } } }')
+        return 0, "", ""
+    monkeypatch.setattr(mod, "_sh", fake_sta)
+    monkeypatch.setattr(mod.shutil, "which", lambda _: "/fixture/sta")
+    text, rec = mod.characterise_liberty(tmp_path, "macro_a", "", tmp_path / "hm")
+    if case in ("recorded", "legacy"):
+        assert rec["characterised"] is True, rec
+        assert text and len(calls) == 1
+    else:
+        assert text is None and rec["characterised"] is False, rec
+        assert calls == [], "bad input must be refused before tool invocation"

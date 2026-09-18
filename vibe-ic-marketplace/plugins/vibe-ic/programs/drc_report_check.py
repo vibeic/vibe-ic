@@ -139,6 +139,7 @@ claim is the thing that would be wrong, not the audit.
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import io
 import json
 import sys
@@ -304,6 +305,94 @@ def required_report_verdict(project_dir: str, required) -> tuple:
                       "required_reports_absent": absent}
 
 
+def _recorded_layout_evidence(project: Path, producers: list):
+    """Bind a report to its measured input bytes, independently of filenames.
+
+    None preserves the legacy evidence path when no invocation binds this report.
+    An explicit but invalid binding returns NONE evidence and cannot fall back to
+    a coincidentally matching filename. No directory glob supplies an identity.
+    """
+    from digital_hardmacro_check import gds_top_cells
+
+    project = project.resolve()
+    entries = _sdf._prov_entries(project)
+    found = []
+
+    def path_for(value):
+        path = Path(value)
+        path = (path if path.is_absolute() else project / path).resolve()
+        path.relative_to(project)  # external paths are not this run's artifacts
+        return path
+
+    def digest(path):
+        value = hashlib.sha256()
+        with path.open("rb") as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                value.update(chunk)
+        return "sha256:" + value.hexdigest()
+
+    def invalid(reason):
+        return {"tier": _sdf.TIER_NONE, "topcell_match": False, "witness": reason}
+
+    for producer in producers:
+        rel = producer.get("file")
+        if not rel:
+            continue
+        try:
+            report = path_for(rel)
+        except (ValueError, OSError):
+            return invalid("report path is outside the project")
+        for entry in reversed(entries):
+            if entry.get("record") != "invocation":
+                continue
+            outputs = entry.get("outputs") or {}
+            if not isinstance(outputs, dict):
+                continue
+            bound = []
+            for name, expected in outputs.items():
+                try:
+                    if path_for(name) == report:
+                        bound.append(expected)
+                except (ValueError, OSError, TypeError):
+                    continue
+            if not bound:
+                continue
+            try:
+                if entry.get("measured") is not True or entry.get("exit_code") != 0:
+                    return invalid("report invocation was not measured successfully")
+                if entry.get("tool") != producer.get("producer"):
+                    return invalid("report invocation tool differs from report producer")
+                if any(expected != digest(report) for expected in bound):
+                    return invalid("recorded DRC report hash differs from current report")
+                inputs = entry.get("inputs") or {}
+                if not isinstance(inputs, dict):
+                    return invalid("invocation inputs are not an artifact mapping")
+                layouts = []
+                for name, expected in inputs.items():
+                    path = path_for(name)
+                    relative = path.relative_to(project).as_posix()
+                    if _sdf._STREAMOUT_RE.fullmatch(relative):
+                        layouts.append((path, expected))
+                if len(layouts) != 1:
+                    return invalid("report invocation must identify one canonical layout input")
+                layout, expected = layouts[0]
+                if digest(layout) != expected:
+                    return invalid("recorded layout hash differs from current layout")
+                tops = gds_top_cells(layout.read_bytes())
+                top = producer.get("top_cell")
+                if not tops or (top and tops != [top]):
+                    return invalid(f"recorded layout top cells {tops!r} differ from report top {top!r}")
+                found.append({"tier": _sdf.TIER_INVOCATION,
+                              "topcell_match": True if top else None,
+                              "witness": f"{rel} -> {layout.relative_to(project)} ({expected})"})
+                # The ledger is append-only. Once the newest binding is read,
+                # older observations cannot override this report's identity.
+                break
+            except (OSError, ValueError, TypeError) as exc:
+                return invalid(f"recorded layout binding unreadable: {exc}")
+    return found[0] if found else None
+
+
 def signoff_verdict(payload: object, project_dir: str) -> tuple:
     """``(findings, summary_additions)`` for the sign-off scope.
 
@@ -388,7 +477,9 @@ def signoff_verdict(payload: object, project_dir: str) -> tuple:
                     f"the report, so it is a claim about the file, not "
                     f"evidence from it.")})
 
-    ev = _sdf.layout_evidence(Path(project_dir), top_cell)
+    ev = _recorded_layout_evidence(Path(project_dir), producers)
+    if ev is None:
+        ev = _sdf.layout_evidence(Path(project_dir), top_cell)
     add["layout_evidence_tier"] = ev["tier"]
     add["layout_topcell_match"] = ev["topcell_match"]
     add["layout_evidence_witness"] = ev["witness"]
