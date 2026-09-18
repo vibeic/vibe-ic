@@ -1,0 +1,13 @@
+[
+  {
+    "issue": "LOCAL:SHA1100_RESET_SEMANTICS",
+    "project": "reset_historical_comparison",
+    "layer": "L9",
+    "field": "reset_domains[].sync; integration.reset_boot.normalized_semantics",
+    "expected": "synchronous active_low",
+    "actual": "sync=unknown; normalized=synchronous active-high",
+    "version_observed": "d7d1891b41c7a6c07dbbc3a6abaebd5f93f0e699",
+    "version_lkg": "",
+    "fixture_path": "vibe-ic-marketplace/plugins/vibe-ic/tests/phase1_fixtures/reset_historical_comparison/reset.md"
+  }
+]

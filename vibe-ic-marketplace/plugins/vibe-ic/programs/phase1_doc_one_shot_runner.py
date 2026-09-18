@@ -60810,25 +60810,9 @@ def _v1_6_369_classify_reset_polarity(name_lc: str) -> str:
 
 
 def _v1_6_369_classify_reset_sync(name: str, evidence_text: str) -> str:
-    """v1.6.369 — for #264 P2. Scan a ±200-char window around the
-    port name in the joined extracted-doc text for sync/async
-    keywords. Returns `synchronous` / `asynchronous` / `unknown`.
-
-    Chip-AGNOSTIC: pure keyword-window scan.
-    """
-    if not evidence_text:
-        return "unknown"
-    idx = evidence_text.lower().find(name.lower())
-    if idx < 0:
-        return "unknown"
-    lo = max(0, idx - 200)
-    hi = min(len(evidence_text), idx + 200)
-    window = evidence_text[lo:hi].lower()
-    if "asynchronous" in window or "async" in window or "async_reset" in window:
-        return "asynchronous"
-    if "synchronous" in window or "sync_reset" in window or "synced reset" in window:
-        return "synchronous"
-    return "unknown"
+    """Resolve explicit current-design clauses for this port, not a window."""
+    from _reset_input_semantics import reset_semantics
+    return reset_semantics(name, evidence_text).get("sync", "unknown")
 
 
 def _v1_6_369_emit_reset_domains(l9: dict, extracted: dict) -> None:
@@ -60873,7 +60857,10 @@ def _v1_6_369_emit_reset_domains(l9: dict, extracted: dict) -> None:
         _dirpref_v1_6_382 = m_reset.group("dirpref") or None
         polarity = _v1_6_369_classify_reset_polarity(
             _stem_v1_6_382.lower())
-        sync = _v1_6_369_classify_reset_sync(name, evidence_joined)
+        from _reset_input_semantics import reset_semantics
+        explicit = reset_semantics(name, evidence_joined)
+        polarity = explicit.get("polarity", polarity)
+        sync = explicit.get("sync", "unknown")
         out.append({
             "name": name,
             "polarity": polarity,

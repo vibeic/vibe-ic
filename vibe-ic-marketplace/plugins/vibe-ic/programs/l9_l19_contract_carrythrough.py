@@ -173,12 +173,20 @@ def _l9_contract(records: List[Dict[str, str]]) -> Dict[str, Any]:
             })
 
     reset_semantics: List[Dict[str, str]] = []
-    sync = _positive_line(records, re.compile(
-        r"(?:synchronous|同步).{0,80}active[- ]?high|"
-        r"active[- ]?high.{0,80}(?:synchronous|同步)", re.I))
-    if sync:
-        reset_semantics.append({**sync,
-                                "normalized": "synchronous active-high"})
+    from _reset_input_semantics import declarations
+    seen_reset_semantics = set()
+    for record in records:
+        for row in declarations(record["text"]):
+            if len(row["sync_values"]) != 1 or len(row["polarity_values"]) != 1:
+                continue
+            normalized = (next(iter(row["sync_values"])) + " " +
+                          next(iter(row["polarity_values"])).replace("_", "-"))
+            if normalized not in seen_reset_semantics:
+                seen_reset_semantics.add(normalized)
+                reset_semantics.append({"source": record["source"],
+                                        "line": row["line"],
+                                        "evidence": row["evidence"],
+                                        "normalized": normalized})
     retained = _positive_line(records, re.compile(
         r"SRAM.{0,80}(?:contents?\s+(?:retained|preserved)|內容保留|内容保留)",
         re.I))
