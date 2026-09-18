@@ -414,6 +414,21 @@ def slot_record(path: Path, mapping: dict, root: Path) -> dict:
     return rec
 
 
+def _is_layer_inventory(key: str, value: list) -> bool:
+    """The fetch adapter's explicit GDS-layer schema, never a pad-name list.
+
+    Unknown keys or malformed rows remain unclaimed. Keeping the exact raw
+    inventory in the record discloses what was classified; this does not prove
+    layer legality or that a design has any pads.
+    """
+    return key in {"FORBIDDEN_LAYERS", "REQUIRED_MARKER_LAYERS"} and all(
+        isinstance(row, dict) and set(row) == {"name", "layer", "datatype"}
+        and isinstance(row["name"], str) and bool(row["name"].strip())
+        and type(row["layer"]) is int and row["layer"] >= 0
+        and type(row["datatype"]) is int and row["datatype"] >= 0
+        for row in value)
+
+
 def _pad_lists(mapping: dict, understood: set) -> dict:
     """Every pad list this slot declares, and every list key that was NOT one.
 
@@ -421,12 +436,14 @@ def _pad_lists(mapping: dict, understood: set) -> dict:
     pattern did not claim, so a template that spells its pad lists some third
     way shows up as something a reader can see rather than as a silent zero.
     """
-    lists, unmatched = [], []
+    lists, unmatched, non_pad = [], [], []
     for k, v in mapping.items():
         if not isinstance(k, str) or not isinstance(v, (list, tuple)):
             continue
         if PAD_LIST_KEY_RE.match(k.strip()):
             lists.append({"key": k, "raw": list(v), "count": len(v)})
+        elif _is_layer_inventory(k, v):
+            non_pad.append({"key": k, "raw": list(v), "kind": "gds_layer_inventory"})
         elif k not in understood:
             # `understood` holds the list-valued keys this program read
             # ELSEWHERE -- the die and core rects above all. Counting those as
@@ -440,6 +457,7 @@ def _pad_lists(mapping: dict, understood: set) -> dict:
         "keys_matched": [d["key"] for d in lists],
         "count": sum(d["count"] for d in lists),
         "unmatched_list_keys": unmatched,
+        "non_pad_lists": non_pad,
     }
 
 

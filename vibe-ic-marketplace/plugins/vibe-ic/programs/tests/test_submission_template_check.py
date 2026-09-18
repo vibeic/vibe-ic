@@ -1160,9 +1160,10 @@ def test_operator_fetch_ingest_consumed_without_core_fabrication(tmp_path,monkey
     project=tmp_path/'design';project.mkdir()
     _ingest(project,'--template',str(root),'--slot','neutral')
     rc,check,doc=_check(project)
-    # Pad metadata is a separate refusal in the exact adapter output.
-    # Repairing slot geometry must neither hide it nor fabricate a pad list.
-    assert rc==1 and _rules(check)=={'PAD_LIST_UNREAD'},check
+    # The adapter declares typed layer inventories, not unknown pad lists.
+    # The owning pad-metadata tests separately require malformed/unread lists
+    # to refuse; this exact producer output must now pass without inventions.
+    assert rc==0 and _rules(check)==set(),check
     assert doc['ingest']['slots'][0]['core_area'] is None
     assert json.loads(path.read_text())==mapping
 
