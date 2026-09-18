@@ -32295,7 +32295,7 @@ def _extract_memmap_range_constants(
     a list of L4 register-style constant entries — one per endpoint.
 
     Each entry:
-      {address, address_int, name, access: "RO", kind:
+      {address, address_int, name, access: "RO"|"WO"|"RW"|"", kind:
        "indexed_register_address", endpoint: "low"|"high",
        range: "0x.. - 0x..", evidence: "input/docs/<file>",
        evidence_line: "<verbatim source line>", extraction_strategy:
@@ -32305,10 +32305,43 @@ def _extract_memmap_range_constants(
     low endpoint must be <= high endpoint (else the pair is not a
     range and is skipped). Endpoints are deduped on (address_int).
     """
+    # Resolve only access columns on explicit pipe-table range rows. A bare
+    # address-space range is not a read-only register declaration. Collect all
+    # declarations before deduplication so file order cannot hide a conflict.
+    access_by_range: Dict[Tuple[int, int], Set[str]] = {}
+    access_aliases = {"R": "RO", "RO": "RO", "W": "WO", "WO": "WO",
+                      "RW": "RW", "R/W": "RW"}
+    if isinstance(extracted, dict):
+        for text in extracted.values():
+            if not isinstance(text, str):
+                continue
+            access_column = address_column = None
+            for line in text.splitlines():
+                if not line.strip().startswith("|"):
+                    access_column = address_column = None
+                    continue
+                cells = [c.strip().strip("`*") for c in line.strip().strip("|").split("|")]
+                headers = [c.lower() for c in cells]
+                if any(c in {"address", "addr", "位址(hex)", "地址", "offset"} for c in headers):
+                    address_column = next(i for i, c in enumerate(headers)
+                                          if c in {"address", "addr", "位址(hex)", "地址", "offset"})
+                    access_column = next((i for i, c in enumerate(headers)
+                                          if c in {"r/w", "access", "rw"}), None)
+                    continue
+                if (access_column is None or address_column is None or
+                        max(access_column, address_column) >= len(cells)):
+                    continue
+                access = access_aliases.get(cells[access_column].upper())
+                if not access:
+                    continue
+                for match in _RE_MEMMAP_RANGE.finditer(cells[address_column]):
+                    key = (int(match.group("lo"), 16), int(match.group("hi"), 16))
+                    access_by_range.setdefault(key, set()).add(access)
     out: List[Dict[str, Any]] = []
     if not isinstance(extracted, dict):
         return out
-    seen: Set[int] = set()
+    seen: Dict[int, Dict[str, Any]] = {}
+    endpoint_accesses: Dict[int, Set[str]] = {}
     for fname, text in sorted(extracted.items()):
         if not isinstance(text, str) or not text:
             continue
@@ -32328,14 +32361,17 @@ def _extract_memmap_range_constants(
                 src_line = line.strip()[:200]
                 for endpoint, addr_s, addr_i in (
                         ("low", lo_s, lo_i), ("high", hi_s, hi_i)):
+                    values = endpoint_accesses.setdefault(addr_i, set())
+                    values.update(access_by_range.get((lo_i, hi_i), set()))
+                    access = next(iter(values)) if len(values) == 1 else ""
                     if addr_i in seen:
+                        seen[addr_i]["access"] = access
                         continue
-                    seen.add(addr_i)
-                    out.append({
+                    entry = {
                         "address": addr_s,
                         "address_int": addr_i,
                         "name": f"MEMMAP_{endpoint.upper()}_{addr_i:08X}",
-                        "access": "RO",
+                        "access": access,
                         "default": "",
                         "description": (
                             f"memory-map {endpoint} endpoint of range "
@@ -32346,7 +32382,9 @@ def _extract_memmap_range_constants(
                         "extraction_strategy": "memmap_range_prose_v_orch",
                         "evidence": f"input/docs/{fname}",
                         "evidence_line": src_line,
-                    })
+                    }
+                    seen[addr_i] = entry
+                    out.append(entry)
     return out
 
 

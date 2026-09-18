@@ -9,5 +9,38 @@
     "version_observed": "d7d1891b41c7a6c07dbbc3a6abaebd5f93f0e699",
     "version_lkg": "",
     "fixture_path": "vibe-ic-marketplace/plugins/vibe-ic/tests/phase1_fixtures/reset_historical_comparison/reset.md"
+  },
+  {
+    "issue": "LOCAL:SHA1110_REGISTER_SEMANTICS",
+    "project": "register_contract_local",
+    "layer": "L4",
+    "field": "registers[].access, fields, reset_value",
+    "expected": "BLOCK range W; named CTRL INIT NEXT MODE and STATUS READY VALID; no unscoped reset value",
+    "actual": "range endpoints RO; WHOLE_REG fields; CTRL reset_value 0x1",
+    "version_observed": "d7d1891b41c7a6c07dbbc3a6abaebd5f93f0e699",
+    "version_lkg": "",
+    "fixture_path": "vibe-ic-marketplace/plugins/vibe-ic/tests/phase1_fixtures/register_contract_local/L5_register_map.md"
+  },
+  {
+    "issue": "LOCAL:SHA1120_NAMED_FIELDS",
+    "project": "named_register_fields_local",
+    "layer": "L4",
+    "field": "registers[].fields[].field_name/bits",
+    "expected": "CTRL INIT0 NEXT1 MODE2; STATUS READY0 VALID1",
+    "actual": "WHOLE_REG only",
+    "version_observed": "d7d1891b41c7a6c07dbbc3a6abaebd5f93f0e699",
+    "version_lkg": "",
+    "fixture_path": "vibe-ic-marketplace/plugins/vibe-ic/tests/phase1_fixtures/named_register_fields_local/L5_register_map.md"
+  },
+  {
+    "issue": "LOCAL:SHA1130_SCALAR_RESET",
+    "project": "scalar_reset_binding_local",
+    "layer": "L4",
+    "field": "registers[].reset_value",
+    "expected": "CTRL scalar reset remains unknown; field-level declarations do not define full scalar",
+    "actual": "CTRL reset_value0x1 from broad scalar proximity",
+    "version_observed": "d7d1891b41c7a6c07dbbc3a6abaebd5f93f0e699",
+    "version_lkg": "",
+    "fixture_path": "vibe-ic-marketplace/plugins/vibe-ic/tests/phase1_fixtures/scalar_reset_binding_local/L4_command_protocol.md"
   }
 ]
