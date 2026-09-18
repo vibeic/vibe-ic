@@ -55,12 +55,13 @@ CALIBRATION, measured before it was chosen
 ==========================================
 Blocking on "a placed pin with no label" flips 0 of the 4 real sign-off GDS on
 this host (sha256 77/77, sha256_magic 77/77, spm 36/36, subservient 31/31, exact
-string match, both streamout engines). A pin DECLARED in the `PINS n ;` header
-but carrying no placement can never be labelled — it has no geometry — so it is
-counted and disclosed separately and never blocks.
+string match, both streamout engines). FIXED and COVER are placements too. Only a pin with no geometric placement
+is unplaceable. Same-name TEXT must fall inside a transformed DEF PORT
+rectangle, using each file's own units; absent geometry/units is unmeasured.
+This coordinate witness does not establish layer readability or connectivity.
 
 Exit: 0 = every measured GDS names every placeable port
-      1 = at least one placed port has no label in the top cell
+      1 = a placed port has a missing or spatially misplaced label
       2 = nothing could be measured (no GDS, no DEF naming a structure in it,
           or a GDS that is not a valid stream) — the VACUOUS_PASS convention
 """
@@ -68,6 +69,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
+import re
+import struct
 import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -79,6 +83,7 @@ from gds_substance_check import (  # noqa: E402
     _CANONICAL_GDS_GLOBS,
     find_canonical_gds,
     parse_gds,
+    iter_records,
     structure_text_census,
 )
 from def_gds_port_power_restore import (  # noqa: E402
@@ -87,6 +92,7 @@ from def_gds_port_power_restore import (  # noqa: E402
     def_design_name,
     def_rank,
     parse_pins,
+    def_units_per_micron,
 )
 
 TOOL = "gds_port_label_check"
@@ -196,6 +202,100 @@ def label_layer_readability(cen, design, pdk_tech=None):
                   f"failed: the predicate's accept case is not yet calibrated.")
 
 
+def port_position_witness(data: bytes, design: str, def_text: str,
+                          placed: List[str]) -> Dict:
+    """Name-matched top TEXT anchors must lie in their DEF PORT rectangles.
+
+    This is a coordinate witness, not extracted connectivity or layer-map
+    signoff. Missing units, unsupported geometry/orientation or missing XY
+    remains unmeasured. No DEF/GDS is rewritten by this reader.
+    """
+    units = def_units_per_micron(def_text)
+    scale = None
+    top = None
+    text = None
+    labels = {}
+    for _off, rt, payload in iter_records(data):
+        if rt == 0x0305 and len(payload) == 16:
+            raw = payload[8:]
+            value = ((-1 if raw[0] & 128 else 1)
+                     * int.from_bytes(raw[1:], "big") / 2**56
+                     * 16.0**((raw[0] & 127) - 64) * 1e6)
+            scale = value if math.isfinite(value) and value > 0 else None
+        elif rt == 0x0606:
+            top = payload.rstrip(b"\0").decode("ascii", "replace")
+        elif rt == 0x0C00:
+            text = {} if top == design else None
+        elif rt == 0x1003 and text is not None:
+            text["xy"] = struct.unpack(">ii", payload) if len(payload) == 8 else None
+        elif rt == 0x1906 and text is not None:
+            text["name"] = payload.rstrip(b"\0").decode("ascii", "replace")
+        elif rt == 0x1100 and text is not None:
+            if "name" in text:
+                labels.setdefault(text["name"], []).append(text.get("xy"))
+            text = None
+        elif rt == 0x0700:
+            top = None
+    result = {"status": "NOT_MEASURED", "scope": "top_TEXT_XY_in_DEF_PORT",
+              "def_units_per_micron": units, "gds_dbu_um": scale,
+              "misplaced": [], "unverified": []}
+    if not units or scale is None:
+        result["reason"] = "DEF or GDS units absent/invalid"
+        return result
+    # Pin PORT coordinates rotate about the placement anchor (unlike a placed
+    # cell's LEF lower-left frame). All eight DEF orientations are explicit.
+    orient = {"N": lambda x,y:(x,y), "S": lambda x,y:(-x,-y),
+              "W": lambda x,y:(-y,x), "E": lambda x,y:(y,-x),
+              "FN": lambda x,y:(-x,y), "FS": lambda x,y:(x,-y),
+              "FW": lambda x,y:(y,x), "FE": lambda x,y:(-y,-x)}
+    section = re.search(r"(?ms)^\s*PINS\s+\d+\s*;(.*?)^\s*END PINS", def_text)
+    rectangles = {}
+    bad = set()
+    if section:
+        for rec in section[1].split(";"):
+            name = re.match(r"\s*-\s+(\S+)", rec)
+            if not name:
+                continue
+            name = name[1]
+            for port_index, port in enumerate(re.split(r"\+\s*PORT\b", rec)):
+                if not re.search(r"\+\s*LAYER\b", port):
+                    if port_index or re.search(r"\+\s*(?:POLYGON|VIA)\b", port):
+                        bad.add(name)
+                    continue
+                locs = re.findall(r"\+\s*(?:PLACED|FIXED|COVER)\s*\(\s*(-?\d+)\s+(-?\d+)\s*\)\s*(\S+)", port)
+                rects = re.findall(r"\+\s*LAYER\s+\S+\s*\(\s*(-?\d+)\s+(-?\d+)\s*\)\s*\(\s*(-?\d+)\s+(-?\d+)\s*\)", port)
+                if (len(locs) != 1 or locs[0][2] not in orient or not rects
+                        or len(rects) != len(re.findall(r"\+\s*LAYER\b", port))
+                        or re.search(r"\+\s*(?:POLYGON|VIA)\b", port)):
+                    bad.add(name)
+                    continue
+                ax, ay, rotation = locs[0]
+                for values in rects:
+                    x1,y1,x2,y2 = map(int, values)
+                    if x1 >= x2 or y1 >= y2:
+                        bad.add(name)
+                        continue
+                    points = [orient[rotation](x,y) for x,y in ((x1,y1),(x2,y2))]
+                    xs = [(x + int(ax))/units for x,y in points]
+                    ys = [(y + int(ay))/units for x,y in points]
+                    rectangles.setdefault(name, []).append((min(xs),min(ys),max(xs),max(ys)))
+    def between(value, lo, hi):
+        return ((value >= lo or math.isclose(value, lo, rel_tol=1e-12, abs_tol=1e-12))
+                and (value <= hi or math.isclose(value, hi, rel_tol=1e-12, abs_tol=1e-12)))
+    for name in sorted(set(placed)):
+        boxes = rectangles.get(name, [])
+        positions = labels.get(name, [])
+        if name in bad or not boxes or not positions or any(p is None for p in positions):
+            result["unverified"].append(name)
+            continue
+        if any(not any(between(p[0]*scale,b[0],b[2]) and between(p[1]*scale,b[1],b[3])
+                       for b in boxes) for p in positions):
+            result["misplaced"].append(name)
+    result["status"] = ("MISPLACED" if result["misplaced"] else "NOT_MEASURED"
+                        if result["unverified"] else "MATCHED")
+    return result
+
+
 def census_one(gds_path: Path, def_paths: List[Path],
                 pdk_tech=None) -> Dict:
     """Measure one GDS against whichever DEF names a structure inside it."""
@@ -284,7 +384,16 @@ def census_one(gds_path: Path, def_paths: List[Path],
                f"{', '.join(unmatched[:5])} — a naming-convention difference "
                f"rather than an absence?)" if unmatched else ""))
     else:
-        rec["verdict"] = "OK"
+        witness = port_position_witness(data, design, def_text, placed)
+        rec["position_witness"] = witness
+        if witness["status"] == "MISPLACED":
+            rec["verdict"] = "MISPLACED_LABELS"
+            rec["reason"] = "same-name top labels lie outside their DEF PORT geometry: " + ", ".join(witness["misplaced"][:_NAME_CAP])
+        elif witness["status"] != "MATCHED":
+            rec["verdict"] = "NOT_MEASURED"
+            rec["reason"] = "port position witness incomplete: " + witness.get("reason", ", ".join(witness["unverified"][:_NAME_CAP]))
+        else:
+            rec["verdict"] = "OK"
     if unreadable_note:
         rec["readability"] = unreadable_note
         rec["label_layers"] = sorted(
@@ -305,7 +414,7 @@ def audit(project: Optional[Path], gds_file: Optional[Path],
         recs = [census_one(g, defs, pdk_tech=pdk_tech)
                 for g in find_canonical_gds(project)]
 
-    if any(r["verdict"] in ("NO_LABELS", "MISSING_LABELS") for r in recs):
+    if any(r["verdict"] in ("NO_LABELS", "MISSING_LABELS", "MISPLACED_LABELS") for r in recs):
         return "FINDINGS", recs
     if any(r["verdict"] == "OK" for r in recs):
         return "PASS", recs
@@ -357,7 +466,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if verdict == "FINDINGS":
         for r in recs:
-            if r["verdict"] in ("NO_LABELS", "MISSING_LABELS"):
+            if r["verdict"] in ("NO_LABELS", "MISSING_LABELS", "MISPLACED_LABELS"):
                 print(f"[FAIL] {Path(r['gds_file']).name}: {r['verdict']} — "
                       f"{r['reason']}", file=sys.stderr)
         return RC_FINDINGS

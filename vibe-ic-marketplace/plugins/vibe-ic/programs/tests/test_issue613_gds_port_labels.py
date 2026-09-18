@@ -116,11 +116,11 @@ def build_gds(top: str, top_labels, child_labels=("A", "B")) -> bytes:
                                   for s in child_labels))
     body = _boundary(2) + _sref("leafcell")
     for i, s in enumerate(top_labels):
-        body += _text_element(100, 1, i * 10, 0, s)
+        body += _text_element(100, 1, 1000 * (i + 1), 2000, s)
     return (_rec(0x0002, struct.pack(">h", 600))
             + _rec(0x0102, b"\x00" * 24)
             + _rec(0x0206, _name("LIB"))
-            + _rec(0x0305, b"\x00" * 16)
+            + _rec(0x0305, _gds_real8(0.001) + _gds_real8(1e-9))
             + child + _structure(top, body)
             + _rec(0x0400))
 
@@ -586,3 +586,86 @@ def test_the_gate_is_reachable_through_the_flow_runner(tmp_path):
         p, "gds_port_label_check . --json reports/phase3/gds_port_labels.json")
     assert ok is False, ev
     assert "NO_LABELS" in str(ev)
+
+# SPM1200: actual DEF PORT/FIXED grammar and real GDS UNITS/XY, neutral names.
+def _gds_real8(value):
+    exponent = 64
+    while value and value < 1 / 16:
+        value *= 16
+        exponent -= 1
+    while value >= 1:
+        value /= 16
+        exponent += 1
+    return bytes([exponent]) + int(value * 2**56).to_bytes(7, 'big')
+
+
+def _witness_input(tmp_path, status='FIXED', xy=(1000, 2000), label='a',
+                   orientation='N', units=2000, gds_unit=1e-9):
+    # DEF anchor (2000,4000) DBU = (1,2) um. Offset rectangle forces
+    # orientation semantics to matter instead of a symmetric box hiding them.
+    dp = tmp_path / 'routed.def'
+    dp.write_text('VERSION 5.8 ;\nDESIGN chip ;\n'
+        + (f'UNITS DISTANCE MICRONS {units} ;\n' if units else '') +
+        'PINS 1 ;\n - a + NET a + DIRECTION INPUT\n + PORT\n'
+        ' + LAYER Metal5 ( -100 -100 ) ( 100 100 )\n'
+        + (f' + {status} ( 2000 4000 ) {orientation} ;\n' if status else ';\n') +
+        'END PINS\nEND DESIGN\n')
+    body = _boundary(81)
+    if label: body += _text_element(81, 10, *xy, label)
+    gp = tmp_path / 'chip.gds'
+    gp.write_bytes(_rec(0x0002, struct.pack('>h', 600)) + _rec(0x0102,b'\0'*24)
+        + _rec(0x0206,_name('LIB')) + _rec(0x0305, _gds_real8(0.001)+_gds_real8(gds_unit))
+        + _structure('chip',body) + _rec(0x0400))
+    return gp,dp
+
+
+@pytest.mark.parametrize('status', ['PLACED','FIXED','COVER'])
+def test_port_witness_accepts_real_placement_status(tmp_path,status):
+    gp,dp=_witness_input(tmp_path,status=status)
+    verdict,recs=CEN.audit(None,gp,dp)
+    assert verdict=='PASS',recs
+    assert PWR.parse_pins(dp.read_text())==[('a','Metal5',2000,4000)]
+
+
+@pytest.mark.parametrize('status', ['PLACED','FIXED','COVER'])
+def test_port_witness_shifted_same_name_refused(tmp_path,status):
+    gp,dp=_witness_input(tmp_path,status=status,xy=(9000,2000))
+    verdict,recs=CEN.audit(None,gp,dp)
+    assert verdict=='FINDINGS',recs
+    assert recs[0]['verdict']=='MISPLACED_LABELS'
+
+
+@pytest.mark.parametrize('case', ['missing-label','unplaced','missing-layer','missing-units','invalid-gds-units','unknown-orientation'])
+def test_port_witness_missing_evidence_not_pass(tmp_path,case):
+    gp,dp=_witness_input(tmp_path,label='' if case=='missing-label' else 'a',
+        status='' if case=='unplaced' else 'FIXED',units=None if case=='missing-units' else 2000,
+        gds_unit=0 if case=='invalid-gds-units' else 1e-9,
+        orientation='UNKNOWN' if case=='unknown-orientation' else 'N')
+    if case=='missing-layer':dp.write_text(dp.read_text().replace(' + LAYER Metal5 ( -100 -100 ) ( 100 100 )\n',''))
+    verdict,recs=CEN.audit(None,gp,dp)
+    assert verdict!='PASS',recs
+    if case=='missing-label':assert verdict=='FINDINGS',recs
+
+
+def test_port_witness_rotated_offset_rect(tmp_path):
+    gp,dp=_witness_input(tmp_path,orientation='W',xy=(950,2100))
+    dp.write_text(dp.read_text().replace('( -100 -100 ) ( 100 100 )','( 100 0 ) ( 300 200 )'))
+    verdict,recs=CEN.audit(None,gp,dp)
+    assert verdict=='PASS',recs
+
+
+def test_port_witness_rotated_wrong_side_refused(tmp_path):
+    gp,dp=_witness_input(tmp_path,status='PLACED',orientation='W',xy=(1100,2050))
+    dp.write_text(dp.read_text().replace('( -100 -100 ) ( 100 100 )','( 100 0 ) ( 300 200 )'))
+    verdict,recs=CEN.audit(None,gp,dp)
+    assert verdict=='FINDINGS',recs
+
+@pytest.mark.parametrize('shape', ['separate-polygon-port','masked-layer'])
+def test_port_witness_mixed_unsupported_geometry_is_unverified(tmp_path,shape):
+    gp,dp=_witness_input(tmp_path,status='PLACED')
+    extra = (' + PORT\n + POLYGON Metal5 ( 0 0 ) ( 100 0 ) ( 100 100 )\n'
+             ' + FIXED ( 2000 4000 ) N' if shape=='separate-polygon-port' else
+             ' + LAYER Metal5 MASK 1 ( 100 100 ) ( 200 200 )')
+    dp.write_text(dp.read_text().replace(' N ;',' N\n'+extra+' ;'))
+    verdict,recs=CEN.audit(None,gp,dp)
+    assert verdict=='NOTHING_MEASURED',recs

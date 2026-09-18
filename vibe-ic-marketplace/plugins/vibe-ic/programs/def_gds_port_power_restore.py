@@ -172,7 +172,7 @@ def parse_pins(def_text):
         if not m:
             continue
         ml = re.search(r"\+\s*LAYER\s+(\w+)\s*\(", rec)
-        mp = re.search(r"\+\s*PLACED\s*\(\s*(-?\d+)\s+(-?\d+)\s*\)", rec)
+        mp = re.search(r"\+\s*(?:PLACED|FIXED|COVER)\s*\(\s*(-?\d+)\s+(-?\d+)\s*\)", rec)
         if ml and mp:
             pins.append((m.group(1), ml.group(1), int(mp.group(1)), int(mp.group(2))))
     return pins
