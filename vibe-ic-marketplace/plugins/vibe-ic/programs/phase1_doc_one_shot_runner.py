@@ -33882,6 +33882,11 @@ def gen_l4_regmap(project: Path,
     # `_v1_6_591_backfill_reset_value_kind` call near content =
     # {...} assembly below for the new wire-in point.
 
+    # Explicit same-source name/address bit tables precede the lossy
+    # WHOLE_REG fallback; existing richer producer fields remain authoritative.
+    from _named_register_fields import attach_named_fields
+    attach_named_fields(registers, extracted)
+
     # v1.6.278 — for #134 round-4 ORGANIC field-agent counter-evidence.
     # Summary-table-only WHOLE_REG promotion. Many registers on real RV
     # benchmark docs appear ONLY in the summary table (canonical RST
