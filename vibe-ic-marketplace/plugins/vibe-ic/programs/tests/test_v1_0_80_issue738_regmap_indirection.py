@@ -618,6 +618,14 @@ def _load_smoke():
     mod = importlib.util.module_from_spec(spec)
     if str(_PROGRAMS) not in sys.path:
         sys.path.insert(0, str(_PROGRAMS))
+    # @dataclass resolves sys.modules.get(cls.__module__).__dict__ while it
+    # processes the class, so a module that defines one must be REGISTERED
+    # before exec_module or the exec dies with a bare AttributeError naming
+    # dataclasses.py rather than this loader. This file passed only because
+    # seven earlier tests `import spec_example_smoke_tb` first; selecting this
+    # test alone (-k) — or letting pytest-randomly order it first — made it
+    # fail. The target defines four @dataclass types.
+    sys.modules[spec.name] = mod
     spec.loader.exec_module(mod)
     return mod
 

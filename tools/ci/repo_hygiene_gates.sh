@@ -166,6 +166,44 @@ run "shipped-path portability" "$ROOT" python3 "$PG/shipped_path_portability_che
 # rather than merely discouraged. Wired here because a source guard that only
 # its own test runs has never run on anything that shipped.
 run "OpenSTA error-abort left armed" "$ROOT" python3 "$PG/sta_continue_on_error_guard.py" "$ROOT"
+# The runtime image's identity must be RESOLVED on the host, never remembered
+# here: a stored digest makes adopting a new image an edit to THIS repository.
+# Three copies had re-grown (the plugin's pin module, the CI hermetic runner,
+# the landing register) and were removed; nothing prevented a fourth. Wired at
+# "$ROOT" and not "$PLUGIN" because two of those three lived under tools/ --
+# handed the plugin root it REFUSES (rc 2) rather than scanning less, which is
+# correct but useless as a gate.
+#
+# MEASURED at this exact root before wiring: rc 0, 1567 Python source file(s)
+# read, 4018 exempt by venue (#1253 -- wiring a RED gate turns "unverified"
+# into "blocking", which is a different change and not this one). Both arms are
+# pinned: the same tree with the resolver's `raise` replaced by a literal
+# `return` is reported at the returning line, and the 64-hex digest that sits
+# in a module docstring as the historical record stays silent.
+run "no stored runtime-image digest"    "$ROOT" python3 "$PG/no_stored_runtime_image_digest_check.py" "$ROOT"
+# @dataclass resolves `sys.modules.get(cls.__module__).__dict__` while it
+# processes the class, so a module loaded via spec_from_file_location must be
+# registered BEFORE exec_module or the exec dies with a bare AttributeError
+# naming dataclasses.py -- a traceback that points at the standard library and
+# hides the two-line cause entirely. Two independent authors hit it in this tree
+# on the same day, the second after the first had written it down, which is the
+# signal that prose is the wrong home for it.
+#
+# Wired at "$ROOT" rather than "$PLUGIN": dynamic loads live under tools/ too,
+# and the root is STRICTLY BROADER at no extra risk (both roots measured rc 0).
+# MEASURED at this root before wiring: rc 0, 5794 file(s), 551 load site(s), 0
+# unregistered. The discriminating arm is real, not a fixture: the pre-fix shape
+# of programs/tests/test_v1_0_80_issue738_regmap_indirection.py:621 is reported
+# by file and line, with the target's own @dataclass named.
+run "dynamic load registers before exec" "$ROOT" python3 "$PG/dynamic_module_load_registers_before_exec_check.py" "$ROOT"
+# These two REFUSE (rc 2) on a subtree that carries no MCP source, which is the
+# correct answer -- "I could not look" is not a pass -- but makes them unfit for
+# a runner that reads any non-zero as FAIL. Measured: wiring them into
+# `run_plugin_self_audit.sh` turned `gate_fixture_discrimination_check` red,
+# because that gate's CAN-PASS fixture builds a minimal subject with no mcp-eda
+# tree at all. They belong here, under the helper that tolerates CANNOT-CHECK.
+run_tolerating_uncheckable "ESM require is bound"        "$ROOT" python3 "$PG/mcp_esm_require_binding_check.py" "$PLUGIN"
+run_tolerating_uncheckable "MCP program path resolves"   "$ROOT" python3 "$PG/mcp_tool_program_path_resolves_check.py" "$PLUGIN"
 # vibe-ic#621 — the JSON manifests were guarded and the PROSE was not: the three
 # READMEs a reader meets first advertised v1.5.12 / v1.4.72 / v1.4.61 against a
 # shipped 1.9.36. Same drift `marketplace_version_sync_check` exists for, one

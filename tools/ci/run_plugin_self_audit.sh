@@ -46,6 +46,19 @@ GATES=(
     "changelog_metric_reproducibility_check"
     "changelog_command_reproducibility_check"
     "self_audit_doc_claim_consistency_check"
+    # A project-local staged PDK must DECLARE whether it ships a tapcell master.
+    # The registry path is already guarded (`pdk_registry_selectable_check`), on
+    # the stated reasoning that a missing key and an explicit null are
+    # indistinguishable under `.get()` -- so an omission silently routes a PDK
+    # down the tapless branch and skips tapcell insertion. That guard walks only
+    # registry entries, so the construction sites reached exactly the state it
+    # exists to prevent. This is the same invariant read off the constructor.
+    #
+    # MEASURED over "$PLUGIN_ROOT" before wiring: rc 0, 1510 file(s), all 5
+    # construction sites DECLARED. A call carrying *args or **kwargs is
+    # UNDECIDABLE and counted, never a FAIL.
+    "staged_pdk_declares_tapcell_master_check"
+    "signoff_config_parse_failure_is_named_check"
 )
 
 # Gates that take it as `--root`. A SECOND LIST rather than a rewritten CLI:

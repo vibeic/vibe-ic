@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1322
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1322)
+- **Total programs (excluding helpers / shims):** 1328
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1328)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1313 |
+| `any` | 1319 |
 
 ## Alphabetical listing
 
@@ -363,6 +363,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `dual_track_select` | any | — | deterministic DUAL-TRACK convergence selector. |
 | `dynamic_ir_drop_check` | any | — | transient (dynamic) IR-drop budget gate for tapeout. |
 | `dynamic_ir_vectored_emit` | any | — | TRANSIENT (dynamic) IR-drop EMITTER (real PSM). |
+| `dynamic_module_load_registers_before_exec_check` | any | — | a module loaded by path must be in ``sys.modules`` BEFORE ``exec_module`` when the loaded file defines a module-level ``@dataclass``. |
 | `eda_image_preflight` | any | — | verify the CVDP scoring sim image matches the official Dockerfile.sim tool spec BEFORE any scoring run (ORGANIC #536). |
 | `eda_log_check` | any | — | Deterministic EDA tool log/report checker. |
 | `eda_report_audit` | any | — | eda_report_audit.py -- Multi-mode EDA report checker for backend skills. |
@@ -741,7 +742,9 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `mask_application_check` | any | — | Verify any AND-mask rule the spec declares is honoured by RTL: the masked value (not the raw byte) is what gets stored AND echoed back in... |
 | `matrix_mutation_ledger` | any | — | a cell may not be called ENFORCED until a NAMED, RUNNABLE mutation has been shown to turn it red. |
 | `mbist_wrapper_gen` | any | — | Memory-BIST (MBIST) March C- wrapper GENERATOR + GATE. |
+| `mcp_esm_require_binding_check` | any | — | an ES module that USES ``require`` must BIND the name somewhere in the same file. |
 | `mcp_execution_verify` | any | — | Deterministic MCP tool execution verifier. |
+| `mcp_tool_program_path_resolves_check` | any | — | an MCP tool must be able to REACH the program it spawns. |
 | `mdio_protocol_synth` | any | — | IEEE 802.3 Management Data Input/Output (MDIO) protocol synth helper. |
 | `mealy_sequence_synth` | any | — | deterministic SOLVER for the MEALY FSM table / sequence-detector family (the Mealy twin of full_moore_fsm_synth). |
 | `measurement_only_artefact_is_not_a_verdict_source` | any | — | a measurement is not a verdict, and an unmeasured axis is not a zero. |
@@ -786,6 +789,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `nextstate_misc_synth` | any | — | deterministic SOLVER for the remaining mechanically- complete VerilogEval shapes the existing FSM / K-map family still SKIPs. |
 | `nfc_protocol_synth` | any | v0.1.84 | NFC / ISO 14443 contactless-protocol synth helper. |
 | `no_protocol_consistency_check` | any | v0.56 | v0.56 plugin gate |
+| `no_stored_runtime_image_digest_check` | any | — | the runtime image's identity is RESOLVED from the host; it is never STORED in this repository's Python source. |
 | `not_verified_tier` | any | — | NOT_VERIFIED — the test tier's equivalent of the gate tier's NOT_CHECKED. |
 | `nvlink_protocol_synth` | any | v0.1.89 | NVIDIA NVLink (high-speed GPU / die-to-die interconnect) protocol synth helper. |
 | `nvm_program_supply_intent` | any | — | does a design that intends to PROGRAM an on-chip non-volatile memory have a physical path to bring the programming supply IN? |
@@ -1125,6 +1129,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `signoff_audit` | any | v0.52 | signoff_audit.py -- Multi-mode signoff evidence checker (LEGACY gate). |
 | `signoff_cell_aware_feol_attribution` | any | — | signoff_cell_aware_feol_attribution.py -- CELL-AWARE FEOL over-fire attributor. |
 | `signoff_cell_aware_feol_cfg` | any | — | signoff_cell_aware_feol_cfg.py -- BUILD the opt-in `--cell-aware-feol` config for the native `svrfdrc` sign-off engine (vibeic-eda image ... |
+| `signoff_config_parse_failure_is_named_check` | any | — | a config read may not answer "I could not parse it" with "nothing was declared". |
 | `signoff_gate_self_skip_consistency_check` | any | — | META-audit for ORGANIC #721. |
 | `signoff_ladder_run` | any | — | Chip-level sign-off ladder runner (B1 from spm pilot) — REAL-gate wired. |
 | `signoff_metrics_aggregate` | any | — | write the sign-off metrics THIS flow measured. |
@@ -1202,6 +1207,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `stage3_compliance` | any | — | Stage 3 (Physical Design + Sign-off) interim gate. |
 | `stage4_compliance` | any | — | Stage 4 (Output + Validation) interim gate. |
 | `stage_on_pass_review` | any | — | the ON-PASS review harness: after a stage PASSES, read the INTENT and the ARTEFACT and say whether they contradict each other. |
+| `staged_pdk_declares_tapcell_master_check` | any | — | a load-bearing sentinel default may not be INHERITED. Every construction site has to SAY it. |
 | `staged_rtl_closure_preflight` | any | — | ORGANIC #586. |
 | `staged_rtl_reused_ip_manifest_emit` | any | — | ORGANIC #732 — auto-emit the keystone SOURCE_MANIFEST.json on the PRE-STAGED-vendor-RTL catalog-glue path. |
 | `step_force` | any | — | re-run ONE step without re-running the phase. vibe-ic#1097 S6. |
@@ -1394,7 +1400,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1313 programs)
+### `any` (1319 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `absence_verdict_names_its_search_space_check` — "not found" must say WHERE it looked.
@@ -1729,6 +1735,7 @@ _(no programs in this group)_
 - `dual_track_select` — deterministic DUAL-TRACK convergence selector.
 - `dynamic_ir_drop_check` — transient (dynamic) IR-drop budget gate for tapeout.
 - `dynamic_ir_vectored_emit` — TRANSIENT (dynamic) IR-drop EMITTER (real PSM).
+- `dynamic_module_load_registers_before_exec_check` — a module loaded by path must be in ``sys.modules`` BEFORE ``exec_module`` when the loaded file defines a module-level ``@dataclass``.
 - `eda_image_preflight` — verify the CVDP scoring sim image matches the official Dockerfile.sim tool spec BEFORE any scoring run (ORGANIC #536).
 - `eda_log_check` — Deterministic EDA tool log/report checker.
 - `eda_report_audit` — eda_report_audit.py -- Multi-mode EDA report checker for backend skills.
@@ -2106,7 +2113,9 @@ _(no programs in this group)_
 - `mask_application_check` — Verify any AND-mask rule the spec declares is honoured by RTL: the masked value (not the raw byte) is what gets stored AND echoed back in...
 - `matrix_mutation_ledger` — a cell may not be called ENFORCED until a NAMED, RUNNABLE mutation has been shown to turn it red.
 - `mbist_wrapper_gen` — Memory-BIST (MBIST) March C- wrapper GENERATOR + GATE.
+- `mcp_esm_require_binding_check` — an ES module that USES ``require`` must BIND the name somewhere in the same file.
 - `mcp_execution_verify` — Deterministic MCP tool execution verifier.
+- `mcp_tool_program_path_resolves_check` — an MCP tool must be able to REACH the program it spawns.
 - `mdio_protocol_synth` — IEEE 802.3 Management Data Input/Output (MDIO) protocol synth helper.
 - `mealy_sequence_synth` — deterministic SOLVER for the MEALY FSM table / sequence-detector family (the Mealy twin of full_moore_fsm_synth).
 - `measurement_only_artefact_is_not_a_verdict_source` — a measurement is not a verdict, and an unmeasured axis is not a zero.
@@ -2151,6 +2160,7 @@ _(no programs in this group)_
 - `nextstate_misc_synth` — deterministic SOLVER for the remaining mechanically- complete VerilogEval shapes the existing FSM / K-map family still SKIPs.
 - `nfc_protocol_synth` — NFC / ISO 14443 contactless-protocol synth helper.  _[v0.1.84]_
 - `no_protocol_consistency_check` — v0.56 plugin gate  _[v0.56]_
+- `no_stored_runtime_image_digest_check` — the runtime image's identity is RESOLVED from the host; it is never STORED in this repository's Python source.
 - `not_verified_tier` — NOT_VERIFIED — the test tier's equivalent of the gate tier's NOT_CHECKED.
 - `nvlink_protocol_synth` — NVIDIA NVLink (high-speed GPU / die-to-die interconnect) protocol synth helper.  _[v0.1.89]_
 - `nvm_program_supply_intent` — does a design that intends to PROGRAM an on-chip non-volatile memory have a physical path to bring the programming supply IN?
@@ -2488,6 +2498,7 @@ _(no programs in this group)_
 - `signoff_audit` — signoff_audit.py -- Multi-mode signoff evidence checker (LEGACY gate).  _[v0.52]_
 - `signoff_cell_aware_feol_attribution` — signoff_cell_aware_feol_attribution.py -- CELL-AWARE FEOL over-fire attributor.
 - `signoff_cell_aware_feol_cfg` — signoff_cell_aware_feol_cfg.py -- BUILD the opt-in `--cell-aware-feol` config for the native `svrfdrc` sign-off engine (vibeic-eda image ...
+- `signoff_config_parse_failure_is_named_check` — a config read may not answer "I could not parse it" with "nothing was declared".
 - `signoff_gate_self_skip_consistency_check` — META-audit for ORGANIC #721.
 - `signoff_ladder_run` — Chip-level sign-off ladder runner (B1 from spm pilot) — REAL-gate wired.
 - `signoff_metrics_aggregate` — write the sign-off metrics THIS flow measured.
@@ -2565,6 +2576,7 @@ _(no programs in this group)_
 - `stage3_compliance` — Stage 3 (Physical Design + Sign-off) interim gate.
 - `stage4_compliance` — Stage 4 (Output + Validation) interim gate.
 - `stage_on_pass_review` — the ON-PASS review harness: after a stage PASSES, read the INTENT and the ARTEFACT and say whether they contradict each other.
+- `staged_pdk_declares_tapcell_master_check` — a load-bearing sentinel default may not be INHERITED. Every construction site has to SAY it.
 - `staged_rtl_closure_preflight` — ORGANIC #586.
 - `staged_rtl_reused_ip_manifest_emit` — ORGANIC #732 — auto-emit the keystone SOURCE_MANIFEST.json on the PRE-STAGED-vendor-RTL catalog-glue path.
 - `step_force` — re-run ONE step without re-running the phase. vibe-ic#1097 S6.
