@@ -19502,6 +19502,46 @@ def _discover_spare_cells_from_liberty(
     return out
 
 
+def _spare_insertion_provenance(spare_plan: Dict[str, Any],
+                                 wrapper: Path) -> Optional[Dict[str, Any]]:
+    """Bind optional insertion intent to the actual wrapper the runner read.
+
+    The cell insertion producer owns every `instances` obligation. A wrapper
+    can establish optional names, but cannot cancel those cell obligations.
+    Missing source is unknown, never evidence that a planned name was omitted.
+    """
+    import hashlib
+    required = [str(i["name"]) for i in spare_plan.get("instances", []) or []
+                if isinstance(i, dict) and i.get("name")]
+    optional = [str(i["name"]) for i in spare_plan.get("spare_pads", []) or []
+                if isinstance(i, dict) and i.get("name")]
+    if not spare_plan.get("spare_pads"):
+        return None  # No optional insertion claim needs a wrapper witness.
+    result = {"version": 1, "status": "UNVERIFIED",
+              "required_insertions": required, "planned_not_inserted": [],
+              "wrapper": {"path": str(wrapper), "read_status": "UNREADABLE"}}
+    try:
+        with wrapper.open("rb") as stream:
+            raw = stream.read(8 * 1024 * 1024 + 1)
+        text = raw.decode("utf-8")
+        if not text.strip() or len(raw) > 8 * 1024 * 1024:
+            raise ValueError("empty or truncated wrapper")
+        text = re.sub(r'"(?:\\.|[^"\\])*"|//[^\n]*|/\*.*?\*/', ' ', text,
+                      flags=re.S)
+        if not re.search(r"\bmodule\b.*\bendmodule\b", text, re.S):
+            raise ValueError("wrapper has no complete module")
+    except (OSError, ValueError) as exc:
+        result["reason"] = str(exc)
+        return result
+    tokens = set(re.findall(r"[A-Za-z_][A-Za-z0-9_$]*", text))
+    result.update(status="OBSERVED",
+                  required_insertions=required + [n for n in optional if n in tokens],
+                  planned_not_inserted=[n for n in optional if n not in tokens])
+    result["wrapper"].update(read_status="READ",
+                             sha256=hashlib.sha256(raw).hexdigest())
+    return result
+
+
 def _reserved_instance_names(spare_plan: Dict[str, Any],
                               wrapper_verilog: Optional[Path] = None
                               ) -> Tuple[List[str], List[str]]:
@@ -31766,6 +31806,8 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     # ordinary CTS buffer preserves PDKs that expose only a single legal cell.
     _fanout_root_buffer_cell = clk_buf_root or clk_buf
     _reserved_names, _spare_pads_unplaced = _reserved_instance_names(
+        spare_plan, out_dir / "chip_top_io.v")
+    spare_plan["insertion_provenance"] = _spare_insertion_provenance(
         spare_plan, out_dir / "chip_top_io.v")
     if _spare_pads_unplaced:
         print(f"[pnr] SPARE_PADS_PLANNED_NOT_PLACED: {_spare_pads_unplaced} — "

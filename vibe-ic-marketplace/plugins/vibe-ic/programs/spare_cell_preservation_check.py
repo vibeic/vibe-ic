@@ -91,6 +91,7 @@ if _os.path.dirname(_os.path.abspath(__file__)) not in _sys.path:
 
 
 import argparse
+import hashlib
 import json
 import re
 import sys
@@ -112,8 +113,7 @@ def _load_json(path: Path) -> Optional[dict]:
 
 
 def _spare_names_and_types(plan: dict) -> List[Tuple[str, str]]:
-    """Return [(name, type), ...] for every inserted spare instance +
-    spare pad. Pure."""
+    """Declared rows; audit resolves insertion provenance before preservation."""
     out: List[Tuple[str, str]] = []
     for inst in plan.get("instances", []) or []:
         if isinstance(inst, dict) and inst.get("name"):
@@ -439,18 +439,79 @@ CROSS_CHECK_LABELS = ("netlist", "def")
 
 
 def _spare_instance_names(plan: dict) -> List[str]:
-    """Recorded spare INSTANCE names (placed cells only).
+    """All confirmed preservation obligations, including instantiated pads."""
+    return [name for name, _typ in _spare_names_and_types(plan)]
 
-    Spare PADS are excluded from the cross-artefact comparison: a spare pad
-    is an IO-ring RESERVATION, and whether a reservation shows up in a
-    gate-level netlist, in a DEF, in both or in neither is a property of the
-    emitter, not of preservation. Their survival is still evaluated by
-    `evaluate_preservation` exactly as before. Pure, chip-AGNOSTIC."""
-    out: List[str] = []
-    for inst in plan.get("instances", []) or []:
-        if isinstance(inst, dict) and inst.get("name"):
-            out.append(str(inst["name"]))
-    return out
+
+def _resolve_insertion_provenance(project: Path, plan: dict,
+                                  final_texts: Dict[str, str]) -> Tuple[dict, dict]:
+    """Separate named planning exclusions from insertion obligations.
+
+    No final-file absence proves non-insertion. The producer must name the
+    exclusions and bind the wrapper it used; its cell insertion obligations
+    cannot be revoked by an IO wrapper. Legacy ambiguous plans stay unverified.
+    """
+    cells = {str(i["name"]) for i in plan.get("instances", []) or []
+             if isinstance(i, dict) and i.get("name")}
+    rows = _spare_names_and_types(plan)
+    names = [n for n, _ in rows]
+    optional = set(names) - cells
+    evidence = plan.get("insertion_provenance")
+    if evidence is None and not plan.get("spare_pads"):
+        return plan, {"status": "NOT_REQUIRED", "planned_not_inserted": []}
+    report = {"status": "UNVERIFIED", "planned_not_inserted": [],
+              "unknown": sorted(optional), "reasons": []}
+    try:
+        if any(not isinstance(i, dict) or not isinstance(i.get("name"), str)
+               or not i["name"] for field in ("instances", "spare_pads")
+               for i in plan.get(field, []) or []):
+            raise ValueError("malformed insertion plan row")
+        if not isinstance(evidence, dict) or evidence.get("version") != 1 \
+                or evidence.get("status") != "OBSERVED":
+            raise ValueError("missing or unverified insertion provenance")
+        required = evidence.get("required_insertions")
+        excluded = evidence.get("planned_not_inserted")
+        if any(not isinstance(v, list) or any(not isinstance(n, str) or not n for n in v)
+               for v in (required, excluded)):
+            raise ValueError("invalid named insertion inventory")
+        if len(names) != len(set(names)) or len(required + excluded) != len(set(required + excluded)):
+            raise ValueError("duplicate or contradictory insertion names")
+        if set(required + excluded) != set(names) or not cells <= set(required):
+            raise ValueError("inventory differs from plan or cancels a cell insertion obligation")
+        source = evidence.get("wrapper")
+        if not isinstance(source, dict) or source.get("read_status") != "READ":
+            raise ValueError("wrapper insertion source was not read")
+        path = project / source["path"]
+        with path.open("rb") as stream:
+            raw = stream.read(MAX_SCAN_BYTES + 1)
+        if not raw.strip() or len(raw) > MAX_SCAN_BYTES or _looks_binary(raw):
+            raise ValueError("empty, binary or truncated insertion source")
+        if hashlib.sha256(raw).hexdigest() != source.get("sha256"):
+            raise ValueError("insertion source hash mismatch")
+        text = raw.decode("utf-8")
+        text = re.sub(r'"(?:\\.|[^"\\])*"|//[^\n]*|/\*.*?\*/', ' ', text,
+                      flags=re.S)
+        if not re.search(r"\bmodule\b.*\bendmodule\b", text, re.S):
+            raise ValueError("insertion source has no complete module")
+        tokens = set(re.findall(r"[A-Za-z_][A-Za-z0-9_$]*", text))
+        if set(excluded) & tokens or not (set(required) - cells) <= tokens:
+            raise ValueError("wrapper contradicts named insertion provenance")
+        if any(name_present_in_text(n, t) for n in excluded for t in final_texts.values()):
+            raise ValueError("planned-not-inserted name occurs in a final artefact")
+        report.update(status="VERIFIED", planned_not_inserted=excluded,
+                      required_insertions=required, unknown=[],
+                      source_path=str(path), source_sha256=source["sha256"])
+        resolved = dict(plan)
+        for field in ("instances", "spare_pads"):
+            resolved[field] = [i for i in plan.get(field, []) or []
+                               if i.get("name") not in excluded]
+        return resolved, report
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        report["reasons"].append(str(exc))
+        # Still check every cell obligation and report genuine removals. An
+        # unverified optional plan is not evidence that those names were deleted.
+        unresolved = dict(plan, spare_pads=[])
+        return unresolved, report
 
 
 def _rel_to(project: Path, path: Path) -> str:
@@ -618,13 +679,19 @@ def audit(project: Path) -> dict:
     # `evaluate_preservation`, or a project with a genuinely removed spare
     # would be reported only as an artefact-set problem and the removal —
     # the defect class this gate exists for — would never be named.
-    result = evaluate_preservation(plan, final_texts)
+    resolved_plan, insertion = _resolve_insertion_provenance(project, plan, final_texts)
+    result = evaluate_preservation(resolved_plan, final_texts)
+    result["insertion_provenance"] = insertion
+    if insertion["status"] == "UNVERIFIED":
+        result["verdict"] = "FAIL"
+        result["reasons"] = ["INSERTION_PROVENANCE_UNVERIFIED: " + reason
+                             for reason in insertion["reasons"]]
     result.update(base)
     result["artefact_paths"] = {k: str(v)
                                 for k, v in artefact_paths.items()}
     result["artefact_read_status"] = read_status
 
-    agreement = _artefact_agreement(project, plan, artefact_paths,
+    agreement = _artefact_agreement(project, resolved_plan, artefact_paths,
                                     final_texts, read_status)
     result["artefact_agreement"] = agreement
     if agreement["disagreements"]:
