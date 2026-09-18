@@ -31241,27 +31241,14 @@ def _v1_6_505_normalize_value(raw: str) -> Optional[str]:
 
 
 def _v1_6_505_lift_scalar_reset_broader_vocab(
-        window: str) -> Optional[str]:
-    """v1.6.505 — for #347 R10. Apply v1.6.505 broader reset-
-    vocab regex set to `window`. Returns the first non-None
-    normalised value, or None if no pattern matches. Idempotent
-    — pure-string function. Chip-AGNOSTIC."""
-    if not isinstance(window, str) or not window:
-        return None
-    for rx in (_V1_6_505_DEFAULT_VALUE_RE,
-               _V1_6_505_POWER_UP_RE,
-               _V1_6_505_INITIALIZED_RE):
-        m = rx.search(window)
-        if not m:
-            continue
-        norm = _v1_6_505_normalize_value(m.group("val"))
-        if norm is not None:
-            return norm
-    # `is cleared by reset` / `writes 0 on reset` shape has no
-    # value group — treat match as canonical 0x0.
-    if _V1_6_505_CLEARED_BY_RESET_RE.search(window):
-        return "0x0"
-    return None
+        window: str, reg_name: Optional[str] = None,
+        address: Optional[int] = None) -> Optional[str]:
+    """Resolve only an explicit full scalar declaration for this register.
+
+    A caller without a bound register cannot establish reset authority.
+    """
+    from _scalar_reset_declarations import candidates, unique_value
+    return unique_value(candidates(window, reg_name, address))
 
 
 # v1.6.508 — for #347 R12. Real-benchmark SoC memory-map docs
@@ -31348,31 +31335,13 @@ def _v1_6_508_lift_reset_from_adoc_table_row(
 def _v1_6_503_lift_scalar_reset_from_prose(
         registers: List[Dict[str, Any]],
         extracted: Dict[str, str]) -> int:
-    """v1.6.503 — for #347 R9 Class C. For each scalar register
-    with null reset_value (no bracket index, NOT a RISC-V GPR /
-    FPR which v1.6.497 already handles), scan extracted prose
-    for adjacent reset hint. Reuse v1.6.482
-    `_v1_6_482_lift_reset_value_from_prose` with all-occurrence
-    iteration (similar to v1.6.491 pattern).
+    """Fill absent scalar resets only from source-bound whole-register facts.
 
-    Returns number of entries filled. Idempotent — already-
-    filled entries are skipped on subsequent runs.
-
-    Chip-AGNOSTIC: pure structural name-shape filter + prose-
-    adjacency lift via existing v1.6.482 helper; no chip-class
-    literal.
-
-    v1.6.507 — for #347 R11 DIAGNOSTIC. When env var
-    `PHASE2A_DEBUG_SCALAR_LIFT=1` is set, write a per-register
-    diagnostic log to `phase1_scalar_lift_debug.log` in the
-    current working directory. Each line records the register
-    name, skip reason ("already-has-reset" / "indexed-array" /
-    "gpr-fpr" / "name-too-short" / "name-not-found-in-any-doc"
-    / "no-prose-match"), evidence files where the name was
-    found, and (for "no-prose-match") a 120-char snippet of the
-    first ≤4 occurrences' ±400 window. chip-AGNOSTIC: pure
-    structural diagnostic; no chip-class literal touched.
-    Default OFF — no production overhead."""
+    Existing values and the indexed/GPR exclusions are preserved. Explicit
+    declarations must agree; partial fields, proximity and unsupported text
+    cannot establish scalar authority. Optional diagnostics retain the legacy
+    PHASE2A_DEBUG_SCALAR_LIFT switch.
+    """
     if not isinstance(registers, list) or not isinstance(extracted, dict):
         return 0
     import os as _os_v1_6_507
@@ -31419,54 +31388,26 @@ def _v1_6_503_lift_scalar_reset_from_prose(
                 _debug_lines_v1_6_507.append(
                     f"{name}: skip=name-too-short")
             continue
-        # Scan every occurrence in every extracted doc.
-        lifted: Optional[str] = None
-        lifted_source: Optional[str] = None
+        # Bind to the owning input file when the register has source authority;
+        # otherwise require all explicit declarations to agree. Never combine
+        # a nearby field value with an unrelated bare register mention.
+        from _scalar_reset_declarations import candidates, unique_value
+        values = set()
+        source = r.get("evidence")
+        address = r.get("address_int")
+        if address is None and isinstance(r.get("address"), str):
+            try:
+                address = int(r["address"], 16)
+            except ValueError:
+                pass
         _debug_occurrences_v1_6_507: List[str] = []
         for _fname, text in extracted.items():
-            if not isinstance(text, str) or not text:
+            if (isinstance(source, str) and source.startswith("input/docs/")
+                    and source != f"input/docs/{_fname}"):
                 continue
-            for nm in re.finditer(
-                    r"\b" + re.escape(name) + r"\b", text):
-                lo = max(0, nm.start() - 400)
-                hi = min(len(text), nm.end() + 400)
-                window = text[lo: hi]
-                lifted = _v1_6_482_lift_reset_value_from_prose(window)
-                if lifted:
-                    lifted_source = "scalar_prose_adjacency_v1_6_503"
-                    break
-                # v1.6.505 — for #347 R10. If v1.6.482 set didn't
-                # match, try the broader scalar-only vocab
-                # (default value / power-up value / initialised to
-                # / cleared by reset). chip-AGNOSTIC fallback.
-                lifted = _v1_6_505_lift_scalar_reset_broader_vocab(
-                    window)
-                if lifted:
-                    lifted_source = "scalar_prose_broader_v1_6_505"
-                    break
-                # v1.6.508 — for #347 R12. If both v1.6.482 + v1.6.505
-                # prose-vocab sets miss, try the AsciiDoc 4-col reset-
-                # table-row shape `| <addr> | <NAME> | <reset_value> |
-                # <access> |` (no prose vocab; pure column-position
-                # match). Real-benchmark SoC memmap docs render scalar
-                # reset values in this shape. chip-AGNOSTIC fallback.
-                lifted = _v1_6_508_lift_reset_from_adoc_table_row(
-                    window, name)
-                if lifted:
-                    lifted_source = "adoc_table_row_reset_v1_6_508"
-                    break
-                # v1.6.507 — for #347 R11 DIAGNOSTIC. Record first
-                # ≤4 unmatched window snippets (±120 char excerpt
-                # with newlines collapsed) so the field agent can
-                # see what vocab the prose actually uses.
-                if _debug_enabled_v1_6_507 and len(
-                        _debug_occurrences_v1_6_507) < 4:
-                    _snippet = window.replace("\n", " ")[:120]
-                    _debug_occurrences_v1_6_507.append(
-                        f"  - file={_fname} "
-                        f"snippet={_snippet!r}")
-            if lifted:
-                break
+            values.update(candidates(text, name, address))
+        lifted = unique_value(values)
+        lifted_source = "scalar_explicit_binding"
         if lifted:
             r["reset_value"] = lifted
             r["reset_value_source"] = lifted_source
