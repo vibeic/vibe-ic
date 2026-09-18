@@ -39,6 +39,7 @@ import json
 from pathlib import Path
 
 import pad_ring_check as PRC
+import macro_obs_geometry_intersect_check as MOC
 
 _MASTERS = ("fixture_io__in_c", "fixture_io__cor", "fixture_io__fill10")
 
@@ -145,6 +146,73 @@ def test_a_path_that_is_not_on_this_host_is_declined_not_assumed(tmp_path):
     proj = _project(tmp_path, write_lef=False)
     lefs, _d, why = PRC.io_lefs_this_run_recorded(proj, _producer())
     assert lefs == [] and "exists on this host" in why
+
+
+def test_a_partially_unreadable_run_inventory_is_declined(tmp_path):
+    """A readable subset cannot stand in for the run's complete view set."""
+    proj = _project(tmp_path)
+    rec = proj / PRC.DERIVED_CHIP_TOP_REL
+    doc = json.loads(rec.read_text())
+    doc["io_library_lefs"].append(str(proj / "pdk" / "missing.lef"))
+    rec.write_text(json.dumps(doc))
+    lefs, _decls, why = PRC.io_lefs_this_run_recorded(proj, _producer())
+    assert lefs == []
+    assert "unreadable" in why and "missing.lef" in why
+
+
+def test_an_existing_but_unreadable_run_view_is_declined(tmp_path, monkeypatch):
+    proj = _project(tmp_path)
+    target = proj / "pdk" / "libs.ref" / "fixture_io" / "lef" / "io.lef"
+    original = Path.read_text
+
+    def fail_target(self, *args, **kwargs):
+        if self == target:
+            raise PermissionError("fixture read denied")
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", fail_target)
+    lefs, _decls, why = PRC.io_lefs_this_run_recorded(proj, _producer())
+    assert lefs == [] and "cannot be read" in why
+
+
+def test_macro_gate_declines_an_unreadable_explicit_view(tmp_path):
+    """An explicit run view list is an all-or-refuse inventory."""
+    proj = tmp_path / "macro_proj"
+    pnr = proj / "phase3" / "stage3" / "pnr"
+    pnr.mkdir(parents=True)
+    (pnr / "routed.def").write_text(
+        "VERSION 5.8 ;\nDESIGN chip ;\nCOMPONENTS 1 ;\n"
+        "- u_macro fixture_macro + PLACED ( 0 0 ) N ;\n"
+        "END COMPONENTS\nEND DESIGN\n")
+    good = proj / "good.lef"
+    good.write_text(
+        "VERSION 5.8 ;\nMACRO fixture_macro\n  CLASS BLOCK ;\n"
+        "  SIZE 10 BY 10 ;\n  OBS\n    LAYER M1 ;\n      RECT 0 0 1 1 ;\n    END\n  END\nEND fixture_macro\nEND LIBRARY\n")
+    missing = proj / "missing.lef"
+    rc = MOC.main([str(proj), "--macro-lef", str(good),
+                   "--macro-lef", str(missing)])
+    assert rc == 2
+
+
+def test_macro_gate_declines_an_existing_but_unreadable_view(tmp_path, monkeypatch):
+    proj = tmp_path / "macro_proj"
+    pnr = proj / "phase3" / "stage3" / "pnr"
+    pnr.mkdir(parents=True)
+    (pnr / "routed.def").write_text(
+        "VERSION 5.8 ;\nDESIGN chip ;\nCOMPONENTS 1 ;\n"
+        "- u_macro fixture_macro + PLACED ( 0 0 ) N ;\n"
+        "END COMPONENTS\nEND DESIGN\n")
+    good = proj / "good.lef"
+    good.write_text("VERSION 5.8 ;\nMACRO fixture_macro\nEND fixture_macro\nEND LIBRARY\n")
+    original = MOC._read_input_text
+
+    def fail_target(path):
+        if path == good:
+            raise PermissionError("fixture read denied")
+        return original(path)
+
+    monkeypatch.setattr(MOC, "_read_input_text", fail_target)
+    assert MOC.main([str(proj), "--macro-lef", str(good)]) == 2
 
 
 def _installed_tree(root: Path, name: str, masters=_MASTERS) -> Path:

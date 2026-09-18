@@ -1094,7 +1094,31 @@ def _main_parsed(a) -> int:
         return _typed_refusal(a.json_out, "macro_obs_geometry_intersect",
                               _reason_taxonomy.BLOCKED_BY_UPSTREAM, reason)
 
-    lefs = list(a.macro_lefs or [])
+    explicit_lefs = list(a.macro_lefs or [])
+    lefs = explicit_lefs
+    if explicit_lefs:
+        unreadable = [p for p in explicit_lefs if not p.is_file()]
+        read_failed = []
+        for p in explicit_lefs:
+            if p in unreadable:
+                continue
+            try:
+                _read_input_text(p)
+            except OSError as exc:
+                read_failed.append(f"{p} ({exc})")
+        unreadable.extend(Path(x.split(" (", 1)[0]) for x in read_failed)
+        if unreadable:
+            shown = ", ".join(str(p) for p in unreadable[:6])
+            if len(unreadable) > 6:
+                shown += f", +{len(unreadable) - 6} more"
+            reason = (f"the run-declared macro LEF inventory contains "
+                      f"{len(unreadable)} unreadable or missing view(s): "
+                      f"{shown}; the inventory is incomplete. NOT a pass.")
+            print(f"[CANNOT DETERMINE] macro_obs_geometry_intersect: {reason}",
+                  file=sys.stderr)
+            return _typed_refusal(
+                a.json_out, "macro_obs_geometry_intersect",
+                _reason_taxonomy.BLOCKED_BY_UPSTREAM, reason)
     if not lefs:
         lefs = discover_macro_lefs(proj)
     texts = []

@@ -586,10 +586,33 @@ def io_lefs_this_run_recorded(project: Path, producer: Dict[str, Any]
                         f"{doc.get('verdict')!r}, so it opened no library")
     lefs = [Path(x) for x in (doc.get("io_library_lefs") or [])
             if isinstance(x, str)]
-    lefs = [p for p in lefs if p.is_file()]
+    unreadable = [p for p in lefs if not p.is_file()]
+    if unreadable:
+        shown = ", ".join(str(p) for p in unreadable[:4])
+        if len(unreadable) > 4:
+            shown += f", +{len(unreadable) - 4} more"
+        return [], [], (
+            f"{DERIVED_CHIP_TOP_REL} names {len(unreadable)} unreadable or "
+            f"missing IO LEF view(s): {shown}; the run inventory is "
+            "incomplete: no complete IO LEF inventory exists on this host "
+            "and is refused")
     if not lefs:
         return [], [], (f"{DERIVED_CHIP_TOP_REL} names no IO LEF that exists "
                         f"on this host")
+    read_failed = []
+    for lef in lefs:
+        try:
+            lef.read_text(errors="replace")
+        except OSError as exc:
+            read_failed.append(f"{lef} ({exc})")
+    if read_failed:
+        shown = ", ".join(read_failed[:4])
+        if len(read_failed) > 4:
+            shown += f", +{len(read_failed) - 4} more"
+        return [], [], (
+            f"{DERIVED_CHIP_TOP_REL} names {len(read_failed)} IO LEF view(s) "
+            f"that exist but cannot be read: {shown}; the run inventory is "
+            "incomplete and is refused")
     claimed = declared_masters(producer)
     carried = PR.IoLibrary(lefs).masters
     absent = [m for m in claimed if m not in carried]
