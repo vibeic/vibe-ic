@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import struct
 import subprocess
 import sys
@@ -380,6 +381,41 @@ def test_the_same_io_physical_views_feed_seed_route_and_streamout(
     assert ingest < consumer.index("\nglobal_placement")
     assert pdk.macro_lefs == ["/pdk/io_a.lef", "/pdk/io_b.lef"]
     assert pdk.macro_gds == ["/pdk/io.gds"]
+
+
+def test_padring_seam_records_the_complete_pnr_lef_inventory(tmp_path, monkeypatch):
+    project = tmp_path / "project"
+    out_dir = project / "phase3/stage3/pnr"
+    out_dir.mkdir(parents=True)
+
+    def seed_only(*_args, **_kwargs):
+        (out_dir / "floorplan.def").write_text("seed exists\n")
+        return 0, "seed complete", ""
+
+    monkeypatch.setattr(RUNNER, "_docker_exec", seed_only)
+    (out_dir / "padring.def").write_text("ring exists\n")
+
+    def passing_gate(*_a, **_k):
+        return RUNNER.StepResult("pad_ring_gen", "PASS")
+
+    pdk = _real_pdk()
+    pdk.macro_lefs = ["/pdk/existing_macro.lef"]
+    deck = _pnr_contract_deck().replace(
+        "read_lef /pdk/core.lef\n",
+        f"read_lef {pdk.tech_lef}\nread_lef {pdk.cell_lef}\n"
+        "read_lef /pdk/existing_macro.lef\n")
+    result, consumer = RUNNER._prepare_padring_for_route(
+        project, pdk, "container", out_dir, "/work/pnr",
+        deck, pad_ring_step=passing_gate,
+        io_view_discover=lambda *_args: (
+            ["/pdk/io_a.lef", "/pdk/io_b.lef"], ["/pdk/io.gds"]))
+    assert result.status == "PASS"
+    record = json.loads((project / RUNNER.PHYSICAL_VIEW_INVENTORY_REL).read_text())
+    assert record["verdict"] == "RECORDED"
+    assert record["scope"] == "pnr_read_lef_inputs"
+    assert record["read_lef_paths"] == re.findall(
+        r"(?m)^\s*read_lef\s+(\S+)\s*$", consumer)
+    assert record["read_lef_paths"][-2:] == ["/pdk/io_a.lef", "/pdk/io_b.lef"]
 
 
 def test_checked_in_step_15_5ic_is_the_contract_the_runner_consumes(tmp_path):

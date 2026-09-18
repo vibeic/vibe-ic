@@ -30254,6 +30254,25 @@ def _inject_padring_io_lefs(full_pnr_tcl: str,
     return full_pnr_tcl[:anchors[0].start()] + block + full_pnr_tcl[anchors[0].start():]
 
 
+PHYSICAL_VIEW_INVENTORY_REL = "reports/phase3/physical_view_inventory.json"
+
+
+def _record_physical_view_inventory(project: Path, pnr_tcl: str) -> Path:
+    """Record the exact LEF paths emitted to this run's PnR reader."""
+    paths = re.findall(r"(?m)^\s*read_lef\s+(\S+)\s*$", pnr_tcl)
+    rec = {
+        "schema": "vibe-ic/physical-view-inventory/1",
+        "producer": "phase3_one_shot_runner",
+        "verdict": "RECORDED",
+        "scope": "pnr_read_lef_inputs",
+        "read_lef_paths": paths,
+    }
+    out = project / PHYSICAL_VIEW_INVENTORY_REL
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(rec, indent=2) + "\n")
+    return out
+
+
 def _inject_padring_chip_top(full_pnr_tcl: str, chip_top_v_c: str,
                              chip_top: str, core: str) -> str:
     """Elaborate the PAD-CARRYING chip top instead of the bare core.
@@ -30600,6 +30619,7 @@ def _prepare_padring_for_route(
     for view in io_gds:
         if view not in pdk.macro_gds:
             pdk.macro_gds.append(view)
+    _record_physical_view_inventory(project, consumer)
     result.output_files += [str(seed), str(seed_log)]
     return result, consumer
 
