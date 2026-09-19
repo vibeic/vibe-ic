@@ -90,6 +90,8 @@ import hashlib
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+import _signoff_drc_format as _sdf
+
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from l_doc_evidence_util import (  # noqa: E402
     EvidenceVerdict,
@@ -332,14 +334,22 @@ def _report_engine(path: str, payload: Any, project: Path) -> Optional[str]:
     engine = producer.get("producer")
     if engine not in {"magic", "klayout"}:
         return None
-    subject = payload.get("subject")
-    items = subject.get("items") if isinstance(subject, dict) else None
-    if not isinstance(items, list) or not items:
+    if not isinstance(producer.get("file"), str) or not producer["file"]:
         return None
+    subject = payload.get("subject")
+    if not isinstance(subject, dict) or subject.get("basis") != "content":
+        return None
+    items = subject.get("items")
+    if not isinstance(items, list) or len(items) != 1:
+        return None
+    seen = set()
     for item in items:
         if not isinstance(item, dict) or not isinstance(item.get("path"), str):
             return None
         rel = Path(item["path"])
+        if rel in seen:
+            return None
+        seen.add(rel)
         path_obj = (project / rel).resolve()
         if not path_obj.is_relative_to(project.resolve()) or not path_obj.is_file():
             return None
@@ -348,6 +358,11 @@ def _report_engine(path: str, payload: Any, project: Path) -> Optional[str]:
             return None
         digest = hashlib.sha256(path_obj.read_bytes()).hexdigest()
         if digest != expected:
+            return None
+        native = _sdf.classify_file(path_obj)
+        if native.kind != engine or not native.is_signoff_deck:
+            return None
+        if engine == "klayout" and producer.get("deck") != native.deck:
             return None
     return engine
 

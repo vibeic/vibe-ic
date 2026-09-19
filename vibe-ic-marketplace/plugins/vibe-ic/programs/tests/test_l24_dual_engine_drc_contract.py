@@ -19,10 +19,14 @@ _INPUT = (
 def _write_audit(project: Path, engine: str, *, duplicate: bool = False,
                  wrong_producer: bool = False, stale_hash: bool = False) -> None:
     artifact = project / "reports" / "phase3" / f"native_{engine}.rpt"
-    artifact.write_text(f"native {engine} DRC transcript\n")
+    artifact.write_text(
+        "<report-database><generator> drc: script = '/pdk/drc.deck'</generator>\n"
+        if engine == "klayout" else "[INFO] COUNT: 0\n"
+    )
     digest = hashlib.sha256(artifact.read_bytes()).hexdigest()
     producer = "openroad" if wrong_producer else engine
-    entry = {"producer": producer, "is_signoff_deck": not wrong_producer,
+    entry = {"producer": producer, "file": f"reports/phase3/native_{engine}.rpt",
+             "is_signoff_deck": not wrong_producer,
              "deck": "/pdk/drc.deck" if engine == "klayout" else None}
     producers = [entry, dict(entry)] if duplicate else [entry]
     if stale_hash:
@@ -82,5 +86,5 @@ def test_consumer_refuses_untrusted_native_provenance(tmp_path: Path) -> None:
         ("wrong_producer", {"wrong_producer": True}),
         ("stale_hash", {"stale_hash": True}),
     ):
-        project = _project(tmp_path / name, klayout=False, controls=control)
+        project = _project(tmp_path / name, klayout=True, controls=control)
         assert gate_main(["gate", str(project)]) == 1
