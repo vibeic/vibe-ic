@@ -42,5 +42,16 @@
     "version_observed": "d7d1891b41c7a6c07dbbc3a6abaebd5f93f0e699",
     "version_lkg": "",
     "fixture_path": "vibe-ic-marketplace/plugins/vibe-ic/tests/phase1_fixtures/scalar_reset_binding_local/L4_command_protocol.md"
+  },
+  {
+    "issue": "LOCAL:SHA1300_TOP_PRESENCE",
+    "project": "explicit_top_context_local",
+    "layer": "L9",
+    "field": "top_module/no_top_module_in_input",
+    "expected": "explicit top sha256; absence flag false",
+    "actual": "fallback sha256; no_top_module_in_input true",
+    "version_observed": "8a5557dd135204e505a6df22412524f384303082",
+    "version_lkg": "",
+    "fixture_path": "vibe-ic-marketplace/plugins/vibe-ic/tests/phase1_fixtures/explicit_top_context_local/L8_submodule_integration.md"
   }
 ]

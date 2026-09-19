@@ -46446,6 +46446,28 @@ def _extract_top_module_from_docs(extracted: Dict[str, str]) -> Optional[str]:
     if _real:
         return _normalize_top_module_case(_real, extracted)
 
+    # A subject-first declaration names the design, rather than merely
+    # mentioning a top module. Anchor the entire affirmative clause so
+    # historical, negative, hypothetical and example prose cannot qualify.
+    # Repeated agreement is valid; multiple explicit names remain unknown.
+    subject_top_names = set()
+    subject_top = re.compile(
+        r"^\s*`(?P<name>[A-Za-z_][A-Za-z0-9_$]*)`\s*"
+        r"(?:為|是|is\s+(?:the\s+)?)\s*(?:\*\*)?"
+        r"(?:單一\s+|single\s+)top\s+module(?:\*\*)?"
+        r"(?=\s*(?:[,，.。;；]|$))", re.I)
+    for text in extracted.values():
+        for line in (text or "").splitlines():
+            hit = subject_top.match(line)
+            # The affirmative, quoted subject is explicit identifier authority.
+            # Loose-prose vocabulary filters (e.g. algorithm/tool words) must
+            # not discard a name the input actually declares as its top.
+            if hit:
+                subject_top_names.add(hit.group("name"))
+    if subject_top_names:
+        return (next(iter(subject_top_names))
+                if len(subject_top_names) == 1 else None)
+
     # ORGANIC-20260705 — no real declaration: an explicit "Module Name:" label
     # or an inline ``module `<name>` `` prose reference is the next-strongest
     # signal (author states the exact RTL identifier to implement). This wins
