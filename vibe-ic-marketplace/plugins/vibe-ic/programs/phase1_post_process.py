@@ -68,6 +68,10 @@ try:
     import l_doc_taxonomy as _tx
 except ImportError:  # pragma: no cover
     from . import l_doc_taxonomy as _tx  # type: ignore
+try:
+    from l_doc_consumer_contract import input_doc_texts
+except ImportError:  # pragma: no cover
+    from .l_doc_consumer_contract import input_doc_texts  # type: ignore
 
 # THE L-document write chokepoint — records the producing release on every
 # document this module writes (na_stub overwrite, scrub rewrite, skeleton
@@ -728,6 +732,11 @@ def emit_l_doc_skeleton(l_doc_code: str,
                 extracted = None
     if extracted:
         fields_template.update(extracted)
+    # L22 owns the width-by-regression obligation.  Preserve the relation when
+    # the input states it, instead of emitting the historical empty skeleton.
+    matrix = _extract_regression_matrix(project_dir) if str(l_doc_code).upper() == "L22" else {}
+    if matrix:
+        fields_template["regression_matrix"] = matrix
     out = {
         "doc_id": spec.code,
         "doc_name": spec.full_name,
@@ -737,7 +746,7 @@ def emit_l_doc_skeleton(l_doc_code: str,
         "evidence": [],
         "extraction_hints": hints,
         "extraction_status": ("DECLARED_ABSENT_FROM_INPUT" if absent
-                              else "EXTRACTED" if extracted
+                              else "EXTRACTED" if (extracted or matrix)
                               else "NOT_YET_EXTRACTED"),
         "emitted_by": _pmd.emitted_by(
             "phase1_post_process.emit_l_doc_skeleton"),
@@ -758,6 +767,12 @@ def emit_l_doc_skeleton(l_doc_code: str,
     if extracted:
         out["extraction_evidence_scan"] = extracted.get(
             "signoff_requirements_scan")
+    if matrix:
+        out["regression_matrix_evidence"] = {
+            "source": "input_doc_texts",
+            "row_count": len(matrix["rows"]),
+            "schema": matrix["schema"],
+        }
     return out
 
 
@@ -873,6 +888,66 @@ def _skeleton_fields_for(l_doc_code: str) -> Dict[str, Any]:
             "manufacturer_data": {},   # module-level metadata block
         },
     }.get(l_doc_code, {})
+
+
+def _extract_regression_matrix(project_dir: Optional[Path]) -> Dict[str, Any]:
+    """Extract a typed width/regression relation from input prose.
+
+    This is deliberately structural: it only accepts rows that name a
+    primary/secondary level and enumerate one or more numeric ``size``
+    values.  It never invents a width or treats a secondary row as a physical
+    sign-off requirement.  The result is consumed by L22, where the relation
+    is actionable rather than left as scattered prose.
+    """
+    if project_dir is None:
+        return {}
+    rows: List[Dict[str, Any]] = []
+    for _path, text in input_doc_texts(Path(project_dir)):
+        for line in text.splitlines():
+            low = line.lower()
+            level = None
+            if re.search(r"\bprimary\b", low):
+                level = "primary"
+            elif re.search(r"\bsecondary\b", low):
+                level = "secondary"
+            if level is None:
+                continue
+            cells = [c.strip() for c in line.split("|")]
+            candidates = []
+            for cell in cells:
+                if re.fullmatch(r"\d+(?:\s*/\s*\d+)*", cell):
+                    candidates.extend(int(v) for v in re.findall(r"\d+", cell))
+            if not candidates:
+                match = re.search(
+                    r"\bsize\s*(?:param(?:eter)?)?\s*[:=]?\s*"
+                    r"(\d+(?:\s*/\s*\d+)*)", line, re.I)
+                if match:
+                    candidates = [int(v) for v in re.findall(r"\d+", match.group(1))]
+            if not candidates:
+                continue
+            scope = []
+            if re.search(r"all\s+corners?|全\s*corner", low):
+                scope.append("all_corners")
+            if re.search(r"full\s+quality|全\s*quality", low):
+                scope.append("full_quality")
+            if re.search(r"functional", low):
+                scope.append("functional")
+            optional = level == "secondary"
+            for width in candidates:
+                rows.append({
+                    "level": level,
+                    "width": width,
+                    "required": not optional,
+                    "scope": scope,
+                    "physical_signoff_required": not optional,
+                })
+    if not rows or not any(r["level"] == "primary" for r in rows):
+        return {}
+    for row in rows:
+        if row["level"] == "secondary":
+            row["physical_signoff_required"] = False
+            row["required"] = False
+    return {"rows": rows, "schema": "width_regression_matrix.v1"}
 
 
 def _extraction_hints_for(l_doc_code: str) -> List[str]:
