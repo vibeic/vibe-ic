@@ -330,6 +330,46 @@ def _threshold_of(line: str) -> Optional[Dict[str, Any]]:
     return {"value": float(m.group(1)), "unit": m.group(2)}
 
 
+def _scoped_timing_corner_clause(line: str, headings: Sequence[str]) -> Optional[str]:
+    """An implicit STA requirement needs timing scope and an explicit mandate.
+
+    A multi-corner phrase alone names no check. Descendant headings may refine
+    timing into libraries/periods/corners, but an unrelated section cannot
+    borrow an earlier timing heading. This carries requirements, never results.
+    """
+    anchor = re.compile(r"\b(?:SDC|timing|clock(?:ing)?)\b", re.I)
+    refinement = re.compile(r"\b(?:librar(?:y|ies)|periods?|corners?)\b", re.I)
+    import _prose_polarity as polarity
+    excluded = re.compile(r"\b(?:examples?|historical|previous)\b|範例|例如|歷史", re.I)
+    if any(excluded.search(heading) or polarity.is_denied(heading)
+           for heading in headings):
+        return None
+    active = False
+    for heading in headings:
+        if anchor.search(heading):
+            active = True
+        elif active and not refinement.search(heading):
+            active = False
+    if not active:
+        return None
+    clause = re.split(r"[。;；]", line, maxsplit=1)[0]
+    if not re.search(r"\bmulti[- ]corner\s+sign[- ]?off\b", clause, re.I):
+        return None
+    # Never infer a timing check from a clause explicitly naming another one.
+    if any(_word_bounded(term).search(clause)
+           for check, terms, _ in SIGNOFF_CHECKS if check != "STA" for term in terms):
+        return None
+    if polarity.is_denied(clause) or excluded.search(clause):
+        return None
+    if not re.search(r"\b(?:must|shall|required)\b|均須|必須", clause, re.I):
+        return None
+    if not _CORNER_RE.search(clause):
+        return None
+    if _requirement_of(clause) is None and "通過" not in clause:
+        return None
+    return clause
+
+
 def extract_signoff_requirements(project: Path) -> Optional[Dict[str, Any]]:
     """L24's requirement rows plus the scan that produced them, or None.
 
@@ -365,12 +405,23 @@ def extract_signoff_requirements(project: Path) -> Optional[Dict[str, Any]]:
         patterns = [_word_bounded(s) for s in spellings]
         hits: List[Dict[str, Any]] = []
         for rel, lines in lines_by_doc:
+            headings: List[Tuple[int, str]] = []
+            in_fence = False
             for lineno, line in enumerate(lines, start=1):
+                if re.match(r"^\s*(```|~~~)", line):
+                    in_fence = not in_fence
+                heading = re.match(r"^\s*(#{1,6})\s+(.+)", line) if not in_fence else None
+                if heading:
+                    depth = len(heading.group(1))
+                    headings = [(d, text) for d, text in headings if d < depth]
+                    headings.append((depth, heading.group(2)))
                 match = next((m for m in (p.search(line) for p in patterns)
                               if m), None)
-                if match is None:
+                implicit = (_scoped_timing_corner_clause(line, [text for _, text in headings])
+                            if check == "STA" and match is None and not in_fence else None)
+                if match is None and implicit is None:
                     continue
-                clause = _clause_for(line, match)
+                clause = implicit if implicit is not None else _clause_for(line, match)
                 hits.append({
                     "document": rel,
                     "line": lineno,
@@ -378,7 +429,8 @@ def extract_signoff_requirements(project: Path) -> Optional[Dict[str, Any]]:
                     # layer; the citation is a pointer, not a copy.
                     "text": line.strip()[:400],
                     "clause": clause.strip()[:200],
-                    "requirement": _requirement_of(clause),
+                    "requirement": (_requirement_of(clause) or
+                                    ("pass" if implicit is not None and "通過" in clause else None)),
                     # Corners are read from the CLAUSE too, for the same
                     # reason: a corner named beside a different check on the
                     # same line is not this check's corner.
