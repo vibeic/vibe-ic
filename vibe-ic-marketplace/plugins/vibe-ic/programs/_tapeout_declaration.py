@@ -716,16 +716,59 @@ def merge_technology(doc: Dict[str, Any],
     return doc
 
 
-def route_of(doc: Dict[str, Any], has_slots: bool) -> str:
+def owner_self_tapeout(project: Path, doc: Dict[str, Any]) -> bool:
+    """Explicit, consistent owner DIE and operator absence; never a slot guess.
+
+    This is an input-contract decision, not catalogue integrity or signoff.
+    Consumers of retained catalogue records must still validate their hashes.
+    """
+    import _submission_template as ST
+    if validate(doc) or answer(doc, "deliverable") != DELIVERABLE_DIE:
+        return False
+    raw, err = load(project / ST.DESIGN_ANSWERS_REL)
+    if err or not isinstance(raw, dict) or not isinstance(raw.get("answers"), dict):
+        return False
+    merged = dict(raw["answers"])
+    for key in EXTRA_KEYS:
+        if key in raw:
+            merged[key] = raw[key]
+    own, _ = merge_answers(blank_declaration(), merged)
+    if validate(own) or answer(own, "deliverable") != DELIVERABLE_DIE:
+        return False
+    # Physical values may be enriched downstream (including chip-top wrapping).
+    # Preserve an explicitly answered ring obligation, not unanswered placeholders.
+    ring = raw["answers"].get("seal_ring_required")
+    if type(ring) is bool and answer(doc, "seal_ring_required") is not ring:
+        return False
+    op = raw.get("operator_template")
+    if not isinstance(op, dict) or any(k not in op or op[k] is not None
+                                       for k in ("path", "slot")):
+        return False
+    if not isinstance(op.get("absent_reason"), str) or not op["absent_reason"].strip():
+        return False
+    # An ingested explicit selection is also binding, even before answers merge.
+    report_path = project / ST.REPORT_REL
+    if report_path.exists():
+        rec, err = load(report_path)
+        if err or not isinstance(rec, dict) or not isinstance(rec.get("ingest"), dict):
+            return False
+        if rec["ingest"].get("declared_slot") is not None:
+            return False
+    return True
+
+
+def route_of(doc: Dict[str, Any], has_slots: bool,
+             project: Optional[Path] = None) -> str:
     """Which of the three routes this declaration selects.
 
-    `has_slots` is the OPERATOR's answer and it wins: a design that ingested a
-    template goes to the operator's own container whatever it declared about
-    itself. That ordering is deliberate — it is what keeps step 37.5ic's
-    verdict "not the one we wrote" on the shuttle route, which is the whole
-    point of that step.
+    Slot files normally retain the operator obligation. With project context,
+    a consistent owner DIE and explicit operator absence distinguishes a
+    retained catalogue from a purchase. The two-argument conservative reader
+    retains its original semantics; absence never means an IP declaration.
     """
     if has_slots:
+        if project is not None and owner_self_tapeout(project, doc):
+            return ROUTE_SELF_TAPEOUT
         return ROUTE_SHUTTLE
     # THROUGH `answer()`, NOT INTO THE DICT. This line used to read
     # `doc["answers"]["deliverable"]` itself, which made it a SECOND reader of
@@ -781,7 +824,7 @@ def declared_route_on_disk(project: Path, has_slots: bool
     if doc.get("schema") != SCHEMA:
         return NOT_DETERMINED, (f"{DECLARATION_REL} does not declare schema "
                                 f"{SCHEMA!r} (found {doc.get('schema')!r})")
-    route = route_of(doc, has_slots)
+    route = route_of(doc, has_slots, project)
     if route == NOT_DETERMINED:
         return route, (f"{DECLARATION_REL} is a declaration and answers no "
                        f"`deliverable`, so it selects no route")

@@ -334,17 +334,11 @@ def slot_rules_are_owed(project: Path,
     is going THROUGH a shuttle — a shuttle die must name its slot — and by
     nobody else.
 
-    So the rules are owed when EITHER:
-      * the design DECLARED a slot (whatever it calls itself, a design that
-        names a slot is checked against that slot), or
-      * its declaration is anything other than HARDMACRO — which includes
-        `DIE`, and, deliberately, includes NOT_DETERMINED and an unreadable or
-        absent declaration. An unstated route must never buy a pass: the whole
-        weight of this clause is that a die that was DEFAULTED and a die that
-        was CHOSEN are the same number with different provenance.
-
-    Nothing here widens what a DIE owes. `u_hawaii_adc` — DIE, no slot — is
-    refused exactly as it is today, and that is the negative control.
+    An explicit selected slot always retains its obligation. Otherwise only a
+    validated HARDMACRO without operator binding, or a consistent owner DIE
+    with explicit operator absence, excludes the purchased-slot contract.
+    The latter remains a DIE and still owes its own physical checks. Missing,
+    malformed or contradictory authority retains the obligation.
     """
     if declared_slot is not None:
         return True, None
@@ -353,6 +347,8 @@ def slot_rules_are_owed(project: Path,
         # DEGRADE TOWARDS OWING IT. "I could not read the declaration" is not
         # "the design declared HARDMACRO".
         return True, None
+    if TD.owner_self_tapeout(project, doc):
+        return False, "owner-attested DIE explicitly declares no operator binding; DIE physical obligations remain"
     deliverable = TD.answer(doc, "deliverable")
     if deliverable != TD.DELIVERABLE_HARDMACRO:
         return True, None
@@ -403,6 +399,9 @@ def catalogue_selects_ip(project: Path) -> Tuple[bool, str]:
     cannot bypass an unreadable record, a changed source, or a purchased slot.
     No files are removed and no new router marker is manufactured.
     """
+    declaration, error = TD.load(project / TD.DECLARATION_REL)
+    if error or not isinstance(declaration, dict) or TD.answer(declaration, "deliverable") != TD.DELIVERABLE_HARDMACRO:
+        return False, "only an owner-declared HARDMACRO can select IP"
     path = project / ST.REPORT_REL
     try:
         doc = json.loads(path.read_text(encoding="utf-8"))
@@ -417,6 +416,20 @@ def catalogue_selects_ip(project: Path) -> Tuple[bool, str]:
     if result["verdict"] != ST.VERDICT_NOT_APPLICABLE:
         return False, "operator catalogue record failed its existing integrity check"
     return True, why or "operator catalogue is informational"
+
+
+def catalogue_selects_self_tapeout(project: Path) -> Tuple[bool, str]:
+    """Validate retained catalogue evidence without turning DIE into IP."""
+    declaration, error = TD.load(project / TD.DECLARATION_REL)
+    if error or not isinstance(declaration, dict) or not TD.owner_self_tapeout(project, declaration):
+        return False, "no consistent owner DIE/operator-absence contract"
+    record, error = TD.load(project / ST.REPORT_REL)
+    if error or not isinstance(record, dict):
+        return False, "catalogue record unreadable"
+    result = evaluate(project, record, None)
+    if result["verdict"] != ST.VERDICT_NOT_APPLICABLE:
+        return False, "catalogue integrity not established"
+    return True, "validated informational catalogue; owner DIE has no operator purchase"
 
 
 def _geometry_key(slot: dict) -> tuple:
@@ -771,7 +784,7 @@ def evaluate(project: Path, doc: Optional[dict],
         # reader of a hardmacro's submission record needs.
         examined["operator_shuttle_available_not_used"] = {
             "slots_shipped": shipped,
-            "declared_route": TD.ROUTE_IP,
+            "declared_route": TD.declared_route_on_disk(project, False)[0],
             "why": not_owed_why,
         }
     elif declared is None:

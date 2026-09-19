@@ -1995,7 +1995,7 @@ def design_kind(run_dir: Path) -> Tuple[str, str]:
     declared_slot = _declared_operator_slot(run_dir)
     owed, _why_not = _submission_template_check.slot_rules_are_owed(
         run_dir, None)
-    if not owed:
+    if not owed and _tapeout_declaration.answer(doc, "deliverable") == _tapeout_declaration.DELIVERABLE_HARDMACRO:
         return _KIND_IP, (
             f"{_tapeout_declaration.DECLARATION_REL} declares deliverable "
             f"{_tapeout_declaration.DELIVERABLE_HARDMACRO} and the design "
@@ -2014,6 +2014,8 @@ def design_kind(run_dir: Path) -> Tuple[str, str]:
         route = _tapeout_declaration.ROUTE_SHUTTLE
     if declared_slot is not None:
         bound = f"the design binds operator slot {declared_slot!r}"
+    elif not owed:
+        bound = "no operator slot is owed; " + (_why_not or "owner declares independent tapeout")
     else:
         bound = ("the slot contract is owed: "
                  + (_why_not or "the design does not declare itself out of "

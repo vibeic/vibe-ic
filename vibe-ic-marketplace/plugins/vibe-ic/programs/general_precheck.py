@@ -1287,7 +1287,9 @@ def evaluate(project: Path,
     catalogue_ip, _catalogue_why = (
         _template_check.catalogue_selects_ip(project) if has_slots
         else (False, ""))
-    seal_route = _decl.route_of(doc, has_slots and not catalogue_ip)
+    catalogue_self = (has_slots and _decl.owner_self_tapeout(project, doc) and
+                      _template_check.catalogue_selects_self_tapeout(project)[0])
+    seal_route = _decl.route_of(doc, has_slots and not (catalogue_ip or catalogue_self))
     if (seal_route == _decl.ROUTE_IP
             and _template_check.slot_rules_are_owed(project, None)[0]):
         # Missing slot files do not cancel an affirmative or unreadable

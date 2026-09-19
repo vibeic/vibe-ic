@@ -187,7 +187,7 @@ def build(project: Path, answers_path: Optional[Path]) -> Dict[str, Any]:
     slots = sorted((project / ST.SLOTS_DIR_REL).glob("*.yaml")) + \
         sorted((project / ST.SLOTS_DIR_REL).glob("*.yml"))
     has_slots = bool(slots)
-    route = TD.route_of(doc, has_slots)
+    route = TD.route_of(doc, has_slots, project)
     return {
         "schema": TD.SCHEMA,
         "program": PROGRAM,
@@ -216,12 +216,12 @@ def _route_reason(route: str, has_slots: bool, doc: Dict[str, Any]) -> str:
                 "anything this design declares about itself, and where the two "
                 "arms disagree the step refuses rather than preferring one")
     if route == TD.ROUTE_SELF_TAPEOUT:
-        return ("no operator template, and the design declares deliverable="
+        return ("no applicable operator binding, and the design declares deliverable="
                 f"{TD.DELIVERABLE_DIE}: it is a die doing its own tape-out, so "
                 "it takes the chip path (step 37.5ic) and is judged by the "
                 "general precheck alone — the operator's arm has no operator")
     if route == TD.ROUTE_IP:
-        return ("no operator template, and the design declares deliverable="
+        return ("no applicable operator binding, and the design declares deliverable="
                 f"{TD.DELIVERABLE_HARDMACRO}: it is delivered, not fabricated, "
                 "so it terminates at the hardmacro kit (step 37.5ip) and needs "
                 "no pad ring, seal ring or submission check")

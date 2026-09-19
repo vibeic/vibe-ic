@@ -944,6 +944,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     except (OSError, ValueError, TypeError):  # degrade towards owing it
         _owed, _why_not = True, None
     if not _owed and _why_not:
+        _route_doc, _route_error = _TD.load(Path(a.project) / _TD.DECLARATION_REL)
+        _route_deliverable = _TD.answer(_route_doc, "deliverable")
         _route_na = {
             "check": "slot_pad_budget",
             "program": "slot_pad_budget_check",
@@ -952,7 +954,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             "reason_class": _reason_taxonomy.DESIGN_DECLARED_NA,
             "skip_kind": "class-not-applicable",
             "reason": (
-                "the design declares deliverable=HARDMACRO and binds no "
+                f"the design declares deliverable={_route_deliverable} and binds no "
                 "operator slot, so no purchased pad budget exists for its "
                 "interface to fit; the slot files on disk are the PDK's live "
                 "catalogue, which is information, not a purchase. " + _why_not),
@@ -968,7 +970,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 "declared_population": 0,
                 "assertions": [
                     {"path": "answers.deliverable",
-                     "equals": _TD.DELIVERABLE_HARDMACRO},
+                     "equals": _route_deliverable},
                 ],
             },
             "note": "a design-declared route, not an unanswered question",

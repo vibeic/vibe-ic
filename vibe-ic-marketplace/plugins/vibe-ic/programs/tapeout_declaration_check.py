@@ -150,6 +150,12 @@ def evaluate(project: Path,
 
     routers = _routers_present(project)
     present = [name for name, ok in routers.items() if ok]
+    if routers.get(TD.SELF_TAPEOUT_REL):
+        import submission_template_check as template_check
+        if (isinstance(doc, dict) and TD.owner_self_tapeout(project, doc)
+                and template_check.catalogue_selects_self_tapeout(project)[0]):
+            # Keep filesystem presence in the report; only active routers conflict.
+            present = [name for name in present if name != ST.SLOTS_DIR_REL + "/*.yaml"]
     if len(present) > 1:
         refusals.append({
             "rule": RULE_ROUTER_CONTRADICTION,

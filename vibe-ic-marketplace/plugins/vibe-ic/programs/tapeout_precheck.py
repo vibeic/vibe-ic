@@ -511,7 +511,10 @@ def delivery_route(project: Path) -> Tuple[str, str]:
     if (project / _st.NO_TEMPLATE_REL).is_file():
         if (project / _st.DESIGN_ANSWERS_REL).exists():
             import submission_template_check as _template_check
-            if _template_check.slot_rules_are_owed(project, None)[0]:
+            doc, err = _decl.load(project / _decl.DECLARATION_REL)
+            if (err or not isinstance(doc, dict)
+                    or _decl.answer(doc, "deliverable") != _decl.DELIVERABLE_HARDMACRO
+                    or _template_check.slot_rules_are_owed(project, None)[0]):
                 return ROUTE_UNDECLARED, "operator binding does not establish an IP route"
         return ROUTE_IP, _st.NO_TEMPLATE_REL
     return ROUTE_UNDECLARED, ""
@@ -614,13 +617,19 @@ def template_was_fetched(project: Path) -> bool:
     return any(p.is_file() for p in project.glob(TEMPLATE_SLOTS_GLOB))
 
 
-def operator_arm_applicability(project: Path, pdk: Optional[str]
+def operator_arm_applicability(project: Path, pdk: Optional[str],
+                               explicit_slot: str = ""
                                ) -> Tuple[str, str, Optional[Any]]:
     """(state, reason, shuttle) for the OPERATOR's arm.
 
     The four states are the ones in this module's docstring, and the whole
     point of having four is that only ONE of them is a legitimate absence.
     """
+    import submission_template_check as template_check
+    if not explicit_slot.strip():
+        is_self, reason = template_check.catalogue_selects_self_tapeout(project)
+        if is_self:
+            return NOT_APPLICABLE, reason, None
     if not pdk:
         return (NOT_DETERMINED,
                 "the design declares no PDK target that this flow could read, "
@@ -886,7 +895,7 @@ def evaluate(project: Path,
             detail={"command": cmd}))
 
     # ---------------- ARM 2 — THEIRS, when there is a THEM ------------------
-    state, why, shuttle = operator_arm_applicability(project, resolved_pdk)
+    state, why, shuttle = operator_arm_applicability(project, resolved_pdk, explicit_slot=slot)
     # WHICH SLOT — and NOT_DETERMINED rather than a guess. This runs only after
     # applicability, so it can never turn the legitimate absence
     # (NOT_APPLICABLE: no live shuttle for this PDK) into a defect. It fires in
