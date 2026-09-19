@@ -51954,6 +51954,15 @@ foreach _inst [get_cells -hierarchical *] {
       puts $_f "STA_LINK_INSTANCE [get_full_name $_inst] UNRESOLVED"
     } else {
       incr _linked
+      set _pins [$_inst pin_iterator]
+      while {[$_pins has_next]} {
+        set _pin [$_pins next]
+        set _net [$_pin net]
+        if {[$_pin is_driver] && ![$_pin is_load] && ($_net eq "NULL" || $_net eq "") && [$_pin liberty_port] ne "NULL" && [$_pin liberty_port] ne ""} {
+          puts $_f "STA_UNCONNECTED_OUTPUT [get_full_name $_pin]"
+        }
+      }
+      $_pins finish
       puts $_f "STA_LINK_INSTANCE [get_full_name $_inst] [get_full_name $_libcell]"
     }
   }
@@ -51962,7 +51971,7 @@ puts $_f "STA_LINK_CENSUS total=$_total linked=$_linked missing=$_missing"
 '''
 
 
-def _sta_native_census_complete(body):
+def _sta_native_census_complete(body, def_file=None):
     """Require explicit non-vacuous link counts and both native annotation counts.
 
     OpenSTA's report_parasitic_annotation emits unannotated and partially
@@ -51972,8 +51981,14 @@ def _sta_native_census_complete(body):
     linked = re.findall(r'^STA_LINK_CENSUS total=(\d+) linked=(\d+) missing=(\d+)$', body, re.M)
     missing = re.findall(r'^Found (\d+) unannotated drivers\.$', body, re.M)
     partial = re.findall(r'^Found (\d+) partially unannotated drivers\.$', body, re.M)
-    if len(linked) != 1 or missing != ['0'] or partial != ['0']:
+    if len(linked) != 1 or len(missing) != 1 or partial != ['0']:
         return False
+    if missing != ['0']:
+        if def_file is None:
+            return False
+        from sta_annotation_population import classify
+        if not classify(body, def_file)['complete']:
+            return False
     total, resolved, unresolved = map(int, linked[0])
     instances = re.findall(r'^STA_LINK_INSTANCE (.+)$', body, re.M)
     return (total > 0 and resolved == total and unresolved == 0
@@ -52075,7 +52090,7 @@ def _emit_declared_process_sta(project, top, pdk, container, spef_path,
         for c, path, tcl in scripts:
             path.write_text(tcl)
             mapped = _to_container_path(str(path), container)
-            rc, out, err = _docker_exec(container, f'sta -no_init -exit {shlex.quote(mapped)} 2>&1', marker=mapped, outputs=[rpt_out], inputs=[netlist, sdc, spef_path, path] + [Path(x) for x in inventory[c] if Path(x).is_file()])
+            rc, out, err = _docker_exec(container, f'sta -no_init -exit {shlex.quote(mapped)} 2>&1', marker=mapped, outputs=[rpt_out], inputs=[netlist, sdc, spef_path, path] + ([_pl.pnr_dir(project) / f'{top}.def'] if (_pl.pnr_dir(project) / f'{top}.def').is_file() else []) + [Path(x) for x in inventory[c] if Path(x).is_file()])
             if rc != 0 or re.search(r'(?mi)^\s*Error(?:\s|:)', out + '\n' + err):
                 return refuse(f'native execution failed rc={rc}; partial report is not complete')
     except (OSError, ValueError) as exc:
@@ -52083,8 +52098,16 @@ def _emit_declared_process_sta(project, top, pdk, container, spef_path,
     if not rpt_out.is_file():
         return refuse('native report absent')
     measured = set()
-    for role, corner, body in _split_sections(rpt_out.read_text(errors='replace')):
-        if role == 'SETUP' and not _sta_native_census_complete(body):
+    populations = {}
+    from sta_annotation_population import classify
+    sections = _split_sections(rpt_out.read_text(errors='replace'))
+    def_file = _pl.pnr_dir(project) / f'{top}.def'
+    for role, corner, body in sections:
+        if role == 'SETUP':
+            populations[corner] = classify(body, def_file)
+    rpt_out.with_name(rpt_out.name + '.population.json').write_text(json.dumps(populations, indent=2) + '\n')
+    for role, corner, body in sections:
+        if role == 'SETUP' and not _sta_native_census_complete(body, def_file):
             return refuse(f'{corner}: incomplete linked-master or parasitic annotation census')
         if role in ('SETUP', 'HOLD'):
             value = extract_slacks(body).get('setup_wns_ns' if role == 'SETUP' else 'hold_wns_ns')
