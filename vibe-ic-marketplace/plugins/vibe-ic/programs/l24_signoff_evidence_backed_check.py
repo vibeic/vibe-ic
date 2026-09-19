@@ -330,6 +330,15 @@ def _report_engine(path: str, payload: Any) -> Optional[str]:
     return None
 
 
+def _report_engine_for_path(project: Path, path: str) -> Optional[str]:
+    """Read an already selected report to preserve a typed engine field."""
+    try:
+        payload = json.loads((project / path).read_text(errors="replace"))
+    except (OSError, ValueError):
+        payload = None
+    return _report_engine(path, payload)
+
+
 #: How a requirement's population was chosen. Carried into the gate's own
 #: `--json` record so a reader can tell a flow-DECLARED sign-off reading from
 #: the name scan that is still all some checks have.
@@ -617,7 +626,7 @@ def _requirements_backed(project: Path, doc: Any, rel: str,
                 str(engine).lower(): [] for engine in required_engines
             }
             for path, verdict in found:
-                engine = _report_engine(path, None)
+                engine = _report_engine_for_path(project, path)
                 if engine in engine_records:
                     engine_records[engine].append((path, verdict))
             missing_engines = sorted(engine for engine, records in engine_records.items()
