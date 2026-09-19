@@ -903,16 +903,33 @@ def _extract_regression_matrix(project_dir: Optional[Path]) -> Dict[str, Any]:
         return {}
     rows: List[Dict[str, Any]] = []
     for _path, text in input_doc_texts(Path(project_dir)):
+        size_table = False
         for line in text.splitlines():
             low = line.lower()
+            cells = [c.strip() for c in line.split("|")]
+            is_table = len(cells) >= 3 and "|" in line
+            if is_table and any(re.fullmatch(r"(?:size|width)", c, re.I)
+                                for c in cells):
+                size_table = True
+                continue
+            if not is_table:
+                size_table = False
             level = None
-            if re.search(r"\bprimary\b", low):
+            if size_table and cells and re.fullmatch(
+                    r"(?:primary|secondary)(?:\s*\([^|]*\))?", cells[1] if cells[0] == "" else cells[0], re.I):
+                level = re.match(r"primary|secondary", (cells[1] if cells[0] == "" else cells[0]), re.I).group(0).lower()
+            elif (not is_table and re.search(r"\bprimary\b", low)
+                  and re.search(r"\bsize\s*(?:param(?:eter)?)?\s*[:=]", low)):
                 level = "primary"
-            elif re.search(r"\bsecondary\b", low):
+            elif (not is_table and re.search(r"\bsecondary\b", low)
+                  and re.search(r"\bsize\s*(?:param(?:eter)?)?\s*[:=]", low)):
                 level = "secondary"
             if level is None:
                 continue
-            cells = [c.strip() for c in line.split("|")]
+            if is_table and not size_table:
+                continue
+            if not is_table and level is None:
+                continue
             candidates = []
             for cell in cells:
                 if re.fullmatch(r"\d+(?:\s*/\s*\d+)*", cell):

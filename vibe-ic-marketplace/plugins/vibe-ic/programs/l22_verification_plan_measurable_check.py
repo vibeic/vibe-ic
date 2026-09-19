@@ -199,14 +199,28 @@ def _input_width_regression_claims(project: Path) -> List[dict]:
     """Find primary/secondary width rows stated by the design input."""
     claims: List[dict] = []
     for _path, text in input_doc_texts(project):
+        size_table = False
         for line in text.splitlines():
             low = line.lower()
-            level = ("primary" if re.search(r"\bprimary\b", low)
-                     else "secondary" if re.search(r"\bsecondary\b", low)
-                     else None)
+            cells = [c.strip() for c in line.split("|")]
+            is_table = len(cells) >= 3 and "|" in line
+            if is_table and any(re.fullmatch(r"(?:size|width)", c, re.I)
+                                for c in cells):
+                size_table = True
+                continue
+            if not is_table:
+                size_table = False
+            label = cells[1] if is_table and cells[0] == "" else (cells[0] if is_table else "")
+            row_match = (size_table and re.fullmatch(
+                r"(?:primary|secondary)(?:\s*\([^|]*\))?", label, re.I))
+            level = (row_match.group(0).split("(", 1)[0].strip().lower()
+                     if row_match else None)
+            if level is None and not is_table:
+                explicit = re.search(r"\b(primary|secondary)\b", low)
+                if explicit and re.search(r"\bsize\s*(?:param(?:eter)?)?\s*[:=]", low):
+                    level = explicit.group(1).lower()
             if level is None:
                 continue
-            cells = [c.strip() for c in line.split("|")]
             widths: List[int] = []
             for cell in cells:
                 if re.fullmatch(r"\d+(?:\s*/\s*\d+)*", cell):
