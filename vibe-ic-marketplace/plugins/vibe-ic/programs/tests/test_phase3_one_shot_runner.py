@@ -112,7 +112,7 @@ def _admitted_empty_project(project):
         path = project / rel
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(doc))
-    (project / TD.SELF_TAPEOUT_REL).write_text("neutral DIE fixture\n")
+    (project / TD.SELF_TAPEOUT_REL).write_text(TD.SELF_TAPEOUT_MARKER + "\n")
 
 
 def test_missing_delivery_declaration_refused_before_backend(tmp_path):
