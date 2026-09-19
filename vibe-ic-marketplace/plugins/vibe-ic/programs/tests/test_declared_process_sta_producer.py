@@ -40,13 +40,13 @@ def scene(tmp_path, monkeypatch):
             if mode['omit'] and role=='HOLD':continue
             val=-1 if mode['negative'] else 1
             content+=f'=== {role} corner: process={corner} ===\nworst slack {"max" if role=="SETUP" else "min"} {val}\n'
-        # The composed producer also requires the native linked/annotation census.
-        # This remains a CPU double; omission must still fail closed.
-        if 'STA_LINK_CENSUS' in text and not mode['omit_census']:
-            content += ('STA_LINK_INSTANCE neutral_cell neutral_library/master\n'
-                        'STA_LINK_CENSUS total=1 linked=1 missing=0\n'
-                        'Found 0 unannotated drivers.\n'
-                        'Found 0 partially unannotated drivers.\n')
+            # The composed producer also requires the native linked/annotation census.
+            # This remains a CPU double; omission must still fail closed.
+            if role == 'SETUP' and 'STA_LINK_CENSUS' in text and not mode['omit_census']:
+                content += ('STA_LINK_INSTANCE neutral_cell neutral_library/master\n'
+                            'STA_LINK_CENSUS total=1 linked=1 missing=0\n'
+                            'Found 0 unannotated drivers.\n'
+                            'Found 0 partially unannotated drivers.\n')
         with out.open('w' if len(calls)==1 else 'a') as f:f.write(content)
         return mode['rc'],'',''
     monkeypatch.setattr(p3,'_docker_exec',run)

@@ -21,8 +21,9 @@ proc set_timing_derate {args} {}
 proc report_checks {args} {}
 proc report_check_types {args} {}
 proc get_cells {args} {if {$::empty} {return {}};return {core_inst io_inst}}
-proc core_inst {method} {if {$method eq "is_leaf"} {return 1};return core_master}
-proc io_inst {method} {if {$method eq "is_leaf"} {return 1};if {$::unlinked} {return NULL};return io_master}
+proc core_inst {method} {if {$method eq "is_leaf"} {return 1};if {$method eq "pin_iterator"} {return neutral_iterator};return core_master}
+proc io_inst {method} {if {$method eq "is_leaf"} {return 1};if {$method eq "pin_iterator"} {return neutral_iterator};if {$::unlinked} {return NULL};return io_master}
+proc neutral_iterator {method} {if {$method eq "has_next"} {return 0};return ""}
 proc get_full_name {obj} {return $obj}
 proc report_parasitic_annotation {args} {
  if {$::api_error} {error "annotation command failed"}
