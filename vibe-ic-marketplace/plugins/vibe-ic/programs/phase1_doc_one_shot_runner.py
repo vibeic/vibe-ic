@@ -52527,6 +52527,29 @@ def _harvest_test_cases_from_input_tables(
                             "evidence": (f"input/docs/{fname} "
                                          "(verification-plan table)"),
                         }
+                        # A percent-PASS criterion over a coverage scope is
+                        # a plan requirement, not one executable input/output
+                        # vector. Require BOTH header roles, so a concrete
+                        # input table with a percent-valued result is untouched.
+                        _headers = [h.strip().strip('`*').lower().replace('_', ' ')
+                                    for h in hdr]
+                        _criteria_header = (exp_i is not None and
+                            _headers[exp_i] in {'判定', 'pass criterion',
+                                'pass criteria', 'acceptance criterion',
+                                'acceptance criteria'})
+                        _scope_i = next((k for k, h in enumerate(_headers)
+                            if h in {'範圍', '范围', 'scope', 'coverage',
+                                     'coverage scope'} and k < len(cells)), None)
+                        if (_criteria_header and _scope_i is not None and
+                                not any(h in {'input', 'stimulus', '輸入', '输入'}
+                                        for h in _headers) and
+                                re.fullmatch(r'\d+(?:\.\d+)?\s*%\s*PASS(?:\s*\(binary\))?',
+                                             last, re.I)):
+                            _case['kind'] = 'coverage_goal'
+                            _case['coverage_scope'] = re.sub(
+                                r'[`*]', '', cells[_scope_i]).strip()
+                            _case['classification_reason'] = (
+                                'percent-PASS acceptance criterion over a coverage scope')
                         if _assertion_row:
                             _case["oracle_from_assertion_row"] = True
                             _case["assertion_affirmation"] = last

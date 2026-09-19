@@ -97,5 +97,16 @@
     "version_observed": "7f777b34f89bee3dbc4bfc769f03cf93493ac389",
     "version_lkg": "",
     "fixture_path": "vibe-ic-marketplace/plugins/vibe-ic/tests/phase1_fixtures/usage_continuation_local/register_usage.md"
+  },
+  {
+    "issue": "LOCAL:SHA2055_COVERAGE_GOALS",
+    "project": "coverage_goal_table_local",
+    "layer": "L10",
+    "field": "test_cases[].kind",
+    "expected": "four percent-PASS acceptance/scope rows remain coverage_goal metadata, not executable functional vectors",
+    "actual": "all four rows functional_vector, anchor gate counts them executable",
+    "version_observed": "46e51026bd67ba986e8ab623e13080f651818375",
+    "version_lkg": "",
+    "fixture_path": "vibe-ic-marketplace/plugins/vibe-ic/tests/phase1_fixtures/coverage_goal_table_local/verification_plan.md"
   }
 ]
