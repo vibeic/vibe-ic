@@ -33781,6 +33781,10 @@ def gen_l4_regmap(project: Path,
     # endpoints as address-map constants (kind=indexed_register_address).
     # Dedup against already-emitted register addresses so a range whose
     # endpoint coincides with a discrete register row is not duplicated.
+    # Preserve documented named range bindings before generic endpoint rows.
+    from _documented_register_ranges import append_documented_ranges
+    append_documented_ranges(registers, extracted)
+
     _existing_addr_ints = {
         r.get("address_int") for r in registers
         if isinstance(r, dict) and r.get("address_int") is not None

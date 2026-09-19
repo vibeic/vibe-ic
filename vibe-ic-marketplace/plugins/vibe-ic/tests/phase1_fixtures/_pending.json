@@ -53,5 +53,16 @@
     "version_observed": "8a5557dd135204e505a6df22412524f384303082",
     "version_lkg": "",
     "fixture_path": "vibe-ic-marketplace/plugins/vibe-ic/tests/phase1_fixtures/explicit_top_context_local/L8_submodule_integration.md"
+  },
+  {
+    "issue": "LOCAL:SHA1930_DOCUMENTED_RANGES",
+    "project": "documented_register_ranges_local",
+    "layer": "L4",
+    "field": "registers",
+    "expected": "all declared range bindings represented with address/access/element width, flat or equivalent array",
+    "actual": "BLOCK/DIGEST name bindings absent; synthetic endpoints not equivalent",
+    "version_observed": "43f84790d55b07a2cb9eb5e5ae8911be0e33c3e0",
+    "version_lkg": "",
+    "fixture_path": "vibe-ic-marketplace/plugins/vibe-ic/tests/phase1_fixtures/documented_register_ranges_local/L5_register_map.md"
   }
 ]
