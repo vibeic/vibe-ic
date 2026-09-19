@@ -417,6 +417,99 @@ def _phase3_has_run(project: Path) -> bool:
     return d.is_dir() and any(d.rglob("*.json"))
 
 
+def _required_sta_corners(project: Path, required: Any,
+                          declared_paths: Tuple[str, ...]) -> Dict[str, Any]:
+    """Bind explicit L24 process obligations to the declared audit's native bytes.
+
+    Aggregate PASS/counts and unrelated discovered reports cannot supply a
+    missing corner. This checks native setup/hold readings, not library or
+    netlist correctness, which retain their separate owning gates.
+    """
+    import math
+    import _audit_receipt as receipt
+    import _sta_basis as basis
+    import sta_corner_record_completeness_check as native
+    out: Dict[str, Any] = {"required": required, "covered": [], "issues": [],
+                           "native_records": []}
+    issues = out["issues"]
+    if (not isinstance(required, list) or not required
+            or any(not isinstance(c, str) or c not in {"SS", "TT", "FF", "SF", "FS"}
+                   for c in required)):
+        issues.append("required process corners are malformed or unknown")
+        return out
+    roles: Dict[str, set] = {c: set() for c in required}
+    # Other flow-declared STA gates publish their own schemas (corner record,
+    # architectural residual, RC sweep). Only this audit owns subject.items.
+    audit_rel = "reports/phase3/sta/post_route_summary.json"
+    if audit_rel not in declared_paths:
+        issues.append("no flow-declared canonical STA audit to bind corner evidence")
+    for rel in (p for p in declared_paths if p == audit_rel):
+        try:
+            report_path = (project / rel).resolve()
+            if not report_path.is_relative_to(project.resolve()):
+                raise ValueError("audit path escapes project")
+            payload = json.loads(report_path.read_text())
+            if payload.get("program") != "eda_report_audit:sta" or payload.get("passed") is not True:
+                raise ValueError("not the passing canonical STA audit producer")
+            subject = payload.get("subject")
+            if not isinstance(subject, dict) or subject.get("basis") != "content":
+                raise ValueError("native content binding absent")
+            items = subject.get("items")
+            if not isinstance(items, list) or not items:
+                raise ValueError("empty native subject")
+            paths = []
+            for item in items:
+                if not isinstance(item, dict) or not isinstance(item.get("path"), str):
+                    raise ValueError("malformed native subject item")
+                path = (project / item["path"]).resolve()
+                if not path.is_relative_to(project.resolve()) or not path.is_file():
+                    raise ValueError("native path missing or outside project")
+                paths.append(path)
+            actual = receipt.subject_of(paths, relative_to=project)
+            if any(subject.get(k) != actual[k] for k in ("basis", "items", "sha256")):
+                raise ValueError("native subject content or identity changed")
+            for path in paths:
+                text = path.read_text()
+                sections = native._split_sections(text)
+                if not sections:
+                    labels = re.findall(r"(?m)^\s*STA_SIGNOFF_CORNER:\s*(\S+)", text)
+                    sections = [("BOTH", labels[0] if len(set(labels)) == 1 else None, text)]
+                for kind, corner, body in sections:
+                    if corner not in roles:
+                        continue
+                    stamps = basis.STAMP_RE.findall(body)
+                    if not stamps or any(basis.normalise_basis(v) != "POST_ROUTE" for v in stamps):
+                        issues.append(f"{path.name}:{corner} lacks unambiguous POST_ROUTE basis")
+                        continue
+                    for marker in ("STA_BASIS_LIBERTY", "STA_BASIS_SPEF"):
+                        values = re.findall(r"(?m)^\s*" + marker + r":\s*(\S+)", body)
+                        if len(set(values)) != 1:
+                            issues.append(f"{path.name}:{corner} lacks unambiguous {marker}")
+                    if re.search(r"(?im)^\s*(?:worst slack|wns|tns).*\b(?:nan|[-+]?inf(?:inity)?)\b", body):
+                        issues.append(f"{path.name}:{corner} contains a non-finite timing reading")
+                    vals = native.extract_slacks(body)
+                    if vals.get("tns_ns") is not None and (not math.isfinite(vals["tns_ns"]) or vals["tns_ns"] < 0):
+                        issues.append(f"{path.name}:{corner} has failing total negative slack")
+                    record = {"path": str(path.relative_to(project.resolve())),
+                              "corner": corner, "role": kind, "slacks": vals}
+                    out["native_records"].append(record)
+                    for role, key in (("SETUP", "setup_wns_ns"), ("HOLD", "hold_wns_ns")):
+                        if kind not in (role, "BOTH"):
+                            continue
+                        value = vals.get(key)
+                        if value is None or not math.isfinite(value) or value < 0:
+                            issues.append(f"{path.name}:{corner}:{role} has no finite met slack")
+                        else:
+                            roles[corner].add(role)
+        except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+            issues.append(f"{rel}: {exc}")
+    out["covered"] = sorted(c for c, found in roles.items() if found == {"SETUP", "HOLD"})
+    out["missing"] = sorted(set(required) - set(out["covered"]))
+    if out["missing"]:
+        issues.append("required corners lack setup/hold evidence: " + ", ".join(out["missing"]))
+    return out
+
+
 def _requirements_backed(project: Path, doc: Any, rel: str,
                          rows_out: Optional[List[Dict[str, Any]]] = None
                          ) -> Tuple[List[str], List[str]]:
@@ -500,6 +593,16 @@ def _requirements_backed(project: Path, doc: Any, rel: str,
                 f"and this run measured it as "
                 + ", ".join(f"{v!r} in {p}" for p, v in failed[:3]))
             continue
+        required_corners = row.get("corners")
+        if check == "STA" and required_corners not in (None, []):
+            coverage = _required_sta_corners(project, required_corners, declared_paths)
+            record["corner_coverage"] = coverage
+            if coverage["issues"]:
+                record["outcome"] = "UNMET_CORNER_EVIDENCE"
+                failures.append(
+                    f"{rel}: the input REQUIRES STA corners {required_corners!r} "
+                    f"at {where}, but " + "; ".join(coverage["issues"]))
+                continue
         record["outcome"] = "BACKED"
         msgs.append(
             f"{rel}: {check} {requirement or '(prose)'} required at {where} — "
