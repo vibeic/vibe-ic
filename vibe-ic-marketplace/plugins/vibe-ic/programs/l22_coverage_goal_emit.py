@@ -196,6 +196,70 @@ def _generated_docs(project: Path) -> Path:
     return project / "phase1" / "generated_docs"
 
 
+def _acceptance_table_goals(project: Path) -> List[Dict[str, Any]]:
+    """Lift stated percentage-PASS requirements, never measured results.
+
+    Header roles establish acceptance intent. Keep all original cells: a
+    population/scope is part of the requirement and must not be deduplicated
+    merely because another row has the same name and percentage.
+    """
+    result: List[Dict[str, Any]] = []
+    criteria = {"判定", "接受區間", "acceptance criterion", "acceptance criteria",
+                "pass criterion", "pass criteria", "acceptance range"}
+    names = {"測試類別", "测试类别", "指標", "指标", "metric", "test category"}
+    gate_headers = {"是否 sign-off gate", "sign-off gate", "signoff gate"}
+    for path, text in input_doc_texts(project):
+        lines = text.splitlines()
+        for i in range(len(lines) - 1):
+            if not lines[i].strip().startswith("|"):
+                continue
+            header = [c.strip() for c in lines[i].strip().strip("|").split("|")]
+            norm = [c.strip("`*").lower() for c in header]
+            sep = [c.strip() for c in lines[i+1].strip().strip("|").split("|")]
+            if len(sep) != len(header) or not all(re.fullmatch(r":?-{3,}:?", c) for c in sep):
+                continue
+            ni = [j for j, c in enumerate(norm) if c in names]
+            ci = [j for j, c in enumerate(norm) if c in criteria]
+            if len(ni) != 1 or len(ci) != 1:
+                continue
+            gi = next((j for j, c in enumerate(norm) if c in gate_headers), None)
+            for k in range(i + 2, len(lines)):
+                if not lines[k].strip().startswith("|"):
+                    break
+                cells = [c.strip() for c in lines[k].strip().strip("|").split("|")]
+                if len(cells) != len(header) or not cells[ni[0]]:
+                    continue
+                criterion = cells[ci[0]]
+                parsed_criterion = re.sub(r"^(\*\*|__|`)(.*?)\1$", r"\2", criterion)
+                match = re.fullmatch(r"(\d+(?:\.\d+)?)\s*%\s*PASS(?:\s*\(binary\))?",
+                                     parsed_criterion, re.I)
+                if not match or not 0 <= float(match.group(1)) <= 100:
+                    continue
+                qualifier = signoff_qualifier(lines[k])
+                signoff = qualifier is None
+                if gi is not None:
+                    declared = cells[gi].lower()
+                    if declared in {"yes", "true", "✅", "是"}:
+                        signoff = True
+                    elif declared in {"no", "false", "❌", "❌ 否", "否"}:
+                        signoff = False
+                        qualifier = cells[gi]
+                    else:
+                        # Preserve an undecided gate flag rather than select it.
+                        signoff = None
+                src, outside = project_relative_source(path, project)
+                goal = {"name": cells[ni[0]], "target_pct": float(match.group(1)),
+                        "kind": "coverage_goal", "metric_kind": "pass_rate",
+                        "criterion": criterion, "source_columns": dict(zip(header, cells)),
+                        "signoff_gate": signoff, "signoff_qualifier": qualifier,
+                        "source": src, "line": k + 1, "evidence": lines[k].strip(),
+                        "extraction_strategy": TOOL + ".acceptance_table"}
+                if outside:
+                    goal["source_outside_project"] = True
+                result.append(goal)
+    return result
+
+
 def run(project: Path, dry_run: bool = False) -> Dict[str, Any]:
     gate = _gate_module()
     if gate is None or not hasattr(gate, "_COVERAGE_TARGET_RE"):
@@ -292,6 +356,16 @@ def run(project: Path, dry_run: bool = False) -> Dict[str, Any]:
             goal["source_outside_project"] = True
         goals.append(goal)
         emitted.append(goal)
+
+    # Source-row identity retains separate populations and makes replay stable.
+    table_have = {(g.get("source"), g.get("line"), g.get("extraction_strategy"))
+                  for g in goals if isinstance(g, dict)}
+    for goal in _acceptance_table_goals(project):
+        key = (goal["source"], goal["line"], goal["extraction_strategy"])
+        if key not in table_have:
+            goals.append(goal)
+            emitted.append(goal)
+            table_have.add(key)
 
     wrote = False
     if emitted and not dry_run:

@@ -108,5 +108,16 @@
     "version_observed": "46e51026bd67ba986e8ab623e13080f651818375",
     "version_lkg": "",
     "fixture_path": "vibe-ic-marketplace/plugins/vibe-ic/tests/phase1_fixtures/coverage_goal_table_local/verification_plan.md"
+  },
+  {
+    "issue": "LOCAL:SHA2120_L22",
+    "project": "acceptance_targets_local",
+    "layer": "L22",
+    "field": "fields.coverage_goals",
+    "expected": "five named percent-PASS table requirements retain numeric percentage and exact criterion/scope/population; no measured results",
+    "actual": "zero goals; consumer SKIP rc2",
+    "version_observed": "f4b278dfd9668a132bd249d126ea1b85b824836e",
+    "version_lkg": "",
+    "fixture_path": "vibe-ic-marketplace/plugins/vibe-ic/tests/phase1_fixtures/acceptance_targets_local/verification_plan.md"
   }
 ]
