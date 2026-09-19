@@ -51940,6 +51940,47 @@ def _pnr_io_liberties_tcl(project: Path, pdk: PdkConfig, container: str,
     return "\n".join(dict.fromkeys(lines))
 
 
+def _sta_link_census_tcl():
+    """Enumerate actual linked leaf instances, never infer linking from silence."""
+    return '''set _linked 0
+set _missing 0
+set _total 0
+foreach _inst [get_cells -hierarchical *] {
+  if {[$_inst is_leaf]} {
+    incr _total
+    set _libcell [$_inst liberty_cell]
+    if {$_libcell eq "NULL" || $_libcell eq ""} {
+      incr _missing
+      puts $_f "STA_LINK_INSTANCE [get_full_name $_inst] UNRESOLVED"
+    } else {
+      incr _linked
+      puts $_f "STA_LINK_INSTANCE [get_full_name $_inst] [get_full_name $_libcell]"
+    }
+  }
+}
+puts $_f "STA_LINK_CENSUS total=$_total linked=$_linked missing=$_missing"
+'''
+
+
+def _sta_native_census_complete(body):
+    """Require explicit non-vacuous link counts and both native annotation counts.
+
+    OpenSTA's report_parasitic_annotation emits unannotated and partially
+    unannotated driver counts. An absent/changed dialect is unverified, not zero.
+    Native detail lines remain in the report for diagnosis.
+    """
+    linked = re.findall(r'^STA_LINK_CENSUS total=(\d+) linked=(\d+) missing=(\d+)$', body, re.M)
+    missing = re.findall(r'^Found (\d+) unannotated drivers\.$', body, re.M)
+    partial = re.findall(r'^Found (\d+) partially unannotated drivers\.$', body, re.M)
+    if len(linked) != 1 or missing != ['0'] or partial != ['0']:
+        return False
+    total, resolved, unresolved = map(int, linked[0])
+    instances = re.findall(r'^STA_LINK_INSTANCE (.+)$', body, re.M)
+    return (total > 0 and resolved == total and unresolved == 0
+            and len(instances) == total
+            and not any(x.endswith(' UNRESOLVED') for x in instances))
+
+
 def _emit_declared_process_sta(project, top, pdk, container, spef_path,
                                rpt_out, notes, required):
     """Own fresh canonical native sections for explicit input process obligations.
@@ -52022,8 +52063,12 @@ def _emit_declared_process_sta(project, top, pdk, container, spef_path,
                              'STA_BASIS_CORNER: nom',
                              f'OCV_DERATE_APPLIED early={_FLAT_OCV_DERATE_EARLY} late={_FLAT_OCV_DERATE_LATE} flat-OCV'] + [f'STA_BASIS_IO_LIBERTY: {_to_container_path(x, container)}' for x in inventory[c][1:] if x in io_views]:
                     tcl += f'puts $_f {tq(line)}\n'
+                if j == 0:
+                    tcl += _sta_link_census_tcl()
                 tcl += 'close $_f\n'
-                tcl += f'report_checks -path_delay {flag} >> {tq(report)}\nreport_worst_slack -{flag} >> {tq(report)}\nreport_tns >> {tq(report)}\n'
+                if j == 0:
+                    tcl += f'report_parasitic_annotation -report_unannotated >> {tq(report)}\n'
+                tcl += f'report_checks -path_delay {flag} >> {tq(report)}\nreport_worst_slack -{flag} >> {tq(report)}\nreport_tns -{flag} >> {tq(report)}\n'
             tcl += _report_check_types_tcl(tq(report)) + 'exit\n'
             path = rpt_out.parent / f'sta_declared_{c.lower()}.tcl'
             scripts.append((c, path, tcl))
@@ -52039,6 +52084,8 @@ def _emit_declared_process_sta(project, top, pdk, container, spef_path,
         return refuse('native report absent')
     measured = set()
     for role, corner, body in _split_sections(rpt_out.read_text(errors='replace')):
+        if role == 'SETUP' and not _sta_native_census_complete(body):
+            return refuse(f'{corner}: incomplete linked-master or parasitic annotation census')
         if role in ('SETUP', 'HOLD'):
             value = extract_slacks(body).get('setup_wns_ns' if role == 'SETUP' else 'hold_wns_ns')
             if value is not None and math.isfinite(value):
