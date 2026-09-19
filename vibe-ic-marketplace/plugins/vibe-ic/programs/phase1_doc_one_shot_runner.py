@@ -33783,6 +33783,10 @@ def gen_l4_regmap(project: Path,
     from _documented_register_ranges import append_documented_ranges
     append_documented_ranges(registers, extracted)
 
+    # Scalar summary widths are explicit register facts, not field layouts.
+    from _documented_scalar_widths import attach_documented_scalar_widths
+    attach_documented_scalar_widths(registers, extracted)
+
     # v1.6.577 — for #393 P3 ORGANIC. Peripheral-CSR namespace
     # collision qualifier. When N peripherals each have `CTRL` /
     # `DATA` / `STATUS` registers (universal SoC convention),

@@ -75,5 +75,16 @@
     "version_observed": "261bd78f2f1e342800b8658de7130f45260a622c",
     "version_lkg": "",
     "fixture_path": "vibe-ic-marketplace/plugins/vibe-ic/tests/phase1_fixtures/address_space_endpoints_local/registers.md"
+  },
+  {
+    "issue": "LOCAL:SHA2000_SCALAR_WIDTH",
+    "project": "scalar_register_width_local",
+    "layer": "L4",
+    "field": "registers[].width_bits",
+    "expected": "PAYLOAD width_bits=16 as explicitly documented; no other semantics invented",
+    "actual": "PAYLOAD emitted without width_bits",
+    "version_observed": "4972fbf57ab075d803c96fd33ea28f4a7c29cd01",
+    "version_lkg": "",
+    "fixture_path": "vibe-ic-marketplace/plugins/vibe-ic/tests/phase1_fixtures/scalar_register_width_local/registers.md"
   }
 ]
