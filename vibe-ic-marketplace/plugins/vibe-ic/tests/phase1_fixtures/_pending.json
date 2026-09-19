@@ -86,5 +86,16 @@
     "version_observed": "4972fbf57ab075d803c96fd33ea28f4a7c29cd01",
     "version_lkg": "",
     "fixture_path": "vibe-ic-marketplace/plugins/vibe-ic/tests/phase1_fixtures/scalar_register_width_local/registers.md"
+  },
+  {
+    "issue": "LOCAL:SHA2036_CONTINUATION",
+    "project": "usage_continuation_local",
+    "layer": "L12",
+    "field": "behavioral_sequences[].steps",
+    "expected": "one procedure retains indented launch action in order; original repeat2-6 covers expanded steps2-7",
+    "actual": "launch write dropped, one procedure split into2, repeat targets no longer local",
+    "version_observed": "7f777b34f89bee3dbc4bfc769f03cf93493ac389",
+    "version_lkg": "",
+    "fixture_path": "vibe-ic-marketplace/plugins/vibe-ic/tests/phase1_fixtures/usage_continuation_local/register_usage.md"
   }
 ]

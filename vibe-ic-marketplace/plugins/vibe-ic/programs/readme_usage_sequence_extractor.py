@@ -272,16 +272,41 @@ def extract_usage_sequence_from_readme(
     sequences: List[dict] = []
     current_steps: List[dict] = []
     last_num: int = 0
+    source_numbers: List[int] = []
+    content_column = 0
 
     def _flush() -> None:
-        nonlocal current_steps, last_num
-        if len(current_steps) >= _MIN_STEPS:
+        nonlocal current_steps, last_num, source_numbers
+        # Continuations cannot manufacture the minimum numbered-list length.
+        if len(set(source_numbers)) >= _MIN_STEPS:
             # Imperative-verb fraction floor.
             imperative_count = sum(
                 1 for s in current_steps
                 if _first_word_lower(s["action"]) in _IMPERATIVE_VERBS
             )
             if imperative_count / len(current_steps) >= _MIN_IMPERATIVE_FRACTION:
+                if len(source_numbers) != len(set(source_numbers)):
+                    # Expanded actions use dense local indices. Bind repeat
+                    # ranges to the first/last action of each SOURCE item.
+                    first, last = {}, {}
+                    for step, number in zip(current_steps, source_numbers):
+                        step["source_step"] = number
+                        first.setdefault(number, step["step"])
+                        last[number] = step["step"]
+                    for step in current_steps:
+                        repeat = step.get("repeat_steps")
+                        if repeat is None:
+                            continue
+                        step["source_repeat_steps"] = repeat
+                        lo, hi = (int(x) for x in repeat.split("-"))
+                        if lo <= hi and all(n in first for n in range(lo, hi + 1)):
+                            step["repeat_steps"] = f"{first[lo]}-{last[hi]}"
+                            step["next_state"] = f"step {first[lo]}"
+                        else:
+                            # Preserve the source claim without asserting a
+                            # dangling target in the expanded sequence.
+                            step.pop("repeat_steps", None)
+                            step.pop("next_state", None)
                 idx = len(sequences) + 1
                 sequences.append({
                     "name":     f"usage_sequence_{idx}",
@@ -291,11 +316,26 @@ def extract_usage_sequence_from_readme(
                     "source":   "readme_usage_sequence",
                 })
         current_steps = []
+        source_numbers = []
         last_num = 0
 
     for line_num, line in enumerate(lines, start=1):
+        line = line.expandtabs(8)
         m = _NUMBERED_LINE_RE.match(line)
         if not m:
+            action = line.strip()
+            indent = len(line) - len(line.lstrip())
+            typed = type_step_action(action)
+            if (current_steps and indent >= content_column and
+                    len(action) >= _MIN_ACTION_LEN and
+                    _first_word_lower(action) in _IMPERATIVE_VERBS and
+                    typed.get("action_type")):
+                step_rec = {"step": len(current_steps) + 1,
+                            "action": action, "evidence_line": line_num}
+                step_rec.update(typed)
+                current_steps.append(step_rec)
+                source_numbers.append(last_num)
+                continue
             # A non-numbered line ends the current sequence iff it
             # is non-blank prose (blank lines are tolerated inside
             # markdown lists).
@@ -319,6 +359,8 @@ def extract_usage_sequence_from_readme(
         }
         step_rec.update(type_step_action(action))
         current_steps.append(step_rec)
+        source_numbers.append(num)
+        content_column = m.start(2)
         last_num = num
 
     _flush()
