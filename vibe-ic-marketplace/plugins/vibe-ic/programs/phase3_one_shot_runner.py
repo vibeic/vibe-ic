@@ -49557,16 +49557,19 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
 
     # --- Step 23: SPEF-based post-route STA (#527) ----------------------
     spef_sta_rpt = sta_out / "sta_spef_based.rpt"
+    spef_sta_attempt_ok = None
     if (spef_out.is_file() and spef_out.stat().st_size > 0
             and _signoff_regen(spef_sta_rpt, primary_def)):
-        if _emit_spef_sta(project, top, pdk, container, spef_out,
-                          spef_sta_rpt, notes):
+        spef_sta_attempt_ok = _emit_spef_sta(project, top, pdk, container, spef_out,
+                                             spef_sta_rpt, notes)
+        if spef_sta_attempt_ok:
             written.append(str(spef_sta_rpt))
             mirror = rpt_phase3 / "sta_spef_based.rpt"
             if _signoff_regen(mirror, primary_def):
                 written.extend(_publish_artefact_mirror(
                     spef_sta_rpt, mirror, project, "_emit_spef_sta"))
-    spef_sta_ok = spef_sta_rpt.is_file() and spef_sta_rpt.stat().st_size > 0
+    spef_sta_ok = (spef_sta_attempt_ok is not False
+                   and spef_sta_rpt.is_file() and spef_sta_rpt.stat().st_size > 0)
 
     # --- TAPEOUT-SIGNOFF P1: multi-corner SPEF (min/nom/max) + corner STA -----
     # Extract a per-corner SPEF set so SETUP is signed off at the slow/max-RC
@@ -49826,6 +49829,12 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
     # #527 — SPEF-based is CANONICAL when available (closer to sign-off
     # reality); the estimate-based report_checks is the fallback only.
     post_route_rpt = sta_out / "post_route_timing.rpt"
+    # An attempted measurement supersedes the alias, including on failure.
+    # Archive prior bytes for diagnosis; never let them stand for this attempt.
+    if spef_sta_attempt_ok is not None and post_route_rpt.is_file():
+        import uuid
+        post_route_rpt.replace(post_route_rpt.with_name(
+            post_route_rpt.name + ".previous-" + uuid.uuid4().hex))
     # RESUME-upgrade (adversarial-review fix): a resumed project may carry a
     # STALE estimate-based alias written before the SPEF run existed; once
     # the SPEF-based report exists the alias MUST be upgraded (and a stale
@@ -49851,7 +49860,7 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                 "phase3/stage3/pnr/sta.rpt for comparison.\n"
                 + spef_sta_rpt.read_text())
             written.append(str(post_route_rpt))
-        elif primary_sta.is_file():
+        elif spef_sta_attempt_ok is not False and primary_sta.is_file():
             post_route_rpt.write_text(primary_sta.read_text())
             written.append(str(post_route_rpt))
 
@@ -51931,6 +51940,115 @@ def _pnr_io_liberties_tcl(project: Path, pdk: PdkConfig, container: str,
     return "\n".join(dict.fromkeys(lines))
 
 
+def _emit_declared_process_sta(project, top, pdk, container, spef_path,
+                               rpt_out, notes, required):
+    """Own fresh canonical native sections for explicit input process obligations.
+
+    Each process gets an isolated STA invocation; native report commands write
+    directly to the owned report. No historical report is imported or merged.
+    Success means complete measurements, never nonnegative timing closure.
+    """
+    import math
+    import shlex
+    import uuid
+    destination = rpt_out
+    rpt_out = rpt_out.with_name(rpt_out.name + ".attempt-" + uuid.uuid4().hex)
+    from sta_corner_record_completeness_check import _split_sections, extract_slacks
+
+    def refuse(reason):
+        notes.append('declared process STA refused: ' + reason)
+        return False
+
+    def tq(value):
+        value = str(value)
+        if any(c in value for c in '{}\\\n\r'):
+            raise ValueError('unsafe Tcl path')
+        return '{' + value + '}'
+
+    netlist = _pl.pnr_dir(project) / f'{top}_pnr.v'
+    sdc = _pl.pnr_dir(project) / 'constraint.sdc'
+    if any(not f.is_file() or not f.stat().st_size for f in (netlist, sdc, spef_path)):
+        return refuse('nonempty routed netlist, SDC and SPEF required')
+    if _discover_aocv_table(project, pdk, container):
+        return refuse('declared AOCV table requires qualified multi-process ingestion; no flat downgrade')
+    libs = _resolve_signoff_corner_libs(project, pdk, container)
+    if any(c not in libs for c in required) or len({libs[c] for c in required}) != len(required):
+        return refuse('missing or collapsed process libraries')
+    staged = project / 'input/pdk/liberty'
+    for c in required:
+        if sum(_classify_corner_from_name(f.name) == c for f in staged.glob('*.lib')) > 1:
+            return refuse('ambiguous staged core library for ' + c)
+    io_record = project / 'reports/phase3/io_pad_chip_top.json'
+    io_views = []
+    if io_record.exists():
+        try:
+            io_views = json.loads(io_record.read_text())['io_library_liberty']
+            if not isinstance(io_views, list) or not io_views or not all(isinstance(x, str) and x for x in io_views):
+                raise ValueError('invalid IO inventory')
+        except (OSError, ValueError, KeyError, TypeError):
+            return refuse('invalid declared IO Liberty inventory')
+    inventory = {}
+    for c in required:
+        lib = libs[c]
+        if _classify_corner_from_name(Path(lib).name) != c:
+            return refuse('core process identity mismatch: ' + c)
+        suffix = Path(lib).stem.partition('__')[2]
+        ios = sorted(set(x for x in io_views if suffix and Path(x).stem.endswith('__' + suffix)))
+        # One view per IO library family; several families are legitimate.
+        families = [Path(x).stem.rpartition('__')[0] for x in ios]
+        if io_views and (not ios or len(set(families)) != len(families)):
+            return refuse('missing or ambiguous exact-PVT IO library for ' + c)
+        declared_families = {Path(x).stem.rpartition('__')[0] for x in io_views}
+        if io_views and set(families) != declared_families:
+            return refuse('incomplete IO family inventory for ' + c)
+        inventory[c] = list(dict.fromkeys([lib] + ios + [str(x) for x in (pdk.macro_libs or [])]))
+    try:
+        rpt_out.parent.mkdir(parents=True, exist_ok=True)
+        report = _to_container_path(str(rpt_out), container)
+        inputs = [_to_container_path(str(f), container) for f in (netlist, sdc, spef_path)]
+        scripts = []
+        for i, c in enumerate(required):
+            views = [_to_container_path(x, container) for x in inventory[c]]
+            tcl = ''.join(f'if {{![file readable {tq(f)}] || [file size {tq(f)}] == 0}} {{error "unreadable STA input"}}\n' for f in views + inputs)
+            tcl += ''.join(f'read_liberty {tq(f)}\n' for f in views)
+            tcl += f'read_verilog {tq(inputs[0])}\nlink_design {tq(_sta_link_top(project, top, netlist, True))}\nread_sdc {tq(inputs[1])}\nread_spef {tq(inputs[2])}\n'
+            tcl += _propagated_clock_tcl() + _flat_ocv_derate_tcl()
+            for j, (role, flag) in enumerate((('SETUP', 'max'), ('HOLD', 'min'))):
+                mode = 'w' if i == 0 and j == 0 else 'a'
+                tcl += f'set _f [open {tq(report)} {mode}]\n'
+                for line in [f'=== {role} corner: process={c} ===', 'STA_BASIS: POST_ROUTE_SPEF',
+                             f'STA_BASIS_LIBERTY: {views[0]}', f'STA_BASIS_NETLIST: {inputs[0]}',
+                             f'STA_BASIS_SDC: {inputs[1]}', f'STA_BASIS_SPEF: {inputs[2]}',
+                             'STA_BASIS_CORNER: nom',
+                             f'OCV_DERATE_APPLIED early={_FLAT_OCV_DERATE_EARLY} late={_FLAT_OCV_DERATE_LATE} flat-OCV'] + [f'STA_BASIS_IO_LIBERTY: {_to_container_path(x, container)}' for x in inventory[c][1:] if x in io_views]:
+                    tcl += f'puts $_f {tq(line)}\n'
+                tcl += 'close $_f\n'
+                tcl += f'report_checks -path_delay {flag} >> {tq(report)}\nreport_worst_slack -{flag} >> {tq(report)}\nreport_tns >> {tq(report)}\n'
+            tcl += _report_check_types_tcl(tq(report)) + 'exit\n'
+            path = rpt_out.parent / f'sta_declared_{c.lower()}.tcl'
+            scripts.append((c, path, tcl))
+        for c, path, tcl in scripts:
+            path.write_text(tcl)
+            mapped = _to_container_path(str(path), container)
+            rc, out, err = _docker_exec(container, f'sta -no_init -exit {shlex.quote(mapped)} 2>&1', marker=mapped, outputs=[rpt_out], inputs=[netlist, sdc, spef_path, path] + [Path(x) for x in inventory[c] if Path(x).is_file()])
+            if rc != 0 or re.search(r'(?mi)^\s*Error(?:\s|:)', out + '\n' + err):
+                return refuse(f'native execution failed rc={rc}; partial report is not complete')
+    except (OSError, ValueError) as exc:
+        return refuse(str(exc))
+    if not rpt_out.is_file():
+        return refuse('native report absent')
+    measured = set()
+    for role, corner, body in _split_sections(rpt_out.read_text(errors='replace')):
+        if role in ('SETUP', 'HOLD'):
+            value = extract_slacks(body).get('setup_wns_ns' if role == 'SETUP' else 'hold_wns_ns')
+            if value is not None and math.isfinite(value):
+                measured.add((corner, role))
+    if measured != {(c, role) for c in required for role in ('SETUP', 'HOLD')}:
+        return refuse('native process/role measurements incomplete')
+    rpt_out.replace(destination)
+    return True
+
+
 def _emit_spef_sta(project: Path, top: str, pdk: PdkConfig, container: str,
                    spef_path: Path, rpt_out: Path,
                    notes: List[str]) -> bool:
@@ -51949,6 +52067,14 @@ def _emit_spef_sta(project: Path, top: str, pdk: PdkConfig, container: str,
     report_checks + report_tns + report_wns. Best-effort: any missing
     prerequisite or tool failure returns False and the caller falls back
     to the estimate-based report (the pre-#527 behavior)."""
+    from l24_signoff_requirements_extract import extract_signoff_requirements
+    obligations = extract_signoff_requirements(project) or {}
+    required = sorted({c for row in obligations.get('signoff_requirements', [])
+                       if row.get('check') == 'STA' and row.get('stated')
+                       for c in row.get('corners', [])})
+    if required:
+        return _emit_declared_process_sta(project, top, pdk, container,
+                                          spef_path, rpt_out, notes, required)
     pnr_out = _pl.pnr_dir(project)
     routed_netlist = pnr_out / f"{top}_pnr.v"
     netlist = routed_netlist
