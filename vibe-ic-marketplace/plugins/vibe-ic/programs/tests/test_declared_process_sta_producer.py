@@ -26,7 +26,7 @@ def scene(tmp_path, monkeypatch):
     monkeypatch.setattr(p3,'_to_container_path',lambda x,*a:str(x))
     monkeypatch.setattr(p3,'_sta_link_top',lambda *a:'dut')
     monkeypatch.setattr(p3,'_discover_aocv_table',lambda *a:None)
-    calls=[]; mode={'rc':0,'omit':False,'negative':False}
+    calls=[]; mode={'rc':0,'omit':False,'negative':False,'omit_census':False}
     def run(container,cmd,**kw):
         text=Path(kw['marker']).read_text();calls.append(text)
         out=Path(kw['outputs'][0]);out.parent.mkdir(parents=True,exist_ok=True)
@@ -40,6 +40,13 @@ def scene(tmp_path, monkeypatch):
             if mode['omit'] and role=='HOLD':continue
             val=-1 if mode['negative'] else 1
             content+=f'=== {role} corner: process={corner} ===\nworst slack {"max" if role=="SETUP" else "min"} {val}\n'
+        # The composed producer also requires the native linked/annotation census.
+        # This remains a CPU double; omission must still fail closed.
+        if 'STA_LINK_CENSUS' in text and not mode['omit_census']:
+            content += ('STA_LINK_INSTANCE neutral_cell neutral_library/master\n'
+                        'STA_LINK_CENSUS total=1 linked=1 missing=0\n'
+                        'Found 0 unannotated drivers.\n'
+                        'Found 0 partially unannotated drivers.\n')
         with out.open('w' if len(calls)==1 else 'a') as f:f.write(content)
         return mode['rc'],'',''
     monkeypatch.setattr(p3,'_docker_exec',run)
@@ -84,3 +91,9 @@ def test_ambiguous_io_refused(scene):
     s=scene;other=s['tmp_path']/'duplicate/io__tt_25C_1v00.lib';other.parent.mkdir();other.write_text('library(io) {}')
     s['record'].write_text(json.dumps({'io_library_liberty':s['ios']+[str(other)]}))
     assert not s['emit']();assert not s['calls']
+
+
+def test_complete_timing_without_native_census_still_refused(scene):
+    scene['mode']['omit_census'] = True
+    assert not scene['emit']()
+    assert not scene['rpt'].exists()

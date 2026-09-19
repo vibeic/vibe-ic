@@ -28,6 +28,23 @@ proc read_spef {args} {}
 proc all_clocks {} {return clk}
 proc set_propagated_clock {args} {}
 proc set_timing_derate {args} {}
+proc get_cells {args} {return {neutral_cell}}
+proc neutral_cell {method} {
+ if {$method eq "is_leaf"} {return 1}
+ if {$method eq "pin_iterator"} {return neutral_iterator}
+ return neutral_master
+}
+proc neutral_iterator {method} {
+ if {$method eq "has_next"} {return 0}
+ return ""
+}
+proc get_full_name {obj} {return $obj}
+proc report_parasitic_annotation {args} {
+ set f [open [lindex $args end] a]
+ puts $f "Found 0 unannotated drivers."
+ puts $f "Found 0 partially unannotated drivers."
+ close $f
+}
 proc report_checks {args} {}
 proc report_check_types {args} {}
 proc report_tns {args} {set f [open [lindex $args end] a]; puts $f "tns 0.0"; close $f}
