@@ -86,6 +86,7 @@ from __future__ import annotations
 import sys
 import json
 import re
+import hashlib
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -312,22 +313,43 @@ def _report_verdict_of(payload: Any) -> Optional[str]:
     return None
 
 
-def _report_engine(path: str, payload: Any) -> Optional[str]:
-    """Identify an explicitly named DRC engine from a report record."""
-    if isinstance(payload, dict):
-        value = payload.get("engine")
-        if isinstance(value, str):
-            low = value.lower()
-            if "klayout" in low:
-                return "klayout"
-            if "magic" in low:
-                return "magic"
-    low = path.lower()
-    if "klayout" in low:
-        return "klayout"
-    if "magic" in low:
-        return "magic"
-    return None
+def _report_engine(path: str, payload: Any, project: Path) -> Optional[str]:
+    """Identify a DRC engine from the audit's native producer provenance.
+
+    A filename or free-form ``engine`` label is operator-controlled metadata.
+    The only admissible identity is the producer classification emitted by
+    ``eda_report_audit:drc`` plus a digest check over its subject files.
+    """
+    if not isinstance(payload, dict) or payload.get("program") != "eda_report_audit:drc":
+        return None
+    summary = payload.get("summary")
+    producers = summary.get("producers") if isinstance(summary, dict) else None
+    if not isinstance(producers, list) or len(producers) != 1:
+        return None
+    producer = producers[0]
+    if not isinstance(producer, dict) or producer.get("is_signoff_deck") is not True:
+        return None
+    engine = producer.get("producer")
+    if engine not in {"magic", "klayout"}:
+        return None
+    subject = payload.get("subject")
+    items = subject.get("items") if isinstance(subject, dict) else None
+    if not isinstance(items, list) or not items:
+        return None
+    for item in items:
+        if not isinstance(item, dict) or not isinstance(item.get("path"), str):
+            return None
+        rel = Path(item["path"])
+        path_obj = (project / rel).resolve()
+        if not path_obj.is_relative_to(project.resolve()) or not path_obj.is_file():
+            return None
+        expected = item.get("sha256")
+        if not isinstance(expected, str) or not re.fullmatch(r"[0-9a-f]{64}", expected):
+            return None
+        digest = hashlib.sha256(path_obj.read_bytes()).hexdigest()
+        if digest != expected:
+            return None
+    return engine
 
 
 def _report_engine_for_path(project: Path, path: str) -> Optional[str]:
@@ -336,7 +358,7 @@ def _report_engine_for_path(project: Path, path: str) -> Optional[str]:
         payload = json.loads((project / path).read_text(errors="replace"))
     except (OSError, ValueError):
         payload = None
-    return _report_engine(path, payload)
+    return _report_engine(path, payload, project)
 
 
 #: How a requirement's population was chosen. Carried into the gate's own
