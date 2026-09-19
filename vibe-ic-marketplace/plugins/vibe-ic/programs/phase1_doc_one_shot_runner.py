@@ -33776,24 +33776,12 @@ def gen_l4_regmap(project: Path,
     # chip-class literal participates.
     _v1_6_576_apply_asciidoc_summary_addresses(registers, extracted)
 
-    # v-orch — prose memory-map RANGE constants. Scan extracted docs for
-    # `0x.. - 0x..` ranges (e.g. "RAM 0x0000 - 0x3FFF") and emit BOTH
-    # endpoints as address-map constants (kind=indexed_register_address).
-    # Dedup against already-emitted register addresses so a range whose
-    # endpoint coincides with a discrete register row is not duplicated.
-    # Preserve documented named range bindings before generic endpoint rows.
+    # Named register ranges declare instances; bare address-space boundaries
+    # do not. Keep the documented range producer, but do not promote synthetic
+    # MEMMAP_LOW/HIGH constants into registers[]. A real register explicitly
+    # named like an endpoint remains authoritative through the table parsers.
     from _documented_register_ranges import append_documented_ranges
     append_documented_ranges(registers, extracted)
-
-    _existing_addr_ints = {
-        r.get("address_int") for r in registers
-        if isinstance(r, dict) and r.get("address_int") is not None
-    }
-    for _mm in _extract_memmap_range_constants(extracted):
-        if _mm.get("address_int") in _existing_addr_ints:
-            continue
-        _existing_addr_ints.add(_mm.get("address_int"))
-        registers.append(_mm)
 
     # v1.6.577 — for #393 P3 ORGANIC. Peripheral-CSR namespace
     # collision qualifier. When N peripherals each have `CTRL` /

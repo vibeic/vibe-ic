@@ -64,5 +64,16 @@
     "version_observed": "43f84790d55b07a2cb9eb5e5ae8911be0e33c3e0",
     "version_lkg": "",
     "fixture_path": "vibe-ic-marketplace/plugins/vibe-ic/tests/phase1_fixtures/documented_register_ranges_local/L5_register_map.md"
+  },
+  {
+    "issue": "LOCAL:SHA1950_ADDRESS_SPACE_ENDPOINT",
+    "project": "address_space_endpoints_local",
+    "layer": "L4",
+    "field": "registers",
+    "expected": "CONFIG remains a real register; prose address-space boundaries never create register instances",
+    "actual": "MEMMAP_HIGH_000000FF and synthetic boundary records emitted as registers",
+    "version_observed": "261bd78f2f1e342800b8658de7130f45260a622c",
+    "version_lkg": "",
+    "fixture_path": "vibe-ic-marketplace/plugins/vibe-ic/tests/phase1_fixtures/address_space_endpoints_local/registers.md"
   }
 ]
