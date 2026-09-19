@@ -282,6 +282,16 @@ _THRESHOLD_RE = re.compile(
 
 _DOC_SUFFIXES = (".md", ".markdown", ".txt", ".rst", ".adoc", ".asciidoc")
 
+_DRC_ENGINES = (("magic", re.compile(r"\bmagic\b", re.I)),
+                ("klayout", re.compile(r"\bklayout\b", re.I)))
+
+
+def _engines_of(check: str, clause: str) -> List[str]:
+    """Return explicitly named engines for a check's own clause."""
+    if check != "DRC":
+        return []
+    return [name for name, pattern in _DRC_ENGINES if pattern.search(clause)]
+
 
 def _word_bounded(term: str) -> re.Pattern:
     return re.compile(r"(?<![A-Za-z0-9])" + re.escape(term)
@@ -435,7 +445,8 @@ def extract_signoff_requirements(project: Path) -> Optional[Dict[str, Any]]:
                     # reason: a corner named beside a different check on the
                     # same line is not this check's corner.
                     "corners": sorted(set(_CORNER_RE.findall(clause))),
-                    "threshold": _threshold_of(clause),
+                "threshold": _threshold_of(clause),
+                    "engines": _engines_of(check, clause),
                 })
         if not hits:
             rows.append({
@@ -459,7 +470,9 @@ def extract_signoff_requirements(project: Path) -> Optional[Dict[str, Any]]:
             "stated": True,
             "requirement": best["requirement"],
             "corners": sorted({c for h in hits for c in h["corners"]}),
-            "threshold": best["threshold"],
+                "threshold": best["threshold"],
+            "engines": sorted({engine for h in hits
+                               for engine in h.get("engines", [])}),
             "citation": {"document": best["document"], "line": best["line"],
                          "text": best["text"], "clause": best["clause"]},
             "occurrences": len(hits),

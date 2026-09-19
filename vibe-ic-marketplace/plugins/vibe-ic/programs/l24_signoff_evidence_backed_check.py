@@ -312,6 +312,24 @@ def _report_verdict_of(payload: Any) -> Optional[str]:
     return None
 
 
+def _report_engine(path: str, payload: Any) -> Optional[str]:
+    """Identify an explicitly named DRC engine from a report record."""
+    if isinstance(payload, dict):
+        value = payload.get("engine")
+        if isinstance(value, str):
+            low = value.lower()
+            if "klayout" in low:
+                return "klayout"
+            if "magic" in low:
+                return "magic"
+    low = path.lower()
+    if "klayout" in low:
+        return "klayout"
+    if "magic" in low:
+        return "magic"
+    return None
+
+
 #: How a requirement's population was chosen. Carried into the gate's own
 #: `--json` record so a reader can tell a flow-DECLARED sign-off reading from
 #: the name scan that is still all some checks have.
@@ -593,6 +611,34 @@ def _requirements_backed(project: Path, doc: Any, rel: str,
                 f"and this run measured it as "
                 + ", ".join(f"{v!r} in {p}" for p, v in failed[:3]))
             continue
+        required_engines = row.get("engines")
+        if check == "DRC" and isinstance(required_engines, list) and required_engines:
+            engine_records: Dict[str, List[Tuple[str, Optional[str]]]] = {
+                str(engine).lower(): [] for engine in required_engines
+            }
+            for path, verdict in found:
+                engine = _report_engine(path, None)
+                if engine in engine_records:
+                    engine_records[engine].append((path, verdict))
+            missing_engines = sorted(engine for engine, records in engine_records.items()
+                                     if not any(verdict not in _ABSENT_VERDICTS
+                                                and verdict is not None
+                                                for _path, verdict in records))
+            failing_engines = sorted(engine for engine, records in engine_records.items()
+                                     if any(verdict in _FAILING_VERDICTS
+                                            for _path, verdict in records))
+            if missing_engines or failing_engines:
+                record["outcome"] = "UNMET_ENGINE_EVIDENCE"
+                detail = []
+                if missing_engines:
+                    detail.append("missing " + ", ".join(missing_engines))
+                if failing_engines:
+                    detail.append("failing " + ", ".join(failing_engines))
+                failures.append(
+                    f"{rel}: the input REQUIRES DRC engines "
+                    f"{sorted(engine_records)} at {where}, but "
+                    + "; ".join(detail))
+                continue
         required_corners = row.get("corners")
         if check == "STA" and required_corners not in (None, []):
             coverage = _required_sta_corners(project, required_corners, declared_paths)
