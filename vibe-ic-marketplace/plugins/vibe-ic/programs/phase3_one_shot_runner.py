@@ -56536,6 +56536,16 @@ catch {{set_wire_rc -clock -layer {mp}5}}
     )
     rc, out, err = _docker_exec(container, cmd, marker=tcl_c, outputs=[out_dir / "ir_em.log"])
     log = (out or "") + "\n" + (err or "")
+    if rc != 0:
+        # A failed native invocation cannot attest values from stdout or stale reports.
+        failure = {"tool": "openroad-psm", "verdict": "FAIL",
+                   "native_rc": rc, "unmeasured_reason": "native_execution_failed"}
+        for report in (ir_rpt, em_rpt):
+            _aa.write_text(report, f"OpenROAD PSM invocation failed: rc={rc}\n")
+            _aa.write_text(report.with_suffix(".json"),
+                           json.dumps(failure, indent=2) + "\n")
+        notes.append(f"IR/EM refused: native execution rc={rc}; no fresh measurement")
+        return False, False
     # Parse IR + EM numbers from PSM stdout (deterministic regex).
     ir_lines = [ln for ln in log.splitlines()
                 if re.search(r"voltage|IR drop|PSM-|Supply", ln, re.I)]
