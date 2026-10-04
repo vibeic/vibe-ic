@@ -2170,6 +2170,33 @@ _NOT_PROSE: Dict[str, str] = {
         "comes from typed JSON fields, not from prose. Falsifier: tests/"
         "test_r0929_step5_bar_datapath.py::test_the_builder_refuses_what_the_"
         "input_does_not_state.",
+    "mixed_signal_power_domain_run::derive":
+        "THREE CLOSED MACHINE GRAMMARS, NO SENTENCE. The UPF text has the "
+        "literal command/option arities checked by `power_model`, Liberty is "
+        "balanced `cell`/`pin` groups with typed attributes, the native Yosys "
+        "JSON is already structured, and the routed DEF contributes only its "
+        "anchored `DESIGN` and counted `COMPONENTS` productions. A denial word "
+        "cannot negate a component in any of these productions: an absent or "
+        "mismatched declaration is a named `Refusal`, never a defaulted value. "
+        "Falsifier: `test_red11_formal_input_polarity.py::"
+        "test_m2_def_comment_denials_do_not_mint_components` adds denial-shaped "
+        "comments and a live component control to the same fixture.",
+    "project_outputs_in_tree_check::_auditor_diagnostic_text":
+        "TYPED AUDIT-JSON GRAMMAR, NO SENTENCE. This reader accepts a unique-key "
+        "JSON object with the required audit envelope, then removes only strings "
+        "that fullmatch the producer's closed diagnostic shape `source -> path "
+        "(live|dangling|outside-root)`. Free prose and malformed records remain "
+        "available to the normal scanner; a denial cannot manufacture a typed "
+        "diagnostic or reverse one. Falsifier: `test_red11_formal_input_polarity.py::"
+        "test_auditor_diagnostics_do_not_treat_denial_prose_as_records`.",
+    "pulse_width_rearm_conformance_check::_suite_paths":
+        "SYSTEMVERILOG-COMMENT MARKER GRAMMAR, NO SENTENCE. The suite declares "
+        "exactly three line-start `// PWR_<KEY>: <single-token-path>` markers; "
+        "each resolved path must exist before the checker runs. A denial prefix "
+        "does not open a marker and a denial-shaped token becomes a missing path, "
+        "so neither can publish a fixture path or a conformance result. "
+        "Falsifier: `test_red11_formal_input_polarity.py::"
+        "test_suite_marker_denials_are_refused_or_ignored`.",
 }
 
 def _aliases(tree: ast.Module) -> Set[str]:
