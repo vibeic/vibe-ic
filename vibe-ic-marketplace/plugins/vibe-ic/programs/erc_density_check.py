@@ -536,7 +536,7 @@ def main(argv: list = None) -> int:
         report["reason"] = stats["current_erc_reason"]
         report["summary"]["pass"] = False
         if args.json:
-            Path(args.json).write_text(json.dumps(report, indent=2) + "\n")
+            atomic_write_text(Path(args.json), json.dumps(report, indent=2) + "\n")
         print("NOT_MEASURED: " + stats["current_erc_reason"])
         return 2
     if nothing_examined and not has_error:

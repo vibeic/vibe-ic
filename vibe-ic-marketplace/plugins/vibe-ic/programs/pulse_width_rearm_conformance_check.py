@@ -37,6 +37,7 @@ from pulse_width_rearm_contract import (  # noqa: E402
     extract_contract,
 )
 from reset_clock_variant_alias import parse_module_ports  # noqa: E402
+from _atomic_artefact import write_text as atomic_write_text  # noqa: E402
 
 
 _IDENT = re.compile(r"^[A-Za-z_]\w*$")
@@ -1010,7 +1011,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.json:
         out = Path(args.json)
         out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
+        atomic_write_text(out, json.dumps(report, indent=2, sort_keys=True) + "\n")
     print(f"pulse_width_rearm_conformance_check: {report['verdict']} - {report.get('reason', '')}")
     if report.get("counts"):
         print("  counts: " + json.dumps(report["counts"], sort_keys=True))
