@@ -17,9 +17,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os as _os
 import re
+import sys as _sys
 from dataclasses import asdict, dataclass
 from typing import Any, Dict, Optional, Tuple
+
+# Keep bare sibling imports resolvable when this program is loaded by path.
+if _os.path.dirname(_os.path.abspath(__file__)) not in _sys.path:
+    _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
 
 import _prose_polarity as _pp
 
