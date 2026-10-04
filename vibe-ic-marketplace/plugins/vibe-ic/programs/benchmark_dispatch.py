@@ -359,8 +359,24 @@ def _runner_receipt_paths(project: Path, invocation: dict) -> None:
             raise ValueError(stream + " log changed")
 
 
+def _material_matches_repaired_output(expected: dict, current: dict) -> bool:
+    """Allow only the working RTL output to differ for a proven repair."""
+    if not isinstance(expected, dict) or not isinstance(current, dict):
+        return False
+    output_keys = {"output_rtl", "output_rtl_sha256"}
+    return ({key: value for key, value in expected.items()
+             if key not in output_keys}
+            == {key: value for key, value in current.items()
+                if key not in output_keys}
+            and expected.get("output_rtl") != current.get("output_rtl")
+            and expected.get("output_rtl_sha256")
+            != current.get("output_rtl_sha256"))
+
+
 def _runner_diagnostics(process: _ProcessOutcome, argv: list[str],
-                        project: Path, *, require_phase2: bool = True) -> dict | None:
+                        project: Path, *, require_phase2: bool = True,
+                        allow_repaired_output: bool = False,
+                        repaired_output_sha256: str | None = None) -> dict | None:
     """Disclose pre-gate refusals without interpreting rc as a gate verdict.
 
     BLOCKING only for unbound/stale evidence or a named refusal before ANY
@@ -388,7 +404,22 @@ def _runner_diagnostics(process: _ProcessOutcome, argv: list[str],
                 and receipt["stdout"] == process.stdout and receipt["stderr"] == process.stderr
                 and receipt["reports_after"] == _runner_report_snapshot(project)):
             raise ValueError("runner binding changed")
-        if receipt["material_after"] != _runner_material_snapshot(project):
+        current_material = _runner_material_snapshot(project)
+        if (allow_repaired_output
+                and (not isinstance(repaired_output_sha256, str)
+                     or current_material.get("output_rtl_sha256")
+                     != repaired_output_sha256)):
+            return {**diagnostic, "status": "MATERIAL_MISMATCH",
+                    "reason_class": "RUNNER_MATERIAL_UNBOUND",
+                    "reason": "RUNNER_MATERIAL_UNBOUND: repaired RTL hash is not the admitted hash"}
+        repaired_output_bound = (
+            allow_repaired_output
+            and isinstance(repaired_output_sha256, str)
+            and current_material.get("output_rtl_sha256") == repaired_output_sha256)
+        if (receipt["material_after"] != current_material
+                and not (repaired_output_bound
+                         and _material_matches_repaired_output(
+                             receipt["material_after"], current_material))):
             return {**diagnostic, "status": "MATERIAL_MISMATCH",
                     "reason_class": "RUNNER_MATERIAL_UNBOUND",
                     "reason": "RUNNER_MATERIAL_UNBOUND: input or output file population/content changed after invocation"}
@@ -474,7 +505,9 @@ def _runner_terminal_error(rc, stdout: str, stderr: str) -> str | None:
     return None
 
 
-def _runner_reentry_reason(task: dict, result: dict) -> str | None:
+def _runner_reentry_reason(task: dict, result: dict, *,
+                           allow_repaired_output: bool = False,
+                           repaired_output_sha256: str | None = None) -> str | None:
     """Legacy refusal exits cannot establish that the stored gates ran.
 
     Normal rc 0/1 remains supported, including bounded NOT_MEASURED outcomes.
@@ -497,10 +530,26 @@ def _runner_reentry_reason(task: dict, result: dict) -> str | None:
                     raise ValueError("invocation project is not this task's gate producer")
             if _strict_json_loads(Path(invocation["record_path"]).read_text()) != invocation:
                 raise ValueError("invocation record changed")
-            diagnostic = _stored_runner_diagnostics(invocation)
+            diagnostic = _stored_runner_diagnostics(
+                invocation, allow_repaired_output=allow_repaired_output,
+                repaired_output_sha256=repaired_output_sha256)
             if diagnostic and diagnostic.get("reason"):
                 raise ValueError(diagnostic["reason"])
-            if invocation["material_after"] != _runner_material_snapshot(project):
+            current_material = _runner_material_snapshot(project)
+            if (allow_repaired_output
+                    and (not isinstance(repaired_output_sha256, str)
+                         or current_material.get("output_rtl_sha256")
+                         != repaired_output_sha256)):
+                raise ValueError("repaired RTL hash is not the admitted hash")
+            repaired_output_bound = (
+                allow_repaired_output
+                and isinstance(repaired_output_sha256, str)
+                and current_material.get("output_rtl_sha256") == repaired_output_sha256)
+            if (invocation["material_after"] != current_material
+                    and not (repaired_output_bound
+                             and _material_matches_repaired_output(
+                                 invocation["material_after"],
+                                 current_material))):
                 raise ValueError("working input/output population or content changed")
             _runner_frozen_material(invocation, task["candidate_snapshot"])
             if (invocation.get("project") != str(invocation_project)
@@ -519,7 +568,9 @@ def _runner_reentry_reason(task: dict, result: dict) -> str | None:
     return None
 
 
-def _stored_runner_diagnostics(invocation: dict) -> dict | None:
+def _stored_runner_diagnostics(invocation: dict, *,
+                               allow_repaired_output: bool = False,
+                               repaired_output_sha256: str | None = None) -> dict | None:
     """Re-use the live collection contract for a frozen invocation record."""
     path = Path(invocation["record_path"])
     raw = path.read_bytes()
@@ -530,7 +581,10 @@ def _stored_runner_diagnostics(invocation: dict) -> dict | None:
         stdout=invocation["stdout"], stderr=invocation["stderr"],
         invocation_id=invocation["invocation_id"], receipt_path=str(path),
         receipt_sha256=hashlib.sha256(raw).hexdigest(), invocation=invocation)
-    diagnostic = _runner_diagnostics(process, invocation["argv"], Path(invocation["project"]))
+    diagnostic = _runner_diagnostics(
+        process, invocation["argv"], Path(invocation["project"]),
+        allow_repaired_output=allow_repaired_output,
+        repaired_output_sha256=repaired_output_sha256)
     if process.error:
         raise ValueError(process.error)
     return diagnostic
@@ -706,7 +760,8 @@ class _RunnerBudget:
                          "MKL_NUM_THREADS", "NUMEXPR_NUM_THREADS"):
                 self._env[name] = str(threads)
 
-    def run(self, argv: list[str]) -> _ProcessOutcome:
+    def run(self, argv: list[str], *,
+            expected_repaired_output_sha256: str | None = None) -> _ProcessOutcome:
         """Run ONE runner invocation in its own SESSION.
 
         `start_new_session` is what lets the coordinator take the whole pool
@@ -768,6 +823,12 @@ class _RunnerBudget:
                     context = _strict_json_loads(kwargs["env"][_RUNNER_CONTEXT_ENV])
                     context["d1_snapshot_sha256"] = launch_snapshot.digest
                     kwargs["env"][_RUNNER_CONTEXT_ENV] = json.dumps(context, sort_keys=True)
+                if expected_repaired_output_sha256 is not None:
+                    current_output_sha256 = _runner_material_snapshot(project).get(
+                        "output_rtl_sha256")
+                    if current_output_sha256 != expected_repaired_output_sha256:
+                        raise ValueError(
+                            "RUNNER_MATERIAL_UNBOUND: repaired RTL changed at runner launch")
                 proc = subprocess.run(argv, **kwargs)
                 rc = int(proc.returncode)
                 stdout = getattr(proc, "stdout", None)
@@ -3562,7 +3623,9 @@ def _run_verification_challenge(candidate: dict, challenge: dict) -> dict:
     })
 
 
-def _validate_ai_review(task: dict) -> dict:
+def _validate_ai_review(task: dict, *,
+                        allow_repaired_output: bool = False,
+                        repaired_output_sha256: str | None = None) -> dict:
     """Validate a hash-bound review, including evidence-backed AI override.
 
     AI is the semantic authority, but authority is not an unexplained token.
@@ -3572,7 +3635,9 @@ def _validate_ai_review(task: dict) -> dict:
     review and not a permanent convergence failure.
     """
     task_reasons: list[str] = _public_input_reasons(task)
-    invocation_reason = _runner_reentry_reason(task, {})
+    invocation_reason = _runner_reentry_reason(
+        task, {}, allow_repaired_output=allow_repaired_output,
+        repaired_output_sha256=repaired_output_sha256)
     if invocation_reason:
         task_reasons.append(invocation_reason)
     if task.get("schema") != _REVIEW_TASK_SCHEMA:
@@ -5883,7 +5948,8 @@ def _validate_live_d1_for_launch(project: Path, route_receipt: dict,
 
 def _run_from_d1_snapshot(budget, argv: list, snapshot: _D1EvidenceSnapshot,
                           receipt: dict, activation: dict, task_sha: str,
-                          *, authority_project: Path | None = None):
+                          *, authority_project: Path | None = None,
+                          expected_repaired_output_sha256: str | None = None):
     """Validate one captured generation and bind that generation to submission."""
     try:
         owner_project = Path(authority_project or snapshot.project).resolve()
@@ -5898,7 +5964,17 @@ def _run_from_d1_snapshot(budget, argv: list, snapshot: _D1EvidenceSnapshot,
         _D1_LAUNCH_CONTEXT.snapshot = snapshot
         _D1_LAUNCH_CONTEXT.authority = (owner_project, task, receipt, activation)
         _assert_d1_snapshot_current(snapshot)
-        return budget.run(argv)
+        if expected_repaired_output_sha256 is not None:
+            current_output_sha256 = _runner_material_snapshot(owner_project).get(
+                "output_rtl_sha256")
+            if current_output_sha256 != expected_repaired_output_sha256:
+                raise ValueError(
+                    "RUNNER_MATERIAL_UNBOUND: repaired RTL changed before runner launch")
+        return budget.run(
+            argv,
+            **({"expected_repaired_output_sha256":
+                expected_repaired_output_sha256}
+               if expected_repaired_output_sha256 is not None else {}))
     except (OSError, ValueError, TypeError) as exc:
         return _ProcessOutcome(rc=None, error=f"D1_SNAPSHOT_LAUNCH_REFUSED: {exc}")
     finally:
@@ -7729,6 +7805,8 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
     def _run_and_collect(job) -> _ResumeRunnerOutcome:
         pid, proj, supplied_rtl, entry, exit_step, *extra = job
         collect_kwargs = extra.pop() if extra and isinstance(extra[-1], dict) else {}
+        expected_repaired_output_sha256 = collect_kwargs.pop(
+            "expected_repaired_output_sha256", None)
         delivery_route = extra[0] if extra else "ip"
         d1_only = extra[1] if len(extra) > 1 else False
         if d1_only:
@@ -7768,6 +7846,19 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
             return _ResumeRunnerOutcome(
                 problem_id=pid, rc=None, collected_json=None,
                 error=str(state.get("reason") or "ROUTE_REENTRY_REFUSED"))
+        if expected_repaired_output_sha256 is not None:
+            try:
+                current_output_sha256 = _runner_material_snapshot(proj).get(
+                    "output_rtl_sha256")
+            except (OSError, ValueError, TypeError) as exc:
+                return _ResumeRunnerOutcome(
+                    problem_id=pid, rc=None, collected_json=None,
+                    error=f"RUNNER_MATERIAL_UNBOUND: unable to recheck repaired RTL: {exc}")
+            if current_output_sha256 != expected_repaired_output_sha256:
+                return _ResumeRunnerOutcome(
+                    problem_id=pid, rc=None, collected_json=None,
+                    error=("RUNNER_MATERIAL_UNBOUND: repaired RTL changed "
+                           "after repair admission"))
         # AI backup/repair has already authored the candidate. Re-enter at the
         # first RTL-validation step so program-first does not author again and
         # overwrite the hash whose semantics the AI just repaired. The routed
@@ -7777,7 +7868,8 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
             state["exit_step"], state["delivery_route"])
         process = _run_from_d1_snapshot(
             runner_budget, argv, d1_snapshot, state["route_receipt"],
-            state["activation"], state["task"]["task_sha256"])
+            state["activation"], state["task"]["task_sha256"],
+            expected_repaired_output_sha256=expected_repaired_output_sha256)
         diagnostic = _runner_diagnostics(process, argv, proj)
         diagnostics_json = json.dumps(diagnostic) if diagnostic else None
         if process.error is not None:
@@ -8157,7 +8249,60 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
                                "review id is absent from solve_report"]},
             })
             continue
-        invocation_reason = _runner_reentry_reason(task, result)
+        # A dispatched receipt freezes the PROGRAM candidate's output RTL.
+        # Before ordinary re-entry checks, prove that a changed working RTL is
+        # an authorized AI repair. Only that exact state may tolerate the
+        # expected output-material delta; every other state stays strict.
+        repair_verdict = None
+        repair_provenance = None
+        repair_challenge = None
+        repair_output_sha256 = None
+        repair_state = False
+        proj = Path(str(task.get("project") or ""))
+        working_paths = _rtl_files(proj)
+        try:
+            working_hash = (_sha256_text(_candidate_text(working_paths))
+                            if working_paths else None)
+        except OSError:
+            working_hash = None
+        if working_hash != task.get("rtl_sha256"):
+            # Establish the semantic proof without laundering the stale
+            # invocation receipt. The receipt exception is considered only
+            # after this detached review is a real REPAIR_REQUIRED finding.
+            proof_task = dict(task)
+            verification = task.get("program_verification")
+            if isinstance(verification, dict) and "runner_invocation" in verification:
+                proof_verification = dict(verification)
+                proof_verification.pop("runner_invocation", None)
+                proof_task["program_verification"] = proof_verification
+            proof_verdict = _validate_ai_review(proof_task)
+            challenge = proof_verdict.get("verified_challenge")
+            if (proof_verdict.get("status") == "REPAIR_REQUIRED"
+                    and isinstance(challenge, dict)):
+                candidate_provenance, provenance_reasons = \
+                    _validate_repair_record(
+                        _repair_record_path(run_p, task), task,
+                        str(working_hash), challenge)
+                if not provenance_reasons:
+                    # Now revalidate the complete task, allowing only the
+                    # proven output-material delta in the runner receipt.
+                    candidate_verdict = _validate_ai_review(
+                        task, allow_repaired_output=True,
+                        repaired_output_sha256=str(working_hash))
+                    candidate_challenge = candidate_verdict.get(
+                        "verified_challenge")
+                    if (candidate_verdict.get("status") == "REPAIR_REQUIRED"
+                            and isinstance(candidate_challenge, dict)
+                            and candidate_challenge.get("sha256")
+                            == challenge.get("sha256")):
+                        repair_state = True
+                        repair_verdict = candidate_verdict
+                        repair_provenance = candidate_provenance
+                        repair_challenge = challenge
+                        repair_output_sha256 = str(working_hash)
+        invocation_reason = _runner_reentry_reason(
+            task, result, allow_repaired_output=repair_state,
+            repaired_output_sha256=repair_output_sha256)
         if invocation_reason:
             reentry_state = _route_reentry_state(pid, result, allow_d1_only=False)
             if reentry_state.get("status") != "ACTIVE":
@@ -8176,7 +8321,6 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
             # A legacy pre-run refusal is not a completed gate invocation.
             # Re-enter the SAME frozen bytes; no edit or author signature is
             # authorised here. Keep old review/test/task records for audit.
-            proj = Path(str(task.get("project") or ""))
             prompt_hash, frozen_hash, stated, frozen_paths = _current_task_material(task)
             reasons = _validate_candidate_snapshot(task.get("candidate_snapshot"), pid)
             reasons += _public_input_reasons(task)
@@ -8277,8 +8421,8 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
             repair_plans.append({
                 "kind": "noop", "id": pid, "pre_logs": pre_logs})
             continue
-        prior_verdict = _validate_ai_review(task)
-        challenge = prior_verdict.get("verified_challenge")
+        prior_verdict = repair_verdict or _validate_ai_review(task)
+        challenge = repair_challenge or prior_verdict.get("verified_challenge")
         if prior_verdict.get("status") != "REPAIR_REQUIRED" or not challenge:
             result.update({"accepted": False, "awaiting_ai": True,
                            "awaiting_ai_review": True,
@@ -8302,8 +8446,11 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
             })
             continue
         repair_record_path = _repair_record_path(run_p, task)
-        repair_provenance, provenance_reasons = _validate_repair_record(
-            repair_record_path, task, str(working_hash), challenge)
+        if repair_state:
+            provenance_reasons = []
+        else:
+            repair_provenance, provenance_reasons = _validate_repair_record(
+                repair_record_path, task, str(working_hash), challenge)
         if provenance_reasons:
             result.update({"accepted": False, "awaiting_ai": True,
                            "awaiting_ai_review": False,
@@ -8370,6 +8517,7 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
             "pre_gate_input": preserved,
             "repair_input_candidate": _archive_repair_input(
                 pid, proj, run_p, repair_provenance),
+            "repaired_output_sha256": repair_output_sha256,
             "program_first_phases": (
                 result.get("program_first_phases")
                 or result.get("phases") or {}),
@@ -8383,7 +8531,9 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
     repair_outcomes = iter(_ordered_parallel_map(
         [(p["id"], p["project"], True, None, p["result"].get("exit"),
           ({"repair_contract": ((p.get("repair_provenance") or {}).get("repair_contract")),
-            "require_repair_contract": True}
+            "require_repair_contract": True,
+            **({"expected_repaired_output_sha256": p["repaired_output_sha256"]}
+               if p.get("repaired_output_sha256") is not None else {})}
            if p["task"].get("candidate_origin") == "AI_REPAIR" or p["kind"] == "run"
            else {}))
          for p in repair_run_plans],

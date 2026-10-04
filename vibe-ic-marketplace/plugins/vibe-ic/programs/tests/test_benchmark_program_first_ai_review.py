@@ -1196,6 +1196,65 @@ def _write_ai_repair_record(run: Path, task: dict, challenge: dict) -> dict:
     return record
 
 
+def _dispatched_parent_task(tmp_path: Path) -> tuple[Path, dict, Path]:
+    """Build the review worklist shape emitted after a dispatched runner call."""
+    run = tmp_path / "run"
+    (run / "responses").mkdir(parents=True)
+    project = _project(tmp_path)
+    (project / "reports/orchestrator/runner_invocations").mkdir()
+    rtl = project / "phase2/stage1/rtl/dut.v"
+    rtl.write_text(
+        "module dut(input wire a, output wire y); assign y = ~a; endmodule\n")
+    prompt = (project / "input/phase1_prompt.md").read_text()
+    bio._stage_public_original("p1", prompt, {"dut.v": rtl.read_text()}, project)
+    runner = tmp_path / "fixture-runner" / "vibe_ic_one_shot_runner.py"
+    runner.parent.mkdir()
+    runner.write_text('''import pathlib, sys
+sys.path.insert(0, %r)
+from design_one_shot_runner import _write_phase2_report
+p = pathlib.Path(sys.argv[1]).resolve()
+assert sys.argv[sys.argv.index('--entry-step') + 1] == '2'
+_write_phase2_report(p/'reports/orchestrator/phase2_one_shot.json', {
+    'verdict':'PASS',
+    'steps':[{'name':'rtl_gen', 'status':'PASS', 'detail':'fixture'}],
+    'measurement_scope':'SOURCE_ONLY_FIXTURE',
+    'native_gate_status':'NOT_MEASURED',
+}, p)
+''' % str(PROGRAMS))
+    argv = bd._resume_solver_argv(runner, project, True, "2", "8")
+    process = bd._RunnerBudget(1, None, 0).run(argv)
+    assert process.error is None, process.error
+    got = bd._collect_runner_result(process, argv, "rtllm", "p1", project)
+    task = bd._make_ai_review_task(
+        "p1", project, got, ROUTING, 0, run, "PROGRAM",
+        runner_invocation=process.invocation)
+    route = bd._make_ai_route_task(
+        task["id"], project,
+        {"public_original_input": task["public_original_input"]}, ROUTING,
+        run, "rtllm", benchmark="rtllm", dataset_path=Path("/unused"))
+    bd._write_jsonl(run / bd._ROUTE_WORKLIST, [route])
+    (run / ".bench_config.json").write_text(
+        json.dumps({"bench": "rtllm", "format": "rtllm"}))
+    return run, task, runner
+
+
+def _stub_dispatched_reentry(monkeypatch):
+    """Keep this regression at the coordinator/consumer boundary."""
+    monkeypatch.setattr(bd, "_runtime_pair_before_fan_out",
+                        lambda rows, run_p, operation: None)
+    monkeypatch.setattr(
+        bd, "_validated_route_reentry_state",
+        lambda **kwargs: {
+            "status": "ACTIVE", "entry_step": "2", "exit_step": "8",
+            "delivery_route": "ip", "route_receipt": {},
+            "activation": {}, "task": {"task_sha256": "fixture"},
+        })
+    monkeypatch.setattr(bd, "_capture_d1_evidence", lambda project: None)
+    monkeypatch.setattr(
+        bd, "_run_from_d1_snapshot",
+        lambda budget, argv, snapshot, *args, **kwargs: budget.run(argv))
+
+
 def _solve_report(run: Path, task: dict) -> None:
     result = {
         "id": task["id"], "ok": True, "candidate_ready": True,
@@ -1205,6 +1264,10 @@ def _solve_report(run: Path, task: dict) -> None:
         "awaiting_ai": True, "awaiting_ai_review": True,
         "awaiting_ai_backup": False,
     }
+    invocation = (task.get("program_verification") or {}).get(
+        "runner_invocation")
+    if invocation is not None:
+        result["runner_invocation"] = invocation
     # Both solve and the resume worker-refresh path record attribution from
     # the actual Program report before creating the review handoff. Omitting
     # it models a missing snapshot, not the canonical accepted candidate.
@@ -1508,6 +1571,112 @@ _write_phase2_report(report, {
         "phases"]
     assert phases["phase4_debugging"]["ai_semantic_repair"]["actor"] == \
         "test-repair-model"
+
+
+def test_dispatched_ai_repair_consumes_changed_rtl_before_regate(
+        tmp_path, monkeypatch):
+    """A runner-bound parent receipt must reach supplied-RTL repair."""
+    run, task, runner = _dispatched_parent_task(tmp_path)
+    _solve_report(run, task)
+    _write_review(task, _proven_fail_review(task))
+    monkeypatch.setattr(
+        bd, "_run_verification_challenge",
+        lambda candidate, challenge: {
+            "status": "FAIL",
+            "candidate_rtl_sha256": candidate["rtl_sha256"],
+            "challenge_sha256": challenge["sha256"],
+        })
+    _stub_dispatched_reentry(monkeypatch)
+    real_argv = bd._resume_solver_argv
+    monkeypatch.setattr(
+        bd, "_resume_solver_argv",
+        lambda _runner, project, supplied_rtl, entry, exit_step,
+               delivery_route="ip": real_argv(
+                   runner, project, supplied_rtl, entry, exit_step,
+                   delivery_route))
+
+    assert bd.cmd_resume("rtllm", "/unused", str(run)) == 2
+    repair = bd._read_jsonl(run / bd._REPAIR_WORKLIST)[0]
+    assert repair["status"] == "AI_SEMANTIC_REPAIR_REQUIRED"
+
+    working_rtl = Path(task["working_rtl_paths"][0])
+    working_rtl.write_text(
+        "module dut(input wire a, output wire y); assign y = a; endmodule\n")
+    _write_ai_repair_record(run, task, repair["verified_challenge"])
+    repaired_hash = bd._runner_material_snapshot(
+        Path(task["project"]))["output_rtl_sha256"]
+    assert bd._runner_reentry_reason(
+        task, {}, allow_repaired_output=True,
+        repaired_output_sha256=repaired_hash) is None
+    stale_hash_reason = bd._runner_reentry_reason(
+        task, {}, allow_repaired_output=True,
+        repaired_output_sha256="0" * 64)
+    assert stale_hash_reason and "repaired RTL hash is not the admitted hash" in \
+        stale_hash_reason
+    real_collect = bio.collect
+    def collect_repaired(fmt, pid, project, **kwargs):
+        if kwargs.get("require_repair_contract"):
+            return {
+                "ok": True,
+                "completion": Path(project /
+                                    "phase2/stage1/rtl/dut.v").read_text(),
+                "rtl_gen": "NOT_APPLICABLE",
+                "supplied_rtl": True,
+            }
+        return real_collect(fmt, pid, project, **kwargs)
+    monkeypatch.setattr(bio, "collect", collect_repaired)
+
+    assert bd.cmd_resume("rtllm", "/unused", str(run)) == 2
+    refreshed = bd._read_jsonl(run / bd._REVIEW_WORKLIST)[0]
+    assert refreshed["candidate_origin"] == "AI_REPAIR"
+    assert refreshed["rtl_sha256"] != task["rtl_sha256"]
+    assert refreshed["program_verification"]["runner_invocation"][
+        "status"] == "COMPLETED"
+    assert not any(row.get("status") == "RUNNER_REGATE_BLOCKED"
+                   for row in bd._read_jsonl(run / bd._REPAIR_WORKLIST))
+    assert Path(runner).is_file()
+
+
+@pytest.mark.parametrize("mutation", ["repair_record", "challenge"])
+def test_dispatched_changed_rtl_without_valid_repair_proof_stays_stale(
+        tmp_path, monkeypatch, mutation):
+    """A changed output alone cannot discharge a stale runner receipt."""
+    run, task, _ = _dispatched_parent_task(tmp_path)
+    _solve_report(run, task)
+    review = _proven_fail_review(task)
+    _write_review(task, review)
+    monkeypatch.setattr(
+        bd, "_run_verification_challenge",
+        lambda candidate, challenge: {
+            "status": "FAIL",
+            "candidate_rtl_sha256": candidate["rtl_sha256"],
+            "challenge_sha256": challenge["sha256"],
+        })
+    _stub_dispatched_reentry(monkeypatch)
+    assert bd.cmd_resume("rtllm", "/unused", str(run)) == 2
+
+    working_rtl = Path(task["working_rtl_paths"][0])
+    working_rtl.write_text(
+        "module dut(input wire a, output wire y); assign y = a; endmodule\n")
+    challenge = bd._read_jsonl(run / bd._REPAIR_WORKLIST)[0]["verified_challenge"]
+    record = _write_ai_repair_record(run, task, challenge)
+    if mutation == "repair_record":
+        record["repaired_rtl_sha256"] = "0" * 64
+        record["repair_contract"]["candidate_sha256"] = "0" * 64
+        bd._repair_record_path(run, task).write_text(json.dumps(record))
+    else:
+        review.pop("verification_test")
+        Path(task["review_path"]).write_text(json.dumps(review))
+
+    def must_not_run(*args, **kwargs):
+        raise AssertionError("invalid repair proof must not re-enter the runner")
+
+    monkeypatch.setattr(bd._RunnerBudget, "run", must_not_run)
+    assert bd.cmd_resume("rtllm", "/unused", str(run)) == 2
+    blocked = bd._read_jsonl(run / bd._REPAIR_WORKLIST)
+    assert blocked and blocked[0]["status"] == "RUNNER_REGATE_BLOCKED"
+    assert any("RUNNER_INVOCATION_NOT_MEASURED" in str(reason)
+               for reason in blocked[0]["reasons"])
 
 
 @_NEEDS_SIMULATOR
