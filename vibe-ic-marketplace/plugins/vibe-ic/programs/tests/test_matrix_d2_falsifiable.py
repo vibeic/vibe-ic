@@ -2914,11 +2914,11 @@ CLAUSE_FIXTURE: Dict[Tuple[str, str], str] = {
            "reports/analog/mixed_signal/level_shifter_audit.json"): "MS_BAD",
     ("M2", "isolation_cell_required_check . --json "
            "reports/analog/mixed_signal/isolation_audit.json"): "MS_BAD",
-    ("M3", "mixed_signal_cosim_check . --json "
+    ("M3", "mixed_signal_cosim_check . --require-current-production --json "
            "reports/analog/mixed_signal/cosim_audit.json"): "ANALOG_P3",
-    ("M3", "mixed_signal_interface_si_check . --json "
+    ("M3", "mixed_signal_interface_si_check . --require-current-production --json "
            "reports/analog/mixed_signal/interface_si_audit.json"): "ANALOG_P3",
-    ("M4", "mixed_signal_signoff_check . --json "
+    ("M4", "mixed_signal_signoff_check . --require-current-production --json "
            "reports/analog/mixed_signal/signoff_audit.json"): "ANALOG_P3",
     ("40", "manufacturing_fab_intake_check . --json "
            "reports/manufacturing/fab_intake.json"): "MFG_BAD",

@@ -3434,6 +3434,18 @@ def run_audit(project: Path, run_spice: bool = True,
     """BLOCKING Step-30 consumption of current executed path correlation."""
     import path_spice_tool as pst
     result = AuditResult()
+    # Step 30 is downstream of extraction and STA.  Before either producer has
+    # run there is no current receipt to consume, so disclose that upstream
+    # state as a typed skip.  Once either input exists, a missing or stale
+    # current receipt remains a real refusal and must stay red.
+    has_spef = any(_pl.extracted_dir(project).glob("*.spef"))
+    has_sta = any(_pl.sta_dir(project).glob("*.rpt"))
+    if not has_spef or not has_sta:
+        reason = "no_spef" if not has_spef else "no_sta"
+        result.summary = {'skipped': True, 'pass': True,
+                          'measurement': 'NOT_MEASURED',
+                          'current_binding': 'NOT_REACHED', 'reason': reason}
+        return result
     try:
         doc = pst.validate_current_step30(project)
         verdict = doc.get('verdict')

@@ -198,6 +198,124 @@ def build_gds(name: str, width_um: float = 120.0,
     return out
 
 
+def _write_current_kit(root: Path, packages: Sequence[str]) -> None:
+    """Stage the current hardmacro receipt consumed by the live IP gate.
+
+    The release-document fixture used to stop at the four delivered views.
+    Since ``digital_hardmacro_check`` became a current-production consumer,
+    that tree is correctly refused unless the receipt binds the signed-off
+    DEF/GDS, route declaration, timing inputs, and the views it delivers.
+    This is a software fixture for that contract: every byte is local, hashed
+    by ``_physical_current``, and the execution markers are explicit.
+    """
+    if not packages:
+        return
+
+    import sys
+    programs = Path(__file__).resolve().parents[1]
+    if str(programs) not in sys.path:
+        sys.path.insert(0, str(programs))
+    import _owner_declared as owner_declared
+    import _physical_current as current
+    import _tapeout_declaration as declaration
+
+    project = Path(root)
+    design = SUBJECT if SUBJECT in packages else packages[0]
+    hardmacro = project / "phase3/stage4/hardmacro"
+    pnr = project / "phase3/stage3/pnr"
+    constraints = project / "phase3/stage3/constraints"
+    extracted = project / "phase3/stage3/extracted"
+    sta = project / "phase3/stage3/sta"
+    gds_dir = project / "phase3/stage4/gds"
+    for directory in (pnr, constraints, extracted, sta, gds_dir):
+        directory.mkdir(parents=True, exist_ok=True)
+
+    # The selected DEF and GDS are the producer's source subjects.  Their
+    # design/top-cell identity agrees with the selected package and the GDS
+    # output below is byte-identical to this signed-off input.
+    (pnr / "routed.def").write_text(
+        f"VERSION 5.8 ;\nDESIGN {design} ;\nEND DESIGN\n",
+        encoding="utf-8")
+    source_gds = gds_dir / f"{design}.gds"
+    source_gds.write_bytes((hardmacro / f"{design}.gds").read_bytes())
+    timing_netlist = pnr / f"{design}_pnr.v"
+    timing_netlist.write_bytes((hardmacro / f"{design}.v").read_bytes())
+    (constraints / "signoff.sdc").write_text(
+        "create_clock -period 20 [get_ports clk]\n", encoding="utf-8")
+    (extracted / f"{design}.spef").write_text(
+        '*SPEF "IEEE 1481-1998"\n*DESIGN "' + design + '"\n',
+        encoding="utf-8")
+    (sta / f"{design}.rpt").write_text(
+        "Startpoint: clk\nEndpoint: dout\nslack (MET) 0.50\n",
+        encoding="utf-8")
+
+    technology = project / "reports/phase3/technology_units.json"
+    technology.parent.mkdir(parents=True, exist_ok=True)
+    technology.write_text(json.dumps({"pdk": PDK}, indent=2) + "\n",
+                           encoding="utf-8")
+
+    pdk = project / "input/pdk"
+    (pdk / "liberty").mkdir(parents=True, exist_ok=True)
+    (pdk / "magic").mkdir(parents=True, exist_ok=True)
+    (pdk / "liberty" / "timing.lib").write_text(
+        "library(fixture) { cell(fixture) { area: 1; } }\n",
+        encoding="utf-8")
+    (pdk / "magic" / "fixture.magicrc").write_text(
+        "# SOFTWARE_FIXTURE_ONLY magic configuration\n", encoding="utf-8")
+
+    route = project / declaration.DECLARATION_REL
+    route.parent.mkdir(parents=True, exist_ok=True)
+    doc = declaration.blank_declaration()
+    doc, _ignored = declaration.merge_answers(
+        doc, {"deliverable": declaration.DELIVERABLE_HARDMACRO})
+    owner_declared.attest(doc)
+    route.write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
+
+    log = hardmacro / "digital_lef.log"
+    timing_log = hardmacro / "timing_model.log"
+    log.write_text("DIGITAL_LEF_WRITE_DONE SOFTWARE_FIXTURE_ONLY\n",
+                   encoding="utf-8")
+    timing_log.write_text("TIMING_MODEL_DONE SOFTWARE_FIXTURE_ONLY\n",
+                          encoding="utf-8")
+    timing_recipe = hardmacro / "timing_recipe.tcl"
+    lef_recipe = hardmacro / "lef_recipe.tcl"
+    timing_recipe.write_text("# SOFTWARE_FIXTURE_ONLY timing recipe\n",
+                             encoding="utf-8")
+    lef_recipe.write_text("# SOFTWARE_FIXTURE_ONLY LEF recipe\n",
+                          encoding="utf-8")
+
+    inputs = {
+        "def": current.entry(project, pnr / "routed.def"),
+        "gds": current.entry(project, source_gds),
+        "route": current.entry(project, route),
+        "technology": current.entry(project, technology),
+        "timing_netlist": current.entry(project, timing_netlist),
+        "timing_sdc": current.entry(project, constraints / "signoff.sdc"),
+        "timing_spef": current.entry(project, extracted / f"{design}.spef"),
+        "timing_sta_report": current.entry(project, sta / f"{design}.rpt"),
+        "timing_recipe": current.entry(project, timing_recipe),
+        "pdk_timing_liberty": current.entry(project, pdk / "liberty/timing.lib"),
+        "pdk_magicrc": current.entry(project, pdk / "magic/fixture.magicrc"),
+        "lef_recipe": current.entry(project, lef_recipe),
+    }
+    outputs = {
+        "lef": current.entry(project, hardmacro / f"{design}.lef"),
+        "liberty": current.entry(project, hardmacro / f"{design}.lib"),
+        "gds": current.entry(project, hardmacro / f"{design}.gds"),
+        "verilog": current.entry(project, hardmacro / f"{design}.v"),
+        "log": current.entry(project, log),
+        "timing_log": current.entry(project, timing_log),
+    }
+    record = current.build(
+        project, "37.5ip", "stage4", design, PDK, "magic+opensta",
+        inputs, outputs,
+        {"rc": 0, "argv": ["magic+opensta", "SOFTWARE_FIXTURE_ONLY"],
+         "timing": {"rc": 0, "argv": ["opensta", "SOFTWARE_FIXTURE_ONLY"]}},
+    )
+    (hardmacro / "current_kit.json").write_text(
+        json.dumps(record, indent=2) + "\n", encoding="utf-8")
+
+
 def _layers(register_rich: bool, bus_width: int = 1) -> Dict[str, dict]:
     """The Phase-1 design INPUT this producer reads, in the shapes it ships in.
 
@@ -326,6 +444,7 @@ def build_project(root: Path, packages: Sequence[str] = (SUBJECT, CONTROL),
                 "output wire dout", f"output wire [{bus_width - 1}:0] dout")
         (kit / f"{name}.v").write_text(verilog, encoding="utf-8")
         (kit / f"{name}.gds").write_bytes(build_gds(name))
+    _write_current_kit(root, packages)
     return root
 
 
