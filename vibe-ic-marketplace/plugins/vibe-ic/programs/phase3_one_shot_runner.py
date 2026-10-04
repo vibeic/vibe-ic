@@ -71024,6 +71024,14 @@ def _step24_transient_argv(project: Path, def_file: Path, pdk: PdkConfig,
     return argv
 
 
+def _polarity_accepted_tool_lines(log: str, pattern: str,
+                                  denial: Callable[[str], Optional[str]]) -> List[str]:
+    """Keep matching tool records whose own line does not deny the value."""
+    return [line for line in (log or "").splitlines()
+            if re.search(pattern, line, re.IGNORECASE)
+            and denial(line) is None]
+
+
 def _emit_ir_em_reports(project: Path, top: str, pdk: PdkConfig,
                         container: str, ir_rpt: Path, em_rpt: Path,
                         notes: List[str]) -> Tuple[bool, bool]:
@@ -71356,10 +71364,15 @@ catch {{set_wire_rc -clock -layer {mp}5}}
         "execution": {"argv": ["bash", "-c", cmd], "native_rc": rc},
     }
     # Parse IR + EM numbers from PSM stdout (deterministic regex).
-    ir_lines = [ln for ln in log.splitlines()
-                if re.search(r"voltage|IR drop|PSM-|Supply", ln, re.I)]
-    em_lines = [ln for ln in log.splitlines()
-                if re.search(r"current|EM analysis|EM lifetime", ln, re.I)]
+    # OpenROAD emits one record per line, but diagnostics are mixed into the
+    # same stdout stream.  A line such as ``IR drop: not measured`` or
+    # ``current: no result`` must not become evidence merely because it contains
+    # the measurement keyword.  The shared vocabulary owns the denial decision;
+    # this caller owns the record boundary (one physical tool-output line).
+    ir_lines = _polarity_accepted_tool_lines(
+        log, r"voltage|IR drop|PSM-|Supply", _pp.is_denied)
+    em_lines = _polarity_accepted_tool_lines(
+        log, r"current|EM analysis|EM lifetime", _pp.is_denied)
     has_ir = any(re.search(r"IR drop", ln, re.I) for ln in ir_lines)
     _missing_em_nets = [net for net in psm_nets
                         if _psm_segment_counts.get(net, 0) == 0 or
