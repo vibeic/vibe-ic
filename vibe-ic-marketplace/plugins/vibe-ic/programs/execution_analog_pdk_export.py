@@ -21,6 +21,7 @@ from typing import Mapping
 
 import execution_modes as em
 import librelane_contract as lc
+import _docker_memory as _dmem
 
 
 SCHEMA = "vibeic.analog-pdk-export.v1"
@@ -458,8 +459,7 @@ def export_bounded_pdk(project: Path, *, target: str, image_ref: str,
                    limits={'max_files': max_files, 'max_bytes': max_bytes})
     scratch = Path(tempfile.mkdtemp(prefix='.analog-pdk-export-', dir=base))
     try:
-        argv = [docker, 'run', '--rm', '--network', 'none', '--cpus', '1',
-                '--memory', '512m', '--memory-swap', '512m',
+        argv = [docker, 'run', *_dmem.docker_memory_flags(), '--rm', '--network', 'none', '--cpus', '1',
                 '-v', f'{scratch}:/vibeic-pdk-export:rw', image_ref,
                 '--skip', 'python3', '-c', _CONTAINER_COPY, pdk_root,
                 '/vibeic-pdk-export', json.dumps({'pdk_root': pdk_root, 'seeds': seeds,

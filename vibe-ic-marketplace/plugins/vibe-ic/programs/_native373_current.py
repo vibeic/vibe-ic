@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 
 from _atomic_artefact import write_json
+import _docker_memory as _dmem
 import _physical_current as pc
 import librelane_contract as lc
 import librelane_pv_signoff as pv
@@ -229,7 +230,7 @@ class ShippedXorRunner:
 
     def run(self, script, env, *, path_keys=(), timeout=1800):
         argv = ["docker", "run", "--rm", "--network", "none", "--cpus", "2",
-                "--memory", "6g", "--memory-swap", "6g",
+                *_dmem.docker_memory_flags(),
                 "-v", f"{self.project}:{self.project}", "-e", "QT_QPA_PLATFORM=offscreen"]
         for key, value in env.items():
             argv += ["-e", f"{key}={value}"]

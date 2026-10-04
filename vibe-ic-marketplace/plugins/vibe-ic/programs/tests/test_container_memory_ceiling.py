@@ -440,7 +440,8 @@ def test_librelane_contract_argv_carries_the_ceiling(tmp_path, monkeypatch):
     ringed = next(e["name"] for e in entries
                   if (e.get("pdn_ring") or {}).get("connect_to_pad_layers")
                   and (e.get("pdn_ring") or {}).get("connects"))
-    assert _drive("emit_pdn_cfg", ok("add_pdn_connect -grid g\n"),
+    pdn_probe = json.dumps({ll._PDN_PAYLOAD_KEY: "add_pdn_connect -grid g\n"}) + "\n"
+    assert _drive("emit_pdn_cfg", ok(pdn_probe),
                   lambda: ll.emit_pdn_cfg(image, ringed, tmp_path / "pdn.tcl"))
 
     assert _drive("flow_segment", ok('["A.One", "B.Two"]\n'),

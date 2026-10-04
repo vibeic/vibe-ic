@@ -10,6 +10,8 @@ import subprocess
 import sys
 import time
 
+import _docker_memory as _dmem
+
 
 def main():
     args = sys.argv[1:]
@@ -31,8 +33,8 @@ def main():
         command = command[1:]
     else:
         raise ValueError("NATIVE373_WRAPPER_COMMAND_MISSING")
-    argv = ["docker", "run", *flags, "--cpus", "2", "--memory", "6g",
-            "--memory-swap", "6g", "--network", "none", image, "--skip",
+    argv = ["docker", "run", *flags, "--cpus", "2",
+            *_dmem.docker_memory_flags(), "--network", "none", image, "--skip",
             "/usr/bin/time", "-v", *command]
     started = time.monotonic()
     cp = subprocess.run(argv)

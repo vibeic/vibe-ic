@@ -70,7 +70,8 @@ def test_edited_config_file_reruns_the_step(tmp_path, monkeypatch):
         calls.append(cmd)
         folder = Path(cmd[cmd.index("-o") + 1])
         put(folder / "state_out.json", {"nl": str(netlist), "metrics": {}})
-        return SimpleNamespace(returncode=0, stdout="", stderr="")
+        # Retained-step validation requires a non-empty invocation record.
+        return SimpleNamespace(returncode=0, stdout="tool completed\n", stderr="")
 
     monkeypatch.setattr(contract, "image_capability", lambda *a: None)
     monkeypatch.setattr(contract.subprocess, "run", tool)
