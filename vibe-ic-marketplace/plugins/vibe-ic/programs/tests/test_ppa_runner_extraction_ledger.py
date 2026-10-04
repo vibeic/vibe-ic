@@ -766,6 +766,15 @@ _LEDGER = frozenset({
                                     # and only when this flow's own wrapper
                                     # record proves the declared name is the
                                     # CORE it wrapped.
+
+    # RED-11: these are compatibility seams for the runner's step-order and
+    # test injection points. Each wrapper only passes the runner's arguments
+    # to the owning `_ppa` module and returns its result; all report parsing,
+    # source binding, artifact writes and power/density decisions live in
+    # `_ppa/power.py` or `_ppa/area.py`. Removing the seams would make the
+    # orchestration boundary harder to exercise without moving any logic.
+    "_step33_current_power_due", "_adopt_current_power_report",
+    "_step25_native_density_due",
     })
 
 

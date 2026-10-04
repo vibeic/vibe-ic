@@ -70266,65 +70266,14 @@ def _step33_tool_arm(project: Path, top: str, pdk: PdkConfig, mode: str,
 
 
 def _step33_current_power_due(project: Path) -> bool:
-    """Admit only the current tool adoption and its actual scalar consumer."""
-    try:
-        import _opensta_current as current
-        current.power_binding(project)
-        report = _pl.reports_phase3_dir(project) / "power.rpt"
-        doc = json.loads(report.with_suffix(".json").read_text())
-        expected = _ppa_power.signoff_record(
-            _ppa_power.read_power_report(report), source="reports/phase3/power.rpt",
-            analysis_mode=doc.get("analysis_mode"))
-        return doc != expected or doc.get("power_measurement") != "MEASURED"
-    except (OSError, ValueError, KeyError, TypeError):
-        return True
+    """Orchestrate Step 33 cache admission through the power module."""
+    return _ppa_power._step33_current_power_due(project)
 
 
 def _adopt_current_power_report(project: Path, top: str, power_rpt: Path,
                                 notes: List[str]) -> bool:
-    """Ordinary Default Step 33 adopts current native STAPostPNR power.
-
-    No parallel power session or fallback report runs at this boundary.
-    """
-    import _opensta_current as current
-    import librelane_postroute as lp
-    power_rpt.parent.mkdir(parents=True, exist_ok=True)
-    receipt_path = power_rpt.with_suffix('.current.json')
-    for path in (power_rpt, receipt_path):
-        path.unlink(missing_ok=True)
-    try:
-        if power_rpt.absolute() != (_pl.reports_phase3_dir(project) / 'power.rpt').absolute():
-            raise current.Refusal('CURRENT_POWER_OUTPUT_PATH_MISMATCH')
-        folder, _ = lp.stapostpnr_state(project)
-        corners = _ppa_power.stapostpnr_corner_power(folder)
-        if not corners or any(row['status'] != 'MEASURED' for row in corners.values()):
-            raise current.Refusal('CURRENT_POWER_CORNERS_UNMEASURED')
-        # Validate every measured corner before choosing the largest total.
-        for corner in corners:
-            current.tool_subject(project, top, corner=corner)
-        worst = max(corners, key=lambda corner: corners[corner]['total_w'])
-        subject, tool = current.tool_subject(project, top, corner=worst)
-        source = Path(corners[worst]['report'])
-        power_rpt.write_text(_ppa_power.current_tool_power_text(
-            worst, corners[worst], source.read_text(), current.digest(tool['state']), subject))
-        receipt = {**subject, 'schema': 'stapostpnr-power-current-v1', 'step': '33',
-                   'tool_state': str(tool['state']),
-                   'source_report': current.file_record(source, 'source_power', project),
-                   'outputs': [current.file_record(power_rpt, 'power_report', project)]}
-        _aa.write_json(receipt_path, receipt)
-        current.power_binding(project)
-        record = _ppa_power.emit_signoff_record(project, power_rpt, power_rpt.with_suffix('.json'),
-                                               'vectorless_sdc', notes, tool_rc=0)
-        if record.get('power_measurement') != 'MEASURED':
-            raise current.Refusal('CURRENT_POWER_DOWNSTREAM_NOT_MEASURED')
-    except (OSError, ValueError, KeyError, TypeError) as exc:
-        receipt_path.unlink(missing_ok=True)
-        power_rpt.unlink(missing_ok=True)
-        _ppa_power.retire_signoff_record(power_rpt.with_suffix('.json'), str(exc), notes)
-        notes.append(f'Power NOT_MEASURED: {exc}')
-        return False
-    notes.append(f'Step 33 adopted current STAPostPNR power corner {worst}')
-    return True
+    """Orchestrate Step 33 current-power adoption through the power module."""
+    return _ppa_power._adopt_current_power_report(project, top, power_rpt, notes)
 
 
 def _emit_power_report(project: Path, top: str, pdk: PdkConfig,
@@ -75338,22 +75287,8 @@ def _read_verdict(json_path: Path) -> Optional[str]:
 
 def _step25_native_density_due(project: Path, def_file: Path,
                                pdk: PdkConfig) -> bool:
-    """Cache admission for the existing Step-24/25 producer, never a second run.
-
-    Shared canonicalization composes this predicate with its existing report
-    freshness tests. Partial but current native coverage is retained; stale
-    inputs, another kit, changed consumers or an absent execution are due.
-    """
-    import em_current_density_check as emc
-    binding = emc.validate_native_density(project)
-    if not binding["valid"]:
-        return True
-    try:
-        doc = json.loads((_pl.reports_phase3_dir(project) / "em_openroad_density.json").read_text())
-        return (doc["inputs"]["layout"]["sha256"] != emc._native_sha(def_file)
-                or doc["pdk"] != {"name": pdk.name, "tech_lef": str(pdk.tech_lef)})
-    except (OSError, ValueError, KeyError, TypeError):
-        return True
+    """Orchestrate Step 25 cache admission through the area module."""
+    return _ppa_area._step25_native_density_due(project, def_file, pdk)
 
 
 def _emit_em_current_authority(project: Path, pdk: PdkConfig,

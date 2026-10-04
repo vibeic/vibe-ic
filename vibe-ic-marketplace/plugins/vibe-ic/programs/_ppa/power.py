@@ -99,6 +99,7 @@ __all__ = [
     "POWER_VERDICT_MEASURED", "signoff_record", "emit_signoff_record",
     "retire_signoff_record",
     "verdict_is_backed_by_a_number",
+    "_step33_current_power_due", "_adopt_current_power_report",
 ]
 
 
@@ -2938,3 +2939,75 @@ def current_tool_power_text(corner, row, report_text, state_sha256, subject):
     """The tool report body, unchanged, plus its current material identities."""
     provenance = '\n'.join('# ' + line for line in json.dumps(subject, indent=2).splitlines())
     return tool_power_report_text(corner, row, report_text, state_sha256) + '\n# Current material inputs\n' + provenance + '\n'
+
+
+def _step33_current_power_due(project: Path) -> bool:
+    """Return whether the retained Step 33 current-power adoption is stale.
+
+    This is cache admission for the power consumer.  The runner owns the
+    surrounding step order; the power module owns the current report's binding
+    and canonical scalar record.
+    """
+    try:
+        import _opensta_current as current
+
+        current.power_binding(project)
+        report = _pl.reports_phase3_dir(project) / "power.rpt"
+        doc = json.loads(report.with_suffix(".json").read_text())
+        expected = signoff_record(
+            read_power_report(report), source="reports/phase3/power.rpt",
+            analysis_mode=doc.get("analysis_mode"))
+        return doc != expected or doc.get("power_measurement") != "MEASURED"
+    except (OSError, ValueError, KeyError, TypeError):
+        return True
+
+
+def _adopt_current_power_report(project: Path, top: str, power_rpt: Path,
+                                notes: List[str]) -> bool:
+    """Adopt the current native STAPostPNR power report for Step 33.
+
+    The phase-3 runner supplies orchestration inputs and retains control of
+    step sequencing.  All power-specific selection, text construction,
+    provenance and signoff behavior lives here.
+    """
+    import _atomic_artefact as _aa
+    import _opensta_current as current
+    import librelane_postroute as lp
+
+    power_rpt.parent.mkdir(parents=True, exist_ok=True)
+    receipt_path = power_rpt.with_suffix('.current.json')
+    for path in (power_rpt, receipt_path):
+        path.unlink(missing_ok=True)
+    try:
+        if power_rpt.absolute() != (_pl.reports_phase3_dir(project) / 'power.rpt').absolute():
+            raise current.Refusal('CURRENT_POWER_OUTPUT_PATH_MISMATCH')
+        folder, _ = lp.stapostpnr_state(project)
+        corners = stapostpnr_corner_power(folder)
+        if not corners or any(row['status'] != 'MEASURED' for row in corners.values()):
+            raise current.Refusal('CURRENT_POWER_CORNERS_UNMEASURED')
+        # Validate every measured corner before choosing the largest total.
+        for corner in corners:
+            current.tool_subject(project, top, corner=corner)
+        worst = max(corners, key=lambda corner: corners[corner]['total_w'])
+        subject, tool = current.tool_subject(project, top, corner=worst)
+        source = Path(corners[worst]['report'])
+        power_rpt.write_text(current_tool_power_text(
+            worst, corners[worst], source.read_text(), current.digest(tool['state']), subject))
+        receipt = {**subject, 'schema': 'stapostpnr-power-current-v1', 'step': '33',
+                   'tool_state': str(tool['state']),
+                   'source_report': current.file_record(source, 'source_power', project),
+                   'outputs': [current.file_record(power_rpt, 'power_report', project)]}
+        _aa.write_json(receipt_path, receipt)
+        current.power_binding(project)
+        record = emit_signoff_record(project, power_rpt, power_rpt.with_suffix('.json'),
+                                     'vectorless_sdc', notes, tool_rc=0)
+        if record.get('power_measurement') != 'MEASURED':
+            raise current.Refusal('CURRENT_POWER_DOWNSTREAM_NOT_MEASURED')
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        receipt_path.unlink(missing_ok=True)
+        power_rpt.unlink(missing_ok=True)
+        retire_signoff_record(power_rpt.with_suffix('.json'), str(exc), notes)
+        notes.append(f'Power NOT_MEASURED: {exc}')
+        return False
+    notes.append(f'Step 33 adopted current STAPostPNR power corner {worst}')
+    return True

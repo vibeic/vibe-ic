@@ -74,6 +74,8 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
+import _path_layout as _pl
+
 
 def applied_area_metrics_tcl() -> str:
     """Measure logical standard-cell and core area on the shipped route DB.
@@ -125,6 +127,7 @@ __all__ = [
     "metrics_of_class", "area_record", "proxy_record", "physical_record",
     "digest_of_record", "assert_eligible_for_physical_ppa", "filter_physical",
     "scope_matches", "compare", "area_verdict", "main",
+    "_step25_native_density_due",
 ]
 
 SCHEMA = "vibeic.ppa.metric.v1"
@@ -1044,6 +1047,29 @@ def instance_cell_area_um2(master_counts: Mapping[str, int],
     n = sum(master_counts.values())
     return float(area), (f"sum of {n} instances' LEF SIZE over "
                          f"{len(master_counts)} master(s)")
+
+
+def _step25_native_density_due(project: Path, def_file: Path,
+                               pdk: Any) -> bool:
+    """Return whether the retained Step 25 native density result is stale.
+
+    This is the area/density cache-admission predicate.  The phase-3 runner
+    still decides when the producer runs; this module owns the input binding
+    comparison and keeps that PPA logic beside the area taxonomy.
+    """
+    import em_current_density_check as emc
+
+    binding = emc.validate_native_density(project)
+    if not binding["valid"]:
+        return True
+    try:
+        doc = json.loads((_pl.reports_phase3_dir(project) /
+                          "em_openroad_density.json").read_text())
+        return (doc["inputs"]["layout"]["sha256"] != emc._native_sha(def_file)
+                or doc["pdk"] != {"name": pdk.name,
+                                   "tech_lef": str(pdk.tech_lef)})
+    except (OSError, ValueError, KeyError, TypeError):
+        return True
 
 
 def _write_json(path_s: Optional[str], doc: Mapping[str, Any]) -> None:

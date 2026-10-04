@@ -6,6 +6,20 @@ LibreLane synthesis implementation once.  No Python fixture, handwritten gate
 receipt, or caller supplied tool version is a producer.
 """
 from __future__ import annotations
+# --- sibling-import path (vibe-ic#2104) ------------------------------------
+# `programs/` is a flat directory whose modules import each other by BARE
+# name. Python puts a file's own directory on `sys.path` only when that file
+# is run as `__main__`; under `importlib.util.spec_from_file_location` — how
+# the gates, the wiring audit and much of the suite load a program — it does
+# not, so every bare sibling import below raises ModuleNotFoundError. Restore
+# the condition the file is written for. Idempotent, and the same shape the
+# sibling programs that already carry it use.
+import os as _os                                                    # noqa: E402
+import sys as _sys                                                  # noqa: E402
+
+if _os.path.dirname(_os.path.abspath(__file__)) not in _sys.path:
+    _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+# ---------------------------------------------------------------------------
 
 from dataclasses import asdict, fields, is_dataclass
 import json
