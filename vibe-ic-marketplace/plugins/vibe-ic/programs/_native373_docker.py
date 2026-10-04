@@ -10,6 +10,11 @@ import subprocess
 import sys
 import time
 
+# `programs/` is a flat directory whose shipped modules import siblings by
+# bare name. Keep path-loaded execution equivalent to direct execution.
+if os.path.dirname(os.path.abspath(__file__)) not in sys.path:
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 import _docker_memory as _dmem
 
 
