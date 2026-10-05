@@ -18130,31 +18130,60 @@ def _bootstrap_execution_policy(execution, project: Path, *, top: str,
 
 
 def _receipt_declared_top(project: Path, defined_modules: Sequence[str]) -> Optional[str]:
-    """Return a producer-declared supplied top only when it is staged.
+    """Return one source-bound supplied top, or fail closed.
 
-    The supplied-RTL declaration is the producer receipt for the top consumed by
-    Phase 2.  It is evidence, not a guess: a missing or stale name is ignored so
-    the existing Yosys ``chip_top`` path fails closed.
+    ``supplied_rtl`` is the producer receipt.  Its ``top.defined_in`` entry
+    must identify exactly one currently staged file whose recorded hash matches
+    the bytes in the staged tree.  L9 is used only as a second declaration: a
+    disagreement is ambiguous, while agreement does not replace the receipt's
+    source binding.
     """
-    candidates: List[str] = []
-    for rel, key_path in (("plugin_output/declaration.json", ("supplied_rtl", "top", "value")),
-                          ("phase1/generated_docs/L9_INTEGRATION_SPEC.json", ("top_module",))):
-        try:
-            value: Any = json.loads((Path(project) / rel).read_text(errors="replace"))
-            for key in key_path:
-                if not isinstance(value, dict):
-                    value = None
-                    break
-                value = value.get(key)
-            if isinstance(value, str) and value.strip():
-                candidates.append(value.strip())
-        except (OSError, ValueError, TypeError):
-            continue
-    defined = set(defined_modules)
-    for candidate in candidates:
-        if candidate in defined:
-            return candidate
-    return None
+    declaration_top: Optional[str] = None
+    declaration_bound = False
+    try:
+        declaration = json.loads(
+            (Path(project) / "plugin_output/declaration.json").read_text(
+                errors="replace"))
+        supplied = declaration.get("supplied_rtl")
+        top_record = supplied.get("top") if isinstance(supplied, dict) else None
+        files = supplied.get("files") if isinstance(supplied, dict) else None
+        value = top_record.get("value") if isinstance(top_record, dict) else None
+        defined_in = top_record.get("defined_in") if isinstance(top_record, dict) else None
+        if isinstance(value, str) and value.strip():
+            declaration_top = value.strip()
+        if (declaration_top and isinstance(defined_in, str)
+                and defined_in and not Path(defined_in).is_absolute()
+                and isinstance(files, list)):
+            matches = [entry for entry in files
+                       if isinstance(entry, dict)
+                       and entry.get("staged") == defined_in]
+            staged_path = Path(project) / defined_in
+            expected = matches[0].get("staged_sha256") if len(matches) == 1 else None
+            actual = _sha256_file(staged_path)
+            actual_hex = actual.split(":", 1)[1] if actual and ":" in actual else actual
+            declaration_bound = (len(matches) == 1
+                                 and matches[0].get("status") == "staged"
+                                 and isinstance(expected, str)
+                                 and expected == actual_hex)
+    except (OSError, ValueError, TypeError):
+        declaration_top = None
+
+    l9_top: Optional[str] = None
+    try:
+        l9 = json.loads(
+            (Path(project) / "phase1/generated_docs/L9_INTEGRATION_SPEC.json")
+            .read_text(errors="replace"))
+        value = l9.get("top_module") if isinstance(l9, dict) else None
+        if isinstance(value, str) and value.strip():
+            l9_top = value.strip()
+    except (OSError, ValueError, TypeError):
+        pass
+
+    candidates = {value for value in (declaration_top, l9_top) if value}
+    if len(candidates) > 1 or not declaration_bound:
+        return None
+    candidate = next(iter(candidates), None)
+    return candidate if candidate in set(defined_modules) else None
 
 
 def _phase2_synth_top(project: Path, requested_top: str) -> str:
