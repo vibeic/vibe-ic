@@ -105,7 +105,8 @@ ROUTING = {
 }
 
 
-def _project(tmp_path: Path, *, phase1: bool = True) -> Path:
+def _project(tmp_path: Path, *, phase1: bool = True,
+             problem_id: str = "p1") -> Path:
     """A CANONICAL Program candidate, the shape `--solve` leaves behind.
 
     Two facts of that shape are load-bearing for `cmd_resume`, and both were
@@ -123,7 +124,7 @@ def _project(tmp_path: Path, *, phase1: bool = True) -> Path:
     `phase1=False` builds the same candidate minus the L-docs, for the test
     that pins that refusal.
     """
-    project = tmp_path / "run" / "projects" / "p1"
+    project = tmp_path / "run" / "projects" / problem_id
     (project / "input").mkdir(parents=True)
     if phase1:
         docs = project / "phase1" / "generated_docs"
@@ -1239,7 +1240,12 @@ _write_phase2_report(p/'reports/orchestrator/phase2_one_shot.json', {
 
 
 def _stub_dispatched_reentry(monkeypatch):
-    """Keep this regression at the coordinator/consumer boundary."""
+    """Keep dispatched repair at the coordinator/consumer boundary.
+
+    The route/D1 producer is covered by the normal-dispatch tests.  These
+    cases target consumer reentry and scheduling; the child remains real and
+    writes the runner-bound report through ``RunnerBudget``.
+    """
     monkeypatch.setattr(bd, "_runtime_pair_before_fan_out",
                         lambda rows, run_p, operation: None)
     monkeypatch.setattr(
@@ -1255,7 +1261,84 @@ def _stub_dispatched_reentry(monkeypatch):
         lambda budget, argv, snapshot, *args, **kwargs: budget.run(argv))
 
 
-def _solve_report(run: Path, task: dict) -> None:
+def _issue_pending_route_fixture(run: Path, route: dict) -> dict:
+    """Run the normal route producer through its pending-D1 boundary."""
+    import route_decision as rd
+    from test_ai_first_route_handoff import _answer, _write_answer
+
+    # This fixture's proposal is deliberately the compact ROUTING constant;
+    # use the documented override path with exact visible prompt evidence.
+    answer = _answer(route, "spec_generation", disposition="OVERRIDE")
+    prompt = Path(route["prompt_path"]).read_text()
+    answer["prompt_evidence"] = [{
+        "excerpt": prompt.splitlines()[0],
+        "supports": "The visible specification is a spec_generation request.",
+    }]
+    _write_answer(route, answer)
+    decision, reasons = bd._validate_ai_route(
+        route, run, benchmark="rtllm", dataset=Path("/unused"))
+    assert decision is not None, reasons
+    project = Path(route["project"])
+    receipt = decision["route_receipt"]
+    bd._publish_current_receipt(
+        project, "route_decision", receipt,
+        digest_field="receipt_sha256", run_id=f"{route['task_sha256']}:fixture-route")
+    bd._seal_route_admission(run, route, decision)
+    pending = rd.write_d1_pending(
+        bd._receipt_current_pointer(project, "d1_pending"),
+        route_receipt=receipt, source_sha256=receipt["source_sha256"],
+        task_sha256=route["task_sha256"])
+    bd._publish_current_receipt(
+        project, "d1_pending", pending,
+        digest_field="activation_sha256",
+        run_id=f"{route['task_sha256']}:fixture-pending")
+    return receipt
+
+
+def _write_issued_run_envelope(run: Path, task: dict,
+                               extra_routes: list[dict] | None = None) -> None:
+    """Write the coordinator-owned envelope consumed by ``cmd_resume``.
+
+    Direct review fixtures start after the real ``--solve`` route decision, so
+    they must carry the same immutable config, issued route task, and input
+    anchor that the producer leaves behind.  The review task remains the
+    consumer input; this helper only supplies producer-owned run metadata.
+    """
+    # These direct-resume fixtures deliberately run their executable proof on
+    # the image host.  A canonical run's presence of ``.bench_config.json``
+    # selects native challenge transport unless the producer explicitly records
+    # a backend; make that producer-owned choice explicit here while preserving
+    # any native declaration a test has already issued.
+    declaration = task.get("verification_execution")
+    if (not isinstance(declaration, dict)
+            or (declaration.get("backend") == "host"
+                and str(declaration.get("selection") or "").startswith("legacy"))):
+        task["verification_execution"] = {
+            "backend": "host", "selection": "explicit test host"}
+    route = bd._make_ai_route_task(
+        task["id"], Path(task["project"]),
+        {"public_original_input": task["public_original_input"]},
+        ROUTING, run, "rtllm", benchmark="rtllm", dataset_path=Path("/unused"))
+    routes = [route, *(extra_routes or [])]
+    bd._publish_route_input_anchor(
+        run, bd._route_input_anchor("rtllm", "rtllm", Path("/unused"), routes))
+    bd._write_jsonl(run / bd._ROUTE_WORKLIST, routes)
+    bd._atomic_write_json(run / ".bench_config.json", {
+        "schema": "vibeic.benchmark.general_run.v1",
+        "bench": "rtllm",
+        "format": "rtllm",
+        "dataset": str(Path("/unused").resolve()),
+        "clean_room": True,
+        "full_dataset": True,
+        "diagnostic_limit": 0,
+        "inherited_from": None,
+        "seed_run": None,
+        "reused_samples_from": None,
+    })
+
+
+def _solve_report(run: Path, task: dict,
+                  *, extra_routes: list[dict] | None = None) -> None:
     result = {
         "id": task["id"], "ok": True, "candidate_ready": True,
         "accepted": False, "entry": "D1", "evidence": "RTL_SIM",
@@ -1285,6 +1368,7 @@ def _solve_report(run: Path, task: dict) -> None:
         },
         "results": [result],
     }))
+    _write_issued_run_envelope(run, task, extra_routes=extra_routes)
     bd._write_jsonl(run / bd._REVIEW_WORKLIST, [task])
     bd._write_jsonl(run / bd._BACKUP_WORKLIST, [])
 
@@ -1475,23 +1559,17 @@ def test_supplied_rtl_accepts_only_explicit_step2_reentry(tmp_path):
 @_NEEDS_SIMULATOR
 def test_ai_repair_reenters_at_validation_without_regeneration(
         tmp_path, monkeypatch):
-    run = tmp_path / "run"
-    (run / "responses").mkdir(parents=True)
-    project = _project(tmp_path)
+    run, task, runner = _dispatched_parent_task(tmp_path)
+    project = Path(task["project"])
+    task["verification_execution"] = {
+        "backend": "host", "selection": "explicit test host"}
     working_rtl = project / "phase2" / "stage1" / "rtl" / "dut.v"
-    working_rtl.write_text(
-        "module dut(input wire a, output wire y); assign y = ~a; endmodule\n")
-    bio._stage_public_original(
-        "p1", (project / "input/phase1_prompt.md").read_text(),
-        {"dut.v": "module dut(input wire a, output wire y); assign y = a; endmodule\n"},
-        project)
-    got = bio.collect("rtllm", "p1", project)
-    task = bd._make_ai_review_task(
-        "p1", project, got, ROUTING, 0, run, "PROGRAM")
     _solve_report(run, task)
     _write_review(task, _proven_fail_review(task))
 
     # First resume proves the Program candidate wrong and emits the repair task.
+    _stub_dispatched_reentry(monkeypatch)
+    monkeypatch.setenv("VIBEIC_CHALLENGE_BACKEND", "host")
     assert bd.cmd_resume("rtllm", "/unused", str(run)) == 2
     repairs = bd._read_jsonl(run / bd._REPAIR_WORKLIST)
     assert repairs[0]["status"] == "AI_SEMANTIC_REPAIR_REQUIRED"
@@ -1506,26 +1584,12 @@ def test_ai_repair_reenters_at_validation_without_regeneration(
     # native report-write seam. Only the runner path is substituted; route,
     # reentry window, prompt, RTL and the original report states are retained.
     # The report's fixture PASS is not a physical/native gate measurement.
-    runner = tmp_path / "fixture-runner" / "vibe_ic_one_shot_runner.py"
-    runner.parent.mkdir()
-    runner.write_text('''import pathlib, sys
-sys.path.insert(0, %r)
-from design_one_shot_runner import _write_phase2_report
-p = pathlib.Path(sys.argv[1]).resolve()
-assert sys.argv[sys.argv.index('--entry-step') + 1] == '2'
-report = p/'reports/orchestrator/phase2_one_shot.json'
-_write_phase2_report(report, {
-    'verdict':'PASS',
-    'steps':[{'name':'rtl_gen', 'status':'NOT_APPLICABLE',
-              'detail':'run declared --entry-step 2'}],
-    'measurement_scope':'SOURCE_ONLY_FIXTURE',
-    'native_gate_status':'NOT_MEASURED',
-}, p)
-''' % str(PROGRAMS))
     real_argv = bd._resume_solver_argv
 
-    def fixture_argv(_runner, project, supplied_rtl, entry, exit_step):
-        argv = real_argv(runner, project, supplied_rtl, entry, exit_step)
+    def fixture_argv(_runner, project, supplied_rtl, entry, exit_step,
+                     delivery_route="ip"):
+        argv = real_argv(runner, project, supplied_rtl, entry, exit_step,
+                         delivery_route)
         seen.append(argv)
         return argv
 
@@ -2499,6 +2563,7 @@ def test_emitted_phase1_provenance_is_bound_when_the_task_does_not_carry_it(
             f"a D1 run's provenance is bound, never regenerated: {argv}")
 
     monkeypatch.setattr(bd._RunnerBudget, "run", never)
+    _stub_dispatched_reentry(monkeypatch)
     assert bd.cmd_resume("rtllm", "/unused", str(run)) == 0
     acceptance = json.loads((run / bd._ACCEPTANCE_REPORT).read_text())
     assert acceptance["status"] == "COMPLETE"
@@ -2519,12 +2584,31 @@ def test_a_retryable_worker_error_is_retried_not_refused_at_the_front_door(
     the chance to emit. The retry must be attempted, its failure must stay
     loud, and the reviewed sibling must still be accepted."""
     run, task = _canonical_task(tmp_path)
-    _solve_report(run, task)
+    # Issue p2 before the solve envelope is published: the producer writes one
+    # immutable anchor containing every issued route task.
+    p2_project = _project(tmp_path, problem_id="p2")
+    p2_prompt = (p2_project / "input/phase1_prompt.md").read_text()
+    p2_source = (p2_project / "phase2/stage1/rtl/dut.v").read_text()
+    bio._stage_public_original("p2", p2_prompt, {"dut.v": p2_source}, p2_project)
+    p2_got = bio.collect("rtllm", "p2", p2_project)
+    p2_task = bd._make_ai_review_task(
+        "p2", p2_project, p2_got, ROUTING, 0, run, "PROGRAM",
+        program_phases=_FUNCTIONAL_PASS)
+    p2_route = bd._make_ai_route_task(
+        "p2", p2_project,
+        {"public_original_input": p2_task["public_original_input"]},
+        ROUTING, run, "rtllm", benchmark="rtllm", dataset_path=Path("/unused"))
+    _solve_report(run, task, extra_routes=[p2_route])
+    p2_receipt = _issue_pending_route_fixture(run, p2_route)
     solve = json.loads((run / "solve_report.json").read_text())
     solve["results"].append({
         "id": "p2", "ok": False, "candidate_ready": False,
-        "accepted": False, "entry": "D1", "evidence": "RTL_SIM",
-        "exit": "8", "routing_verdict": ROUTING, "rc": None,
+        "accepted": False, "entry": p2_receipt["entry_step"],
+        "evidence": p2_receipt["requested_evidence"],
+        "exit": p2_receipt["verify_through"],
+        "delivery_route": "ip",
+        "route_receipt": p2_receipt,
+        "routing_verdict": {**ROUTING, "route_receipt": p2_receipt}, "rc": None,
         "worker_status": "ERROR", "worker_retryable": True,
         "worker_error": "fixture: the worker died before Phase 1",
     })
