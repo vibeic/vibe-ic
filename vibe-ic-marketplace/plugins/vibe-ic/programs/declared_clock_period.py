@@ -470,11 +470,17 @@ def declared_io_delay_fraction(docs: Sequence[Path]) -> Dict[str, object]:
 
 
 def docs_in(docs_dir: Path) -> List[Path]:
-    """The constraint docs, most-authoritative first (L9 then L1, as the
-    resolver's own priority chain already orders them)."""
+    """Read supported plain-text constraint docs, preserving L9 before L1.
+
+    Phase 1 accepts both Markdown and UTF-8 text, case-insensitively. A table
+    in either form must reach the same PDK-keyed consumer; ignoring text can
+    also hide a conflicting declaration beside a Markdown document.
+    """
     if not docs_dir.is_dir():
         return []
-    return sorted(docs_dir.glob("L9_*.md")) + sorted(docs_dir.glob("L1_*.md"))
+    return [doc for prefix in ("L9_", "L1_")
+            for doc in sorted(docs_dir.glob(prefix + "*"))
+            if doc.is_file() and doc.suffix.lower() in (".md", ".txt")]
 
 
 def library_name_from_liberty(liberty_path: str) -> str:
