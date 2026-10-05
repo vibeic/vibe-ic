@@ -1386,6 +1386,64 @@ def _supplied_build_rtl(project: Path) -> List[Path]:
         return []
 
 
+def _supplied_source_bound_top(project: Path, supplied: List[Path],
+                               decls: set) -> Optional[Tuple[str, str]]:
+    """Find a source-bound wrapper in supplied RTL before it is staged.
+
+    This narrow repair applies only before L9 exists.  If either canonical L9
+    path is present, preserve the existing explicit-top behavior and never give
+    an old or stale declaration new override authority.
+
+    With no L9 emitted, the conventional ``chip_top`` wrapper is accepted only
+    when its exact source file declares ``chip_top``, the module is a graph
+    root, and that module body instantiates another module declared in the same
+    supplied corpus.  A leaf named ``chip_top`` is not enough evidence.
+    """
+    candidates = (
+        _pl.generated_docs_dir(project) / "L9_INTEGRATION_SPEC.json",
+        project / "generated_docs" / "L9_INTEGRATION_SPEC.json",
+    )
+    if any(path.exists() for path in candidates):
+        # L9 freshness is owned by the existing Phase-1 stale-document logic;
+        # this pre-L9 repair must not interpret or elevate an old declaration.
+        return None
+
+    all_insts = _scan_rtl_files(supplied)[1]
+    import _hdl_code_text as _hct
+    for path in supplied:
+        if path.name not in (f"{_TOP_NAME_DEFAULT}.v",
+                             f"{_TOP_NAME_DEFAULT}.sv"):
+            continue
+        file_decls, _ = _scan_rtl_files([path])
+        if (_TOP_NAME_DEFAULT not in file_decls
+                or _TOP_NAME_DEFAULT in all_insts):
+            continue
+        try:
+            code = _hct.strip_hdl_comments_and_strings(
+                path.read_text(encoding="utf-8", errors="ignore"))
+        except OSError:
+            continue
+        module_match = re.search(
+            r"\bmodule\s+(?:(?:automatic|static)\s+)?"
+            + re.escape(_TOP_NAME_DEFAULT)
+            + r"\b(?P<body>.*?)\bendmodule\b", code, re.S)
+        if module_match is None:
+            continue
+        child_names = sorted(decls - {_TOP_NAME_DEFAULT})
+        has_child = any(re.search(
+            r"(?<![\w.])" + re.escape(child)
+            + r"\s+(?:#\s*\([\s\S]*?\)\s*)?"
+            + r"[A-Za-z_]\w*\s*(?:\[[^\]\[;]*\]\s*)?\(",
+            module_match.group("body"))
+            for child in child_names)
+        if has_child:
+            return _TOP_NAME_DEFAULT, (
+                f"supplied RTL structurally binds source wrapper top="
+                f"'{_TOP_NAME_DEFAULT}' from {_project_rel(project, path)} "
+                f"(graph root with child instance; L9 not yet emitted)")
+    return None
+
+
 def _resolve_top_name(project: Path, ic_name: str, top_name: str,
                       explicit: bool) -> Tuple[str, str]:
     """Deterministically pick the phase-3 top module.
@@ -1422,10 +1480,21 @@ def _resolve_top_name(project: Path, ic_name: str, top_name: str,
         supplied = _supplied_build_rtl(project)
         decls, insts = _scan_rtl_files(supplied)
         if explicit:
-            # Unstaged input RTL is not the authoritative set an override
-            # needs: phase 2 can still author a top (consume's `chip_top`
-            # wrapper, catalog glue). As with no RTL at all, the explicit
-            # name is kept.
+            # A front-door invocation commonly forwards ``--ic-name`` as an
+            # explicit top.  If the supplied corpus proves that this is a
+            # stale project-name placeholder, bind the real wrapper only while
+            # L9 is absent.  Once L9 exists, preserve the current explicit-top
+            # behavior; freshness is owned by the existing Phase-1 path.
+            source_top = _supplied_source_bound_top(project, supplied, decls)
+            if source_top is not None:
+                selected, source_note = source_top
+                if (selected != top_name
+                        and top_name == _sanitize_module(ic_name)):
+                    source_label = ("L9 top" if source_note.startswith("L9 ")
+                                    else "supplied top")
+                    return selected, (f"explicit --top-name='{top_name}' conflicts "
+                                      f"with {source_note}; using the source-bound "
+                                      f"{source_label}")
             return top_name, ""
         if decls:
             supplied_note = (
