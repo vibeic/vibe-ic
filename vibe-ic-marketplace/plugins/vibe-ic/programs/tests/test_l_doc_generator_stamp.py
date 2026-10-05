@@ -927,6 +927,23 @@ def test_corpus_scope_does_not_treat_phase1_design_as_project(tmp_path):
     assert result["verdict"] == "PASS"
 
 
+def test_symlinked_phase1_does_not_fall_back_to_legacy(tmp_path):
+    """A canonical symlink is VACUOUS even when legacy docs exist."""
+    project = tmp_path / "design"
+    external = tmp_path / "external" / "phase1"
+    external.mkdir(parents=True)
+    (project).mkdir(parents=True)
+    (project / "phase1").symlink_to(external, target_is_directory=True)
+    legacy = project / "generated_docs"
+    legacy.mkdir(parents=True)
+    g.dump(legacy / "L1_DATASHEET.json", {"ic_name": "legacy"},
+           "test.emitter")
+
+    result = g.scan_tree(project)
+    assert result["documents_read"] == 0
+    assert result["verdict"] == "VACUOUS"
+
+
 def test_phase1_doc_runner_blocks_stamp_rc2_as_undetermined():
     """The canonical Phase-1 gate loop must not discard rc=2."""
     import phase1_doc_one_shot_runner as runner

@@ -509,6 +509,10 @@ def _canonical_scan_root(root: Path) -> Optional[Path]:
     phase1 = root / "phase1"
     phase1_handoff = phase1 / "generated_docs"
     legacy = root / "generated_docs"
+    # A symlinked canonical branch is an integrity failure.  Do not fall back
+    # to a second layout and accidentally accept a different producer's docs.
+    if phase1.is_symlink() or phase1_handoff.is_symlink():
+        return phase1_handoff
     # Prefer a handoff that actually contains direct L documents.  An empty
     # phase1/generated_docs/ marker must not hide a valid legacy root-level
     # handoff; if neither handoff has a document, keep the phase1 marker so the
