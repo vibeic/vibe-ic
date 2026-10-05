@@ -180,6 +180,96 @@ def test_missing_docker_is_SKIP_never_a_fabricated_pass(monkeypatch):
     assert "unverifiable" in rec["reason"]
 
 
+def _local_launch(tmp_path, monkeypatch):
+    """A neutral host launch record, checked by the real LOCAL validator."""
+    import librelane_contract as ll
+    cid = "a" * 64
+    image = "registry.invalid/tools@" + PIN_MANIFEST
+    record = {
+        "cid": cid, "image": image,
+        "container_inspect": {
+            "Id": cid, "Image": PINNED_ID,
+            "Config": {"Hostname": cid[:12], "Image": image},
+            "State": {"Running": True, "Paused": False, "Dead": False},
+            "HostConfig": {},
+        },
+        "image_inspect": [{"Id": PINNED_ID, "RepoDigests": [image]}],
+    }
+    path = tmp_path / "launch_identity.json"
+    path.write_text(json.dumps(record))
+    monkeypatch.setenv(ll.LOCAL_ATTESTATION_ENV, str(path))
+    monkeypatch.setenv("VIBEIC_EDA_IMAGE", image)
+    monkeypatch.setattr(ll.socket, "gethostname", lambda: cid[:12])
+    monkeypatch.setattr(cip, "inspect_container",
+                        lambda n: {"status": "docker_absent", "container": n})
+    return record, path, image
+
+
+@pytest.mark.parametrize("required", ["pinned", "mirror", "omitted"])
+def test_local_host_cid_attestation_satisfies_image_admission(
+        tmp_path, monkeypatch, required):
+    record, path, image = _local_launch(tmp_path, monkeypatch)
+    demand = {"pinned": image, "mirror": "mirror.invalid/tools@" + PIN_MANIFEST,
+              "omitted": None}[required]
+    rec = cip.verify("named-holder", demand)
+    assert rec["verdict"] == "PASS", rec
+    assert rec["container"] == record["cid"]
+    assert rec["requested_container"] == "named-holder"
+    assert rec["image_id"] == PINNED_ID
+    assert rec["image_ref"] == image
+    assert rec["execution_route"] == "local"
+    assert rec["attestation_path"] == str(path)
+    if demand:
+        assert rec["image_match"] is True
+
+
+@pytest.mark.parametrize("mutation", [
+    "cid", "hostname", "stopped", "paused", "dead", "image", "image_id",
+    "repo_digest", "missing_receipt", "required_digest", "mutable_required",
+])
+def test_local_image_admission_refuses_unbound_identity(
+        tmp_path, monkeypatch, mutation):
+    record, path, image = _local_launch(tmp_path, monkeypatch)
+    inspected = record["container_inspect"]
+    demand = image
+    if mutation == "cid":
+        record["cid"] = "b" * 64
+    elif mutation == "hostname":
+        inspected["Config"]["Hostname"] = "other-host"
+    elif mutation in ("stopped", "paused", "dead"):
+        inspected["State"][{"stopped": "Running", "paused": "Paused",
+                            "dead": "Dead"}[mutation]] = mutation != "stopped"
+    elif mutation == "image":
+        inspected["Config"]["Image"] = "registry.invalid/tools@" + OTHER_MANIFEST
+    elif mutation == "image_id":
+        inspected["Image"] = STALE_ID
+    elif mutation == "repo_digest":
+        record["image_inspect"][0]["RepoDigests"] = []
+    elif mutation == "required_digest":
+        demand = "registry.invalid/tools@" + OTHER_MANIFEST
+    elif mutation == "mutable_required":
+        demand = "registry.invalid/tools:latest"
+    path.write_text(json.dumps(record))
+    if mutation == "missing_receipt":
+        path.unlink()
+    rec = cip.verify("named-holder", demand)
+    assert rec["verdict"] == "SKIP", rec
+    assert "unverifiable" in rec["reason"]
+    assert rec.get("image_match") is not True
+
+
+def test_frontdoor_publishes_the_actual_local_image_identity(tmp_path, monkeypatch):
+    import vibe_ic_one_shot_runner as frontdoor
+    record, _path, image = _local_launch(tmp_path, monkeypatch)
+    monkeypatch.delenv("VIBEIC_EDA_IMAGE", raising=False)
+    monkeypatch.delenv("IIC_EDA_IMAGE", raising=False)
+    rec = frontdoor._capture_container_image(tmp_path, "named-holder", image)
+    assert rec["verdict"] == "PASS", rec
+    assert rec["container"] == record["cid"]
+    assert rec["propagated_to_child_docker_run"] == image
+    assert json.loads((tmp_path / "reports/container_image.json").read_text()) == rec
+
+
 def test_identity_is_recorded_even_when_no_require_image_given(monkeypatch):
     """Recording is unconditional — that is what makes a published number
     attributable to a toolchain after the fact."""
