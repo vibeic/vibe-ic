@@ -44,8 +44,10 @@ def test_step9_binds_after_real_staging(tmp_path, monkeypatch, prior_rtl):
     monkeypatch.setattr(ll, 'resolve_image', lambda *_: image)
     issued = R.real_entry('IC', 'default', project)
     installation_calls = []
+    staged_current_inputs = False
     original = production._step9_installation
     def observed_installation(*args, **kwargs):
+        assert staged_current_inputs, 'bootstrap bound future producer inputs'
         installation_calls.append(em.digest(rtl) if rtl.exists() else None)
         return original(*args, **kwargs)
     monkeypatch.setattr(production, '_step9_installation', observed_installation)
@@ -64,6 +66,7 @@ def test_step9_binds_after_real_staging(tmp_path, monkeypatch, prior_rtl):
     assert staged['reused_ip'] and 'top.v' in staged['staged'], staged
     assert rtl.read_bytes() == source.read_bytes()
     current_digest = em.digest(rtl)
+    staged_current_inputs = True
     captured = {}
     class AdmissionReached(Exception):
         pass
