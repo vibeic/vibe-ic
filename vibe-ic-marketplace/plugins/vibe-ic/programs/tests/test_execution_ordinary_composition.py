@@ -11,7 +11,18 @@ isolated_transport=R.isolated_transport
 
 @pytest.fixture(autouse=True)
 def clean_runtime(monkeypatch):
+    import os
+    names = (policy.ENV, policy._CAPABILITY_FD_ENV, 'VIBEIC_EXECUTION_AUTH_SOCKET')
+    before = {name: os.environ.get(name) for name in names}
     monkeypatch.setattr(policy, '_ordinary_runtime', None)
+    yield
+    # real_entry publishes transport locators directly; keep later unissued
+    # caller controls independent of the live-entry fixture's closed FDs.
+    for name, value in before.items():
+        if value is None:
+            os.environ.pop(name, None)
+        else:
+            os.environ[name] = value
 
 
 def test_default_bootstrap_is_observationally_inert(tmp_path, monkeypatch):
@@ -331,6 +342,7 @@ def test_issued_default_pdk_reaches_real_step9_registration(tmp_path, monkeypatc
         (project / 'input/project.json').unlink()
         (project / 'phase1/generated_docs/L19_CONSTRAINTS_PDK.json').unlink()
     elif damage == 'conflict':
+        (project / 'phase3').mkdir(parents=True, exist_ok=True)
         (project / 'phase3/librelane_switch.json').write_text('{"pdk":"otherPDK"}')
     R.real_entry('IC', 'default', project)
     measured = []
