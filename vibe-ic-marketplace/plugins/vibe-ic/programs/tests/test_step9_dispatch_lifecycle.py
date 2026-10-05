@@ -127,11 +127,8 @@ def test_step9_binds_after_real_staging(tmp_path, monkeypatch, prior_rtl):
 
 def test_step9_binding_rechecks_source_and_closes_after_plan(tmp_path, monkeypatch):
     from execution_source_snapshot import SourceSnapshot, using
-    import shutil
-    from types import SimpleNamespace
-    worker = tmp_path / 'python3'
-    shutil.copy2(Path(production.sys.executable).resolve(), worker)
-    monkeypatch.setattr(production, 'sys', SimpleNamespace(executable=str(worker)))
+    worker = tmp_path / 'registration-helper.py'
+    worker.write_text('value = 1\n')
     source, _ = production.source_identity()
     snapshot = SourceSnapshot(em._REPO_ROOT, source)
     with using(snapshot):
@@ -142,7 +139,10 @@ def test_step9_binding_rechecks_source_and_closes_after_plan(tmp_path, monkeypat
     register = production.register_synthesis_adapter
     def change_after_registration(*args, **kwargs):
         register(*args, **kwargs)
-        worker.write_bytes(original + b'changed-executable-after-registration')
+        # A registration-time source read belongs to the fresh snapshot. Its
+        # final verification must run before the reserved slot can be bound.
+        em._active_source_snapshot().read_bytes(worker)
+        worker.write_bytes(original + b'value = 2\n')
     with monkeypatch.context() as patch:
         patch.setattr(production, 'register_synthesis_adapter', change_after_registration)
         try:
