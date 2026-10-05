@@ -892,9 +892,38 @@ def test_root_without_project_handoff_keeps_recursive_corpus_scan(tmp_path):
     g.dump(first / "L1_DATASHEET.json", {"ic_name": "a"}, "test.emitter")
     g.dump(second / "L1_DATASHEET.json", {"ic_name": "b"}, "test.emitter")
 
-    result = g.scan_tree(corpus)
+    result = g.scan_tree(corpus, scope="corpus")
     assert result["documents_read"] == 2
     assert result["counts"] == {"CURRENT": 2}
+    assert result["verdict"] == "PASS"
+
+
+def test_empty_legacy_handoff_does_not_borrow_nested_fixture(tmp_path):
+    """An empty legacy project handoff is VACUOUS, never a corpus PASS."""
+    project = tmp_path / "design"
+    (project / "generated_docs").mkdir(parents=True)
+    nested = project / "source" / "fixture" / "phase1" / "generated_docs"
+    nested.mkdir(parents=True)
+    nested.joinpath("L1_DATASHEET.json").write_text(
+        json.dumps({"ic_name": "fixture"}))
+
+    result = g.scan_tree(project)
+    assert result["documents_read"] == 0
+    assert result["verdict"] == "VACUOUS"
+
+
+def test_corpus_scope_does_not_treat_phase1_design_as_project(tmp_path):
+    """Corpus mode remains recursive even when a child design is named phase1."""
+    corpus = tmp_path / "corpus"
+    first = corpus / "phase1" / "v1_x" / "phase1" / "generated_docs"
+    second = corpus / "other" / "v1_y" / "phase1" / "generated_docs"
+    first.mkdir(parents=True)
+    second.mkdir(parents=True)
+    g.dump(first / "L1_DATASHEET.json", {"ic_name": "a"}, "test.emitter")
+    g.dump(second / "L1_DATASHEET.json", {"ic_name": "b"}, "test.emitter")
+
+    result = g.scan_tree(corpus, scope="corpus")
+    assert result["documents_read"] == 2
     assert result["verdict"] == "PASS"
 
 

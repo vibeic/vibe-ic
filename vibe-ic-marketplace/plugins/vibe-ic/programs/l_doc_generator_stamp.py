@@ -109,7 +109,8 @@ Before concluding anything from a published L document — filing an issue,
 quoting a count, calling a gate a blocker — ask this module what release
 wrote it::
 
-    python3 l_doc_generator_stamp.py <design-or-corpus-dir>
+    python3 l_doc_generator_stamp.py <design-dir>
+    python3 l_doc_generator_stamp.py <corpus-dir> --corpus
 
     UNSTAMPED  produced before this stamp existed. Vintage unknown. Do not
                read it as the current state of the flow; re-derive first.
@@ -592,7 +593,8 @@ def _iter_direct_l_docs(scan_root: Path, anchor: Path) -> List[Path]:
 
 def scan_tree(root: Path,
               max_minor_drift: Optional[int] = None,
-              allow_unstamped: bool = False) -> Dict[str, Any]:
+              allow_unstamped: bool = False,
+              *, scope: str = "project") -> Dict[str, Any]:
     """Classify every L document under ``root``.
 
     Always reports ``documents_read``. A clean verdict over an empty scan
@@ -613,10 +615,17 @@ def scan_tree(root: Path,
     offending: List[Dict[str, Any]] = []
     read_n = 0
     root = Path(root)
-    canonical = _canonical_scan_root(root)
-    scan_root = canonical or root
-    paths = (_iter_direct_l_docs(scan_root, root) if canonical is not None
-             else iter_l_docs(scan_root))
+    if scope not in ("project", "corpus"):
+        raise ValueError(f"unknown L-document scan scope: {scope!r}")
+    canonical = _canonical_scan_root(root) if scope == "project" else None
+    if scope == "corpus":
+        paths = iter_l_docs(root)
+    elif canonical is None:
+        # A project invocation never widens into a recursive corpus census.
+        # Callers that own a published corpus must opt into that scope.
+        paths = []
+    else:
+        paths = _iter_direct_l_docs(canonical, root)
     for p in paths:
         read_n += 1
         try:
@@ -672,6 +681,9 @@ def _format(result: Dict[str, Any]) -> str:
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[1])
     ap.add_argument("root")
+    ap.add_argument("--corpus", action="store_true",
+                    help="scan a published corpus recursively; project scope "
+                         "is the safe default")
     ap.add_argument("--json", dest="json_out")
     ap.add_argument("--max-minor-drift", type=int, default=None,
                     help="tolerate a STALE document up to N minor families "
@@ -688,7 +700,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"{TOOL}: ERROR not a directory: {root}", file=sys.stderr)
         return 2
     result = scan_tree(root, max_minor_drift=args.max_minor_drift,
-                       allow_unstamped=args.allow_unstamped)
+                       allow_unstamped=args.allow_unstamped,
+                       scope="corpus" if args.corpus else "project")
     if args.json_out:
         try:
             out = Path(args.json_out)
