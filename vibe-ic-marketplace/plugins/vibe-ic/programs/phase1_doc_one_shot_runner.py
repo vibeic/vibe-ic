@@ -64086,6 +64086,15 @@ def _semantic_gate_root(gate_name: str, project: Path) -> Path:
     """Give L-document gates the exact handoff, never the project corpus."""
     if gate_name in {"l_doc_path_portability_check",
                      "l_doc_generator_stamp"}:
+        # Reuse the stamp gate's canonical/legacy resolver so the runner and
+        # the standalone producer inspect the same direct handoff.  Empty
+        # legacy directories remain a measured VACUOUS/rc=2 result.
+        handoff = _stamp._canonical_scan_root(project)
+        if handoff is not None:
+            return handoff
+        legacy = Path(project) / "generated_docs"
+        if legacy.is_dir() or legacy.is_symlink():
+            return legacy
         return _pl.generated_docs_dir(project)
     return project
 
