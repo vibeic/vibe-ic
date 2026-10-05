@@ -55,25 +55,19 @@ def current_source_tree_identity() -> str:
 @lru_cache(maxsize=2048)
 def _import_names(text: str) -> tuple[str, ...]:
     """Cache syntax only; filesystem resolution must remain current."""
+    from execution_source_snapshot import python_import_syntax
     try:
-        tree = ast.parse(text)
+        imports = python_import_syntax(text)
     except (OSError, SyntaxError):
         return ()
     found: set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            names = [alias.name for alias in node.names]
-        elif isinstance(node, ast.ImportFrom):
-            names = ([node.module] if node.module else
-                     [alias.name for alias in node.names])
-        elif (isinstance(node, ast.Call) and node.args and
-              (getattr(node.func, "attr", None) == "import_module" or
-               getattr(node.func, "id", None) == "__import__") and
-              isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str)):
-            names = [node.args[0].value]
+    for kind, _level, module, names, _optional in imports:
+        if kind == 'import':
+            found.update(names)
+        elif kind == 'from':
+            found.update([module] if module else names)
         else:
-            continue
-        found.update(names)
+            found.add(module)
     return tuple(sorted(found))
 
 
@@ -326,29 +320,15 @@ def _python_module(name: str, search: list[Path], package: str = '',
 @lru_cache(maxsize=2048)
 def _python_import_specs(text: str) -> tuple:
     """Cache syntax, never filesystem resolution or dependency bytes."""
-    tree = ast.parse(text)
-    parents = {child: parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)}
+    from execution_source_snapshot import python_import_syntax
     found = []
-    for node in ast.walk(tree):
-        optional_relative = False
-        if isinstance(node, ast.Import):
-            found.extend((a.name, 0, (), False) for a in node.names)
-        elif isinstance(node, ast.ImportFrom):
-            parent = parents.get(node)
-            while parent is not None:
-                if isinstance(parent, ast.Try) and any(
-                        h.type is None or any(isinstance(n, ast.Name) and n.id in
-                            {'ImportError', 'ModuleNotFoundError', 'Exception', 'BaseException'}
-                            for n in ast.walk(h.type)) for h in parent.handlers):
-                    optional_relative = True
-                parent = parents.get(parent)
-            found.append((node.module or '', node.level,
-                          tuple(a.name for a in node.names), optional_relative))
-        elif (isinstance(node, ast.Call) and node.args and
-              (getattr(node.func, 'attr', None) == 'import_module' or
-               getattr(node.func, 'id', None) == '__import__') and
-              isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str)):
-            found.append((node.args[0].value, 0, (), False))
+    for kind, level, module, names, optional_relative in python_import_syntax(text):
+        if kind == 'import':
+            found.extend((name, 0, (), False) for name in names)
+        elif kind == 'from':
+            found.append((module, level, names, optional_relative))
+        else:
+            found.append((module, 0, (), False))
     return tuple(found)
 
 

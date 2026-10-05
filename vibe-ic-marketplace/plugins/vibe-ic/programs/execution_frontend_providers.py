@@ -133,15 +133,12 @@ def _source_closure(seeds):
         if path in seen or not path.is_file() or path.is_symlink():
             continue
         seen[path]=None
-        try: tree=ast.parse(snapshot.read_text(path) if snapshot is not None else path.read_text())
+        from execution_source_snapshot import python_import_syntax
+        try: imports=python_import_syntax(snapshot.read_text(path) if snapshot is not None else path.read_text())
         except (OSError, SyntaxError):
             continue
-        for node in ast.walk(tree):
-            names=[]
-            if isinstance(node, ast.Import):
-                names=[alias.name for alias in node.names]
-            elif isinstance(node, ast.ImportFrom) and node.module:
-                names=[node.module]
+        for kind, _level, module, aliases, _optional in imports:
+            names = aliases if kind == 'import' else (module,) if kind == 'from' and module else ()
             for name in names:
                 candidate=root / (name.replace('.', '/') + '.py')
                 if candidate.is_file():

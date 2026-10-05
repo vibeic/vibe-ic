@@ -6,11 +6,46 @@ HEAD commit/tree and its initial bytes. It is never an execution-time authority.
 """
 from __future__ import annotations
 
+import ast
+from collections import deque
+from functools import lru_cache
 from contextlib import contextmanager
 from contextvars import ContextVar
 import hashlib
 from pathlib import Path
 import subprocess
+
+
+@lru_cache(maxsize=2048)
+def python_import_syntax(content: str) -> tuple:
+    """Share immutable import syntax by exact source bytes, never path state.
+
+    Registration readers retain their own import grammars and resolve current
+    files independently. Keep only import records, rather than entire ASTs or
+    parent maps, so a bootstrap does not retain every parsed expression.
+    """
+    pending = deque([(ast.parse(content), False)])
+    found = []
+    while pending:
+        node, optional_relative = pending.popleft()
+        if isinstance(node, ast.Import):
+            found.append(('import', 0, '', tuple(a.name for a in node.names), False))
+        elif isinstance(node, ast.ImportFrom):
+            found.append(('from', node.level, node.module or '',
+                          tuple(a.name for a in node.names), optional_relative))
+        elif (isinstance(node, ast.Call) and node.args and
+              (getattr(node.func, 'attr', None) == 'import_module' or
+               getattr(node.func, 'id', None) == '__import__') and
+              isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str)):
+            found.append(('dynamic', 0, node.args[0].value, (), False))
+        if isinstance(node, ast.Try):
+            optional_relative = optional_relative or any(
+                handler.type is None or any(
+                    isinstance(part, ast.Name) and part.id in
+                    {'ImportError', 'ModuleNotFoundError', 'Exception', 'BaseException'}
+                    for part in ast.walk(handler.type)) for handler in node.handlers)
+        pending.extend((child, optional_relative) for child in ast.iter_child_nodes(node))
+    return tuple(found)
 
 
 _ACTIVE: ContextVar["SourceSnapshot | None"] = ContextVar(

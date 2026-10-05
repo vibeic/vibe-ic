@@ -355,15 +355,15 @@ def _canonical_flow_authority(flow_path: Path) -> str:
 def _python_import_requests(content: str) -> tuple:
     # Cache syntax by exact bytes; all path resolution and source authority
     # checks remain live, including an import becoming local after first use.
-    tree = ast.parse(content)
+    from execution_source_snapshot import python_import_syntax
     requests = []
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            requests.extend((0, alias.name) for alias in node.names)
-        elif isinstance(node, ast.ImportFrom):
-            requests.append((node.level, node.module or ''))
-            requests.extend((node.level, '.'.join(filter(None, (node.module, alias.name))))
-                            for alias in node.names if alias.name != '*')
+    for kind, level, module, names, _optional in python_import_syntax(content):
+        if kind == 'import':
+            requests.extend((0, name) for name in names)
+        elif kind == 'from':
+            requests.append((level, module))
+            requests.extend((level, '.'.join(filter(None, (module, name))))
+                            for name in names if name != '*')
     return tuple(requests)
 
 

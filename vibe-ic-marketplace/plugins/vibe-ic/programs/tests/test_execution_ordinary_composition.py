@@ -51,7 +51,10 @@ def test_canonical_default_bootstrap_reaches_producer_receipt_and_consumer(
     runtime = policy.bootstrap(project, parameters={'skip_analog': True})
     assert runtime is not None
     assert runtime['policy']['mode_label'] == 'default-mode'
-    result = policy.dispatch_fixed_step(project, '8')
+    import design_one_shot_runner as design
+    consumed = design.step_sdc_validation(project)
+    assert consumed.status == 'PASS', consumed
+    result = consumed.extras['execution_result']
     assert result['status'] == 'ADOPTED', result
     run = Path(result['run_root'])
     receipt = json.loads((run / 'frontend_8/receipt.json').read_text())
@@ -168,6 +171,41 @@ def test_ordinary_step8_uses_live_context_and_existing_selection(tmp_path):
     sdc.write_text(sdc.read_text()+'# changed caller input after issuance\n')
     with pytest.raises(policy.Refusal, match='FIXED_STEP_REENTRY_CHANGED'):
         design.step_sdc_validation(project)
+
+
+
+def test_source_import_readers_share_exact_content_syntax(monkeypatch):
+    import ast
+    import execution_provider_catalog as catalog
+
+    content = ("import syntax_count_peer\n"
+               "try:\n    from . import optional_peer\n"
+               "except ImportError:\n    import fallback_peer\n"
+               "importlib.import_module('literal_peer')\n")
+    changed = content.replace("literal_peer", "changed_peer")
+    original = ast.parse
+    parsed = []
+
+    def count_parse(source, *args, **kwargs):
+        if source in (content, changed):
+            parsed.append(source)
+        return original(source, *args, **kwargs)
+
+    monkeypatch.setattr(ast, 'parse', count_parse)
+    for reader in (em._python_import_requests, catalog._import_names,
+                   catalog._python_import_specs):
+        reader.cache_clear()
+    assert (1, 'optional_peer') in em._python_import_requests(content)
+    assert 'literal_peer' in catalog._import_names(content)
+    assert ('', 1, ('optional_peer',), True) in catalog._python_import_specs(content)
+    assert parsed == [content], 'one source must be parsed once across readers'
+
+    assert 'changed_peer' in catalog._import_names(changed)
+    assert ('changed_peer', 0, (), False) in catalog._python_import_specs(changed)
+    em._python_import_requests(changed)
+    assert parsed == [content, changed], 'changed bytes need a fresh syntax result'
+    assert 'literal_peer' in catalog._import_names(content)
+    assert 'changed_peer' not in catalog._import_names(content)
 
 
 def test_import_syntax_cache_re_resolves_new_local_module(tmp_path):
