@@ -255,3 +255,33 @@ def test_relative_runtime_data_argument_is_independent_of_registration_cwd(tmp_p
     bound = em._invocation_sources(em.Component('sdc-validator', (
         *component.argv[:4], absolute, *component.argv[5:])))
     assert absolute in bound['argument_sources']
+
+
+def test_producer_site_symbols_share_exact_content_and_reject_changes(tmp_path, monkeypatch):
+    import ast
+    import execution_adapters_backend as backend
+    import execution_adapters_release as release
+    source = tmp_path / 'producer.py'
+    content = 'def produce():\n    pass\n'
+    source.write_text(content)
+    calls = []
+    parse = ast.parse
+    def counted(text, *args, **kwargs):
+        if text == content:
+            calls.append(text)
+        return parse(text, *args, **kwargs)
+    monkeypatch.setattr(ast, 'parse', counted)
+    for module in (backend, release):
+        monkeypatch.setattr(module, 'HERE', tmp_path)
+        assert module._site_path('producer.py:produce') == source
+        assert module._site_path('producer.py:produce') == source
+    assert len(calls) == 1
+    source.write_text('def replacement():\n    pass\n')
+    for module in (backend, release):
+        with pytest.raises(em.Refusal, match='PRODUCER_SYMBOL_MISSING'):
+            module._site_path('producer.py:produce')
+        assert module._site_path('producer.py:replacement') == source
+    source.write_text('invalid syntax !')
+    for module in (backend, release):
+        with pytest.raises(em.Refusal, match='PRODUCER_SITE_UNREADABLE'):
+            module._site_path('producer.py:replacement')

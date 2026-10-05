@@ -9,7 +9,6 @@ producer receipt and every downstream gate are observed.
 from __future__ import annotations
 
 from dataclasses import dataclass
-import ast
 import json
 import re
 from pathlib import Path
@@ -20,6 +19,7 @@ if str(Path(__file__).resolve().parent) not in sys.path:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import execution_modes as em
+from execution_source_snapshot import python_defined_symbols
 from execution_provider_catalog import (BACKEND_IDS, BACKEND_ROWS, coverage_rows,
                                         current_source_identity, current_source_tree_identity,
                                         source_closure, implementation_closure)
@@ -65,11 +65,9 @@ def _site_path(site: str) -> Path:
     if not module or not symbol or not path.is_file():
         raise em.Refusal("BACKEND_PRODUCER_SITE_MISSING", site)
     try:
-        tree = ast.parse(path.read_text())
+        symbols = python_defined_symbols(path.read_text())
     except (OSError, SyntaxError) as exc:
         raise em.Refusal("BACKEND_PRODUCER_SITE_UNREADABLE", site) from exc
-    symbols = {node.name for node in ast.walk(tree)
-               if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))}
     if symbol not in symbols:
         raise em.Refusal("BACKEND_PRODUCER_SYMBOL_MISSING", site)
     return path

@@ -48,6 +48,13 @@ def python_import_syntax(content: str) -> tuple:
     return tuple(found)
 
 
+@lru_cache(maxsize=2048)
+def python_defined_symbols(content: str) -> frozenset[str]:
+    """Cache syntax only; callers must supply each current file's contents."""
+    return frozenset(node.name for node in ast.walk(ast.parse(content))
+                     if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)))
+
+
 _ACTIVE: ContextVar["SourceSnapshot | None"] = ContextVar(
     "execution_source_snapshot", default=None)
 
