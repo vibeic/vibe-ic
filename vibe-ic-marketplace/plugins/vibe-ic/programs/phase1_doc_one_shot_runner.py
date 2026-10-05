@@ -64082,6 +64082,14 @@ def _classify_semantic_gate_rc(gate_name: str, returncode: int) -> str:
     return ""
 
 
+def _semantic_gate_root(gate_name: str, project: Path) -> Path:
+    """Give L-document gates the exact handoff, never the project corpus."""
+    if gate_name in {"l_doc_path_portability_check",
+                     "l_doc_generator_stamp"}:
+        return _pl.generated_docs_dir(project)
+    return project
+
+
 def main() -> int:
     p = argparse.ArgumentParser(
         description=__doc__.split("\n\n")[0]
@@ -68401,7 +68409,8 @@ def main() -> int:
             # this same arm and now SAYS "STALLED: no forward progress"
             # rather than naming a clock.
             _cp = _pr.run(
-                [sys.executable, str(_gate_path), str(project),
+                [sys.executable, str(_gate_path),
+                 str(_semantic_gate_root(_gate_name, project)),
                  "--json", str(_rp)],
                 capture_output=True, text=True,
             )

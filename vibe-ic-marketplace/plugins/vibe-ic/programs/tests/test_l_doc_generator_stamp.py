@@ -959,6 +959,19 @@ def test_corpus_scope_recurses_when_corpus_basename_is_generated_docs(tmp_path):
     assert result["verdict"] == "PASS"
 
 
+def test_corpus_scope_includes_direct_docs_when_root_is_generated_docs(tmp_path):
+    """Recursive corpus scope includes the root handoff and nested designs."""
+    corpus = tmp_path / "generated_docs"
+    nested = corpus / "design_a" / "generated_docs"
+    nested.mkdir(parents=True)
+    g.dump(corpus / "L1_DATASHEET.json", {"ic_name": "root"}, "test.emitter")
+    g.dump(nested / "L1_DATASHEET.json", {"ic_name": "nested"}, "test.emitter")
+
+    result = g.scan_tree(corpus, scope="corpus")
+    assert result["documents_read"] == 2
+    assert result["verdict"] == "PASS"
+
+
 def test_phase1_doc_runner_blocks_stamp_rc2_as_undetermined():
     """The canonical Phase-1 gate loop must not discard rc=2."""
     import phase1_doc_one_shot_runner as runner

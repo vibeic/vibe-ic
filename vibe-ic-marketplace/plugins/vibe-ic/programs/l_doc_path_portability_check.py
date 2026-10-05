@@ -190,8 +190,14 @@ def iter_l_docs(root: Path, *, recursive_root: bool = False) -> Iterable[Path]:
     document, so none of them should be walked.
     """
     seen: set = set()
-    directories = ([root] if root.name == _L_DOC_DIR and not recursive_root
-                   else sorted(root.rglob(_L_DOC_DIR)))
+    if recursive_root:
+        # rglob() does not include its starting directory.  A published
+        # corpus may itself be named generated_docs and still carry a direct
+        # handoff alongside nested designs, so include the root explicitly.
+        directories = [root] + sorted(root.rglob(_L_DOC_DIR))
+    else:
+        directories = ([root] if root.name == _L_DOC_DIR
+                       else sorted(root.rglob(_L_DOC_DIR)))
     for d in directories:
         if not d.is_dir():
             continue
