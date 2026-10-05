@@ -652,6 +652,7 @@ def scan_tree(root: Path,
     return {
         "tool": TOOL,
         "root": str(root),
+        "scope": scope,
         "current_plugin_version": cur_v,
         "current_l_doc_taxonomy_digest": cur_t,
         "documents_read": read_n,

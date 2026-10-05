@@ -924,6 +924,7 @@ def test_corpus_scope_does_not_treat_phase1_design_as_project(tmp_path):
 
     result = g.scan_tree(corpus, scope="corpus")
     assert result["documents_read"] == 2
+    assert result["scope"] == "corpus"
     assert result["verdict"] == "PASS"
 
 
