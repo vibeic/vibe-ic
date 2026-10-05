@@ -95,6 +95,10 @@ def test_step9_binds_after_real_staging(tmp_path, monkeypatch, prior_rtl):
     assert receipt['source_sha'] == issued['route']['source_sha']
     assert receipt['input_hashes']['project/phase2/stage1/rtl/top.v'] == current_digest
     assert installation_calls == [current_digest]
+    policy._prepare_step9(runtime, {})  # AI selection polls omit producer args.
+    with pytest.raises(em.Refusal, match='STEP9_DISPATCH_PARAMETERS_CHANGED'):
+        policy._prepare_step9(runtime, {'top': 'changed_top'})
+    assert installation_calls == [current_digest]
     with pytest.raises(em.Refusal, match='REGISTRY_FINALIZED'):
         registry.register(arm)
     with pytest.raises(em.Refusal, match='STEP9_BINDING_CLOSED'):
@@ -107,27 +111,38 @@ def test_step9_binds_after_real_staging(tmp_path, monkeypatch, prior_rtl):
     with pytest.raises(em.Refusal, match='STEP9_BOOTSTRAP_INPUT_CHANGED'):
         phase3.step_synth(project, 'top', pdk, 'unused')
     assert installation_calls == [current_digest], 'input changes must not rebind'
-    print(json.dumps({'lifecycle': 'replaced' if prior_rtl else 'absent',
-                      'source_sha': receipt['source_sha'], 'project': str(project),
-                      'staging': staged, 'receipt': receipt,
-                      'plan_admission': [r for r in plan['portfolio'] if r['arm_id'] == arm.arm_id]},
-                     sort_keys=True))
+    evidence = tmp_path / 'lifecycle-evidence.json'
+    evidence.write_text(json.dumps({
+        'lifecycle': 'replaced' if prior_rtl else 'absent',
+        'source_sha': receipt['source_sha'], 'project': str(project),
+        'staging': staged, 'receipt': receipt,
+        'plan_admission': [{key: row[key] for key in (
+            'arm_id', 'admission', 'available', 'qualified', 'source_sha', 'tool_version')}
+            for row in plan['portfolio'] if row['arm_id'] == arm.arm_id],
+        'post_binding_mutation_refused': True, 'selection_poll_reuses_binding': True,
+    }, sort_keys=True, indent=2) + '\n')
+    print('STEP9_EVIDENCE', str(evidence), flush=True)
+
 
 
 def test_step9_binding_rechecks_source_and_closes_after_plan(tmp_path, monkeypatch):
     from execution_source_snapshot import SourceSnapshot, using
+    import shutil
+    from types import SimpleNamespace
+    worker = tmp_path / 'python3'
+    shutil.copy2(Path(production.sys.executable).resolve(), worker)
+    monkeypatch.setattr(production, 'sys', SimpleNamespace(executable=str(worker)))
     source, _ = production.source_identity()
     snapshot = SourceSnapshot(em._REPO_ROOT, source)
     with using(snapshot):
         reserved = em.Registry(snapshot=snapshot)
         production.register_synthesis_adapter(reserved, deferred=True)
         reserved.finalize()
-    worker = production.WORKER
     original = worker.read_bytes()
     register = production.register_synthesis_adapter
     def change_after_registration(*args, **kwargs):
         register(*args, **kwargs)
-        worker.write_bytes(original + b'\n# reverse control: source changed after registration\n')
+        worker.write_bytes(original + b'changed-executable-after-registration')
     with monkeypatch.context() as patch:
         patch.setattr(production, 'register_synthesis_adapter', change_after_registration)
         try:

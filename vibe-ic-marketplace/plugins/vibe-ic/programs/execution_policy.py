@@ -697,6 +697,11 @@ def _prepare_step9(runtime: dict, parameters: dict) -> None:
                                                 'declaration', 'pdk_refusal')}
     identity['pdk'] = production._pdk_dict(params.get('pdk'))
     if 'step9_dispatch_parameters' in runtime:
+        # Selection polls omit producer parameters; preserve the first dispatch
+        # values while refusing any explicitly changed value.
+        for key in identity:
+            if key not in parameters:
+                identity[key] = runtime['step9_dispatch_parameters'][key]
         if identity != runtime['step9_dispatch_parameters']:
             raise em.Refusal('STEP9_DISPATCH_PARAMETERS_CHANGED', '9')
         production.current_step9_input_files(project)
