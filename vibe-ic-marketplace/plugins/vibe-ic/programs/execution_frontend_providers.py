@@ -396,7 +396,8 @@ def register_factories(registry, *, step_ids=None, project=None, parameters=None
         registry.register(Adapter('frontend_'+row.replace('.','_'),'frontend-worker',row,sha,bound_files,'current-main',p.engines,tuple(components),validate,required,objective,qualification_evidence='route callable bound; native qualification not measured',output_contract={path:(path,) for path in required},input_contract=INPUT_CONTRACTS[row] + (('phase2/stage1/rtl', 'reports/phase2/cdc/crossing.json') if row == '8' else ())))
     if step_ids is None:
         from execution_production import register_synthesis_adapter
-        register_synthesis_adapter(registry, project=project, parameters=parameters)
+        register_synthesis_adapter(registry, project=project, parameters=parameters,
+                                   deferred=True)
     return tuple(PROVIDERS)
 
 def dedupe_by_engine():

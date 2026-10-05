@@ -17420,9 +17420,8 @@ def step_synth(project: Path, top: str, pdk: PdkConfig,
     every yosys command below is byte-identical to what it was, so a run that
     never overflows its die cannot tell this parameter exists.
     """
-    # The current fixed-row dispatcher owns Ultra execution and AI adoption.
-    # Default has no ordinary runtime and falls through to the unchanged
-    # native-mode/area-retry implementation below.
+    # Issued Default/Ultra execution prepares Step9 from current producer
+    # outputs here. Unissued helpers retain the native implementation below.
     from execution_production import dispatch_site
     _step9 = dispatch_site(("9",), project, {
         "top": top, "pdk": pdk, "container": container,

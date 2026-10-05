@@ -850,7 +850,7 @@ def _step9_installation(project: Path, top: str, pdk: object,
 
 
 def current_step9_input_files(project: Path) -> dict[str, Path] | None:
-    """Return only the input population issued by the current Step9 bootstrap."""
+    """Return only the input population bound at the current Step9 dispatch."""
     values = _STEP9_INPUTS.get(str(Path(project).resolve()))
     if values is None:
         return None
@@ -861,13 +861,9 @@ def current_step9_input_files(project: Path) -> dict[str, Path] | None:
 
 
 def register_synthesis_adapter(registry: em.Registry, *, project: Path | None = None,
-                               parameters: Mapping[str, object] | None = None) -> None:
-    """Register Step9 reachability in ca3b's existing ordinary registry.
-
-    The same ordinary caller may supply its already-resolved project/PDK.
-    Admission is then parent-measured before Controller finalizes the existing
-    Registry. Missing inputs or a failed probe retain an unavailable placeholder.
-    """
+                               parameters: Mapping[str, object] | None = None,
+                               deferred: bool = False) -> None:
+    """Reserve the ordinary slot, or measure it once its producer inputs exist."""
     source, files = source_identity()
     objective = {"metric": "mapped_area_um2", "direction": "min"}
     context = em.Context("9", source, {}, objective, REQUIRED_GATES)
@@ -876,7 +872,10 @@ def register_synthesis_adapter(registry: em.Registry, *, project: Path | None = 
     reason = (str(parameters.get("pdk_refusal"))
               if parameters and parameters.get("pdk_refusal")
               else "MISSING_NATIVE_FACTS:native_installation_receipt")
-    if project is not None and parameters and parameters.get("pdk") is not None:
+    if deferred:
+        reason = "STEP9_DISPATCH_PREPARATION_PENDING"
+    elif (project is not None and parameters and parameters.get("pdk") is not None
+          and not parameters.get("pdk_refusal")):
         try:
             (context, image_id, facts, spec_path, pdk, files,
              receipt) = _step9_installation(Path(project), str(parameters.get("top", "")),
@@ -888,23 +887,58 @@ def register_synthesis_adapter(registry: em.Registry, *, project: Path | None = 
                               pdk, sys.executable, installation_receipt=receipt,
                               availability_reason=reason)
     from dataclasses import replace
-    registry.register(replace(adapter, input_contract=(
+    register = registry.reserve_step9 if deferred else registry.register
+    register(replace(adapter, input_contract=(
         "input/submission_template/tapeout_declaration.json",
         "phase2/stage1/rtl", "phase1/generated_docs",
         "phase3/librelane_switch.json")))
+
+
+def prepare_synthesis_dispatch(runtime: dict, project: Path,
+                               parameters: Mapping[str, object]) -> None:
+    """Bind current producer outputs before the fixed Controller creates a plan."""
+    from execution_source_snapshot import SourceSnapshot, using
+    if Path(project).resolve() != runtime['project']:
+        raise em.Refusal('ORDINARY_PROJECT_UNBOUND', str(project))
+    if (type(runtime['controller']) is not em.Controller or
+            runtime['controller'].registry is not runtime['registry']):
+        raise em.Refusal('PRODUCTION_CHILD_SCOPE_UNBOUND', 'ordinary live Controller required')
+    params = dict(runtime['parameters'], **parameters)
+    # A bootstrap resolver refusal cannot be erased by a later caller value.
+    if runtime['parameters'].get('pdk_refusal'):
+        params['pdk_refusal'] = runtime['parameters']['pdk_refusal']
+    identity = {key: params.get(key) for key in ('top', 'container', 'period_relax',
+                                                'declaration', 'pdk_refusal')}
+    identity['pdk'] = _pdk_dict(params.get('pdk'))
+    if 'step9_dispatch_parameters' in runtime:
+        if identity != runtime['step9_dispatch_parameters']:
+            raise em.Refusal('STEP9_DISPATCH_PARAMETERS_CHANGED', '9')
+        current_step9_input_files(project)
+        return
+    if '9' in runtime['contexts'] or '9' in runtime['runs']:
+        raise em.Refusal('STEP9_BINDING_CLOSED', '9')
+    snapshot = SourceSnapshot(em._REPO_ROOT, runtime['route']['source_sha'])
+    with using(snapshot):
+        prepared = em.Registry(snapshot=snapshot)
+        register_synthesis_adapter(prepared, project=project, parameters=params)
+        prepared.finalize()
+    runtime['registry'].bind_step9(prepared)
+    runtime['step9_dispatch_parameters'] = identity
 
 
 def dispatch_site(step_ids: tuple[str, ...], project: Path,
                   parameters: Mapping[str, object]) -> dict | None:
     """Use the current fixed-Step dispatcher and its issued AI selection.
 
-    Default returns None through the existing policy. No separate Controller,
-    budget, scheduler, automatic choice or canonical-output importer is made.
+    An unissued caller returns None through the existing policy. Issued
+    callers prepare only Step9, then reuse the Controller and importer.
     """
     if "9" not in tuple(map(str, step_ids)):
         return None
-    from execution_policy import dispatch_fixed_step
-    return dispatch_fixed_step(Path(project), "9", parameters=dict(parameters))
+    import execution_policy as policy
+    if policy._ordinary_runtime is not None:
+        prepare_synthesis_dispatch(policy._ordinary_runtime, Path(project), parameters)
+    return policy.dispatch_fixed_step(Path(project), "9", parameters=dict(parameters))
 
 
 STEP_IDS = ("9",)

@@ -1408,6 +1408,8 @@ class Registry:
         self._version_lock = threading.Lock()
         self.snapshot = snapshot
         self._finalized = False
+        self._step9_reserved: Adapter | None = None
+        self._step9_binding_closed = False
 
     def finalize(self) -> None:
         if self._finalized:
@@ -1534,6 +1536,49 @@ class Registry:
                                               for k, v in adapter.output_contract.items()}),
         )
         self._adapters[adapter.arm_id] = snapshot
+
+    def reserve_step9(self, adapter: Adapter) -> None:
+        """Reserve only the native Step9 slot before upstream RTL exists."""
+        from execution_synthesis_engines import LIBRELANE
+        if (adapter.step_id != '9' or adapter.arm_id != LIBRELANE.arm_id or
+                adapter.tool_id != 'step9-worker' or adapter.available or
+                adapter.qualified or self.adapters('9') or
+                adapter.availability_reason != 'STEP9_DISPATCH_PREPARATION_PENDING'):
+            raise Refusal('STEP9_RESERVATION_UNBOUND', adapter.arm_id)
+        self.register(adapter)
+        self._step9_reserved = self._adapters[adapter.arm_id]
+
+    def bind_step9(self, prepared: 'Registry') -> None:
+        """Complete that exact reservation once, before any Step9 plan.
+
+        The replacement has passed ordinary registration and a fresh source
+        snapshot. General registration remains closed; no other arm changes.
+        """
+        with self._version_lock:
+            if self._step9_binding_closed:
+                raise Refusal('STEP9_BINDING_CLOSED', '9')
+            reserved = self._step9_reserved
+            if (reserved is None or not self._finalized or
+                    self.adapters('9') != [reserved] or
+                    self._adapters.get(reserved.arm_id) is not reserved):
+                raise Refusal('STEP9_RESERVATION_UNBOUND', '9')
+            if (type(prepared) is not Registry or not prepared._finalized or
+                    prepared.snapshot is None or not prepared.snapshot.finalized or
+                    prepared.snapshot.commit != reserved.source_sha or
+                    len(prepared._adapters) != 1):
+                raise Refusal('STEP9_PREPARATION_UNBOUND', '9')
+            candidate = prepared._adapters.get(reserved.arm_id)
+            fixed = ('arm_id', 'step_id', 'tool_id', 'source_sha', 'source_files',
+                     'components', 'validate', 'required_outputs', 'input_contract',
+                     'engine_families', 'cpus', 'ram_mb', 'license_id',
+                     'output_contract', 'role', 'applicability', 'applicability_reason')
+            if candidate is None or any(getattr(candidate, key) != getattr(reserved, key)
+                                        for key in fixed):
+                raise Refusal('STEP9_RESERVATION_CHANGED', '9')
+            Controller._source_current(candidate)
+            self._adapters[reserved.arm_id] = candidate
+            self._step9_binding_closed = True
+            self._step9_reserved = None
 
     def adapters(self, step_id: str) -> list[Adapter]:
         return [a for a in self._adapters.values() if a.step_id == step_id]
@@ -1802,6 +1847,9 @@ class Controller:
 
     def plan(self, context: Context, execution_mode: str | None = None,
              superiority: Superiority | None = None, *, execution_root: Path | None = None) -> dict:
+        if context.step_id == '9':
+            with self.registry._version_lock:
+                self.registry._step9_binding_closed = True
         self._validate_live_portfolio()
         binding = self._context_binding(context)
         route_mode = context.route_receipt.get('mode_intent')
