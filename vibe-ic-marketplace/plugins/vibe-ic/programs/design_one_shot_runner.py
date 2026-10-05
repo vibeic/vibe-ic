@@ -25056,6 +25056,10 @@ def main() -> int:
                         "from-documents run). Step 13 then proves the netlist "
                         "of that top. Omitted: phase 3 gets --top-name.")
     p.add_argument("--container", default=_pin.default_container_name())
+    p.add_argument("--area-receipt", default=None,
+                   help="Explicit producer area receipt reserved for Phase 3")
+    p.add_argument("--area-run-manifest", default=None,
+                   help="Explicit current-run manifest paired with --area-receipt")
     p.add_argument("--skip-phase3", action="store_true",
                    help="Lightweight/RTL-only flow (no silicon target). Gates "
                         "the heavy Fault ATPG (steps 11/12 DFT) OFF so an atomic "
@@ -25082,6 +25086,8 @@ def main() -> int:
     import execution_policy as _execution
     _execution.add_arguments(p)
     args = p.parse_args()
+    if bool(args.area_receipt) != bool(args.area_run_manifest):
+        p.error("--area-receipt and --area-run-manifest must be supplied together")
     _execution.configure(args)
 
     global _FORCE_RTL_REGEN

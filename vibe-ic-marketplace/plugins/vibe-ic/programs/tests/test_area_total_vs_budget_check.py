@@ -341,3 +341,17 @@ def test_receipt_without_source_backed_unit_refuses(tmp_path):
              "--area-run-manifest", str(manifest))
     assert r.returncode == 2
     assert "AREA_RECEIPT_UNIT_UNESTABLISHED" in r.stdout
+
+
+def test_receipt_paths_fail_closed_for_relative_and_symlink_inputs(tmp_path):
+    proj, receipt, manifest, _run_id, _hashes = _receipt_fixture(tmp_path)
+    rel = _run(proj, "--area-receipt", str(receipt.relative_to(proj)),
+               "--area-run-manifest", str(manifest))
+    assert rel.returncode == 2
+    assert "AREA_RECEIPT_PATH_INVALID" in rel.stdout
+    link = proj / "receipt-link.json"
+    link.symlink_to(receipt)
+    sym = _run(proj, "--area-receipt", str(link),
+               "--area-run-manifest", str(manifest))
+    assert sym.returncode == 2
+    assert "AREA_RECEIPT_PATH_INVALID" in sym.stdout

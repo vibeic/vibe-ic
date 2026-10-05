@@ -17164,8 +17164,20 @@ def _publish_librelane_synth_fanout_config(config_path: Path,
     return _ll.derive_step_config(original, config_path, updates)
 
 
+def _area_receipt_flags(area_receipt: Optional[str],
+                        area_run_manifest: Optional[str]) -> List[str]:
+    """Return only the explicitly declared producer-evidence argv pair."""
+    if bool(area_receipt) != bool(area_run_manifest):
+        raise ValueError("--area-receipt and --area-run-manifest must be supplied together")
+    if not area_receipt:
+        return []
+    return ["--area-receipt", str(area_receipt),
+            "--area-run-manifest", str(area_run_manifest)]
+
+
 def _step_synth_librelane(project: Path, top: str, pdk: PdkConfig,
-                         container: str) -> StepResult:
+                         container: str, *, area_receipt: Optional[str] = None,
+                         area_run_manifest: Optional[str] = None) -> StepResult:
     """Run the mapped synthesis tool and retain its native evidence for step 9."""
     import librelane_contract as _ll
     import synth_area_stats_emit as _sas
@@ -17337,7 +17349,9 @@ def _step_synth_librelane(project: Path, top: str, pdk: PdkConfig,
                                   folder / "stat_binding_gate.json")
         gate = subprocess.run([sys.executable,
                                str(PROGRAMS_DIR / "area_total_vs_budget_check.py"),
-                               str(project)], capture_output=True, text=True)
+                               str(project),
+                               *_area_receipt_flags(area_receipt, area_run_manifest)],
+                              capture_output=True, text=True)
         if gate.returncode != 0:
             return StepResult("synth", "FAIL", time.time() - t0,
                               f"area_total_vs_budget_check rc={gate.returncode}: "
@@ -17398,7 +17412,8 @@ def _step_synth_librelane(project: Path, top: str, pdk: PdkConfig,
 
 def step_synth(project: Path, top: str, pdk: PdkConfig,
                container: str,
-               period_relax: float = 1.0) -> StepResult:
+               period_relax: float = 1.0, *, area_receipt: Optional[str] = None,
+               area_run_manifest: Optional[str] = None) -> StepResult:
     """Synthesise, and compare the result against the die the design declares.
 
     `period_relax` is the ONE knob the area loop turns. At its default of 1.0
@@ -17424,7 +17439,9 @@ def step_synth(project: Path, top: str, pdk: PdkConfig,
     import librelane_contract as _ll
     _mode = _ll.selected_mode(project, "9")
     if _mode == "librelane":
-        return _step_synth_librelane(project, top, pdk, container)
+        return _step_synth_librelane(
+            project, top, pdk, container, area_receipt=area_receipt,
+            area_run_manifest=area_run_manifest)
     if _mode == "dual":
         return StepResult("synth", "FAIL", 0.0,
                           "LL_DUAL_POSTROUTE_NOT_READY: no same-scope routed "
@@ -18312,7 +18329,8 @@ def step_synth(project: Path, top: str, pdk: PdkConfig,
         except Exception:                                # noqa: BLE001
             _area_lib = ""
         _area_pdk = str(getattr(pdk, "name", "") or "")
-        _area_flags: List[str] = []
+        _area_flags: List[str] = _area_receipt_flags(
+            area_receipt, area_run_manifest)
         if _area_lib:
             _area_flags += ["--library", _area_lib]
         if _area_pdk:
@@ -18402,7 +18420,9 @@ def step_synth(project: Path, top: str, pdk: PdkConfig,
                         f"chip_area={_before} budget={_budget}")
                     _area_retry = step_synth(
                         project, top, pdk, container,
-                        period_relax=AREA_RETRY_PERIOD_RELAX)
+                        period_relax=AREA_RETRY_PERIOD_RELAX,
+                        area_receipt=area_receipt,
+                        area_run_manifest=area_run_manifest)
                     _after = _synth_chip_area(project)
                     if area_retry_is_worth_adopting(_before, _after, _budget):
                         # ADOPTED. The retry's artefacts are already on disk in
@@ -76639,7 +76659,9 @@ def _direct_flow_window(project: Path, top: str, pdk: PdkConfig,
         if site == "synth":
             row = window_gate(isolated, "phase3_one_shot_runner", site,
                               _preflight_refusal(site), step_synth,
-                              isolated, top, pdk, args.container)
+                              isolated, top, pdk, args.container,
+                              area_receipt=getattr(args, "area_receipt", None),
+                              area_run_manifest=getattr(args, "area_run_manifest", None))
         elif site == "pnr":
             row = window_gate(isolated, "phase3_one_shot_runner", site,
                               _preflight_refusal(site), step_pnr,
@@ -77523,6 +77545,10 @@ def main() -> int:
                          "runner; distinct from a structurally resolved RTL "
                          "top module"))
     p.add_argument("--container", default=_pin.default_container_name())
+    p.add_argument("--area-receipt", default=None,
+                   help="Explicit producer area receipt passed to the area gate")
+    p.add_argument("--area-run-manifest", default=None,
+                   help="Explicit current-run manifest paired with --area-receipt")
     p.add_argument("--die-um", default="auto",
                    help="Die size W x H in microns, or 'auto' (default) to size "
                         "the die from the synth cell count + PDK site area + "
@@ -77568,6 +77594,8 @@ def main() -> int:
     import execution_policy as _execution
     _execution.add_arguments(p)
     args = p.parse_args()
+    if bool(args.area_receipt) != bool(args.area_run_manifest):
+        p.error("--area-receipt and --area-run-manifest must be supplied together")
     _execution.configure(args)
     args.density_from_tool_default = not any(
         arg == "--util" or arg.startswith("--util=") for arg in sys.argv[1:])
@@ -78030,7 +78058,9 @@ def main() -> int:
                 project, "phase3_one_shot_runner", "synth",
                 _preflight_refusal("synth"),
                 _recorded("synth", step_synth), project,
-                effective_top, pdk, args.container))
+                effective_top, pdk, args.container,
+                area_receipt=args.area_receipt,
+                area_run_manifest=args.area_run_manifest))
             # Stamp the producer at the CALL SITE, not inside the step:
             # step_gds alone has two PASS returns and step_synth/step_pnr have
             # many, so a per-return stamp is a class of missed sites waiting to

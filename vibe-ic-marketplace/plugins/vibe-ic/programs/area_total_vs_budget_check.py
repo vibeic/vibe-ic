@@ -340,6 +340,7 @@ if _os.path.dirname(_os.path.abspath(__file__)) not in _sys.path:
 import argparse
 import json
 import re
+import stat
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -488,6 +489,16 @@ def read_area_receipt(receipt_path: Path, current_run_path: Path
     being placed beside the project.  All identity and hash fields are exact
     matches; missing or malformed fields refuse before publication.
     """
+    for label, path in (("receipt", receipt_path),
+                        ("current-run manifest", current_run_path)):
+        if not path.is_absolute():
+            return None, f"AREA_RECEIPT_PATH_INVALID: {label} must be absolute"
+        try:
+            st = path.lstat()
+        except OSError as exc:
+            return None, f"AREA_RECEIPT_UNREADABLE: {label}: {exc}"
+        if path.is_symlink() or not stat.S_ISREG(st.st_mode):
+            return None, f"AREA_RECEIPT_PATH_INVALID: {label} must be a regular non-symlink file"
     try:
         receipt = json.loads(receipt_path.read_text(errors="strict"))
         current = json.loads(current_run_path.read_text(errors="strict"))

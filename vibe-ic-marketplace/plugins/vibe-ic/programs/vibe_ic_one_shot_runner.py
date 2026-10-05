@@ -703,6 +703,8 @@ def _phase2_runner_argv(project: Path, *, top_name: str, container: str,
                        skip_hardware: bool, skip_phase3: bool,
                        skip_analog: bool, entry_step: Optional[str],
                        exit_step: Optional[str],
+                       area_receipt: Optional[str] = None,
+                       area_run_manifest: Optional[str] = None,
                        phase3_rederive_ic_name: Optional[str] = None
                        ) -> List[str]:
     """Build the canonical Phase-2 argv with explicit opt-ins only.
@@ -725,6 +727,11 @@ def _phase2_runner_argv(project: Path, *, top_name: str, container: str,
         result += ["--entry-step", str(entry_step)]
     if exit_step:
         result += ["--exit-step", str(exit_step)]
+    if bool(area_receipt) != bool(area_run_manifest):
+        raise ValueError("--area-receipt and --area-run-manifest must be supplied together")
+    if area_receipt:
+        result += ["--area-receipt", str(area_receipt),
+                   "--area-run-manifest", str(area_run_manifest)]
     if phase3_rederive_ic_name is not None:
         # Phase 3 will be handed `_resolve_top_name(..., ic_name, ...)`, not
         # `top_name` (see `_phase3_rederives_top`); step 13 needs the same.
@@ -1524,6 +1531,10 @@ def _main() -> int:
     p.add_argument("project", type=Path)
     p.add_argument("--top-name", default=_TOP_NAME_DEFAULT)
     p.add_argument("--container", default=_pin.default_container_name())
+    p.add_argument("--area-receipt", default=None,
+                   help="Explicit producer area receipt passed to Phase 3")
+    p.add_argument("--area-run-manifest", default=None,
+                   help="Explicit current-run manifest paired with --area-receipt")
     # `--container` names a CONTAINER (every step is `docker exec <container>`),
     # so nothing here ever asked which IMAGE that container was started from.
     # The identity is now RECORDED unconditionally (see the capture below) and
@@ -1630,6 +1641,8 @@ def _main() -> int:
     p.add_argument('--receipt-channel-fd', type=int, help=argparse.SUPPRESS)
     _execution.add_arguments(p)
     args = p.parse_args()
+    if bool(args.area_receipt) != bool(args.area_run_manifest):
+        p.error("--area-receipt and --area-run-manifest must be supplied together")
     # The owner answer is recorded/validated before checking execution authority.
     # Imported API calls may express a route, but cannot start any producer.
     project = args.project.resolve()
@@ -1866,6 +1879,9 @@ def _main() -> int:
                    "--die-um", args.die_um, "--util", str(args.util),
                    "--pdk", args.pdk, "--entry-step", str(args.entry_step),
                    "--exit-step", str(args.exit_step)]
+        if args.area_receipt:
+            p3_args += ["--area-receipt", args.area_receipt,
+                        "--area-run-manifest", args.area_run_manifest]
         if args.allow_oss_pdk_fallback:
             p3_args.append("--allow-oss-pdk-fallback")
         if args.allow_pdk_target_mismatch:
@@ -2363,6 +2379,8 @@ def _main() -> int:
             entry_step=(str(args.entry_step)
                         if _entry_runner == "design_one_shot_runner" else None),
             exit_step=(str(args.exit_step) if args.exit_step else None),
+            area_receipt=args.area_receipt,
+            area_run_manifest=args.area_run_manifest,
             phase3_rederive_ic_name=(
                 args.ic_name
                 if _phase3_rederives_top(flow_top, top_name_explicit)
@@ -2465,6 +2483,9 @@ def _main() -> int:
                    "--die-um", args.die_um,
                    "--util", str(args.util),
                    "--pdk", args.pdk]
+        if args.area_receipt:
+            p3_args += ["--area-receipt", args.area_receipt,
+                        "--area-run-manifest", args.area_run_manifest]
         if _p3_forward_window:
             p3_args += ["--entry-step", "9", "--exit-step", str(args.exit_step)]
         if getattr(args, "allow_oss_pdk_fallback", False):
