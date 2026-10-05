@@ -1548,11 +1548,12 @@ class Registry:
         self.register(adapter)
         self._step9_reserved = self._adapters[adapter.arm_id]
 
-    def bind_step9(self, prepared: 'Registry') -> None:
+    def bind_step9(self, *, project: Path, parameters: dict) -> None:
         """Complete that exact reservation once, before any Step9 plan.
 
-        The replacement has passed ordinary registration and a fresh source
-        snapshot. General registration remains closed; no other arm changes.
+        Only the canonical installation producer can construct the replacement.
+        It must pass ordinary registration and a fresh source snapshot. General
+        registration remains closed; no other arm changes.
         """
         with self._version_lock:
             if self._step9_binding_closed:
@@ -1562,10 +1563,15 @@ class Registry:
                     self.adapters('9') != [reserved] or
                     self._adapters.get(reserved.arm_id) is not reserved):
                 raise Refusal('STEP9_RESERVATION_UNBOUND', '9')
-            if (type(prepared) is not Registry or not prepared._finalized or
-                    prepared.snapshot is None or not prepared.snapshot.finalized or
-                    prepared.snapshot.commit != reserved.source_sha or
-                    len(prepared._adapters) != 1):
+            from execution_source_snapshot import using
+            from execution_production import register_synthesis_adapter
+            snapshot = SourceSnapshot(_REPO_ROOT, reserved.source_sha)
+            with using(snapshot):
+                prepared = Registry(snapshot=snapshot)
+                register_synthesis_adapter(prepared, project=project,
+                                           parameters=parameters)
+                prepared.finalize()
+            if len(prepared._adapters) != 1:
                 raise Refusal('STEP9_PREPARATION_UNBOUND', '9')
             candidate = prepared._adapters.get(reserved.arm_id)
             fixed = ('arm_id', 'step_id', 'tool_id', 'source_sha', 'source_files',

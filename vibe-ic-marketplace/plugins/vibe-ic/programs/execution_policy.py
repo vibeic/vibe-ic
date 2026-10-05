@@ -685,7 +685,6 @@ def _prepare_step9(runtime: dict, parameters: dict) -> None:
     """Bind current producer outputs before the fixed Controller creates a plan."""
     import execution_modes as em
     import execution_production as production
-    from execution_source_snapshot import SourceSnapshot, using
     project = runtime['project']
     if (type(runtime['controller']) is not em.Controller or
             runtime['controller'].registry is not runtime['registry']):
@@ -704,12 +703,7 @@ def _prepare_step9(runtime: dict, parameters: dict) -> None:
         return
     if '9' in runtime['contexts'] or '9' in runtime['runs']:
         raise em.Refusal('STEP9_BINDING_CLOSED', '9')
-    snapshot = SourceSnapshot(em._REPO_ROOT, runtime['route']['source_sha'])
-    with using(snapshot):
-        prepared = em.Registry(snapshot=snapshot)
-        production.register_synthesis_adapter(prepared, project=project, parameters=params)
-        prepared.finalize()
-    runtime['registry'].bind_step9(prepared)
+    runtime['registry'].bind_step9(project=project, parameters=params)
     runtime['step9_dispatch_parameters'] = identity
 
 

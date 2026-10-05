@@ -92,11 +92,11 @@ def test_step9_binds_after_real_staging(tmp_path, monkeypatch, prior_rtl):
     with pytest.raises(em.Refusal, match='REGISTRY_FINALIZED'):
         registry.register(arm)
     with pytest.raises(em.Refusal, match='STEP9_BINDING_CLOSED'):
-        registry.bind_step9(registry)
+        registry.bind_step9(project=project, parameters={})
     empty = em.Registry()
     empty.finalize()
     with pytest.raises(em.Refusal, match='STEP9_RESERVATION_UNBOUND'):
-        empty.bind_step9(registry)
+        empty.bind_step9(project=project, parameters={})
     rtl.write_text(rtl.read_text() + '// changed after binding\n')
     with pytest.raises(em.Refusal, match='STEP9_BOOTSTRAP_INPUT_CHANGED'):
         phase3.step_synth(project, 'top', pdk, 'unused')
@@ -108,26 +108,27 @@ def test_step9_binds_after_real_staging(tmp_path, monkeypatch, prior_rtl):
                      sort_keys=True))
 
 
-def test_step9_binding_rechecks_source_and_closes_after_plan(tmp_path):
+def test_step9_binding_rechecks_source_and_closes_after_plan(tmp_path, monkeypatch):
     from execution_source_snapshot import SourceSnapshot, using
     source, _ = production.source_identity()
-    def registered(*, deferred):
-        snapshot = SourceSnapshot(em._REPO_ROOT, source)
-        with using(snapshot):
-            result = em.Registry(snapshot=snapshot)
-            production.register_synthesis_adapter(result, deferred=deferred)
-            result.finalize()
-        return result
-    reserved = registered(deferred=True)
-    prepared = registered(deferred=False)
+    snapshot = SourceSnapshot(em._REPO_ROOT, source)
+    with using(snapshot):
+        reserved = em.Registry(snapshot=snapshot)
+        production.register_synthesis_adapter(reserved, deferred=True)
+        reserved.finalize()
     worker = production.WORKER
     original = worker.read_bytes()
-    try:
-        worker.write_bytes(original + b'\n# reverse control: source changed after validation\n')
-        with pytest.raises(em.Refusal, match='SOURCE|EXECUTABLE'):
-            reserved.bind_step9(prepared)
-    finally:
-        worker.write_bytes(original)
+    register = production.register_synthesis_adapter
+    def change_after_registration(*args, **kwargs):
+        register(*args, **kwargs)
+        worker.write_bytes(original + b'\n# reverse control: source changed after registration\n')
+    with monkeypatch.context() as patch:
+        patch.setattr(production, 'register_synthesis_adapter', change_after_registration)
+        try:
+            with pytest.raises(em.Refusal, match='SOURCE_AUTHORITY_DIRTY'):
+                reserved.bind_step9(project=tmp_path, parameters={})
+        finally:
+            worker.write_bytes(original)
     assert reserved._step9_reserved is not None
     # Even an unsuccessful first plan closes preparation; it cannot be rebound
     # after a caller has begun using the immutable Step9 plan identity.
@@ -136,4 +137,4 @@ def test_step9_binding_rechecks_source_and_closes_after_plan(tmp_path):
     with pytest.raises(em.Refusal):
         controller.plan(context)
     with pytest.raises(em.Refusal, match='STEP9_BINDING_CLOSED'):
-        reserved.bind_step9(prepared)
+        reserved.bind_step9(project=tmp_path, parameters={})
