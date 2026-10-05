@@ -180,7 +180,7 @@ _SKIP_DIR_NAMES = frozenset({
 })
 
 
-def iter_l_docs(root: Path) -> Iterable[Path]:
+def iter_l_docs(root: Path, *, recursive_root: bool = False) -> Iterable[Path]:
     """Every L document under ``root``, in stable order.
 
     Finds the ``generated_docs`` directories FIRST and globs inside them,
@@ -190,7 +190,7 @@ def iter_l_docs(root: Path) -> Iterable[Path]:
     document, so none of them should be walked.
     """
     seen: set = set()
-    directories = ([root] if root.name == _L_DOC_DIR
+    directories = ([root] if root.name == _L_DOC_DIR and not recursive_root
                    else sorted(root.rglob(_L_DOC_DIR)))
     for d in directories:
         if not d.is_dir():

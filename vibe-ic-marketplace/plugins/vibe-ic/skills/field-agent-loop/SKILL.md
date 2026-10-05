@@ -792,7 +792,9 @@ verification round) — all are now standing rules for EVERY fix audit:
    issue whose premise is what it contains, run
 
    ```bash
-   python3 programs/l_doc_generator_stamp.py <design-or-corpus-dir>
+   python3 programs/l_doc_generator_stamp.py <design-dir>
+   # Published corpus scans must opt into recursive scope explicitly.
+   python3 programs/l_doc_generator_stamp.py <corpus-dir> --corpus
    ```
 
    `CURRENT` — same release and same L-doc taxonomy as your checkout;

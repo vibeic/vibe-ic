@@ -140,9 +140,10 @@ reads a version file and a taxonomy contract and knows nothing about what
 the documents describe.
 
 Usage:
-    python3 l_doc_generator_stamp.py <root> [--json OUT]
+    python3 l_doc_generator_stamp.py <design-dir> [--json OUT]
                                      [--max-minor-drift N]
                                      [--allow-unstamped]
+    python3 l_doc_generator_stamp.py <corpus-dir> --corpus [--json OUT]
 """
 from __future__ import annotations
 
@@ -623,7 +624,7 @@ def scan_tree(root: Path,
         raise ValueError(f"unknown L-document scan scope: {scope!r}")
     canonical = _canonical_scan_root(root) if scope == "project" else None
     if scope == "corpus":
-        paths = iter_l_docs(root)
+        paths = iter_l_docs(root, recursive_root=True)
     elif canonical is None:
         # A project invocation never widens into a recursive corpus census.
         # Callers that own a published corpus must opt into that scope.

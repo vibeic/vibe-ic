@@ -944,6 +944,21 @@ def test_symlinked_phase1_does_not_fall_back_to_legacy(tmp_path):
     assert result["verdict"] == "VACUOUS"
 
 
+def test_corpus_scope_recurses_when_corpus_basename_is_generated_docs(tmp_path):
+    """Corpus scope does not let its root basename disable recursion."""
+    corpus = tmp_path / "generated_docs"
+    first = corpus / "design_a" / "generated_docs"
+    second = corpus / "design_b" / "phase1" / "generated_docs"
+    first.mkdir(parents=True)
+    second.mkdir(parents=True)
+    g.dump(first / "L1_DATASHEET.json", {"ic_name": "a"}, "test.emitter")
+    g.dump(second / "L1_DATASHEET.json", {"ic_name": "b"}, "test.emitter")
+
+    result = g.scan_tree(corpus, scope="corpus")
+    assert result["documents_read"] == 2
+    assert result["verdict"] == "PASS"
+
+
 def test_phase1_doc_runner_blocks_stamp_rc2_as_undetermined():
     """The canonical Phase-1 gate loop must not discard rc=2."""
     import phase1_doc_one_shot_runner as runner
