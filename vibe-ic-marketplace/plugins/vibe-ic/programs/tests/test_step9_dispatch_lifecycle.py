@@ -1,6 +1,7 @@
 """Step9 input lifetime: real staging and installed-tool admission, no synthesis."""
 import json
 import os
+import time
 from pathlib import Path
 
 import pytest
@@ -18,6 +19,8 @@ def test_step9_binds_after_real_staging(tmp_path, monkeypatch, prior_rtl):
     image = os.environ.get('VIBEIC_STEP9_INSTALLATION_TEST_IMAGE')
     if not image:
         pytest.skip('requires an installed pinned image for the real version probe')
+    started = time.monotonic()
+    print('STEP9_LIFECYCLE_START', prior_rtl, flush=True)
     import librelane_contract as ll
     import phase3_one_shot_runner as phase3
     import reused_ip_rtl_consume as consume
@@ -53,6 +56,7 @@ def test_step9_binds_after_real_staging(tmp_path, monkeypatch, prior_rtl):
     monkeypatch.setattr(production, '_step9_installation', observed_installation)
     runtime = policy.bootstrap(project, parameters={
         'top': 'top', 'pdk': pdk, 'skip_analog': True, 'container': 'unused'})
+    print('STEP9_BOOTSTRAP_COMPLETE', round(time.monotonic() - started, 2), flush=True)
     assert installation_calls == [], 'bootstrap bound future producer inputs'
     others = {a.arm_id: a for key in runtime['registry']._adapters
               for a in [runtime['registry']._adapters[key]] if a.step_id != '9'}
@@ -67,6 +71,7 @@ def test_step9_binds_after_real_staging(tmp_path, monkeypatch, prior_rtl):
     assert rtl.read_bytes() == source.read_bytes()
     current_digest = em.digest(rtl)
     staged_current_inputs = True
+    print('STEP9_STAGING_COMPLETE', current_digest, flush=True)
     captured = {}
     class AdmissionReached(Exception):
         pass
@@ -77,6 +82,7 @@ def test_step9_binds_after_real_staging(tmp_path, monkeypatch, prior_rtl):
     monkeypatch.setattr(controller, 'run', stop_after_admission)
     with pytest.raises(AdmissionReached):
         phase3.step_synth(project, 'top', pdk, 'unused')
+    print('STEP9_ADMISSION_COMPLETE', round(time.monotonic() - started, 2), flush=True)
     assert runtime['controller'] is controller and controller.registry is registry
     assert all(registry._adapters[key] is value for key, value in others.items())
     arm = registry.adapters('9')[0]
