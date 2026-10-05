@@ -32,6 +32,140 @@ class Refusal(RuntimeError):
 
 
 LOCAL_ATTESTATION_ENV = 'VIBEIC_LIBRELANE_LOCAL_ATTESTATION'
+# An explicitly issued host provider is a different contract from a Docker
+# image.  The identity is the receipt and the host trees it names; the token
+# below is deliberately not an image reference and is never sent to Docker.
+LOCAL_PROVIDER_RECEIPT_ENV = 'VIBEIC_LIBRELANE_LOCAL_PROVIDER_RECEIPT'
+LOCAL_PROVIDER_ENV_ALIASES = (LOCAL_PROVIDER_RECEIPT_ENV,
+                              'VIBEIC_LIBRELANE_LOCAL_PROVIDER',
+                              'VIBEIC_LIBRELANE_LOCAL_RECEIPT')
+LOCAL_EXECUTION_ROUTE_ENV = 'VIBEIC_LIBRELANE_EXECUTION_ROUTE'
+LOCAL_EXECUTION_IDENTITY = 'LOCAL_EXEC'
+LOCAL_PROVIDER_SCHEMA = 'vibeic/librelane-local-provider/1'
+
+
+def _local_provider_path(project: Path | None = None) -> Path | None:
+    """Return the explicitly issued LOCAL provider receipt, if named."""
+    for name in LOCAL_PROVIDER_ENV_ALIASES:
+        value = os.environ.get(name)
+        if value:
+            return Path(value)
+    # Keep the pre-existing launch receipt variable available for a provider
+    # receipt, while leaving its legacy container-attestation JSON on the old
+    # path.  The schema check is intentional: merely having the old variable
+    # set must never opt a normal Docker launch into the host-provider route.
+    legacy = os.environ.get(LOCAL_ATTESTATION_ENV)
+    if legacy:
+        candidate = Path(legacy)
+        try:
+            record = json.loads(candidate.read_text())
+        except (OSError, ValueError):
+            record = None
+        if isinstance(record, dict) and record.get('schema') == LOCAL_PROVIDER_SCHEMA:
+            return candidate
+    if project is not None:
+        switch = project / 'phase3/librelane_switch.json'
+        if switch.is_file():
+            try:
+                record = _load(switch)
+            except (OSError, ValueError, Refusal):
+                record = {}
+            value = record.get('local_provider_receipt')
+            if isinstance(value, str) and value:
+                return Path(value)
+    return None
+
+
+def _local_route(project: Path | None = None) -> bool:
+    """Whether LibreLane was explicitly admitted to the host LOCAL route.
+
+    The old in-image route remains selected by ``no_container_route``.  A
+    host-side LOCAL provider additionally needs an explicit route or a
+    receipt that declares one, so a stale receipt cannot silently change the
+    normal Docker path.
+    """
+    if _ce.no_container_route():
+        return True
+    route = os.environ.get(LOCAL_EXECUTION_ROUTE_ENV, '').strip().upper()
+    if route:
+        return route == 'LOCAL'
+    path = _local_provider_path(project)
+    if path is None:
+        return False
+    # Once a provider receipt is explicitly named, stay on the provider route
+    # even when its bytes are stale or malformed; the validator below must
+    # return LL_LOCAL_PROVIDER_UNATTESTED rather than falling through to Docker.
+    return True
+
+
+def _local_provider_selected(project: Path | None = None) -> bool:
+    """Whether the explicit host provider (rather than legacy in-image LOCAL) is selected."""
+    route = os.environ.get(LOCAL_EXECUTION_ROUTE_ENV, '').strip().upper()
+    return route == 'LOCAL' or _local_provider_path(project) is not None
+
+
+def local_provider_receipt(project: Path | None = None) -> dict[str, Any]:
+    """Validate and normalize the current host-bound LOCAL provider receipt.
+
+    A provider receipt carries tool and PDK roots, never an EDA image.  Host
+    and root bindings are checked on every call and the receipt bytes are
+    hashed so a run cannot continue after its authority changes.
+    """
+    path = _local_provider_path(project)
+    try:
+        if path is None:
+            raise ValueError('no LOCAL provider receipt was named')
+        raw = path.read_bytes()
+        record = json.loads(raw)
+        if not isinstance(record, dict):
+            raise ValueError('receipt is not an object')
+        if record.get('schema') != LOCAL_PROVIDER_SCHEMA:
+            raise ValueError(f"schema={record.get('schema')!r}")
+        if record.get('execution_route') != 'LOCAL':
+            raise ValueError('execution_route is not LOCAL')
+        host = record.get('hostname', record.get('host'))
+        if not isinstance(host, str) or not host or host != socket.gethostname():
+            raise ValueError(f'hostname={host!r} does not bind this host')
+        tool_root = record.get('tool_root')
+        pdk_root = record.get('pdk_root')
+        if (not isinstance(tool_root, str) or not Path(tool_root).is_absolute()
+                or not Path(tool_root).is_dir()):
+            raise ValueError(f'tool_root={tool_root!r} is not a current directory')
+        if (not isinstance(pdk_root, str) or not Path(pdk_root).is_absolute()
+                or not Path(pdk_root).is_dir()):
+            raise ValueError(f'pdk_root={pdk_root!r} is not a current directory')
+        tool_identity = record.get('tool_identity')
+        if tool_identity is not None and (
+                not isinstance(tool_identity, dict) or
+                tool_identity.get('root') != tool_root):
+            raise ValueError('tool identity is not bound to tool_root')
+        pdk_identity = record.get('pdk_identity')
+        if pdk_identity is not None and (
+                not isinstance(pdk_identity, dict) or
+                pdk_identity.get('root') != pdk_root):
+            raise ValueError('PDK identity is not bound to pdk_root')
+        pdk_name = record.get('pdk')
+        if pdk_name is not None and (
+                not isinstance(pdk_name, str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._+-]*', pdk_name)):
+            raise ValueError(f'pdk={pdk_name!r} is invalid')
+        if isinstance(pdk_identity, dict) and pdk_name is not None and \
+                pdk_identity.get('name') not in (None, pdk_name):
+            raise ValueError('PDK identity name is unbound')
+    except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
+        raise Refusal('LL_LOCAL_PROVIDER_UNATTESTED', f'{path}: {exc}') from None
+    return {
+        'execution_route': 'LOCAL', 'image': None,
+        'tool_root': str(Path(tool_root).resolve()),
+        'pdk_root': str(Path(pdk_root).resolve()),
+        'pdk': pdk_name,
+        'hostname': socket.gethostname(),
+        'network_mode': record.get('network_mode'),
+        'memory': record.get('memory'),
+        'memory_swap': record.get('memory_swap'),
+        'auto_remove': record.get('auto_remove'),
+        'attestation_path': str(path.resolve()),
+        'attestation_sha256': hashlib.sha256(raw).hexdigest(),
+    }
 
 
 def local_image_attestation(image: str | None = None) -> dict[str, Any]:
@@ -104,7 +238,9 @@ def _local_memory_bytes(value: str) -> int:
 
 
 def _run_local(argv: list[str], *, probe_deadline_s: float | None,
-               supervised: bool, log: Path | None, **kw: Any) -> subprocess.CompletedProcess:
+               supervised: bool, log: Path | None,
+               local_provider_project: Path | None = None,
+               **kw: Any) -> subprocess.CompletedProcess:
     """Execute only the Docker-run shapes emitted by this LibreLane owner.
 
     Reuse the existing mount-path conversion and host process supervision.
@@ -180,13 +316,23 @@ def _run_local(argv: list[str], *, probe_deadline_s: float | None,
                           'caller cwd conflicts with the mounted Docker --workdir')
         kw['cwd'] = child_cwd
     image = argv[at]
-    attestation = local_image_attestation(image)
-    if network is not None and attestation['network_mode'] != network:
+    provider_route = image == LOCAL_EXECUTION_IDENTITY
+    if not provider_route and _local_provider_selected(local_provider_project):
+        raise Refusal('LL_LOCAL_IMAGE_UNBOUND', str(image))
+    attestation = (local_provider_receipt(local_provider_project) if provider_route
+                   else local_image_attestation(image))
+    # Docker resource/isolation flags are meaningful for the legacy in-image
+    # attestation.  A host provider owns the tool/PDK trees instead; it does
+    # not claim to be a Docker image and therefore has no image cgroup to
+    # compare against.
+    if not provider_route and network is not None and attestation['network_mode'] != network:
         raise Refusal('LL_LOCAL_NETWORK_UNATTESTED',
                       f"requested --network {network}; current CID {attestation['cid']} "
                       f"has NetworkMode={attestation['network_mode']!r}")
     for requested, key, code in ((memory, 'memory', 'LL_LOCAL_MEMORY_UNATTESTED'),
                                 (memory_swap, 'memory_swap', 'LL_LOCAL_SWAP_UNATTESTED')):
+        if provider_route:
+            continue
         if requested is None:
             continue
         actual = attestation[key]
@@ -197,7 +343,7 @@ def _run_local(argv: list[str], *, probe_deadline_s: float | None,
                 or (not unbounded_request and not (0 < actual <= requested))):
             raise Refusal(code, f"current CID {attestation['cid']} has {key}={actual!r}; "
                           f'requested {requested} bytes; a finite outer limit may be stricter')
-    if auto_remove and attestation['auto_remove'] is not True:
+    if not provider_route and auto_remove and attestation['auto_remove'] is not True:
         raise Refusal('LL_LOCAL_AUTOREMOVE_UNATTESTED',
                       f"requested --rm; current CID {attestation['cid']} "
                       f"has AutoRemove={attestation['auto_remove']!r}")
@@ -239,14 +385,17 @@ def _run_local(argv: list[str], *, probe_deadline_s: float | None,
                 raise Refusal('LL_TOOL_STALLED', f'LOCAL tool made no progress for {grace:g} s; '
                               f'{_salvage(result.out, result.err, log)}')
             result = _wd.completed_process(command, result)
-    if local_image_attestation(image) != attestation:
+    current = (local_provider_receipt(local_provider_project) if provider_route
+               else local_image_attestation(image))
+    if current != attestation:
         raise Refusal('LL_LOCAL_ATTESTATION_CHANGED', attestation['attestation_path'])
     return result
 
 
-def _local_config_source(source: Path, mounts: list[tuple[Path, str]]) -> Path:
+def _local_config_source(source: Path, mounts: list[tuple[Path, str]],
+                         project: Path | None = None) -> Path:
     """Project a declared config's mount paths without changing its bytes."""
-    if not _ce.no_container_route():
+    if not _local_route(project):
         return source
     mapping = [(guest, str(host.resolve())) for host, guest in mounts]
     def paths(value):
@@ -425,6 +574,7 @@ class _Client:
 
 def run_container(argv: list[str], *, probe_deadline_s: float | None = None,
                   supervised: bool = False, log: Path | None = None,
+                  local_provider_project: Path | None = None,
                   **kw: Any) -> subprocess.CompletedProcess:
     """Run one `docker run` argv, named so it can be removed by that name.
 
@@ -447,9 +597,11 @@ def run_container(argv: list[str], *, probe_deadline_s: float | None = None,
     """
     if (probe_deadline_s is None) == (not supervised):
         raise ValueError('run_container: pass exactly one of probe_deadline_s= or supervised=True')
-    if _ce.no_container_route():
+    if (_local_route(local_provider_project)
+            or LOCAL_EXECUTION_IDENTITY in argv):
         return _run_local(list(argv), probe_deadline_s=probe_deadline_s,
-                          supervised=supervised, log=log, **kw)
+                          supervised=supervised, log=log,
+                          local_provider_project=local_provider_project, **kw)
     # Use the image's normal environment, with its explicit skip front door.
     # Overriding ENTRYPOINT bypassed that environment for resolved tool steps.
     argv = list(argv)
@@ -1837,6 +1989,12 @@ def image_pdk_root(image: str, docker: str = 'docker') -> dict[str, str]:
     this host holds under another repository name is inspected by that name.
     An image not on this host, or one declaring no absolute `PDK_ROOT`, refuses.
     """
+    if _local_provider_selected() and image != LOCAL_EXECUTION_IDENTITY:
+        raise Refusal('LL_LOCAL_IMAGE_UNBOUND', str(image))
+    if _local_route() and image == LOCAL_EXECUTION_IDENTITY:
+        provider = local_provider_receipt()
+        return {'image_id': LOCAL_EXECUTION_IDENTITY,
+                'pdk_root': provider['pdk_root']}
     if _ce.no_container_route():
         identity = local_image_attestation(image)
         root = os.environ.get('PDK_ROOT', '')
@@ -1893,6 +2051,14 @@ def _materialise_image_pdk(image: str, found: dict[str, str], pdk: str,
     is written last, so a reader sees a finished tree or none. Returns the host
     root (which holds `<pdk>/`) and whether it was `copied` or `reused`.
     """
+    if _local_provider_selected() and image != LOCAL_EXECUTION_IDENTITY:
+        raise Refusal('LL_LOCAL_IMAGE_UNBOUND', str(image))
+    if _local_route() and image == LOCAL_EXECUTION_IDENTITY:
+        provider = local_provider_receipt()
+        root = Path(provider['pdk_root'])
+        if not (root / pdk).is_dir():
+            raise Refusal('LL_LOCAL_PDK_UNATTESTED', str(root / pdk))
+        return root, 'native'
     if _ce.no_container_route():
         local_image_attestation(image)
         root = Path(found['pdk_root'])
@@ -2033,6 +2199,20 @@ def pdk_root_resolution(project: Path | None = None, pdk: str | None = None, *,
     """
     path = project / 'phase3/librelane_switch.json' if project else None
     switch = _load(path) if path and path.is_file() else {}
+    provider_selected = _local_provider_selected(project)
+    # Validate provider authority before considering a declared PDK root.  A
+    # stale provider must never be hidden by the older declared-root escape.
+    provider = local_provider_receipt(project) if provider_selected else None
+    selected_image = image or switch.get('image')
+    if (provider_selected
+            and selected_image not in (None, LOCAL_EXECUTION_IDENTITY)):
+        raise Refusal('LL_LOCAL_IMAGE_UNBOUND', str(selected_image))
+    requested_pdk = pdk or switch.get('pdk')
+    if (provider is not None and provider.get('pdk') is not None
+            and requested_pdk is not None
+            and provider['pdk'] != str(requested_pdk)):
+        raise Refusal('LL_LOCAL_PDK_UNATTESTED',
+                      f"receipt pdk={provider['pdk']!r}; requested pdk={requested_pdk!r}")
     if switch.get('pdk_root_host'):
         answer = {'path': str(switch['pdk_root_host']), 'source': 'declared',
                   'declared_by': 'phase3/librelane_switch.json pdk_root_host'}
@@ -2041,6 +2221,12 @@ def pdk_root_resolution(project: Path | None = None, pdk: str | None = None, *,
                   'declared_by': 'env VIBEIC_LIBRELANE_PDK_ROOT'}
     else:
         answer = None
+    if answer is not None and provider is not None:
+        declared_root = Path(answer['path']).resolve()
+        provider_root = Path(provider['pdk_root']).resolve()
+        if declared_root != provider_root:
+            raise Refusal('LL_LOCAL_PDK_UNBOUND',
+                          f'declared {declared_root} != receipt {provider_root}')
     if answer is not None:
         # A declared root is a PDK_ROOT: the tree a consumer reads is
         # <path>/<pdk>. Record WHICH PDK when it is known, so a consumer of
@@ -2059,25 +2245,48 @@ def pdk_root_resolution(project: Path | None = None, pdk: str | None = None, *,
                 raise Refusal('LL_PDK_UNDECLARED', 'no design PDK (caller or switch pdk)')
             if not _PDK_NAME.match(str(pdk)):
                 raise Refusal('LL_PDK_NAME_INVALID', repr(pdk))
-            image = image or resolve_image(project)
-            found = image_pdk_root(image, docker)
-            root, how = _materialise_image_pdk(image, found, str(pdk), docker)
-            # A new copy is when an older image's copy may have become stale.
-            pruned = prune_pdk_root_cache(found['image_id'], docker) if how == 'copied' else None
+            if provider_selected:
+                if _local_provider_path(project) is None:
+                    # Explicit LOCAL admission without its receipt is a
+                    # provider failure, never permission to ask Docker.
+                    local_provider_receipt(project)
+                if image not in (None, LOCAL_EXECUTION_IDENTITY):
+                    raise Refusal('LL_LOCAL_IMAGE_UNBOUND', str(image))
+                provider = local_provider_receipt(project)
+                root = Path(provider['pdk_root'])
+                if not (root / str(pdk)).is_dir():
+                    raise Refusal('LL_LOCAL_PDK_UNATTESTED', str(root / str(pdk)))
+                image = LOCAL_EXECUTION_IDENTITY
+                found = {'image_id': LOCAL_EXECUTION_IDENTITY,
+                         'pdk_root': str(root)}
+                how, pruned = 'native', None
+            else:
+                image = image or resolve_image(project)
+                found = image_pdk_root(image, docker)
+                root, how = _materialise_image_pdk(image, found, str(pdk), docker)
+                # A new copy is when an older image's copy may have become stale.
+                pruned = prune_pdk_root_cache(found['image_id'], docker) if how == 'copied' else None
         except Refusal as exc:
             raise Refusal('LL_PDK_ROOT_NOT_RESOLVABLE',
                           'not declared (switch pdk_root_host / VIBEIC_LIBRELANE_PDK_ROOT) '
                           f'and not resolved from the image: {exc}') from None
-        answer = {'path': str(root), 'source': 'resolved',
-                  'derivation': {'image': image, 'image_id': found['image_id'],
+        answer = {'path': str(root),
+                  'source': ('resolved_local' if image == LOCAL_EXECUTION_IDENTITY
+                             else 'resolved'),
+                  'derivation': {'image': (None if image == LOCAL_EXECUTION_IDENTITY else image),
+                                 'image_id': found['image_id'],
                                  'image_pdk_root': found['pdk_root'],
-                                 'image_pdk_root_from': ('attested LOCAL environment PDK_ROOT'
+                                 'image_pdk_root_from': ('host-bound LOCAL provider receipt'
+                                                        if image == LOCAL_EXECUTION_IDENTITY else
+                                                        'attested LOCAL environment PDK_ROOT'
                                                         if how == 'native' else
                                                         'docker image inspect Config.Env PDK_ROOT'),
                                  'pdk': str(pdk), 'pdk_from': pdk_source,
                                  'guest_path': f"{found['pdk_root']}/{pdk}",
                                  'host_path': str(root / str(pdk)),
-                                 'cache': how, 'cache_prune': pruned}}
+                                 'cache': how, 'cache_prune': pruned,
+                                 'execution_route': ('LOCAL' if image == LOCAL_EXECUTION_IDENTITY
+                                                     else 'CONTAINER')}}
     if project is not None and (project / 'phase3').is_dir():
         write_json(project / PDK_ROOT_PROVENANCE_REL, answer)
     return answer
@@ -2103,6 +2312,16 @@ def resolve_image(project: Path | None = None) -> str:
     """
     path = project / 'phase3/librelane_switch.json' if project else None
     declared = _load(path).get('image') if path and path.is_file() else None
+    if _local_provider_selected(project):
+        if declared not in (None, LOCAL_EXECUTION_IDENTITY):
+            raise Refusal('LL_LOCAL_IMAGE_UNBOUND', str(declared))
+        if _local_provider_path(project) is None:
+            local_provider_receipt(project)
+        provider = local_provider_receipt(project)
+        if project is not None and (project / 'phase3').is_dir():
+            write_json(project / 'phase3/librelane_image.provenance.json', {
+                **provider, 'source': 'host-bound LOCAL provider receipt'})
+        return LOCAL_EXECUTION_IDENTITY
     if _ce.no_container_route():
         identity = local_image_attestation(declared or os.environ.get('VIBEIC_LIBRELANE_IMAGE'))
         if project is not None and (project / 'phase3').is_dir():
@@ -2168,8 +2387,13 @@ def _parse_tcl_probe(text: str) -> tuple[dict[str, str], list[str], dict[str, li
     return aliases, sorted(unresolved), ambiguous
 
 
-def image_capability(image: str, docker: str = 'docker') -> dict:
-    if _ce.no_container_route():
+def image_capability(image: str, docker: str = 'docker',
+                     project: Path | None = None) -> dict:
+    if _local_provider_selected(project) and image != LOCAL_EXECUTION_IDENTITY:
+        raise Refusal('LL_LOCAL_IMAGE_UNBOUND', str(image))
+    if _local_route(project) and image == LOCAL_EXECUTION_IDENTITY:
+        local_provider_receipt(project)
+    elif _ce.no_container_route():
         local_image_attestation(image)
     key = (image, docker)
     if key in _CAPABILITY:
@@ -2177,13 +2401,15 @@ def image_capability(image: str, docker: str = 'docker') -> dict:
     probe = [docker, 'run', *_dmem.docker_memory_flags(), '--rm', '--entrypoint', 'sh', image, '-c',
              'python3 -m librelane.steps run --help >/dev/null && '
              'yosys -Q -T -y /dev/null -p help >/dev/null']
-    result = run_container(probe, probe_deadline_s=PROBE_DEADLINE_S)
+    result = run_container(probe, probe_deadline_s=PROBE_DEADLINE_S,
+                           local_provider_project=project)
     if result.returncode:
         raise Refusal('LL_IMAGE_INCAPABLE', f'{image}: LibreLane CLI or yosys CLI -y unavailable (rc={result.returncode})')
     try:
         tcl = run_container([docker, 'run', *_dmem.docker_memory_flags(), '--rm', '--network', 'none',
                              '--entrypoint', 'bash', image, '-c', _TCL_PROBE],
-                            probe_deadline_s=PROBE_DEADLINE_S)
+                            probe_deadline_s=PROBE_DEADLINE_S,
+                            local_provider_project=project)
     except Refusal as exc:
         if exc.code != 'LL_TOOL_DEADLINE':
             raise
@@ -2775,7 +3001,7 @@ def resolve_step_configs(project: Path, image: str, pdk: str,
     The installed LibreLane resolver supplies PDK values.  A prior run's
     resolved.json (including its design-specific numbers) is never an input.
     """
-    image_capability(image, docker)
+    image_capability(image, docker, project)
     if not (pdk_root / pdk).is_dir():
         raise Refusal('LL_PDK_MISSING', str(pdk_root / pdk))
     root = project / 'phase3/librelane' / folder
@@ -2865,13 +3091,15 @@ Path(output, "flow_gates.json").write_text(json.dumps({
     for step_id in json.loads(Path(requested).read_text()) if step_id in gates},
     indent=2, default=str) + "\\n")
 '''
-    runtime_design = _local_config_source(design, [(pdk_root, '/pdk')])
+    runtime_design = _local_config_source(design, [(pdk_root, '/pdk')], project)
     cmd = [docker, 'run', *_dmem.docker_memory_flags(), '--rm',
            '-v', f'{project.resolve()}:{project.resolve()}',
            '-v', f'{pdk_root.resolve()}:/pdk:ro', *_plugin_args(step_ids),
            '--entrypoint', 'python3', image, '-c', script, str(runtime_design),
            str(requested), str(root), pdk, str(project.resolve()), image]
-    result = run_container(cmd, probe_deadline_s=PROBE_DEADLINE_S, log=root / 'resolution.log')
+    result = run_container(cmd, probe_deadline_s=PROBE_DEADLINE_S,
+                           log=root / 'resolution.log',
+                           local_provider_project=project)
     (root / 'resolution.log').write_text(result.stdout + '\n' + result.stderr)
     if result.returncode:
         raise Refusal('LL_CONFIG_RESOLUTION_FAILED', str(root / 'resolution.log'))
@@ -2995,7 +3223,7 @@ def resolve_step_config(project: Path, image: str, source: Path, output: Path,
                         *, mounts: list[tuple[Path, str]] | None = None,
                         pdk_root: str | None = None, docker: str = 'docker') -> Path:
     """Ask LibreLane to apply its PDK config before the step-only CLI runs."""
-    source = _local_config_source(source, mounts or [])
+    source = _local_config_source(source, mounts or [], project)
     script = (
         'import json,os,tempfile;'
         'from librelane.config import Config;'
@@ -3200,7 +3428,7 @@ def run_chain(project: Path, image: str, steps: list[tuple[str, Path, Path]],
                                       for host, guest in mounts or []
                                       if guest == root or guest.startswith(root + '/')],
                   'stated_by': 'run_chain(pdk_root=...)'}
-    if _ce.no_container_route():
+    if _local_route(project):
         pdk_root = _ce.localise_mounted_paths(str(pdk_root),
             [(guest, str(host.resolve())) for host, guest in mounts or []])
         logical_mounts = pdk_record['mounts_under_it']
@@ -3209,7 +3437,7 @@ def run_chain(project: Path, image: str, steps: list[tuple[str, Path, Path]],
             mounts_under_it=[[host, _ce.localise_mounted_paths(guest,
                 [(g, str(h.resolve())) for h, g in mounts or []])]
                 for host, guest in logical_mounts])
-    capability = image_capability(image, docker)
+    capability = image_capability(image, docker, project)
     outputs = []
     previous: Path | None = None
     if lane is not None and (not lane or '/' in lane or lane in ('.', '..')):
@@ -3252,8 +3480,12 @@ def run_chain(project: Path, image: str, steps: list[tuple[str, Path, Path]],
                        # are inputs too: an edited deck must re-run the step.
                        'config_files': config_file_hashes(_load(config), mounts or []),
                        'step': step_id}
-        if _ce.no_container_route():
-            fingerprint['local_image'] = local_image_attestation(image)
+        if _local_route(project):
+            fingerprint['local_provider' if image == LOCAL_EXECUTION_IDENTITY
+                        else 'local_image'] = (
+                            local_provider_receipt(project)
+                            if image == LOCAL_EXECUTION_IDENTITY else
+                            local_image_attestation(image))
         if lane in ('37.3-magic', '37.3-compare'):
             fingerprint['config_files'] = _current_config_material(
                 _load(config), mounts or [])
@@ -3340,7 +3572,8 @@ def run_chain(project: Path, image: str, steps: list[tuple[str, Path, Path]],
                '-i', str(state_path), '-o', str(folder), '--pdk-root', str(pdk_root)]
         try:
             completed = run_container(cmd, supervised=True,
-                                      log=folder / 'invocation.log')
+                                      log=folder / 'invocation.log',
+                                      local_provider_project=project)
         except Refusal as exc:
             if exc.code != 'LL_TOOL_STALLED':
                 raise
