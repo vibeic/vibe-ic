@@ -1772,9 +1772,6 @@ def _main() -> int:
         return 2
     from execution_authority import consume
     execution_route = consume()['route']
-    _execution.bootstrap(project, parameters={"top": args.top_name,
-        "container": args.container, "pdk_name": args.pdk,
-        "skip_analog": bool(args.skip_analog)})
     # ---------------- Container IMAGE provenance (capture always) ----------
     # Every containerised step downstream is dispatched as
     # `docker exec <container> ...`, so `--container` selects a CONTAINER and
@@ -2121,6 +2118,8 @@ def _main() -> int:
     elif run_phase1:
         runner = _phase_runner("phase1")
         p1_args = [str(project), "--ic-name", args.ic_name]
+        if args.skip_analog:
+            p1_args.append("--skip-analog")
         # #2204 — the second pass of the expert hand-off. The extraction is
         # ALREADY DONE and its L documents are what the delivered answer was
         # authored against, so this pass runs the second track and nothing
@@ -2348,6 +2347,15 @@ def _main() -> int:
     if flow_top_note:
         print(f"[flow] {flow_top_note}", flush=True)
         advisories.append(f"flow {flow_top_note}")
+
+    # Register consumers only after Phase 1 has produced their inputs and the
+    # existing applicability decision has resolved the analog route. A Phase-1
+    # failure must retain its own verdict instead of failing registration of
+    # downstream rows whose inputs were never produced.
+    if halted_at != "phase1":
+        _execution.bootstrap(project, parameters={"top": flow_top,
+            "container": args.container, "pdk_name": args.pdk,
+            "skip_analog": not run_analog})
 
     # ---------------- Analog A1..A8 ----------------
     # FX_ADC_PHASE_ORDER — DISPATCHED BEFORE PHASE 2, reported after it.

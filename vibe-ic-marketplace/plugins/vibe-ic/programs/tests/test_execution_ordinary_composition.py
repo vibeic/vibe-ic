@@ -285,3 +285,88 @@ def test_producer_site_symbols_share_exact_content_and_reject_changes(tmp_path, 
     for module in (backend, release):
         with pytest.raises(em.Refusal, match='PRODUCER_SITE_UNREADABLE'):
             module._site_path('producer.py:replacement')
+
+
+@pytest.mark.parametrize('skip_analog', [False, True])
+def test_canonical_phase1_entry_defers_post_phase1_registration(tmp_path, monkeypatch,
+                                                               skip_analog):
+    import sys
+    import phase1_one_shot_runner as phase1
+    project = tmp_path / 'project'
+    project.mkdir()
+    R.real_entry('IC', 'default', project)
+    declaration = project / 'phase1/analog/analog_block_list.json'
+    assert not declaration.exists()
+    reached = []
+    class ReachedPhase1Producer(Exception):
+        pass
+    def stop_at_producer(current, **kwargs):
+        runtime = policy._ordinary_runtime
+        assert current == project
+        assert runtime['parameters']['skip_analog'] is skip_analog
+        assert runtime['registry'].adapters('0.5ic')
+        assert not runtime['registry'].adapters('A1')
+        assert not runtime['registry'].adapters('9')
+        assert not declaration.exists()
+        reached.append(True)
+        raise ReachedPhase1Producer
+    monkeypatch.setattr(phase1, '_run_step_0_5ic', stop_at_producer)
+    argv = ['phase1_one_shot_runner.py', str(project), '--route', 'ic']
+    if skip_analog:
+        argv.append('--skip-analog')
+    monkeypatch.setattr(sys, 'argv', argv)
+    with pytest.raises(ReachedPhase1Producer):
+        phase1.main()
+    assert reached == [True]
+    assert not declaration.exists()
+
+
+@pytest.mark.parametrize("damage", [None, "missing", "conflict"])
+def test_issued_default_pdk_reaches_real_step9_registration(tmp_path, monkeypatch, damage):
+    import execution_production as production
+    import design_one_shot_runner as design
+    from test_default_frontend_r2 import _synthesis
+    project, _, pdk, native_calls = _synthesis(tmp_path, monkeypatch, ordinary=True)
+    if damage == 'missing':
+        (project / 'input/project.json').unlink()
+        (project / 'phase1/generated_docs/L19_CONSTRAINTS_PDK.json').unlink()
+    elif damage == 'conflict':
+        (project / 'phase3/librelane_switch.json').write_text('{"pdk":"otherPDK"}')
+    R.real_entry('IC', 'default', project)
+    measured = []
+    def stop_native_probe(image, current):
+        measured.append((image, current))
+        return 'UNMEASURED:source-only-control', {}, ['SOURCE_ONLY_NATIVE_PROBE_STOP']
+    monkeypatch.setattr(production, '_tool_and_image', stop_native_probe)
+    class Registry:
+        def __init__(self):
+            self.arms = []
+        def register(self, adapter):
+            self.arms.append(adapter)
+    registry = Registry()
+    observed = {}
+    class Execution:
+        request = staticmethod(policy.request)
+        @staticmethod
+        def bootstrap(current, *, parameters):
+            observed.update(parameters)
+            production.register_synthesis_adapter(registry, project=current,
+                                                   parameters=parameters)
+            return registry
+    assert design._bootstrap_execution_policy(
+        Execution, project, top='top', container='unused', ic_class=None,
+        skip_analog=True) is registry
+    assert len(registry.arms) == 1
+    assert not registry.arms[0].available
+    if damage:
+        assert 'pdk' not in observed
+        code = 'LL_PHASE2_PDK_UNDECLARED' if damage == 'missing' else 'LL_PHASE2_PDK_CONFLICT'
+        assert observed['pdk_refusal'].startswith(code)
+        assert code in registry.arms[0].availability_reason
+        assert measured == []
+    else:
+        assert observed['pdk'] == production._pdk_dict(pdk)
+        assert observed['pdk_name'] == pdk.name
+        assert measured == [('img', project)]
+        assert 'SOURCE_ONLY_NATIVE_PROBE_STOP' in registry.arms[0].availability_reason
+    assert native_calls == []

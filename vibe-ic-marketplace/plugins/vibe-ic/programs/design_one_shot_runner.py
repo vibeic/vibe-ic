@@ -18194,14 +18194,16 @@ def _phase2_pdk_config(project: Path):
 def _bootstrap_execution_policy(execution, project: Path, *, top: str,
                                 container: str, ic_class: Optional[str],
                                 skip_analog: bool):
-    """Give Ultra the normal runner's JSON-bound PDK without changing Default."""
+    """Give issued Default and Ultra the normal runner's JSON-bound PDK."""
     parameters = {
         "top": top,
         "container": container,
         "ic_class": ic_class,
         "skip_analog": bool(skip_analog),
     }
-    if execution.request()["mode"] == "ultra":
+    from execution_policy import _CAPABILITY_FD_ENV
+    if (execution.request()["mode"] == "ultra" or
+            _CAPABILITY_FD_ENV in os.environ):
         import librelane_contract as _ll
         try:
             pdk = _phase2_pdk_config(project)
@@ -18210,8 +18212,8 @@ def _bootstrap_execution_policy(execution, project: Path, *, top: str,
             # unavailable external adapter carrying this exact refusal.
             parameters["pdk_refusal"] = str(exc)
         else:
-            # The typed PdkConfig is a runner-local resolution result.  Ultra
-            # carries the same values through Context.objective, whose
+            # The typed PdkConfig is a runner-local resolution result. Both
+            # issued modes carry the same values through Context.objective, whose
             # acceptance digest is canonical JSON.  Reuse the Step-9 adapter's
             # existing conversion rather than placing a dataclass in every
             # later frontend objective (which fails closed at json.dumps).

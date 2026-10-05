@@ -1750,12 +1750,15 @@ def main() -> int:
                         "`vibe_ic_one_shot_runner` when a delivered answer is "
                         "on disk and the track's own record says nobody has "
                         "read it.")
+    p.add_argument("--skip-analog", action="store_true",
+                   help="Preserve the parent invocation's explicit analog routing choice.")
     import execution_policy as _execution
     _execution.add_arguments(p)
     args, extras = p.parse_known_args()
     _execution.configure(args)
     project = args.project.resolve()
-    _execution.bootstrap(project, parameters={"ic_name": args.ic_name})
+    _execution.bootstrap(project, parameters={"ic_name": args.ic_name,
+        "skip_analog": bool(args.skip_analog)}, phase1_only=True)
     if not project.is_dir():
         print(f"ERROR: not a directory: {project}", file=sys.stderr)
         return 2

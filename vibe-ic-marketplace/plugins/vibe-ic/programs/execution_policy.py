@@ -439,7 +439,8 @@ def _register_analog_adapters(registry, project: Path, source_sha: str,
         registry, project=project, source_sha=source_sha)
 
 
-def bootstrap(project: Path, *, parameters: dict | None = None):
+def bootstrap(project: Path, *, parameters: dict | None = None,
+              phase1_only: bool = False):
     global _ordinary_runtime
     value = request()
     # Keep imported/default helpers observationally inert, but let the live
@@ -459,7 +460,8 @@ def bootstrap(project: Path, *, parameters: dict | None = None):
     route = issued['route']
     if route['project'] != str(project):
         raise Refusal('ORDINARY_PROJECT_UNBOUND', str(project))
-    identity = (str(project), value['request_digest'], route['source_sha'])
+    identity = (str(project), value['request_digest'], route['source_sha'],
+                bool(phase1_only))
     if _ordinary_runtime is not None:
         if _ordinary_runtime['identity'] != identity:
             raise Refusal('ORDINARY_RUNTIME_REENTRY', str(project))
@@ -476,21 +478,26 @@ def bootstrap(project: Path, *, parameters: dict | None = None):
     snapshot = SourceSnapshot(em._REPO_ROOT, route['source_sha'])
     with using(snapshot):
         registry = em.Registry(snapshot=snapshot)
-        register_factories(registry, project=project, parameters=params)
-        common = dict(source_sha=route['source_sha'], path=route['ic_ip_path'],
-                      available=True, route_receipt=route, declaration=declaration)
-        register_backend_adapters(registry, **common, execution_mode=value['mode'], parameters={
-            k: v for k, v in params.items() if k in BACKEND_PARAMETER_DEFAULTS})
-        register_release_adapters(registry, **common, parameters={
-            k: v for k, v in params.items() if k in RELEASE_PARAMETER_DEFAULTS})
-        # ``--skip-analog`` is the canonical front door's explicit routing
-        # decision for a digital-only invocation.  Do not make that route
-        # manufacture an empty Phase-1 declaration merely so the Ultra
-        # Registry can be constructed.
-        _register_analog_adapters(registry, project, route['source_sha'], params)
-        from execution_adapters_mixed import register_mixed_adapters
-        register_mixed_adapters(registry, source_sha=route['source_sha'],
-            path=route['ic_ip_path'], project=project, parameters=params)
+        # Phase 1 owns only the route/declaration producer. Its later products
+        # cannot be prerequisites for entering that producer. Subsequent phase
+        # processes build their complete registry after those products exist.
+        register_factories(registry, project=project, parameters=params,
+                           step_ids=('0.5ic',) if phase1_only else None)
+        if not phase1_only:
+            common = dict(source_sha=route['source_sha'], path=route['ic_ip_path'],
+                          available=True, route_receipt=route, declaration=declaration)
+            register_backend_adapters(registry, **common, execution_mode=value['mode'], parameters={
+                k: v for k, v in params.items() if k in BACKEND_PARAMETER_DEFAULTS})
+            register_release_adapters(registry, **common, parameters={
+                k: v for k, v in params.items() if k in RELEASE_PARAMETER_DEFAULTS})
+            # ``--skip-analog`` is the canonical front door's explicit routing
+            # decision for a digital-only invocation.  Do not make that route
+            # manufacture an empty Phase-1 declaration merely so the Ultra
+            # Registry can be constructed.
+            _register_analog_adapters(registry, project, route['source_sha'], params)
+            from execution_adapters_mixed import register_mixed_adapters
+            register_mixed_adapters(registry, source_sha=route['source_sha'],
+                path=route['ic_ip_path'], project=project, parameters=params)
         controller = em.Controller(registry, Budget(value['cpus'], value['ram_mb'],
                              workers=value['workers'], licenses=value['licenses']))
     _ordinary_runtime = dict(identity=identity, project=project, policy=value,
