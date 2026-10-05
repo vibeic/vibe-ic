@@ -442,7 +442,11 @@ def _register_analog_adapters(registry, project: Path, source_sha: str,
 def bootstrap(project: Path, *, parameters: dict | None = None):
     global _ordinary_runtime
     value = request()
-    if value['mode'] == 'default':
+    # Keep imported/default helpers observationally inert, but let the live
+    # canonical launcher bootstrap the same Controller for its program-default
+    # request.  The capability FD is the authority boundary; a caller-authored
+    # default environment must never construct a production registry.
+    if value['mode'] == 'default' and _CAPABILITY_FD_ENV not in os.environ:
         return None
     from execution_authority import consume
     import execution_modes as em
@@ -726,7 +730,11 @@ def dispatch_fixed_step(project: Path, step_id: str, *, inputs=None,
         run, result = runtime['runs'][step_id]
     else:
         run = runtime['project'] / 'reports/execution' / runtime['policy']['request_receipt']['invocation_id'] / step_id
-        result = controller.run(context, run, 'ultra-mode')
+        mode_label = runtime['policy'].get('mode_label')
+        if mode_label is None:
+            mode_label = ('ultra-mode' if runtime['policy'].get('mode') == 'ultra'
+                          else 'default-mode')
+        result = controller.run(context, run, mode_label)
         runtime['contexts'][step_id] = context
         runtime['bindings'][step_id] = context.binding()
         runtime['runs'][step_id] = (run, result)

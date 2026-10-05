@@ -32,6 +32,36 @@ def test_default_bootstrap_is_observationally_inert(tmp_path, monkeypatch):
     assert dict(__import__('os').environ)==before
 
 
+def test_canonical_default_bootstrap_reaches_producer_receipt_and_consumer(
+        tmp_path):
+    project = tmp_path / 'project'
+    project.mkdir()
+    issued = R.real_entry('IC', 'default', project)
+    constraints = project / 'phase2/stage2/constraints'
+    constraints.mkdir(parents=True)
+    (constraints / 'top.sdc').write_text(
+        'create_clock -period 10 [get_ports clk]\n'
+        'set_input_delay 1 -clock clk [all_inputs]\n'
+        'set_output_delay 1 -clock clk [all_outputs]\n')
+    (constraints / 'pvt_matrix.json').write_text('{"corners":[]}\n')
+    l8 = project / 'phase1/generated_docs/L8_TIMING_WAVEFORM.json'
+    l8.parent.mkdir(parents=True)
+    l8.write_text('{"clocks":{"clk":{"period_ns":10}}}\n')
+
+    runtime = policy.bootstrap(project, parameters={'skip_analog': True})
+    assert runtime is not None
+    assert runtime['policy']['mode_label'] == 'default-mode'
+    result = policy.dispatch_fixed_step(project, '8')
+    assert result['status'] == 'ADOPTED', result
+    run = Path(result['run_root'])
+    receipt = json.loads((run / 'frontend_8/receipt.json').read_text())
+    assert receipt['status'] == 'ELIGIBLE'
+    assert any(item['component'] == 'frontend_worker'
+               for item in receipt['processes'])
+    assert json.loads((run / 'adoption.json').read_text())['status'] == 'ADOPTED'
+    assert (project / 'reports/phase2/sdc_check.json').is_file()
+
+
 def test_ordinary_ultra_reuses_controller_and_refuses_unmeasured_selection(tmp_path):
     project=tmp_path/'project';project.mkdir()
     issued=R.real_entry('IC','ultra',project)
