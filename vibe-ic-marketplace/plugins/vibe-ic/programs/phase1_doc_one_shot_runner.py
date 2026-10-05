@@ -64073,6 +64073,15 @@ def _v0_3_7_classify_phase1_exit(cov_gate_failed: bool, strict: bool,
     }
 
 
+def _classify_semantic_gate_rc(gate_name: str, returncode: int) -> str:
+    """Classify the terminal result that the Phase-1 gate loop must honor."""
+    if returncode == 1:
+        return "FAIL"
+    if gate_name == "l_doc_generator_stamp" and returncode == 2:
+        return "UNDETERMINED"
+    return ""
+
+
 def main() -> int:
     p = argparse.ArgumentParser(
         description=__doc__.split("\n\n")[0]
@@ -68376,6 +68385,7 @@ def main() -> int:
          "phase1/l_doc_generator_stamp.json"),
     )
     layer_gate_failures: List[str] = []
+    layer_gate_undetermined: List[str] = []
     for _gate_name, _rel_report in _SEMANTIC_LAYER_GATES:
         _gate_path = Path(__file__).resolve().parent / f"{_gate_name}.py"
         if not _gate_path.is_file():
@@ -68400,10 +68410,18 @@ def main() -> int:
             continue
         _out = (_cp.stdout or _cp.stderr or "").strip().splitlines()
         print(f"      {_gate_name}: {_out[0] if _out else '(no output)'}")
-        if _cp.returncode == 1:
+        _gate_outcome = _classify_semantic_gate_rc(
+            _gate_name, _cp.returncode)
+        if _gate_outcome == "FAIL":
             layer_gate_failures.append(_gate_name)
             for _line in _out[1:6]:
                 print(f"        {_line}", file=sys.stderr)
+        elif _gate_outcome == "UNDETERMINED":
+            # VACUOUS is not a successful stamp gate: the project handoff
+            # supplied no L-document population, so this Phase-1 result is
+            # undetermined and must stop the front door before the expert
+            # track or any downstream phase consumes it.
+            layer_gate_undetermined.append(_gate_name)
 
     # ------------------------------------------------------------------
     # ADVISORY POST-CHECKS — these REPORT and CONTINUE. They are kept out
@@ -68551,6 +68569,12 @@ def main() -> int:
               "extraction_gap)")
         _drop_v0_3_7_exit_reason(project)
         return 1
+    if layer_gate_undetermined:
+        print("UNDETERMINED: semantic layer gate(s) had no measurable "
+              "population: " + ", ".join(layer_gate_undetermined) +
+              " — Phase 1 is blocked", file=sys.stderr)
+        _drop_v0_3_7_exit_reason(project)
+        return 2
     if cov_gate_failed:
         # layergate-2: this flag is now raised by the l3 opcode-name
         # coverage gate OR by any of the L4/L5/L6 semantic layer gates

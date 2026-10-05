@@ -190,7 +190,9 @@ def iter_l_docs(root: Path) -> Iterable[Path]:
     document, so none of them should be walked.
     """
     seen: set = set()
-    for d in sorted(root.rglob(_L_DOC_DIR)):
+    directories = ([root] if root.name == _L_DOC_DIR
+                   else sorted(root.rglob(_L_DOC_DIR)))
+    for d in directories:
         if not d.is_dir():
             continue
         if any(part in _SKIP_DIR_NAMES for part in d.parts):

@@ -491,6 +491,90 @@ def exceeds(v: Verdict, max_minor_drift: Optional[int]) -> bool:
 # ─────────────────────────────────────────────────────────────────────
 # Scanning a tree
 # ─────────────────────────────────────────────────────────────────────
+def _canonical_scan_root(root: Path) -> Optional[Path]:
+    """Return a project's canonical handoff, or ``None`` for a corpus.
+
+    The presence of ``phase1/`` is the project marker even when its generated
+    handoff is missing.  That distinction is what keeps an empty project from
+    borrowing a nested fixture during a corpus-style recursive scan.  The
+    legacy root-level ``generated_docs/`` layout is still a project handoff,
+    for compatibility with older sibling contracts.
+    """
+    root = Path(root)
+    if root.name == "generated_docs":
+        return root
+    if root.name == "phase1":
+        return root / "generated_docs"
+    phase1 = root / "phase1"
+    phase1_handoff = phase1 / "generated_docs"
+    legacy = root / "generated_docs"
+    # A populated canonical handoff wins.  An empty phase1/ directory is only
+    # a marker; when it has no valid handoff, preserve the older root-level
+    # layout before declaring the canonical phase1 path VACUOUS.
+    if phase1_handoff.is_dir() and not phase1_handoff.is_symlink():
+        return phase1_handoff
+    if legacy.is_dir() and not legacy.is_symlink():
+        return legacy
+    if phase1.is_dir() or phase1.is_symlink():
+        return phase1_handoff
+    # Keep a legacy symlink in the canonical branch so the direct scanner can
+    # fail closed; it must never fall through to recursive corpus discovery.
+    if legacy.is_symlink():
+        return legacy
+    return None
+
+
+def _scan_root(root: Path) -> Path:
+    """Choose the L-doc tree for a project or a published corpus.
+
+    A canonical project owns ``phase1/generated_docs``.  Keep the scan inside
+    that Phase-1 bucket when the caller gives us the project root; a project
+    may also contain a nested source checkout whose fixtures are unrelated to
+    the current run.  A root without a Phase-1 bucket is treated as a corpus
+    root and retains the recursive ``generated_docs`` census.  If a project
+    has a Phase-1 directory but no generated handoff, returning that empty
+    bucket makes the result VACUOUS instead of silently borrowing a nested
+    fixture and claiming a verdict for the wrong artefact.
+    """
+    root = Path(root)
+    return _canonical_scan_root(root) or root
+
+
+def _has_symlink_between(path: Path, anchor: Path) -> bool:
+    """Fail closed when a canonical handoff crosses a symlink."""
+    current = Path(path)
+    anchor = Path(anchor)
+    while True:
+        try:
+            if current.is_symlink():
+                return True
+        except OSError:
+            return True
+        if current == anchor:
+            return False
+        parent = current.parent
+        if parent == current:
+            return True
+        current = parent
+
+
+def _iter_direct_l_docs(scan_root: Path, anchor: Path) -> List[Path]:
+    """Read only direct, non-symlink L docs from a canonical handoff."""
+    if (_has_symlink_between(scan_root, anchor) or
+            not scan_root.is_dir()):
+        return []
+    try:
+        from l_doc_path_portability_check import _L_DOC_NAME_RE
+        return [p for p in sorted(scan_root.iterdir())
+                if not p.is_symlink() and p.is_file()
+                and _L_DOC_NAME_RE.match(p.name)]
+    except (OSError, ImportError):
+        # A canonical scope with an unreadable directory has no honest
+        # denominator.  Returning no paths preserves the VACUOUS/rc=2 gate
+        # rather than silently widening the scan to a corpus fallback.
+        return []
+
+
 def scan_tree(root: Path,
               max_minor_drift: Optional[int] = None,
               allow_unstamped: bool = False) -> Dict[str, Any]:
@@ -513,7 +597,12 @@ def scan_tree(root: Path,
     counts: Dict[str, int] = {}
     offending: List[Dict[str, Any]] = []
     read_n = 0
-    for p in iter_l_docs(Path(root)):
+    root = Path(root)
+    canonical = _canonical_scan_root(root)
+    scan_root = canonical or root
+    paths = (_iter_direct_l_docs(scan_root, root) if canonical is not None
+             else iter_l_docs(scan_root))
+    for p in paths:
         read_n += 1
         try:
             doc = json.loads(p.read_text(encoding="utf-8"))

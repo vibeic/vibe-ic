@@ -777,6 +777,25 @@ def _run_docs_mode(project: Path, ic_name: str,
     return int(rc) if rc is not None else 0
 
 
+def _delegated_rc_verdict(rc: int) -> str:
+    """Map a delegated Phase-1 result without laundering rc=2."""
+    if rc == 0:
+        return _V.Verdict.PASS.value
+    if rc == 2:
+        return _V.Verdict.NOT_MEASURED.value
+    return _V.Verdict.FAIL.value
+
+
+def _delegated_step_result(name: str, rc: int, duration_s: float,
+                           detail: str, *, upstream: bool = False) -> StepResult:
+    """Build a truthful row for the docs delegate and its dependent track."""
+    status = _delegated_rc_verdict(rc)
+    reason = "upstream_refused" if upstream and rc == 2 else (
+        "no_population" if rc == 2 else "")
+    return StepResult(name, status, duration_s, detail,
+                      reason_class=reason)
+
+
 # ── The second track (both input modes) ────────────────────────────
 #
 # Wired HERE, not in `phase1_doc_one_shot_runner`, for two reasons:
@@ -1813,7 +1832,9 @@ def main() -> int:
         rc = 1 if refused else int(_pf)
         rc_extract = rc
         pass1_rc = max(rc_extract, rc_route)
-        pass1_verdict = "FAIL" if pass1_rc else "PASS"
+        pass1_verdict = ("FAIL" if rc_route or rc_extract == 1 else
+                         ("NOT_MEASURED" if rc_extract == 2 else "PASS"))
+        rc_track = 0
         if refused:
             # The second track parses the L-docs D1 was supposed to write. D1
             # was never called, so there is nothing for it to examine — running
@@ -1821,6 +1842,12 @@ def main() -> int:
             # one. RECORDED in the summary below rather than skipped silently.
             second_track = ("not run — D1 was REFUSED, so no L-doc exists for "
                             "the expert track to parse")
+        elif rc_extract == 2:
+            # A VACUOUS generator-stamp handoff is an undetermined D1 result;
+            # parsing the absent population would manufacture a second error.
+            rc_track = 2
+            second_track = ("not run — D1 was UNDETERMINED, so no L-doc "
+                            "population exists for the expert track")
         else:
             rc_track = run_phase1_second_track(project, 0)
             rc = max(rc_extract, rc_track, rc_route)
@@ -1830,7 +1857,7 @@ def main() -> int:
         reports = project / "reports"
         reports.mkdir(parents=True, exist_ok=True)
         verdict = (_aggregate_verdict([_pf]) if refused
-                   else ("PASS" if rc == 0 else "FAIL"))
+                   else ("FAIL" if rc_route else _delegated_rc_verdict(rc)))
         summary = {
             "phase": 1,
             "mode": "docs",
@@ -1868,15 +1895,14 @@ def main() -> int:
             summary["preflight_ledger"] = _spf.LEDGER_REL
         else:
             summary["steps"] = [
-                asdict(StepResult(
-                    D1_STEP_NAME, "PASS" if rc_extract == 0 else "FAIL", _t_docs,
+                asdict(_delegated_step_result(
+                    D1_STEP_NAME, rc_extract, _t_docs,
                     f"delegated to phase1_doc_one_shot_runner (rc={rc_extract}); "
                     f"L documents under "
                     f"{_pl.generated_docs_dir(project).name}/")),
-                asdict(StepResult(
-                    "phase1_expert_parse_track",
-                    "PASS" if rc_track == 0 else "FAIL", 0.0,
-                    str(second_track)[:400])),
+                asdict(_delegated_step_result(
+                    "phase1_expert_parse_track", rc_track, 0.0,
+                    str(second_track)[:400], upstream=rc_extract == 2)),
             ]
         _ai_judgement.demote_runner_rows(summary["steps"], summary["ai_judgements"])
         # Per-step output view — see the prompt-mode call below. BOTH exits of

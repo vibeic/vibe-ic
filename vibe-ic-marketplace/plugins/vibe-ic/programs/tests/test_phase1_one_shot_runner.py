@@ -37,6 +37,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import _progress_run as _pr  # noqa: E402
 import _path_layout as _pl  # noqa: E402  R-0915-151
@@ -265,3 +267,45 @@ def test_input_docs_directory_changes_branch(tmp_path):
         assert body.get("mode") == "docs"
         assert body.get("delegated_to")
         assert body.get("verdict") in ("NOT_MEASURED", "FAIL", "SKIP")
+
+
+def test_docs_delegate_rc2_is_not_measured_and_blocks_downstream(
+        tmp_path, monkeypatch):
+    """A VACUOUS delegated gate result remains blocking at the front door."""
+    import phase1_one_shot_runner as runner
+
+    project = tmp_path / "proj"
+    (project / "input" / "docs").mkdir(parents=True)
+    (project / "input" / "docs" / "spec.md").write_text("design input\n")
+
+    monkeypatch.setattr(runner, "_run_step_0_5ic",
+                        lambda project, pdk=None: 0)
+    monkeypatch.setattr(runner, "_detect_input_mode", lambda project: "docs")
+    monkeypatch.setattr(runner, "_run_docs_mode", lambda *args, **kwargs: 2)
+    monkeypatch.setattr(
+        runner, "run_phase1_second_track",
+        lambda *args, **kwargs: pytest.fail(
+            "the expert track must not run after an undetermined D1"),
+    )
+
+    old_argv = sys.argv[:]
+    sys.argv = [str(PROG), str(project), "--mode", "docs",
+                "--ic-name", "TST_CHIP", "--route", "ic"]
+    try:
+        rc = runner.main()
+    finally:
+        sys.argv = old_argv
+
+    assert rc == 2
+    report = json.loads(_phase1_report(project).read_text())
+    assert report["delegated_rc"] == 2
+    assert report["verdict"] == "NOT_MEASURED"
+    assert report["pass1"] == {
+        "verdict": "NOT_MEASURED",
+        "rc": 2,
+        "source": "extraction and route before expert track",
+    }
+    assert report["steps"][0]["status"] == "NOT_MEASURED"
+    assert report["steps"][0]["reason_class"] == "no_population"
+    assert report["steps"][1]["status"] == "NOT_MEASURED"
+    assert report["steps"][1]["reason_class"] == "upstream_refused"

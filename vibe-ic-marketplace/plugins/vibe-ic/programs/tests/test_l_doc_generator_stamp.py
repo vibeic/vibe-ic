@@ -54,6 +54,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -684,6 +685,19 @@ def test_gate_fails_on_an_unstamped_corpus_and_passes_on_a_stamped_one(
     assert "CURRENT=1" in cp.stdout
 
 
+def test_gate_accepts_direct_generated_docs_root(tmp_path):
+    """The canonical handoff directory is also a valid CLI root."""
+    generated = tmp_path / "generated_docs"
+    generated.mkdir(parents=True)
+    g.dump(generated / "L1_DATASHEET.json", {"ic_name": "widget"},
+           "test.emitter")
+    cp = subprocess.run(
+        [sys.executable, str(_PROGRAMS / "l_doc_generator_stamp.py"),
+         str(generated)], capture_output=True, text=True)
+    assert cp.returncode == 0, cp.stdout
+    assert "CURRENT=1" in cp.stdout
+
+
 def test_gate_over_an_empty_root_is_vacuous_not_a_pass(tmp_path):
     """A green over nothing is indistinguishable from a wrong root."""
     cp = subprocess.run(
@@ -691,6 +705,193 @@ def test_gate_over_an_empty_root_is_vacuous_not_a_pass(tmp_path):
          str(tmp_path)], capture_output=True, text=True)
     assert cp.returncode == 2
     assert "VACUOUS" in cp.stdout
+
+
+def test_project_scan_ignores_nested_source_checkout(tmp_path):
+    """A project gate reads its own Phase-1 handoff only.
+
+    The project may carry a source checkout for reproducibility. Its checked-in
+    fixtures are inputs to the test harness, not documents emitted by this
+    project, so they must not change the gate denominator or verdict.
+    """
+    from _hostpaths import require_repo
+
+    project = tmp_path / "design"
+    generated = project / "phase1" / "generated_docs"
+    generated.mkdir(parents=True)
+    g.dump(generated / "L1_DATASHEET.json", {"ic_name": "widget"},
+           "test.emitter")
+
+    fixture_root = require_repo(
+        "vibe-ic-marketplace", "plugins", "vibe-ic", "programs",
+        "tests", "fixtures")
+    fixture = next(fixture_root.rglob("phase1/generated_docs/L*.json"))
+    nested = project / "source" / "vibe-ic-marketplace" / "plugins" \
+        / "vibe-ic" / "programs" / "tests" / "fixtures" \
+        / fixture.relative_to(fixture_root)
+    nested.parent.mkdir(parents=True)
+    shutil.copy2(fixture, nested)
+    phase1_fixture = project / "phase1" / "input-derived" \
+        / "generated_docs" / "L2_FRS.json"
+    phase1_fixture.parent.mkdir(parents=True)
+    phase1_fixture.write_text(json.dumps({"ic_name": "fixture"}))
+
+    result = g.scan_tree(project)
+    assert result["documents_read"] == 1
+    assert result["counts"] == {"CURRENT": 1}
+    assert result["offending"] == []
+    assert result["verdict"] == "PASS"
+
+
+def test_project_scope_with_missing_handoff_fails_closed(tmp_path):
+    """A malformed project does not fall back to nested fixture documents."""
+    project = tmp_path / "design"
+    (project / "phase1").mkdir(parents=True)
+    nested = project / "source" / "fixture" / "phase1" \
+        / "generated_docs" / "L1_DATASHEET.json"
+    nested.parent.mkdir(parents=True)
+    nested.write_text(json.dumps({"ic_name": "fixture"}))
+
+    result = g.scan_tree(project)
+    assert result["documents_read"] == 0
+    assert result["offending"] == []
+    assert result["verdict"] == "VACUOUS"
+
+
+def test_project_scan_ignores_nested_archive_generated_docs(tmp_path):
+    """The canonical project handoff is direct-only, even under phase1/."""
+    project = tmp_path / "design"
+    generated = project / "phase1" / "generated_docs"
+    generated.mkdir(parents=True)
+    g.dump(generated / "L1_DATASHEET.json", {"ic_name": "widget"},
+           "test.emitter")
+    nested = (project / "phase1" / "archive" / "source" / "phase1" /
+              "generated_docs")
+    nested.mkdir(parents=True)
+    nested.joinpath("L2_FRS.json").write_text(
+        json.dumps({"ic_name": "fixture"}))
+
+    result = g.scan_tree(project)
+    assert result["documents_read"] == 1
+    assert result["counts"] == {"CURRENT": 1}
+    assert result["verdict"] == "PASS"
+
+
+def test_legacy_project_generated_docs_is_direct_only(tmp_path):
+    """Older project roots keep their legal generated_docs handoff."""
+    project = tmp_path / "design"
+    generated = project / "generated_docs"
+    generated.mkdir(parents=True)
+    g.dump(generated / "L1_DATASHEET.json", {"ic_name": "widget"},
+           "test.emitter")
+    nested = project / "source" / "fixture" / "generated_docs"
+    nested.mkdir(parents=True)
+    nested.joinpath("L2_FRS.json").write_text(
+        json.dumps({"ic_name": "fixture"}))
+
+    result = g.scan_tree(project)
+    assert result["documents_read"] == 1
+    assert result["counts"] == {"CURRENT": 1}
+    assert result["verdict"] == "PASS"
+
+
+def test_empty_phase1_prefers_valid_legacy_handoff(tmp_path):
+    """An empty phase1 marker does not hide a valid legacy handoff."""
+    project = tmp_path / "design"
+    (project / "phase1").mkdir(parents=True)
+    legacy = project / "generated_docs"
+    legacy.mkdir(parents=True)
+    g.dump(legacy / "L1_DATASHEET.json", {"ic_name": "legacy"},
+           "test.emitter")
+
+    assert g._canonical_scan_root(project) == legacy
+    result = g.scan_tree(project)
+    assert result["documents_read"] == 1
+    assert result["counts"] == {"CURRENT": 1}
+    assert result["verdict"] == "PASS"
+
+
+def test_direct_generated_docs_root_does_not_recurse_into_siblings(tmp_path):
+    """A caller naming generated_docs gets exactly that handoff."""
+    generated = tmp_path / "generated_docs"
+    generated.mkdir(parents=True)
+    g.dump(generated / "L1_DATASHEET.json", {"ic_name": "widget"},
+           "test.emitter")
+    nested = generated / "archive" / "generated_docs"
+    nested.mkdir(parents=True)
+    nested.joinpath("L2_FRS.json").write_text(
+        json.dumps({"ic_name": "fixture"}))
+
+    result = g.scan_tree(generated)
+    assert result["documents_read"] == 1
+    assert result["counts"] == {"CURRENT": 1}
+    assert result["verdict"] == "PASS"
+
+
+def test_symlinked_canonical_handoff_fails_closed(tmp_path):
+    """A project cannot silently import L docs from an external symlink."""
+    project = tmp_path / "design"
+    (project / "phase1").mkdir(parents=True)
+    external = tmp_path / "external" / "generated_docs"
+    external.mkdir(parents=True)
+    g.dump(external / "L1_DATASHEET.json", {"ic_name": "external"},
+           "test.emitter")
+    (project / "phase1" / "generated_docs").symlink_to(
+        external, target_is_directory=True)
+
+    result = g.scan_tree(project)
+    assert result["documents_read"] == 0
+    assert result["verdict"] == "VACUOUS"
+
+    cp = subprocess.run(
+        [sys.executable, str(_PROGRAMS / "l_doc_generator_stamp.py"),
+         str(project)], capture_output=True, text=True)
+    assert cp.returncode == 2, cp.stdout
+    assert "VACUOUS" in cp.stdout
+
+
+def test_empty_canonical_phase1_handoff_is_vacuous_at_cli(tmp_path):
+    """An empty project handoff cannot fall through to nested fixtures."""
+    project = tmp_path / "design"
+    (project / "phase1").mkdir(parents=True)
+    nested = project / "source" / "fixture" / "phase1" / "generated_docs"
+    nested.mkdir(parents=True)
+    nested.joinpath("L1_DATASHEET.json").write_text(
+        json.dumps({"ic_name": "fixture"}))
+
+    cp = subprocess.run(
+        [sys.executable, str(_PROGRAMS / "l_doc_generator_stamp.py"),
+         str(project)], capture_output=True, text=True)
+    assert cp.returncode == 2, cp.stdout
+    assert "VACUOUS" in cp.stdout
+
+
+def test_root_without_project_handoff_keeps_recursive_corpus_scan(tmp_path):
+    """Published corpus roots still census nested design handoffs."""
+    corpus = tmp_path / "corpus"
+    first = corpus / "design_a" / "generated_docs"
+    second = corpus / "design_b" / "generated_docs"
+    first.mkdir(parents=True)
+    second.mkdir(parents=True)
+    g.dump(first / "L1_DATASHEET.json", {"ic_name": "a"}, "test.emitter")
+    g.dump(second / "L1_DATASHEET.json", {"ic_name": "b"}, "test.emitter")
+
+    result = g.scan_tree(corpus)
+    assert result["documents_read"] == 2
+    assert result["counts"] == {"CURRENT": 2}
+    assert result["verdict"] == "PASS"
+
+
+def test_phase1_doc_runner_blocks_stamp_rc2_as_undetermined():
+    """The canonical Phase-1 gate loop must not discard rc=2."""
+    import phase1_doc_one_shot_runner as runner
+
+    assert runner._classify_semantic_gate_rc(
+        "l_doc_generator_stamp", 2) == "UNDETERMINED"
+    assert runner._classify_semantic_gate_rc(
+        "l_doc_generator_stamp", 1) == "FAIL"
+    assert runner._classify_semantic_gate_rc(
+        "l1_pin_bus_width_actionable_check", 2) == ""
 
 
 def test_emitter_is_derived_from_the_live_frame_not_a_literal(tmp_path):
