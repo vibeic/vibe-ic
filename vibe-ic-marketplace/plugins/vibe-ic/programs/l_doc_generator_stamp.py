@@ -508,12 +508,13 @@ def _canonical_scan_root(root: Path) -> Optional[Path]:
     phase1 = root / "phase1"
     phase1_handoff = phase1 / "generated_docs"
     legacy = root / "generated_docs"
-    # A populated canonical handoff wins.  An empty phase1/ directory is only
-    # a marker; when it has no valid handoff, preserve the older root-level
-    # layout before declaring the canonical phase1 path VACUOUS.
-    if phase1_handoff.is_dir() and not phase1_handoff.is_symlink():
+    # Prefer a handoff that actually contains direct L documents.  An empty
+    # phase1/generated_docs/ marker must not hide a valid legacy root-level
+    # handoff; if neither handoff has a document, keep the phase1 marker so the
+    # caller returns VACUOUS instead of widening into a nested fixture corpus.
+    if _has_direct_l_docs(phase1_handoff, root):
         return phase1_handoff
-    if legacy.is_dir() and not legacy.is_symlink():
+    if _has_direct_l_docs(legacy, root):
         return legacy
     if phase1.is_dir() or phase1.is_symlink():
         return phase1_handoff
@@ -556,6 +557,20 @@ def _has_symlink_between(path: Path, anchor: Path) -> bool:
         if parent == current:
             return True
         current = parent
+
+
+def _has_direct_l_docs(path: Path, anchor: Path) -> bool:
+    """Whether *path* is a readable direct L-document handoff."""
+    if (not path.is_dir() or path.is_symlink() or
+            _has_symlink_between(path, anchor)):
+        return False
+    try:
+        from l_doc_path_portability_check import _L_DOC_NAME_RE
+        return any(not child.is_symlink() and child.is_file() and
+                   _L_DOC_NAME_RE.match(child.name)
+                   for child in path.iterdir())
+    except (OSError, ImportError):
+        return False
 
 
 def _iter_direct_l_docs(scan_root: Path, anchor: Path) -> List[Path]:

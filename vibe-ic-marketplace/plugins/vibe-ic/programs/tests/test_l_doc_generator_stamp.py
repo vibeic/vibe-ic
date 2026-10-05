@@ -811,6 +811,22 @@ def test_empty_phase1_prefers_valid_legacy_handoff(tmp_path):
     assert result["verdict"] == "PASS"
 
 
+def test_empty_phase1_generated_docs_prefers_valid_legacy_handoff(tmp_path):
+    """An empty canonical handoff directory does not hide legacy docs."""
+    project = tmp_path / "design"
+    (project / "phase1" / "generated_docs").mkdir(parents=True)
+    legacy = project / "generated_docs"
+    legacy.mkdir(parents=True)
+    g.dump(legacy / "L1_DATASHEET.json", {"ic_name": "legacy"},
+           "test.emitter")
+
+    assert g._canonical_scan_root(project) == legacy
+    result = g.scan_tree(project)
+    assert result["documents_read"] == 1
+    assert result["counts"] == {"CURRENT": 1}
+    assert result["verdict"] == "PASS"
+
+
 def test_direct_generated_docs_root_does_not_recurse_into_siblings(tmp_path):
     """A caller naming generated_docs gets exactly that handoff."""
     generated = tmp_path / "generated_docs"
