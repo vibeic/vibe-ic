@@ -18129,6 +18129,46 @@ def _bootstrap_execution_policy(execution, project: Path, *, top: str,
     return execution.bootstrap(project, parameters=parameters)
 
 
+def _receipt_declared_top(project: Path, defined_modules: Sequence[str]) -> Optional[str]:
+    """Return a producer-declared supplied top only when it is staged.
+
+    The supplied-RTL declaration is the producer receipt for the top consumed by
+    Phase 2.  It is evidence, not a guess: a missing or stale name is ignored so
+    the existing Yosys ``chip_top`` path fails closed.
+    """
+    candidates: List[str] = []
+    for rel, key_path in (("plugin_output/declaration.json", ("supplied_rtl", "top", "value")),
+                          ("phase1/generated_docs/L9_INTEGRATION_SPEC.json", ("top_module",))):
+        try:
+            value: Any = json.loads((Path(project) / rel).read_text(errors="replace"))
+            for key in key_path:
+                if not isinstance(value, dict):
+                    value = None
+                    break
+                value = value.get(key)
+            if isinstance(value, str) and value.strip():
+                candidates.append(value.strip())
+        except (OSError, ValueError, TypeError):
+            continue
+    defined = set(defined_modules)
+    for candidate in candidates:
+        if candidate in defined:
+            return candidate
+    return None
+
+
+def _phase2_synth_top(project: Path, requested_top: str) -> str:
+    """Bind the default request to a verified producer-declared top.
+
+    A real ``chip_top`` remains authoritative.  Only an absent default can be
+    replaced, and only by a name present in the exact staged source set.
+    """
+    defined = _v661_rtl_module_names(Path(project))
+    if requested_top != "chip_top" or requested_top in set(defined):
+        return requested_top
+    return _receipt_declared_top(project, defined) or requested_top
+
+
 def step_yosys_synth(project: Path, top_name: str = "chip_top",
                      container: str = _pin.default_container_name(),
                      ic_class: Optional[str] = None) -> StepResult:
@@ -18193,6 +18233,12 @@ def step_yosys_synth(project: Path, top_name: str = "chip_top",
         if _m["v"] is not None:
             rtl_files.append(_emit_hardmacro_blackbox_stub(
                 _m["v"], _m["name"], synth_dir / "_hardmacro_bb"))
+    # Bind the default request to the supplied-RTL producer receipt before
+    # applying the existing ASIC/waiver precedence.  A missing receipt or a
+    # receipt naming a module absent from the staged source set leaves the
+    # request unchanged, so Yosys still returns the honest invalid-top error.
+    top_name = _phase2_synth_top(project, top_name)
+
     # v1.6.191 (#78 P0) — prefer ASIC-core top when both an FPGA
     # wrapper (`chip_top`) and an ASIC core (`chip_top_asic`) are
     # present in rtl/. The FPGA wrapper has tristate I/O whose
