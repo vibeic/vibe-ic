@@ -681,6 +681,38 @@ def _wait_for_choice(context, run: Path, result: dict, response: Path,
         time.sleep(min(0.25, remaining))
 
 
+def _prepare_step9(runtime: dict, parameters: dict) -> None:
+    """Bind current producer outputs before the fixed Controller creates a plan."""
+    import execution_modes as em
+    import execution_production as production
+    from execution_source_snapshot import SourceSnapshot, using
+    project = runtime['project']
+    if (type(runtime['controller']) is not em.Controller or
+            runtime['controller'].registry is not runtime['registry']):
+        raise em.Refusal('PRODUCTION_CHILD_SCOPE_UNBOUND', 'ordinary live Controller required')
+    params = dict(runtime['parameters'], **parameters)
+    # A bootstrap resolver refusal cannot be erased by a later caller value.
+    if runtime['parameters'].get('pdk_refusal'):
+        params['pdk_refusal'] = runtime['parameters']['pdk_refusal']
+    identity = {key: params.get(key) for key in ('top', 'container', 'period_relax',
+                                                'declaration', 'pdk_refusal')}
+    identity['pdk'] = production._pdk_dict(params.get('pdk'))
+    if 'step9_dispatch_parameters' in runtime:
+        if identity != runtime['step9_dispatch_parameters']:
+            raise em.Refusal('STEP9_DISPATCH_PARAMETERS_CHANGED', '9')
+        production.current_step9_input_files(project)
+        return
+    if '9' in runtime['contexts'] or '9' in runtime['runs']:
+        raise em.Refusal('STEP9_BINDING_CLOSED', '9')
+    snapshot = SourceSnapshot(em._REPO_ROOT, runtime['route']['source_sha'])
+    with using(snapshot):
+        prepared = em.Registry(snapshot=snapshot)
+        production.register_synthesis_adapter(prepared, project=project, parameters=params)
+        prepared.finalize()
+    runtime['registry'].bind_step9(prepared)
+    runtime['step9_dispatch_parameters'] = identity
+
+
 def dispatch_fixed_step(project: Path, step_id: str, *, inputs=None,
                         parameters=None, choice=None) -> dict | None:
     """Dispatch one caller-selected canonical row; gates/adoption remain Core's.
@@ -695,6 +727,8 @@ def dispatch_fixed_step(project: Path, step_id: str, *, inputs=None,
     runtime = _ordinary_runtime
     if Path(project).resolve() != runtime['project']:
         raise Refusal('ORDINARY_PROJECT_UNBOUND', str(project))
+    if step_id == '9':
+        _prepare_step9(runtime, dict(parameters or {}))
     controller = runtime['controller']
     adapters = runtime['registry'].adapters(step_id)
     if not adapters:

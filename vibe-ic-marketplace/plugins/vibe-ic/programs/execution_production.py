@@ -894,38 +894,6 @@ def register_synthesis_adapter(registry: em.Registry, *, project: Path | None = 
         "phase3/librelane_switch.json")))
 
 
-def prepare_synthesis_dispatch(runtime: dict, project: Path,
-                               parameters: Mapping[str, object]) -> None:
-    """Bind current producer outputs before the fixed Controller creates a plan."""
-    from execution_source_snapshot import SourceSnapshot, using
-    if Path(project).resolve() != runtime['project']:
-        raise em.Refusal('ORDINARY_PROJECT_UNBOUND', str(project))
-    if (type(runtime['controller']) is not em.Controller or
-            runtime['controller'].registry is not runtime['registry']):
-        raise em.Refusal('PRODUCTION_CHILD_SCOPE_UNBOUND', 'ordinary live Controller required')
-    params = dict(runtime['parameters'], **parameters)
-    # A bootstrap resolver refusal cannot be erased by a later caller value.
-    if runtime['parameters'].get('pdk_refusal'):
-        params['pdk_refusal'] = runtime['parameters']['pdk_refusal']
-    identity = {key: params.get(key) for key in ('top', 'container', 'period_relax',
-                                                'declaration', 'pdk_refusal')}
-    identity['pdk'] = _pdk_dict(params.get('pdk'))
-    if 'step9_dispatch_parameters' in runtime:
-        if identity != runtime['step9_dispatch_parameters']:
-            raise em.Refusal('STEP9_DISPATCH_PARAMETERS_CHANGED', '9')
-        current_step9_input_files(project)
-        return
-    if '9' in runtime['contexts'] or '9' in runtime['runs']:
-        raise em.Refusal('STEP9_BINDING_CLOSED', '9')
-    snapshot = SourceSnapshot(em._REPO_ROOT, runtime['route']['source_sha'])
-    with using(snapshot):
-        prepared = em.Registry(snapshot=snapshot)
-        register_synthesis_adapter(prepared, project=project, parameters=params)
-        prepared.finalize()
-    runtime['registry'].bind_step9(prepared)
-    runtime['step9_dispatch_parameters'] = identity
-
-
 def dispatch_site(step_ids: tuple[str, ...], project: Path,
                   parameters: Mapping[str, object]) -> dict | None:
     """Use the current fixed-Step dispatcher and its issued AI selection.
@@ -935,10 +903,8 @@ def dispatch_site(step_ids: tuple[str, ...], project: Path,
     """
     if "9" not in tuple(map(str, step_ids)):
         return None
-    import execution_policy as policy
-    if policy._ordinary_runtime is not None:
-        prepare_synthesis_dispatch(policy._ordinary_runtime, Path(project), parameters)
-    return policy.dispatch_fixed_step(Path(project), "9", parameters=dict(parameters))
+    from execution_policy import dispatch_fixed_step
+    return dispatch_fixed_step(Path(project), "9", parameters=dict(parameters))
 
 
 STEP_IDS = ("9",)
