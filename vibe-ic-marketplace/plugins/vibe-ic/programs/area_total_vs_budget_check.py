@@ -350,6 +350,16 @@ from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082/#14
 TOOL = "area_total_vs_budget_check"
 VERSION = "1.0.0"
 
+# An external producer may supply a measured area, but only through this
+# explicit, identity-bound contract.  The receipt is never discovered from the
+# project tree and its number never competes with a candidate stats artefact.
+AREA_RECEIPT_SCHEMA = "vibe-ic/area-signoff-baseline-receipt/1"
+_RECEIPT_ID_FIELDS = ("design", "route", "pdk", "library", "corner",
+                      "source", "input", "generator", "recipe", "image")
+_RECEIPT_HASH_FIELDS = ("source_sha256", "input_sha256", "recipe_sha256",
+                        "pdk_sha256", "liberty_sha256", "lef_sha256")
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$", re.IGNORECASE)
+
 RC_OK, RC_FINDINGS, RC_ARG = 0, 1, 2
 #: INCOMPLETE — the disclosed-skip tier. Named apart from RC_ARG because they
 #: mean different things to a reader even though the flow maps both to
@@ -467,6 +477,68 @@ def read_areas(project: Path) -> List[Dict[str, Any]]:
                                else None),
         })
     return out
+
+
+def read_area_receipt(receipt_path: Path, current_run_path: Path
+                      ) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    """Read one explicitly named producer receipt and bind it to one run.
+
+    The current-run manifest is a separate caller-owned authority.  Requiring
+    both files prevents a copied receipt from becoming a denominator merely by
+    being placed beside the project.  All identity and hash fields are exact
+    matches; missing or malformed fields refuse before publication.
+    """
+    try:
+        receipt = json.loads(receipt_path.read_text(errors="strict"))
+        current = json.loads(current_run_path.read_text(errors="strict"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        return None, f"AREA_RECEIPT_UNREADABLE: {type(exc).__name__}: {exc}"
+    if not isinstance(receipt, dict) or not isinstance(current, dict):
+        return None, "AREA_RECEIPT_SCHEMA_INVALID: both documents must be objects"
+    if receipt.get("schema") != AREA_RECEIPT_SCHEMA:
+        return None, "AREA_RECEIPT_SCHEMA_INVALID: unsupported schema"
+    if receipt.get("status") != "MEASURED":
+        return None, "AREA_RECEIPT_STATUS_NOT_MEASURED: status must be MEASURED"
+    area = _num(receipt.get("area_um2"))
+    if area is None or area <= 0:
+        return None, "AREA_RECEIPT_AREA_INVALID: positive numeric area_um2 required"
+    if not isinstance(receipt.get("citation"), str) or not receipt["citation"].strip():
+        return None, "AREA_RECEIPT_CITATION_MISSING: citation is required"
+    basis = receipt.get("unit_basis")
+    if not isinstance(basis, dict) or basis.get("status") != "ESTABLISHED":
+        return None, "AREA_RECEIPT_UNIT_UNESTABLISHED: Liberty/LEF basis is required"
+    if not isinstance(basis.get("agreement"), str) or not basis["agreement"].strip():
+        return None, "AREA_RECEIPT_UNIT_UNESTABLISHED: Liberty/LEF agreement is missing"
+    rid = receipt.get("run")
+    cid = current.get("run")
+    if not isinstance(rid, dict) or not isinstance(cid, dict):
+        return None, "AREA_RECEIPT_BINDING_MISSING: run identity is required"
+    for key in _RECEIPT_ID_FIELDS:
+        if not isinstance(rid.get(key), str) or not rid[key].strip():
+            return None, f"AREA_RECEIPT_BINDING_MISSING: run.{key}"
+        if rid.get(key) != cid.get(key):
+            return None, f"AREA_RECEIPT_BINDING_MISMATCH: run.{key}"
+    rh = receipt.get("hashes")
+    ch = current.get("hashes")
+    if not isinstance(rh, dict) or not isinstance(ch, dict):
+        return None, "AREA_RECEIPT_HASH_BINDING_MISSING: hashes are required"
+    for key in _RECEIPT_HASH_FIELDS:
+        value = rh.get(key)
+        if not isinstance(value, str) or not _SHA256_RE.fullmatch(value):
+            return None, f"AREA_RECEIPT_HASH_INVALID: hashes.{key}"
+        if value != ch.get(key):
+            return None, f"AREA_RECEIPT_HASH_BINDING_MISMATCH: hashes.{key}"
+    for key in ("liberty_sha256", "lef_sha256"):
+        if basis.get(key) != rh[key]:
+            return None, f"AREA_RECEIPT_UNIT_BASIS_MISMATCH: unit_basis.{key}"
+    return ({"file": str(receipt_path), "chip_area": area,
+             "chip_area_unit": "um^2", "unit_established": True,
+             "unit_established_by": "source-backed Liberty/LEF receipt",
+             "top_module": receipt.get("top_module"),
+             "cell_count": receipt.get("cell_count"),
+             "includes_submodules": receipt.get("includes_submodules"),
+             "selection_rule": receipt.get("selection_rule"),
+             "receipt_citation": receipt["citation"]}, None)
 
 
 def read_ceiling(project: Path) -> Tuple[Optional[float], Optional[str],
@@ -605,17 +677,37 @@ def _cell_signoff_comparison(rep: Dict[str, Any], usable: List[Dict[str, Any]],
 
 
 def evaluate(project: Path, ceiling_override: Optional[str],
-             unit_override: bool, library: str = "", pdk: str = ""
+             unit_override: bool, library: str = "", pdk: str = "",
+             area_receipt: Optional[Path] = None,
+             current_run: Optional[Path] = None
              ) -> Tuple[str, Dict[str, Any]]:
     """Return ``(verdict, report)`` including explicit NOT_APPLICABLE."""
     rep: Dict[str, Any] = {"program": TOOL, "version": VERSION,
-                           "project": str(project), "findings": []}
-    areas = read_areas(project)
+                           "project": str(project), "findings": [],
+                           "ceiling_sources": []}
+    receipt_error = None
+    if area_receipt is not None:
+        if current_run is None:
+            receipt_error = ("AREA_RECEIPT_BINDING_MISSING: --area-run-manifest "
+                             "is required with --area-receipt")
+            areas = []
+        else:
+            bound, receipt_error = read_area_receipt(area_receipt, current_run)
+            areas = [bound] if bound is not None else []
+    else:
+        areas = read_areas(project)
     if unit_override:
         for a in areas:
             a["unit_established"] = True
             a["unit_established_by"] = "--area-unit-um2"
     rep["areas_read"] = areas
+    if area_receipt is not None:
+        rep["area_receipt"] = str(area_receipt)
+        rep["area_run_manifest"] = str(current_run) if current_run else None
+        if receipt_error:
+            rep["verdict"] = "INCOMPLETE"
+            rep["missing_authority"] = receipt_error
+            return "INCOMPLETE", rep
 
     if ceiling_override is not None:
         die_um2, wxh = parse_die_budget_um2(ceiling_override)
@@ -852,6 +944,10 @@ def main(argv: Optional[List[str]] = None) -> int:
                          "library's area unit is known outside the artefact; "
                          "without it an artefact that declines to name its unit "
                          "is an INCOMPLETE, never an assumption")
+    ap.add_argument("--area-receipt", default=None,
+                    help="explicit measured area receipt; never discovered")
+    ap.add_argument("--area-run-manifest", default=None,
+                    help="current-run manifest required to bind --area-receipt")
     ap.add_argument("--library", default="",
                     help="the std-cell library this run built against. When "
                          "given it decides which technology's L7 standard-cell "
@@ -875,7 +971,11 @@ def main(argv: Optional[List[str]] = None) -> int:
             return RC_ARG
 
     verdict, rep = evaluate(project, args.die_area_um, args.area_unit_um2,
-                            library=args.library, pdk=args.pdk)
+                            library=args.library, pdk=args.pdk,
+                            area_receipt=(Path(args.area_receipt)
+                                          if args.area_receipt else None),
+                            current_run=(Path(args.area_run_manifest)
+                                         if args.area_run_manifest else None))
     if args.json:
         out = Path(args.json)
         out.parent.mkdir(parents=True, exist_ok=True)

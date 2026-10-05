@@ -261,3 +261,83 @@ def test_the_program_names_no_process_or_vendor_token(tmp_path):
     for tok in ("sky130", "gf180", "sg13g2", "tsmc", "samsung", "globalfound",
                 "intel", "umc", "smic"):
         assert tok not in src, f"{PROG.name} names {tok!r}"
+
+
+def _receipt_fixture(tmp_path):
+    proj = _project(tmp_path / "receipt", "40x50", area=None)
+    run = {k: f"{k}-current" for k in
+           ("design", "route", "pdk", "library", "corner", "source",
+            "input", "generator", "recipe", "image")}
+    hashes = {k: ("a" if k.endswith("source_sha256") else "b") * 64
+              for k in ("source_sha256", "input_sha256", "recipe_sha256",
+                        "pdk_sha256", "liberty_sha256", "lef_sha256")}
+    manifest = proj / "run-manifest.json"
+    manifest.write_text(json.dumps({"run": run, "hashes": hashes}))
+    receipt = proj / "area-receipt.json"
+    receipt.write_text(json.dumps({
+        "schema": "vibe-ic/area-signoff-baseline-receipt/1",
+        "status": "MEASURED", "area_um2": 1000.0,
+        "citation": "producer.log:42", "run": run, "hashes": hashes,
+        "unit_basis": {"status": "ESTABLISHED", "agreement": "liberty/lef",
+                        "liberty_sha256": hashes["liberty_sha256"],
+                        "lef_sha256": hashes["lef_sha256"]},
+        "selection_rule": "SPM_TOP", "top_module": "spm"}))
+    return proj, receipt, manifest, run, hashes
+
+
+def test_explicit_measured_receipt_is_consumed_only_when_bound(tmp_path):
+    proj, receipt, manifest, _run_id, _hashes = _receipt_fixture(tmp_path)
+    r = _run(proj, "--area-receipt", str(receipt),
+             "--area-run-manifest", str(manifest))
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "[PASS]" in r.stdout
+    assert "area-receipt.json" in r.stdout
+
+
+def test_receipt_identity_and_hash_mutations_refuse(tmp_path):
+    proj, receipt, manifest, run, hashes = _receipt_fixture(tmp_path)
+    for field in ("design", "pdk", "library"):
+        mutated = dict(run)
+        mutated[field] = "wrong"
+        receipt.write_text(json.dumps({
+            "schema": "vibe-ic/area-signoff-baseline-receipt/1",
+            "status": "MEASURED", "area_um2": 1000.0,
+            "citation": "producer.log:42", "run": mutated, "hashes": hashes,
+            "unit_basis": {"status": "ESTABLISHED", "agreement": "liberty/lef",
+                            "liberty_sha256": hashes["liberty_sha256"],
+                            "lef_sha256": hashes["lef_sha256"]}}))
+        r = _run(proj, "--area-receipt", str(receipt),
+                 "--area-run-manifest", str(manifest))
+        assert r.returncode == 2, (field, r.stdout, r.stderr)
+        assert "AREA_RECEIPT_BINDING_MISMATCH" in r.stdout
+        receipt.write_text(json.dumps({
+            "schema": "vibe-ic/area-signoff-baseline-receipt/1",
+            "status": "MEASURED", "area_um2": 1000.0,
+            "citation": "producer.log:42", "run": run, "hashes": hashes,
+            "unit_basis": {"status": "ESTABLISHED", "agreement": "liberty/lef",
+                            "liberty_sha256": hashes["liberty_sha256"],
+                            "lef_sha256": hashes["lef_sha256"]}}))
+    for hash_field in ("input_sha256", "liberty_sha256"):
+        bad = dict(hashes, **{hash_field: "c" * 64})
+        receipt.write_text(json.dumps({
+            "schema": "vibe-ic/area-signoff-baseline-receipt/1",
+            "status": "MEASURED", "area_um2": 1000.0,
+            "citation": "producer.log:42", "run": run, "hashes": bad,
+            "unit_basis": {"status": "ESTABLISHED", "agreement": "liberty/lef",
+                            "liberty_sha256": bad["liberty_sha256"],
+                            "lef_sha256": bad["lef_sha256"]}}))
+        r = _run(proj, "--area-receipt", str(receipt),
+                 "--area-run-manifest", str(manifest))
+        assert r.returncode == 2, (hash_field, r.stdout, r.stderr)
+        assert "AREA_RECEIPT_HASH_BINDING_MISMATCH" in r.stdout
+
+
+def test_receipt_without_source_backed_unit_refuses(tmp_path):
+    proj, receipt, manifest, run, hashes = _receipt_fixture(tmp_path)
+    data = json.loads(receipt.read_text())
+    del data["unit_basis"]
+    receipt.write_text(json.dumps(data))
+    r = _run(proj, "--area-receipt", str(receipt),
+             "--area-run-manifest", str(manifest))
+    assert r.returncode == 2
+    assert "AREA_RECEIPT_UNIT_UNESTABLISHED" in r.stdout
