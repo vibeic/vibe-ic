@@ -10,6 +10,7 @@ import pytest
 PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROGRAMS))
 import execution_modes as em
+from programs.tests._execution_source_fixture import register_source_fixture, issued_context
 from execution_provider_catalog import implementation_closure, proven_dispatcher_closure
 from programs.tests.test_execution_dispatcher_binding import arm, controller, issued_context16
 from programs.tests import test_execution_backend_f3 as fixtures
@@ -50,7 +51,7 @@ def test_complete_package_execution_and_drift_refusal(tmp_path, dotted):
     proof = proven_dispatcher_closure(entry, Path(arm().components[0].argv[1]))
     assert helper in proof
     assert all(p in proof for p in tmp_path.rglob('__init__.py'))
-    ctl = controller(candidate); ctx = fixtures.context16(tmp_path); root = tmp_path / 'run'
+    ctl = controller(candidate, fixture_root=tmp_path); ctx = fixtures.context16(tmp_path); root = tmp_path / 'run'
     assert ctl.run(ctx, root, 'ultra-mode')['candidate_statuses'] == {candidate.arm_id: 'ELIGIBLE'}
     helper.write_text(helper.read_text() + '\n# changed after eligibility\n')
     with pytest.raises(em.Refusal, match='ADAPTER_SOURCE_MISMATCH'):
@@ -63,7 +64,7 @@ def test_complete_package_execution_and_drift_refusal(tmp_path, dotted):
 def test_unbound_package_helper_refuses_before_launch(tmp_path):
     candidate, helper, entry = package_arm(tmp_path, omit=True)
     assert helper in proven_dispatcher_closure(entry, Path(arm().components[0].argv[1]))
-    ctl = controller(candidate); root = tmp_path / 'run'
+    ctl = controller(candidate, fixture_root=tmp_path); root = tmp_path / 'run'
     result = ctl.run(fixtures.context16(tmp_path), root, 'ultra-mode')
     assert result['candidate_statuses'] == {candidate.arm_id: 'NOT_MEASURED'}
     receipt = json.loads((root / candidate.arm_id / 'receipt.json').read_text())
@@ -77,7 +78,7 @@ def test_interpreter_options_share_one_proven_worker(tmp_path, option):
     original = arm(); component = original.components[0]
     candidate = replace(original, arm_id='option_alias', engine_families=('option_label',),
                         components=(replace(component, argv=(component.argv[0], option, *component.argv[1:])),))
-    ctl = controller(original, candidate); root = tmp_path / 'run'
+    ctl = controller(original, candidate, fixture_root=tmp_path); root = tmp_path / 'run'
     result = ctl.run(fixtures.context16(tmp_path), root, 'ultra-mode')
     assert list(result['candidate_statuses'].values()) == ['ELIGIBLE']
     assert len(json.loads((root / 'plan.json').read_text())['arms']) == 1
@@ -88,7 +89,7 @@ def test_unsupported_invocation_is_scoped_refusal_before_launch(tmp_path, option
     original = arm(); component = original.components[0]
     candidate = replace(original, arm_id='000_unsupported', engine_families=('unsupported',),
                         components=(replace(component, argv=(component.argv[0], option, *component.argv[1:])),))
-    ctl = controller(original, candidate); root = tmp_path / 'run'
+    ctl = controller(original, candidate, fixture_root=tmp_path); root = tmp_path / 'run'
     result = ctl.run(fixtures.context16(tmp_path), root, 'ultra-mode')
     assert result['candidate_statuses'][original.arm_id] == 'ELIGIBLE'
     assert result['candidate_statuses'][candidate.arm_id] == 'NOT_MEASURED'
@@ -103,7 +104,7 @@ def test_relative_entry_binds_actual_output_cwd(tmp_path):
     candidate = replace(original, arm_id=name, engine_families=('relative_label',),
                         components=(replace(component, argv=(component.argv[0], '-B', relative, *component.argv[2:])),))
     assert em._provider_identity(candidate, cwd=root / name / 'outputs') == em._provider_identity(original)
-    ctl = controller(original, candidate)
+    ctl = controller(original, candidate, fixture_root=tmp_path)
     result = ctl.run(issued_context16(tmp_path), root, 'ultra-mode')
     plan = json.loads((root / 'plan.json').read_text())
     receipt = json.loads((root / original.arm_id / 'receipt.json').read_text())
@@ -129,7 +130,7 @@ def test_literal_search_path_selects_actual_shadow_package(tmp_path):
     module.write_text('raise RuntimeError("Python must prefer the package")\n')
     closure = proven_dispatcher_closure(entry, Path(arm().components[0].argv[1]))
     assert helper in closure and module not in closure
-    result = controller(candidate).run(fixtures.context16(tmp_path), tmp_path / 'run', 'ultra-mode')
+    result = controller(candidate, fixture_root=tmp_path).run(fixtures.context16(tmp_path), tmp_path / 'run', 'ultra-mode')
     assert result['candidate_statuses'][candidate.arm_id] == 'ELIGIBLE'
 
 
@@ -145,7 +146,7 @@ def test_active_pythonpath_omitted_helper_refuses(tmp_path, monkeypatch):
                         source_files={**original.source_files, str(entry): em.digest(entry)},
                         components=(replace(component, argv=(component.argv[0], str(entry), *component.argv[2:])),))
     assert helper in proven_dispatcher_closure(entry, Path(component.argv[1]))
-    result = controller(candidate).run(fixtures.context16(tmp_path), tmp_path / 'run', 'ultra-mode')
+    result = controller(candidate, fixture_root=tmp_path).run(fixtures.context16(tmp_path), tmp_path / 'run', 'ultra-mode')
     assert result['candidate_statuses'][candidate.arm_id] == 'NOT_MEASURED'
     assert json.loads((tmp_path / 'run' / candidate.arm_id / 'receipt.json').read_text())['processes'] == []
 
@@ -159,7 +160,7 @@ def test_opaque_earlier_wrapper_preserves_valid_representative(tmp_path):
     candidate = replace(original, arm_id='000_opaque', engine_families=('opaque_label',),
                         source_files={**original.source_files, str(entry): em.digest(entry)},
                         components=(replace(component, argv=(component.argv[0], str(entry), *component.argv[2:])),))
-    ctl = controller(original, candidate); ctx = fixtures.context16(tmp_path); root = tmp_path / 'run'
+    ctl = controller(original, candidate, fixture_root=tmp_path); ctx = fixtures.context16(tmp_path); root = tmp_path / 'run'
     plan = ctl.plan(ctx, 'ultra-mode')
     assert original.arm_id in plan['arms']
     assert plan['independence'][candidate.arm_id]['sha256'] is None
@@ -187,7 +188,7 @@ def test_bound_search_path_change_cannot_reuse_execution_closure(tmp_path, monke
                         source_files={**original.source_files, **{str(p): em.digest(p) for p in files}},
                         components=(replace(component, argv=(component.argv[0], str(entry), *component.argv[2:])),))
     monkeypatch.setenv('PYTHONPATH', os.pathsep.join([str(directories[0]), str(PROGRAMS)]))
-    ctl = controller(candidate); ctx = fixtures.context16(tmp_path); root = tmp_path / 'run'
+    ctl = controller(candidate, fixture_root=tmp_path); ctx = fixtures.context16(tmp_path); root = tmp_path / 'run'
     result = ctl.run(ctx, root, 'ultra-mode')
     assert result['candidate_statuses'][candidate.arm_id] == 'ELIGIBLE'
     receipt = json.loads((root / candidate.arm_id / 'receipt.json').read_text())
@@ -210,7 +211,7 @@ def test_bound_shadow_dependency_cannot_claim_transparent_execution(tmp_path):
     candidate = replace(original, arm_id='shadow_worker',
                         source_files={**original.source_files, str(entry): em.digest(entry), str(shadow): em.digest(shadow)},
                         components=(replace(component, argv=(component.argv[0], str(entry), *component.argv[2:])),))
-    ctl = controller(candidate); root = tmp_path / 'run'
+    ctl = controller(candidate, fixture_root=tmp_path); root = tmp_path / 'run'
     result = ctl.run(fixtures.context16(tmp_path), root, 'ultra-mode')
     assert result['candidate_statuses'][candidate.arm_id] == 'NOT_MEASURED'
     receipt = json.loads((root / candidate.arm_id / 'receipt.json').read_text())
@@ -239,7 +240,7 @@ def test_timestamp_valid_stale_package_cache_uses_current_source(tmp_path, cache
     if not cached:
         cache.unlink()
     candidate = replace(candidate, source_files={**candidate.source_files, str(helper): em.digest(helper)})
-    ctl = controller(candidate); ctx = fixtures.context16(tmp_path); root = tmp_path / 'run'
+    ctl = controller(candidate, fixture_root=tmp_path); ctx = fixtures.context16(tmp_path); root = tmp_path / 'run'
     assert ctl.run(ctx, root, 'ultra-mode')['candidate_statuses'] == {candidate.arm_id: 'ELIGIBLE'}
     assert not (root / candidate.arm_id / 'outputs/previous-helper-executed.txt').exists()
     accepted = ctl.adopt(ctx, root, decisions.choice(ctx, root, candidate.arm_id))

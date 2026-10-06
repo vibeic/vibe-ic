@@ -128,8 +128,9 @@ def source_closure(paths: Iterable[Path]) -> set[Path]:
         if path in seen or not path.is_file() or path.is_symlink():
             continue
         seen.add(path)
-        text = snapshot.read_text(path) if snapshot is not None else path.read_text()
-        pending.extend(_local_imports(str(path), text) if path.suffix == ".py" else ())
+        if path.suffix == ".py":
+            text = snapshot.read_text(path) if snapshot is not None else path.read_text()
+            pending.extend(_local_imports(str(path), text))
     if snapshot is not None:
         for path in seen:
             snapshot.read_bytes(path)
@@ -231,17 +232,14 @@ def python_entrypoint(argv: tuple[str, ...], cwd: Path | None) -> Path:
     Options that alter import resolution, inline code and module launch are
     deliberately unsupported. Refusal precedes launch and identity deduplication.
     """
-    index = 1
-    while index < len(argv) and argv[index].startswith('-'):
-        option = argv[index]
-        index += 1
-        if option == '--':
-            break
-        if option not in {'-B', '-u', '-q', '-O', '-OO'}:
-            raise ValueError(f'unsupported Python invocation: {option}')
-    if index >= len(argv):
-        raise ValueError('missing Python entrypoint')
-    path = Path(argv[index])
+    # Share registration's option/value parsing. Import-path-changing options
+    # remain outside this provider's modeled search policy.
+    from execution_modes import _python_entry, Refusal
+    try:
+        argument, _, _ = _python_entry(argv[1:], allowed_options="BuqOWX")
+    except Refusal as exc:
+        raise ValueError(f"unsupported Python invocation: {exc}") from exc
+    path = Path(argument)
     if not path.is_absolute():
         if cwd is None:
             raise ValueError('Python entrypoint needs execution cwd')

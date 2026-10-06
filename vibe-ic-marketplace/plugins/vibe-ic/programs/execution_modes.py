@@ -465,7 +465,8 @@ def _source_method(context_type: type, source: Path, method: str) -> Callable:
     return actual
 
 
-def _python_entry(arguments: tuple[str, ...]) -> tuple[str, list[str], int]:
+def _python_entry(arguments: tuple[str, ...], *,
+                  allowed_options: str = "bBdEiIOPqsSuvxWX") -> tuple[str, list[str], int]:
     """Resolve the script using Python option semantics, never file existence.
 
     Only a bounded script invocation is supported. Unknown options, module,
@@ -491,6 +492,8 @@ def _python_entry(arguments: tuple[str, ...]) -> tuple[str, list[str], int]:
             if not options or argument.startswith('--'):
                 raise Refusal('ENTRY_SOURCE_UNBOUND', argument)
             for offset, option in enumerate(options):
+                if option not in allowed_options:
+                    raise Refusal('ENTRY_SOURCE_UNBOUND', argument)
                 if option in 'WX':
                     value = options[offset + 1:]
                     if not value:

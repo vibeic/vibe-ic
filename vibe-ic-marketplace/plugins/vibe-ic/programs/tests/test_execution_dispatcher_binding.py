@@ -9,6 +9,7 @@ import pytest
 PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROGRAMS))
 import execution_modes as em
+from programs.tests._execution_source_fixture import register_source_fixture, issued_context
 import execution_policy as policy
 import execution_adapters_release as release
 from execution_provider_catalog import coverage_rows, current_source_identity
@@ -63,19 +64,18 @@ def wrapper(tmp_path, original, style, *, bind_helper=True):
                    source_files={**original.source_files, **{str(p): em.digest(p) for p in files}}), helper
 
 
-def controller(*arms):
+def controller(*arms, fixture_root=None):
     registry = em.Registry()
     for adapter in arms:
-        registry.register(adapter)
+        if fixture_root is None:
+            registry.register(adapter)
+        else:
+            register_source_fixture(registry, adapter, fixture_root=fixture_root)
     return em.Controller(registry, em.Budget(2, 1024, workers=2))
 
 
 def issued_context16(tmp_path):
-    payload = real_entry('IC', 'ultra', tmp_path)
-    return replace(backend.context16(tmp_path),
-                   project_digest=payload['route']['project_digest'],
-                   **policy.controller_fields(ic_ip_path='IC',
-                                              route_receipt=payload['route']))
+    return backend.context16(tmp_path)
 
 
 def record(tmp_path, **facts):
@@ -86,7 +86,7 @@ def record(tmp_path, **facts):
                                  'executable_symlink', 'entry_symlink', 'entry_path_alias', 'duplicate_argv', 'copied_worker'])
 def test_actual_dispatcher_alias_cannot_create_another_eligible_arm(tmp_path, monkeypatch, style):
     original = arm(); alias, _ = wrapper(tmp_path, original, style)
-    ctl = controller(original, alias); ctx = issued_context16(tmp_path); root = tmp_path / 'run'
+    ctl = controller(original, alias, fixture_root=tmp_path); ctx = issued_context16(tmp_path); root = tmp_path / 'run'
     if style == 'copied_worker':
         monkeypatch.setenv('PYTHONPATH', str(PROGRAMS))
     plan = ctl.plan(ctx, 'ultra-mode')
@@ -109,7 +109,7 @@ def test_actual_dispatcher_alias_cannot_create_another_eligible_arm(tmp_path, mo
 
 def test_unregistered_executed_helper_has_terminal_refusal(tmp_path):
     alias, helper = wrapper(tmp_path, arm(), 'nested_static', bind_helper=False)
-    ctl = controller(alias); root = tmp_path / 'run'; ctx = backend.context16(tmp_path)
+    ctl = controller(alias, fixture_root=tmp_path); root = tmp_path / 'run'; ctx = backend.context16(tmp_path)
     try:
         result = ctl.run(ctx, root, 'ultra-mode')
         status = result['candidate_statuses'].get(alias.arm_id)
@@ -124,7 +124,7 @@ def test_unregistered_executed_helper_has_terminal_refusal(tmp_path):
 
 def test_bound_executed_helper_drift_refuses_adoption(tmp_path):
     alias, helper = wrapper(tmp_path, arm(), 'nested_static')
-    ctl = controller(alias); root = tmp_path / 'run'; ctx = backend.context16(tmp_path)
+    ctl = controller(alias, fixture_root=tmp_path); root = tmp_path / 'run'; ctx = backend.context16(tmp_path)
     result = ctl.run(ctx, root, 'ultra-mode')
     assert result['candidate_statuses'] == {alias.arm_id: 'ELIGIBLE'}
     before = em.digest(helper)
@@ -151,7 +151,7 @@ def test_unproven_dispatch_has_terminal_refusal(tmp_path, style):
         entry.write_text('import sys\nsys.path.insert(0, ' + repr(str(PROGRAMS)) + ')\n'
                          "import importlib\nname = 'execution_release_worker'\nraise SystemExit(importlib.import_module(name).main())\n")
     alias = replace(alias, source_files={**alias.source_files, str(entry): em.digest(entry)})
-    ctl = controller(alias); root = tmp_path / 'run'
+    ctl = controller(alias, fixture_root=tmp_path); root = tmp_path / 'run'
     result = ctl.run(backend.context16(tmp_path), root, 'ultra-mode')
     receipt = json.loads((root / alias.arm_id / 'receipt.json').read_text())
     record(tmp_path, style=style, result=result, receipt=receipt)

@@ -17,6 +17,8 @@ if str(PROGRAMS) not in sys.path:
     sys.path.insert(0, str(PROGRAMS))
 
 import execution_modes as em
+from programs.tests._execution_source_fixture import register_source_fixture, issued_context
+from programs.tests.test_execution_receipt_chain import isolated_transport
 from execution_adapters_backend import (
     _step30_simulators,
     _step37_route_specs,
@@ -70,7 +72,7 @@ def test_default_call_path_is_source_only_and_unmeasured():
     adapter = registry.adapters("15")[0]
     assert adapter.available is False
     assert adapter.availability_reason == "NATIVE_EXECUTION_NOT_MEASURED"
-    assert adapter.tool_id == "librelane"
+    assert adapter.tool_id == "backend-worker"
     assert adapter.engine_families == ("openroad",)
 
 
@@ -95,9 +97,9 @@ def test_backend_component_calls_real_worker_and_records_gate_boundary(tmp_path)
     source = tmp_path / "seed.txt"
     source.write_text("source-only\n")
     row = next(r for r in coverage_rows() if r["step_id"] == "15")
-    context = em.Context("15", BASE, {"project/input/seed.txt": source},
+    context = issued_context(em.Context("15", BASE, {"project/input/seed.txt": source},
                          {"metric": "canonical_evidence", "direction": "max"},
-                         tuple(row["consumer_gates"]), "librelane")
+                         tuple(row["consumer_gates"]), "librelane"), tmp_path)
     registry = register_backend_adapters(em.Registry(), source_sha=BASE, available=True)
     controller = em.Controller(registry, em.Budget(cpus=1, ram_mb=512, workers=1))
     plan = controller.plan(context, "default-mode")
@@ -148,9 +150,9 @@ def test_controller_adoption_calls_selected_backend_consumer(tmp_path, monkeypat
     source = tmp_path / "seed.txt"
     source.write_text("fixture\n")
     row = next(r for r in coverage_rows() if r["step_id"] == "15")
-    context = em.Context("15", BASE, {"project/input/seed.txt": source},
+    context = issued_context(em.Context("15", BASE, {"project/input/seed.txt": source},
                          {"metric": "canonical_evidence", "direction": "max"},
-                         tuple(row["consumer_gates"]), "librelane")
+                         tuple(row["consumer_gates"]), "librelane"), tmp_path)
 
     def validator(outputs, binding):
         result = json.loads((outputs / "backend_result.json").read_text())
@@ -167,7 +169,7 @@ def test_controller_adoption_calls_selected_backend_consumer(tmp_path, monkeypat
         ("backend_result.json",), {"metric": "canonical_evidence", "direction": "max"},
         output_contract={name: ("backend_result.json",) for name in row["canonical_outputs"]},
         qualification_evidence="R2 finite producer fixture", available=True)
-    registry = em.Registry(); registry.register(adapter)
+    registry = em.Registry(); register_source_fixture(registry, adapter, fixture_root=tmp_path)
     controller = em.Controller(registry, em.Budget(cpus=1, ram_mb=512, workers=1))
     seen = {}
 
@@ -192,9 +194,9 @@ def test_public_controller_refuses_changed_actual_producer_call(tmp_path):
     source = tmp_path / "seed.txt"
     source.write_text("source-only\n")
     row = next(r for r in coverage_rows() if r["step_id"] == "15")
-    context = em.Context("15", BASE, {"project/input/seed.txt": source},
+    context = issued_context(em.Context("15", BASE, {"project/input/seed.txt": source},
                          {"metric": "canonical_evidence", "direction": "max"},
-                         tuple(row["consumer_gates"]), "librelane")
+                         tuple(row["consumer_gates"]), "librelane"), tmp_path)
     original_registry = register_backend_adapters(source_sha=BASE, available=True)
     original_adapter = original_registry.adapters("15")[0]
     producer = next(Path(name) for name in original_adapter.source_files
@@ -215,7 +217,7 @@ def test_public_controller_refuses_changed_actual_producer_call(tmp_path):
                             argv=tuple(str(mutant.resolve()) if x == str(producer) else x
                                        for x in original_adapter.components[0].argv)),))
     registry = em.Registry()
-    registry.register(mutant_adapter)
+    register_source_fixture(registry, mutant_adapter, fixture_root=tmp_path)
     root = tmp_path / "mutated-run"
     summary = em.Controller(registry, em.Budget(cpus=1, ram_mb=512, workers=1)).run(
         context, root, "default-mode")
@@ -323,14 +325,18 @@ def context16(tmp_path):
     floorplan, clock = tmp_path / 'floorplan.def', tmp_path / 'clock.sdc'
     floorplan.write_text('VERSION 5.8 ;\n')
     clock.write_text('create_clock -name clk -period 10 [get_ports clk]\n')
-    return em.Context('16', current_source_identity(), {
+    return issued_context(em.Context('16', current_source_identity(), {
         'project/phase3/stage3/pnr/floorplan.def': floorplan,
         'project/phase2/stage2/constraints/clock.sdc': clock,
-    }, {'metric': 'canonical_evidence', 'direction': 'max'}, ('clock_plan_check',), 'librelane')
+    }, {'metric': 'canonical_evidence', 'direction': 'max'}, ('clock_plan_check',), 'librelane'), tmp_path)
 
 
-def ctl(arm, budget=None):
-    registry = em.Registry(); registry.register(arm)
+def ctl(arm, budget=None, *, fixture_root=None):
+    registry = em.Registry()
+    if fixture_root is None:
+        registry.register(arm)
+    else:
+        register_source_fixture(registry, arm, fixture_root=fixture_root)
     return em.Controller(registry, budget or em.Budget(1, 512, workers=1))
 
 
@@ -396,7 +402,7 @@ def test_br2_002_irrelevant_source_and_labels_cannot_split_implementation(tmp_pa
     first = replace(release_arm, tool_id='first')
     duplicate = replace(first, arm_id='relabelled', tool_id='second', engine_families=('invented',),
                         source_files={**first.source_files, str(extra): em.digest(extra)})
-    registry = em.Registry(); registry.register(first); registry.register(duplicate)
+    registry = em.Registry(); register_source_fixture(registry, first, fixture_root=tmp_path); register_source_fixture(registry, duplicate, fixture_root=tmp_path)
     controller = em.Controller(registry, em.Budget(2, 1024, workers=2))
     plan = controller.plan(ctx, 'ultra-mode')
     assert len(plan['arms']) == 1
@@ -427,9 +433,9 @@ def finite_backend(tmp_path):
         (str(Path(sys.executable).resolve()), str(script), '{inputs}', '{outputs}'), 5),),
         source_files={**arm.source_files, str(script): em.digest(script)})
     seed = tmp_path / 'seed.txt'; seed.write_text('seed\n')
-    ctx = em.Context('15', current_source_identity(), {'project/input/seed.txt': seed}, arm.objective,
-                      tuple(dict.fromkeys(row['consumer_gates'])), 'librelane')
-    return ctl(arm), ctx, arm
+    ctx = issued_context(em.Context('15', current_source_identity(), {'project/input/seed.txt': seed}, arm.objective,
+                      tuple(dict.fromkeys(row['consumer_gates'])), 'librelane'), tmp_path)
+    return ctl(arm, fixture_root=tmp_path), ctx, arm
 
 
 def test_br2_003_real_consumer_refusal_clears_persisted_selection(tmp_path):
@@ -468,8 +474,8 @@ def test_br2_004_factory_supervisor_worker_route_roundtrip(tmp_path, monkeypatch
     row = next(r for r in coverage_rows() if r['step_id'] == '37')
     arm = backend._adapter(row, current_source_identity(), {'metric':'canonical_evidence','direction':'max'}, path='IC', available=True)
     seed = tmp_path / 'seed'; seed.write_text('source-only\n')
-    ctx = em.Context('37', current_source_identity(), {'project/input/seed': seed}, arm.objective,
-                      tuple(dict.fromkeys(row['consumer_gates'])), 'librelane')
+    ctx = issued_context(em.Context('37', current_source_identity(), {'project/input/seed': seed}, arm.objective,
+                      tuple(dict.fromkeys(row['consumer_gates'])), 'librelane'), tmp_path)
     actual_env = {}; popen = em.subprocess.Popen
     def launch(*args, **kwargs):
         if 'VIBEIC_ARM_ID' in kwargs.get('env', {}):
@@ -610,7 +616,7 @@ def test_r4_transparent_wrapper_has_one_real_producer(tmp_path, release_arm, sty
     wrapped = replace(release_arm, arm_id='wrapped_release_16', tool_id='wrapper_label',
         engine_families=('caller_distinct_label',), source_files=sources,
         components=(replace(component, argv=(component.argv[0], str(wrapper), *component.argv[2:])),))
-    registry = em.Registry(); registry.register(release_arm); registry.register(wrapped)
+    registry = em.Registry(); register_source_fixture(registry, release_arm, fixture_root=tmp_path); register_source_fixture(registry, wrapped, fixture_root=tmp_path)
     controller = em.Controller(registry, em.Budget(2, 1024, workers=2))
     plan = controller.plan(ctx, 'ultra-mode')
     assert len(plan['arms']) == 1

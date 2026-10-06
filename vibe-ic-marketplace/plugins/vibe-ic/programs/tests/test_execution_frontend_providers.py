@@ -3,6 +3,8 @@ from pathlib import Path
 import json
 import execution_frontend_providers as p
 import execution_modes as em
+from programs.tests._execution_source_fixture import register_source_fixture, issued_context
+from programs.tests.test_execution_receipt_chain import isolated_transport
 
 EXPECTED=('D1','0.5ic','1','2','3','4','5','6','7','8','10','11','FS1','DT1','12','13','DT2','DT3','P0')
 
@@ -38,7 +40,7 @@ def test_controller_executes_worker_and_validator_reddens_on_output_mutation(tmp
     registry=em.Registry(); p.register_factories(registry); portfolio=em.load_portfolio(); row=next(s for s in portfolio['steps'] if s['id']=='D1')
     import subprocess
     sha=subprocess.check_output(['git','rev-parse','HEAD'],cwd=Path(__file__).parents[2],text=True).strip()
-    context=em.Context('D1',sha,{'input/docs/L1.md':f},{'metric':'source_boundary'},tuple(row['mandatory_gate_programs']))
+    context=issued_context(em.Context('D1',sha,{'input/docs/L1.md':f},{'metric':'source_boundary'},tuple(row['mandatory_gate_programs'])), project)
     run=tmp_path/'run'; result=em.Controller(registry,em.Budget(1,512,1),portfolio).run(context,run)
     assert result['status']=='AWAITING_AI_SELECTION'
     assert result['candidate_statuses']['frontend_D1'] in ('INELIGIBLE','NOT_MEASURED','ELIGIBLE')
@@ -52,7 +54,7 @@ def test_step8_public_controller_eligible_and_adopted(tmp_path):
     registry=em.Registry(); p.register_factories(registry); portfolio=em.load_portfolio()
     row=next(s for s in portfolio['steps'] if str(s['id'])=='8')
     sha=subprocess.check_output(['git','rev-parse','HEAD'],cwd=Path(__file__).parents[2],text=True).strip()
-    ctx=em.Context('8',sha,{'phase2/stage2/constraints/top.sdc':sdc,'phase1/generated_docs/L8_TIMING_WAVEFORM.json':l8},{'metric':'source_boundary'},tuple(row['mandatory_gate_programs']))
+    ctx=issued_context(em.Context('8',sha,{'phase2/stage2/constraints/top.sdc':sdc,'phase1/generated_docs/L8_TIMING_WAVEFORM.json':l8},{'metric':'source_boundary'},tuple(row['mandatory_gate_programs'])), project)
     run=tmp_path/'run'; controller=em.Controller(registry,em.Budget(1,512,1),portfolio); controller.run(ctx,run)
     receipt=json.loads((run/'frontend_8/receipt.json').read_text())
     assert receipt['status']=='ELIGIBLE'; assert set(receipt['evidence']['gates'])==set(row['mandatory_gate_programs'])
@@ -81,11 +83,11 @@ def test_05ic_public_controller_eligible_and_adopted(tmp_path):
     registry=em.Registry(); p.register_factories(registry); portfolio=em.load_portfolio()
     row=next(s for s in portfolio['steps'] if str(s['id'])=='0.5ic')
     sha=subprocess.check_output(['git','rev-parse','HEAD'],cwd=Path(__file__).parents[2],text=True).strip()
-    ctx=em.Context('0.5ic',sha,
+    ctx=issued_context(em.Context('0.5ic',sha,
                    {'input/step_0_5ic_answers.json':answers_path,
                     'input/submission_template_source/s1.yaml':slot},
                    {'template':'input/submission_template_source','slot':'s1'},
-                   tuple(row['mandatory_gate_programs']))
+                   tuple(row['mandatory_gate_programs'])), project)
     run=tmp_path/'run'; controller=em.Controller(registry,em.Budget(1,512,1),portfolio)
     result=controller.run(ctx,run)
     assert result['candidate_statuses']['frontend_0_5ic']=='ELIGIBLE'
@@ -128,10 +130,10 @@ def test_05ic_declared_absence_routes_public_production_and_refuses_na_gate(
     row=next(s for s in portfolio['steps'] if str(s['id'])=='0.5ic')
     sha=subprocess.check_output(['git','rev-parse','HEAD'],cwd=Path(__file__).parents[2],text=True).strip()
     reason=answers['operator_template']['absent_reason']
-    ctx=em.Context('0.5ic',sha,{'input/step_0_5ic_answers.json':answers_path},
+    ctx=issued_context(em.Context('0.5ic',sha,{'input/step_0_5ic_answers.json':answers_path},
                    {'template':'input/submission_template_source',
                     'no_template_reason':reason},
-                   tuple(row['mandatory_gate_programs']))
+                   tuple(row['mandatory_gate_programs'])), project)
     run=tmp_path/'run'; controller=em.Controller(registry,em.Budget(1,512,1),portfolio)
     result=controller.run(ctx,run)
     assert result['candidate_statuses']['frontend_0_5ic']=='NOT_MEASURED'
@@ -326,8 +328,8 @@ def _authority_project(tmp_path):
     sha = subprocess.check_output(['git', 'rev-parse', 'HEAD'],
                                   cwd=Path(p.__file__).parent, text=True).strip()
     row = next(row for row in em.load_portfolio()['steps'] if row['id'] == '0.5ic')
-    return project, em.Context('0.5ic', sha, inputs, parameters,
-                                tuple(row['mandatory_gate_programs']))
+    return project, issued_context(em.Context('0.5ic', sha, inputs, parameters,
+                                tuple(row['mandatory_gate_programs'])), project)
 
 
 def _authority_controller():
