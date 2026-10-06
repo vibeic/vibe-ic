@@ -17347,16 +17347,32 @@ def _step_synth_librelane(project: Path, top: str, pdk: PdkConfig,
             raise _ll.Refusal("LL_SYNTH_AREA_UNMEASURED", str(stat))
         _ll.verify_synthesis_stat(stat, state, Path(stats), top,
                                   folder / "stat_binding_gate.json")
+        area_report = folder / "area_budget_gate.json"
+        area_report.unlink(missing_ok=True)
         gate = subprocess.run([sys.executable,
                                str(PROGRAMS_DIR / "area_total_vs_budget_check.py"),
-                               str(project),
+                               str(project), "--json", str(area_report),
                                *_area_receipt_flags(area_receipt, area_run_manifest)],
                               capture_output=True, text=True)
-        if gate.returncode != 0:
+        if gate.returncode not in (0, 2):
             return StepResult("synth", "FAIL", time.time() - t0,
                               f"area_total_vs_budget_check rc={gate.returncode}: "
                               + gate.stdout[-500:],
                               [str(netlist), str(stat), str(stats)])
+        # rc 2 means no comparison, not a measured synthesis failure. Still
+        # judge the native product: a real netlist/PDK/provenance failure must
+        # not be hidden behind the unresolved area authority. The completed
+        # step remains NOT_MEASURED, so Step9 adoption and final signoff cannot
+        # credit the missing comparison. Require the gate's typed report; an
+        # argument error or missing checker also exits 2 but proves nothing.
+        area_incomplete = gate.returncode == 2
+        if area_incomplete:
+            try:
+                area_result = json.loads(area_report.read_text())
+            except (OSError, ValueError) as exc:
+                raise _ll.Refusal("LL_SYNTH_AREA_REPORT_INVALID", str(exc)) from exc
+            if not isinstance(area_result, dict) or area_result.get("verdict") != "INCOMPLETE":
+                raise _ll.Refusal("LL_SYNTH_AREA_REPORT_INVALID", str(area_result))
         netlist_gate = subprocess.run(
             [sys.executable, str(PROGRAMS_DIR / "synth_netlist_check.py"),
              "--netlist", str(netlist), "--tool-netlist", str(source),
@@ -17396,13 +17412,19 @@ def _step_synth_librelane(project: Path, top: str, pdk: PdkConfig,
         _log_surviving_artefact([str(netlist.parent / "netlist.v")],
                                 produced_by="LibreLane.Yosys.Synthesis",
                                 tool="yosys", exit_code=0)
-        return StepResult("synth", "PASS", time.time() - t0,
+        return StepResult("synth", "NOT_MEASURED" if area_incomplete else "PASS",
+                          time.time() - t0,
                           f"LibreLane Yosys.Synthesis: {netlist.name}; "
                           f"area gate rc={gate.returncode}; "
                           f"pdk gate rc={pdk_gate.returncode}; "
                           "netlist/provenance/handoff gates rc=0; "
-                          "LibreLane netlist checkers ran",
-                          [str(netlist), str(stat), str(stats), str(folder / "state_out.json")])
+                          "LibreLane netlist checkers ran"
+                          + ("; area comparison INCOMPLETE: " + gate.stdout[-500:]
+                             if area_incomplete else ""),
+                          [str(netlist), str(stat), str(stats), str(folder / "state_out.json"),
+                           str(area_report)],
+                          extras={"area_budget_rc": gate.returncode},
+                          reason_class="inconclusive" if area_incomplete else "")
     except (_ll.Refusal, OSError, ValueError) as exc:
         stopped = (_ll.tool_stop_reason(exc.code)
                    if isinstance(exc, _ll.Refusal) else None)
