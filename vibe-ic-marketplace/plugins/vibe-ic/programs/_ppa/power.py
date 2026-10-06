@@ -2114,6 +2114,7 @@ def adopt_current_power_report(project: Path, top: str, power_rpt: Path,
     import _atomic_artefact as _aa
     import _opensta_current as current
     import librelane_postroute as lp
+    from librelane_contract import Refusal as LibreLaneRefusal
 
     power_rpt.parent.mkdir(parents=True, exist_ok=True)
     receipt_path = power_rpt.with_suffix(".current.json")
@@ -2152,7 +2153,7 @@ def adopt_current_power_report(project: Path, top: str, power_rpt: Path,
             "vectorless_sdc", notes, tool_rc=0)
         if record.get("power_measurement") != "MEASURED":
             raise current.Refusal("CURRENT_POWER_DOWNSTREAM_NOT_MEASURED")
-    except (OSError, ValueError, KeyError, TypeError) as exc:
+    except (OSError, ValueError, KeyError, TypeError, LibreLaneRefusal) as exc:
         receipt_path.unlink(missing_ok=True)
         power_rpt.unlink(missing_ok=True)
         retire_signoff_record(power_rpt.with_suffix(".json"), str(exc), notes)

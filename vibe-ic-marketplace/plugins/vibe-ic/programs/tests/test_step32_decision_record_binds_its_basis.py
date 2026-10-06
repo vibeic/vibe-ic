@@ -110,6 +110,26 @@ def _canonicalize(p: Path, monkeypatch, spef_text: str) -> None:
     R.step_canonicalize_artefacts(p, "chip_top", _pdk(), "x")
 
 
+def test_missing_native_power_state_retires_previous_measurement(tmp_path):
+    from _ppa import power
+
+    report = tmp_path / "reports/phase3/power.rpt"
+    report.parent.mkdir(parents=True)
+    report.write_text("previous tool measurement\n")
+    report.with_suffix(".current.json").write_text("{}")
+    report.with_suffix(".json").write_text(json.dumps({
+        "verdict": "PASS", "power_measurement": "MEASURED",
+        "total_power_w": 0.01}))
+    notes = []
+    assert power.adopt_current_power_report(tmp_path, "chip_top", report, notes) is False
+    assert not report.exists()
+    assert not report.with_suffix(".current.json").exists()
+    retired = json.loads(report.with_suffix(".json").read_text())
+    assert retired["power_measurement"] == "NOT_MEASURED"
+    assert retired.get("total_power_w") is None
+    assert any("LL_STAPOSTPNR_STATE_ABSENT" in note for note in notes)
+
+
 def _bound_basis(p: Path, record: dict) -> Path:
     """The SHIPPED receipt check (`postroute_timing_repair_decision.
     verify_receipt`, the one the status generator applies), then the primary
