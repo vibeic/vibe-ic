@@ -40,7 +40,6 @@ def test_default_05ic_uses_canonical_search_and_real_gates(tmp_path, present):
     receipt = json.loads(receipts[0].read_text())
     worker, *gates = receipt['processes']
     assert worker['component'] == 'frontend_worker' and worker['rc'] == 0, receipt
-    assert len(gates) == 2
     assert receipt['binding']['objective']['template'] == 'input/submission_template_source'
     output = Path(receipt['output_root'])
     chain = json.loads((output / 'issued-producer-chain.json').read_text())['payload']
@@ -56,6 +55,7 @@ def test_default_05ic_uses_canonical_search_and_real_gates(tmp_path, present):
     assert len(ingest['lookup']['searched']) == 1
     assert ingest['lookup']['searched'][0].endswith('/input/submission_template_source')
     if present:
+        assert len(gates) == 2 and all(gate['rc'] == 0 for gate in gates)
         assert rc == 0
         assert ingest['status'] == 'INGESTED'
         assert receipt['evidence']['gates'] == {
@@ -67,11 +67,19 @@ def test_default_05ic_uses_canonical_search_and_real_gates(tmp_path, present):
         assert ingest['status'] == 'ABSENT'
         assert ingest['no_template_reason'] is None
         assert ingest['path_selector']['declared'] is False
-        assert receipt['evidence']['gates']['submission_template_check'] == 'FAIL'
+        assert len(gates) == 1
+        assert gates[0]['component'] == 'submission_template_check' and gates[0]['rc'] == 1
         gate = json.loads((output / 'reports/execution_gates/submission_template_check.json').read_text())
-        assert 'NO_TEMPLATE_WITHOUT_REASON' in json.dumps(gate)
-        assert receipt['status'] == 'FAIL'
+        assert gate['check']['verdict'] == 'FAIL'
+        assert 'NO_TEMPLATE_WITHOUT_REASON' in {row['rule'] for row in gate['check']['refusals']}
+        # Existing component execution stops at the first nonzero gate. Keep
+        # that refusal and its unmeasured remainder; it cannot be adopted.
+        assert receipt['status'] == 'NOT_MEASURED'
+        assert receipt['reason'] == 'PROCESS_ERROR'
+        assert receipt['detail'] == 'PROCESS_ERROR: submission_template_check: rc=1'
+        assert not (output / 'reports/execution_gates/tapeout_declaration_check.json').exists()
         assert not (receipts[0].parent.parent / 'selected').exists()
         for marker in ('NO_TEMPLATE.txt', 'SELF_TAPEOUT.txt'):
-            assert not (output / 'input/submission_template' / marker).exists()
+            assert not (project / 'input/submission_template' / marker).exists()
+        assert not (output / 'input/submission_template/NO_TEMPLATE.txt').exists()
         assert not (project / 'input/submission_template_source').exists()
