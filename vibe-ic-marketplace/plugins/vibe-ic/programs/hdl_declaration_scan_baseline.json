@@ -55,7 +55,6 @@
     "iface_conformance_v2::regmap_csr_names::_REGMAP_INTERNAL_PROSE(prompt)",
     "iface_conformance_v2::regmap_generic_csr_names::_DIR_COL_HDR(h)",
     "iface_conformance_v2::regmap_generic_csr_names::_REGMAP_INTERNAL_PROSE(prompt)",
-    "interface_encoding_audit::parse_modules::mod_pattern(src)",
     "l17_channel_catalog_consumer_contract_check::shipped_netlist_port_widths::_NL_MODULE_RE(text)",
     "l9_submodule_conformance_check::parse_module_ports::_RE_DIRECTION_PORT(inner)",
     "lec_gate_netlist_select::_extract_ports::_MODULE_HDR_RE(text)",
