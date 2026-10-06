@@ -1829,6 +1829,37 @@ def _pre_gate_input_manifest(regate: dict) -> dict | None:
     return preserved
 
 
+def _program_output_repair_contract(author_contract: dict, identity: dict,
+                                    material: dict) -> dict:
+    """Separate PROGRAM declaration; never edit the author's signed preimage.
+
+    Only explicit reentry uses this after validating the original declaration
+    and the actual invocation. Keep every source/fragment/configuration
+    obligation and bind its candidate hashes to that invocation's output.
+    """
+    derived = _strict_json_loads(json.dumps(author_contract))
+    derived["author"] = {"kind": "PROGRAM", "program_identity": identity}
+    derived["candidate_sha256"] = material["output_rtl_sha256"]
+    outputs = material["output_rtl"]
+
+    def output_hash(path):
+        if not isinstance(path, str):
+            raise ValueError("Program output declaration lacks an exact source path")
+        key = path[4:] if path.startswith("rtl/") else path
+        return outputs[key]["sha256"]
+
+    preservation = derived["preservation"]
+    preservation.pop("candidate_sha256", None)
+    for row in preservation["sources"]:
+        row["candidate_sha256"] = output_hash(row["path"])
+    matrix = derived["elaboration_matrix"]
+    path = matrix.get("source_path", matrix.get("source"))
+    if isinstance(path, dict):
+        path = path.get("path")
+    matrix["candidate_sha256"] = output_hash(path)
+    return derived
+
+
 def _verified_program_regate(task: dict) -> dict | None:
     """The regate record ONLY if every one of its bindings still holds.
 
@@ -1859,6 +1890,63 @@ def _verified_program_regate(task: dict) -> dict | None:
     # The named "before" version is not decoration: it must be the Program
     # that actually produced the preserved input.
     if before != str(preserved.get("program_version") or ""):
+        return None
+    # A hash pair alone cannot move the author's signature to a preimage.
+    # Reuse the retained current producer/collector receipts and immutable
+    # declaration from the explicit operation. An unchanged unwanted output
+    # is not recovery evidence and retains its final-signature refusal.
+    if produced == regate.get("stale_output_sha256"):
+        return None
+    try:
+        run_p = Path(task["project"]).resolve().parent.parent
+        archive = _regate_path(regate["archive_path"], run_p, exists=False)
+        if not archive.is_dir():
+            return None
+        if _read_json_regular(archive / "complete.json") != regate:
+            return None
+        declaration_path = _regate_path(regate["output_contract_path"], run_p)
+        if declaration_path != archive / "output_contract.json":
+            return None
+        if hashlib.sha256(declaration_path.read_bytes()).hexdigest() != regate["output_contract_sha256"]:
+            return None
+        declaration = _read_json_regular(declaration_path)
+        preimage_path = _regate_path(archive / "preimage_contract.json", run_p)
+        if hashlib.sha256(preimage_path.read_bytes()).hexdigest() != declaration["preimage_contract_sha256"]:
+            return None
+        preimage = _read_json_regular(preimage_path)
+        invocation = task["program_verification"]["runner_invocation"]
+        author_path = _regate_path(task["repair_provenance"]["path"], run_p)
+        author_hash = hashlib.sha256(author_path.read_bytes()).hexdigest()
+        if (declaration["schema"] != _PROGRAM_REGATE_SCHEMA
+                or declaration["actor"] != "PROGRAM"
+                or declaration["program_identity"] != regate["program_identity"]
+                or declaration["runner_invocation"] != invocation
+                or declaration["signed_input_sha256"] != signed
+                or declaration["output_rtl_sha256"] != produced
+                or declaration["author_record_sha256"] != author_hash
+                or preimage["author_record_sha256"] != author_hash
+                or preimage["signed_input_sha256"] != signed
+                or preimage["validation"]["verdict"] != "PASS"
+                or invocation["status"] != "COMPLETED"
+                or invocation["material_before"] != preimage["input_material"]
+                or invocation["material_before"]["output_rtl_sha256"] != signed
+                or invocation["material_after"]["output_rtl_sha256"] != produced
+                or _runner_material_snapshot(Path(task["project"])) != invocation["material_after"]
+                or invocation["material_before"]["input"] != invocation["material_after"]["input"]
+                or declaration["repair_contract"] != _program_output_repair_contract(
+                    task["repair_provenance"]["repair_contract"],
+                    regate["program_identity"], invocation["material_after"])):
+            return None
+        diagnostic = _stored_runner_diagnostics(invocation)
+        if diagnostic and diagnostic.get("reason"):
+            return None
+        _runner_frozen_material(invocation, task["candidate_snapshot"])
+        measured = _read_json_regular(archive / "runner_result.json")
+        if (measured["runner_invocation"] != invocation
+                or measured["collected"]["repair_contract"]["verdict"] != "PASS"
+                or not measured["collected"]["ok"]):
+            return None
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
         return None
     return regate
 
@@ -8767,10 +8855,17 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
             continue
         supplied_rtl = result.get("candidate_origin") in {
             "AI_BACKUP", "AI_REPAIR"}
+        # Only an authenticated explicit reentry may supply a PROGRAM-owned
+        # postimage declaration. Ordinary author repairs retain their exact
+        # signed candidate contract, including every immutable hash check.
+        regate = _verified_program_regate(task)
+        repair_contract = (task.get("repair_provenance") or {}).get("repair_contract")
+        if regate is not None:
+            repair_contract = _read_json_regular(Path(regate["output_contract_path"]))["repair_contract"]
         got = bio.collect(
             fmt, pid, Path(str(task.get("project") or "")),
             supplied_rtl=supplied_rtl,
-            repair_contract=((task.get("repair_provenance") or {}).get("repair_contract")
+            repair_contract=(repair_contract
                              if task.get("candidate_origin") == "AI_REPAIR" else None),
             require_repair_contract=(task.get("candidate_origin") == "AI_REPAIR"),
             required_top=_required_scorer_top(_entry(bench), fmt))
@@ -9735,9 +9830,34 @@ def _apply_program_regate(bench: str, dataset: str | Path, run_p: Path,
     try:
         shutil.copytree(project, staged, symlinks=True)
         for source, destination in zip(input_candidate["rtl_paths"], working, strict=True):
-            _atomic_write_text(staged / destination.relative_to(project), Path(source).read_text())
+            _atomic_write_bytes(staged / destination.relative_to(project), Path(source).read_bytes())
         if _sha256_text(_candidate_text(_rtl_files(staged))) != signed:
             refuse("staged work tree does not hash to the signed input")
+        bio.public_original_input(
+            staged, pid, task["prompt_sha256"], expected=task["public_original_input"])
+        input_material = _runner_material_snapshot(staged)
+        preservation = provenance["repair_contract"]["preservation"]
+        for row in preservation["sources"]:
+            key = row["path"][4:] if row["path"].startswith("rtl/") else row["path"]
+            expected = row.get("candidate_sha256", preservation.get("candidate_sha256"))
+            if input_material["output_rtl"].get(key, {}).get("sha256") != expected:
+                refuse("signed preimage byte binding mismatch: " + row["path"])
+        # Validate the unchanged author declaration on ONLY the exact signed
+        # preimage. The historical gate report is not a new runner verdict.
+        preimage = bio.collect(
+            fmt, pid, staged, supplied_rtl=True,
+            repair_contract=provenance["repair_contract"], require_repair_contract=True,
+            required_top=_required_scorer_top(_entry(bench), fmt))
+        if not preimage.get("ok") or (preimage.get("repair_contract") or {}).get("verdict") != "PASS":
+            refuse("author preimage contract failed: " + str(preimage.get("reason")))
+        if _runner_material_snapshot(staged) != input_material:
+            refuse("signed preimage changed during contract validation")
+        preimage_path = archive / "preimage_contract.json"
+        _write_immutable_json(preimage_path, {
+            "schema": _PROGRAM_REGATE_SCHEMA, "signed_input_sha256": signed,
+            "author_record_sha256": material[str(record_path)],
+            "input_material": input_material, "validation": preimage["repair_contract"]})
+        recheck()
         phase2_report = staged / "reports" / "orchestrator" / "phase2_one_shot.json"
         if phase2_report.exists():
             phase2_report.unlink()  # staged copy only; require fresh gate evidence
@@ -9754,9 +9874,30 @@ def _apply_program_regate(bench: str, dataset: str | Path, run_p: Path,
                 or _sha256_text((staged / "input" / "phase1_prompt.md").read_text())
                 != task["prompt_sha256"]):
             refuse("Program changed bound prompt or Phase-1 inputs")
+        diagnostic = _runner_diagnostics(process, argv, staged)
+        output_contract = provenance["repair_contract"]
+        declaration_path = archive / "output_contract.json"
+        if not process.error and not (diagnostic and diagnostic.get("reason")):
+            invocation = process.invocation
+            if (not isinstance(invocation, dict) or invocation.get("status") != "COMPLETED"
+                    or invocation.get("material_before") != input_material
+                    or invocation["material_after"]["input"] != input_material["input"]):
+                refuse("Program transformation lacks completed current input/output provenance")
+            bio.public_original_input(
+                staged, pid, task["prompt_sha256"], expected=task["public_original_input"])
+            output_contract = _program_output_repair_contract(
+                provenance["repair_contract"], identity, invocation["material_after"])
+            _write_immutable_json(declaration_path, {
+                "schema": _PROGRAM_REGATE_SCHEMA, "actor": "PROGRAM",
+                "program_identity": identity, "runner_invocation": invocation,
+                "signed_input_sha256": signed,
+                "output_rtl_sha256": invocation["material_after"]["output_rtl_sha256"],
+                "author_record_sha256": material[str(record_path)],
+                "preimage_contract_sha256": hashlib.sha256(preimage_path.read_bytes()).hexdigest(),
+                "repair_contract": output_contract})
         got = _collect_runner_result(
             process, argv, fmt, pid, staged, supplied_rtl=True,
-            repair_contract=provenance.get("repair_contract"),
+            repair_contract=output_contract,
             require_repair_contract=True)
         _write_immutable_json(archive / "runner_result.json", {
             "argv": argv, "rc": process.rc, "error": process.error,
@@ -9817,6 +9958,8 @@ def _apply_program_regate(bench: str, dataset: str | Path, run_p: Path,
                   "output_rtl_sha256": new_task["rtl_sha256"],
                   "program_version_before": before,
                   "program_version_after": after,
+                  "output_contract_path": str(declaration_path),
+                  "output_contract_sha256": hashlib.sha256(declaration_path.read_bytes()).hexdigest(),
                   "attributed_to": "PROGRAM",
                   "author_signature_unchanged": True,
                   "repair_authorized": False,

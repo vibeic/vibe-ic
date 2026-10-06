@@ -241,7 +241,7 @@ def _historical_pending_repair(run, parent, challenge, output):
     return task
 
 
-def _stuck(tmp_path, monkeypatch):
+def _stuck(tmp_path, monkeypatch, *, preserved_quote=None):
     """The exact stuck state: signed input, unwanted gate output, stale sig.
 
     The whole stuck state is produced while the OLD Program is running, so the
@@ -268,9 +268,13 @@ def _stuck(tmp_path, monkeypatch):
     # The author authors and SIGNS exactly these bytes.
     working.write_text(_SIGNED_RTL)
     signed = bd._sha256_text(bd._candidate_text(bd._rtl_files(project)))
-    fx._write_ai_repair_record(
+    author_record = fx._write_ai_repair_record(
         run, task, bd._validate_ai_review(task)["verified_challenge"])
     record_path = bd._repair_record_path(run, task)
+    if preserved_quote is not None:
+        author_record["repair_contract"]["preservation"]["sources"][0][
+            "preserved_executable_fragments"].append({"quote": preserved_quote})
+        record_path.write_text(json.dumps(author_record))
     signed_record = record_path.read_bytes()
 
     stuck = _historical_pending_repair(
@@ -302,7 +306,8 @@ def _request(run, task, signed, *, before=_OLD_PROGRAM, after=None, **over):
     return path, request
 
 
-def _case(tmp_path, monkeypatch, *, reviewed=False, exit_step="2"):
+def _case(tmp_path, monkeypatch, *, reviewed=False, exit_step="2",
+          public_parameter=False):
     """The Program-transform entry state (the v1.17.71 fixture, re-pointed).
 
     Built under the OLD Program version so the merged operation's version-pair
@@ -313,6 +318,9 @@ def _case(tmp_path, monkeypatch, *, reviewed=False, exit_step="2"):
     run = tmp_path / "run"
     project = fx._project(tmp_path)
     rtl = project / "phase2/stage1/rtl/dut.v"
+    if public_parameter:
+        rtl.write_text(rtl.read_text().replace(
+            "module dut(", "module dut #(parameter MODE = 0)("))
     # The legacy retry fixture also needs the exact public source precondition
     # of its author contract; never infer that source from the later repair.
     bio._stage_public_original(
@@ -327,6 +335,12 @@ def _case(tmp_path, monkeypatch, *, reviewed=False, exit_step="2"):
     challenge = verdict["verified_challenge"]
     rtl.write_text(rtl.read_text().replace("y = ~a", "y = a"))
     signed = fx._write_ai_repair_record(run, parent, challenge)
+    if public_parameter:
+        matrix = signed["repair_contract"]["elaboration_matrix"]
+        matrix["supported_parameters"] = ["MODE"]
+        matrix["source_quotes"] = [{"quote": "parameter MODE = 0"}]
+        matrix["configurations"].append({"name": "mode_one", "parameters": {"MODE": 1}})
+        bd._repair_record_path(run, parent).write_text(json.dumps(signed))
     bd._archive_candidate("p1", project,
         {"id": "p1", "ok": True, "completion": rtl.read_text()}, run, "AI_REPAIR_INPUT")
     fx._solve_report(run, parent, active_route=True, exit_step=exit_step)
@@ -346,6 +360,8 @@ def _case(tmp_path, monkeypatch, *, reviewed=False, exit_step="2"):
             return SimpleNamespace(returncode=1)
         if state["mode"] in {"old", "still_transforms"}:
             current.write_text(current.read_text().replace("y = a", "y = 1'b0"))
+        if state["mode"] == "drop_parameter":
+            current.write_text(current.read_text().replace(" #(parameter MODE = 0)", ""))
         report = candidate / "reports/orchestrator/phase2_one_shot.json"
         report.parent.mkdir(parents=True, exist_ok=True)
         # R-0915-85 — the producer's word for a site upstream of --entry-step.
@@ -511,6 +527,16 @@ def test_a_fixed_program_regates_from_the_preserved_signed_input(
     assert regate.get("author_signature_unchanged") is True
     assert regate.get("repair_authorized") is False
     assert bd._validate_embedded_repair_provenance(new) == []
+    declaration = json.loads(Path(regate["output_contract_path"]).read_text())
+    assert declaration["actor"] == "PROGRAM"
+    assert declaration["signed_input_sha256"] == signed
+    assert declaration["output_rtl_sha256"] == new["rtl_sha256"]
+    assert declaration["runner_invocation"] == new["program_verification"]["runner_invocation"]
+    assert declaration["repair_contract"]["author"]["kind"] == "PROGRAM"
+    original_matrix = new["repair_provenance"]["repair_contract"]["elaboration_matrix"]
+    derived_matrix = declaration["repair_contract"]["elaboration_matrix"]
+    assert {k: v for k, v in derived_matrix.items() if k != "candidate_sha256"} == {
+        k: v for k, v in original_matrix.items() if k != "candidate_sha256"}
 
     # No acceptance, no publication, and a FRESH independent review is owed.
     outcome = json.loads((run / bd._ACCEPTANCE_REPORT).read_text())
@@ -524,6 +550,87 @@ def test_a_fixed_program_regates_from_the_preserved_signed_input(
     assert {c["sha256"] for c in stuck["verification_challenges"]} <= \
         {c["sha256"] for c in new["verification_challenges"]}
     assert "PROGRAM_REGATE_APPLIED" in capsys.readouterr().out
+    if third_hash:
+        # Adoption of actual normalized bytes also consumes the independently
+        # bound PROGRAM declaration, but only AFTER a new semantic review.
+        fx._write_review(new, fx._valid_review(new))
+        assert bd.cmd_resume("rtllm", "/unused", str(run)) == 0
+        assert json.loads(Path(new["response_path"]).read_text())["completion"] == fixed_output
+        assert record_path.read_bytes() == signed_record
+
+
+@pytest.mark.parametrize("damage", ["missing", "invocation", "output", "identity"])
+def test_transformation_evidence_cannot_be_missing_forged_or_stale(
+        tmp_path, monkeypatch, damage):
+    run, old, signed, signature, record_path = _stuck(tmp_path, monkeypatch)
+    request, _ = _request(run, old, signed)
+    _gate(monkeypatch, _BENIGN)
+    assert _resume(run, request) == 2
+    new = bd._read_jsonl(run / bd._REVIEW_WORKLIST)[0]
+    assert bd._signed_candidate_hash(new) == signed != new["rtl_sha256"]
+    declaration_path = Path(new["program_regate"]["output_contract_path"])
+    if damage == "missing":
+        declaration_path.unlink()
+    elif damage == "output":
+        Path(new["working_rtl_paths"][0]).write_text(_UNWANTED)
+    else:
+        declaration = json.loads(declaration_path.read_text())
+        if damage == "invocation":
+            declaration["runner_invocation"]["invocation_id"] = "forged"
+        else:
+            declaration["program_identity"] = {"source_sha256": "0" * 64}
+        declaration_path.write_text(json.dumps(declaration))
+    assert bd._verified_program_regate(new) is None
+    assert bd._signed_candidate_hash(new) == new["rtl_sha256"]
+    assert bd._validate_embedded_repair_provenance(new)
+    assert record_path.read_bytes() == signature
+    assert not Path(new["response_path"]).exists()
+
+
+def test_a_byte_mutated_preimage_cannot_hide_behind_text_hashes(
+        tmp_path, monkeypatch, capsys):
+    run, old, signed, signature, record_path = _stuck(tmp_path, monkeypatch)
+    candidate = old["repair_input_candidate_snapshot"]
+    preserved = json.loads(Path(old["pre_gate_input"]["input_manifest_path"]).read_text())
+    # Both archives still have the same normalized text/aggregate hash, but
+    # their bytes no longer equal the immutable per-file author declaration.
+    for path in [*candidate["rtl_paths"], *preserved["rtl_paths"]]:
+        source = Path(path)
+        source.write_bytes(source.read_bytes().replace(b"\n", b"\r\n"))
+    assert bd._sha256_text(bd._candidate_text(list(map(Path, candidate["rtl_paths"])))) == signed
+    request, _ = _request(run, old, signed)
+    calls = _gate(monkeypatch, _SIGNED_RTL)
+    assert _resume(run, request) == 2
+    assert bd._read_jsonl(run / bd._REVIEW_WORKLIST) == [old]
+    assert calls == []
+    assert "signed preimage byte binding mismatch" in _refusal(capsys)
+    assert record_path.read_bytes() == signature
+
+
+def test_program_output_must_preserve_the_author_declared_source_fragment(
+        tmp_path, monkeypatch, capsys):
+    run, old, signed, signature, record_path = _stuck(
+        tmp_path, monkeypatch, preserved_quote="assign y = a;")
+    request, _ = _request(run, old, signed)
+    before = _protected(run, old)
+    _gate(monkeypatch, _SIGNED_RTL.replace("y = a", "y = 1'b0"))
+    assert _resume(run, request) == 2
+    assert bd._read_jsonl(run / bd._REVIEW_WORKLIST) == [old]
+    assert _protected(run, old) == before
+    assert "FRAGMENT" in _refusal(capsys)
+    assert record_path.read_bytes() == signature
+
+
+def test_program_output_cannot_drop_a_public_parameter_configuration(
+        tmp_path, monkeypatch, capsys):
+    run, old, request, _, state = _case(tmp_path, monkeypatch, public_parameter=True)
+    before = _protected(run, old)
+    state["mode"] = "drop_parameter"
+    assert _resume(run, request) == 2
+    assert bd._read_jsonl(run / bd._REVIEW_WORKLIST) == [old]
+    assert _protected(run, old) == before
+    assert "SUPPORTED_PARAMETER_REMOVED" in _refusal(capsys)
+    assert not Path(old["response_path"]).exists()
 
 
 def test_the_transition_is_reconstructable_from_records_alone(
@@ -1757,14 +1864,14 @@ def test_a_staged_copy_that_is_not_the_signed_input_is_refused(
     signed". If the staged tree does not hash to those bytes, whatever is
     about to be re-run is not the signed input."""
     run, old, path, request, state = _case(tmp_path, monkeypatch)
-    real = bd._atomic_write_text
+    real = bd._atomic_write_bytes
 
-    def corrupt(target, text):
+    def corrupt(target, raw):
         if "staged_project" in str(target):
-            text = text + "\n// a concurrent writer\n"
-        return real(target, text)
+            raw = raw + b"\n// a concurrent writer\n"
+        return real(target, raw)
 
-    monkeypatch.setattr(bd, "_atomic_write_text", corrupt)
+    monkeypatch.setattr(bd, "_atomic_write_bytes", corrupt)
     before = _protected(run, old)
     assert _resume(run, path) == 2
     assert "staged work tree does not hash to the signed input" in _refusal(capsys)
