@@ -51,10 +51,11 @@ def test_step8_public_controller_eligible_and_adopted(tmp_path):
     sdc.write_text('create_clock -period 10 [get_ports clk]\nset_input_delay 1 -clock clk [all_inputs]\nset_output_delay 1 -clock clk [all_outputs]\n')
     l8=project/'phase1/generated_docs/L8_TIMING_WAVEFORM.json'; l8.parent.mkdir(parents=True)
     l8.write_text(json.dumps({'clocks': {'clk': {'period_ns': 10}}}))
+    matrix=sdc.with_name('pvt_matrix.json'); matrix.write_text('{"corners":[]}\n')
     registry=em.Registry(); p.register_factories(registry); portfolio=em.load_portfolio()
     row=next(s for s in portfolio['steps'] if str(s['id'])=='8')
     sha=subprocess.check_output(['git','rev-parse','HEAD'],cwd=Path(__file__).parents[2],text=True).strip()
-    ctx=issued_context(em.Context('8',sha,{'phase2/stage2/constraints/top.sdc':sdc,'phase1/generated_docs/L8_TIMING_WAVEFORM.json':l8},{'metric':'source_boundary'},tuple(row['mandatory_gate_programs'])), project)
+    ctx=issued_context(em.Context('8',sha,{'phase2/stage2/constraints/top.sdc':sdc,'phase1/generated_docs/L8_TIMING_WAVEFORM.json':l8, 'phase2/stage2/constraints/pvt_matrix.json':matrix},{'metric':'source_boundary'},tuple(row['mandatory_gate_programs'])), project)
     run=tmp_path/'run'; controller=em.Controller(registry,em.Budget(1,512,1),portfolio); controller.run(ctx,run)
     receipt=json.loads((run/'frontend_8/receipt.json').read_text())
     assert receipt['status']=='ELIGIBLE'; assert set(receipt['evidence']['gates'])==set(row['mandatory_gate_programs'])
@@ -194,14 +195,21 @@ def test_rows_2_to_5_spy_order_and_argv(tmp_path, monkeypatch):
     calls.clear(); w.produce_5(tmp_path,tmp_path/'o5',top='chip_top',container='img')
     assert [x[0] for x in calls] == ['formal_harness_gen.generate','formal_property_run.run','step_full_stack_functional_tb','write']
 
-def test_step8_nonzero_and_manifest_mutation_refuse(tmp_path):
+def test_step8_nonzero_and_manifest_mutation_refuse(tmp_path, monkeypatch):
     import hashlib
     project=tmp_path/'p'; sdc=project/'phase2/stage2/constraints/top.sdc'; sdc.parent.mkdir(parents=True)
     sdc.write_text('create_clock -period 10 [get_ports clk]\nset_input_delay 1 -clock clk [all_inputs]\n')
-    l8=project/'phase1/generated_docs/L8_TIMING_WAVEFORM.json'; l8.parent.mkdir(parents=True); l8.write_text(json.dumps({'clocks':[{'name':'clk','period_ns':11}]}))
-    files={str(x.relative_to(project)):hashlib.sha256(x.read_bytes()).hexdigest() for x in (sdc,l8)}
+    l8=project/'phase1/generated_docs/L8_TIMING_WAVEFORM.json'; l8.parent.mkdir(parents=True); l8.write_text(json.dumps({'clocks':{'clk':{'period_ns':11}}}))
+    matrix=sdc.with_name('pvt_matrix.json'); matrix.write_text('{"corners":[]}\n')
+    files={str(x.relative_to(project)):hashlib.sha256(x.read_bytes()).hexdigest() for x in (sdc,l8,matrix)}
     (project/'input').mkdir(); (project/'input/issued_manifest.json').write_text(json.dumps({'step_id':'8','parameters':{},'files':files}))
     import execution_frontend_worker as w
+    # Producer-only unit invocation envelope: real input/manifest bytes and
+    # hashes, not a claim of canonical Controller authority or adoption.
+    manifest=project/'input/issued_manifest.json'
+    manifest_hash=hashlib.sha256(manifest.read_bytes()).hexdigest()
+    monkeypatch.setenv('VIBEIC_MANIFEST_SHA256',manifest_hash)
+    monkeypatch.setenv('VIBEIC_ISSUED_MANIFEST_SHA256',manifest_hash)
     with __import__('pytest').raises(RuntimeError): w.run_row('8',project,tmp_path/'out')
     (project/'input/issued_manifest.json').write_text(json.dumps({'step_id':'9','parameters':{},'files':files}))
     with __import__('pytest').raises(ValueError): w.run_row('8',project,tmp_path/'out2')
