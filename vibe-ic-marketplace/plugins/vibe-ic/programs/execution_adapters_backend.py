@@ -172,10 +172,13 @@ def _composite_gate_execution(binding, result, report_sha):
     """Project the canonical consumer ledger without inventing child processes."""
     step = str(binding.get("step_id"))
     required = list(binding.get("required_gates", ()))
+    summaries = {"backend_canonical", "backend_native_substance"}
     if (step not in ROWS or result.get("schema") != "vibeic/backend-result/2" or
             result.get("step_id") != step or result.get("source_sha") != binding.get("source_sha") or
             result.get("producer_verdict") != "PASS" or result.get("verdict") != "PASS" or
             result.get("missing_inputs") or result.get("missing_outputs") or
+            set(result.get("gates", {})) != set(required) | summaries or
+            any(result["gates"].get(name) != "PASS" for name in summaries) or
             len(required) != len(set(required)) or
             set(required) != set(ROWS[step]["portfolio_policy"]["mandatory_gate_programs"])):
         return {}
@@ -247,7 +250,10 @@ def _evidence_from_receipt(outputs: Path, binding: Mapping[str, object], *, gate
     if result.get("binding") != dict(binding):
         return em.Evidence(binding, "FAIL" if measured_fail else "NOT_MEASURED", {}, {},
                            detail="BACKEND_RESULT_UNBOUND")
-    observed = dict(result.get("gates") or {})
+    # The canonical worker also reports two composition summaries. Their FAIL
+    # was reduced above; they are supporting facts in the hash-bound report,
+    # not additional required gate invocations.
+    observed = {name: (result.get("gates") or {}).get(name, "NOT_MEASURED") for name in gates}
     status = "FAIL" if measured_fail else "NOT_MEASURED"
     if not measured_fail and result.get("producer_verdict") == "PASS" and all(
             observed.get(g) == "PASS" for g in gates) and (
