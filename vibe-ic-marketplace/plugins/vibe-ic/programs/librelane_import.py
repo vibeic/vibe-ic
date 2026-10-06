@@ -46,7 +46,7 @@ WHAT IT WRITES
 --------------
 * The canonical files, COPIED (never symlinked; a symlink at a destination is
   replaced, not written through). State views go through
-  ``librelane_contract.handoff_to_direct`` with a ``path_map`` from the path the
+  ``librelane_contract._copy_state_views`` with a ``path_map`` from the path the
   run recorded to where the run now lives; a view recorded by an EARLIER step
   is refused, since the row would attribute it to the wrong step.
 * One provenance row per imported step: a witnessed row
@@ -116,7 +116,7 @@ import _path_layout as _pl  # noqa: E402
 import _runner_measurement  # noqa: E402
 import _tool_log_provenance as _tlp  # noqa: E402
 from _atomic_artefact import write_json, write_text  # noqa: E402
-from librelane_contract import Refusal, _load, digest, handoff_to_direct  # noqa: E402
+from librelane_contract import Refusal, _copy_state_views, _load, digest  # noqa: E402
 
 FLOW = "librelane"
 #: W0's import manifest, written only through `_efm.write_manifest`.
@@ -651,7 +651,7 @@ def _file_row(project: Path, ran: Ran, tool_file: Path, dest: Path,
 
 @dataclass
 class _ViewCall:
-    """One ``handoff_to_direct`` call, validated before anything is written."""
+    """One state-view copy, validated before anything is written."""
     state_path: Path
     targets: Dict[str, Path]
     receipt: Path
@@ -1146,8 +1146,12 @@ def import_segments(project: Path,
             outputs: Dict[str, Path] = {}
             written: List[Tuple[Path, Path, Optional[str]]] = []
             for call in plan.views:
-                doc = handoff_to_direct(call.state_path, call.targets,
-                                        call.receipt, path_map=call.path_map)
+                # Native Classic runs do not carry run_chain's RCX receipt.
+                # Planning above binds the native flow, step and mapped source;
+                # this transfer records copied bytes, not an RCX measurement.
+                doc = _copy_state_views(call.state_path, call.targets,
+                                        path_map=call.path_map)
+                write_json(call.receipt, doc)
                 for view, row in doc["views"].items():
                     dest = Path(row["dest"])
                     source = Path(row["source"]).resolve()

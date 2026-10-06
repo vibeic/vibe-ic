@@ -96,6 +96,17 @@ def test_one_run_is_written_flat_and_reads_as_before(tmp_path):
     doc = M.load_manifest(proj)                    # validated against disk
     assert "segments" not in doc
     assert doc["schema"] == M.SCHEMA and doc["run_dir"] == ONE
+    # This is a native Classic run, not a run_chain receipt fixture. Its
+    # mapped headers prove transport only; import cannot invent extraction.
+    assert not list((proj / ONE).rglob("vibeic_receipt.json"))
+    spefs = [r for r in doc["rows"] if r["canonical_path"].endswith(".spef")]
+    assert spefs
+    for row in spefs:
+        assert row["measurement"]["measured"] is False, row
+        source = proj / ONE / row["tool_run_path"]
+        copied = proj / row["canonical_path"]
+        assert source.read_bytes() == copied.read_bytes()
+        assert row["canonical_sha256"] == row["tool_run_sha256"]
     assert doc["flow_status"]["complete"] is True
     assert len(doc["rows"]) > 100
     for row in doc["rows"]:

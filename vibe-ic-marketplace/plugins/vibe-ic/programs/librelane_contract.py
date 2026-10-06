@@ -1922,17 +1922,15 @@ def state_from_direct(project: Path, image: str, config_path: Path,
     return path
 
 
-def handoff_to_direct(state_path: Path, targets: dict[str, Path], receipt: Path,
+def _copy_state_views(state_path: Path, targets: dict[str, Path],
                       *, path_map: dict[str, str] | None = None) -> dict:
-    """LibreLane -> direct: put named state views where the direct step reads them.
+    """Copy mapped state views and describe the bytes transferred.
 
-    ``targets`` maps a state view (``def``, ``odb``, ``nl``, ``spef:<corner>``)
-    to the file path the direct consumer expects.  ``path_map`` rewrites a
-    container prefix to its host path for states written by a whole-flow run.
-    Every handed file is bound by sha256 on both sides.
+    This primitive establishes only a copy, never extraction measurement or
+    a producer receipt. The native whole-flow importer supplies its own
+    flow/step/source preflight and journal; direct RCX consumers must use
+    ``handoff_to_direct`` and its producing-receipt validation.
     """
-    rcx_receipt = (validate_rcx_receipt(state_path.parent)
-                   if _state_step_id(state_path.parent) == 'OpenROAD.RCX' else None)
     state = _load(state_path)
     rows: dict[str, Any] = {}
     for view, dest in targets.items():
@@ -1964,13 +1962,31 @@ def handoff_to_direct(state_path: Path, targets: dict[str, Path], receipt: Path,
             rows[view]['design'] = _def_design_name(source)
         if rows[view]['source_sha256'] != rows[view]['dest_sha256']:
             raise Refusal('LL_HANDOFF_COPY_MISMATCH', view)
-        if rcx_receipt is not None and key == 'spef':
+    return {'state': str(state_path), 'state_sha256': digest(state_path),
+            'views': rows}
+
+
+def handoff_to_direct(state_path: Path, targets: dict[str, Path], receipt: Path,
+                      *, path_map: dict[str, str] | None = None) -> dict:
+    """LibreLane -> direct: put named state views where the direct step reads them.
+
+    ``targets`` maps a state view (``def``, ``odb``, ``nl``, ``spef:<corner>``)
+    to the file path the direct consumer expects. ``path_map`` rewrites a
+    container prefix to its host path. Every handed file is bound by sha256
+    on both sides; RCX additionally requires its original producer receipt.
+    """
+    rcx_receipt = (validate_rcx_receipt(state_path.parent)
+                   if _state_step_id(state_path.parent) == 'OpenROAD.RCX' else None)
+    document = _copy_state_views(state_path, targets, path_map=path_map)
+    if rcx_receipt is not None:
+        for view, row in document['views'].items():
+            if view.partition(':')[0] != 'spef':
+                continue
+            source = Path(row['source'])
             recorded = rcx_receipt['sha256'].get(
                 str(source.resolve().relative_to(state_path.parent.resolve())))
-            if not recorded or rows[view]['dest_sha256'] != recorded:
+            if not recorded or row['dest_sha256'] != recorded:
                 raise Refusal('LL_RCX_OUTPUT_UNBOUND', f'{view}: handoff bytes changed')
-    document = {'state': str(state_path), 'state_sha256': digest(state_path),
-                'views': rows}
     write_json(receipt, document)
     return document
 
