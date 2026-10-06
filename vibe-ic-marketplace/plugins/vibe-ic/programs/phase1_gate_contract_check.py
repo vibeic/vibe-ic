@@ -126,9 +126,10 @@ def _syntax_error(py_path: Path) -> str | None:
     mutating the gate tree or the private cache prefix.
     """
     try:
-        source = py_path.read_text(errors="replace")
-        compile(source, str(py_path), "exec", dont_inherit=True)
-    except (OSError, SyntaxError) as exc:
+        # Compile raw source bytes so CPython preserves PEP 263 encoding and
+        # BOM handling while avoiding py_compile's cache write.
+        compile(py_path.read_bytes(), str(py_path), "exec", dont_inherit=True)
+    except (OSError, SyntaxError, UnicodeError) as exc:
         return str(exc)
     return None
 
