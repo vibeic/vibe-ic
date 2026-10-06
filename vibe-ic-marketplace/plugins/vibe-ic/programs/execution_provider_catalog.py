@@ -696,6 +696,11 @@ def _backend(step: str) -> dict:
         "producer_sites": list(BACKEND_SITES[step]),
         "consumer_gates": list(p["mandatory_gate_programs"]),
         "canonical_outputs": list(row["canonical_row"].get("required_outputs", ())),
+        # Preserve row-owned runtime policy for the adapter/controller seam.
+        # Dropping this map here makes the adapter fall back to the generic
+        # typed timeout even when the canonical policy grants a longer native
+        # producer window.
+        "portfolio_policy": dict(p),
         "applicability": _applicability(step, release=False),
         "harvest": list(_summary(row.get("original_harvest"))),
         "notes": "One complete producer; wrappers/checkers sharing an engine family are not additional Ultra arms.",
