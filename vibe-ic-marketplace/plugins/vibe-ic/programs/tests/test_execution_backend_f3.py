@@ -751,3 +751,91 @@ def test_r4_manifest_is_provisional_until_consumer_success(tmp_path, monkeypatch
     assert captured == ['PROVISIONAL']
     generation = accepted['selected_generation']
     assert generation['status'] == em._issued(Path(generation['directory']) / 'manifest.json')['status'] == 'ADOPTED'
+
+
+# Current canonical backend receipt projection; software controls only.
+def _backend_projection_current_fixture():
+    import shlex
+    step = "15"
+    row = backend.ROWS[step]
+    gates = list(row["portfolio_policy"]["mandatory_gate_programs"])
+    commands = []
+    def walk(node):
+        if isinstance(node, dict):
+            for key, value in node.items():
+                if key in ("program_exit_zero", "advisory_program_exit_zero", "optional_program_exit_zero"):
+                    command = value.get("command") if isinstance(value, dict) else value
+                    if isinstance(command, str): commands.append(command)
+                else: walk(value)
+        elif isinstance(node, list):
+            for value in node: walk(value)
+    walk(row["canonical_row"].get("gate", {}))
+    ledger = [{"gate": Path(shlex.split(cmd)[0]).stem, "cmd": cmd, "rc": 0,
+               "exit_code": 0, "verdict": "PASS"} for cmd in commands]
+    binding = {"step_id": step, "source_sha": "SOFTWARE_PROJECTION_FIXTURE_ONLY", "required_gates": gates}
+    report = {"schema": "vibeic/backend-result/2", "step_id": step,
+        "source_sha": binding["source_sha"], "binding": binding,
+        "producer_verdict": "PASS", "verdict": "PASS", "gates": {**{g: "PASS" for g in gates},
+          "backend_canonical": "PASS", "backend_native_substance": "PASS"},
+        "gate_ledger": ledger, "outputs": {}, "missing_outputs": [], "missing_inputs": [],
+        "canonical_receipts": [{"schema": "vibeic/backend-producer-receipt/1",
+          "producer": "execution_backend_producers.produce", "step_id": step, "verdict": "PASS",
+          "detail": "SOFTWARE_PROJECTION_FIXTURE_ONLY"}]}
+    return binding, report
+
+
+def _backend_projection_value(tmp_path, binding, report):
+    (tmp_path / "backend_result.json").write_text(json.dumps(report))
+    return backend.validate(tmp_path, binding)
+
+
+def test_backend_current_projection_is_descriptive_only(tmp_path):
+    binding, report = _backend_projection_current_fixture()
+    value = _backend_projection_value(tmp_path, binding, report)
+    projected = value.provenance["composite_gate_execution"]
+    assert set(projected["gate_records"]) == set(binding["required_gates"])
+    assert projected["receipt_sha256"] == value.outputs["backend_result.json"]
+    assert projected["worker_component"] == "producer"
+    assert projected["worker_source"] == str(backend.HERE / "execution_backend_worker.py")
+    assert projected["gate_sources"]
+    # No Controller, observed process, sealed issuance, adoption or native tool
+    # exists in this fixture. Projection alone does not authorize any of them.
+
+
+@pytest.mark.parametrize("fault", ["missing_ledger", "gate_cmd", "gate_rc", "source", "producer", "required_set"])
+def test_backend_incomplete_or_forged_projection_is_absent(tmp_path, fault):
+    binding, report = _backend_projection_current_fixture()
+    real = next(row for row in report["gate_ledger"] if row["gate"] in binding["required_gates"])
+    if fault == "missing_ledger": report["gate_ledger"] = []
+    elif fault == "gate_cmd": real["cmd"] += " --forged"
+    elif fault == "gate_rc": real["rc"] = True
+    elif fault == "source": report["source_sha"] = "STALE"
+    elif fault == "producer": report["canonical_receipts"][0]["producer"] = "caller_written"
+    elif fault == "required_set": binding["required_gates"] = []
+    value = _backend_projection_value(tmp_path, binding, report)
+    assert not value.provenance
+    assert value.metrics.get("canonical_evidence", 0) == 0
+
+
+def test_backend_measured_fail_survives_forged_projection(tmp_path):
+    binding, report = _backend_projection_current_fixture()
+    report["gate_ledger"] = []
+    report["producer_verdict"] = "FAIL"
+    value = _backend_projection_value(tmp_path, binding, report)
+    assert value.verdict == "FAIL"
+    assert not value.provenance
+
+
+@pytest.mark.parametrize("state", ["PASS", "FAIL", "NOT_MEASURED"])
+def test_backend_summary_states_keep_exact_gate_census_and_fail_precedence(tmp_path, state):
+    binding, report = _backend_projection_current_fixture()
+    report["gates"]["backend_canonical"] = state
+    value = _backend_projection_value(tmp_path, binding, report)
+    assert set(value.gates) == set(binding["required_gates"])
+    if state == "FAIL":
+        assert value.verdict == "FAIL"
+    if state != "PASS":
+        assert not value.provenance
+        assert value.metrics.get("canonical_evidence", 0) == 0
+    else:
+        assert value.provenance["composite_gate_execution"]
