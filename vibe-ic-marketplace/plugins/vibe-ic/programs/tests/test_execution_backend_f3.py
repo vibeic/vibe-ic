@@ -720,14 +720,18 @@ def test_r4_consumer_failure_cleans_only_new_generation(tmp_path, monkeypatch, a
 def test_r4_partial_generation_copy_rolls_back(tmp_path, monkeypatch):
     ctx = H.context(tmp_path); controller = H.controller(H.adapter()); root = tmp_path / 'partial'
     controller.run(ctx, root)
-    original = em.write_bytes; count = []
-    def fail_second(path, content):
-        count.append(path)
-        if len(count) == 2:
-            raise OSError('selected copy fault')
-        return original(path, content)
-    monkeypatch.setattr(em, 'write_bytes', fail_second)
+    # Inject a real publication error at the filesystem boundary. Source-bound
+    # call sites can retain their original write_bytes reference.
+    original = os.replace; count = []
+    def fail_second(source, target, *args, **kwargs):
+        if Path(target).is_relative_to(root / 'selected'):
+            count.append(Path(target))
+            if len(count) == 2:
+                raise OSError('selected copy fault')
+        return original(source, target, *args, **kwargs)
+    monkeypatch.setattr(os, 'replace', fail_second)
     assert observed(lambda: controller.adopt(ctx, root, H.choice(ctx, root))) == 'REFUSED:INVALID_ADOPTION_EVIDENCE'
+    assert len(count) == 2
     assert len(list((root / 'selected').iterdir())) == 0
 
 
