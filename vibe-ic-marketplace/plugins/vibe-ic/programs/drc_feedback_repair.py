@@ -660,10 +660,14 @@ def declare_publication(project: Path, record: dict, image: str,
     if not outputs:
         return None
     import datetime
+    local_route = _ce.no_container_route()
     row = {
         'record': 'invocation', 'tool': 'openroad', 'version': image,
-        'version_capture': 'image digest of the private docker run',
-        'command': command[:400], 'exec_route': 'container', 'exit_code': 0,
+        'version_capture': (
+            'local execution with a digest-bound outer image reference'
+            if local_route else 'image digest of the private docker run'),
+        'command': command[:400],
+        'exec_route': 'local' if local_route else 'container', 'exit_code': 0,
         'measured': True,
         'timestamp': datetime.datetime.now(datetime.timezone.utc)
                      .strftime('%Y-%m-%dT%H:%M:%SZ'),

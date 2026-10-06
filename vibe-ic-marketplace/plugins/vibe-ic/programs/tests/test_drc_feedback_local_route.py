@@ -182,3 +182,29 @@ def test_verify_streamed_refuses_unbound_image_before_any_tool(
     receipt = __import__('json').loads(
         (report / 'drc_feedback.json').read_text())
     assert receipt['finished_status'] == 'REFUSED'
+
+
+
+def test_local_publication_declares_local_execution_route(monkeypatch, tmp_path):
+    project = tmp_path / 'project'
+    output = project / 'phase3/stage3/pnr/routed.def'
+    output.parent.mkdir(parents=True)
+    output.write_text('DESIGN unit ;\n')
+    (project / 'reports/phase3').mkdir(parents=True)
+    (project / 'provenance.jsonl').write_text('')
+    monkeypatch.setattr(feedback._ce, 'no_container_route', lambda: True)
+    record = {
+        'source_def': str(output),
+        'publication': {
+            'output': str(output),
+            'replaced': [str(output)],
+            'from_sha256': 'b' * 64,
+        },
+    }
+    row = feedback.declare_publication(project, record, IMAGE, 'openroad local')
+    assert row['exec_route'] == 'local'
+    assert 'local execution' in row['version_capture']
+    assert 'digest-bound' in row['version_capture']
+    ledger_row = __import__('json').loads(
+        (project / 'provenance.jsonl').read_text())
+    assert ledger_row['exec_route'] == 'local'
