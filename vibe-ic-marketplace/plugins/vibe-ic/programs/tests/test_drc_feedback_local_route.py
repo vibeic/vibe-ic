@@ -143,3 +143,42 @@ def test_run_records_missing_local_image_digest_without_layout_mutation(
     receipt = project / 'reports/phase3/drc_feedback.json'
     assert receipt.is_file()
     assert 'FEEDBACK_IMAGE_DIGEST_REQUIRED' in receipt.read_text()
+
+
+
+def test_verify_streamed_refuses_unbound_image_before_any_tool(
+        monkeypatch, tmp_path):
+    project = tmp_path / 'project'
+    pnr = project / 'phase3/stage3/pnr'
+    report = project / 'reports/phase3'
+    pnr.mkdir(parents=True)
+    report.mkdir(parents=True)
+    source = pnr / 'unit.def'
+    source.write_text('DESIGN unit ;\n')
+    routed = pnr / 'routed.def'
+    routed.write_bytes(source.read_bytes())
+    gds = pnr / 'unit.gds'
+    gds.write_bytes(b'GDS')
+    (report / 'drc_feedback.json').write_text(
+        __import__('json').dumps({
+            'status': 'PASS', 'source_sha256': feedback._sha(source),
+        }) + '\n')
+    rule = {
+        'id': 'CO.6a', 'source': 'test', 'reason': 'test',
+        'obstruction_half_widths_um': [0.1],
+    }
+    monkeypatch.setattr(feedback, '_rules', lambda _deck: [rule])
+    tool_calls = []
+    def no_tool(*_args, **_kwargs):
+        tool_calls.append(True)
+        raise AssertionError('unbound image must not reach finished-layout measurement')
+    monkeypatch.setattr(feedback, '_measure', no_tool)
+    pdk = SimpleNamespace(drc_deck='/pdk/contact.drc')
+    result = feedback.verify_streamed(
+        project, 'unit', pdk, 'FEEDBACK_IMAGE_UNBOUND', gds)
+    assert result['finished_status'] == 'REFUSED'
+    assert result['finished_reason'] == 'FEEDBACK_IMAGE_DIGEST_REQUIRED'
+    assert tool_calls == []
+    receipt = __import__('json').loads(
+        (report / 'drc_feedback.json').read_text())
+    assert receipt['finished_status'] == 'REFUSED'

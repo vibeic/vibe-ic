@@ -572,6 +572,8 @@ def verify_streamed(project: Path, top: str, pdk: Any, image: str,
     source = project / 'phase3/stage3/pnr' / f'{top}.def'
     try:
         record = json.loads(receipt.read_text())
+        if not _image_digest_bound(image):
+            raise ValueError('FEEDBACK_IMAGE_DIGEST_REQUIRED')
         if record.get('status') != 'PASS' or record.get('source_sha256') != _sha(source):
             raise ValueError('FEEDBACK_ROUTE_DIGEST_MISMATCH')
         routed = project / 'phase3/stage3/pnr/routed.def'
