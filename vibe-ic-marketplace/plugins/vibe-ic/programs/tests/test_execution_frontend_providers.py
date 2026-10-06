@@ -814,6 +814,8 @@ def test_05ic_measured_gate_fail_precedes_changed_chain(tmp_path):
     project, ctx = _authority_project(tmp_path)
     controller = _authority_controller(); run = tmp_path / 'run'
     assert controller.run(ctx, run)['candidate_statuses']['frontend_0_5ic'] == 'ELIGIBLE'
+    completion_path = run / 'frontend_0_5ic/issued-completion.json'
+    completion_bytes = completion_path.read_bytes()
     output = run / 'frontend_0_5ic/outputs'
     report = output / 'reports/phase1/submission_template.json'
     document = json.loads(report.read_text())
@@ -828,4 +830,12 @@ def test_05ic_measured_gate_fail_precedes_changed_chain(tmp_path):
     receipt['evidence'] = asdict(evidence)
     receipt_path.write_text(json.dumps(receipt))
     assert _snapshot_adoption(controller, ctx, run) == 'REFUSED'
-    assert json.loads((run / 'adoption.json').read_text())['reason'] == 'GATE_FAIL'
+    # The fresh validator still reports measured FAIL above. It does not
+    # authorize a caller to rewrite evidence in an already sealed completion.
+    # That integrity boundary refuses before considering the edited receipt.
+    adoption = json.loads((run / 'adoption.json').read_text())
+    assert adoption['reason'] == 'EVIDENCE_CHANGED'
+    assert adoption['status'] == 'REFUSED'
+    assert adoption.get('selected') is None
+    assert not adoption.get('selected_generation')
+    assert completion_path.read_bytes() == completion_bytes
