@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
+import math
 import re
 import shlex
 from pathlib import Path
@@ -460,6 +461,30 @@ def _typed_parameters(spec: Mapping[str, object], source_sha: str,
     return params
 
 
+def _producer_timeout_s(spec: Mapping[str, object], params: Mapping[str, object]) -> float:
+    """Return the controller wall bound for one backend producer.
+
+    Backend rows have very different native runtimes.  The controller bound
+    is therefore a row-owned policy value when one is declared, with the
+    typed parameter default retained for rows that do not need a longer
+    native window.  This keeps small fixtures fast while preventing a
+    stream-out producer from being killed by the generic 30-second component
+    default before it can publish its measured receipt.
+    """
+    policy = spec.get("portfolio_policy", {})
+    configured = policy.get("producer_timeout_s") if isinstance(policy, Mapping) else None
+    raw = params.get("timeout_s", 60) if configured is None else configured
+    if isinstance(raw, bool):
+        raise em.Refusal("BACKEND_PRODUCER_TIMEOUT_INVALID", repr(raw))
+    try:
+        timeout = float(raw)
+    except (TypeError, ValueError) as exc:
+        raise em.Refusal("BACKEND_PRODUCER_TIMEOUT_INVALID", repr(raw)) from exc
+    if not math.isfinite(timeout) or not (timeout > 0):
+        raise em.Refusal("BACKEND_PRODUCER_TIMEOUT_INVALID", repr(raw))
+    return timeout
+
+
 def _step37_route_specs() -> tuple[dict, ...]:
     """Expose one streamout producer family; direct Magic is fallback refusal."""
     spec = next(row for row in coverage_rows() if row["step_id"] == "37")
@@ -540,7 +565,7 @@ def _adapter(spec: Mapping[str, object], source_sha: str, objective: Mapping[str
         source_sha=source_sha, source_files=source_files,
         tool_version="source-bound; native qualification NOT_MEASURED",
         engine_families=tuple(spec["engine_families"]),
-        components=(em.Component("producer", (str(Path(sys.executable).resolve()), str(producer), "{inputs}", "{outputs}", "--step-id", str(spec["step_id"]), "--params-json", json.dumps(params, sort_keys=True)), 30),),
+        components=(em.Component("producer", (str(Path(sys.executable).resolve()), str(producer), "{inputs}", "{outputs}", "--step-id", str(spec["step_id"]), "--params-json", json.dumps(params, sort_keys=True)), _producer_timeout_s(spec, params)),),
         validate=validator, required_outputs=("backend_result.json",),
         objective=dict(objective), applicability=applicability_kind,
         applicability_reason="" if applicable else str(applicability), role="producer",

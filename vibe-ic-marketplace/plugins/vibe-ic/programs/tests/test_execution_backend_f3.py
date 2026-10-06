@@ -24,6 +24,7 @@ from execution_adapters_backend import (
     _step37_route_specs,
     _site_path,
     register_backend_adapters,
+    _producer_timeout_s,
     _backend_input_contract,
     backend_project_input_contract,
     validate,
@@ -94,6 +95,22 @@ def test_backend_argv_binds_complete_typed_parameter_envelope():
     assert params["die_um"] == [100, 100] and params["util"] == 0.55
     assert "input_contract" in params and "source_sha" in params
     assert len(params["source_sha"]) == len(params["source_tree_sha"]) == 40
+
+
+def test_backend_producer_timeout_is_row_owned_and_fixture_parameterized():
+    """Long native rows must not inherit the 30-second Component default."""
+    from execution_provider_catalog import BACKEND_ROWS
+    timeout_by_step = {
+        step: _producer_timeout_s(BACKEND_ROWS[step], {"timeout_s": 7})
+        for step in BACKEND_IDS
+    }
+    # Step 37's stream-out producer is a physical native run and its policy
+    # explicitly grants the measured 30-minute window.
+    assert timeout_by_step["37"] >= 1800
+    # Rows without a long-runtime policy continue to honour the supplied
+    # fixture timeout, keeping unit tests and bounded fixtures fast.
+    assert timeout_by_step["15"] == 7
+    assert all(value > 0 for value in timeout_by_step.values())
 
 
 def test_backend_component_calls_real_worker_and_records_gate_boundary(tmp_path):
