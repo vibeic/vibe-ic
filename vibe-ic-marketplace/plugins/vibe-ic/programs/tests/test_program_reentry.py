@@ -868,7 +868,8 @@ _DRIFT_GUARD = {
     # check, which is the guard that owns those bytes.
     "input": "candidate snapshot RTL bytes do not match completion",
     "parent": "candidate snapshot RTL bytes do not match completion",
-    "prompt": "prompt drift",
+    # Current D1 admission owns prompt freshness before the local regate guard.
+    "prompt": "ROUTE_REENTRY_D1_INVALID: D1_CURRENT_PROMPT_PROVENANCE_MISMATCH",
     "challenge": "inherited challenge drift",
     "accepted": "task must be unaccepted",
     "accepted_ledger": "candidate already accepted",
@@ -1557,9 +1558,16 @@ def test_a_missing_or_unsupported_declared_exit_is_refused(
 def test_a_benchmark_with_no_bound_io_adapter_is_refused(
         tmp_path, monkeypatch, capsys):
     run, stuck, signed, path, request = _stuck_request(tmp_path, monkeypatch)
+    before = _protected(run, stuck)
+    calls = _gate(monkeypatch, _BENIGN)
     assert bd.cmd_resume("not-a-benchmark", "/unused", str(run),
                          worker_threads=1, program_regate=str(path)) == 2
-    assert "no bound IO adapter" in _refusal(capsys)
+    # Public continuation rejects an unknown benchmark at immutable I/O
+    # admission, before the explicit operation can inspect any repair bytes.
+    assert "IO_FORMAT_BINDING_REFUSED: continuation differs from issued I/O format" in capsys.readouterr().err
+    assert _protected(run, stuck) == before
+    assert calls == []
+    assert not (run / "program_regates").exists()
 
 
 # --- the preserved input, in both its records --------------------------
