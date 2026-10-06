@@ -610,6 +610,7 @@ def backend_project_input_contract(project: Path, step_id: str) -> tuple[str, ..
         doc = {}
     binding = doc.get("librelane_synthesis") if isinstance(doc, dict) else None
     if isinstance(binding, dict):
+        folder_path = None
         for key in ("folder", "mapped"):
             value = binding.get(key)
             if not isinstance(value, str):
@@ -618,6 +619,24 @@ def backend_project_input_contract(project: Path, step_id: str) -> tuple[str, ..
             if (not rel.is_absolute() and ".." not in rel.parts
                     and rel.parts and (root / rel).resolve().is_relative_to(root)):
                 result.append(rel.as_posix())
+                if key == "folder":
+                    folder_path = root / rel
+        # The synthesis receipt's state_files can point to an earlier
+        # producer in the same LibreLane chain (for example the Yosys JSON
+        # header consumed by Yosys.Synthesis).  Include those exact relative
+        # files, rather than reopening the entire producer directory.
+        if folder_path is not None:
+            try:
+                receipt = json.loads((folder_path / "vibeic_receipt.json").read_text())
+                state_files = receipt.get("input", {}).get("state_files", {})
+            except (OSError, ValueError, TypeError):
+                state_files = {}
+            if isinstance(state_files, dict):
+                for raw in state_files:
+                    path = Path(str(raw))
+                    if (path.is_absolute() and path.is_relative_to(root)
+                            and ".." not in path.parts):
+                        result.append(path.relative_to(root).as_posix())
     # The resolver validates the original producer state path from this
     # receipt; the resolved config is its explicit input fingerprint.
     if (root / "phase3/librelane/synthesis_resolved.json").is_file():
