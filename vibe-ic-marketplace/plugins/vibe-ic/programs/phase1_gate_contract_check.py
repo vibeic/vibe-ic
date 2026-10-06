@@ -129,7 +129,7 @@ def _syntax_error(py_path: Path) -> str | None:
         # Compile raw source bytes so CPython preserves PEP 263 encoding and
         # BOM handling while avoiding py_compile's cache write.
         compile(py_path.read_bytes(), str(py_path), "exec", dont_inherit=True)
-    except (OSError, SyntaxError, UnicodeError) as exc:
+    except (OSError, SyntaxError, UnicodeError, ValueError) as exc:
         return str(exc)
     return None
 

@@ -31,3 +31,10 @@ def test_syntax_check_rejects_invalid_encoding_without_cache(tmp_path):
     gate.write_bytes(b"value = '" + bytes([0xff]) + b"'\n")
     assert _syntax_error(gate)
     assert sorted(p.relative_to(tmp_path).as_posix() for p in tmp_path.rglob("*") if p.is_file()) == ["invalid_encoding.py"]
+
+
+def test_syntax_check_reports_embedded_nul_without_cache(tmp_path):
+    gate = tmp_path / "embedded_nul.py"
+    gate.write_bytes(b"value = 1\x00\n")
+    assert _syntax_error(gate)
+    assert sorted(p.relative_to(tmp_path).as_posix() for p in tmp_path.rglob("*") if p.is_file()) == ["embedded_nul.py"]
