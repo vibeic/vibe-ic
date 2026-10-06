@@ -230,6 +230,7 @@ def _historical_pending_repair(run, parent, challenge, output):
         repair_parent_candidate=parent["candidate_snapshot"],
         repair_provenance=provenance, repair_input_candidate=repair_input)
     task["pre_gate_input"] = bd._bind_pre_gate_output(preserved, task["rtl_sha256"])
+    task["verification_execution"] = parent["verification_execution"]
     bd._write_jsonl(run / bd._REVIEW_WORKLIST, [task])
     solve_path = run / "solve_report.json"
     solve = json.loads(solve_path.read_text())
@@ -277,6 +278,8 @@ def _stuck(tmp_path, monkeypatch):
     _declare_exit(run)
     # The Program is upgraded. Everything after this point runs on the fix.
     monkeypatch.undo()
+    _rt_pair.assume_matching_runtime_pair(monkeypatch)
+    monkeypatch.setenv("VIBEIC_CHALLENGE_BACKEND", "host")
     monkeypatch.setattr(bd, "_program_version", lambda: _NEW_PROGRAM,
                         raising=False)
     return run, stuck, signed, signed_record, record_path
@@ -369,6 +372,8 @@ def _case(tmp_path, monkeypatch, *, reviewed=False, exit_step="2"):
         fx._write_review(task, fx._proven_fail_review(task))
     # The Program is upgraded; everything after this point runs on the fix.
     monkeypatch.undo()
+    _rt_pair.assume_matching_runtime_pair(monkeypatch)
+    monkeypatch.setenv("VIBEIC_CHALLENGE_BACKEND", "host")
     monkeypatch.setattr(bd, "_program_version", lambda: _NEW_PROGRAM,
                         raising=False)
     monkeypatch.setattr(bd.subprocess, "run", boundary)
