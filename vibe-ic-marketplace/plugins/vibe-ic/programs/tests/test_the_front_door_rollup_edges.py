@@ -50,6 +50,7 @@ import vibe_ic_entry_guard as GUARD                          # noqa: E402
 import vibe_ic_one_shot_runner as V
 import _audit_scope                          # noqa: E402
 from _route_fixture import stage_owner_route  # noqa: E402
+from programs.tests.test_execution_receipt_chain import real_entry, isolated_transport
 
 
 @pytest.fixture()
@@ -140,6 +141,7 @@ def _drive_main(project: Path, monkeypatch, *, phase1, phase2, phase3=None,
     monkeypatch.setattr(sys, "argv",
                         ["vibe_ic_one_shot_runner", str(project),
                          "--no-dashboard", "--skip-hardware", *extra_argv])
+    real_entry('IC', 'default', project)
     rc = V.main()
     out = _pl.report_path(project, "vibe_ic_one_shot.json")
     return rc, json.loads(out.read_text())
@@ -249,6 +251,7 @@ def test_a_failing_audit_still_fails_a_fully_passing_run(project, monkeypatch):
     monkeypatch.setattr(V, "_run_phase", fake_run_phase)
     monkeypatch.setattr(sys, "argv", ["vibe_ic_one_shot_runner", str(project),
                                       "--no-dashboard", "--skip-hardware"])
+    real_entry('IC', 'default', project)
     rc = V.main()
     doc = json.loads(_pl.report_path(project, "vibe_ic_one_shot.json").read_text())
     assert doc["completion_audit_axis"]["state"] == "FAIL"
@@ -446,6 +449,7 @@ def test_a_stale_audit_pass_repeated_by_a_fresh_carrier_is_not_measured(
     monkeypatch.setattr(V, "_phase1_decision", lambda *a, **k: (True, "docs"))
     monkeypatch.setattr(sys, "argv", ["vibe_ic_one_shot_runner", str(project),
                                       "--no-dashboard", "--skip-hardware"])
+    real_entry('IC', 'default', project)
     rc = V.main()
     doc = json.loads(_pl.report_path(project, "vibe_ic_one_shot.json").read_text())
     axis = doc["completion_audit_axis"]
@@ -475,6 +479,7 @@ def test_a_stale_audit_fail_does_not_gate_a_good_run(project, monkeypatch):
     monkeypatch.setattr(V, "_phase1_decision", lambda *a, **k: (True, "docs"))
     monkeypatch.setattr(sys, "argv", ["vibe_ic_one_shot_runner", str(project),
                                       "--no-dashboard", "--skip-hardware"])
+    real_entry('IC', 'default', project)
     V.main()
     doc = json.loads(_pl.report_path(project, "vibe_ic_one_shot.json").read_text())
     assert doc["completion_audit_axis"]["state"] == "NOT_MEASURED"
@@ -532,6 +537,7 @@ def test_a_phase_that_left_no_report_is_not_measured(project, monkeypatch):
     monkeypatch.setattr(V, "_phase1_decision", lambda *a, **k: (True, "docs"))
     monkeypatch.setattr(sys, "argv", ["vibe_ic_one_shot_runner", str(project),
                                       "--no-dashboard", "--skip-hardware"])
+    real_entry('IC', 'default', project)
     rc = V.main()
     doc = json.loads(_pl.report_path(project, "vibe_ic_one_shot.json").read_text())
     rows = {r["name"]: r["verdict"] for r in doc["phases"]}
@@ -560,6 +566,7 @@ def test_a_stale_phase_report_is_not_this_runs_row(project, monkeypatch):
     monkeypatch.setattr(V, "_phase1_decision", lambda *a, **k: (True, "docs"))
     monkeypatch.setattr(sys, "argv", ["vibe_ic_one_shot_runner", str(project),
                                       "--no-dashboard", "--skip-hardware"])
+    real_entry('IC', 'default', project)
     V.main()
     doc = json.loads(_pl.report_path(project, "vibe_ic_one_shot.json").read_text())
     rows = {r["name"]: r["verdict"] for r in doc["phases"]}
@@ -658,6 +665,7 @@ def test_phase1s_report_is_read_where_its_producer_writes(project, monkeypatch):
     monkeypatch.setattr(sys, "argv", ["vibe_ic_one_shot_runner", str(project),
                                       "--no-dashboard", "--skip-hardware",
                                       "--skip-phase3"])
+    real_entry('IC', 'default', project)
     rc = V.main()
     doc = json.loads(_pl.report_path(project, "vibe_ic_one_shot.json").read_text())
     rows = {r["name"]: r["verdict"] for r in doc["phases"]}
@@ -880,6 +888,7 @@ def test_a_phase_whose_process_failed_with_no_report_is_a_fail_and_halts(project
     monkeypatch.setattr(sys, "argv", ["vibe_ic_one_shot_runner", str(project),
                                       "--no-dashboard", "--skip-hardware",
                                       "--skip-phase3"])
+    real_entry('IC', 'default', project)
     rc = V.main()
 
     doc = json.loads(_pl.report_path(project, "vibe_ic_one_shot.json").read_text())
@@ -907,6 +916,7 @@ def test_a_phase_that_exited_zero_with_no_report_is_still_not_measured(project,
     monkeypatch.setattr(sys, "argv", ["vibe_ic_one_shot_runner", str(project),
                                       "--no-dashboard", "--skip-hardware",
                                       "--skip-phase3"])
+    real_entry('IC', 'default', project)
     rc = V.main()
 
     doc = json.loads(_pl.report_path(project, "vibe_ic_one_shot.json").read_text())
@@ -968,6 +978,7 @@ def test_a_phase_that_crashed_over_a_stale_report_is_a_fail_and_halts(project,
     monkeypatch.setattr(sys, "argv", ["vibe_ic_one_shot_runner", str(project),
                                       "--no-dashboard", "--skip-hardware",
                                       "--skip-phase3"])
+    real_entry('IC', 'default', project)
     rc = V.main()
     doc = json.loads(_pl.report_path(project, "vibe_ic_one_shot.json").read_text())
     rows = {r["name"]: r["verdict"] for r in doc["phases"]}
@@ -1095,6 +1106,7 @@ def _drive_second_pass(project: Path, monkeypatch, *, extra_argv=()) -> tuple:
     monkeypatch.setattr(sys, "argv",
                         ["vibe_ic_one_shot_runner", str(project),
                          "--no-dashboard", "--skip-hardware", "--skip-phase3", *extra_argv])
+    real_entry('IC', 'default', project)
     rc = V.main()
     out = _pl.report_path(project, "vibe_ic_one_shot.json")
     return rc, json.loads(out.read_text())
@@ -1187,6 +1199,7 @@ def test_a_crashed_phase_one_cannot_borrow_an_earlier_runs_naming(project, monke
     monkeypatch.setattr(sys, "argv",
                         ["vibe_ic_one_shot_runner", str(project),
                          "--no-dashboard", "--skip-hardware", "--skip-phase3"])
+    real_entry('IC', 'default', project)
     rc = V.main()
     doc = json.loads(_pl.report_path(project, "vibe_ic_one_shot.json").read_text())
 
@@ -1232,6 +1245,7 @@ def test_a_first_pass_that_crashes_after_writing_the_sidecar_is_not_demoted(
     monkeypatch.setattr(sys, "argv",
                         ["vibe_ic_one_shot_runner", str(project),
                          "--no-dashboard", "--skip-hardware", "--skip-phase3"])
+    real_entry('IC', 'default', project)
     rc = V.main()
     doc = json.loads(_pl.report_path(project, "vibe_ic_one_shot.json").read_text())
 

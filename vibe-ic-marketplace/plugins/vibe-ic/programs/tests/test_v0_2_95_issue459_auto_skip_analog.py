@@ -36,6 +36,7 @@ if str(_PROGRAMS) not in sys.path:
     sys.path.insert(0, str(_PROGRAMS))
 
 import vibe_ic_one_shot_runner as orch  # noqa: E402
+from programs.tests.test_execution_receipt_chain import real_entry, isolated_transport
 
 
 def _drive_main(monkeypatch, project: Path, argv_extra, need_analog: bool):
@@ -48,6 +49,12 @@ def _drive_main(monkeypatch, project: Path, argv_extra, need_analog: bool):
     # owner route rule 2026-09-28 (ICROUTE)
     from _route_fixture import stage_owner_route
     stage_owner_route(project, "ic")
+    if need_analog:
+        # The dispatched analog route consumes the Phase-1 block declaration.
+        import json
+        declaration = project / "phase1/analog/analog_block_list.json"
+        declaration.parent.mkdir(parents=True, exist_ok=True)
+        declaration.write_text(json.dumps({"blocks": [{"name": "neutral_analog"}]}))
 
     def fake_run_phase(label, runner, args, env=None):
         # #588 — _run_phase gained an env= kwarg (re-entrancy token);
@@ -76,6 +83,7 @@ def _drive_main(monkeypatch, project: Path, argv_extra, need_analog: bool):
     argv = ["vibe_ic_one_shot_runner.py", str(project),
             "--route", "ic"] + list(argv_extra)
     monkeypatch.setattr(sys, "argv", argv)
+    real_entry('IC', 'default', project)
     orch.main()
     return captured
 
@@ -220,6 +228,12 @@ def _drive_main_verdicts(monkeypatch, project: Path, argv_extra,
     # owner route rule 2026-09-28 (ICROUTE)
     from _route_fixture import stage_owner_route
     stage_owner_route(project, "ic")
+    if need_analog:
+        # The dispatched analog route consumes the Phase-1 block declaration.
+        import json
+        declaration = project / "phase1/analog/analog_block_list.json"
+        declaration.parent.mkdir(parents=True, exist_ok=True)
+        declaration.write_text(json.dumps({"blocks": [{"name": "neutral_analog"}]}))
 
     def fake_run_phase(label, runner, args, env=None):
         captured["phase_args"][runner.name] = list(args)
@@ -248,6 +262,7 @@ def _drive_main_verdicts(monkeypatch, project: Path, argv_extra,
                         ["vibe_ic_one_shot_runner.py", str(project),
                          "--route", "ic"]
                         + list(argv_extra))
+    real_entry('IC', 'default', project)
     orch.main()
     return captured
 
