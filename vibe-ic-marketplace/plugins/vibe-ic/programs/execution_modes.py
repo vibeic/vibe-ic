@@ -368,9 +368,17 @@ def _python_import_requests(content: str) -> tuple:
 
 
 def _local_python_imports(path: Path) -> set[Path]:
-    """Resolve current local imports using only content-keyed syntax caching."""
+    """Resolve imports live, or provisionally within a verified snapshot."""
+    snapshot = _active_source_snapshot()
+    path = Path(path).absolute()
+    cache_key = ('execution-modes-local-imports', str(path))
+    if snapshot is not None:
+        cached = snapshot.value_get(cache_key)
+        if cached is not None:
+            snapshot.stats['local_import_hits'] += 1
+            return set(cached)
+        snapshot.stats['local_import_misses'] += 1
     try:
-        snapshot = _active_source_snapshot()
         requests = _python_import_requests(snapshot.read_text(path) if snapshot else path.read_text())
     except (OSError, SyntaxError):
         return set()
@@ -387,16 +395,28 @@ def _local_python_imports(path: Path) -> set[Path]:
             candidate = root.joinpath(*parts)
             module = candidate.with_suffix('.py') if parts else candidate / '__init__.py'
             package = candidate / '__init__.py'
-            if any(p.is_symlink() for p in (module, package)):
-                raise Refusal('ENTRY_SOURCE_UNBOUND', str(candidate))
-            found = {p.resolve() for p in (module, package) if p.is_file()}
+            if snapshot is not None:
+                probes = [snapshot.import_candidate(p) for p in (module, package)]
+                if any(state[1] for state in probes):
+                    raise Refusal('ENTRY_SOURCE_UNBOUND', str(candidate))
+                found = {state[3] for state in probes if state[2]}
+            else:
+                if any(p.is_symlink() for p in (module, package)):
+                    raise Refusal('ENTRY_SOURCE_UNBOUND', str(candidate))
+                found = {p.resolve() for p in (module, package) if p.is_file()}
             if found:
                 result.update(found)
                 for i in range(1, len(parts)):
                     init = root.joinpath(*parts[:i], '__init__.py')
-                    if init.is_file():
+                    if snapshot is not None:
+                        state = snapshot.import_candidate(init)
+                        if state[2]:
+                            result.add(state[3])
+                    elif init.is_file():
                         result.add(init.resolve())
                 break
+    if snapshot is not None:
+        snapshot.value_put(cache_key, frozenset(result))
     return result
 
 
@@ -1853,7 +1873,9 @@ class Controller:
 
     def plan(self, context: Context, execution_mode: str | None = None,
              superiority: Superiority | None = None, *, execution_root: Path | None = None) -> dict:
-        if context.step_id == '9':
+        # Only the canonical Context may expose Step9 fields before binding.
+        # Its first plan closes preparation even when later authority fails.
+        if type(context) is _require_context_type() and context.step_id == '9':
             with self.registry._version_lock:
                 self.registry._step9_binding_closed = True
         self._validate_live_portfolio()

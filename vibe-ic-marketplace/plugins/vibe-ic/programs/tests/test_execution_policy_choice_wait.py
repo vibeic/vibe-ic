@@ -117,6 +117,11 @@ def test_step9_adoption_uses_product_importer_for_current_project(tmp_path, monk
         'contexts': {}, 'bindings': {}, 'runs': {},
     }
     monkeypatch.setattr(policy, '_ordinary_runtime', runtime)
+    # This neutral transform fixture measures importer transport. Native
+    # installation and late input binding have their own lifecycle controls.
+    preparations = []
+    monkeypatch.setattr(policy, '_prepare_step9',
+                        lambda current, parameters: preparations.append((current, parameters)))
     pending = policy.dispatch_fixed_step(project, '9')
     assert pending['status'] == 'AWAITING_AI_SELECTION'
     ctx = runtime['contexts']['9']
@@ -144,6 +149,7 @@ def test_step9_adoption_uses_product_importer_for_current_project(tmp_path, monk
     assert len(calls) == 1
     assert calls[0][:4] == (project, ctx, controller, run)
     assert calls[0][4]['selected'] == 'a'
+    assert preparations == [(runtime, {}), (runtime, {})]
 
 
 def test_no_choice_times_out_without_adoption_or_import(tmp_path, monkeypatch):

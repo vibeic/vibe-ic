@@ -77,14 +77,24 @@ class SourceSnapshot:
         self.repo = Path(repo).resolve()
         self.source_sha = source_sha
         self.stats = {"file_reads": 0, "final_reads": 0, "git_commands": 0,
-                      "git_tree_reads": 0, "closure_misses": 0, "closure_hits": 0}
+                      "git_tree_reads": 0, "closure_misses": 0, "closure_hits": 0,
+                      "path_resolutions": 0, "path_cache_hits": 0,
+                      "digest_computations": 0, "digest_cache_hits": 0,
+                      "blob_computations": 0, "blob_cache_hits": 0,
+                      "local_import_misses": 0, "local_import_hits": 0,
+                      "provider_import_misses": 0, "provider_import_hits": 0,
+                      "import_probes": 0, "import_probe_hits": 0}
         self.commit = self._git_text("rev-parse", "--verify", f"{source_sha}^{{commit}}")
         self.tree = self._git_text("rev-parse", "--verify", f"{self.commit}^{{tree}}")
         head = self._git_text("rev-parse", "HEAD")
         if head != self.commit:
             raise RuntimeError("SOURCE_AUTHORITY_STALE")
         self._bytes: dict[Path, bytes] = {}
-        self._spellings: set[Path] = set()
+        self._resolved: dict[Path, Path] = {}
+        self._relative: dict[Path, str | None] = {}
+        self._digests: dict[Path, str] = {}
+        self._blob_digests: dict[Path, str] = {}
+        self._import_candidates: dict[Path, tuple] = {}
         self._git_blobs: dict[str, str] | None = None
         self._closures: dict[object, frozenset[Path]] = {}
         self._values: dict[object, object] = {}
@@ -95,12 +105,43 @@ class SourceSnapshot:
         return subprocess.run(["git", "-C", str(self.repo), *args], check=True,
                               capture_output=True, text=True, timeout=10).stdout.strip()
 
-    def read_bytes(self, path: Path) -> bytes:
+    def _resolve(self, path: Path) -> Path:
+        # These are transaction inputs, not execution-time authority. Finalize
+        # re-resolves every spelling and reads every captured file afresh.
         spelling = Path(path).absolute()
+        if spelling in self._resolved:
+            self.stats["path_cache_hits"] += 1
+            return self._resolved[spelling]
         if spelling.is_symlink() or not spelling.is_file():
             raise RuntimeError(f"SOURCE_AUTHORITY_UNAVAILABLE: {spelling}")
-        self._spellings.add(spelling)
-        path = spelling.resolve()
+        resolved = spelling.resolve()
+        self._resolved[spelling] = resolved
+        self.stats["path_resolutions"] += 1
+        return resolved
+
+    def _relative_name(self, path: Path) -> str | None:
+        if path not in self._relative:
+            self._relative[path] = (path.relative_to(self.repo).as_posix()
+                                    if path.is_relative_to(self.repo) else None)
+        return self._relative[path]
+
+    @staticmethod
+    def _import_path_state(path: Path) -> tuple:
+        # Include negative lookups and parent-link targets. Equal bytes at a
+        # new target cannot preserve the original module-resolution proof.
+        return (path.exists(), path.is_symlink(), path.is_file(), path.resolve())
+
+    def import_candidate(self, path: Path) -> tuple:
+        spelling = Path(path).absolute()
+        if spelling not in self._import_candidates:
+            self._import_candidates[spelling] = self._import_path_state(spelling)
+            self.stats["import_probes"] += 1
+        else:
+            self.stats["import_probe_hits"] += 1
+        return self._import_candidates[spelling]
+
+    def read_bytes(self, path: Path) -> bytes:
+        path = self._resolve(path)
         if path not in self._bytes:
             self._bytes[path] = path.read_bytes()
             self.stats["file_reads"] += 1
@@ -110,7 +151,13 @@ class SourceSnapshot:
         return self.read_bytes(path).decode()
 
     def digest(self, path: Path) -> str:
-        return hashlib.sha256(self.read_bytes(path)).hexdigest()
+        path = self._resolve(path)
+        if path not in self._digests:
+            self._digests[path] = hashlib.sha256(self.read_bytes(path)).hexdigest()
+            self.stats["digest_computations"] += 1
+        else:
+            self.stats["digest_cache_hits"] += 1
+        return self._digests[path]
 
     def closure_get(self, key):
         value = self._closures.get(key)
@@ -121,7 +168,7 @@ class SourceSnapshot:
         return set(value)
 
     def closure_put(self, key, paths):
-        self._closures[key] = frozenset(Path(p).resolve() for p in paths)
+        self._closures[key] = frozenset(self._resolve(p) for p in paths)
 
     def value_get(self, key):
         return self._values.get(key)
@@ -135,22 +182,27 @@ class SourceSnapshot:
         blobs = self._tree_blobs()
         result = {}
         for path in paths:
-            path = Path(path).resolve()
-            if not path.is_relative_to(self.repo):
+            path = self._resolve(path)
+            relative = self._relative_name(path)
+            if relative is None:
                 continue
-            relative = path.relative_to(self.repo).as_posix()
             if relative not in blobs:
                 raise RuntimeError(f"SOURCE_AUTHORITY_UNAVAILABLE: {relative}")
             result[str(path)] = blobs[relative]
         return result
 
     def verify_tracked(self, path: Path) -> None:
-        path = Path(path).resolve()
+        path = self._resolve(path)
         data = self.read_bytes(path)
-        if not path.is_relative_to(self.repo):
+        relative = self._relative_name(path)
+        if relative is None:
             return
-        relative = path.relative_to(self.repo).as_posix()
-        if self._tree_blobs().get(relative) != self._git_blob(data):
+        if path not in self._blob_digests:
+            self._blob_digests[path] = self._git_blob(data)
+            self.stats["blob_computations"] += 1
+        else:
+            self.stats["blob_cache_hits"] += 1
+        if self._tree_blobs().get(relative) != self._blob_digests[path]:
             raise RuntimeError(f"SOURCE_AUTHORITY_DIRTY: {path}")
 
     def _tree_blobs(self) -> dict[str, str]:
@@ -182,9 +234,14 @@ class SourceSnapshot:
                 self._git_text("rev-parse", "HEAD^{tree}") != self.tree):
             raise RuntimeError("SOURCE_AUTHORITY_STALE")
         blobs = self._tree_blobs()
-        for spelling in self._spellings:
+        for spelling, initial_state in self._import_candidates.items():
+            if self._import_path_state(spelling) != initial_state:
+                raise RuntimeError(f"SOURCE_AUTHORITY_DIRTY: import candidate {spelling}")
+        for spelling, initial_target in self._resolved.items():
             if spelling.is_symlink() or not spelling.is_file():
                 raise RuntimeError(f"SOURCE_AUTHORITY_UNAVAILABLE: {spelling}")
+            if spelling.resolve() != initial_target:
+                raise RuntimeError(f"SOURCE_AUTHORITY_DIRTY: {spelling}")
         for path, original in self._bytes.items():
             if path.is_symlink() or not path.is_file():
                 raise RuntimeError(f"SOURCE_AUTHORITY_UNAVAILABLE: {path}")

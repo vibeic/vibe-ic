@@ -21,14 +21,76 @@ _launchers = []
 
 @pytest.fixture(autouse=True)
 def isolated_transport(monkeypatch):
+    monkeypatch.setattr(policy, '_ordinary_runtime', None)
     for name in (policy.ENV, policy._CAPABILITY_FD_ENV, 'VIBEIC_EXECUTION_AUTH_SOCKET'):
-        monkeypatch.delenv(name, raising=False)
+        # real_entry writes these locators directly. Record even an absent
+        # original key so monkeypatch restores it after the issuer FD closes.
+        monkeypatch.setenv(name, os.environ.get(name, ''))
+        monkeypatch.delenv(name)
     yield
     for proc, fd, channel in _launchers:
         channel.close(); proc.wait(timeout=10)
         try: os.close(fd)
         except OSError: pass
     _launchers.clear()
+
+
+@pytest.mark.parametrize('previous', [None, 'preexisting-locator'])
+def test_isolated_transport_restores_direct_locator_writes(previous):
+    names = (policy.ENV, policy._CAPABILITY_FD_ENV, 'VIBEIC_EXECUTION_AUTH_SOCKET')
+    with pytest.MonkeyPatch.context() as outer:
+        prior_runtime = object()
+        outer.setattr(policy, '_ordinary_runtime', prior_runtime)
+        for name in names:
+            if previous is None:
+                outer.delenv(name, raising=False)
+            else:
+                outer.setenv(name, previous)
+        with pytest.MonkeyPatch.context() as patch:
+            transport = isolated_transport.__wrapped__(patch)
+            next(transport)
+            assert policy._ordinary_runtime is None
+            policy._ordinary_runtime = object()
+            assert all(name not in os.environ for name in names)
+            for name in names:
+                os.environ[name] = 'closed-test-locator'
+            with pytest.raises(StopIteration):
+                next(transport)
+        assert {name: os.environ.get(name) for name in names} == dict.fromkeys(names, previous)
+        assert policy._ordinary_runtime is prior_runtime
+
+
+@pytest.mark.parametrize('damage', ['closed', 'invalid_json'])
+def test_default_bootstrap_refuses_invalid_capability_locator(tmp_path, monkeypatch, damage):
+    fd = os.memfd_create('invalid-capability-control')
+    os.write(fd, b'not an authority credential')
+    monkeypatch.setenv(policy._CAPABILITY_FD_ENV, str(fd))
+    if damage == 'closed':
+        os.close(fd)
+    try:
+        with pytest.raises(em.Refusal, match='REQUEST_CAPABILITY_INVALID'):
+            policy.bootstrap(tmp_path, parameters={'skip_analog': True})
+    finally:
+        if damage != 'closed':
+            os.close(fd)
+
+
+def test_real_issuer_fixture_teardown_leaves_unissued_default_inert(tmp_path):
+    with pytest.MonkeyPatch.context() as patch:
+        transport = isolated_transport.__wrapped__(patch)
+        next(transport)
+        issued = real_entry('IC', 'default', tmp_path)
+        assert issued['route']['project'] == str(tmp_path)
+        fd = int(os.environ[policy._CAPABILITY_FD_ENV])
+        os.fstat(fd)
+        with pytest.raises(StopIteration):
+            next(transport)
+    with pytest.raises(OSError):
+        os.fstat(fd)
+    assert policy._CAPABILITY_FD_ENV not in os.environ
+    assert 'VIBEIC_EXECUTION_AUTH_SOCKET' not in os.environ
+    assert policy._ordinary_runtime is None
+    assert policy.bootstrap(tmp_path) is None
 
 
 def real_entry(path='IC', execution_mode='default', project=None):
@@ -930,8 +992,8 @@ def test_selected_generation_mutation_during_publish_refuses(tmp_path, monkeypat
     controller.run(ctx, root, 'ultra-mode')
     original = em.Controller._selected_generation
 
-    def mutate_after_copy(run_root, receipt):
-        generation = original(run_root, receipt)
+    def mutate_after_copy(run_root, receipt, issue):
+        generation = original(run_root, receipt, issue)
         artifact = Path(generation['directory']) / 'value.txt'
         artifact.chmod(0o644)
         artifact.write_text('late selected mutation\n')

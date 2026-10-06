@@ -72,18 +72,34 @@ def _import_names(text: str) -> tuple[str, ...]:
 
 
 def _local_imports(path: str, text: str) -> tuple[Path, ...]:
-    """Resolve sibling helpers and literal imports against today's files."""
-    source = Path(path)
+    """Resolve live, or reuse a transaction whose path probes finalize afresh."""
+    from execution_source_snapshot import active
+    snapshot = active()
+    source = Path(path).absolute()
+    cache_key = ('provider-local-imports', str(source), text)
+    if snapshot is not None:
+        cached = snapshot.value_get(cache_key)
+        if cached is not None:
+            snapshot.stats['provider_import_hits'] += 1
+            return cached
+        snapshot.stats['provider_import_misses'] += 1
     found: set[Path] = set()
     for name in _import_names(text):
         base = name.split(".")[0]
         for directory in (source.parent, HERE):
             candidates = (directory / (base + ".py"), directory / base / "__init__.py")
-            local = [p for p in candidates if p.is_file() and not p.is_symlink()]
+            if snapshot is not None:
+                probes = [snapshot.import_candidate(p) for p in candidates]
+                local = [state[3] for state in probes if state[2] and not state[1]]
+            else:
+                local = [p.resolve() for p in candidates if p.is_file() and not p.is_symlink()]
             if local:
-                found.update(p.resolve() for p in local)
+                found.update(local)
                 break
-    return tuple(sorted(found))
+    result = tuple(sorted(found))
+    if snapshot is not None:
+        snapshot.value_put(cache_key, result)
+    return result
 
 
 def source_closure(paths: Iterable[Path]) -> set[Path]:
