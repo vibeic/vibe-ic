@@ -469,7 +469,9 @@ def _repair_producer(monkeypatch, project, producer, status, detail):
     if switch is not None:
         sw = project / "phase3" / "librelane_switch.json"
         sw.parent.mkdir(parents=True, exist_ok=True)
-        sw.write_text(json.dumps({"steps": switch}))
+        settings = json.loads(sw.read_text()) if sw.is_file() else {}
+        settings.setdefault("steps", {}).update(switch)
+        sw.write_text(json.dumps(settings))
     monkeypatch.setattr(R, fn, lambda *a, **k: R.StepResult(row, status, 0.0, detail))
     if producer == "librelane":
         monkeypatch.setattr(R, "_librelane_postroute_repair_mode", lambda p: "librelane")
