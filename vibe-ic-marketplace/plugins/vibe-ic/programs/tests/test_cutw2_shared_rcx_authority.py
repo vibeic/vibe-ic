@@ -19,6 +19,8 @@ def put(path, value):
 
 
 def setup_case(tmp_path, monkeypatch, *, cap=30, corruption=None):
+    from _stated_eda_image import mock_docker_route
+    mock_docker_route(monkeypatch)
     odb=tmp_path/'route.odb'; odb.write_text('native routed database')
     sdc=tmp_path/'route.sdc'; sdc.write_text('create_clock -period 20 [get_ports clk]\n')
     deff=tmp_path/'route.def'; deff.write_text('native routed DEF')
