@@ -10,6 +10,41 @@ from programs.tests.test_execution_receipt_chain import isolated_transport, real
 from programs.tests.test_default_d1_entry import _raw_docs_project
 
 
+def test_derived_answer_documents_reach_the_real_gate_and_remain_bound(tmp_path):
+    import area_budget_basis_gen as area
+    import execution_modes as modes
+    from programs.tests.test_r0929_deliverable_consistency import _project
+
+    project = _project(tmp_path)
+    path = project / 'input/step_0_5ic_answers.json'
+    answers = json.loads(path.read_text())
+    answers['operator_template']['absent_reason'] = (
+        'This neutral input specifies no operator, purchased slot or submission '
+        'template; the owner explicitly requires an independent DIE delivery.')
+    path.write_text(json.dumps(answers) + '\n')
+    assert area.main([str(project), '--answers', str(path), '--out', str(path)]) == 0
+    docs = {str(p.relative_to(project)): p.read_bytes()
+            for p in (project / 'input/docs').iterdir() if p.is_file()}
+    real_entry('IC', 'default', project)
+    policy.bootstrap(project, parameters={'skip_analog': True}, phase1_only=True)
+    phase1._run_step_0_5ic(project)
+    receipt_path, = (project / 'reports/execution').glob(
+        '*/0.5ic/frontend_0_5ic/receipt.json')
+    receipt = json.loads(receipt_path.read_text())
+    output = Path(receipt['output_root'])
+    assert all(row['rc'] == 0 for row in receipt['processes'])
+    gate = json.loads((output / 'reports/execution_gates/tapeout_declaration_check.json').read_text())
+    assert gate['verdict'] == 'PASS' and gate['refusals'] == []
+    for name, content in docs.items():
+        assert receipt['binding']['inputs'][name] == hashlib.sha256(content).hexdigest()
+        assert (output / name).read_bytes() == content
+    modes.consume_frontend_chain(output, receipt['binding'])
+    changed = output / next(iter(docs))
+    changed.write_bytes(changed.read_bytes() + b'\nchanged after staging\n')
+    with pytest.raises(modes.Refusal, match='STAGED_INPUT_COPY_CHANGED'):
+        modes.consume_frontend_chain(output, receipt['binding'])
+
+
 @pytest.mark.parametrize('present', [False, True], ids=['missing', 'present'])
 def test_default_05ic_uses_canonical_search_and_real_gates(tmp_path, present):
     project = tmp_path / 'subject'
