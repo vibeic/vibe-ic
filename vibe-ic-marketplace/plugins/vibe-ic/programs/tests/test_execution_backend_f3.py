@@ -156,10 +156,15 @@ def test_backend_project_contract_uses_published_synthesis_folder_only(tmp_path)
     resolved = project / "phase3/librelane/synthesis_resolved.json"
     resolved.parent.mkdir(parents=True)
     resolved.write_text("{}")
+    folder = project / "phase3/librelane/02-yosys-synthesis"
+    folder.mkdir(parents=True)
+    (folder / "vibeic_receipt.json").write_text(json.dumps({"input": {
+        "state_files": {str(project / "phase3/librelane/01-yosys-jsonheader/top.h.json"): "a"}}}))
     contract = backend_project_input_contract(project, "37")
     assert "phase3/librelane/02-yosys-synthesis" in contract
     assert "phase2/stage2/synth/top_synth.v" in contract
     assert "phase3/librelane" not in contract
+    assert "phase3/librelane/01-yosys-jsonheader/top.h.json" in contract
 
 
 def test_source_identity_binds_worker_runner_and_librelane_contract():
