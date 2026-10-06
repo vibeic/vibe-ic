@@ -411,7 +411,9 @@ def test_br2_001_real_controller_and_issued_mutation_control(tmp_path, release_a
     assert controller.adopt(ctx, root, H.choice(ctx, root, release_arm.arm_id))['status'] == 'ADOPTED'
     receipt = root / release_arm.arm_id / 'receipt.json'
     payload = json.loads(receipt.read_text()); payload['reason'] = 'mutated'; dump(receipt, payload)
-    assert observed(lambda: controller.adopt(ctx, root, H.choice(ctx, root, release_arm.arm_id))) == 'REFUSED:EXECUTION_AUTHORITY_MISMATCH'
+    # The immutable existing adoption chain checks its original arm digest
+    # before the completion consumer. Both checks retain the issued bytes.
+    assert observed(lambda: controller.adopt(ctx, root, H.choice(ctx, root, release_arm.arm_id))) == 'REFUSED:ARM_RECEIPT_DIGEST_MISMATCH'
 
 
 def test_br2_001_direct_arm_and_injected_issuer_refused(tmp_path):

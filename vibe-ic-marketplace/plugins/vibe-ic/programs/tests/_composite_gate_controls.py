@@ -58,6 +58,15 @@ def assert_current_composite_refusals(controller, context, root, arm_id):
         candidate['evidence']['verdict'] = 'FAIL'
         candidate['evidence']['provenance'] = {}
         refuse('measured_fail_precedence', candidate, 'GATE_FAIL')
+        candidate = deepcopy(baseline)
+        candidate['reason'] = 'mutated'
+        try:
+            controller._execution_authority(root, json.loads((root / 'plan.json').read_text()), candidate, arm)
+        except em.Refusal as exc:
+            results['issued_completion_mutation'] = exc.code
+            assert exc.code == 'EXECUTION_AUTHORITY_MISMATCH'
+        else:
+            raise AssertionError('issued completion mutation became authoritative')
         try:
             report = json.loads(report_bytes)
             report['gate_records'][0]['argv'].append('--forged')
