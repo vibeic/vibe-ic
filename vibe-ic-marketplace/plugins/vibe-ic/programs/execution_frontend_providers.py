@@ -408,8 +408,12 @@ def register_factories(registry, *, step_ids=None, project=None, parameters=None
                           capture_output=True).returncode != 0:
             raise ValueError('frontend provider source is dirty; refusing registration')
         objective={'parameters_from':'issued_manifest'}
+        # 0.5ic runs two sequential producers plus their source-bound snapshots
+        # and receipts. Give that composite a bounded execution budget; each
+        # independent quality gate keeps the normal component deadline.
+        worker_budget = {'timeout_s': 120} if row == '0.5ic' else {}
         components = [Component('frontend_worker', ('python3',worker,'--step',row,'--inputs','{inputs}','--outputs','{outputs}',
-                       *(('--manifest','{inputs}/issued_manifest.json') if row == '8' else ())))]
+                       *(('--manifest','{inputs}/issued_manifest.json') if row == '8' else ())), **worker_budget)]
         if row in ('0.5ic', '8'):
             def commands(node):
                 if isinstance(node, dict):
