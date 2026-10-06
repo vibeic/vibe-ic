@@ -64,3 +64,13 @@ def state_the_image_for_children(monkeypatch, digest: str = STATED_DIGEST) -> st
     monkeypatch.setenv("VIBEIC_EDA_IMAGE", ref)
     monkeypatch.delenv("IIC_EDA_IMAGE", raising=False)
     return ref
+
+
+def mock_docker_route(monkeypatch):
+    """Select the host route for a fixture which substitutes the Docker edge.
+
+    This does not attest an image or replace producer/consumer validation.
+    LOCAL identity tests must use their own explicit no-container fixture.
+    """
+    import _container_exec
+    monkeypatch.setattr(_container_exec, "no_container_route", lambda: False)

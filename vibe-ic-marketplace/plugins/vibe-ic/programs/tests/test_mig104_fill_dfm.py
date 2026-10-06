@@ -129,6 +129,8 @@ def _stage_fill(tmp_path, monkeypatch, tool_writes):
     """The runner's real `_emit_metal_fill`; the ONLY fake is the tool's own
     file write (`tool_writes(tcl_text) -> DEF text`)."""
     project = tmp_path / "proj"
+    # This fixture substitutes the direct OpenROAD producer, not LibreLane.
+    _switch(project, **{"34": "direct"})
     pnr = _pnr(project)
     (pnr / "top.def").write_text(CAL_NEG.read_text())
     (pnr / "routed.def").write_text(CAL_NEG.read_text())

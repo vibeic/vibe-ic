@@ -23,6 +23,8 @@ def put(path, value):
 
 def producer(project: Path, monkeypatch, half='drc', counts=None, inherited=None,
              missing=(), both_lvs=False, gds_path=None):
+    from _stated_eda_image import mock_docker_route
+    mock_docker_route(monkeypatch)
     counts = counts or {}
     pdk_root = project / 'maintenance-pdk'
     tree = pdk_root / 'procx'

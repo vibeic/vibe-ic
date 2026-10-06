@@ -50,6 +50,8 @@ def _stated_image(monkeypatch):
     below reaches `librelane_contract.resolve_image`, which inside the image (no
     docker) would refuse LL_IMAGE_NOT_RESOLVABLE and on a docker host would
     borrow whatever it holds (tests/_stated_eda_image.py)."""
+    from _stated_eda_image import mock_docker_route
+    mock_docker_route(monkeypatch)
     monkeypatch.delenv("VIBEIC_LIBRELANE_IMAGE", raising=False)
     state_the_image(monkeypatch)
 

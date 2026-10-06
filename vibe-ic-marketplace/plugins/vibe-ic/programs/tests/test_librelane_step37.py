@@ -22,6 +22,8 @@ def _put(path, value):
 @pytest.mark.parametrize("second_metric,expected", [(2, 6), (None, None)])
 def test_drc_requires_both_tool_measurements(tmp_path, monkeypatch,
                                              second_metric, expected):
+    from _stated_eda_image import mock_docker_route
+    mock_docker_route(monkeypatch)
     project = tmp_path / "project"
     source = project / "source"
     source.mkdir(parents=True)

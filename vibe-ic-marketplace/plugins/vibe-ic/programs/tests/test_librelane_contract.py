@@ -553,6 +553,8 @@ def test_native_stat_binds_area_gate_and_netlist_to_tool_output(tmp_path):
 
 
 def test_synthesis_chain_accepts_pre_netlist_state_and_keeps_tool_output(tmp_path, monkeypatch):
+    from _stated_eda_image import mock_docker_route
+    mock_docker_route(monkeypatch)
     p = design(tmp_path)
     initial = put(p / 'initial.json', {'json_h': str(put(p / 'header.json', {}))})
     config = put(p / 'config.json', {'meta': {'step': 'Yosys.Synthesis'}})
@@ -572,6 +574,8 @@ def test_synthesis_chain_accepts_pre_netlist_state_and_keeps_tool_output(tmp_pat
 
 
 def test_stapostpnr_receipt_binds_mounted_liberty_bytes(tmp_path, monkeypatch):
+    from _stated_eda_image import mock_docker_route
+    mock_docker_route(monkeypatch)
     project = tmp_path / 'design'
     pdk = tmp_path / 'pdk'
     liberty = pdk / 'cells/a.lib'
@@ -617,6 +621,8 @@ def test_stapostpnr_receipt_binds_mounted_liberty_bytes(tmp_path, monkeypatch):
 
 
 def test_stream_lane_and_synthesis_namespace_keep_separate_receipts(tmp_path, monkeypatch):
+    from _stated_eda_image import mock_docker_route
+    mock_docker_route(monkeypatch)
     p = design(tmp_path)
     netlist = p / 'block.nl.v'
     netlist.write_text('module block; endmodule')
@@ -663,12 +669,16 @@ def test_step9_dual_does_not_silently_run_direct_without_routed_evidence(tmp_pat
 
 
 def test_image_incapable_is_named_and_not_fallback(monkeypatch):
+    from _stated_eda_image import mock_docker_route
+    mock_docker_route(monkeypatch)
     monkeypatch.setattr(contract.subprocess, 'run', lambda *a, **k: SimpleNamespace(returncode=1))
     with pytest.raises(contract.Refusal, match='LL_IMAGE_INCAPABLE'):
         contract.image_capability('released-image')
 
 
 def test_chain_resumes_success_and_reruns_failed_step(tmp_path, monkeypatch):
+    from _stated_eda_image import mock_docker_route
+    mock_docker_route(monkeypatch)
     p = design(tmp_path)
     source = p / 'source'
     source.mkdir()
@@ -700,6 +710,8 @@ def test_chain_resumes_success_and_reruns_failed_step(tmp_path, monkeypatch):
 
 
 def test_chain_stall_is_reaped_by_its_name_and_recorded_unmeasured(tmp_path, monkeypatch):
+    from _stated_eda_image import mock_docker_route
+    mock_docker_route(monkeypatch)
     p = design(tmp_path)
     source = p / 'block.nl.v'
     source.write_text('module block; endmodule\n')
@@ -749,6 +761,8 @@ def test_chain_stall_is_reaped_by_its_name_and_recorded_unmeasured(tmp_path, mon
 
 
 def test_chain_progressing_past_stall_grace_is_not_killed(tmp_path, monkeypatch):
+    from _stated_eda_image import mock_docker_route
+    mock_docker_route(monkeypatch)
     p = design(tmp_path)
     source = p / 'block.nl.v'
     source.write_text('module block; endmodule\n')
@@ -804,6 +818,8 @@ def test_step31_reports_chain_stall_as_unmeasured(tmp_path, monkeypatch):
 
 
 def test_floorplan_accepts_netlist_only_before_it_creates_geometry(tmp_path, monkeypatch):
+    from _stated_eda_image import mock_docker_route
+    mock_docker_route(monkeypatch)
     p = design(tmp_path)
     netlist = p / 'source.nl.v'
     netlist.write_text('module block; endmodule\n')

@@ -37,6 +37,8 @@ def write(path, text):
 @pytest.fixture(autouse=True)
 def _fresh_capability_cache(monkeypatch):
     # raising=False: the pre-T89 contract has no cache, and must still run each test
+    from _stated_eda_image import mock_docker_route
+    mock_docker_route(monkeypatch)
     monkeypatch.setattr(contract, '_CAPABILITY', {}, raising=False)
     monkeypatch.delenv('VIBEIC_LIBRELANE_IMAGE', raising=False)
     monkeypatch.delenv('VIBEIC_LIBRELANE_PDK_ROOT', raising=False)

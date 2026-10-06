@@ -69,6 +69,8 @@ def built_record(p, files, simulation=True, bind=True):
 
 @pytest.fixture
 def resolver(monkeypatch):
+    from _stated_eda_image import mock_docker_route
+    mock_docker_route(monkeypatch)
     calls = []
 
     def run(cmd, **_kw):

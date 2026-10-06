@@ -26,6 +26,8 @@ _DENSITY_DECK = ('chip_area = extent.sized(0.0).area\n' + _DECK).replace(
 def neutral_declared_windows(tmp_path, monkeypatch):
     # Source controls use the existing synthetic PDK input, never a foundry
     # threshold disguised as a design-specific production default.
+    from _stated_eda_image import mock_docker_route
+    mock_docker_route(monkeypatch)
     registry = BF.put(tmp_path / 'source-fixture-pdk-registry.json', {'pdks': [{
         'name': 'neutral', 'metal_density_windows': {
             'layers': {'metal1': [0.33, None], 'metal2': [0.33, None]},
