@@ -86,6 +86,16 @@ def test_controller_executes_worker_and_validator_reddens_on_output_mutation(tmp
     assert record['producer_result']['status']=='FAIL'
     assert receipt['evidence']['outputs']=={'canonical.json':em.digest(canonical)}
     arm,=registry.adapters('D1')
+    # The real producer recorder stamped its own writes, not a copied claim.
+    import _phase1_producer_identity as identity
+    stamp=json.loads((identity.sidecar_dir(staged)/'step_identity.json').read_text())['phase1']
+    assert len(stamp['outputs'])==28 and stamp['carried']=={}
+    # A direct helper has no live Controller-child issuance, even with these
+    # genuine frozen bytes and their manifest. It must write nothing.
+    import execution_frontend_worker as worker
+    with pytest.raises(em.Refusal, match='ISSUED_FRONTEND_UNAVAILABLE'):
+        worker.produce_d1(frozen, output)
+    assert canonical.read_bytes()==original
     # Forged SDC successes cannot qualify any D1 gate.
     sdc=output/'reports/phase2/sdc_check.json'; sdc.parent.mkdir(parents=True)
     sdc.write_text(json.dumps({'program':'sdc_syntax_check','passed':True}))

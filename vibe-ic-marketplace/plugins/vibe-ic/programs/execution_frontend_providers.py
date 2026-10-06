@@ -302,7 +302,7 @@ def register_factories(registry, *, step_ids=None, project=None, parameters=None
                 typed = (isinstance(record, dict) and
                          record.get('schema') == 'frontend_worker_output/1' and
                          record.get('step_id') == 'D1' and
-                         record.get('producer') == 'design_one_shot_runner.step_phase1' and
+                         record.get('producer') == 'phase1_one_shot_runner._run_docs_mode+run_phase1_second_track' and
                          record.get('result') == 'NOT_MEASURED' and
                          isinstance(producer, dict) and
                          producer.get('name') == 'phase1' and
@@ -310,7 +310,8 @@ def register_factories(registry, *, step_ids=None, project=None, parameters=None
                                                     'NOT_APPLICABLE', 'INCOMPLETE') and
                          type(producer.get('duration_s')) in (int, float) and
                          isinstance(producer.get('detail'), str) and
-                         isinstance(producer.get('output_files'), list))
+                         isinstance(producer.get('extras'), dict) and
+                         isinstance(producer.get('reason_class'), str))
                 verdict = 'FAIL' if typed and producer['status'] == 'FAIL' else 'NOT_MEASURED'
                 return Evidence(facts, verdict,
                                 {name: 'NOT_MEASURED' for name in _gate_names}, artifacts,
