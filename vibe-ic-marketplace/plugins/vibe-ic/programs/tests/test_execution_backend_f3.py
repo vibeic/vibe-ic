@@ -99,7 +99,7 @@ def test_backend_component_calls_real_worker_and_records_gate_boundary(tmp_path)
     row = next(r for r in coverage_rows() if r["step_id"] == "15")
     context = issued_context(em.Context("15", BASE, {"project/input/seed.txt": source},
                          {"metric": "canonical_evidence", "direction": "max"},
-                         tuple(row["consumer_gates"]), "librelane"), tmp_path)
+                         tuple(_required_gates("15")), "librelane"), tmp_path, mode="default")
     registry = register_backend_adapters(em.Registry(), source_sha=BASE, available=True)
     controller = em.Controller(registry, em.Budget(cpus=1, ram_mb=512, workers=1))
     plan = controller.plan(context, "default-mode")
@@ -133,6 +133,11 @@ def test_source_identity_binds_worker_runner_and_librelane_contract():
             "librelane_cts_hold.py"}.issubset(names)
 
 
+def _required_gates(step_id):
+    return next(row['mandatory_gate_programs'] for row in em.load_portfolio()['steps']
+                if row['id'] == step_id)
+
+
 def test_controller_adoption_calls_selected_backend_consumer(tmp_path, monkeypatch):
     # A finite source fixture gives the public controller a real eligible arm;
     # the consumer spy proves adoption passes the immutable selected generation
@@ -152,7 +157,7 @@ def test_controller_adoption_calls_selected_backend_consumer(tmp_path, monkeypat
     row = next(r for r in coverage_rows() if r["step_id"] == "15")
     context = issued_context(em.Context("15", BASE, {"project/input/seed.txt": source},
                          {"metric": "canonical_evidence", "direction": "max"},
-                         tuple(row["consumer_gates"]), "librelane"), tmp_path)
+                         tuple(_required_gates("15")), "librelane"), tmp_path)
 
     def validator(outputs, binding):
         result = json.loads((outputs / "backend_result.json").read_text())
@@ -169,6 +174,8 @@ def test_controller_adoption_calls_selected_backend_consumer(tmp_path, monkeypat
         ("backend_result.json",), {"metric": "canonical_evidence", "direction": "max"},
         output_contract={name: ("backend_result.json",) for name in row["canonical_outputs"]},
         qualification_evidence="R2 finite producer fixture", available=True)
+    adapter = replace(adapter, source_files={**adapter.source_files,
+        **{str(p): em.digest(p) for p in em._source_closure(adapter.source_files)}})
     registry = em.Registry(); register_source_fixture(registry, adapter, fixture_root=tmp_path)
     controller = em.Controller(registry, em.Budget(cpus=1, ram_mb=512, workers=1))
     seen = {}
@@ -196,7 +203,7 @@ def test_public_controller_refuses_changed_actual_producer_call(tmp_path):
     row = next(r for r in coverage_rows() if r["step_id"] == "15")
     context = issued_context(em.Context("15", BASE, {"project/input/seed.txt": source},
                          {"metric": "canonical_evidence", "direction": "max"},
-                         tuple(row["consumer_gates"]), "librelane"), tmp_path)
+                         tuple(_required_gates("15")), "librelane"), tmp_path, mode="default")
     original_registry = register_backend_adapters(source_sha=BASE, available=True)
     original_adapter = original_registry.adapters("15")[0]
     producer = next(Path(name) for name in original_adapter.source_files
@@ -352,7 +359,7 @@ def ctl(arm, budget=None, *, fixture_root=None):
         registry.register(arm)
     else:
         register_source_fixture(registry, arm, fixture_root=fixture_root)
-    return em.Controller(registry, budget or em.Budget(1, 512, workers=1))
+    return em.Controller(registry, budget or em.Budget(1, max(512, arm.ram_mb), workers=1))
 
 
 def forged_first_write(controller, ctx, arm, root):
@@ -389,7 +396,7 @@ def forged_first_write(controller, ctx, arm, root):
 
 
 def test_br2_001_first_write_cannot_mint_adoption(tmp_path, release_arm):
-    ctx = context16(tmp_path)
+    ctx = context16(tmp_path, native_clock=True)
     actual = observed(lambda: forged_first_write(ctl(release_arm), ctx, release_arm, tmp_path / 'forged'))
     assert actual == 'REFUSED:ISSUED_AUTHORITY_UNAVAILABLE'
 
@@ -415,12 +422,12 @@ def test_br2_001_direct_arm_and_injected_issuer_refused(tmp_path):
 
 
 def test_br2_002_irrelevant_source_and_labels_cannot_split_implementation(tmp_path, release_arm):
-    ctx = context16(tmp_path); extra = tmp_path / 'unexecuted.txt'; extra.write_text('unexecuted\n')
+    ctx = context16(tmp_path, native_clock=True); extra = tmp_path / 'unexecuted.txt'; extra.write_text('unexecuted\n')
     first = replace(release_arm, tool_id='first')
     duplicate = replace(first, arm_id='relabelled', tool_id='second', engine_families=('invented',),
                         source_files={**first.source_files, str(extra): em.digest(extra)})
     registry = em.Registry(); register_source_fixture(registry, first, fixture_root=tmp_path); register_source_fixture(registry, duplicate, fixture_root=tmp_path)
-    controller = em.Controller(registry, em.Budget(2, 1024, workers=2))
+    controller = em.Controller(registry, em.Budget(2, 2 * first.ram_mb, workers=2))
     plan = controller.plan(ctx, 'ultra-mode')
     assert len(plan['arms']) == 1
     assert controller.run(ctx, tmp_path / 'deduped', 'ultra-mode')['candidate_statuses'] == {plan['arms'][0]: 'ELIGIBLE'}
@@ -429,9 +436,9 @@ def test_br2_002_irrelevant_source_and_labels_cannot_split_implementation(tmp_pa
 def test_br2_002_real_components_stay_distinct_and_claims_have_source_evidence(tmp_path):
     # This real checked-in tool is consumed through the repository resolver.
     assert require_repo() / 'vibe-ic-marketplace/plugins/vibe-ic/programs/tests/fixtures/execution_modes_tool.py' == H.TOOL
-    ctx = H.context(tmp_path); controller = H.controller(H.adapter('first'), H.adapter('second'))
+    ctx = H.context(tmp_path); controller = H.controller(H.adapter('a'), H.adapter('b'))
     plan = controller.plan(ctx, 'ultra-mode')
-    assert plan['arms'] == ['first', 'second']
+    assert plan['arms'] == ['a', 'b']
     assert all(v['scope'] == 'SOURCE_COMPONENT_CLOSURE' and v['native_independence'] == 'NOT_MEASURED'
                for v in plan['independence'].values())
     assert len({v['sha256'] for v in plan['independence'].values()}) == 2
@@ -451,7 +458,7 @@ def finite_backend(tmp_path):
         source_files={**arm.source_files, str(script): em.digest(script)})
     seed = tmp_path / 'seed.txt'; seed.write_text('seed\n')
     ctx = issued_context(em.Context('15', current_source_identity(), {'project/input/seed.txt': seed}, arm.objective,
-                      tuple(dict.fromkeys(row['consumer_gates'])), 'librelane'), tmp_path)
+                      tuple(_required_gates('15')), 'librelane'), tmp_path)
     return ctl(arm, fixture_root=tmp_path), ctx, arm
 
 
@@ -507,7 +514,8 @@ def test_br2_004_factory_supervisor_worker_route_roundtrip(tmp_path, monkeypatch
         actual = observed(lambda: producers._step37_route(params))
     assert actual == 'librelane'
     assert receipt['processes'][0]['issued_environment'] == {
-        k:actual_env[k] for k in ('VIBEIC_ARM_ID', 'VIBEIC_STEP37_ROUTE')}
+        k:actual_env[k] for k in ('VIBEIC_ARM_ID', 'VIBEIC_STEP37_ROUTE',
+                                 'PYTHONPYCACHEPREFIX', 'PYTHONDONTWRITEBYTECODE')}
     assert arm.arm_id == 'backend_37_librelane'
     assert params['route'] == params['streamout_route'] == 'librelane'
     result = producers._step37_streamout_result(tmp_path, actual,
@@ -572,7 +580,7 @@ def test_br2_006_feasibility_precedes_ready(tmp_path, release_arm, qualified, re
 
 
 def test_br2_006_fitting_unqualified_arm_runs(tmp_path, release_arm):
-    ctx = context16(tmp_path); controller = ctl(release_arm)
+    ctx = context16(tmp_path, native_clock=True); controller = ctl(release_arm)
     assert controller.plan(ctx)['portfolio'][0]['admission'] == 'READY_SOURCE_BOUND'
     assert controller.run(ctx, tmp_path / 'fitting')['candidate_statuses'][release_arm.arm_id] == 'ELIGIBLE'
 
@@ -620,7 +628,7 @@ def test_r3_coverage_census_matches_registered_streamout_identity():
 # R4 controls extend the reviewed test module without changing earlier cases.
 @pytest.mark.parametrize('style', ['direct', 'alias'])
 def test_r4_transparent_wrapper_has_one_real_producer(tmp_path, release_arm, style):
-    ctx = context16(tmp_path)
+    ctx = context16(tmp_path, native_clock=True)
     release_arm = replace(release_arm, tool_id='source_worker_16')
     wrapper = tmp_path / 'transparent.py'
     symbol = 'main as invoke' if style == 'alias' else 'main'
@@ -634,7 +642,7 @@ def test_r4_transparent_wrapper_has_one_real_producer(tmp_path, release_arm, sty
         engine_families=('caller_distinct_label',), source_files=sources,
         components=(replace(component, argv=(component.argv[0], str(wrapper), *component.argv[2:])),))
     registry = em.Registry(); register_source_fixture(registry, release_arm, fixture_root=tmp_path); register_source_fixture(registry, wrapped, fixture_root=tmp_path)
-    controller = em.Controller(registry, em.Budget(2, 1024, workers=2))
+    controller = em.Controller(registry, em.Budget(2, 2 * first.ram_mb, workers=2))
     plan = controller.plan(ctx, 'ultra-mode')
     assert len(plan['arms']) == 1
     assert controller.run(ctx, tmp_path / 'wrapper-run', 'ultra-mode')['candidate_statuses'] == {

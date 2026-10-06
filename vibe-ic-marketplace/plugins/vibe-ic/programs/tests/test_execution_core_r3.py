@@ -100,10 +100,14 @@ path.write_bytes(path.read_bytes()+b'\nMUTATED_TRANSITIVE_SOURCE\n')
 arm.source_files[str(path)]=H.em.digest(path)
 controller=H.em.Controller(registry,H.em.Budget(2,512),H.controller().portfolio)
 root=Path(tempfile.mkdtemp())
-result=controller.run(H.context(root),root/'run')
-assert result['status']=='NOT_MEASURED', result
-assert result['candidate_statuses']['a']=='NOT_MEASURED',result
+try:
+    controller.run(H.context(root),root/'run')
+except H.em.Refusal as exc:
+    assert exc.code == 'PROVIDER_DEPENDENCY_UNBOUND', exc
+else:
+    raise AssertionError('mutated registered source reached execution')
 assert not (root/'run/selected').exists()
+assert not (root/'run/a/receipt.json').exists()
 print('POST_REGISTER_REHASH_REFUSED')
 """
     probe = subprocess.run([sys.executable, '-c', script], cwd=plugin, capture_output=True, text=True, timeout=30)

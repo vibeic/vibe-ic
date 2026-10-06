@@ -71,7 +71,7 @@ def controller(*arms, fixture_root=None):
             registry.register(adapter)
         else:
             register_source_fixture(registry, adapter, fixture_root=fixture_root)
-    return em.Controller(registry, em.Budget(2, 1024, workers=2))
+    return em.Controller(registry, em.Budget(2, max(1024, sum(a.ram_mb for a in arms)), workers=2))
 
 
 def issued_context16(tmp_path):
