@@ -1157,7 +1157,7 @@ def _issued_frontend_child(plan_path, arm, component, argv, cwd, out_fd,
 class _IssuedFrontendProcess:
     """A bounded Linux child retaining the existing process-local issuer.
 
-    Only the exact registered 0.5ic worker uses this path. Other components
+    Only the exact registered 0.5ic and D1 workers use this path. Other components
     retain the exec launcher. No preexec_fn or external authorization service.
     """
     def __init__(self, plan_path, arm, component, argv, cwd, stdout, stderr,
@@ -2410,8 +2410,8 @@ class Controller:
                     child_env[ISSUED_MANIFEST_ENV] = str(manifest)
                     child_env['VIBEIC_MANIFEST_SHA256'] = receipt['manifest_sha256']
                     worker = str(Path(__file__).with_name('execution_frontend_worker.py').resolve())
-                    if (arm.step_id == '0.5ic' and len(argv) == 8 and
-                            argv[1:] == [worker, '--step', '0.5ic', '--inputs',
+                    if (arm.step_id in ('0.5ic', 'D1') and len(argv) == 8 and
+                            argv[1:] == [worker, '--step', arm.step_id, '--inputs',
                                          str(inputs), '--outputs', str(outputs)]):
                         process = _IssuedFrontendProcess(
                             root / 'issued-plan.json', arm, component, argv,

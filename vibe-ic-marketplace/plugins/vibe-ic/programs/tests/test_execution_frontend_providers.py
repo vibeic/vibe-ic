@@ -96,6 +96,9 @@ def test_controller_executes_worker_and_validator_reddens_on_output_mutation(tmp
     with pytest.raises(em.Refusal, match='ISSUED_FRONTEND_UNAVAILABLE'):
         worker.produce_d1(frozen, output)
     assert canonical.read_bytes()==original
+    with pytest.raises(ValueError, match='8: issued route mismatch'):
+        worker.run_row('8', frozen, output)
+    assert canonical.read_bytes()==original
     # Forged SDC successes cannot qualify any D1 gate.
     sdc=output/'reports/phase2/sdc_check.json'; sdc.parent.mkdir(parents=True)
     sdc.write_text(json.dumps({'program':'sdc_syntax_check','passed':True}))
