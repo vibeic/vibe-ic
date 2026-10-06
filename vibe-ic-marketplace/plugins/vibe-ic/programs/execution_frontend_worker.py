@@ -118,7 +118,9 @@ def _cli(step, project, output, modules, args=()):
 
 def produce_d1(project,output,**k):
     import design_one_shot_runner as d
-    return _record('D1',project,output,'design_one_shot_runner.step_phase1',d.step_phase1,**k)
+    # Selection objectives remain bound by the issued manifest and receipt.
+    # The canonical Phase-1 producer accepts only its project argument.
+    return _record('D1',project,output,'design_one_shot_runner.step_phase1',d.step_phase1)
 
 
 def _output_paths(root, required):
