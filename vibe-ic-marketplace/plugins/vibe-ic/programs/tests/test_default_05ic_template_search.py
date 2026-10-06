@@ -27,7 +27,7 @@ def test_derived_answer_documents_reach_the_real_gate_and_remain_bound(tmp_path)
             for p in (project / 'input/docs').iterdir() if p.is_file()}
     real_entry('IC', 'default', project)
     policy.bootstrap(project, parameters={'skip_analog': True}, phase1_only=True)
-    phase1._run_step_0_5ic(project)
+    assert phase1._run_step_0_5ic(project) == 0
     receipt_path, = (project / 'reports/execution').glob(
         '*/0.5ic/frontend_0_5ic/receipt.json')
     receipt = json.loads(receipt_path.read_text())
@@ -35,6 +35,11 @@ def test_derived_answer_documents_reach_the_real_gate_and_remain_bound(tmp_path)
     assert all(row['rc'] == 0 for row in receipt['processes'])
     gate = json.loads((output / 'reports/execution_gates/tapeout_declaration_check.json').read_text())
     assert gate['verdict'] == 'PASS' and gate['refusals'] == []
+    assert receipt['evidence']['gates']['submission_template_check'] == 'NOT_APPLICABLE'
+    adoption = json.loads((receipt_path.parent.parent / 'adoption.json').read_text())
+    assert adoption['status'] == 'ADOPTED'
+    assert not modes.required_gate_satisfied('0.5ic', 'tapeout_declaration_check', 'NOT_APPLICABLE')
+    assert not modes.required_gate_satisfied('32', 'submission_template_check', 'NOT_APPLICABLE')
     for name, content in docs.items():
         assert receipt['binding']['inputs'][name] == hashlib.sha256(content).hexdigest()
         assert (output / name).read_bytes() == content

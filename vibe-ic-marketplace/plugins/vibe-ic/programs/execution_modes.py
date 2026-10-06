@@ -58,6 +58,18 @@ from _atomic_artefact import write_bytes, write_json
 from execution_source_snapshot import SourceSnapshot, active as _active_source_snapshot
 
 
+def required_gate_satisfied(step_id, gate, verdict):
+    """Honor the template checker's documented exit-zero applicability case.
+
+    NOT_APPLICABLE remains visible in evidence. No physical gate or other
+    step can use it to satisfy an obligation. Execution and input authority
+    are still verified separately before eligibility and adoption.
+    """
+    return verdict == 'PASS' or (
+        step_id == '0.5ic' and gate == 'submission_template_check' and
+        verdict == 'NOT_APPLICABLE')
+
+
 # The issuer is owned by this live controller process, never a caller-supplied
 # digest or a secret serialized beside editable run receipts. A new interpreter
 # cannot adopt a previous issuer's run: durable external supervision is not wired.
@@ -2886,7 +2898,8 @@ class Controller:
                     gate_receipt.get('inputs') != binding['inputs'] or
                     gate_receipt.get('output_digest') != _hash(evidence.get('outputs', {}))):
                 raise Refusal('GATE_EXECUTION_UNBOUND', gate)
-        if verdict != 'PASS' or any(gates.get(k) != 'PASS' for k in context.required_gates):
+        if verdict != 'PASS' or any(not required_gate_satisfied(
+                context.step_id, k, gates.get(k)) for k in context.required_gates):
             raise Refusal('GATE_NOT_MEASURED', arm.arm_id)
         if arm.step_id == '0.5ic' and arm.tool_id == 'frontend-worker':
             chain = consume_frontend_chain(Path(receipt['output_root']), binding)
@@ -3033,7 +3046,8 @@ class Controller:
                 Path(receipt['output_root']), self._context_binding(context)))
             if (final_evidence != receipt['evidence'] or
                     final_evidence.get('verdict') != 'PASS' or
-                    any(final_evidence.get('gates', {}).get(gate) != 'PASS'
+                    any(not required_gate_satisfied(context.step_id, gate,
+                        final_evidence.get('gates', {}).get(gate))
                         for gate in context.required_gates)):
                 raise Refusal('FINAL_EVIDENCE_CHANGED', str(arm_id))
             self._eligible(receipt, context, arm)
@@ -3176,7 +3190,8 @@ class Controller:
         final_evidence = asdict(arm.validate(Path(receipt['output_root']), self._context_binding(context)))
         if (final_evidence != receipt.get('evidence') or
                 final_evidence.get('verdict') != 'PASS' or
-                any(final_evidence.get('gates', {}).get(gate) != 'PASS'
+                any(not required_gate_satisfied(context.step_id, gate,
+                    final_evidence.get('gates', {}).get(gate))
                     for gate in context.required_gates)):
             raise Refusal('FINAL_EVIDENCE_CHANGED', str(arm_id))
         return adoption

@@ -200,6 +200,8 @@ def _gate_verdict(program, path):
         doc=json.loads(path.read_text())
         if program == 'submission_template_check':
             verdict=doc['check']['verdict']
+            if verdict == 'NOT_APPLICABLE':
+                return verdict
         else:
             verdict=doc['verdict']
         if verdict not in ('PASS','FAIL'):
@@ -222,8 +224,9 @@ def _run_gate(program, root, source_dir):
         except OSError:
             return 'NOT_MEASURED'
         verdict=_gate_verdict(program, report) if report.is_file() else 'NOT_MEASURED'
-        if cp.returncode == 0 and verdict == 'PASS':
-            return 'PASS'
+        if cp.returncode == 0 and (verdict == 'PASS' or (
+                program == 'submission_template_check' and verdict == 'NOT_APPLICABLE')):
+            return verdict
         if cp.returncode != 0 and verdict == 'FAIL':
             return 'FAIL'
         return 'NOT_MEASURED'
@@ -346,7 +349,8 @@ def register_factories(registry, *, step_ids=None, project=None, parameters=None
                     verdict='FAIL'
                 elif (step_status == 'PASS' and gates and
                       chain is not None and
-                      all(value == 'PASS' for value in gates.values()) and
+                      all(em.required_gate_satisfied(_row, name, value)
+                          for name, value in gates.items()) and
                       all(any(fnmatch.fnmatch(rel, alt.strip())
                               for rel in artifacts
                               for alt in str(spec).split(' OR '))
