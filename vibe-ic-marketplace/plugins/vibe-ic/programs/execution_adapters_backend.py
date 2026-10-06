@@ -577,6 +577,7 @@ def _backend_input_contract(step_id: str, spec: Mapping[str, object]) -> tuple[s
         "phase1/generated_docs", "phase1/pdk_staging_read.json",
         "phase1/merged_docs", "phase2/stage1/rtl", "phase2/stage2", "reports/phase2/dft",
         "phase2/stage2/synth/synth_inputs.json", "phase3/librelane_switch.json",
+        "reports/pdk_via_patch_legalization.json",
     ]
     # PnR and streamout rows consume the current physical checkpoint.  Keep
     # it separate from the generic synthesis closure so earlier rows do not
