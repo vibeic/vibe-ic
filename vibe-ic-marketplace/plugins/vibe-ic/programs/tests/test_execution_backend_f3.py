@@ -28,6 +28,7 @@ from execution_adapters_backend import (
     validate_streamout_receipt,
 )
 from execution_backend_worker import resolve_input_contract
+from synth_handoff_netlist_check import _project_path_resolver
 import execution_backend_consumer
 from execution_provider_catalog import BACKEND_IDS, coverage_rows, coverage_table, current_source_identity
 
@@ -123,6 +124,25 @@ def test_required_input_zero_byte_is_missing_but_nonempty_or_alternate_is_valid(
     alternate = project / "real.sv"
     alternate.write_text("module top; endmodule\n")
     assert resolve_input_contract(project, [{"path": "empty.v OR real.sv"}]) == []
+
+
+def test_backend_handoff_resolves_only_receipt_project_namespace(tmp_path):
+    """A staged backend may rebase receipt project paths, never read ambient originals."""
+    staged = tmp_path / "staged"
+    folder = staged / "phase3/librelane/02-yosys-synthesis"
+    folder.mkdir(parents=True)
+    (staged / "phase3/stage1/rtl").mkdir(parents=True)
+    source = staged / "phase3/librelane/02-yosys-synthesis/spm.nl.v"
+    source.write_text("module spm; endmodule\n")
+    original = Path("/original/project/phase3/librelane/02-yosys-synthesis/spm.nl.v")
+    resolver = _project_path_resolver(
+        staged, folder, {"nl": str(original)})
+    assert resolver(original) == source.resolve()
+    with pytest.raises(ValueError, match="absent"):
+        resolver(Path("/original/project/phase3/librelane/02-yosys-synthesis/missing.v"))
+    # A PDK path is external and stays external; it is subsequently checked
+    # by the receipt's PDK mount validator rather than mapped to the project.
+    assert resolver(Path("/pdk/gf180mcuD/config.tcl")) == Path("/pdk/gf180mcuD/config.tcl")
 
 
 def test_source_identity_binds_worker_runner_and_librelane_contract():

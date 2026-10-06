@@ -528,6 +528,13 @@ def _adapter(spec: Mapping[str, object], source_sha: str, objective: Mapping[str
         available = False
     params['execution_mode'] = execution_mode
     validator = _step37_validator("librelane") if spec["step_id"] == "37" else validate
+    # Backend producers are run in a clean arm directory.  The canonical
+    # runner consumes the already-issued Phase-1/2 and physical checkpoint;
+    # declaring only the row's terminal YAML inputs silently dropped that
+    # checkpoint and made the producer consult an ambient project path.  Keep
+    # the closure explicit and relative so the controller snapshots the exact
+    # bytes without granting the worker access to its parent project.
+    input_contract = _backend_input_contract(str(spec["step_id"]), spec)
     return em.Adapter(
         arm_id=str(spec["arm_id"]), tool_id="backend-worker", step_id=str(spec["step_id"]),
         source_sha=source_sha, source_files=source_files,
@@ -547,7 +554,40 @@ def _adapter(spec: Mapping[str, object], source_sha: str, objective: Mapping[str
                               else "" if available else "NATIVE_EXECUTION_NOT_MEASURED"),
         cpus=1, ram_mb=256, output_contract=output_contract,
         own_no_tool_reason="One complete producer owns all row outputs and gates; checker components are complementary.",
+        input_contract=input_contract,
     )
+
+
+def _backend_input_contract(step_id: str, spec: Mapping[str, object]) -> tuple[str, ...]:
+    """Return the frozen project closure needed by a backend producer.
+
+    ``required_inputs`` are the row's gate contract, not the producer's full
+    source population.  The native PnR/streamout producer verifies the
+    current L-doc, RTL, synthesis receipt, and prior physical state; all of
+    those must be copied into the isolated worker.  These are project-relative
+    directory declarations, so ``execution_policy`` rejects traversal and
+    symlinks before issuing the manifest.  We deliberately exclude
+    ``reports/execution`` and the worker's own output tree.
+    """
+    row = spec.get("canonical_row", {})
+    declared = [str(item.get("path")) for item in row.get("required_inputs", ())
+                if isinstance(item, Mapping) and item.get("path")]
+    common = [
+        "input/docs", "input/step_0_5ic_answers.json", "input/submission_template",
+        "phase1/generated_docs", "phase1/pdk_staging_read.json",
+        "phase1/merged_docs", "phase2/stage1/rtl", "phase2/stage2",
+        "phase3/librelane", "phase3/librelane_switch.json",
+    ]
+    # PnR and streamout rows consume the current physical checkpoint.  Keep
+    # it separate from the generic synthesis closure so earlier rows do not
+    # accidentally claim a later output as an input.
+    if step_id in {"15.5ic", "17", "18", "19", "20", "21", "22",
+                   "23", "24", "26", "26.5ic", "27", "28", "29", "30",
+                   "31", "32", "33", "34", "37", "37.3"}:
+        common.append("phase3/stage3/pnr")
+    if step_id in {"22", "23", "24", "30", "31", "32", "33", "34", "37", "37.3"}:
+        common.extend(("phase3/stage3/extracted", "phase3/stage3/signoff"))
+    return tuple(dict.fromkeys((*declared, *common)))
 
 
 def register_backend_adapters(registry: em.Registry | None = None, *, source_sha: str,

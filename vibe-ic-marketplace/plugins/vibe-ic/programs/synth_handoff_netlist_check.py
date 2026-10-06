@@ -126,7 +126,55 @@ def _receipt_pdk_mounts(folder: Path, receipt: dict) -> list[tuple[Path, str]]:
     return mounts
 
 
-def _native_synthesis(project: Path, folder: Path, top: str) -> tuple[Path, dict, dict]:
+def _project_path_resolver(project: Path, folder: Path, state: dict):
+    """Resolve receipt paths from the producer project into a staged project.
+
+    LibreLane receipts intentionally retain the absolute paths seen by the
+    native producer.  A backend arm runs from a clean ``outputs/project`` and
+    must not read those original paths as an ambient side channel.  Derive the
+    original project root from the receipt's state path and the *relative*
+    producer folder, then admit only the corresponding regular staged file.
+    External paths (notably ``/pdk``) remain external and are checked by the
+    existing PDK mount validator.
+    """
+    project = Path(project).resolve(strict=True)
+    folder = Path(folder).resolve(strict=True)
+    try:
+        recorded = Path(str(state["nl"]))
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError("native state has no absolute netlist path") from exc
+    if not recorded.is_absolute():
+        raise ValueError("native state netlist path is not absolute")
+    rel_folder = folder.relative_to(project)
+    recorded_parent = recorded.parent
+    if len(recorded_parent.parts) <= len(rel_folder.parts):
+        raise ValueError("native state netlist has no project prefix")
+    original_root = recorded_parent
+    for _ in rel_folder.parts:
+        original_root = original_root.parent
+    if original_root / rel_folder != recorded_parent:
+        raise ValueError("native state netlist folder is not canonical")
+    original_root = original_root.resolve()
+
+    def resolve(value):
+        path = Path(str(value))
+        if not path.is_absolute() or not path.is_relative_to(original_root):
+            return path
+        relative = path.relative_to(original_root)
+        target = project / relative
+        try:
+            resolved = target.resolve(strict=True)
+        except (OSError, RuntimeError) as exc:
+            raise ValueError(f"staged project input is absent: {relative}") from exc
+        if (resolved != target or not resolved.is_relative_to(project)
+                or not resolved.is_file() or target.is_symlink()):
+            raise ValueError(f"staged project input is unsafe: {relative}")
+        return resolved
+
+    return resolve
+
+
+def _native_synthesis(project: Path, folder: Path, top: str, *, path_resolver=None) -> tuple[Path, dict, dict]:
     """Verify the existing run_chain receipt against its consumed/output bytes."""
     import librelane_contract as LC
     from _rtl_include_hub import silicon_rtl_selection
@@ -140,7 +188,8 @@ def _native_synthesis(project: Path, folder: Path, top: str) -> tuple[Path, dict
     inp = receipt['input']
     if inp['step'] != 'Yosys.Synthesis' or cfg['meta']['step'] != inp['step']:
         raise ValueError('not a Yosys.Synthesis producer')
-    raw = Path(state['nl']).resolve()
+    resolve_path = path_resolver or (lambda value: Path(value))
+    raw = resolve_path(state['nl']).resolve()
     if not raw.is_relative_to(folder):
         raise ValueError('native netlist is outside its producer folder')
     for rel in ('state_out.json', 'config.json', 'reports/stat.json', str(raw.relative_to(folder))):
@@ -153,10 +202,12 @@ def _native_synthesis(project: Path, folder: Path, top: str) -> tuple[Path, dict
         raise ValueError('producer PDK/top differs from declared input')
     rtl = silicon_rtl_selection(project / 'phase2/stage1/rtl')
     paths = [str(p.resolve()) for p in rtl]
-    if not paths or cfg.get('VERILOG_FILES') != paths:
+    declared_rtl = [str(resolve_path(path).resolve()) for path in cfg.get('VERILOG_FILES', ())]
+    if not paths or declared_rtl != paths:
         raise ValueError('producer RTL file set differs from current synthesis input')
-    for path in rtl:
-        if inp['config_files'].get(str(path.resolve())) != _sha(path):
+    for declared, path in zip(cfg.get('VERILOG_FILES', ()), rtl):
+        recorded_path = str(Path(declared).resolve())
+        if inp['config_files'].get(recorded_path) != _sha(path):
             raise ValueError('producer consumed stale RTL bytes')
     mounts = _receipt_pdk_mounts(folder, receipt)
     # Rehash the producer's recorded population. A later reader namespace may
@@ -166,7 +217,7 @@ def _native_synthesis(project: Path, folder: Path, top: str) -> tuple[Path, dict
     if inp.get('config_files') != expected_config_files:
         raise ValueError('producer consumed stale or incomplete config material')
     for path, recorded in inp['state_files'].items():
-        if recorded != _sha(Path(path)):
+        if recorded != _sha(resolve_path(path)):
             raise ValueError(f'producer consumed stale state_files: {path}')
     stat = json.loads((folder / 'reports/stat.json').read_text())
     modules = stat.get('modules')
@@ -184,7 +235,10 @@ def _native_synthesis(project: Path, folder: Path, top: str) -> tuple[Path, dict
 
 def publish_handoff(project: Path, folder: Path, mapped: Path, top: str) -> dict:
     """Publish exactly the checked native bytes into the existing handoff contract."""
-    raw, _, _ = _native_synthesis(project, folder, top)
+    raw, _, _ = _native_synthesis(project, folder, top,
+                                  path_resolver=_project_path_resolver(
+                                      project, folder,
+                                      json.loads((folder / 'state_out.json').read_text())))
     if mapped.read_bytes() != raw.read_bytes():
         raise ValueError('mapped copy differs from native output')
     canonical = mapped.parent / 'netlist.v'
@@ -228,7 +282,10 @@ def bound_handoff(project: Path) -> Optional[dict]:
         expected = project / 'phase2/stage2/synth' / (binding['top'] + '_synth.v')
         if mapped.resolve() != expected.resolve() or doc.get('netlist') != mapped.name:
             raise ValueError('handoff does not name the production mapped netlist')
-        raw, _, report = _native_synthesis(project, folder, binding['top'])
+        state = json.loads((folder / 'state_out.json').read_text())
+        raw, _, report = _native_synthesis(
+            project, folder, binding['top'],
+            path_resolver=_project_path_resolver(project, folder, state))
         if binding['receipt_sha256'] != _sha(folder / 'vibeic_receipt.json'):
             raise ValueError('native producer receipt changed after publication')
         canonical = mapped.parent / 'netlist.v'
