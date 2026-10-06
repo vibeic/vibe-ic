@@ -9838,9 +9838,9 @@ def _apply_program_regate(bench: str, dataset: str | Path, run_p: Path,
         input_material = _runner_material_snapshot(staged)
         preservation = provenance["repair_contract"]["preservation"]
         for row in preservation["sources"]:
-            key = row["path"][4:] if row["path"].startswith("rtl/") else row["path"]
+            source_relative = row["path"][4:] if row["path"].startswith("rtl/") else row["path"]
             expected = row.get("candidate_sha256", preservation.get("candidate_sha256"))
-            if input_material["output_rtl"].get(key, {}).get("sha256") != expected:
+            if input_material["output_rtl"].get(source_relative, {}).get("sha256") != expected:
                 refuse("signed preimage byte binding mismatch: " + row["path"])
         # Validate the unchanged author declaration on ONLY the exact signed
         # preimage. The historical gate report is not a new runner verdict.
