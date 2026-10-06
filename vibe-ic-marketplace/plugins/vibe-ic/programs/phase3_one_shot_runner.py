@@ -77,7 +77,7 @@ import subprocess
 import sys
 import tempfile
 import time
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field, asdict, replace
 from pathlib import Path, PurePosixPath
 from typing import (Any, Callable, Dict, FrozenSet, Iterable, List, Mapping,
                     NamedTuple, Optional, Sequence, Set, Tuple)
@@ -36653,6 +36653,22 @@ def _discover_padring_io_views(pdk: PdkConfig,
     return lefs, gds
 
 
+def _feedback_pdk_with_padring_io_views(pdk: PdkConfig,
+                                        container: str) -> PdkConfig:
+    """Copy the PDK contract with the canonical pad masters for feedback.
+
+    Route feedback opens the routed DEF independently of the main PnR Tcl.
+    It therefore must load the same IO masters that the canonical pad-ring
+    resolver selected.  Keep the run-wide PDK object immutable: this copy is
+    only passed to the feedback producer.  Discovery remains fail-closed so a
+    missing physical IO view cannot be mistaken for an antenna measurement.
+    """
+    io_lefs, _io_gds = _discover_padring_io_views(pdk, container)
+    existing = list(pdk.macro_lefs or [])
+    merged = existing + [lef for lef in io_lefs if lef not in existing]
+    return replace(pdk, macro_lefs=merged)
+
+
 def _stage_padring_io_lefs_for_lvs(project: Path, pdk: PdkConfig,
                                    container: str) -> List[Path]:
     """Make the IO LEFs that PnR consumed available to host-side LVS emission.
@@ -57883,8 +57899,26 @@ def step_prestream_gate(project: Path, top: str, pdk: PdkConfig,
                 "prestream_gate", "FAIL", time.time() - t0,
                 "SIGNOFF_DECK_FEEDBACK_REFUSED: " + str(exc),
                 [str(project / "reports/phase3/drc_feedback.json")])
+        try:
+            if isinstance(pdk, PdkConfig):
+                _feedback_pdk = _feedback_pdk_with_padring_io_views(
+                    pdk, container)
+            else:
+                # Lightweight test doubles and legacy callers do not carry a
+                # PDK view contract. Preserve their existing feedback path;
+                # canonical PdkConfig runs above remain fail-closed.
+                _feedback_pdk = pdk
+        except Exception as exc:
+            # The antenna baseline must load the same physical IO masters as
+            # pad-ring PnR.  Missing views are an input failure, never a
+            # reason to continue with an incomplete OpenROAD library.
+            return StepResult(
+                "prestream_gate", "FAIL", time.time() - t0,
+                "SIGNOFF_DECK_FEEDBACK_REFUSED: "
+                f"PADRING_IO_VIEW_DISCOVERY_FAILED: {exc}",
+                [str(project / "reports/phase3/drc_feedback.json")])
         _feedback = _drc_feedback.run(
-            project, top, pdk, _feedback_image,
+            project, top, _feedback_pdk, _feedback_image,
             stream_script_text=_GDS_STREAMOUT_PY)
         _fb_pub = _feedback.get("publication") or {}
         if _feedback.get("status") == "PASS" and _fb_pub.get("output"):
