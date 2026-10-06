@@ -899,5 +899,14 @@ def dispatch_ordinary_rows(project, step_ids, site, result_factory):
               else 'PASS' if all(r['status'] in ('ADOPTED', 'NOT_APPLICABLE') for r in results)
               else 'NOT_MEASURED')
     row = result_factory('Ultra fixed-row provider dispatch', {'execution_results': results})
+    # Some ordinary sites return a single runner row, while the Phase-2 DFT
+    # chain deliberately returns a one-element list so its caller can use
+    # ``plan.extend``.  Keep that site contract: mutating ``.status`` on the
+    # container itself turns a real DFT run into ``AttributeError: list has no
+    # attribute status`` after its producers have already run.
+    if isinstance(row, (list, tuple)):
+        for item in row:
+            item.status = status
+        return row
     row.status = status
     return row
