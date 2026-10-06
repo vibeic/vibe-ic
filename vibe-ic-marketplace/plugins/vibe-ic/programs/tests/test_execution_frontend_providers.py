@@ -435,7 +435,7 @@ def _authority_project(tmp_path):
                     'SEAL_RING_WIDTH: 26\nFP_SIZING: absolute\n'
                     'pads: [pad_n0, pad_n1, pad_s0]\n')
     inputs = {str(path.relative_to(project)): path for path in (answers_path, slot)}
-    parameters = {'template': 'input/template', 'slot': 's1'}
+    parameters = {'template': 'input/template', 'slot': 's1', 'metric': 'source_boundary'}
     sha = subprocess.check_output(['git', 'rev-parse', 'HEAD'],
                                   cwd=Path(p.__file__).parent, text=True).strip()
     row = next(row for row in em.load_portfolio()['steps'] if row['id'] == '0.5ic')
@@ -445,7 +445,7 @@ def _authority_project(tmp_path):
 
 def _authority_controller():
     registry = em.Registry()
-    p.register_factories(registry)
+    p.register_factories(registry, step_ids=('0.5ic',))
     return em.Controller(registry, em.Budget(1, 512, 1))
 
 
