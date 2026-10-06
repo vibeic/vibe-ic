@@ -14,6 +14,7 @@ def test_derived_answer_documents_reach_the_real_gate_and_remain_bound(tmp_path)
     import area_budget_basis_gen as area
     import execution_modes as modes
     from programs.tests.test_r0929_deliverable_consistency import _project
+    from programs.tests._route_fixture import stage_owner_route
 
     project = _project(tmp_path)
     path = project / 'input/step_0_5ic_answers.json'
@@ -22,6 +23,7 @@ def test_derived_answer_documents_reach_the_real_gate_and_remain_bound(tmp_path)
         'This neutral input specifies no operator, purchased slot or submission '
         'template; the owner explicitly requires an independent DIE delivery.')
     path.write_text(json.dumps(answers) + '\n')
+    stage_owner_route(project, 'ic')
     assert area.main([str(project), '--answers', str(path), '--out', str(path)]) == 0
     docs = {str(p.relative_to(project)): p.read_bytes()
             for p in (project / 'input/docs').iterdir() if p.is_file()}
