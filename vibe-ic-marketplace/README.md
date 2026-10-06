@@ -558,7 +558,7 @@ vibe-ic-marketplace/
         │       ├── ic_expert_L1..L9.md  ← prose lessons per layer
         │       └── manifests/L1_manifest.json  ← 40-fact Q-bank (PoC)
         ├── skills/                      ← 70 skills, each + compliance.yaml
-        ├── programs/                    ← 6085 *.py at any depth (1597 top level)
+        ├── programs/                    ← 6086 *.py at any depth (1597 top level)
         │   ├── flow_compliance_check.py ← final gate
         │   ├── stage{1,2,3,4}_compliance.py
         │   ├── pdk_registry.json, ic_class_registry.json
