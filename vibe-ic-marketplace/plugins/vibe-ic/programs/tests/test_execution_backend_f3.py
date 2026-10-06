@@ -719,7 +719,8 @@ def test_r4_consumer_failure_cleans_only_new_generation(tmp_path, monkeypatch, a
 
 def test_r4_partial_generation_copy_rolls_back(tmp_path, monkeypatch):
     ctx = H.context(tmp_path); controller = H.controller(H.adapter()); root = tmp_path / 'partial'
-    controller.run(ctx, root)
+    assert controller.run(ctx, root, 'ultra-mode')['status'] == 'AWAITING_AI_SELECTION'
+    assert not (root / 'selected').exists()
     # Inject a real publication error at the filesystem boundary. Source-bound
     # call sites can retain their original write_bytes reference.
     original = os.replace; count = []
