@@ -74,7 +74,11 @@ def resolver(monkeypatch):
     calls = []
 
     def run(cmd, **_kw):
-        design_json, requested, root = Path(cmd[-5]), Path(cmd[-4]), Path(cmd[-3])
+        # Match the resolver's six explicit arguments, including image identity.
+        values = cmd[cmd.index('-c') + 2:]
+        assert len(values) == 6, values
+        assert values[-1] == cmd[cmd.index('-c') - 1]
+        design_json, requested, root = map(Path, values[:3])
         calls.append(json.loads(design_json.read_text()))
         for s in json.loads(requested.read_text()):
             put(root / f'{s}.json', {'meta': {'step': s}})
