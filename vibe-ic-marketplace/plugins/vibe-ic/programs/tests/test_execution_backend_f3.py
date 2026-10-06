@@ -395,7 +395,9 @@ def test_br2_001_first_write_cannot_mint_adoption(tmp_path, release_arm):
 
 
 def test_br2_001_real_controller_and_issued_mutation_control(tmp_path, release_arm):
-    ctx = context16(tmp_path, native_clock=True); controller = ctl(release_arm); root = tmp_path / 'real'
+    ctx = context16(tmp_path, native_clock=True)
+    release_arm = replace(release_arm, ram_mb=2048)
+    controller = ctl(release_arm, budget=em.Budget(1, 2048, workers=1)); root = tmp_path / 'real'
     assert controller.run(ctx, root)['candidate_statuses'][release_arm.arm_id] == 'ELIGIBLE'
     assert controller.adopt(ctx, root, H.choice(ctx, root, release_arm.arm_id))['status'] == 'ADOPTED'
     receipt = root / release_arm.arm_id / 'receipt.json'
