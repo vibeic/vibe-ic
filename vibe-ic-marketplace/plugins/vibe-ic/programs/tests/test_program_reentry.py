@@ -310,6 +310,11 @@ def _case(tmp_path, monkeypatch, *, reviewed=False, exit_step="2"):
     run = tmp_path / "run"
     project = fx._project(tmp_path)
     rtl = project / "phase2/stage1/rtl/dut.v"
+    # The legacy retry fixture also needs the exact public source precondition
+    # of its author contract; never infer that source from the later repair.
+    bio._stage_public_original(
+        "p1", (project / "input/phase1_prompt.md").read_text(),
+        {"dut.v": rtl.read_text()}, project)
     rtl.write_text(rtl.read_text().replace("y = a", "y = ~a"))
     parent = bd._make_ai_review_task("p1", project,
         fx.bio.collect("rtllm", "p1", project), fx.ROUTING, 0, run, "PROGRAM")
