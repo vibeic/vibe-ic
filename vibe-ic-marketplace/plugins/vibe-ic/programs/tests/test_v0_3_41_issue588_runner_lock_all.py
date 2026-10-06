@@ -14,6 +14,10 @@ import os
 import sys
 from pathlib import Path
 
+import pytest
+
+from _runner_ast_fixture import called_main, live_nodes
+
 PROG = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROG))
 import _runner_lock as RL  # noqa: E402
@@ -117,14 +121,40 @@ def test_child_env_propagates_inherited_token_when_reentrant(
     top.release()
 
 
+def _assert_runner_acquires(src, name):
+    import ast
+    main = called_main(ast.parse(src))
+    calls = [n for n in live_nodes(main) if isinstance(n, ast.Call)
+             and isinstance(n.func, ast.Attribute)
+             and isinstance(n.func.value, ast.Name)
+             and n.func.value.id == "_runner_lock"
+             and n.func.attr == "acquire_or_reenter"]
+    assert calls, f"{name}: called implementation never calls acquire_or_reenter"
+
+
 def test_all_four_runners_call_acquire_or_reenter():
     """Every runner's main must take the shared lock (the hole #588
     closes is exactly the standalone runners that previously didn't)."""
-    import inspect
-    import vibe_ic_one_shot_runner as orch
-    import phase1_one_shot_runner as p1
-    import design_one_shot_runner as p2
-    import phase3_one_shot_runner as p3
-    for mod in (orch, p1, p2, p3):
-        src = inspect.getsource(mod.main)
-        assert "acquire_or_reenter" in src, mod.__name__
+    for name in ("vibe_ic_one_shot_runner", "phase1_one_shot_runner",
+                 "design_one_shot_runner", "phase3_one_shot_runner"):
+        _assert_runner_acquires((PROG / f"{name}.py").read_text(), name)
+
+
+@pytest.mark.parametrize("body", [
+    '"acquire_or_reenter"\n    return 0',
+    'def unused():\n        _runner_lock.acquire_or_reenter(p, r)\n    return 0',
+    'return 0\n    _runner_lock.acquire_or_reenter(p, r)',
+    'if False:\n        _runner_lock.acquire_or_reenter(p, r)\n    return 0',
+])
+def test_runner_lock_check_rejects_strings_and_uncalled_code(body):
+    src = f'def main():\n    return _main()\ndef _main():\n    {body}\n'
+    with pytest.raises(AssertionError, match="never calls"):
+        _assert_runner_acquires(src, "disconnected_fixture")
+
+
+def test_runner_lock_check_rejects_an_uncalled_implementation():
+    src = (PROG / "vibe_ic_one_shot_runner.py").read_text()
+    assert 'return _main()' in src
+    with pytest.raises(AssertionError, match="does not return"):
+        _assert_runner_acquires(src.replace('return _main()', 'return 0'),
+                               "vibe_ic_one_shot_runner")

@@ -26,6 +26,10 @@ import sys
 import textwrap
 from pathlib import Path
 
+import pytest
+
+from _runner_ast_fixture import called_main, live_nodes
+
 PROGRAMS = Path(__file__).resolve().parents[1]
 
 # The two runners that print progress AND spawn a child which inherits stdout.
@@ -113,21 +117,50 @@ def test_each_orchestrator_line_buffers_its_own_stream(tmp_path):
         assert "line_buffering=True" in out, f"{prog}: {out[-400:]}"
 
 
-def test_the_hook_runs_before_the_first_banner(tmp_path):
+def _assert_log_hook_order(src, prog):
     """A correctly-written helper called too late fixes nothing. It must be the
     FIRST statement of `main`, ahead of every print the run makes."""
     import ast
+    tree = ast.parse(src)
+    main = called_main(tree)
+    body = [n for n in main.body
+            if not (isinstance(n, ast.Expr)
+                    and isinstance(n.value, ast.Constant)
+                    and isinstance(n.value.value, str))]
+    first = body[0]
+    assert (isinstance(first, ast.Expr)
+            and isinstance(first.value, ast.Call)
+            and getattr(first.value.func, "id", "")
+            == "_line_buffer_own_stream"), (
+        f"{prog}: called implementation starts with {ast.dump(first)[:120]}")
+    # The entry wrapper must not print a banner before entering the hook.
+    wrapper = next(n for n in tree.body
+                   if isinstance(n, ast.FunctionDef) and n.name == "main")
+    if wrapper is not main:
+        calls = [n for n in live_nodes(wrapper) if isinstance(n, ast.Call)]
+        delegation = next(n for n in calls if isinstance(n.func, ast.Name)
+                          and n.func.id == "_main")
+        assert not any(isinstance(n.func, ast.Name) and n.func.id == "print"
+                       and n.lineno < delegation.lineno for n in calls), (
+            f"{prog}: entry wrapper prints before the line-buffering hook")
+
+
+def test_the_hook_runs_before_the_first_banner(tmp_path):
     for prog in ORCHESTRATORS:
-        tree = ast.parse((PROGRAMS / prog).read_text())
-        main = next(n for n in tree.body
-                    if isinstance(n, ast.FunctionDef) and n.name == "main")
-        body = [n for n in main.body
-                if not (isinstance(n, ast.Expr)
-                        and isinstance(n.value, ast.Constant)
-                        and isinstance(n.value.value, str))]
-        first = body[0]
-        assert (isinstance(first, ast.Expr)
-                and isinstance(first.value, ast.Call)
-                and getattr(first.value.func, "id", "")
-                == "_line_buffer_own_stream"), (
-            f"{prog}: main() starts with {ast.dump(first)[:120]}")
+        _assert_log_hook_order((PROGRAMS / prog).read_text(), prog)
+
+
+@pytest.mark.parametrize("mutation", ["uncalled", "late_hook", "wrapper_banner", "nested_hook"])
+def test_log_hook_order_check_rejects_dead_or_late_hooks(mutation):
+    src = (PROGRAMS / "vibe_ic_one_shot_runner.py").read_text()
+    if mutation == "uncalled":
+        old, new = 'return _main()', 'return 0'
+    elif mutation == "wrapper_banner":
+        old, new = 'try:\n        return _main()', 'print("early banner")\n    try:\n        return _main()'
+    elif mutation == "late_hook":
+        old, new = 'def _main() -> int:\n    _line_buffer_own_stream()', 'def _main() -> int:\n    print("early banner")\n    _line_buffer_own_stream()'
+    else:
+        old, new = 'def _main() -> int:\n    _line_buffer_own_stream()', 'def _main() -> int:\n    def unused():\n        _line_buffer_own_stream()'
+    assert old in src
+    with pytest.raises(AssertionError):
+        _assert_log_hook_order(src.replace(old, new), "vibe_ic_one_shot_runner.py")
