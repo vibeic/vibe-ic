@@ -52,13 +52,15 @@ def test_controller_executes_worker_and_validator_reddens_on_output_mutation(tmp
     context=replace(context, inputs={**context.inputs,
                     'input/step_0_5ic_answers.json':route})
     bound_inputs={name: em.digest(path) for name, path in context.inputs.items()}
-    run=tmp_path/'run'; controller=em.Controller(registry,em.Budget(1,512,1),portfolio)
+    run=tmp_path/'run'; controller=em.Controller(registry,em.Budget(1,1024,1),portfolio)
     result=controller.run(context,run)
     receipt_path=run/'frontend_D1/receipt.json'; receipt_bytes=receipt_path.read_bytes()
     receipt=json.loads(receipt_bytes); output=Path(receipt['output_root'])
     process,=receipt['processes']
     assert process['component']=='frontend_worker' and process['rc']==0
     assert process['pid']>0 and process['ended_ns']>process['started_ns']
+    assert 'MemoryError' not in ''.join(Path(process[key]).read_text()
+                                      for key in ('stdout', 'stderr'))
     assert receipt['binding']['objective']=={'metric':'source_boundary'}
     assert receipt['binding']['inputs']==bound_inputs
     frozen=Path(receipt['input_root'])
@@ -73,9 +75,10 @@ def test_controller_executes_worker_and_validator_reddens_on_output_mutation(tmp
     expert=json.loads((staged/'reports/audit/phase1/expert_parse_track.json').read_text())
     assert expert['ai_subtrack']['status']=='HANDOFF_EMITTED'
     assert expert['ai_subtrack']['expectations']==[]
-    assert result['status']=='FAIL'
-    assert result['candidate_statuses']=={'frontend_D1':'FAIL'}
-    assert receipt['reason']=='GATE_FAIL' and receipt['evidence']['verdict']=='FAIL'
+    assert result['status']=='NOT_MEASURED'
+    assert result['candidate_statuses']=={'frontend_D1':'NOT_MEASURED'}
+    assert receipt['reason']=='GATE_EXECUTION_UNBOUND'
+    assert receipt['evidence']['verdict']=='NOT_MEASURED'
     assert receipt['evidence']['gates']=={
         name:'NOT_MEASURED' for name in row['mandatory_gate_programs']}
     assert json.loads((run/'comparison.json').read_text())['eligible_arms']==[]
@@ -83,7 +86,10 @@ def test_controller_executes_worker_and_validator_reddens_on_output_mutation(tmp
     canonical=output/'canonical.json'; original=canonical.read_bytes()
     record=json.loads(original)
     assert record['producer_result']['name']=='phase1'
-    assert record['producer_result']['status']=='FAIL'
+    # These existing producer primitives return rc0 for an emitted handoff.
+    # Their program result cannot qualify D1 without the canonical consumers.
+    assert record['producer_result']['status']=='PASS'
+    assert 'HANDOFF_EMITTED' in record['producer_steps'][1]['detail']
     assert receipt['evidence']['outputs']=={'canonical.json':em.digest(canonical)}
     arm,=registry.adapters('D1')
     # The real producer recorder stamped its own writes, not a copied claim.
@@ -104,7 +110,11 @@ def test_controller_executes_worker_and_validator_reddens_on_output_mutation(tmp
     sdc.write_text(json.dumps({'program':'sdc_syntax_check','passed':True}))
     (output/'reports/sdc_validator.json').write_text(json.dumps(
         {'verdict':'PASS','exit_code':0,'issues':[]}))
+    record['producer_result']['status']='FAIL'
+    canonical.write_text(json.dumps(record))
+    assert arm.validate(output,context.binding()).verdict=='FAIL'
     record['producer_result']['status']='PASS'
+    record['producer_result']['detail']='forged qualification without AI evidence'
     canonical.write_text(json.dumps(record))
     assert em.digest(canonical)!=receipt['evidence']['outputs']['canonical.json']
     changed=arm.validate(output,context.binding())
@@ -127,7 +137,7 @@ def test_controller_executes_worker_and_validator_reddens_on_output_mutation(tmp
         assert rejected.verdict=='NOT_MEASURED'
         assert rejected.gates==receipt['evidence']['gates']
     canonical.write_bytes(original)
-    assert arm.validate(output,context.binding()).verdict=='FAIL'
+    assert arm.validate(output,context.binding()).verdict=='NOT_MEASURED'
     assert receipt_path.read_bytes()==receipt_bytes
 
 def test_step8_public_controller_eligible_and_adopted(tmp_path):

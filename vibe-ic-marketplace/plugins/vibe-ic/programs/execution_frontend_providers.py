@@ -426,9 +426,10 @@ def register_factories(registry, *, step_ids=None, project=None, parameters=None
                 argv = ('python3',str(source_path.with_name(gate+'.py')),
                         *('{outputs}' if value == '.' else value for value in parts[1:]))
                 components.append(Component(gate, argv))
-        # D1 Phase-1 imports and parsing peak at about 202 MiB VMS in EDA 0.4.1.
-        # Keep a bounded per-row reservation; other adapters retain their defaults.
-        resources = {'ram_mb': 256} if row == 'D1' else {}
+        # Issued D1 workers inherit the Controller VM (~569 MiB measured)
+        # before Phase-1 parsing (~202 MiB in a clean process). Reserve bounded
+        # headroom for both; other adapters retain their existing defaults.
+        resources = {'ram_mb': 1024} if row == 'D1' else {}
         registry.register(Adapter('frontend_'+row.replace('.','_'),'frontend-worker',row,sha,bound_files,'current-main',p.engines,tuple(components),validate,required,objective,qualification_evidence='route callable bound; native qualification not measured',output_contract={path:(path,) for path in required},input_contract=INPUT_CONTRACTS[row] + (('phase2/stage1/rtl', 'reports/phase2/cdc/crossing.json') if row == '8' else ()), **resources))
     if step_ids is None:
         from execution_production import register_synthesis_adapter
