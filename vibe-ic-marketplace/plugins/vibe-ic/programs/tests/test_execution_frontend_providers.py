@@ -104,13 +104,14 @@ def test_controller_executes_worker_and_validator_reddens_on_output_mutation(tmp
     assert canonical.read_bytes()==original
     manifest=issued_manifest_path(frozen); original_manifest=manifest.read_bytes()
     wrong_step=json.loads(original_manifest); wrong_step['step_id']='8'
-    try:
-        manifest.write_text(json.dumps(wrong_step))
-        with pytest.raises(ValueError, match='D1: issued route mismatch'):
-            worker.produce_d1(frozen, output)
-        assert canonical.read_bytes()==original
-    finally:
-        manifest.write_bytes(original_manifest)
+    # Serialized negative input is not Controller authority. Keep the genuine
+    # read-only frozen manifest intact while exercising the public route check.
+    wrong_input=tmp_path/'wrong-step-input'; wrong_input.mkdir()
+    issued_manifest_path(wrong_input).write_text(json.dumps(wrong_step))
+    with pytest.raises(ValueError, match='D1: issued route mismatch'):
+        worker.produce_d1(wrong_input, output)
+    assert canonical.read_bytes()==original
+    assert manifest.read_bytes()==original_manifest
     # Forged SDC successes cannot qualify any D1 gate.
     sdc=output/'reports/phase2/sdc_check.json'; sdc.parent.mkdir(parents=True)
     sdc.write_text(json.dumps({'program':'sdc_syntax_check','passed':True}))
