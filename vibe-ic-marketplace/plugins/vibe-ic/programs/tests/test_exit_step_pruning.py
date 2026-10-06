@@ -114,7 +114,7 @@ def test_lint_evidence_exit_prunes_sim_synth_and_the_lec_chain(pruner):
     """EVIDENCE_EXIT['lint_validated'] = step 2: everything past the
     rtl_validate span is pruned — including the site whose LEC burned two
     hours for an RTL deliverable nothing downstream read."""
-    assert pruner(_sites(), "2") == ["sim", "yosys_synth", "dft_lec_chain"]
+    assert pruner(_sites(), "2") == ["sim", "asic_sdc", "yosys_synth", "dft_lec_chain"]
 
 
 def test_the_exit_site_itself_runs(pruner):

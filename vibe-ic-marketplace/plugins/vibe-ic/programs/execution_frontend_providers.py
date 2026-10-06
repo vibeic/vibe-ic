@@ -362,6 +362,21 @@ def register_factories(registry, *, step_ids=None, project=None, parameters=None
                                 detail='real producers, canonical YAML outputs, mandatory gates and issued snapshots validated',
                                 metrics={'source_boundary': 1.0},
                                 provenance={'producer_chain': chain} if chain is not None else {})
+            if _row == '7':
+                # Step 7's producer is the canonical ASIC SDC/PVT emitter.  Its
+                # mandatory consumers (stage compliance, syntax, PVT and
+                # integration checks) are not generic Step-8 validator rows;
+                # the normal Phase-2 runner executes this producer directly
+                # when a source-bound frontend arm is only NOT_MEASURED.
+                # Keep the Controller evidence explicitly unmeasured rather
+                # than reading Step-8 reports and accidentally qualifying a
+                # different step.
+                return Evidence(
+                    facts, 'NOT_MEASURED',
+                    {name: 'NOT_MEASURED' for name in _gate_names},
+                    artifacts,
+                    detail='Step-7 producer emitted source-bound artifacts; '
+                           'canonical consumer qualification remains unmeasured')
             gate_result=flow_compliance_check.check_step(root, contract, {}, strict_step_binding=True)
             gate = getattr(gate_result, 'status', gate_result)
             # The canonical checker returns a typed StepResult whose overall

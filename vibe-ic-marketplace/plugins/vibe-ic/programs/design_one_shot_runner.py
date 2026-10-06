@@ -19578,6 +19578,112 @@ def step_sdc_validation(project: Path) -> StepResult:
                       reason_class=_V.ReasonClass.INPUT_ABSENT if status=='NOT_MEASURED' else '')
 
 
+def _emit_step7_pvt_matrix(project: Path, pdk: object,
+                           container: str) -> Tuple[Path, int]:
+    """Write Step 7's declared PVT matrix beside the canonical ASIC SDC.
+
+    Corner discovery is delegated to the Phase-3 resolver so Phase 2 and
+    Phase 3 name the same Liberty views.  An empty/single-corner census is
+    retained as explicit ``NOT_MEASURED`` evidence by the caller; it is never
+    turned into a multi-corner claim.
+    """
+    import phase3_one_shot_runner as _p3
+
+    staged = project / "input" / "pdk" / "liberty"
+    libs = sorted(staged.glob("*.lib")) if staged.is_dir() else []
+    if len(libs) < 2:
+        lib_value = str(getattr(pdk, "liberty", "") or "")
+        lib_dir = str(Path(lib_value).parent) if lib_value else ""
+        if lib_dir:
+            try:
+                found = _p3._select_signoff_corners(
+                    _p3._discover_container_corner_libs(container, lib_dir),
+                    container, lib_dir)
+            except Exception:
+                found = []
+            if len(found) >= 2:
+                libs = [Path(row["liberty"]) for row in found]
+    corners = []
+    for lib in libs:
+        try:
+            ref = str(lib.relative_to(project))
+        except ValueError:
+            ref = str(lib)
+        corners.append({"name": lib.stem,
+                        "label": _p3._classify_corner_from_name(lib.name),
+                        "liberty": ref})
+    pvt = dict(_p3._PVT_MATRIX_TEMPLATE)
+    pvt["corners"] = corners
+    pvt["primary_corner"] = "TT"
+    _p3.stamp_pvt_corner_coverage(pvt, corners)
+    path = _pl.constraints_dir(project) / "pvt_matrix.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    _aa.write_json(path, pvt)
+    return path, len(corners)
+
+
+def step_asic_sdc(project: Path, top_name: str = "chip_top",
+                  container: str = _pin.default_container_name(),
+                  ic_class: Optional[str] = None,
+                  *, pdk_config: Any = None,
+                  _use_controller: bool = True) -> StepResult:
+    """Canonical Phase-2 Step-7 producer (SDC + PVT matrix).
+
+    The Controller may provide an issued fixed-row producer.  Without one,
+    the normal program-first path invokes the same canonical timing emitter
+    used by Phase 3.  It never trusts a stale Step-7 receipt and never changes
+    any waiver or consumer threshold.
+    """
+    t0 = time.time()
+    import execution_policy as _execution
+    dispatched = (_execution.dispatch_fixed_step(
+        project, "7", parameters={"top": top_name, "container": container,
+                                   "ic_class": ic_class})
+                  if _use_controller else None)
+    if dispatched is not None:
+        dispatch_status = dispatched.get("status")
+        status = ("PASS" if dispatch_status in ("ADOPTED", "NOT_APPLICABLE")
+                  else "FAIL" if dispatch_status == "FAIL"
+                  else "NOT_MEASURED")
+        # A Default frontend arm is source-bound only and may leave the
+        # generic Controller result NOT_MEASURED until Step-7's real producer
+        # runs.  Do not publish that placeholder as the final answer: fall
+        # through to the canonical emitter. Ultra/awaiting-AI and explicit
+        # failures remain owned by the Controller and do not bypass selection.
+        mode = getattr(_execution, "_ordinary_runtime", None)
+        mode = ((mode or {}).get("policy") or {}).get("mode")
+        if dispatch_status != "NOT_MEASURED" or mode != "default":
+            return StepResult("asic_sdc", status, time.time() - t0,
+                              str(dispatched.get("reason", "")),
+                              extras={"execution_result": dispatched})
+    try:
+        pdk = pdk_config if pdk_config is not None else _phase2_pdk_config(project)
+        import phase3_one_shot_runner as _p3
+        from _ppa import timing as _timing
+        rec = _timing.emit_step7_asic_sdc(
+            _p3, project, top_name, pdk, container)
+        pvt_path, corner_count = _emit_step7_pvt_matrix(project, pdk, container)
+        sdc_path = project / str(rec["path"])
+        outputs = [str(sdc_path), str(pvt_path)]
+        if corner_count < 2:
+            return StepResult(
+                "asic_sdc", "NOT_MEASURED", time.time() - t0,
+                (f"Step 7 producer emitted SDC + explicit PVT census, but "
+                 f"only {corner_count} Liberty corner(s) were available; "
+                 "multi-corner qualification remains unmeasured"), outputs,
+                reason_class=_V.ReasonClass.INPUT_ABSENT,
+                extras={"step7_record": rec, "corner_count": corner_count})
+        return StepResult("asic_sdc", "PASS", time.time() - t0,
+                          (f"canonical Step 7 SDC + PVT matrix emitted "
+                           f"({corner_count} corners)"), outputs,
+                          extras={"step7_record": rec,
+                                  "corner_count": corner_count})
+    except Exception as exc:  # fail closed; consumer sees no fabricated row
+        return StepResult("asic_sdc", "FAIL", time.time() - t0,
+                          f"canonical Step 7 producer failed: {type(exc).__name__}: {exc}",
+                          reason_class=_V.ReasonClass.INPUT_ABSENT)
+
+
 def step_sdc_gen(project: Path, top_name: str = "chip_top",
                  ic_class: Optional[str] = None) -> StepResult:
     # v1.6.97 (issue #29 Bug 3, P0) — always force-regenerate the SDC.
@@ -26064,6 +26170,30 @@ def main() -> int:
             k: v for k, v in _early_declaration.items() if k != "fields"}
         plan.append(_s4)
 
+    # Canonical Step 7 (ASIC SDC + PVT matrix) is a Phase-2 producer and must
+    # precede Step 8 validation and Step 9 synthesis.  Keeping it here makes
+    # the handoff real for a later bounded backend continuation: it consumes
+    # the current Phase-2 inputs and does not rely on the Phase-3 tail to
+    # repair a missing receipt after Step 15 has already been selected.
+    if _before_entry("asic_sdc", _entry_site):
+        plan.append(StepResult(
+            "asic_sdc", "NOT_APPLICABLE", 0.0,
+            f"run declared --entry-step {args.entry_step}; Step 7 is upstream "
+            "of this entry and was not dispatched.",
+            declared_by=f"--entry-step {args.entry_step}"))
+    elif _after_exit("asic_sdc"):
+        plan.append(_exit_sentinel("asic_sdc"))
+    else:
+        plan.append(_spf.gate(
+            project, "design_one_shot_runner", "asic_sdc",
+            _preflight_refusal("asic_sdc"),
+            step_asic_sdc, project, args.top_name, args.container, ic_class))
+    if _execution._ordinary_runtime is not None:
+        # Step 8 is the consumer validation of the Step-7 artefacts.  The
+        # default controller may return NOT_MEASURED for this source-bound
+        # row; step_asic_sdc itself falls through to the canonical producer.
+        plan.append(step_sdc_validation(project))
+
     # Step 4 — yosys offline synth (Docker fallback if host yosys absent)
     # PRE-FLIGHT (canonical step 9). Step 9 also declares step 7's
     # `phase2/stage2/constraints/*.sdc`; NO site in this runner writes that
@@ -26099,9 +26229,6 @@ def main() -> int:
     # so the QSF/SDC artefacts are present for downstream lints/audits.
     plan.append(step_qsf_gen(project, args.top_name, ic_class))
     plan.append(step_sdc_gen(project, args.top_name, ic_class))
-    if _execution._ordinary_runtime is not None:
-        plan.append(step_sdc_validation(project))
-
     if not args.skip_hardware:
         otp_sr = step_otp_image_check(project)
         plan.append(otp_sr)

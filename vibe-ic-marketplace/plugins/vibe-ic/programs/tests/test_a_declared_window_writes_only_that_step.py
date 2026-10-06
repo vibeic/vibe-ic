@@ -157,7 +157,7 @@ def test_dispatched_step_ids_come_from_the_runs_own_record(_=None):
     sites = spf.RUNNER_PLANS["design_one_shot_runner"].sites
 
     # nothing sentinelled -> everything dispatched
-    assert dsr.dispatched_step_ids(sites, set()) == {"1", "2", "3", "4", "9",
+    assert dsr.dispatched_step_ids(sites, set()) == {"1", "2", "3", "4", "7", "9",
                                                     "11", "12", "13"}
     # the --entry-step 9 reality: the run books sentinels for the two guarded
     # sites only, so step 4 IS dispatched and must be reported as dispatched
@@ -165,10 +165,10 @@ def test_dispatched_step_ids_come_from_the_runs_own_record(_=None):
     assert "4" in ids, (
         "step 4 ran and was reported out-of-window -- the table's answer, not "
         "the run's")
-    assert ids == {"4", "9", "11", "12", "13"}
+    assert ids == {"4", "7", "9", "11", "12", "13"}
     # an exit sentinel removes its whole span
     assert dsr.dispatched_step_ids(sites, {"yosys_synth", "dft_lec_chain"}) == \
-        {"1", "2", "3", "4"}
+        {"1", "2", "3", "4", "7"}
     assert dsr.dispatched_step_ids((), {"anything"}) == set()
 
 
@@ -264,7 +264,7 @@ def test_a_flag_that_prunes_nothing_is_not_a_window():
     the phase-2 audit NOT_APPLICABLE, which run_verdict reads as green, so an
     audit FAIL a flagless run would raise DISAPPEARED."""
     dsr = _load("design_one_shot_runner")
-    order = ["rtl_gen", "rtl_validate", "sim", "yosys_synth", "dft_lec_chain"]
+    order = ["rtl_gen", "rtl_validate", "sim", "asic_sdc", "yosys_synth", "dft_lec_chain"]
     # nothing pruned, entry at the first site (or absent) -> NOT bounded
     assert dsr.run_is_bounded(None, [], order) is False
     assert dsr.run_is_bounded(None, None, order) is False

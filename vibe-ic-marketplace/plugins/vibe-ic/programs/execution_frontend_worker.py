@@ -424,7 +424,76 @@ def produce_6(project,output,top=None,container=None,**k):
                       reason='Quartus/board unavailable', verdict='NOT_MEASURED',
                       excluded_from_verdict=True)
     return _cli('6',project,output,('quartus_map_audit',),())
-def produce_7(project,output,top=None,pdk=None,container=None,**k): return _require(project,output,'7','emit_step7_asic_sdc+stamp_pvt_corner_coverage',top=top,pdk=pdk,container=container,**k)
+def _step7_pdk(values, source: Path, target: Path):
+    """Rebuild the issued PdkConfig while remapping only source-local paths."""
+    from dataclasses import MISSING, fields
+    from phase3_one_shot_runner import PdkConfig
+    if not isinstance(values, dict):
+        raise ValueError('7: issued PDK configuration is missing')
+
+    def translate(value):
+        if isinstance(value, list):
+            return [translate(item) for item in value]
+        if isinstance(value, dict):
+            return {key: translate(item) for key, item in value.items()}
+        if isinstance(value, str):
+            source_text = str(source.resolve())
+            if value == source_text or value.startswith(source_text + os.sep):
+                return str(target.resolve()) + value[len(source_text):]
+        return value
+
+    raw = translate(dict(values))
+    names = {item.name for item in fields(PdkConfig)}
+    kwargs = {name: raw[name] for name in names if name in raw}
+    for item in fields(PdkConfig):
+        if (item.name not in kwargs and item.default is MISSING
+                and item.default_factory is MISSING):
+            kwargs[item.name] = '' if item.type in (str, 'str') else None
+    return PdkConfig(**kwargs)
+
+
+def produce_7(project, output, top=None, pdk=None, container=None, **k):
+    """Run the canonical Step-7 producer in the private output tree.
+
+    Controller inputs remain read-only.  The issued manifest census is copied
+    into the private output root, then the same Phase-2 `step_asic_sdc` helper
+    used by the ordinary runner emits the SDC and PVT matrix there.  Missing
+    corners stay an explicit NOT_MEASURED result; no receipt is fabricated.
+    """
+    if not top or not pdk or not container:
+        raise ValueError('7: top, pdk and container are required')
+    source = Path(project)
+    output = Path(output)
+    manifest = _verify_manifest(source, '7')
+    output.mkdir(parents=True, exist_ok=True)
+    # Keep the worker's source boundary immutable while giving the canonical
+    # emitter the same relative project tree it receives in the normal path.
+    for rel in manifest.get('files', {}):
+        src = source / rel
+        dst = output / rel
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(src, dst)
+    import design_one_shot_runner as d
+    pdk_obj = _step7_pdk(pdk, source, output)
+    # A worker is a separate ordinary producer process, not a Controller
+    # dispatch site.  Invoke the same canonical emitter through the runner
+    # helper with controller dispatch explicitly disabled; otherwise a generic
+    # frontend row could recurse into its own Step-7 provider.
+    result = d.step_asic_sdc(output, top, container, pdk_config=pdk_obj,
+                             _use_controller=False)
+    index = output / 'steps' / 'index.json'
+    index.parent.mkdir(parents=True, exist_ok=True)
+    index.write_text(json.dumps({'steps': [{'id': '7',
+        'folder': 'phase2/stage2/7_asic_sdc'}]}) + '\n')
+    (output / 'steps/phase2/stage2/7_asic_sdc').mkdir(parents=True, exist_ok=True)
+    return _write('7', output, 'emit_step7_asic_sdc+stamp_pvt_corner_coverage',
+                  reason=result.detail, verdict=result.status,
+                  producer_result={"name": result.name,
+                                   "status": result.status,
+                                   "detail": result.detail,
+                                   "output_files": result.output_files},
+                  parameters={'top': top, 'container': container,
+                              'pdk': pdk})
 def produce_8(project,output,**k):
     """Run the complete Step-8 contract against the staged project."""
     if not _STEP8_DISPATCH.get():

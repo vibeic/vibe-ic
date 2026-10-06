@@ -241,6 +241,11 @@ RUNNER_PLANS: Dict[str, RunnerPlan] = {
             # main():15827 step_full_stack_tb_gen
             # main():15835 step_l10_unit_tb_gen
             ("sim", ("4",)),
+            # main(): the Phase-2 handoff before synthesis.  Step 7 is a
+            # pre-PnR producer and must run before Step 8 validation and Step 9
+            # synthesis; bounded backend continuations consume its receipt
+            # before any Phase-3 producer can run.
+            ("asic_sdc", ("7",)),
             # main():16067 — plan.append(step_yosys_synth(...))
             ("yosys_synth", ("9",)),
             # main():16198 — plan.extend(step_dft_lec_chain(...))
