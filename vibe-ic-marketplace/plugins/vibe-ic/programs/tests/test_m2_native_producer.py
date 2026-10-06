@@ -58,6 +58,8 @@ def test_fixed_runner_reaches_producer_and_existing_gate(tmp_path, monkeypatch):
         return 0
 
     monkeypatch.setattr(runner, "_run_phase", bounded)
+    # This bounded fixed-caller test owns the existing _run_phase transport seam.
+    monkeypatch.setattr(runner, "_controller_mixed_step", lambda *_args: None)
     monkeypatch.setattr(sys, "argv", ["runner", str(project), "--top", "boundary",
                                       "--route", "ic", "--skip-phase1", "--no-dashboard"])
     runner.main()
@@ -160,6 +162,8 @@ def test_digital_only_does_not_invoke_m2(tmp_path, monkeypatch):
     real_entry('IC', 'default', project)
     calls = []
     monkeypatch.setattr(runner, "_run_phase", lambda label, p, args, env=None: calls.append(Path(p).stem) or 0)
+    # This bounded fixed-caller test owns the existing _run_phase transport seam.
+    monkeypatch.setattr(runner, "_controller_mixed_step", lambda *_args: None)
     monkeypatch.setattr(sys, "argv", ["runner", str(project), "--route", "ic", "--skip-phase1", "--no-dashboard"])
     runner.main()
     assert "mixed_signal_power_domain_run" not in calls
@@ -187,6 +191,8 @@ def test_fixed_runner_never_admits_absent_measurement(tmp_path, monkeypatch, fau
             p.write_text("{broken")
         return 0
     monkeypatch.setattr(runner, "_run_phase", bounded)
+    # This bounded fixed-caller test owns the existing _run_phase transport seam.
+    monkeypatch.setattr(runner, "_controller_mixed_step", lambda *_args: None)
     monkeypatch.setattr(sys, "argv", ["runner", str(project), "--top", "boundary",
                                      "--route", "ic", "--skip-phase1", "--no-dashboard"])
     runner.main()

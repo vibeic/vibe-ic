@@ -217,6 +217,8 @@ def test_orchestrator_dispatches_one_of_m1s_declared_producers(
         return 0
 
     monkeypatch.setattr(ORCH, "_run_phase", _record)
+    # This bounded fixed-caller test owns the existing _run_phase transport seam.
+    monkeypatch.setattr(ORCH, "_controller_mixed_step", lambda *_args: None)
     monkeypatch.setattr(sys, "argv",
                         ["vibe_ic_one_shot_runner", str(proj),
                          "--route", "ic", "--skip-phase1", "--no-dashboard"])
@@ -254,6 +256,8 @@ def test_mixed_signal_dispatch_cannot_drag_the_digital_verdict_down(
         return 1 if Path(runner).stem in producers else 0
 
     monkeypatch.setattr(ORCH, "_run_phase", _record)
+    # This bounded fixed-caller test owns the existing _run_phase transport seam.
+    monkeypatch.setattr(ORCH, "_controller_mixed_step", lambda *_args: None)
     monkeypatch.setattr(sys, "argv",
                         ["vibe_ic_one_shot_runner", str(proj),
                          "--route", "ic", "--skip-phase1", "--no-dashboard"])
@@ -345,6 +349,8 @@ def test_digital_only_run_dispatches_no_mixed_signal_merge(tmp_path,
         return 0
 
     monkeypatch.setattr(ORCH, "_run_phase", _record)
+    # This bounded fixed-caller test owns the existing _run_phase transport seam.
+    monkeypatch.setattr(ORCH, "_controller_mixed_step", lambda *_args: None)
     monkeypatch.setattr(sys, "argv",
                         ["vibe_ic_one_shot_runner", str(proj),
                          "--route", "ic", "--skip-phase1", "--no-dashboard"])
