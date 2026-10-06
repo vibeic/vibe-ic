@@ -91,10 +91,9 @@ def _is_d1_frontdoor(argv: list[str]) -> bool:
             and "--entry-step" not in argv)
 
 
-def _emit_phase1_docs(project: Path) -> None:
-    docs = project / "phase1" / "generated_docs"
-    docs.mkdir(parents=True, exist_ok=True)
-    (docs / "L1_DATASHEET.json").write_text('{"schema": 1}\n')
+def _emit_phase1_docs(project: Path, context: dict) -> None:
+    from test_benchmark_program_first_ai_review import _emit_d1_fixture_report
+    _emit_d1_fixture_report(project, context)
 
 
 def _fake_runner(*, program_ids: set[str] | None = None,
@@ -110,11 +109,10 @@ def _fake_runner(*, program_ids: set[str] | None = None,
         project = Path(argv[2])
         if _is_d1_frontdoor(argv):
             # Every routed mid-flow entry is preceded by the canonical D1-only
-            # Phase-1 pass, which the dispatcher accepts by the L-doc
-            # provenance it emits, never by its rc.  Model that pass honestly:
-            # the runner binds the prompt to hash-bound L-docs and touches
-            # nothing else.  The owning loop's own call is the one below.
-            _emit_phase1_docs(project)
+            # Phase-1 pass, which emits both L-doc provenance and a typed
+            # current-call report. Neither the rc nor L-doc presence alone
+            # admits the owning loop's later call.
+            _emit_phase1_docs(project, _runner_invocation_context(_kwargs))
             return SimpleNamespace(returncode=0)
         if project.name in programs:
             rtl = project / "phase2" / "stage1" / "rtl"
@@ -148,6 +146,48 @@ def _phase1_dead_runner():
 
     run.calls = calls
     return run
+
+
+@pytest.mark.parametrize(("damage", "reason"), [
+    ("missing", "D1_GATE_REPORT_UNREADABLE"),
+    ("invalid-json", "D1_GATE_REPORT_UNREADABLE"),
+    ("unbound", "RUNNER_REPORT_UNBOUND"),
+    ("failed", "D1_ACTIVATION_GATE_NOT_PASS"),
+])
+def test_d1_report_precondition_is_required_before_the_owning_loop(
+        tmp_path, monkeypatch, damage, reason):
+    dataset, run = tmp_path / "dataset", tmp_path / "run"
+    _write_dataset(dataset, {"generic_d1_control": _DEBUG_PROMPT})
+    calls = []
+
+    def producer(argv, **kwargs):
+        calls.append(list(argv))
+        assert _is_d1_frontdoor(argv), "invalid D1 evidence launched a later step"
+        project = Path(argv[2])
+        _emit_phase1_docs(project, _runner_invocation_context(kwargs))
+        report = project / "reports/orchestrator/phase1_one_shot.json"
+        if damage == "missing":
+            report.unlink()
+        elif damage == "invalid-json":
+            report.write_text("{")
+        else:
+            document = json.loads(report.read_text())
+            if damage == "unbound":
+                document.pop("runner_binding")
+            else:
+                document["verdict"] = "FAIL"
+            report.write_text(json.dumps(document))
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(bd.subprocess, "run", producer)
+    # A refused/unmeasured worker remains pending (coordinator rc 2).
+    assert _solve_after_ai_route("verilogeval-human", dataset, run) == 2
+    assert len(calls) == 1
+    result = json.loads((run / "solve_report.json").read_text())["results"][0]
+    assert result["worker_status"] == "ERROR"
+    assert reason in result["worker_error"]
+    assert _read_jsonl(run / bd._BACKUP_WORKLIST) == []
+    assert _read_jsonl(run / bd._REVIEW_WORKLIST) == []
 
 
 def _read_jsonl(path: Path) -> list[dict]:
@@ -317,7 +357,7 @@ def test_blocked_frontdoor_row_keeps_the_declaration_it_classified(
     The route declaration is a function of the routing verdict alone, so it
     is known before the Phase-1 front door runs.  When that front door BLOCKS
     (the D1-only pass emits no hash-bound L-doc) the row still stops -- one
-    runner call, no owning loop, no AI work, rc 1 -- but it reports the
+    runner call, no owning loop, no AI work, pending rc 2 -- but it reports the
     declaration it classified and the front door that stopped it.  A DECLARED
     backup is never dispatched past a blocked front door: resume re-runs the
     same front door before regating and refuses, so the AI work could only be
@@ -336,7 +376,7 @@ def test_blocked_frontdoor_row_keeps_the_declaration_it_classified(
     monkeypatch.setattr(bd.subprocess, "run", runner)
 
     assert _solve_after_ai_route(
-        "verilogeval-human", str(dataset), str(run)) == 1
+        "verilogeval-human", str(dataset), str(run)) == 2
     assert len(runner.calls) == 1
     assert _is_d1_frontdoor(runner.calls[0])
     assert _read_jsonl(run / bd._BACKUP_WORKLIST) == []
@@ -351,9 +391,12 @@ def test_blocked_frontdoor_row_keeps_the_declaration_it_classified(
     assert bd._declared_route_ai_backup(verdict)["skills"] == want_skills
     assert result["route_ai_backup"] == {
         "status": "DECLARED", "skills": ["rtl-repair"]}
-    assert result["phase1_frontdoor"]["status"] == "BLOCKED"
-    assert "emitted no hash-bound L-doc provenance" in (
-        result["phase1_frontdoor"]["reason"])
+    # Typed activation raises before a successful frontdoor can be returned;
+    # the coordinator retains the refusal in its worker error instead.
+    assert result["phase1_frontdoor"] is None
+    assert result["d1_activation"] is None
+    assert "D1_ENTRY_PENDING" in result["worker_error"]
+    assert "emitted no hash-bound L-doc provenance" in result["worker_error"]
 
 
 def test_router_outage_still_requires_ai_route_before_runner(tmp_path,
@@ -374,9 +417,12 @@ def test_router_outage_still_requires_ai_route_before_runner(tmp_path,
     task = _read_jsonl(run / bd._ROUTE_WORKLIST)[0]
     assert task["program_proposal"]["source"] == "router_error"
     assert _ai_route.complete_ai_routes(
-        bd, "verilogeval-human", dataset, run) == 1
+        bd, "verilogeval-human", dataset, run) == 2
     assert len(runner.calls) == 1
     result = json.loads((run / "solve_report.json").read_text())["results"][0]
     assert result["worker_status"] == "ERROR"
     assert result["routing_verdict"]["source"] == "ai_override"
-    assert result["phase1_frontdoor"]["status"] == "BLOCKED"
+    assert result["phase1_frontdoor"] is None
+    assert result["d1_activation"] is None
+    assert "D1_ENTRY_PENDING" in result["worker_error"]
+    assert "emitted no hash-bound L-doc provenance" in result["worker_error"]

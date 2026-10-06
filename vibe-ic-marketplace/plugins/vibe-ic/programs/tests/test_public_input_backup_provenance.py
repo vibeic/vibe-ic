@@ -40,7 +40,8 @@ def _backup(tmp_path, monkeypatch):
             return real_run(argv, **kwargs)
         project = Path(argv[2])
         if fixture._is_d1_frontdoor(argv):
-            fixture._emit_phase1_docs(project)
+            fixture._emit_phase1_docs(
+                project, fixture._runner_invocation_context(kwargs))
             return SimpleNamespace(returncode=0)
         rtl = project / "phase2" / "stage1" / "rtl"
         rtl.mkdir(parents=True, exist_ok=True)

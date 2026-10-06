@@ -328,8 +328,12 @@ def test_shape_d_override_midflow(tmp_path,monkeypatch,nature):
     assert calls[0][calls[0].index('--exit-step')+1]=={'debug':'4','optimization':'9'}[nature]
     result=json.loads((run/'solve_report.json').read_text())['results'][0]
     assert result['routing_verdict']['source']=='ai_override'
-    assert result['phase1_frontdoor']['provenance']==before
-    assert emit_attestation.phase1_provenance(project)==before
+    current=emit_attestation.phase1_provenance(project)
+    assert result['phase1_frontdoor']['status']=='GENERATED'
+    assert result['phase1_frontdoor']['provenance']==current and current!=before
+    gate=result['phase1_frontdoor']['d1_gate']
+    assert gate['current_call'] is True and gate['d1_provenance_sha256']==current['digest']
+    assert result['phase1_frontdoor']['runner_invocation']['invocation_id']==gate['invocation_id']
 
 @pytest.mark.parametrize('invalid',['missing','invalid'])
 def test_shape_d_multirow_barrier(tmp_path,monkeypatch,invalid):

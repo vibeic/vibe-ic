@@ -83,8 +83,23 @@ def test_solve_exposes_the_current_refusal_with_stale_scaffolds(tmp_path, monkey
     monkeypatch.setattr(fx, "bio", bio)
     real_run = subprocess.run
     fx._install_solve_fakes(monkeypatch, {})
-    monkeypatch.setattr(bd.subprocess, "run", real_run)
-    monkeypatch.setattr(bd, "_solver_argv", lambda runner, project, *a: _argv(project))
+    canonical_argv = bd._solver_argv
+
+    def solver_argv(runner, project, entry, exit_step, *args):
+        if exit_step == "D1":
+            return canonical_argv(runner, project, entry, exit_step, *args)
+        # Deliberately omit the downstream route to exercise the real refusal.
+        return _argv(project)
+
+    def producer(argv, **kwargs):
+        if argv[argv.index("--exit-step") + 1] == "D1":
+            fx.review_fixture._emit_d1_fixture_report(
+                Path(argv[2]), json.loads(kwargs["env"][bd._RUNNER_CONTEXT_ENV]))
+            return subprocess.CompletedProcess(argv, 0, "", "")
+        return real_run(argv, **kwargs)
+
+    monkeypatch.setattr(bd, "_solver_argv", solver_argv)
+    monkeypatch.setattr(bd.subprocess, "run", producer)
     original_stage = bio.stage
 
     def stage(fmt, problem, project):
@@ -96,7 +111,7 @@ def test_solve_exposes_the_current_refusal_with_stale_scaffolds(tmp_path, monkey
     dataset = tmp_path / "empty-input"
     dataset.mkdir()
     run = tmp_path / "solve"
-    assert fx._solve_after_ai_route("rtllm", dataset, run) == 1
+    assert fx._solve_after_ai_route("rtllm", dataset, run) == 2
     results = json.loads((run / "solve_report.json").read_text())["results"]
     for row in results:
         assert row["rc"] == 2
@@ -104,6 +119,8 @@ def test_solve_exposes_the_current_refusal_with_stale_scaffolds(tmp_path, monkey
         assert diagnostic.get("reason_class", "UNDISCLOSED") == "DELIVERY_ROUTE_UNDECLARED"
         assert not row["candidate_ready"]
         assert not row["awaiting_ai_backup"]
+        assert row["phase1_frontdoor"]["status"] == "GENERATED"
+        assert row["phase1_frontdoor"]["d1_gate"]["current_call"] is True
         receipt = json.loads(Path(diagnostic["receipt_path"]).read_text())
         assert receipt["project"] == str((run / "projects" / row["id"]).resolve())
         assert receipt["invocation_id"] == diagnostic["invocation_id"]

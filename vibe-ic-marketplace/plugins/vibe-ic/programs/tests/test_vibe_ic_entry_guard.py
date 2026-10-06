@@ -495,6 +495,26 @@ def _canonical_solve_run(tmp_path, bench="verilogeval-v2", fmt="verilogeval"):
     dataset.mkdir()
     run_dir = tmp_path / "run"
     dispatch._prepare_general_solve_run(bench, dataset, run_dir, fmt, 0)
+    # Scoring also consumes the immutable format issued by solve. Supply one
+    # input-only route task through its real producer; no runner/acceptance
+    # evidence is created by this precondition fixture.
+    import benchmark_io_adapter as adapter
+    project = run_dir / "projects" / "entry_guard_control"
+    prompt = project / "input" / "phase1_prompt.md"
+    prompt.parent.mkdir(parents=True)
+    prompt.write_text("Design a neutral digital block.\n")
+    original = adapter._stage_public_original(
+        "entry_guard_control", prompt.read_text(), {}, project)
+    route = dispatch._make_ai_route_task(
+        "entry_guard_control", project, {"public_original_input": original},
+        {"nature": "spec_generation", "entry_nature": "spec_generation"},
+        run_dir, fmt, benchmark=bench, dataset_path=dataset)
+    dispatch._publish_route_input_anchor(
+        run_dir, dispatch._route_input_anchor(bench, fmt, dataset, [route]))
+    dispatch._write_jsonl(run_dir / dispatch._ROUTE_WORKLIST, [route])
+    dispatch._atomic_write_json(run_dir / "solve_report.json", {
+        "bench": bench, "format": fmt, "results": [],
+    })
     return run_dir, dataset
 
 
@@ -575,8 +595,12 @@ def test_a_missing_bench_config_still_refuses_before_any_gate(tmp_path):
 
     rc, output = _score(run_dir, dataset)
     assert rc != 0
-    assert _PRECONDITION_SAID in output, output
+    # Immutable continuation-format admission now checks the missing config
+    # before the legacy clean-room precondition. Pin that specific refusal.
+    assert "IO_FORMAT_BINDING_REFUSED" in output, output
+    assert ".bench_config.json" in output, output
     assert "Vibe-IC entry guard FAILed" not in output
+    assert "structural runner-entry evidence found" not in output
 
 
 @pytest.mark.parametrize(("field", "invalid"), [

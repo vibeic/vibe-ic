@@ -1261,18 +1261,25 @@ def _stub_dispatched_reentry(monkeypatch):
         lambda budget, argv, snapshot, *args, **kwargs: budget.run(argv))
 
 
-def _issue_pending_route_fixture(run: Path, route: dict) -> dict:
+def _issue_pending_route_fixture(run: Path, route: dict, *,
+                                 nature: str = "spec_generation",
+                                 requested_evidence: str | None = None) -> dict:
     """Run the normal route producer through its pending-D1 boundary."""
     import route_decision as rd
     from test_ai_first_route_handoff import _answer, _write_answer
 
     # This fixture's proposal is deliberately the compact ROUTING constant;
     # use the documented override path with exact visible prompt evidence.
-    answer = _answer(route, "spec_generation", disposition="OVERRIDE")
+    answer = _answer(route, nature, disposition="OVERRIDE")
+    if requested_evidence is not None:
+        answer["semantic_decision"] = {
+            "nature": nature, "requested_evidence": requested_evidence,
+            "delivery_target": "rtl",
+        }
     prompt = Path(route["prompt_path"]).read_text()
     answer["prompt_evidence"] = [{
         "excerpt": prompt.splitlines()[0],
-        "supports": "The visible specification is a spec_generation request.",
+        "supports": f"The visible specification is a {nature} request.",
     }]
     _write_answer(route, answer)
     decision, reasons = bd._validate_ai_route(
@@ -1295,8 +1302,56 @@ def _issue_pending_route_fixture(run: Path, route: dict) -> dict:
     return receipt
 
 
+def _emit_d1_fixture_report(project: Path, context: dict, *,
+                            emit_docs: bool = True) -> None:
+    """Model ONLY the synthetic D1 producer's current report contract.
+
+    Coordinator transport tests assume a successful D1 precondition. The
+    actual dispatcher still validates the producer binding, report verdict,
+    L-doc provenance and signed route admission. No real IC is measured here.
+    Existing L-doc bytes are retained so review/signature identities stay fixed.
+    """
+    if emit_docs:
+        docs = project / "phase1" / "generated_docs"
+        docs.mkdir(parents=True, exist_ok=True)
+        if not list(docs.glob("L*.json")):
+            (docs / "L1_DATASHEET.json").write_text('{"schema": 1}\n')
+    report = project / "reports" / "orchestrator" / "phase1_one_shot.json"
+    report.parent.mkdir(parents=True, exist_ok=True)
+    document = bd._bind_runner_report({
+        "schema": "fixture.phase1.report.v1", "verdict": "PASS",
+        "measurement_scope": "SYNTHETIC_D1_PRODUCER_PRECONDITION",
+    }, project, __file__, report.name, context=context)
+    report.write_text(json.dumps(document))
+
+
+def _issue_active_route_fixture(run: Path, route: dict, *,
+                                nature: str = "spec_generation",
+                                requested_evidence: str = "lint_validated") -> dict:
+    """Issue real coordinator authority around a narrowly mocked D1 producer."""
+    from unittest.mock import patch
+
+    receipt = _issue_pending_route_fixture(
+        run, route, nature=nature, requested_evidence=requested_evidence)
+
+    def d1_producer(argv, **kwargs):
+        assert "--entry-step" not in argv
+        assert argv[argv.index("--exit-step") + 1] == "D1"
+        context = json.loads(kwargs["env"][bd._RUNNER_CONTEXT_ENV])
+        _emit_d1_fixture_report(Path(argv[2]), context)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    with patch.object(bd.subprocess, "run", d1_producer):
+        frontdoor, _, activation = bd._activate_route_d1(
+            Path(route["project"]), route, receipt,
+            PROGRAMS / "vibe_ic_one_shot_runner.py", bd._RunnerBudget(1, 1, 1))
+    assert frontdoor["status"] == "GENERATED"
+    assert activation["d1_gate"]["verdict"] == "PASS"
+    return receipt
+
+
 def _write_issued_run_envelope(run: Path, task: dict,
-                               extra_routes: list[dict] | None = None) -> None:
+                               extra_routes: list[dict] | None = None) -> list[dict]:
     """Write the coordinator-owned envelope consumed by ``cmd_resume``.
 
     Direct review fixtures start after the real ``--solve`` route decision, so
@@ -1335,14 +1390,17 @@ def _write_issued_run_envelope(run: Path, task: dict,
         "seed_run": None,
         "reused_samples_from": None,
     })
+    return routes
 
 
 def _solve_report(run: Path, task: dict,
-                  *, extra_routes: list[dict] | None = None) -> None:
+                  *, extra_routes: list[dict] | None = None,
+                  active_route: bool = False, exit_step: str = "8",
+                  requested_evidence: str = "lint_validated") -> None:
     result = {
         "id": task["id"], "ok": True, "candidate_ready": True,
         "accepted": False, "entry": "D1", "evidence": "RTL_SIM",
-        "exit": "8", "routing_verdict": ROUTING,
+        "exit": exit_step, "routing_verdict": ROUTING,
         "candidate_origin": "PROGRAM", "ai_repair_required": False,
         "awaiting_ai": True, "awaiting_ai_review": True,
         "awaiting_ai_backup": False,
@@ -1368,7 +1426,15 @@ def _solve_report(run: Path, task: dict,
         },
         "results": [result],
     }))
-    _write_issued_run_envelope(run, task, extra_routes=extra_routes)
+    routes = _write_issued_run_envelope(run, task, extra_routes=extra_routes)
+    if active_route:
+        receipt = _issue_active_route_fixture(
+            run, routes[0], requested_evidence=requested_evidence)
+        assert receipt["verify_through"] == exit_step
+        solve_path = run / "solve_report.json"
+        solve = json.loads(solve_path.read_text())
+        solve["results"][0]["route_receipt"] = receipt
+        solve_path.write_text(json.dumps(solve))
     bd._write_jsonl(run / bd._REVIEW_WORKLIST, [task])
     bd._write_jsonl(run / bd._BACKUP_WORKLIST, [])
 

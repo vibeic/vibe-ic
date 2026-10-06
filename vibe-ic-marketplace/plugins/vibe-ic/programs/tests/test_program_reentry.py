@@ -198,6 +198,48 @@ def _declare_exit(run, step="2"):
     solve_path.write_text(json.dumps(solve))
 
 
+def _historical_pending_repair(run, parent, challenge, output):
+    """Construct a legacy pending task; today's repair admission is not run.
+
+    The pre-contract Program could freeze transformed bytes despite a stale
+    author signature. An old version string on today's coordinator does not
+    recreate that behavior: today's ordinary resume correctly rejects it.
+    Only archive/task producers build this historical input to explicit
+    reentry. No validator is patched and nothing is accepted or published.
+    """
+    project = Path(parent["project"])
+    signed = bd._sha256_text(bd._candidate_text(bd._rtl_files(project)))
+    provenance, reasons = bd._validate_repair_record(
+        bd._repair_record_path(run, parent), parent, signed, challenge)
+    assert reasons == []
+    preserved = bd._archive_pre_gate_input(
+        run, parent["id"], bd._rtl_files(project), signed)
+    repair_input = bd._archive_repair_input(parent["id"], project, run, provenance)
+    working = bd._rtl_files(project)
+    assert len(working) == 1
+    working[0].write_text(output)
+    # This is explicitly historical fixture material, not a claim that the
+    # current source-bound repair collector admitted the transformed output.
+    got = {"id": parent["id"], "ok": True, "completion": output,
+           "rtl_gen": "NOT_APPLICABLE"}
+    task = bd._make_ai_review_task(
+        parent["id"], project, got, fx.ROUTING, 0, run, "AI_REPAIR",
+        verification_challenges=[challenge],
+        expected_public_input=parent["public_original_input"],
+        program_candidate=parent["program_candidate_snapshot"],
+        repair_parent_candidate=parent["candidate_snapshot"],
+        repair_provenance=provenance, repair_input_candidate=repair_input)
+    task["pre_gate_input"] = bd._bind_pre_gate_output(preserved, task["rtl_sha256"])
+    bd._write_jsonl(run / bd._REVIEW_WORKLIST, [task])
+    solve_path = run / "solve_report.json"
+    solve = json.loads(solve_path.read_text())
+    solve["results"][0].update(
+        candidate_origin="AI_REPAIR", awaiting_ai_review=True,
+        ai_repair_required=False, review_task=task["review_path"])
+    solve_path.write_text(json.dumps(solve))
+    return task
+
+
 def _stuck(tmp_path, monkeypatch):
     """The exact stuck state: signed input, unwanted gate output, stale sig.
 
@@ -215,7 +257,7 @@ def _stuck(tmp_path, monkeypatch):
     got = bio.collect("rtllm", "p1", project)
     task = bd._make_ai_review_task("p1", project, got, fx.ROUTING, 0,
                                    run, "PROGRAM")
-    fx._solve_report(run, task)
+    fx._solve_report(run, task, active_route=True, exit_step="2")
     _declare_exit(run)
     fx._write_review(task, fx._proven_fail_review(task))
     assert bd.cmd_resume("rtllm", "/unused", str(run)) == 2
@@ -230,10 +272,8 @@ def _stuck(tmp_path, monkeypatch):
     record_path = bd._repair_record_path(run, task)
     signed_record = record_path.read_bytes()
 
-    # The gates normalize those bytes into something the author never signed.
-    _gate(monkeypatch, _UNWANTED)
-    assert bd.cmd_resume("rtllm", "/unused", str(run)) == 2
-    stuck = bd._read_jsonl(run / bd._REVIEW_WORKLIST)[0]
+    stuck = _historical_pending_repair(
+        run, task, bd._validate_ai_review(task)["verified_challenge"], _UNWANTED)
     _declare_exit(run)
     # The Program is upgraded. Everything after this point runs on the fix.
     monkeypatch.undo()
@@ -281,7 +321,7 @@ def _case(tmp_path, monkeypatch, *, reviewed=False, exit_step="2"):
     signed = fx._write_ai_repair_record(run, parent, challenge)
     bd._archive_candidate("p1", project,
         {"id": "p1", "ok": True, "completion": rtl.read_text()}, run, "AI_REPAIR_INPUT")
-    fx._solve_report(run, parent)
+    fx._solve_report(run, parent, active_route=True, exit_step=exit_step)
     _declare_exit(run, exit_step)
     state = {"mode": "old", "calls": [], "on_run": None, "rc": 0}
     real_run = bd.subprocess.run
@@ -312,8 +352,8 @@ def _case(tmp_path, monkeypatch, *, reviewed=False, exit_step="2"):
         return SimpleNamespace(returncode=state["rc"])
 
     monkeypatch.setattr(bd.subprocess, "run", boundary)
-    assert bd.cmd_resume("rtllm", "/unused", str(run), worker_threads=1) == 2
-    task = bd._read_jsonl(run / bd._REVIEW_WORKLIST)[0]
+    task = _historical_pending_repair(
+        run, parent, challenge, rtl.read_text().replace("y = a", "y = 1'b0"))
     assert task["candidate_origin"] == "AI_REPAIR"
     assert task["rtl_sha256"] != signed["repaired_rtl_sha256"]
     assert bd.cmd_resume("rtllm", "/unused", str(run), worker_threads=1) == 2
@@ -362,6 +402,34 @@ def _refusal(capsys):
 
 
 # ── the stuck state itself, and the refusal that must NOT be weakened ──
+
+@pytest.mark.parametrize("output", [_UNWANTED, _BENIGN])
+def test_current_ordinary_resume_refuses_mutation_of_the_signed_repair(
+        tmp_path, monkeypatch, output):
+    run, parent, _ = fx._task(tmp_path)
+    project = Path(parent["project"])
+    working = project / "phase2/stage1/rtl/dut.v"
+    working.write_text(_SIGNED_RTL.replace("y = a", "y = ~a"))
+    parent = bd._make_ai_review_task(
+        "p1", project, bio.collect("rtllm", "p1", project), fx.ROUTING, 0,
+        run, "PROGRAM")
+    fx._solve_report(run, parent, active_route=True, exit_step="2")
+    fx._write_review(parent, fx._proven_fail_review(parent))
+    assert bd.cmd_resume("rtllm", "/unused", str(run)) == 2
+    challenge = bd._validate_ai_review(parent)["verified_challenge"]
+    working.write_text(_SIGNED_RTL)
+    fx._write_ai_repair_record(run, parent, challenge)
+    record = bd._repair_record_path(run, parent)
+    before = record.read_bytes()
+    _gate(monkeypatch, output)
+    assert bd.cmd_resume("rtllm", "/unused", str(run)) == 2
+    assert bd._read_jsonl(run / bd._REVIEW_WORKLIST) == [parent]
+    refusal = bd._read_jsonl(run / bd._REPAIR_WORKLIST)[0]
+    assert refusal["status"] == "PROGRAM_GATES_REJECTED_AI_REPAIR"
+    assert "CANDIDATE_HASH_MISMATCH" in json.dumps(refusal["reasons"])
+    assert record.read_bytes() == before
+    assert not Path(parent["response_path"]).exists()
+
 
 def test_the_gate_boundary_records_the_signed_input_and_its_output(
         tmp_path, monkeypatch):
@@ -671,7 +739,7 @@ def test_a_concurrent_coordinator_refuses_the_regate(
 def test_a_non_repair_candidate_cannot_be_regated(
         tmp_path, monkeypatch, capsys):
     run, task, _ = fx._task(tmp_path)
-    fx._solve_report(run, task)
+    fx._solve_report(run, task, active_route=True, exit_step="2")
     _declare_exit(run)
     fx._write_review(task, fx._valid_review(task))
     request = {

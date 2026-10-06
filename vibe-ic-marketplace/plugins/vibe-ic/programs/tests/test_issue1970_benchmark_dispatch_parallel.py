@@ -33,6 +33,7 @@ import task_nature_route as tnr                         # noqa: E402
 from _hostpaths import require_repo                     # noqa: E402
 import _runtime_pair_fixture as _rt_pair                # noqa: E402
 import _ai_route_fixture as _ai_route                    # noqa: E402
+import test_benchmark_program_first_ai_review as review_fixture  # noqa: E402
 
 
 def _solve_after_ai_route(bench, dataset, run, *, jobs=1,
@@ -72,6 +73,7 @@ def _install_common_fakes(monkeypatch) -> None:
                            "route": "plugin_loop", "plugin_entry": {}})
     monkeypatch.setattr(tnr, "NATURE_ENTRY", {
         "fixture": {"entry_step": "D1", "default_evidence": "RTL_SIM",
+                    "then": ["2"],
                     "route": "plugin_loop", "plugin_entry": {}}})
     monkeypatch.setattr(tnr, "EVIDENCE_EXIT", {
         "RTL_SIM": {"exit_step": "8"}})
@@ -122,6 +124,10 @@ def _install_solve_fakes(monkeypatch, intervals: dict[str, tuple[float, float]],
 
     def fake_run(argv, *args, **kwargs):
         project = Path(argv[2])
+        if argv[argv.index("--exit-step") + 1] == "D1":
+            review_fixture._emit_d1_fixture_report(
+                project, json.loads(kwargs["env"][bd._RUNNER_CONTEXT_ENV]))
+            return SimpleNamespace(returncode=0)
         pid = project.name
         run_name = project.parents[1].name
         started = time.monotonic()
@@ -215,6 +221,23 @@ def _write_resume_fixture(run: Path) -> None:
     }))
     bd._write_jsonl(run / bd._BACKUP_WORKLIST, backups)
     bd._write_jsonl(run / bd._REVIEW_WORKLIST, [])
+    # These resume controls start AFTER routing/D1. Issue the same immutable
+    # input/config and real coordinator admissions as solve, with only the
+    # synthetic D1 producer mocked; a writable backup row is not authority.
+    extra_routes = [bd._make_ai_route_task(
+        item["id"], Path(item["project"]),
+        {"public_original_input": item["public_original_input"]},
+        review_fixture.ROUTING, run, "rtllm", benchmark="rtllm",
+        dataset_path=Path("/unused")) for item in backups[1:]]
+    routes = review_fixture._write_issued_run_envelope(
+        run, dict(backups[0]), extra_routes=extra_routes)
+    for result, route in zip(results, routes):
+        result["route_receipt"] = review_fixture._issue_active_route_fixture(
+            run, route, nature="fixture", requested_evidence="RTL_SIM")
+    solve_path = run / "solve_report.json"
+    solve = json.loads(solve_path.read_text())
+    solve["results"] = results
+    solve_path.write_text(json.dumps(solve))
 
 
 def _overlap(a: tuple[float, float], b: tuple[float, float]) -> bool:
@@ -231,7 +254,9 @@ def _prior_collectable_report(project: Path, *, invocation_context=None):
                          invocation_context=invocation_context)
     docs = project / "phase1" / "generated_docs"
     docs.mkdir(parents=True, exist_ok=True)
-    (docs / "L1_DATASHEET.json").write_text('{"schema": 1}')
+    ldoc = docs / "L1_DATASHEET.json"
+    if not ldoc.exists():
+        ldoc.write_text('{"schema": 1}\n')
     return report
 
 
@@ -254,6 +279,10 @@ def test_real_runner_refusal_is_preserved_instead_of_being_an_outcome(tmp_path):
 def test_real_refusal_cannot_collect_old_reports_and_resume_retries_only_that_backup(
         tmp_path, monkeypatch):
     _install_common_fakes(monkeypatch)
+    # This mocked transport test uses local challenge execution. The real
+    # challenge runtime selector must not inspect a daemon through our runner
+    # fake when it issues the healthy worker's review task.
+    monkeypatch.setenv("VIBEIC_CHALLENGE_BACKEND", "host")
     run = tmp_path / "run"
     _write_resume_fixture(run)
     for pid in ("p1", "p2"):
@@ -343,7 +372,12 @@ def test_legacy_unmeasured_review_is_regated_without_rebinding_the_old_review(
     _rt_pair.assume_matching_runtime_pair(monkeypatch)
     run, task, _ = _task(tmp_path)
     task["program_verification"]["runner_rc"] = 2
-    _solve_report(run, task)
+    # Retain this legacy control's explicit step-8 span in its test route
+    # table; the product now defaults spec_generation to lint at step 2.
+    monkeypatch.setitem(tnr.EVIDENCE_EXIT, "fixture_spec_conformance", {
+        "exit_step": "8"})
+    _solve_report(run, task, active_route=True,
+                  requested_evidence="fixture_spec_conformance")
     _write_review(task, _valid_review(task))
     old_review = Path(task["review_path"]).read_bytes()
     seen = []
@@ -427,8 +461,19 @@ def test_solve_jobs_overlap_and_commit_shared_artifacts_in_dataset_order(
             + json.dumps(report["results"], indent=1)[:1200])
     # Route responses bind the distinct run roots, so their hashes differ;
     # compare execution outcomes after excluding that expected identity.
-    for report in (serial_report, parallel_report):
+    for root, report in ((serial, serial_report), (parallel, parallel_report)):
         for row in report["results"]:
+            state = bd._validated_route_reentry_state(
+                bench="rtllm", dataset=dataset, fmt="rtllm", run_p=root,
+                pid=row["id"], result=row,
+                route_worklist=bd._read_jsonl(root / bd._ROUTE_WORKLIST),
+                allow_d1_only=False)
+            assert state["status"] == "ACTIVE", state
+            assert row["d1_activation"] == state["activation"]
+            binding = row["routing_verdict"]["coordinator_binding"]
+            assert binding == state["task"]["coordinator_binding"]
+            for key in ("project_handle", "prompt_handle", "response_handle", "binding_sha256"):
+                binding.pop(key)
             row["routing_verdict"].pop("ai_route_response_sha256", None)
             # Invocation identities name their own run root and immutable
             # log archive. Validate those facts before comparing outcomes.
@@ -437,6 +482,24 @@ def test_solve_jobs_overlap_and_commit_shared_artifacts_in_dataset_order(
                 assert invocation["status"] == "COMPLETED"
                 assert Path(invocation["project"]).name == row["id"]
                 assert json.loads(Path(invocation["record_path"]).read_text()) == invocation
+                diagnostic = bd._stored_runner_diagnostics(invocation)
+                assert not diagnostic or not diagnostic.get("reason"), diagnostic
+            frontdoor = row["phase1_frontdoor"]
+            d1_invocation = frontdoor.pop("runner_invocation")
+            assert json.loads(Path(d1_invocation["record_path"]).read_text()) == d1_invocation
+            gate = frontdoor["d1_gate"]
+            assert gate == row["d1_activation"]["d1_gate"]
+            assert gate["invocation_id"] == d1_invocation["invocation_id"]
+            assert gate["current_call"] is True and gate["verdict"] == "PASS"
+            for key in ("task_sha256", "invocation_id", "report_sha256", "ldoc_root_handle", "gate_sha256"):
+                gate.pop(key)
+            # Admission above validated the complete activation and D1 gate.
+            # Compare semantic evidence after removing only the named run
+            # identities; every route/producer binding was checked first.
+            activation = row["d1_activation"]
+            activation["d1_gate"] = dict(gate)
+            for key in ("task_sha256", "d1_gate_sha256", "activation_sha256", "ldoc_root_handle"):
+                activation.pop(key)
     assert parallel_report == serial_report
     for name in (bd._BACKUP_WORKLIST, bd._REVIEW_WORKLIST,
                  bd._ACCEPTANCE_REPORT):
@@ -487,7 +550,7 @@ def test_one_runner_worker_error_is_loud_and_does_not_erase_other_results(
     dataset.mkdir()
     run = tmp_path / "worker-error"
 
-    assert _solve_after_ai_route("rtllm", dataset, run, jobs=2) == 1
+    assert _solve_after_ai_route("rtllm", dataset, run, jobs=2) == 2
     results = json.loads((run / "solve_report.json").read_text())["results"]
     assert [row["id"] for row in results] == ["p1", "p2"]
     assert results[0]["worker_status"] == "ERROR"
@@ -495,9 +558,12 @@ def test_one_runner_worker_error_is_loud_and_does_not_erase_other_results(
     assert "worker_status" not in results[1]
     assert results[1]["rc"] == 0
 
-    monkeypatch.setattr(
-        bd.subprocess, "run",
-        lambda *_a, **_k: SimpleNamespace(returncode=0))
+    def recovered_runner(argv, **kwargs):
+        if argv[argv.index("--exit-step") + 1] == "D1":
+            review_fixture._emit_d1_fixture_report(
+                Path(argv[2]), json.loads(kwargs["env"][bd._RUNNER_CONTEXT_ENV]))
+        return SimpleNamespace(returncode=0)
+    monkeypatch.setattr(bd.subprocess, "run", recovered_runner)
     assert bd.cmd_resume("rtllm", str(dataset), str(run), jobs=2) == 1
     resumed = json.loads((run / "solve_report.json").read_text())["results"]
     assert [row["id"] for row in resumed] == ["p1", "p2"]
