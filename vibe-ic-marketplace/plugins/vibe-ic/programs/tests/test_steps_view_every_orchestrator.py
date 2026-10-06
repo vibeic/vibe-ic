@@ -46,6 +46,8 @@ from pathlib import Path
 
 import pytest
 
+from _runner_ast_fixture import called_main, live_nodes
+
 PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROGRAMS))
 
@@ -181,12 +183,12 @@ _VIEW_BUILDERS = ("emit_steps_view", "publish_report_then_steps_view")
 
 @pytest.mark.parametrize("runner", ORCHESTRATORS)
 def test_every_orchestrator_calls_emit_steps_view_in_main(runner):
-    tree = ast.parse((PROGRAMS / runner).read_text())
-    mains = [n for n in ast.walk(tree)
-             if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
-             and n.name == "main"]
-    assert mains, f"{runner}: no main() to wire"
-    calls = [n for m in mains for n in ast.walk(m)
+    _assert_steps_view_wired((PROGRAMS / runner).read_text(), runner)
+
+
+def _assert_steps_view_wired(src, runner):
+    main = called_main(ast.parse(src))
+    calls = [n for n in live_nodes(main)
              if isinstance(n, ast.Call)
              and isinstance(n.func, ast.Attribute)
              and n.func.attr in _VIEW_BUILDERS]
@@ -194,6 +196,18 @@ def test_every_orchestrator_calls_emit_steps_view_in_main(runner):
         f"{runner}: main() never builds the steps view (no call to any of "
         f"{_VIEW_BUILDERS}) — a run driven through this front door would end "
         f"with no steps/ tree")
+
+
+@pytest.mark.parametrize("mutation", ["uncalled", "nested", "after_return"])
+def test_steps_view_wiring_rejects_uncalled_code(mutation):
+    if mutation == "uncalled":
+        src = 'def main():\n    return 0\ndef _main():\n    _pl.emit_steps_view(p, d)\n'
+    elif mutation == "nested":
+        src = 'def main():\n    def unused():\n        _pl.emit_steps_view(p, d)\n    return 0\n'
+    else:
+        src = 'def main():\n    return 0\n    _pl.emit_steps_view(p, d)\n'
+    with pytest.raises(AssertionError):
+        _assert_steps_view_wired(src, "disconnected_fixture")
 
 
 def test_the_view_publisher_actually_builds_the_view():

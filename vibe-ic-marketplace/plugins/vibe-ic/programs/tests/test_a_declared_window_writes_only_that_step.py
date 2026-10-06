@@ -32,6 +32,8 @@ from pathlib import Path
 
 import pytest
 
+from _runner_ast_fixture import called_main, live_nodes
+
 PROGRAMS = Path(__file__).resolve().parent.parent
 RUNNER = PROGRAMS / "design_one_shot_runner.py"
 
@@ -108,13 +110,9 @@ def test_an_exit_inside_phase_3_does_not_bound_the_front_door():
         assert spf.window_is_effective(exit_step=exit_step, runner=D) is True
 
 
-def test_the_front_door_asks_the_phase2_scoped_question():
-    """Phase-2 and Phase-3 windows use their own dispatch signals."""
-    src = (PROGRAMS / "vibe_ic_one_shot_runner.py").read_text()
-    tree = ast.parse(src)
-    main = next(n for n in tree.body
-                if isinstance(n, ast.FunctionDef) and n.name == "main")
-    calls = [c for c in _calls(main)
+def _assert_front_door_window(src):
+    main = called_main(ast.parse(src))
+    calls = [c for c in live_nodes(main) if isinstance(c, ast.Call)
              if _dotted(c).endswith("window_is_effective")]
     assert calls, "the front door no longer asks the window question at all"
     for c in calls:
@@ -130,10 +128,18 @@ def test_the_front_door_asks_the_phase2_scoped_question():
     # Phase 3 now receives the physical-design cut, but a flag alone cannot
     # make the front door bounded.  The child must have published a fresh
     # bounded report from this invocation before the top-level tail is pruned.
-    assert 'p3_args += ["--entry-step", "9", "--exit-step", str(args.exit_step)]' in src
-    assert '_p3_window_ran = bool(_p3_forward_window and rep.get("bounded")' in src
-    assert 'rep.get("window_run_id") == window_run_id' in src
-    assert '_fd_bounded = _fd_bounded or _p3_window_ran or _p3_skip_by_exit' in src
+    statements = {ast.unparse(n) for n in live_nodes(main)
+                  if isinstance(n, (ast.Assign, ast.AugAssign))}
+    assert "p3_args += ['--entry-step', '9', '--exit-step', str(args.exit_step)]" in statements
+    assert any(s.startswith('_p3_window_ran = bool(_p3_forward_window and rep.get(\'bounded\')')
+               and "rep.get('window_run_id') == window_run_id" in s
+               for s in statements)
+    assert '_fd_bounded = _fd_bounded or _p3_window_ran or _p3_skip_by_exit' in statements
+
+
+def test_the_front_door_asks_the_phase2_scoped_question():
+    """Phase-2 and Phase-3 windows use their own dispatch signals."""
+    _assert_front_door_window((PROGRAMS / "vibe_ic_one_shot_runner.py").read_text())
 
 
 def test_dispatched_step_ids_come_from_the_runs_own_record(_=None):
@@ -292,32 +298,34 @@ def test_the_flag_level_rule_agrees_with_the_dispatch_level_one():
     assert spf.window_is_effective() is False
 
 
-def test_the_front_door_bounds_its_own_tail():
+def _assert_front_door_tail(src):
     """Review w437hob32 MEDIUM: the entry the owner actually uses forwarded the
     window and then ran its own tail unconditionally, so the leak survived and
     the phase-2 report's `not_refreshed_here` was contradicted on disk moments
     later by THIS runner rewriting the file it named."""
-    src = (PROGRAMS / "vibe_ic_one_shot_runner.py").read_text()
-    tree = ast.parse(src)
-    main = next(n for n in tree.body
-                if isinstance(n, ast.FunctionDef) and n.name == "main")
+    main = called_main(ast.parse(src))
     for target in ("_pl.emit_final_summary", "_pl.emit_steps_view"):
-        calls = [c for c in _calls(main) if _dotted(c) == target]
+        calls = [c for c in live_nodes(main) if isinstance(c, ast.Call)
+                 and _dotted(c) == target]
         assert calls, f"{target} vanished from the front door"
         guarded = []
-        for node in ast.walk(main):
+        for node in live_nodes(main):
             if not isinstance(node, ast.If):
                 continue
-            if "_fd_bounded" not in {n.id for n in ast.walk(node.test)
-                                     if isinstance(n, ast.Name)}:
+            if isinstance(node.test, ast.Name) and node.test.id == "_fd_bounded":
+                branch = node.orelse
+            elif (isinstance(node.test, ast.UnaryOp) and isinstance(node.test.op, ast.Not)
+                  and isinstance(node.test.operand, ast.Name)
+                  and node.test.operand.id == "_fd_bounded"):
+                branch = node.body
+            else:
                 continue
-            for branch in (node.body, node.orelse):
-                for stmt in branch:
-                    guarded.extend(c for c in _calls(stmt)
-                                   if _dotted(c) == target)
+            for stmt in branch:
+                guarded.extend(c for c in live_nodes(stmt) if isinstance(c, ast.Call)
+                               and _dotted(c) == target)
         assert all(any(g is c for g in guarded) for c in calls), (
             f"{target} runs at the front door without consulting _fd_bounded")
-    binds = [n for n in ast.walk(main) if isinstance(n, ast.Assign)
+    binds = [n for n in live_nodes(main) if isinstance(n, ast.Assign)
              and any(isinstance(tg, ast.Name) and tg.id == "_fd_bounded"
                      for tg in n.targets)]
     assert binds, "_fd_bounded is never computed"
@@ -325,6 +333,44 @@ def test_the_front_door_bounds_its_own_tail():
                    for b in binds), (
         "_fd_bounded is bound to a truthy literal; the tail is unconditionally "
         "skipped and every arm here still passes")
+
+
+def test_the_front_door_bounds_its_own_tail():
+    _assert_front_door_tail((PROGRAMS / "vibe_ic_one_shot_runner.py").read_text())
+
+
+@pytest.mark.parametrize("body", [
+    "return 0", "return 0\n    return _main()",
+    "if False:\n        return _main()\n    return 0",
+    "def unused():\n        return _main()\n    return 0",
+])
+def test_an_uncalled_implementation_cannot_satisfy_front_door_checks(body):
+    src = (PROGRAMS / "vibe_ic_one_shot_runner.py").read_text()
+    tree = ast.parse(src)
+    main = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "main")
+    lines = src.splitlines(keepends=True)
+    lines[main.lineno - 1:main.end_lineno] = [f"def main():\n    {body}\n"]
+    changed = ''.join(lines)
+    for check in (_assert_front_door_window, _assert_front_door_tail):
+        with pytest.raises(AssertionError, match="does not return"):
+            check(changed)
+
+
+@pytest.mark.parametrize("mutation", ["scope", "argv", "guard"])
+def test_front_door_checks_reject_scope_argv_and_guard_regressions(mutation):
+    src = (PROGRAMS / "vibe_ic_one_shot_runner.py").read_text()
+    if mutation == "scope":
+        old, new = 'runner="design_one_shot_runner"', 'runner="phase3_one_shot_runner"'
+        check = _assert_front_door_window
+    elif mutation == "argv":
+        old, new = 'p3_args += ["--entry-step", "9", "--exit-step", str(args.exit_step)]', 'p3_args += []'
+        check = _assert_front_door_window
+    else:
+        old, new = 'if _fd_bounded:\n        _fd_disclose("emit_final_summary"', 'if not _fd_bounded:\n        _fd_disclose("emit_final_summary"'
+        check = _assert_front_door_tail
+    assert old in src
+    with pytest.raises(AssertionError):
+        check(src.replace(old, new))
 
 
 def test_refresh_only_does_not_rewrite_the_runs_own_report():

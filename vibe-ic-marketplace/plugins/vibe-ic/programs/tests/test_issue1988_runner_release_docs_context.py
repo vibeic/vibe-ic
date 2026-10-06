@@ -18,16 +18,19 @@ The fixture values are synthetic and chip/PDK/vendor agnostic.
 from __future__ import annotations
 
 import json
+import hashlib
 import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import phase3_one_shot_runner as runner  # noqa: E402
 from _release_docs_contract import NOT_MEASURED  # noqa: E402
-from _release_kit import SUBJECT, build_project, docs_dir  # noqa: E402
+from _release_kit import SUBJECT, PDK, build_project, docs_dir  # noqa: E402
 
 
 PROGRAMS = Path(__file__).resolve().parents[1]
@@ -35,6 +38,72 @@ PRODUCER = PROGRAMS / "ip_release_docs_gen.py"
 GATE = PROGRAMS / "release_docs_check.py"
 CONTEXT_REL = "reports/orchestrator/phase3_release_docs_context.json"
 SOURCE_SHA = "a" * 40
+
+
+def _project(root: Path, *, with_layers=True) -> Path:
+    """Explicit synthetic current-kit fixture for the identity-context seam.
+
+    No native execution is measured here. Every receipt row binds actual
+    fixture bytes, and the real kit/document consumers remain in the path.
+    Keep this local: upgrading every release-kit user is separately owned.
+    """
+    project = build_project(root, packages=(SUBJECT,), with_layers=with_layers)
+    hm = project / "phase3/stage4/hardmacro"
+
+    def put(rel, content):
+        path = project / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+        return path
+
+    def row(path):
+        raw = path.read_bytes()
+        return {"path": path.relative_to(project).as_posix(),
+                "sha256": hashlib.sha256(raw).hexdigest(), "bytes": len(raw)}
+
+    declaration = put("input/submission_template/tapeout_declaration.json", json.dumps({
+        "schema": "vibe-ic/tapeout_declaration/1",
+        "answers": {"deliverable": "HARDMACRO"},
+        "answer_provenance": {"deliverable": {
+            "answered_by": "owner", "citation": "Synthetic fixture: IP delivery."}},
+    }))
+    signoff_gds = project / f"phase3/stage4/gds/{SUBJECT}.gds"
+    signoff_gds.parent.mkdir(parents=True, exist_ok=True)
+    signoff_gds.write_bytes((hm / f"{SUBJECT}.gds").read_bytes())
+    timing_netlist = put(f"phase3/stage3/pnr/{SUBJECT}_pnr.v",
+                         (hm / f"{SUBJECT}.v").read_text())
+    sources = {
+        "def": put(f"phase3/stage3/pnr/{SUBJECT}.def",
+                   f"VERSION 5.8 ;\nDESIGN {SUBJECT} ;\nEND DESIGN\n"),
+        "gds": signoff_gds, "route": declaration,
+        "technology": put("reports/phase3/technology_units.json", json.dumps({"pdk": PDK})),
+        "timing_netlist": timing_netlist,
+        "timing_sdc": put("phase2/stage2/constraints/fixture.sdc",
+                          "create_clock -name clk -period 20 [get_ports clk]\n"),
+        "timing_spef": put("phase3/stage3/pnr/fixture.spef", '*SPEF "IEEE 1481-1998"\n'),
+        "timing_sta_report": put("reports/phase3/fixture_sta.rpt", "Synthetic timing fixture.\n"),
+        "timing_recipe": put("phase3/stage4/hardmacro/fixture_timing.tcl", "# Synthetic timing recipe.\n"),
+        "pdk_timing_liberty": put("input/pdk/fixture.lib", (hm / f"{SUBJECT}.lib").read_text()),
+        "pdk_magicrc": put("input/pdk/fixture.magicrc", "# Synthetic technology setup.\n"),
+        "lef_recipe": put("phase3/stage4/hardmacro/fixture_lef.tcl", "# Synthetic LEF recipe.\n"),
+    }
+    outputs = {role: hm / f"{SUBJECT}{suffix}" for role, suffix in (
+        ("lef", ".lef"), ("liberty", ".lib"), ("gds", ".gds"), ("verilog", ".v"))}
+    outputs["log"] = put("phase3/stage4/hardmacro/fixture_lef.log",
+                         "SYNTHETIC FIXTURE ONLY\nDIGITAL_LEF_WRITE_DONE\n")
+    outputs["timing_log"] = put("phase3/stage4/hardmacro/fixture_timing.log",
+                                "SYNTHETIC FIXTURE ONLY\nTIMING_MODEL_DONE\n")
+    receipt = {
+        "schema": "vibeic.default_physical_current/1", "step": "37.5ip", "stage": "stage4",
+        "design": SUBJECT, "pdk": PDK, "tool": "magic+opensta",
+        "inputs": {role: row(path) for role, path in sources.items()},
+        "outputs": {role: row(path) for role, path in outputs.items()},
+        "execution": {"rc": 0, "argv": ["synthetic-fixture", "lef"],
+                      "timing": {"rc": 0, "argv": ["synthetic-fixture", "timing"]}},
+        "fixture": "Synthetic context-consumer scaffolding; no native measurement.",
+    }
+    (hm / "current_kit.json").write_text(json.dumps(receipt, indent=2) + "\n")
+    return project
 
 
 def _run(path: Path, *extra: str) -> subprocess.CompletedProcess:
@@ -80,7 +149,7 @@ def _rows(project: Path) -> dict[str, tuple[str, str]]:
 
 def test_bare_project_runner_context_measures_identification_with_named_sources(
         tmp_path):
-    project = build_project(tmp_path / "p", packages=(SUBJECT,))
+    project = _project(tmp_path / "p")
     (project / "input/project.json").write_text("{}\n", encoding="utf-8")
     role = "A synchronous compute block integrated as a hard macro."
     _context(project, role=role)
@@ -107,8 +176,7 @@ def test_bare_project_runner_context_measures_identification_with_named_sources(
 
 def test_project_json_overrides_context_and_absent_role_stays_not_measured(
         tmp_path):
-    project = build_project(tmp_path / "p", packages=(SUBJECT,),
-                            with_layers=False)
+    project = _project(tmp_path / "p", with_layers=False)
     _context(project, design="lower_priority_design",
              pdk="lower_priority_pdk", role=None)
 
@@ -125,7 +193,7 @@ def test_project_json_overrides_context_and_absent_role_stays_not_measured(
 
 
 def test_phase3_runner_writes_and_passes_the_context(tmp_path):
-    project = build_project(tmp_path / "p", packages=(SUBJECT,))
+    project = _project(tmp_path / "p")
     (project / "input/project.json").write_text("{}\n", encoding="utf-8")
     role = "A runner-resolved integration role."
     l9_path = project / "phase1/generated_docs/L9_INTEGRATION_SPEC.json"
@@ -153,3 +221,27 @@ def test_phase3_runner_writes_and_passes_the_context(tmp_path):
         encoding="utf-8")
     assert '"--ic-name", args.ic_name' in front_door, (
         "the canonical --ic-name invocation is still dropped before phase3")
+
+
+@pytest.mark.parametrize("mutation", ["missing_receipt", "changed_view", "changed_input", "unbound_view"])
+def test_release_docs_still_refuse_noncurrent_kit(tmp_path, mutation):
+    project = _project(tmp_path / "p")
+    hm = project / "phase3/stage4/hardmacro"
+    receipt = hm / "current_kit.json"
+    if mutation == "missing_receipt":
+        receipt.unlink()
+    elif mutation == "changed_view":
+        path = hm / f"{SUBJECT}.lef"
+        path.write_text(path.read_text() + "\n# changed after fixture issuance\n")
+    elif mutation == "changed_input":
+        path = project / "phase2/stage2/constraints/fixture.sdc"
+        path.write_text(path.read_text().replace("20", "21"))
+    else:
+        record = json.loads(receipt.read_text())
+        record["outputs"].pop("verilog")
+        receipt.write_text(json.dumps(record))
+    _context(project)
+    result = _run(project, "--run-context", CONTEXT_REL)
+    assert result.returncode != 0, result.stdout + result.stderr
+    assert "IP_KIT_CURRENT_REFUSED" in result.stdout + result.stderr
+    assert not (docs_dir(project, SUBJECT) / "IP_DATASHEET.md").exists()

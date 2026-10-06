@@ -364,7 +364,7 @@ def test_a_delivered_answer_is_consumed_and_the_front_door_then_skips(tmp_path):
 
 # ── the front door's own half: the mode must reach the runner as an argv ───
 
-def test_the_front_door_maps_the_mode_onto_the_flag_it_dispatches():
+def _assert_front_door_second_pass(src):
     """PROVED BY PARSE, not by grepping the file for a string.
 
     `_phase1_decision` returning a mode is worth nothing if the call site does
@@ -375,10 +375,8 @@ def test_the_front_door_maps_the_mode_onto_the_flag_it_dispatches():
     docstring naming the flag cannot satisfy it.
     """
     import ast
-    src = Path(ORCH.__file__).read_text(errors="replace")
-    tree = ast.parse(src)
-    main = next(n for n in ast.walk(tree)
-                if isinstance(n, ast.FunctionDef) and n.name == "main")
+    from _runner_ast_fixture import called_main, live_nodes
+    main = called_main(ast.parse(src))
 
     def _guards_second_pass(test: ast.expr) -> bool:
         return any(isinstance(n, ast.Attribute)
@@ -387,7 +385,7 @@ def test_the_front_door_maps_the_mode_onto_the_flag_it_dispatches():
                    and n.id == "_P1_MODE_EXPERT_SECOND_PASS"
                    for n in ast.walk(test))
 
-    branches = [n for n in ast.walk(main)
+    branches = [n for n in live_nodes(main)
                 if isinstance(n, ast.If) and _guards_second_pass(n.test)]
     assert branches, ("nothing in vibe_ic_one_shot_runner.main branches on the "
                       "second-pass mode, so the mode the decision returns "
@@ -397,7 +395,7 @@ def test_the_front_door_maps_the_mode_onto_the_flag_it_dispatches():
     # sees the extraction flags too and the second assertion below could never
     # hold. (It did not, first time round; the test was wrong, not the code.)
     flags = {c.value for b in branches for n in b.body
-             for c in ast.walk(n) if isinstance(c, ast.Constant)
+             for c in live_nodes(n) if isinstance(c, ast.Constant)
              and isinstance(c.value, str)}
     assert "--second-track-only" in flags, (
         "the second-pass branch does not build the flag "
@@ -407,6 +405,40 @@ def test_the_front_door_maps_the_mode_onto_the_flag_it_dispatches():
     # would re-derive the L documents under the answer that was authored
     # against them.
     assert "docs" not in flags and "--mode" not in flags
+    # Bind the flag to the same argv variable the live dispatch consumes.
+    appends = [n for b in branches for stmt in b.body for n in live_nodes(stmt)
+               if isinstance(n, ast.AugAssign) and isinstance(n.target, ast.Name)
+               and n.target.id == "p1_args" and isinstance(n.op, ast.Add)
+               and isinstance(n.value, ast.List)
+               and any(isinstance(v, ast.Constant) and v.value == "--second-track-only"
+                       for v in n.value.elts)]
+    assert appends, "the second-pass flag is not appended to p1_args"
+    dispatches = [n for n in live_nodes(main) if isinstance(n, ast.Call)
+                  and isinstance(n.func, ast.Name) and n.func.id == "_run_phase"
+                  and len(n.args) >= 3 and isinstance(n.args[2], ast.Name)
+                  and n.args[2].id == "p1_args"]
+    assert any(c.lineno > a.lineno for c in dispatches for a in appends), (
+        "the second-pass argv is not forwarded after its flag is appended")
+
+
+def test_the_front_door_maps_the_mode_onto_the_flag_it_dispatches():
+    _assert_front_door_second_pass(Path(ORCH.__file__).read_text(errors="replace"))
+
+
+@pytest.mark.parametrize("mutation", ["uncalled", "dead_branch", "wrong_argv", "no_dispatch"])
+def test_the_second_pass_wiring_check_rejects_disconnected_code(mutation):
+    src = Path(ORCH.__file__).read_text(errors="replace")
+    if mutation == "uncalled":
+        old, new = 'return _main()', 'return 0'
+    elif mutation == "dead_branch":
+        old, new = 'if p1_mode == _P1_MODE_EXPERT_SECOND_PASS:', 'if False:'
+    elif mutation == "wrong_argv":
+        old, new = 'p1_args += ["--second-track-only"]', 'unused_args = ["--second-track-only"]'
+    else:
+        old, new = '_run_phase(label, runner, p1_args, env=_phase_env)', '_run_phase(label, runner, [], env=_phase_env)'
+    assert old in src
+    with pytest.raises(AssertionError):
+        _assert_front_door_second_pass(src.replace(old, new))
 
 
 def test_the_dispatched_argv_actually_consumes_the_answer(tmp_path):
