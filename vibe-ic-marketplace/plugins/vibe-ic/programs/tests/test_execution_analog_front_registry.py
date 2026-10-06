@@ -76,6 +76,44 @@ def test_missing_declaration_without_explicit_skip_remains_refused(tmp_path):
             source_sha="not-reached-before-declaration-refusal")
 
 
+@pytest.mark.parametrize("mode", ["default", "ultra"])
+@pytest.mark.parametrize("window", [None, ("15", "22"), ("37", "37")])
+def test_backend_entry_does_not_register_an_analog_frontend(
+        tmp_path, monkeypatch, mode, window):
+    """Exercise main's registration call without running an unrelated A-track."""
+    import phase3_one_shot_runner as backend
+
+    project = tmp_path / "backend"
+    project.mkdir()
+    registry = em.Registry()
+    called = []
+
+    def bootstrap(subject, *, parameters):
+        policy._register_analog_adapters(
+            registry, subject, "no-analog-source-needed", parameters)
+        called.append(subject)
+
+    # This control owns only entry/registration. Admission is already granted;
+    # no PDK prevents any synthesis, stream-out or physical verdict afterwards.
+    monkeypatch.setattr(policy, "configure", lambda args: None)
+    monkeypatch.setattr(policy, "bootstrap", bootstrap)
+    monkeypatch.setattr(backend, "_delivery_admission_refusal", lambda p: None)
+    monkeypatch.setattr(backend, "_librelane_admission_facts", lambda p: {})
+    monkeypatch.setattr(backend._canonical_admission, "admit_span",
+                        lambda *args: SimpleNamespace(admitted=True))
+    monkeypatch.setattr(backend, "_detect_pdk", lambda *args: None)
+    argv = ["phase3_one_shot_runner.py", str(project),
+            "--execution-mode", mode]
+    if window:
+        argv += ["--entry-step", window[0], "--exit-step", window[1]]
+    monkeypatch.setattr(sys, "argv", argv)
+    assert backend.main() == 0
+    assert called == [project]
+    assert all(not registry.adapters(step) for step in
+               (*front.FRONT_IDS, *front.analog.STEP_IDS))
+    assert not (project / "phase1/analog/analog_block_list.json").exists()
+
+
 def test_two_block_worker_runs_existing_a1_producer_in_declared_order(tmp_path):
     project = tmp_path / "project"
     blocks = [block(name, "ldo", specs=[{

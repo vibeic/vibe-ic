@@ -77775,7 +77775,12 @@ def main() -> int:
     pdk = _detect_pdk(project, args.pdk)
     _execution.bootstrap(project, parameters={'top': args.top_name, 'pdk': pdk,
         'design_name': args.top_name, 'pdk_name': args.pdk, 'container': args.container,
-        'die_um': args.die_um, 'util': args.util})
+        'die_um': args.die_um, 'util': args.util,
+        # This process dispatches the backend, including resumed windows.
+        # Analog A-track producers belong to their separate runner; registering
+        # them here incorrectly requires a new Phase-1 analog declaration.
+        # Backend macro/interface checks still consume their required views.
+        'skip_analog': True})
     if pdk is None:
         print("[SKIP] phase3_one_shot_runner: no usable PDK detected. "
               "Provide input/pdk/{liberty,lef}/ or use --pdk sky130A.")
