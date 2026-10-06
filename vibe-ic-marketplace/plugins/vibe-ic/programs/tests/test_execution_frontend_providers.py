@@ -102,9 +102,15 @@ def test_controller_executes_worker_and_validator_reddens_on_output_mutation(tmp
     with pytest.raises(em.Refusal, match='ISSUED_FRONTEND_UNAVAILABLE'):
         worker.produce_d1(frozen, output)
     assert canonical.read_bytes()==original
-    with pytest.raises(ValueError, match='8: issued route mismatch'):
-        worker.run_row('8', frozen, output)
-    assert canonical.read_bytes()==original
+    manifest=issued_manifest_path(frozen); original_manifest=manifest.read_bytes()
+    wrong_step=json.loads(original_manifest); wrong_step['step_id']='8'
+    try:
+        manifest.write_text(json.dumps(wrong_step))
+        with pytest.raises(ValueError, match='D1: issued route mismatch'):
+            worker.produce_d1(frozen, output)
+        assert canonical.read_bytes()==original
+    finally:
+        manifest.write_bytes(original_manifest)
     # Forged SDC successes cannot qualify any D1 gate.
     sdc=output/'reports/phase2/sdc_check.json'; sdc.parent.mkdir(parents=True)
     sdc.write_text(json.dumps({'program':'sdc_syntax_check','passed':True}))
