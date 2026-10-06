@@ -2,6 +2,7 @@
 import importlib
 import hashlib
 import json
+from _direct_density_fixture import stage_direct_density
 
 from _shipped_version import shipped_plugin_version  # noqa: E402  (#800)
 mod = importlib.import_module("signoff_ladder_run")
@@ -528,11 +529,13 @@ class TestMetalDensityTier:
         assert mod.check_tier_metal_density(tmp_path).verdict == "NOT_RUN"
 
     def test_within_window_pass(self, tmp_path):
+        stage_direct_density(tmp_path)
         _write_json(tmp_path / "reports/phase3/metal_density.json",
                     {"layers": {"met1": 0.42, "met2": 0.55, "met3": 0.48}})
         assert mod.check_tier_metal_density(tmp_path).verdict == "PASS"
 
     def test_below_window_fail(self, tmp_path):
+        stage_direct_density(tmp_path)
         # §4.05 negative: a layer below the CMP min-density window FAILs.
         _write_json(tmp_path / "reports/phase3/metal_density.json",
                     {"layers": {"met1": 0.12, "met2": 0.55}})
@@ -695,6 +698,7 @@ class TestNewSignoffTiersInLadder:
         assert rep.as_dict()["released"] is False
 
     def test_metal_density_below_window_blocks_release(self, tmp_path):
+        stage_direct_density(tmp_path)
         _write(tmp_path / "reports/phase3/lvs.rpt", _LVS_MATCH)
         _write_json(tmp_path / "reports/phase3/metal_density.json",
                     {"layers": {"met1": 0.10}})
@@ -1081,6 +1085,7 @@ _ALLOWLISTED_MACRO = "blackbox_macro_a"
 def _build_fully_signed_off(root):
     """A project with REAL evidence for every release-gating tapeout tier."""
     d = root / "signed_off"
+    stage_direct_density(d)
     _write(d / "reports/phase3/drc_signoff.rpt", _DRC_CLEAN_XML)          # T1
     _write_json(d / "reports/drc/geographic_heatmap.json", {"bins": []})  # T1.5
     _write(d / "phase3/stage3/pnr/routed.def", _DEF_SIGNED_OFF)      # T2_PDN

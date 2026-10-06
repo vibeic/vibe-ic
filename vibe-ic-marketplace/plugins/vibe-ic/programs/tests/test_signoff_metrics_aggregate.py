@@ -11,6 +11,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from _direct_density_fixture import stage_direct_density
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import signoff_metrics_aggregate as AGG           # noqa: E402
@@ -33,6 +34,7 @@ def project(tmp_path: Path) -> Path:
     is distinct).
     """
     p = tmp_path / "proj"
+    stage_direct_density(p)
     _write(p / "reports/phase3/drc_router.json", {
         "summary": {"real_violation_total": 3,
                     "producers": [{"producer": "openroad"}]}})
