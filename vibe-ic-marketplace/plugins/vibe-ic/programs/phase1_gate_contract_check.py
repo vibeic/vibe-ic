@@ -116,6 +116,23 @@ def _has_section(docstring: str, names: list[str]) -> bool:
     return False
 
 
+def _syntax_error(py_path: Path) -> str | None:
+    """Return a syntax/read error without writing a bytecode cache.
+
+    ``py_compile.compile`` writes a ``.pyc`` by default.  Phase 1 contract
+    checks run inside an issued producer cache whose emptiness is part of the
+    execution receipt, so syntax validation must stay read-only.  ``compile``
+    parses the same source and preserves the importability check without
+    mutating the gate tree or the private cache prefix.
+    """
+    try:
+        source = py_path.read_text(errors="replace")
+        compile(source, str(py_path), "exec", dont_inherit=True)
+    except (OSError, SyntaxError) as exc:
+        return str(exc)
+    return None
+
+
 def check_gate(gate: str) -> list[Finding]:
     findings: list[Finding] = []
     py = PROGRAMS_DIR / f"{gate}.py"
@@ -126,14 +143,11 @@ def check_gate(gate: str) -> list[Finding]:
             f"{py} does not exist."))
         return findings  # short-circuit; no point checking the rest
 
-    # 1. Importability (syntax-check via py_compile)
-    r = subprocess.run(
-        [sys.executable, "-c", f"import py_compile; py_compile.compile(r'{py}', doraise=True)"],
-        capture_output=True, text=True,
-    )
-    if r.returncode != 0:
+    # 1. Importability (read-only syntax check; do not write .pyc)
+    syntax_error = _syntax_error(py)
+    if syntax_error is not None:
         findings.append(Finding(gate, "ERROR", "syntax_error",
-            f"py_compile failed: {r.stderr.strip()[:200]}"))
+            f"syntax check failed: {syntax_error[:200]}"))
 
     # 2. Docstring sections
     docstring = _read_module_docstring(py)
