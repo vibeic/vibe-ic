@@ -370,29 +370,42 @@ def test_receipt_rewrite_cannot_turn_unmeasured_gate_into_adoptable_pass(tmp_pat
 
 
 @pytest.mark.parametrize('stop', ['cancel', 'deadline'])
-def test_cancel_deadline_actual_rc_partial_logs_reaped(tmp_path, stop):
+def test_cancel_deadline_actual_rc_partial_logs_reaped(tmp_path, stop, monkeypatch):
     ctx = context(tmp_path)
     a = adapter(fault='partial', duration=.01)
     a = replace(a, components=(replace(a.components[0], timeout_s=.2), a.components[1]))
     c = controller(a)
     root = tmp_path / 'run'
     cancel = threading.Event()
-    def cancel_partial_process():
-        # Admission now verifies more source before Popen. Keep the original
-        # cancellation delay relative to the real tool start, so this control
-        # still measures reaping a running process with preserved partial output.
+    timer = None
+    real_popen = em.subprocess.Popen
+
+    def ready_partial_process(argv, *args, **kwargs):
+        nonlocal timer
+        process = real_popen(argv, *args, **kwargs)
+        if list(argv[-4:-2]) != ['transform', 'partial']:
+            return process
+        # This stop/reap control starts with a real child that has already
+        # written partial output. Admission and interpreter startup precede
+        # the unchanged controller's .2-second supervision interval.
         stdout = root / 'a/transform.stdout'
-        deadline = time.monotonic() + 2
-        while time.monotonic() < deadline:
-            if stdout.is_file() and 'neutral tool started' in stdout.read_text():
-                time.sleep(.12)
-                cancel.set()
-                return
+        ready_deadline = time.monotonic() + 2
+        while process.poll() is None and time.monotonic() < ready_deadline:
+            if ('partial output preserved' in stdout.read_text()
+                    and (root / 'a/outputs/value.txt').is_file()):
+                if stop == 'cancel':
+                    timer = threading.Timer(.12, cancel.set)
+                    timer.start()
+                return process
             time.sleep(.001)
-        cancel.set()
-    timer = threading.Thread(target=cancel_partial_process) if stop == 'cancel' else None
-    if timer:
-        timer.start()
+        try:
+            os.killpg(process.pid, 9)
+        except ProcessLookupError:
+            pass
+        process.wait()
+        pytest.fail('partial tool did not reach the required ready state')
+
+    monkeypatch.setattr(em.subprocess, 'Popen', ready_partial_process)
     try:
         c.run(ctx, root, cancel=cancel)
     finally:
