@@ -33,6 +33,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from programs.tests.test_execution_receipt_chain import real_entry, isolated_transport  # noqa: F401
 
 PROGRAMS = Path(__file__).resolve().parents[1]
 if str(PROGRAMS) not in sys.path:
@@ -509,6 +510,7 @@ def test_front_door_halts_when_stale_docs_cannot_be_archived(tmp_path,
     # owner route rule 2026-09-28 (ICROUTE)
     from _route_fixture import stage_owner_route
     stage_owner_route(proj, "ic")
+    real_entry('IC', 'default', proj)
     _phase1(proj, plug)
     (proj / ".vibeic-state").write_text("blocks archive directory")
     monkeypatch.setattr(ORCH, "_capture_container_image",

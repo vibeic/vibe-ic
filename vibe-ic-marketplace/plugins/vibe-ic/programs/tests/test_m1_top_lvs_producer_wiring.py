@@ -48,6 +48,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from programs.tests.test_execution_receipt_chain import real_entry, isolated_transport  # noqa: F401
 
 yaml = pytest.importorskip("yaml")
 
@@ -207,6 +208,7 @@ def test_orchestrator_dispatches_one_of_m1s_declared_producers(
     # owner route rule 2026-09-28 (ICROUTE)
     from _route_fixture import stage_owner_route
     stage_owner_route(proj, "ic")
+    real_entry('IC', 'default', proj)
 
     dispatched: list[str] = []
 
@@ -244,6 +246,7 @@ def test_mixed_signal_dispatch_cannot_drag_the_digital_verdict_down(
     # owner route rule 2026-09-28 (ICROUTE)
     from _route_fixture import stage_owner_route
     stage_owner_route(proj, "ic")
+    real_entry('IC', 'default', proj)
 
     producers = _declared_producers_of_top_lvs(tmp_path, monkeypatch)
 
@@ -333,6 +336,7 @@ def test_digital_only_run_dispatches_no_mixed_signal_merge(tmp_path,
     # owner route rule 2026-09-28 (ICROUTE)
     from _route_fixture import stage_owner_route
     stage_owner_route(proj, "ic")
+    real_entry('IC', 'default', proj)
 
     dispatched: list[str] = []
 
