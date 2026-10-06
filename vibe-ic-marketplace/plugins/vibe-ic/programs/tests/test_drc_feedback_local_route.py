@@ -24,7 +24,7 @@ def test_local_image_resolution_uses_the_digest_bound_runner(monkeypatch):
 def test_local_image_resolution_leaves_invalid_identity_for_run_refusal(monkeypatch):
     monkeypatch.setattr(feedback._ce, 'no_container_route', lambda: True)
     monkeypatch.setenv('VIBEIC_EDA_IMAGE', 'ghcr.io/vibeic/vibeic-eda:latest')
-    assert feedback.image_for_container('outer-container') == 'outer-container'
+    assert feedback.image_for_container('outer-container') == 'FEEDBACK_IMAGE_UNBOUND'
 
 
 def test_feedback_docker_localises_private_program_mount(monkeypatch, tmp_path):
@@ -102,8 +102,12 @@ def test_run_accepts_repository_digest_without_writing_the_routed_layout(
     assert routed.read_bytes() == before
 
 
+@pytest.mark.parametrize('container', [
+    'outer-container',
+    'sha256:' + 'a' * 64,
+])
 def test_run_records_missing_local_image_digest_without_layout_mutation(
-        monkeypatch, tmp_path):
+        monkeypatch, tmp_path, container):
     project = tmp_path / 'project'
     pnr = project / 'phase3/stage3/pnr'
     pnr.mkdir(parents=True)
@@ -121,15 +125,21 @@ def test_run_records_missing_local_image_digest_without_layout_mutation(
     monkeypatch.setattr(feedback._ce, 'no_container_route', lambda: True)
     monkeypatch.delenv('VIBEIC_EDA_IMAGE', raising=False)
     monkeypatch.delenv('IIC_EDA_IMAGE', raising=False)
+    tool_calls = []
+    def no_tool(*_args, **_kwargs):
+        tool_calls.append(True)
+        raise AssertionError('unbound local image must not invoke an EDA tool')
+    monkeypatch.setattr(feedback, '_docker', no_tool)
     pdk = SimpleNamespace(
         drc_deck='/pdk/contact.drc', tech_lef='/pdk/tech.lef',
         cell_lef='/pdk/cell.lef', macro_lefs=[], cell_gds='/pdk/cell.gds',
         macro_gds=[], lefdef_layermap='/pdk/map')
-    image = feedback.image_for_container('outer-container')
+    image = feedback.image_for_container(container)
     result = feedback.run(project, 'unit', pdk, image, publish=False)
     assert result['status'] == 'REFUSED'
     assert result['reason'] == 'FEEDBACK_IMAGE_DIGEST_REQUIRED'
     assert routed.read_bytes() == before
+    assert tool_calls == []
     receipt = project / 'reports/phase3/drc_feedback.json'
     assert receipt.is_file()
     assert 'FEEDBACK_IMAGE_DIGEST_REQUIRED' in receipt.read_text()

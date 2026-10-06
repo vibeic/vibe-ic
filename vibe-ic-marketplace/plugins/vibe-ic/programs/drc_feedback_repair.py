@@ -99,10 +99,10 @@ def image_for_container(container: str) -> str:
             if _eda_pin.reference_digest(reference):
                 return reference
         # Keep the caller on its normal refusal path. ``run`` records a
-        # digest-contract refusal before any EDA tool or layout writer runs;
-        # returning the token here avoids aborting the pre-stream controller
-        # before that receipt can be written.
-        return container
+        # digest-contract refusal before any EDA tool or layout writer runs.
+        # Do not return the caller token: a token can itself look like a bare
+        # digest and would incorrectly bind an unverified local image.
+        return "FEEDBACK_IMAGE_UNBOUND"
     cp = subprocess.run(['docker', 'inspect', '--type', 'container',
                          '--format', '{{.Image}}', container],
                         capture_output=True, text=True, check=False)
