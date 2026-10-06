@@ -925,7 +925,7 @@ def _run_libraries(project: Path) -> List[str]:
     return out
 
 
-def run_technology(project: Path) -> Dict[str, object]:
+def run_technology(project: Path, *, selected_pdk: str = "") -> Dict[str, object]:
     """The technology names THIS project declares, and whether they are one.
 
     A design that names two technology families has not chosen one, and a
@@ -936,6 +936,9 @@ def run_technology(project: Path) -> Dict[str, object]:
                               "source": None, "note": ""}
     names: List[str] = []
     src = None
+    selected_pdk = selected_pdk.strip()
+    if selected_pdk.lower() == "auto":
+        selected_pdk = ""
     # ── THE RUN'S OWN SYNTHESIS ARTEFACT FIRST (vibe-ic#2147) ──────────────
     #
     # An L-doc says what the design MAY be built on; the synthesis artefact
@@ -954,20 +957,38 @@ def run_technology(project: Path) -> Dict[str, object]:
         # machine-local and must not be copied into an emitted L document.
         src = src or _RUN_LIBERTY_FIELD
     if names:
+        # The selected run must not overwrite contrary measured-library evidence.
+        if selected_pdk:
+            names.append(selected_pdk)
         return _cluster(out, names, src)
+    if selected_pdk:
+        # L7 is emitted before L19; its caller already validated this run choice.
+        return _cluster(out, [selected_pdk], "caller::pdk")
     l19 = project / "phase1" / "generated_docs" / "L19_CONSTRAINTS_PDK.json"
     try:
-        fields = json.loads(l19.read_text(errors="replace")).get("fields") or {}
+        doc = json.loads(l19.read_text(errors="replace"))
+        fields = doc.get("fields") or {}
     except Exception:
-        fields = {}
+        doc, fields = {}, {}
     if isinstance(fields, dict):
         for key in ("std_cell_library", "pdk_target"):
             v = fields.get(key)
             if isinstance(v, str) and v.strip():
                 names.append(v.strip())
                 src = src or f"{l19.relative_to(project)}::fields.{key}"
+        # Existing producer evidence distinguishes an explicit run choice from
+        # the first scalar name in an unselected multi-PDK document declaration.
+        evidence = doc.get("extraction_evidence") or {}
+        choices = evidence.get("command_line", []) if isinstance(evidence, dict) else []
+        target = fields.get("pdk_target")
+        claims = [row.get("literal")
+                  for row in (choices if isinstance(choices, list) else [])
+                  if isinstance(row, dict)
+                  and row.get("label") == "pdk_target (explicit run choice)"]
+        explicit = (isinstance(target, str) and bool(target.strip())
+                    and claims == [f"--pdk {target}"])
         alts = fields.get("pdk_target_alternates")
-        if isinstance(alts, list):
+        if not explicit and isinstance(alts, list):
             for v in alts:
                 if isinstance(v, str) and v.strip():
                     names.append(v.strip())
@@ -1108,7 +1129,8 @@ def resolve_for_project(project: Path, *,
                            reference_cite=reference_cite)
 
 
-def for_l7(project: Path, docs: Sequence[Tuple[str, str]]) -> Optional[Dict]:
+def for_l7(project: Path, docs: Sequence[Tuple[str, str]], *,
+           pdk: str = "") -> Optional[Dict]:
     """The block the L7 emitter writes, or None when the design states nothing.
 
     Returning None for a design that declares NEITHER sign-off is deliberate:
@@ -1119,7 +1141,7 @@ def for_l7(project: Path, docs: Sequence[Tuple[str, str]]) -> Optional[Dict]:
     and its readers expect — and the POWER resolution rides in `power`, so one
     field carries both without either becoming a second answer to the other.
     """
-    tech = run_technology(project)
+    tech = run_technology(project, selected_pdk=pdk)
     cands = [] if tech["ambiguous"] else tech["candidates"]
     rep = resolve_texts(docs, cands, metric=METRIC_CELL_AREA)
     power = resolve_texts(docs, cands, metric=METRIC_TOTAL_POWER)

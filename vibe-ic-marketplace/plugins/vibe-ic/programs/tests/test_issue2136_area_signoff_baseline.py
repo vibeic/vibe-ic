@@ -579,3 +579,84 @@ def test_the_program_names_no_process_or_vendor_token():
     for tok in ("sky130", "gf180", "sg13g2", "ihp", "tsmc", "samsung",
                 "globalfound", "intel", "umc", "smic"):
         assert tok not in src, f"{PROG.name} names {tok!r}"
+
+
+# The validated run choice exists before the L19 producer has emitted its file.
+@pytest.mark.parametrize("chosen,determined", [(PDK_A, True), (PDK_B, False)])
+def test_selected_run_pdk_reaches_l7_before_l19(tmp_path, monkeypatch, chosen, determined):
+    monkeypatch.setenv("PDK", PDK_A)
+    monkeypatch.setenv("STD_CELL_LIBRARY", LIB_A)
+    block = asb.for_l7(tmp_path, _docs(), pdk=chosen)
+    assert not (tmp_path / "phase1/generated_docs/L19_CONSTRAINTS_PDK.json").exists()
+    assert block["run_technology"]["candidates"] == [chosen]
+    assert block["run_technology"]["ambiguous"] is False
+    assert block["run_technology"]["source"] == "caller::pdk"
+    assert block["determined"] is determined
+    assert block["threshold_um2"] == (16608.0 if determined else None)
+    if not determined:
+        assert block["baseline_um2"] is None
+        assert block["power"]["determined"] is False
+
+
+def _explicit_target(project, selected, claims=None):
+    path = project / "phase1/generated_docs/L19_CONSTRAINTS_PDK.json"
+    doc = json.loads(path.read_text())
+    doc["extraction_evidence"] = {"command_line": (
+        [{"label": "pdk_target (explicit run choice)",
+          "literal": f"--pdk {selected}"}] if claims is None else claims)}
+    path.write_text(json.dumps(doc))
+
+
+def test_selected_l19_target_does_not_mix_available_alternatives(tmp_path):
+    project = _project(tmp_path, {"pdk_target": PDK_B,
+                                "pdk_target_alternates": [PDK_A, PDK_B]})
+    _explicit_target(project, PDK_B)
+    block = asb.for_l7(project, _docs())
+    assert block["run_technology"]["candidates"] == [PDK_B]
+    assert block["run_technology"]["ambiguous"] is False
+    assert block["determined"] is False
+    assert block["threshold_um2"] is None
+    assert block["baseline_um2"] is None
+    assert block["power"]["determined"] is False
+
+
+@pytest.mark.parametrize("fault", ["wrong_target", "wrong_label", "duplicate", "conflicting", "malformed"])
+def test_invalid_selected_pdk_evidence_cannot_erase_ambiguity(tmp_path, fault):
+    project = _project(tmp_path, {"pdk_target": PDK_B,
+                                "pdk_target_alternates": [PDK_A, PDK_B]})
+    row = {"label": "pdk_target (explicit run choice)", "literal": f"--pdk {PDK_B}"}
+    claims = [row]
+    if fault == "wrong_target":
+        claims = [dict(row, literal=f"--pdk {PDK_A}")]
+    elif fault == "wrong_label":
+        claims = [dict(row, label="document mention")]
+    elif fault == "duplicate":
+        claims = [row, row]
+    elif fault == "conflicting":
+        claims = [row, dict(row, literal=f"--pdk {PDK_A}")]
+    elif fault == "malformed":
+        claims = row
+    _explicit_target(project, PDK_B, claims)
+    block = asb.for_l7(project, _docs())
+    assert block["run_technology"]["ambiguous"] is True
+    assert block["determined"] is False
+    assert block["threshold_um2"] is None
+
+
+@pytest.mark.parametrize("measured", [False, True], ids=["declared_library", "measured_library"])
+def test_selected_run_choice_preserves_conflicting_library_refusal(tmp_path, measured):
+    project = _project(tmp_path, {"pdk_target": PDK_B,
+                                "std_cell_library": LIB_A,
+                                "pdk_target_alternates": [PDK_A, PDK_B]})
+    _explicit_target(project, PDK_B)
+    if measured:
+        stats = project / "phase2/stage2/synth/stats.json"
+        stats.parent.mkdir(parents=True)
+        stats.write_text(json.dumps({"chip_area_unit_evidence": {
+            "liberty": f"/pdk/{PDK_A}/libs.ref/{LIB_A}/lib/tt.lib"}}))
+    block = asb.for_l7(project, _docs(), **({"pdk": PDK_B} if measured else {}))
+    assert block["run_technology"]["ambiguous"] is True
+    assert block["determined"] is False
+    assert block["threshold_um2"] is None
+    if measured:
+        assert block["run_technology"]["source"] == "stats.json::chip_area_unit_evidence.liberty"

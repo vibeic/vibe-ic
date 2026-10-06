@@ -40736,8 +40736,8 @@ def gen_l7_test_debug(project: Path,
     try:
         import area_signoff_baseline as _asb  # noqa: F811
         _area_block = _asb.for_l7(
-            project,
-            [(f"input/docs/{_afn}", _atx) for _afn, _atx in extracted.items()
+            project, pdk=_CLI_PDK or "",
+            docs=[(f"input/docs/{_afn}", _atx) for _afn, _atx in extracted.items()
              if isinstance(_atx, str) and _atx])
     except Exception:
         _area_block = None
