@@ -321,14 +321,29 @@ def release_arm():
                             path='IC', available=True, route_receipt=None, declaration=None)
 
 
-def context16(tmp_path):
+def context16(tmp_path, *, native_clock=False):
     floorplan, clock = tmp_path / 'floorplan.def', tmp_path / 'clock.sdc'
     floorplan.write_text('VERSION 5.8 ;\n')
     clock.write_text('create_clock -name clk -period 10 [get_ports clk]\n')
-    return issued_context(em.Context('16', current_source_identity(), {
+    inputs = {
         'project/phase3/stage3/pnr/floorplan.def': floorplan,
         'project/phase2/stage2/constraints/clock.sdc': clock,
-    }, {'metric': 'canonical_evidence', 'direction': 'max'}, ('clock_plan_check',), 'librelane'), tmp_path)
+    }
+    if native_clock:
+        # This positive needs the genuine Step-16 producer, not a successful
+        # placeholder plan. The negative fixture deliberately omits the PDK.
+        floorplan.write_text('VERSION 5.8 ;\nDIVIDERCHAR "/" ;\nBUSBITCHARS "[]" ;\n'
+            'DESIGN neutral ;\nUNITS DISTANCE MICRONS 1000 ;\n'
+            'DIEAREA ( 0 0 ) ( 100000 100000 ) ;\n'
+            'PINS 1 ;\n- clk + NET clk + DIRECTION INPUT + USE CLOCK\n'
+            '  + PORT + LAYER met1 ( -100 -100 ) ( 100 100 ) + FIXED ( 0 50000 ) N ;\n'
+            'END PINS\nNETS 1 ;\n- clk ( PIN clk ) ;\nEND NETS\nEND DESIGN\n')
+        pdk = tmp_path / 'declared_pdk.json'
+        pdk.write_text(json.dumps({'fields': {'pdk_target': 'sky130A'}}))
+        inputs['project/phase1/generated_docs/L19_CONSTRAINTS_PDK.json'] = pdk
+    return issued_context(em.Context('16', current_source_identity(), inputs,
+        {'metric': 'canonical_evidence', 'direction': 'max'}, ('clock_plan_check',), 'librelane'), tmp_path)
+
 
 
 def ctl(arm, budget=None, *, fixture_root=None):
@@ -380,7 +395,7 @@ def test_br2_001_first_write_cannot_mint_adoption(tmp_path, release_arm):
 
 
 def test_br2_001_real_controller_and_issued_mutation_control(tmp_path, release_arm):
-    ctx = context16(tmp_path); controller = ctl(release_arm); root = tmp_path / 'real'
+    ctx = context16(tmp_path, native_clock=True); controller = ctl(release_arm); root = tmp_path / 'real'
     assert controller.run(ctx, root)['candidate_statuses'][release_arm.arm_id] == 'ELIGIBLE'
     assert controller.adopt(ctx, root, H.choice(ctx, root, release_arm.arm_id))['status'] == 'ADOPTED'
     receipt = root / release_arm.arm_id / 'receipt.json'

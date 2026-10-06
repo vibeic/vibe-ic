@@ -8,6 +8,7 @@ closure discovery, byte identity, execution and consumers remain production code
 from dataclasses import replace
 from pathlib import Path
 from types import MappingProxyType
+import json
 import sys
 
 import execution_modes as em
@@ -63,6 +64,9 @@ def issued_context(context, project, mode='ultra'):
     """Use the genuine canonical CLI capability; no fabricated route or issuer."""
     from programs.tests.test_execution_receipt_chain import real_entry
     import execution_policy as policy
-    payload = real_entry('IC', mode, project)
+    declaration = Path(project) / 'input/step_0_5ic_answers.json'
+    delivery = json.loads(declaration.read_text()).get('answers', {}).get('deliverable') if declaration.is_file() else None
+    path = 'IP' if delivery == 'HARDMACRO' else 'IC'
+    payload = real_entry(path, mode, project)
     return replace(context, project_digest=payload['route']['project_digest'],
-                   **policy.controller_fields(ic_ip_path='IC', route_receipt=payload['route']))
+                   **policy.controller_fields(ic_ip_path=path, route_receipt=payload['route']))
