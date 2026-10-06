@@ -1144,7 +1144,12 @@ def _run_step_0_5ic(project: Path, pdk: str = "") -> int:
         if error:
             return 1
         operator = (bound_answers or {}).get('operator_template') or {}
-        parameters = {'template': operator.get('path'), 'slot': operator.get('slot')}
+        # Use the same actual search location as the canonical producer below.
+        # This names a lookup; it neither creates a template nor buys absence.
+        template = operator.get('path')
+        if template is None:
+            template = _ST.STAGED_TEMPLATE_REL
+        parameters = {'template': template, 'slot': operator.get('slot')}
         # The real producer omits an absent reason from its issued arguments.
         # Preserve every provided owner value, including invalid empty values.
         if operator.get('absent_reason') is not None:

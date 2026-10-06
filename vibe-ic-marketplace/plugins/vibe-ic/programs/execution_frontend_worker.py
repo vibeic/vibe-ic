@@ -298,7 +298,10 @@ def produce_05ic(project,output,template=None,no_template_reason=None,**k):
         staged_template=Path(args1[args1.index('--template') + 1])
         if not staged_template.is_absolute():
             staged_template=staged / staged_template
-        if not staged_template.is_dir():
+        # A missing searched path is an ingest result, not a process error.
+        # The real producer records ABSENT without a routing marker; the
+        # unchanged gate requires the owner's reason before it can qualify.
+        if staged_template.exists() and not staged_template.is_dir():
             raise ValueError('0.5ic: template directory is unavailable')
     else:
         try:
