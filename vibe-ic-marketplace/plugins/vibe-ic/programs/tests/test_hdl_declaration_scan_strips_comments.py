@@ -499,3 +499,49 @@ def build():
     return read
 '''.replace("BINDING", binding)
     assert G.scan_source(src, "m") == ["m::read::rx(text)"]
+
+
+
+@pytest.mark.parametrize("change", [
+    "none", "renamed", "raw", "identity", "parameter", "unknown", "alias",
+    "rebound", "no_line_mask", "no_block_mask", "no_blanking", "raw_return",
+])
+def test_source_bound_lexical_masker(change):
+    """Use the real parser helper; names and unused siblings prove nothing."""
+    source = (PROGRAMS / "module_port_audit.py").read_text()
+    expected = "module_port_audit::module_regions::token_re(mask)"
+    if change == "renamed":
+        source = source.replace("lexical_mask", "sanitize_tokens")
+    elif change == "raw":
+        source = source.replace("mask = lexical_mask(src, attributes=True)",
+                                "mask = src")
+    elif change == "identity":
+        node = next(n for n in ast.parse(source).body
+                    if isinstance(n, ast.FunctionDef) and n.name == "lexical_mask")
+        lines = source.splitlines(keepends=True)
+        lines[node.lineno - 1:node.end_lineno] = [
+            "def lexical_mask(src, **kwargs):\n    return src\n"]
+        source = "".join(lines)
+    elif change == "parameter":
+        source = source.replace(
+            "def module_regions(src: str, issues: Optional[List[str]] = None):",
+            "def module_regions(src, issues=None, lexical_mask=None):")
+    elif change == "unknown":
+        source = source.replace("mask = lexical_mask(src, attributes=True)",
+                                "mask = unavailable_mask(src)")
+    elif change == "alias":
+        source = source.replace("mask = lexical_mask(src, attributes=True)",
+                                "alias = lexical_mask\n        mask = alias(src)")
+    elif change == "rebound":
+        source += "\nlexical_mask = lambda src, **kwargs: src\n"
+    elif change == "no_line_mask":
+        source = source.replace("src.startswith('//', i)", "False", 1)
+    elif change == "no_block_mask":
+        source = source.replace("src.startswith('/*', i)", "False", 1)
+    elif change == "no_blanking":
+        source = source.replace("out[j] = '\\n' if src[j] == '\\n' else ' '",
+                                "out[j] = src[j]", 1)
+    elif change == "raw_return":
+        source = source.replace("return ''.join(out)", "return src", 1)
+    hits = G.scan_source(source, "module_port_audit")
+    assert (expected in hits) == (change not in {"none", "renamed"}), hits

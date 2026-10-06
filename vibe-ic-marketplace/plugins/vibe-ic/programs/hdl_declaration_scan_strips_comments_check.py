@@ -424,6 +424,59 @@ class _InlineComprehensionScope:
             raise KeyError(name) from None
 
 
+
+def _comment_masker(node: ast.AST) -> bool:
+    """Recognise the existing bounded character-mask loop, not its name.
+
+    Both comment arms advance over their entire token before the common loop
+    blanks that span. Only the resulting character list may be returned.
+    Other helper shapes stay unknown; this is not a Python interpreter.
+    """
+    if (not isinstance(node, ast.FunctionDef) or node.decorator_list
+            or not node.args.args or node.args.args[0].arg != 'src'):
+        return False
+    body = node.body
+    if body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant):
+        body = body[1:]
+    def same(actual, text):
+        expected = ast.parse(text).body
+        actual = actual if isinstance(actual, list) else [actual]
+        return [ast.dump(n, include_attributes=False) for n in actual] == [
+            ast.dump(n, include_attributes=False) for n in expected]
+    if (len(body) != 4 or not same(body[0], 'out = list(src)')
+            or not same(body[1], 'i = 0')
+            or not same(body[3], "return ''.join(out)")):
+        return False
+    loop = body[2]
+    if (not isinstance(loop, ast.While) or loop.orelse or len(loop.body) != 3
+            or ast.unparse(loop.test) != 'i < len(src)'
+            or not same(loop.body[0], 'start = i')):
+        return False
+    line = loop.body[1]
+    if (not isinstance(line, ast.If)
+            or ast.unparse(line.test) != "src.startswith('//', i)"
+            or not same(line.body, "end = src.find('\\n', i + 2)\ni = len(src) if end < 0 else end")
+            or len(line.orelse) != 1 or not isinstance(line.orelse[0], ast.If)):
+        return False
+    block = line.orelse[0]
+    if (ast.unparse(block.test) != "src.startswith('/*', i)"
+            or not same(block.body, "end = src.find('*/', i + 2)\nif end < 0:\n    raise ValueError('unterminated_comment')\ni = end + 2")
+            or not same(loop.body[2], "for j in range(start, i):\n    out[j] = '\\n' if src[j] == '\\n' else ' '")):
+        return False
+    # Remaining token arms cannot alter the input/output or escape the common
+    # blanking loop. Their final fallback consumes one ordinary character.
+    tail = block.orelse
+    for child in ast.walk(ast.Module(body=tail, type_ignores=[])):
+        if isinstance(child, (ast.Return, ast.Delete, ast.Break)):
+            return False
+        if isinstance(child, ast.Name) and (child.id == 'out' or (
+                isinstance(child.ctx, ast.Store) and child.id not in {'i', 'end'})):
+            return False
+    while len(tail) == 1 and isinstance(tail[0], ast.If):
+        tail = tail[0].orelse
+    return same(tail, 'i += 1\ncontinue')
+
+
 class _LexicalBindings:
     """Use Python's symbol table to resolve locals, globals and free names.
 
@@ -507,6 +560,20 @@ class _LexicalBindings:
         self.supplied_patterns = {}
         self._resolve_supplied_patterns()
         self.safe = {}
+        self.maskers = set()
+        for table, node in self.nodes.items():
+            if not _comment_masker(node):
+                continue
+            owner = self.binding(self.parents[table], node.name)
+            writes = sum(
+                (isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+                 and n.name == node.name)
+                or (isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store)
+                    and n.id == node.name)
+                or (isinstance(n, ast.alias) and (n.asname or n.name) == node.name)
+                for n in _scope_nodes(self.nodes[owner], self.eager_annotations))
+            if writes == 1:
+                self.maskers.add((owner, node.name))
 
     def binding(self, table, name):
         """The defining scope; an unknown local still shadows outer regexes."""
@@ -589,6 +656,11 @@ class _LexicalBindings:
                 if any(declares_hdl(pattern) for pattern in
                        self.pattern_candidates(table, symbol.get_name()))}
 
+    def visible_maskers(self, table):
+        return {symbol.get_name() for symbol in table.get_symbols()
+                if (self.binding(table, symbol.get_name()), symbol.get_name())
+                in self.maskers}
+
     def stripped(self, table):
         if table not in self.safe:
             inherited = set()
@@ -602,23 +674,27 @@ class _LexicalBindings:
                 first = node.generators[0]
                 parent = self.parents[table]
                 if _from_stripper(first.iter, self.visible_patterns(parent),
-                                  self.stripped(parent), self.eager_annotations):
+                                  self.stripped(parent), self.eager_annotations,
+                                  self.visible_maskers(parent)):
                     inherited.update(n.id for n in ast.walk(first.target)
                                      if isinstance(n, ast.Name))
             self.safe[table] = stripped_locals(
-                node, self.visible_patterns(table), inherited, self.eager_annotations)
+                node, self.visible_patterns(table), inherited, self.eager_annotations,
+                self.visible_maskers(table))
         return self.safe[table]
 
 
 def _from_stripper(value: ast.AST, compiled: Optional[Dict[str, str]],
-                   safe: Set[str], eager_annotations: bool = True) -> bool:
+                   safe: Set[str], eager_annotations: bool = True,
+                   maskers: Optional[Set[str]] = None) -> bool:
     """The existing value-flow rule, evaluated in the value's lexical scope."""
     if isinstance(value, _COMPREHENSIONS):
-        if _from_stripper(value.generators[0].iter, compiled, safe, eager_annotations):
+        if _from_stripper(value.generators[0].iter, compiled, safe, eager_annotations, maskers):
             return True
         bound = {n.id for generator in value.generators
                  for n in ast.walk(generator.target) if isinstance(n, ast.Name)}
         safe = safe - bound
+        maskers = (maskers or set()) - bound
         compiled = {name: pattern for name, pattern in (compiled or {}).items()
                     if name not in bound}
     for sub in _scope_nodes(value, eager_annotations):
@@ -628,6 +704,7 @@ def _from_stripper(value: ast.AST, compiled: Optional[Dict[str, str]],
             except Exception:
                 fname = ""
             if (_STRIPPER.search(fname)
+                    or (isinstance(sub.func, ast.Name) and sub.func.id in (maskers or set()))
                     or _strips_comments_inline(sub, compiled)):
                 return True
         if isinstance(sub, ast.Name) and sub.id in safe:
@@ -638,7 +715,8 @@ def _from_stripper(value: ast.AST, compiled: Optional[Dict[str, str]],
 def stripped_locals(fn: ast.AST,
                     compiled: Optional[Dict[str, str]] = None,
                     inherited: Optional[Set[str]] = None,
-                    eager_annotations: bool = True) -> Set[str]:
+                    eager_annotations: bool = True,
+                    maskers: Optional[Set[str]] = None) -> Set[str]:
     """Locals whose value passed through a stripper, transitively.
 
     Per-NAME, which is the point: a sibling variable being stripped does not
@@ -674,7 +752,7 @@ def stripped_locals(fn: ast.AST,
                 continue
             if all(t in ok for t in names):
                 continue
-            if _from_stripper(value, compiled, ok, eager_annotations):
+            if _from_stripper(value, compiled, ok, eager_annotations, maskers):
                 ok.update(names)
                 grew = True
     return ok
