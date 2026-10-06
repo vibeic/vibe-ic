@@ -117,10 +117,33 @@ def _cli(step, project, output, modules, args=()):
     return _write(step,output,','.join(modules),reason='all producers executed',records=records)
 
 def produce_d1(project,output,**k):
+    from dataclasses import asdict
     import design_one_shot_runner as d
+    manifest = _verify_manifest(project, 'D1')
+    project, output = Path(project), Path(output)
+    output.mkdir(parents=True, exist_ok=True)
+    (output / 'canonical.json').unlink(missing_ok=True)
+    # Phase 1 writes L-docs and expert handoffs. As with Step 8, reconstruct
+    # only the issued census in its private project, never in frozen inputs.
+    staged = output / 'project'
+    if staged.exists(): shutil.rmtree(staged)
+    staged.mkdir()
+    for rel in manifest['files']:
+        target = staged / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(project / rel, target)
     # Selection objectives remain bound by the issued manifest and receipt.
     # The canonical Phase-1 producer accepts only its project argument.
-    return _record('D1',project,output,'design_one_shot_runner.step_phase1',d.step_phase1)
+    producer = 'design_one_shot_runner.step_phase1'
+    try:
+        value = d.step_phase1(staged)
+    except (FileNotFoundError, ImportError, OSError) as exc:
+        return _write('D1', output, producer,
+                      reason=f'native producer unavailable: {exc}')
+    if not isinstance(value, d.StepResult):
+        raise TypeError('D1: canonical producer did not return StepResult')
+    return _write('D1', output, producer, producer_result=asdict(value),
+                  reason='producer executed; D1 handoff qualification is not connected')
 
 
 def _output_paths(root, required):

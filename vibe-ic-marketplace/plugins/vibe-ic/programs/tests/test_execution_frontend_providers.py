@@ -36,14 +36,86 @@ def test_step6_explicitly_not_measured_without_fpga():
     assert result.state=='NOT_IMPLEMENTED'
 
 def test_controller_executes_worker_and_validator_reddens_on_output_mutation(tmp_path):
-    project=tmp_path/'project'; src=project/'input'/'docs'; src.mkdir(parents=True); f=src/'L1.md'; f.write_text('# design\n')
-    registry=em.Registry(); p.register_factories(registry); portfolio=em.load_portfolio(); row=next(s for s in portfolio['steps'] if s['id']=='D1')
+    # Incomplete input is a real expert handoff, not an eligible D1 positive.
+    from dataclasses import replace
     import subprocess
+    import pytest
+    project=tmp_path/'project'; src=project/'input'/'docs'; src.mkdir(parents=True)
+    f=src/'L1.md'; f.write_text('# design\n')
+    registry=em.Registry(); p.register_factories(registry, step_ids=('D1',))
+    portfolio=em.load_portfolio(); row=next(s for s in portfolio['steps'] if s['id']=='D1')
     sha=subprocess.check_output(['git','rev-parse','HEAD'],cwd=Path(__file__).parents[2],text=True).strip()
-    context=issued_context(em.Context('D1',sha,{'input/docs/L1.md':f},{'metric':'source_boundary'},tuple(row['mandatory_gate_programs'])), project)
-    run=tmp_path/'run'; result=em.Controller(registry,em.Budget(1,512,1),portfolio).run(context,run)
-    assert result['status']=='AWAITING_AI_SELECTION'
-    assert result['candidate_statuses']['frontend_D1'] in ('INELIGIBLE','NOT_MEASURED','ELIGIBLE')
+    context=issued_context(em.Context('D1',sha,{'input/docs/L1.md':f},
+                           {'metric':'source_boundary'},tuple(row['mandatory_gate_programs'])),
+                           project, mode='ultra')
+    route=project/'input/step_0_5ic_answers.json'
+    context=replace(context, inputs={**context.inputs,
+                    'input/step_0_5ic_answers.json':route})
+    bound_inputs={name: em.digest(path) for name, path in context.inputs.items()}
+    run=tmp_path/'run'; controller=em.Controller(registry,em.Budget(1,512,1),portfolio)
+    result=controller.run(context,run)
+    receipt_path=run/'frontend_D1/receipt.json'; receipt_bytes=receipt_path.read_bytes()
+    receipt=json.loads(receipt_bytes); output=Path(receipt['output_root'])
+    process,=receipt['processes']
+    assert process['component']=='frontend_worker' and process['rc']==0
+    assert process['pid']>0 and process['ended_ns']>process['started_ns']
+    assert receipt['binding']['objective']=={'metric':'source_boundary'}
+    assert receipt['binding']['inputs']==bound_inputs
+    frozen=Path(receipt['input_root'])
+    from _execution_manifest import issued_manifest_path
+    assert {str(path.relative_to(frozen)):em.digest(path)
+            for path in frozen.rglob('*') if path.is_file() and
+            path != issued_manifest_path(frozen)}==bound_inputs
+    assert not (frozen/'phase1').exists() and not (frozen/'reports').exists()
+    staged=output/'project'
+    docs=list((staged/'phase1/generated_docs').glob('L*.json'))
+    assert len(docs)==28
+    expert=json.loads((staged/'reports/audit/phase1/expert_parse_track.json').read_text())
+    assert expert['ai_subtrack']['status']=='HANDOFF_EMITTED'
+    assert expert['ai_subtrack']['expectations']==[]
+    assert result['status']=='FAIL'
+    assert result['candidate_statuses']=={'frontend_D1':'FAIL'}
+    assert receipt['reason']=='GATE_FAIL' and receipt['evidence']['verdict']=='FAIL'
+    assert receipt['evidence']['gates']=={
+        name:'NOT_MEASURED' for name in row['mandatory_gate_programs']}
+    assert json.loads((run/'comparison.json').read_text())['eligible_arms']==[]
+    assert not (run/'selected').exists() and not (run/'adoption.json').exists()
+    canonical=output/'canonical.json'; original=canonical.read_bytes()
+    record=json.loads(original)
+    assert record['producer_result']['name']=='phase1'
+    assert record['producer_result']['status']=='FAIL'
+    assert receipt['evidence']['outputs']=={'canonical.json':em.digest(canonical)}
+    arm,=registry.adapters('D1')
+    # Forged SDC successes cannot qualify any D1 gate.
+    sdc=output/'reports/phase2/sdc_check.json'; sdc.parent.mkdir(parents=True)
+    sdc.write_text(json.dumps({'program':'sdc_syntax_check','passed':True}))
+    (output/'reports/sdc_validator.json').write_text(json.dumps(
+        {'verdict':'PASS','exit_code':0,'issues':[]}))
+    record['producer_result']['status']='PASS'
+    canonical.write_text(json.dumps(record))
+    assert em.digest(canonical)!=receipt['evidence']['outputs']['canonical.json']
+    changed=arm.validate(output,context.binding())
+    assert changed.verdict=='NOT_MEASURED'
+    assert changed.gates==receipt['evidence']['gates']
+    choice={'arm_id':'frontend_D1','receipt_sha256':em.digest(receipt_path),
+            'rationale':'mutation refusal control','reviewer':'test','binding':context.binding()}
+    with pytest.raises(em.Refusal, match='AI_CHOICE_INELIGIBLE'):
+        controller.adopt(context,run,choice)
+    assert not (run/'selected').exists()
+    assert json.loads((run/'adoption.json').read_text())['status']!='ADOPTED'
+    # Missing, unknown and malformed canonical records also cannot qualify.
+    for invalid in (None, [], {'schema':'unknown'},
+                    {**record, 'producer_result':'StepResult(status=PASS)'}):
+        if invalid is None:
+            canonical.unlink()
+        else:
+            canonical.write_text(json.dumps(invalid))
+        rejected=arm.validate(output,context.binding())
+        assert rejected.verdict=='NOT_MEASURED'
+        assert rejected.gates==receipt['evidence']['gates']
+    canonical.write_bytes(original)
+    assert arm.validate(output,context.binding()).verdict=='FAIL'
+    assert receipt_path.read_bytes()==receipt_bytes
 
 def test_step8_public_controller_eligible_and_adopted(tmp_path):
     import hashlib, subprocess

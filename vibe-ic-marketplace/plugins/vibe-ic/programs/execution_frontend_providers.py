@@ -284,6 +284,38 @@ def register_factories(registry, *, step_ids=None, project=None, parameters=None
             required=tuple(contract.get('required_outputs') or ())
             concrete=_concrete_outputs(root, required)
             artifacts={rel:digest(root/rel) for rel in concrete}
+            if _row == 'D1':
+                # This worker reaches the real Phase-1 expert handoff, but its
+                # canonical outputs/gates are not connected to adoption yet.
+                # Never apply Step 8's SDC reports to these 32 D1 obligations.
+                canonical = root / 'canonical.json'
+                record = None
+                if canonical.is_file() and not canonical.is_symlink():
+                    artifacts = {'canonical.json': digest(canonical)}
+                    try:
+                        record = json.loads(canonical.read_text())
+                    except (OSError, ValueError, TypeError):
+                        pass
+                else:
+                    artifacts = {}
+                producer = record.get('producer_result') if isinstance(record, dict) else None
+                typed = (isinstance(record, dict) and
+                         record.get('schema') == 'frontend_worker_output/1' and
+                         record.get('step_id') == 'D1' and
+                         record.get('producer') == 'design_one_shot_runner.step_phase1' and
+                         record.get('result') == 'NOT_MEASURED' and
+                         isinstance(producer, dict) and
+                         producer.get('name') == 'phase1' and
+                         producer.get('status') in ('PASS', 'FAIL', 'NOT_MEASURED',
+                                                    'NOT_APPLICABLE', 'INCOMPLETE') and
+                         type(producer.get('duration_s')) in (int, float) and
+                         isinstance(producer.get('detail'), str) and
+                         isinstance(producer.get('output_files'), list))
+                verdict = 'FAIL' if typed and producer['status'] == 'FAIL' else 'NOT_MEASURED'
+                return Evidence(facts, verdict,
+                                {name: 'NOT_MEASURED' for name in _gate_names}, artifacts,
+                                detail=('D1_CANONICAL_HANDOFF_NOT_CONNECTED' if typed else
+                                        'D1_CANONICAL_RECORD_MISSING_OR_INVALID'))
             if _row == '0.5ic':
                 try:
                     before_chain = em.consume_frontend_chain(root, facts)
