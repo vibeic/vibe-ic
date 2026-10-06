@@ -26187,7 +26187,8 @@ def main() -> int:
         plan.append(_spf.gate(
             project, "design_one_shot_runner", "asic_sdc",
             _preflight_refusal("asic_sdc"),
-            step_asic_sdc, project, args.top_name, args.container, ic_class))
+            step_asic_sdc, project, args.top_name, args.container, ic_class,
+            _use_controller=False))
     if _execution._ordinary_runtime is not None:
         # Step 8 is the consumer validation of the Step-7 artefacts.  The
         # default controller may return NOT_MEASURED for this source-bound

@@ -34,6 +34,13 @@ def test_phase2_declares_and_wires_canonical_step7_site():
     assert any(any(isinstance(arg, ast.Constant)
                    and arg.value == "asic_sdc" for arg in call.args)
                for call in calls)
+    step7 = next(call for call in calls
+                 if any(isinstance(arg, ast.Constant)
+                        and arg.value == "asic_sdc" for arg in call.args))
+    assert any(kw.arg == "_use_controller"
+               and isinstance(kw.value, ast.Constant)
+               and kw.value.value is False
+               for kw in step7.keywords)
 
 
 def test_step7_direct_path_uses_single_canonical_emitter(tmp_path, monkeypatch):
