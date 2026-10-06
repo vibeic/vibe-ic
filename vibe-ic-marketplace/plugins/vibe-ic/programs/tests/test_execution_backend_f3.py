@@ -100,6 +100,8 @@ def test_backend_argv_binds_complete_typed_parameter_envelope():
 def test_backend_producer_timeout_is_row_owned_and_fixture_parameterized():
     """Long native rows must not inherit the 30-second Component default."""
     from execution_provider_catalog import BACKEND_ROWS
+    registry = register_backend_adapters(source_sha=BASE, available=False,
+                                         parameters={"timeout_s": 7})
     timeout_by_step = {
         step: _producer_timeout_s(BACKEND_ROWS[step], {"timeout_s": 7})
         for step in BACKEND_IDS
