@@ -97,3 +97,34 @@ def test_default_not_measured_frontend_result_falls_through_to_emitter(
     result = D.step_asic_sdc(tmp_path, "chip_top", "container")
     assert result.status == "PASS"
     assert called
+
+
+def test_default_ordinary_step7_placeholder_releases_preflight_gate(
+        tmp_path, monkeypatch):
+    """The live Controller seam must let Default reach the canonical fn.
+
+    ``step_preflight.gate`` asks ``dispatch_ordinary_site`` first.  A
+    source-bound Step-7 adapter is intentionally NOT_MEASURED, so returning
+    that row would strand the direct producer forever.  Ultra and measured
+    failures remain owned by the Controller.
+    """
+    placeholder = SimpleNamespace(status="NOT_MEASURED")
+    monkeypatch.setattr(EP, "dispatch_ordinary_rows",
+                        lambda *args, **kwargs: placeholder)
+    monkeypatch.setattr(EP, "_ordinary_runtime",
+                        {"policy": {"mode": "default"}})
+    assert EP.dispatch_ordinary_site(tmp_path, "design_one_shot_runner",
+                                     "asic_sdc", lambda *a: None) is None
+
+    monkeypatch.setattr(EP, "_ordinary_runtime",
+                        {"policy": {"mode": "ultra"}})
+    assert EP.dispatch_ordinary_site(tmp_path, "design_one_shot_runner",
+                                     "asic_sdc", lambda *a: None) is placeholder
+
+    measured_fail = SimpleNamespace(status="FAIL")
+    monkeypatch.setattr(EP, "dispatch_ordinary_rows",
+                        lambda *args, **kwargs: measured_fail)
+    monkeypatch.setattr(EP, "_ordinary_runtime",
+                        {"policy": {"mode": "default"}})
+    assert EP.dispatch_ordinary_site(tmp_path, "design_one_shot_runner",
+                                     "asic_sdc", lambda *a: None) is measured_fail
