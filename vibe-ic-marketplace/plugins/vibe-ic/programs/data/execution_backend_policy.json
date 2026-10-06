@@ -5660,6 +5660,7 @@
       },
       "portfolio_policy": {
         "producer_timeout_s": 1800,
+        "producer_ram_mb": 4096,
         "id": "37",
         "title_en": "GDSII output (after routed-layout pre-stream admission)",
         "phase": "phase3",

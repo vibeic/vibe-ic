@@ -485,6 +485,16 @@ def _producer_timeout_s(spec: Mapping[str, object], params: Mapping[str, object]
     return timeout
 
 
+def _producer_ram_mb(spec: Mapping[str, object], params: Mapping[str, object]) -> int:
+    """Return the row-owned address-space bound for one backend producer."""
+    policy = spec.get("_portfolio_policy", spec.get("portfolio_policy", {}))
+    configured = policy.get("producer_ram_mb") if isinstance(policy, Mapping) else None
+    raw = 256 if configured is None else configured
+    if isinstance(raw, bool) or type(raw) is not int or raw <= 0:
+        raise em.Refusal("BACKEND_PRODUCER_RAM_INVALID", repr(raw))
+    return raw
+
+
 def _step37_route_specs() -> tuple[dict, ...]:
     """Expose one streamout producer family; direct Magic is fallback refusal."""
     spec = next(row for row in coverage_rows() if row["step_id"] == "37")
@@ -577,7 +587,7 @@ def _adapter(spec: Mapping[str, object], source_sha: str, objective: Mapping[str
             "source-bound component; native qualification NOT_MEASURED; producer site=" + str(producer)),
         available=available, availability_reason=("STEP30_CAPABILITY_OR_LIVE_SHARE_UNAVAILABLE" if missing_step30_authority
                               else "" if available else "NATIVE_EXECUTION_NOT_MEASURED"),
-        cpus=1, ram_mb=256, output_contract=output_contract,
+        cpus=1, ram_mb=_producer_ram_mb(spec, params), output_contract=output_contract,
         own_no_tool_reason="One complete producer owns all row outputs and gates; checker components are complementary.",
         input_contract=input_contract,
     )

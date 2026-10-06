@@ -112,9 +112,11 @@ def test_backend_producer_timeout_is_row_owned_and_fixture_parameterized():
     # The registered adapter must carry the same row-owned policy through the
     # catalog, rather than merely passing the helper-level unit assertion.
     assert registry.adapters("37")[0].components[0].timeout_s == 1800
+    assert registry.adapters("37")[0].ram_mb == 4096
     # Rows without a long-runtime policy continue to honour the supplied
     # fixture timeout, keeping unit tests and bounded fixtures fast.
     assert timeout_by_step["15"] == 7
+    assert registry.adapters("15")[0].ram_mb == 256
     assert all(value > 0 for value in timeout_by_step.values())
 
 
