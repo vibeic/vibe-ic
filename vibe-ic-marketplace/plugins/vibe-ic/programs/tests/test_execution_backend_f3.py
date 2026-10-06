@@ -642,7 +642,7 @@ def test_r4_transparent_wrapper_has_one_real_producer(tmp_path, release_arm, sty
         engine_families=('caller_distinct_label',), source_files=sources,
         components=(replace(component, argv=(component.argv[0], str(wrapper), *component.argv[2:])),))
     registry = em.Registry(); register_source_fixture(registry, release_arm, fixture_root=tmp_path); register_source_fixture(registry, wrapped, fixture_root=tmp_path)
-    controller = em.Controller(registry, em.Budget(2, 2 * first.ram_mb, workers=2))
+    controller = em.Controller(registry, em.Budget(2, 2 * release_arm.ram_mb, workers=2))
     plan = controller.plan(ctx, 'ultra-mode')
     assert len(plan['arms']) == 1
     assert controller.run(ctx, tmp_path / 'wrapper-run', 'ultra-mode')['candidate_statuses'] == {
