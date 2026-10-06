@@ -1,6 +1,4 @@
 """Pad-ring IO masters stay in the canonical feedback reopen contract."""
-import json
-from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -70,3 +68,45 @@ def test_local_antenna_command_reads_feedback_io_lef(monkeypatch, tmp_path):
     assert f'read_lef {{{io_lef}}}' in script
     assert seen['argv'][0] == 'openroad'
     assert 'docker' not in seen['argv']
+
+
+def test_core_only_feedback_bypasses_pad_view_discovery(monkeypatch, tmp_path):
+    pdk = _pdk()
+    monkeypatch.setattr(runner, '_chip_path_requests_pad_ring',
+                        lambda _project: False)
+    def should_not_discover(*_args):
+        raise AssertionError('core-only lane must not discover pad views')
+    monkeypatch.setattr(runner, '_discover_padring_io_views', should_not_discover)
+
+    resolved = runner._feedback_pdk_for_route(tmp_path, pdk, 'eda')
+
+    assert resolved is pdk
+
+
+def test_pad_ring_feedback_stays_fail_closed_when_views_are_missing(
+        monkeypatch, tmp_path):
+    pdk = _pdk()
+    monkeypatch.setattr(runner, '_chip_path_requests_pad_ring',
+                        lambda _project: True)
+    monkeypatch.setattr(
+        runner, '_discover_padring_io_views',
+        lambda _pdk, _container: (_ for _ in ()).throw(
+            ValueError('PADRING_IO_PHYSICAL_VIEWS_ABSENT')))
+
+    with pytest.raises(ValueError, match='PADRING_IO_PHYSICAL_VIEWS_ABSENT'):
+        runner._feedback_pdk_for_route(tmp_path, pdk, 'eda')
+
+
+def test_pad_ring_discovery_refusal_writes_auditable_receipt(tmp_path):
+    pdk = _pdk()
+    receipt = runner._write_feedback_padring_discovery_refusal(
+        tmp_path, 'unit', pdk, IMAGE,
+        ValueError('PADRING_IO_PHYSICAL_VIEWS_ABSENT'))
+
+    doc = __import__('json').loads(receipt.read_text())
+    assert doc['status'] == 'REFUSED'
+    assert doc['reason'] == 'PADRING_IO_VIEW_DISCOVERY_FAILED'
+    assert 'PADRING_IO_PHYSICAL_VIEWS_ABSENT' in doc['detail']
+    assert doc['source_def'].endswith('/phase3/stage3/pnr/unit.def')
+    assert doc['image'] == IMAGE
+    assert isinstance(doc['rules'], list)
