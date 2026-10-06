@@ -188,6 +188,9 @@ def _design(tmp_path, mode, log, errors, warnings):
 
 def _runner(monkeypatch, tool):
     runner = importlib.import_module('design_one_shot_runner')
+    # The supplied tool records Docker argv and writes fixture outputs. Its
+    # fake image is not the identity of pytest's enclosing EDA container.
+    monkeypatch.setattr(contract._ce, 'no_container_route', lambda: False)
     monkeypatch.setattr(contract.subprocess, 'run', tool)
     return runner, getattr(runner, 'step_rtl_lint_tool', None)
 

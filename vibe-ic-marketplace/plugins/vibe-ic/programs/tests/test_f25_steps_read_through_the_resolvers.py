@@ -86,6 +86,11 @@ class FakeDocker:
             if src not in self.trees:
                 return subprocess.CompletedProcess(argv, 1, '', f'Could not find {src}')
             (dest / 'libs.tech').mkdir(parents=True)
+            # Synthesis now verifies that the selected staged library exists
+            # before calling its config resolver. Model that copied input too.
+            library = dest / 'lib/stated_sc__tt.lib'
+            library.parent.mkdir()
+            library.write_text('library(stated_sc) {}\n')
             return subprocess.CompletedProcess(argv, 0, '', '')
         if verb == 'rm':
             return subprocess.CompletedProcess(argv, 0, '', '')
@@ -101,6 +106,9 @@ def env(tmp_path, monkeypatch):
     image = state_the_image(monkeypatch)
     fake = FakeDocker({image: (IMAGE_ID, ['PATH=/bin', f'PDK_ROOT={GUEST_ROOT}'])},
                       [f'{GUEST_ROOT}/{PDK}'])
+    # This fixture models a Docker host, even when pytest itself runs inside
+    # the EDA image. Keep real LOCAL attestation outside this fake transport.
+    monkeypatch.setattr(contract._ce, 'no_container_route', lambda: False)
     monkeypatch.setattr(contract.subprocess, 'run', fake)
     project = tmp_path / 'proj'
     (project / 'phase3').mkdir(parents=True)
@@ -284,12 +292,22 @@ def step29(env, monkeypatch):
 def step30(env, monkeypatch):
     runner = importlib.import_module('phase3_one_shot_runner')
     import path_spice_tool as pst
+    import librelane_postroute as postroute
+    # The current Step30 caller reads Step23's bound state before resolving
+    # its PDK. Supply that input; keep its actual state/digest reader running.
+    folder = env.project / 'phase3/librelane/f25-stapostpnr'
+    state = folder / 'state_out.json'
+    contract.write_json(state, {})
+    contract.write_json(folder / 'config.json',
+                        {'meta': {'step': 'OpenROAD.STAPostPNR'}, 'PDK': PDK})
+    contract.write_json(env.project / postroute.STEP23_RECORD,
+                        {'sta_state': str(state), 'sta_state_sha256': contract.digest(state)})
     seen = {}
 
     def run_step30(project, image, pdk_root, pdk, **_k):
         seen.update(image=image, root=Path(pdk_root))
         _stop()
-    monkeypatch.setattr(pst, 'run_step30', run_step30)
+    monkeypatch.setattr(pst, 'run_current_step30', run_step30)
     notes = []
     runner._step30_tool_arm(env.project, _pdk(), [], notes)
     return seen, ' '.join(notes)

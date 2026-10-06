@@ -390,6 +390,9 @@ def test_librelane_contract_argv_carries_the_ceiling(tmp_path, monkeypatch):
     import json
     from types import SimpleNamespace
     import librelane_contract as ll
+    # The recorder below is a Docker transport fixture, not an attested LOCAL
+    # launch. Select that route explicitly so all argv assertions execute.
+    monkeypatch.setattr(ll._ce, "no_container_route", lambda: False)
     monkeypatch.setenv("VIBEIC_DOCKER_MEMORY", "3g")
     image = "img:w15"
     seen = []
