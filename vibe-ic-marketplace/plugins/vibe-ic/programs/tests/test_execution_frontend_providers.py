@@ -208,6 +208,7 @@ def test_step8_nonzero_and_manifest_mutation_refuse(tmp_path, monkeypatch):
     # hashes, not a claim of canonical Controller authority or adoption.
     manifest=project/'input/issued_manifest.json'
     manifest_hash=hashlib.sha256(manifest.read_bytes()).hexdigest()
+    monkeypatch.setenv(w.ISSUED_MANIFEST_ENV,str(manifest))
     monkeypatch.setenv('VIBEIC_MANIFEST_SHA256',manifest_hash)
     monkeypatch.setenv('VIBEIC_ISSUED_MANIFEST_SHA256',manifest_hash)
     with __import__('pytest').raises(RuntimeError): w.run_row('8',project,tmp_path/'out')
