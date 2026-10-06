@@ -422,7 +422,13 @@ def register_factories(registry, *, step_ids=None, project=None, parameters=None
                     for value in node: yield from commands(value)
             declared = {shlex.split(command)[0]: shlex.split(command) for command in commands(contract.get('gate', {}))}
             for gate in portfolio_gates:
-                parts = declared[gate]
+                parts = list(declared[gate])
+                if row == '0.5ic':
+                    # The producer chain binds its reports through adoption.
+                    # These gates read them; their own receipts have a separate
+                    # destination so validation cannot overwrite signed bytes.
+                    parts[parts.index('--json') + 1] = (
+                        'reports/execution_gates/' + gate + '.json')
                 argv = ('python3',str(source_path.with_name(gate+'.py')),
                         *('{outputs}' if value == '.' else value for value in parts[1:]))
                 components.append(Component(gate, argv))

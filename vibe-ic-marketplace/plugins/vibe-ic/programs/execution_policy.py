@@ -502,11 +502,11 @@ def bootstrap(project: Path, *, parameters: dict | None = None,
                              workers=value['workers'], licenses=value['licenses']))
     _ordinary_runtime = dict(identity=identity, project=project, policy=value,
         route=route, parameters=params, registry=registry, controller=controller,
-        contexts={}, bindings={}, runs={})
+        contexts={}, bindings={}, runs={}, phase1_only=bool(phase1_only))
     return _ordinary_runtime
 
 
-def _fixed_inputs(runtime, step_id: str) -> dict:
+def _fixed_inputs(runtime, step_id: str, *, parameters=None) -> dict:
     if str(step_id) == "9":
         from execution_production import current_step9_input_files
         issued = current_step9_input_files(runtime['project'])
@@ -519,6 +519,10 @@ def _fixed_inputs(runtime, step_id: str) -> dict:
         raise Refusal('UNKNOWN_CANONICAL_STEP', step_id)
     declarations = [r.get('path') for r in row.get('required_inputs', ()) if r.get('path')]
     declarations.extend(('input/step_0_5ic_answers.json', 'input/submission_template'))
+    if step_id == '0.5ic' and (parameters or {}).get('template'):
+        # Freeze only this invocation's declared template source. A missing
+        # searched directory remains valid for explicit absence routes.
+        declarations.append(parameters['template'])
     for arm in runtime['registry'].adapters(step_id):
         declarations.extend(arm.input_contract)
     inputs = {}
@@ -747,13 +751,19 @@ def dispatch_fixed_step(project: Path, step_id: str, *, inputs=None,
         # Snapshot before Controller.run: the manager publishes only after
         # seeing this step's current request.
         baselines[step_id] = _choice_file_state(response_path, snapshot=True)
-    files = dict(inputs) if inputs is not None else _fixed_inputs(runtime, step_id)
+    parameters = dict(parameters or {})
+    if inputs is not None:
+        files = dict(inputs)
+    elif step_id == '0.5ic':
+        files = _fixed_inputs(runtime, step_id, parameters=parameters)
+    else:
+        files = _fixed_inputs(runtime, step_id)
     if not files:
         return dict(status='NOT_MEASURED', reason='ORDINARY_INPUT_ABSENT', step_id=step_id, selected=None)
     frontend = all(a.tool_id == 'frontend-worker' for a in applicable)
     objective = (dict(parameters or {}) if step_id == '0.5ic' else
                  dict(runtime['parameters'], **dict(parameters or {}))) if frontend else dict(applicable[0].objective)
-    if frontend and step_id != '0.5ic':
+    if frontend:
         objective.setdefault('metric', 'source_boundary')
     context = em.Context(step_id, runtime['route']['source_sha'], files, objective,
         tuple(row['mandatory_gate_programs']), project_digest=runtime['route']['project_digest'],
@@ -835,7 +845,39 @@ def dispatch_ordinary_site(project, runner: str, site: str, refusal_factory):
     import step_preflight
     plan = step_preflight.RUNNER_PLANS.get(runner)
     span = dict(plan.sites).get(site, ()) if plan else ()
+    runtime = _ordinary_runtime
+    if (runtime.get('phase1_only') is True and runtime['policy']['mode'] == 'default'
+            and runner == 'phase1_one_shot_runner' and site == 'doc_extract'
+            and span == ('D1',)):
+        # This exact Default site keeps its established producer and expert
+        # handoff. It does not assert a qualified D1 Controller adapter.
+        from execution_authority import consume
+        issued = consume()
+        if Path(project).resolve() != runtime['project']:
+            raise Refusal('ORDINARY_PROJECT_UNBOUND', str(project))
+        if (issued['request']['mode'] != 'default'
+                or issued['request'] != runtime['policy']['request_receipt']
+                or issued['route'] != runtime['route']
+                or runtime['identity'] != (str(runtime['project']),
+                    issued['request']['request_digest'], issued['route']['source_sha'], True)):
+            raise Refusal('REQUEST_CAPABILITY_INVALID', 'canonical Phase1 route changed')
+        runtime['canonical_phase1_producer'] = dict(
+            runner=runner, site=site, step_id='D1', mode='default',
+            source_sha=issued['route']['source_sha'],
+            request_digest=issued['request']['request_digest'],
+            route_digest=issued['route']['route_digest'],
+            controller_qualification='NOT_MEASURED')
+        return None
     return dispatch_ordinary_rows(project, span, site, refusal_factory)
+
+
+def phase1_producer_disclosure(project: Path) -> dict | None:
+    """Report an actual canonical-site selection, never Controller evidence."""
+    runtime = _ordinary_runtime
+    if runtime is None or Path(project).resolve() != runtime['project']:
+        return None
+    selected = runtime.get('canonical_phase1_producer')
+    return dict(selected) if selected is not None else None
 
 
 def dispatch_ordinary_rows(project, step_ids, site, result_factory):

@@ -1144,8 +1144,11 @@ def _run_step_0_5ic(project: Path, pdk: str = "") -> int:
         if error:
             return 1
         operator = (bound_answers or {}).get('operator_template') or {}
-        parameters = {'template': operator.get('path'), 'slot': operator.get('slot'),
-                      'no_template_reason': operator.get('absent_reason')}
+        parameters = {'template': operator.get('path'), 'slot': operator.get('slot')}
+        # The real producer omits an absent reason from its issued arguments.
+        # Preserve every provided owner value, including invalid empty values.
+        if operator.get('absent_reason') is not None:
+            parameters['no_template_reason'] = operator['absent_reason']
         result = execution_policy.dispatch_fixed_step(project, '0.5ic', parameters=parameters)
         return 0 if result['status'] == 'ADOPTED' else 1
     answers_path, answers, err = _step_0_5ic_answers(project)
@@ -1878,6 +1881,9 @@ def main() -> int:
                       "source": "extraction and route before expert track"},
             "second_track": second_track,
         }
+        producer = _execution.phase1_producer_disclosure(project)
+        if producer is not None:
+            summary['canonical_producer'] = producer
         import ai_signed_judgement as _ai_judgement
         summary["ai_judgements"] = _ai_judgement.pending(project, ("D1",))
         if summary["ai_judgements"] and summary["verdict"] in ("PASS", "PASS_WITH_WAIVERS"):
@@ -2002,6 +2008,9 @@ def main() -> int:
         "sufficiency": _suff,
         "extraction_gap": _gap,
     }
+    producer = _execution.phase1_producer_disclosure(project)
+    if producer is not None:
+        summary['canonical_producer'] = producer
     import ai_signed_judgement as _ai_judgement
     summary["ai_judgements"] = _ai_judgement.pending(project, ("D1",))
     _ai_judgement.demote_runner_rows(summary["steps"], summary["ai_judgements"])

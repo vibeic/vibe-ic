@@ -2312,6 +2312,18 @@ def _main() -> int:
                 )
             else:
                 halted_at = "phase1"
+        elif (rc != 0 and verdict == "NOT_MEASURED"
+              and rep.get("reason_class") == "awaiting_signed_judgement"
+              and (rep.get("canonical_producer") or {}).get("step_id") == "D1"
+              and (rep.get("canonical_producer") or {}).get("mode") == "default"
+              and _published_here(project, "phase1_one_shot.json",
+                                  _phase_started["phase1"])):
+            # The canonical producer has handed off to its required expert.
+            # Keep that unmeasured result; downstream registration/dispatch
+            # must wait for the current signed judgement too.
+            halted_at = "phase1"
+            advisories.append("phase1 awaits its required signed AI judgement; "
+                              "downstream registration and dispatch were not started")
     else:
         plan.append(("phase1", "SKIPPED", 0))
 
