@@ -471,7 +471,7 @@ def _producer_timeout_s(spec: Mapping[str, object], params: Mapping[str, object]
     stream-out producer from being killed by the generic 30-second component
     default before it can publish its measured receipt.
     """
-    policy = spec.get("portfolio_policy", {})
+    policy = spec.get("_portfolio_policy", spec.get("portfolio_policy", {}))
     configured = policy.get("producer_timeout_s") if isinstance(policy, Mapping) else None
     raw = params.get("timeout_s", 60) if configured is None else configured
     if isinstance(raw, bool):

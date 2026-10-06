@@ -700,7 +700,9 @@ def _backend(step: str) -> dict:
         # Dropping this map here makes the adapter fall back to the generic
         # typed timeout even when the canonical policy grants a longer native
         # producer window.
-        "portfolio_policy": dict(p),
+        # Keep the row-owned policy available to the adapter without changing
+        # the public provider-coverage census schema.
+        "_portfolio_policy": dict(p),
         "applicability": _applicability(step, release=False),
         "harvest": list(_summary(row.get("original_harvest"))),
         "notes": "One complete producer; wrappers/checkers sharing an engine family are not additional Ultra arms.",
@@ -734,7 +736,11 @@ def coverage_rows() -> list[dict]:
 
 
 def coverage_table() -> dict:
-    rows = coverage_rows()
+    # The runtime policy is an internal adapter seam.  Do not expose it in
+    # the stable provider-coverage artifact or force a schema refresh merely
+    # to carry a controller timeout.
+    rows = [{key: value for key, value in row.items()
+             if key != "_portfolio_policy"} for row in coverage_rows()]
     return {"schema": "vibeic/provider-coverage/1", "row_count": len(rows),
             "backend_row_count": len(BACKEND_IDS), "release_row_count": len(RELEASE_IDS),
             "rows": rows}
