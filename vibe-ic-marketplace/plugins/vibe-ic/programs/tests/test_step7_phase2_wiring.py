@@ -128,3 +128,28 @@ def test_default_ordinary_step7_placeholder_releases_preflight_gate(
                         {"policy": {"mode": "default"}})
     assert EP.dispatch_ordinary_site(tmp_path, "design_one_shot_runner",
                                      "asic_sdc", lambda *a: None) is measured_fail
+
+
+def test_live_preflight_gate_calls_step7_fn_after_default_placeholder(
+        tmp_path, monkeypatch):
+    """Exercise the actual gate seam, not only its dispatch helper."""
+    decision = S.Decision("design_one_shot_runner", "asic_sdc", ["7"],
+                          verdict="READY", allow=True, detail="ready")
+    monkeypatch.setattr(S, "decide", lambda *args, **kwargs: decision)
+    monkeypatch.setattr(S, "record", lambda *args, **kwargs: None)
+    monkeypatch.setattr(EP, "_ordinary_runtime",
+                        {"policy": {"mode": "default"}})
+    monkeypatch.setattr(EP, "dispatch_ordinary_rows",
+                        lambda *args, **kwargs: SimpleNamespace(
+                            status="NOT_MEASURED"))
+    called = []
+    sentinel = SimpleNamespace(status="NOT_MEASURED")
+
+    def direct(*args, **kwargs):
+        called.append((args, kwargs))
+        return sentinel
+
+    got = S.gate(tmp_path, "design_one_shot_runner", "asic_sdc",
+                 lambda *args: None, direct, tmp_path)
+    assert got is sentinel
+    assert called and called[0][0] == (tmp_path,)
