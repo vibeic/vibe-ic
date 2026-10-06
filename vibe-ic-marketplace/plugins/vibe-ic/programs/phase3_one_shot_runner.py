@@ -57432,7 +57432,13 @@ def _layout_basis(project: Path, top: str, pdk: PdkConfig,
     """Content identity of the routed basis, with the shipped GDS when frozen."""
     import _step_identity as _si
     pnr = _pl.pnr_dir(project)
-    netlist = pnr_input_netlist(project, top)[0]
+    try:
+        netlist = pnr_input_netlist(project, top)[0]
+    except ValueError as exc:
+        # A missing/invalid synthesis handoff cannot identify a cached layout.
+        # Keep the refusal as data so the runner records its failed synthesis
+        # and downstream steps instead of aborting before report publication.
+        return "", str(exc)
     paths = {"def": pnr / "routed.def", "netlist": netlist,
              "sdc": pnr / "constraint.sdc"}
     missing = [f"{name}: {path}" for name, path in paths.items()
