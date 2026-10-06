@@ -59,7 +59,7 @@ def assert_current_composite_refusals(controller, context, root, arm_id):
         candidate['evidence']['provenance'] = {}
         refuse('measured_fail_precedence', candidate, 'GATE_FAIL')
         candidate = deepcopy(baseline)
-        candidate['reason'] = 'mutated'
+        candidate['processes'][0]['pid'] += 1
         try:
             controller._execution_authority(root, json.loads((root / 'plan.json').read_text()), candidate, arm)
         except em.Refusal as exc:
