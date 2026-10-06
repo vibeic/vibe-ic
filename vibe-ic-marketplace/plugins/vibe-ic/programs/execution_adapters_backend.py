@@ -573,9 +573,9 @@ def _backend_input_contract(step_id: str, spec: Mapping[str, object]) -> tuple[s
     declared = [str(item.get("path")) for item in row.get("required_inputs", ())
                 if isinstance(item, Mapping) and item.get("path")]
     common = [
-        "input/docs", "input/step_0_5ic_answers.json", "input/submission_template",
+        "input/docs", "input/project.json", "input/step_0_5ic_answers.json", "input/submission_template",
         "phase1/generated_docs", "phase1/pdk_staging_read.json",
-        "phase1/merged_docs", "phase2/stage1/rtl", "phase2/stage2",
+        "phase1/merged_docs", "phase2/stage1/rtl", "phase2/stage2", "reports/phase2/dft",
         "phase3/librelane", "phase3/librelane_switch.json",
     ]
     # PnR and streamout rows consume the current physical checkpoint.  Keep

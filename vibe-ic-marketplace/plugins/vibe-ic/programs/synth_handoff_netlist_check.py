@@ -143,7 +143,8 @@ def _project_path_resolver(project: Path, folder: Path, state: dict):
         recorded = Path(str(state["nl"]))
     except (KeyError, TypeError, ValueError) as exc:
         raise ValueError("native state has no absolute netlist path") from exc
-    if not recorded.is_absolute():
+    if (not recorded.is_absolute() or ".." in recorded.parts
+            or str(recorded) != state["nl"]):
         raise ValueError("native state netlist path is not absolute")
     rel_folder = folder.relative_to(project)
     recorded_parent = recorded.parent
@@ -154,11 +155,16 @@ def _project_path_resolver(project: Path, folder: Path, state: dict):
         original_root = original_root.parent
     if original_root / rel_folder != recorded_parent:
         raise ValueError("native state netlist folder is not canonical")
-    original_root = original_root.resolve()
+    # This is the producer's lexical namespace, which need not exist on this
+    # host.  Resolving it against the consumer filesystem would follow ambient
+    # symlinks and change the meaning of the receipt's original path keys.
 
     def resolve(value):
         path = Path(str(value))
-        if not path.is_absolute() or not path.is_relative_to(original_root):
+        if (not isinstance(value, (str, Path)) or not path.is_absolute()
+                or ".." in path.parts or str(path) != str(value)):
+            raise ValueError(f"native receipt input path is unsafe: {value}")
+        if not path.is_relative_to(original_root):
             return path
         relative = path.relative_to(original_root)
         target = project / relative
@@ -206,14 +212,24 @@ def _native_synthesis(project: Path, folder: Path, top: str, *, path_resolver=No
     if not paths or declared_rtl != paths:
         raise ValueError('producer RTL file set differs from current synthesis input')
     for declared, path in zip(cfg.get('VERILOG_FILES', ()), rtl):
-        recorded_path = str(Path(declared).resolve())
-        if inp['config_files'].get(recorded_path) != _sha(path):
+        if inp['config_files'].get(declared) != _sha(path):
             raise ValueError('producer consumed stale RTL bytes')
     mounts = _receipt_pdk_mounts(folder, receipt)
     # Rehash the producer's recorded population. A later reader namespace may
     # expose additional image files; those were not part of this receipt.
-    expected_config_files = LC.config_file_hashes(
-        {'files': list(inp['config_files'])}, mounts)
+    expected_config_files = {}
+    external_config_files = []
+    for recorded_path in inp['config_files']:
+        source = resolve_path(recorded_path)
+        if source.is_relative_to(project.resolve()):
+            # Preserve the producer's receipt key, but read only the frozen
+            # staged bytes.  Rehashing the original absolute path silently
+            # reintroduced an ambient-project dependency after relocation.
+            expected_config_files[recorded_path] = _sha(source)
+        else:
+            external_config_files.append(recorded_path)
+    expected_config_files.update(LC.config_file_hashes(
+        {'files': external_config_files}, mounts))
     if inp.get('config_files') != expected_config_files:
         raise ValueError('producer consumed stale or incomplete config material')
     for path, recorded in inp['state_files'].items():
