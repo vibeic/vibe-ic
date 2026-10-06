@@ -406,6 +406,8 @@ def test_br2_001_real_controller_and_issued_mutation_control(tmp_path, release_a
     assert release_arm.ram_mb == 4096
     controller = ctl(release_arm, budget=em.Budget(1, 4096, workers=1)); root = tmp_path / 'real'
     assert controller.run(ctx, root)['candidate_statuses'][release_arm.arm_id] == 'ELIGIBLE'
+    from programs.tests._composite_gate_controls import assert_current_composite_refusals
+    assert_current_composite_refusals(controller, ctx, root, release_arm.arm_id)
     assert controller.adopt(ctx, root, H.choice(ctx, root, release_arm.arm_id))['status'] == 'ADOPTED'
     receipt = root / release_arm.arm_id / 'receipt.json'
     payload = json.loads(receipt.read_text()); payload['reason'] = 'mutated'; dump(receipt, payload)
