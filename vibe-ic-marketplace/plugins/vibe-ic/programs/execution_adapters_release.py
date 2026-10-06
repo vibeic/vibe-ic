@@ -371,7 +371,9 @@ def _adapter(spec: Mapping[str, object], source_sha: str, objective: Mapping[str
                                                  "; native qualification NOT_MEASURED" if not external else
                                                  "external handoff classification only; no software producer"),
         available=available and not unavailable and not external, availability_reason=reason,
-        cpus=1, ram_mb=256,
+        # Native OpenROAD reserves about 3.43 GiB of virtual address space
+        # before reading the clock plan (EDA 0.4.1); Controller enforces RLIMIT_AS.
+        cpus=1, ram_mb=4096 if step_id == "16" else 256,
         role=role,
         own_no_tool_reason="One complete release producer owns the row; physical/external evidence remains outside software.",
     )
