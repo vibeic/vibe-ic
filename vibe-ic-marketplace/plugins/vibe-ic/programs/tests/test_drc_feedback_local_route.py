@@ -21,11 +21,10 @@ def test_local_image_resolution_uses_the_digest_bound_runner(monkeypatch):
     assert feedback.image_for_container('outer-container') == IMAGE
 
 
-def test_local_image_resolution_refuses_an_unpinned_runner(monkeypatch):
+def test_local_image_resolution_leaves_invalid_identity_for_run_refusal(monkeypatch):
     monkeypatch.setattr(feedback._ce, 'no_container_route', lambda: True)
     monkeypatch.setenv('VIBEIC_EDA_IMAGE', 'ghcr.io/vibeic/vibeic-eda:latest')
-    with pytest.raises(RuntimeError, match='FEEDBACK_IMAGE_UNBOUND'):
-        feedback.image_for_container('outer-container')
+    assert feedback.image_for_container('outer-container') == 'outer-container'
 
 
 def test_feedback_docker_localises_private_program_mount(monkeypatch, tmp_path):
@@ -72,3 +71,65 @@ def test_feedback_docker_keeps_container_route_argv(monkeypatch, tmp_path):
     assert seen['argv'][:3] == ['docker', 'run', '--rm']
     assert seen['argv'][-5:] == [IMAGE, '--skip', 'openroad', '-exit', '/feedback_programs/x.tcl']
     assert seen['kwargs'] == {'capture_output': True, 'text': True, 'check': False}
+
+
+def test_run_accepts_repository_digest_without_writing_the_routed_layout(
+        monkeypatch, tmp_path):
+    project = tmp_path / 'project'
+    pnr = project / 'phase3/stage3/pnr'
+    pnr.mkdir(parents=True)
+    (project / 'reports/phase3').mkdir(parents=True)
+    source = pnr / 'unit.def'
+    source.write_text('DESIGN unit ;\n')
+    routed = pnr / 'routed.def'
+    routed.write_bytes(source.read_bytes())
+    before = routed.read_bytes()
+    (pnr / 'stream_out.py').write_text('print("EDA stream")\n')
+    rule = {
+        'id': 'CO.6a', 'source': 'test', 'reason': 'test',
+        'obstruction_half_widths_um': [0.1],
+    }
+    monkeypatch.setattr(feedback, '_rules', lambda _deck: [rule])
+    monkeypatch.setattr(
+        feedback, '_antenna_baseline',
+        lambda *_args: (_ for _ in ()).throw(ValueError('stop after image binding')))
+    pdk = SimpleNamespace(
+        drc_deck='/pdk/contact.drc', tech_lef='/pdk/tech.lef',
+        cell_lef='/pdk/cell.lef', macro_lefs=[], cell_gds='/pdk/cell.gds',
+        macro_gds=[], lefdef_layermap='/pdk/map')
+    result = feedback.run(project, 'unit', pdk, IMAGE, publish=False)
+    assert result['reason'] == 'stop after image binding'
+    assert routed.read_bytes() == before
+
+
+def test_run_records_missing_local_image_digest_without_layout_mutation(
+        monkeypatch, tmp_path):
+    project = tmp_path / 'project'
+    pnr = project / 'phase3/stage3/pnr'
+    pnr.mkdir(parents=True)
+    (project / 'reports/phase3').mkdir(parents=True)
+    source = pnr / 'unit.def'
+    source.write_text('DESIGN unit ;\n')
+    routed = pnr / 'routed.def'
+    routed.write_bytes(source.read_bytes())
+    before = routed.read_bytes()
+    (pnr / 'stream_out.py').write_text('print("EDA stream")\n')
+    monkeypatch.setattr(feedback, '_rules', lambda _deck: [{
+        'id': 'CO.6a', 'source': 'test', 'reason': 'test',
+        'obstruction_half_widths_um': [0.1],
+    }])
+    monkeypatch.setattr(feedback._ce, 'no_container_route', lambda: True)
+    monkeypatch.delenv('VIBEIC_EDA_IMAGE', raising=False)
+    monkeypatch.delenv('IIC_EDA_IMAGE', raising=False)
+    pdk = SimpleNamespace(
+        drc_deck='/pdk/contact.drc', tech_lef='/pdk/tech.lef',
+        cell_lef='/pdk/cell.lef', macro_lefs=[], cell_gds='/pdk/cell.gds',
+        macro_gds=[], lefdef_layermap='/pdk/map')
+    image = feedback.image_for_container('outer-container')
+    result = feedback.run(project, 'unit', pdk, image, publish=False)
+    assert result['status'] == 'REFUSED'
+    assert result['reason'] == 'FEEDBACK_IMAGE_DIGEST_REQUIRED'
+    assert routed.read_bytes() == before
+    receipt = project / 'reports/phase3/drc_feedback.json'
+    assert receipt.is_file()
+    assert 'FEEDBACK_IMAGE_DIGEST_REQUIRED' in receipt.read_text()

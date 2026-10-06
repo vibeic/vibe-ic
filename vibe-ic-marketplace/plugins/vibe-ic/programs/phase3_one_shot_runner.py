@@ -57872,9 +57872,19 @@ def step_prestream_gate(project: Path, top: str, pdk: PdkConfig,
     import drc_feedback_repair as _drc_feedback
     if _drc_feedback.has_reviewed_rule(getattr(pdk, "drc_deck", None)):
         _fb_t0 = time.time()
+        try:
+            _feedback_image = _drc_feedback.image_for_container(container)
+        except Exception as exc:
+            # Image identity is an execution precondition. Preserve the
+            # pre-stream gate's normal StepResult refusal contract instead of
+            # aborting the whole controller when a local runner lacks a
+            # digest-bound image reference.
+            return StepResult(
+                "prestream_gate", "FAIL", time.time() - t0,
+                "SIGNOFF_DECK_FEEDBACK_REFUSED: " + str(exc),
+                [str(project / "reports/phase3/drc_feedback.json")])
         _feedback = _drc_feedback.run(
-            project, top, pdk,
-            _drc_feedback.image_for_container(container),
+            project, top, pdk, _feedback_image,
             stream_script_text=_GDS_STREAMOUT_PY)
         _fb_pub = _feedback.get("publication") or {}
         if _feedback.get("status") == "PASS" and _fb_pub.get("output"):

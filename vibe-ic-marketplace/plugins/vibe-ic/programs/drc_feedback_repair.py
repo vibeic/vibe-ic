@@ -45,6 +45,16 @@ _SCOPED_DRC = re.compile(
     r'0 on entry, 0 on exit \(delta \+0\)\.$', re.M)
 
 
+_IMAGE_DIGEST_RE = re.compile(r'(?:sha256:)?[0-9a-f]{64}$')
+
+
+def _image_digest_bound(image: str) -> bool:
+    """Accept the digest forms used by the canonical image contract."""
+    import _eda_pin
+    return bool(_eda_pin.reference_digest(image) or
+                _IMAGE_DIGEST_RE.fullmatch(str(image or '')))
+
+
 class _Absent(ValueError):
     """An absence refusal. ``str()`` stays the bare code the receipt records as
     its ``reason``; ``where`` names the search space the code alone cannot, so
@@ -88,9 +98,11 @@ def image_for_container(container: str) -> str:
             reference = (os.environ.get(key) or '').strip()
             if _eda_pin.reference_digest(reference):
                 return reference
-        raise RuntimeError(
-            'FEEDBACK_IMAGE_UNBOUND: local route requires '
-            'VIBEIC_EDA_IMAGE/IIC_EDA_IMAGE with a repository@sha256 digest')
+        # Keep the caller on its normal refusal path. ``run`` records a
+        # digest-contract refusal before any EDA tool or layout writer runs;
+        # returning the token here avoids aborting the pre-stream controller
+        # before that receipt can be written.
+        return container
     cp = subprocess.run(['docker', 'inspect', '--type', 'container',
                          '--format', '{{.Image}}', container],
                         capture_output=True, text=True, check=False)
@@ -424,7 +436,7 @@ def run(project: Path, top: str, pdk: Any, image: str, *,
             raise ValueError('FEEDBACK_CANONICAL_DEF_DIVERGED')
         record['initial_source_sha256'] = digest
         record['source_sha256'] = digest
-        if not re.fullmatch(r'(?:sha256:)?[0-9a-f]{64}', image):
+        if not _image_digest_bound(image):
             raise ValueError('FEEDBACK_IMAGE_DIGEST_REQUIRED')
         design_cell = _def_design(source_def)
         record['design_cell'] = design_cell
