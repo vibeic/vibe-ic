@@ -16,6 +16,7 @@ import emit_attestation as ea  # noqa: E402
 import route_decision as rd  # noqa: E402
 import task_nature_route as tnr  # noqa: E402
 import _path_layout as path_layout  # noqa: E402
+from _benchmark_io_fixture import issue_io_fixture  # noqa: E402
 
 
 def _receipt(prompt: str, *, target: str = "shippable_gds") -> dict:
@@ -177,6 +178,9 @@ def test_program_reentry_missing_route_admission_refuses_before_dispatch(
             "route_receipt": None,
         }],
     })
+    # Issue the input-only I/O envelope, retaining the missing route receipt
+    # and D1 admission this negative control is meant to refuse.
+    issue_io_fixture(run, "rtllm", Path("/unused"), task=task)
     request = {
         "schema": bd._PROGRAM_REGATE_SCHEMA,
         "id": "p1",

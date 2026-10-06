@@ -16,6 +16,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import blindness_audit as ba  # noqa: E402
 from _entry_guard_fixture import write_prompt_report  # noqa: E402
+from _benchmark_io_fixture import issue_io_fixture  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import _progress_run as _pr  # noqa: E402
@@ -152,6 +153,7 @@ def _stage_run(tmp_path, with_violation: bool):
     # Stage the producer-derived prompt report so this downstream blindness
     # test reaches its subject without weakening the upstream entry contract.
     write_prompt_report(run)
+    issue_io_fixture(run, "verilogeval-v2", ds)
     return ds, run
 
 

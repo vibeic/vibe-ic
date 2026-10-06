@@ -22,6 +22,7 @@ sys.path.insert(0, str(PROGRAMS))
 
 import benchmark_dispatch as bd                         # noqa: E402
 import benchmark_io_adapter as bio                      # noqa: E402
+import test_benchmark_program_first_ai_review as fx      # noqa: E402
 
 
 def _simulator_absent() -> str:
@@ -137,10 +138,13 @@ endmodule
 
 
 def _project(tmp_path: Path, rtl_source: str) -> Path:
-    project = tmp_path / "project"
+    project = tmp_path / "run" / "projects" / "p1"
     (project / "input").mkdir(parents=True)
     (project / "input" / "phase1_prompt.md").write_text(
         "Design module dut with input a and output y; assign y = a.\n")
+    docs = project / "phase1" / "generated_docs"
+    docs.mkdir(parents=True)
+    (docs / "L1_DATASHEET.json").write_text('{"schema": 1, "module": "dut"}\n')
     rtl = project / "phase2" / "stage1" / "rtl"
     rtl.mkdir(parents=True)
     (rtl / "dut.v").write_text(rtl_source)
@@ -237,6 +241,7 @@ def _solve_report(run: Path, task: dict) -> None:
         },
         "results": [result],
     }))
+    fx._write_issued_run_envelope(run, task)
     bd._write_jsonl(run / bd._REVIEW_WORKLIST, [task])
     bd._write_jsonl(run / bd._BACKUP_WORKLIST, [])
 

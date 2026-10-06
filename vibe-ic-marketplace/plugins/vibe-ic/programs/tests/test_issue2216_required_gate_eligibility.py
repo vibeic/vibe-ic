@@ -58,6 +58,7 @@ import benchmark_dispatch as BD                 # noqa: E402
 import step_preflight as SPF                    # noqa: E402
 import flow_phase_attribution as FPA            # noqa: E402
 from test_issue1903_shape_c_accepted_export_control import _fixture
+from _benchmark_io_fixture import issue_io_fixture
 
 
 def _solve(exit_step="2", ran=None, not_attempted=None, **extra):
@@ -256,6 +257,7 @@ def _freshness_fixture(tmp_path, status="PASS"):
     rtl = project / "phase2/stage1/rtl/TopModule.sv"
     rtl.parent.mkdir(parents=True, exist_ok=True)
     rtl.write_text(rtl_text)
+    issue_io_fixture(run, "verilogeval-v2", dataset, task=task)
     return run, dataset, task, report, result
 
 

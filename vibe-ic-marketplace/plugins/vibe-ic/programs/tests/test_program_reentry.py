@@ -1850,12 +1850,14 @@ def test_a_task_that_also_has_a_pending_ai_backup_is_refused(
 # staged copy that did not come out as the signed input.  That is what the
 # refusal is for; reaching it any other way would not be reaching it.
 
-def _candidate_root(run, request_path, staged):
+def _candidate_root(run, request_path, collected):
     """The fresh snapshot path the operation is about to claim."""
     key = "program-regate-" + bd._sha256_text(Path(request_path).read_text())
-    got = fx.bio.collect("rtllm", "p1", Path(staged), supplied_rtl=True)
+    # Use the actual contract-validated Program output. A second collection
+    # without its derived repair contract can refuse and hash empty output.
+    assert collected["ok"], collected
     return (Path(run) / "candidate_snapshots" / "p1"
-            / f"{key}-{bd._sha256_text(str(got.get('completion') or ''))}")
+            / f"{key}-{bd._sha256_text(collected['completion'])}")
 
 
 def test_a_staged_copy_that_is_not_the_signed_input_is_refused(
@@ -1899,10 +1901,14 @@ def test_an_occupied_fresh_candidate_snapshot_is_refused(
         tmp_path, monkeypatch, capsys):
     run, old, path, request, state = _case(tmp_path, monkeypatch)
 
-    def occupy(staged):
-        _candidate_root(run, path, staged).mkdir(parents=True, exist_ok=True)
+    real = bd._collect_runner_result
 
-    state["on_run"] = occupy
+    def collect_then_occupy(*args, **kwargs):
+        collected = real(*args, **kwargs)
+        _candidate_root(run, path, collected).mkdir(parents=True, exist_ok=True)
+        return collected
+
+    monkeypatch.setattr(bd, "_collect_runner_result", collect_then_occupy)
     before = _protected(run, old)
     assert _resume(run, path) == 2
     assert "occupied fresh candidate snapshot" in _refusal(capsys)
@@ -1966,7 +1972,9 @@ def test_a_candidate_snapshot_claimed_during_preparation_is_refused(
         result = real(*args, **kwargs)
         source, target = args[0], args[1]
         if Path(target).name == "promotion_project":
-            _candidate_root(run, path, source).mkdir(parents=True, exist_ok=True)
+            collected = json.loads(
+                (Path(source).parent / "runner_result.json").read_text())["collected"]
+            _candidate_root(run, path, collected).mkdir(parents=True, exist_ok=True)
         return result
 
     monkeypatch.setattr(bd.shutil, "copytree", copy_then_claim)
