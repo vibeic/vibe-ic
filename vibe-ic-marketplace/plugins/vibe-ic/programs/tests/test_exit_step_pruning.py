@@ -42,6 +42,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from programs.tests.test_execution_receipt_chain import isolated_transport, real_entry
 
 PROGRAMS = Path(__file__).resolve().parents[1]
 if str(PROGRAMS) not in sys.path:
@@ -265,9 +266,9 @@ def _drive_orchestrator(monkeypatch, project: Path, argv_extra):
     actual phase2 argv can be inspected without spawning EDA tools (same
     harness as test_v0_2_95_issue459_auto_skip_analog)."""
     captured: dict = {}
-    # owner route rule 2026-09-28 (ICROUTE)
-    from _route_fixture import stage_owner_route
-    stage_owner_route(project, "ic")
+    # A direct main() call consumes a real issuer capability. The shared
+    # isolated_transport fixture closes it and restores the caller's state.
+    real_entry("IC", "default", project)
 
     def fake_run_phase(label, runner, args, env=None):
         captured[runner.name] = list(args)
