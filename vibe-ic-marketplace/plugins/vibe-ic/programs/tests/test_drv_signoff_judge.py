@@ -826,6 +826,8 @@ def test_direct_capture_plan_uses_its_ran_decks_and_linked_lef(tmp_path, monkeyp
                 f"read_verilog {netlist['path']}\n"
                 "link_design top\n"
                 f"read_sdc {sdc['path']}\n"
+                "set_timing_derate -early 0.95\n"
+                "set_timing_derate -late 1.05\n"
                 f"read_spef {spef['path']}\n")
         _file(project, f"phase3/stage3/sta/sta_mcorner_ocv_{kind}.tcl", deck)
     result = plan.build(project)
@@ -1841,7 +1843,9 @@ def _librelane_final_sta(tmp_path: Path, monkeypatch) -> tuple[Path, Path]:
                 "create_clock -period 24 [get_ports clk]\n"
                 "set_input_delay 4.8 -clock clk [all_inputs]\n"
                 "set_output_delay 4.8 -clock clk [all_outputs]\n"
-                "set_max_fanout 4 [current_design]\n")
+                "set_max_fanout 4 [current_design]\n"
+                "set_timing_derate -early 0.95\n"
+                "set_timing_derate -late 1.05\n")
     image_id = "sha256:" + "c" * 64
     _file(project, "phase3/librelane_pdk_root.provenance.json", json.dumps({
         "path": str(root), "derivation": {"pdk": "synthetic",
@@ -1858,6 +1862,7 @@ def _librelane_final_sta(tmp_path: Path, monkeypatch) -> tuple[Path, Path]:
     cand = project / "phase3/librelane/32-cand01"
     repair = cand / "01-vibeic-postrouterepair"
     views = {"nl": _file(repair, "top.nl.v", "module top; endmodule\n"),
+             "sdc": sdc,
              "odb": _file(repair, "top.odb", "CANDIDATE ODB\n"),
              "def": _file(repair, "top.def", "VERSION 5.8 ;\nCANDIDATE ROUTE\n")}
     adopted = repair / "state_out.json"
