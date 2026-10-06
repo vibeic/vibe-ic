@@ -369,6 +369,14 @@ def produce_05ic(project,output,template=None,no_template_reason=None,**k):
             with dst.open('xb') as stream:
                 stream.write(content)
         _write_step_binding(output, '0.5ic', paths)
+        # The declaration gate resolves derived-answer provenance from the
+        # output project. These are issued input copies, not produced views.
+        for rel, content in contents.items():
+            if rel.startswith('input/docs/'):
+                target = output / rel
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with target.open('xb') as stream:
+                    stream.write(content)
         for index, lease in enumerate(snapshots):
             if lease.current() != stages[index]['final_tree']:
                 raise RuntimeError('0.5ic: snapshot changed before completion')

@@ -519,6 +519,10 @@ def _fixed_inputs(runtime, step_id: str, *, parameters=None) -> dict:
         raise Refusal('UNKNOWN_CANONICAL_STEP', step_id)
     declarations = [r.get('path') for r in row.get('required_inputs', ()) if r.get('path')]
     declarations.extend(('input/step_0_5ic_answers.json', 'input/submission_template'))
+    if step_id == '0.5ic':
+        # Derived answers cite these original documents; their consumer must
+        # receive the same frozen bytes as the declaration producers.
+        declarations.append('input/docs')
     if step_id == '0.5ic' and (parameters or {}).get('template'):
         # Freeze only this invocation's declared template source. A missing
         # searched directory remains valid for explicit absence routes.

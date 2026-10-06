@@ -1110,6 +1110,13 @@ def consume_frontend_chain(output: Path, facts: Mapping[str, object]) -> dict:
             raise Refusal('STAGED_SNAPSHOT_UNBOUND', str(root))
     if stages[1]['outputs'] != payload['outputs']:
         raise Refusal('STAGED_CHAIN_OUTPUT_MISMATCH', str(path))
+    for name, expected in facts['inputs'].items():
+        if name.startswith('input/docs/'):
+            target = output / _relative(name)
+            if (target.is_symlink() or not target.is_file() or
+                    not target.resolve().is_relative_to(output) or
+                    digest(target) != expected):
+                raise Refusal('STAGED_INPUT_COPY_CHANGED', name)
     for name, expected in payload['outputs'].items():
         target = output / _relative(name)
         if (target.is_symlink() or not target.resolve().is_relative_to(output) or
