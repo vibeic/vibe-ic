@@ -2774,10 +2774,11 @@ class Controller:
             # A projected receipt is not authority. Reconsume the canonical
             # validator, then bind it to the actual source-owned worker Popen.
             here = Path(__file__).resolve().parent
-            if arm.tool_id == 'release-worker':
+            from execution_provider_catalog import RELEASE_IDS, BACKEND_IDS, python_entrypoint, proven_dispatcher_closure
+            if arm.step_id in RELEASE_IDS:
                 import execution_adapters_release as canonical
                 worker_name, worker_file = 'release-producer', 'execution_release_worker.py'
-            elif arm.tool_id == 'backend-worker':
+            elif arm.step_id in BACKEND_IDS:
                 import execution_adapters_backend as canonical
                 worker_name, worker_file = 'producer', 'execution_backend_worker.py'
             else:
@@ -2791,11 +2792,23 @@ class Controller:
             component = arm.components[0] if len(arm.components) == 1 else None
             expected_argv = ([arg.replace('{inputs}', receipt['input_root']).replace(
                 '{outputs}', receipt['output_root']) for arg in component.argv] if component else [])
+            try:
+                if not component:
+                    raise ValueError('canonical composite needs one registered component')
+                expected_argv[0] = str(Path(shutil.which(expected_argv[0]) or expected_argv[0]).resolve())
+                entry = python_entrypoint(tuple(expected_argv), Path(receipt['output_root']))
+                _, _, entry_index = _python_entry(tuple(expected_argv[1:]), allowed_options='BuqOWX')
+                worker_args = expected_argv[entry_index + 2:]
+                proof = proven_dispatcher_closure(entry, Path(worker_source), cwd=Path(receipt['output_root']))
+                if any(arm.source_files.get(str(path)) != digest(path) for path in proof):
+                    raise ValueError('canonical dispatcher source is not bound')
+            except (OSError, ValueError, Refusal) as exc:
+                raise Refusal('GATE_EXECUTION_UNBOUND', str(exc)) from exc
             if (fresh != evidence or composite.get('schema') != 'vibeic/composite-gate-execution/1' or
                     component is None or component.name != worker_name or
-                    len(expected_argv) != 8 or expected_argv[1] != worker_source or
-                    expected_argv[2:6] != [receipt['input_root'], receipt['output_root'], '--step-id', arm.step_id] or
-                    expected_argv[6] != '--params-json' or
+                    len(worker_args) != 6 or
+                    worker_args[:4] != [receipt['input_root'], receipt['output_root'], '--step-id', arm.step_id] or
+                    worker_args[4] != '--params-json' or
                     composite_worker is None or composite_worker.get('argv') != expected_argv or
                     composite.get('worker_component') != worker_name or
                     composite.get('worker_source') != worker_source or
