@@ -124,7 +124,8 @@ def test_unregistered_executed_helper_has_terminal_refusal(tmp_path):
 
 def test_bound_executed_helper_drift_refuses_adoption(tmp_path):
     alias, helper = wrapper(tmp_path, arm(), 'nested_static')
-    ctl = controller(alias, fixture_root=tmp_path); root = tmp_path / 'run'; ctx = backend.context16(tmp_path)
+    ctl = controller(alias, fixture_root=tmp_path); root = tmp_path / 'run'
+    ctx = backend.context16(tmp_path, native_clock=True)
     result = ctl.run(ctx, root, 'ultra-mode')
     assert result['candidate_statuses'] == {alias.arm_id: 'ELIGIBLE'}
     before = em.digest(helper)
@@ -157,3 +158,14 @@ def test_unproven_dispatch_has_terminal_refusal(tmp_path, style):
     record(tmp_path, style=style, result=result, receipt=receipt)
     assert result['candidate_statuses'] == {alias.arm_id: 'NOT_MEASURED'}
     assert receipt['reason'] == 'PROVIDER_DEPENDENCY_UNBOUND' and receipt['processes'] == []
+
+
+def test_copied_dispatcher_dependency_shadow_still_refused(tmp_path, monkeypatch):
+    from execution_provider_catalog import proven_dispatcher_closure
+    worker = PROGRAMS / 'execution_release_worker.py'
+    entry = tmp_path / 'copied_worker.py'
+    entry.write_bytes(worker.read_bytes())
+    monkeypatch.setenv('PYTHONPATH', str(PROGRAMS))
+    (tmp_path / 'execution_release_rows.py').write_text('ROWS = {}\n')
+    with pytest.raises(ValueError, match='copied worker import resolution differs'):
+        proven_dispatcher_closure(entry, worker)

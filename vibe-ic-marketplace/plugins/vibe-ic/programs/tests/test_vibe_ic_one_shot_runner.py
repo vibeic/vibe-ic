@@ -61,6 +61,7 @@ def test_positive_fail_missing_project(tmp_path):
     cp = _run([str(missing)])
     assert cp.returncode == 2
     assert "not a directory" in cp.stderr
+    assert not missing.exists()
 
 
 def test_empty_fixture_halts_at_phase2(tmp_path):

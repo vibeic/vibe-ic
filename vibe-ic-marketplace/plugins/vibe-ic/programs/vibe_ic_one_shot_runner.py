@@ -3068,6 +3068,9 @@ if __name__ == "__main__":
         entry.add_argument('--execution-mode', choices=('default', 'ultra'), default='default')
         entry.add_argument('--receipt-channel-fd', type=int)
         selected, _ = entry.parse_known_args()
+        if not selected.project.is_dir():
+            print(f'ERROR: not a directory: {selected.project.resolve()}', file=sys.stderr)
+            sys.exit(2)
         route_refusal = _delivery_route.admit(selected.project.resolve(), selected.route)
         if route_refusal:
             print(_delivery_route.refusal_message(route_refusal), file=sys.stderr)

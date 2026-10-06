@@ -514,9 +514,12 @@ def proven_dispatcher_closure(entry: Path, dispatcher: Path, *,
         # matches the canonical worker, rather than merely matching entry bytes.
         actual_search = [entry.parent, *search]
         canonical_search = [dispatcher.parent, *search]
-        actual = implementation_closure(entry, cwd=cwd, search=actual_search) - {entry}
-        canonical = implementation_closure(dispatcher, cwd=cwd, search=canonical_search) - {dispatcher}
-        if actual != canonical:
+        actual = implementation_closure(entry, cwd=cwd, search=actual_search)
+        canonical = implementation_closure(dispatcher, cwd=cwd, search=canonical_search)
+        # Exact entry bytes were checked above. A transitive import may reach
+        # the canonical dispatcher again; normalize only that proven root pair.
+        # Every other dependency must still resolve to the identical file.
+        if (actual - {entry}) | {dispatcher} != canonical:
             raise ValueError(f'copied worker import resolution differs: {entry}')
         return {entry, dispatcher, *actual}
     visit(entry, entrypoint=True)

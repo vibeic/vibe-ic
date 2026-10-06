@@ -414,7 +414,7 @@ def test_05ic_each_real_producer_nonzero_stops_order(tmp_path, monkeypatch, fail
     assert len(calls)==fail_at+1
 
 
-def _authority_project(tmp_path):
+def _authority_project(tmp_path, *, top_cell=None):
     """Read a repository owner input, then supply neutral shuttle geometry."""
     import subprocess
     from programs.tests._hostpaths import repo_path
@@ -427,6 +427,8 @@ def _authority_project(tmp_path):
     answers = json.loads(fixture.read_text())
     answers['answer_provenance']['synthesis_area_budget'] = {
         'answered_by': 'owner', 'citation': 'neutral authority control area limit'}
+    if top_cell is not None:
+        answers['answers']['top_cell'] = top_cell
     answers_path.write_text(json.dumps(answers, sort_keys=True) + '\n')
     slot = project / 'input/template/s1.yaml'
     slot.parent.mkdir()
@@ -664,24 +666,23 @@ def _snapshot_adoption(controller, ctx, run):
 ])
 def test_05ic_staged_writer_refuses_before_adoption(tmp_path, mutation):
     """An external same-user writer; real producers and Controller, no patches."""
-    import os, threading, time
-    project, ctx = _authority_project(tmp_path)
-    answers = project / 'input/step_0_5ic_answers.json'
-    document = json.loads(answers.read_text())
-    document['answers']['top_cell'] = 'issued_owner_top'
-    answers.write_text(json.dumps(document, sort_keys=True) + '\n')
+    import os, threading
+    # Owner input must be complete before the genuine route capability binds it.
+    project, ctx = _authority_project(tmp_path, top_cell='issued_owner_top')
     binding = ctx.binding()
     controller = _authority_controller()
     run = tmp_path / 'run'
     staged = run / 'frontend_0_5ic/outputs/project'
     signal = staged / 'reports/phase1/submission_template.json'
     events = []; errors = []
+    completed = threading.Event()
 
     def writer():
         try:
-            deadline = time.monotonic() + 20
-            while not signal.is_file() and time.monotonic() < deadline:
-                time.sleep(.0005)
+            # Wait for the real producer report, including source admission.
+            # A terminal Controller result also wakes the observer on refusal.
+            while not signal.is_file() and not completed.wait(.0005):
+                pass
             if not signal.is_file():
                 raise RuntimeError('producer 1 never published its real report')
             target = staged / 'input/step_0_5ic_answers.json'
@@ -729,8 +730,11 @@ def test_05ic_staged_writer_refuses_before_adoption(tmp_path, mutation):
 
     thread = threading.Thread(target=writer)
     thread.start()
-    controller.run(ctx, run)
-    thread.join(25)
+    try:
+        controller.run(ctx, run)
+    finally:
+        completed.set()
+        thread.join(25)
     assert not thread.is_alive() and not errors, errors
     assert events and ctx.binding() == binding
     assert em.digest(run / 'frontend_0_5ic/inputs/input/step_0_5ic_answers.json') == binding['inputs']['input/step_0_5ic_answers.json']

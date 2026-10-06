@@ -94,7 +94,7 @@ def test_real_issuer_fixture_teardown_leaves_unissued_default_inert(tmp_path):
 
 
 def real_entry(path='IC', execution_mode='default', project=None):
-    import tempfile, struct
+    import tempfile, struct, time
     project = Path(project or tempfile.mkdtemp())
     stage_owner_route(project, path.lower())
     parent, channel = socket.socketpair()
@@ -103,11 +103,18 @@ def real_entry(path='IC', execution_mode='default', project=None):
                str(project), '--route', path.lower(), '--execution-mode', execution_mode,
                '--route-authority-only', '--receipt-channel-fd', str(channel.fileno())]
     environment = {k:v for k,v in os.environ.items() if not k.startswith('VIBEIC_EXECUTION')}
-    proc = subprocess.Popen(command, pass_fds=(channel.fileno(),), stderr=subprocess.PIPE, env=environment)
-    channel.close(); parent.settimeout(30)
+    # This wait admits the real isolated issuer and its verified source closure.
+    # It is startup readiness, separate from each Controller component deadline.
+    started = time.monotonic()
+    ready = False
+    with tempfile.NamedTemporaryFile(prefix='canonical-entry-', suffix='.stderr',
+                                     dir=project.parent, delete=False) as stderr:
+        stderr_path = Path(stderr.name)
+        proc = subprocess.Popen(command, pass_fds=(channel.fileno(),), stderr=stderr, env=environment)
+    channel.close(); parent.settimeout(120)
     try:
         data, ancillary, _, _ = parent.recvmsg(131072, socket.CMSG_SPACE(4))
-        if not data: raise AssertionError(proc.stderr.read(8192).decode())
+        if not data: raise AssertionError(stderr_path.read_text()[-8192:])
         while b'\n' not in data:
             chunk = parent.recv(4096)
             if not chunk: raise AssertionError('canonical receipt channel EOF')
@@ -124,9 +131,16 @@ def real_entry(path='IC', execution_mode='default', project=None):
         os.environ[policy._CAPABILITY_FD_ENV] = str(fd)
         os.environ['VIBEIC_EXECUTION_AUTH_SOCKET'] = payload.pop('socket')
         _launchers.append((proc,fd,parent))
+        ready = True
         return payload
     except BaseException:
         proc.terminate(); proc.wait(timeout=5); parent.close(); raise
+    finally:
+        stderr_path.with_suffix('.json').write_text(json.dumps({
+            'argv': command, 'pid': proc.pid, 'ready': ready,
+            'startup_elapsed_s': time.monotonic() - started,
+            'startup_timeout_s': 120, 'returncode': proc.poll(),
+            'stderr_path': str(stderr_path)}, indent=2) + '\n')
 
 
 def _live_frontdoor_fixture(front, args):
