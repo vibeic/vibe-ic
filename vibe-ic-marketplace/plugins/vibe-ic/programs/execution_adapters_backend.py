@@ -11,6 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 import re
+import shlex
 from pathlib import Path
 import sys
 from typing import Mapping
@@ -167,6 +168,70 @@ def _issue_direct_inputs(project, params, sid, extra):
     return complete
 
 
+def _composite_gate_execution(binding, result, report_sha):
+    """Project the canonical consumer ledger without inventing child processes."""
+    step = str(binding.get("step_id"))
+    required = list(binding.get("required_gates", ()))
+    if (step not in ROWS or result.get("schema") != "vibeic/backend-result/2" or
+            result.get("step_id") != step or result.get("source_sha") != binding.get("source_sha") or
+            result.get("producer_verdict") != "PASS" or result.get("verdict") != "PASS" or
+            result.get("missing_inputs") or result.get("missing_outputs") or
+            len(required) != len(set(required)) or
+            set(required) != set(ROWS[step]["portfolio_policy"]["mandatory_gate_programs"])):
+        return {}
+    producers = result.get("canonical_receipts")
+    if (not isinstance(producers, list) or not producers or any(
+            not isinstance(row, dict) or row.get("schema") != "vibeic/backend-producer-receipt/1" or
+            row.get("producer") != "execution_backend_producers.produce" or
+            row.get("step_id") != step or row.get("verdict") != "PASS" for row in producers)):
+        return {}
+    commands = []
+    def walk(node):
+        if isinstance(node, dict):
+            for key, value in node.items():
+                if key in ("program_exit_zero", "advisory_program_exit_zero", "optional_program_exit_zero"):
+                    command = value.get("command") if isinstance(value, dict) else value
+                    if isinstance(command, str):
+                        commands.append(command)
+                else:
+                    walk(value)
+        elif isinstance(node, list):
+            for value in node:
+                walk(value)
+    walk(ROWS[step]["canonical_row"].get("gate", {}))
+    if step == "20":
+        commands.append("hold_area_budget_check")
+    ledger = result.get("gate_ledger")
+    if not isinstance(ledger, list):
+        return {}
+    groups, sources = {}, {}
+    for gate in required:
+        if result.get("gates", {}).get(gate) != "PASS":
+            return {}
+        if gate == "backend_canonical":
+            groups[gate] = [{"consumer": "execution_backend_gates.evaluate", "ledger": ledger}]
+            source = HERE / "execution_backend_gates.py"
+        elif gate == "backend_native_substance":
+            groups[gate] = [{"producer_receipts": producers}]
+            source = HERE / "execution_backend_producers.py"
+        else:
+            expected = [cmd for cmd in commands if Path(shlex.split(cmd)[0]).stem == gate]
+            rows = [row for row in ledger if isinstance(row, dict) and row.get("gate") == gate]
+            if (not expected or sorted(row.get("cmd", "") for row in rows) != sorted(expected) or
+                    any(type(row.get("rc")) is not int or row["rc"] != 0 or
+                        row.get("verdict") != "PASS" or row.get("exit_code", 0) != 0 for row in rows)):
+                return {}
+            groups[gate] = rows
+            source = HERE / (gate + ".py")
+        if not source.is_file() or source.is_symlink():
+            return {}
+        sources[str(source)] = em.digest(source)
+    return {"schema": "vibeic/composite-gate-execution/1", "worker_component": "producer",
+            "worker_source": str(HERE / "execution_backend_worker.py"),
+            "receipt_name": "backend_result.json", "receipt_sha256": report_sha,
+            "required_gates": required, "gate_records": groups, "gate_sources": sources}
+
+
 def _evidence_from_receipt(outputs: Path, binding: Mapping[str, object], *, gates: tuple[str, ...]) -> em.Evidence:
     """Read a provider receipt without treating rc0 or metadata as evidence."""
     path = outputs / "backend_result.json"
@@ -199,8 +264,11 @@ def _evidence_from_receipt(outputs: Path, binding: Mapping[str, object], *, gate
         else:
             return em.Evidence(binding, "NOT_MEASURED", observed, outputs_hashes,
                                detail="BACKEND_OUTPUT_UNMEASURED: " + str(name))
+    composite = _composite_gate_execution(binding, result, outputs_hashes["backend_result.json"])
     return em.Evidence(binding, status, observed, outputs_hashes,
-                       detail=str(result.get("detail", "")))
+                       metrics={"canonical_evidence": int(status == "PASS" and bool(composite))},
+                       detail=str(result.get("detail", "")),
+                       provenance={"composite_gate_execution": composite} if composite else {})
 
 
 def validate(outputs: Path, binding: Mapping[str, object]) -> em.Evidence:

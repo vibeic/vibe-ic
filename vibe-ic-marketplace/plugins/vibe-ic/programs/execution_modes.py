@@ -2468,6 +2468,29 @@ class Controller:
                     output_digest=output_digest)
                 for process in receipt['processes']
             }
+            composite = evidence.provenance.get('composite_gate_execution')
+            if composite:
+                worker = next((p for p in receipt['processes']
+                               if p['component'] == composite.get('worker_component')), None)
+                groups = composite.get('gate_records', {})
+                if worker is None or set(groups) != set(plan['binding']['required_gates']):
+                    raise Refusal('GATE_EXECUTION_UNBOUND', arm.arm_id)
+                for gate, records in groups.items():
+                    if gate in receipt['gate_receipts']:
+                        raise Refusal('GATE_EXECUTION_UNBOUND', gate)
+                    receipt['gate_receipts'][gate] = dict(
+                        gate=gate, observation='canonical-composite',
+                        argv=list(worker['argv']), argv_sha256=_hash(worker['argv']),
+                        executable_path=worker['executable_path'],
+                        executable_sha256=worker['executable_sha256'],
+                        source_sha=arm.source_sha, tool_id=arm.tool_id,
+                        tool_version=arm.tool_version,
+                        source_manifest_sha256=_hash(dict(arm.source_files)),
+                        inputs=dict(plan['binding']['inputs']), rc=worker['rc'],
+                        output_digest=output_digest, nested_worker_component=worker['component'],
+                        typed_receipt_name=composite['receipt_name'],
+                        typed_receipt_sha256=composite['receipt_sha256'],
+                        nested_record_sha256=_hash(records))
             nested_records = evidence.provenance.get('nested_gate_records', ())
             if nested_records:
                 # Composite fixed-step adapters may expose gates run by their
@@ -2745,12 +2768,61 @@ class Controller:
         if verdict == 'FAIL' or any(gates.get(k) == 'FAIL' for k in context.required_gates):
             raise Refusal('GATE_FAIL', arm.arm_id)
         gate_receipts = receipt.get('gate_receipts') or {}
+        composite = evidence.get('provenance', {}).get('composite_gate_execution')
+        composite_worker = None
+        if composite:
+            # A projected receipt is not authority. Reconsume the canonical
+            # validator, then bind it to the actual source-owned worker Popen.
+            here = Path(__file__).resolve().parent
+            if arm.tool_id == 'release-worker':
+                import execution_adapters_release as canonical
+                worker_name, worker_file = 'release-producer', 'execution_release_worker.py'
+            elif arm.tool_id == 'backend-worker':
+                import execution_adapters_backend as canonical
+                worker_name, worker_file = 'producer', 'execution_backend_worker.py'
+            else:
+                raise Refusal('GATE_EXECUTION_UNBOUND', arm.arm_id)
+            fresh = asdict(canonical.validate(Path(receipt['output_root']), binding))
+            if fresh.get('verdict') == 'FAIL' or any(
+                    fresh.get('gates', {}).get(g) == 'FAIL' for g in context.required_gates):
+                raise Refusal('GATE_FAIL', arm.arm_id)
+            composite_worker = next((p for p in processes if p.get('component') == worker_name), None)
+            worker_source = str(here / worker_file)
+            component = arm.components[0] if len(arm.components) == 1 else None
+            expected_argv = ([arg.replace('{inputs}', receipt['input_root']).replace(
+                '{outputs}', receipt['output_root']) for arg in component.argv] if component else [])
+            if (fresh != evidence or composite.get('schema') != 'vibeic/composite-gate-execution/1' or
+                    component is None or component.name != worker_name or
+                    len(expected_argv) != 8 or expected_argv[1] != worker_source or
+                    expected_argv[2:6] != [receipt['input_root'], receipt['output_root'], '--step-id', arm.step_id] or
+                    expected_argv[6] != '--params-json' or
+                    composite_worker is None or composite_worker.get('argv') != expected_argv or
+                    composite.get('worker_component') != worker_name or
+                    composite.get('worker_source') != worker_source or
+                    composite.get('required_gates') != list(context.required_gates) or
+                    set(composite.get('gate_records', {})) != set(context.required_gates) or
+                    set(gates) != set(context.required_gates) or
+                    evidence.get('outputs', {}).get(composite.get('receipt_name')) != composite.get('receipt_sha256')):
+                raise Refusal('GATE_EXECUTION_UNBOUND', arm.arm_id)
+            for source, expected in {worker_source: digest(Path(worker_source)),
+                                     **composite.get('gate_sources', {})}.items():
+                if arm.source_files.get(source) != expected or digest(Path(source)) != expected:
+                    raise Refusal('GATE_EXECUTION_UNBOUND', source)
         for gate in context.required_gates:
             gate_receipt = gate_receipts.get(gate)
             if not isinstance(gate_receipt, dict):
                 raise Refusal('GATE_EXECUTION_UNBOUND', gate)
             matching = next((process for process in processes
                              if process.get('component') == gate), None)
+            if matching is None and composite_worker is not None:
+                if (gate_receipt.get('observation') != 'canonical-composite' or
+                        gate_receipt.get('nested_worker_component') != composite_worker['component'] or
+                        gate_receipt.get('typed_receipt_name') != composite['receipt_name'] or
+                        gate_receipt.get('typed_receipt_sha256') != composite['receipt_sha256'] or
+                        gate_receipt.get('nested_record_sha256') != _hash(composite['gate_records'][gate]) or
+                        gate_receipt.get('rc') != 0):
+                    raise Refusal('GATE_EXECUTION_UNBOUND', gate)
+                matching = composite_worker
             if matching is None:
                 # Narrow nested-gate path for the registered M1-M4 aggregate
                 # worker only. Direct gate-process receipts retain the normal

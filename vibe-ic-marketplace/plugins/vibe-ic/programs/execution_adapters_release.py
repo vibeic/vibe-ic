@@ -88,6 +88,45 @@ def _source_files(spec: Mapping[str, object]) -> dict[str, str]:
     return {str(p): em.digest(p) for p in sorted(paths)}
 
 
+def _composite_gate_execution(outputs, binding, report, report_sha):
+    """Describe current in-process calls; observed worker issuance is authority."""
+    step = str(binding.get("step_id"))
+    required = list(binding.get("required_gates", ()))
+    if (step not in ROWS or report.get("schema") != "vibeic/release-evidence/2" or
+            report.get("source_sha") != binding.get("source_sha") or
+            report.get("producer_verdict") != "PASS" or report.get("missing_inputs") or
+            len(required) != len(set(required)) or
+            set(required) != set(ROWS[step]["policy"]["mandatory_gate_programs"])):
+        return {}
+    from execution_release_worker import _canonical_gate_invocations, _command_argv
+    expected = []
+    for invocation in _canonical_gate_invocations(step, Path(outputs) / "project"):
+        module, args = _command_argv(invocation["command"], Path(outputs) / "project")
+        expected.append((module, [module, *args], bool(invocation["blocking"])))
+    rows = report.get("gate_records")
+    if not isinstance(rows, list) or len(rows) != len(expected):
+        return {}
+    groups, sources = {}, {}
+    for row, (gate, argv, blocking) in zip(rows, expected):
+        if (not isinstance(row, dict) or row.get("gate") != gate or
+                row.get("argv") != argv or row.get("blocking") is not blocking):
+            return {}
+        if gate not in required or not blocking:
+            continue
+        source = HERE / (gate + ".py")
+        if (type(row.get("rc")) is not int or row["rc"] != 0 or
+                row.get("verdict") != "PASS" or not source.is_file() or source.is_symlink()):
+            return {}
+        groups.setdefault(gate, []).append(row)
+        sources[str(source)] = em.digest(source)
+    if set(groups) != set(required):
+        return {}
+    return {"schema": "vibeic/composite-gate-execution/1", "worker_component": "release-producer",
+            "worker_source": str(HERE / "execution_release_worker.py"),
+            "receipt_name": "release-evidence.json", "receipt_sha256": report_sha,
+            "required_gates": required, "gate_records": groups, "gate_sources": sources}
+
+
 def validate(outputs: Path, binding: Mapping[str, object]) -> em.Evidence:
     path = Path(outputs) / "release-evidence.json"
     if not path.is_file() or path.is_symlink():
@@ -155,8 +194,11 @@ def validate(outputs: Path, binding: Mapping[str, object]) -> em.Evidence:
         "PASS" if report.get("qualification") == "PASS" and not report.get("missing_outputs") and
         (not native_required or native_verdicts and all(v == "PASS" for v in native_verdicts))
         else "NOT_MEASURED")
+    composite = _composite_gate_execution(outputs, binding, report, outputs_hashes["release-evidence.json"])
     return em.Evidence(binding, verdict, gates, outputs_hashes,
-                       detail=str(report.get("reason", "")))
+                       metrics={"canonical_evidence": int(verdict == "PASS" and bool(composite))},
+                       detail=str(report.get("reason", "")),
+                       provenance={"composite_gate_execution": composite} if composite else {})
 
 
 def _native_finite(value, field):
