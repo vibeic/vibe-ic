@@ -24,6 +24,7 @@ from execution_adapters_backend import (
     _step37_route_specs,
     _site_path,
     register_backend_adapters,
+    backend_project_input_contract,
     validate,
     validate_streamout_receipt,
 )
@@ -143,6 +144,22 @@ def test_backend_handoff_resolves_only_receipt_project_namespace(tmp_path):
     # A PDK path is external and stays external; it is subsequently checked
     # by the receipt's PDK mount validator rather than mapped to the project.
     assert resolver(Path("/pdk/gf180mcuD/config.tcl")) == Path("/pdk/gf180mcuD/config.tcl")
+
+
+def test_backend_project_contract_uses_published_synthesis_folder_only(tmp_path):
+    project = tmp_path / "project"
+    sidecar = project / "phase2/stage2/synth/synth_inputs.json"
+    sidecar.parent.mkdir(parents=True)
+    sidecar.write_text(json.dumps({"librelane_synthesis": {
+        "folder": "phase3/librelane/02-yosys-synthesis",
+        "mapped": "phase2/stage2/synth/top_synth.v"}}))
+    resolved = project / "phase3/librelane/synthesis_resolved.json"
+    resolved.parent.mkdir(parents=True)
+    resolved.write_text("{}")
+    contract = backend_project_input_contract(project, "37")
+    assert "phase3/librelane/02-yosys-synthesis" in contract
+    assert "phase2/stage2/synth/top_synth.v" in contract
+    assert "phase3/librelane" not in contract
 
 
 def test_source_identity_binds_worker_runner_and_librelane_contract():

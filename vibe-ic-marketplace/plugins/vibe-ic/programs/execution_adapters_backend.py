@@ -576,7 +576,7 @@ def _backend_input_contract(step_id: str, spec: Mapping[str, object]) -> tuple[s
         "input/docs", "input/project.json", "input/step_0_5ic_answers.json", "input/submission_template",
         "phase1/generated_docs", "phase1/pdk_staging_read.json",
         "phase1/merged_docs", "phase2/stage1/rtl", "phase2/stage2", "reports/phase2/dft",
-        "phase3/librelane", "phase3/librelane_switch.json",
+        "phase2/stage2/synth/synth_inputs.json", "phase3/librelane_switch.json",
     ]
     # PnR and streamout rows consume the current physical checkpoint.  Keep
     # it separate from the generic synthesis closure so earlier rows do not
@@ -588,6 +588,40 @@ def _backend_input_contract(step_id: str, spec: Mapping[str, object]) -> tuple[s
     if step_id in {"22", "23", "24", "30", "31", "32", "33", "34", "37", "37.3"}:
         common.extend(("phase3/stage3/extracted", "phase3/stage3/signoff"))
     return tuple(dict.fromkeys((*declared, *common)))
+
+
+def backend_project_input_contract(project: Path, step_id: str) -> tuple[str, ...]:
+    """Add only the current synthesis receipt namespace to a worker manifest.
+
+    The static adapter contract cannot know the design's published synthesis
+    folder at registry construction time.  Resolve that binding from the
+    current project immediately before issuance instead of copying the whole
+    ``phase3/librelane`` output tree (which could include this step's stale
+    outputs).  Invalid declarations are left for the consumer's fail-closed
+    handoff check; this helper never invents a path or receipt.
+    """
+    root = Path(project).resolve(strict=True)
+    result: list[str] = []
+    sidecar = root / "phase2/stage2/synth/synth_inputs.json"
+    try:
+        doc = json.loads(sidecar.read_text())
+    except (OSError, ValueError, TypeError):
+        doc = {}
+    binding = doc.get("librelane_synthesis") if isinstance(doc, dict) else None
+    if isinstance(binding, dict):
+        for key in ("folder", "mapped"):
+            value = binding.get(key)
+            if not isinstance(value, str):
+                continue
+            rel = Path(value)
+            if (not rel.is_absolute() and ".." not in rel.parts
+                    and rel.parts and (root / rel).resolve().is_relative_to(root)):
+                result.append(rel.as_posix())
+    # The resolver validates the original producer state path from this
+    # receipt; the resolved config is its explicit input fingerprint.
+    if (root / "phase3/librelane/synthesis_resolved.json").is_file():
+        result.append("phase3/librelane/synthesis_resolved.json")
+    return tuple(dict.fromkeys(result))
 
 
 def register_backend_adapters(registry: em.Registry | None = None, *, source_sha: str,

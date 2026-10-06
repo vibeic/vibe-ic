@@ -529,6 +529,14 @@ def _fixed_inputs(runtime, step_id: str, *, parameters=None) -> dict:
         declarations.append(parameters['template'])
     for arm in runtime['registry'].adapters(step_id):
         declarations.extend(arm.input_contract)
+    # Backend adapters publish one current synthesis receipt namespace per
+    # project.  Keep this dynamic set narrow; a static ``phase3/librelane``
+    # directory declaration would snapshot stale outputs from unrelated rows
+    # and could make the worker appear to consume its own prior result.
+    from execution_provider_catalog import BACKEND_IDS
+    if str(step_id) in BACKEND_IDS:
+        from execution_adapters_backend import backend_project_input_contract
+        declarations.extend(backend_project_input_contract(root, str(step_id)))
     inputs = {}
     for spec in declarations:
         for pattern in str(spec).split(' OR '):
