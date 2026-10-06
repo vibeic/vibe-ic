@@ -101,6 +101,10 @@ def _fake_docker(spef_sta_text):
 
 
 def _canonicalize(p: Path, monkeypatch, spef_text: str) -> None:
+    # This control supplies the direct OpenSTA report at its tool boundary.
+    switch = p / "phase3/librelane_switch.json"
+    switch.write_text(json.dumps({"steps": {
+        step: "direct" for step in ("22", "23", "32", "34", "37")}}))
     monkeypatch.setattr(R, "_docker_exec", _fake_docker(spef_text))
     monkeypatch.setattr(R, "_to_container_path", lambda s, c: s)
     R.step_canonicalize_artefacts(p, "chip_top", _pdk(), "x")
