@@ -77562,6 +77562,24 @@ def _postcheck_step(project: Path, top: str, pdk: Any,
                       reason_class=reason)
 
 
+def _backend_parameter_values(project: Path, pdk: Optional[PdkConfig]) -> Dict[str, str]:
+    """Resolve the image and PDK root for the canonical backend registry.
+
+    Backend producers are source-owned, but they still need the same runtime
+    identities as the concrete Phase-3 tools.  Keeping this resolution at the
+    front door binds the producer parameters to the current run instead of
+    letting a later adapter invocation fail with an unbound envelope.
+    """
+    if pdk is None:
+        return {}
+    import librelane_contract as _ll
+    image = _ll.resolve_image(project)
+    pdk_root = _ll.pdk_root_resolution(
+        project, str(pdk.name), image=image)["path"]
+    return {"pdk_name": str(pdk.name), "image_id": image,
+            "pdk_root": str(pdk_root)}
+
+
 @_restores_the_container_env
 def main() -> int:
     p = argparse.ArgumentParser()
@@ -77773,9 +77791,17 @@ def main() -> int:
     args.util = norm_util
 
     pdk = _detect_pdk(project, args.pdk)
+    backend_parameters = {}
+    if pdk is not None:
+        import librelane_contract as _ll
+        try:
+            backend_parameters = _backend_parameter_values(project, pdk)
+        except _ll.Refusal as exc:
+            print(f"REFUSED: backend runtime binding: {exc}", file=sys.stderr)
+            return 2
     _execution.bootstrap(project, parameters={'top': args.top_name, 'pdk': pdk,
         'design_name': args.top_name, 'pdk_name': args.pdk, 'container': args.container,
-        'die_um': args.die_um, 'util': args.util,
+        'die_um': args.die_um, 'util': args.util, **backend_parameters,
         # This process dispatches the backend, including resumed windows.
         # Analog A-track producers belong to their separate runner; registering
         # them here incorrectly requires a new Phase-1 analog declaration.

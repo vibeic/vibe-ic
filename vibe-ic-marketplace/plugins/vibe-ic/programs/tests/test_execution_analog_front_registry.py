@@ -77,6 +77,79 @@ def test_missing_declaration_without_explicit_skip_remains_refused(tmp_path):
 
 
 @pytest.mark.parametrize("mode", ["default", "ultra"])
+@pytest.mark.parametrize("window", [("15", "22"), ("37", "37")])
+def test_phase3_backend_binding_carries_current_image_and_pdk_root(
+        tmp_path, monkeypatch, mode, window):
+    """Exercise CLI-to-producer parameters, including automatic PDK selection."""
+    import phase3_one_shot_runner as backend
+    import execution_backend_producers as producers
+    import librelane_contract as contract
+
+    project = tmp_path / "backend"
+    project.mkdir()
+    pdk = SimpleNamespace(name="synthetic_process")
+    image = "registry.invalid/eda@sha256:" + "a" * 64
+    root = str(tmp_path / "pdks")
+    resolved = []
+    observed = {}
+
+    class Bound(Exception):
+        pass
+
+    def resolve_root(subject, name, *, image):
+        resolved.append((subject, name, image))
+        return {"path": root}
+
+    def bootstrap(subject, *, parameters):
+        # Invoke the real first backend consumer. Before the repair it refuses
+        # image_id,pdk_root, so the value below is REFUSED rather than BOUND.
+        try:
+            producers._parameters(subject, parameters)
+        except em.Refusal as exc:
+            observed.update(status="REFUSED", detail=str(exc))
+        else:
+            observed.update(status="BOUND", parameters=parameters)
+        raise Bound
+
+    monkeypatch.setattr(policy, "configure", lambda args: None)
+    monkeypatch.setattr(policy, "request", lambda: {"mode": mode})
+    monkeypatch.setenv(policy._CAPABILITY_FD_ENV, "test-bootstrap-intercepted")
+    monkeypatch.setattr(policy, "bootstrap", bootstrap)
+    monkeypatch.setattr(backend, "_delivery_admission_refusal", lambda p: None)
+    monkeypatch.setattr(backend, "_librelane_admission_facts", lambda p: {})
+    monkeypatch.setattr(backend._canonical_admission, "admit_span",
+                        lambda *args: SimpleNamespace(admitted=True))
+    monkeypatch.setattr(backend, "_detect_pdk", lambda *args: pdk)
+    monkeypatch.setattr(contract, "resolve_image", lambda subject: image)
+    monkeypatch.setattr(contract, "pdk_root_resolution", resolve_root)
+    monkeypatch.setattr(sys, "argv", ["phase3_one_shot_runner.py", str(project),
+        "--execution-mode", mode, "--pdk", "auto", "--top-name", "unit_top",
+        "--entry-step", window[0], "--exit-step", window[1]])
+    with pytest.raises(Bound):
+        backend.main()
+    assert observed["status"] == "BOUND", observed
+    assert observed["parameters"]["image_id"] == image
+    assert observed["parameters"]["pdk_root"] == root
+    assert observed["parameters"]["pdk_name"] == pdk.name
+    assert resolved == [(project, pdk.name, image)]
+
+
+@pytest.mark.parametrize("cause", ["image", "pdk_root"])
+def test_phase3_backend_binding_preserves_runtime_refusal(tmp_path, monkeypatch, cause):
+    import phase3_one_shot_runner as backend
+    import librelane_contract as contract
+
+    def refused(*args, **kwargs):
+        raise contract.Refusal("LL_RUNTIME_UNAVAILABLE", cause)
+
+    monkeypatch.setattr(contract, "resolve_image",
+                        refused if cause == "image" else lambda p: "test-image")
+    monkeypatch.setattr(contract, "pdk_root_resolution", refused)
+    with pytest.raises(contract.Refusal, match="LL_RUNTIME_UNAVAILABLE"):
+        backend._backend_parameter_values(tmp_path, SimpleNamespace(name="synthetic_process"))
+
+
+@pytest.mark.parametrize("mode", ["default", "ultra"])
 @pytest.mark.parametrize("window", [None, ("15", "22"), ("37", "37")])
 def test_backend_entry_does_not_register_an_analog_frontend(
         tmp_path, monkeypatch, mode, window):
