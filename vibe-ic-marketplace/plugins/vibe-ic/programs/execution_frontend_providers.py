@@ -419,6 +419,7 @@ def register_factories(registry, *, step_ids=None, project=None, parameters=None
             closure += tuple(source_path.with_name(name) for name in (
                 'execution_step4.py', 'execution_step4_icarus.py',
                 'execution_step4_verilator.py'))
+            closure += tuple(source_path.with_name(name + '.py') for name in portfolio_gates)
         if row == '0.5ic':
             seeds=[source_path, worker_path]
             seeds.extend(source_path.with_name(name) for name in (
