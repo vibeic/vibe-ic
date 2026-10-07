@@ -249,10 +249,14 @@ def choose(step_id):
     if step_id not in PROVIDERS: return None
     return PROVIDERS[step_id]
 
-def register_factories(registry, *, step_ids=None, project=None, parameters=None):
+def register_factories(registry, *, step_ids=None, project=None, parameters=None, execution_mode=None):
     """Register real source adapters in the existing Registry."""
     if not hasattr(registry, 'register'): raise TypeError('registry must provide register')
     import execution_modes as em
+    from dataclasses import replace
+    if execution_mode is None:
+        import execution_policy
+        execution_mode = execution_policy.request()['mode']
     from execution_modes import Adapter, Component, Evidence, digest
     from execution_provider_catalog import source_closure, implementation_closure
     source_path=Path(__file__).resolve(); worker_path=source_path.with_name('execution_frontend_worker.py')
@@ -287,6 +291,9 @@ def register_factories(registry, *, step_ids=None, project=None, parameters=None
             required=tuple(contract.get('required_outputs') or ())
             concrete=_concrete_outputs(root, required)
             artifacts={rel:digest(root/rel) for rel in concrete}
+            if _row == '4':
+                from execution_step4 import validate as validate_step4
+                return validate_step4(root, facts, _gate_names)
             if _row == 'D1':
                 # This worker reaches the real Phase-1 expert handoff, but its
                 # canonical outputs/gates are not connected to adoption yet.
@@ -408,6 +415,10 @@ def register_factories(registry, *, step_ids=None, project=None, parameters=None
         # the adapter identity. A changed contract must force re-registration.
         closure=(source_path, worker_path, _FLOW_PATH, _COVERAGE_PATH,
                  _CATALOG_PATH, _PORTFOLIO_PATH)
+        if row == '4':
+            closure += tuple(source_path.with_name(name) for name in (
+                'execution_step4.py', 'execution_step4_icarus.py',
+                'execution_step4_verilator.py'))
         if row == '0.5ic':
             seeds=[source_path, worker_path]
             seeds.extend(source_path.with_name(name) for name in (
@@ -462,7 +473,22 @@ def register_factories(registry, *, step_ids=None, project=None, parameters=None
         # Reserve bounded headroom for these source-bound producers; other
         # adapters retain their existing defaults.
         resources = {'ram_mb': 1024} if row in ('D1', '7') else {}
-        registry.register(Adapter('frontend_'+row.replace('.','_'),'frontend-worker',row,sha,bound_files,'current-main',p.engines,tuple(components),validate,required,objective,qualification_evidence='route callable bound; native qualification not measured',output_contract={path:(path,) for path in required},input_contract=INPUT_CONTRACTS[row] + (('phase2/stage1/rtl', 'reports/phase2/cdc/crossing.json') if row == '8' else ()), **resources))
+        adapter = Adapter('frontend_'+row.replace('.','_'),'frontend-worker',row,sha,bound_files,'current-main',p.engines,tuple(components),validate,required,objective,qualification_evidence='route callable bound; native qualification not measured',output_contract={path:(path,) for path in required},input_contract=INPUT_CONTRACTS[row] + (('phase2/stage1/rtl', 'reports/phase2/cdc/crossing.json') if row == '8' else ()), **resources)
+        if row == '4' and execution_mode in ('ultra', 'ultra-mode'):
+            # Fixed simulator entry points bind different native engines. Both
+            # disclose the same cocotb oracle and complementary coverage tool.
+            for simulator, engine in (('icarus', 'iverilog'), ('verilator', 'verilator')):
+                entry = str(source_path.with_name('execution_step4_' + simulator + '.py'))
+                registry.register(replace(adapter, arm_id='frontend_4_' + simulator,
+                    engine_families=(engine,),
+                    components=(Component('frontend_worker', ('python3', entry,
+                        '--inputs', '{inputs}', '--outputs', '{outputs}'), timeout_s=1200),),
+                    input_contract=INPUT_CONTRACTS[row] + ('phase2/stage1/rtl',
+                        'phase1/generated_docs', 'phase2/stage1/sim_professional'),
+                    cpus=4, ram_mb=12288, qualified=False,
+                    qualification_evidence='source-bound simulator; native canonical qualification pending'))
+        else:
+            registry.register(adapter)
     if step_ids is None:
         from execution_production import register_synthesis_adapter
         register_synthesis_adapter(registry, project=project, parameters=parameters,
