@@ -477,12 +477,21 @@ def register_factories(registry, *, step_ids=None, project=None, parameters=None
         if row == '4' and execution_mode in ('ultra', 'ultra-mode'):
             # Fixed simulator entry points bind different native engines. Both
             # disclose the same cocotb oracle and complementary coverage tool.
+            from execution_step4 import gate_commands
+            declared = gate_commands(contract)
+            gate_components = []
+            for gate in portfolio_gates:
+                parts = shlex.split(declared[gate])
+                argv = ('python3', str(source_path.with_name(gate + '.py')),
+                        *('{outputs}' if value == '.' else value for value in parts[1:]))
+                gate_components.append(Component(gate, argv, timeout_s=120))
             for simulator, engine in (('icarus', 'iverilog'), ('verilator', 'verilator')):
                 entry = str(source_path.with_name('execution_step4_' + simulator + '.py'))
                 registry.register(replace(adapter, arm_id='frontend_4_' + simulator,
                     engine_families=(engine,),
                     components=(Component('frontend_worker', ('python3', entry,
-                        '--inputs', '{inputs}', '--outputs', '{outputs}'), timeout_s=1200),),
+                        '--inputs', '{inputs}', '--outputs', '{outputs}'), timeout_s=300),
+                        *gate_components),
                     input_contract=INPUT_CONTRACTS[row] + ('phase2/stage1/rtl',
                         'phase1/generated_docs', 'phase2/stage1/sim_professional'),
                     cpus=4, ram_mb=12288, qualified=False,

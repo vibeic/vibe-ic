@@ -170,15 +170,8 @@ def main(simulator):
     produce(args.inputs, args.outputs, simulator)
 
 
-def validate(project, facts, gate_names):
-    """BLOCKING: canonical Step4 and every mandatory consumer must pass."""
-    import _flow_yaml
-    import flow_compliance_check as flow
-    import execution_modes as em
-    from execution_frontend_providers import _concrete_outputs
-    root = Path(project)
-    contract = next(row for row in _flow_yaml.load()['steps'] if str(row['id']) == '4')
-    canonical = flow.check_step(root, contract, {}, strict_step_binding=True)
+def gate_commands(contract):
+    """Use the declared tool-arm consumer interface, including advisories."""
     commands = {}
     def collect(node):
         if isinstance(node, dict):
@@ -192,6 +185,19 @@ def validate(project, facts, gate_names):
             for value in node:
                 collect(value)
     collect(contract.get('gate', {}))
+    return commands
+
+
+def validate(project, facts, gate_names):
+    """BLOCKING: canonical Step4 and every mandatory consumer must pass."""
+    import _flow_yaml
+    import flow_compliance_check as flow
+    import execution_modes as em
+    from execution_frontend_providers import _concrete_outputs
+    root = Path(project)
+    contract = next(row for row in _flow_yaml.load()['steps'] if str(row['id']) == '4')
+    canonical = flow.check_step(root, contract, {}, strict_step_binding=True)
+    commands = gate_commands(contract)
     gates = {}
     for name in gate_names:
         command = commands.get(name)
