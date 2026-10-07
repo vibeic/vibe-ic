@@ -34,6 +34,7 @@ targets.
 from __future__ import annotations
 
 import json
+import hashlib
 import struct
 from pathlib import Path
 from typing import Dict, Sequence
@@ -326,7 +327,65 @@ def build_project(root: Path, packages: Sequence[str] = (SUBJECT, CONTROL),
                 "output wire dout", f"output wire [{bus_width - 1}:0] dout")
         (kit / f"{name}.v").write_text(verilog, encoding="utf-8")
         (kit / f"{name}.gds").write_bytes(build_gds(name))
+    if packages:
+        _bind_current_kit(root, packages[0])
     return root
+
+
+def _bind_current_kit(root: Path, name: str) -> None:
+    """SOFTWARE_FIXTURE_ONLY current receipt for the kit the docs consume.
+
+    Construct records independently of the physical-current checker. These
+    bytes exercise its provenance contract; no native EDA run is claimed.
+    """
+    import _tapeout_declaration as td
+
+    def write(relative, data):
+        path = root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if isinstance(data, bytes):
+            path.write_bytes(data)
+        else:
+            path.write_text(data if isinstance(data, str) else json.dumps(data))
+        return relative
+
+    def record(relative):
+        data = (root / relative).read_bytes()
+        return {"path": relative, "sha256": hashlib.sha256(data).hexdigest(),
+                "bytes": len(data)}
+
+    declaration = td.blank_declaration()
+    declaration["answers"]["deliverable"] = td.DELIVERABLE_HARDMACRO
+    declaration[td.PROVENANCE_KEY] = {"deliverable": {
+        "answered_by": "owner", "citation": "SOFTWARE_FIXTURE_ONLY: IP kit delivery"}}
+    hm = "phase3/stage4/hardmacro/"
+    inputs = {
+        "def": write("phase3/stage3/pnr/routed.def",
+                     f"VERSION 5.8 ;\nDESIGN {name} ;\nEND DESIGN\n"),
+        "gds": write(f"phase3/stage4/gds/{name}.gds", (root / f"{hm}{name}.gds").read_bytes()),
+        "route": write(td.DECLARATION_REL, declaration),
+        "technology": write("reports/phase3/technology_units.json", {"pdk": PDK}),
+        "timing_netlist": write("phase3/stage3/pnr/timing.v", (root / f"{hm}{name}.v").read_bytes()),
+        "timing_sdc": write("phase3/stage3/pnr/timing.sdc", "create_clock -period 20 [get_ports clk]\n"),
+        "timing_spef": write("phase3/stage3/extracted/timing.spef", '*SPEF "IEEE 1481-1998"\n'),
+        "timing_sta_report": write("reports/phase3/kit_sta.rpt", "SOFTWARE_FIXTURE_ONLY timing basis\n"),
+        "timing_recipe": write("reports/phase3/kit_timing.tcl", "# SOFTWARE_FIXTURE_ONLY\n"),
+        "pdk_timing_liberty": write("input/pdk/fixture.lib", (root / f"{hm}{name}.lib").read_bytes()),
+        "pdk_magicrc": write("input/pdk/fixture.magicrc", "# SOFTWARE_FIXTURE_ONLY\n"),
+        "lef_recipe": write(f"{hm}lef.tcl", "# SOFTWARE_FIXTURE_ONLY LEF recipe\n"),
+    }
+    outputs = {"lef": f"{hm}{name}.lef", "liberty": f"{hm}{name}.lib",
+               "gds": f"{hm}{name}.gds", "verilog": f"{hm}{name}.v",
+               "log": write(f"{hm}lef.log", "SOFTWARE_FIXTURE_ONLY\nDIGITAL_LEF_WRITE_DONE\n"),
+               "timing_log": write(f"{hm}timing.log", "SOFTWARE_FIXTURE_ONLY\nTIMING_MODEL_DONE\n")}
+    write(f"{hm}current_kit.json", {
+        "schema": "vibeic.default_physical_current/1", "step": "37.5ip",
+        "stage": "stage4", "design": name, "pdk": PDK, "tool": "magic+opensta",
+        "inputs": {key: record(path) for key, path in inputs.items()},
+        "outputs": {key: record(path) for key, path in outputs.items()},
+        "execution": {"rc": 0, "argv": ["magic", "SOFTWARE_FIXTURE_ONLY"],
+                      "timing": {"rc": 0, "argv": ["sta", "SOFTWARE_FIXTURE_ONLY"]}},
+    })
 
 
 def docs_dir(project: Path, release: str = SUBJECT) -> Path:

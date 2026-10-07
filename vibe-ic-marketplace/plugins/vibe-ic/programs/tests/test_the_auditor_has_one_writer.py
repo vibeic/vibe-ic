@@ -50,13 +50,9 @@ OPEN_WRITE_MODES = frozenset({"w", "a", "x", "wb", "ab", "xb", "w+", "a+"})
 
 #: THE ONLY PERMITTED BYPASSES, each with the reason it is not a project write.
 #: `(module, enclosing function, call)` -> why.
-ALLOWED_BYPASSES = {
-    ("flow_compliance_check.py", "_receipt_off_a_produced_document", "copy2"):
-        "the destination is a `tempfile.TemporaryDirectory`, OUTSIDE the project tree, so the "
-        "digest never scans it and there is no in-progress name for it to recognise; this is "
-        "R-0915-126's redirect getting the gate's receipt out of the run's way, not the auditor "
-        "publishing a document",
-}
+# Receipt redirects now live in the project's durable runtime state. They use
+# the same atomic writer as every other auditor publication; no bypass remains.
+ALLOWED_BYPASSES = {}
 
 
 def _is_os_replace(node: ast.Call) -> bool:
@@ -145,6 +141,35 @@ def test_every_allowed_bypass_still_exists_and_is_still_outside_the_tree():
         assert "TemporaryDirectory" in src[i:i + 4000], (
             f"{fn}() no longer uses a TemporaryDirectory, so its write may now land in the "
             f"project; re-measure before keeping the exemption")
+
+
+def test_durable_receipt_is_published_by_the_one_writer(tmp_path, monkeypatch):
+    """The real redirect preserves producer bytes and the input fingerprint."""
+    import flow_compliance_check as FCC
+    project = tmp_path / "p"
+    source = project / "reports/phase3/die_finishing.json"
+    source.parent.mkdir(parents=True)
+    source.write_text('{"run": {"producer": "die_finishing_gen"}}\n')
+    original = source.read_bytes()
+    before = D.build_digest(D.scan_inputs(project), [])["sha256"]
+    calls = []
+    real = AW.copy_aside
+    def copy(source, destination):
+        calls.append((source, Path(destination)))
+        return real(source, destination)
+    monkeypatch.setattr(AW, "copy_aside", copy)
+    argv = ["python3", "die_finishing_check.py", ".", "--json", str(source)]
+    moved, note, keep = FCC._receipt_off_a_produced_document(argv, project)
+    try:
+        destination = Path(moved[-1])
+        assert calls == [(source, destination)]
+        assert destination.is_relative_to(project / ".vibeic-state/audit_receipts")
+        assert destination.read_bytes() == source.read_bytes() == original
+        assert note and keep is not None
+        assert not list(destination.parent.glob("*" + PL.AUDITOR_TMP_SUFFIX))
+        assert D.build_digest(D.scan_inputs(project), [])["sha256"] == before
+    finally:
+        FCC._RECEIPT_REDIRECTS.pop(FCC._resolved_key(source), None)
 
 
 def test_the_helper_itself_is_the_one_place_that_mints_the_shape():

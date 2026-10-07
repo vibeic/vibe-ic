@@ -3111,18 +3111,15 @@ def test_d6_l6_separates_legitimate_skips_from_illegitimate_ones():
     assert probe_for("P0").scenarios["SEEDED"].declared_by.startswith(
         "ASKED_BEFORE_PRODUCER:")
     assert illegit == [], illegit
-    # R-0915-85 — `INCOMPLETE` was the word that kept 12 and 30 out of this
-    # leg, and it is `NOT_MEASURED(partial_population)` now: the step RAN and
-    # examined PART of its population. Pinned as the PAIR, because the verdict
-    # alone no longer carries the distinction — `NOT_MEASURED` also spells the
-    # two reasons that ARE skips (`is_skip_tier`), and pinning the word alone
-    # would let a step that examined nothing drift in here wearing it.
+    # Step 12 retains its partial-population disclosure. Step 30 now requires
+    # a current native execution: placeholder outputs without its bound receipt
+    # are an earned FAIL, never a partial-population skip. Pin both contracts.
     assert {
         sid: (probe_for(sid).scenarios["SEEDED"].status,
               probe_for(sid).scenarios["SEEDED"].reason_class)
         for sid in ("12", "30")
     } == {"12": ("NOT_MEASURED", "partial_population"),
-          "30": ("NOT_MEASURED", "partial_population")}
+              "30": ("FAIL", "")}
 
 
 def test_d6_l6_deferred_register_only_shrinks():

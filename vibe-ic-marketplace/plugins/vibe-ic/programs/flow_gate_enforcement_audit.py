@@ -856,6 +856,7 @@ class _RunnerModule:
         #: import run as r` — name -> the entry point it is.
         self.sp_funcs: Dict[str, str] = {}
         self._assign_index: Dict[Tuple[int, str], List[ast.Assign]] = {}
+        self.if_branches: List[tuple] = []
         self._collect_subprocess_names()
         self._build()
         #: name -> carrier, for module functions that hand a spawn's result
@@ -909,6 +910,21 @@ class _RunnerModule:
                 self.module_funcs.setdefault(f.name, f)
         callee_ids: Set[int] = set()
         for node in ast.walk(self.tree):
+            if isinstance(node, ast.If) and node.body and node.orelse:
+                # No loop-carried proof: opposite arms can run on later loop
+                # iterations. Only mutually exclusive arms in this invocation
+                # may preserve a status binding past a textual sibling store.
+                cur = self.parent.get(id(node))
+                in_loop = False
+                while cur is not None and self._scope(cur) == self._scope(node):
+                    if isinstance(cur, (ast.For, ast.AsyncFor, ast.While)):
+                        in_loop = True
+                        break
+                    cur = self.parent.get(id(cur))
+                if not in_loop:
+                    self.if_branches.append((self._scope(node),
+                        (node.body[0].lineno, node.body[-1].end_lineno),
+                        (node.orelse[0].lineno, node.orelse[-1].end_lineno)))
             if isinstance(node, (ast.If, ast.While, ast.IfExp, ast.Assert)):
                 # An `if` whose arms provably do nothing is not a decision —
                 # see `_is_inert_branch`. Marking its test would let dead code
@@ -1407,8 +1423,31 @@ class _RunnerModule:
     def _in_ranges(line: int, ranges: Sequence[Tuple[int, int]]) -> bool:
         return any(lo <= line <= hi for lo, hi in ranges)
 
+    def _exclusive_ranges(self, scope: int, line: int,
+                          name: str) -> List[Tuple[int, int]]:
+        """Recognise a branch merge only when its first reader decides.
+
+        An opaque intervening use leaves the binding UNPROVEN. In particular
+        recording a status through an unknown report expression must not earn
+        blocking credit merely because a later sibling tests the same name.
+        """
+        out = []
+        for owner, body, otherwise in self.if_branches:
+            if owner == scope:
+                readers = [n for n in self.loads.get((scope, name), ())
+                           if n.lineno > max(body[1], otherwise[1])]
+                first = min(readers, key=lambda n: n.lineno) if readers else None
+                if first is None or id(first) not in self.test_ids:
+                    continue
+                if self._in_ranges(line, [body]):
+                    out.append(otherwise)
+                elif self._in_ranges(line, [otherwise]):
+                    out.append(body)
+        return out
+
     def _next_store(self, scope: int, name: str, after: int,
                     skip: Sequence[Tuple[int, int]]) -> int:
+        skip = [*skip, *self._exclusive_ranges(scope, after, name)]
         later = [ln for ln in self.stores.get((scope, name), ())
                  if ln > after and not self._in_ranges(ln, skip)]
         return min(later) if later else sys.maxsize
@@ -1423,8 +1462,9 @@ class _RunnerModule:
         proximity-as-evidence mistake #884 is about, one level down.
         """
         stop = self._next_store(scope, name, after, skip)
+        skip = [*skip, *self._exclusive_ranges(scope, after, name)]
         return [n for n in self.loads.get((scope, name), ())
-                if after < n.lineno < stop]
+                if after < n.lineno < stop and not self._in_ranges(n.lineno, skip)]
 
     def _attr_loads(self, scope: int, name: str, after: int,
                     skip: Sequence[Tuple[int, int]] = ()) -> List[ast.AST]:
@@ -1532,7 +1572,8 @@ class _RunnerModule:
             if (s == _MODULE_SCOPE and scope != _MODULE_SCOPE
                     and (scope, n) in self.stores):
                 continue
-            if b <= line < self._next_store(s, n, b, ()):
+            if (b <= line < self._next_store(s, n, b, ())
+                    and not self._in_ranges(line, self._exclusive_ranges(s, b, n))):
                 return True
         return False
 
@@ -2086,6 +2127,12 @@ def audit(flow: Path, programs: Path) -> dict:
         if stem in in_flow or f"{stem}.py" in in_flow:
             continue
         if stem in dispatched:
+            continue
+        # A proven inline blocker is reachable even when the flow consumes it
+        # through a differently named gate. A mere runner mention or discarded
+        # status cannot manufacture this exemption.
+        if (_named_in(src_names, src, stem, _invoked)
+                and gate_wiring(mods, stem) == BLOCKING_WIRING):
             continue
         if _named_in(ci_names, src_ci, stem, _invoked_by_suite):
             continue

@@ -3429,12 +3429,52 @@ def _analog_not_applicable_for_class(
         f"Liberty and ships no transistor-level SPICE deck to correlate")
 
 
+def _step30_not_reached_reason(project: Path) -> Optional[str]:
+    """Only an upstream-only tree may self-skip; row evidence is never skipped.
+
+    In particular a stale/invalid receipt, a named producer refusal, or native
+    execution products still go through the strict current consumer. Removing
+    their SPEF or STA must not hide a reached row behind NOT_REACHED.
+    """
+    import librelane_postroute as lp
+    row_paths = (
+        "reports/phase3/spice_path_tool.json",
+        "reports/phase3/spice_correlation.json",
+        "reports/phase3/spice_correlation.current.json",
+        "reports/phase3/spice_path_correlation.json",
+        "phase3/stage3/spice", "phase3/tool_arms/30", "sim_spice",
+        lp.STEP23_RECORD,
+    )
+    if any((project / rel).exists() or (project / rel).is_symlink()
+           for rel in row_paths):
+        return None
+    if any((project / "phase3/librelane").glob("**/*stapostpnr*/state_out.json")):
+        return None
+    spefs = list(_pl.extracted_dir(project).glob("*.spef"))
+    sta = list(_pl.sta_dir(project).glob("*.rpt"))
+    sta += list((project / "phase3/stage3/pnr").glob("sta.rpt"))
+    # A STA report means the downstream prerequisite was already reached; a
+    # subsequently removed SPEF is missing current input, not a fresh skip.
+    if not spefs and not sta:
+        return "no_spef"
+    if spefs and not sta:
+        return "no_sta"
+    return None
+
+
 def run_audit(project: Path, run_spice: bool = True,
               container: str = _DEFAULT_CONTAINER) -> AuditResult:
     """BLOCKING Step-30 consumption of current executed path correlation."""
     import path_spice_tool as pst
     result = AuditResult()
     try:
+        reason = _step30_not_reached_reason(project)
+        if reason:
+            result.summary = {"skipped": True, "pass": True,
+                              "measurement": "NOT_MEASURED",
+                              "current_binding": "NOT_REACHED",
+                              "reason": reason, "reason_class": "NOT_REACHED"}
+            return result
         doc = pst.validate_current_step30(project)
         verdict = doc.get('verdict')
         result.passed = verdict == 'PASS'

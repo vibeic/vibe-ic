@@ -4481,7 +4481,7 @@ def _receipt_off_a_produced_document(argv: List[str], project: Path
         # its pre-seeded input is unaffected by finding one there.
         seeded: Optional[str] = None
         try:
-            shutil.copy2(abs_target, dest)
+            _aw.copy_aside(abs_target, Path(dest))
             seeded = _file_digest(Path(dest))
         except OSError:                                    # pragma: no cover
             # Unreadable/uncopyable is the pre-seed state, which is exactly what

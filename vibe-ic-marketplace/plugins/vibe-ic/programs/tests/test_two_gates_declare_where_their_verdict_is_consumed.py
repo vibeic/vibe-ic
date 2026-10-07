@@ -194,6 +194,43 @@ def test_the_audit_exits_zero_and_names_neither_gate(tmp_path):
         assert gate not in orphaned
 
 
+@pytest.mark.parametrize("body, expected", [
+    ("if choose:\n    rc = spawn()\nelse:\n    rc = 0\nif rc != 0:\n    return 'FAIL'", "INLINE_BLOCKING"),
+    ("if choose:\n    rc = 0\nelse:\n    rc = spawn()\nif rc != 0:\n    return 'FAIL'", "INLINE_BLOCKING"),
+    ("if choose:\n    rc = spawn()\nelse:\n    rc = 0\nrc = 0\nif rc != 0:\n    return 'FAIL'", "INLINE_UNPROVEN"),
+    ("if choose:\n    rc = spawn()\n    rc = 0\nelse:\n    rc = 0\nif rc != 0:\n    return 'FAIL'", "INLINE_UNPROVEN"),
+    ("if choose:\n    rc = spawn()\nelse:\n    rc = 0\n    if rc != 0:\n        return 'FAIL'", "INLINE_UNPROVEN"),
+    ("for choose in choices:\n    if choose:\n        rc = spawn()\n    else:\n        rc = 0\nif rc != 0:\n    return 'FAIL'", "INLINE_UNPROVEN"),
+    ("if choose:\n    rc = spawn()\nelse:\n    rc = 0\nreport(rc)\nif rc != 0:\n    return 'FAIL'", "INLINE_UNPROVEN"),
+], ids=["spawn-body", "spawn-else", "overwritten-after", "overwritten-before",
+        "sibling-read", "loop-no-proof", "opaque-before-decision"])
+def test_mutually_exclusive_runner_status_bindings(body, expected):
+    """Only the spawned arm's value can prove consumption after a merge.
+
+    Across a helper return, discarded/overwritten values remain UNPROVEN;
+    the audit deliberately does not infer universal caller knowledge.
+    """
+    source = ("import subprocess\n"
+              "def spawn():\n"
+              "    return subprocess.run(['python3', 'branch_check.py']).returncode\n"
+              "def step(choose=False, choices=()):\n"
+              + textwrap.indent(body, "    ") + "\n")
+    assert _audit_mod()._RunnerModule(source).gate_wiring("branch_check") == expected
+
+
+@pytest.mark.parametrize("consumed", [True, False])
+def test_only_a_proven_runner_blocker_can_clear_a_delegated_producer_orphan(tmp_path, consumed):
+    flow, progs = _synthetic(tmp_path / "t", {"flow_check": _DECLARING})
+    (progs / "producer_check.py").write_text(_DECLARING_BLOCKING)
+    call = "rc = subprocess.call(['python3', 'producer_check.py'])\n"
+    tail = "if rc != 0:\n    return 'FAIL'\n" if consumed else "return 'PASS'\n"
+    (progs / "vibe_ic_one_shot_runner.py").write_text(
+        "import subprocess\ndef run():\n" + textwrap.indent(call + tail, "    "))
+    rep = _audit_mod().audit(flow, progs)
+    orphans = {row["gate"] for row in rep["orphaned"]}
+    assert ("producer_check" not in orphans) == consumed
+
+
 def test_batch73_inline_blockers_declare_the_wiring_they_already_have():
     """Declaration-vs-wiring control for the three Batch73 promotions.
 

@@ -1,137 +1,164 @@
-"""R-0915-43 — step 30's declared correlation record exists, ran or refused.
+"""R-0915-43: the current Step-30 producer publishes its declared record.
 
-THE GAP: step 30 declares two outputs —
-
-    phase3/stage3/spice/*.sp OR *.spice OR sim_spice/*.sp
-    phase3/stage3/spice/correlation.json OR reports/phase3/spice_correlation.json
-
-and a run whose driver RAN produced the first and not the second: the deck and
-the log were on disk, the correlation had been computed, and the record the
-flow asks for was absent. The numbers existed and nothing published them.
-
-The cause is a path that belongs to no list. `run_installed_pdk_path_correlation`
-wrote `reports/phase3/spice_path_correlation.json` — not one of the two declared
-outputs, and not one of the three this module's OWN loader
-(`_check_spice_correlation_json`) reads. Four names, and the one written was in
-neither list.
-
-The other direction matters just as much. MEASURED on sha256 run11: the driver
-reached a real conclusion — "Liberty grid tolerance could not be derived", an
-implemented-capability failure rather than a capability gap — and the declared
-record did not exist. A refusal that is only written under a name nobody
-declares is silence to every reader of the declared one.
+The producer now delegates to path_spice_tool.run_current_step30. Measure the
+same nine obligations through the actual producer/consumer boundary, rather
+than pinning the old inline writer's spelling. Native processes are replaced
+by the existing SOURCE_FIXTURE_ONLY fixture; this is software-contract proof,
+never a measured SPICE or whole-IC qualification.
 """
 import json
-import sys
-from pathlib import Path
 
-PROG = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(PROG))
-import spice_correlation_check as SCC  # noqa: E402
-import _path_layout as _pl  # noqa: E402
-
-
-# ------------------------------------------------- the record, when it RAN
-
-def test_the_driver_writes_the_path_the_step_declares(tmp_path):
-    """One correlation, written to the declared name as well as its own."""
-    src = (PROG / "spice_correlation_check.py").read_text()
-    # IN THE DRIVER THE RUNNER ACTUALLY CALLS. This module has four
-    # correlation drivers and the runner calls exactly one of them for an
-    # installed PDK; a write placed in `run_commercial_pdk_path_correlation`
-    # would be a fix that never executes on the common path, which is what the
-    # first version of this change was until this assertion named the function.
-    fn = src.index("def run_installed_pdk_path_correlation")
-    nxt = src.index("\ndef ", fn + 10)
-    window = src[fn:nxt]
-    assert 'declared = _pl.spice_dir(project) / "correlation.json"' in window
-    assert "declared.write_text(json.dumps(report" in window
-    assert "_scc.run_installed_pdk_path_correlation(" in \
-        (PROG / "phase3_one_shot_runner.py").read_text()
+import pytest
+import _path_layout as _pl
+import spice_correlation_check as SCC
+import phase3_one_shot_runner as R
+import test_default_si_spice_power as fixture
+import test_step30_r4_current_failures as r4
 
 
-def test_it_is_the_same_dict_and_never_a_second_summary(tmp_path):
-    """Two documents describing one correlation are two things that can
-    disagree, and the one a reader reaches first would decide the step."""
-    src = (PROG / "spice_correlation_check.py").read_text()
-    fn = src.index("def run_installed_pdk_path_correlation")
-    nxt = src.index("\ndef ", fn + 10)
-    window = src[fn:nxt]
-    # both writes serialise the SAME object
-    assert window.count("json.dumps(report, indent=2, ensure_ascii=False)") == 2
+DECLARED = ("phase3/stage3/spice/correlation.json",
+            "reports/phase3/spice_correlation.json")
+
+
+def _read(project, relative):
+    return json.loads((project / relative).read_text())
+
+
+def _refusing_project(tmp_path, monkeypatch):
+    project, folder, lib = fixture.project(tmp_path)
+    def refuse(*args, **kwargs):
+        raise fixture.LC.Refusal("LL_IMAGE_ABSENT", "SOURCE_FIXTURE_ONLY absent image")
+    monkeypatch.setattr(fixture.LC, "resolve_image", refuse)
+    return project, lib
+
+
+def test_the_driver_writes_the_path_the_step_declares(tmp_path, monkeypatch):
+    project, folder, lib = fixture.project(tmp_path)
+    result = fixture.spice_produce(project, folder, lib, monkeypatch)
+    assert result["status"] == "RAN", result
+    for path in DECLARED:
+        assert _read(project, path) == result["report"]
+    assert SCC.main([str(project), "--json", str(project / "gate.json")]) == 0
+    # The ordinary runner actually consumes the same boundary and names the
+    # declared outputs. A helper-only positive would not prove this obligation.
+    written, notes = [], []
+    assert R._step30_tool_arm(project, fixture.pdk(lib), written, notes)
+    assert all(str(project / path) in written for path in DECLARED)
+
+
+def test_it_is_the_same_dict_and_never_a_second_summary(tmp_path, monkeypatch):
+    project, folder, lib = fixture.project(tmp_path)
+    result = fixture.spice_produce(project, folder, lib, monkeypatch)
+    assert result["status"] == "RAN", result
+    assert (project / DECLARED[0]).read_bytes() == (project / DECLARED[1]).read_bytes()
+    # Disagreement in the projection must invalidate the strict consumer.
+    fixture.put(project / DECLARED[0], {**result["report"], "verdict": "FAIL"})
+    assert SCC.main([str(project), "--json", str(project / "gate.json")]) == 1
+    assert _read(project, "gate.json")["summary"]["current_binding"] == "REFUSED"
 
 
 def test_the_declared_path_is_the_first_one_this_modules_loader_reads(tmp_path):
-    """The record must land where the consumer already looks, not beside it."""
-    proj = tmp_path / "p"
-    (proj / "phase3/stage3/spice").mkdir(parents=True)
-    declared = _pl.spice_dir(proj) / "correlation.json"
+    project = tmp_path / "p"
+    declared = _pl.spice_dir(project) / "correlation.json"
+    declared.parent.mkdir(parents=True)
     declared.write_text(json.dumps({"correlation": {"verdict": "PASS"}}))
-    got = SCC._check_spice_correlation_json(proj)
+    fixture.put(project / DECLARED[1], {"correlation": {"verdict": "FAIL"}})
+    got = SCC._check_spice_correlation_json(project)
     assert got is not None and got["correlation"]["verdict"] == "PASS"
 
 
-def test_the_record_carries_what_was_correlated_the_numbers_and_a_verdict():
-    """The ruling's three requirements, pinned against the shape the driver
-    actually builds rather than against prose about it."""
-    src = (PROG / "spice_correlation_check.py").read_text()
-    # Anchor INSIDE run_installed_pdk_path_correlation. `"correlation": {`
-    # occurs three times in this module (single-cell, full-path, and the
-    # per-arc report); indexing the first one reads a different block and the
-    # assertion would then be about code this ruling never touched.
-    fn = src.index("def run_installed_pdk_path_correlation")
-    i = src.index('"correlation": {', fn)
-    # bounded by the block's OWN end, not a guessed byte count: the verdict is
-    # the last key in it and a short window silently drops the field this test
-    # exists to require.
-    window = src[i:src.index('"artifacts": {"deck"', i)]
-    for field in ("spice_path_delay_ns", "liberty_spef_cone_delay_ns",
-                  "pct_error", '"verdict": verdict'):
-        assert field in window, field
+def test_the_record_carries_what_was_correlated_the_numbers_and_a_verdict(tmp_path, monkeypatch):
+    project, folder, lib = fixture.project(tmp_path)
+    r4.correlation_tool(project, folder, lib, monkeypatch)
+    result = SCC.run_installed_pdk_path_correlation(project, str(lib))
+    assert result["status"] == "RAN", result
+    report = _read(project, DECLARED[0])
+    row = report["detail"]["ngspice"]["base"]["paths"][0]
+    assert (row["startpoint"], row["endpoint"]) == ("launch", "capture")
+    assert row["sta_ns"] == 1.0 and row["spice_ns"] == 1.15
+    assert row["error_pct"] == pytest.approx(15.0)
+    assert row["tolerance_pct"] == 10.0 and row["verdict"] == "MISMATCH"
+    assert report["verdict"] == "FAIL"
+    assert report["current_subject"]["stage"] == "post_route_extracted"
+    gate = SCC.run_audit(project)
+    assert not gate.passed and gate.summary["measurement"] == "MEASURED"
+    assert gate.summary["verdict"] == "FAIL"
 
 
-# ------------------------------------------- the record, when it REFUSED
-
-def test_the_runner_writes_a_named_refusal_at_the_declared_path():
-    src = (PROG / "phase3_one_shot_runner.py").read_text()
-    i = src.index('_spice_declared = spice_out / "correlation.json"')
-    window = src[i:i + 400]
-    assert "_spice_declared.write_text(json.dumps(_payload" in window
-    assert "written.append(str(_spice_declared))" in window
-
-
-def test_the_refusal_and_the_disclosure_are_the_same_payload():
-    """One refusal, two names. If they were built separately they could give
-    two different reasons for one absence."""
-    src = (PROG / "phase3_one_shot_runner.py").read_text()
-    i = src.index("spice_skip.write_text(json.dumps(_payload")
-    # to the end of the declared-path write, not a fixed byte count: the
-    # comment between the two writes is longer than any window worth guessing.
-    j = src.index("written.append(str(_spice_declared))", i)
-    window = src[i:j]
-    assert window.count("json.dumps(_payload, indent=2)") == 2
+def test_the_runner_writes_a_named_refusal_at_the_declared_path(tmp_path, monkeypatch):
+    project, lib = _refusing_project(tmp_path, monkeypatch)
+    written, notes = [], []
+    assert not R._step30_tool_arm(project, fixture.pdk(lib), written, notes)
+    assert all(str(project / path) in written for path in DECLARED)
+    assert str(project / "reports/phase2/gates/spice_correlation.json") in written
+    gate = _read(project, "reports/phase2/gates/spice_correlation.json")
+    assert gate["passed"] is False
+    assert gate["summary"]["current_binding"] == "REFUSED"
 
 
-def test_the_refusal_carries_a_verdict_and_a_reason():
-    """A refusal with no reason is silence with a filename."""
-    src = (PROG / "phase3_one_shot_runner.py").read_text()
-    i = src.index("_spice_cap_flag, _spice_reason = \\")
-    window = src[i:i + 700]
-    assert '"verdict": "SKIPPED-CONDITION" if _tool_absent else "ERROR"' in window
-    assert '"reason": _spice_reason' in window
+def test_the_refusal_and_the_disclosure_are_the_same_payload(tmp_path, monkeypatch):
+    project, lib = _refusing_project(tmp_path, monkeypatch)
+    result = SCC.run_installed_pdk_path_correlation(project, str(lib))
+    assert result["status"] == "ERROR", result
+    assert (project / DECLARED[0]).read_bytes() == (project / DECLARED[1]).read_bytes()
+    assert _read(project, DECLARED[0])["reason"] == result["reason"]
 
 
-def test_a_record_the_run_already_produced_is_left_alone():
-    src = (PROG / "phase3_one_shot_runner.py").read_text()
-    i = src.index('_spice_declared = spice_out / "correlation.json"')
-    assert "if not _spice_declared.is_file():" in src[i:i + 200]
+def test_the_refusal_carries_a_verdict_and_a_reason(tmp_path, monkeypatch):
+    project, lib = _refusing_project(tmp_path, monkeypatch)
+    result = SCC.run_installed_pdk_path_correlation(project, str(lib))
+    report = _read(project, DECLARED[0])
+    assert report["verdict"] == "NOT_MEASURED"
+    assert report["reason"] == result["reason"] and "LL_IMAGE_ABSENT" in report["reason"]
+    assert report["correlation_ran"] is False
+    assert report["reason_class"] == "EXECUTION_ERROR"
+    assert SCC.main([str(project), "--json", str(project / "gate.json")]) == 1
 
 
-def test_the_declared_refusal_is_only_written_when_the_correlation_did_not_run():
-    """The refusal branch sits under the `not _spice_have` guard, so a run that
-    DID correlate never has a refusal written over its numbers."""
-    src = (PROG / "phase3_one_shot_runner.py").read_text()
-    guard = src.index("if not _spice_have and not spice_skip.is_file():")
-    decl = src.index('_spice_declared = spice_out / "correlation.json"')
-    nxt = src.index("# --- Step 32b", guard)
-    assert guard < decl < nxt
+def test_a_record_the_run_already_produced_is_left_alone(tmp_path, monkeypatch):
+    project, folder, lib = fixture.project(tmp_path)
+    result = fixture.spice_produce(project, folder, lib, monkeypatch, verdict="FAIL")
+    assert result["status"] == "RAN"
+    before = {path: (project / path).read_bytes() for path in DECLARED}
+    SCC._persist_declared_refusal(project, {"status": "ERROR", "reason": "companion failed"})
+    assert {path: (project / path).read_bytes() for path in DECLARED} == before
+    gate = SCC.run_audit(project)
+    assert not gate.passed and gate.summary["verdict"] == "FAIL"
+    assert gate.summary["measurement"] == "MEASURED"
+
+
+def test_the_declared_refusal_is_only_written_when_the_correlation_did_not_run(tmp_path, monkeypatch):
+    project, folder, lib = fixture.project(tmp_path)
+    assert fixture.spice_produce(project, folder, lib, monkeypatch)["status"] == "RAN"
+    def forbidden(*args, **kwargs):
+        pytest.fail("the successful current producer must not publish a refusal")
+    monkeypatch.setattr(SCC, "_persist_declared_refusal", forbidden)
+    written, notes = [], []
+    assert R._step30_tool_arm(project, fixture.pdk(lib), written, notes)
+    for path in DECLARED:
+        assert _read(project, path)["verdict"] == "PASS"
+    assert not (project / "phase3/stage3/spice/spice_correlation_not_run.json").exists()
+
+
+@pytest.mark.parametrize("reached", ["empty", "spef_only", "sta_only", "refusal", "receipt", "products"])
+def test_upstream_skip_never_hides_a_reached_step30(tmp_path, reached):
+    project = tmp_path / "p"
+    project.mkdir()
+    if reached == "spef_only":
+        fixture.write(project / "phase3/stage3/extracted/p.spef", '*SPEF "IEEE 1481-1998"\n')
+    elif reached == "sta_only":
+        fixture.write(project / "phase3/stage3/sta/post_route.rpt", "reached STA\n")
+    elif reached in ("refusal", "receipt"):
+        relative = DECLARED[0] if reached == "refusal" else "reports/phase3/spice_correlation.current.json"
+        fixture.put(project / relative, {"verdict": "NOT_MEASURED"})
+    elif reached == "products":
+        fixture.write(project / "phase3/tool_arms/30/ngspice/base/path.log", "failed native execution\n")
+    result = SCC.run_audit(project)
+    if reached in ("empty", "spef_only"):
+        assert result.passed and result.summary["skipped"] is True
+        assert result.summary["current_binding"] == "NOT_REACHED"
+        assert SCC.main([str(project), "--json", str(project / "gate.json")]) == 2
+    else:
+        assert not result.passed and result.summary["skipped"] is False
+        assert result.summary["current_binding"] == "REFUSED"
+        assert SCC.main([str(project), "--json", str(project / "gate.json")]) == 1
