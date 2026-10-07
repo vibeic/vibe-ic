@@ -109,17 +109,18 @@ def test_actual_dispatcher_alias_cannot_create_another_eligible_arm(tmp_path, mo
 
 def test_unregistered_executed_helper_has_terminal_refusal(tmp_path):
     alias, helper = wrapper(tmp_path, arm(), 'nested_static', bind_helper=False)
-    ctl = controller(alias, fixture_root=tmp_path); root = tmp_path / 'run'; ctx = backend.context16(tmp_path)
-    try:
-        result = ctl.run(ctx, root, 'ultra-mode')
-        status = result['candidate_statuses'].get(alias.arm_id)
-    except em.Refusal as exc:
-        status = 'REFUSED'; reason = exc.code
-    record(tmp_path, status=status, helper=str(helper), helper_registered=str(helper) in alias.source_files)
-    assert status == 'REFUSED', status
-    refusal = json.loads((root / 'refusal.json').read_text())
-    assert refusal['reason'] == reason == 'PROVIDER_DEPENDENCY_UNBOUND'
-    assert not (root / alias.arm_id).exists()
+    registry = em.Registry()
+    # Current enrollment detects the missing local dependency before planning
+    # or execution. Assert that earlier terminal refusal instead of expecting
+    # an issued run receipt for a provider that was never admitted.
+    with pytest.raises(em.Refusal) as refusal:
+        register_source_fixture(registry, alias, fixture_root=tmp_path)
+    assert refusal.value.code == 'ADAPTER_SOURCE_CLOSURE_INCOMPLETE'
+    assert str(helper.resolve()) in str(refusal.value)
+    record(tmp_path, status='REFUSED', reason=refusal.value.code, helper=str(helper),
+           helper_registered=str(helper) in alias.source_files)
+    assert not registry.adapters('16')
+    assert not (tmp_path / 'run').exists()
 
 
 def test_bound_executed_helper_drift_refuses_adoption(tmp_path):

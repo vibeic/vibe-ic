@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
+import shutil
+import subprocess
 import sys
 from dataclasses import replace
 
@@ -12,6 +15,10 @@ if str(PROGRAMS) not in sys.path:
     sys.path.insert(0, str(PROGRAMS))
 
 import execution_modes as em
+from programs.tests._execution_source_fixture import issued_context
+from programs.tests.test_execution_receipt_chain import isolated_transport
+from programs.tests.test_execution_backend_f3 import context16
+from programs.tests.test_execution_backend_f3 import _required_gates
 from execution_adapters_release import (
     ALL_IDS,
     EXTERNAL_IDS,
@@ -90,9 +97,10 @@ def test_375ic_and_step39_keep_canonical_condition_semantics():
 def test_release_component_runs_through_public_controller_and_preserves_nm(tmp_path):
     source = tmp_path / "seed.txt"
     source.write_text("source-only\n")
-    context = em.Context("36", BASE, {"project/input/seed.txt": source},
+    context = issued_context(em.Context("36", BASE, {"project/input/seed.txt": source},
                          {"metric": "canonical_evidence", "direction": "max"},
-                         tuple(_spec("36")["consumer_gates"]), "librelane")
+                         tuple(_required_gates("36")), "librelane"),
+                             tmp_path, mode="default")
     registry = register_release_adapters(em.Registry(), source_sha=BASE, available=True)
     controller = em.Controller(registry, em.Budget(cpus=1, ram_mb=512, workers=1))
     plan = controller.plan(context, "default-mode")
@@ -132,25 +140,12 @@ def test_375ip_worker_calls_declared_hardmacro_producer_and_stays_unmeasured(tmp
 
 
 def test_current_source_bound_fixture_reaches_eligible_controller_arm(tmp_path):
-    # Step 16 is a source-owned software producer/gate pair.  This explicit
-    # fixture contains only a DEF and a declared SDC clock; it is not a
-    # historical tapeout bundle and carries its exact input binding through
-    # the public Controller.
-    floorplan = tmp_path / "floorplan.def"
-    floorplan.write_text("VERSION 5.8 ;\n")
-    sdc = tmp_path / "clock.sdc"
-    sdc.write_text("create_clock -name clk -period 10 [get_ports clk]\n")
-    row = _spec("16")
-    context = em.Context(
-        "16", BASE,
-        {
-            "project/phase3/stage3/pnr/floorplan.def": floorplan,
-            "project/phase2/stage2/constraints/clock.sdc": sdc,
-        },
-        {"metric": "canonical_evidence", "direction": "max"},
-        tuple(row["consumer_gates"]), "librelane")
+    # Eligibility requires the genuine native clock-plan producer, a valid
+    # DEF, a declared PDK and canonical controller issuance. This remains a
+    # bounded Step-16 fixture, not a whole-IC qualification.
+    context = context16(tmp_path, native_clock=True, mode="default")
     registry = register_release_adapters(em.Registry(), source_sha=BASE, available=True)
-    controller = em.Controller(registry, em.Budget(cpus=1, ram_mb=512, workers=1))
+    controller = em.Controller(registry, em.Budget(cpus=1, ram_mb=4096, workers=1))
     plan = controller.plan(context, "default-mode")
     assert plan["arms"] == ["release_16"]
     root = tmp_path / "eligible-run"
@@ -192,16 +187,7 @@ def test_release_reverse_mutations_refuse_missing_symbol_and_output(tmp_path):
 
 
 def test_public_controller_rejects_removed_release_producer_call(tmp_path):
-    source = tmp_path / "floorplan.def"
-    source.write_text("VERSION 5.8 ;\n")
-    sdc = tmp_path / "clock.sdc"
-    sdc.write_text("create_clock -name clk -period 10 [get_ports clk]\n")
-    row = _spec("16")
-    context = em.Context("16", BASE,
-                         {"project/phase3/stage3/pnr/floorplan.def": source,
-                          "project/phase2/stage2/constraints/clock.sdc": sdc},
-                         {"metric": "canonical_evidence", "direction": "max"},
-                         tuple(row["consumer_gates"]), "librelane")
+    context = context16(tmp_path)
     original = register_release_adapters(source_sha=BASE, available=True).adapters("16")[0]
     worker = PROGRAMS / "execution_release_worker.py"
     mutant = tmp_path / "execution_release_worker.py"
@@ -211,18 +197,41 @@ def test_public_controller_rejects_removed_release_producer_call(tmp_path):
     mutant.write_text(changed.replace(
         "from __future__ import annotations",
         "from __future__ import annotations\nimport sys\nsys.path.insert(0, " + repr(str(PROGRAMS)) + ")", 1))
-    mutant_sources = {k: v for k, v in original.source_files.items()
-                      if k != str(worker.resolve())}
+    # Keep the canonical import closure; the added untracked worker still
+    # cannot acquire production source authority through Registry.register.
+    mutant_sources = dict(original.source_files)
     mutant_sources[str(mutant.resolve())] = em.digest(mutant)
     component = replace(original.components[0], argv=tuple(
         str(mutant.resolve()) if x == str(worker.resolve()) else x
         for x in original.components[0].argv))
     mutant_adapter = replace(original, source_files=mutant_sources,
                              components=(component,))
-    registry = em.Registry(); registry.register(mutant_adapter)
-    summary = em.Controller(registry, em.Budget(cpus=1, ram_mb=512, workers=1)).run(
-        context, tmp_path / "mutant-run", "default-mode")
-    assert summary["candidate_statuses"][mutant_adapter.arm_id] in {"NOT_MEASURED", "FAIL"}
+    registry = em.Registry()
+    with pytest.raises(em.Refusal) as refusal:
+        registry.register(mutant_adapter)
+    assert refusal.value.code == "SOURCE_AUTHORITY_UNAVAILABLE"
+    assert registry.adapters("16") == []
+
+    # Independently execute the mutation as a software fixture. A producer
+    # returning an empty list must not make its real consumer gate pass.
+    inputs, outputs = tmp_path / "mutant-inputs", tmp_path / "mutant-outputs"
+    for name, path in context.inputs.items():
+        target = inputs / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(path, target)
+    argv = [x.replace("{inputs}", str(inputs)).replace("{outputs}", str(outputs))
+            for x in component.argv]
+    result = subprocess.run(argv, env={**os.environ,
+        "VIBEIC_EXECUTION_BINDING": json.dumps(context.binding())},
+        text=True, capture_output=True, timeout=component.timeout_s)
+    assert result.returncode == 0, result.stderr
+    report = json.loads((outputs / "release-evidence.json").read_text())
+    assert report["producer"] == []
+    assert report["producer_verdict"] == "PASS"
+    assert validate(outputs, context.binding()).verdict == "FAIL"
+    assert any(g["gate"] == "clock_plan_check" and g["verdict"] == "FAIL"
+               for g in report["gate_records"])
+    assert not (outputs / "phase3/stage3/cts/clock_plan.json").exists()
 
 
 def test_release_external_rows_are_visible_classifications_without_runtime_success():
