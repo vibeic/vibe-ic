@@ -1,7 +1,8 @@
-"""Regression tests for the Phase-2 Step-7 producer seam."""
+"""Regression tests for the Phase-2 canonical producer seams."""
 from __future__ import annotations
 
 import ast
+import json
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -15,6 +16,80 @@ import design_one_shot_runner as D  # noqa: E402
 import step_preflight as S  # noqa: E402
 import execution_policy as EP  # noqa: E402
 from _ppa import timing as T  # noqa: E402
+
+
+def test_default_step1_preflight_reaches_one_producer_and_rtl_consumer(
+        tmp_path, monkeypatch):
+    """Default must publish the ordinary producer's bytes before consumption."""
+    project = tmp_path / "project"
+    spec = project / "input/rtl_spec.json"
+    spec.parent.mkdir(parents=True)
+    spec.write_text(json.dumps({
+        "module": "neutral_top", "inputs": ["a", "b"], "outputs": ["y"],
+        "gates": [{"op": "and", "out": "y", "in": ["a", "b"]}]}))
+    monkeypatch.setattr(EP, "_ordinary_runtime", {
+        "project": project.resolve(), "phase1_only": False,
+        "policy": {"mode": "default"}})
+    controller_calls = []
+    placeholder = D._preflight_refusal("rtl_gen")(
+        "Ultra fixed-row provider dispatch", {"execution_results": [{
+            "status": "NOT_MEASURED", "candidate_statuses": {
+                "frontend_1": "NOT_MEASURED"}}]})
+
+    def controller(*args):
+        controller_calls.append(args)
+        return placeholder
+
+    monkeypatch.setattr(EP, "dispatch_ordinary_rows", controller)
+    # Input admission is independent of this routing seam and is exercised by
+    # the real bounded front-door run. Keep its positive decision fixed here.
+    monkeypatch.setattr(S, "decide", lambda *a, **k: S.Decision(
+        "design_one_shot_runner", "rtl_gen", ["1"], verdict="READY"))
+    producer_calls = []
+
+    def producer(subject, ic_class):
+        producer_calls.append((subject, ic_class))
+        return D.step_rtl_gen(subject, ic_class)
+
+    result = S.gate(project, "design_one_shot_runner", "rtl_gen",
+                    D._preflight_refusal("rtl_gen"), producer,
+                    project, "digital_logic")
+    assert result.status == "PASS", result
+    assert producer_calls == [(project, "digital_logic")]
+    assert controller_calls == []
+    rtl = list((project / "phase2/stage1/rtl").glob("*.sv"))
+    assert [path.name for path in rtl] == ["neutral_top.sv"]
+    assert "a & b" in rtl[0].read_text()
+    import flow_step_output_content_check as consumer
+    assert consumer.check(project, "rtl") == []
+
+
+@pytest.mark.parametrize("status", ["NOT_MEASURED", "FAIL", "PASS"])
+@pytest.mark.parametrize("mode,phase1_only", [
+    ("ultra", False), ("default", True)])
+def test_step1_keeps_ultra_and_phase1_only_controller_outcomes(
+        tmp_path, monkeypatch, status, mode, phase1_only):
+    runtime = {"project": tmp_path.resolve(), "phase1_only": phase1_only,
+               "policy": {"mode": mode}}
+    monkeypatch.setattr(EP, "_ordinary_runtime", runtime)
+    row = SimpleNamespace(status=status, extras={"execution_results": [{
+        "status": status, "reason": "NO_REGISTERED_PROVIDER"}]})
+    monkeypatch.setattr(EP, "dispatch_ordinary_rows", lambda *args: row)
+    result = EP.dispatch_ordinary_site(
+        tmp_path, "design_one_shot_runner", "rtl_gen", lambda *args: None)
+    assert result is row
+    assert result.status == status
+    assert "program_first_fallback_sites" not in runtime
+
+
+def test_default_step1_producer_bypass_refuses_other_project(tmp_path, monkeypatch):
+    monkeypatch.setattr(EP, "_ordinary_runtime", {
+        "project": (tmp_path / "admitted").resolve(), "phase1_only": False,
+        "policy": {"mode": "default"}})
+    monkeypatch.setattr(EP, "dispatch_ordinary_rows", lambda *args: None)
+    with pytest.raises(EP.Refusal, match="ORDINARY_PROJECT_UNBOUND"):
+        EP.dispatch_ordinary_site(
+            tmp_path / "other", "design_one_shot_runner", "rtl_gen", lambda *args: None)
 
 
 def test_phase2_declares_and_wires_canonical_step7_site():

@@ -900,6 +900,16 @@ def dispatch_ordinary_site(project, runner: str, site: str, refusal_factory):
     plan = step_preflight.RUNNER_PLANS.get(runner)
     span = dict(plan.sites).get(site, ()) if plan else ()
     runtime = _ordinary_runtime
+    # Default Step 1 uses the ordinary producer after input preflight and
+    # class detection. The frontend qualification worker is a separate Ultra
+    # arm and cannot replace that producer or its expert authoring handoff.
+    # A Phase-1-only runtime has no authority to enter this Phase-2 site.
+    if (runner == 'design_one_shot_runner' and site == 'rtl_gen'
+            and runtime.get('policy', {}).get('mode') == 'default'
+            and runtime.get('phase1_only') is not True):
+        if Path(project).resolve() != runtime['project']:
+            raise Refusal('ORDINARY_PROJECT_UNBOUND', str(project))
+        return None
     # Step 7's Default producer is the canonical program in
     # design_one_shot_runner.step_asic_sdc.  The frontend-worker row is a
     # source-bound qualification arm for Ultra; dispatching it first in
