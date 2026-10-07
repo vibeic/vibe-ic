@@ -15,11 +15,12 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from _clock_plan_fixture import current_fixture
 
 PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROGRAMS))
 contract = importlib.import_module('librelane_contract')
-from _stated_eda_image import state_the_image  # noqa: E402
+from _stated_eda_image import state_the_image, mock_docker_route  # noqa: E402
 runner = importlib.import_module('phase3_one_shot_runner')
 sp = importlib.import_module('_spare_plan')
 import test_librelane_state_bridge as bridge  # noqa: E402  (T89 fixtures)
@@ -54,11 +55,17 @@ def test_plugin_is_mounted_only_for_vibe_ic_steps():
 
 def test_the_custom_steps_code_is_part_of_its_fingerprint(tmp_path, monkeypatch):
     """Editing the step's code must re-run it, never resume a stale result."""
+    mock_docker_route(monkeypatch)  # this fixture models the Docker tool edge
     p, state, _cfg = bridge._chain_fixture(tmp_path)
     cfg = put(p / 'spare.json', {'meta': {'step': 'Vibeic.InsertSpareCells'}})
     calls = []
     monkeypatch.setattr(contract, 'image_capability', lambda *a: None)
-    monkeypatch.setattr(contract.subprocess, 'run', bridge._tool(calls))
+    modeled_tool = bridge._tool(calls)
+    def tool(cmd, **kwargs):
+        result = modeled_tool(cmd, **kwargs)
+        result.stdout = 'Vibeic.InsertSpareCells: wrote state_out.json\n'
+        return result
+    monkeypatch.setattr(contract.subprocess, 'run', tool)
     contract.run_chain(p, 'img', [('Vibeic.InsertSpareCells', cfg, state)], pdk_root='/pdk')
     cmd = calls[0]
     assert f'PYTHONPATH={PLUGIN.parent.resolve()}' in cmd
@@ -870,20 +877,21 @@ def test_legality_on_the_direct_path_is_unchanged(tmp_path):
     assert not any(f['rule'].startswith('LIBRELANE') for f in doc['findings'])
 
 
-def _clock_project(tmp_path, *, port='clk', net=None, cts=None, sdc=None):
+def _clock_project(tmp_path, monkeypatch, *, port='clk', net=None, cts=None, sdc=None):
     project = tmp_path / 'p'
     write(project / 'phase3/stage3/pnr/constraint.sdc', sdc or
-          'create_clock -name clk -period 24 [get_ports clk]\n'
-          'create_clock -name vclk -period 24\n')
+          'create_clock -name clk -period 24 [get_ports clk]\n')
     put(project / 'phase3/stage3/cts/clock_plan.json', {'clocks': [
-        {'name': 'clk', 'period_ns': 24, 'source': 'clk'},
-        {'name': 'vclk', 'period_ns': 24, 'source': 'vclk'}]})
+        {'name': 'clk', 'period_ns': 24, 'source': 'clk'}]})
     if port is not False:
         put(project / 'phase3/librelane/15-config/OpenROAD.CTS.json',
             {'CLOCK_PORT': port, 'CLOCK_NET': net, 'meta': {'step': 'OpenROAD.CTS'}})
         put(project / 'phase3/librelane/15-config/design.json', {'CLOCK_PORT': 'other'})
     if cts is not None:
         write(project / 'phase3/stage3/cts/clock_tree.rpt', cts)
+    current_fixture(monkeypatch, project,
+                    (project / 'phase3/stage3/pnr/constraint.sdc').read_text(),
+                    preserve_plan=False)
     return project
 
 
@@ -897,39 +905,41 @@ def _clock_gate(project):
 _CAL = PROGRAMS / 'calibration'
 
 
-def test_the_gate_refuses_an_sdc_clock_librelane_is_not_given(tmp_path):
-    rc, rules = _clock_gate(_clock_project(tmp_path / 'ok'))
+def test_the_gate_refuses_an_sdc_clock_librelane_is_not_given(tmp_path, monkeypatch):
+    rc, rules = _clock_gate(_clock_project(tmp_path / 'ok', monkeypatch))
     assert rc == 0 and ('INFO', 'LIBRELANE_CLOCKS_MATCH_SDC') in rules
-    rc, rules = _clock_gate(_clock_project(tmp_path / 'net', port=[], net='clk'))
+    rc, rules = _clock_gate(_clock_project(tmp_path / 'net', monkeypatch, port=[], net='clk'))
     assert rc == 0 and ('INFO', 'LIBRELANE_CLOCKS_MATCH_SDC') in rules
-    rc, rules = _clock_gate(_clock_project(tmp_path / 'unset', port=None))
+    rc, rules = _clock_gate(_clock_project(tmp_path / 'unset', monkeypatch, port=None))
     assert rc == 1 and ('FAIL', 'LIBRELANE_CLOCK_MISSING') in rules
-    rc, rules = _clock_gate(_clock_project(tmp_path / 'extra', port=['clk', 'clk_b']))
+    rc, rules = _clock_gate(_clock_project(tmp_path / 'extra', monkeypatch, port=['clk', 'clk_b']))
     assert rc == 1 and ('FAIL', 'LIBRELANE_CLOCK_UNCONSTRAINED') in rules
 
 
-def test_the_gate_refuses_an_sdc_clock_cts_never_took_up(tmp_path):
+def test_the_gate_refuses_an_sdc_clock_cts_never_took_up(tmp_path, monkeypatch):
     sdc = (_CAL / 'cal_two_clocks.sdc').read_text()
     plan = [{'name': 'clk', 'period_ns': 20, 'source': 'clk'},
             {'name': 'clk2', 'period_ns': 30, 'source': 'clk2'}]
-    seen = _clock_project(tmp_path / 'seen', port=False, sdc=sdc,
+    seen = _clock_project(tmp_path / 'seen', monkeypatch, port=False, sdc=sdc,
                           cts=(_CAL / 'cts_clock_roots_seen_negative.log').read_text())
     put(seen / 'phase3/stage3/cts/clock_plan.json', {'clocks': plan})
+    current_fixture(monkeypatch, seen, sdc)
     rc, rules = _clock_gate(seen)
     assert rc == 0 and ('INFO', 'CTS_CLOCKS_SEEN') in rules
-    dropped = _clock_project(tmp_path / 'dropped', port=False, sdc=sdc,
+    dropped = _clock_project(tmp_path / 'dropped', monkeypatch, port=False, sdc=sdc,
                              cts=(_CAL / 'cts_clock_root_dropped_positive.log').read_text())
     put(dropped / 'phase3/stage3/cts/clock_plan.json', {'clocks': plan})
+    current_fixture(monkeypatch, dropped, sdc)
     rc, rules = _clock_gate(dropped)
     assert rc == 1 and ('FAIL', 'CTS_CLOCK_MISSING') in rules
 
 
-def test_without_a_tool_side_the_gate_is_unchanged(tmp_path):
-    rc, rules = _clock_gate(_clock_project(tmp_path, port=False))
+def test_without_a_tool_side_the_gate_is_unchanged(tmp_path, monkeypatch):
+    rc, rules = _clock_gate(_clock_project(tmp_path, monkeypatch, port=False))
     assert rc == 0 and not any(r.startswith(('LIBRELANE', 'CTS_')) for _s, r in rules)
 
 
-def test_the_producer_invents_no_clock(tmp_path):
+def test_the_producer_invents_no_clock(tmp_path, monkeypatch):
     project = tmp_path / 'p'
     write(project / 'phase3/stage3/pnr/routed.def', 'VERSION 5.8 ;\nEND DESIGN\n')
     notes = []
@@ -939,11 +949,36 @@ def test_the_producer_invents_no_clock(tmp_path):
     assert not plan.exists() and 'no nominal clock is invented' in notes[-1]
     write(project / 'phase3/stage3/pnr/constraint.sdc',
           'create_clock -name core -period 7 [get_ports ck]\n')
+    current_fixture(monkeypatch, project,
+                    (project / 'phase3/stage3/pnr/constraint.sdc').read_text(),
+                    publish=False)
     assert runner.emit_clock_plan(project, plan, project / 'phase3/stage3/pnr/routed.def',
                                   project / 'phase3/stage3/pnr', notes)
     doc = json.loads(plan.read_text())
     assert doc['clocks'] == [{'name': 'core', 'period_ns': 7.0, 'source': 'ck'}]
     assert 'buf_strategy' not in doc
+
+
+def test_a_virtual_clock_is_not_given_an_invented_physical_source(tmp_path, monkeypatch):
+    import clock_plan_check as gate
+    project = tmp_path / 'p'
+    body = ('create_clock -name clk -period 24 [get_ports clk]\n'
+            'create_clock -name vclk -period 24\n')
+    rec = current_fixture(monkeypatch, project, body, publish=False)
+    sdc = project / rec['path']
+    assert 'create_clock -name vclk -period 24\n' in sdc.read_text()
+    # Virtual clocks have no CTS root and stay outside the tool-side comparison.
+    put(project / 'phase3/librelane/15-config/OpenROAD.CTS.json',
+        {'CLOCK_PORT': 'clk', 'CLOCK_NET': None, 'meta': {'step': 'OpenROAD.CTS'}})
+    findings = gate._tool_clock_findings(project, [sdc])
+    assert gate._sdc_primary_clock_sources([sdc]) == {'clk': 'clk'}
+    assert not any(f['severity'] == 'FAIL' for f in findings)
+    # Step16's native producer must refuse instead of inventing source='vclk'.
+    floor = project / 'phase3/stage3/pnr/floorplan.def'
+    plan = project / 'phase3/stage3/cts/clock_plan.json'
+    notes = []
+    assert runner.emit_clock_plan(project, plan, floor, floor.parent, notes) is None
+    assert not plan.exists() and 'CLOCK_SOURCE_MISSING' in notes[-1]
 
 
 # ================================================================== PPA ====

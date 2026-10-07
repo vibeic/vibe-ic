@@ -278,7 +278,7 @@ _PLAN = [{"name": "clk", "period_ns": 20, "source": "clk"},
 CTS_STEP = "phase3/librelane/19-cts-hold/01-openroad-cts"
 
 
-def _cts_project(tmp_path: Path, stem: str) -> Path:
+def _cts_project(tmp_path: Path, stem: str, monkeypatch) -> Path:
     """The step-19 LibreLane handoff as `librelane_cts_hold` writes it, around
     one real LibreLane CTS step folder (calibration/<stem>.{rpt,log})."""
     p = tmp_path / stem
@@ -301,6 +301,8 @@ def _cts_project(tmp_path: Path, stem: str) -> Path:
                               "source_sha256": _sha(folder / "cts.rpt"),
                               "dest": "phase3/stage3/cts/clock_tree.rpt",
                               "dest_sha256": _sha(report)}}}))
+    from _clock_plan_fixture import current_fixture
+    current_fixture(monkeypatch, p, sdc.read_text())
     return p
 
 
@@ -324,16 +326,16 @@ def test_the_ll_cts_report_names_no_root_but_its_transcript_does():
     assert (CAL / f"{SEEN}.log").read_text().count("CTS-0007") == 2
 
 
-def test_step16_reads_the_roots_librelane_cts_recorded(tmp_path):
-    rc, rules = _clock_gate(_cts_project(tmp_path, SEEN))
+def test_step16_reads_the_roots_librelane_cts_recorded(tmp_path, monkeypatch):
+    rc, rules = _clock_gate(_cts_project(tmp_path, SEEN, monkeypatch))
     assert rc == 0, rules
     assert "CTS_CLOCK_MISSING" not in rules
     assert f"{CTS_STEP}/openroad-cts.log" in rules["CTS_CLOCKS_SEEN"]
     assert "('clk', 'clk'), ('clk2', 'clk2')" in rules["CTS_CLOCKS_SEEN"]
 
 
-def test_a_root_librelane_cts_never_named_still_fails(tmp_path):
-    rc, rules = _clock_gate(_cts_project(tmp_path, DROPPED))
+def test_a_root_librelane_cts_never_named_still_fails(tmp_path, monkeypatch):
+    rc, rules = _clock_gate(_cts_project(tmp_path, DROPPED, monkeypatch))
     assert rc == 1 and "CTS_CLOCK_MISSING" in rules
     assert "['clk2']" in rules["CTS_CLOCK_MISSING"]
     assert f"{CTS_STEP}/openroad-cts.log" in rules["CTS_CLOCK_MISSING"]
@@ -345,8 +347,8 @@ def test_a_root_librelane_cts_never_named_still_fails(tmp_path):
     ("log", "is absent"),
     ("receipt", "unreadable"),
 ])
-def test_an_unbound_transcript_is_never_read_and_fails_closed(tmp_path, break_it, why):
-    p = _cts_project(tmp_path, SEEN)
+def test_an_unbound_transcript_is_never_read_and_fails_closed(tmp_path, break_it, why, monkeypatch):
+    p = _cts_project(tmp_path, SEEN, monkeypatch)
     if break_it == "report":
         r = p / "phase3/stage3/cts/clock_tree.rpt"
         r.write_text(r.read_text() + "\n")
@@ -363,10 +365,10 @@ def test_an_unbound_transcript_is_never_read_and_fails_closed(tmp_path, break_it
     assert "phase3/stage3/cts/clock_tree.rpt" in rules["CTS_CLOCK_MISSING"]
 
 
-def test_without_a_receipt_the_report_is_the_transcript(tmp_path):
+def test_without_a_receipt_the_report_is_the_transcript(tmp_path, monkeypatch):
     """The direct path is unchanged: its clock_tree.rpt carries the CTS lines
     itself, and no receipt means that file is read as it is."""
-    p = _cts_project(tmp_path, SEEN)
+    p = _cts_project(tmp_path, SEEN, monkeypatch)
     (p / "reports/phase3/librelane_cts_hold_handoff.json").unlink()
     rc, rules = _clock_gate(p)
     assert rc == 1 and "CTS_CLOCK_MISSING" in rules

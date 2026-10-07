@@ -816,7 +816,10 @@ def main(argv=None):
             native.append({"name": name, "period_ns": float(period), "source": source})
         if f"CLOCK_PLAN_PDK {current['pdk']}\n" not in text:
             refusal = "CLOCK_PLAN_NATIVE_PDK_CHANGED"
-        if plan.get("clocks") != native or not native:
+        # Compare the substance already normalized above: supported period /
+        # frequency and pin / port spellings describe the same measured clock.
+        # The current input/output hashes remain mandatory for every shape.
+        if summary != native or not native:
             refusal = "CLOCK_PLAN_NATIVE_VALUES_CHANGED"
         recorded = {r["path"] for role, r in current["inputs"].items()
                     if role.startswith("sdc_")}

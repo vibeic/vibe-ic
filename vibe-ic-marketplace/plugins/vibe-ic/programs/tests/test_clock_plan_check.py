@@ -15,6 +15,7 @@ from pathlib import Path
 
 import pytest
 from _hostpaths import require_repo
+from _clock_plan_fixture import current_fixture
 
 _HERE = Path(__file__).resolve().parent
 _PROG = _HERE.parent / "clock_plan_check.py"
@@ -60,7 +61,7 @@ def _run(project: Path, tmp_path: Path):
 # ----------------------------------------------------------------------
 # PASS fixtures (good substance)
 # ----------------------------------------------------------------------
-def test_pass_explicit_clocks_array(tmp_path):
+def test_pass_explicit_clocks_array(tmp_path, monkeypatch):
     project = tmp_path / "proj"
     project.mkdir()
     _write_plan(project, {
@@ -70,18 +71,20 @@ def test_pass_explicit_clocks_array(tmp_path):
             {"name": "clk_div2", "period_ns": 20.0, "source_pin": "u_div/Q"},
         ],
     })
+    current_fixture(monkeypatch, project, "create_clock -name clk -period 10 [get_ports clk]\ncreate_clock -name clk_div2 -period 20 [get_pins u_div/Q]\n")
     rc, report = _run(project, tmp_path)
     assert rc == 0
     assert report["verdict"] == "PASS"
     assert report["num_clocks"] == 2
 
 
-def test_pass_frequency_mhz_instead_of_period(tmp_path):
+def test_pass_frequency_mhz_instead_of_period(tmp_path, monkeypatch):
     project = tmp_path / "proj"
     project.mkdir()
     _write_plan(project, {
         "clocks": [{"name": "clk", "frequency_mhz": 100.0, "port": "clk"}],
     })
+    current_fixture(monkeypatch, project, "create_clock -name clk -period 10 [get_ports clk]\n")
     rc, report = _run(project, tmp_path)
     assert rc == 0
     assert report["verdict"] == "PASS"
@@ -89,7 +92,7 @@ def test_pass_frequency_mhz_instead_of_period(tmp_path):
     assert abs(report["clocks"][0]["period_ns"] - 10.0) < 1e-6
 
 
-def test_pass_minimal_single_clock_shape(tmp_path):
+def test_pass_minimal_single_clock_shape(tmp_path, monkeypatch):
     """A non-array plan that supplies primary_clock + top-level period + source."""
     project = tmp_path / "proj"
     project.mkdir()
@@ -99,13 +102,14 @@ def test_pass_minimal_single_clock_shape(tmp_path):
         "period_ns": 20.0,
         "source_port": "clk",
     })
+    current_fixture(monkeypatch, project, "create_clock -name clk -period 20 [get_ports clk]\n")
     rc, report = _run(project, tmp_path)
     assert rc == 0
     assert report["verdict"] == "PASS"
     assert report["num_clocks"] == 1
 
 
-def test_two_sdc_names_on_one_physical_clock_share_the_observed_root(tmp_path):
+def test_two_sdc_names_on_one_physical_clock_share_the_observed_root(tmp_path, monkeypatch):
     """FPGA and silicon names may refer to one real input and CTS root."""
     project = tmp_path / "aliases"
     _write_sdc(project,
@@ -126,6 +130,7 @@ def test_two_sdc_names_on_one_physical_clock_share_the_observed_root(tmp_path):
     (_cts_dir(project) / "clock_tree.rpt").write_text(
         '[INFO CTS-0007] Net "clk_in" found for clock "core_clk".\n')
 
+    current_fixture(monkeypatch, project, "create_clock -name core_clk -period 20 [get_ports clk_in]\ncreate_clock -add -name prototype_clk -period 20 [get_ports clk_in]\n")
     rc, report = _run(project, tmp_path)
     rules = {f["rule"] for f in report["findings"]}
     assert rc == 0, rules
@@ -157,7 +162,7 @@ def test_a_different_clock_source_still_requires_its_own_root(tmp_path):
     assert "CTS_CLOCK_MISSING" in rules
 
 
-def test_unbraced_silicon_port_and_braced_fpga_alias_are_one_clock(tmp_path):
+def test_unbraced_silicon_port_and_braced_fpga_alias_are_one_clock(tmp_path, monkeypatch):
     """The shape a gf180 DIE run writes (subservient IC path, v4 tree): the
     silicon SDC names the port without braces, the FPGA SDC names the same
     port braced under the port's own name, and LibreLane CTS reports the one
@@ -183,6 +188,7 @@ def test_unbraced_silicon_port_and_braced_fpga_alias_are_one_clock(tmp_path):
 
     assert mod._sdc_primary_clock_sources(
         [project / "phase2/stage2/constraints/top.asic.sdc"]) == {"clk": "i_clk"}
+    current_fixture(monkeypatch, project, "create_clock -name clk -period 20 [get_ports i_clk]\ncreate_clock -add -name i_clk -period 20 [get_ports {i_clk}]\n")
     rc, report = _run(project, tmp_path)
     rules = {f["rule"] for f in report["findings"]}
     assert "LIBRELANE_CLOCK_MISSING" not in rules, report["findings"]
@@ -198,17 +204,50 @@ def test_checked_in_silicon_sdc_source_excludes_tcl_closing_bracket():
     assert mod._sdc_primary_clock_sources([sdc]) == {"clk": "clk"}
 
 
-def test_pass_sdc_clock_present_in_plan(tmp_path):
+def test_pass_sdc_clock_present_in_plan(tmp_path, monkeypatch):
     project = tmp_path / "proj"
     project.mkdir()
     _write_plan(project, {
         "clocks": [{"name": "clk", "period_ns": 20.0, "source_port": "clk"}],
     })
     _write_sdc(project, "create_clock -name clk -period 20.0 [get_ports clk]\n")
+    current_fixture(monkeypatch, project, "create_clock -name clk -period 20 [get_ports clk]\n")
     rc, report = _run(project, tmp_path)
     assert rc == 0
     assert report["verdict"] == "PASS"
     assert report["sdc_files_checked"]  # the SDC was actually parsed
+
+
+@pytest.mark.parametrize("mutation,rule", [
+    ("period", "CLOCK_PLAN_CURRENT_REFUSED"),
+    ("source", "CLOCK_PLAN_CURRENT_REFUSED"),
+    ("log", "CLOCK_PLAN_CURRENT_REFUSED"),
+    ("current", "CLOCK_PLAN_CURRENT_REFUSED"),
+    ("deck", "CLOCK_PLAN_ASIC_SDC_REFUSED"),
+])
+def test_normalized_values_still_require_current_native_evidence(tmp_path, monkeypatch, mutation, rule):
+    project = tmp_path / "proj"
+    _write_plan(project, {"clocks": [
+        {"name": "clk", "frequency_mhz": 100, "source_port": "clk"}]})
+    rec = current_fixture(monkeypatch, project,
+                          "create_clock -name clk -period 10 [get_ports clk]\n")
+    assert _run(project, tmp_path)[0] == 0
+    path = _cts_dir(project) / "clock_plan.json"
+    doc = json.loads(path.read_text())
+    if mutation == "period":
+        doc["clocks"][0]["frequency_mhz"] = 200
+    elif mutation == "source":
+        doc["clocks"][0]["source_port"] = "other"
+    elif mutation == "current":
+        del doc["current"]
+    elif mutation == "log":
+        (project / doc["current"]["outputs"]["log"]["path"]).unlink()
+    else:
+        (project / rec["path"]).write_text("# replaced deck\n")
+    path.write_text(json.dumps(doc))
+    rc, report = _run(project, tmp_path)
+    assert rc == 1
+    assert any(f["rule"] == rule for f in report["findings"])
 
 
 # ----------------------------------------------------------------------
