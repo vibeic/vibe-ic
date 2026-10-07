@@ -38862,8 +38862,14 @@ def step_prepnr(project: Path, top: str, pdk: PdkConfig, container: str,
     # SAME Step-7 author in that case. Already-stale/missing inputs remain a
     # refusal at the read-only seam; staging loss cannot be regenerated away.
     _step7_reader = getattr(_ppa_timing, "read_step7_asic_sdc", None)
-    _step7_before = (_step7_reader(_runner_module(), project, top, pdk)[0]
-                     if callable(_step7_reader) else None)
+    sdc, sdc_why = _prepnr_constraint_file(project, top, pdk)
+    _step7_before = None
+    if sdc is not None and callable(_step7_reader):
+        try:
+            _step7_before = json.loads((project / "phase2/stage2/constraints" /
+                                       PREPNR_STEP7_SDC_RECORD).read_text())
+        except (OSError, ValueError):
+            pass
     padring = _padring_producer_dispatch(
         project, container, pdk,
         supply_plan=(em_floor_for_resize or {}).get("supply_entry_plan"))
@@ -38874,22 +38880,21 @@ def step_prepnr(project: Path, top: str, pdk: PdkConfig, container: str,
                           extras=extras,
                           reason_class=getattr(padring, "reason_class", ""))
     if _step7_before is not None and padring.status == _V.Verdict.PASS.value:
-        _step7_after, _step7_why = _step7_reader(
-            _runner_module(), project, top, pdk)
+        sdc, sdc_why = _prepnr_constraint_file(project, top, pdk)
         _, _step7_inputs = _ppa_timing.asic_sdc_input_digest(
             _runner_module(), project, top, pdk)
         _step7_previous = _step7_before.get("inputs", {})
         _step7_changed = {k for k in set(_step7_inputs) | set(_step7_previous)
                           if _step7_inputs.get(k) != _step7_previous.get(k)}
-        if (_step7_after is None and _step7_changed and all(
+        if (sdc is None and _step7_changed and all(
                 k == "reports/phase3/io_pad_chip_top.json" or k.startswith("@io_liberty:")
                 for k in _step7_changed)):
             _step7_refresh = _ppa_timing.emit_step7_asic_sdc(
                 _runner_module(), project, top, pdk, container)
-            extras["step7_refresh"] = {"reason": _step7_why,
+            extras["step7_refresh"] = {"reason": sdc_why,
                                       "path": _step7_refresh["path"],
                                       "sha256": _step7_refresh["sha256"]}
-    sdc, sdc_why = _prepnr_constraint_file(project, top, pdk)
+            sdc, sdc_why = _prepnr_constraint_file(project, top, pdk)
     extras["sdc"] = {"path": str(sdc) if sdc else None, "basis": sdc_why}
     fp = _prepnr_floorplan(project, top, pdk, container, die_um, util,
                            netlist, t0)
