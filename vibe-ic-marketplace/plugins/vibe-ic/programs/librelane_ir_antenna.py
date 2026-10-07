@@ -507,8 +507,13 @@ def run_ir(project: Path, image: str, pdk_root: Path, pdk: str, *, routed_def: P
     Bind it into the selected IR corner before building the ODB; an absent
     file or ambiguous corner refuses rather than substituting the kit default.
     None retains the resolved PDK authority for standalone callers."""
-    overlay = ({key: (value, 'current routed DEF SPECIALNETS USE POWER/GROUND')
-                for key, value in supply_nets.items()} if supply_nets is not None else None)
+    # A sign-off checkpoint already supplies the routed netlist. The config
+    # resolver still requires VERILOG_FILES even though this chain consumes
+    # its bridged ODB; it must not require the original RTL tree to be copied.
+    overlay = {'VERILOG_FILES': ([str(Path(netlist).resolve())],
+                                'current routed netlist supplied to the IR bridge')}
+    overlay.update({key: (value, 'current routed DEF SPECIALNETS USE POWER/GROUND')
+                    for key, value in (supply_nets or {}).items()})
     configs = resolve_step_configs(project, image, pdk, list(IR_STEPS), pdk_root=pdk_root,
                                    folder='24-config', overlay=overlay)
     # The budget is the checker's own variable, which the Chip flow's resolver

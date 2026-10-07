@@ -481,6 +481,11 @@ def test_ir_bridge_uses_one_explicit_active_tech_lef(tmp_path, monkeypatch, case
     paths, observed = {}, []
 
     def configs(_project, _image, _pdk, steps, **kwargs):
+        # LibreLane's resolver requires VERILOG_FILES even for a checkpoint
+        # solve. This run deliberately has no original RTL source directory.
+        verilog = (kwargs.get("overlay") or {}).get("VERILOG_FILES")
+        if not verilog or verilog[0] != [str(views[1])]:
+            raise ll.Refusal("LL_CONFIG_RESOLUTION_FAILED", "routed netlist was not supplied")
         for step in steps:
             techs = {"nom*": str(nominal), "max*": "untouched-corner.tlef"}
             if case == "ambiguous":
@@ -501,10 +506,14 @@ def test_ir_bridge_uses_one_explicit_active_tech_lef(tmp_path, monkeypatch, case
     expected = {"missing": "LL_IR_TECH_LEF_MISSING",
                 "ambiguous": "LL_IR_TECH_LEF_CORNER_UNRESOLVED"}.get(case, "OFFLINE_BRIDGE_OBSERVED")
     kwargs = {} if case == "default" else {"tech_lef": active}
-    with pytest.raises(ll.Refusal, match=expected):
+    refusal = None
+    try:
         la.run_ir(project, "offline", tmp_path, "neutral-kit", routed_def=views[0],
                   netlist=views[1], sdc=views[2], spef=views[3], budget_pct=10.0,
                   budget_source="fixture", **kwargs)
+    except ll.Refusal as exc:
+        refusal = exc.code
+    assert refusal == expected
     if case in ("missing", "ambiguous"):
         assert not observed
     else:
