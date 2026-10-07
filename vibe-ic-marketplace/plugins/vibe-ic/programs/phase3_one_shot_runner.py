@@ -38861,8 +38861,9 @@ def step_prepnr(project: Path, top: str, pdk: PdkConfig, container: str,
     # canonical pad producer refreshes its bound record. Refresh through the
     # SAME Step-7 author in that case. Already-stale/missing inputs remain a
     # refusal at the read-only seam; staging loss cannot be regenerated away.
-    _step7_before, _ = _ppa_timing.read_step7_asic_sdc(
-        _runner_module(), project, top, pdk)
+    _step7_reader = getattr(_ppa_timing, "read_step7_asic_sdc", None)
+    _step7_before = (_step7_reader(_runner_module(), project, top, pdk)[0]
+                     if callable(_step7_reader) else None)
     padring = _padring_producer_dispatch(
         project, container, pdk,
         supply_plan=(em_floor_for_resize or {}).get("supply_entry_plan"))
@@ -38873,7 +38874,7 @@ def step_prepnr(project: Path, top: str, pdk: PdkConfig, container: str,
                           extras=extras,
                           reason_class=getattr(padring, "reason_class", ""))
     if _step7_before is not None and padring.status == _V.Verdict.PASS.value:
-        _step7_after, _step7_why = _ppa_timing.read_step7_asic_sdc(
+        _step7_after, _step7_why = _step7_reader(
             _runner_module(), project, top, pdk)
         _, _step7_inputs = _ppa_timing.asic_sdc_input_digest(
             _runner_module(), project, top, pdk)
