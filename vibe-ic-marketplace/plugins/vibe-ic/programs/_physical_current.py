@@ -220,11 +220,13 @@ def clock_plan_asic_refusal(project, record):
         if not isinstance(doc, dict) or not isinstance(doc.get("top"), str):
             return "CLOCK_PLAN_ASIC_SDC_RECORD_INVALID"
         declared = runner._read_declared_pdk_target(project)
-        if not declared or declared != record["pdk"]:
-            return "CLOCK_PLAN_ASIC_PDK_CHANGED"
+        if not declared:
+            return "CLOCK_PLAN_ASIC_PDK_UNDECLARED"
         pdk = runner._detect_pdk(project, declared)
         if pdk is None:
             return "CLOCK_PLAN_ASIC_PDK_UNRESOLVED"
+        if pdk.name != record["pdk"]:
+            return "CLOCK_PLAN_ASIC_PDK_CHANGED"
         asic, why = timing.read_step7_asic_sdc(runner, project, doc["top"], pdk)
         if asic is None:
             return f"CLOCK_PLAN_ASIC_SDC_REFUSED: {why}"

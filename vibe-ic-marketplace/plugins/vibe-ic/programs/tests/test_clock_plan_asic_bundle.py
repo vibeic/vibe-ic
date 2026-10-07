@@ -202,7 +202,15 @@ def test_declared_pdk_change_refuses_a_cached_measurement(bundle, monkeypatch):
     _, _, _, _, _, _, plan, _ = bundle
     assert emit(bundle)[0] == str(plan)
     monkeypatch.setattr(runner, "_read_declared_pdk_target", lambda _: "other_process")
+    monkeypatch.setattr(runner, "_detect_pdk", lambda *_: SimpleNamespace(name="other_process"))
     assert check(bundle)[0] == 1
+
+
+def test_resolved_pdk_identity_accepts_a_declaration_alias(bundle, monkeypatch):
+    _, _, _, _, _, _, plan, _ = bundle
+    monkeypatch.setattr(runner, "_read_declared_pdk_target", lambda _: "fixture_family")
+    assert emit(bundle)[0] == str(plan)
+    assert check(bundle)[0] == 0
 
 
 def test_a_changed_source_record_refreshes_even_with_identical_sdc_bytes(bundle, monkeypatch):
