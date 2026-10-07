@@ -72820,7 +72820,7 @@ def _emit_si_timing_json(project: Path, top: str, pdk: PdkConfig, container: str
                                        ['sta', '-no_init', '-exit', tcl_c])
         tcl = mod.build_opensta_si_tcl(
             _to_container_path(str(libs[0]), container),
-            _to_container_path(str(netlist), container), top,
+            _to_container_path(str(netlist), container), subject.get('physical_top', top),
             _to_container_path(str(sdc), container),
             _to_container_path(str(spef), container),
             _to_container_path(str(out_json), container), vdd_v=vdd_v,

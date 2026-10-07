@@ -63,19 +63,26 @@ def corner_identity(liberties):
     return out
 
 
-def basis(project, top, liberties, *, coupling=False, extra_inputs=()):
+def basis(project, top, liberties, *, coupling=False, extra_inputs=(), physical_top=None):
+    """Bind logical artifact paths and the module those bytes actually describe.
+
+    A distinct physical top is supplied by the validated tool configuration;
+    receipt validation re-derives it from that authority, never from filenames.
+    """
     project = Path(project).resolve(strict=True)
-    if not re.fullmatch(r'[A-Za-z_][\w$]*', top):
+    physical_top = top if physical_top is None else physical_top
+    if any(not isinstance(name, str) or not re.fullmatch(r'[A-Za-z_][\w$]*', name)
+           for name in (top, physical_top)):
         raise Refusal("CURRENT_DESIGN_NAME_INVALID")
     paths = {"netlist": pl.pnr_dir(project) / f"{top}_pnr.v",
              "spef": pl.extracted_dir(project) / f"{top}.spef",
              "sdc": pl.pnr_dir(project) / "constraint.sdc"}
     inputs = [file_record(p, role, project) for role, p in paths.items()]
-    if not re.search(r'\bmodule\s+' + re.escape(top) + r'\b', paths['netlist'].read_text()):
+    if not re.search(r'\bmodule\s+' + re.escape(physical_top) + r'\b', paths['netlist'].read_text()):
         raise Refusal("CURRENT_NETLIST_DESIGN_MISMATCH")
     text = paths['spef'].read_text()
     design = re.search(r'^\*DESIGN\s+"?([^"\s]+)', text, re.M)
-    if design is None or design[1] != top:
+    if design is None or design[1] != physical_top:
         raise Refusal("CURRENT_SPEF_DESIGN_MISMATCH")
     if not re.search(r'^\*D_NET\s', text, re.M):
         raise Refusal("CURRENT_SPEF_EXTRACTION_MISSING")
@@ -88,8 +95,11 @@ def basis(project, top, liberties, *, coupling=False, extra_inputs=()):
         raise Refusal("CURRENT_LIBERTY_MISSING")
     inputs += [file_record(p, f"liberty:{i}") for i, p in enumerate(libs)]
     inputs += [file_record(p, role, project) for role, p in extra_inputs]
-    return {"project": str(project), "top": top, "stage": "post_route_extracted",
-            "corner": corner_identity(libs), "inputs": inputs}
+    subject = {"project": str(project), "top": top, "stage": "post_route_extracted",
+               "corner": corner_identity(libs), "inputs": inputs}
+    if physical_top != top:
+        subject['physical_top'] = physical_top
+    return subject
 
 
 def check_files(records, project):
@@ -144,7 +154,17 @@ def validate(project, receipt_path, step, outputs):
     check_files(doc['inputs'], project)
     roles = {r['role']: Path(r['path']) for r in doc['inputs']}
     libs = [roles[f'liberty:{i}'] for i in range(sum(k.startswith('liberty:') for k in roles))]
-    current = basis(project, doc['top'], libs, coupling=str(step) == '27')
+    # A receipt cannot authorize its own alternate module name. Resolve the
+    # current canonical producer first, then compare both identities below.
+    tool_current = None
+    if 'tool_state' in roles:
+        tool_current, _ = tool_subject(project, doc['top'], corner=doc.get('tool_corner'),
+                                       coupling=str(step) == '27')
+    physical_top = (tool_current or {}).get('physical_top', doc['top'])
+    if doc.get('physical_top', doc['top']) != physical_top:
+        raise Refusal('CURRENT_TOOL_DESIGN_MISMATCH')
+    current = basis(project, doc['top'], libs, coupling=str(step) == '27',
+                    physical_top=physical_top)
     # These roles have exactly one ordinary location. A perfectly hashed file
     # from a sibling stage or design still cannot stand in for that location.
     expected = {r['role']: r for r in current['inputs']}
@@ -153,8 +173,7 @@ def validate(project, receipt_path, step, outputs):
         raise Refusal("CURRENT_INPUT_PATH_MISMATCH")
     if doc['corner'] != current['corner']:
         raise Refusal("CURRENT_LIBERTY_CORNER_MISMATCH")
-    if 'tool_state' in roles:
-        tool_current, _ = tool_subject(project, doc['top'], corner=doc.get('tool_corner'), coupling=str(step) == '27')
+    if tool_current is not None:
         if any(doc.get(k) != v for k, v in tool_current.items() if k != 'inputs'):
             raise Refusal('CURRENT_TOOL_CORNER_SUBJECT_MISMATCH')
         if any(observed.get(row['role']) != row for row in tool_current['inputs']):
@@ -264,8 +283,13 @@ def _tool_subject(project, top, *, corner=None, coupling=False):
         raise Refusal('CURRENT_STAPOSTPNR_FOREIGN_INPUT')
     config = json.loads((folder / 'config.json').read_text())
     original_config = project / 'phase3/librelane/22-config/OpenROAD.STAPostPNR.json'
-    if digest(original_config) != fp.get('config') or config.get('DESIGN_NAME') != top:
+    if (digest(original_config) != fp.get('config')
+            or receipt['sha256'].get('config.json') != digest(folder / 'config.json')
+            or config.get('DESIGN_NAME') != json.loads(original_config.read_text()).get('DESIGN_NAME')):
         raise Refusal('CURRENT_STAPOSTPNR_CONFIG_OR_DESIGN_CHANGED')
+    physical_top = config.get('DESIGN_NAME')
+    if not isinstance(physical_top, str) or not re.fullmatch(r'[A-Za-z_][\w$]*', physical_top):
+        raise Refusal('CURRENT_DESIGN_NAME_INVALID')
     record = json.loads((project / lp.STEP23_RECORD).read_text())
     corner = corner or ((record.get('judgment') or {}).get('worst_setup') or {}).get('corner')
     if not corner:
@@ -281,7 +305,7 @@ def _tool_subject(project, top, *, corner=None, coupling=False):
     if any(str(p) not in fp['liberty_files'] and str(host(p)) not in fp['liberty_files']
            for p in inputs['liberties']):
         raise Refusal('CURRENT_STAPOSTPNR_CORNER_LIBRARY_UNBOUND')
-    subject = basis(project, top, libs, coupling=coupling)
+    subject = basis(project, top, libs, coupling=coupling, physical_top=physical_top)
     roles = {r['role']: r for r in subject['inputs']}
     for role, key in [('netlist', 'sta_netlist'), ('sdc', 'sdc'), ('spef', 'spef')]:
         if digest(project / inputs[key]) != roles[role]['sha256']:
