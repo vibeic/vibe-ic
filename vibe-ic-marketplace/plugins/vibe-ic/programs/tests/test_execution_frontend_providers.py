@@ -8,6 +8,60 @@ from programs.tests.test_execution_receipt_chain import isolated_transport
 
 EXPECTED=('D1','0.5ic','1','2','3','4','5','6','7','8','10','11','FS1','DT1','12','13','DT2','DT3','P0')
 
+def test_step4_ultra_registers_independent_simulators(monkeypatch):
+    import execution_policy
+    monkeypatch.setattr(execution_policy, 'request', lambda: {'mode': 'ultra'})
+    registry = em.Registry()
+    p.register_factories(registry, step_ids=('4',))
+    arms = registry.adapters('4')
+    assert [a.arm_id for a in arms] == ['frontend_4_icarus', 'frontend_4_verilator']
+    assert [a.engine_families for a in arms] == [('iverilog',), ('verilator',)]
+    assert em._provider_identity(arms[0]) != em._provider_identity(arms[1])
+
+
+def test_step4_default_retains_one_composite_adapter(monkeypatch):
+    import execution_policy
+    monkeypatch.setattr(execution_policy, 'request', lambda: {'mode': 'default'})
+    registry = em.Registry()
+    p.register_factories(registry, step_ids=('4',))
+    assert [a.arm_id for a in registry.adapters('4')] == ['frontend_4']
+    assert registry.adapters('4')[0].engine_families == ('iverilog', 'verilator')
+
+
+def test_step4_canonical_failure_cannot_inherit_sdc_pass(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    import execution_policy
+    import flow_compliance_check as flow
+    monkeypatch.setattr(execution_policy, 'request', lambda: {'mode': 'default'})
+    for rel, data in {
+        'reports/phase2/sdc_check.json': {'passed': True, 'program': 'sdc_syntax_check'},
+        'reports/sdc_validator.json': {'verdict': 'PASS', 'exit_code': 0, 'issues': []},
+        'reports/phase2/coverage/coverage_verilator.json': {'totals': {}},
+        'reports/phase2/coverage/coverage_actual.json': {'verdict': 'FAIL'},
+    }.items():
+        target = tmp_path / rel; target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(json.dumps(data))
+    monkeypatch.setattr(flow, 'check_step', lambda *a, **k: SimpleNamespace(status='FAIL', reasons=['native coverage below threshold']))
+    monkeypatch.setattr(flow, '__check_program_exit_zero', lambda *a, **k: SimpleNamespace(passed=False, exit_code=1))
+    monkeypatch.setattr(flow, '_report_verdict', lambda *a: 'FAIL')
+    registry = em.Registry(); p.register_factories(registry, step_ids=('4',))
+    evidence = registry.adapters('4')[0].validate(tmp_path, {'step_id': '4'})
+    assert evidence.verdict == 'FAIL'
+    assert evidence.gates['verilator_coverage_measure'] == 'FAIL'
+
+
+def test_step4_zero_skip_denominator_blocks_native_run(tmp_path, monkeypatch):
+    import subprocess
+    import execution_step4 as step4
+    junit = tmp_path / 'results.xml'
+    def run(*args, **kwargs):
+        junit.write_text('<testsuites><testsuite><testcase name="skipped"><skipped/></testcase></testsuite></testsuites>')
+        return subprocess.CompletedProcess(args[0], 0, 'PROFESSIONAL_TB PASS', '')
+    monkeypatch.setattr(step4.subprocess, 'run', run)
+    result = step4._simulate(tmp_path, 'icarus')
+    assert result['rc'] == 0
+    assert result['verdict'] == 'FAIL'
+
 def test_machine_readable_coverage_and_default():
     c=p.coverage(); assert tuple(c)==EXPECTED; assert all(c[r]['default_rank']==i for i,r in enumerate(EXPECTED)); assert c['0.5ic']['applicability']=='IC+IP route authority'
 
