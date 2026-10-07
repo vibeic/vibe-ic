@@ -219,6 +219,55 @@ def test_step7_bound_population_survives_backend_copy(tmp_path):
     assert T.asic_sdc_input_digest(R, copied, TOP, pdk)[1] != bound
 
 
+@pytest.mark.parametrize("case", ["declared_absent", "no_input", "declared_scan",
+                                 "scan_in_input", "published_scan", "unbound_synth", "empty_synth"])
+def test_step15_uses_pre_dft_only_under_the_canonical_declared_absence(tmp_path, monkeypatch, case):
+    import execution_backend_worker as worker
+    from programs.tests.test_step11_dft_is_owed_only_where_the_design_declares_dft import _project, ABSENT
+    fields = dict(ABSENT)
+    if case == "declared_scan":
+        fields["scan_chains"] = [{"name": "chain0"}]
+    project = _project(tmp_path / "inputs/project", fields)
+    if case == "no_input":
+        (project / "input/docs/L1_product_metadata.md").unlink()
+    if case == "scan_in_input":
+        (project / "input/docs/L1_product_metadata.md").write_text("The core requires scan insertion.\n")
+    if case == "published_scan":
+        scan = project / "reports/phase2/dft/scan_chain.json"
+        scan.parent.mkdir(parents=True)
+        scan.write_text(json.dumps({"published": True}))
+    synth = project / "phase2/stage2/synth/top_synth.v"
+    synth.parent.mkdir(parents=True)
+    synth.write_text("" if case == "empty_synth" else "module top(input clk); endmodule\n")
+    if case == "unbound_synth":
+        (synth.parent / "synth_inputs.json").write_text(json.dumps({"librelane_synthesis": {
+            "folder": "phase3/librelane/missing", "mapped": str(synth.relative_to(project))}}))
+    deck = project / "phase2/stage2/constraints/top.sdc"
+    deck.parent.mkdir(parents=True)
+    deck.write_text("create_clock -period 10 [get_ports clk]\n")
+    monkeypatch.setenv("VIBEIC_EXECUTION_BINDING", json.dumps({
+        "source_sha": BASE, "step_id": "15", "required_gates": _required_gates("15")}))
+    calls = []
+    monkeypatch.setattr(worker, "produce", lambda *a: calls.append("produce") or
+                        {"verdict": "NOT_MEASURED", "detail": "source control"})
+    monkeypatch.setattr(worker, "evaluate", lambda *a: calls.append("gates") or
+                        {"status": "NOT_MEASURED", "ledger": []})
+    result = worker.execute(tmp_path / "inputs", tmp_path / "outputs", step_id="15", params={"top": "top"})
+    path = BACKEND_ROWS["15"]["canonical_row"]["required_inputs"][0]["path"]
+    if case == "declared_absent":
+        assert result["missing_inputs"] == []
+        assert calls == ["produce", "gates"]
+        selected = result["input_resolutions"][0]
+        assert selected["selected"] == "phase2/stage2/synth/top_synth.v"
+        assert selected["selected_sha256"] == em.digest(synth)
+        assert selected["basis"][2]["documents_scanned_count"] == 1
+    else:
+        assert result["missing_inputs"] == [path]
+        assert calls == []
+        assert result["input_resolutions"] == []
+    assert result["verdict"] == "NOT_MEASURED"
+
+
 @pytest.mark.parametrize("path", ["../escape", "/foreign/file", "reports/execution/old/receipt.json", "input/*.json"])
 def test_backend_rejects_unsafe_step7_bound_paths(tmp_path, path):
     project = tmp_path / "project"

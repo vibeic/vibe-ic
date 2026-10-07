@@ -43,7 +43,8 @@ def resolve_contract(project: Path, patterns) -> tuple[dict, list[str]]:
     return found, missing
 
 
-def resolve_input_contract(project: Path, declarations) -> list[str]:
+def resolve_input_contract(project: Path, declarations, *, step_id=None,
+                           top=None, resolutions=None) -> list[str]:
     missing = []
     for declaration in declarations or ():
         if not isinstance(declaration, dict) or not declaration.get("path"):
@@ -57,6 +58,41 @@ def resolve_input_contract(project: Path, declarations) -> list[str]:
             for pattern in patterns for p in project.glob(pattern))
         if not present:
             missing.append(str(declaration["path"]))
+    # Step 12 owes a post-DFT netlist only under its canonical L20 condition.
+    # When the SAME input-corroborated condition proves DFT absent, Step 15
+    # consumes Step 9's netlist through the existing PnR selector. Never turn
+    # an unknown/missing declaration or a published scan chain into this route.
+    if str(step_id) == "15" and top and missing:
+        import _flow_yaml
+        import flow_compliance_check as fcc
+        import phase3_one_shot_runner as runner
+        rows = {str(r["id"]): r for r in _flow_yaml.load()["steps"]}
+        producer = rows["12"]
+        absent = fcc._l_doc_declares_absence(
+            project, (producer.get("condition") or {}).get("l_doc_declares"))
+        scan = project / "reports/phase2/dft/scan_chain.json"
+        for declaration in rows["15"].get("required_inputs", ()):
+            path = declaration.get("path")
+            if (str(declaration.get("from")) != "12" or path not in missing
+                    or path not in producer.get("required_outputs", ())
+                    or absent is None or scan.exists()):
+                continue
+            try:
+                selected, note, is_scan = runner.pnr_input_netlist(project, top)
+                relative = selected.relative_to(project)
+                if (is_scan or not selected.is_file() or selected.is_symlink()
+                        or not selected.stat().st_size):
+                    continue
+            except (OSError, ValueError):
+                continue
+            missing.remove(path)
+            if resolutions is not None:
+                resolutions.append({"schema": "vibeic/backend-input-resolution/1",
+                    "declared": path, "producer_step": "12",
+                    "producer_condition": "NOT_APPLICABLE", "basis": absent,
+                    "selected": relative.as_posix(), "selected_sha256": sha(selected),
+                    "consumer": "phase3_one_shot_runner.pnr_input_netlist",
+                    "detail": note})
     return missing
 
 
@@ -82,7 +118,9 @@ def execute(inputs: Path, outputs: Path, *, step_id: str, params: dict) -> dict:
     binding = _binding(inputs)
     row = ROWS[str(step_id)]["canonical_row"]
     input_contract = params.get("input_contract", row.get("required_inputs", ()))
-    missing_inputs = resolve_input_contract(project, input_contract)
+    input_resolutions = []
+    missing_inputs = resolve_input_contract(project, input_contract,
+        step_id=step_id, top=params.get("top"), resolutions=input_resolutions)
     producer = {"verdict": "NOT_MEASURED", "detail": "producer did not run"}
     gate_result = {"status": "NOT_MEASURED", "ledger": []}
     if missing_inputs:
@@ -140,6 +178,7 @@ def execute(inputs: Path, outputs: Path, *, step_id: str, params: dict) -> dict:
         "canonical_receipts": canonical_receipts,
         "verdict": verdict, "detail": producer.get("detail", ""),
         "input_contract": input_contract, "missing_inputs": missing_inputs,
+        "input_resolutions": input_resolutions,
     }
     (outputs / "backend_result.json").write_text(json.dumps(result, sort_keys=True, indent=2) + "\n")
     return result
