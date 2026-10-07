@@ -54,7 +54,7 @@ def stage(project, output):
     return output, manifest['parameters']
 
 
-def _simulate(bundle, simulator, *, instrument=False, jobs=4):
+def _simulate(bundle, simulator, *, instrument=False, jobs=4, rtl=None):
     if simulator not in ('icarus', 'verilator'):
         raise ValueError('4: unsupported simulator')
     if not 1 <= jobs <= 4:
@@ -67,6 +67,8 @@ def _simulate(bundle, simulator, *, instrument=False, jobs=4):
         dat.unlink(missing_ok=True)
     argv = ['make', '-j' + str(jobs), 'SIM=' + simulator,
             'SIM_BUILD=' + str(build), 'COCOTB_RESULTS_FILE=' + str(junit)]
+    if rtl:
+        argv += ['VERILOG_SOURCES=' + ' '.join(str(path) for path in rtl)]
     environment = {**os.environ, 'RANDOM_SEED': '1'}
     if instrument:
         environment['COMPILE_ARGS'] = '--coverage --coverage-line --coverage-toggle'
@@ -92,9 +94,9 @@ def _simulate(bundle, simulator, *, instrument=False, jobs=4):
 
 def measure_bundle(project, bundle, rtl, *, jobs=4):
     """Use the canonical parser and RTL scope on fresh native coverage bytes."""
-    destination = project / coverage.COVERAGE_MEASUREMENT_REL
+    destination = project / 'reports/phase2' / coverage.COVERAGE_MEASUREMENT_REL
     destination.unlink(missing_ok=True)
-    run = _simulate(bundle, 'verilator', instrument=True, jobs=jobs)
+    run = _simulate(bundle, 'verilator', instrument=True, jobs=jobs, rtl=rtl)
     dat = bundle / 'coverage.dat'
     if run['verdict'] != 'PASS' or not dat.is_file() or not dat.stat().st_size:
         return dict(verdict='FAIL', reason='STEP4_COVERAGE_RUN_FAILED', run=run)
