@@ -78260,6 +78260,11 @@ def main() -> int:
             plan.append(_pls)
             print(f"[prelayout] {_pls.status:5s} {_pls.name}: {_pls.detail}",
                   flush=True)
+            if _pls.status == "PASS":
+                from design_one_shot_runner import step_sdc_validation_post_prelayout
+                import librelane_contract as _sdc_ll
+                if _sdc_ll.selected_mode(project, "8") in ("librelane", "dual"):
+                    plan.append(step_sdc_validation_post_prelayout(project, effective_top))
             # ORGANIC #593 — geometry-aware cache: a DEF that exists may
             # only be reused when the requested --die-um/--util match the
             # cached run's geometry (pnr_args.json). A congestion-recovery

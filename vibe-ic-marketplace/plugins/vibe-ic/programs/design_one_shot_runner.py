@@ -108,6 +108,7 @@ import re
 import secrets
 import stat
 import subprocess
+import shutil
 import sys
 import tempfile
 import time
@@ -19574,6 +19575,17 @@ def step_qsf_gen(project: Path, top_name: str = "chip_top",
 
 
 def step_sdc_validation(project: Path) -> StepResult:
+    import librelane_contract as _llc
+    mode = _llc.selected_mode(project, '8')
+    if mode in ('librelane', 'dual'):
+        # The OpenSTA producer consumes Step 9's mapped netlist.  This site
+        # precedes synthesis; a frozen frontend worker cannot produce its
+        # downstream input. Preserve this observation until the postcheck.
+        return StepResult('sdc_validation', 'NOT_MEASURED', 0.0,
+                          'SDC_VALIDATION_DEFERRED: current mapped netlist and '
+                          'OpenSTA gate are evaluated after prelayout signoff',
+                          extras={'deferred_until': 'post_prelayout', 'mode': mode},
+                          reason_class=_V.ReasonClass.UPSTREAM_FAILED)
     import execution_policy as _execution
     result = _execution.dispatch_fixed_step(project, '8')
     if result is None:
@@ -19584,6 +19596,121 @@ def step_sdc_validation(project: Path) -> StepResult:
     return StepResult('sdc_validation', status, 0.0, str(result.get('reason','')),
                       extras={'execution_result':result},
                       reason_class=_V.ReasonClass.INPUT_ABSENT if status=='NOT_MEASURED' else '')
+
+
+def step_sdc_validation_post_prelayout(project: Path, top: str) -> StepResult:
+    """Consume this project's current tool evidence, without a frontend context.
+
+    Called only after the prelayout producer returns PASS. The two existing
+    deterministic consumers run directly; an invocation-scoped receipt binds
+    their actual exit codes and output bytes to the inputs before and after.
+    """
+    import librelane_contract as ll
+    import shutil
+    import uuid
+    project = Path(project).resolve()
+    invocation = uuid.uuid4().hex
+    folder = project / 'reports/phase2/sdc_postcheck' / invocation
+    folder.mkdir(parents=True, exist_ok=True)
+    receipt = folder / 'receipt.json'
+    gate = project / 'phase3/librelane/prelayout/gates/step8_sdc_opensta.json'
+    deck = project / 'phase3/stage3/pnr/constraint.sdc'
+    netlist = _pl.synth_dir(project) / f'{top}_synth.v'
+    l8 = project / 'phase1/generated_docs/L8_TIMING_WAVEFORM.json'
+    started = time.time_ns()
+    records, binding = [], {}
+    status, reason, detail = 'NOT_MEASURED', _V.ReasonClass.INPUT_ABSENT, ''
+
+    def current_inputs():
+        paths = {'opensta_gate': gate, 'pnr_sdc': deck,
+                 'mapped_netlist': netlist, 'l8': l8}
+        paths.update({str(p.relative_to(project)): p for p in
+                      (project / 'phase2/stage2/constraints').glob('*.sdc')})
+        for path in paths.values():
+            if (path.is_symlink() or not path.is_file() or
+                    not path.resolve().is_relative_to(project) or not path.stat().st_size):
+                raise ValueError(f'SDC_POSTCHECK_INPUT_ABSENT: {path}')
+        doc = json.loads(gate.read_text())
+        state = Path(str(doc.get('source') or ''))
+        if (state.is_symlink() or not state.is_file() or
+                not state.resolve().is_relative_to(project) or
+                doc.get('state_out_sha256') != ll.digest(state)):
+            raise ValueError('SDC_POSTCHECK_GATE_STALE: OpenSTA state')
+        if (Path(str(doc.get('sdc') or '')).resolve() != deck.resolve() or
+                doc.get('sdc_sha256') != ll.digest(deck) or
+                Path(str(doc.get('netlist') or '')).resolve() != netlist.resolve() or
+                Path(str(json.loads(state.read_text()).get('nl') or '')).resolve() != netlist.resolve() or
+                doc.get('netlist_sha256') != ll.digest(netlist)):
+            raise ValueError('SDC_POSTCHECK_GATE_STALE: current deck/netlist')
+        if doc.get('step') != '8' or doc.get('program') != 'librelane_prelayout.judge_sdc':
+            raise ValueError('SDC_POSTCHECK_GATE_UNBOUND')
+        paths['state_out'] = state
+        return {'project': str(project), 'mode': ll.selected_mode(project, '8'),
+                'inputs': {name: {'path': str(path), 'sha256': ll.digest(path)}
+                           for name, path in paths.items()},
+                'sources': {name: ll.digest(PROGRAMS_DIR / name) for name in
+                            ('design_one_shot_runner.py', 'phase3_one_shot_runner.py',
+                             'sdc_syntax_check.py', 'sdc_validator_check.py',
+                             'librelane_prelayout.py')}}
+
+    try:
+        binding = current_inputs()
+        if binding['mode'] not in ('librelane', 'dual'):
+            raise ValueError('SDC_POSTCHECK_TOOL_MODE_REQUIRED')
+        commands = (
+            ('sdc_syntax_check', [sys.executable, str(PROGRAMS_DIR / 'sdc_syntax_check.py'),
+                                 str(project), '--json', str(folder / 'syntax.json')]),
+            ('sdc_validator_check', [sys.executable, str(PROGRAMS_DIR / 'sdc_validator_check.py'),
+                                    str(project), '--l8', str(l8), '--json', str(folder / 'validator.json')]),
+        )
+        for name, argv in commands:
+            cp = subprocess.run(argv, capture_output=True, text=True, timeout=30)
+            target = Path(argv[-1])
+            records.append({'program': name, 'argv': argv, 'rc': cp.returncode,
+                            'stdout': cp.stdout, 'stderr': cp.stderr,
+                            'output': str(target),
+                            'output_sha256': ll.digest(target) if target.is_file() else None})
+            if current_inputs() != binding:
+                raise ValueError('SDC_POSTCHECK_INPUT_CHANGED')
+            if not target.is_file() or not target.stat().st_size:
+                raise ValueError(f'SDC_POSTCHECK_OUTPUT_ABSENT: {name}')
+        syntax = json.loads((folder / 'syntax.json').read_text())
+        validator = json.loads((folder / 'validator.json').read_text())
+        passed = (all(r['rc'] == 0 for r in records) and syntax.get('passed') is True
+                  and validator.get('verdict') == 'PASS' and validator.get('exit_code') == 0)
+        status = 'PASS' if passed else ('FAIL' if any(r['rc'] == 1 for r in records)
+                                        else 'NOT_MEASURED')
+        reason = '' if status != 'NOT_MEASURED' else _V.ReasonClass.INCONCLUSIVE
+        detail = f'SDC_POSTCHECK_{status}: current prelayout consumers; invocation {invocation}'
+        # Publish only the consumers' observed bytes, after the binding held.
+        for src, rel in ((folder / 'syntax.json', 'reports/phase2/sdc_check.json'),
+                         (folder / 'validator.json', 'reports/sdc_validator.json')):
+            dst = project / rel
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(src, dst)
+    except (OSError, ValueError, TypeError, subprocess.TimeoutExpired) as exc:
+        status, reason, detail = 'NOT_MEASURED', _V.ReasonClass.INCONCLUSIVE, str(exc)
+    _aa.write_json(receipt, {'schema': 'sdc-post-prelayout/1', 'invocation_id': invocation,
+                            'binding': binding, 'records': records, 'status': status,
+                            'detail': detail, 'started_ns': started, 'ended_ns': time.time_ns()})
+    result = StepResult('sdc_validation', status, (time.time_ns() - started) / 1e9,
+                        detail, [str(receipt)],
+                        extras={'post_prelayout': True, 'invocation_id': invocation,
+                                'receipt_sha256': ll.digest(receipt)}, reason_class=reason)
+    # Preserve the earlier deferred row. Only this new observation is current;
+    # never reopen its frozen Controller context or edit its status.
+    report = _pl.report_path(project, 'phase2_one_shot.json')
+    if report.is_file():
+        doc = json.loads(report.read_text())
+        previous = next((r for r in reversed(doc.get('steps', []))
+                         if r.get('name') == 'sdc_validation'), None)
+        if (doc.get('project') == str(project) and previous and
+                previous.get('extras', {}).get('deferred_until') == 'post_prelayout'):
+            from types import SimpleNamespace
+            doc['steps'].append(asdict(result))
+            doc['verdict'] = _aggregate_verdict([SimpleNamespace(**r) for r in doc['steps']])
+            _aa.write_json(report, doc)
+    return result
 
 
 def _emit_step7_pvt_matrix(project: Path, pdk: object,
@@ -26692,7 +26819,33 @@ def _aggregate_verdict(plan: List[StepResult]) -> str:
     back: each row is named with the word AND the reason or declaration beside
     it. A run whose skips go silent is the run16 shape.
     """
-    rows = list(_step_verdicts(plan))
+    # A deferred Step-8 observation is history once a newly executed,
+    # digest-bound post-prelayout consumer supplies its current result.
+    latest = next((s for s in reversed(plan) if s.name == 'sdc_validation'), None)
+    current = False
+    if latest and latest.extras.get('post_prelayout'):
+        try:
+            receipt = Path(latest.output_files[0])
+            doc = json.loads(receipt.read_text())
+            current = (hashlib.sha256(receipt.read_bytes()).hexdigest() ==
+                       latest.extras.get('receipt_sha256') and
+                       doc.get('invocation_id') == latest.extras.get('invocation_id') and
+                       doc.get('status') == latest.status and
+                       bool(doc.get('records')) and
+                       all(Path(r['output']).is_file() and
+                           hashlib.sha256(Path(r['output']).read_bytes()).hexdigest() == r['output_sha256']
+                           for r in doc['records']) and
+                       all(hashlib.sha256((PROGRAMS_DIR / name).read_bytes()).hexdigest() == sha
+                           for name, sha in doc['binding']['sources'].items()) and
+                       all(Path(row['path']).is_file() and
+                           hashlib.sha256(Path(row['path']).read_bytes()).hexdigest() == row['sha256']
+                           for row in doc['binding']['inputs'].values()))
+        except (OSError, ValueError, KeyError, IndexError, TypeError):
+            current = False
+    effective = [s for s in plan if not (current and s is not latest and
+                 s.name == 'sdc_validation' and s.status == 'NOT_MEASURED' and
+                 s.extras.get('deferred_until') == 'post_prelayout')]
+    rows = list(_step_verdicts(effective))
     _skipped = [r for r in rows
                 if r.verdict in (_V.Verdict.NOT_MEASURED,
                                  _V.Verdict.NOT_APPLICABLE)]

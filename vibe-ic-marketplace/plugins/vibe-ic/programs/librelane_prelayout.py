@@ -284,7 +284,11 @@ def judge_sdc(folder: Path, resolved: dict, declared_sdc: Optional[Path],
         if untimed:
             verdict = "FAIL"
             findings.append(f"{corner.name}: check_setup {untimed}")
+    state = _load(folder / "state_out.json")
+    netlist = Path(str(state.get("nl") or ""))
     report = {"step": "8", "program": "librelane_prelayout.judge_sdc",
+              "netlist": str(netlist),
+              "netlist_sha256": digest(netlist) if netlist.is_file() else None,
               "verdict": verdict, "sdc": str(deck),
               "excluded_supply_endpoints": sorted(supply_names(resolved)),
               "sdc_sha256": digest(deck) if deck.is_file() else None,
