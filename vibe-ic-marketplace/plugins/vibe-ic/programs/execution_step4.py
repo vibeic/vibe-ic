@@ -13,6 +13,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import tempfile
+import xml.etree.ElementTree as ET
 
 import _atomic_artefact as atomic
 import _sim_results_bridge as results
@@ -75,6 +76,12 @@ def _simulate(bundle, simulator, *, instrument=False, jobs=4):
     log = bundle / ('coverage_run.log' if instrument else 'cocotb_run.log')
     atomic.write_text(log, cp.stdout + '\n' + cp.stderr)
     summary = results.parse_junit(junit)
+    if summary:
+        # Empty JUnit outcome elements are still outcomes. Element truthiness
+        # can otherwise let an all-skipped result look like a passing test.
+        tree = ET.parse(junit)
+        for key, tag in (('failures', 'failure'), ('errors', 'error'), ('skipped', 'skipped')):
+            summary[key] = max(summary[key], len(tree.findall('.//' + tag)))
     clean = bool(cp.returncode == 0 and summary and summary['tests'] > 0 and
                  summary['passed'] > 0 and summary['failures'] == 0 and
                  summary['errors'] == 0 and summary['skipped'] == 0 and
