@@ -58847,11 +58847,11 @@ def emit_clock_plan(project: Path, clock_plan: Path, primary_def: Path,
     (a staleness refresh that re-derives nothing) is only observable by
     executing it. Behaviour is unchanged by the split.
 
-    Emit a SUBSTANTIVE plan that `clock_plan_check` accepts: one entry per
-    `create_clock` found across the project's SDCs, each carrying name +
-    positive period_ns + source port. That checker sweeps the SDCs and FAILs
-    (SDC_CLOCK_DROPPED) on any create_clock name absent from the plan, so ALL
-    of them are harvested — chip-AGNOSTIC, no hardcoded clock name.
+    OpenROAD evaluates Step 7's complete, source-bound ASIC SDC and measures
+    each clock's name, positive period and source. The checker uses the same
+    bundle for dropped-clock checks. FPGA decks and physical-stage snapshots
+    belong to their own consumers; no timing command is removed from the
+    canonical ASIC deck to make it parse.
 
     REFRESH has two independent triggers:
 
@@ -58869,7 +58869,11 @@ def emit_clock_plan(project: Path, clock_plan: Path, primary_def: Path,
     """
     needs_refresh = True
     stale_refresh = False           # this refresh was triggered by staleness
-    sdc_paths = _pl.clock_plan_input_sdcs(project)
+    try:
+        sdc_paths = _pl.clock_plan_input_sdcs(project)
+    except ValueError as exc:
+        notes.append(f"clock_plan.json NOT written: {exc}")
+        return None
     if clock_plan.is_file():
         existing = None
         try:
@@ -58881,6 +58885,17 @@ def emit_clock_plan(project: Path, clock_plan: Path, primary_def: Path,
             existing = None
             needs_refresh = True
         if not needs_refresh:
+            import _physical_current as _pc
+            source_refusal = _pc.clock_plan_asic_refusal(project, existing["current"])
+            if source_refusal:
+                needs_refresh = True
+                notes.append(f"clock_plan.json ASIC source invalid — {source_refusal}")
+            bound = existing["current"].get("inputs", {}).get("asic_record", {})
+            record_path = _pl.constraints_dir(project) / _ppa_timing.ASIC_SDC_RECORD
+            if (not record_path.is_file()
+                    or bound.get("sha256") != _sha256_file(record_path)):
+                needs_refresh = True
+                notes.append("clock_plan.json ASIC source record changed — re-derived")
             stale_against = _clock_plan_stale_inputs(
                 project, existing, sdc_paths)
             if stale_against:
@@ -58945,6 +58960,21 @@ def emit_clock_plan(project: Path, clock_plan: Path, primary_def: Path,
         pdk = _detect_pdk(project, declared_pdk)
         if pdk is None:
             raise ValueError("CLOCK_PLAN_PDK_NOT_RESOLVED")
+        # Execute Step 7's ASIC bundle, never the FPGA dialect or an unbound
+        # copy from another physical stage. The owning reader verifies both
+        # the output bytes and every source input consumed by its producer.
+        record_path = _pl.constraints_dir(project) / _ppa_timing.ASIC_SDC_RECORD
+        if not record_path.is_file():
+            raise ValueError("CLOCK_PLAN_ASIC_SDC_RECORD_MISSING")
+        record = json.loads(record_path.read_text())
+        if not isinstance(record, dict) or not isinstance(record.get("top"), str):
+            raise ValueError("CLOCK_PLAN_ASIC_SDC_RECORD_INVALID")
+        asic, refusal = _ppa_timing.read_step7_asic_sdc(
+            _runner_module(), project, record["top"], pdk)
+        if asic is None:
+            raise ValueError(f"CLOCK_PLAN_ASIC_SDC_REFUSED: {refusal}")
+        if sdc_paths != [project / asic["path"]]:
+            raise ValueError("CLOCK_PLAN_ASIC_SDC_SET_CHANGED")
         if _chip_path_requests_pad_ring(project):
             # This independent DEF reader needs the same physical IO masters
             # as pad_ring_gen/PnR. Missing masters drop COMPONENTS before their

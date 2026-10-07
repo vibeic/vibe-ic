@@ -13,6 +13,7 @@ import _tapeout_declaration as declaration
 import clock_plan_check as gate
 import phase3_one_shot_runner as runner
 from _hostpaths import require_repo
+from _clock_plan_fixture import step7_fixture
 import pytest
 
 
@@ -40,10 +41,11 @@ def setup(tmp_path, monkeypatch):
                 "DESIGN neutral ;\nCOMPONENTS 2 ;\n"
                 "- u_logic core_buf ;\n- u_front input_pad ;\n"
                 "END COMPONENTS\nEND DESIGN\n")
-    put(project, "phase2/stage2/constraints/current.sdc",
-        "create_clock -name system -period 12 [get_ports tick]\n")
+    sdc = put(project, "phase2/stage2/constraints/current.sdc",
+              "create_clock -name system -period 12 [get_ports tick]\n")
     monkeypatch.setattr(runner, "_read_declared_pdk_target", lambda _: pdk.name)
     monkeypatch.setattr(runner, "_detect_pdk", lambda *_: pdk)
+    step7_fixture(monkeypatch, project, pdk, sdc)
     calls = []
 
     def native(_project, tool, args, log):
@@ -107,6 +109,8 @@ def test_core_consumer_does_not_require_an_io_library(setup, monkeypatch):
     project, floor, plan, _, _, _ = setup
     (project / declaration.SELF_TAPEOUT_REL).unlink()
     floor.write_text(floor.read_text().replace("input_pad", "core_buf"))
+    step7_fixture(monkeypatch, project, setup[4],
+                  project / "phase2/stage2/constraints/current.sdc")
     def unexpected(*_):
         raise AssertionError("core-only path queried IO views")
     monkeypatch.setattr(pads, "discover_io_lefs", unexpected)

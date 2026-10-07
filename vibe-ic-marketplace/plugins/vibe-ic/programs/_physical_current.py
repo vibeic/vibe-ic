@@ -147,10 +147,17 @@ def clock_plan(project, plan, floorplan, sdcs, pdk):
         raise ValueError("CLOCK_PLAN_REQUIRES_FLOORPLAN")
     design = design_of(floorplan)
     inputs = {"floorplan": entry(project, floorplan)}
+    from _ppa.timing import ASIC_SDC_RECORD
+    from _path_layout import constraints_dir
+    asic_record = constraints_dir(project) / ASIC_SDC_RECORD
+    inputs["asic_record"] = entry(project, asic_record)
     for i, path in enumerate(sdcs):
         inputs[f"sdc_{i}"] = entry(project, path)
     if not sdcs:
         raise ValueError("CLOCK_PLAN_SDC_MISSING")
+    refusal = clock_plan_asic_refusal(project, {"inputs": inputs, "pdk": pdk.name})
+    if refusal:
+        raise ValueError(refusal)
     lefs = list(dict.fromkeys([pdk.tech_lef, pdk.cell_lef,
                                *(getattr(pdk, "macro_lefs", []) or [])]))
     for i, path in enumerate(lefs):
@@ -189,12 +196,45 @@ def clock_plan(project, plan, floorplan, sdcs, pdk):
     for role, row in inputs.items():
         if entry(project, project / row["path"], external=role.startswith("pdk_")) != row:
             raise ValueError(f"CLOCK_PLAN_INPUT_CHANGED: {role}")
+    refusal = clock_plan_asic_refusal(project, {"inputs": inputs, "pdk": pdk.name})
+    if refusal:
+        raise ValueError(refusal)
     current = build(project, "16", "stage3", design, pdk.name, "openroad",
                     inputs, {"log": entry(project, log)}, execution)
     write_json(plan, {"tool": "openroad", "primary_clock": clocks[0]["name"],
                       "clocks": clocks, "current": current,
                       "derived_from": {str(Path(p).relative_to(project)): digest(p) for p in sdcs}})
     return str(plan)
+
+
+def clock_plan_asic_refusal(project, record):
+    """Blocking reader: the measured ASIC bundle still belongs to its sources."""
+    try:
+        import phase3_one_shot_runner as runner
+        from _ppa import timing
+        project = Path(project)
+        path = runner._pl.constraints_dir(project) / timing.ASIC_SDC_RECORD
+        if record["inputs"]["asic_record"] != entry(project, path):
+            return "CLOCK_PLAN_ASIC_RECORD_CHANGED"
+        doc = json.loads(path.read_text())
+        if not isinstance(doc, dict) or not isinstance(doc.get("top"), str):
+            return "CLOCK_PLAN_ASIC_SDC_RECORD_INVALID"
+        declared = runner._read_declared_pdk_target(project)
+        if not declared or declared != record["pdk"]:
+            return "CLOCK_PLAN_ASIC_PDK_CHANGED"
+        pdk = runner._detect_pdk(project, declared)
+        if pdk is None:
+            return "CLOCK_PLAN_ASIC_PDK_UNRESOLVED"
+        asic, why = timing.read_step7_asic_sdc(runner, project, doc["top"], pdk)
+        if asic is None:
+            return f"CLOCK_PLAN_ASIC_SDC_REFUSED: {why}"
+        selected = {role: row for role, row in record["inputs"].items()
+                    if role.startswith("sdc_")}
+        if selected != {"sdc_0": entry(project, project / asic["path"])}:
+            return "CLOCK_PLAN_ASIC_SDC_SET_CHANGED"
+        return ""
+    except (OSError, ValueError, TypeError, KeyError) as exc:
+        return f"CLOCK_PLAN_ASIC_SDC_REFUSED: {exc}"
 
 
 def direct_half(project, top, pdk, half, producer):
