@@ -477,11 +477,32 @@ SDC_PRIORITY_DIRS = (
 
 
 def clock_plan_input_sdcs(project: Path):
-    """Every `*.sdc` under `project`, canonical-constraint directories first.
+    """Step 7's recorded ASIC deck; legacy plans retain their historical set.
 
-    Stable, deterministic order; no file is excluded, so this is exactly the
-    set the clock-plan producer has always harvested.
+    The ASIC producer owns the constraint bundle, including staged clocks,
+    exceptions and I/O constraints. FPGA and implementation snapshots are
+    separate consumers, not additional executable ASIC inputs. Native Step 16
+    additionally verifies the Step-7 source digest through its owning reader.
+    A present but invalid record never falls back to the historical sweep.
     """
+    import hashlib
+    import json
+    from _ppa.timing import ASIC_SDC_RECORD, _step7_record_output_path
+    constraints = constraints_dir(project)
+    record = constraints / ASIC_SDC_RECORD
+    if record.exists():
+        try:
+            doc = json.loads(record.read_text())
+            if not isinstance(doc, dict) or doc.get("schema") != "vibe-ic/step7-asic-sdc/1":
+                raise ValueError("invalid Step-7 schema")
+            raw = doc.get("path")
+            path = (_step7_record_output_path(project, constraints, raw)
+                    if isinstance(raw, str) else None)
+            if path is None or hashlib.sha256(path.read_bytes()).hexdigest() != doc.get("sha256"):
+                raise ValueError("Step-7 output missing, escaped or changed")
+            return [path]
+        except (OSError, ValueError, TypeError) as exc:
+            raise ValueError(f"CLOCK_PLAN_ASIC_SDC_REFUSED: {exc}") from exc
     seen = []
     for rel in SDC_PRIORITY_DIRS:
         d = project / rel

@@ -32,8 +32,8 @@ clock-plan artefact:
          fact, NOT a fabricated chip-specific threshold.)
        - a source pin or port (a non-empty net/port/pin string). A clock with no
          source object => FAIL.
-  5. If an SDC exists (phase3/.../constraints, the pnr dir, the phase2 fpga
-     constraints, or any ``*.sdc`` under the project), parse every
+  5. Use Step 7's recorded ASIC bundle when present; legacy plans retain
+     their historical SDC discovery. Parse every
      ``create_clock`` in it and verify each constrained clock NAME appears in
      the plan. A dropped clock (in SDC but missing from the plan) => FAIL. This
      is the real backend failure this gate guards: a multi-clock design whose
@@ -315,6 +315,8 @@ def _stale_inputs(project: Path, plan):
 
 
 def _find_sdc_files(project: Path):
+    if (project / "phase2/stage2/constraints/asic_sdc.json").exists():
+        return _pl.clock_plan_input_sdcs(project)
     seen = []
     for rel in _SDC_DIR_CANDIDATES:
         d = project / rel
@@ -716,7 +718,12 @@ def main(argv=None):
             })
 
     # ---- dropped-clock check vs SDC (if an SDC exists) -----------------
-    sdc_files = _find_sdc_files(project)
+    try:
+        sdc_files = _find_sdc_files(project)
+    except ValueError as exc:
+        findings.append({"severity": "FAIL", "rule": "CLOCK_PLAN_ASIC_SDC_REFUSED",
+                         "message": str(exc)})
+        return _emit(args, project, "FAIL", plan_rel, waiver, summary, [], findings, 1)
     sdc_names, sdc_with_clocks = _sdc_clock_names(sdc_files)
     sdc_checked = [str(f.relative_to(project)) for f in sdc_with_clocks]
     if sdc_names:
@@ -795,10 +802,12 @@ def main(argv=None):
     # Blocking current-subject check for the ordinary Step-16 producer.
     import _physical_current as _pc
     current = plan.get("current") if isinstance(plan, dict) else None
-    required = ["floorplan", "recipe", "pdk_lef_0", "pdk_lef_1", "sdc_0"]
+    required = ["floorplan", "recipe", "pdk_lef_0", "pdk_lef_1", "sdc_0", "asic_record"]
     refusal = _pc.validate(project, current, step="16", stage="stage3",
                            tools=("openroad",), required_inputs=required,
                            required_outputs=("log",), marker="CLOCK_PLAN_DONE")
+    if not refusal:
+        refusal = _pc.clock_plan_asic_refusal(project, current)
     if not refusal:
         native = []
         text = (project / current["outputs"]["log"]["path"]).read_text()

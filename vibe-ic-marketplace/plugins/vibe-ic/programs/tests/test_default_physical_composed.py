@@ -8,6 +8,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import _physical_current as current
 import clock_plan_check as clock_gate
 import phase3_one_shot_runner as runner
+from _clock_plan_fixture import step7_fixture
 
 
 def put(project, name, text):
@@ -31,6 +32,7 @@ def clock_project(tmp_path, monkeypatch):
     monkeypatch.setattr(current, "run_native", native)
     monkeypatch.setattr(runner, "_read_declared_pdk_target", lambda p: pdk.name)
     monkeypatch.setattr(runner, "_detect_pdk", lambda *a: pdk)
+    step7_fixture(monkeypatch, tmp_path, pdk, sdc)
     plan = tmp_path / "phase3/stage3/cts/clock_plan.json"
     notes = []
     assert runner.emit_clock_plan(tmp_path, plan, floor, floor.parent, notes) == str(plan), notes
