@@ -139,6 +139,13 @@ def produce(project, output, simulator, **parameters):
     rtl = sorted((project / 'phase2/stage1/rtl').rglob('*.v'))
     rtl += sorted((project / 'phase2/stage1/rtl').rglob('*.sv'))
     functional = _simulate(bundle, simulator)
+    # Publish the same arm's actual JUnit bytes at the normal consumer seam.
+    # A view is not a second measurement; the source transcript remains bound.
+    primary_junit = Path(functional['junit'])
+    if primary_junit.is_file():
+        sim = project / 'phase2/stage1/sim'
+        sim.mkdir(parents=True, exist_ok=True)
+        atomic.write_bytes(sim / 'results.xml', primary_junit.read_bytes())
     measured = measure_bundle(project, bundle, rtl)
     summary = functional['summary'] or {}
     _dump(project / 'reports/phase2/gates/professional_tb.json',
