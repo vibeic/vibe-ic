@@ -85,18 +85,22 @@ def execute(inputs: Path, outputs: Path, *, step_id: str, params: dict) -> dict:
     missing_inputs = resolve_input_contract(project, input_contract)
     producer = {"verdict": "NOT_MEASURED", "detail": "producer did not run"}
     gate_result = {"status": "NOT_MEASURED", "ledger": []}
-    try:
-        params = dict(params, step_id=str(step_id), project=project)
-        producer = produce(project, params)
-        if not isinstance(producer, dict):
-            producer = {"verdict": "NOT_MEASURED", "detail": "producer returned no result"}
-    except BaseException as exc:
-        producer = {"verdict": "NOT_MEASURED", "detail": f"{type(exc).__name__}: {exc}",
-                    "canonical_receipts": [{
-                        "schema": "vibeic/backend-producer-receipt/1",
-                        "producer": "execution_backend_producers.produce",
-                        "step_id": str(step_id), "verdict": "NOT_MEASURED",
-                        "detail": f"{type(exc).__name__}: {exc}"}]}
+    if missing_inputs:
+        producer = {"verdict": "NOT_MEASURED", "detail":
+                    "REQUIRED_INPUT_ABSENT: " + "; ".join(missing_inputs)}
+    else:
+        try:
+            params = dict(params, step_id=str(step_id), project=project)
+            producer = produce(project, params)
+            if not isinstance(producer, dict):
+                producer = {"verdict": "NOT_MEASURED", "detail": "producer returned no result"}
+        except BaseException as exc:
+            producer = {"verdict": "NOT_MEASURED", "detail": f"{type(exc).__name__}: {exc}",
+                        "canonical_receipts": [{
+                            "schema": "vibeic/backend-producer-receipt/1",
+                            "producer": "execution_backend_producers.produce",
+                            "step_id": str(step_id), "verdict": "NOT_MEASURED",
+                            "detail": f"{type(exc).__name__}: {exc}"}]}
     # A producer exception must not erase a measured FAIL, and a consumer
     # exception must not prevent the canonical gate from being represented in
     # the digest-bound result.  Both remain source-only until native receipts.

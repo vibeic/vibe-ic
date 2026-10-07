@@ -82,6 +82,49 @@ def _pad_record(proj):
     return rec
 
 
+@pytest.mark.parametrize("change", ["pad", "other_input", "already_stale"])
+def test_prepnr_refreshes_only_its_own_pad_change_through_step7(tmp_path, monkeypatch, change):
+    from dataclasses import dataclass
+    proj = _project(tmp_path)
+    pdk = _pdk(monkeypatch)
+    netlist = proj / "phase2/stage2/synth/chip_top_synth.v"
+    netlist.parent.mkdir(parents=True)
+    netlist.write_text("module chip_top(input clk); endmodule\n")
+    pad = _pad_record(proj)
+    T.emit_step7_asic_sdc(R, proj, TOP, pdk, "some-container")
+    before = (proj / CONS / T.ASIC_SDC_RECORD).read_bytes()
+    l8 = proj / "phase1/generated_docs/L8_TIMING_WAVEFORM.json"
+    if change == "already_stale":
+        l8.write_text(l8.read_text().replace("25.0", "40.0"))
+
+    def produce_pad(*a, **kw):
+        pad.write_text(pad.read_text() + "\n")
+        if change == "other_input":
+            l8.write_text(l8.read_text().replace("25.0", "40.0"))
+        return R.StepResult("io_pad_chip_top_gen", "PASS", 0.0, "current pad producer")
+
+    @dataclass
+    class Geometry:
+        die_w: int = 100
+        die_h: int = 100
+        core_pad: int = 10
+
+    monkeypatch.setattr(R, "_padring_producer_dispatch", produce_pad)
+    monkeypatch.setattr(R, "_chip_path_requests_pad_ring", lambda *a: False)
+    monkeypatch.setattr(R, "_prepnr_floorplan", lambda *a: Geometry())
+    result = R.step_prepnr(proj, TOP, pdk, "some-container", "auto", .4)
+    if change == "pad":
+        assert result.status == "PASS", result.detail
+        assert result.extras["step7_refresh"]["path"] == str(CONS / f"{TOP}.asic.sdc")
+        assert T.read_step7_asic_sdc(R, proj, TOP, pdk)[0] is not None
+        assert (proj / CONS / T.ASIC_SDC_RECORD).read_bytes() != before
+    else:
+        assert result.status == "NOT_MEASURED", result.detail
+        assert "SDC_SEAM_PENDING" in result.detail
+        assert "step7_refresh" not in result.extras
+        assert (proj / CONS / T.ASIC_SDC_RECORD).read_bytes() == before
+
+
 # --------------------------------------------------------------------------- #
 # RED on main: step 7's declared output is absent after step 7
 # --------------------------------------------------------------------------- #

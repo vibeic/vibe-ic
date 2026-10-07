@@ -251,6 +251,11 @@ def _evidence_from_receipt(outputs: Path, binding: Mapping[str, object], *, gate
     if result.get("binding") != dict(binding):
         return em.Evidence(binding, "FAIL" if measured_fail else "NOT_MEASURED", {}, {},
                            detail="BACKEND_RESULT_UNBOUND")
+    # The worker has not executed the gates when their required input is
+    # absent. Preserve that refusal before asking F1 to bind gate processes
+    # that cannot exist; an omitted input is never an eligible result.
+    if result.get("missing_inputs"):
+        raise em.Refusal("REQUIRED_INPUT_ABSENT", "; ".join(result["missing_inputs"]))
     # The canonical worker also reports two composition summaries. Their FAIL
     # was reduced above; they are supporting facts in the hash-bound report,
     # not additional required gate invocations.
@@ -676,6 +681,29 @@ def backend_project_input_contract(project: Path, step_id: str) -> tuple[str, ..
     # receipt; the resolved config is its explicit input fingerprint.
     if (root / "phase3/librelane/synthesis_resolved.json").is_file():
         result.append("phase3/librelane/synthesis_resolved.json")
+    # Step 7 binds its conservative authoring population, not just the SDC
+    # deck. Carry the exact project files it names into the isolated backend;
+    # @ keys describe code/PDK facts and must never become filesystem paths.
+    record = root / "phase2/stage2/constraints/asic_sdc.json"
+    try:
+        sdc = json.loads(record.read_text())
+        inputs = sdc.get("inputs", {}) if isinstance(sdc, dict) else {}
+    except (OSError, ValueError):
+        inputs = {}
+    if isinstance(inputs, dict):
+        for raw in inputs:
+            if not isinstance(raw, str) or raw.startswith("@"):
+                continue
+            rel = Path(raw)
+            if (rel.is_absolute() or not rel.parts or ".." in rel.parts
+                    or any(c in raw for c in "*?[")
+                    or rel.parts[:2] == ("reports", "execution")
+                    or not (root / rel).resolve().is_relative_to(root)):
+                raise em.Refusal("BACKEND_SDC_INPUT_PATH_UNSAFE", raw)
+            result.append(rel.as_posix())
+    # The pad producer reads the original input_doc copies too. Omitting them
+    # changes its documents_scanned record after Step 7 has bound that record.
+    result.append("phase1/input_doc")
     return tuple(dict.fromkeys(result))
 
 

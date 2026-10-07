@@ -33,7 +33,7 @@ from execution_adapters_backend import (
 from execution_backend_worker import resolve_input_contract
 from synth_handoff_netlist_check import _project_path_resolver
 import execution_backend_consumer
-from execution_provider_catalog import BACKEND_IDS, coverage_rows, coverage_table, current_source_identity
+from execution_provider_catalog import BACKEND_IDS, BACKEND_ROWS, coverage_rows, coverage_table, current_source_identity
 
 BASE = current_source_identity()
 PRE_FIX_BASE = "59cd75606885b71ca7d11bbe34baf2541671be68"
@@ -138,7 +138,10 @@ def test_backend_component_calls_real_worker_and_records_gate_boundary(tmp_path)
     result = json.loads((root / adapter.arm_id / "outputs" / "backend_result.json").read_text())
     assert result["step_id"] == "15"
     assert "gate_ledger" in result and result["verdict"] in {"NOT_MEASURED", "FAIL"}
-    assert result["canonical_receipts"][0]["producer"] == "execution_backend_producers.produce"
+    receipt = json.loads((root / adapter.arm_id / "receipt.json").read_text())
+    assert receipt["reason"] == "REQUIRED_INPUT_ABSENT"
+    assert result["native_receipts"] == result["canonical_receipts"] == []
+    assert result["detail"].startswith("REQUIRED_INPUT_ABSENT:")
 
 
 def test_required_input_zero_byte_is_missing_but_nonempty_or_alternate_is_valid(tmp_path):
@@ -150,6 +153,80 @@ def test_required_input_zero_byte_is_missing_but_nonempty_or_alternate_is_valid(
     alternate = project / "real.sv"
     alternate.write_text("module top; endmodule\n")
     assert resolve_input_contract(project, [{"path": "empty.v OR real.sv"}]) == []
+
+
+@pytest.mark.parametrize("complete", [False, True])
+def test_step15_missing_input_stops_producer_before_any_native_work(tmp_path, monkeypatch, complete):
+    import execution_backend_worker as worker
+    project = tmp_path / "inputs/project"
+    synth = project / "phase2/stage2/synth"
+    synth.mkdir(parents=True)
+    # The shipped canonical row, rather than a fixture-defined obligation.
+    path = BACKEND_ROWS["15"]["canonical_row"]["required_inputs"][0]["path"]
+    if complete:
+        (project / path).write_text("module top; endmodule\n")
+    deck = project / "phase2/stage2/constraints/top.sdc"
+    deck.parent.mkdir(parents=True)
+    deck.write_text("create_clock -period 10 [get_ports clk]\n")
+    monkeypatch.setenv("VIBEIC_EXECUTION_BINDING", json.dumps({
+        "source_sha": BASE, "step_id": "15", "required_gates": _required_gates("15")}))
+    calls = []
+    monkeypatch.setattr(worker, "produce", lambda *a: calls.append("produce") or
+                        {"verdict": "NOT_MEASURED", "detail": "source control"})
+    monkeypatch.setattr(worker, "evaluate", lambda *a: calls.append("gates") or
+                        {"status": "NOT_MEASURED", "ledger": []})
+    result = worker.execute(tmp_path / "inputs", tmp_path / "outputs", step_id="15", params={})
+    assert calls == (["produce", "gates"] if complete else [])
+    assert result["missing_inputs"] == ([] if complete else [path])
+    assert result["verdict"] == "NOT_MEASURED"
+    assert result["native_receipts"] == []
+
+
+def test_step7_bound_population_survives_backend_copy(tmp_path):
+    import execution_backend_worker as worker
+    from programs.tests.test_step7_asic_sdc_is_authored_once_at_step7 import R, T, TOP, CONS
+    from types import SimpleNamespace
+    project = tmp_path / "original"
+    project.mkdir()
+    pdk = SimpleNamespace(name="neutral", liberty="/missing/neutral.lib")
+    names = ("input/submission_template_source/slot.json", "phase2/stage1/fpga/top.sdc",
+             "reports/container_image.json", "reports/phase3/io_pad_chip_top.json")
+    for name in names:
+        target = project / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("{}\n")
+    _, bound = T.asic_sdc_input_digest(R, project, TOP, pdk)
+    record = project / CONS / T.ASIC_SDC_RECORD
+    record.parent.mkdir(parents=True, exist_ok=True)
+    record.write_text(json.dumps({"inputs": bound}))
+    contract = (*_backend_input_contract("15", BACKEND_ROWS["15"]),
+                *backend_project_input_contract(project, "15"))
+    inputs = tmp_path / "inputs/project"
+    inputs.mkdir(parents=True)
+    for pattern in contract:
+        for match in project.glob(pattern):
+            for source in match.rglob("*") if match.is_dir() else (match,):
+                if source.is_file():
+                    dest = inputs / source.relative_to(project)
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(source, dest)
+    copied = tmp_path / "copied"
+    worker._copy_input_tree(inputs.parent, copied)
+    _, got = T.asic_sdc_input_digest(R, copied, TOP, pdk)
+    assert got == bound
+    # Missing/changed input is still visible to the same digest, never repaired.
+    (copied / names[0]).unlink()
+    assert T.asic_sdc_input_digest(R, copied, TOP, pdk)[1] != bound
+
+
+@pytest.mark.parametrize("path", ["../escape", "/foreign/file", "reports/execution/old/receipt.json", "input/*.json"])
+def test_backend_rejects_unsafe_step7_bound_paths(tmp_path, path):
+    project = tmp_path / "project"
+    record = project / "phase2/stage2/constraints/asic_sdc.json"
+    record.parent.mkdir(parents=True)
+    record.write_text(json.dumps({"inputs": {path: "digest", "@pdk": "neutral"}}))
+    with pytest.raises(em.Refusal, match="BACKEND_SDC_INPUT_PATH_UNSAFE"):
+        backend_project_input_contract(project, "15")
 
 
 def test_backend_handoff_resolves_only_receipt_project_namespace(tmp_path):

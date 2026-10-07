@@ -38857,6 +38857,12 @@ def step_prepnr(project: Path, top: str, pdk: PdkConfig, container: str,
                           f"synth netlist missing: {netlist}")
     extras: Dict[str, Any] = {"netlist": str(netlist)}
     ring = _chip_path_requests_pad_ring(project)
+    # A current Step-7 deck can become stale solely because this invocation's
+    # canonical pad producer refreshes its bound record. Refresh through the
+    # SAME Step-7 author in that case. Already-stale/missing inputs remain a
+    # refusal at the read-only seam; staging loss cannot be regenerated away.
+    _step7_before, _ = _ppa_timing.read_step7_asic_sdc(
+        _runner_module(), project, top, pdk)
     padring = _padring_producer_dispatch(
         project, container, pdk,
         supply_plan=(em_floor_for_resize or {}).get("supply_entry_plan"))
@@ -38866,6 +38872,22 @@ def step_prepnr(project: Path, top: str, pdk: PdkConfig, container: str,
                           f"chip-top producer: {padring.detail}",
                           extras=extras,
                           reason_class=getattr(padring, "reason_class", ""))
+    if _step7_before is not None and padring.status == _V.Verdict.PASS.value:
+        _step7_after, _step7_why = _ppa_timing.read_step7_asic_sdc(
+            _runner_module(), project, top, pdk)
+        _, _step7_inputs = _ppa_timing.asic_sdc_input_digest(
+            _runner_module(), project, top, pdk)
+        _step7_previous = _step7_before.get("inputs", {})
+        _step7_changed = {k for k in set(_step7_inputs) | set(_step7_previous)
+                          if _step7_inputs.get(k) != _step7_previous.get(k)}
+        if (_step7_after is None and _step7_changed and all(
+                k == "reports/phase3/io_pad_chip_top.json" or k.startswith("@io_liberty:")
+                for k in _step7_changed)):
+            _step7_refresh = _ppa_timing.emit_step7_asic_sdc(
+                _runner_module(), project, top, pdk, container)
+            extras["step7_refresh"] = {"reason": _step7_why,
+                                      "path": _step7_refresh["path"],
+                                      "sha256": _step7_refresh["sha256"]}
     sdc, sdc_why = _prepnr_constraint_file(project, top, pdk)
     extras["sdc"] = {"path": str(sdc) if sdc else None, "basis": sdc_why}
     fp = _prepnr_floorplan(project, top, pdk, container, die_um, util,
