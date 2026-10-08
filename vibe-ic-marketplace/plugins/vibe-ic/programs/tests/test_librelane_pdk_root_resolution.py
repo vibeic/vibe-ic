@@ -158,6 +158,25 @@ def test_local_route_uses_attested_image_root_and_container_route_keeps_declared
     assert container['source'] == 'declared'
 
 
+@pytest.mark.parametrize('route_key', ['execution_route', 'provider_route'])
+def test_explicit_remote_route_refuses_without_container_route(
+        env, monkeypatch, route_key):
+    image_root = env.tmp / 'image-pdks'
+    (image_root / 'stated_pdk').mkdir(parents=True)
+    foreign_root = env.tmp / 'foreign-cache'
+    foreign_root.mkdir()
+    _switch(env.project, image=env.image, pdk_root_host=str(foreign_root),
+            **{route_key: 'REMOTE'})
+    monkeypatch.setattr(contract._ce, 'no_container_route', lambda: True)
+    monkeypatch.setattr(contract, 'local_image_attestation',
+                        lambda _image: pytest.fail(
+                            'REMOTE route must refuse before local image resolution'))
+    monkeypatch.setenv('PDK_ROOT', str(image_root))
+
+    with pytest.raises(contract.Refusal, match='LL_LOCAL_REMOTE_MISMATCH'):
+        resolution(env.project, 'stated_pdk')
+
+
 # ------------------------------------------------------------ resolution ---
 
 def test_undeclared_root_resolves_from_the_images_own_pdk_root(env):

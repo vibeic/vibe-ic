@@ -281,6 +281,10 @@ def _provider_route_mismatch(image: Any, project: Path | None = None) -> Refusal
     elif image is not None and _explicit_local_route(project):
         return Refusal('LL_LOCAL_REMOTE_MISMATCH',
                         f'Docker-backed image {image} cannot run on an explicit LOCAL route')
+    elif (_provider_route_value(project) in {'REMOTE', 'CONTAINER', 'DOCKER'}
+          and _ce.no_container_route()):
+        return Refusal('LL_LOCAL_REMOTE_MISMATCH',
+                        'explicit remote route cannot run without a container route')
     return None
 
 
