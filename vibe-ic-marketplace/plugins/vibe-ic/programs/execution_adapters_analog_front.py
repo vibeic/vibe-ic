@@ -212,6 +212,17 @@ def register_front_adapters(registry: em.Registry, *, project: Path,
             row_inputs.append("phase3/analog/*/spec.json")
         if step == "A3":
             row_inputs.append("phase3/analog/*/topology.json")
+        if step == "A4":
+            # A *.sp alone is not enough: the existing A4 producer reads
+            # the A3 stimulus and provenance sidecars to bind the delivered
+            # netlist to its design content. Keep both phase roots aligned
+            # with analog_real_corner_sweep.a3_*_path resolution.
+            row_inputs.extend((
+                "phase3/analog/*/tb_*.sp",
+                "phase2/analog/*/tb_*.sp",
+                "phase3/analog/*/netlist_provenance.json",
+                "phase2/analog/*/netlist_provenance.json",
+            ))
         row_inputs.extend((str(declaration.relative_to(project)),
                            "phase1/generated_docs/L19_CONSTRAINTS_PDK.json",
                            "phase1/generated_docs/L22_MIXED_SIGNAL.json",
