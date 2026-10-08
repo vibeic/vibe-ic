@@ -2459,10 +2459,16 @@ def pdk_root_resolution(project: Path | None = None, pdk: str | None = None, *,
         if project is not None and (project / 'phase3').is_dir():
             write_json(project / PDK_ROOT_PROVENANCE_REL, answer)
         return answer
-    if switch.get('pdk_root_host'):
+    # A LOCAL/native invocation already runs against the image's mounted
+    # filesystem.  A worker-side host staging path is not reachable from that
+    # process and must never be promoted to the /pdk contract; resolve the
+    # attested image PDK_ROOT instead.  The container route still honours the
+    # explicit host root so its existing mount contract is unchanged.
+    local_image_route = _ce.no_container_route()
+    if switch.get('pdk_root_host') and not local_image_route:
         answer = {'path': str(switch['pdk_root_host']), 'source': 'declared',
                   'declared_by': 'phase3/librelane_switch.json pdk_root_host'}
-    elif os.environ.get('VIBEIC_LIBRELANE_PDK_ROOT'):
+    elif os.environ.get('VIBEIC_LIBRELANE_PDK_ROOT') and not local_image_route:
         answer = {'path': os.environ['VIBEIC_LIBRELANE_PDK_ROOT'], 'source': 'declared',
                   'declared_by': 'env VIBEIC_LIBRELANE_PDK_ROOT'}
     else:

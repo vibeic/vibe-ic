@@ -131,6 +131,33 @@ def test_declared_env_wins_over_the_image(env, monkeypatch):
     assert env.fake.calls == []
 
 
+def test_local_route_uses_attested_image_root_and_container_route_keeps_declared_root(
+        env, monkeypatch):
+    """A native worker's staging path must not become the LOCAL /pdk mount."""
+    image_root = env.tmp / 'image-pdks'
+    (image_root / 'stated_pdk').mkdir(parents=True)
+    foreign_root = env.tmp / 'foreign-cache'
+    foreign_root.mkdir()
+    _switch(env.project, image=env.image, pdk_root_host=str(foreign_root))
+    monkeypatch.setattr(contract._ce, 'no_container_route', lambda: True)
+    monkeypatch.setattr(contract, 'local_image_attestation',
+                        lambda _image: {'image': env.image, 'image_id': IMAGE_ID,
+                                        'repo_digests': [env.image]})
+    monkeypatch.setenv('PDK_ROOT', str(image_root))
+
+    local = resolution(env.project, 'stated_pdk')
+    assert local['path'] == str(image_root)
+    assert local['source'] == 'resolved'
+    assert local['derivation']['image_pdk_root'] == str(image_root)
+    assert local['derivation']['cache'] == 'native'
+
+    # The Docker-backed route retains the existing explicit-root contract.
+    monkeypatch.setattr(contract._ce, 'no_container_route', lambda: False)
+    container = resolution(env.project, 'stated_pdk')
+    assert container['path'] == str(foreign_root)
+    assert container['source'] == 'declared'
+
+
 # ------------------------------------------------------------ resolution ---
 
 def test_undeclared_root_resolves_from_the_images_own_pdk_root(env):
