@@ -2432,9 +2432,15 @@ def step_for_block(project: Path, block: Dict[str, Any], step_name: str,
                                     "deterministic_stub",
                                 "low_confidence": True,
                             }, disclosures=[_V.Disclosure.STRUCTURE_ONLY])
-            # Artefact not yet emitted — defer to skill (back-compat).
-            msg = (cp.stderr.splitlines()[-1] if cp.stderr
-                   else f"artefact missing — invoke skill `{skill}`")
+            # Artefact not yet emitted — defer to skill (back-compat). For
+            # A4, retain the real corner producer's refusal/output instead of
+            # reading the preflight gate's empty stderr and hiding the cause as
+            # an anonymous skill waiver. This is still NOT_MEASURED when the
+            # producer emitted no corner result; the detail is diagnostic only.
+            _detail_cp = locals().get("rs_cp") if step_name == "A4_corner_sweep" else cp
+            msg = ((_detail_cp.stderr.splitlines()[-1] if _detail_cp and _detail_cp.stderr
+                    else _detail_cp.stdout.splitlines()[-1] if _detail_cp and _detail_cp.stdout
+                    else f"artefact missing — invoke skill `{skill}`"))
             return StepResult(step_name, bname, "PASS_WITH_WAIVERS",
                               time.time() - t0, msg)
         # rc=1: artefact present but stub / fails substance check —
