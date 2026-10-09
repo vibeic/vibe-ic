@@ -426,6 +426,25 @@ def test_cancel_deadline_actual_rc_partial_logs_reaped(tmp_path, stop, monkeypat
         os.kill(process['pid'], 0)
 
 
+def test_backend_worker_uses_progress_watchdog_instead_of_component_clock(tmp_path):
+    """A progressing backend worker is not killed at its row budget."""
+    ctx = context(tmp_path)
+    arm = adapter('backend-progress', duration=.05)
+    arm = replace(
+        arm, tool_id='backend-worker',
+        components=tuple(replace(component, timeout_s=.001)
+                         for component in arm.components))
+    root = tmp_path / 'backend-progress'
+    result = controller(arm).run(ctx, root)
+    assert result['candidate_statuses'][arm.arm_id] == 'ELIGIBLE'
+    receipt = read(root, arm.arm_id)
+    assert all(process['stop_reason'] is None for process in receipt['processes'])
+    assert all('cpu' in process['supervision']['watched']
+               for process in receipt['processes'])
+    assert all(process['supervision']['hard_ceiling_s'] == .001
+               for process in receipt['processes'])
+
+
 def test_no_fallback_to_own_when_primary_process_fails(tmp_path):
     ctx = context(tmp_path)
     external = adapter('external', fault='process_error')

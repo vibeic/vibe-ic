@@ -56,6 +56,7 @@ if _os.path.dirname(_os.path.abspath(__file__)) not in _sys.path:
 
 from _atomic_artefact import write_bytes, write_json
 from execution_source_snapshot import SourceSnapshot, active as _active_source_snapshot
+import _watchdog as _wd
 
 
 def required_gate_satisfied(step_id, gate, verdict):
@@ -2438,23 +2439,68 @@ class Controller:
                             root / 'issued-plan.json', arm, component, argv,
                             outputs, out, err, child_env, cpuset)
                     else:
-                        process = subprocess.Popen(
-                            [sys.executable, '-c', launcher, str(arm.ram_mb * 1024 * 1024),
-                             ','.join(map(str, cpuset)), *argv],
-                            cwd=outputs, stdout=out, stderr=err, start_new_session=True,
-                            env=child_env)
+                        command = [sys.executable, '-c', launcher,
+                                   str(arm.ram_mb * 1024 * 1024),
+                                   ','.join(map(str, cpuset)), *argv]
+                        if arm.tool_id == 'backend-worker' and arm.role == 'producer':
+                            # Backend producers already have a row-owned budget,
+                            # but native OpenROAD can legitimately cross it while
+                            # still moving.  Supervise forward progress instead
+                            # of treating that budget as a kill clock.
+                            holder = {}
+
+                            def launch_supervised(cmd, **kwargs):
+                                kwargs.update(stdout=out, stderr=err,
+                                              start_new_session=True)
+                                holder['process'] = subprocess.Popen(cmd, **kwargs)
+                                return holder['process']
+
+                            supervised = _wd.run_host_supervised(
+                                command, cwd=outputs, env=child_env,
+                                progress_paths=(str(stdout), str(stderr)),
+                                stall_grace_s=_wd.DEFAULT_STALL_GRACE_S,
+                                hard_ceiling_s=component.timeout_s,
+                                abort_probe=(lambda: 'CANCELLED'
+                                             if cancel.is_set() else None),
+                                popen_factory=launch_supervised)
+                            process = holder.get('process')
+                            if process is None:
+                                record.update(rc=supervised.rc,
+                                              ended_ns=time.monotonic_ns(),
+                                              stdout=str(stdout), stderr=str(stderr),
+                                              stdout_sha256=digest(stdout),
+                                              stderr_sha256=digest(stderr),
+                                              stop_reason='PROCESS_ERROR',
+                                              supervision=supervised.supervision)
+                                raise Refusal('PROCESS_ERROR', component.name)
+                            stop = ({'aborted': 'CANCELLED',
+                                     'stalled': 'STALLED'}.get(supervised.outcome))
+                            record['supervision'] = supervised.supervision
+                        else:
+                            process = subprocess.Popen(
+                                command, cwd=outputs, stdout=out, stderr=err,
+                                start_new_session=True, env=child_env)
+                            stop = None
                     record['pid'] = process.pid
-                    stop = None
-                    try:
-                        deadline = time.monotonic() + component.timeout_s
-                        while process.poll() is None:
-                            if cancel.is_set() or time.monotonic() >= deadline:
-                                stop = 'CANCELLED' if cancel.is_set() else 'DEADLINE'
-                                break
-                            time.sleep(.01)
-                    finally:
-                        # Reap this component's process group, including any
-                        # residual descendants after a parent exits normally.
+                    if not (arm.tool_id == 'backend-worker' and arm.role == 'producer'):
+                        try:
+                            deadline = time.monotonic() + component.timeout_s
+                            while process.poll() is None:
+                                if cancel.is_set() or time.monotonic() >= deadline:
+                                    stop = 'CANCELLED' if cancel.is_set() else 'DEADLINE'
+                                    break
+                                time.sleep(.01)
+                        finally:
+                            # Reap this component's process group, including any
+                            # residual descendants after a parent exits normally.
+                            try:
+                                os.killpg(process.pid, signal.SIGKILL)
+                            except ProcessLookupError:
+                                pass
+                            process.wait()
+                    else:
+                        # The watchdog has already reaped a natural or stopped
+                        # process; this catches any residual group members.
                         try:
                             os.killpg(process.pid, signal.SIGKILL)
                         except ProcessLookupError:
