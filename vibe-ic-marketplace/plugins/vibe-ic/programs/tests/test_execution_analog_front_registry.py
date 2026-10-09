@@ -462,7 +462,8 @@ def _default_runner_plan(tmp_path, monkeypatch):
         runtime["runs"][site] = (project / "unused-run", {"status": "NOT_MEASURED",
                                                        "reason": "TEST_TOOL_UNAVAILABLE"})
         return runner.StepResult(front.analog.ANALOG_STEPS[site], args[1]["name"],
-                                 "NOT_MEASURED", 0, "TEST_TOOL_UNAVAILABLE")
+                                 "NOT_MEASURED", 0, "TEST_TOOL_UNAVAILABLE",
+                                 reason_class="tool_absent")
 
     def cosim(subject, args):
         observations["cosim_calls"] += 1
