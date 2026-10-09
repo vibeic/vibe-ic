@@ -378,3 +378,53 @@ def test_worker_rejects_nested_input_directory_symlink_before_copy(tmp_path):
     with pytest.raises(worker.em.Refusal, match='INPUT_OUTSIDE_ROOT'):
         worker.execute(inputs.parent, outputs, step_id='18', params={})
     assert not (outputs / 'project' / 'alias' / 'secret.txt').exists()
+
+
+def test_worker_rejects_symlink_race_between_input_census_and_copy(
+        tmp_path, monkeypatch):
+    inputs = tmp_path / 'inputs' / 'project'
+    inputs.mkdir(parents=True)
+    (inputs / 'ordinary.txt').write_text('ordinary\n')
+    outside = tmp_path / 'outside'
+    outside.mkdir()
+    secret = outside / 'SECRET'
+    secret.write_text('must not be copied\n')
+    outputs = tmp_path / 'outputs'
+    original_census = worker._reject_input_tree_symlinks
+    injected = []
+
+    def census_then_race(root):
+        original_census(root)
+        if root == inputs.parent and not injected:
+            (inputs / 'raced-link').symlink_to(outside, target_is_directory=True)
+            injected.append(True)
+
+    monkeypatch.setattr(worker, '_reject_input_tree_symlinks', census_then_race)
+    with pytest.raises(worker.em.Refusal, match='INPUT_OUTSIDE_ROOT'):
+        worker.execute(inputs.parent, outputs, step_id='18', params={})
+    assert injected == [True]
+    assert secret.read_text() == 'must not be copied\n'
+    assert not outputs.exists()
+
+
+@pytest.mark.parametrize('destination', ['directory', 'symlink'])
+def test_worker_rejects_preexisting_project_destination(tmp_path, destination):
+    inputs = tmp_path / 'inputs' / 'project'
+    inputs.mkdir(parents=True)
+    (inputs / 'ordinary.txt').write_text('ordinary\n')
+    outputs = tmp_path / 'outputs'
+    outputs.mkdir()
+    project = outputs / 'project'
+    if destination == 'directory':
+        project.mkdir()
+        marker = project / 'marker.txt'
+    else:
+        outside = tmp_path / 'outside'
+        outside.mkdir()
+        marker = outside / 'marker.txt'
+        project.symlink_to(outside, target_is_directory=True)
+    marker.write_text('preserve\n')
+
+    with pytest.raises(worker.em.Refusal, match='OUTPUT_OUTSIDE_ROOT'):
+        worker.execute(inputs.parent, outputs, step_id='18', params={})
+    assert marker.read_text() == 'preserve\n'

@@ -108,12 +108,12 @@ def condition_aware_declarations(project: Path, declarations,
 def _copy_input_tree(inputs: Path, project: Path) -> None:
     source = inputs / "project"
     if source.is_dir():
-        shutil.copytree(source, project)
+        shutil.copytree(source, project, symlinks=True)
     else:
         # The controller's input binding is authoritative; JSON is a valid
         # canonical input (netlist metadata, route declarations, manifests),
         # so do not silently drop it in the compatibility layout.
-        shutil.copytree(inputs, project)
+        shutil.copytree(inputs, project, symlinks=True)
 
 
 def _reject_input_tree_symlinks(inputs: Path) -> None:
@@ -407,9 +407,24 @@ def execute(inputs: Path, outputs: Path, *, step_id: str, params: dict) -> dict:
     if em._safe_relative_path(outputs, 'backend_result.json') is None:
         raise em.Refusal('OUTPUT_OUTSIDE_ROOT', 'backend_result.json')
     _reject_input_tree_symlinks(inputs)
+    outputs_was_present = outputs.exists()
     outputs.mkdir(parents=True, exist_ok=True)
     project = outputs / "project"
-    _copy_input_tree(inputs, project)
+    project_was_present = project.exists() or project.is_symlink()
+    if project_was_present:
+        raise em.Refusal('OUTPUT_OUTSIDE_ROOT', 'project')
+    try:
+        _copy_input_tree(inputs, project)
+        _reject_input_tree_symlinks(project)
+    except Exception:
+        if not project_was_present:
+            shutil.rmtree(project, ignore_errors=True)
+        if not outputs_was_present:
+            try:
+                outputs.rmdir()
+            except OSError:
+                pass
+        raise
     binding = _binding(inputs)
     row = ROWS[str(step_id)]["canonical_row"]
     manifest_supplied = 'resolved_input_manifest' in params
