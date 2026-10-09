@@ -629,7 +629,7 @@ def test_m2_real_adapter_controller_choice_adoption_journal_and_current_reread(t
     import execution_modes as em
     import execution_policy as policy
     from execution_backend_snapshot import Journal
-    from programs.tests.test_m2_native_producer import FIXTURE
+    from programs.tests._hostpaths import require_repo
     import mixed_signal_power_domain_run as m2
 
     monkeypatch.setattr(policy, "_ordinary_runtime", None)
@@ -642,7 +642,9 @@ def test_m2_real_adapter_controller_choice_adoption_journal_and_current_reread(t
 
     monkeypatch.setattr(Journal, "write", capture_journal_write)
     project = (tmp_path / "canonical-project").resolve()
-    shutil.copytree(FIXTURE, project)
+    fixture = require_repo("vibe-ic-marketplace", "plugins", "vibe-ic", "programs",
+                           "tests", "fixtures", "m2_placed")
+    shutil.copytree(fixture, project)
     block_list = project / "phase1/analog/analog_block_list.json"
     staged_block_list = project / "phase3/analog/analog_block_list.json"
     staged_block_list.parent.mkdir(parents=True)
@@ -706,6 +708,13 @@ def test_m2_real_adapter_controller_choice_adoption_journal_and_current_reread(t
         generation["outputs"]["reports/analog/mixed_signal/power_domain.json"]
     assert m2.main([str(project), "--check-only"]) == 0
     assert json.loads(receipt_path.read_text())["status"] == "ELIGIBLE"
+    if execution_mode == "default":
+        # A real next consumer must refuse a changed adopted native output.
+        product = project / "reports/analog/mixed_signal/power_domain.json"
+        original = product.read_bytes()
+        product.write_bytes(original + b"\n")
+        assert m2.main([str(project), "--check-only"]) == 1
+        product.write_bytes(original)
     print(json.dumps({"selected_arm": adopted["selected"],
                       "generation": generation["generation"],
                       "current_power_domain_sha256": current_hashes[

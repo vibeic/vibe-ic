@@ -213,7 +213,8 @@ def test_two_block_worker_runs_existing_a1_producer_in_declared_order(tmp_path, 
             execution_choice=None, execution_choice_wait_s=None,
             execution_request_digest=None, execution_request_receipt=None)
         policy.configure(args)
-        runtime = policy.bootstrap(project)
+        runtime = policy.bootstrap(project, parameters={
+            "container": "fixture-unavailable-container", "pdk": "synthetic-test-family"})
         assert runtime is not None
         expected = {
             "A1": ("analog_a1_spec_emit.py", "spec.json"),
@@ -270,6 +271,28 @@ def test_two_block_worker_runs_existing_a1_producer_in_declared_order(tmp_path, 
                 assert current.is_file() and em.digest(current) == digest
             output_name = f"phase3/analog/vreg_alpha/{artifact}"
             assert output_name in generation["outputs"]
+        if execution_mode == "default":
+            # The same issued runtime exercises every remaining fixed row.
+            # This fixture supplies no native installation or mixed subject;
+            # existing producers/gates must disclose that and never adopt.
+            outcomes = {}
+            for step in ("A4", "A5", "A6", "A7", "A8", "A9", "M1", "M2", "M3", "M4"):
+                result = policy.dispatch_fixed_step(project, step)
+                assert result["status"] in ("NOT_MEASURED", "FAIL"), (step, result)
+                assert result.get("selected") is None, (step, result)
+                assert len(runtime["registry"].adapters(step)) == 1
+                run, _ = runtime["runs"][step]
+                assert not (run / "adoption.json").exists(), (step, result)
+                outcomes[step] = result
+            (project / "reports/default-unavailable-rows.json").write_text(
+                json.dumps(outcomes, indent=2) + "\n")
+            # The next consumer must reject a changed adopted predecessor.
+            spec = project / "phase3/analog/vreg_alpha/spec.json"
+            original = spec.read_bytes()
+            spec.write_bytes(original + b"\n")
+            with pytest.raises(em.Refusal, match="FIXED_STEP_REENTRY_CHANGED"):
+                policy.dispatch_fixed_step(project, "A2")
+            spec.write_bytes(original)
     finally:
         policy._ordinary_runtime = previous_runtime
         for name, value in saved.items():
@@ -456,7 +479,7 @@ def _default_runner_plan(tmp_path, monkeypatch):
     monkeypatch.setattr(installation, "prepare_entry_request", prepare)
     monkeypatch.setattr(runner._spf, "gate", dispatch)
     monkeypatch.setattr(runner, "_a9_cosim", cosim)
-    monkeypatch.setattr(runner, "_check_block_list_schema",
+    monkeypatch.setattr(runner, "step_block_list_schema",
                         lambda *args: (_ for _ in ()).throw(PlanComplete()))
     monkeypatch.setattr(sys, "argv", ["analog_one_shot_runner.py", str(project),
                                     "--container", "host"])
@@ -484,7 +507,8 @@ def test_default_issued_a9_does_not_launch_a_second_cosim_producer(tmp_path, mon
     assert observations["cosim_calls"] == 0, observations
 
 
-def test_default_front_input_census_includes_actual_layout_and_cosim_subjects(tmp_path):
+@pytest.mark.parametrize("step", ("A5", "A9"))
+def test_default_front_input_census_includes_actual_layout_and_cosim_subjects(tmp_path, step):
     project = _project(tmp_path / "subject", names=("alpha",))
     names = {
         "A5": ("phase3/analog/alpha/spec.json", "phase3/analog/alpha/topology.json"),
@@ -502,9 +526,8 @@ def test_default_front_input_census_includes_actual_layout_and_cosim_subjects(tm
     front.register_front_adapters(registry, project=project,
                                   source_sha=__import__("execution_synthesis_engines").source_sha())
     runtime = {"project": project, "registry": registry}
-    for step, required in names.items():
-        observed = set(policy._fixed_inputs(runtime, step))
-        assert set(required) <= observed, (step, sorted(observed))
+    observed = set(policy._fixed_inputs(runtime, step))
+    assert set(names[step]) <= observed, (step, sorted(observed))
 
 
 def test_default_front_worker_preserves_issued_container_and_pdk(tmp_path, monkeypatch):
@@ -531,8 +554,10 @@ def test_default_empty_analog_population_has_no_applicable_primary(tmp_path):
     registry = em.Registry()
     front.register_front_adapters(registry, project=project,
                                   source_sha=__import__("execution_synthesis_engines").source_sha())
-    observed = {step: registry.adapters(step)[0].applicability for step in front.FRONT_IDS}
-    assert observed == dict.fromkeys(front.FRONT_IDS, "inapplicable"), observed
+    front.analog.register_adapters(registry, project=project)
+    ids = (*front.FRONT_IDS, *front.analog.STEP_IDS)
+    observed = {step: registry.adapters(step)[0].applicability for step in ids}
+    assert observed == dict.fromkeys(ids, "inapplicable"), observed
 
 
 @pytest.mark.parametrize("step", ("A1", "A2", "A3", "A4", "A5", "A9"))
