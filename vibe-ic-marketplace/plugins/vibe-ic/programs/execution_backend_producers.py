@@ -1176,6 +1176,13 @@ def _current_step_producer_authority(record):
     already = record.get('already_produced_by_the_run', 0)
     if type(already) is not int or already < 0 or population != len(results) + already:
         return False, "current-step producer population is unaccounted", "NOT_MEASURED"
+    reused = [row for row in record.get('skipped', [])
+              if isinstance(row, dict) and not str(row.get('why', '')).startswith(
+                  'the run did not perform this step')]
+    if already and (len(reused) != already or any(
+            row.get('current_input_identity_valid') is not True or
+            not isinstance(row.get('target_sha256'), str) for row in reused)):
+        return False, "prior producer target lacks current input/content proof", "NOT_MEASURED"
     invalid = record.get("invalid_results") or record.get("unexecutable")
     if invalid:
         nonzero = any(row.get("rc") not in (None, 0)

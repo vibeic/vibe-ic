@@ -185,6 +185,89 @@ def test_declared_nonzero_rc_missing_target_is_incomplete(tmp_path, monkeypatch)
     assert record["documents_now_present"] == 0
 
 
+def _reuse_clause():
+    return {"step": "15", "program": "stage2_compliance",
+            "command": "stage2_compliance . --json report.json",
+            "target": "report.json", "siblings": ["native.def"]}
+
+
+def _producer_report():
+    return {"program": "flow_compliance_check", "invoked_as": "producer",
+            "overall": "PASS", "scope": {"stage": "2"},
+            "counts": {"PASS": 1}, "steps": [{"id": "12", "status": "PASS"}],
+            "invocation": "prior-wall-clock-invocation"}
+
+
+def test_current_step_reuses_content_and_input_bound_prior_producer(tmp_path, monkeypatch):
+    clause = _reuse_clause()
+    (tmp_path / "native.def").write_text("current native output\n")
+    (tmp_path / "input.sdc").write_text("create_clock -period 10 [get_ports clk]\n")
+    calls = []
+
+    def successful_producer(project, row, timeout):
+        calls.append(row["step"])
+        (project / row["target"]).write_text(json.dumps(_producer_report()))
+        return {**row, "rc": 0, "executed": True,
+                "target_exists_after": True, "authorship": "producer"}
+
+    monkeypatch.setattr(declared, "declared_producer_clauses", lambda: [clause])
+    monkeypatch.setattr(declared, "_run_one", successful_producer)
+    first = declared.run_for_step(tmp_path, "15")
+    second = declared.run_for_step(tmp_path, "15")
+    assert first["verdict"] == second["verdict"] == "PRODUCED"
+    assert calls == ["15"]
+    assert second["already_produced_by_the_run"] == 1
+    assert second["skipped"][0]["current_input_identity_valid"] is True
+    assert backend_producers._current_step_producer_authority(second)[0] is True
+
+
+@pytest.mark.parametrize("mutation", ["garbage", "changed_target", "changed_input", "changed_source"])
+def test_stale_producer_target_cannot_skip_current_step_failure(
+        tmp_path, monkeypatch, mutation):
+    clause = _reuse_clause()
+    (tmp_path / "native.def").write_text("current native output\n")
+    (tmp_path / "input.sdc").write_text("current constraints\n")
+
+    def successful_producer(project, row, timeout):
+        (project / row["target"]).write_text(json.dumps(_producer_report()))
+        return {**row, "rc": 0, "executed": True,
+                "target_exists_after": True, "authorship": "producer"}
+
+    monkeypatch.setattr(declared, "declared_producer_clauses", lambda: [clause])
+    monkeypatch.setattr(declared, "_run_one", successful_producer)
+    assert declared.run_for_step(tmp_path, "15")["verdict"] == "PRODUCED"
+    if mutation == "garbage":
+        (tmp_path / "report.json").write_text(json.dumps({"invoked_as": "producer", "garbage": True}))
+    elif mutation == "changed_target":
+        doc = _producer_report()
+        doc["counts"] = {"PASS": 999}
+        (tmp_path / "report.json").write_text(json.dumps(doc))
+    elif mutation == "changed_input":
+        (tmp_path / "input.sdc").write_text("changed constraints\n")
+    else:
+        record_path = tmp_path / declared.REPORT_REL
+        prior = json.loads(record_path.read_text())
+        prior["input_identity"]["source_sha"] = "0" * 40
+        record_path.write_text(json.dumps(prior))
+    owed, skipped = declared.owed(tmp_path, [clause])
+    if mutation == "garbage":
+        assert [row["target"] for row in owed] == ["report.json"]
+        assert skipped == []
+    else:
+        assert [row["target"] for row in skipped] == ["report.json"]
+    calls = []
+    monkeypatch.setattr(declared, "_run_one", lambda project, row, timeout:
+                        calls.append(row["step"]) or {**row, "rc": 1,
+                            "executed": True, "target_exists_after": True,
+                            "authorship": "producer"})
+    result = declared.run_for_step(tmp_path, "15")
+    assert calls == ["15"]
+    assert result["already_produced_by_the_run"] == 0
+    assert result["verdict"] == "INCOMPLETE"
+    assert backend_producers._current_step_producer_authority(result) == (
+        False, "current-step producer execution failed", "FAIL")
+
+
 @pytest.mark.parametrize('failure', ['audit', 'unstamped', 'exception', 'nonzero',
                                     'missing_target', 'zero_population'])
 def test_audit_authored_current_step_blocks_backend_consumer(

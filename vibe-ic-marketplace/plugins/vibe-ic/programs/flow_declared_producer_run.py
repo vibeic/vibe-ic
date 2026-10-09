@@ -56,6 +56,7 @@ chip-AGNOSTIC: everything is read from the flow yaml and the project tree.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -375,8 +376,13 @@ def owed(project: Path, clauses: List[Dict[str, str]]
             to_run.append(row)
         elif _role == _ga.ROLE_PRODUCER:
             row = dict(c)
-            row["why"] = "the run already produced it, and the document says so"
-            skipped.append(row)
+            if not _producer_target_has_content(target):
+                row["why"] = ("present, but the producer stamp lacks a substantive current "
+                               "report schema/content proof")
+                to_run.append(row)
+            else:
+                row["why"] = "the run already produced it, and the document says so"
+                skipped.append(row)
         elif _audit_claims(project, c["step"], c["target"]):
             row = dict(c)
             row["why"] = ("present and stating no role, but the audit's own authorship note "
@@ -437,12 +443,14 @@ def _result_is_producer_complete(result: Dict[str, Any]) -> bool:
         return False
     if result.get("target_exists_after") is not True:
         return False
+    if result.get("target_content_valid") is False:
+        return False
     role = result.get("authorship")
     return role == _ga.ROLE_PRODUCER
 
 
 def _run_clauses(project: Path, clauses: List[Dict[str, str]],
-                 timeout: int = 900) -> Dict[str, Any]:
+                 timeout: int = 900, *, prior_targets=None) -> Dict[str, Any]:
     """Execute only the supplied flow-declared producer clauses.
 
     The phase runner uses :func:`run` for its final all-step refresh. Backend
@@ -453,7 +461,27 @@ def _run_clauses(project: Path, clauses: List[Dict[str, str]],
     paths.
     """
     to_run, skipped = owed(project, clauses)
+    if prior_targets is not None:
+        retained = []
+        for row in skipped:
+            if str(row.get("why", "")).startswith("the run did not perform this step"):
+                retained.append(row)
+                continue
+            target = project / row["target"]
+            if (_producer_target_has_content(target) and
+                    prior_targets.get(row["target"]) == _target_digest(target)):
+                retained.append(dict(row, target_sha256=_target_digest(target),
+                                     current_input_identity_valid=True))
+            else:
+                to_run.append(dict(row, why="prior target lacks current input/content proof"))
+        skipped = retained
     results = [_run_one(project, row, timeout) for row in to_run]
+    if prior_targets is not None:
+        for clause, result in zip(to_run, results):
+            result.setdefault("target", clause["target"])
+            target = project / clause["target"]
+            result["target_content_valid"] = _producer_target_has_content(target)
+            result["target_sha256"] = _target_digest(target)
     unexecutable = [r for r in results if not r.get("executed")]
     invalid_results = [r for r in results if not _result_is_producer_complete(r)]
     produced = [r for r in results if _result_is_producer_complete(r)]
@@ -490,6 +518,54 @@ def _run_clauses(project: Path, clauses: List[Dict[str, str]],
                     else "PRODUCED"),
     }
 
+
+def _target_digest(path: Path) -> Optional[str]:
+    try:
+        if path.is_symlink() or not path.is_file() or not path.stat().st_size:
+            return None
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        return None
+
+
+def _producer_target_has_content(path: Path) -> bool:
+    """A writer label alone is not a completed verdict document."""
+    try:
+        if _target_digest(path) is None:
+            return False
+        document = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return False
+    if not isinstance(document, dict) or _ga.role_of(document) != _ga.ROLE_PRODUCER:
+        return False
+    if not isinstance(document.get("program"), str) or not document["program"]:
+        return False
+    if document["program"] == "flow_compliance_check":
+        return isinstance(document.get("steps"), list) and bool(document["steps"])
+    return True
+
+
+def _current_input_identity(project: Path, clauses) -> Dict[str, Any]:
+    """Bind reuse to source and exact input bytes, independent of wall-clock run id."""
+    excluded = {REPORT_REL, *(row["target"] for row in clauses)}
+    files = {}
+    for path in sorted(project.rglob("*")):
+        relative = path.relative_to(project).as_posix()
+        if relative in excluded:
+            continue
+        if path.is_symlink():
+            raise ValueError("producer input is a symlink: " + relative)
+        if path.is_file():
+            files[relative] = hashlib.sha256(path.read_bytes()).hexdigest()
+    source = subprocess.check_output(
+        ["git", "-C", str(PROGRAMS_DIR), "rev-parse", "HEAD"], text=True).strip()
+    source_files = {str(path): _target_digest(path) for path in
+                    [Path(__file__), FLOW_YAML, *
+                     (PROGRAMS_DIR / (row["program"] + ".py") for row in clauses)]}
+    return {"source_sha": source, "source_files": source_files, "files": files,
+            "clauses": clauses}
+
+
 def run_for_step(project: Path, step_id: str, timeout: int = 900
                  ) -> Dict[str, Any]:
     """Run only the producers declared for one current flow step.
@@ -501,11 +577,29 @@ def run_for_step(project: Path, step_id: str, timeout: int = 900
     project and from being credited to its evidence.
     """
     sid = str(step_id)
+    project = Path(project)
     clauses = [c for c in declared_producer_clauses()
                if str(c.get("step")) == sid]
-    rec = _run_clauses(project, clauses, timeout)
+    identity = _current_input_identity(project, clauses)
+    try:
+        prior = json.loads((project / REPORT_REL).read_text())
+    except (OSError, ValueError):
+        prior = {}
+    prior_targets = {}
+    if (isinstance(prior, dict) and prior.get("schema") == "vibeic/current-step-producer-census/1"
+            and prior.get("step_id") == sid and prior.get("verdict") == "PRODUCED"
+            and prior.get("input_identity") == identity):
+        for row in prior.get("results", []) + prior.get("skipped", []):
+            if isinstance(row, dict) and isinstance(row.get("target_sha256"), str):
+                prior_targets[row.get("target")] = row["target_sha256"]
+    rec = _run_clauses(project, clauses, timeout, prior_targets=prior_targets)
+    rec["schema"] = "vibeic/current-step-producer-census/1"
     rec["step_id"] = sid
     rec["scope"] = "current-step"
+    rec["input_identity"] = _current_input_identity(project, clauses)
+    report = project / REPORT_REL
+    report.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_text(report, json.dumps(rec, sort_keys=True, indent=2) + "\n")
     return rec
 
 def run(project: Path, timeout: int = 900) -> Dict[str, Any]:
