@@ -3871,6 +3871,15 @@ def run_chain(project: Path, image: str, steps: list[tuple[str, Path, Path]],
                 hashes[str(path.relative_to(folder))] = digest(path)
             if step_id == 'OpenROAD.STAPostPNR' and path.is_file() and path.name == 'sta.log':
                 hashes[str(path.relative_to(folder))] = digest(path)
+        # LibreLane's Yosys step records the exact native invocation in
+        # COMMANDS.  Bind that journal alongside invocation.log so a consumer
+        # cannot substitute a mutable wrapper command after the run.  Older
+        # receipts remain deliberately unmeasured; new synthesis receipts
+        # carry the real command bytes automatically at this existing seam.
+        if step_id == 'Yosys.Synthesis':
+            commands = folder / 'COMMANDS'
+            if commands.is_file() and commands.stat().st_size:
+                hashes['COMMANDS'] = digest(commands)
         record = {'input': fingerprint, 'sha256': hashes}
         if lane == '37.3-compare' and step_id == 'KLayout.XOR':
             record = bind_xor_report(folder, record)

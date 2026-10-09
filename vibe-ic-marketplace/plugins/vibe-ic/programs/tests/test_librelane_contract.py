@@ -563,6 +563,10 @@ def test_synthesis_chain_accepts_pre_netlist_state_and_keeps_tool_output(tmp_pat
         folder = Path(cmd[cmd.index('-o') + 1])
         netlist = folder / 'block.nl.v'
         netlist.write_text('module block; endmodule')
+        (folder / 'COMMANDS').write_text(
+            'yosys -y /usr/local/lib/python3.12/dist-packages/librelane/'
+            'scripts/pyosys/synthesize.py -- --config-in config.json '
+            '--extra-in extra.json --output block.nl.v\n')
         put(folder / 'state_out.json', {'nl': str(netlist)})
         return SimpleNamespace(returncode=0, stdout='ok', stderr='')
 
@@ -571,6 +575,8 @@ def test_synthesis_chain_accepts_pre_netlist_state_and_keeps_tool_output(tmp_pat
     folder = contract.run_chain(p, 'candidate', [('Yosys.Synthesis', config, initial)], pdk_root='/pdk')[0]
     assert (folder / 'block.nl.v').is_file()
     assert json.loads((folder / 'state_out.json').read_text())['nl'].endswith('block.nl.v')
+    receipt = json.loads((folder / 'vibeic_receipt.json').read_text())
+    assert receipt['sha256']['COMMANDS'] == contract.digest(folder / 'COMMANDS')
 
 
 def test_stapostpnr_receipt_binds_mounted_liberty_bytes(tmp_path, monkeypatch):

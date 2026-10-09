@@ -423,6 +423,93 @@ def _native_recipe_commands(text: str) -> List[Tuple[str, str]]:
     return out
 
 
+def _native_pyosys_wrapper(text: str) -> Optional[dict]:
+    """Recognise LibreLane's direct ``yosys -y synthesize.py`` invocation.
+
+    The wrapper is only an execution identity.  It deliberately does not
+    return a recipe: the ordering audit below consumes the receipt-bound
+    Yosys log, where the passes that actually ran are recorded.  This keeps a
+    filename or copied source text from becoming execution evidence.
+    """
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        match = re.search(r"--\s*Running command\s*`(.+?)'[ \t]*--[ \t]*$",
+                          line)
+        command = match.group(1).strip() if match else line
+        try:
+            tokens = shlex.split(command)
+        except ValueError:
+            continue
+        if not tokens or Path(tokens[0]).name.lower() != "yosys":
+            continue
+        try:
+            yidx = tokens.index("-y")
+            script = tokens[yidx + 1]
+            separator = tokens.index("--", yidx + 2)
+        except (ValueError, IndexError):
+            continue
+        if Path(script).name != "synthesize.py":
+            continue
+        args = tokens[separator + 1:]
+        required = {"--config-in": None, "--extra-in": None,
+                    "--output": None}
+        i = 0
+        while i < len(args):
+            if args[i] in required and i + 1 < len(args):
+                required[args[i]] = args[i + 1]
+                i += 2
+                continue
+            i += 1
+        if all(value for value in required.values()):
+            return {"command": command, "script": script,
+                    "config_in": required["--config-in"],
+                    "extra_in": required["--extra-in"],
+                    "output": required["--output"]}
+    return None
+
+
+_NATIVE_LOG_PASS_RE = re.compile(
+    r"\bExecuting\s+([A-Z][A-Z0-9_]*)\s+pass\b", re.IGNORECASE)
+_NATIVE_LOG_PASS_NAMES = {
+    "DFFLIBMAP": "dfflibmap",
+    "ABC": "abc",
+    "SETUNDEF": "setundef",
+    "HILOMAP": "hilomap",
+    "SPLITNETS": "splitnets",
+    "CLEAN": "clean",
+    "OPT_CLEAN": "opt_clean",
+    "SYNTH": "synth",
+    "TECHMAP": "techmap",
+    "WRITE_VERILOG": "write_verilog",
+}
+
+
+def _native_log_recipe(text: str, config: dict) -> Optional[str]:
+    """Recover the ordered Yosys passes that the native tool really ran."""
+    if "Yosys" not in text:
+        return None
+    commands: List[str] = []
+    for match in _NATIVE_LOG_PASS_RE.finditer(text):
+        name = match.group(1).upper()
+        command = _NATIVE_LOG_PASS_NAMES.get(name)
+        if command is None:
+            continue
+        if command == "setundef":
+            value = config.get("SYNTH_TIE_UNDEFINED")
+            flag = "-zero" if value == "low" else "-one" if value == "high" else ""
+            command = "setundef" + (f" {flag}" if flag else "")
+        commands.append(command)
+    # A native synthesis log must contain the technology mapping and tie-cell
+    # pass before it can answer this gate.  A wrapper/log pair missing either
+    # is an execution trace, not a recipe measurement.
+    if not commands or "dfflibmap" not in commands or "abc" not in commands \
+            or "hilomap" not in commands:
+        return None
+    return "\n".join(commands)
+
+
 def _native_yosys_recipe(project: Path) -> Optional[dict]:
     """Read the current native Yosys recipe, or disclose why it is unreadable.
 
@@ -505,15 +592,46 @@ def _native_yosys_recipe(project: Path) -> Optional[dict]:
                 raise ValueError("native Yosys receipt has no COMMANDS source")
             command_rows = _native_recipe_commands(
                 commands_path.read_text(errors="replace"))
-            if not command_rows:
-                raise ValueError("native COMMANDS has no readable pyosys recipe")
-            for unit, body in command_rows:
-                d = (diagnose_inline_command(body) if unit == "inline"
-                     else diagnose(body))
-                d["source"] = str(commands_path.relative_to(project))
+            wrapper = _native_pyosys_wrapper(commands_path.read_text(errors="replace"))
+            if command_rows:
+                for unit, body in command_rows:
+                    d = (diagnose_inline_command(body) if unit == "inline"
+                         else diagnose(body))
+                    d["source"] = str(commands_path.relative_to(project))
+                    report["findings"].append(d)
+                    if d.get("verdict") in ("CLEAN", "VIOLATION"):
+                        report["violations"].extend(d.get("violations", []))
+            elif wrapper is not None:
+                # The pyosys wrapper's source is inside the pinned image.  Its
+                # filename/configuration cannot certify pass order; the
+                # receipt-bound invocation log is the executed witness.
+                if "invocation.log" not in hashes:
+                    raise ValueError("native Yosys receipt does not bind invocation.log")
+                log_path = receipt_path.parent / "invocation.log"
+                if not log_path.is_file() or not log_path.stat().st_size:
+                    raise ValueError("native Yosys receipt has no invocation log")
+                config_path = receipt_path.parent / "config.json"
+                if "config.json" not in hashes or not config_path.is_file():
+                    raise ValueError("native Yosys receipt does not bind config.json")
+                extra_path = receipt_path.parent / "extra.json"
+                if ("extra.json" not in hashes or not extra_path.is_file() or
+                        Path(wrapper["config_in"]).resolve() != config_path.resolve() or
+                        Path(wrapper["extra_in"]).resolve() != extra_path.resolve() or
+                        Path(wrapper["output"]).resolve().parent != folder):
+                    raise ValueError("native Yosys wrapper does not name current step inputs")
+                config = json.loads(config_path.read_text(errors="replace"))
+                body = _native_log_recipe(
+                    log_path.read_text(errors="replace"), config)
+                if body is None:
+                    raise ValueError("native Yosys invocation log has no readable executed recipe")
+                d = diagnose(body)
+                d["source"] = (str(commands_path.relative_to(project)) +
+                                " + " + str(log_path.relative_to(project)))
                 report["findings"].append(d)
                 if d.get("verdict") in ("CLEAN", "VIOLATION"):
                     report["violations"].extend(d.get("violations", []))
+            else:
+                raise ValueError("native COMMANDS has no readable pyosys recipe")
         except (OSError, ValueError, TypeError, AttributeError) as exc:
             report["findings"].append({
                 "source": str(receipt_path.relative_to(project)),
