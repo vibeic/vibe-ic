@@ -414,6 +414,10 @@ def register_adapters(registry: em.Registry, *, project: Path | None = None, req
             available=receipt is not None and not missing,
             qualification_evidence=em._hash(receipt) if receipt else 'native_installation_receipt missing',
             availability_reason=','.join(missing), cpus=params['cpus'], ram_mb=params['ram_mb'],
+            applicability=('inapplicable' if objective['declaration_sha256'] and
+                           not objective['blocks'] else 'applicable'),
+            applicability_reason=('declared analog block population is empty'
+                                  if objective['declaration_sha256'] and not objective['blocks'] else ''),
             own_no_tool_reason='One complete complementary producer; no second interchangeable provider.',
             output_contract={key: required for key in
                 CONTRACTS[step]['portfolio_policy']['required_output_contract']},

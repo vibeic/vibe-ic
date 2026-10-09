@@ -448,7 +448,7 @@ def _register_analog_adapters(registry, project: Path, source_sha: str,
         registry, project=project, request=parameters.get('analog_request'))
     import execution_adapters_analog_front as analog_front
     analog_front.register_front_adapters(
-        registry, project=project, source_sha=source_sha)
+        registry, project=project, source_sha=source_sha, parameters=parameters)
 
 
 def bootstrap(project: Path, *, parameters: dict | None = None,
@@ -990,7 +990,7 @@ def dispatch_fixed_step(project: Path, step_id: str, *, inputs=None,
     """Dispatch one caller-selected canonical row; gates/adoption remain Core's.
 
     BLOCKING: a pending AI choice or unmeasured/failed result cannot publish
-    canonical output bytes. Default returns before any provider construction.
+    canonical output bytes. Unissued helpers return before provider construction.
     """
     import execution_modes as em
     explicit_choice = choice is not None

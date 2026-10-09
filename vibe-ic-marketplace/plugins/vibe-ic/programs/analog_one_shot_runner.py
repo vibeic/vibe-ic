@@ -2827,8 +2827,12 @@ def main() -> int:
     # Freeze the resolved declaration before registration. A1-A5 products are
     # still collected by the ordinary dispatcher when each later row runs.
     from execution_analog_installation import prepare_entry_request
-    entry_request = prepare_entry_request(project, args) if execution.request()['mode'] == 'ultra' else None
-    execution.bootstrap(project, parameters={'analog_request': entry_request})
+    issued_entry = (execution.request()['mode'] == 'ultra' or
+                    execution._CAPABILITY_FD_ENV in os.environ)
+    entry_request = prepare_entry_request(project, args) if issued_entry else None
+    runtime = execution.bootstrap(project, parameters={
+        'analog_request': entry_request, 'container': args.container,
+        'pdk': _effective_analog_pdk(args, project)})
 
     plan: List[StepResult] = []
     # No refusal is inherited from a previous run of this process.
@@ -2839,7 +2843,7 @@ def main() -> int:
         print(f"  {sr.status:6} {sr.name:24} block={sr.block:16} "
               f"{_rsum.summary_detail(sr.detail, sr.status, width=60)}")
 
-    if execution.request()['mode'] == 'ultra':
+    if runtime is not None:
         # Every declared block must get its A1-A5 producer opportunity before
         # the first unified fixed A6/A7/A8 Context is cached by the ordinary
         # Controller. Keep one literal preflight call site per canonical row.
@@ -2909,7 +2913,8 @@ def main() -> int:
                 step_for_block, project, blk, "A9_hw_verify", args=args,
                 _preflight_note=_note))
     else:
-        # Default deliberately retains its released block-major A1-A9 order.
+        # Imported helpers without an issued Controller retain the direct
+        # block-major producer path.
         for blk in blocks:
             _bname = blk.get("name") or blk.get("type") or "unknown"
             _note = f"block={_bname}"
@@ -2964,7 +2969,18 @@ def main() -> int:
     # L22. Recorded beside the rows, not as one: the flow's A9 gate
     # (`mixed_signal_cosim_check`) owns that verdict, and a second row here
     # would roll the same fact up twice.
-    a9_cosim = _a9_cosim(project, args)
+    if runtime is None:
+        a9_cosim = _a9_cosim(project, args)
+    else:
+        # The fixed A9 worker owns the chip-level producer. A second launch
+        # here would overwrite adopted bytes outside its current receipt,
+        # including when the fixed dispatch refused missing inputs.
+        owned = runtime['runs'].get('A9')
+        result = owned[1] if owned else {}
+        a9_cosim = {'tier': 'CONTROLLER_OWNED',
+                    'controller_status': result.get('status', 'NOT_MEASURED'),
+                    'reason': result.get('reason', '' if owned else 'A9_FIXED_RESULT_ABSENT'),
+                    'run_root': str(owned[0]) if owned else None}
 
     # vibe-ic#2080 — the master block list every A-gate above read, judged at
     # last by the gate written for it. AFTER the loop: A1 is what emits each

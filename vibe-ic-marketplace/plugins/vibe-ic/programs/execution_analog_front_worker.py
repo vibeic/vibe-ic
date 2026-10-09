@@ -64,7 +64,11 @@ def execute(step: str, inputs: Path, outputs: Path) -> dict:
     declared = json.loads(declaration.read_text())
     declared_rows = declared.get("blocks") if isinstance(declared, dict) else declared
     block_rows, results = [], []
-    args = argparse.Namespace(container=None, pdk=None)
+    binding = json.loads(os.environ["VIBEIC_EXECUTION_BINDING"])
+    if binding.get("step_id") != step:
+        raise em.Refusal("FRONT_STEP_BINDING_MISMATCH", step)
+    params = binding.get("objective", {}).get("parameters", {})
+    args = argparse.Namespace(container=params.get("container"), pdk=params.get("pdk"))
     for block_name in blocks:
         block = next(row for row in declared_rows if row.get("name") == block_name)
         result = runner.step_for_block(project, block, STEP_NAMES[step], args=args)
@@ -127,7 +131,7 @@ def execute(step: str, inputs: Path, outputs: Path) -> dict:
     else:
         verdict = "NOT_MEASURED"
     detail = "; ".join(f"{row['block']}:{row['status']}:{row['detail']}" for row in block_rows)
-    receipt = dict(schema=1, binding=json.loads(os.environ["VIBEIC_EXECUTION_BINDING"]),
+    receipt = dict(schema=1, binding=binding,
         step_id=step, blocks=list(blocks), rows=block_rows, outputs=output_hashes,
         block_outputs=block_paths, verdict=verdict, detail=detail, a9_cosim=cosim,
         producer_pid=os.getpid(), source_project=str(project))

@@ -216,6 +216,9 @@ def test_two_block_worker_runs_existing_a1_producer_in_declared_order(tmp_path, 
         runtime = policy.bootstrap(project, parameters={
             "container": "fixture-unavailable-container", "pdk": "synthetic-test-family"})
         assert runtime is not None
+        assert runtime["registry"].adapters("A4")[0].objective["parameters"] == {
+            "producer_step": "A4_corner_sweep", "container": "fixture-unavailable-container",
+            "pdk": "synthetic-test-family"}
         expected = {
             "A1": ("analog_a1_spec_emit.py", "spec.json"),
             "A2": ("analog_a2_topology_emit.py", "topology.md"),
@@ -435,7 +438,7 @@ def test_a9_optional_hardware_gate_present_fail_dominates_and_missing_record_is_
     assert missing.gates["analog_hw_spice_correlation_check"] == "NOT_MEASURED"
 
 
-def _default_runner_plan(tmp_path, monkeypatch):
+def _default_runner_plan(tmp_path, monkeypatch, *, a9_context_present=True):
     """Observe the actual caller schedule; no native result is supplied."""
     import execution_analog_installation as installation
     project = _project(tmp_path / "plan")
@@ -458,9 +461,10 @@ def _default_runner_plan(tmp_path, monkeypatch):
 
     def dispatch(subject, module, site, refusal, function, *args, **kwargs):
         observations["calls"].append((site, args[1]["name"]))
-        runtime["contexts"][site] = object()
-        runtime["runs"][site] = (project / "unused-run", {"status": "NOT_MEASURED",
-                                                       "reason": "TEST_TOOL_UNAVAILABLE"})
+        if site != "A9" or a9_context_present:
+            runtime["contexts"][site] = object()
+            runtime["runs"][site] = (project / "unused-run", {"status": "NOT_MEASURED",
+                                                           "reason": "TEST_TOOL_UNAVAILABLE"})
         return runner.StepResult(front.analog.ANALOG_STEPS[site], args[1]["name"],
                                  "NOT_MEASURED", 0, "TEST_TOOL_UNAVAILABLE",
                                  reason_class="tool_absent")
@@ -503,8 +507,11 @@ def test_default_issued_analog_finishes_population_before_next_fixed_row(tmp_pat
             i for i, (site, _) in enumerate(calls) if site == following), calls
 
 
-def test_default_issued_a9_does_not_launch_a_second_cosim_producer(tmp_path, monkeypatch):
-    observations, _ = _default_runner_plan(tmp_path, monkeypatch)
+@pytest.mark.parametrize("a9_context_present", (True, False))
+def test_default_issued_a9_does_not_launch_a_second_cosim_producer(tmp_path, monkeypatch,
+                                                                 a9_context_present):
+    observations, _ = _default_runner_plan(tmp_path, monkeypatch,
+                                         a9_context_present=a9_context_present)
     assert observations["cosim_calls"] == 0, observations
 
 

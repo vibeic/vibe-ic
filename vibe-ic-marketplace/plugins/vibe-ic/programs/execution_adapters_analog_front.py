@@ -1,7 +1,7 @@
 """Source-bound adapters for the existing analog A1-A5/A9 producer sites.
 
 These rows make the existing ordinary producer and gate path reachable from
-the live Ultra Controller. Adapter availability describes this source-bound
+the live fixed Controller. Adapter availability describes this source-bound
 dispatcher only; it is not a claim that analog tools or hardware are installed.
 """
 from __future__ import annotations
@@ -189,12 +189,23 @@ def validate(outputs: Path, binding: Mapping[str, object]) -> em.Evidence:
 
 
 def register_front_adapters(registry: em.Registry, *, project: Path,
-                            source_sha: str) -> None:
+                            source_sha: str,
+                            parameters: Mapping[str, object] | None = None) -> None:
     """Register one existing producer chain for each owned canonical row."""
     declaration = analog.declaration_path(project)
     blocks = list(analog._blocks(project, declaration))
     declaration_hash = em.digest(declaration)
     source_files = _source_files(source_sha)
+    params = dict(parameters or {})
+    pdk = params.get('pdk_name') or params.get('pdk')
+    if isinstance(pdk, Mapping):
+        pdk = pdk.get('name')
+    elif pdk is not None and not isinstance(pdk, str):
+        pdk = getattr(pdk, 'name', None)
+    caller_params = {'container': params.get('container'), 'pdk': pdk}
+    if any(value is not None and not isinstance(value, str)
+           for value in caller_params.values()):
+        raise em.Refusal('FRONT_CALLER_PARAMETER_INVALID', repr(tuple(caller_params)))
     for step, step_name in STEP_NAMES.items():
         specs = analog.CONTRACTS[step]
         required = tuple(specs["portfolio_policy"]["required_output_contract"])
@@ -202,21 +213,28 @@ def register_front_adapters(registry: em.Registry, *, project: Path,
             step_id=step, blocks=blocks, original_project=str(project.resolve()),
             declaration_sha256=declaration_hash,
             source_manifest_sha256=em._hash(source_files),
-            parameters={"producer_step": step_name})
+            parameters={"producer_step": step_name, **caller_params})
         row_inputs = [item["path"] for item in specs["canonical_row"].get("required_inputs", ())
                       if isinstance(item, dict) and item.get("path")]
         # The ordinary producer reads the prior fixed-step products from its
         # project tree. The isolated worker sees only Context inputs, so bind
         # these current A1/A2 bytes before staging A2/A3.
-        if step in ("A2", "A3"):
+        if step in ("A2", "A3", "A5", "A9"):
             row_inputs.append("phase3/analog/*/spec.json")
-        if step == "A3":
+        if step in ("A3", "A5", "A9"):
             row_inputs.append("phase3/analog/*/topology.json")
+        if step == "A5":
+            row_inputs.append("phase3/analog/*/netlist_provenance.json")
         row_inputs.extend((str(declaration.relative_to(project)),
                            "phase1/generated_docs/L19_CONSTRAINTS_PDK.json",
-                           "phase1/generated_docs/L22_MIXED_SIGNAL.json",
                            "input/pdk/**/*"))
         if step == "A9":
+            # These are prior products/current declarations read by the
+            # existing cosim and hardware consumers, never A9's own reports.
+            row_inputs.extend(("phase1/generated_docs/L22*.json",
+                "phase3/analog/*/*.sp", "phase3/analog/*/a7_post_layout.json",
+                "phase3/analog/*/pre_vs_post.json", "phase3/analog/*/corner_results.json",
+                "phase3/analog/hardmacro/*/*.v", "input/mixed_signal/**/*"))
             row_inputs.extend(pattern
                 for gate in analog.gate_specs(step)
                 if gate.get("kind") == "optional_program_exit_zero"
@@ -236,6 +254,8 @@ def register_front_adapters(registry: em.Registry, *, project: Path,
             tool_version="existing-runner-producer-chain", engine_families=("vibeic-analog-" + step.lower(),),
             components=tuple(components), validate=validate,
             required_outputs=required, objective=objective,
+            applicability="applicable" if blocks else "inapplicable",
+            applicability_reason="" if blocks else "declared analog block population is empty",
             qualified=True, available=True,
             qualification_evidence="source-bound existing producer/gate dispatch; native readiness not implied",
             availability_reason="Native/tool availability is classified by current producer and gates",

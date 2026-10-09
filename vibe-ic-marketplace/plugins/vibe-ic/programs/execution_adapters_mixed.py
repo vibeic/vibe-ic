@@ -235,6 +235,11 @@ def register_mixed_adapters(registry: em.Registry, *, source_sha: str,
     import _flow_yaml
     rows = {str(row["id"]): row for row in _flow_yaml.load()["steps"]}
     params = dict(parameters or {})
+    import execution_adapters_analog as analog
+    declaration = analog.declaration_path(Path(project))
+    empty_population = (path == "IC" and
+        (declaration.exists() or declaration.is_symlink()) and
+        not analog._blocks(Path(project), declaration))
     worker = HERE / "execution_mixed_worker.py"
     sources = {Path(__file__), worker, HERE / "execution_modes.py",
                HERE / "execution_provider_catalog.py", HERE / "execution_backend_snapshot.py",
@@ -308,8 +313,9 @@ def register_mixed_adapters(registry: em.Registry, *, source_sha: str,
             engine_families=("mixed_signal",),
             components=(em.Component("ordinary-mixed-producer", argv, 3600),),
             validate=validate, required_outputs=required, objective=objective,
-            applicability="applicable" if path == "IC" else "inapplicable",
-            applicability_reason="" if path == "IC" else "mixed-signal is IC-only",
+            applicability="applicable" if path == "IC" and not empty_population else "inapplicable",
+            applicability_reason=("mixed-signal is IC-only" if path != "IC" else
+                                  "declared analog block population is empty" if empty_population else ""),
             role="producer", qualified=True,
             qualification_evidence="source component is runnable; native tool qualification and producer measurement remain runtime-bound",
             available=True, cpus=1, ram_mb=512,
