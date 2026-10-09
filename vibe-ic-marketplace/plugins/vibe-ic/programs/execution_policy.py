@@ -704,8 +704,20 @@ def _backend_manifest_parameters(runtime, step_id: str, manifest):
                              (json.dumps(typed, sort_keys=True),) +
                              component.argv[index + 1:])
                 originals[arm.arm_id] = registry._adapters[arm.arm_id]
-                registry._adapters[arm.arm_id] = replace(
-                    arm, components=(replace(component, argv=argv),))
+                rebound = replace(component, argv=argv)
+                # Controller source admission rechecks the immutable
+                # invocation-source snapshot against the live component argv.
+                # A dispatch manifest changes only the JSON transport token,
+                # so refresh that derived snapshot for the same short-lived
+                # arm and restore it with the arm afterward.
+                rebound_fields = {'components': (rebound,)}
+                if hasattr(arm, 'invocation_sources'):
+                    import execution_modes as _execution_modes
+                    from types import MappingProxyType
+                    invocations = dict(arm.invocation_sources)
+                    invocations[component.name] = _execution_modes._invocation_sources(rebound)
+                    rebound_fields['invocation_sources'] = MappingProxyType(invocations)
+                registry._adapters[arm.arm_id] = replace(arm, **rebound_fields)
             yield
         finally:
             for arm_id, original in originals.items():
@@ -1021,15 +1033,19 @@ def dispatch_fixed_step(project: Path, step_id: str, *, inputs=None,
         # seeing this step's current request.
         baselines[step_id] = _choice_file_state(response_path, snapshot=True)
     parameters = dict(parameters or {})
+    from execution_provider_catalog import BACKEND_IDS
+    is_backend = str(step_id) in BACKEND_IDS
     if inputs is not None:
-        from execution_provider_catalog import BACKEND_IDS
         files = (_manifest_for_explicit_inputs(runtime, step_id, parameters, inputs)
-                 if str(step_id) in BACKEND_IDS else dict(inputs))
+                 if is_backend else dict(inputs))
     elif step_id == '0.5ic':
-        files = _fixed_inputs(runtime, step_id, parameters=parameters)
+        files = _fixed_inputs(runtime, step_id)
     else:
         _ensure_default_prelayout(runtime, str(step_id))
-        files = _fixed_inputs(runtime, step_id, parameters=parameters)
+        # Preserve the historical two-argument seam for every non-backend
+        # provider; only backend dispatch receives the issuer manifest.
+        files = (_fixed_inputs(runtime, step_id, parameters=parameters)
+                 if is_backend else _fixed_inputs(runtime, step_id))
     manifest = parameters.get('resolved_input_manifest')
     if isinstance(manifest, dict) and manifest.get('missing'):
         return dict(status='NOT_MEASURED', reason='ORDINARY_INPUT_ABSENT',

@@ -450,6 +450,12 @@ def _typed_parameters(spec: Mapping[str, object], source_sha: str,
             if isinstance(value, Path):
                 value = str(value)
             params[key] = value
+    # A manifest is an issuer capability, not a public registration option.
+    # ``execution_policy._fixed_inputs`` binds the freshly resolved manifest
+    # only for the duration of one dispatch through
+    # ``_backend_manifest_parameters``.  Keep registration fail-closed so a
+    # direct Controller caller cannot smuggle an empty/optionalized manifest.
+    params["resolved_input_manifest"] = None
     params["simulators_explicit"] = explicit_simulators
     params.update({
         "route": "librelane" if str(spec["step_id"]) != "30" else "path_spice",

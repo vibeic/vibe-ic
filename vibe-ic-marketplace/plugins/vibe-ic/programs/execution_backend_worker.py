@@ -16,7 +16,7 @@ if str(HERE) not in sys.path:
 import execution_modes as em
 from execution_adapters_backend import ROWS
 from execution_backend_gates import evaluate, states
-from execution_backend_producers import produce
+from execution_backend_producers import produce, _current_step_producer_authority
 from execution_backend_snapshot import sha
 
 
@@ -376,15 +376,27 @@ def execute(inputs: Path, outputs: Path, *, step_id: str, params: dict) -> dict:
                             "producer": "execution_backend_producers.produce",
                             "step_id": str(step_id), "verdict": "NOT_MEASURED",
                             "detail": f"{type(exc).__name__}: {exc}"}]}
-        # A producer exception must not erase a measured FAIL, and a consumer
-        # exception must not prevent the canonical gate from being represented in
-        # the digest-bound result.  Both remain source-only until native receipts.
-        try:
-            gate_result = evaluate(project, row)
-        except BaseException as exc:
+        # A current-step producer census is authoritative.  If it is
+        # incomplete, zero-population, nonzero, or wrong-owner, do not let the
+        # consumer manufacture a PASS from pre-existing/audit-authored files.
+        current = producer.get("current_step_declared_producers")
+        allowed, reason, authority_verdict = _current_step_producer_authority(current)
+        if not allowed:
+            if producer.get('verdict') != 'FAIL':
+                producer['verdict'] = authority_verdict
             gate_result = {"status": "NOT_MEASURED", "ledger": [{
                 "gate": "backend_consumer", "verdict": "NOT_MEASURED",
-                "reason": f"{type(exc).__name__}: {exc}"}]}
+                "reason": reason}]}
+        else:
+            # A producer exception must not erase a measured FAIL, and a
+            # consumer exception must not prevent the canonical gate from being
+            # represented in the digest-bound result.
+            try:
+                gate_result = evaluate(project, row)
+            except BaseException as exc:
+                gate_result = {"status": "NOT_MEASURED", "ledger": [{
+                    "gate": "backend_consumer", "verdict": "NOT_MEASURED",
+                    "reason": f"{type(exc).__name__}: {exc}"}]}
     files, missing = resolve_contract(project, row.get("required_outputs", ()))
     # Publish only exact current producer/gate bytes; no placeholder output is
     # created for a missing canonical contract.
@@ -409,6 +421,8 @@ def execute(inputs: Path, outputs: Path, *, step_id: str, params: dict) -> dict:
         "missing_outputs": missing, "native_receipts": native_receipts,
         "canonical_receipts": canonical_receipts,
         "verdict": verdict, "detail": producer.get("detail", ""),
+        "current_step_declared_producers": producer.get(
+            "current_step_declared_producers"),
         "input_contract": input_contract, "missing_inputs": missing_inputs,
         "resolved_input_manifest": resolved,
     }

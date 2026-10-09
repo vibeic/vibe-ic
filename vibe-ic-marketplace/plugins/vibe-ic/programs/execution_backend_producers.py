@@ -1141,7 +1141,10 @@ def _run_current_step_declared_producers(project, step_id):
     """
     try:
         import flow_declared_producer_run as declared
-        return declared.run_for_step(Path(project), str(step_id))
+        result = declared.run_for_step(Path(project), str(step_id))
+        if not isinstance(result, dict):
+            raise ValueError("current-step producer returned no record")
+        return result
     except BaseException as exc:
         return {
             "program": "flow_declared_producer_run",
@@ -1149,8 +1152,46 @@ def _run_current_step_declared_producers(project, step_id):
             "step_id": str(step_id),
             "verdict": "INCOMPLETE",
             "executed": 0,
+            "consumer_allowed": False,
             "error": f"{type(exc).__name__}: {exc}",
         }
+
+
+def _current_step_producer_authority(record):
+    """Classify the current-step producer census before consumer evaluation."""
+    if not isinstance(record, dict):
+        return False, "current-step producer record is malformed", "NOT_MEASURED"
+    results = record.get("results")
+    if not isinstance(results, list):
+        return False, "current-step producer results are missing", "NOT_MEASURED"
+    if any(isinstance(row, dict) and type(row.get("rc")) is int and row["rc"] != 0
+           for row in results):
+        return False, "current-step producer execution failed", "FAIL"
+    verdict = record.get("verdict")
+    if verdict != "PRODUCED":
+        return False, f"current-step producer verdict is {verdict!r}", "NOT_MEASURED"
+    population = record.get("population")
+    if type(population) is not int or population <= 0:
+        return False, "current-step producer population is zero", "NOT_MEASURED"
+    already = record.get('already_produced_by_the_run', 0)
+    if type(already) is not int or already < 0 or population != len(results) + already:
+        return False, "current-step producer population is unaccounted", "NOT_MEASURED"
+    invalid = record.get("invalid_results") or record.get("unexecutable")
+    if invalid:
+        nonzero = any(row.get("rc") not in (None, 0)
+                      for row in invalid if isinstance(row, dict))
+        return False, "current-step producer result is incomplete", (
+            "FAIL" if nonzero else "NOT_MEASURED")
+    for row in results:
+        if not isinstance(row, dict):
+            return False, "current-step producer result is malformed", "NOT_MEASURED"
+        if (type(row.get("rc")) is not int or row["rc"] != 0 or
+                row.get("executed") is not True or
+                row.get("target_exists_after") is not True):
+            return False, "current-step producer target did not complete", "NOT_MEASURED"
+        if row.get("authorship") != "producer":
+            return False, "current-step producer authorship is not producer", "NOT_MEASURED"
+    return True, "", "PASS"
 
 def produce(project, params):
     if params['step_id'] in ('15', '15.5ic', '17', '18', '19', '20', '21'):
@@ -1161,8 +1202,17 @@ def produce(project, params):
     # only this row's flow-declared producer outputs now; the phase runner's
     # later all-step refresh remains unchanged and does not get used as a
     # substitute for current-step ownership.
-    result['current_step_declared_producers'] = (
-        _run_current_step_declared_producers(project, params['step_id']))
+    current = _run_current_step_declared_producers(project, params['step_id'])
+    allowed, reason, authority_verdict = _current_step_producer_authority(current)
+    current['consumer_allowed'] = allowed
+    current['authority_verdict'] = authority_verdict
+    current['authority_detail'] = reason
+    result['current_step_declared_producers'] = current
+    if not allowed:
+        result['verdict'] = ("FAIL" if authority_verdict == "FAIL" or result.get('verdict') == 'FAIL'
+                             else "NOT_MEASURED")
+        result['detail'] = (str(result.get('detail', '')) +
+                            f"; {reason}").strip('; ')
     # These are the existing canonical report producers, scoped to this row.
     # They consume actual native outputs; they do not stand in for native work.
     import phase3_one_shot_runner as R
@@ -1190,6 +1240,7 @@ def produce(project, params):
         'step_id': sid,
         'verdict': result.get('verdict', 'NOT_MEASURED'),
         'detail': result.get('detail', ''),
+        'current_step_declared_producers': current,
     }]
     result.setdefault('native_receipts', [])
     return result

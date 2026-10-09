@@ -46,12 +46,10 @@ executed only when its target is ABSENT, or when the audit's own authorship
 note claims the file -- i.e. the only thing that has ever written that path is
 the auditor. A document the run produced is left exactly as the run left it.
 
-A NON-ZERO rc IS RECORDED, NEVER SWALLOWED. These programs write their `--json`
-document whatever they conclude, and the step's own gate re-runs them and
-reaches its own verdict; this program's job is to make the document EXIST as
-run evidence, not to decide anything. Its own exit code is 1 only when a
-declared producer could not be executed at all -- a program that is missing is
-a flow defect and says so.
+A NON-ZERO rc IS RECORDED, NEVER SWALLOWED. A clause completes only after a
+successful execution leaves its nonempty producer-authored document. Failed
+execution or missing/wrong-owner evidence is INCOMPLETE and blocks the current
+backend consumer; the command-line census also returns nonzero.
 
 chip-AGNOSTIC: everything is read from the flow yaml and the project tree.
 """
@@ -421,11 +419,26 @@ def _run_one(project: Path, row: Dict[str, str], timeout: int
     except OSError as exc:
         out.update({"rc": None, "executed": False, "note": str(exc)})
         return out
+    target = project / row["target"]
     out.update({"rc": rc, "executed": True,
                 "elapsed_s": round(time.time() - t0, 2),
-                "target_exists_after": (project / row["target"]).exists(),
+                "target_exists_after": (target.is_file() and not target.is_symlink()
+                                        and target.stat().st_size > 0),
+                "authorship": _document_role(target) if target.exists() else None,
                 "tail": tail})
     return out
+
+
+def _result_is_producer_complete(result: Dict[str, Any]) -> bool:
+    """Whether one owed clause completed as producer-owned evidence."""
+    if type(result.get("rc")) is not int or result["rc"] != 0:
+        return False
+    if result.get("executed") is not True:
+        return False
+    if result.get("target_exists_after") is not True:
+        return False
+    role = result.get("authorship")
+    return role == _ga.ROLE_PRODUCER
 
 
 def _run_clauses(project: Path, clauses: List[Dict[str, str]],
@@ -442,7 +455,8 @@ def _run_clauses(project: Path, clauses: List[Dict[str, str]],
     to_run, skipped = owed(project, clauses)
     results = [_run_one(project, row, timeout) for row in to_run]
     unexecutable = [r for r in results if not r.get("executed")]
-    produced = [r for r in results if r.get("target_exists_after")]
+    invalid_results = [r for r in results if not _result_is_producer_complete(r)]
+    produced = [r for r in results if _result_is_producer_complete(r)]
     # TWO DIFFERENT FACTS WERE COUNTED AS ONE (vibe-ic#619 / RC13). `skipped`
     # holds both "the run already produced it" and "the run did not perform this
     # step", and `already_produced_by_the_run` was `len(skipped)` -- so a project
@@ -469,9 +483,11 @@ def _run_clauses(project: Path, clauses: List[Dict[str, str]],
         "executed": len(results) - len(unexecutable),
         "documents_now_present": len(produced),
         "unexecutable": unexecutable,
+        "invalid_results": invalid_results,
         "results": results, "skipped": skipped,
         "verdict": ("ZERO_POPULATION" if population == 0
-                    else "INCOMPLETE" if unexecutable else "PRODUCED"),
+                    else "INCOMPLETE" if (unexecutable or invalid_results)
+                    else "PRODUCED"),
     }
 
 def run_for_step(project: Path, step_id: str, timeout: int = 900
@@ -552,7 +568,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     for r in rec["unexecutable"]:
         print(f"  NOT EXECUTABLE: step {r['step']} {r['program']}: "
               f"{r.get('note')}", file=sys.stderr)
-    return 1 if rec["unexecutable"] else 0
+    return 1 if rec["verdict"] == "INCOMPLETE" else 0
 
 
 if __name__ == "__main__":

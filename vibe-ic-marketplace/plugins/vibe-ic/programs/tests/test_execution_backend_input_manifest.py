@@ -134,6 +134,40 @@ def test_manifest_accepts_numeric_upstream_step_declaration():
     })
 
 
+@pytest.mark.parametrize("forged", [
+    {"declarations": [], "files": {}, "missing": []},
+    {"declarations": [{"path": "missing.v", "required": False}],
+     "files": {}, "missing": []},
+])
+def test_public_registration_never_transports_caller_manifest(
+        tmp_path, monkeypatch, forged):
+    """Only the issuer dispatch seam may bind a worker manifest."""
+    from execution_adapters_backend import register_backend_adapters
+    from execution_provider_catalog import current_source_identity
+
+    registry = register_backend_adapters(
+        source_sha=current_source_identity(), available=False,
+        parameters={"resolved_input_manifest": forged})
+    argv = registry.adapters("15")[0].components[0].argv
+    params = json.loads(argv[argv.index("--params-json") + 1])
+    assert params["resolved_input_manifest"] is None
+
+    calls = []
+    monkeypatch.setattr(worker, "produce",
+                        lambda project, value: calls.append("produce"))
+    monkeypatch.setattr(worker, "evaluate",
+                        lambda project, row: calls.append("evaluate"))
+    monkeypatch.setenv("VIBEIC_EXECUTION_BINDING", json.dumps({
+        "required_gates": [],
+    }))
+    inputs = tmp_path / "inputs"
+    (inputs / "project").mkdir(parents=True)
+    result = worker.execute(inputs, tmp_path / "outputs", step_id="15", params=params)
+    assert result["missing_inputs"] == ["resolved_input_manifest"]
+    assert result["verdict"] == "NOT_MEASURED"
+    assert calls == []
+
+
 def test_backend_manifest_transport_rebinds_and_restores_component_argv():
     @dataclass(frozen=True)
     class FakeComponent:
@@ -293,7 +327,12 @@ def test_optional_backend_consumer_edges_preserve_present_files_and_empty_waiver
     calls = []
     monkeypatch.setattr(worker, "produce",
                         lambda project, params: calls.append("produce") or {
-                            "verdict": "NOT_MEASURED"})
+                            "verdict": "NOT_MEASURED",
+                            "current_step_declared_producers": {
+                                "verdict": "PRODUCED", "population": 1,
+                                "results": [{"rc": 0, "executed": True,
+                                             "target_exists_after": True,
+                                             "authorship": "producer"}]}})
     monkeypatch.setattr(worker, "evaluate",
                         lambda project, row: calls.append("evaluate") or {
                             "status": "NOT_MEASURED", "ledger": []})
@@ -389,7 +428,11 @@ def test_explicit_backend_dispatch_uses_exact_population_and_blocks_missing(
 
     def produce(project, params):
         producer_calls.append(project)
-        return {"verdict": "NOT_MEASURED", "detail": "mock producer boundary"}
+        return {"verdict": "NOT_MEASURED", "detail": "mock producer boundary",
+                'current_step_declared_producers': {
+                    'verdict': 'PRODUCED', 'population': 1, 'results': [{
+                        'rc': 0, 'executed': True, 'target_exists_after': True,
+                        'authorship': 'producer'}]}}
 
     def evaluate(project, row):
         consumer_calls.append(project)

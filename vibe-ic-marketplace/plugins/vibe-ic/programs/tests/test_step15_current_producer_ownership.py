@@ -35,7 +35,13 @@ def test_current_step_producer_scope_stamps_step15_and_skips_other_steps(tmp_pat
     assert record["step_id"] == "15"
     assert record["owed"] == 1
     assert record["executed"] == 1
-    assert record["documents_now_present"] == 1
+    # The producer writes its stamped report, but the deliberately tiny
+    # project makes stage2_compliance return rc=1.  Presence alone is not a
+    # producer success signal.
+    assert record["documents_now_present"] == 0
+    assert record["verdict"] == "INCOMPLETE"
+    assert record["results"][0]["target_exists_after"] is True
+    assert record["results"][0]["authorship"] == "producer"
     assert all(row["step"] == "15" for row in record["results"])
     assert not any(row["step"] == "26" for row in record["results"])
 
@@ -72,7 +78,7 @@ def test_current_step_scope_filters_before_owed_and_run(tmp_path, monkeypatch):
     def fake_run_one(project, row, timeout):
         run_seen.append(row["step"])
         return {"step": row["step"], "executed": True,
-                "target_exists_after": True}
+                "rc": 0, "target_exists_after": True, "authorship": "producer"}
 
     monkeypatch.setattr(declared, "declared_producer_clauses", lambda: clauses)
     monkeypatch.setattr(declared, "owed", fake_owed)
@@ -97,7 +103,10 @@ def test_backend_producer_orders_current_declared_outputs_before_consumer(
     def fake_declared(project, step_id):
         events.append(("declared", str(step_id)))
         return {"scope": "current-step", "step_id": str(step_id),
-                "verdict": "PRODUCED", "executed": 1}
+                "verdict": "PRODUCED", "executed": 1, "population": 1,
+                "invalid_results": [], "unexecutable": [],
+                "results": [{"rc": 0, "executed": True, "target_exists_after": True,
+                              "authorship": "producer"}]}
 
     monkeypatch.setattr(backend_producers, "produce_pnr", fake_native)
     # Inject the existing producer module seam instead of stubbing the new
@@ -138,6 +147,18 @@ def test_real_backend_worker_runs_declared_producer_before_consumer(
         return {"status": "PASS", "ledger": []}
 
     monkeypatch.setattr(backend_producers, "produce_pnr", fake_native)
+    def fake_declared(project, step_id):
+        events.append(("declared", str(step_id)))
+        report = project / "reports/phase2/gates/stage2_compliance.json"
+        report.parent.mkdir(parents=True, exist_ok=True)
+        report.write_text(json.dumps({"invoked_as": "producer", "verdict": "PASS"}) + "\n")
+        return {"scope": "current-step", "step_id": str(step_id),
+                "verdict": "PRODUCED", "executed": 1, "population": 1,
+                "invalid_results": [], "unexecutable": [],
+                "results": [{"rc": 0, "executed": True, "target_exists_after": True,
+                              "authorship": "producer"}]}
+    monkeypatch.setitem(sys.modules, "flow_declared_producer_run",
+                        types.SimpleNamespace(run_for_step=fake_declared))
     monkeypatch.setattr(backend_worker, "produce", backend_producers.produce)
     monkeypatch.setattr(backend_worker, "evaluate", observed_consumer)
     monkeypatch.setenv("VIBEIC_EXECUTION_BINDING", json.dumps({
@@ -147,6 +168,74 @@ def test_real_backend_worker_runs_declared_producer_before_consumer(
         inputs, outputs, step_id="15",
         params={"input_contract": [{"from": "external", "path": "fixture.sdc"}]})
 
-    assert events == ["native", "consumer"]
+    assert events == ["native", ("declared", "15"), "consumer"]
     assert result["verdict"] == "PASS"
     assert "reports/phase2/gates/stage2_compliance.json" in result["outputs"]
+
+
+def test_declared_nonzero_rc_missing_target_is_incomplete(tmp_path, monkeypatch):
+    row = {"step": "15", "program": "stage2_compliance", "target": "stage2.json"}
+    monkeypatch.setattr(declared, "owed", lambda project, clauses: (clauses, []))
+    monkeypatch.setattr(declared, "_run_one", lambda project, clause, timeout: {
+        **clause, "rc": 1, "executed": True, "target_exists_after": False,
+    })
+    record = declared._run_clauses(tmp_path, [row])
+    assert record["verdict"] == "INCOMPLETE"
+    assert record["invalid_results"]
+    assert record["documents_now_present"] == 0
+
+
+@pytest.mark.parametrize('failure', ['audit', 'unstamped', 'exception', 'nonzero',
+                                    'missing_target', 'zero_population'])
+def test_audit_authored_current_step_blocks_backend_consumer(
+        tmp_path, monkeypatch, failure):
+    inputs = tmp_path / "inputs"
+    project_input = inputs / "project"
+    project_input.mkdir(parents=True)
+    source = project_input / "fixture.sdc"
+    source.write_text("create_clock -period 10 [get_ports clk]\n")
+    calls = []
+
+    def fake_native(project, params):
+        calls.append("native")
+        pnr = project / 'phase3/stage3/pnr'
+        pnr.mkdir(parents=True)
+        (pnr / 'floorplan.def').write_text('VERSION 5.8 ;\nEND DESIGN\n')
+        (pnr / 'pdn.done').write_text('pdn complete\n')
+        return {"verdict": "PASS", "detail": "native outputs retained"}
+
+    def fake_declared(project, step_id):
+        if failure == 'exception':
+            raise RuntimeError('declared producer failed')
+        report = project / "reports/phase2/gates/stage2_compliance.json"
+        report.parent.mkdir(parents=True, exist_ok=True)
+        report.write_text(json.dumps({"invoked_as": "audit", "verdict": "PASS"}) + "\n")
+        row = {"rc": 1 if failure == 'nonzero' else 0, "executed": True,
+               "target_exists_after": failure != 'missing_target',
+               "authorship": 'audit' if failure == 'audit' else
+                    None if failure == 'unstamped' else 'producer'}
+        return {"scope": "current-step", "step_id": str(step_id),
+                "verdict": "PRODUCED", "population": 0 if failure == 'zero_population' else 1,
+                "executed": 1, "invalid_results": [], "unexecutable": [], "results": [row]}
+
+    monkeypatch.setattr(backend_producers, "produce_pnr", fake_native)
+    monkeypatch.setitem(sys.modules, "flow_declared_producer_run",
+                        types.SimpleNamespace(run_for_step=fake_declared))
+    monkeypatch.setattr(backend_worker, "produce", backend_producers.produce)
+    monkeypatch.setattr(backend_worker, "evaluate",
+                        lambda project, row: calls.append("consumer") or {
+                            "status": "PASS", "ledger": []})
+    monkeypatch.setenv("VIBEIC_EXECUTION_BINDING", json.dumps({
+        "source_sha": "fixture", "required_gates": []}))
+    manifest = {"declarations": [{"from": "external", "path": "fixture.sdc"}],
+                "files": {"fixture.sdc": backend_worker.sha(source)}, "missing": []}
+    result = backend_worker.execute(
+        inputs, tmp_path / "outputs", step_id="15",
+        params={"resolved_input_manifest": manifest})
+    assert calls == ["native"]
+    expected = 'FAIL' if failure == 'nonzero' else 'NOT_MEASURED'
+    assert result["verdict"] == expected
+    assert result["current_step_declared_producers"]["consumer_allowed"] is False
+    assert result["current_step_declared_producers"]["authority_verdict"] == expected
+    assert result['canonical_receipts'][0]['current_step_declared_producers'] == (
+        result['current_step_declared_producers'])

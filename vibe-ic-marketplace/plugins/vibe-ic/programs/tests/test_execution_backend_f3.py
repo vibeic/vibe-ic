@@ -32,6 +32,7 @@ from execution_adapters_backend import (
     validate_streamout_receipt,
 )
 import execution_backend_worker as backend_worker
+import execution_policy as policy
 from execution_backend_worker import resolve_input_contract
 from synth_handoff_netlist_check import _project_path_resolver
 import execution_backend_consumer
@@ -183,7 +184,10 @@ def test_backend_component_calls_real_worker_and_records_gate_boundary(tmp_path)
     context = issued_context(em.Context("15", BASE, _step15_controller_inputs(tmp_path),
                          {"metric": "canonical_evidence", "direction": "max"},
                          tuple(_required_gates("15")), "librelane"), tmp_path, mode="default")
-    registry = register_backend_adapters(em.Registry(), source_sha=BASE, available=True)
+    registry = register_backend_adapters(
+        em.Registry(), source_sha=BASE, available=True,
+        parameters={"resolved_input_manifest": {
+            "declarations": [], "files": {}, "missing": []}})
     adapter = registry.adapters("15")[0]
     controller = em.Controller(
         registry, em.Budget(cpus=adapter.cpus, ram_mb=adapter.ram_mb, workers=1))
@@ -263,6 +267,10 @@ def test_step15_complete_inputs_call_producer_then_gates(tmp_path, monkeypatch):
             'verdict': 'PASS',
             'canonical_receipts': [{'producer': 'fixture', 'verdict': 'PASS'}],
             'native_receipts': [],
+            'current_step_declared_producers': {
+                'verdict': 'PRODUCED', 'population': 1, 'results': [{
+                    'rc': 0, 'executed': True, 'target_exists_after': True,
+                    'authorship': 'producer'}]},
         }
 
     def observed_gates(project, row):
@@ -759,7 +767,7 @@ def test_public_controller_refuses_changed_actual_producer_call(tmp_path):
                     if Path(name).name == "execution_backend_worker.py")
     original = producer.read_text()
     mutated = original.replace("producer = produce(project, params)",
-                               "producer = {'verdict': 'PASS', 'canonical_receipts': []}", 1)
+                               "producer = {'verdict': 'PASS', 'canonical_receipts': [], 'detail': 'mutated producer reached'}", 1)
     assert mutated != original
     mutant = tmp_path / "execution_backend_worker.py"
     mutant.write_text(mutated.replace(
@@ -777,15 +785,36 @@ def test_public_controller_refuses_changed_actual_producer_call(tmp_path):
                                        for x in original_adapter.components[0].argv)),))
     registry = em.Registry()
     register_source_fixture(registry, mutant_adapter, fixture_root=tmp_path)
+    manifest = {
+        "declarations": list(BACKEND_ROWS["15"]["canonical_row"]["required_inputs"]),
+        "files": {
+            name.removeprefix("project/"): em.digest(path)
+            for name, path in context.inputs.items()
+        },
+        "missing": [],
+    }
+    original_arm = registry.adapters("15")[0]
+    original_invocations = dict(original_arm.invocation_sources)
     root = tmp_path / "mutated-run"
-    summary = em.Controller(
-        registry, em.Budget(cpus=mutant_adapter.cpus,
-                            ram_mb=mutant_adapter.ram_mb, workers=1)).run(
-        context, root, "default-mode")
+    with policy._backend_manifest_parameters({"registry": registry}, "15", manifest):
+        rebound = registry.adapters("15")[0]
+        assert rebound.invocation_sources != original_invocations
+        summary = em.Controller(
+            registry, em.Budget(cpus=mutant_adapter.cpus,
+                                ram_mb=mutant_adapter.ram_mb, workers=1)).run(
+            context, root, "default-mode")
+    restored = registry.adapters("15")[0]
+    assert restored.components == original_arm.components
+    assert dict(restored.invocation_sources) == original_invocations
     assert summary["candidate_statuses"]["backend_15"] in {"NOT_MEASURED", "FAIL"}
     result = json.loads((root / mutant_adapter.arm_id / "outputs" / "backend_result.json").read_text())
+    # The canonical issuer manifest lets the changed worker execute, but its
+    # empty receipt remains ineligible and cannot become PASS/adoption.
     assert result["missing_inputs"] == []
-    assert result["producer_verdict"] == "PASS"
+    assert result["producer_verdict"] == "NOT_MEASURED"
+    assert result['detail'] == 'mutated producer reached'
+    assert result['gate_ledger'][0]['reason'] == 'current-step producer record is malformed'
+    assert not (root / 'adoption.json').exists()
     assert result["canonical_receipts"] == []
 
 
