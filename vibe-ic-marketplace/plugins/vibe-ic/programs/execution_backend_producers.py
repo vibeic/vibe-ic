@@ -85,9 +85,14 @@ def _native_current_step_producer(step_id):
     return _native_registry_current_step_rows().get(sid)
 
 
-def _native_output_identity(path):
+def _native_output_identity(path, root=None):
     path = Path(path)
     try:
+        if root is not None:
+            relative = path.relative_to(Path(root))
+            path = em._safe_relative_path(root, relative.as_posix())
+            if path is None:
+                return None
         if path.is_symlink() or not path.is_file() or not path.stat().st_size:
             return None
         stat = path.stat()
@@ -109,7 +114,7 @@ def _native_current_step_output_snapshot(project, step_id):
     for spec in specs:
         for pattern in str(spec).split(' OR '):
             for path in sorted(Path(project).glob(pattern.strip())):
-                identity = _native_output_identity(path)
+                identity = _native_output_identity(path, project)
                 if identity is not None:
                     before[str(path.relative_to(project))] = identity
     return before
@@ -1283,11 +1288,16 @@ def _native_current_step_receipt(project, step_id, params, result,
         receipt['reason'] = 'NATIVE_CURRENT_INPUT_MANIFEST_ABSENT'
         return receipt
     for raw, expected in sorted(files.items()):
-        if not isinstance(raw, str) or Path(raw).is_absolute() or '..' in Path(raw).parts:
+        if (not isinstance(raw, str) or Path(raw).is_absolute() or
+                '..' in Path(raw).parts):
             receipt['verdict'] = 'NOT_MEASURED'
             receipt['reason'] = f'NATIVE_CURRENT_INPUT_PATH_INVALID: {raw!r}'
             return receipt
-        path = Path(project) / raw
+        path = em._safe_relative_path(project, raw)
+        if path is None:
+            receipt['verdict'] = 'NOT_MEASURED'
+            receipt['reason'] = f'NATIVE_CURRENT_INPUT_PATH_UNSAFE: {raw!r}'
+            return receipt
         try:
             digest = snap.sha(path)
         except (OSError, ValueError):
@@ -1315,7 +1325,11 @@ def _native_current_step_receipt(project, step_id, params, result,
     for spec, paths in contract.items():
         receipt['output_specs'].append(spec)
         for raw, digest in sorted(paths.items()):
-            path = Path(project) / raw
+            path = em._safe_relative_path(project, raw)
+            if path is None:
+                receipt['verdict'] = 'NOT_MEASURED'
+                receipt['reason'] = f'NATIVE_CURRENT_OUTPUT_PATH_UNSAFE: {raw!r}'
+                return receipt
             try:
                 stat = path.stat()
             except OSError:
@@ -1327,7 +1341,7 @@ def _native_current_step_receipt(project, step_id, params, result,
             # Compare the complete pre-invocation identity rather than using a
             # wall-clock threshold, which can credit a no-op on coarse filesystems.
             before = prior_outputs.get(raw)
-            after = _native_output_identity(path)
+            after = _native_output_identity(path, project)
             if before is not None and after == before:
                 receipt['verdict'] = 'NOT_MEASURED'
                 receipt['reason'] = f'NATIVE_CURRENT_OUTPUT_UNCHANGED: {raw}'
@@ -1370,11 +1384,10 @@ def _current_step_producer_authority(record, project=None):
             return False, "native current producer project is missing", "NOT_MEASURED"
         inputs = record.get('inputs')
         for raw, info in (inputs or {}).items():
-            if (not isinstance(raw, str) or Path(raw).is_absolute()
-                    or '..' in Path(raw).parts or not isinstance(info, dict)
+            path = em._safe_relative_path(project, raw)
+            if (path is None or not isinstance(info, dict)
                     or not isinstance(info.get('sha256'), str)):
                 return False, "native current producer input receipt is malformed", "NOT_MEASURED"
-            path = Path(project) / raw
             try:
                 if (path.is_symlink() or not path.is_file()
                         or snap.sha(path) != info['sha256']):
@@ -1382,11 +1395,10 @@ def _current_step_producer_authority(record, project=None):
             except OSError:
                 return False, f"native current producer input absent: {raw}", "NOT_MEASURED"
         for raw, info in outputs.items():
-            if (not isinstance(raw, str) or not isinstance(info, dict)
-                    or Path(raw).is_absolute() or '..' in Path(raw).parts
+            path = em._safe_relative_path(project, raw)
+            if (path is None or not isinstance(info, dict)
                     or not isinstance(info.get('sha256'), str)):
                 return False, "native current producer output receipt is malformed", "NOT_MEASURED"
-            path = Path(project) / raw
             try:
                 if path.is_symlink() or not path.is_file() or snap.sha(path) != info['sha256']:
                     return False, f"native current producer output changed: {raw}", "NOT_MEASURED"

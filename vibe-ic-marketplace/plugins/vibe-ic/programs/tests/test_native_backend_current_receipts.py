@@ -7,6 +7,8 @@ import os
 import sys
 from pathlib import Path
 
+import pytest
+
 PROGRAMS = Path(__file__).resolve().parents[1]
 if str(PROGRAMS) not in sys.path:
     sys.path.insert(0, str(PROGRAMS))
@@ -191,6 +193,30 @@ def test_registry_receipt_rejects_missing_output(tmp_path, monkeypatch):
     assert current['reason'].startswith('NATIVE_CURRENT_OUTPUT_CONTRACT_UNAVAILABLE:')
 
 
+def test_registry_receipt_rejects_parent_symlink(tmp_path, monkeypatch):
+    project = tmp_path / 'project'
+    input_path = _write(project, 'inputs/current.txt', 'current\n')
+    outside = tmp_path / 'outside'
+    outside.mkdir()
+    (project / 'reports').symlink_to(outside, target_is_directory=True)
+    outputs = _registry_outputs(project, '27')
+
+    def native(current_project, _params):
+        for raw in outputs:
+            _write(current_project, raw, 'fresh\n')
+        return {'verdict': 'PASS'}
+
+    monkeypatch.setattr(producers, 'produce_signoff', native)
+    result = producers.produce(
+        project, {'step_id': '27',
+                  'resolved_input_manifest': _manifest(
+                      project, str(input_path.relative_to(project)))})
+    current = result['current_step_declared_producers']
+    assert current['verdict'] == 'NOT_MEASURED'
+    assert current['consumer_allowed'] is False
+    assert current['reason'].startswith('NATIVE_CURRENT_OUTPUT_PATH_UNSAFE:')
+
+
 def test_registry_measured_fail_survives_missing_outputs(tmp_path, monkeypatch):
     project = tmp_path / 'fail'
     input_path = _write(project, 'inputs/current.txt', 'current\n')
@@ -248,3 +274,27 @@ def test_worker_does_not_promote_entire_tree_to_producer_inputs(tmp_path, monkey
     worker.execute(inputs.parent, outputs, step_id='32', params={})
     assert seen['files'] == {}
 
+
+def test_worker_publication_rejects_parent_symlink(tmp_path, monkeypatch):
+    inputs = tmp_path / 'inputs' / 'project'
+    predecessor = inputs / 'phase3/stage3/pnr/placed.def'
+    predecessor.parent.mkdir(parents=True)
+    predecessor.write_text('input\n')
+    outputs = tmp_path / 'outputs'
+    outside = tmp_path / 'outside'
+    outside.mkdir()
+    outputs.mkdir(parents=True)
+    (outputs / 'reports').symlink_to(outside, target_is_directory=True)
+
+    def native(project, _params):
+        _native_outputs(project, '18')
+        return {'verdict': 'PASS'}
+
+    monkeypatch.setattr(worker, 'produce', native)
+    monkeypatch.setattr(worker, 'evaluate',
+                        lambda _project, _row: {'status': 'PASS', 'ledger': []})
+    monkeypatch.setenv('VIBEIC_EXECUTION_BINDING', json.dumps({
+        'required_gates': [], 'source_sha': 'fixture'}))
+    with pytest.raises(worker.em.Refusal, match='OUTPUT_OUTSIDE_ROOT'):
+        worker.execute(inputs.parent, outputs, step_id='18', params={})
+    assert not list(outside.iterdir())

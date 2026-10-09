@@ -1209,6 +1209,28 @@ def _relative(value: str) -> Path:
     return p
 
 
+def _safe_relative_path(root: Path, value: object) -> Path | None:
+    """Resolve a native contract path without following an escaped parent."""
+    if not isinstance(value, str):
+        return None
+    relative = Path(value)
+    if (relative.is_absolute() or not relative.parts or
+            '..' in relative.parts or value == '.'):
+        return None
+    try:
+        root = Path(root).resolve()
+        candidate = root
+        for part in relative.parts:
+            candidate /= part
+            if candidate.is_symlink():
+                return None
+        if not candidate.resolve(strict=False).is_relative_to(root):
+            return None
+    except (OSError, RuntimeError, ValueError):
+        return None
+    return candidate
+
+
 def _write(path: Path, value: object) -> None:
     write_json(path, value)
 
@@ -2948,8 +2970,9 @@ class Controller:
                                  for spec in arm.required_outputs):
             raise Refusal('OUTPUT_INCOMPLETE', arm.arm_id)
         for name, expected in hashes.items():
-            path = outputs / _relative(name)
-            if not path.is_file() or path.is_symlink() or not path.resolve().is_relative_to(outputs):
+            path = _safe_relative_path(outputs, name)
+            if (path is None or not path.is_file() or path.is_symlink() or
+                    not path.resolve().is_relative_to(outputs)):
                 raise Refusal('OUTPUT_OUTSIDE_ARM', name)
             if digest(path) != expected:
                 raise Refusal('OUTPUT_DIGEST_MISMATCH', name)

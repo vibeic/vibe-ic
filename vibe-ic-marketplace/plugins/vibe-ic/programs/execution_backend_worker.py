@@ -120,7 +120,9 @@ def resolve_contract(project: Path, patterns) -> tuple[dict, list[str]]:
     for raw in patterns:
         alternatives = [part.strip() for part in str(raw).split(" OR ")]
         paths = sorted({p for pattern in alternatives for p in project.glob(pattern)
-                        if p.is_file() and not p.is_symlink() and p.stat().st_size})
+                        if em._safe_relative_path(
+                            project, p.relative_to(project).as_posix()) is not None
+                        and p.is_file() and not p.is_symlink() and p.stat().st_size})
         if not paths:
             missing.append(str(raw))
         for path in paths:
@@ -261,6 +263,12 @@ def _resolve_input_contract(project: Path, declarations, manifest=None) -> dict:
                 add(alternative)
                 continue
             for candidate in project.glob(alternative):
+                try:
+                    relative = candidate.relative_to(project)
+                except ValueError:
+                    continue
+                if em._safe_relative_path(project, relative.as_posix()) is None:
+                    continue
                 if valid_candidate(candidate):
                     return True
         return False
@@ -303,7 +311,10 @@ def _resolve_input_contract(project: Path, declarations, manifest=None) -> dict:
                     rel.as_posix() != raw or not isinstance(digest, str)):
                 add(raw)
                 continue
-            target = project / rel
+            target = em._safe_relative_path(project, raw)
+            if target is None:
+                add(raw)
+                continue
             try:
                 actual = hashlib.sha256(target.read_bytes()).hexdigest()
             except OSError:
@@ -440,8 +451,10 @@ def execute(inputs: Path, outputs: Path, *, step_id: str, params: dict) -> dict:
     # Publish only exact current producer/gate bytes; no placeholder output is
     # created for a missing canonical contract.
     for name in files:
-        source = project / name
-        target = outputs / name
+        source = em._safe_relative_path(project, name)
+        target = em._safe_relative_path(outputs, name)
+        if source is None or target is None:
+            raise em.Refusal('OUTPUT_OUTSIDE_ROOT', name)
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(source, target)
     producer_verdict = producer.get("verdict", "NOT_MEASURED")
