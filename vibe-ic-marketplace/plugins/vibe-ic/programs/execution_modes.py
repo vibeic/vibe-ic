@@ -1218,7 +1218,16 @@ def _safe_relative_path(root: Path, value: object) -> Path | None:
             '..' in relative.parts or value == '.'):
         return None
     try:
-        root = Path(root).resolve()
+        root = Path(root).absolute()
+        probe = root
+        while True:
+            if probe.is_symlink():
+                return None
+            parent = probe.parent
+            if parent == probe:
+                break
+            probe = parent
+        root = root.resolve()
         candidate = root
         for part in relative.parts:
             candidate /= part
