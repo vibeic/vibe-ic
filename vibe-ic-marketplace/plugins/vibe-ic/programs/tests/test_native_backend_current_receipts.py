@@ -351,3 +351,30 @@ def test_worker_rejects_symlinked_input_bundle_root(tmp_path):
     with pytest.raises(worker.em.Refusal, match='INPUT_OUTSIDE_ROOT'):
         worker.execute(inputs, outputs, step_id='18', params={})
     assert not outputs.exists()
+
+
+def test_worker_rejects_nested_input_file_symlink_before_copy(tmp_path):
+    inputs = tmp_path / 'inputs' / 'project'
+    inputs.mkdir(parents=True)
+    outside = tmp_path / 'outside.txt'
+    outside.write_text('must not be copied\n')
+    (inputs / 'alias.txt').symlink_to(outside)
+    outputs = tmp_path / 'outputs'
+
+    with pytest.raises(worker.em.Refusal, match='INPUT_OUTSIDE_ROOT'):
+        worker.execute(inputs.parent, outputs, step_id='18', params={})
+    assert not (outputs / 'project' / 'alias.txt').exists()
+
+
+def test_worker_rejects_nested_input_directory_symlink_before_copy(tmp_path):
+    inputs = tmp_path / 'inputs' / 'project'
+    inputs.mkdir(parents=True)
+    outside = tmp_path / 'outside'
+    outside.mkdir()
+    (outside / 'secret.txt').write_text('must not be copied\n')
+    (inputs / 'alias').symlink_to(outside, target_is_directory=True)
+    outputs = tmp_path / 'outputs'
+
+    with pytest.raises(worker.em.Refusal, match='INPUT_OUTSIDE_ROOT'):
+        worker.execute(inputs.parent, outputs, step_id='18', params={})
+    assert not (outputs / 'project' / 'alias' / 'secret.txt').exists()

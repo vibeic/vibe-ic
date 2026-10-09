@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import stat
 import sys
 from typing import Any, Mapping
 
@@ -113,6 +114,29 @@ def _copy_input_tree(inputs: Path, project: Path) -> None:
         # canonical input (netlist metadata, route declarations, manifests),
         # so do not silently drop it in the compatibility layout.
         shutil.copytree(inputs, project)
+
+
+def _reject_input_tree_symlinks(inputs: Path) -> None:
+    """Reject every symlink before staging the caller's input bundle."""
+    pending = [Path(inputs)]
+    while pending:
+        current = pending.pop()
+        try:
+            with os.scandir(current) as entries:
+                for entry in entries:
+                    path = Path(entry.path)
+                    try:
+                        mode = os.lstat(path).st_mode
+                    except OSError as exc:
+                        raise em.Refusal('INPUT_OUTSIDE_ROOT', str(path)) from exc
+                    if stat.S_ISLNK(mode):
+                        raise em.Refusal('INPUT_OUTSIDE_ROOT', str(path))
+                    if stat.S_ISDIR(mode):
+                        pending.append(path)
+        except em.Refusal:
+            raise
+        except OSError as exc:
+            raise em.Refusal('INPUT_OUTSIDE_ROOT', str(current)) from exc
 
 
 def resolve_contract(project: Path, patterns) -> tuple[dict, list[str]]:
@@ -382,6 +406,7 @@ def execute(inputs: Path, outputs: Path, *, step_id: str, params: dict) -> dict:
         raise em.Refusal('INPUT_OUTSIDE_ROOT', 'project')
     if em._safe_relative_path(outputs, 'backend_result.json') is None:
         raise em.Refusal('OUTPUT_OUTSIDE_ROOT', 'backend_result.json')
+    _reject_input_tree_symlinks(inputs)
     outputs.mkdir(parents=True, exist_ok=True)
     project = outputs / "project"
     _copy_input_tree(inputs, project)
