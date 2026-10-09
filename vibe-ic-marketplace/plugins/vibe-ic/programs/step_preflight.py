@@ -1144,9 +1144,37 @@ def gate(project: Path, runner: str, site: str,
               file=sys.stderr, flush=True)
 
     import execution_policy
-    result = execution_policy.dispatch_ordinary_site(project, runner, site, refusal_factory)
-    if result is None:
-        result = _scoped_dispatch(Path(project), site, flow_def, fn, args, kwargs)
+    # Default mode keeps the native producer in charge.  Capture its exact
+    # invocation here, at the one shared front door, instead of constructing
+    # an Ultra controller or adding a synthetic plan row.  The collector is
+    # deliberately best-effort for compatibility with unissued unit-test
+    # calls; a live canonical route carries all five authority digests and
+    # therefore emits a receipt bound to that invocation.
+    _default_evidence = None
+    try:
+        import default_invocation_evidence as _die
+        _outputs = _die.declared_outputs(dec.flow_steps, flow_def)
+        _gate_programs = _die.declared_gate_programs(dec.flow_steps, flow_def)
+        _default_evidence = _die.start_from_runtime(
+            Path(project), runner, site, dec.flow_steps, producer=fn,
+            inputs=dec.inputs, declared_outputs=_outputs,
+            gate_programs=_gate_programs)
+    except Exception as exc:                 # noqa: BLE001
+        print(f"[preflight] {site}: Default invocation evidence unavailable "
+              f"({type(exc).__name__}: {exc})", file=sys.stderr, flush=True)
+
+    try:
+        result = execution_policy.dispatch_ordinary_site(project, runner, site, refusal_factory)
+        if result is None:
+            result = _scoped_dispatch(Path(project), site, flow_def, fn, args, kwargs)
+    except Exception:
+        if _default_evidence is not None:
+            try:
+                _default_evidence.finish({"status": "FAIL"}, preflight=dec)
+            except Exception as exc:          # noqa: BLE001
+                print(f"[preflight] {site}: Default invocation receipt failed "
+                      f"({type(exc).__name__}: {exc})", file=sys.stderr, flush=True)
+        raise
 
     status = getattr(result, "status", None)
     if status is None and isinstance(result, (list, tuple)):
@@ -1156,6 +1184,12 @@ def gate(project: Path, runner: str, site: str,
         _confirm_identity(Path(project), dec, flow_def=flow_def)
     else:
         dec.identity = "not-applicable"
+    if _default_evidence is not None:
+        try:
+            _default_evidence.finish(result, preflight=dec)
+        except Exception as exc:              # noqa: BLE001
+            print(f"[preflight] {site}: Default invocation receipt failed "
+                  f"({type(exc).__name__}: {exc})", file=sys.stderr, flush=True)
     record(Path(project), dec)
     return result
 
