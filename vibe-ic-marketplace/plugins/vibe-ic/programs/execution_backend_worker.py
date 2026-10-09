@@ -105,15 +105,118 @@ def condition_aware_declarations(project: Path, declarations,
     return filtered
 
 
-def _copy_input_tree(inputs: Path, project: Path) -> None:
-    source = inputs / "project"
-    if source.is_dir():
-        shutil.copytree(source, project, symlinks=True)
-    else:
-        # The controller's input binding is authoritative; JSON is a valid
-        # canonical input (netlist metadata, route declarations, manifests),
-        # so do not silently drop it in the compatibility layout.
-        shutil.copytree(inputs, project, symlinks=True)
+def _copy_input_tree(inputs: Path, project: Path) -> bool:
+    directory_flags = (os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0) |
+                       getattr(os, 'O_NOFOLLOW', 0))
+    file_flags = (os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) |
+                  getattr(os, 'O_NONBLOCK', 0))
+
+    def refusal(path, exc=None):
+        return em.Refusal('INPUT_OUTSIDE_ROOT', str(path))
+
+    def copy_bytes(source_fd, target_fd, path):
+        try:
+            while True:
+                chunk = os.read(source_fd, 1024 * 1024)
+                if not chunk:
+                    return
+                view = memoryview(chunk)
+                while view:
+                    view = view[os.write(target_fd, view):]
+        except OSError as exc:
+            raise refusal(path, exc) from exc
+
+    def copy_directory(source_fd, destination):
+        try:
+            names = os.listdir(source_fd)
+        except OSError as exc:
+            raise refusal(destination, exc) from exc
+        for name in names:
+            path = destination / name
+            try:
+                info = os.lstat(name, dir_fd=source_fd)
+            except OSError as exc:
+                raise refusal(path, exc) from exc
+            if stat.S_ISLNK(info.st_mode):
+                raise refusal(path)
+            if stat.S_ISDIR(info.st_mode):
+                try:
+                    child_fd = os.open(name, directory_flags, dir_fd=source_fd)
+                except OSError as exc:
+                    raise refusal(path, exc) from exc
+                try:
+                    try:
+                        path.mkdir()
+                    except OSError as exc:
+                        raise refusal(path, exc) from exc
+                    copy_directory(child_fd, path)
+                finally:
+                    os.close(child_fd)
+                continue
+            if not stat.S_ISREG(info.st_mode):
+                raise refusal(path)
+            try:
+                source_file_fd = os.open(name, file_flags, dir_fd=source_fd)
+            except OSError as exc:
+                raise refusal(path, exc) from exc
+            target_file_fd = None
+            try:
+                try:
+                    if not stat.S_ISREG(os.fstat(source_file_fd).st_mode):
+                        raise refusal(path)
+                    target_file_fd = os.open(
+                        path, os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                        info.st_mode & 0o7777)
+                except OSError as exc:
+                    raise refusal(path, exc) from exc
+                copy_bytes(source_file_fd, target_file_fd, path)
+            finally:
+                os.close(source_file_fd)
+                if target_file_fd is not None:
+                    os.close(target_file_fd)
+
+    if project.exists() or project.is_symlink():
+        raise em.Refusal('OUTPUT_OUTSIDE_ROOT', 'project')
+    root_fd = None
+    source_fd = None
+    try:
+        try:
+            root_fd = os.open(inputs, directory_flags)
+        except OSError as exc:
+            raise refusal(inputs, exc) from exc
+        try:
+            project_info = os.lstat('project', dir_fd=root_fd)
+        except FileNotFoundError:
+            project_info = None
+        except OSError as exc:
+            raise refusal(inputs / 'project', exc) from exc
+        if project_info is not None and stat.S_ISLNK(project_info.st_mode):
+            raise refusal(inputs / 'project')
+        if project_info is not None and stat.S_ISDIR(project_info.st_mode):
+            try:
+                source_fd = os.open('project', directory_flags, dir_fd=root_fd)
+            except OSError as exc:
+                raise refusal(inputs / 'project', exc) from exc
+            os.close(root_fd)
+            root_fd = None
+        else:
+            source_fd = root_fd
+            root_fd = None
+        try:
+            project.mkdir()
+        except OSError as exc:
+            raise em.Refusal('OUTPUT_OUTSIDE_ROOT', 'project') from exc
+        try:
+            copy_directory(source_fd, project)
+        except Exception:
+            shutil.rmtree(project, ignore_errors=True)
+            raise
+        return True
+    finally:
+        if source_fd is not None:
+            os.close(source_fd)
+        if root_fd is not None:
+            os.close(root_fd)
 
 
 def _reject_input_tree_symlinks(inputs: Path) -> None:
@@ -413,11 +516,12 @@ def execute(inputs: Path, outputs: Path, *, step_id: str, params: dict) -> dict:
     project_was_present = project.exists() or project.is_symlink()
     if project_was_present:
         raise em.Refusal('OUTPUT_OUTSIDE_ROOT', 'project')
+    project_created = False
     try:
-        _copy_input_tree(inputs, project)
+        project_created = _copy_input_tree(inputs, project)
         _reject_input_tree_symlinks(project)
     except Exception:
-        if not project_was_present:
+        if project_created and not project_was_present:
             shutil.rmtree(project, ignore_errors=True)
         if not outputs_was_present:
             try:

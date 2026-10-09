@@ -407,6 +407,35 @@ def test_worker_rejects_symlink_race_between_input_census_and_copy(
     assert not outputs.exists()
 
 
+def test_worker_rejects_symlink_race_during_descriptor_open(
+        tmp_path, monkeypatch):
+    inputs = tmp_path / 'inputs' / 'project'
+    inputs.mkdir(parents=True)
+    ordinary = inputs / 'ordinary.txt'
+    ordinary.write_text('ordinary\n')
+    outside = tmp_path / 'outside'
+    outside.mkdir()
+    secret = outside / 'SECRET'
+    secret.write_text('must not be copied\n')
+    outputs = tmp_path / 'outputs'
+    real_open = worker.os.open
+    raced = []
+
+    def racing_open(path, flags, mode=0o777, *, dir_fd=None):
+        if path == 'ordinary.txt' and not raced:
+            ordinary.unlink()
+            ordinary.symlink_to(secret)
+            raced.append(True)
+        return real_open(path, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(worker.os, 'open', racing_open)
+    with pytest.raises(worker.em.Refusal, match='INPUT_OUTSIDE_ROOT'):
+        worker.execute(inputs.parent, outputs, step_id='18', params={})
+    assert raced == [True]
+    assert secret.read_text() == 'must not be copied\n'
+    assert not outputs.exists()
+
+
 @pytest.mark.parametrize('destination', ['directory', 'symlink'])
 def test_worker_rejects_preexisting_project_destination(tmp_path, destination):
     inputs = tmp_path / 'inputs' / 'project'
