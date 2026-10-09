@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -95,6 +94,11 @@ def _runtime_context(project: Path) -> Optional[dict[str, str]]:
         return None
 
 
+def is_live_default(project: Path) -> bool:
+    """Whether this process has an authority-issued Default runtime."""
+    return _runtime_context(Path(project)) is not None
+
+
 def _hash_paths(project: Path, paths: Sequence[str]) -> dict[str, str]:
     result: dict[str, str] = {}
     for raw in sorted({str(item) for item in paths if item}):
@@ -104,6 +108,33 @@ def _hash_paths(project: Path, paths: Sequence[str]) -> dict[str, str]:
         if _real(path):
             result[_relative(project, path)] = _sha(path)
     return result
+
+
+def _input_records(project: Path, inputs: Sequence[Any]) -> tuple[list[dict[str, Any]], dict[str, str]]:
+    """Keep every preflight state, including absent and unprobeable inputs."""
+    records: list[dict[str, Any]] = []
+    hashes: dict[str, str] = {}
+    for item in inputs:
+        if isinstance(item, Mapping):
+            record = dict(item)
+            raw = record.get("evidence")
+        else:
+            record = {"evidence": str(item)}
+            raw = item
+        if raw:
+            path = Path(str(raw))
+            if not path.is_absolute():
+                path = project / path
+            if _real(path):
+                relative = _relative(project, path)
+                digest = _sha(path)
+                hashes[relative] = digest
+                record["evidence"] = relative
+                record["sha256"] = digest
+        record.setdefault("state", "present" if raw else "unprobeable")
+        record.setdefault("present", bool(raw))
+        records.append(record)
+    return records, hashes
 
 
 def declared_gate_programs(flow_steps: Sequence[str], flow_def: Optional[Path] = None) -> tuple[str, ...]:
@@ -191,6 +222,23 @@ def verify_record(project: Path, record: Mapping[str, Any]) -> tuple[bool, str]:
     try:
         if record.get("schema") != SCHEMA:
             return False, "schema"
+        expected_digest = record.get("receipt_digest")
+        body = {key: value for key, value in record.items() if key != "receipt_digest"}
+        actual_digest = hashlib.sha256(
+            json.dumps(body, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        if not isinstance(expected_digest, str) or expected_digest != actual_digest:
+            return False, "receipt-digest"
+        invocation = record.get("invocation_id")
+        if (record.get("gate", {}).get("same_invocation") != invocation or
+                record.get("consumer", {}).get("invocation_id") != invocation or
+                record.get("consumer", {}).get("receipt_locator") !=
+                _RECEIPT_REL.format(invocation=invocation) or
+                record.get("gate", {}).get("receipt_locator") !=
+                _RECEIPT_REL.format(invocation=invocation)):
+            return False, "invocation-binding"
+        for item in record.get("input_states") or ():
+            if item.get("state") == "absent":
+                return False, f"input:{item.get('path') or item.get('evidence')}"
         before = record.get("input_hashes") or {}
         for relative, expected in before.items():
             path = project / str(relative)
@@ -224,16 +272,46 @@ class Session:
     started_at: str
     output_before: dict[str, str]
     gate_programs: tuple[str, ...]
+    input_states: tuple[dict[str, Any], ...]
+    dispatch_path: str = "step_preflight.gate -> canonical producer"
+    producer_kind: str = "canonical-native"
+
+    def bind_dispatch(self, path: str, kind: str, producer: Any = None) -> None:
+        self.dispatch_path = str(path)
+        self.producer_kind = str(kind)
+        if producer is not None:
+            self.producer = _qualname(producer)
 
     def finish(self, result: Any, *, preflight: Any = None) -> dict[str, Any]:
-        status = _status(result) or "NOT_MEASURED"
+        requested_status = _status(result) or "NOT_MEASURED"
         output_hashes, missing = _declared_output_matches(self.project, self.declared_outputs)
+        if requested_status == "PASS" and (
+                not self.declared_outputs or missing or output_hashes == self.output_before):
+            status = "NOT_MEASURED"
+            freshness_reason = ("OUTPUT_NOT_DECLARED" if not self.declared_outputs else
+                                "OUTPUT_MISSING" if missing else "OUTPUT_UNCHANGED")
+        else:
+            status = requested_status
+            freshness_reason = None
         identity = getattr(preflight, "identity", None) if preflight is not None else None
         gate = {
             "status": status,
             "preflight_verdict": getattr(preflight, "verdict", None),
             "identity": identity,
             "same_invocation": self.invocation["invocation_id"],
+        }
+        consumer_status = ("PASS" if status == "PASS" and identity == "confirmed"
+                           else "NOT_MEASURED" if identity in (None, "not-applicable", "not-checked")
+                           else str(identity))
+        consumer = {
+            "invocation_id": self.invocation["invocation_id"],
+            "status": consumer_status,
+            "declared_programs": list(self.gate_programs),
+            "receipt_locator": _RECEIPT_REL.format(invocation=self.invocation["invocation_id"]),
+            "source": "step_preflight._confirm_identity",
+            "reason": ("required output identity confirmed by this invocation"
+                       if consumer_status == "PASS" else
+                       "canonical downstream gate must consume this locator before chain PASS"),
         }
         entry: dict[str, Any] = {
             "schema": SCHEMA,
@@ -249,39 +327,55 @@ class Session:
             # span exactly; never expand it into one fake invocation per row.
             "flow_steps": list(self.flow_steps),
             "producer": self.producer,
+            "producer_kind": self.producer_kind,
+            "dispatch_path": self.dispatch_path,
+            "producer_result_status": requested_status,
+            "producer_status_reason": freshness_reason,
             "started_at": self.started_at,
             "finished_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
             "input_hashes": self.input_hashes,
+            "input_states": list(self.input_states),
             "output_before": self.output_before,
             "output_hashes": output_hashes,
             "missing_outputs": missing,
             "producer_status": status,
             "gate": gate,
+            "consumer": consumer,
+            "chain_status": "PASS" if consumer_status == "PASS" else
+                            ("FAIL" if status == "FAIL" else "NOT_MEASURED"),
             "declared_gate_programs": list(self.gate_programs),
             "receipt_kind": "canonical-producer-invocation",
         }
+        entry["receipt_locator"] = _RECEIPT_REL.format(invocation=self.invocation["invocation_id"])
+        entry["gate"]["receipt_locator"] = entry["receipt_locator"]
         body = dict(entry)
         entry["receipt_digest"] = hashlib.sha256(
             json.dumps(body, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-        _append(self.project, self.invocation["invocation_id"], entry)
+        try:
+            _append(self.project, self.invocation["invocation_id"], entry)
+        except Exception as exc:  # noqa: BLE001
+            raise RuntimeError(f"Default invocation receipt write failed: {exc}") from exc
+        ok, reason = verify_record(self.project, entry)
+        if not ok:
+            raise RuntimeError(f"Default invocation receipt verification failed: {reason}")
         return entry
 
 
 def start(project: Path, runner: str, site: str, flow_steps: Sequence[str], *,
-          producer: Any, inputs: Sequence[str] = (), declared_outputs: Sequence[str] = (),
+          producer: Any, inputs: Sequence[Any] = (), declared_outputs: Sequence[str] = (),
           gate_programs: Sequence[str] = (), invocation: Mapping[str, str]) -> Session:
     """Start a receipt from explicit, already-resolved invocation metadata."""
     required = ("invocation_id", "request_digest", "route_digest", "source_sha", "project_digest")
     if any(not isinstance(invocation.get(name), str) or not invocation.get(name) for name in required):
         raise ValueError("invocation metadata must be complete")
     project = Path(project).resolve()
-    input_hashes = _hash_paths(project, inputs)
+    input_states, input_hashes = _input_records(project, inputs)
     output_before, _ = _declared_output_matches(project, declared_outputs)
     return Session(project, str(runner), str(site), tuple(str(item) for item in flow_steps),
                    {name: str(invocation[name]) for name in required}, _qualname(producer),
                    tuple(str(item) for item in declared_outputs), input_hashes,
                    time.strftime("%Y-%m-%dT%H:%M:%S%z"), output_before,
-                   tuple(str(item) for item in gate_programs))
+                   tuple(str(item) for item in gate_programs), tuple(input_states))
 
 
 def start_from_runtime(project: Path, runner: str, site: str, flow_steps: Sequence[str], *,
@@ -290,8 +384,6 @@ def start_from_runtime(project: Path, runner: str, site: str, flow_steps: Sequen
     context = _runtime_context(Path(project))
     if context is None:
         return None
-    paths = [str(item.get("evidence")) for item in inputs
-             if isinstance(item, Mapping) and item.get("evidence")]
     return start(Path(project), runner, site, flow_steps, producer=producer,
-                 inputs=paths, declared_outputs=declared_outputs, gate_programs=gate_programs,
+                 inputs=inputs, declared_outputs=declared_outputs, gate_programs=gate_programs,
                  invocation=context)

@@ -1155,18 +1155,25 @@ def gate(project: Path, runner: str, site: str,
         import default_invocation_evidence as _die
         _outputs = _die.declared_outputs(dec.flow_steps, flow_def)
         _gate_programs = _die.declared_gate_programs(dec.flow_steps, flow_def)
+        # Start before dispatch so ``output_before`` is genuinely pre-run.
         _default_evidence = _die.start_from_runtime(
             Path(project), runner, site, dec.flow_steps, producer=fn,
             inputs=dec.inputs, declared_outputs=_outputs,
             gate_programs=_gate_programs)
-    except Exception as exc:                 # noqa: BLE001
-        print(f"[preflight] {site}: Default invocation evidence unavailable "
-              f"({type(exc).__name__}: {exc})", file=sys.stderr, flush=True)
-
-    try:
         result = execution_policy.dispatch_ordinary_site(project, runner, site, refusal_factory)
         if result is None:
+            # Only the None return hands control to the native producer.  A
+            # measured Controller result must never be mislabeled as the
+            # caller's ``fn`` in a Default receipt.
             result = _scoped_dispatch(Path(project), site, flow_def, fn, args, kwargs)
+        else:
+            # A non-None value is a policy/Controller result.  If a live
+            # Default runtime still returns one, record that fact explicitly;
+            # never attribute it to the native ``fn``.
+            if _default_evidence is not None:
+                _default_evidence.bind_dispatch(
+                    "execution_policy.dispatch_ordinary_site", "controller",
+                    execution_policy.dispatch_ordinary_site)
     except Exception:
         if _default_evidence is not None:
             try:
@@ -1188,8 +1195,12 @@ def gate(project: Path, runner: str, site: str,
         try:
             _default_evidence.finish(result, preflight=dec)
         except Exception as exc:              # noqa: BLE001
-            print(f"[preflight] {site}: Default invocation receipt failed "
-                  f"({type(exc).__name__}: {exc})", file=sys.stderr, flush=True)
+            # A live Default producer without a durable receipt is not
+            # admissible evidence.  Do not return the producer's PASS while
+            # silently losing the invocation binding.
+            raise RuntimeError(
+                f"{site}: Default invocation receipt failed: "
+                f"{type(exc).__name__}: {exc}") from exc
     record(Path(project), dec)
     return result
 
