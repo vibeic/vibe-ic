@@ -187,7 +187,8 @@ def test_backend_entry_does_not_register_an_analog_frontend(
     assert not (project / "phase1/analog/analog_block_list.json").exists()
 
 
-def test_two_block_worker_runs_existing_a1_producer_in_declared_order(tmp_path):
+@pytest.mark.parametrize("execution_mode", ["default", "ultra"])
+def test_two_block_worker_runs_existing_a1_producer_in_declared_order(tmp_path, execution_mode):
     project = tmp_path / "project"
     blocks = [block(name, "ldo", specs=[{
         "name": "Vout", "target": 1.8, "unit": "V", "source": "doc_alpha.md"}, {
@@ -206,8 +207,8 @@ def test_two_block_worker_runs_existing_a1_producer_in_declared_order(tmp_path):
     previous_runtime = policy._ordinary_runtime
     policy._ordinary_runtime = None
     try:
-        live.real_entry(path="IC", execution_mode="ultra", project=project)
-        args = SimpleNamespace(execution_mode="ultra", execution_cpus=None,
+        live.real_entry(path="IC", execution_mode=execution_mode, project=project)
+        args = SimpleNamespace(execution_mode=execution_mode, execution_cpus=None,
             execution_ram_mb=None, execution_workers=None, execution_licenses=None,
             execution_choice=None, execution_choice_wait_s=None,
             execution_request_digest=None, execution_request_receipt=None)
@@ -229,7 +230,8 @@ def test_two_block_worker_runs_existing_a1_producer_in_declared_order(tmp_path):
             if step == "A3":
                 assert {f"phase3/analog/{name}/topology.json"
                         for name in ("vreg_alpha", "vreg_beta")} <= bound_inputs
-            if pending["status"] != "AWAITING_AI_SELECTION":
+            expected_status = "ADOPTED" if execution_mode == "default" else "AWAITING_AI_SELECTION"
+            if pending["status"] != expected_status:
                 run, _ = runtime["runs"][step]
                 arm_id = "analog-front-" + step.lower()
                 arm_root = run / arm_id
@@ -257,7 +259,8 @@ def test_two_block_worker_runs_existing_a1_producer_in_declared_order(tmp_path):
                 "receipt_sha256": em.digest(run / arm_id / "receipt.json"),
                 "reviewer": "test AI decision consumer",
                 "rationale": "Current producer and gate evidence for the ordered declared blocks."}
-            adopted = policy.dispatch_fixed_step(project, step, choice=choice)
+            adopted = (pending if execution_mode == "default" else
+                       policy.dispatch_fixed_step(project, step, choice=choice))
             assert adopted["status"] == "ADOPTED", (step, adopted)
             verified = runtime["controller"].verify_adoption(context, run)
             generation = verified["selected_generation"]
@@ -407,3 +410,149 @@ def test_a9_optional_hardware_gate_present_fail_dominates_and_missing_record_is_
     missing = front.validate(root, binding)
     assert missing.verdict == "NOT_MEASURED"
     assert missing.gates["analog_hw_spice_correlation_check"] == "NOT_MEASURED"
+
+
+def _default_runner_plan(tmp_path, monkeypatch):
+    """Observe the actual caller schedule; no native result is supplied."""
+    import execution_analog_installation as installation
+    project = _project(tmp_path / "plan")
+    staged = project / "phase1/analog/analog_block_list.json"
+    staged.parent.mkdir(parents=True, exist_ok=True)
+    staged.write_text((project / "phase3/analog/analog_block_list.json").read_text())
+    observations = {"entry_requests": 0, "calls": [], "cosim_calls": 0}
+    request = {"_origin": "analog-normal-entry", "_project": str(project)}
+    runtime = {"project": project, "policy": {"mode": "default"}, "contexts": {}, "runs": {}}
+
+    def prepare(subject, args):
+        assert subject == project
+        observations["entry_requests"] += 1
+        return request
+
+    def bootstrap(subject, *, parameters):
+        observations["bootstrap"] = parameters
+        policy._ordinary_runtime = runtime
+        return runtime
+
+    def dispatch(subject, module, site, refusal, function, *args, **kwargs):
+        observations["calls"].append((site, args[1]["name"]))
+        runtime["contexts"][site] = object()
+        runtime["runs"][site] = (project / "unused-run", {"status": "NOT_MEASURED",
+                                                       "reason": "TEST_TOOL_UNAVAILABLE"})
+        return runner.StepResult(front.analog.ANALOG_STEPS[site], args[1]["name"],
+                                 "NOT_MEASURED", 0, "TEST_TOOL_UNAVAILABLE")
+
+    def cosim(subject, args):
+        observations["cosim_calls"] += 1
+        return {"tier": "ENV_UNAVAILABLE", "rc": 69}
+
+    class PlanComplete(Exception):
+        pass
+
+    monkeypatch.setattr(policy, "_ordinary_runtime", None)
+    monkeypatch.setenv(policy._CAPABILITY_FD_ENV, "intercepted-planning-boundary")
+    monkeypatch.setattr(policy, "configure", lambda args: None)
+    monkeypatch.setattr(policy, "request", lambda: {"mode": "default"})
+    monkeypatch.setattr(policy, "bootstrap", bootstrap)
+    monkeypatch.setattr(installation, "prepare_entry_request", prepare)
+    monkeypatch.setattr(runner._spf, "gate", dispatch)
+    monkeypatch.setattr(runner, "_a9_cosim", cosim)
+    monkeypatch.setattr(runner, "_check_block_list_schema",
+                        lambda *args: (_ for _ in ()).throw(PlanComplete()))
+    monkeypatch.setattr(sys, "argv", ["analog_one_shot_runner.py", str(project),
+                                    "--container", "host"])
+    with pytest.raises(PlanComplete):
+        runner.main()
+    return observations, request
+
+
+def test_default_issued_analog_entry_prepares_current_native_request(tmp_path, monkeypatch):
+    observations, request = _default_runner_plan(tmp_path, monkeypatch)
+    assert (observations["entry_requests"], observations["bootstrap"].get("analog_request")) == (
+        1, request), observations
+
+
+def test_default_issued_analog_finishes_population_before_next_fixed_row(tmp_path, monkeypatch):
+    observations, _ = _default_runner_plan(tmp_path, monkeypatch)
+    calls = observations["calls"]
+    for prior, following in (("A5", "A6"), ("A6", "A7"), ("A7", "A8"), ("A8", "A9")):
+        assert max(i for i, (site, _) in enumerate(calls) if site == prior) < min(
+            i for i, (site, _) in enumerate(calls) if site == following), calls
+
+
+def test_default_issued_a9_does_not_launch_a_second_cosim_producer(tmp_path, monkeypatch):
+    observations, _ = _default_runner_plan(tmp_path, monkeypatch)
+    assert observations["cosim_calls"] == 0, observations
+
+
+def test_default_front_input_census_includes_actual_layout_and_cosim_subjects(tmp_path):
+    project = _project(tmp_path / "subject", names=("alpha",))
+    names = {
+        "A5": ("phase3/analog/alpha/spec.json", "phase3/analog/alpha/topology.json"),
+        "A9": ("phase1/generated_docs/L22_ANALOG_VERIFICATION_PLAN.json",
+               "phase3/analog/alpha/alpha.sp", "phase3/analog/alpha/tb_alpha.sp",
+               "phase3/analog/alpha/a7_post_layout.json",
+               "phase3/analog/hardmacro/alpha/alpha.v",
+               "input/mixed_signal/scenario.json"),
+    }
+    for name in {n for rows in names.values() for n in rows}:
+        path = project / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("{}\n")
+    registry = em.Registry()
+    front.register_front_adapters(registry, project=project,
+                                  source_sha=__import__("execution_synthesis_engines").source_sha())
+    runtime = {"project": project, "registry": registry}
+    for step, required in names.items():
+        observed = set(policy._fixed_inputs(runtime, step))
+        assert set(required) <= observed, (step, sorted(observed))
+
+
+def test_default_front_worker_preserves_issued_container_and_pdk(tmp_path, monkeypatch):
+    project = _project(tmp_path / "inputs", names=("alpha",))
+    params = {"producer_step": "A4_corner_sweep", "container": "host",
+              "pdk": "synthetic-test-family"}
+    monkeypatch.setenv("VIBEIC_EXECUTION_BINDING", json.dumps(
+        {"step_id": "A4", "objective": {"parameters": params}}))
+    observed = []
+
+    def boundary(root, row, step_name, args=None):
+        observed.append({"container": args.container, "pdk": args.pdk})
+        return SimpleNamespace(status="NOT_MEASURED", detail="SIMULATOR_UNAVAILABLE",
+                               reason_class="tool_absent", output_files=[])
+
+    monkeypatch.setattr(runner, "step_for_block", boundary)
+    receipt = worker.execute("A4", project, tmp_path / "output")
+    assert observed == [{"container": "host", "pdk": "synthetic-test-family"}], observed
+    assert receipt["verdict"] == "NOT_MEASURED" and not receipt["outputs"]
+
+
+def test_default_empty_analog_population_has_no_applicable_primary(tmp_path):
+    project = _project(tmp_path / "digital", names=())
+    registry = em.Registry()
+    front.register_front_adapters(registry, project=project,
+                                  source_sha=__import__("execution_synthesis_engines").source_sha())
+    observed = {step: registry.adapters(step)[0].applicability for step in front.FRONT_IDS}
+    assert observed == dict.fromkeys(front.FRONT_IDS, "inapplicable"), observed
+
+
+@pytest.mark.parametrize("step", ("A1", "A2", "A3", "A4", "A5", "A9"))
+def test_default_front_missing_and_changed_receipt_never_adopts(tmp_path, step):
+    binding = {"step_id": step, "required_gates": [], "objective": {"blocks": ["alpha"]}}
+    root = tmp_path / step
+    root.mkdir()
+    missing = front.validate(root, binding)
+    assert (missing.verdict, missing.detail) == (
+        "NOT_MEASURED", "FRONT_PRODUCER_RECEIPT_ABSENT")
+    product = root / "phase3/analog/alpha/current.json"
+    product.parent.mkdir(parents=True)
+    product.write_text('{"current":true}\n')
+    relative = str(product.relative_to(root))
+    receipt = {"binding": binding, "step_id": step, "blocks": ["alpha"],
+               "rows": [{"block": "alpha"}], "outputs": {relative: em.digest(product)},
+               "block_outputs": {"alpha": [relative]}, "verdict": "PASS"}
+    (root / "front-producer.json").write_text(json.dumps(receipt))
+    assert front.validate(root, binding).verdict == "PASS"
+    product.write_text('{"current":false}\n')
+    changed = front.validate(root, binding)
+    assert changed.verdict == "NOT_MEASURED"
+    assert changed.detail.startswith("FRONT_OUTPUT_CHANGED:")

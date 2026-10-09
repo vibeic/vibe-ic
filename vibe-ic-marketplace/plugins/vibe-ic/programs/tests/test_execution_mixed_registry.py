@@ -619,9 +619,11 @@ def test_actual_m2_worker_runs_checked_in_placed_fixture_and_existing_consumer(t
         assert "NOT_MEASURED" in verdicts or receipt["producer_verdict"] == "NOT_MEASURED"
 
 
+@pytest.mark.parametrize("execution_mode", ["default", "ultra"])
 def test_m2_real_adapter_controller_choice_adoption_journal_and_current_reread(tmp_path,
-                                                                                monkeypatch):
-    """Use the real issued Ultra route and actual registered M2 worker end to end."""
+                                                                           monkeypatch,
+                                                                           execution_mode):
+    """Use the real issued route and actual registered M2 worker end to end."""
     import hashlib
     import shutil
     import execution_modes as em
@@ -646,7 +648,7 @@ def test_m2_real_adapter_controller_choice_adoption_journal_and_current_reread(t
     staged_block_list.parent.mkdir(parents=True)
     shutil.copyfile(block_list, staged_block_list)
 
-    issued = live_issuer.real_entry("IC", "ultra", project)
+    issued = live_issuer.real_entry("IC", execution_mode, project)
     runtime = policy.bootstrap(project, parameters={
         "top_name": "boundary", "container": "host", "pdk": "auto"})
     assert runtime["route"] == issued["route"]
@@ -656,7 +658,8 @@ def test_m2_real_adapter_controller_choice_adoption_journal_and_current_reread(t
     assert arms[0].components[0].argv[1].endswith("execution_mixed_worker.py")
 
     pending = policy.dispatch_fixed_step(project, "M2")
-    assert pending["status"] == "AWAITING_AI_SELECTION", pending
+    assert pending["status"] == ("ADOPTED" if execution_mode == "default" else
+                                  "AWAITING_AI_SELECTION"), pending
     run, first_result = runtime["runs"]["M2"]
     context = runtime["contexts"]["M2"]
     plan = json.loads((run / "plan.json").read_text())
@@ -678,7 +681,8 @@ def test_m2_real_adapter_controller_choice_adoption_journal_and_current_reread(t
                for name in actual_sidecars)
 
     legal_choice = core_helpers.choice(context, run, "M2_ordinary_producer")
-    adopted = policy.dispatch_fixed_step(project, "M2", choice=legal_choice)
+    adopted = (pending if execution_mode == "default" else
+               policy.dispatch_fixed_step(project, "M2", choice=legal_choice))
     assert adopted["status"] == "ADOPTED", adopted
     assert adopted["selected"] == "M2_ordinary_producer"
     verified = runtime["controller"].verify_adoption(context, run)
@@ -706,3 +710,23 @@ def test_m2_real_adapter_controller_choice_adoption_journal_and_current_reread(t
                       "generation": generation["generation"],
                       "current_power_domain_sha256": current_hashes[
                           "reports/analog/mixed_signal/power_domain.json"]}, sort_keys=True))
+
+
+@pytest.mark.parametrize("sid", ("M1", "M2", "M3", "M4"))
+def test_default_mixed_missing_current_receipt_is_named_not_measured(tmp_path, sid):
+    binding = {"step_id": sid, "required_gates": [row[0] for row in worker.GATES[sid]]}
+    evidence = mixed.validate(tmp_path, binding)
+    assert (evidence.verdict, evidence.detail) == (
+        "NOT_MEASURED", "MIXED_CURRENT_RECEIPT_ABSENT")
+    assert all(status == "NOT_MEASURED" for status in evidence.gates.values())
+
+
+def test_default_mixed_explicit_empty_population_is_inapplicable(tmp_path):
+    import execution_modes as em
+    project = tmp_path / "digital"
+    declaration = project / "phase1/analog/analog_block_list.json"
+    declaration.parent.mkdir(parents=True)
+    declaration.write_text('{"blocks":[],"block_count":0}\n')
+    registry = mixed.register_mixed_adapters(em.Registry(), source_sha="ignored", project=project)
+    observed = {sid: registry.adapters(sid)[0].applicability for sid in mixed.IDS}
+    assert observed == dict.fromkeys(mixed.IDS, "inapplicable"), observed
