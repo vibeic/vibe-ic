@@ -378,6 +378,10 @@ def _binding(inputs: Path) -> dict:
 
 def execute(inputs: Path, outputs: Path, *, step_id: str, params: dict) -> dict:
     inputs, outputs = Path(inputs), Path(outputs)
+    if em._safe_relative_path(inputs, 'project') is None:
+        raise em.Refusal('INPUT_OUTSIDE_ROOT', 'project')
+    if em._safe_relative_path(outputs, 'backend_result.json') is None:
+        raise em.Refusal('OUTPUT_OUTSIDE_ROOT', 'backend_result.json')
     outputs.mkdir(parents=True, exist_ok=True)
     project = outputs / "project"
     _copy_input_tree(inputs, project)

@@ -217,6 +217,32 @@ def test_registry_receipt_rejects_parent_symlink(tmp_path, monkeypatch):
     assert current['reason'].startswith('NATIVE_CURRENT_OUTPUT_PATH_UNSAFE:')
 
 
+def test_registry_receipt_and_authority_reject_symlinked_project_root(
+        tmp_path, monkeypatch):
+    target = tmp_path / 'target'
+    input_path = _write(target, 'inputs/current.txt', 'current\n')
+    project = tmp_path / 'project'
+    project.symlink_to(target, target_is_directory=True)
+    outputs = _registry_outputs(target, '27')
+
+    def native(current_project, _params):
+        for raw in outputs:
+            _write(current_project, raw, 'fresh\n')
+        return {'verdict': 'PASS'}
+
+    monkeypatch.setattr(producers, 'produce_signoff', native)
+    result = producers.produce(
+        project, {'step_id': '27',
+                  'resolved_input_manifest': _manifest(
+                      project, str(input_path.relative_to(target)))})
+    current = result['current_step_declared_producers']
+    assert result['verdict'] == 'NOT_MEASURED'
+    assert current['reason'].startswith('NATIVE_CURRENT_INPUT_PATH_UNSAFE:')
+    assert producers._current_step_producer_authority(
+        current, project=project) == (
+            False, current['reason'], 'NOT_MEASURED')
+
+
 def test_registry_measured_fail_survives_missing_outputs(tmp_path, monkeypatch):
     project = tmp_path / 'fail'
     input_path = _write(project, 'inputs/current.txt', 'current\n')
@@ -298,3 +324,30 @@ def test_worker_publication_rejects_parent_symlink(tmp_path, monkeypatch):
     with pytest.raises(worker.em.Refusal, match='OUTPUT_OUTSIDE_ROOT'):
         worker.execute(inputs.parent, outputs, step_id='18', params={})
     assert not list(outside.iterdir())
+
+
+def test_worker_publication_rejects_symlinked_output_root(tmp_path):
+    inputs = tmp_path / 'inputs' / 'project'
+    predecessor = inputs / 'phase3/stage3/pnr/placed.def'
+    predecessor.parent.mkdir(parents=True)
+    predecessor.write_text('input\n')
+    output_target = tmp_path / 'output-target'
+    output_target.mkdir()
+    outputs = tmp_path / 'outputs'
+    outputs.symlink_to(output_target, target_is_directory=True)
+
+    with pytest.raises(worker.em.Refusal, match='OUTPUT_OUTSIDE_ROOT'):
+        worker.execute(inputs.parent, outputs, step_id='18', params={})
+    assert not (output_target / 'backend_result.json').exists()
+
+
+def test_worker_rejects_symlinked_input_bundle_root(tmp_path):
+    input_target = tmp_path / 'input-target'
+    input_target.mkdir()
+    inputs = tmp_path / 'inputs'
+    inputs.symlink_to(input_target, target_is_directory=True)
+    outputs = tmp_path / 'outputs'
+
+    with pytest.raises(worker.em.Refusal, match='INPUT_OUTSIDE_ROOT'):
+        worker.execute(inputs, outputs, step_id='18', params={})
+    assert not outputs.exists()
