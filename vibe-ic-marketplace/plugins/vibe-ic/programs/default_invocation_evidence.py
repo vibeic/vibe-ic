@@ -121,18 +121,20 @@ def _input_records(project: Path, inputs: Sequence[Any]) -> tuple[list[dict[str,
         else:
             record = {"evidence": str(item)}
             raw = item
+        exists = False
         if raw:
             path = Path(str(raw))
             if not path.is_absolute():
                 path = project / path
             if _real(path):
+                exists = True
                 relative = _relative(project, path)
                 digest = _sha(path)
                 hashes[relative] = digest
                 record["evidence"] = relative
                 record["sha256"] = digest
-        record.setdefault("state", "present" if raw else "unprobeable")
-        record.setdefault("present", bool(raw))
+        record.setdefault("state", "present" if exists else "absent" if raw else "unprobeable")
+        record.setdefault("present", exists)
         records.append(record)
     return records, hashes
 
