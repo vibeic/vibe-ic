@@ -35,13 +35,15 @@ def test_current_step_producer_scope_stamps_step15_and_skips_other_steps(tmp_pat
     assert record["step_id"] == "15"
     assert record["owed"] == 1
     assert record["executed"] == 1
-    # The producer writes its stamped report, but the deliberately tiny
-    # project makes stage2_compliance return rc=1.  Presence alone is not a
-    # producer success signal.
-    assert record["documents_now_present"] == 0
-    assert record["verdict"] == "INCOMPLETE"
+    # The producer writes its stamped report, and the deliberately tiny
+    # project makes the explicitly advisory stage2_compliance return rc=1.
+    # The finding stays in the receipt but does not deny producer completeness.
+    assert record["documents_now_present"] == 1
+    assert record["verdict"] == "PRODUCED"
     assert record["results"][0]["target_exists_after"] is True
     assert record["results"][0]["authorship"] == "producer"
+    assert record["results"][0]["enforcement"] == "advisory"
+    assert not record["invalid_results"]
     assert all(row["step"] == "15" for row in record["results"])
     assert not any(row["step"] == "26" for row in record["results"])
 
@@ -164,8 +166,10 @@ def test_backend_producer_orders_current_declared_outputs_before_consumer(
     assert result["current_step_declared_producers"]["step_id"] == "15"
 
 
+@pytest.mark.parametrize("rc,enforcement", [(0, None), (1, "advisory")],
+                         ids=["clean", "advisory-finding"])
 def test_real_backend_worker_runs_declared_producer_before_consumer(
-        tmp_path, monkeypatch):
+        tmp_path, monkeypatch, rc, enforcement):
     inputs = tmp_path / "inputs"
     project_input = inputs / "project"
     project_input.mkdir(parents=True)
@@ -193,11 +197,16 @@ def test_real_backend_worker_runs_declared_producer_before_consumer(
         report = project / "reports/phase2/gates/stage2_compliance.json"
         report.parent.mkdir(parents=True, exist_ok=True)
         report.write_text(json.dumps({"invoked_as": "producer", "verdict": "PASS"}) + "\n")
-        return {"scope": "current-step", "step_id": str(step_id),
+        result = {"scope": "current-step", "step_id": str(step_id),
                 "verdict": "PRODUCED", "executed": 1, "population": 1,
                 "invalid_results": [], "unexecutable": [],
-                "results": [{"rc": 0, "executed": True, "target_exists_after": True,
+                "results": [{"rc": rc, "executed": True,
+                              "target_exists_after": True,
+                              "target_content_valid": True,
                               "authorship": "producer"}]}
+        if enforcement:
+            result["results"][0]["enforcement"] = enforcement
+        return result
     monkeypatch.setitem(sys.modules, "flow_declared_producer_run",
                         types.SimpleNamespace(run_for_step=fake_declared))
     monkeypatch.setattr(backend_worker, "produce", backend_producers.produce)
@@ -212,6 +221,53 @@ def test_real_backend_worker_runs_declared_producer_before_consumer(
     assert events == ["native", ("declared", "15"), "consumer"]
     assert result["verdict"] == "PASS"
     assert "reports/phase2/gates/stage2_compliance.json" in result["outputs"]
+    assert result["current_step_declared_producers"]["results"][0]["rc"] == rc
+    assert result["current_step_declared_producers"]["consumer_allowed"] is True
+
+
+@pytest.mark.parametrize("rc,target_exists", [(1, False), (2, True)],
+                         ids=["missing-output", "advisory-rc2"])
+def test_advisory_finding_does_not_hide_missing_output_or_rc2(
+        tmp_path, monkeypatch, rc, target_exists):
+    row = {"step": "15", "program": "stage2_compliance",
+           "target": "stage2.json", "enforcement": "advisory"}
+    monkeypatch.setattr(declared, "owed", lambda project, clauses: (clauses, []))
+    monkeypatch.setattr(declared, "_run_one", lambda project, clause, timeout: {
+        **clause, "rc": rc, "executed": True,
+        "target_exists_after": target_exists,
+        "target_content_valid": target_exists,
+        "authorship": "producer",
+    })
+    record = declared._run_clauses(tmp_path, [row])
+    assert record["verdict"] == "INCOMPLETE"
+    assert record["invalid_results"]
+    assert record["documents_now_present"] == 0
+
+
+def test_blocking_consumer_failure_still_fails_after_advisory_producer(
+        tmp_path, monkeypatch):
+    project = _step15_project(tmp_path)
+    current = {
+        "schema": "vibeic/current-step-producer-census/1",
+        "step_id": "15", "scope": "current-step", "verdict": "PRODUCED",
+        "population": 1, "executed": 1, "invalid_results": [],
+        "unexecutable": [], "already_produced_by_the_run": 0,
+        "results": [{"rc": 1, "enforcement": "advisory", "executed": True,
+                     "target_exists_after": True,
+                     "target_content_valid": True, "authorship": "producer"}],
+    }
+    monkeypatch.setattr(backend_worker, "evaluate",
+                        lambda _project, _row: {
+                            "status": "FAIL",
+                            "ledger": [{"gate": "blocking", "verdict": "FAIL"}],
+                        })
+    result = backend_worker.execute_current_step(
+        project, step_id="15", producer={
+            "verdict": "PASS",
+            "current_step_declared_producers": current,
+        })
+    assert result["verdict"] == "FAIL"
+    assert result["gate_ledger"][0]["verdict"] == "FAIL"
 
 
 def test_declared_nonzero_rc_missing_target_is_incomplete(tmp_path, monkeypatch):

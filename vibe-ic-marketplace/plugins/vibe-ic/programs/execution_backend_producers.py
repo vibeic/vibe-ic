@@ -1349,6 +1349,12 @@ def _native_current_step_receipt(project, step_id, params, result,
 
 def _current_step_producer_authority(record, project=None):
     """Classify the current-step producer census before consumer evaluation."""
+
+    def _execution_result_is_acceptable(row):
+        rc = row.get("rc") if isinstance(row, dict) else None
+        return (rc == 0 or
+                (rc == 1 and row.get("enforcement") == "advisory"))
+
     if not isinstance(record, dict):
         return False, "current-step producer record is malformed", "NOT_MEASURED"
     if record.get('schema') == 'vibeic/native-current-step-receipt/1':
@@ -1396,7 +1402,7 @@ def _current_step_producer_authority(record, project=None):
     results = record.get("results")
     if not isinstance(results, list):
         return False, "current-step producer results are missing", "NOT_MEASURED"
-    if any(isinstance(row, dict) and type(row.get("rc")) is int and row["rc"] != 0
+    if any(isinstance(row, dict) and not _execution_result_is_acceptable(row)
            for row in results):
         return False, "current-step producer execution failed", "FAIL"
     verdict = record.get("verdict")
@@ -1424,7 +1430,7 @@ def _current_step_producer_authority(record, project=None):
     for row in results:
         if not isinstance(row, dict):
             return False, "current-step producer result is malformed", "NOT_MEASURED"
-        if (type(row.get("rc")) is not int or row["rc"] != 0 or
+        if (not _execution_result_is_acceptable(row) or
                 row.get("executed") is not True or
                 row.get("target_exists_after") is not True):
             return False, "current-step producer target did not complete", "NOT_MEASURED"

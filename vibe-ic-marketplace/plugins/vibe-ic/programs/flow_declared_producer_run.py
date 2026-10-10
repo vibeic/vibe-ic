@@ -120,6 +120,26 @@ def _iter_commands(node: Any, out: List[str]) -> List[str]:
     return out
 
 
+def _iter_command_specs(node: Any) -> List[Tuple[str, str]]:
+    """Return declared commands with the flow's enforcement tier attached."""
+    found: List[Tuple[str, str]] = []
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if key in _COMMAND_KEYS:
+                enforcement = "advisory" if key == "advisory_program_exit_zero" \
+                    else "blocking"
+                if isinstance(value, str):
+                    found.append((value, enforcement))
+                elif isinstance(value, dict) and isinstance(value.get("command"), str):
+                    found.append((value["command"], enforcement))
+            else:
+                found.extend(_iter_command_specs(value))
+    elif isinstance(node, list):
+        for value in node:
+            found.extend(_iter_command_specs(value))
+    return found
+
+
 def declared_producer_clauses(flow_yaml: Path = FLOW_YAML
                               ) -> List[Dict[str, str]]:
     """Every clause the flow declares as a step's OWN producer of a declared
@@ -153,19 +173,25 @@ def declared_producer_clauses(flow_yaml: Path = FLOW_YAML
                      if isinstance(p, str) and str(p).strip()}
         if not outs or not producers:
             continue
-        for cmd in _iter_commands(step.get("gate") or {}, []):
+        for cmd, enforcement in _iter_command_specs(step.get("gate") or {}):
             parts = cmd.split()
             if not parts or parts[0] not in producers:
                 continue
             m = _JSON_RE.search(cmd)
             if not m or m.group(1) not in outs:
                 continue
-            found.append({"step": str(step.get("id")), "program": parts[0],
-                          "command": cmd, "target": m.group(1),
-                          # The step's OTHER declared outputs — the evidence
-                          # that the RUN performed this step at all. See
-                          # `owed`.
-                          "siblings": sorted(outs - {m.group(1)})})
+            clause = {"step": str(step.get("id")), "program": parts[0],
+                      "command": cmd, "target": m.group(1),
+                      # The step's OTHER declared outputs — the evidence
+                      # that the RUN performed this step at all. See
+                      # `owed`.
+                      "siblings": sorted(outs - {m.group(1)})}
+            if enforcement == "advisory":
+                # Preserve the flow's advisory tier beside the producer result.
+                # A non-zero advisory finding remains visible, but it is not a
+                # producer execution failure when the target is complete.
+                clause["enforcement"] = "advisory"
+            found.append(clause)
 
     # ── THE SECOND DECLARATION CHANNEL, which is NOT a gate (vibe-ic#2277) ──
     #
@@ -501,7 +527,9 @@ def _run_one(project: Path, row: Dict[str, str], timeout: int
 
 def _result_is_producer_complete(result: Dict[str, Any]) -> bool:
     """Whether one owed clause completed as producer-owned evidence."""
-    if type(result.get("rc")) is not int or result["rc"] != 0:
+    rc = result.get("rc")
+    advisory_finding = rc == 1 and result.get("enforcement") == "advisory"
+    if type(rc) is not int or (rc != 0 and not advisory_finding):
         return False
     if result.get("executed") is not True:
         return False
