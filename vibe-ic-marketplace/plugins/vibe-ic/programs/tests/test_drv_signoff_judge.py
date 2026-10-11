@@ -1145,6 +1145,14 @@ def test_project_clean_opensta_census_can_reach_pass(tmp_path, monkeypatch):
     _install_test_freeze(bundle, tmp_path, monkeypatch)
     result = drv.judge(bundle, project=tmp_path)
     assert result["verdict"] == "PASS", result
+    # CIEL exposes the installed PDK name as a symlink to its version directory.
+    # The same config bytes and frozen evidence still belong to that PDK.
+    versioned = root / "versions" / "installed-version" / "synthetic"
+    versioned.parent.mkdir(parents=True)
+    (root / "synthetic").rename(versioned)
+    (root / "synthetic").symlink_to(versioned, target_is_directory=True)
+    result = drv.judge(bundle, project=tmp_path)
+    assert result["verdict"] == "PASS", result
     scene["pin_census_report"] = {}
     result = drv.judge(bundle, project=tmp_path)
     assert result["verdict"] == "NOT_MEASURED"

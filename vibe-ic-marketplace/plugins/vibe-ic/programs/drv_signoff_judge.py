@@ -768,7 +768,7 @@ def judge(bundle: dict, *, project: Path | None = None) -> dict:
         provenance = project / "phase3/librelane_pdk_root.provenance.json"
         try:
             root_doc = json.loads(provenance.read_text())
-            pdk_root = Path(root_doc["path"]).resolve() / str(identity.get("pdk") or "")
+            pdk_root = (Path(root_doc["path"]) / str(identity.get("pdk") or "")).resolve()
             pdk_source = Path(str((current.get("sources") or {}).get(
                 "pdk_config", {}).get("path") or "")).resolve()
             if not pdk_root.is_dir() or not pdk_source.is_relative_to(pdk_root):
