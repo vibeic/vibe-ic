@@ -2,8 +2,7 @@
 """spare_cell_coverage_check.py — Design-for-ECO READINESS gate (Step 18).
 
 Reads the spare-cell insertion plan emitted by phase3_one_shot_runner
-(`phase3/stage3/pnr/spare_cells.json`) — step 18's other declared output
-and this gate's ONLY input — and confirms the project carries a usable
+(`phase3/stage3/pnr/spare_cells.json`) and confirms the project carries a usable
 spare-cell ECO budget:
 
   PASS iff ALL of:
@@ -17,7 +16,9 @@ spare-cell ECO budget:
        (`prove_inputs_tied`).
 
 Emits a JSON verdict and exits 0 (PASS) / 1 (FAIL) / 2 (IO/arg error).
-chip-AGNOSTIC: reads only the generic spare_cells.json schema.
+With --post-spare-def, the canonical Step-18 consumer also reconciles the
+recorded instances and tieoffs against the actual post_spare.def checkpoint.
+chip-AGNOSTIC: reads the generic spare_cells.json schema and standard DEF.
 
 DECLARING PRODUCER of `reports/spare_cell_coverage.json`. This program
 writes that path and NOTHING ELSE MAY. It also does not READ it: the
@@ -31,7 +32,6 @@ from __future__ import annotations
 import argparse
 import json
 import math
-import re
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -278,16 +278,20 @@ def inserted_def_evidence(plan: dict, def_path: Path) -> dict:
         elif not expected or components[name] != expected:
             reasons.append(f'post-spare DEF master differs for {name}: '
                            f'{components[name]} vs recorded {expected}')
+    # Reuse the runner's DEF grammar reader: terminal tuples precede the
+    # routing options, and wildcard members are not instance connections.
     connections = {}
-    for section in ('NETS', 'SPECIALNETS'):
-        block = re.search(r'^\s*' + section + r'\s+\d+\s*;(.*?)^\s*END\s+' + section + r'\b',
-                          text, re.MULTILINE | re.DOTALL)
-        if not block:
-            continue
-        for net in re.finditer(r'^\s*-\s+(\S+)\s+(.*?);', block.group(1),
-                               re.MULTILINE | re.DOTALL):
-            for inst, pin in re.findall(r'\(\s*(\S+)\s+(\S+)\s*\)', net.group(2)):
-                connections[(inst, pin)] = net.group(1)
+    try:
+        net_members = runner._def_net_members(text)
+    except ValueError as exc:
+        net_members = {}
+        reasons.append(f'post-spare DEF connectivity unavailable: {exc}')
+    for net, members in net_members.items():
+        for member in members:
+            if member in connections and connections[member] != net:
+                reasons.append(f'post-spare DEF assigns {member[0]}/{member[1]} '
+                               'to more than one net')
+            connections[member] = net
     pins = (plan.get('tie_off') or {}).get('inputs') or []
     for row in pins:
         if not isinstance(row, dict):
