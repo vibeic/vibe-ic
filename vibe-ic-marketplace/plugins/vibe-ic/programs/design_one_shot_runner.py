@@ -22213,99 +22213,27 @@ def _run_transition_atpg(project: Path, clk: str, pdk) -> dict:
     return {'rc': _native_rc, 'pdk': pdk}
 
 
-def step_dft_lec_chain(project: Path, top_name: str, container: str,
-                       ic_class: str, full_chip: bool = True,
-                       lec_max_completed_rungs: Optional[int] = None, *,
-                       phase2_request: bool = False,
-                       rederive_ic_name: Optional[str] = None
-                       ) -> List[StepResult]:
-    """Flow steps 11-13 (stage-2 DFT → post-DFT → LEC).
+def _dft_owned_result(rows, pdk=None):
+    """Return only this native producer's rows; earlier steps are not its verdict."""
+    from types import SimpleNamespace
+    statuses = {r.status for r in rows}
+    status = ('FAIL' if 'FAIL' in statuses else
+              next(iter(statuses)) if len(statuses) == 1 else 'NOT_MEASURED')
+    return SimpleNamespace(
+        name=rows[0].name if rows else 'dft_producer', status=status,
+        detail='; '.join(f'{r.name}: {r.status}: {r.detail}' for r in rows),
+        output_files=list(dict.fromkeys(f for r in rows for f in r.output_files)),
+        extras={}, rows=rows, pdk=pdk)
 
-    These three canonical steps were STRUCTURALLY ORPHANED for the whole life of
-    the flow: DEFINED + GATED in phase1_phase2_phase3.yaml, but produced by NO
-    runner, so flow_compliance saw them permanently MISSING — the exact "middle
-    steps silently skipped" class. Six independent executor-coverage audits
-    converged on 11/12/13 (+30) as the only digital-main-track silent orphans.
-    This wires the REAL open-source executors that already existed in the plugin
-    but were never called:
 
-      11 DFT  : fault_atpg_run.py — Fault (cloudv-io) stuck-at ATPG on the
-                mapped netlist → scan_netlist.v + atpg_coverage.rpt +
-                coverage.json (+ bsdl_emit.py → bsdl_plan.json).
-      12 post : post_dft_netlist.v — yosys opt_clean of the scan netlist.
-      13 LEC  : lec_run.py — yosys equiv proving RTL ≡ handoff netlist →
-                reports/lec.{json,rpt}.
-
-    ``phase2_request``: ``top_name`` is phase 2's REQUESTED ``--top-name``
-    (phase 2 main is the only caller that sets it). Step 13 then resolves it
-    ONCE, with ``lec_gate_netlist_select.step15_top`` (and the driver's
-    ``rederive_ic_name``), to the top step 15 will route. Phase 3's callers
-    pass the top phase 3 main already resolved and leave it False: resolving
-    a resolved top again is not a no-op (``effective_top`` is not idempotent).
-
-    HONEST + fail-safe: any sub-step whose real tool cannot run writes a
-    conscious skip-sentinel (verdict=SKIPPED-CONDITION) beside its absent output
-    (never a silent MISSING, never a fabricated pass). The heavy Fault ATPG
-    (11/12) runs only on a full-chip flow; a --skip-phase3 lightweight run still
-    gets the fast, always-valuable LEC (13)."""
-    results: List[StepResult] = []
-    synth_dir = _pl.synth_dir(project)
+@_spf.retained_step('11', canonical_acceptance=True)
+def _step_dft_insertion(project: Path, top_name: str, container: str,
+                        clk: str, dft_rst: str, dft_rst_active_low: bool,
+                        full_chip: bool):
+    results = []
+    pdk = None
     dft_dir = _pl.dft_dir(project)
-    netlist = synth_dir / "netlist.v"
-    reports_dir = project / "reports"
-    rtl_dir = project / "phase2/stage1/rtl"
-
-    if not netlist.is_file():
-        return [StepResult("dft_lec_chain", "NOT_MEASURED", 0.0,
-                           "no phase2/stage2/synth/netlist.v (synth produced no "
-                           "mapped netlist) — DFT/post-DFT/LEC not applicable", reason_class=_V.ReasonClass.INPUT_ABSENT)]
-
-    # ---- clock derivation (Fault ATPG needs the primary clock name) ----
-    # Simple, robust: scan the RTL for input ports whose name looks like a
-    # clock. Prefer the conventional short names; else the first clock-like
-    # input. (Deliberately not _cdc_top_clock_ports — that helper's signature
-    # is CDC-analysis-specific; a clock-port regex is all DFT needs.)
-    clk = ""
-    # `fault chain` also needs the RESET name (its --reset default is the
-    # literal `rst`); derived from the SAME blob so the two can never disagree.
-    dft_rst, dft_rst_active_low = "", False
-    # vibe-ic#2183 (the secondary finding of the NOT-REPRODUCIBLE report) —
-    # `pdk` is sniffed ONLY inside the Step-11 branch below, and Step DT1
-    # further down reads it at FUNCTION scope. Step 11 is skipped whenever
-    # `full_chip` is false; DT1 is not, because its own preconditions are
-    # `clk` + `phase2/stage2/dft/cut_netlist.v`, both of which survive an
-    # earlier full run. MEASURED on b6a73c0aa3, driving the real step with
-    # `full_chip=False` and a cut netlist on disk:
-    #     UnboundLocalError: cannot access local variable 'pdk'
-    # raised out of `step_dft_lec_chain`, which no caller catches — the whole
-    # phase-2 run dies at steps 11-13.
-    #
-    # `None` means NOT SNIFFED and is deliberately NOT `""`: the empty string
-    # is the sniff's OWN answer for a generic / unmapped netlist, so
-    # initialising to it would publish "there are no library-mapped cells" on a
-    # run that never looked. DT1 measures it instead — see the sniff below.
-    pdk: Optional[str] = None
-    try:
-        # DERIVE FROM THE TOP'S OWN PORTS, NOT FROM EVERY FILE IN rtl/.
-        # The old blob was the concatenation of every RTL file, so on any
-        # multi-module design a SUBMODULE's port name could win. Measured on
-        # subservient x sky130A: the blob yields `clk` — serv_top's port — while
-        # the chip top's clock is `i_clk`, and `fault chain --clock clk` then
-        # dies with "Module port `\clk' is not declared in module header",
-        # losing the scan chain exactly like the missing --reset did.
-        # The mapped netlist is flattened and contains ONLY the top's ports, and
-        # it is the very file `fault chain` is about to read, so it is the
-        # authoritative source here. Fall back to the RTL blob if unreadable.
-        blob = netlist.read_text(errors="ignore")
-        if not _derive_dft_clock_name(blob):
-            rtl_files = sorted([*rtl_dir.glob("*.v"), *rtl_dir.glob("*.sv")])
-            blob = "\n".join(f.read_text(errors="ignore") for f in rtl_files)
-        clk = _derive_dft_clock_name(blob)
-        dft_rst, dft_rst_active_low = _derive_dft_reset_name(blob)
-    except Exception:
-        clk = ""
-        dft_rst, dft_rst_active_low = "", False
-
+    reports_dir = project / 'reports'
     # ================= Step 11 — DFT insertion (Fault ATPG) =================
     t0 = time.time()
     dft_authorized, dft_contract_reason = dft_scan_insertion_contract(project)
@@ -22799,17 +22727,23 @@ def step_dft_lec_chain(project: Path, top_name: str, container: str,
             results.append(StepResult("dft_insertion", "NOT_MEASURED", time.time() - t0,
                            f"Fault ATPG errored ({exc}) → disclosed-skip", reason_class=_V.ReasonClass.EXECUTION_ERROR))
 
-    # ============ Step DT1 — Transition-delay-fault (LOC) ATPG =========
-    _tdf_result = _spf.retained_call(
-        project, 'DT1', _run_transition_atpg, project, clk, pdk,
-        canonical_acceptance=True)
-    pdk = _tdf_result['pdk']
+    return _dft_owned_result(results, pdk)
 
+
+@_spf.retained_step('12', canonical_acceptance=True)
+def _step_post_dft_optimization(project: Path, container: str):
+    results = []
+    dft_dir = _pl.dft_dir(project)
+    synth_dir = _pl.synth_dir(project)
     # ================= Step 12 — Post-DFT optimization =================
     t0 = time.time()
     scan_nl = dft_dir / "scan_netlist.v"
     post_dft = synth_dir / "post_dft_netlist.v"
     if scan_nl.is_file():
+        import execution_policy
+        if execution_policy.request()['mode'] == 'default':
+            # The retained call has already saved the previous working copy.
+            post_dft.unlink(missing_ok=True)
         ys = (f"read_verilog {scan_nl}; opt_clean -purge; "
               f"write_verilog -noattr {post_dft}")
         try:
@@ -22864,6 +22798,116 @@ def step_dft_lec_chain(project: Path, top_name: str, container: str,
         results.append(StepResult("post_dft_opt", "NOT_MEASURED", time.time() - t0,
                        "no scan netlist → post-DFT disclosed-skip", reason_class=_V.ReasonClass.INPUT_ABSENT))
 
+    return _dft_owned_result(results)
+
+
+def step_dft_lec_chain(project: Path, top_name: str, container: str,
+                       ic_class: str, full_chip: bool = True,
+                       lec_max_completed_rungs: Optional[int] = None, *,
+                       phase2_request: bool = False,
+                       rederive_ic_name: Optional[str] = None
+                       ) -> List[StepResult]:
+    """Flow steps 11-13 (stage-2 DFT → post-DFT → LEC).
+
+    These three canonical steps were STRUCTURALLY ORPHANED for the whole life of
+    the flow: DEFINED + GATED in phase1_phase2_phase3.yaml, but produced by NO
+    runner, so flow_compliance saw them permanently MISSING — the exact "middle
+    steps silently skipped" class. Six independent executor-coverage audits
+    converged on 11/12/13 (+30) as the only digital-main-track silent orphans.
+    This wires the REAL open-source executors that already existed in the plugin
+    but were never called:
+
+      11 DFT  : fault_atpg_run.py — Fault (cloudv-io) stuck-at ATPG on the
+                mapped netlist → scan_netlist.v + atpg_coverage.rpt +
+                coverage.json (+ bsdl_emit.py → bsdl_plan.json).
+      12 post : post_dft_netlist.v — yosys opt_clean of the scan netlist.
+      13 LEC  : lec_run.py — yosys equiv proving RTL ≡ handoff netlist →
+                reports/lec.{json,rpt}.
+
+    ``phase2_request``: ``top_name`` is phase 2's REQUESTED ``--top-name``
+    (phase 2 main is the only caller that sets it). Step 13 then resolves it
+    ONCE, with ``lec_gate_netlist_select.step15_top`` (and the driver's
+    ``rederive_ic_name``), to the top step 15 will route. Phase 3's callers
+    pass the top phase 3 main already resolved and leave it False: resolving
+    a resolved top again is not a no-op (``effective_top`` is not idempotent).
+
+    HONEST + fail-safe: any sub-step whose real tool cannot run writes a
+    conscious skip-sentinel (verdict=SKIPPED-CONDITION) beside its absent output
+    (never a silent MISSING, never a fabricated pass). The heavy Fault ATPG
+    (11/12) runs only on a full-chip flow; a --skip-phase3 lightweight run still
+    gets the fast, always-valuable LEC (13)."""
+    results: List[StepResult] = []
+    synth_dir = _pl.synth_dir(project)
+    dft_dir = _pl.dft_dir(project)
+    netlist = synth_dir / "netlist.v"
+    reports_dir = project / "reports"
+    rtl_dir = project / "phase2/stage1/rtl"
+
+    if not netlist.is_file():
+        return [StepResult("dft_lec_chain", "NOT_MEASURED", 0.0,
+                           "no phase2/stage2/synth/netlist.v (synth produced no "
+                           "mapped netlist) — DFT/post-DFT/LEC not applicable", reason_class=_V.ReasonClass.INPUT_ABSENT)]
+
+    # ---- clock derivation (Fault ATPG needs the primary clock name) ----
+    # Simple, robust: scan the RTL for input ports whose name looks like a
+    # clock. Prefer the conventional short names; else the first clock-like
+    # input. (Deliberately not _cdc_top_clock_ports — that helper's signature
+    # is CDC-analysis-specific; a clock-port regex is all DFT needs.)
+    clk = ""
+    # `fault chain` also needs the RESET name (its --reset default is the
+    # literal `rst`); derived from the SAME blob so the two can never disagree.
+    dft_rst, dft_rst_active_low = "", False
+    # vibe-ic#2183 (the secondary finding of the NOT-REPRODUCIBLE report) —
+    # `pdk` is sniffed ONLY inside the Step-11 branch below, and Step DT1
+    # further down reads it at FUNCTION scope. Step 11 is skipped whenever
+    # `full_chip` is false; DT1 is not, because its own preconditions are
+    # `clk` + `phase2/stage2/dft/cut_netlist.v`, both of which survive an
+    # earlier full run. MEASURED on b6a73c0aa3, driving the real step with
+    # `full_chip=False` and a cut netlist on disk:
+    #     UnboundLocalError: cannot access local variable 'pdk'
+    # raised out of `step_dft_lec_chain`, which no caller catches — the whole
+    # phase-2 run dies at steps 11-13.
+    #
+    # `None` means NOT SNIFFED and is deliberately NOT `""`: the empty string
+    # is the sniff's OWN answer for a generic / unmapped netlist, so
+    # initialising to it would publish "there are no library-mapped cells" on a
+    # run that never looked. DT1 measures it instead — see the sniff below.
+    pdk: Optional[str] = None
+    try:
+        # DERIVE FROM THE TOP'S OWN PORTS, NOT FROM EVERY FILE IN rtl/.
+        # The old blob was the concatenation of every RTL file, so on any
+        # multi-module design a SUBMODULE's port name could win. Measured on
+        # subservient x sky130A: the blob yields `clk` — serv_top's port — while
+        # the chip top's clock is `i_clk`, and `fault chain --clock clk` then
+        # dies with "Module port `\clk' is not declared in module header",
+        # losing the scan chain exactly like the missing --reset did.
+        # The mapped netlist is flattened and contains ONLY the top's ports, and
+        # it is the very file `fault chain` is about to read, so it is the
+        # authoritative source here. Fall back to the RTL blob if unreadable.
+        blob = netlist.read_text(errors="ignore")
+        if not _derive_dft_clock_name(blob):
+            rtl_files = sorted([*rtl_dir.glob("*.v"), *rtl_dir.glob("*.sv")])
+            blob = "\n".join(f.read_text(errors="ignore") for f in rtl_files)
+        clk = _derive_dft_clock_name(blob)
+        dft_rst, dft_rst_active_low = _derive_dft_reset_name(blob)
+    except Exception:
+        clk = ""
+        dft_rst, dft_rst_active_low = "", False
+
+    _dft = _step_dft_insertion(project, top_name, container, clk,
+                               dft_rst, dft_rst_active_low, full_chip)
+    results.extend(_dft.rows)
+    pdk = _dft.pdk
+
+    # ============ Step DT1 — Transition-delay-fault (LOC) ATPG =========
+    _tdf_result = _spf.retained_call(
+        project, 'DT1', _run_transition_atpg, project, clk, pdk,
+        canonical_acceptance=True)
+    pdk = _tdf_result['pdk']
+
+    _post_dft = _step_post_dft_optimization(project, container)
+    results.extend(_post_dft.rows)
+
     # ================= Step 13 — LEC (RTL ≡ handoff netlist) =================
     # The handoff netlist is the one step 15 routes (see step_lec_equivalence),
     # for the top step 15 is handed: resolved here, once, on phase 2's request.
@@ -22874,6 +22918,7 @@ def step_dft_lec_chain(project: Path, top_name: str, container: str,
                                 lec_max_completed_rungs=lec_max_completed_rungs)
 
 
+@_spf.retained_step('13', canonical_acceptance=True)
 def step_lec_equivalence(project: Path, top_name: str, container: str,
                          results: Optional[List[StepResult]] = None, *,
                          lec_max_completed_rungs: Optional[int] = None
@@ -23755,7 +23800,7 @@ def step_arith_declaration_emit(project: Path) -> StepResult:
                       f"written — {reason}", reason_class=_V.ReasonClass.EXECUTION_ERROR)
 
 
-@_spf.retained_steps(('5', '6', '39'), canonical_acceptance=True)
+@_spf.retained_steps(('2', '3', '4', '5', '6', '39'), canonical_acceptance=True)
 def step_emit_phase2_manifests(project: Path,
                                 plan: List[StepResult],
                                 top_name: Optional[str] = None,
@@ -24592,6 +24637,19 @@ def step_emit_phase2_manifests(project: Path,
     except Exception:  # nosec — provenance emission is never fatal
         pass
 
+    # Step2 also owns producer-written ROM/rewrite/lint evidence. Its full
+    # consumer must see those outputs here, rather than before the later
+    # all-step producer sweep. Keep the existing emitter return semantics:
+    # each canonical consumer, not a supplementary writer's rc, judges PASS.
+    import execution_policy
+    if execution_policy.request()['mode'] == 'default':
+        import flow_declared_producer_run
+        try:
+            flow_declared_producer_run.run_for_step(project, '2',
+                                                    timeout=_pl.audit_timeout_s(project))
+        except Exception as exc:
+            print(f"[WARN] Step2 supplementary producers did not complete: {exc}",
+                  file=sys.stderr)
     return StepResult("phase2_manifests", "PASS",
                       time.time() - t0,
                       f"{len(written)} manifest(s) written",

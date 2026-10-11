@@ -1066,6 +1066,11 @@ def _retained_row_outcome(evidence) -> str:
 def _retained_row_evidence(dec: Decision, sid: str, evidence) -> list:
     """Attribute existing named results; never assign a span's aggregate to a row."""
     if len(dec.flow_steps) == 1:
+        # Step13's existing ABI carries preceding Step11/12 rows as well.
+        # Only the named LEC results belong to its canonical acceptance.
+        if sid == '13' and dec.site == 'step_lec_equivalence':
+            return [item for item in evidence if item['name'] in
+                    ('lec_equivalence', 'lec_equivalence_eqy')]
         return evidence
     # These are the existing DFT function's result names, not positional
     # assumptions. Explicit producer step IDs take precedence when present.
@@ -1194,6 +1199,11 @@ def _retained_dispatch(project: Path, dec: Decision, flow_def: Any,
                     producer_ok = result == 0
                 elif isinstance(result, dict) and 'rc' in result:
                     producer_ok = type(result['rc']) is int and result['rc'] == 0
+                elif (isinstance(result, list) and dec.flow_steps == ['13']
+                      and dec.site == 'step_lec_equivalence'):
+                    own = [row for row in result if getattr(row, 'name', '') in
+                           ('lec_equivalence', 'lec_equivalence_eqy')]
+                    producer_ok = bool(own) and all(row.status == 'PASS' for row in own)
                 else:
                     producer_ok = getattr(result, 'status', None) == 'PASS'
                 if producer_ok:

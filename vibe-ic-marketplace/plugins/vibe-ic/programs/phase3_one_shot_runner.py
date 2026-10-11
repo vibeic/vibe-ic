@@ -65016,20 +65016,9 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
     # (`postroute_timing_repair_audit` ORs its demands in behind a producer
     # receipt). The declared decision record gets the same bytes unless a
     # bound producer receipt holds it, which keeps its bytes.
-    try:
-        _decision_record = json.dumps(_step32_decision_record(
-            project, _repair_decision, mc_ocv_stance, _sta_for_repair), indent=2) + "\n"
-        _aa.write_text(postroute_timing_repair_out
-                       / "postroute_timing_repair_decision.canonical.json",
-                       _decision_record)
-        written.append(str(postroute_timing_repair_out
-                           / "postroute_timing_repair_decision.canonical.json"))
-        if _producer_receipt is None:
-            _aa.write_text(postroute_timing_repair_out / "postroute_timing_repair_decision.json",
-                           _decision_record)
-            written.append(str(postroute_timing_repair_out / "postroute_timing_repair_decision.json"))
-    except Exception as _decision_exc:  # pragma: no cover — defensive
-        notes.append(f"Step-32 decision record emit failed: {_decision_exc}")
+    _publish_step32_decision(project, _repair_decision, mc_ocv_stance,
+                             _sta_for_repair, postroute_timing_repair_out,
+                             _producer_receipt, written, notes)
 
     # --- Step 33: adopt the current STAPostPNR report_power output -----
     # `basis="post_pnr"`: this is the SIGN-OFF power number, so the session
@@ -66425,6 +66414,29 @@ def _post_route_tns_zero(sta_rpt: Path) -> bool:
         return True
     # Conservative default: not proven to be zero.
     return False
+
+
+@_spf.retained_step('32', canonical_acceptance=True)
+def _publish_step32_decision(project: Path, decision, stance, sta,
+                             out: Path, producer_receipt, written, notes):
+    """Publish the actual repair decision after its native reports are ready."""
+    try:
+        _decision_record = json.dumps(_step32_decision_record(
+            project, decision, stance, sta), indent=2) + "\n"
+        _aa.write_text(out
+                       / "postroute_timing_repair_decision.canonical.json",
+                       _decision_record)
+        written.append(str(out
+                           / "postroute_timing_repair_decision.canonical.json"))
+        if producer_receipt is None:
+            _aa.write_text(out / "postroute_timing_repair_decision.json",
+                           _decision_record)
+            written.append(str(out / "postroute_timing_repair_decision.json"))
+    except Exception as _decision_exc:  # pragma: no cover — defensive
+        notes.append(f"Step-32 decision record emit failed: {_decision_exc}")
+
+        return 2
+    return 0
 
 
 def _step32_decision_record(project: Path, decision: Dict[str, Any],
@@ -78658,6 +78670,53 @@ def _default_step15_with_backend_receipt(
     return row
 
 
+@_spf.retained_step('31', canonical_acceptance=True)
+def _complete_physical_verification(project: Path, plan):
+    """Accept the current DRC/LVS results only after all late reports exist."""
+    rows = [next((r for r in reversed(plan) if r.name == name), None)
+            for name in ('drc', 'lvs')]
+    statuses = {r.status for r in rows if r is not None}
+    status = ('FAIL' if 'FAIL' in statuses else
+              'PASS' if all(r is not None and r.status == 'PASS' for r in rows)
+              else 'NOT_MEASURED')
+    return StepResult('physical_verification_complete', status, 0.0,
+                      '; '.join(f'{r.name}: {r.status}: {r.detail}'
+                                for r in rows if r is not None),
+                      output_files=list(dict.fromkeys(f for r in rows if r is not None
+                                                       for f in r.output_files)))
+
+
+@_spf.retained_step('37', canonical_acceptance=True)
+def _publish_final_layout_receipts(project: Path, receipt, plan):
+    """Write the current layout receipt before complete Step37 acceptance."""
+    path = _pl.reports_phase3_dir(project) / 'layout_receipts.json'
+    path.parent.mkdir(parents=True, exist_ok=True)
+    _aa.write_text(path, json.dumps(receipt, indent=2) + '\n')
+    import execution_policy
+    if execution_policy.request()['mode'] != 'default':
+        return 0  # Preserve the existing Ultra writer and audit order.
+    _complete_physical_verification(project, plan)
+    # This is Step37's existing declared Stage3 audit output. Produce it here,
+    # before the complete consumer, so an absent file cannot prevent its gate
+    # from running or force the auditor to certify a file it alone produced.
+    report = _pl.reports_phase3_dir(project) / 'gates/stage3_compliance.json'
+    report.parent.mkdir(parents=True, exist_ok=True)
+    report.unlink(missing_ok=True)  # Previous bytes were retained on entry.
+    cp = _pr.run([sys.executable, str(PROGRAMS_DIR / 'stage3_compliance.py'),
+                  str(project), '--json',
+                  str(report)], capture_output=True, text=True)
+    gds = next((r for r in reversed(plan) if r.name == 'gds'), None)
+    native = getattr(gds, 'status', 'NOT_MEASURED')
+    if native == 'FAIL':
+        return 1
+    # Stage3's existing clause is advisory. A measured finding (rc=1)
+    # remains for the canonical consumer to judge, not a new blocking rule.
+    if (native != 'PASS' or cp.returncode not in (0, 1) or not report.is_file()
+            or receipt.get('release_verdict') != 'ELIGIBLE_FOR_AUDIT'):
+        return 2
+    return 0
+
+
 @_restores_the_container_env
 def main() -> int:
     p = argparse.ArgumentParser()
@@ -80127,7 +80186,7 @@ def main() -> int:
         "receipts": ([asdict(r) for r in plan if r.name in _layout_rows]
                      + [asdict(r) for r in _pre_audit_rows]),
     }
-    _aa.write_text(_receipt_path, json.dumps(_receipt_doc, indent=2) + "\n")
+    _publish_final_layout_receipts(project, _receipt_doc, plan)
 
     fs_ok = _pl.emit_final_summary(project, PROGRAMS_DIR)
 

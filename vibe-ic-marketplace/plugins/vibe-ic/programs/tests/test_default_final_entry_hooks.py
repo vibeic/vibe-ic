@@ -100,13 +100,18 @@ def test_actual_shared_emitter_records_each_rows_own_consumer(tmp_path, monkeypa
     def consume(project, row):
         sid = str(row['id'])
         seen.append(sid)
-        status = 'FAIL' if sid == failed else 'PASS'
+        # This fixture supplies only formal/FPGA evidence. New manifest-owned
+        # RTL/CDC/coverage consumers must not get PASS from absent products.
+        status = 'FAIL' if sid == failed or sid in ('2', '3', '4') else 'PASS'
         return {'status': status, 'step': {'id': sid, 'status': status}, 'ledger': []}
     monkeypatch.setattr(gates, 'evaluate', consume)
     result = design.step_emit_phase2_manifests(tmp_path, plan, 'top')
     assert result.status == 'PASS'  # Emitting reports is not canonical acceptance.
-    assert seen == ['5', '6', '39']
-    for sid in seen:
+    assert seen == ['2', '3', '4', '5', '6', '39']
+    for sid in ('2', '3', '4'):
+        _, record = saved(tmp_path, sid)
+        assert record['status'] == 'FAIL' and not record['canonical_pass']
+    for sid in ('5', '6', '39'):
         _, record = saved(tmp_path, sid)
         assert record['status'] == ('FAIL' if sid == failed else 'PASS')
         assert record['canonical_pass'] is (sid != failed)
