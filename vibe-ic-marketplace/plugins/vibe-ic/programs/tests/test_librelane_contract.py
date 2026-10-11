@@ -26,13 +26,16 @@ def put(path, obj):
 
 
 @pytest.fixture
-def local_image(tmp_path, monkeypatch):
+def local_image(tmp_path, monkeypatch, request):
     """Host launch receipt shape, without asking the host for an image."""
     cid, image_id = 'ab' * 32, 'sha256:' + 'cd' * 32
     image = 'registry.invalid/tools@sha256:' + 'ef' * 32
+    local_id = getattr(request, 'param', None) == 'local_image_id'
+    if local_id:
+        image = image_id
     receipt = put(tmp_path / 'launch_identity.json', {
         'image': image, 'cid': cid,
-        'image_inspect': [{'Id': image_id, 'RepoDigests': [image]}],
+        'image_inspect': [{'Id': image_id, 'RepoDigests': [] if local_id else [image]}],
         'container_inspect': {'Id': cid, 'Image': image_id,
             'Config': {'Hostname': cid[:12], 'Image': image},
             'HostConfig': {'NetworkMode': 'none', 'Memory': 2 * 1024**3,
@@ -55,6 +58,7 @@ def local_image(tmp_path, monkeypatch):
     return SimpleNamespace(image=image, receipt=receipt, tmp=tmp_path)
 
 
+@pytest.mark.parametrize('local_image', ['registry_digest', 'local_image_id'], indirect=True)
 def test_local_resolver_requires_host_cid_and_records_provenance(local_image):
     project = local_image.tmp / 'project'
     (project / 'phase3').mkdir(parents=True)
@@ -65,7 +69,8 @@ def test_local_resolver_requires_host_cid_and_records_provenance(local_image):
     assert resolved == local_image.image
     recorded = json.loads((project / 'phase3/librelane_image.provenance.json').read_text())
     assert recorded['attestation_sha256'] == contract.digest(local_image.receipt)
-    assert recorded['repo_digests'] == [local_image.image]
+    assert recorded['repo_digests'] == ([] if local_image.image.startswith('sha256:') else [local_image.image])
+    assert recorded['image_id'] == 'sha256:' + 'cd' * 32
     local_image.receipt.unlink()
     with pytest.raises(contract.Refusal, match='LL_LOCAL_IMAGE_UNATTESTED'):
         contract.resolve_image(project)
@@ -291,6 +296,7 @@ def test_local_provider_refuses_remote_and_untyped_image_mismatch(tmp_path, monk
 
 
 @pytest.mark.parametrize('change', ['cid', 'image', 'hostname', 'stopped', 'duplicate'])
+@pytest.mark.parametrize('local_image', ['registry_digest', 'local_image_id'], indirect=True)
 def test_local_changed_identity_refuses_before_execution(local_image, change):
     record = json.loads(local_image.receipt.read_text())
     if change == 'cid':
@@ -324,6 +330,7 @@ def test_local_pdk_reads_native_tree_without_docker_copy(local_image, monkeypatc
 
 
 @pytest.mark.parametrize('supervised', [False, True])
+@pytest.mark.parametrize('local_image', ['registry_digest', 'local_image_id'], indirect=True)
 def test_local_execution_maps_mounts_env_and_preserves_tool_rc(local_image, supervised):
     source = local_image.tmp / 'mount'
     source.mkdir()

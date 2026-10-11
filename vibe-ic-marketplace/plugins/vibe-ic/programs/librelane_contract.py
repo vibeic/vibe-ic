@@ -327,7 +327,8 @@ def local_image_attestation(image: str | None = None) -> dict[str, Any]:
     """Read the host's live launch receipt, bound to THIS container and image.
 
     The host mounts its ordinary launch_identity.json read-only after inspecting
-    the fresh CID. An image environment string alone is never execution proof.
+    the fresh CID. A pulled manifest or exact local image ID binds the bytes;
+    an image environment string alone is never execution proof.
     This is deliberately uncached: changed/absent authority refuses even on reuse.
     """
     path = Path(os.environ.get(LOCAL_ATTESTATION_ENV, ''))
@@ -358,16 +359,22 @@ def local_image_attestation(image: str | None = None) -> dict[str, Any]:
                 or not all(isinstance(ref, str) for ref in repo_digests)):
             raise ValueError('host image RepoDigests is not a string list')
         held = [_eda_pin.reference_digest(ref) for ref in repo_digests]
+        image_bound = (
+            bool(re.fullmatch(r'sha256:[0-9a-f]{64}', reference))
+            and reference == wanted == inspected['Config']['Image'] == inspected['Image']
+        ) or (
+            bool(image_digest) and '@sha256:' in reference
+            and _eda_pin.reference_digest(wanted) == image_digest
+            and _eda_pin.reference_digest(inspected['Config']['Image']) == image_digest
+            and (manifest == image_digest or image_digest in held)
+        )
         if (not re.fullmatch(r'[0-9a-f]{64}', cid)
                 or inspected['Id'] != cid
                 or inspected['Config']['Hostname'] != socket.gethostname()
                 or not socket.gethostname().startswith(cid[:12])
                 or inspected['State']['Running'] is not True
                 or inspected['State'].get('Paused') or inspected['State'].get('Dead')
-                or not image_digest or '@sha256:' not in reference
-                or _eda_pin.reference_digest(wanted) != image_digest
-                or _eda_pin.reference_digest(inspected['Config']['Image']) != image_digest
-                or not (manifest == image_digest or image_digest in held)):
+                or not image_bound):
             raise ValueError('host CID/image inspection does not bind this LOCAL process')
     except (OSError, ValueError, TypeError, KeyError, AttributeError, StopIteration) as exc:
         raise Refusal('LL_LOCAL_IMAGE_UNATTESTED', f'{path}: {exc}') from None
