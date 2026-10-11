@@ -357,7 +357,7 @@ def openroad_identity(image: str, *, run=None) -> dict:
     binaries themselves (review wave 58: `openroad_commit` was required by the
     judge and produced by nothing, so every real capture was NOT_MEASURED).
 
-    `commit` is the `-g<hash>` of the version every build reports; builds that
+    `commit` is the `-g<hash>` or CMake's full-SHA fallback every build reports; builds that
     disagree, a version with no commit, or no build at all leave it None with
     the reason, never a guess."""
     argv = ["docker", "run", *_docker_memory.docker_memory_flags(), "--rm", "--network", "none",
@@ -380,7 +380,7 @@ def openroad_identity(image: str, *, run=None) -> dict:
         record["reason"] = f"OpenROAD builds report different versions: {sorted(versions)}"
     else:
         version = versions.pop()
-        commit = re.search(r"-g([0-9a-f]{7,40})$", version)
+        commit = re.search(r"-g([0-9a-f]{7,40})$", version) or re.fullmatch(r"([0-9a-f]{40})", version)
         record["version"] = version
         if commit:
             record["commit"] = commit.group(1)

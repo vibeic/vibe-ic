@@ -12,6 +12,7 @@ import os
 import re
 import subprocess
 import sys
+import pytest
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -28,11 +29,15 @@ def _answer(text):
     return lambda argv, **k: SimpleNamespace(returncode=0, stdout=text, stderr="")
 
 
-def test_two_builds_of_one_version_give_its_commit():
+@pytest.mark.parametrize('version,commit', [
+    ('26Q3-3055-gb73fad7a92', 'b73fad7a92'),
+    ('b' * 40, 'b' * 40),
+])
+def test_two_builds_of_one_version_give_its_commit(version, commit):
     rec = C.openroad_identity("img", run=_answer(
-        _LINE.format(p="/t/openroad", s=_SHA, v="26Q3-3055-gb73fad7a92")
-        + _LINE.format(p="/t/openroad-python", s="b" * 64, v="26Q3-3055-gb73fad7a92")))
-    assert rec["commit"] == "b73fad7a92" and len(rec["binaries"]) == 2
+        _LINE.format(p="/t/openroad", s=_SHA, v=version)
+        + _LINE.format(p="/t/openroad-python", s="b" * 64, v=version)))
+    assert rec["commit"] == commit and len(rec["binaries"]) == 2
 
 
 def test_builds_that_disagree_give_no_commit():
@@ -42,9 +47,10 @@ def test_builds_that_disagree_give_no_commit():
     assert rec["commit"] is None and "different versions" in rec["reason"]
 
 
-def test_a_version_without_a_commit_or_no_answer_gives_none():
+@pytest.mark.parametrize('version', ['2.0', 'HEAD-HASH-NOTFOUND', 'b' * 7])
+def test_a_version_without_a_commit_or_no_answer_gives_none(version):
     assert C.openroad_identity("img", run=_answer(
-        _LINE.format(p="/t/openroad", s=_SHA, v="2.0")))["commit"] is None
+        _LINE.format(p="/t/openroad", s=_SHA, v=version)))["commit"] is None
     assert C.openroad_identity("img", run=_answer("bash: openroad: not found\n"))[
         "commit"] is None
 
@@ -81,4 +87,5 @@ def test_the_real_builds_in_the_pinned_image_name_their_commit():
     rec = C.openroad_identity(image)
     assert rec["binaries"], rec
     assert re.fullmatch(r"[0-9a-f]{7,40}", rec["commit"] or ""), rec
-    assert all(b["version"].endswith("-g" + rec["commit"]) for b in rec["binaries"])
+    assert all(b["version"].endswith("-g" + rec["commit"]) or
+               b["version"] == rec["commit"] for b in rec["binaries"])
