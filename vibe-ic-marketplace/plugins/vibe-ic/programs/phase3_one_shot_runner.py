@@ -78353,6 +78353,7 @@ def _default_pnr_rows(project: Path, top: str, pdk: PdkConfig, container: str,
     import librelane_contract as ll
     import _flow_yaml
     import flow_compliance_check as compliance
+    import step_output_collector as step_versions
 
     t0 = time.time()
     flow_rows = {str(row['id']): row for row in _flow_yaml.load()['steps']}
@@ -78387,6 +78388,13 @@ def _default_pnr_rows(project: Path, top: str, pdk: PdkConfig, container: str,
         # before the row's producer changes their files. The completed rows
         # of this invocation, including actual output paths, remain visible.
         _publish_in_progress_steps(project, rows)
+        manifest = {
+            'declarations': row_def.get('required_inputs', []),
+            'files': worker._declared_input_files(
+                project, row_def.get('required_inputs', ())),
+            'missing': [],
+        }
+        attempt = step_versions.begin_step(project, sid, manifest['files'])
         try:
             if sid in ('16', '35'):
                 if sid == '16':
@@ -78419,12 +78427,6 @@ def _default_pnr_rows(project: Path, top: str, pdk: PdkConfig, container: str,
                            'gate_ledger': gate['ledger'],
                            'canonical_step_result': gate.get('step')}
             else:
-                manifest = {
-                    'declarations': row_def.get('required_inputs', []),
-                    'files': worker._declared_input_files(
-                        project, row_def.get('required_inputs', ())),
-                    'missing': [],
-                }
                 result = producers.produce(project, {
                     **params, 'step_id': sid,
                     'execution_mode': 'default',
@@ -78448,9 +78450,22 @@ def _default_pnr_rows(project: Path, top: str, pdk: PdkConfig, container: str,
             receipt = {'step_id': sid, 'verdict': status,
                        'detail': f'{type(exc).__name__}: {exc}', 'outputs': {}}
             files = {}
+        except BaseException as exc:
+            # Preserve partial native output before propagating an unexpected
+            # error or interruption. It never replaces a completed PASS.
+            step_versions.finish_step(
+                project, attempt, verdict='INTERRUPTED',
+                result={'step_id': sid, 'detail': f'{type(exc).__name__}: {exc}'})
+            raise
         receipt_path = project / f'reports/phase3/default_steps/{sid}/backend_result.json'
         receipt_path.parent.mkdir(parents=True, exist_ok=True)
         _aa.write_json(receipt_path, receipt)
+        version = step_versions.finish_step(
+            project, attempt, verdict=status, result=receipt,
+            canonical_pass=(status == 'PASS'))
+        if version['capture_errors']:
+            raise OSError('step output version could not be retained: ' +
+                          '; '.join(version['capture_errors']))
         checks[sid] = (receipt.get('canonical_step_result') or {
             'status': status, 'reasons': [str(receipt.get('detail', ''))]})
         detail = str(receipt.get('detail', ''))
@@ -78463,7 +78478,8 @@ def _default_pnr_rows(project: Path, top: str, pdk: PdkConfig, container: str,
             f'default_step_{sid}', status, time.time() - started,
             detail,
             current_outputs + [str(receipt_path)],
-            extras={'step_id': sid, 'backend_result': str(receipt_path)},
+            extras={'step_id': sid, 'backend_result': str(receipt_path),
+                    'output_version': version['folder']},
             reason_class=(_V.ReasonClass.UPSTREAM_REFUSED
                           if status == 'NOT_MEASURED' else '')))
         outputs.extend(current_outputs + [str(receipt_path)])

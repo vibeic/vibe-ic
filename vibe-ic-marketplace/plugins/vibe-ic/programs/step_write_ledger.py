@@ -1002,6 +1002,10 @@ def emit(project: Path) -> Dict[str, Any]:
             sdir = project / "steps" / folder
             if not sdir.is_dir():
                 continue
+            # A version is historical evidence. Later observations belong in
+            # the current ledger, not over an older version's original slice.
+            if (sdir / "written.json").is_file():
+                continue
             try:
                 (sdir / "written.json").write_text(
                     json.dumps(row, indent=2, ensure_ascii=False) + "\n")

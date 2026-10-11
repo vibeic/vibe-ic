@@ -361,6 +361,12 @@ def test_resume_at_cts_does_not_execute_prior_rows_and_stops_on_failure(tmp_path
     saved = json.loads((tmp_path / 'reports/phase3/default_steps/19/backend_result.json').read_text())
     assert saved['step_id'] == '19' and saved['verdict'] == 'FAIL'
     assert not (tmp_path / 'reports/phase3/default_steps/20').exists()
+    import step_output_collector as versions
+    index = json.loads((tmp_path / 'steps/index.json').read_text())
+    version = next(row for row in index['steps'] if row['id'] == '19')
+    retained = tmp_path / 'steps' / version['folder']
+    assert json.loads((retained / 'outputs.json').read_text())['result'] == saved
+    assert versions.latest_pass(tmp_path, '19') is None
 
 
 def test_missing_cts_inputs_stop_before_any_native_tool(tmp_path, monkeypatch):
@@ -397,6 +403,11 @@ def test_floorplan_window_finishes_before_placement(tmp_path, monkeypatch):
                      ('producer', '16'), ('consumer', '16')]
     assert result.status == 'PASS'
     assert [row['extras']['step_id'] for row in result.extras['canonical_steps']] == ['15', '16']
+    import step_output_collector as versions
+    clock = versions.latest_pass(tmp_path, '16')
+    assert clock['result']['verdict'] == 'PASS' and clock['canonical_pass']
+    archive = tmp_path / 'steps' / clock['folder'] / 'clock_plan.json'
+    assert archive.read_bytes() == (runner._pl.cts_dir(tmp_path) / 'clock_plan.json').read_bytes()
 
 
 def test_single_default_driver_routes_the_full_existing_pnr_order(tmp_path, monkeypatch):

@@ -1,45 +1,33 @@
 #!/usr/bin/env python3
-"""step_output_collector.py — materialize a per-STEP output subfolder view.
+"""Retain timestamped, independent per-step output versions.
 
-For ANY Vibe-IC run, this gathers every flow step's resolved output artifacts
-into `<project>/steps/<phase>/<stage>/<id>_<slug>/` (SYMLINKS to the canonical
-files — which stay in their inter-step-contract locations, e.g.
-phase2/stage1/rtl/) plus an `outputs.json` manifest per step, and writes
-`<project>/steps/index.json` (the ordered step list + folder + status + output
-count).
+`steps/<phase>/<stage>/<id>_<slug>_<UTC timestamp>/` contains actual copies,
+not links to mutable working files. Every old folder remains available.
+The canonical phaseN paths stay in place for existing EDA consumers.
 
-NESTED BY PHASE THEN STAGE (owner directive): a flat `steps/<id>_<slug>/`
-made every step look like a peer of every other, with no visual sense of
-"where in the flow" a step sits. `flow_dashboard_data.collect()` already
-carries both `phase` (its own key: phase1/phase2/phase3/analog/mixed/
-manufacturing) and `stage` (the flow yaml's stage id: stage1/stage2/.../
-stage_analog/stage_mixed_signal/stage5_manufacturing) per step, so no new
-classification is invented here — `folder` is just their existing values
-joined with `/`. `folder` is stored as a relative PATH STRING throughout
-(steps/index.json, each outputs.json, the dashboard's directory-listing
-route), and `Path(root) / folder` nests correctly on a multi-segment string
-with no caller change needed — verified against flow_dashboard_web.py's
-`_steps_root(project) / folder`.
+`materialize` is a dashboard observation, never a new executed PASS.
+`begin_step` / `finish_step` retain actual invocation evidence, including
+failed attempts. `latest_pass.json` advances only after the existing complete
+canonical consumer accepts the invocation. Input hashes come from the caller's
+resolved manifest; historical PASS and current-input PASS remain distinct.
 
-Non-invasive by design: the canonical `phaseN/…` tree remains authoritative and
-is NEVER moved (downstream steps read each other by fixed path); `steps/` is a
-convenience VIEW the dashboard links to. Idempotent — re-running refreshes the
-symlinks + manifests to the current on-disk state, and prunes now-empty
-phase/stage directories left over from a prior layout.
-
-chip-AGNOSTIC: derives everything from the flow YAML + the project's own files.
+Scope: one local machine, one sequential runner. No candidate scheduler.
 """
 from __future__ import annotations
 
 import argparse
+import datetime
+import hashlib
 import json
 import os
 import re
+import shutil
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _atomic_artefact import write_json
 
 
 def _slug(name: str) -> str:
@@ -49,6 +37,214 @@ def _slug(name: str) -> str:
 
 def _safe_id(sid: str) -> str:
     return re.sub(r"[^A-Za-z0-9]+", "", sid or "") or "x"
+
+
+def _sha(path: Path) -> str:
+    with path.open('rb') as stream:
+        return hashlib.file_digest(stream, 'sha256').hexdigest()
+
+
+def _version_folder(steps_root: Path, phase: str, stage: str,
+                    sid: str, name: str) -> str:
+    stamp = datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%S_%fZ')
+    base = Path(phase or 'phase') / (stage or 'stage') / f'{_safe_id(sid)}_{_slug(name)}_{stamp}'
+    folder = base
+    number = 0
+    while (steps_root / folder).exists():
+        number += 1
+        folder = Path(str(base) + f'_{number}')
+    (steps_root / folder).mkdir(parents=True)
+    return str(folder)
+
+
+def _copy_outputs(project: Path, sdir: Path, outputs) -> Tuple[list, list]:
+    """Copy bytes, never aliases to a mutable working file. Keep empty files too."""
+    present, errors = [], []
+    for output in outputs:
+        src = Path(str(output.get('abs') or ''))
+        if not output.get('exists') or not src.is_file():
+            continue
+        target = sdir / src.name
+        if target.exists():
+            target = sdir / f'{src.parent.name}__{src.name}'
+        number = 0
+        base = target
+        while target.exists():
+            number += 1
+            target = base.with_name(f'{base.name}__{number}')
+        try:
+            shutil.copy2(src, target)
+            present.append({'rel': output.get('rel'), 'abs': str(src),
+                            'size': target.stat().st_size,
+                            'snapshot': target.name, 'sha256': _sha(target)})
+        except OSError as exc:
+            errors.append(f'{src}: {exc}')
+    return present, errors
+
+
+def _working_files(project: Path) -> dict:
+    """One local sequential attempt: observe writes, excluding retained history."""
+    records = {}
+    for root, dirs, files in os.walk(project):
+        dirs[:] = [name for name in dirs if name not in
+                   ('steps', '.git', '__pycache__', '.pytest_cache', 'node_modules')]
+        for name in files:
+            path = Path(root) / name
+            if path.is_symlink():
+                continue
+            try:
+                info = path.stat()
+                records[str(path.relative_to(project))] = (
+                    info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+            except OSError:
+                continue
+    return records
+
+
+def _freeze_legacy(steps_root: Path, rows) -> None:
+    """Save the bytes still reachable through a pre-versioning view."""
+    for row in rows:
+        if not row.get('folder'):
+            continue
+        folder = steps_root / row['folder']
+        if not folder.is_dir() or not folder.resolve().is_relative_to(steps_root):
+            continue
+        for alias in folder.iterdir():
+            if alias.is_symlink() and alias.is_file():
+                # Replace the alias atomically, not its mutable target.
+                temporary = alias.with_name(alias.name + '.freeze')
+                shutil.copy2(alias, temporary)
+                os.replace(temporary, alias)
+
+
+def begin_step(project: Path, step_id: str, inputs=None) -> dict:
+    """Allocate a retained attempt before its producer can overwrite working files.
+
+    `inputs` is the caller's already-resolved input manifest, not a second
+    declaration or a second preflight. This is for one local sequential runner.
+    """
+    project = Path(project).resolve()
+    sid = str(step_id)
+    record = next((r for r in _iter_step_records(project) if r[0] == sid), None)
+    if record is None:
+        raise ValueError(f'unknown canonical step: {sid}')
+    _, name, _, phase, stage, outputs = record
+    steps_root = project / 'steps'
+    steps_root.mkdir(parents=True, exist_ok=True)
+    # If an earlier process died before finish_step, retain its partial writes
+    # now, before a retry overwrites them. This is recovery on the same host.
+    for journal in steps_root.glob('*/*/*/attempt.json'):
+        unfinished = json.loads(journal.read_text())
+        if unfinished.get('id') == sid and not (journal.parent / 'outputs.json').exists():
+            finish_step(project, unfinished, verdict='INTERRUPTED',
+                        result={'detail': 'previous local invocation did not finish'})
+    # Legacy steps/ folders were mutable views. Freeze their still-available
+    # contents before the first versioned producer, without inventing old PASS.
+    prior = _read_index(project)
+    _freeze_legacy(steps_root, prior.get('steps', []))
+    folder = _version_folder(steps_root, phase, stage, sid, name)
+    attempt = {'id': sid, 'name': name, 'phase': phase, 'stage': stage,
+               'folder': folder, 'status': 'RUNNING', 'inputs': dict(inputs or {}),
+               'started_at': datetime.datetime.now(datetime.timezone.utc).isoformat()}
+    # Preserve pre-existing declared bytes, including checkpoints predating
+    # this policy. They remain input history, never a newly claimed output.
+    previous = steps_root / folder / 'before'
+    previous.mkdir()
+    previous_outputs, errors = _copy_outputs(project, previous, outputs)
+    write_json(previous / 'outputs.json', {'outputs': previous_outputs, 'capture_errors': errors})
+    attempt['capture_errors'] = errors
+    attempt['_before'] = {rel: list(info) for rel, info in _working_files(project).items()}
+    write_json(steps_root / folder / 'attempt.json', attempt)
+    return attempt
+
+
+def _read_index(project: Path) -> dict:
+    try:
+        return json.loads((project / 'steps/index.json').read_text())
+    except (OSError, ValueError):
+        return {'steps': []}
+
+
+def finish_step(project: Path, attempt: dict, *, verdict: str,
+                result=None, canonical_pass: bool = False) -> dict:
+    """Retain every outcome. Only the existing complete step verdict advances PASS.
+
+    Runner/component PASS alone is insufficient: its owner must supply
+    `canonical_pass` after its unchanged canonical consumer has accepted it.
+    """
+    project = Path(project).resolve()
+    sdir = project / 'steps' / attempt['folder']
+    if (sdir / 'outputs.json').exists():
+        raise ValueError('step version already finished')
+    sid = attempt['id']
+    outputs = next(r[5] for r in _iter_step_records(project) if r[0] == sid)
+    present, errors = _copy_outputs(project, sdir, outputs)
+    before = attempt.get('_before', {})
+    changed = [rel for rel, info in _working_files(project).items()
+               if before.get(rel) != list(info)]
+    files = []
+    for rel in changed:
+        src, target = project / rel, sdir / 'files' / rel
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, target)
+            files.append({'rel': rel, 'snapshot': str(target.relative_to(sdir)),
+                          'size': target.stat().st_size, 'sha256': _sha(target)})
+        except OSError as exc:
+            errors.append(f'{rel}: {exc}')
+    record = {key: value for key, value in attempt.items() if not key.startswith('_')}
+    record.update(status=str(verdict), outputs=present, written_files=files,
+                  result=result, canonical_pass=bool(canonical_pass and verdict == 'PASS'),
+                  capture_errors=attempt.get('capture_errors', []) + errors,
+                  finished_at=datetime.datetime.now(datetime.timezone.utc).isoformat())
+    if record['capture_errors']:
+        record['canonical_pass'] = False
+    write_json(sdir / 'outputs.json', record)
+    index = _read_index(project)
+    row = {key: record[key] for key in ('id', 'name', 'phase', 'stage', 'folder', 'status')}
+    row.update(n_outputs=len(present), versioned=True)
+    index['steps'] = [row] + [r for r in index.get('steps', []) if str(r.get('id')) != sid]
+    write_json(project / 'steps/index.json', index)
+    if record['canonical_pass']:
+        path = project / 'steps/latest_pass.json'
+        try:
+            passes = json.loads(path.read_text())
+        except FileNotFoundError:
+            passes = {'steps': {}}
+        passes['steps'][sid] = {'folder': attempt['folder'], 'inputs': record['inputs'],
+                              'finished_at': record['finished_at']}
+        write_json(path, passes)
+    return record
+
+
+def latest_pass(project: Path, step_id: str) -> dict | None:
+    """Return historical PASS with an explicit current-input flag, not guessed freshness."""
+    project = Path(project).resolve()
+    try:
+        passes = json.loads((project / 'steps/latest_pass.json').read_text())
+        pointer = passes['steps'][str(step_id)]
+        record = json.loads((project / 'steps' / pointer['folder'] / 'outputs.json').read_text())
+    except (OSError, ValueError, KeyError):
+        return None
+    record['current_inputs'] = all(
+        (project / rel).is_file() and _sha(project / rel) ==
+        (value.get('sha256') if isinstance(value, dict) else value)
+        for rel, value in pointer.get('inputs', {}).items())
+    return record
+
+
+def _unchanged_invocation(project: Path, prior: dict, outputs) -> bool:
+    """A dashboard refresh is not another invocation or another gate verdict."""
+    try:
+        record = json.loads((project / 'steps' / prior['folder'] / 'outputs.json').read_text())
+    except (OSError, ValueError, KeyError):
+        return False
+    if 'canonical_pass' not in record:
+        return False
+    expected = {item['rel']: item['sha256'] for item in record['outputs']}
+    current = {item.get('rel'): _sha(Path(item['abs'])) for item in outputs
+               if item.get('exists') and Path(item.get('abs') or '').is_file()}
+    return current == expected
 
 
 def _iter_step_records(project: Path):
@@ -82,68 +278,10 @@ def _iter_step_records(project: Path):
                    st.get("outputs", []) or [])
 
 
-def _clear_old(sdir: Path) -> None:
-    """Drop stale symlinks + the manifest so a refresh reflects current state."""
-    if not sdir.is_dir():
-        return
-    for old in sdir.iterdir():
-        if old.is_symlink() or old.name == "outputs.json":
-            try:
-                old.unlink()
-            except OSError:
-                pass
-
-
 def _prune_stale_folders(steps_root: Path, old_folders: List[str],
                           new_folders: set) -> None:
-    """Remove step folders (and now-empty phase/stage parents) from a PRIOR
-    run's index.json that the current run no longer produces.
-
-    Handles two real cases, not just a hypothetical one: (a) a step whose
-    name changed re-slugs to a different folder, orphaning the old one, and
-    (b) migrating an EXISTING flat `<id>_<slug>/` run to this nested
-    `<phase>/<stage>/<id>_<slug>/` layout — every old flat folder is stale
-    under the new scheme and would otherwise sit next to the new tree
-    forever, one becoming an increasingly misleading duplicate of the other.
-    """
-    for rel in old_folders:
-        if rel in new_folders:
-            continue
-        old_dir = steps_root / rel
-        # TRAVERSAL GUARD. `rel` comes from a PRIOR index.json — a file on
-        # disk, not a value this call computed — and this loop DELETES. A
-        # stale, hand-edited or copied-in index.json carrying `../../x` made
-        # `steps_root / rel` resolve outside the project; measured before this
-        # guard, that unlinked a symlink and an `outputs.json` in an unrelated
-        # directory and then rmdir'd it. Bounded damage is still damage, and
-        # deletion code does not get to rely on its input being well formed.
-        try:
-            resolved = old_dir.resolve()
-            if not resolved.is_relative_to(steps_root.resolve()):
-                continue
-        except (OSError, ValueError):
-            continue
-        if not old_dir.is_dir():
-            continue
-        for child in old_dir.iterdir():
-            if child.is_symlink() or child.name == "outputs.json":
-                try:
-                    child.unlink()
-                except OSError:
-                    pass
-        try:
-            old_dir.rmdir()
-        except OSError:
-            continue
-        # Walk back up: drop now-empty phase/stage parents this folder's
-        # removal left behind, but never above steps_root itself.
-        parent = old_dir.parent
-        while parent != steps_root and parent.is_relative_to(steps_root):
-            try:
-                parent.rmdir()   # only succeeds if truly empty
-            except OSError:
-                break
-            parent = parent.parent
+    """Compatibility entry point: historical step versions are never pruned."""
+    return None
 
 
 def materialize(project: Path, only_steps=None) -> Dict[str, Any]:
@@ -163,8 +301,8 @@ def materialize(project: Path, only_steps=None) -> Dict[str, Any]:
       * does NOT prune, because outside the window this call has no opinion
         about which folders are stale, and pruning on a partial view would
         delete the rest of the flow's tree.
-    `only_steps=None` is the whole-flow build, byte-for-byte as before: the
-    extra keys exist only on the windowed path."""
+    Whole-flow refreshes also preserve every earlier version. Observations do
+    not advance the executed PASS selection."""
     project = Path(project).expanduser().resolve()
     steps_root = project / "steps"
     steps_root.mkdir(parents=True, exist_ok=True)
@@ -186,68 +324,36 @@ def materialize(project: Path, only_steps=None) -> Dict[str, Any]:
     index: List[Dict[str, Any]] = []
     new_folders: set = set()
     skipped_ids: List[str] = []
+    _freeze_legacy(steps_root, prior_rows)
+    prior_by_id = {str(row.get('id')): row for row in prior_rows}
 
     for sid, name, status, phase, stage, outputs in _iter_step_records(project):
         if window is not None and str(sid) not in window:
             skipped_ids.append(str(sid))
             continue
+        prior = prior_by_id.get(sid)
+        if prior and _unchanged_invocation(project, prior, outputs):
+            index.append(dict(prior))
+            new_folders.add(prior['folder'])
+            continue
         # `phase` is drawn from flow_dashboard_data's fixed 6-entry _PHASES
         # table and `stage` defaults to "stage" in _iter_step_records — never
         # empty in practice — but a path built from external data must not
         # silently collapse a segment if it ever is.
-        folder = "/".join((phase or "phase", stage or "stage",
-                          f"{_safe_id(sid)}_{_slug(name)}"))
+        folder = _version_folder(steps_root, phase, stage, sid, name)
         new_folders.add(folder)
         sdir = steps_root / folder
-        sdir.mkdir(parents=True, exist_ok=True)
-        _clear_old(sdir)
-
-        present: List[Dict[str, Any]] = []
-        for o in outputs:
-            if not o.get("exists"):
-                continue
-            src = Path(str(o.get("abs") or ""))
-            if not src.exists():
-                continue
-            link = sdir / src.name
-            if link.exists() or link.is_symlink():   # basename collision
-                link = sdir / f"{src.parent.name}__{src.name}"
-            try:
-                # RELATIVE when the target is inside the project (2026-08-25).
-                # An ABSOLUTE link is a portal back to the original tree the
-                # moment the project is copied — and the RTL dispatch copies it
-                # into an isolated stage before generating. Its guard then sees
-                # a symlink pointing OUTSIDE the stage, at a mutable namespace,
-                # and refuses: `PROJECT_SYMLINK_NOT_ISOLATABLE ... No RTL was
-                # written`. Measured 2026-08-25: this mirror emitted 15 absolute
-                # links into `steps/`, every one of them targeting a file inside
-                # the same project, and rtl_gen was BLOCKED on all five task
-                # natures tried — the runner's own bookkeeping blocked the
-                # runner's own RTL generation. With the links relative, rtl_gen
-                # reaches its designed verdict (WAIVED -> spec-to-rtl).
-                #
-                # Relative is also STRICTLY more mount-stable than absolute for
-                # an intra-project link: it survives the whole tree being moved,
-                # copied or bind-mounted elsewhere, which absolute does not.
-                # A target genuinely outside the project stays absolute — that
-                # one SHOULD trip the isolation guard, and this keeps it doing so.
-                try:
-                    inside = src.resolve().is_relative_to(project.resolve())
-                except (OSError, ValueError):
-                    inside = False
-                link.symlink_to(os.path.relpath(src, sdir) if inside else src)
-            except OSError:
-                pass
-            present.append({"rel": o.get("rel"), "abs": str(src),
-                            "size": int(o.get("size") or 0)})
+        present, errors = _copy_outputs(project, sdir, outputs)
 
         (sdir / "outputs.json").write_text(json.dumps(
             {"id": sid, "name": name, "status": status, "phase": phase,
-             "stage": stage, "folder": folder, "outputs": present},
+             "stage": stage, "folder": folder, "outputs": present,
+             "versioned": True, "observation_only": True,
+             "capture_errors": errors},
             indent=2) + "\n")
         index.append({"id": sid, "name": name, "status": status, "phase": phase,
                       "stage": stage, "folder": folder,
-                      "n_outputs": len(present)})
+                      "n_outputs": len(present), "versioned": True})
 
     if window is None:
         _prune_stale_folders(steps_root, prior_folders, new_folders)

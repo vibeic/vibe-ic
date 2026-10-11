@@ -95,10 +95,13 @@ def chain_needs_probe(step_ids: Iterable[str]) -> bool:
 # --- run instance --------------------------------------------------------------
 
 def claim(project: Path) -> str:
-    """Start a run instance: drop every earlier receipt, name a fresh run id."""
+    """Start a fresh active receipt set; retain every earlier set as history."""
     root = project / RECEIPT_DIR
     if root.exists():
-        shutil.rmtree(root)
+        archive = project / "reports/phase3/drv_stage_history" / (
+            "fresh-" + _dt.datetime.now(_dt.timezone.utc).strftime("%Y%m%dT%H%M%S_%fZ"))
+        archive.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(root), str(archive))
     # One run, one id: reuse the id `drv_run_identity.record` took at run
     # start (R-0929-DRV-IDENTITY), which the capture plan also binds.
     import drv_run_identity

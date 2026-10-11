@@ -1323,7 +1323,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `step_internal_fail_bubble_up_check` | any | — | anti-fabrication gate (v1.6.44). |
 | `step_metrics` | any | — | One per-step metrics schema, emitted by whoever computed the number. #1080. |
 | `step_metrics_adoption_check` | any | — | the one metrics schema, and who still is not using it. |
-| `step_output_collector` | any | — | materialize a per-STEP output subfolder view. |
+| `step_output_collector` | any | — | Retain timestamped, independent per-step output versions. |
 | `step_preflight` | any | — | the ORCHESTRATOR side of `required_inputs`. |
 | `step_repro_bundle` | any | — | everything one step reads, in one file, plus what it ran on. |
 | `step_required_inputs_check` | any | — | refuse to run a step that has nothing to read. |
@@ -2806,7 +2806,7 @@ _(no programs in this group)_
 - `step_internal_fail_bubble_up_check` — anti-fabrication gate (v1.6.44).
 - `step_metrics` — One per-step metrics schema, emitted by whoever computed the number. #1080.
 - `step_metrics_adoption_check` — the one metrics schema, and who still is not using it.
-- `step_output_collector` — materialize a per-STEP output subfolder view.
+- `step_output_collector` — Retain timestamped, independent per-step output versions.
 - `step_preflight` — the ORCHESTRATOR side of `required_inputs`.
 - `step_repro_bundle` — everything one step reads, in one file, plus what it ran on.
 - `step_required_inputs_check` — refuse to run a step that has nothing to read.

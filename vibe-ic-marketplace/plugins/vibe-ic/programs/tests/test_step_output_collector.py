@@ -1,9 +1,7 @@
 """Tests for step_output_collector + the dashboard per-step folder routes.
 
-step_output_collector materializes
-<project>/steps/<phase>/<stage>/<id>_<slug>/ (symlink views of each flow
-step's resolved outputs) + manifests, non-invasively (the canonical phaseN/
-tree is never moved). Nested by phase then stage (owner directive) so a
+step_output_collector retains timestamped independent copies and manifests.
+The canonical phaseN tree remains in place; earlier evidence is never pruned. Nested by phase then stage (owner directive) so a
 step's place in the flow is visible from its path, not just a flat peer
 list. The web route serving those folders is path-traversal guarded.
 """
@@ -36,7 +34,7 @@ def test_materialize_creates_steps_tree(tmp_path):
     assert isinstance(idx.get("steps"), list) and idx["steps"]
 
 
-def test_authored_rtl_is_symlinked_into_its_step_folder(tmp_path):
+def test_authored_rtl_is_copied_into_its_step_version(tmp_path):
     _mk_project(tmp_path)
     SOC.materialize(tmp_path)
     # find the step folder that captured spm.v — nested 3 levels deep now:
@@ -44,8 +42,11 @@ def test_authored_rtl_is_symlinked_into_its_step_folder(tmp_path):
     hits = list((tmp_path / "steps").glob("*/*/*/spm.v"))
     assert hits, "spm.v should be symlinked under steps/<phase>/<stage>/<id>_<slug>/"
     link = hits[0]
-    assert link.is_symlink()
-    assert link.resolve() == (tmp_path / "phase2/stage1/rtl/spm.v").resolve()
+    assert link.is_file() and not link.is_symlink()
+    original = tmp_path / "phase2/stage1/rtl/spm.v"
+    expected = original.read_bytes()
+    original.write_text("new retry content\n")
+    assert link.read_bytes() == expected
     # manifest present + well-formed, and carries the phase/stage that
     # produced this exact nesting
     man = json.loads((link.parent / "outputs.json").read_text())
@@ -61,7 +62,9 @@ def test_folder_is_nested_phase_then_stage(tmp_path):
     SOC.materialize(tmp_path)
     idx = json.loads((tmp_path / "steps/index.json").read_text())
     step1 = next(s for s in idx["steps"] if s["id"] == "1")
-    assert step1["folder"] == f"{step1['phase']}/{step1['stage']}/1_spec_to_rtl"
+    assert step1["folder"].startswith(f"{step1['phase']}/{step1['stage']}/1_spec_to_rtl_")
+    import re
+    assert re.search(r"_\d{8}T\d{6}_\d{6}Z$", step1["folder"])
     assert (tmp_path / "steps" / step1["folder"]).is_dir()
 
 
@@ -91,6 +94,88 @@ def test_idempotent(tmp_path):
     assert a["n_steps"] == b["n_steps"]
 
 
+def test_observation_does_not_invent_executed_pass(tmp_path):
+    _mk_project(tmp_path)
+    SOC.materialize(tmp_path)
+    assert not (tmp_path / 'steps/latest_pass.json').exists()
+    assert SOC.latest_pass(tmp_path, '1') is None
+
+
+def test_pass_fail_pass_keeps_all_bytes_logs_and_pass_selection(tmp_path):
+    _mk_project(tmp_path)
+    source = next((tmp_path / 'phase2/stage1/rtl').glob('*.v'))
+    log = tmp_path / 'reports/native.log'
+    log.parent.mkdir()
+    saved = []
+    for outcome, content in [('PASS', b'first accepted result'),
+                             ('FAIL', b'failed retry result'),
+                             ('PASS', b'last accepted result')]:
+        attempt = SOC.begin_step(tmp_path, '1')
+        source.write_bytes(content)
+        log.write_bytes(content + b' log')
+        record = SOC.finish_step(tmp_path, attempt, verdict=outcome,
+                                 result={'verdict': outcome}, canonical_pass=outcome == 'PASS')
+        folder = tmp_path / 'steps' / record['folder']
+        saved.append((folder, content))
+        assert (folder / source.name).read_bytes() == content
+        assert (folder / 'files/reports/native.log').read_bytes() == content + b' log'
+        chosen = SOC.latest_pass(tmp_path, '1')
+        expected = saved[0][0] if outcome == 'FAIL' else folder
+        assert tmp_path / 'steps' / chosen['folder'] == expected
+        for old, old_bytes in saved:
+            assert (old / source.name).read_bytes() == old_bytes
+            assert (old / 'files/reports/native.log').read_bytes() == old_bytes + b' log'
+    assert len({str(folder) for folder, _ in saved}) == 3
+
+
+def test_component_pass_never_replaces_complete_step_pass(tmp_path):
+    _mk_project(tmp_path)
+    attempt = SOC.begin_step(tmp_path, '1')
+    SOC.finish_step(tmp_path, attempt, verdict='PASS', result={'tool_rc': 0})
+    assert SOC.latest_pass(tmp_path, '1') is None
+
+
+def test_changed_input_marks_pass_as_historical(tmp_path):
+    _mk_project(tmp_path)
+    spec = tmp_path / 'input/spec.json'
+    spec.parent.mkdir()
+    spec.write_text('{"width": 8}')
+    attempt = SOC.begin_step(tmp_path, '1', {'input/spec.json': SOC._sha(spec)})
+    SOC.finish_step(tmp_path, attempt, verdict='PASS', canonical_pass=True)
+    assert SOC.latest_pass(tmp_path, '1')['current_inputs'] is True
+    spec.write_text('{"width": 16}')
+    historical = SOC.latest_pass(tmp_path, '1')
+    assert historical['status'] == 'PASS' and historical['current_inputs'] is False
+
+
+def test_interrupted_attempt_is_saved_before_a_retry_overwrites_it(tmp_path):
+    _mk_project(tmp_path)
+    source = next((tmp_path / 'phase2/stage1/rtl').glob('*.v'))
+    first = SOC.begin_step(tmp_path, '1')
+    SOC.finish_step(tmp_path, first, verdict='PASS', canonical_pass=True)
+    interrupted = SOC.begin_step(tmp_path, '1')
+    source.write_bytes(b'partial output before process died')
+    retry = SOC.begin_step(tmp_path, '1')
+    partial = tmp_path / 'steps' / interrupted['folder']
+    assert json.loads((partial / 'outputs.json').read_text())['status'] == 'INTERRUPTED'
+    source.write_bytes(b'new retry output')
+    assert (partial / source.name).read_bytes() == b'partial output before process died'
+    assert SOC.latest_pass(tmp_path, '1')['folder'] == first['folder']
+    SOC.finish_step(tmp_path, retry, verdict='FAIL')
+
+
+def test_view_refresh_cannot_rewrite_an_executed_version(tmp_path):
+    _mk_project(tmp_path)
+    attempt = SOC.begin_step(tmp_path, '1')
+    SOC.finish_step(tmp_path, attempt, verdict='FAIL', result={'detail': 'measured failure'})
+    folder = tmp_path / 'steps' / attempt['folder']
+    original = {p.name: p.read_bytes() for p in folder.iterdir() if p.is_file()}
+    SOC.materialize(tmp_path, only_steps={'1'})
+    for name, content in original.items():
+        assert (folder / name).read_bytes() == content
+    assert SOC.latest_pass(tmp_path, '1') is None
+
+
 def test_web_stepfile_path_traversal_guarded(tmp_path):
     _mk_project(tmp_path)
     SOC.materialize(tmp_path)
@@ -114,7 +199,7 @@ def test_web_stepfile_path_traversal_guarded(tmp_path):
     assert W._step_file_response(str(tmp_path), folder + "/../../..", "spm.v") is None
 
 
-def test_migrating_from_a_prior_flat_layout_prunes_the_old_folder(tmp_path):
+def test_migrating_from_a_prior_flat_layout_retains_its_bytes(tmp_path):
     """A run materialized under the OLD flat `<id>_<slug>/` scheme, then
     re-materialized under this nested one, must not leave the old folder
     sitting next to the new tree forever — it would look like a second,
@@ -133,14 +218,20 @@ def test_migrating_from_a_prior_flat_layout_prunes_the_old_folder(tmp_path):
 
     SOC.materialize(tmp_path)
 
-    assert not old_folder.exists(), "stale flat-layout folder must be pruned"
+    assert old_folder.is_dir()
+    assert (old_folder / "spm.v").is_file() and not (old_folder / "spm.v").is_symlink()
+    original = tmp_path / "phase2/stage1/rtl/spm.v"
+    saved = (old_folder / "spm.v").read_bytes()
+    original.write_text("retry changed the working file\n")
+    assert (old_folder / "spm.v").read_bytes() == saved
     idx = json.loads((steps_root / "index.json").read_text())
     step1 = next(s for s in idx["steps"] if s["id"] == "1")
     assert "/" in step1["folder"], "the new run must be nested"
-    assert (steps_root / step1["folder"] / "spm.v").is_symlink()
+    assert (steps_root / step1["folder"] / "spm.v").is_file()
+    assert not (steps_root / step1["folder"] / "spm.v").is_symlink()
 
 
-def test_pruning_removes_now_empty_phase_and_stage_parents(tmp_path):
+def test_refresh_keeps_older_phase_and_stage_directories(tmp_path):
     """DIRECTION 1 sibling: pruning a stale leaf must not leave an empty
     phase/ or stage/ directory behind as debris, but must also not remove
     anything ABOVE `steps/` itself."""
@@ -154,8 +245,8 @@ def test_pruning_removes_now_empty_phase_and_stage_parents(tmp_path):
 
     SOC.materialize(tmp_path)
 
-    assert not stale.exists()
-    assert not (steps_root / "phaseX").exists(), "emptied stage/phase left behind"
+    assert stale.is_dir()
+    assert (steps_root / "phaseX/stageY").is_dir()
     assert steps_root.is_dir(), "must never remove steps/ itself"
 
 
@@ -189,7 +280,7 @@ def test_prune_never_escapes_steps_root(tmp_path):
     assert sorted(p.name for p in outside.iterdir()) == ["link", "outputs.json"]
 
 
-def test_prune_still_removes_a_genuinely_stale_folder(tmp_path):
+def test_history_retention_keeps_a_stale_folder_and_manifest(tmp_path):
     """The paired half, and the one that keeps the guard from being a way to
     disable the feature: a stale folder INSIDE steps_root must still go, and
     its now-empty phase/stage parents with it. That is the flat-to-nested
@@ -205,8 +296,10 @@ def test_prune_still_removes_a_genuinely_stale_folder(tmp_path):
 
     C._prune_stale_folders(steps_root, ["phase1/stage1/01_old_name"], set())
 
-    assert not stale.exists()
-    assert not (steps_root / "phase1").exists(), "empty parents were not pruned"
+    assert stale.is_dir()
+    assert (stale / "artifact.v").is_file()
+    assert (stale / "outputs.json").read_text() == "{}"
+    assert (steps_root / "phase1/stage1").is_dir()
     assert (tmp_path / "target.txt").is_file(), "the symlink TARGET was deleted"
 
 

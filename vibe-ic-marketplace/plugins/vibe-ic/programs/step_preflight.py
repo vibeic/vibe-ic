@@ -1054,6 +1054,50 @@ def _scoped_dispatch(project: Path, site: str, flow_def: Any,
     return result
 
 
+def _retained_dispatch(project: Path, dec: Decision, flow_def: Any,
+                       fn: Callable[..., Any], args: Any, kwargs: Any) -> Any:
+    """Keep Default's actual call outputs without changing its verdict rules.
+
+    The direct Phase-3 row driver owns its finer per-row versions. Other
+    established sites retain invocation evidence here; a runner PASS remains
+    component evidence until its full canonical consumer has accepted it.
+    """
+    import execution_policy
+    if (execution_policy.request()['mode'] != 'default' or flow_def is not None
+            or (dec.runner == 'phase3_one_shot_runner' and dec.site == 'pnr')):
+        return _scoped_dispatch(project, dec.site, flow_def, fn, args, kwargs)
+    import _flow_yaml
+    import execution_backend_worker as worker
+    import step_output_collector as versions
+    canonical = {str(row['id']): row for row in _flow_yaml.load()['steps']}
+    attempts = [versions.begin_step(project, sid, worker._declared_input_files(
+                    project, canonical[sid].get('required_inputs', ())))
+                for sid in dec.flow_steps if sid in canonical]
+    try:
+        result = _scoped_dispatch(project, dec.site, flow_def, fn, args, kwargs)
+    except BaseException as exc:
+        for attempt in attempts:
+            versions.finish_step(project, attempt, verdict='INTERRUPTED',
+                                 result={'detail': f'{type(exc).__name__}: {exc}'})
+        raise
+    rows = result if isinstance(result, (list, tuple)) else [result]
+    evidence = [{'name': getattr(row, 'name', ''),
+                 'status': getattr(row, 'status', 'NOT_MEASURED'),
+                 'detail': getattr(row, 'detail', ''),
+                 'outputs': getattr(row, 'outputs', [])} for row in rows]
+    statuses = {item['status'] for item in evidence}
+    outcome = ('FAIL' if 'FAIL' in statuses else 'PASS' if statuses == {'PASS'}
+               else 'NOT_MEASURED')
+    for attempt in attempts:
+        saved = versions.finish_step(project, attempt, verdict=outcome,
+                                     result={'runner': dec.runner, 'site': dec.site,
+                                             'rows': evidence})
+        if saved['capture_errors']:
+            raise OSError('step output version could not be retained: ' +
+                          '; '.join(saved['capture_errors']))
+    return result
+
+
 def gate(project: Path, runner: str, site: str,
          refusal_factory: Callable[[str, Dict[str, Any]], Any],
          fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
@@ -1103,8 +1147,7 @@ def gate(project: Path, runner: str, site: str,
             dec.notes.append(str(note))
         print(f"[preflight] {site}: NOT-APPLICABLE — {not_applicable}",
               file=sys.stderr, flush=True)
-        result = _scoped_dispatch(Path(project), site, flow_def,
-                                  fn, args, kwargs)
+        result = _retained_dispatch(Path(project), dec, flow_def, fn, args, kwargs)
         record(Path(project), dec)
         return result
 
@@ -1146,7 +1189,7 @@ def gate(project: Path, runner: str, site: str,
     import execution_policy
     result = execution_policy.dispatch_ordinary_site(project, runner, site, refusal_factory)
     if result is None:
-        result = _scoped_dispatch(Path(project), site, flow_def, fn, args, kwargs)
+        result = _retained_dispatch(Path(project), dec, flow_def, fn, args, kwargs)
 
     status = getattr(result, "status", None)
     if status is None and isinstance(result, (list, tuple)):

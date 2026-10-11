@@ -343,6 +343,8 @@ def test_a_receipt_from_another_run_is_refused(tmp_path, monkeypatch):
     stale = receipt.read_text()
     receipts.claim(project)          # a new run starts: its directory is empty
     assert not receipt.exists()
+    archived = list((project / 'reports/phase3/drv_stage_history').glob('fresh-*/cts.json'))
+    assert len(archived) == 1 and archived[0].read_text() == stale
     receipt.write_text(stale)        # an old receipt copied back in
     rows, inventory = plan._stages(project, False)
     assert inventory["cts"]["status"] == "recorded by another run"

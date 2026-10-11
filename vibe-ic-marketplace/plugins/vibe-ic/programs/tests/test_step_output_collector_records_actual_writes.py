@@ -43,7 +43,7 @@ MEASURED, both directions, same test file:
 
   REVERSE  (PASS pre-change AND PASS post-change — the change must not have
             been bought by breaking or weakening what already worked)
-    test_collector_still_builds_the_nested_symlink_tree
+    test_collector_builds_a_nested_independent_version
     test_materialize_still_returns_its_original_keys
 
   test_real_output_still_reads_as_produced doubles as the anti-"flag
@@ -266,22 +266,26 @@ _STEP_DIR_PARTS = _flow_dir_parts(GDS_STEP)
 _STEP_DIR_MEMBERS = set(_STEP_DIR_PARTS)
 
 
-def test_collector_still_builds_the_nested_symlink_tree(tmp_path):
+def test_collector_builds_a_nested_independent_version(tmp_path):
     """The owner's tree (nested phase/stage/step, symlinks only) is untouched."""
     p = _mk_project(tmp_path, zero_byte=False)
     soc.materialize(p)
     sdir = _step_dir(p, GDS_STEP)
     assert sdir is not None
     parts = sdir.relative_to(p / "steps").parts
-    got = set(parts)
+    stable_parts = parts[:2] + (parts[2].rsplit("_", 2)[0],)
+    got = set(stable_parts)
     assert got == _STEP_DIR_MEMBERS, (
         f"step {GDS_STEP}'s folder is not nested under the segments the flow "
         f"names; arrived={sorted(got - _STEP_DIR_MEMBERS)} "
         f"departed={sorted(_STEP_DIR_MEMBERS - got)}")
-    assert parts == _STEP_DIR_PARTS, (
+    assert stable_parts == _STEP_DIR_PARTS, (
         f"phase/stage/step, in that order: {parts}")
     link = sdir / "chip.gds"
-    assert link.is_symlink() and link.resolve() == (p / GDS_REL).resolve()
+    assert link.is_file() and not link.is_symlink()
+    expected = link.read_bytes()
+    (p / GDS_REL).write_bytes(b"changed retry bytes")
+    assert link.read_bytes() == expected
     assert (sdir / "outputs.json").is_file()
     assert (p / "steps" / "index.json").is_file()
 
