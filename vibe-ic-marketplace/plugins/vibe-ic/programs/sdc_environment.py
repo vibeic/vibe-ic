@@ -398,6 +398,11 @@ def _pdk_io_input_transition(project: Path, container: str = "",
     return bracket, basis
 
 
+def render_pad_scene_sdc(scope: str) -> str:
+    """Keep the same scene when a native tool exports and reloads its SDC."""
+    return "set ::vibeic_scene_sdc {" + scope + "}\n" + scope
+
+
 def pad_operating_scene(project: Path, core_liberty: str, container: str = "",
                         to_container_path=None) -> Dict[str, object]:
     """A generated pad wrapper's static timing mode and native IO pin limits.
@@ -492,8 +497,10 @@ if {[llength [info commands ::vibeic_native_write_sdc]] == 0} {
   }
 }
 '''
-    tcl = "set ::vibeic_scene_sdc {" + scope + "}\n" + scope
-    return {"tcl": tcl, "port_slew_limits": ports if complete else {},
+    return {"tcl": render_pad_scene_sdc(scope), "scope_tcl": scope,
+            "core_cells": sorted({name for name, _ in _liberty_blocks(core_text or "", "cell")}),
+            "core_liberty_sha256": hashlib.sha256(core_text.encode()).hexdigest() if core_text else None,
+            "port_slew_limits": ports if complete else {},
             "liberty_sha256": sources, "complete_pin_limits": complete}
 
 

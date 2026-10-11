@@ -1766,18 +1766,44 @@ def asic_sdc_for_pnr(rt: Any, project: Path, top: str, pdk: Any,
         else:
             # A core Liberty default constrains its own cells, not unrelated
             # IO voltage-domain cells. Their native pin limits stay unchanged.
-            # Explicit design/PDK-config ceilings still apply design-wide.
+            # Explicit design ceilings still apply design-wide. Core-library
+            # PDK defaults apply to that library's cells, not the IO domain.
             pad_limits = pad_scene.get("port_slew_limits") or {}
+            core_targets = {}
+            if pad_scene.get("core_cells"):
+                for command, key, source in (
+                    ("set_max_transition", "slew_ns", blk.get("slew_source") or ""),
+                    ("set_max_capacitance", "cap_pf", blk.get("cap_source") or ""),
+                    ("set_max_fanout", "max_fanout", str(blk.get("fanout_note") or "").partition(" — ")[2]),
+                ):
+                    if str(source).startswith("pinned PDK default ") and blk[key] is not None:
+                        core_targets[command] = blk[key]
             native_pad_limits = (bool(pad_limits) and
-                                 str(blk.get("slew_source") or "").startswith("liberty default "))
+                                 (str(blk.get("slew_source") or "").startswith("liberty default ")
+                                  or "set_max_transition" in core_targets))
             new_blk = rt._drv_constraints_sdc_block(
-                None if native_pad_limits else blk["slew_ns"], blk["cap_pf"], blk["note"],
-                max_fanout=blk["max_fanout"], fanout_note=blk["fanout_note"],
+                None if native_pad_limits or "set_max_transition" in core_targets else blk["slew_ns"],
+                None if "set_max_capacitance" in core_targets else blk["cap_pf"], blk["note"],
+                max_fanout=None if "set_max_fanout" in core_targets else blk["max_fanout"],
+                fanout_note=blk["fanout_note"],
                 supply_ports=supplies, slew_source=blk.get("slew_source") or "",
                 cap_source=blk.get("cap_source") or "")
             out["text"] = out["text"].replace(base_blk, new_blk, 1)
+            if core_targets:
+                masters = " ".join("{" + name + "}" for name in pad_scene["core_cells"])
+                scope = "# PDK defaults apply only to the selected core Liberty cells.\n"
+                scope += f"foreach _vibeic_core_master [list {masters}] {{\n"
+                scope += "  foreach _vibeic_core_cell [get_lib_cells -quiet */$_vibeic_core_master] {\n"
+                for command, value in sorted(core_targets.items()):
+                    scope += f"    {command} {value:g} [$_vibeic_core_cell cell]\n"
+                scope += "  }\n}\n"
+                # Native write_sdc omits non-top Cell constraints. Reuse the
+                # existing scene export so the next row retains these targets.
+                pad_scene["tcl"] = environment.render_pad_scene_sdc(scope + pad_scene["scope_tcl"])
+                der["core_library_targets"] = core_targets
+                der["core_liberty_sha256"] = pad_scene["core_liberty_sha256"]
             if native_pad_limits:
-                out["text"] += "\n# Core cells retain their native Liberty slew limits; IO ports use their pad pin limits.\n"
+                out["text"] += "\n# IO ports use their native pad pin slew limits.\n"
                 for port, limit in sorted(pad_limits.items()):
                     out["text"] += f"set_max_transition {limit:g} [get_ports [list {{{port}}}]]\n"
                 der["pad_pin_slew_limits"] = pad_limits

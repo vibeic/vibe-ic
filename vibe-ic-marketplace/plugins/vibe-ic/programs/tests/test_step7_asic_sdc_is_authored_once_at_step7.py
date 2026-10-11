@@ -30,6 +30,7 @@ PROGRAMS = TESTS.parent
 sys.path.insert(0, str(PROGRAMS))
 
 import phase3_one_shot_runner as R                       # noqa: E402
+import sdc_environment as E                              # noqa: E402
 from _ppa import timing as T                              # noqa: E402
 
 _spec = importlib.util.spec_from_file_location(
@@ -719,12 +720,14 @@ def _mode_arc(when, slew):
 
 
 @pytest.mark.parametrize('consumer', ['openroad', 'sta'])
-@pytest.mark.parametrize('mode,core_slew,user_limit', [
-    ('0', 0.5, None), ('1', 0.5, None), ('m', 0.5, None),
-    ('0', 2.0, None), ('0', 0.5, 1.0)],
-    ids=['fixed-normal','fixed-slow','dynamic-mode','core-still-fails','user-ceiling-still-fails'])
+@pytest.mark.parametrize('mode,core_slew,user_limit,pdk_limits', [
+    ('0', 0.5, None, False), ('1', 0.5, None, False), ('m', 0.5, None, False),
+    ('0', 2.0, None, False), ('0', 0.5, 1.0, False),
+    ('0', 0.5, None, True), ('0', 1.0, None, True)],
+    ids=['fixed-normal','fixed-slow','dynamic-mode','core-still-fails','user-ceiling-still-fails',
+         'pdk-core-normal','pdk-core-still-fails'])
 def test_pad_operating_scene_preserves_actual_mode_and_each_domain_limit(
-        tmp_path, monkeypatch, mode, core_slew, user_limit, consumer):
+        tmp_path, monkeypatch, mode, core_slew, user_limit, pdk_limits, consumer):
     import shutil
     import subprocess
     tool = shutil.which(consumer)
@@ -739,6 +742,12 @@ def test_pad_operating_scene_preserves_actual_mode_and_each_domain_limit(
                                'slew_source': str(core_lib) + ':default_max_transition'})
     pdk.liberty = core_lib
     monkeypatch.setattr(R, '_sdc_environment_pdk_values', lambda *a, **k: ({}, []))
+    if pdk_limits:
+        values = {'set_max_transition': ('0.75', 'pinned PDK default core/config.tcl:MAX_TRANSITION_CONSTRAINT'),
+                  'set_max_capacitance': ('0.2', 'pinned PDK default core/config.tcl:MAX_CAPACITANCE_CONSTRAINT')}
+        monkeypatch.setattr(E, '_sdc_environment_pdk_values', lambda *a, **k: (values, []))
+        monkeypatch.setattr(R, '_synth_max_fanout', lambda *a, **k:
+                            (10, 'pinned PDK default core/config.tcl:MAX_FANOUT_CONSTRAINT', []))
     if user_limit:
         (proj / 'input/constraints').mkdir(parents=True)
         (proj / 'input/constraints/clock.sdc').write_text(
@@ -814,7 +823,40 @@ def test_pad_operating_scene_preserves_actual_mode_and_each_domain_limit(
         assert 'u_core/Y' in checked and '2.000000' in checked
     if user_limit:
         assert 'set_max_transition 1.0 [current_design]' in derived['text']
+    if pdk_limits and core_slew > 0.75:
+        assert 'u_core/Y' in checked and '1.000000' in checked
     # A normal-mode active edge still exists: no from/to blanket suppression.
     if mode == '0':
         normal = output.split('Condition: !MODE', 1)[-1].split('Condition:', 1)[0]
         assert 'Disabled by constraint' not in normal, output
+
+
+def test_pdk_core_targets_do_not_constrain_chip_io_ports(tmp_path, monkeypatch):
+    proj = _project(tmp_path)
+    core_lib = tmp_path / 'core.lib'
+    core_lib.write_text(_mode_library('core_lib', 'core_buf', 1.5, _mode_arc('', 0.5)))
+    io_lib = tmp_path / 'io.lib'
+    io_lib.write_text(_mode_library('io_lib', 'io_pad', 25, _mode_arc('', 1.87)))
+    pdk = _pdk(monkeypatch, drv={'max_transition_ns': 1.5,
+                               'slew_source': str(core_lib) + ':default_max_transition'})
+    pdk.liberty = core_lib
+    values = {'set_max_transition': ('0.75', 'pinned PDK default core/config.tcl:MAX_TRANSITION_CONSTRAINT'),
+              'set_max_capacitance': ('0.2', 'pinned PDK default core/config.tcl:MAX_CAPACITANCE_CONSTRAINT')}
+    monkeypatch.setattr(E, '_sdc_environment_pdk_values', lambda *a, **k: (values, []))
+    monkeypatch.setattr(R, '_synth_max_fanout', lambda *a, **k:
+                        (10, 'pinned PDK default core/config.tcl:MAX_FANOUT_CONSTRAINT', []))
+    T.emit_step7_asic_sdc(R, proj, TOP, pdk, '')
+    path = _pad_record(proj)
+    doc = json.loads(path.read_text())
+    doc.update(io_library_liberty=[str(io_lib)], pad_instances={
+        'u_io': {'port': 'y', 'master': 'io_pad', 'terminal': 'Y', 'direction': 'output'}})
+    path.write_text(json.dumps(doc))
+    derived = T.asic_sdc_for_pnr(R, proj, TOP, pdk, '')
+    assert 'set_max_transition 0.75 [current_design]' not in derived['text']
+    assert 'set_max_capacitance 0.2 $_vibeic_drv_signal_ports' not in derived['text']
+    assert 'set_max_fanout 10 $_vibeic_drv_signal_in_ports' not in derived['text']
+    assert 'set_max_transition 0.75 [$_vibeic_core_cell cell]' in derived['text']
+    assert 'set_max_capacitance 0.2 [$_vibeic_core_cell cell]' in derived['text']
+    assert 'set_max_fanout 10 [$_vibeic_core_cell cell]' in derived['text']
+    assert derived['derivation']['core_library_targets'] == {
+        'set_max_transition': 0.75, 'set_max_capacitance': 0.2, 'set_max_fanout': 10}
