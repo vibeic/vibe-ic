@@ -3741,7 +3741,6 @@ steps:
     programs:
       - transition_fault_atpg_run
       - transition_coverage_check
-      - phase3_one_shot_runner
     # DT1/DT2/DT3 declared NO required_outputs at all, so the artefact each
     # step exists to produce was invisible to every tool that enumerates a
     # step's evidence through this field (flow_dashboard_data._resolve_outputs
@@ -4707,6 +4706,9 @@ steps:
       # authorship note claims it. A document the run already produced is
       # left byte-for-byte alone.
       - stage2_compliance
+    program_outputs:
+      - program: phase3_one_shot_runner
+        path: "reports/phase3/floorplan_rectangles.json"
     required_outputs:
       - "phase3/stage3/pnr/floorplan.def"
       - "phase3/stage3/pnr/pdn.tcl OR phase3/stage3/pnr/pdn.done"
@@ -5036,6 +5038,8 @@ steps:
       - placement_legality_check
       - pnr_timing_repair_completeness_check
     program_outputs:
+      - program: execution_backend_producers
+        path: "reports/phase3/librelane_placement_handoff.json"
       - program: placement_legality_check
         path: "reports/phase3/placement_legality.json"
         producer_command: "placement_legality_check . --json reports/phase3/placement_legality.json"
@@ -5231,6 +5235,9 @@ steps:
     mcp_tools: [eda_pnr]
     programs:
       - cts_quality_check
+    program_outputs:
+      - program: execution_backend_producers
+        path: "reports/phase3/librelane_cts_hold_handoff.json"
     required_outputs:
       - "phase3/stage3/pnr/post_cts.def"
       - "phase3/stage3/cts/clock_tree.rpt"
@@ -5262,6 +5269,8 @@ steps:
       - hold_closure_check
       - hold_area_budget_check
     program_outputs:
+      - program: execution_backend_producers
+        path: "reports/phase3/librelane_cts_hold_handoff.json"
       - program: hold_area_budget_check
         path: "reports/phase3/pnr/hold_area_budget.json"
         verdict_field: verdict
@@ -5639,7 +5648,6 @@ steps:
     programs:
       - path_delay_fault_atpg_run
       - path_delay_coverage_check
-      - phase3_one_shot_runner
     # See the DT1 note: the measurement alone, single-branch, so its absence is
     # loud and can back DT3's condition.
     required_outputs:
@@ -5715,7 +5723,6 @@ steps:
     programs:
       - sdd_atpg_run
       - sdd_coverage_check
-      - phase3_one_shot_runner
     # See the DT1 note: the measurement alone, single-branch.
     required_outputs:
       - "reports/phase2/dft/sdd_coverage.json"
@@ -7127,6 +7134,9 @@ steps:
     mcp_tools: [eda_spice]
     programs:
       - spice_correlation_check
+    program_outputs:
+      - program: path_spice_tool
+        path: "reports/phase3/spice_path_tool.json"
     required_outputs:
       - "phase3/stage3/spice/*.sp OR phase3/stage3/spice/*.spice OR sim_spice/*.sp"
       - "phase3/stage3/spice/correlation.json OR reports/phase3/spice_correlation.json"
@@ -7858,6 +7868,8 @@ steps:
       - drc_report_check
       - lvs_report_check
     program_outputs:
+      - program: phase3_one_shot_runner
+        path: "reports/phase3/erc_current.json"
       - program: pnr_via_stack_completeness_check
         path: "reports/phase3/pnr_via_stack_completeness.json"
         verdict_field: verdict

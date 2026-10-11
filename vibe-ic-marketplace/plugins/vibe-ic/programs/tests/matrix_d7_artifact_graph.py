@@ -590,6 +590,13 @@ def _collect_writes(tree: ast.AST, *, delegates: bool = True) -> Set[Tuple[str, 
     resolver = _PathResolver(tree)
     _module_names = _module_aliases(tree)
     out: Set[Tuple[str, ...]] = set()
+    local_resolvers = {}
+    for function in ast.walk(tree):
+        if isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            local = _PathResolver(function)
+            for call in ast.walk(function):
+                if isinstance(call, ast.Call):
+                    local_resolvers[id(call)] = local
 
     # Phase-1's chokepoint takes a document name rather than a Path. Resolve
     # literal calls and the runner's constant name tables so its loop writes
@@ -629,7 +636,12 @@ def _collect_writes(tree: ast.AST, *, delegates: bool = True) -> Set[Tuple[str, 
             continue
         if (isinstance(fn, ast.Name) and fn.id in _SHADOWING_ATOMIC_WRITERS
                 and fn.id in _module_names and n.args):
-            add(n.args[0])
+            # An unrelated function's same-named local is not this destination.
+            # Bound delegate bodies use the caller's explicit assignments.
+            local = local_resolvers.get(id(n), resolver)
+            tail = local.tail(n.args[0])
+            if tail and Path(tail[-1]).suffix.lower() in ARTIFACT_SUFFIXES:
+                out.add(tail)
             continue
         if isinstance(fn, ast.Name) and fn.id == "open" and n.args:
             mode = _const_str(n.args[1]) if len(n.args) > 1 else None
