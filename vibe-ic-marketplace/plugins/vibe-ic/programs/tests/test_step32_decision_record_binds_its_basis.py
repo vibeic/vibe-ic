@@ -101,6 +101,13 @@ def _fake_docker(spef_sta_text):
 
 
 def _canonicalize(p: Path, monkeypatch, spef_text: str) -> None:
+    # These controls exercise the retained legacy emitter. Default now runs
+    # Step 32 at its own row and its post-stream alias stage does not produce
+    # a timing-repair decision. Keep the original emitter assertions intact;
+    # current Default retention has separate ordinary-call controls.
+    import execution_policy
+    monkeypatch.setattr(execution_policy, "request", lambda: {"mode": "ultra"})
+    monkeypatch.setattr(execution_policy, "_ordinary_runtime", None)
     # This control supplies the direct OpenSTA report at its tool boundary.
     switch = p / "phase3/librelane_switch.json"
     switch.write_text(json.dumps({"steps": {
