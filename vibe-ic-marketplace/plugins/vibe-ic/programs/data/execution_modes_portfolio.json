@@ -7,7 +7,7 @@
       "tools": 63,
       "arms": 333
     },
-    "as_of": "2026-10-03",
+    "as_of": "2026-10-12",
     "evidence_scope": "CURRENT_SOURCE_RUNNER_INTEGRATION; RUNTIME_AVAILABILITY_AND EDA_RESULTS REMAIN PER_INVOCATION",
     "controller_scope": "SHARED REGISTRY/CONTROLLER HOOKED INTO FIVE ORDINARY RUNNER FRONT DOORS; FIXED-STEP ADAPTER AVAILABILITY AND QUALIFICATION REMAIN PER INVOCATION",
     "default_mode": {
@@ -32,8 +32,8 @@
       "default-mode",
       "ultra-mode"
     ],
-    "canonical_flow_sha256": "c5bacf5661bd17d737eb940610e6940a992995c62ab6ea52dcd76e4507ddd88a",
-    "canonical_flow_git_blob": "6149fe866cb075492328d27b6981080555d1a7e7",
+    "canonical_flow_sha256": "5161d563795cc91a89f3177ef5eb872a9bb5ab91af7b48218408bcebbdd10885",
+    "canonical_flow_git_blob": "3d29bfd9024fa20e8d845219b734d735f4a58079",
     "production_runner_hooks": 5,
     "registered_fixed_step_adapters": 60,
     "source_candidate_implementations": 54,
@@ -808,7 +808,7 @@
   "steps": [
     {
       "id": "D1",
-      "title_en": "Phase 1 Doc Extraction (17 skills + dialogue entry → L1-L27)",
+      "title_en": "Phase 1 Doc Extraction (17 skills + dialogue entry \u2192 L1-L27)",
       "phase": "phase1",
       "canonical_stage": "stage_phase1",
       "current_default": {
@@ -821,7 +821,7 @@
         "label_en": "Current source adapter: Vibe-IC program and evidence gates, Poppler pdftotext, Tesseract",
         "source": {
           "repo": "https://github.com/vibeic/vibe-ic",
-          "ref": "fc17c778d9beaf720baf854ec29dbcb83ac61c88",
+          "ref": "428a374dd096ca6ef86a31b691a86dc2b16f29f8",
           "canonical_file": "vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
           "canonical_step_id": "D1",
           "programs": [
@@ -868,8 +868,8 @@
             }
           ],
           "review_row": "review70_final.json#/rows/step_id=D1",
-          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/fc17c778d9beaf720baf854ec29dbcb83ac61c88/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
-          "canonical_blob": "6149fe866cb075492328d27b6981080555d1a7e7"
+          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/428a374dd096ca6ef86a31b691a86dc2b16f29f8/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
+          "canonical_blob": "3d29bfd9024fa20e8d845219b734d735f4a58079"
         },
         "verified": true,
         "verification_scope": "PINNED_SOURCE_AND_EXISTING_RECEIPTS_ONLY",
@@ -1016,7 +1016,7 @@
     },
     {
       "id": "0.5ic",
-      "title_en": "Submission Template Ingest — the operator's slot geometry and fixtures (chip/IC path only)",
+      "title_en": "Submission Template Ingest \u2014 the operator's slot geometry and fixtures (chip/IC path only)",
       "phase": "phase1",
       "canonical_stage": "stage_phase1",
       "current_default": {
@@ -1028,7 +1028,7 @@
         "label_en": "Current source adapter: Vibe-IC program and evidence gates, KLayout",
         "source": {
           "repo": "https://github.com/vibeic/vibe-ic",
-          "ref": "fc17c778d9beaf720baf854ec29dbcb83ac61c88",
+          "ref": "428a374dd096ca6ef86a31b691a86dc2b16f29f8",
           "canonical_file": "vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
           "canonical_step_id": "0.5ic",
           "programs": [
@@ -1041,8 +1041,8 @@
           ],
           "capture_routes": [],
           "review_row": "review70_final.json#/rows/step_id=0.5ic",
-          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/fc17c778d9beaf720baf854ec29dbcb83ac61c88/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
-          "canonical_blob": "6149fe866cb075492328d27b6981080555d1a7e7"
+          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/428a374dd096ca6ef86a31b691a86dc2b16f29f8/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
+          "canonical_blob": "3d29bfd9024fa20e8d845219b734d735f4a58079"
         },
         "verified": true,
         "verification_scope": "PINNED_SOURCE_AND_EXISTING_RECEIPTS_ONLY",
@@ -1138,7 +1138,7 @@
         "label_en": "Current source adapter: Vibe-IC program and evidence gates",
         "source": {
           "repo": "https://github.com/vibeic/vibe-ic",
-          "ref": "fc17c778d9beaf720baf854ec29dbcb83ac61c88",
+          "ref": "428a374dd096ca6ef86a31b691a86dc2b16f29f8",
           "canonical_file": "vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
           "canonical_step_id": "1",
           "programs": [
@@ -1157,8 +1157,8 @@
             }
           ],
           "review_row": "review70_final.json#/rows/step_id=1",
-          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/fc17c778d9beaf720baf854ec29dbcb83ac61c88/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
-          "canonical_blob": "6149fe866cb075492328d27b6981080555d1a7e7"
+          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/428a374dd096ca6ef86a31b691a86dc2b16f29f8/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
+          "canonical_blob": "3d29bfd9024fa20e8d845219b734d735f4a58079"
         },
         "verified": true,
         "verification_scope": "PINNED_SOURCE_AND_EXISTING_RECEIPTS_ONLY",
@@ -1240,7 +1240,7 @@
     },
     {
       "id": "2",
-      "title_en": "🔁 RTL validation (rewrite fidelity + lint + Quartus-unsafe patterns + RTL-bug claim schema)",
+      "title_en": "\ud83d\udd01 RTL validation (rewrite fidelity + lint + Quartus-unsafe patterns + RTL-bug claim schema)",
       "phase": "phase2",
       "canonical_stage": "stage1",
       "current_default": {
@@ -1252,7 +1252,7 @@
         "label_en": "Current source adapter: Vibe-IC program and evidence gates, Yosys",
         "source": {
           "repo": "https://github.com/vibeic/vibe-ic",
-          "ref": "fc17c778d9beaf720baf854ec29dbcb83ac61c88",
+          "ref": "428a374dd096ca6ef86a31b691a86dc2b16f29f8",
           "canonical_file": "vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
           "canonical_step_id": "2",
           "programs": [
@@ -1331,8 +1331,8 @@
             }
           ],
           "review_row": "review70_final.json#/rows/step_id=2",
-          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/fc17c778d9beaf720baf854ec29dbcb83ac61c88/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
-          "canonical_blob": "6149fe866cb075492328d27b6981080555d1a7e7"
+          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/428a374dd096ca6ef86a31b691a86dc2b16f29f8/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
+          "canonical_blob": "3d29bfd9024fa20e8d845219b734d735f4a58079"
         },
         "verified": true,
         "verification_scope": "PINNED_SOURCE_AND_EXISTING_RECEIPTS_ONLY",
@@ -1539,7 +1539,7 @@
     },
     {
       "id": "3",
-      "title_en": "🔁 CDC / RDC check",
+      "title_en": "\ud83d\udd01 CDC / RDC check",
       "phase": "phase2",
       "canonical_stage": "stage1",
       "current_default": {
@@ -1550,7 +1550,7 @@
         "label_en": "Current source adapter: Vibe-IC program and evidence gates",
         "source": {
           "repo": "https://github.com/vibeic/vibe-ic",
-          "ref": "fc17c778d9beaf720baf854ec29dbcb83ac61c88",
+          "ref": "428a374dd096ca6ef86a31b691a86dc2b16f29f8",
           "canonical_file": "vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
           "canonical_step_id": "3",
           "programs": [
@@ -1561,8 +1561,8 @@
           ],
           "capture_routes": [],
           "review_row": "review70_final.json#/rows/step_id=3",
-          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/fc17c778d9beaf720baf854ec29dbcb83ac61c88/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
-          "canonical_blob": "6149fe866cb075492328d27b6981080555d1a7e7"
+          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/428a374dd096ca6ef86a31b691a86dc2b16f29f8/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
+          "canonical_blob": "3d29bfd9024fa20e8d845219b734d735f4a58079"
         },
         "verified": true,
         "verification_scope": "PINNED_SOURCE_AND_EXISTING_RECEIPTS_ONLY",
@@ -1679,7 +1679,7 @@
     },
     {
       "id": "4",
-      "title_en": "🔁 Simulation (testbench-based + L10/L12 coverage + Verilator coverage)",
+      "title_en": "\ud83d\udd01 Simulation (testbench-based + L10/L12 coverage + Verilator coverage)",
       "phase": "phase2",
       "canonical_stage": "stage1",
       "current_default": {
@@ -1693,7 +1693,7 @@
         "label_en": "Current source adapter: Icarus Verilog / vvp, Verilator, cocotb, pyuvm / cocotb-coverage",
         "source": {
           "repo": "https://github.com/vibeic/vibe-ic",
-          "ref": "fc17c778d9beaf720baf854ec29dbcb83ac61c88",
+          "ref": "428a374dd096ca6ef86a31b691a86dc2b16f29f8",
           "canonical_file": "vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
           "canonical_step_id": "4",
           "programs": [
@@ -1724,8 +1724,8 @@
             }
           ],
           "review_row": "review70_final.json#/rows/step_id=4",
-          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/fc17c778d9beaf720baf854ec29dbcb83ac61c88/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
-          "canonical_blob": "6149fe866cb075492328d27b6981080555d1a7e7"
+          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/428a374dd096ca6ef86a31b691a86dc2b16f29f8/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
+          "canonical_blob": "3d29bfd9024fa20e8d845219b734d735f4a58079"
         },
         "verified": true,
         "verification_scope": "PINNED_SOURCE_AND_EXISTING_RECEIPTS_ONLY",
@@ -1864,7 +1864,7 @@
     },
     {
       "id": "5",
-      "title_en": "🔁 Formal verification (assertions proved + bit-level full-stack phase2/stage1/tb)",
+      "title_en": "\ud83d\udd01 Formal verification (assertions proved + bit-level full-stack phase2/stage1/tb)",
       "phase": "phase2",
       "canonical_stage": "stage1",
       "current_default": {
@@ -1878,7 +1878,7 @@
         "label_en": "Current source adapter: SymbiYosys (SBY), ABC, Yosys, Icarus Verilog / vvp",
         "source": {
           "repo": "https://github.com/vibeic/vibe-ic",
-          "ref": "fc17c778d9beaf720baf854ec29dbcb83ac61c88",
+          "ref": "428a374dd096ca6ef86a31b691a86dc2b16f29f8",
           "canonical_file": "vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
           "canonical_step_id": "5",
           "programs": [
@@ -1907,8 +1907,8 @@
             }
           ],
           "review_row": "review70_final.json#/rows/step_id=5",
-          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/fc17c778d9beaf720baf854ec29dbcb83ac61c88/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
-          "canonical_blob": "6149fe866cb075492328d27b6981080555d1a7e7"
+          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/428a374dd096ca6ef86a31b691a86dc2b16f29f8/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
+          "canonical_blob": "3d29bfd9024fa20e8d845219b734d735f4a58079"
         },
         "verified": true,
         "verification_scope": "PINNED_SOURCE_AND_EXISTING_RECEIPTS_ONLY",
@@ -2020,7 +2020,7 @@
         "label_en": "Current source adapter: Quartus Prime",
         "source": {
           "repo": "https://github.com/vibeic/vibe-ic",
-          "ref": "fc17c778d9beaf720baf854ec29dbcb83ac61c88",
+          "ref": "428a374dd096ca6ef86a31b691a86dc2b16f29f8",
           "canonical_file": "vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
           "canonical_step_id": "6",
           "programs": [
@@ -2033,8 +2033,8 @@
           ],
           "capture_routes": [],
           "review_row": "review70_final.json#/rows/step_id=6",
-          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/fc17c778d9beaf720baf854ec29dbcb83ac61c88/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
-          "canonical_blob": "6149fe866cb075492328d27b6981080555d1a7e7"
+          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/428a374dd096ca6ef86a31b691a86dc2b16f29f8/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
+          "canonical_blob": "3d29bfd9024fa20e8d845219b734d735f4a58079"
         },
         "verified": true,
         "verification_scope": "PINNED_SOURCE_AND_EXISTING_RECEIPTS_ONLY",
@@ -2159,7 +2159,7 @@
         "label_en": "Current source adapter: Vibe-IC program and evidence gates",
         "source": {
           "repo": "https://github.com/vibeic/vibe-ic",
-          "ref": "fc17c778d9beaf720baf854ec29dbcb83ac61c88",
+          "ref": "428a374dd096ca6ef86a31b691a86dc2b16f29f8",
           "canonical_file": "vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
           "canonical_step_id": "7",
           "programs": [
@@ -2172,8 +2172,8 @@
           ],
           "capture_routes": [],
           "review_row": "review70_final.json#/rows/step_id=7",
-          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/fc17c778d9beaf720baf854ec29dbcb83ac61c88/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
-          "canonical_blob": "6149fe866cb075492328d27b6981080555d1a7e7"
+          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/428a374dd096ca6ef86a31b691a86dc2b16f29f8/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
+          "canonical_blob": "3d29bfd9024fa20e8d845219b734d735f4a58079"
         },
         "verified": true,
         "verification_scope": "PINNED_SOURCE_AND_EXISTING_RECEIPTS_ONLY",
@@ -2261,7 +2261,7 @@
     },
     {
       "id": "8",
-      "title_en": "🔁 SDC validation",
+      "title_en": "\ud83d\udd01 SDC validation",
       "phase": "phase2",
       "canonical_stage": "stage2",
       "current_default": {
@@ -2272,7 +2272,7 @@
         "label_en": "Current source adapter: Vibe-IC program and evidence gates",
         "source": {
           "repo": "https://github.com/vibeic/vibe-ic",
-          "ref": "fc17c778d9beaf720baf854ec29dbcb83ac61c88",
+          "ref": "428a374dd096ca6ef86a31b691a86dc2b16f29f8",
           "canonical_file": "vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
           "canonical_step_id": "8",
           "programs": [
@@ -2282,8 +2282,8 @@
           ],
           "capture_routes": [],
           "review_row": "review70_final.json#/rows/step_id=8",
-          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/fc17c778d9beaf720baf854ec29dbcb83ac61c88/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
-          "canonical_blob": "6149fe866cb075492328d27b6981080555d1a7e7"
+          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/428a374dd096ca6ef86a31b691a86dc2b16f29f8/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
+          "canonical_blob": "3d29bfd9024fa20e8d845219b734d735f4a58079"
         },
         "verified": true,
         "verification_scope": "PINNED_SOURCE_AND_EXISTING_RECEIPTS_ONLY",
@@ -2383,7 +2383,7 @@
     },
     {
       "id": "9",
-      "title_en": "Synthesis (Yosys → mapped netlist)",
+      "title_en": "Synthesis (Yosys \u2192 mapped netlist)",
       "phase": "phase2",
       "canonical_stage": "stage2",
       "current_default": {
@@ -2396,7 +2396,7 @@
         "label_en": "Current source adapter: Yosys, ABC, slang SystemVerilog frontend for Yosys",
         "source": {
           "repo": "https://github.com/vibeic/vibe-ic",
-          "ref": "fc17c778d9beaf720baf854ec29dbcb83ac61c88",
+          "ref": "428a374dd096ca6ef86a31b691a86dc2b16f29f8",
           "canonical_file": "vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
           "canonical_step_id": "9",
           "programs": [
@@ -2414,8 +2414,8 @@
             }
           ],
           "review_row": "review70_final.json#/rows/step_id=9",
-          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/fc17c778d9beaf720baf854ec29dbcb83ac61c88/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
-          "canonical_blob": "6149fe866cb075492328d27b6981080555d1a7e7"
+          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/428a374dd096ca6ef86a31b691a86dc2b16f29f8/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
+          "canonical_blob": "3d29bfd9024fa20e8d845219b734d735f4a58079"
         },
         "verified": true,
         "verification_scope": "PINNED_SOURCE_AND_EXISTING_RECEIPTS_ONLY",
@@ -2561,7 +2561,7 @@
     },
     {
       "id": "10",
-      "title_en": "🔁 Pre-layout STA (multi-corner)",
+      "title_en": "\ud83d\udd01 Pre-layout STA (multi-corner)",
       "phase": "phase2",
       "canonical_stage": "stage2",
       "current_default": {
@@ -2572,7 +2572,7 @@
         "label_en": "Current source adapter: OpenSTA",
         "source": {
           "repo": "https://github.com/vibeic/vibe-ic",
-          "ref": "fc17c778d9beaf720baf854ec29dbcb83ac61c88",
+          "ref": "428a374dd096ca6ef86a31b691a86dc2b16f29f8",
           "canonical_file": "vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
           "canonical_step_id": "10",
           "programs": [
@@ -2580,8 +2580,8 @@
           ],
           "capture_routes": [],
           "review_row": "review70_final.json#/rows/step_id=10",
-          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/fc17c778d9beaf720baf854ec29dbcb83ac61c88/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
-          "canonical_blob": "6149fe866cb075492328d27b6981080555d1a7e7"
+          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/428a374dd096ca6ef86a31b691a86dc2b16f29f8/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
+          "canonical_blob": "3d29bfd9024fa20e8d845219b734d735f4a58079"
         },
         "verified": true,
         "verification_scope": "PINNED_SOURCE_AND_EXISTING_RECEIPTS_ONLY",
@@ -2691,7 +2691,7 @@
         "label_en": "Current source adapter: Fault DFT, Yosys, Icarus Verilog / vvp",
         "source": {
           "repo": "https://github.com/vibeic/vibe-ic",
-          "ref": "fc17c778d9beaf720baf854ec29dbcb83ac61c88",
+          "ref": "428a374dd096ca6ef86a31b691a86dc2b16f29f8",
           "canonical_file": "vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
           "canonical_step_id": "11",
           "programs": [
@@ -2702,8 +2702,8 @@
           ],
           "capture_routes": [],
           "review_row": "review70_final.json#/rows/step_id=11",
-          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/fc17c778d9beaf720baf854ec29dbcb83ac61c88/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
-          "canonical_blob": "6149fe866cb075492328d27b6981080555d1a7e7"
+          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/428a374dd096ca6ef86a31b691a86dc2b16f29f8/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
+          "canonical_blob": "3d29bfd9024fa20e8d845219b734d735f4a58079"
         },
         "verified": true,
         "verification_scope": "PINNED_SOURCE_AND_EXISTING_RECEIPTS_ONLY",
@@ -2818,7 +2818,7 @@
         "label_en": "Current source adapter: Icarus Verilog / vvp",
         "source": {
           "repo": "https://github.com/vibeic/vibe-ic",
-          "ref": "fc17c778d9beaf720baf854ec29dbcb83ac61c88",
+          "ref": "428a374dd096ca6ef86a31b691a86dc2b16f29f8",
           "canonical_file": "vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
           "canonical_step_id": "FS1",
           "programs": [
@@ -2827,8 +2827,8 @@
           ],
           "capture_routes": [],
           "review_row": "review70_final.json#/rows/step_id=FS1",
-          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/fc17c778d9beaf720baf854ec29dbcb83ac61c88/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
-          "canonical_blob": "6149fe866cb075492328d27b6981080555d1a7e7"
+          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/428a374dd096ca6ef86a31b691a86dc2b16f29f8/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
+          "canonical_blob": "3d29bfd9024fa20e8d845219b734d735f4a58079"
         },
         "verified": true,
         "verification_scope": "PINNED_SOURCE_AND_EXISTING_RECEIPTS_ONLY",
@@ -2936,7 +2936,7 @@
         "label_en": "Current source adapter: Fault DFT, Yosys",
         "source": {
           "repo": "https://github.com/vibeic/vibe-ic",
-          "ref": "fc17c778d9beaf720baf854ec29dbcb83ac61c88",
+          "ref": "428a374dd096ca6ef86a31b691a86dc2b16f29f8",
           "canonical_file": "vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
           "canonical_step_id": "DT1",
           "programs": [
@@ -2945,8 +2945,8 @@
           ],
           "capture_routes": [],
           "review_row": "review70_final.json#/rows/step_id=DT1",
-          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/fc17c778d9beaf720baf854ec29dbcb83ac61c88/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
-          "canonical_blob": "6149fe866cb075492328d27b6981080555d1a7e7"
+          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/428a374dd096ca6ef86a31b691a86dc2b16f29f8/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
+          "canonical_blob": "3d29bfd9024fa20e8d845219b734d735f4a58079"
         },
         "verified": true,
         "verification_scope": "PINNED_SOURCE_AND_EXISTING_RECEIPTS_ONLY",
@@ -3054,7 +3054,7 @@
         "label_en": "Current source adapter: Yosys",
         "source": {
           "repo": "https://github.com/vibeic/vibe-ic",
-          "ref": "fc17c778d9beaf720baf854ec29dbcb83ac61c88",
+          "ref": "428a374dd096ca6ef86a31b691a86dc2b16f29f8",
           "canonical_file": "vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
           "canonical_step_id": "12",
           "programs": [
@@ -3062,8 +3062,8 @@
           ],
           "capture_routes": [],
           "review_row": "review70_final.json#/rows/step_id=12",
-          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/fc17c778d9beaf720baf854ec29dbcb83ac61c88/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
-          "canonical_blob": "6149fe866cb075492328d27b6981080555d1a7e7"
+          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/428a374dd096ca6ef86a31b691a86dc2b16f29f8/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
+          "canonical_blob": "3d29bfd9024fa20e8d845219b734d735f4a58079"
         },
         "verified": true,
         "verification_scope": "PINNED_SOURCE_AND_EXISTING_RECEIPTS_ONLY",
@@ -3159,7 +3159,7 @@
     },
     {
       "id": "13",
-      "title_en": "🔁 Equivalence check (RTL ≡ post-DFT netlist)",
+      "title_en": "\ud83d\udd01 Equivalence check (RTL \u2261 post-DFT netlist)",
       "phase": "phase2",
       "canonical_stage": "stage2",
       "current_default": {
@@ -3170,7 +3170,7 @@
         "label_en": "Current source adapter: Yosys",
         "source": {
           "repo": "https://github.com/vibeic/vibe-ic",
-          "ref": "fc17c778d9beaf720baf854ec29dbcb83ac61c88",
+          "ref": "428a374dd096ca6ef86a31b691a86dc2b16f29f8",
           "canonical_file": "vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
           "canonical_step_id": "13",
           "programs": [
@@ -3189,8 +3189,8 @@
             }
           ],
           "review_row": "review70_final.json#/rows/step_id=13",
-          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/fc17c778d9beaf720baf854ec29dbcb83ac61c88/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
-          "canonical_blob": "6149fe866cb075492328d27b6981080555d1a7e7"
+          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/428a374dd096ca6ef86a31b691a86dc2b16f29f8/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
+          "canonical_blob": "3d29bfd9024fa20e8d845219b734d735f4a58079"
         },
         "verified": true,
         "verification_scope": "PINNED_SOURCE_AND_EXISTING_RECEIPTS_ONLY",
@@ -3314,7 +3314,7 @@
         "label_en": "Current source adapter: Vibe-IC program and evidence gates",
         "source": {
           "repo": "https://github.com/vibeic/vibe-ic",
-          "ref": "fc17c778d9beaf720baf854ec29dbcb83ac61c88",
+          "ref": "428a374dd096ca6ef86a31b691a86dc2b16f29f8",
           "canonical_file": "vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
           "canonical_step_id": "A1",
           "programs": [
@@ -3322,8 +3322,8 @@
           ],
           "capture_routes": [],
           "review_row": "review70_final.json#/rows/step_id=A1",
-          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/fc17c778d9beaf720baf854ec29dbcb83ac61c88/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
-          "canonical_blob": "6149fe866cb075492328d27b6981080555d1a7e7"
+          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/428a374dd096ca6ef86a31b691a86dc2b16f29f8/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
+          "canonical_blob": "3d29bfd9024fa20e8d845219b734d735f4a58079"
         },
         "verified": true,
         "verification_scope": "PINNED_SOURCE_AND_EXISTING_RECEIPTS_ONLY",
@@ -3398,7 +3398,7 @@
         "label_en": "Current source adapter: Vibe-IC program and evidence gates",
         "source": {
           "repo": "https://github.com/vibeic/vibe-ic",
-          "ref": "fc17c778d9beaf720baf854ec29dbcb83ac61c88",
+          "ref": "428a374dd096ca6ef86a31b691a86dc2b16f29f8",
           "canonical_file": "vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
           "canonical_step_id": "A2",
           "programs": [
@@ -3412,8 +3412,8 @@
             }
           ],
           "review_row": "review70_final.json#/rows/step_id=A2",
-          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/fc17c778d9beaf720baf854ec29dbcb83ac61c88/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
-          "canonical_blob": "6149fe866cb075492328d27b6981080555d1a7e7"
+          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/428a374dd096ca6ef86a31b691a86dc2b16f29f8/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
+          "canonical_blob": "3d29bfd9024fa20e8d845219b734d735f4a58079"
         },
         "verified": true,
         "verification_scope": "PINNED_SOURCE_AND_EXISTING_RECEIPTS_ONLY",
@@ -3520,7 +3520,7 @@
         "label_en": "Current source adapter: ngspice / XSPICE",
         "source": {
           "repo": "https://github.com/vibeic/vibe-ic",
-          "ref": "fc17c778d9beaf720baf854ec29dbcb83ac61c88",
+          "ref": "428a374dd096ca6ef86a31b691a86dc2b16f29f8",
           "canonical_file": "vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
           "canonical_step_id": "A3",
           "programs": [
@@ -3535,8 +3535,8 @@
             }
           ],
           "review_row": "review70_final.json#/rows/step_id=A3",
-          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/fc17c778d9beaf720baf854ec29dbcb83ac61c88/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
-          "canonical_blob": "6149fe866cb075492328d27b6981080555d1a7e7"
+          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/428a374dd096ca6ef86a31b691a86dc2b16f29f8/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
+          "canonical_blob": "3d29bfd9024fa20e8d845219b734d735f4a58079"
         },
         "verified": true,
         "verification_scope": "PINNED_SOURCE_AND_EXISTING_RECEIPTS_ONLY",
@@ -3644,7 +3644,7 @@
         "label_en": "Current source adapter: ngspice / XSPICE",
         "source": {
           "repo": "https://github.com/vibeic/vibe-ic",
-          "ref": "fc17c778d9beaf720baf854ec29dbcb83ac61c88",
+          "ref": "428a374dd096ca6ef86a31b691a86dc2b16f29f8",
           "canonical_file": "vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
           "canonical_step_id": "A4",
           "programs": [
@@ -3655,8 +3655,8 @@
           ],
           "capture_routes": [],
           "review_row": "review70_final.json#/rows/step_id=A4",
-          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/fc17c778d9beaf720baf854ec29dbcb83ac61c88/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
-          "canonical_blob": "6149fe866cb075492328d27b6981080555d1a7e7"
+          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/428a374dd096ca6ef86a31b691a86dc2b16f29f8/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
+          "canonical_blob": "3d29bfd9024fa20e8d845219b734d735f4a58079"
         },
         "verified": true,
         "verification_scope": "PINNED_SOURCE_AND_EXISTING_RECEIPTS_ONLY",
@@ -3811,7 +3811,7 @@
         "label_en": "Current source adapter: Magic",
         "source": {
           "repo": "https://github.com/vibeic/vibe-ic",
-          "ref": "fc17c778d9beaf720baf854ec29dbcb83ac61c88",
+          "ref": "428a374dd096ca6ef86a31b691a86dc2b16f29f8",
           "canonical_file": "vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
           "canonical_step_id": "A5",
           "programs": [
@@ -3825,8 +3825,8 @@
             }
           ],
           "review_row": "review70_final.json#/rows/step_id=A5",
-          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/fc17c778d9beaf720baf854ec29dbcb83ac61c88/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
-          "canonical_blob": "6149fe866cb075492328d27b6981080555d1a7e7"
+          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/428a374dd096ca6ef86a31b691a86dc2b16f29f8/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
+          "canonical_blob": "3d29bfd9024fa20e8d845219b734d735f4a58079"
         },
         "verified": true,
         "verification_scope": "PINNED_SOURCE_AND_EXISTING_RECEIPTS_ONLY",
@@ -3948,7 +3948,7 @@
         "label_en": "Current source adapter: KLayout, Magic, Vibe-IC KLayout extensions",
         "source": {
           "repo": "https://github.com/vibeic/vibe-ic",
-          "ref": "fc17c778d9beaf720baf854ec29dbcb83ac61c88",
+          "ref": "428a374dd096ca6ef86a31b691a86dc2b16f29f8",
           "canonical_file": "vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
           "canonical_step_id": "A6",
           "programs": [
@@ -3962,8 +3962,8 @@
             }
           ],
           "review_row": "review70_final.json#/rows/step_id=A6",
-          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/fc17c778d9beaf720baf854ec29dbcb83ac61c88/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
-          "canonical_blob": "6149fe866cb075492328d27b6981080555d1a7e7"
+          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/428a374dd096ca6ef86a31b691a86dc2b16f29f8/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
+          "canonical_blob": "3d29bfd9024fa20e8d845219b734d735f4a58079"
         },
         "verified": true,
         "verification_scope": "PINNED_SOURCE_AND_EXISTING_RECEIPTS_ONLY",
@@ -4077,7 +4077,7 @@
     },
     {
       "id": "A7",
-      "title_en": "🔁 Post-Layout Resimulation",
+      "title_en": "\ud83d\udd01 Post-Layout Resimulation",
       "phase": "analog",
       "canonical_stage": "stage_analog",
       "current_default": {
@@ -4088,7 +4088,7 @@
         "label_en": "Current source adapter: Vibe-IC program and evidence gates",
         "source": {
           "repo": "https://github.com/vibeic/vibe-ic",
-          "ref": "fc17c778d9beaf720baf854ec29dbcb83ac61c88",
+          "ref": "428a374dd096ca6ef86a31b691a86dc2b16f29f8",
           "canonical_file": "vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
           "canonical_step_id": "A7",
           "programs": [
@@ -4096,7 +4096,7 @@
           ],
           "capture_routes": [],
           "review_row": "review70_final.json#/rows/step_id=A7",
-          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/fc17c778d9beaf720baf854ec29dbcb83ac61c88/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
+          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/428a374dd096ca6ef86a31b691a86dc2b16f29f8/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
           "active_call_sites": [
             {
               "file": "vibe-ic-marketplace/plugins/vibe-ic/programs/analog_one_shot_runner.py",
@@ -4106,7 +4106,7 @@
               ]
             }
           ],
-          "canonical_blob": "6149fe866cb075492328d27b6981080555d1a7e7"
+          "canonical_blob": "3d29bfd9024fa20e8d845219b734d735f4a58079"
         },
         "verified": true,
         "verification_scope": "PINNED_SOURCE_AND_EXISTING_RECEIPTS_ONLY",
@@ -4260,7 +4260,7 @@
         "label_en": "Current source adapter: Magic",
         "source": {
           "repo": "https://github.com/vibeic/vibe-ic",
-          "ref": "fc17c778d9beaf720baf854ec29dbcb83ac61c88",
+          "ref": "428a374dd096ca6ef86a31b691a86dc2b16f29f8",
           "canonical_file": "vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
           "canonical_step_id": "A8",
           "programs": [
@@ -4272,8 +4272,8 @@
           ],
           "capture_routes": [],
           "review_row": "review70_final.json#/rows/step_id=A8",
-          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/fc17c778d9beaf720baf854ec29dbcb83ac61c88/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
-          "canonical_blob": "6149fe866cb075492328d27b6981080555d1a7e7"
+          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/428a374dd096ca6ef86a31b691a86dc2b16f29f8/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
+          "canonical_blob": "3d29bfd9024fa20e8d845219b734d735f4a58079"
         },
         "verified": true,
         "verification_scope": "PINNED_SOURCE_AND_EXISTING_RECEIPTS_ONLY",
@@ -4391,7 +4391,7 @@
     },
     {
       "id": "A9",
-      "title_en": "🔁 Co-Simulation (+ HW correlation when bench data exists)",
+      "title_en": "\ud83d\udd01 Co-Simulation (+ HW correlation when bench data exists)",
       "phase": "analog",
       "canonical_stage": "stage_analog",
       "current_default": {
@@ -4404,7 +4404,7 @@
         "label_en": "Current source adapter: Vibe-IC program and evidence gates, ngspice / XSPICE, Icarus Verilog / vvp",
         "source": {
           "repo": "https://github.com/vibeic/vibe-ic",
-          "ref": "fc17c778d9beaf720baf854ec29dbcb83ac61c88",
+          "ref": "428a374dd096ca6ef86a31b691a86dc2b16f29f8",
           "canonical_file": "vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
           "canonical_step_id": "A9",
           "programs": [
@@ -4424,7 +4424,7 @@
             }
           ],
           "review_row": "review70_final.json#/rows/step_id=A9",
-          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/fc17c778d9beaf720baf854ec29dbcb83ac61c88/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
+          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/428a374dd096ca6ef86a31b691a86dc2b16f29f8/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
           "active_call_sites": [
             {
               "file": "vibe-ic-marketplace/plugins/vibe-ic/programs/analog_one_shot_runner.py",
@@ -4445,7 +4445,7 @@
               ]
             }
           ],
-          "canonical_blob": "6149fe866cb075492328d27b6981080555d1a7e7"
+          "canonical_blob": "3d29bfd9024fa20e8d845219b734d735f4a58079"
         },
         "verified": true,
         "verification_scope": "PINNED_SOURCE_AND_EXISTING_RECEIPTS_ONLY",
@@ -4609,7 +4609,7 @@
     },
     {
       "id": "14",
-      "title_en": "🔁 Synthesis handoff gate (pre-PnR Yosys script + netlist audit; open-source-flow specific)",
+      "title_en": "\ud83d\udd01 Synthesis handoff gate (pre-PnR Yosys script + netlist audit; open-source-flow specific)",
       "phase": "phase2",
       "canonical_stage": "stage2",
       "current_default": {
@@ -4620,7 +4620,7 @@
         "label_en": "Current source adapter: Vibe-IC program and evidence gates",
         "source": {
           "repo": "https://github.com/vibeic/vibe-ic",
-          "ref": "fc17c778d9beaf720baf854ec29dbcb83ac61c88",
+          "ref": "428a374dd096ca6ef86a31b691a86dc2b16f29f8",
           "canonical_file": "vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
           "canonical_step_id": "14",
           "programs": [
@@ -4649,8 +4649,8 @@
             }
           ],
           "review_row": "review70_final.json#/rows/step_id=14",
-          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/fc17c778d9beaf720baf854ec29dbcb83ac61c88/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
-          "canonical_blob": "6149fe866cb075492328d27b6981080555d1a7e7"
+          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/428a374dd096ca6ef86a31b691a86dc2b16f29f8/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
+          "canonical_blob": "3d29bfd9024fa20e8d845219b734d735f4a58079"
         },
         "verified": true,
         "verification_scope": "PINNED_SOURCE_AND_EXISTING_RECEIPTS_ONLY",
@@ -4750,7 +4750,7 @@
         "label_en": "Chip pad-ring: LibreLane; core-only/hardmacro: direct adapter",
         "source": {
           "repo": "https://github.com/vibeic/vibe-ic",
-          "ref": "fc17c778d9beaf720baf854ec29dbcb83ac61c88",
+          "ref": "428a374dd096ca6ef86a31b691a86dc2b16f29f8",
           "canonical_file": "vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
           "canonical_step_id": "15",
           "programs": [
@@ -4762,8 +4762,8 @@
           ],
           "capture_routes": [],
           "review_row": "review70_final.json#/rows/step_id=15",
-          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/fc17c778d9beaf720baf854ec29dbcb83ac61c88/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
-          "canonical_blob": "6149fe866cb075492328d27b6981080555d1a7e7"
+          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/428a374dd096ca6ef86a31b691a86dc2b16f29f8/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
+          "canonical_blob": "3d29bfd9024fa20e8d845219b734d735f4a58079"
         },
         "verified": true,
         "verification_scope": "PINNED_SOURCE_AND_EXISTING_RECEIPTS_ONLY",
@@ -4893,7 +4893,7 @@
         "label_en": "Chip pad-ring: LibreLane; core-only/hardmacro: direct adapter",
         "source": {
           "repo": "https://github.com/vibeic/vibe-ic",
-          "ref": "fc17c778d9beaf720baf854ec29dbcb83ac61c88",
+          "ref": "428a374dd096ca6ef86a31b691a86dc2b16f29f8",
           "canonical_file": "vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
           "canonical_step_id": "15.5ic",
           "programs": [
@@ -4910,8 +4910,8 @@
             }
           ],
           "review_row": "review70_final.json#/rows/step_id=15.5ic",
-          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/fc17c778d9beaf720baf854ec29dbcb83ac61c88/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
-          "canonical_blob": "6149fe866cb075492328d27b6981080555d1a7e7"
+          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/428a374dd096ca6ef86a31b691a86dc2b16f29f8/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
+          "canonical_blob": "3d29bfd9024fa20e8d845219b734d735f4a58079"
         },
         "verified": true,
         "verification_scope": "PINNED_SOURCE_AND_EXISTING_RECEIPTS_ONLY",
@@ -5023,7 +5023,7 @@
         "label_en": "Current source adapter: Vibe-IC program and evidence gates",
         "source": {
           "repo": "https://github.com/vibeic/vibe-ic",
-          "ref": "fc17c778d9beaf720baf854ec29dbcb83ac61c88",
+          "ref": "428a374dd096ca6ef86a31b691a86dc2b16f29f8",
           "canonical_file": "vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
           "canonical_step_id": "16",
           "programs": [
@@ -5031,8 +5031,8 @@
           ],
           "capture_routes": [],
           "review_row": "review70_final.json#/rows/step_id=16",
-          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/fc17c778d9beaf720baf854ec29dbcb83ac61c88/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
-          "canonical_blob": "6149fe866cb075492328d27b6981080555d1a7e7"
+          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/428a374dd096ca6ef86a31b691a86dc2b16f29f8/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
+          "canonical_blob": "3d29bfd9024fa20e8d845219b734d735f4a58079"
         },
         "verified": true,
         "verification_scope": "PINNED_SOURCE_AND_EXISTING_RECEIPTS_ONLY",
@@ -5126,7 +5126,7 @@
         "label_en": "Chip pad-ring: LibreLane; core-only/hardmacro: direct adapter",
         "source": {
           "repo": "https://github.com/vibeic/vibe-ic",
-          "ref": "fc17c778d9beaf720baf854ec29dbcb83ac61c88",
+          "ref": "428a374dd096ca6ef86a31b691a86dc2b16f29f8",
           "canonical_file": "vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
           "canonical_step_id": "17",
           "programs": [
@@ -5135,8 +5135,8 @@
           ],
           "capture_routes": [],
           "review_row": "review70_final.json#/rows/step_id=17",
-          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/fc17c778d9beaf720baf854ec29dbcb83ac61c88/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
-          "canonical_blob": "6149fe866cb075492328d27b6981080555d1a7e7"
+          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/428a374dd096ca6ef86a31b691a86dc2b16f29f8/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
+          "canonical_blob": "3d29bfd9024fa20e8d845219b734d735f4a58079"
         },
         "verified": true,
         "verification_scope": "PINNED_SOURCE_AND_EXISTING_RECEIPTS_ONLY",
@@ -5247,7 +5247,7 @@
         "label_en": "Chip pad-ring: LibreLane; core-only/hardmacro: direct adapter",
         "source": {
           "repo": "https://github.com/vibeic/vibe-ic",
-          "ref": "fc17c778d9beaf720baf854ec29dbcb83ac61c88",
+          "ref": "428a374dd096ca6ef86a31b691a86dc2b16f29f8",
           "canonical_file": "vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
           "canonical_step_id": "18",
           "programs": [
@@ -5255,8 +5255,8 @@
           ],
           "capture_routes": [],
           "review_row": "review70_final.json#/rows/step_id=18",
-          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/fc17c778d9beaf720baf854ec29dbcb83ac61c88/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
-          "canonical_blob": "6149fe866cb075492328d27b6981080555d1a7e7"
+          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/428a374dd096ca6ef86a31b691a86dc2b16f29f8/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
+          "canonical_blob": "3d29bfd9024fa20e8d845219b734d735f4a58079"
         },
         "verified": true,
         "verification_scope": "PINNED_SOURCE_AND_EXISTING_RECEIPTS_ONLY",
@@ -5347,6 +5347,7 @@
         "spare_cell_coverage_check"
       ],
       "required_output_contract": [
+        "phase3/stage3/pnr/post_spare.def",
         "phase3/stage3/pnr/spare_cells.json",
         "reports/spare_cell_coverage.json"
       ],
@@ -5366,7 +5367,7 @@
         "label_en": "Chip pad-ring: LibreLane; core-only/hardmacro: direct adapter",
         "source": {
           "repo": "https://github.com/vibeic/vibe-ic",
-          "ref": "fc17c778d9beaf720baf854ec29dbcb83ac61c88",
+          "ref": "428a374dd096ca6ef86a31b691a86dc2b16f29f8",
           "canonical_file": "vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
           "canonical_step_id": "19",
           "programs": [
@@ -5374,8 +5375,8 @@
           ],
           "capture_routes": [],
           "review_row": "review70_final.json#/rows/step_id=19",
-          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/fc17c778d9beaf720baf854ec29dbcb83ac61c88/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
-          "canonical_blob": "6149fe866cb075492328d27b6981080555d1a7e7"
+          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/428a374dd096ca6ef86a31b691a86dc2b16f29f8/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
+          "canonical_blob": "3d29bfd9024fa20e8d845219b734d735f4a58079"
         },
         "verified": true,
         "verification_scope": "PINNED_SOURCE_AND_EXISTING_RECEIPTS_ONLY",
@@ -5473,7 +5474,7 @@
     },
     {
       "id": "20",
-      "title_en": "🔁 Post-CTS hold fixing",
+      "title_en": "\ud83d\udd01 Post-CTS hold fixing",
       "phase": "phase3",
       "canonical_stage": "stage3",
       "current_default": {
@@ -5485,7 +5486,7 @@
         "label_en": "Chip pad-ring: LibreLane; core-only/hardmacro: direct adapter",
         "source": {
           "repo": "https://github.com/vibeic/vibe-ic",
-          "ref": "fc17c778d9beaf720baf854ec29dbcb83ac61c88",
+          "ref": "428a374dd096ca6ef86a31b691a86dc2b16f29f8",
           "canonical_file": "vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
           "canonical_step_id": "20",
           "programs": [
@@ -5494,8 +5495,8 @@
           ],
           "capture_routes": [],
           "review_row": "review70_final.json#/rows/step_id=20",
-          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/fc17c778d9beaf720baf854ec29dbcb83ac61c88/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
-          "canonical_blob": "6149fe866cb075492328d27b6981080555d1a7e7"
+          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/428a374dd096ca6ef86a31b691a86dc2b16f29f8/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
+          "canonical_blob": "3d29bfd9024fa20e8d845219b734d735f4a58079"
         },
         "verified": true,
         "verification_scope": "PINNED_SOURCE_AND_EXISTING_RECEIPTS_ONLY",
@@ -5605,7 +5606,7 @@
         "label_en": "Chip pad-ring: LibreLane; core-only/hardmacro: direct adapter",
         "source": {
           "repo": "https://github.com/vibeic/vibe-ic",
-          "ref": "fc17c778d9beaf720baf854ec29dbcb83ac61c88",
+          "ref": "428a374dd096ca6ef86a31b691a86dc2b16f29f8",
           "canonical_file": "vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
           "canonical_step_id": "21",
           "programs": [
@@ -5617,8 +5618,8 @@
           ],
           "capture_routes": [],
           "review_row": "review70_final.json#/rows/step_id=21",
-          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/fc17c778d9beaf720baf854ec29dbcb83ac61c88/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
-          "canonical_blob": "6149fe866cb075492328d27b6981080555d1a7e7"
+          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/428a374dd096ca6ef86a31b691a86dc2b16f29f8/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
+          "canonical_blob": "3d29bfd9024fa20e8d845219b734d735f4a58079"
         },
         "verified": true,
         "verification_scope": "PINNED_SOURCE_AND_EXISTING_RECEIPTS_ONLY",
@@ -5753,7 +5754,7 @@
     },
     {
       "id": "22",
-      "title_en": "Parasitic Extraction (RC → SPEF)",
+      "title_en": "Parasitic Extraction (RC \u2192 SPEF)",
       "phase": "phase3",
       "canonical_stage": "stage3",
       "current_default": {
@@ -5765,7 +5766,7 @@
         "label_en": "Current source adapter: OpenRCX, Vibe-IC program and evidence gates",
         "source": {
           "repo": "https://github.com/vibeic/vibe-ic",
-          "ref": "fc17c778d9beaf720baf854ec29dbcb83ac61c88",
+          "ref": "428a374dd096ca6ef86a31b691a86dc2b16f29f8",
           "canonical_file": "vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
           "canonical_step_id": "22",
           "programs": [
@@ -5774,8 +5775,8 @@
           ],
           "capture_routes": [],
           "review_row": "review70_final.json#/rows/step_id=22",
-          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/fc17c778d9beaf720baf854ec29dbcb83ac61c88/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
-          "canonical_blob": "6149fe866cb075492328d27b6981080555d1a7e7"
+          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/428a374dd096ca6ef86a31b691a86dc2b16f29f8/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
+          "canonical_blob": "3d29bfd9024fa20e8d845219b734d735f4a58079"
         },
         "verified": true,
         "verification_scope": "PINNED_SOURCE_AND_EXISTING_RECEIPTS_ONLY",
@@ -5930,7 +5931,7 @@
         "label_en": "Current source adapter: OpenSTA, Yosys",
         "source": {
           "repo": "https://github.com/vibeic/vibe-ic",
-          "ref": "fc17c778d9beaf720baf854ec29dbcb83ac61c88",
+          "ref": "428a374dd096ca6ef86a31b691a86dc2b16f29f8",
           "canonical_file": "vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
           "canonical_step_id": "DT2",
           "programs": [
@@ -5939,8 +5940,8 @@
           ],
           "capture_routes": [],
           "review_row": "review70_final.json#/rows/step_id=DT2",
-          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/fc17c778d9beaf720baf854ec29dbcb83ac61c88/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
-          "canonical_blob": "6149fe866cb075492328d27b6981080555d1a7e7"
+          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/428a374dd096ca6ef86a31b691a86dc2b16f29f8/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
+          "canonical_blob": "3d29bfd9024fa20e8d845219b734d735f4a58079"
         },
         "verified": true,
         "verification_scope": "PINNED_SOURCE_AND_EXISTING_RECEIPTS_ONLY",
@@ -6050,7 +6051,7 @@
         "label_en": "Current source adapter: OpenSTA, Yosys, Vibe-IC program and evidence gates",
         "source": {
           "repo": "https://github.com/vibeic/vibe-ic",
-          "ref": "fc17c778d9beaf720baf854ec29dbcb83ac61c88",
+          "ref": "428a374dd096ca6ef86a31b691a86dc2b16f29f8",
           "canonical_file": "vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
           "canonical_step_id": "DT3",
           "programs": [
@@ -6059,8 +6060,8 @@
           ],
           "capture_routes": [],
           "review_row": "review70_final.json#/rows/step_id=DT3",
-          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/fc17c778d9beaf720baf854ec29dbcb83ac61c88/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
-          "canonical_blob": "6149fe866cb075492328d27b6981080555d1a7e7"
+          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/428a374dd096ca6ef86a31b691a86dc2b16f29f8/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
+          "canonical_blob": "3d29bfd9024fa20e8d845219b734d735f4a58079"
         },
         "verified": true,
         "verification_scope": "PINNED_SOURCE_AND_EXISTING_RECEIPTS_ONLY",
@@ -6142,7 +6143,7 @@
     },
     {
       "id": "32",
-      "title_en": "🔁 Post-route timing repair pass (multi-corner repair_design + repair_timing + reroute)",
+      "title_en": "\ud83d\udd01 Post-route timing repair pass (multi-corner repair_design + repair_timing + reroute)",
       "phase": "phase3",
       "canonical_stage": "stage3",
       "current_default": {
@@ -6155,7 +6156,7 @@
         "label_en": "Chip pad-ring: LibreLane; core-only/hardmacro: direct adapter",
         "source": {
           "repo": "https://github.com/vibeic/vibe-ic",
-          "ref": "fc17c778d9beaf720baf854ec29dbcb83ac61c88",
+          "ref": "428a374dd096ca6ef86a31b691a86dc2b16f29f8",
           "canonical_file": "vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
           "canonical_step_id": "32",
           "programs": [
@@ -6164,8 +6165,8 @@
           ],
           "capture_routes": [],
           "review_row": "review70_final.json#/rows/step_id=32",
-          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/fc17c778d9beaf720baf854ec29dbcb83ac61c88/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
-          "canonical_blob": "6149fe866cb075492328d27b6981080555d1a7e7"
+          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/428a374dd096ca6ef86a31b691a86dc2b16f29f8/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
+          "canonical_blob": "3d29bfd9024fa20e8d845219b734d735f4a58079"
         },
         "verified": true,
         "verification_scope": "PINNED_SOURCE_AND_EXISTING_RECEIPTS_ONLY",
@@ -6280,7 +6281,7 @@
     },
     {
       "id": "23",
-      "title_en": "🔁 Post-route STA (multi-corner multi-mode sign-off)",
+      "title_en": "\ud83d\udd01 Post-route STA (multi-corner multi-mode sign-off)",
       "phase": "phase3",
       "canonical_stage": "stage3",
       "current_default": {
@@ -6292,7 +6293,7 @@
         "label_en": "Current source adapter: OpenROAD, OpenSTA",
         "source": {
           "repo": "https://github.com/vibeic/vibe-ic",
-          "ref": "fc17c778d9beaf720baf854ec29dbcb83ac61c88",
+          "ref": "428a374dd096ca6ef86a31b691a86dc2b16f29f8",
           "canonical_file": "vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
           "canonical_step_id": "23",
           "programs": [
@@ -6314,8 +6315,8 @@
             }
           ],
           "review_row": "review70_final.json#/rows/step_id=23",
-          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/fc17c778d9beaf720baf854ec29dbcb83ac61c88/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
-          "canonical_blob": "6149fe866cb075492328d27b6981080555d1a7e7"
+          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/428a374dd096ca6ef86a31b691a86dc2b16f29f8/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
+          "canonical_blob": "3d29bfd9024fa20e8d845219b734d735f4a58079"
         },
         "verified": true,
         "verification_scope": "PINNED_SOURCE_AND_EXISTING_RECEIPTS_ONLY",
@@ -6457,7 +6458,7 @@
     },
     {
       "id": "24",
-      "title_en": "🔁 IR Drop (static + dynamic)",
+      "title_en": "\ud83d\udd01 IR Drop (static + dynamic)",
       "phase": "phase3",
       "canonical_stage": "stage3",
       "current_default": {
@@ -6469,7 +6470,7 @@
         "label_en": "Current source adapter: OpenROAD, Vibe-IC OpenROAD fork",
         "source": {
           "repo": "https://github.com/vibeic/vibe-ic",
-          "ref": "fc17c778d9beaf720baf854ec29dbcb83ac61c88",
+          "ref": "428a374dd096ca6ef86a31b691a86dc2b16f29f8",
           "canonical_file": "vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
           "canonical_step_id": "24",
           "programs": [
@@ -6478,8 +6479,8 @@
           ],
           "capture_routes": [],
           "review_row": "review70_final.json#/rows/step_id=24",
-          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/fc17c778d9beaf720baf854ec29dbcb83ac61c88/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
-          "canonical_blob": "6149fe866cb075492328d27b6981080555d1a7e7"
+          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/428a374dd096ca6ef86a31b691a86dc2b16f29f8/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
+          "canonical_blob": "3d29bfd9024fa20e8d845219b734d735f4a58079"
         },
         "verified": true,
         "verification_scope": "PINNED_SOURCE_AND_EXISTING_RECEIPTS_ONLY",
@@ -6626,7 +6627,7 @@
     },
     {
       "id": "25",
-      "title_en": "🔁 EM check (electromigration lifetime)",
+      "title_en": "\ud83d\udd01 EM check (electromigration lifetime)",
       "phase": "phase3",
       "canonical_stage": "stage3",
       "current_default": {
@@ -6638,7 +6639,7 @@
         "label_en": "Current source adapter: OpenROAD, Vibe-IC program and evidence gates",
         "source": {
           "repo": "https://github.com/vibeic/vibe-ic",
-          "ref": "fc17c778d9beaf720baf854ec29dbcb83ac61c88",
+          "ref": "428a374dd096ca6ef86a31b691a86dc2b16f29f8",
           "canonical_file": "vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
           "canonical_step_id": "25",
           "programs": [
@@ -6647,8 +6648,8 @@
           ],
           "capture_routes": [],
           "review_row": "review70_final.json#/rows/step_id=25",
-          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/fc17c778d9beaf720baf854ec29dbcb83ac61c88/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
-          "canonical_blob": "6149fe866cb075492328d27b6981080555d1a7e7"
+          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/428a374dd096ca6ef86a31b691a86dc2b16f29f8/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
+          "canonical_blob": "3d29bfd9024fa20e8d845219b734d735f4a58079"
         },
         "verified": true,
         "verification_scope": "PINNED_SOURCE_AND_EXISTING_RECEIPTS_ONLY",
@@ -6749,7 +6750,7 @@
     },
     {
       "id": "26",
-      "title_en": "🔁 Antenna check (gate-oxide protection)",
+      "title_en": "\ud83d\udd01 Antenna check (gate-oxide protection)",
       "phase": "phase3",
       "canonical_stage": "stage3",
       "current_default": {
@@ -6761,7 +6762,7 @@
         "label_en": "Current source adapter: OpenROAD, Vibe-IC KLayout extensions",
         "source": {
           "repo": "https://github.com/vibeic/vibe-ic",
-          "ref": "fc17c778d9beaf720baf854ec29dbcb83ac61c88",
+          "ref": "428a374dd096ca6ef86a31b691a86dc2b16f29f8",
           "canonical_file": "vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
           "canonical_step_id": "26",
           "programs": [
@@ -6770,8 +6771,8 @@
           ],
           "capture_routes": [],
           "review_row": "review70_final.json#/rows/step_id=26",
-          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/fc17c778d9beaf720baf854ec29dbcb83ac61c88/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
-          "canonical_blob": "6149fe866cb075492328d27b6981080555d1a7e7"
+          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/428a374dd096ca6ef86a31b691a86dc2b16f29f8/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
+          "canonical_blob": "3d29bfd9024fa20e8d845219b734d735f4a58079"
         },
         "verified": true,
         "verification_scope": "PINNED_SOURCE_AND_EXISTING_RECEIPTS_ONLY",
@@ -6902,7 +6903,7 @@
     },
     {
       "id": "26.5ic",
-      "title_en": "Die Finishing — seal ring + die identification (chip/IC path only)",
+      "title_en": "Die Finishing \u2014 seal ring + die identification (chip/IC path only)",
       "phase": "phase3",
       "canonical_stage": "stage3",
       "current_default": {
@@ -6913,7 +6914,7 @@
         "label_en": "Current source adapter: KLayout",
         "source": {
           "repo": "https://github.com/vibeic/vibe-ic",
-          "ref": "fc17c778d9beaf720baf854ec29dbcb83ac61c88",
+          "ref": "428a374dd096ca6ef86a31b691a86dc2b16f29f8",
           "canonical_file": "vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
           "canonical_step_id": "26.5ic",
           "programs": [
@@ -6928,8 +6929,8 @@
             }
           ],
           "review_row": "review70_final.json#/rows/step_id=26.5ic",
-          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/fc17c778d9beaf720baf854ec29dbcb83ac61c88/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
-          "canonical_blob": "6149fe866cb075492328d27b6981080555d1a7e7"
+          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/428a374dd096ca6ef86a31b691a86dc2b16f29f8/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
+          "canonical_blob": "3d29bfd9024fa20e8d845219b734d735f4a58079"
         },
         "verified": true,
         "verification_scope": "PINNED_SOURCE_AND_EXISTING_RECEIPTS_ONLY",
@@ -7027,7 +7028,7 @@
     },
     {
       "id": "27",
-      "title_en": "🔁 Signal Integrity (Crosstalk / Noise / Glitch + MCF crosstalk-delay)",
+      "title_en": "\ud83d\udd01 Signal Integrity (Crosstalk / Noise / Glitch + MCF crosstalk-delay)",
       "phase": "phase3",
       "canonical_stage": "stage3",
       "current_default": {
@@ -7039,7 +7040,7 @@
         "label_en": "Current source adapter: OpenSTA, Vibe-IC OpenROAD fork",
         "source": {
           "repo": "https://github.com/vibeic/vibe-ic",
-          "ref": "fc17c778d9beaf720baf854ec29dbcb83ac61c88",
+          "ref": "428a374dd096ca6ef86a31b691a86dc2b16f29f8",
           "canonical_file": "vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
           "canonical_step_id": "27",
           "programs": [
@@ -7049,8 +7050,8 @@
           ],
           "capture_routes": [],
           "review_row": "review70_final.json#/rows/step_id=27",
-          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/fc17c778d9beaf720baf854ec29dbcb83ac61c88/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
-          "canonical_blob": "6149fe866cb075492328d27b6981080555d1a7e7"
+          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/428a374dd096ca6ef86a31b691a86dc2b16f29f8/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
+          "canonical_blob": "3d29bfd9024fa20e8d845219b734d735f4a58079"
         },
         "verified": true,
         "verification_scope": "PINNED_SOURCE_AND_EXISTING_RECEIPTS_ONLY",
@@ -7166,7 +7167,7 @@
     },
     {
       "id": "28",
-      "title_en": "🔁 PERC / Reliability sign-off (ESD + latch-up + cross-domain)",
+      "title_en": "\ud83d\udd01 PERC / Reliability sign-off (ESD + latch-up + cross-domain)",
       "phase": "phase3",
       "canonical_stage": "stage3",
       "current_default": {
@@ -7178,7 +7179,7 @@
         "label_en": "Current source adapter: KLayout, Vibe-IC program and evidence gates",
         "source": {
           "repo": "https://github.com/vibeic/vibe-ic",
-          "ref": "fc17c778d9beaf720baf854ec29dbcb83ac61c88",
+          "ref": "428a374dd096ca6ef86a31b691a86dc2b16f29f8",
           "canonical_file": "vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
           "canonical_step_id": "28",
           "programs": [
@@ -7186,8 +7187,8 @@
           ],
           "capture_routes": [],
           "review_row": "review70_final.json#/rows/step_id=28",
-          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/fc17c778d9beaf720baf854ec29dbcb83ac61c88/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
-          "canonical_blob": "6149fe866cb075492328d27b6981080555d1a7e7"
+          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/428a374dd096ca6ef86a31b691a86dc2b16f29f8/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
+          "canonical_blob": "3d29bfd9024fa20e8d845219b734d735f4a58079"
         },
         "verified": true,
         "verification_scope": "PINNED_SOURCE_AND_EXISTING_RECEIPTS_ONLY",
@@ -7298,7 +7299,7 @@
         "label_en": "Current source adapter: OpenSTA, Icarus Verilog / vvp",
         "source": {
           "repo": "https://github.com/vibeic/vibe-ic",
-          "ref": "fc17c778d9beaf720baf854ec29dbcb83ac61c88",
+          "ref": "428a374dd096ca6ef86a31b691a86dc2b16f29f8",
           "canonical_file": "vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
           "canonical_step_id": "29",
           "programs": [
@@ -7307,8 +7308,8 @@
           ],
           "capture_routes": [],
           "review_row": "review70_final.json#/rows/step_id=29",
-          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/fc17c778d9beaf720baf854ec29dbcb83ac61c88/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
-          "canonical_blob": "6149fe866cb075492328d27b6981080555d1a7e7"
+          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/428a374dd096ca6ef86a31b691a86dc2b16f29f8/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
+          "canonical_blob": "3d29bfd9024fa20e8d845219b734d735f4a58079"
         },
         "verified": true,
         "verification_scope": "PINNED_SOURCE_AND_EXISTING_RECEIPTS_ONLY",
@@ -7434,7 +7435,7 @@
         "label_en": "Current source adapter: ngspice / XSPICE, OpenSTA",
         "source": {
           "repo": "https://github.com/vibeic/vibe-ic",
-          "ref": "fc17c778d9beaf720baf854ec29dbcb83ac61c88",
+          "ref": "428a374dd096ca6ef86a31b691a86dc2b16f29f8",
           "canonical_file": "vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
           "canonical_step_id": "30",
           "programs": [
@@ -7442,8 +7443,8 @@
           ],
           "capture_routes": [],
           "review_row": "review70_final.json#/rows/step_id=30",
-          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/fc17c778d9beaf720baf854ec29dbcb83ac61c88/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
-          "canonical_blob": "6149fe866cb075492328d27b6981080555d1a7e7"
+          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/428a374dd096ca6ef86a31b691a86dc2b16f29f8/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
+          "canonical_blob": "3d29bfd9024fa20e8d845219b734d735f4a58079"
         },
         "verified": true,
         "verification_scope": "PINNED_SOURCE_AND_EXISTING_RECEIPTS_ONLY",
@@ -7582,7 +7583,7 @@
         "label_en": "Current source adapter: OpenSTA",
         "source": {
           "repo": "https://github.com/vibeic/vibe-ic",
-          "ref": "fc17c778d9beaf720baf854ec29dbcb83ac61c88",
+          "ref": "428a374dd096ca6ef86a31b691a86dc2b16f29f8",
           "canonical_file": "vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
           "canonical_step_id": "33",
           "programs": [
@@ -7592,8 +7593,8 @@
           ],
           "capture_routes": [],
           "review_row": "review70_final.json#/rows/step_id=33",
-          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/fc17c778d9beaf720baf854ec29dbcb83ac61c88/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
-          "canonical_blob": "6149fe866cb075492328d27b6981080555d1a7e7"
+          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/428a374dd096ca6ef86a31b691a86dc2b16f29f8/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
+          "canonical_blob": "3d29bfd9024fa20e8d845219b734d735f4a58079"
         },
         "verified": true,
         "verification_scope": "PINNED_SOURCE_AND_EXISTING_RECEIPTS_ONLY",
@@ -7721,7 +7722,7 @@
         "label_en": "Current source adapter: OpenROAD, KLayout, Vibe-IC KLayout extensions",
         "source": {
           "repo": "https://github.com/vibeic/vibe-ic",
-          "ref": "fc17c778d9beaf720baf854ec29dbcb83ac61c88",
+          "ref": "428a374dd096ca6ef86a31b691a86dc2b16f29f8",
           "canonical_file": "vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
           "canonical_step_id": "34",
           "programs": [
@@ -7731,8 +7732,8 @@
           ],
           "capture_routes": [],
           "review_row": "review70_final.json#/rows/step_id=34",
-          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/fc17c778d9beaf720baf854ec29dbcb83ac61c88/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
-          "canonical_blob": "6149fe866cb075492328d27b6981080555d1a7e7"
+          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/428a374dd096ca6ef86a31b691a86dc2b16f29f8/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
+          "canonical_blob": "3d29bfd9024fa20e8d845219b734d735f4a58079"
         },
         "verified": true,
         "verification_scope": "PINNED_SOURCE_AND_EXISTING_RECEIPTS_ONLY",
@@ -7890,7 +7891,7 @@
         "label_en": "Current source adapter: Vibe-IC program and evidence gates",
         "source": {
           "repo": "https://github.com/vibeic/vibe-ic",
-          "ref": "fc17c778d9beaf720baf854ec29dbcb83ac61c88",
+          "ref": "428a374dd096ca6ef86a31b691a86dc2b16f29f8",
           "canonical_file": "vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
           "canonical_step_id": "35",
           "programs": [
@@ -7899,8 +7900,8 @@
           ],
           "capture_routes": [],
           "review_row": "review70_final.json#/rows/step_id=35",
-          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/fc17c778d9beaf720baf854ec29dbcb83ac61c88/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
-          "canonical_blob": "6149fe866cb075492328d27b6981080555d1a7e7"
+          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/428a374dd096ca6ef86a31b691a86dc2b16f29f8/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
+          "canonical_blob": "3d29bfd9024fa20e8d845219b734d735f4a58079"
         },
         "verified": true,
         "verification_scope": "PINNED_SOURCE_AND_EXISTING_RECEIPTS_ONLY",
@@ -8040,7 +8041,7 @@
         "label_en": "Current source adapter: Magic, KLayout, Vibe-IC program and evidence gates",
         "source": {
           "repo": "https://github.com/vibeic/vibe-ic",
-          "ref": "fc17c778d9beaf720baf854ec29dbcb83ac61c88",
+          "ref": "428a374dd096ca6ef86a31b691a86dc2b16f29f8",
           "canonical_file": "vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
           "canonical_step_id": "37",
           "programs": [
@@ -8058,8 +8059,8 @@
           ],
           "capture_routes": [],
           "review_row": "review70_final.json#/rows/step_id=37",
-          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/fc17c778d9beaf720baf854ec29dbcb83ac61c88/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
-          "canonical_blob": "6149fe866cb075492328d27b6981080555d1a7e7"
+          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/428a374dd096ca6ef86a31b691a86dc2b16f29f8/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
+          "canonical_blob": "3d29bfd9024fa20e8d845219b734d735f4a58079"
         },
         "verified": true,
         "verification_scope": "PINNED_SOURCE_AND_EXISTING_RECEIPTS_ONLY",
@@ -8187,7 +8188,7 @@
     },
     {
       "id": "37.3",
-      "title_en": "GDS stream-out / finishing fidelity — the shipped GDS XOR'd against this run's own pre-finishing boundary",
+      "title_en": "GDS stream-out / finishing fidelity \u2014 the shipped GDS XOR'd against this run's own pre-finishing boundary",
       "phase": "phase3",
       "canonical_stage": "stage4",
       "current_default": {
@@ -8198,7 +8199,7 @@
         "label_en": "Current source adapter: KLayout",
         "source": {
           "repo": "https://github.com/vibeic/vibe-ic",
-          "ref": "fc17c778d9beaf720baf854ec29dbcb83ac61c88",
+          "ref": "428a374dd096ca6ef86a31b691a86dc2b16f29f8",
           "canonical_file": "vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
           "canonical_step_id": "37.3",
           "programs": [
@@ -8206,8 +8207,8 @@
           ],
           "capture_routes": [],
           "review_row": "review70_final.json#/rows/step_id=37.3",
-          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/fc17c778d9beaf720baf854ec29dbcb83ac61c88/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
-          "canonical_blob": "6149fe866cb075492328d27b6981080555d1a7e7"
+          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/428a374dd096ca6ef86a31b691a86dc2b16f29f8/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
+          "canonical_blob": "3d29bfd9024fa20e8d845219b734d735f4a58079"
         },
         "verified": true,
         "verification_scope": "PINNED_SOURCE_AND_EXISTING_RECEIPTS_ONLY",
@@ -8304,7 +8305,7 @@
     },
     {
       "id": "31",
-      "title_en": "🔁 Physical Verification (DRC + LVS + ERC + Density)",
+      "title_en": "\ud83d\udd01 Physical Verification (DRC + LVS + ERC + Density)",
       "phase": "phase3",
       "canonical_stage": "stage4",
       "current_default": {
@@ -8318,7 +8319,7 @@
         "label_en": "Current source adapter: KLayout, Magic, Netgen LVS, Vibe-IC KLayout extensions",
         "source": {
           "repo": "https://github.com/vibeic/vibe-ic",
-          "ref": "fc17c778d9beaf720baf854ec29dbcb83ac61c88",
+          "ref": "428a374dd096ca6ef86a31b691a86dc2b16f29f8",
           "canonical_file": "vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
           "canonical_step_id": "31",
           "programs": [
@@ -8340,8 +8341,8 @@
           ],
           "capture_routes": [],
           "review_row": "review70_final.json#/rows/step_id=31",
-          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/fc17c778d9beaf720baf854ec29dbcb83ac61c88/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
-          "canonical_blob": "6149fe866cb075492328d27b6981080555d1a7e7"
+          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/428a374dd096ca6ef86a31b691a86dc2b16f29f8/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
+          "canonical_blob": "3d29bfd9024fa20e8d845219b734d735f4a58079"
         },
         "verified": true,
         "verification_scope": "PINNED_SOURCE_AND_EXISTING_RECEIPTS_ONLY",
@@ -8515,7 +8516,7 @@
         "label_en": "Current source adapter: Vibe-IC program and evidence gates",
         "source": {
           "repo": "https://github.com/vibeic/vibe-ic",
-          "ref": "fc17c778d9beaf720baf854ec29dbcb83ac61c88",
+          "ref": "428a374dd096ca6ef86a31b691a86dc2b16f29f8",
           "canonical_file": "vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
           "canonical_step_id": "36",
           "programs": [
@@ -8527,8 +8528,8 @@
           ],
           "capture_routes": [],
           "review_row": "review70_final.json#/rows/step_id=36",
-          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/fc17c778d9beaf720baf854ec29dbcb83ac61c88/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
-          "canonical_blob": "6149fe866cb075492328d27b6981080555d1a7e7"
+          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/428a374dd096ca6ef86a31b691a86dc2b16f29f8/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
+          "canonical_blob": "3d29bfd9024fa20e8d845219b734d735f4a58079"
         },
         "verified": true,
         "verification_scope": "PINNED_SOURCE_AND_EXISTING_RECEIPTS_ONLY",
@@ -8598,7 +8599,7 @@
     },
     {
       "id": "37.4",
-      "title_en": "Sign-off metrics aggregation — the run's own checker verdicts, under the names the release documents read",
+      "title_en": "Sign-off metrics aggregation \u2014 the run's own checker verdicts, under the names the release documents read",
       "phase": "phase3",
       "canonical_stage": "stage4",
       "current_default": {
@@ -8609,7 +8610,7 @@
         "label_en": "Current source adapter: Vibe-IC program and evidence gates",
         "source": {
           "repo": "https://github.com/vibeic/vibe-ic",
-          "ref": "fc17c778d9beaf720baf854ec29dbcb83ac61c88",
+          "ref": "428a374dd096ca6ef86a31b691a86dc2b16f29f8",
           "canonical_file": "vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
           "canonical_step_id": "37.4",
           "programs": [
@@ -8617,8 +8618,8 @@
           ],
           "capture_routes": [],
           "review_row": "review70_final.json#/rows/step_id=37.4",
-          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/fc17c778d9beaf720baf854ec29dbcb83ac61c88/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
-          "canonical_blob": "6149fe866cb075492328d27b6981080555d1a7e7"
+          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/428a374dd096ca6ef86a31b691a86dc2b16f29f8/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
+          "canonical_blob": "3d29bfd9024fa20e8d845219b734d735f4a58079"
         },
         "verified": true,
         "verification_scope": "PINNED_SOURCE_AND_EXISTING_RECEIPTS_ONLY",
@@ -8700,7 +8701,7 @@
     },
     {
       "id": "37.5ip",
-      "title_en": "Digital Hardmacro Generation — LEF + Liberty + GDS + Verilog (delivered on EVERY route)",
+      "title_en": "Digital Hardmacro Generation \u2014 LEF + Liberty + GDS + Verilog (delivered on EVERY route)",
       "phase": "phase3",
       "canonical_stage": "stage4",
       "current_default": {
@@ -8714,7 +8715,7 @@
         "label_en": "Current source adapter: Magic, OpenROAD, OpenSTA, Vibe-IC program and evidence gates",
         "source": {
           "repo": "https://github.com/vibeic/vibe-ic",
-          "ref": "fc17c778d9beaf720baf854ec29dbcb83ac61c88",
+          "ref": "428a374dd096ca6ef86a31b691a86dc2b16f29f8",
           "canonical_file": "vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
           "canonical_step_id": "37.5ip",
           "programs": [
@@ -8736,8 +8737,8 @@
             }
           ],
           "review_row": "review70_final.json#/rows/step_id=37.5ip",
-          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/fc17c778d9beaf720baf854ec29dbcb83ac61c88/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
-          "canonical_blob": "6149fe866cb075492328d27b6981080555d1a7e7"
+          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/428a374dd096ca6ef86a31b691a86dc2b16f29f8/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
+          "canonical_blob": "3d29bfd9024fa20e8d845219b734d735f4a58079"
         },
         "verified": true,
         "verification_scope": "PINNED_SOURCE_AND_EXISTING_RECEIPTS_ONLY",
@@ -8861,7 +8862,7 @@
     },
     {
       "id": "37.5ic",
-      "title_en": "Tape-out Precheck — our general ladder, plus the operator's own refusal where the PDK ships one (chip/IC path only)",
+      "title_en": "Tape-out Precheck \u2014 our general ladder, plus the operator's own refusal where the PDK ships one (chip/IC path only)",
       "phase": "phase3",
       "canonical_stage": "stage4",
       "current_default": {
@@ -8873,7 +8874,7 @@
         "label_en": "Current source adapter: Submission operator precheck, Vibe-IC program and evidence gates",
         "source": {
           "repo": "https://github.com/vibeic/vibe-ic",
-          "ref": "fc17c778d9beaf720baf854ec29dbcb83ac61c88",
+          "ref": "428a374dd096ca6ef86a31b691a86dc2b16f29f8",
           "canonical_file": "vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
           "canonical_step_id": "37.5ic",
           "programs": [
@@ -8893,8 +8894,8 @@
             }
           ],
           "review_row": "review70_final.json#/rows/step_id=37.5ic",
-          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/fc17c778d9beaf720baf854ec29dbcb83ac61c88/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
-          "canonical_blob": "6149fe866cb075492328d27b6981080555d1a7e7"
+          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/428a374dd096ca6ef86a31b691a86dc2b16f29f8/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
+          "canonical_blob": "3d29bfd9024fa20e8d845219b734d735f4a58079"
         },
         "verified": true,
         "verification_scope": "PINNED_SOURCE_AND_EXISTING_RECEIPTS_ONLY",
@@ -9014,7 +9015,7 @@
         "label_en": "Current source adapter: Vibe-IC program and evidence gates",
         "source": {
           "repo": "https://github.com/vibeic/vibe-ic",
-          "ref": "fc17c778d9beaf720baf854ec29dbcb83ac61c88",
+          "ref": "428a374dd096ca6ef86a31b691a86dc2b16f29f8",
           "canonical_file": "vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
           "canonical_step_id": "38",
           "programs": [
@@ -9023,8 +9024,8 @@
           ],
           "capture_routes": [],
           "review_row": "review70_final.json#/rows/step_id=38",
-          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/fc17c778d9beaf720baf854ec29dbcb83ac61c88/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
-          "canonical_blob": "6149fe866cb075492328d27b6981080555d1a7e7"
+          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/428a374dd096ca6ef86a31b691a86dc2b16f29f8/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
+          "canonical_blob": "3d29bfd9024fa20e8d845219b734d735f4a58079"
         },
         "verified": true,
         "verification_scope": "PINNED_SOURCE_AND_EXISTING_RECEIPTS_ONLY",
@@ -9119,7 +9120,7 @@
         "label_en": "Current source adapter: Quartus Prime",
         "source": {
           "repo": "https://github.com/vibeic/vibe-ic",
-          "ref": "fc17c778d9beaf720baf854ec29dbcb83ac61c88",
+          "ref": "428a374dd096ca6ef86a31b691a86dc2b16f29f8",
           "canonical_file": "vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
           "canonical_step_id": "39",
           "programs": [
@@ -9133,8 +9134,8 @@
           ],
           "capture_routes": [],
           "review_row": "review70_final.json#/rows/step_id=39",
-          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/fc17c778d9beaf720baf854ec29dbcb83ac61c88/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
-          "canonical_blob": "6149fe866cb075492328d27b6981080555d1a7e7"
+          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/428a374dd096ca6ef86a31b691a86dc2b16f29f8/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
+          "canonical_blob": "3d29bfd9024fa20e8d845219b734d735f4a58079"
         },
         "verified": true,
         "verification_scope": "PINNED_SOURCE_AND_EXISTING_RECEIPTS_ONLY",
@@ -9277,7 +9278,7 @@
         "label_en": "Current source adapter: KLayout, Magic, Netgen LVS",
         "source": {
           "repo": "https://github.com/vibeic/vibe-ic",
-          "ref": "fc17c778d9beaf720baf854ec29dbcb83ac61c88",
+          "ref": "428a374dd096ca6ef86a31b691a86dc2b16f29f8",
           "canonical_file": "vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
           "canonical_step_id": "M1",
           "programs": [
@@ -9292,8 +9293,8 @@
             }
           ],
           "review_row": "review70_final.json#/rows/step_id=M1",
-          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/fc17c778d9beaf720baf854ec29dbcb83ac61c88/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
-          "canonical_blob": "6149fe866cb075492328d27b6981080555d1a7e7"
+          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/428a374dd096ca6ef86a31b691a86dc2b16f29f8/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
+          "canonical_blob": "3d29bfd9024fa20e8d845219b734d735f4a58079"
         },
         "verified": true,
         "verification_scope": "PINNED_SOURCE_AND_EXISTING_RECEIPTS_ONLY",
@@ -9436,7 +9437,7 @@
         "label_en": "Current source adapter: Vibe-IC program and evidence gates",
         "source": {
           "repo": "https://github.com/vibeic/vibe-ic",
-          "ref": "fc17c778d9beaf720baf854ec29dbcb83ac61c88",
+          "ref": "428a374dd096ca6ef86a31b691a86dc2b16f29f8",
           "canonical_file": "vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
           "canonical_step_id": "M2",
           "programs": [
@@ -9447,8 +9448,8 @@
           ],
           "capture_routes": [],
           "review_row": "review70_final.json#/rows/step_id=M2",
-          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/fc17c778d9beaf720baf854ec29dbcb83ac61c88/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
-          "canonical_blob": "6149fe866cb075492328d27b6981080555d1a7e7"
+          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/428a374dd096ca6ef86a31b691a86dc2b16f29f8/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
+          "canonical_blob": "3d29bfd9024fa20e8d845219b734d735f4a58079"
         },
         "verified": true,
         "verification_scope": "PINNED_SOURCE_AND_EXISTING_RECEIPTS_ONLY",
@@ -9563,7 +9564,7 @@
         "label_en": "Current source adapter: Vibe-IC program and evidence gates",
         "source": {
           "repo": "https://github.com/vibeic/vibe-ic",
-          "ref": "fc17c778d9beaf720baf854ec29dbcb83ac61c88",
+          "ref": "428a374dd096ca6ef86a31b691a86dc2b16f29f8",
           "canonical_file": "vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
           "canonical_step_id": "M3",
           "programs": [
@@ -9573,8 +9574,8 @@
           ],
           "capture_routes": [],
           "review_row": "review70_final.json#/rows/step_id=M3",
-          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/fc17c778d9beaf720baf854ec29dbcb83ac61c88/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
-          "canonical_blob": "6149fe866cb075492328d27b6981080555d1a7e7"
+          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/428a374dd096ca6ef86a31b691a86dc2b16f29f8/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
+          "canonical_blob": "3d29bfd9024fa20e8d845219b734d735f4a58079"
         },
         "verified": true,
         "verification_scope": "PINNED_SOURCE_AND_EXISTING_RECEIPTS_ONLY",
@@ -9730,7 +9731,7 @@
         "label_en": "Current source adapter: Vibe-IC program and evidence gates",
         "source": {
           "repo": "https://github.com/vibeic/vibe-ic",
-          "ref": "fc17c778d9beaf720baf854ec29dbcb83ac61c88",
+          "ref": "428a374dd096ca6ef86a31b691a86dc2b16f29f8",
           "canonical_file": "vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
           "canonical_step_id": "M4",
           "programs": [
@@ -9739,8 +9740,8 @@
           ],
           "capture_routes": [],
           "review_row": "review70_final.json#/rows/step_id=M4",
-          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/fc17c778d9beaf720baf854ec29dbcb83ac61c88/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
-          "canonical_blob": "6149fe866cb075492328d27b6981080555d1a7e7"
+          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/428a374dd096ca6ef86a31b691a86dc2b16f29f8/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
+          "canonical_blob": "3d29bfd9024fa20e8d845219b734d735f4a58079"
         },
         "verified": true,
         "verification_scope": "PINNED_SOURCE_AND_EXISTING_RECEIPTS_ONLY",
@@ -9855,7 +9856,7 @@
     },
     {
       "id": "40",
-      "title_en": "Fabrication (foundry mask-set + wafer fab — external)",
+      "title_en": "Fabrication (foundry mask-set + wafer fab \u2014 external)",
       "phase": "phase3",
       "canonical_stage": "stage5_manufacturing",
       "current_default": {
@@ -9866,7 +9867,7 @@
         "label_en": "External receipt validator; physical execution not measured",
         "source": {
           "repo": "https://github.com/vibeic/vibe-ic",
-          "ref": "fc17c778d9beaf720baf854ec29dbcb83ac61c88",
+          "ref": "428a374dd096ca6ef86a31b691a86dc2b16f29f8",
           "canonical_file": "vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
           "canonical_step_id": "40",
           "programs": [
@@ -9874,8 +9875,8 @@
           ],
           "capture_routes": [],
           "review_row": "review70_final.json#/rows/step_id=40",
-          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/fc17c778d9beaf720baf854ec29dbcb83ac61c88/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
-          "canonical_blob": "6149fe866cb075492328d27b6981080555d1a7e7"
+          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/428a374dd096ca6ef86a31b691a86dc2b16f29f8/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
+          "canonical_blob": "3d29bfd9024fa20e8d845219b734d735f4a58079"
         },
         "verified": true,
         "verification_scope": "PINNED_SOURCE_AND_EXISTING_RECEIPTS_ONLY",
@@ -9953,7 +9954,7 @@
         "label_en": "External receipt validator; physical execution not measured",
         "source": {
           "repo": "https://github.com/vibeic/vibe-ic",
-          "ref": "fc17c778d9beaf720baf854ec29dbcb83ac61c88",
+          "ref": "428a374dd096ca6ef86a31b691a86dc2b16f29f8",
           "canonical_file": "vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
           "canonical_step_id": "41",
           "programs": [
@@ -9961,8 +9962,8 @@
           ],
           "capture_routes": [],
           "review_row": "review70_final.json#/rows/step_id=41",
-          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/fc17c778d9beaf720baf854ec29dbcb83ac61c88/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
-          "canonical_blob": "6149fe866cb075492328d27b6981080555d1a7e7"
+          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/428a374dd096ca6ef86a31b691a86dc2b16f29f8/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
+          "canonical_blob": "3d29bfd9024fa20e8d845219b734d735f4a58079"
         },
         "verified": true,
         "verification_scope": "PINNED_SOURCE_AND_EXISTING_RECEIPTS_ONLY",
@@ -10070,7 +10071,7 @@
         "label_en": "External receipt validator; physical execution not measured",
         "source": {
           "repo": "https://github.com/vibeic/vibe-ic",
-          "ref": "fc17c778d9beaf720baf854ec29dbcb83ac61c88",
+          "ref": "428a374dd096ca6ef86a31b691a86dc2b16f29f8",
           "canonical_file": "vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
           "canonical_step_id": "42",
           "programs": [
@@ -10078,8 +10079,8 @@
           ],
           "capture_routes": [],
           "review_row": "review70_final.json#/rows/step_id=42",
-          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/fc17c778d9beaf720baf854ec29dbcb83ac61c88/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
-          "canonical_blob": "6149fe866cb075492328d27b6981080555d1a7e7"
+          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/428a374dd096ca6ef86a31b691a86dc2b16f29f8/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
+          "canonical_blob": "3d29bfd9024fa20e8d845219b734d735f4a58079"
         },
         "verified": true,
         "verification_scope": "PINNED_SOURCE_AND_EXISTING_RECEIPTS_ONLY",
@@ -10171,7 +10172,7 @@
         "label_en": "External receipt validator; physical execution not measured",
         "source": {
           "repo": "https://github.com/vibeic/vibe-ic",
-          "ref": "fc17c778d9beaf720baf854ec29dbcb83ac61c88",
+          "ref": "428a374dd096ca6ef86a31b691a86dc2b16f29f8",
           "canonical_file": "vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
           "canonical_step_id": "43",
           "programs": [
@@ -10179,8 +10180,8 @@
           ],
           "capture_routes": [],
           "review_row": "review70_final.json#/rows/step_id=43",
-          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/fc17c778d9beaf720baf854ec29dbcb83ac61c88/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
-          "canonical_blob": "6149fe866cb075492328d27b6981080555d1a7e7"
+          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/428a374dd096ca6ef86a31b691a86dc2b16f29f8/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
+          "canonical_blob": "3d29bfd9024fa20e8d845219b734d735f4a58079"
         },
         "verified": true,
         "verification_scope": "PINNED_SOURCE_AND_EXISTING_RECEIPTS_ONLY",
@@ -10288,7 +10289,7 @@
         "label_en": "External receipt validator; physical execution not measured",
         "source": {
           "repo": "https://github.com/vibeic/vibe-ic",
-          "ref": "fc17c778d9beaf720baf854ec29dbcb83ac61c88",
+          "ref": "428a374dd096ca6ef86a31b691a86dc2b16f29f8",
           "canonical_file": "vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
           "canonical_step_id": "44",
           "programs": [
@@ -10296,8 +10297,8 @@
           ],
           "capture_routes": [],
           "review_row": "review70_final.json#/rows/step_id=44",
-          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/fc17c778d9beaf720baf854ec29dbcb83ac61c88/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
-          "canonical_blob": "6149fe866cb075492328d27b6981080555d1a7e7"
+          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/428a374dd096ca6ef86a31b691a86dc2b16f29f8/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
+          "canonical_blob": "3d29bfd9024fa20e8d845219b734d735f4a58079"
         },
         "verified": true,
         "verification_scope": "PINNED_SOURCE_AND_EXISTING_RECEIPTS_ONLY",
@@ -10405,7 +10406,7 @@
         "label_en": "Current source adapter: Vibe-IC program and evidence gates, Icarus Verilog / vvp",
         "source": {
           "repo": "https://github.com/vibeic/vibe-ic",
-          "ref": "fc17c778d9beaf720baf854ec29dbcb83ac61c88",
+          "ref": "428a374dd096ca6ef86a31b691a86dc2b16f29f8",
           "canonical_file": "vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
           "canonical_step_id": "P0",
           "programs": [
@@ -10413,8 +10414,8 @@
           ],
           "capture_routes": [],
           "review_row": "review70_final.json#/rows/step_id=P0",
-          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/fc17c778d9beaf720baf854ec29dbcb83ac61c88/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
-          "canonical_blob": "6149fe866cb075492328d27b6981080555d1a7e7"
+          "repo_source_url": "https://github.com/vibeic/vibe-ic/blob/428a374dd096ca6ef86a31b691a86dc2b16f29f8/vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml",
+          "canonical_blob": "3d29bfd9024fa20e8d845219b734d735f4a58079"
         },
         "verified": true,
         "verification_scope": "PINNED_SOURCE_AND_EXISTING_RECEIPTS_ONLY",

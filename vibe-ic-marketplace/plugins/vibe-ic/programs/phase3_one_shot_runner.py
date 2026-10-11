@@ -78366,15 +78366,22 @@ def _default_pnr_rows(project: Path, top: str, pdk: PdkConfig, container: str,
     for sid in step_ids:
         row_def = flow_rows[sid]
         if not compliance._check_condition(project, row_def.get('condition')):
+            dependency_gap = row_def.get('condition_kind') == 'dependency_required'
+            condition_status = 'NOT_MEASURED' if dependency_gap else 'NOT_APPLICABLE'
+            condition_detail = ('canonical upstream dependency condition is not ready'
+                                if dependency_gap else
+                                'canonical design condition is not applicable')
             rows.append(StepResult(
-                f'default_step_{sid}', 'SKIP', 0.0,
-                'canonical design condition is not applicable',
-                extras={'step_id': sid}))
-            checks[sid] = {'status': 'NOT_APPLICABLE',
-                           'reasons': ['canonical design condition is not applicable']}
+                f'default_step_{sid}', condition_status, 0.0, condition_detail,
+                extras={'step_id': sid},
+                reason_class=_V.ReasonClass.INPUT_ABSENT if dependency_gap else '',
+                declared_by='' if dependency_gap else 'canonical step condition'))
+            checks[sid] = {'status': condition_status, 'reasons': [condition_detail]}
             attempt = step_versions.begin_step(project, sid)
-            step_versions.finish_step(project, attempt, verdict='NOT_APPLICABLE',
+            step_versions.finish_step(project, attempt, verdict=condition_status,
                                       result=checks[sid])
+            if dependency_gap:
+                break
             continue
         started = time.time()
         print(f'[default] step {sid} START: {row_def["name"]}', flush=True)
@@ -78499,11 +78506,11 @@ def _default_pnr_rows(project: Path, top: str, pdk: PdkConfig, container: str,
             # It is the current routing producer's bytes, never a prior DEF.
             shutil.copy2(_pl.pnr_dir(project) / 'routed.def',
                          _pl.pnr_dir(project) / f'{top}.def')
-    failed = next((row for row in rows if row.status not in ('PASS', 'SKIP')), None)
+    failed = next((row for row in rows if row.status not in ('PASS', 'NOT_APPLICABLE')), None)
     return StepResult(
         report_name, failed.status if failed else 'PASS', time.time() - t0,
         (f'canonical step {failed.extras["step_id"]}: {failed.detail}' if failed
-         else 'canonical native rows completed: ' + ', '.join(step_ids)),
+         else 'canonical rows completed, including declared N/A: ' + ', '.join(step_ids)),
         list(dict.fromkeys(outputs)),
         extras={'canonical_steps': [asdict(row) for row in rows],
                 'requested_steps': step_ids, 'canonical_gate_checks': checks},
