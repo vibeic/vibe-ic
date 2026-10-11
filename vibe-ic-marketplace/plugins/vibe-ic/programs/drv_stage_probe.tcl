@@ -50,10 +50,9 @@ proc ::vibeic_drv::append_line {path line} {
 proc ::vibeic_drv::census {path} {
     ::vibeic_drv::append_line $path \
         "# census: report_check_types -max_slew -max_capacitance -max_fanout -violators -verbose"
-    sta::redirect_file_append_begin $path
-    set code [catch {::vibeic_drv::rct -max_slew -max_capacitance -max_fanout -violators -verbose} msg]
-    sta::redirect_file_end
-    if {$code} { error $msg }
+    # Let the public report wrapper finish its SDC warmup before the native
+    # command opens the report. OpenROAD cannot nest logger redirections.
+    ::vibeic_drv::rct -max_slew -max_capacitance -max_fanout -violators -verbose >> $path
     foreach kind {max_slew max_capacitance max_fanout} {
         ::vibeic_drv::append_line $path "$kind violators=[sta::${kind}_violation_count]"
     }
@@ -103,10 +102,7 @@ proc ::vibeic_drv::synth_census {path} {
 # and the IO cells' limit apart.
 proc ::vibeic_drv::fanout_limits {tag} {
     set path $tag.fanout_limits.rpt
-    sta::redirect_file_begin $path
-    set code [catch {::vibeic_drv::rct -max_fanout -verbose -max_count 1000000000} msg]
-    sta::redirect_file_end
-    if {$code} { error $msg }
+    ::vibeic_drv::rct -max_fanout -verbose -max_count 1000000000 > $path
     set f [open $path r]
     set body [read $f]
     close $f

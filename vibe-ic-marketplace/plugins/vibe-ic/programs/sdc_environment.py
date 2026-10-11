@@ -461,7 +461,7 @@ def pad_operating_scene(project: Path, core_liberty: str, container: str = "",
   rename ::report_check_types ::vibeic_native_report_check_types
   rename ::sta::max_slew_violation_count ::vibeic_native_max_slew_violation_count
   proc ::vibeic_with_pad_mode {command args} {
-    report_worst_slack -max > /dev/null
+    worst_slack -max
     set removed {}
     foreach edge [concat {*}[get_timing_edges -of_objects [get_cells $::vibeic_scene_pads]]] {
       if {[$edge is_disabled_constant] && [$edge cond] ne "" && ![$edge is_disabled_constraint]} {

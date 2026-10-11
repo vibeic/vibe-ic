@@ -39,8 +39,18 @@ _LIB = """library ("quartz_io__ss") {
 _CORE = ("quartz_sc__inv_1/ZN", "pinned PDK default cfg:SYNTH_DRIVING_CELL")
 
 
-def _die(tmp_path: Path, io: bool = True) -> Path:
-    p = tmp_path / "die"
+def _die(tmp_path: Path, io: bool = True, *, tool: bool = False) -> Path:
+    if tool:
+        from test_f15_step23_gates_read_the_tool_arm import tool_project
+        p = tool_project(tmp_path)
+        (p / "phase3/librelane_switch.json").unlink()
+    else:
+        p = tmp_path / "die"
+        switch = p / "phase3/librelane_switch.json"
+        switch.parent.mkdir(parents=True)
+        # These cases exercise the direct deck clause. The production default
+        # uses a bound tool deck, exercised separately below.
+        switch.write_text(json.dumps({"steps": {"23": "direct"}}))
     marker = p / TD.SELF_TAPEOUT_REL
     marker.parent.mkdir(parents=True)
     marker.write_text(TD.SELF_TAPEOUT_MARKER + "\n")
@@ -48,7 +58,7 @@ def _die(tmp_path: Path, io: bool = True) -> Path:
         lib = tmp_path / "quartz_io__ss.lib"
         lib.write_text(_LIB)
         rec = p / SE.IO_PAD_RECORD
-        rec.parent.mkdir(parents=True)
+        rec.parent.mkdir(parents=True, exist_ok=True)
         rec.write_text(json.dumps({"io_library_liberty": [str(lib)]}))
     return p
 
@@ -85,6 +95,53 @@ def test_the_io_tier_carried_by_the_deck_passes(tmp_path):
     assert _resolve(project)["verdict"] == "PDK_IO_TIER"
     rc, doc = _run(project)
     assert (rc, doc["verdict"]) == (0, "PASS"), doc
+
+
+def _bind_timed_deck(project: Path, deck: Path) -> None:
+    """Bind the fixture tool's selected input using the real receipt layout."""
+    import hashlib
+    import librelane_signoff as LS
+    from test_f15_step23_gates_read_the_tool_arm import rebind
+    record = json.loads((project / LS.SIGNOFF_RECORD).read_text())
+    state_path = Path(record["sta_state"])
+    state = json.loads(state_path.read_text())
+    previous = state["sdc"]
+    state["sdc"] = str(deck)
+    state_path.write_text(json.dumps(state))
+    receipt_path = state_path.parent / "vibeic_receipt.json"
+    receipt = json.loads(receipt_path.read_text())
+    receipt["input"]["state_files"].pop(previous)
+    receipt["input"]["state_files"][str(deck)] = hashlib.sha256(deck.read_bytes()).hexdigest()
+    receipt_path.write_text(json.dumps(receipt))
+    rebind(project)
+
+
+def test_default_tool_arm_checks_the_bound_drive_and_refuses_a_changed_deck(tmp_path):
+    from librelane_contract import selected_mode
+    project = _die(tmp_path, tool=True)
+    assert selected_mode(project, "23") == "librelane"
+    _resolve(project)
+    deck = project / DECK
+    _bind_timed_deck(project, deck)
+    rc, doc = _run(project)
+    assert (rc, doc["verdict"]) == (0, "PASS"), doc
+    assert doc["tool_arm"]
+    deck.write_text("create_clock -period 10 clk\n")
+    rc, doc = _run(project)
+    assert (rc, doc["verdict"]) == (1, "REFUSED")
+    assert doc["refusal"] == "LL_STA_INPUT_STALE"
+
+
+def test_default_tool_arm_cannot_use_a_good_local_deck_for_its_bad_timed_deck(tmp_path):
+    project = _die(tmp_path, tool=True)
+    _resolve(project)
+    timed = project / "phase3/tool_timed.sdc"
+    timed.write_text("create_clock -period 10 clk\n")
+    _bind_timed_deck(project, timed)
+    rc, doc = _run(project)
+    assert (rc, doc["verdict"]) == (1, "FAIL"), doc
+    assert doc["deck"] == str(timed)
+    assert doc["lines_missing"]
 
 
 def test_a_not_measured_drive_is_rc2_never_pass(tmp_path):

@@ -56,6 +56,7 @@ if not sta:
     tcl.append("namespace eval ::ord {}")
 tcl.append(f"set ::env(SAVE_SDC) {{{out}/top.sdc}}")
 tcl.append(f"set ::fo {fanout}")
+tcl.append(f"set ::warmup {int(bool(cfg.get('FAKE_REPORT_WARMUP')))}")
 tcl.append(r"""
 set ::redirect ""
 proc write_sdc {args} {
@@ -71,6 +72,21 @@ proc emit {text} {
         set f [open $::redirect a]; puts $f $text; close $f }
 }
 proc report_check_types {args} {
+    if {$::warmup} {
+        sta::redirect_file_begin /dev/null
+        sta::redirect_file_end
+    }
+    set redirect 0
+    foreach symbol {> >>} {
+        set at [lsearch -exact $args $symbol]
+        if {$at >= 0} {
+            set path [lindex $args [expr {$at + 1}]]
+            if {$symbol eq ">"} { sta::redirect_file_begin $path } else {
+                sta::redirect_file_append_begin $path
+            }
+            set redirect 1
+        }
+    }
     if {"-violators" in $args} {
         emit "max fanout\n\nPin u1/Z\nmax fanout $::fo\nfanout 5\n-----------\nSlack -1 (VIOLATED)"
     } else {
@@ -78,13 +94,20 @@ proc report_check_types {args} {
         # worst slack) and a core driver under the SDC's limit
         emit "max fanout\n\nPin u_pad/Y\nmax fanout 1\nfanout 3\n-----------\nSlack -2 (VIOLATED)\n\nPin u1/Z\nmax fanout $::fo\nfanout 2\n-----------\nSlack 2 (MET)"
     }
+    if {$redirect} { sta::redirect_file_end }
 }
 proc get_pins {args} { set name [lindex $args end]; if {[string first / $name] >= 0} { return $name }; return {} }
 proc get_cells {args} { return [lindex [split [lindex $args end] /] 0] }
 namespace eval ::sta {}
-proc ::sta::redirect_file_append_begin {path} { set ::redirect $path }
+proc ::sta::redirect_file_append_begin {path} {
+    if {$::redirect ne ""} { error UTL-0102 }
+    set ::redirect $path
+}
 proc ::sta::redirect_file_end {} { set ::redirect "" }
-proc ::sta::redirect_file_begin {path} { close [open $path w]; set ::redirect $path }
+proc ::sta::redirect_file_begin {path} {
+    if {$::redirect ne ""} { error UTL-0102 }
+    close [open $path w]; set ::redirect $path
+}
 proc ::sta::max_fanout_check_limit {} { return 1 }   ;# the worst pin: the pad
 proc ::sta::max_slew_violation_count {} { return 0 }
 proc ::sta::max_capacitance_violation_count {} { return 0 }
@@ -220,6 +243,56 @@ def test_a_chain_without_a_stage_step_gets_no_probe(tmp_path, monkeypatch):
     folder = _run(project, docker, state, ("OpenROAD.CheckAntennas", {}))[0]
     assert "drv_stage_probe" not in json.loads((folder / "input_fingerprint.json").read_text())
     assert not (project / "phase3/librelane/l/.openroad_home").exists()
+
+
+def test_stage_reports_allow_the_sdc_warmup_before_native_redirection(tmp_path, monkeypatch):
+    docker = _fake_docker(tmp_path, monkeypatch)
+    project, state = _project(tmp_path)
+    receipts.claim(project)
+    folder = _run(project, docker, state,
+                  ("OpenROAD.RepairDesignPostGPL", {"FAKE_REPORT_WARMUP": True}))[0]
+    assert not list((folder / receipts.PROBE_DIR).glob("*.error"))
+    rows, _ = plan._stages(project, False, frozenset({"padcell"}))
+    row = next(row for row in rows if row["name"] == "placement_repair")
+    assert row["fanout_check_limit"] == 4
+    behavior = Path(row["behavior_report"]["path"]).read_text()
+    assert "max_fanout violators=1" in behavior
+    assert drv._COMMAND in behavior
+
+
+def test_pad_mode_warmup_uses_the_quiet_timing_query(tmp_path):
+    import subprocess
+    import sdc_environment as sdc
+    core = tmp_path / "core.lib"
+    io = tmp_path / "io.lib"
+    core.write_text('library(core) { time_unit : "1ns"; }')
+    io.write_text('library(io) { time_unit : "1ns"; cell(pad) {'
+                  ' pin(PAD) { max_transition : 25; } } }')
+    record = tmp_path / sdc.IO_PAD_RECORD
+    record.parent.mkdir(parents=True)
+    record.write_text(json.dumps({"verdict": "WROTE",
+        "io_library_liberty": [str(io)],
+        "pad_instances": {"u_pad": {"master": "pad", "terminal": "PAD", "port": "clk"}}}))
+    scene = sdc.pad_operating_scene(tmp_path, str(core))
+    assert scene["complete_pin_limits"]
+    script = tmp_path / "warmup.tcl"
+    script.write_text('''namespace eval ::sta {}
+set warmups 0
+proc worst_slack {args} { incr ::warmups; return 42 }
+proc report_worst_slack {args} { error {nested logger redirection} }
+proc report_check_types {args} { return native_report }
+proc ::sta::max_slew_violation_count {} { return 0 }
+proc write_sdc {args} {}
+proc get_cells {args} { return u_pad }
+proc get_timing_edges {args} { return {} }
+''' + scene["tcl"] + '''
+puts "RESULT [report_check_types -max_slew]"
+puts "WARMUPS $warmups"
+''')
+    run = subprocess.run([TCLSH, str(script)], capture_output=True, text=True)
+    assert run.returncode == 0, run.stderr
+    assert "RESULT native_report" in run.stdout
+    assert "WARMUPS 1" in run.stdout
 
 
 def test_run_chain_writes_receipts_the_plan_reads_from_tool_bytes(tmp_path, monkeypatch):
