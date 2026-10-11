@@ -261,7 +261,8 @@ def _script(plan: dict, scene: dict, out: Path, *, control: bool,
         prefix += ("set_max_fanout 1 [current_design]\n"
                    f"set_max_transition {limits['max_slew']} [current_design]\n"
                    f"set_max_capacitance {limits['max_capacitance']} [current_design]\n")
-        return (prefix + f"{_COMMAND} -digits 6 -max_count {max_count} > {_tcl(out / 'positive_control.rpt')}\n"
+        return (prefix + f"{_COMMAND} -digits 9 -max_count {max_count} > {_tcl(out / 'positive_control.rpt')}\n"
+                f"report_check_types -max_slew -max_capacitance -max_fanout -verbose -digits 9 -max_count {max_count} > {_tcl(out / 'positive_control_all_limits.rpt')}\n"
                 f"set _f [open {_tcl(out / 'positive_control_counters.log')} w]\n"
                 + "".join(
                     f'puts $_f "DRV_COUNTER {kind} [sta::{kind}_violation_count]"\n'
@@ -548,6 +549,7 @@ def capture(plan: dict, out_dir: Path, *, image: str | None = None) -> dict:
                    all_limits_report=_ref(scene_dir / "all_limits.rpt"),
                    counter_report=_ref(scene_dir / "counters.log"),
                    positive_control_report=_ref(scene_dir / "positive_control.rpt"),
+                   positive_control_all_limits_report=_ref(scene_dir / "positive_control_all_limits.rpt"),
                    parasitic_annotation_report=_ref(scene_dir / "annotation.rpt"),
                    clock_properties=_ref(scene_dir / "clocks.rpt"),
                    tool_scripts=[_ref(scene_dir / "measure.tcl"),

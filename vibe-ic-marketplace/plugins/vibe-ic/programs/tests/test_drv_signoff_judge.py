@@ -169,6 +169,9 @@ def _bundle(tmp_path: Path) -> dict:
              "all_limits_max_count": 1,
              "population": {k: 1 for k in drv.KINDS},
              "positive_control_report": positive,
+             "positive_control_all_limits_report": _file(
+                 tmp_path, "control_all.rpt", _report(fanout=2, fanout_limit=1,
+                     cap_limit=.01, slew_limit=.01)),
              "positive_control_expected": {k: 1 for k in drv.KINDS},
              "positive_control_counters": {k: 1 for k in drv.KINDS},
              "positive_control_limits": {"max_fanout": 1,
@@ -263,6 +266,15 @@ def _violate(bundle: dict, root: Path, kind: str, *, value: float,
     scene["counters"][kind] = 1
     scene["counter_report"] = _file(root, "counter.log", "".join(
         f"DRV_COUNTER {k} {scene['counters'][k]}\n" for k in drv.KINDS))
+    # Both fresh processes observe the same design; only control limits change.
+    control = dict(numbers)
+    control.update(fanout_limit=scene["positive_control_limits"]["max_fanout"],
+                   cap_limit=scene["positive_control_limits"]["max_capacitance"],
+                   slew_limit=scene["positive_control_limits"]["max_slew"])
+    scene["positive_control_report"] = _file(
+        root, "control.rpt", _report(**control, violators=True))
+    scene["positive_control_all_limits_report"] = _file(
+        root, "control_all.rpt", _report(**control))
     bundle["pins"]["u/Y"].update(net_class=net_class, cell_class=cell_class)
     if net_class == "clock":
         scene["clock_network_pins"] = ["u/Y"]
@@ -387,6 +399,27 @@ def test_extraction_command_hash_must_bind_real_file(tmp_path):
     assert result["verdict"] == "NOT_MEASURED"
     assert any("extraction input/output" in reason
                for reason in result["not_measured"])
+
+
+@pytest.mark.parametrize("kind,title,measurement", [
+    ("max_fanout", "max fanout", "fanout"),
+    ("max_slew", "max slew", "slew"),
+    ("max_capacitance", "max capacitance", "capacitance"),
+])
+@pytest.mark.parametrize("status", ["VIOLATED", "MET"])
+def test_native_status_without_numeric_slack_preserves_verdict(kind, title,
+                                                              measurement, status):
+    measured = 2 if status == "VIOLATED" else .5
+    report = (f"{title}\n\nPin control/X\n{title} 1\n"
+              f"{measurement} {measured}\n-----------\nSlack             ({status})\n")
+    rows = drv.parse_check_types(report, scene="typ_nom", mode="functional",
+                                 violators_only=False)[kind]
+    assert len(rows) == 1
+    assert rows[0]["violated"] is (status == "VIOLATED")
+    assert "slack" not in rows[0]
+    violators = drv.parse_check_types(report, scene="typ_nom", mode="functional",
+                                      violators_only=True)[kind]
+    assert len(violators) == (1 if status == "VIOLATED" else 0)
 
 
 def test_all_limits_report_cannot_hide_a_named_violator(tmp_path):
@@ -1126,6 +1159,32 @@ def test_control_expected_is_recomputed_from_real_population(tmp_path):
                for reason in result["not_measured"])
 
 
+@pytest.mark.parametrize("fault", [None, "missing_report", "wrong_pin", "duplicate"])
+def test_control_population_includes_newly_constrained_io_pins(tmp_path, fault):
+    bundle = _bundle(tmp_path)
+    scene = bundle["scenes"][0]
+    core = _report(fanout=2, fanout_limit=1, cap_limit=.01, slew_limit=.01)
+    io = core.replace("u/Y", "io/Y")
+    scene["positive_control_all_limits_report"] = _file(
+        tmp_path, "control_all.rpt", core + io)
+    scene["positive_control_report"] = _file(tmp_path, "control.rpt", core + io)
+    scene["positive_control_counters"] = {kind: 2 for kind in drv.KINDS}
+    if fault == "missing_report":
+        scene.pop("positive_control_all_limits_report")
+    elif fault == "wrong_pin":
+        scene["positive_control_report"] = _file(
+            tmp_path, "control.rpt", core + io.replace("io/Y", "other/Y"))
+    elif fault == "duplicate":
+        scene["positive_control_report"] = _file(
+            tmp_path, "control.rpt", core + core)
+    result = drv.judge(bundle)
+    if fault is None:
+        assert result["verdict"] == "PASS", result
+    else:
+        assert result["verdict"] == "NOT_MEASURED"
+        assert any("positive control" in reason for reason in result["not_measured"])
+
+
 def test_capture_ignores_plan_population_and_excluded_pin_assertions(
         tmp_path, monkeypatch):
     import subprocess
@@ -1145,6 +1204,8 @@ def test_capture_ignores_plan_population_and_excluded_pin_assertions(
             (folder / "positive_control.rpt").write_text(_report(
                 fanout=2, fanout_limit=1, cap_limit=.01,
                 slew_limit=.01, violators=True))
+            (folder / "positive_control_all_limits.rpt").write_text(_report(
+                fanout=2, fanout_limit=1, cap_limit=.01, slew_limit=.01))
             (folder / "positive_control_counters.log").write_text(
                 "".join(f"DRV_COUNTER {kind} 1\n" for kind in drv.KINDS))
         else:
@@ -1190,6 +1251,8 @@ def test_capture_replaces_plan_pin_classes_with_opensta_and_liberty(tmp_path, mo
             (folder / "positive_control.rpt").write_text(_report(
                 fanout=2, fanout_limit=1, cap_limit=.01,
                 slew_limit=.01, violators=True))
+            (folder / "positive_control_all_limits.rpt").write_text(_report(
+                fanout=2, fanout_limit=1, cap_limit=.01, slew_limit=.01))
             (folder / "positive_control_counters.log").write_text(
                 "".join(f"DRV_COUNTER {kind} 1\n" for kind in drv.KINDS))
         else:
@@ -1268,6 +1331,8 @@ def test_checkpoint_sdk_upgrade_keeps_original_producer_and_inputs(tmp_path, mon
         if script.name == "positive_control.tcl":
             (folder / "positive_control.rpt").write_text(_report(
                 fanout=2, fanout_limit=1, cap_limit=.01, slew_limit=.01, violators=True))
+            (folder / "positive_control_all_limits.rpt").write_text(_report(
+                fanout=2, fanout_limit=1, cap_limit=.01, slew_limit=.01))
             (folder / "positive_control_counters.log").write_text(
                 "".join(f"DRV_COUNTER {kind} 1\n" for kind in drv.KINDS))
         else:

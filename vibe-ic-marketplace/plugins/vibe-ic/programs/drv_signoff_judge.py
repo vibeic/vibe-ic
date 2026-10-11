@@ -106,6 +106,12 @@ def parse_check_types(body: str, *, scene: str, mode: str,
             continue
         if row is None or kind is None:
             continue
+        status = re.fullmatch(r"Slack\s+\((VIOLATED|MET)\)", line)
+        if status:
+            # Native fanout reports can omit the numeric slack while retaining
+            # an explicit verdict. Preserve that verdict without inventing slack.
+            row["violated"] = status.group(1) == "VIOLATED"
+            continue
         metric = _METRIC.fullmatch(line)
         if not metric:
             continue
@@ -1234,6 +1240,10 @@ def judge(bundle: dict, *, project: Path | None = None) -> dict:
                                  missing, name + " positive control")
         control_rows = parse_check_types(control_text, scene=name, mode=mode,
                                          violators_only=True)
+        control_all_text = _evidence(scene.get("positive_control_all_limits_report") or {},
+                                    missing, name + " positive control all limits")
+        control_all_rows = parse_check_types(control_all_text, scene=name, mode=mode,
+                                             violators_only=False)
         if not scene.get("positive_control_fresh_process"):
             missing.append(f"{name}: positive control did not use fresh process")
         controls = scene.get("positive_control_limits") or {}
@@ -1265,17 +1275,41 @@ def judge(bundle: dict, *, project: Path | None = None) -> dict:
             if any("limit" not in row for row in all_rows[kind]):
                 missing.append(f"{name}: {kind} row without limit")
             control_limit = controls.get(kind)
-            expected_control = sum(
-                1 for row in all_rows[kind]
+            # Global control limits also constrain IO pins which had no limit
+            # in the measurement. Use the control process's own full population.
+            expected_control_keys = {
+                _key(kind, row) for row in control_all_rows[kind]
                 if _positive_number(control_limit) and
                 isinstance(row.get("measured"), (int, float)) and
-                row["measured"] > control_limit)
+                row["measured"] > control_limit}
+            control_keys = {_key(kind, row) for row in control_rows[kind]}
             actual_control = (scene.get("positive_control_counters") or {}).get(kind)
-            if (expected_control < 1 or
-                    len(control_rows[kind]) != expected_control or
-                    actual_control != expected_control):
+            control_all_keys = {_key(kind, row) for row in control_all_rows[kind]}
+            if (not expected_control_keys or
+                    control_keys != expected_control_keys or
+                    len(control_rows[kind]) != len(control_keys) or
+                    len(control_all_rows[kind]) != len(control_all_keys) or
+                    actual_control != len(expected_control_keys)):
                 missing.append(f"{name}: {kind} positive control did not detect "
                                "the measured eligible population")
+            # Tightening limits cannot remove an eligible measurement pin or
+            # change its physical fanout/capacitance. Keep that cross-check.
+            original_eligible = {_key(kind, row) for row in all_rows[kind]
+                                 if _positive_number(control_limit) and
+                                 isinstance(row.get("measured"), (int, float)) and
+                                 row["measured"] > control_limit}
+            if not original_eligible <= expected_control_keys:
+                missing.append(f"{name}: {kind} positive control lost measurement pins")
+            if kind != "max_slew":
+                original_values = {_key(kind, row): row.get("measured")
+                                   for row in all_rows[kind]}
+                if any(key in original_values and
+                       (not isinstance(original_values[key], (int, float)) or
+                        not isinstance(row.get("measured"), (int, float)) or
+                        abs(row["measured"] - original_values[key]) > 1e-6)
+                       for row in control_all_rows[kind]
+                       for key in [_key(kind, row)]):
+                    missing.append(f"{name}: {kind} positive control changed measurement")
             independent_bad = set()
             for row in all_rows[kind]:
                 key = _key(kind, row)
