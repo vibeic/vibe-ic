@@ -60038,72 +60038,87 @@ def run_at_speed_atpg_producers(project: Path, written: List[str],
         ("DT3", "sdd_atpg_run.py", []),
     )
     for step, prog, extra_argv in order:
-        out_json = project / _ATPG_COVERAGE_REL[step]
-        ll_argv, ll_refusal = atpg_librelane_views(project, step)
-        if not atpg_needs_regrade(out_json) and (
-                ll_argv is None or atpg_graded_from(out_json, ll_argv)):
-            # A real grade already exists; retire any record that contradicts it.
-            atpg_clear_not_run(project, step)
-            continue
-        if ll_refusal:
-            atpg_disclose_not_run(
-                project, step,
-                f"{step} at-speed ATPG NOT RUN — LibreLane timing views "
-                f"selected and unavailable: {ll_refusal}",
-                "precondition_unmet", {"librelane_timing": ll_refusal})
-            notes.append(f"{step} LibreLane timing views unavailable "
-                         f"→ {_ATPG_NOT_RUN_REL[step]}")
-            continue
+        _spf.retained_call(
+            project, step, _run_at_speed_atpg_producer,
+            project, step, prog, extra_argv, written, notes,
+            canonical_acceptance=True)
 
-        missing = atpg_missing_inputs(project, step)
-        if missing:
-            atpg_disclose_not_run(
-                project, step,
-                f"{step} at-speed ATPG NEVER RAN — precondition unmet: "
-                + "; ".join(missing),
-                "precondition_unmet", {"missing_inputs": missing})
-            notes.append(f"{step} at-speed ATPG not run (precondition unmet) "
-                         f"→ {_ATPG_NOT_RUN_REL[step]}")
-            continue
 
-        cmd = [sys.executable, str(PROGRAMS_DIR / prog), str(project),
-               "--clock", str(routed_sdc_clock(project)), *extra_argv,
-               *ll_argv, "--json", str(out_json)]
-        pdk_in = project / "input" / "pdk"
-        if pdk_in.is_dir():
-            cmd += ["--pdk-dir", str(pdk_in.resolve())]
-        out_json.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            # Supervised on the producer's own forward progress (output, CPU
-            # and I/O of the child and its live descendants), never a clock.
-            # A `Stalled` is a RuntimeError, so the `except Exception` beside
-            # this already catches it and the disclosure below names it.
-            proc = _pr.run(cmd, capture_output=True, text=True)
-        except Exception as exc:
-            atpg_disclose_not_run(
-                project, step,
-                f"{step} at-speed ATPG execution error: {exc}",
-                "producer_execution_error")
-            notes.append(f"{step} at-speed ATPG errored ({exc}) → "
-                         f"{_ATPG_NOT_RUN_REL[step]}")
-            continue
+def _run_at_speed_atpg_producer(project: Path, step: str, prog: str,
+                                extra_argv: List[str], written: List[str],
+                                notes: List[str]) -> Dict[str, Any]:
+    """One existing at-speed producer after prior evidence has been saved."""
+    out_json = project / _ATPG_COVERAGE_REL[step]
+    ll_argv, ll_refusal = atpg_librelane_views(project, step)
+    if not atpg_needs_regrade(out_json) and (
+            ll_argv is None or atpg_graded_from(out_json, ll_argv)):
+        # A real grade already exists; retire any record that contradicts it.
+        atpg_clear_not_run(project, step)
+        return {'rc': None, 'reason': 'existing grade retained; producer not run'}
+    if ll_refusal:
+        atpg_disclose_not_run(
+            project, step,
+            f"{step} at-speed ATPG NOT RUN — LibreLane timing views "
+            f"selected and unavailable: {ll_refusal}",
+            "precondition_unmet", {"librelane_timing": ll_refusal})
+        notes.append(f"{step} LibreLane timing views unavailable "
+                     f"→ {_ATPG_NOT_RUN_REL[step]}")
+        return {'rc': 2, 'reason': notes[-1]}
 
-        if out_json.is_file():
-            written.append(str(out_json))
-            atpg_clear_not_run(project, step)
-        else:
-            # Ran and produced nothing. The producer writes its JSON on every
-            # path it reaches, so reaching none of them is itself the finding.
-            tail = ((proc.stderr or proc.stdout or "")[-400:] or "no output")
-            atpg_disclose_not_run(
-                project, step,
-                f"{step} at-speed ATPG RAN but wrote no "
-                f"{_ATPG_COVERAGE_REL[step]} (producer exit "
-                f"{proc.returncode}): {tail}",
-                "producer_wrote_no_artifact",
-                {"producer_exit": proc.returncode})
-            notes.append(f"{step} at-speed ATPG wrote no artefact (exit "
-                         f"{proc.returncode}) → {_ATPG_NOT_RUN_REL[step]}")
+    missing = atpg_missing_inputs(project, step)
+    if missing:
+        atpg_disclose_not_run(
+            project, step,
+            f"{step} at-speed ATPG NEVER RAN — precondition unmet: "
+            + "; ".join(missing),
+            "precondition_unmet", {"missing_inputs": missing})
+        notes.append(f"{step} at-speed ATPG not run (precondition unmet) "
+                     f"→ {_ATPG_NOT_RUN_REL[step]}")
+        return {'rc': 2, 'reason': notes[-1]}
+
+    cmd = [sys.executable, str(PROGRAMS_DIR / prog), str(project),
+           "--clock", str(routed_sdc_clock(project)), *extra_argv,
+           *ll_argv, "--json", str(out_json)]
+    pdk_in = project / "input" / "pdk"
+    if pdk_in.is_dir():
+        cmd += ["--pdk-dir", str(pdk_in.resolve())]
+    out_json.parent.mkdir(parents=True, exist_ok=True)
+    # The due retry must not mistake a previous report for its own output.
+    # Its prior bytes have already been saved by retained_call.
+    out_json.unlink(missing_ok=True)
+    try:
+        # Supervised on the producer's own forward progress (output, CPU
+        # and I/O of the child and its live descendants), never a clock.
+        # A `Stalled` is a RuntimeError, so the `except Exception` beside
+        # this already catches it and the disclosure below names it.
+        proc = _pr.run(cmd, capture_output=True, text=True)
+    except Exception as exc:
+        atpg_disclose_not_run(
+            project, step,
+            f"{step} at-speed ATPG execution error: {exc}",
+            "producer_execution_error")
+        notes.append(f"{step} at-speed ATPG errored ({exc}) → "
+                     f"{_ATPG_NOT_RUN_REL[step]}")
+        return {'rc': 2, 'reason': notes[-1]}
+
+    if out_json.is_file():
+        written.append(str(out_json))
+        atpg_clear_not_run(project, step)
+        return {'rc': proc.returncode, 'program': prog}
+    else:
+        # Ran and produced nothing. The producer writes its JSON on every
+        # path it reaches, so reaching none of them is itself the finding.
+        tail = ((proc.stderr or proc.stdout or "")[-400:] or "no output")
+        atpg_disclose_not_run(
+            project, step,
+            f"{step} at-speed ATPG RAN but wrote no "
+            f"{_ATPG_COVERAGE_REL[step]} (producer exit "
+            f"{proc.returncode}): {tail}",
+            "producer_wrote_no_artifact",
+            {"producer_exit": proc.returncode})
+        notes.append(f"{step} at-speed ATPG wrote no artefact (exit "
+                     f"{proc.returncode}) → {_ATPG_NOT_RUN_REL[step]}")
+    return {'rc': 2, 'producer_rc': proc.returncode, 'reason': notes[-1]}
 
 
 def _repair_residual_note(project: "Path", residual: bool,

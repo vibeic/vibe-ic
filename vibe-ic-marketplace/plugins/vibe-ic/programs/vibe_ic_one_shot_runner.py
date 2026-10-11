@@ -637,7 +637,23 @@ def _need_analog(project: Path, force_skip: bool) -> bool:
 
 
 def _run_phase(label: str, runner: Path, args: List[str],
-               env: Optional[Dict[str, str]] = None) -> int:
+               env: Optional[Dict[str, str]] = None, *,
+               _retain_mixed: bool = True) -> int:
+    mixed_step = {"mixed_signal_top_lvs_run.py": "M1",
+                  "mixed_signal_power_domain_run.py": "M2",
+                  "mixed_signal_m3_run.py": "M3",
+                  "mixed_signal_signoff_run.py": "M4"}.get(runner.name)
+    if mixed_step is not None and _retain_mixed:
+        import step_preflight
+        return step_preflight.retained_call(
+            Path(args[0]), mixed_step, _run_phase, label, runner, args,
+            env=env, _retain_mixed=False, canonical_acceptance=True)
+    # Default retains the selected call before invalidating its audit file.
+    # Other modes keep their established caller-side invalidation.
+    if mixed_step in {"M2", "M3", "M4"} and "--json" in args:
+        import execution_policy
+        if execution_policy.request()["mode"] == "default":
+            Path(args[args.index("--json") + 1]).unlink(missing_ok=True)
     print(f"\n{'='*72}\n=== {label} → {runner.name}\n{'='*72}")
     # ORGANIC #588 — pass the re-entrancy env so the spawned standalone
     # phase runner re-enters THIS orchestrator's project lock instead of
@@ -2774,7 +2790,8 @@ def _main() -> int:
         # its bound outputs. A failed M1 cannot dispatch a downstream producer.
         if rc == 0 and verdict == "PASS":
             _m2_json = project / "reports/analog/mixed_signal/power_domain_producer_audit.json"
-            _m2_json.unlink(missing_ok=True)
+            if _execution.request()["mode"] != "default":
+                _m2_json.unlink(missing_ok=True)
             _m2_dispatched = _controller_mixed_step(_execution, project, "M2", _m2_json)
             if _m2_dispatched is None:
                 _m2_rc = _run_phase(
@@ -2813,7 +2830,8 @@ def _main() -> int:
         # successor or borrow a passing verdict from missing audit bytes.
         if _m2_rc == 0 and _m2_verdict == "PASS":
             _m3_json = project / "reports/analog/mixed_signal/m3_producer_audit.json"
-            _m3_json.unlink(missing_ok=True)
+            if _execution.request()["mode"] != "default":
+                _m3_json.unlink(missing_ok=True)
             _m3_dispatched = _controller_mixed_step(_execution, project, "M3", _m3_json)
             if _m3_dispatched is None:
                 _m3_rc = _run_phase(
@@ -2855,7 +2873,8 @@ def _main() -> int:
         reports["mixed_signal_M3"] = _m3_rep
         if _m3_rc == 0 and _m3_verdict == "PASS":
             _m4_json = project / "reports/analog/mixed_signal/signoff_producer_audit.json"
-            _m4_json.unlink(missing_ok=True)
+            if _execution.request()["mode"] != "default":
+                _m4_json.unlink(missing_ok=True)
             _m4_dispatched = _controller_mixed_step(_execution, project, "M4", _m4_json)
             if _m4_dispatched is None:
                 _m4_rc = _run_phase(

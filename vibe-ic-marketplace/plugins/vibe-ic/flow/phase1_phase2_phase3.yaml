@@ -3741,6 +3741,7 @@ steps:
     programs:
       - transition_fault_atpg_run
       - transition_coverage_check
+      - phase3_one_shot_runner
     # DT1/DT2/DT3 declared NO required_outputs at all, so the artefact each
     # step exists to produce was invisible to every tool that enumerates a
     # step's evidence through this field (flow_dashboard_data._resolve_outputs
@@ -3783,6 +3784,11 @@ steps:
     # `phase3_one_shot_runner._ATPG_NOT_RUN_LEGACY_COLOCATED_REL`.
     required_outputs:
       - "reports/phase2/dft/transition_coverage.json"
+    program_outputs:
+      - program: phase3_one_shot_runner
+        path: "phase2/stage2/dft/transition_atpg_not_run.json"
+      - program: phase3_one_shot_runner
+        path: "reports/phase2/dft/transition_atpg_not_run.json"
     gate:
       # produce/validate split (mirrors Step 11): the RUNNER produces
       # transition_coverage.json (design_one_shot_runner, with the discovered
@@ -5633,10 +5639,16 @@ steps:
     programs:
       - path_delay_fault_atpg_run
       - path_delay_coverage_check
+      - phase3_one_shot_runner
     # See the DT1 note: the measurement alone, single-branch, so its absence is
     # loud and can back DT3's condition.
     required_outputs:
       - "reports/phase2/dft/path_delay_coverage.json"
+    program_outputs:
+      - program: phase3_one_shot_runner
+        path: "phase2/stage2/dft/path_delay_atpg_not_run.json"
+      - program: phase3_one_shot_runner
+        path: "reports/phase2/dft/path_delay_atpg_not_run.json"
     gate:
       # produce/validate split (mirrors Step 11 / DT1): the RUNNER produces
       # path_delay_coverage.json (phase3_one_shot_runner, once the routed
@@ -5703,9 +5715,15 @@ steps:
     programs:
       - sdd_atpg_run
       - sdd_coverage_check
+      - phase3_one_shot_runner
     # See the DT1 note: the measurement alone, single-branch.
     required_outputs:
       - "reports/phase2/dft/sdd_coverage.json"
+    program_outputs:
+      - program: phase3_one_shot_runner
+        path: "phase2/stage2/dft/sdd_atpg_not_run.json"
+      - program: phase3_one_shot_runner
+        path: "reports/phase2/dft/sdd_atpg_not_run.json"
     gate:
       # produce/validate split (mirrors DT1/DT2): the RUNNER produces
       # sdd_coverage.json (phase3_one_shot_runner, after DT2); the flow GATE
@@ -9598,6 +9616,9 @@ steps:
     required_outputs:
       - "phase3/mixed_signal/top_merged.gds"
       - "reports/analog/mixed_signal/merge.json"
+    program_outputs:
+      - program: mixed_signal_top_lvs_run
+        path: "reports/analog/mixed_signal/top_lvs_run.json"
     gate:
       all_of:
         # PRODUCER, advisory on purpose: producing is not a verdict. It runs
@@ -9694,6 +9715,8 @@ steps:
       - "reports/analog/mixed_signal/pd_connectivity.json"
       - "reports/analog/mixed_signal/power_domain_run.json"
     program_outputs:
+      - program: mixed_signal_power_domain_run
+        path: "reports/analog/mixed_signal/power_domain_producer_audit.json"
       - program: power_domain_crossing_check
         path: "reports/analog/mixed_signal/power_domain_crossing_audit.json"
       - program: level_shifter_required_check
@@ -9746,6 +9769,8 @@ steps:
       - "phase3/mixed_signal/cosim/mixed_signal_results.json"
       - "reports/analog/mixed_signal/interface_si.json"
     program_outputs:
+      - program: mixed_signal_m3_run
+        path: "reports/analog/mixed_signal/m3_producer_audit.json"
       - program: mixed_signal_cosim_check
         path: "reports/analog/mixed_signal/cosim_audit.json"
       - program: mixed_signal_interface_si_check
@@ -9787,6 +9812,8 @@ steps:
     required_outputs:
       - "reports/analog/mixed_signal/signoff.json"
     program_outputs:
+      - program: mixed_signal_signoff_run
+        path: "reports/analog/mixed_signal/signoff_producer_audit.json"
       - program: mixed_signal_signoff_check
         path: "reports/analog/mixed_signal/signoff_audit.json"
     gate:
