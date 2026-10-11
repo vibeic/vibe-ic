@@ -792,6 +792,53 @@ def test_linked_io_liberty_continued_cap_unit_and_default_fanout():
     assert limits["defaults"]["max_capacitance"] == 999
 
 
+@pytest.mark.parametrize("group", ["internal_power", "timing"])
+def test_liberty_limits_after_nested_groups_are_pin_attributes(group):
+    limits = drv._liberty_limits('''library (lib) {
+ time_unit : "1ns"; capacitive_load_unit (1, pf);
+ cell (logic) { pin (Y) {
+  ''' + group + ''' () {
+   nested () { max_capacitance : 0.000001; max_transition : 0.000001; }
+  }
+  max_capacitance : 0.071421; max_transition : 1.490347;
+  max_fanout : 2; fanout_load : 1;
+ } }
+}''')
+    pin = limits["cells"]["logic"]["Y"]
+    assert pin["max_capacitance"] == .071421
+    assert pin["max_slew"] == 1.490347
+    assert pin["max_fanout"] == 2
+    assert pin["fanout_load"] == 1
+
+
+@pytest.mark.parametrize("measured,expected", [(.06, "PASS"), (.08, "FAIL")])
+def test_post_table_liberty_limit_is_used_by_actual_judge(tmp_path, measured, expected):
+    bundle = _bundle(tmp_path)
+    lib = _file(tmp_path, "library.lib", '''library (lib) {
+ time_unit : "1ns"; capacitive_load_unit (1, pf);
+ nom_process : 1; nom_voltage : 5; nom_temperature : 25;
+ default_max_transition : 20; default_max_capacitance : 20;
+ cell (logic) { pin (Y) {
+  internal_power () { fall_power (table) { values ("0.001"); } }
+  max_transition : 20; max_capacitance : 0.071421;
+ } }
+}''')
+    bundle["current"]["liberties"] = [{"name": "std", **lib}]
+    bundle["frozen"]["liberties"]["std"] = lib["sha256"]
+    bundle["scenes"][0]["linked_liberties"] = [{"name": "std", **lib}]
+    _violate(bundle, tmp_path, "max_capacitance", value=measured, limit=.071421)
+    if measured <= .071421:
+        scene = bundle["scenes"][0]
+        scene["counters"]["max_capacitance"] = 0
+        scene["counter_report"] = _file(tmp_path, "counter.log", "".join(
+            f"DRV_COUNTER {kind} {scene['counters'][kind]}\n" for kind in drv.KINDS))
+    result = drv.judge(bundle)
+    assert result["verdict"] == expected, result["failures"] + result["not_measured"]
+    if expected == "FAIL":
+        assert result["findings"][0]["failed_tier"] == "T1_LIBERTY"
+        assert result["findings"][0]["waivable"] is False
+
+
 def test_negated_table_title_cannot_be_a_measurement():
     body = "not max slew\nPin u/Y ^\nmax slew 3\nslew 4\nSlack -1 (VIOLATED)\n"
     parsed = drv.parse_check_types(body, scene="s", mode="m",

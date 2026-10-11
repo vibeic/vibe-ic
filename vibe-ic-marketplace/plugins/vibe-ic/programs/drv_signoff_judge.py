@@ -145,7 +145,7 @@ def _balanced_block(text: str, start: int) -> str:
 
 
 def _liberty_limits(body: str) -> dict:
-    """Take pin attributes before nested timing groups and library defaults."""
+    """Read direct pin attributes in any order, excluding nested groups."""
     # PDK Liberty writers commonly split a unit declaration with a Tcl-style
     # backslash/newline (the linked gf180 IO library does exactly this).
     body = re.sub(r"\\\s*\n\s*", " ", body)
@@ -179,8 +179,18 @@ def _liberty_limits(body: str) -> dict:
         pins = {}
         for pin in re.finditer(r'\bpin\s*\(\s*"?([^"\)]+)"?\s*\)\s*\{', cell_body):
             pin_body = _balanced_block(cell_body, pin.start())
-            # Pin-level attributes occur before nested timing/power tables.
-            direct = pin_body.split("timing (")[0].split("internal_power (")[0]
+            # Liberty permits pin attributes after timing/power tables. Keep
+            # every direct attribute while discarding child-group bodies.
+            direct_chars = []
+            depth = 0
+            for char in pin_body:
+                if char == "{":
+                    depth += 1
+                elif char == "}":
+                    depth -= 1
+                elif depth == 0:
+                    direct_chars.append(char)
+            direct = "".join(direct_chars)
             pins[pin.group(1).strip()] = {
                 kind: scaled(direct, kind)
                 for kind in KINDS}
