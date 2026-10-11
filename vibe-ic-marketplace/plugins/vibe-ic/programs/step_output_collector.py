@@ -283,7 +283,9 @@ def latest_pass(project: Path, step_id: str) -> dict | None:
         record = json.loads((steps_root / pointer['folder'] / 'outputs.json').read_text())
     except (OSError, ValueError, KeyError):
         return None
-    record['current_inputs'] = all(
+    # No resolved input identity means freshness was not measured. A
+    # historical canonical PASS must not become current by all({}) alone.
+    record['current_inputs'] = bool(pointer.get('inputs')) and all(
         (project / rel).is_file() and _sha(project / rel) ==
         (value.get('sha256') if isinstance(value, dict) else value)
         for rel, value in pointer.get('inputs', {}).items())

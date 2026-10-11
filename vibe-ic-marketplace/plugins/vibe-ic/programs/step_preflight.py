@@ -1081,12 +1081,13 @@ def _retained_row_evidence(dec: Decision, sid: str, evidence) -> list:
     return selected
 
 
-def retained_step(step_id: str):
+def retained_step(step_id: str, *, canonical_acceptance: bool = False):
     """Retain an existing leaf call; leave its arguments and verdict unchanged.
 
     This attaches history at the actual producer/validator function without
     changing the runner's dispatch plan, entry window or applicability rules.
-    The saved result remains component evidence, never a canonical PASS.
+    Component evidence stays component-only. An explicitly complete producer
+    may attach the unchanged canonical consumer in the same saved invocation.
     """
     import functools
 
@@ -1099,16 +1100,27 @@ def retained_step(step_id: str):
                 dec = Decision(runner=fn.__module__, site=fn.__name__,
                                flow_steps=[str(step_id)])
                 return _retained_dispatch(Path(project), dec, None, fn,
-                                          (project, top, pdk, container), {})
+                                          (project, top, pdk, container), {},
+                                          canonical_acceptance=canonical_acceptance)
             return prelayout
         @functools.wraps(fn)
         def retained(project, *args, **kwargs):
             dec = Decision(runner=fn.__module__, site=fn.__name__,
                            flow_steps=[str(step_id)])
             return _retained_dispatch(Path(project), dec, None, fn,
-                                      (project, *args), kwargs)
+                                      (project, *args), kwargs,
+                                      canonical_acceptance=canonical_acceptance)
         return retained
     return decorate
+
+
+def retained_call(project: Path, step_id: str, fn, *args,
+                  canonical_acceptance: bool = False, **kwargs):
+    """Retain one selected existing call before it invalidates working outputs."""
+    dec = Decision(runner=fn.__module__, site=fn.__name__,
+                   flow_steps=[str(step_id)])
+    return _retained_dispatch(Path(project), dec, None, fn, args, kwargs,
+                              canonical_acceptance=canonical_acceptance)
 
 
 def _begin_retained_rows(project: Path, dec: Decision) -> list:
@@ -1139,7 +1151,8 @@ def _retain_preflight_refusal(project: Path, dec: Decision, flow_def: Any,
 
 
 def _retained_dispatch(project: Path, dec: Decision, flow_def: Any,
-                       fn: Callable[..., Any], args: Any, kwargs: Any) -> Any:
+                       fn: Callable[..., Any], args: Any, kwargs: Any,
+                       *, canonical_acceptance: bool = False) -> Any:
     """Keep Default's actual call outputs without changing its verdict rules.
 
     The direct Phase-3 row driver owns its finer per-row versions. Other
@@ -1152,8 +1165,26 @@ def _retained_dispatch(project: Path, dec: Decision, flow_def: Any,
         return _scoped_dispatch(project, dec.site, flow_def, fn, args, kwargs)
     import step_output_collector as versions
     attempts = _begin_retained_rows(project, dec)
+    consumer = None
     try:
         result = _scoped_dispatch(project, dec.site, flow_def, fn, args, kwargs)
+        if canonical_acceptance:
+            if len(attempts) != 1:
+                raise ValueError('complete canonical acceptance requires one selected step')
+            if isinstance(result, int) and not isinstance(result, bool):
+                producer_ok = result == 0
+            elif isinstance(result, dict) and 'rc' in result:
+                producer_ok = type(result['rc']) is int and result['rc'] == 0
+            else:
+                producer_ok = getattr(result, 'status', None) == 'PASS'
+            if producer_ok:
+                import _flow_yaml
+                import execution_backend_gates as gates
+                row = next(row for row in _flow_yaml.load()['steps']
+                           if str(row['id']) == attempts[0]['id'])
+                consumer = gates.evaluate(project, row)
+                if consumer['status'] == 'PASS':
+                    consumer['outputs'] = gates.contracts(project, row)
     except BaseException as exc:
         for attempt in attempts:
             versions.finish_step(project, attempt, verdict='INTERRUPTED',
@@ -1167,17 +1198,30 @@ def _retained_dispatch(project: Path, dec: Decision, flow_def: Any,
                              or getattr(row, 'output_files', [])),
                  'step_id': (getattr(row, 'extras', {}) or {}).get('step_id')}
                 for row in rows]
+    if canonical_acceptance and (isinstance(result, int) and not isinstance(result, bool)
+                                 or isinstance(result, dict) and 'rc' in result):
+        rc = result if isinstance(result, int) else result['rc']
+        evidence = [{'name': dec.site, 'status': ('PASS' if type(rc) is int and rc == 0 else
+                     'FAIL' if type(rc) is int and rc == 1 else 'NOT_MEASURED'),
+                     'return_code': rc, 'producer_result': result}]
     invocation_outcome = _retained_row_outcome(evidence)
     for attempt in attempts:
         own_evidence = _retained_row_evidence(dec, attempt['id'], evidence)
         outcome = _retained_row_outcome(own_evidence)
+        if consumer is not None:
+            outcome = consumer['status']
         saved = versions.finish_step(project, attempt, verdict=outcome,
                                      result={'runner': dec.runner, 'site': dec.site,
                                              'rows': evidence,
                                              'invocation_status': invocation_outcome,
                                              'step_rows': own_evidence,
+                                             'producer_return': (result if isinstance(result, (dict, int))
+                                                                 else None),
+                                             'canonical_consumer': consumer,
                                              'attribution': ('EXISTING_PRODUCER_RESULT' if own_evidence
-                                                             else 'UNRESOLVED_SHARED_RESULT')})
+                                                             else 'UNRESOLVED_SHARED_RESULT')},
+                                     canonical_pass=(consumer is not None
+                                                     and consumer['status'] == 'PASS'))
         if saved['capture_errors']:
             raise OSError('step output version could not be retained: ' +
                           '; '.join(saved['capture_errors']))

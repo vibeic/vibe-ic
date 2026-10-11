@@ -1124,6 +1124,7 @@ def _pdk_of_this_run(extras: "Optional[List[str]]") -> str:
     return "" if val.lower() in ("", "auto") else val
 
 
+@_spf.retained_step('0.5ic', canonical_acceptance=True)
 def _run_step_0_5ic(project: Path, pdk: str = "") -> int:
     """Run step 0.5ic's two producers, in the order the flow declares them.
 

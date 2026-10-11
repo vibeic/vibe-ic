@@ -58415,57 +58415,54 @@ def run_pre_audit_producers(project: Path, container: str = "", *,
     these steps' own yaml clauses already decide them in the audit.
     """
     rows: List[StepResult] = []
+    step_ids = {'foundry_handoff': '38', 'tapeout_checklist': '36',
+                'gds_xor': '37.3'}
     for name, program, out_rel, extra_argv in _PRE_AUDIT_PRODUCERS:
         if (only_names is not None and name not in only_names
                 or name in skip_names):
             continue
-        # These files belong to this producer.  Remove a previous invocation's
-        # copy before attempting the producer so a timeout/refusal cannot leave
-        # bytes that the later compliance audit mistakes for this run's output.
-        # The producer's own StepResult remains the authority; this unlink only
-        # invalidates an unbound prior-run fallback.
-        try:
-            (project / out_rel).unlink(missing_ok=True)
-        except OSError as exc:
-            rows.append(_signoff_not_checked(
-                name, time.time(),
-                f"cannot invalidate prior producer output {out_rel}: {exc}"))
-            continue
-        if name == "foundry_handoff":
-            import foundry_handoff_package_check as _handoff_check
-            sources = _handoff_check.layout_member_sources(project)
-            if ((_ga.visible_gds(project) or _ga.gate_record(project))
-                    and not _ga.admitted_package_sources(project, sources)):
-                # A measurement-only stream (R-0929-TAIL-CONTINUES) is never
-                # packaged, but it is the GDS the tail steps just measured and
-                # stays where they read it; any older kit is still set aside.
-                if not _ga.measurement_stream_current(project):
-                    _ga.quarantine_visible_gds(
-                        project, "foundry handoff: current layout admission absent")
-                _ga.quarantine_handoff_package(
-                    project, "foundry handoff: current layout admission absent")
-                rows.append(_upstream_signoff_not_measured(
-                    name, "current digest-bound GDS admission absent"
-                    + ("; the stream is measurement-only (a non-PASS Step 32 "
-                       "or pre-stream gate)" if _ga.measurement_stream_current(project)
-                       else "")))
-                continue
-        argv = tuple(extra_argv)
-        if container and name in _PDK_AWARE_SIGNOFF_GATES:
-            argv += ("--pdk-container", container)
-        # A LAYOUT-TOOL GATE NEEDS THE CONTAINER BY ITS OWN FLAG NAME, and
-        # forgetting it is silent: `gds_xor_check` found no runner, refused with
-        # "no KLayout runner reaches this project", and wrote a NOT_DETERMINED
-        # receipt -- on a tree its runner DOES cover (`covers()` returns True for
-        # exactly that path). MEASURED while proving the SLT53B fix: the receipt
-        # appeared, so "produced" looked satisfied, while the comparison had not
-        # run. Two flags, two different gates: the PDK-view readers above take
-        # `--pdk-container`; this one drives KLayout and takes `--container`.
-        if container and name in _KLAYOUT_CONTAINER_SIGNOFF_GATES:
-            argv += ("--container", container)
-        rows.append(_run_declared_signoff_gate(project, name, program, out_rel,
-                                               argv))
+        rows.append(_spf.retained_call(
+            project, step_ids[name], _run_pre_audit_producer,
+            project, name, program, out_rel, extra_argv, container,
+            canonical_acceptance=True))
     return rows
+
+
+def _run_pre_audit_producer(project: Path, name: str, program: str,
+                            out_rel: str, extra_argv: tuple,
+                            container: str) -> StepResult:
+    """The existing producer body, after its history has saved old bytes."""
+    # Invalidate the working copy, retaining every previous version first.
+    # A refused retry cannot leave an old output masquerading as a new one.
+    try:
+        (project / out_rel).unlink(missing_ok=True)
+    except OSError as exc:
+        return _signoff_not_checked(
+            name, time.time(),
+            f"cannot invalidate prior producer output {out_rel}: {exc}")
+    if name == "foundry_handoff":
+        import foundry_handoff_package_check as _handoff_check
+        sources = _handoff_check.layout_member_sources(project)
+        if ((_ga.visible_gds(project) or _ga.gate_record(project))
+                and not _ga.admitted_package_sources(project, sources)):
+            # Keep the established layout-admission decision unchanged.
+            if not _ga.measurement_stream_current(project):
+                _ga.quarantine_visible_gds(
+                    project, "foundry handoff: current layout admission absent")
+            _ga.quarantine_handoff_package(
+                project, "foundry handoff: current layout admission absent")
+            return _upstream_signoff_not_measured(
+                name, "current digest-bound GDS admission absent"
+                + ("; the stream is measurement-only (a non-PASS Step 32 "
+                   "or pre-stream gate)" if _ga.measurement_stream_current(project)
+                   else ""))
+    argv = tuple(extra_argv)
+    if container and name in _PDK_AWARE_SIGNOFF_GATES:
+        argv += ("--pdk-container", container)
+    # KLayout takes --container; the PDK-view readers take --pdk-container.
+    if container and name in _KLAYOUT_CONTAINER_SIGNOFF_GATES:
+        argv += ("--container", container)
+    return _run_declared_signoff_gate(project, name, program, out_rel, argv)
 
 
 def _signoff_gate_env(program: str, extra_argv: tuple, out_rel: str):
@@ -76925,46 +76922,13 @@ def _run_derived_artefact_generators(project: Path, effective_top: Optional[str]
         gen_path = PROGRAMS_DIR / gen
         if not gen_path.is_file():
             continue
-        if gen == "foundry_handoff_pack_gen.py":
-            import foundry_handoff_package_check as _handoff_check
-            sources = _handoff_check.layout_member_sources(project)
-            if ((_ga.visible_gds(project) or _ga.gate_record(project))
-                    and not _ga.admitted_package_sources(project, sources)):
-                # R-0929-TAIL-CONTINUES: a measurement-only stream stays
-                # where the tail read it; it is never packaged.
-                if not _ga.measurement_stream_current(project):
-                    _ga.quarantine_visible_gds(
-                        project, "foundry handoff: current layout admission absent")
-                _ga.quarantine_handoff_package(
-                    project, "foundry handoff: current layout admission absent")
-                print("[WARN] foundry handoff skipped: current digest-bound "
-                      "GDS admission absent", file=sys.stderr)
-                outcomes.append({"program": gen, "rc": None,
-                                 "message": "skipped: current digest-bound GDS "
-                                            "admission absent"})
-                continue
-        cmd = [sys.executable, str(gen_path), str(project)]
-        # #467: hand the resolved top to the handoff generator as the
-        # design_top fallback (used only when L1 ic_name is empty).
-        if gen == "foundry_handoff_pack_gen.py" and effective_top:
-            cmd += ["--top", str(effective_top)]
-        try:
-            cp = subprocess.run(
-                cmd,
-                timeout=120, check=False,
-                capture_output=True, text=True,
-            )
-        except Exception as exc:
-            print(f"[WARN] {kind} generator failed: {exc}",
-                  file=sys.stderr)
-            outcomes.append({"program": gen, "rc": None, "message": str(exc)})
-            continue
-        message = _stderr_tail(cp.stderr or cp.stdout, 5)
-        if cp.returncode != 0:
-            print(f"[WARN] {kind} generator {gen} exited rc={cp.returncode}: "
-                  f"{message}", file=sys.stderr)
-        outcomes.append({"program": gen, "rc": cp.returncode,
-                         "message": message})
+        sid = {'postroute_timing_repair_status_gen.py': '32',
+               'foundry_handoff_pack_gen.py': '38',
+               'tapeout_checklist_gen.py': '36'}[gen]
+        outcomes.append(_spf.retained_call(
+            project, sid, _run_derived_artefact_generator,
+            project, effective_top, gen, kind,
+            canonical_acceptance=(sid != '32')))
     # The durable record: every outcome, in the run's own report directory,
     # so a refusal is readable after the terminal is gone.
     try:
@@ -76976,6 +76940,47 @@ def _run_derived_artefact_generators(project: Path, effective_top: Optional[str]
     except OSError as exc:
         print(f"[WARN] derived-generator record not written: {exc}", file=sys.stderr)
     return outcomes
+
+
+def _run_derived_artefact_generator(project: Path, effective_top: Optional[str],
+                                    gen: str, kind: str) -> Dict[str, Any]:
+    """One existing retry, with its prior outputs retained before any write."""
+    if gen == "foundry_handoff_pack_gen.py":
+        import foundry_handoff_package_check as _handoff_check
+        sources = _handoff_check.layout_member_sources(project)
+        if ((_ga.visible_gds(project) or _ga.gate_record(project))
+                and not _ga.admitted_package_sources(project, sources)):
+            # R-0929-TAIL-CONTINUES: a measurement-only stream stays
+            # where the tail read it; it is never packaged.
+            if not _ga.measurement_stream_current(project):
+                _ga.quarantine_visible_gds(
+                    project, "foundry handoff: current layout admission absent")
+            _ga.quarantine_handoff_package(
+                project, "foundry handoff: current layout admission absent")
+            print("[WARN] foundry handoff skipped: current digest-bound "
+                  "GDS admission absent", file=sys.stderr)
+            return {"program": gen, "rc": None,
+                    "message": "skipped: current digest-bound GDS admission absent"}
+    cmd = [sys.executable, str(PROGRAMS_DIR / gen), str(project)]
+    # #467: hand the resolved top to the handoff generator as the
+    # design_top fallback (used only when L1 ic_name is empty).
+    if gen == "foundry_handoff_pack_gen.py" and effective_top:
+        cmd += ["--top", str(effective_top)]
+    try:
+        cp = subprocess.run(
+            cmd,
+            timeout=120, check=False,
+            capture_output=True, text=True,
+        )
+    except Exception as exc:
+        print(f"[WARN] {kind} generator failed: {exc}",
+              file=sys.stderr)
+        return {"program": gen, "rc": None, "message": str(exc)}
+    message = _stderr_tail(cp.stderr or cp.stdout, 5)
+    if cp.returncode != 0:
+        print(f"[WARN] {kind} generator {gen} exited rc={cp.returncode}: "
+              f"{message}", file=sys.stderr)
+    return {"program": gen, "rc": cp.returncode, "message": message}
 
 
 #: `reports/phase3/<this>`: every derived generator's exit and message.
