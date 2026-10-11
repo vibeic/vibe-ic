@@ -1265,6 +1265,7 @@ def gate(project: Path, runner: str, site: str,
     own `StepResult`-shaped refusal row.
     """
     flow_def = kwargs.pop("_preflight_flow_def", None)
+    canonical_acceptance = kwargs.pop('_preflight_canonical_acceptance', False)
     # WHICH INSTANCE of the site this dispatch was. `analog_one_shot_runner`
     # dispatches every A-site once PER BLOCK, so without this the ledger would
     # carry N identical `A2` records with no way to tell which block each was
@@ -1304,7 +1305,8 @@ def gate(project: Path, runner: str, site: str,
             dec.notes.append(str(note))
         print(f"[preflight] {site}: NOT-APPLICABLE — {not_applicable}",
               file=sys.stderr, flush=True)
-        result = _retained_dispatch(Path(project), dec, flow_def, fn, args, kwargs)
+        result = _retained_dispatch(Path(project), dec, flow_def, fn, args, kwargs,
+                                    canonical_acceptance=canonical_acceptance)
         record(Path(project), dec)
         return result
 
@@ -1347,7 +1349,8 @@ def gate(project: Path, runner: str, site: str,
     import execution_policy
     result = execution_policy.dispatch_ordinary_site(project, runner, site, refusal_factory)
     if result is None:
-        result = _retained_dispatch(Path(project), dec, flow_def, fn, args, kwargs)
+        result = _retained_dispatch(Path(project), dec, flow_def, fn, args, kwargs,
+                                    canonical_acceptance=canonical_acceptance)
 
     status = getattr(result, "status", None)
     if status is None and isinstance(result, (list, tuple)):

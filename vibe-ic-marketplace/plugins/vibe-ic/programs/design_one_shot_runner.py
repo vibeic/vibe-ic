@@ -19578,7 +19578,7 @@ def step_qsf_gen(project: Path, top_name: str = "chip_top",
                       f"rc={rc} out={_evidence_tail(out, 500)} err={_evidence_tail(err, 500)}")
 
 
-@_spf.retained_step('8')
+@_spf.retained_step('8', canonical_acceptance=True)
 def step_sdc_validation(project: Path) -> StepResult:
     import librelane_contract as _llc
     mode = _llc.selected_mode(project, '8')
@@ -19645,7 +19645,7 @@ def step_sdc_validation(project: Path) -> StepResult:
 _SDC_POSTCHECK_SCHEMA = 'sdc-post-prelayout/2'
 
 
-@_spf.retained_step('8')
+@_spf.retained_step('8', canonical_acceptance=True)
 def step_sdc_validation_post_prelayout(project: Path, top: str,
                                        *, native_result: Optional[dict] = None) -> StepResult:
     """Consume this project's current tool evidence, without a frontend context.
@@ -22022,6 +22022,197 @@ def _positive_completed_rung_cap(value: str) -> int:
     return parsed
 
 
+def _run_transition_atpg(project: Path, clk: str, pdk) -> dict:
+    """Run the existing Phase-2 DT1 producer without borrowing old coverage."""
+    dft_dir = _pl.dft_dir(project)
+    reports_dir = project / 'reports'
+    # Transition-delay-fault (LOC) ATPG producer.
+    # v1.3.97 — PRODUCE the TDF coverage from the Step-11 cut netlist, reusing
+    # the discovered `clk`. The flow's DT1 gate only VALIDATES the produced
+    # reports/phase2/dft/transition_coverage.json (via transition_coverage_
+    # check), mirroring the Step-11 produce/validate split.
+    #
+    # THE STEP ALWAYS LEAVES A RECORD. Previously the whole block sat behind a
+    # bare `if clk and cut_netlist.v`, with no else — so when the precondition
+    # was unmet the at-speed coverage artefact was simply ABSENT, with nothing
+    # anywhere saying why, and the DT1 row could not distinguish "never ran"
+    # from "ran and failed to write" from "ran and self-skipped". Those are
+    # three different repairs. The producer's exit status was discarded too, so
+    # a run that exited non-zero without writing its JSON also vanished.
+    # An absent artefact must never be silence; each of the three outcomes now
+    # names itself in `not_run_stage`, and the gate turns that into BLOCKED
+    # (recorded reason) rather than a step nobody notices.
+    _native_rc = 2
+    _tdf_not_run = dft_dir / "transition_atpg_not_run.json"
+    _TDF_CAP = {"capability_flag": "cap:at_speed_timing_graded_atpg",
+                "skips_required_output":
+                    "reports/phase2/dft/transition_coverage.json"}
+    tdf_json = reports_dir / "phase2" / "dft" / "transition_coverage.json"
+    import execution_policy
+    if execution_policy.request()['mode'] == 'default':
+        # The enclosing retained call has already saved the previous output.
+        # A missing precondition must not leave old coverage as current work.
+        tdf_json.unlink(missing_ok=True)
+    _tdf_missing = []
+    if not clk:
+        _tdf_missing.append("no clock was discovered for this design")
+    if not (dft_dir / "cut_netlist.v").is_file():
+        _tdf_missing.append("phase2/stage2/dft/cut_netlist.v absent — the "
+                            "Step-11 scan cut produced no cut netlist to run "
+                            "at-speed ATPG on")
+    if _tdf_missing:
+        # A PRECONDITION IS NOT A CAPABILITY — the DT1 arm of the same split
+        # #581 made for the budget and `_dft_atpg_crash_reason` made for the
+        # crash. This record already SAYS `not_run_stage: precondition_unmet`
+        # ("cut_netlist.v absent"), and used to say
+        # `capability_flag: cap:at_speed_timing_graded_atpg` in the same
+        # breath — asserting the engine cannot do at-speed TDF ATPG on a run
+        # where the engine was never invoked. The ownership claim
+        # (`skips_required_output`) is kept: it says WHICH absent output this
+        # marker explains, which is true and is a different claim.
+        #
+        # DIRECTION OF THE CHANGE, stated: dropping the flag can only make a
+        # step's status the SAME or STRICTER (a capability-AWARE deferral
+        # MISSING->SKIPPED-CONDITION is refused), never looser. Measured on
+        # the published sha256 x sky130A tree, removing both DFT capability
+        # flags left `flow_compliance_check --strict` byte-identical.
+        _dft_disclose_skip(
+            _tdf_not_run,
+            "transition-delay-fault ATPG NEVER RAN — precondition unmet: "
+            + "; ".join(_tdf_missing),
+            {"skips_required_output": _TDF_CAP["skips_required_output"],
+             "not_run_stage": "precondition_unmet"})
+    else:
+        tdf_json.parent.mkdir(parents=True, exist_ok=True)
+        tdf_cmd = [sys.executable,
+                   str(PROGRAMS_DIR / "transition_fault_atpg_run.py"),
+                   str(project), "--clock", clk, "--max-faults", "400",
+                   "--json", str(tdf_json)]
+        _tdf_lib = sorted((project / "input" / "pdk" / "liberty").glob("*typ*.lib")) \
+            if (project / "input" / "pdk" / "liberty").is_dir() else []
+        if _tdf_lib:
+            tdf_cmd += ["--liberty", str(_tdf_lib[0])]
+        # vibe-ic#2183 — SNIFF IT HERE when Step 11 did not run (see the
+        # `pdk = None` note at the top of this function). The same call, on the
+        # same netlist, so the two branches can never name different PDKs; and
+        # a measurement rather than a default, so `--pdk-dir` is present
+        # exactly when the netlist says the commercial PDK is in use.
+        if pdk is None:
+            _tdf_sniff_netlist, pdk = _dft_atpg_sniff_pdk(
+                project, "phase2/stage2/synth/netlist.v")
+        if pdk and pdk == _cpdk.COMMERCIAL_PDK_ID:
+            tdf_cmd += ["--pdk-dir", str((project / "input" / "pdk").resolve())]
+        try:
+            # Outer wall MUST cover the producer's OWN size-scaled wall (capped at
+            # WALL_BUDGET_MAX); a fixed value below that cap SIGKILLs the producer
+            # mid-batch on any flop-bearing design, so it writes no coverage and
+            # leaks its container. See _tdf_atpg_subprocess_timeout_s.
+            _tdf_p = _pr.run(tdf_cmd, capture_output=True, text=True)
+            _native_rc = _tdf_p.returncode
+            if not tdf_json.is_file():
+                if _native_rc == 0:
+                    _native_rc = 2
+                # Ran, produced nothing. The producer writes its JSON on every
+                # path it reaches, so reaching none of them is itself the
+                # finding — record the exit status and the tail rather than
+                # leaving an absent file to be read as a self-skip.
+                _dft_disclose_skip(
+                    _tdf_not_run,
+                    "transition-delay-fault ATPG RAN but wrote no "
+                    "transition_coverage.json (producer exit "
+                    f"{_tdf_p.returncode}): "
+                    + ((_tdf_p.stderr or _tdf_p.stdout or "")[-400:]
+                       or "no output"),
+                    dict(_TDF_CAP, not_run_stage="producer_wrote_no_artifact",
+                         producer_exit=_tdf_p.returncode))
+            elif _tdf_not_run.is_file():
+                # A real measurement supersedes any stale record from a prior
+                # attempt, so the gate does not read a fresh result as blocked.
+                try:
+                    _tdf_not_run.unlink()
+                except OSError:
+                    pass
+        except _pr.Stalled as exc:
+            # vibe-ic#581 (extended to the AT-SPEED path) — A TIMEOUT IS A BUDGET
+            # OUTCOME, NOT A CAPABILITY GAP.
+            #
+            # #581 split the stuck-at dispatch's timeout out of its blanket
+            # `except Exception` (see the sibling handler above at
+            # "Fault ATPG exceeded its wall budget"), but the transition/at-speed
+            # dispatch here was left with only `except Exception`, so a wall-clock
+            # expiry still lands in `_TDF_CAP` and is recorded with
+            # `capability_flag: cap:at_speed_timing_graded_atpg` — a machine-
+            # readable assertion that the ENGINE cannot do at-speed TDF ATPG.
+            #
+            # MEASURED on opentitan_aes x sky130A (fault 0.9.4, vibeic/yosys `sat`):
+            # the LOC miter builds and the SAT solver returns real per-fault STR/STF
+            # verdicts (cal_run.log: "VIBEICTDF _42764__A2 STR", 617 620 cells
+            # imported to the SAT DB, model FOUND) — the engine ran fine. What blew
+            # was OUR wall clock: ~57 s of kissat per fault x --max-faults 400 on a
+            # 2922-flop flattened AES cannot finish in 1800 s. Nothing about the
+            # engine's capability is in question; the remedy is "raise the budget
+            # or lower --max-faults", which the capability flag actively hides.
+            #
+            # A crash/RuntimeError/FileNotFoundError IS a capability gap and keeps
+            # the flag on the `except Exception` arm below — this is a split, not a
+            # deletion. TimeoutExpired subclasses SubprocessError (not OSError), so
+            # handler ORDER is the fix: this arm must precede `except Exception`.
+            #
+            # The producer NOW scales its own wall with scan-flop count (see
+            # transition_fault_atpg_run._scaled_wall_budget), and this runner's
+            # outer subprocess wall tracks the producer's WALL_BUDGET_MAX cap
+            # (see _tdf_atpg_subprocess_timeout_s), so a wall expiry here is a
+            # genuine budget outcome at the FULL scaled budget — not the old
+            # fixed-1800 s throttle that abandoned the producer before its own
+            # sized batch could finish.
+            # CZT-10 — THE OUTER WALL IS GONE, AND THE FAULT SAMPLE DID NOT
+            # MOVE. This was left untouched by the previous lane on the grounds
+            # that the inner budget also SIZES the sample, so removing the wall
+            # might silently shrink what gets graded. MEASURED rather than
+            # assumed, on the producer's own pure functions:
+            #
+            #   _scaled_wall_budget(1800, scan_flops)  0 -> 1800s,
+            #       1000 -> 4800s, 1800+ -> 7200s (WALL_BUDGET_MAX)
+            #   _rightsize_sample(0.5, 120, W, ...)  W=1800 -> 2820 faults,
+            #       W=3600 -> 5880, W=7200 -> 12000
+            #
+            # So the coupling is REAL -- but it is the INNER budget that sizes
+            # the sample, and the dataflow between the two is ONE-WAY:
+            # `_tdf_atpg_subprocess_timeout_s()` is DERIVED FROM
+            # `WALL_BUDGET_MAX`, and the outer value reaches the producer
+            # nowhere. Read off the argv with `ast` (which cannot see the
+            # comment that mentions the helper by name, and my first probe
+            # matched exactly that comment and had to be redone): `tdf_cmd`
+            # carries --clock / --max-faults / --json / --liberty / --pdk-dir
+            # and no wall, budget or timeout flag at all.
+            #
+            # The producer therefore still sizes its sample from its OWN floor
+            # and cap, unchanged, and the runner simply stops killing it. The
+            # two were separable, and this arm is what the separation leaves:
+            # a stall is a finding about the run.
+            _dft_disclose_skip(
+                _tdf_not_run,
+                f"transition-delay-fault ATPG STALLED and was stopped: {exc}. "
+                f"The SAT engine was launched and then made no forward progress "
+                f"on ANY readable signal — a finding about the RUN, not a "
+                f"capability gap (vibe-ic#581) and not a wall clock (CZT-10). "
+                f"The producer's own size-scaled sample is untouched.",
+                {"stopped_as": "STALLED",
+                 "stall_looks": getattr(exc, "looks", None),
+                 "stall_elapsed_s": getattr(exc, "elapsed_s", None),
+                 "stall_signals": getattr(exc, "signals", None),
+                 "skips_required_output":
+                     "reports/phase2/dft/transition_coverage.json",
+                 "not_run_stage": "producer_stalled"})
+        except Exception as exc:
+            _dft_disclose_skip(
+                _tdf_not_run,
+                f"transition ATPG execution error: {exc}",
+                dict(_TDF_CAP, not_run_stage="producer_execution_error"))
+
+    return {'rc': _native_rc, 'pdk': pdk}
+
+
 def step_dft_lec_chain(project: Path, top_name: str, container: str,
                        ic_class: str, full_chip: bool = True,
                        lec_max_completed_rungs: Optional[int] = None, *,
@@ -22609,179 +22800,10 @@ def step_dft_lec_chain(project: Path, top_name: str, container: str,
                            f"Fault ATPG errored ({exc}) → disclosed-skip", reason_class=_V.ReasonClass.EXECUTION_ERROR))
 
     # ============ Step DT1 — Transition-delay-fault (LOC) ATPG =========
-    # v1.3.97 — PRODUCE the TDF coverage from the Step-11 cut netlist, reusing
-    # the discovered `clk`. The flow's DT1 gate only VALIDATES the produced
-    # reports/phase2/dft/transition_coverage.json (via transition_coverage_
-    # check), mirroring the Step-11 produce/validate split.
-    #
-    # THE STEP ALWAYS LEAVES A RECORD. Previously the whole block sat behind a
-    # bare `if clk and cut_netlist.v`, with no else — so when the precondition
-    # was unmet the at-speed coverage artefact was simply ABSENT, with nothing
-    # anywhere saying why, and the DT1 row could not distinguish "never ran"
-    # from "ran and failed to write" from "ran and self-skipped". Those are
-    # three different repairs. The producer's exit status was discarded too, so
-    # a run that exited non-zero without writing its JSON also vanished.
-    # An absent artefact must never be silence; each of the three outcomes now
-    # names itself in `not_run_stage`, and the gate turns that into BLOCKED
-    # (recorded reason) rather than a step nobody notices.
-    _tdf_not_run = dft_dir / "transition_atpg_not_run.json"
-    _TDF_CAP = {"capability_flag": "cap:at_speed_timing_graded_atpg",
-                "skips_required_output":
-                    "reports/phase2/dft/transition_coverage.json"}
-    tdf_json = reports_dir / "phase2" / "dft" / "transition_coverage.json"
-    _tdf_missing = []
-    if not clk:
-        _tdf_missing.append("no clock was discovered for this design")
-    if not (dft_dir / "cut_netlist.v").is_file():
-        _tdf_missing.append("phase2/stage2/dft/cut_netlist.v absent — the "
-                            "Step-11 scan cut produced no cut netlist to run "
-                            "at-speed ATPG on")
-    if _tdf_missing:
-        # A PRECONDITION IS NOT A CAPABILITY — the DT1 arm of the same split
-        # #581 made for the budget and `_dft_atpg_crash_reason` made for the
-        # crash. This record already SAYS `not_run_stage: precondition_unmet`
-        # ("cut_netlist.v absent"), and used to say
-        # `capability_flag: cap:at_speed_timing_graded_atpg` in the same
-        # breath — asserting the engine cannot do at-speed TDF ATPG on a run
-        # where the engine was never invoked. The ownership claim
-        # (`skips_required_output`) is kept: it says WHICH absent output this
-        # marker explains, which is true and is a different claim.
-        #
-        # DIRECTION OF THE CHANGE, stated: dropping the flag can only make a
-        # step's status the SAME or STRICTER (a capability-AWARE deferral
-        # MISSING->SKIPPED-CONDITION is refused), never looser. Measured on
-        # the published sha256 x sky130A tree, removing both DFT capability
-        # flags left `flow_compliance_check --strict` byte-identical.
-        _dft_disclose_skip(
-            _tdf_not_run,
-            "transition-delay-fault ATPG NEVER RAN — precondition unmet: "
-            + "; ".join(_tdf_missing),
-            {"skips_required_output": _TDF_CAP["skips_required_output"],
-             "not_run_stage": "precondition_unmet"})
-    else:
-        tdf_json.parent.mkdir(parents=True, exist_ok=True)
-        tdf_cmd = [sys.executable,
-                   str(PROGRAMS_DIR / "transition_fault_atpg_run.py"),
-                   str(project), "--clock", clk, "--max-faults", "400",
-                   "--json", str(tdf_json)]
-        _tdf_lib = sorted((project / "input" / "pdk" / "liberty").glob("*typ*.lib")) \
-            if (project / "input" / "pdk" / "liberty").is_dir() else []
-        if _tdf_lib:
-            tdf_cmd += ["--liberty", str(_tdf_lib[0])]
-        # vibe-ic#2183 — SNIFF IT HERE when Step 11 did not run (see the
-        # `pdk = None` note at the top of this function). The same call, on the
-        # same netlist, so the two branches can never name different PDKs; and
-        # a measurement rather than a default, so `--pdk-dir` is present
-        # exactly when the netlist says the commercial PDK is in use.
-        if pdk is None:
-            _tdf_sniff_netlist, pdk = _dft_atpg_sniff_pdk(
-                project, "phase2/stage2/synth/netlist.v")
-        if pdk and pdk == _cpdk.COMMERCIAL_PDK_ID:
-            tdf_cmd += ["--pdk-dir", str((project / "input" / "pdk").resolve())]
-        try:
-            # Outer wall MUST cover the producer's OWN size-scaled wall (capped at
-            # WALL_BUDGET_MAX); a fixed value below that cap SIGKILLs the producer
-            # mid-batch on any flop-bearing design, so it writes no coverage and
-            # leaks its container. See _tdf_atpg_subprocess_timeout_s.
-            _tdf_p = _pr.run(tdf_cmd, capture_output=True, text=True)
-            if not tdf_json.is_file():
-                # Ran, produced nothing. The producer writes its JSON on every
-                # path it reaches, so reaching none of them is itself the
-                # finding — record the exit status and the tail rather than
-                # leaving an absent file to be read as a self-skip.
-                _dft_disclose_skip(
-                    _tdf_not_run,
-                    "transition-delay-fault ATPG RAN but wrote no "
-                    "transition_coverage.json (producer exit "
-                    f"{_tdf_p.returncode}): "
-                    + ((_tdf_p.stderr or _tdf_p.stdout or "")[-400:]
-                       or "no output"),
-                    dict(_TDF_CAP, not_run_stage="producer_wrote_no_artifact",
-                         producer_exit=_tdf_p.returncode))
-            elif _tdf_not_run.is_file():
-                # A real measurement supersedes any stale record from a prior
-                # attempt, so the gate does not read a fresh result as blocked.
-                try:
-                    _tdf_not_run.unlink()
-                except OSError:
-                    pass
-        except _pr.Stalled as exc:
-            # vibe-ic#581 (extended to the AT-SPEED path) — A TIMEOUT IS A BUDGET
-            # OUTCOME, NOT A CAPABILITY GAP.
-            #
-            # #581 split the stuck-at dispatch's timeout out of its blanket
-            # `except Exception` (see the sibling handler above at
-            # "Fault ATPG exceeded its wall budget"), but the transition/at-speed
-            # dispatch here was left with only `except Exception`, so a wall-clock
-            # expiry still lands in `_TDF_CAP` and is recorded with
-            # `capability_flag: cap:at_speed_timing_graded_atpg` — a machine-
-            # readable assertion that the ENGINE cannot do at-speed TDF ATPG.
-            #
-            # MEASURED on opentitan_aes x sky130A (fault 0.9.4, vibeic/yosys `sat`):
-            # the LOC miter builds and the SAT solver returns real per-fault STR/STF
-            # verdicts (cal_run.log: "VIBEICTDF _42764__A2 STR", 617 620 cells
-            # imported to the SAT DB, model FOUND) — the engine ran fine. What blew
-            # was OUR wall clock: ~57 s of kissat per fault x --max-faults 400 on a
-            # 2922-flop flattened AES cannot finish in 1800 s. Nothing about the
-            # engine's capability is in question; the remedy is "raise the budget
-            # or lower --max-faults", which the capability flag actively hides.
-            #
-            # A crash/RuntimeError/FileNotFoundError IS a capability gap and keeps
-            # the flag on the `except Exception` arm below — this is a split, not a
-            # deletion. TimeoutExpired subclasses SubprocessError (not OSError), so
-            # handler ORDER is the fix: this arm must precede `except Exception`.
-            #
-            # The producer NOW scales its own wall with scan-flop count (see
-            # transition_fault_atpg_run._scaled_wall_budget), and this runner's
-            # outer subprocess wall tracks the producer's WALL_BUDGET_MAX cap
-            # (see _tdf_atpg_subprocess_timeout_s), so a wall expiry here is a
-            # genuine budget outcome at the FULL scaled budget — not the old
-            # fixed-1800 s throttle that abandoned the producer before its own
-            # sized batch could finish.
-            # CZT-10 — THE OUTER WALL IS GONE, AND THE FAULT SAMPLE DID NOT
-            # MOVE. This was left untouched by the previous lane on the grounds
-            # that the inner budget also SIZES the sample, so removing the wall
-            # might silently shrink what gets graded. MEASURED rather than
-            # assumed, on the producer's own pure functions:
-            #
-            #   _scaled_wall_budget(1800, scan_flops)  0 -> 1800s,
-            #       1000 -> 4800s, 1800+ -> 7200s (WALL_BUDGET_MAX)
-            #   _rightsize_sample(0.5, 120, W, ...)  W=1800 -> 2820 faults,
-            #       W=3600 -> 5880, W=7200 -> 12000
-            #
-            # So the coupling is REAL -- but it is the INNER budget that sizes
-            # the sample, and the dataflow between the two is ONE-WAY:
-            # `_tdf_atpg_subprocess_timeout_s()` is DERIVED FROM
-            # `WALL_BUDGET_MAX`, and the outer value reaches the producer
-            # nowhere. Read off the argv with `ast` (which cannot see the
-            # comment that mentions the helper by name, and my first probe
-            # matched exactly that comment and had to be redone): `tdf_cmd`
-            # carries --clock / --max-faults / --json / --liberty / --pdk-dir
-            # and no wall, budget or timeout flag at all.
-            #
-            # The producer therefore still sizes its sample from its OWN floor
-            # and cap, unchanged, and the runner simply stops killing it. The
-            # two were separable, and this arm is what the separation leaves:
-            # a stall is a finding about the run.
-            _dft_disclose_skip(
-                _tdf_not_run,
-                f"transition-delay-fault ATPG STALLED and was stopped: {exc}. "
-                f"The SAT engine was launched and then made no forward progress "
-                f"on ANY readable signal — a finding about the RUN, not a "
-                f"capability gap (vibe-ic#581) and not a wall clock (CZT-10). "
-                f"The producer's own size-scaled sample is untouched.",
-                {"stopped_as": "STALLED",
-                 "stall_looks": getattr(exc, "looks", None),
-                 "stall_elapsed_s": getattr(exc, "elapsed_s", None),
-                 "stall_signals": getattr(exc, "signals", None),
-                 "skips_required_output":
-                     "reports/phase2/dft/transition_coverage.json",
-                 "not_run_stage": "producer_stalled"})
-        except Exception as exc:
-            _dft_disclose_skip(
-                _tdf_not_run,
-                f"transition ATPG execution error: {exc}",
-                dict(_TDF_CAP, not_run_stage="producer_execution_error"))
+    _tdf_result = _spf.retained_call(
+        project, 'DT1', _run_transition_atpg, project, clk, pdk,
+        canonical_acceptance=True)
+    pdk = _tdf_result['pdk']
 
     # ================= Step 12 — Post-DFT optimization =================
     t0 = time.time()
@@ -23229,7 +23251,7 @@ def fmeda_producer_command(flow_yaml: Optional[Path] = None) -> Optional[str]:
     return None
 
 
-@_spf.retained_step('FS1')
+@_spf.retained_step('FS1', canonical_acceptance=True)
 def step_fmeda_fault_injection(project: Path,
                                flow_yaml: Optional[Path] = None,
                                not_applicable: Optional[str] = None
@@ -25984,7 +26006,7 @@ def main() -> int:
         plan.append(_spf.gate(
             project, "design_one_shot_runner", "rtl_gen",
             _preflight_refusal("rtl_gen"),
-            step_rtl_gen, project, ic_class))
+            step_rtl_gen, project, ic_class, _preflight_canonical_acceptance=True))
 
     # Floor G-CATALOG-GLUE — DETERMINISTIC reused-IP CONSUME. When step_rtl_gen
     # WAIVED (reused-IP / catalog-glue) and left rtl/ EMPTY but the design's
@@ -26477,7 +26499,7 @@ def main() -> int:
             project, "design_one_shot_runner", "asic_sdc",
             _preflight_refusal("asic_sdc"),
             step_asic_sdc, project, args.top_name, args.container, ic_class,
-            pdk_name=args.pdk, _use_controller=False))
+            pdk_name=args.pdk, _use_controller=False, _preflight_canonical_acceptance=True))
     if (_execution._ordinary_runtime is not None
             and not _before_entry("yosys_synth", _entry_site)
             and not _after_exit("asic_sdc")):
@@ -26515,7 +26537,7 @@ def main() -> int:
             step_yosys_synth, project, args.top_name, args.container, ic_class,
             pdk_name=args.pdk,
             _preflight_not_applicable=(_analog_reason if _analog_absent
-                                       else None)))
+                                       else None), _preflight_canonical_acceptance=True))
 
     # vibe-ic#2080 — the log `step_yosys_synth` just wrote, judged at last by
     # the gate written for it. Dispatched immediately after that step and

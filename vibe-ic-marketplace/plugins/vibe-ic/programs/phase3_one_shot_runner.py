@@ -60406,7 +60406,7 @@ def publish_prelayout_reports(project: Path, folder: Path, *,
             "pre_pnr_summary": str(summary)}
 
 
-@_spf.retained_step('10')
+@_spf.retained_step('10', canonical_acceptance=True)
 def step_prelayout_signoff(project: Path, top: str, pdk: PdkConfig,
                            container: str) -> StepResult:
     """Steps 7 + 10 (pre-layout, stage-2) — emitted RIGHT AFTER synth, BEFORE PnR.
@@ -61106,7 +61106,7 @@ def _write_ip_release_docs_context(
     return path
 
 
-@_spf.retained_step('37.5ip')
+@_spf.retained_step('37.5ip', canonical_acceptance=True)
 def step_ip_release_docs_gen(
         project: Path, design_name: Optional[str] = None,
         pdk_name: Optional[str] = None, source_sha: Optional[str] = None,
@@ -61458,7 +61458,7 @@ def _emit_drc_attribution_reports(project: Path) -> List[Dict[str, Any]]:
     return out
 
 
-@_spf.retained_step('37.4')
+@_spf.retained_step('37.4', canonical_acceptance=True)
 def step_signoff_metrics_aggregate(project: Path) -> StepResult:
     """Canonical step 37.4 — the sign-off metrics record, produced then checked.
 
@@ -61605,7 +61605,7 @@ def step_tapeout_docs_gen(project: Path) -> StepResult:
                       reason_class=reason)
 
 
-@_spf.retained_step('37.5ic')
+@_spf.retained_step('37.5ic', canonical_acceptance=True)
 def step_ic_release_docs_gen(project: Path) -> StepResult:
     """Canonical step 37.5ic's PRODUCT-document producer.
 
@@ -79192,7 +79192,7 @@ def main() -> int:
                 _recorded("synth", step_synth), project,
                 effective_top, pdk, args.container,
                 area_receipt=args.area_receipt,
-                area_run_manifest=args.area_run_manifest))
+                area_run_manifest=args.area_run_manifest, _preflight_canonical_acceptance=True))
             # Stamp the producer at the CALL SITE, not inside the step:
             # step_gds alone has two PASS returns and step_synth/step_pnr have
             # many, so a per-return stamp is a class of missed sites waiting to

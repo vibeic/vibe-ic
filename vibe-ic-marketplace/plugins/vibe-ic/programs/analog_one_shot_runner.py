@@ -2606,6 +2606,7 @@ def step_block_list_schema(project: Path) -> StepResult:
                       extras={"block_list_schema": row}, disclosures=[_V.Disclosure.ADVISORY])
 
 
+@_spf.retained_step('A9', canonical_acceptance=True)
 def _a9_cosim(project: Path, args=None) -> Dict[str, Any]:
     """Run `analog_a9_cosim_emit` on the L22-declared scenarios.
 
@@ -2850,27 +2851,27 @@ def main() -> int:
                 project, "analog_one_shot_runner", "A1",
                 _preflight_refusal("A1_spec_extract", _bname),
                 step_for_block, project, blk, "A1_spec_extract", args=args,
-                _preflight_note=_note))
+                _preflight_note=_note, _preflight_canonical_acceptance=True))
             _dispatched(_spf.gate(
                 project, "analog_one_shot_runner", "A2",
                 _preflight_refusal("A2_topology_select", _bname),
                 step_for_block, project, blk, "A2_topology_select", args=args,
-                _preflight_note=_note))
+                _preflight_note=_note, _preflight_canonical_acceptance=True))
             _dispatched(_spf.gate(
                 project, "analog_one_shot_runner", "A3",
                 _preflight_refusal("A3_netlist_gen", _bname),
                 step_for_block, project, blk, "A3_netlist_gen", args=args,
-                _preflight_note=_note))
+                _preflight_note=_note, _preflight_canonical_acceptance=True))
             _dispatched(_spf.gate(
                 project, "analog_one_shot_runner", "A4",
                 _preflight_refusal("A4_corner_sweep", _bname),
                 step_for_block, project, blk, "A4_corner_sweep", args=args,
-                _preflight_note=_note))
+                _preflight_note=_note, _preflight_canonical_acceptance=True))
             _dispatched(_spf.gate(
                 project, "analog_one_shot_runner", "A5",
                 _preflight_refusal("A5_layout", _bname),
                 step_for_block, project, blk, "A5_layout", args=args,
-                _preflight_note=_note))
+                _preflight_note=_note, _preflight_canonical_acceptance=True))
 
         # Keep each unified row's full block population together before the
         # next row. In particular, all A7 producer opportunities precede the
@@ -2883,7 +2884,7 @@ def main() -> int:
                 project, "analog_one_shot_runner", "A6",
                 _preflight_refusal("A6_block_pv", _bname),
                 step_for_block, project, blk, "A6_block_pv", args=args,
-                _preflight_note=_note))
+                _preflight_note=_note, _preflight_canonical_acceptance=True))
         for blk in blocks:
             _bname = blk.get("name") or blk.get("type") or "unknown"
             _note = f"block={_bname}"
@@ -2891,7 +2892,7 @@ def main() -> int:
                 project, "analog_one_shot_runner", "A7",
                 _preflight_refusal("A7_post_layout_resim", _bname),
                 step_for_block, project, blk, "A7_post_layout_resim", args=args,
-                _preflight_note=_note))
+                _preflight_note=_note, _preflight_canonical_acceptance=True))
         for blk in blocks:
             _bname = blk.get("name") or blk.get("type") or "unknown"
             _note = f"block={_bname}"
@@ -2899,7 +2900,7 @@ def main() -> int:
                 project, "analog_one_shot_runner", "A8",
                 _preflight_refusal("A8_hardmacro_gen", _bname),
                 step_for_block, project, blk, "A8_hardmacro_gen", args=args,
-                _preflight_note=_note))
+                _preflight_note=_note, _preflight_canonical_acceptance=True))
         for blk in blocks:
             _bname = blk.get("name") or blk.get("type") or "unknown"
             _note = f"block={_bname}"
@@ -2917,42 +2918,42 @@ def main() -> int:
                 project, "analog_one_shot_runner", "A1",
                 _preflight_refusal("A1_spec_extract", _bname),
                 step_for_block, project, blk, "A1_spec_extract", args=args,
-                _preflight_note=_note))
+                _preflight_note=_note, _preflight_canonical_acceptance=True))
             _dispatched(_spf.gate(
                 project, "analog_one_shot_runner", "A2",
                 _preflight_refusal("A2_topology_select", _bname),
                 step_for_block, project, blk, "A2_topology_select", args=args,
-                _preflight_note=_note))
+                _preflight_note=_note, _preflight_canonical_acceptance=True))
             _dispatched(_spf.gate(
                 project, "analog_one_shot_runner", "A3",
                 _preflight_refusal("A3_netlist_gen", _bname),
                 step_for_block, project, blk, "A3_netlist_gen", args=args,
-                _preflight_note=_note))
+                _preflight_note=_note, _preflight_canonical_acceptance=True))
             _dispatched(_spf.gate(
                 project, "analog_one_shot_runner", "A4",
                 _preflight_refusal("A4_corner_sweep", _bname),
                 step_for_block, project, blk, "A4_corner_sweep", args=args,
-                _preflight_note=_note))
+                _preflight_note=_note, _preflight_canonical_acceptance=True))
             _dispatched(_spf.gate(
                 project, "analog_one_shot_runner", "A5",
                 _preflight_refusal("A5_layout", _bname),
                 step_for_block, project, blk, "A5_layout", args=args,
-                _preflight_note=_note))
+                _preflight_note=_note, _preflight_canonical_acceptance=True))
             _dispatched(_spf.gate(
                 project, "analog_one_shot_runner", "A6",
                 _preflight_refusal("A6_block_pv", _bname),
                 step_for_block, project, blk, "A6_block_pv", args=args,
-                _preflight_note=_note))
+                _preflight_note=_note, _preflight_canonical_acceptance=True))
             _dispatched(_spf.gate(
                 project, "analog_one_shot_runner", "A7",
                 _preflight_refusal("A7_post_layout_resim", _bname),
                 step_for_block, project, blk, "A7_post_layout_resim", args=args,
-                _preflight_note=_note))
+                _preflight_note=_note, _preflight_canonical_acceptance=True))
             _dispatched(_spf.gate(
                 project, "analog_one_shot_runner", "A8",
                 _preflight_refusal("A8_hardmacro_gen", _bname),
                 step_for_block, project, blk, "A8_hardmacro_gen", args=args,
-                _preflight_note=_note))
+                _preflight_note=_note, _preflight_canonical_acceptance=True))
             _dispatched(_spf.gate(
                 project, "analog_one_shot_runner", "A9",
                 _preflight_refusal("A9_hw_verify", _bname),

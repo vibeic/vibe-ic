@@ -3625,6 +3625,11 @@ steps:
     programs:
       - fmeda_fault_injection_coverage
       - fmeda_coverage_check
+    # Preserve the runner's previous coverage before a retry replaces it.
+    # This evidence declaration does not change required outputs or verdicts.
+    program_outputs:
+      - program: fmeda_fault_injection_coverage
+        path: "reports/phase2/safety/fmeda_coverage.json"
     # NO required_outputs — DELIBERATE, and REOPENED 2026-07-28 with a sharper
     # reason than the one it carried. FS1 is the only step in this file whose
     # artefact's ONLY producer anywhere in the plugin is the FIRST command of

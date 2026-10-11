@@ -1344,6 +1344,7 @@ def _run_step_0_5ic(project: Path, pdk: str = "") -> int:
     return 0
 
 
+@_spf.retained_step('D1', canonical_acceptance=True)
 def run_phase1_second_track(project: Path, rc_in: int) -> int:
     """The second track, run after the L-docs exist. Returns the exit code
     Phase 1 should report: a track that did not run overrides a clean backend

@@ -42,12 +42,15 @@ import _progress_run as _pr  # noqa: E402
 
 def _transition_dispatch() -> str:
     """The transition/at-speed ATPG subprocess dispatch — from where the
-    producer command is assembled to the end of its handler chain (the next
-    step's banner). This isolates the DT1 arm from the stuck-at arm above."""
+    producer command is assembled to the end of its own helper. This isolates
+    the DT1 handler chain from the separate stuck-at producer."""
+    import ast
     src = PROG.read_text(encoding="utf-8")
-    i = src.index("tdf_cmd = [sys.executable,")
-    j = src.index("# ================= Step 12", i)
-    return src[i:j]
+    fn = next(node for node in ast.parse(src).body
+              if isinstance(node, ast.FunctionDef)
+              and node.name == '_run_transition_atpg')
+    block = '\n'.join(src.splitlines()[fn.lineno - 1:fn.end_lineno])
+    return block[block.index("tdf_cmd = [sys.executable,"):]
 
 
 def _transition_timeout_arm() -> str:
