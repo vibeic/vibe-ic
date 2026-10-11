@@ -60371,6 +60371,7 @@ def publish_prelayout_reports(project: Path, folder: Path, *,
             "pre_pnr_summary": str(summary)}
 
 
+@_spf.retained_step('10')
 def step_prelayout_signoff(project: Path, top: str, pdk: PdkConfig,
                            container: str) -> StepResult:
     """Steps 7 + 10 (pre-layout, stage-2) — emitted RIGHT AFTER synth, BEFORE PnR.
@@ -60916,6 +60917,7 @@ def _record_ip_kit_na(project: Path, program: str, rel: str,
                       declared_by=cited)
 
 
+@_spf.retained_step('37.5ip')
 def step_digital_hardmacro_gen(project: Path,
                                pdk: Optional["PdkConfig"] = None,
                                container: str = "") -> StepResult:
@@ -61069,6 +61071,7 @@ def _write_ip_release_docs_context(
     return path
 
 
+@_spf.retained_step('37.5ip')
 def step_ip_release_docs_gen(
         project: Path, design_name: Optional[str] = None,
         pdk_name: Optional[str] = None, source_sha: Optional[str] = None,
@@ -61420,6 +61423,7 @@ def _emit_drc_attribution_reports(project: Path) -> List[Dict[str, Any]]:
     return out
 
 
+@_spf.retained_step('37.4')
 def step_signoff_metrics_aggregate(project: Path) -> StepResult:
     """Canonical step 37.4 — the sign-off metrics record, produced then checked.
 
@@ -61509,6 +61513,7 @@ def step_signoff_metrics_aggregate(project: Path) -> StepResult:
                        "drc_attribution_reports": drc_attr})
 
 
+@_spf.retained_step('37.5ic')
 def step_tapeout_docs_gen(project: Path) -> StepResult:
     """Canonical step 37.5ic's release-document producer.
 
@@ -61565,6 +61570,7 @@ def step_tapeout_docs_gen(project: Path) -> StepResult:
                       reason_class=reason)
 
 
+@_spf.retained_step('37.5ic')
 def step_ic_release_docs_gen(project: Path) -> StepResult:
     """Canonical step 37.5ic's PRODUCT-document producer.
 

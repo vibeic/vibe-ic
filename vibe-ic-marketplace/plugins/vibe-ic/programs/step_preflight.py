@@ -1081,6 +1081,53 @@ def _retained_row_evidence(dec: Decision, sid: str, evidence) -> list:
     return selected
 
 
+def retained_step(step_id: str):
+    """Retain an existing leaf call; leave its arguments and verdict unchanged.
+
+    This attaches history at the actual producer/validator function without
+    changing the runner's dispatch plan, entry window or applicability rules.
+    The saved result remains component evidence, never a canonical PASS.
+    """
+    import functools
+
+    def decorate(fn):
+        @functools.wraps(fn)
+        def retained(project, *args, **kwargs):
+            dec = Decision(runner=fn.__module__, site=fn.__name__,
+                           flow_steps=[str(step_id)])
+            return _retained_dispatch(Path(project), dec, None, fn,
+                                      (project, *args), kwargs)
+        return retained
+    return decorate
+
+
+def _begin_retained_rows(project: Path, dec: Decision) -> list:
+    import _flow_yaml
+    import execution_backend_worker as worker
+    import step_output_collector as versions
+    canonical = {str(row['id']): row for row in _flow_yaml.load()['steps']}
+    return versions.begin_steps(project, [
+        (sid, worker._declared_input_files(project, canonical[sid].get('required_inputs', ())))
+        for sid in dec.flow_steps if sid in canonical])
+
+
+def _retain_preflight_refusal(project: Path, dec: Decision, flow_def: Any,
+                              extras: dict) -> None:
+    """Save the existing refusal before any later call can replace its evidence."""
+    import execution_policy
+    if execution_policy.request()['mode'] != 'default' or flow_def is not None:
+        return
+    import step_output_collector as versions
+    for attempt in _begin_retained_rows(project, dec):
+        saved = versions.finish_step(
+            project, attempt, verdict='NOT_MEASURED',
+            result={'runner': dec.runner, 'site': dec.site,
+                    'producer_started': False, 'detail': dec.detail, **extras})
+        if saved['capture_errors']:
+            raise OSError('preflight refusal could not be retained: ' +
+                          '; '.join(saved['capture_errors']))
+
+
 def _retained_dispatch(project: Path, dec: Decision, flow_def: Any,
                        fn: Callable[..., Any], args: Any, kwargs: Any) -> Any:
     """Keep Default's actual call outputs without changing its verdict rules.
@@ -1093,13 +1140,8 @@ def _retained_dispatch(project: Path, dec: Decision, flow_def: Any,
     if (execution_policy.request()['mode'] != 'default' or flow_def is not None
             or (dec.runner == 'phase3_one_shot_runner' and dec.site == 'pnr')):
         return _scoped_dispatch(project, dec.site, flow_def, fn, args, kwargs)
-    import _flow_yaml
-    import execution_backend_worker as worker
     import step_output_collector as versions
-    canonical = {str(row['id']): row for row in _flow_yaml.load()['steps']}
-    attempts = versions.begin_steps(project, [
-        (sid, worker._declared_input_files(project, canonical[sid].get('required_inputs', ())))
-        for sid in dec.flow_steps if sid in canonical])
+    attempts = _begin_retained_rows(project, dec)
     try:
         result = _scoped_dispatch(project, dec.site, flow_def, fn, args, kwargs)
     except BaseException as exc:
@@ -1111,7 +1153,8 @@ def _retained_dispatch(project: Path, dec: Decision, flow_def: Any,
     evidence = [{'name': getattr(row, 'name', ''),
                  'status': getattr(row, 'status', 'NOT_MEASURED'),
                  'detail': getattr(row, 'detail', ''),
-                 'outputs': getattr(row, 'outputs', []),
+                 'outputs': (getattr(row, 'outputs', None)
+                             or getattr(row, 'output_files', [])),
                  'step_id': (getattr(row, 'extras', {}) or {}).get('step_id')}
                 for row in rows]
     invocation_outcome = _retained_row_outcome(evidence)
@@ -1211,6 +1254,7 @@ def gate(project: Path, runner: str, site: str,
         bundle = _emit_repro_bundle(Path(project), dec)
         if bundle:
             extras["repro_bundle"] = bundle
+        _retain_preflight_refusal(Path(project), dec, flow_def, extras)
         return refusal_factory(dec.detail, extras)
 
     if dec.verdict != "READY":

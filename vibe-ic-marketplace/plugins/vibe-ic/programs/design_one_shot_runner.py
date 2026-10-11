@@ -19576,6 +19576,7 @@ def step_qsf_gen(project: Path, top_name: str = "chip_top",
                       f"rc={rc} out={_evidence_tail(out, 500)} err={_evidence_tail(err, 500)}")
 
 
+@_spf.retained_step('8')
 def step_sdc_validation(project: Path) -> StepResult:
     import librelane_contract as _llc
     mode = _llc.selected_mode(project, '8')
@@ -19642,6 +19643,7 @@ def step_sdc_validation(project: Path) -> StepResult:
 _SDC_POSTCHECK_SCHEMA = 'sdc-post-prelayout/2'
 
 
+@_spf.retained_step('8')
 def step_sdc_validation_post_prelayout(project: Path, top: str,
                                        *, native_result: Optional[dict] = None) -> StepResult:
     """Consume this project's current tool evidence, without a frontend context.
@@ -23223,6 +23225,7 @@ def fmeda_producer_command(flow_yaml: Optional[Path] = None) -> Optional[str]:
     return None
 
 
+@_spf.retained_step('FS1')
 def step_fmeda_fault_injection(project: Path,
                                flow_yaml: Optional[Path] = None,
                                not_applicable: Optional[str] = None
