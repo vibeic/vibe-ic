@@ -444,6 +444,69 @@ def test_synth_flags_come_from_evidence_not_the_receipt(tmp_path):
     assert row["ideal_clock_excluded"] is False
 
 
+@pytest.mark.parametrize("lost_source", [None, "missing", "changed"])
+def test_native_abc_source_and_slew_option_reach_the_stage_consumer(tmp_path, lost_source):
+    project = tmp_path / "proj"
+    receipts.claim(project)
+    synth = project / "phase2/stage2/synth"
+    temp = synth / "_tmp_yosys-abc-A1"
+    temp.mkdir(parents=True)
+    leaf = temp / "AREA_0.abc"
+    recipe = "strash\n&get -n\n&nf\n&put\nbuffer -N 10 -S 750.0\n"
+    leaf.write_text(recipe)
+    wrapper = temp / "abc.script"
+    wrapper.write_text(f"echo + source {leaf}\nsource {leaf}\n")
+    path = receipts.keep_abc_script(project, synth,
+                                    f"Running ABC script: {wrapper}\n")
+    assert path.read_text() == f"echo + source {leaf}\nsource {leaf}\n"
+    assert not temp.exists()
+    netlist = synth / "top_synth.v"
+    netlist.write_text("module top; endmodule\n")
+    sdc = project / "constraint.sdc"
+    sdc.write_text("set_max_fanout 10 [current_design]\n")
+    behavior = path.parent / "behavior.rpt"
+    behavior.write_text("clocks 1\nclock clk is_propagated=0\n" + drv._COMMAND + "\n"
+                        + "".join(f"{k} violators=0\n" for k in drv.KINDS))
+    receipt = receipts.record_synth(project, abc_script=path, behavior=behavior,
+                                    netlist=netlist, sdc=sdc)
+    document = json.loads(receipt.read_text())
+    captured = document.get("abc_sources", [])
+    if captured:
+        copy = Path(captured[0]["script"]["path"])
+        assert copy.read_text() == recipe
+        if lost_source == "missing":
+            copy.unlink()
+        elif lost_source == "changed":
+            copy.write_text("buffer -N 100 -S 750.0\n")
+    row = plan._stages(project, False)[0][0]
+    assert row["ran"] is (lost_source is None)
+    assert row["applied"]["fanout"] == (10.0 if lost_source is None else None)
+    assert row["synth_abc_buffering"] is (lost_source is None)
+
+
+def test_a_wrapper_without_bound_source_bytes_is_not_a_synthesis_stage(tmp_path):
+    project = tmp_path / "proj"
+    receipts.claim(project)
+    folder = project / "evidence"
+    folder.mkdir(parents=True)
+    script = folder / "abc.script"
+    leaf = folder / "AREA_0.abc"
+    leaf.write_text("buffer -N 10 -S 750.0\n")
+    script.write_text(f"source {leaf}\n")
+    behavior = folder / "behavior.rpt"
+    behavior.write_text(drv._COMMAND + "\n")
+    netlist = folder / "top.v"
+    netlist.write_text("module top; endmodule\n")
+    sdc = folder / "constraint.sdc"
+    sdc.write_text("set_max_fanout 10 [current_design]\n")
+    receipts.record_synth(project, abc_script=script, behavior=behavior,
+                          netlist=netlist, sdc=sdc)
+    row = plan._stages(project, False)[0][0]
+    assert row["ran"] is False
+    assert row["applied"]["fanout"] is None
+    assert row["synth_abc_buffering"] is False
+
+
 def test_every_synth_abc_call_keeps_its_script():
     """All four yosys command sites (default read, slang, sv2v, retry) carry
     the flags that make yosys keep and name the script ABC ran."""

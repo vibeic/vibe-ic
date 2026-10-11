@@ -330,8 +330,26 @@ def _stages(project: Path, postroute_repair_ran: bool,
             name != "synth" or bool(_recorded_text(row.get("abc_script"))))
         if name == "synth":
             script = _recorded_text(row.get("abc_script"))
+            scripts = [script]
+            sources = {item["source"]: item.get("script")
+                       for item in doc.get("abc_sources", [])}
+            pending = drv_stage_receipts.abc_source_names(script)
+            seen = set()
+            while pending:
+                source = pending.pop(0)
+                if source in seen:
+                    continue
+                seen.add(source)
+                text = _recorded_text(_recorded_ref(project, sources.get(source)))
+                if not text:
+                    row["ran"] = False
+                    scripts = []
+                    break
+                scripts.append(text)
+                pending.extend(drv_stage_receipts.abc_source_names(text))
             buffers = [float(v) for v in re.findall(
-                rf"(?m)^\s*buffer\s+-N\s+({_NUM})\s*;?\s*$", script)]
+                rf"(?:^|[;\n])\s*buffer\s+-N\s+({_NUM})"
+                rf"(?:\s+-S\s+{_NUM})?\s*(?=;|\n|$)", "\n".join(scripts))]
             row["applied"] = {"fanout": _one(buffers)}
             row["synth_abc_buffering"] = bool(buffers)
             row["ideal_clock_excluded"] = _ideal_clock_excluded(behavior)

@@ -31,6 +31,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import shutil
 import sys
 import uuid
@@ -318,11 +319,25 @@ def abc_script_path(project: Path) -> Path:
     return project / RECEIPT_DIR / EVIDENCE_DIR / "synth" / "abc.script"
 
 
+def abc_source_names(script: str) -> List[str]:
+    """The source commands in a native ABC script, excluding echoed commands."""
+    names = []
+    for command in re.split(r"[;\n]", script):
+        if not re.match(r"^\s*source\s+", command):
+            continue
+        words = shlex.split(command, comments=True)
+        if len(words) == 2 and words[0] == "source":
+            names.append(words[1])
+    return names
+
+
 def keep_abc_script(project: Path, synth_dir: Path, log_text: str) -> Optional[Path]:
     """Copy the script the mapping ABC call ran (the last one the yosys log
     names) into the run's evidence and drop yosys's kept temp folders."""
     target = abc_script_path(project)
     target.unlink(missing_ok=True)
+    sources_index = target.with_name("abc_sources.json")
+    sources_index.unlink(missing_ok=True)
     names = _ABC_SCRIPT.findall(log_text)
     kept = None
     if names and current_run(project) is not None:
@@ -331,6 +346,26 @@ def keep_abc_script(project: Path, synth_dir: Path, log_text: str) -> Optional[P
         if source.is_file():
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(source, target)
+            # LibreLane's wrapper sources its generated mapping recipe. Keep
+            # those exact bytes before cleaning up the Yosys temporary files.
+            sources = []
+            pending = abc_source_names(source.read_text())
+            seen = set()
+            while pending:
+                name = pending.pop(0)
+                if name in seen:
+                    continue
+                seen.add(name)
+                leaf = Path(name)
+                leaf = leaf if leaf.is_absolute() else synth_dir / leaf
+                ref = None
+                if leaf.is_file():
+                    copy = target.with_name(f"abc_source_{len(sources)}.script")
+                    shutil.copyfile(leaf, copy)
+                    ref = _ref(copy)
+                    pending.extend(abc_source_names(copy.read_text()))
+                sources.append({"source": name, "script": ref})
+            sources_index.write_text(json.dumps(sources, indent=2) + "\n")
             kept = target
     for folder in synth_dir.glob("_tmp_yosys-abc-*"):
         shutil.rmtree(folder, ignore_errors=True)
@@ -356,6 +391,9 @@ def record_synth(project: Path, *, abc_script: Optional[Path],
                  "census_sdc": _ref(sdc) if sdc.is_file() else None}
     if abc_script is not None and abc_script.is_file():
         doc["abc_script"] = _ref(abc_script)
+        sources_index = abc_script.with_name("abc_sources.json")
+        if sources_index.is_file():
+            doc["abc_sources"] = json.loads(sources_index.read_text())
     else:
         doc["reason"] = "the synthesis log names no ABC script ABC ran"
     if behavior is not None and behavior.is_file():
