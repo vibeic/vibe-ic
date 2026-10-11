@@ -390,6 +390,10 @@ def test_run_survives_a_view_that_cannot_be_built(tmp_path):
     assert rec["error"], rec
     # Not silent: the human watching the run is told too.
     assert "steps view NOT built" in cp.stderr
+    assert (project / 'steps').read_text() == 'not a directory\n'
+    retained = list((project / 'reports/step_versions').glob('*/*/*/outputs.json'))
+    assert retained, 'an unavailable dashboard view must not lose actual step versions'
+    assert all(json.loads(path.read_text())['id'] == 'D1' for path in retained)
 
 
 # --------------------------------------------------------------------------

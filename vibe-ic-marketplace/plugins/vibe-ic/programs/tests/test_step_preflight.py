@@ -179,6 +179,9 @@ def test_producer_disclosed_skip_is_not_an_absence(tmp_path):
     absence still refuses."""
     p = _synthetic_run(tmp_path, with_routed_def=True)
     gd = p / "phase1" / "generated_docs"
+    constraints = p / 'phase2/stage2/constraints'
+    constraints.mkdir(parents=True)
+    (constraints / 'current.sdc').write_text('create_clock -period 10 [get_ports clk]\n')
     gd.mkdir(parents=True, exist_ok=True)
     (gd / "L20_DFT_SCAN_TOPOLOGY.json").write_text(json.dumps(
         {"doc_id": "L20", "fields": {"dft_present": False, "scan_chains": [],

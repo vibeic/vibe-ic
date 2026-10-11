@@ -1,5 +1,6 @@
 """A Phase-3 window dispatches one real runner site without disturbing inputs."""
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -12,6 +13,25 @@ def _window_record(project: Path, category: str, name: str) -> Path:
     matches = list((project / "reports" / category / "windows").glob(f"*/{name}"))
     assert len(matches) == 1, matches
     return matches[0]
+
+
+
+def _retained_step37_files(project):
+    index = json.loads((project / 'steps/index.json').read_text())
+    assert {str(row['id']) for row in index['steps']} == {'37'}
+    row = index['steps'][0]
+    assert re.fullmatch(r'phase3/stage4/37_gdsii_output_after_routed_layout_pre_stream_admi_\d{8}T\d{6}_\d{6}Z', row['folder'])
+    folder = project / 'steps' / row['folder']
+    record = json.loads((folder / 'outputs.json').read_text())
+    assert record['id'] == '37' and record['observation_only'] is True
+    allowed = {str((folder / name).relative_to(project)) for name in ('outputs.json', 'written.json')}
+    for output in record['outputs']:
+        source = project / output['rel']
+        snapshot = folder / output['snapshot']
+        assert snapshot.is_file() and not snapshot.is_symlink()
+        assert snapshot.read_bytes() == source.read_bytes()
+        allowed.add(str(snapshot.relative_to(project)))
+    return allowed
 
 
 def test_real_runner_cli_exposes_window():
@@ -101,10 +121,8 @@ def test_gds_window_preserves_outside_files_and_marks_downstream(tmp_path, monke
         "reports/phase3/gds_admission.json",
         "reports/write_ledger.json",
         "steps/index.json",
-        "steps/phase3/stage4/37_gdsii_output_after_routed_layout_pre_stream_admi/outputs.json",
-        "steps/phase3/stage4/37_gdsii_output_after_routed_layout_pre_stream_admi/written.json",
     }
-    assert set(changed) <= allowed_reports | {
+    assert set(changed) <= allowed_reports | _retained_step37_files(project) | {
         "phase3/stage3/pnr/top.gds", "phase3/stage4/gds/top.gds"}, changed
     assert after["phase3/stage3/pnr/top.def"] == before["phase3/stage3/pnr/top.def"]
     assert after["phase3/synth/top_synth.v"] == before["phase3/synth/top_synth.v"]
@@ -298,12 +316,10 @@ def test_real_gds_step_with_container_write_keeps_other_stage_files(tmp_path, mo
         "reports/phase3/gds_admission.json",
         "reports/write_ledger.json",
         "steps/index.json",
-        "steps/phase3/stage4/37_gdsii_output_after_routed_layout_pre_stream_admi/outputs.json",
-        "steps/phase3/stage4/37_gdsii_output_after_routed_layout_pre_stream_admi/written.json",
     }
     # Step 37's own declared outputs: the stream, its transcript, and the
     # record plus recipe that step 37.3 re-streams from.
-    assert set(changed) <= allowed_reports | {
+    assert set(changed) <= allowed_reports | _retained_step37_files(project) | {
         "phase3/stage3/pnr/top.gds", "phase3/stage3/pnr/stream_out.log",
         "phase3/stage3/pnr/top.stream_inputs.json",
         "phase3/stage3/pnr/stream_out.py",

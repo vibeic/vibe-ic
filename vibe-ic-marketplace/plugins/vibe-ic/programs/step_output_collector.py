@@ -87,7 +87,7 @@ def _working_files(project: Path) -> dict:
     records = {}
     for root, dirs, files in os.walk(project):
         dirs[:] = [name for name in dirs if name not in
-                   ('steps', '.git', '__pycache__', '.pytest_cache', 'node_modules')]
+                   ('steps', 'step_versions', '.git', '__pycache__', '.pytest_cache', 'node_modules')]
         for name in files:
             path = Path(root) / name
             if path.is_symlink():
@@ -117,6 +117,13 @@ def _freeze_legacy(steps_root: Path, rows) -> None:
                 os.replace(temporary, alias)
 
 
+def _versions_root(project: Path) -> Path:
+    """Keep outputs even when a legacy file blocks the optional steps/ view."""
+    steps = project / 'steps'
+    fallback = project / 'reports/step_versions'
+    return fallback if fallback.exists() or (steps.exists() and not steps.is_dir()) else steps
+
+
 def begin_step(project: Path, step_id: str, inputs=None) -> dict:
     """Allocate a retained attempt before its producer can overwrite working files.
 
@@ -129,7 +136,7 @@ def begin_step(project: Path, step_id: str, inputs=None) -> dict:
     if record is None:
         raise ValueError(f'unknown canonical step: {sid}')
     _, name, _, phase, stage, outputs = record
-    steps_root = project / 'steps'
+    steps_root = _versions_root(project)
     steps_root.mkdir(parents=True, exist_ok=True)
     # If an earlier process died before finish_step, retain its partial writes
     # now, before a retry overwrites them. This is recovery on the same host.
@@ -141,10 +148,11 @@ def begin_step(project: Path, step_id: str, inputs=None) -> dict:
     # Legacy steps/ folders were mutable views. Freeze their still-available
     # contents before the first versioned producer, without inventing old PASS.
     prior = _read_index(project)
-    _freeze_legacy(steps_root, prior.get('steps', []))
+    _freeze_legacy(steps_root, [row for row in prior.get('steps', []) if str(row.get('id')) == sid])
     folder = _version_folder(steps_root, phase, stage, sid, name)
     attempt = {'id': sid, 'name': name, 'phase': phase, 'stage': stage,
                'folder': folder, 'status': 'RUNNING', 'inputs': dict(inputs or {}),
+               'storage_root': str(steps_root.relative_to(project)),
                'started_at': datetime.datetime.now(datetime.timezone.utc).isoformat()}
     # Preserve pre-existing declared bytes, including checkpoints predating
     # this policy. They remain input history, never a newly claimed output.
@@ -160,7 +168,7 @@ def begin_step(project: Path, step_id: str, inputs=None) -> dict:
 
 def _read_index(project: Path) -> dict:
     try:
-        return json.loads((project / 'steps/index.json').read_text())
+        return json.loads((_versions_root(project) / 'index.json').read_text())
     except (OSError, ValueError):
         return {'steps': []}
 
@@ -173,7 +181,8 @@ def finish_step(project: Path, attempt: dict, *, verdict: str,
     `canonical_pass` after its unchanged canonical consumer has accepted it.
     """
     project = Path(project).resolve()
-    sdir = project / 'steps' / attempt['folder']
+    steps_root = project / attempt.get('storage_root', 'steps')
+    sdir = steps_root / attempt['folder']
     if (sdir / 'outputs.json').exists():
         raise ValueError('step version already finished')
     sid = attempt['id']
@@ -204,9 +213,9 @@ def finish_step(project: Path, attempt: dict, *, verdict: str,
     row = {key: record[key] for key in ('id', 'name', 'phase', 'stage', 'folder', 'status')}
     row.update(n_outputs=len(present), versioned=True)
     index['steps'] = [row] + [r for r in index.get('steps', []) if str(r.get('id')) != sid]
-    write_json(project / 'steps/index.json', index)
+    write_json(steps_root / 'index.json', index)
     if record['canonical_pass']:
-        path = project / 'steps/latest_pass.json'
+        path = steps_root / 'latest_pass.json'
         try:
             passes = json.loads(path.read_text())
         except FileNotFoundError:
@@ -221,9 +230,10 @@ def latest_pass(project: Path, step_id: str) -> dict | None:
     """Return historical PASS with an explicit current-input flag, not guessed freshness."""
     project = Path(project).resolve()
     try:
-        passes = json.loads((project / 'steps/latest_pass.json').read_text())
+        steps_root = _versions_root(project)
+        passes = json.loads((steps_root / 'latest_pass.json').read_text())
         pointer = passes['steps'][str(step_id)]
-        record = json.loads((project / 'steps' / pointer['folder'] / 'outputs.json').read_text())
+        record = json.loads((steps_root / pointer['folder'] / 'outputs.json').read_text())
     except (OSError, ValueError, KeyError):
         return None
     record['current_inputs'] = all(
@@ -324,7 +334,8 @@ def materialize(project: Path, only_steps=None) -> Dict[str, Any]:
     index: List[Dict[str, Any]] = []
     new_folders: set = set()
     skipped_ids: List[str] = []
-    _freeze_legacy(steps_root, prior_rows)
+    _freeze_legacy(steps_root, [row for row in prior_rows
+                               if window is None or str(row.get('id')) in window])
     prior_by_id = {str(row.get('id')): row for row in prior_rows}
 
     for sid, name, status, phase, stage, outputs in _iter_step_records(project):
