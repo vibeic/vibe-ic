@@ -12127,6 +12127,7 @@ def step_l10_unit_tb_run(project: Path, container: "str | None") -> StepResult:
                               "sim_executed": bool(rep["executed"])})
 
 
+@_spf.retained_step('5')
 def step_full_stack_functional_tb(project: Path,
                                   container: "str | None") -> StepResult:
     """FULLSTACKTB — the FUNCTIONAL full-stack population Step 5 reads.
@@ -20038,6 +20039,7 @@ def step_otp_image_check(project: Path) -> StepResult:
 # -------------------------------------------------------------------------
 # 5. quartus FPGA compile (Docker)
 # -------------------------------------------------------------------------
+@_spf.retained_step('6')
 def step_fpga_compile(project: Path, top_name: str,
                       container: str) -> StepResult:
     """Run Quartus full compile.
@@ -20194,6 +20196,7 @@ def _jtag_hardware_absent(blob: str) -> bool:
     return any(s in low for s in sigs)
 
 
+@_spf.retained_step('39')
 def step_fpga_burn(project: Path, top_name: str) -> StepResult:
     t0 = time.time()
     sof = next((_pl.fpga_early_dir(project) / "output_files").glob("*.sof"), None)
@@ -23730,6 +23733,7 @@ def step_arith_declaration_emit(project: Path) -> StepResult:
                       f"written — {reason}", reason_class=_V.ReasonClass.EXECUTION_ERROR)
 
 
+@_spf.retained_steps(('5', '6', '39'), canonical_acceptance=True)
 def step_emit_phase2_manifests(project: Path,
                                 plan: List[StepResult],
                                 top_name: Optional[str] = None,

@@ -16,6 +16,7 @@ Scope: one local machine, one sequential runner. No candidate scheduler.
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 import datetime
 import hashlib
 import json
@@ -24,6 +25,27 @@ import re
 import shutil
 import sys
 from pathlib import Path
+
+
+_ACTIVE_LOCAL_CALLS = set()
+
+
+@contextmanager
+def active_steps(project: Path, attempts):
+    """A nested function call must not recover its still-running parent.
+
+    This in-process call stack is local and sequential. After an exception or
+    process exit, unfinished journals remain eligible for normal recovery.
+    """
+    project = Path(project).resolve()
+    folders = {str((project / a.get('storage_root', 'steps') / a['folder']).resolve())
+               for a in attempts}
+    added = folders - _ACTIVE_LOCAL_CALLS
+    _ACTIVE_LOCAL_CALLS.update(added)
+    try:
+        yield
+    finally:
+        _ACTIVE_LOCAL_CALLS.difference_update(added)
 from typing import Any, Dict, List, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -128,6 +150,8 @@ def _recover_unfinished(project: Path) -> None:
     """Close the previous local invocation before ANY next producer writes."""
     steps_root = _versions_root(project)
     for journal in steps_root.glob('*/*/*/attempt.json'):
+        if str(journal.parent.resolve()) in _ACTIVE_LOCAL_CALLS:
+            continue
         if (journal.parent / 'outputs.json').exists():
             continue
         unfinished = json.loads(journal.read_text())

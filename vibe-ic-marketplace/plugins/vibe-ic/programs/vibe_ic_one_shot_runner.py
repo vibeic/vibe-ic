@@ -643,14 +643,18 @@ def _run_phase(label: str, runner: Path, args: List[str],
                   "mixed_signal_power_domain_run.py": "M2",
                   "mixed_signal_m3_run.py": "M3",
                   "mixed_signal_signoff_run.py": "M4"}.get(runner.name)
-    if mixed_step is not None and _retain_mixed:
+    stage_analog = (runner.name == 'flow_compliance_check.py'
+                    and '--stage-id' in args
+                    and args[args.index('--stage-id') + 1] == 'stage_analog')
+    retained_id = mixed_step or ('14' if stage_analog else None)
+    if retained_id is not None and _retain_mixed:
         import step_preflight
         return step_preflight.retained_call(
-            Path(args[0]), mixed_step, _run_phase, label, runner, args,
+            Path(args[0]), retained_id, _run_phase, label, runner, args,
             env=env, _retain_mixed=False, canonical_acceptance=True)
     # Default retains the selected call before invalidating its audit file.
     # Other modes keep their established caller-side invalidation.
-    if mixed_step in {"M2", "M3", "M4"} and "--json" in args:
+    if (mixed_step in {"M2", "M3", "M4"} or stage_analog) and "--json" in args:
         import execution_policy
         if execution_policy.request()["mode"] == "default":
             Path(args[args.index("--json") + 1]).unlink(missing_ok=True)

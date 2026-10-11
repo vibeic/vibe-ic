@@ -20799,12 +20799,19 @@ def main(argv: Optional[List[str]] = None) -> int:
     # all) publishes "no records" rather than an empty list that would read as
     # "every gate was considered and none of them anything".
     structural_gate_records: Optional[List[Dict[str, Any]]] = None
+    p0_attempt = None
     # A scoped test flow may declare only one step. Do not inject P0 into a
     # flow that does not declare it; the canonical flow does declare P0.
     if (any(str(step.get("id")) == "P0" for step in steps)
             and args.stage not in (3, 4)
             and target_stage not in _NO_RTL_UMBRELLA_SCOPES):
         structural_gate_records = []
+        import execution_policy as _p0_policy
+        if _p0_policy.request()['mode'] == 'default':
+            import step_preflight as _p0_preflight
+            p0_attempt = _p0_preflight._begin_retained_rows(project,
+                _p0_preflight.Decision(runner='flow_compliance_check',
+                                      site='structural_rtl', flow_steps=['P0']))[0]
         # #497 step 3 — `main()` no longer consumes the umbrella's PROSE
         # buckets at all. `s_passed` is the umbrella's own tri-state and
         # `s_waivers` is an already-structured list published verbatim as
@@ -20934,6 +20941,18 @@ def main(argv: Optional[List[str]] = None) -> int:
             if not p0_passed:
                 structural_result.status = _T.Verdict.FAIL.value
                 structural_result.reasons.extend(p0_reasons)
+
+    if p0_attempt is not None:
+        import step_output_collector as _p0_versions
+        from dataclasses import asdict as _p0_asdict
+        _p0_saved = _p0_versions.finish_step(
+            project, p0_attempt, verdict=structural_result.status,
+            result={'runner': 'flow_compliance_check', 'site': 'structural_rtl',
+                    'canonical_consumer': _p0_asdict(structural_result)},
+            canonical_pass=structural_result.status == 'PASS')
+        if _p0_saved['capture_errors']:
+            raise OSError('structural RTL version could not be retained: ' +
+                          '; '.join(_p0_saved['capture_errors']))
 
     results: List[StepResult] = []
     if structural_result is not None:

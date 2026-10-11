@@ -1123,6 +1123,26 @@ def retained_call(project: Path, step_id: str, fn, *args,
                               canonical_acceptance=canonical_acceptance)
 
 
+def retained_steps(step_ids, *, canonical_acceptance: bool = False):
+    """Retain one existing producer which owns the listed rows' outputs.
+
+    This is for a shared emitter, not separate producers or a dispatch plan.
+    Each row still runs its own unchanged consumer and gets its own verdict.
+    """
+    import functools
+    ids = [str(sid) for sid in step_ids]
+
+    def decorate(fn):
+        @functools.wraps(fn)
+        def retained(project, *args, **kwargs):
+            dec = Decision(runner=fn.__module__, site=fn.__name__, flow_steps=ids)
+            return _retained_dispatch(Path(project), dec, None, fn,
+                                      (project, *args), kwargs,
+                                      canonical_acceptance=canonical_acceptance)
+        return retained
+    return decorate
+
+
 def _begin_retained_rows(project: Path, dec: Decision) -> list:
     import _flow_yaml
     import execution_backend_worker as worker
@@ -1165,31 +1185,32 @@ def _retained_dispatch(project: Path, dec: Decision, flow_def: Any,
         return _scoped_dispatch(project, dec.site, flow_def, fn, args, kwargs)
     import step_output_collector as versions
     attempts = _begin_retained_rows(project, dec)
-    consumer = None
-    try:
-        result = _scoped_dispatch(project, dec.site, flow_def, fn, args, kwargs)
-        if canonical_acceptance:
-            if len(attempts) != 1:
-                raise ValueError('complete canonical acceptance requires one selected step')
-            if isinstance(result, int) and not isinstance(result, bool):
-                producer_ok = result == 0
-            elif isinstance(result, dict) and 'rc' in result:
-                producer_ok = type(result['rc']) is int and result['rc'] == 0
-            else:
-                producer_ok = getattr(result, 'status', None) == 'PASS'
-            if producer_ok:
-                import _flow_yaml
-                import execution_backend_gates as gates
-                row = next(row for row in _flow_yaml.load()['steps']
-                           if str(row['id']) == attempts[0]['id'])
-                consumer = gates.evaluate(project, row)
-                if consumer['status'] == 'PASS':
-                    consumer['outputs'] = gates.contracts(project, row)
-    except BaseException as exc:
-        for attempt in attempts:
-            versions.finish_step(project, attempt, verdict='INTERRUPTED',
-                                 result={'detail': f'{type(exc).__name__}: {exc}'})
-        raise
+    consumers = {}
+    with versions.active_steps(project, attempts):
+        try:
+            result = _scoped_dispatch(project, dec.site, flow_def, fn, args, kwargs)
+            if canonical_acceptance:
+                if isinstance(result, int) and not isinstance(result, bool):
+                    producer_ok = result == 0
+                elif isinstance(result, dict) and 'rc' in result:
+                    producer_ok = type(result['rc']) is int and result['rc'] == 0
+                else:
+                    producer_ok = getattr(result, 'status', None) == 'PASS'
+                if producer_ok:
+                    import _flow_yaml
+                    import execution_backend_gates as gates
+                    canonical = {str(row['id']): row for row in _flow_yaml.load()['steps']}
+                    for attempt in attempts:
+                        row = canonical[attempt['id']]
+                        consumer = gates.evaluate(project, row)
+                        if consumer['status'] == 'PASS':
+                            consumer['outputs'] = gates.contracts(project, row)
+                        consumers[attempt['id']] = consumer
+        except BaseException as exc:
+            for attempt in attempts:
+                versions.finish_step(project, attempt, verdict='INTERRUPTED',
+                                     result={'detail': f'{type(exc).__name__}: {exc}'})
+            raise
     rows = result if isinstance(result, (list, tuple)) else [result]
     evidence = [{'name': getattr(row, 'name', ''),
                  'status': getattr(row, 'status', 'NOT_MEASURED'),
@@ -1204,8 +1225,14 @@ def _retained_dispatch(project: Path, dec: Decision, flow_def: Any,
         evidence = [{'name': dec.site, 'status': ('PASS' if type(rc) is int and rc == 0 else
                      'FAIL' if type(rc) is int and rc == 1 else 'NOT_MEASURED'),
                      'return_code': rc, 'producer_result': result}]
+    if canonical_acceptance and len(attempts) > 1 and not isinstance(result, (list, tuple)):
+        # The caller explicitly names the rows owned by this one emitter.
+        # Do not apply a shared PASS to a list of independent producer results.
+        evidence = [{**item, 'step_id': attempt['id']}
+                    for attempt in attempts for item in evidence]
     invocation_outcome = _retained_row_outcome(evidence)
     for attempt in attempts:
+        consumer = consumers.get(attempt['id'])
         own_evidence = _retained_row_evidence(dec, attempt['id'], evidence)
         outcome = _retained_row_outcome(own_evidence)
         if consumer is not None:
