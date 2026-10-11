@@ -337,7 +337,7 @@ def _stages(project: Path, postroute_repair_ran: bool,
             row["ideal_clock_excluded"] = _ideal_clock_excluded(behavior)
         else:
             snapshot = _recorded_text(row.get("sdc_snapshot"))
-            row["applied"] = {field: _one(_sdc_values(snapshot, command))
+            row["applied"] = {field: _one(_sdc_values(snapshot, command, include_ports=False))
                               for field, command in (
                                   ("fanout", "set_max_fanout"),
                                   ("slew_ns", "set_max_transition"),
@@ -759,7 +759,7 @@ def build(project: Path, *, final_state: dict | None = None) -> dict:
     for field, command in (("fanout", "set_max_fanout"),
                            ("slew_ns", "set_max_transition"),
                            ("cap_pf", "set_max_capacitance")):
-        observed[field] = _sdc_values(sdc_text, command)
+        observed[field] = _sdc_values(sdc_text, command, include_ports=False)
     frozen = {"sources": {k: v["sha256"] for k, v in sources.items()},
               "ocv_recipe": ocv_recipe,
               "liberties": {k: v["sha256"] for k, v in liberties.items()},

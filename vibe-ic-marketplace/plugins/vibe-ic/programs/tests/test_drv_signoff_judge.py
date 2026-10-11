@@ -404,6 +404,33 @@ def test_all_limits_report_cannot_hide_a_named_violator(tmp_path):
                for n in result["not_measured"])
 
 
+@pytest.mark.parametrize('core_target', ['[current_design]', '[$_vibeic_core_cell cell]'])
+def test_core_sdc_limits_keep_io_port_slew_independent(tmp_path, core_target):
+    bundle = _bundle(tmp_path)
+    body = ('foreach _vibeic_core_cell [get_lib_cells */logic] {\n'
+            f' set_max_fanout 4 {core_target}\n'
+            f' set_max_transition 3 {core_target}\n'
+            f' set_max_capacitance 0.2 {core_target}\n'
+            '}\nset_max_transition 25 [get_ports [list {a}]]\n')
+    source = _file(tmp_path, 'signoff_sdc', body)
+    bundle['current']['sources']['signoff_sdc'] = source
+    bundle['frozen']['sources']['signoff_sdc'] = source['sha256']
+    for stage in bundle['stages']:
+        if stage['name'] != 'synth':
+            stage['sdc_snapshot'] = _file(tmp_path, stage['name'] + '.sdc', body)
+    result = drv.judge(bundle)
+    assert result['verdict'] == 'PASS', result
+    # A conflicting core assignment must still fail. Only port targets have
+    # their independent IO constraints; they cannot hide a changed core limit.
+    source = _file(tmp_path, 'signoff_sdc', body +
+                   f'set_max_transition 5 {core_target}\n')
+    bundle['current']['sources']['signoff_sdc'] = source
+    bundle['frozen']['sources']['signoff_sdc'] = source['sha256']
+    result = drv.judge(bundle)
+    assert result['verdict'] == 'FAIL'
+    assert any('set_max_transition != declared' in f for f in result['failures'])
+
+
 def test_signoff_sdc_ten_against_declared_four_fails_even_if_report_clean(tmp_path):
     bundle = _bundle(tmp_path)
     source = _file(tmp_path, "signoff_sdc",
@@ -1180,7 +1207,8 @@ def test_opensta_census_io_label_comes_from_linked_pad_cell(tmp_path):
     assert derive(folder, [{"name": "io", **lib}], rows)["pins"]["u/Y"]["cell_class"] == "std"
 
 
-@pytest.mark.parametrize('lef_class', ['ENDCAP TOPRIGHT', 'PAD SPACER'])
+@pytest.mark.parametrize('lef_class', ['ENDCAP TOPRIGHT', 'PAD SPACER',
+                                      'PAD POWER', 'PAD AREAIO'])
 def test_census_keeps_physical_io_pins_without_inventing_liberty(tmp_path, lef_class):
     from drv_signoff_census import derive
     folder = tmp_path / 'tool'
@@ -1197,8 +1225,12 @@ def test_census_keeps_physical_io_pins_without_inventing_liberty(tmp_path, lef_c
  time_unit : "1ns"; capacitive_load_unit (1, pf);
  cell (logic) { pin (Y) { direction : output; } }
 }''')
+    supply_pins = ((' PIN VDD\n DIRECTION INOUT ;\n USE POWER ;\n END VDD\n'
+                    ' PIN VSS\n DIRECTION INOUT ;\n USE GROUND ;\n END VSS\n')
+                   if lef_class in ('PAD POWER', 'PAD AREAIO') else '')
     lef_text = ('MACRO physical\n CLASS ' + lef_class + ' ;\n PIN BUS\n'
-                ' DIRECTION INOUT ;\n USE SIGNAL ;\n END BUS\nEND physical\n')
+                ' DIRECTION INOUT ;\n USE SIGNAL ;\n END BUS\n' + supply_pins +
+                'END physical\n')
     lef = _file(tmp_path, 'physical.lef', lef_text)
     rows = drv.parse_check_types(_report(fanout=2), scene='typ_nom',
                                  mode='functional', violators_only=False)
@@ -1212,6 +1244,17 @@ def test_census_keeps_physical_io_pins_without_inventing_liberty(tmp_path, lef_c
     assert result['excluded'][0]['pin'] == 'corner/BUS'
     assert result['excluded'][0]['reason'] == 'lef_physical_no_liberty_arc'
     assert result['excluded'][0]['excluded_kinds'] == ['max_slew']
+    if supply_pins:
+        # AREAIO also describes real drivers: supply typing and no control
+        # inputs distinguish the passive rail connector used by this case.
+        Path(lef['path']).write_text(lef_text.replace('END physical',
+            ' PIN CTRL\n DIRECTION INPUT ;\n USE SIGNAL ;\n END CTRL\nEND physical'))
+        with pytest.raises(ValueError, match='lacks unique linked Liberty pin'):
+            derive(folder, [{'name': 'std', **lib}], rows, [lef])
+        Path(lef['path']).write_text(lef_text.replace('USE POWER', 'USE SIGNAL')
+                                           .replace('USE GROUND', 'USE SIGNAL'))
+        with pytest.raises(ValueError, match='lacks unique linked Liberty pin'):
+            derive(folder, [{'name': 'std', **lib}], rows, [lef])
     # An unmodeled logic cell must remain a missing model, even without a driver.
     Path(lef['path']).write_text(lef_text.replace(lef_class, 'CORE'))
     with pytest.raises(ValueError, match='lacks unique linked Liberty pin'):
@@ -1222,6 +1265,82 @@ def test_census_keeps_physical_io_pins_without_inventing_liberty(tmp_path, lef_c
                                                      'corner/BUS\tpin\tunknown\t1'))
     with pytest.raises(ValueError, match='lacks unique linked Liberty pin'):
         derive(folder, [{'name': 'std', **lib}], rows, [lef])
+
+
+def test_physical_load_keeps_native_unit_fanout_weight(tmp_path):
+    from drv_signoff_census import derive
+    folder = tmp_path / 'tool'
+    _file(folder, 'pin_census.tsv',
+          'u/Y\tpin\toutput\t1\tu\tlogic\tY\tn\tinput\t0\t0\t0\t0\t0\n'
+          'spacer/BUS\tpin\tunknown\t0\tspacer\tphysical\tBUS\tn\tinput\t0\t0\t0\tX\t0\n')
+    _file(folder, 'net_census.rpt',
+          'Net n\n Total capacitance: 0.1\n Number of drivers: 1\n'
+          ' Number of loads: 1\n Number of pins: 2\n\nDriver pins\n u/Y output (logic)\n\n'
+          'Load pins\n spacer/BUS unknown (physical)\n\n')
+    _file(folder, 'disabled_edges.rpt', '')
+    lib = _file(tmp_path, 'logic.lib', '''library (lib) {
+ time_unit : "1ns"; capacitive_load_unit (1, pf); default_fanout_load : 5;
+ cell (logic) { pin (Y) { direction : output; } }
+}''')
+    lef = _file(tmp_path, 'physical.lef',
+                'MACRO physical\n CLASS PAD SPACER ;\n PIN BUS\n'
+                ' DIRECTION INOUT ;\n USE SIGNAL ;\n END BUS\nEND physical\n')
+    result = derive(folder, [{'name': 'std', **lib}],
+                    {kind: [] for kind in drv.KINDS}, [lef])
+    row = next(p for p in result['excluded'] if p['pin'] == 'u/Y')
+    # CheckFanouts::fanoutLoad adds one for a physical load with no Liberty
+    # port; neither zero nor the driver's library default is its weight.
+    assert row['fanout'] == 1
+    assert row['cap_pf'] == .1
+    assert result['driver_pins'] == ['u/Y']
+    assert set(result['pins']) == {'u/Y', 'spacer/BUS'}
+
+
+def test_core_only_constraints_record_unbounded_io_checks_without_hiding_core(tmp_path):
+    from drv_signoff_census import derive
+    folder = tmp_path / 'tool'
+    _file(folder, 'pin_census.tsv',
+          'u/Y\tpin\toutput\t1\tu\tlogic\tY\tn\tinput\t0.1\t0.1\t0\tX\t0\n'
+          'pad/Y\tpin\toutput\t1\tpad\tio\tY\tout\tinput\t0.1\t0.1\t0\tX\t0\n')
+    _file(folder, 'net_census.rpt',
+          'Net n\n Total capacitance: 0.1\n Number of drivers: 1\n'
+          ' Number of loads: 0\n Number of pins: 1\n\nDriver pins\n u/Y output (logic)\n\n'
+          'Net out\n Total capacitance: 0.1\n Number of drivers: 1\n'
+          ' Number of loads: 0\n Number of pins: 1\n\nDriver pins\n pad/Y output (io)\n\n')
+    _file(folder, 'disabled_edges.rpt', '')
+    core = _file(tmp_path, 'core.lib', '''library (lib) {
+ time_unit : "1ns"; capacitive_load_unit (1, pf);
+ cell (logic) { pin (Y) { direction : output; } }
+}''')
+    io = _file(tmp_path, 'io.lib', '''library (io) {
+ time_unit : "1ns"; capacitive_load_unit (1, pf);
+ cell (io) { pad_cell : true; pin (Y) { direction : output; max_transition : 3; } }
+}''')
+    body = ('foreach _vibeic_core_master [list {logic}] {\n'
+            ' foreach _vibeic_core_cell [get_lib_cells -quiet */$_vibeic_core_master] {\n'
+            '  set_max_fanout 4 [$_vibeic_core_cell cell]\n'
+            '  set_max_capacitance 0.2 [$_vibeic_core_cell cell]\n'
+            '  set_max_transition 3 [$_vibeic_core_cell cell]\n }\n}\n')
+    sdc = Path(_file(tmp_path, 'signoff.sdc', body)['path'])
+    rows = drv.parse_check_types(_report(), scene='typ_nom', mode='functional',
+                                 violators_only=False)
+    rows['max_slew'] += drv.parse_check_types(_report().replace('u/Y', 'pad/Y'),
+                         scene='typ_nom', mode='functional', violators_only=False)['max_slew']
+    libs = [{'name': 'std', **core}, {'name': 'io', **io}]
+    result = derive(folder, libs, rows, signoff_sdc=sdc, core_liberty='std')
+    assert result['unproven'] == []
+    assert result['population'] == {'max_slew': 2, 'max_capacitance': 1, 'max_fanout': 1}
+    assert result['driver_pins'] == ['pad/Y', 'u/Y']
+    assert result['excluded'][0]['reason'] == 'no_applicable_limit'
+    assert set(result['excluded'][0]['excluded_kinds']) == {'max_fanout', 'max_capacitance'}
+    # A global limit makes the absent IO row a real omission again.
+    sdc.write_text(body + 'set_max_fanout 4 [current_design]\n')
+    with pytest.raises(ValueError, match='omitted driver pad/Y'):
+        derive(folder, libs, rows, signoff_sdc=sdc, core_liberty='std')
+    sdc.write_text(body)
+    rows['max_fanout'] = []
+    with pytest.raises(ValueError, match='omitted driver u/Y'):
+        derive(folder, libs, rows, signoff_sdc=sdc, core_liberty='std')
 
 
 def test_unreported_unexcluded_driver_blocks_census(tmp_path):

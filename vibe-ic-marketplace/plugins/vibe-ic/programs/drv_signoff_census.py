@@ -122,10 +122,43 @@ def port_connectivity(pins: dict, nets: dict, pad_cells: set) -> dict[str, bool]
     return result
 
 
+def _core_only_kinds(body: str, core_cells: set[str]) -> set[str]:
+    """Recognize the existing emitter's literal core-master limit block.
+
+    A non-core missing row is inapplicable only if its Liberty has no limit
+    and the generated SDC supplies none outside this verified core scope.
+    Unknown expressions/scopes remain unproven, not silently accepted.
+    """
+    checked = False
+    block = re.compile(
+        r"foreach\s+_vibeic_core_master\s+\[list ([^\n]+)\]\s*\{\s*"
+        r"foreach\s+_vibeic_core_cell\s+\[get_lib_cells -quiet \*/\$_vibeic_core_master\]\s*\{"
+        r"(.*?)\n\s*\}\s*\}", re.S)
+    def remove(match):
+        nonlocal checked
+        names = re.findall(r"\{([^{}]+)\}", match[1])
+        if (not names or not set(names).issubset(core_cells) or
+                re.sub(r"\{[^{}]+\}", "", match[1]).strip()):
+            return match[0]
+        commands = [line.strip() for line in match[2].splitlines() if line.strip()]
+        if not commands or any(not re.fullmatch(
+                rf"set_max_(?:fanout|capacitance|transition)\s+{_NUM}\s+"
+                r"\[\$_vibeic_core_cell cell\]", line) for line in commands):
+            return match[0]
+        checked = True
+        return ""
+    rest = block.sub(remove, body)
+    if not checked:
+        return set()
+    return {kind for kind in KINDS if not re.search(
+        rf"(?m)^\s*set_{kind.replace('max_slew', 'max_transition')}\b", rest)}
+
+
 def derive(scene_dir: Path, linked_liberties: list[dict],
            all_rows: dict[str, list[dict]],
            linked_lefs: list[dict] | None = None, *,
-           allow_unproven: bool = False) -> dict:
+           allow_unproven: bool = False, signoff_sdc: Path | None = None,
+           core_liberty: str | None = None) -> dict:
     """Reconcile reported rows with pin and net identities from one STA run."""
     pins = _pins(scene_dir / "pin_census.tsv")
     nets = _nets(scene_dir / "net_census.rpt")
@@ -134,6 +167,10 @@ def derive(scene_dir: Path, linked_liberties: list[dict],
     for item in linked_liberties:
         limits = _liberty_limits(Path(item["path"]).read_text())
         libs.append((item["name"], limits))
+    core_cells = {cell for name, limits in libs if name == core_liberty
+                  for cell in limits["cells"]}
+    core_only = (_core_only_kinds(signoff_sdc.read_text(), core_cells)
+                 if signoff_sdc is not None and core_cells else set())
     lef_models = _lef_pin_models(linked_lefs) if linked_lefs else {}
     lef_uses = {key: model["use"] for key, model in lef_models.items()
                 if "use" in model}
@@ -190,6 +227,17 @@ def derive(scene_dir: Path, linked_liberties: list[dict],
                (set(pins) - all_names["max_slew"]))
     for name in sorted(omitted):
         pin = pins[name]
+        kinds = [kind for kind in KINDS if name not in all_names[kind] and
+                 (kind == "max_slew" or pin["driver"])]
+        meta = metadata[name]
+        limit_lib = next((limits for lib_name, limits in libs
+                          if lib_name == meta["liberty"]), None)
+        unbounded = (meta["cell_class"] == "port" or
+                     (limit_lib is not None and meta["liberty"] != core_liberty))
+        no_limit = unbounded and all(kind in core_only and
+            (limit_lib is None or
+             (limit_lib["cells"][pin["cell"]][pin["cell_pin"]].get(kind) is None and
+              limit_lib["defaults"].get(kind) is None)) for kind in kinds)
         key = (pin["cell"], pin["cell_pin"])
         pg_without_arc = (lef_uses.get(key) in ("POWER", "GROUND") and
                           key in lib_pins and not lib_pins[key]["has_timing_arc"])
@@ -197,9 +245,11 @@ def derive(scene_dir: Path, linked_liberties: list[dict],
                   "lef_pg_no_liberty_arc" if pg_without_arc else
                   "unconnected_no_net" if not pin["net"] else
                   "constant" if pin["logic"] in ("0", "1") else
-                  (disabled.get(name) or ("ideal" if pin["ideal"] else None)))
+                  (disabled.get(name) or ("ideal" if pin["ideal"] else
+                   "no_applicable_limit" if no_limit else None)))
         if reason not in ("constant", "disabled", "ideal", "lef_pg_no_liberty_arc",
                           "lef_physical_no_liberty_arc",
+                          "no_applicable_limit",
                           "unconnected_no_net"):
             if not allow_unproven:
                 raise ValueError(f"OpenSTA omitted driver {name} without exclusion proof")
@@ -218,6 +268,11 @@ def derive(scene_dir: Path, linked_liberties: list[dict],
             matches = [limits for _, limits in libs if load["cell"] in limits["cells"]
                        and load["cell_pin"] in limits["cells"][load["cell"]]]
             if len(matches) != 1:
+                if metadata[load_name]["cell_class"] == "physical":
+                    # OpenSTA CheckFanouts::fanoutLoad adds one when a load
+                    # has no Liberty port. Keep that load in the fanout.
+                    fanout += 1.0
+                    continue
                 raise ValueError(f"OpenSTA load {load_name} lacks unique Liberty pin")
             limit = matches[0]
             load_weight = limit["cells"][load["cell"]][load["cell_pin"]].get(
@@ -225,8 +280,6 @@ def derive(scene_dir: Path, linked_liberties: list[dict],
             if load_weight is None:
                 load_weight = limit.get("default_fanout_load")
             fanout += load_weight if load_weight is not None else 0.0
-        kinds = [kind for kind in KINDS if name not in all_names[kind] and
-                 (kind == "max_slew" or pin["driver"])]
         excluded.append({"pin": name, "reason": reason, "excluded_kinds": kinds,
                          "fanout": fanout,
                          "cap_pf": (net or {}).get("cap_pf", 0.0),

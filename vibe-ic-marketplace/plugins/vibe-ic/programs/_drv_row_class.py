@@ -114,6 +114,7 @@ class Classifier:
         A DRV FAIL is still useful connectivity evidence; no verdict is upgraded.
         """
         from drv_signoff_census import _pins, _nets, port_connectivity
+        from drv_signoff_annotation import _is_physical_pin, _lef_pin_models
         import drv_run_identity
         source = project / "reports/phase3/sta/drv_signoff_bundle.json"
 
@@ -176,11 +177,18 @@ class Classifier:
                     if pin_path.parent != net_path.parent:
                         raise ValueError("OpenSTA pin/net census comes from different scenes")
                     pins = _pins(pin_path)
+                    lef_refs = scene.get("linked_lefs") or []
+                    for item in lef_refs:
+                        checked(item)
+                    lef_models = _lef_pin_models(lef_refs) if lef_refs else {}
+                    modeled_cells = {cell for lib in limits for cell in lib["cells"]}
                     for pin, item in pins.items():
                         if item["kind"] == "pin" and item.get("net"):
                             matches = [lib for lib in limits if item["cell_pin"] in
                                        lib["cells"].get(item["cell"], {})]
                             if len(matches) != 1:
+                                if not matches and _is_physical_pin(item, lef_models, modeled_cells):
+                                    continue
                                 raise ValueError(f"OpenSTA pin {pin} lacks unique linked Liberty identity")
                     proofs.append(port_connectivity(pins, _nets(net_path), pads))
                     refs.append({"scene": name, "pins": pin_ref, "nets": net_ref,
@@ -246,7 +254,7 @@ class Classifier:
 def sdc_cap_margin(sdc_text: str) -> Optional[float]:
     """The one design-scope `set_max_capacitance <v> [current_design]` value
     the sign-off SDC applies, or None when absent or ambiguous."""
-    values = {v for v in _sdc_values(sdc_text, "set_max_capacitance")}
+    values = {v for v in _sdc_values(sdc_text, "set_max_capacitance", include_ports=False)}
     return values.pop() if len(values) == 1 else None
 
 

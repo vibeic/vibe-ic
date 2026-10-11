@@ -64,19 +64,28 @@ def _lef_uses(paths: list[dict]) -> dict[tuple[str, str], str]:
 
 
 def _is_physical_pin(pin: dict, models: dict, modeled_cells: set[str]) -> bool:
-    """A passive LEF corner/spacer can have no linked Liberty cell.
+    """A passive LEF corner, spacer or supply master can lack a Liberty cell.
 
     Keep it in the pin inventory; only its absent timing check is inapplicable.
     A missing model on a logic cell, clock or actual driver is still an error.
     """
     model = models.get((pin.get("cell"), pin.get("cell_pin")), {})
     master_class = model.get("class") or ""
+    physical = (master_class == "PAD SPACER" or
+                master_class.split()[:1] == ["ENDCAP"])
+    if master_class in ("PAD POWER", "PAD AREAIO"):
+        # AREAIO alone also denotes functional IO. Require the complete LEF
+        # to describe an INOUT-only supply master, with typed power/ground.
+        macro_pins = [item for (cell, _), item in models.items()
+                      if cell == pin.get("cell")]
+        physical = (bool(macro_pins) and
+                    all(item.get("direction") == "INOUT" for item in macro_pins) and
+                    any(item.get("use") in ("POWER", "GROUND") for item in macro_pins))
     return (pin.get("kind") == "pin" and pin.get("cell") not in modeled_cells
             and not pin.get("driver") and not pin.get("clock")
             and pin.get("direction") in ("unknown", "inout")
             and model.get("direction") == "INOUT"
-            and (master_class == "PAD SPACER" or
-                 master_class.split()[:1] == ["ENDCAP"]))
+            and physical)
 
 
 def _unannotated(body: str) -> list[str]:

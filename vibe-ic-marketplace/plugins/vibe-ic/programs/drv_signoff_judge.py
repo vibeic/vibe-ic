@@ -60,11 +60,15 @@ def _evidence(item: dict, errors: list[str], label: str) -> str:
     return path.read_text(errors="replace")
 
 
-def _sdc_values(body: str, command: str) -> list[float]:
+def _sdc_values(body: str, command: str, *, include_ports: bool = True) -> list[float]:
     # Tcl is not a line-oriented format.  A conflicting later assignment must
     # never be hidden by reading only the first matching line.
+    # IO port constraints have their own domain. They are not the core
+    # defaults the stage receipt and the core declaration must agree on.
     return [float(m.group(1)) for m in re.finditer(
-        rf"(?m)^\s*{re.escape(command)}\s+({_NUM})(?=\s|$)", body)]
+        rf"(?m)^\s*{re.escape(command)}\s+({_NUM})(?=\s|$)([^\n;]*)", body)
+        if include_ports or not re.search(r"\[(?:get_ports|all_inputs|all_outputs)\b",
+                                          m.group(2))]
 
 
 def parse_check_types(body: str, *, scene: str, mode: str,
@@ -785,7 +789,7 @@ def judge(bundle: dict, *, project: Path | None = None) -> dict:
     for field, command in (("fanout", "set_max_fanout"),
                            ("slew_ns", "set_max_transition"),
                            ("cap_pf", "set_max_capacitance")):
-        values = _sdc_values(sdc_text, command)
+        values = _sdc_values(sdc_text, command, include_ports=False)
         if not values:
             fails.append(f"sign-off SDC {command} absent")
         elif any(v != declared.get(field) for v in values):
@@ -933,7 +937,7 @@ def judge(bundle: dict, *, project: Path | None = None) -> dict:
             for field, command in (("fanout", "set_max_fanout"),
                                    ("slew_ns", "set_max_transition"),
                                    ("cap_pf", "set_max_capacitance")):
-                values = _sdc_values(snapshot, command)
+                values = _sdc_values(snapshot, command, include_ports=False)
                 if not values or any(value != applied.get(field) for value in values):
                     fails.append(f"{name}: {command} snapshot != applied value")
             if not _positive_number(stage.get("fanout_check_limit")):
@@ -989,6 +993,7 @@ def judge(bundle: dict, *, project: Path | None = None) -> dict:
                 not isinstance(p, dict) or not p.get("pin") or
                 p.get("reason") not in ("constant", "disabled", "ideal",
                                         "lef_pg_no_liberty_arc", "lef_physical_no_liberty_arc",
+                                        "no_applicable_limit",
                                         "unconnected_no_net",
                                         "unproven") or
                 ("excluded_kinds" in p and
@@ -1009,7 +1014,7 @@ def judge(bundle: dict, *, project: Path | None = None) -> dict:
             if not isinstance(item, dict) or not item.get("pin"):
                 continue
             if item.get("reason") in ("lef_pg_no_liberty_arc", "lef_physical_no_liberty_arc",
-                                      "unconnected_no_net"):
+                                      "no_applicable_limit", "unconnected_no_net"):
                 continue
             if item.get("reason") == "unproven":
                 missing.append(f"{name}: omitted pin {item['pin']} has no exclusion proof")
@@ -1165,7 +1170,9 @@ def judge(bundle: dict, *, project: Path | None = None) -> dict:
                     from drv_signoff_census import derive as derive_census
                     census = derive_census(census_paths[0].parent,
                                            scene.get("linked_liberties") or [], all_rows,
-                                           scene.get("linked_lefs"), allow_unproven=True)
+                                           scene.get("linked_lefs"), allow_unproven=True,
+                                           signoff_sdc=Path(sdc["path"]),
+                                           core_liberty=scene.get("liberty"))
                     if (scene_pins != census["pins"] or
                             scene.get("excluded_pins") != census["excluded"] or
                             scene.get("clock_network_pins") != census["clock_network_pins"] or

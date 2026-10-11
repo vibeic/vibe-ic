@@ -107,6 +107,47 @@ def test_port_to_pad_and_io_margin_rows_do_not_block(tmp_path):
     assert proc["drv"]["total"] == 2          # the tool's own count, unchanged
 
 
+def test_unrelated_physical_pin_preserves_the_complete_connectivity_witness(tmp_path):
+    from _drv_row_class import Classifier, OFFCHIP_PORT
+    from drv_signoff_judge import _sha
+    run = _stage(tmp_path, [_PORT, _IO])
+    source = run / 'reports/phase3/sta/drv_signoff_bundle.json'
+    doc = json.loads(source.read_text())
+    scene = doc['scenes'][0]
+    lef = tmp_path / 'physical.lef'
+    lef_body = ('MACRO physical\n CLASS PAD SPACER ;\n PIN BUS\n'
+                ' DIRECTION INOUT ;\n USE SIGNAL ;\n END BUS\nEND physical\n')
+    lef.write_text(lef_body)
+    scene['linked_lefs'] = [{'path': str(lef), 'sha256': _sha(lef)}]
+    pins, nets = (Path(scene[key]['path']) for key in ('pin_census_report', 'net_census_report'))
+    with pins.open('a') as stream:
+        stream.write('spacer/BUS\tpin\tunknown\t0\tspacer\tphysical\tBUS\tbus\tinput\t0\t0\t0\tX\t0\n')
+    with nets.open('a') as stream:
+        stream.write('\nNet bus\n Total capacitance: 0\n Number of drivers: 0\n'
+                     ' Number of loads: 1\n Number of pins: 1\n\n'
+                     'Load pins\n spacer/BUS unknown\n\n')
+    for key in ('pin_census_report', 'net_census_report'):
+        scene[key]['sha256'] = _sha(Path(scene[key]['path']))
+    source.write_text(json.dumps(doc))
+    netlist = Path(doc['identity']['artifacts']['sta_netlist']['path'])
+    sdc = Path(doc['current']['sources']['signoff_sdc']['path'])
+    lib = Path(scene['linked_liberties'][0]['path'])
+    def classify():
+        return Classifier(netlist, {'*': [lib]}, .2, project=run, sdc=sdc)
+    classifier = classify()
+    assert classifier.connectivity_evidence['state'] == 'SOURCE_BOUND', classifier.connectivity_evidence
+    assert classifier.classify('*', 'max_capacitance', 'a', .2, 2.989206) == OFFCHIP_PORT
+    _, result = T._judge(run, tmp_path)
+    assert 'R5_DRV_VIOLATION' not in result['rules_violated'], result
+    # Missing models on real logic still make the witness unavailable.
+    lef.write_text(lef_body.replace('PAD SPACER', 'CORE'))
+    scene['linked_lefs'][0]['sha256'] = _sha(lef)
+    source.write_text(json.dumps(doc))
+    assert classify().connectivity_evidence['state'] == 'UNAVAILABLE'
+    _, result = T._judge(run, tmp_path)
+    assert 'R5_DRV_VIOLATION' in result['rules_violated']
+
+
 def test_a_core_row_beside_them_still_blocks(tmp_path):
     rc, res = T._judge(_stage(tmp_path, [_PORT, _IO, _CORE]), tmp_path)
     assert rc == 1 and "R5_DRV_VIOLATION" in res["rules_violated"]

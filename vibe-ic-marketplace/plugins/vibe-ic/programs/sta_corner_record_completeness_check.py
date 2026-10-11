@@ -1276,8 +1276,10 @@ def _drv_class_inputs(project: Path, rpt: Optional[Path],
         return None, {}, f"{len(netlists)} deck netlists match {sorted(names)}", None
     if not report_corner:
         return None, {}, "report corner identity absent", None
-    typed = {report_corner: sorted(set(libs))}
-    if not typed[report_corner]:
+    # A direct multicorner deck provides the actual library set. Its common
+    # report folder is not a PVT name; validate all its linked scene witnesses.
+    typed = {"*": sorted(set(libs))}
+    if not typed["*"]:
         return None, {}, f"no linked Liberty files for report corner {report_corner}", None
     return (next(iter(netlists)), typed, "",
             next(iter(sdcs)) if len(sdcs) == 1 else None)

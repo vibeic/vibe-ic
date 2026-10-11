@@ -479,7 +479,9 @@ def capture(plan: dict, out_dir: Path, *, image: str | None = None) -> dict:
         census = None
         try:
             census = derive_census(scene_dir, scene["linked_liberties"], all_rows,
-                                   scene.get("linked_lefs"), allow_unproven=True)
+                                   scene.get("linked_lefs"), allow_unproven=True,
+                                   signoff_sdc=Path(plan["current"]["sources"]["signoff_sdc"]["path"]),
+                                   core_liberty=scene.get("liberty"))
             population = census["population"]
             if bundle["pins"] and set(bundle["pins"]) != set(census["pins"]):
                 raise ValueError("OpenSTA pin names differ between scenes")
