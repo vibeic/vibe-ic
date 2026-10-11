@@ -269,6 +269,11 @@ def test_the_layout_producer_gets_the_container_by_its_own_flag_name():
     # which a new branch in the loop (the foundry_handoff admission) pushed
     # the flag out of (T109c)
     body = src[i:src.index("return rows", i)]
+    # The actual loop retains this helper call before it invalidates the old
+    # output. Follow that reachable producer body, retaining both flag checks.
+    if '_run_pre_audit_producer' in body:
+        import inspect
+        body += inspect.getsource(R._run_pre_audit_producer)
     assert '("--container", container)' in body
     assert body.index("_PDK_AWARE_SIGNOFF_GATES") < body.index(
         "_KLAYOUT_CONTAINER_SIGNOFF_GATES"), "both branches must remain present"
