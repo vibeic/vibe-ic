@@ -1117,11 +1117,11 @@ def judge(bundle: dict, *, project: Path | None = None) -> dict:
             if not isinstance(linked_item, dict):
                 missing.append(f"{name}: linked Liberty record malformed")
                 continue
-            linked_header = (libs.get(linked_item.get("name")) or {}).get("header")
-            if (not isinstance(expected_pvt, dict) or
-                    any((linked_header or {}).get(k) != expected_pvt.get(k)
-                        for k in ("nom_process", "nom_voltage", "nom_temperature"))):
-                missing.append(f"{name}: {linked_item.get('name')} linked Liberty PVT mismatch")
+        # The core library defines this scene's PVT. IO and supply libraries
+        # have their own nominal headers; some passive supply models use the
+        # same header in every corner. Their identities are checked against
+        # the frozen full per-scene library set above and the frozen input
+        # hashes, rather than against another library's nominal header.
         if scene.get("command") != _COMMAND:
             missing.append(f"{name}: required OpenSTA report_check_types command absent")
         report = _evidence(scene.get("report") or {}, missing, name + " violator report")

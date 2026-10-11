@@ -140,11 +140,12 @@ _NOT_PROSE: Dict[str, str] = {
         "with the exact set ::env(NAME) form is an environment assignment; a "
         "comment or prose statement cannot negate one. The final scene inputs "
         "are still checked for file presence and content hashes by the plan.",
-    "drv_signoff_annotation::_lef_uses":
-        "LEF PIN AND USE GRAMMAR, NO SENTENCE. Only a USE POWER or USE GROUND "
-        "token within a named MACRO/PIN block qualifies; other USE forms and "
-        "free text cannot negate or create that formal token. The annotation "
-        "fixture flips USE POWER to USE SIGNAL and observes refusal.",
+    "drv_signoff_annotation::_lef_pin_models":
+        "LEF MACRO, CLASS, PIN, DIRECTION AND USE GRAMMAR, NO SENTENCE. Named "
+        "blocks and semicolon-terminated tokens describe library geometry and "
+        "pin types; free text cannot negate or create those formal tokens. "
+        "The annotation fixtures mutate USE POWER to USE SIGNAL, PAD to CORE "
+        "and INOUT to INPUT and observe the corresponding refusal.",
     "drv_signoff_capture::openroad_identity":
         "ONE PROBE LINE GRAMMAR, NO SENTENCE. The only text read is the "
         "capture's own probe output, one `OPENROAD_BINARY <path> <sha256> "

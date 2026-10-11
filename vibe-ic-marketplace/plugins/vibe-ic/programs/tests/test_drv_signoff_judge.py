@@ -563,6 +563,53 @@ def test_clock_waiver_needs_signed_limits_preceding_run(tmp_path, monkeypatch):
     assert drv.judge(bundle)["verdict"] == "FAIL"
 
 
+@pytest.mark.parametrize("fault", [None, "own_temperature", "changed_liberty",
+                                   "wrong_corner", "core_voltage",
+                                   "core_process", "core_temperature"])
+def test_linked_io_pvt_uses_its_frozen_library_identity(tmp_path, fault):
+    bundle = _bundle(tmp_path)
+    header = {"nom_process": 1, "nom_voltage": 3.3,
+              "nom_temperature": 100 if fault == "own_temperature" else 25}
+    io = _file(tmp_path, "io.lib", "library (io) {\n"
+               ' time_unit : "1ns"; capacitive_load_unit (1, pf);\n' + "\n".join(
+        f" {key} : {value};" for key, value in header.items()) + "\n}\n")
+    bundle["current"]["liberties"].append({"name": "io", **io})
+    bundle["frozen"]["liberties"]["io"] = io["sha256"]
+    bundle["frozen"]["scene_liberties"]["typ_nom"].append("io")
+    bundle["current"]["scene_liberties"]["typ_nom"].append("io")
+    bundle["scenes"][0]["linked_liberties"].append({"name": "io", **io})
+    if fault == "changed_liberty":
+        path = Path(io["path"])
+        path.write_text(path.read_text().replace("nom_voltage : 3.3", "nom_voltage : 3.0"))
+    elif fault == "wrong_corner":
+        bundle["scenes"][0]["linked_liberties"][-1]["sha256"] = "d" * 64
+    elif fault in ("core_voltage", "core_process", "core_temperature"):
+        original, replacement = {
+            "core_voltage": ("nom_voltage : 5", "nom_voltage : 4.5"),
+            "core_process": ("nom_process : 1", "nom_process : 2"),
+            "core_temperature": ("nom_temperature : 25", "nom_temperature : 125"),
+        }[fault]
+        core = bundle["current"]["liberties"][0]
+        updated = _file(tmp_path, "library.lib", Path(core["path"]).read_text().replace(
+            original, replacement))
+        core.update(updated)
+        bundle["frozen"]["liberties"]["std"] = updated["sha256"]
+        bundle["scenes"][0]["linked_liberties"][0].update(updated)
+    _refresh_scripts(bundle, tmp_path)
+    result = drv.judge(bundle)
+    if fault in (None, "own_temperature"):
+        assert result["verdict"] == "PASS", result["not_measured"]
+    elif fault == "changed_liberty":
+        assert result["verdict"] == "FAIL"
+        assert any("linked Liberty" in message for message in result["failures"])
+    elif fault == "wrong_corner":
+        assert result["verdict"] == "NOT_MEASURED"
+        assert any("frozen full Liberty set" in message for message in result["not_measured"])
+    else:
+        assert result["verdict"] == "NOT_MEASURED"
+        assert any("Liberty PVT header mismatch" in message for message in result["not_measured"])
+
+
 def test_io_default_fanout_one_catches_three_below_design_four(tmp_path):
     bundle = _bundle(tmp_path)
     io = _file(tmp_path, "io.lib", '''library (io) {
@@ -611,6 +658,26 @@ def test_std_cell_cap_margin_on_io_is_disclosed_separately(tmp_path):
     assert result["verdict"] == "PASS"
     assert result["io_margin_disclosures"][0]["failed_tier"] == (
         "IO_STD_CELL_MARGIN_DISCLOSURE")
+
+
+def test_librelane_capture_plan_preserves_io_library_inventory(tmp_path, monkeypatch):
+    import drv_capture_plan as plan
+    project, adopted = _librelane_final_sta(tmp_path, monkeypatch)
+    root = tmp_path / "installed"
+    io = _file(root, "synthetic/libs.ref/io/lib/io_typ.lib",
+               'library (io) { time_unit : "1ns"; capacitive_load_unit (1,pf); '
+               'nom_process : 1; nom_voltage : 3.3; '
+               'nom_temperature : 25; }')
+    env = project / "phase3/librelane/32-cand01/04-openroad-stapostpnr/nom_typ/_env_sta.tcl"
+    env.write_text(env.read_text() +
+                   f'set ::env(PAD_LIBS) "{io["path"]}"\n')
+    final_state = _step32_report(project, adopted)
+    result = plan.build(project, final_state=final_state)
+    assert result["frozen"]["pvt"]["typ_nom"]["nom_voltage"] == 5
+    assert all(scene["liberty"] == "std_typ" and
+               [item["name"] for item in scene["linked_liberties"]] == ["std_typ", "io_typ"]
+               for scene in result["scenes"])
+    assert result["frozen"]["liberties"]["io_typ"] == io["sha256"]
 
 
 @pytest.mark.parametrize("kind,value,limit", [
@@ -838,6 +905,10 @@ def test_direct_capture_plan_uses_its_ran_decks_and_linked_lef(tmp_path, monkeyp
     lib = _file(root, "synthetic/libs.ref/lib/lib/std_typ.lib",
                 'library (std) { time_unit : "1ns"; capacitive_load_unit (1,pf); '
                 'nom_voltage : 5; nom_temperature : 25; }')
+    io = _file(root, "synthetic/libs.ref/io/lib/io_typ.lib",
+               'library (io) { time_unit : "1ns"; capacitive_load_unit (1,pf); '
+               'nom_process : 1; nom_voltage : 3.3; '
+               'nom_temperature : 25; }')
     lef = _file(root, "synthetic/libs.ref/lib/lef/std.lef",
                 "MACRO std\n PIN A\n USE SIGNAL ;\n END A\nEND std\n")
     _file(root, "synthetic/libs.tech/librelane/lib/config.tcl",
@@ -864,6 +935,7 @@ def test_direct_capture_plan_uses_its_ran_decks_and_linked_lef(tmp_path, monkeyp
         spef = _file(project, f"phase3/stage3/extracted/top.{rc}.spef",
                      f"*SPEF {rc}\n")
         deck = (f"read_liberty /original/synthetic/libs.ref/lib/lib/std_typ.lib\n"
+                "read_liberty /original/synthetic/libs.ref/io/lib/io_typ.lib\n"
                 f"read_verilog {netlist['path']}\n"
                 "link_design top\n"
                 f"read_sdc {sdc['path']}\n"
@@ -877,6 +949,10 @@ def test_direct_capture_plan_uses_its_ran_decks_and_linked_lef(tmp_path, monkeyp
     assert result["frozen"]["values"]["io_delay_ns"] == 4.8
     assert all(s["linked_lefs"][0]["sha256"] == lef["sha256"]
                for s in result["scenes"])
+    assert all(scene["liberty"] == "std_typ" and
+               [item["name"] for item in scene["linked_liberties"]] == ["std_typ", "io_typ"]
+               for scene in result["scenes"])
+    assert result["frozen"]["liberties"]["io_typ"] == io["sha256"]
 
 
 def test_scene_linked_liberty_is_the_hard_slew_limit(tmp_path):
