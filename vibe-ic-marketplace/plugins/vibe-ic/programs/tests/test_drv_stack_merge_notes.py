@@ -169,8 +169,16 @@ def test_the_step23_audit_clause_judges_only_the_final_capture(tmp_path):
         doc["not_measured"], doc["not_measured"]
 
 
+@pytest.fixture
+def legacy_tail_transport(monkeypatch):
+    """Use the imported raw-transport driver's own mode and runtime isolation."""
+    from test_r0929_tail_continues import diagnostic_transport_mode
+    diagnostic_transport_mode.__wrapped__(monkeypatch)
+
+
 @pytest.mark.parametrize("status", ["PASS", "WAIVED", "FAIL"])
-def test_step32_lets_an_owner_waived_row_reach_stream_out(tmp_path, monkeypatch, status):
+def test_step32_lets_an_owner_waived_row_reach_stream_out(tmp_path, monkeypatch,
+                                                       status, legacy_tail_transport):
     """R-0930-TAIL-TEST-MIGRATION: judge usable inputs, retain upstream status.
 
     The old AST assertion required a removed status-only chain stop. Drive

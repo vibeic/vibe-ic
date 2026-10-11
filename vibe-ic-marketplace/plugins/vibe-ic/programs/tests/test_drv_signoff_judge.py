@@ -1229,6 +1229,70 @@ def test_capture_replaces_plan_pin_classes_with_opensta_and_liberty(tmp_path, mo
     assert result["identity"]["pdk_commit"] == "installed-version"
 
 
+@pytest.mark.parametrize("fault", [None, "pdk", "anchor", "liberty", "rcx"])
+def test_checkpoint_sdk_upgrade_keeps_original_producer_and_inputs(tmp_path, monkeypatch, fault):
+    import subprocess
+    import drv_signoff_capture as capture
+    plan = _bundle(tmp_path)
+    _capture_rcx_fixture(plan, tmp_path)
+    plan["top"] = "top"
+    producer = plan["identity"]["tool_image"]
+    plan["identity"]["source_tool_image"] = producer
+    plan["identity"]["source_tool_image_id"] = plan["identity"]["tool_image_digest"]
+    original_identity = copy.deepcopy(plan["identity"])
+    anchor = {"path": "/image/pdk/config.tcl", "pdk_commit": "installed-version",
+              "sha256": plan["frozen"]["sources"]["pdk_config"]}
+    if fault == "pdk":
+        anchor["sha256"] = "0" * 64
+    if fault == "liberty":
+        Path(plan["current"]["liberties"][0]["path"]).write_text("different library")
+    if fault == "rcx":
+        path = tmp_path / "rcx/vibeic_receipt.json"
+        receipt = json.loads(path.read_text())
+        receipt["input"]["image"] = "synthetic:updated"
+        path.write_text(json.dumps(receipt))
+    def installed_anchor(*args):
+        if fault == "anchor":
+            raise ValueError("installed PDK unavailable")
+        return anchor
+    monkeypatch.setattr(capture, "image_pdk_anchor", installed_anchor)
+    monkeypatch.setattr(capture, "openroad_identity", lambda image: {"commit": "b" * 40})
+    monkeypatch.setattr(capture._ce, "no_container_route", lambda: False)
+    monkeypatch.setattr(capture.subprocess, "run", lambda *a, **k:
+        subprocess.CompletedProcess(a, 0, json.dumps({
+            "Id": "sha256:" + "b" * 64, "Config": {"Labels": {}}}), ""))
+    launches = []
+    def fresh(script, roots, *, image):
+        launches.append(image)
+        folder = script.parent
+        if script.name == "positive_control.tcl":
+            (folder / "positive_control.rpt").write_text(_report(
+                fanout=2, fanout_limit=1, cap_limit=.01, slew_limit=.01, violators=True))
+            (folder / "positive_control_counters.log").write_text(
+                "".join(f"DRV_COUNTER {kind} 1\n" for kind in drv.KINDS))
+        else:
+            (folder / "annotation.rpt").write_text("Found 0 unannotated drivers.\n")
+            (folder / "clocks.rpt").write_text("propagated\n")
+            (folder / "violators.rpt").write_text(_report(violators=True))
+            (folder / "all_limits.rpt").write_text(_report(fanout=2))
+            (folder / "counters.log").write_text(
+                "".join(f"DRV_COUNTER {kind} 0\n" for kind in drv.KINDS))
+        return "OpenSTA 3.1 bbbbbbbbbb\n"
+    monkeypatch.setattr(capture, "_run_fresh", fresh)
+    if fault:
+        with pytest.raises(ValueError):
+            capture.capture(plan, tmp_path / "captured", image="synthetic:updated")
+        assert not launches
+    else:
+        result = capture.capture(plan, tmp_path / "captured", image="synthetic:updated")
+        assert launches == ["synthetic:updated", "synthetic:updated"]
+        assert result["identity"]["source_tool_image"] == producer
+        assert result["identity"]["source_tool_image_id"] == original_identity["source_tool_image_id"]
+        assert result["identity"]["tool_image"] == "synthetic:updated"
+        assert result["identity"]["tool_image_digest"] == "sha256:" + "b" * 64
+        assert plan["identity"] == original_identity
+
+
 def test_project_judge_rejects_plan_anchor_even_when_bundle_is_self_consistent(
         tmp_path, monkeypatch):
     bundle = _bundle(tmp_path)
@@ -1311,7 +1375,9 @@ def test_annotation_exclusion_requires_lef_pg_and_no_liberty_arc(tmp_path):
     assert [row["pin"] for row in restored["unresolved"]] == ["u/VDD"]
 
 
-def test_project_clean_opensta_census_can_reach_pass(tmp_path, monkeypatch):
+@pytest.mark.parametrize("producer_image", [None, "sha256:" + "c" * 64])
+def test_project_clean_opensta_census_can_reach_pass(tmp_path, monkeypatch,
+                                                   producer_image):
     from drv_signoff_census import derive
     bundle = _bundle(tmp_path)
     l7 = _file(tmp_path, "input/docs/L7.md", "verification plan\n")
@@ -1326,10 +1392,16 @@ def test_project_clean_opensta_census_can_reach_pass(tmp_path, monkeypatch):
               "pdk_commit": "installed-version"}
     bundle["threshold_anchor"] = anchor
     bundle["identity"]["pdk_commit"] = anchor["pdk_commit"]
+    if producer_image:
+        bundle["identity"].update(source_tool_image="synthetic:previous",
+                                  source_tool_image_id=producer_image)
     monkeypatch.setattr(drv, "image_pdk_anchor", lambda *a: anchor)
-    _file(tmp_path, "phase3/librelane_pdk_root.provenance.json", json.dumps({
+    provenance = {
         "path": str(root),
-        "derivation": {"image_id": bundle["identity"]["tool_image_digest"]}}))
+        "derivation": {"image_id": producer_image or
+                       bundle["identity"]["tool_image_digest"]}}
+    provenance_ref = _file(tmp_path, "phase3/librelane_pdk_root.provenance.json",
+                           json.dumps(provenance))
     scene = bundle["scenes"][0]
     folder = tmp_path / "census"
     _file(folder, "pin_census.tsv",
@@ -1355,6 +1427,14 @@ def test_project_clean_opensta_census_can_reach_pass(tmp_path, monkeypatch):
     _install_test_freeze(bundle, tmp_path, monkeypatch)
     result = drv.judge(bundle, project=tmp_path)
     assert result["verdict"] == "PASS", result
+    if producer_image:
+        Path(provenance_ref["path"]).write_text(json.dumps({**provenance,
+            "derivation": {"image_id": "sha256:" + "d" * 64}}))
+        wrong_producer = drv.judge(bundle, project=tmp_path)
+        assert wrong_producer["verdict"] == "NOT_MEASURED"
+        assert "installed PDK root image identity differs from producer image" in \
+            wrong_producer["not_measured"]
+        Path(provenance_ref["path"]).write_text(json.dumps(provenance))
     # CIEL exposes the installed PDK name as a symlink to its version directory.
     # The same config bytes and frozen evidence still belong to that PDK.
     versioned = root / "versions" / "installed-version" / "synthetic"
@@ -2254,6 +2334,8 @@ def _librelane_final_sta(tmp_path: Path, monkeypatch) -> tuple[Path, Path]:
     monkeypatch.setattr(librelane_contract, "pdk_root_resolution",
                         lambda *a, **k: {"path": str(root),
                                          "derivation": {"image_id": image_id}})
+    monkeypatch.setattr(librelane_contract, "resolve_image",
+                        lambda *a, **k: "synthetic:test")
     profile = tmp_path / "profile.json"
     profile.write_text(json.dumps({"synthetic": {"pvt": {
         "typ": {"nom_voltage": 5, "nom_temperature": 25}},
@@ -2290,6 +2372,56 @@ def _step32_report(project: Path, adopted: Path) -> dict:
             "adopted_state": str(adopted),
             "final": {"sta_state": str(state),
                       "sta_state_sha256": drv._sha(state)}}
+
+
+@pytest.mark.parametrize("changed_input", [None, "pdk", "liberty", "lef"])
+def test_default_capture_resumes_cached_inputs_on_current_sdk(tmp_path, monkeypatch,
+                                                            changed_input):
+    import drv_capture_plan as capture_plan
+    import drv_signoff_capture
+    import librelane_contract
+    project, adopted = _librelane_final_sta(tmp_path, monkeypatch)
+    final_state = _step32_report(project, adopted)
+    original = capture_plan.build(project, final_state=final_state)
+    _file(project, "reports/phase3/sta/drv_capture_plan.json", json.dumps(original))
+    provenance = project / "phase3/librelane_pdk_root.provenance.json"
+    producer_bytes = provenance.read_bytes()
+    new_sdk = "synthetic:updated"
+    launches = []
+    def selected_sdk(selected_project, *, record=True):
+        assert selected_project == project
+        assert record is False
+        return new_sdk
+
+    monkeypatch.setattr(librelane_contract, "resolve_image", selected_sdk)
+
+    def recreate_old_sdk(*args, **kwargs):
+        raise AssertionError("a same-host checkpoint already has its PDK inputs")
+
+    def capture(plan, output, *, image):
+        launches.append((plan, image))
+        return {"identity": plan["identity"]}
+
+    monkeypatch.setattr(librelane_contract, "pdk_root_resolution", recreate_old_sdk)
+    monkeypatch.setattr(drv_signoff_capture, "capture", capture)
+    if changed_input:
+        ref = (original["current"]["sources"]["pdk_config"] if changed_input == "pdk"
+               else original["scenes"][0]["linked_liberties" if changed_input == "liberty"
+                                           else "linked_lefs"][0])
+        path = Path(ref["path"])
+        path.write_text(path.read_text() + "\nchanged installed PDK input\n")
+        with pytest.raises(ValueError, match="retained checkpoint PDK (config|input) changed"):
+            capture_plan.capture_and_publish(project, final_state=final_state)
+        assert launches == []
+    else:
+        output = capture_plan.capture_and_publish(project, final_state=final_state)
+        assert output.is_file()
+        assert launches[0][1] == new_sdk
+        assert launches[0][0]["identity"]["source_tool_image_id"] == \
+            original["identity"]["source_tool_image_id"]
+        assert launches[0][0]["frozen"]["sources"]["pdk_config"] == \
+            original["frozen"]["sources"]["pdk_config"]
+    assert provenance.read_bytes() == producer_bytes
 
 
 def test_capture_plan_carries_every_required_stage_the_run_recorded(tmp_path, monkeypatch):

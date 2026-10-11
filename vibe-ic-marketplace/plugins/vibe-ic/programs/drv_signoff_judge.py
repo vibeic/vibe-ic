@@ -809,8 +809,9 @@ def judge(bundle: dict, *, project: Path | None = None) -> dict:
             if not pdk_root.is_dir() or not pdk_source.is_relative_to(pdk_root):
                 missing.append("PDK config is not inside installed PDK root")
             if ((root_doc.get("derivation") or {}).get("image_id") !=
-                    identity.get("tool_image_digest")):
-                missing.append("installed PDK root image identity differs from STA image")
+                    (identity.get("source_tool_image_id") or
+                     identity.get("tool_image_digest"))):
+                missing.append("installed PDK root image identity differs from producer image")
         except (OSError, ValueError, TypeError, KeyError, AttributeError):
             missing.append("installed PDK root provenance unavailable")
     sdc = (current.get("sources") or {}).get("signoff_sdc") or {}

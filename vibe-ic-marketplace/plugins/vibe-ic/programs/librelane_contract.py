@@ -2588,7 +2588,7 @@ def resolve_pdk_root(project: Path | None = None, pdk: str | None = None, *,
         return None
 
 
-def resolve_image(project: Path | None = None) -> str:
+def resolve_image(project: Path | None = None, *, record: bool = True) -> str:
     """Switch ``image`` > ``VIBEIC_LIBRELANE_IMAGE`` > the host's resolved image.
 
     The fallback is the plugin's ONE runtime resolver, `_eda_pin.image_reference`
@@ -2601,14 +2601,14 @@ def resolve_image(project: Path | None = None) -> str:
     declared = _load(path).get('image') if path and path.is_file() else None
     provider = local_provider_identity(project)
     if provider is not None:
-        if project is not None and (project / 'phase3').is_dir():
+        if record and project is not None and (project / 'phase3').is_dir():
             write_json(project / 'phase3/librelane_image.provenance.json',
                        {'image': str(provider), 'source': 'host-owned LOCAL provider',
                         'provider': provider.as_record()})
         return provider
     if _ce.no_container_route():
         identity = local_image_attestation(declared or os.environ.get('VIBEIC_LIBRELANE_IMAGE'))
-        if project is not None and (project / 'phase3').is_dir():
+        if record and project is not None and (project / 'phase3').is_dir():
             write_json(project / 'phase3/librelane_image.provenance.json',
                        {**identity, 'source': 'host-CID attested LOCAL image'})
         return identity['image']

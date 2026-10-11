@@ -643,13 +643,16 @@ def build(project: Path, *, final_state: dict | None = None) -> dict:
     provenance = json.loads((project / "phase3/librelane_pdk_root.provenance.json").read_text())
     pdk = provenance["derivation"]["pdk"]
     image = provenance["derivation"]["image"]
-    # A copied run retains the producer host's cache path. Recreate the same
-    # image's PDK on this host without changing the run's provenance record.
-    from librelane_contract import pdk_root_resolution
-    resolution = pdk_root_resolution(None, pdk, image=image)
-    if resolution["derivation"]["image_id"] != provenance["derivation"]["image_id"]:
-        raise ValueError("final STA PDK image differs from run provenance")
-    root = Path(resolution["path"])
+    # A same-host checkpoint already names its PDK inputs. Reading them does
+    # not require launching the older executable that produced the layout.
+    # Only recreate the original image's PDK when that cache is unavailable.
+    root = Path(provenance["path"])
+    if not (root / pdk).is_dir():
+        from librelane_contract import pdk_root_resolution
+        resolution = pdk_root_resolution(None, pdk, image=image)
+        if resolution["derivation"]["image_id"] != provenance["derivation"]["image_id"]:
+            raise ValueError("final STA PDK image differs from run provenance")
+        root = Path(resolution["path"])
     recorded_netlist = _run_path(project, state["nl"])
     routed_identity = _current_routed_identity(project, recorded_netlist)
     if routed_identity is None:
@@ -732,6 +735,19 @@ def build(project: Path, *, final_state: dict | None = None) -> dict:
     sources = {"pdk_config": _ref(pdk_config),
                "signoff_sdc": _ref(raw_signoff_sdc),
                "signoff_sdc_derived": derived_signoff_sdc}
+    previous_path = project / "reports/phase3/sta/drv_capture_plan.json"
+    if previous_path.is_file():
+        previous = json.loads(previous_path.read_text())
+        if ((previous.get("identity") or {}).get("source_tool_image_id") ==
+                provenance["derivation"]["image_id"]):
+            expected_pdk = ((previous.get("frozen") or {}).get("sources") or {}).get("pdk_config")
+            if expected_pdk and expected_pdk != sources["pdk_config"]["sha256"]:
+                raise ValueError("retained checkpoint PDK config changed")
+            for scene in previous.get("scenes") or []:
+                for item in [*(scene.get("linked_liberties") or []),
+                             *(scene.get("linked_lefs") or [])]:
+                    if _ref(Path(item["path"]))["sha256"] != item.get("sha256"):
+                        raise ValueError(f"retained checkpoint PDK input changed: {item['path']}")
     native_measurement = (state_path.parent.parent /
                           "01-vibeic-postrouterepair/native_signoff/measurement_scene.sdc")
     if native_measurement.is_file():
@@ -889,8 +905,9 @@ def capture_and_publish(project: Path, *, final_state: dict | None = None,
     output.unlink(missing_ok=True)
     plan_path = publish(project, final_state=final_state, capture_point=capture_point)
     plan = json.loads(plan_path.read_text())
+    from librelane_contract import resolve_image
     bundle = drv_signoff_capture.capture(
         plan, project / "reports/phase3/sta/drv_capture",
-        image=plan["identity"]["source_tool_image"])
+        image=resolve_image(project, record=False))
     write_text(output, json.dumps(bundle, indent=2) + "\n")
     return output

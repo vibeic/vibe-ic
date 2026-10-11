@@ -301,9 +301,10 @@ def _spef_extraction_receipt(plan: dict, scene: dict, out: Path) -> dict:
         if recorded_input.get("step") != "OpenROAD.RCX":
             raise ValueError("RCX receipt names a different producer step")
         recorded_image = recorded_input.get("image")
-        bound_image = (plan.get("identity") or {}).get("tool_image")
+        identity = plan.get("identity") or {}
+        bound_image = identity.get("source_tool_image") or identity.get("tool_image")
         if recorded_image != bound_image:
-            raise ValueError("RCX receipt image differs from capture image")
+            raise ValueError("RCX receipt image differs from producer image")
         rel_spef = spef.relative_to(rcx_dir).as_posix()
         spef_sha = _sha(spef)
         if recorded_sha.get(rel_spef) != spef_sha:
@@ -419,8 +420,34 @@ def capture(plan: dict, out_dir: Path, *, image: str | None = None) -> dict:
     if (image_info is not None and image_info.returncode) or not str(digest).startswith("sha256:"):
         raise ValueError("pinned OpenSTA image identity unavailable")
     expected_id = bundle["identity"].get("source_tool_image_id")
+    anchor = None
     if expected_id and digest != expected_id:
-        raise ValueError("capture image differs from final STA image identity")
+        # A new STA executable may consume the retained routed checkpoint.
+        # Its installed PDK and actual inputs must still match the frozen run.
+        try:
+            anchor = image_pdk_anchor(
+                image, str(bundle["identity"].get("pdk") or ""),
+                str(bundle["identity"].get("library") or ""))
+        except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
+            raise ValueError(f"capture SDK PDK compatibility unavailable: {exc}") from exc
+        frozen_sources = plan["frozen"]["sources"]
+        if (not re.fullmatch(r"[0-9a-f]{64}", str(frozen_sources.get("pdk_config"))) or
+                anchor.get("sha256") != frozen_sources["pdk_config"]):
+            raise ValueError("capture SDK PDK input differs from retained checkpoint")
+        inputs = []
+        for name in ("l7", "l9", "pdk_config", "signoff_sdc"):
+            item = plan["current"]["sources"][name]
+            if item.get("sha256") != frozen_sources.get(name):
+                raise ValueError(f"capture input declaration changed: {name}")
+            inputs.append(item)
+        for scene in plan["scenes"]:
+            inputs.extend([scene["spef"], *scene["linked_liberties"],
+                           *(scene.get("linked_lefs") or [])])
+        inputs.extend(plan["identity"]["artifacts"][name]
+                      for name in ("sta_netlist", "def"))
+        for item in inputs:
+            if _ref(Path(item.get("path") or ""))["sha256"] != item.get("sha256"):
+                raise ValueError(f"capture input bytes changed: {item.get('path')}")
     bundle["identity"]["tool_image"] = image
     bundle["identity"]["tool_image_digest"] = digest
     bundle["identity"]["tool_image_oci_version"] = version
@@ -429,7 +456,7 @@ def capture(plan: dict, out_dir: Path, *, image: str | None = None) -> dict:
     if openroad.get("commit"):
         bundle["identity"]["openroad_commit"] = openroad["commit"]
     try:
-        bundle["threshold_anchor"] = image_pdk_anchor(
+        bundle["threshold_anchor"] = anchor or image_pdk_anchor(
             image, str(bundle["identity"].get("pdk") or ""),
             str(bundle["identity"].get("library") or ""))
         bundle["identity"]["pdk_commit"] = bundle["threshold_anchor"]["pdk_commit"]
@@ -448,6 +475,7 @@ def capture(plan: dict, out_dir: Path, *, image: str | None = None) -> dict:
             roots.add(Path(item["path"]).resolve().parent)
         scene_dir = out_dir / scene["name"]
         scene_dir.mkdir(parents=True, exist_ok=True)
+        extraction_receipt = _spef_extraction_receipt(bundle, scene, scene_dir)
         # The author of a capture plan cannot lower the OpenSTA report bound.
         # Read the resulting census back from the fresh tool output instead.
         max_count = 2_147_483_647
@@ -506,8 +534,7 @@ def capture(plan: dict, out_dir: Path, *, image: str | None = None) -> dict:
         row.pop("excluded_pins_recorded", None)
         row.pop("excluded_pins_report", None)
         row.pop("clock_network_pins", None)
-        row["spef_extraction_receipt"] = _spef_extraction_receipt(
-            bundle, scene, scene_dir)
+        row["spef_extraction_receipt"] = extraction_receipt
         row.update(fresh_process=True, postroute=True, propagated_clocks=True,
                    excluded_pins_recorded=census is not None,
                    command=_COMMAND, all_limits_max_count=max_count,
