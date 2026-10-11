@@ -16,6 +16,7 @@ import execution_policy as policy
 import phase1_one_shot_runner as phase1
 import phase3_one_shot_runner as phase3
 import step_output_collector as versions
+import vibe_ic_one_shot_runner as front
 
 
 @pytest.fixture(autouse=True)
@@ -158,3 +159,159 @@ def test_real_derived_refusal_retains_deleted_flag_and_returned_reason(tmp_path,
     assert (folder / 'before' / retained['snapshot']).read_bytes() == b'previous repair evidence'
     assert record['result']['producer_return']['message'] == 'current basis absent'
     assert not record['canonical_pass']
+
+
+def test_atpg_missing_inputs_retains_each_actual_disclosure(tmp_path, monkeypatch):
+    monkeypatch.setattr(phase3._pr, 'run', lambda *_a, **_k: pytest.fail('native must not start'))
+    written, notes = [], []
+    assert phase3.run_at_speed_atpg_producers(tmp_path, written, notes) is None
+    assert written == [] and len(notes) == 3
+    for sid in ('DT1', 'DT2', 'DT3'):
+        folder, record = saved(tmp_path, sid)
+        relative = phase3._ATPG_NOT_RUN_REL[sid]
+        assert (folder / 'files' / relative).read_bytes() == (tmp_path / relative).read_bytes()
+        assert record['result']['producer_return']['rc'] == 2
+        assert record['status'] == 'NOT_MEASURED' and not record['canonical_pass']
+        assert versions.latest_pass(tmp_path, sid) is None
+
+
+def test_atpg_due_retry_cannot_consume_its_previous_report(tmp_path, monkeypatch):
+    monkeypatch.setattr(phase3, 'atpg_librelane_views', lambda *_: ([], None))
+    monkeypatch.setattr(phase3, 'atpg_missing_inputs', lambda *_: [])
+    monkeypatch.setattr(phase3, 'atpg_needs_regrade', lambda *_: True)
+    monkeypatch.setattr(phase3, 'routed_sdc_clock', lambda *_: 10)
+    for relative in phase3._ATPG_COVERAGE_REL.values():
+        path = tmp_path / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b'previous grade bytes')
+    seen = []
+    def no_output(argv, **_kwargs):
+        path = Path(argv[argv.index('--json') + 1])
+        assert not path.exists(), 'due retry must invalidate the old working report after capture'
+        seen.append(path)
+        return SimpleNamespace(returncode=0, stdout='', stderr='producer wrote nothing')
+    monkeypatch.setattr(phase3._pr, 'run', no_output)
+    written, notes = [], []
+    phase3.run_at_speed_atpg_producers(tmp_path, written, notes)
+    assert written == [] and len(seen) == 3
+    for sid, relative in phase3._ATPG_COVERAGE_REL.items():
+        folder, record = saved(tmp_path, sid)
+        assert (folder / 'before/files' / relative).read_bytes() == b'previous grade bytes'
+        assert not (tmp_path / relative).exists()
+        assert record['result']['producer_return']['producer_rc'] == 0
+        assert record['status'] == 'NOT_MEASURED' and not record['canonical_pass']
+        disclosure = json.loads((tmp_path / phase3._ATPG_NOT_RUN_REL[sid]).read_text())
+        assert disclosure['not_run_stage'] == 'producer_wrote_no_artifact'
+
+
+def test_atpg_retiring_old_disclosures_keeps_their_bytes(tmp_path, monkeypatch):
+    monkeypatch.setattr(phase3, 'atpg_librelane_views', lambda *_: (None, None))
+    monkeypatch.setattr(phase3, 'atpg_needs_regrade', lambda *_: False)
+    monkeypatch.setattr(phase3._pr, 'run', lambda *_a, **_k: pytest.fail('valid grade is reused'))
+    for mapping in (phase3._ATPG_NOT_RUN_REL, phase3._ATPG_NOT_RUN_LEGACY_COLOCATED_REL):
+        for relative in mapping.values():
+            path = tmp_path / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b'previous refusal bytes')
+    phase3.run_at_speed_atpg_producers(tmp_path, [], [])
+    for sid in ('DT1', 'DT2', 'DT3'):
+        folder, record = saved(tmp_path, sid)
+        for mapping in (phase3._ATPG_NOT_RUN_REL, phase3._ATPG_NOT_RUN_LEGACY_COLOCATED_REL):
+            relative = mapping[sid]
+            assert (folder / 'before/files' / relative).read_bytes() == b'previous refusal bytes'
+            assert not (tmp_path / relative).exists()
+        assert record['result']['producer_return']['rc'] is None
+        assert not record['canonical_pass'], 'reuse without new production is historical evidence'
+
+
+MIXED = [
+    ('M1', 'mixed_signal_top_lvs_run.py', 'top_lvs_run.json'),
+    ('M2', 'mixed_signal_power_domain_run.py', 'power_domain_producer_audit.json'),
+    ('M3', 'mixed_signal_m3_run.py', 'm3_producer_audit.json'),
+    ('M4', 'mixed_signal_signoff_run.py', 'signoff_producer_audit.json'),
+]
+
+
+@pytest.mark.parametrize('sid,program,audit', MIXED)
+def test_mixed_phase_refusal_preserves_the_prior_audit(tmp_path, monkeypatch, sid, program, audit):
+    primary = tmp_path / 'reports/analog/mixed_signal' / audit
+    primary.parent.mkdir(parents=True)
+    primary.write_bytes(b'previous producer audit')
+    def produce(argv, **kwargs):
+        assert argv[1] == str(PROGRAMS / program)
+        assert kwargs['env'] == {'TASK': 'local'}
+        if sid != 'M1':
+            assert not primary.exists()
+        primary.write_bytes(b'current refusal audit')
+        return SimpleNamespace(returncode=2)
+    monkeypatch.setattr(front.subprocess, 'run', produce)
+    rc = front._run_phase('mixed control', PROGRAMS / program,
+                          [str(tmp_path), '--json', str(primary)], env={'TASK': 'local'})
+    assert rc == 2
+    folder, record = saved(tmp_path, sid)
+    relative = str(primary.relative_to(tmp_path))
+    assert (folder / 'before/files' / relative).read_bytes() == b'previous producer audit'
+    assert (folder / 'files' / relative).read_bytes() == b'current refusal audit'
+    assert record['status'] == 'NOT_MEASURED' and not record['canonical_pass']
+    assert versions.latest_pass(tmp_path, sid) is None
+
+
+def test_mixed_phase_completion_does_not_override_the_consumer(tmp_path, monkeypatch):
+    monkeypatch.setattr(front.subprocess, 'run', lambda *_a, **_k: SimpleNamespace(returncode=0))
+    monkeypatch.setattr(gates, 'evaluate', lambda project, row: {
+        'status': 'FAIL', 'step': {'id': row['id'], 'status': 'FAIL'},
+        'ledger': [{'gate': 'mixed_signal_merge_check', 'rc': 1, 'verdict': 'FAIL'}]})
+    assert front._run_phase('mixed control', PROGRAMS / MIXED[0][1], [str(tmp_path)]) == 0
+    _, record = saved(tmp_path, 'M1')
+    assert record['status'] == 'FAIL' and not record['canonical_pass']
+    assert record['result']['canonical_consumer']['ledger'][0]['rc'] == 1
+
+
+def test_mixed_phase_accepted_version_survives_a_failed_retry(tmp_path, monkeypatch):
+    import _flow_yaml
+    primary = tmp_path / 'reports/analog/mixed_signal' / MIXED[1][2]
+    row = next(r for r in _flow_yaml.load()['steps'] if str(r['id']) == 'M2')
+    returns = iter([0, 2])
+    def produce(*_args, **_kwargs):
+        primary.parent.mkdir(parents=True, exist_ok=True)
+        rc = next(returns)
+        primary.write_text(json.dumps({'rc': rc}))
+        if rc == 0:
+            for relative in row['required_outputs']:
+                path = tmp_path / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(b'controlled producer output')
+        return SimpleNamespace(returncode=rc)
+    monkeypatch.setattr(front.subprocess, 'run', produce)
+    monkeypatch.setattr(gates, 'evaluate', lambda project, step: {
+        'status': 'PASS', 'step': {'id': step['id'], 'status': 'PASS'}, 'ledger': []})
+    args = [str(tmp_path), '--json', str(primary)]
+    assert front._run_phase('mixed control', PROGRAMS / MIXED[1][1], args) == 0
+    first, accepted = saved(tmp_path, 'M2')
+    assert accepted['canonical_pass'] is True
+    assert front._run_phase('mixed control', PROGRAMS / MIXED[1][1], args) == 2
+    second, refused = saved(tmp_path, 'M2')
+    assert second != first and not refused['canonical_pass']
+    assert versions.latest_pass(tmp_path, 'M2')['folder'] == str(first.relative_to(tmp_path / 'steps'))
+    assert json.loads((first / 'files' / primary.relative_to(tmp_path)).read_text()) == {'rc': 0}
+
+
+def test_mixed_phase_interruption_preserves_partial_output(tmp_path, monkeypatch):
+    primary = tmp_path / 'reports/analog/mixed_signal' / MIXED[2][2]
+    def interrupt(*_args, **_kwargs):
+        primary.parent.mkdir(parents=True, exist_ok=True)
+        primary.write_bytes(b'partial native audit')
+        raise KeyboardInterrupt('bounded interruption')
+    monkeypatch.setattr(front.subprocess, 'run', interrupt)
+    with pytest.raises(KeyboardInterrupt, match='bounded interruption'):
+        front._run_phase('mixed control', PROGRAMS / MIXED[2][1],
+                         [str(tmp_path), '--json', str(primary)])
+    folder, record = saved(tmp_path, 'M3')
+    assert record['status'] == 'INTERRUPTED' and not record['canonical_pass']
+    assert (folder / 'files' / primary.relative_to(tmp_path)).read_bytes() == b'partial native audit'
+
+
+def test_nonmixed_phase_does_not_create_a_mixed_version(tmp_path, monkeypatch):
+    monkeypatch.setattr(front.subprocess, 'run', lambda *_a, **_k: SimpleNamespace(returncode=7))
+    assert front._run_phase('other phase', PROGRAMS / 'phase1_one_shot_runner.py', [str(tmp_path)]) == 7
+    assert not (tmp_path / 'steps').exists()
