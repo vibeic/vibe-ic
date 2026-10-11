@@ -390,7 +390,14 @@ def test_the_judge_reads_the_receipt_and_writes_nothing(tmp_path):
         {"log": entries["log"]}, {"rc": 0, "argv": ["klayout", "synthetic-fixture"]})
     doc["finishing_layer_differences"] = []
     doc["shipped_sha256_live"] = entries["shipped"]["sha256"]
-    doc["connectivity"]["subject_sha256"] = entries["shipped"]["sha256"]
+    lvs = tmp_path / G.LVS_VERDICT_REL
+    lvs.parent.mkdir(parents=True, exist_ok=True)
+    lvs.write_text(json.dumps({
+        "status": "PASS", "finding": "synthetic consumer fixture",
+        "layout_source": {"kind": "gds", "path": entries["shipped"]["path"],
+                          "sha256": entries["shipped"]["sha256"],
+                          "extracted_sha256": entries["shipped"]["sha256"]}}))
+    doc["connectivity"] = G.gds_connectivity(tmp_path, entries["shipped"]["sha256"])
     out.write_text(json.dumps(doc))
     before = hashlib.sha256(out.read_bytes()).hexdigest()
     rc, line, _ = G.judge_receipt(tmp_path, "reports/phase3/gds_xor.json")
