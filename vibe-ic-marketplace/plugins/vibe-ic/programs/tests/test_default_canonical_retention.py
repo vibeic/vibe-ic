@@ -41,7 +41,7 @@ def test_real_pre_audit_refusal_preserves_the_file_it_invalidates(tmp_path, monk
     def refuse(project, actual_name, *_args):
         assert actual_name == name
         assert not original.exists(), 'a failed retry must not consume the old working copy'
-        return phase3.StepResult(name, 'NOT_MEASURED', 0.0, 'producer cannot run')
+        return phase3._signoff_not_checked(name, 0.0, 'producer cannot run')
     monkeypatch.setattr(phase3, '_run_declared_signoff_gate', refuse)
     rows = phase3.run_pre_audit_producers(tmp_path, only_names=[name])
     assert rows[0].status == 'NOT_MEASURED'
@@ -142,7 +142,7 @@ def test_step05_current_declared_die_reaches_the_real_accepting_consumer(tmp_pat
 
 
 def test_real_derived_refusal_retains_deleted_flag_and_returned_reason(tmp_path, monkeypatch):
-    flag = tmp_path / 'phase3/stage3/pnr/no_repair_needed.flag'
+    flag = phase3._pl.postroute_timing_repair_dir(tmp_path) / 'no_repair_needed.flag'
     flag.parent.mkdir(parents=True)
     flag.write_bytes(b'previous repair evidence')
     def refuse(*_args, **_kwargs):
