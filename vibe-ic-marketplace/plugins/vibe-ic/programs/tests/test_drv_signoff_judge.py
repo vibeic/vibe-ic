@@ -635,6 +635,66 @@ def test_io_default_fanout_one_catches_three_below_design_four(tmp_path):
     assert result["findings"][0]["failed_tier"] == "T1_LIBERTY_FANOUT"
 
 
+@pytest.mark.parametrize("fault", [None, "liberty", "core", "global",
+                                   "unknown_scope", "port", "unmatched_port"])
+def test_core_scoped_slew_does_not_replace_io_or_port_limits(tmp_path, fault):
+    bundle = _bundle(tmp_path)
+    io = _file(tmp_path, "io.lib", '''library (io) {
+ time_unit : "1ns"; capacitive_load_unit (1, pf);
+ nom_process : 1; nom_voltage : 5; nom_temperature : 25;
+ default_max_transition : 25; default_max_capacitance : 999;
+ cell (pad) { pad_cell : true; pin (Y) { direction : output; } }
+}''')
+    bundle["current"]["liberties"].append({"name": "io", **io})
+    bundle["frozen"]["liberties"]["io"] = io["sha256"]
+    bundle["frozen"]["scene_liberties"]["typ_nom"].append("io")
+    bundle["current"]["scene_liberties"]["typ_nom"].append("io")
+    bundle["scenes"][0]["linked_liberties"].append({"name": "io", **io})
+    master = "unknown" if fault == "unknown_scope" else "logic"
+    port = "other" if fault == "unmatched_port" else "u/Y"
+    sdc = ("set_max_fanout 4 [current_design]\n"
+           "set_max_capacitance 0.2 [current_design]\n"
+           f"set_max_transition 25 [get_ports [list {{{port}}}]]\n"
+           f"foreach _vibeic_core_master [list {{{master}}}] {{\n"
+           "  foreach _vibeic_core_cell [get_lib_cells -quiet */$_vibeic_core_master] {\n"
+           "    set_max_transition 3 [$_vibeic_core_cell cell]\n"
+           "  }\n}\n")
+    if fault == "global":
+        sdc += "set_max_transition 3 [current_design]\n"
+    ref = _file(tmp_path, "signoff_sdc", sdc)
+    bundle["current"]["sources"]["signoff_sdc"] = ref
+    bundle["frozen"]["sources"]["signoff_sdc"] = ref["sha256"]
+    for stage in bundle["stages"]:
+        if "sdc_snapshot" in stage:
+            stage["sdc_snapshot"] = _file(tmp_path, stage["name"] + ".sdc", sdc)
+    bundle["pins"]["u/Y"].update(net_class="IO", cell_class="IO", cell="pad",
+                                    cell_pin="Y", liberty="io", driver_cell="pad")
+    value = 30 if fault == "liberty" else 4
+    limit = 3 if fault in ("core", "global") else 25
+    _violate(bundle, tmp_path, "max_slew", value=value, limit=limit,
+             net_class="IO", cell_class="IO")
+    if value <= limit:
+        scene = bundle["scenes"][0]
+        scene["counters"]["max_slew"] = 0
+        scene["counter_report"] = _file(tmp_path, "counter.log", "".join(
+            f"DRV_COUNTER {kind} {scene['counters'][kind]}\n" for kind in drv.KINDS))
+    if fault == "core":
+        bundle["pins"]["u/Y"].update(net_class="data", cell_class="std", cell="logic",
+                                        cell_pin="Y", liberty="std", driver_cell="logic")
+    elif fault in ("port", "unmatched_port"):
+        _port_row(bundle, port_to_pad=False)
+    result = drv.judge(bundle)
+    if fault in (None, "port"):
+        assert result["verdict"] == "PASS", result["failures"] + result["not_measured"]
+    elif fault == "unmatched_port":
+        assert result["verdict"] == "NOT_MEASURED"
+    else:
+        assert result["verdict"] == "FAIL"
+        if fault == "liberty":
+            assert result["findings"][0]["failed_tier"] == "T1_LIBERTY"
+            assert result["findings"][0]["waivable"] is False
+
+
 def test_std_cell_cap_margin_on_io_is_disclosed_separately(tmp_path):
     bundle = _bundle(tmp_path)
     io = _file(tmp_path, "io.lib", '''library (io) {

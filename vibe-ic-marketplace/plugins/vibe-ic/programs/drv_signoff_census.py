@@ -122,7 +122,8 @@ def port_connectivity(pins: dict, nets: dict, pad_cells: set) -> dict[str, bool]
     return result
 
 
-def _core_only_kinds(body: str, core_cells: set[str]) -> set[str]:
+def _core_only_kinds(body: str, core_cells: set[str], *,
+                     ignore_port_limits: bool = False) -> set[str]:
     """Recognize the existing emitter's literal core-master limit block.
 
     A non-core missing row is inapplicable only if its Liberty has no limit
@@ -150,6 +151,12 @@ def _core_only_kinds(body: str, core_cells: set[str]) -> set[str]:
     rest = block.sub(remove, body)
     if not checked:
         return set()
+    if ignore_port_limits:
+        # Port constraints do not turn a verified core-cell block into a
+        # design-wide constraint. The caller resolves them per actual port.
+        rest = re.sub(
+            rf"(?m)^\s*set_max_(?:fanout|capacitance|transition)\s+{_NUM}\s+"
+            r"\[get_ports[^\n;]*\]\s*$", "", rest)
     return {kind for kind in KINDS if not re.search(
         rf"(?m)^\s*set_{kind.replace('max_slew', 'max_transition')}\b", rest)}
 

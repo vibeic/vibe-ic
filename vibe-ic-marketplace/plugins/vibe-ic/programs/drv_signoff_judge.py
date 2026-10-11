@@ -60,15 +60,29 @@ def _evidence(item: dict, errors: list[str], label: str) -> str:
     return path.read_text(errors="replace")
 
 
-def _sdc_values(body: str, command: str, *, include_ports: bool = True) -> list[float]:
+def _sdc_values(body: str, command: str, *, include_ports: bool = True,
+                only_port: str | None = None) -> list[float]:
     # Tcl is not a line-oriented format.  A conflicting later assignment must
     # never be hidden by reading only the first matching line.
     # IO port constraints have their own domain. They are not the core
     # defaults the stage receipt and the core declaration must agree on.
-    return [float(m.group(1)) for m in re.finditer(
-        rf"(?m)^\s*{re.escape(command)}\s+({_NUM})(?=\s|$)([^\n;]*)", body)
-        if include_ports or not re.search(r"\[(?:get_ports|all_inputs|all_outputs)\b",
-                                          m.group(2))]
+    values = []
+    for match in re.finditer(
+            rf"(?m)^\s*{re.escape(command)}\s+({_NUM})(?=\s|$)([^\n;]*)", body):
+        target = match.group(2).strip()
+        if only_port is not None:
+            listed = re.fullmatch(r"\[get_ports\s+\[list\s+((?:\{[^{}]+\}\s*)+)\]\]", target)
+            literal = re.fullmatch(r"\[get_ports\s+\{([^{}]+)\}\]", target)
+            names = (re.findall(r"\{([^{}]+)\}", listed[1]) if listed else
+                     [literal[1]] if literal else
+                     ["*"] if target == "[get_ports *]" else [])
+            if only_port not in names and "*" not in names:
+                continue
+        elif not include_ports and re.search(
+                r"\[(?:get_ports|all_inputs|all_outputs)\b", target):
+            continue
+        values.append(float(match.group(1)))
+    return values
 
 
 def parse_check_types(body: str, *, scene: str, mode: str,
@@ -448,6 +462,13 @@ def _annotate_limits(row: dict, kind: str, scene: dict, libs: dict,
     explicit = declared.get({"max_slew": "slew_ns",
                              "max_capacitance": "cap_pf",
                              "max_fanout": "fanout"}[kind])
+    if (kind == "max_slew" and declared.get("core_scoped_slew") and
+            lib_name != scene.get("liberty")):
+        # This SDC binds the declared slew to core masters, not to every
+        # linked library. Keep actual port constraints on their named net;
+        # other IO/macro pins retain their own linked Liberty limit.
+        port = row["pin"] if is_port else row.get("net")
+        explicit = (declared.get("port_slew_limits") or {}).get(port)
     if kind == "max_capacitance" and row.get("cell_class") == "IO":
         explicit = declared.get("io_cap_pf")
     if kind == "max_fanout" and row["net_class"] == "clock":
@@ -972,6 +993,20 @@ def judge(bundle: dict, *, project: Path | None = None) -> dict:
             missing.append(f"scene identity missing, repeated or unexpected: {name}")
             continue
         scene_names.add(name)
+        from drv_signoff_census import _core_only_kinds
+        core_cells = set((libs.get(scene.get("liberty")) or {}).get(
+            "limits", {}).get("cells", {}))
+        scoped_declared = dict(declared)
+        scoped_declared["core_scoped_slew"] = "max_slew" in _core_only_kinds(
+            sdc_text, core_cells, ignore_port_limits=True)
+        scoped_declared["port_slew_limits"] = {}
+        if scoped_declared["core_scoped_slew"]:
+            for pin, meta in scene_pins.items():
+                if not isinstance(meta, dict) or meta.get("cell_class") != "port":
+                    continue
+                port_limits = _sdc_values(sdc_text, "set_max_transition", only_port=pin)
+                if port_limits:
+                    scoped_declared["port_slew_limits"][pin] = min(port_limits)
         if not scene.get("fresh_process") or not scene.get("postroute"):
             missing.append(f"{name}: fresh post-route STA process not proven")
         if scene.get("unannotated_nets") != 0:
@@ -1033,7 +1068,7 @@ def judge(bundle: dict, *, project: Path | None = None) -> dict:
                        "direction": direction, "measured": measured,
                        "excluded_reason": item.get("reason")}
                 if not _annotate_limits(row, kind, scene, libs, scene_pins,
-                                        declared, missing):
+                                        scoped_declared, missing):
                     continue
                 row["limit"] = row["effective_limit"]
                 row["slack"] = row["effective_limit"] - measured
@@ -1242,7 +1277,7 @@ def judge(bundle: dict, *, project: Path | None = None) -> dict:
                 if kind == "max_slew" and row["direction"] not in ("rise", "fall"):
                     missing.append(f"{name}: slew rise/fall absent for {row['pin']}")
                 if not _annotate_limits(row, kind, scene, libs, scene_pins,
-                                        declared, missing):
+                                        scoped_declared, missing):
                     continue
                 effective = row["effective_limit"]
                 tolerance = max(1e-6, abs(effective) * 1e-6)
