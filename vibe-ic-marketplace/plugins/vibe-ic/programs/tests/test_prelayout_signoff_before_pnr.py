@@ -378,9 +378,14 @@ def test_main_calls_prelayout_signoff_before_pnr():
                    if isinstance(n, ast.FunctionDef) and n.name == "main")
 
     pls = _first_dispatch_line(main_fn, "step_prelayout_signoff")
-    pnr = _first_dispatch_line(main_fn, "step_pnr")
+    pnr = _first_dispatch_line(main_fn, "_default_step15_with_backend_receipt")
     assert pls is not None, "main() never dispatches step_prelayout_signoff"
-    assert pnr is not None, "main() never dispatches step_pnr"
+    assert pnr is not None, "main() never dispatches the current PnR entry"
+    entry = next(n for n in ast.walk(tree)
+                 if isinstance(n, ast.FunctionDef)
+                 and n.name == "_default_step15_with_backend_receipt")
+    assert _first_dispatch_line(entry, "_default_pnr_rows") is not None
+    assert _first_dispatch_line(entry, "step_pnr") is not None
     assert pls < pnr, (
         f"step_prelayout_signoff (line {pls}) must be dispatched BEFORE "
         f"step_pnr (line {pnr}) — the pre-layout emit must not sit behind PnR")

@@ -60,6 +60,17 @@ END DESIGN
 
 def make_project(tmp_path: Path, def_text: str = DEF_OK,
                  gds: bytes = None, name: str = "macro_a") -> Path:
+    import _tapeout_declaration as td
+    declaration, _ = td.merge_answers(td.blank_declaration(),
+                                      {'deliverable': 'HARDMACRO', 'top_cell': name})
+    declaration[td.PROVENANCE_KEY] = {
+        'deliverable': {'answered_by': 'owner', 'citation': 'fixture input'}}
+    path = tmp_path / td.DECLARATION_REL
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(declaration))
+    technology = tmp_path / 'reports/phase3/technology_units.json'
+    technology.parent.mkdir(parents=True, exist_ok=True)
+    technology.write_text(json.dumps({'pdk': 'sky130A'}))
     (tmp_path / "phase3/stage3/pnr").mkdir(parents=True, exist_ok=True)
     (tmp_path / "phase3/stage4/gds").mkdir(parents=True, exist_ok=True)
     if def_text is not None:
@@ -128,6 +139,16 @@ def test_gds_with_no_geometry_is_refused(tmp_path):
     cp, rec = run(p)
     assert cp.returncode == 1
     assert "no geometry" in rec["reason"]
+
+
+def test_missing_route_declaration_is_refused_before_building_kit(tmp_path):
+    import _tapeout_declaration as td
+    project = make_project(tmp_path)
+    (project / td.DECLARATION_REL).unlink()
+    cp, rec = run(project)
+    assert cp.returncode == 1
+    assert rec['reason'] == 'IP_ROUTE_NOT_OWNER_DECLARED_HARDMACRO'
+    assert not (project / 'phase3/stage4/hardmacro').exists()
 
 
 def test_gds_top_cell_that_is_not_the_design_is_refused(tmp_path):
@@ -541,6 +562,9 @@ def test_characterise_uses_recorded_artifacts_not_module_stem(tmp_path, monkeypa
     sp.mkdir(parents=True)
     reports = tmp_path / "reports/phase3"
     reports.mkdir(parents=True)
+    liberty = tmp_path / 'input/pdk/liberty/ss.lib'
+    liberty.parent.mkdir(parents=True)
+    liberty.write_text('library (ss) { cell (INV) { area : 1; } }\n')
     stem = "macro_a" if case == "legacy" else "payload"
     module = "wrong_cell" if case == "wrong_module" else "macro_a"
     (pnr / f"{stem}_pnr.v").write_text(f"module {module}; endmodule\n")
@@ -553,7 +577,7 @@ def test_characterise_uses_recorded_artifacts_not_module_stem(tmp_path, monkeypa
     if case == "escape":
         basis = "STA_BASIS_NETLIST: ../payload_pnr.v\nSTA_BASIS_SPEF: payload.max.spef\n"
     (reports / "sta_mcorner_ocv.rpt").write_text(
-        f"=== SETUP corner: process=SS liberty=/pdk/ss.lib, SPEF={stem}.max.spef ===\n"
+        f"=== SETUP corner: process=SS liberty={liberty}, SPEF={stem}.max.spef ===\n"
         + basis + "STA_BASIS_CORNER: max\n"
         + "=== HOLD corner: process=FF liberty=/pdk/ff.lib, SPEF=payload.min.spef ===\n")
     if case == "missing":
@@ -566,7 +590,9 @@ def test_characterise_uses_recorded_artifacts_not_module_stem(tmp_path, monkeypa
         assert f"read_verilog {pnr / (stem + '_pnr.v')}" in body
         assert f"read_spef {sp / (stem + '.max.spef')}" in body
         assert "link_design macro_a" in body
-        Path(body.split()[-1]).write_text('library (x) { cell (macro_a) { pin (q) { timing () {} } } }')
+        command = next(line for line in body.splitlines()
+                       if line.startswith('write_timing_model '))
+        Path(command.split()[-1]).write_text('library (x) { cell (macro_a) { pin (q) { timing () {} } } }')
         return 0, "", ""
     monkeypatch.setattr(mod, "_sh", fake_sta)
     monkeypatch.setattr(mod.shutil, "which", lambda _: "/fixture/sta")

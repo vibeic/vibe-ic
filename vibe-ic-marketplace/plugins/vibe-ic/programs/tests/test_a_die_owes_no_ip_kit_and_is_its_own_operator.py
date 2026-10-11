@@ -316,7 +316,8 @@ def test_this_step_reads_no_artefact_a_later_step_produces(tmp_path):
         assert _dir.split("/")[0] in {"input", "phase1"}, _dir
     # and the run's OWN record of what it read names none of it: the planted
     # phase-3 ring above was not scanned and is nowhere in the report.
-    assert rep["documents_scanned"] == []
+    assert rep["documents_scanned"] == [
+        "input/step_0_5ic_answers.json", TD.DECLARATION_REL]
     assert "padring.json" not in json.dumps(rep)
 
 

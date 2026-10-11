@@ -1091,6 +1091,16 @@ def retained_step(step_id: str):
     import functools
 
     def decorate(fn):
+        if fn.__name__ == 'step_prelayout_signoff':
+            # This published leaf also exposes a four-positional-argument
+            # code interface. Keep it for its existing low-level callers.
+            @functools.wraps(fn)
+            def prelayout(project, top, pdk, container):
+                dec = Decision(runner=fn.__module__, site=fn.__name__,
+                               flow_steps=[str(step_id)])
+                return _retained_dispatch(Path(project), dec, None, fn,
+                                          (project, top, pdk, container), {})
+            return prelayout
         @functools.wraps(fn)
         def retained(project, *args, **kwargs):
             dec = Decision(runner=fn.__module__, site=fn.__name__,
