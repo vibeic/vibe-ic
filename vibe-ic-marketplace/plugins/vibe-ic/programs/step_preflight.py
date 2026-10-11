@@ -1054,6 +1054,33 @@ def _scoped_dispatch(project: Path, site: str, flow_def: Any,
     return result
 
 
+def _retained_row_outcome(evidence) -> str:
+    statuses = {item['status'] for item in evidence}
+    if 'FAIL' in statuses:
+        return 'FAIL'
+    if len(statuses) == 1:
+        return next(iter(statuses))
+    return 'NOT_MEASURED'
+
+
+def _retained_row_evidence(dec: Decision, sid: str, evidence) -> list:
+    """Attribute existing named results; never assign a span's aggregate to a row."""
+    if len(dec.flow_steps) == 1:
+        return evidence
+    # These are the existing DFT function's result names, not positional
+    # assumptions. Explicit producer step IDs take precedence when present.
+    dft_names = {'dft_insertion': '11', 'dft_scan_insertion': '11',
+                 'post_dft_opt': '12', 'lec_equivalence': '13'}
+    selected = []
+    for item in evidence:
+        explicit = item.get('step_id')
+        owned = explicit if explicit is not None else (
+            dft_names.get(item['name']) if dec.site == 'dft_lec_chain' else None)
+        if owned is not None and str(owned) == sid:
+            selected.append(item)
+    return selected
+
+
 def _retained_dispatch(project: Path, dec: Decision, flow_def: Any,
                        fn: Callable[..., Any], args: Any, kwargs: Any) -> Any:
     """Keep Default's actual call outputs without changing its verdict rules.
@@ -1070,9 +1097,9 @@ def _retained_dispatch(project: Path, dec: Decision, flow_def: Any,
     import execution_backend_worker as worker
     import step_output_collector as versions
     canonical = {str(row['id']): row for row in _flow_yaml.load()['steps']}
-    attempts = [versions.begin_step(project, sid, worker._declared_input_files(
-                    project, canonical[sid].get('required_inputs', ())))
-                for sid in dec.flow_steps if sid in canonical]
+    attempts = versions.begin_steps(project, [
+        (sid, worker._declared_input_files(project, canonical[sid].get('required_inputs', ())))
+        for sid in dec.flow_steps if sid in canonical])
     try:
         result = _scoped_dispatch(project, dec.site, flow_def, fn, args, kwargs)
     except BaseException as exc:
@@ -1084,14 +1111,20 @@ def _retained_dispatch(project: Path, dec: Decision, flow_def: Any,
     evidence = [{'name': getattr(row, 'name', ''),
                  'status': getattr(row, 'status', 'NOT_MEASURED'),
                  'detail': getattr(row, 'detail', ''),
-                 'outputs': getattr(row, 'outputs', [])} for row in rows]
-    statuses = {item['status'] for item in evidence}
-    outcome = ('FAIL' if 'FAIL' in statuses else 'PASS' if statuses == {'PASS'}
-               else 'NOT_MEASURED')
+                 'outputs': getattr(row, 'outputs', []),
+                 'step_id': (getattr(row, 'extras', {}) or {}).get('step_id')}
+                for row in rows]
+    invocation_outcome = _retained_row_outcome(evidence)
     for attempt in attempts:
+        own_evidence = _retained_row_evidence(dec, attempt['id'], evidence)
+        outcome = _retained_row_outcome(own_evidence)
         saved = versions.finish_step(project, attempt, verdict=outcome,
                                      result={'runner': dec.runner, 'site': dec.site,
-                                             'rows': evidence})
+                                             'rows': evidence,
+                                             'invocation_status': invocation_outcome,
+                                             'step_rows': own_evidence,
+                                             'attribution': ('EXISTING_PRODUCER_RESULT' if own_evidence
+                                                             else 'UNRESOLVED_SHARED_RESULT')})
         if saved['capture_errors']:
             raise OSError('step output version could not be retained: ' +
                           '; '.join(saved['capture_errors']))

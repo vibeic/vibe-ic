@@ -124,12 +124,41 @@ def _versions_root(project: Path) -> Path:
     return fallback if fallback.exists() or (steps.exists() and not steps.is_dir()) else steps
 
 
-def begin_step(project: Path, step_id: str, inputs=None) -> dict:
-    """Allocate a retained attempt before its producer can overwrite working files.
+def _recover_unfinished(project: Path) -> None:
+    """Close the previous local invocation before ANY next producer writes."""
+    steps_root = _versions_root(project)
+    for journal in steps_root.glob('*/*/*/attempt.json'):
+        if (journal.parent / 'outputs.json').exists():
+            continue
+        unfinished = json.loads(journal.read_text())
+        saved = finish_step(project, unfinished, verdict='INTERRUPTED',
+                            result={'detail': 'previous local invocation did not finish'})
+        if saved['capture_errors']:
+            raise OSError('interrupted step output could not be retained: ' +
+                          '; '.join(saved['capture_errors']))
 
-    `inputs` is the caller's already-resolved input manifest, not a second
-    declaration or a second preflight. This is for one local sequential runner.
-    """
+
+def _copy_inputs(project: Path, sdir: Path, inputs) -> Tuple[list, list]:
+    """Keep the bytes of the caller's resolved manifest, without resolving it again."""
+    files, errors = [], []
+    for rel, identity in (inputs or {}).items():
+        source, target = project / rel, sdir / 'inputs' / rel
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, target)
+            digest = _sha(target)
+            expected = identity.get('sha256') if isinstance(identity, dict) else identity
+            if digest != expected:
+                errors.append(f'input {rel}: copied bytes differ from resolved input hash')
+            files.append({'rel': rel, 'snapshot': str(target.relative_to(sdir)),
+                          'size': target.stat().st_size, 'sha256': digest})
+        except OSError as exc:
+            errors.append(f'input {rel}: {exc}')
+    return files, errors
+
+
+def _begin_step(project: Path, step_id: str, inputs=None) -> dict:
+    """Allocate one member of an already-recovered local invocation."""
     project = Path(project).resolve()
     sid = str(step_id)
     record = next((r for r in _iter_step_records(project) if r[0] == sid), None)
@@ -138,17 +167,6 @@ def begin_step(project: Path, step_id: str, inputs=None) -> dict:
     _, name, _, phase, stage, outputs = record
     steps_root = _versions_root(project)
     steps_root.mkdir(parents=True, exist_ok=True)
-    # If an earlier process died before finish_step, retain its partial writes
-    # now, before a retry overwrites them. This is recovery on the same host.
-    for journal in steps_root.glob('*/*/*/attempt.json'):
-        unfinished = json.loads(journal.read_text())
-        if unfinished.get('id') == sid and not (journal.parent / 'outputs.json').exists():
-            finish_step(project, unfinished, verdict='INTERRUPTED',
-                        result={'detail': 'previous local invocation did not finish'})
-    # Legacy steps/ folders were mutable views. Freeze their still-available
-    # contents before the first versioned producer, without inventing old PASS.
-    prior = _read_index(project)
-    _freeze_legacy(steps_root, [row for row in prior.get('steps', []) if str(row.get('id')) == sid])
     folder = _version_folder(steps_root, phase, stage, sid, name)
     attempt = {'id': sid, 'name': name, 'phase': phase, 'stage': stage,
                'folder': folder, 'status': 'RUNNING', 'inputs': dict(inputs or {}),
@@ -160,10 +178,39 @@ def begin_step(project: Path, step_id: str, inputs=None) -> dict:
     previous.mkdir()
     previous_outputs, errors = _copy_outputs(project, previous, outputs)
     write_json(previous / 'outputs.json', {'outputs': previous_outputs, 'capture_errors': errors})
-    attempt['capture_errors'] = errors
+    input_files, input_errors = _copy_inputs(project, steps_root / folder, inputs)
+    attempt['input_files'] = input_files
+    attempt['capture_errors'] = errors + input_errors
     attempt['_before'] = {rel: list(info) for rel, info in _working_files(project).items()}
     write_json(steps_root / folder / 'attempt.json', attempt)
     return attempt
+
+
+def begin_steps(project: Path, steps) -> list:
+    """Start one local call's rows together, without interrupting its own siblings.
+
+    Each member is `(step_id, resolved_input_manifest)`. Recovery happens
+    once before allocation, so a previous call's partial bytes are saved
+    before this call can overwrite them.
+    """
+    project = Path(project).resolve()
+    _recover_unfinished(project)
+    # A following step can overwrite a preceding step's canonical working
+    # file too. Freeze all reachable legacy aliases before any new call.
+    _freeze_legacy(_versions_root(project), _read_index(project).get('steps', []))
+    attempts = [_begin_step(project, sid, inputs) for sid, inputs in steps]
+    errors = [error for attempt in attempts for error in attempt['capture_errors']]
+    if errors:
+        for attempt in attempts:
+            finish_step(project, attempt, verdict='NOT_MEASURED',
+                        result={'detail': 'invocation input/output history could not be retained'})
+        raise OSError('step input/output history could not be retained: ' + '; '.join(errors))
+    return attempts
+
+
+def begin_step(project: Path, step_id: str, inputs=None) -> dict:
+    """Start one local sequential row using the caller's resolved input manifest."""
+    return begin_steps(project, [(step_id, inputs)])[0]
 
 
 def _read_index(project: Path) -> dict:

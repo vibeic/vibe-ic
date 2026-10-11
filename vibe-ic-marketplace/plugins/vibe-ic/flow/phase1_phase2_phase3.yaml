@@ -5163,7 +5163,7 @@ steps:
         # Readiness: actual_density >= target, spares distributed across
         # core regions (not clustered), and all tied off.
         - program_exit_zero:
-            command: "spare_cell_coverage_check . --json reports/phase2/gates/spare_cell_coverage.json"
+            command: "spare_cell_coverage_check . --post-spare-def --json reports/phase2/gates/spare_cell_coverage.json"
             condition_files_exist: ["phase3/stage3/pnr/spare_cells.json"]
             absent_condition_reason: >-
               The same gate OPENS with a hard `files_exist:
@@ -7749,6 +7749,16 @@ steps:
       - "reports/phase3/gds_xor.json"
     programs:
       - gds_xor_check
+    program_outputs:
+      # The direct comparison retains these; LibreLane's accepted finishing
+      # receipt can instead cite its existing native stream/measurement files.
+      # These are producer declarations, not unconditional required outputs.
+      - program: gds_xor_check
+        path: "reports/phase3/gds_xor_native.log"
+      - program: gds_xor_check
+        path: "reports/phase3/gds_xor_reference.gds"
+      - program: gds_xor_check
+        path: "reports/phase3/gds_xor_native.rb"
     gate:
       all_of:
         # `--check`, NOT `--json`, AND THE DIFFERENCE IS A PUBLISHED FAIL.
@@ -9683,6 +9693,15 @@ steps:
       - "reports/analog/mixed_signal/isolation.json"
       - "reports/analog/mixed_signal/pd_connectivity.json"
       - "reports/analog/mixed_signal/power_domain_run.json"
+    program_outputs:
+      - program: power_domain_crossing_check
+        path: "reports/analog/mixed_signal/power_domain_crossing_audit.json"
+      - program: level_shifter_required_check
+        path: "reports/analog/mixed_signal/level_shifter_audit.json"
+      - program: isolation_cell_required_check
+        path: "reports/analog/mixed_signal/isolation_audit.json"
+      - program: power_domain_signal_crossing_check
+        path: "reports/phase2/gates/power_domain_signal_crossing.json"
     gate:
       all_of:
         - program_exit_zero: "mixed_signal_power_domain_run . --check-only --json reports/analog/mixed_signal/power_domain_native_audit.json"
@@ -9726,6 +9745,11 @@ steps:
     required_outputs:
       - "phase3/mixed_signal/cosim/mixed_signal_results.json"
       - "reports/analog/mixed_signal/interface_si.json"
+    program_outputs:
+      - program: mixed_signal_cosim_check
+        path: "reports/analog/mixed_signal/cosim_audit.json"
+      - program: mixed_signal_interface_si_check
+        path: "reports/analog/mixed_signal/interface_si_audit.json"
     gate:
       # These clauses are independent evidence consumers. Run all of them
       # after a producer refusal so one invocation records the complete M3
@@ -9762,6 +9786,9 @@ steps:
       - mixed_signal_signoff_check
     required_outputs:
       - "reports/analog/mixed_signal/signoff.json"
+    program_outputs:
+      - program: mixed_signal_signoff_check
+        path: "reports/analog/mixed_signal/signoff_audit.json"
     gate:
       # The producer receipt and derived signoff are both blocking evidence
       # sources. Preserve both refusals in one run while keeping AND

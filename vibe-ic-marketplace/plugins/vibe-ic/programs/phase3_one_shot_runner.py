@@ -78372,29 +78372,36 @@ def _default_pnr_rows(project: Path, top: str, pdk: PdkConfig, container: str,
                 extras={'step_id': sid}))
             checks[sid] = {'status': 'NOT_APPLICABLE',
                            'reasons': ['canonical design condition is not applicable']}
+            attempt = step_versions.begin_step(project, sid)
+            step_versions.finish_step(project, attempt, verdict='NOT_APPLICABLE',
+                                      result=checks[sid])
             continue
         started = time.time()
         print(f'[default] step {sid} START: {row_def["name"]}', flush=True)
-        missing = worker.resolve_input_contract(
-            project, row_def.get('required_inputs', ()))
-        if missing:
-            rows.append(StepResult(
-                f'default_step_{sid}', 'NOT_MEASURED', time.time() - started,
-                'missing current inputs: ' + '; '.join(missing),
-                extras={'step_id': sid, 'missing_inputs': missing},
-                reason_class=_V.ReasonClass.INPUT_ABSENT))
-            break
-        # Withdraw the previous invocation's citations from the live report
-        # before the row's producer changes their files. The completed rows
-        # of this invocation, including actual output paths, remain visible.
-        _publish_in_progress_steps(project, rows)
         manifest = {
             'declarations': row_def.get('required_inputs', []),
             'files': worker._declared_input_files(
                 project, row_def.get('required_inputs', ())),
             'missing': [],
         }
+        missing = worker.resolve_input_contract(
+            project, row_def.get('required_inputs', ()), manifest)
+        if missing:
+            rows.append(StepResult(
+                f'default_step_{sid}', 'NOT_MEASURED', time.time() - started,
+                'missing current inputs: ' + '; '.join(missing),
+                extras={'step_id': sid, 'missing_inputs': missing},
+                reason_class=_V.ReasonClass.INPUT_ABSENT))
+            attempt = step_versions.begin_step(project, sid, manifest['files'])
+            step_versions.finish_step(project, attempt, verdict='NOT_MEASURED',
+                                      result={'step_id': sid, 'missing_inputs': missing,
+                                              'detail': 'producer not started: required input absent'})
+            break
         attempt = step_versions.begin_step(project, sid, manifest['files'])
+        # Withdraw the previous invocation's citations from the live report
+        # before the row's producer changes their files. The completed rows
+        # of this invocation, including actual output paths, remain visible.
+        _publish_in_progress_steps(project, rows)
         try:
             if sid in ('16', '35'):
                 if sid == '16':
