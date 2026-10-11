@@ -3188,6 +3188,28 @@ def writer(project):
     assert 'input/config/readonly.json' not in detected
 
 
+def test_delegate_keeps_forwarded_parameters_without_borrowing_reader_locals(monkeypatch):
+    import ast
+    helper = ast.parse('''
+def produce(project, destination):
+    from _atomic_artefact import write_json
+    write_json(destination, {})
+''')
+    monkeypatch.setattr(G, '_tree', lambda name: helper if name == 'native_helper' else None)
+    detected = _detected('''
+import native_helper as helper
+def reader(project):
+    path = project / "input" / "config" / "readonly.json"
+    return path.read_text()
+def forward(project, path):
+    helper.produce(project, path)
+def main(project):
+    forward(project, project / "reports" / "actual.json")
+''')
+    assert 'reports/actual.json' in detected
+    assert 'input/config/readonly.json' not in detected
+
+
 def test_d7_the_write_detector_sees_an_atomic_write(monkeypatch):
     """A program converted to an atomic writer must still read as a WRITE.
 

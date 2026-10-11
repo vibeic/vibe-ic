@@ -591,12 +591,38 @@ def _collect_writes(tree: ast.AST, *, delegates: bool = True) -> Set[Tuple[str, 
     _module_names = _module_aliases(tree)
     out: Set[Tuple[str, ...]] = set()
     local_resolvers = {}
+    functions = {}
+    function_resolvers = {}
     for function in ast.walk(tree):
         if isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef)):
             local = _PathResolver(function)
+            functions[function.name] = function
+            function_resolvers[function.name] = local
             for call in ast.walk(function):
                 if isinstance(call, ast.Call):
                     local_resolvers[id(call)] = local
+    # Carry concrete argument paths into a local helper's parameters. This
+    # keeps a delegated producer visible without borrowing another function's
+    # same-named variable. Conflicting call sites stay unresolved.
+    for _ in range(2):
+        bindings = {}
+        for call in ast.walk(tree):
+            if not (isinstance(call, ast.Call) and isinstance(call.func, ast.Name)
+                    and call.func.id in functions):
+                continue
+            function = functions[call.func.id]
+            source = local_resolvers.get(id(call), resolver)
+            pairs = list(zip(function.args.posonlyargs + function.args.args, call.args))
+            keywords = {kw.arg: kw.value for kw in call.keywords if kw.arg}
+            pairs += [(arg, keywords[arg.arg]) for arg in function.args.args + function.args.kwonlyargs
+                      if arg.arg in keywords]
+            for arg, value in pairs:
+                tail = source.tail(value)
+                if tail:
+                    bindings.setdefault((function.name, arg.arg), set()).add(tail)
+        for (name, parameter), tails in bindings.items():
+            if len(tails) == 1:
+                function_resolvers[name].env[parameter] = next(iter(tails))
 
     # Phase-1's chokepoint takes a document name rather than a Path. Resolve
     # literal calls and the runner's constant name tables so its loop writes
@@ -663,11 +689,12 @@ def _collect_writes(tree: ast.AST, *, delegates: bool = True) -> Set[Tuple[str, 
             elif fn.attr in ("copy", "copy2", "copyfile", "move") and len(n.args) > 1:
                 add(n.args[1])
     if delegates:
-        out.update(_delegated_write_tails(tree, resolver))
+        out.update(_delegated_write_tails(tree, resolver, local_resolvers))
     return out
 
 
-def _delegated_write_tails(tree: ast.AST, resolver: _PathResolver) -> Set[Tuple[str, ...]]:
+def _delegated_write_tails(tree: ast.AST, resolver: _PathResolver,
+                          local_resolvers: dict) -> Set[Tuple[str, ...]]:
     """Resolve one sibling-module call with a concrete artefact argument.
 
     The callee must actually write the bound parameter. Merely passing a path
@@ -686,9 +713,10 @@ def _delegated_write_tails(tree: ast.AST, resolver: _PathResolver) -> Set[Tuple[
         module = modules.get(call.func.value.id)
         if module is None:
             continue
+        source = local_resolvers.get(id(call), resolver)
         arguments = call.args + [kw.value for kw in call.keywords]
-        if not any(resolver.tail(arg) and
-                   Path(resolver.tail(arg)[-1]).suffix.lower() in ARTIFACT_SUFFIXES
+        if not any(source.tail(arg) and
+                   Path(source.tail(arg)[-1]).suffix.lower() in ARTIFACT_SUFFIXES
                    for arg in arguments):
             continue
         callee_tree = _tree(module)
@@ -704,7 +732,7 @@ def _delegated_write_tails(tree: ast.AST, resolver: _PathResolver) -> Set[Tuple[
                      if arg.arg in keywords]
         assignments = []
         for arg, value in bindings:
-            tail = resolver.tail(value)
+            tail = source.tail(value)
             if tail:
                 assignments.append(ast.Assign(
                     targets=[ast.Name(id=arg.arg, ctx=ast.Store())],
