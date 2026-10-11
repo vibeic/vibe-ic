@@ -78006,7 +78006,16 @@ def _run_phase3_window(project: Path, top: str, pdk: PdkConfig,
               "refusing to overwrite its receipts", file=sys.stderr)
         return 2
     import drv_run_identity as _drv_run_identity
-    _drv_run_identity.start(project)   # R-0929-DRV-IDENTITY: this run's identity + receipts
+    # A local Default window continues its completed checkpoints. Ultra and
+    # fresh runs keep their separate run identity and receipt claim.
+    try:
+        _drv_run_identity.start(
+            project, continue_steps=(
+                _phase3_window_steps(args.entry_step, args.exit_step)
+                if execution_policy.request()['mode'] == 'default' else None))
+    except ValueError as exc:
+        print(f"[phase3] Default continuation refused: {exc}", file=sys.stderr)
+        return 2
     before = _phase3_file_manifest(project)
     rows: List[StepResult] = []
     changed_sites: List[str] = []

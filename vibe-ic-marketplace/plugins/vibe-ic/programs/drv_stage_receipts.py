@@ -120,6 +120,38 @@ def current_run(project: Path) -> Optional[str]:
     return value if isinstance(value, str) and re.fullmatch(r"[0-9a-f]{32}", value) else None
 
 
+def invalidate_from_steps(project: Path, step_ids: Iterable[str]) -> List[str]:
+    """Retain preceding checkpoints; rerun affected stages in canonical order.
+
+    The historical bytes remain in an archive. Their live receipt is removed
+    before a producer starts, so a failed retry cannot credit old output.
+    """
+    import _flow_yaml
+    order = [str(row["id"]) for row in _flow_yaml.load()["steps"]]
+    selected = [order.index(str(sid)) for sid in step_ids]
+    if not selected:
+        return []
+    owners = {"synth": "9", "placement_repair": "17", "cts": "19",
+              "post_grt_repair": "21", "postroute_repair": "32", "signoff_sta": "23"}
+    affected = [name for name, sid in owners.items() if order.index(sid) >= min(selected)]
+    root = project / RECEIPT_DIR
+    archive = (project / "reports/phase3/drv_stage_history" /
+               f"{current_run(project)}-{uuid.uuid4().hex}")
+    for name in affected:
+        receipt = root / f"{name}.json"
+        evidence = root / EVIDENCE_DIR / name
+        if not receipt.is_file() and not evidence.is_dir():
+            continue
+        archive.mkdir(parents=True, exist_ok=True)
+        if receipt.is_file():
+            shutil.copy2(receipt, archive / receipt.name)
+            receipt.unlink()
+        if evidence.is_dir():
+            shutil.copytree(evidence, archive / EVIDENCE_DIR / name)
+            shutil.rmtree(evidence)
+    return affected
+
+
 def read_receipt(project: Path, name: str) -> tuple[Optional[dict], str]:
     """The receipt of stage `name` when it belongs to the current run."""
     path = project / RECEIPT_DIR / f"{name}.json"

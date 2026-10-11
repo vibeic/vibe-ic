@@ -638,6 +638,120 @@ def test_the_receipt_run_id_is_the_run_identity_recorded_at_start(tmp_path):
     assert receipts.claim(project) == recorded
 
 
+@pytest.mark.parametrize("entry,retained,withdrawn", [
+    ("19", {"placement_repair"}, {"cts", "post_grt_repair", "postroute_repair", "signoff_sta"}),
+    ("32", {"placement_repair", "cts", "post_grt_repair"}, {"postroute_repair", "signoff_sta"}),
+    ("37", {"placement_repair", "cts", "post_grt_repair", "postroute_repair", "signoff_sta"}, set()),
+])
+def test_default_window_retains_preceding_native_receipts_and_withdraws_affected_stages(
+        tmp_path, monkeypatch, entry, retained, withdrawn):
+    import types
+    import phase3_one_shot_runner as runner
+    import drv_run_identity as identity
+    docker = _fake_docker(tmp_path, monkeypatch)
+    project, state = _project(tmp_path)
+    original = identity.start(project)
+    _run(project, docker, state,
+         ("OpenROAD.RepairDesignPostGPL", {}), ("OpenROAD.CTS", {}),
+         ("OpenROAD.RepairDesignPostGRT", {}), ("Vibeic.PostRouteRepair", {}),
+         ("OpenROAD.STAPostPNR", {}))
+    before = {name: (project / receipts.RECEIPT_DIR / f"{name}.json").read_bytes()
+              for name in retained | withdrawn}
+    seen = {}
+
+    def at_native_boundary(*args, **kwargs):
+        seen["identity"] = identity.load(project)
+        for name in retained:
+            assert (project / receipts.RECEIPT_DIR / f"{name}.json").read_bytes() == before[name]
+            assert receipts.read_receipt(project, name)[1] == "recorded"
+        for name in withdrawn:
+            assert receipts.read_receipt(project, name)[1] == "absent"
+            archives = list((project / "reports/phase3/drv_stage_history").glob(f"*/{name}.json"))
+            assert len(archives) == 1 and archives[0].read_bytes() == before[name]
+        rows, _ = plan._stages(project, True, frozenset({"padcell"}))
+        assert {row["name"] for row in rows} == retained
+        raise SystemExit("native boundary reached")
+
+    monkeypatch.setattr(runner, "_phase3_file_manifest", at_native_boundary)
+    args = types.SimpleNamespace(entry_step=entry, exit_step=entry, container="")
+    with pytest.raises(SystemExit, match="native boundary reached"):
+        runner._run_phase3_window(project, "top", object(), args, ["default_backend"])
+    assert seen["identity"]["run_id"] == original["run_id"]
+    assert seen["identity"]["recorded_at"] == original["recorded_at"]
+    assert seen["identity"]["initial_code_identity"]["plugin_tree_sha256"] == original["plugin_tree_sha256"]
+
+
+def test_default_retry_records_the_new_cts_output_under_the_same_logical_run(tmp_path, monkeypatch):
+    import drv_run_identity as identity
+    docker = _fake_docker(tmp_path, monkeypatch)
+    project, state = _project(tmp_path)
+    original = identity.start(project)
+    _run(project, docker, state, ("OpenROAD.RepairDesignPostGPL", {}), ("OpenROAD.CTS", {}))
+    old, _ = receipts.read_receipt(project, "cts")
+    identity.start(project, continue_steps=["19"])
+    _run(project, docker, state, ("OpenROAD.CTS", {"FAKE_SDC_FANOUT": 7}))
+    new, status = receipts.read_receipt(project, "cts")
+    assert status == "recorded" and new["run_id"] == original["run_id"]
+    assert new["sdc_snapshot"]["sha256"] != old["sdc_snapshot"]["sha256"]
+    rows, _ = plan._stages(project, False, frozenset({"padcell"}))
+    assert next(row for row in rows if row["name"] == "cts")["fanout_check_limit"] == 7
+    assert next(row for row in rows if row["name"] == "placement_repair")["fanout_check_limit"] == 4
+
+
+def test_synthesis_retry_archives_an_unpublished_abc_script_before_new_mapping(tmp_path, monkeypatch):
+    import drv_run_identity as identity
+    docker = _fake_docker(tmp_path, monkeypatch)
+    project, state = _project(tmp_path)
+    identity.start(project)
+    _run(project, docker, state, ("OpenROAD.CTS", {}))
+    abc = receipts.abc_script_path(project)
+    abc.parent.mkdir(parents=True)
+    abc.write_text("buffer -N 4\n")
+    identity.start(project, continue_steps=["9"])
+    assert not abc.exists()
+    old = list((project / "reports/phase3/drv_stage_history").glob("*/evidence/synth/abc.script"))
+    assert len(old) == 1 and old[0].read_text() == "buffer -N 4\n"
+
+
+def test_default_floorplan_continuation_retains_the_script_from_completed_mapping(tmp_path):
+    import drv_run_identity as identity
+    project, _ = _project(tmp_path)
+    original = identity.start(project)
+    synth = project / "phase2/stage2/synth"
+    script = synth / "_tmp_yosys-abc-unit/abc.script"
+    script.parent.mkdir(parents=True)
+    script.write_text("buffer -N 4\n")
+    kept = receipts.keep_abc_script(project, synth, f"Running ABC script: {script}\n")
+    assert kept is not None and receipts.read_receipt(project, "synth")[1] == "absent"
+    new = identity.start(project, continue_steps=["15"])
+    assert new["run_id"] == original["run_id"]
+    assert kept.read_text() == "buffer -N 4\n"
+    assert receipts.read_receipt(project, "synth")[1] == "absent"  # census has not run yet
+
+
+def test_changed_specification_refuses_default_continuation_before_the_native_tool(tmp_path, monkeypatch):
+    import types
+    import phase3_one_shot_runner as runner
+    import drv_run_identity as identity
+    docker = _fake_docker(tmp_path, monkeypatch)
+    project, state = _project(tmp_path)
+    docs = project / identity.SPEC_DOCS
+    docs.mkdir(parents=True)
+    spec = docs / "L1_DATASHEET.json"
+    spec.write_text('{"clock_period_ns": 10}\n')
+    identity.start(project)
+    _run(project, docker, state, ("OpenROAD.CTS", {}))
+    before = (project / identity.RECORD).read_bytes()
+    receipt = (project / receipts.RECEIPT_DIR / "cts.json").read_bytes()
+    spec.write_text('{"clock_period_ns": 20}\n')
+    monkeypatch.setattr(runner, "_phase3_file_manifest", lambda *a:
+                        pytest.fail("native continuation began with another specification"))
+    args = types.SimpleNamespace(entry_step="32", exit_step="32", container="")
+    assert runner._run_phase3_window(project, "top", object(), args, ["default_backend"]) == 2
+    assert (project / identity.RECORD).read_bytes() == before
+    assert (project / receipts.RECEIPT_DIR / "cts.json").read_bytes() == receipt
+
+
 def test_an_io_pad_limit_is_never_read_as_the_design_limit(tmp_path, monkeypatch):
     """Without the Liberty's pad_cell fact the pad's 1 and the core's 4 are one
     class that disagrees: no single applied limit, so the judge cannot pass

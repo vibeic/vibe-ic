@@ -11,6 +11,40 @@ import execution_backend_gates as gates
 import execution_policy
 
 
+def test_default_floorplan_records_synthesis_under_the_current_sdc_before_native_pnr(tmp_path, monkeypatch):
+    import drv_stage_receipts as stages
+    from _ppa import timing
+    stages.claim(tmp_path)
+    pdk = SimpleNamespace(name="unit", liberty="current_core.lib")
+    monkeypatch.setattr(producers, "_parameters", lambda *a: (runner, None, pdk, "unit-image"))
+    monkeypatch.setattr(runner, "step_prepnr", lambda *a: runner.StepResult("prep", "PASS", 0, ""))
+    monkeypatch.setattr(timing, "asic_sdc_for_pnr", lambda *a: {"source": "current step 7"})
+    observed = {}
+
+    def publish(current, folder):
+        assert current["source"] == "current step 7"
+        folder.mkdir(parents=True)
+        (folder / "constraint.sdc").write_text("current step 7 deck\n")
+
+    def census(project, **kwargs):
+        observed.update(kwargs)
+        assert kwargs["sdc"].read_text() == "current step 7 deck\n"
+        assert kwargs["netlist"] == runner._pl.synth_dir(tmp_path) / "unit_synth.v"
+        assert kwargs["liberties"] == ["current_core.lib"] and kwargs["top"] == "unit"
+        return None
+
+    def native(*args, **kwargs):
+        assert observed, "floorplan began without synthesis evidence production"
+        raise RuntimeError("native floorplan boundary reached")
+
+    monkeypatch.setattr(timing, "publish_pnr_sdc", publish)
+    monkeypatch.setattr(stages, "synth_stage_supervised", census)
+    monkeypatch.setattr(runner, "_chip_path_requests_pad_ring", lambda *a: True)
+    monkeypatch.setattr(runner, "_prepare_librelane_floorplan_for_route", native)
+    with pytest.raises(RuntimeError, match="native floorplan boundary reached"):
+        producers.produce_pnr(tmp_path, {"step_id": "15", "top": "unit", "die_um": "100,100", "util": .2})
+
+
 def test_backend_consumers_use_the_same_canonical_flow_as_default():
     import _flow_yaml
     from execution_provider_catalog import BACKEND_ROWS

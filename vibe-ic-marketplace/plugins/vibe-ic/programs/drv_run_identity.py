@@ -66,20 +66,52 @@ def record(project: Path, *, plugin_root: Path = PLUGIN_ROOT) -> dict:
            "recorded_at": _dt.datetime.now(_dt.timezone.utc).isoformat(),
            "plugin_source_commit": _git_commit(plugin_root),
            "plugin_tree_sha256": _tree_digest(plugin_root),
-           "plugin_root": str(plugin_root)}
+           "plugin_root": str(plugin_root),
+           "spec_version": spec_version(project)}
     write_text(project / RECORD, json.dumps(doc, indent=2) + "\n")
     return doc
 
 
-def start(project: Path) -> dict:
-    """The run start of every Phase-3 run, full or --window (review wave 58):
-    record this run's identity, then (DRV standard section 1) claim the stage
-    receipt directory for it -- every earlier receipt is dropped and the run id
-    just recorded binds the ones the stages write, the plan reader refusing a
-    receipt from any other run.  A window's captures bind ITS code, and a stage
-    it did not re-run is not credited from an earlier run."""
-    doc = record(project)
+def start(project: Path, *, continue_steps=None) -> dict:
+    """Start a fresh run, or continue one local Default run's checkpoints.
+
+    A fresh run claims its own receipts. An explicit Default continuation
+    retains the logical run ID and preceding tool evidence, records the current
+    code identity, and withdraws the selected and downstream stage receipts.
+    Original start time and code identity remain available for provenance.
+    """
     import drv_stage_receipts
+    if continue_steps is not None:
+        previous = load(project)
+        run_id = previous.get("run_id")
+        if (isinstance(run_id, str) and re.fullmatch(r"[0-9a-f]{32}", run_id)
+                and drv_stage_receipts.current_run(project) == run_id):
+            # Use the same consumer that will judge these receipts. A directory
+            # claim or a 'not run' row alone is not a completed checkpoint.
+            import drv_capture_plan
+            rows, _ = drv_capture_plan._stages(project, True)
+            # Step 9 keeps ABC's executed script before Step 15's SDC exists.
+            # Its census is completed at Step 15, so that mapping checkpoint
+            # must survive even though there is not yet a synth-stage row.
+            abc = drv_stage_receipts.abc_script_path(project)
+            mapped = abc.is_file() and abc.stat().st_size > 0
+            if mapped or any(row.get("ran") for row in rows):
+                current_spec = spec_version(project)
+                if (previous.get("spec_version") is not None
+                        and previous["spec_version"] != current_spec):
+                    raise ValueError("Default checkpoint specification changed; "
+                                     "preceding stages cannot be reused")
+                doc = dict(previous)
+                doc.setdefault("initial_code_identity", {k: previous.get(k) for k in (
+                    "plugin_source_commit", "plugin_tree_sha256", "recorded_at")})
+                doc.update(plugin_source_commit=_git_commit(PLUGIN_ROOT),
+                           plugin_tree_sha256=_tree_digest(PLUGIN_ROOT),
+                           plugin_root=str(PLUGIN_ROOT), spec_version=current_spec,
+                           continued_at=_dt.datetime.now(_dt.timezone.utc).isoformat())
+                drv_stage_receipts.invalidate_from_steps(project, continue_steps)
+                write_text(project / RECORD, json.dumps(doc, indent=2) + "\n")
+                return doc
+    doc = record(project)
     drv_stage_receipts.claim(project)
     return doc
 

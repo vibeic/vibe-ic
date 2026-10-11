@@ -1,4 +1,8 @@
-"""Ordinary shared caller controls; offline transport, never native evidence."""
+"""Shared enclosing caller controls; offline transport, never native evidence.
+
+The cache cases belong to Ultra's retained enclosing caller. Default dispatches
+current rows individually and does not enter those legacy caches.
+"""
 import json
 from pathlib import Path
 
@@ -14,6 +18,8 @@ class ReachedFollowingRow(Exception):
 
 @pytest.mark.parametrize("subject", ["CURRENT_PARTIAL", "NATIVE_MISSING", "CSV_CHANGED", "AUTHORITY_CHANGED", "SDC_CHANGED"])
 def test_ordinary_cache_caller_binds_current_ir_em_before_following_row(tmp_path, monkeypatch, subject):
+    import execution_policy
+    monkeypatch.setattr(execution_policy, "request", lambda: {"mode": "ultra"})
     project, original_pdk, _ = build(tmp_path, monkeypatch, via=True)
     pdk = R.PdkConfig(name=original_pdk.name, liberty=original_pdk.liberty,
                       tech_lef=original_pdk.tech_lef, cell_lef=original_pdk.cell_lef,
@@ -83,6 +89,8 @@ def test_backend_defaults_preserve_frontend_and_current_step14_policy(tmp_path):
 @pytest.mark.parametrize("subject", ["CURRENT", "RECEIPT_MISSING", "COMPANION_CHANGED",
                                       "SPEF_CHANGED", "EXECUTION_MISSING"])
 def test_ordinary_power_cache_admits_only_current_tool_adoption(tmp_path, monkeypatch, subject):
+    import execution_policy
+    monkeypatch.setattr(execution_policy, "request", lambda: {"mode": "ultra"})
     from test_default_current_power import project as power_project, write, POWER
     project, folder, lib = power_project(tmp_path)
     pnr = R._pl.pnr_dir(project)
@@ -144,6 +152,24 @@ def test_ordinary_power_cache_admits_only_current_tool_adoption(tmp_path, monkey
     else:
         from test_default_current_power import gate
         assert gate(project, "33") == 1
+
+
+def test_default_prestream_dispatches_current_rows_without_legacy_cache_reads(tmp_path, monkeypatch):
+    import execution_policy
+    monkeypatch.setattr(execution_policy, "request", lambda: {"mode": "default"})
+    observed = {}
+    expected = R.StepResult("current_rows", "PASS", 0.0, "dispatch control only")
+
+    def current(project, top, pdk, container, step_ids, **kwargs):
+        observed.update(project=project, top=top, step_ids=step_ids)
+        return expected
+
+    monkeypatch.setattr(R, "_default_pnr_rows", current)
+    for name in ("_step25_native_density_due", "_step33_current_power_due"):
+        monkeypatch.setattr(R, name, lambda *a: pytest.fail("Default entered a legacy cache"))
+    assert R.step_canonicalize_artefacts(tmp_path, "unit", object(), "offline", prestream=True) is expected
+    assert observed["project"] == tmp_path and observed["top"] == "unit"
+    assert {"24", "25", "33"}.issubset(observed["step_ids"])
 
 
 def test_ordinary_finished_gds_dispatch_uses_reviewed_primary(tmp_path, monkeypatch):

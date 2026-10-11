@@ -1050,6 +1050,16 @@ def produce_pnr(project, params):
         from _ppa import timing
         current_sdc = timing.asic_sdc_for_pnr(R, project, top, pdk, container)
         timing.publish_pnr_sdc(current_sdc, project / PNR)
+        # Complete the existing synthesis receipt under Step 7's current SDC.
+        # Default does not enter the enclosing step_pnr that used to do this.
+        import drv_stage_receipts as drv_stages
+        if drv_stages.current_run(project) is not None:
+            drv_stages.synth_stage_supervised(
+                project, netlist=R._pl.synth_dir(project) / f'{top}_synth.v', top=top,
+                liberties=[str(pdk.liberty)], sdc=project / PNR / 'constraint.sdc',
+                to_container=lambda path: R._to_container_path(str(path), container),
+                execute=lambda cmd, marker, log_path: R._docker_exec(
+                    container, cmd, marker=marker, log_path=log_path))
         if R._chip_path_requests_pad_ring(project):
             # The accepted ring-pinned producer retains its tap coverage,
             # master free-run exclusion, pad connection and PDN semantics.
