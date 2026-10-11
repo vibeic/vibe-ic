@@ -8,7 +8,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from drv_signoff_judge import KINDS, _NUM, _liberty_limits, port_to_pad
-from drv_signoff_annotation import _lef_uses
+from drv_signoff_annotation import _is_physical_pin, _lef_pin_models
 
 
 def _pins(path: Path) -> dict[str, dict]:
@@ -134,7 +134,10 @@ def derive(scene_dir: Path, linked_liberties: list[dict],
     for item in linked_liberties:
         limits = _liberty_limits(Path(item["path"]).read_text())
         libs.append((item["name"], limits))
-    lef_uses = _lef_uses(linked_lefs) if linked_lefs else {}
+    lef_models = _lef_pin_models(linked_lefs) if linked_lefs else {}
+    lef_uses = {key: model["use"] for key, model in lef_models.items()
+                if "use" in model}
+    modeled_cells = {cell for _, limits in libs for cell in limits["cells"]}
     lib_pins = {(cell, cell_pin): props for _, limits in libs
                 for cell, pins_in_cell in limits["cells"].items()
                 for cell_pin, props in pins_in_cell.items()}
@@ -152,10 +155,13 @@ def derive(scene_dir: Path, linked_liberties: list[dict],
             matches = [(lib_name, limits) for lib_name, limits in libs
                        if pin["cell"] in limits["cells"] and
                        pin["cell_pin"] in limits["cells"][pin["cell"]]]
-            if len(matches) != 1:
+            if not matches and _is_physical_pin(pin, lef_models, modeled_cells):
+                liberty, cell_class = None, "physical"
+            elif len(matches) != 1:
                 raise ValueError(f"OpenSTA instance {name} lacks unique linked Liberty pin")
-            liberty, limits = matches[0]
-            cell_class = "IO" if pin["cell"] in limits["pad_cells"] else "std"
+            else:
+                liberty, limits = matches[0]
+                cell_class = "IO" if pin["cell"] in limits["pad_cells"] else "std"
         net_class = ("constant" if pin["logic"] in ("0", "1") else
                      "clock" if pin["clock"] else
                      "IO" if cell_class in ("IO", "port") else "data")
@@ -187,11 +193,13 @@ def derive(scene_dir: Path, linked_liberties: list[dict],
         key = (pin["cell"], pin["cell_pin"])
         pg_without_arc = (lef_uses.get(key) in ("POWER", "GROUND") and
                           key in lib_pins and not lib_pins[key]["has_timing_arc"])
-        reason = ("lef_pg_no_liberty_arc" if pg_without_arc else
+        reason = ("lef_physical_no_liberty_arc" if metadata[name]["cell_class"] == "physical" else
+                  "lef_pg_no_liberty_arc" if pg_without_arc else
                   "unconnected_no_net" if not pin["net"] else
                   "constant" if pin["logic"] in ("0", "1") else
                   (disabled.get(name) or ("ideal" if pin["ideal"] else None)))
         if reason not in ("constant", "disabled", "ideal", "lef_pg_no_liberty_arc",
+                          "lef_physical_no_liberty_arc",
                           "unconnected_no_net"):
             if not allow_unproven:
                 raise ValueError(f"OpenSTA omitted driver {name} without exclusion proof")

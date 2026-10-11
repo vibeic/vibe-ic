@@ -9,8 +9,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from drv_signoff_judge import _liberty_limits
 
 
-def _lef_uses(paths: list[dict]) -> dict[tuple[str, str], str]:
-    uses: dict[tuple[str, str], str] = {}
+def _lef_pin_models(paths: list[dict]) -> dict[tuple[str, str], dict]:
+    models: dict[tuple[str, str], dict] = {}
+    classes: dict[str, str] = {}
     for item in paths:
         macro = pin = None
         for raw in Path(item["path"]).read_text().splitlines():
@@ -22,14 +23,27 @@ def _lef_uses(paths: list[dict]) -> dict[tuple[str, str], str]:
             match = re.fullmatch(r"PIN\s+(\S+)", line, re.I)
             if match and macro:
                 pin = match.group(1)
+                models.setdefault((macro, pin), {})
                 continue
-            match = re.fullmatch(r"USE\s+(POWER|GROUND|SIGNAL|CLOCK|ANALOG|SCAN)\s*;", line, re.I)
+            match = re.fullmatch(r"CLASS\s+([^;]+)\s*;", line, re.I)
+            if match and macro and not pin:
+                value = " ".join(match.group(1).upper().split())
+                if macro in classes and classes[macro] != value:
+                    raise ValueError(f"LEF CLASS conflicts for {macro}")
+                classes[macro] = value
+                continue
+            match = re.fullmatch(
+                r"(USE|DIRECTION)\s+([A-Z]+(?:\s+[A-Z]+)?)\s*;", line, re.I)
             if match and macro and pin:
                 key = (macro, pin)
-                use = match.group(1).upper()
-                if key in uses and uses[key] != use:
-                    raise ValueError(f"LEF USE conflicts for {macro}/{pin}")
-                uses[key] = use
+                field = match.group(1).lower()
+                value = " ".join(match.group(2).upper().split())
+                if field == "use" and value not in (
+                        "POWER", "GROUND", "SIGNAL", "CLOCK", "ANALOG", "SCAN"):
+                    continue
+                if field in models[key] and models[key][field] != value:
+                    raise ValueError(f"LEF {field.upper()} conflicts for {macro}/{pin}")
+                models[key][field] = value
                 continue
             match = re.fullmatch(r"END\s+(\S+)", line, re.I)
             if match:
@@ -37,9 +51,32 @@ def _lef_uses(paths: list[dict]) -> dict[tuple[str, str], str]:
                     pin = None
                 elif macro and match.group(1) == macro:
                     macro, pin = None, None
-    if not uses:
+    if not any("use" in model for model in models.values()):
         raise ValueError("linked LEF pin USE census empty")
-    return uses
+    for (macro, _), model in models.items():
+        model["class"] = classes.get(macro)
+    return models
+
+
+def _lef_uses(paths: list[dict]) -> dict[tuple[str, str], str]:
+    return {key: model["use"] for key, model in _lef_pin_models(paths).items()
+            if "use" in model}
+
+
+def _is_physical_pin(pin: dict, models: dict, modeled_cells: set[str]) -> bool:
+    """A passive LEF corner/spacer can have no linked Liberty cell.
+
+    Keep it in the pin inventory; only its absent timing check is inapplicable.
+    A missing model on a logic cell, clock or actual driver is still an error.
+    """
+    model = models.get((pin.get("cell"), pin.get("cell_pin")), {})
+    master_class = model.get("class") or ""
+    return (pin.get("kind") == "pin" and pin.get("cell") not in modeled_cells
+            and not pin.get("driver") and not pin.get("clock")
+            and pin.get("direction") in ("unknown", "inout")
+            and model.get("direction") == "INOUT"
+            and (master_class == "PAD SPACER" or
+                 master_class.split()[:1] == ["ENDCAP"]))
 
 
 def _unannotated(body: str) -> list[str]:

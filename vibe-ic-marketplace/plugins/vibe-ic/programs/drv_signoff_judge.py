@@ -988,7 +988,8 @@ def judge(bundle: dict, *, project: Path | None = None) -> dict:
         if not isinstance(excluded, list) or any(
                 not isinstance(p, dict) or not p.get("pin") or
                 p.get("reason") not in ("constant", "disabled", "ideal",
-                                        "lef_pg_no_liberty_arc", "unconnected_no_net",
+                                        "lef_pg_no_liberty_arc", "lef_physical_no_liberty_arc",
+                                        "unconnected_no_net",
                                         "unproven") or
                 ("excluded_kinds" in p and
                  (not isinstance(p["excluded_kinds"], list) or
@@ -1007,7 +1008,8 @@ def judge(bundle: dict, *, project: Path | None = None) -> dict:
         for item in excluded or []:
             if not isinstance(item, dict) or not item.get("pin"):
                 continue
-            if item.get("reason") in ("lef_pg_no_liberty_arc", "unconnected_no_net"):
+            if item.get("reason") in ("lef_pg_no_liberty_arc", "lef_physical_no_liberty_arc",
+                                      "unconnected_no_net"):
                 continue
             if item.get("reason") == "unproven":
                 missing.append(f"{name}: omitted pin {item['pin']} has no exclusion proof")

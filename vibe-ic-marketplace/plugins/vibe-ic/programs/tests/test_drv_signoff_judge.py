@@ -1180,6 +1180,50 @@ def test_opensta_census_io_label_comes_from_linked_pad_cell(tmp_path):
     assert derive(folder, [{"name": "io", **lib}], rows)["pins"]["u/Y"]["cell_class"] == "std"
 
 
+@pytest.mark.parametrize('lef_class', ['ENDCAP TOPRIGHT', 'PAD SPACER'])
+def test_census_keeps_physical_io_pins_without_inventing_liberty(tmp_path, lef_class):
+    from drv_signoff_census import derive
+    folder = tmp_path / 'tool'
+    _file(folder, 'pin_census.tsv',
+          'u/Y\tpin\toutput\t1\tu\tlogic\tY\tn\tinput\t0.1\t0.1\t0\tX\t0\n'
+          'corner/BUS\tpin\tunknown\t0\tcorner\tphysical\tBUS\tbus\tinput\t0\t0\t0\tX\t0\n')
+    _file(folder, 'net_census.rpt',
+          'Net n\n Total capacitance: 0.1\n Number of drivers: 1\n'
+          ' Number of loads: 0\n Number of pins: 1\n\nDriver pins\n u/Y output (logic)\n\n'
+          'Net bus\n Total capacitance: 0\n Number of drivers: 0\n'
+          ' Number of loads: 0\n Number of pins: 0\n\n')
+    _file(folder, 'disabled_edges.rpt', '')
+    lib = _file(tmp_path, 'logic.lib', '''library (lib) {
+ time_unit : "1ns"; capacitive_load_unit (1, pf);
+ cell (logic) { pin (Y) { direction : output; } }
+}''')
+    lef_text = ('MACRO physical\n CLASS ' + lef_class + ' ;\n PIN BUS\n'
+                ' DIRECTION INOUT ;\n USE SIGNAL ;\n END BUS\nEND physical\n')
+    lef = _file(tmp_path, 'physical.lef', lef_text)
+    rows = drv.parse_check_types(_report(fanout=2), scene='typ_nom',
+                                 mode='functional', violators_only=False)
+    result = derive(folder, [{'name': 'std', **lib}], rows, [lef])
+    assert set(result['pins']) == {'u/Y', 'corner/BUS'}
+    assert result['pins']['u/Y']['cell_class'] == 'std'
+    assert result['pins']['corner/BUS']['cell_class'] == 'physical'
+    assert result['pins']['corner/BUS']['liberty'] is None
+    assert result['population'] == {'max_slew': 1, 'max_capacitance': 1, 'max_fanout': 1}
+    assert result['unproven'] == []
+    assert result['excluded'][0]['pin'] == 'corner/BUS'
+    assert result['excluded'][0]['reason'] == 'lef_physical_no_liberty_arc'
+    assert result['excluded'][0]['excluded_kinds'] == ['max_slew']
+    # An unmodeled logic cell must remain a missing model, even without a driver.
+    Path(lef['path']).write_text(lef_text.replace(lef_class, 'CORE'))
+    with pytest.raises(ValueError, match='lacks unique linked Liberty pin'):
+        derive(folder, [{'name': 'std', **lib}], rows, [lef])
+    Path(lef['path']).write_text(lef_text)
+    raw = (folder / 'pin_census.tsv').read_text()
+    (folder / 'pin_census.tsv').write_text(raw.replace('corner/BUS\tpin\tunknown\t0',
+                                                     'corner/BUS\tpin\tunknown\t1'))
+    with pytest.raises(ValueError, match='lacks unique linked Liberty pin'):
+        derive(folder, [{'name': 'std', **lib}], rows, [lef])
+
+
 def test_unreported_unexcluded_driver_blocks_census(tmp_path):
     from drv_signoff_census import derive
     folder = tmp_path / "tool"
