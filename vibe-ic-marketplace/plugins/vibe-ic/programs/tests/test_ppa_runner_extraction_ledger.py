@@ -99,6 +99,12 @@ def ppa_functions_in(path: Path):
 # v1.11.18. It may SHRINK freely. Growing it is a decision, not a diff.
 # ======================================================================
 _LEDGER = frozenset({
+    # These split the existing _die_finishing orchestration: the native body
+    # still calls die_finishing_gen with the same arguments; the record adapter
+    # retains its actual return code and invokes the unchanged canonical gate.
+    # Neither adds geometry, a PPA metric reader, or area/timing/power analysis.
+    # The public _die_finishing keeps its original two-item return interface.
+    "_die_finishing_native", "_die_finishing_record",
     # CR-6: the runner emits a late OpenROAD query after edits. It derives no
     # timing or DRV metric; the tool's final report remains the measurement.
     # As with _report_wns_tcl below, a Tcl producer belongs in the runner.

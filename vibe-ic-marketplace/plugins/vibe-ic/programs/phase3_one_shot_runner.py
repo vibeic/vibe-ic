@@ -44466,6 +44466,7 @@ def _work_lives_in_container(container: Optional[str]):
 def _die_finishing(project: Path, top: str, pdk: PdkConfig,
                      gds_path: Path,
                      container: Optional[str] = None) -> Tuple[bool, str]:
+    """Run the existing Step-26.5ic producer, preserving its two-item ABI."""
     result = _die_finishing_record(project, top, pdk, gds_path, container)
     return result.extras['completed'], result.detail
 
@@ -44475,17 +44476,18 @@ def _die_finishing_record(project: Path, top: str, pdk: PdkConfig,
                           gds_path: Path,
                           container: Optional[str] = None) -> StepResult:
     t0 = time.time()
-    completed, detail = _die_finishing_native(project, top, pdk, gds_path, container)
-    # A nonfatal refusal remains unmeasured. Only completion reaches the
+    completed, detail, status = _die_finishing_native(project, top, pdk, gds_path, container)
+    # A nonfatal refusal remains unmeasured; a measured native FAIL stays FAIL.
+    # Only completion reaches the
     # unchanged die_finishing_check; a truthy tuple is never accepted as PASS.
-    return StepResult('die_finishing', 'PASS' if completed else 'NOT_MEASURED',
+    return StepResult('die_finishing', status,
                       time.time() - t0, detail, extras={'completed': completed},
-                      reason_class='' if completed else 'not_executed')
+                      reason_class='not_executed' if status == 'NOT_MEASURED' else '')
 
 
 def _die_finishing_native(project: Path, top: str, pdk: PdkConfig,
                           gds_path: Path,
-                          container: Optional[str] = None) -> Tuple[bool, str]:
+                          container: Optional[str] = None) -> Tuple[bool, str, str]:
     """Step 26.5ic — die finishing: the PDK's OWN seal ring on the streamed GDS.
 
     Delegates to the `die_finishing_gen` plugin program, which locates the PDK's
@@ -44507,14 +44509,14 @@ def _die_finishing_native(project: Path, top: str, pdk: PdkConfig,
     PDK that ships no generator is a named skip, never a silent "sealed".
     """
     if not gds_path.is_file():
-        return False, "no GDS to seal"
+        return False, "no GDS to seal", 'NOT_MEASURED'
     prog = Path(__file__).resolve().parent / "die_finishing_gen.py"
     if not prog.is_file():
-        return False, "die_finishing_gen program not found"
+        return False, "die_finishing_gen program not found", 'NOT_MEASURED'
     pdk_dir = _pdk_dir_of(pdk)
     if not pdk_dir:
         return False, ("cannot locate the PDK directory from the tech LEF — "
-                       "no seal-ring generator was looked for")
+                       "no seal-ring generator was looked for"), 'NOT_MEASURED'
     argv = [sys.executable, str(prog), str(project),
             "--gds", str(gds_path), "--in-place",
             "--pdk-root", str(Path(pdk_dir).parent),
@@ -44586,7 +44588,7 @@ def _die_finishing_native(project: Path, top: str, pdk: PdkConfig,
         # `subprocess.TimeoutExpired` was in this tuple and can no longer be
         # raised here: the call is progress-supervised and reports a stall as
         # an rc. Leaving it would be dead code that still reads as coverage.
-        return False, f"die finishing NONFATAL: {exc}"
+        return False, f"die finishing NONFATAL: {exc}", 'NOT_MEASURED'
     if cp.returncode != 0:
         # rc 2 is the program's NAMED disclosed skip (this PDK ships no
         # generator); rc 1 is a real failure with its reason in the report.
@@ -44595,13 +44597,14 @@ def _die_finishing_native(project: Path, top: str, pdk: PdkConfig,
         why = next((ln for ln in reversed(tail)
                     if ln.startswith(("VACUOUS_PASS:", "die_finishing_gen:"))),
                    (tail[-1] if tail else f"rc={cp.returncode}"))
-        return False, f"die finishing did NOT complete: {why[:300]}"
+        return False, f"die finishing did NOT complete: {why[:300]}", (
+            'FAIL' if cp.returncode == 1 else 'NOT_MEASURED')
     if _ll_m265 == "dual" and _ll_seal.get("tool"):
         _librelane_sealring_xor(project, pdk, gds_path)
     if _ll_m265 == "librelane" and _ll_seal.get("tool"):
         return True, ("PDK seal ring inserted by LibreLane KLayout.SealRing and "
-                      "verified around the die")
-    return True, "PDK seal ring inserted and verified around the die"
+                      "verified around the die"), 'PASS'
+    return True, "PDK seal ring inserted and verified around the die", 'PASS'
 
 
 def _die_density_fill(project: Path, top: str, pdk: PdkConfig,

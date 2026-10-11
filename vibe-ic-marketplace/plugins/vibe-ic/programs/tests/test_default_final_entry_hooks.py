@@ -152,7 +152,7 @@ def test_real_die_finishing_nested_call_does_not_interrupt_parent(tmp_path, monk
     def native(project, *_args):
         write(project, 'phase3/stage3/pnr/die_finished.def', b'current DEF')
         write(project, 'reports/phase3/die_finishing.json', b'{"verdict":"FAIL"}')
-        return True, 'producer finished, consumer still owns acceptance'
+        return True, 'producer finished, consumer still owns acceptance', 'PASS'
     monkeypatch.setattr(phase3, '_die_finishing_native', native)
     monkeypatch.setattr(gates, 'evaluate', lambda project, row: {
         'status': 'FAIL', 'step': {'id': row['id'], 'status': 'FAIL'}, 'ledger': []})
@@ -167,6 +167,36 @@ def test_real_die_finishing_nested_call_does_not_interrupt_parent(tmp_path, monk
     assert (folder / 'files/reports/parent-finished.log').read_bytes() == b'parent completed after child'
     _, child = saved(tmp_path, '26.5ic')
     assert child['status'] == 'FAIL' and not child['canonical_pass']
+    assert not versions._ACTIVE_LOCAL_CALLS
+
+
+@pytest.mark.parametrize('rc,status', [(1, 'FAIL'), (2, 'NOT_MEASURED')])
+def test_actual_die_finishing_keeps_native_failure_or_capability_status(tmp_path, monkeypatch, rc, status):
+    import librelane_contract as ll
+    gds = write(tmp_path, 'phase3/stage3/pnr/top.gds', b'fixture GDS; native call is stubbed')
+    pdk = SimpleNamespace(tech_lef='/pdk/fixture/libs.ref/tech.lef')
+    monkeypatch.setattr(ll, 'selected_mode', lambda *args: 'direct')
+    monkeypatch.setattr(phase3._pr, 'run_best_effort', lambda *args, **kwargs:
+                        SimpleNamespace(returncode=rc, stdout='die_finishing_gen: refused', stderr=''))
+    result = phase3._die_finishing(tmp_path, 'top', pdk, gds)
+    assert result[0] is False and 'refused' in result[1]
+    _, record = saved(tmp_path, '26.5ic')
+    assert record['status'] == status
+    assert record['result']['step_rows'][0]['status'] == status
+    assert not record['canonical_pass']
+
+
+def test_nested_existing_leaf_calls_both_finish_without_false_recovery(tmp_path):
+    @preflight.retained_step('31')
+    def child(project):
+        return SimpleNamespace(name='drc', status='PASS', detail='', extras={})
+    @preflight.retained_step('37')
+    def parent(project):
+        child(project)
+        return SimpleNamespace(name='gds', status='PASS', detail='', extras={})
+    assert parent(tmp_path).status == 'PASS'
+    assert saved(tmp_path, '31')[1]['status'] == 'PASS'
+    assert saved(tmp_path, '37')[1]['status'] == 'PASS'
     assert not versions._ACTIVE_LOCAL_CALLS
 
 
