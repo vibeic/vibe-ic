@@ -10209,6 +10209,7 @@ def step_catalog_synth_safe_params(project: Path) -> StepResult:
                       reason, files)
 
 
+@_spf.retained_step('4')
 def step_step4_functional_evidence(project: Path,
                                    ic_class: str = "") -> StepResult:
     """Run Step 4's TB-substance and functional-evidence gates inline.

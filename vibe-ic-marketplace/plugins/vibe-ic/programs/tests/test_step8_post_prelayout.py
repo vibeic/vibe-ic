@@ -35,6 +35,9 @@ def test_tool_step8_defers_before_synth_without_frontend_dispatch(tmp_path, monk
 
 
 def test_direct_step8_keeps_existing_worker(tmp_path, monkeypatch):
+    # This is the standalone legacy worker case. Default's runtime-bound
+    # direct consumer has separate assertions below.
+    monkeypatch.setattr(E, '_ordinary_runtime', None)
     put(tmp_path / 'phase3/librelane_switch.json', {'steps': {'8': 'direct'}})
     calls = []
     monkeypatch.setattr(E, 'dispatch_fixed_step', lambda *a, **k:

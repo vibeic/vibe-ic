@@ -324,6 +324,10 @@ def test_the_analog_runner_gates_every_a_step_of_every_block(tmp_path,
     rather than the source text: every A-step of every block must pass through
     `gate`, at its own site, in `_AI_STEP_NAMES` order."""
     import analog_one_shot_runner as A
+    import execution_policy as execution
+    # main() bootstraps a process-wide runtime; restore it after this
+    # synthetic dispatch so following tests keep their own execution context.
+    monkeypatch.setattr(execution, '_ordinary_runtime', None)
 
     p = _analog_project(tmp_path, with_l5=True)
     (p / "phase3/analog/analog_block_list.json").write_text(json.dumps(
