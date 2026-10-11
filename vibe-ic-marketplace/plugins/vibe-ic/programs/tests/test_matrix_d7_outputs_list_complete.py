@@ -3142,6 +3142,38 @@ def _detected(src: str) -> set:
     return {"/".join(t) for t in G._collect_writes(_ast.parse(src))}
 
 
+def test_delegated_writer_binds_the_callers_path_and_excludes_readers(monkeypatch):
+    import ast
+    helper = ast.parse('''
+def produce(project, target):
+    from _atomic_artefact import write_json
+    write_json(target, {"measured": True})
+def inspect(project, source):
+    return source.read_text()
+''')
+    monkeypatch.setattr(G, '_tree', lambda name: helper if name == 'native_helper' else None)
+    detected = _detected('''
+import native_helper as helper
+def main(project):
+    target = project / "reports" / "actual.json"
+    helper.produce(project, target)
+    helper.inspect(project, project / "reports" / "input_only.json")
+''')
+    assert 'reports/actual.json' in detected
+    assert 'reports/input_only.json' not in detected
+
+
+def test_bare_imported_atomic_writer_does_not_treat_content_as_destination():
+    detected = _detected('''
+from _atomic_artefact import write_json
+def produce(project):
+    write_json(project / "reports" / "actual.json",
+               project / "reports" / "content_only.json")
+''')
+    assert 'reports/actual.json' in detected
+    assert 'reports/content_only.json' not in detected
+
+
 def test_d7_the_write_detector_sees_an_atomic_write(monkeypatch):
     """A program converted to an atomic writer must still read as a WRITE.
 

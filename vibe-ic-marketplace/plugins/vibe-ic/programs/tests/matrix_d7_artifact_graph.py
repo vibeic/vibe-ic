@@ -564,7 +564,7 @@ def _shadowed_write_target(aliases: FrozenSet[str], fn: ast.Attribute,
     return fn.value
 
 
-def _collect_writes(tree: ast.AST) -> Set[Tuple[str, ...]]:
+def _collect_writes(tree: ast.AST, *, delegates: bool = True) -> Set[Tuple[str, ...]]:
     """Tail segments of every path this module WRITES.
 
     Write positions recognised, all structurally (never by name matching):
@@ -627,6 +627,10 @@ def _collect_writes(tree: ast.AST) -> Set[Tuple[str, ...]]:
         if isinstance(fn, ast.Name) and fn.id in _ATOMIC_WRITERS and n.args:
             add(n.args[0])
             continue
+        if (isinstance(fn, ast.Name) and fn.id in _SHADOWING_ATOMIC_WRITERS
+                and fn.id in _module_names and n.args):
+            add(n.args[0])
+            continue
         if isinstance(fn, ast.Name) and fn.id == "open" and n.args:
             mode = _const_str(n.args[1]) if len(n.args) > 1 else None
             for kw in n.keywords:
@@ -646,6 +650,57 @@ def _collect_writes(tree: ast.AST) -> Set[Tuple[str, ...]]:
                     add(fn.value)
             elif fn.attr in ("copy", "copy2", "copyfile", "move") and len(n.args) > 1:
                 add(n.args[1])
+    if delegates:
+        out.update(_delegated_write_tails(tree, resolver))
+    return out
+
+
+def _delegated_write_tails(tree: ast.AST, resolver: _PathResolver) -> Set[Tuple[str, ...]]:
+    """Resolve one sibling-module call with a concrete artefact argument.
+
+    The callee must actually write the bound parameter. Merely passing a path
+    to a reader is not production; no function-name or output-flag guess is used.
+    """
+    modules = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                modules[alias.asname or alias.name] = alias.name
+    out = set()
+    for call in ast.walk(tree):
+        if not (isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute)
+                and isinstance(call.func.value, ast.Name)):
+            continue
+        module = modules.get(call.func.value.id)
+        if module is None:
+            continue
+        arguments = call.args + [kw.value for kw in call.keywords]
+        if not any(resolver.tail(arg) and
+                   Path(resolver.tail(arg)[-1]).suffix.lower() in ARTIFACT_SUFFIXES
+                   for arg in arguments):
+            continue
+        callee_tree = _tree(module)
+        if callee_tree is None:
+            continue
+        callee = next((node for node in callee_tree.body
+                       if isinstance(node, ast.FunctionDef) and node.name == call.func.attr), None)
+        if callee is None:
+            continue
+        bindings = list(zip(callee.args.posonlyargs + callee.args.args, call.args))
+        keywords = {kw.arg: kw.value for kw in call.keywords if kw.arg}
+        bindings += [(arg, keywords[arg.arg]) for arg in callee.args.args + callee.args.kwonlyargs
+                     if arg.arg in keywords]
+        assignments = []
+        for arg, value in bindings:
+            tail = resolver.tail(value)
+            if tail:
+                assignments.append(ast.Assign(
+                    targets=[ast.Name(id=arg.arg, ctx=ast.Store())],
+                    value=ast.Constant(value='/'.join(tail))))
+        # Retain the callee's import identities for bare/qualified atomic writes.
+        imports = [node for node in callee_tree.body if isinstance(node, (ast.Import, ast.ImportFrom))]
+        bound = ast.Module(body=imports + assignments + callee.body, type_ignores=[])
+        out.update(_collect_writes(bound, delegates=False))
     return out
 
 
