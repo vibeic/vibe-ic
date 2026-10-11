@@ -73,6 +73,12 @@ def make_project(tmp_path: Path, def_text: str = DEF_OK,
     technology.write_text(json.dumps({'pdk': 'sky130A'}))
     (tmp_path / "phase3/stage3/pnr").mkdir(parents=True, exist_ok=True)
     (tmp_path / "phase3/stage4/gds").mkdir(parents=True, exist_ok=True)
+    # The current producer packages the post-route netlist, not a Verilog
+    # interface invented from DEF. These capability-gap cases intentionally
+    # omit STA inputs, so the timing model remains explicitly unmeasured.
+    (tmp_path / f"phase3/stage3/pnr/{name}_pnr.v").write_text(
+        f"module {name}(input clk, output [1:0] dout, inout vpwr, vgnd);\n"
+        "  assign dout = {clk, clk};\nendmodule\n")
     if def_text is not None:
         (tmp_path / "phase3/stage3/pnr/routed.def").write_text(def_text)
     if gds is None:
@@ -85,7 +91,8 @@ def make_project(tmp_path: Path, def_text: str = DEF_OK,
 def run(project: Path, *extra):
     out = project / "gen.json"
     cp = subprocess.run(
-        [sys.executable, str(PROG), str(project), "--json", str(out), *extra],
+        [sys.executable, str(PROG), str(project), "--json", str(out),
+         "--pdk-name", "sky130A", *extra],
         capture_output=True, text=True, cwd=str(project))
     rec = json.loads(out.read_text()) if out.exists() else None
     return cp, rec
