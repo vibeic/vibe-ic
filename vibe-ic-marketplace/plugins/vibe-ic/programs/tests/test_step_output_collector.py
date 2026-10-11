@@ -8,12 +8,79 @@ list. The web route serving those folders is path-traversal guarded.
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
-PROG = Path(__file__).resolve().parent.parent
+import pytest
+
+PROG = Path(os.environ.get('VIBEIC_OUTPUT_RETENTION_PROGRAMS',
+                           str(Path(__file__).resolve().parent.parent)))
 sys.path.insert(0, str(PROG))
 import step_output_collector as SOC  # noqa: E402
+import flow_dashboard_data as FDD  # noqa: E402
+
+
+@pytest.mark.parametrize('step', FDD._load_flow()[1], ids=lambda s: str(s['id']))
+def test_every_canonical_step_keeps_all_declared_previous_bytes(tmp_path, step):
+    """All 70 declarations; synthetic file transport, not native IC execution."""
+    specs = list(step.get('required_outputs') or [])
+    specs += [row['path'] for row in step.get('program_outputs', []) if row.get('path')]
+    expected = {}
+    for spec in specs:
+        for alternative in spec.split(' OR '):
+            for label in ('first', 'second') if '*' in alternative else ('first',):
+                relative = alternative.strip().replace('**', 'nested/deep').replace('*', label)
+                path = tmp_path / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                expected[relative] = ('old ' + relative).encode()
+                path.write_bytes(expected[relative])
+    attempt = SOC.begin_step(tmp_path, str(step['id']))
+    folder = tmp_path / attempt['storage_root'] / attempt['folder']
+    before = json.loads((folder / 'before/outputs.json').read_text())
+    assert before['capture_errors'] == []
+    assert {row['rel'] for row in before['outputs']} == set(expected)
+    for row in before['outputs']:
+        assert (folder / 'before' / row['snapshot']).read_bytes() == expected[row['rel']]
+    # An unsuccessful retry must retain the old evidence without inventing PASS.
+    for relative in expected:
+        (tmp_path / relative).unlink()
+    result = SOC.finish_step(tmp_path, attempt, verdict='NOT_MEASURED')
+    assert result['canonical_pass'] is False
+    assert SOC.latest_pass(tmp_path, str(step['id'])) is None
+    for row in before['outputs']:
+        assert (folder / 'before' / row['snapshot']).read_bytes() == expected[row['rel']]
+
+
+def test_retention_resolves_every_match_without_the_dashboard_display_cap(tmp_path):
+    paths = ['rtl/a.v', 'rtl/b.v', 'rtl/a.sv', 'directory/deep/output.txt']
+    paths += [f'extra/{i}.json' for i in range(FDD._OUTPUTS_CAP + 2)]
+    for relative in paths:
+        path = tmp_path / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(relative)
+    specs = ['rtl/*.v OR rtl/*.sv', 'directory'] + paths[4:]
+    display, present, total = FDD._resolve_outputs(tmp_path, specs)
+    retained, retained_present, retained_total = FDD._resolve_outputs(
+        tmp_path, specs, retain_all=True)
+    assert len(display) == FDD._OUTPUTS_CAP
+    assert {row['rel'] for row in retained} == set(paths)
+    assert (retained_present, retained_total) == (present, total)
+
+
+def test_supplemental_output_is_preserved_without_satisfying_required_outputs(tmp_path):
+    def row():
+        return next(s for p in FDD.collect(tmp_path, live=False)['phases']
+                    for s in p['steps'] if s['id'] == 'M2')
+    original = row()
+    path = tmp_path / 'reports/analog/mixed_signal/power_domain_producer_audit.json'
+    path.parent.mkdir(parents=True)
+    path.write_text('{"evidence":"supplement only"}')
+    current = row()
+    assert current['status'] == original['status']
+    assert current['status'] != 'pass'
+    assert not any(o['exists'] for o in current['outputs'])
+    assert path in [Path(o['abs']) for o in current.get('retention_outputs', []) if o['exists']]
 
 
 def _mk_project(tmp: Path) -> Path:

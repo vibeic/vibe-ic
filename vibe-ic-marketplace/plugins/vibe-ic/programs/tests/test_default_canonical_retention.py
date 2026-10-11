@@ -32,6 +32,12 @@ def saved(project, sid):
     return folder, json.loads((folder / 'outputs.json').read_text())
 
 
+def prior_bytes(folder, relative):
+    manifest = json.loads((folder / 'before/outputs.json').read_text())
+    entry = next(row for row in manifest['outputs'] if row['rel'] == relative)
+    return (folder / 'before' / entry['snapshot']).read_bytes()
+
+
 @pytest.mark.parametrize('name,sid', [
     ('foundry_handoff', '38'), ('tapeout_checklist', '36'), ('gds_xor', '37.3')])
 def test_real_pre_audit_refusal_preserves_the_file_it_invalidates(tmp_path, monkeypatch, name, sid):
@@ -196,7 +202,7 @@ def test_atpg_due_retry_cannot_consume_its_previous_report(tmp_path, monkeypatch
     assert written == [] and len(seen) == 3
     for sid, relative in phase3._ATPG_COVERAGE_REL.items():
         folder, record = saved(tmp_path, sid)
-        assert (folder / 'before/files' / relative).read_bytes() == b'previous grade bytes'
+        assert prior_bytes(folder, relative) == b'previous grade bytes'
         assert not (tmp_path / relative).exists()
         assert record['result']['producer_return']['producer_rc'] == 0
         assert record['status'] == 'NOT_MEASURED' and not record['canonical_pass']
@@ -218,7 +224,7 @@ def test_atpg_retiring_old_disclosures_keeps_their_bytes(tmp_path, monkeypatch):
         folder, record = saved(tmp_path, sid)
         for mapping in (phase3._ATPG_NOT_RUN_REL, phase3._ATPG_NOT_RUN_LEGACY_COLOCATED_REL):
             relative = mapping[sid]
-            assert (folder / 'before/files' / relative).read_bytes() == b'previous refusal bytes'
+            assert prior_bytes(folder, relative) == b'previous refusal bytes'
             assert not (tmp_path / relative).exists()
         assert record['result']['producer_return']['rc'] is None
         assert not record['canonical_pass'], 'reuse without new production is historical evidence'
@@ -250,7 +256,7 @@ def test_mixed_phase_refusal_preserves_the_prior_audit(tmp_path, monkeypatch, si
     assert rc == 2
     folder, record = saved(tmp_path, sid)
     relative = str(primary.relative_to(tmp_path))
-    assert (folder / 'before/files' / relative).read_bytes() == b'previous producer audit'
+    assert prior_bytes(folder, relative) == b'previous producer audit'
     assert (folder / 'files' / relative).read_bytes() == b'current refusal audit'
     assert record['status'] == 'NOT_MEASURED' and not record['canonical_pass']
     assert versions.latest_pass(tmp_path, sid) is None

@@ -328,12 +328,16 @@ def _resolve_spec(project: Path, spec: str) -> Tuple[bool, Dict[str, Any]]:
 
 
 def _resolve_outputs(
-    project: Path, required_outputs: Any
+    project: Path, required_outputs: Any, *, retain_all: bool = False
 ) -> Tuple[List[Dict[str, Any]], int, int]:
     """Resolve every output-spec. Returns (entries_capped, n_present, n_total).
 
     One entry per output-spec; the full present/total counts drive status even
-    though only the first `_OUTPUTS_CAP` entries are attached for display."""
+    though only the first `_OUTPUTS_CAP` entries are attached for display.
+
+    Retention uses the same path resolver, but keeps every existing alternative
+    and glob match without a display cap. This does not change status counts.
+    """
     entries: List[Dict[str, Any]] = []
     n_present = 0
     specs = required_outputs or []
@@ -341,7 +345,19 @@ def _resolve_outputs(
         present, entry = _resolve_spec(project, spec)
         if present:
             n_present += 1
-        entries.append(entry)
+        if retain_all and present:
+            for alt in _split_alts(spec):
+                for match in _glob_existing(project, alt):
+                    files = sorted(match.rglob('*')) if match.is_dir() else [match]
+                    for path in files:
+                        if path.is_file():
+                            _, resolved = _resolve_spec(project, str(path.relative_to(project)))
+                            entries.append(resolved)
+        else:
+            entries.append(entry)
+    if retain_all:
+        entries = list({entry['rel']: entry for entry in entries}.values())
+        return entries, n_present, len(specs)
     return entries[:_OUTPUTS_CAP], n_present, len(specs)
 
 
@@ -947,6 +963,14 @@ def collect(project, full: bool = False, live: bool = True) -> dict:
         outputs, n_present, n_total = _resolve_outputs(
             project_path, step.get("required_outputs")
         )
+        retention_specs = list(step.get("required_outputs") or [])
+        retention_specs.extend(
+            output['path'] for output in step.get('program_outputs', [])
+            if isinstance(output, dict) and output.get('path')
+        )
+        retention_outputs, _, _ = _resolve_outputs(
+            project_path, retention_specs, retain_all=True
+        )
 
         if mode == "full" and sid in comp_by_id:
             comp = comp_by_id[sid]
@@ -994,6 +1018,7 @@ def collect(project, full: bool = False, live: bool = True) -> dict:
             "gate": _gate_summary(step.get("gate")),
             "detail": detail or "",
             "outputs": outputs,
+            "retention_outputs": retention_outputs,
         }
         phase_steps[_phase_key_for(step)].append(step_obj)
 

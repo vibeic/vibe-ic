@@ -457,7 +457,14 @@ def test_producer_argv_is_unchanged(tmp_path):
 
     import phase3_one_shot_runner as _R
     orig = _R._pr.run
-    _R._pr.run = lambda cmd, **kw: (cmds.append(cmd) or _FakeProc(rc=0))
+    def produce(cmd, **kw):
+        cmds.append(cmd)
+        output = Path(cmd[cmd.index('--json') + 1])
+        step = next(sid for sid, relative in _R._ATPG_COVERAGE_REL.items()
+                    if output == tmp_path / relative)
+        _coverage(tmp_path, step)
+        return _FakeProc(rc=0)
+    _R._pr.run = produce
     try:
         _run(tmp_path)
     finally:

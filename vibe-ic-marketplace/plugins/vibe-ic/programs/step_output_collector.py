@@ -334,7 +334,7 @@ def _iter_step_records(project: Path):
             yield (str(st.get("id", "")), str(st.get("name", "")),
                    str(st.get("status", "")), pkey,
                    str(st.get("stage") or "stage"),
-                   st.get("outputs", []) or [])
+                   st.get("retention_outputs", st.get("outputs", [])) or [])
 
 
 def _prune_stale_folders(steps_root: Path, old_folders: List[str],
