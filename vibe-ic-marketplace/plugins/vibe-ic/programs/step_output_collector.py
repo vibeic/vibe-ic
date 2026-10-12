@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 from contextlib import contextmanager
 import datetime
+import fcntl
 import hashlib
 import json
 import os
@@ -30,22 +31,79 @@ from pathlib import Path
 _ACTIVE_LOCAL_CALLS = set()
 
 
+def _process_identity(pid):
+    """Linux process identity; PID alone cannot distinguish a reused owner."""
+    if type(pid) is not int or pid <= 0:
+        return None
+    try:
+        fields = Path(f'/proc/{pid}/stat').read_text().rsplit(')', 1)[1].split()
+        if fields[0] in ('Z', 'X'):
+            return None
+        return {'pid': pid, 'start_ticks': int(fields[19]),
+                'boot_id': Path('/proc/sys/kernel/random/boot_id').read_text().strip()}
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def _active_owner(folder):
+    """A child consumer must not recover its live parent's journal."""
+    try:
+        with (folder / 'active_call.json').open() as stream:
+            owner = json.load(stream)
+            try:
+                fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                identity = (_process_identity(owner.get('pid'))
+                            if isinstance(owner, dict) else None)
+                if identity is None or identity != owner:
+                    raise OSError('cannot verify owner of locked retained call')
+                return True
+    except FileNotFoundError:
+        return False
+    except ValueError as exc:
+        raise OSError('retained call marker is unreadable') from exc
+    return False
+
+
 @contextmanager
 def active_steps(project: Path, attempts):
     """A nested function call must not recover its still-running parent.
 
-    This in-process call stack is local and sequential. After an exception or
-    process exit, unfinished journals remain eligible for normal recovery.
+    The local call stack also publishes a process-bound marker for canonical
+    consumers launched in subprocesses. An exited/reused owner cannot protect
+    an unfinished journal. Unwinding removes the marker even on an exception.
     """
     project = Path(project).resolve()
     folders = {str((project / a.get('storage_root', 'steps') / a['folder']).resolve())
                for a in attempts}
     added = folders - _ACTIVE_LOCAL_CALLS
     _ACTIVE_LOCAL_CALLS.update(added)
+    markers = []
     try:
+        owner = _process_identity(os.getpid())
+        if owner is None:
+            raise OSError('cannot bind retained call to a live Linux process identity')
+        for folder in added:
+            marker = Path(folder) / 'active_call.json'
+            write_json(marker, owner)
+            lease = marker.open()
+            try:
+                fcntl.flock(lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BaseException:
+                lease.close()
+                raise
+            markers.append((marker, lease))
         yield
     finally:
-        _ACTIVE_LOCAL_CALLS.difference_update(added)
+        try:
+            # Release every kernel lease even if removal of a marker fails.
+            # A surviving file alone cannot protect an unwound call.
+            for _, lease in markers:
+                lease.close()
+            for marker, _ in markers:
+                marker.unlink(missing_ok=True)
+        finally:
+            _ACTIVE_LOCAL_CALLS.difference_update(added)
 from typing import Any, Dict, List, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -153,6 +211,8 @@ def _recover_unfinished(project: Path) -> None:
         if str(journal.parent.resolve()) in _ACTIVE_LOCAL_CALLS:
             continue
         if (journal.parent / 'outputs.json').exists():
+            continue
+        if _active_owner(journal.parent):
             continue
         unfinished = json.loads(journal.read_text())
         saved = finish_step(project, unfinished, verdict='INTERRUPTED',
