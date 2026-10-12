@@ -80,7 +80,7 @@ def test_runner_produces_scoped_analog_audit_after_analog(tmp_path, monkeypatch)
     assert rc != 0, rc
     _why = " | ".join(_doc.get("verdict_reasons") or [])
     assert "phase3 NOT_MEASURED" in _why, _why
-    phases = {row["phase"]: row for row in _doc["phases"]}
+    phases = {row["name"]: row for row in _doc["phases"]}
     assert phases["phase2"]["verdict"] == "PASS", phases
     assert "completion audit is not a pass" in _why, _why
 
