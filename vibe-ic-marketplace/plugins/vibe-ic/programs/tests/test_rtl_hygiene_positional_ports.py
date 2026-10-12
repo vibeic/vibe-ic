@@ -227,6 +227,7 @@ endmodule
         elaborated=json.loads((tmp_path/'native.json').read_text())['modules']['top']
         assert elaborated['cells']['u_leaf']['port_directions']['data_o']=='output'
         assert elaborated['cells']['u_leaf']['connections']['data_o']==elaborated['netnames']['routed']['bits']
+        assert lint.collect_instance_connections(source).get('routed') == 'data_o'
         assert 'routed' not in _undriven(source)
         parsed=lint._module_ports.parse_modules(lint._module_ports.strip_preproc_directives(source),str(fp))
         child=next(i for m in parsed if m.name=='top' for i in m.instances if i.instance_name=='u_leaf')
@@ -291,5 +292,5 @@ endmodule
     assert any(f['rule']=='instance-driver-analysis-unresolved' and f['symbol']=='routed'
                for f in json.loads(report.read_text()))
     consumed=A._load_hygiene_findings(report,cli.returncode,cli.stderr)
-    assert any(f.rule=='instance-driver-analysis-unresolved' and f.symbol=='routed'
-               and f.severity=='ERROR' for f in consumed)
+    assert any(f.rule_id=='instance-driver-analysis-unresolved' and "'routed'" in f.message
+               and f.severity=='ERROR' and f.category=='correctness_smells' for f in consumed)
