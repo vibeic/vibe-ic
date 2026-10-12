@@ -1198,16 +1198,11 @@ def test_the_exemption_rests_on_the_flows_optionality_and_nothing_else(
     assert path not in _w1_paths(step)
 
 
-def _no_list_but_writes_anchor():
-    """``(step, paths)`` of a step with NO ``required_outputs`` whose gate writes.
-
-    W4's whole subject. On the current flow that is FS1 alone, and its two
-    outputs come from plain ``program_exit_zero`` clauses — which is exactly
-    why W4's optionality exemption has no live subject and must be proved on a
-    mutated flow instead of asserted into the source and never exercised.
-    """
+def _gate_writes_anchor():
+    """A real producer whose required list can be removed in scratch only."""
     for sid in F.step_ids():
-        if F.declares_required_outputs(sid):
+        gate = F.gate(sid) or {}
+        if not gate.get("all_of"):
             continue
         targets = G.gate_output_targets(sid)
         if targets:
@@ -1244,23 +1239,26 @@ def test_w4_exemption_is_exercised_on_a_mutated_flow(tmp_path, condition,
     to behave the way the fix claims — silent when the condition is real,
     unchanged when the condition list is empty.
     """
-    anchor = _no_list_but_writes_anchor()
-    assert anchor is not None, (
-        "no step declares gate outputs without a required_outputs key, so W4 "
-        "governs nothing at all and should be removed rather than exempted"
-    )
+    anchor = _gate_writes_anchor()
+    assert anchor is not None, "no real gate-output producer for the W4 control"
     step, paths = anchor
-    before = {f.path for f in G.findings_for(step) if f.rule == G.W4}
-    assert before == set(paths), (
-        f"step {step}: W4 charges {sorted(before)} but the gate designates "
-        f"{sorted(paths)} — the baseline for this control is not what it "
-        f"claims to be"
-    )
+
+    def remove_list(doc):
+        for row in doc["steps"]:
+            if F.normalize_id(row["id"]) == step:
+                row.pop("required_outputs", None)
+    baseline = _mutated_flow(tmp_path, "d7_w4_missing_list.yaml", remove_list)
+    with _SwappedFlow(baseline):
+        before = {f.path for f in G.findings_for(step) if f.rule == G.W4}
+        assert before == set(paths), (
+            f"step {step}: W4 charges {sorted(before)} but the gate "
+            f"designates {sorted(paths)}")
 
     def retype(doc):
         for s in doc["steps"]:
             if F.normalize_id(s["id"]) != step:
                 continue
+            s.pop("required_outputs", None)
             for clause in (s.get("gate") or {}).get("all_of") or []:
                 cmd = clause.pop(F.K_PROGRAM, None)
                 if cmd is None:
@@ -1303,7 +1301,8 @@ def test_w4_exemption_is_exercised_on_a_mutated_flow(tmp_path, condition,
                 f"conditional_findings — the exemption made it invisible"
             )
 
-    assert {f.path for f in G.findings_for(step) if f.rule == G.W4} == set(paths)
+    with _SwappedFlow(baseline):
+        assert {f.path for f in G.findings_for(step) if f.rule == G.W4} == set(paths)
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -1675,7 +1674,14 @@ def test_waivers_meet_the_registry_standard():
     having evaluated nothing. An empty subject is a measurement of nothing, so
     it is a failure, not a pass.
     """
-    assert dim_waivers(), f"dimension {DIM} declares no waiver at all"
+    if not dim_waivers():
+        # Completion is valid only after every actual row is checked, not
+        # after validating an empty list of waivers.
+        checked = {F.normalize_id(c.step_id): G.findings_for(c.step_id)
+                   for c in cells_for(DIM)}
+        assert len(checked) == len(F.step_ids())
+        assert not {sid: findings for sid, findings in checked.items() if findings}
+
     # And the cell census must agree that these are the waivers IN FORCE —
     # otherwise the validated list could be a stale one no cell consults, and
     # the quality bar would be applied to the wrong entries.

@@ -245,6 +245,7 @@ def test_real_backend_worker_runs_declared_producer_before_consumer(
         events.append("native")
         pnr = project / "phase3/stage3/pnr"
         pnr.mkdir(parents=True, exist_ok=True)
+        (pnr / "constraint.sdc").write_text((project_input / "fixture.sdc").read_text())
         (pnr / "floorplan.def").write_text("synthetic floorplan\n")
         (pnr / "pdn.done").write_text("synthetic pdn\n")
         return {"verdict": "PASS", "detail": "fixture native"}

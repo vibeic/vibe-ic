@@ -630,6 +630,9 @@ WAIVERS: Tuple[Waiver, ...] = (
             "Quartus on host' as the expected disclosed gap. Re-executed live "
             "by programs/tests/test_matrix_d3_outputs_produced.py::"
             "test_d3_waived_unproven_entries_have_no_committed_artefact"
+            "; executable absence control programs/tests/"
+            "test_matrix_d3_outputs_produced.py::"
+            "`def test_d3_waived_unproven_entries_have_no_committed_artefact`"
         ),
     ),
     Waiver(
@@ -650,6 +653,9 @@ WAIVERS: Tuple[Waiver, ...] = (
             "benchmark-data/ic/spm/v1.5.66_gf180mcuD. Re-executed live by "
             "programs/tests/test_matrix_d3_outputs_produced.py::"
             "test_d3_waived_unproven_entries_have_no_committed_artefact"
+            "; executable absence control programs/tests/"
+            "test_matrix_d3_outputs_produced.py::"
+            "`def test_d3_waived_unproven_entries_have_no_committed_artefact`"
         ),
     ),
     # A8/d3 STOOD HERE AND IS GONE — see the 2026-08-06 note above. It is
