@@ -177,7 +177,8 @@ def test_the_other_two_roster_entries_are_untouched():
     assert roster["gate_evidence_completeness_check"][1] is F._completion_audit_written
 
 
-@pytest.mark.parametrize("stage", ["before_route", "route_without_receipt", "bad_current_before_route"])
+@pytest.mark.parametrize("stage", ["before_route", "route_without_receipt", "bad_current_before_route",
+                                   "refusal_before_route", "tool_result_before_route"])
 def test_native_spice_gate_and_p0_keep_the_producer_boundary(tmp_path, monkeypatch, stage):
     import json
     import spice_correlation_check as SC
@@ -190,6 +191,11 @@ def test_native_spice_gate_and_p0_keep_the_producer_boundary(tmp_path, monkeypat
         current = tmp_path / "reports/phase3/spice_correlation.current.json"
         current.parent.mkdir(parents=True)
         current.write_text(json.dumps({"verdict": "PASS", "schema": "foreign"}))
+    elif stage in ("refusal_before_route", "tool_result_before_route"):
+        name = 'spice_correlation.json' if stage == 'refusal_before_route' else 'spice_path_tool.json'
+        result = tmp_path / 'reports/phase3' / name
+        result.parent.mkdir(parents=True)
+        result.write_text(json.dumps({'verdict': 'NOT_MEASURED', 'status': 'ERROR'}))
     report = tmp_path / "native-spice-gate.json"
     rc = SC.main([str(tmp_path), "--no-spice", "--json", str(report)])
     doc = json.loads(report.read_text())

@@ -35,7 +35,7 @@ Early audit boundary:
   - Before step 22 is reachable (no routed.def from step 21) and before any
     current Step-30 receipt exists, return rc 2 / NOT_MEASURED with the shared
     ASKED_BEFORE_PRODUCER classification. The gate remains invoked in P0.
-  - Once routed.def or a current receipt exists, validate the current executed
+  - Once routed.def or a Step-30 result exists, validate the current executed
     Step-30 correlation. Missing, stale, malformed or failing evidence blocks;
     an absent SPEF is not an excuse for a producer that was already reachable.
 
@@ -3429,8 +3429,13 @@ def run_audit(project: Path, run_spice: bool = True,
     result = AuditResult()
     # P0 also invokes this consumer before Phase3. Use the existing owning
     # producer predicate, rather than treating a future receipt as a defect.
-    # An existing current receipt must still be validated, even without route.
-    if not (project / 'reports/phase3/spice_correlation.current.json').exists():
+    # An attempted/refused producer or an old copied result must still fail
+    # current validation, even when it delivered no valid route or receipt.
+    reports = _pl.reports_dir(project) / 'phase3'
+    products = [reports / 'spice_correlation.current.json', reports / 'spice_path_tool.json']
+    products.extend((_pl.spice_dir(project) if kind == 'spice' else reports) / name
+                    for kind, name in _DECLARED_CORRELATION_NAMES)
+    if not any(path.exists() for path in products):
         from flow_compliance_check import _asked_before_producer
         early = _asked_before_producer(result.program, project)
         if early is not None:
