@@ -644,3 +644,55 @@ endmodule
     assert [(f["rule"], f["symbol"], f["severity"]) for f in findings] == [
         ("hierarchy-port-resolution", "u_leaf", "ERROR")]
     assert "unsupported instance array" in findings[0]["message"]
+
+
+@pytest.mark.parametrize("declarations,condition", [
+    ("parameter ENABLE=8'hff+8'h1", "ENABLE"),
+    ("parameter A=2, B=1", "!A == B"),
+    ("parameter A=1'sb1, B=1'b0", "A < B"),
+    ("parameter [7:0] A=8'hff", "A+1'b1"),
+    ("parameter A=8'hff", "A+1'b1"),
+    ("parameter [7:0] A=0, B=255", "B+1'b1"),
+    ('parameter A="AA"', 'A < "B"'),
+    ("parameter A=1", "A[64] == 0"),
+    ("parameter A=8'hff", "A[0] > -1"),
+    ("parameter A=1", "(A == A) > -1"),
+    ("parameter A=0, B=!A", "B > -1"),
+    ("parameter A=1, B=|A", "B > -1"),
+    ("parameter A=1, B=(A && A)", "B > -1"),
+    ("parameter A=1", "'0 > -1"),
+])
+def test_native_unsafe_constant_semantics_never_credit_a_driver(tmp_path, declarations, condition):
+    source = f"""
+module top #({declarations})(input source, output result);
+    wire routed;
+    generate if ({condition}) begin: selected
+        leaf u_leaf(.data_i(source), .data_o(routed));
+    end endgenerate
+    assign result = routed;
+endmodule
+"""
+    result, findings = _native_hierarchy(tmp_path, [source, LEAF])
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert [(f["rule"], f["symbol"], f["severity"]) for f in findings] == [
+        ("hierarchy-port-resolution", "top", "ERROR")]
+    assert findings[0]["block_eligible"]
+    assert "unresolved generate condition" in findings[0]["message"]
+
+
+@pytest.mark.parametrize("declarations,condition", [
+    ("parameter integer A=2, B=1", "A > B"),
+    ("parameter [0:0] A=1'b0", "A*4 == 0"),
+])
+def test_native_bounded_integer_and_vector_arithmetic_remains_resolved(tmp_path, declarations, condition):
+    source = f"""
+module top #({declarations})(input source, output result);
+    wire routed;
+    generate if ({condition}) begin: selected
+        leaf u_leaf(.data_i(source), .data_o(routed));
+    end endgenerate
+    assign result = routed;
+endmodule
+"""
+    result, findings = _native_hierarchy(tmp_path, [source, LEAF])
+    assert (result.returncode, findings) == (0, []), result.stdout + result.stderr

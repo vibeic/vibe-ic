@@ -18,8 +18,21 @@ import module_port_audit as ports
 from verilog_width_resolve import _ternary_to_python
 
 
+class _WidthDependentInt(int):
+    """A literal/declared vector whose compound sizing is not inferred here."""
+    def __new__(cls, value, width=None):
+        result = int.__new__(cls, value)
+        result.width = width
+        return result
+
+
 def constant(expr, params):
     """Evaluate only explicitly supported constant syntax; None means unknown."""
+    literal_values = {}
+    clog2_name = '__hierarchy_system_clog2'
+    while clog2_name in params or re.search(r'\b' + clog2_name + r'\b', expr):
+        clog2_name += '_'
+
     def literal(m):
         size, signed, base, digits = m.groups()
         if re.search(r'[xz?]', digits, re.I):
@@ -32,7 +45,12 @@ def constant(expr, params):
             value &= (1 << width) - 1
             if signed and value & (1 << (width - 1)):
                 value -= 1 << width
-        return str(value)
+        name = '__hierarchy_literal_' + str(len(literal_values))
+        while name in params or re.search(r'\b' + name + r'\b', expr):
+            name += '_'
+        literal_values[name] = (value if size == '32' and signed else
+                                _WidthDependentInt(value, int(size) if size else None))
+        return name
 
     def divide(left, right):
         quotient = abs(left) // abs(right)
@@ -50,27 +68,67 @@ def constant(expr, params):
             return n.value
         if isinstance(n, ast.Name) and n.id in params:
             return params[n.id]
+        if isinstance(n, ast.Name) and n.id in literal_values:
+            return literal_values[n.id]
         if isinstance(n, ast.BinOp) and type(n.op) in binary:
             left, right = visit(n.left), visit(n.right)
             if not isinstance(left, int) or not isinstance(right, int):
                 raise ValueError('noninteger arithmetic')
+            sized = isinstance(left, _WidthDependentInt) or isinstance(right, _WidthDependentInt)
+            if sized and (min(left, right) < 0 or
+                          (isinstance(left, _WidthDependentInt) and
+                           isinstance(right, _WidthDependentInt))):
+                raise ValueError('compound constant needs HDL width inference')
+            if not all(-(1 << 31) <= value < (1 << 31) for value in (left, right)):
+                raise ValueError('constant exceeds bounded signed integer domain')
             if isinstance(n.op, (ast.LShift, ast.RShift)) and not 0 <= right <= 4096:
                 raise ValueError('shift budget')
             if isinstance(n.op, (ast.LShift, ast.RShift)) and left < 0:
                 raise ValueError('unresolved signed shift width')
-            return binary[type(n.op)](left, right)
-        if isinstance(n, ast.UnaryOp) and isinstance(n.op, (ast.Not, ast.USub, ast.UAdd)):
+            value = binary[type(n.op)](left, right)
+            if not -(1 << 31) <= value < (1 << 31):
+                raise ValueError('constant overflow needs HDL width inference')
+            # A nonnegative vector combined with a nonnegative ordinary
+            # integer has at least a 32-bit operation width. This bounded
+            # result fits either signedness; retain vector provenance so a
+            # later negative result/comparison cannot silently lose it.
+            if sized and value < 0:
+                raise ValueError('negative vector arithmetic needs HDL width inference')
+            widths = [operand.width if isinstance(operand, _WidthDependentInt) else 32
+                      for operand in (left, right)]
+            return (_WidthDependentInt(value, max(widths) if all(widths) else None)
+                    if sized else value)
+        if isinstance(n, ast.UnaryOp) and isinstance(n.op, (ast.USub, ast.UAdd)):
             value = visit(n.operand)
-            return (int(not value) if isinstance(n.op, ast.Not) else
-                    -value if isinstance(n.op, ast.USub) else +value)
+            if isinstance(value, _WidthDependentInt):
+                raise ValueError('unary constant needs HDL width inference')
+            return -value if isinstance(n.op, ast.USub) else +value
         if isinstance(n, ast.BoolOp):
-            values = [bool(visit(v)) for v in n.values]
-            return int(all(values) if isinstance(n.op, ast.And) else any(values))
+            operands = [visit(v) for v in n.values]
+            if any(isinstance(value, str) for value in operands):
+                raise ValueError('string truth requires HDL bit conversion')
+            values = [bool(value) for value in operands]
+            return _WidthDependentInt(all(values) if isinstance(n.op, ast.And) else any(values), 1)
         if isinstance(n, ast.Compare) and len(n.ops) == 1 and type(n.ops[0]) in compare:
-            return int(compare[type(n.ops[0])](visit(n.left), visit(n.comparators[0])))
+            left, right = visit(n.left), visit(n.comparators[0])
+            if isinstance(left, _WidthDependentInt) or isinstance(right, _WidthDependentInt):
+                if not isinstance(n.ops[0], (ast.Eq, ast.NotEq)) or min(left, right) < 0:
+                    raise ValueError('comparison needs HDL signedness inference')
+            if isinstance(left, str) != isinstance(right, str):
+                raise ValueError('mixed string/integer comparison')
+            if isinstance(left, str) and not isinstance(n.ops[0], (ast.Eq, ast.NotEq)):
+                raise ValueError('string ordering requires HDL bit conversion')
+            return _WidthDependentInt(compare[type(n.ops[0])](left, right), 1)
         if isinstance(n, ast.IfExp):
-            return visit(n.body if visit(n.test) else n.orelse)
-        if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == 'clog2':
+            selected, other = visit(n.body), visit(n.orelse)
+            if (isinstance(selected, _WidthDependentInt) or isinstance(other, _WidthDependentInt)
+                    or isinstance(selected, str) != isinstance(other, str)):
+                raise ValueError('conditional constant needs HDL type inference')
+            condition = visit(n.test)
+            if isinstance(condition, str):
+                raise ValueError('string truth requires HDL bit conversion')
+            return selected if condition else other
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == clog2_name:
             if len(n.args) != 1 or n.keywords:
                 raise ValueError('clog2 arguments')
             value = visit(n.args[0])
@@ -79,32 +137,74 @@ def constant(expr, params):
             return (value - 1).bit_length()
         if isinstance(n, ast.Subscript) and isinstance(n.value, ast.Name):
             value = visit(n.value)
-            if not isinstance(value, int) or value < 0:
-                raise ValueError('select domain')
+            width = value.width if isinstance(value, _WidthDependentInt) else 32
+            if not isinstance(value, int) or width is None or not 0 < width <= 4096:
+                raise ValueError('unresolved select width')
             if isinstance(n.slice, ast.Slice):
                 hi, lo = visit(n.slice.lower), visit(n.slice.upper)
-                if n.slice.step is not None or not 0 <= lo <= hi <= 4096:
-                    raise ValueError('select range')
-                return (value >> lo) & ((1 << (hi - lo + 1)) - 1)
-            bit = visit(n.slice)
-            if not 0 <= bit <= 4096:
-                raise ValueError('select index')
-            return (value >> bit) & 1
+                if n.slice.step is not None or not 0 <= lo <= hi < width:
+                    raise ValueError('out-of-bounds select')
+            else:
+                hi = lo = visit(n.slice)
+                if not 0 <= lo < width:
+                    raise ValueError('out-of-bounds select')
+            return _WidthDependentInt((int(value) >> lo) & ((1 << (hi - lo + 1)) - 1),
+                                      hi - lo + 1)
         raise ValueError('unsupported constant syntax')
 
     try:
-        text = re.sub(r"(\d*)'([sS]?)([bBoOdDhH])([0-9a-fA-F_xXzZ?]+)", literal, expr.strip())
-        text = re.sub(r"'0\b", '0', text)
-        text = re.sub(r'\$clog2\b', 'clog2', text)
-        text = _ternary_to_python(text)
+        text = expr.strip()
+        if '\\' in text:
+            return None  # escaped strings need HDL escape/type rules
+        if re.search(r'\b0[xXoObB][0-9a-fA-F_]', ports.lexical_mask(text)):
+            return None  # Python numeric notation is not Verilog syntax
+        if re.search(r'\b(?:and|or|not|if|else|True|False|None)\b', ports.lexical_mask(text)):
+            return None
+
+        def replace_code(pattern, replacement):
+            nonlocal text
+            for match in reversed(list(re.finditer(pattern, ports.lexical_mask(text)))):
+                text = text[:match.start()] + replacement + text[match.end():]
+        # Python's unary-not/bitwise precedence differs from Verilog. Resolve
+        # only a whole unary negation, and refuse mixed bitwise comparisons.
+        while text.startswith('('):
+            outer = ports.extract_balanced(text, 0)
+            if outer is None or outer[1] != len(text) - 1:
+                break
+            text = outer[0].strip()
+        if re.search(r'!(?!=)', ports.lexical_mask(text)):
+            operand = text[1:].strip() if text.startswith('!') else ''
+            balanced = ports.extract_balanced(operand, 0) if operand.startswith('(') else None
+            atom = re.fullmatch(r"[A-Za-z_]\w*|\d+|\d*'[sS]?[bBoOdDhH][0-9a-fA-F_]+", operand)
+            if atom or (balanced is not None and balanced[1] == len(operand) - 1):
+                value = constant(operand, params)
+                return _WidthDependentInt(not value, 1) if isinstance(value, int) else None
+            return None
+        mask = ports.lexical_mask(text)
+        if (re.search(r'(?<!&)&(?!&)|(?<!\|)\|(?!\|)|\^', mask)
+                and re.search(r'==|!=|(?<![<>])[<>](?![<>])', mask)):
+            return None
+        # Substitute only outside string literals; literal values retain the
+        # fact that compound arithmetic would require real HDL width rules.
+        for match in reversed(list(re.finditer(
+                r"(\d*)'([sS]?)([bBoOdDhH])([0-9a-fA-F_xXzZ?]+)", mask))):
+            text = text[:match.start()] + literal(match) + text[match.end():]
+        zero_name = '__hierarchy_fill_zero'
+        while zero_name in params or re.search(r'\b' + zero_name + r'\b', expr):
+            zero_name += '_'
+        literal_values[zero_name] = _WidthDependentInt(0, 1)
+        replace_code(r"'0\b", zero_name)
+        replace_code(r'\$clog2\b', clog2_name)
+        if '?' in ports.lexical_mask(text):
+            text = _ternary_to_python(text)
         if text is None:
             return None
         if re.match(r'^\s*\|(?!\|)', text):
             result = constant(text.lstrip()[1:], params)
-            return int(bool(result)) if result is not None else None
-        text = text.replace('&&', ' and ').replace('||', ' or ')
-        text = re.sub(r'!(?!=)', ' not ', text)
-        text = re.sub(r'(?<!/)/(?!/)', '//', text)
+            return _WidthDependentInt(bool(result), 1) if isinstance(result, int) else None
+        replace_code(r'&&', ' and ')
+        replace_code(r'\|\|', ' or ')
+        replace_code(r'(?<!/)/(?!/)', '//')
         return visit(ast.parse(text.strip(), mode='eval').body)
     except (ValueError, TypeError, SyntaxError, KeyError, ZeroDivisionError, OverflowError):
         return None
@@ -120,10 +220,15 @@ def parameter_expressions(header, body):
             groups.append(result[0])
     groups += [m.group(1) for m in re.finditer(r'\b(?:localparam|parameter)\b([^;]+);', body)]
     for group in groups:
+        current_declaration = ''
         for item in ports.split_top_level(group):
             match = re.match(r'(.*?)\b([A-Za-z_]\w*)\s*=\s*(.+)$', item.strip(), re.S)
             if match:
-                declaration = match.group(1)
+                declaration = match.group(1).strip()
+                if declaration:
+                    current_declaration = declaration
+                else:
+                    declaration = current_declaration
                 width = ''.join(re.findall(r'\[[^\]]+\]', declaration))
                 signed = bool(re.search(r'\bsigned\b', declaration))
                 if re.search(r'\b(?:int|integer)\b', declaration):
@@ -148,6 +253,7 @@ def resolve_parameters(expressions, overrides=None):
                 value &= (1 << width) - 1
                 if signed and value & (1 << (width - 1)):
                     value -= 1 << width
+                value = int(value) if width == 32 and signed else _WidthDependentInt(value, width)
             if value is not None:
                 resolved[name] = value
                 changed = True
@@ -187,7 +293,7 @@ def active_body(body, params, statement_end):
         if match.group(1) != 'if':
             raise ValueError('unsupported generate selection: ' + match.group(1))
         value = constant(body[tail + 1:condition[1]], params)
-        if value is None:
+        if not isinstance(value, int):
             raise ValueError('unresolved generate condition: ' + body[tail + 1:condition[1]])
         then_end = statement_end(mask, after)
         if then_end <= after:
@@ -302,7 +408,8 @@ class DriverContext:
     def drivers(self, name, overrides=None, ancestors=()):
         region = self.regions[name]
         params = resolve_parameters(region.expressions, overrides)
-        key = (name, tuple(sorted(params.items())))
+        key = (name, tuple(sorted((key, type(value).__name__, value, getattr(value, 'width', None))
+                                  for key, value in params.items())))
         if key in self.cache:
             return self.cache[key]
         if name in ancestors:
