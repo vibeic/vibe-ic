@@ -160,9 +160,10 @@ def test_reused_phase1_consumes_current_expert_review_before_phase2(
     docs.mkdir(parents=True)
     for index in range(1, 14):
         (docs / f"L{index}.json").write_text("{}\n")
-    design_input = project / "input/design_input.txt"
+    design_input = project / "input/docs/spec.md"
     design_input.parent.mkdir(parents=True, exist_ok=True)
     design_input.write_text("A small digital counter.\n")
+    assert V._design_input_present(project) is True
     producer = _report(project, "phase1_one_shot.json", {"verdict": "PASS"})
     monkeypatch.setattr(V, "_phase1_freshness", lambda *a, **k: {
         "state": V._p1id.REUSE, "reason": "CURRENT", "why": "current producer"})
