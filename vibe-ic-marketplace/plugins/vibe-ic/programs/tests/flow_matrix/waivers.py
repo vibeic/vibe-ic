@@ -771,49 +771,7 @@ WAIVERS: Tuple[Waiver, ...] = (
 
     # ── dimension 7 — is the required_outputs list complete? ───────────
     # FS1 closed: the native runner produces both declared reports before its
-    # unchanged canonical consumer. The three remaining entries are 7, 23, M1.
-    Waiver(
-        step_id="7",
-        dim=7,
-        reason=(
-            "reports/phase3/single_corner_stance.json is emitted ONLY on the "
-            "single-corner branch — phase3_one_shot_runner writes it under "
-            "`if len(corners) < 2 and not pvt.get('multi_corner')` — and a "
-            "multi-corner run legitimately produces none, so an unconditional "
-            "required_outputs entry converts every honest multi-corner run "
-            "into MISSING. required_outputs is ALL-of-N and its only any-of "
-            "spelling is ' OR ' between paths; every alternative that would "
-            "cover the multi-corner branch (pvt_matrix.json, the gate's own "
-            "reports/phase2/gates/pvt_matrix.json) is present on EVERY run, "
-            "so the entry could never fail and would be a declaration that "
-            "measures nothing. Closing this needs a producer change that "
-            "emits a corner-stance disclosure on BOTH branches, plus a "
-            "re-publish of the affected roots — a flow change with its own "
-            "verification, not a declaration change."
-        ),
-        evidence=(
-            "producer programs/phase3_one_shot_runner.py::`rpt_phase3 / "
-            "\"single_corner_stance.json\"` — the write guarded by "
-            "`len(corners) < 2`. CONTENT-addressed (#1289/#1290): the "
-            "anchor IS the evidence and the line is derived, not stored. "
-            "Cited by line until 2026-08-14 and re-measured three times as "
-            "the block drifted (29776-29796, then 29941-29964, then "
-            "30621-30646); #1110's atomic-write conversion then moved it "
-            "two lines further, which is the churn this notation ends. "
-            "Historical numbers carry no leading colon on purpose — a bare "
-            "`:NNNN` inherits the last-named file and would be validated as "
-            "a live citation; consumer "
-            "programs/pvt_matrix_check.py:44-45 then :105. MEASURED "
-            "2026-07-28 with flow_compliance_check.check_step over the nine "
-            "tracked roots holding phase2/stage2/constraints/pvt_matrix.json: "
-            "adding the entry moves benchmark-data/ic/spm/v1.5.58_ihp-sg13g2, "
-            "v1.5.65_sky130A and v1.5.66_gf180mcuD from PASS to MISSING "
-            "('required_outputs missing: "
-            "[reports/phase3/single_corner_stance.json]') — three "
-            "multi-corner runs failed for producing no single-corner "
-            "disclosure. The other six are FAIL/PASS-unchanged."
-        ),
-    ),
+    # unchanged canonical consumer. Step 7 now records both branches; only 23 and M1 remain.
     Waiver(
         step_id="M1",
         dim=7,

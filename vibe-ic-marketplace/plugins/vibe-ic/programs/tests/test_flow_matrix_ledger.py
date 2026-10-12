@@ -872,6 +872,7 @@ PINNED_OUTPUT_MEMBERS = frozenset({
     ('6', 'reports/phase2/fpga/quartus_map_audit.json'),
     ('7', 'phase2/stage2/constraints/*.sdc'),
     ('7', 'phase2/stage2/constraints/pvt_matrix.json'),
+    ('7', 'reports/phase3/single_corner_stance.json'),
     ('8', 'reports/phase2/sdc_check.json'),
     ('9', 'phase2/stage2/synth/area.rpt OR phase2/stage2/synth/stats.json'),
     ('9', 'phase2/stage2/synth/netlist.v'),
@@ -1422,7 +1423,8 @@ def test_output_entries_classify_into_the_four_kinds():
     # Three already-declared FILEs were also absent from the old member pin:
     # Step 18's post-spare DEF and Step M2's connectivity/run reports.
     # FS1 now owns its two native-produced reports (+2 FILE).
-    assert seen[F.FILE] == 148, (seen, REDERIVE)
+    # Step 7 records every native corner set (+1 FILE).
+    assert seen[F.FILE] == 149, (seen, REDERIVE)
     assert seen[F.GLOB] == 29, (seen, REDERIVE)
     assert seen[F.ANY_OF] == 27, (seen, REDERIVE)
     # Reported to the orchestrator: the PROGRAM_EXIT form described in the brief

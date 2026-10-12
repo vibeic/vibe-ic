@@ -257,8 +257,8 @@ RESOLUTION_LIMITS_AS_MEASURED = 6
 # rather than re-synchronised: a waiver is a public admission, and it can have
 # exactly one text.
 #
-# Three dimension-7 entries remain: 7, 23 and M1. FS1 is now enforced:
-# the native runner produces both reports before the unchanged canonical gate.
+# Two dimension-7 entries remain: 23 and M1. FS1 and Step 7 are enforced:
+# native outputs exist before their unchanged canonical consumers.
 # Missing-output and declaration-removal controls still reject incomplete runs.
 
 

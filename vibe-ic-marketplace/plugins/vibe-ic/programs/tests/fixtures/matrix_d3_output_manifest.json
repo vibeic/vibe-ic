@@ -394,6 +394,10 @@
      "alternative": "phase2/stage2/constraints/pvt_matrix.json",
      "path": "phase2/stage2/constraints/pvt_matrix.json",
      "size_bytes": 911
+    },
+    "reports/phase3/single_corner_stance.json": {
+     "status": "UNPROVEN",
+     "note": "Both native Step7 branches now record their current corner set. Controlled producer and PVT consumer regressions are qualified; published full-IC output evidence remains unproven."
     }
    }
   },
