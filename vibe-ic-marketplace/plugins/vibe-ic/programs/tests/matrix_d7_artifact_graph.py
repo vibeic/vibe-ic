@@ -439,6 +439,32 @@ def is_artifact_path(text: str) -> bool:
     return Path(t).suffix.lower() in ARTIFACT_SUFFIXES
 
 
+@lru_cache(maxsize=1)
+def _reports_phase3_helper_tail() -> Tuple[str, ...]:
+    """Read the concrete report directory from its actual path helper.
+
+    An unresolved helper previously reduced the stance writers to basename
+    tails, falsely charging the reader's historical ``reports/phase3/sta``
+    alternatives as runner outputs. Unknown helper bodies stay unresolved.
+    """
+    tree = _tree("_path_layout")
+    if tree is None:
+        return ()
+    for node in tree.body:
+        if not isinstance(node, ast.FunctionDef) or node.name != "reports_phase3_dir":
+            continue
+        if len(node.args.args) != 1 or len(node.body) != 1:
+            return ()
+        ret = node.body[0]
+        expr = ret.value if isinstance(ret, ast.Return) else None
+        if (isinstance(expr, ast.BinOp) and isinstance(expr.op, ast.Div)
+                and isinstance(expr.left, ast.Name)
+                and expr.left.id == node.args.args[0].arg):
+            value = _const_str(expr.right)
+            return tuple(value.split("/")) if value else ()
+    return ()
+
+
 class _PathResolver:
     """Resolve path EXPRESSIONS in one module to their literal tail segments.
 
@@ -456,10 +482,14 @@ class _PathResolver:
     that is produced-but-declared is not a finding.
     """
 
-    __slots__ = ("env",)
+    __slots__ = ("env", "layout_aliases")
 
-    def __init__(self, tree: ast.AST) -> None:
+    def __init__(self, tree: ast.AST, *, layout_aliases=()) -> None:
         self.env: Dict[str, Tuple[str, ...]] = {}
+        self.layout_aliases = frozenset(layout_aliases) | frozenset(
+            alias.asname or alias.name for node in ast.walk(tree)
+            if isinstance(node, ast.Import) for alias in node.names
+            if alias.name == "_path_layout")
         for _ in range(3):
             changed = False
             for n in ast.walk(tree):
@@ -485,6 +515,13 @@ class _PathResolver:
         segs: List[str] = []
         cur = node
         while True:
+            if (isinstance(cur, ast.Call) and len(cur.args) == 1
+                    and isinstance(cur.func, ast.Attribute)
+                    and cur.func.attr == "reports_phase3_dir"
+                    and isinstance(cur.func.value, ast.Name)
+                    and cur.func.value.id in self.layout_aliases):
+                segs = list(_reports_phase3_helper_tail()) + segs
+                break
             if isinstance(cur, ast.BinOp) and isinstance(cur.op, ast.Div):
                 right = _const_str(cur.right)
                 if right is None and isinstance(cur.right, ast.JoinedStr):
@@ -595,7 +632,7 @@ def _collect_writes(tree: ast.AST, *, delegates: bool = True) -> Set[Tuple[str, 
     function_resolvers = {}
     for function in ast.walk(tree):
         if isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            local = _PathResolver(function)
+            local = _PathResolver(function, layout_aliases=resolver.layout_aliases)
             functions[function.name] = function
             function_resolvers[function.name] = local
             for call in ast.walk(function):
@@ -2259,6 +2296,7 @@ def clear_flow_caches() -> None:
         gate_input_paths,
         flow_consumers,
         declared_entries,
+        program_output_declarations,
         _all_declared,
         _all_declared_basenames,
         _step_condition_basenames,

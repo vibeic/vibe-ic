@@ -758,6 +758,10 @@
      "path": "reports/phase2/gates/stage2_compliance.json",
      "size_bytes": 123426,
      "note": "2026-09-02 \u2014 re-measured against benchmark-data/ic/spm/v1.14.88_gf180mcuD: reports/phase2/gates/stage2_compliance.json tracked at HEAD, non-empty, and attributed to this step by the cell's write ledger. Previously UNPROVEN. Prior note: 2026-08-31 - UNPROVEN. Declared by `29e9c72796` [v1.13.96], which moved the flow yaml without moving this manifest; `d3_manifest_declaration_parity_check` has been reporting it as uncovered ever since (measured red on 781d24727 [v1.14.22] before this change, 7 uncovered paths). The stage-tier `*_com"
+    },
+    "phase3/stage3/pnr/constraint.sdc": {
+     "status": "UNPROVEN",
+     "note": "The existing Default Step15 producer publishes this physical SDC before native floorplan and downstream STA. Published native evidence for this new declaration has not been measured."
     }
    }
   },

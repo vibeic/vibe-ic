@@ -4669,7 +4669,11 @@ steps:
     program_outputs:
       - program: phase3_one_shot_runner
         path: "reports/phase3/floorplan_rectangles.json"
+      # The floor is conditional; the existing EM gate judges the built grid.
+      - program: phase3_one_shot_runner
+        path: "reports/phase3/pdn_em_sizing.json"
     required_outputs:
+      - "phase3/stage3/pnr/constraint.sdc"
       - "phase3/stage3/pnr/floorplan.def"
       - "phase3/stage3/pnr/pdn.tcl OR phase3/stage3/pnr/pdn.done"
       - "reports/phase2/gates/stage2_compliance.json"
@@ -5904,6 +5908,15 @@ steps:
       - hold_corner_coverage_check
       - sta_assumed_clock_disclosure_check
       - clock_target_record_agreement_check
+    # Legacy/direct writers are conditional. Default's current native STA
+    # record and reports remain mandatory below; no duplicate stance is owed.
+    program_outputs:
+      - program: phase3_one_shot_runner
+        path: "phase3/reports/sta.rpt"
+      - program: phase3_one_shot_runner
+        path: "reports/phase3/mcorner_ocv_stance.json"
+      - program: phase3_one_shot_runner
+        path: "reports/phase3/multi_corner_spef_stance.json"
     required_outputs:
       - "phase3/stage3/sta/post_route_timing.rpt"
       # Emitted by Step 23's SPEF-backed STA pass and mirrored here.  Step

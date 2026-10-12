@@ -739,6 +739,7 @@ PINNED_OUTPUT_MEMBERS = frozenset({
     ('14', 'reports/phase2/gates/yosys_hilomap.json'),
     ('14', 'reports/phase2/gates/yosys_script_template.json'),
     ('14', 'reports/phase2/gates/yosys_tiecell_recipe_order.json'),
+    ('15', 'phase3/stage3/pnr/constraint.sdc'),
     ('15', 'phase3/stage3/pnr/floorplan.def'),
     ('15', 'phase3/stage3/pnr/pdn.tcl OR phase3/stage3/pnr/pdn.done'),
     ('15', 'reports/phase2/gates/stage2_compliance.json'),
@@ -1446,7 +1447,8 @@ def test_output_entries_classify_into_the_four_kinds():
     # Step23 executes and owns three existing hold/clock report writers (+3 FILE).
     # One FILE added against e1c961d6ac: Step23 current achieved-period output.
     # Three FILEs added against 31665933c7: fresh DRV plan, bundle and verdict.
-    assert seen[F.FILE] == 166, (seen, REDERIVE)
+    # Step15 publishes the physical SDC before any downstream consumer (+1 FILE).
+    assert seen[F.FILE] == 167, (seen, REDERIVE)
     assert seen[F.GLOB] == 30, (seen, REDERIVE)
     assert seen[F.ANY_OF] == 27, (seen, REDERIVE)
     # Reported to the orchestrator: the PROGRAM_EXIT form described in the brief

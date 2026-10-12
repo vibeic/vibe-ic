@@ -771,81 +771,9 @@ WAIVERS: Tuple[Waiver, ...] = (
 
     # ── dimension 7 — is the required_outputs list complete? ───────────
     # FS1 closed: the native runner produces both declared reports before its
-    # unchanged canonical consumer. Step 7 records both branches; M1 now declares native-produced LVS evidence. Only 23 remains.
-    Waiver(
-        step_id="23",
-        dim=7,
-        reason=(
-            "Fourteen artefacts remain undeclared after "
-            "reports/phase3/sta/sta_corner_record_completeness.json was "
-            "declared on 2026-07-28 (that one is the step's own unconditional "
-            "gate --json target, so it closed with no verdict change on any "
-            "published root). The residue splits in two and BOTH halves are "
-            "conditional-by-design. (a) The two multi-corner STANCE files are "
-            "written only when the post-route DEF exists, and six of the "
-            "eight tracked roots carrying this step's already-declared "
-            "post_route_timing.rpt predate that emitter; five of them PASS "
-            "today and go MISSING if the stance files are declared. (b) The "
-            "three sign-off .rpt files are each emitted on one branch of a "
-            "real PDK condition — sta_mcorner_ocv.rpt only when the ss and ff "
-            "process libraries genuinely differ, sta_spef_multicorner.rpt "
-            "only with two or more corner SPEFs, sta_spef_based.rpt only with "
-            "a non-empty SPEF — and their absence is DISCLOSED in the stance "
-            "files (`report: null`, `multicorner_sta_report: null`). Pairing "
-            "each .rpt with its stance file via ' OR ' would declare the "
-            "name, but with the stance ALSO declared the pair could never "
-            "fail on its own, so it would be decoration. Closing this needs "
-            "the (a) decision — re-publish the six roots, or add a "
-            "conditional/disclosed-skip spelling to required_outputs — taken "
-            "first; then (b) follows as OR-pairs that can actually fail. "
-            "COUNT RE-MEASURED 2026-08-14 (#1215): sixteen, not the fourteen "
-            "recorded above — the population drifted upward while this cell "
-            "stayed red and nobody re-read it, which is what a waived cell "
-            "makes easy. #1215 declared one of the sixteen, "
-            "reports/phase3/sta/post_route_signoff_corner.json (this step's "
-            "own post_route_signoff_corner_check --json target, promoted by "
-            "the write record and undeclared), taking it to FIFTEEN. That is "
-            "a finding removed, not a colour change: this cell was red before "
-            "and is red after, and the (a)/(b) split above is untouched — "
-            "both halves of the residue are exactly the artefacts named "
-            "there."
-        ),
-        evidence=(
-            "producers programs/phase3_one_shot_runner.py::`sta_out / "
-            "\"sta_spef_based.rpt\"` and "
-            "programs/phase3_one_shot_runner.py::`sta_out / "
-            "\"sta_mcorner_ocv.rpt\"`, with mirrors "
-            "programs/phase3_one_shot_runner.py::`mirror = rpt_phase3 / "
-            "\"sta_spef_based.rpt\"` and "
-            "programs/phase3_one_shot_runner.py::`mc_ocv_mirror = "
-            "rpt_phase3 / \"sta_mcorner_ocv.rpt\"`, and the two stance "
-            "emissions programs/phase3_one_shot_runner.py::`mc_stance = "
-            "rpt_phase3 / \"multi_corner_spef_stance.json\"` and "
-            "programs/phase3_one_shot_runner.py::`mc_ocv_stance = "
-            "rpt_phase3 / \"mcorner_ocv_stance.json\"` — both guarded by "
-            "`if primary_def.is_file() and _signoff_regen(...)`. "
-            "CONTENT-addressed (#1289/#1290). Cited by line until "
-            "2026-08-14 and re-measured twice "
-            "(30169/30286/30175/30316/30188/30288, then "
-            "30849/30966/30855/30996/30867/30967); #1110's atomic-write "
-            "conversion then moved all six two lines further, which is the "
-            "churn this notation ends. Historical numbers are written "
-            "WITHOUT a leading colon on purpose: a bare `:NNNN` inherits "
-            "the last-named file and would be validated as a live "
-            "citation, so a historical number written that way re-breaks "
-            "this waiver); "
-            "consumer "
-            "programs/sta_corner_record_completeness_check.py:194-223 "
-            "(_PROCESS_STANCE_CANDIDATES / _RC_STANCE_CANDIDATES / "
-            "_MULTICORNER_CANDIDATES / _MCORNER_OCV_CANDIDATES / "
-            "_NOMINAL_SPEF_CANDIDATES). MEASURED 2026-07-28 with "
-            "flow_compliance_check.check_step over the eight tracked roots "
-            "holding phase3/stage3/sta/post_route_timing.rpt: declaring the "
-            "two stance files moves phase1_parity/{espi,lpc/phase3,mdio,"
-            "sgmii} and benchmark-data/ic/caravel_user_project from PASS to "
-            "MISSING (5 of 8); the other three are FAIL before and after."
-        ),
-    ),
+    # unchanged canonical consumer. Step 7 records both branches; M1 declares native-produced LVS evidence.
+    # Step23 closes through actual owner declarations and concrete helper
+    # resolution; conditional reports are not made unconditional requirements.
     # ── WITHDRAWN 2026-08-26: 34/d7, registered 2026-08-15 (`9167b162`,
     # vibe-ic#1215) over `reports/phase3/cmp_fill_emit.json`. A waiver must
     # name a step that is CURRENTLY failing and this one had stopped:
