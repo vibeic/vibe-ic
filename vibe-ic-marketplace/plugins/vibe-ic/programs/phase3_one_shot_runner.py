@@ -56288,10 +56288,14 @@ def _discover_container_corner_libs(container: str,
                                     lib_dir_c: str) -> List[Tuple[str, str]]:
     """Enumerate `*.lib` corner files inside the CONTAINER PDK lib dir
     (`lib_dir_c`, a container path). Returns [(stem, container_path), …].
-    Best-effort: empty list on any docker/exec failure or no container.
+    With no named container, read the current local PDK directory. Otherwise
+    use the named execution target. Empty list on discovery failure.
     chip-AGNOSTIC — pure filesystem listing, no chip/vendor literal."""
-    if not container or not lib_dir_c:
+    if not lib_dir_c:
         return []
+    if not container:
+        return [(path.stem, str(path)) for path in sorted(Path(lib_dir_c).glob('*.lib'))
+                if path.is_file()]
     try:
         rc, out, _err = _docker_exec(
             container, f"ls {shlex.quote(lib_dir_c)}/*.lib 2>/dev/null",
@@ -78503,6 +78507,7 @@ def _default_pnr_rows(project: Path, top: str, pdk: PdkConfig, container: str,
                             current, project=project)
                         result = {'verdict': verdict, 'detail': detail,
                                   'current_step_declared_producers': current}
+                    step_versions.publish_producer_outputs(project, attempt)
                     gate = (backend_gates.evaluate(project, row_def)
                             if sid == '16' or produced else
                             {'status': result['verdict'], 'ledger': []})
@@ -78528,6 +78533,7 @@ def _default_pnr_rows(project: Path, top: str, pdk: PdkConfig, container: str,
                             'started_ns': int(started * 1_000_000_000),
                             'finished_ns': time.time_ns(),
                             'verdict': result.get('verdict', 'NOT_MEASURED')}
+                    step_versions.publish_producer_outputs(project, attempt)
                     receipt = worker.execute_current_step(
                         project, step_id=sid, producer=result)
                     status = receipt['verdict']

@@ -697,14 +697,21 @@ def step23_tool_arm(project: Path, artefacts: tuple[str, ...] = (CORNER_REPORT,)
     for name in declared:
         matched = [p for p in spefs if fnmatch.fnmatch(name, p)]
         libs = []
+        roles = {}
         for field in ('CELL_LIBS', 'PAD_LIBS', 'EXTRA_LIBS'):
             declared_libs = config.get(field) or {}
             if isinstance(declared_libs, dict):
-                libs.extend(lib for p, group in declared_libs.items()
-                            if fnmatch.fnmatch(name, p) for lib in group)
+                selected = [lib for p, group in declared_libs.items()
+                            if fnmatch.fnmatch(name, p) for lib in group]
             elif isinstance(declared_libs, list):
-                libs.extend(lib for lib in declared_libs if isinstance(lib, str))
-        pvt = parse_liberty_pvt(libs[0]) if libs else None
+                selected = [lib for lib in declared_libs if isinstance(lib, str)]
+            else:
+                selected = []
+            libs.extend(selected)
+            for lib in selected:
+                roles.setdefault(lib, field)
+        cell_libs = [lib for lib in libs if roles[lib] == 'CELL_LIBS']
+        pvt = parse_liberty_pvt(cell_libs[0]) if cell_libs else None
         gaps = dict(pvt.gaps) if pvt else {'process': 'no cell Liberty bound'}
         rc = rc_corner(matched[0]) if len(matched) == 1 else None
         spef = str(spefs[matched[0]]) if rc else None
@@ -733,9 +740,19 @@ def step23_tool_arm(project: Path, artefacts: tuple[str, ...] = (CORNER_REPORT,)
             current_sha = digest(host) if host else None
             run_sha = liberty_at_run.get(lib)
             liberty_views.append({'path': lib, 'sha256': current_sha,
-                                  'run_sha256': run_sha, 'header_pvt': header})
+                                  'run_sha256': run_sha, 'header_pvt': header,
+                                  'role': roles[lib],
+                                  'filename_pvt_gaps': dict(lib_pvt.gaps)})
             if not run_sha or current_sha != run_sha:
                 gaps['liberty_digest'] = 'Liberty bytes differ from the STA run or were not bound'
+            if roles[lib] != 'CELL_LIBS':
+                # Pads and extra models may have several supply domains, or
+                # be untimed stubs without a PVT header. They remain bound to
+                # their exact configured/logged bytes, and their own metadata
+                # is disclosed above; they do not define the core-cell axis.
+                if lib_pvt.process and lib_pvt.process != scene_process:
+                    gaps['auxiliary_liberty_process'] = 'auxiliary Liberty and scene process disagree'
+                continue
             if header is None or lib_pvt.gaps:
                 gaps['liberty_header_pvt'] = 'Liberty bytes or header PVT unavailable'
             elif (lib_pvt.voltage_v != header['nom_voltage'] or
@@ -750,7 +767,7 @@ def step23_tool_arm(project: Path, artefacts: tuple[str, ...] = (CORNER_REPORT,)
             'process': pvt.process if pvt else None,
             'voltage_v': pvt.voltage_v if pvt else None,
             'temperature_c': pvt.temperature_c if pvt else None,
-            'liberty': libs[0] if libs else None,
+            'liberty': cell_libs[0] if cell_libs else None,
             'liberties': liberty_views,
             'liberty_sha256': liberty_views[0]['sha256'] if liberty_views else None,
             'liberty_header_pvt': liberty_views[0]['header_pvt'] if liberty_views else None,

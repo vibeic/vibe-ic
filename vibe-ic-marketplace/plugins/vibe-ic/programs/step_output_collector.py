@@ -264,6 +264,30 @@ def _read_index(project: Path) -> dict:
         return {'steps': []}
 
 
+def publish_producer_outputs(project: Path, attempt: dict) -> dict:
+    """Give the consumer this attempt's observed writes before it runs.
+
+    The existing ledger observes the declared files; the producer's current
+    receipts still establish execution/content authority. Publishing a RUNNING
+    index cannot advance latest_pass or replace an older version's record.
+    """
+    import step_write_ledger as ledger
+    project = Path(project).resolve()
+    steps_root = project / attempt.get('storage_root', 'steps')
+    folder = steps_root / attempt['folder']
+    if (folder / 'outputs.json').exists() or (folder / 'written.json').exists():
+        raise ValueError('step producer outputs already published or finished')
+    sid = str(attempt['id'])
+    record = next(row for row in ledger.build(project)['steps'] if str(row['id']) == sid)
+    write_json(folder / 'written.json', record)
+    index = _read_index(project)
+    row = {key: attempt[key] for key in ('id', 'name', 'phase', 'stage', 'folder', 'status')}
+    row.update(versioned=True)
+    index['steps'] = [row] + [r for r in index.get('steps', []) if str(r.get('id')) != sid]
+    write_json(steps_root / 'index.json', index)
+    return record
+
+
 def finish_step(project: Path, attempt: dict, *, verdict: str,
                 result=None, canonical_pass: bool = False) -> dict:
     """Retain every outcome. Only the existing complete step verdict advances PASS.
