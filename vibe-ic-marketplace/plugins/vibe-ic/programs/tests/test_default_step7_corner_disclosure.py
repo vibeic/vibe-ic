@@ -43,8 +43,8 @@ def test_prelayout_records_every_current_route_without_rescuing_empty_tool_set(
     prior.parent.mkdir(parents=True)
     prior.write_text('{"stance":"SINGLE_CORNER_DISCLOSED","multi_corner_claimed":false}\n')
     _result, matrix, _calls = _run(project, monkeypatch, corners=corners)
+    assert G.audit(project)['rc'] == (1 if corners == [] else 0)
     report = json.loads(prior.read_text())
     assert report['stance'] == 'CORNER_SET_RECORDED', report
     assert report['corner_count'] == len(matrix['corners'])
     assert report['corners'] == [row['name'] for row in matrix['corners']]
-    assert G.audit(project)['rc'] == (1 if corners == [] else 0)
