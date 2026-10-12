@@ -23761,6 +23761,96 @@ def _v1_6_477_reject_short_caps_numbered(title) -> bool:
     return bool(_V1_6_477_SHORT_CAPS_RE.match(t))
 
 
+_L2_PROTOCOL_EVIDENCE_TOKEN_RE = re.compile(
+    r"\b(half[\s\-]?duplex|full[\s\-]?duplex|"
+    r"single[\s\-]?wire|1[\s\-]?wire|one[\s\-]?wire|"
+    r"i2c|spi|uart|axi|ahb[\s\-]?lite|ahb|apb|wishbone|"
+    r"obi|tilelink|ocp|ddr|lpddr|hbm|sata|scsi|nvme|"
+    r"sd[\s\-]?card|emmc|ethernet|mac\b|pcie|serdes|usb|jtag"
+    r")\d*[a-z]*\b|半\s*[雙双]\s*工|單\s*(?:線|根線|條線)",
+    re.IGNORECASE,
+)
+_L2_SOFTWARE_EMULATION_RE = re.compile(
+    r"\bbit[\s-]?bang(?:ing|ed)?\b|\b(?:software|firmware)[\s-]+emulat\w*\b|"
+    r"軟體模擬|软件模拟|韌體模擬",
+    re.IGNORECASE,
+)
+
+
+def _digital_claim_negation_text(text: str) -> str:
+    # Pure-digital classification denies analog blocks, not digital buses
+    # or registers. Preserve offsets while sharing the clause predicate.
+    return re.sub(r"純數位|纯数位|純數字|\bpure(?:ly)?[\s-]?digital\b",
+                  lambda m: " " * len(m.group()), text, flags=re.I)
+
+
+def _l2_positive_protocol_evidence_text(text: str) -> Tuple[str, List[Dict[str, str]]]:
+    """Keep prose, masking only protocol tokens denied or software-emulated.
+
+    A colon-introduced negative list scopes its bullets until another prose
+    line or heading. Inline denials share the existing clause/cell negation
+    predicate, so a positive declaration after ``but`` remains eligible.
+    """
+    out: List[str] = []
+    rejected: List[Dict[str, str]] = []
+    negative_list = False
+    for line in text.splitlines(keepends=True):
+        negation_text = _digital_claim_negation_text(line)
+        plain = re.sub(r"[*`_#]", "", negation_text).strip()
+        bullet = bool(re.match(r"^\s*(?:[-+*]|\d+[.)])\s+", line))
+        if plain and not bullet:
+            negative_list = bool(plain.endswith((":", "："))
+                                 and _RE_ANALOG_NEGATION.search(plain))
+        chars = list(line)
+        for match in _L2_PROTOCOL_EVIDENCE_TOKEN_RE.finditer(line):
+            start, end = 0, len(line)
+            for delimiter in _CLAUSE_HARD_DELIMS:
+                before = line.rfind(delimiter, 0, match.start())
+                after = line.find(delimiter, match.end())
+                if before >= 0:
+                    start = max(start, before + len(delimiter))
+                if after >= 0:
+                    end = min(end, after)
+            cell = _neg_md_table_cell_span(line, match.start())
+            if cell:
+                start, end = max(start, cell[0]), min(end, cell[1])
+            start = _neg_comma_clause_start(line, start, match.start(), end)
+            for position in range(match.end(), end):
+                if (line[position] in _CLAUSE_SOFT_DELIMS
+                        and _RE_CLAUSE_NUCLEUS.search(line[position + 1:end])):
+                    end = position
+                    break
+            scope = line[start:end]
+            emulated = any(
+                not _v0_1_62_analog_kw_negated(scope, em.start(), em.end())
+                for em in _L2_SOFTWARE_EMULATION_RE.finditer(scope))
+            # A general-purpose output may carry a serial pattern without
+            # implementing a hardware bus. An explicit bus/controller
+            # declaration remains eligible even beside a GPIO description.
+            gpio_scope = line[cell[0]:cell[1]] if cell else scope
+            gpio_pattern = bool(
+                re.search(r"\bGPIO\b|general[\s-]+purpose\s+(?:output|I/O)", gpio_scope, re.I)
+                and re.search(r"\b(?:tx|pattern|output)\b|輸出", scope, re.I)
+                and not re.search(
+                    r"\b(?:UART|I2C|SPI)\s+(?:hardware\s+)?"
+                    r"(?:controller|transceiver|peripheral|master|slave|bus|interface)\b|"
+                    r"\b(?:hardware|dedicated)\s+(?:UART|I2C|SPI)\b", scope, re.I))
+            unspecified = bool(re.search(
+                r"❌|未指定|不指定|不規定|不限定|"
+                r"\b(?:unspecified|not\s+(?:specified|mandated|prescribed))\b",
+                scope, re.I))
+            reason = ("negative list" if bullet and negative_list else
+                      "negated clause" if _v0_1_62_analog_kw_negated(
+                          negation_text, match.start(), match.end()) else
+                      "unspecified interface choice" if unspecified else
+                      "software emulation" if emulated or gpio_pattern else None)
+            if reason:
+                chars[match.start():match.end()] = " " * (match.end() - match.start())
+                rejected.append({"literal": line.strip(), "label": reason})
+        out.append("".join(chars))
+    return "".join(out), rejected
+
+
 def gen_l2_frs(project: Path,
                extracted: Dict[str, str]) -> LDocResult:
     """L2: FRS sections + protocol overview."""
@@ -23855,6 +23945,19 @@ def gen_l2_frs(project: Path,
                 ev.append({"literal": f"{sec_id} {title}",
                            "label": "FRS section"})
 
+    # #3050: a protocol mentioned in an absence declaration or firmware
+    # emulation is not a positive chip-interface claim. Keep original text
+    # for the other FRS extractors and record every rejected occurrence.
+    protocol_extracted: Dict[str, str] = {}
+    protocol_rejections = 0
+    for fname, text in extracted.items():
+        filtered, rejected = _l2_positive_protocol_evidence_text(text)
+        protocol_extracted[fname] = filtered
+        protocol_rejections += len(rejected)
+        if rejected:
+            evidence.setdefault(f"input/docs/{fname}", []).extend(rejected)
+    protocol_concat = " ".join(protocol_extracted.values())
+
     # Detect half-duplex / single-wire keywords for protocol_overview.
     # v1.6.38 — chip-AGNOSTIC extension. Recognises both English and
     # CJK forms of the keyword, and infers half-duplex from the
@@ -23927,7 +24030,7 @@ def gen_l2_frs(project: Path,
 
     half_duplex = False
     one_wire = False
-    for text in extracted.values():
+    for text in protocol_extracted.values():
         # English forms — sentence-anchored protocol context required.
         if _has_single_wire_protocol_evidence(text):
             if re.search(r"half[\s\-]?duplex", text, re.IGNORECASE):
@@ -23951,7 +24054,7 @@ def gen_l2_frs(project: Path,
             r"bidirectional",
             re.IGNORECASE,
         )
-        for text in extracted.values():
+        for text in protocol_extracted.values():
             if bi_re.search(text):
                 half_duplex = True
                 break
@@ -24113,18 +24216,7 @@ def gen_l2_frs(project: Path,
     # distinct alternative keeps the negative-look-ahead semantics
     # the L9 / L2 protocol detection requires.
     # Chip-AGNOSTIC: all are industry-consortium open standards.
-    _PROTOCOL_KEYWORD_RE = re.compile(
-        r"\b("
-        r"half[\s\-]?duplex|full[\s\-]?duplex|"
-        r"single[\s\-]?wire|1[\s\-]?wire|one[\s\-]?wire|"
-        r"i2c|spi|uart|axi|ahb[\s\-]?lite|ahb|apb|wishbone|"
-        r"obi|tilelink|ocp|"
-        r"ddr|lpddr|hbm|"
-        r"sata|scsi|nvme|sd[\s\-]?card|emmc|"
-        r"ethernet|mac|pcie|serdes|usb|jtag"
-        r")\d*[a-z]*\b",
-        re.IGNORECASE,
-    )
+    _PROTOCOL_KEYWORD_RE = _L2_PROTOCOL_EVIDENCE_TOKEN_RE
     # v1.6.71 — closes issue #8 Bug A residual. v1.6.67 emitted the
     # protocol_overview dict whenever ANY protocol keyword fired in
     # the source. As a result, projects that merely *mention* a bus
@@ -24147,7 +24239,7 @@ def gen_l2_frs(project: Path,
     # integrates one. Reject those.
     _STRUCTURAL_ANCHOR_RE = re.compile(
         r"\b(bus|interface|protocol|command|transmit|receive|"
-        r"frame|MOSI|MISO|SCLK|SDA|SCL|tx|rx|wire|pin)\b",
+        r"frame|MOSI|MISO|SCLK|SDA|SCL|tx|rx|wires?|pins?)\b",
         re.IGNORECASE,
     )
 
@@ -24321,7 +24413,7 @@ def gen_l2_frs(project: Path,
     #     entries — `*  <PROTOCOL>` / `*  <PROTOCOL> <role>` /
     #     `*  <PROTOCOL> to <PROTOCOL> <role>`.
     _PATH2_STRUCTURAL_ANCHOR_RE = re.compile(
-        r"\b(?:bus|interface|protocol|frame|opcode|command|wire|signal|"
+        r"\b(?:bus|interface|protocol|frame|opcode|command|wires?|signal|"
         r"tx|rx|MOSI|MISO|SCLK|SDA|SCL|wake|trigger|enable|connect(?:ed)?|"
         r"transmit|receive|payload|crc|parity)\b",
         re.IGNORECASE,
@@ -24450,13 +24542,13 @@ def gen_l2_frs(project: Path,
 
     protocol_evidence_found = (
         half_duplex or one_wire
-        or any(_has_bus_protocol_evidence(t) for t in extracted.values())
+        or any(_has_bus_protocol_evidence(t) for t in protocol_extracted.values())
     )
     # v1.6.295 — for #180 ORGANIC. Compute the class-and-shape-count
     # gate up here so the flag-computation step below can use it.
     # See `_v1_6_295_should_emit_protocol_overview` for the rule.
     _v1_6_295_hd_signal_count = (
-        _v1_6_295_count_half_duplex_shape_signals(concat))
+        _v1_6_295_count_half_duplex_shape_signals(protocol_concat))
     _v1_6_295_protocol_overview_emit_ok = (
         _v1_6_295_should_emit_protocol_overview(
             _v1_6_295_class_path_for_l2,
@@ -24471,6 +24563,8 @@ def gen_l2_frs(project: Path,
     # it structurally.
     no_protocol_overview_in_input = _flag_no_X_in_input(
         protocol_evidence_found, evidence, "protocol_overview")
+    if not protocol_evidence_found and protocol_rejections:
+        no_protocol_overview_in_input = True
     # v1.6.295 — for #180 ORGANIC. When the v1.6.295 class gate
     # suppressed protocol_overview (CPU / analog class OR <2
     # half-duplex shape signals), force the flag to True so the
@@ -24560,7 +24654,7 @@ def gen_l2_frs(project: Path,
         r"wake[-\s]?up\s+pulse\s+before)\b",
         re.IGNORECASE,
     )
-    extracted_concat = concat
+    extracted_concat = protocol_concat
 
     def _find_byte_order(text: str) -> str | None:
         """Return 'LSB' or 'MSB' if a non-cipher-internal byte-order
@@ -24585,7 +24679,7 @@ def gen_l2_frs(project: Path,
     if protocol_evidence_found and _v1_6_295_protocol_overview_emit_ok:
         protocol_overview = {
             "half_duplex": half_duplex,
-            "wire_count": 1 if one_wire else (4 if "spi" in concat.lower() else 2),
+            "wire_count": 1 if one_wire else (4 if "spi" in protocol_concat.lower() else 2),
             # v1.6.70 — null when no structured byte-order claim found
             # in source. AID-class default no longer leaks across.
             # v1.6.71 — broadened to natural-language forms via
@@ -38686,7 +38780,8 @@ _V1_6_378_STATS_VALUE_DENY = re.compile(r"^\s*(\d{1,3})\s*$")
 
 
 def _v1_6_378_is_register_row(
-        name: str, value: str, description: str = "") -> bool:
+        name: str, value: str, description: str = "",
+        register_context: Optional[bool] = None) -> bool:
     """v1.6.378 — for #271 P3. Structural predicate: does (name, value,
     description) plausibly describe a debug register row?
 
@@ -38702,13 +38797,22 @@ def _v1_6_378_is_register_row(
     nm = (name or "").strip()
     if not any(p.match(nm) for p in _V1_6_378_REG_NAME_SHAPES):
         return False
+    # #3051: identifier case alone cannot turn a physical-signoff table
+    # into registers. A typed register heading is positive authority;
+    # without it, a two-column row needs register-content semantics.
+    if register_context is False:
+        return False
+    if register_context is True:
+        return True
+    anchored = bool(re.search(
+        r"\b(0x|reset|address|width|access|read|write|r/w|ro|wo|register|csr|debug)\b",
+        description or "", re.IGNORECASE))
+    if not (value or "").strip() and not anchored:
+        return False
     # Small-int value (likely verification stats) requires a register-
     # content anchor in the description column to be accepted.
     if _V1_6_378_STATS_VALUE_DENY.match(value or ""):
-        if not re.search(
-            r"\b(0x|reset|address|width|access|read|write|r/w|ro|wo)\b",
-            description or "", re.IGNORECASE,
-        ):
+        if not anchored:
             return False
     return True
 
@@ -40202,6 +40306,27 @@ def gen_l7_test_debug(project: Path,
     for fname, text in extracted.items():
         if not _L7_FILE_KEYWORDS.search(fname):
             continue
+        register_sections = _v1_6_334_extract_multi_shape_section_headers(
+            text, source_path=fname)
+
+        def register_table_context(position: int) -> Optional[bool]:
+            preceding = [s for s in register_sections if s["match_pos"] < position]
+            if not preceding:
+                return None
+            title = preceding[-1]["title"]
+            register_mentions = list(re.finditer(
+                r"\b(?:registers?|csrs?)\b|暫存器|寄存器", title, re.I))
+            if register_mentions:
+                return any(not _v0_1_62_analog_kw_negated(
+                    _digital_claim_negation_text(title), m.start(), m.end())
+                    for m in register_mentions)
+            if re.search(
+                    r"\b(?:physical|timing)\s+verification\b|"
+                    r"\b(?:sign[\s-]?off|coverage|statistics|metrics)\b|"
+                    r"物理驗證|時序驗證|覆蓋率|統計", title, re.I):
+                return False
+            return None
+
         for m in _l7_param_row_re.finditer(text):
             nm = m.group("name").strip()
             if nm.lower() in {"name", "address", "value", "default",
@@ -40216,7 +40341,8 @@ def gen_l7_test_debug(project: Path,
             _value_v1_6_378 = m.group("value")
             _desc_v1_6_378 = m.group("desc").strip()
             if not _v1_6_378_is_register_row(
-                    nm, _value_v1_6_378, _desc_v1_6_378):
+                    nm, _value_v1_6_378, _desc_v1_6_378,
+                    register_table_context(m.start())):
                 continue
             seen_debug_reg.add(nm.lower())
             debug_registers.append({
@@ -40250,7 +40376,8 @@ def gen_l7_test_debug(project: Path,
             # only the name+description anchors participate.
             _desc_v1_6_378_2c = m.group("desc").strip()
             if not _v1_6_378_is_register_row(
-                    nm, "", _desc_v1_6_378_2c):
+                    nm, "", _desc_v1_6_378_2c,
+                    register_table_context(m.start())):
                 continue
             seen_debug_reg.add(nm.lower())
             debug_registers.append({

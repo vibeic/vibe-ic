@@ -29,6 +29,7 @@ output is what this test pins.
 from __future__ import annotations
 
 from pathlib import Path
+import json
 
 import pytest
 
@@ -126,3 +127,91 @@ def test_phase1_picker_no_fpga_board_in_results() -> None:
         f"This is the v1.6.58/v1.6.60 regression class; "
         f"check `_FPGA_BOARD_RE` coverage."
     )
+
+
+def _field_doc(tmp_path: Path, layer: str, text: str) -> dict:
+    from programs import phase1_doc_one_shot_runner as producer
+    if layer == "L2":
+        result = producer.gen_l2_frs(tmp_path, {"command_protocol.md": text})
+    else:
+        result = producer.gen_l7_test_debug(tmp_path, {"verification_plan.md": text})
+    return json.loads(result.path.read_text())
+
+
+@pytest.mark.parametrize("project,layer,field,expected", [
+    ("negated_chip_protocol", "L2", "protocol_overview", None),
+    ("physical_signoff_rows", "L7", "debug_registers", []),
+])
+def test_phase1_local_field_intake(project, layer, field, expected, tmp_path):
+    from programs.tests._hostpaths import require_repo
+    root = require_repo("vibe-ic-marketplace", "plugins", "vibe-ic", "programs",
+                        "tests", "fixtures", "phase1_local", project)
+    text = "\n".join(p.read_text() for p in sorted(root.glob("*.md")))
+    doc = _field_doc(tmp_path, layer, text)
+    assert doc[field] == expected, doc[field]
+
+
+@pytest.mark.parametrize("text,wire_count", [
+    ("A chip implements the SPI command protocol.\n", 4),
+    ("A purely digital SPI slave interface accepts commands.\n", 4),
+    ("Firmware may bit-bang GPIO as UART, but the chip has a dedicated SPI controller with four wires.\n", 4),
+    ("The UART hardware controller command interface drives GPIO output pins.\n", 2),
+    ("Firmware bit-banging GPIO simulates SPI, but the UART hardware controller command interface accepts commands.\n", 2),
+    ("Firmware bit-banging GPIO simulates SPI; the UART hardware controller command interface accepts commands.\n", 2),
+    ("No SPI command interface.\nA UART slave interface accepts commands.\n", 2),
+    ("No SPI interface, but the UART slave interface accepts commands.\n", 2),
+    ("**Absent**:\n- SPI command interface\n\n**Implemented**:\n"
+     "- UART slave interface accepts commands\n", 2),
+    ("A chip has no UART interface.\nThe SPI command protocol transmits MSB-first.\n", 4),
+])
+def test_l2_positive_protocol_declarations_survive_negated_neighbors(
+        text, wire_count, tmp_path):
+    doc = _field_doc(tmp_path, "L2", text)
+    assert doc["protocol_overview"]["wire_count"] == wire_count, doc
+
+
+@pytest.mark.parametrize("text", [
+    "No SPI command interface is implemented.\n",
+    "The chip does not provide an I2C slave interface.\n",
+    "**Not implemented**:\n- SPI command interface\n- UART command interface\n",
+    "A GPIO output supplies UART tx by firmware bit-banging; this is an application.\n",
+    "Firmware may bit-bang GPIO as UART.\n",
+    "A GPIO output supports a serial UART pattern.\n",
+    "| Output | Function |\n|---|---|\n| output_bit | GPIO output may act as UART tx |\n",
+    "A GPIO output uses firmware bit-banged UART tx.\n",
+    "The SRAM bus protocol name (Wishbone-classic / generic / custom) is unspecified.\n",
+    "No half-duplex single-wire command protocol is present.\n",
+])
+def test_l2_negative_or_emulated_protocol_mentions_are_not_hardware(text, tmp_path):
+    doc = _field_doc(tmp_path, "L2", text)
+    assert doc["protocol_overview"] is None, doc["protocol_overview"]
+    assert doc["no_protocol_overview_in_input"] is True, doc
+
+
+def test_l2_memory_macro_is_not_an_ethernet_mac_protocol(tmp_path):
+    from programs import phase1_doc_one_shot_runner as producer
+    result = producer.gen_l2_frs(tmp_path, {
+        "architecture.md": "A memory interface uses SRAM macro cells.\n"})
+    doc = json.loads(result.path.read_text())
+    assert doc["protocol_overview"] is None, doc["protocol_overview"]
+    assert doc["no_protocol_overview_in_input"] is True, doc
+
+
+@pytest.mark.parametrize("heading,row,names", [
+    ("Debug registers", "| DBG_CTRL | Debug control |", ["DBG_CTRL"]),
+    ("No debug registers", "| DBG_CTRL | Debug control |", []),
+    ("沒有 debug registers", "| DBG_CTRL | Debug control |", []),
+    ("Debug registers", "| CONFIG | Mode selector |", ["CONFIG"]),
+    ("Purely digital debug registers", "| CONFIG | Mode selector |", ["CONFIG"]),
+    ("Parameters", "| DmBaseAddr | Debug module base address register |", ["DmBaseAddr"]),
+    ("Debug registers", "| DBG_CTRL | 0 | Control register, read/write |", ["DBG_CTRL"]),
+    ("Physical Verification", "| RULE_CHECK | 100% clean |", []),
+    ("Physical Verification", "| RuleCount | 42 | physical signoff requirement |", []),
+    ("Verification statistics", "| COVERAGE | 100 |", []),
+    ("Requirements", "| CHECK_A | clean |", []),
+])
+def test_l7_table_role_keeps_registers_and_rejects_verification_rows(
+        heading, row, names, tmp_path):
+    text = f"# Verification\n## {heading}\n| Name | Description |\n|---|---|\n{row}\n"
+    doc = _field_doc(tmp_path, "L7", text)
+    assert [r["name"] for r in doc["debug_registers"]] == names, doc["debug_registers"]
