@@ -11,10 +11,167 @@ import subprocess
 import sys
 
 import pytest
+import json
 
 PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROGRAMS))
 import rtl_hygiene_lint as lint  # noqa: E402
+
+
+NATIVE_TOP = """module top #(parameter ENABLE=0)(input source, output result);
+wire routed;
+generate if (ENABLE) begin: selected
+leaf u_leaf(.a(source), .y(routed));
+assign result=routed;
+end else begin: inactive
+assign result=source;
+end endgenerate
+endmodule
+"""
+NATIVE_LEAF = 'module leaf(input a, output y); assign y=a; endmodule\n'
+
+
+def _native_lint_cli(tmp_path, source=NATIVE_TOP, extra=()):
+    assert shutil.which('yosys'), 'native driver qualification requires Yosys'
+    leaf = tmp_path / 'leaf.v'
+    top = tmp_path / 'top.v'
+    leaf.write_text(NATIVE_LEAF)
+    top.write_text(source)
+    report = tmp_path / 'findings.json'
+    result = subprocess.run([sys.executable, str(PROGRAMS / 'rtl_hygiene_lint.py'),
+        str(leaf), str(top), '--top', 'top', '--severity', 'ERROR', '--json', str(report),
+        *extra], capture_output=True, text=True)
+    assert report.is_file(), result.stdout + result.stderr
+    assert top.read_text() == source and leaf.read_text() == NATIVE_LEAF
+    return result, json.loads(report.read_text())
+
+
+@pytest.mark.parametrize('enabled', [0, 1])
+def test_native_selected_parameter_branch_resolves_driver_cli(tmp_path, enabled):
+    result, findings = _native_lint_cli(tmp_path, extra=['--parameter', f'ENABLE={enabled}'])
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert sum(f['symbol'] == 'routed' and f['severity'] == 'ERROR' for f in findings) == 0
+    context = json.loads(next(tmp_path.glob('native-elaboration-*/context.json')).read_text())
+    assert context['status'] == 'MEASURED' and context['parameters'] == [f'ENABLE={enabled}']
+
+
+@pytest.mark.parametrize('enabled', [False, True])
+def test_native_selected_preprocessor_branch_resolves_driver_cli(tmp_path, enabled):
+    source = """module top(input source, output result);
+wire routed;
+`ifdef FEATURE
+leaf u_leaf(.a(source), .y(routed));
+assign result=routed;
+`else
+assign result=source;
+`endif
+endmodule
+"""
+    result, findings = _native_lint_cli(tmp_path, source, ['--define', 'FEATURE'] if enabled else [])
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert sum(f['symbol'] == 'routed' and f['severity'] == 'ERROR' for f in findings) == 0
+
+
+def test_native_disabled_driver_still_blocks_when_output_reads_it(tmp_path):
+    source = NATIVE_TOP.replace('assign result=routed;', '').replace('assign result=source;', '')
+    source = source.replace('end endgenerate', 'end endgenerate\nassign result=routed;')
+    result, findings = _native_lint_cli(tmp_path, source)
+    assert result.returncode == 1
+    assert any(f['rule'] == 'native-elaboration-unresolved' for f in findings)
+    assert any(f['symbol'] == 'routed' and f['block_eligible'] for f in findings)
+
+
+@pytest.mark.parametrize('connection', ['.a(source), .y(routed), .y(routed)',
+                                       '.a(source), .y(routed), broken'])
+def test_native_does_not_erase_bad_connections(tmp_path, connection):
+    source = NATIVE_TOP.replace('.a(source), .y(routed)', connection)
+    result, findings = _native_lint_cli(tmp_path, source, ['--parameter', 'ENABLE=1'])
+    assert result.returncode == 1
+    assert any(f['symbol'] == 'routed' and f['severity'] == 'ERROR' for f in findings)
+
+
+def test_native_fresh_invocations_reject_previous_good_configuration(tmp_path):
+    first, _ = _native_lint_cli(tmp_path, extra=['--parameter', 'ENABLE=1'])
+    assert first.returncode == 0
+    old = {p: p.read_bytes() for p in tmp_path.glob('native-elaboration-*/*')}
+    bad = NATIVE_TOP.replace('assign result=source;', 'assign result=routed;')
+    second, findings = _native_lint_cli(tmp_path, bad)
+    assert second.returncode == 1
+    assert any(f['rule'] == 'native-elaboration-unresolved' for f in findings)
+    assert len(list(tmp_path.glob('native-elaboration-*/context.json'))) == 2
+    assert all(p.read_bytes() == value for p, value in old.items())
+
+
+def test_native_aggregate_keeps_other_findings_and_missing_auditor(tmp_path):
+    (tmp_path / 'leaf.v').write_text(NATIVE_LEAF)
+    (tmp_path / 'top.v').write_text(NATIVE_TOP + '\nmodule unused(input a, output reg q); always @(a) q <= a; endmodule\n')
+    output = tmp_path / 'review.json'
+    result = subprocess.run([sys.executable, str(PROGRAMS / 'rtl_review_aggregate.py'),
+        '--rtl-dir', str(tmp_path), '--top', 'top', '--parameter', 'ENABLE=1',
+        '--out-json', str(output), '--strict'], capture_output=True, text=True)
+    assert output.is_file(), result.stdout + result.stderr
+    report = json.loads(output.read_text())
+    assert sum(f['rule_id'] == 'instance-driver-analysis-unresolved'
+               for category in report['per_category'].values() for f in category['findings']) == 0
+    assert report['total_warns'] > 0 and report['auditors_not_run']
+    assert result.returncode == 1
+
+
+def test_default_declared_gate_uses_real_selected_inputs(tmp_path):
+    import yaml
+    project = tmp_path / 'project'
+    rtl = project / 'phase2/stage1/rtl'
+    rtl.mkdir(parents=True)
+    (rtl / 'leaf.v').write_text(NATIVE_LEAF)
+    (rtl / 'top.v').write_text(NATIVE_TOP.replace('parameter ENABLE=0', 'parameter ENABLE=1'))
+    (rtl / 'top_tb.v').write_text('this excluded testbench is not RTL;\n')
+    docs = project / 'phase1/generated_docs'
+    docs.mkdir(parents=True)
+    (docs / 'L9_INTEGRATION_SPEC.json').write_text(json.dumps({'top_module': 'top'}))
+    flow = yaml.safe_load((PROGRAMS.parent / 'flow/phase1_phase2_phase3.yaml').read_text())
+    step2 = next(step for step in flow['steps'] if str(step['id']) == '2')
+    assert {'from': 'D1', 'path': 'phase1/generated_docs/L9_INTEGRATION_SPEC.json'} in step2['required_inputs']
+    def commands(value):
+        if isinstance(value, dict):
+            for key, item in value.items():
+                if key == 'program_exit_zero' and isinstance(item, str) and item.startswith('rtl_hygiene_lint '):
+                    yield item
+                else: yield from commands(item)
+        elif isinstance(value, list):
+            for item in value: yield from commands(item)
+    command, = list(commands(flow))
+    import flow_compliance_check as compliance
+    passed, detail = compliance._check_program_exit_zero(project, command)
+    assert passed, detail
+    native = next(project.glob('reports/phase2/lint/native-elaboration-*/context.json'))
+    context = json.loads(native.read_text())
+    assert context['top'] == 'top' and context['defines'] == ['SYNTHESIS']
+    assert context['files'] == [str(rtl / 'leaf.v'), str(rtl / 'top.v')]
+    old = {p: p.read_bytes() for p in native.parent.iterdir()}
+    (rtl / 'top.v').write_text(NATIVE_TOP.replace('assign result=source;', 'assign result=routed;'))
+    passed, detail = compliance._check_program_exit_zero(project, command)
+    assert not passed, detail
+    # The consumer refuses overwriting the previous report. A retry has its
+    # own destination, preserving both the earlier verdict and native proof.
+    assert len(list(project.glob('reports/phase2/lint/native-elaboration-*/context.json'))) == 1
+    retry = command.replace('rtl_hygiene.json', 'rtl_hygiene_retry.json')
+    passed, detail = compliance._check_program_exit_zero(project, retry)
+    assert not passed, detail
+    assert len(list(project.glob('reports/phase2/lint/native-elaboration-*/context.json'))) == 2
+    assert all(p.read_bytes() == value for p, value in old.items())
+
+
+def test_native_rejects_rtl_changed_before_consumer(tmp_path):
+    assert shutil.which('yosys'), 'native driver qualification requires Yosys'
+    leaf = tmp_path / 'leaf.v'
+    top = tmp_path / 'top.v'
+    leaf.write_text(NATIVE_LEAF)
+    top.write_text(NATIVE_TOP)
+    design = lint._native_driver_view([leaf, top], 'top', [], ['ENABLE=1'], [], tmp_path)
+    top.write_text(NATIVE_TOP.replace('leaf u_leaf', 'unknown u_leaf'))
+    findings = lint.lint_file(top, design)
+    assert any(f.rule == 'native-elaboration-unresolved' and f.block_eligible for f in findings)
+    assert any(f.rule == 'instance-driver-analysis-unresolved' for f in findings)
 
 
 def _undriven(source: str):
