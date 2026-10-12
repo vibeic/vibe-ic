@@ -928,7 +928,20 @@ def judge(bundle: dict, *, project: Path | None = None) -> dict:
 
     stage_rows = {s.get("name"): s for s in bundle.get("stages") or []}
     postroute_repair_ran = bool(bundle.get("postroute_repair_ran"))
-    if project is not None:
+    adoption_basis = identity.get('repair_adoption')
+    if project is not None and adoption_basis is not None:
+        try:
+            from librelane_contract import postroute_repair_adoption
+            layout = ((identity.get('artifacts') or {}).get('def') or {})
+            current_adoption = postroute_repair_adoption(project, Path(layout['path']))
+            if adoption_basis != current_adoption:
+                missing.append('repair adoption basis differs from current layout-bound sources')
+            postroute_repair_ran = current_adoption['adopted']
+            if postroute_repair_ran != bool(bundle.get('postroute_repair_ran')):
+                missing.append('step 32 repair adoption differs from DRV bundle')
+        except (OSError, ValueError, TypeError, KeyError, RuntimeError) as exc:
+            missing.append(f'repair adoption basis unreadable: {exc}')
+    elif project is not None:
         repair_report = project / "reports/phase3/librelane_postroute_repair.json"
         if repair_report.is_file():
             try:

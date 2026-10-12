@@ -938,6 +938,50 @@ def _load(path: Path) -> dict[str, Any]:
     return value
 
 
+def postroute_repair_adoption(project: Path, layout: Path) -> dict:
+    """Resolve the existing repair record against the captured layout."""
+    def ref(path: Path) -> dict:
+        if not path.is_file():
+            raise ValueError(f'repair adoption input absent: {path}')
+        return {'path': str(path.resolve()), 'sha256': digest(path)}
+
+    def path(value: str) -> Path:
+        candidate = Path(value)
+        return candidate if candidate.is_absolute() else project / candidate
+
+    basis = {'adopted': False, 'layout': ref(layout), 'report': None}
+    report_path = project / 'reports/phase3/librelane_postroute_repair.json'
+    if not report_path.is_file():
+        return basis
+    basis['report'] = ref(report_path)
+    report = _load(report_path)
+    if not report.get('adopted'):
+        return basis
+    final = report.get('final') or {}
+    state_path = path(str(final.get('sta_state') or ''))
+    basis['sta_state'] = ref(state_path)
+    if basis['sta_state']['sha256'] != final.get('sta_state_sha256'):
+        raise ValueError('repair adoption STA state differs from producer record')
+    receipt_path = state_path.parent / 'vibeic_receipt.json'
+    receipt = _load(receipt_path)
+    basis['sta_receipt'] = ref(receipt_path)
+    if ((receipt.get('input') or {}).get('step') != 'OpenROAD.STAPostPNR' or
+            (receipt.get('sha256') or {}).get('state_out.json') != basis['sta_state']['sha256']):
+        raise ValueError('repair adoption STA state is not bound to native producer')
+    repair_def = path(str(_load(state_path).get('def') or ''))
+    basis['repair_def'] = ref(repair_def)
+    if ((receipt.get('input') or {}).get('state_files') or {}).get(str(repair_def)) != basis['repair_def']['sha256']:
+        raise ValueError('repair adoption DEF differs from native STA input')
+    basis['adopted'] = basis['repair_def']['sha256'] == basis['layout']['sha256']
+    if basis['adopted'] and report.get('site') == 'after_route':
+        handoff_path = project / 'reports/phase3/librelane_route_handoff.json'
+        handoff = _load(handoff_path)
+        if (handoff.get('postroute_repair') or {}).get('report_sha256') != basis['report']['sha256']:
+            raise ValueError('repair adoption report is not bound to route handoff')
+        basis['route_handoff'] = ref(handoff_path)
+    return basis
+
+
 def _set(out: dict, provenance: dict, key: str, value: Any, source: str) -> None:
     if value is None or value in ('NOT_DETERMINED', 'NOT_MEASURED', ''):
         return

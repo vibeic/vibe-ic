@@ -904,7 +904,11 @@ def build(project: Path, *, final_state: dict | None = None) -> dict:
                    ("sta_netlist", "lvs_netlist", "gds_netlist")}}
     # The judge requires post-route repair constraints exactly when step 32
     # adopted a candidate; use the same adoption record.
-    if final_state is not None:
+    if current_step23:
+        from librelane_contract import postroute_repair_adoption
+        identity['repair_adoption'] = postroute_repair_adoption(project, Path(layout['path']))
+        postroute_repair_ran = identity['repair_adoption']['adopted']
+    elif final_state is not None:
         postroute_repair_ran = bool(final_state.get("adopted"))
     else:
         repair = project / "reports/phase3/librelane_postroute_repair.json"

@@ -2674,6 +2674,15 @@ def _current_sta_ocv_receipts(state_path):
         'sha256': outputs}))
     return Path(extra['path'])
 
+
+def _retained_repair_sta_receipt(state_path):
+    state = json.loads(state_path.read_text())
+    _file(state_path.parent, 'vibeic_receipt.json', json.dumps({
+        'input': {'step': 'OpenROAD.STAPostPNR',
+                  'state_files': {state['def']: drv._sha(Path(state['def']))}},
+        'sha256': {'state_out.json': drv._sha(state_path)}}))
+
+
 @pytest.mark.parametrize('fault', [None, 'sta_changed', 'route_changed',
     'handoff_state_changed', 'source_changed', 'alias_changed', 'foreign_image'])
 def test_current_step23_follows_rcx_handoff_instead_of_retained_step32(tmp_path, monkeypatch, fault):
@@ -2684,6 +2693,7 @@ def test_current_step23_follows_rcx_handoff_instead_of_retained_step32(tmp_path,
     old_report = _step32_report(project, adopted)
     _file(project, 'reports/phase3/librelane_postroute_repair.json', json.dumps(old_report))
     old_state = Path(old_report['final']['sta_state'])
+    _retained_repair_sta_receipt(old_state)
     current_dir = project / 'phase3/librelane/23/01-openroad-stapostpnr'
     shutil.copytree(old_state.parent, current_dir)
     current_state = current_dir / 'state_out.json'
@@ -2725,7 +2735,9 @@ def test_current_step23_follows_rcx_handoff_instead_of_retained_step32(tmp_path,
         plan = capture_plan.build(project, final_state=selection)
         assert plan['scenes'][0]['spef'] == source
         assert plan['identity']['artifacts']['def']['sha256'] == drv._sha(routed)
-        assert plan['postroute_repair_ran'] is False
+        # This current route really is the retained adopted candidate.
+        assert plan['postroute_repair_ran'] is True
+        assert plan['identity']['repair_adoption']['adopted'] is True
         out = tmp_path / 'capture'
         out.mkdir()
         receipt = capture._spef_extraction_receipt(plan, plan['scenes'][0], out)
@@ -2826,3 +2838,85 @@ def test_current_sta_applied_ocv_reaches_the_real_capture_script(tmp_path, monke
             assert 'set_timing_derate -early 0.95' in script
             assert 'set_timing_derate -late 1.05' in script
     assert raw.read_bytes() == before
+
+
+@pytest.mark.parametrize('case', [
+    'no_history', 'unrelated_layout', 'adopted_layout', 'adopted_after_route',
+    'dropped_flag', 'changed_basis', 'changed_after_capture',
+    'state_changed', 'def_unbound', 'handoff_mismatch'])
+def test_current_step23_repair_scope_reaches_judge(tmp_path, monkeypatch, case):
+    """The real current producer and gate agree on which repair produced this DEF."""
+    import shutil
+    import drv_capture_plan as capture_plan
+    project, adopted = _librelane_final_sta(tmp_path, monkeypatch)
+    report = _step32_report(project, adopted)
+    old_state = Path(report['final']['sta_state'])
+    state = json.loads(old_state.read_text())
+    # Use the complete bundle's layout bytes so its existing stream derivation
+    # remains valid; the producer and consumer still read the actual native DEF.
+    Path(state['def']).write_text('ROUTED DEF\n')
+    _retained_repair_sta_receipt(old_state)
+    folder = project / 'phase3/librelane/23/01-openroad-stapostpnr'
+    shutil.copytree(old_state.parent, folder)
+    current_state = folder / 'state_out.json'
+    _current_sta_ocv_receipts(current_state)
+    (project / 'phase3/stage3/pnr/routed.def').write_bytes(Path(state['def']).read_bytes())
+    if case == 'unrelated_layout':
+        other = _file(project, 'previous/other.def', 'UNRELATED PREVIOUS ROUTE\n')
+        state['def'] = other['path']
+        old_state.write_text(json.dumps(state))
+        report['final']['sta_state_sha256'] = drv._sha(old_state)
+        _retained_repair_sta_receipt(old_state)
+    report_path = project / 'reports/phase3/librelane_postroute_repair.json'
+    if case != 'no_history':
+        if case in ('adopted_after_route', 'handoff_mismatch'):
+            report['site'] = 'after_route'
+        _file(project, str(report_path.relative_to(project)), json.dumps(report))
+    if case in ('adopted_after_route', 'handoff_mismatch'):
+        _file(project, 'reports/phase3/librelane_route_handoff.json', json.dumps({
+            'postroute_repair': {'report_sha256': drv._sha(report_path)
+                if case == 'adopted_after_route' else '0' * 64}}))
+    if case == 'state_changed':
+        old_state.write_text(old_state.read_text() + ' ')
+    elif case == 'def_unbound':
+        receipt_path = old_state.parent / 'vibeic_receipt.json'
+        receipt = json.loads(receipt_path.read_text())
+        receipt['input']['state_files'] = {}
+        receipt_path.write_text(json.dumps(receipt))
+    selection = {'capture_step': '23', 'final': {
+        'sta_state': str(current_state), 'sta_state_sha256': drv._sha(current_state)}}
+    refusals = {'state_changed': 'STA state differs from producer record',
+                'def_unbound': 'DEF differs from native STA input',
+                'handoff_mismatch': 'report is not bound to route handoff'}
+    if case in refusals:
+        with pytest.raises(ValueError, match=refusals[case]):
+            capture_plan.build(project, final_state=selection)
+        return
+    plan = capture_plan.build(project, final_state=selection)
+    is_adopted = case not in ('no_history', 'unrelated_layout')
+    assert plan['postroute_repair_ran'] is is_adopted
+    assert plan['identity']['repair_adoption']['adopted'] is is_adopted
+    assert ('postroute_repair' in plan['stage_receipts']) is is_adopted
+    bundle = _bundle(project)
+    bundle['identity']['artifacts']['def'] = plan['identity']['artifacts']['def']
+    bundle['identity']['repair_adoption'] = copy.deepcopy(plan['identity']['repair_adoption'])
+    bundle['postroute_repair_ran'] = plan['postroute_repair_ran']
+    if case == 'dropped_flag':
+        bundle['postroute_repair_ran'] = False
+    elif case == 'changed_basis':
+        bundle['identity']['repair_adoption']['adopted'] = False
+    elif case == 'changed_after_capture':
+        old_state.write_text(old_state.read_text() + ' ')
+    result = drv.judge(bundle, project=project)
+    adoption_gaps = [item for item in result['not_measured']
+                     if 'repair adoption' in item]
+    if case in ('dropped_flag', 'changed_basis', 'changed_after_capture'):
+        assert adoption_gaps, result
+    else:
+        assert not adoption_gaps, adoption_gaps
+    # The gate must still demand the measured repair stage when it produced
+    # this layout; a flag or source change cannot silently remove the stage.
+    required = 'postroute_repair: required applied constraints absent'
+    assert (required in result['failures']) is is_adopted
+    if is_adopted:
+        assert result['verdict'] == 'FAIL'
