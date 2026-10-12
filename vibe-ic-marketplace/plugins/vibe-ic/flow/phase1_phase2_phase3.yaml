@@ -5899,6 +5899,11 @@ steps:
       # authorship note claims it. A document the run already produced is
       # left byte-for-byte alone.
       - sta_report_check
+      # These existing blocking checkers write their current reports during
+      # the producer phase, before the independent compliance audit.
+      - hold_corner_coverage_check
+      - sta_assumed_clock_disclosure_check
+      - clock_target_record_agreement_check
     required_outputs:
       - "phase3/stage3/sta/post_route_timing.rpt"
       # Emitted by Step 23's SPEF-backed STA pass and mirrored here.  Step
@@ -5961,6 +5966,9 @@ steps:
       # sha256/clean_run_v1427_20260715, spm/v1.9.96_gf180mcuD).
       - "reports/phase3/sta/post_route_signoff_corner.json"
       - "reports/phase3/sta/architectural_residual.json"
+      - "reports/phase3/sta/hold_corner_coverage.json"
+      - "reports/phase3/sta/assumed_clock_disclosure.json"
+      - "reports/phase3/clock_target_record_agreement.json"
       # WITHDRAWN, NOT FORGOTTEN — the two multi-corner STANCE files
       # (`reports/phase3/multi_corner_spef_stance.json`,
       # `reports/phase3/mcorner_ocv_stance.json`) belong here on the merits:
