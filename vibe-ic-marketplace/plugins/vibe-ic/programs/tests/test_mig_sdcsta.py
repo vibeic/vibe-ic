@@ -2,7 +2,8 @@
 
 Every tool artefact here is a REAL one (programs/calibration/, produced by the
 released vibeic-eda 0.3.77 image); only the process edge that would have
-written it is substituted.
+written it is substituted. The native EQY controls also execute the emitted
+script on synthesized neutral examples when EQY is installed.
 """
 import importlib
 import json
@@ -286,6 +287,61 @@ def test_eqy_script_drops_bitwuzla_and_defines_initial_values():
     text = eqy.eqy_script("top", [Path("/r.v")], Path("/n.v"), "/lib/tt.lib")
     assert "bitwuzla" not in text and "setundef -init -zero" in text
     assert "read_liberty -ignore_miss_func /lib/tt.lib" in text and "-icells /n.v" in text
+
+
+@pytest.mark.skipif(shutil.which("eqy") is None, reason="native EQY is required")
+@pytest.mark.parametrize("case,expected", [
+    ("merged_alias", "PASS"),
+    ("corrupt_output", "FAIL"),
+    ("truncated_internal", "PASS"),
+])
+def test_eqy_native_keeps_cutpoint_definitions(tmp_path, case, expected):
+    """Exercise the actual script and partition reader, including a real CEX.
+
+    Two identical registers may merge into one register in the gate. With
+    an arbitrary cutpoint at b, the old a partition compares gold's initial
+    zero with unconstrained b=1 and incorrectly fails. Gold amendment keeps
+    that state relation without removing a, b or any output comparison.
+    """
+    if case == "truncated_internal":
+        gold = ("module neutral(input clk, rst, input [7:0] d, output reg [3:0] y); "
+                "wire [7:0] wide = d ^ 8'h96; "
+                "always @(posedge clk) y <= rst ? 0 : wide[3:0]; endmodule\n")
+        gate = ("module neutral(input clk, rst, input [7:0] d, output reg [3:0] y); "
+                "wire [7:0] wide = {4'b0, d[3:0] ^ 4'h6}; "
+                "always @(posedge clk) y <= rst ? 0 : wide[3:0]; endmodule\n")
+        outputs = {"y": [0, 1, 2, 3]}
+    else:
+        gold = ("module neutral(input clk, rst, d, output reg a, b); "
+                "always @(posedge clk) begin a <= rst ? 0 : d; "
+                "b <= rst ? 0 : d; end endmodule\n")
+        expr = "b" if case == "merged_alias" else "!b"
+        gate = ("module neutral(input clk, rst, d, output wire a, output reg b); "
+                "always @(posedge clk) b <= rst ? 0 : d; "
+                f"assign a = {expr}; endmodule\n")
+        outputs = {"a": [0], "b": [0]}
+    rtl = put(tmp_path / "rtl.v", gold)
+    netlist = put(tmp_path / "netlist.v", gate)
+    liberty = put(tmp_path / "neutral.lib", "library(neutral) {}\n")
+    script = put(tmp_path / "proof.eqy",
+                 eqy.eqy_script("neutral", [rtl], netlist, str(liberty)))
+    folder = tmp_path / "step"
+    result = subprocess.run(["eqy", "-j", "1", "-d", str(folder / "scratch"),
+                             str(script)], capture_output=True, text=True,
+                            timeout=60)
+    report = eqy.judge_eqy(folder, tmp_path / "report.json")
+    assert report["verdict"] == expected, result.stdout + result.stderr
+    assert result.returncode == (0 if expected == "PASS" else 2)
+    compared = {}
+    for partition in (folder / "scratch/partitions").glob("*.json"):
+        for name, bits in json.loads(partition.read_text())["partition"]["outbits"].items():
+            compared.setdefault(name, set()).update(bits)
+    assert all(set(bits) <= compared.get(name, set()) for name, bits in outputs.items())
+    if case == "merged_alias":
+        assert report["compared_points"] == 2
+    if case == "corrupt_output":
+        assert report["non_equivalent_points"] == ["neutral.a"]
+        assert (folder / "scratch/strategies/neutral.a/sat/trace.vcd").is_file()
 
 
 @pytest.mark.parametrize("a,b,expect", [
