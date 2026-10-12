@@ -23544,6 +23544,10 @@ def step_verilator_coverage(project: Path, top_name: str = "",
                           "taken, and none invented", [], reason_class=_V.ReasonClass.TOOL_ABSENT)
 
     out_path = _pl.report_path(project, _vcm.COVERAGE_MEASUREMENT_REL)
+    if any(Path(one_tb).suffix == ".py" for one_tb in tbs):
+        # A refused professional rerun must not leave this producer's older
+        # passing coverage report for the gate to consume as current evidence.
+        out_path.unlink(missing_ok=True)
     # Build under the sim tree, not under reports/: reports/ is the signed
     # artefact surface and a Verilator obj_dir is neither a report nor stable.
     build_dir = _pl.sim_dir(project) / "cov_build"
