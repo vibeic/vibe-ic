@@ -8,7 +8,7 @@ sys.path.insert(0, str(PROGRAMS))
 import serial_parallel_mul_synth as synth
 import spec_conformance_check as conformance
 import pytest
-from parameter_range_contract import minimums, has_elaboration_guard
+from parameter_range_contract import minimums, has_elaboration_guard, rtl_parameter_names
 
 
 def _project(tmp_path, name, *, minimum):
@@ -74,6 +74,16 @@ def test_json_ranges_are_parameter_scoped_and_preserve_physical_requirements():
            "parameter_ranges": [{"name": "DEPTH", "min": 4}]}
     assert minimums(json.dumps(doc)) == {"width": 5, "depth": 4}
     assert doc["integration"].startswith("hold >= 0; slack >= 0")
+
+
+def test_bare_json_range_uses_the_checked_modules_actual_parameters():
+    rtl = ('module core #(parameter WIDTH=5)(); endmodule '
+           'module child #(parameter hold=0)(); endmodule')
+    names = rtl_parameter_names(rtl, "core")
+    assert names == frozenset({"width"})
+    text = json.dumps({"description": "WIDTH >= 3; hold >= 0; slack >= 0"})
+    assert minimums(text, declared_parameters=names) == {"width": 3}
+    assert minimums(text, declared_parameters=rtl_parameter_names(rtl, "missing")) == {}
 
 
 @pytest.mark.parametrize("guard", [True, False])

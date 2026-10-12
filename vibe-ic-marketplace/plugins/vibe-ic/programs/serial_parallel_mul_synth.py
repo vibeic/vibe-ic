@@ -236,7 +236,9 @@ def extract_serial_parallel_mul_spec(
     bounds = {}
     for stem in ("L1_DATASHEET.json", "L2_FRS.json", "L3_DETAIL_SPEC.json",
                  "L9_INTEGRATION_SPEC.json"):
-        for name, low in minimums(json.dumps(_find_doc(gd, stem), ensure_ascii=False)).items():
+        for name, low in minimums(
+                json.dumps(_find_doc(gd, stem), ensure_ascii=False),
+                declared_parameters=(size_name,)).items():
             bounds[name] = max(low, bounds.get(name, low))
     size_min = bounds.get(size_name.lower())
     if size_min is not None and size_def < size_min:

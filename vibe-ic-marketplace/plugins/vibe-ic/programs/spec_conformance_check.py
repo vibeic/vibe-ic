@@ -2901,7 +2901,8 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     # CR-11: a legal parameter range is an elaboration contract.  The gate is
     # already advisory in the flow until a corpus sweep permits promotion.
-    from parameter_range_contract import minimums, has_elaboration_guard
+    from parameter_range_contract import minimums, has_elaboration_guard, rtl_parameter_names
+    declared_parameters = rtl_parameter_names(rtl_body, top or rtl_name)
     parameter_inputs = [spec_raw]
     if spec_path.parent.name == "generated_docs":
         sibling = spec_path.parent / "L3_DETAIL_SPEC.json"
@@ -2909,7 +2910,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             parameter_inputs.append(sibling.read_text(errors="replace"))
     legal_minimums = {}
     for source in parameter_inputs:
-        for name, low in minimums(source).items():
+        for name, low in minimums(source, declared_parameters=declared_parameters).items():
             legal_minimums[name] = max(low, legal_minimums.get(name, low))
     for name, low in sorted(legal_minimums.items()):
         if not has_elaboration_guard(rtl_body, name, low, top=top or rtl_name):
