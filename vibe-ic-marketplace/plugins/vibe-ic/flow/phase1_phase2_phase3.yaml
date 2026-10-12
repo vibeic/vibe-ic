@@ -2838,6 +2838,9 @@ steps:
     required_outputs:
       - "phase2/stage2/constraints/*.sdc"
       - "phase2/stage2/constraints/pvt_matrix.json"
+      - "reports/phase3/single_corner_stance.json"
+      # Every native route records the current corner set. Only the original
+      # direct single-corner branch earns SINGLE_CORNER_DISCLOSED.
       # NOT DECLARED, and the clause below says why in its own words:
       # `l21_to_upf_emit` is "measured rc=2 SKIP whenever L21 declares no
       # power_domains". `required_outputs` is UNCONDITIONAL — the same rule

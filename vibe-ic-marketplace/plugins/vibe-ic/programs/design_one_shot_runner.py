@@ -19886,6 +19886,7 @@ def _emit_step7_pvt_matrix(project: Path, pdk: object,
     path = _pl.constraints_dir(project) / "pvt_matrix.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     _aa.write_json(path, pvt)
+    _p3.emit_step7_corner_disclosure(project, pvt)
     return path, len(corners)
 
 

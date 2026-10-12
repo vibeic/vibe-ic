@@ -56221,6 +56221,42 @@ def stamp_pvt_corner_coverage(pvt: dict, corners: list) -> dict:
 
 
 
+
+def emit_step7_corner_disclosure(project: Path, pvt: dict, *,
+                                single_corner_disclosed: bool = False) -> Path:
+    """Record the current native corner set; this record grants no signoff.
+
+    The legacy filename is retained for the existing single-corner consumer.
+    Other routes record the census without earning that single-corner status.
+    """
+    corners = pvt.get("corners") or []
+    record = {
+        "program": "phase3_one_shot_runner",
+        "stance": ("SINGLE_CORNER_DISCLOSED" if single_corner_disclosed
+                   else "CORNER_SET_RECORDED"),
+        "corner_count": len(corners),
+        "corners": [corner.get("name") for corner in corners],
+        "primary_corner": pvt.get("primary_corner", "TT"),
+        "multi_corner_claimed": bool(pvt.get("multi_corner")),
+        "review_required": len(corners) < 2,
+        "rationale": (
+            "Fewer than 2 Liberty corners are available in the active PDK, "
+            "so multi-corner sign-off cannot be substantiated. This run is "
+            "an explicitly-disclosed single-corner stance (NOT a "
+            "multi-corner claim). Production tapeout sign-off requires "
+            "per-corner STA across ss/tt/ff; stage the missing corner "
+            "Liberty libs and re-run, or carry this stance as a reviewed "
+            "waiver. Disclosed per #442 / #694."
+            if single_corner_disclosed else
+            "Current resolved Liberty corner inventory. PVT sign-off "
+            "continues to be assessed by the existing timing gates."),
+    }
+    path = Path(project) / "reports/phase3/single_corner_stance.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(record, indent=2) + "\n")
+    return path
+
+
 def _classify_corner_from_name(name: str) -> str:
     """Return canonical corner label (SS/TT/FF/best/worst/typ) from filename.
     Heuristics:
@@ -62928,50 +62964,18 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
         stamp_pvt_corner_coverage(pvt, corners)
         pvt_path.write_text(json.dumps(pvt, indent=2) + "\n")
         written.append(str(pvt_path))
-        # --- ORGANIC #694: durable single-corner stance attestation -------
-        # When <2 Liberty corners are available (the common case on a
-        # single-corner open PDK such as sky130A, which ships nominal/tt by
-        # default), the runner emits NEITHER a multi-corner matrix NOR the
-        # explicit single-corner disclosure that pvt_matrix_check (#442)
-        # accepts — so a legitimate single-corner run is scored as a hard
-        # FAIL (corner_count=0). Symmetric with #692's durable attestation:
-        # write reports/phase3/single_corner_stance.json disclosing the
-        # available corner(s) + rationale, which pvt_matrix_check reads to
-        # DEFER (VACUOUS/PASS-with-review) instead of FAIL. §4.05 NO-LEAK:
-        # the stance is emitted ONLY when <2 corners are genuinely present
-        # and multi_corner is NOT claimed; a matrix that CLAIMS multi-corner
-        # with <2 corners still FAILs the gate's contradictory-claim path.
-        try:
-            if len(corners) < 2 and not pvt.get("multi_corner"):
-                stance = {
-                    "program": "phase3_one_shot_runner",
-                    "stance": "SINGLE_CORNER_DISCLOSED",
-                    "corner_count": len(corners),
-                    "corners": [c.get("name") for c in corners],
-                    "primary_corner": pvt.get("primary_corner", "TT"),
-                    "multi_corner_claimed": False,
-                    "rationale": (
-                        "Fewer than 2 Liberty corners are available in the "
-                        "active PDK, so multi-corner sign-off cannot be "
-                        "substantiated. This run is an explicitly-disclosed "
-                        "single-corner stance (NOT a multi-corner claim). "
-                        "Production tapeout sign-off requires per-corner STA "
-                        "across ss/tt/ff — stage the missing corner Liberty "
-                        "libs and re-run, or carry this stance as a reviewed "
-                        "waiver. Disclosed per #442 / #694."),
-                    "review_required": True,
-                }
-                rpt_phase3.mkdir(parents=True, exist_ok=True)
-                stance_path = rpt_phase3 / "single_corner_stance.json"
-                stance_path.write_text(
-                    json.dumps(stance, indent=2) + "\n")
-                written.append(str(stance_path))
-                notes.append(
-                    "#694: emitted single_corner_stance.json "
-                    f"(corner_count={len(corners)}) — pvt_matrix_check "
-                    "defers instead of false-FAIL")
-        except Exception as exc:  # best-effort, never block the step
-            notes.append(f"#694 single-corner stance emit failed: {exc}")
+    # #694: every native route records its current set. Only the existing
+    # direct, unclaimed single-corner branch earns the legacy disclosure.
+    # A LibreLane empty set must never borrow a previous single-corner stance.
+    single_corner_disclosed = (
+        modes["7"] != "librelane" and
+        len(corners) < 2 and not pvt.get("multi_corner"))
+    stance_path = emit_step7_corner_disclosure(
+        project, pvt, single_corner_disclosed=single_corner_disclosed)
+    written.append(str(stance_path))
+    if single_corner_disclosed:
+        notes.append("#694: emitted single_corner_stance.json "
+                     f"(corner_count={len(corners)})")
 
     # --- Step 8: pre-emit SDC syntax check report ----------------------
     # The gate runs sdc_syntax_check and writes to reports/phase2/sdc_check.json
