@@ -118,7 +118,7 @@ def parameter_expressions(header, body):
         result = ports.extract_balanced(header, marker.end() - 1)
         if result:
             groups.append(result[0])
-    groups += [m.group(1) for m in re.finditer(r'\blocalparam\b([^;]+);', body)]
+    groups += [m.group(1) for m in re.finditer(r'\b(?:localparam|parameter)\b([^;]+);', body)]
     for group in groups:
         for item in ports.split_top_level(group):
             match = re.match(r'(.*?)\b([A-Za-z_]\w*)\s*=\s*(.+)$', item.strip(), re.S)
@@ -168,8 +168,6 @@ def active_body(body, params, statement_end):
         opaque.append((match.start(), end))
     opaque += [(m.start(), m.end()) for m in re.finditer(
         r'\b(function|task)\b.*?\bend\1\b', mask, re.S)]
-    regions = [(m.start(), m.end()) for m in re.finditer(
-        r'\bgenerate\b.*?\bendgenerate\b', mask, re.S)]
 
     def blank(lo, hi):
         for i in range(lo, hi):
@@ -184,12 +182,8 @@ def active_body(body, params, statement_end):
             tail += 1
         condition = ports.extract_balanced(mask, tail)
         if condition is None:
-            continue
+            raise ValueError('unresolved generate condition boundary')
         after = condition[1] + 1
-        in_generate = any(lo <= off < hi for lo, hi in regions)
-        named = re.match(r'\s*begin\s*:', mask[after:])
-        if not (in_generate or named):
-            continue
         if match.group(1) != 'if':
             raise ValueError('unsupported generate selection: ' + match.group(1))
         value = constant(body[tail + 1:condition[1]], params)
@@ -205,11 +199,14 @@ def active_body(body, params, statement_end):
             if else_end <= else_start:
                 raise ValueError('unresolved generate else arm')
             if value:
+                blank(off, after)
                 blank(then_end, else_end)
             else:
                 blank(off, else_start)
         elif not value:
             blank(off, then_end)
+        else:
+            blank(off, after)
     return ''.join(chars)
 
 
@@ -323,6 +320,12 @@ class DriverContext:
         problems = []
         instances = ports.parse_instantiations(ports.lexical_mask(body, attributes=True),
                                                region.module.file, region.body_line)
+        for statement, line in ports._collect_statements(body):
+            array = re.match(r'\s*\w+\s+(?:#\s*\(.*\)\s*)?'
+                             r'(\w+)\s*(?:\[[^\]]+\]\s*)+\(', statement, re.S)
+            if array:
+                problems.append((region.body_line + line, array.group(1),
+                                 'unsupported instance array'))
         for inst in instances:
             def problem(reason):
                 problems.append((inst.line, inst.instance_name, reason))
@@ -387,7 +390,10 @@ class DriverContext:
                     continue
                 formal_width = self.range_width(formal.width_expr, child_params)
                 actual_width = self.actual_width(actual, region, params)
-                if formal_width is not None and actual_width is not None and formal_width != actual_width:
+                if formal_width is None or actual_width is None:
+                    problem('unresolved output width: ' + formal_name)
+                    continue
+                if formal_width != actual_width:
                     problem(f'output width mismatch: {formal_name} {formal_width} != {actual_width}')
                     continue
                 if formal.direction == 'output' and formal_name not in child_driven:

@@ -382,17 +382,23 @@ endmodule
     assert (result.returncode, findings) == (0, []), result.stdout + result.stderr
 
 
-@pytest.mark.parametrize("connection", [
-    "leaf u_leaf(.data_i(routed), .data_o(result));",
-    "leaf u_leaf(routed, result);",
-    "absent u_leaf(.data_i(source), .data_o(routed));",
-    "leaf u_leaf(.data_i(source), .wrong(routed));",
-    "leaf u_leaf(.data_i(source), .data_o(routed), .wrong(result));",
-    "leaf u_leaf(.data_o(routed), .data_o(result));",
-    "leaf u_leaf(source, routed, result);",
-    "leaf u_leaf(.data_i(source), .data_o(source & routed));",
+@pytest.mark.parametrize("connection,expected", [
+    ("leaf u_leaf(.data_i(routed), .data_o(result));", [("undriven-wire", "routed")]),
+    ("leaf u_leaf(routed, result);", [("undriven-wire", "routed")]),
+    ("absent u_leaf(.data_i(source), .data_o(routed));",
+     [("undriven-wire", "routed"), ("hierarchy-port-resolution", "u_leaf")]),
+    ("leaf u_leaf(.data_i(source), .wrong(routed));",
+     [("undriven-wire", "routed"), ("hierarchy-port-resolution", "u_leaf")]),
+    ("leaf u_leaf(.data_i(source), .data_o(routed), .wrong(result));",
+     [("hierarchy-port-resolution", "u_leaf")]),
+    ("leaf u_leaf(.data_o(routed), .data_o(result));",
+     [("undriven-wire", "routed"), ("hierarchy-port-resolution", "u_leaf")]),
+    ("leaf u_leaf(source, routed, result);",
+     [("undriven-wire", "routed"), ("hierarchy-port-resolution", "u_leaf")]),
+    ("leaf u_leaf(.data_i(source), .data_o(source & routed));",
+     [("undriven-wire", "routed"), ("hierarchy-port-resolution", "u_leaf")]),
 ])
-def test_native_invalid_bindings_and_input_actuals_still_block(tmp_path, connection):
+def test_native_invalid_bindings_and_input_actuals_still_block(tmp_path, connection, expected):
     source = """
 module top(input source, output result);
     wire routed;
@@ -402,8 +408,12 @@ endmodule
 """ % connection
     result, findings = _native_hierarchy(tmp_path, [source, LEAF])
     assert result.returncode == 1, result.stdout + result.stderr
-    assert any(f["rule"] in {"undriven-wire", "hierarchy-port-resolution"}
-               for f in findings), findings
+    assert [(f["rule"], f["symbol"]) for f in findings] == expected
+    assert all(f["severity"] == "ERROR" and f["block_eligible"] for f in findings)
+    import rtl_review_aggregate as A
+    consumed = A._load_hygiene_findings(tmp_path / "findings.json", result.returncode, result.stderr)
+    assert [(f.rule_id, f.severity, f.category) for f in consumed] == [
+        (rule, "ERROR", "correctness_smells") for rule, symbol in expected]
 
 
 def test_native_width_mismatch_does_not_credit_an_output(tmp_path):
@@ -478,9 +488,11 @@ module top #(parameter ENABLE = unknown_fn(1)) (input source, output result);
     end endgenerate
 endmodule
 """
-    result, _ = _native_hierarchy(tmp_path, [source])
-    assert result.returncode != 0, result.stdout + result.stderr
-    assert "unresolved generate condition" in result.stderr
+    result, findings = _native_hierarchy(tmp_path, [source])
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert [(f["rule"], f["symbol"], f["severity"]) for f in findings] == [
+        ("hierarchy-port-resolution", "top", "ERROR")]
+    assert "unresolved generate condition" in findings[0]["message"]
 
 
 def test_native_same_named_sibling_wire_still_has_no_driver(tmp_path):
@@ -578,3 +590,57 @@ endmodule
     assert result.returncode == (0 if complete else 1), result.stdout + result.stderr
     assert [f["symbol"] for f in findings if f["rule"] == "undriven-wire"] == (
         [] if complete else ["routed"])
+
+
+@pytest.mark.parametrize("enabled", [0, 1])
+@pytest.mark.parametrize("statement", [
+    "assign routed = source;",
+    "leaf u_leaf(.data_i(source), .data_o(routed));",
+])
+def test_native_implicit_generate_tracks_selected_driver(tmp_path, enabled, statement):
+    source = f"""
+module top #(parameter ENABLE = {enabled})(input source, output result);
+    wire routed;
+    if (ENABLE) {statement}
+    assign result = routed;
+endmodule
+"""
+    result, findings = _native_hierarchy(tmp_path, [source, LEAF])
+    assert result.returncode == (0 if enabled else 1), result.stdout + result.stderr
+    assert [(f["rule"], f["symbol"], f["severity"]) for f in findings] == (
+        [] if enabled else [("undriven-wire", "routed", "ERROR")])
+
+
+def test_native_unknown_output_width_is_rejected(tmp_path):
+    source = """
+module top(input source, output [1:0] result);
+    wire [1:0] routed;
+    leaf u_leaf(.data_i(source), .data_o(routed));
+    assign result = routed;
+endmodule
+"""
+    child = """
+module leaf(input data_i, output [opaque(1):0] data_o);
+    assign data_o = {data_i, data_i};
+endmodule
+"""
+    result, findings = _native_hierarchy(tmp_path, [source, child])
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert [(f["rule"], f["symbol"], f["severity"]) for f in findings] == [
+        ("undriven-wire", "routed", "ERROR"),
+        ("hierarchy-port-resolution", "u_leaf", "ERROR")]
+    assert "unresolved output width: data_o" in findings[1]["message"]
+
+
+def test_native_unsupported_instance_array_discovery_is_rejected(tmp_path):
+    source = """
+module top(input source, output result);
+    leaf u_leaf[1:0](.data_i(source), .data_o());
+    assign result = source;
+endmodule
+"""
+    result, findings = _native_hierarchy(tmp_path, [source, LEAF])
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert [(f["rule"], f["symbol"], f["severity"]) for f in findings] == [
+        ("hierarchy-port-resolution", "u_leaf", "ERROR")]
+    assert "unsupported instance array" in findings[0]["message"]

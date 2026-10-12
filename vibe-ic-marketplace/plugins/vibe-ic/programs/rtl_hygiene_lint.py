@@ -6632,7 +6632,12 @@ def lint_file(path: Path, hierarchy=None) -> List[Finding]:
         # The CLI's exact file selection is one hierarchy. Preserve module
         # scope: a sibling's same-named driver never credits a local wire.
         for region in hierarchy.by_file[str(path)]:
-            body, driven, connections, problems = hierarchy.drivers(region.module.name)
+            try:
+                body, driven, connections, problems = hierarchy.drivers(region.module.name)
+            except ValueError as exc:
+                results.append(Finding(str(path), region.module.line, 'ERROR',
+                                       'hierarchy-port-resolution', region.module.name, str(exc)))
+                continue
             local_source = region.header + body + '\nendmodule'
             local = rule_undriven_and_unread(local_source, str(path), connections, driven)
             for finding in local:
