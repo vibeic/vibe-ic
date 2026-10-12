@@ -1314,6 +1314,12 @@ def main():
         print(f"ERROR: project_dir {proj} not found", file=sys.stderr)
         return 2
 
+    def report_json(payload):
+        # Every early-return report describes this project, including missing
+        # inputs. Identification does not alter the functional verdict.
+        return json.dumps({**payload, "design_identity": {"design": proj.resolve().name}},
+                          indent=2)
+
     # VACUOUS_PASS (rc=2) when the IC has NO command protocol / opcodes. This
     # gate enforces an OPCODE-DRIVEN bit-level full-stack TB (>= min_opcodes
     # distinct CMD opcodes, byte[6]=0xF2-class response checks) — meaningful
@@ -1380,8 +1386,8 @@ def main():
                             Path(args.json).parent.mkdir(parents=True,
                                                          exist_ok=True)
                             Path(args.json).write_text(
-                                json.dumps(_res, indent=2))
-                        print(json.dumps(_res, indent=2))
+                                report_json(_res))
+                        print(report_json(_res))
                         return 0 if _res["pass"] else 1
                 if _regmap and (_scored or 0) == 0:
                     _ic_class = _resolve_ic_class(proj)
@@ -1421,8 +1427,8 @@ def main():
                             Path(args.json).parent.mkdir(parents=True,
                                                          exist_ok=True)
                             Path(args.json).write_text(
-                                json.dumps(_res, indent=2))
-                        print(json.dumps(_res, indent=2))
+                                report_json(_res))
+                        print(report_json(_res))
                         return 0
                     # (B) The functional ORACLE is legitimately DEFERRED for
                     # this IC (crypto/compute accelerator: has_command_protocol=
@@ -1477,11 +1483,11 @@ def main():
                             Path(args.json).parent.mkdir(parents=True,
                                                          exist_ok=True)
                             Path(args.json).write_text(
-                                json.dumps(_res, indent=2))
+                                report_json(_res))
                         # JSON first, then the sentinel line LAST at line-start
                         # (flow_compliance requires rc==3 AND a line starting
                         # with PASS_WITH_WAIVERS in stdout).
-                        print(json.dumps(_res, indent=2))
+                        print(report_json(_res))
                         print(_msg)
                         return 3
                     _msg = (
@@ -1515,8 +1521,8 @@ def main():
                     if args.json:
                         Path(args.json).parent.mkdir(parents=True,
                                                      exist_ok=True)
-                        Path(args.json).write_text(json.dumps(_res, indent=2))
-                    print(json.dumps(_res, indent=2))
+                        Path(args.json).write_text(report_json(_res))
+                    print(report_json(_res))
                     return 1
                 # FULLSTACKTB (2026-09-29) — NO OPCODES IS NOT NO FUNCTION.
                 # This line used to be a VACUOUS_PASS (`DESIGN_DECLARED_NA`,
@@ -1543,8 +1549,8 @@ def main():
                         f"{_exc!r}")
                 if args.json:
                     Path(args.json).parent.mkdir(parents=True, exist_ok=True)
-                    Path(args.json).write_text(json.dumps(_res, indent=2))
-                print(json.dumps(_res, indent=2))
+                    Path(args.json).write_text(report_json(_res))
+                print(report_json(_res))
                 if _sentinel:
                     # LAST, at column 0: `flow_compliance_check` raises the
                     # INCOMPLETE tier from this token, so a refused population
@@ -1561,8 +1567,8 @@ def main():
                    args.min_distinct, args.min_opcodes, args.run)
     if args.json:
         Path(args.json).parent.mkdir(parents=True, exist_ok=True)
-        Path(args.json).write_text(json.dumps(result, indent=2))
-    print(json.dumps(result, indent=2))
+        Path(args.json).write_text(report_json(result))
+    print(report_json(result))
     return 0 if result["pass"] else 1
 
 

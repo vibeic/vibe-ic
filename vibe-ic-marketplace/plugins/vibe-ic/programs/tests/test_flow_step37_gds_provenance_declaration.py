@@ -379,14 +379,14 @@ def test_producer_is_wired_into_step_canonicalize_artefacts():
     """Every behavioural test above calls the helper directly, so all of them
     pass even if the runner never calls it. The wiring is what ships."""
     import ast
+    from _runner_ast_fixture import reachable_calls
     src = (_PROGRAMS / "phase3_one_shot_runner.py").read_text()
     fn = next((n for n in ast.walk(ast.parse(src))
                if isinstance(n, ast.FunctionDef)
                and n.name == "step_canonicalize_artefacts"), None)
     assert fn is not None, "premise: the canonicalisation step was renamed"
-    assert any(isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
-               and n.func.id == "_step37_declare_streamout_gds_provenance"
-               for n in ast.walk(fn)), (
+    assert "_step37_declare_streamout_gds_provenance" in reachable_calls(
+        ast.parse(src), "step_canonicalize_artefacts"), (
         "step_canonicalize_artefacts must declare Step 37's GDS provenance on "
         "every path through the alias block, not only when it just copied")
 

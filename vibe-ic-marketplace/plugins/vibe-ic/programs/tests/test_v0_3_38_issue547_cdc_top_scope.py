@@ -60,6 +60,18 @@ def _stage_rtl(tmp_path: Path) -> Path:
     return rtl
 
 
+def _select_root_port_scan(project: Path) -> None:
+    """These legacy tests exercise the explicit RTL root-port scanner.
+
+    The production default reads Yosys flop CLK pins, whose internal gated
+    net names need not equal external root ports. Its behavior is exercised
+    separately below and by the netlist front-end regression suite.
+    """
+    switch = project / "phase3/librelane_switch.json"
+    switch.parent.mkdir(parents=True, exist_ok=True)
+    switch.write_text(json.dumps({"steps": {"3": "direct"}}))
+
+
 def _cdc_verdict(project: Path) -> dict:
     return json.loads(
         (project / "reports" / "phase2" / "cdc" / "crossing.json").read_text())
@@ -69,6 +81,7 @@ def test_hierarchical_single_clock_with_rcvar_wrapper_passes(tmp_path):
     """The reopen repro: chip_top.clk_sys + irq_unit.clk_i + wrapper clk
     must be ONE domain (PASS), not root_clocks=['clk','clk_i','clk_sys']."""
     _stage_rtl(tmp_path)
+    _select_root_port_scan(tmp_path)
     P2.step_emit_phase2_manifests(tmp_path, [], top_name="chip_top")
     d = _cdc_verdict(tmp_path)
     assert d["verdict"] == "PASS", d
@@ -80,6 +93,7 @@ def test_top_resolved_from_instantiation_graph_without_top_name(tmp_path):
     """Without --top-name, the single graph root (wrapper chip_top — the
     *__rcvar_inner copy is excluded) still scopes the scan correctly."""
     _stage_rtl(tmp_path)
+    _select_root_port_scan(tmp_path)
     P2.step_emit_phase2_manifests(tmp_path, [])
     d = _cdc_verdict(tmp_path)
     assert d["verdict"] == "PASS", d
@@ -89,6 +103,7 @@ def test_top_resolved_from_instantiation_graph_without_top_name(tmp_path):
 
 def test_top_resolved_from_l9_top_module(tmp_path):
     _stage_rtl(tmp_path)
+    _select_root_port_scan(tmp_path)
     gd = tmp_path / "phase1" / "generated_docs"
     gd.mkdir(parents=True)
     (gd / "L9_INTEGRATION_SPEC.json").write_text(json.dumps({
@@ -132,6 +147,7 @@ def test_cdc_crossing_json_end_state_via_subprocess(tmp_path):
         _IRQ_UNIT)
     (tmp_path / "phase2" / "stage1" / "rtl" / "prim_clock_gating.v").write_text(
         _PRIM_CG)
+    _select_root_port_scan(tmp_path)
     P2.step_emit_phase2_manifests(tmp_path, [], top_name="chip_top")
     result = subprocess.run(
         ["python3", "-c",
@@ -142,6 +158,19 @@ def test_cdc_crossing_json_end_state_via_subprocess(tmp_path):
         capture_output=True, text=True,
     )
     assert result.returncode == 0, result.stderr
+
+
+def test_default_hierarchical_clock_uses_actual_flop_clk_pins(tmp_path):
+    """No mode switch: the native netlist remains the Default authority."""
+    _stage_rtl(tmp_path)
+    P2.step_emit_phase2_manifests(tmp_path, [], top_name="chip_top")
+    d = _cdc_verdict(tmp_path)
+    native = json.loads((tmp_path / "reports/phase2/cdc/netlist_front_end.json").read_text())
+    assert d["front_end"] == "netlist"
+    assert d["verdict"] == native["verdict"] == "PASS"
+    assert d["clocks_found"] == native["clock_domains"] == ["u_inner.clk_gated"]
+    assert native["regex_clock_domains"] == ["clk"]
+    assert native["flops"] == 1 and native["top"] == "chip_top"
 
 
 def test_single_flat_module_still_passes_regression(tmp_path):

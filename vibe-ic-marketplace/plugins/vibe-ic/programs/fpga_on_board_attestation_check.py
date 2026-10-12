@@ -389,10 +389,13 @@ def _step_waived(project: Path, *step_labels: str) -> dict | None:
     return None
 
 
-def _write_report(json_path: str | None, payload: dict) -> None:
+def _write_report(json_path: str | None, payload: dict, project: Path) -> None:
     if not json_path:
         return
     Path(json_path).parent.mkdir(parents=True, exist_ok=True)
+    # This is a per-project observation, including a missing-board result.
+    # Keep its findings/verdict intact while identifying the project inspected.
+    payload = {**payload, "design_identity": {"design": project.name}}
     Path(json_path).write_text(json.dumps(payload, indent=2,
                                           ensure_ascii=False) + "\n")
 
@@ -458,7 +461,7 @@ def main(argv: List[str] | None = None) -> int:
                         "manifest_waiver_ticket": manifest.get("waiver_ticket"),
                         "waiver": waiver,
                         "findings": [],
-                    })
+                    }, project)
                     return 0
                 print(
                     "fpga_on_board_attestation_check: on_board_pass.json "
@@ -493,7 +496,7 @@ def main(argv: List[str] | None = None) -> int:
         "overall": overall,
         **extra,
         "findings": [asdict(f) for f in findings],
-    })
+    }, project)
 
     return 0 if not errors else 1
 

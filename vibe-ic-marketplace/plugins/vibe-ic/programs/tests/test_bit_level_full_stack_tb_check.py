@@ -74,6 +74,26 @@ def _make_project(tmp_path, top="aid_top", tb_text=GOOD_TB,
 # ---------------------------------------------------------------------------
 # Happy path
 # ---------------------------------------------------------------------------
+@pytest.mark.parametrize('project_argument', ['absolute', 'cwd'])
+def test_missing_rtl_cli_report_identifies_project_without_changing_failure(
+        tmp_path, monkeypatch, project_argument):
+    reports = []
+    for name in ('local_alpha', 'local_beta'):
+        project = tmp_path / name
+        project.mkdir()
+        output = project / 'bit_level.json'
+        monkeypatch.chdir(project)
+        argument = '.' if project_argument == 'cwd' else str(project)
+        monkeypatch.setattr(sys, 'argv', ['bit_level_full_stack_tb_check.py',
+                                        argument, '--json', str(output)])
+        assert gate.main() == 1
+        report = json.loads(output.read_text())
+        assert report['pass'] is False and report['rule'] == 'RTL_DIR_EXISTS'
+        assert report['design_identity'] == {'design': name}
+        reports.append(report)
+    assert reports[0] != reports[1]
+
+
 def test_full_stack_tb_pass(tmp_path):
     proj, rtl, sim = _make_project(tmp_path)
     result = gate.check(proj, rtl, sim, top=None,

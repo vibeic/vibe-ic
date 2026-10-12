@@ -479,9 +479,10 @@ def test_fixed_direction_rerun_stale_refresh_is_restamped(
 
 def test_the_restamp_is_actually_wired_into_step_canonicalize_artefacts():
     """Every behavioural test above drives the helper DIRECTLY, so all of them
-    pass even if the runner never calls it — the wiring is what ships. Walk the
-    runner's AST and require the call inside `step_canonicalize_artefacts`."""
+    pass even if the runner never calls it — the wiring is what ships. Follow
+    live calls from `step_canonicalize_artefacts`, including its alias helper."""
     import ast
+    from _runner_ast_fixture import reachable_calls
     src = (_PROGRAMS / "phase3_one_shot_runner.py").read_text()
     fn = next((n for n in ast.walk(ast.parse(src))
                if isinstance(n, ast.FunctionDef)
@@ -489,11 +490,36 @@ def test_the_restamp_is_actually_wired_into_step_canonicalize_artefacts():
     assert fn is not None, (
         "premise: the canonicalisation step was renamed — this test scans "
         "nothing")
-    called = any(
-        isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
-        and n.func.id == "_step37_restamp_canon_gds_provenance"
-        for n in ast.walk(fn))
+    called = "_step37_restamp_canon_gds_provenance" in reachable_calls(
+        ast.parse(src), "step_canonicalize_artefacts")
     assert called, (
         "Step 37 writes phase3/stage4/gds/<top>.gds AFTER both provenance "
         "writers have run; without the re-stamp call the shipped deliverable "
         "carries the previous design's declared hash")
+
+
+def test_live_helper_wiring_rejects_dead_or_disconnected_restamp():
+    import ast
+    from _runner_ast_fixture import reachable_calls
+    live = "def entry():\n    alias()\ndef alias():\n    restamp()\n"
+    assert 'restamp' in reachable_calls(ast.parse(live), 'entry')
+    for broken in (
+        "def entry():\n    pass\ndef alias():\n    restamp()\n",
+        "def entry():\n    alias()\ndef alias():\n    if False:\n        restamp()\n",
+        "def entry():\n    alias()\ndef alias():\n    return\n    restamp()\n",
+        "def entry():\n    def unused():\n        restamp()\n",
+    ):
+        assert 'restamp' not in reachable_calls(ast.parse(broken), 'entry')
+
+
+def test_production_alias_publisher_refreshes_real_bytes_and_provenance(tmp_path):
+    project, primary, canon = _rerun_project(tmp_path)
+    original_ledger = (project / 'provenance.jsonl').read_text().splitlines()
+    written, notes = [], []
+    _runner._publish_canonical_gds_alias(project, 'chip_top', written, notes)
+    assert canon.read_bytes() == primary.read_bytes()
+    assert str(canon) in written and notes
+    ledger = (project / 'provenance.jsonl').read_text().splitlines()
+    assert ledger[:len(original_ledger)] == original_ledger
+    verdict, findings = audit(project)
+    assert verdict == 'PASS', [(f.rule, f.detail) for f in findings]

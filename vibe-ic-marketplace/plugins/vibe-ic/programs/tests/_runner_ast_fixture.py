@@ -59,3 +59,22 @@ def called_main(tree: ast.Module) -> ast.FunctionDef:
                  and not node.value.args and not node.value.keywords]
     assert delegates, "main() does not return the called _main() implementation"
     return functions["_main"]
+
+
+def reachable_calls(tree: ast.Module, entry: str) -> set[str]:
+    """Calls reachable through live local helpers, excluding dead definitions."""
+    functions = {node.name: node for node in tree.body
+                 if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))}
+    assert entry in functions, f"runner entry {entry!r} is missing"
+    pending, visited, calls = [entry], set(), set()
+    while pending:
+        name = pending.pop()
+        if name in visited:
+            continue
+        visited.add(name)
+        for node in live_nodes(functions[name]):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+                calls.add(node.func.id)
+                if node.func.id in functions:
+                    pending.append(node.func.id)
+    return calls

@@ -298,7 +298,13 @@ def test_484_without_fix_shape_would_collide(tmp_path):
     # designs, and must be non-empty.
     def _stamped(proj):
         out = set()
+        # Compare the current artifacts the identity gate consumes. Retained
+        # attempts have deliberately different timestamped paths per project;
+        # they are evidence history, not additional current emitter outputs.
         for fp in proj.rglob("*.json"):
+            rel = fp.relative_to(proj)
+            if rel.parts[0] == "steps" or rel.parts[:2] == ("reports", "step_versions"):
+                continue
             try:
                 d = json.loads(fp.read_text())
             except ValueError:

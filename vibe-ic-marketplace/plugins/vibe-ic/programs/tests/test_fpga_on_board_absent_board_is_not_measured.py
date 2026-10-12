@@ -70,3 +70,16 @@ def test_partial_physical_evidence_is_a_fail_not_an_absence(tmp_path):
         "reports/phase2/fpga/quartus_pgm.log"]
     rc, rep = _run(tmp_path)
     assert rep["overall"] == "FAIL" and rc == 1, rep
+
+
+def test_absent_board_reports_identify_each_inspected_project(tmp_path):
+    reports = []
+    for name in ('local_alpha', 'local_beta'):
+        project = tmp_path / name
+        project.mkdir()
+        rc, report = _run(project)
+        assert rc == 1 and report['overall'] == 'NOT_MEASURED'
+        assert report['design_identity'] == {'design': name}
+        reports.append(report)
+    assert reports[0] != reports[1]
+    assert reports[0]['findings'] == reports[1]['findings']

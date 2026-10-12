@@ -710,16 +710,25 @@ def step_run_programs(step_id) -> Tuple[str, ...]:
     source.
 
     So the population is defined by BEHAVIOUR: a gate program, or a program
-    this step declares (in `programs:` or as a `program_outputs:` writer) that
-    a runner actually invokes. The second half deliberately requires the
+    this step declares in `programs:` or with a `producer_command` that a
+    runner actually invokes. A program_outputs source-owner reference alone
+    is not a command: a shared runner owns outputs of many different rows,
+    and an invocation somewhere in that runner cannot attribute every other
+    row's reads to this row. The second half deliberately requires the
     RUNNER evidence, so the four programs steps 20 and 31 advertise and
     nothing runs — dimension 1's newly-pinned orphans — do not creep in and
     inflate this floor.
     """
     runs = set(D1.runner_invoked())
     out: List[str] = list(F.gate_programs(step_id))
-    for prog in (tuple(F.declared_programs(step_id))
-                 + tuple(F.program_output_programs(step_id))):
+    commanded_writers = []
+    for spec in (F.step_by_id(step_id) or {}).get('program_outputs', ()):
+        if not isinstance(spec, dict) or not spec.get('producer_command'):
+            continue
+        parts = shlex.split(spec['producer_command'])
+        if parts and parts[0] == spec.get('program'):
+            commanded_writers.append(parts[0])
+    for prog in tuple(F.declared_programs(step_id)) + tuple(commanded_writers):
         if prog in out or prog not in runs:
             continue
         if F.program_path(prog) is None:
@@ -1398,6 +1407,36 @@ def test_d5_blocks_on_covers_the_real_dependency_graph(cell):
         f"step {sid}: {len(problems)} dimension-5 defect(s)\n  - "
         + "\n  - ".join(problems)
     )
+
+
+def test_source_owner_metadata_does_not_invoke_every_row_of_a_shared_runner():
+    """A marker writer is not the entire physical flow's read set."""
+    for sid in ('DT1', '15', 'DT2', 'DT3', '31'):
+        assert 'phase3_one_shot_runner' in F.program_output_programs(sid)
+        assert 'phase3_one_shot_runner' not in step_run_programs(sid)
+    for sid in ('17', '19', '20'):
+        assert 'execution_backend_producers' in F.program_output_programs(sid)
+        assert 'execution_backend_producers' not in step_run_programs(sid)
+    # Single-purpose native/audit commands still contribute their real reads.
+    assert 'dfm_screen_check' in step_run_programs('35')
+    assert 'routed.def' in program_string_constants('dfm_screen_check')
+    assert any(p == '21' for p, _art, _ev in derived_dependencies('35'))
+
+
+def test_a_writer_with_an_actual_producer_command_is_still_analyzed(monkeypatch):
+    """A live command, even if only declared in program_outputs, cannot vanish."""
+    original = F.step_by_id
+    row = copy.deepcopy(original('17'))
+    writer = next(s for s in row['program_outputs']
+                  if s['program'] == 'execution_backend_producers')
+    writer['producer_command'] = 'execution_backend_producers . --step-id 17'
+    monkeypatch.setattr(F, 'step_by_id', lambda sid: row if str(sid) == '17' else original(sid))
+    step_run_programs.cache_clear()
+    try:
+        assert 'execution_backend_producers' in step_run_programs('17')
+        assert any('filled.def' in art for _p, art, _ev in derived_dependencies('17'))
+    finally:
+        step_run_programs.cache_clear()
 
 
 # ══════════════════════════════════════════════════════════════════════
