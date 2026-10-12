@@ -22864,6 +22864,7 @@ def step_dft_lec_chain(project: Path, top_name: str, container: str,
     (11/12) runs only on a full-chip flow; a --skip-phase3 lightweight run still
     gets the fast, always-valuable LEC (13)."""
     chain_started_at = time.time()
+    default_mode = _execution.request()['mode'] == 'default'
     results: List[StepResult] = []
     synth_dir = _pl.synth_dir(project)
     dft_dir = _pl.dft_dir(project)
@@ -22926,6 +22927,8 @@ def step_dft_lec_chain(project: Path, top_name: str, container: str,
                                dft_rst, dft_rst_active_low, full_chip)
     results.extend(_dft.rows)
     pdk = _dft.pdk
+    if default_mode and any(row.status in ('FAIL', 'NOT_MEASURED') for row in _dft.rows):
+        return results
     rejection = _default_dft_rejection(project, chain_started_at)
     if rejection is not None:
         return results + [rejection]
@@ -22935,12 +22938,23 @@ def step_dft_lec_chain(project: Path, top_name: str, container: str,
         project, 'DT1', _run_transition_atpg, project, clk, pdk,
         canonical_acceptance=True)
     pdk = _tdf_result['pdk']
+    if (default_mode and _tdf_result['rc'] != 0 and
+            (_tdf_result['rc'] == 1 or any(row.status in ('PASS', 'PASS_WITH_WAIVERS')
+                                          for row in _dft.rows))):
+        status = 'FAIL' if _tdf_result['rc'] == 1 else 'NOT_MEASURED'
+        return results + [StepResult(
+            'transition_atpg', status, 0.0,
+            f"current transition ATPG producer exited {_tdf_result['rc']}; successor not dispatched",
+            extras={'step_id': 'DT1', 'producer_rc': _tdf_result['rc']},
+            reason_class=_V.ReasonClass.EXECUTION_ERROR if status == 'NOT_MEASURED' else '')]
     rejection = _default_dft_rejection(project, chain_started_at)
     if rejection is not None:
         return results + [rejection]
 
     _post_dft = _step_post_dft_optimization(project, container)
     results.extend(_post_dft.rows)
+    if default_mode and any(row.status in ('FAIL', 'NOT_MEASURED') for row in _post_dft.rows):
+        return results
     rejection = _default_dft_rejection(project, chain_started_at)
     if rejection is not None:
         return results + [rejection]
