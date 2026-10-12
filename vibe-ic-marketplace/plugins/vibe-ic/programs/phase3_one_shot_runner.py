@@ -78683,7 +78683,11 @@ def _complete_physical_verification(project: Path, plan):
                       '; '.join(f'{r.name}: {r.status}: {r.detail}'
                                 for r in rows if r is not None),
                       output_files=list(dict.fromkeys(f for r in rows if r is not None
-                                                       for f in r.output_files)))
+                                                       for f in r.output_files)),
+                      reason_class=(_V.ReasonClass.INPUT_ABSENT
+                                    if status == 'NOT_MEASURED' and any(r is None for r in rows)
+                                    else _V.ReasonClass.UPSTREAM_REFUSED
+                                    if status == 'NOT_MEASURED' else ''))
 
 
 @_spf.retained_step('37', canonical_acceptance=True)
@@ -78696,6 +78700,12 @@ def _publish_final_layout_receipts(project: Path, receipt, plan):
     if execution_policy.request()['mode'] != 'default':
         return 0  # Preserve the existing Ultra writer and audit order.
     _complete_physical_verification(project, plan)
+    gds = next((r for r in reversed(plan) if r.name == 'gds'), None)
+    native = getattr(gds, 'status', 'NOT_MEASURED')
+    if native == 'FAIL':
+        return 1
+    if native != 'PASS' or receipt.get('release_verdict') != 'ELIGIBLE_FOR_AUDIT':
+        return 2  # No release audit of missing, stopped, or diagnostic output.
     # This is Step37's existing declared Stage3 audit output. Produce it here,
     # before the complete consumer, so an absent file cannot prevent its gate
     # from running or force the auditor to certify a file it alone produced.
@@ -78705,14 +78715,9 @@ def _publish_final_layout_receipts(project: Path, receipt, plan):
     cp = _pr.run([sys.executable, str(PROGRAMS_DIR / 'stage3_compliance.py'),
                   str(project), '--json',
                   str(report)], capture_output=True, text=True)
-    gds = next((r for r in reversed(plan) if r.name == 'gds'), None)
-    native = getattr(gds, 'status', 'NOT_MEASURED')
-    if native == 'FAIL':
-        return 1
     # Stage3's existing clause is advisory. A measured finding (rc=1)
     # remains for the canonical consumer to judge, not a new blocking rule.
-    if (native != 'PASS' or cp.returncode not in (0, 1) or not report.is_file()
-            or receipt.get('release_verdict') != 'ELIGIBLE_FOR_AUDIT'):
+    if cp.returncode not in (0, 1) or not report.is_file():
         return 2
     return 0
 

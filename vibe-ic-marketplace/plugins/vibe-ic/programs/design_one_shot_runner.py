@@ -23800,7 +23800,7 @@ def step_arith_declaration_emit(project: Path) -> StepResult:
                       f"written — {reason}", reason_class=_V.ReasonClass.EXECUTION_ERROR)
 
 
-@_spf.retained_steps(('2', '3', '4', '5', '6', '39'), canonical_acceptance=True)
+@_spf.retained_steps(('5', '6', '39'), canonical_acceptance=True)
 def step_emit_phase2_manifests(project: Path,
                                 plan: List[StepResult],
                                 top_name: Optional[str] = None,
@@ -24637,6 +24637,22 @@ def step_emit_phase2_manifests(project: Path,
     except Exception:  # nosec — provenance emission is never fatal
         pass
 
+    return StepResult("phase2_manifests", "PASS",
+                      time.time() - t0,
+                      f"{len(written)} manifest(s) written",
+                      written)
+
+
+@_spf.retained_steps(('2', '3', '4'), canonical_acceptance=True)
+def _complete_phase2_frontend(project: Path, plan: List[StepResult],
+                              top_name: Optional[str] = None,
+                              container: str = _pin.default_container_name()) -> StepResult:
+    """Complete the real runner's RTL/CDC/simulation outputs after coverage.
+
+    Standalone manifest emission remains an existing component operation.
+    Only this actual runner seam owns the complete frontend consumers.
+    """
+    result = step_emit_phase2_manifests(project, plan, top_name, container)
     # Step2 also owns producer-written ROM/rewrite/lint evidence. Its full
     # consumer must see those outputs here, rather than before the later
     # all-step producer sweep. Keep the existing emitter return semantics:
@@ -24650,10 +24666,7 @@ def step_emit_phase2_manifests(project: Path,
         except Exception as exc:
             print(f"[WARN] Step2 supplementary producers did not complete: {exc}",
                   file=sys.stderr)
-    return StepResult("phase2_manifests", "PASS",
-                      time.time() - t0,
-                      f"{len(written)} manifest(s) written",
-                      written)
+    return result
 
 
 def _build_final_audit_cmd(project: Path, audit: Path,
@@ -26833,7 +26846,7 @@ def main() -> int:
             "the declared outputs of steps 2, 3 and 6",
             "The manifest emitter has always written those three steps' documents "
             "whatever the window; the review confirmed it as a pre-existing shape.")
-    plan.append(step_emit_phase2_manifests(project, plan, args.top_name,
+    plan.append(_complete_phase2_frontend(project, plan, args.top_name,
                                            args.container))
     # v0.1.58 capture: regenerate final_summary.md BEFORE the audit so the
     # attestation table reflects the SHA256 of every artefact emitted

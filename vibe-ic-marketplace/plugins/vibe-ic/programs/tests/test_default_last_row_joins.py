@@ -57,9 +57,10 @@ def test_final_manifest_consumes_2_3_4_after_their_actual_reports(tmp_path, monk
     seen = reject(monkeypatch)
     write(tmp_path, 'phase2/stage1/rtl/top.v', b'module top(input clk); endmodule')
     write(tmp_path, design._SYNTH_LOG_REL, b'current synthesis transcript')
-    result = design.step_emit_phase2_manifests(tmp_path, [], 'top')
+    plan = [design.StepResult('yosys_synth', 'PASS', 0.0, 'current synthesis')]
+    result = design._complete_phase2_frontend(tmp_path, plan, 'top')
     assert result.status == 'PASS'
-    assert seen == ['2', '3', '4', '5', '6', '39']
+    assert seen == ['5', '6', '39', '2', '3', '4']
     for sid in ('2', '3', '4'):
         folder, record = saved(tmp_path, sid)
         assert record['status'] == 'FAIL' and not record['canonical_pass']
@@ -78,13 +79,14 @@ def test_step2_supplementary_writer_runs_before_complete_consumer(tmp_path, monk
         written.append(sid)
         return {'verdict': 'PRODUCED'}
     def consume(project, row):
-        assert written == ['2']
-        assert (project / 'reports/phase2/lint/rom_init_lint.json').is_file()
+        if str(row['id']) in ('2', '3', '4'):
+            assert written == ['2']
+            assert (project / 'reports/phase2/lint/rom_init_lint.json').is_file()
         return {'status': 'FAIL', 'step': {'id': row['id'], 'status': 'FAIL'}, 'ledger': []}
     monkeypatch.setattr(declared, 'run_for_step', produce)
     monkeypatch.setattr(gates, 'evaluate', consume)
     write(tmp_path, 'phase2/stage1/rtl/top.v', b'module top(input clk); endmodule')
-    assert design.step_emit_phase2_manifests(tmp_path, [], 'top').status == 'PASS'
+    assert design._complete_phase2_frontend(tmp_path, [], 'top').status == 'PASS'
     assert written == ['2']
 
 
@@ -186,7 +188,8 @@ def test_actual_final_receipt_writes_stage3_audit_before_complete_consumer(tmp_p
         assert (tmp_path / 'reports/phase3/layout_receipts.json').is_file()
         report.write_text('{"verdict":"PASS"}')
         return SimpleNamespace(returncode=audit_rc, stdout='', stderr='')
-    monkeypatch.setattr(phase3._pr, 'run', audit)
+    monkeypatch.setattr(phase3._pr, 'run', audit if scope == 'ELIGIBLE_FOR_AUDIT'
+                        else lambda *a, **k: pytest.fail('cannot audit a non-release layout'))
     rc = phase3._publish_final_layout_receipts(tmp_path, {'release_verdict': scope}, rows)
     assert rc == (0 if scope == 'ELIGIBLE_FOR_AUDIT' and audit_rc in (0, 1) else 2)
     assert seen == (['31', '37'] if rc == 0 else ['31'])
@@ -194,7 +197,10 @@ def test_actual_final_receipt_writes_stage3_audit_before_complete_consumer(tmp_p
     assert record['status'] == ('FAIL' if rc == 0 else 'NOT_MEASURED')
     assert not record['canonical_pass']
     assert before(folder, rel) == b'previous stage3 audit'
-    assert (folder / 'files' / rel).read_bytes() == report.read_bytes()
+    if scope == 'ELIGIBLE_FOR_AUDIT':
+        assert (folder / 'files' / rel).read_bytes() == report.read_bytes()
+    else:
+        assert report.read_bytes() == b'previous stage3 audit'
 
 
 def test_ultra_receipt_writer_keeps_existing_order_without_default_audits(tmp_path, monkeypatch):
@@ -203,3 +209,11 @@ def test_ultra_receipt_writer_keeps_existing_order_without_default_audits(tmp_pa
     assert phase3._publish_final_layout_receipts(tmp_path, {}, []) == 0
     assert (tmp_path / 'reports/phase3/layout_receipts.json').is_file()
     assert not (tmp_path / 'steps/index.json').exists()
+
+
+def test_missing_physical_result_is_disclosed_without_crashing(tmp_path, monkeypatch):
+    seen = reject(monkeypatch)
+    result = phase3._complete_physical_verification(tmp_path, [])
+    assert result.status == 'NOT_MEASURED' and result.reason_class == 'input_absent'
+    assert seen == []
+    assert saved(tmp_path, '31')[1]['status'] == 'NOT_MEASURED'
