@@ -2652,6 +2652,28 @@ def test_opensta_census_proves_the_port_to_pad_net(tmp_path):
     assert pins["b"]["port_to_pad"] is False
 
 
+
+def _current_sta_ocv_receipts(state_path):
+    """Native output fixture: the existing Tcl, config and applied report record."""
+    import librelane_signoff
+    folder = state_path.parent
+    state = json.loads(state_path.read_text())
+    corners = list(state['lib'])
+    extra = _file(folder, 'extra_corner.tcl', librelane_signoff._DERATE_TCL)
+    config = _file(folder, 'config.json', json.dumps({
+        'STA_CORNERS': corners, 'TIME_DERATING_CONSTRAINT': 5,
+        'STA_EXTRA_CORNER_TCL_FILE': extra['path']}))
+    outputs = {'state_out.json': drv._sha(state_path), 'config.json': config['sha256']}
+    for corner in corners:
+        ref = _file(folder, corner + '/' + librelane_signoff.CORNER_REPORT,
+            'OCV_DERATE_APPLIED early=0.95 late=1.05 flat-OCV '
+            'source=TIME_DERATING_CONSTRAINT=5\n')
+        outputs[corner + '/' + librelane_signoff.CORNER_REPORT] = ref['sha256']
+    _file(folder, 'vibeic_receipt.json', json.dumps({
+        'input': {'step': 'OpenROAD.STAPostPNR', 'config_files': {extra['path']: extra['sha256']}},
+        'sha256': outputs}))
+    return Path(extra['path'])
+
 @pytest.mark.parametrize('fault', [None, 'sta_changed', 'route_changed',
     'handoff_state_changed', 'source_changed', 'alias_changed', 'foreign_image'])
 def test_current_step23_follows_rcx_handoff_instead_of_retained_step32(tmp_path, monkeypatch, fault):
@@ -2684,6 +2706,7 @@ def test_current_step23_follows_rcx_handoff_instead_of_retained_step32(tmp_path,
             'dest': alias['path'], 'dest_sha256': alias['sha256']}}}))
     state['spef'] = {'nom_*': alias['path']}
     current_state.write_text(json.dumps(state))
+    _current_sta_ocv_receipts(current_state)
     selection = {'capture_step': '23', 'final': {
         'sta_state': str(current_state), 'sta_state_sha256': drv._sha(current_state)}}
     routed = project / 'phase3/stage3/pnr/routed.def'
@@ -2714,3 +2737,92 @@ def test_current_step23_follows_rcx_handoff_instead_of_retained_step32(tmp_path,
     else:
         measure()
     assert json.loads((project / 'reports/phase3/librelane_postroute_repair.json').read_text()) == old_report
+
+
+@pytest.mark.parametrize('fault', [None, 'config_changed', 'report_changed', 'extra_changed',
+    'report_mismatch', 'extra_unbound', 'percent_missing', 'percent_nonfinite',
+    'report_absent', 'report_duplicate', 'corners_missing', 'wrong_producer', 'source_changed_after_plan'])
+def test_current_sta_applied_ocv_reaches_the_real_capture_script(tmp_path, monkeypatch, fault):
+    import shutil
+    import drv_capture_plan as plan
+    import drv_signoff_capture as capture
+    project, adopted = _librelane_final_sta(tmp_path, monkeypatch)
+    old = _step32_report(project, adopted)
+    old_state = Path(old['final']['sta_state'])
+    folder = project / 'phase3/librelane/23/01-openroad-stapostpnr'
+    shutil.copytree(old_state.parent, folder)
+    state_path = folder / 'state_out.json'
+    state = json.loads(state_path.read_text())
+    raw = Path(state['sdc'])
+    raw.write_text('\n'.join(line for line in raw.read_text().splitlines()
+                             if not line.startswith('set_timing_derate')) + '\n')
+    (project / 'phase3/stage3/pnr/routed.def').write_bytes(Path(state['def']).read_bytes())
+    selection = {'capture_step': '23', 'final': {
+        'sta_state': str(state_path), 'sta_state_sha256': drv._sha(state_path)}}
+    extra = _current_sta_ocv_receipts(state_path)
+    config_path = folder / 'config.json'
+    report = folder / 'nom_typ/vibeic_signoff.rpt'
+    receipt_path = folder / 'vibeic_receipt.json'
+    receipt = json.loads(receipt_path.read_text())
+    config = json.loads(config_path.read_text())
+    if fault == 'config_changed':
+        config_path.write_text(config_path.read_text() + ' ')
+    elif fault == 'report_changed':
+        report.write_text(report.read_text() + 'changed after producer\n')
+    elif fault == 'extra_changed':
+        extra.write_text(extra.read_text() + '# changed after producer\n')
+    elif fault == 'report_mismatch':
+        report.write_text(report.read_text().replace('early=0.95', 'early=0.90'))
+    elif fault == 'extra_unbound':
+        receipt['input']['config_files'] = {}
+    elif fault == 'wrong_producer':
+        receipt['input']['step'] = 'OpenROAD.RCX'
+    elif fault == 'percent_missing':
+        del config['TIME_DERATING_CONSTRAINT']
+    elif fault == 'percent_nonfinite':
+        config['TIME_DERATING_CONSTRAINT'] = 'nan'
+    elif fault == 'report_absent':
+        report.unlink()
+    elif fault == 'report_duplicate':
+        report.write_text(report.read_text() * 2)
+    elif fault == 'corners_missing':
+        config['STA_CORNERS'] = []
+    if fault in ('percent_missing', 'percent_nonfinite', 'corners_missing'):
+        config_path.write_text(json.dumps(config))
+        receipt['sha256']['config.json'] = drv._sha(config_path)
+    if fault in ('report_mismatch', 'report_duplicate'):
+        receipt['sha256']['nom_typ/vibeic_signoff.rpt'] = drv._sha(report)
+    receipt_path.write_text(json.dumps(receipt))
+    errors = {'config_changed': 'native OCV input absent or changed',
+        'report_changed': 'native OCV report absent or changed',
+        'extra_changed': 'native OCV extra-corner Tcl absent or changed',
+        'report_mismatch': 'native OCV applied recipe differs',
+        'extra_unbound': 'native OCV extra-corner Tcl absent or changed',
+        'percent_missing': 'native OCV derate constraint absent or malformed',
+        'percent_nonfinite': 'native OCV derate constraint outside',
+        'report_absent': 'run input absent',
+        'wrong_producer': 'native OCV receipt names another producer step',
+        'report_duplicate': 'native OCV applied recipe absent or ambiguous',
+        'corners_missing': 'native OCV corner coverage differs'}
+    before = raw.read_bytes()
+    if fault in errors:
+        with pytest.raises(ValueError, match=errors[fault]):
+            plan.build(project, final_state=selection)
+    else:
+        result = plan.build(project, final_state=selection)
+        recipe = result['current']['ocv_recipe']
+        assert recipe['early'] == 0.95 and recipe['late'] == 1.05
+        assert recipe == result['frozen']['ocv_recipe']
+        assert result['current']['sources']['signoff_sdc']['path'] == str(raw)
+        if fault == 'source_changed_after_plan':
+            report.write_text(report.read_text() + 'changed before capture\n')
+            with pytest.raises(ValueError, match='DRV OCV recipe source changed'):
+                capture._script(result, result['scenes'][0], tmp_path,
+                                control=False, max_count=100)
+        else:
+            script = capture._script(result, result['scenes'][0], tmp_path,
+                                     control=False, max_count=100)
+            assert 'read_sdc {' + str(raw) + '}' in script
+            assert 'set_timing_derate -early 0.95' in script
+            assert 'set_timing_derate -late 1.05' in script
+    assert raw.read_bytes() == before

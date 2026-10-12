@@ -534,6 +534,61 @@ def _ocv_recipe(paths: list[Path]) -> dict:
     return {"early": early, "late": late, "source_refs": sources}
 
 
+def _native_sta_ocv(state_path: Path, corners: set[str]) -> dict:
+    """Read the derate actually applied by this STAPostPNR invocation."""
+    from librelane_signoff import CORNER_REPORT
+    folder = state_path.parent
+    receipt_path = folder / 'vibeic_receipt.json'
+    receipt = json.loads(receipt_path.read_text())
+    if (receipt.get('input') or {}).get('step') != 'OpenROAD.STAPostPNR':
+        raise ValueError('native OCV receipt names another producer step')
+    bound = receipt.get('sha256') or {}
+    config_path = folder / 'config.json'
+    refs = [_ref(receipt_path)]
+    for path in (state_path, config_path):
+        ref = _ref(path)
+        if bound.get(path.name) != ref['sha256']:
+            raise ValueError(f'native OCV input absent or changed: {path}')
+        refs.append(ref)
+    config = json.loads(config_path.read_text())
+    if set(config.get('STA_CORNERS') or []) != corners:
+        raise ValueError('native OCV corner coverage differs from selected STA scenes')
+    extra = Path(str(config.get('STA_EXTRA_CORNER_TCL_FILE') or ''))
+    extra_ref = _ref(extra)
+    if ((receipt.get('input') or {}).get('config_files') or {}).get(str(extra)) != extra_ref['sha256']:
+        raise ValueError('native OCV extra-corner Tcl absent or changed')
+    refs.append(extra_ref)
+    try:
+        percent = float(config['TIME_DERATING_CONSTRAINT'])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError('native OCV derate constraint absent or malformed') from exc
+    if not math.isfinite(percent) or not 0 <= percent < 100:
+        raise ValueError('native OCV derate constraint outside flat-OCV bounds')
+    expected = {'early': 1 - percent / 100, 'late': 1 + percent / 100}
+    marker = re.compile(r'^OCV_DERATE_APPLIED early=(\S+) late=(\S+) '
+                        r'flat-OCV source=TIME_DERATING_CONSTRAINT=(\S+)\s*$', re.M)
+    for corner in sorted(corners):
+        report = folder / corner / CORNER_REPORT
+        ref = _ref(report)
+        if bound.get(f'{corner}/{CORNER_REPORT}') != ref['sha256']:
+            raise ValueError(f'native OCV report absent or changed: {report}')
+        rows = marker.findall(report.read_text())
+        if len(rows) != 1:
+            raise ValueError(f'native OCV applied recipe absent or ambiguous: {corner}')
+        try:
+            early, late, applied_percent = map(float, rows[0])
+        except ValueError as exc:
+            raise ValueError(f'native OCV applied recipe malformed: {corner}') from exc
+        values = (early, late, applied_percent)
+        wanted = (expected['early'], expected['late'], percent)
+        if any(not math.isfinite(value) or not math.isclose(value, target, rel_tol=1e-12,
+                                                         abs_tol=1e-12)
+               for value, target in zip(values, wanted)):
+            raise ValueError(f'native OCV applied recipe differs from declared constraint: {corner}')
+        refs.append(ref)
+    return {**expected, 'source_refs': refs}
+
+
 def _build_direct(project: Path) -> dict:
     """Capture the scenes a direct OCV deck really used, leaving gaps visible."""
     import _eda_image
@@ -779,7 +834,8 @@ def build(project: Path, *, final_state: dict | None = None) -> dict:
     raw_signoff_sdc = _current_report_sdc(project,
                                           _run_path(project, state["sdc"]))
     derived_signoff_sdc = _ref(signoff_sdc)
-    ocv_recipe = _ocv_recipe([signoff_sdc])
+    ocv_recipe = (_native_sta_ocv(state_path, actual_scenes) if current_step23
+                  else _ocv_recipe([signoff_sdc]))
     sources = {"pdk_config": _ref(pdk_config),
                "signoff_sdc": _ref(raw_signoff_sdc),
                "signoff_sdc_derived": derived_signoff_sdc}
