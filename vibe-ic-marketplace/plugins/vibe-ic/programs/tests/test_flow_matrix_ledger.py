@@ -916,6 +916,7 @@ PINNED_OUTPUT_MEMBERS = frozenset({
     ('FS1', 'reports/phase2/safety/fmeda_coverage_gate.json'),
     ('M1', 'phase3/mixed_signal/top_merged.gds'),
     ('M1', 'reports/analog/mixed_signal/merge.json'),
+    ('M1', 'reports/analog/mixed_signal/top_lvs.json'),
     ('M2', 'reports/analog/mixed_signal/isolation.json'),
     ('M2', 'reports/analog/mixed_signal/level_shifter.json'),
     ('M2', 'reports/analog/mixed_signal/pd_connectivity.json'),
@@ -1424,7 +1425,8 @@ def test_output_entries_classify_into_the_four_kinds():
     # Step 18's post-spare DEF and Step M2's connectivity/run reports.
     # FS1 now owns its two native-produced reports (+2 FILE).
     # Step 7 records every native corner set (+1 FILE).
-    assert seen[F.FILE] == 149, (seen, REDERIVE)
+    # M1 independently requires the native-produced LVS evidence (+1 FILE).
+    assert seen[F.FILE] == 150, (seen, REDERIVE)
     assert seen[F.GLOB] == 29, (seen, REDERIVE)
     assert seen[F.ANY_OF] == 27, (seen, REDERIVE)
     # Reported to the orchestrator: the PROGRAM_EXIT form described in the brief

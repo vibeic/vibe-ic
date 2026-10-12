@@ -1,0 +1,42 @@
+{
+  "schema": "vibeic.native_component_report.v1",
+  "scope": "Native M1 output production and measured failure rejection; not benchmark IC, design LVS PASS or whole-flow acceptance",
+  "input_kind": "Real open PDK cell under an unrouted wrapper; deliberately negative top-level connectivity fixture",
+  "pdk": "sky130A",
+  "producer": {
+    "program": "mixed_signal_top_lvs_run",
+    "sha256": "15603e599f86588834f354711b8f78fbb699c0317a0e1733cd1ea6f84633b541",
+    "merge_script_sha256": "7e55b7d0ce2eb3516cd54e089272858c4a0c386b63d86a02cd7b781043f47143"
+  },
+  "tool": {
+    "sha256": "8b41a8907887cf8c72c1a2d354348d827671fee47697b4781db4a20fc144fe38",
+    "version": "KLayout 0.30.12"
+  },
+  "execution": {
+    "klayout_marker_present": true,
+    "magic_marker_present": true,
+    "netgen_report_nonempty": true,
+    "compared": true
+  },
+  "output": {
+    "path": "reports/analog/mixed_signal/top_lvs.json",
+    "sha256": "3d8caee3575ade54a77409f87fd51aa1a286c966727a3c200b9595f0a219c863",
+    "verdict": "FAIL",
+    "lvs_artifacts": {
+      "phase3/mixed_signal/native_m1_top_merged_extracted.sp": "b266c5b23e928a5ef0daabbe8dd2d1681bc70c90991b8f229020d8b0fcbb681a",
+      "phase3/mixed_signal/ext2spice_merged.log": "fe3c7c5f4e2839412671abe34bf8e39d98d7fcb46710f7aad9bc370fa6528c73",
+      "phase3/mixed_signal/ext2spice_merged.tcl": "0e1fd4a286edec6eac31a29b3e9514af88da6d191b01d32bf5ae11a8a933a968",
+      "phase3/mixed_signal/top_lvs.tcl": "967e1ee2cdef9beb0271fb9810bdaac8364f751abde85e6735f435daf141c5a6",
+      "reports/analog/mixed_signal/top_lvs.rpt": "5ebbe32c4d1f4589cecdf3092c031da76ae675acf5dd8c98f49f2e8de4bf0cab"
+    }
+  },
+  "consumer": {
+    "program": "mixed_signal_merge_check",
+    "rc": 1,
+    "verdict": "FAIL",
+    "rules": [
+      "MERGE_LVS_FAIL"
+    ]
+  },
+  "published_whole_ic_evidence": "UNPROVEN"
+}

@@ -1653,11 +1653,15 @@
     },
     "reports/analog/mixed_signal/merge.json": {
      "status": "UNPROVEN"
+    },
+    "reports/analog/mixed_signal/top_lvs.json": {
+     "status": "UNPROVEN"
     }
    },
    "unproven": [
     "phase3/mixed_signal/top_merged.gds",
-    "reports/analog/mixed_signal/merge.json"
+    "reports/analog/mixed_signal/merge.json",
+    "reports/analog/mixed_signal/top_lvs.json"
    ],
    "condition_files": [
     "phase1/analog/analog_block_list.json"

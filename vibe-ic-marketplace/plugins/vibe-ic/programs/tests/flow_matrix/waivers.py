@@ -771,59 +771,7 @@ WAIVERS: Tuple[Waiver, ...] = (
 
     # ── dimension 7 — is the required_outputs list complete? ───────────
     # FS1 closed: the native runner produces both declared reports before its
-    # unchanged canonical consumer. Step 7 now records both branches; only 23 and M1 remain.
-    Waiver(
-        step_id="M1",
-        dim=7,
-        reason=(
-            "reports/analog/mixed_signal/top_lvs.json is the artefact that "
-            "substantiates M1's PASS — mixed_signal_top_lvs_run writes it and "
-            "mixed_signal_merge_check's PASS branch is contingent on reading "
-            "it — yet M1's required_outputs names only top_merged.gds and "
-            "merge.json, so nothing independently verifies its presence. "
-            "Declaring it was PREPARED and then withdrawn on evidence: the "
-            "artefact exists in NONE of the twelve admissible run roots and "
-            "its producer needs KLayout + Magic + netgen in a container, so "
-            "it cannot be shown produced live here either. Declaring it would "
-            "add a second UNPROVEN entry to M1's dimension-3 waiver — moving "
-            "the gap between dimensions rather than closing it. What closes "
-            "this: publish one run root in which mixed_signal_top_lvs_run "
-            "actually executed, then declare the artefact and record it."
-        ),
-        evidence=(
-            # vibe-ic#1289 — CONTENT anchor, not a line number. Measured
-            # 2026-08-14: this citation read `:917` and rotted in THREE separate
-            # batches (the 22-PR INDEX.md batch, the 10-PR hygiene batch, and a
-            # 64-PR extension), each time manufacturing a red that belonged to
-            # no PR in the batch, because those batches shift lines in
-            # mixed_signal_top_lvs_run.py. Re-pointing the number resets the
-            # counter; anchoring to the text removes the failure mode. The
-            # anchor resolves to exactly ONE line, which the validator requires.
-            "producer programs/mixed_signal_top_lvs_run.py::`"
-            '(rpt_dir / "top_lvs.json").write_text(' "` (in the same block "
-            "as the already-declared merge.json); consumer "
-            # vibe-ic#2014 — THE SAME LESSON, APPLIED TO THE OTHER HALF. The
-            # producer citation two lines above was converted to a CONTENT
-            # anchor by #1289 after rotting in three batches; the CONSUMER half
-            # was left as `:89-91 then :108` and rotted the first time
-            # `mixed_signal_merge_check.py` gained lines above them (the
-            # `reason_class` publication this batch added), manufacturing a red
-            # in a waiver nothing about the waiver had changed. Both anchors
-            # resolve to exactly one line, which the validator requires.
-            "programs/mixed_signal_merge_check.py::`"
-            'for rel in ("reports/analog/mixed_signal/top_lvs.json",'
-            "` then programs/mixed_signal_merge_check.py::`"
-            'elif str(top_lvs.get("verdict")) == "PASS":' "`. MEASURED "
-            "2026-07-28 with test_matrix_d3_outputs_produced.resolve_anywhere("
-            "'reports/analog/mixed_signal/top_lvs.json') -> None over all 12 "
-            "run roots, while the sibling merge.json resolves at "
-            "AI_IC_design/4th_benchmark/U_Hawaii_EE628_DeltaSigma_ADC_e2e "
-            "(497 B). Mutation check that the declaration WOULD be live: with "
-            "mixed_signal_merge_check's MERGE_NOT_LVS_SUBSTANTIATED branch "
-            "flipped to its historical PASS-on-presence stub, M1 reports PASS "
-            "without the declaration and MISSING with it."
-        ),
-    ),
+    # unchanged canonical consumer. Step 7 records both branches; M1 now declares native-produced LVS evidence. Only 23 remains.
     Waiver(
         step_id="23",
         dim=7,

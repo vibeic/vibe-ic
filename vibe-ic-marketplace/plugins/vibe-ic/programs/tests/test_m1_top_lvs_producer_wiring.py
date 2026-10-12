@@ -34,9 +34,9 @@ program that really writes ``top_lvs.json`` (proved by RUNNING it against a
 faked toolchain, never by grepping source), and the orchestrator must dispatch
 one of those declared producers.  Any producer name satisfies them.
 
-The direction-1 guards pin what must NOT move: M1 still FAILs on a merged GDS
-with no / non-PASS top-level LVS, M1's ``required_outputs`` gains nothing, and
-a digital-only run dispatches no mixed-signal merge at all.
+The direction-1 guards pin M1's refusal of missing/non-PASS top-level LVS,
+its required merge and LVS evidence, and the exclusion of the advisory run
+record. A digital-only run dispatches no mixed-signal merge at all.
 
 chip-AGNOSTIC: synthetic fixtures + a monkeypatched container.
 """
@@ -290,14 +290,14 @@ def test_every_program_m1_declares_is_invoked_by_m1(tmp_path):
 
 
 def test_m1_required_outputs_stay_the_two_design_artefacts():
-    """Guards against paying for the wiring with a manufactured MISSING, and
-    against declaring the producer's own run record: top_lvs_run.json exists
-    even on the producer's honest rc=2 skip, so declaring it would let the
-    gate's own side effect satisfy M1's artefact check."""
+    """Keep the two merge artefacts and independently require the consumed
+    LVS evidence. The advisory run record cannot satisfy that requirement."""
     assert _m1_step().get("required_outputs") == [
         "phase3/mixed_signal/top_merged.gds",
         "reports/analog/mixed_signal/merge.json",
+        _TOP_LVS_REL,
     ]
+    assert "reports/analog/mixed_signal/top_lvs_run.json" not in _m1_step()["required_outputs"]
 
 
 def test_m1_still_fails_on_a_merged_gds_with_no_top_level_lvs(tmp_path):
