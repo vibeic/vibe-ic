@@ -103,10 +103,12 @@ Generality: applies to ANY Verilog/SystemVerilog design. Finds bugs #1, #2,
 """
 from __future__ import annotations
 import argparse
+import hashlib
 import json
 import os
 import re
 import sys
+import tempfile
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import List, Dict, Set, Tuple, Optional
@@ -6617,14 +6619,142 @@ def autofix_delayed_blocking_clock_toggle(path: Path) -> Tuple[int, List[str]]:
     return len(sites), [str(site['name']) for site in sites]
 
 
-def lint_file(path: Path) -> List[Finding]:
+def _native_driver_view(files, top, defines, parameters, include_dirs, output_dir):
+    """Elaborate the selected closure once; never accept an old JSON as proof.
+
+    This is the Yosys frontend for driver analysis, not synthesis or tool
+    candidate selection. Keep its inputs, log and JSON together for review.
+    Failure leaves the lexical findings intact and adds a blocking disclosure.
+    """
+    files = [Path(p).resolve() for p in files]
+    include_dirs = sorted({Path(p).resolve() for p in include_dirs}
+                          | {p.parent for p in files})
+    if not re.fullmatch(r'[A-Za-z_]\w*', top):
+        raise ValueError('native driver analysis requires the selected module top')
+    if any(not re.fullmatch(r'[A-Za-z_]\w*(?:=[^\s;"\\]+)?', d) for d in defines):
+        raise ValueError('invalid native compile define')
+    if any(not re.fullmatch(r'[A-Za-z_]\w*=[0-9+-]+', p) for p in parameters):
+        raise ValueError('native top parameters must be NAME=integer')
+    output_dir.mkdir(parents=True, exist_ok=True)
+    work = Path(tempfile.mkdtemp(prefix='native-elaboration-', dir=output_dir))
+    tracked = set(files)
+    for directory in include_dirs:
+        tracked.update(p for p in directory.rglob('*')
+                       if p.is_file() and p.suffix in {'.v', '.sv', '.vh', '.svh'})
+    def hashes():
+        return {str(p): hashlib.sha256(p.read_bytes()).hexdigest()
+                for p in sorted(tracked)}
+    before = hashes()
+    context = {'top': top, 'files': [str(p) for p in files],
+               'defines': list(defines), 'parameters': list(parameters),
+               'include_dirs': [str(p) for p in include_dirs], 'input_sha256': before}
+    def quote(value):
+        return '"' + str(value).replace('\\', '\\\\').replace('"', '\\"') + '"'
+    # -nosynthesis prevents Yosys from silently introducing a compile define
+    # that the caller did not select. There is no guessed active branch.
+    read = 'read_verilog -sv -nosynthesis ' + ' '.join(
+        ['-D' + d for d in defines]
+        + ['-I' + quote(p) for p in include_dirs] + [quote(p) for p in files])
+    commands = [read]
+    for parameter in parameters:
+        name, value = parameter.split('=', 1)
+        commands.append(f'chparam -set {name} {value} {top}')
+    native_json = work / 'design.json'
+    commands += [f'hierarchy -check -top {top}', 'proc', 'check -assert',
+                 'write_json ' + quote(native_json)]
+    script = work / 'elaborate.ys'
+    atomic_write_text(script, ';\n'.join(commands) + '\n')
+    try:
+        result = _pr.run(['yosys', '-Q', '-s', str(script)],
+                         capture_output=True, text=True)
+        atomic_write_text(work / 'native.log', result.stdout + result.stderr)
+        if result.returncode != 0:
+            raise ValueError(f'native Yosys elaboration failed (rc={result.returncode}); {work}')
+        if hashes() != before:
+            raise ValueError('native elaboration inputs changed during this invocation')
+        design = json.loads(native_json.read_text())
+        if top not in design.get('modules', {}):
+            raise ValueError('native elaboration did not emit the selected top')
+    except (OSError, ValueError) as exc:
+        context.update(status='NOT_MEASURED', reason=str(exc))
+        atomic_write_text(work / 'context.json', json.dumps(context, indent=2))
+        raise ValueError(str(exc)) from exc
+    context.update(status='MEASURED', native_json_sha256=hashlib.sha256(
+        native_json.read_bytes()).hexdigest())
+    atomic_write_text(work / 'context.json', json.dumps(context, indent=2))
+    design['_lint_input_sha256'] = before
+    return design
+
+
+def _resolve_native_driver_findings(findings, path, design):
+    """Resolve only driver findings against active native module variants.
+
+    Do not erase malformed/duplicate connection evidence, unrelated rules or
+    a used net with a missing/partial driver. Inactive conditional connections
+    may leave unused nets; they are not an active missing-driver assertion.
+    """
+    raw = path.read_text(errors='replace')
+    if hashlib.sha256(path.read_bytes()).hexdigest() != design['_lint_input_sha256'].get(str(path.resolve())):
+        return findings + [Finding(str(path), 1, 'ERROR', 'native-elaboration-unresolved', '',
+            'selected RTL changed after native elaboration; driver proof NOT_MEASURED')]
+    masked = _module_ports.lexical_mask(raw, attributes=True)
+    modules = list(re.finditer(r'\bmodule\s+([A-Za-z_]\w*)\b.*?\bendmodule\b',
+                               masked, re.S))
+    parsed = _module_ports.parse_modules(_module_ports.strip_preproc_directives(
+        _module_ports.strip_comments(raw)), str(path))
+    invalid = {}
+    for parent in parsed:
+        bad = set()
+        for inst in parent.instances:
+            names = [c.port_name for c in inst.connections]
+            if (inst.malformed_connections or inst.has_mixed_connections
+                    or len(names) != len(set(names))):
+                for actual in [c.wire_expr for c in inst.connections] + inst.positional_actuals:
+                    bad.update(re.findall(r'\b[A-Za-z_]\w*\b', actual))
+        invalid[parent.name] = bad
+    native_modules = design['modules']
+    def verdict(finding):
+        pos = sum(len(s) for s in raw.splitlines(keepends=True)[:finding.line - 1])
+        parent = next((m.group(1) for m in modules if m.start() <= pos < m.end()), None)
+        if parent is None or finding.symbol in invalid.get(parent, set()):
+            return False
+        variants = [m for name, m in native_modules.items()
+                    if name == parent or m.get('attributes', {}).get('hdlname', '').split()[-1:] == [parent]]
+        if not variants:
+            return finding.rule == 'instance-driver-analysis-unresolved'
+        for module in variants:
+            net = module.get('netnames', {}).get(finding.symbol)
+            if net is None:
+                if finding.rule != 'instance-driver-analysis-unresolved':
+                    return False
+                continue
+            driven, used = set(), set()
+            for port in module.get('ports', {}).values():
+                (driven if port['direction'] in ('input', 'inout') else used).update(port['bits'])
+            for cell in module.get('cells', {}).values():
+                for port, bits in cell.get('connections', {}).items():
+                    direction = cell.get('port_directions', {}).get(port)
+                    if direction in ('output', 'inout'): driven.update(bits)
+                    if direction in ('input', 'inout'): used.update(bits)
+            bits = {b for b in net['bits'] if isinstance(b, int)}
+            if not bits.issubset(driven):
+                if finding.rule != 'instance-driver-analysis-unresolved' or bits & used:
+                    return False
+        return True
+    return [f for f in findings if f.rule not in ('undriven-wire', 'instance-driver-analysis-unresolved')
+            or not verdict(f)]
+
+
+def lint_file(path: Path, native_design=None) -> List[Finding]:
     raw = path.read_text(errors='replace')
     src = strip_comments(raw)
     results = []
     results += rule_input_port_reg(src, str(path))
     results += rule_output_port_reg_redeclared(src, str(path))
     results += rule_delayed_blocking_clock_toggle(src, str(path))
-    results += rule_undriven_and_unread(src, str(path))
+    drivers = rule_undriven_and_unread(src, str(path))
+    results += (_resolve_native_driver_findings(drivers, path, native_design)
+                if native_design is not None else drivers)
     results += rule_case_coverage(src, str(path))
     results += rule_if_no_else_latch(src, str(path))
     results += rule_pulse_swallow(src, str(path))
@@ -7215,8 +7345,14 @@ def _extract_top_module_body(src: str):
 
 def main():
     ap = argparse.ArgumentParser(description='General RTL hygiene lint.')
-    ap.add_argument('files', nargs='+', help='Verilog/SystemVerilog files')
+    ap.add_argument('files', nargs='*', help='Verilog/SystemVerilog files')
+    ap.add_argument('--project', type=Path,
+                    help='Use the Default silicon RTL selection, declared L9 top and catalog top parameters')
     ap.add_argument('--json', help='Write findings as JSON to this path')
+    ap.add_argument('--top', help='Selected top; run fresh native driver elaboration for this closure')
+    ap.add_argument('--define', action='append', default=[], help='Selected compile define (repeatable)')
+    ap.add_argument('--parameter', action='append', default=[], help='Selected top NAME=integer (repeatable)')
+    ap.add_argument('--include-dir', action='append', default=[], help='Native include directory (repeatable)')
     ap.add_argument('--severity', choices=['ERROR', 'WARN', 'INFO'], default='INFO',
                     help='Minimum severity to report (default: INFO)')
     ap.add_argument('--fix', action='store_true',
@@ -7236,6 +7372,27 @@ def main():
                          'finding trips rc=1); accepted for vocabulary parity '
                          'with the sibling --strict gates.')
     args = ap.parse_args()
+    if args.project:
+        if args.files or args.fix or args.top or args.parameter:
+            ap.error('--project owns the source set, top and top parameters')
+        try:
+            import _path_layout as layout
+            from _rtl_include_hub import silicon_rtl_selection
+            from catalog_synth_safe_params_check import top_synth_parameters
+            project = args.project.resolve()
+            spec = json.loads((project / 'phase1/generated_docs/L9_INTEGRATION_SPEC.json').read_text())
+            args.top = spec['top_module']
+            args.files = [str(p) for p in silicon_rtl_selection(layout.rtl_dir(project))]
+            pinned = top_synth_parameters(project, args.top)
+            args.parameter = pinned[0] if pinned else []
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            ap.error('Default native lint input selection failed: ' + str(exc))
+    if not args.files:
+        ap.error('no selected RTL sources')
+    if (args.define or args.parameter or args.include_dir) and not args.top:
+        ap.error('native configuration requires --top')
+    if args.fix and args.top:
+        ap.error('--fix cannot change a native elaboration input')
 
     if args.fix:
         # ORGANIC #533 — compile-neutrality safety net (guard-the-guard).
@@ -7343,13 +7500,22 @@ def main():
     min_sev = sev_order[args.severity]
 
     all_findings: List[Finding] = []
+    native_design = None
+    if args.top:
+        try:
+            native_design = _native_driver_view(
+                args.files, args.top, args.define, args.parameter, args.include_dir,
+                Path(args.json).parent if args.json else Path.cwd())
+        except (OSError, ValueError) as exc:
+            all_findings.append(Finding(str(args.files[0]), 1, 'ERROR',
+                'native-elaboration-unresolved', '', str(exc) + '; driver proof NOT_MEASURED'))
     for f in args.files:
         p = Path(f)
         if not p.exists():
             print(f"WARNING: file not found: {f}", file=sys.stderr)
             continue
         try:
-            all_findings += lint_file(p)
+            all_findings += lint_file(p, native_design)
         except Exception as e:
             print(f"ERROR parsing {f}: {e}", file=sys.stderr)
             return 2
