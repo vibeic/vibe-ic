@@ -1637,6 +1637,8 @@ steps:
     required_inputs:
       - from: 1
         path: "phase2/stage1/rtl/*.sv OR phase2/stage1/rtl/*.v"
+      - from: D1
+        path: "phase1/generated_docs/L9_INTEGRATION_SPEC.json"
     closed_loop:
       fallback_to: 1
       trigger: >-

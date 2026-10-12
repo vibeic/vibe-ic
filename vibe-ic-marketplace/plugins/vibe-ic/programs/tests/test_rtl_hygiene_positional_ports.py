@@ -129,6 +129,8 @@ def test_default_declared_gate_uses_real_selected_inputs(tmp_path):
     docs.mkdir(parents=True)
     (docs / 'L9_INTEGRATION_SPEC.json').write_text(json.dumps({'top_module': 'top'}))
     flow = yaml.safe_load((PROGRAMS.parent / 'flow/phase1_phase2_phase3.yaml').read_text())
+    step2 = next(step for step in flow['steps'] if str(step['id']) == '2')
+    assert {'from': 'D1', 'path': 'phase1/generated_docs/L9_INTEGRATION_SPEC.json'} in step2['required_inputs']
     def commands(value):
         if isinstance(value, dict):
             for key, item in value.items():
