@@ -23444,7 +23444,6 @@ def step_fmeda_fault_injection(project: Path,
                 cwd=str(project), capture_output=True, text=True)
             extras["coverage_gate_exit"] = gate_proc.returncode
             gate_rep = json.loads((project / gate_rel).read_text())
-            extras["coverage_gate_report"] = gate_rel
             gate_valid = (gate_proc.returncode == 0 and
                           gate_rep.get("verdict") == "PASS") or (
                 gate_proc.returncode == 2 and
