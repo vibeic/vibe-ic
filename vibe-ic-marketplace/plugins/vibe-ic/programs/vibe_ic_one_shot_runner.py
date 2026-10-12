@@ -65,6 +65,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -646,12 +647,23 @@ def _run_phase(label: str, runner: Path, args: List[str],
     stage_analog = (runner.name == 'flow_compliance_check.py'
                     and '--stage-id' in args
                     and args[args.index('--stage-id') + 1] == 'stage_analog')
-    retained_id = mixed_step or ('14' if stage_analog else None)
+    retained_id = mixed_step
     if retained_id is not None and _retain_mixed:
         import step_preflight
         return step_preflight.retained_call(
             Path(args[0]), retained_id, _run_phase, label, runner, args,
             env=env, _retain_mixed=False, canonical_acceptance=True)
+    history = None
+    if stage_analog and _retain_mixed and '--json' in args:
+        import execution_policy
+        if execution_policy.request()['mode'] == 'default':
+            # This is a scoped audit, not a synthesis producer. Preserve its
+            # report versions without allocating a synthetic Step14 invocation.
+            report = Path(args[args.index('--json') + 1])
+            history = report.parent / 'history' / f'{report.stem}_{time.time_ns()}'
+            history.mkdir(parents=True)
+            if report.is_file():
+                shutil.copy2(report, history / 'before.json')
     # Default retains the selected call before invalidating its audit file.
     # Other modes keep their established caller-side invalidation.
     if (mixed_step in {"M2", "M3", "M4"} or stage_analog) and "--json" in args:
@@ -672,10 +684,14 @@ def _run_phase(label: str, runner: Path, args: List[str],
     supports_execution_policy = runner.name in policy_cli_children
     args = _execution.child_arguments(
         args, supports_execution_policy=supports_execution_policy)
-    cp = subprocess.run([sys.executable, str(runner), *args], env=env,
-                        pass_fds=(_execution.child_pass_fds()
-                                   if supports_execution_policy else ()))
-    return cp.returncode
+    try:
+        cp = subprocess.run([sys.executable, str(runner), *args], env=env,
+                            pass_fds=(_execution.child_pass_fds()
+                                       if supports_execution_policy else ()))
+        return cp.returncode
+    finally:
+        if history is not None and report.is_file():
+            shutil.copy2(report, history / 'after.json')
 
 
 def _positive_completed_rung_cap(value: str) -> int:

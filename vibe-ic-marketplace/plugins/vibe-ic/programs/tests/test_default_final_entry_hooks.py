@@ -225,10 +225,12 @@ def test_stage_analog_call_keeps_previous_report_before_refusal(tmp_path, monkey
     monkeypatch.setattr(front.subprocess, 'run', produce)
     args = [str(tmp_path), '--stage-id', 'stage_analog', '--strict', '--json', str(report)]
     assert front._run_phase('analog preproduction', PROGRAMS / 'flow_compliance_check.py', args) == 2
-    folder, record = saved(tmp_path, '14')
-    assert prior(folder, relative) == b'previous analog evidence'
-    assert (folder / 'files' / relative).read_bytes() == report.read_bytes()
-    assert record['status'] == 'NOT_MEASURED' and not record['canonical_pass']
+    history = list((report.parent/'history').glob('stage_analog_compliance_*'))
+    assert len(history) == 1
+    assert (history[0]/'before.json').read_bytes() == b'previous analog evidence'
+    assert (history[0]/'after.json').read_bytes() == report.read_bytes()
+    assert not any(r['id'] == '14' for r in versions._read_index(tmp_path)['steps'])
+    assert versions.latest_pass(tmp_path, '14') is None
 
 
 @pytest.mark.parametrize('verdict', ['PASS', 'FAIL', 'NOT_INVOCABLE'])
@@ -254,3 +256,28 @@ def test_actual_p0_main_retains_exact_typed_consumer_without_rerunning_it(tmp_pa
     assert record['status'] == actual['status']
     assert record['canonical_pass'] is (verdict == 'PASS')
     assert bool(versions.latest_pass(tmp_path, 'P0')) is (verdict == 'PASS')
+
+
+@pytest.mark.parametrize('no_analog', [True, False])
+@pytest.mark.parametrize('rc', [0, 1, 2])
+def test_scoped_analog_audit_is_not_a_synthesis_invocation(tmp_path, monkeypatch, no_analog, rc):
+    write(tmp_path, 'generated_docs/L5_ADI_SPEC.json', json.dumps({'no_analog': no_analog}).encode())
+    relative = 'reports/analog/stage_analog_compliance.json'
+    report = write(tmp_path, relative, b'previous scoped analog audit')
+    consumer_calls = []
+    monkeypatch.setattr(gates, 'evaluate', lambda *args: consumer_calls.append(args) or {'status': 'FAIL', 'ledger': [], 'step': {'id': '14', 'status': 'FAIL'}})
+    def produce(argv, **kwargs):
+        assert not report.exists()
+        assert argv[argv.index('--stage-id') + 1] == 'stage_analog'
+        report.write_text(json.dumps({'overall': 'PASS' if rc == 0 else 'FAIL', 'scope': 'stage_analog'}))
+        return SimpleNamespace(returncode=rc)
+    monkeypatch.setattr(front.subprocess, 'run', produce)
+    args = [str(tmp_path), '--stage-id', 'stage_analog', '--strict', '--json', str(report)]
+    assert front._run_phase('scoped analog audit', PROGRAMS/'flow_compliance_check.py', args) == rc
+    assert consumer_calls == []
+    assert not any(r['id'] == '14' for r in versions._read_index(tmp_path)['steps'])
+    assert not (tmp_path/'phase2/stage2/synth/netlist.v').exists()
+    history = list((report.parent/'history').glob('stage_analog_compliance_*'))
+    assert len(history) == 1
+    assert (history[0]/'before.json').read_bytes() == b'previous scoped analog audit'
+    assert (history[0]/'after.json').read_bytes() == report.read_bytes()

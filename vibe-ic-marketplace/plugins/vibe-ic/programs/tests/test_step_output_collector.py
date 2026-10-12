@@ -432,3 +432,61 @@ def test_prune_keeps_a_folder_the_current_run_still_produces(tmp_path):
     C._prune_stale_folders(steps_root, ["phase2/stage1/07_rtl"],
                            {"phase2/stage1/07_rtl"})
     assert keep.is_dir() and (keep / "outputs.json").is_file()
+
+
+import subprocess
+import step_preflight as preflight
+import execution_policy as policy
+import execution_backend_gates as gates
+
+CHILD = """
+import json, sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[2])
+import step_output_collector as versions
+p = Path(sys.argv[1])
+a = versions.begin_step(p, 'P0')
+versions.finish_step(p, a, verdict='FAIL', result={'detail': 'actual failing child'})
+"""
+
+
+def run_child(project):
+    subprocess.run([sys.executable, '-c', CHILD, str(project), str(PROG)], check=True)
+
+
+def record(project, attempt):
+    return project / 'steps' / attempt['folder'] / 'outputs.json'
+
+
+def test_canonical_retained_consumer_child_does_not_finish_live_step7(tmp_path, monkeypatch):
+    monkeypatch.setattr(policy, 'request', lambda: {'mode': 'default'})
+    # Exercise the real retained-call seam; the child has its own module state.
+    def producer(project):
+        run_child(project)
+        return 1
+    assert preflight.retained_call(tmp_path, '7', producer, tmp_path,
+                                   canonical_acceptance=True) == 1
+    entries = SOC._read_index(tmp_path)['steps']
+    parent = next(x for x in entries if x['id'] == '7')
+    child = next(x for x in entries if x['id'] == 'P0')
+    saved = json.loads((tmp_path / 'steps' / parent['folder'] / 'outputs.json').read_text())
+    assert saved['status'] == 'FAIL'
+    assert child['status'] == 'FAIL'
+    assert not saved['canonical_pass']
+    assert not list((tmp_path / 'steps').glob('*/*/*/active_call.json'))
+
+
+def test_successful_producer_retains_failing_canonical_child_consumer(tmp_path, monkeypatch):
+    monkeypatch.setattr(policy, 'request', lambda: {'mode': 'default'})
+    def consumer(project, row):
+        run_child(project)
+        return {'status': 'FAIL', 'step': {'id': row['id'], 'status': 'FAIL'}, 'ledger': []}
+    monkeypatch.setattr(gates, 'evaluate', consumer)
+    assert preflight.retained_call(tmp_path, '7', lambda project: 0, tmp_path,
+                                   canonical_acceptance=True) == 0
+    entry = next(x for x in SOC._read_index(tmp_path)['steps'] if x['id'] == '7')
+    saved = json.loads((tmp_path/'steps'/entry['folder']/'outputs.json').read_text())
+    assert saved['status'] == 'FAIL'
+    assert saved['result']['rows'][0]['status'] == 'PASS'
+    assert not saved['canonical_pass']
+    assert SOC.latest_pass(tmp_path, '7') is None
