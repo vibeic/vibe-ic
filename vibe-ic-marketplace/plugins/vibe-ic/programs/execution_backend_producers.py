@@ -1631,6 +1631,11 @@ def produce(project, params):
             continue
         _, program, output, extra = table[name]
         rows.append(R._run_declared_signoff_gate(project, name, program, output, extra))
+    if sid == '23' and params.get('execution_mode') == 'default':
+        # These writers just replaced the sign-off records. Restore the
+        # assumption disclosure before the independent backend consumer.
+        import clock_target_provenance as provenance
+        provenance.stamp_signoff_records(project)
     if any(row.status == 'FAIL' for row in rows):
         result['verdict'] = 'FAIL'
     elif result['verdict'] == 'PASS' and any(row.status != 'PASS' for row in rows):

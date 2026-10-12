@@ -117,3 +117,28 @@ def test_default_stamps_an_assumed_clock_before_disclosure_without_changing_sdc(
     assert sdc.read_bytes() == before
     from sta_assumed_clock_disclosure_check import main as disclosure
     assert disclosure([str(project), '--json', str(tmp_path / 'disclosure.json')]) == 0
+
+
+def test_default_keeps_assumption_on_current_signoff_records_before_final_consumer(tmp_path, monkeypatch):
+    project, _ = _produce(tmp_path, monkeypatch)
+    (project / 'config.json').unlink()
+    monkeypatch.setattr(runner, '_resolve_clock_spec', lambda *args, **kwargs: (24.0, 'clk'))
+    import clock_target_provenance as provenance
+    def current_record_writer(project, name, program, output, extra):
+        # Control these instruments' outputs, while the real native-producer
+        # seam, clock-source emitter, stamping and disclosure consumer run.
+        target = project / output
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(json.dumps({'verdict': 'PASS'}))
+        return runner.StepResult(name, 'PASS', 0.0, '', [str(target)])
+    monkeypatch.setattr(runner, '_run_declared_signoff_gate', current_record_writer)
+    params = {'step_id': '23', 'top': 'top', 'pdk_root': str(tmp_path),
+              'image_id': 'fixture', 'execution_mode': 'default'}
+    backend.produce(project, params)
+    from sta_assumed_clock_disclosure_check import check
+    report = check(project)
+    assert report['verdict'] == 'PASS', report
+    for relative in provenance.SIGNOFF_RELS:
+        target = project / relative
+        if target.exists():
+            assert json.loads(target.read_text())['clock_period_assumed'] is True
