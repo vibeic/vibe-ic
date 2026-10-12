@@ -341,7 +341,10 @@ def _instance_scope_context(src: str):
     """Lexical scope evidence, without inventing compile/generate choices."""
     import bisect
     masked = _module_ports.lexical_mask(src, attributes=True)
-    structural = _module_ports.strip_preproc_directives(masked)
+    # Keep character offsets as well as lines: preprocessor and structural
+    # events must index the same source when looking up an instance position.
+    structural = '\n'.join(' ' * len(line) if line.lstrip().startswith('`') else line
+                           for line in masked.split('\n'))
     events = [(m.end(), m.group()) for m in re.finditer(
         r'\b(?:generate|endgenerate|begin|end)\b', structural)]
     events += [(m.end(), m.group(1)) for m in re.finditer(

@@ -222,6 +222,7 @@ endmodule
         assert shutil.which("yosys"), "EDA image must supply the native control"
         script = f"read_verilog -sv {'-DFEATURE' if boundary == 'preprocessor' else ''} {fp}; hierarchy -check -top top; proc; check -assert; write_json {tmp_path}/native.json"
         native = subprocess.run(['yosys','-Q','-p',script],capture_output=True,text=True)
+        (tmp_path/'native.log').write_text(native.stdout+native.stderr)
         assert native.returncode == 0, native.stdout+native.stderr
         elaborated=json.loads((tmp_path/'native.json').read_text())['modules']['top']
         assert elaborated['cells']['u_leaf']['port_directions']['data_o']=='output'
@@ -289,3 +290,6 @@ endmodule
     assert cli.returncode==1
     assert any(f['rule']=='instance-driver-analysis-unresolved' and f['symbol']=='routed'
                for f in json.loads(report.read_text()))
+    consumed=A._load_hygiene_findings(report,cli.returncode,cli.stderr)
+    assert any(f.rule=='instance-driver-analysis-unresolved' and f.symbol=='routed'
+               and f.severity=='ERROR' for f in consumed)
