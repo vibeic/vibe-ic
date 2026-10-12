@@ -1245,6 +1245,13 @@ def produce_signoff(project, params):
             # Reuse its selected-arm writer so a rerun replaces the live
             # measurement with the current worst corner, without changing SDC.
             R._achievable_fmax_from_tool_arm(project, top, notes, written)
+            # This row's disclosure consumer runs before the phase runner's
+            # final sign-off sweep. Publish the existing clock-source record
+            # now, and stamp any assumed period into the current tool record.
+            import clock_target_provenance as provenance
+            period, _ = R._resolve_clock_spec(project, top=top, pdk_name=pdk.name)
+            provenance.emit_report(project, pdk=pdk.name, applied_period_ns=float(period))
+            provenance.stamp_signoff_records(project)
         if failures:
             return {'verdict': 'FAIL', 'detail': '\n'.join(failures)}
     elif sid == '24':
