@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import sys
+from types import SimpleNamespace
 from pathlib import Path
 
 
@@ -31,19 +32,37 @@ def test_runner_produces_scoped_analog_audit_after_analog(tmp_path, monkeypatch)
     from _route_fixture import stage_owner_route
     stage_owner_route(project, "ic")
 
+    from test_the_front_door_rollup_edges import _report, _save_complete_acceptance
     calls: list[tuple[str, str, list[str]]] = []
+    native_subprocess = runner.subprocess.run
 
-    def record(label, program, args, env=None):
-        name = Path(program).stem
-        calls.append((label, name, list(args)))
-        if name == "flow_compliance_check":
+    def record(argv, **kwargs):
+        name = Path(argv[1]).stem if len(argv) > 1 else ""
+        phase_names = {
+            "analog_one_shot_runner", "phase2_one_shot_runner",
+            "design_one_shot_runner", "phase3_one_shot_runner",
+            "flow_compliance_check", "analog_acceptance_tb_gen",
+        }
+        if name not in phase_names:
+            return native_subprocess(argv, **kwargs)
+        args = list(argv[2:])
+        calls.append(("controlled phase", name, args))
+        if name == "analog_one_shot_runner":
+            _report(project, "analog_one_shot.json", {"verdict": "PASS"})
+            _save_complete_acceptance(project, "A2", "PASS", runner=name)
+        elif name in {"phase2_one_shot_runner", "design_one_shot_runner"}:
+            _report(project, "phase2_one_shot.json", {"verdict": "PASS"})
+            _save_complete_acceptance(project, "13", "PASS",
+                                      runner="design_one_shot_runner")
+        elif name == "flow_compliance_check":
             out = Path(args[args.index("--json") + 1])
             out.parent.mkdir(parents=True, exist_ok=True)
             out.write_text(json.dumps({"verdict": "FAIL"}) + "\n")
-            return 1
-        return 0
+            return SimpleNamespace(returncode=1, stdout="", stderr="")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
 
-    monkeypatch.setattr(runner, "_run_phase", record)
+    # Keep the real _run_phase retention seam. Control only child outcomes.
+    monkeypatch.setattr(runner.subprocess, "run", record)
     monkeypatch.setattr(runner, "_capture_container_image", lambda *_: {})
     monkeypatch.setattr(runner, "_capture_pdk_revision", lambda *_: {})
     monkeypatch.setattr(sys, "argv", [
@@ -52,26 +71,17 @@ def test_runner_produces_scoped_analog_audit_after_analog(tmp_path, monkeypatch)
         "--no-dashboard",
     ])
 
-    # R-0915-151 / icslot70 — WHAT THIS FIXTURE'S RUN LEGITIMATELY IS.
-    #
-    # This arm is about ORDERING and ARGV: analog runs before the compliance audit, and that
-    # audit is invoked with the project and `--strict`. Every one of those assertions is below
-    # and untouched.
-    #
-    # The `== 0` that used to stand here was scaffolding, and it encoded the behaviour the
-    # front-door ruling changed. The stub returns 0 for phase2 and phase3 and writes NO report
-    # for either, and it writes no completion audit at all -- so nothing in this run MEASURED
-    # phase 2 or phase 3. The front door used to invent `PASS if rc == 0` from that and exit 0;
-    # it now rolls the run up as NOT_MEASURED and says why, which is the whole point of
-    # "the front door's verdict is the conjunction of its phases and the completion audit".
-    # Asserting 0 here would be asserting the invented PASS back into existence.
+    # Analog and Phase 2 have current accepted control reports. Phase 3
+    # deliberately writes none: its zero exit cannot create a whole-flow PASS.
     rc = runner.main()
     _doc = json.loads(
         (project / "reports" / "orchestrator" / "vibe_ic_one_shot.json").read_text())
     assert _doc["verdict"] == "NOT_MEASURED", (_doc["verdict"], _doc.get("verdict_reasons"))
     assert rc != 0, rc
     _why = " | ".join(_doc.get("verdict_reasons") or [])
-    assert "phase2 NOT_MEASURED" in _why and "phase3 NOT_MEASURED" in _why, _why
+    assert "phase3 NOT_MEASURED" in _why, _why
+    phases = {row["phase"]: row for row in _doc["phases"]}
+    assert phases["phase2"]["verdict"] == "PASS", phases
     assert "completion audit is not a pass" in _why, _why
 
     names = [name for _label, name, _args in calls]
