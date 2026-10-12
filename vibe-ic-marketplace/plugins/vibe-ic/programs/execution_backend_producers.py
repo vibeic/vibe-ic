@@ -1240,6 +1240,11 @@ def produce_signoff(project, params):
                 [str(sta / 'sta_spef_based.rpt'), str(sta / 'post_route_timing.rpt'),
                  str(rpt / 'sta_spef_based.rpt')],
                 produced_by='LibreLane.OpenROAD.STAPostPNR', tool='openroad', exit_code=0)
+            # The independent Step23 consumer reads the achieved period now,
+            # before the legacy phase runner's later all-step publication.
+            # Reuse its selected-arm writer so a rerun replaces the live
+            # measurement with the current worst corner, without changing SDC.
+            R._achievable_fmax_from_tool_arm(project, top, notes, written)
         if failures:
             return {'verdict': 'FAIL', 'detail': '\n'.join(failures)}
     elif sid == '24':

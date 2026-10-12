@@ -770,6 +770,7 @@ PINNED_OUTPUT_MEMBERS = frozenset({
     ('23', 'reports/phase3/sta/hold_corner_coverage.json'),
     ('23', 'reports/phase3/sta/assumed_clock_disclosure.json'),
     ('23', 'reports/phase3/clock_target_record_agreement.json'),
+    ('23', 'reports/phase3/achievable_fmax.json'),
     ('23', 'reports/phase3/sta/post_route_signoff_corner.json'),
     ('23', 'reports/phase3/sta/post_route_summary.json'),
     ('23', 'reports/phase3/sta/sta_corner_record_completeness.json'),
