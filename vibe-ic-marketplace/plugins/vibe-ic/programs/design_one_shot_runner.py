@@ -23323,7 +23323,8 @@ FMEDA_STEP_ID = "FS1"
 FMEDA_PRODUCER = "fmeda_fault_injection_coverage"
 
 
-def fmeda_producer_command(flow_yaml: Optional[Path] = None) -> Optional[str]:
+def fmeda_producer_command(flow_yaml: Optional[Path] = None, *,
+                           program: str = FMEDA_PRODUCER) -> Optional[str]:
     """Step FS1's producer command, exactly as the flow's gate states it.
 
     Read from the flow YAML instead of repeated here, so the run and the
@@ -23342,11 +23343,11 @@ def fmeda_producer_command(flow_yaml: Optional[Path] = None) -> Optional[str]:
     for step in _fdp._iter_steps(doc):
         if str(step.get("id")) != FMEDA_STEP_ID:
             continue
-        if FMEDA_PRODUCER not in (step.get("programs") or []):
+        if program not in (step.get("programs") or []):
             return None
         for cmd in _fdp._iter_commands(step.get("gate") or {}, []):
             parts = cmd.split()
-            if parts and parts[0] == FMEDA_PRODUCER and _fdp._JSON_RE.search(cmd):
+            if parts and parts[0] == program and _fdp._JSON_RE.search(cmd):
                 return cmd
     return None
 
@@ -23376,6 +23377,7 @@ def step_fmeda_fault_injection(project: Path,
     t0 = time.time()
     name = "fmeda_fault_injection"
     command = fmeda_producer_command(flow_yaml)
+    gate_command = fmeda_producer_command(flow_yaml, program="fmeda_coverage_check")
     import flow_declared_producer_run as _fdp
     if command is None:
         rel = "reports/phase2/safety/fmeda_coverage.json"
@@ -23389,6 +23391,12 @@ def step_fmeda_fault_injection(project: Path,
         out.unlink()
     except FileNotFoundError:
         pass
+    gate_rel = (_fdp._JSON_RE.search(gate_command).group(1)
+                if gate_command else None)
+    if gate_rel:
+        # The retained-step wrapper preserves prior versions before this
+        # invocation clears the canonical alias.
+        (project / gate_rel).unlink(missing_ok=True)
     if not_applicable:
         return StepResult(name, "NOT_APPLICABLE", time.time() - t0,
                           f"no digital RTL to fault-inject by design: "
@@ -23422,11 +23430,40 @@ def step_fmeda_fault_injection(project: Path,
     extras = {"producer_exit": proc.returncode, "command": command}
     verdict = str(rep.get("verdict", ""))
     detail = f"{FMEDA_PRODUCER}: {verdict} (exit {proc.returncode}) — {tail}"
+    import _structural_absence as _sa
+    absence = _sa.evidence_of(rep)
+    if gate_command:
+        # Produce the independent recomputation before the full canonical
+        # consumer checks this step's declared outputs.
+        gate_error = ""
+        gate_rep = {}
+        try:
+            gate_proc = _pr.run(
+                [sys.executable, str(PROGRAMS_DIR / "fmeda_coverage_check.py"),
+                 *gate_command.split()[1:]],
+                cwd=str(project), capture_output=True, text=True)
+            extras["coverage_gate_exit"] = gate_proc.returncode
+            gate_rep = json.loads((project / gate_rel).read_text())
+            extras["coverage_gate_report"] = gate_rel
+            gate_valid = (gate_proc.returncode == 0 and
+                          gate_rep.get("verdict") == "PASS") or (
+                gate_proc.returncode == 2 and
+                gate_rep.get("verdict") == "NOT_APPLICABLE" and
+                _sa.evidence_of(gate_rep) is not None)
+            if not gate_valid:
+                gate_error = f"independent coverage check did not complete: {gate_rep.get('verdict')}"
+        except Exception as exc:
+            gate_error = f"independent coverage check could not produce {gate_rel}: {type(exc).__name__}: {exc}"
+        if gate_error and verdict != "FAIL" and (verdict == "PASS" or absence is not None):
+            measured_failure = gate_rep.get("verdict") == "FAIL"
+            return StepResult(name, "FAIL" if measured_failure else "NOT_MEASURED",
+                              time.time() - t0, detail + "; " + gate_error,
+                              files, extras,
+                              reason_class=(None if measured_failure else
+                                            _V.ReasonClass.EXECUTION_ERROR))
     if verdict in ("PASS", "FAIL"):
         return StepResult(name, verdict, time.time() - t0, detail, files,
                           extras)
-    import _structural_absence as _sa
-    absence = _sa.evidence_of(rep)
     if absence is not None:
         return StepResult(name, "NOT_APPLICABLE", time.time() - t0, detail,
                           files, extras,

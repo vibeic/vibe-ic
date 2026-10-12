@@ -3630,61 +3630,12 @@ steps:
     program_outputs:
       - program: fmeda_fault_injection_coverage
         path: "reports/phase2/safety/fmeda_coverage.json"
-    # NO required_outputs — DELIBERATE, and REOPENED 2026-07-28 with a sharper
-    # reason than the one it carried. FS1 is the only step in this file whose
-    # artefact's ONLY producer anywhere in the plugin is the FIRST command of
-    # its own gate: `fmeda_fault_injection_coverage` is invoked here and nowhere
-    # else (no runner calls it; `grep -rn fmeda_fault_injection_coverage
-    # programs/` hits only the program itself and `fmeda_coverage_check`, which
-    # imports it as a library).
-    #
-    # A declaration was attempted and WITHDRAWN, because the only thing that
-    # made it appear to work was an auditor certifying its own output.
-    # `flow_compliance_check` returns MISSING before the gate runs when every
-    # declared entry is absent, so declaring these paths stops the gate — and
-    # therefore the producer — from ever running: MEASURED on a fixture holding
-    # only phase2/stage1/rtl, check_step returns MISSING "no required_outputs
-    # found" and the tree still holds NO file under reports/ afterwards. The
-    # withdrawn change suppressed that early return for this shape so the gate
-    # would run and a post-gate probe would find the file. That probe can only
-    # ever find a file THE AUDIT ITSELF JUST WROTE, and the suppression applied
-    # to every step of the same shape, not to FS1: MEASURED on a copy of
-    # benchmark-data/ic/ibex it turned step 8 (SDC validation) from a correct
-    # MISSING into PASS on `reports/phase2/sdc_check.json` — a file 12 other
-    # tracked roots really do carry and ibex does not.
-    #
-    # WHAT WOULD CLOSE THIS, exactly one thing: wire
-    # `fmeda_fault_injection_coverage` into a runner — the same way
-    # `phase3_one_shot_runner._DECLARED_SIGNOFF_GATES` (2026-07-27) wired the
-    # four sign-off gates the flow declared and no runner ran — so the artefact
-    # EXISTS BEFORE the audit looks. Then, and only then, declaring both paths
-    # here measures the run instead of the auditor. Until that wiring lands the
-    # entries would be satisfied by nobody but `flow_compliance_check`, which is
-    # what the 7 tracked roots carrying `reports/phase2/safety/fmeda_coverage.json`
-    # already are: every one holds the vacuous-skip verdict
-    # `{"program": "fmeda_fault_injection_coverage", "verdict": "NOT_APPLICABLE"}`
-    # — audit output committed as run evidence, not a fault-injection result.
-    #
-    # RE-MEASURED 2026-08-11 (vibe-ic#983 ruling 1 asked for exactly the
-    # declaration withdrawn above). Every load-bearing fact still holds, so the
-    # declaration is still NOT made:
-    #   * PRODUCER: still exactly one. `fmeda_fault_injection_coverage` is
-    #     reached only by this gate line; everything else that names it imports
-    #     it as a library (`fmeda_coverage_check`,
-    #     `result_md_audit_provenance_check`) or names it in prose/INDEX.
-    #   * THE BREAKAGE, reproduced on this tree: two check_step runs on a fresh
-    #     fixture holding only phase2/stage1/rtl. As shipped -> VACUOUS_PASS and
-    #     the gate WRITES both JSON files. With both paths declared -> MISSING,
-    #     "no required_outputs found", and the tree holds NO file under reports/
-    #     afterwards. Declaring stops the gate, and the gate is the producer.
-    #   * THE EVIDENCE, re-counted: 15 files across 8 published run trees, so
-    #     #983's count is right. But 7 of the 8 `fmeda_coverage.json` still hold
-    #     the vacuous NOT_APPLICABLE document; exactly ONE carries a real
-    #     fault-injection roll-up (injected/detected counts, DC vs the ASIL
-    #     floor) and its verdict is FAIL. A count of files is not a count of
-    #     measurements.
-    # #983's count held; its inference that "the step produces judgeable output"
-    # did not — the AUDITOR produces it. Unchanged until the wiring above lands.
+    required_outputs:
+      - "reports/phase2/safety/fmeda_coverage.json"
+      - "reports/phase2/safety/fmeda_coverage_gate.json"
+    # The phase-2 runner produces both the fault-injection result and its
+    # independent recomputation before the canonical consumer runs. Missing
+    # output still blocks the audit; the audit is not the first producer.
     gate:
       all_of:
         - program_exit_zero: "fmeda_fault_injection_coverage . --rtl-dir phase2/stage1/rtl --asil D --json reports/phase2/safety/fmeda_coverage.json"
