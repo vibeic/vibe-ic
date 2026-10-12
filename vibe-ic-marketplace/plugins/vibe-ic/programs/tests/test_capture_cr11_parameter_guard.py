@@ -8,7 +8,7 @@ sys.path.insert(0, str(PROGRAMS))
 import serial_parallel_mul_synth as synth
 import spec_conformance_check as conformance
 import pytest
-from parameter_range_contract import minimums, has_elaboration_guard, rtl_parameter_names
+from parameter_range_contract import minimums, has_elaboration_guard
 
 
 def _project(tmp_path, name, *, minimum):
@@ -77,6 +77,7 @@ def test_json_ranges_are_parameter_scoped_and_preserve_physical_requirements():
 
 
 def test_bare_json_range_uses_the_checked_modules_actual_parameters():
+    from parameter_range_contract import rtl_parameter_names
     rtl = ('module core #(parameter WIDTH=5)(); endmodule '
            'module child #(parameter hold=0)(); endmodule')
     names = rtl_parameter_names(rtl, "core")
