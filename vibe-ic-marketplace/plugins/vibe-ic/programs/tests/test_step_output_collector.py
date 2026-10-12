@@ -46,6 +46,31 @@ def test_portable_output_hash_covers_empty_and_multiple_chunks(tmp_path, monkeyp
         assert SOC._sha(path) == hashlib.sha256(data).hexdigest()
 
 
+def test_sequential_child_does_not_interrupt_its_live_parent(tmp_path):
+    import _progress_run as pr
+    parent = SOC.begin_step(tmp_path, '1')
+    folder = tmp_path / parent['storage_root'] / parent['folder']
+    inherited = os.environ.get(SOC._ACTIVE_LOCAL_ENV)
+    code = ('import sys; from pathlib import Path; '
+            f'sys.path.insert(0, {str(PROG)!r}); '
+            'import step_output_collector as soc; '
+            f'p=Path({str(tmp_path)!r}); '
+            'child=soc.begin_step(p,"2"); '
+            'soc.finish_step(p,child,verdict="FAIL")')
+    with SOC.active_steps(tmp_path, [parent]):
+        child = pr.run([sys.executable, '-c', code], capture_output=True, text=True)
+        assert child.returncode == 0, child.stderr
+        assert not (folder / 'outputs.json').exists()
+        SOC.finish_step(tmp_path, parent, verdict='FAIL')
+    assert os.environ.get(SOC._ACTIVE_LOCAL_ENV) == inherited
+    assert json.loads((folder / 'outputs.json').read_text())['status'] == 'FAIL'
+    # A genuinely unfinished previous top-level call must still recover.
+    abandoned = SOC.begin_step(tmp_path, '1')
+    SOC.begin_step(tmp_path, '2')
+    recovered = tmp_path / abandoned['storage_root'] / abandoned['folder'] / 'outputs.json'
+    assert json.loads(recovered.read_text())['status'] == 'INTERRUPTED'
+
+
 @pytest.mark.parametrize('step', FDD._load_flow()[1], ids=lambda s: str(s['id']))
 def test_every_canonical_step_keeps_all_declared_previous_bytes(tmp_path, step):
     """All 70 declarations; synthetic file transport, not native IC execution."""

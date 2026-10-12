@@ -347,22 +347,19 @@ def test_runner_calls_the_reconciler_at_the_tail_of_the_run():
 
 
 def test_spi_universal_overlay_is_the_documented_source_of_the_claim():
-    """Root-cause pin. `_apply_universal` is called for EVERY dispatched
-    ic_class, not just SPI, and stamps the positive claim unconditionally.
-    If that ever becomes conditional the reconciler is still correct, but this
-    test should be revisited rather than silently kept green."""
+    """The overlay must claim a map only when real register records exist."""
     import spi_protocol_synth as S
-    doc = {"registers": []}
     # Drive the real helper over a temp generated_docs dir.
     import tempfile
-    with tempfile.TemporaryDirectory() as td:
-        gd = Path(td)
-        (gd / "L4_REGMAP.json").write_text(json.dumps(doc))
-        S.apply_spi_synth(gd, False, None)
-        after = json.loads((gd / "L4_REGMAP.json").read_text())
-    assert after.get(CLAIM_PRESENT) is True, (
-        "the unconditional overlay claim is gone — re-check whether the "
-        "reconciler is still the right place for the repair")
-    # ... and the reconciler withdraws it again.
-    reconcile_register_map_claims(after)
-    assert CLAIM_PRESENT not in after
+    for registers in ([], [{"name": "CTRL", "offset": "0x00", "width_bits": 8}]):
+        with tempfile.TemporaryDirectory() as td:
+            gd = Path(td)
+            (gd / "L4_REGMAP.json").write_text(json.dumps({"registers": registers}))
+            S.apply_spi_synth(gd, False, None)
+            after = json.loads((gd / "L4_REGMAP.json").read_text())
+        if registers:
+            assert after.get(CLAIM_PRESENT) is True
+        else:
+            assert after.get(CLAIM_PRESENT) is not True
+            reconcile_register_map_claims(after)
+            assert CLAIM_PRESENT not in after

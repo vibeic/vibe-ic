@@ -235,13 +235,17 @@ def test_real_fmeda_pass_cannot_mask_rejecting_complete_consumer(tmp_path, monke
     seen = reject_consumer(monkeypatch)
     rel = 'reports/phase2/safety/fmeda_coverage.json'
     path = write(tmp_path, rel, b'previous coverage')
+    calls = []
     def native(argv, **kwargs):
-        assert not path.exists() and not seen
-        path.write_text('{"verdict":"PASS"}')
+        current = tmp_path / argv[argv.index('--json') + 1]
+        assert not current.exists() and not seen
+        calls.append(Path(argv[1]).name)
+        current.write_text('{"verdict":"PASS"}')
         return SimpleNamespace(returncode=0, stdout='current coverage', stderr='')
     monkeypatch.setattr(design._pr, 'run', native)
     assert design.step_fmeda_fault_injection(tmp_path).status == 'PASS'
     assert seen == ['FS1']
+    assert calls == ['fmeda_fault_injection_coverage.py', 'fmeda_coverage_check.py']
     folder, record = saved(tmp_path, 'FS1')
     assert record['status'] == 'FAIL' and not record['canonical_pass']
     assert prior(folder, rel) == b'previous coverage'
