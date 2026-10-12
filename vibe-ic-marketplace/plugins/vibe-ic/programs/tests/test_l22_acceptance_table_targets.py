@@ -1,4 +1,5 @@
 import json,sys
+import pytest
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from l22_coverage_goal_emit import run
@@ -33,3 +34,25 @@ def test_observed_and_nonpercentage_not_promoted(tmp_path):
 def test_existing_numeric_goal_preserved(tmp_path):
  original={'name':'custom target','target_pct':88,'source':'owner input'}
  goals,_=emit(tmp_path,'No new targets.',[original]);assert goals==[original]
+
+@pytest.mark.parametrize('name_header,criterion_header,criterion,expected', [
+ ('Test class', '必過判定', '100% PASS', 1),
+ ('Test class', '必過判定', '100% PASS(可用標準套件或內附測試)', 1),
+ ('Test category', 'Pass criterion', '100% PASS (may use the standard suite)', 1),
+ ('Test class', '必過判定', '100% PASS (if optional mode is enabled)', 0),
+ ('Test class', 'Measured', '100% PASS', 0),
+])
+def test_test_class_pass_requirements_preserve_annotations(
+        tmp_path, name_header, criterion_header, criterion, expected):
+ text=(f'| {name_header} | {criterion_header} |\n|---|---|\n'
+       f'| Instruction compliance | {criterion} |\n')
+ goals,report=emit(tmp_path,text)
+ assert report['emitted_count']==expected, report
+ assert len(goals)==expected
+ if expected:
+  assert goals[0]['target_pct']==100
+  assert goals[0]['criterion']==criterion
+  assert goals[0]['source_columns'][criterion_header]==criterion
+  assert goals[0]['signoff_gate'] is True
+  assert goals[0]['metric_kind']=='pass_rate'
+  assert run(tmp_path)['emitted_count']==0

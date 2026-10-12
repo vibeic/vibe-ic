@@ -204,9 +204,9 @@ def _acceptance_table_goals(project: Path) -> List[Dict[str, Any]]:
     merely because another row has the same name and percentage.
     """
     result: List[Dict[str, Any]] = []
-    criteria = {"判定", "接受區間", "acceptance criterion", "acceptance criteria",
+    criteria = {"判定", "必過判定", "必过判定", "接受區間", "acceptance criterion", "acceptance criteria",
                 "pass criterion", "pass criteria", "acceptance range"}
-    names = {"測試類別", "测试类别", "指標", "指标", "metric", "test category"}
+    names = {"測試類別", "测试类别", "指標", "指标", "metric", "test category", "test class"}
     gate_headers = {"是否 sign-off gate", "sign-off gate", "signoff gate"}
     for path, text in input_doc_texts(project):
         lines = text.splitlines()
@@ -231,7 +231,12 @@ def _acceptance_table_goals(project: Path) -> List[Dict[str, Any]]:
                     continue
                 criterion = cells[ci[0]]
                 parsed_criterion = re.sub(r"^(\*\*|__|`)(.*?)\1$", r"\2", criterion)
-                match = re.fullmatch(r"(\d+(?:\.\d+)?)\s*%\s*PASS(?:\s*\(binary\))?",
+                # Method-selection notes do not change a PASS target. Keep
+                # the original criterion below; unknown/conditional trailing
+                # clauses still refuse instead of becoming unconditional goals.
+                match = re.fullmatch(r"(\d+(?:\.\d+)?)\s*%\s*PASS"
+                                     r"(?:\s*\((?:binary|(?:may|can)\s+use\s+[^()\n]+"
+                                     r"|可(?:用|使用)[^()\n]+)\))?",
                                      parsed_criterion, re.I)
                 if not match or not 0 <= float(match.group(1)) <= 100:
                     continue
