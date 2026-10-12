@@ -149,6 +149,7 @@ def _l9_contract(records: List[Dict[str, str]]) -> Dict[str, Any]:
         r"對外|外部|端口|介面|参数|參數|啟動", re.I))
     architecture = _selected(records, ("L2", "L8"), re.compile(
         r"architecture|functional|system|memory|sram|integration|ISA|"
+        r"\bcore\b|\bwrapper\b|\binterface\b|"
         r"架構|功能|系統|組成|記憶體|整合|同步", re.I))
     reset_boot = _selected(records, ("L2", "L3", "L7"), re.compile(
         r"reset|boot|同步|啟動|启动", re.I))

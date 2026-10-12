@@ -28,6 +28,45 @@ def _write_doc(project: Path, name: str, text: str) -> None:
     (root / name).write_text(text, encoding="utf-8")
 
 
+def test_submodule_core_and_wrapper_interfaces_reach_architecture(tmp_path):
+    _write_consumers(tmp_path)
+    _write_doc(tmp_path, "L8_submodule.md", """\
+layer: L8
+# Structural block contracts
+## Compute core
+Separate instruction bus, data bus, and RF interface are required.
+## Bus wrapper
+The wrapper exposes instruction bus and data bus after adapting the RF interface.
+""")
+    report = C.run(tmp_path)
+    assert report["status"] == "OK"
+    l9 = json.loads((tmp_path / "phase1/generated_docs/L9_INTEGRATION_SPEC.json").read_text())
+    architecture = l9.get("integration", {}).get("architecture", [])
+    assert len(architecture) == 2, architecture
+    assert all("instruction bus" in item["evidence"] and
+               "data bus" in item["evidence"] for item in architecture)
+    assert all(item["source"] == "input/docs/L8_submodule.md" for item in architecture)
+    before = (tmp_path / "phase1/generated_docs/L9_INTEGRATION_SPEC.json").read_bytes()
+    C.run(tmp_path)
+    assert (tmp_path / "phase1/generated_docs/L9_INTEGRATION_SPEC.json").read_bytes() == before
+
+
+def test_denied_or_untyped_core_contracts_are_not_promoted(tmp_path):
+    _write_consumers(tmp_path)
+    _write_doc(tmp_path, "L8_submodule.md", """\
+layer: L8
+## No compute core
+This design does not need an instruction bus or data bus.
+""")
+    _write_doc(tmp_path, "notes.md", """\
+## Compute core
+An instruction bus and data bus are only a discussion example.
+""")
+    C.run(tmp_path)
+    l9 = json.loads((tmp_path / "phase1/generated_docs/L9_INTEGRATION_SPEC.json").read_text())
+    assert l9.get("integration", {}).get("architecture", []) == []
+
+
 def test_positive_cross_layer_contracts_reach_their_consumers(tmp_path):
     """Positive: explicit layer contracts land in L9/L19 with provenance."""
     _write_consumers(tmp_path)

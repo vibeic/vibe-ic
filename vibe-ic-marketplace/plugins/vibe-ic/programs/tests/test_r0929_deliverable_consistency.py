@@ -112,6 +112,70 @@ def _gen():
     return importlib.import_module("area_budget_basis_gen")
 
 
+def _operator_slot(project, doc, name="small", rect=(0, 0, 100, 200)):
+    import _submission_template as ST
+    source = project / ST.STAGED_TEMPLATE_REL / (name + ".json")
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text(json.dumps({"SLOT": name, "DIE_AREA": list(rect)}))
+    record = ST.slot_record(source, json.loads(source.read_text()), source.parent)
+    slots = project / ST.SLOTS_DIR_REL
+    slots.mkdir(parents=True, exist_ok=True)
+    (slots / (name + ".yaml")).write_text(json.dumps(record))
+    doc["operator_template"] = {"slot": name}
+    doc.setdefault("answer_provenance", {})["operator_template.slot"] = {
+        "answered_by": "owner", "citation": "Owner selected " + name,
+    }
+    doc["answers"]["die_area_um"] = list(rect)
+    return source
+
+
+def test_owner_slot_reaches_budget_and_l19_consumer(tmp_path):
+    project = tmp_path / "project"
+    path = project / "input/docs/L9_constraints.md"
+    path.parent.mkdir(parents=True)
+    path.write_text(L9)
+    doc = _answers()
+    _operator_slot(project, doc, rect=(10, 20, 110.25, 220.75))
+    got = _gen().derive(project, doc)
+    assert got["status"] == "WRITE", got
+    resolution = TD.area_budget_resolution({
+        "synthesis_area_budget": got["budget"]})
+    assert resolution["status"] == "LIMIT", resolution
+    assert resolution["ceiling_wxh_um"] == "100.25x200.75", resolution
+    assert "OUTCOME" not in got["budget"]["rationale"]
+    assert "operator" in got["budget"]["rationale"].lower()
+    assert "input/submission_template/slots/small.yaml" in got["inputs"]
+
+
+@pytest.mark.parametrize("defect", ["unattested", "changed_source", "mutated_slot", "missing_digest", "stale_owner"])
+def test_operator_slot_authority_refuses_bad_geometry(tmp_path, defect):
+    project = tmp_path / "project"
+    path = project / "input/docs/L9_constraints.md"
+    path.parent.mkdir(parents=True)
+    path.write_text(L9)
+    doc = _answers()
+    source = _operator_slot(project, doc)
+    if defect == "unattested":
+        doc["answer_provenance"]["operator_template.slot"]["answered_by"] = "agent"
+    elif defect == "changed_source":
+        source.write_text(json.dumps({"SLOT": "small", "DIE_AREA": [0, 0, 300, 400]}))
+    elif defect in {"mutated_slot", "missing_digest"}:
+        slot = project / "input/submission_template/slots/small.yaml"
+        data = json.loads(slot.read_text())
+        if defect == "mutated_slot":
+            data["die_area"]["rect"] = ["0", "0", "300", "400"]
+        else:
+            data.pop("source_sha256")
+        slot.write_text(json.dumps(data))
+    else:
+        current = copy.deepcopy(doc)
+        current["answer_provenance"]["operator_template.slot"]["answered_by"] = "agent"
+        (project / ANSWERS_REL).write_text(json.dumps(current))
+    got = _gen().derive(project, doc)
+    assert got["status"] == "REFUSED", got
+    assert "budget" not in got
+
+
 @pytest.mark.parametrize("statement", [
     "Die dimensions should be sized by the canonical IC flow and IO requirements.",
     "Die area is determined by the run.",
