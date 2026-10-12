@@ -463,13 +463,15 @@ def collect_instance_connections(src: str,
     return connected
 
 
-def rule_undriven_and_unread(src: str, path: str) -> List[Finding]:
+def rule_undriven_and_unread(src: str, path: str,
+                           instance_connections=None, resolved_drivers=None) -> List[Finding]:
     findings: List[Finding] = []
     decls = find_declarations(src)
-    lhs = collect_lhs_set(src)
+    lhs = collect_lhs_set(src) if resolved_drivers is None else set(resolved_drivers)
     rhs = collect_rhs_set(src)
     uncertain: Set[str] = set()
-    inst_sigs = collect_instance_connections(src, uncertain)
+    inst_sigs = (collect_instance_connections(src, uncertain) if instance_connections is None
+                 else instance_connections)
 
     for kind, name, lineno in decls:
         driven = name in lhs or name in inst_sigs
@@ -6617,19 +6619,47 @@ def autofix_delayed_blocking_clock_toggle(path: Path) -> Tuple[int, List[str]]:
     return len(sites), [str(site['name']) for site in sites]
 
 
-def lint_file(path: Path) -> List[Finding]:
+def lint_file(path: Path, hierarchy=None) -> List[Finding]:
     raw = path.read_text(errors='replace')
     src = strip_comments(raw)
     results = []
     results += rule_input_port_reg(src, str(path))
     results += rule_output_port_reg_redeclared(src, str(path))
     results += rule_delayed_blocking_clock_toggle(src, str(path))
-    results += rule_undriven_and_unread(src, str(path))
+    if hierarchy is None:
+        results += rule_undriven_and_unread(src, str(path))
+    else:
+        # The CLI's exact file selection is one hierarchy. Preserve module
+        # scope: a sibling's same-named driver never credits a local wire.
+        for region in hierarchy.by_file[str(path)]:
+            body, driven, connections, problems = hierarchy.drivers(region.module.name)
+            local_source = region.header + body + '\nendmodule'
+            local = rule_undriven_and_unread(local_source, str(path), connections, driven)
+            for finding in local:
+                finding.line += region.module.line - 1
+            results += local
+            for line, symbol, reason in problems:
+                results.append(Finding(str(path), line, 'ERROR',
+                                       'hierarchy-port-resolution', symbol, reason))
+            if region.module.discovery_issues:
+                results.append(Finding(str(path), region.module.line, 'ERROR',
+                                       'hierarchy-port-resolution', region.module.name,
+                                       '; '.join(region.module.discovery_issues)))
+            # Empty declarations remain explicit black-box/stub interfaces.
+            if not body.strip():
+                continue
+            for port in region.module.ports.values():
+                if port.direction == 'output' and port.name not in driven:
+                    results.append(Finding(str(path), port.line, 'ERROR',
+                                           'undriven-output-port', port.name,
+                                           f"output port '{port.name}' is not driven in "
+                                           f"module '{region.module.name}' selected configuration."))
     results += rule_case_coverage(src, str(path))
     results += rule_if_no_else_latch(src, str(path))
     results += rule_pulse_swallow(src, str(path))
     results += rule_uninit_registered_output(src, str(path))
-    results += rule_undriven_output_port(src, str(path))
+    if hierarchy is None:
+        results += rule_undriven_output_port(src, str(path))
     results += rule_incomplete_sensitivity(src, str(path))
     results += rule_vector_self_shift_fold(src, str(path))
     results += rule_reserved_word_identifier(src, str(path))
@@ -7343,13 +7373,25 @@ def main():
     min_sev = sev_order[args.severity]
 
     all_findings: List[Finding] = []
+    try:
+        from rtl_hierarchy_drivers import DriverContext
+        hierarchy = DriverContext([Path(f) for f in args.files],
+                                  _procedural_statement_end, collect_lhs_set)
+    except (OSError, ValueError) as exc:
+        # Unsafe discovery is a visible rejection, never a clean empty list.
+        finding = Finding(str(args.files[0]), 1, 'ERROR',
+                          'hierarchy-port-resolution', '', str(exc))
+        if args.json:
+            atomic_write_text(Path(args.json), json.dumps([asdict(finding)], indent=2))
+        print(f"ERROR hierarchy-port-resolution: {exc}", file=sys.stderr)
+        return 1
     for f in args.files:
         p = Path(f)
         if not p.exists():
             print(f"WARNING: file not found: {f}", file=sys.stderr)
             continue
         try:
-            all_findings += lint_file(p)
+            all_findings += lint_file(p, hierarchy)
         except Exception as e:
             print(f"ERROR parsing {f}: {e}", file=sys.stderr)
             return 2
