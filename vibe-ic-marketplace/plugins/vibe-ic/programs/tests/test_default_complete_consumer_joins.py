@@ -114,6 +114,57 @@ def test_default_dft_chain_stops_before_next_producer_on_complete_rejection(
     assert result[0].status == 'PASS', 'the original native result remains unchanged'
 
 
+@pytest.mark.parametrize('failed,status', [
+    *[(sid, status) for sid in ('11', 'DT1', '12') for status in ('FAIL', 'NOT_MEASURED')],
+    pytest.param('lightweight', 'NOT_APPLICABLE', id='lightweight_keeps_lec'),
+    pytest.param('undeclared_dft', 'NOT_APPLICABLE', id='undeclared_dft_keeps_lec'),
+])
+def test_default_dft_native_rejection_stops_without_complete_consumer(
+        tmp_path, monkeypatch, failed, status):
+    """Native failure has no completed consumer; it must still stop its successor."""
+    calls = []
+    declared_absent = failed in ('lightweight', 'undeclared_dft')
+    write(tmp_path, 'phase2/stage2/synth/netlist.v', b'module top(input clk); endmodule')
+    monkeypatch.setattr(gates, 'evaluate', lambda project, row: {
+        'status': 'PASS', 'ledger': [], 'step': {'id': str(row['id']), 'status': 'PASS'}})
+    monkeypatch.setattr(gates, 'contracts', lambda *a: {'control_fixture': {}})
+    def native_row(name, sid):
+        word = 'NOT_APPLICABLE' if declared_absent else status if failed == sid else 'PASS'
+        return design.StepResult(name, word, 0.0, 'native control outcome',
+            declared_by='declared no DFT in control fixture' if word == 'NOT_APPLICABLE' else '',
+            reason_class=design._V.ReasonClass.NOT_EXECUTED if word == 'NOT_MEASURED' else '')
+    @preflight.retained_step('11', canonical_acceptance=True)
+    def insertion(project, *args):
+        calls.append('11')
+        return design._dft_owned_result([native_row('dft_insertion', '11')], 'fixture')
+    def transition(project, *args):
+        calls.append('DT1')
+        rc = 2 if declared_absent or failed == 'DT1' and status == 'NOT_MEASURED' else 1 if failed == 'DT1' else 0
+        return {'rc': rc, 'pdk': 'fixture'}
+    @preflight.retained_step('12', canonical_acceptance=True)
+    def post(project, *args):
+        calls.append('12')
+        return design._dft_owned_result([native_row('post_dft_opt', '12')])
+    def lec(project, top, container, results, **kwargs):
+        calls.append('13')
+        return results + [design.StepResult('lec_equivalence', 'PASS', 0.0, 'native control PASS')]
+    monkeypatch.setattr(design, '_step_dft_insertion', insertion)
+    monkeypatch.setattr(design, '_run_transition_atpg', transition)
+    monkeypatch.setattr(design, '_step_post_dft_optimization', post)
+    monkeypatch.setattr(design, 'step_lec_equivalence', lec)
+    result = design.step_dft_lec_chain(tmp_path, 'top', 'unused', 'digital',
+                                      full_chip=(failed != 'lightweight'))
+    if declared_absent:
+        assert calls == ['11', 'DT1', '12', '13']
+        assert result[-1].name == 'lec_equivalence' and result[-1].status == 'PASS'
+    else:
+        assert calls == ['11', 'DT1', '12'][:['11', 'DT1', '12'].index(failed) + 1]
+        assert result[-1].status == status
+        record = saved(tmp_path, failed)[1]
+        assert record['status'] == status
+        assert record['result']['canonical_consumer'] is None
+
+
 @pytest.mark.parametrize('runner,site,sid', [
     ('design_one_shot_runner', 'rtl_gen', '1'),
     ('design_one_shot_runner', 'asic_sdc', '7'),
