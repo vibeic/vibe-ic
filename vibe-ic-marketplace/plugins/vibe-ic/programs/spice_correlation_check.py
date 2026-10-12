@@ -2977,8 +2977,17 @@ def run_installed_pdk_path_correlation(project: Path, liberty_path: str,
         doc = pst.run_current_step30(project, image, Path(root), pdk)
         return {'status': 'RAN', 'verdict': doc['verdict'], 'report': doc}
     except (lc.Refusal, OSError, ValueError, KeyError, TypeError) as exc:
+        reason = str(exc)
+        if getattr(exc, 'code', None) == 'LL_STAPOSTPNR_STATE_ABSENT':
+            excluded = _unverified_session_candidates(project)
+            if excluded:
+                # A legacy PnR report is not a substitute for the current
+                # extracted tool State. Name the existing exclusion so a
+                # missing-checkpoint refusal also explains that material.
+                reason += '; PNR_SESSION_UNVERIFIED: refusing unattested reports: ' + ', '.join(
+                    _rel_or_name(project, path) for path in excluded)
         return _persist_declared_refusal(project, {'status': 'ERROR',
-            'measurement': 'NOT_MEASURED', 'reason': str(exc)})
+            'measurement': 'NOT_MEASURED', 'reason': reason})
 
 
 # ══════════════════════════════════════════════════════════════════════════

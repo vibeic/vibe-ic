@@ -158,7 +158,7 @@ def test_end_to_end_gate_does_not_crash_on_openroad_report(tmp_path):
     assert "summary" in rpt
 
 # SPM1130: exercise the actual PnR writer tail in a Tcl interpreter, then
-# the actual selected-report/corner consumer. No STA or SPICE is launched.
+# the current State/receipt corner consumer. No STA or SPICE is launched.
 _CORNER_LIBS = ('define_corners nominal quick slow\n'
                 'read_liberty -corner nominal /pdk/typ.lib\n'
                 'read_liberty -corner quick /pdk/fast.lib\n'
@@ -232,51 +232,52 @@ def _emit_bound_report(tmp_path, raw, stanza=_CORNER_LIBS):
     return pnr / 'sta.rpt'
 
 
-def _attested_copy(tmp_path, rpt):
-    """The writer's bytes WITHOUT its `PNR_SESSION_UNVERIFIED` line, placed
-    where attested sign-off STA lives, and the in-session original removed.
+def _current_binding_fixture(tmp_path, monkeypatch, *, corner='slow', liberty_name='slow.lib'):
+    """Use the current producer's real State/receipt input contract.
 
-    R-0915-154: the in-session `pnr/sta.rpt` is never a correlation source, so
-    the consumer half of these writer tests can no longer run on it. What they
-    test -- that the path is bound to the corner the WRITER chose, and that the
-    consumer correlates at that corner or refuses -- is unchanged, and it is
-    run on the same bytes minus exactly the one line that makes a report
-    ineligible. The line itself is asserted on the original before removal.
+    Native transport stops explicitly after current binding and actual Tcl
+    construction. These source controls provide no STA/SPICE/IC PASS credit.
     """
-    text = rpt.read_text()
-    assert 'STA_PARASITICS_PROVENANCE: PNR_SESSION_UNVERIFIED' in text
-    sta_dir = SCC._pl.sta_dir(tmp_path)
-    sta_dir.mkdir(parents=True, exist_ok=True)
-    out = sta_dir / 'sta_bound_attested.rpt'
-    out.write_text(''.join(l for l in text.splitlines(True)
-                           if 'PNR_SESSION_UNVERIFIED' not in l))
-    rpt.unlink()
-    return out
+    import test_default_si_spice_power as fixture
+    LC, PST = fixture.LC, fixture.PST
+    p, folder, lib = fixture.project(tmp_path, corner=corner, liberty_name=liberty_name)
+    fixture.write(p / 'fixture_pdk/neutral/libs.tech/ngspice/model.sp',
+                  '.model neutral nmos level=1\n')
+    fixture.write(p / 'fixture_pdk/neutral/libs.tech/magic/neutral.magicrc',
+                  '# SOURCE_FIXTURE_ONLY\n')
+    fixture.write(p / 'fixture_pdk/neutral/libs.tech/librelane/config.tcl',
+                  '# SOURCE_FIXTURE_ONLY\n')
+    monkeypatch.setattr(LC, 'resolve_image', lambda *_a, **_k: fixture.BF.IMAGE)
+    monkeypatch.setattr(LC, 'pdk_root_resolution', lambda *_a, **_k: {
+        'path': str(p / 'fixture_pdk')})
+    calls = []
+    def stopped_transport(project, image, root, pdk, **_kwargs):
+        subject, context = PST.current_context(project, image, root, pdk)
+        inputs = LC.post_pnr_timing_inputs(project, folder / 'state_out.json', context['corner'])
+        script = PST.arm_tcl(inputs, project, 'neutral', str(project / inputs['spef']),
+                            ('neutral_fixture', 'typ'), [PST.REG_TO_REG],
+                            project / 'SOURCE_FIXTURE_ONLY', 'fixture_cells.sp',
+                            'fixture_models.sp', 'VDD', 'VSS', 'ngspice')
+        calls.append({'subject': subject, 'context': context, 'inputs': inputs, 'script': script})
+        raise LC.Refusal('SOURCE_FIXTURE_ONLY_NATIVE_TRANSPORT_NOT_RUN',
+                         'current binding observed; no native simulator launched')
+    monkeypatch.setattr(PST, 'run_step30', stopped_transport)
+    return p, folder, lib, calls
 
 
-def _consume_binding(tmp_path, monkeypatch, unreadable=''):
-    pnr = tmp_path / 'phase3/stage3/pnr'
-    _net = pnr / 'chip_pnr.v'
-    _net.write_text('module chip(input a, output z); BUF u1 (.A(a), .Z(z)); endmodule\n')
-    # R-0915-166 — PRODUCTION ORDER: route first, THEN time it. These fixtures
-    # emit the report before this helper runs, so the netlist would otherwise be
-    # NEWER than the STA that timed it and the freshness rule would (correctly)
-    # call the report a previous layout's. Backdated so the fixture models the
-    # order a real run has, and the cases keep measuring CORNER BINDING.
-    import os as _os
-    _rpt_t = max((f.stat().st_mtime for f in tmp_path.rglob('*.rpt')),
-                 default=_net.stat().st_mtime)
-    _os.utime(_net, (_rpt_t - 60, _rpt_t - 60))
-    extracted = SCC._pl.extracted_dir(tmp_path)
-    extracted.mkdir(parents=True, exist_ok=True)
-    (extracted / 'chip.spef').write_text('*SPEF "IEEE 1481-1998"\n')
-    monkeypatch.setattr(SCC, '_resolve_ngspice', lambda *_: '/never-launched/ngspice')
-    monkeypatch.setattr(SCC, '_read_container_text', lambda _, path: '' if path == unreadable else 'library (fixture) {}')
-    monkeypatch.setattr(SCC, 'discover_installed_pdk_sources', lambda *args: {'subckt_names': {'BUF'}})
-    # Stop AFTER actual report selection + corner validation. No simulator,
-    # deck, tolerance or signoff PASS is fabricated by these CPU fixtures.
-    monkeypatch.setattr(SCC, 'resolve_path_stages', lambda *args: None)
-    return SCC.run_installed_pdk_path_correlation(tmp_path, '/pdk/typ.lib', container='fixture')
+def _consume_current_binding(project):
+    # The active Liberty hint must not override the corner owned by Step23.
+    return SCC.run_installed_pdk_path_correlation(
+        project, '/pdk/neutral/typ.lib', container='SOURCE_FIXTURE_ONLY')
+
+
+def _assert_unmeasured_current_refusal(project, result):
+    assert result['status'] == 'ERROR', result
+    assert result['measurement'] == 'NOT_MEASURED', result
+    assert not (project / 'reports/phase3/spice_correlation.current.json').exists()
+    gate = SCC.run_audit(project, run_spice=False)
+    assert not gate.passed and gate.summary['measurement'] == 'NOT_MEASURED'
+    assert SCC.main([str(project), '--no-spice', '--json', str(project / 'fixture-gate.json')]) == 1
 
 
 @pytest.mark.parametrize('corner,stanza,expected', [
@@ -285,58 +286,155 @@ def _consume_binding(tmp_path, monkeypatch, unreadable=''):
     ('', None, '/pdk/typ.lib'),
 ], ids=['setup-slow-not-active-typ', 'setup-fast-not-label-assumption', 'single-corner'])
 def test_writer_binds_actual_selected_path(tmp_path, monkeypatch, corner, stanza, expected):
-    rpt = _emit_bound_report(tmp_path, _native_path(corner), stanza)
+    p, folder, lib, calls = _current_binding_fixture(
+        tmp_path, monkeypatch, corner=corner or 'nominal', liberty_name=Path(expected).name)
+    rpt = _emit_bound_report(p, _native_path(corner), stanza)
     assert 'STA_PARASITICS_PROVENANCE: PNR_SESSION_UNVERIFIED' in rpt.read_text()
-    rpt = _attested_copy(tmp_path, rpt)
-    result = _consume_binding(tmp_path, monkeypatch)
-    assert result['reason'] == 'critical path not stitchable', result
-    assert SCC._pick_sta_report(tmp_path, {'BUF'}) == rpt
     assert SCC.parse_sta_corner_basis(rpt.read_text())['liberty'] == expected
+    result = _consume_current_binding(p)
+    _assert_unmeasured_current_refusal(p, result)
+    assert result['reason'].startswith('SOURCE_FIXTURE_ONLY_NATIVE_TRANSPORT_NOT_RUN:'), result
+    assert len(calls) == 1
+    observed = calls[0]
+    assert observed['context']['corner'] == (corner or 'nominal')
+    guest = '/pdk/neutral/' + Path(expected).name
+    assert observed['inputs']['liberties'] == [guest]
+    assert [row['path'] for row in observed['subject']['inputs']
+            if row['role'].startswith('liberty:')] == [str(lib)]
+    assert 'read_liberty ' + guest + '\n' in observed['script']
+    assert 'report_checks -path_delay max ' in observed['script']
+    assert 'write_path_spice -path_args {-path_delay max ' in observed['script']
+    assert 'read_spef ' + str(p / observed['inputs']['spef']) + '\n' in observed['script']
+    # A PnR-session report stays ineligible; no fixture removes its stamp.
+    assert SCC._pick_sta_report(p, {'BUF'}) is None
+    assert rpt.is_file()
+
+
+def test_current_corner_accepts_bound_libraries_and_refuses_an_unbound_addition(tmp_path, monkeypatch):
+    import test_default_si_spice_power as fixture
+    p, folder, lib, calls = _current_binding_fixture(tmp_path, monkeypatch)
+    aux = fixture.write(lib.parent / 'aux.lib',
+                        'library(neutral_aux) { default_operating_conditions: typ; }\n')
+    guest = '/pdk/neutral/aux.lib'
+    config_path = p / 'phase3/librelane/22-config/OpenROAD.STAPostPNR.json'
+    config = json.loads(config_path.read_text())
+    config['CELL_LIBS']['*'].append(guest)
+    fixture.put(config_path, config)
+    fixture.put(folder / 'config.json', config)
+    fp = json.loads((folder / 'input_fingerprint.json').read_text())
+    fp['config'] = fixture.LC.digest(config_path)
+    fp['config_files'][guest] = fixture.LC.digest(aux)
+    fp['liberty_files'][guest] = fixture.LC.digest(aux)
+    log = folder / 'slow/sta.log'
+    with log.open('a') as f:
+        f.write("Reading cell library for the 'slow' corner at '" + guest + "'\n")
+    fixture.seal(folder, fp)
+    result = _consume_current_binding(p)
+    _assert_unmeasured_current_refusal(p, result)
+    assert result['reason'].startswith('SOURCE_FIXTURE_ONLY_NATIVE_TRANSPORT_NOT_RUN:')
+    assert len(calls) == 1 and calls[0]['inputs']['liberties'] == ['/pdk/neutral/slow.lib', guest]
+    assert [row['path'] for row in calls[0]['subject']['inputs']
+            if row['role'].startswith('liberty:')] == [str(lib), str(aux)]
+    assert 'read_liberty ' + guest + '\n' in calls[0]['script']
+    with log.open('a') as f:
+        f.write("Reading cell library for the 'slow' corner at '/pdk/neutral/unbound.lib'\n")
+    fixture.seal(folder, fp)
+    result = _consume_current_binding(p)
+    _assert_unmeasured_current_refusal(p, result)
+    assert 'CURRENT_STAPOSTPNR_CORNER_LIBRARY_UNBOUND' in result['reason']
+    assert len(calls) == 1, 'the unbound addition must stop before a second native invocation'
 
 
 @pytest.mark.parametrize('case', ['missing-corner', 'unknown-corner', 'contradictory-corner',
     'conflicting-libraries', 'multiple-bare-libraries', 'hold-path', 'unreadable-library',
     'first-unbound-later-valid', 'missing-path-type', 'unknown-read-syntax'])
 def test_writer_binding_refusals(tmp_path, monkeypatch, case):
+    import test_default_si_spice_power as fixture
+    p, folder, lib, calls = _current_binding_fixture(tmp_path, monkeypatch)
     stanza = _CORNER_LIBS
     raw = _native_path()
-    unreadable = ''
-    if case == 'missing-corner': raw = _native_path('')
-    if case == 'unknown-corner': raw = _native_path('unloaded')
-    if case == 'contradictory-corner': raw = raw.replace('Corner: slow', 'Corner: slow\nCorner: quick')
-    if case == 'conflicting-libraries': stanza += '\nread_liberty -corner slow /pdk/other.lib'
-    if case == 'multiple-bare-libraries':
-        stanza = 'read_liberty /pdk/one.lib\nread_liberty /pdk/two.lib'; raw = _native_path('')
-    if case == 'hold-path': raw = _native_path('quick', 'min')
-    if case == 'unreadable-library': unreadable = '/pdk/slow.lib'
-    if case == 'first-unbound-later-valid': raw = _native_path('') + '\n' + _native_path('slow')
-    if case == 'missing-path-type': raw = raw.replace('Path Type: max\n', '')
-    if case == 'unknown-read-syntax': stanza += '\nsource /pdk/extra-libs.tcl'
-    rpt = _attested_copy(tmp_path, _emit_bound_report(tmp_path, raw, stanza))
-    result = _consume_binding(tmp_path, monkeypatch, unreadable)
-    assert result['status'] == 'ERROR', result
-    assert 'corner' in result['reason'] and ('refusing' in result['reason']), result
-    if case == 'unreadable-library' and SCC.parse_sta_corner_basis(
-            rpt.read_text())['liberty']:
-        assert 'slow.lib, which is unreadable' in result['reason']
-    # R-0915-154: when the WRITER refused the binding, the consumer's refusal
-    # names the stamp that says so.
-    if 'STA_CORNER_BINDING_REFUSED' in rpt.read_text() and not \
-            SCC.parse_sta_corner_basis(rpt.read_text())['liberty']:
-        assert 'STA_CORNER_BINDING_REFUSED' in result['reason'], result
+    record_path = p / fixture.LP.STEP23_RECORD
+    record = json.loads(record_path.read_text())
+    log = folder / 'slow/sta.log'
+    expected = 'CURRENT_STEP30_CORNER_MISSING'
+    if case == 'missing-corner':
+        raw = _native_path('')
+        record['judgment']['worst_setup'].pop('corner')
+    elif case == 'unknown-corner':
+        raw = _native_path('unloaded')
+        record['judgment']['worst_setup']['corner'] = 'unloaded'
+        expected = 'LL_CORNER_NOT_ANALYSED'
+    elif case == 'contradictory-corner':
+        raw = raw.replace('Corner: slow', 'Corner: slow\nCorner: quick')
+        log.write_text(log.read_text().replace("'slow' corner", "'quick' corner"))
+        expected = 'LL_CORNER_LIBRARY_UNREAD'
+    elif case == 'conflicting-libraries':
+        stanza += '\nread_liberty -corner slow /pdk/other.lib'
+        with log.open('a') as f:
+            f.write("Reading cell library for the 'slow' corner at '/pdk/neutral/other.lib'\n")
+        expected = 'CURRENT_STAPOSTPNR_CORNER_LIBRARY_UNBOUND'
+    elif case == 'multiple-bare-libraries':
+        stanza = 'read_liberty /pdk/one.lib\nread_liberty /pdk/two.lib'
+        raw = _native_path('')
+        record['judgment']['worst_setup'].pop('corner')
+        record['judgment']['available_libraries'] = ['one.lib', 'two.lib']
+    elif case == 'hold-path':
+        raw = _native_path('quick', 'min')
+        record['judgment']['worst_hold'] = record['judgment'].pop('worst_setup')
+    elif case == 'unreadable-library':
+        lib.unlink()
+        expected = 'slow.lib'
+    elif case == 'first-unbound-later-valid':
+        raw = _native_path('') + '\n' + _native_path('slow')
+        record['judgment']['worst_setup'].pop('corner')
+        record['judgment']['later_setup'] = {'corner': 'slow'}
+    elif case == 'missing-path-type':
+        raw = raw.replace('Path Type: max\n', '')
+        record['judgment']['untyped_path'] = record['judgment'].pop('worst_setup')
+    elif case == 'unknown-read-syntax':
+        stanza += '\nsource /pdk/extra-libs.tcl'
+        log.write_text('SOURCE_FIXTURE_ONLY\nsource /pdk/neutral/extra-libs.tcl\n')
+        expected = 'LL_CORNER_LIBRARY_UNREAD'
+    rpt = _emit_bound_report(p, raw, stanza)
+    fixture.put(record_path, record)
+    # Re-seal only substituted tool output after constructing this scenario.
+    # Original input-library hashes remain unchanged, including the unreadable one.
+    fixture.seal(folder, json.loads((folder / 'input_fingerprint.json').read_text()))
+    result = _consume_current_binding(p)
+    _assert_unmeasured_current_refusal(p, result)
+    assert expected in result['reason'], (case, result)
+    assert calls == [], 'invalid current corner material must not launch native work'
+    assert rpt.is_file() and 'PNR_SESSION_UNVERIFIED' in rpt.read_text()
+    if 'STA_CORNER_BINDING_REFUSED' in rpt.read_text():
+        assert not SCC.parse_sta_corner_basis(rpt.read_text())['liberty']
 
 
 # ── R-0915-154: the in-session report is never a correlation source ────────
 
 def test_the_in_session_report_is_never_picked_and_the_refusal_says_why(
         tmp_path, monkeypatch):
-    rpt = _emit_bound_report(tmp_path, _native_path('slow'))
+    import test_default_si_spice_power as fixture
+    p, folder, lib, calls = _current_binding_fixture(tmp_path, monkeypatch)
+    rpt = _emit_bound_report(p, _native_path('slow'))
     assert 'STA_PARASITICS_PROVENANCE: PNR_SESSION_UNVERIFIED' in rpt.read_text()
-    assert SCC._pick_sta_report(tmp_path, {'BUF'}) is None
-    result = _consume_binding(tmp_path, monkeypatch)
-    assert result['status'] == 'ERROR', result
+    assert SCC._pick_sta_report(p, {'BUF'}) is None
+    record_path = p / fixture.LP.STEP23_RECORD
+    record = json.loads(record_path.read_text())
+    record_path.unlink()
+    result = _consume_current_binding(p)
+    _assert_unmeasured_current_refusal(p, result)
+    assert 'LL_STAPOSTPNR_STATE_ABSENT' in result['reason'], result
     assert 'PNR_SESSION_UNVERIFIED' in result['reason'], result
     assert 'phase3/stage3/pnr/sta.rpt' in result['reason'], result
+    assert calls == [] and rpt.is_file()
+    # Restoring the actual current declaration reaches the native boundary.
+    # Its unrelated transport refusal must not blame the retained PnR report.
+    fixture.put(record_path, record)
+    current = _consume_current_binding(p)
+    _assert_unmeasured_current_refusal(p, current)
+    assert current['reason'].startswith('SOURCE_FIXTURE_ONLY_NATIVE_TRANSPORT_NOT_RUN:')
+    assert 'PNR_SESSION_UNVERIFIED' not in current['reason']
+    assert len(calls) == 1 and rpt.is_file()
 
 
 def test_without_the_stamp_the_same_report_is_still_a_source(tmp_path):

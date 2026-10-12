@@ -74,7 +74,7 @@ def seal(folder, fp):
         str(p.relative_to(folder)): LC.digest(p) for p in folder.rglob('*')
         if p.is_file() and p.name != 'vibeic_receipt.json'}})
 
-def project(tmp_path):
+def project(tmp_path, *, corner='nom_typ', liberty_name='neutral.lib'):
     p = tmp_path / 'p'
     nl = write(p / 'phase3/stage3/pnr/neutral_pnr.v', NETLIST)
     spef = write(p / 'phase3/stage3/extracted/neutral.spef', SPEF)
@@ -82,9 +82,10 @@ def project(tmp_path):
     views = {'nl': str(nl), 'sdc': str(sdc), 'spef': {'*': str(spef)}, 'metrics': {}}
     folder, _ = BF.producer(p, 'OpenROAD.STAPostPNR', views, views,
                            lane='22-23/01-openroad-stapostpnr', config_folder='22-config', name='neutral')
-    lib = write(p / 'fixture_pdk/neutral/neutral.lib', 'library(neutral_typ) { default_operating_conditions: typ; }\n')
-    corner = 'nom_typ'
-    guest = '/pdk/neutral/neutral.lib'
+    library = 'neutral_typ' if liberty_name == 'neutral.lib' else 'neutral_' + Path(liberty_name).stem
+    lib = write(p / 'fixture_pdk/neutral' / liberty_name,
+                f'library({library}) {{ default_operating_conditions: typ; }}\n')
+    guest = '/pdk/neutral/' + liberty_name
     write(folder / corner / 'sta.log', f"SOURCE_FIXTURE_ONLY\nReading cell library for the '{corner}' corner at '{guest}'\n")
     write(folder / corner / 'power.rpt', POWER)
     config = p / 'phase3/librelane/22-config/OpenROAD.STAPostPNR.json'
