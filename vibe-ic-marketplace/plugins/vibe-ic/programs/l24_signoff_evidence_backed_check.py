@@ -565,6 +565,14 @@ def _is_input_or_audit_record(path: Path) -> bool:
     return isinstance(payload, dict) and (
         payload.get("program") == "flow_compliance_check"
         or payload.get("invoked_as") == "audit"
+        or payload.get("record_role") in ("configuration", "prelayout_audit")
+        # Retained pre-role records remain valid input/audit records too.
+        or (path.name == "single_corner_stance.json"
+            and payload.get("program") == "phase3_one_shot_runner"
+            and payload.get("stance") in (
+                "SINGLE_CORNER_DISCLOSED", "CORNER_SET_RECORDED"))
+        or (path.name == "pre_pnr_summary.json"
+            and payload.get("program") == "eda_report_audit:sta")
         # Step7 publishes the pad-driving input while authoring its SDC.
         # Its reports/phase3 location does not make it a signoff result.
         or payload.get("schema") == "vibeic.pad_input_drive.v1")

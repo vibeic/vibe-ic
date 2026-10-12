@@ -56232,6 +56232,7 @@ def emit_step7_corner_disclosure(project: Path, pvt: dict, *,
     corners = pvt.get("corners") or []
     record = {
         "program": "phase3_one_shot_runner",
+        "record_role": "configuration",
         "stance": ("SINGLE_CORNER_DISCLOSED" if single_corner_disclosed
                    else "CORNER_SET_RECORDED"),
         "corner_count": len(corners),
@@ -60367,6 +60368,9 @@ def _publish_prelayout_summary(project: Path) -> Path:
         detail = (completed.stderr or completed.stdout or
                   "sta_report_check did not emit a summary").strip()
         raise Refusal("PRELAYOUT_STA_SUMMARY_FAILED", detail[-500:])
+    record = json.loads(summary.read_text())
+    record["record_role"] = "prelayout_audit"
+    summary.write_text(json.dumps(record, indent=2) + "\n")
     return summary
 
 

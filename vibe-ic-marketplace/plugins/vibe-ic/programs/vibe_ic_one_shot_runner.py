@@ -2174,6 +2174,7 @@ def _main() -> int:
                  if _gd_now.is_dir() and len(list(_gd_now.glob("L*.json"))) >= 13
                  else None)
     _p1_design_input = _design_input_present(project)
+    _phase1_checkpoint_review = None
     if _p1_fresh is not None and not _p1_design_input:
         _p1_fresh = {"state": "KEPT_AS_INPUT", "reason": "NO_DESIGN_INPUT",
                      "why": "these L docs have no design input behind them: "
@@ -2442,6 +2443,24 @@ def _main() -> int:
             halted_at = 'phase1'
     else:
         plan.append(("phase1", "SKIPPED", 0))
+        if (_execution.request()['mode'] == 'default'
+                and _p1_fresh is not None
+                and _p1_fresh['state'] == _p1id.REUSE):
+            # Producer freshness preserves the checkpoint; the current expert
+            # consumer still decides whether Phase2 may use its documents.
+            import ai_signed_judgement as _checkpoint_ai
+            credit, detail = _checkpoint_ai.check(project, "D1")
+            rejected = (not credit and _checkpoint_ai.check(
+                project, "D1", expected_verdict="FAIL")[0])
+            review = "PASS" if credit else "FAIL" if rejected else "NOT_MEASURED"
+            _phase1_checkpoint_review = {
+                "verdict": review, "detail": detail, "producer_reused": True}
+            if not credit:
+                # No producer process was rerun: rc remains zero. The row
+                # records the consumer verdict that stopped this transition.
+                plan[-1] = ("phase1", review, 0)
+                halted_at = "phase1"
+                advisories.append("phase1 checkpoint handoff refused: " + detail)
 
     # FX_STALE_LDOCS (review wave8 BLOCKER 2) — the generated docs as phase 1
     # left them. Anything that changes them from here to the end of this run
@@ -3092,6 +3111,7 @@ def _main() -> int:
         "pdk_revision": _pdk_rec,
         "verdict": overall,
         "ai_judgements": _ai_pending,
+        "phase1_checkpoint_review": _phase1_checkpoint_review,
         # WHY the roll-up is what it is, phase by phase. Empty for a clean PASS.
         "verdict_reasons": _rollup_why,
         "completion_audit_verdicts": _ca_verdicts,

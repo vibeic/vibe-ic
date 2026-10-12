@@ -178,6 +178,10 @@ def test_postcheck_publishes_retained_three_corner_reports(tmp_path):
         project, folder, receipt_sha256=_native_result(folder)["receipt_sha256"])
     assert Path(published["pre_pnr_timing"]).is_file()
     assert Path(published["pre_pnr_summary"]).is_file()
+    summary = json.loads(Path(published["pre_pnr_summary"]).read_text())
+    assert summary["record_role"] == "prelayout_audit"
+    import l24_signoff_evidence_backed_check as signoff
+    assert signoff._is_input_or_audit_record(Path(published["pre_pnr_summary"]))
     names = sorted(p.name for p in (project / "phase3/stage3/sta/prelayout_per_corner").glob("*.rpt"))
     assert names == ["sta_FF.rpt", "sta_SS.rpt", "sta_TT.rpt"]
 

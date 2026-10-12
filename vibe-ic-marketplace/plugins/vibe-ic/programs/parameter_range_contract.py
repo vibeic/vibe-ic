@@ -24,24 +24,35 @@ def minimums(text: str) -> dict[str, int]:
         data = json.loads(text)
     except (TypeError, ValueError):
         data = None
-    lines = text.splitlines() if data is None else []
-    def collect(node, parent=""):
+    lines = [(line, None) for line in text.splitlines()] if data is None else []
+    def collect(node, parent="", names=frozenset()):
         if isinstance(node, str):
-            lines.extend(node.splitlines())
+            lines.extend((line, names) for line in node.splitlines())
         elif isinstance(node, list):
             for child in node:
-                collect(child, parent)
+                collect(child, parent, names)
         elif isinstance(node, dict):
+            if parent in ("parameters", "parameter_ranges"):
+                name = node.get("name")
+                if isinstance(name, str) and re.fullmatch(r"[A-Za-z_]\w*", name):
+                    names = frozenset((name.lower(),))
             if parent == "parameter_ranges":
                 name, low = node.get("name"), node.get("min")
-                if isinstance(name, str) and type(low) is int and low >= 0:
+                if (isinstance(name, str) and re.fullmatch(r"[A-Za-z_]\w*", name)
+                        and type(low) is int and low >= 0):
                     answer[name.lower()] = max(low, answer.get(name.lower(), low))
             for key, child in node.items():
-                collect(child, key)
+                collect(child, key, names)
     if data is not None:
         collect(data)
-    for line in lines:
+    for line, names in lines:
         for match in _MINIMUM.finditer(line):
+            # Bare inequalities in integration/signoff prose describe physical
+            # acceptance. In JSON they become RTL ranges only inside the named
+            # parameter contract, or with an explicit "parameter" declaration.
+            if (names is not None and match.group(1).lower() not in names
+                    and not re.match(r"parameter\s+", match.group(), re.I)):
+                continue
             lo, hi = sentence_scope(line, match.start(), match.end(),
                                     before=len(line), after=len(line))
             if is_denied(line[lo:hi]) is not None:

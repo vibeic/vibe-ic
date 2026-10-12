@@ -105,7 +105,7 @@ def _report(project: Path, name: str, payload: dict) -> Path:
 
 
 def _drive_main(project: Path, monkeypatch, *, phase1, phase2, phase3=None,
-                extra_argv=(), after_phase=None) -> tuple:
+                extra_argv=(), after_phase=None, reuse_phase1=False) -> tuple:
     """Run the REAL main() with the phase subprocesses stubbed.
 
     Only `_run_phase` and the phase-1 entry decision are staged; every line of the
@@ -141,7 +141,8 @@ def _drive_main(project: Path, monkeypatch, *, phase1, phase2, phase3=None,
         return 0
 
     monkeypatch.setattr(V, "_run_phase", fake_run_phase)
-    monkeypatch.setattr(V, "_phase1_decision", lambda *a, **k: (True, "docs"))
+    monkeypatch.setattr(V, "_phase1_decision", lambda *a, **k:
+                        (False, "") if reuse_phase1 else (True, "docs"))
     monkeypatch.setattr(sys, "argv",
                         ["vibe_ic_one_shot_runner", str(project),
                          "--no-dashboard", "--skip-hardware", *extra_argv])
@@ -149,6 +150,47 @@ def _drive_main(project: Path, monkeypatch, *, phase1, phase2, phase3=None,
     rc = V.main()
     out = _pl.report_path(project, "vibe_ic_one_shot.json")
     return rc, json.loads(out.read_text())
+
+
+@pytest.mark.parametrize("review", ["PASS", "FAIL", "stale", "missing"])
+def test_reused_phase1_consumes_current_expert_review_before_phase2(
+        project, monkeypatch, review):
+    import ai_signed_judgement as ai
+    docs = project / "phase1/generated_docs"
+    docs.mkdir(parents=True)
+    for index in range(1, 14):
+        (docs / f"L{index}.json").write_text("{}\n")
+    design_input = project / "input/design_input.txt"
+    design_input.parent.mkdir(parents=True, exist_ok=True)
+    design_input.write_text("A small digital counter.\n")
+    producer = _report(project, "phase1_one_shot.json", {"verdict": "PASS"})
+    monkeypatch.setattr(V, "_phase1_freshness", lambda *a, **k: {
+        "state": V._p1id.REUSE, "reason": "CURRENT", "why": "current producer"})
+    if review != "missing":
+        receipt = project / "reports/audit/ai_judgements/D1.json"
+        receipt.parent.mkdir(parents=True, exist_ok=True)
+        receipt.write_text(json.dumps({
+            "schema": ai.SCHEMA, "step_id": "D1", "signed_by": "expert",
+            "judgement": "Reviewed the current document handoff.",
+            "verdict": "FAIL" if review == "FAIL" else "PASS",
+            "evidence_sha256": ("0" * 64 if review == "stale" else
+                                ai.evidence_sha256(project, "D1"))}))
+    retained = {p: p.read_bytes() for p in [*docs.glob("*.json"), producer]}
+    called = []
+    rc, doc = _drive_main(
+        project, monkeypatch, phase1=("PASS", 0, None), phase2=("PASS", 0),
+        reuse_phase1=True, extra_argv=("--skip-phase3", "--skip-analog"),
+        after_phase=called.append)
+    if review == "PASS":
+        assert called == ["phase2"], doc
+    else:
+        assert called == [], doc
+        assert rc == 1 and doc["halted_at"] == "phase1", doc
+        expected = "FAIL" if review == "FAIL" else "NOT_MEASURED"
+        assert doc["phases"][0] == {
+            "name": "phase1", "verdict": expected, "rc": 0}, doc
+        assert doc["phase1_checkpoint_review"]["producer_reused"] is True
+    assert {p: p.read_bytes() for p in retained} == retained
 
 
 def _save_complete_acceptance(project, sid, status, *, runner, excluded=""):

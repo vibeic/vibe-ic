@@ -7,6 +7,7 @@ PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROGRAMS))
 import serial_parallel_mul_synth as synth
 import spec_conformance_check as conformance
+import pytest
 from parameter_range_contract import minimums, has_elaboration_guard
 
 
@@ -65,6 +66,37 @@ def test_other_parameter_has_no_invented_minimum(tmp_path):
     assert not has_elaboration_guard("always @(*) if (WIDTH < 5) $fatal(1);", "WIDTH", 5)
     assert minimums("WIDTH >= 5") == {"width": 5}
     assert minimums("No requirement that WIDTH >= 5") == {}
+
+
+def test_json_ranges_are_parameter_scoped_and_preserve_physical_requirements():
+    doc = {"parameters": [{"name": "WIDTH", "description": "WIDTH >= 5; hold >= 0"}],
+           "integration": "hold >= 0; slack >= 0; parameter DEPTH >= 3",
+           "parameter_ranges": [{"name": "DEPTH", "min": 4}]}
+    assert minimums(json.dumps(doc)) == {"width": 5, "depth": 4}
+    assert doc["integration"].startswith("hold >= 0; slack >= 0")
+
+
+@pytest.mark.parametrize("guard", [True, False])
+def test_physical_prose_does_not_create_rtl_guard_obligations(tmp_path, capsys, guard):
+    project = _project(tmp_path, "filter_cell", minimum=5)
+    spec, why = synth.extract_serial_parallel_mul_spec(project, "digital_arithmetic_primitive")
+    assert spec is not None, why
+    rtl = synth.emit_rtl(spec)
+    source_dir = project / "phase2/stage1/rtl"
+    source_dir.mkdir(parents=True)
+    (source_dir / "filter_cell.v").write_text(
+        rtl if guard else rtl.replace("initial $fatal", "initial $display"))
+    l9 = project / "phase1/generated_docs/L9_INTEGRATION_SPEC.json"
+    doc = json.loads(l9.read_text())
+    doc["integration"] = "Physical STA requires hold >= 0 and slack >= 0."
+    l9.write_text(json.dumps(doc))
+    rc = conformance.main(["--spec", str(l9), "--rtl-dir", str(source_dir),
+                           "--top", "filter_cell"])
+    output = capsys.readouterr().out
+    assert rc == (0 if guard else 1), output
+    assert "hold needs" not in output and "slack needs" not in output
+    if not guard:
+        assert "parameter-range-guard-missing" in output
 
 
 def test_unrelated_counter_design_is_checked_without_multiplier_generator(tmp_path, capsys):

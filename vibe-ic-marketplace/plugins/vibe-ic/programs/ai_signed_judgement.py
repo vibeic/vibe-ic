@@ -150,8 +150,14 @@ def evidence_sha256(project: Path, step_id: str) -> Optional[str]:
     return digest.hexdigest()
 
 
-def check(project: Path, step_id: str) -> Tuple[bool, str]:
-    """Return whether this hand-off is creditable, with a reviewable reason."""
+def check(project: Path, step_id: str, *, expected_verdict: str = "PASS") -> Tuple[bool, str]:
+    """Validate a current signed review; only PASS grants hand-off credit.
+
+    The optional FAIL query lets transitions distinguish a measured rejection
+    from an absent or stale review using the same evidence validator.
+    """
+    if expected_verdict not in ("PASS", "FAIL"):
+        raise ValueError("expected_verdict must be PASS or FAIL")
     sid = str(step_id)
     if sid not in STEPS or not _requested(project, sid):
         return True, "no conditional AI hand-off"
@@ -175,13 +181,13 @@ def check(project: Path, step_id: str) -> Tuple[bool, str]:
     if (sha and receipt.get("schema") == SCHEMA
             and receipt.get("step_id") == sid
             and receipt.get("evidence_sha256") == sha
-            and receipt.get("verdict") == "PASS"
+            and receipt.get("verdict") == expected_verdict
             and isinstance(receipt.get("signed_by"), str)
             and receipt["signed_by"].strip()
             and isinstance(receipt.get("judgement"), str)
             and receipt["judgement"].strip()):
         return True, f"signed judgement bound to evidence sha256:{sha}"
-    return False, (f"awaiting_signed_judgement: Step {sid} requires a PASS "
+    return False, (f"awaiting_signed_judgement: Step {sid} requires a {expected_verdict} "
                    f"AI judgement signed over current evidence sha256:{sha}; "
                    f"receipt reports/audit/ai_judgements/{sid}.json")
 

@@ -28,6 +28,7 @@ if str(PROGRAMS) not in sys.path:
     sys.path.insert(0, str(PROGRAMS))
 
 import phase1_post_process as P  # noqa: E402
+import pytest
 
 GATE = PROGRAMS / "l24_signoff_evidence_backed_check.py"
 T_OLD, T_NEW = 1_700_000_000, 1_700_100_000
@@ -127,4 +128,32 @@ def test_a_real_phase3_record_after_synthesis_still_counts(tmp_path):
         json.dumps({"status": "PASS"}), T_NEW)
     rc, out = _gate(proj)
     assert rc == 1, out
+
+
+@pytest.mark.parametrize("kind", ["corner", "legacy_corner", "prelayout", "legacy_prelayout"])
+def test_prelayout_inventory_and_audit_do_not_assert_physical_execution(tmp_path, kind):
+    import phase3_one_shot_runner as physical
+    proj = _project(tmp_path)
+    _netlist(proj, T_OLD)
+    if "corner" in kind:
+        path = physical.emit_step7_corner_disclosure(proj, {
+            "corners": [{"name": "SS"}, {"name": "TT"}, {"name": "FF"}]})
+        record = json.loads(path.read_text())
+        if kind == "corner":
+            assert record["record_role"] == "configuration"
+        else:
+            record.pop("record_role", None)
+    else:
+        path = proj / "reports/phase3/sta/pre_pnr_summary.json"
+        record = {"program": "eda_report_audit:sta", "verdict": "PASS",
+                  "summary": {"slack_measurement": "NOT_MEASURED"}}
+        if kind == "prelayout":
+            record["record_role"] = "prelayout_audit"
+    _at(path, json.dumps(record), T_NEW)
+    rc, out = _gate(proj)
+    assert rc == 0 and "not yet measurable" in out, out
+    # The same inventory cannot hide a real current physical attempt.
+    _at(proj / "reports/phase3/lvs_verdict.json", '{"status":"PASS"}', T_NEW)
+    rc, out = _gate(proj)
+    assert rc == 1 and "the input REQUIRES DRC clean" in out, out
 
