@@ -144,12 +144,14 @@ conservative; tighten per project maturity.
 from __future__ import annotations
 import argparse
 import ast
+import datetime
 import json
 import os
 import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -385,6 +387,13 @@ def verilate_professional_tb_and_run(
                          f"{audit['reason'] or audit['inert']}")
     build.mkdir(parents=True, exist_ok=True)
     run_dir.mkdir(parents=True, exist_ok=True)
+    # Every attempt owns fresh files. Retain earlier JUnit, raw coverage,
+    # logs, execution records and builds, including a failed rerun.
+    stamp = datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%S_%fZ')
+    attempt = Path(tempfile.mkdtemp(prefix=f'attempt_{stamp}_', dir=run_dir))
+    build = build / attempt.name / 'build'
+    build.mkdir(parents=True, exist_ok=True)
+    run_dir = attempt
     # All sources are the caller's RTL closure, not a second Makefile selector.
     # Paths in the generated file are relative to the consumer cwd so the same
     # file works under host and container bind-mount spellings.
@@ -405,17 +414,24 @@ def verilate_professional_tb_and_run(
         "COCOTB_RESULTS_FILE = coverage_results.xml\n"
         f"export PYTHONPATH := $(abspath {rel(tb.parent)}):$(PYTHONPATH)\n"
         "include $(shell cocotb-config --makefiles)/Makefile.sim\n")
-    # Remove only this adapter's previous evidence before launching. A stale
-    # Icarus JUnit next to the Python file can never satisfy this measurement.
+    # Only the new attempt's files can satisfy this measurement.
     junit = run_dir / "coverage_results.xml"
     dat = run_dir / "coverage.dat"
-    for previous in (junit, dat):
-        previous.unlink(missing_ok=True)
     command = ["make", "-f", str(makefile), f"-j{max(1, build_jobs)}"]
     rc, out, err = exec_fn(command, str(run_dir))
     (run_dir / "coverage_cocotb.log").write_text((out or "") + "\n" + (err or ""))
     import _sim_results_bridge as _srb  # noqa: PLC0415
     summary = _srb.parse_junit(junit)
+    execution = {
+        "testbench": str(tb), "top": plan["top"],
+        "reference_model_tier": plan["reference_model_tier"],
+        "instrumented_junit": str(junit), "test_denominator": summary,
+        "functional_stimulus": audit, "coverage_dat": str(dat),
+        "instrumentation_flags": list(COVERAGE_INSTRUMENTATION_FLAGS),
+        "exit_code": rc, "measurement_status": "NOT_MEASURED",
+    }
+    execution_path = run_dir / "coverage_cocotb_execution.json"
+    execution_path.write_text(json.dumps(execution, indent=2) + "\n")
     if (rc != 0 or not summary or summary["tests"] <= 0
             or summary["passed"] <= 0 or summary["failures"]
             or summary["errors"] or summary["skipped"]):
@@ -427,15 +443,12 @@ def verilate_professional_tb_and_run(
     if not activity:
         raise SystemExit(f"PROFESSIONAL_COVERAGE_INPUT_ACTIVITY_UNOBSERVED: {tb}")
     import hashlib  # noqa: PLC0415
-    (run_dir / "coverage_cocotb_execution.json").write_text(json.dumps({
-        "testbench": str(tb), "top": plan["top"],
-        "reference_model_tier": plan["reference_model_tier"],
-        "instrumented_junit": str(junit), "test_denominator": summary,
-        "functional_stimulus": audit,
+    execution.update({
+        "measurement_status": "MEASURED",
         "observed_functional_input_toggles": activity,
         "testbench_sha256": hashlib.sha256(tb.read_bytes()).hexdigest(),
-        "coverage_dat": str(dat), "instrumentation_flags": list(COVERAGE_INSTRUMENTATION_FLAGS),
-    }, indent=2) + "\n")
+    })
+    execution_path.write_text(json.dumps(execution, indent=2) + "\n")
     return str(dat)
 
 
@@ -1519,6 +1532,37 @@ def suite_payload_fields(result: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def prepare_professional_coverage_report(path: Path) -> None:
+    """Retain the prior report and make the current attempt unmeasured.
+
+    A refused attempt must never lend the previous PASS to the consumer.
+    The previous report remains an independent byte-for-byte history copy.
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    previous = None
+    if path.is_file():
+        history = path.parent / (path.stem + '.history')
+        history.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%S_%fZ')
+        folder = Path(tempfile.mkdtemp(prefix=f'attempt_{stamp}_', dir=history))
+        previous = folder / path.name
+        shutil.copy2(path, previous)
+    path.write_text(json.dumps({
+        "tool": "verilator", "measurement_mode": "measure-tb",
+        "measurement_status": "NOT_MEASURED",
+        "reason": "current professional coverage attempt has no accepted measurement",
+        "previous_report": str(previous) if previous else None,
+    }, indent=2) + "\n")
+
+
+def fail_professional_coverage_report(path: Path, reason: str) -> None:
+    """Record the current refusal without consuming or changing history."""
+    record = json.loads(Path(path).read_text())
+    record.update(measurement_status="NOT_MEASURED", reason=reason)
+    Path(path).write_text(json.dumps(record, indent=2) + "\n")
+
+
 def cmd_measure_tb(args: argparse.Namespace) -> int:
     """Instrument + run the project's own testbench and write the measurement."""
     rtl = list(args.rtl or [])
@@ -1550,14 +1594,18 @@ def cmd_measure_tb(args: argparse.Namespace) -> int:
     run_dir = args.run_dir or build_dir
     mounts = _mounts_for(getattr(args, "container", ""))
     scope = args.scope_file or rtl
-    if any(Path(tb).suffix == ".py" for tb in tbs):
-        # This producer's report cannot survive a refused remeasurement and
-        # lend the previous passing execution to a new unexecuted bundle.
-        Path(args.out).unlink(missing_ok=True)
+    professional = any(Path(tb).suffix == ".py" for tb in tbs)
+    if professional:
+        prepare_professional_coverage_report(Path(args.out))
 
     # ONE implementation, shared with the flow's own producer.
-    res = measure_suite(rtl, tbs, build_dir, run_dir=run_dir,
-                        build_jobs=args.build_jobs, mounts=mounts, scope=scope)
+    try:
+        res = measure_suite(rtl, tbs, build_dir, run_dir=run_dir,
+                            build_jobs=args.build_jobs, mounts=mounts, scope=scope)
+    except SystemExit as exc:
+        if professional:
+            fail_professional_coverage_report(Path(args.out), str(exc))
+        raise
     dats, per_tb = res["dats"], res["per_testbench"]
     for one_tb, rec in per_tb.items():
         if not rec.get("measured"):

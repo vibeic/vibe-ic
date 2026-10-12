@@ -294,6 +294,13 @@ def test_zero_and_skipped_instrumented_junit_cannot_reuse_prior_icarus_pass(tmp_
         sources, tbs = V.discover_measure_testbenches(project)
         with pytest.raises(SystemExit, match='PROFESSIONAL_COVERAGE_SIMULATION_REFUSED'):
             V.measure_suite(sources, tbs, str(build), exec_fn=simulate, build_jobs=1)
+        assert (build / 'coverage.dat').read_text() == 'stale'
+        assert (build / 'coverage_results.xml').read_text() == '<testsuite tests="1"/>'
+        attempts = list(build.glob('attempt_*'))
+        assert len(attempts) == 1
+        record = json.loads((attempts[0] / 'coverage_cocotb_execution.json').read_text())
+        assert record['measurement_status'] == 'NOT_MEASURED'
+        assert Path(record['coverage_dat']).read_text() == 'fresh data from shutdown'
 
 
 def test_real_cocotb_coverage_uses_this_runs_passing_junit_and_raw_points(tmp_path):
@@ -331,6 +338,24 @@ def test_real_cocotb_coverage_uses_this_runs_passing_junit_and_raw_points(tmp_pa
         '--coverage-json', str(out)], text=True, capture_output=True)
     assert changed.returncode == 1, changed.stdout + changed.stderr
     assert 'PROFESSIONAL_COVERAGE_EVIDENCE_REFUSED' in changed.stdout
+    # A real successful native run survives a later native failed rerun.
+    import professional_tb_gen as gen
+    before_report = out.read_bytes()
+    before_dat = Path(dat).read_bytes()
+    before_junit = Path(record['instrumented_junit']).read_bytes()
+    (bundle / 'expert_reference_tb.py').write_text(
+        _COCOTB_SCOREBOARD.replace('== value', '== (value ^ 1)'))
+    gen.generate(project)
+    failed = subprocess.run(proc.args, text=True, capture_output=True)
+    assert failed.returncode == 1, failed.stdout + failed.stderr
+    current = json.loads(out.read_text())
+    assert current['measurement_status'] == 'NOT_MEASURED'
+    assert 'PROFESSIONAL_COVERAGE_SIMULATION_REFUSED' in current['reason']
+    assert Path(current['previous_report']).read_bytes() == before_report
+    assert Path(dat).read_bytes() == before_dat
+    assert Path(record['instrumented_junit']).read_bytes() == before_junit
+    refused = subprocess.run(checked.args, text=True, capture_output=True)
+    assert refused.returncode == 1, refused.stdout + refused.stderr
 
 
 @pytest.mark.parametrize('control', ['failure', 'skip', 'zero', 'inert'])
@@ -363,7 +388,9 @@ def test_native_professional_rerun_refuses_failed_skipped_and_zero_test_controls
     refusal = ('PROFESSIONAL_COVERAGE_INPUT_ACTIVITY_UNOBSERVED'
                if control == 'inert' else 'PROFESSIONAL_COVERAGE_SIMULATION_REFUSED')
     assert refusal in measured.stderr
-    assert not out.exists(), 'a failed rerun left a stale measurement for the consumer'
+    current = json.loads(out.read_text())
+    assert current['measurement_status'] == 'NOT_MEASURED'
+    assert Path(current['previous_report']).read_text() == 'previous passing measurement must not survive'
     checked = subprocess.run([
         sys.executable, str(PROGRAMS / 'verilator_coverage_measure.py'), 'check',
         '--coverage-json', str(out)], text=True, capture_output=True)

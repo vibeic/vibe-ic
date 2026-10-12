@@ -23544,10 +23544,9 @@ def step_verilator_coverage(project: Path, top_name: str = "",
                           "taken, and none invented", [], reason_class=_V.ReasonClass.TOOL_ABSENT)
 
     out_path = _pl.report_path(project, _vcm.COVERAGE_MEASUREMENT_REL)
-    if any(Path(one_tb).suffix == ".py" for one_tb in tbs):
-        # A refused professional rerun must not leave this producer's older
-        # passing coverage report for the gate to consume as current evidence.
-        out_path.unlink(missing_ok=True)
+    professional = any(Path(one_tb).suffix == ".py" for one_tb in tbs)
+    if professional:
+        _vcm.prepare_professional_coverage_report(out_path)
     # Build under the sim tree, not under reports/: reports/ is the signed
     # artefact surface and a Verilator obj_dir is neither a report nor stable.
     build_dir = _pl.sim_dir(project) / "cov_build"
@@ -23589,6 +23588,8 @@ def step_verilator_coverage(project: Path, top_name: str = "",
         cov = _suite["cov"]
         scoped = _vcm.scope_totals(cov, [str(x) for x in rtl])
     except SystemExit as exc:
+        if professional:
+            _vcm.fail_professional_coverage_report(out_path, str(exc))
         return StepResult("verilator_coverage", "NOT_MEASURED", time.time() - t0,
                           f"coverage instrumentation did not produce a "
                           f"measurement: {exc}", [], reason_class=_V.ReasonClass.EXECUTION_ERROR)
