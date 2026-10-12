@@ -531,11 +531,13 @@ def test_build_equiv_script_keeps_full_sat_ladder():
                   "equiv_induct -seq 16", "equiv_induct -seq 64",
                   "equiv_status"):
         assert stage in s, f"SAT verification stage {stage!r} was removed"
-    assert (s.index("equiv_simple")
-            < s.index("equiv_induct -seq 4")
-            < s.index("equiv_induct -seq 16")
-            < s.index("equiv_induct -seq 64")
-            < s.index("equiv_status")), "SAT ladder order broken"
+    fallback = s[s.index("equiv_simple\n"):]
+    assert (fallback.index("equiv_simple")
+            < fallback.index("equiv_induct -seq 4")
+            < fallback.index("equiv_induct -seq 16")
+            < fallback.index("equiv_induct -seq 64")
+            < fallback.index("equiv_status")), "SAT fallback ladder order broken"
+    assert s.index("equiv_simple -short") < s.index("equiv_induct -seq 16") < s.index("equiv_simple\n")
 
 
 # ---------------------------------------------------------------------------
@@ -1967,7 +1969,12 @@ def test_lec_short_cone_preproof_keeps_the_complete_fallback_ladder():
         "equiv_induct -seq 64",
         "equiv_status",
     ]
-    positions = [script.find(token) for token in required]
+    positions = []
+    start = 0
+    for token in required:
+        pos = script.find(token, start)
+        positions.append(pos)
+        start = pos + len(token)
     assert all(pos >= 0 for pos in positions), (
         f"short-cone plus complete fallback ladder missing: {positions}")
     assert positions == sorted(positions), (
