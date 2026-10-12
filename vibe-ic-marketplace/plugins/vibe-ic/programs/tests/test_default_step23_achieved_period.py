@@ -124,9 +124,16 @@ def test_default_keeps_assumption_on_current_signoff_records_before_final_consum
     (project / 'config.json').unlink()
     monkeypatch.setattr(runner, '_resolve_clock_spec', lambda *args, **kwargs: (24.0, 'clk'))
     import clock_target_provenance as provenance
-    def current_record_writer(project, name, program, output, extra):
+    def current_record_writer(project, name, program, output, extra, **kwargs):
         # Control these instruments' outputs, while the real native-producer
         # seam, clock-source emitter, stamping and disclosure consumer run.
+        if name == 'drv_signoff':
+            selected = json.loads((project / signoff.SIGNOFF_RECORD).read_text())
+            assert kwargs == {'drv_final_state': {'capture_step': '23', 'final': {
+                'sta_state': selected['sta_state'],
+                'sta_state_sha256': selected['sta_state_sha256']}}}
+        else:
+            assert not kwargs
         target = project / output
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(json.dumps({'verdict': 'PASS'}))

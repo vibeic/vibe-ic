@@ -310,6 +310,7 @@ def test_default_sta_publishes_the_selected_tool_without_a_second_sta(tmp_path, 
         report = project / 'reports/phase3/sta_postpnr_signoff.json'
         report.parent.mkdir(parents=True)
         report.write_text(json.dumps({'sta_state': str(sta / 'state_out.json'),
+                                      'sta_state_sha256': signoff.digest(sta / 'state_out.json'),
                                       'corners': {'nom_tt': {}},
                                       'judgment': {'verdict': 'PASS'}}))
         written.append(str(report))
