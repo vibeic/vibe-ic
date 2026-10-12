@@ -990,6 +990,18 @@
      "writes": "reports/phase3/sta/architectural_residual.json",
      "base_run": "benchmark-data/ic/spm/v1.10.18_sky130A",
      "note": "Historical capture remains NOT_MEASURED: this output was UNPROVEN on 2026-09-09 because the gate postdates all published runs. Re-measured 2026-09-12 from original corpus 8c4b608a4542759c2d4ef97dfb56571f43cc512f tracked-only inputs using source 14c7551678dff41c3f110fbae5f4ef25ad21cf5e and pinned image sha256:89a8fd7295208ee6d06e216ade9edc6161d26db52099e9f22ceb77a2d76e3f49: native checker read the real POST_ROUTE_SPEF path with +5.24ns slack and emitted its one-sided PASS. This registration executes the normal inline producer anew; it neither adds corpus bytes nor attributes the new report to the historical version. Missing inputs/NOT_CHECKED remain not produced, and a measured design FAIL remains labelled FAIL."
+    },
+    "reports/phase3/sta/hold_corner_coverage.json": {
+     "status": "UNPROVEN",
+     "note": "The canonical per-step producer now declares this current verdict report. Controlled component fixtures verify production and failure rejection; published whole-IC production is not claimed."
+    },
+    "reports/phase3/sta/assumed_clock_disclosure.json": {
+     "status": "UNPROVEN",
+     "note": "The canonical per-step producer now declares this current verdict report. Controlled component fixtures verify production and failure rejection; published whole-IC production is not claimed."
+    },
+    "reports/phase3/clock_target_record_agreement.json": {
+     "status": "UNPROVEN",
+     "note": "The canonical per-step producer now declares this current verdict report. Controlled component fixtures verify production and failure rejection; published whole-IC production is not claimed."
     }
    }
   },
