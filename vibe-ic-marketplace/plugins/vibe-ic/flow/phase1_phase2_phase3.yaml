@@ -9589,6 +9589,16 @@ steps:
       - "phase3/mixed_signal/top_merged.gds"
       - "reports/analog/mixed_signal/merge.json"
       - "reports/analog/mixed_signal/top_lvs.json"
+      - "phase3/mixed_signal/m1_merge_receipt.json"
+      - "phase3/mixed_signal/merge.log"
+      - "phase3/mixed_signal/merge.json"
+      - "phase3/mixed_signal/macro_placements.json"
+      - "phase3/mixed_signal/klayout_merge.py"
+      - "phase3/mixed_signal/*_merged_extracted.sp"
+      - "phase3/mixed_signal/ext2spice_merged.log"
+      - "phase3/mixed_signal/ext2spice_merged.tcl"
+      - "phase3/mixed_signal/top_lvs.tcl"
+      - "reports/analog/mixed_signal/top_lvs.rpt"
     program_outputs:
       - program: mixed_signal_top_lvs_run
         path: "reports/analog/mixed_signal/top_lvs_run.json"
@@ -9617,7 +9627,8 @@ steps:
       producer's honest rc=2 skip it still exists (carrying the named gap),
       so declaring it would let the gate's own side effect satisfy M1's
       artefact check. The merged GDS and merge report remain required;
-      top_lvs.json is also required because the blocking consumer reads it.
+      top_lvs.json and all bound execution artefacts are also required
+      because the blocking consumer reads and verifies those same files.
       Native KLayout, Magic and netgen execution has demonstrated report
       production on a negative component fixture; its measured LVS FAIL
       remains FAIL. Presence of the report is never a signoff verdict.
