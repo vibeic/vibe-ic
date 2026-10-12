@@ -204,7 +204,8 @@ CENSUS_GATE_PRESENT = 70
 # 2026-09-23: step 37.3 (GDS stream-out / finishing fidelity) ARRIVED.
 # MEASURED on the live yaml, not incremented: arrived ['37.3'], departed [].
 # 37.3 declares reports/phase3/gds_xor.json, so 67 -> 68.
-CENSUS_REQUIRED_OUTPUTS_PRESENT = 68
+# FS1 now declares the two reports its native runner produces.
+CENSUS_REQUIRED_OUTPUTS_PRESENT = 69
 # 62 -> 63 and 60 -> 61 on 2026-08-11 (`332b9985`, vibe-ic#923 via #929): step
 # P0 (the structural-RTL pre-flight) gained `blocks_on: [1]` deliberately —
 # P0 already declared `required_inputs: [{from: 1, ...}]`, so the ordering edge
