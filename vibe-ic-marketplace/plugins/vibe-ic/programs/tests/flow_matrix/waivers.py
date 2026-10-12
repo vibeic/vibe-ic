@@ -389,7 +389,7 @@ def content_citation_problems(waiver: Waiver) -> Tuple[str, ...]:
       re-examined. Measured while writing this — ``len(corners) < 2`` occurs 3
       times in ``phase3_one_shot_runner.py`` and ``single_corner_stance.json``
       4 times, so both are refused; the assignment that writes it,
-      ``stance_path = rpt_phase3 / "single_corner_stance.json"``, occurs once
+      ``path = Path(project) / "reports/phase3/single_corner_stance.json"``, occurs once
       and is accepted. The rule makes the author name the construct rather than
       gesture at the topic.
     """

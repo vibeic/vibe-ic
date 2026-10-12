@@ -1985,7 +1985,7 @@ def test_the_tighter_anchor_for_that_same_construct_IS_accepted():
     """
     problems = W.content_citation_problems(_waiver_citing(
         'programs/phase3_one_shot_runner.py::'
-        '`stance_path = rpt_phase3 / "single_corner_stance.json"`'))
+        '`path = Path(project) / "reports/phase3/single_corner_stance.json"`'))
     assert problems == (), problems
 
 
