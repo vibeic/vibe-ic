@@ -749,6 +749,7 @@ PINNED_OUTPUT_MEMBERS = frozenset({
     ('17', 'phase3/stage3/pnr/placed.def'),
     ('17', 'reports/phase3/placement_legality.json'),
     ('18', 'phase3/stage3/pnr/spare_cells.json'),
+    ('18', 'phase3/stage3/pnr/post_spare.def'),
     ('18', 'reports/spare_cell_coverage.json'),
     ('19', 'phase3/stage3/cts/clock_tree.rpt'),
     ('19', 'phase3/stage3/pnr/post_cts.def'),
@@ -914,6 +915,8 @@ PINNED_OUTPUT_MEMBERS = frozenset({
     ('M2', 'reports/analog/mixed_signal/isolation.json'),
     ('M2', 'reports/analog/mixed_signal/level_shifter.json'),
     ('M2', 'reports/analog/mixed_signal/power_domain.json'),
+    ('M2', 'reports/analog/mixed_signal/pd_connectivity.json'),
+    ('M2', 'reports/analog/mixed_signal/power_domain_run.json'),
     ('M3', 'phase3/mixed_signal/cosim/mixed_signal_results.json'),
     ('M3', 'reports/analog/mixed_signal/interface_si.json'),
     ('M4', 'reports/analog/mixed_signal/signoff.json'),
@@ -1413,7 +1416,9 @@ def test_output_entries_classify_into_the_four_kinds():
     # demands live, and postroute_timing_repair_audit ORs them in.
     # Step 14 owns its three checker reports; Step 9 alone owns netlist.v.
     # Removing that duplicate FILE and adding three reports is a net +2 FILE.
-    assert seen[F.FILE] == 143, (seen, REDERIVE)
+    # Three already-declared FILEs were also absent from the old member pin:
+    # Step 18's post-spare DEF and Step M2's connectivity/run reports.
+    assert seen[F.FILE] == 146, (seen, REDERIVE)
     assert seen[F.GLOB] == 29, (seen, REDERIVE)
     assert seen[F.ANY_OF] == 27, (seen, REDERIVE)
     # Reported to the orchestrator: the PROGRAM_EXIT form described in the brief

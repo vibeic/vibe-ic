@@ -289,7 +289,9 @@ DIM = 5
 #: duplicate was not simply deleted. Pinned rather than floored so a waiver
 #: set is a recorded fact instead of an empty loop reporting green — see
 #: ``test_d5_waivers_meet_the_registry_bar``.
-WAIVED_CELLS_PINNED: frozenset = frozenset({"12/d5"})
+# The handoff now owns its reports, so the duplicate producer and 12/d5
+# waiver are gone. Pin the empty set; any new waiver still fails this guard.
+WAIVED_CELLS_PINNED: frozenset = frozenset()
 
 # ══════════════════════════════════════════════════════════════════════
 # Producers — exact, from the yaml
