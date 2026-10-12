@@ -45,3 +45,16 @@ def test_default_current_step_produces_all_three_reports_and_keeps_failure(tmp_p
                   'clock_target': 'clock_target_record_agreement_check'}[damage]
         assert rows[failed]['rc'] == 1, rows[failed]
         assert allowed is False and verdict == 'FAIL', (result, reason, verdict)
+
+
+@pytest.mark.parametrize('program', sorted(REPORTS))
+def test_the_same_checker_called_by_audit_is_not_producer_evidence(tmp_path, monkeypatch, program):
+    import importlib
+    import _gate_authorship as authorship
+    project = fixture.tool_project(tmp_path)
+    fixture.gate_inputs(project)
+    target = project/REPORTS[program]
+    monkeypatch.setenv(authorship.ROLE_ENV, authorship.ROLE_AUDIT)
+    assert importlib.import_module(program).main([str(project), '--json', str(target)]) == 0
+    assert json.loads(target.read_text())['invoked_as'] == 'audit'
+    assert declared._producer_target_has_content(target) is False
