@@ -68,3 +68,31 @@ def test_no_source_remains_unmeasured(tmp_path):
     project = _project(tmp_path, {'notes.txt': 'no RTL source\n'})
     row = _runner().step_fmeda_fault_injection(project)
     assert row.status == 'NOT_MEASURED', row
+
+
+def test_real_canonical_consumer_accepts_both_native_reports(tmp_path, monkeypatch):
+    import step_output_collector as versions
+    project = _ecc_project(tmp_path, _DEC_OK)
+    monkeypatch.setattr(policy, 'request', lambda: {'mode': 'default'})
+    row = _runner().step_fmeda_fault_injection(project)
+    accepted = versions.latest_pass(project, 'FS1')
+    assert row.status == 'PASS', row
+    assert accepted and accepted['canonical_pass'], accepted
+    assert accepted['result']['canonical_consumer']['status'] == 'PASS'
+    assert {item['rel'] for item in accepted['outputs']} == set(REPORTS)
+
+
+def test_measured_independent_failure_blocks_the_native_row(tmp_path, monkeypatch):
+    project = _ecc_project(tmp_path, _DEC_OK)
+    mod = _runner()
+    native = mod._pr.run
+    def execute(argv, **kwargs):
+        if Path(argv[1]).stem == 'fmeda_coverage_check':
+            (project / REPORTS[1]).write_text('{"verdict":"FAIL"}\n')
+            return SimpleNamespace(returncode=1, stdout='', stderr='coverage failed')
+        return native(argv, **kwargs)
+    monkeypatch.setattr(mod._pr, 'run', execute)
+    seen = observe_consumer(monkeypatch, project)
+    row = mod.step_fmeda_fault_injection(project)
+    assert row.status == 'FAIL', row
+    assert not seen, 'a failed native result must not reach acceptance'

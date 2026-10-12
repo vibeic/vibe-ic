@@ -36,8 +36,8 @@ run ``--fix-figures``, and ``--check`` fails on drift (vibe-ic#961).
         present on 70<!--figure:gate_declared--> steps,
         non-empty on 70<!--figure:gated_steps--> (every step now declares one)
     required_outputs
-        present on 68<!--figure:required_output_declared--> steps,
-        non-empty on 68<!--figure:required_output_steps--> (absent on FS1 and P0)
+        present on 69<!--figure:required_output_declared--> steps,
+        non-empty on 69<!--figure:required_output_steps--> (absent on P0)
     blocks_on
         present on 70<!--figure:blocks_on_declared--> steps,
         non-empty on 68<!--figure:blocks_on_nonempty--> (declared on every step;
@@ -69,11 +69,11 @@ OR a sim ``*.log`` OR a ``pass.flag``; a ``drc_clean.flag`` OR a ``.lyrdb``).
 The consumer splits on the literal ``" OR "`` (spaces included) and strips each
 alternative — :func:`split_any_of` reproduces exactly that.
 
-Live entry census — 202<!--figure:required_output_entries--> entries over
-68<!--figure:required_output_steps--> steps, classified by
+Live entry census — 204<!--figure:required_output_entries--> entries over
+69<!--figure:required_output_steps--> steps, classified by
 :func:`classify_output` (digits derived; see the anchor note in §1):
 
-    FILE          146<!--figure:required_outputs_file-->
+    FILE          148<!--figure:required_outputs_file-->
         plain relative path, no wildcard, no " OR "
     GLOB          29<!--figure:required_outputs_glob-->
         wildcard, no " OR " (e.g. ``phase1/generated_docs/L13_*.json``)
@@ -85,7 +85,7 @@ Live entry census — 202<!--figure:required_output_entries--> entries over
 
 **Contradiction with the brief, reported deliberately**: there is NO
 ``program_exit_zero: "<cmd>"`` form anywhere in ``required_outputs``. All
-202<!--figure:required_output_entries--> entries are plain strings; not one contains the token ``program_exit_zero``.
+204<!--figure:required_output_entries--> entries are plain strings; not one contains the token ``program_exit_zero``.
 That form exists only inside ``gate`` clauses (§3). :data:`PROGRAM_EXIT` is
 still returned by :func:`classify_output` for forward compatibility, but on the
 current yaml it never fires — a sibling that branches on it is writing dead

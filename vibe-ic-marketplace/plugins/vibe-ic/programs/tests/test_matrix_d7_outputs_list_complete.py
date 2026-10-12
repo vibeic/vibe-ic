@@ -257,13 +257,9 @@ RESOLUTION_LIMITS_AS_MEASURED = 6
 # rather than re-synchronised: a waiver is a public admission, and it can have
 # exactly one text.
 #
-# THE REGISTRY NOW HOLDS FOUR DIMENSION-7 ENTRIES, not nine. Five were CLOSED
-# on 2026-07-28 by DECLARING the artefact in the flow yaml (steps D1, 21, 25,
-# 28, 31 — see the yaml's per-entry notes), each mutation-controlled: strip the
-# declaration and the cell goes red. The four that remain are 7, 23 and M1
-# (narrowed), and FS1 (reopened with a sharper reason after its closure turned
-# out to rest on the compliance checker accepting an artefact it had created
-# itself).
+# Three dimension-7 entries remain: 7, 23 and M1. FS1 is now enforced:
+# the native runner produces both reports before the unchanged canonical gate.
+# Missing-output and declaration-removal controls still reject incomplete runs.
 
 
 def dim_waivers():

@@ -196,15 +196,10 @@ def _reports_present(root: Path) -> List[str]:
 
 _POPULATION = _trap_shape_steps()
 
-#: The trap-shape steps that declare NOTHING today. Pinned, because whether a
-#: step of this shape should declare is a JUDGEMENT and not something the yaml
-#: can decide for itself: steps 2, 8 and 36 are the same shape and DO declare,
-#: accepting a permanent MISSING until a non-audit producer appears. FS1 is
-#: pinned on the other side of that judgement because its declaration was
-#: attempted, measured and withdrawn (vibe-ic#983 ruling 1 asked for it again).
-#: A step entering or leaving this set is a named, loud event -- which is
-#: exactly what happens if anyone declares FS1's two gate paths.
-_DECLARE_NOTHING_AS_PINNED: Tuple[str, ...] = ("FS1",)
+#: FS1's native runner now writes both reports before the canonical consumer.
+#: No remaining gate-report-shaped step declares nothing. The live missing-output
+#: and mutation controls below continue to reject audit-only production.
+_DECLARE_NOTHING_AS_PINNED: Tuple[str, ...] = ()
 
 _DECLARING = tuple(s for s in _POPULATION if F.required_outputs(s))
 _DECLARING_NOTHING = tuple(s for s in _POPULATION if not F.required_outputs(s))

@@ -770,65 +770,8 @@ WAIVERS: Tuple[Waiver, ...] = (
     #   now empty.
 
     # ── dimension 7 — is the required_outputs list complete? ───────────
-    # Five of the nine original entries were CLOSED on 2026-07-28 by declaring
-    # the artefact (D1, 21, 25, 28, 31). The four below are the residue and
-    # they are blocked on three different things. Two (7, 23) share one:
-    # `required_outputs` is ALL-of-N with no conditional spelling, so an
-    # artefact the flow emits only on one branch of a genuine design/PDK
-    # condition cannot be declared without failing the other branch. M1 is
-    # blocked on evidence: the artefact exists in no published run root, so
-    # declaring it would move the gap from dimension 7 to dimension 3. FS1 is
-    # blocked on WIRING, and its entry below is the one that was briefly closed
-    # and reopened the same day — the closure rested on the compliance checker
-    # accepting an artefact it had created itself.
-    Waiver(
-        step_id="FS1",
-        dim=7,
-        reason=(
-            "FS1 declares no required_outputs key at all while its gate writes "
-            "two real JSON artefacts, so there is no list for the flow's "
-            "presence checks to key off. REOPENED 2026-07-28 with the reason "
-            "sharpened from 'adding one is a yaml change nobody has made yet' "
-            "to the thing that actually blocks it: FS1's artefacts have NO "
-            "producer anywhere in the plugin except the first command of its "
-            "own gate, so a declaration cannot be satisfied by a run — only by "
-            "the auditor. flow_compliance_check returns MISSING before the "
-            "gate runs when every declared entry is absent, so declaring both "
-            "paths makes FS1 a permanent red (MEASURED: two consecutive "
-            "check_step runs on a fixture holding only phase2/stage1/rtl both "
-            "report MISSING and leave no file under reports/). The withdrawn "
-            "closure removed that early return for this step SHAPE so the gate "
-            "would run and a post-gate probe would find what the gate had just "
-            "written; the same suppression turned step 8 from a correct "
-            "MISSING into PASS on benchmark-data/ic/ibex, certifying it on "
-            "reports/phase2/sdc_check.json which the audit itself created and "
-            "12 other tracked roots really do carry. WHAT CLOSES THIS, exactly "
-            "one thing: wire fmeda_fault_injection_coverage into a runner the "
-            "way phase3_one_shot_runner._DECLARED_SIGNOFF_GATES wired the four "
-            "sign-off gates on 2026-07-27, so the artefact exists BEFORE the "
-            "audit looks; then declare both paths."
-        ),
-        evidence=(
-            "flow/phase1_phase2_phase3.yaml FS1 step has no required_outputs "
-            "key while its gate runs 'fmeda_fault_injection_coverage ... "
-            "--json reports/phase2/safety/fmeda_coverage.json' and "
-            "'fmeda_coverage_check ... --json "
-            "reports/phase2/safety/fmeda_coverage_gate.json'. NO OTHER "
-            "PRODUCER: `grep -rn fmeda_fault_injection_coverage programs/ "
-            "flow/` reaches exactly ONE invocation — that yaml gate line. "
-            "Re-measured 2026-08-06: everything else it reaches imports the "
-            "module as a library or names it in prose — "
-            "programs/fmeda_coverage_check.py:3,48 (docstring, then `import "
-            "fmeda_fault_injection_coverage as fi`), "
-            "programs/result_md_audit_provenance_check.py:72 (the same "
-            "import), plus comments and tests. "
-            "All 7 tracked roots carrying reports/phase2/safety/"
-            "fmeda_coverage.json hold the auditor's vacuous-skip document "
-            "({'program': 'fmeda_fault_injection_coverage', 'verdict': "
-            "'NOT_APPLICABLE'}), i.e. compliance-gate output committed "
-            "alongside a run, not a fault-injection measurement."
-        ),
-    ),
+    # FS1 closed: the native runner produces both declared reports before its
+    # unchanged canonical consumer. The three remaining entries are 7, 23, M1.
     Waiver(
         step_id="7",
         dim=7,

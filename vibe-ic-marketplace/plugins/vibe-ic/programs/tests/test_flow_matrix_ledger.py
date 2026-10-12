@@ -748,8 +748,8 @@ PINNED_OUTPUT_MEMBERS = frozenset({
     ('16', 'phase3/stage3/cts/clock_plan.json'),
     ('17', 'phase3/stage3/pnr/placed.def'),
     ('17', 'reports/phase3/placement_legality.json'),
-    ('18', 'phase3/stage3/pnr/spare_cells.json'),
     ('18', 'phase3/stage3/pnr/post_spare.def'),
+    ('18', 'phase3/stage3/pnr/spare_cells.json'),
     ('18', 'reports/spare_cell_coverage.json'),
     ('19', 'phase3/stage3/cts/clock_tree.rpt'),
     ('19', 'phase3/stage3/pnr/post_cts.def'),
@@ -806,8 +806,8 @@ PINNED_OUTPUT_MEMBERS = frozenset({
     ('31', 'reports/phase3/lvs_verdict.json'),
     ('31', 'reports/phase3/magic_illegal_overlap.json'),
     ('31', 'reports/phase3/perc_sweep.json'),
-    ('32', 'phase3/stage3/postroute_timing_repair/postroute_timing_repair_decision.json'),
     ('32', 'phase3/stage3/postroute_timing_repair/postroute_timing_repair_decision.canonical.json'),
+    ('32', 'phase3/stage3/postroute_timing_repair/postroute_timing_repair_decision.json'),
     ('32', 'phase3/stage3/postroute_timing_repair/repair_log.json OR phase3/stage3/postroute_timing_repair/no_repair_needed.flag'),
     ('33', 'reports/phase3/power.json'),
     ('33', 'reports/phase3/power.rpt'),
@@ -817,8 +817,8 @@ PINNED_OUTPUT_MEMBERS = frozenset({
     ('35', 'reports/phase3/dfm_screen.json'),
     ('36', 'reports/audit/tapeout_checklist.json'),
     ('37', 'phase3/stage3/pnr/*.stream_inputs.json'),
-    ('37', 'phase3/stage3/pnr/magic_stream_out.tcl OR phase3/stage3/pnr/stream_out.py'),
     ('37', 'phase3/stage3/pnr/*stream_out.log'),
+    ('37', 'phase3/stage3/pnr/magic_stream_out.tcl OR phase3/stage3/pnr/stream_out.py'),
     ('37', 'phase3/stage4/gds/*.gds'),
     ('37', 'reports/phase3/gates/stage3_compliance.json'),
     ('37', 'reports/phase3/layout_receipts.json'),
@@ -910,12 +910,14 @@ PINNED_OUTPUT_MEMBERS = frozenset({
     ('DT1', 'reports/phase2/dft/transition_coverage.json'),
     ('DT2', 'reports/phase2/dft/path_delay_coverage.json'),
     ('DT3', 'reports/phase2/dft/sdd_coverage.json'),
+    ('FS1', 'reports/phase2/safety/fmeda_coverage.json'),
+    ('FS1', 'reports/phase2/safety/fmeda_coverage_gate.json'),
     ('M1', 'phase3/mixed_signal/top_merged.gds'),
     ('M1', 'reports/analog/mixed_signal/merge.json'),
     ('M2', 'reports/analog/mixed_signal/isolation.json'),
     ('M2', 'reports/analog/mixed_signal/level_shifter.json'),
-    ('M2', 'reports/analog/mixed_signal/power_domain.json'),
     ('M2', 'reports/analog/mixed_signal/pd_connectivity.json'),
+    ('M2', 'reports/analog/mixed_signal/power_domain.json'),
     ('M2', 'reports/analog/mixed_signal/power_domain_run.json'),
     ('M3', 'phase3/mixed_signal/cosim/mixed_signal_results.json'),
     ('M3', 'reports/analog/mixed_signal/interface_si.json'),
@@ -1418,7 +1420,8 @@ def test_output_entries_classify_into_the_four_kinds():
     # Removing that duplicate FILE and adding three reports is a net +2 FILE.
     # Three already-declared FILEs were also absent from the old member pin:
     # Step 18's post-spare DEF and Step M2's connectivity/run reports.
-    assert seen[F.FILE] == 146, (seen, REDERIVE)
+    # FS1 now owns its two native-produced reports (+2 FILE).
+    assert seen[F.FILE] == 148, (seen, REDERIVE)
     assert seen[F.GLOB] == 29, (seen, REDERIVE)
     assert seen[F.ANY_OF] == 27, (seen, REDERIVE)
     # Reported to the orchestrator: the PROGRAM_EXIT form described in the brief
