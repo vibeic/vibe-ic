@@ -279,6 +279,61 @@ def _cites(recs: Sequence[Dict[str, Any]]) -> str:
     return "; ".join(f"{r['cite']} ('{r['quote']}')" for r in recs)
 
 
+def _operator_die_basis(project: Path, doc: Dict[str, Any]) -> Dict[str, Any]:
+    """Read an owner-selected slot through the existing template producer.
+
+    The ingested rectangle alone is not authority: re-read its source and
+    compare the geometry, and refuse stale/unattested selections. No slot
+    is selected here and no published dimension is rounded.
+    """
+    operator = doc.get("operator_template") or {}
+    slot = operator.get("slot") if isinstance(operator, dict) else None
+    current_path = project / ST.DESIGN_ANSWERS_REL
+    if current_path.is_file():
+        current, error = TD.load(current_path)
+        if error or not isinstance(current, dict):
+            return {"error": error or "the current owner answers are not a mapping"}
+        current_operator = current.get("operator_template") or {}
+        current_slot = (current_operator.get("slot")
+                        if isinstance(current_operator, dict) else None)
+        if current_slot != slot:
+            return {"error": "the recorded operator slot differs from the current owner answers"}
+        if TD.is_answered(slot) and TD.attestation_of(current, "operator_template.slot") != TD.attestation_of(doc, "operator_template.slot"):
+            return {"error": "the recorded slot attestation differs from the current owner answers"}
+    if not TD.is_answered(slot):
+        return {}
+    if not isinstance(slot, str) or not TD.attestation_of(doc, "operator_template.slot")["declares"]:
+        return {"error": "the selected operator slot is not owner-attested"}
+    import submission_template_answers as producer
+    report = producer.build(project, slot_name=slot)
+    if report["verdict"] != producer.PASS:
+        return {"error": report["reason"]}
+    record, error = ST._load_mapping(project / report["slot_file"])
+    if error or not isinstance(record, dict):
+        return {"error": error or "the selected slot record is not a mapping"}
+    if not isinstance(record.get("source_sha256"), str) or not re.fullmatch(r"[0-9a-f]{64}", record["source_sha256"]):
+        return {"error": "the selected slot has no source digest to verify"}
+    source, notes = producer._source_record(project, record)
+    if notes or not source:
+        return {"error": "; ".join(notes) or "the selected slot source is unavailable"}
+    source_path = Path(record["source_file"])
+    if not source_path.is_absolute():
+        source_path = project / source_path
+    try:
+        source_rel = str(source_path.resolve().relative_to(project.resolve()))
+    except ValueError:
+        return {"error": "the selected operator source is outside the project and cannot be input-bound"}
+    fresh = ST.slot_record(source_path, source, source_path.parent)
+    rect = ST.parse_rect((fresh.get("die_area") or {}).get("rect"))
+    transcribed = ST.parse_rect(report["answers"].get("die_area_um"))
+    if rect is None or rect != transcribed:
+        return {"error": "the selected slot geometry disagrees with its source"}
+    width, height = ST.rect_wh(rect)
+    return {"fixed": (f"{ST.dec_str(width)}x{ST.dec_str(height)}", report["slot_file"]),
+            "slot": slot, "attestation": TD.attestation_of(doc, "operator_template.slot"),
+            "inputs": [report["slot_file"], source_rel]}
+
+
 def derive(project: Path, doc: Dict[str, Any]) -> Dict[str, Any]:
     """{status: WRITE|REFUSED|NOT_DETERMINED, budget?, reason?, basis}."""
     # THE OWNER'S FIELD IS NEVER OVERWRITTEN (DELIVC final check, finding 2).
@@ -304,6 +359,15 @@ def derive(project: Path, doc: Dict[str, Any]) -> Dict[str, Any]:
     docs = design_docs(project)
     declines, outcomes = die_size_statements(docs)
     fixed = FPC._prose_die_area(project, list(docs))
+    operator = (_operator_die_basis(project, doc)
+                if deliverable == TD.DELIVERABLE_DIE else {})
+    if operator.get("error"):
+        return {"status": "REFUSED", "rc": 1, "reason": operator["error"]}
+    if operator.get("fixed"):
+        if fixed and fixed[0] != operator["fixed"][0]:
+            return {"status": "REFUSED", "rc": 1,
+                    "reason": "the design's fixed die disagrees with the owner-selected operator slot"}
+        fixed = operator["fixed"]
     cell = _table_rows(project, ASB.METRIC_CELL_AREA)
     die = _table_rows(project, _DIE_AREA_METRIC)
     basis: Dict[str, Any] = {
@@ -317,6 +381,9 @@ def derive(project: Path, doc: Dict[str, Any]) -> Dict[str, Any]:
         "die_area_gates": die["ceilings"],
         "stdcell_area_baseline": cell["baselines"],
     }
+    if operator:
+        basis["operator_slot"] = {"slot": operator["slot"],
+                                  "attestation": operator["attestation"]}
     gates = cell["ceilings"]
     if die["ceilings"]:
         return {"status": "REFUSED", "rc": 1, "basis": basis,
@@ -324,7 +391,7 @@ def derive(project: Path, doc: Dict[str, Any]) -> Dict[str, Any]:
                            + ", ".join(r["cite"] for r in die["ceilings"])
                            + "; a LIMIT carries two die dimensions and this "
                            "program invents neither")}
-    if fixed and declines:
+    if fixed and declines and not operator:
         return {"status": "REFUSED", "rc": 1, "basis": basis,
                 "reason": (f"the input fixes the die at {fixed[0]} um "
                            f"({fixed[1]}) and declines a die size at "
@@ -339,6 +406,9 @@ def derive(project: Path, doc: Dict[str, Any]) -> Dict[str, Any]:
     parts: List[str] = []
     if fixed:
         w, h = (float(x) for x in fixed[0].lower().split("x"))
+        if operator:
+            parts.append(f"The owner-selected operator slot {operator['slot']!r} "
+                         "fulfills the original documents' delegated sizing choice.")
         parts.append(f"The input fixes the die at {fixed[0]} um "
                      f"({fixed[1]}); that rectangle is the LIMIT carried "
                      "here.")
@@ -387,7 +457,8 @@ def derive(project: Path, doc: Dict[str, Any]) -> Dict[str, Any]:
     # decline or a gate added to any of them changes the answer, so each is
     # part of what the answer was derived from.
     inputs = sorted({rel for rel, _p, _t in docs}
-                    | {rel for rel, _t in l7_docs(project)})
+                    | {rel for rel, _t in l7_docs(project)}
+                    | set(operator.get("inputs", [])))
     digest = TD.derived_inputs_sha256(project, inputs)
     if digest is None:                               # pragma: no cover
         return {"status": "REFUSED", "rc": 1, "basis": basis,
