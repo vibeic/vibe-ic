@@ -2824,9 +2824,13 @@ def main(argv: Optional[List[str]] = None) -> int:
             and spec_path.name == 'L9_INTEGRATION_SPEC.json'):
         return refuse_top('top-module-not-declared', '',
                           'multi-module canonical integration requires top_module or --top')
-    if top and top not in module_names:
+    if top and top not in module_names and (args.top or spec_path.suffix == '.json'):
         return refuse_top('top-module-not-found', top,
                           f'declared top {top} is absent from the collected RTL')
+    if top and top not in module_names:
+        # A prose extractor's candidate label is not a typed declaration.
+        # Keep the legacy port/reset comparison for natural-language specs.
+        top = None
 
     # ORGANIC #186 — the reset/clock variant-alias step
     # (design_one_shot_runner.step_reset_clock_variant_aliases) may rename the

@@ -259,15 +259,18 @@ def _enclosing_functions(tree: ast.AST) -> dict:
 #: A call that appears, disappears or moves changes this map and reddens the
 #: ratchet until it is re-pinned by name -- a count floor let six members
 #: leave the resolver's view unnoticed (analog_a6's `self.lc.run_chain` was
-#: one of them). 31 calls in 27 functions.
+#: one of them). 36 calls in 31 functions.
 EXPECTED_CALL_SITES = {
+    '_native373_current.py::produce': 2,
     '_ppa/synthesis.py::run_exploration': 1,
     'analog_a6_librelane_drc.py::_Arm.run': 1,
     'analog_a7_post_layout_emit.py::run': 1,
     'design_one_shot_runner.py::step_rtl_lint_tool': 1,
+    'execution_backend_producers.py::_state_chain': 1,
     'librelane_cts_hold.py::execute': 2,
     'librelane_eqy.py::run_eqy': 1,
     'librelane_fill_dfm.py::run_density': 1,
+    'librelane_fill_dfm.py::default_stream': 1,
     'librelane_fill_dfm.py::run_fill_insertion': 1,
     'librelane_ir_antenna.py::run_antenna_gds': 1,
     'librelane_ir_antenna.py::run_antenna_router': 1,
@@ -280,6 +283,7 @@ EXPECTED_CALL_SITES = {
     'librelane_pv_signoff.py::run_database_unit': 1,
     'librelane_pv_signoff.py::run_finishing_xor': 1,
     'librelane_pv_signoff.py::run_half': 1,
+    'librelane_pv_signoff.py::run_mixed_top': 1,
     'librelane_route.py::execute._route': 1,
     'librelane_route.py::execute._route._ll_arm': 2,
     'librelane_signoff.py::run': 1,
@@ -354,7 +358,7 @@ def test_run_chain_passes_and_records_the_stated_root(tmp_path, monkeypatch):
         argv.append(cmd)
         folder = Path(cmd[cmd.index("-o") + 1])
         (folder / "state_out.json").write_text(json.dumps({}))
-        return ll.subprocess.CompletedProcess(cmd, 0, "", "")
+        return ll.subprocess.CompletedProcess(cmd, 0, "fixture native step completed\n", "")
 
     monkeypatch.setattr(ll, "image_capability", lambda *a, **k: {})
     monkeypatch.setattr(ll, "openroad_home", lambda *a, **k: None)
