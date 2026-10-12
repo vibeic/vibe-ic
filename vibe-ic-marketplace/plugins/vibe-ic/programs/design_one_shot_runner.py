@@ -22864,7 +22864,8 @@ def step_dft_lec_chain(project: Path, top_name: str, container: str,
     (11/12) runs only on a full-chip flow; a --skip-phase3 lightweight run still
     gets the fast, always-valuable LEC (13)."""
     chain_started_at = time.time()
-    default_mode = _execution.request()['mode'] == 'default'
+    import execution_policy
+    default_mode = execution_policy.request()['mode'] == 'default'
     results: List[StepResult] = []
     synth_dir = _pl.synth_dir(project)
     dft_dir = _pl.dft_dir(project)
