@@ -337,7 +337,45 @@ def collect_rhs_set(src: str) -> Set[str]:
     return used
 
 
-def collect_instance_connections(src: str) -> Dict[str, str]:
+def _instance_scope_context(src: str):
+    """Lexical scope evidence, without inventing compile/generate choices."""
+    import bisect
+    masked = _module_ports.lexical_mask(src, attributes=True)
+    structural = _module_ports.strip_preproc_directives(masked)
+    events = [(m.end(), m.group()) for m in re.finditer(
+        r'\b(?:generate|endgenerate|begin|end)\b', structural)]
+    events += [(m.end(), m.group(1)) for m in re.finditer(
+        r'^\s*`(ifdef|ifndef|endif)\b[^\n]*', masked, re.M)]
+    events.sort()
+    positions, unresolved = [0], [False]
+    blocks = regions = preprocessing = 0
+    for at, token in events:
+        if token == 'begin': blocks += 1
+        elif token == 'end': blocks = max(0, blocks - 1)
+        elif token == 'generate': regions += 1
+        elif token == 'endgenerate': regions = max(0, regions - 1)
+        elif token in {'ifdef', 'ifndef'}: preprocessing += 1
+        elif token == 'endif': preprocessing = max(0, preprocessing - 1)
+        positions.append(at)
+        unresolved.append(bool(blocks or regions or preprocessing))
+    lines = structural.splitlines(keepends=True)
+    starts = [0]
+    for line in lines: starts.append(starts[-1] + len(line))
+
+    def is_unresolved(instance):
+        if instance.line < 1 or instance.line > len(lines):
+            return True
+        matches = list(re.finditer(r'\b' + re.escape(instance.instance_name) + r'\s*\(',
+                                   lines[instance.line - 1]))
+        if len(matches) != 1:
+            return True
+        at = starts[instance.line - 1] + matches[0].start()
+        return unresolved[bisect.bisect_right(positions, at) - 1]
+    return is_unresolved
+
+
+def collect_instance_connections(src: str,
+                                 uncertain: Optional[Set[str]] = None) -> Dict[str, str]:
     """
     Resolve instance actuals through the balanced module parser.
 
@@ -356,6 +394,7 @@ def collect_instance_connections(src: str) -> Dict[str, str]:
     except (AttributeError, TypeError, ValueError):
         module_defs = []
     defs = {mod.name: mod for mod in module_defs}
+    unresolved_scope = _instance_scope_context(src) if module_defs else lambda _inst: True
 
     def _simple_actuals(actual: str) -> Set[str]:
         actual = actual.strip()
@@ -386,6 +425,7 @@ def collect_instance_connections(src: str) -> Dict[str, str]:
             if inst.malformed_connections or duplicate_ports or inst.has_mixed_connections:
                 continue
 
+            ambiguous_scope = unresolved_scope(inst)
             child = defs.get(inst.module_name)
             if child is not None and child.discovery_issues:
                 continue
@@ -395,7 +435,10 @@ def collect_instance_connections(src: str) -> Dict[str, str]:
                         formal is None or formal.direction not in {'output', 'inout'}):
                     continue
                 for signal in _simple_actuals(conn.wire_expr):
-                    connected[signal] = conn.port_name
+                    if ambiguous_scope:
+                        if uncertain is not None: uncertain.add(signal)
+                    else:
+                        connected[signal] = conn.port_name
 
             if (not inst.positional_actuals or inst.is_implicit or
                     inst.has_mixed_connections or inst.malformed_connections):
@@ -410,7 +453,10 @@ def collect_instance_connections(src: str) -> Dict[str, str]:
                 if formal is None or formal.direction not in {'output', 'inout'}:
                     continue
                 for signal in _simple_actuals(actual):
-                    connected[signal] = formal.name
+                    if ambiguous_scope:
+                        if uncertain is not None: uncertain.add(signal)
+                    else:
+                        connected[signal] = formal.name
     return connected
 
 
@@ -419,7 +465,8 @@ def rule_undriven_and_unread(src: str, path: str) -> List[Finding]:
     decls = find_declarations(src)
     lhs = collect_lhs_set(src)
     rhs = collect_rhs_set(src)
-    inst_sigs = collect_instance_connections(src)
+    uncertain: Set[str] = set()
+    inst_sigs = collect_instance_connections(src, uncertain)
 
     for kind, name, lineno in decls:
         driven = name in lhs or name in inst_sigs
@@ -430,8 +477,14 @@ def rule_undriven_and_unread(src: str, path: str) -> List[Finding]:
         # For now, focus on the clear-cut cases.
 
         if kind == 'wire' and not driven:
-            findings.append(Finding(path, lineno, 'ERROR', 'undriven-wire', name,
-                f"wire '{name}' declared but never driven (no assign, no instance output)."))
+            if name in uncertain:
+                findings.append(Finding(path, lineno, 'ERROR', 'instance-driver-analysis-unresolved', name,
+                    f"wire '{name}' has a child connection in an unresolved compile/generate scope; "
+                    "the lexical view cannot prove this driver active. Native elaboration of the "
+                    "declared configuration is required; this is NOT_MEASURED, not a missing-driver proof."))
+            else:
+                findings.append(Finding(path, lineno, 'ERROR', 'undriven-wire', name,
+                    f"wire '{name}' declared but never driven (no assign, no instance output)."))
         # ORGANIC R8C3 (#782) — TOTALLY-DEAD reg/logic: declared but NEITHER
         # driven NOR read. The existing reg/logic arm below guards on
         # `name in lhs` (written-but-unread), so a `reg`/`logic` that is never

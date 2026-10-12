@@ -218,7 +218,6 @@ endmodule
 """
     fp=tmp_path/'input.sv';fp.write_text(source)
     # Every configured preprocessor arm is independently checked by the tool.
-    native_defines = ['-D','FEATURE'] if boundary == 'preprocessor' else []
     if control == "current":
         assert shutil.which("yosys"), "EDA image must supply the native control"
         script = f"read_verilog -sv {'-DFEATURE' if boundary == 'preprocessor' else ''} {fp}; hierarchy -check -top top; proc; check -assert; write_json {tmp_path}/native.json"
@@ -240,3 +239,53 @@ endmodule
     findings=json.loads(report.read_text())
     assert any(f['rule']=='undriven-wire' and f['symbol']=='routed' for f in findings)==(control!='current')
     assert fp.read_text()==source
+
+
+@pytest.mark.parametrize("event", ["@(*)", "@ (*)", "@ ( * )"])
+def test_event_wildcard_keeps_discovery_and_real_attributes(event):
+    source = ANSI + f"""
+module top(input [7:0] source, output [7:0] result);
+    reg [7:0] sampled;
+    wire [7:0] routed;
+    always {event} begin sampled=source; end
+    (* keep = 1, description = "endgenerate" *) leaf u_leaf(sampled, routed);
+    assign result=routed;
+endmodule
+"""
+    masked=lint._module_ports.lexical_mask(source, attributes=True)
+    assert event in masked
+    assert 'description' not in masked
+    assert len(masked)==len(source)
+    assert masked.count('\n')==source.count('\n')
+    assert 'routed' not in _undriven(source)
+
+
+@pytest.mark.parametrize("branch", ["generate", "preprocessor"])
+def test_unselected_conditional_child_is_not_credited_as_an_active_driver(tmp_path, branch):
+    import json
+    import rtl_review_aggregate as A
+    inside="leaf u_leaf(.data_i(source), .data_o(routed));"
+    region=(f"generate if (ENABLE) begin: maybe wire [7:0] unused; {inside} end endgenerate"
+            if branch=='generate' else f"`ifdef FEATURE\n{inside}\n`endif")
+    source=ANSI+f"""
+module top #(parameter ENABLE=0)(input [7:0] source, output [7:0] result);
+    wire [7:0] routed;
+    {region}
+    assign result=routed;
+endmodule
+"""
+    fp=tmp_path/'conditional.sv';fp.write_text(source)
+    findings=lint.rule_undriven_and_unread(source,str(fp))
+    f=next(f for f in findings if f.symbol=='routed')
+    assert f.rule=='instance-driver-analysis-unresolved'
+    assert f.severity=='ERROR' and f.block_eligible
+    assert 'NOT_MEASURED' in f.message
+    assert 'routed' not in lint.collect_instance_connections(source)
+    assert A.HYGIENE_RULE_CATEGORY[f.rule]=='correctness_smells'
+    native=subprocess.run(['yosys','-Q','-p',f'read_verilog -sv {fp}; hierarchy -check -top top; proc; check -assert'],capture_output=True,text=True)
+    assert native.returncode!=0, native.stdout+native.stderr
+    report=tmp_path/'hygiene.json'
+    cli=subprocess.run([sys.executable,str(PROGRAMS/'rtl_hygiene_lint.py'),str(fp),'--severity','ERROR','--json',str(report)],capture_output=True,text=True)
+    assert cli.returncode==1
+    assert any(f['rule']=='instance-driver-analysis-unresolved' and f['symbol']=='routed'
+               for f in json.loads(report.read_text()))

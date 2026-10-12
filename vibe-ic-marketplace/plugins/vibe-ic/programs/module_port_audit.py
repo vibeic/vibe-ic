@@ -190,6 +190,16 @@ def split_top_level(text: str, separator: str = ',') -> List[str]:
     return parts
 
 
+def _attribute_start(src: str, pos: int) -> bool:
+    """An event wildcard ``@(*)`` is not a SystemVerilog attribute."""
+    if not src.startswith('(*', pos):
+        return False
+    previous = pos - 1
+    while previous >= 0 and src[previous].isspace():
+        previous -= 1
+    return previous < 0 or src[previous] != '@'
+
+
 def lexical_mask(src: str, *, attributes: bool = False) -> str:
     """Blank comments and strings without moving any source offset.
 
@@ -215,7 +225,7 @@ def lexical_mask(src: str, *, attributes: bool = False) -> str:
             if i >= len(src):
                 raise ValueError('unterminated_string')
             i += 1
-        elif attributes and src.startswith('(*', i):
+        elif attributes and _attribute_start(src, i):
             end = lexical_mask(src[i + 2:]).find('*)')
             if end < 0:
                 raise ValueError('unterminated_attribute')
@@ -273,7 +283,7 @@ def mask_attributes_only(src: str) -> str:
             else:
                 i += 1
             continue
-        if state == 'code' and src.startswith('(*', i):
+        if state == 'code' and _attribute_start(src, i):
             start = i
             i += 2
             depth = 1
