@@ -1308,6 +1308,22 @@ def produce_signoff(project, params):
             raise em.Refusal('BACKEND_SDF_NATIVE_UNMEASURED', sid)
         R._step29_tool_arm(project, top, pdk, 'librelane', sim, sdf, written, notes)
     elif sid == '30':
+        if params.get('execution_mode', 'default') == 'default':
+            from execution_adapters_backend import _step30_simulators
+            instruments = _step30_simulators(params)
+            if instruments != ('ngspice',):
+                return {'verdict': 'NOT_MEASURED',
+                        'detail': 'BACKEND_CURRENT_STEP30_PROVIDER_UNQUALIFIED: ' +
+                                  repr(instruments)}
+            # Use the same current producer and strict consumer as the
+            # ordinary Phase-3 caller. Its native correlation record belongs
+            # at the canonical path; the audit belongs in phase2/gates.
+            if not R._step30_tool_arm(project, pdk, written, notes, container=container):
+                gate = _require(project / 'reports/phase2/gates/spice_correlation.json')
+                verdict = json.loads(gate.read_text()).get('summary', {}).get('verdict')
+                return {'verdict': 'FAIL' if verdict == 'FAIL' else 'NOT_MEASURED',
+                        'detail': '\n'.join(notes)}
+            return {'verdict': 'PASS', 'detail': '\n'.join(notes)}
         import path_spice_tool as spice
         from execution_adapters_backend import _step30_simulators
         result = spice.run_step30(project, image, root, pdk.name,

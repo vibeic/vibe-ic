@@ -7110,6 +7110,13 @@ steps:
     name: "Post-Layout SPICE Verification (critical-path correlation + analog)"
     stage: stage3
     required_inputs:
+      # The current SPICE producer consumes the preceding extracted STA
+      # record and SPEF. Declare them in the same list used by preparation,
+      # preflight, and the direct producer receipt; PDK alone is not the input.
+      - from: 23
+        path: "reports/phase3/sta_postpnr_signoff.json"
+      - from: 22
+        path: "phase3/stage3/extracted/*.spef"
       - from: external
         check: none
         what: >-

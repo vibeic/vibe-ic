@@ -291,3 +291,185 @@ def test_step30_ordinary_phase3_refusal_retires_previous_current_pass(tmp_path, 
     assert report['verdict'] == 'NOT_MEASURED'
     assert not (p / 'reports/phase3/spice_correlation.current.json').exists()
     assert not (p / 'phase3/stage3/spice/correlation.spice').exists()
+
+
+def _current_backend_step30(project, lib, monkeypatch, *, mode='default', simulators=None):
+    import execution_backend_producers as backend
+    import phase3_one_shot_runner as runner
+    monkeypatch.setattr(backend, '_parameters',
+                        lambda *_: (runner, None, pdk(lib), 'SOFTWARE_FIXTURE_ONLY'))
+    params = {'step_id': '30', 'top': 'neutral', 'image_id': BF.IMAGE,
+              'pdk_root': str(project / 'fixture_pdk')}
+    if mode is not None:
+        params['execution_mode'] = mode
+    if simulators is not None:
+        params['simulators'] = simulators
+    return backend.produce_signoff(project, params)
+
+
+@pytest.mark.parametrize('kind,expected', [('CORRELATED', 'PASS'), ('MISMATCH', 'FAIL'),
+                                           ('CRITICAL_MISMATCH', 'FAIL')])
+@pytest.mark.parametrize('mode', ['default', None], ids=['default', 'unspecified-default'])
+def test_backend_step30_uses_the_current_producer_and_preserves_its_product(
+        tmp_path, monkeypatch, kind, expected, mode):
+    import test_step30_r4_current_failures as current_fixture
+    p, folder, lib = project(tmp_path)
+    current_fixture.correlation_tool(p, folder, lib, monkeypatch,
+                                     mismatch=kind, companion='success')
+    # Setup supplies native-input-shaped files and substituted process transport.
+    # No existing result may stand in for this backend invocation.
+    for name in ('reports/phase3/spice_correlation.current.json',
+                 'reports/phase3/spice_correlation.json',
+                 'phase3/stage3/spice/correlation.json'):
+        (p / name).unlink(missing_ok=True)
+    actual = PST.run_current_step30
+    calls = []
+    def observed(*args, **kwargs):
+        calls.append(args[0])
+        return actual(*args, **kwargs)
+    monkeypatch.setattr(PST, 'run_current_step30', observed)
+    result = _current_backend_step30(p, lib, monkeypatch, mode=mode)
+    assert calls == [p], 'the backend must invoke the current producer once'
+    assert result['verdict'] == expected, result
+    native = json.loads((p / 'reports/phase3/spice_correlation.json').read_text())
+    assert native == json.loads((p / 'phase3/stage3/spice/correlation.json').read_text())
+    assert native['verdict'] == expected and 'detail' in native and 'summary' not in native
+    gate = SC.run_audit(p, run_spice=False)
+    assert gate.summary['current_binding'] == 'CURRENT'
+    assert gate.summary['measurement'] == 'MEASURED'
+    assert gate.summary['verdict'] == expected
+    assert gate.passed is (expected == 'PASS')
+    published = json.loads((p / 'reports/phase2/gates/spice_correlation.json').read_text())
+    assert published['summary']['current_binding'] == 'CURRENT'
+    assert published['summary']['verdict'] == expected
+
+
+def test_backend_step30_digital_pass_cannot_hide_an_uncovered_analog_module(tmp_path, monkeypatch):
+    import test_step30_r4_current_failures as current_fixture
+    p, folder, lib = project(tmp_path)
+    current_fixture.correlation_tool(p, folder, lib, monkeypatch,
+                                     mismatch='CORRELATED', companion='success')
+    write(p / 'phase2/stage1/rtl/adc_helper.sv', 'module adc_helper; endmodule\n')
+    result = _current_backend_step30(p, lib, monkeypatch)
+    assert result['verdict'] == 'FAIL', result
+    gate = SC.run_audit(p, run_spice=False)
+    assert gate.summary['current_binding'] == 'CURRENT'
+    assert gate.summary['correlation_verdict'] == 'PASS'
+    assert gate.summary['measurement'] == 'MEASURED'
+    assert gate.summary['verdict'] == 'FAIL' and not gate.passed
+    assert any(f.rule == 'ANALOG_SPICE_MISSING' for f in gate.findings)
+
+
+def test_backend_step30_current_refusal_cannot_reuse_an_earlier_pass(tmp_path, monkeypatch):
+    import test_step30_r4_current_failures as current_fixture
+    p, folder, lib = project(tmp_path)
+    current_fixture.correlation_tool(p, folder, lib, monkeypatch,
+                                     mismatch='CORRELATED', companion='success')
+    assert SC.run_installed_pdk_path_correlation(p, str(lib))['status'] == 'RAN'
+    def refuse(*_args, **_kwargs):
+        raise LC.Refusal('CURRENT_STEP30_EXECUTION_MISSING', 'SOFTWARE_FIXTURE_ONLY transport refused')
+    monkeypatch.setattr(PST, 'run_current_step30', refuse)
+    result = _current_backend_step30(p, lib, monkeypatch)
+    assert result['verdict'] == 'NOT_MEASURED', result
+    assert not (p / 'reports/phase3/spice_correlation.current.json').exists()
+    declared = json.loads((p / 'reports/phase3/spice_correlation.json').read_text())
+    assert declared['verdict'] == 'NOT_MEASURED' and declared['correlation_ran'] is False
+    assert declared == json.loads((p / 'phase3/stage3/spice/correlation.json').read_text())
+    assert declared == json.loads((p / 'phase3/stage3/spice/spice_correlation_not_run.json').read_text())
+    gate = SC.run_audit(p, run_spice=False)
+    assert not gate.passed and gate.summary['measurement'] == 'NOT_MEASURED'
+
+
+@pytest.mark.parametrize('simulators', [('xyce',), ('ngspice', 'xyce')])
+def test_backend_default_step30_cannot_silently_change_the_requested_instrument(
+        tmp_path, monkeypatch, simulators):
+    import test_step30_r4_current_failures as current_fixture
+    p, folder, lib = project(tmp_path)
+    current_fixture.correlation_tool(p, folder, lib, monkeypatch,
+                                     mismatch='CORRELATED', companion='success')
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError('unqualified current provider must not run another instrument')
+    monkeypatch.setattr(PST, 'run_step30', forbidden)
+    monkeypatch.setattr(PST, 'run_current_step30', forbidden)
+    result = _current_backend_step30(p, lib, monkeypatch, simulators=simulators)
+    assert result['verdict'] == 'NOT_MEASURED', result
+    assert result['detail'] == 'BACKEND_CURRENT_STEP30_PROVIDER_UNQUALIFIED: ' + repr(simulators)
+
+
+@pytest.mark.parametrize('kind,expected', [('CORRELATED', 'PASS'), ('MISMATCH', 'FAIL'),
+                                         ('REFUSED', 'NOT_MEASURED')])
+def test_default_row_loop_consumes_current_step30_and_stops_on_failure(
+        tmp_path, monkeypatch, kind, expected):
+    import execution_backend_producers as backend
+    import flow_compliance_check as compliance
+    import test_step30_r4_current_failures as current_fixture
+    p, folder, lib = project(tmp_path)
+    current_fixture.correlation_tool(p, folder, lib, monkeypatch,
+                                     mismatch='CORRELATED' if kind == 'REFUSED' else kind,
+                                     companion='success')
+    if kind == 'REFUSED':
+        def refuse(*_args, **_kwargs):
+            raise LC.Refusal('CURRENT_STEP30_EXECUTION_MISSING', 'SOFTWARE_FIXTURE_ONLY refusal')
+        monkeypatch.setattr(PST, 'run_current_step30', refuse)
+    cfg = pdk(lib)
+    monkeypatch.setattr(backend, '_parameters', lambda *_: (R, None, cfg, 'SOFTWARE_FIXTURE_ONLY'))
+    monkeypatch.setattr(R, '_backend_parameter_values', lambda *_: {
+        'pdk_root': str(p / 'fixture_pdk'), 'image_id': BF.IMAGE})
+    actual_producer = backend.produce
+    called = []
+    def observed(project_path, params):
+        called.append(params['step_id'])
+        assert params['step_id'] == '30', 'a failed Step30 must not start the following producer'
+        return actual_producer(project_path, params)
+    monkeypatch.setattr(backend, 'produce', observed)
+    # Substitute process transport only; the runner, producer, canonical gate,
+    # ledger, contract resolver, and retained output collector remain real.
+    import contextlib
+    import io
+    actual_transport = compliance._watchdog.run_host_supervised
+    consumed = []
+    def gate_transport(argv, **kwargs):
+        if Path(argv[1]).name != 'spice_correlation_check.py':
+            return actual_transport(argv, **kwargs)
+        consumed.append(argv[1])
+        stdout, stderr = io.StringIO(), io.StringIO()
+        with monkeypatch.context() as transport_context:
+            transport_context.chdir(kwargs['cwd'])
+            with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                rc = SC.main(argv[2:])
+        return compliance._watchdog.SupervisedResult(
+            rc=rc, out=stdout.getvalue(), err=stderr.getvalue(), outcome='natural')
+    monkeypatch.setattr(compliance._watchdog, 'run_host_supervised', gate_transport)
+    ids = ['30'] if expected == 'PASS' else ['30', '33']
+    row = R._default_pnr_rows(p, 'neutral', cfg, 'SOFTWARE_FIXTURE_ONLY', ids)
+    assert called == ['30']
+    assert row.status == expected, row.detail
+    receipt = json.loads((p / 'reports/phase3/default_steps/30/backend_result.json').read_text())
+    assert receipt['verdict'] == expected
+    if expected == 'PASS':
+        assert len(consumed) == 1
+        assert any(entry['gate'] == 'spice_correlation_check'
+                   for entry in receipt['gate_ledger'])
+        native = receipt['current_step_declared_producers']
+        assert 'reports/phase3/sta_postpnr_signoff.json' in native['inputs']
+        assert 'phase3/stage3/extracted/neutral.spef' in native['inputs']
+    if expected != 'NOT_MEASURED':
+        gate = SC.run_audit(p, run_spice=False)
+        assert gate.summary['current_binding'] == 'CURRENT'
+        assert gate.summary['measurement'] == 'MEASURED'
+        assert gate.summary['verdict'] == expected
+
+
+@pytest.mark.parametrize('missing', ['reports/phase3/sta_postpnr_signoff.json',
+                                    'phase3/stage3/extracted/neutral.spef'])
+def test_default_step30_missing_current_input_stops_before_producer(tmp_path, monkeypatch, missing):
+    import execution_backend_producers as backend
+    p, folder, lib = project(tmp_path)
+    (p / missing).unlink()
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError('missing current input must be reported before the native tool starts')
+    monkeypatch.setattr(backend, 'produce', forbidden)
+    row = R._default_pnr_rows(p, 'neutral', pdk(lib), 'SOFTWARE_FIXTURE_ONLY', ['30', '33'])
+    assert row.status == 'NOT_MEASURED', row.detail
+    assert 'missing current inputs' in row.detail
+    assert missing in row.detail or ('*.spef' in row.detail and missing.endswith('.spef'))
