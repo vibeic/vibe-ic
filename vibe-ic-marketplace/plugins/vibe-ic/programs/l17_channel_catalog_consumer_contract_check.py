@@ -262,9 +262,9 @@ except Exception as exc:  # pragma: no cover
     _CONSUMER_IMPORT_ERROR = f"{type(exc).__name__}: {exc}"
 
 
-def _c_derive_signals(l17: dict, l9: dict) -> List[dict]:
+def _c_derive_signals(l17: dict, l9: dict, project: Optional[Path] = None) -> List[dict]:
     if _consumer is not None:
-        return list(_consumer.derive_signals(l17, l9))
+        return list(_consumer.derive_signals(l17, l9, project=project))
     return []
 
 
@@ -712,7 +712,12 @@ def audit(project: Path) -> Tuple[List[Finding], Dict[str, Any]]:
             {"undeclared": undeclared[:20]}))
 
     # -- Consumer derivation ------------------------------------------------
-    derived = _c_derive_signals(l17, l9)
+    try:
+        derived = _c_derive_signals(l17, l9, project=project)
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        findings.append(Finding("ERROR", "SELECTED_INTERFACE_BINDING_INVALID",
+                                str(exc), {}))
+        return findings, info
     derived_names = {d.get("name") for d in derived}
     info["consumer_derived_port_count"] = len(derived)
 

@@ -351,6 +351,46 @@ def bind_selected_interface(project: Path, content: dict) -> dict:
     return result
 
 
+
+def selected_interface_ports(project: Path, content: dict) -> List[Dict[str, Any]]:
+    """Return the current chosen roster without deleting document provenance.
+
+    Binding labels alone do not retire a requirement. Re-run the existing
+    input/declaration/top binding and the manifest's electrical obligations.
+    This reader leaves the L9 document and every earlier output untouched.
+    """
+    rosters = [content[key] for key in ("ports", "top_ports", "top_module_pins")
+               if key in content]
+    if (not rosters or any(not isinstance(rows, list) or rows != rosters[0]
+                           for rows in rosters)):
+        raise ValueError("selected interface port rosters disagree")
+    bound = bind_selected_interface(project, content)
+    if "selected_interface_binding" not in bound:
+        return rosters[0]
+    from l9_rtl_pin_consistency_check import _manifest_renamed_groups
+    manifest = json.loads((Path(project) / "phase2/stage1/rtl/SOURCE_MANIFEST.json").read_text())
+    declared = _manifest_renamed_groups(manifest)
+    rows = {p["name"]: p for p in bound["ports"]}
+    retired = set(bound["selected_interface_binding"]["document_examples_not_implemented"])
+    for group in bound["selected_interface_binding"]["illustrative_groups"]:
+        sources, targets = set(group["l9"]), set(group["rtl"])
+        covered = set()
+        for lhs, rhs in declared:
+            if lhs <= sources and rhs <= targets:
+                covered.update(lhs)
+        if covered != sources:
+            raise ValueError("selected interface rename is not declared in current manifest")
+        for source in sources:
+            for target in targets:
+                old, new = rows[source], rows[target]
+                if (old.get("direction") or old.get("mode")) != new["direction"]:
+                    raise ValueError(f"selected rename direction mismatch: {source} -> {target}")
+                if (isinstance(old.get("width"), int) and isinstance(new.get("width"), int)
+                        and old["width"] != new["width"]):
+                    raise ValueError(f"selected rename width mismatch: {source} -> {target}")
+    return [port for port in bound["ports"] if port["name"] not in retired]
+
+
 def refresh_selected_interface(project: Path, path: Path, content: dict) -> dict:
     """Ordinary producer refresh for a continuation's existing L9 document."""
     bound = bind_selected_interface(project, content)

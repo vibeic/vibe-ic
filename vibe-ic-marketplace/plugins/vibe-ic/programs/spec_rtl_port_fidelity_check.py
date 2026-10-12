@@ -83,7 +83,11 @@ def load_spec(path: Path) -> List[Port]:
     natural-language prompt ("- input d (8 bits)"), a markdown ```verilog
     module(...)``` header, or a plain Verilog file — via the shared extractor."""
     txt = path.read_text(errors='replace')
-    return extract_spec_contract(txt, is_json=path.suffix == '.json').ports
+    project = next((ancestor for ancestor in path.resolve().parents
+                    if (ancestor / "phase2/stage1/rtl/SOURCE_MANIFEST.json").is_file()), None)
+    if path.suffix == '.json' and 'selected_interface_binding' in json.loads(txt) and project is None:
+        raise ValueError("selected interface requires the current reused-IP manifest")
+    return extract_spec_contract(txt, is_json=path.suffix == '.json', project=project).ports
 
 
 def check_index_gaps(ports: List[Port], path: str) -> List[Finding]:
@@ -183,8 +187,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     findings += check_index_gaps(chosen_ports, chosen_path)
     findings += check_duplicates(chosen_ports, chosen_path)
     if args.spec:
-        spec_ports = load_spec(Path(args.spec))
-        findings += compare_to_spec(chosen_ports, spec_ports, chosen_path)
+        try:
+            spec_ports = load_spec(Path(args.spec))
+            findings += compare_to_spec(chosen_ports, spec_ports, chosen_path)
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            findings.append(Finding(chosen_path, 'ERROR', 'selected-interface-binding-invalid',
+                                    args.top or '', str(exc)))
 
     errs = [f for f in findings if f.severity == 'ERROR']
     warns = [f for f in findings if f.severity == 'WARN']

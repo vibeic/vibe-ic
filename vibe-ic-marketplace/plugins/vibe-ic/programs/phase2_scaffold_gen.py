@@ -302,7 +302,7 @@ def require_resolved_widths(signals: list[dict], artefact: str) -> None:
         raise UnresolvedPortWidth(artefact, bad)
 
 
-def derive_signals(l17: dict, l9: dict) -> list[dict]:
+def derive_signals(l17: dict, l9: dict, *, project: Path | None = None) -> list[dict]:
     """Return a deduplicated list of {name, direction, width, comment} dicts.
 
     Sources, in priority order:
@@ -383,6 +383,18 @@ def derive_signals(l17: dict, l9: dict) -> list[dict]:
     no diagnostic anywhere. Refusing is the only answer that a wrong number
     cannot imitate.
     """
+    if "selected_interface_binding" in l9:
+        if project is None:
+            raise ValueError("selected interface derivation requires the current project")
+        from _staged_top_module import selected_interface_ports
+        chosen = selected_interface_ports(project, l9)
+        retired = {p["name"] for p in l9.get("ports", [])} - {p["name"] for p in chosen}
+        l9 = dict(l9, ports=chosen, top_ports=chosen)
+        # L17's earlier illustrative names must not reintroduce retired aliases.
+        l17 = dict(l17, **{key: [p for p in _list_or_empty(l17.get(key))
+                                if not isinstance(p, dict) or p.get("name") not in retired]
+                          for key in ("channels", "global_signals")})
+
     signals: list[dict] = []
     seen: set[str] = set()
     # name -> the width TEXT the layers state and this function cannot use.
@@ -1388,7 +1400,7 @@ def emit_scaffold(project: Path,
 
     ic_name = l1.get("ic_name") or "unknown"
     top = derive_top_module_name(l1, l9, ic_name)
-    signals = derive_signals(l17, l9)
+    signals = derive_signals(l17, l9, project=project)
 
     # BLOCKING, and BEFORE the first write (ORGANIC #404). The individual
     # emitters refuse too, but a refusal discovered on the fourth `_write`

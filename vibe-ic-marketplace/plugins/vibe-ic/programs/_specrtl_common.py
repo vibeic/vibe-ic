@@ -1592,7 +1592,8 @@ def _json_port_width(d: dict) -> int:
 
 
 def extract_spec_contract(text: str, is_json: bool = False,
-                          confirm: bool = True, client_factory=None) -> SpecContract:
+                          confirm: bool = True, client_factory=None,
+                          project: Optional[Path] = None) -> SpecContract:
     """Extract a declared contract from spec text.
 
     SEMANTIC double-confirm: prose-inferred fields (reset mode/polarity, output latency,
@@ -1614,6 +1615,9 @@ def extract_spec_contract(text: str, is_json: bool = False,
             port_dicts, rst, mod, lat = data, {}, None, None
         else:                               # {"ports":[...],"reset":{...},...}
             port_dicts = data.get('ports', [])
+            if "selected_interface_binding" in data and project is not None:
+                from _staged_top_module import selected_interface_ports
+                port_dicts = selected_interface_ports(project, data)
             rst = data.get('reset', {}) or {}
             # A JSON spec contract names its top under `module` OR `top_module`
             # — L9_INTEGRATION_SPEC.json emits the latter. Reading only `module`

@@ -686,7 +686,7 @@ def _adapter_scaffold_derive_signals(
     l9 = layers.get("L9", [(None, {})])[0][1]
     l17 = layers.get("L17", [(None, {})])[0][1]
     try:
-        signals = mod.derive_signals(l17, l9)
+        signals = mod.derive_signals(l17, l9, project=project)
     except Exception:  # noqa: BLE001
         return None
     out: Dict[str, Dict[str, Any]] = {}

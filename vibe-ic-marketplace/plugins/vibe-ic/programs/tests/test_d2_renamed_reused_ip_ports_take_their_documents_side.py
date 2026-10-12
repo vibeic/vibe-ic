@@ -740,3 +740,98 @@ def test_step2_refuses_a_group_row_whose_family_has_no_rtl_port():
     assert (rc, rep["verdict"]) == (1, "DOES_NOT_FIT")
     assert "PAD_GROUP_UNRESOLVED" in rep["reason"]
     assert "have no pad" not in rep["reason"]
+
+
+@pytest.mark.parametrize("consumer", ["scaffold", "shared_parser", "fidelity"])
+@pytest.mark.parametrize("control", ["current", "no_delegation", "required_source",
+                                     "wrong_width", "no_manifest_rename", "forged_binding",
+                                     "missing_selected_port", "conflicting_roster"])
+def test_selected_interface_chosen_roster_reaches_phase2_consumers(tmp_path, consumer, control):
+    """Use real current producer and consumers; retain the original L9 artifact."""
+    import phase2_scaffold_gen as P2
+    from _specrtl_common import extract_spec_contract
+    from _staged_top_module import bind_selected_interface
+    from spec_rtl_port_fidelity_check import load_spec
+    proj = _selected_project(tmp_path)
+    path = proj / "phase1/generated_docs/L9_INTEGRATION_SPEC.json"
+    bound = bind_selected_interface(proj, json.loads(path.read_text()))
+    if control == "no_delegation":
+        declaration = proj / "plugin_output/declaration.json"
+        declaration.write_text(json.dumps({"top_module": "core"}))
+    elif control in {"required_source", "wrong_width"}:
+        for port in bound["ports"]:
+            if control == "required_source" and port["name"] == "o_memory_addr":
+                port["required"] = True
+            elif control == "wrong_width" and port["name"] == "o_memory_wdata":
+                port["width"] = 4
+    elif control == "no_manifest_rename":
+        manifest = proj / "phase2/stage1/rtl/SOURCE_MANIFEST.json"
+        manifest.write_text(json.dumps({"reused_ip": True}))
+    elif control == "forged_binding":
+        doc = proj / "input/docs/L3_external_interface.md"
+        doc.write_text(doc.read_text().replace("address (typical)",
+                                               "address; mandatory fixed name; MUST implement o_memory_addr"))
+        bound["selected_interface_binding"]["selected_source_sha256"] = "0" * 64
+        # Forged labels cannot retire an input's now-fixed mandatory pin.
+        bound["selected_interface_binding"]["document_examples_not_implemented"] = sorted(DOC_ONLY)
+    elif control == "missing_selected_port":
+        netlist = proj / "phase2/stage2/synth/core_synth.v"
+        netlist.write_text(netlist.read_text().replace("o_memory_wdata, ", "")
+                          .replace("  output [1:0] o_memory_wdata;\n", ""))
+    elif control == "conflicting_roster":
+        import copy
+        bound["top_ports"] = copy.deepcopy(bound["top_ports"])
+        bound["top_ports"][0]["width"] = 4
+    path.write_text(json.dumps(bound))
+    before = {p: p.read_bytes() for p in [path, proj / "phase2/stage2/synth/core_synth.v",
+                                          proj / "plugin_output/declaration.provenance.json"]}
+    def consume():
+        if consumer == "scaffold":
+            # The earlier L17 names must not put illustrative aliases back.
+            l17 = {"channels": [{"name": name, "direction": "output"} for name in DOC_ONLY]}
+            return P2.derive_signals(l17, bound, project=proj)
+        if consumer == "shared_parser":
+            return [vars(p) for p in extract_spec_contract(path.read_text(), is_json=True, project=proj).ports]
+        return [vars(p) for p in load_spec(path)]
+    if control == "current":
+        rows = {p["name"]: p for p in consume()}
+        assert set(rows) == {"clk", "rst", "o_status", "o_memory_wdata", "o_memory_waddr", "o_memory_wen"}
+        assert rows["o_memory_wdata"]["width"] == 2
+        assert rows["o_memory_wdata"]["direction"] == "output"
+        assert not (set(rows) & DOC_ONLY)
+    else:
+        with pytest.raises((ValueError, KeyError), match=".+"):
+            consume()
+    assert all(p.read_bytes() == data for p, data in before.items())
+
+
+def test_selected_interface_actual_scaffold_and_conformance_handoff(tmp_path, capsys):
+    import phase2_scaffold_gen as P2
+    import spec_conformance_check as SC
+    from _specrtl_common import parse_rtl_ports
+    from _staged_top_module import bind_selected_interface
+    proj = _selected_project(tmp_path)
+    path = proj / "phase1/generated_docs/L9_INTEGRATION_SPEC.json"
+    bound = bind_selected_interface(proj, json.loads(path.read_text()))
+    path.write_text(json.dumps(bound))
+    before = path.read_bytes()
+    P2.emit_scaffold(proj)
+    scaffold = proj / "phase2/stage1/scaffold/core_top.v"
+    _, ports = parse_rtl_ports(scaffold.read_text(), "core")
+    assert {p.name for p in ports} == {"clk", "rst", "o_status", "o_memory_wdata", "o_memory_waddr", "o_memory_wen"}
+    report = proj / "chosen-conformance.json"
+    rc = SC.main(["--spec", str(path), "--rtl-dir", str(proj / "phase2/stage2/synth"),
+                  "--json", str(report)])
+    assert rc == 0, capsys.readouterr().out
+    assert not any(f["severity"] == "ERROR" for f in json.loads(report.read_text()))
+    assert path.read_bytes() == before
+
+
+def test_selected_interface_scaffold_requires_current_project(tmp_path):
+    import phase2_scaffold_gen as P2
+    from _staged_top_module import bind_selected_interface
+    proj = _selected_project(tmp_path)
+    path = proj / "phase1/generated_docs/L9_INTEGRATION_SPEC.json"
+    bound = bind_selected_interface(proj, json.loads(path.read_text()))
+    with pytest.raises(ValueError, match="requires the current project"):
+        P2.derive_signals({}, bound)
