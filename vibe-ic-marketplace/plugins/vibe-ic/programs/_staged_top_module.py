@@ -210,7 +210,8 @@ def bind_selected_interface(project: Path, content: dict) -> dict:
     the existing absent-from-top label. Fixed ports, directions and known
     widths remain obligations. This does not verify the declaration's author.
     """
-    from l9_rtl_pin_consistency_check import _auto_derive_renamed_interfaces
+    from l9_rtl_pin_consistency_check import (_auto_derive_renamed_interfaces,
+                                              _l3_fixed_port_name)
     from renamed_interface_derive import _rtl_top_ports
 
     project = Path(project)
@@ -285,7 +286,8 @@ def bind_selected_interface(project: Path, content: dict) -> dict:
     missing = sorted(n for n in old if n not in retired
                      and documented[n].get("optional") is not True)
     fixed = sorted(n for n in retired if documented[n].get("required") is True
-                   or documented[n].get("mandatory") is True)
+                   or documented[n].get("mandatory") is True
+                   or _l3_fixed_port_name(project, n))
     unexpected = sorted(new - added)
     if missing or fixed or unexpected:
         raise ValueError(f"mandatory_missing={missing + fixed}; undeclared_ports={unexpected}")

@@ -745,6 +745,40 @@ def _auto_derive_renamed_interfaces(project: Path, only_l9: list,
     return out
 
 
+def _l3_fixed_port_name(project: Path, name: str) -> bool:
+    """An explicit fixed-name obligation outranks another port's illustration."""
+    from _prose_polarity import is_denied, sentence_scope
+    token = re.compile(rf"(?<!\w){re.escape(name)}(?!\w)")
+    fixed = re.compile(r"\bmandatory\b|\bfixed\s+(?:port\s+)?name\b|"
+                       r"\bmust\s+implement\b", re.I)
+    forbidden = re.compile(r"\b(?:must|shall)\s+(?:not|never)\s+be\s+renamed\b|"
+                           r"\b(?:do\s+not|never)\s+rename\b", re.I)
+    root = project / 'input/docs'
+    if not root.is_dir():
+        return False
+    for path in sorted(set(root.glob('L3*')) | set(root.glob('*interface*'))):
+        for line in path.read_text(errors='replace').splitlines():
+            if not token.search(line):
+                continue
+            for cue in fixed.finditer(line):
+                lo, hi = sentence_scope(line, cue.start(), cue.end(),
+                                        before=len(line), after=len(line))
+                clause = line[lo:hi]
+                if token.search(clause) and is_denied(clause) is None:
+                    return True
+            for cue in forbidden.finditer(line):
+                lo, hi = sentence_scope(line, cue.start(), cue.end(),
+                                        before=len(line), after=len(line))
+                # The prohibition itself is affirmative authority for a fixed
+                # name. Blank its intrinsic negation before checking whether
+                # the surrounding input denies that obligation.
+                framing = (line[lo:cue.start()] + ' ' * len(cue.group())
+                           + line[cue.end():hi])
+                if token.search(line[lo:hi]) and is_denied(framing) is None:
+                    return True
+    return False
+
+
 def reconcile_reused_ip(only_l9: list, only_rtl: list,
                         manifest: dict,
                         bound_ports: Optional[set] = None
