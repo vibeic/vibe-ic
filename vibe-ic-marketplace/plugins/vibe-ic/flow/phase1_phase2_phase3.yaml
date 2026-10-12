@@ -9588,6 +9588,7 @@ steps:
     required_outputs:
       - "phase3/mixed_signal/top_merged.gds"
       - "reports/analog/mixed_signal/merge.json"
+      - "reports/analog/mixed_signal/top_lvs.json"
     program_outputs:
       - program: mixed_signal_top_lvs_run
         path: "reports/analog/mixed_signal/top_lvs_run.json"
@@ -9615,7 +9616,11 @@ steps:
       top_lvs_run.json is deliberately NOT a required_output: on the
       producer's honest rc=2 skip it still exists (carrying the named gap),
       so declaring it would let the gate's own side effect satisfy M1's
-      artefact check. The two declared outputs are design artefacts.
+      artefact check. The merged GDS and merge report remain required;
+      top_lvs.json is also required because the blocking consumer reads it.
+      Native KLayout, Magic and netgen execution has demonstrated report
+      production on a negative component fixture; its measured LVS FAIL
+      remains FAIL. Presence of the report is never a signoff verdict.
 
       LIMIT OF THAT PRINCIPLE — stated here so it is not read as absolute.
       `reports/analog/mixed_signal/merge.json` IS declared above and IS a
