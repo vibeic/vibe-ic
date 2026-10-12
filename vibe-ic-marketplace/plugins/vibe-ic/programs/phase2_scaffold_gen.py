@@ -383,6 +383,7 @@ def derive_signals(l17: dict, l9: dict, *, project: Path | None = None) -> list[
     no diagnostic anywhere. Refusing is the only answer that a wrong number
     cannot imitate.
     """
+    chosen = None
     if "selected_interface_binding" in l9:
         if project is None:
             raise ValueError("selected interface derivation requires the current project")
@@ -511,6 +512,14 @@ def derive_signals(l17: dict, l9: dict, *, project: Path | None = None) -> list[
         s["width"] = None
         s["width_declared"] = text
 
+    if chosen is not None:
+        chosen_by_name = {_sanitize_id(p["name"]): p for p in chosen}
+        for signal in signals:
+            port = chosen_by_name.get(signal["name"])
+            if port is not None:
+                signal["direction"] = port.get("direction") or port.get("mode") or "input"
+                if isinstance(port.get("width"), int) and port["width"] > 0:
+                    signal["width"] = port["width"]
     return signals
 
 

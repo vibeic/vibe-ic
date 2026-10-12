@@ -374,20 +374,22 @@ def selected_interface_ports(project: Path, content: dict) -> List[Dict[str, Any
     retired = set(bound["selected_interface_binding"]["document_examples_not_implemented"])
     for group in bound["selected_interface_binding"]["illustrative_groups"]:
         sources, targets = set(group["l9"]), set(group["rtl"])
-        covered = set()
-        for lhs, rhs in declared:
-            if lhs <= sources and rhs <= targets:
-                covered.update(lhs)
-        if covered != sources:
+        pairs = [(lhs, rhs) for lhs, rhs in declared
+                 if lhs and rhs and lhs <= sources and rhs <= targets]
+        if (set().union(*(lhs for lhs, _ in pairs)) != sources
+                or set().union(*(rhs for _, rhs in pairs)) != targets):
             raise ValueError("selected interface rename is not declared in current manifest")
-        for source in sources:
-            for target in targets:
-                old, new = rows[source], rows[target]
-                if (old.get("direction") or old.get("mode")) != new["direction"]:
-                    raise ValueError(f"selected rename direction mismatch: {source} -> {target}")
-                if (isinstance(old.get("width"), int) and isinstance(new.get("width"), int)
-                        and old["width"] != new["width"]):
-                    raise ValueError(f"selected rename width mismatch: {source} -> {target}")
+        # Authorization groups span a protocol family; electrical equivalence
+        # belongs to each declared mapping, not every cross-family pair.
+        for lhs, rhs in pairs:
+            for source in lhs:
+                for target in rhs:
+                    old, new = rows[source], rows[target]
+                    if (old.get("direction") or old.get("mode")) != new["direction"]:
+                        raise ValueError(f"selected rename direction mismatch: {source} -> {target}")
+                    if (isinstance(old.get("width"), int) and isinstance(new.get("width"), int)
+                            and old["width"] != new["width"]):
+                        raise ValueError(f"selected rename width mismatch: {source} -> {target}")
     return [port for port in bound["ports"] if port["name"] not in retired]
 
 

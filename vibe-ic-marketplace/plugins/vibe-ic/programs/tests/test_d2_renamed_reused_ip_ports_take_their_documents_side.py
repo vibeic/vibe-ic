@@ -744,7 +744,7 @@ def test_step2_refuses_a_group_row_whose_family_has_no_rtl_port():
 
 @pytest.mark.parametrize("consumer", ["scaffold", "shared_parser", "fidelity"])
 @pytest.mark.parametrize("control", ["current", "no_delegation", "required_source",
-                                     "wrong_width", "no_manifest_rename", "forged_binding",
+                                     "wrong_width", "no_manifest_rename", "empty_rename_target", "forged_binding",
                                      "missing_selected_port", "conflicting_roster"])
 def test_selected_interface_chosen_roster_reaches_phase2_consumers(tmp_path, consumer, control):
     """Use real current producer and consumers; retain the original L9 artifact."""
@@ -764,9 +764,11 @@ def test_selected_interface_chosen_roster_reaches_phase2_consumers(tmp_path, con
                 port["required"] = True
             elif control == "wrong_width" and port["name"] == "o_memory_wdata":
                 port["width"] = 4
-    elif control == "no_manifest_rename":
+    elif control in {"no_manifest_rename", "empty_rename_target"}:
         manifest = proj / "phase2/stage1/rtl/SOURCE_MANIFEST.json"
-        manifest.write_text(json.dumps({"reused_ip": True}))
+        manifest.write_text(json.dumps({"reused_ip": True, "renamed_interfaces":
+                                       [{"l9": sorted(DOC_ONLY), "rtl": []}]
+                                       if control == "empty_rename_target" else []}))
     elif control == "forged_binding":
         doc = proj / "input/docs/L3_external_interface.md"
         doc.write_text(doc.read_text().replace("address (typical)",
@@ -788,7 +790,8 @@ def test_selected_interface_chosen_roster_reaches_phase2_consumers(tmp_path, con
     def consume():
         if consumer == "scaffold":
             # The earlier L17 names must not put illustrative aliases back.
-            l17 = {"channels": [{"name": name, "direction": "output"} for name in DOC_ONLY]}
+            l17 = {"channels": [{"name": name, "direction": "output"} for name in DOC_ONLY]
+                               + [{"name": "o_memory_wdata", "direction": "output"}]}
             return P2.derive_signals(l17, bound, project=proj)
         if consumer == "shared_parser":
             return [vars(p) for p in extract_spec_contract(path.read_text(), is_json=True, project=proj).ports]
