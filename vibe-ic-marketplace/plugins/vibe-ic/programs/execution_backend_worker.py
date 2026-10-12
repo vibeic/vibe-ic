@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import os
 from pathlib import Path
@@ -379,6 +380,16 @@ def execute_current_step(project: Path, *, step_id: str,
     project = Path(project)
     sid = str(step_id)
     row = ROWS[sid]["canonical_row"]
+    if sid == '23':
+        # This Default-only seam consumes the current row before stream-out
+        # and LVS. Keep the canonical final-audit row immutable: its later
+        # post-stream gate must still refuse an in-flow bundle.
+        row = copy.deepcopy(row)
+        for clause in row.get('gate', {}).get('all_of', []):
+            command = clause.get('program_exit_zero', '')
+            if command.startswith('drv_signoff_judge '):
+                clause['program_exit_zero'] = command.replace(
+                    '--capture-point post_stream', '--capture-point in_flow', 1)
     binding = dict(binding or {
         "step_id": sid,
         "source_sha": "default-direct",

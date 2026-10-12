@@ -1611,10 +1611,15 @@ def produce(project, params):
     import phase3_one_shot_runner as R
     names = {'23': {'sta_signoff', 'sta_corner', 'sta_record', 'sta_architectural_residual'},
              '24': {'ir_drop'}, '25': {'em_signoff'}, '26': {'antenna'}}.get(sid, set())
+    if sid == '23' and params.get('execution_mode') == 'default':
+        # The current row precedes stream-out/LVS. Its existing pre-stream
+        # instrument captures fresh DRV evidence; final capture stays in the
+        # phase runner's post-stream signoff table.
+        names.add('drv_signoff')
     table = {row[0]: row for row in R._DECLARED_SIGNOFF_GATES}
     table.update({row[0]: row for row in R._PRESTREAM_GATES})
     rows = []
-    for name in ('sta_signoff', 'sta_corner', 'sta_record', 'sta_architectural_residual', 'ir_drop', 'em_signoff', 'antenna'):
+    for name in ('sta_signoff', 'sta_corner', 'sta_record', 'sta_architectural_residual', 'drv_signoff', 'ir_drop', 'em_signoff', 'antenna'):
         if name not in names:
             continue
         _, program, output, extra = table[name]

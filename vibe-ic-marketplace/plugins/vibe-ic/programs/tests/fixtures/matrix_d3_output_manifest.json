@@ -1006,6 +1006,18 @@
     "reports/phase3/achievable_fmax.json": {
      "status": "UNPROVEN",
      "note": "Default now calls the existing selected-arm achieved-period writer before consumption. Controlled current-corner fixtures prove the seam; published native whole-IC evidence remains unproven."
+    },
+    "reports/phase3/sta/drv_capture_plan.json": {
+     "status": "UNPROVEN",
+     "note": "Default schedules the existing fresh in-flow DRV capture before current-row consumption. Final post-stream identity remains required. Published native whole-IC evidence is not claimed."
+    },
+    "reports/phase3/sta/drv_signoff_bundle.json": {
+     "status": "UNPROVEN",
+     "note": "Default schedules the existing fresh in-flow DRV capture before current-row consumption. Final post-stream identity remains required. Published native whole-IC evidence is not claimed."
+    },
+    "reports/phase3/sta/drv_signoff.json": {
+     "status": "UNPROVEN",
+     "note": "Default schedules the existing fresh in-flow DRV capture before current-row consumption. Final post-stream identity remains required. Published native whole-IC evidence is not claimed."
     }
    }
   },
