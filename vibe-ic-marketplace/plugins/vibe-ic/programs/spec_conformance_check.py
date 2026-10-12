@@ -2799,6 +2799,35 @@ def main(argv: Optional[List[str]] = None) -> int:
         print('spec_conformance_check: FAIL — no RTL files found', file=sys.stderr)
         return 2
 
+    def refuse_top(rule, symbol, detail):
+        finding = Finding(str(spec_path), 'ERROR', rule, symbol, detail)
+        print('spec_conformance_check: FAIL — ' + detail, file=sys.stderr)
+        if args.json:
+            Path(args.json).write_text(json.dumps([asdict(finding)], indent=2))
+        return 2
+
+    if spec_path.suffix == '.json':
+        contract = json.loads(spec_raw)
+        declared = {contract.get(key) for key in ('module', 'top_module')
+                    if isinstance(contract, dict) and isinstance(contract.get(key), str)
+                    and contract.get(key)}
+        if len(declared) > 1:
+            return refuse_top('top-module-conflict', '',
+                              'canonical module and top_module declarations disagree')
+    import re as _re
+    module_names = set()
+    for source in files:
+        text = strip_comments(source.read_text(errors='replace'))
+        text = _re.sub(r'"(?:\\.|[^"\\])*"', '""', text)
+        module_names.update(_re.findall(r'\bmodule\s+(?:automatic\s+)?([A-Za-z_]\w*)\b', text))
+    if (not top and len(module_names) > 1
+            and spec_path.name == 'L9_INTEGRATION_SPEC.json'):
+        return refuse_top('top-module-not-declared', '',
+                          'multi-module canonical integration requires top_module or --top')
+    if top and top not in module_names:
+        return refuse_top('top-module-not-found', top,
+                          f'declared top {top} is absent from the collected RTL')
+
     # ORGANIC #186 — the reset/clock variant-alias step
     # (design_one_shot_runner.step_reset_clock_variant_aliases) may rename the
     # AUTHORED top to `<top>__rcvar_inner` and wrap it in a same-named wrapper
@@ -2829,7 +2858,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(f'spec_conformance_check: parse error in {f}: {e}', file=sys.stderr)
             return 2
         nm, ports = parse_rtl_ports(src, top)
-        if ports and (not rtl_ports or (top and nm == top)):
+        if (top and nm == top) or (not top and ports and not rtl_ports):
             rtl_name, rtl_ports, rtl_body, chosen = nm, ports, src, str(f)
             if top and nm == top:
                 break

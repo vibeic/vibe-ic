@@ -21,11 +21,51 @@ disagrees with the document proves WHICH of the two was consulted.
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import pathlib
+from pathlib import Path
 import stat
 import pytest
 import flow_compliance_check as F
+
+
+@pytest.mark.parametrize("old_verdict,current_bad", [("FAIL", False), ("PASS", True)])
+def test_real_conformance_ledger_binds_the_current_retained_receipt(
+        tmp_path, old_verdict, current_bad):
+    project = tmp_path / "project"
+    rtl = project / "phase2/stage1/rtl"
+    docs = project / "phase1/generated_docs"
+    canonical = project / "reports/phase2/gates/spec_conformance.json"
+    for directory in (rtl, docs, canonical.parent):
+        directory.mkdir(parents=True, exist_ok=True)
+    (rtl / "core.v").write_text(
+        "module core(input clk, output gpio); assign gpio=clk; endmodule\n")
+    ports = [{"name": "clk", "direction": "input", "width": 1},
+             {"name": "gpio", "direction": "output", "width": 1}]
+    if current_bad:
+        ports.append({"name": "required", "direction": "output", "width": 1})
+    (docs / "L9_INTEGRATION_SPEC.json").write_text(json.dumps({
+        "top_module": "core", "ports": ports}))
+    canonical.write_text(json.dumps({"program": "prior_producer",
+        "verdict": old_verdict, "design_identity": {"top": "old_child"}}))
+    before = canonical.read_bytes()
+    F._GATE_LEDGER.clear()
+    command = ("spec_conformance_check --rtl-dir phase2/stage1/rtl "
+               "--spec phase1/generated_docs/L9_INTEGRATION_SPEC.json "
+               "--json reports/phase2/gates/spec_conformance.json")
+    result = F._check_program_exit_zero(project, command)
+    assert result.exit_code == (1 if current_bad else 0)
+    assert result.verdict == ("FAIL" if current_bad else "PASS")
+    assert result.structured_verdict is None  # current native findings are a list
+    row = F._GATE_LEDGER[-1]
+    receipt = Path(row["receipt"]["path"])
+    assert receipt != canonical and receipt.is_file()
+    assert row["receipt"]["sha256"] == hashlib.sha256(receipt.read_bytes()).hexdigest()
+    assert row["executed_argv"][row["executed_argv"].index("--json") + 1] == str(receipt)
+    findings = json.loads(receipt.read_text())
+    assert bool(findings) is current_bad
+    assert canonical.read_bytes() == before
 
 #: A gate that writes a typed verdict to its --json path and exits with a
 #: chosen rc. Nothing about it is chip-specific.

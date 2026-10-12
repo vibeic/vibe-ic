@@ -87,6 +87,28 @@ def test_CONTROL_the_module_key_still_selects_the_top(tmp_path):
     assert 'port-extra' not in rules(findings)
 
 
+def test_missing_declared_top_cannot_fall_back_to_a_reused_child(tmp_path):
+    res, findings = run(tmp_path, {"top_module": "missing", "ports": TOP_SPEC_PORTS})
+    assert res.returncode == 2
+    assert 'top-module-not-found' in rules(findings)
+
+
+def test_multi_module_canonical_contract_needs_a_declared_top(tmp_path):
+    res, findings = run(tmp_path, {"ports": TOP_SPEC_PORTS})
+    assert res.returncode == 2
+    assert 'top-module-not-declared' in rules(findings)
+    # Supplying the known design identity still selects the actual top.
+    res, findings = run(tmp_path, {"ports": TOP_SPEC_PORTS}, '--top', 'zz_top')
+    assert res.returncode == 0 and not findings
+
+
+def test_conflicting_canonical_module_fields_are_not_silently_selected(tmp_path):
+    res, findings = run(tmp_path, {"module": "aaa_submodule", "top_module": "zz_top",
+                                 "ports": TOP_SPEC_PORTS})
+    assert res.returncode == 2
+    assert 'top-module-conflict' in rules(findings)
+
+
 def test_CONTROL_a_declared_top_that_really_does_mismatch_still_FAILS(tmp_path):
     """Negative control for the selection fix: selecting the right module must
     not be a way of finding nothing. A genuine mismatch on the DECLARED top

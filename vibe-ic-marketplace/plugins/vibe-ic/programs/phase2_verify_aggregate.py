@@ -1,9 +1,9 @@
 """v0.1.50 — Phase 2 output verification aggregator (Pattern-C → program).
 
-Doctrine: `skills/phase2-rtl-verify/SKILL.md` asks Claude to spot-check
-RTL + SOF + reference TB PASS after phase2 runner. Spot-check is
-enumerable (RTL hygiene gates, spec-conformance, lint, SOF artifact
-presence). All deterministic.
+Deterministic evidence for the Phase2 expert review: RTL, mapped netlist and
+reference TB for IC/IP; RTL, reference TB and bitstream for an explicit FPGA
+review. Artifact presence and static check results do not claim simulation,
+hardware execution or whole-flow acceptance.
 
 Uses the existing rtl_precheck_gate + spec_conformance_check programs;
 returns a unified verdict so the skill becomes a thin wrapper.
@@ -35,13 +35,10 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Any, Dict, List
 import plugin_manifest_discovery as _pmd  # noqa: E402  (#800 ONE version reader)
-
-
-REQUIRED_ARTIFACTS = (
-    "phase2/stage1/rtl",        # RTL directory
-    "phase2/stage1/sof",        # synth-output netlist + SDC
-    "phase2/stage1/tb",         # reference testbench
-)
+import _path_layout as _pl
+import _submission_template as _st
+import _tapeout_declaration as _td
+from spec_conformance_check import collect_rtl_files
 
 
 BACKING_CHECKS = (
@@ -65,6 +62,9 @@ class CheckResult:
     name: str
     exit_code: int
     stdout_tail: str
+    argv: List[str] = field(default_factory=list)
+    stderr_tail: str = ""
+    reason_class: str = ""
 
     @property
     def passed(self) -> bool:
@@ -80,6 +80,7 @@ class Phase2Report:
     artifacts: List[ArtifactPresence]
     checks: List[CheckResult]
     verdict: str
+    verification_target: str = ""
 
     def as_dict(self) -> Dict[str, Any]:
         return {
@@ -87,19 +88,49 @@ class Phase2Report:
             "artifacts": [asdict(a) for a in self.artifacts],
             "checks": [c.as_dict() for c in self.checks],
             "verdict": self.verdict,
+            "verification_target": self.verification_target,
             "emitted_by": _pmd.emitted_by("phase2_verify_aggregate"),
         }
 
 
-def scan_artifacts(project_dir: Path) -> List[ArtifactPresence]:
-    out: List[ArtifactPresence] = []
-    for rel in REQUIRED_ARTIFACTS:
-        p = project_dir / rel
-        out.append(ArtifactPresence(
-            name=rel.split("/")[-1],
-            path=str(p),
-            present=p.exists(),
-        ))
+def _verification_target(project_dir: Path, target: str | None = None) -> str:
+    if target is not None:
+        return target
+    # The raw owner answer takes precedence over a generated declaration.
+    for rel in (_st.DESIGN_ANSWERS_REL, _td.DECLARATION_REL):
+        if not (project_dir / rel).is_file():
+            continue
+        try:
+            _, delivery = _td.read_owner_delivery(project_dir, rel)
+        except ValueError:
+            return "UNSPECIFIED"
+        return "ic" if delivery == _td.DELIVERABLE_DIE else "ip"
+    return "UNSPECIFIED"
+
+
+def _nonempty(paths) -> bool:
+    return any(path.is_file() and path.stat().st_size > 0 for path in paths)
+
+
+def scan_artifacts(project_dir: Path, target: str | None = None) -> List[ArtifactPresence]:
+    target = _verification_target(project_dir, target)
+    rtl = _pl.rtl_dir(project_dir)
+    tb_dirs = _pl.resolve_tb_dirs(project_dir)
+    tb = next((directory for directory in tb_dirs if _nonempty(
+        p for pattern in ("*.v", "*.sv") for p in directory.glob(pattern))),
+        _pl.sim_full_stack_dir(project_dir))
+    out = [ArtifactPresence("rtl", str(rtl), _nonempty(collect_rtl_files([], str(rtl)))),
+           ArtifactPresence("tb", str(tb), _nonempty(p for pattern in
+                            ("*.v", "*.sv") for p in tb.glob(pattern)))]
+    if target in ("ic", "ip"):
+        netlist = _pl.synth_dir(project_dir)
+        out.append(ArtifactPresence("netlist", str(netlist), _nonempty(
+            p for pattern in ("*.v", "*.sv") for p in netlist.glob(pattern))))
+    elif target == "fpga":
+        fpga = _pl.fpga_early_dir(project_dir) / "output_files"
+        out.append(ArtifactPresence("sof", str(fpga), _nonempty(fpga.glob("*.sof"))))
+    else:
+        out.append(ArtifactPresence("verification_target", "owner delivery or --target", False))
     return out
 
 
@@ -107,20 +138,27 @@ def _run_check(label: str, name: str, extra_args: List[str],
                project_dir: Path) -> CheckResult:
     rtl_dir = project_dir / "phase2" / "stage1" / "rtl"
     cmd = [sys.executable, str(PROGRAMS_DIR / name)]
-    if "--rtl-dir" in extra_args:
+    if name == "rtl_precheck_gate.py":
         cmd += ["--rtl-dir", str(rtl_dir)]
+    elif name == "spec_conformance_check.py":
+        spec = _pl.generated_docs_dir(project_dir) / "L9_INTEGRATION_SPEC.json"
+        cmd += ["--rtl-dir", str(rtl_dir), "--spec", str(spec)]
+    elif name == "rtl_hygiene_lint.py":
+        cmd += [str(path) for path in collect_rtl_files([], str(rtl_dir))]
     else:
-        # programs that take positional <project_dir>
-        cmd += [str(project_dir)]
+        raise ValueError(f"no child CLI adapter for {name}")
     try:
         proc = subprocess.run(
             cmd, capture_output=True, text=True, timeout=180, check=False)
         return CheckResult(
             name=label, exit_code=proc.returncode,
-            stdout_tail=proc.stdout[-500:])
+            stdout_tail=proc.stdout[-500:], argv=cmd, stderr_tail=proc.stderr[-1000:],
+            reason_class=("" if proc.returncode == 0 else
+                          "CHECK_FAILED" if proc.returncode == 1 else "INVOCATION_ERROR"))
     except (subprocess.TimeoutExpired, FileNotFoundError) as e:
         return CheckResult(name=label, exit_code=127,
-                            stdout_tail=f"error: {e}")
+                            stdout_tail=f"error: {e}", argv=cmd, stderr_tail=str(e),
+                            reason_class="EXECUTION_ERROR")
 
 
 def aggregate(project_dir: Path,
@@ -134,13 +172,16 @@ def aggregate(project_dir: Path,
         artifacts=artifacts, checks=checks, verdict=verdict)
 
 
-def verify(project_dir: Path) -> Phase2Report:
-    artifacts = scan_artifacts(project_dir)
+def verify(project_dir: Path, target: str | None = None) -> Phase2Report:
+    target = _verification_target(project_dir, target)
+    artifacts = scan_artifacts(project_dir, target)
     checks = [
         _run_check(label, name, args, project_dir)
         for label, name, args in BACKING_CHECKS
     ]
-    return aggregate(project_dir, artifacts, checks)
+    report = aggregate(project_dir, artifacts, checks)
+    report.verification_target = target
+    return report
 
 
 def report_to_markdown(rep: Phase2Report) -> str:
@@ -174,8 +215,10 @@ def _cli() -> int:
     p.add_argument("--out-md", type=Path)
     p.add_argument("--out-json", type=Path)
     p.add_argument("--strict", action="store_true")
+    p.add_argument("--target", choices=("ic", "ip", "fpga"),
+                   help="Phase2 artifact review target; default: owner delivery answer")
     args = p.parse_args()
-    rep = verify(args.project_dir)
+    rep = verify(args.project_dir, args.target)
     md = report_to_markdown(rep)
     if args.out_md:
         args.out_md.write_text(md, encoding="utf-8")

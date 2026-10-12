@@ -208,6 +208,23 @@ def test_librelane_mode_lints_the_synthesis_file_set_and_blocks(tmp_path, monkey
     assert (project / 'reports/phase2/gates/spec_conformance_tool_ports.json').is_file()
 
 
+def test_tool_port_conformance_receives_the_native_declared_top(tmp_path, monkeypatch):
+    project, _, _, tool = _design(tmp_path, 'librelane', MULTI, 0, 1)
+    runner, step = _runner(monkeypatch, tool)
+    original = runner._pr.run
+    captured = []
+    def record(argv, **kwargs):
+        captured.append(argv)
+        return original(argv, **kwargs)
+    monkeypatch.setattr(runner._pr, 'run', record)
+    row = step(project)
+    command = next(argv for argv in captured
+                   if any(str(part).endswith('spec_conformance_check.py') for part in argv))
+    assert command[command.index('--top') + 1] == 'cal_pos'
+    assert '--tool-ports' in command
+    assert row.extras['spec_conformance_tool_ports_rc'] is not None
+
+
 @pytest.mark.parametrize('code,status,reason', [
     ('LL_TOOL_STALLED', 'NOT_MEASURED', 'stalled'),
     ('LL_TOOL_DEADLINE', 'NOT_MEASURED', 'budget_exhausted'),

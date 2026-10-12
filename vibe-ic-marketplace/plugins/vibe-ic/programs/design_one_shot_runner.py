@@ -13603,6 +13603,7 @@ def step_rtl_lint_tool(project: Path, *, pdk_name: Optional[str] = None) -> Opti
         conformance_rc = _pr.run(
             [sys.executable, str(PROGRAMS_DIR / "spec_conformance_check.py"),
              "--rtl-dir", str(_pl.rtl_dir(project)), "--spec", str(l9_path),
+             *(["--top", str(top)] if top else []),
              "--tool-ports", str(json_h), "--json", str(conformance)],
             capture_output=True, text=True).returncode
     report = _vlg.judge(folder, rtl)

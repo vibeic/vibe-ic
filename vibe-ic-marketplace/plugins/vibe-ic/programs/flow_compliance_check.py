@@ -3653,6 +3653,8 @@ class _ProgramCheckOutcome:
     #: outlives the subprocess call and is still there when the wrapper reads
     #: the verdict out of it.
     receipt_scratch: Any = None
+    executed_argv: Optional[List[str]] = None
+    written_receipts: List[Dict[str, Any]] = field(default_factory=list)
 
     def __iter__(self):
         yield self.passed
@@ -4003,6 +4005,12 @@ def _check_program_exit_zero(project: Path, cmd_str: str) -> tuple[bool, str]:
     _exact_rc = _actual_rc if _actual_rc is not None else rc
     _ledger_row["exit_code"] = _exact_rc
     _ledger_row["structured_verdict"] = _structured_verdict
+    if isinstance(_inner, _ProgramCheckOutcome):
+        _ledger_row["executed_argv"] = _inner.executed_argv
+        if _inner.written_receipts:
+            path = Path(_inner.written_receipts[-1]["scratch"])
+            _ledger_row["receipt"] = {
+                "path": str(path), "sha256": _file_digest(path)}
     # FX_P2 review: a gate that PASSED only by relaxing a tool says so on its
     # stdout (`DISCLOSURE: ...`, e.g. flow_step_output_content_check --mode rtl
     # after slang's declaration-order retry). The clause names no `--json`, so
@@ -4626,7 +4634,8 @@ def __check_program_exit_zero(project: Path, cmd_str: str) -> _ProgramCheckOutco
         # verdict.
         _stamp_publication(_publication)
         return _ProgramCheckOutcome(passed, output, exit_code,
-                                    _receipt_path, _receipt_tmp)
+                                    _receipt_path, _receipt_tmp,
+                                    executed_argv=list(argv), written_receipts=_written)
     # #525 — per-gate budget from the SHARED resolver (default 900s, env
     # VIBE_IC_GATE_TIMEOUT_S, cap 3600s). The old fixed 300s killed honest
     # slow gates on large SoCs (reset_dependency_check ~6 min on a 7.5MB
@@ -5785,9 +5794,9 @@ def _command_json_report(project: Path, cmd: str) -> Optional[Dict[str, Any]]:
     # older than the invocation being judged.
     moved = _RECEIPT_REDIRECTS.get(_resolved_key(p))
     if moved is not None:
-        redirected = _json_report_at(Path(moved[0]))
-        if redirected is not None:
-            return redirected
+        # A current findings list (or invalid current object) cannot make the
+        # historical producer object this gate invocation's verdict again.
+        return _json_report_at(Path(moved[0]))
     return _json_report_at(p)
 
 
