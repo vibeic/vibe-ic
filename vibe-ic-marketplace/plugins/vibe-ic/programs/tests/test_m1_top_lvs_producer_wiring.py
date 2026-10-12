@@ -272,7 +272,9 @@ def test_mixed_signal_dispatch_cannot_drag_the_digital_verdict_down(
 
     producers = _declared_producers_of_top_lvs(tmp_path, monkeypatch)
 
+    dispatched = []
     def _record(label, runner, args, env=None):
+        dispatched.append(Path(runner).stem)
         return 1 if Path(runner).stem in producers else 0
 
     monkeypatch.setattr(ORCH, "_run_phase", _record)
@@ -291,7 +293,8 @@ def test_mixed_signal_dispatch_cannot_drag_the_digital_verdict_down(
     assert phases["mixed_signal"]["rc"] == 1, "producer failure not recorded"
     assert phases["phase3"]["verdict"] == "PASS", phases["phase3"]
     assert rep["verdict"] == "FAIL", "Default whole-flow acceptance must refuse M1 failure"
-    assert "mixed_signal_M2" not in phases, "failed M1 must not dispatch M2"
+    assert "mixed_signal_power_domain_run" not in dispatched, "failed M1 must not dispatch M2"
+    assert phases["mixed_signal_M2"]["verdict"] == "NOT_MEASURED", "blocked M2 must not become PASS"
 
 
 # ── direction-1 guards: what must NOT change ───────────────────────────────
