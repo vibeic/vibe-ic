@@ -606,7 +606,8 @@ def test_the_librelane_chip_path_refuses_a_phantom_pad_before_assignment(
         "the tool chain must not run"))
     pdk = SimpleNamespace(name="probe_pdk")
     result, consumer = R._prepare_librelane_floorplan_for_route(
-        project, pdk, "c", out_dir, "", {"15": "direct", "15.5ic": "librelane"},
+        project, pdk, "c", out_dir, f"read_verilog {wrapper}\nlink_design chip_top\n",
+        {"15": "direct", "15.5ic": "librelane"},
         io_view_discover=lambda *a: ([], []))
     assert result.status == "FAIL" and consumer is None
     if finding is None:
