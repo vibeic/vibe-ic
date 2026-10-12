@@ -147,6 +147,49 @@ def test_owner_slot_reaches_budget_and_l19_consumer(tmp_path):
     assert "input/submission_template/slots/small.yaml" in got["inputs"]
 
 
+def _slot_declaration(project):
+    doc = _answers()
+    _operator_slot(project, doc)
+    path = project / ANSWERS_REL
+    path.write_text(json.dumps(doc))
+    assert _gen().main([str(project)]) == 0
+    _declare(project)
+    return json.loads((project / TD.DECLARATION_REL).read_text())
+
+
+def test_selected_slot_survives_the_public_declaration_consumer(tmp_path):
+    project = _project(tmp_path)
+    decl = _slot_declaration(project)
+    assert CHECK.evaluate(project)["verdict"] == "PASS"
+    assert decl["operator_template"] == {"slot": "small"}
+
+
+def test_selected_slot_declaration_keeps_owner_and_refuses_changed_source(tmp_path):
+    project = _project(tmp_path)
+    _slot_declaration(project)
+    assert CHECK.evaluate(project)["verdict"] == "PASS"
+    original = (project / ANSWERS_REL).read_bytes()
+    source = project / "input/submission_template_source/small.json"
+    changed = json.loads(source.read_text())
+    changed["DIE_AREA"] = [0, 0, 101, 200]
+    source.write_text(json.dumps(changed))
+    res = CHECK.evaluate(project)
+    assert res["verdict"] == "FAIL"
+    assert STALE_RULE in [r["rule"] for r in res["refusals"]]
+    assert (project / ANSWERS_REL).read_bytes() == original
+
+
+def test_a_forged_slot_in_the_generated_declaration_is_refused(tmp_path):
+    project = _project(tmp_path)
+    decl = _slot_declaration(project)
+    assert CHECK.evaluate(project)["verdict"] == "PASS"
+    decl["operator_template"] = {"slot": "another"}
+    (project / TD.DECLARATION_REL).write_text(json.dumps(decl))
+    res = CHECK.evaluate(project)
+    assert res["verdict"] == "FAIL"
+    assert STALE_RULE in [r["rule"] for r in res["refusals"]]
+
+
 @pytest.mark.parametrize("defect", ["unattested", "changed_source", "mutated_slot", "missing_digest", "stale_owner"])
 def test_operator_slot_authority_refuses_bad_geometry(tmp_path, defect):
     project = tmp_path / "project"
