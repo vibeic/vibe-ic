@@ -23839,11 +23839,26 @@ def _l2_positive_protocol_evidence_text(text: str) -> Tuple[str, List[Dict[str, 
                 r"❌|未指定|不指定|不規定|不限定|"
                 r"\b(?:unspecified|not\s+(?:specified|mandated|prescribed))\b",
                 scope, re.I))
+            # A firmware feature elsewhere in the clause does not revoke
+            # this protocol's explicit hardware ownership declaration.
+            # Bind the affirmative subject/verb and role to THIS token;
+            # "firmware emulates a dedicated SPI controller" is not one.
+            hardware_claim = bool(
+                re.search(
+                    r"\b(?:chip|device|design|ic)\s+"
+                    r"(?:implements|has|contains|includes|integrates|provides)\s+"
+                    r"(?:(?:a|an|the)\s+)?(?:(?:dedicated|hardware)\s+)?$",
+                    line[start:match.start()], re.I)
+                and re.match(
+                    r"(?:\s+(?:hardware|command|serial))*\s+"
+                    r"(?:controller|transceiver|peripheral|master|slave|bus|interface)\b",
+                    line[match.end():end], re.I))
             reason = ("negative list" if bullet and negative_list else
                       "negated clause" if _v0_1_62_analog_kw_negated(
                           negation_text, match.start(), match.end()) else
                       "unspecified interface choice" if unspecified else
-                      "software emulation" if emulated or gpio_pattern else None)
+                      "software emulation" if (emulated or gpio_pattern)
+                      and not hardware_claim else None)
             if reason:
                 chars[match.start():match.end()] = " " * (match.end() - match.start())
                 rejected.append({"literal": line.strip(), "label": reason})

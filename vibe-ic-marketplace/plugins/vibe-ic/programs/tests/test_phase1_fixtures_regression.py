@@ -153,6 +153,8 @@ def test_phase1_local_field_intake(project, layer, field, expected, tmp_path):
 
 @pytest.mark.parametrize("text,wire_count", [
     ("A chip implements the SPI command protocol.\n", 4),
+    ("The chip implements a dedicated SPI command controller and firmware bit-banging supplies a UART GPIO output.\n", 4),
+    ("The chip implements a UART hardware controller command interface with a firmware bit-banging diagnostic mode.\n", 2),
     ("A purely digital SPI slave interface accepts commands.\n", 4),
     ("Firmware may bit-bang GPIO as UART, but the chip has a dedicated SPI controller with four wires.\n", 4),
     ("The UART hardware controller command interface drives GPIO output pins.\n", 2),
@@ -172,6 +174,7 @@ def test_l2_positive_protocol_declarations_survive_negated_neighbors(
 
 @pytest.mark.parametrize("text", [
     "No SPI command interface is implemented.\n",
+    "Firmware emulates a dedicated SPI command controller.\n",
     "The chip does not provide an I2C slave interface.\n",
     "**Not implemented**:\n- SPI command interface\n- UART command interface\n",
     "A GPIO output supplies UART tx by firmware bit-banging; this is an application.\n",
