@@ -165,6 +165,30 @@ def test_default_dft_native_rejection_stops_without_complete_consumer(
         assert record['result']['canonical_consumer'] is None
 
 
+@pytest.mark.parametrize('status', ['FAIL', 'NOT_MEASURED'])
+def test_lightweight_dft_execution_error_still_stops_lec(tmp_path, monkeypatch, status):
+    """Skipping heavy DFT does not excuse a post-DFT tool that actually failed."""
+    write(tmp_path, 'phase2/stage2/synth/netlist.v', b'module top(input clk); endmodule')
+    monkeypatch.setattr(gates, 'evaluate', lambda project, row: {
+        'status': 'PASS', 'ledger': [], 'step': {'id': str(row['id']), 'status': 'PASS'}})
+    monkeypatch.setattr(gates, 'contracts', lambda *a: {'control_fixture': {}})
+    monkeypatch.setattr(design, '_run_transition_atpg', lambda *a: {'rc': 2, 'pdk': None})
+    @preflight.retained_step('12', canonical_acceptance=True)
+    def post(project, *args):
+        return design._dft_owned_result([design.StepResult(
+            'post_dft_opt', status, 0.0, 'post-DFT tool execution error',
+            reason_class=design._V.ReasonClass.EXECUTION_ERROR
+                         if status == 'NOT_MEASURED' else '')])
+    monkeypatch.setattr(design, '_step_post_dft_optimization', post)
+    monkeypatch.setattr(design, 'step_lec_equivalence', lambda *a, **k:
+                        pytest.fail('a post-DFT execution error cannot dispatch LEC'))
+    result = design.step_dft_lec_chain(tmp_path, 'top', 'unused', 'digital', full_chip=False)
+    assert result[0].status == 'NOT_APPLICABLE'
+    assert result[-1].status == status
+    record = saved(tmp_path, '12')[1]
+    assert record['status'] == status and record['result']['canonical_consumer'] is None
+
+
 @pytest.mark.parametrize('runner,site,sid', [
     ('design_one_shot_runner', 'rtl_gen', '1'),
     ('design_one_shot_runner', 'asic_sdc', '7'),

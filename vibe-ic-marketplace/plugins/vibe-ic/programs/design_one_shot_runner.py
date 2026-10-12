@@ -22954,7 +22954,10 @@ def step_dft_lec_chain(project: Path, top_name: str, container: str,
 
     _post_dft = _step_post_dft_optimization(project, container)
     results.extend(_post_dft.rows)
-    if default_mode and any(row.status in ('FAIL', 'NOT_MEASURED') for row in _post_dft.rows):
+    if default_mode and any(
+            row.status == 'FAIL' or row.status == 'NOT_MEASURED' and
+            (full_chip or row.reason_class != _V.ReasonClass.INPUT_ABSENT)
+            for row in _post_dft.rows):
         return results
     rejection = _default_dft_rejection(project, chain_started_at)
     if rejection is not None:
