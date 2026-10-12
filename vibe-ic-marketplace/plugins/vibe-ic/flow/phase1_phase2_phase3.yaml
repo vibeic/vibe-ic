@@ -5970,6 +5970,9 @@ steps:
       - "reports/phase3/sta/assumed_clock_disclosure.json"
       - "reports/phase3/clock_target_record_agreement.json"
       - "reports/phase3/achievable_fmax.json"
+      - "reports/phase3/sta/drv_capture_plan.json"
+      - "reports/phase3/sta/drv_signoff_bundle.json"
+      - "reports/phase3/sta/drv_signoff.json"
       # WITHDRAWN, NOT FORGOTTEN — the two multi-corner STANCE files
       # (`reports/phase3/multi_corner_spef_stance.json`,
       # `reports/phase3/mcorner_ocv_stance.json`) belong here on the merits:
