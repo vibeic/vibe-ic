@@ -91,6 +91,8 @@ CATEGORY_NAMES = (
 HYGIENE_RULE_CATEGORY: Dict[str, str] = {
     "hierarchy-port-resolution": "correctness_smells",
     "instance-driver-analysis-unresolved": "correctness_smells",
+    "undriven-wire": "correctness_smells",
+    "undriven-output-port": "correctness_smells",
     # § 1 synthesis hazards
     "latch_inferred": "synthesis_hazards",
     "multiple_drivers": "synthesis_hazards",
