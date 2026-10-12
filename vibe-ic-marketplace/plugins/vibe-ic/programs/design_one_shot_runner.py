@@ -22804,6 +22804,30 @@ def _step_post_dft_optimization(project: Path, container: str):
     return _dft_owned_result(results)
 
 
+def _default_dft_rejection(project: Path, started_at: float) -> Optional[StepResult]:
+    """Read the completed consumers before the next DFT producer starts."""
+    import execution_policy
+    if execution_policy.request()['mode'] != 'default':
+        return None
+    import step_output_collector
+    rejected = [row for row in step_output_collector.current_acceptance(project, started_at)
+                if str(row['id']) in ('11', 'DT1', '12') and row['status'] not in
+                ('PASS', 'PASS_WITH_WAIVERS', 'NOT_APPLICABLE')]
+    if not rejected:
+        return None
+    row = next((row for row in rejected if row['status'] == 'FAIL'), rejected[0])
+    consumer = row['result']['canonical_consumer']
+    step = consumer.get('step') or {}
+    status = 'FAIL' if row['status'] == 'FAIL' else 'NOT_MEASURED'
+    return StepResult(
+        'canonical_dft_acceptance', status, 0.0,
+        f"canonical step {row['id']} was not accepted: " +
+        '; '.join(map(str, step.get('reasons') or [row['status']])),
+        extras={'step_id': str(row['id']), 'output_version': row['folder']},
+        reason_class=(step.get('reason_class') or _V.ReasonClass.UPSTREAM_REFUSED
+                      if status == 'NOT_MEASURED' else ''))
+
+
 def step_dft_lec_chain(project: Path, top_name: str, container: str,
                        ic_class: str, full_chip: bool = True,
                        lec_max_completed_rungs: Optional[int] = None, *,
@@ -22839,6 +22863,7 @@ def step_dft_lec_chain(project: Path, top_name: str, container: str,
     (never a silent MISSING, never a fabricated pass). The heavy Fault ATPG
     (11/12) runs only on a full-chip flow; a --skip-phase3 lightweight run still
     gets the fast, always-valuable LEC (13)."""
+    chain_started_at = time.time()
     results: List[StepResult] = []
     synth_dir = _pl.synth_dir(project)
     dft_dir = _pl.dft_dir(project)
@@ -22901,15 +22926,24 @@ def step_dft_lec_chain(project: Path, top_name: str, container: str,
                                dft_rst, dft_rst_active_low, full_chip)
     results.extend(_dft.rows)
     pdk = _dft.pdk
+    rejection = _default_dft_rejection(project, chain_started_at)
+    if rejection is not None:
+        return results + [rejection]
 
     # ============ Step DT1 — Transition-delay-fault (LOC) ATPG =========
     _tdf_result = _spf.retained_call(
         project, 'DT1', _run_transition_atpg, project, clk, pdk,
         canonical_acceptance=True)
     pdk = _tdf_result['pdk']
+    rejection = _default_dft_rejection(project, chain_started_at)
+    if rejection is not None:
+        return results + [rejection]
 
     _post_dft = _step_post_dft_optimization(project, container)
     results.extend(_post_dft.rows)
+    rejection = _default_dft_rejection(project, chain_started_at)
+    if rejection is not None:
+        return results + [rejection]
 
     # ================= Step 13 — LEC (RTL ≡ handoff netlist) =================
     # The handoff netlist is the one step 15 routes (see step_lec_equivalence),

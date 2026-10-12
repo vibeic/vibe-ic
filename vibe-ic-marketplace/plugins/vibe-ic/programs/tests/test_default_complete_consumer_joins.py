@@ -57,6 +57,63 @@ def reject_consumer(monkeypatch):
     return seen
 
 
+@pytest.mark.parametrize('failed,status', [
+    *[(sid, status) for sid in ('11', 'DT1', '12') for status in ('FAIL', 'NOT_MEASURED')],
+    pytest.param(None, 'FAIL', id='all_accepted'),
+    pytest.param('previous_11', 'FAIL', id='previous_rejection_ignored'),
+])
+def test_default_dft_chain_stops_before_next_producer_on_complete_rejection(
+        tmp_path, monkeypatch, failed, status):
+    """Control-only fake tools; actual chain, retention and dispatch execute."""
+    calls = []
+    write(tmp_path, 'phase2/stage2/synth/netlist.v', b'module top(input clk); endmodule')
+    if failed == 'previous_11':
+        attempt = versions.begin_step(tmp_path, '11')
+        versions.finish_step(tmp_path, attempt, verdict='FAIL', result={
+            'canonical_consumer': {'status': 'FAIL', 'step': {'id': '11', 'status': 'FAIL'}}})
+    def consume(project, row):
+        sid = str(row['id'])
+        return {'status': status if sid == failed else 'PASS', 'ledger': [],
+                'step': {'id': sid, 'status': status if sid == failed else 'PASS'}}
+    monkeypatch.setattr(gates, 'evaluate', consume)
+    monkeypatch.setattr(gates, 'contracts', lambda *a: {'control_fixture': {}})
+    @preflight.retained_step('11', canonical_acceptance=True)
+    def insertion(project, *args):
+        calls.append('11')
+        write(project, 'phase2/stage2/dft/cut_netlist.v', b'module top(input clk); endmodule')
+        return design._dft_owned_result([
+            design.StepResult('dft_insertion', 'PASS', 0.0, 'native control PASS')], 'fixture')
+    def transition(project, *args):
+        calls.append('DT1')
+        write(project, 'reports/phase2/dft/transition_coverage.json', b'{"verdict":"PASS"}')
+        return {'rc': 0, 'pdk': 'fixture'}
+    @preflight.retained_step('12', canonical_acceptance=True)
+    def post(project, *args):
+        calls.append('12')
+        write(project, 'phase2/stage2/synth/post_dft_netlist.v', b'module top(input clk); endmodule')
+        return design._dft_owned_result([
+            design.StepResult('post_dft_opt', 'PASS', 0.0, 'native control PASS')])
+    def lec(project, top, container, results, **kwargs):
+        calls.append('13')
+        return results + [design.StepResult('lec_equivalence', 'PASS', 0.0, 'native control PASS')]
+    monkeypatch.setattr(design, '_step_dft_insertion', insertion)
+    monkeypatch.setattr(design, '_run_transition_atpg', transition)
+    monkeypatch.setattr(design, '_step_post_dft_optimization', post)
+    monkeypatch.setattr(design, 'step_lec_equivalence', lec)
+    result = design.step_dft_lec_chain(tmp_path, 'top', 'unused', 'digital', full_chip=True)
+    rejecting = failed in ('11', 'DT1', '12')
+    expected = (['11', 'DT1', '12'][:['11', 'DT1', '12'].index(failed) + 1]
+                if rejecting else ['11', 'DT1', '12', '13'])
+    assert calls == expected, 'a rejecting complete gate must stop the next producer'
+    if rejecting:
+        assert result[-1].status == status and result[-1].extras['step_id'] == failed
+        assert saved(tmp_path, failed)[1]['status'] == status
+    else:
+        assert [row.name for row in result] == ['dft_insertion', 'post_dft_opt', 'lec_equivalence']
+        assert all(row.status == 'PASS' for row in result)
+    assert result[0].status == 'PASS', 'the original native result remains unchanged'
+
+
 @pytest.mark.parametrize('runner,site,sid', [
     ('design_one_shot_runner', 'rtl_gen', '1'),
     ('design_one_shot_runner', 'asic_sdc', '7'),
