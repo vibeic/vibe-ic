@@ -808,7 +808,7 @@
   "steps": [
     {
       "id": "D1",
-      "title_en": "Phase 1 Doc Extraction (17 skills + dialogue entry → L1-L27)",
+      "title_en": "Phase 1 Doc Extraction (17 skills + dialogue entry \u2192 L1-L27)",
       "phase": "phase1",
       "canonical_stage": "stage_phase1",
       "current_default": {
@@ -1016,7 +1016,7 @@
     },
     {
       "id": "0.5ic",
-      "title_en": "Submission Template Ingest — the operator's slot geometry and fixtures (chip/IC path only)",
+      "title_en": "Submission Template Ingest \u2014 the operator's slot geometry and fixtures (chip/IC path only)",
       "phase": "phase1",
       "canonical_stage": "stage_phase1",
       "current_default": {
@@ -1240,7 +1240,7 @@
     },
     {
       "id": "2",
-      "title_en": "🔁 RTL validation (rewrite fidelity + lint + Quartus-unsafe patterns + RTL-bug claim schema)",
+      "title_en": "\ud83d\udd01 RTL validation (rewrite fidelity + lint + Quartus-unsafe patterns + RTL-bug claim schema)",
       "phase": "phase2",
       "canonical_stage": "stage1",
       "current_default": {
@@ -1539,7 +1539,7 @@
     },
     {
       "id": "3",
-      "title_en": "🔁 CDC / RDC check",
+      "title_en": "\ud83d\udd01 CDC / RDC check",
       "phase": "phase2",
       "canonical_stage": "stage1",
       "current_default": {
@@ -1679,7 +1679,7 @@
     },
     {
       "id": "4",
-      "title_en": "🔁 Simulation (testbench-based + L10/L12 coverage + Verilator coverage)",
+      "title_en": "\ud83d\udd01 Simulation (testbench-based + L10/L12 coverage + Verilator coverage)",
       "phase": "phase2",
       "canonical_stage": "stage1",
       "current_default": {
@@ -1864,7 +1864,7 @@
     },
     {
       "id": "5",
-      "title_en": "🔁 Formal verification (assertions proved + bit-level full-stack phase2/stage1/tb)",
+      "title_en": "\ud83d\udd01 Formal verification (assertions proved + bit-level full-stack phase2/stage1/tb)",
       "phase": "phase2",
       "canonical_stage": "stage1",
       "current_default": {
@@ -2262,7 +2262,7 @@
     },
     {
       "id": "8",
-      "title_en": "🔁 SDC validation",
+      "title_en": "\ud83d\udd01 SDC validation",
       "phase": "phase2",
       "canonical_stage": "stage2",
       "current_default": {
@@ -2384,7 +2384,7 @@
     },
     {
       "id": "9",
-      "title_en": "Synthesis (Yosys → mapped netlist)",
+      "title_en": "Synthesis (Yosys \u2192 mapped netlist)",
       "phase": "phase2",
       "canonical_stage": "stage2",
       "current_default": {
@@ -2562,7 +2562,7 @@
     },
     {
       "id": "10",
-      "title_en": "🔁 Pre-layout STA (multi-corner)",
+      "title_en": "\ud83d\udd01 Pre-layout STA (multi-corner)",
       "phase": "phase2",
       "canonical_stage": "stage2",
       "current_default": {
@@ -3163,7 +3163,7 @@
     },
     {
       "id": "13",
-      "title_en": "🔁 Equivalence check (RTL ≡ post-DFT netlist)",
+      "title_en": "\ud83d\udd01 Equivalence check (RTL \u2261 post-DFT netlist)",
       "phase": "phase2",
       "canonical_stage": "stage2",
       "current_default": {
@@ -4081,7 +4081,7 @@
     },
     {
       "id": "A7",
-      "title_en": "🔁 Post-Layout Resimulation",
+      "title_en": "\ud83d\udd01 Post-Layout Resimulation",
       "phase": "analog",
       "canonical_stage": "stage_analog",
       "current_default": {
@@ -4395,7 +4395,7 @@
     },
     {
       "id": "A9",
-      "title_en": "🔁 Co-Simulation (+ HW correlation when bench data exists)",
+      "title_en": "\ud83d\udd01 Co-Simulation (+ HW correlation when bench data exists)",
       "phase": "analog",
       "canonical_stage": "stage_analog",
       "current_default": {
@@ -4613,7 +4613,7 @@
     },
     {
       "id": "14",
-      "title_en": "🔁 Synthesis handoff gate (pre-PnR Yosys script + netlist audit; open-source-flow specific)",
+      "title_en": "\ud83d\udd01 Synthesis handoff gate (pre-PnR Yosys script + netlist audit; open-source-flow specific)",
       "phase": "phase2",
       "canonical_stage": "stage2",
       "current_default": {
@@ -5480,7 +5480,7 @@
     },
     {
       "id": "20",
-      "title_en": "🔁 Post-CTS hold fixing",
+      "title_en": "\ud83d\udd01 Post-CTS hold fixing",
       "phase": "phase3",
       "canonical_stage": "stage3",
       "current_default": {
@@ -5760,7 +5760,7 @@
     },
     {
       "id": "22",
-      "title_en": "Parasitic Extraction (RC → SPEF)",
+      "title_en": "Parasitic Extraction (RC \u2192 SPEF)",
       "phase": "phase3",
       "canonical_stage": "stage3",
       "current_default": {
@@ -6149,7 +6149,7 @@
     },
     {
       "id": "32",
-      "title_en": "🔁 Post-route timing repair pass (multi-corner repair_design + repair_timing + reroute)",
+      "title_en": "\ud83d\udd01 Post-route timing repair pass (multi-corner repair_design + repair_timing + reroute)",
       "phase": "phase3",
       "canonical_stage": "stage3",
       "current_default": {
@@ -6287,7 +6287,7 @@
     },
     {
       "id": "23",
-      "title_en": "🔁 Post-route STA (multi-corner multi-mode sign-off)",
+      "title_en": "\ud83d\udd01 Post-route STA (multi-corner multi-mode sign-off)",
       "phase": "phase3",
       "canonical_stage": "stage3",
       "current_default": {
@@ -6468,7 +6468,7 @@
     },
     {
       "id": "24",
-      "title_en": "🔁 IR Drop (static + dynamic)",
+      "title_en": "\ud83d\udd01 IR Drop (static + dynamic)",
       "phase": "phase3",
       "canonical_stage": "stage3",
       "current_default": {
@@ -6637,7 +6637,7 @@
     },
     {
       "id": "25",
-      "title_en": "🔁 EM check (electromigration lifetime)",
+      "title_en": "\ud83d\udd01 EM check (electromigration lifetime)",
       "phase": "phase3",
       "canonical_stage": "stage3",
       "current_default": {
@@ -6760,7 +6760,7 @@
     },
     {
       "id": "26",
-      "title_en": "🔁 Antenna check (gate-oxide protection)",
+      "title_en": "\ud83d\udd01 Antenna check (gate-oxide protection)",
       "phase": "phase3",
       "canonical_stage": "stage3",
       "current_default": {
@@ -6913,7 +6913,7 @@
     },
     {
       "id": "26.5ic",
-      "title_en": "Die Finishing — seal ring + die identification (chip/IC path only)",
+      "title_en": "Die Finishing \u2014 seal ring + die identification (chip/IC path only)",
       "phase": "phase3",
       "canonical_stage": "stage3",
       "current_default": {
@@ -7038,7 +7038,7 @@
     },
     {
       "id": "27",
-      "title_en": "🔁 Signal Integrity (Crosstalk / Noise / Glitch + MCF crosstalk-delay)",
+      "title_en": "\ud83d\udd01 Signal Integrity (Crosstalk / Noise / Glitch + MCF crosstalk-delay)",
       "phase": "phase3",
       "canonical_stage": "stage3",
       "current_default": {
@@ -7177,7 +7177,7 @@
     },
     {
       "id": "28",
-      "title_en": "🔁 PERC / Reliability sign-off (ESD + latch-up + cross-domain)",
+      "title_en": "\ud83d\udd01 PERC / Reliability sign-off (ESD + latch-up + cross-domain)",
       "phase": "phase3",
       "canonical_stage": "stage3",
       "current_default": {
@@ -8198,7 +8198,7 @@
     },
     {
       "id": "37.3",
-      "title_en": "GDS stream-out / finishing fidelity — the shipped GDS XOR'd against this run's own pre-finishing boundary",
+      "title_en": "GDS stream-out / finishing fidelity \u2014 the shipped GDS XOR'd against this run's own pre-finishing boundary",
       "phase": "phase3",
       "canonical_stage": "stage4",
       "current_default": {
@@ -8315,7 +8315,7 @@
     },
     {
       "id": "31",
-      "title_en": "🔁 Physical Verification (DRC + LVS + ERC + Density)",
+      "title_en": "\ud83d\udd01 Physical Verification (DRC + LVS + ERC + Density)",
       "phase": "phase3",
       "canonical_stage": "stage4",
       "current_default": {
@@ -8609,7 +8609,7 @@
     },
     {
       "id": "37.4",
-      "title_en": "Sign-off metrics aggregation — the run's own checker verdicts, under the names the release documents read",
+      "title_en": "Sign-off metrics aggregation \u2014 the run's own checker verdicts, under the names the release documents read",
       "phase": "phase3",
       "canonical_stage": "stage4",
       "current_default": {
@@ -8711,7 +8711,7 @@
     },
     {
       "id": "37.5ip",
-      "title_en": "Digital Hardmacro Generation — LEF + Liberty + GDS + Verilog (delivered on EVERY route)",
+      "title_en": "Digital Hardmacro Generation \u2014 LEF + Liberty + GDS + Verilog (delivered on EVERY route)",
       "phase": "phase3",
       "canonical_stage": "stage4",
       "current_default": {
@@ -8872,7 +8872,7 @@
     },
     {
       "id": "37.5ic",
-      "title_en": "Tape-out Precheck — our general ladder, plus the operator's own refusal where the PDK ships one (chip/IC path only)",
+      "title_en": "Tape-out Precheck \u2014 our general ladder, plus the operator's own refusal where the PDK ships one (chip/IC path only)",
       "phase": "phase3",
       "canonical_stage": "stage4",
       "current_default": {
@@ -9877,7 +9877,7 @@
     },
     {
       "id": "40",
-      "title_en": "Fabrication (foundry mask-set + wafer fab — external)",
+      "title_en": "Fabrication (foundry mask-set + wafer fab \u2014 external)",
       "phase": "phase3",
       "canonical_stage": "stage5_manufacturing",
       "current_default": {
