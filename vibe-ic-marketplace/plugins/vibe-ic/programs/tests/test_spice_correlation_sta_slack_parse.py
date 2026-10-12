@@ -29,7 +29,9 @@ PROG = Path(__file__).resolve().parent.parent / "spice_correlation_check.py"
 
 
 def _load_module():
-    spec = importlib.util.spec_from_file_location("spice_correlation_check", PROG)
+    # A path-loaded parser fixture must not replace the module used by the
+    # real runner and its producer controls during the same suite collection.
+    spec = importlib.util.spec_from_file_location("_spice_correlation_slack_fixture", PROG)
     mod = importlib.util.module_from_spec(spec)
     # Register before exec so @dataclass can resolve cls.__module__ in sys.modules.
     sys.modules[spec.name] = mod

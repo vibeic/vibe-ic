@@ -135,40 +135,44 @@ def test_every_driver_refusal_reaches_the_record(tmp_path):
         assert d["reason_class"] == klass, (status, reason)
 
 
-def test_all_fifteen_refusals_return_through_the_helper():
-    """The property that makes the one above general: no early refusal in the
-    driver returns a bare dict."""
-    import ast
-    import inspect
-    src = inspect.getsource(S.run_installed_pdk_path_correlation)
-    fn = ast.parse(src.lstrip()).body[0]
-    bare = []
-    for node in ast.walk(fn):
-        if isinstance(node, ast.Return) and isinstance(node.value, ast.Dict):
-            status = next((v.value for k, v in zip(node.value.keys,
-                                                   node.value.values)
-                           if isinstance(k, ast.Constant)
-                           and k.value == "status"
-                           and isinstance(v, ast.Constant)), None)
-            # RAN is the success path: it writes BOTH declared names itself and
-            # must not pass through the refusal helper, or a measurement could
-            # be overwritten by a refusal.
-            if status in ("ERROR", "NO_TOOL"):
-                bare.append(ast.get_source_segment(src.lstrip(), node.value))
-    assert bare == [], f"{len(bare)} refusal(s) return a dict nobody persists"
-    assert src.count("_persist_declared_refusal(project,") == 15
+def test_all_fifteen_refusals_return_through_the_helper(tmp_path, monkeypatch):
+    """Every delegated input/producer boundary persists its actual refusal.
+
+    The historical fifteen inline returns became one shared catch. Exercise
+    each present boundary rather than freezing a count of source statements.
+    """
+    import test_default_si_spice_power as fixture
+    import librelane_postroute as lp
+    import path_spice_tool as pst
+    p, folder, lib = fixture.project(tmp_path)
+    fixture.spice_produce(p, folder, lib, monkeypatch)
+    boundaries = [(fixture.LC, 'resolve_image'), (lp, 'stapostpnr_state'),
+                  (fixture.LC, 'pdk_root_resolution'), (pst, 'run_current_step30')]
+    for module, name in boundaries:
+        reason = 'SOFTWARE_FIXTURE_ONLY refused at ' + name
+        def refused(*args, **kwargs):
+            raise fixture.LC.Refusal('CURRENT_FIXTURE_REFUSAL', reason)
+        with monkeypatch.context() as patch:
+            patch.setattr(module, name, refused)
+            result = S.run_installed_pdk_path_correlation(p, str(lib))
+        assert result['status'] == 'ERROR' and reason in result['reason']
+        records = [json.loads((p / relative).read_text()) for relative in _DECLARED]
+        assert records[0] == records[1]
+        assert records[0]['verdict'] == 'NOT_MEASURED'
+        assert records[0]['correlation_ran'] is False and reason in records[0]['reason']
 
 
-def test_the_success_path_is_not_routed_through_the_refusal_helper(tmp_path):
-    """THE SECOND NEGATIVE CONTROL: nothing else changed. The RAN return is the
-    driver's own, writes both declared names itself, and never passes through
-    the refusal helper — which is why a successful correlation cannot be
-    overwritten by one."""
-    import inspect
-    src = inspect.getsource(S.run_installed_pdk_path_correlation)
-    ran = src.rindex('return {"status": "RAN"')
-    assert "_persist_declared_refusal" not in src[ran:]
-    assert 'declared.write_text(json.dumps(report' in src
+def test_the_success_path_is_not_routed_through_the_refusal_helper(tmp_path, monkeypatch):
+    import test_default_si_spice_power as fixture
+    p, folder, lib = fixture.project(tmp_path)
+    def unexpected(*args, **kwargs):
+        raise AssertionError('Current measurement cannot pass through refusal persistence')
+    monkeypatch.setattr(S, '_persist_declared_refusal', unexpected)
+    result = fixture.spice_produce(p, folder, lib, monkeypatch)
+    assert result['status'] == 'RAN'
+    records = [json.loads((p / relative).read_text()) for relative in _DECLARED]
+    assert records[0] == records[1] == result['report']
+    assert S.main([str(p), '--json', str(p / 'consumer.json')]) == 0
 
 
 def test_a_driver_that_returned_no_reason_still_says_something(tmp_path):

@@ -87,6 +87,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _container_exec as _ce  # noqa: E402 — the ONE guarded docker-exec argv
 import _eda_pin as _pin  # noqa: E402 — the ONE place the pin is stated
 import _progress_run as _pr  # noqa: E402
+import _atomic_artefact as _aa  # noqa: E402
+import _prose_polarity as _polarity  # noqa: E402
 
 
 ANALOG_MODULE_PATTERNS = re.compile(
@@ -161,8 +163,15 @@ def _parse_spice_measurements(results: List[Path]) -> dict:
             text = f.read_text(errors="replace")
         except OSError:
             continue
-        for m in meas_re.finditer(text):
-            meas[m.group(1)] = float(m.group(2))
+        for line in text.splitlines():
+            for m in meas_re.finditer(line):
+                # Measurement identifiers are formal names, not prose. Any
+                # denial beside the numeric value still disclaims that value.
+                if _polarity.is_denied(line[m.start(2):], ignore_bracketed=False):
+                    continue
+                value = _safe_float(m.group(2))
+                if value is not None:
+                    meas[m.group(1)] = value
     return meas
 
 
@@ -443,19 +452,19 @@ def check_analog_coverage(
 
     spice_decks = _find_spice_decks(project)
     spice_results = _find_spice_results(project)
-    all_spice_text = set()
-    for f in spice_decks + spice_results:
-        all_spice_text.add(f.stem.lower())
-
     for mod in analog_modules:
         mod_lower = mod.lower()
-        covered = any(mod_lower in s or s in mod_lower for s in all_spice_text)
+        def matches(path):
+            return mod_lower in path.stem.lower() or path.stem.lower() in mod_lower
+        measurements = _parse_spice_measurements([f for f in spice_results if matches(f)])
+        covered = (any(matches(f) for f in spice_decks) and
+                   any(math.isfinite(value) for value in measurements.values()))
         if covered:
             stats["covered"] += 1
             findings.append(Finding(
                 rule="ANALOG_SPICE_COVERED",
                 severity="INFO",
-                message=f"Analog module '{mod}' has matching SPICE simulation",
+                message=f"Analog module '{mod}' has a matching SPICE deck and finite measurement",
             ))
         else:
             stats["uncovered"].append(mod)
@@ -2863,17 +2872,7 @@ def _correlation_reason_class(status: str, reason: str) -> str:
 
 
 def _persist_declared_refusal(project: Path, result: dict) -> dict:
-    """Leave step 30's declared record, then hand the driver's own dict back.
-
-    Wrapping each refusal AT THE RETURN keeps the whole driver one function —
-    which is what several landed contracts read it as. `test_spm_tail_antenna_
-    dbu_and_pdk_gap` asserts the deck and the report take the stage load from
-    ONE function by looking for `per_stage_load_source` inside this driver's
-    source, and R-0915-43's file reads the declared write the same way. A
-    wrapper in front of a renamed inner satisfied neither, while changing no
-    behaviour at all — the properties were true and had moved out of the window
-    the tests read. One function, fifteen wrapped returns, and every one of
-    those properties is textually where it was."""
+    """Persist the current delegated driver's refusal and return its own dict."""
     _write_declared_correlation_refusal(
         project, str((result or {}).get("status")),
         str((result or {}).get("reason")
@@ -2932,11 +2931,18 @@ def _write_declared_correlation_refusal(project: Path, status: str,
             if target.is_file():
                 continue          # a real correlation already spoke here
             target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(json.dumps(payload, indent=2,
-                                         ensure_ascii=False) + "\n")
+            _aa.write_text(target, json.dumps(payload, indent=2,
+                                              ensure_ascii=False) + "\n")
             out.append(str(target))
         except OSError:
             continue
+    # The existing runner publishes this disclosure in its write ledger.
+    # It describes the same refusal as the declared records, not another
+    # independently assembled summary. Keep the returned declared-path API.
+    disclosure = _pl.spice_dir(project) / 'spice_correlation_not_run.json'
+    if not disclosure.is_file():
+        disclosure.parent.mkdir(parents=True, exist_ok=True)
+        _aa.write_text(disclosure, json.dumps(payload, indent=2, ensure_ascii=False) + '\n')
     return out
 
 
@@ -2959,7 +2965,8 @@ def run_installed_pdk_path_correlation(project: Path, liberty_path: str,
                      'reports/phase3/spice_correlation.current.json',
                      'phase3/stage3/spice/correlation.json',
                      'phase3/stage3/spice/correlation.spice',
-                     'phase3/stage3/spice/correlation.log'):
+                     'phase3/stage3/spice/correlation.log',
+                     'phase3/stage3/spice/spice_correlation_not_run.json'):
         (project / relative).unlink(missing_ok=True)
     try:
         image = lc.resolve_image(project)
@@ -3432,7 +3439,8 @@ def run_audit(project: Path, run_spice: bool = True,
     # An attempted/refused producer or an old copied result must still fail
     # current validation, even when it delivered no valid route or receipt.
     reports = _pl.reports_dir(project) / 'phase3'
-    products = [reports / 'spice_correlation.current.json', reports / 'spice_path_tool.json']
+    products = [reports / 'spice_correlation.current.json', reports / 'spice_path_tool.json',
+                _pl.spice_dir(project) / 'spice_correlation_not_run.json']
     products.extend((_pl.spice_dir(project) if kind == 'spice' else reports) / name
                     for kind, name in _DECLARED_CORRELATION_NAMES)
     if not any(path.exists() for path in products):
@@ -3458,6 +3466,33 @@ def run_audit(project: Path, run_spice: bool = True,
         if not result.passed:
             result.findings.append(Finding(rule='SPICE_CURRENT_' + str(verdict), severity='ERROR',
                                            message='Current tool correlation: ' + str(doc.get('arms'))))
+        # Report only numbers from the validated current native product.
+        # Historical correlation JSON remains ineligible for this verdict.
+        paths = [row for arm in (doc.get('detail') or {}).values()
+                 for row in (arm.get('base') or {}).get('paths', [])
+                 if row.get('status') == 'MEASURED' and
+                 all(isinstance(row.get(key), (int, float)) and
+                     math.isfinite(row[key]) and row[key] > 0
+                     for key in ('sta_ns', 'spice_ns'))]
+        result.summary['correlation'] = {
+            'correlation_checked': bool(paths), 'spice_paths_found': len(paths),
+            'max_discrepancy_pct': max((abs(row['spice_ns'] - row['sta_ns']) /
+                                        row['sta_ns'] * 100 for row in paths), default=None)}
+        for row in paths:
+            kind = row.get('verdict')
+            if kind in ('CORRELATED', 'MISMATCH', 'CRITICAL_MISMATCH'):
+                result.findings.append(Finding(
+                    rule='SPICE_STA_' + kind,
+                    severity='INFO' if kind == 'CORRELATED' else 'ERROR',
+                    message=f"Current path: SPICE={row['spice_ns']}ns vs STA={row['sta_ns']}ns; "
+                            f"native tolerance={row.get('tolerance_pct')}%"))
+        # Step 30 declares critical-path correlation AND analog coverage.
+        # Keep the existing coverage check behind current correlation binding.
+        result.summary['analog'] = check_analog_coverage(project, result.findings)
+        if any(f.severity == 'ERROR' for f in result.findings):
+            result.passed = False
+            result.summary.update({'pass': False, 'verdict': 'FAIL',
+                                   'correlation_verdict': verdict})
     except (pst.Refusal, OSError, ValueError, KeyError, TypeError) as exc:
         result.passed = False
         result.summary = {'skipped': False, 'pass': False, 'measurement': 'NOT_MEASURED',
