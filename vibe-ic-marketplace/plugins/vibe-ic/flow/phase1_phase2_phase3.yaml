@@ -4591,7 +4591,9 @@ steps:
       # on. Same shape as the thirteen of #2261.
       - flow_compliance_check
     required_outputs:
-      - "phase2/stage2/synth/netlist.v"
+      - "reports/phase2/gates/yosys_hilomap.json"
+      - "reports/phase2/gates/yosys_script_template.json"
+      - "reports/phase2/gates/yosys_tiecell_recipe_order.json"
       - "reports/analog/stage_analog_compliance.json"
     gate:
       all_of:
@@ -4632,19 +4634,19 @@ steps:
             condition_files_exist: ["phase2/stage2/synth"]
             absent_condition_reason: >-
               Scoped to the presence of a synthesis directory. Step 14
-              declares phase2/stage2/synth/netlist.v as its SOLE
-              required_outputs pattern, so a run with no synth tree resolves
-              the step MISSING before this clause could hide anything -- the
-              absence is loud one level up, not swallowed here.
+              requires the synthesis netlist from Step 9, and its blocking
+              netlist content check rejects a missing input. These checker
+              reports are Step 14 outputs; the input netlist remains owned
+              by Step 9.
         - optional_program_exit_zero:
             command: "yosys_script_template_check . --json reports/phase2/gates/yosys_script_template.json"
             condition_files_exist: ["phase2/stage2/synth"]
             absent_condition_reason: >-
               Scoped to the presence of a synthesis directory. Step 14
-              declares phase2/stage2/synth/netlist.v as its SOLE
-              required_outputs pattern, so a run with no synth tree resolves
-              the step MISSING before this clause could hide anything -- the
-              absence is loud one level up, not swallowed here.
+              requires the synthesis netlist from Step 9, and its blocking
+              netlist content check rejects a missing input. These checker
+              reports are Step 14 outputs; the input netlist remains owned
+              by Step 9.
         # v1.9.62+ — the third tie-cell ordering rule pair, ADVISORY.
         # The two gates above assert hilomap PRESENCE and token presence.
         # Neither checks `setundef -zero` BEFORE hilomap, nor `opt_clean` /
@@ -4667,12 +4669,11 @@ steps:
             advisory_reason: "NOT-YET-CLEAN: this gate CAN refuse and is wired advisory as a ratchet position, not as a verdict. Notch measured rc 0 on a real spm run (2026-08-31): it is already clean on real input, so blocking would cost nothing today; the only thing holding it advisory is that no other run has been measured."
             condition_files_exist: ["phase2/stage2/synth"]
             absent_condition_reason: >-
-              Scoped to the presence of a synthesis directory: the rule is
-              about the ORDER of setundef/hilomap/opt_clean inside a yosys
-              script, and with no synth tree there is no script to order. Step
-              14 declares phase2/stage2/synth/netlist.v as its SOLE
-              required_outputs pattern, so a run with no synth tree resolves
-              the step MISSING one level up.
+              Scoped to the presence of a synthesis directory: the rule
+              checks setundef/hilomap/opt_clean order in a Yosys script.
+              Step 14 requires the netlist from Step 9, and its blocking
+              netlist content check rejects a missing input. The report is
+              owned by Step 14; the input netlist remains owned by Step 9.
     blocks_on: [9, 13]
 
   - id: 15

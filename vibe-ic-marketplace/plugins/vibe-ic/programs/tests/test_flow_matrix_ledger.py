@@ -734,8 +734,10 @@ PINNED_OUTPUT_MEMBERS = frozenset({
     ('12', 'phase2/stage2/synth/post_dft_netlist.v'),
     ('13', 'reports/lec.json'),
     ('13', 'reports/lec.rpt'),
-    ('14', 'phase2/stage2/synth/netlist.v'),
     ('14', 'reports/analog/stage_analog_compliance.json'),
+    ('14', 'reports/phase2/gates/yosys_hilomap.json'),
+    ('14', 'reports/phase2/gates/yosys_script_template.json'),
+    ('14', 'reports/phase2/gates/yosys_tiecell_recipe_order.json'),
     ('15', 'phase3/stage3/pnr/floorplan.def'),
     ('15', 'phase3/stage3/pnr/pdn.tcl OR phase3/stage3/pnr/pdn.done'),
     ('15', 'reports/phase2/gates/stage2_compliance.json'),
@@ -1409,7 +1411,9 @@ def test_output_entries_classify_into_the_four_kinds():
     # the canonical Step-32 decision, written on every canonicalize pass;
     # behind a bound LibreLane producer receipt it is where the canonical
     # demands live, and postroute_timing_repair_audit ORs them in.
-    assert seen[F.FILE] == 141, (seen, REDERIVE)
+    # Step 14 owns its three checker reports; Step 9 alone owns netlist.v.
+    # Removing that duplicate FILE and adding three reports is a net +2 FILE.
+    assert seen[F.FILE] == 143, (seen, REDERIVE)
     assert seen[F.GLOB] == 29, (seen, REDERIVE)
     assert seen[F.ANY_OF] == 27, (seen, REDERIVE)
     # Reported to the orchestrator: the PROGRAM_EXIT form described in the brief

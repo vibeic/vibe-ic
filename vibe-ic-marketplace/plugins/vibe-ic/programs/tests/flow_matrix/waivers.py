@@ -680,62 +680,8 @@ WAIVERS: Tuple[Waiver, ...] = (
     # reason, and its artefact question survives dormancy.
 
     # ── dimension 5 — is blocks_on the true dependency graph? ──────────
-    Waiver(
-        step_id="12",
-        dim=5,
-        reason=(
-            "dft_post_optimization_scan_survival_check (step 12's new "
-            "content clause, landed 2026-08-08 to close a dimension-2 gap) "
-            "reads phase2/stage2/synth/netlist.v to detect the 'pre-DFT "
-            "netlist copied over' substitution. That path's TRUE producer, "
-            "step 9, is already inside step 12's blocks_on closure "
-            "(blocks_on=[11], closure includes 9 via 11->10->...->9) — so "
-            "the real dependency is already covered. The finding fires "
-            "because step 14 ALSO declares the identical path in ITS OWN "
-            "required_outputs, even though step 14 does not produce it "
-            "(it audits an input already correctly declared via its own "
-            "required_inputs from step 9) — a pre-existing duplicate "
-            "declaration this fix did not create. depends_on cannot simply "
-            "add step 14: step 14 already has step 12 in its own blocks_on "
-            "ancestry (14 -> ... -> 13 -> 12), so the edge would be "
-            "circular. Removing the duplicate from step 14 was tried and "
-            "reverted: 63x8's own dimension-3/6/8 modules (and two "
-            "ledger census constants) depend on step 14 declaring a "
-            "non-empty required_outputs list for reasons unrelated to this "
-            "fix, and removing it traded one narrow, understood gap for "
-            "four new ones. Closing this needs step 14's duplicate "
-            "declaration reconciled against everything that currently "
-            "reads it — a separate, wider change, not a step-12 fix."
-        ),
-        evidence=(
-            "flow/phase1_phase2_phase3.yaml: step 9's required_outputs "
-            "declares phase2/stage2/synth/netlist.v (the true producer); "
-            "step 14's required_outputs ALSO declares the identical path "
-            "(the duplicate) while step 14's OWN required_inputs already "
-            "correctly cites `from: 9` for the same file. "
-            "programs/dft_post_optimization_scan_survival_check.py reads "
-            "phase2/stage2/synth/netlist.v via `project / \"phase2\" / "
-            "\"stage2\" / \"synth\" / \"netlist.v\"` to compare against "
-            "post_dft_netlist.v. MEASURED 2026-08-08: "
-            "test_matrix_d5_deps_correct.py::derived_dependencies('12') "
-            "returns step 9 (already in closure, no finding) AND step 14 "
-            "(not in closure, D5-MISSING-EDGE, would-cycle) for the same "
-            "artefact — both from `producers()` legitimately returning "
-            "('9', '14') for phase2/stage2/synth/netlist.v. Negative "
-            "control: deleting step 14's required_outputs entry (tested, "
-            "then reverted) makes this cell pass but reddens "
-            "test_flow_matrix_ledger.py::"
-            "test_required_outputs_non_empty_exactly_where_declared, "
-            "::test_output_entries_classify_into_the_four_kinds, "
-            "::test_accessors_track_a_removed_field, "
-            "test_matrix_d3_outputs_produced.py[step14], "
-            "test_matrix_d6_skip_discipline.py[step14] and "
-            "test_matrix_d8_missing_caught.py::"
-            "test_d8_downgrade_is_reachable_through_each_steps_own_real_gate "
-            "— confirming the duplicate is load-bearing elsewhere and this "
-            "is a real cross-dimension conflict, not a step-12-local one."
-        ),
-    ),
+    # Step 14 now owns its checker reports; Step 9 alone owns the
+    # synthesis netlist. Step 12 no longer has a false forward edge.
 
     # ── dimension 6 — skip discipline (the ARITHMETIC half) ───────────
     # EMPTY, and that is the point. This block used to hold THREE waivers

@@ -557,7 +557,10 @@ def _run_clauses(project: Path, clauses: List[Dict[str, str]],
         retained = []
         for row in skipped:
             if str(row.get("why", "")).startswith("the run did not perform this step"):
-                retained.append(row)
+                # run_for_step explicitly selected this step. Its report-only
+                # outputs cannot have siblings before the first producer runs.
+                # The all-step refresh still uses owed's performed-step filter.
+                to_run.append(dict(row, why="explicit current-step producer request"))
                 continue
             target = project / row["target"]
             if (_producer_target_has_content(target) and
@@ -697,10 +700,11 @@ def run_for_step(project: Path, step_id: str, timeout: int = 900
     """Run only the producers declared for one current flow step.
 
     This is the pre-consumer seam used by a per-step backend worker.  The
-    declaration, ``owed`` sibling check and producer/audit authorship stamp are
-    exactly the same as the final flow refresh; filtering by the requested
-    step only prevents unrelated producer clauses from running in this step's
-    project and from being credited to its evidence.
+    Filtering by the requested step prevents unrelated producer clauses from
+    running or being credited to its evidence. Unlike the final all-step
+    refresh, an explicitly selected step also starts its report producers when
+    none of its outputs exists yet. Reuse still requires current-input and
+    content-bound producer evidence.
     """
     sid = str(step_id)
     project = Path(project)
