@@ -790,6 +790,19 @@ def parse_instantiations(body: str, file_path: str, base_line: int) -> List[Modu
             stmt_start_line += cleaned[:closers.end()].count('\n')
             cleaned = cleaned[closers.end():]
 
+        # A generate block's first instance shares a statement with its
+        # opening condition/begin label. Discover the syntax, without claiming
+        # the branch active; runtime lint keeps this scope unresolved.
+        if re.match(r'(?:generate|if|else|for|case|begin)\b', cleaned):
+            openings = list(re.finditer(r'\bbegin\b(?:\s*:\s*[A-Za-z_]\w*)?', cleaned))
+            if openings:
+                prefix = openings[-1].end()
+                stmt_start_line += cleaned[:prefix].count('\n')
+                tail = cleaned[prefix:]
+                leading = len(tail) - len(tail.lstrip())
+                stmt_start_line += tail[:leading].count('\n')
+                cleaned = tail.lstrip()
+
         # Match module_name
         m_mod = re.match(r'(\w+)\s*', cleaned)
         if not m_mod:

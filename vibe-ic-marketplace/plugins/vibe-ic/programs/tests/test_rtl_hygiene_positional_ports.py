@@ -294,3 +294,32 @@ endmodule
     consumed=A._load_hygiene_findings(report,cli.returncode,cli.stderr)
     assert any(f.rule_id=='instance-driver-analysis-unresolved' and "'routed'" in f.message
                and f.severity=='ERROR' and f.category=='correctness_smells' for f in consumed)
+
+
+@pytest.mark.parametrize("enabled", [0, 1])
+def test_first_generate_child_is_discovered_without_guessing_activation(tmp_path, enabled):
+    import json
+    source=ANSI+f"""
+module top #(parameter ENABLE={enabled})(input [7:0] source, output [7:0] result);
+    wire [7:0] routed;
+    generate if (ENABLE) begin: optional
+        leaf u_leaf(.data_i(source), .data_o(routed));
+    end endgenerate
+    assign result=routed;
+endmodule
+"""
+    fp=tmp_path/'first.sv';fp.write_text(source)
+    native=subprocess.run(['yosys','-Q','-p',f'read_verilog -sv {fp}; hierarchy -check -top top; proc; check -assert; write_json {tmp_path}/native.json'],capture_output=True,text=True)
+    (tmp_path/'native.log').write_text(native.stdout+native.stderr)
+    assert (native.returncode==0)==bool(enabled), native.stdout+native.stderr
+    mods=lint._module_ports.parse_modules(source,str(fp))
+    parent=next(m for m in mods if m.name=='top')
+    child=next(i for i in parent.instances if i.instance_name=='u_leaf')
+    assert child.module_name=='leaf'
+    assert child.line==source[:source.index('leaf u_leaf')].count('\n')+1
+    findings=lint.rule_undriven_and_unread(source,str(fp))
+    f=next(f for f in findings if f.symbol=='routed')
+    assert f.rule=='instance-driver-analysis-unresolved'
+    assert f.severity=='ERROR' and f.block_eligible
+    assert 'routed' not in lint.collect_instance_connections(source)
+    assert fp.read_text()==source
