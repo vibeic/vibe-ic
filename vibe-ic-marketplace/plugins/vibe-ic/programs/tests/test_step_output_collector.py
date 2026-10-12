@@ -8,6 +8,7 @@ list. The web route serving those folders is path-traversal guarded.
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import sys
 from pathlib import Path
@@ -19,6 +20,30 @@ PROG = Path(os.environ.get('VIBEIC_OUTPUT_RETENTION_PROGRAMS',
 sys.path.insert(0, str(PROG))
 import step_output_collector as SOC  # noqa: E402
 import flow_dashboard_data as FDD  # noqa: E402
+
+
+def test_supported_python_without_file_digest_retains_exact_output(tmp_path, monkeypatch):
+    """Python 3.10 must retain output without the 3.11-only helper."""
+    monkeypatch.delattr(hashlib, 'file_digest', raising=False)
+    path = tmp_path / 'phase2/stage1/rtl/counter.v'
+    path.parent.mkdir(parents=True)
+    path.write_bytes(b'abc')
+    expected = 'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad'
+    assert SOC._sha(path) == expected
+    attempt = SOC.begin_step(tmp_path, '1')
+    retained = SOC.finish_step(tmp_path, attempt, verdict='FAIL')
+    folder = tmp_path / retained['storage_root'] / retained['folder']
+    assert (folder / path.name).read_bytes() == b'abc'
+    assert SOC.latest_pass(tmp_path, '1') is None
+    assert path.read_bytes() == b'abc'
+
+
+def test_portable_output_hash_covers_empty_and_multiple_chunks(tmp_path, monkeypatch):
+    monkeypatch.delattr(hashlib, 'file_digest', raising=False)
+    path = tmp_path / 'output.bin'
+    for data in (b'', bytes(range(256)) * 8201):
+        path.write_bytes(data)
+        assert SOC._sha(path) == hashlib.sha256(data).hexdigest()
 
 
 @pytest.mark.parametrize('step', FDD._load_flow()[1], ids=lambda s: str(s['id']))

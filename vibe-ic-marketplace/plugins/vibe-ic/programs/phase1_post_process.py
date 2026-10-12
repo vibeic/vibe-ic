@@ -906,7 +906,8 @@ def _extract_regression_matrix(project_dir: Optional[Path]) -> Dict[str, Any]:
         size_table = False
         for line in text.splitlines():
             low = line.lower()
-            cells = [c.strip() for c in line.split("|")]
+            cells = [re.sub(r"(`+|\*{1,3}|_{1,3})(.*?)\1", r"\2", c.strip())
+                     for c in line.split("|")]
             is_table = len(cells) >= 3 and "|" in line
             if is_table and any(re.fullmatch(r"(?:size|width)", c, re.I)
                                 for c in cells):

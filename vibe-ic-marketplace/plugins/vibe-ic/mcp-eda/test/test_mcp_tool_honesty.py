@@ -56,6 +56,86 @@ INDEX_JS = Path(__file__).resolve().parent.parent / "src" / "index.js"
 assert INDEX_JS.exists()
 NODE = shutil.which("node")
 
+
+def _invoke_registered_tool(name, params, gds_result=None):
+    """Exercise the actual registered handler with controlled tool replies."""
+    src = _src()
+    marker = src.index('"' + name + '"')
+    start = src.rfind('server.tool(', 0, marker)
+    end = src.find('server.tool(', marker)
+    block = src[start:end] if end >= 0 else src[start:]
+    script = r'''
+const calls = [];
+let handler;
+const chain = new Proxy(() => chain, { get: () => chain });
+const server = {tool: (...args) => {handler = args.at(-1);}};
+const z = chain;
+const TOOLS = '/tools', PDK_ROOT = '/pdks', SERVER_VERSION = 'test';
+const optPath = () => {}, assertSafePath = () => {}, optNoShellMeta = () => {};
+const guardError = e => ({success:false,error:String(e)});
+const wrapResult = x => x, _probeDocker = () => ({ok:true});
+const magicPdkEnv = () => null;
+const gdsResult = GDS_RESULT;
+function dockerExec(cmd) {
+  calls.push(cmd);
+  if (cmd.includes('GDS_CELL_COUNT') || /klayout.* -r /.test(cmd))
+    return gdsResult || {success:true,output:'INLINE_PYTHON_PROBE_COMPLETED'};
+  if (cmd.includes('TYPE ROUTING')) return {success:true,output:'15\n6\n4\n20'};
+  if (cmd.includes('^MACRO ')) return {success:true,output:'229\n1'};
+  return {success:true,output:'240'};
+}
+TOOL_BLOCK
+const result = await handler(PARAMS);
+console.log(JSON.stringify({result,calls}));
+'''.replace('GDS_RESULT', json.dumps(gds_result)).replace('TOOL_BLOCK', block).replace('PARAMS', json.dumps(params))
+    r = _pr.run([NODE, '--input-type=module', '-e', script], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    return json.loads(r.stdout)
+
+
+@pytest.mark.skipif(NODE is None, reason='node not installed')
+@pytest.mark.parametrize('engine,suffix', [('klayout_python', '.py'), ('klayout_drc', '.drc')])
+def test_inline_klayout_macro_has_native_interpreter_suffix(engine, suffix):
+    result = _invoke_registered_tool('eda_run_tcl', {
+        'engine': engine, 'script': 'print("INLINE_PYTHON_PROBE_COMPLETED")',
+        'extra_args': [], 'timeout_sec': 30})
+    assert result['result']['success'] is True
+    assert result['result']['script_path'].endswith(suffix)
+    assert result['result']['script_path'] in result['calls'][0]
+    assert 'base64 -d' in result['calls'][0]
+
+
+@pytest.mark.skipif(NODE is None, reason='node not installed')
+@pytest.mark.parametrize('native', [
+    {'success': False, 'output': 'macro interpreter unavailable'},
+    {'success': False, 'output': 'GDS_CELL_COUNT=230'},
+    {'success': True, 'output': 'parser emitted no measurement'},
+])
+def test_failed_gds_parser_never_reports_measured_zero(native):
+    response = _invoke_registered_tool('eda_pdk_lint', {
+        'lib': '/pdk/cells.lib', 'techlef': '/pdk/tech.lef',
+        'celllef': '/pdk/cells.lef', 'cellgds': '/pdk/cells.gds',
+        'cts_buf_list': []}, native)
+    result = response['result']
+    assert result['success'] is False
+    assert any(r['check'] == 'gds_parse_unavailable' and r['severity'] == 'error'
+               for r in result['findings'])
+    assert not any(r['check'] == 'gds_cells' for r in result['findings'])
+
+
+@pytest.mark.skipif(NODE is None, reason='node not installed')
+@pytest.mark.parametrize('count', [0, 230])
+def test_gds_parser_preserves_actual_counts_and_uses_python_macro(count):
+    response = _invoke_registered_tool('eda_pdk_lint', {
+        'lib': '/pdk/cells.lib', 'techlef': '/pdk/tech.lef',
+        'celllef': '/pdk/cells.lef', 'cellgds': '/pdk/cells.gds',
+        'cts_buf_list': []}, {'success': True, 'output': f'GDS_CELL_COUNT={count}\n'})
+    assert response['result']['success'] is True
+    assert any(r['check'] == 'gds_cells' and r['message'] == f'{count} cells in GDS lib'
+               for r in response['result']['findings'])
+    assert any('klayout' in c and '.py' in c and '/dev/stdin' not in c
+               for c in response['calls'])
+
 # ── verbatim captures ────────────────────────────────────────────────────
 # openroad, current-shape STA script (liberty + verilog, no LEF), rc=0
 STA_NO_TECH = """[INFO ORD-0030] Using 4 thread(s).

@@ -21,6 +21,33 @@ HELPER = "_post_emit_l8_clock_reset_waveform"
 RUNNER_PATH = _PROGRAMS / "phase1_doc_one_shot_runner.py"
 
 
+@pytest.mark.parametrize('metadata', [
+    'written_at: 2026-05-22',
+    'released: 2025/10/12',
+    'build_number: 12345',
+])
+def test_document_metadata_is_not_a_timing_constant(tmp_path, metadata):
+    fixture = (_HERE / 'fixtures/phase1_local/metadata_date_repro2996/timing_notes.md').read_text()
+    source = fixture.replace('written_at: 2026-05-22', metadata)
+    source += '\nWAIT_LIMIT = 5000 cycles\nT_DELAY_TICKS = 6000\nBUFFER_WORDS = 9000\npublished_on: 2026-05-22\n'
+    (tmp_path / 'phase1/generated_docs').mkdir(parents=True)
+    result = RUNNER.gen_l8_timing_waveform(tmp_path, {'timing_notes.md': source})
+    doc = json.loads(Path(result.path).read_text())
+    rows = doc.get('timing_parameters', []) + doc.get('timing_constants', [])
+    names = {r['name'] for r in rows}
+    assert not names.intersection({'written_at', 'released', 'build_number', 'published_on', 'BUFFER_WORDS'})
+    for name, value, unit in [('T_GUARD', 7000, 'ns'), ('WAIT_LIMIT', 5000, 'cycles'), ('T_DELAY_TICKS', 6000, 'ticks')]:
+        assert any(r['name'] == name and r['value'] == value and r['unit'] == unit for r in rows)
+
+
+def test_front_matter_value_can_be_reused_by_explicit_technical_statement(tmp_path):
+    source = '---\nT_GUARD: 2026-05-22\n---\n# Timing\nT_GUARD = 7000 ns\n'
+    (tmp_path / 'phase1/generated_docs').mkdir(parents=True)
+    result = RUNNER.gen_l8_timing_waveform(tmp_path, {'timing_notes.md': source})
+    doc = json.loads(Path(result.path).read_text())
+    assert {r['value'] for r in doc['timing_constants'] if r['name'] == 'T_GUARD'} == {7000}
+
+
 def _write(project: Path, *, clock: bool = True, reset: bool = True,
            existing=None) -> None:
     docs = project / "phase1" / "generated_docs"

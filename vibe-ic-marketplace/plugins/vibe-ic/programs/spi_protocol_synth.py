@@ -79,6 +79,20 @@ def apply_spi_synth(generated_docs_dir: Path, is_spi: bool,
 
 
 def _apply_universal(gd: Path, is_spi: bool = False) -> None:
+    def facts(filename):
+        p = gd / filename
+        if not p.is_file():
+            return {}
+        d = _read(p)
+        return {**(d.get('fields') or {}), **d}
+
+    reg = facts('L4_REGMAP.json')
+    protocol = facts('L3_CMD_PROTOCOL.json')
+    has_registers = (reg.get('no_registers_in_input') is not True
+                     and reg.get('register_map_present') is not False
+                     and bool(reg.get('registers')))
+    has_protocol = is_spi or any(protocol.get(k) for k in
+                                ('opcodes', 'commands', 'channels', 'handshakes', 'transactions'))
     # L4 register map presence
     p = gd / "L4_REGMAP.json"
     if p.is_file():
@@ -129,7 +143,7 @@ def _apply_universal(gd: Path, is_spi: bool = False) -> None:
         # class-universal (true of every block guide), so emit it via
         # setdefault (a downstream protocol synth's value still wins; a
         # protocol with no opinion gets this NEUTRAL framing, not SPI's).
-        d.setdefault("test_cases_present", (
+        d.setdefault("test_cases_present", "present" if d.get('test_cases') else (
             "partial - the spec provides functional descriptions and "
             "waveform figures that map to compliance test scenarios "
             "but does not provide a formal test plan or testbench."))
@@ -156,13 +170,16 @@ def _apply_universal(gd: Path, is_spi: bool = False) -> None:
             # wins via setdefault). The list must NOT carry SPI-flavored
             # content — these are generic compliance buckets true of any
             # register/wire protocol block guide.
-            d.setdefault("derived_compliance_test_categories", [
-                "Reset behavior verification.",
-                "Register access (read/write to all fields; reserved-bit behavior).",
-                "Nominal transfer / transaction across the protocol's operating modes.",
+            categories = ["Reset behavior verification."]
+            if has_registers:
+                categories.append("Register access (read/write to all fields; reserved-bit behavior).")
+            if has_protocol:
+                categories.append("Nominal transfer / transaction across the protocol's operating modes.")
+            categories.extend([
                 "Error and fault condition handling.",
                 "Back-to-back / sustained operation.",
             ])
+            d.setdefault("derived_compliance_test_categories", categories)
         _write(p, d)
     # L11 OTP N/A
     p = gd / "L11_OTP_CONTENT.json"
@@ -194,6 +211,10 @@ def _apply_universal(gd: Path, is_spi: bool = False) -> None:
         "verification_plan_present": "implicit",
         "notes": "Spec does not include a formal verification plan; categories above are derived from the spec's functional and waveform descriptions.",
     }
+    verification = facts('L22_VERIFICATION_PLAN.json')
+    if any(verification.get(k) for k in ('coverage_goals', 'test_cases', 'regression_matrix', 'assertions')):
+        _l22_payload['verification_plan_present'] = 'present'
+        _l22_payload.pop('notes')
     if is_spi:
         _l22_payload["verification_categories_derived_from_spec"] = [
             "Register access (read/write to all register fields; reserved bits behavior)",
@@ -211,12 +232,16 @@ def _apply_universal(gd: Path, is_spi: bool = False) -> None:
         # (a downstream protocol synth that authors its own list still wins
         # via setdefault). NOT SPI-flavored — these are generic verification
         # buckets applicable to any register/wire protocol block guide.
-        _l22_payload["verification_categories_derived_from_spec"] = [
-            "Register access (read/write to all register fields; reserved-bit behavior)",
-            "Nominal transfer / transaction across the protocol's operating modes",
+        categories = []
+        if has_registers:
+            categories.append("Register access (read/write to all register fields; reserved-bit behavior)")
+        if has_protocol:
+            categories.append("Nominal transfer / transaction across the protocol's operating modes")
+        categories.extend([
             "Error and fault condition detection and handling",
             "Reset behavior verification",
-            "Back-to-back / sustained operation"]
+            "Back-to-back / sustained operation"])
+        _l22_payload["verification_categories_derived_from_spec"] = categories
     # TWO findings, both real, merged rather than chosen between (#714, #715).
     #
     # WHEN the note may attach (#714/#715 found this independently). Each

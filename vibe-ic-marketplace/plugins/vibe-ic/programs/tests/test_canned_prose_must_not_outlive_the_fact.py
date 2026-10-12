@@ -35,6 +35,28 @@ _L23 = "L23_SECURITY_REQUIREMENTS"
 _L11 = "L11_OTP_CONTENT"
 
 
+@pytest.mark.parametrize('registers,protocol', [(False, False), (True, False), (False, True), (True, True)])
+def test_verification_categories_follow_present_interfaces(tmp_path, registers, protocol):
+    gd = tmp_path / 'generated_docs';gd.mkdir()
+    seed = {
+        'L3_CMD_PROTOCOL.json': {'opcodes': [{'name': 'READ', 'value': 1}] if protocol else [], 'no_opcodes_in_input': not protocol},
+        'L4_REGMAP.json': {'registers': [{'name': 'CTRL', 'address': 0}] if registers else [], 'no_registers_in_input': not registers, 'register_map_present': registers},
+        'L10_TEST_CASES.json': {'test_cases': [{'name': 'reset', 'expected': 'state clears'}]},
+        'L22_VERIFICATION_PLAN.json': {'fields': {'coverage_goals': [{'name': 'reset', 'target_pct': 100}]}},
+    }
+    for name, value in seed.items(): (gd / name).write_text(json.dumps(value))
+    sps.apply_spi_synth(gd, False, None)
+    l10 = json.loads((gd / 'L10_TEST_CASES.json').read_text())
+    l22 = json.loads((gd / 'L22_VERIFICATION_PLAN.json').read_text())['fields']
+    for categories in (l10['derived_compliance_test_categories'], l22['verification_categories_derived_from_spec']):
+        assert any('Register access' in c for c in categories) is registers
+        assert any('Nominal transfer' in c for c in categories) is protocol
+    assert l10['test_cases'] == seed['L10_TEST_CASES.json']['test_cases']
+    assert l22['coverage_goals'] == seed['L22_VERIFICATION_PLAN.json']['fields']['coverage_goals']
+    assert 'does not provide a formal test plan' not in l10.get('test_cases_present', '')
+    assert 'does not include a formal verification plan' not in l22.get('notes', '')
+
+
 def _seed(gd, l19_fields=None):
     gd.mkdir(parents=True, exist_ok=True)
     (gd / f"{_L19}.json").write_text(json.dumps(

@@ -43575,8 +43575,8 @@ def gen_l8_timing_waveform(project: Path,
     tp_bracket = re.compile(r"\b([A-Z][A-Z0-9_]{1,30})\[\s*(\d{4,})\s*\]")
     # Pattern B: assignment form  NAME = 12345  / NAME : 12345
     tp_assign = re.compile(
-        r"\b([A-Z][A-Z0-9_]{1,30})\s*[:=]\s*(\d{4,})\s*"
-        r"(ticks?|cycles?|ns|us|μs|µs)?",
+        r"\b([A-Z][A-Z0-9_]{1,30})\s*[:=]\s*(\d{4,})(?![\d./-])[ \t]*"
+        r"(ticks?|cycles?|ns|us|ms|μs|µs)?\b",
         re.IGNORECASE)
     for fname, text in extracted.items():
         # Restrict to text-y docs (.txt) so we don't get binary noise.
@@ -43585,6 +43585,10 @@ def gen_l8_timing_waveform(project: Path,
                           fname, re.IGNORECASE):
             continue
         ev = evidence.setdefault(f"input/docs/{fname}", [])
+        # Document front matter describes the document, not hardware timing.
+        # An explicit technical statement in the body can reuse a metadata key.
+        text = re.sub(r"\A(?:\ufeff)?---[ \t]*\r?\n.*?^(?:---|\.\.\.)[ \t]*(?:\r?\n|\Z)",
+                      "", text, flags=re.MULTILINE | re.DOTALL)
         for rx in (tp_bracket, tp_assign):
             for m in rx.finditer(text):
                 name = m.group(1)
@@ -43595,13 +43599,21 @@ def gen_l8_timing_waveform(project: Path,
                     continue
                 if value > 10_000_000:  # 1e7 sanity cap
                     continue
+                unit = (m.group(3).lower() if rx is tp_assign
+                        and m.lastindex and m.lastindex >= 3
+                        and m.group(3) else None)
+                if unit is None:
+                    if name.lower().endswith('_ticks') or name.lower() in _rx_classifier_default:
+                        unit = 'ticks'
+                    elif name.lower().endswith('_cycles'):
+                        unit = 'cycles'
+                    elif rx is tp_assign:
+                        # A generic numeric assignment alone supplies no time unit.
+                        continue
                 key = (name, value_s)
                 if key in seen_tps:
                     continue
                 seen_tps.add(key)
-                unit = (m.group(3).lower() if rx is tp_assign
-                        and m.lastindex and m.lastindex >= 3
-                        and m.group(3) else "ticks")
                 timing_parameters.append({
                     "name": name,
                     "value": value,
@@ -43716,23 +43728,16 @@ def gen_l8_timing_waveform(project: Path,
             _add_width(name, w, role, fname, line_no)
 
     # v1.6.64 — populate timing_constants from harvested timing_parameters.
-    # Each timing_parameter with a `T_*`-shaped name OR `t<NAME>`-shaped
-    # name OR a unit of ns/us/ticks is promoted to a typed
-    # timing_constants entry. No template fallback.
+    # Promote only parameters with an explicit or name-encoded timing unit.
+    # A generic numeric metadata pair is not a timing constant.
     seen_tc_names: Set[str] = set()
     for tp in timing_parameters:
         nm = tp.get("name", "")
         if not nm:
             continue
-        # Accept `T_<NAME>`, `t<NAME>` (camelcase scientific notation),
-        # or any name whose `unit` is a real time unit.
+        # Require the unit established by the source harvester.
         unit = (tp.get("unit") or "").lower()
-        looks_like_timing = (
-            nm.startswith("T_") or
-            (nm[0:1].lower() == "t" and len(nm) > 1 and
-             nm[1:2].isalpha() and nm[1:2].isupper()) or
-            unit in {"ns", "us", "ms", "ticks", "cycles", "clock"}
-        )
+        looks_like_timing = unit in {"ns", "us", "ms", "μs", "µs", "tick", "ticks", "cycle", "cycles", "clock"}
         if not looks_like_timing or nm in seen_tc_names:
             continue
         seen_tc_names.add(nm)

@@ -6688,7 +6688,8 @@ server.tool(
       if (!script) {
         return wrapResult({ success: false, t0, error: "either `script` or `script_file` required", output: "" });
       }
-      tmpFile = `/tmp/run_tcl_${Date.now()}_${Math.floor(Math.random() * 100000)}`;
+      const suffix = engine === "klayout_python" ? ".py" : engine === "klayout_drc" ? ".drc" : "";
+      tmpFile = `/tmp/run_tcl_${Date.now()}_${Math.floor(Math.random() * 100000)}${suffix}`;
       const b64 = Buffer.from(script, "utf-8").toString("base64");
       const writeRes = dockerExec(`echo '${b64}' | base64 -d > ${tmpFile}`, 30000);
       if (!writeRes.success) {
@@ -6838,19 +6839,28 @@ server.tool(
 
     // 5. GDS-LEF cell name match (sample)
     if (cellgds) {
-      const gdsRes = dockerExec(`${TOOLS}/klayout/klayout -z -rd cellgds='${cellgds}' -r /dev/stdin <<'PY'
+      const gdsScript = `
 import pya
-ly = pya.Layout(); ly.read('${cellgds}')
+ly = pya.Layout(); ly.read(${JSON.stringify(cellgds)})
 names = sorted([c.name for c in ly.each_cell()])
 print('GDS_CELL_COUNT=' + str(len(names)))
 print('GDS_CELL_SAMPLE=' + ','.join(names[:10]))
-PY
-`, 60000);
-      const gdsMatch = (gdsRes.output || "").match(/GDS_CELL_COUNT=(\d+)/);
-      const gdsCount = gdsMatch ? parseInt(gdsMatch[1]) : 0;
-      note("info", "gds_cells", `${gdsCount} cells in GDS lib`);
-      if (Math.abs(gdsCount - nmacros) > nmacros * 0.5) {
-        note("warn", "gds_lef_count_mismatch", `GDS has ${gdsCount} cells but LEF has ${nmacros} macros — investigate`);
+`;
+      const gdsTmp = `/tmp/pdk_lint_${Date.now()}_${Math.floor(Math.random() * 100000)}.py`;
+      const gdsB64 = Buffer.from(gdsScript, "utf-8").toString("base64");
+      const gdsWrite = dockerExec(`echo '${gdsB64}' | base64 -d > ${gdsTmp}`, 30000);
+      const gdsRes = gdsWrite.success
+        ? dockerExec(`${TOOLS}/klayout/klayout -b -r ${gdsTmp} 2>&1`, 60000)
+        : gdsWrite;
+      const gdsMatch = (gdsRes.output || "").match(/^GDS_CELL_COUNT=(\d+)[ \t]*$/m);
+      const gdsCount = gdsMatch ? Number(gdsMatch[1]) : null;
+      if (!gdsRes.success || !Number.isSafeInteger(gdsCount)) {
+        note("error", "gds_parse_unavailable", `GDS cell count was not measured: ${gdsRes.error || gdsRes.output || "missing parser output"}`);
+      } else {
+        note("info", "gds_cells", `${gdsCount} cells in GDS lib`);
+        if (Math.abs(gdsCount - nmacros) > nmacros * 0.5) {
+          note("warn", "gds_lef_count_mismatch", `GDS has ${gdsCount} cells but LEF has ${nmacros} macros — investigate`);
+        }
       }
     }
 

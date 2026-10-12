@@ -119,5 +119,27 @@
     "version_observed": "f4b278dfd9668a132bd249d126ea1b85b824836e",
     "version_lkg": "",
     "fixture_path": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/fixtures/phase1_local/acceptance_targets_local/verification_plan.md"
+  },
+  {
+    "issue": 2996,
+    "project": "metadata_date_repro2996",
+    "layer": "L8",
+    "field": "timing_parameters and timing_constants",
+    "expected": "T_GUARD = 7000 ns remains a typed timing parameter; written_at is absent from both timing arrays.",
+    "actual": "written_at is emitted with value 2026 and unit ticks in timing arrays.",
+    "version_observed": "1.28.12",
+    "version_lkg": "",
+    "fixture_path": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/fixtures/phase1_local/metadata_date_repro2996/timing_notes.md"
+  },
+  {
+    "issue": 2998,
+    "project": "markdown_matrix_repro2998",
+    "layer": "L22",
+    "field": "fields.regression_matrix",
+    "expected": "Primary width 16 is required with physical signoff; secondary widths 4 and 8 are optional without physical signoff.",
+    "actual": "The producer emits an empty regression_matrix object.",
+    "version_observed": "1.28.12",
+    "version_lkg": "",
+    "fixture_path": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/fixtures/phase1_local/markdown_matrix_repro2998/verification.md"
   }
 ]

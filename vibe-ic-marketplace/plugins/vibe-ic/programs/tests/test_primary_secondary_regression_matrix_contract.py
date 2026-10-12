@@ -5,6 +5,7 @@ The fixture is neutral prose: it carries no design, PDK, oracle, or harness.
 from __future__ import annotations
 
 import json
+import pytest
 from pathlib import Path
 
 import phase1_post_process as producer
@@ -17,6 +18,25 @@ _INPUT = """
 | Primary (required) | 32 | all corners + full quality metrics + functional 100% |
 | Secondary (optional) | 8 / 16 | functional 100% only; does not block physical acceptance |
 """
+
+
+@pytest.mark.parametrize('decoration', ['`', '**', '_'])
+def test_formatted_table_keeps_input_width_obligations(tmp_path, decoration):
+    source = (Path(__file__).parent / 'fixtures/phase1_local/markdown_matrix_repro2998/verification.md').read_text()
+    source = source.replace('`size`', decoration + 'size' + decoration)
+    source = source.replace('**Primary**', decoration + 'Primary' + decoration)
+    source = source.replace('**Secondary**', decoration + 'Secondary' + decoration)
+    source = source.replace('| 16 |', '| ' + decoration + '16' + decoration + ' |')
+    project = _project(tmp_path)
+    (project / 'phase1/input_doc/plan.txt').write_text(source)
+    path = _emit(project)
+    rows = json.loads(path.read_text())['fields']['regression_matrix'].get('rows', [])
+    assert [(r['level'], r['width'], r['required'], r['physical_signoff_required']) for r in rows] == [
+        ('primary', 16, True, True), ('secondary', 4, False, False), ('secondary', 8, False, False)]
+    # Independent consumer must detect removal from formatted source too.
+    doc = json.loads(path.read_text());doc['fields']['regression_matrix'] = {}
+    path.write_text(json.dumps(doc))
+    assert any(f['id'] == 'REGRESSION_MATRIX_MISSING' for f in inspect(project)['blocking_findings'])
 
 
 def _project(tmp_path: Path) -> Path:
