@@ -60660,6 +60660,11 @@ def step_prelayout_signoff(project: Path, top: str, pdk: PdkConfig,
         pvt_path.write_text(json.dumps(pvt, indent=2) + "\n")
         written.append(str(pvt_path))
 
+    # Both the tool-resolved and direct paths record the current matrix.
+    # Inventory does not earn SINGLE_CORNER_DISCLOSED or rescue an empty tool set.
+    written.append(str(emit_step7_corner_disclosure(
+        project, json.loads(pvt_path.read_text()))))
+
     # --- Step 10: GENUINE pre-layout multi-corner STA --------------------
     # force_prelayout=True: this step is Step 10 (PRE-LAYOUT) by definition, so
     # it must time the synth netlist even on a re-run in a dir that already
@@ -62964,18 +62969,15 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
         stamp_pvt_corner_coverage(pvt, corners)
         pvt_path.write_text(json.dumps(pvt, indent=2) + "\n")
         written.append(str(pvt_path))
-    # #694: every native route records its current set. Only the existing
-    # direct, unclaimed single-corner branch earns the legacy disclosure.
-    # A LibreLane empty set must never borrow a previous single-corner stance.
-    single_corner_disclosed = (
-        modes["7"] != "librelane" and
-        len(corners) < 2 and not pvt.get("multi_corner"))
-    stance_path = emit_step7_corner_disclosure(
-        project, pvt, single_corner_disclosed=single_corner_disclosed)
-    written.append(str(stance_path))
-    if single_corner_disclosed:
-        notes.append("#694: emitted single_corner_stance.json "
-                     f"(corner_count={len(corners)})")
+        # #694: keep the existing direct single-corner disclosure. A
+        # multi-corner branch records its census without earning that status.
+        single_corner_disclosed = len(corners) < 2 and not pvt.get("multi_corner")
+        stance_path = emit_step7_corner_disclosure(
+            project, pvt, single_corner_disclosed=single_corner_disclosed)
+        written.append(str(stance_path))
+        if single_corner_disclosed:
+            notes.append("#694: emitted single_corner_stance.json "
+                         f"(corner_count={len(corners)})")
 
     # --- Step 8: pre-emit SDC syntax check report ----------------------
     # The gate runs sdc_syntax_check and writes to reports/phase2/sdc_check.json
