@@ -1202,7 +1202,12 @@ def _gate_writes_anchor():
     """A real producer whose required list can be removed in scratch only."""
     for sid in F.step_ids():
         gate = F.gate(sid) or {}
-        if not gate.get("all_of"):
+        clauses = gate.get("all_of") or []
+        # The mutation below retypes these direct ordinary clauses. A row
+        # with nested/advisory clauses would leave some writers unchanged.
+        if not clauses or not all(isinstance(clause, dict)
+                                  and set(clause) == {F.K_PROGRAM}
+                                  for clause in clauses):
             continue
         targets = G.gate_output_targets(sid)
         if targets:
