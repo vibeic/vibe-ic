@@ -851,6 +851,14 @@ def _as_rows(rows: Any) -> List[Tuple[str, str, int]]:
     return out
 
 
+def _rollup_phase_rows(plan, execution_mode=None):
+    """Use the same applicable phase population in the runner and report reader."""
+    excluded = () if execution_mode == 'default' else (
+        'analog', 'mixed_signal', 'mixed_signal_M2', 'mixed_signal_M3', 'mixed_signal_M4')
+    return [(name, verdict, rc) for name, verdict, rc in plan
+            if name not in excluded and verdict != 'SKIPPED']
+
+
 def _roll_up(rows: List[Tuple[str, str, int]],
              completion_audit_verdicts: Optional[List[str]] = None,
              demoted: Optional[Dict[str, Dict[str, Any]]] = None,
@@ -1098,6 +1106,26 @@ def _acceptance_status(record: dict) -> str:
     if status == 'NOT_MEASURED' and step.get('excluded_from_verdict'):
         return 'NOT_APPLICABLE'
     return status
+
+
+def _default_track_verdict(project: Path, started_at: float, step_id: str,
+                           verdict: str) -> str:
+    """A selected mixed producer advances only after its current complete check."""
+    import execution_policy
+    if execution_policy.request()['mode'] != 'default':
+        return verdict
+    records = [row for row in _current_default_acceptance(project, started_at)
+               if str(row['id']) == step_id]
+    blocked = [row for row in records if _acceptance_status(row) not in
+               ('PASS', 'PASS_WITH_WAIVERS', 'NOT_APPLICABLE')]
+    if verdict == 'FAIL' or any(row['status'] == 'FAIL' for row in blocked):
+        return 'FAIL'
+    if blocked or verdict == 'NOT_READY':
+        return 'NOT_MEASURED'
+    if verdict == 'PASS' and any(_acceptance_status(row) == 'PASS_WITH_WAIVERS'
+                                 for row in records):
+        return 'PASS_WITH_WAIVERS'
+    return verdict
 
 
 def _row_verdict(project: Path, report_name: str, rc: int, started_at: float,
@@ -2463,7 +2491,7 @@ def _main() -> int:
     #
     # The plan ROW is still appended after phase 2 (`_analog_row`), so the
     # run's phase order as reported is unchanged.
-    # Non-blocking on FAIL. Dispatches off the single run_analog decision
+    # Dispatches off the single run_analog decision
     # computed above (#459) so the A-track invocation and phase2's
     # --skip-analog forwarding never disagree. The decision is sourced from
     # phase1 artefacts (L5_ADI_SPEC / analog_block_list), which are produced
@@ -2478,8 +2506,8 @@ def _main() -> int:
     # could NEVER reach its analog flow via the one-shot entry. Dispatch the
     # A-track whenever run_analog AND phase1 did not itself halt (phase1 emits the
     # L5_ADI_SPEC the A-track needs); a phase2 digital halt does NOT block it. The
-    # A-track stays non-blocking, and phase3's digital PnR remains correctly gated
-    # on halted_at (a pure-analog IC still skips the digital PnR).
+    # In Default, a selected A-track rejection stops later producers. Other
+    # modes retain their existing non-blocking behavior.
     _analog_dispatch = (run_analog and not _p3_skip_by_exit
                         and halted_at in ("", "phase2"))
     if _analog_dispatch:
@@ -2505,11 +2533,15 @@ def _main() -> int:
         rc = _run_phase("ANALOG A1..A8", runner, _analog_args, env=_phase_env)
         rep = _read_report(_pl.report_path(project, "analog_one_shot.json"))
         verdict = rep.get("verdict") or ("PASS" if rc == 0 else "FAIL")
+        if execution_policy_value['mode'] == 'default':
+            verdict, _analog_why = _row_verdict(
+                project, 'analog_one_shot.json', rc, _phase_started['analog'], 'analog')
+            if _analog_why:
+                advisories.append(_analog_why)
+            if verdict in ('FAIL', 'NOT_MEASURED'):
+                halted_at = 'analog'
         _analog_row = ("analog", verdict, rc)
         reports["analog"] = rep
-        # Analog FAIL is logged but does NOT halt the digital flow —
-        # downstream Phase 3 still proceeds (analog hardmacros land
-        # via Step 14 floorplan in a future iteration).
     else:
         _analog_row = ("analog", "SKIPPED", 0)
 
@@ -2611,7 +2643,7 @@ def _main() -> int:
     # ``audit_created`` and cannot count as evidence produced by the run it is
     # judging.  This pre-production is non-blocking: the A-track and the
     # Step-14 gate retain ownership of their own verdicts.
-    if halted_at != "phase1" and not _p3_skip_by_exit:
+    if halted_at not in ('phase1', 'analog') and not _p3_skip_by_exit:
         _analog_stage_json = (project / "reports" / "analog"
                               / "stage_analog_compliance.json")
         _analog_stage_rc = _run_phase(
@@ -2809,8 +2841,10 @@ def _main() -> int:
     # Its inputs are the analog hardmacro GDS/Verilog (A8) and the phase-3
     # sign-off GDS + gate netlist, so it runs only when BOTH tracks ran.
     _ms_dispatch = (run_analog and not args.skip_phase3 and not _p3_skip_by_exit
-                    and halted_at not in ("phase1", "phase2"))
+                    and halted_at not in ("phase1", "phase2", "analog"))
     if _ms_dispatch:
+        _mixed_started = time.time()
+        _mixed_pass = ('PASS', 'PASS_WITH_WAIVERS') if execution_policy_value['mode'] == 'default' else ('PASS',)
         _ms_json = (project / "reports" / "analog" / "mixed_signal"
                     / "top_lvs_run.json")
         # The merge/extract needs the PDK's magicrc + netgen setup, so it needs
@@ -2833,12 +2867,13 @@ def _main() -> int:
         # rc 2 is the producer's documented disclosed skip (inputs / tools /
         # PDK tech absent) — record it as SKIP, never as a pass.
         verdict = rep.get("verdict") or {0: "PASS", 2: "SKIP"}.get(rc, "FAIL")
+        verdict = _default_track_verdict(project, _mixed_started, 'M1', verdict)
         plan.append(("mixed_signal", verdict, rc))
         reports["mixed_signal"] = rep
         # Default M2 follows the fixed M1 producer. One native Yosys arm
         # reads the routed design; the canonical M2 gate independently checks
         # its bound outputs. A failed M1 cannot dispatch a downstream producer.
-        if rc == 0 and verdict == "PASS":
+        if rc == 0 and verdict in _mixed_pass:
             _m2_json = project / "reports/analog/mixed_signal/power_domain_producer_audit.json"
             if _execution.request()["mode"] != "default":
                 _m2_json.unlink(missing_ok=True)
@@ -2870,15 +2905,16 @@ def _main() -> int:
                 _m2_verdict = "NOT_READY" if _m2_rc == 2 else "FAIL"
                 if _m2_rc == 0:
                     _m2_rc = 1
+            _m2_verdict = _default_track_verdict(project, _mixed_started, 'M2', _m2_verdict)
         else:
-            _m2_rc, _m2_verdict = 2, "NOT_READY"
+            _m2_rc, _m2_verdict = 2, ('NOT_MEASURED' if execution_policy_value['mode'] == 'default' else 'NOT_READY')
             _m2_rep = {"verdict": _m2_verdict, "reason": "M1 did not pass; M2 not dispatched"}
         plan.append(("mixed_signal_M2", _m2_verdict, _m2_rc))
         reports["mixed_signal_M2"] = _m2_rep
         # Fixed M3/M4 dependency sequence. These rows remain independent of
         # digital completion, but an unmeasured mixed step cannot dispatch its
         # successor or borrow a passing verdict from missing audit bytes.
-        if _m2_rc == 0 and _m2_verdict == "PASS":
+        if _m2_rc == 0 and _m2_verdict in _mixed_pass:
             _m3_json = project / "reports/analog/mixed_signal/m3_producer_audit.json"
             if _execution.request()["mode"] != "default":
                 _m3_json.unlink(missing_ok=True)
@@ -2916,12 +2952,13 @@ def _main() -> int:
                 _m3_verdict = "PASS"
             elif _m3_rc == 0:
                 _m3_rc = 1
+            _m3_verdict = _default_track_verdict(project, _mixed_started, 'M3', _m3_verdict)
         else:
-            _m3_rc, _m3_verdict = 2, "NOT_READY"
+            _m3_rc, _m3_verdict = 2, ('NOT_MEASURED' if execution_policy_value['mode'] == 'default' else 'NOT_READY')
             _m3_rep = {"verdict": "NOT_READY", "reason": "M2 did not pass; M3 not dispatched"}
         plan.append(("mixed_signal_M3", _m3_verdict, _m3_rc))
         reports["mixed_signal_M3"] = _m3_rep
-        if _m3_rc == 0 and _m3_verdict == "PASS":
+        if _m3_rc == 0 and _m3_verdict in _mixed_pass:
             _m4_json = project / "reports/analog/mixed_signal/signoff_producer_audit.json"
             if _execution.request()["mode"] != "default":
                 _m4_json.unlink(missing_ok=True)
@@ -2954,8 +2991,9 @@ def _main() -> int:
                 _m4_verdict = "NOT_READY" if _m4_rc == 2 else "FAIL"
                 if _m4_rc == 0:
                     _m4_rc = 1
+            _m4_verdict = _default_track_verdict(project, _mixed_started, 'M4', _m4_verdict)
         else:
-            _m4_rc, _m4_verdict = 2, "NOT_READY"
+            _m4_rc, _m4_verdict = 2, ('NOT_MEASURED' if execution_policy_value['mode'] == 'default' else 'NOT_READY')
             _m4_rep = {"verdict": "NOT_READY", "reason": "M3 did not pass; M4 not dispatched"}
         plan.append(("mixed_signal_M4", _m4_verdict, _m4_rc))
         reports["mixed_signal_M4"] = _m4_rep
@@ -2989,10 +3027,7 @@ def _main() -> int:
                           f"run may read those rewrites as hand edits")
 
     # ---------------- Aggregate ----------------
-    digital_rows = [(n, v, rc) for n, v, rc in plan
-                    if n not in ("analog", "mixed_signal", "mixed_signal_M2",
-                                 "mixed_signal_M3", "mixed_signal_M4")
-                    and v != "SKIPPED"]
+    digital_rows = _rollup_phase_rows(plan, execution_policy_value['mode'])
     _ca_verdicts = _completion_audit_verdicts(project)
     _audit_axis = _completion_audit_axis(
         project, phase3_ran=_phase3_ran,
@@ -3024,6 +3059,7 @@ def _main() -> int:
         advisories.append(f"verdict {overall}: {_why}")
     summary = {
         "phase": "vibe-ic",
+        "execution_mode": execution_policy_value['mode'],
         "project": str(project),
         **_delivery_route.report_label(project),
         "duration_s": time.time() - t0,

@@ -145,7 +145,8 @@ _PHASE_VERDICTS = _ORCHESTRATOR_VERDICTS | {
 }
 _PHASE1_STEP_STATUSES = {"PASS", "FAIL", "BLOCKED", "WAIVED", "SKIP"}
 _ORCHESTRATOR_PHASES = {
-    "phase1", "phase2", "analog", "phase3", "mixed_signal"
+    "phase1", "phase2", "analog", "phase3", "mixed_signal",
+    "mixed_signal_M2", "mixed_signal_M3", "mixed_signal_M4"
 }
 
 
@@ -198,12 +199,15 @@ def _is_orchestrator_report(path: Path, expected_project: Path) -> bool:
     if data is None or data.get("phase") != "vibe-ic":
         return False
     phases = data.get("phases")
+    base_phases = ['phase1', 'phase2', 'analog', 'phase3', 'mixed_signal']
+    shapes = [base_phases]
+    if data.get('execution_mode') == 'default':
+        shapes.append(base_phases + ['mixed_signal_M2', 'mixed_signal_M3', 'mixed_signal_M4'])
     if (not _project_matches(data.get("project"), expected_project)
             or data.get("verdict") not in _ORCHESTRATOR_VERDICTS
             or not isinstance(phases, list)
             or [row.get("name") if isinstance(row, dict) else None
-                for row in phases] != [
-                    "phase1", "phase2", "analog", "phase3", "mixed_signal"]
+                for row in phases] not in shapes
             or not all(_valid_phase_row(row) for row in phases)):
         return False
     return data["verdict"] == _expected_front_door_verdict(data, phases)
@@ -234,20 +238,25 @@ def _expected_front_door_verdict(data: dict, phases: list) -> str:
             for row in phases
             if row["name"] not in {"analog", "mixed_signal"}
             and row["verdict"] != "SKIPPED"]
-    if not rows:
-        return "FAIL"
     if "completion_audit_axis" in data:
         try:
             import vibe_ic_one_shot_runner as _front_door
         except Exception:                                  # pragma: no cover
             pass
         else:
+            rows = _front_door._rollup_phase_rows(
+                [(row['name'], row['verdict'], row.get('rc') or 0) for row in phases],
+                data.get('execution_mode'))
+            if not rows:
+                return 'FAIL'
             axis = data.get("completion_audit_axis")
             return _front_door._roll_up(
                 rows,
                 data.get("completion_audit_verdicts") or [],
                 demoted=data.get("demoted_phases") or {},
                 audit_axis=axis if isinstance(axis, dict) else None)[0]
+    if not rows:
+        return 'FAIL'
     # LEGACY SHAPE — a report published before the conjunction rule existed.
     digital = [v for _n, v, _rc in rows]
     if "FAIL" in digital:

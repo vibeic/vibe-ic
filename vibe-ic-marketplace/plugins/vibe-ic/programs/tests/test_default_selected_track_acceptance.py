@@ -22,7 +22,7 @@ def drive_selected_tracks(project, monkeypatch, *, rejected=None, status='FAIL',
     monkeypatch.setattr(V, '_need_analog', lambda *a: True)
     import ai_signed_judgement
     monkeypatch.setattr(ai_signed_judgement, 'pending', lambda *a: {})
-    monkeypatch.setattr(V, '_capture_image', lambda *a: {'status': 'NOT_MEASURED'})
+    monkeypatch.setattr(V, '_capture_container_image', lambda *a: {'verdict': 'NOT_MEASURED'})
     monkeypatch.setattr(V, '_capture_pdk_revision', lambda *a: {'status': 'NOT_MEASURED'})
     monkeypatch.setattr(V._pl, 'emit_final_summary', lambda *a: False)
 
@@ -98,6 +98,7 @@ def test_default_selected_rejection_stops_next_producer_and_controls_rollup(
         assert doc['halted_at'] == 'analog'
     assert GUARD._is_orchestrator_report(
         V._pl.report_path(project, 'vibe_ic_one_shot.json'), project)
+    assert GUARD._expected_front_door_verdict(dict(doc, verdict='PASS'), doc['phases']) == status
 
 
 @pytest.mark.parametrize('scope', ['accepted', 'previous', 'excluded_board'])
