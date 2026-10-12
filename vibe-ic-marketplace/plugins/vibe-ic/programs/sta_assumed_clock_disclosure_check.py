@@ -68,6 +68,7 @@ from typing import Dict, List, Optional
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from _atomic_artefact import write_text as atomic_write_text  # noqa: E402
+import _gate_authorship as _ga
 # The paths and the sentence come from the WRITER, never re-typed here: a
 # checker that spells its subject itself can drift into asserting about a file
 # nobody writes and pass forever.
@@ -166,7 +167,7 @@ def main(argv=None) -> int:
     args = ap.parse_args(argv)
     rep = check(Path(args.project))
     if args.json:
-        atomic_write_text(Path(args.json), json.dumps(rep, indent=2) + "\n")
+        atomic_write_text(Path(args.json), json.dumps(_ga.stamp(rep), indent=2) + "\n")
     print(f"[{rep['verdict']}] sta_assumed_clock_disclosure_check — "
           f"{rep['reason']}")
     print(json.dumps(rep, indent=2))

@@ -288,6 +288,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import _gate_authorship as _ga
+from _atomic_artefact import write_text as atomic_write_text
 import re
 import sys
 from pathlib import Path
@@ -1068,7 +1070,8 @@ def main(argv=None) -> int:
     if args.json:
         outp = Path(args.json)
         outp.parent.mkdir(parents=True, exist_ok=True)
-        outp.write_text(json.dumps(report, indent=2) + "\n")
+        report["program"] = _TOOL
+        atomic_write_text(outp, json.dumps(_ga.stamp(report), indent=2) + "\n")
     print(f"=== {_TOOL} === verdict: {verdict}")
     if rc == 2:
         # The flow reads rc=2 as the disclosed-skip tier; print the sentinel so

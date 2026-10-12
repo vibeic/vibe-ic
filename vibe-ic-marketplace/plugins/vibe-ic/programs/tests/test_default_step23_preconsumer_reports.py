@@ -16,8 +16,8 @@ REPORTS = {
 
 @pytest.mark.parametrize('damage', ['none', 'hold', 'assumed_clock', 'clock_target'])
 def test_default_current_step_produces_all_three_reports_and_keeps_failure(tmp_path, damage):
-    hold = {fixture.CORNERS[-1]: -0.4} if damage == 'hold' else None
-    project = fixture.tool_project(tmp_path, hold=hold)
+    project = fixture.tool_project(
+        tmp_path, hold_inf=('min_ff_n40C_5v50',) if damage == 'hold' else ())
     fixture.gate_inputs(project, assumed=damage == 'assumed_clock', stamp=False)
     if damage == 'clock_target':
         target = project/'reports/phase3/clock_target_provenance.json'
