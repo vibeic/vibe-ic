@@ -12,7 +12,7 @@ from programs.tests.test_execution_receipt_chain import isolated_transport
 
 def drive_selected_tracks(project, monkeypatch, *, rejected=None, status='FAIL',
                           native_analog='PASS', excluded=False, semantic_fail=False):
-    """Fake native tools, actual main(), timestamped versions and report reader."""
+    """Controlled native/AI outcomes; actual main(), versions and report reader."""
     called = []
     blocks = project / 'phase1/analog/analog_block_list.json'
     blocks.parent.mkdir(parents=True)
@@ -20,6 +20,11 @@ def drive_selected_tracks(project, monkeypatch, *, rejected=None, status='FAIL',
     if rejected == 'previous':
         _save_complete_acceptance(project, 'A2', 'FAIL', runner='analog_one_shot_runner')
     monkeypatch.setattr(V, '_need_analog', lambda *a: True)
+    import ai_signed_judgement
+    monkeypatch.setattr(ai_signed_judgement, 'pending', lambda *a: {})
+    monkeypatch.setattr(V, '_capture_image', lambda *a: {'status': 'NOT_MEASURED'})
+    monkeypatch.setattr(V, '_capture_pdk_revision', lambda *a: {'status': 'NOT_MEASURED'})
+    monkeypatch.setattr(V._pl, 'emit_final_summary', lambda *a: False)
 
     def after_phase(name):
         if name != 'phase1':
@@ -63,6 +68,11 @@ def drive_selected_tracks(project, monkeypatch, *, rejected=None, status='FAIL',
                 called.append('phase2')
             elif 'phase3' in runner.name:
                 called.append('phase3')
+                rc = native(label, runner, args, env=env)
+                audit = project / 'reports/audit/phase23_completion_audit.json'
+                audit.parent.mkdir(parents=True, exist_ok=True)
+                audit.write_text(json.dumps({'verdict': 'PASS'}))
+                return rc
             return native(label, runner, args, env=env)
         monkeypatch.setattr(V, '_run_phase', run)
 
