@@ -18196,7 +18196,8 @@ def _phase2_pdk_config(project: Path, pdk_name: Optional[str] = None):
 
 def _bootstrap_execution_policy(execution, project: Path, *, top: str,
                                 container: str, ic_class: Optional[str],
-                                skip_analog: bool, pdk_name: Optional[str] = None):
+                                skip_analog: bool, pdk_name: Optional[str] = None,
+                                skip_hardware: bool = False):
     """Give issued Default and Ultra the normal runner's JSON-bound PDK."""
     parameters = {
         "top": top,
@@ -18204,6 +18205,8 @@ def _bootstrap_execution_policy(execution, project: Path, *, top: str,
         "ic_class": ic_class,
         "skip_analog": bool(skip_analog),
     }
+    if execution.request()['mode'] == 'default':
+        parameters['skip_hardware'] = bool(skip_hardware)
     from execution_policy import _CAPABILITY_FD_ENV
     if (execution.request()["mode"] == "ultra" or
             _CAPABILITY_FD_ENV in os.environ):
@@ -25675,7 +25678,8 @@ def main() -> int:
     _bootstrap_execution_policy(
         _execution, project, top=args.top_name, container=args.container,
         ic_class=getattr(args, 'ic_class', None),
-        skip_analog=bool(args.skip_analog), pdk_name=args.pdk)
+        skip_analog=bool(args.skip_analog), pdk_name=args.pdk,
+        skip_hardware=bool(args.skip_hardware))
     # Capture the dispatch context before any phase producer publishes a
     # report. Every write below passes this same value explicitly; a fresh
     # early refusal report therefore cannot become an unbound witness merely

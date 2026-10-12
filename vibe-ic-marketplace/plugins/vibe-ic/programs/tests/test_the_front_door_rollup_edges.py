@@ -105,7 +105,7 @@ def _report(project: Path, name: str, payload: dict) -> Path:
 
 
 def _drive_main(project: Path, monkeypatch, *, phase1, phase2, phase3=None,
-                extra_argv=()) -> tuple:
+                extra_argv=(), after_phase=None) -> tuple:
     """Run the REAL main() with the phase subprocesses stubbed.
 
     Only `_run_phase` and the phase-1 entry decision are staged; every line of the
@@ -114,6 +114,8 @@ def _drive_main(project: Path, monkeypatch, *, phase1, phase2, phase3=None,
     def fake_run_phase(label, runner, args, env=None):
         if "phase1" in runner.name:
             _report(project, "phase1_one_shot.json", {"verdict": phase1[0]})
+            if after_phase:
+                after_phase("phase1")
             if phase1[2] is not None:
                 # THE SIDECAR'S OWN PATH AND KEY. The path is now ONE declaration
                 # (`_path_layout.coverage_only_sidecar_path`) that the producer, both
@@ -130,6 +132,8 @@ def _drive_main(project: Path, monkeypatch, *, phase1, phase2, phase3=None,
             return phase1[1]
         if "phase2" in runner.name:
             _report(project, "phase2_one_shot.json", {"verdict": phase2[0]})
+            if after_phase:
+                after_phase("phase2")
             return phase2[1]
         if "phase3" in runner.name and phase3 is not None:
             _report(project, "phase3_one_shot.json", phase3[0])
@@ -145,6 +149,115 @@ def _drive_main(project: Path, monkeypatch, *, phase1, phase2, phase3=None,
     rc = V.main()
     out = _pl.report_path(project, "vibe_ic_one_shot.json")
     return rc, json.loads(out.read_text())
+
+
+def _save_complete_acceptance(project, sid, status, *, runner, excluded=""):
+    """Use the actual version writer; the phase producer's result stays separate."""
+    import step_output_collector as versions
+    attempt = versions.begin_step(project, sid)
+    return versions.finish_step(
+        project, attempt, verdict=status, canonical_pass=(status == "PASS"),
+        result={"runner": runner, "canonical_consumer": {
+            "status": status, "ledger": [],
+            "step": {"id": sid, "status": status,
+                     "excluded_from_verdict": excluded}}})
+
+
+@pytest.mark.parametrize("phase,sid,runner", [
+    ("phase1", "0.5ic", "phase1_one_shot_runner"),
+    ("phase2", "10", "design_one_shot_runner"),
+])
+@pytest.mark.parametrize("status", ["FAIL", "NOT_MEASURED"])
+def test_complete_current_rejection_halts_before_the_next_phase(
+        project, monkeypatch, phase, sid, runner, status):
+    called = []
+    def after_phase(name):
+        called.append(name)
+        if name == phase:
+            _save_complete_acceptance(project, sid, status, runner=runner)
+    rc, doc = _drive_main(
+        project, monkeypatch, phase1=("PASS", 0, None), phase2=("PASS", 0),
+        phase3=({"verdict": "PASS"}, 0), after_phase=after_phase)
+    assert rc == 1 and doc["verdict"] == status, doc
+    assert doc["halted_at"] == phase
+    assert called == (["phase1"] if phase == "phase1" else ["phase1", "phase2"])
+    # The raw native report/rc remain honest; only the flow decision changes.
+    assert doc["phases"][0 if phase == "phase1" else 1]["rc"] == 0
+    assert V._read_report(V._phase_report_path(
+        project, phase + "_one_shot.json"))["verdict"] == "PASS"
+
+
+@pytest.mark.parametrize("latest", ["PASS", "FAIL"])
+def test_latest_complete_attempt_controls_advancement_not_partial_index(
+        project, monkeypatch, latest):
+    import step_output_collector as versions
+    called = []
+    def after_phase(name):
+        called.append(name)
+        if name != "phase1":
+            return
+        _save_complete_acceptance(project, "D1", "FAIL" if latest == "PASS" else "PASS",
+                                  runner="phase1_one_shot_runner")
+        accepted = _save_complete_acceptance(project, "D1", latest,
+                                             runner="phase1_one_shot_runner")
+        partial = versions.begin_step(project, "D1")
+        versions.finish_step(project, partial, verdict="PASS",
+                             result={"runner": "phase1_one_shot_runner", "canonical_consumer": None})
+        assert versions._read_index(project)["steps"][0]["folder"] == partial["folder"]
+        assert accepted["folder"] != partial["folder"]
+    rc, doc = _drive_main(project, monkeypatch, phase1=("PASS", 0, None),
+                          phase2=("PASS", 0), extra_argv=("--skip-phase3",),
+                          after_phase=after_phase)
+    assert called == (["phase1", "phase2"] if latest == "PASS" else ["phase1"])
+    assert (rc, doc["verdict"], doc["halted_at"]) == (
+        (0, "PASS", None) if latest == "PASS" else (1, "FAIL", "phase1"))
+
+
+def test_prior_complete_failure_does_not_poison_a_new_phase(project, monkeypatch):
+    _save_complete_acceptance(project, "D1", "FAIL", runner="phase1_one_shot_runner")
+    called = []
+    def after_phase(name):
+        called.append(name)
+        if name == "phase1":
+            _save_complete_acceptance(project, "D1", "PASS", runner="phase1_one_shot_runner")
+    rc, doc = _drive_main(project, monkeypatch, phase1=("PASS", 0, None),
+                          phase2=("PASS", 0), extra_argv=("--skip-phase3",),
+                          after_phase=after_phase)
+    assert called == ["phase1", "phase2"]
+    assert rc == 0 and doc["verdict"] == "PASS"
+
+
+def test_existing_board_exclusion_remains_unmeasured_and_nonblocking(project, monkeypatch):
+    def after_phase(name):
+        if name == "phase2":
+            _save_complete_acceptance(
+                project, "39", "NOT_MEASURED", runner="design_one_shot_runner",
+                excluded="NOT_MEASURED, excluded from the run verdict: board not built")
+    rc, doc = _drive_main(project, monkeypatch, phase1=("PASS", 0, None),
+                          phase2=("PASS", 0), extra_argv=("--skip-phase3",),
+                          after_phase=after_phase)
+    assert rc == 0 and doc["verdict"] == "PASS"
+    import step_output_collector as versions
+    assert versions.latest_pass(project, "39") is None
+
+
+def test_coverage_only_demotion_cannot_hide_another_current_step_rejection(project, monkeypatch):
+    def after_phase(name):
+        if name == 'phase1':
+            _save_complete_acceptance(project, '0.5ic', 'FAIL', runner='phase1_one_shot_runner')
+    rc, doc = _drive_main(
+        project, monkeypatch,
+        phase1=('FAIL', 1, {'coverage_only_failure': True, 'coverage_pct': 71.0, 'total_todo': 0}),
+        phase2=('PASS', 0), extra_argv=('--skip-phase3',), after_phase=after_phase)
+    assert rc == 1 and doc['verdict'] == 'FAIL'
+    assert doc['halted_at'] == 'phase1' and doc['demoted_phases'] == {}
+
+
+def test_current_unmeasured_consumer_never_downgrades_native_failure(project):
+    started = time.time()
+    _save_complete_acceptance(project, 'D1', 'NOT_MEASURED', runner='phase1_one_shot_runner')
+    _report(project, 'phase1_one_shot.json', {'verdict': 'FAIL'})
+    assert V._row_verdict(project, 'phase1_one_shot.json', 1, started, 'phase1')[0] == 'FAIL'
 
 
 # ── H1: the #505 standalone shape ──────────────────────────────────────────

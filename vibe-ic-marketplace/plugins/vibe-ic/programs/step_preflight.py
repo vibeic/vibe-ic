@@ -1241,6 +1241,9 @@ def _retained_dispatch(project: Path, dec: Decision, flow_def: Any,
         evidence = [{**item, 'step_id': attempt['id']}
                     for attempt in attempts for item in evidence]
     invocation_outcome = _retained_row_outcome(evidence)
+    runner = dec.runner
+    if runner == '__main__':
+        runner = Path(fn.__globals__.get('__file__', '__main__.py')).stem
     for attempt in attempts:
         consumer = consumers.get(attempt['id'])
         own_evidence = _retained_row_evidence(dec, attempt['id'], evidence)
@@ -1248,7 +1251,7 @@ def _retained_dispatch(project: Path, dec: Decision, flow_def: Any,
         if consumer is not None:
             outcome = consumer['status']
         saved = versions.finish_step(project, attempt, verdict=outcome,
-                                     result={'runner': dec.runner, 'site': dec.site,
+                                     result={'runner': runner, 'site': dec.site,
                                              'rows': evidence,
                                              'invocation_status': invocation_outcome,
                                              'step_rows': own_evidence,

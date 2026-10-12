@@ -316,6 +316,35 @@ def latest_pass(project: Path, step_id: str) -> dict | None:
     return record
 
 
+def current_acceptance(project: Path, started_at: float) -> list:
+    """Latest complete consumers since this sequential phase invocation began.
+
+    Read the versions, not the view index: an enclosing partial observation
+    can update that index after a complete consumer has already refused.
+    The local sequential invocation window is the owner; dashboard phase
+    labels do not determine which child process executed a fractional row.
+    """
+    latest = {}
+    for path in _versions_root(Path(project).resolve()).glob('*/*/*/outputs.json'):
+        record = json.loads(path.read_text())
+        result = record.get('result') or {}
+        if not isinstance(result, dict):
+            continue
+        consumer = result.get('canonical_consumer')
+        if not isinstance(consumer, dict):
+            consumer = result.get('canonical_step_result')
+            if not isinstance(consumer, dict):
+                continue
+        began = datetime.datetime.fromisoformat(record['started_at']).timestamp()
+        if began < started_at:
+            continue
+        ended = datetime.datetime.fromisoformat(record['finished_at']).timestamp()
+        sid = str(record['id'])
+        if sid not in latest or ended > latest[sid][0]:
+            latest[sid] = (ended, record)
+    return [item[1] for sid, item in sorted(latest.items())]
+
+
 def _unchanged_invocation(project: Path, prior: dict, outputs) -> bool:
     """A dashboard refresh is not another invocation or another gate verdict."""
     try:

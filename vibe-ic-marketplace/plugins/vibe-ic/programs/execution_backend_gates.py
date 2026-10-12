@@ -16,7 +16,21 @@ def evaluate(project: Path, row: dict) -> dict:
     # Capture the actual semantic consumer and its lossless gate ledger. No
     # custom parser substitutes for a declared gate or changes its thresholds.
     start = len(fcc._GATE_LEDGER)
-    verdict = fcc.check_step(project, row, {})
+    import execution_policy
+    runtime = execution_policy._ordinary_runtime
+    scope = {}
+    waivers = {}
+    if (runtime is not None and runtime.get('policy', {}).get('mode') == 'default'
+            and Path(runtime['project']).resolve() == Path(project).resolve()):
+        scope = runtime.get('parameters', {})
+        if row['id'] in fcc._FPGA_BOARD_STEP_IDS:
+            # Reuse the same disclosed-board policy as the final canonical
+            # audit. Its synthesized marker yields NOT_MEASURED/excluded,
+            # not an authored waiver or an executed PASS.
+            fcc._synthesise_fpga_skip_waivers(project, waivers)
+    flags = {name: True for name in ('skip_analog', 'skip_hardware')
+             if scope.get(name) is True}
+    verdict = fcc.check_step(project, row, waivers, **flags)
     if str(row['id']) == '20':
         import hold_area_budget_check as area
         area_rc = area.main([str(project), '--json', str(project / 'reports/phase3/hold_area_budget.json')])

@@ -25,6 +25,26 @@ def default_mode(monkeypatch):
     monkeypatch.setattr(policy, '_ordinary_runtime', None)
 
 
+@pytest.mark.parametrize('sid', [6, 39])
+@pytest.mark.parametrize('skip_hardware', [False, True])
+def test_complete_consumer_uses_the_actual_default_board_scope(
+        tmp_path, monkeypatch, sid, skip_hardware):
+    import _flow_yaml
+    row = next(row for row in _flow_yaml.load()['steps'] if row['id'] == sid)
+    monkeypatch.setattr(policy, '_ordinary_runtime', {
+        'project': tmp_path, 'policy': {'mode': 'default'},
+        'parameters': {'skip_hardware': skip_hardware}})
+    result = gates.evaluate(tmp_path, row)
+    assert result['status'] == ('NOT_MEASURED' if skip_hardware else 'FAIL')
+    assert bool(result['step']['excluded_from_verdict']) is skip_hardware
+    assert result['status'] != 'PASS'
+
+
+def test_view_observations_without_invocation_times_are_not_complete_acceptance(tmp_path):
+    versions.materialize(tmp_path)
+    assert versions.current_acceptance(tmp_path, 0) == []
+
+
 def saved(project, sid):
     row = next((r for r in versions._read_index(project)['steps'] if r['id'] == sid), None)
     assert row is not None, f'Step {sid} did not retain its invocation'

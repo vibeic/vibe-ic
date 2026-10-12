@@ -380,6 +380,8 @@ def test_run_survives_a_view_that_cannot_be_built(tmp_path):
             str(project), "--route", "ic", "--mode", "prompt", "--ic-name", "TST"]
     _supervised(argv)
     _sign_ai_fixture(project, "D1")
+    import time
+    started = time.time()
     cp = _supervised(argv)
 
     assert cp.returncode == 0, (
@@ -396,6 +398,16 @@ def test_run_survives_a_view_that_cannot_be_built(tmp_path):
     # Phase 1 also executes the IC template search. Both actual calls must
     # survive the unavailable view; neither is an invented dashboard PASS.
     assert {json.loads(path.read_text())['id'] for path in retained} == {'D1', '0.5ic'}
+    # The actual phase CLI's native success must not overrule the current
+    # complete rejection, even when the optional dashboard view is unavailable.
+    import vibe_ic_one_shot_runner as front
+    verdict, reason = front._row_verdict(
+        project, 'phase1_one_shot.json', cp.returncode, started, 'phase1')
+    assert verdict == 'FAIL', (verdict, reason)
+    assert reason and 'canonical' in reason
+    current = [json.loads(path.read_text()) for path in retained
+               if isinstance((json.loads(path.read_text()).get('result') or {}).get('canonical_consumer'), dict)]
+    assert {row['result']['runner'] for row in current} == {'phase1_one_shot_runner'}
 
 
 # --------------------------------------------------------------------------

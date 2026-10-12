@@ -1080,8 +1080,28 @@ def _published_here(project: Path, report_name: str, started_at: float) -> bool:
     return _pl.published_here(path, started_at)
 
 
+def _current_default_acceptance(project: Path, started_at: float) -> list:
+    import execution_policy
+    if execution_policy.request()['mode'] != 'default':
+        return []
+    import step_output_collector
+    return step_output_collector.current_acceptance(project, started_at)
+
+
+def _acceptance_status(record: dict) -> str:
+    result = record.get('result') or {}
+    consumer = result.get('canonical_consumer') or result.get('canonical_step_result') or {}
+    step = consumer.get('step', consumer)
+    status = record['status']
+    # Honor the canonical consumer's existing board exclusion. A measured
+    # FAIL cannot be excluded, and an absent board never becomes PASS.
+    if status == 'NOT_MEASURED' and step.get('excluded_from_verdict'):
+        return 'NOT_APPLICABLE'
+    return status
+
+
 def _row_verdict(project: Path, report_name: str, rc: int, started_at: float,
-                 phase: str) -> Tuple[str, Optional[str]]:
+                 phase: str, *, _acceptance=None) -> Tuple[str, Optional[str]]:
     """This phase's verdict, or NOT_MEASURED with the reason. R-0915-151.
 
     A phase that RAN here and left no report written at or after its own start has
@@ -1091,6 +1111,14 @@ def _row_verdict(project: Path, report_name: str, rc: int, started_at: float,
     from an earlier run or a PASS conjured from rc 0 -- for a phase that measured
     nothing at all.
     """
+    accepted = (_current_default_acceptance(project, started_at)
+                if _acceptance is None else _acceptance)
+    blocked = [record for record in accepted if _acceptance_status(record) not in
+               ('PASS', 'PASS_WITH_WAIVERS', 'NOT_APPLICABLE')]
+    consumer_reason = (f"{phase}'s current canonical consumer did not accept " +
+                       ', '.join(f"step {record['id']}: {record['status']}" for record in blocked))
+    if any(record['status'] == 'FAIL' for record in blocked):
+        return 'FAIL', consumer_reason
     path = _phase_report_path(project, report_name)
     exists = _report_exists(project, report_name)
     fresh = _published_here(project, report_name, started_at)
@@ -1163,9 +1191,15 @@ def _row_verdict(project: Path, report_name: str, rc: int, started_at: float,
             f"final verdict for {phase}. A phase whose final audit did not "
             f"finish is a FAIL, not a PASS carried over from before the audit")
     verdict = rep.get("verdict")
-    if verdict:
-        return str(verdict), None
-    return ("PASS" if rc == 0 else "FAIL"), None
+    verdict = str(verdict) if verdict else ('PASS' if rc == 0 else 'FAIL')
+    if verdict == 'FAIL':
+        return verdict, None
+    if blocked:
+        return 'NOT_MEASURED', consumer_reason
+    if verdict == 'PASS' and any(_acceptance_status(record) == 'PASS_WITH_WAIVERS'
+                                 for record in accepted):
+        return 'PASS_WITH_WAIVERS', f"{phase}'s current canonical consumer retains an existing waiver"
+    return verdict, None
 
 
 def _completion_audit_axis(project: Path, *, phase3_ran: bool,
@@ -2180,9 +2214,10 @@ def _main() -> int:
                  else "PHASE 1 (NL → L1-L23)")
         _phase_started["phase1"] = time.time()
         rc = _run_phase(label, runner, p1_args, env=_phase_env)
+        _p1_acceptance = _current_default_acceptance(project, _phase_started['phase1'])
         verdict, _fresh_why = _row_verdict(
             project, "phase1_one_shot.json", rc,
-            _phase_started.get("phase1", t0), "phase1")
+            _phase_started.get("phase1", t0), "phase1", _acceptance=_p1_acceptance)
         if _fresh_why:
             advisories.append(_fresh_why)
         rep = _read_report(_phase_report_path(project, "phase1_one_shot.json"))
@@ -2199,6 +2234,11 @@ def _main() -> int:
             # NOT coverage-only and still halts. Full-chip flows (phase3
             # in scope) keep halting — doc-extraction feeds the backend.
             cov_only, cov_reason = _phase1_failure_is_coverage_only(project)
+            if any(str(record['id']) != 'D1' and _acceptance_status(record) not in
+                   ('PASS', 'PASS_WITH_WAIVERS', 'NOT_APPLICABLE')
+                   for record in _p1_acceptance):
+                cov_only = False
+                advisories.append('phase1 has a current non-coverage canonical rejection: NOT demoting')
             # THE SIDECAR MUST BE THIS INVOCATION'S, AND THE rc MUST BE THE ONE THE
             # COVERAGE-ONLY PATH RETURNS. R-0915-151.
             #
@@ -2354,6 +2394,8 @@ def _main() -> int:
             halted_at = "phase1"
             advisories.append("phase1 awaits its required signed AI judgement; "
                               "downstream registration and dispatch were not started")
+        elif verdict == 'NOT_MEASURED' and _execution.request()['mode'] == 'default':
+            halted_at = 'phase1'
     else:
         plan.append(("phase1", "SKIPPED", 0))
 
@@ -2395,9 +2437,12 @@ def _main() -> int:
     # failure must retain its own verdict instead of failing registration of
     # downstream rows whose inputs were never produced.
     if halted_at != "phase1":
-        _execution.bootstrap(project, parameters={"top": flow_top,
+        _default_parameters = {"top": flow_top,
             "container": args.container, "pdk_name": args.pdk,
-            "skip_analog": not run_analog})
+            "skip_analog": not run_analog}
+        if _execution.request()['mode'] == 'default':
+            _default_parameters['skip_hardware'] = bool(args.skip_hardware)
+        _execution.bootstrap(project, parameters=_default_parameters)
 
     # ---------------- Analog A1..A8 ----------------
     # FX_ADC_PHASE_ORDER — DISPATCHED BEFORE PHASE 2, reported after it.
@@ -2535,7 +2580,8 @@ def _main() -> int:
             rep = _read_report(_phase_report_path(project, "phase2_one_shot.json"))
             plan.append(("phase2", verdict, rc))
             reports["phase2"] = rep
-            if verdict == "FAIL":
+            if (verdict == 'FAIL' or (verdict == 'NOT_MEASURED'
+                    and _execution.request()['mode'] == 'default')):
                 halted_at = "phase2"
     else:
         plan.append(("phase2", "SKIPPED", 0))
