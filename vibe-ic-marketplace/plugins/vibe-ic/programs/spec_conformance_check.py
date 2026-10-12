@@ -2074,7 +2074,8 @@ def check(spec: SpecContract, rtl_name: str, rtl_ports: List[Port],
           renamed_groups: Optional[List[tuple]] = None,
           input_prose: str = '',
           alt_spellings: Optional[List[tuple]] = None,
-          declared_spellings: Optional[set] = None) -> List[Finding]:
+          declared_spellings: Optional[set] = None,
+          projected_renamed_groups: Optional[List[tuple]] = None) -> List[Finding]:
     f: List[Finding] = []
 
     # ---- structural sanity: zero output-capable ports -----------------------
@@ -2225,7 +2226,8 @@ def check(spec: SpecContract, rtl_name: str, rtl_ports: List[Port],
     # ACCEPTED, never SUPPRESSED. A group reconciles ONLY when every name on
     # both sides is real and the electrical facts match:
     #   * every `l9` name is a SPEC port that is genuinely absent from the RTL;
-    #   * every `rtl` name is an RTL port genuinely absent from the spec;
+    #   * every `rtl` name is an RTL port absent from the spec, or is a selected
+    #     target independently revalidated from the current input/implementation;
     #   * every RTL name carries the SAME direction as the L9 port(s) it serves,
     #     and the same width when both are literal.
     # Any other shape is reported as a defect IN THE DECLARATION and the
@@ -2238,6 +2240,8 @@ def check(spec: SpecContract, rtl_name: str, rtl_ports: List[Port],
     for l9_set, rtl_set in (renamed_groups or []):
         if not l9_set or not rtl_set:
             continue
+        projected = any(l9_set <= sources and rtl_set <= targets
+                        for sources, targets in (projected_renamed_groups or []))
         bad = False
         for nm in sorted(l9_set):
             if nm not in smap:
@@ -2258,7 +2262,7 @@ def check(spec: SpecContract, rtl_name: str, rtl_ports: List[Port],
                     f"SOURCE_MANIFEST declares a rename TO '{nm}', but the RTL "
                     f"has no such port."))
                 bad = True
-            elif nm in smap:
+            elif nm in smap and not projected:
                 f.append(Finding(path, 'ERROR', 'port-rename-target-in-spec', nm,
                     f"SOURCE_MANIFEST declares '{nm}' as a rename TARGET, but the "
                     f"spec declares a port of that name — that is not a rename."))
@@ -2870,6 +2874,36 @@ def main(argv: Optional[List[str]] = None) -> int:
     except Exception:  # noqa: BLE001 — no manifest ⇒ no relaxation
         _renamed_groups = []
 
+    # Phase1 retains illustrative names alongside the selected interface.
+    # A marker or an old binding receipt is not authority: recompute through
+    # its owning producer from current input, declaration and selected top.
+    # The manifest must still declare each accepted rename, and check() still
+    # compares both original and target electrical obligations with the RTL.
+    _projected_groups: List[tuple] = []
+    _binding_findings: List[Finding] = []
+    if spec_path.suffix == '.json':
+        _content = json.loads(spec_raw)
+        if isinstance(_content, dict) and 'selected_interface_binding' in _content:
+            try:
+                from _staged_top_module import bind_selected_interface
+                _rosters = [_content[key] for key in
+                            ('ports', 'top_ports', 'top_module_pins') if key in _content]
+                if ('ports' not in _content or not _rosters
+                        or any(not isinstance(roster, list) or roster != _rosters[0]
+                               for roster in _rosters)):
+                    raise ValueError('selected interface port rosters disagree')
+                _binding_project = _project_root_of(
+                    files, 'phase2/stage1/rtl/SOURCE_MANIFEST.json')
+                if _binding_project is None:
+                    raise ValueError('current reused-IP manifest is unavailable')
+                _bound = bind_selected_interface(_binding_project, _content)
+                for _group in _bound['selected_interface_binding']['illustrative_groups']:
+                    _projected_groups.append((set(_group['l9']), set(_group['rtl'])))
+            except (OSError, ValueError, KeyError, TypeError) as exc:
+                _binding_findings.append(Finding(
+                    chosen, 'ERROR', 'selected-interface-binding-invalid',
+                    top or rtl_name, f'current selected interface refused: {exc}'))
+
     # RB2-04 (#2063) — the alternative spellings the INPUT states, and the
     # design's own declared choice. Read from `input/docs/` and
     # `plugin_output/declaration.json` — the design INPUT and the design's own
@@ -2897,7 +2931,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     findings = check(spec, rtl_name, rtl_ports, rtl_resets, rtl_registered, chosen,
                      rtl_body, spec_text=spec_body,
                      renamed_groups=_renamed_groups, input_prose=input_prose,
-                     alt_spellings=_alt_spellings, declared_spellings=_declared)
+                     alt_spellings=_alt_spellings, declared_spellings=_declared,
+                     projected_renamed_groups=_projected_groups)
+    findings += _binding_findings
 
     # CR-11: a legal parameter range is an elaboration contract.  The gate is
     # already advisory in the flow until a corpus sweep permits promotion.
