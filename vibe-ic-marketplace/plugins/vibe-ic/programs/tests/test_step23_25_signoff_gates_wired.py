@@ -298,16 +298,30 @@ def test_runner_actually_calls_the_gates_in_its_plan():
     # test_the_signoff_gate_is_told_which_pdk_the_run_built.
     import ast
     src = _RUNNER_SRC.read_text(errors="replace")
-    calls = [n for n in ast.walk(ast.parse(src))
+    tree = ast.parse(src)
+    calls = [n for n in ast.walk(tree)
              if isinstance(n, ast.Call)
              and isinstance(n.func, ast.Attribute) and n.func.attr == "extend"
              and n.args and isinstance(n.args[0], ast.Call)
              and isinstance(n.args[0].func, ast.Name)
              and n.args[0].func.id == "step_declared_signoff_gates"]
-    assert len(calls) == 1, (
-        "the sign-off gates are defined but never appended to `plan` "
-        "(or are appended more than once)")
-    assert ast.unparse(calls[0].func.value) == "plan", ast.unparse(calls[0])
+    # Default and Ultra have mutually exclusive bodies. Each execution path
+    # must append the gates once; counting both bodies as one invocation
+    # falsely rejects the existing mode split.
+    mode_branches = [n for n in ast.walk(tree)
+                     if isinstance(n, ast.If)
+                     and ast.unparse(n.test) == "_execution.request()['mode'] == 'default'"
+                     and any(call in list(ast.walk(n)) for call in calls)]
+    assert len(mode_branches) == 1, "sign-off calls must share one exclusive mode split"
+    split = mode_branches[0]
+    covered = []
+    for mode, body in (("default", split.body), ("ultra", split.orelse)):
+        branch_nodes = [n for stmt in body for n in ast.walk(stmt)]
+        branch_calls = [call for call in calls if call in branch_nodes]
+        assert len(branch_calls) == 1, f"{mode} must append sign-off gates exactly once"
+        assert ast.unparse(branch_calls[0].func.value) == "plan", ast.unparse(branch_calls[0])
+        covered.extend(branch_calls)
+    assert set(covered) == set(calls), "sign-off gates must not also run outside the mode split"
 
 
 def test_blast_radius_is_stated_where_the_wiring_is():

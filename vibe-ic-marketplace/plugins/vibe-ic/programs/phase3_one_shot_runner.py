@@ -68189,8 +68189,11 @@ def _librelane_signoff_record(project: Path, top: str, pdk: PdkConfig,
             canonical = (_librelane_handed_spefs(rpt / "librelane_rcx_handoff.json")
                          if m22 == "librelane" else
                          {c: corner_dir / f"{top}.{c}.spef" for c in _SPEF_CORNERS})
+            # Default reruns must read the current SDC and netlist, which
+            # are not part of the shared qualification cache key.
             result = _librelane_signoff_run(project, top, pdk, extract=False,
-                                            time=True, direct_spefs=canonical)
+                                            time=True, direct_spefs=canonical,
+                                            **({'refresh': True} if not qualify else {}))
             sta_folder = result["sta"]
             corners = _ls.corner_timing(sta_folder)
             judged = _ls.judge_timing(corners)
