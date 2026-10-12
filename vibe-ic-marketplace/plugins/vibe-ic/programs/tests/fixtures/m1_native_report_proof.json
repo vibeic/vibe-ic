@@ -38,5 +38,13 @@
       "MERGE_LVS_FAIL"
     ]
   },
-  "published_whole_ic_evidence": "UNPROVEN"
+  "published_whole_ic_evidence": "UNPROVEN",
+  "merge_artifacts": {
+    "phase3/mixed_signal/top_merged.gds": "b2853f08729960f35ace896fa0dffd2d7df0b0dc742e1efb1e4cffad07ad36b5",
+    "phase3/mixed_signal/merge.log": "e5796a92cc4cdf1e4ea779ebe6f38fe2a673246982e47583824a26d721182612",
+    "phase3/mixed_signal/merge.json": "9f5a22487e5e0849805067ead136cc9aaef8829ee7cd0fac2a2e342ffd3acdee",
+    "phase3/mixed_signal/macro_placements.json": "e9c545d5074c6536d894ad75d0b996bf924cfbb6f7531c88f1291f6b85332074",
+    "phase3/mixed_signal/klayout_merge.py": "7e55b7d0ce2eb3516cd54e089272858c4a0c386b63d86a02cd7b781043f47143"
+  },
+  "merge_receipt_path": "phase3/mixed_signal/m1_merge_receipt.json"
 }

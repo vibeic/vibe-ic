@@ -720,6 +720,15 @@
      "path": "reports/analog/stage_analog_compliance.json",
      "size_bytes": 6436,
      "note": "2026-09-02 \u2014 re-measured against benchmark-data/ic/spm/v1.14.88_gf180mcuD: reports/analog/stage_analog_compliance.json tracked at HEAD, non-empty, and attributed to this step by the cell's write ledger. Previously UNPROVEN. Prior note: 2026-08-31 - UNPROVEN. Declared by `29e9c72796` [v1.13.96], which moved the flow yaml without moving this manifest; `d3_manifest_declaration_parity_check` has been reporting it as uncovered ever since (measured red on 781d24727 [v1.14.22] before this change, 7 uncovered paths). The stage-tier `*_com"
+    },
+    "reports/phase2/gates/yosys_hilomap.json": {
+     "status": "UNPROVEN"
+    },
+    "reports/phase2/gates/yosys_script_template.json": {
+     "status": "UNPROVEN"
+    },
+    "reports/phase2/gates/yosys_tiecell_recipe_order.json": {
+     "status": "UNPROVEN"
     }
    }
   },
@@ -825,6 +834,9 @@
      "alternative": "reports/spare_cell_coverage.json",
      "path": "reports/spare_cell_coverage.json",
      "size_bytes": 440
+    },
+    "phase3/stage3/pnr/post_spare.def": {
+     "status": "UNPROVEN"
     }
    }
   },
@@ -1656,12 +1668,52 @@
     },
     "reports/analog/mixed_signal/top_lvs.json": {
      "status": "UNPROVEN"
+    },
+    "phase3/mixed_signal/m1_merge_receipt.json": {
+     "status": "UNPROVEN"
+    },
+    "phase3/mixed_signal/merge.log": {
+     "status": "UNPROVEN"
+    },
+    "phase3/mixed_signal/merge.json": {
+     "status": "UNPROVEN"
+    },
+    "phase3/mixed_signal/macro_placements.json": {
+     "status": "UNPROVEN"
+    },
+    "phase3/mixed_signal/klayout_merge.py": {
+     "status": "UNPROVEN"
+    },
+    "phase3/mixed_signal/*_merged_extracted.sp": {
+     "status": "UNPROVEN"
+    },
+    "phase3/mixed_signal/ext2spice_merged.log": {
+     "status": "UNPROVEN"
+    },
+    "phase3/mixed_signal/ext2spice_merged.tcl": {
+     "status": "UNPROVEN"
+    },
+    "phase3/mixed_signal/top_lvs.tcl": {
+     "status": "UNPROVEN"
+    },
+    "reports/analog/mixed_signal/top_lvs.rpt": {
+     "status": "UNPROVEN"
     }
    },
    "unproven": [
     "phase3/mixed_signal/top_merged.gds",
     "reports/analog/mixed_signal/merge.json",
-    "reports/analog/mixed_signal/top_lvs.json"
+    "reports/analog/mixed_signal/top_lvs.json",
+    "phase3/mixed_signal/m1_merge_receipt.json",
+    "phase3/mixed_signal/merge.log",
+    "phase3/mixed_signal/merge.json",
+    "phase3/mixed_signal/macro_placements.json",
+    "phase3/mixed_signal/klayout_merge.py",
+    "phase3/mixed_signal/*_merged_extracted.sp",
+    "phase3/mixed_signal/ext2spice_merged.log",
+    "phase3/mixed_signal/ext2spice_merged.tcl",
+    "phase3/mixed_signal/top_lvs.tcl",
+    "reports/analog/mixed_signal/top_lvs.rpt"
    ],
    "condition_files": [
     "phase1/analog/analog_block_list.json"
@@ -1678,12 +1730,20 @@
     },
     "reports/analog/mixed_signal/isolation.json": {
      "status": "UNPROVEN"
+    },
+    "reports/analog/mixed_signal/pd_connectivity.json": {
+     "status": "UNPROVEN"
+    },
+    "reports/analog/mixed_signal/power_domain_run.json": {
+     "status": "UNPROVEN"
     }
    },
    "unproven": [
     "reports/analog/mixed_signal/power_domain.json",
     "reports/analog/mixed_signal/level_shifter.json",
-    "reports/analog/mixed_signal/isolation.json"
+    "reports/analog/mixed_signal/isolation.json",
+    "reports/analog/mixed_signal/pd_connectivity.json",
+    "reports/analog/mixed_signal/power_domain_run.json"
    ],
    "condition_files": [
     "phase1/analog/analog_block_list.json"
