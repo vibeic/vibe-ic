@@ -2650,3 +2650,67 @@ def test_opensta_census_proves_the_port_to_pad_net(tmp_path):
     pins = derive(folder, [{"name": "io", **lib}], _census_rows(report))["pins"]
     assert pins["a"]["port_to_pad"] is True
     assert pins["b"]["port_to_pad"] is False
+
+
+@pytest.mark.parametrize('fault', [None, 'sta_changed', 'route_changed',
+    'handoff_state_changed', 'source_changed', 'alias_changed', 'foreign_image'])
+def test_current_step23_follows_rcx_handoff_instead_of_retained_step32(tmp_path, monkeypatch, fault):
+    import shutil
+    import drv_capture_plan as capture_plan
+    import drv_signoff_capture as capture
+    project, adopted = _librelane_final_sta(tmp_path, monkeypatch)
+    old_report = _step32_report(project, adopted)
+    _file(project, 'reports/phase3/librelane_postroute_repair.json', json.dumps(old_report))
+    old_state = Path(old_report['final']['sta_state'])
+    current_dir = project / 'phase3/librelane/23/01-openroad-stapostpnr'
+    shutil.copytree(old_state.parent, current_dir)
+    current_state = current_dir / 'state_out.json'
+    state = json.loads(current_state.read_text())
+    source = _file(project, 'phase3/librelane/22/01-openroad-rcx/nom/top.nom.spef',
+                   '*SPEF current extraction\n')
+    alias = _file(project, 'phase3/stage3/extracted/spef_corners/top.nom.spef',
+                  '*SPEF current extraction\n')
+    rcx = Path(source['path']).parent.parent
+    rcx_state = _file(rcx, 'state_out.json', json.dumps({'spef': {'nom_*': source['path']}}))
+    _file(rcx, 'COMMANDS', 'openroad -exit rcx.tcl\n')
+    _file(rcx, 'vibeic_receipt.json', json.dumps({
+        'input': {'step': 'OpenROAD.RCX',
+                  'image': 'synthetic:foreign' if fault == 'foreign_image' else 'synthetic:test',
+                  'state_files': {state['def']: drv._sha(Path(state['def']))}},
+        'sha256': {'nom/top.nom.spef': source['sha256']}}))
+    _file(project, 'reports/phase3/librelane_rcx_handoff.json', json.dumps({
+        'state': rcx_state['path'], 'state_sha256': rcx_state['sha256'],
+        'views': {'spef:nom_*': {'source': source['path'], 'source_sha256': source['sha256'],
+            'dest': alias['path'], 'dest_sha256': alias['sha256']}}}))
+    state['spef'] = {'nom_*': alias['path']}
+    current_state.write_text(json.dumps(state))
+    selection = {'capture_step': '23', 'final': {
+        'sta_state': str(current_state), 'sta_state_sha256': drv._sha(current_state)}}
+    routed = project / 'phase3/stage3/pnr/routed.def'
+    routed.write_bytes(Path(state['def']).read_bytes())
+    changed = {'sta_changed': current_state, 'route_changed': routed,
+        'handoff_state_changed': Path(rcx_state['path']), 'source_changed': Path(source['path']),
+        'alias_changed': Path(alias['path'])}.get(fault)
+    if changed:
+        changed.write_text(changed.read_text() + '\nchanged bytes\n')
+    errors = {'sta_changed': 'STA.*state absent or differs', 'route_changed': 'STA DEF differs',
+        'handoff_state_changed': 'RCX handoff state absent or changed',
+        'source_changed': 'RCX handoff SPEF source or alias changed',
+        'alias_changed': 'RCX handoff SPEF source or alias changed',
+        'foreign_image': 'RCX receipt image differs'}
+    def measure():
+        plan = capture_plan.build(project, final_state=selection)
+        assert plan['scenes'][0]['spef'] == source
+        assert plan['identity']['artifacts']['def']['sha256'] == drv._sha(routed)
+        assert plan['postroute_repair_ran'] is False
+        out = tmp_path / 'capture'
+        out.mkdir()
+        receipt = capture._spef_extraction_receipt(plan, plan['scenes'][0], out)
+        captured = json.loads(Path(receipt['path']).read_text())
+        assert captured['source_receipt']['path'] == str(rcx / 'vibeic_receipt.json')
+    if fault:
+        with pytest.raises(ValueError, match=errors[fault]):
+            measure()
+    else:
+        measure()
+    assert json.loads((project / 'reports/phase3/librelane_postroute_repair.json').read_text()) == old_report

@@ -58554,7 +58554,8 @@ _ADVISORY_TIER_SIGNOFF_GATES = {"dfm_screen": "PASS_WITH_ADVISORIES"}
 
 def _run_declared_signoff_gate(project: Path, name: str, program: str,
                                out_rel: str,
-                               extra_argv: tuple = ()) -> StepResult:
+                               extra_argv: tuple = (), *,
+                               drv_final_state: dict | None = None) -> StepResult:
     """Invoke one flow-declared sign-off gate inline, blocking on its verdict.
 
     Exactly two exit codes are verdicts about the design — 0 (PASS) and 1
@@ -58594,7 +58595,9 @@ def _run_declared_signoff_gate(project: Path, name: str, program: str,
             _argv = list(extra_argv)
             _point = (_argv[_argv.index("--capture-point") + 1]
                       if "--capture-point" in _argv[:-1] else "in_flow")
-            _drv_plan.capture_and_publish(project, capture_point=_point)
+            _capture_args = ({'final_state': drv_final_state}
+                             if drv_final_state is not None else {})
+            _drv_plan.capture_and_publish(project, capture_point=_point, **_capture_args)
         except (OSError, ValueError, RuntimeError, KeyError) as exc:
             return _signoff_not_checked(
                 name, t0, f"fresh DRV capture did not complete: {exc}")

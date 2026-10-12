@@ -1194,6 +1194,7 @@ def produce_signoff(project, params):
     R, ll, pdk, container = _parameters(project, params)
     sid, top = params['step_id'], params['top']
     notes, written, failures = [], [], []
+    drv_final_state = None
     pnr, rpt = project / PNR, project / RPT
     extracted = project / 'phase3/stage3/extracted'
     spef = extracted / (top + '.spef')
@@ -1225,6 +1226,9 @@ def produce_signoff(project, params):
         if ordinary:
             import librelane_signoff as signoff
             record = json.loads(_require(rpt / 'sta_postpnr_signoff.json').read_text())
+            drv_final_state = {'capture_step': '23', 'final': {
+                'sta_state': record['sta_state'],
+                'sta_state_sha256': record['sta_state_sha256']}}
             native = Path(record['sta_state']).parent
             reports = [_require(native / corner / signoff.CORNER_REPORT)
                        for corner in record.get('corners', {})]
@@ -1359,7 +1363,10 @@ def produce_signoff(project, params):
                 'detail': 'DRC: ' + drc.detail + '\nLVS: ' + lvs.detail}
     else:
         raise em.Refusal('BACKEND_UNKNOWN_SIGNOFF_STEP', sid)
-    return {'verdict': 'PASS', 'detail': '\n'.join(notes)}
+    result = {'verdict': 'PASS', 'detail': '\n'.join(notes)}
+    if drv_final_state is not None:
+        result['drv_final_state'] = drv_final_state
+    return result
 
 
 def _run_current_step_declared_producers(project, step_id):
@@ -1630,7 +1637,11 @@ def produce(project, params):
         if name not in names:
             continue
         _, program, output, extra = table[name]
-        rows.append(R._run_declared_signoff_gate(project, name, program, output, extra))
+        capture_args = ({'drv_final_state': result['drv_final_state']}
+                        if name == 'drv_signoff' and result.get('drv_final_state') is not None
+                        else {})
+        rows.append(R._run_declared_signoff_gate(
+            project, name, program, output, extra, **capture_args))
     if sid == '23' and params.get('execution_mode') == 'default':
         # These writers just replaced the sign-off records. Restore the
         # assumption disclosure before the independent backend consumer.
@@ -1640,6 +1651,9 @@ def produce(project, params):
         result['verdict'] = 'FAIL'
     elif result['verdict'] == 'PASS' and any(row.status != 'PASS' for row in rows):
         result['verdict'] = 'NOT_MEASURED'
+    failed_details = [f'{row.name}: {row.detail}' for row in rows if row.status != 'PASS']
+    if failed_details:
+        result['detail'] = '\n'.join([str(result.get('detail', '')), *failed_details]).strip()
     # This is the producer's own current-tree evidence, not a fabricated native
     # tool receipt.  Native receipts remain an empty, separately named field;
     # the worker can therefore distinguish source evidence from EDA execution.

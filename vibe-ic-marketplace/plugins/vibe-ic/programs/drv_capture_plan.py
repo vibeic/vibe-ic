@@ -650,6 +650,35 @@ def _build_direct(project: Path) -> dict:
             "scenes": scenes, "postroute_repair_ran": False}
 
 
+def _native_spef(project: Path, spef: Path, rc: str) -> Path:
+    """Follow the existing RCX handoff when STA reads a canonical alias."""
+    handoff_path = project / 'reports/phase3/librelane_rcx_handoff.json'
+    if not handoff_path.is_file():
+        return spef
+    handoff = json.loads(handoff_path.read_text())
+    matches = [view for view in (handoff.get('views') or {}).values()
+               if isinstance(view, dict) and view.get('dest') and
+               _run_path(project, view['dest']).resolve() == spef.resolve()]
+    if not matches:
+        return spef
+    if len(matches) != 1:
+        raise ValueError('RCX handoff SPEF alias is ambiguous')
+    view = matches[0]
+    state = _run_path(project, str(handoff.get('state') or ''))
+    if not state.is_file() or _sha(state) != handoff.get('state_sha256'):
+        raise ValueError('RCX handoff state absent or changed')
+    source = _run_path(project, str(view.get('source') or ''))
+    native = json.loads(state.read_text()).get('spef') or {}
+    if not native.get(rc + '_*') or _run_path(project, native[rc + '_*']).resolve() != source.resolve():
+        raise ValueError('RCX handoff SPEF source differs from extraction state')
+    if (not source.is_file() or not spef.is_file() or
+            _sha(source) != view.get('source_sha256') or
+            _sha(spef) != view.get('dest_sha256') or
+            view.get('source_sha256') != view.get('dest_sha256')):
+        raise ValueError('RCX handoff SPEF source or alias changed')
+    return source
+
+
 def build(project: Path, *, final_state: dict | None = None) -> dict:
     project = project.resolve()
     if (final_state is None and
@@ -679,7 +708,8 @@ def build(project: Path, *, final_state: dict | None = None) -> dict:
     else:
         netlist, top = routed_identity
     state_def = _ref(_run_path(project, state["def"]))
-    if final_state is None:
+    current_step23 = final_state is not None and final_state.get('capture_step') == '23'
+    if final_state is None or current_step23:
         # After handoff the canonical routed DEF must be the layout the final
         # STA state measured.
         layout = _ref(project / "phase3/stage3/pnr/routed.def")
@@ -731,7 +761,7 @@ def build(project: Path, *, final_state: dict | None = None) -> dict:
             if existing != item:
                 raise ValueError("linked Liberty identity collision")
         scene_libs[name] = [item["name"] for item in linked]
-        spef = _run_path(project, state["spef"][rc + "_*"])
+        spef = _native_spef(project, _run_path(project, state["spef"][rc + "_*"]), rc)
         scenes.append({"name": name, "mode": "functional", "rc_corner": rc,
                        "spef": _ref(spef), "spef_layout_sha256": artifacts["def"]["sha256"],
                        "generated_top_liberty": _ref(generated_liberty),

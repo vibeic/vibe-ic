@@ -88,3 +88,45 @@ def test_final_capture_table_still_requires_post_stream_identity():
     current = next(row for row in runner._PRESTREAM_GATES if row[0] == 'drv_signoff')
     assert final[3] == ('--capture-point', 'post_stream')
     assert current[3] == ()
+
+
+@pytest.mark.parametrize('verdict', ['FAIL', 'NOT_MEASURED'])
+def test_capture_failure_detail_survives_backend_and_receipt(tmp_path, monkeypatch, verdict):
+    result, _ = _schedule(monkeypatch, tmp_path, 'default', verdict)
+    assert 'drv_signoff: controlled capture result' in result['detail']
+    assert result['canonical_receipts'][0]['detail'] == result['detail']
+
+
+def test_native_current_sta_selection_reaches_capture_only(tmp_path, monkeypatch):
+    selection = {'capture_step': '23', 'final': {
+        'sta_state': '/current/23/state_out.json', 'sta_state_sha256': 'a' * 64}}
+    _schedule(monkeypatch, tmp_path, 'default')
+    monkeypatch.setattr(producers, 'produce_signoff', lambda *a: {
+        'verdict': 'PASS', 'drv_final_state': selection})
+    seen = []
+    def instrument(project, name, program, output, extra, **kwargs):
+        seen.append((name, kwargs))
+        return runner.StepResult(name, 'PASS', 0, 'controlled result')
+    monkeypatch.setattr(runner, '_run_declared_signoff_gate', instrument)
+    result = producers.produce(tmp_path, {'step_id': '23', 'execution_mode': 'default'})
+    assert result['verdict'] == 'PASS'
+    assert [kwargs for name, kwargs in seen if name == 'drv_signoff'] == [
+        {'drv_final_state': selection}]
+    assert all(not kwargs for name, kwargs in seen if name != 'drv_signoff')
+
+
+def test_current_capture_selection_is_passed_before_judge(tmp_path, monkeypatch):
+    import drv_capture_plan
+    selection = {'capture_step': '23', 'final': {'sta_state': 'current'}}
+    seen = []
+    def capture(project, *, final_state=None, capture_point='in_flow'):
+        seen.append((project, final_state, capture_point))
+        raise ValueError('RCX receipt image differs from producer image')
+    monkeypatch.setattr(drv_capture_plan, 'capture_and_publish', capture)
+    monkeypatch.setattr(runner._pr, 'run', lambda *a, **k: pytest.fail('judge ran after refused capture'))
+    row = runner._run_declared_signoff_gate(tmp_path, 'drv_signoff',
+        'drv_signoff_judge.py', 'reports/phase3/sta/drv_signoff.json',
+        drv_final_state=selection)
+    assert seen == [(tmp_path, selection, 'in_flow')]
+    assert row.status == 'NOT_MEASURED'
+    assert 'RCX receipt image differs from producer image' in row.detail
