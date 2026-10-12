@@ -769,6 +769,16 @@ def parse_instantiations(body: str, file_path: str, base_line: int) -> List[Modu
 
     for stmt_text, stmt_start_line in statements:
         cleaned = stmt_text.strip()
+        # Block closers carry no semicolon. The collector consequently keeps
+        # them at the front of the next module-level instance statement.
+        # Remove only closing keywords, never an opening/conditional prefix;
+        # a generate/procedural branch is not proved active by this parser.
+        closers = re.match(
+            r'(?:(?:endgenerate|endcase|endfunction|endtask|end)\b'
+            r'(?:\s*:\s*[A-Za-z_]\w*)?\s*)+', cleaned)
+        if closers:
+            stmt_start_line += cleaned[:closers.end()].count('\n')
+            cleaned = cleaned[closers.end():]
 
         # Match module_name
         m_mod = re.match(r'(\w+)\s*', cleaned)

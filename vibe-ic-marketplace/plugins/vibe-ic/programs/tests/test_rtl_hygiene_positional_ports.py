@@ -187,3 +187,56 @@ endmodule
     run_result = subprocess.run(["vvp", str(out_path)],
                                 capture_output=True, text=True)
     assert run_result.returncode == 0, run_result.stdout + run_result.stderr
+
+
+@pytest.mark.parametrize("boundary", ["generate", "always", "case", "preprocessor"])
+@pytest.mark.parametrize("control", ["current", "absent", "duplicate", "malformed"])
+def test_instance_after_closed_scope_keeps_real_output_driver(tmp_path, boundary, control):
+    """A native elaboration control and the actual lexical/CLI consumer agree."""
+    import json
+    prefix = {
+        "generate": "generate if (1) begin: selected assign anchor=source; end: selected endgenerate",
+        "always": "always @(*) begin anchor=source; end",
+        "case": "always @(*) begin case (source) 1'b0: anchor=1'b0; default: anchor=1'b1; endcase end",
+        "preprocessor": "`ifdef FEATURE\ngenerate if (1) begin: selected assign anchor=source; end endgenerate\n`else\nassign anchor=source;\n`endif",
+    }[boundary]
+    connection = ".data_i(anchor), .data_o(routed)"
+    if control == "duplicate":
+        connection += ", .data_o(other)"
+    elif control == "malformed":
+        connection += ", .broken(routed) trailing"
+    instance = f"leaf #(.W(8)) u_leaf({connection});" if control != "absent" else ""
+    source = ANSI + f"""
+module top(input wire source, output wire [7:0] result);
+    {'wire' if boundary in ('generate', 'preprocessor') else 'reg'} anchor;
+    wire [7:0] routed;
+    wire [7:0] other;
+    {prefix}
+    {instance}
+    assign result=routed;
+endmodule
+"""
+    fp=tmp_path/'input.sv';fp.write_text(source)
+    # Every configured preprocessor arm is independently checked by the tool.
+    native_defines = ['-D','FEATURE'] if boundary == 'preprocessor' else []
+    if control == "current":
+        assert shutil.which("yosys"), "EDA image must supply the native control"
+        script = f"read_verilog -sv {'-DFEATURE' if boundary == 'preprocessor' else ''} {fp}; hierarchy -check -top top; proc; check -assert; write_json {tmp_path}/native.json"
+        native = subprocess.run(['yosys','-Q','-p',script],capture_output=True,text=True)
+        assert native.returncode == 0, native.stdout+native.stderr
+        elaborated=json.loads((tmp_path/'native.json').read_text())['modules']['top']
+        assert elaborated['cells']['u_leaf']['port_directions']['data_o']=='output'
+        assert elaborated['cells']['u_leaf']['connections']['data_o']==elaborated['netnames']['routed']['bits']
+        assert 'routed' not in _undriven(source)
+        parsed=lint._module_ports.parse_modules(lint._module_ports.strip_preproc_directives(source),str(fp))
+        child=next(i for m in parsed if m.name=='top' for i in m.instances if i.instance_name=='u_leaf')
+        assert child.line==source[:source.index(instance)].count('\n')+1
+    else:
+        assert 'routed' in _undriven(source)
+    # Assert the actual public CLI report, preserving unrelated unused-wire findings.
+    report=tmp_path/'hygiene.json'
+    run=subprocess.run([sys.executable,str(PROGRAMS/'rtl_hygiene_lint.py'),str(fp),
+                        '--severity','ERROR','--json',str(report)],capture_output=True,text=True)
+    findings=json.loads(report.read_text())
+    assert any(f['rule']=='undriven-wire' and f['symbol']=='routed' for f in findings)==(control!='current')
+    assert fp.read_text()==source
