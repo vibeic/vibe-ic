@@ -87,6 +87,7 @@ USAGE
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import sys
 from pathlib import Path
@@ -170,6 +171,12 @@ def build(project: Path, answers_path: Optional[Path]) -> Dict[str, Any]:
                     if key in raw:
                         merged[key] = raw[key]
                 doc, ignored = TD.merge_answers(doc, merged)
+                # The area producer replays its owner-attested slot selection
+                # against this declaration. Carry the supplied selection along
+                # with its provenance; dropping it makes a fresh LIMIT appear
+                # stale at the real consumer. No slot is chosen here.
+                if "operator_template" in raw:
+                    doc["operator_template"] = copy.deepcopy(raw["operator_template"])
                 source["ignored_keys"] = ignored
                 # #2070 — a transcribed TECHNOLOGY fact answers its question.
                 # `merge_answers` carried the provenance record through as an
