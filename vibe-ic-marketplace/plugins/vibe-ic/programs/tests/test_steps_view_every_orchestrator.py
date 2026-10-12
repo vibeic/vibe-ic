@@ -393,7 +393,9 @@ def test_run_survives_a_view_that_cannot_be_built(tmp_path):
     assert (project / 'steps').read_text() == 'not a directory\n'
     retained = list((project / 'reports/step_versions').glob('*/*/*/outputs.json'))
     assert retained, 'an unavailable dashboard view must not lose actual step versions'
-    assert all(json.loads(path.read_text())['id'] == 'D1' for path in retained)
+    # Phase 1 also executes the IC template search. Both actual calls must
+    # survive the unavailable view; neither is an invented dashboard PASS.
+    assert {json.loads(path.read_text())['id'] for path in retained} == {'D1', '0.5ic'}
 
 
 # --------------------------------------------------------------------------
