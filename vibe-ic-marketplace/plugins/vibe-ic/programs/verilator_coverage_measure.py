@@ -360,6 +360,13 @@ def scope_totals(cov: Dict[str, Any],
     if not matched:
         return None
 
+    line_points = list(agg['line'])
+    line_map = {src: lines for src, lines in (cov.get('line_union') or {}).items()
+                if Path(src).name in wanted and lines}
+    if line_map:
+        agg['line'] = [sum(h > 0 for lines in line_map.values() for h in lines.values()),
+                       sum(len(lines) for lines in line_map.values())]
+
     def pct(pair: List[int]) -> float:
         return round(100.0 * pair[0] / pair[1], 2) if pair[1] > 0 else 0.0
 
@@ -367,6 +374,9 @@ def scope_totals(cov: Dict[str, Any],
         "totals": {c: {"covered": agg[c][0], "total": agg[c][1],
                        "pct": pct(agg[c])} for c in agg},
         "scope_files": sorted(matched),
+        "line_metric": "executable_line_union" if line_map else "category_points",
+        "line_point_totals": {"covered": line_points[0], "total": line_points[1],
+                              "pct": pct(line_points)},
     }
 
 
@@ -583,6 +593,8 @@ def parse_coverage_dat(
                         pf[head][0] += 1
 
     host_of, disclosure = host_path_namespace(list(per_file), mounts)
+    line_map = union_line_map([path], require_hierarchy=False) or {}
+    line_host_of, _ = host_path_namespace(list(line_map), mounts)
 
     def pct(pair: List[int]) -> float:
         return round(100.0 * pair[0] / pair[1], 2) if pair[1] > 0 else 0.0
@@ -601,6 +613,7 @@ def parse_coverage_dat(
         },
         "format_detected": classifier or "unknown",
         "path_namespace": disclosure,
+        "line_union": {line_host_of.get(src, src): lines for src, lines in line_map.items()},
     }
 
 
@@ -696,12 +709,15 @@ def union_coverage_dats(
                     pf[head][0] += 1
 
     host_of, disclosure = host_path_namespace(list(per_file), mounts)
+    line_map = union_line_map(paths) or {}
+    line_host_of, _ = host_path_namespace(list(line_map), mounts)
 
     def pct(pair: List[int]) -> float:
         return round(100.0 * pair[0] / pair[1], 2) if pair[1] > 0 else 0.0
 
     return {
         "unionisable": True,
+        "line_union": {line_host_of.get(src, src): lines for src, lines in line_map.items()},
         "runs_unioned": len(list(paths)),
         "distinct_points": len(hits),
         "totals": {c: {"covered": cats[c][0], "total": cats[c][1],
@@ -760,7 +776,8 @@ def parse_lcov_info(text: str) -> Dict[str, Dict[int, int]]:
     return out
 
 
-def union_line_map(paths: Sequence[str]) -> Optional[Dict[str, Dict[int, int]]]:
+def union_line_map(paths: Sequence[str], *, require_hierarchy: bool = True
+                   ) -> Optional[Dict[str, Dict[int, int]]]:
     """`{file: {line: hits}}` over every point of the `h`-stripped union.
 
     The same question lcov answers, asked of this program's own union: every
@@ -774,7 +791,7 @@ def union_line_map(paths: Sequence[str]) -> Optional[Dict[str, Dict[int, int]]]:
                 if not m:
                     continue
                 blob, n = m.group(1), int(m.group(2))
-                if coverage_point_key(blob) is None:
+                if require_hierarchy and coverage_point_key(blob) is None:
                     return None
                 fields = dict(seg.split("\x02", 1) for seg in blob.split("\x01")
                               if "\x02" in seg)
@@ -1027,13 +1044,19 @@ def _mounts_for(container: str) -> Optional[List[Tuple[Path, str]]]:
 def cmd_measure(args: argparse.Namespace) -> int:
     dat = verilate_and_run(args.rtl_dir, args.top, args.main, args.build_dir)
     cov = parse_coverage_dat(dat, mounts=_mounts_for(getattr(args, "container", "")))
+    scoped = scope_totals(cov, list(cov.get('per_file') or {}))
     out = {
         "tool": "verilator",
         "coverage_dat": dat,
         **cov,
+        **(scoped or {}),
+        "per_file_metric": "category_points",
     }
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
     Path(args.out).write_text(json.dumps(out, indent=2))
+    if not scoped or scoped['line_metric'] != 'executable_line_union':
+        print('[measure] executable-line coverage NOT_MEASURED', file=sys.stderr)
+        return 1
     totals = out["totals"]
     line_pct = totals["line"]["pct"]
     toggle_pct = totals["toggle"]["pct"]
@@ -1302,12 +1325,16 @@ def suite_payload_fields(result: Dict[str, Any]) -> Dict[str, Any]:
     `measurement_scope` says which of the two the totals belong to."""
     measured = result.get("measured") or []
     dats = result.get("dats") or []
+    scoped = scope_totals(result.get('cov') or {}, list(result.get('scope_used') or []))
     return {
         "testbenches": measured,
         "measurement_scope": ("union-of-suite" if len(dats) > 1
                               else "single-testbench"),
         "per_testbench": result.get("per_testbench") or {},
         "union_refused": result.get("union_refused") or "",
+        "line_metric": scoped['line_metric'] if scoped else 'NOT_MEASURED',
+        "line_point_totals": scoped['line_point_totals'] if scoped else None,
+        "per_file_metric": "category_points",
         "line_union_cross_check": result.get("line_union_cross_check") or {
             "status": "NOT_MEASURED", "reason": "not recorded by the producer"},
     }
@@ -1806,7 +1833,15 @@ def cmd_check(args: argparse.Namespace) -> int:
         return 1
 
     totals = data["totals"]
-    line_pct = totals["line"]["pct"]
+    # Older reports can carry a v_line-only headline beside a measured native
+    # LCOV union. The line floor consumes that same executable-line population.
+    if isinstance(_xc, dict) and _xc.get('status') == 'MEASURED':
+        line_pct = _xc['lcov_line_totals']['pct']
+    elif data.get('line_metric') in ('category_points', 'NOT_MEASURED'):
+        print('[check] executable-line coverage NOT_MEASURED; category points are not the line floor')
+        return 1
+    else:
+        line_pct = totals["line"]["pct"]
     toggle_pct = totals["toggle"]["pct"]
     branch_pct = totals["branch"]["pct"]
     below = []

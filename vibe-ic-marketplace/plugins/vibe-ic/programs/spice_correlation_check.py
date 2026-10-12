@@ -3434,6 +3434,20 @@ def run_audit(project: Path, run_spice: bool = True,
     """BLOCKING Step-30 consumption of current executed path correlation."""
     import path_spice_tool as pst
     result = AuditResult()
+    # P0 also invokes this consumer before Phase3. Use the existing owning
+    # producer predicate, rather than treating a future receipt as a defect.
+    # An existing current receipt must still be validated, even without route.
+    if not (project / 'reports/phase3/spice_correlation.current.json').exists():
+        from flow_compliance_check import _asked_before_producer
+        early = _asked_before_producer(result.program, project)
+        if early is not None:
+            result.summary = {'skipped': True, 'pass': False,
+                              'measurement': 'NOT_MEASURED',
+                              'current_binding': 'NOT_YET_PRODUCED',
+                              'reason': 'asked_before_producer',
+                              'reason_class': 'ASKED_BEFORE_PRODUCER',
+                              'asked_before_producer': early}
+            return result
     try:
         doc = pst.validate_current_step30(project)
         verdict = doc.get('verdict')

@@ -520,3 +520,66 @@ def test_v5_file_extractor():
 def test_v4_file_extractor():
     blob = "\x02line\x01rtl/foo.v\x01"
     assert gate._file_v4(blob) == "rtl/foo.v"
+
+
+def test_native_lcov_line_population_controls_the_published_floor(tmp_path, monkeypatch):
+    import subprocess
+    rtl = tmp_path / "rtl"
+    rtl.mkdir()
+    dut = rtl / "core.sv"
+    dut.write_text("module core(input a, output b); assign b=a; endmodule\n")
+    tb = tmp_path / "tb.sv"
+    tb.write_text("module tb; reg a=0; wire b; core dut(a,b); initial begin #1 a=1; #1 a=0; #1 $finish; end endmodule\n")
+    # SOFTWARE_FIXTURE_ONLY point data; the native LCOV tool reads these bytes.
+    dat = tmp_path / "coverage.dat"
+    def record(page, source, line, hits):
+        blob = f"\x01f\x02{source}\x01l\x02{line}\x01h\x02tb.dut\x01page\x02{page}/core\x01o\x02point"
+        return f"C '{blob}' {hits}\n"
+    dat.write_text("# SystemC::Coverage-3\n" + record("v_line", dut, 10, 1)
+                   + record("v_expr", dut, 20, 0) + record("v_line", tb, 1, 1))
+    monkeypatch.setattr(gate, "verilate_tb_and_run", lambda *a, **k: str(dat))
+    calls = []
+    (tmp_path / "build").mkdir()
+    def native(argv, cwd):
+        calls.append(argv)
+        r = subprocess.run(argv, cwd=cwd, capture_output=True, text=True)
+        return r.returncode, r.stdout, r.stderr
+    result = gate.measure_suite([str(dut)], [str(tb)], str(tmp_path / "build"),
+                                   exec_fn=native, scope=[str(dut)])
+    xc = result["line_union_cross_check"]
+    assert xc["status"] == "MEASURED" and xc["agree"], xc
+    expected = {"covered": 1, "total": 2, "pct": 50.0}
+    assert xc["lcov_line_totals"] == expected
+    assert any(argv[0] == "verilator_coverage" for argv in calls)
+    scoped = gate.scope_totals(result["cov"], [str(dut)])
+    assert scoped["totals"]["line"] == expected, scoped
+    assert scoped["line_point_totals"] == {"covered": 1, "total": 1, "pct": 100.0}
+    payload = {"tool": "verilator", "testbench": str(tb), "rtl_sources": [str(dut)],
+               "coverage_dat": str(dat), "totals": scoped["totals"],
+               **gate.suite_payload_fields(result)}
+    path = tmp_path / "coverage.json"
+    path.write_text(json.dumps(payload))
+    args = ["check", "--coverage-json", str(path), "--min-toggle", "0", "--min-branch", "0"]
+    assert gate.main(args + ["--min-line", "70"]) == 1
+    assert gate.main(args + ["--min-line", "40"]) == 0
+    # The same native LCOV evidence corrects an old v_line-only headline too.
+    payload["totals"]["line"] = {"covered": 1, "total": 1, "pct": 100.0}
+    path.write_text(json.dumps(payload))
+    assert gate.main(args + ["--min-line", "70"]) == 1
+
+
+@pytest.mark.parametrize("floor,expected", [(70, 1), (40, 0)])
+def test_cpp_measure_uses_the_same_executable_line_population(tmp_path, monkeypatch, floor, expected):
+    from types import SimpleNamespace
+    dat = tmp_path / "coverage.dat"
+    dat.write_text("C 'page\x02v_line/core\x01f\x02rtl/core.sv\x01l\x0210\x01h\x02dut' 1\n"
+                   "C 'page\x02v_expr/core\x01f\x02rtl/core.sv\x01l\x0220\x01h\x02dut' 0\n")
+    monkeypatch.setattr(gate, "verilate_and_run", lambda *a: str(dat))
+    out = tmp_path / "cpp-coverage.json"
+    args = SimpleNamespace(rtl_dir="rtl", top="core", main="main.cpp", build_dir="build",
+                           out=str(out), min_line=floor, min_toggle=0, min_branch=0, container="")
+    assert gate.cmd_measure(args) == expected
+    doc = json.loads(out.read_text())
+    assert doc["totals"]["line"] == {"covered": 1, "total": 2, "pct": 50.0}
+    assert doc["line_point_totals"] == {"covered": 1, "total": 1, "pct": 100.0}
+    assert doc["line_metric"] == "executable_line_union"

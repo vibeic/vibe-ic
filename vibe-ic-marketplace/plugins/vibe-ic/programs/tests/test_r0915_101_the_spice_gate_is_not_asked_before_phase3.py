@@ -175,3 +175,44 @@ def test_the_other_two_roster_entries_are_untouched():
     assert "gate_evidence_completeness_check" in roster
     assert roster["klayout_deck_mode_check"][1] is F._phase3_drc_ran
     assert roster["gate_evidence_completeness_check"][1] is F._completion_audit_written
+
+
+@pytest.mark.parametrize("stage", ["before_route", "route_without_receipt", "bad_current_before_route"])
+def test_native_spice_gate_and_p0_keep_the_producer_boundary(tmp_path, monkeypatch, stage):
+    import json
+    import spice_correlation_check as SC
+    rtl = tmp_path / "phase2/stage1/rtl"
+    rtl.mkdir(parents=True)
+    (rtl / "core.v").write_text("module core(input a, output b); assign b=a; endmodule\n")
+    if stage == "route_without_receipt":
+        _phase3_reached(tmp_path)
+    elif stage == "bad_current_before_route":
+        current = tmp_path / "reports/phase3/spice_correlation.current.json"
+        current.parent.mkdir(parents=True)
+        current.write_text(json.dumps({"verdict": "PASS", "schema": "foreign"}))
+    report = tmp_path / "native-spice-gate.json"
+    rc = SC.main([str(tmp_path), "--no-spice", "--json", str(report)])
+    doc = json.loads(report.read_text())
+    early = stage == "before_route"
+    assert rc == (2 if early else 1), doc
+    assert doc["summary"]["measurement"] == "NOT_MEASURED"
+    assert doc["summary"]["skipped"] is early
+    if early:
+        assert doc["summary"]["reason_class"] == RT.ASKED_BEFORE_PRODUCER
+        assert doc["summary"]["current_binding"] == "NOT_YET_PRODUCED"
+    else:
+        assert not doc["passed"]
+        assert any(f["rule"] == "SPICE_CURRENT_INPUTS_UNBOUND" for f in doc["findings"])
+    # Only this declared gate is the bounded subject; its actual subprocess runs.
+    monkeypatch.setattr(F, "_STRUCTURAL_RTL_GATES", (GATE,))
+    records = []
+    passed, fails, skips, waivers = F._run_structural_rtl_gates(tmp_path, records_out=records)
+    assert len(records) == 1 and records[0]["name"] == GATE
+    assert records[0]["verdict"] == ("SKIP" if early else "FAIL"), records
+    assert passed is early
+    assert not waivers
+    if early:
+        assert not fails and skips
+        assert records[0]["reason_class"] == RT.ASKED_BEFORE_PRODUCER
+    else:
+        assert fails and not skips
