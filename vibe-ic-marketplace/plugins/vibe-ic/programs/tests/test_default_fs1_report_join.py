@@ -9,6 +9,7 @@ import _flow_yaml
 import execution_backend_gates as gates
 import execution_policy as policy
 from test_fs1_fmeda_producer_is_run_by_the_runner import COUNTER, _project, _runner
+from test_fmeda_fault_injection_coverage import _DEC_OK, _ecc_project
 
 
 REPORTS = (
@@ -30,19 +31,19 @@ def observe_consumer(monkeypatch, project):
     def consume(project, row):
         seen.append(tuple((project / relative).is_file() for relative in REPORTS))
         return {'status': 'PASS', 'ledger': [],
-                'step': {'id': 'FS1', 'status': 'NOT_APPLICABLE'}}
+                'step': {'id': 'FS1', 'status': 'PASS'}}
     monkeypatch.setattr(gates, 'evaluate', consume)
     return seen
 
 
 def test_current_fs1_finishes_both_reports_before_consumer(tmp_path, monkeypatch):
-    project = _project(tmp_path, {'cnt.v': COUNTER})
+    project = _ecc_project(tmp_path, _DEC_OK)
     seen = observe_consumer(monkeypatch, project)
     row = _runner().step_fmeda_fault_injection(project)
     assert seen and all(all(present) for present in seen), seen
     reports = [json.loads((project / relative).read_text()) for relative in REPORTS]
-    assert [report['verdict'] for report in reports] == ['NOT_APPLICABLE'] * 2
-    assert row.status == 'NOT_APPLICABLE', row
+    assert [report['verdict'] for report in reports] == ['PASS'] * 2
+    assert row.status == 'PASS', row
 
 
 def test_failed_independent_report_cannot_reuse_previous_pass(tmp_path, monkeypatch):
