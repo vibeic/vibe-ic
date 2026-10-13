@@ -155,6 +155,32 @@ def test_checked_in_activity_testbench_remains_functional():
     assert set(a["driven"]) == {"x", "y"}, a
 
 
+@pytest.mark.parametrize("variation,expected", [
+    ("native", {"cmd_i": 7}), ("denied", {}), ("prose", {}),
+    ("zero", {}), ("negative", {}), ("foreign_page", {}),
+    ("foreign_hierarchy", {}),
+])
+def test_professional_activity_requires_native_record_grammar(
+        tmp_path, variation, expected):
+    fields = "\x01page\x02v_toggle/dut\x01h\x02TOP.dut\x01o\x02cmd_i[0]"
+    raw = f"C '{fields}' 7"
+    if variation == "denied":
+        raw = "not " + raw
+    elif variation == "prose":
+        raw = "The cmd_i input does not toggle; observed transitions: 7."
+    elif variation == "zero":
+        raw = raw[:-1] + "0"
+    elif variation == "negative":
+        raw = raw[:-1] + "-7"
+    elif variation == "foreign_page":
+        raw = raw.replace("v_toggle/dut", "v_toggle/other")
+    elif variation == "foreign_hierarchy":
+        raw = raw.replace("TOP.dut", "TOP.other")
+    dat = tmp_path / "coverage.dat"
+    dat.write_text(raw + "\n")
+    assert V._professional_input_activity(dat, "dut", ["cmd_i"]) == expected
+
+
 def test_check_refuses_to_grade_a_connectivity_only_measurement(tmp_path,
                                                                 capsys):
     import argparse
