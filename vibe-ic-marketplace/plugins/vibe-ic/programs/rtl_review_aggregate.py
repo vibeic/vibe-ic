@@ -89,8 +89,11 @@ CATEGORY_NAMES = (
 # Which rtl_hygiene_lint rule-id maps to which category. The keys are
 # the canonical rule-id strings emitted in the program's JSON output.
 HYGIENE_RULE_CATEGORY: Dict[str, str] = {
+    "hierarchy-port-resolution": "correctness_smells",
     "instance-driver-analysis-unresolved": "correctness_smells",
     "native-elaboration-unresolved": "correctness_smells",
+    "undriven-wire": "correctness_smells",
+    "undriven-output-port": "correctness_smells",
     # § 1 synthesis hazards
     "latch_inferred": "synthesis_hazards",
     "multiple_drivers": "synthesis_hazards",

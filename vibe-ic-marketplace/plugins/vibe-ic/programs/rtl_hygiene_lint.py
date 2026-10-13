@@ -465,13 +465,15 @@ def collect_instance_connections(src: str,
     return connected
 
 
-def rule_undriven_and_unread(src: str, path: str) -> List[Finding]:
+def rule_undriven_and_unread(src: str, path: str,
+                           instance_connections=None, resolved_drivers=None) -> List[Finding]:
     findings: List[Finding] = []
     decls = find_declarations(src)
-    lhs = collect_lhs_set(src)
+    lhs = collect_lhs_set(src) if resolved_drivers is None else set(resolved_drivers)
     rhs = collect_rhs_set(src)
     uncertain: Set[str] = set()
-    inst_sigs = collect_instance_connections(src, uncertain)
+    inst_sigs = (collect_instance_connections(src, uncertain) if instance_connections is None
+                 else instance_connections)
 
     for kind, name, lineno in decls:
         driven = name in lhs or name in inst_sigs
@@ -6619,6 +6621,93 @@ def autofix_delayed_blocking_clock_toggle(path: Path) -> Tuple[int, List[str]]:
     return len(sites), [str(site['name']) for site in sites]
 
 
+def _native_driver_run(script, work, include_dirs, context):
+    """Use this invocation's selected image, or the existing direct tool route."""
+    import os
+    import shutil
+    selected = ((os.environ.get('VIBEIC_EDA_IMAGE') or '').strip() or
+                (os.environ.get('IIC_EDA_IMAGE') or '').strip())
+    command = ['yosys', '-Q', '-s', str(script)]
+    context.update(backend='local', selected_image=selected or None, image=None,
+                   command=None, native_command=command,
+                   native_returncode=None, transport_returncode=None)
+    if selected:
+        import librelane_contract as contract
+        if os.environ.get(contract.LOCAL_ATTESTATION_ENV):
+            context['backend'] = 'in-image'
+            try:
+                identity = contract.local_image_attestation(selected)
+            except contract.Refusal as exc:
+                raise ValueError(str(exc)) from exc
+            context.update(backend='in-image', image=identity['image'],
+                           image_identity=identity)
+        else:
+            import _eda_image as image
+            context['backend'] = 'docker'
+            import _eda_pin
+            if _eda_pin.is_bare_image_id(selected):
+                raise ValueError(image.image_id_refusal(selected))
+            digest, kind, why = image.local_digest(selected)
+            context.update(backend='docker', image_digest=digest,
+                           image_digest_kind=kind)
+            if not digest:
+                raise ValueError('selected native EDA image unavailable: ' + why)
+            target = image._pinned(selected, digest, kind)
+            context['image'] = target
+            # A fresh process receipt separates the tool's natural exit from a
+            # Docker/entrypoint failure. The outer supervisor owns its lifetime.
+            receipt = work / 'native_process.json'
+            launcher = '''import json, pathlib, shutil, subprocess, sys
+command = sys.argv[2:]
+record = {'command': command, 'tool_path': shutil.which(command[0]),
+          'native_returncode': None}
+try:
+    result = subprocess.run(command, capture_output=True, text=True)
+    record['native_returncode'] = result.returncode
+    sys.stdout.write(result.stdout)
+    sys.stderr.write(result.stderr)
+except OSError as exc:
+    record['launch_error'] = str(exc)
+pathlib.Path(sys.argv[1]).write_text(json.dumps(record, indent=2))
+sys.exit(record['native_returncode'] if record['native_returncode'] is not None else 127)
+'''
+            volumes = []
+            for directory in include_dirs:
+                volumes += ['-v', f'{directory}:{directory}:ro']
+            volumes += ['-v', f'{work}:{work}']
+            import _docker_memory as memory
+            argv = ['docker', 'run', '--rm', '--network', 'none',
+                    *memory.docker_memory_flags(), *volumes,
+                    target, '--skip', 'python3', '-c', launcher, str(receipt), *command]
+            context['command'] = argv
+            try:
+                result = contract.run_container(argv, supervised=True, log=work / 'native.log')
+            except contract.Refusal as exc:
+                raise ValueError(str(exc)) from exc
+            context['command'] = list(result.args)
+            context['transport_returncode'] = result.returncode
+            if not receipt.is_file():
+                atomic_write_text(work / 'native.log', result.stdout + result.stderr)
+                raise ValueError('selected native EDA target did not emit a tool receipt '
+                                 f'(transport rc={result.returncode}); {work}')
+            process = json.loads(receipt.read_text())
+            context['native_process'] = process
+            context['native_returncode'] = process.get('native_returncode')
+            if process.get('launch_error'):
+                atomic_write_text(work / 'native.log', result.stdout + result.stderr)
+                raise ValueError('selected native EDA target could not launch Yosys: '
+                                 + process['launch_error'])
+            if process.get('command') != command or process.get('native_returncode') != result.returncode:
+                atomic_write_text(work / 'native.log', result.stdout + result.stderr)
+                raise ValueError('selected native EDA target/tool result mismatch; ' + str(work))
+            return result
+    context['tool_path'] = shutil.which(command[0])
+    context['command'] = command
+    result = _pr.run(command, capture_output=True, text=True)
+    context.update(native_returncode=result.returncode, transport_returncode=result.returncode)
+    return result
+
+
 def _native_driver_view(files, top, defines, parameters, include_dirs, output_dir):
     """Elaborate the selected closure once; never accept an old JSON as proof.
 
@@ -6647,14 +6736,17 @@ def _native_driver_view(files, top, defines, parameters, include_dirs, output_di
     before = hashes()
     context = {'top': top, 'files': [str(p) for p in files],
                'defines': list(defines), 'parameters': list(parameters),
-               'include_dirs': [str(p) for p in include_dirs], 'input_sha256': before}
+               'include_dirs': [str(p) for p in include_dirs], 'input_sha256': before,
+               'backend': 'not-launched', 'image': None,
+               'native_returncode': None, 'transport_returncode': None}
     def quote(value):
         return '"' + str(value).replace('\\', '\\\\').replace('"', '\\"') + '"'
     # -nosynthesis prevents Yosys from silently introducing a compile define
     # that the caller did not select. There is no guessed active branch.
     read = 'read_verilog -sv -nosynthesis ' + ' '.join(
         ['-D' + d for d in defines]
-        + ['-I' + quote(p) for p in include_dirs] + [quote(p) for p in files])
+        # Yosys consumes the -I suffix literally, including any quote marks.
+        + ['-I' + str(p) for p in include_dirs] + [quote(p) for p in files])
     commands = [read]
     for parameter in parameters:
         name, value = parameter.split('=', 1)
@@ -6665,8 +6757,10 @@ def _native_driver_view(files, top, defines, parameters, include_dirs, output_di
     script = work / 'elaborate.ys'
     atomic_write_text(script, ';\n'.join(commands) + '\n')
     try:
-        result = _pr.run(['yosys', '-Q', '-s', str(script)],
-                         capture_output=True, text=True)
+        if any(any(c.isspace() for c in str(p)) for p in include_dirs):
+            raise ValueError('native Yosys -Idir cannot represent an include directory '
+                             'containing whitespace; driver proof NOT_MEASURED')
+        result = _native_driver_run(script, work, include_dirs, context)
         atomic_write_text(work / 'native.log', result.stdout + result.stderr)
         if result.returncode != 0:
             raise ValueError(f'native Yosys elaboration failed (rc={result.returncode}); {work}')
@@ -6745,21 +6839,54 @@ def _resolve_native_driver_findings(findings, path, design):
             or not verdict(f)]
 
 
-def lint_file(path: Path, native_design=None) -> List[Finding]:
+def lint_file(path: Path, native_design=None, *, hierarchy=None) -> List[Finding]:
     raw = path.read_text(errors='replace')
     src = strip_comments(raw)
     results = []
     results += rule_input_port_reg(src, str(path))
     results += rule_output_port_reg_redeclared(src, str(path))
     results += rule_delayed_blocking_clock_toggle(src, str(path))
-    drivers = rule_undriven_and_unread(src, str(path))
-    results += (_resolve_native_driver_findings(drivers, path, native_design)
-                if native_design is not None else drivers)
+    if hierarchy is None:
+        drivers = rule_undriven_and_unread(src, str(path))
+        results += (_resolve_native_driver_findings(drivers, path, native_design)
+                    if native_design is not None else drivers)
+    else:
+        # The CLI's exact file selection is one hierarchy. Preserve module
+        # scope: a sibling's same-named driver never credits a local wire.
+        for region in hierarchy.by_file[str(path)]:
+            try:
+                body, driven, connections, problems = hierarchy.drivers(region.module.name)
+            except ValueError as exc:
+                results.append(Finding(str(path), region.module.line, 'ERROR',
+                                       'hierarchy-port-resolution', region.module.name, str(exc)))
+                continue
+            local_source = region.header + body + '\nendmodule'
+            local = rule_undriven_and_unread(local_source, str(path), connections, driven)
+            for finding in local:
+                finding.line += region.module.line - 1
+            results += local
+            for line, symbol, reason in problems:
+                results.append(Finding(str(path), line, 'ERROR',
+                                       'hierarchy-port-resolution', symbol, reason))
+            if region.module.discovery_issues:
+                results.append(Finding(str(path), region.module.line, 'ERROR',
+                                       'hierarchy-port-resolution', region.module.name,
+                                       '; '.join(region.module.discovery_issues)))
+            # Empty declarations remain explicit black-box/stub interfaces.
+            if not body.strip():
+                continue
+            for port in region.module.ports.values():
+                if port.direction == 'output' and port.name not in driven:
+                    results.append(Finding(str(path), port.line, 'ERROR',
+                                           'undriven-output-port', port.name,
+                                           f"output port '{port.name}' is not driven in "
+                                           f"module '{region.module.name}' selected configuration."))
     results += rule_case_coverage(src, str(path))
     results += rule_if_no_else_latch(src, str(path))
     results += rule_pulse_swallow(src, str(path))
     results += rule_uninit_registered_output(src, str(path))
-    results += rule_undriven_output_port(src, str(path))
+    if hierarchy is None:
+        results += rule_undriven_output_port(src, str(path))
     results += rule_incomplete_sensitivity(src, str(path))
     results += rule_vector_self_shift_fold(src, str(path))
     results += rule_reserved_word_identifier(src, str(path))
@@ -7509,13 +7636,30 @@ def main():
         except (OSError, ValueError) as exc:
             all_findings.append(Finding(str(args.files[0]), 1, 'ERROR',
                 'native-elaboration-unresolved', '', str(exc) + '; driver proof NOT_MEASURED'))
+    hierarchy = None
+    if not args.top:
+        # The structural hierarchy resolves the unconfigured source closure.
+        # Selected tops/defines/parameters keep the fresh native producer above;
+        # the helper has no external configuration input and cannot replace it.
+        try:
+            from rtl_hierarchy_drivers import DriverContext
+            hierarchy = DriverContext([Path(f) for f in args.files],
+                                      _procedural_statement_end, collect_lhs_set)
+        except (OSError, ValueError) as exc:
+            # Unsafe discovery is a visible rejection, never a clean empty list.
+            finding = Finding(str(args.files[0]), 1, 'ERROR',
+                              'hierarchy-port-resolution', '', str(exc))
+            if args.json:
+                atomic_write_text(Path(args.json), json.dumps([asdict(finding)], indent=2))
+            print(f"ERROR hierarchy-port-resolution: {exc}", file=sys.stderr)
+            return 1
     for f in args.files:
         p = Path(f)
         if not p.exists():
             print(f"WARNING: file not found: {f}", file=sys.stderr)
             continue
         try:
-            all_findings += lint_file(p, native_design)
+            all_findings += lint_file(p, native_design, hierarchy=hierarchy)
         except Exception as e:
             print(f"ERROR parsing {f}: {e}", file=sys.stderr)
             return 2

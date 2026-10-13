@@ -9,11 +9,14 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import json
+import os
 
 import pytest
 import json
 
-PROGRAMS = Path(__file__).resolve().parents[1]
+PROGRAMS = Path(os.environ.get(
+    "VIBEIC_HYGIENE_PROGRAMS_DIR", str(Path(__file__).resolve().parents[1])))
 sys.path.insert(0, str(PROGRAMS))
 import rtl_hygiene_lint as lint  # noqa: E402
 
@@ -172,6 +175,192 @@ def test_native_rejects_rtl_changed_before_consumer(tmp_path):
     findings = lint.lint_file(top, design)
     assert any(f.rule == 'native-elaboration-unresolved' and f.block_eligible for f in findings)
     assert any(f.rule == 'instance-driver-analysis-unresolved' for f in findings)
+
+
+@pytest.fixture
+def selected_native_target(tmp_path, monkeypatch):
+    """PROGRAM_FIXTURE transport edge; its Yosys subprocess is real.
+
+    Actual host-to-image CLI controls are separate evidence. This fixture does
+    not claim that its substituted Docker boundary executed an image.
+    """
+    import _eda_image
+    import librelane_contract
+    for key in ('VIBEIC_EDA_IMAGE', 'IIC_EDA_IMAGE',
+                librelane_contract.LOCAL_ATTESTATION_ENV):
+        monkeypatch.delenv(key, raising=False)
+    target = 'registry.invalid/neutral-tools@sha256:' + 'ac' * 32
+    monkeypatch.setattr(_eda_image, 'local_digest',
+                        lambda selected: ('sha256:' + 'ac' * 32, 'repo-digest', ''))
+    calls = []
+    def run(argv, **kw):
+        calls.append((argv, kw))
+        assert kw['supervised'] is True
+        assert argv[argv.index(target) + 1] == '--skip'
+        assert '-v' in argv and any(v.endswith(':ro') for v in argv)
+        # Execute the producer's own image command in this test's EDA image.
+        child = subprocess.run(argv[argv.index('--skip') + 1:],
+                               capture_output=True, text=True, timeout=20)
+        return subprocess.CompletedProcess(argv, child.returncode, child.stdout, child.stderr)
+    monkeypatch.setattr(librelane_contract, 'run_container', run)
+    return target, calls
+
+
+def _selected_native_main(tmp_path, monkeypatch, source=NATIVE_TOP):
+    leaf, top = tmp_path / 'leaf.v', tmp_path / 'top.v'
+    leaf.write_text(NATIVE_LEAF)
+    top.write_text(source)
+    report = tmp_path / 'findings.json'
+    monkeypatch.setattr(sys, 'argv', [str(PROGRAMS / 'rtl_hygiene_lint.py'),
+        str(leaf), str(top), '--top', 'top', '--parameter', 'ENABLE=1',
+        '--severity', 'ERROR', '--json', str(report)])
+    rc = lint.main()
+    context = json.loads(sorted(tmp_path.glob('native-elaboration-*/context.json'))[-1].read_text())
+    return rc, json.loads(report.read_text()), context
+
+
+@pytest.mark.parametrize('image_env', ['VIBEIC_EDA_IMAGE', 'IIC_EDA_IMAGE'])
+def test_native_selected_image_runs_without_host_yosys(tmp_path, monkeypatch,
+                                                      selected_native_target, image_env):
+    target, calls = selected_native_target
+    monkeypatch.setenv(image_env, target)
+    def absent_host(*args, **kw):
+        raise FileNotFoundError('neutral host has no Yosys')
+    monkeypatch.setattr(lint._pr, 'run', absent_host)
+    rc, findings, context = _selected_native_main(tmp_path, monkeypatch)
+    assert rc == 0, context
+    assert findings == [] and len(calls) == 1
+    assert context['backend'] == 'docker' and context['image'] == target
+    assert context['native_returncode'] == context['transport_returncode'] == 0
+    assert context['native_process']['tool_path'] == shutil.which('yosys')
+    assert context['native_process']['command'][:3] == ['yosys', '-Q', '-s']
+    assert context['parameters'] == ['ENABLE=1'] and context['status'] == 'MEASURED'
+
+
+@pytest.mark.parametrize('rejection', ['unavailable', 'missing_receipt', 'missing_tool', 'wrong_rc'])
+def test_native_selected_target_failure_never_uses_available_host(tmp_path, monkeypatch,
+                                                                selected_native_target, rejection):
+    import _eda_image
+    import librelane_contract
+    target, calls = selected_native_target
+    monkeypatch.setenv('VIBEIC_EDA_IMAGE', target)
+    if rejection == 'unavailable':
+        monkeypatch.setattr(_eda_image, 'local_digest',
+                            lambda selected: (None, '', 'neutral target missing'))
+    else:
+        def broken(argv, **kw):
+            calls.append((argv, kw))
+            if rejection in ('wrong_rc', 'missing_tool'):
+                at = argv.index('--skip')
+                receipt, command = Path(argv[at + 4]), argv[at + 5:]
+                record = {'command': command, 'native_returncode': 1}
+                if rejection == 'missing_tool':
+                    record.update(native_returncode=None, launch_error='neutral image has no Yosys')
+                receipt.write_text(json.dumps(record))
+            return subprocess.CompletedProcess(argv, 127 if rejection == 'missing_tool' else 0, '', '')
+        monkeypatch.setattr(librelane_contract, 'run_container', broken)
+    rc, findings, context = _selected_native_main(tmp_path, monkeypatch)
+    assert rc == 1, context
+    assert context['status'] == 'NOT_MEASURED'
+    assert any(f['rule'] == 'native-elaboration-unresolved' for f in findings)
+    assert len(calls) == (0 if rejection == 'unavailable' else 1)
+    if rejection == 'missing_tool':
+        assert context['native_returncode'] is None and context['transport_returncode'] == 127
+
+
+@pytest.mark.parametrize('source', [
+    NATIVE_TOP.replace('leaf u_leaf', 'unknown u_leaf'),
+    NATIVE_TOP.replace('.y(routed)', '.y()'),
+    NATIVE_TOP.replace('leaf u_leaf(.a(source), .y(routed));', 'wire unused;'),
+], ids=['unknown-child', 'missing-connection', 'undriven-wire'])
+def test_native_selected_image_keeps_driver_negatives(tmp_path, monkeypatch,
+                                                     selected_native_target, source):
+    target, calls = selected_native_target
+    monkeypatch.setenv('VIBEIC_EDA_IMAGE', target)
+    rc, findings, context = _selected_native_main(tmp_path, monkeypatch, source)
+    assert rc == 1 and len(calls) == 1
+    assert context['native_returncode'] == context['transport_returncode'] == 1
+    assert context['status'] == 'NOT_MEASURED'
+    assert any(f['rule'] == 'native-elaboration-unresolved' for f in findings)
+    assert any(f['symbol'] == 'routed' and f['block_eligible'] for f in findings)
+
+
+@pytest.mark.parametrize('matches', [True, False])
+def test_native_selected_in_image_uses_existing_attestation(tmp_path, monkeypatch,
+                                                          selected_native_target, matches):
+    import librelane_contract
+    target, calls = selected_native_target
+    monkeypatch.setenv('VIBEIC_EDA_IMAGE', target)
+    monkeypatch.setenv(librelane_contract.LOCAL_ATTESTATION_ENV, '/neutral/launch_identity.json')
+    def attest(selected):
+        assert selected == target
+        if not matches:
+            raise librelane_contract.Refusal('LL_LOCAL_IMAGE_UNATTESTED', 'neutral image mismatch')
+        return {'image': selected, 'image_id': 'sha256:' + 'ad' * 32}
+    monkeypatch.setattr(librelane_contract, 'local_image_attestation', attest)
+    rc, findings, context = _selected_native_main(tmp_path, monkeypatch)
+    assert rc == (0 if matches else 1), context
+    assert calls == []
+    assert context.get('backend') == 'in-image'
+    assert context['status'] == ('MEASURED' if matches else 'NOT_MEASURED')
+    if matches:
+        assert context['native_returncode'] == context['transport_returncode'] == 0
+        assert findings == []
+    else:
+        assert context['native_returncode'] is None
+        assert any(f['rule'] == 'native-elaboration-unresolved' for f in findings)
+
+
+def test_native_relative_include_is_read_and_bound_to_current_source(tmp_path):
+    include_dir = tmp_path / 'includes'
+    include_dir.mkdir()
+    header = include_dir / 'neutral.svh'
+    header.write_text('`define INCLUDED_DRIVER leaf u_leaf(.a(source), .y(routed));\n')
+    source = NATIVE_TOP.replace('wire routed;', '`include "neutral.svh"\nwire routed;')
+    source = source.replace('leaf u_leaf(.a(source), .y(routed));', '`INCLUDED_DRIVER')
+    args = ['--parameter', 'ENABLE=1', '--include-dir', str(include_dir)]
+    good, findings = _native_lint_cli(tmp_path, source, args)
+    assert good.returncode == 0, good.stdout + good.stderr
+    assert findings == []
+    context_path, = tmp_path.glob('native-elaboration-*/context.json')
+    context = json.loads(context_path.read_text())
+    import hashlib
+    assert context['input_sha256'][str(header)] == hashlib.sha256(header.read_bytes()).hexdigest()
+    old = {p: p.read_bytes() for p in context_path.parent.iterdir()}
+    header.write_text('`define INCLUDED_DRIVER leaf u_leaf(.a(source), .y());\n')
+    bad, findings = _native_lint_cli(tmp_path, source, args)
+    assert bad.returncode == 1
+    assert any(f['rule'] == 'native-elaboration-unresolved' for f in findings)
+    current, = [p for p in tmp_path.glob('native-elaboration-*/context.json') if p != context_path]
+    record = json.loads(current.read_text())
+    assert record['input_sha256'][str(header)] == hashlib.sha256(header.read_bytes()).hexdigest()
+    assert record['status'] == 'NOT_MEASURED'
+    assert all(p.read_bytes() == value for p, value in old.items())
+
+
+def test_native_missing_relative_include_is_not_a_clean_driver_result(tmp_path):
+    include_dir = tmp_path / 'includes'
+    include_dir.mkdir()
+    source = NATIVE_TOP.replace('wire routed;', '`include "neutral.svh"\nwire routed;')
+    result, findings = _native_lint_cli(tmp_path, source,
+                                      ['--parameter', 'ENABLE=1', '--include-dir', str(include_dir)])
+    assert result.returncode == 1
+    assert any(f['rule'] == 'native-elaboration-unresolved' for f in findings)
+    context = json.loads(next(tmp_path.glob('native-elaboration-*/context.json')).read_text())
+    assert context['status'] == 'NOT_MEASURED'
+
+
+def test_native_include_directory_with_whitespace_is_explicitly_unmeasured(tmp_path):
+    include_dir = tmp_path / 'with space'
+    include_dir.mkdir()
+    (include_dir / 'neutral.svh').write_text('`define NEUTRAL_INCLUDE 1\n')
+    result, findings = _native_lint_cli(tmp_path,
+        extra=['--parameter', 'ENABLE=1', '--include-dir', str(include_dir)])
+    assert result.returncode == 1
+    assert any(f['rule'] == 'native-elaboration-unresolved' for f in findings)
+    context = json.loads(next(tmp_path.glob('native-elaboration-*/context.json')).read_text())
+    assert context['status'] == 'NOT_MEASURED' and 'whitespace' in context['reason']
+    assert context['native_returncode'] is None and context['transport_returncode'] is None
 
 
 def _undriven(source: str):
@@ -446,10 +635,19 @@ endmodule
     report=tmp_path/'hygiene.json'
     cli=subprocess.run([sys.executable,str(PROGRAMS/'rtl_hygiene_lint.py'),str(fp),'--severity','ERROR','--json',str(report)],capture_output=True,text=True)
     assert cli.returncode==1
-    assert any(f['rule']=='instance-driver-analysis-unresolved' and f['symbol']=='routed'
-               for f in json.loads(report.read_text()))
+    actual=json.loads(report.read_text())
+    assert [(f['rule'],f['symbol'],f['severity']) for f in actual] == [
+        ('undriven-wire','routed','ERROR')]
+    assert actual[0]['block_eligible']
+    from rtl_hierarchy_drivers import DriverContext
+    context=DriverContext([fp],lint._procedural_statement_end,lint.collect_lhs_set)
+    body,drivers,connections,problems=context.drivers('top')
+    assert problems==[]
+    assert 'routed' not in drivers and 'routed' not in connections
+    assert not lint._module_ports.parse_instantiations(body,'top',1)
+    assert '.data_o(routed)' in source
     consumed=A._load_hygiene_findings(report,cli.returncode,cli.stderr)
-    assert any(f.rule_id=='instance-driver-analysis-unresolved' and "'routed'" in f.message
+    assert any(f.rule_id=='undriven-wire' and "'routed'" in f.message
                and f.severity=='ERROR' and f.category=='correctness_smells' for f in consumed)
 
 
@@ -480,3 +678,565 @@ endmodule
     assert f.severity=='ERROR' and f.block_eligible
     assert 'routed' not in lint.collect_instance_connections(source)
     assert fp.read_text()==source
+
+
+def _native_hierarchy(tmp_path, sources):
+    paths = []
+    for number, source in enumerate(sources):
+        path = tmp_path / f"unit_{number}.sv"
+        path.write_text(source)
+        paths.append(path)
+    report = tmp_path / "findings.json"
+    result = subprocess.run(
+        [sys.executable, str(PROGRAMS / "rtl_hygiene_lint.py"),
+         *map(str, paths), "--strict", "--severity", "ERROR", "--json", str(report)],
+        capture_output=True, text=True)
+    findings = json.loads(report.read_text()) if report.exists() else []
+    return result, findings
+
+
+LEAF = """
+module leaf(input data_i, output data_o);
+    assign data_o = data_i;
+endmodule
+"""
+
+
+@pytest.mark.parametrize("style", ["named", "positional", "implicit", "wildcard"])
+def test_native_cross_file_child_after_generate_is_a_driver(tmp_path, style):
+    connection = {
+        "named": ".data_i(source), .data_o(routed)",
+        "positional": "source, routed",
+        "implicit": ".data_i, .data_o",
+        "wildcard": ".*",
+    }[style]
+    signal = "data_o" if style in {"implicit", "wildcard"} else "routed"
+    source = f"""
+module top(input source, input data_i, output result);
+    wire {signal};
+    generate if (0) begin : unused
+        assign result = source;
+    end endgenerate
+    leaf u_leaf({connection});
+    assign result = {signal};
+endmodule
+"""
+    result, findings = _native_hierarchy(tmp_path, [source, LEAF])
+    assert (result.returncode, findings) == (0, []), result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("connection,expected", [
+    ("leaf u_leaf(.data_i(routed), .data_o(result));", [("undriven-wire", "routed")]),
+    ("leaf u_leaf(routed, result);", [("undriven-wire", "routed")]),
+    ("absent u_leaf(.data_i(source), .data_o(routed));",
+     [("undriven-wire", "routed"), ("hierarchy-port-resolution", "u_leaf")]),
+    ("leaf u_leaf(.data_i(source), .wrong(routed));",
+     [("undriven-wire", "routed"), ("hierarchy-port-resolution", "u_leaf")]),
+    ("leaf u_leaf(.data_i(source), .data_o(routed), .wrong(result));",
+     [("hierarchy-port-resolution", "u_leaf")]),
+    ("leaf u_leaf(.data_o(routed), .data_o(result));",
+     [("undriven-wire", "routed"), ("hierarchy-port-resolution", "u_leaf")]),
+    ("leaf u_leaf(source, routed, result);",
+     [("undriven-wire", "routed"), ("hierarchy-port-resolution", "u_leaf")]),
+    ("leaf u_leaf(.data_i(source), .data_o(source & routed));",
+     [("undriven-wire", "routed"), ("hierarchy-port-resolution", "u_leaf")]),
+])
+def test_native_invalid_bindings_and_input_actuals_still_block(tmp_path, connection, expected):
+    source = """
+module top(input source, output result);
+    wire routed;
+    %s
+    assign result = routed;
+endmodule
+""" % connection
+    result, findings = _native_hierarchy(tmp_path, [source, LEAF])
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert [(f["rule"], f["symbol"]) for f in findings] == expected
+    assert all(f["severity"] == "ERROR" and f["block_eligible"] for f in findings)
+    import rtl_review_aggregate as A
+    consumed = A._load_hygiene_findings(tmp_path / "findings.json", result.returncode, result.stderr)
+    assert [(f.rule_id, f.severity, f.category) for f in consumed] == [
+        (rule, "ERROR", "correctness_smells") for rule, symbol in expected]
+
+
+def test_native_width_mismatch_does_not_credit_an_output(tmp_path):
+    source = """
+module top(input source, output [3:0] result);
+    wire [3:0] routed;
+    leaf u_leaf(.data_i(source), .data_o(routed));
+    assign result = routed;
+endmodule
+"""
+    result, findings = _native_hierarchy(tmp_path, [source, LEAF])
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert any("output width mismatch" in f["message"] for f in findings), findings
+
+
+@pytest.mark.parametrize("enabled", [0, 1])
+def test_native_conditional_driver_tracks_selected_parameter(tmp_path, enabled):
+    source = f"""
+module top #(parameter ENABLE = {enabled}) (input source, output result);
+    wire routed;
+    generate if (ENABLE) begin : enabled
+        leaf u_leaf(.data_i(source), .data_o(routed));
+    end endgenerate
+    assign result = routed;
+endmodule
+"""
+    result, findings = _native_hierarchy(tmp_path, [source, LEAF])
+    assert result.returncode == (0 if enabled else 1), result.stdout + result.stderr
+    assert [f["symbol"] for f in findings if f["rule"] == "undriven-wire"] == (
+        [] if enabled else ["routed"])
+
+
+def test_native_child_override_cannot_credit_an_inactive_driver(tmp_path):
+    child = """
+module leaf #(parameter ENABLE = 1) (input data_i, output data_o);
+    generate if (ENABLE) begin : enabled
+        assign data_o = data_i;
+    end endgenerate
+endmodule
+"""
+    source = """
+module top(input source, output result);
+    wire routed;
+    leaf #(.ENABLE(0)) u_leaf(.data_i(source), .data_o(routed));
+    assign result = routed;
+endmodule
+"""
+    result, findings = _native_hierarchy(tmp_path, [source, child])
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert any("not driven in selected configuration" in f["message"] for f in findings), findings
+
+
+def test_native_inactive_unknown_child_is_absent(tmp_path):
+    source = """
+module top #(parameter ENABLE = 0) (input source, output result);
+    generate if (ENABLE) begin : enabled
+        absent u_leaf(.data_o(result));
+    end else begin : disabled
+        assign result = source;
+    end endgenerate
+endmodule
+"""
+    result, findings = _native_hierarchy(tmp_path, [source])
+    assert (result.returncode, findings) == (0, []), result.stdout + result.stderr
+
+
+def test_native_unresolved_generate_condition_is_rejected(tmp_path):
+    source = """
+module top #(parameter ENABLE = unknown_fn(1)) (input source, output result);
+    generate if (ENABLE) begin : enabled
+        assign result = source;
+    end endgenerate
+endmodule
+"""
+    result, findings = _native_hierarchy(tmp_path, [source])
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert [(f["rule"], f["symbol"], f["severity"]) for f in findings] == [
+        ("hierarchy-port-resolution", "top", "ERROR")]
+    assert "unresolved generate condition" in findings[0]["message"]
+
+
+def test_native_same_named_sibling_wire_still_has_no_driver(tmp_path):
+    source = """
+module first(input source, output result);
+    wire routed;
+    assign routed = source;
+    assign result = routed;
+endmodule
+module second(input source, output result);
+    wire routed;
+    assign result = routed;
+endmodule
+"""
+    result, findings = _native_hierarchy(tmp_path, [source])
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert [f["symbol"] for f in findings if f["rule"] == "undriven-wire"] == ["routed"]
+
+
+def test_native_sensitivity_wildcard_is_not_an_attribute(tmp_path):
+    source = """
+module leaf(input data_i, output reg data_o);
+    always @ (*) data_o = data_i;
+endmodule
+module top(input source, output result);
+    leaf u_leaf(.data_i(source), .data_o(result));
+endmodule
+"""
+    result, findings = _native_hierarchy(tmp_path, [source])
+    assert (result.returncode, findings) == (0, []), result.stdout + result.stderr
+
+
+def test_native_initialized_output_is_in_the_formal_port_census(tmp_path):
+    source = """
+module leaf(output reg data_o = 1'b0);
+    initial data_o = 1'b0;
+endmodule
+module top(output result);
+    leaf u_leaf(.data_o(result));
+endmodule
+"""
+    result, findings = _native_hierarchy(tmp_path, [source])
+    assert (result.returncode, findings) == (0, []), result.stdout + result.stderr
+
+
+def test_native_default_preprocessor_selection_removes_inactive_ports(tmp_path):
+    source = """
+module top(input source, output result
+`ifdef EXTRA
+    , output optional_result
+`endif
+);
+    assign result = source;
+endmodule
+"""
+    result, findings = _native_hierarchy(tmp_path, [source])
+    assert (result.returncode, findings) == (0, []), result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("declaration,override", [
+    ("parameter [0:0] ENABLE = 2", ""),
+    ("parameter [0:0] ENABLE = 1", "#(.ENABLE(2))"),
+])
+def test_native_parameter_width_truncation_selects_the_inactive_driver(tmp_path, declaration, override):
+    child = f"""
+module leaf #({declaration}) (input data_i, output data_o);
+    generate if (ENABLE) begin : enabled
+        assign data_o = data_i;
+    end endgenerate
+endmodule
+"""
+    source = f"""
+module top(input source, output result);
+    wire routed;
+    leaf {override} u_leaf(.data_i(source), .data_o(routed));
+    assign result = routed;
+endmodule
+"""
+    result, findings = _native_hierarchy(tmp_path, [source, child])
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert any("not driven in selected configuration" in f["message"] for f in findings), findings
+
+
+@pytest.mark.parametrize("complete", [False, True])
+def test_native_partial_child_output_only_credits_covered_bits(tmp_path, complete):
+    source = """
+module top(input source, output [1:0] result);
+    wire [1:0] routed;
+    leaf u_low(.data_i(source), .data_o(routed[0]));
+    %s
+    assign result = routed;
+endmodule
+""" % ("leaf u_high(.data_i(source), .data_o(routed[1]));" if complete else "")
+    result, findings = _native_hierarchy(tmp_path, [source, LEAF])
+    assert result.returncode == (0 if complete else 1), result.stdout + result.stderr
+    assert [f["symbol"] for f in findings if f["rule"] == "undriven-wire"] == (
+        [] if complete else ["routed"])
+
+
+@pytest.mark.parametrize("enabled", [0, 1])
+@pytest.mark.parametrize("statement", [
+    "assign routed = source;",
+    "leaf u_leaf(.data_i(source), .data_o(routed));",
+])
+def test_native_implicit_generate_tracks_selected_driver(tmp_path, enabled, statement):
+    source = f"""
+module top #(parameter ENABLE = {enabled})(input source, output result);
+    wire routed;
+    if (ENABLE) {statement}
+    assign result = routed;
+endmodule
+"""
+    result, findings = _native_hierarchy(tmp_path, [source, LEAF])
+    assert result.returncode == (0 if enabled else 1), result.stdout + result.stderr
+    assert [(f["rule"], f["symbol"], f["severity"]) for f in findings] == (
+        [] if enabled else [("undriven-wire", "routed", "ERROR")])
+
+
+def test_native_unknown_output_width_is_rejected(tmp_path):
+    source = """
+module top(input source, output [1:0] result);
+    wire [1:0] routed;
+    leaf u_leaf(.data_i(source), .data_o(routed));
+    assign result = routed;
+endmodule
+"""
+    child = """
+module leaf(input data_i, output [opaque(1):0] data_o);
+    assign data_o = {data_i, data_i};
+endmodule
+"""
+    result, findings = _native_hierarchy(tmp_path, [source, child])
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert [(f["rule"], f["symbol"], f["severity"]) for f in findings] == [
+        ("undriven-wire", "routed", "ERROR"),
+        ("hierarchy-port-resolution", "u_leaf", "ERROR")]
+    assert "unresolved output width: data_o" in findings[1]["message"]
+
+
+def test_native_unsupported_instance_array_discovery_is_rejected(tmp_path):
+    source = """
+module top(input source, output result);
+    leaf u_leaf[1:0](.data_i(source), .data_o());
+    assign result = source;
+endmodule
+"""
+    result, findings = _native_hierarchy(tmp_path, [source, LEAF])
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert [(f["rule"], f["symbol"], f["severity"]) for f in findings] == [
+        ("hierarchy-port-resolution", "u_leaf", "ERROR")]
+    assert "unsupported instance array" in findings[0]["message"]
+
+
+@pytest.mark.parametrize("declarations,condition", [
+    ("parameter ENABLE=8'hff+8'h1", "ENABLE"),
+    ("parameter A=2, B=1", "!A == B"),
+    ("parameter A=1'sb1, B=1'b0", "A < B"),
+    ("parameter [7:0] A=8'hff", "A+1'b1"),
+    ("parameter A=8'hff", "A+1'b1"),
+    ("parameter [7:0] A=0, B=255", "B+1'b1"),
+    ('parameter A="AA"', 'A < "B"'),
+    ("parameter A=1", "A[64] == 0"),
+    ("parameter A=8'hff", "A[0] > -1"),
+    ("parameter A=1", "(A == A) > -1"),
+    ("parameter A=0, B=!A", "B > -1"),
+    ("parameter A=1, B=|A", "B > -1"),
+    ("parameter A=1, B=(A && A)", "B > -1"),
+    ("parameter A=1", "'0 > -1"),
+])
+def test_native_unsafe_constant_semantics_never_credit_a_driver(tmp_path, declarations, condition):
+    source = f"""
+module top #({declarations})(input source, output result);
+    wire routed;
+    generate if ({condition}) begin: selected
+        leaf u_leaf(.data_i(source), .data_o(routed));
+    end endgenerate
+    assign result = routed;
+endmodule
+"""
+    result, findings = _native_hierarchy(tmp_path, [source, LEAF])
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert [(f["rule"], f["symbol"], f["severity"]) for f in findings] == [
+        ("hierarchy-port-resolution", "top", "ERROR")]
+    assert findings[0]["block_eligible"]
+    assert "unresolved generate condition" in findings[0]["message"]
+
+
+@pytest.mark.parametrize("declarations,condition", [
+    ("parameter integer A=2, B=1", "A > B"),
+    ("parameter [0:0] A=1'b0", "A*4 == 0"),
+])
+def test_native_bounded_integer_and_vector_arithmetic_remains_resolved(tmp_path, declarations, condition):
+    source = f"""
+module top #({declarations})(input source, output result);
+    wire routed;
+    generate if ({condition}) begin: selected
+        leaf u_leaf(.data_i(source), .data_o(routed));
+    end endgenerate
+    assign result = routed;
+endmodule
+"""
+    result, findings = _native_hierarchy(tmp_path, [source, LEAF])
+    assert (result.returncode, findings) == (0, []), result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("datatype,value,condition,expected_rc", [
+    ("bit", "1", "ENABLE", 0),
+    ("bit", "0", "ENABLE", 1),
+    ("bit", "2", "ENABLE", 1),
+    ("logic", "2", "ENABLE", 1),
+    ("byte", "256", "ENABLE", 1),
+    ("byte", "255", "ENABLE >= 0", 1),
+    ("logic", "1", "ENABLE", 0),
+    ("reg", "1", "ENABLE", 0),
+    ("reg", "2", "ENABLE", 1),
+    ("bit signed", "1", "ENABLE", 0),
+    ("byte", "255", "ENABLE", 0),
+    ("byte unsigned", "255", "ENABLE", 0),
+    ("shortint", "1", "ENABLE", 0),
+    ("shortint", "65536", "ENABLE", 1),
+    ("longint", "1", "ENABLE", 0),
+    ("longint", "18446744073709551616", "ENABLE", 1),
+    ("time", "1", "ENABLE", 0),
+    ("time", "18446744073709551616", "ENABLE", 1),
+    ("logic [3:0]", "16", "ENABLE", 1),
+    ("logic [1:0][1:0]", "16", "ENABLE", 1),
+], ids=["bit1", "bit0", "bit2", "logic2", "byte256", "signedbyte255",
+        "logic1", "reg1", "reg2", "signedbit1", "signedbyte255_truth",
+        "unsignedbyte255", "shortint1", "shortint65536", "longint1",
+        "longint_overflow", "time1", "time_overflow", "logic_vector16",
+        "logic_multidimension16"])
+def test_native_typed_parameter_child_driver_matches_yosys(
+        tmp_path, datatype, value, condition, expected_rc):
+    """The same child source must not gain credit from untruncated Python ints."""
+    source = f"""
+module leaf #(parameter {datatype} ENABLE={value})(input source, output result);
+    generate if ({condition}) begin: selected
+        assign result = source;
+    end endgenerate
+endmodule
+module top(input source, output result);
+    leaf u_leaf(.source(source), .result(result));
+endmodule
+"""
+    _check_typed_driver_source(tmp_path, source, expected_rc)
+
+
+def _check_typed_driver_source(tmp_path, source, expected_rc):
+    assert shutil.which("yosys"), "typed-driver qualification requires native Yosys"
+    result, findings = _native_hierarchy(tmp_path, [source])
+    path = tmp_path / "unit_0.sv"
+    native = subprocess.run(
+        ["yosys", "-Q", "-T", "-p",
+         # The built-in SystemVerilog frontend also parses time and packed
+         # multidimensional parameters; read_verilog rejects those declarations.
+         f"read_slang {path} --top top; hierarchy -check -top top; proc; flatten; check -assert"],
+        capture_output=True, text=True)
+    (tmp_path / "native-yosys.stdout").write_text(native.stdout)
+    (tmp_path / "native-yosys.stderr").write_text(native.stderr)
+    (tmp_path / "process-results.json").write_text(json.dumps({
+        "native_yosys_process_rc": native.returncode,
+        "hygiene_process_rc": result.returncode,
+        "findings": findings,
+    }, indent=2))
+    assert native.returncode == expected_rc, native.stdout + native.stderr
+    if expected_rc:
+        assert "used but has no driver" in native.stdout
+        assert result.returncode == 1, result.stdout + result.stderr
+        assert any(f["severity"] == "ERROR" and f["block_eligible"] for f in findings)
+    else:
+        assert (result.returncode, findings) == (0, []), result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("declaration,body,condition", [
+    ("parameter bit FIRST=1, ENABLE=2", "", "ENABLE"),
+    ("parameter byte FIRST=1, ENABLE=256", "", "ENABLE"),
+    ("parameter FIRST=1", "localparam logic ENABLE=2;", "ENABLE"),
+    ("parameter unsigned ENABLE=-1", "", "ENABLE < 0"),
+], ids=["inherited_bit", "inherited_byte", "body_localparam", "implicit_unsigned"])
+def test_native_typed_parameter_declaration_context_stays_blocking(
+        tmp_path, declaration, body, condition):
+    source = f"""
+module leaf #({declaration})(input source, output result);
+    {body}
+    generate if ({condition}) begin: selected
+        assign result = source;
+    end endgenerate
+endmodule
+module top(input source, output result);
+    leaf u_leaf(.source(source), .result(result));
+endmodule
+"""
+    _check_typed_driver_source(tmp_path, source, 1)
+
+
+@pytest.mark.parametrize("datatype,value,condition", [
+    ("bit", "2", "ENABLE"),
+    ("logic", "2", "ENABLE"),
+    ("byte", "256", "ENABLE"),
+    ("byte", "255", "ENABLE >= 0"),
+], ids=["bit2", "logic2", "byte256", "signedbyte255"])
+def test_native_typed_child_override_is_converted_before_driver_credit(
+        tmp_path, datatype, value, condition):
+    source = f"""
+module leaf #(parameter {datatype} ENABLE=1)(input source, output result);
+    generate if ({condition}) begin: selected
+        assign result = source;
+    end endgenerate
+endmodule
+module top(input source, output result);
+    leaf #(.ENABLE({value})) u_leaf(.source(source), .result(result));
+endmodule
+"""
+    _check_typed_driver_source(tmp_path, source, 1)
+
+
+@pytest.mark.parametrize("declaration", [
+    "parameter unresolved_t ENABLE=2",
+    "parameter real ENABLE=2",
+    "parameter bit signed unsigned ENABLE=2",
+    "parameter byte [1:0] ENABLE=2",
+])
+def test_native_unsupported_parameter_type_never_uses_python_integer_credit(
+        tmp_path, declaration):
+    source = f"""
+module top #({declaration})(input source, output result);
+    generate if (ENABLE) begin: selected
+        assign result = source;
+    end endgenerate
+endmodule
+"""
+    result, findings = _native_hierarchy(tmp_path, [source])
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert any(f["rule"] == "hierarchy-port-resolution" and
+               f["severity"] == "ERROR" and f["block_eligible"] for f in findings)
+
+
+def _machine_grammar_context(tmp_path, source):
+    from rtl_hierarchy_drivers import DriverContext
+    path = tmp_path / 'grammar.sv'
+    path.write_text(source)
+    return DriverContext([path], lint._procedural_statement_end, lint.collect_lhs_set)
+
+
+@pytest.mark.parametrize('body,expected', [
+    ('leaf u_leaf(.a(source), .y(routed));', True),
+    ('generate if (!ENABLE) begin: disabled '
+     'leaf u_leaf(.a(source), .y(routed)); end endgenerate', False),
+    ('// Do not credit leaf u_leaf(.a(source), .y(routed));\n'
+     '/* assign routed = source; is denied commentary, not RTL. */', False),
+])
+def test_hierarchy_machine_grammar_driver_credit(tmp_path, body, expected):
+    source = ('module leaf(input a, output y); assign y=a; endmodule\n'
+              'module top #(parameter ENABLE=1)(input source, output result);\n'
+              'wire routed;\n' + body + '\nassign result=routed; endmodule\n')
+    context = _machine_grammar_context(tmp_path, source)
+    _body, driven, connections, problems = context.drivers('top')
+    assert problems == []
+    assert ('routed' in driven) == expected
+    assert connections == ({'routed': 'y'} if expected else {})
+    assert ('u_leaf' in _body) == expected
+
+
+@pytest.mark.parametrize('source,stage,reason', [
+    ('The output is driven by leaf u_leaf(.a(source), .y(routed));\n'
+     'parameter ENABLE=1; assign routed=source;\n', 'discovery', 'no safely parsed module'),
+    ('Do not drive routed: leaf u_leaf(.a(source), .y(routed));\n'
+     'Do not use parameter ENABLE=1 or assign routed=source;\n',
+     'discovery', 'no safely parsed module'),
+    ('module top #(parameter ENABLE=unknown_fn(1))(input source, output result);\n'
+     'generate if (ENABLE) begin: unresolved assign result=source; '
+     'end endgenerate endmodule\n', 'selection', 'unresolved generate condition'),
+])
+def test_hierarchy_machine_grammar_refuses_prose_and_unknown(tmp_path, source, stage, reason):
+    with pytest.raises(ValueError, match=reason):
+        context = _machine_grammar_context(tmp_path, source)
+        assert stage == 'selection'
+        context.drivers('top')
+
+
+@pytest.mark.parametrize('value', [0, 1])
+def test_hierarchy_machine_grammar_parameter_declarations(tmp_path, value):
+    from rtl_hierarchy_drivers import resolve_parameters
+    source = f'''module leaf(input a, output y); assign y=a; endmodule
+module top #(parameter ENABLE={value})(input source, output result);
+wire routed;
+// Do not infer localparam SELECT=1; or parameter GHOST=1;
+/* parameter ENABLE=1; localparam GHOST=1; are prose examples. */
+localparam SELECT=ENABLE;
+generate if (SELECT) begin: selected
+leaf u_leaf(.a(source), .y(routed));
+end endgenerate
+assign result=routed;
+endmodule
+'''
+    context = _machine_grammar_context(tmp_path, source)
+    expressions = context.regions['top'].expressions
+    assert expressions == {'ENABLE': (str(value), '', False),
+                           'SELECT': ('ENABLE', '', False)}
+    assert resolve_parameters(expressions) == {'ENABLE': value, 'SELECT': value}
+    _body, driven, connections, problems = context.drivers('top')
+    assert problems == []
+    assert ('routed' in driven) == bool(value)
+    assert connections == ({'routed': 'y'} if value else {})
