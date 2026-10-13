@@ -157,7 +157,7 @@ def _fake_opensta(calls: list, fail_corners=()):
         _write(rpt,
                "Startpoint: reg_a (rising edge-triggered flip-flop)\n"
                "Endpoint: reg_b (rising edge-triggered flip-flop)\n"
-               "  0.42   slack (MET)\n"
+               f"  {dict(SS=0.42, TT=0.52, FF=0.62)[corner]}   slack (MET)\n"
                "tns 0.00\n"
                "wns 0.00\n"
                f"STA_BASIS: {m.group(1)}\n"
@@ -217,6 +217,11 @@ def test_failed_corner_reemit_cannot_supply_the_pre_layout_body(tmp_path,
         per_corner_bodies={"sta_SS.rpt": _STALE_POST_ROUTE,
                            "sta_TT.rpt": _STALE_POST_ROUTE},
         pre_pnr_body=_PRE_LAYOUT_HEADER + _STALE_POST_ROUTE)
+    # Keep a second genuinely distinct pre-layout corner available while SS
+    # fails. The new summary consumer must still measure two legal corners.
+    _write(proj / "input/pdk/liberty/x__ff.lib", "library(ff){}")
+    _write(R._pl.sta_dir(proj) / R.STEP10_CORNER_DIR / "sta_FF.rpt",
+           _healthy_body("STA_BASIS: PRE_LAYOUT_ESTIMATE", slack=0.62))
     _hermetic(monkeypatch, calls, fail_corners=("SS",))
 
     res = _run_step(proj)
@@ -332,9 +337,10 @@ def test_undeclared_pre_pnr_is_reported_not_deleted(tmp_path, monkeypatch):
 # REVERSE cases — these must STILL pass
 # ---------------------------------------------------------------------------
 
-def _healthy_body(stamp_line: str) -> str:
+def _healthy_body(stamp_line: str, *, slack=0.42) -> str:
     return ("Startpoint: reg_a (rising edge-triggered flip-flop)\n"
-            "  0.42   slack (MET)\n"
+            "Endpoint: reg_b (rising edge-triggered flip-flop)\n"
+            f"  {slack}   slack (MET)\n"
             "tns 0.00\n"
             f"{stamp_line}\n"
             "STA_BASIS_NOTE: pre-layout basis FORCED (Step 10)\n")
@@ -351,10 +357,11 @@ def test_reverse_healthy_pre_layout_rerun_is_left_byte_identical(tmp_path,
     """
     calls: list = []
     body = _healthy_body("STA_BASIS: PRE_LAYOUT_ESTIMATE")
+    tt_body = _healthy_body("STA_BASIS: PRE_LAYOUT_ESTIMATE", slack=0.52)
     pre = _PRE_LAYOUT_HEADER + body
     proj = _rerun_project(
         tmp_path,
-        per_corner_bodies={"sta_SS.rpt": body, "sta_TT.rpt": body},
+        per_corner_bodies={"sta_SS.rpt": body, "sta_TT.rpt": tt_body},
         pre_pnr_body=pre)
     _hermetic(monkeypatch, calls)
 
@@ -363,7 +370,7 @@ def test_reverse_healthy_pre_layout_rerun_is_left_byte_identical(tmp_path,
     sta = R._pl.sta_dir(proj)
     assert calls == [], f"burned an OpenSTA run on healthy reports: {calls}"
     assert (sta / R.STEP10_CORNER_DIR / "sta_SS.rpt").read_text() == body
-    assert (sta / R.STEP10_CORNER_DIR / "sta_TT.rpt").read_text() == body
+    assert (sta / R.STEP10_CORNER_DIR / "sta_TT.rpt").read_text() == tt_body
     assert (sta / "pre_pnr_timing.rpt").read_text() == pre
     assert not list(sta.rglob("*.stale_basis")), "quarantined a healthy report"
     assert res.status == "PASS", (res.status, res.detail)
@@ -381,10 +388,11 @@ def test_reverse_whitespace_variant_stamp_is_still_pre_layout(tmp_path,
     """
     calls: list = []
     body = _healthy_body("#   STA_BASIS:   PRE_LAYOUT_ESTIMATE")
+    tt_body = _healthy_body("STA_BASIS: PRE_LAYOUT_ESTIMATE", slack=0.52)
     pre = _PRE_LAYOUT_HEADER + body
     proj = _rerun_project(
         tmp_path,
-        per_corner_bodies={"sta_SS.rpt": body, "sta_TT.rpt": body},
+        per_corner_bodies={"sta_SS.rpt": body, "sta_TT.rpt": tt_body},
         pre_pnr_body=pre)
     _hermetic(monkeypatch, calls)
 
