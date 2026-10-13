@@ -19945,6 +19945,16 @@ def step_asic_sdc(project: Path, top_name: str = "chip_top",
                  "multi-corner qualification remains unmeasured"), outputs,
                 reason_class=_V.ReasonClass.INPUT_ABSENT,
                 extras={"step7_record": rec, "corner_count": corner_count})
+        if ((_execution._ordinary_runtime or {}).get('policy', {}).get('mode') == 'default'
+                and __import__('librelane_contract').selected_mode(project, '8') != 'direct'):
+            return StepResult(
+                'asic_sdc', 'NOT_MEASURED', time.time() - t0,
+                'Step 7 SDC + PVT producer completed; complete acceptance '
+                'awaits the post-synthesis native SDC consumer', outputs,
+                reason_class=_V.ReasonClass.UPSTREAM_FAILED,
+                extras={'step7_record': rec, 'corner_count': corner_count,
+                        'producer_status': 'PASS', 'deferred_until': 'post_prelayout',
+                        'deferred_started_at': t0, 'deferred_project': str(project.resolve())})
         return StepResult("asic_sdc", "PASS", time.time() - t0,
                           (f"canonical Step 7 SDC + PVT matrix emitted "
                            f"({corner_count} corners)"), outputs,
@@ -27225,6 +27235,40 @@ def _aggregate_verdict(plan: List[StepResult]) -> str:
     effective = [s for s in plan if not (current and s is not latest and
                  s.name == 'sdc_validation' and s.status == 'NOT_MEASURED' and
                  s.extras.get('deferred_until') == 'post_prelayout')]
+    # Step 7's producer precedes synthesis; its complete native consumer is
+    # owned by prelayout. Keep the deferred observation until BOTH existing
+    # receipts witness this invocation's current bytes, and never hide FAIL.
+    for early in plan:
+        if not (early.name == 'asic_sdc' and early.status == 'NOT_MEASURED'
+                and early.extras.get('deferred_until') == 'post_prelayout'):
+            continue
+        try:
+            import step_output_collector as versions
+            project = Path(early.extras['deferred_project'])
+            began = early.extras['deferred_started_at']
+            accepted = next((r for r in versions.current_acceptance(project, began)
+                             if r['id'] == '7'), None)
+            if accepted and accepted['status'] == 'FAIL':
+                effective.append(StepResult('asic_sdc_acceptance', 'FAIL', 0.0,
+                                            'current complete Step 7 consumer failed'))
+            if (current and accepted and accepted['canonical_pass']
+                    and accepted['status'] == 'PASS'
+                    and accepted['result']['canonical_consumer']['status'] == 'PASS'
+                    and receipt.resolve().is_relative_to(project.resolve())
+                    and doc['started_ns'] / 1e9 >= began
+                    and all(Path(r['path']).resolve().is_relative_to(project.resolve())
+                            for r in bound_inputs.values())
+                    and accepted['inputs']
+                    and all((project / rel).is_file()
+                            and hashlib.sha256((project / rel).read_bytes()).hexdigest() == sha
+                            for rel, sha in accepted['inputs'].items())
+                    and accepted['outputs']
+                    and all((project / r['rel']).is_file()
+                            and hashlib.sha256((project / r['rel']).read_bytes()).hexdigest()
+                            == r['sha256'] for r in accepted['outputs'])):
+                effective.remove(early)
+        except (OSError, ValueError, KeyError, TypeError):
+            pass                            # missing/stale acceptance remains owed
     rows = list(_step_verdicts(effective))
     _skipped = [r for r in rows
                 if r.verdict in (_V.Verdict.NOT_MEASURED,

@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1442
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1442)
+- **Total programs (excluding helpers / shims):** 1443
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1443)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1433 |
+| `any` | 1434 |
 
 ## Alphabetical listing
 
@@ -771,6 +771,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `leaf_typo_alias_emit` | any | v0.3.18 | v0.3.18 (ORGANIC #517). |
 | `lec_equivalence_check` | any | — | Step 13 deterministic LEC substance gate. |
 | `lec_gate_netlist_select` | any | — | Truthful diagnosis of a structural LEC abort. |
+| `lec_observable_cone` | any | — | Keep observable aliases as match points, with the complete sequential cone. |
 | `lec_post_layout_check` | any | — | POST-LAYOUT logic-equivalence gate. |
 | `lec_run` | any | — | Step 13 LEC PRODUCER (RTL ≡ synthesized gate netlist). |
 | `legacy_external_reference_debt` | any | — | decide, record and MEASURE the legacy external-reference debt that #2158's blocking gate made visible (#2165). |
@@ -1514,7 +1515,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1433 programs)
+### `any` (1434 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `absence_verdict_names_its_search_space_check` — "not found" must say WHERE it looked.
@@ -2256,6 +2257,7 @@ _(no programs in this group)_
 - `leaf_typo_alias_emit` — v0.3.18 (ORGANIC #517).  _[v0.3.18]_
 - `lec_equivalence_check` — Step 13 deterministic LEC substance gate.
 - `lec_gate_netlist_select` — Truthful diagnosis of a structural LEC abort.
+- `lec_observable_cone` — Keep observable aliases as match points, with the complete sequential cone.
 - `lec_post_layout_check` — POST-LAYOUT logic-equivalence gate.
 - `lec_run` — Step 13 LEC PRODUCER (RTL ≡ synthesized gate netlist).
 - `legacy_external_reference_debt` — decide, record and MEASURE the legacy external-reference debt that #2158's blocking gate made visible (#2165).

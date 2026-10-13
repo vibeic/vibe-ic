@@ -1,4 +1,4 @@
-"""A rung that proves NOTHING NEW ends the ladder — it does not start another.
+"""A fallback induction rung that proves NOTHING NEW ends the ladder.
 
 THE MEASURED FACT THIS SUITE IS BUILT ON (vibe-ic#2232, `ic/sha256`, 8HD-9).
 The rung that did the work took **700.6 s** and left `1611 proven / 2 unproven`.
@@ -20,11 +20,13 @@ in the direction "did this rung earn the next one".
 
 WHAT THESE TESTS PIN, each one a direction the change could go wrong in:
 
-  * a rung that proves nothing NEW, with a residual still standing, ENDS the
-    ladder — the rung above it is never launched, and the record says which
-    rung stopped it and why;
+  * a fallback induction rung that proves nothing NEW, with a residual still
+    standing, ENDS the ladder — the rung above it is never launched, and the
+    record says which rung stopped it and why;
+  * a plateau in short simple, early joint or full simple still reaches the
+    later strategies while the same total admission budget permits it;
   * A LADDER THAT IS STILL PROVING IS NEVER TRUNCATED. The control: every rung
-    proves something, and all four still run. A guard that stopped a
+    proves something, and all six still run. A guard that stopped a
     progressing ladder would buy the wall clock back by throwing proofs away;
   * A FINISHED PROOF IS NOT A FLAT WALL. When the residual is ZERO the deeper
     rungs necessarily print `Proved 0` too — that is a proof, not a wall, and
@@ -51,14 +53,13 @@ import lec_run  # noqa: E402
 # The rung ladder as this suite expects to find it. Spelled out on purpose: a
 # rung added or reordered must update these tests DELIBERATELY rather than let
 # them silently agree with whatever the code now emits.
-# 6dc565435 split the combined simple rung into `equiv_simple_short` and
-# `equiv_simple_full`, each its own process and checkpoint, so the ladder is
-# five rungs. The two simple rungs are EXEMPT from the no-progress stop (a
-# plateau there must still be allowed to reach induction); every expectation
-# below therefore gives them a share of what the combined rung used to prove
-# and lets the induction rungs decide the stop, exactly as before.
-_RUNGS = ("equiv_simple_short", "equiv_simple_full", "equiv_induct_seq4",
-          "equiv_induct_seq16", "equiv_induct_seq64")
+# The early joint induction preserves relations before the full simple pass
+# rewires cutpoints. The two simple rungs AND this joint attempt are exempt
+# from the no-progress stop: each has a different strategy still ahead of it.
+# The three later induction rungs retain the original plateau contract.
+_RUNGS = ("equiv_simple_short", "equiv_induct_joint_seq16",
+          "equiv_simple_full", "equiv_induct_seq4", "equiv_induct_seq16",
+          "equiv_induct_seq64")
 
 
 def test_the_ladder_is_the_one_this_suite_was_written_against():
@@ -77,10 +78,11 @@ class _FakeYosys:
     `gains` — how many previously-unproven points each rung proves, by rung
     name. A 0 reproduces #2232's measured rung: the pass RUNS, completes, and
     prints `Proved 0 previously unproven $equiv cells.` with the residual
-    unchanged. Rungs absent from the map prove `default_gain`.
+    unchanged. Rungs absent from the map prove `default_gain` (zero unless
+    explicitly requested), so an unlisted rung cannot silently finish a proof.
     """
 
-    def __init__(self, total=100, gains=None, default_gain=20, die_at=None):
+    def __init__(self, total=100, gains=None, default_gain=0, die_at=None):
         self.scripts = []
         self.rungs_run = []
         self.total = total
@@ -205,7 +207,8 @@ def _drive(monkeypatch, fake) -> tuple:
 # The measured shape: equiv_simple carries most of it, -seq 4 finishes the
 # work it can, and -seq 16 runs to completion having proved NOTHING NEW with a
 # residual still standing.
-_FLAT_AT_SEQ16 = {"equiv_simple_short": 20, "equiv_simple_full": 40,
+_FLAT_AT_SEQ16 = {"equiv_simple_short": 20, "equiv_induct_joint_seq16": 0,
+                  "equiv_simple_full": 40,
                   "equiv_induct_seq4": 38,
                   "equiv_induct_seq16": 0, "equiv_induct_seq64": 0}
 
@@ -225,12 +228,13 @@ def test_a_rung_that_proved_nothing_new_does_not_earn_the_next_one(monkeypatch):
     _rc, report = _drive(monkeypatch, fake)
     ladder = report["lec_ladder"]
     climbed = [lg["rung"] for lg in ladder["legs"]]
-    assert climbed == ["equiv_simple_short", "equiv_simple_full",
+    assert climbed == ["equiv_simple_short", "equiv_induct_joint_seq16",
+                       "equiv_simple_full",
                        "equiv_induct_seq4", "equiv_induct_seq16"], climbed
     assert "equiv_induct_seq64" not in fake.rungs_run, (
         "the deepest rung was launched after the rung below it proved 0 — "
         "that is #2232's 7.5 h, exactly")
-    assert len(fake.scripts) == 4, (
+    assert len(fake.scripts) == 5, (
         f"{len(fake.scripts)} yosys process(es) ran; the ladder was supposed "
         "to stop at the rung that proved nothing")
 
@@ -300,6 +304,7 @@ def test_a_ladder_that_is_still_proving_climbs_every_rung(monkeypatch):
     guard that truncated a progressing ladder would buy the wall clock back by
     throwing away proofs — it is the opposite defect and it is worse."""
     fake = _FakeYosys(total=200, gains={"equiv_simple_short": 30,
+                                        "equiv_induct_joint_seq16": 20,
                                         "equiv_simple_full": 30,
                                         "equiv_induct_seq4": 30,
                                         "equiv_induct_seq16": 20,
@@ -314,6 +319,13 @@ def test_a_ladder_that_is_still_proving_climbs_every_rung(monkeypatch):
     assert ladder.get("stopped_on_no_progress") is not True
     assert ladder["complete"] is True
     assert len(fake.scripts) == len(_RUNGS)
+    assert [lg["proved_at_exit"] for lg in ladder["legs"]] == [
+        30, 50, 80, 110, 130, 140]
+    assert [lg["unproven_at_exit"] for lg in ladder["legs"]] == [
+        170, 150, 120, 90, 70, 60]
+    assert report["verdict"] == "INCONCLUSIVE"
+    assert report["equivalent"] is False
+    assert report["unproven_points"] == 60
 
 
 def test_a_fully_proven_ladder_is_not_a_flat_wall(monkeypatch):
@@ -321,7 +333,9 @@ def test_a_fully_proven_ladder_is_not_a_flat_wall(monkeypatch):
     the residual is ZERO every deeper rung necessarily prints `Proved 0` — the
     guard's own signature — because there is nothing left to prove. That is a
     finished proof, not a wall, and the run must still reach PASS."""
-    fake = _FakeYosys(gains={"equiv_simple_short": 40, "equiv_simple_full": 60,
+    fake = _FakeYosys(gains={"equiv_simple_short": 40,
+                             "equiv_induct_joint_seq16": 0,
+                             "equiv_simple_full": 60,
                              "equiv_induct_seq4": 0,
                              "equiv_induct_seq16": 0, "equiv_induct_seq64": 0})
     rc, report = _drive(monkeypatch, fake)
@@ -333,6 +347,90 @@ def test_a_fully_proven_ladder_is_not_a_flat_wall(monkeypatch):
     assert report["verdict"] == "PASS", report["verdict"]
     assert report["equivalent"] is True
     assert report["unproven_points"] == 0
+    assert rc == 0
+    assert [lg["proved_at_exit"] for lg in ladder["legs"]] == [
+        40, 40, 100, 100, 100, 100]
+    assert [lg["unproven_at_exit"] for lg in ladder["legs"]] == [
+        60, 60, 0, 0, 0, 0]
+
+
+@pytest.mark.parametrize("gains, proved, residual", [
+    ((0, 10, 20, 30, 40, 50), [0, 10, 30, 60, 100, 150], 50),
+    ((10, 0, 20, 30, 40, 50), [10, 10, 30, 60, 100, 150], 50),
+    ((10, 20, 0, 30, 40, 50), [10, 30, 30, 60, 100, 150], 50),
+    ((0, 0, 0, 30, 40, 50), [0, 0, 0, 30, 70, 120], 80),
+], ids=["short-zero", "joint-zero", "full-zero", "all-three-zero"])
+def test_initial_strategy_plateaus_still_run_the_whole_fallback(
+        monkeypatch, gains, proved, residual):
+    """A completed initial strategy cannot speak for the later strategies.
+
+    The tool is synthetic; the real driver must launch all six processes and
+    report their exact carried counts, including every zero-gain boundary.
+    """
+    fake = _FakeYosys(total=200, gains=dict(zip(_RUNGS, gains)))
+    rc, report = _drive(monkeypatch, fake)
+    ladder = report["lec_ladder"]
+    assert [lg["rung"] for lg in ladder["legs"]] == list(_RUNGS)
+    assert fake.rungs_run == list(_RUNGS)
+    assert len(fake.scripts) == 6
+    assert [lg["proved_at_entry"] for lg in ladder["legs"]] == [
+        None, *proved[:-1]]
+    assert [lg["proved_at_exit"] for lg in ladder["legs"]] == proved
+    assert [lg["unproven_at_exit"] for lg in ladder["legs"]] == [
+        200 - n for n in proved]
+    assert ladder["proof_state_carry"]["boundaries_measured"] == 5
+    assert ladder["proof_state_carry"]["carried"] is True
+    assert ladder["stopped_on_no_progress"] is False
+    assert ladder["complete"] is True
+    assert report["verdict"] == "INCONCLUSIVE"
+    assert report["equivalent"] is False
+    assert report["unproven_points"] == residual
+    assert rc == 0
+
+
+def test_a_joint_plateau_does_not_rearm_a_spent_total_budget(monkeypatch):
+    """The joint exception permits fallback only when admission remains.
+
+    Spending the total budget is not a completed no-progress decision and
+    must retain the joint checkpoint without claiming an engine resource kill.
+    """
+    now = [0.0]
+    budget_cls = lec_run.StepBudget
+    monkeypatch.setattr(lec_run, "DEFAULT_YOSYS_TIMEOUT_S", 100)
+    monkeypatch.setattr(lec_run, "StepBudget", lambda total_s: budget_cls(
+        total_s, clock=lambda: now[0]))
+    fake = _FakeYosys(total=200, gains={
+        "equiv_simple_short": 10, "equiv_induct_joint_seq16": 0,
+        "equiv_simple_full": 20, "equiv_induct_seq4": 30,
+        "equiv_induct_seq16": 40, "equiv_induct_seq64": 50})
+    timeouts = []
+
+    def run(*args, **kwargs):
+        timeouts.append(kwargs["timeout"])
+        result = fake(*args, **kwargs)
+        now[0] = 30.0 if len(fake.scripts) == 1 else 101.0
+        return result
+
+    rc, report = _drive(monkeypatch, run)
+    ladder = report["lec_ladder"]
+    assert fake.rungs_run == ["equiv_simple_short", "equiv_induct_joint_seq16"]
+    assert [lg["rung"] for lg in ladder["legs"]] == fake.rungs_run
+    assert timeouts == [100, 70]
+    assert [lg["proved_at_exit"] for lg in ladder["legs"]] == [10, 10]
+    assert report["unproven_points"] == 190
+    assert ladder["stopped_on_no_progress"] is False
+    assert ladder["complete"] is False
+    assert ladder["stopped_because"] == (
+        "the step budget was spent before rung equiv_simple_full could be launched")
+    assert report["lec_attempts_detail"][-1]["launched"] is False
+    assert report["lec_attempts_detail"][-1]["budget_sec"] == 0
+    assert report["step_budget_exhausted"] is True
+    assert report["step_budget_stopped_this_proof"] is False
+    assert report["exhausted_resource"] is None
+    assert report["lec_resume"]["state"] == "RESUMABLE"
+    assert report["lec_resume"]["resumable_from_rung"] == "equiv_induct_joint_seq16"
+    assert report["verdict"] == "INCONCLUSIVE"
+    assert report["equivalent"] is False
     assert rc == 0
 
 
@@ -357,20 +455,23 @@ def test_a_fully_proven_ladder_is_not_a_flat_wall(monkeypatch):
 # `test_counts_that_were_not_measured_never_read_as_no_progress` in this
 # file's landed sibling and by the `None not in (...)` guard at the call site.
 
-@pytest.mark.parametrize("flat_at, climbed", [
-    ("equiv_induct_seq4", ["equiv_simple_short", "equiv_simple_full",
-                           "equiv_induct_seq4"]),
-    ("equiv_induct_seq16", ["equiv_simple_short", "equiv_simple_full",
-                            "equiv_induct_seq4", "equiv_induct_seq16"]),
-])
+@pytest.mark.parametrize("flat_at, climbed, proved, residual", [
+    ("equiv_induct_seq4", ["equiv_simple_short", "equiv_induct_joint_seq16",
+                           "equiv_simple_full", "equiv_induct_seq4"],
+     [20, 20, 60, 60], 40),
+    ("equiv_induct_seq16", ["equiv_simple_short", "equiv_induct_joint_seq16",
+                            "equiv_simple_full", "equiv_induct_seq4",
+                            "equiv_induct_seq16"], [20, 20, 60, 70, 70], 30),
+], ids=["equiv_induct_seq4-climbed0", "equiv_induct_seq16-climbed1"])
 def test_the_ladder_stops_at_the_FIRST_rung_that_proves_nothing(
-        monkeypatch, flat_at, climbed):
+        monkeypatch, flat_at, climbed, proved, residual):
     """WHICH rung stops it is decided by the evidence, not by a position in the
-    list. Both arms read the same field — the rungs the ladder actually ran —
-    so a tree without the guard answers with its own four."""
-    gains = {"equiv_simple_short": 20, "equiv_simple_full": 40}
+    list. A zero-gain early joint attempt must reach the full fallback before
+    a later induction plateau can decide the stop."""
+    gains = {"equiv_simple_short": 20, "equiv_induct_joint_seq16": 0,
+             "equiv_simple_full": 40}
     seen_flat = False
-    for rung in _RUNGS[2:]:
+    for rung in _RUNGS[3:]:
         if rung == flat_at:
             seen_flat = True
         gains[rung] = 0 if seen_flat else 10
@@ -378,6 +479,16 @@ def test_the_ladder_stops_at_the_FIRST_rung_that_proves_nothing(
     _rc, report = _drive(monkeypatch, fake)
     assert [lg["rung"] for lg in report["lec_ladder"]["legs"]] == climbed
     assert fake.rungs_run == climbed
+    assert [lg["proved_at_exit"] for lg in report["lec_ladder"]["legs"]] == proved
+    assert report["lec_ladder"]["stopped_on_no_progress"] is True
+    assert report["lec_ladder"]["complete"] is True
+    why = report["lec_ladder"]["stopped_because"]
+    assert flat_at in why
+    assert f"{proved[-1]} proven at entry" in why
+    assert f"{residual} still unproven at exit" in why
+    assert report["unproven_points"] == residual
+    assert report["verdict"] == "INCONCLUSIVE"
+    assert report["equivalent"] is False
 
 
 def test_a_leg_KILLED_mid_rung_is_not_re_labelled_a_flat_wall(monkeypatch):
@@ -393,7 +504,9 @@ def test_a_leg_KILLED_mid_rung_is_not_re_labelled_a_flat_wall(monkeypatch):
     trade a real, honest exhaustion for a capability-gap sentence. The
     checkpoint separates them: `write_rtlil` and its sentinel run only after
     the pass returns."""
-    fake = _FakeYosys(gains={"equiv_simple_short": 20, "equiv_simple_full": 40,
+    fake = _FakeYosys(gains={"equiv_simple_short": 20,
+                             "equiv_induct_joint_seq16": 0,
+                             "equiv_simple_full": 40,
                              "equiv_induct_seq4": 20},
                       die_at="equiv_induct_seq16")
     _rc, report = _drive(monkeypatch, fake)

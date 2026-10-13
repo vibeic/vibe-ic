@@ -26,23 +26,23 @@ def _run_with_admission_exhaustion(monkeypatch, after):
 
 
 # `after` counts yosys PROCESSES, one per rung. Since 6dc565435 the ladder is
-# five rungs (`equiv_simple_short`, `equiv_simple_full`, then the three
-# induction rungs), so admission runs out after the THIRD process to leave
-# `equiv_induct_seq4` as the completed checkpoint, and after the FIFTH to let
-# the last rung finish.
+# six rungs (short, joint induction, full, then three fallback induction
+# rungs), so admission runs out after the FOURTH process to leave
+# `equiv_induct_seq4` as the completed checkpoint. The last control counts
+# every shipped rung, including the early joint attempt.
 def test_unadmitted_next_rung_keeps_completed_checkpoint_resumable(monkeypatch):
-    rc, report = _run_with_admission_exhaustion(monkeypatch, 3)
+    rc, report = _run_with_admission_exhaustion(monkeypatch, 4)
     assert rc == 0  # Producer writes evidence; the independent gate owns PASS.
     assert report["lec_ladder"]["complete"] is False
     assert report["lec_attempts_detail"][-1]["launched"] is False
-    assert report["compared_points"] == 40
-    assert report["unproven_points"] == 60
+    assert report["compared_points"] == 60
+    assert report["unproven_points"] == 40
     assert report["lec_resume"]["state"] == "RESUMABLE"
     assert report["lec_resume"]["resumable_from_rung"] == "equiv_induct_seq4"
 
 
 def test_unadmitted_next_rung_does_not_claim_engine_exhaustion(monkeypatch):
-    _, report = _run_with_admission_exhaustion(monkeypatch, 3)
+    _, report = _run_with_admission_exhaustion(monkeypatch, 4)
     assert report["step_budget_exhausted"] is True
     assert report["step_budget_stopped_this_proof"] is False
     # Admission was spent, but no running attempt exhausted a resource.
@@ -55,7 +55,7 @@ def test_unadmitted_next_rung_does_not_claim_engine_exhaustion(monkeypatch):
 
 
 def test_completed_last_rung_remains_complete_when_it_outlasts_admission(monkeypatch):
-    _, report = _run_with_admission_exhaustion(monkeypatch, 5)
+    _, report = _run_with_admission_exhaustion(monkeypatch, len(lec_run.LEC_LADDER))
     assert report["step_budget_exhausted"] is True
     assert report["lec_ladder"]["complete"] is True
     assert report["lec_resume"]["state"] == "COMPLETE"

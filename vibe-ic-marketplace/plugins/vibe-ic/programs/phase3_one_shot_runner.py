@@ -60453,7 +60453,7 @@ def publish_prelayout_reports(project: Path, folder: Path, *,
             "pre_pnr_summary": str(summary)}
 
 
-@_spf.retained_step('10', canonical_acceptance=True)
+@_spf.retained_steps(('7', '10'), canonical_acceptance=True)
 def step_prelayout_signoff(project: Path, top: str, pdk: PdkConfig,
                            container: str) -> StepResult:
     """Steps 7 + 10 (pre-layout, stage-2) — emitted RIGHT AFTER synth, BEFORE PnR.
@@ -60858,6 +60858,16 @@ def step_prelayout_signoff(project: Path, top: str, pdk: PdkConfig,
             time.time() - t0, " | ".join(_ll_bad) + " — " + detail, written,
             reason_class=("" if any(g["verdict"] == "FAIL" for _, g in _ll_verdicts)
                           else _V.ReasonClass.INCONCLUSIVE))
+    if ok:
+        try:
+            written.append(str(_publish_prelayout_summary(project)))
+        except (_llc.Refusal, OSError, ValueError) as exc:
+            code = getattr(exc, 'code', 'PRELAYOUT_STA_SUMMARY_UNAVAILABLE')
+            failed = code == 'PRELAYOUT_STA_SUMMARY_FAILED'
+            return StepResult(
+                'prelayout_signoff', 'FAIL' if failed else 'NOT_MEASURED',
+                time.time() - t0, f'{code}: {exc} — {detail}', written,
+                reason_class='' if failed else _V.ReasonClass.INCONCLUSIVE)
     # `WARN` (the pre-layout sign-off BASIS is unsubstantiated) is a pass the
     # step itself declined to make clean — R-0915-85's word for that is
     # PASS_WITH_WAIVERS, and `validate_step_row` derives the must-close row

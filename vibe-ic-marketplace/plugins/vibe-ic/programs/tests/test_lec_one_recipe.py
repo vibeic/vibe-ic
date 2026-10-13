@@ -120,6 +120,7 @@ def test_shared_tail_is_the_shipped_ladder_verbatim():
         "stat\n"
         "equiv_struct\n"
         "equiv_simple -short\n"
+        "equiv_induct -seq 16\n"
         "equiv_simple\n"
         "equiv_induct -seq 4\n"
         "equiv_induct -seq 16\n"
@@ -282,7 +283,7 @@ def test_screen_and_full_differ_only_in_the_induction_rungs():
     full = LP.build_yosys_equiv_script(functional_lib=True,
                                        **_POST_KW).splitlines()
     removed = [ln for ln in full if ln not in screen]
-    assert removed == ["equiv_induct -seq 4", "equiv_induct -seq 16",
+    assert removed == ["equiv_induct -seq 16", "equiv_induct -seq 4", "equiv_induct -seq 16",
                        "equiv_induct -seq 64"]
     assert [ln for ln in screen if ln not in full] == []
 

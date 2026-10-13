@@ -165,7 +165,7 @@ LEC_CHECKPOINT_SCHEMA_VERSION = "vibeic.lec.checkpoint.v1"
 #: legs it reached its verdict from. It is REPORT-ONLY: nothing here is hashed
 #: into a key, and nothing here can make a cache entry hit or miss.
 LEC_PROOF_EXECUTION_SCHEMA_VERSION = "vibeic.lec.proof-execution.v1"
-LEC_LADDER_SCHEMA_VERSION = "vibeic.lec.ladder.v2-short-checkpoint"
+LEC_LADDER_SCHEMA_VERSION = "vibeic.lec.ladder.v3-joint-induction"
 #: `_ladder_stop` when the loop climbed every rung. Named, not spelled
 #: twice: it is also what tells the parser the closing `equiv_status` is
 #: the LADDER's and not some intermediate leg's.
@@ -181,6 +181,11 @@ CONTROLLED_LIMIT_RECEIPT_SCHEMA_VERSION = "vibeic.lec.controlled-limit.v1"
 # ladder position in this file and not two.
 LEC_LADDER: Tuple[Tuple[str, str], ...] = (
     ("equiv_simple_short", "equiv_simple -short\n"),
+    # Prove the remaining state relation jointly before the full local SAT
+    # pass rewires additional cutpoints. Partial simple proofs can discard a
+    # useful relation between sequential aliases and leave an otherwise
+    # provable full model stuck. Keep the existing fallback ladder intact.
+    ("equiv_induct_joint_seq16", "equiv_induct -seq 16\n"),
     ("equiv_simple_full", "equiv_simple\n"),
     ("equiv_induct_seq4", "equiv_induct -seq 4\n"),
     ("equiv_induct_seq16", "equiv_induct -seq 16\n"),
@@ -3895,6 +3900,8 @@ def build_equiv_script(gold_files: List[str], gate_netlist: str, top: str,
     is a no-op, so a non-memory LEC verdict is byte-unchanged; a memory-bearing
     EQUIVALENT design now PROVES ("Equivalence successfully proven!"), and a
     broken one stays unproven → FAIL (sound negative)."""
+    from lec_observable_cone import observable_matchpoint_names
+    _observable_names = observable_matchpoint_names(top)
     gold_read = " ".join(gold_files)
     bb = "".join(f"read_verilog -lib {q}\n" for q in (blackbox_v or []))
     # Empty except on the Liberty-expanded gate (see LIBERTY_PIN_ATTR).
@@ -4080,6 +4087,7 @@ def build_equiv_script(gold_files: List[str], gate_netlist: str, top: str,
         f"async2sync\n"
         f"opt_clean\n"
         f"{_splitnets}"
+        f"{_observable_names}"
         f"design -stash gold\n"
         # --- gate = synth netlist; Liberty cells EXPANDED to $_ logic then
         #     flattened in so the SAT engine can model every point ---
@@ -4101,6 +4109,7 @@ def build_equiv_script(gold_files: List[str], gate_netlist: str, top: str,
         f"opt_clean\n"
         f"{_restore_words}"
         f"{_splitnets}"
+        f"{_observable_names}"
         f"design -stash gate\n"
         f"design -copy-from gold -as gold {top}\n"
         f"design -copy-from gate -as gate {top}\n"
@@ -4148,8 +4157,9 @@ def build_equiv_script(gold_files: List[str], gate_netlist: str, top: str,
 # from this function and that the pre-layout text did not move.
 #
 # `seq_depths=None` -> the shipped `LEC_LADDER` verbatim (the pre-layout
-# caller). An explicit ascending depth list -> the same first rung followed by
-# one `equiv_induct` per depth; that is the post-layout caller's
+# caller). The explicit default depth list uses that same recipe. A custom
+# ascending depth list retains short/full simple followed by one induction
+# per requested depth; that is the post-layout caller's
 # already-documented `--seq-depths` knob, and with its default (4, 16, 64) the
 # emitted text is IDENTICAL to the ladder. Deeper induction is sound (it only
 # proves more), so a caller-chosen depth cannot weaken the proof.
@@ -4177,7 +4187,9 @@ def equiv_proof_tail(seq_depths: Optional[List[int]] = None, *,
         if rungs is not None:
             raise ValueError("equiv_proof_tail: a screen has no rung ladder "
                              "to bound")
-        ladder = LEC_LADDER[0][1] + LEC_LADDER[1][1]
+        commands = dict(LEC_LADDER)
+        ladder = (commands["equiv_simple_short"]
+                  + commands["equiv_simple_full"])
     elif seq_depths is None:
         ladder = _emit_ladder(checkpoint_dir, start_index=start_index,
                               rungs=rungs)
@@ -4196,12 +4208,17 @@ def equiv_proof_tail(seq_depths: Optional[List[int]] = None, *,
             # writing a checkpoint no resume could ever select.
             raise ValueError("equiv_proof_tail: checkpoint_dir is supported "
                              "only for the shipped ladder (seq_depths=None)")
-        ladder = (LEC_LADDER[0][1] + LEC_LADDER[1][1] + "".join(
-            f"equiv_induct -seq {d}\n" for d in depths)
-        )
+        commands = dict(LEC_LADDER)
+        simple = (commands["equiv_simple_short"]
+                  + commands["equiv_simple_full"])
+        # The explicit default used by post-layout is the same recipe. A
+        # custom depth list retains its requested schedule; it must not gain
+        # an unrequested depth-16 attempt.
+        ladder = ("".join(command for _, command in LEC_LADDER)
+                  if depths == [4, 16, 64] else simple + "".join(
+                      f"equiv_induct -seq {d}\n" for d in depths))
         if not depths:
-            ladder = (LEC_LADDER[0][1] + LEC_LADDER[1][1]
-                      + "equiv_induct\n")
+            ladder = simple + "equiv_induct\n"
     return (
         # READ-ONLY report pass. It prints the miter's cell histogram, which is
         # the OBSERVABLE `miter_is_stateless` reads to decide whether temporal
@@ -6465,7 +6482,11 @@ def main(argv: Optional[List[str]] = None) -> int:
             # a new reason to stop.  Historically their combined rung could
             # make zero progress before an induction rung made progress, so a
             # plateau here must still be allowed to reach induction.
-            if (_rung_name not in {"equiv_simple_short", "equiv_simple_full"}
+            # The early joint attempt precedes the full simple fallback.
+            # Its plateau cannot establish that a later, different proof
+            # strategy will make no progress, so it does not cut that tail.
+            if (_rung_name not in {"equiv_simple_short", "equiv_simple_full",
+                                  "equiv_induct_joint_seq16"}
                     and None not in (_pe, _px, _ue, _ux)
                     and _px == _pe and _ux == _ue and _ux > 0):
                 # THE THREE THINGS A STOP OWES ITS READER: which rung, and

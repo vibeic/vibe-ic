@@ -48,6 +48,7 @@ from _atomic_artefact import write_json  # noqa: E402
 from librelane_contract import (Refusal, _load, digest,  # noqa: E402
                                 resolve_step_config, run_chain)
 import instrument_calibration  # noqa: E402
+from lec_observable_cone import observable_matchpoint_names  # noqa: E402
 
 STEP = "Yosys.EQY"
 #: EQY's own status words (eqy_job.py `possible_statuses`).
@@ -61,7 +62,8 @@ def eqy_script(top: str, rtl: list[Path], netlist: Path, liberty: str) -> str:
         "[gate]", f"read_liberty -ignore_miss_func {liberty}",
         f"read_verilog -formal -sv -icells {netlist}", "",
         "[script]", f"hierarchy -top {top}", "proc", f"prep -top {top} -flatten",
-        "memory -nomap", "async2sync", "setundef -init -zero", "",
+        "memory -nomap", "async2sync", "setundef -init -zero", "splitnets",
+        observable_matchpoint_names(top).rstrip(), "",
         "[partition *]", "amend *", "",
         "[strategy sat]", "use sat", "depth 5", "",
         "[strategy pdr]", "use sby", "engine abc pdr -rfi", ""])
