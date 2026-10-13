@@ -1022,6 +1022,9 @@ def _selected_native_handoff_project(tmp_path):
     mapped = proj / "phase2/stage2/synth/core_synth.v"
     put(mapped.parent / "synth_inputs.json", {"netlist": mapped.name})
     handoff.publish_handoff(proj, folder, mapped, "core")
+    from _staged_top_module import bind_selected_interface
+    l9 = proj / "phase1/generated_docs/L9_INTEGRATION_SPEC.json"
+    put(l9, bind_selected_interface(proj, json.loads(l9.read_text())))
     return proj
 
 
