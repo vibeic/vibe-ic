@@ -6715,6 +6715,7 @@ def _native_driver_view(files, top, defines, parameters, include_dirs, output_di
     candidate selection. Keep its inputs, log and JSON together for review.
     Failure leaves the lexical findings intact and adds a blocking disclosure.
     """
+    output_dir = Path(output_dir).resolve()
     files = [Path(p).resolve() for p in files]
     include_dirs = sorted({Path(p).resolve() for p in include_dirs}
                           | {p.parent for p in files})

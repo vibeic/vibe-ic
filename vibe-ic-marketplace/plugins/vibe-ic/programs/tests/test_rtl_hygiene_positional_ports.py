@@ -34,6 +34,77 @@ endmodule
 NATIVE_LEAF = 'module leaf(input a, output y); assign y=a; endmodule\n'
 
 
+@pytest.mark.parametrize('relative_report', [True, False], ids=['relative', 'absolute'])
+def test_native_project_report_paths_obey_docker_mount_protocol(
+        tmp_path, monkeypatch, relative_report):
+    """CPU transport-contract control; actual Docker/Yosys is separate evidence."""
+    import _eda_image
+    import librelane_contract
+    project = tmp_path / 'project'
+    rtl = project / 'phase2/stage1/rtl'
+    rtl.mkdir(parents=True)
+    source = rtl / 'top.v'
+    source.write_text('module top(input source, output result); '
+                      'assign result=source; endmodule\n')
+    docs = project / 'phase1/generated_docs'
+    docs.mkdir(parents=True)
+    (docs / 'L9_INTEGRATION_SPEC.json').write_text(json.dumps({'top_module': 'top'}))
+    monkeypatch.chdir(project)
+    target = 'registry.invalid/neutral-tools@sha256:' + 'ac' * 32
+    monkeypatch.setenv('VIBEIC_EDA_IMAGE', target)
+    monkeypatch.delenv('IIC_EDA_IMAGE', raising=False)
+    monkeypatch.delenv(librelane_contract.LOCAL_ATTESTATION_ENV, raising=False)
+    monkeypatch.setattr(_eda_image, 'local_digest',
+                        lambda selected: ('sha256:' + 'ac' * 32, 'repo-digest', ''))
+    calls = []
+
+    def transport(argv, **kwargs):
+        calls.append(argv)
+        for index, arg in enumerate(argv):
+            if arg == '-v':
+                host, container, *_ = argv[index + 1].split(':')
+                if not Path(host).is_absolute() or not Path(container).is_absolute():
+                    raise ValueError('Docker mount paths must be absolute')
+        at = argv.index('--skip')
+        receipt = Path(argv[at + 4])
+        command = argv[at + 5:]
+        script = Path(command[-1])
+        assert receipt.is_absolute() and script.is_absolute()
+        work = script.parent
+        assert work.parent == (project / 'reports/lint').resolve()
+        assert 'write_json "' + str(work / 'design.json') + '"' in script.read_text()
+        (work / 'design.json').write_text(json.dumps({'modules': {'top': {}}}))
+        receipt.write_text(json.dumps({'command': command, 'native_returncode': 0}))
+        return subprocess.CompletedProcess(argv, 0, 'controlled transport reply\n', '')
+
+    monkeypatch.setattr(librelane_contract, 'run_container', transport)
+    report = Path('reports/lint/findings.json')
+    if not relative_report:
+        report = project / report
+    monkeypatch.setattr(sys, 'argv', [str(PROGRAMS / 'rtl_hygiene_lint.py'),
+        '--project', '.', '--json', str(report), '--severity', 'ERROR'])
+    assert lint.main() == 0
+    assert json.loads(report.read_text()) == [] and len(calls) == 1
+    context_path, = (project / 'reports/lint').glob('native-elaboration-*/context.json')
+    context = json.loads(context_path.read_text())
+    assert context['status'] == 'MEASURED'
+    assert context['native_returncode'] == context['transport_returncode'] == 0
+    assert source.read_text().startswith('module top(input source, output result);')
+
+
+@pytest.mark.parametrize('defines,parameters', [(['FEATURE;bad'], []), ([], ['ENABLE=bad'])])
+def test_native_relative_report_keeps_invalid_configuration_refusal(
+        tmp_path, monkeypatch, defines, parameters):
+    source = tmp_path / 'top.v'
+    source.write_text('module top(input a, output y); assign y=a; endmodule\n')
+    monkeypatch.chdir(tmp_path)
+    calls = []
+    monkeypatch.setattr(lint, '_native_driver_run', lambda *args: calls.append(args))
+    with pytest.raises(ValueError, match='invalid native compile define|NAME=integer'):
+        lint._native_driver_view([source], 'top', defines, parameters, [], Path('reports'))
+    assert calls == []
+
+
 def _native_lint_cli(tmp_path, source=NATIVE_TOP, extra=()):
     assert shutil.which('yosys'), 'native driver qualification requires Yosys'
     leaf = tmp_path / 'leaf.v'
