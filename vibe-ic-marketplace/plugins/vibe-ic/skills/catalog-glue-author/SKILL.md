@@ -354,6 +354,31 @@ different name, and say **why** in a `rationale` field next to the pairing.
 
 ### MERGE-preserving rule (HARD)
 
+For a catalog project whose native outputs must be producer-owned, author the
+rename input under `plugin_input/`, then use the existing source publisher:
+
+```bash
+python3 programs/ip_catalog_pull.py <project> --authored-glue <wrapper.v> \
+  --authored-interface plugin_input/interface.json
+```
+
+The strict JSON has exactly `schema` (`vibeic.authored_interface_renames.v1`),
+`top_module`, nonempty `actor` and `rationale`, `renamed_interfaces` (nonempty
+`{l9:[...],rtl:[...]}` pairs), and `input_obligations` (nonempty
+`{path:"input/docs/...",quote:"verbatim input text"}` records). Supply names
+and rationale as an explicit design choice. The producer reads the actual
+input bytes and independently verifies original input delegation, current L9,
+selected declaration/top and known direction/width. It refuses incomplete,
+unknown, fixed/mandatory or electrically incompatible mappings; it does not
+turn `derived_pad_pairs` into a declared rename. It publishes the manifest
+and actual output provenance, including the same interface input when the
+existing typed derivative/glue successor must remeasure its full inventory.
+
+Keep the current caller input: ordinary reused-source admission rechecks its
+digest and current authority. Do not hand-edit native manifest hashes or
+events to recover a refusal. Pad bit-net placement, functional equivalence,
+fresh document review and all later flow gates still apply independently.
+
 The auto-emit is **merge-preserving**: it only (re)asserts `reused_ip` / `ip_list`
 / `rtl_strategy` and `setdefault`s `generated_by`. Any `tie_offs` / `flattened_buses`
 / `flattened_outputs` / `renamed_interfaces` block you hand-author **survives
