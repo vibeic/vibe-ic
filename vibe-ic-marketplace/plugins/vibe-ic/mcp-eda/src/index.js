@@ -48,6 +48,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { execSync } from "child_process";
 import { registerDevices } from "./devices/_registry.js";
+import { parseYosysSynthStats } from "./lib/yosys_synth_stats.mjs";
 // Shell-safety validators (command-injection hardening). The argv-based
 // _spawnSync used by dockerExec + host handlers is the existing legacy
 // import declared further down (`spawnSync as _spawnSyncEarly`).
@@ -1532,10 +1533,9 @@ server.tool(
     //  design, and anything already flattened - prints only `Chip area for
     //  module '<t>':`, so the old pattern read null for the whole flat class.
     //  Prefer the top-module line when present, else the module line.
-    const areaMatch = result.output.match(/Chip area for top module.*?:\s*([\d.]+)/)
-                   || result.output.match(/Chip area for module.*?:\s*([\d.]+)/);
-    const cellMatch = result.output.match(/(\d+)\s+[\d.E+]+\s+cells$/m)
-                   || result.output.match(/^\s*(\d+)\s+cells$/m);
+    // Bind both metrics to the final stat pass and requested top. Hierarchy
+    // counts already include descendants; per-module counts must not be summed.
+    const synthStats = parseYosysSynthStats(result.output, top_module);
 
     // v0.119.41 (Wave 9, gap #2): the v0.119.40 fresh-agent benchmark
     // observed `log_tail` truncating actual Yosys parser errors when
@@ -1565,8 +1565,8 @@ server.tool(
 
     const metrics = {
       success: result.success,
-      area_um2: areaMatch ? parseFloat(areaMatch[1]) : null,
-      cells: cellMatch ? parseInt(cellMatch[1]) : null,
+      area_um2: synthStats.area_um2,
+      cells: synthStats.cells,
       netlist: output_netlist,
       // ORGANIC-20260531: surface the discovered tie cell + whether the
       // hilomap pass was applied (so the caller knows constant nets were
