@@ -1120,24 +1120,123 @@ def _alias_map(body: str) -> Dict[str, str]:
     return out
 
 
+def _outer_parens(expr: str) -> str:
+    """Remove only balanced parentheses enclosing the WHOLE expression."""
+    expr = expr.strip()
+    while expr.startswith("(") and expr.endswith(")"):
+        depth = 0
+        whole = True
+        for idx, char in enumerate(expr):
+            depth += (char == "(") - (char == ")")
+            if depth < 0 or (depth == 0 and idx != len(expr) - 1):
+                whole = False
+                break
+        if not whole or depth:
+            break
+        expr = expr[1:-1].strip()
+    return expr
+
+
+def _procedural_driver_count(body: str, signal: str) -> int:
+    return sum(bool(re.search(
+        rf"\b{re.escape(signal)}\s*(?:<=|=(?!=))",
+        re.split(r"\bassign\b|\bendmodule\b", block, maxsplit=1)[0]))
+        for block in re.split(r"\balways(?:_ff|_comb|_latch)?\b", body)[1:])
+
+
+def _reset_gated_aliases(iface: ModuleIface, reset_name: str,
+                         active_low: bool, ffs: Dict[str, ResetFF]
+                         ) -> Dict[str, str]:
+    """Scalar ``deasserted_reset &/&& zero_reset_register`` output bindings.
+
+    This finite grammar retains a reset-safety output obligation when write
+    admission becomes combinational but its transaction qualifier stays
+    registered. It does NOT infer arbitrary combinational output reset values.
+    Both operands must be atoms; the reset atom must have the declared polarity,
+    and the other atom must have one procedural driver with literal-zero reset.
+    At the reset edge the gate is zero; afterwards the register is zero, so the
+    existing sampled-reset assertion is sound even when reset is released.
+    Unknown polarity, expressions, competing drivers and nonzero reset values
+    remain outside the deterministic floor and are never claimed as proved.
+    """
+    assignments: Dict[str, List[str]] = {}
+    for m in re.finditer(r"\bassign\s+([A-Za-z_]\w*)\s*=\s*([^;]+);",
+                         iface.body):
+        assignments.setdefault(m.group(1), []).append(m.group(2))
+    out: Dict[str, str] = {}
+    for port in iface.ports:
+        if port.direction != "output" or not _is_scalar(port.width):
+            continue
+        rhss = assignments.get(port.name, [])
+        if len(rhss) != 1:
+            continue
+        expr = _outer_parens(rhss[0])
+        depth = 0
+        cuts = []
+        idx = 0
+        while idx < len(expr):
+            char = expr[idx]
+            depth += (char == "(") - (char == ")")
+            if char == "&" and depth == 0:
+                width = 2 if expr[idx:idx + 2] == "&&" else 1
+                cuts.append((idx, width))
+                idx += width
+            else:
+                idx += 1
+        if depth or len(cuts) != 1:
+            continue
+        at, width = cuts[0]
+        atoms = []
+        for operand in (expr[:at], expr[at + width:]):
+            atom = _outer_parens(operand)
+            prefix = atom[:1] if atom[:1] in ("!", "~") else ""
+            identifier = _outer_parens(atom[1:] if prefix else atom)
+            if not re.fullmatch(r"[A-Za-z_]\w*", identifier):
+                break
+            atoms.append((prefix, identifier))
+        if len(atoms) != 2:
+            continue
+        for gate, target in (atoms, atoms[::-1]):
+            if gate[1] != reset_name or bool(gate[0]) == active_low:
+                continue
+            if target[0]:
+                continue
+            signal = target[1]
+            ff = ffs.get(signal)
+            if ff is None or ff.value != "'0" or signal in assignments:
+                continue
+            if _procedural_driver_count(iface.body, signal) != 1:
+                continue
+            out[port.name] = signal
+    return out
+
+
 @dataclass
 class ResetProp:
     output: str             # the OUTPUT port asserted
     target: str             # the registered signal that holds the value
     value: str              # normalized reset constant
     is_async: bool
+    reset_gate: bool = False  # also inhibit at the FIRST currently reset edge
 
 
 def derive_reset_props(iface: ModuleIface, reset_name: str, active_low: bool
                        ) -> List[ResetProp]:
     """For each OUTPUT port, find its reset value (directly registered, or via a
-    single `assign out = reg;` alias) → a construction-safe ResetProp. Outputs
+    plain alias or scalar reset-gated zero-reset register) → a ResetProp. Outputs
     whose reset value cannot be pinned to a literal are omitted (fail-safe)."""
     ffs = {f.signal: f for f in find_reset_ffs(iface.body, reset_name, active_low)}
     aliases = _alias_map(iface.body)
+    gated = _reset_gated_aliases(iface, reset_name, active_low, ffs)
+    aliases.update(gated)
     props: List[ResetProp] = []
     for p in iface.ports:
         if p.direction != "output":
+            continue
+        if (re.search(rf"\bassign\s+{re.escape(p.name)}\s*=", iface.body)
+                and _procedural_driver_count(iface.body, p.name)):
+            # A procedural write to the continuously assigned OUTPUT is a
+            # second driver too, even if that write has a literal reset branch.
             continue
         target = p.name
         if target not in ffs and target in aliases:
@@ -1146,7 +1245,7 @@ def derive_reset_props(iface: ModuleIface, reset_name: str, active_low: bool
         if ff is None:
             continue
         props.append(ResetProp(output=p.name, target=target, value=ff.value,
-                               is_async=ff.is_async))
+                               is_async=ff.is_async, reset_gate=p.name in gated))
     return props
 
 
@@ -1490,6 +1589,12 @@ def emit_harness(iface: ModuleIface, clock: str, reset_name: str,
                      + [(p, "rst_active") for p in async_props]):
         idx += 1
         name = f"p_reset_safety_{idx}"
+        full_guard = f"f_past_valid && {guard}"
+        if p.reset_gate:
+            # The admission gate must inhibit a PREVIOUSLY launched transaction
+            # at the very first reset-sampling edge. An after-reset-only guard
+            # misses that edge. Retain its registered-zero check on release too.
+            full_guard = f"rst_active || ({full_guard})"
         if assertion_form == "immediate":
             # v1.15.67 — the IMMEDIATE form, for the `read_slang` frontend.
             # The equivalence is the one this function's own comment states
@@ -1505,14 +1610,14 @@ def emit_harness(iface: ModuleIface, clock: str, reset_name: str,
             # Ignoring the assertions is not an option: a harness whose
             # properties are dropped proves nothing while reporting PASS.
             assert_lines.append(
-                f"    always @(posedge {clock}) if (f_past_valid && {guard})\n"
+                f"    always @(posedge {clock}) if ({full_guard})\n"
                 f"        a_reset_safety_{idx}: assert "
                 f"({p.output} == {p.value});")
         else:
             prop_lines.append(
                 f"    property {name};\n"
                 f"        @(posedge {clock})\n"
-                f"            (f_past_valid && {guard}) |-> ({p.output} == {p.value});\n"
+                f"            ({full_guard}) |-> ({p.output} == {p.value});\n"
                 f"    endproperty")
             assert_lines.append(
                 f"    a_reset_safety_{idx}: assert property ({name});")
