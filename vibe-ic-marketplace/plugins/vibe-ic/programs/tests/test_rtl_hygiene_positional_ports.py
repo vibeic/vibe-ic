@@ -1171,3 +1171,72 @@ endmodule
     assert result.returncode == 1, result.stdout + result.stderr
     assert any(f["rule"] == "hierarchy-port-resolution" and
                f["severity"] == "ERROR" and f["block_eligible"] for f in findings)
+
+
+def _machine_grammar_context(tmp_path, source):
+    from rtl_hierarchy_drivers import DriverContext
+    path = tmp_path / 'grammar.sv'
+    path.write_text(source)
+    return DriverContext([path], lint._procedural_statement_end, lint.collect_lhs_set)
+
+
+@pytest.mark.parametrize('body,expected', [
+    ('leaf u_leaf(.a(source), .y(routed));', True),
+    ('generate if (!ENABLE) begin: disabled '
+     'leaf u_leaf(.a(source), .y(routed)); end endgenerate', False),
+    ('// Do not credit leaf u_leaf(.a(source), .y(routed));\n'
+     '/* assign routed = source; is denied commentary, not RTL. */', False),
+])
+def test_hierarchy_machine_grammar_driver_credit(tmp_path, body, expected):
+    source = ('module leaf(input a, output y); assign y=a; endmodule\n'
+              'module top #(parameter ENABLE=1)(input source, output result);\n'
+              'wire routed;\n' + body + '\nassign result=routed; endmodule\n')
+    context = _machine_grammar_context(tmp_path, source)
+    _body, driven, connections, problems = context.drivers('top')
+    assert problems == []
+    assert ('routed' in driven) == expected
+    assert connections == ({'routed': 'y'} if expected else {})
+    assert ('u_leaf' in _body) == expected
+
+
+@pytest.mark.parametrize('source,stage,reason', [
+    ('The output is driven by leaf u_leaf(.a(source), .y(routed));\n'
+     'parameter ENABLE=1; assign routed=source;\n', 'discovery', 'no safely parsed module'),
+    ('Do not drive routed: leaf u_leaf(.a(source), .y(routed));\n'
+     'Do not use parameter ENABLE=1 or assign routed=source;\n',
+     'discovery', 'no safely parsed module'),
+    ('module top #(parameter ENABLE=unknown_fn(1))(input source, output result);\n'
+     'generate if (ENABLE) begin: unresolved assign result=source; '
+     'end endgenerate endmodule\n', 'selection', 'unresolved generate condition'),
+])
+def test_hierarchy_machine_grammar_refuses_prose_and_unknown(tmp_path, source, stage, reason):
+    with pytest.raises(ValueError, match=reason):
+        context = _machine_grammar_context(tmp_path, source)
+        assert stage == 'selection'
+        context.drivers('top')
+
+
+@pytest.mark.parametrize('value', [0, 1])
+def test_hierarchy_machine_grammar_parameter_declarations(tmp_path, value):
+    from rtl_hierarchy_drivers import resolve_parameters
+    source = f'''module leaf(input a, output y); assign y=a; endmodule
+module top #(parameter ENABLE={value})(input source, output result);
+wire routed;
+// Do not infer localparam SELECT=1; or parameter GHOST=1;
+/* parameter ENABLE=1; localparam GHOST=1; are prose examples. */
+localparam SELECT=ENABLE;
+generate if (SELECT) begin: selected
+leaf u_leaf(.a(source), .y(routed));
+end endgenerate
+assign result=routed;
+endmodule
+'''
+    context = _machine_grammar_context(tmp_path, source)
+    expressions = context.regions['top'].expressions
+    assert expressions == {'ENABLE': (str(value), '', False),
+                           'SELECT': ('ENABLE', '', False)}
+    assert resolve_parameters(expressions) == {'ENABLE': value, 'SELECT': value}
+    _body, driven, connections, problems = context.drivers('top')
+    assert problems == []
+    assert ('routed' in driven) == bool(value)
+    assert connections == ({'routed': 'y'} if value else {})

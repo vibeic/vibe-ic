@@ -8,6 +8,12 @@ refused. No external tools or design-specific names are used.
 """
 from __future__ import annotations
 
+# Flat programs load each other by bare name, including by-path consumers.
+import os as _os
+import sys as _sys
+if _os.path.dirname(_os.path.abspath(__file__)) not in _sys.path:
+    _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+
 import ast
 import operator
 import re
