@@ -5,8 +5,8 @@
   "populations": {
     "programs_top_level": {
       "definition": "Every *.py directly in plugins/vibe-ic/programs/ (top level, NOT recursive). Helpers (_*.py), DEPRECATED_* and *_shim.py ARE included. This is the population the shell glob `programs/*.py` expands to. NOTE: the git pathspec `programs/*.py` is NOT the same thing \u2014 git's `*` crosses `/`, so `git ls-files 'programs/*.py'` returns the RECURSIVE population instead.",
-      "count": 1602,
-      "sha256_of_sorted_paths": "cc5dc454ae5b285a1b2ac0900eddf15d015889fcf25f1bc6000bb0de8cf1539e"
+      "count": 1603,
+      "sha256_of_sorted_paths": "10eaea43c5fe14b3a6780b2530768ab6945c8ce109b1d2597c346b470ac77005"
     },
     "programs_catalogued": {
       "definition": "programs_top_level minus helpers and deprecation shims (_*.py, DEPRECATED_*, *_shim.py, and any file whose first 2000 chars contain 'DEPRECATION SHIM'). This is the population catalogued in programs/INDEX.md by tools/gen_programs_index.py.",
@@ -15,8 +15,8 @@
     },
     "programs_tree_all_py": {
       "definition": "Every *.py at ANY depth under plugins/vibe-ic/programs/, including programs/tests/ and the sub-packages. Roughly programs_top_level + test_files + sub-package modules.",
-      "count": 6138,
-      "sha256_of_sorted_paths": "b9492b633333608adffb48f2bf24aeaed2d42903bb215a3fc3959396d463742c"
+      "count": 6139,
+      "sha256_of_sorted_paths": "8a3d5f5ea2f103edff6f15f0fa5a578001768a97d2fd66a7f039023083776e18"
     },
     "test_files": {
       "definition": "Every test_*.py at any depth under plugins/vibe-ic/programs/tests/.",
@@ -30,8 +30,8 @@
     },
     "programs_helpers_and_shims": {
       "definition": "programs_top_level minus programs_catalogued: the helper modules and deprecation shims that INDEX.md deliberately omits. Stated in the plugin README so the gap between the two program counts is accounted for rather than left as an unexplained discrepancy.",
-      "count": 158,
-      "sha256_of_sorted_paths": "0f0c0afdeb0bf8c3d85223bd4da33d1a27f0309a097c0410e20fed41c0564524"
+      "count": 159,
+      "sha256_of_sorted_paths": "508a11a618d3c789842f8a47fc967d3c174710974f62d489e3132a541f6f3c9e"
     },
     "skill_compliance_test_files": {
       "definition": "Every test_*.py under plugins/vibe-ic/skills/*/tests/ \u2014 the per-skill compliance regressions. A DIFFERENT corpus from test_files, which is programs/tests/ only.",
