@@ -68,13 +68,18 @@ def run_chain_calls(tree: ast.AST):
         and an attribute so bound is the module wherever its NAME is read
         (`self.lc`, `arm.lc`) -- a conservative over-approximation, which the
         member pin below makes visible if it ever over-reaches;
-      * `from librelane_contract import run_chain [as Y]` binds the function.
+      * local function return tuples and arguments carry those same bindings;
+      * `from librelane_contract import run_chain [as Y]` binds the function,
+        as does an alias that is actually called;
+      * an installed tracing wrapper may forward the original callable's
+        arguments unchanged. Its forwarding call remains in the population.
     A call is `<module ref>.run_chain(...)` or `Y(...)`. Everything else that
     could reach the function is returned as an UNRESOLVABLE use, which fails
     the ratchet: `.run_chain` read off a base that is not some OTHER imported
     module and not a resolved call, the bound function used as a value, and a
     module reference handed on other than by an attribute read or a resolved
-    assignment (e.g. as an argument, or stored in a container)."""
+    assignment/known local handoff (e.g. given to an opaque callable, or
+    stored in a container)."""
     parent, scope_of, nodes = {}, {}, []
     stack = [(tree, tree)]
     while stack:                             # one pass: parents and scopes
@@ -110,12 +115,106 @@ def run_chain_calls(tree: ast.AST):
                 return k
         return set()
 
-    names, mod_attrs, pairs = set(), set(), []
+    def binding_scope(e):
+        return next((sc for sc in chain(scope_of[id(e)])
+                     if e.id in binds.get(id(sc), {})), None)
+
+    mod_attrs, pairs, functions, returns, return_values = {}, [], {}, {}, {}
 
     def is_module(e):
         if isinstance(e, ast.Name):
-            return "module" in kinds_of(e)
-        return isinstance(e, ast.Attribute) and e.attr in mod_attrs
+            kinds = kinds_of(e)
+            return "module" in kinds and not kinds - {"module", "parameter"}
+        if isinstance(e, ast.Attribute):
+            kinds = mod_attrs.get(e.attr, set())
+            return "module" in kinds and not kinds - {"module", "parameter"}
+        return False
+
+    def is_chain(e):
+        if isinstance(e, ast.Name):
+            kinds = kinds_of(e)
+            return "chain" in kinds and not kinds - {"chain", "parameter"}
+        return isinstance(e, ast.Attribute) and e.attr == TARGET and is_module(e.value)
+
+    def local_functions(e):
+        if not isinstance(e, ast.Name):
+            return []
+        kinds = kinds_of(e)
+        if any(k != "parameter" and k not in functions for k in kinds):
+            return []
+        return [functions[k] for k in kinds if k in functions]
+
+    def merge(a, b):
+        if not a:
+            return b
+        if not b:
+            return a
+        if isinstance(a, tuple) and isinstance(b, tuple) and len(a) == len(b):
+            return tuple(merge(x, y) for x, y in zip(a, b))
+        if isinstance(a, set) and isinstance(b, set):
+            return a | b
+        return {"opaque"}                    # incompatible return shapes
+
+    def value_of(e):
+        if isinstance(e, ast.Name):
+            return kinds_of(e)
+        if isinstance(e, (ast.Tuple, ast.List)):
+            return tuple(value_of(x) for x in e.elts)
+        if is_module(e) or _is_import_module_call(e):
+            return {"module"}
+        if is_chain(e):
+            return {"chain"}
+        if isinstance(e, ast.Attribute):
+            return set()                    # another assignment may bind it
+        if isinstance(e, ast.Call):
+            callees = local_functions(e.func)
+            if not callees:
+                return {"opaque"} if isinstance(e.func, ast.Name) and kinds_of(e.func) else set()
+            value = set()
+            for func in callees:
+                value = merge(value, returns.get(id(func), set()))
+            return value
+        return {"other"}
+
+    def bind_value(sc, target, value):
+        if isinstance(target, (ast.Tuple, ast.List)):
+            if isinstance(value, tuple) and len(target.elts) == len(value):
+                return any_changed([bind_value(sc, t, v) for t, v in zip(target.elts, value)])
+            return False
+        if isinstance(target, ast.Name) and isinstance(value, set):
+            return any_changed([bind(sc, target.id, k) for k in value])
+        if (isinstance(target, ast.Attribute) and isinstance(value, set)
+                and ("module" in value or target.attr in mod_attrs)):
+            prior = mod_attrs.get(target.attr, set())
+            if prior | value != prior:
+                mod_attrs[target.attr] = prior | value
+                return True
+        return False
+
+    def contains_module(value):
+        return (any(contains_module(v) for v in value) if isinstance(value, tuple)
+                else "module" in value)
+
+    def binding_shape(target, value):
+        if isinstance(target, (ast.Tuple, ast.List)):
+            return (isinstance(value, tuple) and len(target.elts) == len(value)
+                    and all(binding_shape(t, v) for t, v in zip(target.elts, value)))
+        return (isinstance(target, (ast.Name, ast.Attribute)) and isinstance(value, set)
+                and ("module" not in value or not value - {"module", "parameter"}))
+
+    def any_changed(changes):
+        return any(changes)                  # all bindings must be evaluated
+
+    def arguments(call, func):
+        pos = [*func.args.posonlyargs, *func.args.args]
+        out = []
+        for param, value in zip(pos, call.args):
+            if isinstance(value, ast.Starred):
+                break                       # following positions are unknown
+            out.append((param, value))
+        named = {p.arg: p for p in [*pos, *func.args.kwonlyargs]}
+        out += [(named[k.arg], k.value) for k in call.keywords if k.arg in named]
+        return out
 
     for node in nodes:
         sc = scope_of[id(node)]
@@ -126,60 +225,159 @@ def run_chain_calls(tree: ast.AST):
         elif isinstance(node, ast.ImportFrom):
             for alias in node.names:
                 if node.module == TARGET_MODULE and alias.name == TARGET:
-                    names.add(alias.asname or alias.name)
+                    bind(sc, alias.asname or alias.name, "chain")
                 else:
                     bind(sc, alias.asname or alias.name, "other_module")
         elif isinstance(node, _SCOPES):
+            if not isinstance(node, ast.Lambda):
+                key = f"local:{id(node)}"
+                if node.decorator_list:
+                    bind(sc, node.name, "opaque")
+                else:
+                    functions[key] = node
+                    bind(sc, node.name, key)
             for a in (*node.args.posonlyargs, *node.args.args, *node.args.kwonlyargs,
                       *filter(None, (node.args.vararg, node.args.kwarg))):
-                bind(node, a.arg, "other")   # parameters bind in their function
+                bind(node, a.arg, "parameter")
         for target, value in _pairs(node):
             pairs.append((sc, target, value))
             if isinstance(target, ast.Name) and _is_import_module_call(value):
                 bind(sc, target.id, "module")
-    consumed, changed = set(), True
+        if isinstance(node, ast.Return):
+            return_values.setdefault(id(sc), []).append(node.value)
+    def finish(value):
+        return tuple(finish(v) for v in value) if isinstance(value, tuple) else value or {"opaque"}
+
+    consumed, changed, finished = set(), True, False
     while changed:                           # bindings may chain
         changed = False
         for sc, target, value in pairs:
-            if not is_module(value):
-                continue
-            consumed.add(id(value))
-            if isinstance(target, ast.Name):
-                changed |= bind(sc, target.id, "module")
-            elif isinstance(target, ast.Attribute) and target.attr not in mod_attrs:
-                mod_attrs.add(target.attr)
+            changed |= bind_value(sc, target, value_of(value))
+            if is_module(value) and isinstance(target, (ast.Name, ast.Attribute)):
+                consumed.add(id(value))
+        for node in nodes:
+            if isinstance(node, ast.Call):
+                for func in local_functions(node.func):
+                    for param, value in arguments(node, func):
+                        changed |= bind_value(func, ast.Name(id=param.arg), value_of(value))
+                        if is_module(value) or is_chain(value):
+                            consumed.add(id(value))
+        for func in functions.values():
+            value = set()
+            for expression in return_values.get(id(func), ()):
+                value = merge(value, value_of(expression))
+            if value != returns.get(id(func), set()):
+                returns[id(func)] = value
                 changed = True
+        if not changed and not finished:
+            # Delay unknown assignments until known return/argument bindings
+            # have settled, then propagate their ambiguity through aliases.
+            for sc, target, value in pairs:
+                changed |= bind_value(sc, target, finish(value_of(value)))
+            finished = True
     for node in nodes:                       # every other Store binds a non-module
         if (isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store)
-                and "module" not in binds.get(id(scope_of[id(node)]), {}).get(node.id, ())):
+                and not binds.get(id(scope_of[id(node)]), {}).get(node.id)):
             bind(scope_of[id(node)], node.id, "other")
+    # A producer-call value must reach a binding we actually model. Knowing
+    # what it returns cannot excuse handing that value to an unknown consumer.
+    for _, target, value in pairs:
+        if isinstance(value, ast.Call) and binding_shape(target, value_of(value)):
+            consumed.add(id(value))
+    for node in nodes:
+        if isinstance(node, ast.Call):
+            for func in local_functions(node.func):
+                for param, value in arguments(node, func):
+                    if (isinstance(value, ast.Call)
+                            and binding_shape(ast.Name(id=param.arg), value_of(value))):
+                        consumed.add(id(value))
     uses = [value for _, target, value in pairs
-            if id(value) in consumed and not isinstance(target, (ast.Name, ast.Attribute))]
+            if id(value) in consumed and contains_module(value_of(value))
+            and not binding_shape(target, value_of(value))]
     calls, called = [], set()
     for node in nodes:
         if isinstance(node, ast.Call):
+            if hasattr(node, "_run_chain_root_forwarded"):
+                del node._run_chain_root_forwarded
             f = node.func
-            if ((isinstance(f, ast.Attribute) and f.attr == TARGET and is_module(f.value))
-                    or (isinstance(f, ast.Name) and f.id in names)):
+            if is_chain(f):
                 calls.append(node)
                 called.add(id(f))
+    # A callable alias is resolved only when it reaches an actual call.
+    # Orphaned aliases and unknown consumers still appear as opaque uses.
+    for _, target, value in pairs:
+        if isinstance(target, ast.Name) and is_chain(value):
+            if any(isinstance(c.func, ast.Name) and c.func.id == target.id
+                   and binding_scope(c.func) is scope_of[id(target)]
+                   for c in calls):
+                consumed.add(id(value))
+    reached = {id(f) for n in nodes if isinstance(n, ast.Call) for f in local_functions(n.func)}
+
+    def returned_modules(e):
+        if is_module(e):
+            return [e]
+        if isinstance(e, ast.Call) and contains_module(value_of(e)):
+            return [e]                      # a known local producer return
+        if isinstance(e, (ast.Tuple, ast.List)):
+            return [m for one in e.elts for m in returned_modules(one)]
+        return []                           # opaque calls are not return slots
+
     for node in nodes:
-        if id(node) in called:
+        if isinstance(node, ast.Return) and id(scope_of[id(node)]) in reached and node.value:
+            consumed.update(id(e) for e in returned_modules(node.value))
+    # Accept a wrapper installation only after proving its sole original-call
+    # invocation forwards *args/**kwargs untouched. This is a binding proof,
+    # not an exemption for a worker filename or a callable's spelling.
+    for _, target, value in pairs:
+        if not (isinstance(target, ast.Attribute) and target.attr == TARGET
+                and is_module(target.value)):
+            continue
+        for func in local_functions(value):
+            forwarded = [c for c in calls if scope_of[id(c)] is func]
+            if len(forwarded) == 1 and _unchanged_forwarding(forwarded[0], func):
+                forwarded[0]._run_chain_root_forwarded = True
+                consumed.add(id(target))
+    for node in nodes:
+        if id(node) in called or id(node) in consumed:
             continue
         if isinstance(node, ast.Attribute) and node.attr == TARGET:
             base = node.value
-            if not (isinstance(base, ast.Name) and kinds_of(base) == {"other_module"}):
+            if not (isinstance(base, ast.Name)
+                    and kinds_of(base) - {"parameter"} == {"other_module"}):
                 uses.append(node)            # a value, or a base we cannot resolve
-        elif isinstance(node, ast.Name) and node.id in names and isinstance(node.ctx, ast.Load):
+        elif (isinstance(node, ast.Name) and "chain" in kinds_of(node)
+              and isinstance(node.ctx, ast.Load)):
             uses.append(node)
         elif (isinstance(getattr(node, "ctx", None), ast.Load) and id(node) not in consumed
-              and is_module(node)):
+              and (is_module(node) or isinstance(node, ast.Name) and "module" in kinds_of(node))):
             up = parent.get(id(node))
             if not (isinstance(up, ast.Attribute) and up.value is node):
                 uses.append(node)            # the module handed on as a value
+        elif isinstance(node, ast.Call) and contains_module(value_of(node)):
+            up = parent.get(id(node))
+            if not (isinstance(up, ast.Attribute) and up.value is node):
+                uses.append(node)            # a producer value handed on opaquely
     calls.sort(key=lambda c: (c.lineno, c.col_offset))
     uses.sort(key=lambda u: (u.lineno, u.col_offset))
     return calls, uses
+
+
+def _unchanged_forwarding(call, func):
+    """A tracing wrapper preserves the original callable's root keyword."""
+    args, kwargs = func.args.vararg, func.args.kwarg
+    if (not args or not kwargs or func.args.posonlyargs or func.args.args or func.args.kwonlyargs
+            or len(call.args) != 1 or len(call.keywords) != 1):
+        return False
+    positional, keyword = call.args[0], call.keywords[0]
+    if not (isinstance(positional, ast.Starred) and isinstance(positional.value, ast.Name)
+            and positional.value.id == args.arg and keyword.arg is None
+            and isinstance(keyword.value, ast.Name) and keyword.value.id == kwargs.arg):
+        return False
+    if not any(isinstance(n, ast.Return) and n.value is call for n in ast.walk(func)):
+        return False
+    forwarded = {id(positional.value), id(keyword.value)}
+    return all(id(n) in forwarded for n in ast.walk(func)
+               if isinstance(n, ast.Name) and n.id in {args.arg, kwargs.arg})
 
 
 def call_sites(tree: ast.AST, rel: str):
@@ -236,7 +434,9 @@ def _states_root(call: ast.Call, func=None) -> bool:
     the runtime refusal would say so."""
     kw = {k.arg: k.value for k in call.keywords}
     value = kw.get("pdk_root")
-    if value is None or (isinstance(value, ast.Constant) and value.value in (None, "")):
+    if value is None:
+        return bool(getattr(call, "_run_chain_root_forwarded", False))
+    if isinstance(value, ast.Constant) and value.value in (None, ""):
         return False
     return not (isinstance(value, ast.Name) and value.id in _none_default_params(func))
 
@@ -259,15 +459,21 @@ def _enclosing_functions(tree: ast.AST) -> dict:
 #: A call that appears, disappears or moves changes this map and reddens the
 #: ratchet until it is re-pinned by name -- a count floor let six members
 #: leave the resolver's view unnoticed (analog_a6's `self.lc.run_chain` was
-#: one of them). 31 calls in 27 functions.
+#: one of them). Includes the traced worker's unchanged forwarding call.
 EXPECTED_CALL_SITES = {
+    '_native373_current.py::produce': 2,
     '_ppa/synthesis.py::run_exploration': 1,
     'analog_a6_librelane_drc.py::_Arm.run': 1,
     'analog_a7_post_layout_emit.py::run': 1,
     'design_one_shot_runner.py::step_rtl_lint_tool': 1,
+    'execution_backend_producers.py::_cts_split': 1,
+    'execution_backend_producers.py::_state_chain': 1,
+    'execution_backend_producers.py::produce_pnr': 1,
+    'execution_native_worker.py::execute._traced_run_chain': 1,
     'librelane_cts_hold.py::execute': 2,
     'librelane_eqy.py::run_eqy': 1,
     'librelane_fill_dfm.py::run_density': 1,
+    'librelane_fill_dfm.py::default_stream': 1,
     'librelane_fill_dfm.py::run_fill_insertion': 1,
     'librelane_ir_antenna.py::run_antenna_gds': 1,
     'librelane_ir_antenna.py::run_antenna_router': 1,
@@ -280,6 +486,7 @@ EXPECTED_CALL_SITES = {
     'librelane_pv_signoff.py::run_database_unit': 1,
     'librelane_pv_signoff.py::run_finishing_xor': 1,
     'librelane_pv_signoff.py::run_half': 1,
+    'librelane_pv_signoff.py::run_mixed_top': 1,
     'librelane_route.py::execute._route': 1,
     'librelane_route.py::execute._route._ll_arm': 2,
     'librelane_signoff.py::run': 1,
@@ -448,6 +655,137 @@ def test_a_root_forwarded_from_a_none_default_parameter_is_not_stated():
     calls, _ = run_chain_calls(tree)
     enclosing = _enclosing_functions(tree)
     assert [_states_root(c, enclosing.get(id(c))) for c in calls] == [False, True, True]
+
+
+_MODULE_HANDOFF = """\
+def supplier():
+    import librelane_contract as contract
+    return 'tag', contract
+def consume(contract):
+    return contract.run_chain(p, i, s, pdk_root='/pdk')
+tag, contract = supplier()
+consume(contract)
+"""
+
+
+def test_the_resolver_follows_local_module_returns_and_parameters():
+    tree = ast.parse(_MODULE_HANDOFF)
+    calls, uses = run_chain_calls(tree)
+    assert call_sites(tree, 'neutral.py') == {'neutral.py::consume': 1}
+    assert len(calls) == 1 and _states_root(calls[0])
+    assert uses == []
+    unrelated = ast.parse(_MODULE_HANDOFF.replace('librelane_contract', 'fault_scan_chain_insert'))
+    assert run_chain_calls(unrelated) == ([], [])
+
+
+@pytest.mark.parametrize('change', [
+    'unknown_return', 'unknown_return_consumer', 'unknown_consumer', 'opaque_return_recipient',
+    'mixed_argument', 'mixed_callable_argument',
+    'expanded_argument', 'decorated_supplier',
+])
+def test_module_handoffs_do_not_resolve_opaque_paths(change):
+    source = _MODULE_HANDOFF
+    if change == 'unknown_return':
+        source = source.replace("return 'tag', contract", "return 'tag', opaque_factory()")
+    elif change == 'unknown_return_consumer':
+        source = source.replace("return 'tag', contract", "return 'tag', opaque_consumer(contract)")
+    elif change == 'unknown_consumer':
+        source += 'opaque_consumer(contract)\n'
+    elif change == 'opaque_return_recipient':
+        source += 'opaque_consumer(supplier())\n'
+    elif change == 'mixed_argument':
+        source += 'consume(None)\n'
+    elif change == 'mixed_callable_argument':
+        source += 'consume(contract.run_chain)\n'
+    elif change == 'expanded_argument':
+        source = source.replace('consume(contract)\n', 'consume(*opaque_arguments, contract)\n')
+    else:
+        source = source.replace('def supplier():', '@opaque_decorator\ndef supplier():')
+    calls, uses = run_chain_calls(ast.parse(source))
+    assert uses, 'an unknown module or consumer must remain visible to the audit'
+    if change not in ('unknown_consumer', 'opaque_return_recipient'):
+        assert calls == []
+
+
+_TRACED_CHAIN = """\
+import librelane_contract as contract
+original = contract.run_chain
+def traced(*args, **kwargs):
+    journal['entered'] = True
+    return original(*args, **kwargs)
+contract.run_chain = traced
+"""
+
+
+def test_an_installed_tracing_wrapper_preserves_the_root_contract():
+    tree = ast.parse(_TRACED_CHAIN)
+    calls, uses = run_chain_calls(tree)
+    assert call_sites(tree, 'neutral.py') == {'neutral.py::traced': 1}
+    assert len(calls) == 1 and _states_root(calls[0])
+    assert uses == []
+    unrelated = ast.parse(_TRACED_CHAIN.replace('librelane_contract', 'fault_scan_chain_insert'))
+    assert run_chain_calls(unrelated) == ([], [])
+
+
+@pytest.mark.parametrize('change', [
+    'uninstalled', 'drop_kwargs', 'mutate_kwargs', 'replace_root',
+    'named_root', 'rebound_original', 'decorated_wrapper', 'opaque_call',
+])
+def test_a_wrapper_cannot_hide_missing_or_replaced_root_arguments(change):
+    source = _TRACED_CHAIN
+    if change == 'uninstalled':
+        source = source.replace('contract.run_chain = traced', '')
+    elif change == 'drop_kwargs':
+        source = source.replace('original(*args, **kwargs)', 'original(*args)')
+    elif change == 'mutate_kwargs':
+        source = source.replace("journal['entered'] = True", "kwargs.pop('pdk_root', None)")
+    elif change == 'replace_root':
+        source = source.replace('original(*args, **kwargs)', 'original(*args, pdk_root=None, **kwargs)')
+    elif change == 'named_root':
+        source = source.replace('def traced(*args, **kwargs):', 'def traced(*args, pdk_root=None, **kwargs):')
+    elif change == 'rebound_original':
+        source = source.replace('def traced(*args, **kwargs):',
+                                'original = opaque_factory()\ndef traced(*args, **kwargs):')
+    elif change == 'decorated_wrapper':
+        source = source.replace('def traced(*args, **kwargs):', '@opaque_decorator\ndef traced(*args, **kwargs):')
+    else:
+        source = source.replace('original(*args, **kwargs)', 'opaque_call(*args, **kwargs)')
+    tree = ast.parse(source)
+    calls, uses = run_chain_calls(tree)
+    enclosing = _enclosing_functions(tree)
+    assert uses or any(not _states_root(c, enclosing.get(id(c))) for c in calls)
+
+
+@pytest.mark.parametrize('rel', [
+    '_native373_current.py', 'execution_backend_producers.py',
+    'execution_native_worker.py', 'librelane_fill_dfm.py', 'librelane_pv_signoff.py',
+])
+@pytest.mark.parametrize('mutation', ['remove_root', 'unrelated_module'])
+def test_real_handoffs_and_wrapper_cannot_leave_the_root_audit(rel, mutation):
+    """Mutate shipped source ASTs, including the worker's forwarding call."""
+    tree = ast.parse((PROGRAMS / rel).read_text())
+    calls, uses = run_chain_calls(tree)
+    expected = {k: v for k, v in EXPECTED_CALL_SITES.items() if k.startswith(rel + '::')}
+    assert call_sites(tree, rel) == expected
+    assert calls and not uses
+    enclosing = _enclosing_functions(tree)
+    assert all(_states_root(c, enclosing.get(id(c))) for c in calls)
+    if mutation == 'remove_root':
+        for call in calls:
+            call.keywords = [k for k in call.keywords if k.arg not in ('pdk_root', None)]
+        changed, _ = run_chain_calls(tree)
+        assert call_sites(tree, rel) == expected, 'root removal must not hide the call'
+        assert changed and all(not _states_root(c, enclosing.get(id(c))) for c in changed)
+    else:
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.name == TARGET_MODULE:
+                        alias.name = 'fault_scan_chain_insert'
+            elif isinstance(node, ast.ImportFrom) and node.module == TARGET_MODULE:
+                node.module = 'fault_scan_chain_insert'
+        assert run_chain_calls(tree) == ([], [])
+        assert call_sites(tree, rel) != expected, 'exact member equality must reject the replacement'
 
 
 def test_a_step_folder_resumes_only_under_the_root_it_was_run_with(tmp_path, monkeypatch):
