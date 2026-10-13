@@ -150,3 +150,268 @@ def test_work_already_authored_is_not_clobbered(tmp_path):
     got = T._emit_case_reset_invariant_oracle(
         tmp_path, _HOLD, "subservient", ports, out, {})
     assert "authored" in got.read_text()
+
+
+# #3074: self-authored registered byte-memory INPUT and actual native producers.
+import hashlib
+import json
+import resource
+import shutil
+import subprocess
+import pytest
+import _l10_execution as X
+import l10_tb_conformance_check as C
+
+CASE = {"name": "reset_content_retained", "kind": "functional_vector",
+        "stimulus": "Reset assert retains external byte memory content, including the first sampled rising edge after an active pending write.",
+        "expected": "Every actual storage byte remains unchanged throughout the complete reset assertion interval."}
+
+DEBT = {"name": "independent_unimplemented_obligation", "kind": "functional_vector",
+        "stimulus": "Check a separately declared unspecified data transaction", "expected": "The independent expected result remains owed."}
+
+RTL = """module sample_store(input i_clk, input i_rst, input [7:0] i_store_rdata,
+ output reg [2:0] o_store_raddr, output reg [2:0] o_store_waddr,
+ output reg [7:0] o_store_wdata, output OWE o_store_we);
+ reg [3:0] phase;
+ PENDING
+ always @(posedge i_clk) begin
+  if(i_rst) begin phase <= 0; o_store_raddr <= 0; o_store_waddr <= 2; o_store_wdata <= 8'h3c; SETZERO end
+  else begin phase <= phase + 1; o_store_raddr <= 2;
+   if(phase == 2) begin SETONE o_store_waddr <= 2; o_store_wdata <= 8'h3c; end
+   else begin SETZERO end
+  end
+ end
+endmodule
+"""
+
+PORTS = [{"name": n,"direction":d,"width":w} for d,w,n in
+ [("input",1,"i_clk"),("input",1,"i_rst"),("input",8,"i_store_rdata"),
+ ("output",3,"o_store_raddr"),("output",3,"o_store_waddr"),("output",8,"o_store_wdata"),("output",1,"o_store_we")]]
+
+DECL = {"top_module":"sample_store","clock_port_name":"i_clk","reset_polarity":"active_high",
+        "sram_interface_protocol":"registered_dual_port_8bit_async_read_sync_write",
+        "sram_interface":{"read_address":"o_store_raddr","write_address":"o_store_waddr",
+            "write_data":"o_store_wdata","read_data":"i_store_rdata","write_enable":"o_store_we","read_latency_cycles":0}}
+
+DIAGNOSTIC = """`timescale 1ns/1ps
+module strict_pending_probe;
+ reg i_clk=0, i_rst=1; wire [2:0] raddr,waddr; wire [7:0] wdata; wire we;
+ reg [7:0] memory[0:7]; reg [7:0] snapshot[0:7]; wire [7:0] rdata=memory[raddr];
+ sample_store dut(i_clk,i_rst,rdata,raddr,waddr,wdata,we);
+ always #5 i_clk=~i_clk;
+ // Real external-memory commit: previous registered transaction commits on
+ // every rising edge, INCLUDING reset's first edge. Never gate on reset.
+ always @(posedge i_clk) if(we===1'b1) memory[waddr] <= wdata;
+ integer i,cycles; reg found; integer address; reg [7:0] before_byte,pending_data;
+ initial begin
+  for(i=0;i<8;i=i+1) memory[i]=8'ha5+i*17;
+  repeat(4) @(negedge i_clk); i_rst=0; found=0;
+  for(cycles=0;cycles<64 && !found;cycles=cycles+1) begin
+   @(negedge i_clk);
+   if(we===1'b1 && memory[waddr]!==wdata) found=1;
+  end
+  if(!found) $fatal(1,"no non-idempotent pending transaction; retention NOT_MEASURED");
+  address=waddr; before_byte=memory[waddr]; pending_data=wdata;
+  for(i=0;i<8;i=i+1) snapshot[i]=memory[i];
+  $display("PENDING address=%0d before=%02x data=%02x",address,before_byte,pending_data);
+  i_rst=1;
+  @(posedge i_clk); @(negedge i_clk);
+  $display("FIRST_EDGE address=%0d before=%02x after=%02x post_edge_we=%b",address,before_byte,memory[address],we);
+  for(i=0;i<8;i=i+1) if(memory[i]!==snapshot[i]) begin
+   $display("STRICT_RETENTION FAIL edge=0 byte=%0d before=%02x after=%02x",i,snapshot[i],memory[i]);
+   $fatal(1);
+  end
+  repeat(5) begin @(posedge i_clk); @(negedge i_clk);
+   for(i=0;i<8;i=i+1) if(memory[i]!==snapshot[i]) $fatal(1,"later reset byte changed");
+  end
+  $display("STRICT_RETENTION PASS bytes=8 edges=6 including_first_edge=1"); $finish;
+ end
+endmodule
+"""
+
+def bounded():
+ resource.setrlimit(resource.RLIMIT_AS,(4*1024**3,4*1024**3))
+ resource.setrlimit(resource.RLIMIT_CORE,(0,0))
+
+def execute(argv,cwd,timeout=120):
+ p=subprocess.run([str(a) for a in argv],cwd=cwd,capture_output=True,text=True,timeout=timeout,preexec_fn=bounded)
+ return p.returncode,(p.stderr or "")+(p.stdout or "")
+
+def dispatch(argv,cwd,container,tool,timeout):
+ argv=list(argv)
+ if '-j' in argv: argv[argv.index('-j')+1]='1'
+ return execute(argv,cwd,timeout)
+
+def prepare(root,good=False):
+ for d in ['phase1/generated_docs','phase2/stage1/rtl','plugin_output','input/docs']:(root/d).mkdir(parents=True,exist_ok=True)
+ s=RTL.replace('OWE','wire' if good else 'reg').replace('PENDING',"reg pending; assign o_store_we = pending && !i_rst;" if good else '')
+ s=s.replace('SETZERO','pending <= 0;' if good else 'o_store_we <= 0;').replace('SETONE','pending <= 1;' if good else 'o_store_we <= 1;')
+ (root/'phase2/stage1/rtl/sample_store.v').write_text(s)
+ docs=root/'phase1/generated_docs'
+ for n,data in [('L1_DATASHEET.json',{'ic_class':'glue_logic'}),('L2_FRS.json',{'function':'registered external byte-store sequencer'}),('L3_CMD_PROTOCOL.json',{'opcodes':[]}),('L9_INTEGRATION_SPEC.json',{'top_module':'sample_store','top_ports':PORTS}),('L10_TEST_CASES.json',{'test_cases':[CASE,DEBT]})]:(docs/n).write_text(json.dumps(data,indent=2))
+ (root/'plugin_output/declaration.json').write_text(json.dumps(DECL,indent=2))
+ (root/'input/docs/retention.md').write_text('# Neutral external memory contract\n'+CASE['stimulus']+'\n'+CASE['expected']+'\nPorts and protocol: '+json.dumps(DECL)+'\n')
+ return root/'phase2/stage1/rtl/sample_store.v'
+
+def _retention_consumer(project):
+ out = project / "consumer.json"
+ rc = C.main(["--l10", str(project / "phase1/generated_docs/L10_TEST_CASES.json"),
+              "--tb-dir", str(T._pl.sim_dir(project) / "tb"), "--project", str(project),
+              "--out", str(out), "--strict"])
+ return rc, json.loads(out.read_text())
+
+
+def _retention_native(project, good=True, mutation=None, diagnostic=True):
+ from not_verified_tier import skip_not_verified
+ if any(shutil.which(tool) is None for tool in ("iverilog", "vvp", "verilator")):
+  skip_not_verified("native reset retention needs Icarus and Verilator", "Run this module in the pinned EDA image")
+ rtl = prepare(project, good)
+ if mutation == "no_pending":
+  rtl.write_text(rtl.read_text().replace("if(phase == 2)", "if(1'b0)"))
+ elif mutation == "unsupported_width":
+  rtl.write_text(rtl.read_text().replace("[2:0]", "[16:0]"))
+ elif mutation in ("unsupported_protocol", "missing_role"):
+  path = project / "plugin_output/declaration.json"
+  decl = json.loads(path.read_text())
+  if mutation == "unsupported_protocol": decl["sram_interface_protocol"] = "unstated_commit_convention"
+  else: decl["sram_interface"].pop("write_address")
+  path.write_text(json.dumps(decl))
+ diagnostic_rc = None
+ diagnostic_log = ""
+ if diagnostic:
+  tb = project / "strict_pending_probe.v"
+  tb.write_text(DIAGNOSTIC)
+  rc, log = execute(["iverilog", "-g2012", "-s", "strict_pending_probe", "-o", project / "strict.vvp", rtl, tb], project)
+  assert rc == 0, log
+  diagnostic_rc, diagnostic_log = execute(["vvp", project / "strict.vvp"], project)
+  (project / "strict-run.log").write_text(diagnostic_log)
+ generation = {}
+ assert T.emit_unit_tbs(project, top="sample_store", report=generation,
+                        scaffold=False, case_stated=True) == 1
+ execution = {}
+ T.run_unit_tbs(project, report=execution, dispatch=dispatch, container=None,
+                build_timeout=120, run_timeout=30)
+ rc, consumer = _retention_consumer(project)
+ result = {"diagnostic_rc": diagnostic_rc, "diagnostic": diagnostic_log,
+           "generation": generation, "execution": execution, "consumer_rc": rc,
+           "consumer": consumer, "rtl_sha256": hashlib.sha256(rtl.read_bytes()).hexdigest()}
+ (project / "native-retention-receipt.json").write_text(json.dumps(result, indent=2))
+ return project, result
+
+
+@pytest.fixture(scope="module")
+def native_retention_good(tmp_path_factory):
+ return _retention_native(tmp_path_factory.mktemp("retention_good"))
+
+
+@pytest.fixture(scope="module")
+def native_retention_bad(tmp_path_factory):
+ return _retention_native(tmp_path_factory.mktemp("retention_bad"), good=False)
+
+
+def _retention_row(consumer):
+ return next(r for r in consumer["results"] if r["id"] == CASE["name"])
+
+
+def _debt_stays_owed(consumer):
+ debt = next(r for r in consumer["results"] if r["id"] == DEBT["name"])
+ assert debt["status"] == "NOT_EXECUTED" and debt["pass"] is False
+ assert debt["sim_executed"] is False and debt["waived"] is False
+
+
+def test_registered_pending_first_edge_byte_change_is_failed_by_native_case(native_retention_bad):
+ project, result = native_retention_bad
+ assert result["diagnostic_rc"] == 1
+ assert "FIRST_EDGE address=2 before=c7 after=3c post_edge_we=0" in result["diagnostic"]
+ case = result["execution"]["cases"][0]
+ assert case["state"] == "failed", case
+ row = _retention_row(result["consumer"])
+ assert row["status"] == "fail" and row["pass"] is False and row["sim_executed"] is True
+ log = (Path(case["work_dir"]) / "run.log").read_text()
+ assert "retention arm=1 edge=0 byte=2 before=c7 after=3c" in log
+ assert "RESET_RETENTION SAMPLE arm=1 edge=0 bytes=a5b63cd8e9fa0b1c post_edge_we=0" in log
+ assert result["consumer_rc"] == 1
+ _debt_stays_owed(result["consumer"])
+
+
+def test_strict_retention_positive_measures_actual_idle_and_pending_bytes(native_retention_good):
+ _, result = native_retention_good
+ assert result["diagnostic_rc"] == 0
+ assert "FIRST_EDGE address=2 before=c7 after=c7 post_edge_we=0" in result["diagnostic"]
+ row = _retention_row(result["consumer"])
+ assert row["pass"] is True and row["status"] == "pass" and row["sim_executed"] is True
+ case = result["execution"]["cases"][0]
+ measured = (case.get("reset_retention") or {}).get("measurement")
+ assert measured is not None and measured["complete"] is True and measured["changed"] is False
+ assert measured["pending"] == {"address": 2, "before": "c7", "data": "3c"}
+ assert measured["baselines"] == {"0": "a5b6c7d8e9fa0b1c", "1": "a5b6c7d8e9fa0b1c"}
+ assert measured["samples"] == {a: {str(i): "a5b6c7d8e9fa0b1c" for i in range(6)} for a in ("0", "1")}
+ assert result["consumer_rc"] == 1  # The independent unimplemented obligation still blocks.
+ _debt_stays_owed(result["consumer"])
+
+
+@pytest.mark.parametrize("mutation", ["unsupported_protocol", "missing_role", "unsupported_width", "no_pending"])
+def test_unbound_or_unexercised_memory_protocol_is_native_not_measured(tmp_path, mutation):
+ _, result = _retention_native(tmp_path, mutation=mutation, diagnostic=False)
+ case = result["execution"]["cases"][0]
+ assert case["state"] == "not_measured", case
+ assert "NOT_MEASURED" in case["message"]
+ row = _retention_row(result["consumer"])
+ assert row["pass"] is False and row["status"] == "NOT_EXECUTED"
+ assert row["sim_executed"] is False and row["waived"] is False
+ _debt_stays_owed(result["consumer"])
+
+
+@pytest.mark.parametrize("mutation", ["legacy_pass", "missing_execution", "missing_transcript", "changed_transcript",
+                                      "missing_first_edge", "missing_bytes", "changed_rtl", "changed_declaration", "changed_tb"])
+def test_retention_pass_requires_current_execution_protocol_and_actual_bytes(native_retention_good, mutation):
+ project, original = native_retention_good
+ record_path = X.record_path(project)
+ case = original["execution"]["cases"][0]
+ transcript = Path(case["work_dir"]) / "run.log"
+ rtl = project / "phase2/stage1/rtl/sample_store.v"
+ decl = project / "plugin_output/declaration.json"
+ tb = Path(case["tb_file"])
+ saved = {p: p.read_bytes() for p in (record_path, transcript, rtl, decl, tb)}
+ try:
+  record = json.loads(saved[record_path])
+  row = record["cases"][0]
+  evidence = row.get("reset_retention")
+  if mutation == "legacy_pass": row.pop("reset_retention", None)
+  elif mutation == "missing_execution": record_path.unlink()
+  elif mutation == "missing_transcript": transcript.unlink()
+  elif mutation == "changed_transcript": transcript.write_text(saved[transcript].decode() + "changed current native transcript\n")
+  elif mutation in ("missing_first_edge", "missing_bytes"):
+   text = saved[transcript].decode()
+   lines = [line for line in text.splitlines() if not (line.startswith("RESET_RETENTION SAMPLE arm=1 edge=0 ")
+            if mutation == "missing_first_edge" else line.startswith("RESET_RETENTION SAMPLE "))]
+   transcript.write_text("\n".join(lines) + "\n")
+   if isinstance(evidence, dict): evidence["transcript_sha256"] = hashlib.sha256(transcript.read_bytes()).hexdigest()
+  elif mutation == "changed_rtl": rtl.write_text(saved[rtl].decode().replace("8'h3c", "8'h3d"))
+  elif mutation == "changed_declaration":
+   data = json.loads(saved[decl]); data["sram_interface_protocol"] = "different_commit_protocol"; decl.write_text(json.dumps(data))
+  elif mutation == "changed_tb": tb.write_text(saved[tb].decode() + "// changed current testbench\n")
+  if mutation != "missing_execution": record_path.write_text(json.dumps(record))
+  _, rejected = _retention_consumer(project)
+  measured = _retention_row(rejected)
+  assert measured["pass"] is False, measured
+  assert measured["status"] == "NOT_EXECUTED" and measured["waived"] is False
+  _debt_stays_owed(rejected)
+ finally:
+  for path, data in saved.items(): path.write_bytes(data)
+
+
+def test_consumer_refuses_false_pass_over_measured_first_edge_corruption(native_retention_bad):
+ project, _ = native_retention_bad
+ path = X.record_path(project); original = path.read_bytes()
+ try:
+  record = json.loads(original)
+  record["cases"][0]["verdict"] = "PASS"
+  path.write_text(json.dumps(record))
+  _, checked = _retention_consumer(project)
+  row = _retention_row(checked)
+  assert row["pass"] is False and row["status"] == "fail", row
+  assert "actual memory bytes changed" in " ".join(row["evidence"])
+  _debt_stays_owed(checked)
+ finally:
+  path.write_bytes(original)

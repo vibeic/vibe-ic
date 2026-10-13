@@ -1845,6 +1845,10 @@ def evaluate(
         # remains available only to the separate vacuity/substance check; a
         # case id or opcode in source text is never evidence that the case ran.
         exec_state, exec_reason = _l10x.case_state(case_id, execution_record)
+        import reset_invariant_oracle_tb_gen as _riv
+        if _riv.is_reset_hold_case(c):
+            exec_state, exec_reason = _riv.retention_case_state(
+                Path(project_root) if project_root else None, case_id, execution_record)
         executed_fail = exec_state == _l10x.FAIL
         ok = exec_state == _l10x.PASS
         # R-0929-UNSELECTED-FEATURES — a case whose declared option the design

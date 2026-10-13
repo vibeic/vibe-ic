@@ -19,23 +19,16 @@ emitter for one property family (`cpu_boot_latency_oracle_tb_gen`, the
 `reset_n_cycle_instruction` is the single case that executed) and none for
 this one. This module is that missing family.
 
-WHAT IT GROUNDS, and what it deliberately does not. Both oracles are
-NECESSARY CONDITIONS stated at the pins, never a re-description of the
-sentence:
+WHAT IT GROUNDS. Full storage retention requires the selected external-memory
+protocol, actual byte snapshots and both idle and pending-write reset windows.
+The pending window includes reset's FIRST sampled edge; the external memory
+always consumes the previous registered transaction, even on that edge.
+Missing protocol, pending activity or current bytes is NOT_MEASURED.
 
-  RESET_ASSERT_HOLD  "state held across reset assert" is observed as: while
-    reset is ASSERTED the design issues no WRITE on its storage interface.
-    A write is the only pin-visible way stored content can change, so no
-    write asserted across the whole assert window is a real, falsifiable
-    necessary condition for "content preserved".
-
-    FALSIFIABILITY, MEASURED rather than asserted. Both oracles PASS on the
-    shipped RTL AND on its pre-R-0915-99 combinational-boundary predecessor,
-    so neither is evidence about the registered-boundary change -- they are
-    about the reset invariants, which both revisions honour. What proves they
-    can fail is a MUTANT: a DUT whose reset branch drives the observed output
-    to 1 makes each of them FAIL by name (`reset_assert_sram` at every cycle
-    of the assert window; the glitch oracle inside its window).
+  RESET_ASSERT_HOLD measures byte content through the explicitly declared
+    registered dual-port byte protocol. Without that binding the historical
+    write-strobe check remains a falsifiable necessary condition only. It can
+    detect a violation, but its success cannot credit full memory retention.
 
   RESET_GLITCH_NO_RACE  "a reset glitch must not cause a fetch race" is
     observed as: during a SHORT reset pulse applied mid-operation, the bus
@@ -66,6 +59,7 @@ if _os.path.dirname(_os.path.abspath(__file__)) not in _sys.path:
 # ---------------------------------------------------------------------------
 
 import json
+import hashlib
 import re
 import sys
 from pathlib import Path
@@ -307,6 +301,212 @@ def _vstr(text: str) -> str:
             .replace("%", " pct").replace("\n", " "))[:400]
 
 
+RETENTION_PROTOCOL = "registered_dual_port_8bit_async_read_sync_write"
+RETENTION_HEADER = "// VIBEIC_RESET_RETENTION: "
+RETENTION_EDGES = 6
+RETENTION_ACTIVE_CYCLES = 64
+
+
+def declared_retention_memory(project: Path, dut: str,
+                              inputs: List[Tuple[str, str]],
+                              outputs: List[Tuple[str, str]]) -> Tuple[Optional[dict], str]:
+    """Bind the selected SRAM protocol and explicit role map; never infer timing."""
+    path = Path(project) / "plugin_output/declaration.json"
+    try:
+        raw = path.read_bytes()
+        decl = json.loads(raw)
+    except (OSError, ValueError):
+        return None, "NOT_MEASURED: no readable selected memory declaration"
+    if not isinstance(decl, dict) or decl.get("sram_interface_protocol") != RETENTION_PROTOCOL:
+        return None, "NOT_MEASURED: unsupported or unstated external memory commit protocol"
+    roles = decl.get("sram_interface")
+    if not isinstance(roles, dict) or roles.get("read_latency_cycles", 0) != 0:
+        return None, "NOT_MEASURED: selected protocol needs explicit SRAM roles and asynchronous read"
+    memory = {role: roles.get(key) for role, key in (
+        ("raddr", "read_address"), ("waddr", "write_address"),
+        ("wdata", "write_data"), ("rdata", "read_data"), ("we", "write_enable"))}
+    ins, outs = dict(inputs), dict(outputs)
+    if (any(not isinstance(n, str) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_$]*", n)
+            for n in memory.values()) or len(set(memory.values())) != 5
+            or memory["rdata"] not in ins
+            or any(memory[k] not in outs for k in ("raddr", "waddr", "wdata", "we"))):
+        return None, "NOT_MEASURED: selected memory roles do not bind to the actual DUT ports"
+    def bits(width):
+        if not width:
+            return 1
+        m = re.fullmatch(r"\[\s*(\d+)\s*:\s*(\d+)\s*\]", str(width))
+        return abs(int(m[1]) - int(m[2])) + 1 if m else None
+    abits = bits(outs[memory["waddr"]])
+    if (abits is None or not 1 <= abits <= 16
+            or bits(outs[memory["raddr"]]) != abits
+            or bits(outs[memory["wdata"]]) != 8 or bits(ins[memory["rdata"]]) != 8
+            or bits(outs[memory["we"]]) != 1):
+        return None, "NOT_MEASURED: unsupported or unknown byte-memory port widths"
+    memory.update(protocol=RETENTION_PROTOCOL, depth=1 << abits, dut=dut,
+                  declaration_sha256=hashlib.sha256(raw).hexdigest())
+    return memory, "selected declaration; previous registered transaction commits on every rising edge"
+
+
+def _emit_retention_oracle(case: dict, dut: str, inputs, outputs, inouts,
+                           memory: dict) -> str:
+    """Actual byte model, idle reset and active/pending reset, including edge zero."""
+    name = case["name"]
+    clk = _pick_clock(inputs)
+    rst, low = _pick_reset(inputs)
+    asserted, released = ("0", "1") if low else ("1", "0")
+    depth = memory["depth"]
+    raddr, waddr, data, rdata, we = (memory[k] for k in
+                                   ("raddr", "waddr", "wdata", "rdata", "we"))
+    lines = [f"// Auto-generated RESET-INVARIANT oracle TB for case={name}",
+             f"// family={FAMILY_HOLD} — actual byte retention, no first-edge exception",
+             RETENTION_HEADER + json.dumps(memory, sort_keys=True),
+             "`timescale 1ns/1ps", f"module {name};"]
+    for n, w in inputs:
+        lines.append(f"  reg {w + ' ' if w else ''}{n} = 0;")
+    for n, w in outputs + inouts:
+        lines.append(f"  wire {w + ' ' if w else ''}{n};")
+    conns = ", ".join(f".{n}({n})" for n, _ in inputs + outputs + inouts)
+    lines += [f"  {dut} u_dut ({conns});", f"  always #5 {clk} = ~{clk};",
+              f"  reg [7:0] retention_mem [0:{depth - 1}];",
+              f"  reg [7:0] retention_before [0:{depth - 1}];",
+              "  integer errors = 0; integer _i; integer edge_number; integer active_cycles;",
+              "  reg pending_found;",
+              f"  always @(*) {rdata} = retention_mem[{raddr}];",
+              "  // Consume the previous registered transaction on EVERY rising edge.",
+              "  // Never gate the external memory commit on reset or discard a launched write.",
+              f"  always @(posedge {clk}) if ({we} === 1'b1)",
+              f"    retention_mem[{waddr}] <= {data};",
+              "  task observe_reset(input integer arm);",
+              "    begin",
+              f"      for (_i = 0; _i < {depth}; _i = _i + 1)",
+              "        retention_before[_i] = retention_mem[_i];",
+              '      $write("RESET_RETENTION BASELINE arm=%0d bytes=", arm);',
+              f'      for (_i = 0; _i < {depth}; _i = _i + 1) $write("%02x", retention_mem[_i]);',
+              '      $display("");',
+              f"      {rst} = 1'b{asserted};",
+              f"      for (edge_number = 0; edge_number < {RETENTION_EDGES}; edge_number = edge_number + 1) begin",
+              f"        @(posedge {clk}); @(negedge {clk});",
+              '        $write("RESET_RETENTION SAMPLE arm=%0d edge=%0d bytes=", arm, edge_number);',
+              f'        for (_i = 0; _i < {depth}; _i = _i + 1) $write("%02x", retention_mem[_i]);',
+              f'        $display(" post_edge_we=%b", {we});',
+              f"        for (_i = 0; _i < {depth}; _i = _i + 1) begin",
+              "          if (retention_mem[_i] !== retention_before[_i]) begin",
+              "            errors = errors + 1;",
+              f'            $display("[TB {name}] FAIL: retention arm=%0d edge=%0d byte=%0d before=%02x after=%02x", arm, edge_number, _i, retention_before[_i], retention_mem[_i]);',
+              "          end",
+              "        end",
+              "      end",
+              "    end",
+              "  endtask",
+              "  initial begin",
+              f"    for (_i = 0; _i < {depth}; _i = _i + 1) retention_mem[_i] = 8'ha5 + _i * 17;",
+              f"    {rst} = 1'b{asserted};",
+              f"    repeat (4) @(negedge {clk});",
+              "    observe_reset(0);",
+              f"    {rst} = 1'b{released}; pending_found = 0;",
+              f"    for (active_cycles = 0; active_cycles < {RETENTION_ACTIVE_CYCLES} && !pending_found; active_cycles = active_cycles + 1) begin",
+              f"      @(negedge {clk});",
+              f"      if ({we} === 1'b1 && ^({waddr}) !== 1'bx && ^({data}) !== 1'bx",
+              f"          && retention_mem[{waddr}] !== {data}) pending_found = 1;",
+              "    end",
+              "    if (!pending_found) begin",
+              f'      $display("[TB {name}] NOT_MEASURED: no actual non-idempotent pending write within {RETENTION_ACTIVE_CYCLES} cycles");',
+              "      $finish;",
+              "    end",
+              f'    $display("RESET_RETENTION PENDING address=%0d before=%02x data=%02x", {waddr}, retention_mem[{waddr}], {data});',
+              "    observe_reset(1);",
+              f'    if (errors != 0) begin $display("[TB {name}] FAIL — %0d byte checks failed", errors); $fatal(1); end',
+              f'    $display("[TB {name}] PASS — actual byte retention including first sampled edge");',
+              "    $finish;", "  end", "endmodule"]
+    return "\n".join(lines) + "\n"
+
+
+def retention_measurement(transcript: str, memory: dict) -> dict:
+    """Decode actual bytes; missing pending transition/edge zero is not retention."""
+    depth = memory["depth"]
+    baselines, samples = {}, {}
+    for arm, data in re.findall(r"(?m)^RESET_RETENTION BASELINE arm=([01]) bytes=([0-9a-fA-F]+)$", transcript):
+        baselines[arm] = data.lower()
+    for arm, edge, data in re.findall(r"(?m)^RESET_RETENTION SAMPLE arm=([01]) edge=(\d+) bytes=([0-9a-fA-F]+) post_edge_we=[01]$", transcript):
+        samples.setdefault(arm, {})[int(edge)] = data.lower()
+    p = re.search(r"(?m)^RESET_RETENTION PENDING address=(\d+) before=([0-9a-fA-F]{2}) data=([0-9a-fA-F]{2})$", transcript)
+    pending = {"address": int(p[1]), "before": p[2].lower(), "data": p[3].lower()} if p else None
+    complete = (set(baselines) == {"0", "1"} and pending is not None
+                and 0 <= pending["address"] < depth and pending["before"] != pending["data"]
+                and baselines["1"][2 * pending["address"]:2 * pending["address"] + 2] == pending["before"]
+                and all(len(baselines[a]) == 2 * depth and set(samples.get(a, {})) == set(range(RETENTION_EDGES))
+                        and all(len(s) == 2 * depth for s in samples[a].values()) for a in ("0", "1")))
+    changed = complete and any(s != baselines[a] for a in ("0", "1") for s in samples[a].values())
+    return {"complete": bool(complete), "changed": bool(changed), "baselines": baselines,
+            "samples": {a: {str(k): v for k, v in rows.items()} for a, rows in samples.items()},
+            "pending": pending}
+
+
+def _retention_memory_identity(project: Path, tb: Path) -> Tuple[Optional[dict], str]:
+    import testbench_gen as _tbg
+    try:
+        line = next(s for s in tb.read_text().splitlines() if s.startswith(RETENTION_HEADER))
+        bound = json.loads(line[len(RETENTION_HEADER):])
+        dut, ports, _ = _tbg.resolve_dut(project, bound["dut"])
+        ins, outs, _ = _tbg._classify(ports)
+        current, why = declared_retention_memory(project, dut, ins, outs)
+        if current is None or current != bound:
+            return None, "NOT_MEASURED: executed memory binding is absent, unsupported or changed"
+        return current, why
+    except (OSError, ValueError, StopIteration, KeyError, TypeError):
+        return None, "NOT_MEASURED: testbench has no declared actual-byte memory binding"
+
+
+def capture_retention_execution(project: Path, tb: Path, transcript: Path,
+                                sources: dict) -> Tuple[Optional[dict], str]:
+    """Attach native values to the existing execution row, not a second receipt."""
+    memory, why = _retention_memory_identity(project, tb)
+    if memory is None:
+        return None, why
+    try:
+        raw = transcript.read_bytes()
+    except OSError:
+        return None, "NOT_MEASURED: native retention transcript is missing"
+    measured = retention_measurement(raw.decode(errors="replace"), memory)
+    evidence = {"memory": memory, "sources": sources, "transcript": str(transcript),
+                "transcript_sha256": hashlib.sha256(raw).hexdigest(), "measurement": measured}
+    return evidence, ("actual byte retention including idle and pending first sampled edges"
+                      if measured["complete"] else
+                      "NOT_MEASURED: current native bytes, pending transition or reset edge zero are incomplete")
+
+
+def retention_case_state(project: Optional[Path], case_id: str, record: dict) -> Tuple[str, str]:
+    """L10 may credit full retention only from current executed actual bytes."""
+    import _l10_execution as _l10x
+    state, why = _l10x.case_state(case_id, record)
+    if state != _l10x.PASS:
+        return state, why  # Preserve a measured failure; never downgrade it.
+    identity, why = _l10x.scenario_tb_identity(case_id, record)
+    if not identity or project is None:
+        return _l10x.NOT_EXECUTED, "NOT_MEASURED: current retention testbench identity is missing: " + why
+    row = record["rows"][case_id]
+    evidence = row.get("reset_retention")
+    if not isinstance(evidence, dict):
+        return _l10x.NOT_EXECUTED, "NOT_MEASURED: no current actual-byte retention execution evidence"
+    try:
+        memory, why = _retention_memory_identity(Path(project), Path(row["tb_file"]))
+        sources = evidence.get("sources")
+        if (memory is None or memory != evidence.get("memory") or not isinstance(sources, dict)
+                or not sources or any(_l10x.file_sha256(Path(p)) != digest for p, digest in sources.items())):
+            return _l10x.NOT_EXECUTED, "NOT_MEASURED: retention protocol, source bytes or selected declaration changed"
+        raw = Path(evidence["transcript"]).read_bytes()
+        if hashlib.sha256(raw).hexdigest() != evidence.get("transcript_sha256"):
+            return _l10x.NOT_EXECUTED, "NOT_MEASURED: current native retention transcript changed"
+        measured = retention_measurement(raw.decode(errors="replace"), memory)
+        if not measured["complete"] or measured != evidence.get("measurement"):
+            return _l10x.NOT_EXECUTED, "NOT_MEASURED: complete current byte snapshots and first sampled edge are missing"
+        if measured["changed"]:
+            return _l10x.FAIL, "actual memory bytes changed during reset, including its first sampled edge"
+        return _l10x.PASS, "current native actual bytes retained across idle and pending reset, including edge zero"
+    except (OSError, KeyError, TypeError, ValueError):
+        return _l10x.NOT_EXECUTED, "NOT_MEASURED: native retention values or current source binding are unreadable"
+
+
 def emit_case_oracle_from_ports(
     case: dict,
     dut: str,
@@ -315,6 +515,7 @@ def emit_case_oracle_from_ports(
     inouts: List[Tuple[str, str]],
     qualifiers: Optional[Dict[str, List[Dict[str, str]]]] = None,
     refusals: Optional[Dict[str, str]] = None,
+    memory: Optional[dict] = None,
 ) -> Optional[str]:
     """Core, project-I/O-free emitter. Returns TB text, or None (fail-closed).
 
@@ -336,6 +537,8 @@ def emit_case_oracle_from_ports(
         # No clock to sample on, or no reset to assert: this DUT surface does
         # not let the invariant be observed at all.
         return None
+    if family == FAMILY_HOLD and memory is not None:
+        return _emit_retention_oracle(case, dut, inputs, outputs, inouts, memory)
     observed = (_pick(outputs, _WRITE_RES) if family == FAMILY_HOLD
                 else (_pick(outputs, _BUS_ACTIVITY_RES)
                       or _pick(outputs, _READ_ENABLE_RES)))
@@ -482,7 +685,10 @@ def emit_case_oracle_from_ports(
     L.append(f'      $display("[TB {name}] FAIL — %0d check(s) failed", errors);')
     L.append("      $fatal(1);")
     L.append("    end")
-    L.append(f'    $display("[TB {name}] PASS — {family} holds");')
+    if family == FAMILY_HOLD:
+        L.append(f'    $display("[TB {name}] NOT_MEASURED — write strobe necessary condition only; no actual byte retention measurement");')
+    else:
+        L.append(f'    $display("[TB {name}] PASS — {family} holds");')
     L.append("    $finish;")
     L.append("  end")
     L.append("endmodule")

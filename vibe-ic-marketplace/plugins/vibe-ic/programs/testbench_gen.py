@@ -846,9 +846,11 @@ def _emit_case_reset_invariant_oracle(project: Path, case: dict,
         # by what; every other output must be known after reset release.
         quals, refused = _riv.declared_output_qualifiers_and_refusals(
             project, outputs, inputs)
+        memory, memory_basis = _riv.declared_retention_memory(
+            project, dut_module, inputs, outputs)
         text = _riv.emit_case_oracle_from_ports(
             case, dut_module, inputs, outputs, inouts, qualifiers=quals,
-            refusals=refused)
+            refusals=refused, memory=memory)
     except Exception as e:  # pragma: no cover — never break the loop
         if report is not None:
             report.setdefault("oracle_errors", []).append(
@@ -860,7 +862,8 @@ def _emit_case_reset_invariant_oracle(project: Path, case: dict,
     f.write_text(stamp_generated(text, "_emit_case_reset_invariant_oracle"))
     if report is not None:
         report.setdefault("reset_invariant_cases", []).append(
-            {"case": name, "family": _riv.case_family(case)})
+            {"case": name, "family": _riv.case_family(case),
+             "retention_memory": memory, "retention_basis": memory_basis})
     return f
 
 
@@ -2182,6 +2185,7 @@ def _junit(cases: List[Dict[str, Any]]) -> str:
     from xml.sax.saxutils import escape, quoteattr
     fails = sum(1 for c in cases if c["state"] == "failed")
     errs = sum(1 for c in cases if c["state"] == "errored")
+    skipped = sum(1 for c in cases if c["state"] == "not_measured")
     body = []
     for c in cases:
         body.append(f'  <testcase classname="{UNIT_TB_RESULT_DIR}" '
@@ -2192,11 +2196,13 @@ def _junit(cases: List[Dict[str, Any]]) -> str:
         elif c["state"] == "errored":
             body.append(f'    <error message={quoteattr(c["message"][:400])}>'
                         f'{escape(c["log_tail"][:2000])}</error>')
+        elif c["state"] == "not_measured":
+            body.append(f'    <skipped message={quoteattr(c["message"][:400])}/>')
         body.append("  </testcase>")
     return ('<?xml version="1.0" encoding="UTF-8"?>\n'
             f'<testsuites>\n<testsuite name="{UNIT_TB_RESULT_DIR}" '
             f'tests="{len(cases)}" failures="{fails}" errors="{errs}" '
-            f'skipped="0">\n' + "\n".join(body) +
+            f'skipped="{skipped}">\n' + "\n".join(body) +
             "\n</testsuite>\n</testsuites>\n")
 
 
@@ -2259,6 +2265,9 @@ def run_unit_tbs(project: Path, container: "str | None" = None,
     sources = package_first_order(
         sorted(rtl.glob("*.sv")) + sorted(rtl.glob("*.v")) if rtl.is_dir()
         else [])
+    import reset_invariant_oracle_tb_gen as _riv
+    retention_cases = {str(c.get("name", c.get("id", ""))) for c in
+                       (load_l10_cases(project) or []) if _riv.is_reset_hold_case(c)}
     support = [p for p in sorted(tb_dir.glob("*.sv")) + sorted(tb_dir.glob("*.v"))
                if not is_unit_tb(p)]
     cases: List[Dict[str, Any]] = []
@@ -2272,6 +2281,8 @@ def run_unit_tbs(project: Path, container: "str | None" = None,
         state = "errored"
         message = ""
         log = ""
+        retention = None
+        source_identity = {}
         try:
             has_case_oracle = ORACLE_NONE_MARKER not in tb.read_text(
                 errors="replace")
@@ -2283,6 +2294,8 @@ def run_unit_tbs(project: Path, container: "str | None" = None,
                      f"-I{rtl}", f"-I{tb_dir}"]
                     + [str(s) for s in sources + support + extra]
                     + [str(tb), "-o", f"sim_{tb.stem}"])
+            if tb.stem in retention_cases:
+                source_identity = {str(s): _l10x.file_sha256(s) for s in sources + support + extra}
             brc, blog = disp(argv, wd, container, SIMULATOR, build_timeout)
             # The COMMAND belongs in the transcript: a build that silently
             # picked up (or did not pick up) a source is unreadable without it.
@@ -2324,12 +2337,20 @@ def run_unit_tbs(project: Path, container: "str | None" = None,
                            + (f": {verdict_fail.group(0).strip()}"
                               if verdict_fail else ""))
                 log = rlog[-2000:]
+            if tb.stem in retention_cases:
+                retention, retention_detail = _riv.capture_retention_execution(
+                    project, tb, wd / "run.log", source_identity)
+                if state == "passed" and (retention is None or
+                                          not retention["measurement"]["complete"]):
+                    state = "not_measured"
+                    message = retention_detail
         cases.append({"name": tb.stem, "state": state, "message": message,
                       "log_tail": log, "time": time.time() - t0,
                       "work_dir": str(wd),
                       "tb_file": str(tb),
                       **tb_identity,
-                      "has_case_oracle": has_case_oracle})
+                      "has_case_oracle": has_case_oracle,
+                      **({"reset_retention": retention} if tb.stem in retention_cases else {})})
     isa_rows = _isa_suite_rows(project, report, isa_producer)
     for row in isa_rows:
         # A case the ISA suite producer EXECUTED is judged by the suite, not by
@@ -2386,8 +2407,8 @@ def run_unit_tbs(project: Path, container: "str | None" = None,
                       "declared L10 case oracle was not executed")
         else:
             verdict = _l10x.NOT_EXECUTED
-            detail = ("testbench did not execute because elaboration/build "
-                      "did not complete")
+            detail = (case["message"] if case["state"] == "not_measured" else
+                      "testbench did not execute because elaboration/build did not complete")
         rows.append({
             "id": case["name"],
             "verdict": verdict,
@@ -2396,6 +2417,7 @@ def run_unit_tbs(project: Path, container: "str | None" = None,
             "tb_sha256": case["tb_sha256"],
             "tb_provenance": case["tb_provenance"],
             "detail": detail,
+            **({"reset_retention": case["reset_retention"]} if "reset_retention" in case else {}),
         })
     if isa_rows:
         import isa_suite_producer as _isa

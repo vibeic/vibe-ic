@@ -248,6 +248,8 @@ def load_record(project: Path, l10_path: Optional[Path] = None) -> Dict[str, Any
             "tb_file": str(row.get("tb_file") or ""),
             "tb_sha256": row.get("tb_sha256"),
             "tb_provenance": row.get("tb_provenance"),
+            **({"reset_retention": row["reset_retention"]}
+               if "reset_retention" in row else {}),
             # Execution is an observed boolean, not something inferred back
             # from the verdict word.  Missing, string-valued, or false keeps
             # the row at NOT_EXECUTED in ``case_state``.
