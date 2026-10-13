@@ -127,22 +127,41 @@ When AI authors the chip-top wrapper, it MUST:
 
 ### Synchronous reset at an external memory interface
 
-When the complete input contract declares a clock-sampled transaction interface
-with no separately declared asynchronous safety-inhibit requirement, qualify
-its transaction strobes at the declared reset sampling edge. In that scope, a
-raw combinational reset qualifier would change the external transaction during
-a between-edge pulse without a reset sampling edge. The complete interface and
-protocol contract takes precedence: an explicitly declared asynchronous safety
-inhibit must follow its specified behavior even if internal reset is synchronous.
-Preserve write-enable/address/data alignment; delaying only
-write-enable while leaving address/data on the old cycle changes the transaction.
-State the memory protocol's reset boundary: a synchronous external memory can
-consume the preceding valid transaction at the edge that samples reset, before
-the reset output state takes effect. Check held-reset retention and normal boot
-with that protocol, rather than promising asynchronous cancellation. For a
-proven violation, retain the original independent control unchanged, run it on
-the repaired candidate, and add only the affected reset/alignment positive.
-Keep imported IP hashes and authored-glue corrections separately attributed.
+Read the complete input's memory retention and sampling obligations before
+choosing the external memory protocol. Synchronous internal reset alone does
+not authorize a pending write at the first edge that samples reset. If the
+input requires all memory contents to retain throughout reset assertion, the
+chosen protocol must suppress writes at that first edge and throughout held
+reset. A declaration cannot introduce a first-edge exception to that input.
+If the input explicitly permits a preceding transaction to commit at that
+edge, declare that boundary and test the permitted behavior separately.
+
+Preserve the complete registered transaction: write-enable launch, address and
+data must stay aligned. For a memory that consumes writes only at the declared
+clock edge, an external reset admission qualifier over the registered launch
+can satisfy whole-memory retention without asynchronously resetting core
+state. Check the actual sampling rule and all reset-edge transactions before
+using this design. A memory that writes on a write-enable transition or during
+an active level needs its own protocol analysis; this guidance does not make
+raw reset qualification safe for those interfaces. Follow any separately
+specified asynchronous safety behavior and any required port-waveform rule.
+
+Distinguish an unsampled port waveform from a consumed memory transaction.
+When the input allows a clock-sampled protocol and does not require a constant
+between-edge write-enable waveform, record that waveform change diagnostically
+and compare actual memory contents, firmware results and cycle counts with the
+unpulsed baseline. Keep address/data alignment and observed core-state checks;
+a reset pulse wholly between sampling edges must not change the sampled
+execution. Require an observed active injection point before crediting reset
+retention, and check every memory byte through the first edge and held reset.
+
+Preserve original controls and receipts. If an earlier test enforced an extra
+port-waveform condition from a prior protocol choice, freeze it and author a
+new, separately identified protocol test; retain its input-derived memory,
+firmware and reset assertions and known-bad value controls. Declare required
+free choices through `spec_declaration_emit.py --set`, preserve imported IP
+pins, and attribute the authored-glue correction separately. Do not waive an
+input retention failure or hand-edit producer provenance to admit a repair.
 
 ## SOURCE_MANIFEST.json — the keystone reused-IP artifact (mandatory)
 
