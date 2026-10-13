@@ -14,7 +14,12 @@ Logic-pinned.
 from __future__ import annotations
 
 import json
+import hashlib
+import subprocess
+import sys
 from pathlib import Path
+
+import pytest
 
 import ip_catalog_pull as mod
 from ip_catalog_query import CatalogMatch
@@ -146,3 +151,137 @@ def test_pull_all_writes_declaration(tmp_path, monkeypatch):
         (project / "plugin_output" / "declaration.json").read_text())
     assert decl["license_compliance_audit"]["all_permissive"] is True
     assert "MIT" in decl["license_compliance_audit"]["spdx_set"]
+
+
+@pytest.mark.parametrize('source_kind', ['local_mirror', 'pinned_local_upstream'])
+def test_delivered_wrapper_spdx_reaches_actual_attribution(tmp_path, monkeypatch, source_kind):
+    root = _make_mirror(tmp_path, 'rtl/core.v', 'wrapper/adapter.v')
+    upstream = root / 'myip'
+    (upstream / 'LICENSE').write_text('ISC License\n')
+    (upstream / 'rtl/core.v').write_text('// SPDX-License-Identifier: ISC\nmodule core; endmodule\n')
+    (upstream / 'wrapper/adapter.v').write_text('/* SPDX-License-Identifier: Apache-2.0 */\nmodule adapter; endmodule\n')
+    _patch_mirror(monkeypatch, root)
+    monkeypatch.setattr(mod, 'IP_MIRROR_ROOT', None)
+    match = _match(license='ISC', rtl_files=('rtl/core.v', 'wrapper/adapter.v'))
+    if source_kind == 'pinned_local_upstream':
+        for args in (('init', '-q'), ('config', 'user.name', 'Neutral fixture'),
+                     ('config', 'user.email', 'fixture@example.invalid'),
+                     ('add', '.'), ('commit', '-qm', 'Neutral mixed-license source')):
+            subprocess.run(['git', '-C', str(upstream), *args], check=True,
+                           capture_output=True, text=True)
+        match.canonical_url = str(upstream)
+        match.canonical_commit = subprocess.run(
+            ['git', '-C', str(upstream), 'rev-parse', 'HEAD'], check=True,
+            capture_output=True, text=True).stdout.strip()
+    project = tmp_path / 'project'; project.mkdir()
+    aggregate = mod.pull_all_catalog_matches(
+        project, [match], official_only=source_kind == 'pinned_local_upstream',
+        cache_root=tmp_path / 'own-cache')
+    assert aggregate['n_ips_pulled'] == 1
+    declaration = json.loads((project / 'plugin_output/declaration.json').read_text())
+    cp = subprocess.run([sys.executable, str(Path(mod.__file__).with_name('gds_ip_attribution.py')),
+                         'build-text', str(project)], capture_output=True, text=True)
+    (tmp_path / 'actual-attribution.stdout').write_text(cp.stdout)
+    (tmp_path / 'actual-attribution.stderr').write_text(cp.stderr)
+    assert cp.returncode == 0, cp.stderr
+    assert declaration['license_compliance_audit']['spdx_set'] == ['Apache-2.0', 'ISC']
+    assert 'spdx_set=Apache-2.0,ISC' in cp.stdout
+    assert declaration['license_compliance_audit']['all_permissive'] is True
+    copied = declaration['ip_catalog_used'][0]['files_copied']
+    assert len(copied) == 2
+    expected = {'core.v': 'ISC', 'adapter.v': 'Apache-2.0'}
+    for file in copied:
+        path = Path(file['dest'])
+        assert file['sha256'] == hashlib.sha256(path.read_bytes()).hexdigest()
+        evidence = file['license_evidence']
+        assert evidence['status'] == 'PASS'
+        assert evidence['spdx'] == expected[path.name]
+        assert evidence['basis'] == 'SPDX-License-Identifier'
+        assert evidence['path'] == str(path)
+        assert evidence['sha256'] == file['sha256']
+
+
+@pytest.mark.parametrize('condition', [
+    'unknown_wrapper', 'composite_wrapper', 'composite_lowercase_wrapper', 'composite_boundary_wrapper', 'contradictory_wrapper',
+    'unreadable_wrapper', 'unknown_entry', 'unreadable_entry',
+    'forbidden_wrapper', 'contradictory_entry', 'mismatched_entry',
+])
+def test_actual_source_license_refusal_reaches_attribution(tmp_path, monkeypatch, condition):
+    root = _make_mirror(tmp_path, 'rtl/core.v', 'wrapper/adapter.v')
+    upstream = root / 'myip'
+    entry = upstream / 'LICENSE'; entry.write_text('ISC License\n')
+    core = upstream / 'rtl/core.v'
+    core.write_text('// SPDX-License-Identifier: ISC\nmodule core; endmodule\n')
+    wrapper = upstream / 'wrapper/adapter.v'
+    wrapper.write_text('// SPDX-License-Identifier: Apache-2.0\nmodule adapter; endmodule\n')
+    unreadable = None
+    if condition == 'unknown_wrapper':
+        wrapper.write_text('// SPDX-License-Identifier: Unrecognized-9.9\nmodule adapter; endmodule\n')
+    elif condition in ('composite_wrapper', 'composite_lowercase_wrapper', 'composite_boundary_wrapper'):
+        marker = 'spdx-license-identifier' if 'lowercase' in condition else 'SPDX-License-Identifier'
+        prefix = '// ' + marker + ': '
+        filler = ('//' + '.' * (5000 - len(prefix) - len('ISC') - 3) + '\n'
+                  if 'boundary' in condition else '')
+        wrapper.write_text(filler + prefix + 'ISC OR GPL-3.0-only\nmodule adapter; endmodule\n')
+    elif condition == 'contradictory_wrapper':
+        wrapper.write_text('// SPDX-License-Identifier: ISC\n// SPDX-License-Identifier: Apache-2.0\nmodule adapter; endmodule\n')
+    elif condition == 'forbidden_wrapper':
+        wrapper.write_text('// SPDX-License-Identifier: GPL-3.0-only\nmodule adapter; endmodule\n')
+    elif condition == 'unknown_entry':
+        entry.write_text('Unrecognized license document\n')
+    elif condition == 'contradictory_entry':
+        entry.write_text('// SPDX-License-Identifier: ISC\n// SPDX-License-Identifier: Apache-2.0\n')
+    elif condition == 'mismatched_entry':
+        entry.write_text('GNU GENERAL PUBLIC LICENSE\n')
+    else:
+        unreadable = wrapper if condition == 'unreadable_wrapper' else entry
+        unreadable.chmod(0)
+    _patch_mirror(monkeypatch, root)
+    monkeypatch.setattr(mod, 'IP_MIRROR_ROOT', None)
+    project = tmp_path / 'project'; project.mkdir()
+    try:
+        aggregate = mod.pull_all_catalog_matches(
+            project, [_match(license='ISC', rtl_files=('rtl/core.v', 'wrapper/adapter.v'))])
+    finally:
+        if unreadable: unreadable.chmod(0o644)
+    cp = subprocess.run([sys.executable, str(Path(mod.__file__).with_name('gds_ip_attribution.py')),
+                         'build-text', str(project)], capture_output=True, text=True)
+    (tmp_path / 'actual-attribution.stdout').write_text(cp.stdout)
+    (tmp_path / 'actual-attribution.stderr').write_text(cp.stderr)
+    audit = aggregate['license_compliance_audit']
+    assert audit['all_permissive'] is False, audit
+    assert 'LICENSE-AUDIT all_permissive=False' in cp.stdout
+    expected = ('NOT_MEASURED' if condition in
+                ('unknown_entry', 'unreadable_entry', 'unreadable_wrapper') else 'REJECTED')
+    assert audit['status'] == expected, audit
+    ip = aggregate['ip_catalog_used'][0]
+    if condition.endswith('wrapper'):
+        # A conflicting, prohibited or unreadable source was refused before copy.
+        assert not (project / 'phase2/stage1/rtl/adapter.v').exists()
+        refused = ip['file_license_refusals'][0]
+        assert refused['path'] == str(wrapper)
+        assert refused['status'] == expected
+        if condition == 'unreadable_wrapper':
+            assert 'LICENSE_SOURCE_UNREADABLE' in refused['reason']
+        else:
+            assert refused['sha256'] == hashlib.sha256(wrapper.read_bytes()).hexdigest()
+        if condition.startswith('composite_'):
+            assert refused['spdx'] == 'ISC OR GPL-3.0-only'  # full expression, never just ISC
+    else:
+        assert len(ip['files_copied']) == 2
+        assert ip['entry_license_evidence']['status'] == expected
+        assert audit['spdx_set'] == ['Apache-2.0', 'ISC']  # actual delivered population is never dropped
+
+
+def test_headerless_copy_uses_actual_upstream_license_evidence(tmp_path, monkeypatch):
+    root = _make_mirror(tmp_path, 'rtl/core.v')
+    _patch_mirror(monkeypatch, root)
+    monkeypatch.setattr(mod, 'IP_MIRROR_ROOT', None)
+    project = tmp_path / 'project'; project.mkdir()
+    aggregate = mod.pull_all_catalog_matches(project, [_match()])
+    evidence = aggregate['ip_catalog_used'][0]['files_copied'][0]['license_evidence']
+    assert aggregate['license_compliance_audit']['all_permissive'] is True
+    assert evidence['spdx'] == 'MIT'
+    assert evidence['basis'] == 'upstream_license_file'
+    assert evidence['license_path'] == str(root / 'myip/LICENSE')
+    assert evidence['license_sha256'] == hashlib.sha256((root / 'myip/LICENSE').read_bytes()).hexdigest()

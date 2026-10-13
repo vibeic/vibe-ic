@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -177,6 +178,48 @@ def _sha256_file(path: Path) -> str:
     return h.hexdigest()
 
 
+def _file_license_evidence(path: Path, fallback: Optional[dict] = None,
+                           *, payload: Optional[bytes] = None) -> dict:
+    """Read the existing SPDX/header parser's evidence for these actual bytes.
+
+    A complete explicit identifier overrides the entry's license. Unsupported
+    expressions and conflicting identifiers cannot become a permissive prefix.
+    This is evidence for the copy audit, not a new license policy.
+    """
+    from ip_catalog_upstream_audit import infer_spdx_from_text
+    record = {'path': str(path), 'sha256': None, 'spdx': None,
+              'status': 'NOT_MEASURED', 'basis': None, 'readable': False}
+    try:
+        payload = path.read_bytes() if payload is None else payload
+        record['sha256'] = hashlib.sha256(payload).hexdigest()
+        text = payload.decode('utf-8')
+        header = text[:5000]
+    except (OSError, UnicodeError) as exc:
+        return dict(record, reason=f'LICENSE_SOURCE_UNREADABLE: {exc}')
+    record['readable'] = True
+    identifiers = sorted({match.group(1).strip().removesuffix('*/').strip()
+                          for match in re.finditer(r'SPDX-License-Identifier:[ \t]*([^\r\n]*)', text, re.I)
+                          if match.start() < 5000})  # Capture the full line, including an expression crossing the header boundary.
+    record['declared_spdx'] = identifiers
+    if len(identifiers) > 1:
+        return dict(record, status='REJECTED', basis='SPDX-License-Identifier',
+                    reason='LICENSE_SOURCE_CONTRADICTORY: multiple explicit identifiers')
+    if identifiers:
+        license_id = identifiers[0]
+        record['basis'] = 'SPDX-License-Identifier'
+    else:
+        license_id = infer_spdx_from_text(header)
+        record['basis'] = 'source_header' if license_id else None
+        if not license_id and fallback and fallback['status'] == 'PASS':
+            license_id = fallback['spdx']
+            record.update(basis='upstream_license_file',
+                          license_path=fallback['path'], license_sha256=fallback['sha256'])
+    if license_id is None:
+        return dict(record, reason='LICENSE_SOURCE_UNKNOWN: no readable license evidence')
+    compatible, reason = check_license_compatibility(license_id)
+    return dict(record, spdx=license_id, status='PASS' if compatible else 'REJECTED', reason=reason)
+
+
 def pull_catalog_ip(match: CatalogMatch,
                     project: Path,
                     dest_subdir: str = "phase2/stage1/rtl",
@@ -279,7 +322,7 @@ def pull_catalog_ip(match: CatalogMatch,
                     "before_sha256": hashlib.sha256(before.stdout.encode()).hexdigest(),
                     "after_sha256": hashlib.sha256(after.stdout.encode()).hexdigest(),
                 })
-        except ValueError as exc:
+        except (ValueError, OSError) as exc:
             return {"ip_name": match.ip_name, "status": "FAIL",
                     "reason": str(exc), "clone_pin": clone_pin}
 
@@ -297,9 +340,22 @@ def pull_catalog_ip(match: CatalogMatch,
     dest_dir.mkdir(parents=True, exist_ok=True)
     files_copied: List[Dict[str, Any]] = []
     files_missing: List[str] = []
+    file_license_refusals: List[Dict[str, Any]] = []
+    from ip_catalog_upstream_audit import find_license_file
+    license_path = find_license_file(src_dir)
+    entry_license_evidence = (_file_license_evidence(license_path) if license_path else
+                             {'status': 'NOT_MEASURED', 'spdx': None,
+                              'reason': 'LICENSE_SOURCE_UNKNOWN: no upstream license file'})
 
     for rtl_rel in match.rtl_files:
         if official_only:
+            source_license = _file_license_evidence(
+                src_dir / rtl_rel, entry_license_evidence,
+                payload=official_payloads[rtl_rel])
+            if not source_license['readable'] or source_license['status'] == 'REJECTED':
+                file_license_refusals.append(dict(source_license, rtl_rel=rtl_rel))
+                files_missing.append(rtl_rel)
+                continue
             dest_path = dest_dir / Path(rtl_rel).name
             dest_path.write_bytes(official_payloads[rtl_rel])
             files_copied.append({
@@ -308,6 +364,7 @@ def pull_catalog_ip(match: CatalogMatch,
                 "dest": str(dest_path),
                 "sha256": _sha256_file(dest_path),
                 "size_bytes": dest_path.stat().st_size,
+                "license_evidence": _file_license_evidence(dest_path, entry_license_evidence),
             })
             continue
         src_path = src_dir / rtl_rel
@@ -321,6 +378,11 @@ def pull_catalog_ip(match: CatalogMatch,
                 files_missing.append(rtl_rel)
                 continue
         dest_path = dest_dir / Path(rtl_rel).name
+        source_license = _file_license_evidence(src_path, entry_license_evidence)
+        if not source_license['readable'] or source_license['status'] == 'REJECTED':
+            file_license_refusals.append(dict(source_license, rtl_rel=rtl_rel))
+            files_missing.append(rtl_rel)
+            continue
         shutil.copy2(src_path, dest_path)
         files_copied.append({
             "rtl_rel": rtl_rel,
@@ -328,6 +390,7 @@ def pull_catalog_ip(match: CatalogMatch,
             "dest": str(dest_path),
             "sha256": _sha256_file(dest_path),
             "size_bytes": dest_path.stat().st_size,
+            "license_evidence": _file_license_evidence(dest_path, entry_license_evidence),
         })
 
     # 3b. AUDIT THE MIRROR THE FILES CAME OUT OF, before the provenance line
@@ -370,6 +433,13 @@ def pull_catalog_ip(match: CatalogMatch,
                     f"local mirror contradicts the manifest's licence claim: "
                     f"{'; '.join(mirror_audit.get('issues', []))}"),
                 "local_mirror_audit": mirror_audit,
+                # The mirror audit runs after copy. Preserve that delivered
+                # population even when its entry claim is subsequently refused.
+                "license": match.license,
+                "entry_license_evidence": entry_license_evidence,
+                "file_license_refusals": file_license_refusals,
+                "files_copied": files_copied,
+                "files_missing": files_missing,
             }
 
     # 4. Locate license file in source dir (for attribution)
@@ -377,7 +447,10 @@ def pull_catalog_ip(match: CatalogMatch,
     for license_name in ["LICENSE", "LICENSE.md", "LICENSE.txt", "COPYING"]:
         lp = src_dir / license_name
         if lp.is_file():
-            license_file_text = lp.read_text()[:200]
+            try:
+                license_file_text = lp.read_text()[:200]
+            except (OSError, UnicodeError):
+                pass  # The named NOT_MEASURED evidence is retained above.
             break
 
     audit = {
@@ -385,6 +458,8 @@ def pull_catalog_ip(match: CatalogMatch,
         "category": match.category,
         "version": match.version,
         "license": match.license,
+        "entry_license_evidence": entry_license_evidence,
+        "file_license_refusals": file_license_refusals,
         "license_file_first_200_chars": license_file_text,
         "canonical_url": match.canonical_url,
         "canonical_commit": match.canonical_commit,
@@ -438,6 +513,9 @@ def pull_catalog_ip(match: CatalogMatch,
                 None if mirror_audit is None
                 else mirror_audit.get("license_check", {}).get("match")),
             "files_pulled": len(files_copied),
+            "file_license_evidence": [{"dest": f['dest'], **f['license_evidence']}
+                                      for f in files_copied],
+            "file_license_refusals": file_license_refusals,
             "outputs": outputs_map,
             "outputs_sha256": sorted(f["sha256"] for f in files_copied),
             "ran_at_epoch": time.time(),
@@ -629,12 +707,22 @@ def pull_all_catalog_matches(project: Path,
                  if official_only else pull_catalog_ip(m, project))
         audits.append(audit)
 
-    # Aggregate license set
-    spdx_set = sorted({a.get("license", "") for a in audits
-                       if a.get("status") in ("PASS", "PARTIAL")})
-    all_permissive = all(
-        check_license_compatibility(lic)[0] for lic in spdx_set if lic
-    )
+    # The delivered population, rather than only the catalog's entry claim.
+    entry_spdx_set = {a.get('license', '') for a in audits
+                      if a.get('status') in ('PASS', 'PARTIAL')}
+    file_evidence = [dict(f.get('license_evidence') or {'status': 'NOT_MEASURED'},
+                          ip_name=a['ip_name'], dest=f.get('dest'))
+                     for a in audits for f in a.get('files_copied', [])]
+    evidence = [*file_evidence, *(a.get('entry_license_evidence') or
+                 {'status': 'NOT_MEASURED'} for a in audits),
+                *(r for a in audits for r in a.get('file_license_refusals', []))]
+    spdx_set = sorted(entry_spdx_set | {e['spdx'] for e in file_evidence if e.get('spdx')})
+    license_status = ('REJECTED' if any(e['status'] == 'REJECTED' for e in evidence)
+                      or any(a.get('status') == 'REJECTED' for a in audits) else
+                      'NOT_MEASURED' if not file_evidence or
+                      any(e['status'] != 'PASS' for e in evidence) else 'PASS')
+    all_permissive = license_status == 'PASS' and all(
+        check_license_compatibility(lic)[0] for lic in spdx_set)
 
     aggregated = {
         "rtl_strategy": "catalog_lookup_plus_ai_glue",
@@ -643,8 +731,11 @@ def pull_all_catalog_matches(project: Path,
         "n_ips_failed": sum(1 for a in audits if a.get("status") == "FAIL"),
         "ip_catalog_used": audits,
         "license_compliance_audit": {
+            "status": license_status,
             "all_permissive": all_permissive,
             "spdx_set": spdx_set,
+            "entry_spdx_set": sorted(entry_spdx_set),
+            "file_evidence": file_evidence,
         },
     }
 
