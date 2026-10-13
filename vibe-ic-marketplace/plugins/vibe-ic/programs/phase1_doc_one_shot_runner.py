@@ -456,13 +456,23 @@ class _v1_6_580_step_timeout:  # noqa: N801 — keep snake_case for ctx
         return False  # do not swallow exceptions
 
 
+def _v1_6_580_write_step_outcome(
+        project: Path, layer_name: str, payload: Dict[str, Any]) -> None:
+    """Persist this invocation's outcome even when an earlier L-doc is kept."""
+    outcome = _pl.report_path(project, f"phase1/{layer_name}_step_outcome.json")
+    outcome.parent.mkdir(parents=True, exist_ok=True)
+    record = dict(payload, layer=layer_name)
+    outcome.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
+
+
 def _v1_6_580_write_failure_stub(
         project: Path, layer_name: str, payload: Dict[str, Any]
         ) -> None:
     """v1.6.580 — for #396 P2. Write a stub `<layer>.json` under
     `<project>/generated_docs/` carrying the failure metadata.
-    Skips write when a real (non-stub) L-doc already exists for
-    that layer. Chip-AGNOSTIC."""
+    Keeps a real (non-stub) L-doc; the separate current-step outcome
+    still records the failure. Chip-AGNOSTIC."""
+    _v1_6_580_write_step_outcome(project, layer_name, payload)
     try:
         gd = _pl.generated_docs_dir(project)
         gd.mkdir(parents=True, exist_ok=True)
@@ -505,6 +515,9 @@ def _v1_6_580_run_step_with_watchdog(
     try:
         with _v1_6_580_step_timeout(timeout_s, step_name):
             result = step_fn()
+        _v1_6_580_write_step_outcome(project, layer_name, {
+            "step_name": step_name, "phase1_step_error": False,
+            "phase1_step_timeout": False})
         return True, result
     except _V1_6_580_StepTimeout as e:
         stub = {
@@ -52400,17 +52413,15 @@ def gen_l9_integration_spec(project: Path,
     _czl9_prose_port_fallback(content, extracted)
     _czl9_emit_interface_prose(content, extracted)
 
-    result = _write_l_doc(
-        project, "L9_INTEGRATION_SPEC", content, evidence,
+    # Phase 1 runs before L19 and the selected synthesis producer. Bind only
+    # the current staged RTL interface before publishing the document, so a
+    # genuine binding refusal cannot replace a previous successful L9.
+    # Implementation readers still validate their full synthesis handoff.
+    bound = _stgtop.bind_selected_interface(
+        project, content, include_synthesis_handoff=False)
+    return _write_l_doc(
+        project, "L9_INTEGRATION_SPEC", bound, evidence,
         source_documents=_source_documents_from_extracted(project, extracted))
-    # The selected synthesis handoff reads this exact L9 as current authority.
-    # Publish the genuine authored document before invoking that consumer;
-    # its existing receipt/hash and current-interface refusals stay strict.
-    emitted = json.loads(result.path.read_text())
-    bound = _stgtop.refresh_selected_interface(project, result.path, emitted)
-    return LDocResult(name=result.name, path=result.path,
-                      todo_count=json.dumps(bound).count("__TODO__"),
-                      evidence_count=result.evidence_count)
 
 
 # v1.6.289 — for #156 ORGANIC. Bring-up paragraph list harvester.
@@ -64404,8 +64415,9 @@ def main() -> int:
             except AttributeError:
                 print(f"      → {layer_name} emitted")
         else:
-            print(f"      → {layer_name} STEP FAILED — recoverable stub "
-                  "written (see runner log); continuing", file=sys.stderr)
+            print(f"      → {layer_name} STEP FAILED — current outcome recorded; "
+                  "prior document kept or failure stub written "
+                  "(see runner log); continuing", file=sys.stderr)
         return r
 
     def _reread(fname):

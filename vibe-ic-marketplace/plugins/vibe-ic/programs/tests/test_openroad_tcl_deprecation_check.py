@@ -12,10 +12,15 @@ per the v0.69 Item 4 residual: the plugin itself must already be clean.
 """
 from __future__ import annotations
 
+import hashlib
 import json
+import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 PROG = (Path(__file__).resolve().parent.parent
         / "openroad_tcl_deprecation_check.py")
@@ -188,11 +193,9 @@ def test_skip_dirs_are_pruned(tmp_path):
 def test_plugin_tree_itself_is_clean():
     # flow #486: scan THIS plugin's own tree explicitly via the manifest-
     # anchored plugin root. The program's bare default (--search-dir absent)
-    # resolves to parents[2], which on the source monorepo is the
-    # single-plugin `plugins/` dir but on the flattened install cache is the
-    # version-collection dir (all shipped versions) — a different, wrong
-    # target. Pinning --search-dir to the plugin root makes this assertion
-    # mean the same thing in both trees.
+    # is covered separately by the installed/source scope controls below.
+    # This explicit mode must continue to scan the complete current plugin
+    # in both layouts.
     from _plugin_tree import plugin_root
     code, out, err = _run(["--search-dir", str(plugin_root())])
     assert code == 0, (
@@ -400,3 +403,104 @@ def test_a_mid_expression_mention_inside_a_string_is_not_a_command(tmp_path):
         '']))
     code, out, err = _run(["--search-dir", str(tmp_path)])
     assert code == 0, f"a mid-expression mention was read as a call: {err!r}"
+
+
+# Issue #3025: the actual bare CLI must scan its declared plugin, not siblings.
+def _issue3025_plugin(root, *, manifest=True):
+    (root / "programs").mkdir(parents=True)
+    checker = root / "programs/openroad_tcl_deprecation_check.py"
+    shutil.copyfile(PROG, checker)
+    if manifest:
+        anchor = root / ".claude-plugin/plugin.json"
+        anchor.parent.mkdir()
+        anchor.write_text(json.dumps({"name": "vibe-ic", "version": "neutral-fixture"}))
+    _write(root, "skills/safe.tcl", "set_routing_layers -signal met2-met5\n")
+    return checker
+
+
+def _issue3025_native(root, checker, *, search_dir=None):
+    report = root / "native_report.json"
+    argv = [sys.executable, str(checker), "--json", str(report)]
+    if search_dir is not None:
+        argv += ["--search-dir", str(search_dir)]
+    proc = subprocess.run(argv, cwd=checker.parent.parent, capture_output=True,
+                          text=True, env=dict(os.environ, PYTHONDONTWRITEBYTECODE="1"))
+    (root / "native_process.json").write_text(json.dumps({
+        "argv": argv, "cwd": str(checker.parent.parent), "rc": proc.returncode,
+        "checker_sha256": hashlib.sha256(checker.read_bytes()).hexdigest(),
+        "stdout": proc.stdout, "stderr": proc.stderr}, indent=2))
+    return proc, json.loads(report.read_text()) if report.is_file() else None
+
+
+@pytest.mark.parametrize("layout", ["source", "single-version", "sibling-versions"])
+def test_issue3025_default_is_bound_to_declared_plugin(tmp_path, layout):
+    active = (tmp_path / "repo/vibe-ic-marketplace/plugins/vibe-ic"
+              if layout == "source" else tmp_path / "runtime/active")
+    checker = _issue3025_plugin(active)
+    if layout != "single-version":
+        _issue3025_plugin(active.parent / "inactive")
+    proc, report = _issue3025_native(tmp_path, checker)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert Path(report["search_dir"]).resolve() == active.resolve()
+    assert report["files_examined"] == 1
+    assert report["total"] == 0
+
+
+@pytest.mark.parametrize("suffix,body", [
+    (".tcl", "write_gds output.gds\n"),
+    (".py", 'script = "write_gds output.gds"\n'),
+    (".js", 'const script = "write_gds output.gds";\n'),
+    (".md", "```tcl\nwrite_gds output.gds\n```\n"),
+    (".yaml", "script: |\n  write_gds output.gds\n"),
+    (".yml", "script: |\n  write_gds output.gds\n"),
+])
+def test_issue3025_default_still_detects_current_emission(tmp_path, suffix, body):
+    active = tmp_path / "runtime/active"
+    checker = _issue3025_plugin(active)
+    bad = _write(active, "skills/nested/current_bad" + suffix, body)
+    proc, report = _issue3025_native(tmp_path, checker)
+    assert proc.returncode == 1
+    assert report["files_examined"] == 2
+    assert report["total"] == 1
+    assert any(row["token"] == "write_gds"
+               and row["file"].endswith(str(bad.relative_to(active)))
+               for row in report["findings"])
+
+
+def test_issue3025_explicit_current_scope_ignores_sibling(tmp_path):
+    active = tmp_path / "runtime/active"
+    checker = _issue3025_plugin(active)
+    _issue3025_plugin(active.parent / "inactive")
+    proc, report = _issue3025_native(tmp_path, checker, search_dir=active)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert Path(report["search_dir"]).resolve() == active.resolve()
+    assert report["files_examined"] == 1 and report["total"] == 0
+
+
+def test_issue3025_explicit_broader_scope_keeps_sibling_detection(tmp_path):
+    active = tmp_path / "runtime/active"
+    checker = _issue3025_plugin(active)
+    _issue3025_plugin(active.parent / "inactive")
+    _write(active.parent / "inactive", "skills/sibling_bad.tcl", "write_gds output.gds\n")
+    proc, report = _issue3025_native(tmp_path, checker, search_dir=active.parent)
+    assert proc.returncode == 1
+    assert Path(report["search_dir"]).resolve() == active.parent.resolve()
+    assert any(row["file"] == "inactive/skills/sibling_bad.tcl"
+               for row in report["findings"])
+    # Same-basename sibling checkers retain the existing identity rule.
+    assert any(row["file"] == "inactive/programs/openroad_tcl_deprecation_check.py"
+               for row in report["findings"])
+
+
+@pytest.mark.parametrize("invalid", ["absent", "malformed", "not-object", "no-name"])
+def test_issue3025_unknown_default_root_is_refused(tmp_path, invalid):
+    active = tmp_path / "unidentified/runtime/active"
+    checker = _issue3025_plugin(active, manifest=False)
+    if invalid != "absent":
+        anchor = active / ".claude-plugin/plugin.json"
+        anchor.parent.mkdir()
+        anchor.write_text({"malformed": "{", "not-object": "[]", "no-name": "{}"}[invalid])
+    proc, report = _issue3025_native(tmp_path, checker)
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert "plugin root" in proc.stderr.lower()
+    assert report is None

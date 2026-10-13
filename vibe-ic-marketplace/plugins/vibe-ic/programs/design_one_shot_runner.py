@@ -24800,6 +24800,8 @@ def _build_final_audit_cmd(project: Path, audit: Path,
            "--allow-thin-input"]
     if skip_analog:
         cmd.append("--skip-analog")
+    if phase == 2:
+        cmd += ["--json", str(project / "reports/phase2/gates/phase2_compliance.json")]
     return cmd
 
 
