@@ -10072,7 +10072,7 @@ def step_professional_tb_gen(project: Path, top_name: str = "",
         if gen.get('random_goal_plan') and xml_summary is not None:
             _ptb.finalize_random_pair_execution(
                 out_dir, gen['random_goal_plan'],
-                argv=['make', 'SIM=icarus'], returncode=rc,
+                argv=['make', '-B', 'SIM=icarus'], returncode=rc,
                 image=_pin.configured_reference())
 
         if xml_summary is None:
