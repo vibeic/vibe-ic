@@ -9917,6 +9917,12 @@ def step_professional_tb_gen(project: Path, top_name: str = "",
                           detail=f"class not derivable ({gen.get('reason', '')})", reason_class=_V.ReasonClass.INPUT_ABSENT)
     if status != "PASS":
         _write({**gen, "ran_cocotb": False})
+        if status == "INCOMPLETE" and gen.get("memory_signature_required"):
+            return StepResult("professional_tb_gen", "NOT_MEASURED", time.time() - t0,
+                              detail=gen.get("reason", "memory_signature contract unresolved"),
+                              extras={"fallback_skill": "testbench-gen",
+                                      "program_first": "professional_tb_gen"},
+                              reason_class=_V.ReasonClass.INPUT_ABSENT)
         return StepResult("professional_tb_gen", "FAIL", time.time() - t0,
                           detail=f"generator status={status}")
 
@@ -10131,6 +10137,15 @@ def step_professional_tb_gen(project: Path, top_name: str = "",
                 and xml_summary["passed"] > 0
                 and xml_summary["failures"] == 0
                 and xml_summary["errors"] == 0):
+            if gen.get("memory_signature_cases"):
+                import _professional_memory_signature as _memory_signature
+                try:
+                    _memory_signature.read_observations(out_dir, gen["memory_signature_cases"])
+                except (OSError, ValueError, AssertionError, TypeError, AttributeError) as error:
+                    gap = f"declared memory_signature was not measured: {error}"
+                    _write({**rec, "status": "INCOMPLETE", "reason": gap})
+                    return StepResult("professional_tb_gen", "NOT_MEASURED", time.time() - t0,
+                                      detail=gap, reason_class=_V.ReasonClass.PARTIAL_POPULATION)
             _write({**rec, "status": "PASS"})
             return StepResult(
                 "professional_tb_gen", "PASS", time.time() - t0,

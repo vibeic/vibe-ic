@@ -521,8 +521,19 @@ def _functional_coverage(bundle_dir: Optional[Path]) -> Optional[Dict[str, Any]]
 
 
 def check(project: Path) -> Dict[str, Any]:
+    import professional_tb_gen as _ptb
+    import _professional_memory_signature as _memory_signature
+    memory_required = bool(_ptb._memory_signature_rows(project))
+
+    def memory_unmeasured(reason: str) -> dict:
+        return {"gate": "professional_tb", "verdict": "NOT_CHECKED",
+                "reason_class": _reason_taxonomy.BLOCKED_BY_UPSTREAM,
+                "memory_signature_verified": False, "reason": reason}
+
     report = project / "reports" / "phase2" / "gates" / "professional_tb.json"
     if not report.is_file():
+        if memory_required:
+            return memory_unmeasured("declared memory_signature has no professional execution report")
         unit_track = l10_unit_tb_track(project)
         if unit_track is not None:
             return unit_track
@@ -551,6 +562,20 @@ def check(project: Path) -> Dict[str, Any]:
                 "reason": "cocotb functional mismatch — real RTL bug",
                 "dut_kind": rec.get("dut_kind"),
                 "cocotb_xml_failures": rec.get("cocotb_xml_failures")}
+
+    if rec.get("memory_signature_required") and not memory_required:
+        return memory_unmeasured("previous memory_signature declaration is absent or unreadable")
+
+    memory_cases = []
+    if memory_required:
+        try:
+            memory_cases = _ptb.memory_signature_cases(project)
+        except ValueError as error:
+            return memory_unmeasured(str(error))
+        if (rec.get("memory_signature_cases") != memory_cases
+                or rec.get("ran_cocotb") is not True
+                or rec.get("status") != "PASS"):
+            return memory_unmeasured("current declared memory_signature was not executed with its commit observer")
 
     # A deterministic professional generator may be unable to derive a
     # design-class reference model.  A real, independently executed L10 unit
@@ -605,6 +630,25 @@ def check(project: Path) -> Dict[str, Any]:
                 "disk: missing=" + json.dumps(bundle["missing"])
                 + " empty=" + json.dumps(bundle["empty"])
                 + " (declared out_dir " + bundle["declared_out_dir"] + ")")
+    if memory_cases and res["verdict"] == "PASS":
+        if bundle is None or not bundle.get("resolved_out_dir"):
+            return memory_unmeasured("memory_signature execution bundle missing")
+        out = Path(bundle["resolved_out_dir"])
+        summary = _sim_results.parse_junit(out / "results.xml")
+        if summary and any(summary.get(key, 0) for key in ("failures", "errors")):
+            return {"gate": "professional_tb", "verdict": "FAIL",
+                    "memory_signature_verified": False,
+                    "reason": "memory_signature native JUnit records a failure"}
+        if (not summary or summary.get("passed", 0) < len(memory_cases)
+                or any(summary.get(key, 0) for key in ("failures", "errors", "skipped"))):
+            return memory_unmeasured("memory_signature needs a complete passing native JUnit")
+        try:
+            _memory_signature.read_observations(out, memory_cases)
+        except (OSError, ValueError, AssertionError, TypeError, AttributeError) as error:
+            return memory_unmeasured(f"memory_signature observations unavailable: {error}")
+        res["memory_signature_verified"] = True
+    elif rec.get("dut_kind") == "expert_reference":
+        res["memory_signature_verified"] = False
     return res
 
 

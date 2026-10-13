@@ -365,6 +365,11 @@ def _professional_bundle(tb: Path) -> Dict[str, Any]:
     if plan["dut_kind"] == "expert_reference":
         import professional_tb_gen as _ptg  # noqa: PLC0415
         source = _ptg._load_expert_reference_tb(tb.parent)
+        if source is not None and plan.get("memory_signature_cases"):
+            try:
+                source = _ptg._checked_memory_signature_tb(source, plan["memory_signature_cases"])
+            except (ValueError, TypeError, KeyError):
+                source = None
         if source is None or source != tb.read_text(errors="replace"):
             raise SystemExit(f"PROFESSIONAL_COVERAGE_HOOK_UNFILLED_OR_STALE: {tb}")
     return plan

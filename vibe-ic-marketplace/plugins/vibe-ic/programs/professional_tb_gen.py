@@ -50,6 +50,7 @@ from typing import Any, Dict, List, Optional, Tuple
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _path_layout as _pl  # noqa: E402
 import arith_oracle_tb_gen as _aog  # noqa: E402 — reuse port/golden/spec logic
+import _professional_memory_signature as _memory_signature  # noqa: E402
 
 
 _CLK_NAMES = _aog._CLK_NAMES
@@ -947,7 +948,13 @@ async def professional_smoke_test(dut):
     producer reads and never overwrites. It is accepted only when it is
     self-checking, so it must (1) contain no TestSkip, (2) print the literal
     token `PROFESSIONAL_TB PASS`, and (3) carry at least one `@cocotb.test()`
-    coroutine that references `dut` and asserts."""
+    coroutine that references `dut` and asserts.
+
+    Memory-signature models need explicit L10 test_cases with
+    category="memory_signature", byte-addressed expected_bytes, and interface
+    clock/edge/write_enable/active_level/write_address/write_data roles. The
+    case.id names its expert coroutine. The producer adds an actual commit
+    observer; zero initialization and completion do not prove a store."""
     _start_clock(dut)
     await _reset(dut)
     for _ in range(20):
@@ -1008,6 +1015,51 @@ include $(shell cocotb-config --makefiles)/Makefile.sim
 '''
 
 
+def _memory_signature_rows(project: Path) -> list:
+    import cpu_functional_oracle_waiver_check as _w
+    rows = _w._declared_rows(_gd(project) / "L10_TEST_CASES.json",
+                             ("test_cases", "cases", "vectors"))
+    return [row for row in rows if isinstance(row, dict)
+            and row.get("category") == "memory_signature"]
+
+
+def memory_signature_cases(project: Path, shape: Optional[dict] = None) -> list:
+    rows = _memory_signature_rows(project)
+    if not rows:
+        return []
+    if shape is None:
+        shape, _why = classify_dut(project, _detect_ic_class(project))
+    if shape is None or shape["kind"] != "generic":
+        raise ValueError("memory_signature has no supported L9 byte-storage interface")
+    return _memory_signature.resolve_cases(rows, shape["ports"], shape["cr"])
+
+
+def _checked_memory_signature_tb(text: str, cases: list) -> str:
+    tree = ast.parse(text)
+    tests = {node.name: node for node in tree.body
+             if isinstance(node, ast.AsyncFunctionDef)
+             and any(ast.unparse(d).startswith("cocotb.test")
+                     for d in node.decorator_list)}
+    for case in cases:
+        if case["id"] not in tests:
+            raise ValueError(f"{case['id']}: missing same-name expert cocotb coroutine")
+        tests[case["id"]].decorator_list.append(ast.Call(
+            func=ast.Name(id="_memory_signature_checked", ctx=ast.Load()),
+            args=[ast.parse(repr(case), mode="eval").body], keywords=[]))
+    # Preserve legal placement of a module docstring and future imports.
+    index = 0
+    while index < len(tree.body) and (
+            isinstance(tree.body[index], ast.Expr)
+            and isinstance(tree.body[index].value, ast.Constant)
+            and isinstance(tree.body[index].value.value, str)
+            or isinstance(tree.body[index], ast.ImportFrom)
+            and tree.body[index].module == "__future__"):
+        index += 1
+    tree.body.insert(index, ast.ImportFrom(module="_professional_memory_signature",
+        names=[ast.alias(name="checked", asname="_memory_signature_checked")], level=0))
+    return ast.unparse(ast.fix_missing_locations(tree)) + "\n"
+
+
 # --------------------------------------------------------------------------
 # Driver
 # --------------------------------------------------------------------------
@@ -1025,6 +1077,10 @@ def generate(project: Path, out_dir: Optional[Path] = None) -> dict:
     ic_class = _detect_ic_class(project)
     shape, why = classify_dut(project, ic_class)
     if shape is None:
+        if _memory_signature_rows(project):
+            return {"status": "INCOMPLETE", "reason": why,
+                    "memory_signature_required": True, "ic_class": ic_class,
+                    "fallback_skill": "testbench-gen"}
         return {"status": "SKIP", "reason": why, "ic_class": ic_class}
     top = shape["top"]
     out = out_dir or (_pl.rtl_dir(project).parent / "sim_professional" / top)
@@ -1037,6 +1093,18 @@ def generate(project: Path, out_dir: Optional[Path] = None) -> dict:
 
     expert_tb = (_load_expert_reference_tb(out)
                  if shape["kind"] == "generic" else None)
+    memory_cases = []
+    if _memory_signature_rows(project):
+        try:
+            memory_cases = memory_signature_cases(project, shape)
+            if expert_tb is None:
+                raise ValueError("memory_signature requires expert_reference_tb.py with same-name case coroutines")
+            expert_tb = _checked_memory_signature_tb(expert_tb, memory_cases)
+        except ValueError as error:
+            return {"status": "INCOMPLETE", "reason": str(error),
+                    "memory_signature_required": True, "ic_class": ic_class,
+                    "out_dir": str(out), "fallback_skill": "testbench-gen",
+                    "request": "Declare the byte-addressed L10 memory_signature interface/expected_bytes and author same-case coroutines in expert_reference_tb.py"}
     if expert_tb is not None:
         tb = expert_tb
         ref_tier = "expert_filled"
@@ -1069,6 +1137,20 @@ def generate(project: Path, out_dir: Optional[Path] = None) -> dict:
         "closure": cov["fields"]["closure_policy"],
         **({'random_goal_plan': random_plan} if random_plan else {}),
     }
+    memory_metadata = {}
+    if memory_cases:
+        from time import time_ns
+        # A filtered/nonexecuted case must not inherit a previous observation.
+        # Retain the old measurement under a distinct name for inspection.
+        for case in memory_cases:
+            prior = out / _memory_signature.receipt_name(case["id"])
+            if prior.is_file():
+                prior.rename(prior.with_name(f"{prior.name}.prior-{time_ns()}"))
+        support = "_professional_memory_signature.py"
+        (out / support).write_text(Path(__file__).with_name(support).read_text())
+        memory_metadata = {"memory_signature_required": True,
+                           "memory_signature_cases": memory_cases}
+        vplan.update(memory_metadata)
 
     (out / f"tb_{top}.py").write_text(tb)
     (out / f"{top}_coverage_model.json").write_text(
@@ -1079,6 +1161,7 @@ def generate(project: Path, out_dir: Optional[Path] = None) -> dict:
         json.dumps(vplan, indent=2) + "\n")
     return {"status": "PASS", "ic_class": ic_class, "dut_kind": run_kind,
             **({'random_goal_plan': random_plan} if random_plan else {}),
+            **memory_metadata,
             "reference_model_tier": ref_tier, "out_dir": str(out),
             # HOW MANY SOURCES THE EMITTED MAKEFILE WILL COMPILE. With none,
             # `emit_makefile` falls back to `$(PWD)/<top>.v`, which is not
@@ -1091,7 +1174,8 @@ def generate(project: Path, out_dir: Optional[Path] = None) -> dict:
             "rtl_files": len(rtl),
             "files": [f"tb_{top}.py", f"{top}_coverage_model.json",
                       f"{top}_assertions.sva", "Makefile",
-                      "verification_plan.json"]}
+                      "verification_plan.json"] +
+                     (["_professional_memory_signature.py"] if memory_cases else [])}
 
 
 def main(argv=None) -> int:
@@ -1105,6 +1189,8 @@ def main(argv=None) -> int:
     if a.json:
         a.json.write_text(txt + "\n")
     print(txt)
+    if res.get("status") == "INCOMPLETE" and res.get("memory_signature_required"):
+        return 2
     return 0 if res.get("status") in ("PASS", "SKIP") else 1
 
 
