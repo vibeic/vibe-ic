@@ -1092,3 +1092,100 @@ def test_relative_root_retains_native_handoff_refusals(
         bind_selected_interface(root, content)
     assert reason in str(refusal.value), str(refusal.value)
     assert all(p.read_bytes() == data for p, data in before.items())
+
+
+def _phase1_selected_scope_project(tmp_path, handoff):
+    """Neutral source-control inputs; no synthesized or measured handoff."""
+    from _staged_top_module import bind_selected_interface
+    proj = _selected_project(tmp_path)
+    (proj / "phase2/stage1/rtl/core.v").write_text(STAGED_TOP)
+    switch = proj / "phase3/librelane_switch.json"
+    switch.parent.mkdir(parents=True, exist_ok=True)
+    switch.write_text(json.dumps({"steps": {"9": "librelane"}}))
+    if handoff == "stale":
+        (proj / "phase2/stage2/synth/synth_inputs.json").write_text(
+            json.dumps({"librelane_synthesis": {"schema": "obsolete"}}))
+    docs = proj / "phase1/generated_docs"
+    l9 = docs / "L9_INTEGRATION_SPEC.json"
+    l9.write_text(json.dumps(bind_selected_interface(
+        proj, json.loads(l9.read_text()), include_synthesis_handoff=False)))
+    (docs / "L17_CHANNEL_SIGNAL_CATALOG.json").write_text(json.dumps({
+        "extraction_status": "EXTRACTED",
+        "extraction_evidence": [{"line": 1, "quote": "Neutral selected interface"}],
+        "fields": {"channels": [
+            {"name": "o_memory_wdata", "direction": "output", "width": 2,
+             "purpose": "current selected data output"},
+            {"name": "o_status", "direction": "output", "width": 1,
+             "purpose": "current selected status output"}],
+            "global_signals": [
+                {"name": "clk", "direction": "input", "purpose": "clock"},
+                {"name": "rst", "direction": "input", "purpose": "reset"}],
+            "handshake_pairs": {}, "dependency_graph": {}}}))
+    return proj
+
+
+@pytest.mark.parametrize("handoff", ["absent", "stale"])
+def test_phase1_l17_audits_logical_interface_before_future_handoff(tmp_path, handoff):
+    import os
+    import subprocess
+    import l17_channel_catalog_consumer_contract_check as L17
+    import phase2_scaffold_gen as P2
+    from _staged_top_module import selected_interface_ports
+    proj = _phase1_selected_scope_project(tmp_path, handoff)
+    docs = proj / "phase1/generated_docs"
+    l9 = json.loads((docs / "L9_INTEGRATION_SPEC.json").read_text())
+    l17 = json.loads((docs / "L17_CHANNEL_SIGNAL_CATALOG.json").read_text())["fields"]
+    before = {p: p.read_bytes() for p in proj.rglob("*") if p.is_file()}
+    findings, info = L17.audit(proj)
+    accepted = L17.build_report(proj, findings, info)["summary"]["pass"]
+    assert accepted is True, [vars(f) for f in findings]
+    # Real public CLI uses the same source authority as the direct consumer.
+    subject = Path(os.environ.get("VIBEIC_SCOPE_SUBJECT", PROGRAMS))
+    report = tmp_path / "l17-logical.json"
+    cli = subprocess.run([sys.executable, str(subject / "l17_channel_catalog_consumer_contract_check.py"),
+                          str(proj), "--json", str(report)], capture_output=True, text=True)
+    assert cli.returncode == 0, cli.stdout + cli.stderr
+    assert json.loads(report.read_text())["summary"]["pass"] is True
+    for consume in [lambda: selected_interface_ports(proj, l9),
+                    lambda: P2.derive_signals(l17, l9, project=proj)]:
+        with pytest.raises(ValueError, match="LL_SYNTH_HANDOFF_INVALID"):
+            consume()
+    logical = P2.derive_signals(l17, l9, project=proj, include_synthesis_handoff=False)
+    assert {row["name"] for row in logical} == {
+        "clk", "rst", "o_status", "o_memory_wdata", "o_memory_waddr", "o_memory_wen"}
+    assert all(p.read_bytes() == data for p, data in before.items())
+
+
+@pytest.mark.parametrize("damage", ["missing_rename", "wrong_width", "wrong_clock", "malformed_catalog"])
+def test_phase1_logical_scope_retains_interface_and_catalog_refusals(tmp_path, damage):
+    import subprocess
+    proj = _phase1_selected_scope_project(tmp_path, "absent")
+    docs = proj / "phase1/generated_docs"
+    l9 = docs / "L9_INTEGRATION_SPEC.json"
+    if damage == "missing_rename":
+        (proj / "phase2/stage1/rtl/SOURCE_MANIFEST.json").write_text(
+            json.dumps({"reused_ip": True, "renamed_interfaces": []}))
+    elif damage in {"wrong_width", "wrong_clock"}:
+        content = json.loads(l9.read_text())
+        for key in ("ports", "top_ports", "top_module_pins"):
+            for port in content[key]:
+                if port["name"] == ("o_memory_wdata" if damage == "wrong_width" else "clk"):
+                    port["width"] = 4 if damage == "wrong_width" else 2
+        l9.write_text(json.dumps(content))
+    else:
+        (docs / "L17_CHANNEL_SIGNAL_CATALOG.json").write_text("{")
+    before = {p: p.read_bytes() for p in proj.rglob("*") if p.is_file()}
+    cli = subprocess.run([sys.executable, str(PROGRAMS / "l17_channel_catalog_consumer_contract_check.py"),
+                          str(proj)], capture_output=True, text=True)
+    payload = json.loads(cli.stdout)
+    if damage == "malformed_catalog":
+        # The existing reader names unreadable input with rc2/SKIP. This is
+        # not catalog or Phase-1 qualification, whatever summary.pass says.
+        assert cli.returncode == 2, cli.stdout + cli.stderr
+        assert {(f["severity"], f["category"]) for f in payload["findings"]} == {
+            ("SKIP", "INVALID_JSON")}
+    else:
+        assert cli.returncode == 1, cli.stdout + cli.stderr
+        assert payload["summary"]["pass"] is False
+        assert payload["summary"]["error_count"] > 0
+    assert all(p.read_bytes() == data for p, data in before.items())

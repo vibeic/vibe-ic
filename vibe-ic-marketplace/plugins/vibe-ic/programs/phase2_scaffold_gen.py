@@ -302,7 +302,8 @@ def require_resolved_widths(signals: list[dict], artefact: str) -> None:
         raise UnresolvedPortWidth(artefact, bad)
 
 
-def derive_signals(l17: dict, l9: dict, *, project: Path | None = None) -> list[dict]:
+def derive_signals(l17: dict, l9: dict, *, project: Path | None = None,
+                   include_synthesis_handoff: bool = True) -> list[dict]:
     """Return a deduplicated list of {name, direction, width, comment} dicts.
 
     Sources, in priority order:
@@ -311,6 +312,8 @@ def derive_signals(l17: dict, l9: dict, *, project: Path | None = None) -> list[
       3. L9.ports
 
     For each channel we default to master-side direction.
+    Phase-1 catalog validation explicitly requests the current logical RTL
+    interface; implementation consumers retain synthesis handoff validation.
 
     WIDTH HAS THREE STATES, NOT TWO (ORGANIC #404)
     ----------------------------------------------
@@ -388,7 +391,8 @@ def derive_signals(l17: dict, l9: dict, *, project: Path | None = None) -> list[
         if project is None:
             raise ValueError("selected interface derivation requires the current project")
         from _staged_top_module import selected_interface_ports
-        chosen = selected_interface_ports(project, l9)
+        chosen = selected_interface_ports(
+            project, l9, include_synthesis_handoff=include_synthesis_handoff)
         retired = {p["name"] for p in l9.get("ports", [])} - {p["name"] for p in chosen}
         l9 = dict(l9, ports=chosen, top_ports=chosen)
         # L17's earlier illustrative names must not reintroduce retired aliases.

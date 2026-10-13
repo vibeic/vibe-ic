@@ -264,7 +264,8 @@ except Exception as exc:  # pragma: no cover
 
 def _c_derive_signals(l17: dict, l9: dict, project: Optional[Path] = None) -> List[dict]:
     if _consumer is not None:
-        return list(_consumer.derive_signals(l17, l9, project=project))
+        return list(_consumer.derive_signals(
+            l17, l9, project=project, include_synthesis_handoff=False))
     return []
 
 

@@ -358,19 +358,22 @@ def bind_selected_interface(project: Path, content: dict, *,
 
 
 
-def selected_interface_ports(project: Path, content: dict) -> List[Dict[str, Any]]:
+def selected_interface_ports(project: Path, content: dict, *,
+                             include_synthesis_handoff: bool = True) -> List[Dict[str, Any]]:
     """Return the current chosen roster without deleting document provenance.
 
     Binding labels alone do not retire a requirement. Re-run the existing
     input/declaration/top binding and the manifest's electrical obligations.
     This reader leaves the L9 document and every earlier output untouched.
+    Phase-1 logical readers explicitly exclude the future synthesis handoff.
     """
     rosters = [content[key] for key in ("ports", "top_ports", "top_module_pins")
                if key in content]
     if (not rosters or any(not isinstance(rows, list) or rows != rosters[0]
                            for rows in rosters)):
         raise ValueError("selected interface port rosters disagree")
-    bound = bind_selected_interface(project, content)
+    bound = bind_selected_interface(
+        project, content, include_synthesis_handoff=include_synthesis_handoff)
     if "selected_interface_binding" not in bound:
         return rosters[0]
     from l9_rtl_pin_consistency_check import _manifest_renamed_groups
