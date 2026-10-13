@@ -177,6 +177,192 @@ def test_native_rejects_rtl_changed_before_consumer(tmp_path):
     assert any(f.rule == 'instance-driver-analysis-unresolved' for f in findings)
 
 
+@pytest.fixture
+def selected_native_target(tmp_path, monkeypatch):
+    """PROGRAM_FIXTURE transport edge; its Yosys subprocess is real.
+
+    Actual host-to-image CLI controls are separate evidence. This fixture does
+    not claim that its substituted Docker boundary executed an image.
+    """
+    import _eda_image
+    import librelane_contract
+    for key in ('VIBEIC_EDA_IMAGE', 'IIC_EDA_IMAGE',
+                librelane_contract.LOCAL_ATTESTATION_ENV):
+        monkeypatch.delenv(key, raising=False)
+    target = 'registry.invalid/neutral-tools@sha256:' + 'ac' * 32
+    monkeypatch.setattr(_eda_image, 'local_digest',
+                        lambda selected: ('sha256:' + 'ac' * 32, 'repo-digest', ''))
+    calls = []
+    def run(argv, **kw):
+        calls.append((argv, kw))
+        assert kw['supervised'] is True
+        assert argv[argv.index(target) + 1] == '--skip'
+        assert '-v' in argv and any(v.endswith(':ro') for v in argv)
+        # Execute the producer's own image command in this test's EDA image.
+        child = subprocess.run(argv[argv.index('--skip') + 1:],
+                               capture_output=True, text=True, timeout=20)
+        return subprocess.CompletedProcess(argv, child.returncode, child.stdout, child.stderr)
+    monkeypatch.setattr(librelane_contract, 'run_container', run)
+    return target, calls
+
+
+def _selected_native_main(tmp_path, monkeypatch, source=NATIVE_TOP):
+    leaf, top = tmp_path / 'leaf.v', tmp_path / 'top.v'
+    leaf.write_text(NATIVE_LEAF)
+    top.write_text(source)
+    report = tmp_path / 'findings.json'
+    monkeypatch.setattr(sys, 'argv', [str(PROGRAMS / 'rtl_hygiene_lint.py'),
+        str(leaf), str(top), '--top', 'top', '--parameter', 'ENABLE=1',
+        '--severity', 'ERROR', '--json', str(report)])
+    rc = lint.main()
+    context = json.loads(sorted(tmp_path.glob('native-elaboration-*/context.json'))[-1].read_text())
+    return rc, json.loads(report.read_text()), context
+
+
+@pytest.mark.parametrize('image_env', ['VIBEIC_EDA_IMAGE', 'IIC_EDA_IMAGE'])
+def test_native_selected_image_runs_without_host_yosys(tmp_path, monkeypatch,
+                                                      selected_native_target, image_env):
+    target, calls = selected_native_target
+    monkeypatch.setenv(image_env, target)
+    def absent_host(*args, **kw):
+        raise FileNotFoundError('neutral host has no Yosys')
+    monkeypatch.setattr(lint._pr, 'run', absent_host)
+    rc, findings, context = _selected_native_main(tmp_path, monkeypatch)
+    assert rc == 0, context
+    assert findings == [] and len(calls) == 1
+    assert context['backend'] == 'docker' and context['image'] == target
+    assert context['native_returncode'] == context['transport_returncode'] == 0
+    assert context['native_process']['tool_path'] == shutil.which('yosys')
+    assert context['native_process']['command'][:3] == ['yosys', '-Q', '-s']
+    assert context['parameters'] == ['ENABLE=1'] and context['status'] == 'MEASURED'
+
+
+@pytest.mark.parametrize('rejection', ['unavailable', 'missing_receipt', 'missing_tool', 'wrong_rc'])
+def test_native_selected_target_failure_never_uses_available_host(tmp_path, monkeypatch,
+                                                                selected_native_target, rejection):
+    import _eda_image
+    import librelane_contract
+    target, calls = selected_native_target
+    monkeypatch.setenv('VIBEIC_EDA_IMAGE', target)
+    if rejection == 'unavailable':
+        monkeypatch.setattr(_eda_image, 'local_digest',
+                            lambda selected: (None, '', 'neutral target missing'))
+    else:
+        def broken(argv, **kw):
+            calls.append((argv, kw))
+            if rejection in ('wrong_rc', 'missing_tool'):
+                at = argv.index('--skip')
+                receipt, command = Path(argv[at + 4]), argv[at + 5:]
+                record = {'command': command, 'native_returncode': 1}
+                if rejection == 'missing_tool':
+                    record.update(native_returncode=None, launch_error='neutral image has no Yosys')
+                receipt.write_text(json.dumps(record))
+            return subprocess.CompletedProcess(argv, 127 if rejection == 'missing_tool' else 0, '', '')
+        monkeypatch.setattr(librelane_contract, 'run_container', broken)
+    rc, findings, context = _selected_native_main(tmp_path, monkeypatch)
+    assert rc == 1, context
+    assert context['status'] == 'NOT_MEASURED'
+    assert any(f['rule'] == 'native-elaboration-unresolved' for f in findings)
+    assert len(calls) == (0 if rejection == 'unavailable' else 1)
+    if rejection == 'missing_tool':
+        assert context['native_returncode'] is None and context['transport_returncode'] == 127
+
+
+@pytest.mark.parametrize('source', [
+    NATIVE_TOP.replace('leaf u_leaf', 'unknown u_leaf'),
+    NATIVE_TOP.replace('.y(routed)', '.y()'),
+    NATIVE_TOP.replace('leaf u_leaf(.a(source), .y(routed));', 'wire unused;'),
+], ids=['unknown-child', 'missing-connection', 'undriven-wire'])
+def test_native_selected_image_keeps_driver_negatives(tmp_path, monkeypatch,
+                                                     selected_native_target, source):
+    target, calls = selected_native_target
+    monkeypatch.setenv('VIBEIC_EDA_IMAGE', target)
+    rc, findings, context = _selected_native_main(tmp_path, monkeypatch, source)
+    assert rc == 1 and len(calls) == 1
+    assert context['native_returncode'] == context['transport_returncode'] == 1
+    assert context['status'] == 'NOT_MEASURED'
+    assert any(f['rule'] == 'native-elaboration-unresolved' for f in findings)
+    assert any(f['symbol'] == 'routed' and f['block_eligible'] for f in findings)
+
+
+@pytest.mark.parametrize('matches', [True, False])
+def test_native_selected_in_image_uses_existing_attestation(tmp_path, monkeypatch,
+                                                          selected_native_target, matches):
+    import librelane_contract
+    target, calls = selected_native_target
+    monkeypatch.setenv('VIBEIC_EDA_IMAGE', target)
+    monkeypatch.setenv(librelane_contract.LOCAL_ATTESTATION_ENV, '/neutral/launch_identity.json')
+    def attest(selected):
+        assert selected == target
+        if not matches:
+            raise librelane_contract.Refusal('LL_LOCAL_IMAGE_UNATTESTED', 'neutral image mismatch')
+        return {'image': selected, 'image_id': 'sha256:' + 'ad' * 32}
+    monkeypatch.setattr(librelane_contract, 'local_image_attestation', attest)
+    rc, findings, context = _selected_native_main(tmp_path, monkeypatch)
+    assert rc == (0 if matches else 1), context
+    assert calls == []
+    assert context.get('backend') == 'in-image'
+    assert context['status'] == ('MEASURED' if matches else 'NOT_MEASURED')
+    if matches:
+        assert context['native_returncode'] == context['transport_returncode'] == 0
+        assert findings == []
+    else:
+        assert context['native_returncode'] is None
+        assert any(f['rule'] == 'native-elaboration-unresolved' for f in findings)
+
+
+def test_native_relative_include_is_read_and_bound_to_current_source(tmp_path):
+    include_dir = tmp_path / 'includes'
+    include_dir.mkdir()
+    header = include_dir / 'neutral.svh'
+    header.write_text('`define INCLUDED_DRIVER leaf u_leaf(.a(source), .y(routed));\n')
+    source = NATIVE_TOP.replace('wire routed;', '`include "neutral.svh"\nwire routed;')
+    source = source.replace('leaf u_leaf(.a(source), .y(routed));', '`INCLUDED_DRIVER')
+    args = ['--parameter', 'ENABLE=1', '--include-dir', str(include_dir)]
+    good, findings = _native_lint_cli(tmp_path, source, args)
+    assert good.returncode == 0, good.stdout + good.stderr
+    assert findings == []
+    context_path, = tmp_path.glob('native-elaboration-*/context.json')
+    context = json.loads(context_path.read_text())
+    import hashlib
+    assert context['input_sha256'][str(header)] == hashlib.sha256(header.read_bytes()).hexdigest()
+    old = {p: p.read_bytes() for p in context_path.parent.iterdir()}
+    header.write_text('`define INCLUDED_DRIVER leaf u_leaf(.a(source), .y());\n')
+    bad, findings = _native_lint_cli(tmp_path, source, args)
+    assert bad.returncode == 1
+    assert any(f['rule'] == 'native-elaboration-unresolved' for f in findings)
+    current, = [p for p in tmp_path.glob('native-elaboration-*/context.json') if p != context_path]
+    record = json.loads(current.read_text())
+    assert record['input_sha256'][str(header)] == hashlib.sha256(header.read_bytes()).hexdigest()
+    assert record['status'] == 'NOT_MEASURED'
+    assert all(p.read_bytes() == value for p, value in old.items())
+
+
+def test_native_missing_relative_include_is_not_a_clean_driver_result(tmp_path):
+    include_dir = tmp_path / 'includes'
+    include_dir.mkdir()
+    source = NATIVE_TOP.replace('wire routed;', '`include "neutral.svh"\nwire routed;')
+    result, findings = _native_lint_cli(tmp_path, source,
+                                      ['--parameter', 'ENABLE=1', '--include-dir', str(include_dir)])
+    assert result.returncode == 1
+    assert any(f['rule'] == 'native-elaboration-unresolved' for f in findings)
+    context = json.loads(next(tmp_path.glob('native-elaboration-*/context.json')).read_text())
+    assert context['status'] == 'NOT_MEASURED'
+
+
+def test_native_include_directory_with_whitespace_is_explicitly_unmeasured(tmp_path):
+    include_dir = tmp_path / 'with space'
+    include_dir.mkdir()
+    (include_dir / 'neutral.svh').write_text('`define NEUTRAL_INCLUDE 1\n')
+    result, findings = _native_lint_cli(tmp_path,
+        extra=['--parameter', 'ENABLE=1', '--include-dir', str(include_dir)])
+    assert result.returncode == 1
+    assert any(f['rule'] == 'native-elaboration-unresolved' for f in findings)
+    context = json.loads(next(tmp_path.glob('native-elaboration-*/context.json')).read_text())
+    assert context['status'] == 'NOT_MEASURED' and 'whitespace' in context['reason']
+    assert context['native_returncode'] is None and context['transport_returncode'] is None
+
+
 def _undriven(source: str):
     findings = lint.rule_undriven_and_unread(
         lint.strip_comments(source), "fixture.sv")
