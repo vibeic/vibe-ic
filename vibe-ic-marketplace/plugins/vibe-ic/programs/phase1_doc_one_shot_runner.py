@@ -1806,12 +1806,13 @@ _V1_6_334_RE_SECTION_HEADER_RST_UNDERLINE = re.compile(
 def _v1_6_357_slice_section_body(text: str,
                                   heading_end: int,
                                   next_heading_start: Optional[int],
-                                  max_chars: int = 800) -> str:
+                                  max_chars: Optional[int] = 800) -> str:
     """v1.6.357 — for #252 P3. Slice the prose body between a
     section heading and the NEXT section heading. Returns a clean
     string with blank-only lines stripped (leading/trailing whitespace
-    trimmed) and capped at ``max_chars`` (with a trailing `…` suffix
-    when truncated).
+    trimmed). A bounded preview uses ``max_chars`` (with a trailing
+    `…` suffix when truncated); ``None`` preserves the complete body
+    for semantic requirements consumers.
 
     If ``next_heading_start`` is None (last heading in file), slices
     to the end of the document.
@@ -1846,7 +1847,7 @@ def _v1_6_357_slice_section_body(text: str,
     while lines and not lines[-1].strip():
         lines.pop()
     body = "\n".join(lines)
-    if len(body) > max_chars:
+    if max_chars is not None and len(body) > max_chars:
         body = body[:max_chars] + "…"
     return body
 
@@ -23988,7 +23989,9 @@ def gen_l2_frs(project: Path,
             if i + 1 < len(multi_shape_hits):
                 next_offset = multi_shape_hits[i + 1].get("match_pos")
             content_body = _v1_6_357_slice_section_body(
-                text, heading_end, next_offset,
+                # Canonical FRS content is semantic input for downstream
+                # consumers, not a bounded preview. Preserve every fact.
+                text, heading_end, next_offset, max_chars=None,
             )
             sections.append({
                 "section": sec_id,

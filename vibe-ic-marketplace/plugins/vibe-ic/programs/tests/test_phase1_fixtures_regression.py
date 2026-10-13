@@ -56,6 +56,8 @@ _EXPECTED: dict[str, str] = {
     "litescope":   "LiteScope",
     "taxi":        "Taxi Transport Library",
     "benchmark_a":      "EXAMPLE_CHIP",
+    # #3106: the native intake project's identity is also pinned.
+    "subservient_l2_section_tail": "subservient",
 }
 
 
@@ -65,6 +67,8 @@ def _load_fixture(project: str) -> dict[str, str]:
     `phase1_one_shot_runner` extractor passes to
     `_ic_name_from_docs`."""
     pdir = _FIXTURE_DIR / project
+    if not pdir.is_dir():
+        pdir = Path(__file__).parent / "fixtures" / "phase1_local" / project
     if not pdir.is_dir():
         raise FileNotFoundError(f"missing fixture dir: {pdir}")
     out: dict[str, str] = {}
@@ -325,3 +329,100 @@ def test_l7_register_role_obeys_heading_ancestry_and_sibling_boundaries(
         text, names, tmp_path):
     doc = _field_doc(tmp_path, "L7", text)
     assert [r["name"] for r in doc["debug_registers"]] == names, doc["debug_registers"]
+
+
+def test_subservient_l2_section_tail_from_native_intake(tmp_path):
+    """#3106's emitted INPUT must survive the public semantic producer."""
+    from programs.tests._hostpaths import require_repo
+    from programs import phase1_doc_one_shot_runner as producer
+    fixture = require_repo(
+        "vibe-ic-marketplace", "plugins", "vibe-ic", "programs", "tests",
+        "fixtures", "phase1_local", "subservient_l2_section_tail",
+        "L1_product_metadata.md")
+    text = fixture.read_text()
+    # Input-derived section bounds, independent of the slicing helper being
+    # repaired. This exact row is the public issue's immutable expectation.
+    expected = text.split("## Tapeout 目標\n", 1)[1].split(
+        "## 量產 (Production-readiness) 期望", 1)[0].strip("\n")
+    result = producer.gen_l2_frs(tmp_path, {fixture.name: text})
+    doc = json.loads(result.path.read_text())
+    actual = next(row for row in doc["frs_sections"]
+                  if row["title"] == "Tapeout 目標")
+    assert actual == {
+        "section": "h2", "title": "Tapeout 目標", "content": expected,
+        "evidence": "input/docs/L1_product_metadata.md",
+        "heading_shape": "md_atx",
+    }, actual
+
+
+@pytest.mark.parametrize("heading,next_heading,shape", [
+    ("## Functional Requirements\n", "## Following Section\n", "md_atx"),
+    ("Functional Requirements\n-----------------------\n",
+     "Following Section\n-----------------\n", "rst_underline"),
+    ("== Functional Requirements\n", "== Following Section\n", "adoc"),
+    ("1.1 Functional Requirements\n", "1.2 Following Section\n", "numbered"),
+])
+@pytest.mark.parametrize("body_chars", [1200, 20000])
+def test_l2_semantic_section_body_is_complete(
+        heading, next_heading, shape, body_chars, tmp_path):
+    """Long requirements are data, across each supported heading shape."""
+    from programs import phase1_doc_one_shot_runner as producer
+    prose = ("functional requirements retain arbitration and ordering. " *
+             (body_chars // 40))[:body_chars]
+    body = prose + "\n\nterminal_constraint = 97"
+    text = heading + "\n" + body + "\n\n" + next_heading + "next_body_only\n"
+    result = producer.gen_l2_frs(tmp_path, {"specification.rst": text})
+    rows = json.loads(result.path.read_text())["frs_sections"]
+    row = next(r for r in rows if r["title"] == "Functional Requirements")
+    assert row["content"] == body, row
+    assert row["heading_shape"] == shape, row
+    assert "next_body_only" not in row["content"]
+    following = next(r for r in rows if r["title"] == "Following Section")
+    assert following["content"] == "next_body_only", following
+
+
+@pytest.mark.parametrize("body", ["", "short_requirement = 3"])
+def test_l2_semantic_section_short_or_empty_body_keeps_boundaries(body, tmp_path):
+    from programs import phase1_doc_one_shot_runner as producer
+    result = producer.gen_l2_frs(tmp_path, {"specification.md":
+        "## Requirements\n\n" + body + "\n\n## Following Section\nother\n"})
+    rows = json.loads(result.path.read_text())["frs_sections"]
+    row = next(r for r in rows if r["title"] == "Requirements")
+    assert row["content"] == body, row
+
+
+@pytest.mark.parametrize("cap", [None, 17, 800])
+def test_section_body_preview_cap_remains_explicit(cap):
+    from programs import phase1_doc_one_shot_runner as producer
+    body = "requirement data with internal spaces. " * 100
+    text = "\n\n" + body + "\n\n"
+    kwargs = {} if cap is None else {"max_chars": cap}
+    actual = producer._v1_6_357_slice_section_body(text, 0, None, **kwargs)
+    limit = 800 if cap is None else cap
+    assert actual == body[:limit] + "…"
+
+
+def test_l2_complete_body_reaches_expert_but_missing_tail_is_rejected(tmp_path):
+    """Actual expert consumer must distinguish good producer data from loss."""
+    from programs import phase1_doc_one_shot_runner as producer
+    from programs import phase1_expert_parse_track as expert
+    body = "arbitration rules remain sequential. " * 100
+    tail = "terminal_constraint = 97"
+    result = producer.gen_l2_frs(tmp_path, {"specification.md":
+        "## Requirements\n\n" + body + "\n" + tail + "\n"})
+    expectation = {"id": "terminal_requirement_retained", "layer": "L2_FRS",
+                   "field_path": "frs_sections.content",
+                   "requirement": "The input's final constraint is preserved.",
+                   "evidence": ["specification.md: terminal_constraint = 97"],
+                   "expected_tokens": [tail]}
+    good = expert.converge_ai_expectation(tmp_path, expectation)
+    assert good["usable"] and good["met"], good
+    assert good["scope"] == "field_path", good
+    # Deliberately damage only this neutral raw fixture, not the real project
+    # or producer. A successful negative requires the actual consumer to fail.
+    doc = json.loads(result.path.read_text())
+    doc["frs_sections"][0]["content"] = body[:800] + "…"
+    result.path.write_text(json.dumps(doc))
+    bad = expert.converge_ai_expectation(tmp_path, expectation)
+    assert bad["usable"] and bad["met"] is False, bad
+    assert bad["missing_tokens"] == [tail], bad
