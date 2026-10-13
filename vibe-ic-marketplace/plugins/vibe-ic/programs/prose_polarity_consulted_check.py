@@ -119,6 +119,15 @@ _SEARCH_ATTRS = {"search", "findall", "finditer", "match", "fullmatch"}
 #: The count is printed on every run, clean or not.
 _EXEMPT_REASON_MIN = 80
 _NOT_PROSE: Dict[str, str] = {
+    "verilator_coverage_measure::_professional_input_activity":
+        "VERILATOR COVERAGE-DATA GRAMMAR, NO SENTENCE. The reader accepts "
+        "only a complete C '<encoded-fields>' <unsigned-count> record, "
+        "with a positive count, the exact v_toggle/<top> page, a matching "
+        "top hierarchy and a declared functional-input name. Encoded fields "
+        "use Verilator's control-character separators; natural-language "
+        "denial is not a record. Falsifier: "
+        "test_coverage_stimulus_attribution.py::"
+        "test_professional_activity_requires_native_record_grammar.",
     "synth_full_adder_map::discover":
         "ONE MACHINE GRAMMAR, NO SENTENCE. The input is the active PDK Liberty "
         "file: cell/pin blocks, area numbers, directions and quoted Boolean "
