@@ -202,13 +202,18 @@ def staged_top_ports(project, vendor_dir,
     return declared_ports(modules, top, project=project)
 
 
-def bind_selected_interface(project: Path, content: dict) -> dict:
+def bind_selected_interface(project: Path, content: dict, *,
+                            include_synthesis_handoff: bool = True) -> dict:
     """Bind a delegated, declared reused-IP interface to its selected top.
 
     Reuse the existing protocol + original L3 illustrative-name authority.
     Keep document examples for pad-group evidence; only those names receive
     the existing absent-from-top label. Fixed ports, directions and known
     widths remain obligations. This does not verify the declaration's author.
+    The Phase-1 producer sets ``include_synthesis_handoff=False`` because it
+    runs before L19/Step 9: it can bind only the current staged RTL interface.
+    Implementation readers retain the default and validate their current
+    synthesis handoff.
     """
     from l9_rtl_pin_consistency_check import (_auto_derive_renamed_interfaces,
                                               _l3_fixed_port_name)
@@ -241,23 +246,24 @@ def bind_selected_interface(project: Path, content: dict) -> dict:
     if choice["top_module"] != top:
         raise ValueError(f"selected top {choice['top_module']!r} differs from L9 {top!r}")
     selected = _rtl_top_ports(project, top)
-    # The ordinary pad consumer can have only the selected synthesis header;
-    # use the same selection and header parser as its existing core backstop.
-    try:
-        from phase3_one_shot_runner import pnr_input_netlist
-        from lec_run import netlist_top_ports
-        netlist, _note, _scan = pnr_input_netlist(project, top)
-        parsed = netlist_top_ports(netlist.read_text(), top)
-        if parsed:
-            actual = []
-            for direction, rng, name in parsed:
-                m = re.fullmatch(r"\[\s*(-?\d+)\s*:\s*(-?\d+)\s*\]", rng.strip())
-                width = (abs(int(m.group(1)) - int(m.group(2))) + 1 if m
-                         else (1 if not rng.strip() else None))
-                actual.append({"name": name, "direction": direction, "width": width})
-            selected = (str(netlist.relative_to(project)), actual)
-    except OSError:
-        pass
+    # A pad/implementation consumer can have only the selected synthesis
+    # header. Phase 1 must not consume that later producer's contract.
+    if include_synthesis_handoff:
+        try:
+            from phase3_one_shot_runner import pnr_input_netlist
+            from lec_run import netlist_top_ports
+            netlist, _note, _scan = pnr_input_netlist(project, top)
+            parsed = netlist_top_ports(netlist.read_text(), top)
+            if parsed:
+                actual = []
+                for direction, rng, name in parsed:
+                    m = re.fullmatch(r"\[\s*(-?\d+)\s*:\s*(-?\d+)\s*\]", rng.strip())
+                    width = (abs(int(m.group(1)) - int(m.group(2))) + 1 if m
+                             else (1 if not rng.strip() else None))
+                    actual.append({"name": name, "direction": direction, "width": width})
+                selected = (str(netlist.relative_to(project)), actual)
+        except OSError:
+            pass
     if not selected:
         return not_applicable("current selected top interface is unavailable")
     source, actual = selected
@@ -393,9 +399,11 @@ def selected_interface_ports(project: Path, content: dict) -> List[Dict[str, Any
     return [port for port in bound["ports"] if port["name"] not in retired]
 
 
-def refresh_selected_interface(project: Path, path: Path, content: dict) -> dict:
+def refresh_selected_interface(project: Path, path: Path, content: dict, *,
+                               include_synthesis_handoff: bool = True) -> dict:
     """Ordinary producer refresh for a continuation's existing L9 document."""
-    bound = bind_selected_interface(project, content)
+    bound = bind_selected_interface(
+        project, content, include_synthesis_handoff=include_synthesis_handoff)
     if bound != content:
         from l_doc_generator_stamp import dump
         dump(path, bound, emitter="_staged_top_module.refresh_selected_interface")
