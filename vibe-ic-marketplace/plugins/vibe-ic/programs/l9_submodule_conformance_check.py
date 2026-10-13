@@ -359,6 +359,7 @@ SKIP_NOT_AN_OBJECT = "not_an_object"
 SKIP_NAMING_DELEGATED = "naming_delegated_low_confidence"
 SKIP_NO_NAME = "no_name"
 SKIP_OPTIONAL_ABSENT = "optional_module_absent"
+SKIP_OPTIONAL_NAMING_DELEGATED = "optional_naming_delegated"
 SKIP_CONDITION_FALSE = "requirement_condition_false"
 
 _SKIP_REASON_TEXT = {
@@ -372,6 +373,9 @@ _SKIP_REASON_TEXT = {
         "an object with no `name` field",
     SKIP_OPTIONAL_ABSENT:
         "explicitly optional implementation, absent from RTL",
+    SKIP_OPTIONAL_NAMING_DELEGATED:
+        "explicitly optional implementation with delegated naming; its "
+        "logical name cannot establish RTL presence or absence",
     SKIP_CONDITION_FALSE:
         "conditional implementation whose declared top-module condition is false",
 }
@@ -433,12 +437,13 @@ def classify_submodules(l9: dict, rtl_ports: Optional[dict] = None
                 rtl_ports is None or s.get("name") not in rtl_ports):
             _skip(SKIP_CONDITION_FALSE)
             continue
+        if s.get("low_confidence") is True:
+            _skip(SKIP_OPTIONAL_NAMING_DELEGATED if state == "optional"
+                  else SKIP_NAMING_DELEGATED)
+            continue
         if (state == "optional" and rtl_ports is not None
                 and s.get("name") not in rtl_ports):
             _skip(SKIP_OPTIONAL_ABSENT)
-            continue
-        if s.get("low_confidence") is True:
-            _skip(SKIP_NAMING_DELEGATED)
             continue
         if not s.get("name"):
             _skip(SKIP_NO_NAME)

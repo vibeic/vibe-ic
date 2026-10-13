@@ -296,3 +296,13 @@ def test_producer_mixed_role_paragraph_drives_native_presence_consumer(tmp_path)
     roles = {s["name"]: s.get("implementation_requirement")
              for s in l9["submodules"]}
     assert roles == {"rx_phy": "required", "tx_phy": "optional"}
+
+
+def test_optional_delegated_name_cannot_establish_implementation_absence():
+    from programs.l9_submodule_conformance_check import classify_submodules
+    examined, census = classify_submodules({"submodules": [{
+        "name": "Optional diagnostic block", "low_confidence": True,
+        "implementation_requirement": "optional"}]}, {"chosen_diag_name": []})
+    assert examined == []
+    assert census["skipped"] == {"optional_naming_delegated": 1}
+    assert "optional_module_absent" not in census["skipped"]
