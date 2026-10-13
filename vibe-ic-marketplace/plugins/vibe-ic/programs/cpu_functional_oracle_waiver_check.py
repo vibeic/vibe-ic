@@ -948,6 +948,17 @@ def _coverage_goal_summary(project: Path) -> dict:
     # measured by the L10 cases bound to it that ran their own oracle).
     summary = _cgc.measure_goals(goals, totals, rows,
                                  _l10x.load_record(project, l10))
+    import professional_tb_gen as professional
+    for goal, measured in zip(goals, summary['rows']):
+        actual = professional.random_pair_goal_measurement(project, goal)
+        if actual is not None:
+            measured.update(actual)
+            measured.update(achieved_pct=actual.get('achieved_pct'),
+                            achieved_source=actual.get('achieved_source'),
+                            instrument='arithmetic_random_pairs')
+    for state, key in ((_cgc.PASS, 'passed_count'), (_cgc.FAIL, 'failed_count'),
+                       (_cgc.NOT_MEASURED, 'not_measured_count')):
+        summary[key] = sum(row['verdict'] == state for row in summary['rows'])
     summary["totals_source"] = source
     _credit_isa_goals(project, summary)
     # FX_P2 — a goal whose dimension IS instrumented, but which no executed
@@ -1269,6 +1280,9 @@ def _evaluate(project: Path) -> "tuple[int, str]":
         verdict == CONNECTIVITY_VERDICT.replace("_", "-")
         or cap == CAP_CPU_FUNCTIONAL_ORACLE)
     if not is_connectivity:
+        refusal = _cgc.coverage_goal_refusal(_coverage_goal_summary(project))
+        if refusal:
+            return 1, 'INCOMPLETE: functional smoke PASS does not satisfy declared coverage goals: ' + refusal
         # A genuine functional PASS (oracle bridge) or any non-connectivity
         # verdict — not this gate's concern. The functional gates own it.
         return 0, ("PASS: sim/results.xml is not a cpu-functional-oracle "
