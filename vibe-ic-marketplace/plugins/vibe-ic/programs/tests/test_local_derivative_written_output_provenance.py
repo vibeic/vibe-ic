@@ -35,7 +35,10 @@ def test_actual_derivative_write_supersedes_only_replaced_output(tmp_path, monke
     assert (project / 'provenance.jsonl').read_bytes().startswith(old_ledger)
     event = json.loads((project / 'provenance.jsonl').read_text().splitlines()[-1])
     assert event['exit_code'] == 0
-    assert event['outputs'] == {'phase2/stage1/rtl/leaf.v': 'sha256:' + _h(project / 'phase2/stage1/rtl/leaf.v')}
+    assert event['outputs'] == {
+        'phase2/stage1/rtl/leaf.v': 'sha256:' + _h(project / 'phase2/stage1/rtl/leaf.v'),
+        'phase2/stage1/rtl/SOURCE_MANIFEST.json': 'sha256:' + _h(project / 'phase2/stage1/rtl/SOURCE_MANIFEST.json'),
+    }
     assert 'phase2/stage1/rtl/helper.v' not in event['outputs']
     result = runner.step_rtl_gen(project, 'processor_cpu')
     assert result.status == 'PASS_WITH_WAIVERS', result.detail
