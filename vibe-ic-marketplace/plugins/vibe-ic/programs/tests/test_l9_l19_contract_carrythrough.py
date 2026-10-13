@@ -51,6 +51,75 @@ The wrapper exposes instruction bus and data bus after adapting the RF interface
     assert (tmp_path / "phase1/generated_docs/L9_INTEGRATION_SPEC.json").read_bytes() == before
 
 
+def test_source_submodule_roles_survive_native_l9_generation(tmp_path):
+    from programs.tests._hostpaths import require_repo
+    root = require_repo("vibe-ic-marketplace", "plugins", "vibe-ic", "programs",
+                        "tests", "fixtures", "subservient_input_docs")
+    text = (root / "L8_submodule_integration.md").read_text()
+    result = R.gen_l9_integration_spec(
+        tmp_path, {"L8_submodule_integration.md": text}, {})
+    doc = json.loads(result.path.read_text())
+    roles = [s.get("implementation_requirement", "required")
+             for s in doc["submodules"]]
+    assert roles == ["optional"], roles
+    optional = doc["submodules"][-1]
+    assert optional["low_confidence"] is True
+    assert "可選包入" in optional["requirement_evidence"][0]["evidence"]
+
+
+def test_io_delay_override_and_disclosure_keep_their_common_scope(tmp_path):
+    _write_consumers(tmp_path)
+    _write_doc(tmp_path, "L9_constraints.md", """layer: L9
+# I/O delay
+Input and output delay default to 20% of the selected clock period.
+The plugin may override this default; an override must be recorded in declaration.json.
+""")
+    C.run(tmp_path)
+    l19 = json.loads((tmp_path / "phase1/generated_docs/L19_CONSTRAINTS_PDK.json").read_text())
+    actual = l19.get("constraints", {}).get("io_delay", {})
+    assert "override must be recorded in declaration.json" in actual.get("evidence", ""), actual
+    assert actual["override_allowed"] is True
+    assert actual["override_requires_declaration"] is True
+
+
+def test_scope_and_default_qualifiers_reach_owning_layers(tmp_path):
+    _write_consumers(tmp_path)
+    _write_doc(tmp_path, "L8_integration.md", """layer: L8
+# Hierarchy freedom
+The implementation may flatten modules and choose file organization.
+# Not constrained
+Source language and generate blocks are implementation choices.
+""")
+    _write_doc(tmp_path, "L7_verification.md", """layer: L7
+# Out of scope
+Gate simulation is recommended, not mandatory; leakage corners are required only for production.
+""")
+    _write_doc(tmp_path, "L9_constraints.md", """layer: L9
+# Synthesis fanout
+Fanout uses the declared PDK defaults, with no override.
+# Core utilization
+Memory occupies approximately 50-70% in the composed configuration; this is an estimate.
+# Not constrained by SDC
+Multi-cycle paths may be added only with an equivalence proof in L7.
+# Power network
+Unlisted PDN settings use the selected PDK defaults.
+""")
+    C.run(tmp_path)
+    l9 = json.loads((tmp_path / "phase1/generated_docs/L9_INTEGRATION_SPEC.json").read_text())
+    l19 = json.loads((tmp_path / "phase1/generated_docs/L19_CONSTRAINTS_PDK.json").read_text())
+    architecture = str(l9["integration"]["architecture"])
+    verification = str(l9["integration"]["verification"])
+    constraints = str(l19["constraints"]["implementation_constraints"])
+    assert "flatten modules" in architecture and "generate blocks" in architecture
+    assert "required only for production" in verification
+    assert "50-70%" in constraints and "this is an estimate" in constraints
+    assert "only with an equivalence proof" in constraints
+    assert "Unlisted PDN settings" in constraints
+    policy = l19["constraints"]["timing_exceptions"]
+    assert policy["allow_automatic"] is False
+    assert policy["requires_l7_equivalence"] is True
+
+
 def test_denied_or_untyped_core_contracts_are_not_promoted(tmp_path):
     _write_consumers(tmp_path)
     _write_doc(tmp_path, "L8_submodule.md", """\

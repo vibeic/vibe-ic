@@ -229,3 +229,70 @@ def test_parser_handles_sv_import_clause_in_header() -> None:
         ("clk", "input"), ("rstn", "input"), ("rx_bit", "output"),
     ]
     assert out["mixed"] == [("clk", "input"), ("q", "output")]
+
+
+@pytest.mark.parametrize("requirement,condition,top,expected", [
+    ("optional", None, "chip_top", "PASS"),
+    ("required", None, "chip_top", "FAIL"),
+    ("conditional", {"field": "top_module", "equals": "other_top"},
+     "chip_top", "PASS"),
+    ("conditional", {"field": "top_module", "equals": "chip_top"},
+     "chip_top", "FAIL"),
+])
+def test_declared_implementation_role_controls_missing_module(
+        tmp_path, requirement, condition, top, expected):
+    p = tmp_path / "proj"
+    _write_rtl(p, "chip_top.sv", CHIP_TOP_RTL)
+    _write_rtl(p, "rx_phy.sv", RX_PHY_RTL)
+    module = {"name": "tx_phy", "implementation_requirement": requirement}
+    if condition:
+        module["requirement_condition"] = condition
+    _write_l9(p, {"schema_version": 2, "top_module": top,
+                  "submodules": [{"name": "rx_phy"}, module]})
+    verdict, findings = audit(p)
+    assert verdict == expected, findings
+
+
+def test_present_optional_module_still_requires_instantiation(tmp_path):
+    p = tmp_path / "proj"
+    _write_rtl(p, "chip_top.sv", DEAD_TOP_RTL)
+    _write_rtl(p, "rx_phy.sv", RX_PHY_RTL)
+    _write_rtl(p, "tx_phy.sv", TX_PHY_RTL)
+    _write_l9(p, {"schema_version": 2, "submodules": [
+        {"name": "rx_phy"},
+        {"name": "tx_phy", "implementation_requirement": "optional"}]})
+    verdict, findings = audit(p)
+    assert verdict == "FAIL"
+    assert any(f.rule == "SUBMODULE_NOT_INSTANTIATED" for f in findings)
+
+
+def test_unresolved_condition_is_reported_without_waiving_presence(tmp_path):
+    p = tmp_path / "proj"
+    _write_rtl(p, "chip_top.sv", CHIP_TOP_RTL)
+    _write_rtl(p, "rx_phy.sv", RX_PHY_RTL)
+    _write_l9(p, {"schema_version": 2, "submodules": [
+        {"name": "tx_phy", "implementation_requirement": "conditional",
+         "requirement_condition": {"field": "top_module", "equals": "chip_top"}}]})
+    verdict, findings = audit(p)
+    assert verdict == "FAIL"
+    assert any(f.rule == "SUBMODULE_CONDITION_UNRESOLVED" for f in findings)
+
+
+def test_producer_mixed_role_paragraph_drives_native_presence_consumer(tmp_path):
+    from programs import phase1_doc_one_shot_runner as producer
+    p = tmp_path / "proj"
+    p.mkdir()
+    source = """# Submodule integration
+## Submodules:
+- `rx_phy` (required); its optional width parameter may be omitted.
+- `tx_phy` (optional); the implementation may include or omit this module.
+"""
+    producer.gen_l9_integration_spec(p, {"integration.md": source}, {})
+    _write_rtl(p, "chip_top.sv", DEAD_TOP_RTL)
+    _write_rtl(p, "rx_phy.sv", RX_PHY_RTL)
+    verdict, findings = audit(p)
+    assert verdict == "PASS", findings
+    l9 = json.loads((p / "phase1/generated_docs/L9_INTEGRATION_SPEC.json").read_text())
+    roles = {s["name"]: s.get("implementation_requirement")
+             for s in l9["submodules"]}
+    assert roles == {"rx_phy": "required", "tx_phy": "optional"}
