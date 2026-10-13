@@ -1246,6 +1246,149 @@ def _row_verdict(project: Path, report_name: str, rc: int, started_at: float,
     return verdict, None
 
 
+def _phase2_pad_top_deferral(project: Path, report: dict, started_at: float) -> Optional[dict]:
+    """Carry only the Step-5 obligation owned by the later pad-top producer."""
+    import design_one_shot_runner as design
+    import full_stack_functional_tb as functional
+    import librelane_contract as contract
+    import flow_compliance_check as compliance
+    import _flow_yaml
+    try:
+        if (report.get('verdict') != 'NOT_MEASURED' or report.get('ai_judgements')
+                or report.get('final_audit_pending') or report.get('declared_window')):
+            return None
+        rows = report['steps']
+        deferred = [r for r in rows if r['name'] == 'full_stack_functional_tb']
+        audits = [r for r in rows if r['name'] == 'final_audit']
+        if (len(deferred) != 1 or deferred[0]['status'] != 'NOT_MEASURED'
+                or len(audits) != 1 or audits[0]['status'] != 'NOT_MEASURED'):
+            return None
+        remaining = [design.StepResult(**r) for r in rows
+                     if r['name'] not in ('full_stack_functional_tb', 'final_audit')]
+        remaining_verdict = design._aggregate_verdict(remaining)
+        if not remaining or remaining_verdict not in ('PASS', 'PASS_WITH_WAIVERS'):
+            return None
+        audit_path = project / 'reports/phase2/gates/phase2_compliance.json'
+        gate_path = project / 'reports/phase2/gates/bit_level_full_stack.json'
+        if not all(_pl.published_here(p, started_at) for p in (audit_path, gate_path)):
+            return None
+        audit = json.loads(audit_path.read_text())
+        gate = json.loads(gate_path.read_text())
+        if (audit.get('program') != 'flow_compliance_check'
+                or Path(audit['project']).resolve() != project.resolve()
+                or audit['scope']['phase'] != '2' or audit['scope'].get('stage')
+                or audit['scope'].get('stage_id') or audit.get('overall') != 'NOT_MEASURED'
+                or audit.get('structural_fail_lines') or audit.get('step_artifact_fail_lines')
+                or audit.get('ordering_violations_gating') or audit.get('blocker_list_error')
+                or audit.get('blocker_contract_violations')):
+            return None
+        incomplete = [r for r in audit['steps'] if r['status'] not in
+                      ('PASS', 'PASS_WITH_WAIVERS', 'NOT_APPLICABLE')
+                      and not (r['status'] == 'NOT_MEASURED' and r.get('excluded_from_verdict'))]
+        audited_ids = [str(r['id']) for r in audit['steps']]
+        declared_ids = {str(r['id']) for r in _flow_yaml.load()['steps']
+                        if (isinstance(r['id'], int) and 1 <= r['id'] <= 6)
+                        or (not isinstance(r['id'], int) and (
+                            str(r.get('phase_scope') or '').strip().lower() == 'agnostic'
+                            or compliance._STAGE_PHASE.get(
+                                str(r.get('stage') or '').strip()) in (None, '2')))}
+        if (not audited_ids or len(audited_ids) != len(set(audited_ids))
+                or set(audited_ids) != set(audit['scope']['steps_judged'])
+                or audit['scope']['step_count'] != len(audited_ids)
+                or set(audited_ids) != declared_ids):
+            return None
+        ledger = audit['gate_execution_ledger']
+        blocked = [r for r in ledger if r['verdict'] not in
+                   ('PASS', 'PASS_WITH_WAIVERS', 'NOT_APPLICABLE')]
+        if (not ledger or len(incomplete) != 1 or str(incomplete[0]['id']) != '5'
+                or incomplete[0]['status'] != 'NOT_MEASURED' or len(blocked) != 1
+                or blocked[0]['gate'] != 'bit_level_full_stack_tb_check'
+                or blocked[0]['rc'] != 2 or blocked[0].get('exit_code') != 2
+                or blocked[0].get('structured_verdict') != 'NOT_MEASURED'
+                or blocked[0]['reason_class'] != 'BLOCKED_BY_UPSTREAM'
+                or gate.get('rule') != 'functional_full_stack_top_absent'
+                or gate.get('verdict') != 'NOT_MEASURED'
+                or gate.get('reason_class') != 'BLOCKED_BY_UPSTREAM'):
+            return None
+        accepted = _current_default_acceptance(project, started_at)
+        rejected = [r for r in accepted if _acceptance_status(r) not in
+                    ('PASS', 'PASS_WITH_WAIVERS', 'NOT_APPLICABLE')]
+        if not rejected or any(str(r['id']) != '5' or r['status'] != 'NOT_MEASURED'
+                               for r in rejected):
+            return None
+        record = json.loads(functional.record_path(project).read_text())
+        required = functional.required_full_stack_top(project)
+        inputs = functional._design_input_digest(project)
+        if (required.get('refusal_class') != 'BLOCKED_BY_UPSTREAM'
+                or not required['pad_ring'] or record.get('reason_class') != 'BLOCKED_BY_UPSTREAM'
+                or record.get('verdict') != 'NOT_MEASURED'
+                or record.get('generated_at_unix', 0) < started_at
+                or record.get('design_input') != inputs):
+            return None
+        rtl = {str(p.relative_to(project)): contract.digest(p)
+               for p in functional._rtl_sources(project)}
+        context = {name: contract.digest(project / 'phase1/generated_docs' / name)
+                   for name in ('L3_CMD_PROTOCOL.json', 'L4_REGMAP.json')}
+        if not rtl or not all(context.values()):
+            return None
+        return {'step': '5', 'status': 'NOT_MEASURED', 'state': 'DEFERRED',
+                'owner': 'phase3.io_pad_chip_top_gen', 'project': str(project.resolve()),
+                'remaining_verdict': remaining_verdict, 'design_input': inputs, 'rtl': rtl,
+                'gate_context': context,
+                'source': {Path(m.__file__).name: contract.digest(Path(m.__file__))
+                           for m in (functional, design)},
+                'outer_source_sha256': contract.digest(Path(__file__)),
+                'phase2_audit_sha256': contract.digest(audit_path)}
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def _resolve_phase2_pad_top(project: Path, deferred: dict, started_at: float) -> Tuple[str, int]:
+    """Resolve the named obligation with its current complete late consumer."""
+    import full_stack_functional_tb as functional
+    import bit_level_full_stack_tb_check as gate
+    import librelane_contract as contract
+    try:
+        report = json.loads((project / 'reports/phase3/gates/full_stack_functional.json').read_text())
+        bound = report['post_padring']
+        if (not isinstance(bound, dict) or not isinstance(deferred.get('rtl'), dict)
+                or not isinstance(deferred.get('source'), dict)
+                or not isinstance(bound.get('source'), dict)
+                or set(deferred['source']) != {'full_stack_functional_tb.py', 'design_one_shot_runner.py'}
+                or set(bound['source']) != {'full_stack_functional_tb.py',
+                                           'bit_level_full_stack_tb_check.py', 'phase3_one_shot_runner.py'}):
+            return 'NOT_MEASURED', 2
+        if (bound['project'] != deferred['project'] or deferred['project'] != str(project.resolve())
+                or bound['started_at'] < started_at
+                or bound['pad_producer_started_at'] < started_at
+                or bound['pad_producer_started_at'] > bound['started_at']
+                or not deferred['rtl'] or not deferred['source'] or not bound['source']
+                or deferred['outer_source_sha256'] != contract.digest(Path(__file__))
+                or deferred['phase2_audit_sha256'] != contract.digest(
+                    project / 'reports/phase2/gates/phase2_compliance.json')
+                or deferred['design_input'] != functional._design_input_digest(project)
+                or set(deferred['gate_context']) != {'L3_CMD_PROTOCOL.json', 'L4_REGMAP.json'}
+                or any(contract.digest(project / 'phase1/generated_docs' / name) != sha
+                       for name, sha in deferred['gate_context'].items())
+                or any(not (project / p).is_file() or contract.digest(project / p) != sha
+                       for p, sha in deferred['rtl'].items())
+                or any(contract.digest(PROGRAMS_DIR / name) != sha
+                       for name, sha in deferred['source'].items())
+                or any(contract.digest(PROGRAMS_DIR / name) != sha
+                       for name, sha in bound['source'].items())
+                or bound['functional_record_sha256'] != contract.digest(functional.record_path(project))
+                or bound['chip_top_record_sha256'] != contract.digest(project / functional.CHIP_TOP_RECORD_REL)):
+            return 'NOT_MEASURED', 2
+        rc, current, _sentinel = gate.functional_full_stack_verdict(project)
+        if rc != bound['rc'] or current['verdict'] != report['verdict']:
+            return 'NOT_MEASURED', 2
+        if current['verdict'] == 'PASS':
+            return deferred['remaining_verdict'], rc
+        return current['verdict'], rc
+    except (OSError, ValueError, KeyError, TypeError):
+        return 'NOT_MEASURED', 2
+
+
 def _completion_audit_axis(project: Path, *, phase3_ran: bool,
                            started_at: float) -> Dict[str, Any]:
     """The completion-audit axis for THIS invocation — or none, said out loud.
@@ -2581,6 +2724,7 @@ def _main() -> int:
         _analog_row = ("analog", "SKIPPED", 0)
 
     # ---------------- Phase 2 ----------------
+    _phase2_pad_top_deferred = None
     if not halted_at:
         runner = _phase_runner("phase2")
         # Forward --skip-phase3 so phase2's DFT/LEC chain (steps 11-13) gates the
@@ -2647,8 +2791,14 @@ def _main() -> int:
             rep = _read_report(_phase_report_path(project, "phase2_one_shot.json"))
             plan.append(("phase2", verdict, rc))
             reports["phase2"] = rep
+            if (verdict == 'NOT_MEASURED' and _execution.request()['mode'] == 'default'
+                    and rc in (0, 1) and not args.skip_phase3 and not _p3_skip_by_exit):
+                _phase2_pad_top_deferred = _phase2_pad_top_deferral(
+                    project, rep, _phase_started['phase2'])
+                if _phase2_pad_top_deferred:
+                    _phase2_pad_top_deferred['phase2_process'] = {'verdict': verdict, 'rc': rc}
             if (verdict == 'FAIL' or (verdict == 'NOT_MEASURED'
-                    and _execution.request()['mode'] == 'default')):
+                    and _execution.request()['mode'] == 'default' and not _phase2_pad_top_deferred)):
                 halted_at = "phase2"
     else:
         plan.append(("phase2", "SKIPPED", 0))
@@ -2766,6 +2916,18 @@ def _main() -> int:
                 halted_at = "phase3"
     else:
         plan.append(("phase3", "SKIPPED", 0))
+
+    if _phase2_pad_top_deferred and _phase3_ran:
+        status, consumer_rc = _resolve_phase2_pad_top(
+            project, _phase2_pad_top_deferred, _phase_started['phase3'])
+        _phase2_pad_top_deferred['terminal_verdict'] = status
+        _phase2_pad_top_deferred['terminal_rc'] = consumer_rc
+        # The child process's early NOT_MEASURED/rc remains in the original
+        # phase report. This row is its acceptance after the named late gate.
+        plan = [(name, status, consumer_rc) if name == 'phase2' else (name, word, code)
+                for name, word, code in plan]
+        if status == 'FAIL':
+            halted_at = 'phase2'
 
     if _p3_forward_window and _phase3_ran and not _p3_window_ran:
         # The child refused or failed before publishing a fresh window
@@ -3099,6 +3261,7 @@ def _main() -> int:
         **_delivery_route.report_label(project),
         "duration_s": time.time() - t0,
         "halted_at": halted_at or None,
+        "phase2_deferred_obligation": _phase2_pad_top_deferred,
         "phases": [{"name": n, "verdict": v, "rc": rc} for n, v, rc in plan],
         "advisories": advisories,   # v0.3.7 #505 — non-gating notes
         # WHICH IMAGE the run's --container actually executed. Carried in the
