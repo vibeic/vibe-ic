@@ -155,6 +155,14 @@ def test_phase1_local_field_intake(project, layer, field, expected, tmp_path):
     ("A chip implements the SPI command protocol.\n", 4),
     ("The chip implements a dedicated SPI command controller and firmware bit-banging supplies a UART GPIO output.\n", 4),
     ("The chip implements a UART hardware controller command interface with a firmware bit-banging diagnostic mode.\n", 2),
+    ("A dedicated SPI hardware controller implements the chip's command interface with a firmware bit-banging diagnostic mode.\n", 4),
+    ("The SPI hardware command controller is implemented in the chip and firmware bit-banging supplies a UART GPIO output.\n", 4),
+    ("The chip's dedicated SPI hardware controller accepts command transfers while firmware bit-banging supplies a UART GPIO output.\n", 4),
+    ("The SPI command controller is implemented in the chip and firmware bit-banging supplies a UART GPIO output.\n", 4),
+    ("The chip's UART hardware controller accepts command transfers while firmware bit-banging supplies an SPI GPIO output.\n", 2),
+    ("The UART hardware command controller is implemented in the chip and firmware bit-banging supplies an SPI GPIO output.\n", 2),
+    ("Firmware emulates a dedicated SPI controller and the chip's UART hardware controller accepts command transfers.\n", 2),
+    ("A dedicated UART hardware controller implements the chip's command interface with firmware bit-banging on an SPI GPIO output.\n", 2),
     ("A purely digital SPI slave interface accepts commands.\n", 4),
     ("Firmware may bit-bang GPIO as UART, but the chip has a dedicated SPI controller with four wires.\n", 4),
     ("The UART hardware controller command interface drives GPIO output pins.\n", 2),
@@ -169,12 +177,22 @@ def test_phase1_local_field_intake(project, layer, field, expected, tmp_path):
 def test_l2_positive_protocol_declarations_survive_negated_neighbors(
         text, wire_count, tmp_path):
     doc = _field_doc(tmp_path, "L2", text)
-    assert doc["protocol_overview"]["wire_count"] == wire_count, doc
+    assert (doc["protocol_overview"] or {}).get("wire_count") == wire_count, doc
 
 
 @pytest.mark.parametrize("text", [
     "No SPI command interface is implemented.\n",
     "Firmware emulates a dedicated SPI command controller.\n",
+    "Firmware emulates the chip's dedicated SPI command controller.\n",
+    "Firmware emulation models a dedicated SPI hardware command controller.\n",
+    "Firmware emulation models the chip's dedicated SPI hardware command controller.\n",
+    "Firmware emulates a dedicated SPI command controller and a dedicated UART hardware controller.\n",
+    "The SPI hardware command controller is emulated by firmware.\n",
+    "A dedicated SPI hardware controller emulated by firmware accepts commands.\n",
+    "The SPI hardware controller is firmware-emulated and accepts commands.\n",
+    "Firmware bit-bangs a dedicated SPI command interface.\n",
+    "A software-emulated dedicated UART hardware controller accepts commands.\n",
+    "No dedicated SPI hardware controller command interface is implemented while firmware bit-banging drives UART GPIO output.\n",
     "The chip does not provide an I2C slave interface.\n",
     "**Not implemented**:\n- SPI command interface\n- UART command interface\n",
     "A GPIO output supplies UART tx by firmware bit-banging; this is an application.\n",
@@ -216,5 +234,64 @@ def test_l2_memory_macro_is_not_an_ethernet_mac_protocol(tmp_path):
 def test_l7_table_role_keeps_registers_and_rejects_verification_rows(
         heading, row, names, tmp_path):
     text = f"# Verification\n## {heading}\n| Name | Description |\n|---|---|\n{row}\n"
+    doc = _field_doc(tmp_path, "L7", text)
+    assert [r["name"] for r in doc["debug_registers"]] == names, doc["debug_registers"]
+
+
+@pytest.mark.parametrize("text,names", [
+    ("# Verification\n## Debug registers\n### Control\n"
+     "| Name | Description |\n|---|---|\n| DBG_CTRL | Mode selector |\n",
+     ["DBG_CTRL"]),
+    ("# Verification\n## Debug registers\n### Coverage counters\n"
+     "| Name | Value | Description |\n|---|---|---|\n"
+     "| EVENT_COUNT | 0x200 | Read/write register counting observed events |\n",
+     ["EVENT_COUNT"]),
+    ("# Verification\n## Debug registers\n### Control registers\n"
+     "| Name | Description |\n|---|---|\n| DBG_CTRL | Mode selector |\n",
+     ["DBG_CTRL"]),
+    ("# Verification\n## Debug registers\n### No debug registers\n"
+     "| Name | Description |\n|---|---|\n| DBG_CTRL | Read/write control register |\n",
+     []),
+    ("# Verification\n## Debug registers\n### Physical Verification\n"
+     "| Name | Description |\n|---|---|\n| DBG_CTRL | Read/write register check |\n",
+     []),
+    ("# Verification\n## Debug registers\n### No debug registers\n#### Control\n"
+     "| Name | Description |\n|---|---|\n| DBG_CTRL | Read/write control register |\n",
+     []),
+    ("# Verification\n## Debug registers\n### Physical Verification\n"
+     "| Name | Description |\n|---|---|\n| RULE_CHECK | Register layout check |\n"
+     "### Control\n| Name | Description |\n|---|---|\n| CONFIG | Mode selector |\n",
+     ["CONFIG"]),
+    ("# Verification\n## Debug registers\n| Name | Description |\n|---|---|\n"
+     "| DBG_CTRL | Mode selector |\n## Physical Verification\n### Control\n"
+     "| Name | Description |\n|---|---|\n| RULE_CHECK | Read/write register check |\n",
+     ["DBG_CTRL"]),
+    ("# Verification\n## Debug registers\n| Name | Description |\n|---|---|\n"
+     "| DBG_CTRL | Mode selector |\n## Requirements\n### Control\n"
+     "| Name | Description |\n|---|---|\n| CHECK_A | Clean |\n",
+     ["DBG_CTRL"]),
+    ("# Verification\n## Parameters\nGeneral parameters.\n## Debug registers\n"
+     "| Name | Description |\n|---|---|\n| CONFIG | Mode selector |\n"
+     "## Parameters\n| Name | Description |\n|---|---|\n| CHECK_A | Clean |\n",
+     ["CONFIG"]),
+    ("# Verification\n## Debug registers\n| Name | Description |\n|---|---|\n"
+     "| DBG_CTRL | Mode selector |\n## No debug registers\n"
+     "| Name | Description |\n|---|---|\n| ABSENT_CTRL | Read/write register |\n"
+     "## Debug registers\n| Name | Description |\n|---|---|\n| CONFIG | Mode selector |\n",
+     ["DBG_CTRL", "CONFIG"]),
+    ("# Verification\n## Coverage counters\n| Name | Description |\n|---|---|\n"
+     "| EVENT_COUNT | Number of observed events |\n", []),
+    ("Verification\n=============\nDebug registers\n---------------\n"
+     "Control\n~~~~~~~\n| Name | Description |\n|---|---|\n| DBG_CTRL | Mode selector |\n",
+     ["DBG_CTRL"]),
+    ("= Verification\n== Debug registers\n=== Control\n"
+     "| Name | Description |\n|---|---|\n| DBG_CTRL | Mode selector |\n",
+     ["DBG_CTRL"]),
+    ("1 Verification\n1.1 Debug registers\n1.1.1 Control\n"
+     "| Name | Description |\n|---|---|\n| DBG_CTRL | Mode selector |\n",
+     ["DBG_CTRL"]),
+])
+def test_l7_register_role_obeys_heading_ancestry_and_sibling_boundaries(
+        text, names, tmp_path):
     doc = _field_doc(tmp_path, "L7", text)
     assert [r["name"] for r in doc["debug_registers"]] == names, doc["debug_registers"]

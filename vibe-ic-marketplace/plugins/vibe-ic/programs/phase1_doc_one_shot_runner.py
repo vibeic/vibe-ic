@@ -1891,7 +1891,8 @@ def _v1_6_444_underline_shape_label(source_path) -> str:
 
 def _v1_6_334_extract_multi_shape_section_headers(
         text: str,
-        source_path: str = None) -> List[Dict[str, Any]]:
+        source_path: str = None,
+        deduplicate: bool = True) -> List[Dict[str, Any]]:
     """v1.6.334 — for #232 P2 ORGANIC. Extract section headers across
     Markdown ATX (`## Title`), RST setext underline (`Title\\n====`),
     AsciiDoc (`== Title`), and the legacy numbered shape
@@ -1904,7 +1905,9 @@ def _v1_6_334_extract_multi_shape_section_headers(
     Where `heading_shape` ∈ {numbered, md_atx, md_setext,
     rst_underline, adoc, adoc_underline}.
     Results are sorted by `match_pos` so caller can stamp positional
-    metadata. Duplicate (title, shape) pairs are de-duplicated.
+    metadata. Duplicate (title, shape) pairs are de-duplicated by default;
+    positional section-role callers use ``deduplicate=False`` so repeated
+    sibling headings still terminate the preceding section.
 
     v1.6.357 — for #252 P3. Now also returns ``match_end`` so the
     caller can slice the prose body between this heading and the
@@ -1930,7 +1933,7 @@ def _v1_6_334_extract_multi_shape_section_headers(
         if not title:
             return
         key = (title.lower(), shape)
-        if key in seen:
+        if deduplicate and key in seen:
             return
         seen.add(key)
         out.append({
@@ -23771,7 +23774,8 @@ _L2_PROTOCOL_EVIDENCE_TOKEN_RE = re.compile(
     re.IGNORECASE,
 )
 _L2_SOFTWARE_EMULATION_RE = re.compile(
-    r"\bbit[\s-]?bang(?:ing|ed)?\b|\b(?:software|firmware)[\s-]+emulat\w*\b|"
+    r"\bbit[\s-]?bang(?:s|ing|ed)?\b|\b(?:software|firmware)[\s-]+emulat\w*\b|"
+    r"\b(?:emulat\w*|simulat\w*)\s+by\s+(?:software|firmware)\b|"
     r"軟體模擬|软件模拟|韌體模擬",
     re.IGNORECASE,
 )
@@ -23839,20 +23843,48 @@ def _l2_positive_protocol_evidence_text(text: str) -> Tuple[str, List[Dict[str, 
                 r"❌|未指定|不指定|不規定|不限定|"
                 r"\b(?:unspecified|not\s+(?:specified|mandated|prescribed))\b",
                 scope, re.I))
-            # A firmware feature elsewhere in the clause does not revoke
-            # this protocol's explicit hardware ownership declaration.
-            # Bind the affirmative subject/verb and role to THIS token;
-            # "firmware emulates a dedicated SPI controller" is not one.
-            hardware_claim = bool(
+            # Bind ownership to this protocol's own noun phrase. Its
+            # controller may be the subject, possessive, or passive object;
+            # a firmware feature elsewhere must not erase that hardware.
+            prefix, suffix = line[start:match.start()], line[match.end():end]
+            role = re.match(
+                r"(?:\s+(?:hardware|command|serial))*\s+"
+                r"(?:controller|transceiver|peripheral|master|slave|bus|interface)\b",
+                suffix, re.I)
+            noun_prefix = re.search(
+                r"(?:(?:a|an|the)\s+)?"
+                r"(?:(?:chip|device|design|ic)['’]s\s+)?"
+                r"(?:(?:dedicated|hardware|command|serial)\s+)*$", prefix, re.I)
+            before_noun = prefix[:noun_prefix.start()]
+            after_role = suffix[role.end():] if role else ""
+            noun_subject = not before_noun.strip() or bool(
+                re.search(r"\b(?:and|but|while|whereas)\s*$", before_noun, re.I)
+                and _RE_CLAUSE_NUCLEUS.match(after_role.lstrip()))
+            # Explicitly hardware-qualified objects can still be emulated:
+            # "firmware emulates the chip's dedicated SPI controller".
+            token_emulated = bool(
+                re.search(r"\b(?:emulat\w*|simulat\w*|bit[\s-]?bang(?:s|ing|ed)?)\s*$",
+                          before_noun, re.I)
+                or re.match(
+                    r"\s+(?:(?:is|was|can\s+be|may\s+be)\s+)?"
+                    r"(?:(?:emulat\w*|simulat\w*)\s+by\s+(?:software|firmware)\b|"
+                    r"(?:software|firmware)[\s-]+emulat\w*\b)",
+                    after_role, re.I))
+            hardware_claim = bool(role and not token_emulated and (
                 re.search(
                     r"\b(?:chip|device|design|ic)\s+"
                     r"(?:implements|has|contains|includes|integrates|provides)\s+"
-                    r"(?:(?:a|an|the)\s+)?(?:(?:dedicated|hardware)\s+)?$",
-                    line[start:match.start()], re.I)
-                and re.match(
-                    r"(?:\s+(?:hardware|command|serial))*\s+"
-                    r"(?:controller|transceiver|peripheral|master|slave|bus|interface)\b",
-                    line[match.end():end], re.I))
+                    r"(?:(?:a|an|the)\s+)?(?:(?:dedicated|hardware)\s+)*$",
+                    prefix, re.I)
+                or noun_subject and (
+                    re.search(r"\b(?:chip|device|design|ic)['’]s\s+"
+                              r"(?:(?:dedicated|hardware)\s+)*$", prefix, re.I)
+                    or re.search(r"\b(?:dedicated|hardware)\s+$", prefix, re.I)
+                    or re.search(r"\bhardware\b", role.group(), re.I))
+                or re.match(
+                    r"\s+is\s+(?:implemented|integrated|instantiated)\s+"
+                    r"(?:in|on|within)\s+(?:(?:a|an|the)\s+)?"
+                    r"(?:chip|device|design|ic)\b", after_role, re.I)))
             reason = ("negative list" if bullet and negative_list else
                       "negated clause" if _v0_1_62_analog_kw_negated(
                           negation_text, match.start(), match.end()) else
@@ -40322,25 +40354,37 @@ def gen_l7_test_debug(project: Path,
         if not _L7_FILE_KEYWORDS.search(fname):
             continue
         register_sections = _v1_6_334_extract_multi_shape_section_headers(
-            text, source_path=fname)
-
-        def register_table_context(position: int) -> Optional[bool]:
-            preceding = [s for s in register_sections if s["match_pos"] < position]
-            if not preceding:
-                return None
-            title = preceding[-1]["title"]
+            text, source_path=fname, deduplicate=False)
+        # Existing parsed heading depths bound inheritance: neutral children
+        # keep the register role, while peers and parents end its scope.
+        register_ancestry: List[Tuple[int, Optional[bool]]] = []
+        register_contexts: List[Tuple[int, Optional[bool]]] = []
+        for section in register_sections:
+            sec_id = section["section_id"]
+            depth = int(sec_id[1:]) if sec_id.startswith("h") else sec_id.count(".") + 1
+            while register_ancestry and register_ancestry[-1][0] >= depth:
+                register_ancestry.pop()
+            context = register_ancestry[-1][1] if register_ancestry else None
+            title = section["title"]
             register_mentions = list(re.finditer(
                 r"\b(?:registers?|csrs?)\b|暫存器|寄存器", title, re.I))
-            if register_mentions:
-                return any(not _v0_1_62_analog_kw_negated(
-                    _digital_claim_negation_text(title), m.start(), m.end())
-                    for m in register_mentions)
             if re.search(
                     r"\b(?:physical|timing)\s+verification\b|"
-                    r"\b(?:sign[\s-]?off|coverage|statistics|metrics)\b|"
-                    r"物理驗證|時序驗證|覆蓋率|統計", title, re.I):
-                return False
-            return None
+                    r"\bsign[\s-]?off\b|物理驗證|時序驗證", title, re.I):
+                context = False
+            elif register_mentions:
+                context = any(not _v0_1_62_analog_kw_negated(
+                    _digital_claim_negation_text(title), m.start(), m.end())
+                    for m in register_mentions)
+            elif context is not True and re.search(
+                    r"\b(?:coverage|statistics|metrics)\b|覆蓋率|統計", title, re.I):
+                context = False
+            register_ancestry.append((depth, context))
+            register_contexts.append((section["match_pos"], context))
+
+        def register_table_context(position: int) -> Optional[bool]:
+            return next((context for offset, context in reversed(register_contexts)
+                         if offset < position), None)
 
         for m in _l7_param_row_re.finditer(text):
             nm = m.group("name").strip()
