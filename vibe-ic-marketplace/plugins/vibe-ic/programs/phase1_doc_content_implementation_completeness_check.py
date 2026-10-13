@@ -197,6 +197,80 @@ def _load_l_doc_text(project: Path) -> str:
     return "\n".join(chunks)
 
 
+def _owned_clause_coverage(project: Path) -> Tuple[int, List[str]]:
+    """Check source obligations at the two existing integration/timing owners.
+
+    A heading or unrelated L-doc token cannot stand in for its mandatory
+    body clauses. This reads source lines independently of the emitter and
+    requires the same source in the owning field's evidence.
+    """
+    from _prose_polarity import is_denied
+    owners = {}
+    for layer, keys in (('L9_INTEGRATION_SPEC', ('integration', 'architecture')),
+                        ('L19_CONSTRAINTS_PDK', ('constraints', 'io_delay'))):
+        try:
+            node = json.loads((_pl.generated_docs_dir(project) / f'{layer}.json').read_text())
+            for key in keys:
+                node = node[key]
+            owners[layer] = node if isinstance(node, list) else [node]
+        except (OSError, ValueError, KeyError, TypeError):
+            owners[layer] = []
+    count, missing, seen = 0, [], set()
+    for sub in _DOC_DIRS:
+        root = project / sub
+        if not root.is_dir():
+            continue
+        for source in sorted(root.iterdir()):
+            if not source.is_file() or source.suffix.lower() not in ('.md', '.txt'):
+                continue
+            text = source.read_text(encoding='utf-8', errors='replace')
+            layer = re.search(r'(?mi)^\s*layer\s*:\s*(L[89])\s*$', text)
+            layer = layer.group(1) if layer else (
+                re.match(r'(L[89])(?:_|\b)', source.name).group(1)
+                if re.match(r'(L[89])(?:_|\b)', source.name) else '')
+            if not layer or (layer, text) in seen:
+                continue
+            seen.add((layer, text))
+            rel = source.relative_to(project).as_posix()
+            parents = []
+            for line_no, line in enumerate(text.splitlines(), 1):
+                heading = re.match(r'^(#{1,6})\s+(.+)$', line)
+                if heading:
+                    depth, title = len(heading.group(1)), heading.group(2)
+                    parents = [p for p in parents if p[0] < depth]
+                    owner = parents[-1][1] if parents else ''
+                    if layer == 'L8' and re.search(
+                            r'sub[\s_-]?module|integration|hierarchy|階層|整合', title, re.I):
+                        owner = 'L9_INTEGRATION_SPEC'
+                    elif layer == 'L9' and re.search(
+                            r'I/O\s+delay|input.*delay|output.*delay|I/O.*延遲', title, re.I):
+                        owner = 'L19_CONSTRAINTS_PDK'
+                    if is_denied(title):
+                        owner = ''
+                    parents.append((depth, owner, line.strip()))
+                    continue
+                owner = parents[-1][1] if parents else ''
+                if not owner:
+                    continue
+                mandatory = re.search(r'\bmust\b|\brequired\b|\bshall\b|必須|必须|須|不得|禁止', line, re.I)
+                default = owner == 'L19_CONSTRAINTS_PDK' and '%' in line and re.search(
+                    r'delay|延遲|延迟', line, re.I)
+                if not (mandatory or default):
+                    continue
+                clause = re.sub(r'^\s*[-*+]\s+', '', line).strip()
+                context = [p[2] for p in parents if re.search(
+                    r'\bif\b|\bwhen\b|假如|若|僅當|仅当', p[2], re.I)]
+                normalize = lambda s: ' '.join(s.split())
+                count += 1
+                if not any(isinstance(row, dict) and row.get('source') == rel
+                           and isinstance(row.get('evidence'), str)
+                           and all(normalize(part) in normalize(row['evidence'])
+                                   for part in [clause, *context])
+                           for row in owners[owner]):
+                    missing.append(f'{rel}:{line_no} -> {owner}: {clause}')
+    return count, missing
+
+
 def _section_covered(section: dict, l_text: str) -> bool:
     """A section is covered if its sec_id, heading text, or file:line
     appears anywhere in the concatenated L*.json text."""
@@ -247,8 +321,19 @@ def main() -> int:
     if not project.is_dir():
         return 2
 
+    clause_count, missing_clauses = _owned_clause_coverage(project)
+    if missing_clauses:
+        print('[FAIL] phase1_doc_content_implementation_completeness_check: '
+              'source-owned integration/timing obligations missing: '
+              + '; '.join(missing_clauses))
+        return 1
+
     sections = _scan_sections(project)
     if not sections:
+        if clause_count:
+            print('[PASS] phase1_doc_content_implementation_completeness_check: '
+                  f'{clause_count} source-owned integration/timing clauses preserved')
+            return 0
         print("[SKIP] phase1_doc_content_implementation_completeness_check: "
               "no parseable section headings in input/docs or extracted_docs")
         return 0

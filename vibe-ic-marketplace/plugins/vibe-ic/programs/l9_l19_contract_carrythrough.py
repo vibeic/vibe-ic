@@ -38,6 +38,83 @@ _HEADING_RE = re.compile(r"^(#{1,6})\s+(.*\S)\s*$")
 _NUMBER_RE = re.compile(r"[-+]?\d+(?:\.\d+)?")
 
 
+def submodule_requirement(text: str, name: str, source: str) -> Dict[str, Any]:
+    """Read the obligation on a module declaration, never on its parameters.
+
+    The finite vocabulary is required / optional / conditional. Naming is an
+    independent contract: this does not alter ``low_confidence``. A condition
+    we cannot type is retained as unresolved, which the native consumer refuses
+    to treat as permission to omit a module.
+    """
+    lines = text.splitlines()
+    parents: List[Tuple[int, str]] = []
+    from phase1_doc_one_shot_runner import (
+        _RE_L9_BULLET_SUBMOD_HEADING, _RE_L9_BULLET_SUBMOD_HEADING_v1_6_313,
+        _RE_L9_SUBMOD_NUM_HEADING)
+    bullet_context = False
+    bullet_seen = False
+    for index, line in enumerate(lines):
+        heading = _HEADING_RE.match(line)
+        if heading:
+            depth = len(heading.group(1))
+            parents = [(d, h) for d, h in parents if d < depth]
+            title = re.sub(r"^\d+(?:\.\d+)*\s+", "", heading.group(2))
+            declared_name = re.split(r"[（(]", title, 1)[0].strip(" `*")
+            matches = declared_name == name and bool(_RE_L9_SUBMOD_NUM_HEADING.match(line))
+            bullet_context = bool(_RE_L9_BULLET_SUBMOD_HEADING.search(line)
+                                  or _RE_L9_BULLET_SUBMOD_HEADING_v1_6_313.search(line))
+            bullet_seen = False
+        else:
+            bullet = re.match(r"^\s*[-*+]\s+(?:\*\*)?`([^`]+)`(?:\*\*)?(.*)$", line)
+            matches = bool(bullet_context and bullet and bullet.group(1) == name)
+            title = (bullet.group(2).strip() if matches else "")
+            if bullet:
+                bullet_seen = True
+            elif bullet_seen:
+                bullet_context = False
+            elif _RE_L9_BULLET_SUBMOD_HEADING.search(line):
+                bullet_context = True
+        if matches:
+            # Only a declaration's leading qualifier owns implementation
+            # optionality. ``core (required); optional ECC parameter`` stays
+            # required, and a body parameter named optional cannot waive it.
+            qualifier = re.search(r"[（(]([^）)]*)[）)]", title)
+            q = qualifier.group(1) if qualifier else ""
+            condition = re.fullmatch(
+                r"(?:only\s+(?:when|if)|僅當|仅当)\s*"
+                r"(?:top(?:[_ -]?module)?)\s*=\s*`?([A-Za-z_][\w$]*)`?", q.strip(), re.I)
+            role = "required"
+            result: Dict[str, Any] = {}
+            if condition:
+                role = "conditional"
+                result["requirement_condition"] = {
+                    "field": "top_module", "equals": condition.group(1)}
+            elif re.search(r"only\s+(?:when|if)|僅當|仅当|若|\bwhen\b|\bif\b", q, re.I):
+                role = "conditional"
+                result["requirement_condition"] = {"unresolved": q}
+            elif re.fullmatch(r"optional|(?:視\s+Plugin\s+設計)?可選包入|"
+                              r"(?:视\s+Plugin\s+设计)?可选包入|可省略", q.strip(), re.I):
+                role = "optional"
+            elif re.search(r"\brequired\b|mandatory|必含|必要|必須|必须", q, re.I):
+                role = "required"
+            elif heading and any(re.search(
+                    r"\brequired\b|mandatory|必要|必含", h, re.I)
+                    for _, h in parents):
+                role = "required"
+            end = index + 1
+            if heading:
+                while end < len(lines) and not _HEADING_RE.match(lines[end]):
+                    end += 1
+            result["implementation_requirement"] = role
+            result["requirement_evidence"] = [{
+                "source": source, "line": index + 1,
+                "evidence": "\n".join(lines[index:end]).strip()}]
+            return result
+        if heading:
+            parents.append((len(heading.group(1)), heading.group(2)))
+    return {}
+
+
 def _generated_docs(project: Path) -> Path:
     return project / "phase1" / "generated_docs"
 
@@ -82,35 +159,36 @@ def _source_documents(project: Path) -> List[Dict[str, str]]:
     return out
 
 
-def _sections(text: str) -> List[Tuple[str, str]]:
-    """Split markdown at every heading, preserving heading plus body."""
+def _sections(text: str, *, descendants: bool = False) -> List[Tuple[str, str]]:
+    """Preserve each heading's body, optionally including its descendants."""
     out: List[Tuple[str, str]] = []
-    heading = ""
-    body: List[str] = []
-    for line in text.splitlines():
-        match = _HEADING_RE.match(line)
-        if match:
-            if heading:
-                out.append((heading, "\n".join(body).strip()))
-            heading = match.group(2).strip()
-            body = [line]
-        elif heading:
-            body.append(line)
-    if heading:
-        out.append((heading, "\n".join(body).strip()))
+    lines = text.splitlines()
+    headings = [(i, len(m.group(1)), m.group(2).strip())
+                for i, line in enumerate(lines) if (m := _HEADING_RE.match(line))]
+    for pos, (start, depth, heading) in enumerate(headings):
+        end = next((i for i, level, _ in headings[pos + 1:]
+                    if not descendants or level <= depth), len(lines))
+        out.append((heading, "\n".join(lines[start:end]).strip()))
     return out
 
 
 def _selected(records: Iterable[Dict[str, str]], layers: Iterable[str],
-              heading_re: Pattern[str]) -> List[Dict[str, str]]:
+              heading_re: Pattern[str], *, scope_limits: bool = False
+              ) -> List[Dict[str, str]]:
     wanted = set(layers)
     out: List[Dict[str, str]] = []
     seen: set[Tuple[str, str]] = set()
     for record in records:
         if record["layer"] not in wanted:
             continue
-        for heading, text in _sections(record["text"]):
-            if not heading_re.search(heading) or _polarity.is_denied(heading):
+        for heading, text in _sections(record["text"], descendants=scope_limits):
+            # An explicit boundary states scope; it is not a denial of every
+            # obligation listed below it. Ordinary denied features still drop.
+            boundary = scope_limits and bool(re.search(
+                r"不在.{0,20}約束|不在.{0,20}约束|out\s+of\s+scope|"
+                r"not\s+constrained|自由度|freedom", heading, re.I))
+            if not heading_re.search(heading) or (
+                    _polarity.is_denied(heading) and not boundary):
                 continue
             key = (record["source"], text)
             if key in seen:
@@ -149,14 +227,19 @@ def _l9_contract(records: List[Dict[str, str]]) -> Dict[str, Any]:
         r"對外|外部|端口|介面|参数|參數|啟動", re.I))
     architecture = _selected(records, ("L2", "L8"), re.compile(
         r"architecture|functional|system|memory|sram|integration|ISA|"
+        r"sub[\s_-]?modules?|hierarchy|decomposition|freedom|"
         r"\bcore\b|\bwrapper\b|\binterface\b|"
-        r"架構|功能|系統|組成|記憶體|整合|同步", re.I))
+        r"架構|功能|系統|組成|記憶體|整合|同步|階層|自由度|"
+        r"不在.{0,20}約束|out\s+of\s+scope|not\s+constrained", re.I),
+        scope_limits=True)
     reset_boot = _selected(records, ("L2", "L3", "L7"), re.compile(
         r"reset|boot|同步|啟動|启动", re.I))
     isa = _selected(records, ("L2", "L7", "L8"), re.compile(
         r"\bISA\b|instruction|bit[- ]?serial|指令|位元", re.I))
     verification = _selected(records, ("L7", "L8"), re.compile(
-        r"verification|functional|reset|boot|驗證|验证|整合契約", re.I))
+        r"verification|functional|reset|boot|驗證|验证|整合契約|"
+        r"不在.{0,20}約束|out\s+of\s+scope|not\s+constrained", re.I),
+        scope_limits=True)
 
     not_applicable = []
     role_absence = {
@@ -300,7 +383,16 @@ def _io_delay_contract(records: List[Dict[str, str]], l19: dict
         r"(?:delay|延遲|延迟)", re.I))
     if not hit:
         return None
+    # Numbers belong to the matched numeric clause, not an adjacent coverage
+    # percentage in the larger evidence scope.
     percents = re.findall(r"(\d+(?:\.\d+)?)\s*%", hit["evidence"])
+    # The default and its override/disclosure rule share one declared section.
+    # Preserve that scope instead of clipping evidence at the numeric line.
+    for section in _selected(records, ("L9",), re.compile(
+            r"I/O\s+delay|input.*delay|output.*delay|I/O.*延遲", re.I), scope_limits=True):
+        if section["source"] == hit["source"] and hit["evidence"] in section["evidence"]:
+            hit = {**hit, "evidence": section["evidence"]}
+            break
     if not percents:
         return None
     fraction = float(percents[0])
@@ -320,10 +412,39 @@ def _io_delay_contract(records: List[Dict[str, str]], l19: dict
                         "clock_period_ns": period, "delay_ns": delay,
                         "display": _display_ns(delay),
                         "period_source": rec.get("source")})
+    policy: Dict[str, Any] = {}
+    if re.search(r"\bmay\s+override\b|可(?:依需要)?\s*override", hit["evidence"], re.I):
+        policy["override_allowed"] = True
+    if re.search(r"override[^\n]{0,100}(?:must|須|必须)[^\n]{0,100}"
+                 r"declaration\.json", hit["evidence"], re.I):
+        policy["override_requires_declaration"] = True
     return {"default_fraction_percent": fraction,
             "input_delay": f"{fraction:g}% of selected clock period",
             "output_delay": f"{fraction:g}% of selected clock period",
-            "derived_defaults": derived, **hit}
+            "derived_defaults": derived, **hit, **policy}
+
+
+def _timing_exception_contract(records: List[Dict[str, str]]) -> Optional[dict]:
+    """Type an explicit exception/proof policy in its original scope.
+
+    This does not invent an exception or claim that an equivalence proof ran.
+    The SDC consumer must obtain actual proof evidence before accepting one.
+    """
+    for section in _selected(records, ("L9",), re.compile(
+            r"SDC|timing.*exception|false.*path|multi.*cycle", re.I),
+            scope_limits=True):
+        evidence = section["evidence"]
+        if not re.search(r"false[ -]?path|multi[ -]?cycle", evidence, re.I):
+            continue
+        if not re.search(r"L7", evidence, re.I):
+            continue
+        if not re.search(r"(?:須|必须).{0,40}(?:證明等價|证明等价)|"
+                         r"(?:must|required|requires).{0,60}equivalence|"
+                         r"only\s+with\s+an?\s+equivalence\s+proof", evidence, re.I):
+            continue
+        return {"allow_automatic": False, "requires_l7_equivalence": True,
+                **section}
+    return None
 
 
 def _l19_contract(project: Path, records: List[Dict[str, str]], l19: dict
@@ -371,6 +492,11 @@ def _l19_contract(project: Path, records: List[Dict[str, str]], l19: dict
 
     values = {
         "io_delay": _io_delay_contract(records, l19),
+        "timing_exceptions": _timing_exception_contract(records),
+        "implementation_constraints": _selected(records, ("L9",), re.compile(
+            r"fanout|floorplan|utilization|density|power\s+network|PDN|"
+            r"SDC|不在.{0,20}約束|out\s+of\s+scope|not\s+constrained", re.I),
+            scope_limits=True),
         "pad_order_by_side": {
             "logical_grouping": pad,
             "implementation_details": (

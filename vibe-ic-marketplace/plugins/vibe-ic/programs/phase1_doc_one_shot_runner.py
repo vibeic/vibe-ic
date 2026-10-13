@@ -50889,6 +50889,9 @@ def gen_l9_integration_spec(project: Path,
                 "role": "documented submodule",
                 "low_confidence": True,
             })
+            from l9_l19_contract_carrythrough import submodule_requirement
+            submodules[-1].update(submodule_requirement(
+                text or "", nm, f"input/docs/{fname}"))
             if len(submodules) >= 32:
                 break
         for nm in _l9_bullet_submodule_extract(text or ""):
@@ -50919,6 +50922,9 @@ def gen_l9_integration_spec(project: Path,
                 "evidence":  f"input/docs/{fname}",
                 "role":      "documented submodule",
             })
+            from l9_l19_contract_carrythrough import submodule_requirement
+            submodules[-1].update(submodule_requirement(
+                text or "", nm, f"input/docs/{fname}"))
             if len(submodules) >= 32:
                 break
         if len(submodules) >= 32:
