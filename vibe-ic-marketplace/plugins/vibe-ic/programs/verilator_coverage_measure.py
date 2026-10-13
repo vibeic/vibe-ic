@@ -143,12 +143,15 @@ conservative; tighten per project maturity.
 """
 from __future__ import annotations
 import argparse
+import ast
+import datetime
 import json
 import os
 import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -272,6 +275,10 @@ def verilate_tb_and_run(rtl_files: List[str], tb_path: str, build_dir: str,
     if not rtl_files:
         raise SystemExit("no RTL sources to instrument")
     tb = Path(tb_path)
+    if tb.suffix == ".py":
+        return verilate_professional_tb_and_run(
+            rtl_files, tb, Path(build_dir), Path(run_dir),
+            exec_fn=exec_fn, build_jobs=build_jobs)
     if not tb.is_file():
         raise SystemExit(f"testbench not found: {tb_path}")
     top = _tb_top_module(tb)
@@ -332,6 +339,165 @@ def verilate_tb_and_run(rtl_files: List[str], tb_path: str, build_dir: str,
     raise SystemExit(
         f"no coverage.dat produced by the instrumented run under {run_dir} "
         f"— the simulation did not emit coverage points")
+
+
+def _professional_bundle(tb: Path) -> Dict[str, Any]:
+    """Resolve the existing professional generator contract; never infer a top.
+
+    These refusals are BLOCKING for this measurement. An unfilled hook is not
+    coverage stimulus, and a disconnected Python file is not a simulator bundle.
+    """
+    try:
+        plan = json.loads((tb.parent / "verification_plan.json").read_text())
+    except (OSError, ValueError) as exc:
+        raise SystemExit(f"PROFESSIONAL_COVERAGE_PLAN_INVALID: {tb}: {exc}")
+    tiers = {"expert_reference": "expert_filled",
+             "serial_stream": "streaming_bounded_latency",
+             "parallel_arith": "closed_form"}
+    top = plan.get("top") if isinstance(plan, dict) else None
+    if (not isinstance(top, str) or not re.fullmatch(r"[A-Za-z_]\w*", top)
+            or tb.name != f"tb_{top}.py"
+            or plan.get("reference_model_tier") != tiers.get(plan.get("dut_kind"))
+            or plan.get("dut_kind") not in tiers):
+        raise SystemExit(f"PROFESSIONAL_COVERAGE_PLAN_INCOMPLETE: {tb}")
+    if not tb.is_file():
+        raise SystemExit(f"PROFESSIONAL_COVERAGE_TB_ABSENT: {tb}")
+    if plan["dut_kind"] == "expert_reference":
+        import professional_tb_gen as _ptg  # noqa: PLC0415
+        source = _ptg._load_expert_reference_tb(tb.parent)
+        if source is None or source != tb.read_text(errors="replace"):
+            raise SystemExit(f"PROFESSIONAL_COVERAGE_HOOK_UNFILLED_OR_STALE: {tb}")
+    return plan
+
+
+def verilate_professional_tb_and_run(
+        rtl_files: List[str], tb: Path, build: Path, run_dir: Path, *,
+        exec_fn, build_jobs: int = 0) -> str:
+    """Instrument the SAME cocotb module generated and simulated at Step 4.
+
+    The build/run directory is distinct from the Icarus bundle: its JUnit and
+    coverage.dat are this execution's evidence. Missing, failed, skipped or
+    zero-test JUnit refuses coverage, even when a .dat was written on shutdown.
+    No functional-coverage bins or instruction counts are inferred here.
+    """
+    plan = _professional_bundle(tb)
+    audit = functional_stimulus_audit(tb)
+    if not audit["decidable"] or not audit["driven"]:
+        raise SystemExit(f"PROFESSIONAL_COVERAGE_NO_FUNCTIONAL_STIMULUS: {tb}: "
+                         f"{audit['reason'] or audit['inert']}")
+    build.mkdir(parents=True, exist_ok=True)
+    run_dir.mkdir(parents=True, exist_ok=True)
+    # Every attempt owns fresh files. Retain earlier JUnit, raw coverage,
+    # logs, execution records and builds, including a failed rerun.
+    stamp = datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%S_%fZ')
+    attempt = Path(tempfile.mkdtemp(prefix=f'attempt_{stamp}_', dir=run_dir))
+    build = build / attempt.name / 'build'
+    build.mkdir(parents=True, exist_ok=True)
+    run_dir = attempt
+    # All sources are the caller's RTL closure, not a second Makefile selector.
+    # Paths in the generated file are relative to the consumer cwd so the same
+    # file works under host and container bind-mount spellings.
+    import os  # noqa: PLC0415
+    rel = lambda p: os.path.relpath(str(p), str(run_dir))
+    sources = " \\\n\t".join(rel(p) for p in rtl_files)
+    flags = " ".join(COVERAGE_INSTRUMENTATION_FLAGS)
+    includes = " ".join(dict.fromkeys(rel(Path(p).parent) for p in rtl_files))
+    makefile = run_dir / "coverage_cocotb.mk"
+    makefile.write_text(
+        "SIM = verilator\nTOPLEVEL_LANG = verilog\n"
+        f"VERILOG_SOURCES = $(abspath {sources})\n"
+        f"TOPLEVEL = {plan['top']}\nMODULE = {tb.stem}\n"
+        f"VERILOG_INCLUDE_DIRS = $(abspath {includes})\n"
+        f"COMPILE_ARGS += --timing {flags} -Wno-fatal -Wno-lint\n"
+        f"SIM_BUILD = {rel(build / 'obj_dir')}\n"
+        f"CUSTOM_COMPILE_DEPS += {makefile.name}\n"
+        "COCOTB_RESULTS_FILE = coverage_results.xml\n"
+        f"export PYTHONPATH := $(abspath {rel(tb.parent)}):$(PYTHONPATH)\n"
+        "include $(shell cocotb-config --makefiles)/Makefile.sim\n")
+    # Only the new attempt's files can satisfy this measurement.
+    junit = run_dir / "coverage_results.xml"
+    dat = run_dir / "coverage.dat"
+    command = ["make", "-f", str(makefile), f"-j{max(1, build_jobs)}"]
+    rc, out, err = exec_fn(command, str(run_dir))
+    (run_dir / "coverage_cocotb.log").write_text((out or "") + "\n" + (err or ""))
+    import _sim_results_bridge as _srb  # noqa: PLC0415
+    summary = _srb.parse_junit(junit)
+    execution = {
+        "testbench": str(tb), "top": plan["top"],
+        "reference_model_tier": plan["reference_model_tier"],
+        "instrumented_junit": str(junit), "test_denominator": summary,
+        "functional_stimulus": audit, "coverage_dat": str(dat),
+        "instrumentation_flags": list(COVERAGE_INSTRUMENTATION_FLAGS),
+        "exit_code": rc, "measurement_status": "NOT_MEASURED",
+    }
+    execution_path = run_dir / "coverage_cocotb_execution.json"
+    execution_path.write_text(json.dumps(execution, indent=2) + "\n")
+    if (rc != 0 or not summary or summary["tests"] <= 0
+            or summary["passed"] <= 0 or summary["failures"]
+            or summary["errors"] or summary["skipped"]):
+        raise SystemExit(f"PROFESSIONAL_COVERAGE_SIMULATION_REFUSED: {tb}: "
+                         f"rc={rc}, instrumented_junit={summary}")
+    if not dat.is_file():
+        raise SystemExit(f"PROFESSIONAL_COVERAGE_DAT_ABSENT: {tb}")
+    activity = _professional_input_activity(dat, plan["top"], audit["driven"])
+    if not activity:
+        raise SystemExit(f"PROFESSIONAL_COVERAGE_INPUT_ACTIVITY_UNOBSERVED: {tb}")
+    import hashlib  # noqa: PLC0415
+    execution.update({
+        "measurement_status": "MEASURED",
+        "observed_functional_input_toggles": activity,
+        "testbench_sha256": hashlib.sha256(tb.read_bytes()).hexdigest(),
+    })
+    execution_path.write_text(json.dumps(execution, indent=2) + "\n")
+    return str(dat)
+
+
+def _professional_input_activity(dat: Path, top: str,
+                                 inputs: Sequence[str]) -> Dict[str, int]:
+    """Actual top-input transitions from this tool-generated v5 coverage data.
+
+    AST assignment is only a dispatch contract. Here the tool must also have
+    observed a declared functional input move; initialization to zero or an
+    unreachable assignment cannot satisfy that observation. No denominator is
+    changed: the original data continues to feed all existing coverage metrics.
+    """
+    hits = {}
+    for raw in dat.read_text(errors="replace").splitlines():
+        match = COVERAGE_LINE_RE.match(raw)
+        if not match or int(match[2]) <= 0:
+            continue
+        fields = dict(pair.split("\x02", 1) for pair in match[1].split("\x01")
+                      if "\x02" in pair)
+        if (fields.get("page") != f"v_toggle/{top}"
+                or fields.get("h") not in {top, "TOP", f"TOP.{top}"}):
+            continue
+        name = re.split(r"\[|:", fields.get("o", ""), 1)[0]
+        if name in inputs:
+            hits[name] = hits.get(name, 0) + int(match[2])
+    return hits
+
+
+def _check_professional_execution(tb: Path, dat: Path) -> Optional[str]:
+    """Consume the instrumented bundle's own JUnit and top-input observations."""
+    import hashlib  # noqa: PLC0415
+    import _sim_results_bridge as _srb  # noqa: PLC0415
+    try:
+        plan = _professional_bundle(tb)
+        record = json.loads((dat.parent / "coverage_cocotb_execution.json").read_text())
+        summary = _srb.parse_junit(dat.parent / "coverage_results.xml")
+        if (record.get("testbench") != str(tb)
+                or record.get("testbench_sha256") != hashlib.sha256(tb.read_bytes()).hexdigest()
+                or not summary or summary["tests"] <= 0 or summary["passed"] <= 0
+                or summary["failures"] or summary["errors"] or summary["skipped"]
+                or summary != record.get("test_denominator")):
+            return "instrumented Python source/JUnit is missing, changed, failed, skipped or zero-test"
+        audit = functional_stimulus_audit(tb)
+        activity = _professional_input_activity(dat, plan["top"], audit["driven"])
+        if not activity or activity != record.get("observed_functional_input_toggles"):
+            return "tool data recorded no matching top-level functional-input movement"
+    except (SystemExit, OSError, ValueError, TypeError) as exc:
+        return str(exc)
+    return None
 
 
 def scope_totals(cov: Dict[str, Any],
@@ -1112,6 +1278,23 @@ _TB_DISCOVERY_ORDER = (
 )
 
 
+def _professional_measure_testbenches(project: Path) -> List[str]:
+    """Every generator-owned professional bundle, including refused bundles.
+
+    If no functional Verilog/Python candidate exists, missing/incomplete plans
+    reach the adapter's named refusal instead of a connectivity harness. An
+    incomplete generated hook does not displace an existing functional Verilog
+    suite. No previous JUnit is used for discovery; the instrumented simulation
+    must establish its own result.
+    """
+    candidates = []
+    for bundle in sorted((project / "phase2/stage1/sim_professional").glob("*")):
+        if not bundle.is_dir() or bundle.name.startswith("."):
+            continue
+        candidates.append(str(bundle / f"tb_{bundle.name}.py"))
+    return candidates
+
+
 def discover_measure_inputs(project: Path) -> Tuple[List[str], Optional[str]]:
     """(RTL sources, testbench) for `project`, or ([], None) when absent.
 
@@ -1135,6 +1318,7 @@ def discover_measure_inputs(project: Path) -> Tuple[List[str], Optional[str]]:
         if (project / rel).is_dir():
             candidates.extend(
                 str(path) for path in sorted((project / rel).glob(pat)))
+    candidates.extend(_professional_measure_testbenches(project))
 
     # Keep the declared path order as the fallback, but do not prefer an inert
     # connectivity harness over a later testbench that demonstrably drives a
@@ -1182,10 +1366,12 @@ def discover_measure_testbenches(project: Path) -> Tuple[List[str], List[str]]:
             for path in sorted((project / rel).glob(pat)):
                 if str(path) not in candidates:
                     candidates.append(str(path))
+    professional = _professional_measure_testbenches(project)
+    candidates.extend(c for c in professional if c not in candidates)
     driving = [c for c in candidates
                if (lambda a: a["decidable"] and a["driven"])(
                    functional_stimulus_audit(Path(c)))]
-    chosen = driving or ([candidates[0]] if candidates else [])
+    chosen = driving or professional or ([candidates[0]] if candidates else [])
     for tb in chosen:
         for extra in _cov_sources_for_tb(project, Path(tb), rtl):
             if extra not in rtl:
@@ -1203,6 +1389,8 @@ def _cov_sources_for_tb(project: Path, tb: Path,
     that a shared instance signal is stimulus; only
     :func:`functional_stimulus_audit` produces that verdict.
     """
+    if tb.suffix == ".py":
+        return []
     try:
         import testbench_gen as _tbg  # noqa: PLC0415
     except Exception:  # noqa: BLE001 — discovery must retain its old fallback
@@ -1275,6 +1463,10 @@ def measure_suite(rtl: Sequence[str], tbs: Sequence[str], build_dir: str, *,
             dat_i = verilate_tb_and_run(list(rtl), str(one_tb), sub, sub_run,
                                         exec_fn=exec_fn, build_jobs=build_jobs)
         except SystemExit as exc:
+            if Path(one_tb).suffix == ".py":
+                # A declared professional suite that did not execute cannot
+                # disappear from an otherwise green suite union.
+                raise
             # DISCLOSED, never silently dropped: a member that would not build
             # is a member whose contribution is missing from the union, and the
             # reader has to be told which one.
@@ -1340,6 +1532,37 @@ def suite_payload_fields(result: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def prepare_professional_coverage_report(path: Path) -> None:
+    """Retain the prior report and make the current attempt unmeasured.
+
+    A refused attempt must never lend the previous PASS to the consumer.
+    The previous report remains an independent byte-for-byte history copy.
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    previous = None
+    if path.is_file():
+        history = path.parent / (path.stem + '.history')
+        history.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%S_%fZ')
+        folder = Path(tempfile.mkdtemp(prefix=f'attempt_{stamp}_', dir=history))
+        previous = folder / path.name
+        shutil.copy2(path, previous)
+    path.write_text(json.dumps({
+        "tool": "verilator", "measurement_mode": "measure-tb",
+        "measurement_status": "NOT_MEASURED",
+        "reason": "current professional coverage attempt has no accepted measurement",
+        "previous_report": str(previous) if previous else None,
+    }, indent=2) + "\n")
+
+
+def fail_professional_coverage_report(path: Path, reason: str) -> None:
+    """Record the current refusal without consuming or changing history."""
+    record = json.loads(Path(path).read_text())
+    record.update(measurement_status="NOT_MEASURED", reason=reason)
+    Path(path).write_text(json.dumps(record, indent=2) + "\n")
+
+
 def cmd_measure_tb(args: argparse.Namespace) -> int:
     """Instrument + run the project's own testbench and write the measurement."""
     rtl = list(args.rtl or [])
@@ -1371,10 +1594,18 @@ def cmd_measure_tb(args: argparse.Namespace) -> int:
     run_dir = args.run_dir or build_dir
     mounts = _mounts_for(getattr(args, "container", ""))
     scope = args.scope_file or rtl
+    professional = any(Path(tb).suffix == ".py" for tb in tbs)
+    if professional:
+        prepare_professional_coverage_report(Path(args.out))
 
     # ONE implementation, shared with the flow's own producer.
-    res = measure_suite(rtl, tbs, build_dir, run_dir=run_dir,
-                        build_jobs=args.build_jobs, mounts=mounts, scope=scope)
+    try:
+        res = measure_suite(rtl, tbs, build_dir, run_dir=run_dir,
+                            build_jobs=args.build_jobs, mounts=mounts, scope=scope)
+    except SystemExit as exc:
+        if professional:
+            fail_professional_coverage_report(Path(args.out), str(exc))
+        raise
     dats, per_tb = res["dats"], res["per_testbench"]
     for one_tb, rec in per_tb.items():
         if not rec.get("measured"):
@@ -1583,6 +1814,96 @@ def _cov_strip_comments(text: str) -> str:
     return re.sub(r"//[^\n]*", " ", text)
 
 
+def _professional_python_audit(tb: Path) -> Dict[str, Any]:
+    """Python stimulus uses the design's L9 input contract, not pin guesses.
+
+    A source assignment alone is not execution evidence. This audit admits a
+    self-checking bundle for simulation; the adapter subsequently requires this
+    instrumented run's nonzero, unskipped passing JUnit before crediting data.
+    """
+    out = {"testbench": str(tb), "decidable": False, "reason": "",
+           "driven": [], "inert": [], "clock_reset": [],
+           "self_declared_connectivity_only": False,
+           "stimulus_language": "cocotb-python"}
+    try:
+        plan = _professional_bundle(tb)
+        tree = ast.parse(tb.read_text())
+        project = _cov_project_root({"rtl_sources": [str(tb)]})
+        if project is None:
+            raise ValueError("Python testbench is outside a canonical project bundle")
+        import arith_oracle_tb_gen as _aog  # noqa: PLC0415
+        import professional_tb_gen as _ptg  # noqa: PLC0415
+        top, ports = _aog._load_top_ports(project)
+        if top != plan["top"] or not ports:
+            raise ValueError("professional top does not match the design's L9 ports")
+        cr = _ptg._load_clock_reset(project, ports)
+    except (SystemExit, OSError, SyntaxError, ValueError, TypeError) as exc:
+        out["reason"] = str(exc)
+        return out
+    constants = {}
+    roots = set()
+    for node in tree.body:
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    try:
+                        constants[target.id] = ast.literal_eval(node.value)
+                    except (ValueError, TypeError):
+                        pass
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.args.args:
+            roots.add(node.args.args[0].arg)
+
+    def signal(handle):
+        if isinstance(handle, ast.Attribute) and isinstance(handle.value, ast.Name):
+            return handle.attr if handle.value.id in roots else None
+        if (isinstance(handle, ast.Call) and isinstance(handle.func, ast.Name)
+                and handle.func.id == "getattr" and len(handle.args) >= 2
+                and isinstance(handle.args[0], ast.Name)
+                and handle.args[0].id in roots):
+            name = handle.args[1]
+            if isinstance(name, ast.Constant) and isinstance(name.value, str):
+                return name.value
+            if isinstance(name, ast.Name) and isinstance(constants.get(name.id), str):
+                return constants[name.id]
+        return None
+
+    inputs = {p["name"] for p in ports if p.get("dir") == "input"}
+    infrastructure = {cr.get("clk"), cr.get("rst")}
+    data_inputs = inputs - infrastructure
+    values = {name: set() for name in data_inputs}
+    dynamic = set()
+    reads = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Attribute) and node.attr == "value" and isinstance(node.ctx, ast.Load):
+            name = signal(node.value)
+            if name:
+                reads.add(name)
+        if not isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+            continue
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+        for target in targets:
+            if not isinstance(target, ast.Attribute) or target.attr != "value":
+                continue
+            name = signal(target.value)
+            if name in inputs & infrastructure:
+                out["clock_reset"].append(name)
+            if name not in data_inputs:
+                continue
+            try:
+                value = ast.literal_eval(node.value)
+                values[name].add(repr(value))
+            except (ValueError, TypeError):
+                dynamic.add(name)
+    if not reads or not any(isinstance(n, ast.Assert) for n in ast.walk(tree)):
+        out["reason"] = "no observed DUT read and self-check assertion in the Python source"
+        return out
+    out["clock_reset"] = sorted(set(out["clock_reset"]))
+    out["driven"] = sorted(dynamic | {n for n, v in values.items() if len(v) > 1})
+    out["inert"] = sorted(data_inputs - set(out["driven"]))
+    out["decidable"] = bool(data_inputs)
+    return out
+
+
 def functional_stimulus_audit(tb_path: Path) -> Dict[str, Any]:
     """Does this testbench ever move a DUT input other than clock and reset?
 
@@ -1593,6 +1914,8 @@ def functional_stimulus_audit(tb_path: Path) -> Dict[str, Any]:
     caller must fall through to its normal behaviour — an audit that cannot see
     must never be the reason a run is judged.
     """
+    if tb_path.suffix == ".py":
+        return _professional_python_audit(tb_path)
     out: Dict[str, Any] = {
         "testbench": str(tb_path), "decidable": False, "reason": "",
         "driven": [], "inert": [], "clock_reset": [],
@@ -1765,6 +2088,15 @@ def cmd_check(args: argparse.Namespace) -> int:
     _tb = _tbs[0] if _tbs else None
     if _tb:
         _audits = [functional_stimulus_audit(Path(x)) for x in _tbs]
+        for _one_tb in _tbs:
+            if Path(_one_tb).suffix != ".py":
+                continue
+            _one_dat = ((data.get("per_testbench") or {}).get(_one_tb) or {}).get(
+                "coverage_dat", data.get("coverage_dat"))
+            _refusal = _check_professional_execution(Path(_one_tb), Path(_one_dat or ""))
+            if _refusal:
+                print(f"[check] PROFESSIONAL_COVERAGE_EVIDENCE_REFUSED: {_one_tb}: {_refusal}")
+                return 1
         _audit = next((a for a in _audits if a["decidable"] and a["driven"]),
                       _audits[0])
         if _audit["decidable"] and not _audit["driven"]:
