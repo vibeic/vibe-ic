@@ -780,6 +780,13 @@ def main(argv=None) -> int:
     shells out to this instead of growing a second copy in bash.
     """
     argv = sys.argv[1:] if argv is None else list(argv)
+    if "--refresh" in argv:
+        try:
+            _pin.resolved_image_digest(allow_pull="--allow-pull" in argv,
+                                       refresh=True)
+        except _pin.ImageNotResolvable as exc:
+            print(f"_eda_image: {exc}", file=sys.stderr)
+            return 2
     if "--judged" in argv:
         judged = judged_image(allow_pull="--allow-pull" in argv)
         if judged.ref is None:

@@ -15,7 +15,13 @@ Inputs (read from <project_dir>):
         - clock_domains[*]          → optional richer clock spec
     generated_docs/L9_INTEGRATION_SPEC.json
         - top_module                → guides ports default
-        - top_module_pins[]         → infer clock / reset / async / IO ports
+        - top_module_pins[]         → clock / direction of boundary ports
+        - reset_domains[]          → typed reset semantics (never a cut licence)
+    generated_docs/L19_CONSTRAINTS_PDK.json
+        - constraints.io_delay     → source-declared default fraction
+        - constraints.timing_exceptions → source-declared equivalence requirement
+    input/constraints/*.sdc (optional)
+        - explicitly authored exceptions, bound to this top and its clocks
 
 Optional rtl wrapper (board namespace) — detected by scanning rtl/ for a
 module with CLOCK_50/KEY/GPIO_0 ports. If present, we emit constraints
@@ -64,6 +70,7 @@ if _os.path.dirname(_os.path.abspath(__file__)) not in _sys.path:
 
 import argparse
 import json
+import math
 import re
 import sys
 from pathlib import Path
@@ -697,24 +704,158 @@ def _l8_declared_clocks(l8: dict, target_scope: Optional[str] = None
     return out
 
 
-def _is_reset(name: str) -> bool:
-    n = name.lower()
-    return ("reset" in n) or ("rst" in n)
+def _reset_contract(l9: dict, wave: dict, surface: Optional[set] = None) -> dict:
+    """Read the existing typed reset slots; never infer an exception.
+
+    BLOCKING on contradictory typed semantics. Async reset semantics do not
+    prove a timing cut (including recovery/removal), so both sync and async
+    reset inputs remain timed unless the design authored an exception.
+    """
+    slots = []
+    for layer, doc in (("L9", l9), ("L8", wave)):
+        scopes = [(layer, doc)]
+        if isinstance(doc.get("fields"), dict):
+            scopes.append((layer + ".fields", doc["fields"]))
+        for source, scope in scopes:
+            containers = [(source, scope)]
+            waveform = scope.get("clock_and_reset_waveform")
+            if isinstance(waveform, dict):
+                containers.append((source + ".clock_and_reset_waveform", waveform))
+            for path, container in containers:
+                for key in ("reset_domains", "resets"):
+                    slots.append((path + "." + key, container.get(key)))
+    out = {}
+    for source, records in slots:
+        for rec in records if isinstance(records, list) else []:
+            if not isinstance(rec, dict) or not isinstance(rec.get("name"), str):
+                continue
+            name = rec["name"]
+            if surface is not None and name not in surface:
+                continue
+            entry = out.setdefault(name, {"sync": "unknown", "sources": []})
+            votes = []
+            for key in ("synchronous", "sync", "synchrony", "type"):
+                value = rec.get(key)
+                if value is None or value == "":
+                    continue
+                if isinstance(value, bool):
+                    votes.append("synchronous" if value else "asynchronous")
+                    continue
+                value = str(value).strip().lower()
+                if value in ("sync", "synchronous", "async", "asynchronous"):
+                    votes.append("synchronous" if value in ("sync", "synchronous")
+                                 else "asynchronous")
+                elif key != "type" and value not in (
+                        "unknown", "unspecified", "not_measured"):
+                    raise ValueError(f"SDC_RESET_CONTRACT_INVALID: {name}: "
+                                     f"{source}.{key}={rec[key]!r}")
+            if entry["sync"] != "unknown":
+                votes.append(entry["sync"])
+            if len(set(votes)) > 1:
+                raise ValueError(f"SDC_RESET_CONTRACT_CONTRADICTORY: {name}: "
+                                 f"{source} disagrees with {entry['sources']}")
+            if votes:
+                entry["sync"] = votes[0]
+            entry["sources"].append(source)
+    return out
 
 
-def _is_async_io(name: str) -> bool:
-    n = name.lower()
-    # Only hard-async tokens: physical switches/keys, GPIO, id_bus.
-    # "data" and "io" removed (#555): they match sync bus signals such as
-    # instr_rdata_i / data_addr_o and produce false_path instead of timed I/O.
-    return any(tok in n for tok in ("key", "sw", "switch", "gpio", "id_bus"))
+def _source_backed_record(project: Path, rec: dict) -> bool:
+    """A producer source anchor must resolve to the supplied design input."""
+    source = rec.get("source")
+    evidence = rec.get("evidence")
+    if not isinstance(source, str) or not isinstance(evidence, str) or not evidence:
+        return False
+    path = (project / source).resolve()
+    if not path.is_relative_to(project / "input"):
+        return False
+    # The same no-oracle boundary as the staged-SDC reader.
+    import _reference_flow_boundary as boundary
+    if boundary.design_input_denial(project, path):
+        return False
+    try:
+        return evidence in path.read_text(encoding="utf-8")
+    except OSError:
+        return False
 
 
-def _is_output(name: str, direction: str) -> bool:
-    if direction == "output":
-        return True
-    n = name.lower()
-    return any(tok in n for tok in ("led", "hex", "out"))
+def _io_delay_max(project: Path, l19: dict, period: float) -> Tuple[float, str]:
+    rec = (l19.get("constraints") or {}).get("io_delay") or {}
+    value = rec.get("default_fraction_percent")
+    if value is None:
+        return 4.0, "legacy default 4ns; no source-declared fraction"
+    if not _source_backed_record(project, rec):
+        raise ValueError("SDC_IO_DELAY_SOURCE_REFUSED: fraction has no current input anchor")
+    try:
+        fraction = float(value)
+    except (TypeError, ValueError):
+        fraction = math.nan
+    if not math.isfinite(fraction) or not 0 <= fraction <= 100:
+        raise ValueError("SDC_IO_DELAY_CONTRACT_REFUSED: invalid default_fraction_percent")
+    return period * fraction / 100, f"L19.constraints.io_delay from {rec['source']}"
+
+
+_EXCEPTION_OBJECT = re.compile(
+    r"\[(get_ports|get_clocks)\s+(?:\{([^{}]+)\}|([^\]]+))\]")
+
+
+def _bound_exceptions(project: Path, l19: dict, surface: Optional[set],
+                      clocks: List[Tuple[str, str, float]]) -> List[dict]:
+    """Admit only staged design commands, bound to this top and clock set.
+
+    BLOCKING on unknown objects or an equivalence requirement that has not
+    been measured. There is no canonical L7 exception-proof producer here;
+    a path, a prose assertion, or an arbitrary PASS JSON cannot substitute.
+    This consumer therefore refuses such exceptions rather than minting a
+    proof receipt. Timing the boundary requires no exception or proof.
+    """
+    records = _sdc.collect_timing_exceptions(project)
+    if not records:
+        return []
+    policy = (l19.get("constraints") or {}).get("timing_exceptions") or {}
+    if policy:
+        if not _source_backed_record(project, policy):
+            raise ValueError("SDC_EXCEPTION_POLICY_SOURCE_REFUSED: no current input anchor")
+        if policy.get("requires_l7_equivalence") is True:
+            raise ValueError("SDC_EXCEPTION_EQUIVALENCE_NOT_MEASURED: design requires "
+                             "current L7 equivalence; no verified exception-proof contract")
+    labels = {name for name, _port, _period in clocks}
+    by_port = {port: name for name, port, _period in clocks}
+    staged_labels = {}
+    for rec in _sdc.collect_create_clocks(project):
+        if rec.get("name") and rec.get("port_name") in by_port:
+            if (rec["name"] in staged_labels and
+                    staged_labels[rec["name"]] != by_port[rec["port_name"]]):
+                raise ValueError("SDC_EXCEPTION_CLOCK_CONTRADICTORY: "
+                                 f"{rec['name']} is bound to multiple ports")
+            staged_labels[rec["name"]] = by_port[rec["port_name"]]
+    for record in records:
+        command = record["command"]
+        # Unsupported Tcl is refused visibly, never passed through as a
+        # verified object. The existing ASIC reader retains its own grammar.
+        unresolved = _EXCEPTION_OBJECT.sub("", command)
+        unresolved = re.sub(r"\[all_(?:clocks|inputs|outputs)\]", "", unresolved)
+        if "$" in command or "[" in unresolved or "]" in unresolved:
+            raise ValueError("SDC_EXCEPTION_OBJECT_NOT_MEASURED: unresolved Tcl/pin scope")
+        def bind(match):
+            kind, braced, bare = match.groups()
+            names = braced if braced is not None else bare
+            bound = []
+            for name in names.split():
+                if kind == "get_clocks":
+                    name = staged_labels.get(name, name)
+                    if name not in labels:
+                        raise ValueError(f"SDC_EXCEPTION_CLOCK_UNKNOWN: {name}")
+                else:
+                    base = re.sub(r"\[.*\]$", "", name)
+                    if surface is None:
+                        raise ValueError("SDC_EXCEPTION_PORT_NOT_MEASURED: top is unresolved")
+                    if base not in surface:
+                        raise ValueError(f"SDC_EXCEPTION_PORT_UNKNOWN: {name}")
+                bound.append(name)
+            return f"[{kind} {{{' '.join(bound)}}}]"
+        record["command"] = _EXCEPTION_OBJECT.sub(bind, command)
+    return records
 
 
 # ---------------------------------------------------------------------------
@@ -722,10 +863,11 @@ def _is_output(name: str, direction: str) -> bool:
 # ---------------------------------------------------------------------------
 def _render_sdc(top: str, clock_port: str, period_ns: float,
                 inputs: List[str], outputs: List[str],
-                async_ports: List[str],
+                exceptions: List[dict],
                 gen_clocks: Optional[List[Tuple[str, str]]] = None,
                 l8_clocks: Optional[
-                    List[Tuple[str, str, float]]] = None) -> str:
+                    List[Tuple[str, str, float]]] = None,
+                io_max: float = 4.0, reset_contract: Optional[dict] = None) -> str:
     period_str = f"{period_ns:.3f}".rstrip("0").rstrip(".") or "20"
     lines: List[str] = []
     lines.append("# =========================================================================")
@@ -739,6 +881,10 @@ def _render_sdc(top: str, clock_port: str, period_ns: float,
     lines.append("# DO NOT hand-edit; regenerate via sdc_gen.py.")
     lines.append("# =========================================================================")
     lines.append("")
+    for name, rec in (reset_contract or {}).items():
+        lines.append(f"# Reset {name}: {rec['sync']}; semantics alone author no timing cut")
+    if reset_contract:
+        lines.append("")
     # Pick a short user-friendly clock name
     clock_label = "clk_main"
     if "50" in clock_port:
@@ -782,7 +928,7 @@ def _render_sdc(top: str, clock_port: str, period_ns: float,
     if inputs:
         lines.append("# Synchronous data inputs (moderate setup/hold)")
         for sig in inputs:
-            lines.append(f"set_input_delay  -clock {clock_label} -max 4.0 "
+            lines.append(f"set_input_delay  -clock {clock_label} -max {io_max} "
                          f"[get_ports {{{sig}}}]")
             lines.append(f"set_input_delay  -clock {clock_label} -min 0.0 "
                          f"[get_ports {{{sig}}}]")
@@ -790,24 +936,16 @@ def _render_sdc(top: str, clock_port: str, period_ns: float,
     if outputs:
         lines.append("# Outputs")
         for sig in outputs:
-            lines.append(f"set_output_delay -clock {clock_label} -max 4.0 "
+            lines.append(f"set_output_delay -clock {clock_label} -max {io_max} "
                          f"[get_ports {{{sig}}}]")
             lines.append(f"set_output_delay -clock {clock_label} -min 0.0 "
                          f"[get_ports {{{sig}}}]")
         lines.append("")
-    if async_ports:
-        lines.append("# Async inputs / open-drain shared bus → false_path")
-        # collapse to wildcard groups when names share a base
-        base_groups: Dict[str, bool] = {}
-        for s in async_ports:
-            m = re.match(r"^([A-Za-z_][A-Za-z0-9_]*)\[", s)
-            base = m.group(1) + "[*]" if m else s
-            base_groups[base] = True
-        for s in base_groups:
-            lines.append(f"set_false_path -from [get_ports {{{s}}}] "
-                         f"-to [all_clocks]")
-            lines.append(f"set_false_path -from [all_clocks] "
-                         f"-to [get_ports {{{s}}}]")
+    if exceptions:
+        lines.append("# Exceptions authored in the design's staged constraints")
+        for rec in exceptions:
+            lines.append(f"# source={rec['source']}:{rec['line']}")
+            lines.append(rec["command"])
         lines.append("")
     return "\n".join(lines) + "\n"
 
@@ -926,7 +1064,6 @@ def main(argv: Optional[List[str]] = None) -> int:
     # is the top entity, else fall back to L9.top_module_pins.
     inputs: List[str] = []
     outputs: List[str] = []
-    async_ports: List[str] = []
     clock_port: Optional[str] = None
     dropped_pins: List[str] = []
     residue_pins: List[str] = []  # top-surface ports L9 never covered
@@ -981,12 +1118,9 @@ def main(argv: Optional[List[str]] = None) -> int:
                 if name.lower() in _l8_clock_names:
                     _l8_clock_ports.append(name)
                 continue
-            if _is_reset(name) or _is_async_io(name):
-                async_ports.extend(sigs)
-                continue
-            if _is_output(name, direction):
+            if direction in ("output", "inout"):
                 outputs.extend(sigs)
-            else:
+            if direction in ("input", "inout"):
                 inputs.extend(sigs)
     else:
         # L9 namespace. ORGANIC #619 — the L9 doc top_module_pins describe the
@@ -1024,12 +1158,9 @@ def main(argv: Optional[List[str]] = None) -> int:
                 if name.lower() in _l8_clock_names:
                     _l8_clock_ports.append(name)
                 continue
-            if _is_reset(name) or _dir == "inout" or _is_async_io(name):
-                async_ports.append(name)
-                continue
-            if _dir == "out":
+            if _dir in ("out", "inout"):
                 outputs.append(name)
-            else:
+            if _dir != "out":
                 inputs.append(name)
 
         # ---- SURFACE RESIDUE -------------------------------------------
@@ -1063,7 +1194,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             _recs = None
         if _recs:
             _claimed = {clock_port} | set(inputs) | set(outputs) \
-                | set(async_ports) | set(_l8_clock_ports)
+                | set(_l8_clock_ports)
             for _name, _dir, _w in _recs:
                 if not _name or _name in _claimed:
                     continue
@@ -1076,14 +1207,9 @@ def main(argv: Optional[List[str]] = None) -> int:
                     if _name.lower() in _l8_clock_names:
                         _l8_clock_ports.append(_name)
                     continue
-                if _is_reset(_name) or "inout" in (_dir or "").lower() \
-                        or _is_async_io(_name):
-                    async_ports.append(_name)
-                    residue_pins.append(_name)
-                    continue
-                if _is_output(_name, _dir or ""):
+                if _dir in ("output", "inout"):
                     outputs.append(_name)
-                else:
+                if _dir in ("input", "inout"):
                     inputs.append(_name)
                 residue_pins.append(_name)
 
@@ -1171,8 +1297,58 @@ def main(argv: Optional[List[str]] = None) -> int:
               "Every remaining port was consumed as a clock/reset/async pin."
               % (_declared, len(dropped_pins)))
 
+    try:
+        resets = _reset_contract(l9, _l8_wave, top_ports)
+        l19 = _load_json(_pl.generated_docs_dir(project) /
+                         "L19_CONSTRAINTS_PDK.json") or {}
+        io_max, io_source = _io_delay_max(project, l19, period_ns)
+        if l8_clock_set:
+            emitted_clocks = l8_clock_set
+        else:
+            label = ("clk_50" if "50" in clock_port else
+                     "clk_100" if "100" in clock_port else "clk_main")
+            emitted_clocks = [(label, clock_port, period_ns)]
+        exceptions = _bound_exceptions(project, l19, top_ports, emitted_clocks)
+        # A design-authored full directional cut can replace that I/O role.
+        # Partial clock/pin exceptions remain additive: do not enlarge them.
+        for rec in exceptions:
+            command = rec["command"]
+            # Only an unqualified whole-direction cut replaces the I/O role.
+            # Setup/hold, edge and through qualifiers leave other paths timed.
+            options = _EXCEPTION_OBJECT.sub("", command)
+            options = re.sub(r"\[all_clocks\]", "", options)
+            if not re.fullmatch(r"set_false_path\s+-(?:from\s+-to|to\s+-from)\s*",
+                                options):
+                continue
+            for option, other, roles in (("from", "to", inputs),
+                                         ("to", "from", outputs)):
+                if not command.startswith("set_false_path") or not re.search(
+                        rf"-{other}\s+\[all_clocks\]", command):
+                    continue
+                match = re.search(rf"-{option}\s+\[get_ports\s+\{{([^{{}}]+)\}}\]",
+                                  command)
+                if match:
+                    for port in match.group(1).split():
+                        roles[:] = [sig for sig in roles
+                                    if sig != port and not (
+                                        port.endswith("[*]") and
+                                        sig.split("[")[0] == port[:-3])]
+    except ValueError as exc:
+        gate_json = _pl.report_path(project, "phase2/gates/sdc_gen.json")
+        gate_json.parent.mkdir(parents=True, exist_ok=True)
+        gate_json.write_text(json.dumps({
+            "top": top, "exception_admission": "REFUSED", "error": str(exc),
+            "exception_equivalence": "NOT_MEASURED"}, indent=2), encoding="utf-8")
+        print(f"FAIL sdc_gen: {exc}", file=sys.stderr)
+        return 1
+    for name, rec in resets.items():
+        if rec["sync"] == "unknown":
+            print(f"NOTE SDC_RESET_SEMANTICS_NOT_MEASURED: {name}; "
+                  "timed by direction, no exception inferred")
+    print(f"NOTE SDC_IO_DELAY: max={io_max:g}ns; {io_source}")
     text = _render_sdc(top, clock_port, period_ns, inputs, outputs,
-                       async_ports, gen_clocks, l8_clock_set or None)
+                       exceptions, gen_clocks, l8_clock_set or None,
+                       io_max=io_max, reset_contract=resets)
     out.write_text(text, encoding="utf-8")
 
     # #207 — VALIDATE the generated SDC against the netlist it constrains. A
@@ -1193,6 +1369,13 @@ def main(argv: Optional[List[str]] = None) -> int:
         "top_ports": (sorted(top_ports) if top_ports is not None else None),
         "dropped_l9_pins": sorted(dropped_pins),
         "residue_pins_constrained": sorted(residue_pins),
+        "reset_contract": resets,
+        "timing_exceptions": exceptions,
+        "exception_authority": "design-authored staged SDC only; no inferred cuts",
+        "exception_admission": "ADMITTED" if exceptions else "NO_EXCEPTIONS",
+        "exception_equivalence": "NOT_MEASURED",
+        "io_delay_max_ns": io_max,
+        "io_delay_source": io_source,
     }
     # Denominator of the coverage assertion, for the PASS line below. Stays at
     # NOT ASSERTED unless there is a declared port list to assert against, so
@@ -1319,7 +1502,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     print(f"PASS sdc_gen: {out} "
           f"(clock={clock_port}@{clock_mhz}MHz period={period_ns:.2f}ns; "
           f"{len(inputs)} in / {len(outputs)} out / "
-          f"{len(async_ports)} false_path / "
+          f"{sum(r['command'].startswith('set_false_path') for r in exceptions)} false_path / "
           f"{len(gen_clocks)} generated_clock"
           + (f"; dropped {len(dropped_pins)} L9 pin(s) absent from "
              f"synthesizable RTL surface: {sorted(dropped_pins)} (#619)"

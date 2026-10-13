@@ -3,13 +3,19 @@
 Covers the sby-log parse (proved / failed / depth / cex / engine), the .sby
 config parse (per-task mode/depth/engine), the bounded-vs-unbounded strength
 classifier, the results.json builder (all_proved / verdict logic), and the
-harness/.sby emitters. No docker, no SymbiYosys — pure-function tests only.
+harness/.sby emitters. The registered-alias controls also execute native
+Yosys/SymbiYosys when available, with explicit resource bounds.
 
 These are the parse/emit fixtures pinned to the REAL spm run transcript so a
 regression in the parser is caught deterministically.
 """
+import json
+import shutil
+import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import formal_property_run as FPR  # noqa: E402
@@ -481,8 +487,8 @@ def test_emit_invariant_sby_flatten_connect_and_task_defines():
                                tasks=p["tasks"])
     # netlist-level wiring of internal state (no hierarchical ref needed)
     assert "flatten" in s
-    assert "connect -set peek_s dut.s" in s
-    assert "connect -set peek_c dut.c" in s
+    assert "connect -nomap -set peek_s dut.s" in s
+    assert "connect -nomap -set peek_c dut.c" in s
     assert "chparam -set size 32 formal_spm" in s
     # per-task read_verilog carries that task's own defines
     assert "refeq: read_verilog -formal -sv -DSPM_REFEQ -DSPM_NO_INV" in s
@@ -515,7 +521,7 @@ def test_emit_invariant_sby_prove_engine_is_sby_drivable():
 def test_emit_invariant_sby_default_tasks():
     # no @task pragmas -> a default prove + bmc pair
     s = FPR.emit_invariant_sby(["a.v"], "h.sv", "top", [("q", "u.q")], [])
-    assert "connect -set q u.q" in s
+    assert "connect -nomap -set q u.q" in s
     assert "prove: mode prove" in s and "bmc: mode bmc" in s
 
 
@@ -685,3 +691,232 @@ def test_frontend_retry_does_not_mask_solver_inconclusive():
     log = ("SBY 00:00:01 [formal_aes_safety] engine_0: abc pdr\n"
            "SBY 00:00:02 [formal_aes_safety] DONE (UNKNOWN, rc=4)\n")
     assert not FPR.frontend_aborted_the_read(log)
+
+
+# #3062: self-authored registered-state aliases, actual producer -> consumer.
+# Keep the clock/reset/state assertions identical between binding variants.
+def _registered_alias_fixture(project, shape="packed", mutation=None):
+    rd = project / "phase2/stage1/rtl"
+    rd.mkdir(parents=True)
+    rtl = """module alias_cell(input clk, input rst, input [1:0] d);
+  reg [1:0] left, right;
+  wire flag = (left == right);
+  always @(posedge clk) begin
+    if (rst) begin left <= 0; right <= 0; end
+    else begin left <= d; right <= left ^ 2'b11; end
+  end
+endmodule
+"""
+    edits = {
+        "negedge": ("@(posedge clk)", "@(negedge clk)"),
+        "async": ("@(posedge clk)", "@(posedge clk or posedge rst)"),
+        "reset_inverted": ("if (rst)", "if (!rst)"),
+        "wrong_state": ("right <= left ^ 2'b11", "right <= left ^ 2'b01"),
+    }
+    if mutation in edits:
+        rtl = rtl.replace(*edits[mutation])
+    source = rd / "alias_cell.v"
+    source.write_text(rtl)
+    expression = "packed_state" if shape == "packed" else "{view_left, view_right}"
+    extra = ""
+    if shape == "duplicate":
+        extra = """// @observe duplicate_left = dut.left
+(* keep *) wire [1:0] duplicate_left;
+always @($global_clock) assert (duplicate_left == view_left);
+"""
+    elif shape == "equality":
+        extra = """// @observe view_flag = dut.flag
+(* keep *) wire view_flag;
+wire literal_one = 1'b1;
+wire equality_alias = (view_flag == literal_one);
+always @($global_clock) assert (equality_alias == (view_left == view_right));
+"""
+    h = project / "formal_alias.sv"
+    text = """module formal_alias(input clk);
+(* anyseq *) reg rst;
+(* anyseq *) reg [1:0] d;
+alias_cell dut(clk, rst, d);
+// @observe view_left = dut.left
+// @observe view_right = dut.right
+(* keep *) wire [1:0] view_left, view_right;
+wire [3:0] packed_state = {view_left, view_right};
+reg past_valid = 0;
+always @($global_clock) begin
+  past_valid <= 1;
+  if (past_valid && !(!$past(clk) && clk)) assert (EXPRESSION == $past(EXPRESSION));
+end
+reg reference_valid = 0;
+reg [1:0] reference_left, reference_right;
+always @(posedge clk) begin
+  if (rst) begin reference_left <= 0; reference_right <= 0; reference_valid <= 1; end
+  else begin reference_left <= d; reference_right <= reference_left ^ 2'b11; end
+  if (reference_valid) begin
+    assert(view_left == reference_left);
+    assert(view_right == reference_right);
+  end
+end
+EXTRA
+endmodule
+""".replace("EXPRESSION", expression).replace("EXTRA", extra)
+    if mutation == "missing_target":
+        text = text.replace("= dut.left", "= dut.absent")
+    h.write_text(text)
+    return source, h
+
+
+def _alias_native(project, shape="packed", mutation=None, reused=False):
+    from not_verified_tier import skip_not_verified
+    import formal_proof_evidence_check as consumer
+    missing = [name for name in ("yosys", "sby") if shutil.which(name) is None]
+    if missing:
+        skip_not_verified(f"native registered-alias control needs {missing}",
+                          "Run test_formal_property_run.py in the pinned EDA image")
+    source, h = _registered_alias_fixture(project, shape, mutation)
+    kwargs = dict(container=None, timeout=60, mem_limit_kb=4 * 1024 * 1024,
+                  safety_depth=12, bmc_depth=12, prove_engines="direct")
+    formal = project / "phase2/stage1/formal"
+    if reused:
+        emitted = FPR.run(project, harness=h, rtl=[source], top="alias_cell",
+                          emit_only=True, **kwargs)
+        sby = project / emitted["sby"]
+        # Exercise migration of an already bound legacy task, not just a task
+        # whose expert fragment added previously absent observers.
+        sby.write_text(sby.read_text().replace("connect -nomap -set", "connect -set"))
+        result = FPR.run(project, top="alias_cell", sby=sby, **kwargs)
+    else:
+        result = FPR.run(project, harness=h, rtl=[source], top="alias_cell", **kwargs)
+        sby = project / result["sby"]
+    checked = consumer.audit(project)
+    (project / "native-receipt.json").write_text(json.dumps(
+        {"producer": result, "consumer": checked}, indent=2))
+    return result, checked, sby, formal
+
+
+def _alias_postbind(sby, formal):
+    # Use the producer's actual safety script and inspect immediately after
+    # bindings, before prep/opt can remove a free assertion operand.
+    script = sby.read_text().split("[script]", 1)[1].split("[files]", 1)[0]
+    lines = []
+    model_path = formal / "postbind.json"
+    for line in script.splitlines():
+        if line.startswith(("bmc:", "~safety:")):
+            continue
+        if line.startswith("safety:"):
+            line = line[len("safety:"):].strip()
+        if line.startswith("prep -top"):
+            lines += [f"write_json {model_path}", "check -assert"]
+            break
+        if line.strip():
+            lines.append(line)
+    ys = formal / "postbind.ys"
+    ys.write_text("\n".join(lines) + "\n")
+    native = subprocess.run(["yosys", "-Q", "-T", "-s", str(ys)], cwd=formal,
+                            text=True, stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT, timeout=30)
+    (formal / "postbind.log").write_text(native.stdout)
+    assert native.returncode == 0, native.stdout
+    model = json.loads(model_path.read_text())["modules"]["formal_alias"]
+    nets = model["netnames"]
+    drivers = {bit for cell in model["cells"].values()
+               for port, bits in cell["connections"].items()
+               if cell["port_directions"][port] == "output" for bit in bits}
+    for name in ("dut.left", "dut.right", "view_left", "view_right", "packed_state"):
+        assert set(nets[name]["bits"]) <= drivers, name
+    assert nets["packed_state"]["bits"] == (
+        nets["view_right"]["bits"] + nets["view_left"]["bits"])
+    for alias, target in (("duplicate_left", "view_left"), ("equality_alias", "view_flag")):
+        if alias in nets:
+            assert nets[alias]["bits"] == nets[target]["bits"]
+            assert set(nets[alias]["bits"]) <= drivers
+    assert "used but has no driver" not in native.stdout
+
+
+@pytest.mark.parametrize("shape", ["packed", "direct", "duplicate", "equality"])
+def test_registered_alias_native_preserves_drivers_and_proves(tmp_path, shape):
+    result, checked, sby, formal = _alias_native(tmp_path, shape)
+    assert result["verdict"] == checked["verdict"] == "PASS", result
+    assert result["rc"] == checked["rc"] == 0
+    assert result["all_proved"] is True
+    assert result["authored_property_count"] == (4 if shape in ("duplicate", "equality") else 3)
+    assert result["property_denominator"] == result["authored_property_count"]
+    assert {(p["mode"], p["status"]) for p in result["properties"]} == {
+        ("prove", "PASS"), ("bmc", "PASS")}
+    _alias_postbind(sby, formal)
+
+
+def test_registered_alias_native_reused_legacy_binding_is_upgraded(tmp_path):
+    result, checked, sby, formal = _alias_native(tmp_path, reused=True)
+    assert result["verdict"] == checked["verdict"] == "PASS", result
+    text = sby.read_text()
+    assert "connect -set" not in text
+    assert text.count("connect -nomap -set") == 2
+    assert FPR._ensure_expert_observers_bound(sby, formal) is False
+    _alias_postbind(sby, formal)
+
+
+@pytest.mark.parametrize("mutation", ["negedge", "async", "reset_inverted", "wrong_state"])
+def test_registered_alias_native_rejects_clock_reset_state_mutants(tmp_path, mutation):
+    result, checked, sby, formal = _alias_native(tmp_path, mutation=mutation)
+    assert result["verdict"] == checked["verdict"] == "FAIL", result
+    assert result["all_proved"] is False
+    assert result["authored_property_count"] == result["property_denominator"] == 3
+    assert {p["status"] for p in result["properties"]} == {"FAIL"}
+    assert all(p["cex_frame"] is not None for p in result["properties"])
+    _alias_postbind(sby, formal)
+
+
+def test_registered_alias_native_missing_target_is_error_not_proof(tmp_path):
+    result, checked, _, _ = _alias_native(tmp_path, mutation="missing_target")
+    assert result["all_proved"] is False
+    assert checked["verdict"] == "FAIL"
+    assert {p["status"] for p in result["properties"]} == {"ERROR"}
+    assert result["authored_property_count"] == result["property_denominator"] == 3
+
+
+@pytest.mark.parametrize("command", ["connect -set", "connect -nomap -set"])
+def test_registered_alias_binding_parser_checks_exact_target_and_multiplicity(command):
+    harness = "// @observe tap = dut.q\n"
+    good = f"{command} tap dut.q\n"
+    assert FPR.observer_binding_mismatches(harness, good) == []
+    assert FPR.observer_binding_mismatches(harness, f"{command} tap dut.wrong\n")
+    assert FPR.observer_binding_mismatches(harness, good + good)
+    assert FPR.observer_binding_mismatches(harness, good + f"{command} other dut.q\n")
+    assert FPR.observer_binding_mismatches(harness, good.replace(command, "connect -unknown -set"))
+
+
+def test_registered_alias_native_invariant_connect_preserves_packed_drivers(tmp_path):
+    from not_verified_tier import skip_not_verified
+    if any(shutil.which(name) is None for name in ("yosys", "sby")):
+        skip_not_verified("native invariant alias control needs yosys/sby",
+                          "Run test_formal_property_run.py in the pinned EDA image")
+    source, h = _registered_alias_fixture(tmp_path)
+    text = h.read_text().replace("@observe", "@connect")
+    # This independent, single-clock invariant compares the SAME registered
+    # states with the same reference equations via the packed alias.
+    start, end = text.index("reg past_valid"), text.index("reg reference_valid")
+    text = text[:start] + text[end:]
+    text = text.replace("assert(view_left == reference_left);\n    assert(view_right == reference_right);",
+                        "assert(packed_state == {reference_left, reference_right});")
+    text = text.replace("endmodule", """reg reset_past_valid = 0;
+always @(posedge clk) begin
+  reset_past_valid <= 1;
+  if (reset_past_valid && $past(rst)) assert(packed_state == 4'b0);
+end
+endmodule""")
+    h.write_text(text)
+    result = FPR.run(tmp_path, invariant_harness=h, rtl=[source], top="formal_alias",
+                     container=None, timeout=60, mem_limit_kb=4 * 1024 * 1024,
+                     safety_depth=12, bmc_depth=12)
+    (tmp_path / "native-receipt.json").write_text(json.dumps({"producer": result}, indent=2))
+    assert result["all_proved"] is True, result
+    assert result["verdict"] == "PASS"
+    assert result["authored_property_count"] == result["property_denominator"] == 2
+    assert {(p["mode"], p["status"]) for p in result["properties"]} == {
+        ("prove", "PASS"), ("bmc", "PASS")}
+    formal = tmp_path / "phase2/stage1/formal"
+    assert not (formal / "results.json").exists()  # preserve supplementary scope
+    sby = tmp_path / result["sby"]
+    assert sby.read_text().count("connect -nomap -set") == 2
+    for task in ("prove", "bmc"):
+        log = formal / f"formal_alias_inductive_{task}/model/design.log"
+        assert "used but has no driver" not in log.read_text()

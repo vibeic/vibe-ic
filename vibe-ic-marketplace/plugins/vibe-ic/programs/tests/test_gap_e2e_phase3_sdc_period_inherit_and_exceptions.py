@@ -264,6 +264,32 @@ def test_e2e7_only_exception_directives_collected(tmp_path):
     assert exceptions == ["set_false_path -from [get_ports rst_n]"]
 
 
+def test_shared_reader_reaches_phase3_with_direction_and_multicycle_pair(tmp_path):
+    """Shared extraction keeps partial cuts and both authored cycle checks."""
+    commands = [
+        "set_false_path -setup -from [get_ports {data_in}] -to [all_clocks]",
+        "set_multicycle_path -setup 2 -from [get_ports {data_in}] -to [get_ports {data_out}]",
+        "set_multicycle_path -hold 1 -from [get_ports {data_in}] -to [get_ports {data_out}]",
+    ]
+    body = ("set output_port data_out\n"
+            "create_clock -name clk -period 10 [get_ports clk]\n"
+            + commands[0] + "\n"
+            "set_multicycle_path -setup 2 -from [get_ports {data_in}] \\\n"
+            "    -to [get_ports $output_port]\n"
+            + commands[2] + "\n")
+    _input_constraints_sdc(tmp_path, "timing", body)
+    _reference_flow_sdc(tmp_path, "constraints/design.sdc", body)
+    expected = (commands[0:1] + [commands[1].replace(" -to", "      -to").replace(
+        "{data_out}", "data_out")] + commands[2:])
+    assert R._staged_timing_exceptions(tmp_path) == expected
+    deck = R._build_auto_silicon_sdc(tmp_path, top="neutral_top")
+    actual = [line for line in deck.splitlines()
+              if line.startswith(("set_false_path", "set_multicycle_path"))]
+    assert actual == expected, deck
+    assert "create_clock -name clk -period 10" in deck
+    assert "set_input_delay" in deck and "set_output_delay" in deck
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # Real spm benchmark reproduction (skips if the reference tree is absent)
 # ═══════════════════════════════════════════════════════════════════════════

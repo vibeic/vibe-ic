@@ -20,7 +20,7 @@
 #   ./restart-eda.sh 0.3.67               # bare tag  -> ghcr.io/vibeic/vibeic-eda:0.3.67
 #   ./restart-eda.sh ghcr.io/vibeic/vibeic-eda:latest  # full ref honored as-is (explicit floating opt-in)
 #   FORCE=1 ./restart-eda.sh              # recreate even if an EDA job is running
-#   PULL=1 ./restart-eda.sh               # first install / upgrade: fetch the pinned image if absent
+#   PULL=1 ./restart-eda.sh               # first install / upgrade: refresh the published digest, then fetch it if absent
 #
 # Env overrides:
 #   NAME=vibeic-eda            container name to manage
@@ -29,15 +29,16 @@
 #                              (the repository `_eda_pin` resolves, R-0915-96)
 #   DESIGNS_DIR=/path/to/your/designs   existing designs dir mounted at /foss/designs (fresh-container fallback only; must already exist)
 #   RESTART_EDA_PRINT_IMAGE=1  print the resolved image ref and exit (no docker)
-#   PULL=1                     fetch the resolved image when this host does not hold it
+#   PULL=1                     refresh the published identity (unless explicitly overridden), fetch if absent
 #
 # PULL=1 IS THE INSTALL ROUTE, and the published manual uses it (vibe-ic#2349).
 # The manual used to `docker pull …:latest` and `docker run --name vibeic-eda …`
 # by hand, so every container it produced ran whatever `latest` meant that day —
 # never the digest `_eda_pin` checks — and was refused as CONTAINER_IMAGE_MISMATCH.
 # With PULL=1 the image is still named by the SAME resolver (`--judged
-# --allow-pull`, which asks about the pinned digest, never about `latest`), and
-# this script fetches exactly those bytes. Nothing outside the plugin states the
+# --allow-pull --refresh`). This explicit upgrade resolves the published identity
+# once, then this script fetches exactly that digest. An explicit override stays
+# authoritative. Nothing outside the plugin states the
 # image identity, so the manual cannot drift from the pin again.
 #
 # After a successful recreate, confirm the toolchain from Claude Code with the
@@ -113,7 +114,7 @@ else
   [[ -n "$RESOLVER" ]] || die \
     "no tag argument and no plugin programs/_eda_image.py above ${SCRIPT_DIR} — pass a tag explicitly"
   declare -a JUDGED=( --judged )
-  [[ "${PULL:-0}" == "1" ]] && JUDGED+=( --allow-pull )
+  [[ "${PULL:-0}" == "1" ]] && JUDGED+=( --allow-pull --refresh )
   arg="$(python3 "$RESOLVER" "${JUDGED[@]}")" || die \
     "no tag argument and ${RESOLVER} could not name an image on this host — pass a tag explicitly"
   [[ -n "$arg" ]] || die "${RESOLVER} --judged printed nothing — pass a tag explicitly"
