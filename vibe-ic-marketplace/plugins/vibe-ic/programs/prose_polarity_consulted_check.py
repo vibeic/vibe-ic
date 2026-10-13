@@ -119,6 +119,17 @@ _SEARCH_ATTRS = {"search", "findall", "finditer", "match", "fullmatch"}
 #: The count is printed on every run, clean or not.
 _EXEMPT_REASON_MIN = 80
 _NOT_PROSE: Dict[str, str] = {
+    "l9_l19_contract_carrythrough::submodule_requirement":
+        "FINITE MODULE-DECLARATION QUALIFIERS, NO FREE-PROSE OPTIONALITY. "
+        "Only an exact parenthesized optional enum permits absence; unknown, "
+        "negated or compound optional qualifiers retain the required default. "
+        "A conditional qualifier must fully match the top_module equality "
+        "grammar; otherwise its complete unresolved condition reaches the "
+        "native consumer and cannot waive a module. Parameter/body prose has "
+        "no authority over this annotation. Falsifiers: "
+        "test_l9_submodule_conformance_check.py::"
+        "test_ambiguous_optionality_does_not_waive_required_module and "
+        "test_compound_condition_is_not_truncated_into_inactive.",
     "rtl_hierarchy_drivers::drivers":
         "SELECTED RTL MODULE GRAMMAR, NO PROSE INTAKE. DriverContext reads "
         "parsed Verilog module regions after comment removal, resolves formal "
