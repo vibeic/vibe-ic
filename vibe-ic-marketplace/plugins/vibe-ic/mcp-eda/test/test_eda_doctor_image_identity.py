@@ -199,3 +199,198 @@ def test_the_check_is_soft_and_wired_after_the_docker_probe():
     assert "soft: img.ok ? undefined : true" in block
     assert src.index('check: "docker_reachable"') < i, (
         "the identity check must run after docker is known reachable")
+
+
+def _doctor_source():
+    """Run the shipped doctor registration and execution helpers unchanged.
+
+    The stdio server is not started. Only its schema/registration transport and
+    machine providers are fixtures; neither the doctor nor Python pairing
+    verdict is replaced by a test implementation.
+    """
+    src = INDEX_JS.read_text(encoding="utf-8")
+
+    def function(name):
+        start = src.index(f"function {name}(")
+        return src[start:src.index("\n}", start) + 2]
+
+    def between(first, last):
+        start = src.index(first)
+        return src[start:src.index(last, start)]
+
+    return "\n".join([
+        between("const CONTAINER =", "// ─── Parallel-by-default"),
+        function("_run"),
+        between("let _dockerProbeAt =", "// v0.1.11: container-visibility"),
+        function("dockerExec"),
+        between("const SERVER_VERSION =", "// Helper: run an arbitrary command"),
+        between("const _versionCache =", "// ─── Tool identity for the provenance log"),
+        between("const _BYTES_PER_GIB =", "// ─── Tool: eda_run_tcl"),
+    ])
+
+
+def _doctor_call(case):
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node not available; the doctor under test is JavaScript")
+    programs = HERE.parents[1] / "programs"
+    # Only image presence/digest providers are authored. In particular,
+    # default_container_name, container_pin_state and preflight run unchanged.
+    python_setup = (
+        "import json,os,sys;import _runtime_pair_preflight as R;"
+        "fixture=json.loads(os.environ['PAIR_FIXTURE']);"
+        "R._pin.pinned_image_present=lambda env: "
+        "(os.environ['VIBEIC_EDA_IMAGE'],'') if fixture.get('image_present',True) "
+        "else (None,R._pin.IMAGE_NOT_PRESENT+': neutral image absent');"
+        "R._pin.container_image_digest=lambda name: "
+        "(sys.stderr.write('PAIR_SUBJECT='+name+'\\n') and "
+        "tuple(fixture['containers'].get(name,[None,R._pin.CONTAINER_ABSENT+': '+name])));"
+    )
+    script = textwrap.dedent(f"""
+        const cp = require('child_process');
+        const fixture = {json.dumps(case)};
+        delete process.env.EDA_CONTAINER;
+        delete process.env.VIBEIC_EDA_CONTAINER;
+        delete process.env.IIC_EDA_IMAGE;
+        Object.assign(process.env, fixture.env);
+        process.env.VIBEIC_EDA_IMAGE = 'neutral.invalid/eda@' + fixture.required;
+        process.env.PAIR_FIXTURE = JSON.stringify(fixture);
+        const VIBE_IC_PROGRAMS_DIR = {json.dumps(str(programs))};
+        const calls = [], pairSubjects = [];
+        const _spawnSync = (cmd, args, opts = {{}}) => {{
+          calls.push({{cmd, args}});
+          if (cmd === 'python3') {{
+            if (fixture.python === 'exit') return {{status: 1, stderr: 'neutral provider unavailable'}};
+            if (fixture.python === 'malformed') return {{status: 0, stdout: 'not JSON'}};
+            const child = cp.spawnSync(cmd,
+              [args[0], {json.dumps(python_setup)} + args[1]],
+              {{...opts, env: {{...process.env, ...(opts.env || {{}})}}}});
+            pairSubjects.push(...String(child.stderr || '').split('\\n')
+              .filter(s => s.startsWith('PAIR_SUBJECT=')).map(s => s.slice(13)));
+            return child;
+          }}
+          if (cmd !== 'docker') throw Error('unexpected machine provider: ' + cmd);
+          if (args[0] === 'ps') {{
+            const name = args.find(a => a.startsWith('name=')).slice(5);
+            return {{status: 0, stdout: fixture.absent === name ? '' : name + '\\n'}};
+          }}
+          if (args[0] === 'exec') {{
+            if (args.join(' ').includes('command -v timeout'))
+              return {{status: 0, stdout: '/usr/bin/timeout\\n'}};
+            return {{status: 0, stdout: fixture.tool_missing
+              ? 'command not found' : 'neutral 1.2 container=' + args[1] + '\\n'}};
+          }}
+          if (args[0] === 'inspect') {{
+            const name = args[1], format = args[args.length - 1];
+            const digest = (fixture.containers[name] || [null])[0];
+            if (fixture.absent === name) return {{status: 1, stdout: ''}};
+            if (format.includes('HostConfig')) return {{status: 0, stdout: '2147483648 2147483648'}};
+            const id = 'sha256:' + 'c'.repeat(64);
+            return {{status: 0, stdout: format.includes('Config.Image')
+              ? id + '\\tneutral.invalid/eda@' + (digest || 'unknown') : id}};
+          }}
+          if (args[0] === 'image' && args[1] === 'inspect')
+            return {{status: 0, stdout: '2026-01-01T00:00:00Z\\tneutral-version'}};
+          if (args[0] === 'image' && args[1] === 'ls') return {{status: 0, stdout: ''}};
+          throw Error('unexpected docker argv: ' + JSON.stringify(args));
+        }};
+        const existsSync = () => true;
+        const optPath = () => {{}};
+        const execSync = () => 'neutral host tool 1.2';
+        const schema = new Proxy(() => schema, {{get: () => schema}});
+        const z = schema;
+        const handlers = {{}};
+        const server = {{tool: (name, description, fields, handler) => {{handlers[name] = handler;}}}};
+        {_doctor_source()}
+        const request = {{method: 'tools/call', params: {{name: 'eda_doctor', arguments: {{skip_versions: false}}}}}};
+        handlers[request.params.name](request.params.arguments).then(envelope => {{
+          console.log(JSON.stringify({{result: JSON.parse(envelope.content[0].text), calls, pairSubjects}}));
+        }}).catch(error => {{console.error(error); process.exitCode = 1;}});
+    """)
+    argv = [node, "-e", script]
+    res = _watchdog.run_host_supervised(argv, stall_grace_s=_STALL_GRACE_S)
+    assert res.outcome not in ("stalled", "ceiling"), res.out + res.err
+    run = _watchdog.completed_process(argv, res)
+    assert run.returncode == 0, run.stdout + run.stderr
+    return json.loads(run.stdout.strip().splitlines()[-1])
+
+
+_PAIR_A = "sha256:" + "a" * 64
+_PAIR_B = "sha256:" + "b" * 64
+_ISOLATED = "eda-isolated-fixture"
+
+
+@pytest.mark.parametrize("selectors,selected,default_digest,selected_digest,ok", [
+    ({}, "vibeic-eda", _PAIR_A, _PAIR_B, True),
+    ({"EDA_CONTAINER": _ISOLATED}, _ISOLATED, _PAIR_A, _PAIR_B, False),
+    ({"VIBEIC_EDA_CONTAINER": _ISOLATED}, _ISOLATED, _PAIR_A, _PAIR_B, False),
+    ({"EDA_CONTAINER": _ISOLATED, "VIBEIC_EDA_CONTAINER": _ISOLATED}, _ISOLATED, _PAIR_A, _PAIR_B, False),
+    ({"EDA_CONTAINER": _ISOLATED, "VIBEIC_EDA_CONTAINER": "vibeic-eda"}, _ISOLATED, _PAIR_A, _PAIR_B, False),
+    ({"EDA_CONTAINER": _ISOLATED, "VIBEIC_EDA_CONTAINER": "vibeic-eda"}, _ISOLATED, _PAIR_B, _PAIR_A, True),
+    ({"EDA_CONTAINER": _ISOLATED}, _ISOLATED, _PAIR_B, _PAIR_A, True),
+    ({"VIBEIC_EDA_CONTAINER": _ISOLATED}, _ISOLATED, _PAIR_B, _PAIR_A, True),
+    ({"EDA_CONTAINER": _ISOLATED, "VIBEIC_EDA_CONTAINER": _ISOLATED}, _ISOLATED, _PAIR_B, _PAIR_A, True),
+], ids=["default", "eda-only-mismatch", "python-only-mismatch", "equal-mismatch",
+        "conflict-mismatch", "conflict-match", "selected-match-default-mismatch",
+        "python-only-match", "equal-match"])
+def test_issue3023_doctor_judges_its_execution_target(
+        selectors, selected, default_digest, selected_digest, ok):
+    out = _doctor_call({"env": selectors, "required": _PAIR_A, "containers": {
+        "vibeic-eda": [default_digest, ""], _ISOLATED: [selected_digest, ""]}})
+    result = out["result"]
+    pair = next(row for row in result["checks"] if row["check"] == "runtime_pair_match")
+    assert result["success"] is ok, result
+    assert pair["ok"] is ok, pair
+    assert out["pairSubjects"] == [selected], out
+    assert f"container={selected} " in pair["detail"], pair
+    # Check actual native probe argv, including binary execution, against the
+    # same declared target. A good pair for another target is insufficient.
+    subjects = [call["args"][1] for call in out["calls"]
+                if call["cmd"] == "docker" and call["args"][0] in ("exec", "inspect")]
+    assert subjects and set(subjects) == {selected}, out
+    image = next(row for row in result["checks"] if row["check"] == "eda_image_identity")
+    assert image["detail"].startswith(selected + " runs "), image
+    assert all(f"container={selected}" in row["detail"]
+               for row in result["checks"] if row["check"].startswith("tool_")), result
+
+
+@pytest.mark.parametrize("failure", ["absent", "unreadable", "image-absent", "exit", "malformed", "tool-missing"])
+def test_issue3023_doctor_cannot_borrow_an_unmeasured_target(failure):
+    case = {"env": {"EDA_CONTAINER": _ISOLATED}, "required": _PAIR_A,
+            "containers": {"vibeic-eda": [_PAIR_A, ""], _ISOLATED: [_PAIR_A, ""]}}
+    if failure == "absent":
+        case["absent"] = _ISOLATED
+        case["containers"].pop(_ISOLATED)
+    elif failure == "unreadable":
+        case["containers"][_ISOLATED] = [None, "neutral image has no registry digest"]
+    elif failure == "image-absent":
+        case["image_present"] = False
+    elif failure in ("exit", "malformed"):
+        case["python"] = failure
+    else:
+        case["tool_missing"] = True
+    out = _doctor_call(case)
+    assert out["result"]["success"] is False, out
+    rows = {row["check"]: row for row in out["result"]["checks"]}
+    if failure == "absent":
+        assert rows["docker_reachable"]["ok"] is False
+        assert "runtime_pair_match" not in rows
+        assert _ISOLATED in rows["docker_reachable"]["detail"]
+    elif failure == "tool-missing":
+        assert rows["runtime_pair_match"]["ok"] is True
+        assert rows["tool_yosys"]["ok"] is False
+    else:
+        assert rows["runtime_pair_match"]["ok"] is False, rows
+        if failure in ("exit", "malformed"):
+            assert "RUNTIME_PAIR_NOT_MEASURED" in rows["runtime_pair_match"]["detail"]
+        else:
+            assert out["pairSubjects"] == [_ISOLATED], out
+
+
+def test_issue3023_explicit_matching_image_preserves_admission():
+    out = _doctor_call({"env": {"EDA_CONTAINER": _ISOLATED}, "required": _PAIR_B,
+                        "containers": {"vibeic-eda": [_PAIR_A, ""], _ISOLATED: [_PAIR_B, ""]}})
+    assert out["result"]["success"] is True, out
+    pair = next(row for row in out["result"]["checks"] if row["check"] == "runtime_pair_match")
+    assert f"required={_PAIR_B} found={_PAIR_B}" in pair["detail"], pair
+    assert out["pairSubjects"] == [_ISOLATED], out
