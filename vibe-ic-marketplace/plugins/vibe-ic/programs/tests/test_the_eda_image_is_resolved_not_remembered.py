@@ -1339,8 +1339,10 @@ def test_the_published_identity_names_a_reference_this_host_holds(monkeypatch, h
     monkeypatch.setattr(_pin, "_RESOLVED", {})
 
     def docker(*args, **kwargs):
-        if args == ("image", "ls", "--digests", "--format",
-                    "{{.Repository}}\t{{.Digest}}\t{{.ID}}"):
+        if args in (("image", "ls", "--digests", "--format",
+                     "{{.Repository}}\t{{.Digest}}\t{{.ID}}"),
+                    ("image", "ls", "-a", "--digests", "--format",
+                     "{{.Repository}}\t{{.Digest}}\t{{.ID}}")):
             return 0, f"{holder}\t{digest}\timg-id\n", ""
         if args[:3] == ("image", "inspect", "--format") and "Labels" in args[3]:
             return 0, "0.3.79\n", ""
@@ -1361,3 +1363,209 @@ def test_the_published_identity_names_a_reference_this_host_holds(monkeypatch, h
     monkeypatch.setattr(_pin, "_RESOLVED", {})
     assert M.local_image() == want
     assert _pin.resolved_image_digest() == digest
+
+
+# The image providers below extend the existing restart mount/config fixture;
+# the real shell caller, CLI resolver and runtime preflight all run unchanged.
+_ISSUE3021_IMAGE_PROVIDER = r'''
+repo = "neutral.invalid/vibeic-eda"
+old = "sha256:" + "1" * 64
+new = "sha256:" + "2" * 64
+old_id = "sha256:" + "a" * 64
+new_id = "sha256:" + "b" * 64
+old_ref, new_ref = repo + "@" + old, repo + "@" + new
+
+if verb == "manifest":
+    if state.get("registry") == "unavailable":
+        sys.stderr.write("neutral registry unavailable\n"); sys.exit(1)
+    out(json.dumps({"digest": new}) if state.get("registry") != "malformed" else "{}")
+    sys.exit(0)
+if verb == "buildx":
+    out("1.1.0"); sys.exit(0)
+if verb == "pull":
+    if argv[1] != new_ref:
+        sys.stderr.write("unexpected neutral pull subject\n"); sys.exit(77)
+    state["new_present"] = True
+    json.dump(state, open(os.environ["MOCK_STATE"], "w"))
+    sys.exit(0)
+if verb == "image" and argv[1:2] == ["ls"]:
+    entries = [(old, old_id)]
+    if "-a" in argv and state.get("new_present"):
+        entries.append((new, new_id))
+    for digest, image_id in entries:
+        out(repo + "@" + digest if fmt == "{{.Repository}}@{{.Digest}}"
+            else repo + "\t" + digest + "\t" + image_id)
+    sys.exit(0)
+if verb == "image" and argv[1:2] == ["inspect"]:
+    subject = next(a for a in argv[2:] if a not in ("--format", fmt))
+    is_new = subject in (new_ref, new_id)
+    if is_new and not state.get("new_present"):
+        sys.exit(1)
+    if subject not in (repo, repo + ":latest", old_ref, new_ref, old_id, new_id):
+        sys.exit(1)
+    digest, image_id = (new, new_id) if is_new else (old, old_id)
+    if "RepoDigests" in fmt:
+        out(json.dumps([repo + "@" + digest]) + ("\t" + image_id if ".Id" in fmt else ""))
+    elif "Labels" in fmt:
+        out("1.1.0" if is_new else "1.0.0")
+    elif ".Id" in fmt:
+        out(image_id)
+    sys.exit(0)
+if verb == "inspect" and "{{.Image}}" in fmt:
+    created = run_argv()
+    ref = next((a for a in (created or []) if a in (old_ref, new_ref)), old_ref)
+    image_id = new_id if ref == new_ref else old_id
+    out(image_id + ("\t" + ref if ".Config.Image" in fmt else ""))
+    sys.exit(0)
+'''
+
+
+def _issue3021_harness(tmp_path, *, new_present=False, registry="available", override=""):
+    import importlib.util
+    import subprocess
+
+    fixture_path = _PLUGIN / "mcp-eda/test/test_restart_eda_mount_preservation.py"
+    spec = importlib.util.spec_from_file_location("restart_mount_fixture", fixture_path)
+    fixture = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(fixture)
+    work = tmp_path / "neutral-work"
+    work.mkdir()
+    state = fixture._state(binds=[f"{work}:/neutral-work:ro"])
+    state.update(new_present=new_present, registry=registry)
+    harness = fixture.Harness(tmp_path, state)
+    marker = 'if verb == "image" and argv[1:2] == ["inspect"]:'
+    assert fixture.FAKE_DOCKER.count(marker) == 1
+    (harness.bin / "docker").write_text(
+        fixture.FAKE_DOCKER.replace(marker, _ISSUE3021_IMAGE_PROVIDER + "\n" + marker))
+    env = {"PATH": f"{harness.bin}:{os.environ.get('PATH', '/usr/bin:/bin')}",
+           "MOCK_STATE": str(harness.state), "MOCK_LOG": str(harness.log),
+           "VIBEIC_EDA_IMAGE_REPO": "neutral.invalid/vibeic-eda",
+           "VIBEIC_EDA_IMAGE": override, "IIC_EDA_IMAGE": "",
+           "VIBEIC_EDA_CONTAINER": "neutral-eda", "NAME": "neutral-eda",
+           "VIBEIC_DOCKER_MEMORY": "2g", "PYTHONDONTWRITEBYTECODE": "1"}
+
+    def call(argv, **extra):
+        result = subprocess.run(argv, env={**env, **extra}, capture_output=True,
+                                text=True, timeout=60)
+        records = tmp_path / "native-calls.jsonl"
+        with records.open("a") as stream:
+            stream.write(json.dumps({"argv": argv, "env_extra": extra,
+                                     "rc": result.returncode, "stdout": result.stdout,
+                                     "stderr": result.stderr}) + "\n")
+        return result
+
+    return harness, call
+
+
+@pytest.mark.parametrize("layout", ["repository", "packaged"])
+@pytest.mark.parametrize("route", ["documented-upgrade", "explicit-digest-upgrade"])
+def test_issue3021_upgrade_and_fresh_preflight_share_one_digest(tmp_path, layout, route):
+    harness, call = _issue3021_harness(tmp_path)
+    script = ((_PLUGIN.parents[2] if layout == "repository" else _PLUGIN)
+              / "tools/vibeic-eda/restart-eda.sh")
+    new_ref = "neutral.invalid/vibeic-eda@sha256:" + "2" * 64
+    argv = ["bash", str(script)]
+    if route == "explicit-digest-upgrade":
+        argv.append(new_ref)
+    restarted = call(argv, PULL="1")
+    # Drive a fresh unchanged verdict consumer AFTER the neutral recreate. It
+    # has no inherited override, exactly like the documented next doctor call.
+    preflight = call([sys.executable, "-c",
+                      "import sys,json;sys.path.insert(0,sys.argv[1]);"
+                      "import _runtime_pair_preflight as R;print(json.dumps(R.preflight()))",
+                      str(_PROGRAMS)])
+    assert restarted.returncode == 0, restarted.stdout + restarted.stderr
+    assert preflight.returncode == 0, preflight.stdout + preflight.stderr
+    record = json.loads(preflight.stdout)
+    assert new_ref in harness.run_argv(), harness.run_argv()
+    assert record["verdict"] == "RUNTIME_PAIR_MATCH", record
+    assert record["required_digest"] == record["found_digest"] == "sha256:" + "2" * 64
+    assert [c for c in harness.calls() if c[:1] == ["pull"]] == [["pull", new_ref]]
+    assert harness.mount_args() == [f"{tmp_path / 'neutral-work'}:/neutral-work:ro"]
+
+
+def test_issue3021_digest_only_image_is_selected_by_the_actual_cli(tmp_path):
+    harness, call = _issue3021_harness(tmp_path, new_present=True)
+    result = call([sys.executable, str(_PROGRAMS / "_eda_image.py"), "--judged"])
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "neutral.invalid/vibeic-eda@sha256:" + "2" * 64
+    assert not any(c[:1] in (["manifest"], ["pull"], ["buildx"]) for c in harness.calls())
+
+
+@pytest.mark.parametrize("mode", ["ordinary", "allow-pull", "override-upgrade"])
+def test_issue3021_upgrade_does_not_change_ordinary_or_explicit_selection(tmp_path, mode):
+    old_ref = "neutral.invalid/vibeic-eda@sha256:" + "1" * 64
+    harness, call = _issue3021_harness(
+        tmp_path, override=old_ref if mode == "override-upgrade" else "")
+    if mode == "override-upgrade":
+        result = call(["bash", str(_PLUGIN / "tools/vibeic-eda/restart-eda.sh")],
+                      PULL="1", RESTART_EDA_PRINT_IMAGE="1")
+    else:
+        argv = [sys.executable, str(_PROGRAMS / "_eda_image.py"), "--judged"]
+        if mode == "allow-pull":
+            argv.append("--allow-pull")
+        result = call(argv)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == old_ref
+    assert not any(c[:1] in (["manifest"], ["pull"], ["buildx"]) for c in harness.calls())
+
+
+@pytest.mark.parametrize("registry", ["unavailable", "malformed"])
+def test_issue3021_requested_refresh_refuses_without_a_measured_registry(tmp_path, registry):
+    harness, call = _issue3021_harness(tmp_path, registry=registry)
+    result = call(["bash", str(_PLUGIN / "tools/vibeic-eda/restart-eda.sh")], PULL="1")
+    assert result.returncode != 0, result.stdout
+    assert "could not name an image" in result.stderr, result.stderr
+    assert not any(c[:1] in (["run"], ["pull"], ["rename"], ["stop"], ["rm"])
+                   for c in harness.calls()), harness.calls()
+
+
+def test_issue3021_refresh_requires_the_existing_network_opt_in(tmp_path):
+    harness, call = _issue3021_harness(tmp_path)
+    result = call([sys.executable, str(_PROGRAMS / "_eda_image.py"), "--judged", "--refresh"])
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert "allow-pull" in result.stderr
+    assert not harness.calls()
+
+
+def test_issue3021_refresh_is_explicit_and_ordinary_cache_stays_frozen(tmp_path):
+    harness, call = _issue3021_harness(tmp_path)
+    source = (
+        "import sys,json,io,contextlib;sys.path.insert(0,sys.argv[1]);"
+        "import _eda_pin as P;import _eda_image as M;"
+        "first=P.resolved_image_digest();ordinary=io.StringIO();"
+        "\nwith contextlib.redirect_stdout(ordinary):\n"
+        " ordinary_rc=M.main(['--judged','--allow-pull'])\n"
+        "cached=P.resolved_image_digest();upgrade=io.StringIO();"
+        "\nwith contextlib.redirect_stdout(upgrade):\n"
+        " upgrade_rc=M.main(['--judged','--allow-pull','--refresh'])\n"
+        "print(json.dumps({'first':first,'cached':cached,'ordinary_rc':ordinary_rc,"
+        "'ordinary':ordinary.getvalue().strip(),'upgrade_rc':upgrade_rc,"
+        "'upgrade':upgrade.getvalue().strip(),'final':P.resolved_image_digest()}))"
+    )
+    result = call([sys.executable, "-c", source, str(_PROGRAMS)])
+    assert result.returncode == 0, result.stdout + result.stderr
+    data = json.loads(result.stdout)
+    old, new = "sha256:" + "1" * 64, "sha256:" + "2" * 64
+    assert data["first"] == data["cached"] == old, data
+    assert data["ordinary_rc"] == data["upgrade_rc"] == 0, data
+    assert data["ordinary"].endswith("@" + old), data
+    assert data["upgrade"].endswith("@" + new), data
+    assert data["final"] == new, data
+    assert sum(c[:1] == ["manifest"] for c in harness.calls()) == 1
+
+
+def test_issue3021_new_digest_does_not_waive_an_old_container(tmp_path):
+    harness, call = _issue3021_harness(tmp_path, new_present=True)
+    result = call([sys.executable, "-c",
+                   "import sys,json;sys.path.insert(0,sys.argv[1]);"
+                   "import _runtime_pair_preflight as R;print(json.dumps(R.preflight()))",
+                   str(_PROGRAMS)])
+    assert result.returncode == 0, result.stderr
+    data = json.loads(result.stdout)
+    assert data["verdict"] == "RUNTIME_PAIR_MISMATCH", data
+    assert data["required_digest"] == "sha256:" + "2" * 64
+    assert data["found_digest"] == "sha256:" + "1" * 64
+    assert data["disagreed"] == "container_matches_pin", data
+    assert any(_pin.CONTAINER_IMAGE_MISMATCH in line for line in data["evidence"])
+    assert not any(c[:1] in (["manifest"], ["pull"], ["run"]) for c in harness.calls())

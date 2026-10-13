@@ -290,7 +290,9 @@ def _host_image_digest(repo: str) -> Tuple[Optional[str], str, str]:
     `latest` was measured sitting on an image five releases old — so the label
     the build stamped on itself is the only statement of which release this is.
     """
-    rc, out, _err = _docker("image", "ls", "--digests", "--format",
+    # As in local_references_for_digest, -a includes images pulled by digest
+    # without a tag. A tagged older image must not hide a newer held release.
+    rc, out, _err = _docker("image", "ls", "-a", "--digests", "--format",
                             "{{.Repository}}\t{{.Digest}}\t{{.ID}}")
     if rc == -1:
         return None, _err, ""
@@ -367,12 +369,19 @@ def _registry_image_digest(repo: str) -> Tuple[Optional[str], str]:
         None, f"registry answer for {repo}:latest carried no digest")
 
 
-def resolved_image_digest(env=None, *, allow_pull: bool = False) -> str:
+def resolved_image_digest(env=None, *, allow_pull: bool = False,
+                          refresh: bool = False) -> str:
     """THE identity, resolved once per process. Never stored in this repo.
 
     Raises `ImageNotResolvable` when no step answers — see the doctrine comment
     above `IMAGE_NOT_RESOLVABLE`.
     """
+    # An explicit upgrade starts a new identity decision. Ordinary callers
+    # retain the frozen local-first pin, including when allow_pull is set.
+    if refresh:
+        if not allow_pull:
+            raise ImageNotResolvable(["refresh requires --allow-pull"])
+        reset_resolved_image_digest()
     env = os.environ if env is None else env
     if "digest" in _RESOLVED:
         return _RESOLVED["digest"]
@@ -427,6 +436,14 @@ def resolved_image_digest(env=None, *, allow_pull: bool = False) -> str:
         if got:
             return _hold(got)
         tried.append(f"{key}={named} carries no digest ({why or 'not present'})")
+
+    if refresh:
+        got, why = _registry_image_digest(repo)
+        if got:
+            return _hold(got)
+        # A requested upgrade cannot silently recreate on an older local pin
+        # when the published identity was not measured.
+        raise ImageNotResolvable([f"registry refresh: {why}"])
 
     got, why, held_as = _host_image_digest(repo)
     if got:

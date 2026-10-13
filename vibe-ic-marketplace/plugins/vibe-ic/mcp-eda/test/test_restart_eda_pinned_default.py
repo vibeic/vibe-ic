@@ -301,12 +301,12 @@ def _pull_harness(tmp_path, **extra):
 
 
 def test_issue2349_pull_asks_the_resolver_about_the_pinned_digest_only(tmp_path):
-    """PULL=1 widens the SAME resolver call with --allow-pull; it does not name an
-    image of its own, and without PULL=1 the call is unchanged."""
+    """PULL=1 explicitly refreshes through the SAME resolver; it does not name
+    an image of its own, and without PULL=1 the call is unchanged."""
     _r, resolver, _d = _pull_harness(tmp_path, PULL="1", RESTART_EDA_PRINT_IMAGE="1")
     assert _r.returncode == 0, _r.stderr
     assert _r.stdout.strip() == _PINNED
-    assert [l.split()[1:] for l in resolver] == [["--judged", "--allow-pull"]]
+    assert [l.split()[1:] for l in resolver] == [["--judged", "--allow-pull", "--refresh"]]
 
     plain = tmp_path / "plain"
     plain.mkdir()
