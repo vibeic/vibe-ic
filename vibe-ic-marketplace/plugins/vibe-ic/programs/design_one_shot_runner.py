@@ -9825,7 +9825,7 @@ def _professional_tb_sim_differential(project: Path, out_dir: Path,
     except OSError as exc:
         return {"verdict": "NOT_MEASURED",
                 "reason": f"could not stage the Icarus JUnit: {exc}"}
-    cmd = (f"cd '{out_dir}' && make SIM=verilator SIM_BUILD=sim_build_verilator "
+    cmd = (f"cd '{out_dir}' && make -B SIM=verilator SIM_BUILD=sim_build_verilator "
            f"COCOTB_RESULTS_FILE=results_verilator.xml")
     log_path = out_dir / "cocotb_run_verilator.log"
     if exec_site == "container":
@@ -10045,7 +10045,7 @@ def step_professional_tb_gen(project: Path, top_name: str = "",
                     reason_class=_V.ReasonClass.PARTIAL_POPULATION)
             consumer_out_dir = _to_container_path(str(out_dir), container)
         cmd = (f"cd {_shlex.quote(consumer_out_dir)} && "
-               "make SIM=icarus")
+               "make -B SIM=icarus")
         if _exec_site == "container":
             rc, so, se = _docker_exec(container, cmd, timeout=1200,
                                       marker=consumer_out_dir,
@@ -10072,7 +10072,7 @@ def step_professional_tb_gen(project: Path, top_name: str = "",
         if gen.get('random_goal_plan') and xml_summary is not None:
             _ptb.finalize_random_pair_execution(
                 out_dir, gen['random_goal_plan'],
-                argv=['make', 'SIM=icarus'], returncode=rc,
+                argv=['make', '-B', 'SIM=icarus'], returncode=rc,
                 image=_pin.configured_reference())
 
         if xml_summary is None:

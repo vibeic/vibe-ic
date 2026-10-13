@@ -3,10 +3,12 @@ from __future__ import annotations
 
 import importlib.util
 import ast
+import hashlib
 import json
 import os
 import re
 import sys
+import shutil
 from pathlib import Path
 
 import pytest
@@ -380,3 +382,121 @@ def test_issue3012_changed_expert_source_still_refuses_coverage(tmp_path):
     import verilator_coverage_measure as coverage
     with pytest.raises(SystemExit, match="HOOK_UNFILLED_OR_STALE"):
         coverage._professional_bundle(out / "tb_signature_unit.py")
+
+
+_CURRENT_VALUE_EXPERT = '''\
+import cocotb
+from cocotb.triggers import Timer
+
+@cocotb.test()
+async def current_value(dut):
+    for sample in [0, 1, 1, 0]:
+        dut.ck4.value = 0
+        dut.sample.value = sample
+        await Timer(2, unit="ns")
+        dut.ck4.value = 1
+        await Timer(2, unit="ns")
+        actual = int(dut.result.value)
+        expected = EXPECTED
+        dut._log.info("CURRENT_VALUE sample=%d actual=%d expected=%d", sample, actual, expected)
+        assert actual == expected, (sample, actual, expected)
+    dut._log.info("PROFESSIONAL_TB PASS current source VALUE")
+'''
+
+
+def _native_current_value_arm(project, label):
+    """Retain the real producer, both engine outputs and compiled identities."""
+    import design_one_shot_runner as runner
+    import _sim_results_bridge as bridge
+    out = project / "phase2/stage1/sim_professional/converter"
+    step = runner.step_professional_tb_gen(project, "converter", "neutral-unused")
+    report = json.loads((project / "reports/phase2/gates/professional_tb.json").read_text())
+    archive = project / "native-qualification" / label
+    archive.mkdir(parents=True)
+    for name in ("results.xml", "results_icarus.xml", "results_verilator.xml",
+                 "cocotb_run.log", "cocotb_run_verilator.log", "sim_differential.json",
+                 "tb_converter.py", "expert_reference_tb.py", "Makefile"):
+        path = out / name
+        if path.is_file():
+            shutil.copy2(path, archive / name)
+    models = {}
+    for engine, rel in (("icarus", "sim_build/sim.vvp"),
+                        ("verilator", "sim_build_verilator/Vtop")):
+        path = out / rel
+        if path.is_file():
+            models[engine] = hashlib.sha256(path.read_bytes()).hexdigest()
+            shutil.copy2(path, archive / (engine + "-compiled-model"))
+    rtl = project / "phase2/stage1/rtl/converter.sv"
+    result = {
+        "label": label, "step_status": step.status, "step_detail": step.detail,
+        "runtime_subject": str(Path(runner.__file__).resolve()),
+        "runtime_subject_sha256": hashlib.sha256(Path(runner.__file__).read_bytes()).hexdigest(),
+        "native_report": report, "junit_icarus": bridge.parse_junit(out / "results.xml"),
+        "junit_verilator": bridge.parse_junit(out / "results_verilator.xml"),
+        "rtl_sha256": hashlib.sha256(rtl.read_bytes()).hexdigest(),
+        "rtl_mtime_ns": rtl.stat().st_mtime_ns, "compiled_sha256": models,
+    }
+    shutil.copy2(rtl, archive / rtl.name)
+    (archive / "producer.receipt.json").write_text(json.dumps(result, indent=2) + "\n")
+    return step, result
+
+
+@pytest.mark.parametrize("mode", ["direct", "dual"])
+def test_native_current_rtl_value_survives_preserved_source_mtime(tmp_path, mode):
+    """The same semantic qualification must fail on an old compiled VALUE.
+
+    This deliberately expects B's *new* value on base and candidate alike;
+    it does not accept the observed stale failure as a passing diagnostic.
+    """
+    tools = ("iverilog", "cocotb-config", "make") + (("verilator",) if mode == "dual" else ())
+    if not all(shutil.which(tool) for tool in tools):
+        pytest.skip("native simulator/cocotb tools unavailable")
+    project = _project(tmp_path / mode)
+    switch = project / "phase3/librelane_switch.json"
+    switch.parent.mkdir(parents=True)
+    switch.write_text(json.dumps({"steps": {"4": mode}}))
+    out = project / "phase2/stage1/sim_professional/converter"
+    out.mkdir(parents=True)
+    expert = out / "expert_reference_tb.py"
+    rtl = project / "phase2/stage1/rtl/converter.sv"
+    original = rtl.read_text()
+    old_mtime = 1_600_000_000_000_000_000
+    os.utime(rtl, ns=(old_mtime, old_mtime))
+    expert.write_text(_CURRENT_VALUE_EXPERT.replace("EXPECTED", "sample"))
+    first, a = _native_current_value_arm(project, "A")
+    assert first.status == "PASS", a
+    assert a["junit_icarus"]["passed"] == 1
+    if mode == "dual":
+        assert a["junit_verilator"]["passed"] == 1
+
+    rtl.write_text(original.replace("result <= sample", "result <= ~sample"))
+    os.utime(rtl, ns=(old_mtime, old_mtime))
+    expert.write_text(_CURRENT_VALUE_EXPERT.replace("EXPECTED", "1 - sample"))
+    changed, b = _native_current_value_arm(project, "B-preserved-mtime")
+    assert a["rtl_sha256"] != b["rtl_sha256"]
+    assert a["rtl_mtime_ns"] == b["rtl_mtime_ns"] == old_mtime
+    assert changed.status == "PASS", b
+    assert b["junit_icarus"]["passed"] == 1
+    if mode == "dual":
+        assert b["junit_verilator"]["passed"] == 1
+
+    # Keep every old build before measuring the same B source / oracle cleanly.
+    for directory in ("sim_build", "sim_build_verilator"):
+        path = out / directory
+        if path.is_dir():
+            path.rename(project / ("preserved-B-" + directory))
+    clean, b_clean = _native_current_value_arm(project, "B-clean")
+    assert clean.status == "PASS", b_clean
+    assert b_clean["rtl_sha256"] == b["rtl_sha256"]
+    assert b_clean["junit_icarus"]["passed"] == 1
+    if mode == "dual":
+        assert b_clean["junit_verilator"]["passed"] == 1
+
+    # Keep B's expected-value oracle and build; a truly bad new RTL must FAIL.
+    rtl.write_text(original)
+    os.utime(rtl, ns=(old_mtime, old_mtime))
+    bad, c = _native_current_value_arm(project, "C-real-bad-value")
+    assert bad.status == "FAIL", c
+    assert c["junit_icarus"]["failures"] == 1
+    if mode == "dual":
+        assert c["junit_verilator"]["failures"] == 1

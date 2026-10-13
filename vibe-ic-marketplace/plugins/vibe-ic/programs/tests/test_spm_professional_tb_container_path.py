@@ -71,7 +71,7 @@ def test_container_dispatch_consumes_the_mount_translated_bundle_path(
     expected = f"{container_root}/phase2/stage1/sim_professional/spm"
     assert step.status == "PASS", step.detail
     assert calls["container"] == "vibeic-eda"
-    assert calls["cmd"] == f"cd {shlex.quote(expected)} && make SIM=icarus"
+    assert calls["cmd"] == f"cd {shlex.quote(expected)} && make -B SIM=icarus"
     assert str(out) not in calls["cmd"]
     assert calls["marker"] == expected
     assert calls["log_path"] == str(out / "cocotb_run.log")

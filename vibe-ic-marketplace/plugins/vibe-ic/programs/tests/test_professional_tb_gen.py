@@ -254,7 +254,7 @@ def test_requested_random_pairs_are_measured_before_step4_pass(tmp_path,monkeypa
     assert receipt['width']==width and receipt['framing']['latency']==1
     assert receipt['seed']==(0x9E3779B97F4A7C15 ^ width)
     assert receipt['execution']['returncode']==0
-    assert receipt['execution']['argv']==['make','SIM=icarus']
+    assert receipt['execution']['argv']==['make','-B','SIM=icarus']
     assert '@sha256:' in receipt['execution']['configured_image']
 
 
