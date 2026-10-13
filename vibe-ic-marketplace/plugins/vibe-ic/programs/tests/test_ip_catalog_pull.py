@@ -285,3 +285,61 @@ def test_headerless_copy_uses_actual_upstream_license_evidence(tmp_path, monkeyp
     assert evidence['basis'] == 'upstream_license_file'
     assert evidence['license_path'] == str(root / 'myip/LICENSE')
     assert evidence['license_sha256'] == hashlib.sha256((root / 'myip/LICENSE').read_bytes()).hexdigest()
+
+
+@pytest.mark.parametrize('condition,header,denied', [
+    ('denied_spdx', 'This header is not applicable: SPDX-License-Identifier: ISC', True),
+    ('denied_prose', 'This file is not covered by the MIT License.', True),
+    ('mit_boilerplate', 'MIT License\n\nPermission is hereby granted, free of charge, '
+     'to any person obtaining a copy, to deal in the Software without restriction.\n\n'
+     'THE SOFTWARE IS PROVIDED AS IS, WITHOUT WARRANTY OF ANY KIND. '
+     'IN NO EVENT SHALL THE AUTHORS BE LIABLE.', False),
+    ('isc_grant', 'Permission to use, copy, modify, and/or distribute this software '
+     'for any purpose with or without fee is hereby granted.\n\n'
+     'THE SOFTWARE IS PROVIDED AS IS WITHOUT WARRANTY.', False),
+    ('legacy_grant', 'This source may be used and distributed without restriction '
+     'provided that this copyright statement is retained.\n\n'
+     'There is no warranty.', False),
+    ('legacy_padded_grant', 'This source may be used and distributed '
+     'without////restriction////provided////that////this////copyright////statement '
+     'is retained.\n\nThere is no warranty.', False),
+])
+def test_license_claim_polarity_reaches_actual_attribution(tmp_path, monkeypatch, condition, header, denied):
+    root = _make_mirror(tmp_path, 'rtl/core.v', 'wrapper/adapter.v')
+    upstream = root / 'myip'
+    (upstream / 'LICENSE').write_text('ISC License\n')
+    (upstream / 'rtl/core.v').write_text('// SPDX-License-Identifier: ISC\nmodule core; endmodule\n')
+    wrapper = upstream / 'wrapper/adapter.v'
+    payload = ('/* ' + header + ' */\nmodule adapter; endmodule\n').encode()
+    wrapper.write_bytes(payload)
+    _patch_mirror(monkeypatch, root)
+    monkeypatch.setattr(mod, 'IP_MIRROR_ROOT', None)
+    project = tmp_path / 'project'; project.mkdir()
+    aggregate = mod.pull_all_catalog_matches(
+        project, [_match(license='ISC', rtl_files=('rtl/core.v', 'wrapper/adapter.v'))])
+    cp = subprocess.run([sys.executable, str(Path(mod.__file__).with_name('gds_ip_attribution.py')),
+                         'build-text', str(project)], capture_output=True, text=True)
+    (tmp_path / 'actual-attribution.stdout').write_text(cp.stdout)
+    (tmp_path / 'actual-attribution.stderr').write_text(cp.stderr)
+    (tmp_path / 'actual-copy-audit.json').write_text(json.dumps(aggregate, indent=2))
+    assert wrapper.read_bytes() == payload
+    audit = aggregate['license_compliance_audit']
+    ip = aggregate['ip_catalog_used'][0]
+    if denied:
+        assert audit['status'] == 'REJECTED', audit
+        assert audit['all_permissive'] is False, audit
+        assert 'LICENSE-AUDIT all_permissive=False' in cp.stdout
+        assert not (project / 'phase2/stage1/rtl/adapter.v').exists()
+        evidence = ip['file_license_refusals'][0]
+        assert evidence['status'] == 'REJECTED'
+        assert 'LICENSE_SOURCE_DENIED' in evidence['reason']
+    else:
+        assert audit['status'] == 'PASS', audit
+        assert audit['all_permissive'] is True, audit
+        assert cp.returncode == 0, cp.stderr
+        evidence = next(file['license_evidence'] for file in ip['files_copied']
+                        if Path(file['dest']).name == 'adapter.v')
+        assert evidence['status'] == 'PASS'
+        assert evidence['basis'] == 'source_header'
+        assert Path(evidence['path']).read_bytes() == payload
+    assert evidence['sha256'] == hashlib.sha256(payload).hexdigest()

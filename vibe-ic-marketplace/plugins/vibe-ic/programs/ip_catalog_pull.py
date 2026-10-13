@@ -186,7 +186,8 @@ def _file_license_evidence(path: Path, fallback: Optional[dict] = None,
     expressions and conflicting identifiers cannot become a permissive prefix.
     This is evidence for the copy audit, not a new license policy.
     """
-    from ip_catalog_upstream_audit import infer_spdx_from_text
+    from ip_catalog_upstream_audit import LICENSE_KEYWORDS, infer_spdx_from_text
+    from _prose_polarity import LINE_END_BREAKS, is_denied, sentence_scope
     record = {'path': str(path), 'sha256': None, 'spdx': None,
               'status': 'NOT_MEASURED', 'basis': None, 'readable': False}
     try:
@@ -197,19 +198,50 @@ def _file_license_evidence(path: Path, fallback: Optional[dict] = None,
     except (OSError, UnicodeError) as exc:
         return dict(record, reason=f'LICENSE_SOURCE_UNREADABLE: {exc}')
     record['readable'] = True
+    markers = [match for match in re.finditer(r'SPDX-License-Identifier:[ \t]*([^\r\n]*)', text, re.I)
+               if match.start() < 5000]
     identifiers = sorted({match.group(1).strip().removesuffix('*/').strip()
-                          for match in re.finditer(r'SPDX-License-Identifier:[ \t]*([^\r\n]*)', text, re.I)
-                          if match.start() < 5000})  # Capture the full line, including an expression crossing the header boundary.
+                          for match in markers})  # Keep expressions crossing the header boundary complete.
     record['declared_spdx'] = identifiers
     if len(identifiers) > 1:
         return dict(record, status='REJECTED', basis='SPDX-License-Identifier',
                     reason='LICENSE_SOURCE_CONTRADICTORY: multiple explicit identifiers')
     if identifiers:
+        for match in markers:
+            # SPDX is a line record; unrelated warranty prose is not its polarity.
+            lo, hi = sentence_scope(text, match.start(), match.start(1), extra_breaks=('\n',))
+            denial = is_denied(text[lo:hi], ignore_bracketed=False)
+            if denial:
+                return dict(record, status='REJECTED', basis='SPDX-License-Identifier',
+                            reason=f'LICENSE_SOURCE_DENIED: {denial} in SPDX declaration')
         license_id = identifiers[0]
         record['basis'] = 'SPDX-License-Identifier'
     else:
         license_id = infer_spdx_from_text(header)
         record['basis'] = 'source_header' if license_id else None
+        if license_id:
+            for pattern, inferred in LICENSE_KEYWORDS:
+                match = re.search(pattern, header, re.I | re.S)
+                if inferred != license_id or not match:
+                    continue
+                # Ask the actual licensing sentence, not the whole LICENSE.
+                # Body patterns can start at a copyright preamble; the grant
+                # itself owns permission, so scope at that clause when present.
+                grant = re.search(r'permission|redistribution and use|may be used and distributed',
+                                  match.group(), re.I)
+                start = match.start() + (grant.start() if grant else 0)
+                lo, hi = sentence_scope(header, start, start + 1, extra_breaks=LINE_END_BREAKS)
+                claim = header[lo:hi]
+                if grant:
+                    # These existing grant forms permit use without the named
+                    # limit; they do not deny the grant. Other denials remain.
+                    claim = re.sub(r'\bwithout\W{1,30}(?:restriction|limitation|fee|modification)\b',
+                                   '', claim, flags=re.I)
+                denial = is_denied(claim, ignore_bracketed=False)
+                if denial:
+                    return dict(record, status='REJECTED',
+                                reason=f'LICENSE_SOURCE_DENIED: {denial} in license declaration')
+                break
         if not license_id and fallback and fallback['status'] == 'PASS':
             license_id = fallback['spdx']
             record.update(basis='upstream_license_file',
