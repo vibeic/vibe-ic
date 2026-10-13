@@ -229,6 +229,12 @@ def test_a_port_covered_only_by_false_path_counts_as_covered(tmp_path):
     set_input_delay / set_output_delay would report it as a gap on every
     design that has a reset."""
     p = _mk(tmp_path / "falsepath", _PINS_FULL, _TOP_ANSI)
+    # The fixture's async reset has an explicit design-authored incoming cut.
+    # A reset-shaped name alone is not authority for a timing exception.
+    staged = p / "input/constraints"
+    staged.mkdir(parents=True)
+    (staged / "design.sdc").write_text(
+        "set_false_path -from [get_ports {rst_n}] -to [all_clocks]\n")
     r = _run(p)
     assert r.returncode == 0, r.stdout + r.stderr
     text = _sdc(p)
