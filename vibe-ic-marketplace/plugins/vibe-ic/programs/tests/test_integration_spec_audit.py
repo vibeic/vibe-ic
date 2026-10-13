@@ -227,3 +227,24 @@ def test_clock_gating_warning(tmp_path):
 
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])
+
+
+@pytest.mark.parametrize("evidence,expected", [
+    ("No stubs, but the top contains a stub.", False),
+    ("No stubs but the top contains a stub.", False),
+    ("No stubs and one TODO remains.", False),
+    ("No placeholder; worker is a stub.", False),
+    ("No stub or placeholder modules are permitted.", True),
+    ("No stubs and no TODO placeholders.", True),
+    ("Top module must not leave any stub.", True),
+    ("Top module 禁止留 stub.", True),
+])
+def test_prohibition_is_bound_to_its_placeholder_clause(tmp_path, evidence, expected):
+    data = make_valid_l9(integration={"architecture": [{"evidence": evidence}]})
+    (tmp_path / "L9_integration.json").write_text(json.dumps(data))
+    result = asdict(isa.audit(str(tmp_path)))
+    process = subprocess.run([sys.executable, str(SCRIPT), str(tmp_path), "--json"],
+                             text=True, capture_output=True)
+    assert json.loads(process.stdout) == result
+    assert result["passed"] is expected, result
+    assert process.returncode == (0 if expected else 1), process.stdout

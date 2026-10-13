@@ -161,10 +161,16 @@ def _asserts_stub(text: str, path: str) -> bool:
         lo, hi = sentence_scope(prose, match.start(), match.end(),
                                extra_breaks=('; ', '\n', '。', '；'))
         before, after = prose[lo:match.start()], prose[match.end():hi]
+        # A prohibition governs its verb/object list. It cannot reach across
+        # an affirmative clause such as "no stubs, but worker is a stub".
+        # Coordinated placeholder names remain one prohibited object list.
         prohibited_before = re.search(
             r'(?:\b(?:must|shall|should)\s+not\b|'
             r'\b(?:never|no|without|avoid|forbid|prohibit)\b|禁止|不得|不准|避免)'
-            r'[^.;；\n]{0,50}$', before, re.I)
+            r'\s*(?:(?:leave|use|contain|include|have|any|a|an|the)\s+|'
+            r'(?:留|使用|含有|有|任何)\s*)*'
+            r'(?:(?:stubs?|placeholders?|TODOs?)(?:\s+modules?)?\s*'
+            r'(?:,\s*|(?:and|or)\s+))*$', before, re.I)
         prohibited_after = re.match(
             r'^\s*(?:modules?\s+)?(?:is\s+|are\s+|must\s+be\s+|shall\s+be\s+)?'
             r'(?:prohibited|forbidden|not\s+allowed)\b', after, re.I)
