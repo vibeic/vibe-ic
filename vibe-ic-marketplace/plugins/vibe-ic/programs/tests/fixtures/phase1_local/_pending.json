@@ -141,5 +141,27 @@
     "version_observed": "1.28.12",
     "version_lkg": "",
     "fixture_path": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/fixtures/phase1_local/markdown_matrix_repro2998/verification.md"
+  },
+  {
+    "issue": 3051,
+    "project": "physical_signoff_rows",
+    "layer": "L7",
+    "field": "debug_registers",
+    "expected": "[]",
+    "actual": "[{\"name\":\"DRC\",\"value\":null,\"description\":\"100% clean(magic + KLayout)\"},{\"name\":\"LVS\",\"value\":null,\"description\":\"100% clean(magic + netgen)\"}]",
+    "version_observed": "1.28.27/e49eef3d5d8664183150c15a8a9f00d9453fc838; latest 1.28.28/f99c113505481a3793a581318bd8d420b40dad81 retains the same producer logic. No oracle, reference, golden or benchmark harness was read.",
+    "version_lkg": "",
+    "fixture_path": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/fixtures/phase1_local/physical_signoff_rows/verification_plan.md"
+  },
+  {
+    "issue": 3050,
+    "project": "negated_chip_protocol",
+    "layer": "L2",
+    "field": "protocol_overview",
+    "expected": "null",
+    "actual": "{\"half_duplex\":false,\"wire_count\":4,\"byte_order\":null,\"wake_required_pre_command\":null,\"evidence\":\"interface keyword match (i2c/spi/uart/...)\"}",
+    "version_observed": "1.28.27/e49eef3d5d8664183150c15a8a9f00d9453fc838; latest 1.28.28/f99c113505481a3793a581318bd8d420b40dad81 retains the same producer logic. No oracle, reference, golden or benchmark harness was read.",
+    "version_lkg": "",
+    "fixture_path": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/fixtures/phase1_local/negated_chip_protocol/command_protocol.md"
   }
 ]

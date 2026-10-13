@@ -5928,6 +5928,10 @@ steps:
       # 37.4 consumes it when aggregating metrics, but consumption does not
       # transfer producer ownership to that later step.
       - "reports/phase3/sta_spef_based.rpt"
+      # Step 23's STAPostPNR writer owns the native state/corner record
+      # consumed by Step 30. The canonical Default backend always selects
+      # that writer; a legacy direct STA producer does not emit this file.
+      - "reports/phase3/sta_postpnr_signoff.json"
       - "reports/phase3/sta/post_route_summary.json"
       # The timing RECORD-completeness verdict. Like post_route_summary.json
       # above it is BOTH this step's own unconditional gate `--json` target AND
@@ -6030,6 +6034,12 @@ steps:
       # is PRODUCED and PROMOTED whenever the run declares STA corners: the
       # emitter writes every declared (corner, role) section and promotes once
       # the linked-master and annotation censuses pass. No path changes here.
+    output_conditions:
+      "reports/phase3/sta_postpnr_signoff.json":
+        librelane_step_mode:
+          step: "23"
+          modes: ["librelane", "dual"]
+          default_backend: true
     gate:
       all_of:
         # vibe-ic#1097 S8 — "asked" and "reached" must BOTH be on disk.
@@ -7121,7 +7131,7 @@ steps:
       - from: 23
         path: "reports/phase3/sta_postpnr_signoff.json"
       - from: 22
-        path: "phase3/stage3/extracted/*.spef"
+        path: "phase3/stage3/extracted/parasitic.spef OR phase3/stage3/extracted/*.spef"
       - from: external
         check: none
         what: >-

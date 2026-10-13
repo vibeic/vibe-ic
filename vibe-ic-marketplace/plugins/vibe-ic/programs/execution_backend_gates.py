@@ -48,11 +48,8 @@ def contracts(project: Path, row: dict) -> dict:
     import flow_compliance_check as fcc
     result = {}
     for spec in row.get('required_outputs', []):
-        condition = (row.get('output_conditions') or {}).get(spec)
-        if condition:
-            met, _ = fcc._evaluate_gate(project, condition)
-            if not met:
-                continue
+        if fcc._output_not_owed(project, row, spec):
+            continue
         files = []
         for pattern in spec.split(' OR '):
             for p in sorted(project.glob(pattern.strip())):

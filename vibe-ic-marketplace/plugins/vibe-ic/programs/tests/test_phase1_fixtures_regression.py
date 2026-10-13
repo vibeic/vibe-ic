@@ -29,6 +29,7 @@ output is what this test pins.
 from __future__ import annotations
 
 from pathlib import Path
+import json
 
 import pytest
 
@@ -126,3 +127,171 @@ def test_phase1_picker_no_fpga_board_in_results() -> None:
         f"This is the v1.6.58/v1.6.60 regression class; "
         f"check `_FPGA_BOARD_RE` coverage."
     )
+
+
+def _field_doc(tmp_path: Path, layer: str, text: str) -> dict:
+    from programs import phase1_doc_one_shot_runner as producer
+    if layer == "L2":
+        result = producer.gen_l2_frs(tmp_path, {"command_protocol.md": text})
+    else:
+        result = producer.gen_l7_test_debug(tmp_path, {"verification_plan.md": text})
+    return json.loads(result.path.read_text())
+
+
+@pytest.mark.parametrize("project,layer,field,expected", [
+    ("negated_chip_protocol", "L2", "protocol_overview", None),
+    ("physical_signoff_rows", "L7", "debug_registers", []),
+])
+def test_phase1_local_field_intake(project, layer, field, expected, tmp_path):
+    from programs.tests._hostpaths import require_repo
+    root = require_repo("vibe-ic-marketplace", "plugins", "vibe-ic", "programs",
+                        "tests", "fixtures", "phase1_local", project)
+    text = "\n".join(p.read_text() for p in sorted(root.glob("*.md")))
+    doc = _field_doc(tmp_path, layer, text)
+    assert doc[field] == expected, doc[field]
+
+
+@pytest.mark.parametrize("text,wire_count", [
+    ("A chip implements the SPI command protocol.\n", 4),
+    ("The chip implements a dedicated SPI command controller and firmware bit-banging supplies a UART GPIO output.\n", 4),
+    ("The chip implements a UART hardware controller command interface with a firmware bit-banging diagnostic mode.\n", 2),
+    ("A dedicated SPI hardware controller implements the chip's command interface with a firmware bit-banging diagnostic mode.\n", 4),
+    ("The SPI hardware command controller is implemented in the chip and firmware bit-banging supplies a UART GPIO output.\n", 4),
+    ("The chip's dedicated SPI hardware controller accepts command transfers while firmware bit-banging supplies a UART GPIO output.\n", 4),
+    ("The SPI command controller is implemented in the chip and firmware bit-banging supplies a UART GPIO output.\n", 4),
+    ("The chip's UART hardware controller accepts command transfers while firmware bit-banging supplies an SPI GPIO output.\n", 2),
+    ("The UART hardware command controller is implemented in the chip and firmware bit-banging supplies an SPI GPIO output.\n", 2),
+    ("Firmware emulates a dedicated SPI controller and the chip's UART hardware controller accepts command transfers.\n", 2),
+    ("A dedicated UART hardware controller implements the chip's command interface with firmware bit-banging on an SPI GPIO output.\n", 2),
+    ("A purely digital SPI slave interface accepts commands.\n", 4),
+    ("Firmware may bit-bang GPIO as UART, but the chip has a dedicated SPI controller with four wires.\n", 4),
+    ("The UART hardware controller command interface drives GPIO output pins.\n", 2),
+    ("Firmware bit-banging GPIO simulates SPI, but the UART hardware controller command interface accepts commands.\n", 2),
+    ("Firmware bit-banging GPIO simulates SPI; the UART hardware controller command interface accepts commands.\n", 2),
+    ("No SPI command interface.\nA UART slave interface accepts commands.\n", 2),
+    ("No SPI interface, but the UART slave interface accepts commands.\n", 2),
+    ("**Absent**:\n- SPI command interface\n\n**Implemented**:\n"
+     "- UART slave interface accepts commands\n", 2),
+    ("A chip has no UART interface.\nThe SPI command protocol transmits MSB-first.\n", 4),
+])
+def test_l2_positive_protocol_declarations_survive_negated_neighbors(
+        text, wire_count, tmp_path):
+    doc = _field_doc(tmp_path, "L2", text)
+    assert (doc["protocol_overview"] or {}).get("wire_count") == wire_count, doc
+
+
+@pytest.mark.parametrize("text", [
+    "No SPI command interface is implemented.\n",
+    "Firmware emulates a dedicated SPI command controller.\n",
+    "Firmware emulates the chip's dedicated SPI command controller.\n",
+    "Firmware emulation models a dedicated SPI hardware command controller.\n",
+    "Firmware emulation models the chip's dedicated SPI hardware command controller.\n",
+    "Firmware emulates a dedicated SPI command controller and a dedicated UART hardware controller.\n",
+    "The SPI hardware command controller is emulated by firmware.\n",
+    "A dedicated SPI hardware controller emulated by firmware accepts commands.\n",
+    "The SPI hardware controller is firmware-emulated and accepts commands.\n",
+    "Firmware bit-bangs a dedicated SPI command interface.\n",
+    "A software-emulated dedicated UART hardware controller accepts commands.\n",
+    "No dedicated SPI hardware controller command interface is implemented while firmware bit-banging drives UART GPIO output.\n",
+    "The chip does not provide an I2C slave interface.\n",
+    "**Not implemented**:\n- SPI command interface\n- UART command interface\n",
+    "A GPIO output supplies UART tx by firmware bit-banging; this is an application.\n",
+    "Firmware may bit-bang GPIO as UART.\n",
+    "A GPIO output supports a serial UART pattern.\n",
+    "| Output | Function |\n|---|---|\n| output_bit | GPIO output may act as UART tx |\n",
+    "A GPIO output uses firmware bit-banged UART tx.\n",
+    "The SRAM bus protocol name (Wishbone-classic / generic / custom) is unspecified.\n",
+    "No half-duplex single-wire command protocol is present.\n",
+])
+def test_l2_negative_or_emulated_protocol_mentions_are_not_hardware(text, tmp_path):
+    doc = _field_doc(tmp_path, "L2", text)
+    assert doc["protocol_overview"] is None, doc["protocol_overview"]
+    assert doc["no_protocol_overview_in_input"] is True, doc
+
+
+def test_l2_memory_macro_is_not_an_ethernet_mac_protocol(tmp_path):
+    from programs import phase1_doc_one_shot_runner as producer
+    result = producer.gen_l2_frs(tmp_path, {
+        "architecture.md": "A memory interface uses SRAM macro cells.\n"})
+    doc = json.loads(result.path.read_text())
+    assert doc["protocol_overview"] is None, doc["protocol_overview"]
+    assert doc["no_protocol_overview_in_input"] is True, doc
+
+
+@pytest.mark.parametrize("heading,row,names", [
+    ("Debug registers", "| DBG_CTRL | Debug control |", ["DBG_CTRL"]),
+    ("No debug registers", "| DBG_CTRL | Debug control |", []),
+    ("沒有 debug registers", "| DBG_CTRL | Debug control |", []),
+    ("Debug registers", "| CONFIG | Mode selector |", ["CONFIG"]),
+    ("Purely digital debug registers", "| CONFIG | Mode selector |", ["CONFIG"]),
+    ("Parameters", "| DmBaseAddr | Debug module base address register |", ["DmBaseAddr"]),
+    ("Debug registers", "| DBG_CTRL | 0 | Control register, read/write |", ["DBG_CTRL"]),
+    ("Physical Verification", "| RULE_CHECK | 100% clean |", []),
+    ("Physical Verification", "| RuleCount | 42 | physical signoff requirement |", []),
+    ("Verification statistics", "| COVERAGE | 100 |", []),
+    ("Requirements", "| CHECK_A | clean |", []),
+])
+def test_l7_table_role_keeps_registers_and_rejects_verification_rows(
+        heading, row, names, tmp_path):
+    text = f"# Verification\n## {heading}\n| Name | Description |\n|---|---|\n{row}\n"
+    doc = _field_doc(tmp_path, "L7", text)
+    assert [r["name"] for r in doc["debug_registers"]] == names, doc["debug_registers"]
+
+
+@pytest.mark.parametrize("text,names", [
+    ("# Verification\n## Debug registers\n### Control\n"
+     "| Name | Description |\n|---|---|\n| DBG_CTRL | Mode selector |\n",
+     ["DBG_CTRL"]),
+    ("# Verification\n## Debug registers\n### Coverage counters\n"
+     "| Name | Value | Description |\n|---|---|---|\n"
+     "| EVENT_COUNT | 0x200 | Read/write register counting observed events |\n",
+     ["EVENT_COUNT"]),
+    ("# Verification\n## Debug registers\n### Control registers\n"
+     "| Name | Description |\n|---|---|\n| DBG_CTRL | Mode selector |\n",
+     ["DBG_CTRL"]),
+    ("# Verification\n## Debug registers\n### No debug registers\n"
+     "| Name | Description |\n|---|---|\n| DBG_CTRL | Read/write control register |\n",
+     []),
+    ("# Verification\n## Debug registers\n### Physical Verification\n"
+     "| Name | Description |\n|---|---|\n| DBG_CTRL | Read/write register check |\n",
+     []),
+    ("# Verification\n## Debug registers\n### No debug registers\n#### Control\n"
+     "| Name | Description |\n|---|---|\n| DBG_CTRL | Read/write control register |\n",
+     []),
+    ("# Verification\n## Debug registers\n### Physical Verification\n"
+     "| Name | Description |\n|---|---|\n| RULE_CHECK | Register layout check |\n"
+     "### Control\n| Name | Description |\n|---|---|\n| CONFIG | Mode selector |\n",
+     ["CONFIG"]),
+    ("# Verification\n## Debug registers\n| Name | Description |\n|---|---|\n"
+     "| DBG_CTRL | Mode selector |\n## Physical Verification\n### Control\n"
+     "| Name | Description |\n|---|---|\n| RULE_CHECK | Read/write register check |\n",
+     ["DBG_CTRL"]),
+    ("# Verification\n## Debug registers\n| Name | Description |\n|---|---|\n"
+     "| DBG_CTRL | Mode selector |\n## Requirements\n### Control\n"
+     "| Name | Description |\n|---|---|\n| CHECK_A | Clean |\n",
+     ["DBG_CTRL"]),
+    ("# Verification\n## Parameters\nGeneral parameters.\n## Debug registers\n"
+     "| Name | Description |\n|---|---|\n| CONFIG | Mode selector |\n"
+     "## Parameters\n| Name | Description |\n|---|---|\n| CHECK_A | Clean |\n",
+     ["CONFIG"]),
+    ("# Verification\n## Debug registers\n| Name | Description |\n|---|---|\n"
+     "| DBG_CTRL | Mode selector |\n## No debug registers\n"
+     "| Name | Description |\n|---|---|\n| ABSENT_CTRL | Read/write register |\n"
+     "## Debug registers\n| Name | Description |\n|---|---|\n| CONFIG | Mode selector |\n",
+     ["DBG_CTRL", "CONFIG"]),
+    ("# Verification\n## Coverage counters\n| Name | Description |\n|---|---|\n"
+     "| EVENT_COUNT | Number of observed events |\n", []),
+    ("Verification\n=============\nDebug registers\n---------------\n"
+     "Control\n~~~~~~~\n| Name | Description |\n|---|---|\n| DBG_CTRL | Mode selector |\n",
+     ["DBG_CTRL"]),
+    ("= Verification\n== Debug registers\n=== Control\n"
+     "| Name | Description |\n|---|---|\n| DBG_CTRL | Mode selector |\n",
+     ["DBG_CTRL"]),
+    ("1 Verification\n1.1 Debug registers\n1.1.1 Control\n"
+     "| Name | Description |\n|---|---|\n| DBG_CTRL | Mode selector |\n",
+     ["DBG_CTRL"]),
+])
+def test_l7_register_role_obeys_heading_ancestry_and_sibling_boundaries(
+        text, names, tmp_path):
+    doc = _field_doc(tmp_path, "L7", text)
+    assert [r["name"] for r in doc["debug_registers"]] == names, doc["debug_registers"]
