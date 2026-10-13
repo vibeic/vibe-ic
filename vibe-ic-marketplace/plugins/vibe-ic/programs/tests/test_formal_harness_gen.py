@@ -11,6 +11,7 @@ reg) so a regression in the parser is caught deterministically.
 """
 import sys
 from pathlib import Path
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import formal_harness_gen as G  # noqa: E402
@@ -140,6 +141,72 @@ def test_derive_reset_props_via_alias():
     assert len(props) == 1
     p = props[0]
     assert p.output == "p" and p.target == "p_reg" and p.value == "'0"
+
+
+def _gated_output(expression, reset="rst", reset_condition="rst",
+                  reset_value="1'b0", extra="", output_width=""):
+    return f"""module gated_output(input clk, {reset}, d,
+        output wire {output_width} admitted);
+        reg launch;
+        always @(posedge clk)
+            if ({reset_condition}) launch <= {reset_value};
+            else launch <= d;
+        assign admitted = {expression};
+        {extra}
+    endmodule"""
+
+
+@pytest.mark.parametrize("expression", [
+    "!rst && launch", "launch && !rst", "~rst & launch",
+    "((! (rst)) && (launch))",
+])
+def test_generate_reset_gated_registered_output(tmp_path, expression):
+    result, out = _gen(tmp_path, _gated_output(expression))
+    assert result["verdict"] == "EMITTED"
+    assert result["properties"] == [{
+        "output": "admitted", "target": "launch", "reset_value": "'0",
+        "reset_style": "sync"}]
+    assert "|-> (admitted == '0)" in out.read_text()
+    assert "(rst_active || (f_past_valid && rst_active_q)) |->" in out.read_text()
+
+
+@pytest.mark.parametrize("expression", ["rst_n && launch", "launch & (rst_n)"])
+def test_generate_reset_gated_active_low(tmp_path, expression):
+    result, _ = _gen(tmp_path, _gated_output(
+        expression, reset="rst_n", reset_condition="!rst_n"))
+    assert result["verdict"] == "EMITTED"
+    assert result["properties"][0]["output"] == "admitted"
+    assert result["properties"][0]["target"] == "launch"
+    iface = G.parse_module(_gated_output(
+        expression, reset="rst_n", reset_condition="!rst_n"), "gated_output")
+    immediate = G.emit_harness(iface, "clk", "rst_n", True,
+        G.derive_reset_props(iface, "rst_n", True), assertion_form="immediate")
+    assert "if (rst_active || (f_past_valid && rst_active_q))" in immediate
+
+
+@pytest.mark.parametrize("expression,kwargs", [
+    ("rst && launch", {}),                         # wrong polarity
+    ("!rst && d", {}),                             # input, not register
+    ("!rst && missing", {}),                       # undriven register atom
+    ("!rst && launch", {"reset_value": "1'b1"}),    # released gate is nonzero
+    ("!(rst && launch)", {}),                      # whole-expression NOT
+    ("(!rst && launch) || d", {}),                  # unsupported expression
+    ("!rst && launch && d", {}),                   # additional qualifier
+    ("!rst && launch", {"output_width": "[3:0]"}),  # outside scalar grammar
+    ("!rst && launch", {"extra": "assign admitted = d;"}),
+    ("!rst && launch", {"extra": "always @(posedge clk) launch <= d;"}),
+    ("!rst && launch", {"extra": "always_ff @(posedge clk) launch <= d;"}),
+    ("!rst && launch", {"extra": "always_comb launch = d;"}),
+    ("!rst && launch", {"extra": "always @(posedge clk) if (rst) admitted <= 0; else admitted <= d;"}),
+    ("!rst && launch", {"extra": "always_ff @(posedge clk) if (rst) admitted <= 0; else admitted <= d;"}),
+    ("!rst && launch", {"extra": "always_comb admitted = d;"}),
+    ("!rst && launch", {"extra": "assign launch = d;"}),
+])
+def test_generate_reset_gated_unsupported_refused(tmp_path, expression, kwargs):
+    result, _ = _gen(tmp_path, _gated_output(expression, **kwargs))
+    assert result["verdict"] == "NOT_APPLICABLE"
+    assert result["rc"] == 2
+    assert "construction-safe" in result["reason"]
 
 
 def test_derive_reset_props_omits_nonliteral_output():
