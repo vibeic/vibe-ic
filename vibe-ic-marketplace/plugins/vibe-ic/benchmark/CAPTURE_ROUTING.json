@@ -35,6 +35,15 @@
       "bucket_A_program": "programs/canonical_run_admission.py",
       "bucket_B_skill_file": "agents/ic-expert-agent.md"
     },
+    "phase2.sdc_gen": {
+      "description": "Capture subtype for the existing boundary SDC consumer: typed reset semantics, directional I/O timing and design-authored exception authority. Routing only; no new flow step or gate.",
+      "bucket_A_program": "programs/sdc_gen.py",
+      "bucket_A_related": [
+        "programs/sdc_constraints.py",
+        "programs/phase3_one_shot_runner.py"
+      ],
+      "bucket_B_skill_file": "skills/sta-review/SKILL.md"
+    },
     "phase2.detect_ic_class": {
       "bucket_A_program": "programs/ic_class_profile.py",
       "bucket_A_related": [

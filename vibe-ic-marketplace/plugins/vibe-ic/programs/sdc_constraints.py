@@ -214,6 +214,43 @@ def primary_clock(project: Path,
     return min(clocks, key=lambda c: c["period_ns"])
 
 
+def collect_timing_exceptions(project: Path) -> List[Dict]:
+    """Design-authored exceptions, with their actual staged source/line.
+
+    This is the existing Phase-3 reader's authority and grammar. Generated
+    decks are never inputs. Admission/port binding belongs to the consumer;
+    an authored exception is not, by itself, an equivalence proof.
+    """
+    out: List[Dict] = []
+    seen: set = set()
+    for source in collect_sdc_files(project):
+        try:
+            text = source.read_text(errors="replace")
+        except OSError:
+            continue
+        variables = _collect_tcl_vars(text)
+        if variables:
+            text = _substitute_vars(text, variables)
+        # Keep the first physical line number of a continued Tcl command.
+        joined = re.sub(r"\\\s*\n", " ", text)
+        physical_lines = iter(enumerate(text.splitlines(), 1))
+        line_numbers = []
+        for lineno, line in physical_lines:
+            line_numbers.append(lineno)
+            while line.rstrip().endswith("\\"):
+                _next, line = next(physical_lines, (lineno, ""))
+        for index, line in enumerate(joined.splitlines()):
+            if not re.match(r"^\s*(?:set_false_path|set_multicycle_path)\b", line):
+                continue
+            norm = " ".join(line.split())
+            if norm not in seen:
+                seen.add(norm)
+                out.append({"command": line.strip(),
+                            "source": str(source.relative_to(project)),
+                            "line": line_numbers[index]})
+    return out
+
+
 _GET_PORTS_RE = re.compile(r"get_ports\s+\{?\s*([A-Za-z_]\w*)", re.IGNORECASE)
 # A `set <var> <value>` whose VAR names a clock/reset PORT (…_port / …_port_name),
 # e.g. `set clk_port_name clk_i`, `set reset_port rst_n`. Distinct from

@@ -2706,28 +2706,8 @@ def _staged_timing_exceptions(project: Path) -> List[str]:
 
     Chip-AGNOSTIC: standard-SDC syntax only; no chip/vendor/PDK literals.
     """
-    out: List[str] = []
-    seen: set = set()
-    for sdc_file in _sdc.collect_sdc_files(project):  # input/constraints + input/reference_flow ONLY
-        try:
-            text = sdc_file.read_text(errors="replace")
-        except OSError:
-            continue
-        variables = _sdc._collect_tcl_vars(text)
-        if variables:
-            text = _sdc._substitute_vars(text, variables)
-        # join Tcl backslash line-continuations before per-line extraction
-        text = re.sub(r"\\\s*\n", " ", text)
-        for line in text.splitlines():
-            if line.lstrip().startswith("#"):
-                continue
-            if not _TIMING_EXCEPTION_RE.match(line):
-                continue
-            norm = " ".join(line.split())  # collapse whitespace for stable dedup
-            if norm and norm not in seen:
-                seen.add(norm)
-                out.append(line.strip())
-    return out
+    return [record["command"] for record in
+            _sdc.collect_timing_exceptions(project)]
 
 
 def _c4_l8_declared_period_ns(project: Path,
