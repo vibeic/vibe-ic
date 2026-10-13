@@ -169,3 +169,110 @@ def test_undeclared_drop_still_errors_under_both_arg_shapes(tmp_path):
     rc_pos, rules_pos, _ = _run(tmp_path / "b", rtl, mf, positional=True)
     assert rc_flag != 0 and rc_pos != 0
     assert "port-missing" in rules_flag and "port-missing" in rules_pos
+
+
+_LOGICAL_SCOPE_CASES = [
+    "raw-rtl-dir", "raw-positional-directory", "raw-positional-file",
+    "toolports-good", "toolports-wrong-width", "toolports-wrong-clock",
+    "toolports-missing-selected-port", "toolports-missing-top",
+    "raw-missing-rename", "raw-wrong-spec-width", "raw-wrong-spec-clock",
+    "raw-forged-declaration", "implementation-none", "implementation-good",
+]
+
+
+def _run_selected_source_scope(tmp_path, case):
+    """Real CLI on neutral current selected inputs; tool JSON is metadata only."""
+    import os
+    import hashlib
+    from test_d2_renamed_reused_ip_ports_take_their_documents_side import _phase1_selected_scope_project
+    project = _phase1_selected_scope_project(tmp_path, "absent")
+    spec = project / "phase1/generated_docs/L9_INTEGRATION_SPEC.json"
+    source = project / "phase2/stage1/rtl"
+    if case.startswith("implementation-"):
+        source = project / "phase2/stage2/synth"
+    if case == "raw-missing-rename":
+        (project / "phase2/stage1/rtl/SOURCE_MANIFEST.json").write_text(
+            json.dumps({"reused_ip": True, "renamed_interfaces": []}))
+    elif case in {"raw-wrong-spec-width", "raw-wrong-spec-clock"}:
+        content = json.loads(spec.read_text())
+        for key in ("ports", "top_ports", "top_module_pins"):
+            for port in content[key]:
+                if port["name"] == ("clk" if case.endswith("clock") else "o_memory_wdata"):
+                    port["width"] = 4
+        spec.write_text(json.dumps(content))
+    elif case == "raw-forged-declaration":
+        (project / "plugin_output/declaration.json").write_text(
+            json.dumps({"top_module": "unselected_top", "memory_interface_protocol": "split_read_write"}))
+    args = ["--rtl-dir", str(source)]
+    if case == "raw-positional-directory":
+        args = [str(source)]
+    elif case == "raw-positional-file":
+        args = [str(source / "core.v")]
+    if case.startswith("toolports-") or case == "implementation-good":
+        # Author-controlled elaboration input shape, never an EDA measurement.
+        ports = {name: {"direction": "input" if name in {"clk", "rst"} else "output",
+                        "bits": list(range(width))}
+                 for name, width in [("clk", 1), ("rst", 1), ("o_status", 1),
+                                     ("o_memory_wdata", 2), ("o_memory_waddr", 1),
+                                     ("o_memory_wen", 1)]}
+        if case == "toolports-wrong-width":
+            ports["o_memory_wdata"]["bits"] = [1, 2, 3]
+        elif case == "toolports-wrong-clock":
+            ports["clk"]["bits"] = [1, 2]
+        elif case == "toolports-missing-selected-port":
+            del ports["o_memory_wdata"]
+        metadata = project / "controlled-tool-ports.json"
+        metadata.write_text(json.dumps({"modules": {
+            "absent_top" if case == "toolports-missing-top" else "core": {"ports": ports}}}))
+        args += ["--tool-ports", str(metadata)]
+    before = {str(p.relative_to(project)): hashlib.sha256(p.read_bytes()).hexdigest()
+              for p in project.rglob("*") if p.is_file()}
+    subject = Path(os.environ.get("VIBEIC_CONFORMANCE_SUBJECT", PROG.parent))
+    report = tmp_path / "scope-findings.json"
+    cli = subprocess.run([sys.executable, str(subject / "spec_conformance_check.py"),
+                          "--spec", str(spec), "--top", "core", *args,
+                          "--json", str(report)], capture_output=True, text=True)
+    findings = json.loads(report.read_text()) if report.is_file() else []
+    (tmp_path / "scope-consumer.receipt.json").write_text(json.dumps({
+        "case": case, "argv": cli.args, "natural_rc": cli.returncode,
+        "stdout": cli.stdout, "stderr": cli.stderr, "findings": findings,
+        "source_input_hashes": before,
+    }, indent=2) + "\n")
+    after = {str(p.relative_to(project)): hashlib.sha256(p.read_bytes()).hexdigest()
+             for p in project.rglob("*") if p.is_file()}
+    assert after == before
+    return cli, findings
+
+
+import pytest
+
+
+@pytest.mark.parametrize("case", _LOGICAL_SCOPE_CASES)
+def test_selected_raw_scope_is_independent_of_future_synthesis(tmp_path, case):
+    cli, findings = _run_selected_source_scope(tmp_path, case)
+    accepted = cli.returncode == 0
+    positive = case in {"raw-rtl-dir", "raw-positional-directory", "raw-positional-file", "toolports-good"}
+    if positive:
+        assert accepted is True, cli.stdout + cli.stderr
+        assert [f for f in findings if f["severity"] == "ERROR"] == []
+    elif case == "toolports-missing-top":
+        assert cli.returncode == 2
+        assert "NOT_MEASURED" in cli.stderr
+    else:
+        assert cli.returncode == 1, cli.stdout + cli.stderr
+        assert any(f["severity"] == "ERROR" for f in findings)
+        if case.startswith("implementation-"):
+            assert any(f["rule"] == "selected-interface-binding-invalid"
+                       and "LL_SYNTH_HANDOFF_INVALID" in f["message"] for f in findings)
+        else:
+            assert all("LL_SYNTH_HANDOFF_INVALID" not in f["message"] for f in findings)
+            expected_rule = {
+                "toolports-wrong-width": "port-rename-width-mismatch",
+                "toolports-wrong-clock": "port-width-mismatch",
+                "toolports-missing-selected-port": "port-rename-missing-rtl-port",
+                "raw-missing-rename": "port-missing",
+                "raw-wrong-spec-width": "port-width-mismatch",
+                "raw-wrong-spec-clock": "port-width-mismatch",
+                "raw-forged-declaration": "selected-interface-binding-invalid",
+            }[case]
+            assert any(f["rule"] == expected_rule for f in findings)

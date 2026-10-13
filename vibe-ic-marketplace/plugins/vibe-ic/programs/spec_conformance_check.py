@@ -2929,7 +2929,18 @@ def main(argv: Optional[List[str]] = None) -> int:
                     files, 'phase2/stage1/rtl/SOURCE_MANIFEST.json')
                 if _binding_project is None:
                     raise ValueError('current reused-IP manifest is unavailable')
-                _bound = bind_selected_interface(_binding_project, _content)
+                # Step 2 checks the chosen current raw RTL, including its
+                # elaborated --tool-ports view, before Step 9 exists. Scope
+                # follows the actual chosen file, not the invocation spelling.
+                try:
+                    Path(chosen).resolve().relative_to(
+                        (_binding_project / 'phase2/stage1/rtl').resolve())
+                    _logical_rtl = True
+                except ValueError:
+                    _logical_rtl = False
+                _bound = bind_selected_interface(
+                    _binding_project, _content,
+                    include_synthesis_handoff=not _logical_rtl)
                 for _group in _bound['selected_interface_binding']['illustrative_groups']:
                     _projected_groups.append((set(_group['l9']), set(_group['rtl'])))
             except (OSError, ValueError, KeyError, TypeError) as exc:
