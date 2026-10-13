@@ -177,6 +177,7 @@ _LOGICAL_SCOPE_CASES = [
     "toolports-missing-selected-port", "toolports-missing-top",
     "raw-missing-rename", "raw-wrong-spec-width", "raw-wrong-spec-clock",
     "raw-forged-declaration", "implementation-none", "implementation-good",
+    "raw-directory-pivot", "raw-phase2-ancestor-pivot", "raw-stage1-ancestor-pivot",
 ]
 
 
@@ -188,6 +189,19 @@ def _run_selected_source_scope(tmp_path, case):
     project = _phase1_selected_scope_project(tmp_path, "absent")
     spec = project / "phase1/generated_docs/L9_INTEGRATION_SPEC.json"
     source = project / "phase2/stage1/rtl"
+    if case in {"raw-directory-pivot", "raw-phase2-ancestor-pivot", "raw-stage1-ancestor-pivot"}:
+        role_files = [spec, project / "plugin_output/declaration.json",
+                      source / "SOURCE_MANIFEST.json", source / "core.v"]
+        role_before = {str(path): hashlib.sha256(path.read_bytes()).hexdigest()
+                       for path in role_files}
+        pivot = (source if case == "raw-directory-pivot" else
+                 project / "phase2" if case == "raw-phase2-ancestor-pivot" else
+                 project / "phase2/stage1")
+        target = project / ("outside-" + pivot.name)
+        pivot.rename(target)
+        pivot.symlink_to(target, target_is_directory=True)
+        assert {str(path): hashlib.sha256(path.read_bytes()).hexdigest()
+                for path in role_files} == role_before
     if case.startswith("implementation-"):
         source = project / "phase2/stage2/synth"
     if case == "raw-missing-rename":
@@ -261,7 +275,7 @@ def test_selected_raw_scope_is_independent_of_future_synthesis(tmp_path, case):
     else:
         assert cli.returncode == 1, cli.stdout + cli.stderr
         assert any(f["severity"] == "ERROR" for f in findings)
-        if case.startswith("implementation-"):
+        if case.startswith("implementation-") or case.endswith("pivot"):
             assert any(f["rule"] == "selected-interface-binding-invalid"
                        and "LL_SYNTH_HANDOFF_INVALID" in f["message"] for f in findings)
         else:

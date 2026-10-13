@@ -2934,7 +2934,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 # follows the actual chosen file, not the invocation spelling.
                 try:
                     Path(chosen).resolve().relative_to(
-                        (_binding_project / 'phase2/stage1/rtl').resolve())
+                        _binding_project.resolve() / 'phase2/stage1/rtl')
                     _logical_rtl = True
                 except ValueError:
                     _logical_rtl = False
