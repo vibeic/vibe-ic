@@ -231,8 +231,28 @@ def parameter_expressions(header, body):
                     declaration = current_declaration
                 width = ''.join(re.findall(r'\[[^\]]+\]', declaration))
                 signed = bool(re.search(r'\bsigned\b', declaration))
-                if re.search(r'\b(?:int|integer)\b', declaration):
-                    width, signed = '[31:0]', not bool(re.search(r'\bunsigned\b', declaration))
+                unsigned = bool(re.search(r'\bunsigned\b', declaration))
+                datatype = re.sub(r'\[[^\]]+\]', '', declaration)
+                datatype = re.sub(r'\b(?:parameter|localparam|signed|unsigned)\b',
+                                  '', datatype).strip()
+                implicit_types = {
+                    'bit': (1, False), 'logic': (1, False), 'reg': (1, False),
+                    'byte': (8, True), 'shortint': (16, True),
+                    'int': (32, True), 'integer': (32, True),
+                    'longint': (64, True), 'time': (64, False),
+                }
+                if signed and unsigned:
+                    raise ValueError('conflicting parameter signedness: ' + declaration)
+                if datatype:
+                    if datatype not in implicit_types:
+                        raise ValueError('unsupported parameter type: ' + declaration)
+                    type_width, type_signed = implicit_types[datatype]
+                    if width and datatype not in {'bit', 'logic', 'reg'}:
+                        raise ValueError('unsupported packed parameter type: ' + declaration)
+                    width = width or f'[{type_width - 1}:0]'
+                    signed = signed or (type_signed and not unsigned)
+                elif not width and (signed or unsigned):
+                    raise ValueError('unresolved implicit parameter signedness: ' + declaration)
                 expressions[match.group(2)] = (match.group(3).strip(), width, signed)
     return expressions
 

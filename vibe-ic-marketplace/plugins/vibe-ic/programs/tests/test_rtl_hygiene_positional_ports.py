@@ -853,3 +853,135 @@ endmodule
 """
     result, findings = _native_hierarchy(tmp_path, [source, LEAF])
     assert (result.returncode, findings) == (0, []), result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("datatype,value,condition,expected_rc", [
+    ("bit", "1", "ENABLE", 0),
+    ("bit", "0", "ENABLE", 1),
+    ("bit", "2", "ENABLE", 1),
+    ("logic", "2", "ENABLE", 1),
+    ("byte", "256", "ENABLE", 1),
+    ("byte", "255", "ENABLE >= 0", 1),
+    ("logic", "1", "ENABLE", 0),
+    ("reg", "1", "ENABLE", 0),
+    ("reg", "2", "ENABLE", 1),
+    ("bit signed", "1", "ENABLE", 0),
+    ("byte", "255", "ENABLE", 0),
+    ("byte unsigned", "255", "ENABLE", 0),
+    ("shortint", "1", "ENABLE", 0),
+    ("shortint", "65536", "ENABLE", 1),
+    ("longint", "1", "ENABLE", 0),
+    ("longint", "18446744073709551616", "ENABLE", 1),
+    ("time", "1", "ENABLE", 0),
+    ("time", "18446744073709551616", "ENABLE", 1),
+    ("logic [3:0]", "16", "ENABLE", 1),
+    ("logic [1:0][1:0]", "16", "ENABLE", 1),
+], ids=["bit1", "bit0", "bit2", "logic2", "byte256", "signedbyte255",
+        "logic1", "reg1", "reg2", "signedbit1", "signedbyte255_truth",
+        "unsignedbyte255", "shortint1", "shortint65536", "longint1",
+        "longint_overflow", "time1", "time_overflow", "logic_vector16",
+        "logic_multidimension16"])
+def test_native_typed_parameter_child_driver_matches_yosys(
+        tmp_path, datatype, value, condition, expected_rc):
+    """The same child source must not gain credit from untruncated Python ints."""
+    source = f"""
+module leaf #(parameter {datatype} ENABLE={value})(input source, output result);
+    generate if ({condition}) begin: selected
+        assign result = source;
+    end endgenerate
+endmodule
+module top(input source, output result);
+    leaf u_leaf(.source(source), .result(result));
+endmodule
+"""
+    _check_typed_driver_source(tmp_path, source, expected_rc)
+
+
+def _check_typed_driver_source(tmp_path, source, expected_rc):
+    assert shutil.which("yosys"), "typed-driver qualification requires native Yosys"
+    result, findings = _native_hierarchy(tmp_path, [source])
+    path = tmp_path / "unit_0.sv"
+    native = subprocess.run(
+        ["yosys", "-Q", "-T", "-p",
+         # The built-in SystemVerilog frontend also parses time and packed
+         # multidimensional parameters; read_verilog rejects those declarations.
+         f"read_slang {path} --top top; hierarchy -check -top top; proc; flatten; check -assert"],
+        capture_output=True, text=True)
+    (tmp_path / "native-yosys.stdout").write_text(native.stdout)
+    (tmp_path / "native-yosys.stderr").write_text(native.stderr)
+    (tmp_path / "process-results.json").write_text(json.dumps({
+        "native_yosys_process_rc": native.returncode,
+        "hygiene_process_rc": result.returncode,
+        "findings": findings,
+    }, indent=2))
+    assert native.returncode == expected_rc, native.stdout + native.stderr
+    if expected_rc:
+        assert "used but has no driver" in native.stdout
+        assert result.returncode == 1, result.stdout + result.stderr
+        assert any(f["severity"] == "ERROR" and f["block_eligible"] for f in findings)
+    else:
+        assert (result.returncode, findings) == (0, []), result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("declaration,body,condition", [
+    ("parameter bit FIRST=1, ENABLE=2", "", "ENABLE"),
+    ("parameter byte FIRST=1, ENABLE=256", "", "ENABLE"),
+    ("parameter FIRST=1", "localparam logic ENABLE=2;", "ENABLE"),
+    ("parameter unsigned ENABLE=-1", "", "ENABLE < 0"),
+], ids=["inherited_bit", "inherited_byte", "body_localparam", "implicit_unsigned"])
+def test_native_typed_parameter_declaration_context_stays_blocking(
+        tmp_path, declaration, body, condition):
+    source = f"""
+module leaf #({declaration})(input source, output result);
+    {body}
+    generate if ({condition}) begin: selected
+        assign result = source;
+    end endgenerate
+endmodule
+module top(input source, output result);
+    leaf u_leaf(.source(source), .result(result));
+endmodule
+"""
+    _check_typed_driver_source(tmp_path, source, 1)
+
+
+@pytest.mark.parametrize("datatype,value,condition", [
+    ("bit", "2", "ENABLE"),
+    ("logic", "2", "ENABLE"),
+    ("byte", "256", "ENABLE"),
+    ("byte", "255", "ENABLE >= 0"),
+], ids=["bit2", "logic2", "byte256", "signedbyte255"])
+def test_native_typed_child_override_is_converted_before_driver_credit(
+        tmp_path, datatype, value, condition):
+    source = f"""
+module leaf #(parameter {datatype} ENABLE=1)(input source, output result);
+    generate if ({condition}) begin: selected
+        assign result = source;
+    end endgenerate
+endmodule
+module top(input source, output result);
+    leaf #(.ENABLE({value})) u_leaf(.source(source), .result(result));
+endmodule
+"""
+    _check_typed_driver_source(tmp_path, source, 1)
+
+
+@pytest.mark.parametrize("declaration", [
+    "parameter unresolved_t ENABLE=2",
+    "parameter real ENABLE=2",
+    "parameter bit signed unsigned ENABLE=2",
+    "parameter byte [1:0] ENABLE=2",
+])
+def test_native_unsupported_parameter_type_never_uses_python_integer_credit(
+        tmp_path, declaration):
+    source = f"""
+module top #({declaration})(input source, output result);
+    generate if (ENABLE) begin: selected
+        assign result = source;
+    end endgenerate
+endmodule
+"""
+    result, findings = _native_hierarchy(tmp_path, [source])
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert any(f["rule"] == "hierarchy-port-resolution" and
+               f["severity"] == "ERROR" and f["block_eligible"] for f in findings)
