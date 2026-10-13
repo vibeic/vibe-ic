@@ -1210,6 +1210,12 @@ def _retained_dispatch(project: Path, dec: Decision, flow_def: Any,
                     import _flow_yaml
                     import execution_backend_gates as gates
                     canonical = {str(row['id']): row for row in _flow_yaml.load()['steps']}
+                    # Bind every row to this invocation's observed outputs
+                    # before any consumer can select a historical write record.
+                    # Execution/content authority still belongs to that row's
+                    # unchanged canonical consumer, not the observation itself.
+                    for attempt in attempts:
+                        versions.publish_producer_outputs(project, attempt)
                     for attempt in attempts:
                         row = canonical[attempt['id']]
                         consumer = gates.evaluate(project, row)
