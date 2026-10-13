@@ -46,6 +46,178 @@ def write(project, relative, content):
     return path
 
 
+def publication_contract(monkeypatch, step_ids=('5',)):
+    """Keep the shipped output contracts; isolate a native predicate consumer.
+
+    These are history/consumer integration controls, not tool proof receipts.
+    The actual formal semantic gate is exercised separately below.
+    """
+    import _flow_yaml
+    from _hostpaths import require_repo
+    flow = require_repo('vibe-ic-marketplace', 'plugins', 'vibe-ic', 'flow',
+                        'phase1_phase2_phase3.yaml')
+    document = _flow_yaml.load(flow)
+    for row in document['steps']:
+        sid = str(row['id'])
+        if sid in step_ids:
+            row['gate'] = {'json_field_true': {
+                'file': f'reports/neutral_consumer_{sid}.json', 'field': 'accepted'}}
+    monkeypatch.setattr(_flow_yaml, 'load', lambda *args, **kwargs: document)
+
+
+def publication_files(project, name='earlier'):
+    rtl = write(project, 'phase2/stage1/rtl/top.v',
+                b'module top(input a, output b); assign b=a; endmodule\n')
+    proof = write(project, f'phase2/stage1/formal/{name}.sby',
+                  b'[options]\nmode prove\n# neutral path-attribution fixture\n')
+    write(project, 'phase2/stage1/formal/results.json', b'{"verdict":"PASS"}')
+    write(project, 'phase2/stage1/sim_full_stack/results.json', b'{"verdict":"PASS"}')
+    write(project, 'reports/neutral_consumer_5.json', b'{"accepted":true}')
+    return rtl, proof
+
+
+def published_previous(project, step_id='5'):
+    attempt = versions.begin_step(project, step_id)
+    versions.publish_producer_outputs(project, attempt)
+    versions.finish_step(project, attempt, verdict='NOT_MEASURED')
+    folder, _ = saved(project, step_id)
+    return folder, (folder / 'written.json').read_bytes()
+
+
+def test_current_output_publication_accepts_changed_name_through_retained_call(
+        tmp_path, monkeypatch):
+    publication_contract(monkeypatch)
+    rtl, old = publication_files(tmp_path)
+    earlier, frozen = published_previous(tmp_path)
+
+    def producer(project):
+        old.rename(old.with_suffix('.retired'))
+        write(project, 'phase2/stage1/formal/current.sby', old.with_suffix('.retired').read_bytes())
+        return 0
+
+    assert preflight.retained_call(tmp_path, '5', producer, tmp_path,
+                                   canonical_acceptance=True) == 0
+    folder, record = saved(tmp_path, '5')
+    assert record['status'] == 'PASS', record['result']['canonical_consumer']
+    binding = record['result']['canonical_consumer']['step']['output_binding']
+    assert binding['n_satisfied'] == 3 and binding['codes'] == ['step_attributed']
+    assert binding['source'] == 'step_folder'
+    observed = json.loads((folder / 'written.json').read_text())
+    assert any(item['rel'].endswith('/current.sby') for item in observed['produced'])
+    assert (earlier / 'written.json').read_bytes() == frozen
+    assert versions.latest_pass(tmp_path, '5')['folder'] == record['folder']
+    rtl.write_bytes(rtl.read_bytes() + b'// source changed after acceptance\n')
+    assert versions.latest_pass(tmp_path, '5')['current_inputs'] is False
+
+
+@pytest.mark.parametrize('defect', ['absent', 'empty', 'semantic_refusal'])
+def test_current_output_publication_keeps_output_and_consumer_refusals(
+        tmp_path, monkeypatch, defect):
+    publication_contract(monkeypatch)
+    _, old = publication_files(tmp_path)
+    published_previous(tmp_path)
+
+    def producer(project):
+        old.rename(old.with_suffix('.retired'))
+        if defect != 'absent':
+            write(project, 'phase2/stage1/formal/current.sby',
+                  b'' if defect == 'empty' else old.with_suffix('.retired').read_bytes())
+        if defect == 'semantic_refusal':
+            write(project, 'reports/neutral_consumer_5.json', b'{"accepted":false}')
+        return 0
+
+    preflight.retained_call(tmp_path, '5', producer, tmp_path, canonical_acceptance=True)
+    _, record = saved(tmp_path, '5')
+    assert record['status'] != 'PASS' and not record['canonical_pass']
+    assert versions.latest_pass(tmp_path, '5') is None
+    consumer = record['result']['canonical_consumer']
+    assert consumer is not None
+    if defect == 'semantic_refusal':
+        assert consumer['step']['output_binding']['n_satisfied'] == 3
+        assert any('False' in reason for reason in consumer['step']['reasons'])
+    else:
+        assert consumer['step']['output_binding']['n_satisfied'] == 2
+
+
+@pytest.mark.parametrize('rc', [1, 2])
+def test_current_output_publication_does_not_publish_failed_producer(
+        tmp_path, monkeypatch, rc):
+    publication_contract(monkeypatch)
+    publication_files(tmp_path)
+    def forbidden(*args, **kwargs):
+        raise AssertionError('failed producer must not publish or run a consumer')
+    monkeypatch.setattr(versions, 'publish_producer_outputs', forbidden)
+    monkeypatch.setattr(gates, 'evaluate', forbidden)
+    assert preflight.retained_call(tmp_path, '5', lambda: rc,
+                                   canonical_acceptance=True) == rc
+    folder, record = saved(tmp_path, '5')
+    assert record['status'] == ('FAIL' if rc == 1 else 'NOT_MEASURED')
+    assert not record['canonical_pass'] and not (folder / 'written.json').exists()
+    assert versions.latest_pass(tmp_path, '5') is None
+
+
+def test_current_output_publication_keeps_actual_formal_semantic_gate(
+        tmp_path):
+    # Foreign/stale-shaped claims are not repaired by observing their presence.
+    publication_files(tmp_path)
+    preflight.retained_call(tmp_path, '5', lambda: 0, canonical_acceptance=True)
+    _, record = saved(tmp_path, '5')
+    consumer = record['result']['canonical_consumer']
+    assert record['status'] != 'PASS' and not record['canonical_pass']
+    assert consumer['step']['output_binding']['n_satisfied'] == 3
+    formal = [item for item in consumer['ledger']
+              if item['gate'] == 'formal_proof_evidence_check']
+    assert formal and formal[-1]['rc'] == 1 and formal[-1]['verdict'] == 'FAIL'
+    assert versions.latest_pass(tmp_path, '5') is None
+
+
+def test_current_output_publication_precedes_every_shared_consumer(
+        tmp_path, monkeypatch):
+    ids = ('5', '6', '39')
+    publication_contract(monkeypatch, ids)
+    publication_files(tmp_path)
+    for sid in ids:
+        write(tmp_path, f'reports/neutral_consumer_{sid}.json', b'{"accepted":true}')
+    write(tmp_path, 'phase2/stage1/fpga/output_files/top.sof', b'neutral transport fixture')
+    write(tmp_path, 'phase2/stage1/fpga/output_files/top.map.rpt', b'neutral report fixture')
+    write(tmp_path, 'reports/phase2/fpga/quartus_map_audit.json', b'{"verdict":"PASS"}')
+    write(tmp_path, 'phase2/stage1/fpga/final/top.sof', b'neutral transport fixture')
+    write(tmp_path, 'reports/phase2/fpga/on_board_pass.json', b'{"verdict":"PASS"}')
+    native_consume, seen = gates.evaluate, []
+    def consume(project, row):
+        index = versions._read_index(project)['steps']
+        current = {r['id']: r for r in index if r['id'] in ids}
+        assert set(current) == set(ids)
+        assert all((project / 'steps' / r['folder'] / 'written.json').is_file()
+                   for r in current.values()), 'all current rows must be published before the first consumer'
+        seen.append(str(row['id']))
+        return native_consume(project, row)
+    monkeypatch.setattr(gates, 'evaluate', consume)
+    @preflight.retained_steps(ids, canonical_acceptance=True)
+    def producer(project):
+        return SimpleNamespace(name='shared', status='PASS', detail='neutral producer', extras={})
+    producer(tmp_path)
+    assert seen == list(ids)
+    assert all(saved(tmp_path, sid)[1]['canonical_pass'] for sid in ids)
+
+
+def test_current_output_publication_failure_preserves_interruption(
+        tmp_path, monkeypatch):
+    publication_files(tmp_path)
+    def fail(*args, **kwargs):
+        raise OSError('current publication could not be retained')
+    def forbidden(*args, **kwargs):
+        raise AssertionError('consumer must not run after publication failed')
+    monkeypatch.setattr(versions, 'publish_producer_outputs', fail)
+    monkeypatch.setattr(gates, 'evaluate', forbidden)
+    with pytest.raises(OSError, match='publication could not be retained'):
+        preflight.retained_call(tmp_path, '5', lambda: 0, canonical_acceptance=True)
+    _, record = saved(tmp_path, '5')
+    assert record['status'] == 'INTERRUPTED' and not record['canonical_pass']
+    assert versions.latest_pass(tmp_path, '5') is None
+    assert not versions._ACTIVE_LOCAL_CALLS
+
+
 @pytest.mark.parametrize('name,sid', [('step_fpga_compile', '6'), ('step_fpga_burn', '39')])
 def test_actual_fpga_missing_input_is_saved_without_starting_hardware(tmp_path, name, sid):
     args = (tmp_path, 'top', 'unused') if sid == '6' else (tmp_path, 'top')
