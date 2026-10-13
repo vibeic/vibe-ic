@@ -52403,11 +52403,12 @@ def gen_l9_integration_spec(project: Path,
     result = _write_l_doc(
         project, "L9_INTEGRATION_SPEC", content, evidence,
         source_documents=_source_documents_from_extracted(project, extracted))
-    # The selected synthesis handoff reads this exact L9 as current authority.
-    # Publish the genuine authored document before invoking that consumer;
-    # its existing receipt/hash and current-interface refusals stay strict.
+    # Phase 1 runs before L19 and the selected synthesis producer. Bind only
+    # the current staged RTL interface here; the later implementation readers
+    # still validate their full synthesis handoff against this published L9.
     emitted = json.loads(result.path.read_text())
-    bound = _stgtop.refresh_selected_interface(project, result.path, emitted)
+    bound = _stgtop.refresh_selected_interface(
+        project, result.path, emitted, include_synthesis_handoff=False)
     return LDocResult(name=result.name, path=result.path,
                       todo_count=json.dumps(bound).count("__TODO__"),
                       evidence_count=result.evidence_count)
