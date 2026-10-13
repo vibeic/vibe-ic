@@ -136,7 +136,7 @@ def find_stub_paths(data, path: str = "") -> List[str]:
     """Return list of JSON paths that contain stub/placeholder text."""
     paths: List[str] = []
     if isinstance(data, str):
-        if STUB_PATTERNS.search(data):
+        if _asserts_stub(data, path):
             paths.append(f"{path}={data!r}")
     elif isinstance(data, list):
         for i, v in enumerate(data):
@@ -145,6 +145,32 @@ def find_stub_paths(data, path: str = "") -> List[str]:
         for k, v in data.items():
             paths.extend(find_stub_paths(v, f"{path}.{k}" if path else k))
     return paths
+
+
+def _asserts_stub(text: str, path: str) -> bool:
+    """Prohibiting a stub in evidence does not declare an existing stub.
+
+    Operative fields still reject every placeholder. Evidence is examined
+    token by token; a prohibition cannot hide an affirmative sibling claim.
+    """
+    if path.rsplit('.', 1)[-1] != 'evidence':
+        return bool(STUB_PATTERNS.search(text))
+    from _prose_polarity import sentence_scope
+    prose = text.replace('**', '')
+    for match in STUB_PATTERNS.finditer(prose):
+        lo, hi = sentence_scope(prose, match.start(), match.end(),
+                               extra_breaks=('; ', '\n', '。', '；'))
+        before, after = prose[lo:match.start()], prose[match.end():hi]
+        prohibited_before = re.search(
+            r'(?:\b(?:must|shall|should)\s+not\b|'
+            r'\b(?:never|no|without|avoid|forbid|prohibit)\b|禁止|不得|不准|避免)'
+            r'[^.;；\n]{0,50}$', before, re.I)
+        prohibited_after = re.match(
+            r'^\s*(?:modules?\s+)?(?:is\s+|are\s+|must\s+be\s+|shall\s+be\s+)?'
+            r'(?:prohibited|forbidden|not\s+allowed)\b', after, re.I)
+        if not (prohibited_before or prohibited_after):
+            return True
+    return False
 
 
 # ---------------------------------------------------------------------------

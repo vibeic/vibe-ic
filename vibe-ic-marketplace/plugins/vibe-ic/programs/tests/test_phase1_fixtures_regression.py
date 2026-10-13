@@ -138,6 +138,36 @@ def _field_doc(tmp_path: Path, layer: str, text: str) -> dict:
     return json.loads(result.path.read_text())
 
 
+def test_conditional_obligation_clauses_from_intake_reach_l9(tmp_path):
+    """The native intake fixture must exercise its actual L9 field owner."""
+    from programs.tests._hostpaths import require_repo
+    from programs import l9_l19_contract_carrythrough as carry
+    root = require_repo("vibe-ic-marketplace", "plugins", "vibe-ic", "programs",
+                        "tests", "fixtures", "phase1_local",
+                        "conditional_obligation_clauses")
+    text = (root / "L8_submodule_integration.md").read_text()
+    docs = tmp_path / "input/docs"
+    docs.mkdir(parents=True)
+    (docs / "L8_submodule.md").write_text("layer: L8\n" + text)
+    constraints = (root / "L9_constraints_floorplan.md").read_text()
+    (docs / "L9_constraints.md").write_text("layer: L9\n" + constraints)
+    generated = tmp_path / "phase1/generated_docs"
+    generated.mkdir(parents=True)
+    for name in ("L9_INTEGRATION_SPEC.json", "L19_CONSTRAINTS_PDK.json"):
+        (generated / name).write_text("{}\n")
+    carry.run(tmp_path)
+    l9 = json.loads((generated / "L9_INTEGRATION_SPEC.json").read_text())
+    actual = "\n".join(s["evidence"] for s in
+                       l9.get("integration", {}).get("architecture", []))
+    assert text.strip() in actual, actual
+    l19 = json.loads((generated / "L19_CONSTRAINTS_PDK.json").read_text())
+    io_delay = l19["constraints"]["io_delay"]
+    assert constraints.strip() in io_delay["evidence"], io_delay
+    assert io_delay["default_fraction_percent"] == 20
+    assert io_delay["override_allowed"] is True
+    assert io_delay["override_requires_declaration"] is True
+
+
 @pytest.mark.parametrize("project,layer,field,expected", [
     ("negated_chip_protocol", "L2", "protocol_overview", None),
     ("physical_signoff_rows", "L7", "debug_registers", []),

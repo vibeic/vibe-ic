@@ -39,9 +39,11 @@ Scope (deliberately narrow — top-level pin consistency is owned by the
 sibling Wave 79 gate `l9_rtl_pin_consistency_check.py`; this gate stays
 strictly below that line):
 
-    1. SUBMODULE_FILE_MISSING — every L9.submodules[].name must exist as
+    1. SUBMODULE_FILE_MISSING — required L9.submodules[].name must exist as
                                 a `module <name>` declaration in
                                 rtl/*.sv|.v.
+                                Typed optional entries may be absent;
+                                conditional entries resolve from L9.top_module.
     2. SUBMODULE_NOT_INSTANTIATED — every L9.submodules[].name must be
                                 instantiated by some other module in
                                 rtl/*.sv|.v (else it is dead code, often
@@ -50,6 +52,9 @@ strictly below that line):
     3. (schema_version 1 only) SUBMODULE_PORTS_DRIFT — when L9 carries
                                 per-submodule port declarations, they
                                 must match the actual module port list.
+    4. SUBMODULE_CONDITION_UNRESOLVED / SUBMODULE_REQUIREMENT_INVALID — an
+       unknown role or unresolved condition is a finding, never an omission
+       waiver. These findings are advisory at the existing flow boundary.
 
 Generality: works for ANY IC project with an L9_INTEGRATION_SPEC.json
 plus an rtl/ directory. Pure Python, no EDA-tool dependency. Class-
@@ -353,6 +358,9 @@ class Finding:
 SKIP_NOT_AN_OBJECT = "not_an_object"
 SKIP_NAMING_DELEGATED = "naming_delegated_low_confidence"
 SKIP_NO_NAME = "no_name"
+SKIP_OPTIONAL_ABSENT = "optional_module_absent"
+SKIP_OPTIONAL_NAMING_DELEGATED = "optional_naming_delegated"
+SKIP_CONDITION_FALSE = "requirement_condition_false"
 
 _SKIP_REASON_TEXT = {
     SKIP_NOT_AN_OBJECT:
@@ -363,10 +371,41 @@ _SKIP_REASON_TEXT = {
         "a literal RTL module-name assertion (v0.1.85)",
     SKIP_NO_NAME:
         "an object with no `name` field",
+    SKIP_OPTIONAL_ABSENT:
+        "explicitly optional implementation, absent from RTL",
+    SKIP_OPTIONAL_NAMING_DELEGATED:
+        "explicitly optional implementation with delegated naming; its "
+        "logical name cannot establish RTL presence or absence",
+    SKIP_CONDITION_FALSE:
+        "conditional implementation whose declared top-module condition is false",
 }
 
 
-def classify_submodules(l9: dict) -> Tuple[List[dict], Dict[str, object]]:
+def _requirement_state(l9: dict, submodule: dict) -> Tuple[str, str]:
+    """Return required / optional / inactive / unresolved / invalid.
+
+    Legacy entries remain required. An optional implementation permits absence
+    only; present implementations still owe their instantiation and ports.
+    Conditional obligations resolve from the owning L9 top-module contract.
+    Unknown conditions never become a silent waiver.
+    """
+    role = submodule.get("implementation_requirement", "required")
+    if role not in ("required", "optional", "conditional"):
+        return "invalid", f"unsupported implementation_requirement {role!r}"
+    if role != "conditional":
+        return role, ""
+    condition = submodule.get("requirement_condition")
+    if (not isinstance(condition, dict) or condition.get("field") != "top_module"
+            or not isinstance(condition.get("equals"), str)
+            or not condition["equals"]
+            or not isinstance(l9.get("top_module"), str)
+            or not l9["top_module"]):
+        return "unresolved", "conditional implementation has no resolvable top_module condition"
+    return ("required" if l9["top_module"] == condition["equals"] else "inactive"), ""
+
+
+def classify_submodules(l9: dict, rtl_ports: Optional[dict] = None
+                        ) -> Tuple[List[dict], Dict[str, object]]:
     """Split `L9.submodules` into what this gate can assert on and what it
     cannot, and count both.
 
@@ -374,11 +413,12 @@ def classify_submodules(l9: dict) -> Tuple[List[dict], Dict[str, object]]:
     ``examined`` and ``skipped`` (reason -> count); it is the denominator
     every verdict below discloses.
 
-    The three skips are UNCHANGED in effect — a bare string has no
+    The legacy three skips are UNCHANGED in effect — a bare string has no
     identifier to look for in rtl/, a `low_confidence` entry is a functional
     contract whose RTL name the Plugin chooses, and an object with no name
     asserts nothing. What is new is that they are counted rather than
-    silently dropped.
+    silently dropped. Explicitly optional or inactive conditional entries
+    are counted separately when absent; present entries are still checked.
     """
     examinable: List[dict] = []
     skipped: Dict[str, int] = {}
@@ -392,8 +432,18 @@ def classify_submodules(l9: dict) -> Tuple[List[dict], Dict[str, object]]:
         if not isinstance(s, dict):
             _skip(SKIP_NOT_AN_OBJECT)
             continue
+        state, _reason = _requirement_state(l9, s)
+        if state == "inactive" and (
+                rtl_ports is None or s.get("name") not in rtl_ports):
+            _skip(SKIP_CONDITION_FALSE)
+            continue
         if s.get("low_confidence") is True:
-            _skip(SKIP_NAMING_DELEGATED)
+            _skip(SKIP_OPTIONAL_NAMING_DELEGATED if state == "optional"
+                  else SKIP_NAMING_DELEGATED)
+            continue
+        if (state == "optional" and rtl_ports is not None
+                and s.get("name") not in rtl_ports):
+            _skip(SKIP_OPTIONAL_ABSENT)
             continue
         if not s.get("name"):
             _skip(SKIP_NO_NAME)
@@ -420,7 +470,7 @@ def check_submodule_presence(l9: dict,
                              rtl_ports: Dict[str, List[Tuple[str, str]]]
                              ) -> List[Finding]:
     findings: List[Finding] = []
-    for s in classify_submodules(l9)[0]:
+    for s in classify_submodules(l9, rtl_ports)[0]:
         name = s.get("name")
         if name not in rtl_ports:
             findings.append(Finding(
@@ -452,7 +502,7 @@ def check_submodule_instantiation(l9: dict,
                                   rtl_ports: Dict[str, List[Tuple[str, str]]]
                                   ) -> List[Finding]:
     findings: List[Finding] = []
-    for s in classify_submodules(l9)[0]:
+    for s in classify_submodules(l9, rtl_ports)[0]:
         name = s.get("name")
         if name not in rtl_ports:
             # Already flagged by SUBMODULE_FILE_MISSING; skip dead-code
@@ -481,7 +531,7 @@ def check_submodule_ports_v1(l9: dict,
     """Schema v1 carries per-submodule .ports field. When present, cross-
     check it against the actual RTL module port list."""
     findings: List[Finding] = []
-    for s in classify_submodules(l9)[0]:
+    for s in classify_submodules(l9, rtl_ports)[0]:
         name = s.get("name")
         decl_ports = s.get("ports")
         if not isinstance(decl_ports, list) or not decl_ports:
@@ -542,9 +592,20 @@ def audit_report(project: Path) -> Tuple[str, List[Finding], Dict[str, object],
                 "L9 missing or carries no submodules to cross-check; gate "
                 "inapplicable")
 
-    examinable, census = classify_submodules(l9)
-
     rtl_ports = collect_module_ports(project)
+    examinable, census = classify_submodules(l9, rtl_ports)
+    role_findings: List[Finding] = []
+    for s in l9.get("submodules", []) or []:
+        if not isinstance(s, dict):
+            continue
+        state, reason = _requirement_state(l9, s)
+        if state in ("unresolved", "invalid"):
+            role_findings.append(Finding(
+                rule=("SUBMODULE_CONDITION_UNRESOLVED" if state == "unresolved"
+                      else "SUBMODULE_REQUIREMENT_INVALID"),
+                severity="ERROR", module=s.get("name", ""), message=reason))
+    if role_findings:
+        return "FAIL", role_findings, census, ""
     if not rtl_ports:
         # L9 lists submodules but rtl/ is empty / absent. This is an
         # incomplete project — flow_compliance_check catches absent

@@ -5,7 +5,9 @@ stub/placeholder text, register/reset/clock warnings, and empty directories.
 """
 import json
 import shutil
+import subprocess
 import sys
+from dataclasses import asdict
 from pathlib import Path
 
 import pytest
@@ -134,6 +136,41 @@ def test_stub_detected_fail(tmp_path):
     assert result.passed is False
     errors = [f for f in result.findings if f.severity == "ERROR"]
     assert any(f.rule == "STUB_DETECTED" for f in errors)
+
+
+@pytest.mark.parametrize("name,evidence,expected,unresolved", [
+    ("clean", "Top module instantiates useful submodules.", True, False),
+    ("prohibition", "Top module must instantiate useful submodules; stub modules are prohibited.", True, False),
+    ("actual_stub_evidence", "Submodule worker is a stub; implementation is pending.", False, False),
+    ("unresolved_port", "Top module instantiates useful submodules.", False, True),
+])
+def test_public_3071_actual_api_cli_agree(tmp_path, name, evidence, expected, unresolved):
+    project = tmp_path / name
+    docs = project / "phase1/generated_docs"
+    docs.mkdir(parents=True)
+    data = make_valid_l9(integration={"architecture": [{
+        "source": "input/docs/design.md", "evidence": evidence}]})
+    if unresolved:
+        data["submodules"][0]["ports"].append("TODO: add remaining ports")
+    (docs / "L9_INTEGRATION_SPEC.json").write_text(json.dumps(data))
+    result = asdict(isa.audit(str(project)))
+    cp = subprocess.run([sys.executable, str(SCRIPT), str(project), "--json"],
+                        capture_output=True, text=True)
+    assert json.loads(cp.stdout) == result
+    assert cp.returncode == (0 if result["passed"] else 1)
+    assert result["passed"] is expected, result
+
+
+@pytest.mark.parametrize("evidence,expected", [
+    ("Top module must not leave stub modules.", True),
+    ("Top module 禁止留 stub.", True),
+    ("Stub modules are prohibited; worker is a stub.", False),
+    ("No stubs are permitted. TODO: implement worker.", False),
+])
+def test_prohibition_cannot_hide_an_affirmative_stub(tmp_path, evidence, expected):
+    data = make_valid_l9(integration={"architecture": [{"evidence": evidence}]})
+    (tmp_path / "L9_integration.json").write_text(json.dumps(data))
+    assert isa.audit(str(tmp_path)).passed is expected
 
 
 # ---------------------------------------------------------------------------
