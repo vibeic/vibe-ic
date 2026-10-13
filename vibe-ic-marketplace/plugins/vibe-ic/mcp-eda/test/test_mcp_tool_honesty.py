@@ -186,10 +186,14 @@ YOSYS_ONE_CELL = """=== comb_top ===
 
    Chip area for module '\\comb_top': 17.561600
 """
-YOSYS_HIERARCHICAL = """   Chip area for module '\\hier_top': 0.000000
+YOSYS_HIERARCHICAL = """=== hier_top ===
+   Chip area for module '\\hier_top': 0.000000
+=== leaf ===
    Chip area for module '\\leaf': 17.561600
-   Chip area for top module '\\hier_top': 35.123200
+=== design hierarchy ===
+        2   35.123 hier_top
         2   35.123 cells
+   Chip area for top module '\\hier_top': 35.123200
 """
 
 
@@ -211,6 +215,18 @@ def _eval_match(expr_decls, fixture):
     )
     r = _pr.run([NODE, "-e", script], capture_output=True, text=True)
     assert r.returncode == 0, f"node failed: {r.stderr}\n{script}"
+    return json.loads(r.stdout)
+
+
+def _eval_synth_stats(fixture, top):
+    helper = INDEX_JS.parent / "lib" / "yosys_synth_stats.mjs"
+    script = (
+        "import {parseYosysSynthStats} from " + json.dumps(helper.as_uri()) + ";\n"
+        + "console.log(JSON.stringify(parseYosysSynthStats("
+        + json.dumps(fixture) + ", " + json.dumps(top) + ")));"
+    )
+    r = _pr.run([NODE, "--input-type=module", "-e", script], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
     return json.loads(r.stdout)
 
 
@@ -499,27 +515,24 @@ def test_synth_reports_a_legitimate_zero_cell_count_as_zero():
     """`assign zero = 1'b0` is CORRECTLY zero cells. Reporting null there is
     indistinguishable from 'could not parse', which is how a correct synthesis
     got scored as a failure."""
-    decl = _extract("const cellMatch = ")
-    got = _eval_match(decl, YOSYS_ZERO_CELLS)
+    got = _eval_synth_stats(YOSYS_ZERO_CELLS, "zero_top")
     assert got["cells"] == 0, f"legitimate 0-cell design must report 0, got {got['cells']}"
 
 
 @pytest.mark.skipif(not NODE, reason="node not available")
 def test_synth_still_reports_real_cell_counts():
     """The zero fix must not blunt the normal path."""
-    decl = _extract("const cellMatch = ")
-    assert _eval_match(decl, YOSYS_ONE_CELL)["cells"] == 1
-    assert _eval_match(decl, YOSYS_HIERARCHICAL)["cells"] == 2
+    assert _eval_synth_stats(YOSYS_ONE_CELL, "comb_top")["cells"] == 1
+    assert _eval_synth_stats(YOSYS_HIERARCHICAL, "hier_top")["cells"] == 2
 
 
 @pytest.mark.skipif(not NODE, reason="node not available")
 def test_synth_area_parses_flat_and_hierarchical_designs():
     """`Chip area for top module` appears only for a hierarchical design; a flat
     one prints `Chip area for module`, and used to read null."""
-    decl = _extract("const areaMatch = ")
-    assert _eval_match(decl, YOSYS_ONE_CELL)["area"] == 17.5616, "flat design area"
+    assert _eval_synth_stats(YOSYS_ONE_CELL, "comb_top")["area_um2"] == 17.5616, "flat design area"
     # hierarchical: the top-module total must win over the per-module lines
-    assert _eval_match(decl, YOSYS_HIERARCHICAL)["area"] == 35.1232, "top-module total"
+    assert _eval_synth_stats(YOSYS_HIERARCHICAL, "hier_top")["area_um2"] == 35.1232, "top-module total"
 
 
 def test_synth_manifest_written_for_a_measured_zero():
