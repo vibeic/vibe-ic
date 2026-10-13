@@ -1,5 +1,6 @@
 """The formal expert receipt must refer to an executable assertion."""
 
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -11,7 +12,11 @@ import formal_proof_evidence_check as evidence_check  # noqa: E402
 
 def test_read_slang_immediate_assert_can_close_exact_obligation(tmp_path):
     request = [{"id": "L6.fsm_state.IDLE", "status": "UNAUTHORED"}]
+    request_text = json.dumps({"fallback_skill": "formal-verify",
+                               "unresolved_obligations": request})
+    (tmp_path / harness_gen.AUTHORING_REQUEST).write_text(request_text)
     receipt = {
+        "request_sha256": hashlib.sha256(request_text.encode()).hexdigest(),
         "invocation_status": "INVOKED",
         "dispositions": [{"id": request[0]["id"], "status": "AUTHORED",
                           "property": "p_idle_transition"}],

@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import argparse
 import errno
+import hashlib
 import json
 import os
 import re
@@ -700,13 +701,36 @@ def declaration_obligations(project: Optional[Path]) -> dict:
     }
 
 
+def _authoring_request_snapshot(formal_dir: Path) -> Optional[dict]:
+    """The exact active request, or its preserved bytes after floor completion."""
+    active = formal_dir / AUTHORING_REQUEST
+    try:
+        if active.is_file():
+            text = active.read_text()
+            snapshot = {"text": text, "sha256": hashlib.sha256(text.encode()).hexdigest()}
+        else:
+            contract = json.loads((formal_dir / PROPERTY_CONTRACT).read_text())
+            snapshot = contract.get("authoring_request")
+        if not isinstance(snapshot, dict) or not isinstance(snapshot.get("text"), str):
+            return None
+        if hashlib.sha256(snapshot["text"].encode()).hexdigest() != snapshot.get("sha256"):
+            return None
+        request = json.loads(snapshot["text"])
+        if (not isinstance(request, dict) or request.get("fallback_skill") != "formal-verify"
+                or not isinstance(request.get("unresolved_obligations"), list)
+                or not request["unresolved_obligations"]):
+            return None
+        return snapshot
+    except (OSError, ValueError, AttributeError):
+        return None
+
+
 def _write_property_contract(project: Optional[Path], contract: dict) -> None:
     if project is None or _pl is None:
         return
     formal_dir = _pl.formal_dir(project)
     formal_dir.mkdir(parents=True, exist_ok=True)
-    (formal_dir / PROPERTY_CONTRACT).write_text(
-        json.dumps(contract, indent=2, ensure_ascii=False) + "\n")
+    prior_request = _authoring_request_snapshot(formal_dir)
     unresolved = contract.get("unresolved_obligations") or []
     if unresolved:
         request = {
@@ -732,9 +756,30 @@ def _write_property_contract(project: Optional[Path], contract: dict) -> None:
                 "invoke formal-verify on these exact IDs and record each authored "
                 "property in property_contract.json before rerunning Step 5"),
         }
-        (formal_dir / AUTHORING_REQUEST).write_text(
-            json.dumps(request, indent=2, ensure_ascii=False) + "\n")
-    else:
+        text = json.dumps(request, indent=2, ensure_ascii=False) + "\n"
+        if prior_request is not None:
+            original = json.loads(prior_request["text"])
+            original_rows = {str(r.get("id")): r for r in
+                             original["unresolved_obligations"] if isinstance(r, dict)}
+            if (original.get("property_denominator") == request["property_denominator"]
+                    and all(original.get(k) == request.get(k) for k in
+                            ("missing_declarations", "declaration_root", "declaration_root_present",
+                             "declaration_root_error", "unreadable_declarations"))
+                    and all(str(r.get("id")) in original_rows and all(
+                        original_rows[str(r.get("id"))].get(k) == r.get(k)
+                        for k in ("id", "layer", "source", "description")) for r in unresolved)):
+                # Partial authorship changes the open contract, not the exact
+                # request the provider already answered. Keep that identity.
+                text = prior_request["text"]
+        (formal_dir / AUTHORING_REQUEST).write_text(text)
+        prior_request = {"text": text, "sha256": hashlib.sha256(text.encode()).hexdigest()}
+    if prior_request is not None:
+        # The active queue may be cleared; its requested role, IDs, denominator
+        # and identity remain independently checkable in the existing contract.
+        contract["authoring_request"] = prior_request
+    (formal_dir / PROPERTY_CONTRACT).write_text(
+        json.dumps(contract, indent=2, ensure_ascii=False) + "\n")
+    if not unresolved:
         stale = formal_dir / AUTHORING_REQUEST
         if stale.is_file():
             stale.unlink()
@@ -1366,6 +1411,12 @@ def _expert_closed_obligations(formal_dir: Path, unresolved: List[dict],
         return []
     if str(receipt.get("invocation_status", "")).upper() != "INVOKED":
         return []
+    request = _authoring_request_snapshot(formal_dir)
+    if (request is None or receipt.get("request_sha256") != request["sha256"]
+            or receipt.get("fallback_skill", "formal-verify") != "formal-verify"):
+        return []
+    requested = {str(r.get("id")): r for r in
+                 json.loads(request["text"])["unresolved_obligations"] if isinstance(r, dict)}
     dispositions = {
         str(row.get("id")): row
         for row in (receipt.get("dispositions") or [])
@@ -1380,9 +1431,14 @@ def _expert_closed_obligations(formal_dir: Path, unresolved: List[dict],
             text += "\n" + frag.read_text(errors="replace")
         except OSError:
             pass
+    text = strip_comments(text)
     closed: List[dict] = []
     for row in unresolved:
         oid = str(row.get("id", "")).strip()
+        original = requested.get(oid)
+        if original is None or any(original.get(k) != row.get(k)
+                                   for k in ("id", "layer", "source", "description")):
+            continue
         d = dispositions.get(oid)
         if not d or str(d.get("status", "")).upper() != "AUTHORED":
             continue

@@ -227,12 +227,13 @@ def test_expert_request_without_invocation_receipt_stays_incomplete(tmp_path):
 
 
 def test_invoked_expert_receipt_closes_exact_request_id(tmp_path):
+    import hashlib
     import json
     formal = tmp_path / "phase2" / "stage1" / "formal"
     formal.mkdir(parents=True)
     harness = formal / "formal_dut.sv"
     harness.write_text(
-        "module formal_dut(input clk); always @(posedge clk) assert (1'b1); endmodule\n")
+        "module formal_dut(input clk); always @(posedge clk) p_idle_transition: assert (1'b1); endmodule\n")
     requested = {"id": "L6.fsm_state.IDLE", "layer": "L6",
                  "description": "declared IDLE transition", "status": "UNAUTHORED"}
     (formal / "property_contract.json").write_text(json.dumps({
@@ -242,10 +243,12 @@ def test_invoked_expert_receipt_closes_exact_request_id(tmp_path):
     }))
     (formal / "formal_authoring_request.json").write_text(json.dumps({
         "property_denominator": 1,
+        "fallback_skill": "formal-verify",
         "unresolved_obligations": [requested],
     }))
     (formal / "formal_expert_review.json").write_text(json.dumps({
         "invocation_status": "INVOKED", "fallback_skill": "formal-verify",
+        "request_sha256": hashlib.sha256((formal / "formal_authoring_request.json").read_bytes()).hexdigest(),
         "dispositions": [{"id": "L6.fsm_state.IDLE", "status": "AUTHORED",
                            "property": "p_idle_transition"}],
     }))
