@@ -474,3 +474,64 @@ def test_default_step30_missing_current_input_stops_before_producer(tmp_path, mo
     assert row.status == 'NOT_MEASURED', row.detail
     assert 'missing current inputs' in row.detail
     assert missing in row.detail or ('*.spef' in row.detail and missing.endswith('.spef'))
+
+
+@pytest.mark.parametrize('mode', ['default', 'direct', 'librelane', 'dual',
+                                 'foreign-default', 'invalid'])
+def test_step23_native_output_follows_the_current_producer(tmp_path, monkeypatch, mode):
+    import execution_policy as policy
+    import execution_backend_gates as gates
+    import execution_modes as modes
+    import flow_compliance_check as compliance
+    import yaml
+    flow = require_repo('vibe-ic-marketplace', 'plugins', 'vibe-ic', 'flow',
+                        'phase1_phase2_phase3.yaml')
+    row = next(row for row in yaml.safe_load(flow.read_text())['steps'] if row['id'] == 23)
+    record = 'reports/phase3/sta_postpnr_signoff.json'
+    assert record in row['required_outputs']
+    monkeypatch.setattr(policy, '_ordinary_runtime', None)
+    monkeypatch.delenv(policy.ENV, raising=False)
+    monkeypatch.delenv(policy._CAPABILITY_FD_ENV, raising=False)
+    # Even an explicit direct switch cannot change Default's actual backend.
+    selected = 'direct' if mode in ('default', 'foreign-default') else mode
+    put(tmp_path / 'phase3/librelane_switch.json', {'steps': {'23': selected}})
+    if mode == 'default':
+        policy.bootstrap(tmp_path)
+    elif mode == 'foreign-default':
+        foreign = tmp_path / 'other'
+        foreign.mkdir()
+        policy.bootstrap(foreign)
+    owed = mode in ('default', 'librelane', 'dual', 'invalid')
+    reason = compliance._output_not_owed(tmp_path, row, record)
+    assert (reason is None) is owed
+    # Exercise both existing output consumers with the same canonical
+    # declaration, leaving the unrelated Step23 timing gates out of this case.
+    observed = dict(row, required_outputs=[record], programs=[], gate={})
+    audited = compliance.check_step(tmp_path, observed, {})
+    assert audited.output_binding['not_owed'] == ([] if owed else [record])
+    if owed:
+        assert audited.status == 'FAIL'
+        assert f"no required_outputs found (expected: ['{record}'])" in audited.reasons
+        with pytest.raises(modes.Refusal, match='BACKEND_SUBSTANTIVE_CONTRACT_MISSING'):
+            gates.contracts(tmp_path, observed)
+        put(tmp_path / record, {'fixture': 'SOURCE_FIXTURE_ONLY'})
+        assert record in gates.contracts(tmp_path, observed)
+    else:
+        assert 'NOT_APPLICABLE' in reason and gates.contracts(tmp_path, observed) == {}
+
+
+def test_legacy_direct_sta_does_not_excuse_step30_current_input(tmp_path, monkeypatch):
+    import execution_backend_producers as backend
+    p, folder, lib = project(tmp_path)
+    switch = p / 'phase3/librelane_switch.json'
+    declaration = json.loads(switch.read_text())
+    declaration.setdefault('steps', {})['23'] = 'direct'
+    put(switch, declaration)
+    (p / 'reports/phase3/sta_postpnr_signoff.json').unlink()
+    def forbidden(*args, **kwargs):
+        raise AssertionError('no native launch without the Step30 STA input')
+    monkeypatch.setattr(backend, 'produce', forbidden)
+    row = R._default_pnr_rows(p, 'neutral', pdk(lib), 'SOURCE_FIXTURE_ONLY', ['30'])
+    assert row.status == 'NOT_MEASURED'
+    assert 'missing current inputs' in row.detail
+    assert 'sta_postpnr_signoff.json' in row.detail
