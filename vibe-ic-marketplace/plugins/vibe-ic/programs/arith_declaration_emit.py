@@ -199,15 +199,11 @@ def _derive_latency_from_oracle_manifest(run_dir: Path) -> int | None:
         # only ever a copy of declaration.json — the file this program
         # writes — so preferring it would close a dependency cycle and, for
         # any IC whose spec requires declaration.json, deadlock the flow.
-        if isinstance(d.get("calibrated_latency"), int):
-            return d["calibrated_latency"]
-        if isinstance(d.get("declared_latency"), int):
-            return d["declared_latency"]
-        # Framing string encodes the winning offset as "offset=N" sometimes
-        framing = d.get("framing", "")
-        m = re.search(r'offset[=\s]+(\d+)', str(framing))
-        if m:
-            return int(m.group(1))
+        from arith_oracle_tb_gen import settled_serial_latency
+        measured = settled_serial_latency(
+            d.get("calibrated_latency"), d.get("calibrated_latency_origin"))
+        if measured is not None:
+            return measured
     return None
 
 

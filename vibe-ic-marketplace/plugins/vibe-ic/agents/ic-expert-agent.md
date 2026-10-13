@@ -690,6 +690,17 @@ end-to-end output latency; an unobserved or optimized-away register is not a
 latency trade. If the input's latency freedom is unclear, report that Phase-1
 ambiguity before adding a stage.
 
+`latency_cycles_origin` names the sampling convention. The ordinary CR-5
+convention is `settled_edge_offset`; an explicitly retained legacy
+`pre_nba_sample_offset` is converted once to that settled offset. Do not try
+both integers as alternative passing windows. Native framing manifests name
+`calibrated_latency_origin`; an untagged integer is not a measured settled
+latency. For deterministic arithmetic scenarios, state `transaction_rearm`
+(`clocked_reset` or zero-latency `continuous`), `rearm_reset_cycles`, and
+`parallel_hold=through_final_product_bit` before generating the TB. An
+unsupported or ambiguous scope still needs the expert handoff.
+
+
 ### Skill: functional-TB golden authoring for a CPU-core reset-to-first-activity BOOT-LATENCY case
 A CPU-core (or any clocked-core) L10 case is sometimes NOT an instruction-execution oracle at all but a
 BOOT-LATENCY property: "N cycles after reset release, the design has performed its first bus access /

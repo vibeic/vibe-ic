@@ -119,9 +119,22 @@ When AI authors the chip-top wrapper, it MUST:
    endmodule
    ```
 
-4. AI MUST update `<project>/plugin_output/declaration.json` to list:
-   - `ai_authored_files`: every .v file AI created (not the pulled IPs)
-   - `pulled_ip_files`: every .v file the pull script copied (already populated by ip_catalog_pull.py)
+4. After the authored glue exists, record every authored RTL/header basename
+   through the existing source producer (repeat the option for each file):
+
+   ```bash
+   python3 plugins/vibe-ic/programs/ip_catalog_pull.py <project> \
+     --authored-glue top_wrapper.v --authored-glue local_defs.svh
+   ```
+
+   The producer hashes the actual files, independently verifies the official
+   IP pins and rejects undeclared staged files. It writes structured
+   `SOURCE_MANIFEST.json.ai_authored_files`, the declaration's existing
+   `ai_authored_files` name list, and provenance while preserving free choices.
+   Do not hand-fill hashes or producer-owned declaration fields. Register glue
+   before applying a `--local-derivative` record; its parent, exact patch and
+   unchanged native challenge evidence remain separate admission obligations.
+   `pulled_ip_files` remains populated by the ordinary pull producer.
 
 5. AI MUST run `iverilog -g2012 -t null <project>/phase2/stage1/rtl/*.v` as final sanity check before declaring success.
 

@@ -395,10 +395,12 @@ def bound_cases(goal: dict, rows: Sequence[dict],
             valid_tb, _identity_why = _l10x.scenario_tb_identity(name, record or {})
             generated = (valid_tb and isinstance(own, dict) and
                          own.get("tb_provenance") == _l10x.TB_GENERATED)
+            if generated:
+                state, _why = _l10x.scenario_case_state(name, record or {})
         except Exception:  # pragma: no cover
             state = None
             generated = False
-        if state in (PASS, FAIL) and not generated and name not in out:
+        if state in (PASS, FAIL) and name not in out:
             out.append(name)
             how.append("the goal's own scenario oracle")
     return out, "; ".join(sorted(set(how)))

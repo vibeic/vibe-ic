@@ -451,7 +451,10 @@ def measured_framing(project: Path) -> Dict[str, Tuple[Any, str]]:
         out: Dict[str, Tuple[Any, str]] = {}
         lat = d.get("calibrated_latency")
         if type(lat) is int and lat >= 0:
-            out["latency_cycles"] = (lat, "%s:calibrated_latency" % rel)
+            from arith_oracle_tb_gen import settled_serial_latency
+            settled = settled_serial_latency(lat, d.get("calibrated_latency_origin"))
+            if settled is not None:
+                out["latency_cycles"] = (settled, "%s:calibrated_latency" % rel)
         bo = d.get("calibrated_bit_order")
         obo = d.get("calibrated_out_bit_order", bo)
         if bo in ("LSB_first", "MSB_first") and obo == bo:
@@ -494,7 +497,12 @@ def measurement_disagreements(project: Path,
     """Every declared field the oracle measured to a DIFFERENT value."""
     out: List[Dict[str, Any]] = []
     for name, (value, source) in sorted(measured_framing(project).items()):
-        if name in declared and not same_framing(name, declared[name], value):
+        stated = declared.get(name)
+        if name == "latency_cycles" and name in declared:
+            from arith_oracle_tb_gen import settled_serial_latency, SERIAL_LATENCY_ORIGIN
+            stated = settled_serial_latency(
+                stated, declared.get("latency_cycles_origin", SERIAL_LATENCY_ORIGIN))
+        if name in declared and not same_framing(name, stated, value):
             out.append({"field": name, "declared": declared[name],
                         "measured": value, "measured_at": source})
     return out

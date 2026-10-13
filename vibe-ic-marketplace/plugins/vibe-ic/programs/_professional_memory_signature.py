@@ -69,6 +69,18 @@ def resolve_cases(rows: list, ports: list, clock: dict) -> list:
     return cases
 
 
+def seed_memory_signature(expected_bytes: dict) -> dict:
+    """Initial external storage for a resolved byte-signature contract.
+
+    An expert reference applies this before starting its clock. Each owed
+    byte starts different from its expected result, so a skipped zero store
+    cannot satisfy the reference's final memory comparison. Other storage is
+    owned by the reference; this does not change the commit observer.
+    """
+    return {int(address): (~value) & 0xff
+            for address, value in expected_bytes.items()}
+
+
 def receipt_name(cid: str) -> str:
     return f"memory_signature_{cid}.json"
 

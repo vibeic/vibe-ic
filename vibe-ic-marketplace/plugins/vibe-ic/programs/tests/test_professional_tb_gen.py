@@ -216,7 +216,7 @@ endmodule
 '''
     (rtl/'neutral_arithmetic.v').write_text(body)
     (root/'plugin_output').mkdir()
-    (root/'plugin_output/declaration.json').write_text(json.dumps({'bit_order':'LSB_first','latency_cycles':1,'integer_encoding':'unsigned','reset_polarity':'active_high'}))
+    (root/'plugin_output/declaration.json').write_text(json.dumps({'bit_order':'LSB_first','latency_cycles':1,'latency_cycles_origin':'pre_nba_sample_offset','integer_encoding':'unsigned','reset_polarity':'active_high'}))
     return cases[0]
 
 
@@ -367,3 +367,29 @@ def test_missing_serial_framing_stays_unmeasured(tmp_path,monkeypatch):
     row=G._coverage_goal_summary(tmp_path)['rows'][0]
     assert row['verdict']=='NOT_MEASURED' and row['achieved_pct'] is None
     assert D.step_step4_functional_evidence(tmp_path,'digital_arithmetic_primitive').status!='PASS'
+
+
+@pytest.mark.parametrize("origin,latency,expected", [
+    ("settled_edge_offset",0,"PASS"),
+    ("pre_nba_sample_offset",1,"PASS"),
+    ("settled_edge_offset",1,"FAIL"),
+])
+def test_professional_native_scoreboard_uses_one_explicit_latency_origin(
+        tmp_path,monkeypatch,origin,latency,expected):
+    _random_goal_project(tmp_path,64,'*',4,True)
+    declaration=tmp_path/'plugin_output/declaration.json'
+    selected=json.loads(declaration.read_text())
+    selected.update(latency_cycles=latency,latency_cycles_origin=origin)
+    declaration.write_text(json.dumps(selected))
+    old=os.environ.get('PYTHONPATH','')
+    monkeypatch.setenv('PYTHONPATH',str(PROG)+os.pathsep+old)
+    actual=D.step_professional_tb_gen(tmp_path,'neutral_arithmetic','')
+    assert actual.status==expected, actual.detail
+    output=tmp_path/'phase2/stage1/sim_professional/neutral_arithmetic'
+    plan=json.loads((output/'verification_plan.json').read_text())['random_goal_plan']
+    measured=json.loads((output/plan['measurement_file']).read_text())
+    assert measured['execution']['argv']==['make','-B','SIM=icarus']
+    assert measured['executed_random_pairs']==64
+    assert (measured['random_mismatches']==0)==(expected=='PASS'),measured
+    assert plan['framing'].get('latency_origin')==origin
+    assert plan['framing'].get('settled_latency')==(latency-1 if origin=='pre_nba_sample_offset' else latency)

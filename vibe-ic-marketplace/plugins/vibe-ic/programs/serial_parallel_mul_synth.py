@@ -406,6 +406,7 @@ def plugin_declaration(spec: Dict[str, Any]) -> Dict[str, Any]:
         "reset_polarity": "active_low" if spec["rst_active_low"] else "active_high",
         "latency_cycles": serial_path_latency(
             emit_rtl(spec), spec["serial_in"], spec["serial_out"]),
+        "latency_cycles_origin": "pre_nba_sample_offset",
         "integer_encoding": "unsigned",
     }
 
@@ -441,8 +442,25 @@ def main(argv: Optional[List[str]] = None) -> int:
                 return 2
             expected = dict(declaration, size_param=spec["size_default"])
             conflicts = [name for name, value in expected.items()
-                         if name in prior and (type(prior[name]) is not type(value)
+                         if name not in ("latency_cycles", "latency_cycles_origin")
+                         and name in prior and (type(prior[name]) is not type(value)
                                                or prior[name] != value)]
+            if "latency_cycles" in prior:
+                from arith_oracle_tb_gen import settled_serial_latency, SERIAL_LATENCY_ORIGIN
+                before = (settled_serial_latency(prior["latency_cycles"],
+                    prior.get("latency_cycles_origin", SERIAL_LATENCY_ORIGIN))
+                    if type(prior["latency_cycles"]) is int else None)
+                produced = settled_serial_latency(declaration["latency_cycles"],
+                    declaration["latency_cycles_origin"])
+                if before is None or before != produced:
+                    conflicts.append("latency_cycles")
+                # An equivalent stated window does not authorize rewriting
+                # the author's integer or explicitly selected origin.
+                declaration["latency_cycles"] = prior["latency_cycles"]
+                if "latency_cycles_origin" in prior:
+                    declaration["latency_cycles_origin"] = prior["latency_cycles_origin"]
+                else:
+                    declaration.pop("latency_cycles_origin", None)
             if conflicts:
                 print(json.dumps({"verdict": "DEFER", "reason":
                                   "existing declaration conflicts with serial RTL: "

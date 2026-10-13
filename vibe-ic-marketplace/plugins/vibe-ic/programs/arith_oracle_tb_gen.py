@@ -686,6 +686,25 @@ def _serial_prose_port(p: dict) -> bool:
     return bool(re.search(r"\bserial\b|bit[- ]?serial|\[\s*0\s*:\s*0\s*\]", wraw))
 
 
+SERIAL_LATENCY_ORIGIN = "settled_edge_offset"
+LEGACY_SERIAL_LATENCY_ORIGIN = "pre_nba_sample_offset"
+
+
+def settled_serial_latency(value: Any, origin: str) -> Optional[int]:
+    """Normalize one stated clock convention; never try both integer windows."""
+    if type(value) is bool:
+        return None
+    try:
+        offset = int(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+    if origin == LEGACY_SERIAL_LATENCY_ORIGIN:
+        offset -= 1
+    elif origin != SERIAL_LATENCY_ORIGIN:
+        return None
+    return offset if offset >= 0 else None
+
+
 def read_declared_conventions(project: Path,
                               ports: List[dict]) -> Optional[dict]:
     """Resolve the Plugin's DECLARED serial-interface conventions.
@@ -699,7 +718,9 @@ def read_declared_conventions(project: Path,
     Returns {bit_order:'LSB'|'MSB', latency:int, signed:bool,
     reset_active_low:bool} or None when bit_order/latency cannot be resolved
     (→ the caller DEFERS, fail-closed)."""
-    keys = ("bit_order", "latency_cycles", "integer_encoding", "reset_polarity")
+    keys = ("bit_order", "latency_cycles", "integer_encoding", "reset_polarity",
+            "latency_cycles_origin", "transaction_rearm", "rearm_reset_cycles",
+            "parallel_hold")
     conv: Dict[str, Any] = {}
     for cand in ("plugin_output/declaration.json", "declaration.json"):
         d = _read_json(project / cand)
@@ -737,14 +758,19 @@ def read_declared_conventions(project: Path,
         latency = int(str(conv.get("latency_cycles")).strip())
     except (TypeError, ValueError):
         return None
-    if latency < 0:
+    origin = conv.get("latency_cycles_origin", SERIAL_LATENCY_ORIGIN)
+    settled = settled_serial_latency(latency, origin)
+    if settled is None:
         return None
     enc = str(conv.get("integer_encoding", "")).strip().lower()
     signed = ("signed" in enc and "unsigned" not in enc)
     rp = str(conv.get("reset_polarity", "")).strip().lower()
     reset_active_low = ("active_low" in rp) or ("low" in rp and "high" not in rp)
     return {"bit_order": bit_order, "latency": latency, "signed": signed,
-            "reset_active_low": reset_active_low}
+            "latency_origin": origin, "settled_latency": settled,
+            "reset_active_low": reset_active_low,
+            **{k: conv[k] for k in ("transaction_rearm", "rearm_reset_cycles",
+                                    "parallel_hold") if k in conv}}
 
 
 def extract_serial_arith_spec(
@@ -1215,7 +1241,7 @@ def emit_serial_oracle_module(module_name: str, spec: dict,
     L.append("                                  : ((_bv[_vi] >> (N-1-_k)) & 1'b1);")
     L.append(f"        else {sin} = 1'b0;")
     L.append(f"        @(posedge {clk});")
-    L.append(f"        _word[_k] = {sout};")
+    L.append(f"        #1; _word[_k] = {sout};  // sample after this edge settles")
     L.append(f"        @(negedge {clk});")
     L.append("      end")
     L.append("      if (inorder == 0) _capL[_vi] = _word; else _capM[_vi] = _word;")
@@ -1265,7 +1291,7 @@ def emit_serial_oracle_module(module_name: str, spec: dict,
     # Encoding is numeric (0 = LSB_first, 1 = MSB_first) so the line carries
     # no locale/string-literal portability risk across simulators.
     L.append("    if (_best == NV) $display(\"ORACLE_TB_FRAMING in_order=%0d "
-             "out_order=%0d latency_cycles=%0d\", _bio, _boo, _boff);")
+             "out_order=%0d latency_cycles=%0d latency_origin=settled_edge_offset\", _bio, _boo, _boff);")
     L.append("    if (_best != NV) $display(\"ORACLE_MISMATCH: no single serial "
              "framing reassembles the DUT stream to the golden for all vectors "
              "(possible functional defect)\");")
@@ -1319,11 +1345,264 @@ def _emit_calibrated_framing_scoring(L: List[str], nv: int) -> None:
     L.append('    $display("ORACLE_TB_DONE pass=%0d/%0d", _m, NV);')
     L.append(f"    if (_best == {_CAL_VECTORS} && _m == NV) $display("
              "\"ORACLE_TB_FRAMING in_order=%0d out_order=%0d "
-             "latency_cycles=%0d\", _bio, _boo, _boff);")
+             "latency_cycles=%0d latency_origin=settled_edge_offset\", _bio, _boo, _boff);")
     L.append(f"    if (_best != {_CAL_VECTORS} || _m != NV) $display("
              "\"ORACLE_MISMATCH: no single serial framing reassembles the DUT "
              "stream to the golden for all vectors (possible functional "
              "defect)\");")
+
+
+ARITHMETIC_SCENARIO_HEADER = "// VIBEIC_ARITHMETIC_SCENARIO: "
+
+
+def arithmetic_scenario_plan(project: Path, ic_class: Optional[str], case: dict) -> Optional[dict]:
+    """Supported L10 scope plus declared framing/rearm, without alignment search."""
+    import hashlib
+    spec, _ = extract_serial_arith_spec(project, ic_class)
+    if spec is None or spec.get('other_inputs'):
+        return None
+    declared = _read_json(project / 'plugin_output/declaration.json') or {}
+    if declared.get('integer_encoding') not in ('unsigned', 'signed', 'signed_2c'):
+        return None
+    conv = read_declared_conventions(project, spec['ports'])
+    if (not conv or conv.get('transaction_rearm') not in ('clocked_reset', 'continuous')
+            or conv.get('parallel_hold') != 'through_final_product_bit'
+            or type(conv.get('rearm_reset_cycles')) is not int
+            or not 1 <= conv['rearm_reset_cycles'] <= 16 or not spec.get('rst')):
+        return None
+    width = spec['width']; latency = conv['settled_latency']
+    if not 4 <= width <= 64 or latency > 2 * width:
+        return None
+    # Continuous transactions can be generated without an unstated idle or
+    # parallel-operand overlap only at zero settled latency.
+    if conv['transaction_rearm'] == 'continuous' and latency != 0:
+        return None
+    l9 = _read_json(_pl.generated_docs_dir(project) / 'L9_INTEGRATION_SPEC.json') or {}
+    l9 = l9.get('fields') or l9
+    resets = l9.get('reset_domains') or l9.get('resets') or []
+    if not any(r.get('name') == spec['rst'] and str(r.get('sync', '')).lower()
+               in ('sync', 'synchronous') for r in resets if isinstance(r, dict)):
+        return None
+    text = ' '.join(str(case.get(k) or '') for k in
+                    ('stimulus', 'expected', 'coverage_scope', 'scope')).lower()
+    # These scopes are exercised differently; unknown scope keeps the original
+    # expert handoff. A generic arithmetic result is never renamed a scenario.
+    populations = []
+    if re.search(r'operand\s+(?:boundar|extreme)|operand\s+corners?', text):
+        corners = {0, 1, (1 << width) - 1}
+        if spec['signed']:
+            corners.update({(1 << (width - 1)) - 1, 1 << (width - 1)})
+        corners.update(named_corner_values(case, width))
+        populations.append(('operand_boundaries',
+                            [(a, b) for a in sorted(corners) for b in sorted(corners)]))
+    if re.search(r'consecutive\s+(?:(?:(?:>=|≥|at\s+least)\s*)?[0-9][0-9,_]*\s+)?transactions?|back.to.back', text):
+        count = declared_vector_population(case)
+        if count is None or count < 2 or count > MAX_CASE_VECTORS:
+            return None
+        populations.append(('consecutive_transactions',
+                            select_operand_pairs(spec, 'mixed', min_vectors=count)))
+    if (re.search(r'(?:reset|rst)', text) and re.search(r'held|hold', text)
+          and re.search(r'released|release', text)
+          and (reset_mid_computation_case(case)
+               or re.search(r'asserted\s+during\s+computation', text))):
+        populations.append(('reset_situations', select_operand_pairs(spec, 'corners')))
+    if not populations:
+        return None
+    if re.search(r'asynchronous|different\s+clock|power\s+(?:on|off)', text):
+        return None
+    files = [*_pl.generated_docs_dir(project).glob('L2*.json'),
+             _pl.generated_docs_dir(project) / 'L9_INTEGRATION_SPEC.json',
+             _pl.generated_docs_dir(project) / 'L10_TEST_CASES.json',
+             project / 'plugin_output/declaration.json',
+             *sorted(_pl.rtl_dir(project).rglob('*.v')),
+             *sorted(_pl.rtl_dir(project).rglob('*.sv'))]
+    if any(not p.is_file() for p in files):
+        return None
+    binding = {str(p.resolve()): hashlib.sha256(p.read_bytes()).hexdigest() for p in files}
+    pairs = []; phases = []
+    for kind, selected in populations:
+        multiplier = 9 if kind == 'reset_situations' else 1
+        phases.append({'scenario': kind, 'first_vector': len(pairs),
+                       'vectors': len(selected), 'transactions': len(selected) * multiplier,
+                       'comparisons': len(selected) * multiplier * width})
+        pairs.extend(selected)
+    kind = phases[0]['scenario'] if len(phases) == 1 else 'combined_scenarios'
+    plan = {'schema': 'vibeic.arithmetic_scenario.v1', 'case': case.get('name') or case.get('id'),
+            'scenario': kind, 'case_sha256': hashlib.sha256(json.dumps(
+                case, sort_keys=True, ensure_ascii=False).encode()).hexdigest(),
+            'binding': binding, 'spec': spec, 'pairs': pairs,
+            'framing': conv, 'latency_origin': SERIAL_LATENCY_ORIGIN,
+            'transactions': sum(p['transactions'] for p in phases),
+            'comparisons': sum(p['comparisons'] for p in phases)}
+    if len(phases) > 1:
+        plan['populations'] = phases
+    return plan
+
+
+def emit_arithmetic_scenario_module(module_name: str, plan: dict) -> str:
+    """One fixed declared window; independent golden for every scenario bit."""
+    spec = plan['spec']; framing = plan['framing']; n = spec['width']
+    par, sin, sout, clk, rst = (spec[k] for k in
+                               ('parallel', 'serial_in', 'serial_out', 'clk', 'rst'))
+    latency = framing['settled_latency']; pairs = plan['pairs']
+    on, off = (0, 1) if spec['reset_active_low'] else (1, 0)
+    rearm = int(framing['transaction_rearm'] == 'clocked_reset')
+    reset_cycles = framing['rearm_reset_cycles']
+    lsb = framing['bit_order'] == 'LSB'
+    lines = ['`timescale 1ns/1ps', ARITHMETIC_SCENARIO_HEADER + json.dumps(plan, sort_keys=True),
+             f'module {module_name};', f'localparam integer N={n}, NV={len(pairs)}, L={latency};']
+    for p in spec['ports']:
+        width = n if p['name'] == par else int(p.get('numeric_width') or 1)
+        lines.append(f"{'reg' if p['dir'] == 'input' else 'wire'} "
+                     f"{'['+str(width-1)+':0] ' if width > 1 else ''}{p['name']};")
+    lines += [f"{spec['top']} dut (" + ', '.join(f".{p['name']}({p['name']})" for p in spec['ports']) + ');',
+              f'initial {clk}=0; always #5 {clk}=~{clk};',
+              'reg [N-1:0] av[0:NV-1], bv[0:NV-1], gv[0:NV-1];',
+              'integer errors=0, comparisons=0, transactions=0, held_edges=0;',
+              'integer vi,k,h,a; reg held_value;',
+              'task clear_state(input integer holds); begin',
+              f" {rst}=1'b{on}; {sin}=0; {par}=0;",
+              ' for(h=0;h<holds;h=h+1) begin', f'  @(posedge {clk}); #1;',
+              f"  if ({sout} !== 1'b0 && {sout} !== 1'b1) errors=errors+1;",
+              f'  if(h>0 && {sout} !== held_value) errors=errors+1;',
+              f'  held_value={sout}; held_edges=held_edges+1; @(negedge {clk});',
+              ' end', f" {rst}=1'b{off};", 'end endtask',
+              'task compare_transaction(input integer v,input integer reset_first,input integer pulse); begin',
+              f' if(reset_first) clear_state({reset_cycles});', f' {par}=av[v];',
+              ' for(k=0;k<N+L;k=k+1) begin',
+              f"  {sin}=(k<N) ? bv[v][{'k' if lsb else 'N-1-k'}] : 0;",
+              f"  if(pulse>0 && k==pulse) begin {rst}=1'b{on}; #1; {rst}=1'b{off}; #1; end",
+              f'  @(posedge {clk}); #1;', '  if(k>=L) begin',
+              f"   if({sout} !== gv[v][{'k-L' if lsb else 'N-1-(k-L)'}]) begin",
+              '    errors=errors+1;', f'    $display("FAIL: {module_name} fixed-window bit=%0d",k-L);',
+              '   end', '   comparisons=comparisons+1;', '  end',
+              f'  @(negedge {clk});', ' end', ' transactions=transactions+1;', 'end endtask',
+              'task interrupted(input integer v,input integer position,input integer holds); begin',
+              f' {par}=~av[v];', ' for(a=0;a<position;a=a+1) begin',
+              f"  {sin}=~bv[v][{'a' if lsb else 'N-1-a'}];",
+              f'  @(posedge {clk}); #1; @(negedge {clk});', ' end',
+              ' clear_state(holds); compare_transaction(v,0,0);', 'end endtask',
+              'initial begin']
+    for p in spec['ports']:
+        if p['dir'] == 'input' and p['name'] != clk:
+            lines.append(f" {p['name']}=0;")
+    lines.append(f" {rst}=1'b{on};")
+    for i, (a, b) in enumerate(pairs):
+        lhs, rhs = (a, b) if spec.get('parallel_is_lhs', True) else (b, a)
+        golden = compute_golden(spec['operator'], lhs, rhs, n, spec['signed'])
+        lines.append(f" av[{i}]={n}'d{_twos(a,n)}; bv[{i}]={n}'d{_twos(b,n)}; gv[{i}]={n}'d{golden};")
+    phases = plan.get('populations') or [{'scenario': plan['scenario'],
+                                       'first_vector': 0, 'vectors': len(pairs)}]
+    if plan.get('populations'):
+        # Same case and comparator tasks, with actual per-family populations.
+        lines.insert(lines.index('initial begin'),
+                     'integer phase_transactions,phase_comparisons,phase_errors;')
+    lines.append(f' @(negedge {clk}); clear_state({reset_cycles});')
+    for phase in phases:
+        if plan.get('populations'):
+            lines += [' phase_transactions=transactions; phase_comparisons=comparisons;',
+                      f' phase_errors=errors; clear_state({reset_cycles});']
+        first = phase['first_vector']; last = first + phase['vectors']
+        lines.append(' for(vi=0;vi<NV;vi=vi+1) begin' if not plan.get('populations')
+                     else f' for(vi={first};vi<{last};vi=vi+1) begin')
+        if phase['scenario'] == 'reset_situations':
+            for position in (1, n // 2, n - 1):
+                for holds in (1, 3):
+                    lines += [f' clear_state({reset_cycles}); interrupted(vi,{position},{holds});']
+            for pulse in (1, n // 2, n - 1):
+                lines += [f' clear_state({reset_cycles}); compare_transaction(vi,0,{pulse});']
+        else:
+            lines.append(f' compare_transaction(vi,{rearm},0);')
+        lines.append(' end')
+        if plan.get('populations'):
+            lines += [f'$display("ARITH_SCENARIO_POPULATION family={phase["scenario"]} transactions=%0d comparisons=%0d errors=%0d",',
+                      ' transactions-phase_transactions,comparisons-phase_comparisons,errors-phase_errors);']
+    lines += ['$display("ARITH_SCENARIO_DONE transactions=%0d comparisons=%0d errors=%0d held_edges=%0d",',
+              ' transactions,comparisons,errors,held_edges);',
+              f' if(errors) $fatal(1,"FAIL: {module_name} scenario comparator");',
+              f' $display("[TB {module_name}] PASS: declared arithmetic scenario");', '$finish;', 'end endmodule']
+    return '\n'.join(lines) + '\n'
+
+
+def _scenario_header(tb: Path) -> Optional[dict]:
+    try:
+        line = next(l for l in tb.read_text().splitlines() if l.startswith(ARITHMETIC_SCENARIO_HEADER))
+        plan = json.loads(line[len(ARITHMETIC_SCENARIO_HEADER):])
+        return plan if isinstance(plan, dict) and plan.get('schema') == 'vibeic.arithmetic_scenario.v1' else None
+    except (OSError, ValueError, StopIteration):
+        return None
+
+
+def capture_arithmetic_scenario_execution(project: Path, tb: Path, transcript: Path,
+                                           sources: dict) -> Tuple[Optional[dict], str]:
+    """Capture actual comparisons; absence never creates scenario credit."""
+    import hashlib
+    plan = _scenario_header(tb)
+    if not plan:
+        return None, 'NOT_MEASURED: no supported arithmetic scenario plan'
+    try:
+        raw = transcript.read_bytes()
+    except OSError:
+        return None, 'NOT_MEASURED: no arithmetic scenario transcript'
+    matches = re.findall(rb'^ARITH_SCENARIO_DONE transactions=(\d+) comparisons=(\d+) errors=(\d+) held_edges=(\d+)\r?$', raw, re.MULTILINE)
+    if len(matches) != 1:
+        return None, 'NOT_MEASURED: scenario comparison population incomplete or ambiguous'
+    transactions, comparisons, errors, held = map(int, matches[0])
+    populations = None; populations_complete = True
+    if plan.get('populations'):
+        populations = [{'scenario': family.decode(), 'transactions': int(tx),
+                        'comparisons': int(cmp), 'errors': int(err)}
+                       for family, tx, cmp, err in re.findall(
+                           rb'^ARITH_SCENARIO_POPULATION family=(operand_boundaries|consecutive_transactions|reset_situations) transactions=(\d+) comparisons=(\d+) errors=(\d+)\r?$', raw, re.MULTILINE)]
+        expected = [{k: p[k] for k in ('scenario', 'transactions', 'comparisons')}
+                    for p in plan['populations']]
+        observed = [{k: p[k] for k in ('scenario', 'transactions', 'comparisons')}
+                    for p in populations]
+        populations_complete = observed == expected
+    measured = {'plan': plan, 'sources': sources, 'transcript': str(transcript),
+                'transcript_sha256': hashlib.sha256(raw).hexdigest(),
+                'transactions': transactions, 'comparisons': comparisons,
+                'errors': errors, 'held_edges': held,
+                'complete': transactions == plan['transactions'] and comparisons == plan['comparisons']
+                            and populations_complete}
+    if populations is not None:
+        measured['populations'] = populations
+    return measured, 'native declared scenario comparisons'
+
+
+def arithmetic_scenario_case_state(row: dict) -> Tuple[str, str]:
+    """Current generated scenario receipt, separate from generic TB provenance."""
+    import hashlib
+    measured = row.get('arithmetic_scenario')
+    if not isinstance(measured, dict):
+        return 'NOT_EXECUTED', 'generated generic oracle cannot measure a scenario'
+    # A native comparator failure remains a measured failure.
+    if type(measured.get('errors')) is int and measured['errors'] > 0:
+        return 'FAIL', 'native arithmetic scenario comparator failed'
+    plan = _scenario_header(Path(row.get('tb_file') or ''))
+    if not plan or measured.get('plan') != plan or measured.get('complete') is not True:
+        return 'NOT_EXECUTED', 'NOT_MEASURED: scenario plan/population incomplete'
+    for path, digest in {**plan['binding'], **measured.get('sources', {})}.items():
+        try:
+            if not digest or hashlib.sha256(Path(path).read_bytes()).hexdigest() != digest:
+                return 'NOT_EXECUTED', 'NOT_MEASURED: scenario input or DUT bytes changed'
+        except OSError:
+            return 'NOT_EXECUTED', 'NOT_MEASURED: scenario input or DUT missing'
+    compiled = measured.get('sources') or {}
+    rtl_paths = [p for p in plan['binding'] if Path(p).suffix in ('.v', '.sv')]
+    if not rtl_paths or any(compiled.get(p) != plan['binding'][p] for p in rtl_paths):
+        return 'NOT_EXECUTED', 'NOT_MEASURED: scenario DUT was not consumed by this compilation'
+    try:
+        raw = Path(measured['transcript']).read_bytes()
+        if hashlib.sha256(raw).hexdigest() != measured.get('transcript_sha256'):
+            return 'NOT_EXECUTED', 'NOT_MEASURED: scenario transcript changed'
+    except (OSError, KeyError):
+        return 'NOT_EXECUTED', 'NOT_MEASURED: scenario transcript missing'
+    observed, _ = capture_arithmetic_scenario_execution(
+        Path(row['tb_file']).parent, Path(row['tb_file']), Path(measured['transcript']), compiled)
+    if observed != measured:
+        return 'NOT_EXECUTED', 'NOT_MEASURED: scenario observed population differs from receipt'
+    return 'PASS', 'current native declared arithmetic scenario'
 
 
 def case_oracle_options(spec: dict, case: "dict | None") -> Dict[str, Any]:

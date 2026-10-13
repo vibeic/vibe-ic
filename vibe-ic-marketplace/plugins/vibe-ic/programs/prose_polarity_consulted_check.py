@@ -119,6 +119,19 @@ _SEARCH_ATTRS = {"search", "findall", "finditer", "match", "fullmatch"}
 #: The count is printed on every run, clean or not.
 _EXEMPT_REASON_MIN = 80
 _NOT_PROSE: Dict[str, str] = {
+    "arith_oracle_tb_gen::capture_arithmetic_scenario_execution":
+        "EXACT NATIVE NUMERIC RECORDS, NOT HUMAN SCENARIO PROSE. The reader "
+        "takes its emitted JSON plan header and complete line-anchored "
+        "ARITH_SCENARIO_DONE/POPULATION records printed by the same native "
+        "TB, with decimal counters and a finite family enum. Exactly one DONE "
+        "and the ordered required populations are necessary for completeness. "
+        "A denial, diagnostic prefix, suffix commentary or repeated DONE "
+        "cannot become comparison evidence. It never reads L10 descriptions; "
+        "this classification does not apply to their planner. Falsifier: "
+        "test_serial_parallel_declared_function_oracle.py::"
+        "test_native_scenario_transcript_requires_canonical_records drives "
+        "real Icarus output through the actual strict consumer, refusing "
+        "these record mutations while preserving the canonical native PASS.",
     "l9_l19_contract_carrythrough::submodule_requirement":
         "FINITE MODULE-DECLARATION QUALIFIERS, NO FREE-PROSE OPTIONALITY. "
         "Only an exact parenthesized optional enum permits absence; unknown, "

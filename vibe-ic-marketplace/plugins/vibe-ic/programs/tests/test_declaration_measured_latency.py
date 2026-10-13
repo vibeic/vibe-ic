@@ -66,7 +66,13 @@ V5C_MANIFEST = {
 }
 
 
-def _project(tmp_path: Path, *, declaration=None, manifest=V5C_MANIFEST,
+# Metadata-only guards below retain their original numeric obligations using
+# a neutral, explicitly tagged settled measurement. The historical originless
+# V5C payload above is retained verbatim; it is not relabeled native evidence.
+SETTLED_METADATA_CONTROL = dict(V5C_MANIFEST,
+                                calibrated_latency_origin="settled_edge_offset")
+
+def _project(tmp_path: Path, *, declaration=None, manifest=SETTLED_METADATA_CONTROL,
              contract: str = CONTRACT) -> Path:
     proj = tmp_path / "proj"
     (proj / "input" / "docs").mkdir(parents=True)
@@ -131,7 +137,7 @@ def test_a_rerun_keeps_the_measurement_and_follows_a_new_one(tmp_path):
     assert _emit(proj).returncode == 0
     assert _emit(proj).returncode == 0
     assert _decl(proj)["latency_cycles"] == 2
-    m = dict(V5C_MANIFEST, calibrated_latency=3)
+    m = dict(SETTLED_METADATA_CONTROL, calibrated_latency=3)
     (proj / MANIFEST).write_text(json.dumps(m))
     assert _emit(proj).returncode == 0
     assert _decl(proj)["latency_cycles"] == 3
@@ -215,7 +221,7 @@ def test_declared_copy_in_the_manifest_is_not_a_measurement(tmp_path):
 
 def test_split_in_out_order_does_not_judge_bit_order(tmp_path):
     """One `bit_order` field cannot state two measured orders."""
-    m = dict(V5C_MANIFEST, calibrated_out_bit_order="MSB_first")
+    m = dict(SETTLED_METADATA_CONTROL, calibrated_out_bit_order="MSB_first")
     proj = _project(tmp_path, manifest=m,
                     declaration={"bit_order": "MSB_first", "latency_cycles": 2})
     gcp, report = _gate(proj)

@@ -500,3 +500,65 @@ def test_native_current_rtl_value_survives_preserved_source_mtime(tmp_path, mode
     assert c["junit_icarus"]["failures"] == 1
     if mode == "dual":
         assert c["junit_verilator"]["failures"] == 1
+
+
+def _complement_signature_project(root, mode):
+    """The persistent expert consumes the support copied by the real producer.
+
+    The legacy zero fallback measures absent seed capability on old source;
+    it does not create an import/API error as the paired baseline verdict.
+    Original zero-seed fixtures and observer assertions stay unchanged.
+    """
+    project, out = _signature_project(root, mode)
+    expert = _SIGNATURE_EXPERT.replace(
+        "import cocotb\n", "import cocotb\nimport _professional_memory_signature as signature_support\n", 1)
+    expert = expert.replace(
+        "    memory = {address: 0 for address in range(64)}\n",
+        "    memory = {address: 0 for address in range(64)}\n"
+        "    seed = getattr(signature_support, 'seed_memory_signature', None)\n"
+        "    if seed is not None:\n"
+        "        memory.update(seed(CASE['expected_bytes']))\n"
+        "    addresses = sorted(map(int, CASE['expected_bytes']))\n"
+        "    dut._log.info('SIGNATURE_INITIAL_BYTES %s', [[a, memory[a]] for a in addresses])\n")
+    expert = expert.replace(
+        '    for address, expected in CASE.get("expected_bytes", {}).items():\n',
+        "    dut._log.info('SIGNATURE_FINAL_BYTES %s', [[a, memory[a]] for a in addresses])\n"
+        "    dut._log.info('ACTUAL_STORE_EVENTS %s', writes)\n"
+        '    for address, expected in CASE.get("expected_bytes", {}).items():\n')
+    (out / "expert_reference_tb.py").write_text(expert)
+    return project, out
+
+
+@pytest.mark.parametrize("mode", ["complete", "missing-zero-word"])
+def test_issue3012_copied_complement_seed_reaches_native_reference(tmp_path, mode):
+    project, out = _complement_signature_project(tmp_path, mode)
+    step, report, rc, result = _native_signature_run(project)
+    log = (out / "cocotb_run.log").read_text()
+    values = {}
+    for label in ("SIGNATURE_INITIAL_BYTES", "SIGNATURE_FINAL_BYTES", "ACTUAL_STORE_EVENTS"):
+        values[label] = ast.literal_eval(re.search(label + r" (\[[^\n]*\])", log).group(1))
+    expected = json.loads((project / "phase1/generated_docs/L10_TEST_CASES.json").read_text())[
+        "fields"]["test_cases"][0]["expected_bytes"]
+    seed = [[int(address), (~byte) & 0xff] for address, byte in expected.items()]
+    (project / "seed-values.json").write_text(json.dumps({
+        "mode": mode, "expected_bytes": expected, "expected_seed": seed,
+        "observed": values, "producer": report, "consumer": result,
+        "consumer_rc": rc}, indent=2) + "\n")
+    assert values["SIGNATURE_INITIAL_BYTES"] == seed, values
+    assert report["ran_cocotb"] is True
+    assert report["cocotb_test_denominator"]["tests"] == 1
+    wanted = [[int(address), byte] for address, byte in expected.items()]
+    if mode == "complete":
+        assert values["ACTUAL_STORE_EVENTS"] == wanted
+        assert values["SIGNATURE_FINAL_BYTES"] == wanted
+        assert (step.status, report["cocotb_rc"], rc, result["verdict"]) == ("PASS", 0, 0, "PASS")
+        assert result["memory_signature_verified"] is True
+    else:
+        assert values["ACTUAL_STORE_EVENTS"] == wanted[4:]
+        assert values["SIGNATURE_FINAL_BYTES"] == seed[:4] + wanted[4:]
+        assert (step.status, report["cocotb_rc"], rc, result["verdict"]) == ("FAIL", 2, 1, "FAIL")
+        assert report["cocotb_test_denominator"]["failures"] == 1
+        assert report["functional_mismatch"] is True
+        assert "('32', 255, 0)" in log, log
+    assert (out / "_professional_memory_signature.py").read_bytes() == (
+        PROGRAMS / "_professional_memory_signature.py").read_bytes()

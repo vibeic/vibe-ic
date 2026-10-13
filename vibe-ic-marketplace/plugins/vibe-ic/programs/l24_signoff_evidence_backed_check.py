@@ -477,9 +477,9 @@ def _phase3_has_run(project: Path) -> bool:
     executed, so the evidence the gate demanded could never appear — the gate
     made its own premise unsatisfiable.
 
-    A requirement is UNMET only if the run completed the phase that would have
-    measured it. Before that it is simply not yet measurable, and saying so is
-    not the same as saying it was missed.
+    A requirement is UNMET only after a current physical attempt is recorded.
+    Preparing its inputs is not such an attempt. An actual producer's failure
+    still counts: this predicate does not require successful completion.
     """
     records = []
     current = _pl.phase3_signoff_input_identity(project)
@@ -562,7 +562,30 @@ def _is_input_or_audit_record(path: Path) -> bool:
         payload = json.loads(path.read_text(errors="replace"))
     except (OSError, ValueError):
         return False
-    return isinstance(payload, dict) and (
+    if not isinstance(payload, dict):
+        return False
+    # These producers prepare the logical pad wrapper and its assignment for
+    # the physical consumer. Both can run during Phase2 full-stack preparation;
+    # neither has placed a ring or attempted physical implementation.
+    if payload.get("program") in ("io_pad_chip_top_gen", "pad_assignment_gen"):
+        return True
+    # The pad checker publishes its own failure even when its producer never
+    # ran. Keep that failure visible to the pad gate, but do not let its mere
+    # publication demand future signoff from the Phase2 audit. Restrict this to
+    # the native absent-report form: a retained producer (including FAIL), an
+    # unreadable tool result, or another finding remains physical evidence.
+    findings = payload.get("findings")
+    if (payload.get("gate") == "pad_ring_check"
+            and payload.get("schema") == "vibe-ic/padring/1"
+            and payload.get("verdict") == "FAIL"
+            and "producer" in payload and payload["producer"] is None
+            and "tool_state" not in payload
+            and isinstance(findings, list) and findings
+            and all(isinstance(row, dict)
+                    and row.get("rule") == "PADRING_REPORT_ABSENT"
+                    for row in findings)):
+        return True
+    return (
         payload.get("program") == "flow_compliance_check"
         or payload.get("invoked_as") == "audit"
         or payload.get("record_role") in ("configuration", "prelayout_audit")

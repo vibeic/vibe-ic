@@ -725,6 +725,27 @@ def stamp_generated(text: str, emitter: str) -> str:
     return f"// {ORACLE_GENERATED_MARKER}{emitter}\n" + text
 
 
+def _emit_case_arithmetic_scenario(project: Path, ic_class, case: dict,
+                                   out_dir: Path, report) -> "Path | None":
+    """An actual declared scenario; unsupported scope keeps the expert handoff."""
+    name = str(case.get("name") or case.get("id") or "")
+    if not _LEGAL_ID_RE.match(name):
+        return None
+    kept = authored_oracle_preserved(out_dir, name, report)
+    if kept is not None:
+        return kept
+    import arith_oracle_tb_gen as arith
+    plan = arith.arithmetic_scenario_plan(project, ic_class, case)
+    if plan is None:
+        return None
+    path = out_dir / f"{name}.v"
+    path.write_text(stamp_generated(arith.emit_arithmetic_scenario_module(name, plan),
+                                    "_emit_case_arithmetic_scenario"))
+    if report is not None:
+        report.setdefault("arithmetic_scenario_cases", []).append(name)
+    return path
+
+
 def _emit_case_golden_oracle(project: Path, ic_class: "str | None",
                              case: dict, out_dir: Path,
                              report: "dict | None",
@@ -1822,6 +1843,7 @@ ORACLE_FAMILY_BY_EMITTER = {
     "_emit_case_delivered_oracle": "delivered_oracle",
     "_emit_case_known_answer_vector": "known_answer_vector",
     "_emit_case_stated_vector_bus": "stated_vector_bus",
+    "_emit_case_arithmetic_scenario": "declared_arithmetic_scenario",
     "_emit_case_golden_oracle": "declared_function_golden",
     "_emit_case_boot_latency_oracle": "boot_latency",
     "_emit_case_reset_invariant_oracle": "reset_invariant",
@@ -1932,6 +1954,8 @@ def emit_unit_tbs(project: Path, top: str = "chip_top",
             # a value the design STATES outranks one this flow re-derives.
             wrote = _emit_case_stated_vector_bus(project, c, dut_module,
                                                  ports, out_dir, report)
+        if wrote is None:
+            wrote = _emit_case_arithmetic_scenario(project, ic_class, c, out_dir, report)
         if wrote is None:
             wrote = _emit_case_golden_oracle(project, ic_class, c, out_dir,
                                              report, case_stated=case_stated)
@@ -2268,6 +2292,8 @@ def run_unit_tbs(project: Path, container: "str | None" = None,
     import reset_invariant_oracle_tb_gen as _riv
     retention_cases = {str(c.get("name", c.get("id", ""))) for c in
                        (load_l10_cases(project) or []) if _riv.is_reset_hold_case(c)}
+    import arith_oracle_tb_gen as _arith
+    scenario_cases = {tb.stem for tb in tbs if _arith._scenario_header(tb) is not None}
     support = [p for p in sorted(tb_dir.glob("*.sv")) + sorted(tb_dir.glob("*.v"))
                if not is_unit_tb(p)]
     cases: List[Dict[str, Any]] = []
@@ -2282,6 +2308,7 @@ def run_unit_tbs(project: Path, container: "str | None" = None,
         message = ""
         log = ""
         retention = None
+        arithmetic_scenario = None
         source_identity = {}
         try:
             has_case_oracle = ORACLE_NONE_MARKER not in tb.read_text(
@@ -2294,7 +2321,7 @@ def run_unit_tbs(project: Path, container: "str | None" = None,
                      f"-I{rtl}", f"-I{tb_dir}"]
                     + [str(s) for s in sources + support + extra]
                     + [str(tb), "-o", f"sim_{tb.stem}"])
-            if tb.stem in retention_cases:
+            if tb.stem in retention_cases or tb.stem in scenario_cases:
                 source_identity = {str(s): _l10x.file_sha256(s) for s in sources + support + extra}
             brc, blog = disp(argv, wd, container, SIMULATOR, build_timeout)
             # The COMMAND belongs in the transcript: a build that silently
@@ -2344,13 +2371,21 @@ def run_unit_tbs(project: Path, container: "str | None" = None,
                                           not retention["measurement"]["complete"]):
                     state = "not_measured"
                     message = retention_detail
+            if tb.stem in scenario_cases:
+                arithmetic_scenario, scenario_detail = _arith.capture_arithmetic_scenario_execution(
+                    project, tb, wd / "run.log", source_identity)
+                if state == "passed" and (arithmetic_scenario is None or
+                                           not arithmetic_scenario["complete"]):
+                    state = "not_measured"
+                    message = scenario_detail
         cases.append({"name": tb.stem, "state": state, "message": message,
                       "log_tail": log, "time": time.time() - t0,
                       "work_dir": str(wd),
                       "tb_file": str(tb),
                       **tb_identity,
                       "has_case_oracle": has_case_oracle,
-                      **({"reset_retention": retention} if tb.stem in retention_cases else {})})
+                      **({"reset_retention": retention} if tb.stem in retention_cases else {}),
+                      **({"arithmetic_scenario": arithmetic_scenario} if arithmetic_scenario else {})})
     isa_rows = _isa_suite_rows(project, report, isa_producer)
     for row in isa_rows:
         # A case the ISA suite producer EXECUTED is judged by the suite, not by
@@ -2418,6 +2453,8 @@ def run_unit_tbs(project: Path, container: "str | None" = None,
             "tb_provenance": case["tb_provenance"],
             "detail": detail,
             **({"reset_retention": case["reset_retention"]} if "reset_retention" in case else {}),
+            **({"arithmetic_scenario": case["arithmetic_scenario"]}
+               if "arithmetic_scenario" in case else {}),
         })
     if isa_rows:
         import isa_suite_producer as _isa

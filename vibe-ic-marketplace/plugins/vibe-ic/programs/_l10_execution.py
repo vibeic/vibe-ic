@@ -250,6 +250,8 @@ def load_record(project: Path, l10_path: Optional[Path] = None) -> Dict[str, Any
             "tb_provenance": row.get("tb_provenance"),
             **({"reset_retention": row["reset_retention"]}
                if "reset_retention" in row else {}),
+            **({"arithmetic_scenario": row["arithmetic_scenario"]}
+               if "arithmetic_scenario" in row else {}),
             # Execution is an observed boolean, not something inferred back
             # from the verdict word.  Missing, string-valued, or false keeps
             # the row at NOT_EXECUTED in ``case_state``.
@@ -320,7 +322,9 @@ def scenario_case_state(case_id: str, record: Dict[str, Any]) -> Tuple[str, str]
     if not valid:
         return NOT_EXECUTED, why
     if record["rows"][case_id]["tb_provenance"] == TB_GENERATED:
-        return NOT_EXECUTED, "generated generic oracle cannot measure a scenario"
+        import arith_oracle_tb_gen
+        measured, detail = arith_oracle_tb_gen.arithmetic_scenario_case_state(record["rows"][case_id])
+        return (FAIL, why) if state == FAIL and measured == PASS else (measured, detail)
     return state, why
 
 

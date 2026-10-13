@@ -673,7 +673,7 @@ import os
 import random
 import cocotb
 from cocotb.clock import Clock
-from cocotb.triggers import RisingEdge, FallingEdge, Timer
+from cocotb.triggers import RisingEdge, FallingEdge, Timer, ReadOnly
 
 try:
     from cocotb_coverage.coverage import CoverPoint, CoverCross, coverage_db
@@ -750,17 +750,34 @@ def _bits_lsb(val):
 
 async def _run_vector(dut, xv, yv, order):
     """Drive one (x,y) vector; return the collected P stream (list of N+ bits)."""
-    getattr(dut, X).value = xv
     ybits = _bits_lsb(yv) if order == "lsb" else list(reversed(_bits_lsb(yv)))
     got = []
     for i in range(N + MAX_LATENCY):
+        await FallingEdge(getattr(dut, CLK))
+        if i == 0:
+            getattr(dut, X).value = xv
+        if i == 0 and RST is not None:
+            getattr(dut, RST).value = {0 if shape['cr']['active_high'] else 1}
         getattr(dut, Y).value = ybits[i] if i < N else 0
         await RisingEdge(getattr(dut, CLK))
+        await ReadOnly()  # CR-5: observe after this edge's NBA updates settle
         try:
             got.append(int(getattr(dut, P).value))
         except Exception:
             got.append(0)
     return got
+
+
+async def _serial_reset(dut):
+    # Keep reset asserted until _run_vector drives the first input at a falling
+    # edge; there is no uncounted active edge before input edge zero.
+    await FallingEdge(getattr(dut, CLK))
+    for name in DUT_INPUTS:
+        getattr(dut, name).value = 0
+    if RST is not None:
+        getattr(dut, RST).value = {1 if shape['cr']['active_high'] else 0}
+        for _ in range(3):
+            await RisingEdge(getattr(dut, CLK))
 
 
 def _stream_to_val(stream, latency, order, n):
@@ -781,7 +798,7 @@ async def professional_stream_test(dut):
     calib = [(3, 3), (5, 7), ({hi}, {hi})]
     solved = None
     for order in ("lsb", "msb"):
-        await _reset(dut)
+        await _serial_reset(dut)
         for (xv, yv) in calib:
             got = await _run_vector(dut, xv, yv, order)
             for lat in range(MAX_LATENCY + 1):
@@ -794,7 +811,7 @@ async def professional_stream_test(dut):
             break
     if {bool(plan)!r}:
         framing = RANDOM_GOAL_PLAN['framing']
-        solved = (framing['bit_order'].lower(), framing['latency'])
+        solved = (framing['bit_order'].lower(), framing['settled_latency'])
     assert solved, ("could not derive (latency, bit-order) for the serial "
                     "datapath — the DUT does not implement (x*y) mod 2^N in "
                     "any bounded LSB/MSB alignment")
@@ -819,7 +836,7 @@ async def professional_stream_test(dut):
     total = 0
     random_executed = 0
     random_failures = 0
-    await _reset(dut)
+    await _serial_reset(dut)
     for (xv, yv) in corners + rand:
         got = await _run_vector(dut, xv, yv, order)
         exp = _ref(xv, yv)
@@ -832,7 +849,7 @@ async def professional_stream_test(dut):
             fails += 1
             random_failures += int(is_random)
             dut._log.error(f"MISMATCH x={{xv}} y={{yv}} exp={{exp}} got={{act}}")
-        await _reset(dut)
+        await _serial_reset(dut)
     if _HAVE_COV:
         try:
             coverage_db.report_coverage(dut._log.info, bins=True)
@@ -954,7 +971,15 @@ async def professional_smoke_test(dut):
     category="memory_signature", byte-addressed expected_bytes, and interface
     clock/edge/write_enable/active_level/write_address/write_data roles. The
     case.id names its expert coroutine. The producer adds an actual commit
-    observer; zero initialization and completion do not prove a store."""
+    observer; zero initialization and completion do not prove a store.
+
+    In that persistent expert reference, initialize the external signature
+    area before starting the clock with the copied support:
+        from _professional_memory_signature import seed_memory_signature
+        memory.update(seed_memory_signature(case["expected_bytes"]))
+    Its integer-addressed bytes start at the bitwise complement of the
+    expected bytes. Keep the final memory comparison and the producer's
+    independent commit observer; a skipped zero store must fail both."""
     _start_clock(dut)
     await _reset(dut)
     for _ in range(20):

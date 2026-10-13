@@ -228,6 +228,7 @@ def test_emit_writes_the_l7_required_declaration(tmp_path):
         # serial path, as every oracle framing search measures; the pin said
         # 1, a false fact the ruling ordered corrected.
         "latency_cycles": 2,
+        "latency_cycles_origin": "pre_nba_sample_offset",
         "integer_encoding": "unsigned",
     }
 
@@ -369,6 +370,7 @@ The Plugin MUST declare `plugin_output/declaration.json` before authoring:
 | `bit_order` | Yes | `LSB_first`(primary) |
 | `integer_encoding` | Yes | `unsigned`(primary) |
 | `latency_cycles` | Yes | `2`(primary) |
+| `latency_cycles_origin` | No | `pre_nba_sample_offset`(primary) |
 | `reset_polarity` | Yes | `active_high`(primary) |
 | `size_param` | Yes | `32`(primary) |
 """

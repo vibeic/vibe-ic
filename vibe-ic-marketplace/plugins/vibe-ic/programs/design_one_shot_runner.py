@@ -10607,6 +10607,64 @@ def step_l10_unit_tb_gen(project: Path,
         [str(out_dir)])
 
 
+def _no_analog_acceptance_reason(project: Path) -> Optional[str]:
+    """A positive empty analog population; missing documents are unresolved.
+
+    Read the existing master-list/L5 declarations and reject conflicting L22
+    work. The acceptance producer's absent-plan no-op alone is not authority
+    to declare the analog track inapplicable.
+    """
+    facts = []
+    candidates = [(_pl.analog_dir(project) / 'analog_block_list.json', 'blocks'),
+                  (project / 'phase1/analog/analog_block_list.json', 'blocks'),
+                  (project / 'analog_blocks/analog_block_list.json', 'blocks'),
+                  (project / 'input/analog_block_list.json', 'blocks'),
+                  (_pl.generated_docs_dir(project) / 'L5_ADI_SPEC.json', None)]
+    try:
+        for path, key in candidates:
+            if not path.exists():
+                continue
+            doc = json.loads(path.read_text())
+            if key:
+                blocks = doc if isinstance(doc, list) else doc.get(key)
+                if not isinstance(blocks, list) or blocks:
+                    return None
+                if isinstance(doc, dict) and 'block_count' in doc and (
+                        type(doc['block_count']) is not int or doc['block_count'] != 0):
+                    return None
+            else:
+                if not isinstance(doc, dict):
+                    return None
+                data = doc.get('fields', doc)
+                if not isinstance(data, dict) or data.get('no_analog') is False:
+                    return None
+                populations = [data[k] for k in ('analog_blocks', 'blocks') if k in data]
+                if any(not isinstance(p, list) or p for p in populations):
+                    return None
+                if data.get('no_analog') is not True and not populations:
+                    return None
+            facts.append(str(path.relative_to(project)))
+        l22 = _pl.generated_docs_dir(project) / 'L22_VERIFICATION_PLAN.json'
+        if l22.exists():
+            doc = json.loads(l22.read_text())
+            data = doc.get('fields', doc)
+            if not isinstance(data, dict):
+                return None
+            plan = data.get('verification_plan')
+            if plan is not None and (not isinstance(plan, dict) or
+                    ('analog' in plan and (not isinstance(plan['analog'], list) or plan['analog']))):
+                return None
+        import analog_acceptance_tb_gen as acceptance
+        l10 = _pl.generated_docs_dir(project) / 'L10_TEST_CASES.json'
+        if l10.exists() and not isinstance(json.loads(l10.read_text()), dict):
+            return None
+        if acceptance.load_intent_rows(project):
+            return None
+    except (OSError, ValueError, TypeError, AttributeError, ImportError):
+        return None
+    return ('no analog block declared by ' + ', '.join(facts)) if facts else None
+
+
 def step_analog_acceptance_tb_gen(project: Path) -> StepResult:
     """ORGANIC #2064 — run the ANALOG-ACCEPTANCE producer beside the L10 unit-TB
     scaffolder, so an analog `verification_intent` row finally has a producer.
@@ -10625,6 +10683,10 @@ def step_analog_acceptance_tb_gen(project: Path) -> StepResult:
     producer writes nothing and this step SKIPs with the layer fact named.
     chip-AGNOSTIC: L22/L10 structure only, no chip/vendor/SKU literal."""
     t0 = time.time()
+    absent = _no_analog_acceptance_reason(project)
+    if absent:
+        return StepResult('analog_acceptance_tb_gen', 'NOT_APPLICABLE',
+                          time.time() - t0, absent, declared_by=absent)
     try:
         import sys as _sys
         if str(PROGRAMS_DIR) not in _sys.path:
@@ -10680,6 +10742,11 @@ def step_analog_acceptance_tb_run(project: Path) -> StepResult:
     already writes a sibling of — so Step 4's denominator becomes real with no
     change to the gate that judges it."""
     t0 = time.time()
+    absent = _no_analog_acceptance_reason(project)
+    if absent:
+        return StepResult('analog_acceptance_tb_run', 'NOT_APPLICABLE',
+                          time.time() - t0, absent, declared_by=absent,
+                          extras={'sim_executed': False})
     try:
         import sys as _sys
         if str(PROGRAMS_DIR) not in _sys.path:
@@ -12199,6 +12266,40 @@ def step_l10_unit_tb_run(project: Path, container: "str | None") -> StepResult:
                               "sim_executed": bool(rep["executed"])})
 
 
+def _phase2_needs_logical_pad_top(project: Path) -> bool:
+    import execution_policy
+    import phase3_one_shot_runner as phase3
+    return (execution_policy.request()['mode'] == 'default'
+            and phase3._chip_path_requests_pad_ring(project))
+
+
+def _phase2_logical_pad_top(project: Path, synth: StepResult,
+                           container: Optional[str], pdk_name: Optional[str]) -> List[StepResult]:
+    """Run the existing logical pad producer after synthesis, before Step 5.
+
+    This writes no floorplan or physical pad-ring evidence. The same producer
+    and full-stack consumer remain responsible for their own findings.
+    """
+    if synth.status != 'PASS' or not synth.output_files or not synth.extras.get('synth_top'):
+        return [StepResult('full_stack_functional_tb', 'NOT_MEASURED', 0.0,
+                           'logical pad top awaits the current synthesis output',
+                           reason_class=_V.ReasonClass.UPSTREAM_FAILED
+                           if synth.status == 'FAIL' else _V.ReasonClass.INPUT_ABSENT)]
+    import phase3_one_shot_runner as phase3
+    import librelane_contract as contract
+    try:
+        pdk = _phase2_pdk_config(project, pdk_name)
+    except (OSError, ValueError, contract.Refusal) as exc:
+        return [StepResult('io_pad_chip_top_gen', 'NOT_MEASURED', 0.0,
+                           f'logical pad top PDK unresolved: {exc}',
+                           reason_class=_V.ReasonClass.INPUT_ABSENT)]
+    pad = phase3.step_io_pad_chip_top_gen(project, container, pdk)
+    rows = [pad]
+    if pad.status == 'PASS':
+        rows.append(step_full_stack_functional_tb(project, container))
+    return rows
+
+
 @_spf.retained_step('5')
 def step_full_stack_functional_tb(project: Path,
                                   container: "str | None") -> StepResult:
@@ -12208,9 +12309,10 @@ def step_full_stack_functional_tb(project: Path,
     functional stimulus and is not functional evidence. This runs the design's
     own L10 cases, each with the oracle its input states, through the
     full-stack top (`full_stack_functional_tb`): the core off a pad-ring route,
-    the pad-ring chip top on one. On a DIE route in Phase 2 that chip top does
-    not exist yet, so the step is NOT_MEASURED with that reason and the phase-3
-    runner re-runs the producer the moment `io_pad_chip_top_gen` writes it.
+    the pad-ring chip top on one. Default writes that logical top after
+    synthesis, before this population is consumed in Phase 2. A top that
+    does not exist still records NOT_MEASURED; the Phase-3 physical producer
+    keeps its existing functional re-check when it writes the delivered top.
 
     The step's word is the record's word: PASS only when at least one case
     executed and every executed case matched; FAIL when one disagreed;
@@ -13972,6 +14074,11 @@ def _persist_oracle_calibrated_framing(project: Path, log_text: str) -> None:
     d["calibrated_bit_order"] = order.get(int(m.group(1)))
     d["calibrated_out_bit_order"] = order.get(int(m.group(2)))
     d["calibrated_latency"] = int(m.group(3))
+    # Old native markers sampled before NBA; new markers name their settled
+    # clock origin. Compatibility is explicit in the persisted instrument data.
+    origin = re.match(r"\s+latency_origin=(\w+)", (log_text or "")[m.end():])
+    d["calibrated_latency_origin"] = (
+        origin.group(1) if origin else "pre_nba_sample_offset")
     d["calibrated_source"] = (
         "measured by the oracle TB framing search (single framing matched "
         "every vector); NOT copied from declaration.json")
@@ -26387,6 +26494,7 @@ def main() -> int:
     # BEFORE step_reference_tb (so the skeleton lands under
     # sim_full_stack/ before any iverilog run is invoked, satisfying
     # bit_level_full_stack_tb_check).
+    _full_stack_after_synth = False
     # SITE `sim` (flow step 4) — the span's first dispatch. Step 4 declares it
     # reads the RTL plus D1's L10_TEST_CASES.json and L12_BEHAVIORAL_SEQUENCES
     # .json; before this gate a missing-RTL entry surfaced as
@@ -26429,9 +26537,12 @@ def main() -> int:
         # `bit_level_full_stack_tb_check` now refuses it as functional evidence
         # and reads THIS record instead. After the unit-TB pair on purpose: the
         # same oracle ladder answers each case here, retargeted to the
-        # full-stack top (on a DIE route that top is built in Phase 3, and the
-        # phase-3 runner re-runs this producer when it is).
-        plan.append(step_full_stack_functional_tb(project, args.container))
+        # full-stack top. Default's DIE top needs the mapped Step-9 netlist;
+        # execute its existing logical pad producer below before Step 5 is
+        # consumed, rather than waiting for the Phase 3 physical producer.
+        _full_stack_after_synth = _phase2_needs_logical_pad_top(project)
+        if not _full_stack_after_synth:
+            plan.append(step_full_stack_functional_tb(project, args.container))
         # ORGANIC #2064 — the ANALOG-ACCEPTANCE producer and its executor, in
         # the same order and for the same reason as the pair above: the L10
         # `verification_intent` rows of an analog block had NO producer, so
@@ -26802,6 +26913,9 @@ def main() -> int:
     _synth_row = plan[-1]
     plan.append(step_synth_log_audit(project, _synth_row))
 
+    if _full_stack_after_synth:
+        plan.extend(_phase2_logical_pad_top(project, _synth_row, args.container, args.pdk))
+
     # Phase 2's audit consumes Step 8. Finish its deferred native check here,
     # when the mapped netlist exists, so it cannot block the Phase 3 producer
     # that previously was the only caller. Reuse the existing canonical tool.
@@ -27029,6 +27143,13 @@ def main() -> int:
             "the declared outputs of steps 2, 3 and 6",
             "The manifest emitter has always written those three steps' documents "
             "whatever the window; the review confirmed it as a pre-existing shape.")
+    # COMPLETE Step 6 reads this invocation's board-skip cause as well as
+    # the manifest. Reuse the pending (never PASS) publisher before its
+    # consumer, so it cannot classify the previous run's producer rows.
+    if not _bounded:
+        _publish_record_before_audit(
+            project, plan, ic_class, evidence,
+            invocation_context=_dispatch_invocation_context)
     plan.append(_complete_phase2_frontend(project, plan, args.top_name,
                                            args.container))
     # v0.1.58 capture: regenerate final_summary.md BEFORE the audit so the
@@ -27146,7 +27267,7 @@ def main() -> int:
         "ic_class": ic_class,
         "ic_class_evidence": evidence,
         "steps": [asdict(s) for s in plan],
-        "verdict": _aggregate_verdict(plan),
+        "verdict": _aggregate_verdict(plan, project=project, started_at=_run_started_at),
     }
     # llv1 W14: the implementation flow and each step's producer. {} for the
     # default flow, so a default run's record is byte-for-byte unchanged.
@@ -27251,7 +27372,8 @@ def main() -> int:
     return 0 if summary["verdict"] in ("PASS", "PASS_WITH_WAIVERS") else 1
 
 
-def _aggregate_verdict(plan: List[StepResult]) -> str:
+def _aggregate_verdict(plan: List[StepResult], *, project: Optional[Path] = None,
+                       started_at: Optional[float] = None) -> str:
     """The run's verdict, from `verdict.run_verdict`. ONE rule for the flow.
 
     WHAT THIS REPLACES, and why the replacement is a deletion rather than a
@@ -27274,6 +27396,7 @@ def _aggregate_verdict(plan: List[StepResult]) -> str:
     back: each row is named with the word AND the reason or declaration beside
     it. A run whose skips go silent is the run16 shape.
     """
+    aggregate_project = project
     # A deferred Step-8 observation is history once a newly executed,
     # digest-bound post-prelayout consumer supplies its current result.
     latest = next((s for s in reversed(plan) if s.name == 'sdc_validation'), None)
@@ -27343,6 +27466,45 @@ def _aggregate_verdict(plan: List[StepResult]) -> str:
                 effective.remove(early)
         except (OSError, ValueError, KeyError, TypeError):
             pass                            # missing/stale acceptance remains owed
+    # The canonical consumer owns the existing board-capability exclusion.
+    # Keep raw compile/burn rows unmeasured; only their contribution to THIS
+    # aggregate follows a current, digest-bound Step 6 exclusion. A real
+    # board contract, tool failure, stale receipt or missing consumer still
+    # blocks. No other NOT_MEASURED producer is retired here.
+    project = aggregate_project
+    qsf = next((s for s in reversed(plan) if s.name == 'qsf_gen'), None)
+    if (project is not None and started_at is not None and qsf
+            and qsf.status == 'NOT_APPLICABLE'
+            and qsf.extras.get('verification_track') == 'generic_full_stack'
+            and qsf.declared_by and not _has_board_harness_top(project)):
+        try:
+            import step_output_collector as versions
+            accepted = next((r for r in versions.current_acceptance(project, started_at)
+                             if str(r['id']) == '6'), None)
+            consumer = accepted['result']['canonical_consumer']['step']
+            exclusion = consumer.get('excluded_from_verdict')
+            if (accepted['status'] == consumer['status'] == 'NOT_MEASURED'
+                    and str(consumer['id']) == '6'
+                    and consumer.get('reason_class') == 'input_absent'
+                    and isinstance(exclusion, str) and exclusion.strip()
+                    and accepted['inputs'] and accepted['outputs']
+                    and all((project / rel).is_file() and
+                            hashlib.sha256((project / rel).read_bytes()).hexdigest() ==
+                            (sha.get('sha256') if isinstance(sha, dict) else sha)
+                            for rel, sha in accepted['inputs'].items())
+                    and all((project / r['rel']).is_file() and
+                            hashlib.sha256((project / r['rel']).read_bytes()).hexdigest() == r['sha256']
+                            for r in accepted['outputs'])):
+                from dataclasses import replace
+                effective = [replace(s, status='NOT_APPLICABLE', reason_class='',
+                                     declared_by=exclusion,
+                                     detail=s.detail + '; ' + exclusion)
+                             if (s.name in ('fpga_compile', 'fpga_burn')
+                                 and s.status == 'NOT_MEASURED'
+                                 and s.reason_class == _V.ReasonClass.INPUT_ABSENT)
+                             else s for s in effective]
+        except (OSError, ValueError, TypeError, KeyError):
+            pass  # missing or stale canonical evidence remains owed
     rows = list(_step_verdicts(effective))
     _skipped = [r for r in rows
                 if r.verdict in (_V.Verdict.NOT_MEASURED,

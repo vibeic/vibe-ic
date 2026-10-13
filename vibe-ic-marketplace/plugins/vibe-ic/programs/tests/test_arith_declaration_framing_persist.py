@@ -139,6 +139,7 @@ def test_emitter_prefers_calibrated_over_declared(tmp_path):
     (sim / "arith_oracle_manifest.json").write_text(json.dumps({
         "calibrated_bit_order": "LSB_first",
         "calibrated_latency": 2,
+        "calibrated_latency_origin": "settled_edge_offset",
         "declared_latency": None,
     }))
     assert em._derive_latency_from_oracle_manifest(tmp_path) == 2
@@ -177,3 +178,55 @@ def test_wired_step_is_non_blocking_when_the_emitter_fail_closes(tmp_path):
     res = d.step_arith_declaration_emit(tmp_path)
     assert res.status == "NOT_MEASURED", f"expected SKIP, got {res.status}"
     assert not (tmp_path / "plugin_output" / "declaration.json").exists()
+
+
+@pytest.mark.parametrize("depth", [1,2,3])
+def test_native_serial_latency_uses_the_documented_settled_edge_origin(tmp_path,depth):
+    import subprocess,shutil
+    assert shutil.which("iverilog") and shutil.which("vvp"), "native Icarus required"
+    gen=_load("arith_oracle_tb_gen"); reader=_load("spec_declaration_emit")
+    runner=_load("design_one_shot_runner")
+    pairs=[(0xa5,0x3d),(0x81,0xc3),(0xff,0x96),(0x67,0x9b),
+           (0xf0,0xaf),(0,0xff),(0xff,0xff),(1,1)]
+    spec={"top":"neutral_pipe","operator":"&","width":8,"signed":False,
+          "parallel":"x","serial_in":"y","serial_out":"p","clk":"clk",
+          "rst":"rst","reset_active_low":False,"parallel_is_lhs":True,
+          "ports":[{"name":n,"dir":d} for n,d in
+                   [("clk","input"),("rst","input"),("x","input"),
+                    ("y","input"),("p","output")]]}
+    dut=tmp_path/"dut.v"
+    dut.write_text(f"""module neutral_pipe(input clk,rst,input [7:0] x,input y,output p);
+reg [{depth-1}:0] pipe; reg [2:0] idx; integer j; assign p=pipe[{depth-1}];
+always @(posedge clk) if(rst) begin pipe<=0; idx<=0; end else begin
+pipe[0]<=x[idx]&y; for(j=1;j<{depth};j=j+1) pipe[j]<=pipe[j-1]; idx<=idx+1'b1;
+end endmodule
+""")
+    tb=tmp_path/"tb.v";tb.write_text(gen.emit_serial_oracle_module("native_origin",spec,pairs))
+    binary=tmp_path/"native.vvp"
+    cc=subprocess.run(["iverilog","-g2012","-s","native_origin","-o",str(binary),
+                       str(tb),str(dut)],capture_output=True,text=True)
+    assert cc.returncode==0, cc.stdout+cc.stderr
+    run=subprocess.run(["vvp",str(binary)],capture_output=True,text=True)
+    (tmp_path/"native.log").write_text(run.stdout+run.stderr)
+    assert run.returncode==0 and "ORACLE_TB_DONE pass=8/8" in run.stdout, run.stdout
+    sim=tmp_path/"phase2/stage1/sim_full_stack";sim.mkdir(parents=True)
+    manifest=sim/"arith_oracle_manifest.json"
+    manifest.write_text(json.dumps({"program":"arith_oracle_tb_gen"}))
+    runner._persist_oracle_calibrated_framing(tmp_path,run.stdout)
+    measured=reader.measured_framing(tmp_path)
+    assert measured["latency_cycles"][0]==depth-1, measured
+    assert reader.same_framing("latency_cycles",depth-1,measured["latency_cycles"][0])
+    assert not reader.same_framing("latency_cycles",depth,measured["latency_cycles"][0])
+    assert json.loads(manifest.read_text())["calibrated_latency_origin"]=="settled_edge_offset"
+
+
+def test_explicit_legacy_latency_origin_is_normalized_and_absent_origin_unmeasured(tmp_path):
+    reader=_load("spec_declaration_emit")
+    manifest=tmp_path/"phase2/stage1/sim_full_stack/arith_oracle_manifest.json"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(json.dumps({"calibrated_latency":2,
+        "calibrated_latency_origin":"pre_nba_sample_offset"}))
+    measured=reader.measured_framing(tmp_path)
+    assert measured["latency_cycles"][0]==1, measured
+    manifest.write_text(json.dumps({"calibrated_latency":2}))
+    assert "latency_cycles" not in reader.measured_framing(tmp_path)

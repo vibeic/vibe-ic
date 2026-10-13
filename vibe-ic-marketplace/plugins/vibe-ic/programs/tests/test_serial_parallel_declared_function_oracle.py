@@ -269,3 +269,203 @@ def test_oracle_passes_correct_dut_fails_broken_dut(tmp_path):
 
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))
+
+
+# Public issues #3093/#3094: wholly neutral native producer/consumer inputs.
+def _declared_scenario_project(root, *, width=8, order="LSB_first",
+                               rearm="clocked_reset", mode="good", latency=0, renamed=False):
+    gd = root / "phase1/generated_docs"
+    rtl = root / "phase2/stage1/rtl"
+    gd.mkdir(parents=True); rtl.mkdir(parents=True)
+    scope = [
+        ("operand_limits", "Operand boundaries: x/y=0, 1, MAX; all Cartesian combinations"),
+        ("transaction_sequence", "Consecutive transactions: at least 16 operand pairs using the declared rearm, no extra idle cycles"),
+        ("reset_situations", "Synchronous reset held, released, and asserted during computation; between-edge reset pulses must not reset"),
+    ]
+    cases = [{"name": name, "kind": "functional_vector", "expected": "100% PASS",
+              "coverage_scope": text} for name, text in scope]
+    ports = [{"name": n, "direction": d, "width": w} for n,d,w in
+             [("clk","input",1),("rst","input",1),("x","input",width),
+              ("y","input",1),("p","output",1)]]
+    (gd / "L9_INTEGRATION_SPEC.json").write_text(json.dumps({
+        "top_module": "neutral_serial", "ic_class": "digital_arithmetic_primitive",
+        "top_ports": ports, "clocks": [{"name":"clk","period_ns":10}],
+        "reset_domains":[{"name":"rst","polarity":"active_high","sync":"sync"}]}))
+    (gd / "L2_FRS.json").write_text(json.dumps({"frs_sections": [{
+        "content": f"p = (x & y) mod 2^{width}; serial-parallel bitwise arithmetic"}]}))
+    (gd / "L10_TEST_CASES.json").write_text(json.dumps({"test_cases": cases}))
+    root.joinpath("plugin_output").mkdir()
+    root.joinpath("plugin_output/declaration.json").write_text(json.dumps({
+        "bit_order":order, "latency_cycles":latency,
+        "latency_cycles_origin":"settled_edge_offset", "integer_encoding":"unsigned",
+        "reset_polarity":"active_high", "transaction_rearm":rearm,
+        "rearm_reset_cycles":1, "parallel_hold":"through_final_product_bit"}))
+    bit = "idx" if order == "LSB_first" else f"{width-1}-idx"
+    reset = "rst" if mode != "ignored_reset" else "1'b0"
+    inv = "~" if mode == "wrong_product" else ""
+    rtl.joinpath("neutral_serial.v").write_text(f"""`timescale 1ns/1ps
+module neutral_serial(input clk,rst,input [{width-1}:0] x,input y,output reg p);
+integer idx=0;
+always @(posedge clk) begin
+ if ({reset}) begin idx<=0; p<=0; end
+ else begin p<={inv}(x[{bit}] & y); idx <= (idx=={width-1})?0:idx+1; end
+end
+endmodule
+""")
+    if renamed:
+        import re
+        names={"clk":"i_clk", "rst":"i_rst", "x":"operand_word",
+               "y":"serial_bit", "p":"result_bit"}
+        for path in [gd/"L9_INTEGRATION_SPEC.json",gd/"L2_FRS.json",
+                     rtl/"neutral_serial.v"]:
+            text=path.read_text()
+            for before,after in names.items():
+                text=re.sub(r"\b"+before+r"\b",after,text)
+            path.write_text(text)
+    return cases
+
+
+def _scenario_icarus_execution(root, cases, *, stale=False):
+    """Actual Icarus transport; production emit/capture and goal reader remain real.
+
+    Does not pretend to execute the Default whole front door or upstream phases.
+    """
+    import _l10_execution as execution
+    import l10_coverage_goal_classify as goals
+    assert shutil.which("iverilog") and shutil.which("vvp"), "native Icarus required"
+    tb_dir = root / "phase2/stage1/sim/tb"
+    assert tbg.emit_unit_tbs(root, top="neutral_serial", report={}) == len(cases)
+    rows=[]
+    for case in cases:
+        tb=tb_dir/(case["name"]+".v"); work=root/"native"/case["name"]
+        work.mkdir(parents=True); binary=work/"sim.vvp"
+        cc=subprocess.run(["iverilog","-g2012","-s",case["name"],"-o",str(binary),
+                           str(root/"phase2/stage1/rtl/neutral_serial.v"),str(tb)],
+                          capture_output=True,text=True)
+        (work/"compile.log").write_text(cc.stdout+cc.stderr)
+        assert cc.returncode==0, cc.stdout+cc.stderr
+        run=subprocess.run(["vvp",str(binary)],capture_output=True,text=True)
+        transcript=work/"run.log"; transcript.write_text(run.stdout+run.stderr)
+        capture=getattr(aotg,"capture_arithmetic_scenario_execution",None)
+        sources={str(root/"phase2/stage1/rtl/neutral_serial.v"):
+                 execution.file_sha256(root/"phase2/stage1/rtl/neutral_serial.v")}
+        measured=capture(root,tb,transcript,sources)[0] if capture else None
+        row={"id":case["name"],"verdict":"PASS" if run.returncode==0 else "FAIL",
+             "sim_executed":True,"tb_file":str(tb),**execution.capture_tb_identity(tb),
+             "detail":"actual Icarus native scenario transport"}
+        if measured is not None: row["arithmetic_scenario"]=measured
+        rows.append(row)
+    execution.write_record(root,root/"phase1/generated_docs/L10_TEST_CASES.json",rows,
+                           producer="test-owned actual Icarus transport",tb_dir=tb_dir)
+    if stale:
+        decl=root/"plugin_output/declaration.json"
+        decl.write_text(decl.read_text()+" ")
+    record=execution.load_record(root,root/"phase1/generated_docs/L10_TEST_CASES.json")
+    return {case["name"]:goals.measure_scenario_goal(case,100.0,cases,record)
+            for case in cases}
+
+
+@pytest.mark.parametrize("width,order,rearm,renamed", [
+    (4,"LSB_first","clocked_reset",False),(8,"LSB_first","clocked_reset",False),
+    (8,"MSB_first","clocked_reset",False),(8,"LSB_first","continuous",False),
+    (8,"LSB_first","clocked_reset",True),
+])
+def test_declared_arithmetic_scenarios_gain_only_actual_native_credit(
+        tmp_path,width,order,rearm,renamed):
+    root=tmp_path/"neutral"
+    cases=_declared_scenario_project(root,width=width,order=order,rearm=rearm,renamed=renamed)
+    measured=_scenario_icarus_execution(root,cases)
+    assert {k:v["verdict"] for k,v in measured.items()} == {
+        c["name"]:"PASS" for c in cases}, measured
+    assert all(v["achieved_pct"]==100.0 and v["bound_cases"] for v in measured.values())
+    if renamed:
+        # Actual ordinary unit runner publishes the same source-owned receipt.
+        import _l10_execution as execution
+        import l10_coverage_goal_classify as goals
+        report={}
+        assert tbg.run_unit_tbs(root,container="host",report=report)==len(cases),report
+        assert report['passed']==len(cases) and report['failed']==0,report
+        record=execution.load_record(root,root/'phase1/generated_docs/L10_TEST_CASES.json')
+        actual={c['name']:goals.measure_scenario_goal(c,100.0,cases,record)['verdict'] for c in cases}
+        assert actual=={c['name']:'PASS' for c in cases},actual
+
+
+@pytest.mark.parametrize("mode,latency,stale,expected", [
+    ("wrong_product",0,False,"FAIL"),("ignored_reset",0,False,"FAIL"),
+    ("good",1,False,"FAIL"),("good",0,True,"NOT_MEASURED"),
+])
+def test_generated_arithmetic_scenario_controls_remain_falsifiable(
+        tmp_path,mode,latency,stale,expected):
+    root=tmp_path/"neutral"
+    cases=_declared_scenario_project(root,mode=mode,latency=latency)
+    measured=_scenario_icarus_execution(root,cases,stale=stale)
+    row=measured["reset_situations"] if mode=="ignored_reset" else measured["operand_limits"]
+    assert row["verdict"]==expected, row
+
+
+def test_composite_declared_scenario_scope_executes_every_requested_population(tmp_path):
+    root=tmp_path/"neutral"
+    cases=_declared_scenario_project(root)
+    cases[0]["stimulus"] = ("Operand boundaries; consecutive >= 4 transactions; "
+        "reset held and released and asserted during computation")
+    l10=root/"phase1/generated_docs/L10_TEST_CASES.json"
+    doc=json.loads(l10.read_text())
+    doc["test_cases"]=cases
+    l10.write_text(json.dumps(doc))
+    actual=_scenario_icarus_execution(root,cases)
+    import _l10_execution as execution
+    import l10_coverage_goal_classify as goals
+    record=execution.load_record(root,l10)
+    measured=record['rows']['operand_limits'].get('arithmetic_scenario') or {}
+    wanted={'operand_boundaries','consecutive_transactions','reset_situations'}
+    observed=measured.get('populations') or []
+    (root/'actual-composite-values.json').write_text(json.dumps({
+        'consumer':actual['operand_limits'],'measured':measured},indent=2))
+    assert actual['operand_limits']['verdict']=='PASS',actual['operand_limits']
+    assert {p['scenario'] for p in observed}==wanted,measured
+    declared={p['scenario']:p for p in measured['plan']['populations']}
+    assert all(p['transactions']==declared[p['scenario']]['transactions'] and
+               p['comparisons']==declared[p['scenario']]['comparisons'] and
+               p['errors']==0 for p in observed),measured
+    assert sum(p['comparisons'] for p in observed)==measured['comparisons']
+    assert measured['complete'] is True
+    # Omitting one required family's receipt cannot preserve whole-row credit.
+    measured['populations']=[p for p in observed if p['scenario']!='reset_situations']
+    partial=goals.measure_scenario_goal(cases[0],100.0,cases,record)
+    assert partial['verdict']=='NOT_MEASURED',partial
+
+
+@pytest.mark.parametrize("marker,prefix,suffix,duplicate,expected", [
+    ('ARITH_SCENARIO_DONE','not ','',False,'NOT_MEASURED'),
+    ('ARITH_SCENARIO_DONE','diagnostic: ','',False,'NOT_MEASURED'),
+    ('ARITH_SCENARIO_DONE','',' (not measured)',False,'NOT_MEASURED'),
+    ('ARITH_SCENARIO_POPULATION','not ','',False,'NOT_MEASURED'),
+    ('ARITH_SCENARIO_POPULATION','diagnostic: ','',False,'NOT_MEASURED'),
+    ('ARITH_SCENARIO_POPULATION','',' (not measured)',False,'NOT_MEASURED'),
+    ('ARITH_SCENARIO_DONE','','',True,'NOT_MEASURED'),
+    ('ARITH_SCENARIO_DONE','','',False,'PASS'),
+])
+def test_native_scenario_transcript_requires_canonical_records(tmp_path,marker,prefix,suffix,duplicate,expected):
+    import _l10_execution as execution
+    import l10_coverage_goal_classify as goals
+    root=tmp_path/'neutral'
+    cases=_declared_scenario_project(root)
+    cases[0]['stimulus']='Operand boundaries; consecutive >= 4 transactions; reset held, released, and asserted during computation'
+    l10=root/'phase1/generated_docs/L10_TEST_CASES.json'
+    l10.write_text(json.dumps({'test_cases':cases}))
+    original=_scenario_icarus_execution(root,cases)
+    assert original['operand_limits']['verdict']=='PASS',original
+    record=execution.load_record(root,l10)
+    row=record['rows']['operand_limits']; measured=row['arithmetic_scenario']
+    transcript=Path(measured['transcript']);raw=transcript.read_text()
+    matching=[line for line in raw.splitlines() if line.startswith(marker+' ')]
+    assert matching,'actual native record required for the control'
+    changed='\n'.join(prefix+line+suffix if line.startswith(marker+' ') else line for line in raw.splitlines())+'\n'
+    if duplicate:changed+=matching[0]+'\n'
+    transcript.write_text(changed)
+    captured,why=aotg.capture_arithmetic_scenario_execution(root,Path(row['tb_file']),transcript,measured['sources'])
+    if captured is None:row.pop('arithmetic_scenario',None)
+    else:row['arithmetic_scenario']=captured
+    actual=goals.measure_scenario_goal(cases[0],100.0,cases,record)
+    (root/'record-grammar-values.json').write_text(json.dumps({'marker':marker,'prefix':prefix,'suffix':suffix,'duplicate':duplicate,'expected':expected,'actual':actual,'capture':captured,'why':why},indent=2))
+    assert actual['verdict']==expected,actual

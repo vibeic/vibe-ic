@@ -111,6 +111,32 @@ activity budget. Absent preload keeps the stock seed; malformed preload cannot
 credit actual-byte retention. A chosen stimulus alone is never execution
 evidence: absent non-idempotent pending activity remains NOT_MEASURED.
 
+## Declared serial arithmetic scenarios
+
+The existing unit producer can generate operand-boundary, consecutive-transaction
+and synchronous-reset scenarios from the case's own L10 scope. It requires the
+selected serial function, bit order and settled observation offset, plus
+`transaction_rearm`, `rearm_reset_cycles` and
+`parallel_hold=through_final_product_bit`. Supported rearm is `clocked_reset`,
+or `continuous` when the settled offset is zero. Unmodeled input roles, clock
+domains, reset styles and ambiguous scopes remain unmeasured.
+
+The scenario oracle uses independent modulo goldens at one declared window; it
+does not search DUT alignment to choose an expected answer. It exercises all
+selected corner pairs, the stated transaction population, early/middle/late
+interruptions with single/multiple reset holds, and between-edge reset pulses.
+A row listing multiple supported families executes each family in the same
+native case, with separate actual populations and an aggregate comparison total.
+Generated scenario credit requires the current native comparison population
+and unchanged input, DUT, declaration, TB and transcript identities. Generic
+generated arithmetic remains insufficient for scenario credit. Authored and
+delivered testbenches retain their original priority.
+
+`latency_cycles_origin=settled_edge_offset` is the normal CR-5 convention.
+Explicit legacy `pre_nba_sample_offset` is normalized once. Native manifests
+carry their origin; a bare measured integer is not origin evidence. Neither
+convention relaxes an incorrect declared window.
+
 ## Capture
 
 Any recovery here (a new reference-model pattern, a new coverage-derivation rule,
