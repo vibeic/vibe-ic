@@ -24,9 +24,27 @@ User shares an RTL file or directory and asks for a review.
 ```bash
 python3 plugins/vibe-ic/programs/rtl_review_aggregate.py \
     --rtl-dir <dir-of-.v-and-.sv> \
+    --top <selected-top> \
+    --define <selected-compile-define> \
     --out-md  rtl_review.md \
     --out-json rtl_review.json
 ```
+
+Pass the frontend's selected top and complete ordered RTL closure (repeat
+`--rtl-file` when the directory also contains testbenches or include hubs),
+compile defines (`--define`), integer top overrides (`--parameter`) and include
+directories (`--include-dir`). Omit `--define` for an explicitly empty define
+set. These describe the selected configuration; AI does not guess active
+generate branches. The hygiene consumer elaborates fresh native Yosys evidence
+in this invocation and retains its input hashes, log and JSON in a new
+`native-elaboration-*` directory. Without a selected top, review remains
+lexical and conditional-driver uncertainty still blocks. Native failure does
+not erase findings or the missing-auditor disclosure.
+
+The canonical Default Step-2 gate calls `rtl_hygiene_lint --project . --define
+SYNTHESIS`: the existing silicon source selector, L9 top and catalog top
+parameter owner supply the digital configuration. This is driver elaboration,
+not a second full synthesis run or Ultra candidate comparison.
 
 Exit codes: 0 = PASS or WARN; 1 = FAIL (with `--strict`); 2 = bad input.
 

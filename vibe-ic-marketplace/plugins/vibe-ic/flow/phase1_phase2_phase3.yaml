@@ -1637,6 +1637,8 @@ steps:
     required_inputs:
       - from: 1
         path: "phase2/stage1/rtl/*.sv OR phase2/stage1/rtl/*.v"
+      - from: D1
+        path: "phase1/generated_docs/L9_INTEGRATION_SPEC.json"
     closed_loop:
       fallback_to: 1
       trigger: >-
@@ -1822,7 +1824,10 @@ steps:
         # AND in --fix-repaired RTL; they are recorded in rtl_hygiene.json for
         # review but must NOT hard-gate the flow. chip-AGNOSTIC: severity scoping
         # only, no per-IP allow-list.
-        - program_exit_zero: "rtl_hygiene_lint phase2/stage1/rtl/*.sv phase2/stage1/rtl/*.v --severity ERROR --json reports/phase2/lint/rtl_hygiene.json"
+        # Native driver proof uses this invocation's selected silicon closure,
+        # L9 top and catalog top parameters. No future synthesis receipt or old
+        # elaboration output is an input. Unrelated lexical findings remain.
+        - program_exit_zero: "rtl_hygiene_lint --project . --define SYNTHESIS --severity ERROR --json reports/phase2/lint/rtl_hygiene.json"
         - program_exit_zero: "rom_init_lint phase2/stage1/rtl/*.sv phase2/stage1/rtl/*.v --json reports/phase2/lint/rom_init_lint.json"
         # rtl_bug_report_schema_check: only fires when reports/phase2/rtl_bugs.json
         # exists; otherwise the program reports rc=2 (input missing) which

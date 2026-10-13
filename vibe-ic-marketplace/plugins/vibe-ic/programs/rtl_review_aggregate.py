@@ -90,6 +90,7 @@ CATEGORY_NAMES = (
 # the canonical rule-id strings emitted in the program's JSON output.
 HYGIENE_RULE_CATEGORY: Dict[str, str] = {
     "instance-driver-analysis-unresolved": "correctness_smells",
+    "native-elaboration-unresolved": "correctness_smells",
     # § 1 synthesis hazards
     "latch_inferred": "synthesis_hazards",
     "multiple_drivers": "synthesis_hazards",
@@ -702,7 +703,8 @@ def aggregate(
     )
 
 
-def review_rtl_dir(rtl_dir: Path, tmp_dir: Path) -> ReviewReport:
+def review_rtl_dir(rtl_dir: Path, tmp_dir: Path, *, top=None,
+                   defines=(), parameters=(), include_dirs=(), rtl_files=None) -> ReviewReport:
     """Drive the 3 sub-programs over a directory of RTL files and aggregate.
 
     Each sub-program's EXIT CODE is now carried into its loader. It used to be
@@ -711,16 +713,22 @@ def review_rtl_dir(rtl_dir: Path, tmp_dir: Path) -> ReviewReport:
     (#2036). A producer that reached no verdict now raises
     `ProducerOutputError` rather than improving the score.
     """
-    files = sorted([p for p in rtl_dir.rglob("*")
-                    if p.suffix in (".v", ".sv") and p.is_file()])
+    files = (list(rtl_files) if rtl_files is not None else
+             sorted([p for p in rtl_dir.rglob("*")
+                     if p.suffix in (".v", ".sv") and p.is_file()]))
     findings: List[Finding] = []
 
     if files:
         # rtl_hygiene_lint files...
         hygiene_json = tmp_dir / "hygiene.json"
+        native_args = (["--top", top] if top else [])
+        for flag, values in (("--define", defines), ("--parameter", parameters),
+                             ("--include-dir", include_dirs)):
+            for value in values:
+                native_args += [flag, str(value)]
         rc, _out, err = _run_program_json(
             "rtl_hygiene_lint.py",
-            [str(f) for f in files],
+            [str(f) for f in files] + native_args,
             hygiene_json)
         findings.extend(_load_hygiene_findings(hygiene_json, rc, err))
 
@@ -852,6 +860,12 @@ def _cli() -> int:
         description="Deterministic rtl-review aggregator (Pattern-B program).")
     p.add_argument("--rtl-dir", type=Path, required=True,
                    help="Directory of .v / .sv files to review")
+    p.add_argument("--top", help="Selected top for fresh native driver analysis")
+    p.add_argument("--define", action="append", default=[])
+    p.add_argument("--parameter", action="append", default=[])
+    p.add_argument("--include-dir", action="append", default=[])
+    p.add_argument("--rtl-file", type=Path, action="append",
+                   help="Selected native RTL closure in frontend order (repeatable)")
     p.add_argument("--tmp-dir", type=Path, default=None,
                    help="Working dir for sub-program JSON (default: rtl-dir/.review)")
     p.add_argument("--out-md", type=Path, default=None,
@@ -862,6 +876,11 @@ def _cli() -> int:
                    help="Exit non-zero if verdict != PASS, or if any auditor "
                         "did not run (RULING F2036-H)")
     args = p.parse_args()
+    if (args.define or args.parameter or args.include_dir or args.rtl_file) and not args.top:
+        p.error("selected native configuration requires --top")
+    if args.rtl_file and any(not f.is_file() or not f.resolve().is_relative_to(
+            args.rtl_dir.resolve()) for f in args.rtl_file):
+        p.error("selected RTL files must exist inside --rtl-dir")
 
     if not args.rtl_dir.exists():
         print(f"rtl-dir does not exist: {args.rtl_dir}", file=sys.stderr)
@@ -874,7 +893,9 @@ def _cli() -> int:
     # exits 3 (distinct from 1 = "reviewed, verdict not PASS" and 2 = usage) and
     # writes NO report, so nothing downstream can mistake it for a score.
     try:
-        report = review_rtl_dir(args.rtl_dir, tmp_dir)
+        report = review_rtl_dir(args.rtl_dir, tmp_dir, top=args.top,
+            defines=args.define, parameters=args.parameter,
+            include_dirs=args.include_dir, rtl_files=args.rtl_file)
     except ProducerOutputError as exc:
         print(f"rtl_review_aggregate: REFUSING to emit a review — {exc}",
               file=sys.stderr)

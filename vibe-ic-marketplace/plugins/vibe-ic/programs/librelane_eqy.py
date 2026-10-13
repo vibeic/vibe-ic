@@ -5,7 +5,7 @@ lec_run (yosys equiv_*) stays arm A. This module runs EQY through the contract
 with a vibe-ic-generated EQY_SCRIPT and judges EQY's own per-partition status
 files, then `combine` keeps the conclusive arm.
 
-The generated script differs from LibreLane's generic one in three measured ways:
+The generated script differs from LibreLane's generic one in four measured ways:
 
 * No `bitwuzla` strategy — the solver is not in the image (review correction).
 * The gate side reads the cells from the PDK liberty's `function` attributes
@@ -16,6 +16,12 @@ The generated script differs from LibreLane's generic one in three measured ways
   the step skips itself.
 * `read_verilog -icells`, so a netlist that still carries Yosys internal cells
   (`$_DFF_P_`) reads.
+* Amend each partition with the gold definitions of its matched inputs. A
+  synthesis-merged alias must retain the state relation of the original
+  registers: treating the other alias as an arbitrary partition input can
+  produce a counterexample at time zero even for two identical resettable
+  registers. Amendment retains every match point and output obligation; it
+  adds the producer logic behind cutpoints rather than dropping comparisons.
 
 EQY's top-level status folds "could not decide" into FAIL. The reader therefore
 reads every partition's strategy status files: a partition is PROVEN when a
@@ -56,6 +62,7 @@ def eqy_script(top: str, rtl: list[Path], netlist: Path, liberty: str) -> str:
         f"read_verilog -formal -sv -icells {netlist}", "",
         "[script]", f"hierarchy -top {top}", "proc", f"prep -top {top} -flatten",
         "memory -nomap", "async2sync", "setundef -init -zero", "",
+        "[partition *]", "amend *", "",
         "[strategy sat]", "use sat", "depth 5", "",
         "[strategy pdr]", "use sby", "engine abc pdr -rfi", ""])
 
