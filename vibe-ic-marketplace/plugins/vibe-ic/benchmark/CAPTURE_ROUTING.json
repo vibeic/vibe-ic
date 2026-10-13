@@ -17,6 +17,15 @@
       "bucket_B_skill_file": "agents/ic-expert-agent.md",
       "bucket_B_section_anchor": "NL spec phrase patterns"
     },
+    "phase1.integration_contract": {
+      "description": "Capture subtype for L9 implementation presence and L19 constraint-policy carry-through from layered design inputs; does not add a flow step.",
+      "bucket_A_program": "programs/l9_l19_contract_carrythrough.py",
+      "bucket_A_related": [
+        "programs/phase1_doc_one_shot_runner.py",
+        "programs/l9_submodule_conformance_check.py"
+      ],
+      "bucket_B_skill_file": "skills/layer-contract-doctrine/SKILL.md"
+    },
     "phase1.l8_timing": {
       "description": "Capture subtype for L8 prose timing and declared input-clock identity; does not add a flow step.",
       "bucket_A_program": "programs/phase1_doc_one_shot_runner.py",
