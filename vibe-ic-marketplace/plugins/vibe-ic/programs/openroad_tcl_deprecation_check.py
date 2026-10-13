@@ -12,8 +12,8 @@ flags ``-bottom_routing_layer`` / ``-top_routing_layer`` (now expressed via
 left over from a pre-2023 tutorial silently breaks on a fresh OpenROAD build.
 
 This program is a static grep — it does not invoke OpenROAD. It walks
-``--search-dir`` (default: the ``plugins/`` directory containing the
-unified ``vibe-ic/`` plugin), inspects every
+``--search-dir`` (default: the manifest-declared plugin tree containing
+this running program), inspects every
 ``*.tcl`` file AND every ``*.py`` / ``*.js`` / ``*.md`` / ``*.yaml`` / ``*.yml``
 file (for embedded TCL snippets in heredocs, docstrings, or skill docs), and
 flags occurrences of any deprecated token.
@@ -514,13 +514,18 @@ def _format_report(findings: List[Finding], examined: int = -1) -> str:
 
 
 def _default_search_dir() -> Path:
-    """Default: the plugins/ directory that contains this program's tree
-    (i.e. two levels up from programs/). This matches the commission:
-    scan the unified plugin's skills + programs in one shot."""
-    here = Path(__file__).resolve()
-    # here = .../plugins/vibe-ic/programs/openroad_tcl_deprecation_check.py
-    #        parents[0]=programs parents[1]=<plugin> parents[2]=plugins
-    return here.parents[2]
+    """The running program's declared plugin, in source or installed layout."""
+    root = Path(__file__).resolve().parent.parent
+    manifest = root / ".claude-plugin/plugin.json"
+    try:
+        declaration = json.loads(manifest.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise ValueError(f"cannot determine plugin root at {root}: {exc}") from exc
+    if (not isinstance(declaration, dict)
+            or not isinstance(declaration.get("name"), str)
+            or not declaration["name"].strip()):
+        raise ValueError(f"invalid plugin root declaration: {manifest}")
+    return root
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -534,15 +539,17 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
     ap.add_argument("--search-dir", default=None,
                     help="Root directory to scan (recursively). Default: "
-                         "this plugin's plugins/ directory.")
+                         "this running program's manifest-declared plugin tree.")
     ap.add_argument("--json", default=None,
                     help="Optional path to write a JSON report.")
     args = ap.parse_args(argv)
 
-    if args.search_dir is None:
-        search_dir = _default_search_dir()
-    else:
-        search_dir = Path(args.search_dir)
+    try:
+        search_dir = (_default_search_dir() if args.search_dir is None
+                      else Path(args.search_dir))
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
     if not search_dir.is_dir():
         print(f"error: --search-dir is not a directory: {search_dir}",
               file=sys.stderr)

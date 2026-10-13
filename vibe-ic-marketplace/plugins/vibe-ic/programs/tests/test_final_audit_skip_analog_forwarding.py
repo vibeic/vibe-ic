@@ -95,3 +95,14 @@ def test_vibe_ic_runner_forwards_skip_analog_to_phase2():
     assert 'p2_args.append("--skip-analog")' in src, (
         "vibe_ic_one_shot_runner must forward --skip-analog to design_one_shot_runner.py "
         "so final_audit doesn't FAIL a digital-only project on analog file checks.")
+
+
+def test_phase2_final_audit_requests_its_same_call_structured_ledger():
+    mod = _load_p2()
+    project = Path('/tmp/neutral_phase2')
+    cmd = mod._build_final_audit_cmd(project, Path('/tmp/audit.py'), phase=2)
+    assert '--json' in cmd
+    assert cmd[cmd.index('--json') + 1] == str(
+        project / 'reports/phase2/gates/phase2_compliance.json')
+    assert cmd[cmd.index('--phase') + 1] == '2'
+    assert '--strict-structural' in cmd and '--allow-thin-input' in cmd

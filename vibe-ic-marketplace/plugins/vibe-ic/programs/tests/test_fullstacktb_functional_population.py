@@ -562,3 +562,361 @@ def test_phase3_reruns_the_producer_only_after_the_pad_ring_is_written(
                             "io_pad_chip_top_gen", "FAIL", 0.0, "rc=1"))
     res = p3._padring_producer_dispatch(tmp_path, "ctr", None)
     assert res.status == "FAIL" and seen == []
+
+
+# The ordinary front door must reach the producer that owns the missing top.
+# All prerequisites here are neutral source-fixture checks; the simulator
+# boundary is the existing stand-in, so these do not claim native IC sign-off.
+def _phase2_pad_fixture(tmp_path, monkeypatch):
+    import time
+    from dataclasses import asdict
+    import design_one_shot_runner as design
+    import execution_policy as execution
+    import flow_compliance_check as compliance
+    import _flow_yaml
+    import step_output_collector as versions
+    import vibe_ic_one_shot_runner as outer
+
+    monkeypatch.setattr(execution, 'request', lambda: {'mode': 'default'})
+    project = _mk_project(tmp_path, die=True, chip_top=False)
+    started = time.time()
+    producer = design.step_full_stack_functional_tb(project, None)
+    assert producer.status == 'NOT_MEASURED'
+    assert json.loads(_fsf().record_path(project).read_text())['reason_class'] == 'BLOCKED_BY_UPSTREAM'
+    _write(project / 'neutral_prerequisite.json', '{"measured": true}')
+    # D1's existing conditional review consumer also reads the inline neutral
+    # L-docs. Bind this test-only review to exactly those authored fixture bytes.
+    import ai_signed_judgement as judgement
+    _write(project / 'reports/audit/ai_judgements/D1.json', json.dumps({
+        'schema': judgement.SCHEMA, 'step_id': 'D1', 'verdict': 'PASS',
+        'signed_by': 'ic-expert-agent', 'judgement': 'reviewed neutral unit fixture L-docs',
+        'evidence_sha256': judgement.evidence_sha256(project, 'D1')}))
+    compliance._GATE_LEDGER.clear()
+    rows = []
+    declared = [r for r in _flow_yaml.load()['steps']
+                if (isinstance(r['id'], int) and 1 <= r['id'] <= 6)
+                or (not isinstance(r['id'], int) and (
+                    str(r.get('phase_scope') or '').strip().lower() == 'agnostic'
+                    or compliance._STAGE_PHASE.get(
+                        str(r.get('stage') or '').strip()) in (None, '2')))]
+    for declaration in declared:
+        sid = declaration['id']
+        clause = {'json_field_true': {'file': 'neutral_prerequisite.json', 'field': 'measured'}}
+        if sid == 5:
+            clause = {'program_exit_zero':
+                      'bit_level_full_stack_tb_check . --json '
+                      'reports/phase2/gates/bit_level_full_stack.json'}
+        row = compliance.check_step(project, {'id': sid, 'name': 'neutral_prerequisite',
+                      'stage': 'stage1', 'required_outputs': ['neutral_prerequisite.json'],
+                      'gate': clause}, {})
+        rows.append(asdict(row))
+    assert all(r['status'] == ('NOT_MEASURED' if str(r['id']) == '5' else 'PASS')
+               for r in rows), [(r['id'], r['status'], r.get('failed_gates'),
+                                 r.get('conditional_note')) for r in rows]
+    functional = next(r for r in rows if str(r['id']) == '5')
+    attempt = versions.begin_step(project, '5')
+    versions.finish_step(project, attempt, verdict=functional['status'],
+                         result={'canonical_consumer': {'step': functional}})
+    audit = {'program': 'flow_compliance_check', 'project': str(project),
+             'scope': {'phase': '2', 'stage': None, 'stage_id': None,
+                       'steps_judged': [str(r['id']) for r in rows], 'step_count': len(rows)},
+             'overall': 'NOT_MEASURED', 'steps': rows,
+             'gate_execution_ledger': list(compliance._GATE_LEDGER)}
+    _write(project / 'reports/phase2/gates/phase2_compliance.json', json.dumps(audit))
+    report = {'project': str(project), 'verdict': 'NOT_MEASURED', 'steps': [
+        asdict(design.StepResult('neutral_measurable', 'PASS')),
+        asdict(producer), asdict(design.StepResult('final_audit', 'NOT_MEASURED',
+                                                  reason_class='partial_population'))]}
+    _write(outer._phase_report_path(project, 'phase2_one_shot.json'), json.dumps(report))
+    return project, report, started
+
+
+def _actual_outer_phase3_entry(project, report, started):
+    """Execute the real Phase-2 halt statements and Phase-3 entry expression.
+
+    Reading the actual caller also lets the exact base answer with its old
+    cycle's VALUE (False), rather than failing on a missing new helper symbol.
+    """
+    import ast
+    from types import SimpleNamespace
+    import execution_policy as execution
+    import vibe_ic_one_shot_runner as outer
+    tree = ast.parse(Path(outer.__file__).read_text())
+    main = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == '_main')
+    body = next(n for n in ast.walk(main) if isinstance(n, ast.If) and any(
+        isinstance(x, ast.Assign) and ast.unparse(x) == "halted_at = 'phase2'"
+        for x in n.body) and 'NOT_MEASURED' in ast.unparse(n.test))
+    # Its sibling immediately preceding this halt owns the named deferral.
+    siblings = next(value for n in ast.walk(main) for value in vars(n).values()
+                    if isinstance(value, list) and body in value)
+    pos = siblings.index(body)
+    nodes = [body]
+    if pos and '_phase2_pad_top_deferral(' in ast.unparse(siblings[pos - 1]):
+        nodes.insert(0, siblings[pos - 1])
+    verdict, _ = outer._row_verdict(project, 'phase2_one_shot.json', 1, started, 'phase2')
+    env = dict(vars(outer), project=project, rep=report, verdict=verdict, rc=1,
+               _execution=execution,
+               args=SimpleNamespace(skip_phase3=False), _p3_skip_by_exit=False,
+               _phase_started={'phase2': started}, _phase2_pad_top_deferred=None,
+               halted_at='')
+    exec(compile(ast.Module(body=nodes, type_ignores=[]), outer.__file__, 'exec'), env)
+    entry = next(n for n in main.body if isinstance(n, ast.If)
+                 and n.body and "_phase_runner('phase3')" in ast.unparse(n.body[0]))
+    entered = eval(compile(ast.Expression(entry.test), outer.__file__, 'eval'), env)
+    return entered, env
+
+
+def _actual_late_rollup(env, phase3_started):
+    import ast
+    import vibe_ic_one_shot_runner as outer
+    env.update(_phase3_ran=True, _phase_started={'phase3': phase3_started},
+               plan=[('phase2', 'NOT_MEASURED', 1), ('phase3', 'PASS', 0)])
+    main = next(n for n in ast.parse(Path(outer.__file__).read_text()).body
+                if isinstance(n, ast.FunctionDef) and n.name == '_main')
+    node = next((n for n in main.body if isinstance(n, ast.If)
+                 and '_resolve_phase2_pad_top(' in ast.unparse(n)), None)
+    if node:
+        exec(compile(ast.Module(body=[node], type_ignores=[]), outer.__file__, 'exec'), env)
+    return env['plan'][0][1:]
+
+
+def _late_pad_producer(project, monkeypatch, *, outcome='pass'):
+    import phase3_one_shot_runner as phase3
+    fsf = _fsf()
+    monkeypatch.setattr(fsf, 'default_dispatch', _FakeSim(
+        (lambda case, nv: (nv - 1, nv)) if outcome == 'sim_fail' else None))
+    monkeypatch.setattr(fsf, 'default_model_resolver', _resolver)
+
+    def write_pad(p, *_args, **_kwargs):
+        if outcome not in ('missing_pad', 'pad_fail'):
+            _write(p / 'phase3/stage3/pnr/chip_top_io.v', CHIP_TOP_V)
+            _write(p / 'reports/phase3/io_pad_chip_top.json', json.dumps({
+                'verdict': 'WROTE', 'chip_top_module': 'chip_top', 'core_module': CORE,
+                'chip_top_verilog': 'phase3/stage3/pnr/chip_top_io.v'}))
+            if outcome == 'old_pad':
+                import os
+                import time
+                for target in ('phase3/stage3/pnr/chip_top_io.v',
+                               'reports/phase3/io_pad_chip_top.json'):
+                    os.utime(p / target, (time.time() - 30, time.time() - 30))
+        return phase3.StepResult('io_pad_chip_top_gen',
+                                 'FAIL' if outcome == 'pad_fail' else 'PASS')
+
+    monkeypatch.setattr(phase3, 'step_io_pad_chip_top_gen', write_pad)
+    if outcome == 'generator_error':
+        def unavailable(*_a, **_kw):
+            raise OSError('neutral generator unavailable')
+        monkeypatch.setattr(fsf, 'generate', unavailable)
+    return phase3._padring_producer_dispatch(project, None, None)
+
+
+def test_default_outer_reaches_phase3_for_only_its_pad_top_obligation(tmp_path, monkeypatch):
+    project, report, started = _phase2_pad_fixture(tmp_path, monkeypatch)
+    entered, env = _actual_outer_phase3_entry(project, report, started)
+    assert entered is True
+    owed = env['_phase2_pad_top_deferred']
+    assert (owed['status'], owed['state'], owed['owner']) == (
+        'NOT_MEASURED', 'DEFERRED', 'phase3.io_pad_chip_top_gen')
+    assert owed['phase2_process'] == {'verdict': 'NOT_MEASURED', 'rc': 1}
+    assert report['verdict'] == 'NOT_MEASURED'
+
+
+def test_default_late_pad_population_resolves_with_actual_terminal_consumer(
+        tmp_path, monkeypatch, arith_class):
+    import time
+    project, report, started = _phase2_pad_fixture(tmp_path, monkeypatch)
+    entered, env = _actual_outer_phase3_entry(project, report, started)
+    phase3_started = time.time()
+    if entered:
+        res = _late_pad_producer(project, monkeypatch)
+        assert res.extras.get('full_stack_functional_terminal', {}).get('verdict') == 'PASS'
+    assert _actual_late_rollup(env, phase3_started) == ('PASS', 0)
+    rec = json.loads(_fsf().record_path(project).read_text())
+    assert rec['counts']['executed'] > 0
+    assert gate.functional_full_stack_verdict(project)[0] == 0
+    # The original child report and its failed early measurement remain history.
+    assert json.loads((project / 'reports/orchestrator/phase2_one_shot.json').read_text())['verdict'] == 'NOT_MEASURED'
+
+
+@pytest.mark.parametrize('mutation', ['phase2_fail', 'extra_incomplete', 'extra_gate_fail',
+                                     'wrong_gate', 'wrong_rc', 'empty_ledger',
+                                     'missing_audit_row', 'scoped_audit', 'stale_gate'])
+def test_default_phase2_other_obligations_still_block(tmp_path, monkeypatch, mutation):
+    import os
+    project, report, started = _phase2_pad_fixture(tmp_path, monkeypatch)
+    audit_path = project / 'reports/phase2/gates/phase2_compliance.json'
+    audit = json.loads(audit_path.read_text())
+    if mutation == 'phase2_fail':
+        report['steps'][0]['status'] = 'FAIL'
+        report['verdict'] = 'FAIL'
+    elif mutation == 'extra_incomplete':
+        audit['steps'][0].update(status='NOT_MEASURED', reason_class='partial_population')
+    elif mutation == 'extra_gate_fail':
+        audit['gate_execution_ledger'].append({'gate': 'neutral_measurable', 'verdict': 'FAIL', 'rc': 1})
+    elif mutation == 'wrong_gate':
+        audit['gate_execution_ledger'][0]['gate'] = 'unrelated_checker'
+    elif mutation == 'wrong_rc':
+        audit['gate_execution_ledger'][0]['rc'] = 1
+    elif mutation == 'empty_ledger':
+        audit['gate_execution_ledger'] = []
+    elif mutation == 'missing_audit_row':
+        audit['steps'].pop(0)
+    elif mutation == 'scoped_audit':
+        audit['scope']['stage_id'] = 'stage1'
+    elif mutation == 'stale_gate':
+        path = project / 'reports/phase2/gates/bit_level_full_stack.json'
+        os.utime(path, (started - 30, started - 30))
+    audit_path.write_text(json.dumps(audit))
+    _write(project / 'reports/orchestrator/phase2_one_shot.json', json.dumps(report))
+    entered, env = _actual_outer_phase3_entry(project, report, started)
+    assert entered is False
+    assert env['halted_at'] == 'phase2'
+
+
+@pytest.mark.parametrize('mutation,want', [
+    ('absent', 'NOT_MEASURED'), ('missing_pad', 'NOT_MEASURED'),
+    ('pad_fail', 'NOT_MEASURED'), ('generator_error', 'NOT_MEASURED'),
+    ('sim_fail', 'FAIL'), ('stale', 'NOT_MEASURED'), ('context', 'NOT_MEASURED'),
+    ('source', 'NOT_MEASURED'), ('rtl', 'NOT_MEASURED'), ('pad_record', 'NOT_MEASURED'),
+    ('input', 'NOT_MEASURED'), ('old_pad', 'NOT_MEASURED'),
+    ('protocol_context', 'NOT_MEASURED'),
+    ('empty_source', 'NOT_MEASURED'), ('unrelated_source', 'NOT_MEASURED')])
+def test_default_late_terminal_missing_wrong_or_failed_still_blocks(
+        tmp_path, monkeypatch, arith_class, mutation, want):
+    import time
+    project, report, started = _phase2_pad_fixture(tmp_path, monkeypatch)
+    entered, env = _actual_outer_phase3_entry(project, report, started)
+    assert entered is True
+    phase3_started = time.time()
+    if mutation != 'absent':
+        _late_pad_producer(project, monkeypatch, outcome=mutation)
+    path = project / 'reports/phase3/gates/full_stack_functional.json'
+    if mutation in ('stale', 'context', 'source', 'empty_source', 'unrelated_source'):
+        terminal = json.loads(path.read_text())
+        if mutation == 'stale':
+            terminal['post_padring']['started_at'] = phase3_started - 30
+        elif mutation == 'context':
+            terminal['post_padring']['project'] = str(tmp_path / 'other_project')
+        elif mutation == 'source':
+            terminal['post_padring']['source']['bit_level_full_stack_tb_check.py'] = '0' * 64
+        elif mutation == 'empty_source':
+            terminal['post_padring']['source'] = {}
+        else:
+            terminal['post_padring']['source'] = {
+                'unrelated_source.py': '0' * 64}
+        path.write_text(json.dumps(terminal))
+    elif mutation == 'rtl':
+        p = project / f'phase2/stage1/rtl/{CORE}.v'
+        p.write_text(p.read_text() + '\n// changed current RTL\n')
+    elif mutation == 'pad_record':
+        p = project / 'reports/phase3/io_pad_chip_top.json'
+        p.write_text(p.read_text() + '\n')
+    elif mutation == 'input':
+        p = project / 'phase1/generated_docs/L10_TEST_CASES.json'
+        p.write_text(p.read_text() + '\n')
+    elif mutation == 'protocol_context':
+        p = project / 'phase1/generated_docs/L3_CMD_PROTOCOL.json'
+        p.write_text(json.dumps({'opcodes': [{'name': 'new_command', 'code': 1}]}))
+    status, rc = _actual_late_rollup(env, phase3_started)
+    assert status == want and rc != 0
+    if mutation == 'generator_error':
+        assert json.loads(path.read_text())['reason_class'] == 'EXECUTION_ERROR'
+
+
+def test_default_late_actual_pad_generator_then_functional_terminal(
+        tmp_path, monkeypatch, arith_class):
+    """The real pad source producer writes the top; only the simulator is a stand-in."""
+    import time
+    import io_pad_chip_top_gen as pads
+    import phase3_one_shot_runner as phase3
+    import test_io_pad_chip_top_gen as pad_fixture
+    project, report, started = _phase2_pad_fixture(tmp_path, monkeypatch)
+    # The PDK helper is the established neutral LEF/config corpus. The real
+    # generator reads this inline INPUT and the project's actual L9 ports.
+    pdk_root = pad_fixture._pdk(tmp_path / 'neutral_pdk')
+    _write(pdk_root / 'testpdk/libs.ref/testlib_io/lib/io.lib', '''library(neutral) {
+cell(testlib_io__in) {
+pin(PAD) {
+direction: input;
+is_pad: true;
+}
+pin(Y) {
+direction: output;
+function: "PAD";
+}
+}
+cell(testlib_io__bi) {
+pin(PAD) {
+direction: inout;
+is_pad: true;
+function: "A";
+three_state: "OE";
+}
+pin(A) {
+direction: input;
+}
+pin(OE) {
+direction: input;
+related_power_pin: "VDDIO";
+}
+pin(TIELO) {
+direction: output;
+function: "0";
+related_power_pin: "VDDIO";
+}
+}
+}
+''')
+    # This pad-generator API control uses the declared direct synthetic
+    # netlist. It does not claim a native LibreLane synthesis receipt.
+    _write(project / 'phase3/librelane_switch.json', json.dumps({'steps': {'9': 'direct'}}))
+    _write(project / f'phase2/stage2/synth/{CORE}_synth.v', CORE_V)
+    _write(project / 'input/docs/L3_external_interface.md', '''---
+layer: L3
+---
+# External interface
+The I/O cell library is delegated to the PDK i/o pad defaults.
+## Physical Pad Placement
+| Pad side | signals |
+|---|---|
+| South (S) | `rst` |
+| East (E) | `clk` |
+| North (N) | `x[7:0]` |
+| West (W) | `y` / `p` |
+''')
+
+    def actual_pad(p, *_a, **_k):
+        rc, produced = pads.run(p, str(pdk_root), 'testpdk')
+        assert rc == 0 and produced['verdict'] == 'WROTE', produced
+        _write(p / 'reports/phase3/io_pad_chip_top.json', json.dumps(produced))
+        return phase3.StepResult('io_pad_chip_top_gen', 'PASS')
+
+    monkeypatch.setattr(phase3, 'step_io_pad_chip_top_gen', actual_pad)
+    fsf = _fsf()
+    monkeypatch.setattr(fsf, 'default_dispatch', _FakeSim())
+
+    def models(p, used, _container):
+        record = json.loads((p / 'reports/phase3/io_pad_chip_top.json').read_text())
+        cells = {}
+        for item in record['pad_instances'].values():
+            terminal, core_pin = item['terminal'], item['core_pin']
+            if item['direction'] == 'input':
+                cells[item['master']] = (
+                    f'module {item["master"]}(input {terminal}, output {core_pin}); '
+                    f'assign {core_pin} = {terminal}; endmodule\n')
+            else:
+                cells[item['master']] = (
+                    f'module {item["master"]}(inout {terminal}, input {core_pin}, input OE, output TIELO); '
+                    f'assign TIELO = 1\'b0; assign {terminal} = OE ? 1\'bz : {core_pin}; endmodule\n')
+        return {'neutral_pad_models.v': ''.join(cells.values())}, 'neutral pad models'
+
+    monkeypatch.setattr(fsf, 'default_model_resolver', models)
+    entered, env = _actual_outer_phase3_entry(project, report, started)
+    phase3_started = time.time()
+    if entered:
+        result = phase3._padring_producer_dispatch(project, None, None)
+        assert result.status == 'PASS'
+        assert result.extras.get('full_stack_functional_terminal', {}).get('verdict') == 'PASS', result.extras
+        produced = json.loads((project / 'reports/phase3/io_pad_chip_top.json').read_text())
+        assert len(produced['pad_instances']) == 12
+    assert _actual_late_rollup(env, phase3_started) == ('PASS', 0)

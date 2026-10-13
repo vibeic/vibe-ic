@@ -36602,13 +36602,15 @@ def _padring_producer_dispatch(project: Path,
     chip-AGNOSTIC: the delivery route only, no chip / vendor / SKU literal.
     """
     if _chip_path_requests_pad_ring(project):
+        producer_started_at = time.time()
         if supply_plan is not None:
             res = step_io_pad_chip_top_gen(project, container, pdk,
                                            supply_plan=supply_plan)
         else:
             res = step_io_pad_chip_top_gen(project, container, pdk)
         if res.status == _V.Verdict.PASS.value:
-            _full_stack_functional_after_padring(project, container, res)
+            _full_stack_functional_after_padring(project, container, res,
+                                               producer_started_at)
         return res
     declared, why = _declaration_deliverable_answer(project)
     return StepResult(
@@ -36621,7 +36623,8 @@ def _padring_producer_dispatch(project: Path,
 
 def _full_stack_functional_after_padring(project: Path,
                                          container: Optional[str],
-                                         res: StepResult) -> None:
+                                         res: StepResult,
+                                         producer_started_at: float) -> None:
     """FULLSTACKTB — run the Step-5 functional full-stack population through the
     pad-ring chip top the moment `io_pad_chip_top_gen` has written it.
 
@@ -36632,11 +36635,18 @@ def _full_stack_functional_after_padring(project: Path,
     through the delivered top rather than none. It never changes this step's
     word -- the pad-ring producer's verdict is about the ring -- and a failure
     to run is recorded beside it, not raised. chip-AGNOSTIC."""
+    started = time.time()
+    report = project / "reports/phase3/gates/full_stack_functional.json"
+    report.parent.mkdir(parents=True, exist_ok=True)
+    import full_stack_functional_tb as _fsf
+    import bit_level_full_stack_tb_check as _gate
+    from librelane_contract import digest
+    binding = {"project": str(project.resolve()), "started_at": started,
+               "pad_producer_started_at": producer_started_at,
+               "source": {Path(m.__file__).name: digest(Path(m.__file__))
+                          for m in (_fsf, _gate)}}
+    binding['source'][Path(__file__).name] = digest(Path(__file__))
     try:
-        _here = str(Path(__file__).resolve().parent)
-        if _here not in sys.path:
-            sys.path.insert(0, _here)
-        import full_stack_functional_tb as _fsf               # noqa: PLC0415
         rec = _fsf.generate(project, container)
         res.extras["full_stack_functional"] = {
             "verdict": rec.get("verdict"),
@@ -36644,11 +36654,32 @@ def _full_stack_functional_after_padring(project: Path,
             "counts": rec.get("counts"),
             "record": str(_fsf.record_path(project)),
         }
-        print(f"[phase3] full_stack_functional_tb: {rec.get('verdict')} — "
-              f"{rec.get('reason')}", file=sys.stderr)
+        # A generator return is not acceptance. Run the original complete
+        # functional consumer immediately, through the top just produced.
+        rc, terminal, _sentinel = _gate.functional_full_stack_verdict(project)
+        if rec.get("generated_at_unix", 0) < started:
+            raise ValueError("functional generator returned an earlier outcome")
+        pad_record = project / _fsf.CHIP_TOP_RECORD_REL
+        pad_top = project / json.loads(pad_record.read_text())["chip_top_verilog"]
+        if not all(_pl.published_here(p, producer_started_at) for p in (pad_record, pad_top)):
+            raise ValueError("pad-top producer left only earlier output")
+        binding.update(rc=rc,
+                       functional_record_sha256=digest(_fsf.record_path(project)),
+                       chip_top_record_sha256=digest(project / _fsf.CHIP_TOP_RECORD_REL))
+        terminal["post_padring"] = binding
+        report.write_text(json.dumps(terminal, indent=2) + "\n")
+        res.extras["full_stack_functional_terminal"] = {
+            "verdict": terminal["verdict"], "rc": rc, "report": str(report)}
+        print(f"[phase3] full_stack_functional_tb: {terminal['verdict']}", file=sys.stderr)
     except Exception as exc:                                  # noqa: BLE001
-        res.extras["full_stack_functional"] = {
-            "verdict": "NOT_MEASURED", "error": repr(exc)}
+        res.extras.setdefault("full_stack_functional", {
+            "verdict": "NOT_MEASURED", "error": repr(exc)})
+        terminal = {"verdict": "NOT_MEASURED", "reason_class": "EXECUTION_ERROR",
+                    "rule": "functional_post_padring_error", "error": repr(exc),
+                    "post_padring": binding}
+        report.write_text(json.dumps(terminal, indent=2) + "\n")
+        res.extras["full_stack_functional_terminal"] = {
+            "verdict": "NOT_MEASURED", "error": repr(exc), "report": str(report)}
 
 
 def _declaration_deliverable_answer(project: Path) -> Tuple[Optional[str], str]:

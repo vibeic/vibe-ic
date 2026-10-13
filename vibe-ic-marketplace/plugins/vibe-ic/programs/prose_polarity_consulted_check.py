@@ -119,6 +119,25 @@ _SEARCH_ATTRS = {"search", "findall", "finditer", "match", "fullmatch"}
 #: The count is printed on every run, clean or not.
 _EXEMPT_REASON_MIN = 80
 _NOT_PROSE: Dict[str, str] = {
+    "rtl_hierarchy_drivers::drivers":
+        "SELECTED RTL MODULE GRAMMAR, NO PROSE INTAKE. DriverContext reads "
+        "parsed Verilog module regions after comment removal, resolves formal "
+        "generate conditions, and credits child outputs only through declared "
+        "port bindings. HDL logical negation selects an inactive arm; prose "
+        "denial is not that operation. Unknown conditions or child grammar "
+        "refuse credit. Falsifier: test_rtl_hygiene_positional_ports.py::"
+        "test_hierarchy_machine_grammar_driver_credit and "
+        "test_hierarchy_machine_grammar_refuses_prose_and_unknown.",
+    "rtl_hierarchy_drivers::parameter_expressions":
+        "FORMAL HDL PARAMETER DECLARATIONS, NO SENTENCE. The caller supplies "
+        "the header/body of a parsed, comment-stripped RTL module. Balanced "
+        "parameter lists and semicolon-terminated parameter/localparam "
+        "declarations preserve expressions and explicit width/signedness; "
+        "typed constant resolution, not English polarity, controls selection. "
+        "Comment-contained declarations have no authority and unresolved "
+        "expressions cannot enable driver credit. Falsifier: "
+        "test_rtl_hygiene_positional_ports.py::"
+        "test_hierarchy_machine_grammar_parameter_declarations.",
     "verilator_coverage_measure::_professional_input_activity":
         "VERILATOR COVERAGE-DATA GRAMMAR, NO SENTENCE. The reader accepts "
         "only a complete C '<encoded-fields>' <unsigned-count> record, "

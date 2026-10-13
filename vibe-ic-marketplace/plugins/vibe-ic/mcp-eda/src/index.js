@@ -91,7 +91,10 @@ function _shellSingleQuotedHeredoc(content, sentinel) {
     .replace(/`/g, "\\`");
 }
 
-const CONTAINER = process.env.EDA_CONTAINER || "vibeic-eda";
+// Resolve the MCP execution target once. EDA_CONTAINER remains authoritative
+// when both selectors are set; Python's selector is also accepted on its own.
+const CONTAINER = (process.env.EDA_CONTAINER || "").trim()
+  || (process.env.VIBEIC_EDA_CONTAINER || "").trim() || "vibeic-eda";
 const PDK_ROOT = "/foss/pdks";
 const TOOLS = "/foss/tools";
 
@@ -6473,7 +6476,10 @@ const _RUNTIME_PAIR_PY =
 
 function _runtimePairIdentity(spawn = _spawnSync) {
   const r = spawn("python3", ["-c", _RUNTIME_PAIR_PY],
-    { cwd: VIBE_IC_PROGRAMS_DIR, encoding: "utf-8", timeout: 60000 });
+    { cwd: VIBE_IC_PROGRAMS_DIR, encoding: "utf-8", timeout: 60000,
+      // Judge the same resolved target that dockerExec and the image/tool
+      // probes address, including when the inherited selectors disagree.
+      env: { ...process.env, VIBEIC_EDA_CONTAINER: CONTAINER } });
   if (!r || r.status !== 0 || !r.stdout) {
     // COULD-NOT-ASK IS NOT A MATCH. The one substitution this check exists to
     // refuse is a clean-looking report about a pair nobody reconciled.

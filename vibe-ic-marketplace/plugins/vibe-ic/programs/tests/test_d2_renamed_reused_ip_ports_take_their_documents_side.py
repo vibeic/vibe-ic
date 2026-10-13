@@ -107,6 +107,11 @@ NETLIST = """module core(clk, rst, o_memory_wdata, o_memory_waddr, o_memory_wen,
 endmodule
 """
 
+STAGED_TOP = """module core(input clk, input rst, output [1:0] o_memory_wdata,
+  output o_memory_waddr, output o_memory_wen, output o_status);
+endmodule
+"""
+
 PAIRS = [{"l9": ["o_memory_data"], "rtl": ["o_memory_wdata"]},
          {"l9": ["o_memory_addr", "o_memory_we"],
           "rtl": ["o_memory_waddr", "o_memory_wen"]}]
@@ -331,14 +336,13 @@ def test_selected_binding_does_not_relabel_forbidden_document_evidence(tmp_path)
     assert any("ports" in v and "evidence" in v for v in violations)
 
 
-def test_l9_regeneration_publishes_before_selected_handoff_read(tmp_path, monkeypatch):
-    """Exercise the real emitter ordering with L9 absent at entry.
+@pytest.mark.parametrize("handoff", ["direct", "absent", "stale"])
+def test_l9_regeneration_binds_staged_interface_before_synthesis(tmp_path, handoff):
+    """The document producer consumes current staged RTL, before Step 9/L19.
 
-    This neutral fixture keeps the consumer's exact-name L9 read. The bounded
-    actual-project control separately verifies the full native receipt/hash
-    consumer, without replaying synthesis or inventing a generated L9.
+    The implementation reader must still reject absent or stale handoffs;
+    those artifacts cannot stop this earlier document producer.
     """
-    import librelane_contract as LC
     import phase1_doc_one_shot_runner as D
     import phase3_one_shot_runner as R
     proj = _selected_project(tmp_path)
@@ -352,26 +356,157 @@ def test_l9_regeneration_publishes_before_selected_handoff_read(tmp_path, monkey
          "pin_table": [dict(p, mode=p["direction"])
                        for p in original["top_ports"]]}))
     l9.unlink()
-    observed = []
-
-    def selected_handoff(project, top):
-        current = LC._ldoc(project / "phase1/generated_docs", l9.name)
-        assert current["top_module"] == top == "core"
-        assert not current.get("phase1_step_error")
-        observed.append(current)
-        return project / "phase2/stage2/synth/core_synth.v", "fixture", False
-
-    monkeypatch.setattr(R, "pnr_input_netlist", selected_handoff)
+    rtl = proj / "phase2/stage1/rtl/core.v"
+    rtl.write_text(STAGED_TOP)
+    switch = proj / "phase3/librelane_switch.json"
+    switch.parent.mkdir(parents=True, exist_ok=True)
+    switch.write_text(json.dumps({"steps": {"9": "direct" if handoff == "direct" else "librelane"}}))
+    if handoff == "stale":
+        # Synthetic malformed authority is a refusal control, never a receipt
+        # fabricated to clear the real implementation gate.
+        (proj / "phase2/stage2/synth/synth_inputs.json").write_text(
+            json.dumps({"librelane_synthesis": {"schema": "obsolete"}}))
     extracted = {p.name: p.read_text() for p in (proj / "input/docs").glob("*.md")}
     assert not l9.exists()
     result = D.gen_l9_integration_spec(proj, extracted, {})
     final = json.loads(result.path.read_text())
-    assert observed and result.path == l9
+    assert result.path == l9
     assert final["top_ports"] == final["ports"] == final["top_module_pins"]
-    assert final["selected_interface_binding"]["selected_source"].endswith("core_synth.v")
+    assert final["selected_interface_binding"]["selected_source"] == "phase2/stage1/rtl/core.v"
     assert {p["name"] for p in final["top_ports"]
             if p.get("declared_by_staged_top") is True} == {
                 "clk", "rst", "o_status", "o_memory_wdata", "o_memory_waddr", "o_memory_wen"}
+    if handoff != "direct":
+        before = result.path.read_bytes()
+        with pytest.raises(ValueError, match="LL_SYNTH_HANDOFF_INVALID"):
+            R.pnr_input_netlist(proj, "core")
+        assert result.path.read_bytes() == before
+
+
+@pytest.mark.parametrize("control", ["top", "mandatory", "direction", "width"])
+def test_l9_staged_binding_keeps_current_interface_mismatch_refusals(tmp_path, control):
+    """Producer scope is not permission to ignore a current interface mismatch."""
+    from _staged_top_module import refresh_selected_interface
+    proj = _selected_project(tmp_path, missing_mandatory=control == "mandatory",
+                             wrong_width=control == "width")
+    rtl = proj / "phase2/stage1/rtl/core.v"
+    rtl.write_text(STAGED_TOP)
+    path = proj / "phase1/generated_docs/L9_INTEGRATION_SPEC.json"
+    content = json.loads(path.read_text())
+    if control == "top":
+        content["top_module"] = "other_core"
+    elif control == "direction":
+        content["top_ports"][0]["direction"] = "output"
+    before = path.read_bytes()
+    with pytest.raises(ValueError, match="differs from L9|mandatory_missing|direction mismatch|width mismatch"):
+        refresh_selected_interface(proj, path, content, include_synthesis_handoff=False)
+    assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize("control", ["mandatory", "direction", "width"])
+def test_issue3067_l9_native_failure_preserves_prior_document(tmp_path, control):
+    """Real regeneration must finish binding before replacing a prior L9."""
+    import phase1_doc_one_shot_runner as D
+    proj = _selected_project(tmp_path, missing_mandatory=control == "mandatory",
+                             wrong_width=control == "width")
+    source_doc = proj / "input/docs/L3_external_interface.md"
+    source_doc.write_text(source_doc.read_text() + "\nTop-level module: core\n")
+    rtl = proj / "phase2/stage1/rtl/core.v"
+    rtl.write_text(STAGED_TOP)
+    path = proj / "phase1/generated_docs/L9_INTEGRATION_SPEC.json"
+    original = json.loads(path.read_text())
+    if control == "direction":
+        original["top_ports"][0]["direction"] = "output"
+    path.write_text(json.dumps(original))
+    (path.parent / "L1_DATASHEET.json").write_text(json.dumps({
+        "ic_name": "core", "ic_name_extraction_strategy": "explicit_ic_name",
+        "pin_table": [dict(p, mode=p["direction"]) for p in original["top_ports"]]}))
+    switch = proj / "phase3/librelane_switch.json"
+    switch.parent.mkdir(parents=True, exist_ok=True)
+    switch.write_text(json.dumps({"steps": {"9": "librelane"}}))
+    extracted = {p.name: p.read_text() for p in (proj / "input/docs").glob("*.md")}
+    before = path.read_bytes()
+    ok, result = D._v1_6_580_run_step_with_watchdog(
+        lambda: D.gen_l9_integration_spec(proj, extracted, {}),
+        step_name="L9_INTEGRATION_SPEC", layer_name="L9_INTEGRATION_SPEC",
+        project=proj, timeout_s=30)
+    assert (ok, result) == (False, None)
+    assert path.read_bytes() == before
+    outcome = D._pl.report_path(proj, "phase1/L9_INTEGRATION_SPEC_step_outcome.json")
+    status = json.loads(outcome.read_text())
+    assert status["phase1_step_error"] is True
+    assert status["error_class"] == "ValueError"
+    assert any(rule in status["error_message"] for rule in (
+        "mandatory_missing", "direction mismatch", "width mismatch"))
+
+
+def test_issue3067_first_optional_binding_needs_no_native_handoff(tmp_path):
+    """Inline document facts survive absent later-stage implementation authority."""
+    import phase1_doc_one_shot_runner as D
+    import phase3_one_shot_runner as R
+    project = tmp_path / "proj"
+    source = project / "input/docs/integration.md"
+    source.parent.mkdir(parents=True)
+    source.write_text("# Integration\n\nTop-level module: generic_top\n\n"
+                      "```verilog\nmodule generic_top(input clk, input reset_n, "
+                      "output data_o);\nendmodule\n```\n"
+                      "\n| Pin | Direction | Description |\n|---|---|---|\n"
+                      "| clk | input | clock input |\n"
+                      "| reset_n | input | reset input |\n"
+                      "| data_o | output | synchronous output |\n")
+    choice = project / "plugin_output/declaration.json"
+    choice.parent.mkdir()
+    choice.write_text(json.dumps({"top_module": "generic_top"}))
+    manifest = project / "phase2/stage1/rtl/SOURCE_MANIFEST.json"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(json.dumps({"reused_ip": True}))
+    switch = project / "phase3/librelane_switch.json"
+    switch.parent.mkdir(parents=True)
+    switch.write_text(json.dumps({"steps": {"9": "librelane"}}))
+    extracted = {source.name: source.read_text()}
+    D.gen_l1_datasheet(project, extracted)
+    ok, result = D._v1_6_580_run_step_with_watchdog(
+        lambda: D.gen_l9_integration_spec(project, extracted, {}),
+        "L9_INTEGRATION_SPEC", "L9_INTEGRATION_SPEC", project, 30)
+    assert ok is True and result is not None
+    body = json.loads(result.path.read_text())
+    assert body["top_module"] == "generic_top"
+    assert {p["name"] for p in body["top_ports"]} == {"clk", "reset_n", "data_o"}
+    assert "selected_interface_binding" not in body
+    assert not body.get("phase1_step_error")
+    before = result.path.read_bytes()
+    with pytest.raises(ValueError, match="LL_SYNTH_HANDOFF_INVALID"):
+        R.pnr_input_netlist(project, "generic_top")
+    assert result.path.read_bytes() == before
+
+
+def test_issue3067_watchdog_current_failure_survives_preserved_document(tmp_path):
+    """A previous real document cannot hide this call's failure or recovery."""
+    import phase1_doc_one_shot_runner as D
+    project = tmp_path / "proj"
+    document = D._pl.generated_docs_dir(project) / "L9_INTEGRATION_SPEC.json"
+    document.parent.mkdir(parents=True)
+    before = b'{"top_module":"neutral_top","ports":[],"prior_nonstub":true}\n'
+    document.write_bytes(before)
+    outcome = D._pl.report_path(project, "phase1/L9_INTEGRATION_SPEC_step_outcome.json")
+    def fail():
+        raise ValueError("neutral current binding failure")
+    ok, result = D._v1_6_580_run_step_with_watchdog(
+        fail, "L9_INTEGRATION_SPEC", "L9_INTEGRATION_SPEC", project, 30)
+    assert (ok, result) == (False, None)
+    assert document.read_bytes() == before
+    first = json.loads(outcome.read_text())
+    assert first["phase1_step_error"] is True
+    assert first["error_message"] == "neutral current binding failure"
+    sentinel = object()
+    ok, result = D._v1_6_580_run_step_with_watchdog(
+        lambda: sentinel, "L9_INTEGRATION_SPEC", "L9_INTEGRATION_SPEC", project, 30)
+    assert ok is True and result is sentinel
+    current = json.loads(outcome.read_text())
+    assert current["phase1_step_error"] is False
+    assert current["phase1_step_timeout"] is False
+    assert "error_message" not in current
+    assert document.read_bytes() == before
 
 
 @pytest.mark.parametrize("kw", [{"protocol": False},
