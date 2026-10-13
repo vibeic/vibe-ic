@@ -348,6 +348,240 @@ def test_authored_glue_cli_dry_run_refuses_without_writes(tmp_path, monkeypatch)
     assert _authored_metadata_bytes(project) == before
 
 
+def _interface_fixture(tmp_path, monkeypatch):
+    """Neutral input choice with real official pull and real selected consumer."""
+    project, match, _ = _authored_glue_fixture(tmp_path, monkeypatch)
+    monkeypatch.setattr(pull, 'query_catalog', lambda *a, **kw: [match])
+    rel, contract = _prepare_interface_inputs(project)
+    return project, match, rel, contract
+
+
+def _prepare_interface_inputs(project):
+    source = project/'phase2/stage1/rtl/top_wrapper.v'
+    source.write_text('module top_wrapper(input clk, output [3:0] o_memory_raddr, '
+                      'output [3:0] o_memory_waddr);\n'
+                      'assign o_memory_raddr = 4\'b0010;\n'
+                      'assign o_memory_waddr = 4\'b0011;\nendmodule\n')
+    doc = project/'input/docs/L3_external_interface.md'
+    doc.write_text('''# External interface
+Reuse leaf from vendor:reusable:leaf:2.3.4.
+Memory names are illustrative; declare the selected protocol.
+| Signal | Width | Direction | Description |
+|---|---|---|---|
+| `clk` | 1 | input | clock |
+| `o_memory_addr` | 4 | output | address (typical) |
+
+The Plugin MUST declare `plugin_output/declaration.json` before authoring:
+| Field | Required | Example |
+|---|---|---|
+| `top_module` | Yes | `"top_wrapper"` |
+| `memory_interface_protocol` | Yes | `"split_read_write"` |
+''')
+    import spec_declaration_emit as declaration
+    assert declaration.main([str(project), '--set', 'top_module=top_wrapper',
+                             '--set', 'memory_interface_protocol=split_read_write']) == 0
+    from l_doc_generator_stamp import dump
+    ports = [{'name': 'clk', 'direction': 'input', 'width': 1, 'evidence': str(doc.relative_to(project))},
+             {'name': 'o_memory_addr', 'direction': 'output', 'width': 4,
+              'evidence': str(doc.relative_to(project))}]
+    dump(project/'phase1/generated_docs/L9_INTEGRATION_SPEC.json',
+         {'top_module': 'top_wrapper', 'top_ports': ports}, emitter='neutral-test-input')
+    rel = 'plugin_input/interface.json'
+    contract = {'schema': 'vibeic.authored_interface_renames.v1',
+                'top_module': 'top_wrapper', 'actor': 'neutral fixture author',
+                'rationale': 'The delegated address interface is split into read and write roles.',
+                'renamed_interfaces': [{'l9': ['o_memory_addr'],
+                                       'rtl': ['o_memory_raddr', 'o_memory_waddr']}],
+                'input_obligations': [{'path': str(doc.relative_to(project)),
+                                       'quote': 'Memory names are illustrative; declare the selected protocol.'}]}
+    _json(project/rel, contract)
+    return rel, contract
+
+
+def _selected_interface(project):
+    from _staged_top_module import selected_interface_ports
+    return selected_interface_ports(project, json.loads(
+        (project/'phase1/generated_docs/L9_INTEGRATION_SPEC.json').read_text()))
+
+
+def _assert_selected_interface_accepts(project):
+    # Observe the actual unchanged consumer's verdict, including its refusal,
+    # before comparing it. Baseline grading must reach a value assertion rather
+    # than terminate on an uncaught exception or a newly absent manifest key.
+    try:
+        ports = _selected_interface(project)
+        observation = {'accepted': True, 'ports': ports}
+    except ValueError as exc:
+        if str(exc) != 'selected interface rename is not declared in current manifest':
+            raise
+        observation = {'accepted': False, 'reason': str(exc)}
+    assert observation['accepted'] is True, observation
+    assert {port['name'] for port in observation['ports']} == {'clk', 'o_memory_raddr', 'o_memory_waddr'}
+
+
+def _publish_interface(project, match, rel):
+    # The baseline uses its real old producer rather than failing on new API
+    # absence; the control's failure is the real consumer's measured refusal.
+    import inspect
+    kwargs = ({'authored_interface': rel}
+              if 'authored_interface' in inspect.signature(pull.emit_authored_glue_inventory).parameters else {})
+    return pull.emit_authored_glue_inventory(project, [match], ['top_wrapper.v'], **kwargs)
+
+
+def test_authored_interface_public_producer_changes_real_consumer_verdict(tmp_path, monkeypatch):
+    project, match, rel, contract = _interface_fixture(tmp_path, monkeypatch)
+    with pytest.raises(ValueError, match='rename is not declared'):
+        _selected_interface(project)
+    assert _publish_interface(project, match, rel)['status'] == pull.PIN_VERIFIED
+    _assert_selected_interface_accepts(project)
+    mf = project/'phase2/stage1/rtl/SOURCE_MANIFEST.json'
+    manifest = json.loads(mf.read_text())
+    assert manifest['renamed_interfaces'] == contract['renamed_interfaces']
+    event = json.loads((project/'provenance.jsonl').read_text().splitlines()[-1])
+    assert event['inputs'][rel] == 'sha256:' + _h(project/rel)
+    assert event['outputs']['phase2/stage1/rtl/SOURCE_MANIFEST.json'] == 'sha256:' + _h(mf)
+    before = _authored_metadata_bytes(project)
+    again = _publish_interface(project, match, rel)
+    assert again['already_current'] and again['outputs'] == {}
+    assert _authored_metadata_bytes(project) == before
+    assert pull.verify_existing_reused_pins_outcome(project, [match], manifest)[0] == pull.PIN_VERIFIED
+
+
+@pytest.mark.parametrize('control', ['subset', 'unknown_source', 'unknown_target', 'wrong_width',
+    'wrong_direction', 'unknown_width', 'required', 'fixed', 'no_delegation', 'wrong_top',
+    'wrong_schema', 'unknown_field', 'bad_quote', 'duplicate_name', 'duplicate_json_key',
+    'corrupt_json', 'malformed_roster', 'malformed_port', 'duplicate_doc_port'])
+def test_authored_interface_invalid_input_never_changes_owned_metadata(tmp_path, monkeypatch, control):
+    project, match, rel, contract = _interface_fixture(tmp_path, monkeypatch)
+    l9 = project/'phase1/generated_docs/L9_INTEGRATION_SPEC.json'
+    doc = project/'input/docs/L3_external_interface.md'
+    model = json.loads(l9.read_text())
+    if control == 'subset': contract['renamed_interfaces'][0]['rtl'].pop()
+    elif control == 'unknown_source': contract['renamed_interfaces'][0]['l9'] = ['o_memory_missing']
+    elif control == 'unknown_target': contract['renamed_interfaces'][0]['rtl'].append('o_memory_missing')
+    elif control == 'wrong_width': model['top_ports'][1]['width'] = 3
+    elif control == 'wrong_direction': model['top_ports'][1]['direction'] = 'input'
+    elif control == 'unknown_width': model['top_ports'][1].pop('width')
+    elif control == 'required': model['top_ports'][1]['required'] = True
+    elif control == 'fixed': doc.write_text(doc.read_text().replace('address (typical)', 'mandatory fixed name o_memory_addr'))
+    elif control == 'no_delegation': doc.write_text(doc.read_text().replace('illustrative', 'concrete').replace('(typical)', ''))
+    elif control == 'wrong_top': contract['top_module'] = 'another_top'
+    elif control == 'wrong_schema': contract['schema'] = 'arbitrary'
+    elif control == 'unknown_field': contract['derived_pad_pairs'] = contract['renamed_interfaces']
+    elif control == 'bad_quote': contract['input_obligations'][0]['quote'] = 'invented authority'
+    elif control == 'duplicate_name': contract['renamed_interfaces'][0]['rtl'].append('o_memory_raddr')
+    elif control == 'malformed_roster': model['ports'] = []
+    elif control == 'malformed_port': model['top_ports'].append('invalid port')
+    elif control == 'duplicate_doc_port': model['top_ports'].append(dict(model['top_ports'][1]))
+    _json(l9, model)
+    _json(project/rel, contract)
+    if control == 'duplicate_json_key':
+        path = project/rel; path.write_text(path.read_text().replace('"actor":', '"actor": "other", "actor":'))
+    elif control == 'corrupt_json': (project/rel).write_text('{invalid JSON')
+    before = _authored_metadata_bytes(project)
+    with pytest.raises((ValueError, OSError)):
+        _publish_interface(project, match, rel)
+    assert _authored_metadata_bytes(project) == before
+
+
+@pytest.mark.parametrize('change', ['contract', 'input_authority', 'selected_width'])
+def test_authored_interface_ordinary_source_consumer_rechecks_authority(tmp_path, monkeypatch, change):
+    project, match, rel, _ = _interface_fixture(tmp_path, monkeypatch)
+    assert _publish_interface(project, match, rel)['status'] == pull.PIN_VERIFIED
+    if change == 'contract': (project/rel).write_bytes((project/rel).read_bytes() + b'\n')
+    elif change == 'input_authority':
+        doc = project/'input/docs/L3_external_interface.md'
+        doc.write_text(doc.read_text().replace('illustrative', 'concrete').replace('(typical)', ''))
+    else:
+        source = project/'phase2/stage1/rtl/top_wrapper.v'
+        source.write_text(source.read_text().replace('[3:0]', '[2:0]'))
+    manifest = json.loads((project/'phase2/stage1/rtl/SOURCE_MANIFEST.json').read_text())
+    before = _authored_metadata_bytes(project)
+    state, why = pull.verify_existing_reused_pins_outcome(project, [match], manifest)
+    assert state == pull.PIN_MISMATCH and 'AUTHORED_INTERFACE_REFUSED' in why
+    assert _authored_metadata_bytes(project) == before
+
+
+@pytest.mark.parametrize('rel', ['', 'plugin_input//interface.json',
+                                  'plugin_input/./interface.json', 'input/docs/L3_external_interface.md'])
+def test_authored_interface_noncanonical_or_empty_path_never_publishes(tmp_path, monkeypatch, rel):
+    project, match, _, _ = _interface_fixture(tmp_path, monkeypatch)
+    before = _authored_metadata_bytes(project)
+    with pytest.raises(ValueError):
+        _publish_interface(project, match, rel)
+    assert _authored_metadata_bytes(project) == before
+
+
+def test_authored_interface_cli_uses_same_real_producer_and_consumer(tmp_path, monkeypatch, capsys):
+    project, _, rel, _ = _interface_fixture(tmp_path, monkeypatch)
+    assert pull.main([str(project), '--authored-glue', 'top_wrapper.v',
+                      '--authored-interface', rel]) == 0
+    capsys.readouterr()
+    _assert_selected_interface_accepts(project)
+
+
+@pytest.mark.parametrize('order', ['glue_then_derivative', 'derivative_then_glue'])
+def test_authored_interface_native_two_orders_close_current_manifest_ledger(public_mapper_project, order):
+    project, match, _ = public_mapper_project
+    pull.pull_all_catalog_matches(project, [match], official_only=True,
+                                  apply_corrections=order == 'derivative_then_glue')
+    previous = (project/'provenance.jsonl').read_bytes()
+    previous_ref = json.loads((project/'phase2/stage1/rtl/SOURCE_MANIFEST.json').read_text()).get('local_derivative')
+    rel, contract = _prepare_interface_inputs(project)
+    assert _publish_interface(project, match, rel)['status'] == pull.PIN_VERIFIED
+    if order == 'glue_then_derivative':
+        outcome = pull.adopt_catalog_local_correction(project, [match])
+        assert outcome['status'] == pull.PIN_VERIFIED, outcome
+    _assert_selected_interface_accepts(project)
+    manifest_path = project/'phase2/stage1/rtl/SOURCE_MANIFEST.json'
+    manifest = json.loads(manifest_path.read_text())
+    assert manifest['renamed_interfaces'] == contract['renamed_interfaces']
+    record = json.loads((project/manifest['local_derivative']['path']).read_text())
+    if previous_ref:
+        assert record['previous_local_derivative'] == previous_ref
+    for name in ('parent_red', 'candidate_green'):
+        receipt = json.loads((project/record['proof'][name]['path']).read_text())
+        assert receipt['rtl']['top_wrapper.v'] == _h(manifest_path.parent/'top_wrapper.v')
+        assert len(receipt['native_measurements']['case_rows']) == 12
+        assert all('top_wrapper.v' in row['compile_argv'] for row in receipt['native_measurements']['case_rows'])
+    assert (project/'provenance.jsonl').read_bytes().startswith(previous)
+    assert pull.verify_existing_reused_pins_outcome(project, [match], manifest)[0] == pull.PIN_VERIFIED
+    before_repeat = _authored_metadata_bytes(project)
+    again = _publish_interface(project, match, rel)
+    assert again['status'] == pull.PIN_VERIFIED and again['already_current'] and again['outputs'] == {}
+    assert _authored_metadata_bytes(project) == before_repeat
+    assert pull.verify_existing_reused_pins_outcome(project, [match], manifest)[0] == pull.PIN_VERIFIED
+    from test_local_derivative_written_output_provenance import _gate
+    result, report = _gate(project, 'interface-' + order)
+    assert result.returncode == 0 and report['verdict'] == 'PASS', result.stdout + result.stderr
+    positive = project.parent/('positive-interface-' + order)
+    shutil.copytree(project, positive)
+    assert (positive/'phase2/stage1/rtl/SOURCE_MANIFEST.json').read_bytes() == manifest_path.read_bytes()
+    # A native negative uses the same actual writer/consumer ledger, with no
+    # test-owned repaired hash. The latest real manifest binding must bite.
+    manifest_path.write_bytes(manifest_path.read_bytes() + b'\n')
+    result, report = _gate(project, 'interface-drift-' + order)
+    assert result.returncode == 1 and report['verdict'] == 'FAIL', result.stdout + result.stderr
+    assert any(row['rule'] == 'PROVENANCE_HASH_MISMATCH' and 'SOURCE_MANIFEST.json' in row['detail']
+               for row in report['findings'])
+    corrupted = _authored_metadata_bytes(project)
+    with pytest.raises(ValueError, match='current native derivative manifest binding'):
+        _publish_interface(project, match, rel)
+    assert _authored_metadata_bytes(project) == corrupted
+
+
+def test_authored_interface_bad_input_blocks_before_native_derivative_successor(public_mapper_project):
+    project, match, _ = public_mapper_project
+    pull.pull_all_catalog_matches(project, [match], official_only=True)
+    rel, contract = _prepare_interface_inputs(project)
+    contract['renamed_interfaces'][0]['rtl'].pop()
+    _json(project/rel, contract)
+    before = {str(p.relative_to(project)): p.read_bytes() for p in project.rglob('*') if p.is_file()}
+    with pytest.raises(ValueError, match='do not cover'):
+        _publish_interface(project, match, rel)
+    assert {str(p.relative_to(project)): p.read_bytes() for p in project.rglob('*') if p.is_file()} == before
+
+
 def test_normal_consumer_admits_complete_declared_local_derivative(tmp_path, monkeypatch):
     # Same supplied derivative bytes/receipts reach the old and new ordinary
     # runner. The pre-fix failure is its observed FAIL verdict, not a missing API.

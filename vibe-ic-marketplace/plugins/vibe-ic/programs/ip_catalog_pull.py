@@ -1077,8 +1077,157 @@ def _local_inventory(rtl: Path) -> Dict[str, str]:
     return result
 
 
+AUTHORED_INTERFACE_SCHEMA = "vibeic.authored_interface_renames.v1"
+
+
+def _authored_interface_plan(project: Path, rel: str) -> Dict[str, Any]:
+    """Validate a caller's input declaration; never infer or publish a rename.
+
+    BLOCKING source admission only. Current input delegation, selected-top
+    identity and literal electrical facts must independently authorize every
+    pair. Pad sides and functional equivalence remain ordinary obligations.
+    """
+    if not isinstance(rel, str) or not rel.startswith("plugin_input/") or \
+            Path(rel).as_posix() != rel or any(not part for part in rel.split("/")):
+        raise ValueError("authored interface input must be under plugin_input")
+    path = _local_path(project, rel)
+
+    def unique_keys(rows):
+        result = {}
+        for key, value in rows:
+            if key in result:
+                raise ValueError("duplicate authored interface JSON key")
+            result[key] = value
+        return result
+
+    contract_bytes = path.read_bytes()
+    data = json.loads(contract_bytes.decode("utf-8"), object_pairs_hook=unique_keys)
+    keys = {"schema", "top_module", "actor", "rationale", "renamed_interfaces",
+            "input_obligations"}
+    if not isinstance(data, dict) or set(data) != keys or \
+            data.get("schema") != AUTHORED_INTERFACE_SCHEMA:
+        raise ValueError("authored interface schema or fields differ")
+    if any(not isinstance(data[k], str) or not data[k].strip()
+           for k in ("actor", "rationale", "top_module")):
+        raise ValueError("authored interface actor/rationale/top missing")
+    guards = {path: contract_bytes}
+    obligations = data["input_obligations"]
+    if not isinstance(obligations, list) or not obligations:
+        raise ValueError("authored interface input obligation missing")
+    for row in obligations:
+        if not isinstance(row, dict) or set(row) != {"path", "quote"} or \
+                not isinstance(row["path"], str) or not row["path"].startswith("input/docs/"):
+            raise ValueError("authored interface obligation must quote original input/docs")
+        source = _local_path(project, row["path"])
+        if not isinstance(row["quote"], str) or not row["quote"] or \
+                row["quote"] not in source.read_text():
+            raise ValueError("authored interface input quote differs")
+        guards[source] = source.read_bytes()
+    # All original documents are inputs to the existing delegation/fixed-name
+    # checks. An author-selected quote cannot hide a contrary document.
+    for source in sorted((project / "input/docs").rglob("*")):
+        if source.is_file():
+            source = _local_path(project, str(source.relative_to(project)))
+            guards[source] = source.read_bytes()
+    l9_path = _local_path(project, "phase1/generated_docs/L9_INTEGRATION_SPEC.json")
+    l9_bytes = l9_path.read_bytes()
+    l9 = json.loads(l9_bytes)
+    if not isinstance(l9, dict):
+        raise ValueError("authored interface current L9 is not an object")
+    rosters = [l9[key] for key in ("ports", "top_ports", "top_module_pins") if key in l9]
+    if not rosters or any(not isinstance(rows, list) or rows != rosters[0] for rows in rosters):
+        raise ValueError("authored interface current L9 rosters disagree")
+    if any(not isinstance(port, dict) or not isinstance(port.get("name"), str)
+           or not re.fullmatch(r"[A-Za-z_]\w*", port["name"]) for port in rosters[0]) or \
+            len({port["name"] for port in rosters[0]}) != len(rosters[0]):
+        raise ValueError("authored interface current L9 ports are malformed or repeated")
+    from _staged_top_module import bind_selected_interface
+    from _l_doc_pad_placement import accept_renames
+    from renamed_interface_derive import _rtl_top_ports
+    bound = bind_selected_interface(project, l9, include_synthesis_handoff=False)
+    binding = bound.get("selected_interface_binding") or {}
+    groups = binding.get("illustrative_groups") or []
+    if not groups or data["top_module"] != binding.get("top_module"):
+        raise ValueError("authored interface lacks current input delegation or selected top")
+    selected = _rtl_top_ports(project, data["top_module"])
+    if not selected or selected[0] != binding["selected_source"] or \
+            not selected[0].startswith("phase2/stage1/rtl/"):
+        raise ValueError("authored interface current selected source is unavailable")
+    choice = _local_path(project, "plugin_output/declaration.json")
+    guards[l9_path] = l9_bytes
+    guards[choice] = choice.read_bytes()
+    selected_path = _local_path(project, selected[0])
+    guards[selected_path] = selected_path.read_bytes()
+    sidecar = project / "plugin_output/declaration.provenance.json"
+    if sidecar.exists():
+        sidecar = _local_path(project, str(sidecar.relative_to(project)))
+        guards[sidecar] = sidecar.read_bytes()
+    entries = data["renamed_interfaces"]
+    if not isinstance(entries, list) or not entries:
+        raise ValueError("authored interface rename pairs missing")
+    pairs, seen = [], set()
+    for entry in entries:
+        if not isinstance(entry, dict) or set(entry) != {"l9", "rtl"}:
+            raise ValueError("authored interface pair fields differ")
+        for key in ("l9", "rtl"):
+            names = entry[key]
+            if not isinstance(names, list) or not names or any(
+                    not isinstance(name, str) or not re.fullmatch(r"[A-Za-z_]\w*", name)
+                    for name in names) or len(set(names)) != len(names):
+                raise ValueError("authored interface pair names malformed or repeated")
+        lhs, rhs = set(entry["l9"]), set(entry["rtl"])
+        identity = (tuple(sorted(lhs)), tuple(sorted(rhs)))
+        if identity in seen or not any(lhs <= set(group["l9"]) and rhs <= set(group["rtl"])
+                                       for group in groups):
+            raise ValueError("authored interface pair is repeated or outside input delegation")
+        seen.add(identity)
+        pairs.append((lhs, rhs))
+    for group in groups:
+        authorized = [(lhs, rhs) for lhs, rhs in pairs
+                      if lhs <= set(group["l9"]) and rhs <= set(group["rtl"])]
+        if (set().union(*(lhs for lhs, _ in authorized)) != set(group["l9"]) or
+                set().union(*(rhs for _, rhs in authorized)) != set(group["rtl"])):
+            raise ValueError("authored interface pairs do not cover the selected interface")
+    accepted, rejected = accept_renames(pairs, bound["ports"], selected[1])
+    if rejected or len(accepted) != len(pairs):
+        raise ValueError("authored interface electrical declaration refused: " + repr(rejected))
+    ports = {p["name"]: p for p in bound["ports"]}
+    for lhs, rhs in pairs:
+        for name in lhs | rhs:
+            width = ports[name].get("width")
+            if not isinstance(width, int) or isinstance(width, bool) or width < 1 or \
+                    ports[name].get("direction", ports[name].get("mode")) not in {"input", "output", "inout"}:
+                raise ValueError("authored interface electrical extent/direction is unknown")
+    if any(p.read_bytes() != raw for p, raw in guards.items()):
+        raise ValueError("authored interface inputs changed during validation")
+    return {"ref": {"path": rel, "sha256": hashlib.sha256(contract_bytes).hexdigest()},
+            "pairs": entries, "guards": guards,
+            "inputs": {str(p.relative_to(project)): "sha256:" + hashlib.sha256(raw).hexdigest()
+                       for p, raw in guards.items()}}
+
+
+def _verify_authored_interface(project: Path, manifest: Dict[str, Any]) -> None:
+    """Reused-source admission retains the actual caller input's authority."""
+    if "authored_interface" not in manifest:
+        return
+    ref = manifest["authored_interface"]
+    _local_ref(project, ref)
+    plan = _authored_interface_plan(project, ref["path"])
+    if ref != plan["ref"] or manifest.get("renamed_interfaces") != plan["pairs"]:
+        raise ValueError("authored interface input or published mappings changed")
+    events = [json.loads(line) for line in (project / "provenance.jsonl").read_text().splitlines()]
+    if not any(isinstance(event, dict) and event.get("event") in {
+                   "ip_catalog_authored_glue_inventory", "ip_catalog_local_derivative"}
+               and event.get("exit_code") == 0 and event.get("authored_interface") == ref
+               and event.get("renamed_interfaces") == plan["pairs"]
+               and event.get("inputs", {}).get(ref["path"]) == "sha256:" + ref["sha256"]
+               for event in events):
+        raise ValueError("authored interface native publication event is missing")
+
+
 def emit_authored_glue_inventory(project: Path, matches: List[CatalogMatch],
-                                 names: List[str]) -> Dict[str, Any]:
+                                 names: List[str], *,
+                                 authored_interface: Optional[str] = None) -> Dict[str, Any]:
     """Record explicitly declared glue through the existing source producer.
 
     Source admission only: read actual bytes, independently verify the official
@@ -1090,6 +1239,14 @@ def emit_authored_glue_inventory(project: Path, matches: List[CatalogMatch],
     if manifest.get("reused_ip") is not True or \
             manifest.get("generated_by") != "ip_catalog_pull":
         raise ValueError("authored glue requires an official catalog parent")
+    previous_interface = manifest.get("authored_interface")
+    if previous_interface is not None:
+        _local_ref(project, previous_interface)
+    interface_rel = (authored_interface if authored_interface is not None
+                     else (previous_interface or {}).get("path"))
+    interface = _authored_interface_plan(project, interface_rel) if interface_rel is not None else None
+    if interface and manifest.get("renamed_interfaces") not in (None, [], interface["pairs"]):
+        raise ValueError("authored interface cannot overwrite another rename declaration")
     official = {}
     for pin in manifest.get("source_pins") or []:
         for rel, digest in pin.get("files_sha256", {}).items():
@@ -1142,9 +1299,32 @@ def emit_authored_glue_inventory(project: Path, matches: List[CatalogMatch],
                    event.get("event") == "ip_catalog_authored_glue_inventory" and
                    event.get("exit_code") == 0 and event.get("ai_authored_files") == rows and
                    event.get("inputs") == inputs for event in events))
+    if interface:
+        current_outputs = {str(path.relative_to(project)): "sha256:" + _sha256_file(path)
+                           for path in (mf_path, decl_path) if path.is_file()}
+        latest_outputs = {}
+        for event in events:
+            if event.get("exit_code") == 0 and isinstance(event.get("outputs"), dict):
+                latest_outputs.update(event["outputs"])
+        if "local_derivative" in manifest and latest_outputs.get(
+                "phase2/stage1/rtl/SOURCE_MANIFEST.json") != current_outputs[
+                    "phase2/stage1/rtl/SOURCE_MANIFEST.json"]:
+            raise ValueError("authored interface requires a current native derivative manifest binding")
+        already = (manifest.get("ai_authored_files") == rows and
+                   declaration.get("ai_authored_files") == sorted(authored) and
+                   previous_interface == interface["ref"] and
+                   manifest.get("renamed_interfaces") == interface["pairs"] and any(
+                       event.get("event") == "ip_catalog_authored_glue_inventory" and
+                       event.get("exit_code") == 0 and event.get("ai_authored_files") == rows and
+                       event.get("authored_interface") == interface["ref"] and
+                       event.get("renamed_interfaces") == interface["pairs"] and
+                       event.get("inputs", {}).get(interface_rel) == "sha256:" + interface["ref"]["sha256"]
+                       for event in events) and
+                   all(latest_outputs.get(path) == digest for path, digest in current_outputs.items()))
     derivative = "local_derivative" in manifest
     if derivative and not already:
-        outcome = adopt_catalog_local_correction(project, matches, authored_rows=rows)
+        outcome = adopt_catalog_local_correction(project, matches, authored_rows=rows,
+                                                authored_interface=interface_rel)
         if outcome["status"] != PIN_VERIFIED:
             return outcome
         manifest = _local_json(mf_path)
@@ -1163,11 +1343,17 @@ def emit_authored_glue_inventory(project: Path, matches: List[CatalogMatch],
                 (path.exists() and not path.is_file()) or \
                 (path.read_bytes() if path.is_file() else None) != data:
             raise ValueError("source metadata changed before authored publication")
+    if interface and _authored_interface_plan(project, interface_rel)["guards"] != interface["guards"]:
+        raise ValueError("authored interface inputs changed before authored publication")
     if already:
         return {"status": PIN_VERIFIED, "kind": "AUTHORED_GLUE_INVENTORY",
                 "already_current": True, "outputs": {}}
     manifest["ai_authored_files"] = rows
     declaration["ai_authored_files"] = sorted(authored)
+    if interface:
+        manifest["authored_interface"] = interface["ref"]
+        manifest["renamed_interfaces"] = interface["pairs"]
+        inputs.update(interface["inputs"])
     import _atomic_artefact as atomic
     atomic.write_json(mf_path, manifest)
     atomic.write_json(decl_path, declaration)
@@ -1176,6 +1362,8 @@ def emit_authored_glue_inventory(project: Path, matches: List[CatalogMatch],
              "inputs": inputs,
              "outputs": {str(path.relative_to(project)): "sha256:" + _sha256_file(path)
                          for path in (mf_path, decl_path)}}
+    if interface:
+        event.update(authored_interface=interface["ref"], renamed_interfaces=interface["pairs"])
     with provenance_path.open("ab") as stream:
         previous = metadata_before[provenance_path]
         if previous and not previous.endswith(b"\n"):
@@ -1287,6 +1475,14 @@ def _local_derivative_plan(project: Path, matches: List[CatalogMatch],
              "official_unmodified_files": len(official)-len(replacements),
              "locally_adapted_reused_files": len(replacements),
              "separately_authored_files": sorted(authored)}
+    if "authored_interface" in manifest:
+        interface = _authored_interface_plan(project, manifest["authored_interface"]["path"])
+        if (manifest["authored_interface"] != interface["ref"] or
+                manifest.get("renamed_interfaces") != interface["pairs"]):
+            raise ValueError("authored interface input or published mappings changed")
+        local_event.update(authored_interface=interface["ref"],
+                           renamed_interfaces=interface["pairs"],
+                           inputs={interface["ref"]["path"]: "sha256:" + interface["ref"]["sha256"]})
     if manifest.get("local_derivative") == ref:
         local_event["outputs"]["phase2/stage1/rtl/SOURCE_MANIFEST.json"] = (
             "sha256:" + _sha256_file(project / "phase2/stage1/rtl/SOURCE_MANIFEST.json"))
@@ -1323,6 +1519,10 @@ def _local_derivative_plan(project: Path, matches: List[CatalogMatch],
 def verify_existing_reused_pins_outcome(project: Path, matches: List[CatalogMatch],
                                        manifest: Dict[str, Any]) -> Tuple[str, str]:
     """Ordinary runner admission: official bytes or explicit LOCAL DERIVATIVE."""
+    try:
+        _verify_authored_interface(project, manifest)
+    except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+        return PIN_MISMATCH, "AUTHORED_INTERFACE_REFUSED: " + str(exc)
     if "local_derivative" not in manifest:
         return verify_existing_official_pins_outcome(project, matches, manifest)
     try:
@@ -1346,11 +1546,17 @@ def verify_existing_reused_pins_outcome(project: Path, matches: List[CatalogMatc
 
 
 def apply_local_derivative(project: Path, matches: List[CatalogMatch],
-                           ref: Dict[str, Any], *, authored_rows=None) -> Dict[str, Any]:
+                           ref: Dict[str, Any], *, authored_rows=None,
+                           authored_interface: Optional[str] = None) -> Dict[str, Any]:
     """Existing pull producer stages only the finite replay, retaining parent data."""
     try:
         mf_path = project / "phase2/stage1/rtl/SOURCE_MANIFEST.json"
         manifest = _local_json(mf_path)
+        if authored_interface is not None and authored_rows is None:
+            raise ValueError("authored interface derivative publication requires typed glue rows")
+        interface = _authored_interface_plan(project, authored_interface) if authored_interface is not None else None
+        if interface and manifest.get("renamed_interfaces") not in (None, [], interface["pairs"]):
+            raise ValueError("authored interface cannot overwrite another rename declaration")
         if "local_derivative" in manifest and manifest["local_derivative"] != ref:
             successor = _local_json(_local_ref(project, ref))
             old = _local_json(_local_ref(project, manifest["local_derivative"]))
@@ -1429,9 +1635,17 @@ def apply_local_derivative(project: Path, matches: List[CatalogMatch],
         if outputs != plan["event"]["outputs"]:
             raise ValueError("written derivative output differs from replayed patch")
         manifest["local_derivative"] = ref
+        if interface:
+            if _authored_interface_plan(project, authored_interface)["guards"] != interface["guards"]:
+                raise ValueError("authored interface inputs changed before derivative publication")
+            manifest["authored_interface"] = interface["ref"]
+            manifest["renamed_interfaces"] = interface["pairs"]
         atomic.write_json(mf_path, manifest)
         outputs["phase2/stage1/rtl/SOURCE_MANIFEST.json"] = "sha256:" + _sha256_file(mf_path)
         event = {**plan["event"], "outputs": outputs}
+        if interface:
+            event.update(authored_interface=interface["ref"], renamed_interfaces=interface["pairs"],
+                         inputs={interface["ref"]["path"]: "sha256:" + interface["ref"]["sha256"]})
         with (project / "provenance.jsonl").open("a") as f:
             f.write(json.dumps(event, sort_keys=True) + "\n")
         return {"status": PIN_VERIFIED, "reason": why, **event}
@@ -1535,7 +1749,8 @@ def _measure_catalog_glue_context(support, parent_rtl, current_rtl, authored,
 
 def adopt_catalog_local_correction(project: Path, matches: List[CatalogMatch],
                                    corrections: Optional[List[Path]] = None, *,
-                                   authored_rows=None) -> Dict[str, Any]:
+                                   authored_rows=None,
+                                   authored_interface: Optional[str] = None) -> Dict[str, Any]:
     """Publish the existing LOCAL_DERIVATIVE contract from sealed catalog data.
 
     Native evidence is a component source challenge on the declared exact
@@ -1573,7 +1788,7 @@ def adopt_catalog_local_correction(project: Path, matches: List[CatalogMatch],
             for name in official:
                 shutil.copy2(_local_path(project, "phase2/stage1/rtl/" + name), parent_rtl / name)
             parent_manifest = {key: value for key, value in manifest.items()
-                               if key not in ("local_derivative", "ai_authored_files")}
+                               if key not in ("local_derivative", "ai_authored_files", "authored_interface")}
             (parent_rtl / "SOURCE_MANIFEST.json").write_text(json.dumps(parent_manifest, indent=2) + "\n")
             shutil.copy2(project / "provenance.jsonl", parent / "provenance.jsonl")
         def ref(path):
@@ -1620,7 +1835,8 @@ def adopt_catalog_local_correction(project: Path, matches: List[CatalogMatch],
             record["previous_local_derivative"] = previous_ref
         path = support / "record.json"
         path.write_text(json.dumps(record, indent=2) + "\n")
-        return apply_local_derivative(project, matches, ref(path), authored_rows=authored_rows)
+        return apply_local_derivative(project, matches, ref(path), authored_rows=authored_rows,
+                                      authored_interface=authored_interface)
     except (OSError, ValueError, TypeError, KeyError, AttributeError,
             subprocess.TimeoutExpired) as exc:
         return {"status": PIN_UNAVAILABLE, "reason": "catalog local correction is not admitted: " + str(exc)}
@@ -1643,6 +1859,8 @@ def main(argv: List[str]) -> int:
                     help="apply an explicit project-relative LOCAL DERIVATIVE record; independently verify its official parent, exact patch, full inventory and retained challenge evidence")
     source_action.add_argument("--authored-glue", action="append", metavar="BASENAME",
                     help="record each explicitly declared staged RTL/header as authored glue; verify official pins and reject undeclared inventory before publishing source metadata")
+    ap.add_argument("--authored-interface", metavar="INPUT",
+                    help="with --authored-glue, publish explicit rename pairs from strict plugin_input JSON; current input delegation and known electrical facts remain blocking")
     ap.add_argument("--allow-self-match", action="store_true",
                     help="Do NOT refuse a catalog entry that supplies the IC's "
                          "OWN design (#187 — requires explicit acknowledgement)")
@@ -1658,6 +1876,8 @@ def main(argv: List[str]) -> int:
                     help="Name of the IP/entry that supersedes the pruned "
                          "one (recorded in the prune provenance entry).")
     args = ap.parse_args(argv)
+    if args.authored_interface is not None and not args.authored_glue:
+        ap.error("--authored-interface requires --authored-glue")
     if args.authored_glue and (args.dry_run or args.prune):
         ap.error("--authored-glue cannot be combined with --dry-run or --prune")
 
@@ -1672,7 +1892,8 @@ def main(argv: List[str]) -> int:
                 catalog_dir=Path(args.catalog_dir) if args.catalog_dir else None)
                 if versioned_reuse_evidence(facts, m)[0]]
             if args.authored_glue:
-                outcome = emit_authored_glue_inventory(project, matches, args.authored_glue)
+                outcome = emit_authored_glue_inventory(project, matches, args.authored_glue,
+                                                       authored_interface=args.authored_interface)
             else:
                 path = _local_path(project, args.local_derivative)
                 outcome = apply_local_derivative(project, matches,
