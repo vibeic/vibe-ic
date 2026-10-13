@@ -1254,6 +1254,9 @@ def _local_derivative_plan(project: Path, matches: List[CatalogMatch],
              "official_unmodified_files": len(official)-len(replacements),
              "locally_adapted_reused_files": len(replacements),
              "separately_authored_files": sorted(authored)}
+    if manifest.get("local_derivative") == ref:
+        local_event["outputs"]["phase2/stage1/rtl/SOURCE_MANIFEST.json"] = (
+            "sha256:" + _sha256_file(project / "phase2/stage1/rtl/SOURCE_MANIFEST.json"))
     if not allow_parent:
         # Existing consumers already owe this producer event. Known local
         # corruption must outrank an unavailable independent parent replay;
@@ -1359,6 +1362,7 @@ def apply_local_derivative(project: Path, matches: List[CatalogMatch],
             for name, data in plan["replacements"].items():
                 atomic.write_bytes(rtl / name, data)
                 outputs["phase2/stage1/rtl/" + name] = "sha256:" + _sha256_file(rtl / name)
+            outputs["phase2/stage1/rtl/SOURCE_MANIFEST.json"] = "sha256:" + _sha256_file(mf_path)
             if outputs != plan["event"]["outputs"]:
                 raise ValueError("recovered producer output bytes differ from the verified patch")
             with (project / "provenance.jsonl").open("ab") as stream:
@@ -1381,9 +1385,11 @@ def apply_local_derivative(project: Path, matches: List[CatalogMatch],
             raise ValueError("written derivative output differs from replayed patch")
         manifest["local_derivative"] = ref
         atomic.write_json(mf_path, manifest)
+        outputs["phase2/stage1/rtl/SOURCE_MANIFEST.json"] = "sha256:" + _sha256_file(mf_path)
+        event = {**plan["event"], "outputs": outputs}
         with (project / "provenance.jsonl").open("a") as f:
-            f.write(json.dumps({**plan["event"], "outputs": outputs}, sort_keys=True) + "\n")
-        return {"status": PIN_VERIFIED, "reason": why, **plan["event"]}
+            f.write(json.dumps(event, sort_keys=True) + "\n")
+        return {"status": PIN_VERIFIED, "reason": why, **event}
     except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
         return {"status": PIN_MISMATCH, "kind": "LOCAL_DERIVATIVE",
                 "reason": "LOCAL_DERIVATIVE_REFUSED: " + str(exc)}
