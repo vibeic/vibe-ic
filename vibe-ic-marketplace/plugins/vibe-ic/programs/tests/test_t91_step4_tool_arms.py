@@ -118,11 +118,15 @@ def test_check_refuses_a_measured_line_union_disagreement(tmp_path, capsys):
             "totals": {k: {"covered": 9, "total": 9, "pct": 100.0}
                        for k in ("line", "toggle", "branch")},
             "per_file": {}, "format_detected": "v5"}
-    agree = dict(base, line_union_cross_check={"status": "MEASURED",
-                                               "agree": True, "mismatches": []})
-    split = dict(base, line_union_cross_check={
-        "status": "MEASURED", "agree": False,
-        "mismatches": [{"file": "cov_cal.v", "kind": "hit_set"}]})
+    # Use the producer's current record, including its native LCOV population.
+    # The toggle member hits line 6; omitting it from ours is a real split.
+    dats = [str(_CAL / "cov_union_tb_idle.dat"),
+            str(_CAL / "cov_union_tb_toggle.dat")]
+    tool = vcm.parse_lcov_info((_CAL / "cov_union_suite_lcov.info").read_text())
+    agree = dict(base, line_union_cross_check=vcm.cross_check_line_union(
+        vcm.union_line_map(dats), tool, ["cov_cal.v"]))
+    split = dict(base, line_union_cross_check=vcm.cross_check_line_union(
+        vcm.union_line_map(dats[:1]), tool, ["cov_cal.v"]))
     rcs = []
     for name, doc in (("agree", agree), ("split", split)):
         p = tmp_path / f"{name}.json"
