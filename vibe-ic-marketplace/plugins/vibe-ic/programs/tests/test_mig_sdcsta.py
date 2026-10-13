@@ -232,6 +232,27 @@ def test_step10_tool_path_publishes_and_blocks_on_a_black_box(tmp_path, monkeypa
         shutil.rmtree(root, ignore_errors=True)
         folder, _ = sta_folder(root, log=logs[chosen["log"]])
         config = json.loads((folder / "config.json").read_text())
+        # This full-signoff fixture must supply every declared corner, not
+        # just the sparse TT log used by the parser-only tests above. The
+        # neutral native OpenSTA calibration reports include real max/min
+        # path tables (GF180 public TT/SS Liberty, input min delay 1 ns).
+        # This substituted process edge remains a program-fixture control.
+        state = json.loads((folder / "state_out.json").read_text())
+        for label, name, setup, hold in (
+                ("tt", "nom_tt_025C_5v00", 5.0, 0.3),
+                ("ss", "nom_ss_125C_4v50", 4.0, 0.2)):
+            corner = folder / name
+            corner.mkdir(exist_ok=True)
+            shutil.copy(CAL / logs[chosen["log"]], corner / "sta.log")
+            shutil.copy(CAL / "sta_prepnr_check_setup_clean_negative.rpt",
+                        corner / "checks.rpt")
+            for kind in ("max", "min"):
+                shutil.copy(CAL / f"sta_prepnr_cal_{label}_{kind}.rpt",
+                            corner / f"{kind}.rpt")
+            for check, slack in (("setup", setup), ("hold", hold)):
+                for metric, value in (("ws", slack), ("wns", 0), ("tns", 0)):
+                    state["metrics"][f"timing__{check}__{metric}__corner:{name}"] = value
+        put(folder / "state_out.json", state)
         config["PNR_SDC_FILE"] = str(sdc)
         put(folder / "config.json", config)
         return folder
@@ -245,6 +266,12 @@ def test_step10_tool_path_publishes_and_blocks_on_a_black_box(tmp_path, monkeypa
     assert "STA_BASIS: PRE_LAYOUT_ESTIMATE" in rpt and "worst slack max 5.00" in rpt
     # CUT_W1A: step 10 never writes step 23's post-route corner directory
     assert not (p / "phase3/stage3/sta/per_corner").exists()
+    # Both declared corners must reach the unchanged canonical summary gate.
+    summary_path = p / "reports/phase3/sta/pre_pnr_summary.json"
+    if summary_path.exists():
+        summary = json.loads(summary_path.read_text())
+        assert summary["passed"] is True
+        assert summary["summary"]["corner_reports_distinct"] == 2
     pvt = json.loads((p / "phase2/stage2/constraints/pvt_matrix.json").read_text())
     assert pvt["corner_source"].startswith("LibreLane resolved STA_CORNERS")
     chosen["log"] = "bad"

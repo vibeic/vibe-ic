@@ -1,0 +1,35 @@
+OpenSTA 3.1.0 42185e92c4 Copyright (c) 2026, Parallax Software, Inc.
+License GPLv3: GNU GPL version 3 <http://gnu.org/licenses/gpl.html>
+
+This is free software, and you are free to change and redistribute it
+under certain conditions; type `show_copying' for details. 
+This program comes with ABSOLUTELY NO WARRANTY; for details type `show_warranty'.
+Startpoint: f1 (rising edge-triggered flip-flop clocked by clk)
+Endpoint: y (output port clocked by clk)
+Path Group: clk
+Path Type: min
+
+  Delay    Time   Description
+---------------------------------------------------------
+   0.00    0.00   clock clk (rise edge)
+   0.00    0.00   clock network delay (ideal)
+   0.00    0.00 ^ f1/CLK (gf180mcu_fd_sc_mcu7t5v0__dffq_1)
+   0.59    0.59 v f1/Q (gf180mcu_fd_sc_mcu7t5v0__dffq_1)
+   0.00    0.59 v y (out)
+           0.59   data arrival time
+
+   0.00    0.00   clock clk (rise edge)
+   0.00    0.00   clock network delay (ideal)
+   0.00    0.00   clock reconvergence pessimism
+   0.00    0.00   output external delay
+           0.00   data required time
+---------------------------------------------------------
+           0.00   data required time
+          -0.59   data arrival time
+---------------------------------------------------------
+           0.59   slack (MET)
+
+
+tns min 0.00
+wns min 0.00
+worst slack min 0.59
