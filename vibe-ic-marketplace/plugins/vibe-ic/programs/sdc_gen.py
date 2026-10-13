@@ -704,33 +704,51 @@ def _l8_declared_clocks(l8: dict, target_scope: Optional[str] = None
     return out
 
 
-def _reset_contract(l9: dict, wave: dict) -> dict:
+def _reset_contract(l9: dict, wave: dict, surface: Optional[set] = None) -> dict:
     """Read the existing typed reset slots; never infer an exception.
 
     BLOCKING on contradictory typed semantics. Async reset semantics do not
     prove a timing cut (including recovery/removal), so both sync and async
     reset inputs remain timed unless the design authored an exception.
     """
-    slots = [("L9.reset_domains", l9.get("reset_domains")),
-             ("L9.resets", l9.get("resets")),
-             ("L8.resets", wave.get("resets")),
-             ("L8.clock_and_reset_waveform.resets",
-              (wave.get("clock_and_reset_waveform") or {}).get("resets"))]
+    slots = []
+    for layer, doc in (("L9", l9), ("L8", wave)):
+        scopes = [(layer, doc)]
+        if isinstance(doc.get("fields"), dict):
+            scopes.append((layer + ".fields", doc["fields"]))
+        for source, scope in scopes:
+            containers = [(source, scope)]
+            waveform = scope.get("clock_and_reset_waveform")
+            if isinstance(waveform, dict):
+                containers.append((source + ".clock_and_reset_waveform", waveform))
+            for path, container in containers:
+                for key in ("reset_domains", "resets"):
+                    slots.append((path + "." + key, container.get(key)))
     out = {}
     for source, records in slots:
         for rec in records if isinstance(records, list) else []:
-            if not isinstance(rec, dict) or not rec.get("name"):
+            if not isinstance(rec, dict) or not isinstance(rec.get("name"), str):
                 continue
             name = rec["name"]
+            if surface is not None and name not in surface:
+                continue
             entry = out.setdefault(name, {"sync": "unknown", "sources": []})
             votes = []
-            if isinstance(rec.get("synchronous"), bool):
-                votes.append("synchronous" if rec["synchronous"] else "asynchronous")
-            for key in ("sync", "type"):
-                value = str(rec.get(key) or "").lower()
+            for key in ("synchronous", "sync", "synchrony", "type"):
+                value = rec.get(key)
+                if value is None or value == "":
+                    continue
+                if isinstance(value, bool):
+                    votes.append("synchronous" if value else "asynchronous")
+                    continue
+                value = str(value).strip().lower()
                 if value in ("sync", "synchronous", "async", "asynchronous"):
                     votes.append("synchronous" if value in ("sync", "synchronous")
                                  else "asynchronous")
+                elif key != "type" and value not in (
+                        "unknown", "unspecified", "not_measured"):
+                    raise ValueError(f"SDC_RESET_CONTRACT_INVALID: {name}: "
+                                     f"{source}.{key}={rec[key]!r}")
             if entry["sync"] != "unknown":
                 votes.append(entry["sync"])
             if len(set(votes)) > 1:
@@ -1280,7 +1298,7 @@ def main(argv: Optional[List[str]] = None) -> int:
               % (_declared, len(dropped_pins)))
 
     try:
-        resets = _reset_contract(l9, _l8_wave)
+        resets = _reset_contract(l9, _l8_wave, top_ports)
         l19 = _load_json(_pl.generated_docs_dir(project) /
                          "L19_CONSTRAINTS_PDK.json") or {}
         io_max, io_source = _io_delay_max(project, l19, period_ns)
@@ -1295,6 +1313,13 @@ def main(argv: Optional[List[str]] = None) -> int:
         # Partial clock/pin exceptions remain additive: do not enlarge them.
         for rec in exceptions:
             command = rec["command"]
+            # Only an unqualified whole-direction cut replaces the I/O role.
+            # Setup/hold, edge and through qualifiers leave other paths timed.
+            options = _EXCEPTION_OBJECT.sub("", command)
+            options = re.sub(r"\[all_clocks\]", "", options)
+            if not re.fullmatch(r"set_false_path\s+-(?:from\s+-to|to\s+-from)\s*",
+                                options):
+                continue
             for option, other, roles in (("from", "to", inputs),
                                          ("to", "from", outputs)):
                 if not command.startswith("set_false_path") or not re.search(
