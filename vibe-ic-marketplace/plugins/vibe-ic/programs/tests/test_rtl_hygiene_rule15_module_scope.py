@@ -42,9 +42,13 @@ def _trunc(tmp_path, text, name="dut.sv"):
 # Two sibling modules declare a same-named reg `r` at DIFFERENT widths. Within
 # module `b`, `r=i` (both 32 bits) is width-CORRECT; it must NOT be flagged using
 # module `a`'s narrower [7:0] `r`.
+# Drive and read both registers through outputs: this positive fixture must not
+# carry genuine unused-reg or unread-reg warnings from the module-scoped scan.
 _GAPP_FP = (
-    "module a(input clk); reg [7:0] r; endmodule\n"
-    "module b(input clk, input [31:0] i); reg [31:0] r; always @(*) r=i; endmodule\n"
+    "module a(input clk, input [7:0] i, output [7:0] result); "
+    "reg [7:0] r; always @(*) r=i; assign result=r; endmodule\n"
+    "module b(input clk, input [31:0] i, output [31:0] result); "
+    "reg [31:0] r; always @(*) r=i; assign result=r; endmodule\n"
 )
 
 
