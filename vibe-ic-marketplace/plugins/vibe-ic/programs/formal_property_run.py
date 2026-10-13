@@ -983,10 +983,15 @@ def emit_sby(rtl_files: List[str], harness_file: str, top: str,
     files_block = "\n".join(srcs)
     # R-0915-144 — OBSERVERS: DUT state made visible the way the engine binds
     # it (see `formal_harness_gen.OBSERVE_PRAGMA`). The design is flattened
-    # and each observer is `connect -set` to the flattened net, AFTER
+    # and each observer is `connect -nomap -set` to the flattened net, AFTER
     # `select -assert-any` has proved that net exists: a net that is not there
     # stops the task with an ERROR, so an observer can never be left undriven
-    # (a free variable) behind a proof. No observers → byte-identical script.
+    # (a free variable) behind a proof. -nomap addresses the named placeholder,
+    # not its canonical alias: default alias mapping can unset a packed alias,
+    # another observer, or an assertion operand's driver after flatten. The
+    # native registered-alias controls exercise those paths and the original
+    # clock/reset/state mutations. Existing placeholder drivers are still
+    # removed; -nounset would retain them. No observers → identical script.
     bind_lines = ""
     model_top = harness_top or top
     dut_lines = ""
@@ -1004,7 +1009,7 @@ def emit_sby(rtl_files: List[str], harness_file: str, top: str,
             _b.append(f"setattr -unset init {model_top}/w:*.*")
         for lhs, rhs in observers or []:
             _b.append(f"select -assert-any {model_top}/w:{rhs}")
-            _b.append(f"connect -set {lhs} {rhs}")
+            _b.append(f"connect -nomap -set {lhs} {rhs}")
         bind_lines = "\n".join(_b) + "\n"
     if kind_engine:
         kt = "safety" + KIND_ARM_SUFFIX
@@ -1149,7 +1154,7 @@ def emit_invariant_sby(rtl_files: List[str], harness_file: str, top: str,
     srcs = list(rtl_files) + [harness_file] + list(include_files or [])
     files_block = "\n".join(srcs)
     chparam_lines = [f"chparam -set {n} {v} {top}" for n, v in chparams]
-    connect_lines = [f"connect -set {lhs} {rhs}" for lhs, rhs in connects]
+    connect_lines = [f"connect -nomap -set {lhs} {rhs}" for lhs, rhs in connects]
 
     task_names, opts, engines, read_lines = [], [], [], []
     for t in tasks:
@@ -1695,7 +1700,8 @@ _OBSERVE_LINE_RE = re.compile(r"//\s*@observe\b(?P<rest>[^\n]*)$", re.MULTILINE)
 _OBSERVE_BODY_RE = re.compile(
     r"^\s+(?P<lhs>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*"
     r"(?P<rhs>[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)\s*$")
-_CONNECT_RE = re.compile(r"^\s*connect\s+-set\s+(?P<lhs>\S+)\s+(?P<rhs>\S+)\s*$",
+_CONNECT_RE = re.compile(r"^[ \t]*connect[ \t]+(?P<nomap>-nomap[ \t]+)?"
+                         r"-set[ \t]+(?P<lhs>\S+)[ \t]+(?P<rhs>\S+)[ \t]*$",
                          re.MULTILINE)
 _SV_KEYWORDS = {
     "module", "property", "endproperty", "assert", "assume", "cover", "always",
@@ -2289,7 +2295,9 @@ def _ensure_expert_observers_bound(sby_path: Path, formal_dir: Path) -> bool:
     was emitted.  Staging that fragment alone is insufficient: the old task
     has no ``connect -set`` commands, so the pre-proof refusal correctly sees
     undriven observer wires.  Add only absent bindings immediately before the
-    existing ``prep -top``.  A pre-existing incompatible binding is deliberately
+    existing ``prep -top``. Compatible legacy bindings are upgraded to -nomap
+    so reused tasks preserve the same alias drivers as freshly emitted tasks.
+    A pre-existing incompatible binding is deliberately
     left for ``observer_binding_mismatches`` to refuse rather than overwritten.
     """
     observers = parse_observers(_harness_texts(sby_path, formal_dir, None))
@@ -2311,19 +2319,19 @@ def _ensure_expert_observers_bound(sby_path: Path, formal_dir: Path) -> bool:
         if lhs in declared and declared[lhs] != rhs:
             return False
         declared[lhs] = rhs
-    strict_connect = re.compile(
-        r"^[ \t]*connect[ \t]+-set[ \t]+(?P<lhs>\S+)[ \t]+"
-        r"(?P<rhs>\S+)[ \t]*$")
+    strict_connect = _CONNECT_RE
     lines_before = script.splitlines(keepends=True)
     found: Dict[str, List[str]] = {}
+    needs_nomap = False
     for line in lines_before:
         match = strict_connect.match(line.rstrip("\n"))
         if match and match.group("lhs") in declared:
             found.setdefault(match.group("lhs"), []).append(match.group("rhs"))
+            needs_nomap |= match.group("nomap") is None
     if any(any(rhs != declared[lhs] for rhs in rhss)
            for lhs, rhss in found.items()):
         return False
-    if all(found.get(lhs) == [rhs] for lhs, rhs in declared.items()):
+    if not needs_nomap and all(found.get(lhs) == [rhs] for lhs, rhs in declared.items()):
         return False
     stripped: List[str] = []
     select_re = re.compile(r"^[ \t]*select[ \t]+-assert-any[ \t]+"
@@ -2348,7 +2356,7 @@ def _ensure_expert_observers_bound(sby_path: Path, formal_dir: Path) -> bool:
         lines += [f"hierarchy -top {top_match.group(1)}", "proc", "flatten"]
     for lhs, rhs in declared.items():
         lines += [f"select -assert-any {top_match.group(1)}/w:{rhs}",
-                  f"connect -set {lhs} {rhs}"]
+                  f"connect -nomap -set {lhs} {rhs}"]
     prep_at = top_match.start()
     revised = script[:prep_at] + "\n".join(lines) + "\n" + script[prep_at:]
     try:

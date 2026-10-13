@@ -270,9 +270,9 @@ def test_a_reused_sby_binds_observers_added_by_the_expert_fragment(tmp_path):
     assert result["verdict"] == "EMIT_ONLY"
     text = sby.read_text()
     assert "select -assert-any formal_fixture_core/w:dut.state" in text
-    assert "connect -set observed_state dut.state" in text
-    assert text.count("connect -set observed_state dut.state") == 1
-    assert text.index("connect -set observed_state dut.state") < text.index("prep -top")
+    assert "connect -nomap -set observed_state dut.state" in text
+    assert text.count("connect -nomap -set observed_state dut.state") == 1
+    assert text.index("connect -nomap -set observed_state dut.state") < text.index("prep -top")
     assert R._ensure_expert_observers_bound(sby, d) is False
 
 

@@ -371,7 +371,7 @@ def test_m8_an_expert_fragment_observer_is_bound(tmp_path):
     (fdir / fhg.EXPERT_PROPERTIES_SVH).write_text(FRAGMENT)
     _, res, _ = _step5(project)
     sby = (project / res["sby"]).read_text()
-    assert "connect -set obs_yr2 dut.yr" in sby
+    assert "connect -nomap -set obs_yr2 dut.yr" in sby
     assert res["all_proved"] is True                 # a correct design proves
 
 
@@ -380,7 +380,7 @@ def test_m8_an_observer_a_reused_task_file_does_not_bind_is_refused(tmp_path):
     _, res, _ = _step5(project)
     sby = project / res["sby"]
     sby.write_text("\n".join(l for l in sby.read_text().splitlines()
-                             if not l.startswith(("connect -set", "select -assert-any"))))
+                             if not l.startswith(("connect -nomap -set", "select -assert-any"))))
     res2 = fpr.run(project, harness=None, container=None, timeout=300)
     assert res2["verdict"] == "ERROR"
     assert any("vibeic_obs_" in r for r in res2["hierarchical_references"])
