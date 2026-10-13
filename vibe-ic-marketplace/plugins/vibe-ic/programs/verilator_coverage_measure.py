@@ -1297,9 +1297,13 @@ def _professional_measure_testbenches(project: Path) -> List[str]:
         record = json.loads((project / 'reports/phase2/gates/professional_tb.json').read_text())
         if (isinstance(record, dict) and isinstance(record.get('files'), list)
                 and 'verification_plan.json' in record['files']):
-            import professional_tb_check as _ptc  # noqa: PLC0415
-            declared = _ptc._resolve_bundle_dir(project, record.get('out_dir'))
-    except (OSError, ValueError, TypeError):
+            raw = record.get('out_dir')
+            if isinstance(raw, str) and raw:
+                path = Path(raw)
+                path = (path if path.is_absolute() else project / path).resolve()
+                path.relative_to(project.resolve())
+                declared = path
+    except (OSError, ValueError, TypeError, RuntimeError):
         pass
     candidates = []
     for bundle in sorted((project / "phase2/stage1/sim_professional").glob("*")):
@@ -1311,7 +1315,9 @@ def _professional_measure_testbenches(project: Path) -> List[str]:
         generated = ('verification_plan.json', f'tb_{bundle.name}.py',
                      f'{bundle.name}_coverage_model.json', f'{bundle.name}_assertions.sva',
                      'professional_tb_refusal.json')
-        if bundle != declared and not any((bundle / name).is_file() for name in generated):
+        if (bundle.resolve() != declared
+                and not any((bundle / name).exists() or (bundle / name).is_symlink()
+                            for name in generated)):
             continue
         candidates.append(str(bundle / f"tb_{bundle.name}.py"))
     return candidates
