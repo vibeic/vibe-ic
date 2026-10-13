@@ -649,7 +649,7 @@ def parse_port_list_ansi(header: str, file_path: str, base_line: int,
             # An unpacked dimension after the name, e.g.
             # `input logic [33:0] imd_val_d_ex_i[2]`. Legal SystemVerilog, and
             # without it the anchored match fails and the port disappears.
-            r'(?:\s*\[[^\]]+\])*\s*$',
+            r'(?:\s*\[[^\]]+\])*\s*(?:=\s*\S.*?)?$',
             part_stripped
         )
         if m:
@@ -920,7 +920,7 @@ def parse_instantiations(body: str, file_path: str, base_line: int) -> List[Modu
     return instances
 
 
-def _collect_statements(body: str) -> List[Tuple[str, int]]:
+def _collect_statements(body: str, *, preserve_literals=False) -> List[Tuple[str, int]]:
     """
     Collect semicolon-terminated statements with their starting line numbers.
     Returns list of (statement_text, start_line_offset).
@@ -929,7 +929,16 @@ def _collect_statements(body: str) -> List[Tuple[str, int]]:
     mask = lexical_mask(body, attributes=True)
     start = 0
     stack = []
+    # Generate/block boundaries do not end with semicolons. Keeping them on
+    # the next statement hid the first instance after ``endgenerate`` and
+    # the first instance inside a named generate arm. Split at those lexical
+    # boundaries too, without interpreting delimiters inside expressions.
+    boundaries = {m.start(): m.end() for m in re.finditer(
+        r'\b(?:generate|endgenerate|begin|end)\b'
+        r'(?:\s*:\s*[A-Za-z_]\w*)?', mask)}
     for index, ch in enumerate(mask):
+        if not stack and index in boundaries:
+            start = boundaries[index]
         if ch in '([{':
             stack.append(ch)
         elif ch in ')]}':
@@ -940,7 +949,8 @@ def _collect_statements(body: str) -> List[Tuple[str, int]]:
         elif ch == ';' and not stack:
             text = mask[start:index + 1]
             leading = len(text) - len(text.lstrip())
-            statements.append((text, mask[:start + leading].count('\n')))
+            statements.append((body[start:index + 1] if preserve_literals else text,
+                               mask[:start + leading].count('\n')))
             start = index + 1
     return statements
 
