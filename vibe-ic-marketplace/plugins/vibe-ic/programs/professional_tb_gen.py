@@ -38,16 +38,19 @@ from __future__ import annotations
 
 import argparse
 import ast
+import hashlib
 import json
 import os
 import re
 import sys
+import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _path_layout as _pl  # noqa: E402
 import arith_oracle_tb_gen as _aog  # noqa: E402 — reuse port/golden/spec logic
+import _professional_memory_signature as _memory_signature  # noqa: E402
 
 
 _CLK_NAMES = _aog._CLK_NAMES
@@ -499,6 +502,151 @@ def build_assertions(project: Path, shape: dict) -> Tuple[str, dict]:
 # --------------------------------------------------------------------------
 # cocotb testbench emission
 # --------------------------------------------------------------------------
+def _digest(path: Path) -> str:
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        return ''
+
+
+def _requested_random_pairs(row: dict) -> Optional[int]:
+    import l10_coverage_goal_classify as goals
+    scope, _ = goals.coverage_scope(row)
+    count = _aog.declared_vector_population(dict(row, coverage_scope=scope))
+    return count if (count is not None and goals.is_pass_rate_goal(row)
+                     and re.search(r'\brandom\b|隨機|随机', scope or '', re.I)
+                     and re.search(r'\bpairs?\b|組|组', scope or '', re.I)) else None
+
+
+def arithmetic_random_goal_plan(project: Path, shape: dict) -> Optional[dict]:
+    """Bind stated random operand populations to this existing arithmetic TB.
+
+    Counts come from the same population reader the L10 arithmetic producer
+    uses. Directed vectors and testcase counts cannot satisfy a random count.
+    Unsupported semantics remain the original goal consumer's NOT_MEASURED.
+    """
+    import l10_coverage_goal_classify as goals
+    doc = _read_json(_gd(project) / 'L10_TEST_CASES.json') or {}
+    rows = doc.get('test_cases') or (doc.get('fields') or {}).get('test_cases') or []
+    _, declared = goals.partition(rows)
+    selected = []
+    for row in declared:
+        population = _requested_random_pairs(row)
+        if population is None:
+            continue
+        selected.append({'case': str(row.get('name') or row.get('id') or ''),
+                         'goal_sha256': hashlib.sha256(json.dumps(
+                             row, sort_keys=True, ensure_ascii=False).encode()).hexdigest(),
+                         'requested_random_pairs': population})
+    if not selected:
+        return None
+    files = [*_gd(project).glob('L2*.json'), *_gd(project).glob('L9*.json'),
+             _gd(project) / 'L10_TEST_CASES.json',
+             *map(Path, _rtl_files(project, shape['top']))]
+    files += [project / p for p in ('plugin_output/declaration.json', 'declaration.json')
+              if (project / p).is_file()]
+    binding = {p.relative_to(project).as_posix(): _digest(p) for p in files if p.is_file()}
+    framing = (_aog.read_declared_conventions(project, shape['ports'])
+               if shape['kind'] == 'serial_stream' else {'sampling': 'settled_parallel'})
+    attempt = uuid.uuid4().hex
+    return {'attempt': attempt, 'top': shape['top'], 'measurement_file': f'arithmetic_random_pairs.{attempt}.json',
+            'goals': selected, 'binding': binding, 'width': int(shape['width']),
+            'operator': shape.get('operator') or shape['spec']['operator'],
+            'requested_random_pairs': max(g['requested_random_pairs'] for g in selected),
+            'seed': 0x9E3779B97F4A7C15 ^ int(shape['width']),
+            'sampler': 'arith_oracle_tb_gen._distinct_population_pairs / SplitMix64',
+            'framing': framing}
+
+
+def _random_measurement_support(plan: Optional[dict]) -> str:
+    if not plan:
+        return ''
+    return f'''
+import json
+from pathlib import Path
+RANDOM_GOAL_PLAN = {plan!r}
+
+
+def _publish_random_pairs(executed, mismatches, directed, distinct):
+    # Written before the assertion, so a measured mismatch remains evidence.
+    result = dict(RANDOM_GOAL_PLAN, executed_random_pairs=executed,
+                  distinct_random_pairs=distinct, random_mismatches=mismatches,
+                  directed_comparisons=directed)
+    Path(RANDOM_GOAL_PLAN['measurement_file']).write_text(json.dumps(result, indent=2))
+'''
+
+
+def finalize_random_pair_execution(out: Path, plan: dict, *, argv: list,
+                                   returncode: int, image: str) -> None:
+    """Attach the original runner's execution and JUnit to this attempt only."""
+    path = out / plan['measurement_file']
+    if not path.is_file():
+        return
+    result = _read_json(path)
+    if not result or result.get('attempt') != plan['attempt']:
+        return
+    result['execution'] = {'argv': argv, 'returncode': returncode,
+                           'configured_image': image}
+    result['junit_sha256'] = _digest(out / 'results.xml')
+    result['tb_sha256'] = _digest(out / f"tb_{plan['top']}.py")
+    path.write_text(json.dumps(result, indent=2) + '\n')
+
+
+def random_pair_goal_measurement(project: Path, goal: dict) -> Optional[dict]:
+    """Read the current native attempt, never infer pairs from JUnit test count."""
+    requested = _requested_random_pairs(goal)
+    if requested is None:
+        return None
+    goal_hash = hashlib.sha256(json.dumps(goal, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+    for vplan in sorted((_pl.rtl_dir(project).parent / 'sim_professional').glob('*/verification_plan.json')):
+        plan = (_read_json(vplan) or {}).get('random_goal_plan')
+        if not isinstance(plan, dict):
+            continue
+        bound = next((g for g in plan.get('goals', [])
+                      if g.get('goal_sha256') == goal_hash), None)
+        if not bound:
+            continue
+        result = _read_json(vplan.parent / plan['measurement_file'])
+        why = 'this arithmetic random-pair attempt did not produce measured comparisons'
+        if not result or result.get('attempt') != plan.get('attempt'):
+            return {'verdict': 'NOT_MEASURED', 'why': why}
+        if (not plan.get('binding') or any(not (project / p).is_file()
+                or _digest(project / p) != h for p, h in plan['binding'].items())
+                or any(result.get(key) != plan.get(key) for key in
+                       ('binding', 'goals', 'top', 'width', 'operator', 'framing', 'seed'))
+                or result.get('junit_sha256') != _digest(vplan.parent / 'results.xml')
+                or result.get('tb_sha256') != _digest(vplan.parent / f"tb_{plan['top']}.py")):
+            return {'verdict': 'NOT_MEASURED', 'why': 'arithmetic random-pair evidence is stale or unrelated'}
+        execution = result.get('execution') or {}
+        import _eda_pin as pin
+        if str(execution.get('configured_image') or '').rsplit('@', 1)[-1] != pin.resolved_image_digest():
+            return {'verdict': 'NOT_MEASURED', 'why': 'arithmetic random-pair execution does not bind the current image digest'}
+        if not execution.get('argv') or execution.get('returncode') != 0:
+            return {'verdict': 'FAIL', 'why': 'arithmetic random-pair simulator execution failed'}
+        measured = result.get('executed_random_pairs', 0)
+        distinct = result.get('distinct_random_pairs', 0)
+        mismatches = result.get('random_mismatches', 0)
+        if (any(type(v) is not int or v < 0 for v in (measured, distinct, mismatches))
+                or distinct > measured or mismatches > measured):
+            return {'verdict': 'NOT_MEASURED', 'why': 'arithmetic random-pair counts are not measured integers'}
+        if mismatches:
+            return {'verdict': 'FAIL', 'why': f'{mismatches} arithmetic random-pair comparisons failed'}
+        if min(measured, distinct) < bound['requested_random_pairs']:
+            return {'verdict': 'NOT_MEASURED', 'why': f"only {min(measured, distinct)} random pairs measured; {bound['requested_random_pairs']} requested"}
+        import _sim_results_bridge as results
+        junit = results.parse_junit(vplan.parent / 'results.xml')
+        if not junit or junit['passed'] <= 0 or junit['failures'] or junit['errors']:
+            return {'verdict': 'FAIL', 'why': 'arithmetic random-pair JUnit did not pass'}
+        return {'verdict': 'PASS', 'achieved_pct': 100.0,
+                'achieved_source': (vplan.parent / plan['measurement_file']).relative_to(project).as_posix(),
+                'instrument': 'arithmetic_random_pairs',
+                'requested_random_pairs': bound['requested_random_pairs'],
+                'executed_random_pairs': measured, 'distinct_random_pairs': distinct,
+                'why': f'{measured} distinct random pairs compared with zero mismatches'}
+    return {'verdict': 'NOT_MEASURED', 'requested_random_pairs': requested,
+            'why': 'no current goal-bound arithmetic random-pair measurement'}
+
+
 def _emit_common_header(shape: dict) -> str:
     cr = shape["cr"]
     clk = cr["clk"] or "clk"
@@ -576,10 +724,17 @@ def emit_serial_stream_tb(shape: dict) -> str:
     # coverage decorators (cocotb-coverage) on the sampled operands
     cov_bins_x = str({b["name"]: (lambda v, vals=b["values"]: v in vals)
                       for b in cps[0]["bins"]}) if cps else "{}"
-    header = _emit_common_header(shape)
+    plan = shape.get('random_goal_plan')
+    header = _emit_common_header(shape) + _random_measurement_support(plan)
+    random_pairs = (repr(_aog._distinct_population_pairs(
+        N, min(plan['requested_random_pairs'], _aog.MAX_CASE_VECTORS), '*',
+        {(0, 0), (0, hi), (hi, 0), (1, 1), (hi, hi),
+         (2, hi), (hi, 2), (hi >> 1, 3)})) if plan else
+        f'[(random.randint(0, {hi}), random.randint(0, {hi})) for _ in range(200)]')
+    max_latency = max(N + 4, ((plan or {}).get('framing') or {}).get('latency', 0))
     return header + f'''
 N = {N}
-MAX_LATENCY = N + 4          # bounded search window for the output alignment
+MAX_LATENCY = {max_latency}          # includes the declared goal's sampling window
 X = "{x}"; Y = "{y}"; P = "{p}"
 
 
@@ -617,7 +772,7 @@ def _stream_to_val(stream, latency, order, n):
     return sum((b & 1) << (n - 1 - i) for i, b in enumerate(seg))
 
 
-@cocotb.test()
+@cocotb.test(skip={bool(plan and plan['framing'] is None)!r})
 async def professional_stream_test(dut):
     random.seed(SEED)
     _start_clock(dut)
@@ -637,6 +792,9 @@ async def professional_stream_test(dut):
                 break
         if solved:
             break
+    if {bool(plan)!r}:
+        framing = RANDOM_GOAL_PLAN['framing']
+        solved = (framing['bit_order'].lower(), framing['latency'])
     assert solved, ("could not derive (latency, bit-order) for the serial "
                     "datapath — the DUT does not implement (x*y) mod 2^N in "
                     "any bounded LSB/MSB alignment")
@@ -656,9 +814,11 @@ async def professional_stream_test(dut):
     # ---- directed corners + constrained-random ----
     corners = [(0, 0), (0, {hi}), ({hi}, 0), (1, 1), ({hi}, {hi}),
                (2, {hi}), ({hi}, 2), ({hi} >> 1, 3)]
-    rand = [(random.randint(0, {hi}), random.randint(0, {hi})) for _ in range(200)]
+    rand = {random_pairs}
     fails = 0
     total = 0
+    random_executed = 0
+    random_failures = 0
     await _reset(dut)
     for (xv, yv) in corners + rand:
         got = await _run_vector(dut, xv, yv, order)
@@ -666,8 +826,11 @@ async def professional_stream_test(dut):
         act = _stream_to_val(got, latency, order, N)
         _sample(xv, yv)
         total += 1
+        is_random = total > len(corners)
+        random_executed += int(is_random)
         if act != exp:
             fails += 1
+            random_failures += int(is_random)
             dut._log.error(f"MISMATCH x={{xv}} y={{yv}} exp={{exp}} got={{act}}")
         await _reset(dut)
     if _HAVE_COV:
@@ -676,6 +839,9 @@ async def professional_stream_test(dut):
             coverage_db.export_to_xml(filename="coverage_{top}.xml")
         except Exception:
             pass
+    if {bool(plan)!r}:
+        _publish_random_pairs(random_executed, random_failures, len(corners),
+                              len(set(rand[:random_executed])))
     assert fails == 0, f"{{fails}}/{{total}} vectors mismatched the reference"
     dut._log.info(f"PROFESSIONAL_TB PASS {{total}}/{{total}} vectors, order={{order}} latency={{latency}}")
 '''
@@ -692,7 +858,12 @@ def emit_parallel_arith_tb(shape: dict) -> str:
     res = sp.get("result_port") or "out"
     signed = bool(sp.get("signed"))
     hi = (1 << N) - 1
-    header = _emit_common_header(shape)
+    plan = shape.get('random_goal_plan')
+    header = _emit_common_header(shape) + _random_measurement_support(plan)
+    random_pairs = (repr(_aog._distinct_population_pairs(
+        N, min(plan['requested_random_pairs'], _aog.MAX_CASE_VECTORS), op,
+        {(0, 0), (0, hi), (hi, 0), (1, 1), (hi, hi), (hi >> 1, 3), (hi, 2)}))
+        if plan else f'[(random.randint(0, {hi}), random.randint(0, {hi})) for _ in range(300)]')
     return header + f'''
 import arith_oracle_tb_gen as _aog  # reference golden (single source of truth)
 N = {N}; A = "{a}"; B = "{b}"; R = "{res}"; OP = "{op}"; SIGNED = {signed}
@@ -705,8 +876,9 @@ async def professional_arith_test(dut):
     await _reset(dut)
     corners = [(0, 0), (0, {hi}), ({hi}, 0), (1, 1), ({hi}, {hi}),
                ({hi} >> 1, 3), ({hi}, 2)]
-    rand = [(random.randint(0, {hi}), random.randint(0, {hi})) for _ in range(300)]
+    rand = {random_pairs}
     fails = 0; total = 0
+    random_executed = 0; random_failures = 0
     for (av, bv) in corners + rand:
         getattr(dut, A).value = av
         getattr(dut, B).value = bv
@@ -718,9 +890,15 @@ async def professional_arith_test(dut):
         except Exception:
             act = None
         total += 1
+        is_random = total > len(corners)
+        random_executed += int(is_random)
         if act != exp:
             fails += 1
+            random_failures += int(is_random)
             dut._log.error(f"MISMATCH a={{av}} b={{bv}} exp={{exp}} got={{act}}")
+    if {bool(plan)!r}:
+        _publish_random_pairs(random_executed, random_failures, len(corners),
+                              len(set(rand[:random_executed])))
     assert fails == 0, f"{{fails}}/{{total}} mismatched"
     dut._log.info(f"PROFESSIONAL_TB PASS {{total}}/{{total}}")
 '''
@@ -770,7 +948,13 @@ async def professional_smoke_test(dut):
     producer reads and never overwrites. It is accepted only when it is
     self-checking, so it must (1) contain no TestSkip, (2) print the literal
     token `PROFESSIONAL_TB PASS`, and (3) carry at least one `@cocotb.test()`
-    coroutine that references `dut` and asserts."""
+    coroutine that references `dut` and asserts.
+
+    Memory-signature models need explicit L10 test_cases with
+    category="memory_signature", byte-addressed expected_bytes, and interface
+    clock/edge/write_enable/active_level/write_address/write_data roles. The
+    case.id names its expert coroutine. The producer adds an actual commit
+    observer; zero initialization and completion do not prove a store."""
     _start_clock(dut)
     await _reset(dut)
     for _ in range(20):
@@ -831,6 +1015,51 @@ include $(shell cocotb-config --makefiles)/Makefile.sim
 '''
 
 
+def _memory_signature_rows(project: Path) -> list:
+    import cpu_functional_oracle_waiver_check as _w
+    rows = _w._declared_rows(_gd(project) / "L10_TEST_CASES.json",
+                             ("test_cases", "cases", "vectors"))
+    return [row for row in rows if isinstance(row, dict)
+            and row.get("category") == "memory_signature"]
+
+
+def memory_signature_cases(project: Path, shape: Optional[dict] = None) -> list:
+    rows = _memory_signature_rows(project)
+    if not rows:
+        return []
+    if shape is None:
+        shape, _why = classify_dut(project, _detect_ic_class(project))
+    if shape is None or shape["kind"] != "generic":
+        raise ValueError("memory_signature has no supported L9 byte-storage interface")
+    return _memory_signature.resolve_cases(rows, shape["ports"], shape["cr"])
+
+
+def _checked_memory_signature_tb(text: str, cases: list) -> str:
+    tree = ast.parse(text)
+    tests = {node.name: node for node in tree.body
+             if isinstance(node, ast.AsyncFunctionDef)
+             and any(ast.unparse(d).startswith("cocotb.test")
+                     for d in node.decorator_list)}
+    for case in cases:
+        if case["id"] not in tests:
+            raise ValueError(f"{case['id']}: missing same-name expert cocotb coroutine")
+        tests[case["id"]].decorator_list.append(ast.Call(
+            func=ast.Name(id="_memory_signature_checked", ctx=ast.Load()),
+            args=[ast.parse(repr(case), mode="eval").body], keywords=[]))
+    # Preserve legal placement of a module docstring and future imports.
+    index = 0
+    while index < len(tree.body) and (
+            isinstance(tree.body[index], ast.Expr)
+            and isinstance(tree.body[index].value, ast.Constant)
+            and isinstance(tree.body[index].value.value, str)
+            or isinstance(tree.body[index], ast.ImportFrom)
+            and tree.body[index].module == "__future__"):
+        index += 1
+    tree.body.insert(index, ast.ImportFrom(module="_professional_memory_signature",
+        names=[ast.alias(name="checked", asname="_memory_signature_checked")], level=0))
+    return ast.unparse(ast.fix_missing_locations(tree)) + "\n"
+
+
 # --------------------------------------------------------------------------
 # Driver
 # --------------------------------------------------------------------------
@@ -848,13 +1077,34 @@ def generate(project: Path, out_dir: Optional[Path] = None) -> dict:
     ic_class = _detect_ic_class(project)
     shape, why = classify_dut(project, ic_class)
     if shape is None:
+        if _memory_signature_rows(project):
+            return {"status": "INCOMPLETE", "reason": why,
+                    "memory_signature_required": True, "ic_class": ic_class,
+                    "fallback_skill": "testbench-gen"}
         return {"status": "SKIP", "reason": why, "ic_class": ic_class}
     top = shape["top"]
     out = out_dir or (_pl.rtl_dir(project).parent / "sim_professional" / top)
     out.mkdir(parents=True, exist_ok=True)
 
+    random_plan = (arithmetic_random_goal_plan(project, shape)
+                   if shape['kind'] in ('serial_stream', 'parallel_arith') else None)
+    if random_plan:
+        shape['random_goal_plan'] = random_plan
+
     expert_tb = (_load_expert_reference_tb(out)
                  if shape["kind"] == "generic" else None)
+    memory_cases = []
+    if _memory_signature_rows(project):
+        try:
+            memory_cases = memory_signature_cases(project, shape)
+            if expert_tb is None:
+                raise ValueError("memory_signature requires expert_reference_tb.py with same-name case coroutines")
+            expert_tb = _checked_memory_signature_tb(expert_tb, memory_cases)
+        except ValueError as error:
+            return {"status": "INCOMPLETE", "reason": str(error),
+                    "memory_signature_required": True, "ic_class": ic_class,
+                    "out_dir": str(out), "fallback_skill": "testbench-gen",
+                    "request": "Declare the byte-addressed L10 memory_signature interface/expected_bytes and author same-case coroutines in expert_reference_tb.py"}
     if expert_tb is not None:
         tb = expert_tb
         ref_tier = "expert_filled"
@@ -885,7 +1135,22 @@ def generate(project: Path, out_dir: Optional[Path] = None) -> dict:
         "assertions": "L29 (see <top>_assertions.sva)",
         "sim": "cocotb + cocotb-coverage; SIM=icarus|verilator",
         "closure": cov["fields"]["closure_policy"],
+        **({'random_goal_plan': random_plan} if random_plan else {}),
     }
+    memory_metadata = {}
+    if memory_cases:
+        from time import time_ns
+        # A filtered/nonexecuted case must not inherit a previous observation.
+        # Retain the old measurement under a distinct name for inspection.
+        for case in memory_cases:
+            prior = out / _memory_signature.receipt_name(case["id"])
+            if prior.is_file():
+                prior.rename(prior.with_name(f"{prior.name}.prior-{time_ns()}"))
+        support = "_professional_memory_signature.py"
+        (out / support).write_text(Path(__file__).with_name(support).read_text())
+        memory_metadata = {"memory_signature_required": True,
+                           "memory_signature_cases": memory_cases}
+        vplan.update(memory_metadata)
 
     (out / f"tb_{top}.py").write_text(tb)
     (out / f"{top}_coverage_model.json").write_text(
@@ -895,6 +1160,8 @@ def generate(project: Path, out_dir: Optional[Path] = None) -> dict:
     (out / "verification_plan.json").write_text(
         json.dumps(vplan, indent=2) + "\n")
     return {"status": "PASS", "ic_class": ic_class, "dut_kind": run_kind,
+            **({'random_goal_plan': random_plan} if random_plan else {}),
+            **memory_metadata,
             "reference_model_tier": ref_tier, "out_dir": str(out),
             # HOW MANY SOURCES THE EMITTED MAKEFILE WILL COMPILE. With none,
             # `emit_makefile` falls back to `$(PWD)/<top>.v`, which is not
@@ -907,7 +1174,8 @@ def generate(project: Path, out_dir: Optional[Path] = None) -> dict:
             "rtl_files": len(rtl),
             "files": [f"tb_{top}.py", f"{top}_coverage_model.json",
                       f"{top}_assertions.sva", "Makefile",
-                      "verification_plan.json"]}
+                      "verification_plan.json"] +
+                     (["_professional_memory_signature.py"] if memory_cases else [])}
 
 
 def main(argv=None) -> int:
@@ -921,6 +1189,8 @@ def main(argv=None) -> int:
     if a.json:
         a.json.write_text(txt + "\n")
     print(txt)
+    if res.get("status") == "INCOMPLETE" and res.get("memory_signature_required"):
+        return 2
     return 0 if res.get("status") in ("PASS", "SKIP") else 1
 
 

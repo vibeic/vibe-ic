@@ -853,6 +853,68 @@ def audit(project: Path) -> dict:
         rep["findings"].append(
             "PROOF_TRANSCRIPT_MISSING (#1974): results do not cite the proof "
             "transcript as `proof_transcript`")
+    # #3063: a completed floor clears its active queue, not the historical
+    # authoring request. Recheck that identity and executable dispositions even
+    # when expert_fallback_required is now false.
+    import formal_harness_gen as _fhg
+    try:
+        authoring_contract = json.loads((formal_dir / _fhg.PROPERTY_CONTRACT).read_text())
+    except (OSError, ValueError):
+        authoring_contract = {}
+    if not isinstance(authoring_contract, dict):
+        authoring_contract = {}
+    contract_rows = (authoring_contract.get("covered_obligations") or []) + (
+        authoring_contract.get("unresolved_obligations") or [])
+    expert_rows = [r for r in contract_rows if isinstance(r, dict)
+                   and r.get("author") == "formal-verify" and r.get("property")]
+    if results.get("expert_fallback_requested") or expert_rows:
+        snapshot = _fhg._authoring_request_snapshot(formal_dir)
+        valid = (snapshot is not None
+                 and results.get("expert_fallback_request_sha256") == snapshot["sha256"])
+        requested = json.loads(snapshot["text"]) if snapshot is not None else {}
+        valid = (valid and results.get("expert_fallback_skill") == requested.get("fallback_skill")
+                 and isinstance(requested.get("property_denominator"), int)
+                 and isinstance(denominator, int)
+                 and denominator >= requested["property_denominator"])
+        status = results.get("expert_fallback_invocation_status")
+        if status == "INVOKED" and results.get("expert_fallback_invoked") is True:
+            try:
+                receipt = json.loads((formal_dir / "formal_expert_review.json").read_text())
+            except (OSError, ValueError):
+                receipt = {}
+            if not isinstance(receipt, dict):
+                receipt = {}
+            valid = (valid and receipt.get("invocation_status") == "INVOKED"
+                     and receipt.get("fallback_skill", "formal-verify") == requested.get("fallback_skill")
+                     and receipt.get("request_sha256") == snapshot["sha256"]
+                     and results.get("expert_fallback_receipt") == str(
+                         (formal_dir / "formal_expert_review.json").relative_to(project)))
+            htext = "\n".join(p.read_text(errors="replace") for p in
+                              _harness_files(project, formal_dir, results))
+            closed = {r["id"] for r in _fhg._expert_closed_obligations(
+                formal_dir, contract_rows, htext)}
+            # A partial invocation remains a historical fact. A complete claim
+            # still needs every original requested ID, never closure by omission.
+            if not contract_incomplete:
+                import formal_property_run as _fpr
+                program_closed, _, _ = _fpr._verified_program_closures(formal_dir)
+                ids = {r.get("id") for r in requested.get("unresolved_obligations", [])
+                       if isinstance(r, dict)}
+                valid = (valid and ids <= closed | set(program_closed) | set(by_binding)
+                         and {r.get("id") for r in expert_rows} <= closed)
+        elif status == "INVOKED_BY_PROGRAM" and results.get("expert_fallback_invoked") is True:
+            import formal_property_run as _fpr
+            closed, refuted, _ = _fpr._verified_program_closures(formal_dir)
+            valid = (valid and bool(closed or refuted)
+                     and results.get("expert_fallback_receipt") == str(
+                         (formal_dir / _fpr.PROGRAM_RECEIPT).relative_to(project)))
+        elif not contract_incomplete and expert_rows:
+            valid = False
+        if not valid:
+            contract_ok = False
+            rep["findings"].append(
+                "EXPERT_AUTHORING_IDENTITY_INVALID (#3063): original request, role, "
+                "receipt or executable dispositions do not support this invocation")
     if results.get("expert_fallback_required"):
         # R-0915-125. THIS NO LONGER FAILS THE CLAIM, and the reason is that a
         # FAIL is reserved for a proof that RAN and FAILED.

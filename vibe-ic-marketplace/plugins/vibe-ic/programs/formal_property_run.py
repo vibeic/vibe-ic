@@ -2035,11 +2035,20 @@ def _attach_property_contract(results: dict, formal_dir: Path,
         except (OSError, ValueError):
             contract = {}
     request_floor = 0
+    request: dict = {}
     request_obligations: List[dict] = []
     request_path = formal_dir / "formal_authoring_request.json"
-    if request_path.is_file():
+    from formal_harness_gen import _authoring_request_snapshot, _expert_closed_obligations
+    request_snapshot = _authoring_request_snapshot(formal_dir)
+    if request_path.is_file() or request_snapshot is not None:
         try:
-            request = json.loads(request_path.read_text(errors="replace"))
+            # An invalid active role/identity cannot erase its denominator or
+            # requested IDs. It remains open; only verified identity earns credit.
+            loaded = json.loads(request_path.read_text() if request_path.is_file()
+                                else request_snapshot["text"])
+            if not isinstance(loaded, dict):
+                raise TypeError("authoring request is not a JSON object")
+            request = loaded
             request_floor = int(request.get("property_denominator", 0))
             request_obligations = [
                 row for row in (request.get("unresolved_obligations") or [])
@@ -2047,6 +2056,11 @@ def _attach_property_contract(results: dict, formal_dir: Path,
             ]
         except (OSError, ValueError, TypeError):
             request_floor = 0
+    if request_snapshot is None and not request_obligations and (
+            request_path.is_file() or contract.get("authoring_request") is not None):
+        request_obligations = [{"id": "formal.authoring_request_invalid", "layer": "formal",
+                                "status": "UNAUTHORED", "author": "formal-verify",
+                                "description": "authoring request identity or requested IDs are unreadable"}]
     unresolved = list(contract.get("unresolved_obligations") or [])
     # R-0915-144 — the PROGRAM's answer, read back against its evidence. A
     # closed id leaves the contract's open list; a refuted one stays, named.
@@ -2149,8 +2163,13 @@ def _attach_property_contract(results: dict, formal_dir: Path,
     # without re-reading the receipt.
     _invocation_status = str(receipt.get("invocation_status", "")).upper()
     expert_invoked = bool(
-        request_obligations
-        and _invocation_status in ("INVOKED", "INVOKED_BY_PROGRAM"))
+        request_obligations and request_snapshot is not None
+        and receipt.get("request_sha256") == request_snapshot["sha256"]
+        and _invocation_status == "INVOKED"
+        and receipt.get("fallback_skill", "formal-verify") == request.get("fallback_skill"))
+    expert_closed = {str(row["id"]) for row in _expert_closed_obligations(
+        formal_dir, request_obligations,
+        _harness.read_text(errors="replace") if _harness is not None else "")}
     program_invoked = bool(request_obligations and (program_closed or program_refuted))
     expert_used = False
     receipt_unresolved: List[dict] = []
@@ -2168,7 +2187,7 @@ def _attach_property_contract(results: dict, formal_dir: Path,
         disposition = dispositions.get(oid) if expert_invoked else None
         status = str((disposition or {}).get("status", "")).upper()
         prop = str((disposition or {}).get("property", "")).strip()
-        if status == "AUTHORED" and prop:
+        if status == "AUTHORED" and prop and oid in expert_closed:
             expert_used = True
             continue
         row = dict(requested)
@@ -2201,7 +2220,12 @@ def _attach_property_contract(results: dict, formal_dir: Path,
     results["covered_property_count"] = min(
         actual + structural_only, _closed_obligations)
     results["unresolved_obligations"] = unresolved
-    results["expert_fallback_required"] = bool(request_obligations)
+    results["expert_fallback_required"] = bool(request_path.is_file() and request_obligations)
+    results["expert_fallback_requested"] = bool(request_obligations)
+    results["expert_fallback_skill"] = request.get("fallback_skill") if request_obligations else None
+    results["expert_fallback_request_sha256"] = request_snapshot["sha256"] if request_snapshot else None
+    results["expert_fallback_invoked_by"] = (receipt.get("invoked_by") if expert_invoked
+                                              else "formal_property_run" if program_invoked else None)
     results["expert_fallback_invoked"] = expert_invoked or program_invoked
     #: WHICH KIND of answer discharged it, or "" when none has. Published so the
     #: distinction survives into `formal_proof_evidence_check` and into anything

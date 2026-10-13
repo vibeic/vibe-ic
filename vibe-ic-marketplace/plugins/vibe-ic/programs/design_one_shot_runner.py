@@ -9917,6 +9917,12 @@ def step_professional_tb_gen(project: Path, top_name: str = "",
                           detail=f"class not derivable ({gen.get('reason', '')})", reason_class=_V.ReasonClass.INPUT_ABSENT)
     if status != "PASS":
         _write({**gen, "ran_cocotb": False})
+        if status == "INCOMPLETE" and gen.get("memory_signature_required"):
+            return StepResult("professional_tb_gen", "NOT_MEASURED", time.time() - t0,
+                              detail=gen.get("reason", "memory_signature contract unresolved"),
+                              extras={"fallback_skill": "testbench-gen",
+                                      "program_first": "professional_tb_gen"},
+                              reason_class=_V.ReasonClass.INPUT_ABSENT)
         return StepResult("professional_tb_gen", "FAIL", time.time() - t0,
                           detail=f"generator status={status}")
 
@@ -10063,6 +10069,11 @@ def step_professional_tb_gen(project: Path, top_name: str = "",
                     "cocotb_pass_marker": pass_marker,
                     "cocotb_xml_failures": xml_fail,
                     "cocotb_test_denominator": xml_summary})
+        if gen.get('random_goal_plan') and xml_summary is not None:
+            _ptb.finalize_random_pair_execution(
+                out_dir, gen['random_goal_plan'],
+                argv=['make', 'SIM=icarus'], returncode=rc,
+                image=_pin.configured_reference())
 
         if xml_summary is None:
             # DISPATCHED AND NOTHING CAME BACK. That is a different fact from
@@ -10126,6 +10137,15 @@ def step_professional_tb_gen(project: Path, top_name: str = "",
                 and xml_summary["passed"] > 0
                 and xml_summary["failures"] == 0
                 and xml_summary["errors"] == 0):
+            if gen.get("memory_signature_cases"):
+                import _professional_memory_signature as _memory_signature
+                try:
+                    _memory_signature.read_observations(out_dir, gen["memory_signature_cases"])
+                except (OSError, ValueError, AssertionError, TypeError, AttributeError) as error:
+                    gap = f"declared memory_signature was not measured: {error}"
+                    _write({**rec, "status": "INCOMPLETE", "reason": gap})
+                    return StepResult("professional_tb_gen", "NOT_MEASURED", time.time() - t0,
+                                      detail=gap, reason_class=_V.ReasonClass.PARTIAL_POPULATION)
             _write({**rec, "status": "PASS"})
             return StepResult(
                 "professional_tb_gen", "PASS", time.time() - t0,
@@ -10327,6 +10347,36 @@ def step_step4_functional_evidence(project: Path,
                 _outputs,
                 extras={"fallback_skill": "testbench-gen",
                         "program_first": "professional_tb_gen"})
+        import cpu_functional_oracle_waiver_check as _step4_goals
+        _goal_summary = _step4_goals._coverage_goal_summary(project)
+        if _goal_summary['declared_count']:
+            # This gate's top-level VACUOUS convention still names the absent
+            # canonical slot. Its actual goal rows also measure the passing
+            # professional slot, and are published/consumed here unchanged.
+            _goal_report = _pl.report_path(project, 'gates/cpu_functional_oracle_waiver.json')
+            _goal_rc, _goal_out, _goal_err = _run([
+                sys.executable, str(PROGRAMS_DIR / 'cpu_functional_oracle_waiver_check.py'),
+                str(project), '--json', str(_goal_report)], cwd=project, timeout=60)
+            if _goal_rc not in (0, 2):
+                return StepResult('step4_functional_evidence', 'FAIL', time.time() - t0,
+                                  f'coverage-goal consumer rc={_goal_rc}: {_goal_out or _goal_err}', _outputs)
+            try:
+                _published_goals = json.loads(_goal_report.read_text())['coverage_goals']
+            except (OSError, ValueError, KeyError):
+                return StepResult('step4_functional_evidence', 'FAIL', time.time() - t0,
+                                  f'coverage-goal report unavailable: {_goal_out or _goal_err}', _outputs)
+            if _published_goals != _goal_summary:
+                return StepResult('step4_functional_evidence', 'FAIL', time.time() - t0,
+                                  'coverage-goal report does not describe the current measurement', _outputs)
+            _goal_summary = _published_goals
+            _outputs.append(str(_goal_report.relative_to(project)))
+        _goal_refusal = _step4_goals._cgc.coverage_goal_refusal(_goal_summary)
+        if _goal_refusal:
+            return StepResult('step4_functional_evidence',
+                              'FAIL' if _goal_summary['failed_count'] else 'NOT_MEASURED',
+                              time.time() - t0, _goal_refusal, _outputs,
+                              extras={'fallback_skill': 'testbench-gen'},
+                              reason_class=_V.ReasonClass.PARTIAL_POPULATION)
         return StepResult(
             "step4_functional_evidence", "PASS", time.time() - t0,
             "Step 4 TB and functional evidence passed at the declared "
