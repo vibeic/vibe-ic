@@ -488,6 +488,9 @@ def _f_empty(p: Path) -> None:
 
 def _f_rtl_bad(p: Path) -> None:
     _w(p, "phase2/stage1/rtl/top.v", _BAD_RTL)
+    # Reach the content predicate with the Default frontend's required top;
+    # the deliberately absent driver and all other planted defects remain.
+    _w(p, "phase1/generated_docs/L9_INTEGRATION_SPEC.json", {"top_module": "top"})
 
 
 def _f_analog_stage_bad_verdict(p: Path) -> None:
@@ -2744,7 +2747,7 @@ CLAUSE_FIXTURE: Dict[Tuple[str, str], str] = {
     # exist and be unverifiable.
     ("31", "drc_vacuous_pass_check . --under reports/phase3/drc_signoff.rpt --json reports/phase3/drc_vacuous.json"): "SIGNOFF_UNVERIFIABLE",
     ("31", "lvs_signoff_guard . --verdict-file reports/phase3/lvs.rpt"): "SIGNOFF_UNVERIFIABLE",
-    ("2", "rtl_hygiene_lint phase2/stage1/rtl/*.sv phase2/stage1/rtl/*.v "
+    ("2", "rtl_hygiene_lint --project . --define SYNTHESIS "
           "--severity ERROR --json reports/phase2/lint/rtl_hygiene.json"):
         "RTL_BAD",
     ("3", "cdc_async_input_check . --json "
