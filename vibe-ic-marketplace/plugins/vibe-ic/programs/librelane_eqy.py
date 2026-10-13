@@ -62,7 +62,7 @@ def eqy_script(top: str, rtl: list[Path], netlist: Path, liberty: str) -> str:
         "[gate]", f"read_liberty -ignore_miss_func {liberty}",
         f"read_verilog -formal -sv -icells {netlist}", "",
         "[script]", f"hierarchy -top {top}", "proc", f"prep -top {top} -flatten",
-        "memory -nomap", "async2sync", "setundef -init -zero", "splitnets -ports",
+        "memory -nomap", "async2sync", "setundef -init -zero", "splitnets",
         observable_matchpoint_names(top).rstrip(), "",
         "[partition *]", "amend *", "",
         "[strategy sat]", "use sat", "depth 5", "",
