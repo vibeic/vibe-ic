@@ -45,6 +45,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 sys.path.insert(0, str(Path(__file__).parent))
+from _hdl_code_text import strip_hdl_comments_and_strings  # noqa: E402
 try:
     import _path_layout as _pl  # noqa: E402
 except Exception:  # pragma: no cover - _path_layout always present in-tree
@@ -1138,6 +1139,7 @@ def _outer_parens(expr: str) -> str:
 
 
 def _procedural_driver_count(body: str, signal: str) -> int:
+    body = strip_hdl_comments_and_strings(body)
     return sum(bool(re.search(
         rf"\b{re.escape(signal)}\s*(?:<=|=(?!=))",
         re.split(r"\bassign\b|\bendmodule\b", block, maxsplit=1)[0]))
@@ -1161,7 +1163,7 @@ def _reset_gated_aliases(iface: ModuleIface, reset_name: str,
     """
     assignments: Dict[str, List[str]] = {}
     for m in re.finditer(r"\bassign\s+([A-Za-z_]\w*)\s*=\s*([^;]+);",
-                         iface.body):
+                         strip_hdl_comments_and_strings(iface.body)):
         assignments.setdefault(m.group(1), []).append(m.group(2))
     out: Dict[str, str] = {}
     for port in iface.ports:
@@ -1230,10 +1232,11 @@ def derive_reset_props(iface: ModuleIface, reset_name: str, active_low: bool
     gated = _reset_gated_aliases(iface, reset_name, active_low, ffs)
     aliases.update(gated)
     props: List[ResetProp] = []
+    driver_body = strip_hdl_comments_and_strings(iface.body)
     for p in iface.ports:
         if p.direction != "output":
             continue
-        if (re.search(rf"\bassign\s+{re.escape(p.name)}\s*=", iface.body)
+        if (re.search(rf"\bassign\s+{re.escape(p.name)}\s*=", driver_body)
                 and _procedural_driver_count(iface.body, p.name)):
             # A procedural write to the continuously assigned OUTPUT is a
             # second driver too, even if that write has a literal reset branch.

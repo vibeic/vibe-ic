@@ -1,6 +1,6 @@
 """Unit tests for formal_harness_gen.py (Step 5 DETERMINISTIC property author).
 
-Pure-function tests only — no docker, no SymbiYosys. They pin the interface /
+The parse/emit controls pin the interface /
 reset-value parse, the construction-safety guards (non-literal reset values are
 NEVER asserted), the thin-wrapper descent to the leaf logic module, and the
 emitted-harness shape the Step-5 runner + abc-pdr proof depend on.
@@ -8,10 +8,14 @@ emitted-harness shape the Step-5 runner + abc-pdr proof depend on.
 The parse fixtures are shaped like the REAL spm serial-parallel multiplier (a
 sync active-high reset, a registered serial-product output aliased through a
 reg) so a regression in the parser is caught deterministically.
+The diagnostic-string regression also exercises the real native runner and
+consumer on self-authored neutral RTL in the EDA image.
 """
 import sys
 from pathlib import Path
 import pytest
+import json
+import shutil
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import formal_harness_gen as G  # noqa: E402
@@ -141,6 +145,121 @@ def test_derive_reset_props_via_alias():
     assert len(props) == 1
     p = props[0]
     assert p.output == "p" and p.target == "p_reg" and p.value == "'0"
+
+
+_DIAGNOSTIC_DIRECT = ('module neutral_register(input clk,rst,data,output reg held); '
+    'always @(posedge clk) begin if(rst) held<=0; else held<=data; '
+    '$display("assign held = data;"); end endmodule\n')
+_NEUTRAL_GATED = ('module neutral_register(input clk,rst,data,output wire held); '
+    'reg stored; always @(posedge clk) if(rst) stored<=0; else stored<=data; '
+    'assign held=!rst && stored; endmodule\n')
+
+
+def _diagnostic_project(project, text):
+    docs = project / "phase1/generated_docs"
+    docs.mkdir(parents=True)
+    for name, value in (
+        ("L3_CMD_PROTOCOL.json", {"no_opcodes_in_input": True}),
+        ("L6_FSM.json", {"no_fsm_in_input": True}),
+        ("L8_TIMING_WAVEFORM.json", {"formal_applicability": {
+            "status": "NOT_APPLICABLE", "reason": "Neutral INPUT declares no additional waveform obligations beyond the synchronous RTL reset contract."}})):
+        (docs / name).write_text(json.dumps(value))
+    rtl = project / "phase2/stage1/rtl/neutral_register.v"
+    rtl.parent.mkdir(parents=True)
+    rtl.write_text(text)
+    return rtl
+
+
+def _native_diagnostic_proof(project, rtl, floor):
+    from not_verified_tier import skip_not_verified
+    if any(shutil.which(tool) is None for tool in ("yosys", "sby")):
+        skip_not_verified("native diagnostic reset control needs yosys/sby",
+                          "Run this module in the pinned EDA image")
+    import formal_property_run as runner
+    import formal_proof_evidence_check as consumer
+    proof = runner.run(project, harness=Path(floor["harness_path"]), rtl=[rtl],
+        top=floor["harness_module"], container=None, timeout=60,
+        mem_limit_kb=4 * 1024 * 1024, prove_engines="direct")
+    checked = consumer.audit(project)
+    (project / "native-diagnostic-receipt.json").write_text(json.dumps({
+        "floor": floor, "proof": proof, "consumer": checked}, indent=2))
+    return proof, checked
+
+
+def test_current_native_floor_keeps_direct_reset_output_with_hdl_diagnostic_string(tmp_path):
+    rtl = _diagnostic_project(tmp_path, _DIAGNOSTIC_DIRECT)
+    floor = G.generate(project=tmp_path, top="neutral_register", assertion_form="immediate")
+    assert floor["rc"] == 0, floor
+    assert floor["verdict"] == "EMITTED"
+    assert floor["properties"] == [{"output": "held", "target": "held",
+        "reset_value": "'0", "reset_style": "sync"}]
+    assert floor["property_denominator"] == floor["authored_property_count"] == 1
+    assert rtl.read_text() == _DIAGNOSTIC_DIRECT
+    proof, checked = _native_diagnostic_proof(tmp_path, rtl, floor)
+    assert proof["verdict"] == checked["verdict"] == "PASS"
+    assert proof["all_proved"] is True
+    assert {p["status"] for p in proof["properties"]} == {"PASS"}
+
+
+@pytest.mark.parametrize("style,message", [
+    ("plain", "always_ff held <= data;"),
+    ("gated", "assign held = data;"),
+    ("gated", "assign stored = data;"),
+    ("gated", "always_ff stored <= data;"),
+    ("gated", "always_comb held = data;"),
+])
+def test_plain_and_gated_driver_analysis_ignores_diagnostic_strings(tmp_path, style, message):
+    expression = "stored" if style == "plain" else "!rst && stored"
+    text = ('module neutral_register(input clk,rst,data,output wire held); reg stored; '
+        'always @(posedge clk) begin if(rst) stored<=0; else stored<=data; '
+        f'$display("{message}"); end assign held={expression}; endmodule\n')
+    result, _ = _gen(tmp_path, text)
+    assert result["verdict"] == "EMITTED", result
+    assert result["properties"] == [{"output": "held", "target": "stored",
+        "reset_value": "'0", "reset_style": "sync"}]
+
+
+def test_gated_driver_analysis_ignores_comments(tmp_path):
+    text = _NEUTRAL_GATED.replace("endmodule", "// always_ff stored <= data;\n/* assign held = data; */\nendmodule")
+    result, _ = _gen(tmp_path, text)
+    assert result["verdict"] == "EMITTED"
+    assert result["properties"][0]["target"] == "stored"
+
+
+@pytest.mark.parametrize("expression,extra", [
+    ("!rst && stored", "assign held = data;"),
+    ("!rst && stored", "always @(posedge clk) stored <= data;"),
+    ("rst && stored", ""),
+    ("!rst && data", ""),
+])
+def test_diagnostic_strings_do_not_hide_real_invalid_gated_drivers(tmp_path, expression, extra):
+    text = ('module neutral_register(input clk,rst,data,output wire held); reg stored; '
+        'always @(posedge clk) begin if(rst) stored<=0; else stored<=data; '
+        '$display("assign held = !rst && stored; always_ff stored <= data;"); end '
+        f'assign held={expression}; {extra} endmodule\n')
+    result, _ = _gen(tmp_path, text)
+    assert result["rc"] == 2 and result["verdict"] == "NOT_APPLICABLE", result
+
+
+@pytest.mark.parametrize("mutation", [None, "missing_gate", "wrong_polarity", "input_driver"])
+def test_same_native_gated_property_keeps_current_reset_first_edge_semantics(tmp_path, mutation):
+    rtl = _diagnostic_project(tmp_path, _NEUTRAL_GATED)
+    floor = G.generate(project=tmp_path, top="neutral_register", assertion_form="immediate")
+    assert floor["rc"] == 0 and floor["property_denominator"] == 1
+    harness = Path(floor["harness_path"]).read_bytes()
+    assert b"rst_active || (f_past_valid && rst_active_q)" in harness
+    if mutation == "missing_gate":
+        rtl.write_text(_NEUTRAL_GATED.replace("!rst && stored", "stored"))
+    elif mutation == "wrong_polarity":
+        rtl.write_text(_NEUTRAL_GATED.replace("!rst && stored", "rst && stored"))
+    elif mutation == "input_driver":
+        rtl.write_text(_NEUTRAL_GATED.replace("!rst && stored", "!rst && data"))
+    proof, checked = _native_diagnostic_proof(tmp_path, rtl, floor)
+    assert Path(floor["harness_path"]).read_bytes() == harness
+    expected = "PASS" if mutation is None else "FAIL"
+    assert proof["verdict"] == checked["verdict"] == expected
+    assert {p["status"] for p in proof["properties"]} == {expected}
+    assert proof["all_proved"] is (mutation is None)
 
 
 def _gated_output(expression, reset="rst", reset_condition="rst",
