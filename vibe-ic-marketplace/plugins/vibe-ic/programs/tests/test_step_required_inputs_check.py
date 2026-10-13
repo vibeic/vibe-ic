@@ -64,6 +64,11 @@ def project(tmp_path):
     (tmp_path / "phase2" / "stage1" / "rtl").mkdir(parents=True)
     (tmp_path / "phase2" / "stage1" / "rtl" / "top.v").write_text(
         "module top(); endmodule\n")
+    # Step 2 also consumes the integration declaration; its present-input
+    # reverse control must supply both inputs from the current shipped flow.
+    integration = tmp_path / "phase1/generated_docs/L9_INTEGRATION_SPEC.json"
+    integration.parent.mkdir(parents=True)
+    integration.write_text(json.dumps({"fields": {"top_module": "top"}}))
     # step 11's declared scan_netlist.v is deliberately NOT created.
     (tmp_path / "phase2" / "stage2" / "dft").mkdir(parents=True)
     return tmp_path
@@ -150,3 +155,78 @@ def test_backward_compatibility_no_steps_tree_and_no_ledger(project):
     assert "not required and not read" in rep["degraded"]["steps_tree"]
     # and the degradation must not be expressed as a pass
     assert rc in (0, 1)
+
+
+def _issue3054_flow():
+    from _hostpaths import require_repo
+    return yaml.safe_load(require_repo(
+        "vibe-ic-marketplace", "plugins", "vibe-ic", "flow",
+        "phase1_phase2_phase3.yaml").read_text())
+
+
+def _issue3054_step1(project):
+    """Neutral initialized inputs, derived from the actual D1 declaration."""
+    doc = _issue3054_flow()
+    for spec in next(row for row in doc["steps"] if row["id"] == "D1")["required_outputs"]:
+        rel = spec.split(" OR ")[0].replace("*", "NEUTRAL")
+        path = project / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("{}\n" if path.suffix == ".json" else "neutral input\n")
+    return doc
+
+
+@pytest.mark.parametrize("complete", [True, False], ids=["present", "missing"])
+def test_issue3054_scoped_step1_cli_and_rtl_preflight(tmp_path, complete):
+    import step_preflight as preflight
+    _issue3054_step1(tmp_path)
+    missing = "phase1/generated_docs/L1_DATASHEET.json"
+    if not complete:
+        (tmp_path / missing).unlink()
+    rc, report = _run(tmp_path, FLOW, "1")
+    assert rc == (0 if complete else 1), report
+    row = report["steps"][0]
+    assert row["verdict"] == ("READY" if complete else "BLOCKED")
+    assert row["inputs"] and all(item["present"] is not None for item in row["inputs"])
+
+    called = []
+    def native_boundary():
+        called.append("dispatched")
+        return "SOURCE_FIXTURE_ONLY"
+    def refusal(detail, extras):
+        return {"detail": detail, "extras": extras}
+    result = preflight.gate(tmp_path, "design_one_shot_runner", "rtl_gen",
+                            refusal, native_boundary)
+    assert len(called) == (1 if complete else 0), result
+    decision = json.loads(preflight.ledger_path(tmp_path).read_text())["decisions"][0]
+    assert decision["verdict"] == ("READY" if complete else "REFUSED")
+    assert decision["allow"] is complete and decision["inputs"]
+    if not complete:
+        assert missing in result["detail"]
+
+
+@pytest.mark.parametrize("mutation", ["sta_owner", "spef_alternative",
+                                      "unknown_owner", "undeclared_output"])
+def test_issue3054_reversed_declarations_still_refuse_scoped_step1(tmp_path, mutation):
+    doc = _issue3054_step1(tmp_path)
+    rows = {str(row["id"]): row for row in doc["steps"]}
+    if mutation == "sta_owner":
+        rows["23"]["required_outputs"].remove("reports/phase3/sta_postpnr_signoff.json")
+    elif mutation == "spef_alternative":
+        rows["30"]["required_inputs"][1]["path"] = "phase3/stage3/extracted/*.spef"
+    elif mutation == "unknown_owner":
+        rows["30"]["required_inputs"][0]["from"] = "UNKNOWN_PRODUCER"
+    else:
+        rows["30"]["required_inputs"][0]["path"] = "reports/phase3/undeclared.json"
+    flow = tmp_path / "reversed.yaml"
+    flow.write_text(yaml.safe_dump(doc, sort_keys=False))
+    rc, report = _run(tmp_path, flow, "1")
+    assert rc == 2, report
+    assert report["ok"] is False and "SELF-INCONSISTENT" in report["error"]
+    assert len(report["declaration_defects"]) == 1, report
+    assert "steps" not in report
+    import step_preflight as preflight
+    decision = preflight.decide(tmp_path, "design_one_shot_runner", "rtl_gen", flow)
+    # This historical default is advisory UNAVAILABLE: dispatch was allowed,
+    # and this reversal must not claim that the malformed flow stopped it.
+    assert decision.verdict == "UNAVAILABLE" and decision.inputs == []
+    assert decision.allow is True
