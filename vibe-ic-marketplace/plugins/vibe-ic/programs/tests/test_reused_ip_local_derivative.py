@@ -86,6 +86,212 @@ def _apply(project, match, ref):
     return pull.apply_local_derivative(project, [match], ref)
 
 
+def _authored_glue_fixture(tmp_path, monkeypatch):
+    project, match, ref, record = _fixture(tmp_path, monkeypatch)
+    rtl = project/'phase2/stage1/rtl'
+    (rtl/'top_wrapper.v').write_text('module top_wrapper; leaf core(); endmodule\n')
+    digest = _h(rtl/'top_wrapper.v')
+    record['current_inventory']['top_wrapper.v'] = digest
+    for key in ('parent_red', 'candidate_green'):
+        path = project/record['proof'][key]['path']
+        receipt = json.loads(path.read_text())
+        receipt['rtl']['top_wrapper.v'] = digest
+        _json(path, receipt)
+        record['proof'][key]['sha256'] = _h(path)
+    _json(project/ref['path'], record)
+    ref['sha256'] = _h(project/ref['path'])
+    return project, match, ref
+
+
+def _authored_metadata_bytes(project):
+    paths = ('phase2/stage1/rtl/SOURCE_MANIFEST.json',
+             'plugin_output/declaration.json', 'provenance.jsonl')
+    return {name: (project/name).read_bytes() if (project/name).is_file() else None
+            for name in paths}
+
+
+def test_authored_glue_producer_then_actual_derivative_and_ordinary_consumer(tmp_path, monkeypatch):
+    project, match, ref = _authored_glue_fixture(tmp_path, monkeypatch)
+    # The existing consumer actually refuses a genuine extra glue file before
+    # the new writer. This is not a missing-new-API baseline assertion.
+    failed = _apply(project, match, ref)
+    assert failed['status'] == pull.PIN_MISMATCH
+    assert 'declared complete current inventory' in failed['reason']
+    emitted = pull.emit_authored_glue_inventory(project, [match], ['top_wrapper.v'])
+    assert emitted['status'] == pull.PIN_VERIFIED
+    assert emitted['ai_authored_files'] == [
+        {'path': 'top_wrapper.v', 'sha256': _h(project/'phase2/stage1/rtl/top_wrapper.v')}]
+    assert _apply(project, match, ref)['status'] == pull.PIN_VERIFIED
+    consumed = runner.step_rtl_gen(project, 'processor_cpu')
+    assert consumed.status == 'PASS_WITH_WAIVERS', consumed.detail
+    assert consumed.extras['ip_fetch']['reuse_kind'] == 'LOCAL_DERIVATIVE'
+
+
+def test_authored_glue_legacy_caller_rows_remain_admitted(tmp_path, monkeypatch):
+    project, match, ref = _authored_glue_fixture(tmp_path, monkeypatch)
+    path = project/'phase2/stage1/rtl/SOURCE_MANIFEST.json'
+    manifest = json.loads(path.read_text())
+    manifest['ai_authored_files'] = [
+        {'path': 'top_wrapper.v', 'sha256': _h(path.parent/'top_wrapper.v')}]
+    _json(path, manifest)
+    # Historical valid caller metadata and actual official-parent reproduction
+    # remain valid without a newly imposed authored-inventory event requirement.
+    assert _apply(project, match, ref)['status'] == pull.PIN_VERIFIED
+    assert runner.step_rtl_gen(project, 'processor_cpu').status == 'PASS_WITH_WAIVERS'
+
+
+def test_authored_glue_repeat_is_byte_idempotent_and_no_duplicate_event(tmp_path, monkeypatch):
+    project, match, _ = _authored_glue_fixture(tmp_path, monkeypatch)
+    assert pull.emit_authored_glue_inventory(project, [match], ['top_wrapper.v'])['status'] == pull.PIN_VERIFIED
+    before = _authored_metadata_bytes(project)
+    again = pull.emit_authored_glue_inventory(project, [match], ['top_wrapper.v'])
+    assert again['already_current'] is True and again['outputs'] == {}
+    assert _authored_metadata_bytes(project) == before
+    events = [json.loads(x) for x in (project/'provenance.jsonl').read_text().splitlines()]
+    assert sum(x.get('event') == 'ip_catalog_authored_glue_inventory' for x in events) == 1
+
+
+def test_authored_glue_append_preserves_valid_last_line_without_newline(tmp_path, monkeypatch):
+    project, match, _ = _authored_glue_fixture(tmp_path, monkeypatch)
+    path = project/'provenance.jsonl'
+    previous = path.read_bytes().rstrip(b'\n')
+    path.write_bytes(previous)
+    assert pull.emit_authored_glue_inventory(project, [match], ['top_wrapper.v'])['status'] == pull.PIN_VERIFIED
+    assert path.read_bytes().startswith(previous + b'\n')
+    events = [json.loads(x) for x in path.read_text().splitlines()]
+    assert events[-1]['event'] == 'ip_catalog_authored_glue_inventory'
+
+
+@pytest.mark.parametrize('names', [[], ['../top_wrapper.v'], ['/top_wrapper.v'],
+    ['nested/top_wrapper.v'], ['nested\\top_wrapper.v'], ['leaf.v'],
+    ['top_wrapper.v', 'top_wrapper.v'], ['missing.v']])
+def test_authored_glue_invalid_declared_paths_never_publish(tmp_path, monkeypatch, names):
+    project, match, _ = _authored_glue_fixture(tmp_path, monkeypatch)
+    before = _authored_metadata_bytes(project)
+    with pytest.raises((ValueError, OSError)):
+        pull.emit_authored_glue_inventory(project, [match], names)
+    assert _authored_metadata_bytes(project) == before
+
+
+@pytest.mark.parametrize('name', ['extra.v', 'extra.svh', 'notes.txt'])
+def test_authored_glue_unlisted_inventory_never_publish(tmp_path, monkeypatch, name):
+    project, match, _ = _authored_glue_fixture(tmp_path, monkeypatch)
+    (project/'phase2/stage1/rtl'/name).write_text('unlisted data\n')
+    before = _authored_metadata_bytes(project)
+    with pytest.raises(ValueError, match='undeclared'):
+        pull.emit_authored_glue_inventory(project, [match], ['top_wrapper.v'])
+    assert _authored_metadata_bytes(project) == before
+
+
+@pytest.mark.parametrize('name', ['named.vh', 'named.svh'])
+def test_authored_glue_named_regular_headers_are_explicit_inputs(tmp_path, monkeypatch, name):
+    project, match, _ = _authored_glue_fixture(tmp_path, monkeypatch)
+    (project/'phase2/stage1/rtl'/name).write_text('`define LOCAL_WIDTH 3\n')
+    out = pull.emit_authored_glue_inventory(project, [match], ['top_wrapper.v', name])
+    assert out['status'] == pull.PIN_VERIFIED
+    assert {x['path'] for x in out['ai_authored_files']} == {'top_wrapper.v', name}
+
+
+def test_authored_glue_source_symlink_refused_before_publication(tmp_path, monkeypatch):
+    project, match, _ = _authored_glue_fixture(tmp_path, monkeypatch)
+    path = project/'phase2/stage1/rtl/top_wrapper.v'
+    outside = tmp_path/'outside.v'
+    outside.write_bytes(path.read_bytes())
+    path.unlink()
+    path.symlink_to(outside)
+    before = _authored_metadata_bytes(project)
+    with pytest.raises(ValueError, match='symlink'):
+        pull.emit_authored_glue_inventory(project, [match], ['top_wrapper.v'])
+    assert _authored_metadata_bytes(project) == before
+
+
+def test_authored_glue_source_ancestor_symlink_never_publishes(tmp_path, monkeypatch):
+    project, match, _ = _authored_glue_fixture(tmp_path, monkeypatch)
+    path = project/'phase2/stage1/rtl'
+    outside = tmp_path/'outside-rtl'
+    path.rename(outside)
+    path.symlink_to(outside, target_is_directory=True)
+    before = _authored_metadata_bytes(project)
+    with pytest.raises(ValueError, match='symlink'):
+        pull.emit_authored_glue_inventory(project, [match], ['top_wrapper.v'])
+    assert _authored_metadata_bytes(project) == before
+
+
+def test_authored_glue_metadata_ancestor_symlink_never_publishes(tmp_path, monkeypatch):
+    project, match, _ = _authored_glue_fixture(tmp_path, monkeypatch)
+    path = project/'plugin_output'
+    outside = tmp_path/'outside-metadata'
+    path.rename(outside)
+    path.symlink_to(outside, target_is_directory=True)
+    before = _authored_metadata_bytes(project)
+    with pytest.raises(ValueError, match='escapes'):
+        pull.emit_authored_glue_inventory(project, [match], ['top_wrapper.v'])
+    assert _authored_metadata_bytes(project) == before
+
+
+def test_authored_glue_non_source_input_refused_before_publication(tmp_path, monkeypatch):
+    project, match, _ = _authored_glue_fixture(tmp_path, monkeypatch)
+    (project/'phase2/stage1/rtl/notes.txt').write_text('caller metadata\n')
+    before = _authored_metadata_bytes(project)
+    with pytest.raises(ValueError, match='RTL or a source header'):
+        pull.emit_authored_glue_inventory(project, [match], ['top_wrapper.v', 'notes.txt'])
+    assert _authored_metadata_bytes(project) == before
+
+
+def test_authored_glue_independent_pin_failure_never_publishes(tmp_path, monkeypatch):
+    project, match, _ = _authored_glue_fixture(tmp_path, monkeypatch)
+    # A fresh independent upstream pull, not local consistent hashes, wins.
+    upstream = Path(match.canonical_url)
+    (upstream/'rtl/leaf.v').write_text('module leaf; wire changed; endmodule\n')
+    _git(upstream, 'add', '.')
+    _git(upstream, 'commit', '-qm', 'replace pinned source')
+    _git(upstream, 'tag', '-f', '2.3.4')
+    before = _authored_metadata_bytes(project)
+    refused = pull.emit_authored_glue_inventory(project, [match], ['top_wrapper.v'])
+    assert refused['status'] == pull.PIN_MISMATCH, refused
+    assert _authored_metadata_bytes(project) == before
+
+
+def test_authored_glue_independent_pin_unavailable_never_publishes(tmp_path, monkeypatch):
+    project, match, _ = _authored_glue_fixture(tmp_path, monkeypatch)
+    Path(match.canonical_url).rename(tmp_path/'unreachable-source')
+    before = _authored_metadata_bytes(project)
+    refused = pull.emit_authored_glue_inventory(project, [match], ['top_wrapper.v'])
+    assert refused['status'] == pull.PIN_UNAVAILABLE, refused
+    assert _authored_metadata_bytes(project) == before
+
+
+@pytest.mark.parametrize('which', ['source', 'manifest', 'declaration', 'provenance'])
+def test_authored_glue_actual_fetch_then_concurrent_drift_never_overwrites(tmp_path, monkeypatch, which):
+    project, match, _ = _authored_glue_fixture(tmp_path, monkeypatch)
+    verifier = pull.verify_existing_official_pins_outcome
+    at_refusal = {}
+    def real_fetch_then_drift(*args, **kwargs):
+        state = verifier(*args, **kwargs)
+        assert state[0] == pull.PIN_VERIFIED
+        paths = {'source': project/'phase2/stage1/rtl/top_wrapper.v',
+                 'manifest': project/'phase2/stage1/rtl/SOURCE_MANIFEST.json',
+                 'declaration': project/'plugin_output/declaration.json',
+                 'provenance': project/'provenance.jsonl'}
+        path = paths[which]
+        path.write_bytes(path.read_bytes() + b'\n')
+        at_refusal.update(_authored_metadata_bytes(project))
+        return state
+    monkeypatch.setattr(pull, 'verify_existing_official_pins_outcome', real_fetch_then_drift)
+    with pytest.raises(ValueError, match='changed before authored publication'):
+        pull.emit_authored_glue_inventory(project, [match], ['top_wrapper.v'])
+    assert _authored_metadata_bytes(project) == at_refusal
+
+
+def test_authored_glue_cli_dry_run_refuses_without_writes(tmp_path, monkeypatch):
+    project, _, _ = _authored_glue_fixture(tmp_path, monkeypatch)
+    before = _authored_metadata_bytes(project)
+    with pytest.raises(SystemExit) as refused:
+        pull.main([str(project), '--authored-glue', 'top_wrapper.v', '--dry-run'])
+    assert refused.value.code == 2
+    assert _authored_metadata_bytes(project) == before
+
+
 def test_normal_consumer_admits_complete_declared_local_derivative(tmp_path, monkeypatch):
     # Same supplied derivative bytes/receipts reach the old and new ordinary
     # runner. The pre-fix failure is its observed FAIL verdict, not a missing API.

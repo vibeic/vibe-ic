@@ -1057,6 +1057,100 @@ def _local_inventory(rtl: Path) -> Dict[str, str]:
     return result
 
 
+def emit_authored_glue_inventory(project: Path, matches: List[CatalogMatch],
+                                 names: List[str]) -> Dict[str, Any]:
+    """Record explicitly declared glue through the existing source producer.
+
+    Source admission only: read actual bytes, independently verify the official
+    pins, and refuse undeclared inventory before publishing any metadata.
+    """
+    project = project.resolve()
+    mf_path = _local_path(project, "phase2/stage1/rtl/SOURCE_MANIFEST.json")
+    manifest = _local_json(mf_path)
+    if manifest.get("reused_ip") is not True or \
+            manifest.get("generated_by") != "ip_catalog_pull" or \
+            "local_derivative" in manifest:
+        raise ValueError("authored glue requires an official catalog parent")
+    official = {}
+    for pin in manifest.get("source_pins") or []:
+        for rel, digest in pin.get("files_sha256", {}).items():
+            name = Path(rel).name
+            if name in official:
+                raise ValueError("colliding official inventory basenames")
+            official[name] = digest
+    if not official or not names:
+        raise ValueError("official inventory and explicit authored glue required")
+    authored = {}
+    for name in names:
+        if not isinstance(name, str) or not name or name in (".", "..") or \
+                "/" in name or "\\" in name or Path(name).name != name:
+            raise ValueError("authored glue must be a staged source basename")
+        if Path(name).suffix.lower() not in (".v", ".sv", ".vh", ".svh"):
+            raise ValueError("authored glue must be RTL or a source header")
+        if name in official or name in authored:
+            raise ValueError("authored glue overlaps official or repeated source")
+        authored[name] = _sha256_file(_local_path(
+            project, "phase2/stage1/rtl/" + name))
+    before = {**official, **authored}
+    if _local_inventory(project / "phase2/stage1/rtl") != before:
+        raise ValueError("undeclared or changed staged inventory")
+    decl_path = project / "plugin_output/declaration.json"
+    provenance_path = project / "provenance.jsonl"
+    for path in (decl_path, provenance_path):
+        if not path.resolve().is_relative_to(project) or \
+                any(p.is_symlink() for p in (path, *path.parents) if p != project) or \
+                (path.exists() and not path.is_file()):
+            raise ValueError("authored glue metadata path escapes or is nonregular")
+    declaration = _local_json(decl_path) if decl_path.is_file() else {}
+    metadata_before = {path: path.read_bytes() if path.is_file() else None
+                       for path in (mf_path, decl_path, provenance_path)}
+    events = []
+    if provenance_path.is_file():
+        for line in provenance_path.read_text().splitlines():
+            event = json.loads(line)
+            if not isinstance(event, dict):
+                raise ValueError("invalid existing producer provenance")
+            events.append(event)
+    state, why = verify_existing_official_pins_outcome(project, matches, manifest)
+    if state != PIN_VERIFIED:
+        return {"status": state, "reason": why, "kind": "AUTHORED_GLUE_INVENTORY"}
+    # Refuse bytes changed during independent source reproduction.
+    if _local_inventory(project / "phase2/stage1/rtl") != before:
+        raise ValueError("staged inventory changed before authored publication")
+    for path, data in metadata_before.items():
+        if not path.resolve().is_relative_to(project) or \
+                any(p.is_symlink() for p in (path, *path.parents) if p != project) or \
+                (path.exists() and not path.is_file()) or \
+                (path.read_bytes() if path.is_file() else None) != data:
+            raise ValueError("source metadata changed before authored publication")
+    rows = [{"path": name, "sha256": authored[name]} for name in sorted(authored)]
+    inputs = {"phase2/stage1/rtl/" + name: "sha256:" + digest
+              for name, digest in authored.items()}
+    if manifest.get("ai_authored_files") == rows and \
+            declaration.get("ai_authored_files") == sorted(authored) and any(
+                event.get("event") == "ip_catalog_authored_glue_inventory" and
+                event.get("exit_code") == 0 and event.get("ai_authored_files") == rows and
+                event.get("inputs") == inputs for event in events):
+        return {"status": PIN_VERIFIED, "kind": "AUTHORED_GLUE_INVENTORY",
+                "already_current": True, "outputs": {}}
+    manifest["ai_authored_files"] = rows
+    declaration["ai_authored_files"] = sorted(authored)
+    import _atomic_artefact as atomic
+    atomic.write_json(mf_path, manifest)
+    atomic.write_json(decl_path, declaration)
+    event = {"event": "ip_catalog_authored_glue_inventory", "exit_code": 0,
+             "ai_authored_files": rows,
+             "inputs": inputs,
+             "outputs": {str(path.relative_to(project)): "sha256:" + _sha256_file(path)
+                         for path in (mf_path, decl_path)}}
+    with provenance_path.open("ab") as stream:
+        previous = metadata_before[provenance_path]
+        if previous and not previous.endswith(b"\n"):
+            stream.write(b"\n")
+        stream.write((json.dumps(event, sort_keys=True) + "\n").encode())
+    return {"status": PIN_VERIFIED, "kind": "AUTHORED_GLUE_INVENTORY", **event}
+
+
 def _local_derivative_plan(project: Path, matches: List[CatalogMatch],
                            manifest: Dict[str, Any], ref: Dict[str, Any], *,
                            allow_parent=False):
@@ -1307,8 +1401,11 @@ def main(argv: List[str]) -> int:
     ap.add_argument("--ic-name", default=None,
                     help="IC-under-test name (strengthens the #187 self-match "
                          "guard; L1/L3/L9 identity is used when omitted)")
-    ap.add_argument("--local-derivative", metavar="RECORD",
+    source_action = ap.add_mutually_exclusive_group()
+    source_action.add_argument("--local-derivative", metavar="RECORD",
                     help="apply an explicit project-relative LOCAL DERIVATIVE record; independently verify its official parent, exact patch, full inventory and retained challenge evidence")
+    source_action.add_argument("--authored-glue", action="append", metavar="BASENAME",
+                    help="record each explicitly declared staged RTL/header as authored glue; verify official pins and reject undeclared inventory before publishing source metadata")
     ap.add_argument("--allow-self-match", action="store_true",
                     help="Do NOT refuse a catalog entry that supplies the IC's "
                          "OWN design (#187 — requires explicit acknowledgement)")
@@ -1324,20 +1421,25 @@ def main(argv: List[str]) -> int:
                     help="Name of the IP/entry that supersedes the pruned "
                          "one (recorded in the prune provenance entry).")
     args = ap.parse_args(argv)
+    if args.authored_glue and (args.dry_run or args.prune):
+        ap.error("--authored-glue cannot be combined with --dry-run or --prune")
 
     project = Path(args.project)
 
-    if args.local_derivative:
+    if args.local_derivative or args.authored_glue:
         try:
-            path = _local_path(project, args.local_derivative)
             from ip_catalog_query import load_project_facts, versioned_reuse_evidence
             facts = load_project_facts(project)
             matches = [m for m in query_catalog(
                 project, min_confidence=args.min_confidence,
                 catalog_dir=Path(args.catalog_dir) if args.catalog_dir else None)
                 if versioned_reuse_evidence(facts, m)[0]]
-            outcome = apply_local_derivative(project, matches,
-                                            {"path": args.local_derivative, "sha256": _sha256_file(path)})
+            if args.authored_glue:
+                outcome = emit_authored_glue_inventory(project, matches, args.authored_glue)
+            else:
+                path = _local_path(project, args.local_derivative)
+                outcome = apply_local_derivative(project, matches,
+                                                {"path": args.local_derivative, "sha256": _sha256_file(path)})
         except (OSError, ValueError, TypeError) as exc:
             outcome = {"status": PIN_MISMATCH, "reason": str(exc)}
         print(json.dumps(outcome, indent=2))
