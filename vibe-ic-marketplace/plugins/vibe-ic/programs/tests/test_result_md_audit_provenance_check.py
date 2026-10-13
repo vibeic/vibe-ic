@@ -706,3 +706,75 @@ def test_pass_with_waivers_verdict_still_demands_provenance(tmp_path):
     r = _run(tmp_path)
     assert r.returncode == 1, r.stdout
     assert "RESULT_MD_MISSING_AUDIT_SHA" in r.stdout, r.stdout
+
+
+# Public issue #3081: exercise the actual API and shipped CLI over the exact
+# five neutral report fixtures, plus local controls against hiding real claims.
+import pytest  # noqa: E402
+
+_CLAIM_SCOPE_CASES = {
+    "plain": (
+        "STATUS: FAIL\nHardware was not measured. Formal awaits independent review.\n",
+        False, 0),
+    "awaiting": (
+        "STATUS: FAIL\n| Step5 / hardware | Formal awaiting expert PASS; no hardware measurement. |\n",
+        False, 0),
+    "component": (
+        "STATUS: FAIL\nHardware NOT_MEASURED; isolated synthesis PASS does not qualify hardware.\n",
+        False, 0),
+    "real-hardware": ("STATUS: FAIL\nHardware PASS.\n", True, 1),
+    "real-phase23": ("Phase 2+3 PASS.\n", True, 1),
+    "pending-prose": (
+        "STATUS: FAIL\nHardware awaiting expert PASS.\n", False, 0),
+    "pending-after-pass": (
+        "STATUS: FAIL\nHardware PASS is still pending; no hardware measurement.\n",
+        False, 0),
+    "pending-after-long-subject": (
+        "STATUS: FAIL\nHardware regression on target board: PASS is still pending; no hardware measurement.\n",
+        False, 0),
+    "later-hardware": (
+        "STATUS: FAIL\nHardware NOT_MEASURED; Hardware PASS.\n", True, 1),
+    "later-phase23": (
+        "STATUS: FAIL\nHardware NOT_MEASURED; Phase 2+3 PASS.\n", True, 1),
+    "table-hardware": (
+        "STATUS: FAIL\n| Hardware | **PASS** | Formal review pending. |\n",
+        True, 1),
+    "table-bring-up": (
+        "STATUS: FAIL\n| Hardware | bring-up PASS on the board. |\n", True, 1),
+    "table-component": (
+        "STATUS: FAIL\n| Hardware | Synthesis PASS; no hardware measurement. |\n",
+        False, 0),
+}
+_MISSING_SUCCESS_PROVENANCE = {
+    "RESULT_MD_MISSING_AUDIT_SHA",
+    "RESULT_MD_MISSING_PROGRAM_RESPONSE",
+    "RESULT_MD_MISSING_AUDIT_VERDICT",
+}
+
+
+@pytest.mark.parametrize("label", _CLAIM_SCOPE_CASES)
+def test_claim_scope_native_api(tmp_path, label):
+    sys.path.insert(0, str(PROG.parent))
+    import result_md_audit_provenance_check as chk
+    body, claims, _ = _CLAIM_SCOPE_CASES[label]
+    (tmp_path / "RESULT.md").write_text(body)
+    failures, warnings, summary = chk.inspect(tmp_path)
+    assert summary["claims_pass"] is claims, (label, summary, failures)
+    assert {f.split(" ", 1)[0] for f in failures} == (
+        _MISSING_SUCCESS_PROVENANCE if claims else set()), (label, failures)
+    assert warnings == [], (label, warnings)
+
+
+@pytest.mark.parametrize("label", _CLAIM_SCOPE_CASES)
+def test_claim_scope_shipped_cli(tmp_path, label):
+    body, claims, rc = _CLAIM_SCOPE_CASES[label]
+    (tmp_path / "RESULT.md").write_text(body)
+    out = tmp_path / "claim.json"
+    actual = subprocess.run(
+        [sys.executable, str(PROG), str(tmp_path), "--json", str(out)],
+        capture_output=True, text=True)
+    doc = json.loads(out.read_text())
+    assert actual.returncode == rc, (label, actual.stdout, actual.stderr)
+    assert doc["summary"]["claims_pass"] is claims, (label, doc)
+    assert {f.split(" ", 1)[0] for f in doc["failures"]} == (
+        _MISSING_SUCCESS_PROVENANCE if claims else set()), (label, doc)

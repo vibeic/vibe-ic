@@ -73,6 +73,7 @@ import fmeda_fault_injection_coverage as _fmeda  # noqa: E402
 # The AUDITOR's own in-progress files are declared in ONE place (R-0915-168); a freshness judge
 # must ask that declaration rather than carry its own suffix list. See `_is_flow_output`.
 import _path_layout as _pl_shapes  # noqa: E402
+from _prose_polarity import sentence_scope  # noqa: E402
 
 WAIVER_KEY = "result_md_audit_provenance_intentional"
 WAIVER_MIN_LEN = 40
@@ -107,10 +108,8 @@ WAIVER_MIN_LEN = 40
 # `absent FPGA hardware; 1 VACUOUS-PASS (FS1 FMEDA)`: `hardware` and `PASS`
 # fell within the 40-character window, from two unrelated clauses.
 #
-# Scope: this excludes the DISQUALIFYING COMPOUNDS only. The `[^\n]{0,40}`
-# adjacency windows below are still adjacency tests, not claim parsers — a
-# bare `PASS` from an unrelated clause inside the window still matches, and
-# closing that would require reading the sentence rather than the span.
+# The hardware subject is also scoped below: a component verdict or a pending
+# expert review beside that subject is not a successful hardware assertion.
 _PASS_CLAIM = r"(?<!VACUOUS-)(?<!NON-)(?<!NOT-)\bPASS\b(?!-VOID)"
 
 _CLAIMS_PASS_PATTERNS = (
@@ -118,7 +117,6 @@ _CLAIMS_PASS_PATTERNS = (
     r"\bsof[^\n]{0,40}\bsuccess\b",
     r"\bburn[^\n]{0,40}\b(?:success|completed|verified)\b",
     r"\bSOF[^\n]{0,40}\bprogrammed\b",
-    r"\bhardware[^\n]{0,40}" + _PASS_CLAIM,
     r"\boverall\s*verdict\s*[:=]\s*" + _PASS_CLAIM,
     r"\baudit[_\s]*verdict\s*[:=]\s*['\"]?PASS",
 )
@@ -159,6 +157,47 @@ def _build_claims_re(project: Path) -> "re.Pattern[str]":
 _CLAIMS_PASS_RE = re.compile(
     "|".join(_CLAIMS_PASS_PATTERNS), re.IGNORECASE,
 )
+
+
+_HARDWARE_RE = re.compile(r"\bhardware\b", re.IGNORECASE)
+_HARDWARE_PASS_RE = re.compile(
+    r"\bhardware[^\n]{0,40}?(?P<pass>" + _PASS_CLAIM + ")", re.IGNORECASE)
+_HARDWARE_PENDING_RE = re.compile(
+    r"\b(?:await(?:ing|s)?|pending|NOT_MEASURED)\b", re.IGNORECASE)
+_HARDWARE_PENDING_SUFFIX_RE = re.compile(
+    r"^[\s*_`]*(?:(?:is|was|remains)\s+)?(?:still\s+)?"
+    r"(?:pending|await(?:ing|s)?)\b", re.IGNORECASE)
+_OTHER_CELL_SUBJECT_RE = re.compile(r"\b(?:formal|synthesis)\b", re.IGNORECASE)
+
+
+def _hardware_claims_pass(text: str) -> bool:
+    """Read each hardware assertion in its own report clause/status cell.
+
+    A semicolon or line ends a report clause; normal sentence punctuation is
+    owned by the shared scope helper. Table labels can name hardware while
+    another cell discusses a formal/synthesis result; that component's PASS
+    cannot carry the hardware label. A PASS explicitly stated as pending is
+    still incomplete. Other qualifiers after an actual PASS do not erase it,
+    nor does an earlier FAIL headline.
+    """
+    for hardware in _HARDWARE_RE.finditer(text):
+        _, hi = sentence_scope(
+            text, hardware.start(), hardware.end(), before=0,
+            extra_breaks=("\n", ";"))
+        clause = text[hardware.start():hi]
+        success = _HARDWARE_PASS_RE.search(clause)
+        if success is None:
+            continue
+        prefix = clause[:success.start("pass")]
+        if _HARDWARE_PENDING_RE.search(prefix):
+            continue
+        if _HARDWARE_PENDING_SUFFIX_RE.match(clause[success.end("pass"):]):
+            continue
+        if "|" in prefix and _OTHER_CELL_SUBJECT_RE.search(
+                prefix.rsplit("|", 1)[1]):
+            continue
+        return True
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -756,7 +795,8 @@ def inspect(project: Path) -> Tuple[List[str], List[str], dict]:
     # Scan with this program's own diagnostic sentences blanked out: a report
     # QUOTING our verdict is citing evidence, not making the claim the quoted
     # sentence describes. See _strip_self_emitted.
-    claims_pass = bool(claims_re.search(_strip_self_emitted(text)))
+    claim_text = _strip_self_emitted(text)
+    claims_pass = bool(claims_re.search(claim_text)) or _hardware_claims_pass(claim_text)
     summary["claims_pass"] = claims_pass
 
     if not claims_pass:
