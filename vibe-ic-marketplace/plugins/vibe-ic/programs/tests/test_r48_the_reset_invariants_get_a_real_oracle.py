@@ -415,3 +415,143 @@ def test_consumer_refuses_false_pass_over_measured_first_edge_corruption(native_
   _debt_stays_owed(checked)
  finally:
   path.write_bytes(original)
+
+
+# Source/metadata controls for the optional designer stimulus. No simulator is
+# dispatched here; decoder transcripts are synthetic data, not native evidence.
+_PRELOAD = [{"address": 7, "byte": 255}, {"address": 0, "byte": 0},
+            {"address": 4, "byte": 165}]
+_ABSENT = object()
+
+
+def _preload_metadata_project(project, choice=_ABSENT):
+ prepare(project, good=True)
+ path = project / "plugin_output/declaration.json"
+ decl = json.loads(path.read_text())
+ if choice is not _ABSENT:
+  decl["verification_stimuli"] = choice
+  path.write_text(json.dumps(decl))
+ report = {}
+ assert T.emit_unit_tbs(project, top="sample_store", report=report,
+                        scaffold=False, case_stated=True) == 1
+ tb = T._pl.sim_dir(project) / "tb" / (CASE["name"] + ".v")
+ return tb, report
+
+
+def _preload_choice(entries):
+ return {"reset_retention": {"memory_preload": entries}}
+
+
+def _emitted_preload(text):
+ import re
+ return {int(address): int(byte, 16) for address, byte in
+         re.findall(r"retention_mem\[(\d+)\] = 8'h([0-9a-f]{2});", text)}
+
+
+def test_declared_preload_is_consumed_by_the_general_producer(tmp_path):
+ tb, report = _preload_metadata_project(tmp_path, _preload_choice(_PRELOAD))
+ text = tb.read_text()
+ assert _emitted_preload(text) == {0: 0, 4: 165, 7: 255}
+ memory = report["reset_invariant_cases"][0]["retention_memory"]
+ assert memory["memory_preload"] == sorted(_PRELOAD, key=lambda entry: entry["address"])
+ assert R._retention_memory_identity(tmp_path, tb)[0] == memory
+ assert report["no_real_oracle"] == [DEBT["name"]]
+ seed = text.index("retention_mem[_i] = 8'ha5 + _i * 17;")
+ overlay = text.index("retention_mem[7] = 8'hff;")
+ idle = text.index("observe_reset(0);")
+ assert seed < overlay < idle
+ assert "always @(posedge i_clk) if (o_store_we === 1'b1)" in text
+ assert "retention_mem[o_store_waddr] <= o_store_wdata;" in text
+ assert "edge_number = 0; edge_number < 6" in text
+ assert "active_cycles < 64 && !pending_found" in text
+ assert "retention_mem[o_store_waddr] !== o_store_wdata" in text
+ assert "retention_mem[_i] !== retention_before[_i]" in text
+ assert "NOT_MEASURED: no actual non-idempotent pending write within 64 cycles" in text
+
+
+@pytest.mark.parametrize("choice", [_ABSENT, {}, {"reset_retention": {}}])
+def test_absent_preload_keeps_the_stock_seed_and_unexercised_refusal(tmp_path, choice):
+ tb, report = _preload_metadata_project(tmp_path, choice)
+ text = tb.read_text()
+ assert _emitted_preload(text) == {}
+ assert "retention_mem[_i] = 8'ha5 + _i * 17;" in text
+ assert "NOT_MEASURED: no actual non-idempotent pending write within 64 cycles" in text
+ assert "memory_preload" not in report["reset_invariant_cases"][0]["retention_memory"]
+
+
+@pytest.mark.parametrize("choice", [
+ None, [], {"reset_retention": None}, {"reset_retention": []},
+ _preload_choice(None), _preload_choice([]), _preload_choice({"address": 0, "byte": 1}),
+ _preload_choice([None]), _preload_choice([{"address": 0}]),
+ _preload_choice([{"address": 0, "byte": 1, "ignored": 2}]),
+ *[_preload_choice([{"address": address, "byte": 1}]) for address in (-1, 8, True, "1", 1.0)],
+ *[_preload_choice([{"address": 0, "byte": byte}]) for byte in (-1, 256, False, "1", 1.0)],
+ _preload_choice([{"address": 0, "byte": 1}, {"address": 0, "byte": 2}]),
+])
+def test_malformed_preload_declines_actual_byte_credit(tmp_path, choice):
+ tb, report = _preload_metadata_project(tmp_path, choice)
+ row = report["reset_invariant_cases"][0]
+ assert row["retention_memory"] is None
+ assert row["retention_basis"].startswith("NOT_MEASURED: retention")
+ text = tb.read_text()
+ assert R.RETENTION_HEADER not in text
+ assert "NOT_MEASURED — write strobe necessary condition only" in text
+ assert report["no_real_oracle"] == [DEBT["name"]]
+
+
+def _preload_decoder_record(project, changed=False):
+ tb, _ = _preload_metadata_project(project, _preload_choice(_PRELOAD))
+ # Known neutral byte snapshots test the existing metadata consumer only.
+ before = "00b6c7d8a5fa0bff"
+ lines = [f"RESET_RETENTION BASELINE arm={arm} bytes={before}" for arm in (0, 1)]
+ lines.append("RESET_RETENTION PENDING address=2 before=c7 data=3c")
+ for arm in (0, 1):
+  for edge in range(6):
+   data = "00b63cd8a5fa0bff" if changed and arm == 1 else before
+   lines.append(f"RESET_RETENTION SAMPLE arm={arm} edge={edge} bytes={data} post_edge_we=0")
+ transcript = project / "synthetic-decoder-transcript.txt"
+ transcript.write_text("\n".join(lines) + "\n")
+ rtl = project / "phase2/stage1/rtl/sample_store.v"
+ evidence, _ = R.capture_retention_execution(project, tb, transcript,
+                                           {str(rtl): X.file_sha256(rtl)})
+ X.write_record(project, project / "phase1/generated_docs/L10_TEST_CASES.json",
+                [{"id": CASE["name"], "verdict": "PASS", "sim_executed": True,
+                  "tb_file": str(tb), "reset_retention": evidence}],
+                producer="CPU metadata fixture, NOT native execution")
+ record = X.load_record(project, project / "phase1/generated_docs/L10_TEST_CASES.json")
+ return tb, transcript, record
+
+
+def test_preload_binding_reaches_the_existing_retention_metadata_consumer(tmp_path):
+ _, _, record = _preload_decoder_record(tmp_path)
+ assert R.retention_case_state(tmp_path, CASE["name"], record)[0] == X.PASS
+ assert R.retention_case_state(tmp_path, DEBT["name"], record)[0] == X.NOT_EXECUTED
+
+
+@pytest.mark.parametrize("damage", ["changed_preload", "removed_preload", "malformed_preload",
+                                    "changed_tb", "missing_edge_zero", "changed_source"])
+def test_preload_metadata_credit_keeps_current_binding_refusals(tmp_path, damage):
+ tb, transcript, record = _preload_decoder_record(tmp_path)
+ decl = tmp_path / "plugin_output/declaration.json"
+ if damage in ("changed_preload", "removed_preload", "malformed_preload"):
+  data = json.loads(decl.read_text())
+  if damage == "changed_preload": data["verification_stimuli"] = _preload_choice([{"address": 0, "byte": 1}])
+  elif damage == "removed_preload": data.pop("verification_stimuli")
+  else: data["verification_stimuli"] = _preload_choice([{"address": True, "byte": 1}])
+  decl.write_text(json.dumps(data))
+ elif damage == "changed_tb": tb.write_text(tb.read_text() + "// current bytes changed\n")
+ elif damage == "changed_source":
+  rtl = tmp_path / "phase2/stage1/rtl/sample_store.v"
+  rtl.write_text(rtl.read_text() + "// current bytes changed\n")
+ else:
+  transcript.write_text("\n".join(line for line in transcript.read_text().splitlines()
+                                if not line.startswith("RESET_RETENTION SAMPLE arm=1 edge=0 ")) + "\n")
+  record["rows"][CASE["name"]]["reset_retention"]["transcript_sha256"] = X.file_sha256(transcript)
+ assert R.retention_case_state(tmp_path, CASE["name"], record)[0] == X.NOT_EXECUTED
+
+
+def test_preload_metadata_consumer_refuses_forged_pass_over_first_edge_change(tmp_path):
+ _, _, record = _preload_decoder_record(tmp_path, changed=True)
+ state, why = R.retention_case_state(tmp_path, CASE["name"], record)
+ assert state == X.FAIL
+ assert "including its first sampled edge" in why

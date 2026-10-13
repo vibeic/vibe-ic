@@ -94,6 +94,23 @@ It **combines open-source** frameworks rather than re-inventing them: **cocotb**
   `TODO(spec-to-assertion)` stubs for you to formalise (never fabricated as a
   passing SVA).
 
+## Optional reset-retention byte stimulus
+
+When a retention test needs a designer-chosen memory stimulus, declare
+`verification_stimuli.reset_retention.memory_preload` in the project's
+`plugin_output/declaration.json` through `spec_declaration_emit --from-json`
+or `--set`. This verification choice is separate from the SRAM timing contract.
+It is a non-empty list of `{"address": 0, "byte": 165}` entries: exactly those
+two keys, unique addresses within the selected memory depth, and integer byte
+values 0..255. Boolean, string and floating-point values are refused.
+
+`testbench_gen.emit_unit_tbs` applies the bytes after initializing every memory
+location and before observing either reset arm. It preserves every rising-edge
+write, the pending first-edge check, all-byte comparisons and the 64-cycle
+activity budget. Absent preload keeps the stock seed; malformed preload cannot
+credit actual-byte retention. A chosen stimulus alone is never execution
+evidence: absent non-idempotent pending activity remains NOT_MEASURED.
+
 ## Capture
 
 Any recovery here (a new reference-model pattern, a new coverage-derivation rule,

@@ -307,6 +307,40 @@ RETENTION_EDGES = 6
 RETENTION_ACTIVE_CYCLES = 64
 
 
+def _declared_retention_preload(decl: dict, depth: int) -> Tuple[Optional[list], Optional[str]]:
+    """Optional verification free choice, separate from the hardware protocol.
+
+    verification_stimuli.reset_retention.memory_preload is a non-empty list
+    of {address, byte}: unique in-range addresses and integer bytes, no bools.
+    Absent fields keep the stock seed. An explicit malformed choice must not
+    silently fall back to that seed or credit an actual-byte retention case.
+    """
+    selected = decl
+    for key in ("verification_stimuli", "reset_retention"):
+        if key not in selected:
+            return None, None
+        selected = selected[key]
+        if not isinstance(selected, dict):
+            return None, f"NOT_MEASURED: retention stimulus {key} must be an object"
+    if "memory_preload" not in selected:
+        return None, None
+    entries = selected["memory_preload"]
+    if not isinstance(entries, list) or not entries:
+        return None, "NOT_MEASURED: retention memory_preload must be a non-empty list"
+    seen = set()
+    for entry in entries:
+        if not isinstance(entry, dict) or set(entry) != {"address", "byte"}:
+            return None, "NOT_MEASURED: retention memory_preload entries need exactly address and byte"
+        address, byte = entry["address"], entry["byte"]
+        if (type(address) is not int or not 0 <= address < depth
+                or type(byte) is not int or not 0 <= byte <= 255):
+            return None, "NOT_MEASURED: retention memory_preload needs in-range integer addresses and bytes"
+        if address in seen:
+            return None, "NOT_MEASURED: retention memory_preload addresses must be unique"
+        seen.add(address)
+    return sorted(entries, key=lambda entry: entry["address"]), None
+
+
 def declared_retention_memory(project: Path, dut: str,
                               inputs: List[Tuple[str, str]],
                               outputs: List[Tuple[str, str]]) -> Tuple[Optional[dict], str]:
@@ -344,6 +378,11 @@ def declared_retention_memory(project: Path, dut: str,
         return None, "NOT_MEASURED: unsupported or unknown byte-memory port widths"
     memory.update(protocol=RETENTION_PROTOCOL, depth=1 << abits, dut=dut,
                   declaration_sha256=hashlib.sha256(raw).hexdigest())
+    preload, refusal = _declared_retention_preload(decl, memory["depth"])
+    if refusal:
+        return None, refusal
+    if preload is not None:
+        memory["memory_preload"] = preload
     return memory, "selected declaration; previous registered transaction commits on every rising edge"
 
 
@@ -399,8 +438,10 @@ def _emit_retention_oracle(case: dict, dut: str, inputs, outputs, inouts,
               "    end",
               "  endtask",
               "  initial begin",
-              f"    for (_i = 0; _i < {depth}; _i = _i + 1) retention_mem[_i] = 8'ha5 + _i * 17;",
-              f"    {rst} = 1'b{asserted};",
+              f"    for (_i = 0; _i < {depth}; _i = _i + 1) retention_mem[_i] = 8'ha5 + _i * 17;"]
+    for entry in memory.get("memory_preload", []):
+        lines.append(f"    retention_mem[{entry['address']}] = 8'h{entry['byte']:02x};")
+    lines += [f"    {rst} = 1'b{asserted};",
               f"    repeat (4) @(negedge {clk});",
               "    observe_reset(0);",
               f"    {rst} = 1'b{released}; pending_found = 0;",
