@@ -16452,6 +16452,12 @@ def _output_not_owed(project: Path, step: Dict[str, Any], spec: Any
     for an artefact its only producer (`step_pad_ring_final_evidence`, under
     `_chip_path_requests_pad_ring`) correctly never writes for a hardmacro.
 
+    A native record may instead name `librelane_step_mode`: the existing
+    selected producer modes, with the current Default backend context taking
+    precedence when `default_backend` is true. A legacy direct producer owes
+    no native record; a downstream consumer that actually requires that
+    record still refuses its absence.
+
     NOT APPLICABLE only when the producer's condition is false. One reason
     cites an owner-declared die-less delivery with no bound slot. The other
     cites absence of both route markers, where even a DIE or unreadable
@@ -16460,7 +16466,32 @@ def _output_not_owed(project: Path, step: Dict[str, Any], spec: Any
     if not isinstance(conds, dict):
         return None
     cond = conds.get(str(spec))
-    if not isinstance(cond, dict) or not cond.get("delivery_declares"):
+    if not isinstance(cond, dict):
+        return None
+    selection = cond.get("librelane_step_mode")
+    if isinstance(selection, dict):
+        # The ordinary Default backend selects STAPostPNR regardless of the
+        # legacy switch. Use this invocation's project-bound context, never a
+        # past output or receipt, to decide which producer owes the record.
+        import execution_policy
+        runtime = execution_policy._ordinary_runtime
+        if (selection.get("default_backend") is True
+                and runtime is not None
+                and runtime.get("policy", {}).get("mode") == "default"
+                and Path(runtime["project"]).resolve() == project.resolve()):
+            return None
+        from librelane_contract import selected_mode, Refusal
+        try:
+            selected = selected_mode(project, str(selection.get("step")))
+        except Refusal:
+            # A damaged selection never excuses a missing output.
+            return None
+        if selected in (selection.get("modes") or []):
+            return None
+        return (f"declared output {spec!r} NOT_APPLICABLE for selected producer: "
+                f"step {selection.get('step')} mode {selected!r} does not "
+                "emit this record")
+    if not cond.get("delivery_declares"):
         return None
     if _check_condition(project, cond):
         return None
