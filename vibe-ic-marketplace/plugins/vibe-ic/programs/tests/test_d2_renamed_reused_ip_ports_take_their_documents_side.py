@@ -973,3 +973,119 @@ def test_selected_interface_scaffold_requires_current_project(tmp_path):
     bound = bind_selected_interface(proj, json.loads(path.read_text()))
     with pytest.raises(ValueError, match="requires the current project"):
         P2.derive_signals({}, bound)
+
+
+def _selected_native_handoff_project(tmp_path):
+    """Neutral producer-shaped metadata, consumed by the real handoff reader.
+
+    This fixture is not synthesis/EDA evidence. Nothing in the handoff or
+    selected-interface consumer is mocked, and publication uses its native API.
+    """
+    import hashlib
+    import synth_handoff_netlist_check as handoff
+    proj = _selected_project(tmp_path).resolve()
+    def put(path, data):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(data))
+        return path
+    def digest(path):
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    rtl = proj / "phase2/stage1/rtl/core.v"
+    rtl.write_text(STAGED_TOP)
+    put(proj / "input/project.json", {"pdk": "neutral"})
+    put(proj / "phase1/generated_docs/L17_CHANNEL_SIGNAL_CATALOG.json",
+        {"channels": [], "global_signals": [], "extraction_status": "EXTRACTION_FOUND_NOTHING"})
+    folder = proj / "phase3/librelane/02-yosys-synthesis"
+    folder.mkdir(parents=True)
+    raw = folder / "core.nl.v"
+    raw.write_text(NETLIST)
+    prior = put(proj / "phase3/librelane/01-yosys-jsonheader/core.h.json",
+                {"module": "core"})
+    cfg = {"meta": {"step": "Yosys.Synthesis"}, "PDK": "neutral",
+           "DESIGN_NAME": "core", "VERILOG_FILES": [str(rtl)],
+           "SYNTH_TIEHI_CELL": "TIE_H/Y", "SYNTH_TIELO_CELL": "TIE_L/Y"}
+    resolved = put(proj / "phase3/librelane/synthesis_resolved.json", cfg)
+    put(folder / "config.json", cfg)
+    put(folder / "state_out.json", {"nl": str(raw), "metrics": {
+        "design__instance_unmapped__count": 0, "synthesis__check_error__count": 0}})
+    put(folder / "reports/stat.json", {"modules": {"\\core": {
+        "num_submodules": 0}}})
+    put(folder / "pdk_root.json", {"cli_pdk_root": "/pdk",
+        "stated_by": "run_chain(pdk_root=...)", "mounts_under_it": []})
+    inp = {"step": "Yosys.Synthesis", "config": digest(resolved),
+           "config_files": {str(rtl): digest(rtl)},
+           "state_files": {str(prior): digest(prior)}}
+    put(folder / "input_fingerprint.json", inp)
+    receipt = {"input": inp, "sha256": {
+        str(f.relative_to(folder)): digest(f) for f in folder.rglob("*") if f.is_file()}}
+    put(folder / "vibeic_receipt.json", receipt)
+    mapped = proj / "phase2/stage2/synth/core_synth.v"
+    put(mapped.parent / "synth_inputs.json", {"netlist": mapped.name})
+    handoff.publish_handoff(proj, folder, mapped, "core")
+    return proj
+
+
+@pytest.mark.parametrize("root_form", ["absolute", "dot", "child"])
+def test_relative_root_reads_current_selected_handoff(tmp_path, monkeypatch, root_form):
+    import subprocess
+    from _staged_top_module import bind_selected_interface
+    proj = _selected_native_handoff_project(tmp_path)
+    path = proj / "phase1/generated_docs/L9_INTEGRATION_SPEC.json"
+    content = json.loads(path.read_text())
+    expected = bind_selected_interface(proj, content)
+    before = {p: p.read_bytes() for p in proj.rglob("*") if p.is_file()}
+    monkeypatch.chdir(proj if root_form == "dot" else proj.parent)
+    root = proj if root_form == "absolute" else Path("." if root_form == "dot" else proj.name)
+    try:
+        actual = bind_selected_interface(root, content)
+    except ValueError as exc:
+        actual = {"native_refusal": str(exc)}
+    assert actual == expected, actual
+    binding = actual["selected_interface_binding"]
+    assert binding["selected_source"] == "phase2/stage2/synth/core_synth.v"
+    report = tmp_path / "l17-native.json"
+    cli = subprocess.run([sys.executable, str(PROGRAMS / "l17_channel_catalog_consumer_contract_check.py"),
+                          str(root), "--json", str(report)], capture_output=True, text=True)
+    assert cli.returncode == 0, cli.stdout + cli.stderr
+    assert json.loads(report.read_text())["summary"]["pass"] is True
+    assert all(p.read_bytes() == data for p, data in before.items())
+
+
+@pytest.mark.parametrize("root_form", ["absolute", "dot", "child"])
+@pytest.mark.parametrize("damage,reason", [
+    ("foreign_state", "state_files contains a foreign path"),
+    ("stale_state", "consumed stale state_files"),
+    ("forged_source", "consumed stale RTL bytes"),
+])
+def test_relative_root_retains_native_handoff_refusals(
+        tmp_path, monkeypatch, root_form, damage, reason):
+    import hashlib
+    from _staged_top_module import bind_selected_interface
+    proj = _selected_native_handoff_project(tmp_path)
+    folder = proj / "phase3/librelane/02-yosys-synthesis"
+    prior = proj / "phase3/librelane/01-yosys-jsonheader/core.h.json"
+    if damage == "stale_state":
+        prior.write_text('{"module":"changed_after_publication"}')
+    else:
+        receipt_path = folder / "vibeic_receipt.json"
+        receipt = json.loads(receipt_path.read_text())
+        if damage == "foreign_state":
+            foreign = tmp_path / "foreign.h.json"
+            foreign.write_text('{"module":"core"}')
+            receipt["input"]["state_files"] = {
+                str(foreign): hashlib.sha256(foreign.read_bytes()).hexdigest()}
+        else:
+            receipt["input"]["config_files"] = {
+                str(proj / "phase2/stage1/rtl/core.v"): "0" * 64}
+        fingerprint = folder / "input_fingerprint.json"
+        fingerprint.write_text(json.dumps(receipt["input"]))
+        receipt["sha256"]["input_fingerprint.json"] = hashlib.sha256(fingerprint.read_bytes()).hexdigest()
+        receipt_path.write_text(json.dumps(receipt))
+    content = json.loads((proj / "phase1/generated_docs/L9_INTEGRATION_SPEC.json").read_text())
+    before = {p: p.read_bytes() for p in proj.rglob("*") if p.is_file()}
+    monkeypatch.chdir(proj if root_form == "dot" else proj.parent)
+    root = proj if root_form == "absolute" else Path("." if root_form == "dot" else proj.name)
+    with pytest.raises(ValueError) as refusal:
+        bind_selected_interface(root, content)
+    assert reason in str(refusal.value), str(refusal.value)
+    assert all(p.read_bytes() == data for p, data in before.items())

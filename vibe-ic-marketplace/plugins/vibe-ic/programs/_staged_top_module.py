@@ -219,7 +219,7 @@ def bind_selected_interface(project: Path, content: dict, *,
                                               _l3_fixed_port_name)
     from renamed_interface_derive import _rtl_top_ports
 
-    project = Path(project)
+    project = Path(project).resolve()
     already_bound = "selected_interface_binding" in content
 
     def not_applicable(reason: str) -> dict:
