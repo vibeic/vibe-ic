@@ -545,6 +545,15 @@ feasibility. See `programs/llm_semantic_confirm.py` and `spec_conformance_check`
 These are LLM-judgment skills, not deterministic gates — where a program cannot decide, apply
 them with the strongest model available and prefer rigor over a quick guess.
 
+### Skill: defined idle addresses at a continuously read memory boundary
+
+When a processor shares instruction, data, or register-file storage behind a continuously available asynchronous memory read with no read-enable role, an inactive internal client can leave an undefined address that the external boundary still reads. Trace the actual internal read admission and register sampling. Keep a previously defined, legal external read address on known inactive read edges, or select a legal idle address when the input permits that choice. Preserve the active address, sampling point and declared read latency. For uncertain read activity, retain conservative four-state X/Z merging between incoming and held addresses rather than treating uncertainty as inactivity; a conditional expression can preserve that distinction. A bus-cycle indication or write-disable is not automatically a read-enable. Follow the input reset timing and memory-retention obligations, and preserve alignment of the complete write-enable, address and data tuple. Validate through unchanged memory models and functional scoreboards with a reverse control that restores the original behavior. This is architecture advice and does not replace normal producer and consumer verdicts.
+
+The mapping from internal client admission to external address sampling is an
+architecture choice: review the input and selected memory protocol before
+applying it. An address-assignment pattern alone does not establish that
+mapping or authorize changing a strict read-address checker.
+
 ### Skill: minimum SOP/POS with don't-cares
 When the spec gives a K-map / truth table with don't-cares and asks for "minimum SOP" (or POS),
 compute the **true minimal cover that exploits the don't-cares** — do not stop at the first
