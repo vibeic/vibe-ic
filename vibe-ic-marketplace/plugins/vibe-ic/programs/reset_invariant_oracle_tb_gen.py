@@ -460,12 +460,12 @@ def _emit_retention_oracle(case: dict, dut: str, inputs, outputs, inouts,
               "    if (!pending_found) begin",
               f'      $display("[TB {name}] NOT_MEASURED: no actual non-idempotent pending write within {RETENTION_ACTIVE_CYCLES} cycles");',
               "      $finish;",
-              "    end",
-              f'    $display("RESET_RETENTION PENDING address=%0d before=%02x data=%02x", {waddr}, retention_mem[{waddr}], {data});',
-              "    observe_reset(1);",
-              f'    if (errors != 0) begin $display("[TB {name}] FAIL — %0d byte checks failed", errors); $fatal(1); end',
-              f'    $display("[TB {name}] PASS — actual byte retention including first sampled edge");',
-              "    $finish;", "  end", "endmodule"]
+              "    end else begin",
+              f'      $display("RESET_RETENTION PENDING address=%0d before=%02x data=%02x", {waddr}, retention_mem[{waddr}], {data});',
+              "      observe_reset(1);",
+              f'      if (errors != 0) begin $display("[TB {name}] FAIL — %0d byte checks failed", errors); $fatal(1); end',
+              f'      $display("[TB {name}] PASS — actual byte retention including first sampled edge");',
+              "      $finish;", "    end", "  end", "endmodule"]
     return "\n".join(lines) + "\n"
 
 

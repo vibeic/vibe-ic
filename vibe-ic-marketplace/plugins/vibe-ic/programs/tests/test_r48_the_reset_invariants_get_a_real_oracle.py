@@ -359,6 +359,11 @@ def test_unbound_or_unexercised_memory_protocol_is_native_not_measured(tmp_path,
  row = _retention_row(result["consumer"])
  assert row["pass"] is False and row["status"] == "NOT_EXECUTED"
  assert row["sim_executed"] is False and row["waived"] is False
+ if mutation == "no_pending":
+  log = (Path(case["work_dir"]) / "run.log").read_text()
+  assert "RESET_RETENTION PENDING" not in log, log
+  assert "RESET_RETENTION BASELINE arm=1" not in log, log
+  assert f"[TB {CASE['name']}] PASS" not in log, log
  _debt_stays_owed(result["consumer"])
 
 
