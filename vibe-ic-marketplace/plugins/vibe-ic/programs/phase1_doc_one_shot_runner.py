@@ -50686,6 +50686,172 @@ def _czl9_prose_port_fallback(content: Dict[str, Any],
     content["top_module_pins_source"] = "prose_port_definition_list"
 
 
+QUALIFIED_OUTPUT_INPUT = "plugin_input/qualified-outputs.json"
+QUALIFIED_OUTPUT_SCHEMA = "vibeic.phase1-qualified-output-input.v1"
+
+
+def qualified_output_input_contract(project: Path, content: dict) -> dict:
+    """Describe the CURRENT authoring input; never infer a validity relation.
+
+    The Expert selects the channel, roles and polarity. This function only
+    records the input bytes and the declared interface that choice addresses.
+    The independent Expert answer and D1 signature remain separate producers.
+    """
+    import _qualified_by as qb
+    import hashlib
+    rosters = []
+    for key in ("ports", "top_ports", "top_module_pins"):
+        rows = content.get(key)
+        if not isinstance(rows, list):
+            raise ValueError(f"qualified output input: {key} is not a port list")
+        names, roster = set(), []
+        for row in rows:
+            if not isinstance(row, dict) or not isinstance(row.get("name"), str):
+                raise ValueError(f"qualified output input: malformed {key} row")
+            name = row["name"]
+            if not name or name in names:
+                raise ValueError(f"qualified output input: duplicate {key} port {name!r}")
+            names.add(name)
+            # A bound implementation can contain documentary optional/example
+            # rows. They cannot become an implemented validity relationship.
+            if (content.get("selected_interface_binding") and
+                    row.get("declared_by_staged_top") is not True):
+                continue
+            roster.append({"name": name,
+                           "direction": row.get("direction") or row.get("mode"),
+                           "width": row.get("width")})
+        rosters.append(sorted(roster, key=lambda r: r["name"]))
+    canonical = lambda value: json.dumps(value, sort_keys=True, ensure_ascii=False)
+    if any(canonical(r) != canonical(rosters[0]) for r in rosters[1:]):
+        raise ValueError("qualified output input: port aliases disagree")
+    files = qb._design_input_files(Path(project))
+    return {"schema": QUALIFIED_OUTPUT_SCHEMA,
+            "input_files": {rel: hashlib.sha256(path.read_bytes()).hexdigest()
+                            for rel, path in sorted(files.items())},
+            "interface": rosters[0], "qualifiers": []}
+
+
+def _admit_qualified_output_input(project: Path, content: dict) -> dict:
+    """Admit a typed Expert INPUT before the normal L9 publication.
+
+    Only inactive write-data validity is authored here. No X rule, source
+    signature, expectation, or verdict is supplied by this first-track writer.
+    Every row is validated before any L9 row is changed or published.
+    """
+    import copy
+    import hashlib
+    import _qualified_by as qb
+    path = Path(project) / QUALIFIED_OUTPUT_INPUT
+    # lexists semantics: a dangling link is a refusal, not an absent choice.
+    if not path.exists() and not path.is_symlink():
+        if "qualified_output_authoring" in content:
+            raise ValueError("qualified output input: previously admitted author input was removed")
+        return content
+    for part in (path, path.parent):
+        if part.is_symlink():
+            raise ValueError("qualified output input: author input cannot be a symlink")
+    if not path.is_file():
+        raise ValueError("qualified output input: author input is not a file")
+
+    def unique_object(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError(f"qualified output input: duplicate JSON key {key!r}")
+            result[key] = value
+        return result
+
+    raw = path.read_bytes()
+    data = json.loads(raw.decode("utf-8"), object_pairs_hook=unique_object)
+    contract = qualified_output_input_contract(project, content)
+    if not isinstance(data, dict) or set(data) != set(contract):
+        raise ValueError("qualified output input: expected only schema/input_files/interface/qualifiers")
+    if data["schema"] != QUALIFIED_OUTPUT_SCHEMA:
+        raise ValueError("qualified output input: unsupported schema")
+    canonical = lambda value: json.dumps(value, sort_keys=True, ensure_ascii=False)
+    for key in ("input_files", "interface"):
+        if canonical(data[key]) != canonical(contract[key]):
+            raise ValueError(f"qualified output input: {key} does not describe the current input/interface")
+    if not isinstance(data["qualifiers"], list):
+        raise ValueError("qualified output input: qualifiers is not a list")
+    ports = {r["name"]: r for r in contract["interface"]}
+    excluded = {name for name in ports if re.search(
+        r"(?:^|_)(?:clk|clock|rst|reset|resetn|rstn)(?:$|_)", name, re.I)}
+
+    def clock_reset_names(node):
+        if isinstance(node, dict):
+            for value in node.values():
+                clock_reset_names(value)
+        elif isinstance(node, list):
+            for value in node:
+                clock_reset_names(value)
+        elif isinstance(node, str) and node in ports:
+            excluded.add(node)
+    for key in ("clocks", "clock_domains", "resets", "reset_domains"):
+        clock_reset_names(content.get(key))
+
+    def check_basis(basis, output=None, port=None):
+        if not isinstance(basis, list) or not basis:
+            raise ValueError("qualified output input: basis must be non-empty")
+        for row in basis:
+            if (not isinstance(row, dict) or set(row) != {"file", "line", "quote"}
+                    or type(row["line"]) is not int):
+                raise ValueError("qualified output input: basis requires exact file/line/quote types")
+        why = qb.basis_refusal(project, basis, output, port)
+        if why:
+            raise ValueError(f"qualified output input: {why}")
+
+    admitted, seen = [], set()
+    for row in data["qualifiers"]:
+        keys = {"output", "port", "active_level", "output_role", "qualifier_role",
+                "channel", "basis", "polarity"}
+        if not isinstance(row, dict) or set(row) != keys:
+            raise ValueError("qualified output input: malformed qualifier or unknown field")
+        output, port, level = row["output"], row["port"], row["active_level"]
+        if not isinstance(output, str) or not isinstance(port, str):
+            raise ValueError("qualified output input: output and port must be names")
+        if output in seen:
+            raise ValueError(f"qualified output input: duplicate output {output!r}")
+        seen.add(output)
+        d, q = ports.get(output, {}), ports.get(port, {})
+        if (d.get("direction") != "output" or type(d.get("width")) is not int
+                or d["width"] <= 1 or output in excluded):
+            raise ValueError("qualified output input: data must be a current multi-bit non-clock/reset output")
+        if (q.get("direction") != "output" or type(q.get("width")) is not int
+                or q["width"] != 1 or port == output or port in excluded):
+            raise ValueError("qualified output input: qualifier must be a different current one-bit non-clock/reset output")
+        if level not in ("high", "low"):
+            raise ValueError("qualified output input: active_level must be exactly high or low")
+        if row["output_role"] != "write_data" or row["qualifier_role"] != "write_enable":
+            raise ValueError("qualified output input: only inactive write-data/write-enable validity is supported")
+        if not isinstance(row["channel"], str) or not row["channel"].strip():
+            raise ValueError("qualified output input: an explicit same-channel Expert judgment is required")
+        check_basis(row["basis"], output, port)
+        polarity = row["polarity"]
+        if (not isinstance(polarity, dict) or set(polarity) != {"kind", "decision", "basis"}
+                or polarity["kind"] not in ("input_requirement", "designer_choice")
+                or not isinstance(polarity["decision"], str)
+                or not polarity["decision"].strip()):
+            raise ValueError("qualified output input: explicit polarity origin and Expert decision are required")
+        check_basis(polarity["basis"])
+        admitted.append(row)
+
+    result = copy.deepcopy(content)
+    for key in ("ports", "top_ports", "top_module_pins"):
+        for row in result[key]:
+            row.pop("qualified_by", None)
+            for authored in admitted:
+                if row["name"] == authored["output"]:
+                    row["qualified_by"] = {"port": authored["port"],
+                                           "active_level": authored["active_level"],
+                                           "basis": copy.deepcopy(authored["basis"])}
+    result["qualified_output_authoring"] = {
+        "schema": QUALIFIED_OUTPUT_SCHEMA, "input": QUALIFIED_OUTPUT_INPUT,
+        "input_sha256": hashlib.sha256(raw).hexdigest(),
+        "decisions": copy.deepcopy(admitted), "review": "PENDING_INDEPENDENT_D1"}
+    return result
+
+
 def gen_l9_integration_spec(project: Path,
                             extracted: Dict[str, str],
                             l3: dict) -> LDocResult:
@@ -52428,6 +52594,7 @@ def gen_l9_integration_spec(project: Path,
     # Implementation readers still validate their full synthesis handoff.
     bound = _stgtop.bind_selected_interface(
         project, content, include_synthesis_handoff=False)
+    bound = _admit_qualified_output_input(project, bound)
     return _write_l_doc(
         project, "L9_INTEGRATION_SPEC", bound, evidence,
         source_documents=_source_documents_from_extracted(project, extracted))
@@ -64345,6 +64512,8 @@ def main() -> int:
                    help="Reuse existing input_doc/.")
     p.add_argument("--strict", action="store_true",
                    help="Exit 1 on TODO stubs OR coverage < 80%%.")
+    p.add_argument("--describe-qualified-output-input", action="store_true",
+                   help="Print the current typed Expert qualifier INPUT contract; write nothing.")
     p.add_argument("--ic-name", default=None,
                    help="ORGANIC #541 — authoritative chip name. When given, "
                         "it OVERRIDES the doc heuristic (CLI > docs) so a "
@@ -64374,6 +64543,20 @@ def main() -> int:
     if not (project / "input" / "docs").is_dir():
         print(f"ERROR: input/docs/ missing under {project}", file=sys.stderr)
         return 2
+
+    if args.describe_qualified_output_input:
+        try:
+            l9 = _try_load_l_doc(project, "L9_INTEGRATION_SPEC")
+            if not isinstance(l9, dict):
+                raise ValueError("no current L9 port roster to describe")
+            current = _stgtop.bind_selected_interface(
+                project, l9, include_synthesis_handoff=False)
+            print(json.dumps(qualified_output_input_contract(project, current),
+                             indent=2, ensure_ascii=False))
+            return 0
+        except (OSError, ValueError, TypeError) as exc:
+            print(f"ERROR: qualified output INPUT contract: {exc}", file=sys.stderr)
+            return 2
 
     if _CLI_PDK:
         # Use the existing family/revision rule, preserving genuine conflicts.

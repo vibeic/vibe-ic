@@ -460,6 +460,35 @@ a derivable fact wrongly called "unspecifiable" is a false-floor.
 - Units and cycle counts both recorded (avoid ambiguity at ns → cycles conversion).
 
 ### L9 Integration Spec
+
+For a write-data output that is meaningful only during an enabled write,
+author the relation before changing verification behavior. Read the design's
+own INPUT and its explicit protocol delegation. A write-enable name alone
+does not choose high or low; when the input delegates the protocol, record
+the polarity as a designer choice and explain that choice. Confirm that data
+and enable belong to the same actual channel. Never qualify clocks, resets,
+one-bit status outputs, another channel, or an input driven by the testbench.
+
+The native author INPUT is `plugin_input/qualified-outputs.json`, schema
+`vibeic.phase1-qualified-output-input.v1`. Obtain its current input-byte and
+implemented-port contract with `phase1_doc_one_shot_runner.py <project>
+--describe-qualified-output-input`; retain those hashes and that roster.
+Each qualifier names output, port, active_level (`high` or `low`), roles
+(`write_data` and `write_enable`), the reviewed channel, exact INPUT basis
+citations, and polarity origin/rationale/basis. Run the normal Phase-1 L9
+producer; do not patch generated L9 or signatures. All three L9 port aliases
+must carry the same relation. Normal selected-source refresh revalidates the
+author INPUT, and its create/change/delete invalidates prior producer reuse.
+
+An independent second-pass Expert must read the INPUT and the actual author
+choice, verify the same-channel relation and polarity, then author its own
+source-cited expectation in the existing Expert answer: id
+`qualified_by:<output>`, layer `L9_INTEGRATION_SPEC`, field_path `top_ports`,
+`qualified_by: {output, port, active_level}`, and exact `basis` citations.
+The producer never creates its own matching answer or signs D1. Only a fresh
+independent D1 review/signature lets the unchanged trust reader use the field.
+Data X while enable is active or unknown remains a failure; qualifier-control
+X, reset hazards, and other outputs remain strict obligations.
 - DTOP top-level port list matches L5 pad list.
 - Every submodule declared in L6 appears in L9 with full port declaration.
 - Internal wire producer-consumer mapping has no dangling signals.

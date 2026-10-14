@@ -111,6 +111,18 @@ PLUGIN_ROOT = Path(__file__).resolve().parent.parent
 #: selects PDK-keyed rows, `--ic-name` becomes L1 chip_name / L10 ic_name).
 KNOB_NAMES = ("ic_name", "pdk", "mode")
 
+# This fixed, Expert-authored INPUT is consumed by the normal L9 producer.
+# Its absence is recorded too: adding a first choice must invalidate reuse.
+# Other plugin_input files are not made Phase-1 inputs by this boundary.
+QUALIFIED_OUTPUT_INPUT = "plugin_input/qualified-outputs.json"
+
+
+def _qualified_output_input_hash(project: Path) -> Optional[str]:
+    path = Path(project) / QUALIFIED_OUTPUT_INPUT
+    if path.is_symlink() or path.parent.is_symlink():
+        return "INVALID_AUTHOR_SYMLINK"
+    return _sha256(path)
+
 
 def _oracle_reason(rel: str) -> Optional[str]:
     """§4.05 — the ONE authority (`step_input_scope.oracle_reason`, which
@@ -509,6 +521,10 @@ def input_tree_snapshot(project: Path) -> Dict[str, Tuple[Optional[str], int]]:
             except OSError:
                 mt = 0
             out[rel] = (_sha256(f), mt)
+    author = project / QUALIFIED_OUTPUT_INPUT
+    if author.exists() or author.is_symlink():
+        out[QUALIFIED_OUTPUT_INPUT] = (_qualified_output_input_hash(project),
+                                       author.lstat().st_mtime_ns)
     return out
 
 
@@ -555,6 +571,9 @@ def design_input_record(project: Path, io: Dict[str, Set[str]],
             rel = _rel(project, q)
             if rel is not None and not _oracle_reason(rel):
                 listed.add(rel)
+    # Do not broaden plugin_input to an input root or list its other entries.
+    # Recording this file even while absent detects create/change/delete.
+    files.add(QUALIFIED_OUTPUT_INPUT)
     return {"files": sorted(files), "listed_dirs": sorted(listed),
             "flow_written": sorted(flow_written)}
 
@@ -584,7 +603,8 @@ def inputs_digest(project: Path, record: Optional[Dict[str, Any]] = None,
     fw = set(record.get("flow_written") or ())
     parts = []
     for rel in record.get("files") or ():
-        h = _sha256(project / rel)
+        h = (_qualified_output_input_hash(project)
+             if rel == QUALIFIED_OUTPUT_INPUT else _sha256(project / rel))
         parts.append(f"f\0{rel}\0{h or 'ABSENT'}")
     for rel in record.get("listed_dirs") or ():
         parts.append(f"d\0{rel}\0{'|'.join(_listing(project, rel, fw))}")

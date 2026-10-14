@@ -407,6 +407,10 @@ def refresh_selected_interface(project: Path, path: Path, content: dict, *,
     """Ordinary producer refresh for a continuation's existing L9 document."""
     bound = bind_selected_interface(
         project, content, include_synthesis_handoff=include_synthesis_handoff)
+    # A later selected-source derivation must re-consume the author choice,
+    # not carry a prior field merely because its port names still exist.
+    from phase1_doc_one_shot_runner import _admit_qualified_output_input
+    bound = _admit_qualified_output_input(project, bound)
     if bound != content:
         from l_doc_generator_stamp import dump
         dump(path, bound, emitter="_staged_top_module.refresh_selected_interface")

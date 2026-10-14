@@ -41,6 +41,7 @@ def evidence(project: Path, step_id: str) -> list[Path]:
         return _files(project, "input/design_input.txt",
                       "input/phase1_prompt.md", "input/phase1_structured.yaml",
                       "input/docs/**/*", "phase1/input_doc/**/*",
+                      "plugin_input/qualified-outputs.json",
                       "phase1/generated_docs/L*.json",
                       "reports/audit/phase1/expert_parse_track_pack/l_doc_expectations.json")
     if sid == "1":

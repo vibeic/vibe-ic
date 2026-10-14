@@ -40,6 +40,249 @@ _OUT = [("o_data", "[7:0]"), ("o_we", ""), ("o_cyc", ""), ("o_flag", "")]
 _EXCL = ("clk", "rst_n")
 
 
+_NATIVE_DOC = """# Neutral write interface
+
+module widget(input clk_i, input rst_i, output [7:0] payload_o, output commit_o, output status_o);
+
+| Name | Width | Direction | Description |
+| --- | --- | --- | --- |
+| clk_i | 1-bit | input | clock |
+| rst_i | 1-bit | input | active-high synchronous reset |
+| payload_o | 8-bit | output | write data on the storage channel |
+| commit_o | 1-bit | output | write enable on the storage channel |
+| status_o | 1-bit | output | status |
+The designer chooses this storage protocol and its write-enable active level.
+"""
+
+
+def _native_qualified_project(tmp_path, level="high"):
+    import phase1_doc_one_shot_runner as docs
+    p = tmp_path / "native"
+    source = p / "input/docs/interface.md"
+    source.parent.mkdir(parents=True)
+    source.write_text(_NATIVE_DOC)
+    extracted = {source.name: source.read_text()}
+    docs.gen_l1_datasheet(p, extracted)
+    result = docs.gen_l9_integration_spec(p, extracted, {})
+    contract = docs.qualified_output_input_contract(p, json.loads(result.path.read_text()))
+    lines = _NATIVE_DOC.splitlines()
+    basis = [{"file": "input/docs/interface.md", "line": i + 1, "quote": line}
+             for i, line in enumerate(lines) if "| payload_o |" in line or "| commit_o |" in line]
+    polarity_basis = [{"file": "input/docs/interface.md", "line": len(lines), "quote": lines[-1]}]
+    contract["qualifiers"] = [{"output": "payload_o", "port": "commit_o",
+                               "active_level": level, "output_role": "write_data",
+                               "qualifier_role": "write_enable", "channel": "storage",
+                               "basis": basis, "polarity": {
+                                   "kind": "designer_choice", "decision": f"commit_o active {level}",
+                                   "basis": polarity_basis}}]
+    author = p / docs.QUALIFIED_OUTPUT_INPUT
+    author.parent.mkdir(parents=True)
+    author.write_text(json.dumps(contract))
+    return p, extracted, result.path, author, contract
+
+
+def _native_qualified_expectation(contract):
+    row = contract["qualifiers"][0]
+    return {"id": f"qualified_by:{row['output']}", "layer": "L9_INTEGRATION_SPEC",
+            "field_path": "top_ports", "requirement": "independently reviewed write-data validity",
+            "basis": row["basis"], "expected_tokens": [row["output"], row["port"], row["active_level"]],
+            "qualified_by": {key: row[key] for key in ("output", "port", "active_level")}}
+
+
+@pytest.mark.parametrize("level", ["high", "low"])
+def test_native_qualified_input_normal_producer_and_independent_consumer(tmp_path, level):
+    import phase1_doc_one_shot_runner as docs
+    import phase1_expert_parse_track as expert
+    p, extracted, l9, author, contract = _native_qualified_project(tmp_path, level)
+    author_bytes = author.read_bytes()
+    docs.gen_l9_integration_spec(p, extracted, {})
+    emitted = json.loads(l9.read_text())
+    expected = {key: contract["qualifiers"][0][key] for key in ("port", "active_level", "basis")}
+    for key in ("ports", "top_ports", "top_module_pins"):
+        fields = {r["name"]: r["qualified_by"] for r in emitted[key] if "qualified_by" in r}
+        assert fields == {"payload_o": expected}
+    assert author.read_bytes() == author_bytes
+    assert emitted["qualified_output_authoring"]["review"] == "PENDING_INDEPENDENT_D1"
+    answer = _native_qualified_expectation(contract)
+    comparison = expert.converge_ai_expectation(p, answer)
+    assert comparison["usable"] and comparison["met"]
+    assert comparison["scope"] == "exact_qualified_output_relation"
+    # The native writer/reader cannot credit or sign its own relation.
+    found, ignored = qb.trusted_qualifiers(p, [("payload_o", "[7:0]"), ("commit_o", "")], [])
+    assert found == {} and "not signed by the D1" in ignored["payload_o"]
+    assert not list(p.rglob("SIG*"))
+    schema = expert.authoring_schema(p)
+    assert schema["qualified_output_expectation"]["input"] == docs.QUALIFIED_OUTPUT_INPUT
+
+
+@pytest.mark.parametrize("mutation,reason", [
+    ("stale_input", "input_files"), ("stale_roster", "interface"),
+    ("duplicate_output", "duplicate output"), ("unknown_field", "unknown field"),
+    ("missing_polarity", "malformed qualifier"), ("bad_polarity", "explicit polarity"),
+    ("bad_level", "active_level"), ("one_bit_data", "multi-bit"),
+    ("input_qualifier", "one-bit"), ("multi_bit_qualifier", "one-bit"),
+    ("foreign_quote", "design-input"), ("false_quote", "not on"),
+    ("bool_line", "types"), ("status_role", "write-data"),
+    ("empty_channel", "same-channel"), ("duplicate_json_key", "duplicate JSON key"),
+])
+def test_native_qualified_input_refusal_preserves_previous_l9(tmp_path, mutation, reason):
+    import copy
+    import phase1_doc_one_shot_runner as docs
+    p, extracted, l9, author, original = _native_qualified_project(tmp_path)
+    data = copy.deepcopy(original)
+    row = data["qualifiers"][0]
+    if mutation == "stale_input": data["input_files"]["input/docs/interface.md"] = "0" * 64
+    elif mutation == "stale_roster": data["interface"][0]["width"] = 2
+    elif mutation == "duplicate_output": data["qualifiers"].append(copy.deepcopy(row))
+    elif mutation == "unknown_field": row["PASS"] = True
+    elif mutation == "missing_polarity": del row["polarity"]
+    elif mutation == "bad_polarity": row["polarity"]["kind"] = "inferred_from_name"
+    elif mutation == "bad_level": row["active_level"] = "active_high"
+    elif mutation == "one_bit_data": row["output"] = "status_o"
+    elif mutation == "input_qualifier": row["port"] = "clk_i"
+    elif mutation == "multi_bit_qualifier": row["port"] = "payload_o"
+    elif mutation == "foreign_quote": row["basis"][0]["file"] = "reports/golden.txt"
+    elif mutation == "false_quote": row["basis"][0]["quote"] = "payload_o data unrelated to source"
+    elif mutation == "bool_line": row["basis"][0]["line"] = True
+    elif mutation == "status_role": row["output_role"] = "status"
+    elif mutation == "empty_channel": row["channel"] = ""
+    raw = json.dumps(data)
+    if mutation == "duplicate_json_key": raw = raw[:-1] + ', "schema": "forged"}'
+    author.write_text(raw)
+    before = l9.read_bytes()
+    with pytest.raises(ValueError, match=reason):
+        docs.gen_l9_integration_spec(p, extracted, {})
+    assert l9.read_bytes() == before
+    assert qb.declared_fields(p) == {}
+
+
+def test_native_qualified_input_describe_cli_is_read_only(tmp_path):
+    p, _extracted, l9, author, _contract = _native_qualified_project(tmp_path)
+    before = {l9: l9.read_bytes(), author: author.read_bytes()}
+    result = subprocess.run([sys.executable, str(PROGRAMS / "phase1_doc_one_shot_runner.py"),
+                             str(p), "--describe-qualified-output-input"],
+                            text=True, capture_output=True, check=False)
+    assert result.returncode == 0, result.stderr
+    contract = json.loads(result.stdout)
+    assert contract["qualifiers"] == []
+    assert len(contract["interface"]) == 5
+    assert all(path.read_bytes() == raw for path, raw in before.items())
+
+
+@pytest.mark.parametrize("mutation,usable", [("different_level", True), ("foreign_basis", False),
+                                           ("bad_id", False), ("missing_fact", False)])
+def test_native_qualified_expectation_is_exact_not_a_token_coincidence(tmp_path, mutation, usable):
+    import phase1_doc_one_shot_runner as docs
+    import phase1_expert_parse_track as expert
+    p, extracted, l9, _author, contract = _native_qualified_project(tmp_path)
+    docs.gen_l9_integration_spec(p, extracted, {})
+    answer = _native_qualified_expectation(contract)
+    if mutation == "different_level": answer["qualified_by"]["active_level"] = "low"
+    elif mutation == "foreign_basis": answer["basis"][0]["file"] = "reports/golden.txt"
+    elif mutation == "bad_id": answer["id"] = "qualified_by:other_o"
+    elif mutation == "missing_fact": del answer["qualified_by"]
+    # Scattered tokens and an author's claimed met=True cannot satisfy a pair.
+    answer["expected_tokens"] = ["payload_o", "commit_o", "high"]
+    answer["met"] = True
+    result = expert.converge_ai_expectation(p, answer)
+    assert result["usable"] is usable
+    assert result["met"] is False
+
+
+def test_native_qualified_expectation_refuses_conflicting_alias(tmp_path):
+    import phase1_doc_one_shot_runner as docs
+    import phase1_expert_parse_track as expert
+    p, extracted, l9, _author, contract = _native_qualified_project(tmp_path)
+    docs.gen_l9_integration_spec(p, extracted, {})
+    emitted = json.loads(l9.read_text())
+    row = next(r for r in emitted["ports"] if r["name"] == "payload_o")
+    row["qualified_by"]["active_level"] = "low"
+    l9.write_text(json.dumps(emitted))
+    result = expert.converge_ai_expectation(p, _native_qualified_expectation(contract))
+    assert result["usable"] and not result["met"]
+    assert "aliases disagree" in result["observed"]
+
+
+def test_native_qualified_author_input_is_current_d1_evidence_without_signing(tmp_path):
+    import phase1_doc_one_shot_runner as docs
+    import ai_signed_judgement as judgement
+    p, extracted, l9, author, contract = _native_qualified_project(tmp_path)
+    docs.gen_l9_integration_spec(p, extracted, {})
+    assert author in judgement.evidence(p, "D1")
+    old_l9, old_digest = l9.read_bytes(), judgement.evidence_sha256(p, "D1")
+    contract["qualifiers"][0]["active_level"] = "low"
+    author.write_text(json.dumps(contract))
+    assert judgement.evidence_sha256(p, "D1") != old_digest
+    assert l9.read_bytes() == old_l9
+    assert not list(p.rglob("SIG*"))
+
+
+def test_native_qualified_absent_input_keeps_strict_unsigned_outputs(tmp_path):
+    import phase1_doc_one_shot_runner as docs
+    p, extracted, l9, author, _contract = _native_qualified_project(tmp_path)
+    author.unlink()
+    docs.gen_l9_integration_spec(p, extracted, {})
+    assert qb.declared_fields(p) == {}
+    assert "qualified_output_authoring" not in json.loads(l9.read_text())
+
+
+@pytest.mark.parametrize("initially_present,change", [(False, "create"), (True, "change"), (True, "delete")])
+def test_native_qualified_phase1_reuse_detects_author_choice_change(tmp_path, initially_present, change):
+    import phase1_doc_one_shot_runner as docs
+    import _phase1_producer_identity as identity
+    p, extracted, l9, author, contract = _native_qualified_project(tmp_path)
+    if not initially_present:
+        author.unlink()
+    before = identity.input_tree_snapshot(p)
+    recorder = identity.ProducerRecorder()
+    with recorder:
+        docs.gen_l1_datasheet(p, extracted)
+        docs.gen_l9_integration_spec(p, extracted, {})
+    identity.stamp(p, recorder, input_before=before, knobs={"mode": "docs"})
+    assert identity.assess(p, PROGRAMS)["state"] == identity.REUSE
+    unrelated = p / "plugin_input/unrelated.json"
+    unrelated.write_text('{"value":1}')
+    assert identity.assess(p, PROGRAMS)["state"] == identity.REUSE
+    old_l9 = l9.read_bytes()
+    if change == "delete":
+        author.unlink()
+    else:
+        contract["qualifiers"][0]["active_level"] = "low"
+        author.write_text(json.dumps(contract))
+    decision = identity.assess(p, PROGRAMS)
+    assert decision["state"] == identity.REGENERATE
+    assert decision["reason"] == identity.DESIGN_INPUT_CHANGED
+    assert l9.read_bytes() == old_l9
+
+
+@pytest.mark.parametrize("change", ["different_level", "delete", "malformed", "stale_roster"])
+def test_native_qualified_normal_refresh_reconsumes_author_authority(tmp_path, change):
+    import phase1_doc_one_shot_runner as docs
+    import _staged_top_module as selected
+    p, extracted, l9, author, contract = _native_qualified_project(tmp_path)
+    docs.gen_l9_integration_spec(p, extracted, {})
+    before = l9.read_bytes()
+    if change == "delete": author.unlink()
+    elif change == "malformed": author.write_text('{')
+    elif change == "stale_roster":
+        contract["interface"][0]["width"] = 2
+        author.write_text(json.dumps(contract))
+    else:
+        contract["qualifiers"][0]["active_level"] = "low"
+        author.write_text(json.dumps(contract))
+    if change == "different_level":
+        refreshed = selected.refresh_selected_interface(p, l9, json.loads(before), include_synthesis_handoff=True)
+        for key in ("ports", "top_ports", "top_module_pins"):
+            assert next(r for r in refreshed[key] if r["name"] == "payload_o")["qualified_by"]["active_level"] == "low"
+        stable = l9.read_bytes()
+        selected.refresh_selected_interface(p, l9, json.loads(stable), include_synthesis_handoff=True)
+        assert l9.read_bytes() == stable
+    else:
+        with pytest.raises(ValueError):
+            selected.refresh_selected_interface(p, l9, json.loads(before), include_synthesis_handoff=True)
+        assert l9.read_bytes() == before
+
+
 def _proj(tmp_path):
     p = tmp_path / "proj"
     (p / "phase1/generated_docs").mkdir(parents=True)

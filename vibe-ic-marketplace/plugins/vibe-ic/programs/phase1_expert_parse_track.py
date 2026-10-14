@@ -1589,6 +1589,33 @@ def authoring_schema(project: Path) -> Dict[str, Any]:
         # represent are named here, at authoring time, by the same
         # declaration `unaskable_tokens` refuses by at review time.
         "expected_tokens_rule": TOKEN_LANGUAGE,
+        "qualified_output_expectation": {
+            "input": "plugin_input/qualified-outputs.json",
+            "input_schema": "vibeic.phase1-qualified-output-input.v1",
+            "id": "qualified_by:<output>", "layer": "L9_INTEGRATION_SPEC",
+            "field_path": "top_ports",
+            "qualified_by": {"output": "<multi-bit write-data output>",
+                             "port": "<one-bit write-enable output>",
+                             "active_level": "high|low"},
+            "basis": [{"file": "<design INPUT path>", "line": "<integer>",
+                       "quote": "<verbatim input quotation>"}],
+            "author_input_fields": {
+                "top_level": ["schema", "input_files", "interface", "qualifiers"],
+                "qualifier": ["output", "port", "active_level", "output_role",
+                              "qualifier_role", "channel", "basis", "polarity"],
+                "roles": {"output_role": "write_data", "qualifier_role": "write_enable"},
+                "polarity": {"kind": "input_requirement|designer_choice",
+                             "decision": "<explicit Expert rationale; never inferred from a name>",
+                             "basis": "<verbatim INPUT requirement or delegation citations>"},
+                "currentness": ("Use the read-only --describe-qualified-output-input "
+                                "contract for all current input hashes and implemented ports; "
+                                "do not edit its hashes to accept stale input")},
+            "rule": ("Author this expectation independently from design INPUT "
+                     "and explicit delegated designer choices. Review same-channel "
+                     "write-data validity and polarity; a WE name never chooses "
+                     "high. The comparator checks the exact relation on all three "
+                     "L9 port aliases, not token coincidence. Neither the L9 "
+                     "writer nor this track creates or signs its matching answer.")},
         "rule": ("an expectation's `field_path` MUST be one this schema lists "
                  "for the layer it addresses, or be omitted entirely. A path "
                  "no layer declares is refused BY NAME at review time and the "
@@ -2420,6 +2447,87 @@ def _absent_branches(c: Dict[str, Any]) -> List[Dict[str, Any]]:
             if b["layer_present"] is False]
 
 
+def _converge_qualified_output(project: Path, base: dict, exp: dict) -> dict:
+    """An independently authored finite relation, compared without token search.
+
+    This is not a waiver: missing/foreign citations, wrong output roles, a
+    malformed expectation or disagreeing aliases stay undecidable/unmet. D1
+    review/signing and the oracle's existing trust reader remain unchanged.
+    """
+    import _qualified_by as qb
+    fact, basis = exp.get("qualified_by"), exp.get("basis")
+    if (not isinstance(fact, dict) or set(fact) != {"output", "port", "active_level"}
+            or not isinstance(fact.get("output"), str)
+            or not isinstance(fact.get("port"), str)
+            or fact.get("active_level") not in ("high", "low")
+            or base["id"] != f"qualified_by:{fact.get('output')}"
+            or base["layer"] != qb.EXPECTATION_LAYER
+            or base["field_path"] != "top_ports"):
+        base["observed"] = "qualified output expectation needs its exact id/layer/path/output/port/high|low contract"
+        return base
+    if (not isinstance(basis, list) or not basis
+            or any(not isinstance(b, dict) or set(b) != {"file", "line", "quote"}
+                   or type(b.get("line")) is not int for b in basis)):
+        base["observed"] = "qualified output expectation needs exact typed source citations"
+        return base
+    why = qb.basis_refusal(project, basis, fact["output"], fact["port"])
+    if why:
+        base["observed"] = f"qualified output expectation basis refused: {why}"
+        return base
+    base.update(qualified_by=dict(fact), basis=basis, usable=True,
+                scope="exact_qualified_output_relation", owning_layers_status="OK")
+    path = resolve_layer_file(project, base["layer"])
+    if path is None:
+        base.update(layer_present=False, layer_in_taxonomy=True,
+                    observed="the program track produced no L9_INTEGRATION_SPEC layer at all")
+        return base
+    base["layer_present"] = True
+    try:
+        import l_doc_consumer_contract as ldc
+        content = ldc.l_doc_fields(json.loads(path.read_text()))
+        aliases = []
+        for key in ("ports", "top_ports", "top_module_pins"):
+            rows = content.get(key)
+            if not isinstance(rows, list):
+                raise ValueError(f"{key} is not a port list")
+            ports = {}
+            for row in rows:
+                if (not isinstance(row, dict) or not isinstance(row.get("name"), str)
+                        or row["name"] in ports):
+                    raise ValueError(f"{key} contains malformed or duplicate port rows")
+                ports[row["name"]] = row
+            d, q = ports.get(fact["output"], {}), ports.get(fact["port"], {})
+            if (d.get("direction", d.get("mode")) != "output"
+                    or type(d.get("width")) is not int or d["width"] <= 1
+                    or q.get("direction", q.get("mode")) != "output"
+                    or type(q.get("width")) is not int or q["width"] != 1
+                    or fact["output"] == fact["port"]
+                    or (content.get("selected_interface_binding") and
+                        (d.get("declared_by_staged_top") is not True or
+                         q.get("declared_by_staged_top") is not True))
+                    or any(re.search(r"(?:^|_)(?:clk|clock|rst|reset|resetn|rstn)(?:$|_)",
+                                     name, re.I) for name in (fact["output"], fact["port"]))):
+                raise ValueError(f"{key} does not carry the current data-output/qualifier-output roles")
+            declared = d.get("qualified_by")
+            if not isinstance(declared, dict) or set(declared) != {"port", "active_level", "basis"}:
+                raise ValueError(f"{key} has no exact qualified_by field for {fact['output']}")
+            why = qb.basis_refusal(project, declared.get("basis"), fact["output"], fact["port"])
+            if why:
+                raise ValueError(f"{key} field basis refused: {why}")
+            aliases.append(declared)
+        serialized = [json.dumps(value, sort_keys=True, ensure_ascii=False) for value in aliases]
+        if len(set(serialized)) != 1:
+            raise ValueError("the three L9 qualified_by aliases disagree")
+        base["field_path_status"] = "DECLARED"
+        base["met"] = (aliases[0]["port"] == fact["port"] and
+                       aliases[0]["active_level"] == fact["active_level"])
+        base["observed"] = ("all three L9 aliases carry the exact independently authored relation"
+                            if base["met"] else "L9 carries a different qualifier or active level")
+    except (OSError, ValueError, TypeError, KeyError) as exc:
+        base["observed"] = f"qualified output relation unmet: {exc}"
+    return base
+
+
 def converge_ai_expectation(project: Path, exp: Any) -> Dict[str, Any]:
     """Decide ONE AI expectation against what the program track actually wrote.
 
@@ -2537,6 +2645,10 @@ def converge_ai_expectation(project: Path, exp: Any) -> Dict[str, Any]:
     raw_split = exp.get(SPLIT_KEY)
     if raw_split is not None:
         return _converge_split(project, base, exp, raw_split)
+
+    if ("qualified_by" in exp or
+            isinstance(base["id"], str) and base["id"].startswith("qualified_by:")):
+        return _converge_qualified_output(project, base, exp)
 
     if not base["id"] or not base["layer"]:
         base["observed"] = ("the expectation names no id and/or no layer, so "
