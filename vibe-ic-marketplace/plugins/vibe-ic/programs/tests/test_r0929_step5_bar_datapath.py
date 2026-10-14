@@ -642,3 +642,138 @@ def test_an_idle_read_address_at_the_reset_vector_is_not_a_fetch(tmp_path,
     assert dp["state"] == "failed"
     assert "DATAPATH_CHECK reset_vector_fetch MISS (1 of 32 image bytes" in log
     assert dp["checks"] == {"passed": 1, "total": 5}
+
+
+# ---- latency-0 continuous reads: the SAME native producer and consumer ----
+def _memory_timed_cpu(latency, with_ren, rtl=CPU_V):
+    """Neutral CPU timing matched to the stated memory protocol, never a TB
+    marker generator. It executes the assembled instructions and byte stores.
+    The one/two-clock variants preserve the existing synchronous protocol."""
+    if latency == 0 and with_ren:
+        rtl = (rtl.replace("1: st <= 2;", "")
+               .replace("2: begin ir[", "1: begin ir[")
+               .replace("6: st <= 7;", "")
+               .replace("7: begin ld[", "6: begin ld["))
+    elif latency == 2:
+        rtl = (rtl.replace("1: st <= 2;", "1: st <= 9;\n      9: st <= 2;")
+               .replace("6: st <= 7;", "6: st <= 10;\n      10: st <= 7;"))
+    if not with_ren:
+        rtl = (rtl.replace("output reg o_mem_we, output reg o_mem_ren);",
+                           "output reg o_mem_we);")
+               .replace(" o_mem_ren <= 0;", "")
+               .replace("o_mem_ren <= 1; ", ""))
+    return rtl
+
+
+def _native_datapath(tmp_path, latency=0, with_ren=False, rtl=CPU_V,
+                     load=GOOD_LOAD, ports=None):
+    """Actual owner -> Icarus -> actual re-deriving owner; no dispatch,
+    transcript, score, input-reader or ISA-credit stand-in."""
+    _require_iverilog()
+    import testbench_gen as tbg
+    import bit_level_full_stack_tb_check as gate
+    decl = json.loads(json.dumps(DECL))
+    decl["sram_interface"]["read_latency_cycles"] = latency
+    if not with_ren:
+        decl["sram_interface"].pop("read_enable")
+    ports = (CPU_PORTS if with_ren else NO_REN_PORTS) if ports is None else ports
+    proj = _cpu_project(tmp_path, decl=decl, load=load, ports=ports,
+                        rtl=_memory_timed_cpu(latency, with_ren, rtl))
+    fsf = _fsf()
+    top = fsf.required_full_stack_top(proj, "DIE")
+    mod, parsed, why = tbg.resolve_dut(proj, CPU)
+    assert mod == CPU, why
+    models = base._write(proj / "models" / "pads.v",
+                         next(iter(PAD_MODELS.values())))
+    sources = [proj / "phase2/stage1/rtl" / f"{CPU}.v",
+               proj / top["source"], models]
+    fdir = fsf.functional_dir(proj)
+    fdir.mkdir(parents=True, exist_ok=True)
+    dp = fsf._datapath_case(proj, mod, parsed, top, sources, fdir,
+                            fdir / "run", fsf.default_dispatch, None, set())
+    problems = []
+    got = gate._verify_datapath(proj, {fsf.DATAPATH_KEY: dp}, top, problems)
+    assert not problems, problems
+    assert got["state"] == dp["state"]
+    log = (proj / dp["run_log"]).read_text() if dp.get("run_log") else ""
+    return proj, dp, got, log
+
+
+@pytest.mark.parametrize("latency", [0, 1, 2])
+@pytest.mark.parametrize("with_ren", [False, True])
+def test_declared_memory_timing_runs_through_native_datapath_and_reader(
+        tmp_path, latency, with_ren):
+    proj, dp, got, log = _native_datapath(tmp_path, latency, with_ren)
+    assert dp["state"] == "passed", dp
+    assert got["checks"] == {"passed": 5, "total": 5}
+    assert got["delivered_memsize_bytes"] == 256
+    assert got["expected_words"] == ["0x0000000c", "0x00000011"]
+    assert "32 of 32 image bytes" in log
+    text = (proj / dp["tb"]).read_text()
+    assert _fsf().instance_count(text, "chip_top") == 1
+    assert _fsf().instance_count(text, CPU) == 0
+    if latency == 0:
+        assert "rpipe" not in text
+    else:
+        assert "rpipe[LAT-1]" in text
+
+
+@pytest.mark.parametrize("kind,rtl,load,needle", [
+    ("wrong_store", CPU_V.replace("r2[8*n +: 8]", "(r2[8*n +: 8] ^ 8'h01)"),
+     GOOD_LOAD, "DATAPATH_CHECK store_word MISS"),
+    ("missing_lane", ONE_LANE_V, GOOD_LOAD,
+     "DATAPATH_CHECK byte_lanes_written MISS"),
+    ("load_corruption", CPU_V, BROKEN_LOAD,
+     "DATAPATH_CHECK load_store_word MISS"),
+    ("stray_write", STRAY_V, GOOD_LOAD,
+     "DATAPATH_CHECK write_discipline MISS (stray=2"),
+    ("unknown_write_enable", CPU_V.replace("o_mem_we <= 1;",
+                                           "o_mem_we <= 1'bx;"),
+     GOOD_LOAD, "DATAPATH_CHECK write_discipline MISS"),
+    ("unknown_enabled_write_data", CPU_V.replace("r2[8*n +: 8]", "8'hxx"),
+     GOOD_LOAD, "DATAPATH_CHECK write_discipline MISS"),
+], ids=["wrong_store", "missing_lane", "load_corruption", "stray_write",
+        "unknown_write_enable", "unknown_enabled_write_data"])
+def test_async_native_datapath_keeps_each_write_and_load_negative(
+        tmp_path, kind, rtl, load, needle):
+    _proj, dp, got, log = _native_datapath(tmp_path, rtl=rtl, load=load)
+    assert dp["state"] == "failed", (kind, dp)
+    assert got["checks"]["total"] == 5 and got["checks"]["passed"] < 5
+    assert needle in log, log[-1600:]
+    assert "DATAPATH_CHECK reset_vector_fetch PASS" in log
+
+
+def test_async_native_datapath_keeps_out_of_range_write_negative(tmp_path):
+    ports = [(d, 9 if n == "o_mem_waddr" else w, n)
+             for d, w, n in NO_REN_PORTS]
+    rtl = STRAY_V.replace("output reg [7:0] o_mem_waddr",
+                          "output reg [8:0] o_mem_waddr")
+    # raddr and waddr share a declaration in the neutral source.
+    rtl = rtl.replace("output reg [7:0] o_mem_raddr, output reg [7:0] o_mem_waddr",
+                      "output reg [7:0] o_mem_raddr, output reg [8:0] o_mem_waddr")
+    rtl = rtl.replace("o_mem_waddr <= 8'h80", "o_mem_waddr <= 9'h100")
+    _proj, dp, got, log = _native_datapath(tmp_path, rtl=rtl, ports=ports)
+    assert dp["state"] == got["state"] == "failed", dp
+    assert "DATAPATH_CHECK write_discipline MISS (stray=0 oob=2" in log
+
+
+def test_async_native_datapath_keeps_idle_address_fetch_negative(tmp_path):
+    _proj, dp, got, log = _native_datapath(tmp_path, rtl=NO_REN_STUCK_V)
+    assert dp["state"] == got["state"] == "failed", dp
+    assert "DATAPATH_CHECK reset_vector_fetch MISS (1 of 32 image bytes" in log
+
+
+def test_async_native_datapath_keeps_unknown_read_enable_negative(tmp_path):
+    rtl = CPU_V.replace("o_mem_ren <= 1;", "o_mem_ren <= 1'bx;")
+    _proj, dp, got, log = _native_datapath(tmp_path, with_ren=True, rtl=rtl)
+    assert dp["state"] == got["state"] == "failed", dp
+    assert "DATAPATH_CHECK reset_vector_fetch MISS" in log
+    assert "DATAPATH_CHECK write_discipline MISS" in log
+
+
+@pytest.mark.parametrize("latency", [-1, None, True])
+def test_invalid_or_unstated_latency_still_refuses(latency):
+    decl = json.loads(json.dumps(DECL))
+    decl["sram_interface"]["read_latency_cycles"] = latency
+    got, why = _cdp().sram_roles(decl)
+    assert got is None and "read latency" in why
