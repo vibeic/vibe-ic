@@ -1661,3 +1661,79 @@ def test_a_designation_stamp_is_demoted_when_the_spec_moves(tmp_path):
     assert prov["provenance_verified"] is False, prov
     assert prov["provenance_diverged"] is True, prov
     assert "PROVENANCE UNVERIFIED" in r.stdout, r.stdout
+
+
+def test_unchanged_carried_declaration_preserves_the_full_provenance_bytes(tmp_path):
+    """A repeated native producer must not invalidate downstream byte bindings."""
+    p = _make_project(tmp_path, ZH_CONTRACT, "stable_provenance")
+    assert _run_emit(p, "--set", "bit_order=MSB_first",
+                     "--set", "latency_cycles=3").returncode == 0
+    assert _run_emit(p).returncode == 0
+    declaration = p / DECL_PATH
+    sidecar = declaration.with_suffix(".provenance.json")
+    before = declaration.read_bytes(), sidecar.read_bytes()
+    assert _run_emit(p).returncode == 0
+    assert (declaration.read_bytes(), sidecar.read_bytes()) == before
+
+
+def test_a_changed_choice_still_replaces_the_provenance_record(tmp_path):
+    p = _make_project(tmp_path, ZH_CONTRACT, "changed_provenance")
+    assert _run_emit(p, "--set", "bit_order=MSB_first",
+                     "--set", "latency_cycles=3").returncode == 0
+    assert _run_emit(p).returncode == 0
+    sidecar = (p / DECL_PATH).with_suffix(".provenance.json")
+    before = sidecar.read_bytes()
+    assert _run_emit(p, "--set", "latency_cycles=5").returncode == 0
+    assert sidecar.read_bytes() != before
+    assert _provenance(p)["fields"]["latency_cycles"]["value"] == 5
+    assert _provenance(p)["fields"]["latency_cycles"]["provenance"] == "author_declared"
+
+
+def test_a_changed_contract_still_replaces_the_provenance_record(tmp_path):
+    p = _make_project(tmp_path, ZH_CONTRACT, "changed_contract")
+    assert _run_emit(p, "--set", "bit_order=MSB_first",
+                     "--set", "latency_cycles=3").returncode == 0
+    assert _run_emit(p).returncode == 0
+    sidecar = (p / DECL_PATH).with_suffix(".provenance.json")
+    before = sidecar.read_bytes()
+    doc = p / "input/docs/L7_verification_plan.md"
+    assert doc.is_file()
+    doc.write_text(doc.read_text().replace("| `latency_cycles` | ✅ |",
+                                          "| `latency_cycles` | ⚠️ 資訊性 |"))
+    assert _run_emit(p).returncode == 0
+    assert sidecar.read_bytes() != before
+    assert _provenance(p)["fields"]["latency_cycles"]["required"] is False
+
+
+def test_an_invalid_provenance_timestamp_is_replaced(tmp_path):
+    p = _make_project(tmp_path, ZH_CONTRACT, "invalid_provenance_date")
+    assert _run_emit(p, "--set", "bit_order=MSB_first",
+                     "--set", "latency_cycles=3").returncode == 0
+    assert _run_emit(p).returncode == 0
+    sidecar = (p / DECL_PATH).with_suffix(".provenance.json")
+    prior = _provenance(p)
+    prior["generated_at"] = "not-a-timestamp"
+    sidecar.write_text(json.dumps(prior))
+    assert _run_emit(p).returncode == 0
+    assert _provenance(p)["generated_at"] != "not-a-timestamp"
+
+
+@pytest.mark.parametrize("corruption", ["schema_float", "verified_flag_integer"])
+def test_stable_provenance_publication_preserves_json_types(tmp_path, corruption):
+    p = _make_project(tmp_path, ZH_CONTRACT, "typed_provenance")
+    assert _run_emit(p, "--set", "bit_order=MSB_first",
+                     "--set", "latency_cycles=3").returncode == 0
+    assert _run_emit(p).returncode == 0
+    sidecar = (p / DECL_PATH).with_suffix(".provenance.json")
+    prior = _provenance(p)
+    if corruption == "schema_float":
+        prior["schema_version"] = 2.0
+    else:
+        prior["fields"]["bit_order"]["provenance_verified"] = 1
+    sidecar.write_text(json.dumps(prior))
+    assert _run_emit(p).returncode == 0
+    current = _provenance(p)
+    if corruption == "schema_float":
+        assert type(current["schema_version"]) is int, current["schema_version"]
+    else:
+        assert type(current["fields"]["bit_order"]["provenance_verified"]) is bool, current["fields"]["bit_order"]

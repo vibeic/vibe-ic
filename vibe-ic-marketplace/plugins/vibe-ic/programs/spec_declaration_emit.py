@@ -1699,13 +1699,18 @@ def _write_json(path: Path, payload: Any, *, stable_publication: bool = False) -
         try:
             previous = json.loads(path.read_text())
             if (isinstance(previous, dict) and isinstance(payload, dict)
-                    and isinstance(previous.get('generated_at'), str)
-                    and previous['generated_at']
-                    and {k: v for k, v in previous.items() if k != 'generated_at'}
-                        == {k: v for k, v in payload.items() if k != 'generated_at'}):
-                # Same complete producer payload: keep published bytes. All
-                # consumers still hash generated_at and every other byte.
-                return
+                    and isinstance(previous.get('generated_at'), str)):
+                timestamp = datetime.fromisoformat(previous['generated_at'])
+                old_facts = {k: v for k, v in previous.items() if k != 'generated_at'}
+                new_facts = {k: v for k, v in payload.items() if k != 'generated_at'}
+                # JSON types belong to the producer facts. Python equality
+                # equates True with 1 and integral floats with integers.
+                if (timestamp.tzinfo is not None
+                        and json.dumps(old_facts, sort_keys=True, ensure_ascii=False)
+                        == json.dumps(new_facts, sort_keys=True, ensure_ascii=False)):
+                    # Same complete producer payload: keep published bytes.
+                    # Consumers still hash generated_at and every other byte.
+                    return
         except (OSError, ValueError, TypeError):
             pass
     path.parent.mkdir(parents=True, exist_ok=True)
