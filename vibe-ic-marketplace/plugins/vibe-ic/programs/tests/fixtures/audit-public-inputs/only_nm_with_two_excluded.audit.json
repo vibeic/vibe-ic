@@ -1,0 +1,79 @@
+{
+  "schema_version": 2,
+  "step_status_schema_version": 2,
+  "version": "source-synthetic-1969-denominator",
+  "run_at": "2026-01-01T00:00:00+00:00",
+  "verdict": "NOT_MEASURED",
+  "run_status": "NOT_MEASURED",
+  "step_counts": {
+    "PASS": 0,
+    "PASS_WITH_WAIVERS": 0,
+    "FAIL": 0,
+    "NOT_MEASURED": 4,
+    "NOT_APPLICABLE": 0
+  },
+  "steps": [
+    {
+      "id": "1",
+      "name": "public synthetic reporting step 1",
+      "stage": "stage1",
+      "status": "NOT_MEASURED",
+      "reason_class": "",
+      "declared_by": "",
+      "attribution": "",
+      "disclosures": [],
+      "partial_vacuity_disclosed": false,
+      "excluded_from_verdict": ""
+    },
+    {
+      "id": "2",
+      "name": "public synthetic reporting step 2",
+      "stage": "stage1",
+      "status": "NOT_MEASURED",
+      "reason_class": "",
+      "declared_by": "",
+      "attribution": "",
+      "disclosures": [],
+      "partial_vacuity_disclosed": false,
+      "excluded_from_verdict": ""
+    },
+    {
+      "id": "6",
+      "name": "public synthetic reporting step 6",
+      "stage": "stage1",
+      "status": "NOT_MEASURED",
+      "reason_class": "",
+      "declared_by": "",
+      "attribution": "",
+      "disclosures": [],
+      "partial_vacuity_disclosed": false,
+      "excluded_from_verdict": "explicit public observation unavailable"
+    },
+    {
+      "id": "39",
+      "name": "public synthetic reporting step 39",
+      "stage": "stage1",
+      "status": "NOT_MEASURED",
+      "reason_class": "",
+      "declared_by": "",
+      "attribution": "",
+      "disclosures": [],
+      "partial_vacuity_disclosed": false,
+      "excluded_from_verdict": "explicit public observation unavailable"
+    }
+  ],
+  "not_measured_excluded": [
+    {
+      "step_id": "6",
+      "step_name": "public synthetic reporting step 6",
+      "reason_class": "",
+      "reason": "explicit public observation unavailable"
+    },
+    {
+      "step_id": "39",
+      "step_name": "public synthetic reporting step 39",
+      "reason_class": "",
+      "reason": "explicit public observation unavailable"
+    }
+  ]
+}

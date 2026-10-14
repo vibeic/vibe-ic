@@ -1392,7 +1392,8 @@ def _arithmetic_scenario_intent(case: dict, operand_names: Tuple[str, ...]) -> d
     reset = bool(stated(r'reset|rst|重置|復位|复位') and (mid or (held and released)))
     return {'case': {**case, **normalized}, 'text': text,
             'operand_boundaries': boundaries, 'consecutive_transactions': consecutive,
-            'reset_situations': reset, 'reset_complete': held and released and mid}
+            'reset_situations': reset, 'reset_complete': held and released and mid,
+            'random_transactions': stated(r'\brandom(?:ized)?\b|隨機|随机')}
 
 
 def arithmetic_observation(project: Path, spec: dict, *, top: Optional[str] = None,
@@ -1484,6 +1485,11 @@ def arithmetic_scenario_plan(project: Path, ic_class: Optional[str], case: dict,
     spec, why = extract_serial_arith_spec(project, ic_class)
     intent = _arithmetic_scenario_intent(case, (spec['parallel'], spec['serial_in']) if spec else ())
     families = [k for k in ('operand_boundaries', 'consecutive_transactions', 'reset_situations') if intent[k]]
+    # A random serial arithmetic row is the same fixed interface obligation;
+    # its population is declared by that row, never found by framing search.
+    random_vectors = bool(spec is not None and not families and intent['random_transactions'])
+    if random_vectors:
+        families = ['random_transactions']
     if not families:
         return None
     required_choices = {}; required_population = None
@@ -1513,7 +1519,10 @@ def arithmetic_scenario_plan(project: Path, ic_class: Optional[str], case: dict,
     if choices.get('parallel_hold') != 'through_final_product_bit':
         required_choices['parallel_hold'] = {'type': 'string', 'allowed': ['through_final_product_bit']}
     # Read a designer's explicit count, never turn a generic sample into it.
-    count = declared_vector_population(intent['case']) if intent['consecutive_transactions'] else None
+    count = declared_vector_population(intent['case']) if (intent['consecutive_transactions'] or random_vectors) else None
+    if random_vectors and count is not None and count > MAX_CASE_VECTORS:
+        defer('declared random population exceeds supported per-case vector capacity')
+        return None
     minimum = max(2, count or 2)
     population_path = f"verification_stimuli.arithmetic_scenarios.{case.get('name') or case.get('id')}.transaction_count"
     stimuli = declared.get('verification_stimuli') or {}
@@ -1561,6 +1570,9 @@ def arithmetic_scenario_plan(project: Path, ic_class: Optional[str], case: dict,
     # These scopes are exercised differently; unknown scope keeps the original
     # expert handoff. A generic arithmetic result is never renamed a scenario.
     populations = []
+    if random_vectors:
+        populations.append(('random_transactions',
+                            select_operand_pairs(spec, 'random', min_vectors=count)))
     if intent['operand_boundaries']:
         corners = {0, 1, (1 << width) - 1}
         if spec['signed']:
@@ -1617,6 +1629,7 @@ def emit_arithmetic_scenario_module(module_name: str, plan: dict) -> str:
     par, sin, sout, clk, rst = (spec[k] for k in
                                ('parallel', 'serial_in', 'serial_out', 'clk', 'rst'))
     latency = framing['settled_latency']; pairs = plan['pairs']
+    random_vectors = plan['scenario'] == 'random_transactions'
     observation = plan['observation']
     half = format(observation['clock_period_ns'] / 2, '.12g')
     sample = format(observation['sample_offset_ns'], '.12g')
@@ -1624,7 +1637,13 @@ def emit_arithmetic_scenario_module(module_name: str, plan: dict) -> str:
     rearm = int(framing['transaction_rearm'] == 'clocked_reset')
     reset_cycles = framing['rearm_reset_cycles']
     lsb = framing['bit_order'] == 'LSB'
-    lines = ['`timescale 1ns/1ps', ARITHMETIC_SCENARIO_HEADER + json.dumps(plan, sort_keys=True),
+    # A 10000-pair plan exceeds native lexer comment-line limits. Keep the
+    # exact JSON as short comment chunks; the same reader joins them losslessly.
+    encoded_plan = json.dumps(plan, sort_keys=True)
+    headers = ([ARITHMETIC_SCENARIO_HEADER + encoded_plan[i:i+2048]
+                for i in range(0, len(encoded_plan), 2048)] if random_vectors
+               else [ARITHMETIC_SCENARIO_HEADER + encoded_plan])
+    lines = ['`timescale 1ns/1ps', *headers,
              f'module {module_name};', f'localparam integer N={n}, NV={len(pairs)}, L={latency};']
     for p in spec['ports']:
         width = n if p['name'] == par else int(p.get('numeric_width') or 1)
@@ -1658,6 +1677,13 @@ def emit_arithmetic_scenario_module(module_name: str, plan: dict) -> str:
               f'  @(posedge {clk}); #{sample}; @(negedge {clk});', ' end',
               ' clear_state(holds); compare_transaction(v,0,0);', 'end endtask',
               'initial begin']
+    if random_vectors:
+        lines.insert(lines.index('task clear_state(input integer holds); begin'),
+                     'integer passed_transactions=0, prior_errors;')
+        task_start = lines.index('task compare_transaction(input integer v,input integer reset_first,input integer pulse); begin')
+        lines.insert(task_start + 1, ' prior_errors=errors;')
+        task_end = lines.index(' transactions=transactions+1;')
+        lines.insert(task_end + 1, ' if(errors==prior_errors) passed_transactions=passed_transactions+1;')
     for p in spec['ports']:
         if p['dir'] == 'input' and p['name'] != clk:
             lines.append(f" {p['name']}=0;")
@@ -1692,7 +1718,11 @@ def emit_arithmetic_scenario_module(module_name: str, plan: dict) -> str:
         if plan.get('populations'):
             lines += [f'$display("ARITH_SCENARIO_POPULATION family={phase["scenario"]} transactions=%0d comparisons=%0d errors=%0d",',
                       ' transactions-phase_transactions,comparisons-phase_comparisons,errors-phase_errors);']
-    lines += ['$display("ARITH_SCENARIO_DONE transactions=%0d comparisons=%0d errors=%0d held_edges=%0d",',
+    if random_vectors:
+        order = 0 if lsb else 1
+        lines += ['$display("ORACLE_TB_DONE pass=%0d/%0d", passed_transactions,transactions);',
+                  f' if(!errors) $display("ORACLE_TB_FRAMING in_order={order} out_order={order} latency_cycles={latency} latency_origin={SERIAL_LATENCY_ORIGIN}");']
+    lines += ['$display("ARITH_SCENARIO_DONE transactions=%0d comparisons=%0d errors=%0d held_edges=%0d",'
               ' transactions,comparisons,errors,held_edges);',
               f' if(errors) $fatal(1,"FAIL: {module_name} scenario comparator");',
               f' $display("[TB {module_name}] PASS: declared arithmetic scenario");', '$finish;', 'end endmodule']
@@ -1701,8 +1731,10 @@ def emit_arithmetic_scenario_module(module_name: str, plan: dict) -> str:
 
 def _scenario_header(tb: Path) -> Optional[dict]:
     try:
-        line = next(l for l in tb.read_text().splitlines() if l.startswith(ARITHMETIC_SCENARIO_HEADER))
-        plan = json.loads(line[len(ARITHMETIC_SCENARIO_HEADER):])
+        encoded = ''.join(l[len(ARITHMETIC_SCENARIO_HEADER):]
+                          for l in tb.read_text().splitlines()
+                          if l.startswith(ARITHMETIC_SCENARIO_HEADER))
+        plan = json.loads(encoded)
         return plan if isinstance(plan, dict) and plan.get('schema') == 'vibeic.arithmetic_scenario.v1' else None
     except (OSError, ValueError, StopIteration):
         return None
@@ -1734,12 +1766,26 @@ def capture_arithmetic_scenario_execution(project: Path, tb: Path, transcript: P
         observed = [{k: p[k] for k in ('scenario', 'transactions', 'comparisons')}
                     for p in populations]
         populations_complete = observed == expected
+    framing = None; framing_complete = True
+    if plan.get('scenario') == 'random_transactions':
+        matches = re.findall(
+            rb'^ORACLE_TB_FRAMING in_order=(\d+) out_order=(\d+) latency_cycles=(\d+) latency_origin=([a-z_]+)\r?$',
+            raw, re.MULTILINE)
+        declared = plan['framing']; order = 0 if declared['bit_order'] == 'LSB' else 1
+        expected = (order, order, declared['settled_latency'], SERIAL_LATENCY_ORIGIN)
+        observed = [(int(i), int(o), int(latency), origin.decode())
+                    for i, o, latency, origin in matches]
+        framing_complete = observed == [expected]
+        if len(observed) == 1:
+            framing = dict(zip(('in_order', 'out_order', 'latency_cycles', 'latency_origin'), observed[0]))
     measured = {'plan': plan, 'sources': sources, 'transcript': str(transcript),
                 'transcript_sha256': hashlib.sha256(raw).hexdigest(),
                 'transactions': transactions, 'comparisons': comparisons,
                 'errors': errors, 'held_edges': held,
                 'complete': transactions == plan['transactions'] and comparisons == plan['comparisons']
-                            and populations_complete}
+                            and populations_complete and framing_complete}
+    if plan.get('scenario') == 'random_transactions':
+        measured['framing'] = framing
     if populations is not None:
         measured['populations'] = populations
     return measured, 'native declared scenario comparisons'

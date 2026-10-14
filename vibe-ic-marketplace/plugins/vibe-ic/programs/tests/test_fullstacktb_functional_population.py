@@ -1556,3 +1556,138 @@ def test_arithmetic_population_counters_keep_strict_score_precedence(rc, record,
     if marker:
         text += '[TB counter_case] PASS: scenario\n'
     assert _fsf().score_transcript('counter_case', rc, text)['state'] == state
+
+
+# Issue3132 random residual: public tiny native DUT, no field/owner artifacts.
+def _random_contract_input(tmp_path, *, key='wrapped8_delayed', mode='good',
+                           refusal=None, bit_order='LSB_first'):
+    root = tmp_path / 'random_public_input'
+    _timed_input(root, key, mode=mode, refusal=refusal)
+    case = {'name': 'random_contract', 'kind': 'functional_vector',
+            'stimulus': 'Random at least 10000 operand pairs using the stated serial framing.',
+            'expected': '100% PASS'}
+    gd = root / 'phase1/generated_docs'
+    (gd / 'L10_TEST_CASES.json').write_text(json.dumps({'test_cases': [case]}))
+    declaration = root / 'plugin_output/declaration.json'
+    data = json.loads(declaration.read_text()); data['bit_order'] = bit_order
+    declaration.write_text(json.dumps(data, sort_keys=True))
+    inventory = {str(f.relative_to(root)): _fsf().sha256_file(f)
+                 for f in root.rglob('*') if f.is_file()}
+    (root / 'random_public_input_hashes.json').write_text(
+        json.dumps(inventory, sort_keys=True, indent=2))
+    return root
+
+
+def _random_assert_native_result(root, result, rc, consumed, expected):
+    entry, = result['cases']
+    assert result['verdict'] == expected and rc == (0 if expected == 'PASS' else 1), (result, consumed)
+    assert entry['declared_population'] == 10000
+    assert entry['checks']['total'] == 10000
+    assert entry['build_rc'] == 0 and entry['run_rc'] is not None
+    handles = json.loads((root / 'native_handles.json').read_text())
+    assert len(handles) == 2 and all(h['rc'] is not None for h in handles)
+    if expected == 'PASS':
+        assert entry['run_rc'] == 0 and entry['checks']['passed'] == 10000
+        assert consumed['counts']['executed'] == consumed['counts']['passed'] == 1
+    return entry
+
+
+@pytest.mark.parametrize('key', ['core8_renamed', 'wrapped8_delayed'])
+def test_issue3132_random_uses_the_declared_fixed_schedule(tmp_path, key):
+    root = _random_contract_input(tmp_path, key=key)
+    result, rc, consumed = _timed_native(root)
+    entry = _random_assert_native_result(root, result, rc, consumed, 'PASS')
+    tb = root / entry['tb']; text = tb.read_text()
+    plan = aog._scenario_header(tb)
+    assert plan is not None and plan['scenario'] == 'random_transactions'
+    assert plan['transactions'] == 10000 and plan['comparisons'] == 80000
+    width, wrapped, period, cd, od, renamed, rearm, latency = _TIMED_CONFIGS[key]
+    assert plan['framing']['settled_latency'] == latency == 1
+    assert plan['observation']['clock_period_ns'] == period == 18
+    assert plan['observation']['sample_offset_ns'] == cd + od + 0.75
+    assert not any(token in text for token in ('MAXOFF', '_boff', '_drive_capture(1)'))
+    log = (root / entry['run_log']).read_text()
+    assert 'ORACLE_TB_DONE pass=10000/10000' in log
+    assert 'ORACLE_TB_FRAMING in_order=0 out_order=0 latency_cycles=1 latency_origin=settled_edge_offset' in log
+
+
+def test_issue3132_random_cannot_search_another_cycle(tmp_path):
+    root = _random_contract_input(tmp_path, mode='wrong_cycle')
+    result, rc, consumed = _timed_native(root)
+    _random_assert_native_result(root, result, rc, consumed, 'FAIL')
+
+
+def test_issue3132_random_cannot_search_another_bit_order(tmp_path):
+    root = _random_contract_input(tmp_path, bit_order='MSB_first')
+    result, rc, consumed = _timed_native(root)
+    _random_assert_native_result(root, result, rc, consumed, 'FAIL')
+
+
+@pytest.mark.parametrize('mode', ['wrong_product', 'ignored_reset', 'unknown'])
+def test_issue3132_random_genuine_native_negative_controls(tmp_path, mode):
+    root = _random_contract_input(tmp_path, mode=mode)
+    result, rc, consumed = _timed_native(root)
+    _random_assert_native_result(root, result, rc, consumed, 'FAIL')
+
+
+@pytest.mark.parametrize('refusal', ['missing', 'stale_model', 'before_settle'])
+def test_issue3132_random_requires_current_supported_observation(tmp_path, refusal):
+    root = _random_contract_input(tmp_path, refusal=refusal)
+    result, rc, consumed = _timed_native(root)
+    assert result['verdict'] == consumed['verdict'] == 'NOT_MEASURED' and rc == 2, (result, consumed)
+    assert result['counts']['executed'] == 0
+    assert json.loads((root / 'native_handles.json').read_text()) == []
+    assert result['reason_class'] == 'MISSING_OBSERVATION_CONTRACT'
+
+
+@pytest.mark.parametrize('mutation', ['framing_transcript', 'stale_declaration', 'short_population'])
+def test_issue3132_random_strict_consumer_rechecks_contract(tmp_path, mutation):
+    root = _random_contract_input(tmp_path)
+    result, rc, consumed = _timed_native(root)
+    _random_assert_native_result(root, result, rc, consumed, 'PASS')
+    fs = _fsf(); record = fs.record_path(root); rec = json.loads(record.read_text()); entry, = rec['cases']
+    if mutation == 'stale_declaration':
+        path = root / 'plugin_output/declaration.json'
+        d = json.loads(path.read_text()); d['latency_cycles'] = 2
+        path.write_text(json.dumps(d, sort_keys=True))
+    else:
+        path = root / entry['run_log']; text = path.read_text()
+        if mutation == 'framing_transcript':
+            # A count-correct, hash-current transcript must still obey framing.
+            match = re.search(r'(?m)^ORACLE_TB_FRAMING .*$', text)
+            assert match, text[-1000:]
+            text = text[:match.start()] + 'ORACLE_TB_FRAMING in_order=0 out_order=0 latency_cycles=99 latency_origin=settled_edge_offset' + text[match.end():]
+        else:
+            text = text.replace('pass=10000/10000', 'pass=9999/9999')
+            text = text.replace('transactions=10000 comparisons=80000', 'transactions=9999 comparisons=79992')
+        path.write_text(text); entry['run_log_sha256'] = fs.sha256_file(path)
+        if mutation == 'framing_transcript' and isinstance(entry.get('arithmetic_scenario'), dict):
+            # Refresh descriptive receipt hashes too: refusal must come from
+            # re-reading the actual framing, not merely a stale transcript hash.
+            measured = entry['arithmetic_scenario']
+            measured['transcript_sha256'] = fs.sha256_file(path)
+            if isinstance(measured.get('framing'), dict):
+                measured['framing']['latency_cycles'] = 99
+        record.write_text(json.dumps(rec, indent=2))
+    rc, checked, _ = gate.functional_full_stack_verdict(root)
+    assert rc != 0 and checked['functional_verified'] is False, checked
+
+
+def test_issue3132_legacy_native_search_receipt_does_not_evade_current_contract(tmp_path):
+    root = _random_contract_input(tmp_path)
+    tbg = importlib.import_module('testbench_gen')
+    # Build historical search-family evidence with the real old emitter and
+    # native dispatch, never a fabricated transcript or simulator verdict.
+    with patch.object(tbg, '_emit_case_arithmetic_scenario', return_value=None):
+        result, rc, consumed = _timed_native(root)
+    entry, = result['cases']
+    assert entry['family'] == 'declared_function_golden'
+    assert entry['state'] == 'passed' and entry['run_rc'] == 0
+    assert entry['checks'] == {'passed': 10000, 'total': 10000}
+    log = (root / entry['run_log']).read_text()
+    observed = re.search(r'ORACLE_TB_FRAMING in_order=0 out_order=0 latency_cycles=(\d+) latency_origin=settled_edge_offset', log)
+    assert observed and int(observed.group(1)) == 2
+    declaration = json.loads((root / 'plugin_output/declaration.json').read_text())
+    assert declaration['latency_cycles'] == 1
+    assert declaration['latency_cycles_origin'] == 'settled_edge_offset'
+    assert rc == 2 and consumed['functional_verified'] is False, consumed

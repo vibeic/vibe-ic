@@ -27,8 +27,8 @@ This detector reads the prompt (the design INPUT), classifies which of those
 verification-relevant SHAPES the design has, and injects the matching self-TB
 coverage slices as an ADVISORY requirement into the AI-backup hand-off — so the
 author's close-loop self-check exercises the slice BEFORE emit. It is advisory
-(never a gate/strip): stronger self-verification is always-safe guidance, so a
-broad fire cannot mis-steer authoring. Reads ONLY the prompt (§4.05).
+(never a gate/strip), but its directives must follow the input's signal roles;
+unrelated administrative words cannot select a protocol. Reads ONLY the prompt.
 
 Usage:
     from spec_selftb_coverage_detect import detect_selftb_coverage
@@ -43,6 +43,11 @@ import re
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+if str(Path(__file__).resolve().parent) not in sys.path:
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from _specrtl_common import extract_spec_contract
 
 # ── shape markers (prompt prose / skeleton) ───────────────────────────────────
 _TRIGGER_RE = re.compile(
@@ -84,6 +89,30 @@ _FSM_CONTEXT_RE = re.compile(
     r"\bFSM\b|\bstate\s+machine\b|\bstates?\b\s*(?:S_|:|are|include)|\bS_[A-Z]"
     r"|\bnext[-\s]?state\b|\btransition\b|\balgorithm\b|\btraverse\b|\bsorted\b"
     r"|\bsearch\b|\biterat", re.IGNORECASE)
+
+_CONSECUTIVE_ARITHMETIC_RE = re.compile(
+    r"\b(?:consecutive|multiple|back[- ]to[- ]back)\s+"
+    r"(?:arithmetic\s+(?:operations?|transactions?)|multiplications?|products?)\b",
+    re.IGNORECASE)
+
+
+def _has_handshake_roles(prompt: str) -> bool:
+    """Bind control pairs to declared signals or a local protocol statement."""
+    names = {port.name for port in extract_spec_contract(prompt, confirm=False).ports}
+    # Named inline prose declarations, e.g. input `i_start` / output `o_ready`.
+    names.update(re.findall(
+        r"\b(?:input|output|inout)\s+(?:(?:wire|reg|logic)\s+)?"
+        r"`([A-Za-z_]\w*)`", prompt, re.I))
+    if names:
+        return (any(_TRIGGER_RE.fullmatch(name) for name in names)
+                and any(_DONE_RE.fullmatch(name) for name in names))
+    # A prose-only interface can still state a genuine protocol. Its two roles
+    # must belong to the same statement, not to unrelated documents.
+    from _prose_polarity import is_denied
+    return any(_TRIGGER_RE.search(clause) and _DONE_RE.search(clause)
+               and re.search(r"\b(?:handshake|protocol)\b", clause, re.I)
+               and not is_denied(clause)
+               for clause in re.split(r"[.;\n。]", prompt))
 
 
 # Input-derived authoring contract for interrupt-controller prompts.  These are
@@ -169,7 +198,8 @@ def detect_selftb_coverage(prompt: str) -> Dict[str, Any]:
     Returns a dict::
 
         {
-          "shapes": [str, ...],     # any of handshake_fsm / register_dynamic /
+          "shapes": [str, ...],     # any of handshake_fsm / consecutive_arithmetic /
+                                    #   register_dynamic /
                                     #   interrupt_controller / fsm_completion
           "slices": [str, ...],     # the concrete self-TB slices to exercise
           "requirement": str|None,  # ready-to-inject author directive
@@ -185,10 +215,8 @@ def detect_selftb_coverage(prompt: str) -> Dict[str, Any]:
     self_tb_scenarios: List[Dict[str, Any]] = []
     parameter_sweeps: List[Dict[str, Any]] = []
 
-    has_trigger = bool(_TRIGGER_RE.search(p))
-    has_done = bool(_DONE_RE.search(p))
     # 1) handshake / request-ready / start-done FSM
-    if has_trigger and has_done:
+    if _has_handshake_roles(p):
         shapes.append("handshake_fsm")
         slices.append(
             "HANDSHAKE FSM: drive BACK-TO-BACK transactions (assert the next "
@@ -197,6 +225,20 @@ def detect_selftb_coverage(prompt: str) -> Dict[str, Any]:
             "outputs as an EXTERNAL checker: drive stimulus, DEASSERT it, then "
             "check the output pulse on the FOLLOWING clock edge; hold data-valid "
             "outputs until consumed.")
+
+    from _prose_polarity import LINE_END_BREAKS, is_denied, sentence_scope
+    for match in _CONSECUTIVE_ARITHMETIC_RE.finditer(p):
+        lo, hi = sentence_scope(p, match.start(), match.end(),
+                                extra_breaks=LINE_END_BREAKS + (",", ";", "。"))
+        if is_denied(p[lo:hi]):
+            continue
+        shapes.append("consecutive_arithmetic")
+        slices.append(
+            "CONSECUTIVE ARITHMETIC: exercise the declared consecutive operations "
+            "and compare every arithmetic result using the input's stimulus, "
+            "clock/reset and re-arm schedule; do not infer additional control "
+            "ports or a handshake protocol.")
+        break
 
     # 2) register peripheral (AXI-Lite / APB) with time-varying internal state
     if (_AXI_LITE_RE.search(p) or _APB_RE.search(p)) and _DYN_STATE_RE.search(p):

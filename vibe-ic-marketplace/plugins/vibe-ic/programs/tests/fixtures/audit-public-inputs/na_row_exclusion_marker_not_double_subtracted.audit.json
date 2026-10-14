@@ -1,0 +1,61 @@
+{
+  "schema_version": 2,
+  "step_status_schema_version": 2,
+  "version": "source-synthetic-1969-denominator",
+  "run_at": "2026-01-01T00:00:00+00:00",
+  "verdict": "PASS",
+  "run_status": "PASS",
+  "step_counts": {
+    "PASS": 1,
+    "PASS_WITH_WAIVERS": 0,
+    "FAIL": 0,
+    "NOT_MEASURED": 1,
+    "NOT_APPLICABLE": 1
+  },
+  "steps": [
+    {
+      "id": "1",
+      "name": "public synthetic reporting step 1",
+      "stage": "stage1",
+      "status": "PASS",
+      "reason_class": "",
+      "declared_by": "",
+      "attribution": "",
+      "disclosures": [],
+      "partial_vacuity_disclosed": false,
+      "excluded_from_verdict": ""
+    },
+    {
+      "id": "2",
+      "name": "public synthetic reporting step 2",
+      "stage": "stage1",
+      "status": "NOT_APPLICABLE",
+      "reason_class": "",
+      "declared_by": "",
+      "attribution": "",
+      "disclosures": [],
+      "partial_vacuity_disclosed": false,
+      "excluded_from_verdict": "marker already in inapplicable bucket"
+    },
+    {
+      "id": "6",
+      "name": "public synthetic reporting step 6",
+      "stage": "stage1",
+      "status": "NOT_MEASURED",
+      "reason_class": "",
+      "declared_by": "",
+      "attribution": "",
+      "disclosures": [],
+      "partial_vacuity_disclosed": false,
+      "excluded_from_verdict": "explicit public observation unavailable"
+    }
+  ],
+  "not_measured_excluded": [
+    {
+      "step_id": "6",
+      "step_name": "public synthetic reporting step 6",
+      "reason_class": "",
+      "reason": "explicit public observation unavailable"
+    }
+  ]
+}

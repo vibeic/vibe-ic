@@ -94,6 +94,20 @@ It **combines open-source** frameworks rather than re-inventing them: **cocotb**
   `TODO(spec-to-assertion)` stubs for you to formalise (never fabricated as a
   passing SVA).
 
+### Skill: Software-visible field profiles for reference models
+
+**Pattern**: An instruction extension or interface selection is treated as proof of every software-readable or writable field, so a reference model confuses internal saved state with the selected software interface.
+
+**When to apply**: Authoring a Tier-3 model around an implementation that exposes a documented subset of architectural or interface state.
+
+**What to do**: First record the declared scope, selected IP revision and pinned public capability sources, then distinguish software read masks, write permissions and side effects from internal state. Compare only source-supported fields while preserving transaction widths, timing, full byte commits and unknown-value checks. Check an internal saved state through its specified observable effect when software readback is not promised. An unsupported or ambiguous requirement remains `NOT_MEASURED` and cannot be silently removed from required acceptance. If a newly reviewed profile narrows an earlier oracle, preserve the old oracle and counterexample and label the new scope explicitly; never choose masks or goldens from DUT traces. Retain positive, fault-specific negative and byte-identical reverse controls.
+
+**Worked pattern** (anonymized): An interrupt implementation may retain a saved enable internally for return behavior while exposing only the current enable through software reads. Test the guaranteed read field and the specified return effect independently; do not invent read or write access to the saved field. A second eventual interrupt alone does not prove that pending state survived masking: use a discriminating countercontrol or keep that property unmeasured.
+
+**Why this is GENERAL**: The same distinction applies to processor status fields, peripheral register views and protocol capability subsets. Instruction or interface membership, internal state and software access are separate claims; actual native/JUnit evidence remains scoped to the tested fields and effects.
+
+_Captured by benchmark-enhancement-capture 2026-10-15._
+
 ## Optional reset-retention byte stimulus
 
 When a retention test needs a designer-chosen memory stimulus, declare

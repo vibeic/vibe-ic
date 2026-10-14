@@ -1,0 +1,55 @@
+{
+  "scope": "Public comment6175438704 and self-authored neutral source-role controls, not owner capture.",
+  "cases": {
+    "admin-and-history": {
+      "prompt": "This request is a benchmark IC run; no operator submission template or purchased slot was supplied in the request or its design inputs.\nHistorical description: production-ready.\n```verilog\nmodule neutral #(parameter size=8)(input clk, input rst, input [size-1:0] x, input y, output p);\nendmodule\n```\nExercise seven consecutive arithmetic operations using the declared clocked-reset rearm; check each product result.\n",
+      "handshake": false,
+      "consecutive": true
+    },
+    "admin-and-startup": {
+      "prompt": "This request is a benchmark IC run; no operator submission template or purchased slot was supplied in the request or its design inputs.\n```verilog\nmodule neutral #(parameter size=8)(input clk, input rst, input [size-1:0] x, input y, output p);\nendmodule\n```\nThe core is ready to compute after reset release.\nExercise seven consecutive arithmetic operations using the declared clocked-reset rearm; check each product result.\n",
+      "handshake": false,
+      "consecutive": true
+    },
+    "all-public-roles": {
+      "prompt": "This request is a benchmark IC run; no operator submission template or purchased slot was supplied in the request or its design inputs.\nHistorical description: production-ready.\n```verilog\nmodule neutral #(parameter size=8)(input clk, input rst,\ninput [size-1:0] x, input y, output p);\nendmodule\n```\nThe core is ready to compute after reset release.\nExercise seven consecutive arithmetic operations using the declared clocked-reset rearm; check each product result.\n無 SPI / I2C / UART / Wishbone / APB / AXI bus\n",
+      "handshake": false,
+      "consecutive": true
+    },
+    "metadata-without-interface": {
+      "prompt": "This request is a benchmark IC run; no operator submission template or purchased slot was supplied in the request or its design inputs.\nHistorical description: production-ready.\nThe project is ready to compute after setup.\n",
+      "handshake": false,
+      "consecutive": false
+    },
+    "consecutive-arithmetic-only": {
+      "prompt": "```verilog\nmodule neutral #(parameter size=8)(input clk, input rst, input [size-1:0] x, input y, output p);\nendmodule\n```\nExercise seven consecutive arithmetic operations using the declared clocked-reset rearm; check each product result.\n",
+      "handshake": false,
+      "consecutive": true
+    },
+    "request-ready-without-other-controls": {
+      "prompt": "```verilog\nmodule neutral(input clk,input rst,input request,output ready); endmodule\n```\nThere are no start or done ports. Assert request again when ready completes the previous transaction.\n",
+      "handshake": true,
+      "consecutive": false
+    },
+    "request-ready-across-documents": {
+      "prompt": "# Document one\n- Input: req (1 bit)\n# Document two\n- Output: ready (1 bit)\nThere are no start or done ports. A request accepted on req completes with ready.\n",
+      "handshake": true,
+      "consecutive": false
+    },
+    "start-done-with-admin-and-no-buses": {
+      "prompt": "This request is a benchmark IC run; no operator submission template or purchased slot was supplied in the request or its design inputs.\nHistorical description: production-ready.\n```verilog\nmodule neutral(input clk,input rst,input start,output done); endmodule\n```\nAssert start for the next operation on the cycle done signals completion.\n無 SPI / I2C / UART / Wishbone / APB / AXI bus\n",
+      "handshake": true,
+      "consecutive": false
+    },
+    "explicit-protocol-without-port-header": {
+      "prompt": "The valid/done handshake accepts another transaction immediately after completion.\n",
+      "handshake": true,
+      "consecutive": false
+    },
+    "explicitly-no-consecutive-arithmetic": {
+      "prompt": "# Public arithmetic contract\nPorts: input clk; input rst; input [7:0] x; input [7:0] y; output [7:0] p.\nCompute (x*y) mod 2^8. No start, valid, ready, or done ports exist.\nNo consecutive arithmetic operations are required; only one multiplication is performed.\n",
+      "handshake": false,
+      "consecutive": false
+    }
+  }
+}

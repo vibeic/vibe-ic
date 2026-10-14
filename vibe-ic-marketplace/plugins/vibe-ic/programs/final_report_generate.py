@@ -1280,7 +1280,8 @@ def _counts_snapshot(
     """#461 / #1969: consume counts and disclosures from ONE audit snapshot.
 
     `executed_pass` / `executed_total` match the audit summary line's
-    "X/Y executed PASS" definition (PASS over total − waived − skipped),
+    "X/Y executed PASS" definition (PASS over total − waived − skipped
+    − named NOT_MEASURED exclusions),
     so the headline audit block, the prose bullets, and the resource log
     never disagree. `pass_only` is the strict PASS bucket retained for
     the per-verdict roll-up table. chip-AGNOSTIC: pure arithmetic on
@@ -1347,7 +1348,16 @@ def _counts_snapshot(
              & {str(d) for d in (row.get("disclosures") or [])})
     ) if pass_only else 0
     executed_pass = pass_only - vacuity_disclosed
-    executed_total = total_steps - waived - skipped
+    # The checker excludes only named NOT_MEASURED rows from this denominator.
+    # Consume that same current snapshot fact; a marker on FAIL or an already
+    # inapplicable row cannot discount the requirement a second time.
+    not_measured_excluded = sum(
+        1 for row in (audit_rows if isinstance(audit_rows, list) else [])
+        if isinstance(row, dict)
+        and row.get("status") == _T.Verdict.NOT_MEASURED.value
+        and row.get("excluded_from_verdict")
+    )
+    executed_total = total_steps - waived - skipped - not_measured_excluded
     if flow is not None and verdicts is not None:
         skipped_manufacturing, skipped_midflow = _split_skipped_by_stage(flow, verdicts)
     else:

@@ -37,10 +37,13 @@ from typing import Any, Callable, Optional
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _atomic_artefact import write_json  # noqa: E402
 from librelane_contract import (Refusal, _load, digest, emit_config,  # noqa: E402
-                                resolve_step_config, run_chain)
+                                config_file_hashes, derive_step_config,
+                                resolve_step_config, run_chain,
+                                validate_step_receipt)
 import instrument_calibration  # noqa: E402
 
 STEPS = ("OpenROAD.CheckSDCFiles", "OpenROAD.STAPrePNR")
+_TIME_UNIT_REPORT = "vibeic_time_unit.rpt"
 
 #: OpenSTA `link_design` on a master absent from every liberty (Warning 198).
 _BLACK_BOX_RE = re.compile(
@@ -203,11 +206,86 @@ def run_prelayout(project: Path, image: str, pdk: str, top: str, netlist: Path,
         resolved[step_id] = resolve_step_config(
             project, image, raw, root / f"{step_id}.resolved.json",
             mounts=mounts, pdk_root=pdk_root)
+    resolved[STEPS[-1]] = _capture_time_unit_config(resolved[STEPS[-1]], mounts or [])
     state = root / "state_in.json"
     write_json(state, {"nl": str(netlist.resolve())})
     folders = run_chain(project, image, [(s, resolved[s], state) for s in STEPS],
                         mounts=mounts, pdk_root=pdk_root, namespace=f"prelayout/{arm}")
     return folders[-1]
+
+
+def _capture_time_unit_config(config: Path, mounts: list) -> Path:
+    """Ask the native interpreter after its existing per-corner hook ran.
+
+    LibreLane may set command units independently of the Liberty's units.
+    Its ordinary report collector and receipt writer retain this report.
+    """
+    doc = _load(config)
+    previous = doc.get("STA_EXTRA_CORNER_TCL_FILE")
+    hook = config.with_name(config.stem + ".time_units.tcl")
+    lines = ["# Preserve the declared hook before measuring command units."]
+    if previous:
+        bound = config_file_hashes(doc, mounts).get(str(previous))
+        # A changed mounted hook must also change this config-file digest,
+        # so run_chain cannot reuse the old native execution.
+        lines.append(f"# Original hook SHA256: {bound or 'image-owned'}")
+        quoted = str(previous).replace("\\", "\\\\").replace('"', '\\"')
+        for token in ("$", "[", "]"):
+            quoted = quoted.replace(token, "\\" + token)
+        lines.append(f'source "{quoted}"')
+    lines.extend([
+        f'puts "%OL_CREATE_REPORT {_TIME_UNIT_REPORT}"',
+        'set _vibeic_time_unit ""',
+        'catch {set _vibeic_time_unit "[sta::unit_scale_abbreviation time][sta::unit_suffix time]"}',
+        'if {$_vibeic_time_unit ne ""} {',
+        '    puts "STA_TIME_UNIT: $_vibeic_time_unit"',
+        '} else {',
+        '    puts "STA_TIME_UNIT_NOT_STATED: native interpreter could not establish command time units"',
+        '}',
+        'puts "%OL_END_REPORT"',
+    ])
+    hook.write_text("\n".join(lines) + "\n")
+    return derive_step_config(config, config.with_name(config.stem + ".native_units.json"), {
+        "STA_EXTRA_CORNER_TCL_FILE": (str(hook),
+            "retain native command time units after the original per-corner hook")})
+
+
+def _native_time_unit(folder: Path, corner: Path, liberty: list) -> Optional[str]:
+    """Consume the receipt-bound native unit and its current input context."""
+    report = corner / _TIME_UNIT_REPORT
+    if not report.is_file():
+        return None  # Retained producers predating native unit capture.
+    receipt = validate_step_receipt(folder, "OpenROAD.STAPrePNR")
+    if receipt["sha256"].get(str(report.relative_to(folder))) != digest(report):
+        raise Refusal("LL_PRELAYOUT_TIME_UNIT_UNBOUND", str(report))
+    from eda_report_audit import _STA_TIME_UNIT_RE, _STA_TIME_TO_NS
+    units = {m.group("unit").lower() for m in _STA_TIME_UNIT_RE.finditer(report.read_text())}
+    if len(units) != 1 or not units <= _STA_TIME_TO_NS.keys():
+        raise Refusal("LL_PRELAYOUT_TIME_UNIT_UNESTABLISHED", str(report))
+    context = _load(folder / "pdk_root.json")
+    mounts = sorted(context.get("mounts_under_it") or [],
+                    key=lambda row: len(str(row[1])), reverse=True)
+    inputs = receipt["input"].get("config_files") or {}
+    if not liberty:
+        raise Refusal("LL_PRELAYOUT_LIBERTY_UNBOUND", str(corner))
+    for name in liberty:
+        path = Path(name)
+        mapped = next((Path(host) / path.relative_to(guest)
+                       for host, guest in mounts if path.is_relative_to(guest)), None)
+        expected = inputs.get(str(name))
+        if mapped is not None or expected is not None:
+            source = mapped if mapped is not None else path
+            if not isinstance(expected, str) or not re.fullmatch(r"[0-9a-f]{64}", expected):
+                raise Refusal("LL_PRELAYOUT_LIBERTY_UNBOUND", str(name))
+            if not source.is_file():
+                raise Refusal("LL_PRELAYOUT_LIBERTY_MISSING", str(source))
+            if digest(source) != expected:
+                raise Refusal("LL_PRELAYOUT_LIBERTY_CHANGED", str(source))
+        elif not re.fullmatch(r".+@sha256:[0-9a-f]{64}", str(receipt["input"].get("image", ""))):
+            raise Refusal("LL_PRELAYOUT_LIBERTY_UNBOUND", str(name))
+        # An unmounted image-internal library is bound by the exact image
+        # digest and the native execution, not a guessed host path.
+    return next(iter(units))
 
 
 def _corners(folder: Path) -> list[Path]:
@@ -378,6 +456,14 @@ def compose_corner_reports(folder: Path, out_dir: Path,
         liberty = [lib for pattern, group in libs.items()
                    if fnmatch.fnmatch(corner.name, pattern)
                    for lib in (group if isinstance(group, list) else [group])]
+        unit = _native_time_unit(folder, corner, liberty)
+        if unit:
+            from eda_report_audit import _STA_TIME_UNIT_RE
+            other = {m.group("unit").lower() for part in parts
+                     for m in _STA_TIME_UNIT_RE.finditer(part)}
+            if other - {unit}:
+                raise Refusal("LL_PRELAYOUT_TIME_UNIT_CONFLICT", str(corner))
+            summary.append(f"STA_TIME_UNIT: {unit}")
         if len(liberty) == 1:
             summary.append(f"STA_BASIS_LIBERTY: {liberty[0]}")
         if state.get("nl"):

@@ -67,3 +67,25 @@ def test_plain_combinational_prompt_does_not_fire():
 if __name__ == "__main__":
     import pytest
     raise SystemExit(pytest.main([__file__, "-q"]))
+
+
+import json
+import pytest
+
+_PUBLIC_ROLE_CASES = json.loads((Path(__file__).parent / "fixtures" /
+    "issue3088_advisory_roles.json").read_text())["cases"]
+
+
+@pytest.mark.parametrize("label", _PUBLIC_ROLE_CASES)
+def test_public_3088_advisory_roles(label):
+    case = _PUBLIC_ROLE_CASES[label]
+    actual = detect(case["prompt"])
+    assert ("handshake_fsm" in actual["shapes"]) is case["handshake"], actual
+    assert ("consecutive_arithmetic" in actual["shapes"]) is case["consecutive"], actual
+    if case["handshake"]:
+        assert "BACK-TO-BACK" in actual["requirement"], actual
+    else:
+        assert "start/valid" not in (actual["requirement"] or ""), actual
+        assert "ready/done" not in (actual["requirement"] or ""), actual
+    if case["consecutive"]:
+        assert "arithmetic result" in actual["requirement"], actual

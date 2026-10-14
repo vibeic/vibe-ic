@@ -25849,6 +25849,24 @@ def _audit_after_declared_producers(project: Path, skip_analog: bool) -> StepRes
               f"still be authored by the audit and refused as its own "
               f"evidence", file=sys.stderr)
     currentness = _finish_selected_interface_currentness(project)
+    # Step14 declares reports only: the all-step sweep cannot infer its first
+    # production from another declared output.  A real Default synthesis
+    # handoff supplies the missing applicability fact.  Select only this step
+    # through the existing producer API; its unchanged consumer still decides
+    # whether the native input and the resulting reports are acceptable.
+    import execution_policy
+    if (execution_policy.request()['mode'] == 'default'
+            and (_pl.synth_dir(project) / 'netlist.v').is_file()):
+        try:
+            import flow_declared_producer_run as declared
+            handoff_producers = declared.run_for_step(
+                project, '14', timeout=_pl.audit_timeout_s(project))
+            print('[phase2] Step14 handoff producers: '
+                  f"{handoff_producers['verdict']}; "
+                  f"{handoff_producers['executed']} executed")
+        except Exception as exc:  # The audit retains missing/failed evidence.
+            print(f'[WARN] Step14 handoff producers did not complete: {exc}',
+                  file=sys.stderr)
     # The producer sweep may create or replace attested files. The audit must
     # read a summary of that resulting tree, even when the sweep exits nonzero.
     _pl.emit_final_summary(project, PROGRAMS_DIR)

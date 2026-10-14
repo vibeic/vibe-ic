@@ -1064,8 +1064,20 @@ def functional_full_stack_verdict(project: Path):
             continue
         got = _fsf.score_transcript(str(c.get("name")), c.get("run_rc"),
                                     log.read_text(errors="replace"))
-        if (_fsf._family_of(text) == 'declared_arithmetic_scenario'
+        arithmetic_contract = _fsf._family_of(text) == 'declared_arithmetic_scenario'
+        if (_fsf._family_of(text) == 'declared_function_golden'
                 and got['state'] == _fsf.PASSED):
+            # Current INPUT owns random framing even when an older TB carries
+            # the retired search-family marker. A count-correct old receipt
+            # must not evade the current fixed-window/source-bound contract.
+            request = {}
+            plan = _fsf.arithmetic_plan_for_top(
+                project, declared_rows[str(c['name'])], _tbg._detect_ic_class(project),
+                required, rec.get('models') or [], request)
+            arithmetic_contract = bool(
+                (plan is not None and plan.get('scenario') == 'random_transactions')
+                or 'random_transactions' in request.get('scenario_families', []))
+        if arithmetic_contract and got['state'] == _fsf.PASSED:
             measured, why = _fsf.arithmetic_case_evidence(
                 project, declared_rows[str(c['name'])], _tbg._detect_ic_class(project),
                 required, rec.get('models') or [], c, rec.get('sources') or [])
@@ -1321,7 +1333,7 @@ def main():
                          "currently has no effect (gate is already strict)")
     args = ap.parse_args()
 
-    proj = Path(args.project_dir)
+    proj = Path(args.project_dir).resolve()
     if not proj.exists():
         print(f"ERROR: project_dir {proj} not found", file=sys.stderr)
         return 2

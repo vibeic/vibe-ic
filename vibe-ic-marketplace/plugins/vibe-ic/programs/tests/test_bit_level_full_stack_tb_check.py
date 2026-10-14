@@ -488,3 +488,81 @@ def test_cli_nonexistent_project_returns_2(tmp_path):
     finally:
         sys.argv = old
     assert rc == 2
+
+
+@pytest.mark.parametrize('change', [
+    'current', 'transcript_changed', 'plan_changed', 'source_changed',
+    'transcript_missing', 'population_short',
+])
+def test_project_path_spelling_keeps_native_receipt_verdict(tmp_path, change):
+    """Normal CLI path spelling cannot change current four-case acceptance."""
+    import importlib.util
+    import subprocess
+
+    spec = importlib.util.spec_from_file_location(
+        '_public_native_path_inputs',
+        Path(__file__).with_name('test_fullstacktb_functional_population.py'))
+    helpers = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(helpers)
+    project = tmp_path / 'public_input'
+    cases = helpers._timed_input(project, 'wrapped8_delayed')
+    cases.append({'name': 'second_operand_boundary', 'kind': 'functional_vector',
+                  'expected': '100% PASS',
+                  'coverage_scope': 'Operand boundaries: zero, one, MAX; all Cartesian combinations'})
+    docs = project / 'phase1/generated_docs'
+    (docs / 'L10_TEST_CASES.json').write_text(json.dumps({'test_cases': cases}))
+    (docs / 'L3_CMD_PROTOCOL.json').write_text(json.dumps(
+        {'no_opcodes_in_input': True, 'opcodes': []}))
+    produced, rc, measured = helpers._timed_native(project)
+    assert produced['verdict'] == 'PASS' and rc == 0, (produced, measured)
+    assert produced['counts']['executed'] == produced['counts']['passed'] == 4
+    entry = produced['cases'][0]
+
+    if change == 'transcript_changed':
+        log = project / entry['run_log']
+        (tmp_path / 'original-transcript.bin').write_bytes(log.read_bytes())
+        log.write_text(log.read_text() + '\nchanged public transcript bytes\n')
+    elif change == 'plan_changed':
+        declaration = project / 'plugin_output/declaration.json'
+        (tmp_path / 'original-declaration.json').write_bytes(declaration.read_bytes())
+        contract = json.loads(declaration.read_text())
+        contract['latency_cycles'] += 1
+        declaration.write_text(json.dumps(contract))
+    elif change == 'source_changed':
+        rtl = project / produced['sources'][0]['path']
+        (tmp_path / 'original-source.v').write_bytes(rtl.read_bytes())
+        rtl.write_text(rtl.read_text() + '\n// changed compiled public source\n')
+    elif change == 'transcript_missing':
+        log = project / entry['run_log']
+        log.rename(log.with_suffix('.retained-before-missing'))
+    elif change == 'population_short':
+        log = project / entry['run_log']
+        (tmp_path / 'original-transcript.bin').write_bytes(log.read_bytes())
+        log.write_text('\n'.join(line for line in log.read_text().splitlines()
+                                 if not line.startswith('ARITH_SCENARIO_DONE ')) + '\n')
+        entry['run_log_sha256'] = helpers._fsf().sha256_file(log)
+        helpers._fsf().record_path(project).write_text(json.dumps(produced))
+
+    expected_rc = 0 if change == 'current' else 2
+    expected_verdict = 'PASS' if change == 'current' else 'NOT_MEASURED'
+    before = {str(p.relative_to(project)): helpers._fsf().sha256_file(p)
+              for p in project.rglob('*') if p.is_file()}
+    reports = []
+    for spelling, argument in [('absolute', str(project.resolve())), ('relative', '.')]:
+        destination = tmp_path / (spelling + '-consumer.json')
+        argv = [sys.executable, str(SCRIPT), argument, '--json', str(destination)]
+        result = subprocess.run(argv, cwd=project, text=True, capture_output=True)
+        (tmp_path / (spelling + '-invocation.json')).write_text(json.dumps(
+            {'argv': argv, 'cwd': str(project), 'exit_code': result.returncode,
+             'stdout': result.stdout, 'stderr': result.stderr}, indent=2))
+        actual = json.loads(destination.read_text())
+        reports.append(actual)
+        assert result.returncode == expected_rc, actual
+        assert actual['verdict'] == expected_verdict, actual
+        if change == 'current':
+            assert actual['counts']['executed'] == 4, actual
+            assert actual['counts']['passed'] == 4, actual
+    assert reports[0] == reports[1]
+    after = {str(p.relative_to(project)): helpers._fsf().sha256_file(p)
+             for p in project.rglob('*') if p.is_file()}
+    assert before == after

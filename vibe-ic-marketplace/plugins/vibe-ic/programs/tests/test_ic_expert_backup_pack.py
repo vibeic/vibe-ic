@@ -133,3 +133,51 @@ def test_phase1_ai_subtrack_handoff_keeps_expectation_authoring_scope(tmp_path):
     assert set(advice['named_signals']) == {
         'ingress_valid', 'egress_ready', 'stage_cursor', 'beat_remaining'}
     assert (dest / h['read_design_input_from']).read_text() == MIXED_ROLES
+
+
+import subprocess
+import pytest
+
+_PUBLIC_ROLE_CASES = json.loads((Path(__file__).parent / "fixtures" /
+    "issue3088_advisory_roles.json").read_text())["cases"]
+
+
+@pytest.mark.parametrize("surface", ["assemble-phase1", "normal-cli"])
+@pytest.mark.parametrize("label", _PUBLIC_ROLE_CASES)
+def test_public_3088_advisory_reaches_normal_producer(tmp_path, label, surface):
+    case = _PUBLIC_ROLE_CASES[label]
+    prompt = case["prompt"]
+    dest = tmp_path / "pack"
+    if surface == "assemble-phase1":
+        actual = P.assemble(prompt, None, None, [], [], dest,
+                            output_target="l_doc_expectations.json")
+    else:
+        source = tmp_path / "public-prompt.txt"
+        source.write_text(prompt)
+        argv = [sys.executable, str(_PROGRAMS / "ic_expert_backup_pack.py"),
+                "--prompt", "@" + str(source), "--out", str(dest)]
+        run = subprocess.run(argv, capture_output=True, text=True)
+        (tmp_path / "CLI_RECEIPT.json").write_text(json.dumps({
+            "argv": argv, "exit_code": run.returncode,
+            "stdout": run.stdout, "stderr": run.stderr,
+        }, indent=2) + "\n")
+        assert run.returncode == 0, (run.stdout, run.stderr)
+        actual = json.loads(run.stdout)
+    saved = json.loads((dest / "ic_expert_agent_handoff.json").read_text())
+    assert saved == actual
+    if surface == "assemble-phase1":
+        assert (dest / saved["read_design_input_from"]).read_text() == prompt
+    else:
+        assert source.read_text() == prompt
+        assert saved["output_target"] == "rtl.sv"
+    advice = [r for r in saved["spec_requirements"] if r["kind"] == "self_tb_coverage"]
+    shapes = [shape for row in advice for shape in row["shapes"]]
+    text = " ".join(row["requirement"] for row in advice)
+    assert ("handshake_fsm" in shapes) is case["handshake"], advice
+    assert ("consecutive_arithmetic" in shapes) is case["consecutive"], advice
+    if case["handshake"]:
+        assert "BACK-TO-BACK" in text, advice
+    else:
+        assert "start/valid" not in text and "ready/done" not in text, advice
+    if case["consecutive"]:
+        assert "arithmetic result" in text, advice

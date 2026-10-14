@@ -371,3 +371,99 @@ def test_all_pass_companion_keeps_truthful_executed_counts(monkeypatch, tmp_path
     _assert_public_summary(md, audit)
     _assert_executed_views(md, 2, 2)
     assert "Engineering Phase 2+3 complete." in md
+
+
+# Additional public #1969 denominator controls. Existing tests above are intact.
+def _render_exclusion_input(monkeypatch, tmp_path: Path, filename: str):
+    audit_bytes = (PUBLIC_INPUTS / filename).read_bytes()
+    audit = json.loads(audit_bytes)
+    project = tmp_path / "excluded_public_project"
+    audit_path = project / "reports" / "audit" / "phase23_completion_audit.json"
+    flow = tmp_path / "excluded_public_flow.yaml"
+    _write_flow(flow, audit)
+    monkeypatch.setattr(F, "FLOW_YAML", flow)
+    counts = audit["step_counts"]
+    # The existing producer serializes these named NOT_MEASURED exclusions.
+    # Independently build its known headline, then exercise production loading,
+    # count interpretation, reconciliation and every rendered ratio normally.
+    excluded = [row for row in audit["steps"]
+                if row["status"] == "NOT_MEASURED"
+                and row.get("excluded_from_verdict")]
+    assert {str(row["id"]) for row in excluded} == {
+        str(row["step_id"]) for row in audit["not_measured_excluded"]}
+    numerator = counts["PASS"] - sum(
+        row["status"] == "PASS" and bool(
+            {"vacuity", "partial_vacuity"} & set(row["disclosures"]))
+        for row in audit["steps"])
+    denominator = (sum(counts.values()) - counts["PASS_WITH_WAIVERS"]
+                   - counts["NOT_APPLICABLE"] - len(excluded))
+    stdout = "\n".join([
+        "=== Vibe-IC public synthetic compliance ===",
+        "Project: /synthetic/excluded_public_project",
+        "Flow def: /synthetic/excluded_public_flow.yaml",
+        f"Steps: {sum(counts.values())} total ({numerator}/{denominator} executed PASS, "
+        f"{counts['PASS_WITH_WAIVERS']} DEFERRED via waiver)",
+        "  " + "  ".join(f"{key}={value}" for key, value in counts.items()),
+        f"Overall: {audit['verdict']}  (strict=True)",
+    ]) + "\n"
+
+    def _fake_run_audit(*_args, **_kwargs):
+        audit_path.parent.mkdir(parents=True)
+        audit_path.write_bytes(audit_bytes)
+        (project / "audit.stdout").write_text(stdout, encoding="utf-8")
+        return stdout, audit["verdict"]
+
+    monkeypatch.setattr(F, "_run_audit", _fake_run_audit)
+    md = F._render(project, run_audit=True)
+    (project / "reports" / "final_summary.md").write_text(md, encoding="utf-8")
+    assert audit_path.read_bytes() == audit_bytes
+    _assert_public_summary(md, audit)
+    return md, audit
+
+
+def test_two_excluded_nm_rows_share_the_producers_denominator(monkeypatch, tmp_path):
+    md, audit = _render_exclusion_input(
+        monkeypatch, tmp_path, "two_excluded_nm_70_rows.audit.json")
+    assert len(audit["steps"]) == 70
+    assert audit["step_counts"] == {"PASS": 12, "PASS_WITH_WAIVERS": 0,
+        "FAIL": 3, "NOT_MEASURED": 31, "NOT_APPLICABLE": 24}
+    assert {str(row["step_id"]) for row in audit["not_measured_excluded"]} == {"6", "39"}
+    _assert_executed_views(md, 10, 44)
+    assert "**FAIL=3**" in md
+    assert "INCOMPLETE — fix FAILs before claiming." in md
+    assert "every canonical step that MEASURED something passed" not in md
+
+
+def test_partial_pass_with_excluded_nm_keeps_both_qualifications(monkeypatch, tmp_path):
+    md, audit = _render_exclusion_input(
+        monkeypatch, tmp_path, "partial_with_two_excluded_nm.audit.json")
+    assert audit["steps"][0]["disclosures"] == ["partial_vacuity"]
+    _assert_executed_views(md, 0, 2)
+    assert "**FAIL=1**" in md
+    assert "Engineering Phase 2+3 complete." not in md
+
+
+def test_unexcluded_nm_rows_remain_required_and_unmeasured(monkeypatch, tmp_path):
+    md, audit = _render_exclusion_input(
+        monkeypatch, tmp_path, "only_nm_with_two_excluded.audit.json")
+    assert audit["step_counts"]["NOT_MEASURED"] == 4
+    _assert_executed_views(md, 0, 2)
+    assert "Engineering Phase 2+3 complete." not in md
+
+
+def test_failed_row_marker_cannot_remove_a_measured_failure(monkeypatch, tmp_path):
+    md, audit = _render_exclusion_input(
+        monkeypatch, tmp_path, "failed_row_exclusion_marker_remains_blocking.audit.json")
+    assert audit["steps"][1]["status"] == "FAIL"
+    assert audit["steps"][1]["excluded_from_verdict"]
+    _assert_executed_views(md, 1, 2)
+    assert "**FAIL=1**" in md
+    assert "Engineering Phase 2+3 complete." not in md
+
+
+def test_inapplicable_row_marker_is_not_subtracted_twice(monkeypatch, tmp_path):
+    md, audit = _render_exclusion_input(
+        monkeypatch, tmp_path, "na_row_exclusion_marker_not_double_subtracted.audit.json")
+    assert audit["steps"][1]["status"] == "NOT_APPLICABLE"
+    assert audit["steps"][1]["excluded_from_verdict"]
+    _assert_executed_views(md, 1, 1)
