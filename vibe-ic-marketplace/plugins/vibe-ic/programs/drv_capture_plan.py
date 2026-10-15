@@ -734,6 +734,57 @@ def _native_spef(project: Path, spef: Path, rc: str) -> Path:
     return source
 
 
+def _capture_top(project: Path, state_path: Path, state: dict, netlist: Path,
+                 netlist_sha: str, paired_top: str | None, image: str) -> str:
+    """Use the measured state's design name, never its netlist filename."""
+    from module_port_audit import module_regions
+    from librelane_contract import _def_design_name
+    issues: list[str] = []
+    names = [name for name, *_ in module_regions(netlist.read_text(), issues)]
+    if _sha(netlist) != netlist_sha:
+        raise ValueError('DRV capture top: selected netlist changed during discovery')
+    if issues or not names or len(names) != len(set(names)):
+        raise ValueError(f'DRV capture top: netlist module discovery is ambiguous: {issues}')
+    folder = state_path.parent
+    receipt_path, config_path = folder / 'vibeic_receipt.json', folder / 'config.json'
+    native_top = None
+    if receipt_path.exists() or config_path.exists():
+        try:
+            receipt = json.loads(receipt_path.read_text())
+            config = json.loads(config_path.read_text())
+            source, bound = receipt['input'], receipt['sha256']
+            if source.get('step') != 'OpenROAD.STAPostPNR':
+                raise ValueError('receipt names another producer')
+            for path in (state_path, config_path):
+                if bound.get(path.name) != _sha(path):
+                    raise ValueError(f'native state/config bytes changed: {path.name}')
+            recorded = _run_path(project, state['nl']).resolve()
+            hashes = [digest for path, digest in source['state_files'].items()
+                      if _run_path(project, path).resolve() == recorded]
+            if hashes != [netlist_sha]:
+                raise ValueError('native state netlist path/hash is unbound or changed')
+            if source.get('image') is not None and source['image'] != image:
+                raise ValueError('native image differs from run provenance')
+            native_top = config.get('DESIGN_NAME')
+            if not isinstance(native_top, str) or not native_top.strip():
+                raise ValueError('native DESIGN_NAME is absent')
+        except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+            raise ValueError(f'DRV capture top: native authority invalid: {exc}') from exc
+    if paired_top is not None and native_top is not None and paired_top != native_top:
+        raise ValueError('DRV capture top: paired decks disagree with native DESIGN_NAME')
+    top = native_top if native_top is not None else paired_top
+    if top is None:
+        if len(names) != 1:
+            raise ValueError('DRV capture top: legacy netlist has no unique module authority')
+        top = names[0]
+    if top not in names:
+        raise ValueError(f'DRV capture top: selected design {top!r} is absent from netlist')
+    design = _def_design_name(_run_path(project, state['def']))
+    if design is not None and design != top:
+        raise ValueError('DRV capture top: selected design disagrees with final STA DEF')
+    return top
+
+
 def build(project: Path, *, final_state: dict | None = None) -> dict:
     project = project.resolve()
     if (final_state is None and
@@ -759,9 +810,9 @@ def build(project: Path, *, final_state: dict | None = None) -> dict:
     routed_identity = _current_routed_identity(project, recorded_netlist)
     if routed_identity is None:
         netlist = recorded_netlist
-        top = netlist.name.removesuffix(".nl.v")
+        paired_top = None
     else:
-        netlist, top = routed_identity
+        netlist, paired_top = routed_identity
     state_def = _ref(_run_path(project, state["def"]))
     current_step23 = final_state is not None and final_state.get('capture_step') == '23'
     if final_state is None or current_step23:
@@ -836,6 +887,8 @@ def build(project: Path, *, final_state: dict | None = None) -> dict:
     derived_signoff_sdc = _ref(signoff_sdc)
     ocv_recipe = (_native_sta_ocv(state_path, actual_scenes) if current_step23
                   else _ocv_recipe([signoff_sdc]))
+    top = _capture_top(project, state_path, state, netlist,
+                       artifacts['sta_netlist']['sha256'], paired_top, image)
     sources = {"pdk_config": _ref(pdk_config),
                "signoff_sdc": _ref(raw_signoff_sdc),
                "signoff_sdc_derived": derived_signoff_sdc}

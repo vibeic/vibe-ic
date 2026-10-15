@@ -2661,6 +2661,7 @@ def _current_sta_ocv_receipts(state_path):
     corners = list(state['lib'])
     extra = _file(folder, 'extra_corner.tcl', librelane_signoff._DERATE_TCL)
     config = _file(folder, 'config.json', json.dumps({
+        'DESIGN_NAME': 'top',
         'STA_CORNERS': corners, 'TIME_DERATING_CONSTRAINT': 5,
         'STA_EXTRA_CORNER_TCL_FILE': extra['path']}))
     outputs = {'state_out.json': drv._sha(state_path), 'config.json': config['sha256']}
@@ -2670,7 +2671,9 @@ def _current_sta_ocv_receipts(state_path):
             'source=TIME_DERATING_CONSTRAINT=5\n')
         outputs[corner + '/' + librelane_signoff.CORNER_REPORT] = ref['sha256']
     _file(folder, 'vibeic_receipt.json', json.dumps({
-        'input': {'step': 'OpenROAD.STAPostPNR', 'config_files': {extra['path']: extra['sha256']}},
+        'input': {'step': 'OpenROAD.STAPostPNR',
+                  'state_files': {state['nl']: drv._sha(Path(state['nl']))},
+                  'config_files': {extra['path']: extra['sha256']}},
         'sha256': outputs}))
     return Path(extra['path'])
 
@@ -2920,3 +2923,176 @@ def test_current_step23_repair_scope_reaches_judge(tmp_path, monkeypatch, case):
     assert (required in result['failures']) is is_adopted
     if is_adopted:
         assert result['verdict'] == 'FAIL'
+
+
+def _native_top_capture_fixture(tmp_path, monkeypatch, filename='arbitrary_route.v',
+                                top='physical_shell'):
+    """Neutral final STA materials; the filename is not module authority."""
+    project, adopted = _librelane_final_sta(tmp_path, monkeypatch)
+    selection = _step32_report(project, adopted)
+    state_path = Path(selection['final']['sta_state'])
+    state = json.loads(state_path.read_text())
+    netlist = Path(state['nl']).with_name(filename)
+    netlist.write_text(f'module {top}; endmodule\n')
+    state['nl'] = str(netlist)
+    state_path.write_text(json.dumps(state))
+    Path(state['def']).write_text(f'VERSION 5.8 ;\nDESIGN {top} ;\nEND DESIGN\n')
+    config = _file(state_path.parent, 'config.json', json.dumps({'DESIGN_NAME': top}))
+    _file(state_path.parent, 'vibeic_receipt.json', json.dumps({
+        'input': {'step': 'OpenROAD.STAPostPNR', 'image': 'synthetic:test',
+                  'state_files': {state['nl']: drv._sha(netlist),
+                                  state['def']: drv._sha(Path(state['def']))}},
+        'sha256': {'state_out.json': drv._sha(state_path),
+                   'config.json': config['sha256']}}))
+    selection['final']['sta_state_sha256'] = drv._sha(state_path)
+    return project, selection, state_path, netlist
+
+
+@pytest.mark.parametrize('filename,top', [
+    ('arbitrary_route.v', 'physical_shell'),
+    ('opaque_views.nl.v', 'mapped_core'),
+])
+def test_final_sta_top_comes_from_bound_design_not_filename(
+        tmp_path, monkeypatch, filename, top):
+    import drv_capture_plan as planner
+    import drv_signoff_capture as capture
+    project, selection, state_path, netlist = _native_top_capture_fixture(
+        tmp_path, monkeypatch, filename, top)
+    plan = planner.build(project, final_state=selection)
+    script = capture._script(plan, plan['scenes'][0], tmp_path / 'fresh-capture',
+                             control=False, max_count=100)
+    observed = {'top': plan['top'], 'netlist': plan['identity']['artifacts']['sta_netlist'],
+                'native_state': str(state_path), 'script': script,
+                'scope': 'SOURCE_CONTROL: real build and capture Tcl emitter; no OpenSTA'}
+    (tmp_path / 'top-authority.observation.json').write_text(
+        json.dumps(observed, indent=2) + '\n')
+    assert plan['top'] == top, observed
+    assert f'link_design {{{top}}}\n' in script, observed
+    assert plan['identity']['artifacts']['sta_netlist'] == {
+        'path': str(netlist.resolve()), 'sha256': drv._sha(netlist)}, observed
+
+
+@pytest.mark.parametrize('fault', [
+    'missing-config', 'missing-receipt', 'missing-name', 'nonstring-name',
+    'config-changed', 'state-changed', 'netlist-changed', 'same-bytes-other-path',
+    'wrong-producer', 'wrong-image', 'name-not-in-netlist', 'def-conflict',
+    'paired-deck-conflict',
+])
+def test_final_sta_top_refuses_unbound_or_conflicting_native_authority(
+        tmp_path, monkeypatch, fault):
+    import drv_capture_plan as planner
+    import drv_signoff_capture as capture
+    project, selection, state_path, netlist = _native_top_capture_fixture(
+        tmp_path, monkeypatch)
+    folder = state_path.parent
+    config_path, receipt_path = folder / 'config.json', folder / 'vibeic_receipt.json'
+    state = json.loads(state_path.read_text())
+    config, receipt = json.loads(config_path.read_text()), json.loads(receipt_path.read_text())
+    if fault == 'missing-config':
+        config_path.unlink()
+    elif fault == 'missing-receipt':
+        receipt_path.unlink()
+    elif fault in {'missing-name', 'nonstring-name', 'name-not-in-netlist'}:
+        if fault == 'missing-name':
+            del config['DESIGN_NAME']
+        else:
+            config['DESIGN_NAME'] = 23 if fault == 'nonstring-name' else 'absent_design'
+        config_path.write_text(json.dumps(config))
+        receipt['sha256']['config.json'] = drv._sha(config_path)
+    elif fault == 'config-changed':
+        config_path.write_text(config_path.read_text() + ' ')
+    elif fault == 'state-changed':
+        state_path.write_text(state_path.read_text() + ' ')
+        selection['final']['sta_state_sha256'] = drv._sha(state_path)
+    elif fault == 'netlist-changed':
+        netlist.write_text(netlist.read_text() + '// changed after native STA\n')
+    elif fault == 'same-bytes-other-path':
+        other = netlist.with_name('other-view.v')
+        other.write_bytes(netlist.read_bytes())
+        del receipt['input']['state_files'][state['nl']]
+        receipt['input']['state_files'][str(other)] = drv._sha(other)
+    elif fault == 'wrong-producer':
+        receipt['input']['step'] = 'OpenROAD.RCX'
+    elif fault == 'wrong-image':
+        receipt['input']['image'] = 'synthetic:other'
+    elif fault == 'def-conflict':
+        Path(state['def']).write_text('VERSION 5.8 ;\nDESIGN other_design ;\nEND DESIGN\n')
+    elif fault == 'paired-deck-conflict':
+        for kind in ('setup', 'hold'):
+            _file(project, f'phase3/stage3/sta/sta_mcorner_ocv_{kind}.tcl',
+                  f'read_verilog {{{netlist}}}\nlink_design {{other_design}}\n'
+                  f'read_sdc {state["sdc"]}\n')
+    if fault != 'missing-receipt':
+        receipt_path.write_text(json.dumps(receipt))
+    with pytest.raises(ValueError, match='DRV capture top:') as refused:
+        plan = planner.build(project, final_state=selection)
+        script = capture._script(plan, plan['scenes'][0], tmp_path / 'fresh-capture',
+                                 control=False, max_count=100)
+        observed = {'outcome': 'PLAN_AND_SCRIPT_RETURNED', 'top': plan['top'],
+                    'script': script, 'fault': fault}
+        (tmp_path / 'top-authority.observation.json').write_text(
+            json.dumps(observed, indent=2) + '\n')
+        assert observed['outcome'] == 'NAMED_TOP_AUTHORITY_REFUSAL', observed
+    (tmp_path / 'top-authority.observation.json').write_text(json.dumps({
+        'outcome': 'NAMED_TOP_AUTHORITY_REFUSAL', 'reason': str(refused.value),
+        'fault': fault}, indent=2) + '\n')
+
+
+@pytest.mark.parametrize('case', ['unique', 'comments-and-strings',
+                                   'ambiguous', 'duplicate', 'malformed', 'missing'])
+def test_legacy_final_sta_uses_only_unique_complete_module_authority(
+        tmp_path, monkeypatch, case):
+    import drv_capture_plan as planner
+    import drv_signoff_capture as capture
+    project, selection, state_path, netlist = _native_top_capture_fixture(
+        tmp_path, monkeypatch, filename='legacy_view.v')
+    (state_path.parent / 'config.json').unlink()
+    (state_path.parent / 'vibeic_receipt.json').unlink()
+    text = {
+        'unique': 'module physical_shell; endmodule\n',
+        'comments-and-strings': '// module fake; endmodule\n'
+            'module physical_shell; initial $display("module fake; endmodule"); endmodule\n',
+        'ambiguous': 'module physical_shell; endmodule\nmodule other; endmodule\n',
+        'duplicate': 'module physical_shell; endmodule\nmodule physical_shell; endmodule\n',
+        'malformed': 'module physical_shell;\n',
+        'missing': '// no module definition\n',
+    }[case]
+    netlist.write_text(text)
+    if case in {'unique', 'comments-and-strings'}:
+        plan = planner.build(project, final_state=selection)
+        script = capture._script(plan, plan['scenes'][0], tmp_path / 'fresh-capture',
+                                 control=False, max_count=100)
+        observed = {'top': plan['top'], 'script': script, 'case': case}
+        (tmp_path / 'top-authority.observation.json').write_text(
+            json.dumps(observed, indent=2) + '\n')
+        assert plan['top'] == 'physical_shell', observed
+        assert 'link_design {physical_shell}\n' in script, observed
+    else:
+        with pytest.raises(ValueError, match='DRV capture top:') as refused:
+            plan = planner.build(project, final_state=selection)
+            observed = {'outcome': 'PLAN_RETURNED', 'top': plan['top'], 'case': case}
+            (tmp_path / 'top-authority.observation.json').write_text(
+                json.dumps(observed, indent=2) + '\n')
+            assert observed['outcome'] == 'NAMED_TOP_AUTHORITY_REFUSAL', observed
+        (tmp_path / 'top-authority.observation.json').write_text(json.dumps({
+            'outcome': 'NAMED_TOP_AUTHORITY_REFUSAL', 'reason': str(refused.value),
+            'case': case}, indent=2) + '\n')
+
+
+def test_native_final_sta_top_can_select_declared_module_among_multiple(
+        tmp_path, monkeypatch):
+    import drv_capture_plan as planner
+    import drv_signoff_capture as capture
+    project, selection, state_path, netlist = _native_top_capture_fixture(tmp_path, monkeypatch)
+    netlist.write_text('module child; endmodule\nmodule physical_shell; child u(); endmodule\n')
+    receipt_path = state_path.parent / 'vibeic_receipt.json'
+    receipt = json.loads(receipt_path.read_text())
+    receipt['input']['state_files'][str(netlist)] = drv._sha(netlist)
+    receipt_path.write_text(json.dumps(receipt))
+    plan = planner.build(project, final_state=selection)
+    script = capture._script(plan, plan['scenes'][0], tmp_path / 'fresh-capture',
+                             control=False, max_count=100)
+    observed = {'top': plan['top'], 'script': script}
+    (tmp_path / 'top-authority.observation.json').write_text(json.dumps(observed, indent=2) + '\n')
+    assert plan['top'] == 'physical_shell', observed
+    assert 'link_design {physical_shell}\n' in script, observed
