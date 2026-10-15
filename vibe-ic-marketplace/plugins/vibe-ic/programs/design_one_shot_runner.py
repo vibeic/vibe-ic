@@ -20159,8 +20159,24 @@ def step_asic_sdc(project: Path, top_name: str = "chip_top",
         pdk = pdk_config if pdk_config is not None else _phase2_pdk_config(project, pdk_name)
         import phase3_one_shot_runner as _p3
         from _ppa import timing as _timing
+        sdc_pdk = pdk
+        if not Path(str(pdk.liberty)).is_file():
+            import copy
+            import librelane_contract as _ll
+            # The backend's strict reader binds this host-staged asset. Keep
+            # the original image view for PVT discovery and the caller.
+            sdc_pdk = copy.copy(pdk)
+            staging = _ll.pdk_root_resolution(
+                project, str(pdk.name), image=_ll.resolve_image(project))
+            _p3._host_staged_liberty(sdc_pdk, staging)
+        try:
+            with Path(str(sdc_pdk.liberty)).open("rb") as liberty:
+                liberty.read(1)
+        except OSError as exc:
+            raise ValueError(
+                f"SDC_LIBERTY_UNREADABLE: {sdc_pdk.liberty}") from exc
         rec = _timing.emit_step7_asic_sdc(
-            _p3, project, top_name, pdk, container)
+            _p3, project, top_name, sdc_pdk, container)
         pvt_path, corner_count = _emit_step7_pvt_matrix(project, pdk, container)
         sdc_path = project / str(rec["path"])
         outputs = [str(sdc_path), str(pvt_path)]

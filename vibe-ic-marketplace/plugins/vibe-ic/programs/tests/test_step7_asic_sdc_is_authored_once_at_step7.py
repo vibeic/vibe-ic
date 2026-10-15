@@ -1042,3 +1042,177 @@ def test_sdc_fixture_real_summary_consumer_rejects_negative_slack(tmp_path, monk
     assert summary["passed"] is False
     assert any(row["rule"] == "STA_REAL_VIOLATION_FOUND"
                for row in summary["findings"])
+
+
+@pytest.mark.parametrize('case', [
+    'fresh_detect', 'cache_reuse', 'selected_ss', 'selected_ff',
+    'wrong_library', 'wrong_corner', 'wrong_distribution', 'changed_bytes',
+    'missing_asset', 'missing_at_producer', 'unmapped_selected_asset',
+    'unavailable_image', 'wrong_distribution_at_producer',
+])
+def test_normal_step7_and_backend_share_selected_liberty_binding(
+        tmp_path, monkeypatch, case):
+    """Real Step7 -> backend resolver -> strict pre-PnR reader, no native EDA.
+
+    Only the image/runtime I/O boundary is substituted. The host cache is not
+    mounted in the named container; its PVT census must retain the image view
+    and the reference-selected corners rather than silently using fallbacks.
+    """
+    import design_one_shot_runner as d
+    import execution_backend_producers as producers
+    import execution_policy
+    import librelane_contract as ll
+
+    proj = _project(tmp_path)
+    declaration = proj / 'input/project.json'
+    declaration.parent.mkdir()
+    declaration.write_text(json.dumps({'pdk': 'neutral_pdk'}))
+    image_root = tmp_path / 'image_only_pdk'
+    image_pdk = image_root / 'ciel/neutral/versions/frozen/neutral_pdk'
+    host_root = tmp_path / 'staged_pdk'
+    within_pdk = Path('neutral_pdk/libs.ref/neutral_cells/lib')
+    guest_dir = image_pdk / 'libs.ref/neutral_cells/lib'
+    reference = ['ss_125C_1v50', 'tt_025C_1v75', 'ff_000C_2v00']
+    fallback = ['ss_100C_1v60', 'tt_025C_1v80', 'ff_n40C_1v95']
+    libraries = [f'neutral_cells__{corner}.lib' for corner in reference + fallback]
+    for name in libraries:
+        target = host_root / within_pdk / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(f'library({Path(name).stem}) {{ time_unit : "1ns"; }}\n')
+    selected_corner = {'selected_ss': reference[0], 'selected_ff': reference[2]}.get(
+        case, reference[1])
+    selected_name = f'neutral_cells__{selected_corner}.lib'
+    guest_liberty = guest_dir / selected_name
+    staged_liberty = host_root / within_pdk / selected_name
+    selected = [guest_liberty]
+    detected = []
+
+    def detect(project, name):
+        assert project == proj and name == 'neutral_pdk'
+        pdk = SimpleNamespace(name=name, liberty=str(selected[0]), macro_libs=[])
+        detected.append(pdk)
+        return pdk
+
+    resolution = {'path': str(host_root), 'source': 'resolved',
+                  'derivation': {'image_pdk_root': str(image_root),
+                                 'pdk': 'neutral_pdk',
+                                 'host_path': str(host_root / 'neutral_pdk')}}
+    stage_calls = []
+
+    def resolve_root(project, name, *, image):
+        assert project == proj and name == 'neutral_pdk'
+        assert image == 'source-control-image'
+        stage_calls.append(image)
+        return resolution
+
+    def resolve_image(project):
+        assert project == proj
+        if case == 'unavailable_image':
+            raise ll.Refusal('LL_LOCAL_IMAGE_UNATTESTED', 'fixture has no attested image')
+        return 'source-control-image'
+
+    probes = []
+
+    def image_io(container, command, **kwargs):
+        assert container == 'fixture-container'
+        assert str(host_root) not in command, 'host cache is not container-mounted'
+        probes.append(command)
+        if command.startswith('ls ') and str(guest_dir) in command:
+            return 0, '\n'.join(str(guest_dir / name) for name in libraries), ''
+        config = image_pdk / 'libs.tech/librelane/config.tcl'
+        if command.startswith('cat ') and str(config) in command:
+            return 0, 'set ::env(STA_CORNERS) "' + ' '.join(
+                f'nom_{corner}' for corner in reference) + '"\n', ''
+        raise AssertionError(f'unexpected native boundary: {command}')
+
+    monkeypatch.setattr(R, '_detect_pdk', detect)
+    monkeypatch.setattr(R, '_docker_exec', image_io)
+    monkeypatch.setattr(R, '_liberty_drv_limits', lambda *a, **k: {})
+    monkeypatch.setattr(R, '_synth_max_fanout', lambda *a, **k: (None, None, []))
+    monkeypatch.setattr(E, '_sdc_environment_pdk_values', lambda *a, **k: ({}, []))
+    monkeypatch.setattr(ll, 'resolve_image', resolve_image)
+    monkeypatch.setattr(ll, 'pdk_root_resolution', resolve_root)
+    monkeypatch.setattr(ll, 'selected_mode', lambda *a, **k: 'librelane')
+    monkeypatch.setattr(execution_policy, '_ordinary_runtime', {'policy': {'mode': 'default'}})
+    if case == 'missing_at_producer':
+        staged_liberty.unlink()
+    elif case == 'unmapped_selected_asset':
+        selected[0] = tmp_path / 'unmapped/missing.lib'
+    elif case == 'wrong_distribution_at_producer':
+        resolution['derivation']['pdk'] = 'another_distribution'
+
+    result = d.step_asic_sdc(proj, TOP, 'fixture-container',
+                            pdk_name='neutral_pdk', _use_controller=False)
+    producer_refusals = {
+        'missing_at_producer': 'LL_PDK_LIB_MISSING',
+        'unmapped_selected_asset': 'SDC_LIBERTY_UNREADABLE',
+        'unavailable_image': 'LL_LOCAL_IMAGE_UNATTESTED',
+        'wrong_distribution_at_producer': 'LL_PDK_LIB_CONFLICT',
+    }
+    if case in producer_refusals:
+        assert result.status == 'FAIL', result
+        assert producer_refusals[case] in result.detail, result.detail
+        assert not (proj / CONS / T.ASIC_SDC_RECORD).exists()
+        return
+
+    assert result.status == 'NOT_MEASURED', result.detail
+    assert result.extras['producer_status'] == 'PASS'
+    assert result.extras['deferred_until'] == 'post_prelayout'
+    assert result.extras['corner_count'] == 3
+    assert detected[0].liberty == str(guest_liberty), 'caller PDK must remain unchanged'
+    matrix = json.loads((proj / CONS / 'pvt_matrix.json').read_text())
+    assert [(c['label'], c['liberty']) for c in matrix['corners']] == [
+        (label, str(guest_dir / f'neutral_cells__{corner}.lib'))
+        for label, corner in zip(('SS', 'TT', 'FF'), reference)]
+    assert probes and any('STA_CORNERS' not in cmd and 'config.tcl' in cmd for cmd in probes)
+    if case == 'cache_reuse':
+        first_record = (proj / CONS / T.ASIC_SDC_RECORD).read_bytes()
+        result = d.step_asic_sdc(proj, TOP, 'fixture-container',
+                                pdk_name='neutral_pdk', _use_controller=False)
+        assert result.extras['producer_status'] == 'PASS'
+        assert (proj / CONS / T.ASIC_SDC_RECORD).read_bytes() == first_record
+
+    record_before = (proj / CONS / T.ASIC_SDC_RECORD).read_bytes()
+    sdc_before = (proj / _record(proj)['path']).read_bytes()
+    if case in ('wrong_library', 'wrong_corner'):
+        selected[0] = guest_dir / ('other_cells__tt.lib' if case == 'wrong_library'
+                                   else f'neutral_cells__{reference[0]}.lib')
+        target = host_root / within_pdk / selected[0].name
+        target.write_bytes(staged_liberty.read_bytes())
+    elif case == 'wrong_distribution':
+        selected[0] = image_root / 'ciel/neutral/versions/frozen/other_pdk' / within_pdk.relative_to(
+            'neutral_pdk') / selected_name
+    elif case == 'changed_bytes':
+        staged_liberty.write_text('library(changed) { time_unit : "2ns"; }\n')
+    elif case == 'missing_asset':
+        staged_liberty.unlink()
+
+    params = {'pdk_name': 'neutral_pdk', 'image_id': 'source-control-image',
+              'pdk_root': str(host_root), 'top': TOP, 'container': 'fixture-container'}
+    refusal = None
+    try:
+        _, _, current_pdk, _ = producers._parameters(proj, params)
+        record, why = T.read_step7_asic_sdc(R, proj, TOP, current_pdk)
+        current_path, seam_why = R._prepnr_constraint_file(proj, TOP, current_pdk)
+    except ll.Refusal as exc:
+        refusal = str(exc)
+        record, current_path, why, seam_why = None, None, refusal, refusal
+    accepted = case in ('fresh_detect', 'cache_reuse', 'selected_ss', 'selected_ff')
+    observation = {'case': case, 'producer_status': result.status,
+                   'record_liberty': _record(proj)['inputs']['@liberty'],
+                   'record_liberty_sha256': _record(proj)['inputs']['@liberty_sha256'],
+                   'reader_accepted': record is not None, 'reader_reason': why,
+                   'seam_accepted': current_path is not None, 'seam_reason': seam_why,
+                   'corner_count': result.extras['corner_count'], 'resolver_refusal': refusal}
+    (tmp_path / 'observed.json').write_text(json.dumps(observation, indent=2) + '\n')
+    print(json.dumps(observation, sort_keys=True))
+    assert (record is not None) is accepted, observation
+    assert (current_path is not None) is accepted, observation
+    if accepted:
+        assert record['inputs']['@liberty'] == str(staged_liberty)
+        assert record['inputs']['@liberty_sha256'] == hashlib.sha256(staged_liberty.read_bytes()).hexdigest()
+        assert stage_calls
+    else:
+        assert refusal or '@liberty' in why, observation
+    assert (proj / CONS / T.ASIC_SDC_RECORD).read_bytes() == record_before
+    assert (proj / _record(proj)['path']).read_bytes() == sdc_before
