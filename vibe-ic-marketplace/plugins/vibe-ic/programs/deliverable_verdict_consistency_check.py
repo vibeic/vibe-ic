@@ -92,6 +92,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+import _flow_reason_taxonomy as _reason_taxonomy
+import verdict as _verdict
+
 # ---------------------------------------------------------------------------
 # Verdict vocabulary.
 # ---------------------------------------------------------------------------
@@ -647,6 +650,7 @@ class ConsistencyReport:
     headline: Dict[str, object] = field(default_factory=dict)
     orchestrator: Dict[str, object] = field(default_factory=dict)
     blocking: List[str] = field(default_factory=list)
+    reason_class: Optional[str] = None
 
     @property
     def rc(self) -> int:
@@ -705,11 +709,23 @@ def check(run_dir: Path, *, result: Optional[Path] = None) -> ConsistencyReport:
                 f"adjectives is refused — that would let any confident "
                 f"sentence become a headline.",
                 head, orch)
+        # This conditional check has no claim to compare. State that narrow
+        # applicability fact through the P0 typed-report channel, rather than
+        # asking its consumer to infer it from the sentence or rc=2. Missing
+        # material and an unchecked prose success claim are different cases:
+        # they must keep the consumer's fail-closed non-measurement tier.
+        no_claim_class = (
+            _reason_taxonomy.DESIGN_DECLARED_NA
+            if (text.strip() and claim is None and orch.get("report")
+                and orch.get("verdict") in _verdict.PRODUCER_STATUSES
+                and not orch.get("audit_unreadable"))
+            else None)
         return ConsistencyReport(
             str(run_dir), str(deliverable), "NOT_APPLICABLE", "SKIP",
             f"{deliverable.name} states no unambiguous headline verdict — "
             f"nothing to contradict (this gate requires a stated headline to be "
-            f"TRUE; it does not require one to exist)", head, orch)
+            f"TRUE; it does not require one to exist)", head, orch,
+            reason_class=no_claim_class)
 
     if orch["verdict"] is None:
         return ConsistencyReport(
@@ -799,7 +815,8 @@ def report_to_dict(rep: ConsistencyReport) -> dict:
     return {"run_dir": rep.run_dir, "deliverable": rep.deliverable,
             "state": rep.state, "verdict": rep.verdict, "reason": rep.reason,
             "headline": rep.headline, "orchestrator": rep.orchestrator,
-            "blocking": rep.blocking, "rc": rep.rc}
+            "blocking": rep.blocking, "rc": rep.rc,
+            "reason_class": rep.reason_class}
 
 
 # ---------------------------------------------------------------------------

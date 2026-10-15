@@ -787,3 +787,155 @@ def test_prose_success_polarity_reaches_the_normal_consumer(tmp_path, text, clai
 def test_unrelated_denial_cannot_cross_an_affirmative_claim_predicate(tmp_path, surface):
     test_prose_success_polarity_reaches_the_normal_consumer(
         tmp_path, 'No errors, and we assert a tapeout-ready claim.', True, surface)
+
+
+# #3166 — transport the leaf's narrow applicability decision to its real P0
+# consumer. Every case runs the actual CLI twice: standalone with its JSON,
+# then through the umbrella's normal argv builder/supervised subprocess.
+_NO_HEADLINE_MD = "# Neutral run\n\n**STATUS**: NOT_MEASURED\n\nMeasurements are pending.\n"
+_NO_CLAIM_MD = "# Neutral run\n\nMeasurements are pending.\n"
+
+
+def _cli_and_real_p0(run, monkeypatch):
+    import flow_compliance_check as F
+
+    rtl = run / "phase2/stage1/rtl"
+    rtl.mkdir(parents=True, exist_ok=True)
+    (rtl / "unit.v").write_text("module unit(); endmodule\n")
+    report = run.parent / "leaf-cli.json"
+    argv = [sys.executable, str(PROG_PATH), str(run), "--json", str(report)]
+    cp = subprocess.run(argv, capture_output=True, text=True)
+    payload = json.loads(report.read_text())
+    # This is the existing single-gate acceptance harness. The classifier,
+    # argv builder, sidecar transport and leaf subprocess are all unmodified.
+    # Production's complete registry is never changed on disk.
+    with monkeypatch.context() as scope:
+        scope.setattr(F, "_STRUCTURAL_RTL_GATES",
+                      ("deliverable_verdict_consistency_check",))
+        records = []
+        executed, fails, skips, waivers = F._run_structural_rtl_gates(
+            run, records_out=records)
+    assert len(records) == 1, records
+    observation = {
+        "leaf": {"argv": argv, "rc": cp.returncode,
+                 "stdout": cp.stdout, "stderr": cp.stderr, "report": payload},
+        "p0": {"executed": executed, "fails": fails, "skips": skips,
+               "waivers": waivers, "records": records,
+               "umbrella": F.p0_umbrella_verdict(executed, records)},
+    }
+    (run.parent / "producer-consumer.observation.json").write_text(
+        json.dumps(observation, indent=2, ensure_ascii=False) + "\n")
+    return cp, payload, records[0], observation["p0"]
+
+
+@pytest.mark.parametrize("orch", ["FAIL", "PASS", "NOT_MEASURED"])
+@pytest.mark.parametrize("text", [_NO_CLAIM_MD, _NO_HEADLINE_MD],
+                         ids=["neutral-prose", "status-not-measured"])
+def test_no_headline_typed_skip_reaches_real_p0(tmp_path, monkeypatch, orch, text):
+    run = _mkrun(tmp_path, deliverable=text, orch_verdict=orch)
+    cp, rep, record, p0 = _cli_and_real_p0(run, monkeypatch)
+    assert cp.returncode == 2 and cp.stdout.startswith("SKIP:"), cp
+    assert rep["state"] == "NOT_APPLICABLE" and rep["verdict"] == "SKIP", rep
+    assert rep["headline"]["token"] is None, rep
+    assert rep.get("reason_class") == "DESIGN_DECLARED_NA", rep
+    assert record["verdict"] == "SKIP", record
+    assert record["reason_class"] == "DESIGN_DECLARED_NA", record
+    assert record["evidence"]["exit_code"] == 2, record
+    assert record["evidence"]["skip_kind"] == "declared-by-gate", record
+    assert not p0["fails"] and not p0["waivers"], p0
+    # Its applicability is answered; the leaf is still SKIP, never PASS.
+    assert p0["umbrella"] == "PASS", p0
+
+
+@pytest.mark.parametrize("orch", ["FAIL", "PASS"])
+def test_unadjudicated_prose_success_stays_unmeasured_in_real_p0(
+        tmp_path, monkeypatch, orch):
+    run = _mkrun(tmp_path, deliverable="# Run\n\nThe design is tapeout-ready.\n",
+                 orch_verdict=orch)
+    cp, rep, record, p0 = _cli_and_real_p0(run, monkeypatch)
+    assert cp.returncode == 2, cp
+    assert rep["state"] == ("UNCHECKED_SUCCESS_CLAIM" if orch == "FAIL"
+                            else "NOT_APPLICABLE"), rep
+    assert rep.get("reason_class") is None, rep
+    assert record["verdict"] == "INCOMPLETE", record
+    assert record["reason_class"] == "EXECUTION_ERROR", record
+    assert p0["umbrella"] == "NOT_MEASURED", p0
+
+
+@pytest.mark.parametrize("text", [_NO_HEADLINE_MD, _PASS_MD],
+                         ids=["no-headline", "canonical-pass"])
+@pytest.mark.parametrize("material", ["missing", "corrupt", "empty", "missing-key",
+                                       "unknown-status", "bool", "list"])
+def test_unusable_independent_value_is_not_typed_na_in_real_p0(
+        tmp_path, monkeypatch, text, material):
+    run = _mkrun(tmp_path, deliverable=text, orch_verdict=None)
+    path = run / "reports/orchestrator/vibe_ic_one_shot.json"
+    raw = {"corrupt": "{", "empty": "", "missing-key": '{"phase":"neutral"}',
+           "unknown-status": '{"verdict":"UNRECOGNIZED"}',
+           "bool": '{"verdict":true}', "list": '{"verdict":["PASS"]}'}
+    if material != "missing":
+        path.write_text(raw[material])
+    cp, rep, record, p0 = _cli_and_real_p0(run, monkeypatch)
+    assert cp.returncode == 2 and rep["state"] == "NOT_APPLICABLE", rep
+    assert rep.get("reason_class") is None, rep
+    # With a canonical headline, the existing missing-independent-value
+    # sentence is BLOCKED_BY_UPSTREAM. Without a headline it stays the
+    # no-headline EXECUTION_ERROR. Both must retain their exact prior tier.
+    missing_comparison = (text == _PASS_MD and material in {
+        "missing", "corrupt", "empty", "missing-key"})
+    assert record["verdict"] == ("BLOCKED" if missing_comparison
+                                  else "INCOMPLETE"), record
+    assert record["reason_class"] == ("BLOCKED_BY_UPSTREAM" if missing_comparison
+                                       else "EXECUTION_ERROR"), record
+    assert p0["umbrella"] == "NOT_MEASURED", p0
+
+
+def test_no_headline_with_unreadable_audit_stays_unmeasured_in_real_p0(
+        tmp_path, monkeypatch):
+    run = _mkrun(tmp_path, deliverable=_NO_HEADLINE_MD, orch_verdict="FAIL")
+    audit = run / "reports/audit/phase23_completion_audit.json"
+    audit.parent.mkdir(parents=True)
+    audit.write_text("{")
+    cp, rep, record, p0 = _cli_and_real_p0(run, monkeypatch)
+    assert cp.returncode == 2 and rep["orchestrator"]["audit_unreadable"], rep
+    assert rep.get("reason_class") is None, rep
+    assert record["verdict"] == "INCOMPLETE", record
+    assert p0["umbrella"] == "NOT_MEASURED", p0
+
+
+@pytest.mark.parametrize("headline,expected_rc,expected_state,expected_record", [
+    (_PASS_MD, 1, "DELIVERABLE_CONTRADICTS_ORCHESTRATOR", "FAIL"),
+    (_FAIL_MD, 0, "CONSISTENT", "PASS"),
+], ids=["pass-over-fail", "fail-over-fail"])
+def test_canonical_comparison_survives_typed_skip_in_real_p0(
+        tmp_path, monkeypatch, headline, expected_rc, expected_state,
+        expected_record):
+    run = _mkrun(tmp_path, deliverable=headline, orch_verdict="FAIL")
+    cp, rep, record, p0 = _cli_and_real_p0(run, monkeypatch)
+    assert cp.returncode == expected_rc and rep["state"] == expected_state, rep
+    assert rep.get("reason_class") is None, rep
+    assert record["verdict"] == expected_record, record
+    assert p0["umbrella"] == expected_record, p0
+
+
+@pytest.mark.parametrize("text", [None, "", " \n\t\n"],
+                         ids=["missing", "empty", "whitespace"])
+def test_absent_deliverable_material_gets_no_new_typed_na(tmp_path, text):
+    # Missing RESULT is preempted by P0's existing producer-order contract;
+    # test the real leaf here without pretending that preemption ran it.
+    run = _mkrun(tmp_path, deliverable=text, orch_verdict="FAIL")
+    out = tmp_path / "leaf-cli.json"
+    cp = subprocess.run([sys.executable, str(PROG_PATH), str(run), "--json", str(out)],
+                        capture_output=True, text=True)
+    rep = json.loads(out.read_text())
+    assert cp.returncode == 2 and rep["state"] == "NOT_APPLICABLE", rep
+    assert rep.get("reason_class") is None, rep
+
+
+def test_cli_usage_error_is_not_an_applicability_declaration(tmp_path):
+    run = _mkrun(tmp_path, deliverable=_NO_HEADLINE_MD, orch_verdict="FAIL")
+    out = tmp_path / "leaf-cli.json"
+    cp = subprocess.run([sys.executable, str(PROG_PATH), str(run), "--json", str(out),
+                         "--unsupported-option"], capture_output=True, text=True)
+    assert cp.returncode == 2 and "unrecognized arguments" in cp.stderr, cp
+    assert not out.exists() and not cp.stdout, cp

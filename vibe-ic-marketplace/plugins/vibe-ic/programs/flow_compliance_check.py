@@ -10445,6 +10445,9 @@ def _p0_contract_argv(gate_name: str,
 #: accepts. `_p0_declared_report` returns None for everything else, and the
 #: prose reading those gates already had is untouched.
 _P0_GATE_DECLARES_REASON_CLASS: frozenset = frozenset({
+    # The leaf declares only a material-backed absence of a headline/claim.
+    # Other rc-2 states (missing evidence, unchecked prose) remain unclassified.
+    "deliverable_verdict_consistency_check",
     "waiver_staleness_check",
     "analog_flow_compliance_check",
     # R-0915-52 (lane icsub4). The completion audit's `classify_sub_gate`
