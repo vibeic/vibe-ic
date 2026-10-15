@@ -82,7 +82,7 @@ def _run_fresh(script: Path, roots: set[Path], *, image: str) -> str:
         mounts.extend(("-v", f"{root}:{root}"))
     name = _docker_watchdog.ephemeral_container_name("vibeic_drv_sta")
     raw = script.with_suffix(".tool.log")
-    cidfile = script.with_suffix(".container.cid")
+    cidfile = script.parent / f"{name}.container.cid"
     argv = ["docker", "run", *_docker_memory.docker_memory_flags(),
             "--rm", "--network", "none", "--cidfile", str(cidfile),
             "--name", name,

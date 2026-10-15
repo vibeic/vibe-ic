@@ -2920,3 +2920,120 @@ def test_current_step23_repair_scope_reaches_judge(tmp_path, monkeypatch, case):
     assert (required in result['failures']) is is_adopted
     if is_adopted:
         assert result['verdict'] == 'FAIL'
+
+
+def _fresh_cid_launch_fixture(tmp_path, monkeypatch, *, fail_launch=False):
+    """Real API/supervisor/Popen, only Docker exclusive CID I/O is modeled."""
+    import os
+    import drv_signoff_capture as capture
+    bindir = tmp_path / 'source-control-bin'
+    bindir.mkdir()
+    journal = tmp_path / 'docker-source-control.jsonl'
+    docker = bindir / 'docker'
+    docker.write_text('''#!/usr/bin/env python3
+from pathlib import Path
+import json, os, sys
+args = sys.argv[1:]
+cid = Path(args[args.index('--cidfile') + 1])
+entry = {'argv': args, 'pid': os.getpid(), 'scope': 'SOURCE_CONTROL only; no Docker/OpenSTA'}
+try:
+    fd = os.open(cid, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+except FileExistsError:
+    entry['outcome'] = 'CIDFILE_ALREADY_EXISTS'
+    with Path(JOURNAL).open('a') as stream: stream.write(json.dumps(entry) + '\\n')
+    print('docker: container ID file found: ' + str(cid), file=sys.stderr)
+    raise SystemExit(125)
+with os.fdopen(fd, 'w') as stream: stream.write('SOURCE_CONTROL_CID_' + str(os.getpid()) + '\\n')
+entry['outcome'] = 'LAUNCH_FAILURE' if FAIL_LAUNCH else 'LAUNCH_ACCEPTED'
+with Path(JOURNAL).open('a') as stream: stream.write(json.dumps(entry) + '\\n')
+if FAIL_LAUNCH:
+    print('SOURCE_CONTROL launch failed after CID allocation', file=sys.stderr)
+    raise SystemExit(17)
+print('SOURCE_CONTROL launcher accepted; no OpenSTA executed.')
+'''.replace('JOURNAL', repr(str(journal))).replace('FAIL_LAUNCH', repr(fail_launch)))
+    docker.chmod(0o755)
+    monkeypatch.setenv('PATH', str(bindir) + os.pathsep + os.environ['PATH'])
+    monkeypatch.setenv('VIBEIC_DOCKER_MEMORY', '2g')
+    monkeypatch.setattr(capture._ce, 'no_container_route', lambda: False)
+    # External Docker CPU/reap I/O is replaced; real supervisor policy and
+    # the actual host child Popen/reaping are retained. No daemon is used.
+    monkeypatch.setattr(capture._docker_watchdog, 'ephemeral_container_cpu_probe',
+                        lambda _name: lambda _process: 0.0)
+    monkeypatch.setattr(capture._docker_watchdog, 'ephemeral_container_reap',
+                        lambda _name: lambda _process: None)
+    children = []
+    real_popen = capture.subprocess.Popen
+
+    def track_popen(*args, **kwargs):
+        child = real_popen(*args, **kwargs)
+        children.append(child)
+        return child
+
+    monkeypatch.setattr(capture.subprocess, 'Popen', track_popen)
+    script = tmp_path / 'measure.tcl'
+    script.write_text('puts SOURCE_CONTROL\n')
+    return capture, script, journal, children
+
+
+def _fresh_cid_launch_attempt(capture, script, journal):
+    try:
+        output = capture._run_fresh(script, {script.parent}, image='source-control:image')
+        observed = {'outcome': 'RETURNED', 'output': output}
+    except RuntimeError as exc:
+        observed = {'outcome': 'REFUSED', 'reason': str(exc)}
+    call = json.loads(journal.read_text().splitlines()[-1])
+    argv = call['argv']
+    observed.update(cidfile=argv[argv.index('--cidfile') + 1],
+                    name=argv[argv.index('--name') + 1], docker_boundary=call,
+                    raw=script.with_suffix('.tool.log').read_text())
+    return observed
+
+
+def test_same_script_fresh_sta_retry_uses_distinct_retained_cid_files(tmp_path, monkeypatch):
+    capture, script, journal, children = _fresh_cid_launch_fixture(tmp_path, monkeypatch)
+    first = _fresh_cid_launch_attempt(capture, script, journal)
+    first_cid = Path(first['cidfile'])
+    first_bytes = first_cid.read_bytes()
+    second = _fresh_cid_launch_attempt(capture, script, journal)
+    observed = {'attempts': [first, second],
+                'first_cid_retained': first_cid.read_bytes() == first_bytes,
+                'child_rcs': [p.returncode for p in children],
+                'children_reaped_absent': all(p.returncode is not None and
+                    not Path(f'/proc/{p.pid}').exists() for p in children)}
+    (tmp_path / 'launch-api.observation.json').write_text(json.dumps(observed, indent=2) + '\n')
+    assert first['outcome'] == 'RETURNED', observed
+    assert second['outcome'] == 'RETURNED', observed
+    assert first['name'] != second['name'], observed
+    assert first['cidfile'] != second['cidfile'], observed
+    assert observed['first_cid_retained'] is True, observed
+    assert observed['child_rcs'] == [0, 0], observed
+    assert observed['children_reaped_absent'] is True, observed
+
+
+def test_existing_legacy_sta_cid_is_retained_without_blocking_new_launch(tmp_path, monkeypatch):
+    capture, script, journal, children = _fresh_cid_launch_fixture(tmp_path, monkeypatch)
+    legacy = script.with_suffix('.container.cid')
+    previous = b'SOURCE_CONTROL_PRIOR_ATTEMPT\n'
+    legacy.write_bytes(previous)
+    observed = _fresh_cid_launch_attempt(capture, script, journal)
+    observed['legacy_cid_retained'] = legacy.read_bytes() == previous
+    observed['child_rcs'] = [p.returncode for p in children]
+    (tmp_path / 'launch-api.observation.json').write_text(json.dumps(observed, indent=2) + '\n')
+    assert observed['outcome'] == 'RETURNED', observed
+    assert Path(observed['cidfile']) != legacy, observed
+    assert observed['legacy_cid_retained'] is True, observed
+    assert observed['child_rcs'] == [0], observed
+
+
+def test_fresh_sta_launch_error_still_refuses_and_retains_cid(tmp_path, monkeypatch):
+    capture, script, journal, children = _fresh_cid_launch_fixture(
+        tmp_path, monkeypatch, fail_launch=True)
+    observed = _fresh_cid_launch_attempt(capture, script, journal)
+    observed['cid_retained'] = Path(observed['cidfile']).read_text().startswith('SOURCE_CONTROL_CID_')
+    observed['child_rcs'] = [p.returncode for p in children]
+    (tmp_path / 'launch-api.observation.json').write_text(json.dumps(observed, indent=2) + '\n')
+    assert observed['outcome'] == 'REFUSED', observed
+    assert observed['reason'].startswith('NOT_MEASURED:'), observed
+    assert 'rc=17' in observed['reason'], observed
+    assert observed['cid_retained'] is True, observed
+    assert observed['child_rcs'] == [17], observed
