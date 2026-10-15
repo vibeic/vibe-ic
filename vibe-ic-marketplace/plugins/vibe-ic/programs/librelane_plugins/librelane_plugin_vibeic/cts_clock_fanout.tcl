@@ -168,7 +168,6 @@ proc vic_close_cts_clock_fanout {prects} {
         }
         detailed_placement {*}$placement_args
         check_placement -verbose
-        set_global_connections
     } why options]
     foreach pair $locked { [lindex $pair 0] setPlacementStatus [lindex $pair 1] }
     if {$failed} { return -options $options $why }

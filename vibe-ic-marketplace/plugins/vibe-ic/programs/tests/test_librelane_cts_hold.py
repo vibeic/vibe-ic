@@ -898,7 +898,7 @@ def test_the_split_works_on_the_step_17_18_librelane_consumer_deck(real_deck):
 _CTS_FANOUT_WORLD = r"""
 namespace eval ord {}; namespace eval sta {}; namespace eval utl {}
 set ::insts {}; set ::nets {}; set ::terms {}; set ::metrics [dict create]
-set ::inserted 0; set ::pg 0; set ::legal 0; set ::written 0
+set ::inserted 0; set ::pg 0; set ::legal 0; set ::written 0; set ::power_ready 0
 proc object {kind name} { interp alias {} $name {} dispatch $kind $name; return $name }
 proc net {name} {
     lappend ::nets $name; set ::world_nt($name) {}; set ::world_bt($name) {}
@@ -1044,11 +1044,13 @@ proc check_placement {args} {
     if {$::env(DAMAGE) eq "illegal"} {error "injected illegal placement"}
 }
 proc set_global_connections {} {
+    if {!$::power_ready} {error "native supply connections before power-net initialization"}
     foreach i $::insts { connect $i/VP n_power; connect $i/VG n_ground }
     set ::pg 1; lappend ::events pg
 }
 proc write_views {} {
-    # The real image writer also applies global connections before serializing.
+    # Preserve the pinned writer's initialization before global connections.
+    source $::env(SCRIPTS_DIR)/openroad/common/set_power_nets.tcl
     set_global_connections
     foreach i $::insts {
         if {$::world_tn($i/VP) ne "n_power" || $::world_tn($i/VG) ne "n_ground"} {error "PG absent $i"}
@@ -1093,6 +1095,7 @@ def _clock_fanout_entry(tmp_path, *, entry="sizing", cap=4, loads=16,
     common.mkdir(parents=True)
     for name in ("io.tcl", "resizer.tcl", "set_rc.tcl"):
         write(common / name, "# SOURCE_CONTROL image I/O boundary\n")
+    write(common / "set_power_nets.tcl", "set ::power_ready 1\n")
     sizing = write(root / "sizing.tcl", "# sizing process boundary; topology unchanged\n")
     step_dir = PROGRAMS / "librelane_plugins/librelane_plugin_vibeic"
     script = step_dir / ("clock_path_drive_sizing.tcl" if entry == "sizing"
