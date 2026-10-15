@@ -1447,6 +1447,29 @@ def author_asic_sdc(rt: Any, project: Path, top: str, pdk: Any,
     return out
 
 
+def _selected_sdc_pdk(rt: Any, project: Path, pdk: Any) -> Any:
+    """Resolve the selected SDC Liberty role without mutating the tool/PVT view.
+
+    Both the author and strict reader use the backend's exact host asset;
+    neither may infer the selected library or corner from an old receipt.
+    """
+    selected = pdk
+    if not Path(str(getattr(pdk, "liberty", ""))).is_file():
+        import copy
+        import librelane_contract as ll
+        selected = copy.copy(pdk)
+        staging = ll.pdk_root_resolution(
+            project, str(pdk.name), image=ll.resolve_image(project))
+        rt._host_staged_liberty(selected, staging)
+    try:
+        with Path(str(getattr(selected, "liberty", ""))).open("rb") as liberty:
+            liberty.read(1)
+    except OSError as exc:
+        raise ValueError(
+            f"SDC_LIBERTY_UNREADABLE: {getattr(selected, 'liberty', '')}") from exc
+    return selected
+
+
 def asic_sdc_input_digest(rt: Any, project: Path, top: str, pdk: Any
                           ) -> Tuple[str, Dict[str, str]]:
     """(digest, {input: sha256}) of what `author_asic_sdc` can read.
@@ -1618,6 +1641,7 @@ def emit_step7_asic_sdc(rt: Any, project: Path, top: str, pdk: Any,
                         container: str) -> Dict[str, Any]:
     """STEP 7's producer: author the design-intent SDC and write it to the
     declared path with its record. Returns the record (with `path`)."""
+    pdk = _selected_sdc_pdk(rt, project, pdk)
     digest, inputs = asic_sdc_input_digest(rt, project, top, pdk)
     authored = author_asic_sdc(rt, project, top, pdk, container, supply_ports=())
     path = step7_asic_sdc_path(rt, project, top, authored["design_staged"])
@@ -1679,7 +1703,12 @@ def read_step7_asic_sdc(rt: Any, project: Path, top: str, pdk: Any
                       f"PDK {rec.get('pdk')!r}, not {top!r} / {pdk.name!r}")
     # BOUND TO ITS INPUTS (review_wave7): a deck is current only while
     # everything it was authored from is unchanged.
-    digest, inputs = asic_sdc_input_digest(rt, project, top, pdk)
+    import librelane_contract as ll
+    try:
+        selected = _selected_sdc_pdk(rt, project, pdk)
+    except (ll.Refusal, OSError, ValueError) as exc:
+        return None, f"the step-7 SDC's selected @liberty is unavailable: {exc}"
+    digest, inputs = asic_sdc_input_digest(rt, project, top, selected)
     if digest != rec.get("input_digest"):
         was = rec.get("inputs") or {}
         changed = sorted(k for k in set(was) | set(inputs)

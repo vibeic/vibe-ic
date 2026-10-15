@@ -61,13 +61,18 @@ def _pdk(monkeypatch, drv=None):
 
 
 @pytest.fixture(autouse=True)
-def _complete_corner_fixture_contract(monkeypatch):
+def _complete_corner_fixture_contract(monkeypatch, tmp_path):
     # Some legacy cases call PL._corner_pdk directly to select another
     # Liberty. Complete that shared fixture edge, including those callers,
     # without changing their input setup or acceptance assertions.
     corner_pdk = PL._corner_pdk
     def complete(*args, **kwargs):
         pdk = corner_pdk(*args, **kwargs)
+        if not Path(str(pdk.liberty)).is_file():
+            material = tmp_path / "fixture_pdk" / Path(str(pdk.liberty)).name
+            material.parent.mkdir(exist_ok=True)
+            material.write_text('library(neutral) { time_unit : "1ns"; }\n')
+            pdk.liberty = str(material)
         monkeypatch.setattr(R, "_emit_multi_corner_sta", _fixture_corner_sta)
         return pdk
     monkeypatch.setattr(PL, "_corner_pdk", complete)
@@ -635,10 +640,12 @@ def test_a_run_whose_step7_deferred_regenerates_at_pnr(tmp_path, monkeypatch):
     """Fewer than 2 corners: step_prelayout_signoff returns NOT_MEASURED
     before step 7's producer; PnR regenerates through it and says why."""
     proj = _project(tmp_path)
+    material = tmp_path / "one_corner.lib"
+    material.write_text('library(neutral) { time_unit : "1ns"; }\n')
 
     class _OneCorner:
         name = "sky130A"
-        liberty = "/foss/pdks/x/nom.lib"
+        liberty = str(material)
     res = R.step_prelayout_signoff(proj, TOP, _OneCorner(), "no-such-container")
     assert res.status == "NOT_MEASURED"
     monkeypatch.setattr(R, "_liberty_drv_limits", lambda *a, **k: {})
@@ -1052,7 +1059,7 @@ def test_sdc_fixture_real_summary_consumer_rejects_negative_slack(tmp_path, monk
 ])
 def test_normal_step7_and_backend_share_selected_liberty_binding(
         tmp_path, monkeypatch, case):
-    """Real Step7 -> backend resolver -> strict pre-PnR reader, no native EDA.
+    """Real Step7 -> prelayout re-emission -> fresh guest/host strict readers.
 
     Only the image/runtime I/O boundary is substituted. The host cache is not
     mounted in the named container; its PVT census must retain the image view
@@ -1174,6 +1181,36 @@ def test_normal_step7_and_backend_share_selected_liberty_binding(
 
     record_before = (proj / CONS / T.ASIC_SDC_RECORD).read_bytes()
     sdc_before = (proj / _record(proj)['path']).read_bytes()
+    pvt_before = (proj / CONS / 'pvt_matrix.json').read_bytes()
+    prelayout_pdk = detect(proj, 'neutral_pdk')
+    native_boundary = []
+
+    def stop_before_native(project, top, pdk, sdc, *args):
+        assert pdk is prelayout_pdk and pdk.liberty == str(guest_liberty)
+        assert sdc.read_bytes() == sdc_before
+        native_boundary.append(str(sdc))
+        # The real prelayout function has already re-emitted Step7 here.
+        # Stop only the native I/O boundary; do not fabricate a tool PASS.
+        raise ll.Refusal('LL_STEP_FAILED', 'unit fixture stopped before native STA')
+
+    monkeypatch.setattr(R, '_prelayout_librelane', stop_before_native)
+    prelayout = R.step_prelayout_signoff(proj, TOP, prelayout_pdk, 'fixture-container')
+    assert prelayout.status == 'FAIL' and 'unit fixture stopped' in prelayout.detail
+    assert native_boundary == [str(proj / _record(proj)['path'])]
+    assert prelayout_pdk.liberty == str(guest_liberty)
+    assert (proj / CONS / T.ASIC_SDC_RECORD).read_bytes() == record_before
+    assert (proj / _record(proj)['path']).read_bytes() == sdc_before
+    assert (proj / CONS / 'pvt_matrix.json').read_bytes() == pvt_before
+    # Both contexts must accept the actual re-emitted record, including a
+    # fresh registry/image selection that has not passed through the backend.
+    for reader_pdk in (detect(proj, 'neutral_pdk'),
+                       SimpleNamespace(name='neutral_pdk', liberty=str(staged_liberty), macro_libs=[])):
+        current, why = T.read_step7_asic_sdc(R, proj, TOP, reader_pdk)
+        assert current is not None, why
+        assert current['inputs']['@liberty'] == str(staged_liberty)
+        assert current['inputs']['@liberty_sha256'] == hashlib.sha256(staged_liberty.read_bytes()).hexdigest()
+        assert reader_pdk.liberty in (str(guest_liberty), str(staged_liberty))
+
     if case in ('wrong_library', 'wrong_corner'):
         selected[0] = guest_dir / ('other_cells__tt.lib' if case == 'wrong_library'
                                    else f'neutral_cells__{reference[0]}.lib')
@@ -1187,6 +1224,12 @@ def test_normal_step7_and_backend_share_selected_liberty_binding(
     elif case == 'missing_asset':
         staged_liberty.unlink()
 
+    accepted = case in ('fresh_detect', 'cache_reuse', 'selected_ss', 'selected_ff')
+    fresh_record, fresh_why = T.read_step7_asic_sdc(R, proj, TOP, detect(proj, 'neutral_pdk'))
+    assert (fresh_record is not None) is accepted, fresh_why
+    if not accepted:
+        assert '@liberty' in fresh_why, fresh_why
+
     params = {'pdk_name': 'neutral_pdk', 'image_id': 'source-control-image',
               'pdk_root': str(host_root), 'top': TOP, 'container': 'fixture-container'}
     refusal = None
@@ -1197,7 +1240,6 @@ def test_normal_step7_and_backend_share_selected_liberty_binding(
     except ll.Refusal as exc:
         refusal = str(exc)
         record, current_path, why, seam_why = None, None, refusal, refusal
-    accepted = case in ('fresh_detect', 'cache_reuse', 'selected_ss', 'selected_ff')
     observation = {'case': case, 'producer_status': result.status,
                    'record_liberty': _record(proj)['inputs']['@liberty'],
                    'record_liberty_sha256': _record(proj)['inputs']['@liberty_sha256'],
