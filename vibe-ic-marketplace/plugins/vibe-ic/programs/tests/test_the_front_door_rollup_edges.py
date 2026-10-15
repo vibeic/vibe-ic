@@ -1420,3 +1420,211 @@ def test_a_first_pass_that_crashes_after_writing_the_sidecar_is_not_demoted(
     # and it is NOT excused as "the record belongs to an earlier run" -- there is no record at all
     assert not any("belongs to an earlier run" in a for a in doc.get("advisories", [])), (
         doc.get("advisories"))
+
+
+# #3168 — the bounded publisher writes a token-scoped terminal account. Drive
+# BOTH real main branches; stage only external execution/admission boundaries.
+def _drive_bounded_phase3_receiver(front, project, monkeypatch, *, route="entry",
+                                  child_document=None, child_rc=0,
+                                  canonical_bytes=None, parent_token=None,
+                                  published_token=None, report_mtime=None,
+                                  phase_clock=None):
+    """Reusable receiver replay, compatible with base and candidate main().
+
+    `child_document(token)` returns bytes, or None to publish nothing. A caller
+    may feed unchanged historical sender bytes and control token/clock/mtime:
+    that proves receiver behavior, never new native execution. No new product
+    helper is called here, so a base reversal fails on values, not a missing API.
+    Use only an owned temporary project; admission and image I/O are fixtures.
+    """
+    from types import SimpleNamespace
+    import secrets
+
+    project = Path(project)
+    project.mkdir(parents=True, exist_ok=True)
+    stage_owner_route(project, "ic")
+    monkeypatch.setattr(front, "_configure_execution_policy",
+                        lambda _args: {"mode": "default"})
+    monkeypatch.setattr(front, "_capture_container_image",
+                        lambda *_args: {"verdict": "PASS",
+                                         "scope": "SOURCE_CONTROL: image I/O fixture"})
+    monkeypatch.setattr(front._canonical_admission, "admit_span", lambda *a, **k:
+                        SimpleNamespace(admitted=True, identity_sha256="source-control"))
+    monkeypatch.setattr(front._canonical_admission, "child_env",
+                        lambda _identity, env: dict(env))
+    monkeypatch.setattr(front, "_phase1_decision", lambda *a, **k: (True, "docs"))
+    if parent_token is not None:
+        monkeypatch.setattr(secrets, "token_hex", lambda _n: parent_token)
+    if phase_clock is not None:
+        monkeypatch.setattr(front.time, "time", lambda: phase_clock)
+    monkeypatch.delenv("VIBEIC_RUNNER_INVOCATION_CONTEXT", raising=False)
+    trace = []
+    published = {}
+
+    def child(label, runner, args, env=None):
+        trace.append({"label": label, "runner": str(runner), "argv": args})
+        if runner.name in ("phase1_one_shot_runner.py", "phase2_one_shot_runner.py",
+                           "design_one_shot_runner.py"):
+            name = ("phase1_one_shot.json" if runner.name.startswith("phase1")
+                    else "phase2_one_shot.json")
+            p = _pl.report_path(project, name)
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text('{"verdict":"PASS","scope":"SOURCE_CONTROL child fixture"}\n')
+            return 0
+        if runner.name == "flow_compliance_check.py" and "stage_analog" in args:
+            p = Path(args[args.index("--json") + 1])
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text('{"verdict":"PASS","scope":"SOURCE_CONTROL child fixture"}\n')
+            return 0
+        assert runner.name == "phase3_one_shot_runner.py", trace
+        token = env["VIBEIC_PHASE3_WINDOW_RUN_ID"]
+        canonical = project / "reports/orchestrator/phase3_one_shot.json"
+        canonical.parent.mkdir(parents=True, exist_ok=True)
+        canonical.write_bytes(canonical_bytes if canonical_bytes is not None else
+                              b'{"program":"phase3_one_shot_runner","record":"in-progress","steps":[]}\n')
+        published["canonical_before"] = canonical.read_bytes().hex()
+        published["parent_token"] = token
+        raw = child_document(token) if child_document is not None else None
+        if raw is not None:
+            # Publisher contract is staged on disk independently of the reader.
+            path = project / "reports/orchestrator/windows" / (published_token or token) / "phase3_one_shot.json"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(raw)
+            if report_mtime is not None:
+                os.utime(path, (report_mtime, report_mtime))
+            published["scoped_path"] = str(path)
+            published["scoped_before"] = raw.hex()
+        return child_rc
+
+    monkeypatch.setattr(front, "_run_phase", child)
+    flags = (["--entry-step", "15", "--exit-step", "16"] if route == "entry"
+             else ["--exit-step", "16"])
+    monkeypatch.setattr(sys, "argv", ["vibe_ic_one_shot_runner", str(project),
+                                     "--no-dashboard", "--skip-analog", *flags])
+    rc = front.main()
+    out = _pl.report_path(project, "vibe_ic_one_shot.json")
+    report = json.loads(out.read_text())
+    canonical = project / "reports/orchestrator/phase3_one_shot.json"
+    published["canonical_after"] = canonical.read_bytes().hex()
+    if "scoped_path" in published:
+        published["scoped_after"] = Path(published["scoped_path"]).read_bytes().hex()
+    observation = {"scope": "SOURCE_CONTROL receiver replay; no native child",
+                   "route": route, "rc": rc, "summary": report,
+                   "child_rc": child_rc, "trace": trace, "published": published}
+    (project / "receiver.observation.json").write_text(
+        json.dumps(observation, indent=2) + "\n")
+    return observation
+
+
+def _bounded_terminal(token, *, verdict="PASS", route="entry", stale=True):
+    return json.dumps({"program": "phase3_one_shot_runner", "bounded": True,
+                       "window_run_id": token,
+                       "declared_window": {"entry_step": "15" if route == "entry" else "9",
+                                           "exit_step": "16"},
+                       "verdict": verdict, "audit_verdict": verdict,
+                       "audit_scope": "bounded; full declared gates for selected steps",
+                       "stale_downstream": ({"17": {"status": "NOT_MEASURED"}}
+                                            if stale else {}),
+                       "bounded_disclosures": [{"refresh": "whole-flow", "kind": "skipped"}]
+                       }).encode() + b"\n"
+
+
+@pytest.mark.parametrize("route", ["entry", "forwarded"])
+def test_bounded_main_consumes_its_exact_terminal_report(project, monkeypatch, route):
+    other = project / "reports/orchestrator/windows/newer-unrelated/phase3_one_shot.json"
+    other.parent.mkdir(parents=True)
+    other.write_bytes(_bounded_terminal("newer-unrelated", verdict="FAIL"))
+    obs = _drive_bounded_phase3_receiver(V, project, monkeypatch, route=route,
+        child_document=lambda token: _bounded_terminal(token, route=route))
+    doc = obs["summary"]
+    assert obs["rc"] == 0, obs
+    assert doc["bounded"] is True and doc["dispatched_verdict"] == "PASS", doc
+    assert doc["verdict"] == "NOT_MEASURED" and doc["audit_verdict"] == "NOT_MEASURED", doc
+    assert doc["stale_downstream"] == {"17": {"status": "NOT_MEASURED"}}, doc
+    assert obs["published"]["canonical_before"] == obs["published"]["canonical_after"]
+    assert obs["published"]["scoped_before"] == obs["published"]["scoped_after"]
+    p3 = next(t for t in obs["trace"] if Path(t["runner"]).name == "phase3_one_shot_runner.py")
+    assert p3["argv"][p3["argv"].index("--entry-step") + 1] == ("15" if route == "entry" else "9")
+
+
+@pytest.mark.parametrize("route", ["entry", "forwarded"])
+def test_bounded_main_propagates_terminal_failure(project, monkeypatch, route):
+    obs = _drive_bounded_phase3_receiver(V, project, monkeypatch, route=route,
+        child_document=lambda token: _bounded_terminal(token, verdict="FAIL", route=route),
+        child_rc=1)
+    assert obs["rc"] == 1, obs
+    assert obs["summary"]["dispatched_verdict"] == "FAIL", obs
+    assert obs["summary"]["verdict"] == "FAIL", obs
+
+
+@pytest.mark.parametrize("route", ["entry", "forwarded"])
+@pytest.mark.parametrize("damage", ["missing", "malformed", "nonobject", "wrong-id",
+                                     "wrong-directory", "stale", "missing-verdict", "unknown-verdict",
+                                     "unbounded-account"])
+def test_bounded_main_never_takes_unusable_or_other_terminal_as_dispatch_pass(
+        project, monkeypatch, route, damage):
+    def sender(token):
+        if damage == "missing":
+            return None
+        if damage == "malformed":
+            return b"{"
+        if damage == "nonobject":
+            return b"[]"
+        if damage == "wrong-id":
+            return _bounded_terminal("not-this-parent", route=route)
+        d = json.loads(_bounded_terminal(token, route=route))
+        if damage == "missing-verdict":
+            del d["verdict"]
+        if damage == "unknown-verdict":
+            d["verdict"] = "UNRECOGNIZED"
+        if damage == "unbounded-account":
+            d["bounded"] = False
+        return json.dumps(d).encode()
+    obs = _drive_bounded_phase3_receiver(V, project, monkeypatch, route=route,
+        child_document=sender,
+        published_token="different-window" if damage == "wrong-directory" else None,
+        report_mtime=1 if damage == "stale" else None)
+    assert obs["summary"].get("dispatched_verdict") != "PASS", obs
+    assert next(r for r in obs["summary"]["phases"]
+                if r["name"] == "phase3")["verdict"] != "PASS", obs
+    assert obs["summary"]["verdict"] != "PASS", obs
+
+
+@pytest.mark.parametrize("route", ["entry", "forwarded"])
+def test_bounded_main_canonical_pass_cannot_replace_its_missing_window(
+        project, monkeypatch, route):
+    token = "1" * 32
+    obs = _drive_bounded_phase3_receiver(V, project, monkeypatch, route=route,
+        parent_token=token, canonical_bytes=_bounded_terminal(token, route=route),
+        child_document=None)
+    assert obs["summary"].get("dispatched_verdict") != "PASS", obs
+    assert next(r for r in obs["summary"]["phases"]
+                if r["name"] == "phase3")["verdict"] != "PASS", obs
+    assert obs["rc"] != 0, obs
+
+
+@pytest.mark.parametrize("route", ["entry", "forwarded"])
+@pytest.mark.parametrize("valid_identity", [True, False], ids=["current", "wrong-id"])
+def test_bounded_main_retains_nonzero_child_rc(project, monkeypatch, route, valid_identity):
+    obs = _drive_bounded_phase3_receiver(V, project, monkeypatch, route=route,
+        child_document=lambda token: _bounded_terminal(
+            token if valid_identity else "not-this-parent", route=route), child_rc=7)
+    assert obs["rc"] == 7, obs
+    phase = next(r for r in obs["summary"]["phases"] if r["name"] == "phase3")
+    assert phase["rc"] == 7, phase
+    assert phase["verdict"] == ("PASS" if valid_identity else
+                                "FAIL" if route == "forwarded" else "NOT_MEASURED"), phase
+
+
+@pytest.mark.parametrize("canonical,expected", [("PASS", "PASS"), ("FAIL", "FAIL"),
+                                                (None, "NOT_MEASURED")])
+def test_unbounded_row_still_reads_only_its_canonical_report(project, canonical, expected):
+    if canonical is not None:
+        _report(project, "phase3_one_shot.json", {"verdict": canonical})
+    other = project / "reports/orchestrator/windows/unrelated/phase3_one_shot.json"
+    other.parent.mkdir(parents=True)
+    other.write_bytes(_bounded_terminal("unrelated", verdict="PASS"))
+    # The pre-existing API and no path override: base is fully invocable too.
+    verdict, _ = V._row_verdict(project, "phase3_one_shot.json", 0, 0.0,
+                               "phase3", _acceptance=[])
+    assert verdict == expected

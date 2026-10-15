@@ -1065,6 +1065,12 @@ def _phase_report_path(project: Path, report_name: str) -> Path:
     return _pl.report_path(project, report_name)
 
 
+def _phase3_window_report_path(project: Path, window_run_id: str) -> Path:
+    """The terminal account published for this parent's exact window token."""
+    return (project / "reports/orchestrator/windows" / window_run_id
+            / "phase3_one_shot.json")
+
+
 def _report_exists(project: Path, report_name: str) -> bool:
     """Is there a `report_name` in this tree at all -- whoever wrote it, whenever?"""
     try:
@@ -1145,7 +1151,9 @@ def _default_track_verdict(project: Path, started_at: float, step_id: str,
 
 
 def _row_verdict(project: Path, report_name: str, rc: int, started_at: float,
-                 phase: str, *, _acceptance=None) -> Tuple[str, Optional[str]]:
+                 phase: str, *, _acceptance=None,
+                 report_path: Optional[Path] = None,
+                 expected_window_run_id: Optional[str] = None) -> Tuple[str, Optional[str]]:
     """This phase's verdict, or NOT_MEASURED with the reason. R-0915-151.
 
     A phase that RAN here and left no report written at or after its own start has
@@ -1163,9 +1171,14 @@ def _row_verdict(project: Path, report_name: str, rc: int, started_at: float,
                        ', '.join(f"step {record['id']}: {record['status']}" for record in blocked))
     if any(record['status'] == 'FAIL' for record in blocked):
         return 'FAIL', consumer_reason
-    path = _phase_report_path(project, report_name)
-    exists = _report_exists(project, report_name)
-    fresh = _published_here(project, report_name, started_at)
+    if report_path is None:
+        path = _phase_report_path(project, report_name)
+        exists = _report_exists(project, report_name)
+        fresh = _published_here(project, report_name, started_at)
+    else:
+        path = report_path
+        exists = path.is_file()
+        fresh = _pl.published_here(path, started_at)
     # ONE DECISION, ON (rc, DID THIS INVOCATION PUBLISH A REPORT). R-0915-160, second cut.
     #
     # THE PROCESS IS ALSO A WITNESS, AND WHEN IT FAILED IT IS THE ONLY ONE. My round-3 rule read
@@ -1220,6 +1233,19 @@ def _row_verdict(project: Path, report_name: str, rc: int, started_at: float,
             f"{phase} exited 0 and its {report_name} predates {phase}'s start in this "
             f"invocation, so that file describes an earlier run and its verdict is not read")
     rep = _read_report(path)
+    if report_path is not None and not isinstance(rep, dict):
+        rep = {}
+    if expected_window_run_id is not None and not (
+            rep.get("bounded") and
+            rep.get("window_run_id") == expected_window_run_id and
+            rep.get("verdict")):
+        # Check provenance BEFORE a report can supply the phase row. Checking
+        # it only later for the bounded label still borrowed PASS from another
+        # window (or the rc=0 fallback of an incomplete account).
+        return ("FAIL" if rc else "NOT_MEASURED"), (
+            f"{phase} exited {rc}, but {path} does not carry this window's "
+            f"bounded identity and stated verdict ({expected_window_run_id}); "
+            "its phase verdict is not adopted")
     # A COPY PUBLISHED BEFORE THE PHASE'S OWN FINAL AUDIT IS NOT ITS VERDICT.
     # design_one_shot_runner publishes phase2_one_shot.json once before the
     # final audit (so the audit judges this run's record) and again from its
@@ -2210,10 +2236,11 @@ def _main() -> int:
         phase3_started = time.time()
         rc = _run_phase("PHASE 3 bounded window", _phase_runner("phase3"),
                         p3_args, env=p3_env)
-        phase3_report = _phase_report_path(project, "phase3_one_shot.json")
+        phase3_report = _phase3_window_report_path(project, window_run_id)
         p3 = (_read_report(phase3_report)
               if _pl.published_here(phase3_report, phase3_started) else {})
-        if p3.get("window_run_id") != window_run_id:
+        if not (isinstance(p3, dict) and p3.get("bounded")
+                and p3.get("window_run_id") == window_run_id and p3.get("verdict")):
             p3 = {}
         phase3_verdict = p3.get("verdict", "NOT_MEASURED")
         p3_stale = p3.get("stale_downstream") or {}
@@ -2899,19 +2926,26 @@ def _main() -> int:
             _phase_started["phase3"] = time.time()
             rc = _run_phase("PHASE 3 (synth → PnR → GDS → DRC → LVS)",
                             runner, p3_args, env=p3_env)
+            phase3_report = (_phase3_window_report_path(project, window_run_id)
+                             if _p3_forward_window else
+                             _phase_report_path(project, "phase3_one_shot.json"))
             verdict, _fresh_why = _row_verdict(
                 project, "phase3_one_shot.json", rc,
-                _phase_started.get("phase3", t0), "phase3")
+                _phase_started.get("phase3", t0), "phase3",
+                **({"report_path": phase3_report,
+                    "expected_window_run_id": window_run_id}
+                   if _p3_forward_window else {}))
             if _fresh_why:
                 advisories.append(_fresh_why)
-            rep = _read_report(_phase_report_path(project, "phase3_one_shot.json"))
+            rep = _read_report(phase3_report)
+            if not isinstance(rep, dict):
+                rep = {}
             plan.append(("phase3", verdict, rc))
             reports["phase3"] = rep
             _p3_window_ran = bool(_p3_forward_window and rep.get("bounded")
                                   and rep.get("window_run_id") == window_run_id
                                   and _pl.published_here(
-                                      _phase_report_path(project, "phase3_one_shot.json"),
-                                      _phase_started["phase3"]))
+                                      phase3_report, _phase_started["phase3"]))
             if verdict == "FAIL":
                 halted_at = "phase3"
     else:
