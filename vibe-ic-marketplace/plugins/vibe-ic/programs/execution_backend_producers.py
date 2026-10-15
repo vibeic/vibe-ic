@@ -10,6 +10,7 @@ import time
 import json
 import os
 import shutil
+import shlex
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -533,6 +534,37 @@ def _handoff(project, ll, folder, names):
     target = {view: project / name for view, name in names.items()}
     return ll.handoff_to_direct(folder / 'state_out.json', target,
                project / RPT / ('execution-backend-' + folder.parent.name + '-handoff.json'))
+
+
+def _publish_step17_timing_script(project, ll, folder, config, image):
+    """Publish the selected native session's actual OpenROAD subject bytes."""
+    try:
+        folder = Path(folder).resolve()
+        receipt = ll.validate_step_receipt(folder, 'Vibeic.PostGPLFanoutClosure')
+        if (receipt['input']['image'] != image
+                or receipt['input']['config'] != snap.sha(config)):
+            raise ValueError('selected native image/config differs')
+        record_path = folder / 'pnr_postgpl_timing.json'
+        if (record_path.is_symlink()
+                or receipt['sha256'].get(record_path.name) != snap.sha(record_path)):
+            raise ValueError('native script-body record is not receipt-bound')
+        record = json.loads(record_path.read_text())
+        subject = folder / 'pnr_postgpl_timing.tcl'
+        commands = folder / 'COMMANDS'
+        if (record['script'] != subject.name or subject.is_symlink()
+                or not subject.is_file() or not subject.stat().st_size
+                or record['sha256'] != snap.sha(subject)
+                or record['commands_sha256'] != snap.sha(commands)):
+            raise ValueError('executed subject or command journal changed')
+        journals = [shlex.split(line) for line in commands.read_text().splitlines()
+                    if line.strip()]
+        if (len(journals) != 1 or not journals[0]
+                or Path(journals[0][-1]).resolve() != subject):
+            raise ValueError('native COMMANDS names another subject')
+        target = project / PNR / subject.name
+        _copy(subject, target)
+    except (ll.Refusal, OSError, ValueError, KeyError, TypeError) as exc:
+        raise em.Refusal('BACKEND_PLACEMENT_TIMING_SCRIPT_UNBOUND', str(exc)) from exc
 
 
 def _read_step15_bounded_state(project):
@@ -1143,6 +1175,8 @@ def produce_pnr(project, params):
         handoff = _handoff(project, ll, by[ids[-1]], {
             'def': PNR + 'placed.def', 'odb': PNR + 'librelane_placed.odb'})
         snap.dump(project / RPT / 'librelane_placement_handoff.json', handoff)
+        _publish_step17_timing_script(project, ll, by['Vibeic.PostGPLFanoutClosure'],
+                                     configs['Vibeic.PostGPLFanoutClosure'], params['image_id'])
         _logs(project, by.values(), 'librelane_placement.log')
     elif sid == '18':
         ids = ['Vibeic.InsertSpareCells']
