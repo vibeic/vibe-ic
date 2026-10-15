@@ -214,6 +214,8 @@ def canonical_program_paths(programs_dir: Path) -> tuple[Path, ...]:
         programs_dir / "execution_frontend_providers.py",
         programs_dir / "execution_frontend_worker.py",
         programs_dir / "execution_backend_producers.py",
+        programs_dir / "drv_capture_plan.py",
+        programs_dir / "drv_signoff_capture.py",
         *(programs_dir / name for name in PLUGIN_HOST_MODULES),
         *plugin_sources,
         programs_dir.parent / "flow" / "phase1_phase2_phase3.yaml",

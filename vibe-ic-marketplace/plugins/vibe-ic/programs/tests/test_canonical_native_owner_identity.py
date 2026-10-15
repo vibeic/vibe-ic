@@ -27,6 +27,7 @@ def admission_case(tmp_path, monkeypatch):
     import librelane_contract
     for name in ['design_one_shot_runner.py', 'phase3_one_shot_runner.py',
                  'librelane_contract.py', 'execution_backend_producers.py',
+                 'drv_capture_plan.py', 'drv_signoff_capture.py',
                  *librelane_contract.PLUGIN_HOST_MODULES]:
         shutil.copyfile(actual / name, programs / name)
     shutil.copytree(actual / 'librelane_plugins', programs / 'librelane_plugins',
@@ -188,3 +189,64 @@ def test_identical_source_tree_under_another_absolute_root_stays_duplicate(admis
     assert repeated.reason == 'DUPLICATE_NO_NEW_EVIDENCE'
     assert not repeated.admitted
     assert repeated.identity == first.identity
+
+
+@pytest.mark.parametrize('span', ['phase2', 'phase3'])
+@pytest.mark.parametrize('owner', ['drv_capture_plan.py', 'drv_signoff_capture.py'])
+def test_capture_host_owner_change_reopens_and_preserves_duplicate_controls(
+        admission_case, span, owner, tmp_path):
+    import hashlib
+    import json
+
+    module, project, programs = admission_case
+    config = {'pdk': 'fixture-pdk', 'entry_step': '22', 'exit_step': '27'}
+    path = programs / owner
+    original = path.read_bytes()
+    first = module.admit_span(project, span, programs, 'fixture-container', config)
+    unchanged = module.admit_span(project, span, programs, 'fixture-container', config)
+    try:
+        path.write_bytes(original + b'\n# neutral capture host source-byte change\n')
+        changed_sha256 = hashlib.sha256(path.read_bytes()).hexdigest()
+        changed = module.admit_span(project, span, programs, 'fixture-container', config)
+        repeated = module.admit_span(project, span, programs, 'fixture-container', config)
+    finally:
+        path.write_bytes(original)
+    reverted = module.admit_span(project, span, programs, 'fixture-container', config)
+    elsewhere = tmp_path / 'other-checkout/plugin'
+    shutil.copytree(programs.parent, elsewhere)
+    portable = module.admit_span(
+        project, span, elsewhere / 'programs', 'fixture-container', config)
+    relative_keys = tuple(p.relative_to(programs.parent).as_posix()
+                          for p in module.canonical_program_paths(programs))
+    portable_keys = tuple(p.relative_to(elsewhere).as_posix()
+                         for p in module.canonical_program_paths(elsewhere / 'programs'))
+    observed = {
+        'scope': 'SOURCE_CONTROL: actual admission API; neutral image/provenance I/O',
+        'owner': owner, 'span': span,
+        'original_sha256': hashlib.sha256(original).hexdigest(),
+        'changed_sha256': changed_sha256,
+        'restored_exact': path.read_bytes() == original,
+        'changed_reason': changed.reason,
+        'changed_admitted': changed.admitted,
+        'identities': {name: row.identity_sha256 for name, row in (
+            ('first', first), ('unchanged', unchanged), ('changed', changed),
+            ('repeated', repeated), ('reverted', reverted), ('portable', portable))},
+        'same_relative_keys': relative_keys == portable_keys,
+    }
+    (tmp_path / 'capture-host-admission.observation.json').write_text(
+        json.dumps(observed, indent=2) + '\n')
+    assert first.admitted and first.reason == 'ADMITTED', observed
+    assert not unchanged.admitted and unchanged.reason == 'DUPLICATE_NO_NEW_EVIDENCE', observed
+    assert unchanged.identity == first.identity, observed
+    assert not repeated.admitted and repeated.reason == 'DUPLICATE_NO_NEW_EVIDENCE', observed
+    assert repeated.identity == changed.identity, observed
+    assert not reverted.admitted and reverted.reason == 'DUPLICATE_NO_NEW_EVIDENCE', observed
+    assert reverted.identity == first.identity, observed
+    assert not portable.admitted and portable.reason == 'DUPLICATE_NO_NEW_EVIDENCE', observed
+    assert portable.identity == first.identity, observed
+    assert relative_keys == portable_keys, observed
+    assert path.read_bytes() == original, observed
+    assert changed_sha256 != observed['original_sha256'], observed
+    assert observed['changed_reason'] == 'ADMITTED', observed
+    assert changed.admitted, observed
+    assert changed.identity_sha256 != first.identity_sha256, observed
