@@ -1032,7 +1032,9 @@ proc insert_buffer {args} {
     lappend ::events insert
 }
 proc detailed_placement {args} {
-    if {$args ne {-max_displacement {10 20}}} {error "unexpected placement flags $args"}
+    if {[info exists ::env(PL_MAX_DISPLACEMENT_X)] && [info exists ::env(PL_MAX_DISPLACEMENT_Y)]} {
+        if {$args ne {-max_displacement {10 20}}} {error "unexpected placement flags $args"}
+    } elseif {$args ne {}} {error "missing pair must use native default: $args"}
     foreach i $::insts { if {![string match vic_cts_fanout_* $i] && $::world_ps($i) ni {LOCKED FIRM COVER}} {error "original cell moved $i"} }
     if {$::env(DAMAGE) eq "placement-error"} {error "injected placement error"}
     set ::legal 1; lappend ::events placement
@@ -1083,7 +1085,7 @@ source $::env(ENTRY)
 
 
 def _clock_fanout_entry(tmp_path, *, entry="sizing", cap=4, loads=16,
-                        damage="none", retap="none"):
+                        damage="none", retap="none", displacement=("10", "20")):
     """Reusable real-entry API; no helper copied out of the product source."""
     import os
     root = tmp_path / "native-boundary"
@@ -1100,6 +1102,11 @@ def _clock_fanout_entry(tmp_path, *, entry="sizing", cap=4, loads=16,
                VIBEIC_CLKPATH_SIZING_TCL=str(sizing), ENTRY=str(script), WORLD_OUT=str(output),
                LOADS=str(loads), DAMAGE=damage, RETAP=retap,
                PL_MAX_DISPLACEMENT_X="10", PL_MAX_DISPLACEMENT_Y="20")
+    for key, value in zip(("PL_MAX_DISPLACEMENT_X", "PL_MAX_DISPLACEMENT_Y"), displacement):
+        if value is None:
+            env.pop(key, None)
+        else:
+            env[key] = value
     if cap is None:
         env.pop("MAX_FANOUT_CONSTRAINT", None)
     else:
@@ -1202,5 +1209,19 @@ def test_clock_fanout_final_retap_branch_is_closed_before_census(tmp_path, retap
     actual_excess = max(0, run.metrics["vibeic__cts__max_fanout"] - 4)
     assert actual_excess == 0, {"actual_max": run.metrics, "raw": run.text}
     assert run.metrics["vibeic__cts__max_fanout"] <= 4, {"actual_max": run.metrics, "raw": run.text}
+    rc, doc, text = _clock_fanout_gate(tmp_path / "project", run, 4)
+    assert (rc, doc.get("verdict")) == (0, "PASS"), text
+
+
+@pytest.mark.parametrize("entry", ["sizing", "retap"])
+@pytest.mark.parametrize("displacement", [(None, None), ("10", None), (None, "20")])
+def test_clock_fanout_entry_uses_native_default_without_complete_displacement_pair(
+        tmp_path, entry, displacement):
+    run = _clock_fanout_entry(tmp_path, entry=entry, displacement=displacement)
+    actual_process_rc = run.rc
+    assert actual_process_rc == 0, {"actual_rc": actual_process_rc, "raw": run.text}
+    assert run.written, run.text
+    actual_max = run.metrics["vibeic__cts__max_fanout"]
+    assert actual_max == 4, {"actual_max": actual_max, "raw": run.text}
     rc, doc, text = _clock_fanout_gate(tmp_path / "project", run, 4)
     assert (rc, doc.get("verdict")) == (0, "PASS"), text

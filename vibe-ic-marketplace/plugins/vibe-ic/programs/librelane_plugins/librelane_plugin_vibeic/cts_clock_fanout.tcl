@@ -160,8 +160,13 @@ proc vic_close_cts_clock_fanout {prects} {
         }
     }
     set failed [catch {
-        detailed_placement -max_displacement \
-            [list $::env(PL_MAX_DISPLACEMENT_X) $::env(PL_MAX_DISPLACEMENT_Y)]
+        set placement_args {}
+        if {[info exists ::env(PL_MAX_DISPLACEMENT_X)] &&
+            [info exists ::env(PL_MAX_DISPLACEMENT_Y)]} {
+            lappend placement_args -max_displacement \
+                [list $::env(PL_MAX_DISPLACEMENT_X) $::env(PL_MAX_DISPLACEMENT_Y)]
+        }
+        detailed_placement {*}$placement_args
         check_placement -verbose
         set_global_connections
     } why options]
