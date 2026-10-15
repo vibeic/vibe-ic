@@ -16,6 +16,13 @@ close $_vic_fh
 
 source [file join [file dirname [info script]] external_capture_launch_retap.tcl]
 
+# Retap can add a load even when the preceding sizing state met the cap.
+source [file join [file dirname [info script]] cts_clock_fanout.tcl]
+if {[catch {vic_close_cts_clock_fanout $_vic_prects_insts} _vic_why]} {
+    puts stderr "VIC_CTS_FANOUT_REFUSED: $_vic_why"
+    exit 1
+}
+
 # Re-measure CTS fanout after retap, since a retained launch register is a
 # new load on its target net. This is the metric consumed by CTS quality.
 set _vic_cts_insts 0

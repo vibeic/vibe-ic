@@ -890,3 +890,317 @@ def test_the_split_works_on_the_step_17_18_librelane_consumer_deck(real_deck):
                          def_c='/w/post_hold.def', after_restore_tcl='')
     assert 'read_db /w/post_hold.odb' in tail and 'read_def /w/ll_placed.def' not in tail
     assert _has(tail, 'detailed_route') and not _has(tail, 'clock_tree_synthesis')
+
+
+# SOURCE_CONTROL: the complete installed Tcl entry runs under tclsh. Only the
+# OpenROAD/ODB process edge and its view writer are replaced; the closure and
+# final census are the product source, and the consumer below is the real CLI.
+_CTS_FANOUT_WORLD = r"""
+namespace eval ord {}; namespace eval sta {}; namespace eval utl {}
+set ::insts {}; set ::nets {}; set ::terms {}; set ::metrics [dict create]
+set ::inserted 0; set ::pg 0; set ::legal 0; set ::written 0
+proc object {kind name} { interp alias {} $name {} dispatch $kind $name; return $name }
+proc net {name} {
+    lappend ::nets $name; set ::world_nt($name) {}; set ::world_bt($name) {}
+    set ::world_sig($name) SIGNAL; object net $name
+}
+proc connect {term net} {
+    if {[info exists ::world_tn($term)] && $::world_tn($term) ne "NULL"} {
+        set old $::world_tn($term); set i [lsearch -exact $::world_nt($old) $term]
+        set ::world_nt($old) [lreplace $::world_nt($old) $i $i]
+    }
+    set ::world_tn($term) $net
+    if {$net ne "NULL"} { lappend ::world_nt($net) $term }
+}
+proc inst {name master} {
+    lappend ::insts $name; set ::world_im($name) $master; set ::world_ps($name) PLACED
+    set ::world_it($name) {}; object inst $name; object master $master
+    foreach {pin dir sig} {I INPUT SIGNAL Z OUTPUT SIGNAL VP INOUT POWER VG INOUT GROUND} {
+        set term $name/$pin; lappend ::world_it($name) $term; lappend ::terms $term
+        set ::world_ti($term) $name; set ::world_td($term) $dir; set ::world_ts($term) $sig
+        set ::world_tp($term) $pin; set ::world_tn($term) NULL; object term $term
+    }
+}
+proc dispatch {kind obj method args} {
+    switch -- $kind {
+        block {
+            switch -- $method {
+                getInsts { return $::insts }
+                findInst { set x [lindex $args 0]; if {[info exists ::world_im($x)]} {return $x}; return NULL }
+                findNet { set x [lindex $args 0]; if {[info exists ::world_nt($x)]} {return $x}; return NULL }
+            }
+        }
+        inst {
+            switch -- $method {
+                getName { return $obj }
+                getMaster { return $::world_im($obj) }
+                getITerms { return $::world_it($obj) }
+                findITerm { set t $obj/[lindex $args 0]; if {[info exists ::world_tn($t)]} {return $t}; return NULL }
+                getPlacementStatus { return $::world_ps($obj) }
+                setPlacementStatus { set ::world_ps($obj) [lindex $args 0]; return }
+            }
+        }
+        master { if {$method eq "getName"} { return $obj } }
+        net {
+            switch -- $method {
+                getName { return $obj }
+                getITerms { return $::world_nt($obj) }
+                getBTerms { return $::world_bt($obj) }
+                getSigType { return $::world_sig($obj) }
+            }
+        }
+        term {
+            switch -- $method {
+                getMTerm { return $obj }
+                getInst { return $::world_ti($obj) }
+                getIoType { return $::world_td($obj) }
+                getSigType { return $::world_ts($obj) }
+                getName { return $::world_tp($obj) }
+                getNet { return $::world_tn($obj) }
+                disconnect { connect $obj NULL; return }
+                connect { connect $obj [lindex $args 0]; return }
+            }
+        }
+    }
+    error "unsupported DB operation $kind $obj $method $args"
+}
+object block B
+proc ord::get_db_block {} { return B }
+proc all_clocks {} { return clock }
+proc sta::find_clk_nets {clock} {
+    set nets {}; foreach n $::nets { if {$n ni {n_data n_power n_ground}} {lappend nets $n} }; return $nets
+}
+proc get_cells {args} {
+    set n [lindex $args end]
+    if {[lsearch -exact $args -of_objects] >= 0} { return [lindex [split $n /] 0] }
+    return $n
+}
+proc get_lib_cells {args} { return $::world_im([lindex $args end]) }
+proc get_property {obj field} {
+    switch -- $field {
+        is_buffer { return [expr {$obj ne "unsafe_role"}] }
+        is_inverter { return [expr {$::env(DAMAGE) eq "inverter"}] }
+        dont_use { return [expr {$::env(DAMAGE) eq "dont-use"}] }
+        is_propagated { return 1 }
+        period { return 20 }
+        is_register_clock { return 1 }
+        lib_pin_name { return I }
+        startpoint { return r0/Z }
+        slack {
+            if {$::env(RETAP) eq "none"} { return 5 }
+            if {$::world_tn(r0/I) eq "n_root"} {return 0.2}; return -0.2
+        }
+    }
+    error "unsupported STA property $obj $field"
+}
+proc get_pins {args} {
+    if {[lindex $args 0] eq "-of_objects"} { return [list [lindex $args 1]/I] }
+    set pins [lindex $args 0]
+    foreach pin $pins { if {![info exists ::world_tn($pin)]} {error "unknown load $pin"} }
+    return $pins
+}
+proc get_full_name {x} { return $x }
+proc all_outputs {} { return out }
+proc all_registers {} { return r0 }
+proc find_timing_paths {args} { return path }
+proc sta::worst_slack {which} {
+    if {$which eq "-min" && $::env(RETAP) eq "rollback" && $::world_tn(r0/I) eq "n_root"} {return -0.1}
+    return 0.1
+}
+proc sta::total_negative_slack {args} { return 0 }
+proc set_propagated_clock {args} {}
+proc unset_propagated_clock {args} {}
+proc estimate_parasitics {args} { lappend ::events estimate }
+proc read_current_odb {} {}
+proc utl::metric_integer {key value} { dict set ::metrics $key $value }
+proc insert_buffer {args} {
+    if {[llength $args] != 8} {error "unexpected insert_buffer arity"}
+    array set a $args
+    if {[lsort [array names a]] ne [lsort {-buffer_cell -load_pins -buffer_name -net_name}]} {error "wrong native flags"}
+    if {$::env(DAMAGE) eq "insert-error"} {error "injected native insert error"}
+    incr ::inserted
+    # The API accepts base names; a legal receiver may uniquify both names.
+    set actual_name "$a(-buffer_name)_native"
+    set actual_net "$a(-net_name)_native"
+    inst $actual_name $a(-buffer_cell); net $actual_net
+    set old $::world_tn([lindex $a(-load_pins) 0])
+    connect $actual_name/I $old; connect $actual_name/Z $actual_net
+    foreach pin $a(-load_pins) {
+        if {$::world_tn($pin) ne $old} {error "mixed source nets"}
+        connect $pin $actual_net
+    }
+    lappend ::events insert
+}
+proc detailed_placement {args} {
+    if {$args ne {-max_displacement {10 20}}} {error "unexpected placement flags $args"}
+    foreach i $::insts { if {![string match vic_cts_fanout_* $i] && $::world_ps($i) ni {LOCKED FIRM COVER}} {error "original cell moved $i"} }
+    if {$::env(DAMAGE) eq "placement-error"} {error "injected placement error"}
+    set ::legal 1; lappend ::events placement
+}
+proc check_placement {args} {
+    if {$args ne {-verbose}} {error "unexpected check flags"}
+    if {$::env(DAMAGE) eq "illegal"} {error "injected illegal placement"}
+}
+proc set_global_connections {} {
+    foreach i $::insts { connect $i/VP n_power; connect $i/VG n_ground }
+    set ::pg 1; lappend ::events pg
+}
+proc write_views {} {
+    # The real image writer also applies global connections before serializing.
+    set_global_connections
+    foreach i $::insts {
+        if {$::world_tn($i/VP) ne "n_power" || $::world_tn($i/VG) ne "n_ground"} {error "PG absent $i"}
+        if {$::world_ps($i) ne "PLACED" && $i ni {spare payload}} {error "placement protection leaked $i"}
+    }
+    incr ::written; lappend ::events write
+    set f [open $::env(WORLD_OUT) w]
+    puts $f "meta|$::inserted|$::legal|$::pg|$::written"
+    dict for {k v} $::metrics { puts $f "metric|$k|$v" }
+    foreach i $::insts { puts $f "inst|$i|$::world_im($i)|$::world_ps($i)" }
+    foreach n $::nets { puts $f "net|$n|[join $::world_nt($n) ,]|[join $::world_bt($n) ,]" }
+    puts $f "events|[join $::events ,]"
+    close $f
+}
+set ::events {}
+foreach n {n_input n_root n_data n_power n_ground} { net $n }
+inst origin mux_role; connect origin/Z n_input
+if {$::env(DAMAGE) eq "no-role"} {inst root unsafe_role} else {inst root relay_role}
+connect root/I n_input; connect root/Z n_root
+for {set i 0} {$i < $::env(LOADS)} {incr i} {
+    inst leaf$i relay_role; connect leaf$i/I n_root; net n_leaf$i; connect leaf$i/Z n_leaf$i
+    inst r$i storage_role; connect r$i/I n_leaf$i
+}
+inst payload logic_role; connect payload/Z n_data
+inst spare spare_role; set ::world_ps(spare) FIRM
+for {set i 0} {$i < 17} {incr i} {inst d$i logic_role; connect d$i/I n_data}
+if {$::env(DAMAGE) eq "port-load"} {set ::world_bt(n_root) {out_clock}}
+if {$::env(DAMAGE) eq "multi-driver"} {connect spare/Z n_root}
+set f [open $::env(VIBEIC_CLKPATH_PRECTS_INSTANCES) w]
+foreach i $::insts {if {$i ne "root" && ![string match leaf* $i]} {puts $f $i}}
+close $f
+source $::env(ENTRY)
+"""
+
+
+def _clock_fanout_entry(tmp_path, *, entry="sizing", cap=4, loads=16,
+                        damage="none", retap="none"):
+    """Reusable real-entry API; no helper copied out of the product source."""
+    import os
+    root = tmp_path / "native-boundary"
+    common = root / "openroad/common"
+    common.mkdir(parents=True)
+    for name in ("io.tcl", "resizer.tcl", "set_rc.tcl"):
+        write(common / name, "# SOURCE_CONTROL image I/O boundary\n")
+    sizing = write(root / "sizing.tcl", "# sizing process boundary; topology unchanged\n")
+    step_dir = PROGRAMS / "librelane_plugins/librelane_plugin_vibeic"
+    script = step_dir / ("clock_path_drive_sizing.tcl" if entry == "sizing"
+                         else "external_capture_launch_retap_step.tcl")
+    output = root / "world.tsv"
+    env = dict(os.environ, SCRIPTS_DIR=str(root), VIBEIC_CLKPATH_PRECTS_INSTANCES=str(root / "pre.txt"),
+               VIBEIC_CLKPATH_SIZING_TCL=str(sizing), ENTRY=str(script), WORLD_OUT=str(output),
+               LOADS=str(loads), DAMAGE=damage, RETAP=retap,
+               PL_MAX_DISPLACEMENT_X="10", PL_MAX_DISPLACEMENT_Y="20")
+    if cap is None:
+        env.pop("MAX_FANOUT_CONSTRAINT", None)
+    else:
+        env["MAX_FANOUT_CONSTRAINT"] = str(cap)
+    harness = write(root / "run.tcl", _CTS_FANOUT_WORLD)
+    proc = subprocess.run(["tclsh", str(harness)], text=True,
+                          capture_output=True, env=env, timeout=15)
+    write(root / "stdout.log", proc.stdout)
+    write(root / "stderr.log", proc.stderr)
+    put(root / "PROCESS.json", {"scope": "SOURCE_CONTROL", "argv": ["tclsh", str(harness)],
+                                "rc": proc.returncode, "entry": entry, "cap": cap,
+                                "loads": loads, "damage": damage, "retap": retap})
+    lines = [x.split("|") for x in output.read_text().splitlines()] if output.exists() else []
+    metrics = {x[1]: int(x[2]) for x in lines if x[0] == "metric"}
+    nets = {x[1]: x[2].split(",") if x[2] else [] for x in lines if x[0] == "net"}
+    instances = {x[1]: (x[2], x[3]) for x in lines if x[0] == "inst"}
+    return SimpleNamespace(rc=proc.returncode, text=proc.stdout + proc.stderr,
+                           metrics=metrics, nets=nets, instances=instances,
+                           rows=lines, written=output.exists())
+
+
+def _clock_fanout_gate(project, run, cap):
+    _handoff(project, {c: 0.15 for c in CORNERS}, cap=cap, extra=run.metrics)
+    return _gate("cts_quality_check", project)
+
+
+@pytest.mark.parametrize("entry", ["sizing", "retap"])
+@pytest.mark.parametrize("cap", [2, 3, 4])
+def test_clock_fanout_actual_entry_closes_active_cap(tmp_path, entry, cap):
+    run = _clock_fanout_entry(tmp_path, entry=entry, cap=cap)
+    assert run.rc == 0 and run.written, run.text
+    observed_max = run.metrics["vibeic__cts__max_fanout"]
+    created = {x for x in run.instances if x == "root" or x.startswith(("leaf", "vic_cts_fanout_"))}
+    graph_max = max(len(pins) - 1 for pins in run.nets.values()
+                    if any(f"{x}/Z" in pins for x in created))
+    assert observed_max == graph_max, {"metric": observed_max, "actual_graph_max": graph_max}
+    all_pins = [p for pins in run.nets.values() for p in pins]
+    assert len(all_pins) == len(set(all_pins)), "a terminal was duplicated across nets"
+    assert {"n_input", "n_root", "n_data", *[f"n_leaf{i}" for i in range(16)]} <= run.nets.keys()
+    actual_excess = max(0, observed_max - cap)
+    assert actual_excess == 0, {"observed_max": observed_max, "cap": cap, "raw": run.text}
+    assert observed_max <= cap, {"observed_max": observed_max, "cap": cap, "raw": run.text}
+    rc, doc, text = _clock_fanout_gate(tmp_path / "project", run, cap)
+    assert (rc, doc.get("verdict")) == (0, "PASS"), text
+    assert run.nets["n_data"] == ["payload/Z", *[f"d{i}/I" for i in range(17)]]
+    assert run.instances["spare"] == ("spare_role", "FIRM")
+    assert all(run.instances[x][0] == "relay_role" for x in run.instances if x.startswith("vic_cts_fanout_"))
+    # Every original register still traces through noninverting relays to the
+    # same source. This checks actual connectivity, not a reported fanout token.
+    driver = {n: [p for p in pins if p.endswith("/Z")][0] for n, pins in run.nets.items()
+              if any(p.endswith("/Z") for p in pins)}
+    pin_net = {p: n for n, pins in run.nets.items() for p in pins}
+    for i in range(16):
+        net = pin_net[f"r{i}/I"]
+        seen = set()
+        while driver[net] != "origin/Z":
+            cell = driver[net].rsplit("/", 1)[0]
+            assert cell not in seen and run.instances[cell][0] == "relay_role"
+            seen.add(cell)
+            net = pin_net[f"{cell}/I"]
+    assert run.rows[-1][1].endswith("estimate,pg,write"), run.rows[-1]
+
+
+@pytest.mark.parametrize("entry", ["sizing", "retap"])
+@pytest.mark.parametrize("damage,reason", [
+    ("no-role", "BUFFER_UNAVAILABLE"), ("inverter", "BUFFER_UNAVAILABLE"),
+    ("dont-use", "BUFFER_UNAVAILABLE"), ("insert-error", "injected native insert error"),
+    ("placement-error", "injected placement error"), ("illegal", "injected illegal placement"),
+    ("port-load", "LOAD_UNSUPPORTED"), ("multi-driver", "DRIVER_UNSUPPORTED"),
+])
+def test_clock_fanout_unusable_native_state_refuses_without_views(tmp_path, entry, damage, reason):
+    run = _clock_fanout_entry(tmp_path, entry=entry, damage=damage)
+    observed = "VIC_CTS_FANOUT_REFUSED" if run.rc == 1 and not run.written else (
+        f"rc={run.rc},written={run.written},max={run.metrics.get('vibeic__cts__max_fanout')}")
+    assert observed == "VIC_CTS_FANOUT_REFUSED", {"actual_receiver_outcome": observed, "raw": run.text}
+    assert reason in run.text, run.text
+
+
+@pytest.mark.parametrize("cap", [0, 1])
+def test_clock_fanout_impossible_cap_is_bounded_refusal(tmp_path, cap):
+    run = _clock_fanout_entry(tmp_path, cap=cap)
+    observed = "UNSPLITTABLE" if run.rc == 1 and not run.written else f"rc={run.rc},written={run.written}"
+    assert observed == "UNSPLITTABLE", {"actual_receiver_outcome": observed, "raw": run.text}
+    assert "CAP_UNSPLITTABLE" in run.text
+
+
+@pytest.mark.parametrize("cap,loads", [(4, 4), (1, 1), (None, 16)])
+def test_clock_fanout_valid_or_undeclared_population_is_unchanged(tmp_path, cap, loads):
+    run = _clock_fanout_entry(tmp_path, cap=cap, loads=loads)
+    assert run.rc == 0 and run.written, run.text
+    assert run.metrics["vibeic__cts__max_fanout"] == loads
+    assert not any(x.startswith("vic_cts_fanout_") for x in run.instances)
+
+
+@pytest.mark.parametrize("retap,loads,marker", [("keep", 4, "VIC_RETAP keep"), ("rollback", 16, "VIC_RETAP reject")])
+def test_clock_fanout_final_retap_branch_is_closed_before_census(tmp_path, retap, loads, marker):
+    run = _clock_fanout_entry(tmp_path, entry="retap", retap=retap, loads=loads)
+    assert run.rc == 0 and run.written, run.text
+    assert marker in run.text, run.text
+    actual_excess = max(0, run.metrics["vibeic__cts__max_fanout"] - 4)
+    assert actual_excess == 0, {"actual_max": run.metrics, "raw": run.text}
+    assert run.metrics["vibeic__cts__max_fanout"] <= 4, {"actual_max": run.metrics, "raw": run.text}
+    rc, doc, text = _clock_fanout_gate(tmp_path / "project", run, 4)
+    assert (rc, doc.get("verdict")) == (0, "PASS"), text

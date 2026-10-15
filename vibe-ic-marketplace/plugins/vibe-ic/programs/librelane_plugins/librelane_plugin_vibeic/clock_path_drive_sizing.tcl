@@ -27,6 +27,12 @@ source $::env(VIBEIC_CLKPATH_SIZING_TCL)
 
 if {$_vic_was_propagated} { set_propagated_clock [all_clocks] }
 
+source [file join [file dirname [info script]] cts_clock_fanout.tcl]
+if {[catch {vic_close_cts_clock_fanout $_vic_prects_insts} _vic_why]} {
+    puts stderr "VIC_CTS_FANOUT_REFUSED: $_vic_why"
+    exit 1
+}
+
 # The clock tree's fanout, measured here because this is the one session
 # that knows which instances CTS created (not in the snapshot): the largest
 # number of loads on a net such an instance drives. `cts_quality_check`
