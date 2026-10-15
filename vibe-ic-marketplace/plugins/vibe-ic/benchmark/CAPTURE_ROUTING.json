@@ -124,6 +124,15 @@
       "bucket_A_program": "programs/bit_level_full_stack_tb_check.py",
       "bucket_B_skill_file": "skills/phase2-rtl-verify/SKILL.md"
     },
+    "phase2.verilator_coverage": {
+      "description": "Capture routing for coverage stimulus admission and native Verilator measurement; does not add a flow step.",
+      "bucket_A_program": "programs/verilator_coverage_measure.py",
+      "bucket_A_related": [
+        "programs/design_one_shot_runner.py",
+        "programs/professional_tb_gen.py"
+      ],
+      "bucket_B_skill_file": "skills/testbench-gen/SKILL.md"
+    },
     "phase2.formal": {
       "description": "Step 5 declaration-to-property authoring, SymbiYosys execution, proof evidence, and expert fallback for unresolved L3/L6/L8 obligations.",
       "bucket_A_program": "programs/formal_harness_gen.py",

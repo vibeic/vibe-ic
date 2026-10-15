@@ -1850,6 +1850,162 @@ def _cov_strip_comments(text: str) -> str:
     return re.sub(r"//[^\n]*", " ", text)
 
 
+def _python_scope_nodes(nodes, *, executed=False):
+    """Visit one lexical scope; declarations do not execute their bodies."""
+    for node in nodes:
+        yield node
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef,
+                             ast.ClassDef, ast.Lambda)):
+            if not executed:
+                # Defaults, decorators and class bases bind in the enclosing
+                # scope; nested declaration bodies have a separate scope.
+                for field, value in ast.iter_fields(node):
+                    if field == 'body':
+                        continue
+                    children = value if isinstance(value, list) else [value]
+                    yield from _python_scope_nodes(
+                        child for child in children if isinstance(child, ast.AST))
+            continue
+        # Deferred/comprehension bodies and short-circuit branches are outside
+        # this admission subset. Merely constructing them is not a handle read.
+        if executed and isinstance(node, (ast.GeneratorExp, ast.ListComp,
+                                          ast.SetComp, ast.DictComp, ast.BoolOp,
+                                          ast.IfExp)):
+            continue
+        if executed and isinstance(node, ast.If) and isinstance(node.test, ast.Constant):
+            branch = list(_python_scope_nodes(
+                node.body if node.test.value else node.orelse, executed=True))
+            yield from branch
+            if any(isinstance(n, (ast.Return, ast.Raise, ast.Break, ast.Continue))
+                   for n in branch):
+                break
+            continue
+        yield from _python_scope_nodes(ast.iter_child_nodes(node), executed=executed)
+        if executed and isinstance(node, (ast.Return, ast.Raise, ast.Break, ast.Continue)):
+            break
+
+
+def _python_bound_names(nodes) -> set[str]:
+    """Lexical bindings, including bindings later than a particular call."""
+    names = set()
+    for node in nodes:
+        if isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
+            names.add(node.id)
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            names.add(node.name)
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            names.update(a.asname or a.name.split('.')[0] for a in node.names)
+        elif isinstance(node, ast.ExceptHandler) and node.name:
+            names.add(node.name)
+        elif isinstance(node, (ast.MatchAs, ast.MatchStar)) and node.name:
+            names.add(node.name)
+        elif isinstance(node, ast.MatchMapping) and node.rest:
+            names.add(node.rest)
+    return names
+
+
+def _professional_local_helper_reads(tree: ast.Module, port_names: set[str]) -> set[str]:
+    """Attribute synchronous local-helper reads to exact caller DUT handles.
+
+    This is a one-hop admission rule, not Python execution: ambiguous names,
+    rebound parameters, decorators, async/generator helpers and unpacked calls
+    receive no additional credit. Native JUnit and input toggles remain required.
+    """
+    module_nodes = list(_python_scope_nodes(tree.body))
+    # A star import can replace any callable; its exported namespace is not
+    # established by this source-only admission rule.
+    if any(isinstance(n, ast.ImportFrom) and any(a.name == '*' for a in n.names)
+           for n in module_nodes):
+        return set()
+    definitions = [n for n in module_nodes
+                   if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))]
+    rebound = _python_bound_names(n for n in module_nodes
+                                 if not isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)))
+    # A global write in any function can change the callable seen by a test.
+    rebound.update(name for n in ast.walk(tree) if isinstance(n, ast.Global)
+                   for name in n.names)
+    helpers = {n.name: n for n in tree.body if isinstance(n, ast.FunctionDef)
+               and not n.decorator_list and n.name not in rebound
+               and sum(d.name == n.name for d in definitions) == 1}
+    reads = set()
+    for test in tree.body:
+        if (not isinstance(test, (ast.FunctionDef, ast.AsyncFunctionDef))
+                or not test.args.args
+                or not any(ast.unparse(d).startswith('cocotb.test')
+                           for d in test.decorator_list)):
+            continue
+        body = list(_python_scope_nodes(test.body, executed=True))
+        lexical_body = list(_python_scope_nodes(test.body))
+        bound = _python_bound_names(lexical_body)
+        parameters = [*test.args.posonlyargs, *test.args.args, *test.args.kwonlyargs]
+        bound.update(a.arg for a in parameters)
+        if test.args.vararg:
+            bound.add(test.args.vararg.arg)
+        if test.args.kwarg:
+            bound.add(test.args.kwarg.arg)
+        dut = test.args.args[0].arg
+        if (dut in _python_bound_names(lexical_body)
+                or any(isinstance(n, ast.Nonlocal) and dut in n.names
+                       for n in ast.walk(test))):
+            continue
+        for call in body:
+            if (not isinstance(call, ast.Call) or not isinstance(call.func, ast.Name)
+                    or call.func.id in bound or call.func.id not in helpers):
+                continue
+            helper = helpers[call.func.id]
+            hb = list(_python_scope_nodes(helper.body, executed=True))
+            lexical_helper = list(_python_scope_nodes(helper.body))
+            if (helper.args.vararg or helper.args.kwarg
+                    or any(isinstance(n, (ast.Yield, ast.YieldFrom, ast.Global, ast.Nonlocal,
+                                          ast.For, ast.AsyncFor, ast.While, ast.With,
+                                          ast.AsyncWith, ast.Try)) for n in lexical_helper)
+                    or any(isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+                           and n.func.id == helper.name for n in hb)
+                    or any(isinstance(a, ast.Starred) for a in call.args)
+                    or any(k.arg is None for k in call.keywords)):
+                continue
+            positional = [*helper.args.posonlyargs, *helper.args.args]
+            all_args = [*positional, *helper.args.kwonlyargs]
+            if len(call.args) > len(positional):
+                continue
+            actual = {a.arg: value for a, value in zip(positional, call.args)}
+            invalid = False
+            for keyword in call.keywords:
+                if (keyword.arg in actual
+                        or keyword.arg in {a.arg for a in helper.args.posonlyargs}
+                        or keyword.arg not in {a.arg for a in all_args}):
+                    invalid = True
+                    break
+                actual[keyword.arg] = keyword.value
+            defaults = dict(zip([a.arg for a in positional][-len(helper.args.defaults):],
+                                helper.args.defaults)) if helper.args.defaults else {}
+            defaults.update({a.arg: value for a, value in
+                             zip(helper.args.kwonlyargs, helper.args.kw_defaults)
+                             if value is not None})
+            if invalid or any(a.arg not in actual and a.arg not in defaults for a in all_args):
+                continue
+            # A rebound formal is not the handle the caller supplied. Refuse
+            # the whole helper instead of guessing statement/dataflow order.
+            rebound_formals = _python_bound_names(lexical_helper)
+            # Nested closures can change the enclosing formal without a Store
+            # in this lexical scope. Their nonlocal bindings are ambiguous too.
+            rebound_formals.update(name for n in ast.walk(helper)
+                                   if isinstance(n, ast.Nonlocal) for name in n.names)
+            if rebound_formals & {a.arg for a in all_args}:
+                continue
+            for node in hb:
+                if (not isinstance(node, ast.Attribute) or node.attr != 'value'
+                        or not isinstance(node.ctx, ast.Load)
+                        or not isinstance(node.value, ast.Name)):
+                    continue
+                handle = actual.get(node.value.id)
+                if (isinstance(handle, ast.Attribute)
+                        and isinstance(handle.value, ast.Name)
+                        and handle.value.id == dut and handle.attr in port_names):
+                    reads.add(handle.attr)
+    return reads
+
+
 def _professional_python_audit(tb: Path) -> Dict[str, Any]:
     """Python stimulus uses the design's L9 input contract, not pin guesses.
 
@@ -1930,6 +2086,7 @@ def _professional_python_audit(tb: Path) -> Dict[str, Any]:
                 values[name].add(repr(value))
             except (ValueError, TypeError):
                 dynamic.add(name)
+    reads.update(_professional_local_helper_reads(tree, {p['name'] for p in ports}))
     if not reads or not any(isinstance(n, ast.Assert) for n in ast.walk(tree)):
         out["reason"] = "no observed DUT read and self-check assertion in the Python source"
         return out

@@ -705,3 +705,188 @@ def test_copied_canonical_declaration_keeps_its_bundle_population(tmp_path, stat
         assert 'PROFESSIONAL_COVERAGE_PLAN_INVALID' in actual['report']['reason'], observed
     else:
         assert observed['admission'] == 'expert_filled', observed
+
+
+_HELPER_READER = 'def sample_handle(handle):\n    return int(handle.value)\n'
+
+
+def _helper_scoreboard_project(root, helper, expression, *, before='', after='',
+                               module_after='', drive=True, test_arguments='dut'):
+    """Normal professional producer, with a competing functional Verilog suite."""
+    import professional_tb_gen as gen
+    project, bundle = _professional_project(root)
+    source = _COCOTB_SCOREBOARD.replace('int(dut.result.value)', expression)
+    source = source.replace('async def reference_model(dut):',
+                            f'async def reference_model({test_arguments}):')
+    source = source.replace('    for value in', before + '    for value in')
+    source += after
+    if not drive:
+        source = source.replace('dut.sample.value = value', 'dut.sample.value = 0')
+    source = source.replace('@cocotb.test()', helper + '\n@cocotb.test()') + module_after
+    (bundle / 'expert_reference_tb.py').write_text(source)
+    (bundle / 'replacement.py').write_text('def sample_handle(handle):\n    return 0\n')
+    gen.generate(project)
+    competing = project / 'phase2/stage1/sim/tb'
+    competing.mkdir(parents=True)
+    (competing / 'tb_vector.v').write_text(
+        'module tb_vector; reg sample=0; reg ck4=0; wire result;\n'
+        'converter dut(.sample(sample),.ck4(ck4),.result(result));\n'
+        'initial begin sample=1; #5 sample=0; #5 $finish; end\nendmodule\n')
+    return project, bundle / 'tb_converter.py'
+
+
+@pytest.mark.parametrize('helper,expression', [
+    (_HELPER_READER, 'sample_handle(dut.result)'),
+    (_HELPER_READER, 'sample_handle(handle=dut.result)'),
+    ('def sample_handle(unused, handle):\n    return int(handle.value)\n',
+     'sample_handle(0, handle=dut.result)'),
+    ('def sample_handle(*, handle):\n    return int(handle.value)\n',
+     'sample_handle(handle=dut.result)'),
+    ('def sample_handle(handle, label="result"):\n'
+     '    if not handle.value.is_resolvable:\n'
+     '        raise AssertionError(label)\n'
+     '    return int(handle.value)\n', 'sample_handle(dut.result)'),
+], ids=['positional', 'keyword', 'keyword-mapping', 'keyword-only', 'validated-read'])
+def test_local_handle_reader_joins_the_functional_suite(tmp_path, helper, expression):
+    project, tb = _helper_scoreboard_project(tmp_path, helper, expression)
+    audit = V.functional_stimulus_audit(tb)
+    assert audit['decidable'] and audit['driven'] == ['sample'], audit
+    _, selected = V.discover_measure_testbenches(project)
+    assert set(map(lambda p: Path(p).name, selected)) == {'tb_vector.v', 'tb_converter.py'}, selected
+
+
+@pytest.mark.parametrize('helper,expression,options', [
+    (_HELPER_READER, 'int(dut.result.value)', {}),
+    (_HELPER_READER, 'sample_handle(dut.result)', {'drive': False}),
+], ids=['direct-read-with-unused-helper', 'read-without-functional-drive'])
+def test_local_reader_preserves_direct_and_inert_controls(tmp_path, helper, expression, options):
+    project, tb = _helper_scoreboard_project(tmp_path, helper, expression, **options)
+    audit = V.functional_stimulus_audit(tb)
+    assert audit['decidable'], audit
+    assert audit['driven'] == ([] if options else ['sample']), audit
+    _, selected = V.discover_measure_testbenches(project)
+    assert (str(tb) in selected) is (not options), selected
+    assert any(Path(p).name == 'tb_vector.v' for p in selected), selected
+
+
+@pytest.mark.parametrize('helper,expression,options', [
+    (_HELPER_READER, 'sample_handle(dut.result)',
+     {'module_after': '\ndef unused(x=(sample_handle := lambda handle: 0)):\n    pass\n'}),
+    (_HELPER_READER, 'sample_handle(dut.result)',
+     {'before': '    def unused(x=(dut := None)):\n        pass\n'}),
+    (_HELPER_READER, 'sample_handle(dut.result)',
+     {'module_after': '\nunused = lambda x=(sample_handle := lambda handle: 0): 0\n'}),
+    (_HELPER_READER, 'sample_handle(dut.result)',
+     {'before': '    unused = lambda x=(dut := None): 0\n'}),
+    (_HELPER_READER, 'sample_handle(dut.result)',
+     {'module_after': '\n@(sample_handle := lambda handle: 0)\ndef unused():\n    pass\n'}),
+    (_HELPER_READER, 'sample_handle(dut.result)',
+     {'before': '    class Unused((dut := object)):\n        pass\n'}),
+    ('def sample_handle(handle):\n    match {}:\n        case {**handle}:\n            pass\n'
+     '    return int(handle.value)\n', 'sample_handle(dut.result)', {}),
+    (_HELPER_READER, 'sample_handle(dut.result)',
+     {'before': '    match {}:\n        case {**sample_handle}:\n            pass\n'}),
+    (_HELPER_READER, 'sample_handle(dut.result)',
+     {'before': '    match {}:\n        case {**dut}:\n            pass\n'}),
+    (_HELPER_READER, 'sample_handle(dut.result)',
+     {'module_after': '\nmatch {}:\n    case {**sample_handle}:\n        pass\n'}),
+    ('def sample_handle(handle):\n    def mutate():\n        nonlocal handle\n'
+     '        handle = None\n    mutate()\n    return int(handle.value)\n',
+     'sample_handle(dut.result)', {}),
+    (_HELPER_READER, 'sample_handle(dut.result)',
+     {'before': '    def mutate():\n        nonlocal dut\n        dut = None\n    mutate()\n'}),
+    (_HELPER_READER, 'sample_handle(dut.result)',
+     {'module_after': '\nfrom replacement import *\n'}),
+    ('def sample_handle(handle):\n    unused = (handle.value for _ in ())\n    return 0\n',
+     'sample_handle(dut.result)', {}),
+    ('def sample_handle(handle):\n    if True:\n        return 0\n    return int(handle.value)\n',
+     'sample_handle(dut.result)', {}),
+    (_HELPER_READER, '0', {'before': '    unused = (sample_handle(dut.result) for _ in ())\n'}),
+    ('def sample_handle(handle):\n    return False and int(handle.value)\n',
+     'sample_handle(dut.result)', {}),
+    ('def sample_handle(handle):\n    return 0 if True else int(handle.value)\n',
+     'sample_handle(dut.result)', {}),
+    (_HELPER_READER, 'False and sample_handle(dut.result)', {}),
+    (_HELPER_READER, '0 if True else sample_handle(dut.result)', {}),
+    ('def sample_handle(handle):\n    unused = [handle.value for _ in ()]\n    return 0\n',
+     'sample_handle(dut.result)', {}),
+    (_HELPER_READER, '0', {}),
+    ('def sample_handle(handle):\n    handle.value = 0\n    return 0\n',
+     'sample_handle(dut.result)', {}),
+    ('def sample_handle(handle):\n    return 0\n', 'sample_handle(dut.result)', {}),
+    (_HELPER_READER, '0', {'before': '    if False:\n        sample_handle(dut.result)\n'}),
+    ('def sample_handle(handle):\n    if False:\n        return int(handle.value)\n    return 0\n',
+     'sample_handle(dut.result)', {}),
+    ('def sample_handle(handle):\n    return 0\n    return int(handle.value)\n',
+     'sample_handle(dut.result)', {}),
+    ('def sample_handle(handle):\n    def unused():\n        return int(handle.value)\n    return 0\n',
+     'sample_handle(dut.result)', {}),
+    ('def replace(fn):\n    return lambda handle: 0\n@replace\n' + _HELPER_READER,
+     'sample_handle(dut.result)', {}),
+    (_HELPER_READER.replace('def sample_handle', 'async def sample_handle'),
+     'sample_handle(dut.result)', {}),
+    ('def sample_handle(handle):\n    yield int(handle.value)\n', 'sample_handle(dut.result)', {}),
+    (_HELPER_READER, 'sample_handle(dut.result)',
+     {'module_after': '\nsample_handle = lambda handle: 0\n'}),
+    (_HELPER_READER, 'sample_handle(dut.result)',
+     {'module_after': '\ndef sample_handle(handle):\n    return 0\n'}),
+    (_HELPER_READER, 'sample_handle(dut.result)',
+     {'test_arguments': 'dut, sample_handle=None'}),
+    (_HELPER_READER, 'sample_handle(dut.result)',
+     {'after': '    sample_handle = lambda handle: 0\n'}),
+    (_HELPER_READER, 'sample_handle(dut.result)',
+     {'before': '    if False:\n        sample_handle = lambda handle: 0\n'}),
+    (_HELPER_READER, 'sample_handle(dut.result)',
+     {'before': '    from math import floor as sample_handle\n'}),
+    (_HELPER_READER, 'sample_handle(dut.result)',
+     {'before': '    def sample_handle(handle):\n        return 0\n'}),
+    ('def sample_handle(unused, handle):\n    return int(handle.value)\n',
+     'sample_handle(dut.result, handle=0)', {}),
+    (_HELPER_READER, 'sample_handle(dut.result, handle=dut.result)', {}),
+    (_HELPER_READER, 'sample_handle()', {}),
+    (_HELPER_READER, 'sample_handle(dut.result, 0)', {}),
+    (_HELPER_READER, 'sample_handle(*[dut.result])', {}),
+    (_HELPER_READER, 'sample_handle(**{"handle": dut.result})', {}),
+    (_HELPER_READER, 'sample_handle(other=dut.result)', {}),
+    ('def sample_handle(handle, /):\n    return int(handle.value)\n',
+     'sample_handle(handle=dut.result)', {}),
+    ('def sample_handle(handle, *args):\n    return int(handle.value)\n',
+     'sample_handle(dut.result)', {}),
+    ('def sample_handle(handle, **kwargs):\n    return int(handle.value)\n',
+     'sample_handle(dut.result)', {}),
+], ids=['header-module-function-default', 'header-caller-function-default',
+        'header-module-lambda-default', 'header-caller-lambda-default',
+        'header-module-decorator', 'header-caller-class-base', 'mapping-formal', 'mapping-caller-callable', 'mapping-caller-dut',
+        'mapping-module-callable', 'nested-nonlocal-formal', 'nested-nonlocal-dut', 'module-star-import', 'lazy-generator-read', 'constant-return', 'lazy-generator-call',
+        'short-circuit-read', 'conditional-expression-read', 'short-circuit-call',
+        'conditional-expression-call', 'empty-comprehension-read', 'unused', 'write-only', 'ignore-handle', 'dead-call', 'dead-read',
+        'read-after-return', 'nested-unused', 'decorated', 'async', 'generator',
+        'module-rebind', 'module-redefinition', 'caller-parameter', 'caller-late-bind',
+        'caller-dead-bind', 'caller-import', 'caller-definition', 'wrong-keyword-map',
+        'duplicate-binding', 'missing', 'excess', 'starargs', 'kwargs', 'unknown-keyword',
+        'posonly-keyword', 'helper-varargs', 'helper-kwargs'])
+def test_ambiguous_or_unexecuted_helpers_do_not_displace_functional_verilog(
+        tmp_path, helper, expression, options):
+    project, tb = _helper_scoreboard_project(tmp_path, helper, expression, **options)
+    audit = V.functional_stimulus_audit(tb)
+    assert not audit['decidable'] and audit['driven'] == [], audit
+    _, selected = V.discover_measure_testbenches(project)
+    assert [Path(p).name for p in selected] == ['tb_vector.v'], selected
+
+
+@pytest.mark.parametrize('binding', [
+    'handle = None', 'handle: object = None', 'handle += 0', '(handle := None)',
+    'del handle', 'for handle in []:\n        pass',
+    'with context() as handle:\n        pass',
+    'try:\n        pass\n    except Exception as handle:\n        pass',
+    'def handle():\n        return 0',
+    'if False:\n        handle = None',
+], ids=['assign', 'annotated', 'augmented', 'named-expression', 'delete',
+        'loop', 'with', 'except', 'nested-definition', 'dead-binding'])
+def test_rebound_helper_formals_receive_no_handle_credit(tmp_path, binding):
+    helper = 'def sample_handle(handle):\n    ' + binding + '\n    return int(handle.value)\n'
+    project, tb = _helper_scoreboard_project(tmp_path, helper, 'sample_handle(dut.result)')
+    audit = V.functional_stimulus_audit(tb)
+    assert not audit['decidable'] and audit['driven'] == [], audit
+    _, selected = V.discover_measure_testbenches(project)
+    assert [Path(p).name for p in selected] == ['tb_vector.v'], selected
