@@ -27603,6 +27603,57 @@ def _v1_7_72_lift_code_literal_encoding(
     return appended
 
 
+def _l4_qualified_field_encoding_sections(
+        register: Dict[str, Any],
+        extracted: Dict[str, str]) -> Optional[Dict[str, List[str]]]:
+    """Resolve explicit Markdown ``REGISTER . FIELD`` ownership (#3204).
+
+    A qualified field section is authoritative: proximity is not another
+    ownership relation. Keep file and register scope, stop at the next peer
+    or ancestor heading, and retain child headings within the field. None
+    leaves unstructured documents on their existing extraction path; an
+    empty/missing field section in a structured register supplies no enum.
+    """
+    register_name = register.get("register_name") or register.get("name")
+    if not isinstance(register_name, str) or not register_name:
+        return None
+    evidence = register.get("evidence")
+    source_docs = extracted
+    if isinstance(evidence, str) and evidence:
+        # The emitter prefixes source keys with input/docs/. Match the full
+        # key, not only its basename: unrelated directories can reuse names.
+        source_docs = {
+            key: text for key, text in extracted.items()
+            if evidence == key or evidence.endswith("/" + key)
+        }
+    sections: Dict[str, List[str]] = {}
+    heading_re = re.compile(r"^[ \t]{0,3}(#{1,6})[ \t]+([^\n]+)", re.MULTILINE)
+    owner_re = re.compile(
+        re.escape(register_name) + r"\s*\.\s*([A-Za-z_]\w*)")
+    for text in source_docs.values():
+        if not isinstance(text, str):
+            continue
+        # Example headings inside fenced code do not declare field owners.
+        # Mask only for heading discovery, preserving offsets into source.
+        heading_text = re.sub(
+            r"(?ms)^[ \t]{0,3}(`{3,}|~{3,})[^\n]*\n.*?^[ \t]{0,3}\1[ \t]*$",
+            lambda match: re.sub(r"[^\n]", " ", match.group(0)), text)
+        headings = list(heading_re.finditer(heading_text))
+        for i, heading in enumerate(headings):
+            title = heading.group(2).strip().rstrip("#").strip()
+            owner = owner_re.fullmatch(title)
+            if owner is None:
+                continue
+            end = len(text)
+            for following in headings[i + 1:]:
+                if len(following.group(1)) <= len(heading.group(1)):
+                    end = following.start()
+                    break
+            sections.setdefault(owner.group(1), []).append(
+                text[heading.end():end])
+    return sections if sections else None
+
+
 def _v1_6_512_lift_encoding_for_registers(
         registers: List[Dict[str, Any]],
         extracted: Dict[str, str]) -> int:
@@ -27714,6 +27765,7 @@ def _v1_6_512_lift_encoding_for_registers(
         # mentions ONCE per register (shared across all this
         # register's fields).
         reg_name = reg.get("register_name") or reg.get("name") or ""
+        owned_sections = _l4_qualified_field_encoding_sections(reg, extracted)
         reg_anchor_mentions: List[Tuple[int, int]] = []
         if isinstance(reg_name, str) and len(reg_name) >= 2:
             try:
@@ -27732,6 +27784,13 @@ def _v1_6_512_lift_encoding_for_registers(
             if width is None or width < 2:
                 continue
             field_name = fld.get("field_name")
+            if owned_sections is not None:
+                for section in owned_sections.get(field_name, []):
+                    total += _v1_6_512_lift_field_encoding(fld, section)
+                own_text = _cl_field_text(fld)
+                if own_text:
+                    total += _v1_6_512_lift_field_encoding(fld, own_text)
+                continue
             field_mentions: List[Tuple[int, int]] = []
             if (isinstance(field_name, str)
                     and len(field_name) >= 2):

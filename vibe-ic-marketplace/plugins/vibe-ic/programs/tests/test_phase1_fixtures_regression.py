@@ -426,3 +426,100 @@ def test_l2_complete_body_reaches_expert_but_missing_tail_is_rejected(tmp_path):
     bad = expert.converge_ai_expectation(tmp_path, expectation)
     assert bad["usable"] and bad["met"] is False, bad
     assert bad["missing_tokens"] == [tail], bad
+
+
+@pytest.mark.parametrize("field,expected", [
+    ("ENABLE", ""), ("RATE", "RATE_SLOW,RATE_FAST"),
+    ("SIZE", "SIZE_SMALL,SIZE_LARGE"), ("ACTION", "DO_READ,DO_WRITE"),
+])
+def test_l4_owned_field_encoding_from_native_intake(tmp_path, field, expected):
+    """#3204: compare emitted enum values, not merely field presence."""
+    doc = _l4_owned_encoding_fixture(tmp_path)
+    fields = _l4_encoding_fields(doc, "CONFIG")
+    actual = ",".join(e["mnem"] for e in fields[field].get("encoding", []))
+    assert actual == expected
+
+
+def _l4_owned_encoding_fixture(tmp_path, transform=None, extra=None):
+    from programs.tests._hostpaths import require_repo
+    from programs import phase1_doc_one_shot_runner as producer
+    fixture = require_repo(
+        "vibe-ic-marketplace", "plugins", "vibe-ic", "programs", "tests",
+        "fixtures", "phase1_local", "l4_owned_field_encoding", "registers.md")
+    text = fixture.read_text()
+    if transform:
+        text = transform(text)
+    extracted = {fixture.name: text}
+    if extra:
+        extracted.update(extra)
+    result = producer.gen_l4_regmap(tmp_path, extracted)
+    return json.loads(result.path.read_text())
+
+
+def _l4_encoding_fields(doc, register):
+    return {f["field_name"]: f for r in doc["registers"]
+            if r["name"] == register for f in r["fields"]}
+
+
+@pytest.mark.parametrize("separate_doc", [True, False])
+def test_l4_owned_field_encoding_keeps_register_and_document_scope(
+        tmp_path, separate_doc):
+    """Same field names in another owner must not join by bare identifier."""
+    foreign = []
+    def transform(text):
+        other = text.replace("CONFIG", "AUX_CONFIG").replace(
+            "RATE_", "FOREIGN_RATE_").replace("SIZE_", "FOREIGN_SIZE_").replace(
+            "DO_", "FOREIGN_DO_").replace("0x0 | 4", "0x4 | 4").replace(
+            "Offset: `0x0`", "Offset: `0x4`")
+        foreign.append(other)
+        return text if separate_doc else text + "\n" + other
+    doc = _l4_owned_encoding_fixture(tmp_path, transform)
+    if separate_doc:
+        doc = _l4_owned_encoding_fixture(tmp_path, extra={"unrelated.md": foreign[0]})
+    fields = _l4_encoding_fields(doc, "CONFIG")
+    assert ",".join(e["mnem"] for e in fields["RATE"]["encoding"]) == "RATE_SLOW,RATE_FAST"
+    other = _l4_encoding_fields(doc, "AUX_CONFIG")
+    assert ",".join(e["mnem"] for e in other["RATE"]["encoding"]) == "FOREIGN_RATE_SLOW,FOREIGN_RATE_FAST"
+
+
+def test_l4_owned_field_encoding_has_no_neighbor_fallback_for_empty_owner(tmp_path):
+    def remove_size_enum(text):
+        start = text.index("#### CONFIG . SIZE")
+        end = text.index("#### CONFIG . ACTION")
+        return text[:start] + "#### CONFIG . SIZE\nNo enum is specified.\n\n" + text[end:]
+    doc = _l4_owned_encoding_fixture(tmp_path, remove_size_enum)
+    fields = _l4_encoding_fields(doc, "CONFIG")
+    assert fields["SIZE"].get("encoding", []) == []
+    assert ",".join(e["mnem"] for e in fields["RATE"]["encoding"]) == "RATE_SLOW,RATE_FAST"
+
+
+def test_l4_owned_field_encoding_preserves_unqualified_legacy_prose(tmp_path):
+    doc = _l4_owned_encoding_fixture(tmp_path, lambda text: text.replace(
+        "#### CONFIG . RATE", "#### RATE").replace(
+        "#### CONFIG . SIZE", "#### SIZE").replace(
+        "#### CONFIG . ACTION", "#### ACTION").replace(
+        "3'b001: Small size.", "4'b0001: Small size.").replace(
+        "3'b010: Large size.", "4'b0010: Large size."))
+    fields = _l4_encoding_fields(doc, "CONFIG")
+    assert [e["mnem"] for e in fields["RATE"]["encoding"]] == ["RATE_SLOW", "RATE_FAST"]
+
+
+@pytest.mark.parametrize("shape", ["long", "child_heading", "reordered", "fenced_heading"])
+def test_l4_owned_field_encoding_obeys_sections_instead_of_distance(tmp_path, shape):
+    def transform(text):
+        if shape == "long":
+            return text.replace("Select rate.\n", "Select rate.\n" + "Background information.\n" * 180)
+        if shape == "child_heading":
+            return text.replace("Select rate.\n", "Select rate.\n\n##### Encoding values\n")
+        if shape == "fenced_heading":
+            return text.replace("Select rate.\n", "Select rate.\n\n```text\n#### EXAMPLE . FIELD\n```\n")
+        summary, rest = text.split("#### CONFIG . RATE", 1)
+        rate, rest = rest.split("#### CONFIG . SIZE", 1)
+        size, action = rest.split("#### CONFIG . ACTION", 1)
+        return (summary + "#### CONFIG . ACTION" + action
+                + "#### CONFIG . SIZE" + size + "#### CONFIG . RATE" + rate)
+    doc = _l4_owned_encoding_fixture(tmp_path, transform)
+    fields = _l4_encoding_fields(doc, "CONFIG")
+    assert ",".join(e["mnem"] for e in fields["RATE"]["encoding"]) == "RATE_SLOW,RATE_FAST"
+    assert ",".join(e["mnem"] for e in fields["SIZE"]["encoding"]) == "SIZE_SMALL,SIZE_LARGE"
+    assert [e["pattern"] for e in fields["ACTION"]["encoding"]] == ["01", "10"]

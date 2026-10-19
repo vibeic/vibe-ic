@@ -185,5 +185,16 @@
     "version_observed": "1.28.48; current composed SOURCE HEAD 832cb2a45a007f5181f3061e5f6ea75e5d39fc12 / tree a3e0131b480152c83da41111e8fbecd507a61281. Owner phase1_doc_one_shot_runner.py SHA256 a54df8a93d126849948ae92cabf5f31b7741bb8ec28c8915bfc69e8a89794c58. 當次28 docs為CURRENT48；不借舊47 PASS、SIG或 expert 計數。",
     "version_lkg": "",
     "fixture_path": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/fixtures/phase1_local/subservient_l2_section_tail/L1_product_metadata.md"
+  },
+  {
+    "issue": 3204,
+    "project": "l4_owned_field_encoding",
+    "layer": "L4",
+    "field": "registers[].fields[].encoding",
+    "expected": "{\"ENABLE\": [], \"RATE\": [\"RATE_SLOW\", \"RATE_FAST\"], \"SIZE\": [\"SIZE_SMALL\", \"SIZE_LARGE\"], \"ACTION\": [\"DO_READ\", \"DO_WRITE\"]}",
+    "actual": "{\n  \"ENABLE\": [],\n  \"RATE\": [\n    \"RATE_SLOW\",\n    \"RATE_FAST\",\n    \"SIZE_SMALL\",\n    \"SIZE_LARGE\"\n  ],\n  \"SIZE\": [\n    \"RATE_SLOW\",\n    \"RATE_FAST\",\n    \"SIZE_SMALL\",\n    \"SIZE_LARGE\"\n  ],\n  \"ACTION\": [\n    \"rw\",\n    \"DO_READ\",\n    \"DO_WRITE\"\n  ]\n}",
+    "version_observed": "1.29.96 (official base f38b8dc032effcd63a4f210fc9404aa0f43342d5)",
+    "version_lkg": "Unknown; no earlier version assumed.",
+    "fixture_path": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/fixtures/phase1_local/l4_owned_field_encoding/registers.md"
   }
 ]
