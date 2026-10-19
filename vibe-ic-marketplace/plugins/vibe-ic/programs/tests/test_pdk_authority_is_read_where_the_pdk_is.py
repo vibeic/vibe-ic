@@ -167,6 +167,49 @@ def test_an_unreadable_file_is_not_a_table_and_never_an_empty_allowed_set(tmp_pa
     assert has is False and path is None       # the volume is here; no facility
 
 
+def test_magic_provider_is_available_even_without_a_klayout_provider(tmp_path):
+    """#3258: unsupported invocation is not technology absence."""
+    volume = tmp_path / "neutral_process"
+    provider = volume / "libs.tech/magic/seal_ring_generator/neutral_gen_sealring.py"
+    provider.parent.mkdir(parents=True)
+    provider.write_text("# Usage: neutral_gen_sealring.py width height target_dir [-force] [-outer] [-keep]\n")
+    available, path, tried = A.seal_ring_facility(volume)
+    assert available is True, (available, path, tried)
+    assert path == str(provider)
+
+
+def test_native_seal_rung_does_not_grant_absence_na_for_a_magic_provider(tmp_path):
+    volume = tmp_path / "neutral_process"
+    provider = volume / "libs.tech/magic/seal_ring_generator/neutral_gen_sealring.py"
+    provider.parent.mkdir(parents=True)
+    provider.write_text("# neutral provider exists; invocation is a separate contract\n")
+    available, path, tried = A.seal_ring_facility(volume)
+    step = next(s for s in G.LADDER if s.step_id == "General.SealRing")
+    ev = G.StepEvidence(step.step_id, step.label, step.order, step.source,
+                        G.NOT_DETERMINED, step.refuses_on)
+    G._step_delegate(ev, step, tmp_path, None, PROGRAMS, 1,
+                     seal_required=G._decl.NOT_DETERMINED,
+                     seal_facility=available, seal_facility_path=path,
+                     seal_facility_tried=tried,
+                     seal_deliverable=G._decl.DELIVERABLE_DIE,
+                     seal_route=G._decl.ROUTE_SELF_TAPEOUT)
+    assert ev.verdict == G.NOT_DETERMINED, ev.as_dict()
+    assert "no seal-ring facility" not in ev.evidence
+
+
+def test_multiple_magic_providers_are_available_but_not_arbitrarily_selected(tmp_path):
+    import die_finishing_gen as finishing
+    volume = tmp_path / "neutral_process"
+    directory = volume / "libs.tech/magic/seal_ring_generator"
+    directory.mkdir(parents=True)
+    for name in ("first_gen_sealring.py", "second_gen_sealring.py"):
+        (directory / name).write_text("# neutral provider\n")
+    available, selected, tried = A.seal_ring_facility(volume)
+    assert available is True and selected is None, (available, selected, tried)
+    with pytest.raises(ValueError, match="ambiguous seal-ring providers"):
+        finishing.resolve_script(tmp_path, None, str(tmp_path), "neutral_process")
+
+
 def test_no_container_is_the_previous_behaviour_exactly():
     assert isinstance(A.container_reader(None), A.LocalReader)
     assert isinstance(A.container_reader(""), A.LocalReader)

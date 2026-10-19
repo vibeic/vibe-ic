@@ -169,6 +169,77 @@ def test_the_upstream_interface_is_used_unchanged():
                         "--die-height", "200.000000"]
 
 
+def test_magic_positional_interface_is_not_misclassified_as_klayout_batch(tmp_path):
+    """Neutral declared API: no process name is needed to select its form."""
+    script = tmp_path / "neutral_gen_sealring.py"
+    script.write_text(
+        "# Usage: neutral_gen_sealring.py width height target_dir [-force] [-outer] [-keep]\n"
+        "def generate_sealring(width, height, target_dir, force, keep):\n"
+        "    pass\n")
+    form, why = DFG.detect_form(_LocalRunner(), str(script))
+    assert form == "magic-positional", (form, why)
+
+
+def test_magic_positional_ring_is_imported_under_the_original_top(tmp_path, monkeypatch):
+    """The new provider output is a standalone ring, not a complete chip."""
+    pya = pytest.importorskip("pya")
+    project = _project(tmp_path)
+    bridge = project / "input/pdk/bridge/signoff_config.json"
+    bridge.parent.mkdir(parents=True)
+    bridge.write_text(json.dumps({"die_finishing": {
+        "magic_geometry": {"size_convention": "outer", "offset_um": [0, 0],
+                           "provider_size_um": [200, 200]}}}))
+    script = project / "neutral_gen_sealring.py"
+    script.write_text('''# Usage: neutral_gen_sealring.py width height target_dir [-force] [-outer] [-keep]
+import sys
+from pathlib import Path
+import pya
+def generate_sealring(width, height, target_dir, force, keep):
+    l=pya.Layout();l.dbu=0.001;t=l.create_cell("neutral_ring")
+    w=round(float(width)/l.dbu);h=round(float(height)/l.dbu)
+    ring=pya.Region(pya.Box(0,0,w,h))-pya.Region(pya.Box(6000,6000,w-6000,h-6000))
+    t.shapes(l.layer(99,0)).insert(ring)
+    Path(target_dir).mkdir(parents=True,exist_ok=True)
+    l.write(str(Path(target_dir)/"neutral_ring.gds"))
+generate_sealring(sys.argv[1],sys.argv[2],sys.argv[3],False,True)
+''')
+    result = _run(project, script, monkeypatch)
+    assert result["seal_ring"]["state"] == "PASS", result
+    checked = DFC.evaluate(project)
+    assert checked["verdict"] == "PASS", checked
+    output = pya.Layout()
+    output.read(str(project / "phase3/stage3/pnr/chip_top.gds"))
+    assert [t.name for t in output.top_cells()] == ["chip_top"]
+    layer = next(li for li in output.layer_indexes()
+                 if output.get_info(li).layer == 10 and output.get_info(li).datatype == 0)
+    original = pya.Region(output.top_cell().begin_shapes_rec(layer))
+    assert original.area() == 200000 * 200000
+
+
+@pytest.mark.parametrize("geometry", [
+    None,
+    {"size_convention": "outer", "offset_um": [0, 0]},
+    {"size_convention": "outer", "provider_size_um": [True, 200], "offset_um": [0, 0]},
+    {"size_convention": "outer", "provider_size_um": [200, 200], "offset_um": [0, "0"]},
+    {"size_convention": "outer", "provider_size_um": [200, 200], "offset_um": [0, float("nan")]},
+    {"size_convention": "chip", "provider_size_um": [200, 200], "offset_um": [0, 0], "extra": 1},
+])
+def test_magic_frame_and_offset_require_typed_explicit_authority(tmp_path, monkeypatch, geometry):
+    project = _project(tmp_path)
+    script = tmp_path / "neutral_gen_sealring.py"
+    script.write_text(
+        "# Usage: neutral_gen_sealring.py width height target_dir [-force] [-outer] [-keep]\n"
+        "def generate_sealring(width,height,target_dir,force,keep):\n    pass\n")
+    if geometry is not None:
+        bridge = project / "input/pdk/bridge/signoff_config.json"
+        bridge.parent.mkdir(parents=True)
+        bridge.write_text(json.dumps({"die_finishing": {"magic_geometry": geometry}}))
+    result = _run(project, script, monkeypatch)
+    assert result["seal_ring"]["state"] == "FAIL", result
+    assert result["seal_ring"]["rule"] == "MAGIC_GEOMETRY_AUTHORITY_REQUIRED", result
+    assert not (project / DFG._DEF_REL).exists()
+
+
 def test_the_klayout_batch_form_sets_the_technology_search_path():
     """LibreLane's `run_ihp_sg13g2` sets KLAYOUT_PATH "so that KLayout can load
     the technology definition". A batch script driven with `-n <tech>` needs it;
