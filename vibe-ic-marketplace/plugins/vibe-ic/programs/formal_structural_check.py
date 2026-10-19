@@ -66,6 +66,7 @@ from typing import Dict, List, Optional, Tuple
 
 sys.path.insert(0, str(Path(__file__).parent))
 import _atomic_artefact as _aa  # noqa: E402  (vibe-ic#1082 — atomic writes)
+import _progress_run as _pr  # noqa: E402
 
 VERSION = "3.0.0"
 
@@ -969,16 +970,33 @@ def _native_text(value) -> str:
     return str(value)
 
 
-def _native_query_run(argv: List[str], timeout: int = 120) -> Tuple[int, str, str, dict]:
-    """Run one native query batch without discarding a timeout's partial streams.
+def _native_query_run(argv: List[str], timeout: int = 120, *,
+                      container: Optional[str] = None, command: Optional[str] = None
+                      ) -> Tuple[int, str, str, dict]:
+    """Supervise native progress and reap the exact owned container job.
 
-    A timeout is not a successful native result.  Its output is nevertheless
-    evidence for query markers which completed before the process was killed.
+    ``timeout`` is a recorded budget, never a clock kill. Individual SAT
+    queries retain their solver limit and every terminal marker remains in
+    the evidence. A stalled batch is incomplete, including its partial output.
     """
+    supervision = "host_process_and_progress"
     try:
-        process = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
+        if container:
+            import _container_exec as ce
+            if not command:
+                raise ValueError("container native query requires its exact command")
+            supervision = "container_identity_and_progress"
+            process = ce.run_in_container_supervised(container, command, ceiling_s=timeout)
+        else:
+            process = _pr.run(argv, capture_output=True, text=True, hard_ceiling_s=timeout)
         return process.returncode, _native_text(process.stdout), _native_text(process.stderr), {
-            "termination": "COMPLETED", "native_exit_code": process.returncode}
+            "termination": "STALLED" if process.returncode == _pr.RC_STALLED else "COMPLETED",
+            "native_exit_code": process.returncode, "supervision": supervision,
+            "recorded_budget_seconds": timeout}
+    except _pr.Stalled as exc:
+        return _pr.RC_STALLED, _native_text(exc.stdout), _native_text(exc.stderr), {
+            "termination": "STALLED", "native_exit_code": _pr.RC_STALLED,
+            "supervision": supervision, "error": str(exc), "signals": exc.signals}
     except subprocess.TimeoutExpired as exc:
         stdout = getattr(exc, "stdout", None)
         if stdout is None:
@@ -1070,7 +1088,8 @@ def _cofactor_payload_support(model: dict, rows: List[dict], work_dir: Path,
         argv = ce.exec_argv(container, f"yosys -Q -T -s {ys.resolve()}", tag="formal_structural_check")
     else:
         argv = ["yosys", "-Q", "-T", "-s", str(ys.resolve())]
-    rc, stdout, stderr, run = _native_query_run(argv)
+    rc, stdout, stderr, run = _native_query_run(
+        argv, container=container, command=f"yosys -Q -T -s {ys.resolve()}")
     log = stdout + stderr
     native = _native_artifacts(work_dir, "cofactor_support", stdout, stderr, run)
     info = {"native_exit_code": rc, "status": "UNAVAILABLE", "rows": [],
@@ -1142,7 +1161,11 @@ def _reset_row_cone_eligibility(model: dict) -> dict:
     total = {"$and", "$or", "$xor", "$xnor", "$not", "$mux", "$eq", "$ne",
              "$eqx", "$nex", "$logic_not", "$logic_and", "$logic_or",
              "$reduce_and", "$reduce_or", "$reduce_xor", "$reduce_xnor",
-             "$reduce_bool"}
+             "$reduce_bool", "$add", "$sub", "$shiftx"}
+    # Native add/sub are finite-width total functions. shiftx is total in
+    # Yosys's undef-aware value domain (out-of-range bits remain undef).
+    # Cone selection never defines those bits: the existing undef queries
+    # and every role/priority arm still run with -enable_undef.
     cells = mod.get("cells") or {}
     if any(p.get("direction") not in {"input", "output"} for p in mod["ports"].values()):
         return {"eligible": False, "reason": "unknown-native-pin-direction"}
@@ -1374,7 +1397,8 @@ def reset_control_mapping(netlist: dict, raw: Optional[dict], top: str,
         argv = ce.exec_argv(container, inner, tag="formal_structural_check")
     else:
         argv = ["yosys", "-Q", "-T", "-s", str(ys.resolve())]
-    rc, stdout, stderr, run = _native_query_run(argv)
+    rc, stdout, stderr, run = _native_query_run(
+        argv, container=container, command=f"yosys -Q -T -s {ys.resolve()}")
     log = stdout + stderr
     native = _native_artifacts(work_dir, "transition_pair", stdout, stderr, run)
     progress = _transition_query_progress(log, ["domain", *specs])

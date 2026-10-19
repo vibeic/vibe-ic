@@ -109,7 +109,7 @@ def test_timeout_retains_completed_query_progress_and_marks_truncation_unknown(t
     def timeout(*_args, **_kwargs):
         raise subprocess.TimeoutExpired(["yosys"], 120, output=transcript, stderr=b"timed out\n")
 
-    monkeypatch.setattr(fsc.subprocess, "run", timeout)
+    monkeypatch.setattr(fsc._pr, "run", timeout)
     rc, stdout, stderr, native = fsc._native_query_run(["yosys"])
     info, _ = fsc._cofactor_payload_support(
         {"modules": {"transition_pair": {"ports": {}}}}, [], tmp_path / "cofactor")
@@ -131,7 +131,7 @@ def test_missing_native_tool_is_not_reported_as_timeout(monkeypatch):
     def missing(*_args, **_kwargs):
         raise FileNotFoundError("yosys")
 
-    monkeypatch.setattr(fsc.subprocess, "run", missing)
+    monkeypatch.setattr(fsc._pr, "run", missing)
     rc, stdout, stderr, native = fsc._native_query_run(["yosys"])
     assert (rc, stdout, stderr) == (127, "", "")
     assert native["termination"] == "TOOL_UNAVAILABLE" and "yosys" in native["error"]
@@ -616,3 +616,59 @@ def test_xnor_reduction_preserves_ordinary_data_current_q_and_undef_refusals(tmp
                        for row in mapping["rows"] for role in row["conditional_roles"]), mapping
         print("XNOR_REFUSAL_OBSERVATION " + json.dumps({"case": name, "rc": rc,
             "verdict": rec["verdict"], "mapping": mapping}, sort_keys=True))
+
+
+@pytest.mark.parametrize("body, expected", [
+    ("if(rst) q<=0; else q<=(d+en)-(clear);", fsc.PASS),
+    ("if(!rst) q<=0; else q<=(d+en)-(clear);", fsc.REFUTED),
+    ("if(rst) q<=0; else q<=d[en +: 2];", fsc.NOT_DISCHARGED),
+])
+def test_arithmetic_and_undefined_shift_use_exact_cones_without_new_credit(tmp_path, body, expected):
+    _yosys()
+    rtl=tmp_path/"m.v"
+    rtl.write_text(_control_rtl(body))
+    rec=fsc.check([rtl], "m", [{"rule":"reset_polarity", "signal":"rst", "value":"active_high"}], tmp_path)
+    mapping=rec["claims"][0]["reset_control_mapping"]
+    assert mapping["native_row_cone"]["eligible"], mapping["native_row_cone"]
+    assert rec["verdict"] == expected, rec
+    progress=mapping["query_progress"]
+    assert progress["completed"] == progress["planned"] and not progress["unknown"], progress
+    assert len(mapping["raw_identities"]) == 2
+
+
+def test_native_container_queries_use_identity_supervision_not_client_timeout(monkeypatch):
+    import _container_exec as ce
+    calls=[]
+    def supervised(container, command, **kwargs):
+        calls.append((container,command,kwargs))
+        return subprocess.CompletedProcess([], ce.STALLED_RC, "partial query\n", "owned job reaped")
+    monkeypatch.setattr(ce,"run_in_container_supervised",supervised)
+    rc,out,err,meta=fsc._native_query_run(["docker","exec"], container="test-container", command="yosys -s model.ys")
+    assert calls == [("test-container","yosys -s model.ys",{"ceiling_s":120})]
+    assert rc == ce.STALLED_RC and out == "partial query\n" and err == "owned job reaped"
+    assert meta["termination"] == "STALLED" and meta["supervision"] == "container_identity_and_progress"
+
+
+@pytest.mark.parametrize("body", [
+    "if(rst) q<=0; else q<=(d+en)-clear;",
+    "if(!rst) q<=0; else q<=(d+en)-clear;",
+    "if(rst) q<=0; else q<=d[en +: 2];",
+])
+def test_native_cone_and_whole_model_answers_match_every_identity_and_arm(tmp_path, monkeypatch, body):
+    _yosys()
+    rtl=tmp_path/"m.v"
+    rtl.write_text(_control_rtl(body))
+    claim=[{"rule":"reset_polarity", "signal":"rst", "value":"active_high"}]
+    cone=fsc.check([rtl],"m",claim,tmp_path/"cone")
+    monkeypatch.setattr(fsc,"_reset_row_cone_eligibility",lambda model: {"eligible":False,"reason":"whole-model control"})
+    whole=fsc.check([rtl],"m",claim,tmp_path/"whole")
+    left=cone["claims"][0]["reset_control_mapping"]
+    right=whole["claims"][0]["reset_control_mapping"]
+    assert cone["verdict"] == whole["verdict"]
+    assert left["raw_identities"] == right["raw_identities"]
+    assert left["query_progress"]["planned"] == right["query_progress"]["planned"]
+    for arm in (left,right):
+        assert arm["query_progress"]["completed"] == arm["query_progress"]["planned"]
+    def answers(mapping):
+        return [(r["cell"],r["bit_index"],r["classification"],r["native_queries"]) for r in mapping["rows"]]
+    assert answers(left) == answers(right)
