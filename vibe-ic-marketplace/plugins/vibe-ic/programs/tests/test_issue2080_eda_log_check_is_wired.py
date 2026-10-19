@@ -461,6 +461,7 @@ def test_manifest_publication_discloses_current_refusal_and_replaces_old_lint_pa
     assert hygiene['verdict'] == 'INCOMPLETE' and hygiene['reason_class'] == 'TOOL_HANDOFF_INVALID', hygiene
     assert hygiene['reason'] == expected, hygiene
     assert hygiene['rtl_files'] == ['core.v'] and 'evidence' not in hygiene, hygiene
+    assert all((tmp_path / rel).is_file() for rel in result.output_files), result.output_files
     # Publication must not convert the strict reader's refusal into a usable
     # legacy transcript, even if the incoming source row itself claims PASS.
     with pytest.raises(ValueError, match='SYNTH_LOG_HANDOFF_UNBOUND'):
