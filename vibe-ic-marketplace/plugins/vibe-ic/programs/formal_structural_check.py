@@ -653,7 +653,8 @@ def clock_edge_applicability(netlist: dict, raw_netlist: Optional[dict],
 
 
 def _transition_pair(mod: dict, reset_bit: int,
-                     payload_by_q: Optional[dict] = None) -> Tuple[dict, List[dict]]:
+                     payload_by_q: Optional[dict] = None,
+                     observations: Optional[dict] = None) -> Tuple[dict, List[dict]]:
     """Two native combinational next-state models sharing every Q/data bit.
 
     Only the selected top reset differs (0 versus 1). Original combinational
@@ -1111,6 +1112,9 @@ def _transition_pair(mod: dict, reset_bit: int,
                                "SRST > EN > D" if "SRST" in conn else "EN > D")
             row["role_provenance"] = list({json.dumps(p, sort_keys=True): p
                                             for p in role_provenance}.values())
+    for name, bit in (observations or {}).items():
+        for arm in (0, 1):
+            ports[f"observe_{name}_{arm}"] = {"direction": "output", "bits": [remap(bit, arm)]}
     module = {"attributes": {"top": 1}, "ports": ports, "cells": cells,
               "netnames": {n: {"hide_name": 0, "bits": p["bits"], "attributes": {}}
                            for n, p in ports.items()}}
@@ -1368,6 +1372,268 @@ def _reset_row_cone_eligibility(model: dict) -> dict:
     return {"eligible": visited == len(cells),
             "reason": "single-driver-total-boolean-dag" if visited == len(cells)
                       else "combinational-feedback"}
+
+
+def _priority_load_retention(mod: dict, reset_bit: int, rows: List[dict],
+                             work_dir: Path, container: Optional[str] = None) -> dict:
+    """Certify priority-load control with an existing Q-retaining fallback.
+
+    A disabled load may expose a lower-priority shift; the two data cofactors
+    need not agree. Cut ALL reset paths at one original mux-select strobe,
+    prove its load value is monotonically controlled by reset, and prove an unrestricted
+    discriminating load-versus-source-retention witness. The load payload
+    cannot depend on target Q or the declared reset. This is a retention role,
+    never a reset force or a post-reset state assumption.
+    """
+    import copy
+    import hashlib
+    empty = {"status": "NOT_APPLICABLE", "certificates": []}
+    senses = {r.get("polarity") for r in rows if r.get("classification") == "RESET_FORCE"}
+    if len(senses) != 1 or not senses <= {"active_high", "active_low"}:
+        return empty
+    active = int(next(iter(senses)) == "active_high")
+    targets = [r for r in rows if r.get("classification") == "UNRESOLVED_DATA_DEPENDENCE"
+               and not r.get("unsupported") and set(r.get("controls", {})) <= {"D", "EN"}]
+    if not targets:
+        return empty
+    drivers = _drivers(mod)
+    qbits = {q for _, c, k in _cells(mod) if k == "ff" for q in _bits(c, "Q")}
+    inputs = {b for p in mod.get("ports", {}).values() if p.get("direction") == "input"
+              for b in p.get("bits", [])}
+    reset_cone = _cone(mod, reset_bit)
+
+    fingerprints = {}
+
+    def fingerprint(bit, seen=frozenset()):
+        # Identical combinational expressions are the same cut even if proc
+        # emitted duplicate cells. Q/data roots retain their exact identity.
+        if not isinstance(bit, int) or bit in inputs or bit in qbits:
+            return str(bit)
+        if bit in fingerprints:
+            return fingerprints[bit]
+        cell = drivers.get(bit)
+        if bit in seen or cell is None or _kind(cell.get("type", "")) != "comb":
+            return None
+        outputs = [(pin, i) for pin, values in cell["connections"].items()
+                   if cell["port_directions"].get(pin) == "output"
+                   for i, value in enumerate(values) if value == bit]
+        signature = [cell["type"], cell.get("parameters", {}), outputs,
+            [(pin, [fingerprint(v, seen | {bit}) for v in values])
+             for pin, values in sorted(cell["connections"].items())
+             if cell["port_directions"].get(pin) == "input"]]
+        digest = hashlib.sha256(json.dumps(signature, sort_keys=True).encode()).hexdigest()
+        fingerprints[bit] = digest
+        return digest
+
+    def fanin(roots, cut=frozenset()):
+        pending, seen = list(roots), set()
+        while pending:
+            bit = pending.pop()
+            # Literal undef is a dependency terminal, never a defined value.
+            # Both cut transitions must separately pass native definedness;
+            # this also permits optimizer-inserted don't-cares behind EN.
+            if bit in seen or bit in ("0", "1", "x", "z"):
+                continue
+            if not isinstance(bit, int):
+                return None
+            seen.add(bit)
+            if bit in cut or bit in qbits or bit in inputs:
+                continue
+            cell = drivers.get(bit)
+            if cell is None or _kind(cell.get("type", "")) != "comb":
+                return None
+            pending.extend(v for pin, values in cell.get("connections", {}).items()
+                           if cell.get("port_directions", {}).get(pin) == "input" for v in values)
+        return seen
+
+    groups = {}
+    for row in targets:
+        roots = [row["controls"]["D"][row["bit_index"]], *row["controls"].get("EN", [])]
+        full = fanin(roots)
+        if full is None:
+            continue
+        choices = set()
+        for bit in full:
+            cell = drivers.get(bit, {})
+            if cell.get("type") in {"$mux", "$bwmux"}:
+                choices.update(s for s in cell["connections"]["S"] if s in reset_cone)
+        for cut in sorted(choices):
+            cell = drivers.get(cut, {})
+            outputs = [v for pin, values in cell.get("connections", {}).items()
+                       if cell.get("port_directions", {}).get(pin) == "output" for v in values]
+            aliases = {b for b in full if isinstance(b, int) and fingerprint(b) == fingerprint(cut)}
+            # Every alias being cut must have a dedicated one-bit driver.
+            if any([v for pin, values in drivers.get(b, {}).get("connections", {}).items()
+                    if drivers[b]["port_directions"].get(pin) == "output" for v in values] != [b]
+                   for b in aliases):
+                continue
+            remaining = fanin(roots, aliases)
+            if outputs == [cut] and remaining is not None and reset_bit not in remaining:
+                groups.setdefault((cut, tuple(sorted(aliases))), []).append(row)
+    if not groups:
+        return empty
+    original, _ = _transition_pair(mod, reset_bit, observations={str(c): c for c, _ in groups})
+    if not _reset_row_cone_eligibility(original)["eligible"]:
+        return empty
+    certificates, runs = [], []
+    for (cut, aliases), selected in groups.items():
+        directory = work_dir / f"cut_{cut}"
+        directory.mkdir(parents=True, exist_ok=True)
+        cut_mod = copy.deepcopy(mod)
+        cut_mod["cells"] = {n: c for n, c in cut_mod["cells"].items()
+                            if not any(c == drivers[b] for b in aliases)}
+        for cell in cut_mod["cells"].values():
+            cell["connections"] = {pin: [cut if v in aliases else v for v in values]
+                                   for pin, values in cell["connections"].items()}
+        cut_mod["ports"]["priority_load_strobe"] = {"direction": "input", "bits": [cut]}
+        value_model, value_rows = _transition_pair(cut_mod, cut)
+        support, payloads = _cofactor_payload_support(value_model, value_rows, directory, container)
+        if (support.get("native_exit_code") != 0 or not support.get("normalization_output_current")
+                or support.get("status") != "NATIVE_NORMALIZED_COFACTOR_SUPPORT"):
+            runs.append({"cut": cut, "support": support, "status": "INCOMPLETE"})
+            continue
+        model, cut_rows = _transition_pair(cut_mod, cut, payloads)
+        if not _reset_row_cone_eligibility(model)["eligible"]:
+            continue
+        module = model["modules"]["transition_pair"]
+        # Combine the actual reset pair and the strobe pair, sharing roots by
+        # their original input/Q identity, never by an accidental wire number.
+        shared = {p["bits"][0]: module["ports"][name]["bits"][0]
+                  for name, p in original["modules"]["transition_pair"]["ports"].items()
+                  if p["direction"] == "input"}
+        next_bit = 1 + max(v for c in module["cells"].values()
+                           for values in c["connections"].values() for v in values if isinstance(v, int))
+
+        def remap(value):
+            nonlocal next_bit
+            if not isinstance(value, int):
+                return value
+            if value not in shared:
+                shared[value] = next_bit
+                next_bit += 1
+            return shared[value]
+
+        actual = original["modules"]["transition_pair"]
+        for name, cell in actual["cells"].items():
+            copied = copy.deepcopy(cell)
+            copied["connections"] = {p: [remap(v) for v in values]
+                                     for p, values in cell["connections"].items()}
+            module["cells"]["actual_reset_" + name] = copied
+        for arm in (0, 1):
+            p = actual["ports"][f"observe_{cut}_{arm}"]
+            module["ports"][f"strobe_{arm}"] = {"direction": "output", "bits": [remap(p["bits"][0])]}
+        module["netnames"] = {}
+
+        def gate(kind, a, b=None):
+            nonlocal next_bit
+            y = next_bit
+            next_bit += 1
+            con = {"A": [a], "Y": [y]}
+            params = {"A_SIGNED": 0, "A_WIDTH": 1, "Y_WIDTH": 1}
+            if b is not None:
+                con["B"] = [b]
+                params.update(B_SIGNED=0, B_WIDTH=1)
+            module["cells"][f"load_role_{y}"] = {"type": kind, "parameters": params,
+                "connections": con, "port_directions": {p: "output" if p == "Y" else "input" for p in con}}
+            return y
+
+        def port(name, bit):
+            module["ports"][name] = {"direction": "output", "bits": [bit]}
+            return name
+
+        specs, queries = {}, {}
+        support_by_q = {r["q"]: r for r in support["rows"]}
+        qrows = {r["q"]: r for r in cut_rows if not r.get("unsupported")}
+        for row in selected:
+            q = row["q"]
+            pair = qrows.get(q)
+            data = support_by_q.get(q, {})
+            if pair is None or data.get("status") != "NATIVE_NORMALIZED_COFACTOR_SUPPORT":
+                continue
+            for load in (0, 1):
+                if q in data.get(f"cofactor{load}_bits", [q]):
+                    continue
+                fallback = 1 - load
+                ports = pair["query_ports"]
+                on = [module["ports"][f"strobe_{arm}"]["bits"][0] for arm in (0, 1)]
+                if not load:
+                    on = [gate("$not", v) for v in on]
+                suppression = gate("$or", gate("$not", on[active]), on[1-active])
+                activation = gate("$or", gate("$not", on[1-active]), on[active])
+                guard = module["ports"][ports[f"retain_guard{fallback}"]]["bits"][0]
+                loaded = module["ports"][ports[f"n{load}"]]["bits"][0]
+                current = module["ports"][f"input_{q}"]["bits"][0]
+                different = gate("$ne", loaded, current)
+                witnesses = [gate("$and", gate("$and", on[arm], gate("$not", on[1-arm])),
+                                  gate("$and", guard, different)) for arm in (1-active, active)]
+                key = f"q{q}_load{load}"
+                checks = {"suppression": (port(key+"_suppression", suppression), "1"),
+                          "activation": (port(key+"_activation", activation), "1"),
+                          "suppression_retention": (port(key+"_suppression_witness", witnesses[0]), "0"),
+                          "activation_retention": (port(key+"_activation_witness", witnesses[1]), "0"),
+                          "defined_load": (ports[f"n{load}"], None),
+                          "defined_fallback": (ports[f"n{fallback}"], None),
+                          "load_zero": (ports[f"n{load}"], "0"),
+                          "load_one": (ports[f"n{load}"], "1"),
+                          "retention_valid": (ports[f"retain_valid{fallback}"], "1")}
+                for arm in (0, 1):
+                    for proof in ("roles_disjoint", "roles_cover"):
+                        checks[f"{proof}{arm}"] = ports[f"{proof}{arm}"], "1"
+                specs[key] = row, load, data, checks
+                queries.update({key+"_"+name: value for name, value in checks.items()})
+        if not queries:
+            continue
+        model_path = directory / "priority_load_pair.json"
+        _aa.write_json(model_path, model)
+        script = [f"read_json {model_path.resolve()}", "hierarchy -top transition_pair",
+                  "log VIBEIC_TRANSITION_QUERY domain", "sat -enable_undef -set-def-inputs",
+                  "log VIBEIC_TRANSITION_COMPLETE domain"]
+        for ident, (name, value) in queries.items():
+            option = f"-set-any-undef {name}" if value is None else f"-prove {name} {value}"
+            script += ["select -module transition_pair", f"select w:{name} %ci*",
+                       "log VIBEIC_TRANSITION_QUERY " + ident,
+                       f"sat -timeout 10 -enable_undef -set-def-inputs {option} -show-inputs -show {name}",
+                       "log VIBEIC_TRANSITION_COMPLETE " + ident, "select -clear"]
+        ys = directory / "priority_load.ys"
+        _aa.write_text(ys, "\n".join(script)+"\n")
+        command = f"yosys -Q -T -s {ys.resolve()}"
+        if container:
+            import _container_exec as ce
+            argv = ce.exec_argv(container, command, tag="formal_structural_check")
+        else:
+            argv = ["yosys", "-Q", "-T", "-s", str(ys.resolve())]
+        rc, stdout, stderr, run = _native_query_run(argv, container=container, command=command)
+        native = _native_artifacts(directory, "priority_load", stdout, stderr, run)
+        progress = _transition_query_progress(stdout+stderr, ["domain", *queries])
+        complete = (rc == 0 and progress["completed"] == progress["planned"] and not progress["unknown"]
+                    and progress["by_identity"]["domain"]["result"] == "HAS_UNDEF")
+        runs.append({"cut": cut, "native_exit_code": rc, "native_run": native,
+                     "query_progress": progress, "support": support,
+                     "model_sha256": file_sha256(model_path), "script_sha256": file_sha256(ys)})
+        for key, (row, load, data, checks) in specs.items():
+            answers = {name: progress["by_identity"][key+"_"+name]["result"] for name in checks}
+            expected = {name: "PROVED" for name in checks}
+            expected.update(defined_load="NO_UNDEF", defined_fallback="NO_UNDEF",
+                            load_zero="REFUTED", load_one="REFUTED")
+            directions = [name for name, opposite in (("suppression", "activation"), ("activation", "suppression"))
+                          if answers[name] == "PROVED" and answers[opposite] == "REFUTED"
+                          and answers[name+"_retention"] == "REFUTED"
+                          and answers[opposite+"_retention"] == "PROVED"]
+            directional = {"suppression", "activation", "suppression_retention", "activation_retention"}
+            if complete and len(directions) == 1 and all(answers[k] == v for k, v in expected.items() if k not in directional):
+                certificates.append({"q": row["q"], "status": "CERTIFIED", "cut_strobe": cut, "cut_aliases": list(aliases),
+                    "load_strobe_value": load, "active_reset_value": active,
+                    "scope": "unrestricted one-step shared current Q and data",
+                    "complete_reset_fanin_cut": True, "target_q_absent_from_load_support": True,
+                    "post_reset_state_restriction": False, "load_support": data[f"cofactor{load}_bits"],
+                    "direction": directions[0], "directional_control": answers[directions[0]],
+                    "discriminating_retention": answers[directions[0]+"_retention"],
+                    "queries": answers, "query_prefix": key, "work_dir": str(directory)})
+    progress = {"planned": sum(r.get("query_progress", {}).get("planned", 0) for r in runs),
+                "completed": sum(r.get("query_progress", {}).get("completed", 0) for r in runs)}
+    return {"status": "COMPLETED" if all(r.get("native_exit_code") == 0 for r in runs) else "INCOMPLETE",
+            "native_exit_code": 0 if runs and all(r.get("native_exit_code") == 0 for r in runs) else None,
+            "query_progress": progress, "runs": runs, "certificates": certificates}
 
 
 def _post_reset_independence(model: dict, rows: List[dict], work_dir: Path,
@@ -1807,6 +2073,18 @@ def reset_control_mapping(netlist: dict, raw: Optional[dict], top: str,
             result["unresolved"].append(f"{row['cell']}.Q[{row['bit_index']}]: {row.get('reason')}")
     if (rc == 0 and domain_reachable and progress["completed"] == progress["planned"]
             and not progress["unknown"]):
+        loads = _priority_load_retention(mod, bit, rows, work_dir / "priority_load", container)
+        result["priority_load_retention"] = loads
+        load_by_q = {c["q"]: c for c in loads["certificates"]}
+        for row in rows:
+            if row["q"] not in load_by_q:
+                continue
+            old = f"{row['cell']}.Q[{row['bit_index']}]: {row.get('reason')}"
+            row["classification"] = "RETENTION_CONTROL"
+            row["proof_basis"] = "native_priority_load_retention"
+            row["priority_load_certificate"] = load_by_q[row["q"]]
+            row["reason"] = "native reset control of a priority load with a discriminating source-Q-retaining fallback"
+            result["unresolved"] = [u for u in result["unresolved"] if u != old]
         post = _post_reset_independence(model, rows, work_dir / "post_reset", container)
         result["post_reset_independence"] = post
         by_q = {c["q"]: c for c in post["certificates"]}

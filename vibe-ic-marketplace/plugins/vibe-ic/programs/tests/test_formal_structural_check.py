@@ -938,3 +938,56 @@ def test_raw_arithmetic_constant_force_cannot_be_reclassified_as_retention(tmp_p
     assert low["native_queries"]["retain0"] == "REFUTED", low
     progress = mapping["query_progress"]
     assert progress["completed"] == progress["planned"] and not progress["unknown"], progress
+
+
+_PRIORITY_LOAD_CASES = {
+    'activate-priority-load': ('if(load & rst) q<=d; else if(shift) q<={q[0],q[1]};', 'active_high', fsc.PASS),
+    'suppress-priority-load': ('if(load & !rst) q<=d; else if(shift) q<={q[0],q[1]};', 'active_high', fsc.PASS),
+    'suppress-priority-load-low': ('if(load & rst) q<=d; else if(shift) q<={q[0],q[1]};', 'active_low', fsc.PASS),
+    'enable-before-priority-load': ('if((load & !rst)|shift) q<=(load & !rst) ? d : {q[0],q[1]};', 'active_high', fsc.PASS),
+    'inverse-select-priority-load': ('if(!(!(load & !rst))) q<=d; else if(shift) q<={q[0],q[1]};', 'active_high', fsc.PASS),
+    'mixed-payload-kept': ('q<=rst ? d^{2{clear}} : d;', 'active_high', fsc.NOT_DISCHARGED),
+    'nested-mixed-payload-kept': ('if(shift) q<=rst ? d^{2{clear}} : d;', 'active_high', fsc.NOT_DISCHARGED),
+    'target-q-load-kept': ('if(load & !rst) q<=q+d; else if(shift) q<=d;', 'active_high', fsc.NOT_DISCHARGED),
+    'reset-data-bypass-kept': ('if(load & !rst) q<=d^{2{rst}}; else if(shift) q<={q[0],q[1]};', 'active_high', fsc.NOT_DISCHARGED),
+    'undef-load-kept': ("if(load & !rst) q<=2'bxx; else if(shift) q<={q[0],q[1]};", 'active_high', fsc.NOT_DISCHARGED),
+    'wrong-force-kept': ('if(load & !rst) q<=d; else if(shift) q<={q[0],q[1]};', 'active_low_wrong', fsc.REFUTED),
+}
+
+
+@pytest.mark.parametrize('case', _PRIORITY_LOAD_CASES)
+def test_priority_load_retention_normal_cli_keeps_unrestricted_q_and_data(tmp_path, case):
+    _yosys()
+    body, polarity, expected = _PRIORITY_LOAD_CASES[case]
+    active = '!rst' if polarity == 'active_low' else 'rst'
+    declared = 'active_low' if polarity.startswith('active_low') else 'active_high'
+    source = ('module m(input clk,rst,load,shift,clear,input [1:0] d,'
+              'output reg boot,output reg [1:0] q);\n'
+              f'always @(posedge clk) if({active}) boot<=0; else boot<=d[0];\n'
+              'always @(posedge clk) '+body+'\nendmodule\n')
+    rtl = tmp_path/'m.v'
+    rtl.write_text(source)
+    output = tmp_path/'mapping.json'
+    rc = fsc.main(['--rtl', str(rtl), '--top', 'm', '--claim',
+                  'reset_polarity:rst:'+declared, '--work-dir', str(tmp_path), '--json', str(output)])
+    rec = json.loads(output.read_text())
+    assert rec['verdict'] == expected, rec
+    assert rc == (0 if expected == fsc.PASS else 1), rec
+    mapping = rec['claims'][0]['reset_control_mapping']
+    assert len(mapping['raw_identities']) == 3, mapping
+    assert mapping['query_progress']['completed'] == mapping['query_progress']['planned'], mapping
+    if expected == fsc.PASS:
+        rows = [r for r in mapping['rows'] if r.get('proof_basis') == 'native_priority_load_retention']
+        assert len(rows) == 2, mapping
+        assert all(r['classification'] == 'RETENTION_CONTROL' for r in rows), rows
+        component = mapping['priority_load_retention']
+        assert component['native_exit_code'] == 0, component
+        assert component['query_progress']['completed'] == component['query_progress']['planned'], component
+        for row in rows:
+            cert = row['priority_load_certificate']
+            assert cert['scope'] == 'unrestricted one-step shared current Q and data', cert
+            assert cert['complete_reset_fanin_cut'] and cert['target_q_absent_from_load_support'], cert
+            assert cert['directional_control'] == 'PROVED' and cert['discriminating_retention'] == 'REFUTED', cert
+            assert cert['post_reset_state_restriction'] is False, cert
+    elif expected == fsc.NOT_DISCHARGED:
+        assert not any(r.get('priority_load_certificate') for r in mapping['rows']), mapping
