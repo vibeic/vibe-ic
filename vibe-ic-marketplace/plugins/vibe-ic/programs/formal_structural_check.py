@@ -1470,7 +1470,7 @@ def _post_reset_independence(model: dict, rows: List[dict], work_dir: Path,
         if complete and domain["result"] == "HAS_UNDEF" and answer["result"] == "PROVED":
             certificates.append({"q": row["q"], "status": "CERTIFIED",
                 "rule": "POST_RESET_COFACTOR_INDEPENDENCE", "active_reset_value": arm,
-                "scope": "after at least one asserted reset edge on the same clock and edge",
+                "scope": "current state immediately follows an asserted reset edge on the same clock and edge",
                 "clock": key[0], "clock_polarity": key[1], "premises": groups[key]["premises"],
                 "domain_query": domains[key], "equality_query": ident,
                 "other_current_q_and_data": "free; no input or scratch-value restriction"})
@@ -1816,7 +1816,7 @@ def reset_control_mapping(netlist: dict, raw: Optional[dict], top: str,
             # obligation for the first assertion edge. Preserve its refusal.
             row["post_reset_certificate"] = by_q[row["q"]]
             old = f"{row['cell']}.Q[{row['bit_index']}]: {row.get('reason')}"
-            row["reason"] = ("POST_RESET_COFACTOR_INDEPENDENCE: reset-independent after an asserted clock edge; "
+            row["reason"] = ("POST_RESET_COFACTOR_INDEPENDENCE: reset-independent in the immediate poststate of an asserted reset edge; "
                              "unrestricted first-edge force sense remains unresolved")
             new = f"{row['cell']}.Q[{row['bit_index']}]: {row['reason']}"
             result["unresolved"] = [new if u == old else u for u in result["unresolved"]]

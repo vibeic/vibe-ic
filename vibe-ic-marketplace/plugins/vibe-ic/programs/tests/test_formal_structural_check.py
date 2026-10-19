@@ -245,7 +245,7 @@ def test_post_reset_native_independence_requires_total_same_edge_premises(tmp_pa
         row = next(r for r in mapping["rows"] if r["classification"] == "UNRESOLVED_DATA_DEPENDENCE")
         # The normal CLI must distinguish a proved post-reset relation from
         # the pre-fix one-step-only diagnostic. Its blocking verdict stays.
-        assert row["reason"] == ("POST_RESET_COFACTOR_INDEPENDENCE: reset-independent after an asserted clock edge; "
+        assert row["reason"] == ("POST_RESET_COFACTOR_INDEPENDENCE: reset-independent in the immediate poststate of an asserted reset edge; "
                                  "unrestricted first-edge force sense remains unresolved"), row
     certified = [r for r in mapping["rows"] if r.get("post_reset_certificate")]
     assert len(certified) == int(positive), mapping
@@ -256,7 +256,7 @@ def test_post_reset_native_independence_requires_total_same_edge_premises(tmp_pa
         assert row["native_queries"]["equal"] == "REFUTED", row
         cert = row["post_reset_certificate"]
         assert cert["active_reset_value"] == int(not low), cert
-        assert cert["scope"] == "after at least one asserted reset edge on the same clock and edge", cert
+        assert cert["scope"] == "current state immediately follows an asserted reset edge on the same clock and edge", cert
         assert len(cert["premises"]) == 1 and cert["premises"][0]["value"] == value, cert
         assert cert["premises"][0]["q"] != row["q"], cert
         post = mapping["post_reset_independence"]
