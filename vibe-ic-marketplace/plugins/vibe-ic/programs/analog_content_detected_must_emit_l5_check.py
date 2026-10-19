@@ -120,6 +120,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import _vacuous_exit as _vx
+from _analog_block_intent import is_physical_esd_check
 
 _GATE = "analog_content_detected_must_emit_l5_check"
 
@@ -480,7 +481,11 @@ def _scan_docs(project: Path) -> Dict[str, List[Tuple[str, int, str]]]:
         except Exception:
             continue
         rel = str(f.relative_to(project))
-        for i, line in enumerate(text.splitlines(), start=1):
+        offset = 0
+        for i, raw_line in enumerate(text.splitlines(keepends=True), start=1):
+            line_offset = offset
+            offset += len(raw_line)
+            line = raw_line.rstrip("\r\n")
             if _NEGATION_RE.search(line):
                 continue
             for cid, (pat, _) in _KEYWORD_CLASSES.items():
@@ -492,6 +497,8 @@ def _scan_docs(project: Path) -> Dict[str, List[Tuple[str, int, str]]]:
                 # count and must not force an L5 analog block.
                 positive_hit = False
                 for m in pat.finditer(line):
+                    if is_physical_esd_check(text, line_offset+m.start(), line_offset+m.end()):
+                        continue
                     if not _keyword_is_negated(line, m.start(), m.end()):
                         positive_hit = True
                         break

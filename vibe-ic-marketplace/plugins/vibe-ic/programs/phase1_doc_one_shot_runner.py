@@ -134,6 +134,7 @@ import phase1_port_extract as _ppx
 import _input_corpus_scope as _ics
 import sdc_constraints as _sdc
 import floorplan_contract as _fpc
+from _analog_block_intent import is_physical_esd_check
 from l_doc_consumer_contract import project_relative_source
 from _prose_polarity import is_denied as _prose_is_denied
 from _prose_polarity import sentence_scope as _prose_sentence_scope
@@ -13645,7 +13646,8 @@ def _v466_best_class_match(text: str, pat: str):
     real = []
     for m in matches:
         ls, le = _v466_line_bounds(text, m.start())
-        if not _v466_line_is_plugin_layer_title(text[ls:le]):
+        if (not _v466_line_is_plugin_layer_title(text[ls:le])
+                and not is_physical_esd_check(text, m.start(), m.end())):
             real.append(m)
     if not real:
         return None
@@ -36779,7 +36781,8 @@ def gen_l5_adi_spec(project: Path,
         if cls in _emitter_seen_classes:
             continue
         for fname, text in extracted.items():
-            m = pat.search(text or "")
+            m = next((hit for hit in pat.finditer(text or "")
+                      if not is_physical_esd_check(text, hit.start(), hit.end())), None)
             if not m:
                 continue
             # Honor the same reject-context as the main emitter:

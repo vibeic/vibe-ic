@@ -317,5 +317,16 @@
     "version_observed": "1.30.8 exact official 164664a5d7495802fe09f22feb59ed76d79c7d89",
     "version_lkg": "Not established. Current official source omission, not an invented release regression interval.",
     "fixture_path": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/fixtures/phase1_local/l8_literal_parameter_owner/literal_parameters.md"
+  },
+  {
+    "issue": 3279,
+    "project": "neutral_physical_signoff_list",
+    "layer": "L5_ADI_SPEC",
+    "field": "analog_blocks",
+    "expected": "L5 analog_blocks=[] and analog_blocks_detected=false. Physical IR/EM/ESD verification obligations remain present in INPUT; this list requests no new analog circuit.",
+    "actual": "L5 publishes one esd block, spec=null, low_confidence=true; the ordinary analog parity gate demands it from the same ESD keyword.",
+    "version_observed": "1.30.25 at exact official e67b74e3e9204aa37fd8eaaf8d66266bfa8c2812; independently reproduced on composed1.29.96 source05. No last-known-good interval asserted.",
+    "version_lkg": "",
+    "fixture_path": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/fixtures/phase1_local/neutral_physical_signoff_list/physical_signoff.md"
   }
 ]
