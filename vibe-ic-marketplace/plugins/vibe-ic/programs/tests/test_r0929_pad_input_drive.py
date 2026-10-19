@@ -64,12 +64,12 @@ def _core(tmp_path: Path) -> Path:
     return p
 
 
-def _sdc(project: Path, monkeypatch, values=None) -> str:
+def _sdc(project: Path, monkeypatch, values=None, *, top: str = "") -> str:
     vals = dict(_PDK_VALUES if values is None else values)
     monkeypatch.setattr(p3, "_sdc_environment_values", lambda *_: (dict(vals), []))
     monkeypatch.setattr(p3, "_synth_max_fanout", lambda *_: (None, "", []))
     return p3._build_auto_silicon_sdc(
-        project, pdk_name="famxD",
+        project, top=top, pdk_name="famxD",
         liberty_path="/pdk/libs.ref/quartz_sc/lib/slow.lib")
 
 
@@ -271,10 +271,16 @@ _IO_LIB = """library ("quartz_io__%(corner)s") {
 """
 
 
-def _io_record(project: Path, libs) -> None:
+def _io_record(project: Path, libs, *, core_module: str = "",
+               chip_top_module: str = "") -> None:
     rec = project / "reports" / "phase3" / "io_pad_chip_top.json"
     rec.parent.mkdir(parents=True, exist_ok=True)
-    rec.write_text(json.dumps({"io_library_liberty": [str(x) for x in libs]}))
+    doc = {"io_library_liberty": [str(x) for x in libs]}
+    if core_module:
+        doc["core_module"] = core_module
+    if chip_top_module:
+        doc["chip_top_module"] = chip_top_module
+    rec.write_text(json.dumps(doc))
 
 
 def _io_lib(tmp_path: Path, corner: str, in_pad="1.000000", bi_pad="1.000000",
@@ -319,6 +325,114 @@ def test_the_io_liberty_brackets_the_die_inputs_per_view(tmp_path, monkeypatch):
     assert rec["sdc_lines"] and all(ln in text.splitlines() for ln in rec["sdc_lines"])
     # a PDK-tier drive is a modelled edge: the STA verdict is left alone
     assert _fold(project, _rows())["sta_signoff"].status == "PASS"
+
+
+def test_current_core_boundary_keeps_on_chip_drive_until_chip_top_is_analysed(
+        tmp_path, monkeypatch):
+    """#3269: a future DIE request does not move the current core boundary.
+
+    The current analysis top is the changed input.  Core -> chip -> core is the
+    forward and reversal control; the pad producer's identity stays unchanged.
+    """
+    project = _die(tmp_path)
+    _io_record(project, [_io_lib(tmp_path, "tt")],
+               core_module="neutral_core", chip_top_module="neutral_chip")
+
+    core = _sdc(project, monkeypatch, top="neutral_core")
+    core_record = _record(project)
+    assert core_record["verdict"] == "NOT_APPLICABLE"
+    assert _commands(core, "set_driving_cell") == [
+        "set_driving_cell -lib_cell quartz_sc__inv_1 -pin ZN [all_inputs]"]
+    assert _commands(core, "set_input_transition") == []
+    assert core_record["analysis_top"] == "neutral_core"
+    assert core_record["boundary"]["chip_top_module"] == "neutral_chip"
+
+    chip = _sdc(project, monkeypatch, top="neutral_chip")
+    assert _commands(chip, "set_driving_cell") == []
+    assert _commands(chip, "set_input_transition") == [
+        "set_input_transition -max $_vibeic_pad_max [all_inputs]",
+        "set_input_transition -min $_vibeic_pad_min [all_inputs]",
+    ]
+    chip_record = _record(project)
+    assert chip_record["verdict"] == "PDK_IO_TIER"
+    assert chip_record["analysis_top"] == "neutral_chip"
+
+    restored = _sdc(project, monkeypatch, top="neutral_core")
+    assert _commands(restored, "set_driving_cell") == [
+        "set_driving_cell -lib_cell quartz_sc__inv_1 -pin ZN [all_inputs]"]
+    assert _record(project)["verdict"] == "NOT_APPLICABLE"
+
+
+def test_unknown_analysis_top_refuses_to_guess_core_or_pad_boundary(
+        tmp_path, monkeypatch):
+    """A stale caller identity cannot borrow either a core or pad model."""
+    project = _die(tmp_path)
+    _io_record(project, [_io_lib(tmp_path, "tt")],
+               core_module="neutral_core", chip_top_module="neutral_chip")
+    text = _sdc(project, monkeypatch, top="stale_top")
+    rec = _record(project)
+    assert rec["verdict"] == "NOT_MEASURED"
+    assert _commands(text, "set_driving_cell") == []
+    assert _commands(text, "set_input_transition") == []
+    assert rec["analysis_top"] == "stale_top"
+    assert "matches neither" in rec["reason"]
+
+
+def _multi_axis_pad_lib(first: str, second: str, *, unit: str = "1ns",
+                        output_limit: str = "1") -> str:
+    return f'''library(neutral_io) {{
+      time_unit : "{unit}";
+      lu_table_template(t) {{ variable_1 : input_net_transition; }}
+      cell(neutral_pad) {{
+        pin(PAD) {{ direction : input; is_pad : true; max_transition : 20000; }}
+        pin(Y0) {{ direction : output; function : "PAD";
+          max_transition : {output_limit};
+          timing() {{ related_pin : "PAD";
+            cell_rise(t) {{ index_1("{first}"); values("0.1, 0.2"); }}
+          }}
+        }}
+        pin(Y1) {{ direction : output; function : "PAD";
+          max_transition : {output_limit};
+          timing() {{ related_pin : "PAD";
+            cell_rise(t) {{ index_1("{second}"); values("0.1, 0.2"); }}
+          }}
+        }}
+      }}
+    }}'''
+
+
+def test_intersecting_active_pad_tables_use_only_the_common_axis():
+    """#3270: all always-active receiver tables constrain one stimulus."""
+    import sdc_environment as SE
+    got = SE._io_pad_view(_multi_axis_pad_lib("0.02, 0.5", "0.2, 2"))
+    assert {k: got.get(k) for k in ("fast_ns", "slow_ns")} == {
+        "fast_ns": 0.2, "slow_ns": 0.5}
+
+
+def test_same_axis_active_pad_tables_preserve_the_characterised_range():
+    import sdc_environment as SE
+    got = SE._io_pad_view(_multi_axis_pad_lib("0.02, 0.5", "0.02, 0.5"))
+    assert {k: got.get(k) for k in ("fast_ns", "slow_ns")} == {
+        "fast_ns": 0.02, "slow_ns": 0.5}
+
+
+def test_disjoint_active_pad_tables_refuse_a_characterised_bracket():
+    import sdc_environment as SE
+    got = SE._io_pad_view(_multi_axis_pad_lib("0.02, 0.1", "0.2, 2"))
+    assert "fast_ns" not in got and "slow_ns" not in got
+    assert got["why"] == "the pad pins' characterised ranges do not overlap"
+
+
+def test_axis_intersection_converts_units_and_ignores_receiver_output_limit():
+    """The table axes, not a favourable receiver-output limit, choose the edge."""
+    import sdc_environment as SE
+    low = SE._io_pad_view(_multi_axis_pad_lib(
+        "20, 500", "200, 2000", unit="1ps", output_limit="1"))
+    high = SE._io_pad_view(_multi_axis_pad_lib(
+        "20, 500", "200, 2000", unit="1ps", output_limit="999"))
+    expected = {"fast_ns": 0.2, "slow_ns": 0.5}
+    assert {k: low.get(k) for k in expected} == expected
+    assert {k: high.get(k) for k in expected} == expected
 
 
 def test_each_scene_takes_its_own_linked_io_view(tmp_path, monkeypatch):

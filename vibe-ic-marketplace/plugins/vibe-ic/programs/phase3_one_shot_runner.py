@@ -4518,8 +4518,8 @@ def _build_auto_silicon_sdc(project: Path, top: str = "",
     # R-0929-PAD-INPUT-DRIVE: a DIE top's bond-pad inputs are never driven by
     # the core synthesis driving cell; the resolved drive is recorded for the
     # Step-23 STA verdict, which cannot PASS on a NOT_MEASURED drive.
-    _env, _pad_drive = _sdc_pad_input_drive(project, _env, container,
-                                            _to_container_path)
+    _env, _pad_drive = _sdc_pad_input_drive(
+        project, _env, container, _to_container_path, analysis_top=top)
     _pad_drive["sdc_lines"] = _sdc_pad_drive_sdc_lines(_pad_drive, _tu_scale)
     try:
         _sdc_write_pad_input_drive(project, _pad_drive)

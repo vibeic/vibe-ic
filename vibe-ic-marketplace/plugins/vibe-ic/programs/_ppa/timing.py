@@ -1410,7 +1410,7 @@ def author_asic_sdc(rt: Any, project: Path, top: str, pdk: Any,
         txt, pad_rec = _sdc_env.staged_sdc_pad_input_drive(
             project, txt, out["staged_sdc"], container,
             getattr(rt, "_to_container_path", None),
-            _sdc_env.liberty_time_scale(str(pdk.liberty)))
+            _sdc_env.liberty_time_scale(str(pdk.liberty)), analysis_top=top)
         try:
             _sdc_env.write_pad_input_drive_record(project, pad_rec)
         except OSError:
