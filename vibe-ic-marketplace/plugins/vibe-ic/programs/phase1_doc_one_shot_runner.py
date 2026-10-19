@@ -11062,6 +11062,41 @@ def _v455_dir_for_span_ex(line: str, pos: int, line_dir: str) -> tuple:
     }
 
 
+def _prose_sentence_for_port_span(line: str, pos: int) -> tuple:
+    """Return this token's sentence and relative offset, without splitting
+    dotted identifiers, decimal voltages, or backticked pin ranges.
+
+    #3220: a physical source line may contain several sentences. A direction
+    stated by one sentence is not declaration evidence for tokens in another.
+    Tables keep their row/cell grammar and do not use this prose helper.
+    """
+    start = 0
+    for sep in re.finditer(r"[.!?](?=\s|$)|[。！？]", line):
+        if line[:sep.start()].count("`") % 2:
+            continue
+        if sep.start() >= pos:
+            return line[start:sep.end()], pos - start
+        start = sep.end()
+    return line[start:], pos - start
+
+
+def _is_logical_interface_or_role_span(line: str, pos: int) -> bool:
+    """A noun phrase naming a logical interface or its role is not a pin
+    declaration. Inspect grammar around the occurrence, never the identifier:
+    the same name can independently be declared as a physical port.
+    """
+    identifier = r"(?:`[^`]+`|[A-Za-z_][A-Za-z0-9_]*)"
+    logical = r"\blogical\b[^,;.!?\n]*?\binterfaces?\s+" + identifier
+    if any(m.start() <= pos < m.end()
+           for m in re.finditer(logical, line, re.IGNORECASE)):
+        return True
+    role = (r"\b(?:local\s+)?roles?\b"
+            r"(?:\s+(?:(?:is|of)\s+)?|\s*[:=]\s*)"
+            r"(?P<identity>" + identifier + r")")
+    return any(m.start("identity") <= pos < m.end("identity")
+               for m in re.finditer(role, line, re.IGNORECASE))
+
+
 def _v455_interface_pins(extracted: Dict[str, str]) -> List[dict]:
     """Backticked pin tokens (ranges expanded) found inside port-context
     heading ranges — the bullet-list interface shape analog datasheets
@@ -11170,8 +11205,12 @@ def _v455_interface_pins(extracted: Dict[str, str]) -> List[dict]:
                     if _is_port_table_row:
                         tok_dir, tok_conflict = direction, None
                     else:
+                        if _is_logical_interface_or_role_span(line, _tm.start()):
+                            continue
+                        sentence, sentence_pos = _prose_sentence_for_port_span(
+                            line, _tm.start())
                         tok_dir, tok_conflict = _v455_dir_for_span_ex(
-                            line, _tm.start(), direction)
+                            sentence, sentence_pos, _v455_dir_from_line(sentence))
                     expanded = _v455_expand_pin_token(tok)
                     # aliases attach only to a single (non-banked) canonical tok
                     tok_aliases = (alias_for.get(tok, [])
@@ -22728,7 +22767,24 @@ def gen_l1_datasheet(project: Path,
             tokens = [t for t in tokens if t]
             if len(tokens) < 2:
                 continue
-            for t in tokens:
+            for token_match in re.finditer(r"[^\s\t\|,]+", scan_line):
+                t = token_match.group(0)
+                token_mode = mode_token
+                if not _is_pipe_table_row(line):
+                    # #3220: a technical abbreviation or logical-interface
+                    # label cannot borrow a direction from a different
+                    # sentence on the same physical line.
+                    if _is_logical_interface_or_role_span(
+                            scan_line, token_match.start()):
+                        continue
+                    sentence, _ = _prose_sentence_for_port_span(
+                        scan_line, token_match.start())
+                    local_direction = _PIN_TABLE_LINE_RE.search(sentence)
+                    if not local_direction:
+                        continue
+                    token_mode = local_direction.group(1).lower()
+                    if token_mode not in {"input", "output", "inout"}:
+                        continue
                 if re.match(r"^[A-Z][A-Z0-9_]{1,15}$", t) and t.upper() not in {
                     "INPUT", "OUTPUT", "INOUT", "BIDIR", "POWER", "GROUND",
                     "AC", "DC", "DUT", "VDD", "VSS",
@@ -22780,7 +22836,7 @@ def gen_l1_datasheet(project: Path,
                     _v1_6_363_emit_name = _v1_6_363_strip_pipe_from_name(t)
                     pins.append({
                         "name": _v1_6_363_emit_name,
-                        "mode": mode_token,
+                        "mode": token_mode,
                         # Wave 38/B2: typed-depth fields. aliases/rtl_name/
                         # board_name are required by l1_pin_table_aliases_typed_check
                         # for downstream RTL/board cross-referencing.

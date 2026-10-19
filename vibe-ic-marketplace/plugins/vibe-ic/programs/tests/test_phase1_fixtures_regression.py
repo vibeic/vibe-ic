@@ -426,3 +426,109 @@ def test_l2_complete_body_reaches_expert_but_missing_tail_is_rejected(tmp_path):
     bad = expert.converge_ai_expectation(tmp_path, expectation)
     assert bad["usable"] and bad["met"] is False, bad
     assert bad["missing_tokens"] == [tail], bad
+
+def _native_l1_l9_pin_rows(tmp_path, text):
+    from programs import phase1_doc_one_shot_runner as producer
+    extracted = {"interfaces.md": text}
+    first = producer.gen_l1_datasheet(tmp_path, extracted)
+    ninth = producer.gen_l9_integration_spec(tmp_path, extracted, {})
+    return {
+        "L1": json.loads(first.path.read_text()).get("pin_table", []),
+        "L9": json.loads(ninth.path.read_text()).get("top_ports", []),
+    }
+
+
+# Extractor fixtures have field expectations rather than an IC-name pick.
+_EXPECTED_PHYSICAL_PORTS = {
+    "logical_role_not_physical_pin": {
+        "bus_req_i": "input", "bus_rsp_o": "output",
+        "entropy_req_o": "output", "entropy_rsp_i": "input",
+    },
+}
+
+
+@pytest.mark.parametrize("layer", ["L1", "L9"])
+def test_logical_role_not_physical_pin_from_native_intake(tmp_path, layer):
+    from programs.tests._hostpaths import require_repo
+    fixture = require_repo(
+        "vibe-ic-marketplace", "plugins", "vibe-ic", "programs", "tests",
+        "fixtures", "phase1_local", "logical_role_not_physical_pin", "interfaces.md")
+    rows = _native_l1_l9_pin_rows(tmp_path, fixture.read_text())[layer]
+    actual = ",".join(sorted(row["name"].lower() for row in rows))
+    assert actual == "bus_req_i,bus_rsp_o,entropy_req_o,entropy_rsp_i"
+    directions = {row["name"]: row.get("direction", row.get("mode")) for row in rows}
+    assert directions == _EXPECTED_PHYSICAL_PORTS["logical_role_not_physical_pin"]
+
+
+@pytest.mark.parametrize("layer", ["L1", "L9"])
+@pytest.mark.parametrize("text", [
+    "# Ports\nPhysical input `req`.\nPhysical output `rsp`.\nPhysical output `cdc`.\n",
+    "# Ports\nPhysical input `req`. Physical output `rsp`. Physical output `cdc`.\n",
+    "# Ports\ninput REQ\noutput RSP\noutput CDC\n",
+    "# Ports\n```systemverilog\nmodule bridge(input req, output rsp, output cdc);\n"
+    "endmodule\n```\n",
+    "# Ports\n| Signal | Direction | Type | Description |\n"
+    "|---|---|---|---|\n| `req` | input | logic | Request |\n"
+    "| `rsp` | output | logic | Response |\n| `cdc` | output | logic | Status |\n",
+])
+def test_short_role_and_cdc_names_are_valid_explicit_physical_ports(
+        tmp_path, layer, text):
+    rows = _native_l1_l9_pin_rows(tmp_path, text)[layer]
+    actual = sorted((row["name"].lower(), row.get("direction", row.get("mode")))
+                    for row in rows)
+    assert actual == [("cdc", "output"), ("req", "input"), ("rsp", "output")]
+
+
+@pytest.mark.parametrize("layer", ["L1", "L9"])
+@pytest.mark.parametrize("text", [
+    "The logical transport interface `roleset` has local role `req`, with "
+    "physical input `payload_i`, and physical output `payload_o`.\n",
+    "The logical transport interface `cdc` has local role `req`.\n"
+    "The logical entropy interface `req` has local role `rsp`.\n"
+    "Physical input `payload_i`.\nPhysical output `payload_o`.\n",
+    "Physical input `payload_i`, and physical output `payload_o`. "
+    "The clocks remain separate domains; no CDC or timing waiver is granted.\n",
+])
+def test_logical_role_sentence_scope_does_not_own_physical_pins(tmp_path, layer, text):
+    rows = _native_l1_l9_pin_rows(tmp_path, "# Shared interface decisions\n" + text)[layer]
+    actual = sorted((row["name"].lower(), row.get("direction", row.get("mode")))
+                    for row in rows)
+    actual_value = ",".join(f"{name}:{direction}" for name, direction in actual)
+    assert actual_value == "payload_i:input,payload_o:output"
+
+
+@pytest.mark.parametrize("layer", ["L1", "L9"])
+def test_same_role_words_can_be_independent_physical_declarations(tmp_path, layer):
+    text = ("# Interface decisions\n"
+            "The logical transport interface `fabric` has local role `rsp`. "
+            "Physical input `req`. Physical output `rsp`. Physical output `cdc`.\n")
+    rows = _native_l1_l9_pin_rows(tmp_path, text)[layer]
+    actual = sorted((row["name"].lower(), row.get("direction", row.get("mode")))
+                    for row in rows)
+    assert actual == [("cdc", "output"), ("req", "input"), ("rsp", "output")]
+
+
+@pytest.mark.parametrize("layer", ["L1", "L9"])
+def test_unrelated_prose_document_cannot_lend_a_port_direction(tmp_path, layer):
+    from programs import phase1_doc_one_shot_runner as producer
+    extracted = {
+        "interfaces.md": "# Ports\nPhysical input `req`. Physical output `rsp`.\n",
+        "background.md": "# Background\nThe logical service `cdc` has local role `rsp`. "
+                         "No CDC or timing waiver is granted.\n",
+    }
+    l1 = producer.gen_l1_datasheet(tmp_path, extracted)
+    l9 = producer.gen_l9_integration_spec(tmp_path, extracted, {})
+    rows = json.loads((l1 if layer == "L1" else l9).path.read_text())[
+        "pin_table" if layer == "L1" else "top_ports"]
+    actual = sorted((row["name"].lower(), row.get("direction", row.get("mode")))
+                    for row in rows)
+    assert actual == [("req", "input"), ("rsp", "output")]
+
+
+@pytest.mark.parametrize("layer", ["L1", "L9"])
+def test_role_prefixed_identifiers_still_have_explicit_port_evidence(tmp_path, layer):
+    text = "# Ports\ninput ROLE_REQ\noutput ROLE_RSP\noutput CDC\n"
+    rows = _native_l1_l9_pin_rows(tmp_path, text)[layer]
+    actual = sorted((row["name"].lower(), row.get("direction", row.get("mode")))
+                    for row in rows)
+    assert actual == [("cdc", "output"), ("role_req", "input"), ("role_rsp", "output")]
