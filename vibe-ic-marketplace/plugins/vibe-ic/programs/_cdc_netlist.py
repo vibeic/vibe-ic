@@ -412,6 +412,86 @@ class Netlist:
         return None
 
 
+class _AnalysisNetlist(Netlist):
+    """Invocation-local lookups over one current, loaded netlist.
+
+    Do not put these caches on the caller's mutable Netlist: a later analysis
+    must see its current ports, flop connections and dependency cones. The
+    source/native binding remains the caller's admission boundary.
+    """
+    def __init__(self, source: Netlist):
+        super().__init__(source.top, source.ports, source.cells, source.names,
+                         source.drivers, source.flops, source.memories)
+        self._input_ports = {b: n for n, (d, bits) in self.ports.items()
+                             if d in ("input", "inout") for b in bits}
+        self._port_labels = {b: n for n, (_d, bits) in self.ports.items()
+                             for b in bits}
+        self._q_flops = {b: f for f in self.flops for b in f.q}
+        self._domains: Dict[int, str] = {}
+        self._direct: Dict[Tuple[int, int], Optional[object]] = {}
+        self._consumer_index = None
+        self._direct_index = None
+        self._cone_memo = None
+
+    def cone(self, bits: Iterable, skip: Optional[Set[object]] = None
+             ) -> Tuple[Set[object], Set[object]]:
+        if self._cone_memo is None:
+            from _cdc_cone_memo import CompletedConeMemo
+            self._cone_memo = CompletedConeMemo(
+                self, lambda seeds, skip=None: Netlist.cone(self, seeds, skip))
+        return self._cone_memo.cone(bits, skip)
+
+    @property
+    def port_bits(self) -> Dict[object, str]:
+        return self._input_ports
+
+    def flop_of_q(self) -> Dict[object, Flop]:
+        return self._q_flops
+
+    def bit_label(self, bit) -> str:
+        if self.is_const(bit):
+            return f"const:{bit}"
+        return self._port_labels.get(bit, self.names.get(bit, f"net#{bit}"))
+
+    def domain(self, flop: Flop) -> str:
+        key = id(flop)
+        if key not in self._domains:
+            self._domains[key] = Netlist.domain(self, flop)
+        return self._domains[key]
+
+    def direct_source(self, flop: Flop, index: int) -> Optional[object]:
+        key = (id(flop), index)
+        if key not in self._direct:
+            self._direct[key] = Netlist.direct_source(self, flop, index)
+        return self._direct[key]
+
+    def _indexes(self) -> None:
+        if self._consumer_index is not None:
+            return
+        consumers = {}
+        direct = {}
+        for f, i, cone in _data_cones(self):
+            bit = self.direct_source(f, i)
+            # Share one row across fan-in keys; each edge stores only a
+            # reference. Append in the original flop/D traversal order.
+            row = (f, i, bit)
+            for source in cone:
+                consumers.setdefault(source, []).append(row)
+            direct.setdefault((self.domain(f), bit), []).append(f)
+        self._consumer_index = consumers
+        self._direct_index = direct
+
+    def consumers(self, bit) -> List[Tuple[Flop, int, bool]]:
+        self._indexes()
+        return [(f, i, source == bit)
+                for f, i, source in self._consumer_index.get(bit, ())]
+
+    def has_stage2(self, stage1: Flop, index: int, domain: str) -> bool:
+        self._indexes()
+        return any(f is not stage1 for f in
+                   self._direct_index.get((domain, stage1.q[index]), ()))
+
+
 def _outer_reset_mux(nl: Netlist, d_bits: List[object]) -> Optional[object]:
     """The select of the $mux driving every D bit with a constant arm."""
     selects: Set[object] = set()
@@ -498,6 +578,8 @@ def _finding(rule: str, severity: str, message: str, **evidence) -> dict:
 
 def _sync_stage2(nl: Netlist, stage1: Flop, index: int, domain: str) -> bool:
     """Is stage1.Q[index] sampled directly by another flop of `domain`?"""
+    if isinstance(nl, _AnalysisNetlist):
+        return nl.has_stage2(stage1, index, domain)
     bit = stage1.q[index]
     for f in nl.flops:
         if f is stage1 or nl.domain(f) != domain:
@@ -528,6 +610,8 @@ def _data_cones(nl: Netlist) -> List[Tuple[Flop, int, Set[object]]]:
 
 def _consumers(nl: Netlist, source_bit) -> List[Tuple[Flop, int, bool]]:
     """(flop, D index, direct?) for every flop whose data cone reads the bit."""
+    if isinstance(nl, _AnalysisNetlist):
+        return nl.consumers(source_bit)
     return [(f, i, nl.direct_source(f, i) == source_bit)
             for f, i, cone in _data_cones(nl) if source_bit in cone]
 
@@ -540,6 +624,7 @@ def reg_crossing_findings(nl: Netlist) -> List[dict]:
     """A flop of domain A read by a flop of domain B (clock_domain_reg_crossing)."""
     import instrument_calibration
     instrument_calibration.assert_calibrated("_cdc_netlist::reg_crossing_findings")
+    nl = _AnalysisNetlist(nl)
     domains = clock_domains(nl)
     if len(domains) < 2:
         return []
@@ -594,6 +679,7 @@ def async_input_findings(nl: Netlist, is_candidate) -> List[dict]:
     """
     import instrument_calibration
     instrument_calibration.assert_calibrated("_cdc_netlist::async_input_findings")
+    nl = _AnalysisNetlist(nl)
     clock_or_reset = {nl.root(f.clk) for f in nl.flops} | \
         {nl.root(f.arst) for f in nl.flops if f.arst is not None}
     findings: List[dict] = []
@@ -620,6 +706,7 @@ def reset_dependency_findings(nl: Netlist) -> List[dict]:
     """A reset net whose own fan-in contains a flop it resets (a cycle)."""
     import instrument_calibration
     instrument_calibration.assert_calibrated("_cdc_netlist::reset_dependency_findings")
+    nl = _AnalysisNetlist(nl)
     resets: Dict[object, List[Flop]] = {}
     for f in nl.flops:
         for r in (f.arst, f.srst):
