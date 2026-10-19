@@ -33,6 +33,14 @@ The canonical flow is `flow/phase1_phase2_phase3.yaml`: IC path runs 0.5ic,
 precheck); IP path delivers the LEF, Liberty, GDS and Verilog views at 37.5ip.
 Only step 37 has both `.5ic` and `.5ip` variants.
 
+When the owner explicitly delegates implementation slot selection, preserve
+the chooser as `answer_provenance["operator_template.slot"].answered_by =
+"agent"`, cite the actual selection, and attach `delegation` with
+`answered_by: "owner"`, the owner's verbatim `citation`, and
+`scope: "operator_template.slot"`. The area-basis producer accepts this scoped
+grant without calling the agent's choice an owner choice. It does not grant
+authority to infer `deliverable`; the prompt's delivery route remains required.
+
 You are the **IC Expert Agent**. You are BOTH the front door that talks to the
 user AND the silicon reviewer that makes the chip correct. (There is one role: it both faces the user and owns silicon depth.) You elicit the chip
 requirements from the user, ingest the dialogue, produce the L1–L24 JSON, review

@@ -147,9 +147,20 @@ def test_owner_slot_reaches_budget_and_l19_consumer(tmp_path):
     assert "input/submission_template/slots/small.yaml" in got["inputs"]
 
 
-def _slot_declaration(project):
+def _delegate_slot(doc):
+    doc['answer_provenance']['operator_template.slot'] = {
+        'answered_by': 'agent', 'citation': 'Expert selects the smallest published slot',
+        'delegation': {'answered_by': 'owner',
+                       'citation': 'The expert may select the implementation slot',
+                       'scope': 'operator_template.slot'},
+    }
+
+
+def _slot_declaration(project, delegated=False):
     doc = _answers()
     _operator_slot(project, doc)
+    if delegated:
+        _delegate_slot(doc)
     path = project / ANSWERS_REL
     path.write_text(json.dumps(doc))
     assert _gen().main([str(project)]) == 0
@@ -157,11 +168,60 @@ def _slot_declaration(project):
     return json.loads((project / TD.DECLARATION_REL).read_text())
 
 
-def test_selected_slot_survives_the_public_declaration_consumer(tmp_path):
+@pytest.mark.parametrize('delegated', [False, True], ids=['owner', 'delegated'])
+def test_selected_slot_survives_the_public_declaration_consumer(tmp_path, delegated):
     project = _project(tmp_path)
-    decl = _slot_declaration(project)
+    decl = _slot_declaration(project, delegated=delegated)
     assert CHECK.evaluate(project)["verdict"] == "PASS"
     assert decl["operator_template"] == {"slot": "small"}
+    if delegated:
+        record = decl['answer_provenance']['operator_template.slot']
+        assert record['answered_by'] == 'agent'
+        assert record['delegation']['answered_by'] == 'owner'
+
+
+@pytest.mark.parametrize('defect', [
+    'absent', 'uncited_owner', 'agent_authorizes', 'wrong_scope', 'uncited_choice',
+    'deliverable_inference', 'stale_delegation',
+])
+def test_delegated_slot_refuses_missing_or_misscoped_authority(tmp_path, defect):
+    project = _project(tmp_path)
+    doc = _answers()
+    _operator_slot(project, doc)
+    _delegate_slot(doc)
+    record = doc['answer_provenance']['operator_template.slot']
+    if defect == 'absent':
+        record.pop('delegation')
+    elif defect == 'uncited_owner':
+        record['delegation']['citation'] = ''
+    elif defect == 'agent_authorizes':
+        record['delegation']['answered_by'] = 'agent'
+    elif defect == 'wrong_scope':
+        record['delegation']['scope'] = 'deliverable'
+    elif defect == 'uncited_choice':
+        record.pop('citation')
+    elif defect == 'deliverable_inference':
+        doc['answer_provenance']['deliverable']['answered_by'] = 'agent'
+    else:
+        current = copy.deepcopy(doc)
+        current['answer_provenance']['operator_template.slot']['delegation']['citation'] = 'A different authorization'
+        (project / ANSWERS_REL).write_text(json.dumps(current))
+    got = _gen().derive(project, doc)
+    assert got['status'] == 'REFUSED', got
+    assert 'budget' not in got
+
+
+def test_revoked_slot_delegation_invalidates_the_public_consumer(tmp_path):
+    project = _project(tmp_path)
+    _slot_declaration(project, delegated=True)
+    assert CHECK.evaluate(project)['verdict'] == 'PASS'
+    path = project / ANSWERS_REL
+    current = json.loads(path.read_text())
+    current['answer_provenance']['operator_template.slot'].pop('delegation')
+    path.write_text(json.dumps(current))
+    result = CHECK.evaluate(project)
+    assert result['verdict'] == 'FAIL'
+    assert STALE_RULE in [r['rule'] for r in result['refusals']]
 
 
 def test_selected_slot_declaration_keeps_owner_and_refuses_changed_source(tmp_path):

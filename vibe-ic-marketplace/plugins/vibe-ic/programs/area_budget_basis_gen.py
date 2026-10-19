@@ -279,6 +279,26 @@ def _cites(recs: Sequence[Dict[str, Any]]) -> str:
     return "; ".join(f"{r['cite']} ('{r['quote']}')" for r in recs)
 
 
+def _operator_slot_attestation(doc: Dict[str, Any]) -> Dict[str, Any]:
+    """Keep the chooser distinct from an owner's scoped implementation grant.
+
+    Delegation applies only to this slot choice. It cannot attest the
+    deliverable or turn an uncited agent inference into an owner decision.
+    """
+    key = "operator_template.slot"
+    att = TD.attestation_of(doc, key)
+    provenance = doc.get(TD.PROVENANCE_KEY)
+    record = provenance.get(key) if isinstance(provenance, dict) else None
+    grant = record.get("delegation") if isinstance(record, dict) else None
+    if (att["answered_by"] == TD.ANSWERED_BY_AGENT_VALUE and att["citation"]
+            and isinstance(grant, dict) and grant.get("scope") == key):
+        owner = TD.attestation_of({TD.PROVENANCE_KEY: {key: grant}}, key)
+        if owner["declares"]:
+            return {**att, "declares": True, "why_not": None,
+                    "delegation": {**owner, "scope": key}}
+    return att
+
+
 def _operator_die_basis(project: Path, doc: Dict[str, Any]) -> Dict[str, Any]:
     """Read an owner-selected slot through the existing template producer.
 
@@ -298,12 +318,13 @@ def _operator_die_basis(project: Path, doc: Dict[str, Any]) -> Dict[str, Any]:
                         if isinstance(current_operator, dict) else None)
         if current_slot != slot:
             return {"error": "the recorded operator slot differs from the current owner answers"}
-        if TD.is_answered(slot) and TD.attestation_of(current, "operator_template.slot") != TD.attestation_of(doc, "operator_template.slot"):
+        if TD.is_answered(slot) and _operator_slot_attestation(current) != _operator_slot_attestation(doc):
             return {"error": "the recorded slot attestation differs from the current owner answers"}
     if not TD.is_answered(slot):
         return {}
-    if not isinstance(slot, str) or not TD.attestation_of(doc, "operator_template.slot")["declares"]:
-        return {"error": "the selected operator slot is not owner-attested"}
+    attestation = _operator_slot_attestation(doc)
+    if not isinstance(slot, str) or not attestation["declares"]:
+        return {"error": "the selected operator slot is not owner-attested or explicitly owner-delegated"}
     import submission_template_answers as producer
     report = producer.build(project, slot_name=slot)
     if report["verdict"] != producer.PASS:
@@ -330,7 +351,7 @@ def _operator_die_basis(project: Path, doc: Dict[str, Any]) -> Dict[str, Any]:
         return {"error": "the selected slot geometry disagrees with its source"}
     width, height = ST.rect_wh(rect)
     return {"fixed": (f"{ST.dec_str(width)}x{ST.dec_str(height)}", report["slot_file"]),
-            "slot": slot, "attestation": TD.attestation_of(doc, "operator_template.slot"),
+            "slot": slot, "attestation": attestation,
             "inputs": [report["slot_file"], source_rel]}
 
 
@@ -407,7 +428,9 @@ def derive(project: Path, doc: Dict[str, Any]) -> Dict[str, Any]:
     if fixed:
         w, h = (float(x) for x in fixed[0].lower().split("x"))
         if operator:
-            parts.append(f"The owner-selected operator slot {operator['slot']!r} "
+            chooser = ("owner-selected" if operator['attestation']['answered_by'] == TD.ANSWERED_BY_OWNER_VALUE
+                       else "owner-authorized agent-selected")
+            parts.append(f"The {chooser} operator slot {operator['slot']!r} "
                          "fulfills the original documents' delegated sizing choice.")
         parts.append(f"The input fixes the die at {fixed[0]} um "
                      f"({fixed[1]}); that rectangle is the LIMIT carried "
