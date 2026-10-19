@@ -138,14 +138,14 @@ function writeManifest(workDir, entry) {
     timestamp: new Date().toISOString(),
     ...gateManifestEntry(entry),
   };
-  const manifestJson = JSON.stringify(manifest, null, 2);
-  // Append to latest_results.jsonl (one JSON per line, newest last)
-  const appendCmd = `echo '${manifestJson.replace(/'/g, "\\'")}' >> ${workDir}/latest_results.jsonl`;
-  // Also write latest_results.yml for human readability
-  const ymlLines = Object.entries(manifest)
-    .map(([k, v]) => `${k}: ${typeof v === "object" ? JSON.stringify(v) : v}`)
-    .join("\\n");
-  const ymlCmd = `echo -e '${ymlLines}\\n---' >> ${workDir}/latest_results.yml`;
+  const quote = (value) => "'" + String(value).replace(/'/g, "'\\''") + "'";
+  // Exactly one JSON object per physical line; the normal verifier reads JSONL.
+  const manifestJson = JSON.stringify(manifest);
+  const appendCmd = `printf '%s\\n' ${quote(manifestJson)} >> ${quote(`${workDir}/latest_results.jsonl`)}`;
+  // A JSON document is also valid YAML. Keep the readable stream lossless for
+  // strings, nested values and shell metacharacters; printf must not expand them.
+  const yamlDocument = JSON.stringify(manifest, null, 2) + "\n---\n";
+  const ymlCmd = `printf '%s' ${quote(yamlDocument)} >> ${quote(`${workDir}/latest_results.yml`)}`;
   dockerExec(`${appendCmd} && ${ymlCmd}`, 5000);
   return manifest;
 }

@@ -269,3 +269,47 @@ def test_slack_parser_reports_absence_as_absence() -> None:
 def test_slack_parser_prefers_the_setup_corner_and_reads_bare_form() -> None:
     assert _parse("wns min 5.00\nwns max -0.65\n")["wns"] == -0.65
     assert _parse("wns 1.25\n")["wns"] == 1.25
+
+
+@pytest.mark.skipif(NODE is None, reason="node not on PATH")
+@pytest.mark.parametrize("leaf,note", [
+    ("plain", "ordinary result"),
+    ("work space", "Unicode \u6e2c\u8a66 and a literal \\n, embedded\nline"),
+    ("owner's $slot", "owner's data: $HOME and `literal`"),
+])
+def test_real_manifest_writer_roundtrips_jsonl_into_normal_consumer(tmp_path, leaf, note):
+    import mcp_execution_verify as consumer
+    wd = tmp_path / leaf
+    wd.mkdir()
+    harness = r"""
+import {readFileSync} from 'node:fs';
+import {spawnSync} from 'node:child_process';
+import {gateManifestEntry} from '%s';
+const source=readFileSync(process.argv[1], 'utf8');
+const start=source.indexOf('function writeManifest(');
+const end=source.indexOf('\n}\n', start)+2;
+function dockerExec(command) {
+  const r=spawnSync('bash', ['-c', command], {encoding:'utf8'});
+  if(r.status!==0) throw new Error('manifest command failed: '+r.stderr);
+  return {success:true, output:r.stdout, exitCode:r.status};
+}
+const writeManifest=eval('('+source.slice(start,end)+')');
+for(const entry of JSON.parse(process.argv[3])) writeManifest(process.argv[2], entry);
+""" % GATE_MJS.as_uri()
+    entries = [
+        {"step":"sta", "status":"PASS", "wns":0.0, "tns":0.0, "note":note},
+        {"step":"drc", "status":"FAIL", "violations":12},
+        {"step":"sta", "status":"PASS", "wns":None, "tns":None},
+    ]
+    result = _pr.run([NODE, "--input-type=module", "-e", harness, str(INDEX_JS), str(wd), json.dumps(entries)], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    path = wd / "latest_results.jsonl"
+    lines = path.read_text().split("\n")
+    records = consumer.parse_manifest(path)
+    assert len(records) == 3, (records, path.read_text())
+    assert [r["status"] for r in records] == ["PASS", "FAIL", "INCONCLUSIVE"]
+    assert records[0]["note"] == note
+    assert len([l for l in lines if l]) == 3
+    assert [json.loads(l) for l in lines if l] == records
+    import yaml
+    assert list(yaml.safe_load_all((wd/"latest_results.yml").read_text()))[:3] == records
