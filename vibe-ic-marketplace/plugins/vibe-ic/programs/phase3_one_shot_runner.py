@@ -4090,6 +4090,9 @@ def _ensure_staged_sdc_io_delay(sdc_text: str, project: Path,
     supplied constraint attaches to the design's own clock object rather than
     to a clock this file invented.
 
+    Supplied input delays exclude every native clock-source port, not just
+    the primary clock, while retaining the delay on the data inputs.
+
     Returns ``(sdc_text, info)``. BYTE-IDENTICAL when the design already
     declares both delays, or when no clock name is resolvable (nothing real to
     reference — disclosed, never fabricated)."""
@@ -4126,7 +4129,7 @@ def _ensure_staged_sdc_io_delay(sdc_text: str, project: Path,
     lines = []
     if not have_in:
         info["added_input_delay"] = io_delay
-        lines.append(f"set_input_delay  {io_delay} -clock {clock_name} [all_inputs]")
+        lines.append(f"set_input_delay  {io_delay} -clock {clock_name} [all_inputs -no_clocks]")
     if not have_out:
         info["added_output_delay"] = io_delay
         lines.append(f"set_output_delay {io_delay} -clock {clock_name} [all_outputs]")
