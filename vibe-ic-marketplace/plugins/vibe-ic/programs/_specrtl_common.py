@@ -1627,6 +1627,16 @@ def extract_spec_contract(text: str, is_json: bool = False,
             # conformance verdict was rendered against the wrong module.
             mod = data.get('module') or data.get('top_module')
             lat = data.get('latency_registered')
+        # A logical req/rsp bundle has two directed payloads, not one physical
+        # tri-state wire. Only an explicit selected-interface binding can turn
+        # it into physical ports. Refuse unresolved bundles before defaulting
+        # a missing scalar width to one.
+        for d in port_dicts:
+            interface = d.get('interface_contract') or {}
+            if interface.get('kind') == 'req_rsp' and interface.get('physical_port') is False:
+                raise ValueError('UNRESOLVED_STRUCTURED_INTERFACE: ' + str(d.get('name'))
+                                 + ' type=' + str(interface.get('type_ref'))
+                                 + '; bind directed payload ports before physical conformance')
         ports = [Port(d['name'], _json_port_direction(d), _json_port_width(d),
                       bool(d.get('optional')) if isinstance(d, dict) else False)
                  for d in port_dicts]

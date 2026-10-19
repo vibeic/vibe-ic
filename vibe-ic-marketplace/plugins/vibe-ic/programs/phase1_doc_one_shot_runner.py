@@ -5428,6 +5428,10 @@ def _v638_comportable_interface_harvest(text: str):
                 "name": tok,
                 "direction": direction,
                 "width": None,
+                "interface_contract": ({"kind": "req_rsp", "physical_port": False,
+                                        "role": "host" if "host" in label else "device",
+                                        "type_ref": None, "instance_count": None}
+                                       if is_bus else None),
                 "description": None,
                 "source_row": bm.group(0).strip()[:120],
                 "extraction_strategy": strat,
@@ -5438,6 +5442,7 @@ def _v638_comportable_interface_harvest(text: str):
         name_i = roles["name"]
         act_i = roles["act"]
         type_i = roles.get("type")
+        package_i = roles.get("package_struct")
         width_i = roles.get("width")
         desc_i = roles.get("description")
         for cells in rows:
@@ -5484,7 +5489,14 @@ def _v638_comportable_interface_harvest(text: str):
             yield {
                 "name": name,
                 "direction": direction,
-                "width": width_arg,
+                # Width in this table counts interface instances, not bits.
+                "width": None,
+                "interface_contract": {
+                    "kind": type_cell, "physical_port": False, "role": act,
+                    "type_ref": ((cells[package_i] or "").strip(" *`").strip()
+                                 if package_i is not None and package_i < len(cells) else None),
+                    "instance_count": int(width_arg) if width_arg is not None else None,
+                },
                 "description": desc_arg,
                 "source_row": " | ".join(cells)[:120],
                 "extraction_strategy": "comportable_intermodule_act_v638",
@@ -5513,6 +5525,8 @@ def _v638_classify_act_header(cells):
             roles["act"] = i
         elif cell == "type" and "type" not in roles:
             roles["type"] = i
+        elif cell == "package::struct" and "package_struct" not in roles:
+            roles["package_struct"] = i
         elif cell in _V0_3_2_HEADER_WIDTH_TOKENS and "width" not in roles:
             roles["width"] = i
         elif cell in _V0_3_2_HEADER_DESC_TOKENS and "description" not in roles:
@@ -21917,12 +21931,28 @@ def gen_l1_datasheet(project: Path,
             pin_index.setdefault(x, -1)
     pin_seen = _PinSeenView()
 
+    def _bind_interface(entry, contract):
+        """Keep logical interface identity separate from physical port width.
+
+        ADVISORY unresolved type: the integration author must bind the payload
+        definition before flattening. A count never supplies that definition.
+        Reapply after score-merge so a scalar candidate cannot erase the type.
+        """
+        merged = dict(entry.get("interface_contract") or {})
+        merged.update({k: v for k, v in contract.items() if v is not None})
+        entry["interface_contract"] = merged
+        entry["width"] = None
+        entry.pop("msb", None)
+        entry.pop("lsb", None)
+        entry["width_symbolic"] = merged.get("type_ref") or ("unresolved_interface(" + entry["name"] + ")")
+
     def _add_pin(name: str, mode: str, fname: str,
                  width: Optional[str] = None,
                  description: Optional[str] = None,
                  extraction_strategy: str = "pin_table_keyword_scan",
                  source_row: str = "",
                  optional: Optional[bool] = None,
+                 interface_contract: Optional[dict] = None,
                  ) -> None:
         """v1.6.248 — shared pin-emit helper. Used by the legacy
         `input|output|inout` keyword scan AND the new RST grid /
@@ -22035,6 +22065,8 @@ def gen_l1_datasheet(project: Path,
         # from the RTL top as advisory, not FAIL.
         if optional:
             entry["optional"] = True
+        if interface_contract:
+            _bind_interface(entry, interface_contract)
         existing_idx = pin_index.get(name)
         if existing_idx is None or existing_idx < 0:
             pins.append(entry)
@@ -22046,6 +22078,11 @@ def gen_l1_datasheet(project: Path,
         prev = pins[existing_idx]
         new_score = _port_entry_score(entry)
         prev_score = _port_entry_score(prev)
+        # A table's named payload type is more specific than a bus bullet.
+        # Preserve its source identity, rather than winning only its width.
+        if (entry.get("interface_contract", {}).get("type_ref")
+                and not prev.get("interface_contract", {}).get("type_ref")):
+            new_score = max(new_score, prev_score + 1)
         winner, loser = (entry, prev) if new_score > prev_score else (prev, entry)
         for k in ("width", "msb", "lsb", "width_symbolic",
                   "description", "io_standard"):
@@ -22057,6 +22094,12 @@ def gen_l1_datasheet(project: Path,
         # merged entry keeps it.
         if loser.get("optional") and not winner.get("optional"):
             winner["optional"] = True
+        if loser.get("interface_contract") or winner.get("interface_contract"):
+            # The richer table type wins over an earlier bus bullet's unknown
+            # type, irrespective of which candidate wins the pin score.
+            contract = dict(loser.get("interface_contract") or {})
+            contract.update({k: v for k, v in (winner.get("interface_contract") or {}).items() if v is not None})
+            _bind_interface(winner, contract)
         if winner is entry:
             pins[existing_idx] = entry
 
@@ -22386,6 +22429,7 @@ def gen_l1_datasheet(project: Path,
                 description=_row_v638.get("description"),
                 extraction_strategy=_row_v638.get("extraction_strategy"),
                 source_row=_row_v638.get("source_row") or "",
+                interface_contract=_row_v638.get("interface_contract"),
             )
             if len(ev) < 24:
                 ev.append({
@@ -50986,7 +51030,7 @@ def gen_l9_integration_spec(project: Path,
             # typed-width fields so the L9↔RTL gate sees doc-declared
             # optionality on L9.top_ports too.
             for _k in ("width", "msb", "lsb", "width_symbolic",
-                       "optional"):
+                       "optional", "interface_contract"):
                 _v = p.get(_k)
                 if _v is not None:
                     entry_l9[_k] = _v
@@ -62968,7 +63012,7 @@ def _promote_l1_pins_to_l9_ports(
         es = p.get("extraction_strategy")
         if es:
             entry["extraction_strategy"] = es
-        for _k in ("width", "msb", "lsb", "width_symbolic", "optional"):
+        for _k in ("width", "msb", "lsb", "width_symbolic", "optional", "interface_contract"):
             _v = p.get(_k)
             if _v is not None:
                 entry[_k] = _v

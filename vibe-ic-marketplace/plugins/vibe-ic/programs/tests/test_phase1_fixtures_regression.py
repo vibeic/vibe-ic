@@ -80,6 +80,45 @@ def _load_fixture(project: str) -> dict[str, str]:
     return out
 
 
+@pytest.mark.parametrize("instances", [1, 3])
+def test_phase1_comportable_struct_bundle_retains_type_and_not_scalar(tmp_path, instances):
+    """The intake fixture's count must not become a physical bit width."""
+    from programs.phase1_doc_one_shot_runner import gen_l1_datasheet, gen_l9_integration_spec
+    docs = _load_fixture("comportable_struct_bundle")
+    docs = {k: v.replace("| rsp | 1 |", f"| rsp | {instances} |") for k, v in docs.items()}
+    l1 = gen_l1_datasheet(tmp_path, docs)
+    pins = json.loads(Path(l1.path).read_text())["pin_table"]
+    bus = next(p for p in pins if p["name"] == "bus")
+    assert bus.get("width") != instances, "STRUCT_BUNDLE_SCALARIZED"
+    assert bus["interface_contract"]["type_ref"] == "transport_pkg::transport"
+    assert bus["interface_contract"]["instance_count"] == instances
+    assert bus["interface_contract"]["physical_port"] is False
+    l9 = json.loads(Path(gen_l9_integration_spec(tmp_path, docs, {}).path).read_text())
+    for alias in ("ports", "top_ports", "top_module_pins"):
+        projected = next(p for p in l9[alias] if p["name"] == "bus")
+        assert projected.get("width") is None
+        assert projected["width_symbolic"] == "transport_pkg::transport"
+        assert projected["interface_contract"] == bus["interface_contract"]
+    from programs._specrtl_common import extract_spec_contract
+    with pytest.raises(ValueError, match="UNRESOLVED_STRUCTURED_INTERFACE: bus"):
+        extract_spec_contract(json.dumps(l9), is_json=True, confirm=False)
+
+
+def test_phase1_comportable_struct_bundle_does_not_change_physical_pins(tmp_path):
+    from programs.phase1_doc_one_shot_runner import gen_l1_datasheet
+    docs = {"interfaces.md": """| Signal | Direction | Width | Description |
+|:--|:--|--:|:--|
+| ready_o | output | 1 | Scalar ready |
+| data_io | inout | 8 | Physical bidirectional bus |
+"""}
+    pins = json.loads(Path(gen_l1_datasheet(tmp_path, docs).path).read_text())["pin_table"]
+    ready = next(p for p in pins if p["name"] == "ready_o")
+    data = next(p for p in pins if p["name"] == "data_io")
+    assert (ready["mode"], ready["width"]) == ("output", 1)
+    assert (data["mode"], data["width"]) == ("inout", 8)
+    assert all("interface_contract" not in p for p in [ready, data])
+
+
 @pytest.mark.parametrize("project,expected", sorted(_EXPECTED.items()))
 def test_phase1_picker_matches_verifier_benchmark(
         project: str, expected: str) -> None:
