@@ -507,6 +507,68 @@ def test_a_library_declaring_no_edge_spacing_contributes_zero_not_a_default(
     assert req["die_side_um"] == 2 * CORNER_W + 2 * PAD_W
 
 
+@pytest.mark.parametrize("inset", [37, 3])
+def test_declared_inset_reaches_geometry(tmp_path, inset):
+    """The producer and assignment consume one effective spacing value.
+
+    Both values differ from the library's 5 um fact, in opposite directions,
+    so this catches a max() policy as well as a library-only policy.
+    """
+    proj = _project(tmp_path)
+    decl = proj / "input/submission_template/tapeout_declaration.json"
+    decl.parent.mkdir(parents=True)
+    decl.write_text(json.dumps({"answers": {"pad_edge_spacing_um": inset}}))
+    pdk = _pdk(tmp_path / "pdk")
+
+    made = _run(GEN, proj, pdk)
+    assert made.returncode == 0, made.stdout + made.stderr
+    assigned = _run(ASSIGN, proj, pdk)
+    assert assigned.returncode == 0, assigned.stdout + assigned.stderr
+
+    assignment = json.loads(
+        (proj / "phase3/stage3/pnr/pad_assignment.json").read_text())
+    record = _record(proj)
+    assert assignment["PAD_EDGE_SPACING"] == inset
+    assert float(record["pdk_declared"]["PAD_EDGE_SPACING"]) == EDGE
+    assert record["pdk_declared_sources"]["PAD_EDGE_SPACING"].endswith(
+        "config.tcl:3")
+    assert record["die_required_um"]["edge_spacing_um"] == inset
+    assert record["die_required_um"]["die_side_um"] == (
+        2 * inset + 2 * CORNER_W + 2 * PAD_W)
+    assert record["die_required_um"]["ring_depth_um"] == 100 + inset
+    assert record["die_required_um"]["edge_spacing_source"] == (
+        "declaration answer pad_edge_spacing_um")
+    assert record["effective_pad_edge_spacing"] == {
+        "value_um": float(inset),
+        "source": "declaration answer pad_edge_spacing_um",
+    }
+
+
+def test_an_unreadable_spacing_declaration_is_refused(tmp_path):
+    proj = _project(tmp_path)
+    decl = proj / "input/submission_template/tapeout_declaration.json"
+    decl.parent.mkdir(parents=True)
+    decl.write_text("{not-json")
+
+    made = _run(GEN, proj, _pdk(tmp_path / "pdk"))
+    assert made.returncode == 1, made.stdout + made.stderr
+    assert _record(proj)["rule"] == "PAD_EDGE_SPACING_SOURCE_UNREADABLE"
+
+
+@pytest.mark.parametrize(
+    "inset", ["not-a-number", -1, float("inf")],
+    ids=["nonnumeric", "negative", "nonfinite"])
+def test_an_invalid_declared_inset_is_refused(tmp_path, inset):
+    proj = _project(tmp_path)
+    decl = proj / "input/submission_template/tapeout_declaration.json"
+    decl.parent.mkdir(parents=True)
+    decl.write_text(json.dumps({"answers": {"pad_edge_spacing_um": inset}}))
+
+    made = _run(GEN, proj, _pdk(tmp_path / "pdk"))
+    assert made.returncode == 1, made.stdout + made.stderr
+    assert _record(proj)["rule"] == "PAD_EDGE_SPACING_INVALID"
+
+
 # --------------------------------------------------------------------------- #
 # THE BIDIRECTIONAL CONTROL
 # --------------------------------------------------------------------------- #

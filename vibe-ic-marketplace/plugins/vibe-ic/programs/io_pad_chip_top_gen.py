@@ -31,8 +31,8 @@ L-documents and a declaration. This program closes that, and it closes it by
 DERIVING the instances rather than by relaxing the refusal: the instances it
 names exist because it created them.
 
-WHAT IT READS -- three sources, none of them a default
-=====================================================
+WHAT IT READS -- four sources, none of them a guessed design value
+=================================================================
 1. THE DESIGN'S OWN PARTITION, via `_l_doc_pad_placement`: which top-level
    PORT sits on which die edge, one entry per bus bit, in the document's own
    order. This is the same reader `pad_assignment_gen` already uses, so the
@@ -46,6 +46,10 @@ WHAT IT READS -- three sources, none of them a default
    names, the corner master, the fillers and the edge spacing. Read from the
    PDK the RUN selected -- a named tree that does not resolve is NOT RESOLVED,
    never a scan that would draw masters from an unrelated process.
+4. THE PROJECT'S TAPE-OUT DECLARATION, only for a pad-edge-spacing override.
+   The value is resolved through `pad_assignment_gen.compose`, so geometry
+   and assignment use its one authority order: declaration over the selected
+   IO library. The library's raw value and file:line remain in the record.
 
 When a multi-rail library needs engineering choices, the same agent may write
 ``phase3/stage3/pnr/io_power_ring_plan.json`` with ``supply_masters`` and
@@ -128,6 +132,7 @@ import argparse
 import collections
 import hashlib
 import json
+import math
 import os
 import re
 import sys
@@ -140,6 +145,7 @@ import _atomic_artefact as _aa  # noqa: E402 — vibe-ic#1082
 import _l_doc_pad_placement as LPP          # noqa: E402
 import _pad_ring as PR                      # noqa: E402
 import _source_record_merge as _srm     # noqa: E402
+import pad_assignment_gen as PAG            # noqa: E402
 
 PROGRAM = "io_pad_chip_top_gen"
 
@@ -180,6 +186,66 @@ class Unavailable(Exception):
         super().__init__(message)
         self.rule = rule
         self.message = message
+
+
+def _effective_pad_edge_spacing(
+        project: Path, decls: "PR.PdkDeclarations") -> Tuple[float, str]:
+    """Resolve the value geometry shares with ``pad_assignment_gen``.
+
+    The assignment author owns source precedence.  For this variable a slot
+    cannot speak, so its ``compose`` contract reduces to project declaration
+    over the selected IO library.  Keep the library value in the caller's raw
+    PDK record; this returns only the effective numeric value and provenance.
+    """
+    declaration, unreadable = PAG.read_declaration(project)
+    if unreadable:
+        raise Refusal(
+            "PAD_EDGE_SPACING_SOURCE_UNREADABLE",
+            "the tape-out declaration could not be read, so its higher-"
+            f"precedence pad-edge spacing is unknown: {unreadable}")
+
+    if declaration is not None:
+        answers = declaration.get("answers")
+        if not isinstance(answers, dict):
+            raise Refusal(
+                "PAD_EDGE_SPACING_SOURCE_UNREADABLE",
+                "the tape-out declaration's `answers` is not a mapping, so "
+                "its higher-precedence pad-edge spacing is unknown")
+        invalid = [
+            finding for finding in PAG.TD.validate(declaration)
+            if finding.get("key") == "pad_edge_spacing_um"
+        ]
+        if invalid:
+            raise Refusal("PAD_EDGE_SPACING_INVALID",
+                          str(invalid[0].get("message")))
+
+    pdk_raw = decls.values.get("PAD_EDGE_SPACING")
+    library_value = {}
+    if pdk_raw is not None and pdk_raw != "":
+        library_value["PAD_EDGE_SPACING"] = {
+            "value": pdk_raw,
+            "source": ("pdk io library "
+                       f"{decls.sources.get('PAD_EDGE_SPACING', '?')}"),
+        }
+    config, provenance, _answered, _owed = PAG.compose(
+        {}, declaration, library_value)
+    raw = config.get("PAD_EDGE_SPACING", 0.0)
+    source = provenance.get(
+        "PAD_EDGE_SPACING",
+        "selected IO library declares no PAD_EDGE_SPACING; upstream default 0")
+    try:
+        value = float(raw)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise Refusal(
+            "PAD_EDGE_SPACING_INVALID",
+            f"effective PAD_EDGE_SPACING from {source} must be a finite "
+            f"non-negative number, got {raw!r}") from exc
+    if not math.isfinite(value) or value < 0:
+        raise Refusal(
+            "PAD_EDGE_SPACING_INVALID",
+            f"effective PAD_EDGE_SPACING from {source} must be a finite "
+            f"non-negative number, got {raw!r}")
+    return value, source
 
 
 def instance_name(port: str) -> str:
@@ -1984,6 +2050,11 @@ def run(project: Path, pdk_root: Optional[str], pdk: Optional[str],
     decls = PR.PdkDeclarations(cfgs, masters=sizes)
     rec["pdk_declared"] = {k: v for k, v in decls.values.items()}
     rec["pdk_declared_sources"] = dict(decls.sources)
+    edge_um, edge_source = _effective_pad_edge_spacing(project, decls)
+    rec["effective_pad_edge_spacing"] = {
+        "value_um": edge_um,
+        "source": edge_source,
+    }
 
     prefix = library_prefix(decls)
     rec["io_library_prefix"] = prefix
@@ -2105,7 +2176,7 @@ def run(project: Path, pdk_root: Optional[str], pdk: Optional[str],
         else:
             die = float(supply_plan.get("die_side_um") or 0)
             corner_size = sizes.get(str(decls.values.get("PAD_CORNER")), (0, 0))
-            edge = float(decls.values.get("PAD_EDGE_SPACING") or 0)
+            edge = edge_um
             if not (die > 2 * (max(corner_size) + edge) and pair_width > 0):
                 raise Refusal("SUPPLY_ENTRY_NO_LEGAL_SITE",
                               "die, corner, edge, or supply-master geometry is absent")
@@ -2436,16 +2507,12 @@ def run(project: Path, pdk_root: Optional[str], pdk: Optional[str],
     #     PAD_NORTH: the sum of cell widths is 4800000 DEF unit(s) and the
     #     side is 4696000 -- 104000 unit(s) wider than the declared die
     # 104000 units at 2000 units/um is 52 um, which is 2 x the library's own
-    # declared PAD_EDGE_SPACING of 26. The term is read from the same
-    # declaration `pad_assignment_gen` writes into the config, so the two
-    # cannot disagree; a library that declares none contributes 0, which is
-    # what upstream's own default for that variable is.
+    # declared PAD_EDGE_SPACING of 26. The effective term is resolved through
+    # the same `pad_assignment_gen.compose` precedence that writes the config,
+    # so the two cannot disagree; the raw library value remains recorded, and
+    # a library that declares none contributes upstream's own default of 0.
     corner_master = decls.values.get("PAD_CORNER")
     corner_w = sizes.get(str(corner_master), (0.0, 0.0))[0]
-    try:
-        edge_um = float(decls.values.get("PAD_EDGE_SPACING") or 0.0)
-    except (TypeError, ValueError):
-        edge_um = 0.0
     side_um: Dict[str, float] = {}
     for side in SIDES:
         pads = sum(sizes.get(str(chosen[i]["master"]), (0.0, 0.0))[0]
@@ -2462,11 +2529,11 @@ def run(project: Path, pdk_root: Optional[str], pdk: Optional[str],
     # detailed_route reported 3515 violations of which 3112 were Shorts and
     # 3104 of those lay inside that band, 2054 of them naming an IO instance.
     #
-    # The band is the IO ROW's depth plus the library's own edge spacing, and
-    # both terms are read: the spacing from the PDK's declaration (the same
-    # one the die side above uses) and the depth from each PLACED master's own
-    # LEF SIZE — its HEIGHT for a pad on a horizontal side, and a corner cell
-    # counted at its larger dimension because it occupies both. A master whose
+    # The band is the IO ROW's depth plus the effective edge spacing, and both
+    # terms are read: spacing from the shared declaration-over-library
+    # authority and depth from each PLACED master's own LEF SIZE — its HEIGHT
+    # for a pad on a horizontal side, and a corner cell counted at its larger
+    # dimension because it occupies both. A master whose
     # SIZE the LEF does not carry contributes NOTHING and is NAMED, so an
     # unreadable library yields no depth rather than a default one.
     depth_terms: Dict[str, float] = {}
@@ -2499,8 +2566,9 @@ def run(project: Path, pdk_root: Optional[str], pdk: Optional[str],
         "ring_depth_basis": (
             "the deepest PLACED ring master (each pad at its own LEF SIZE "
             "height, the corner cell at its larger dimension because it "
-            "occupies both sides) plus the library's declared "
-            "PAD_EDGE_SPACING. This is how far a placeable core must stay "
+            "occupies both sides) plus the effective PAD_EDGE_SPACING whose "
+            "source is recorded beside this field. This is how far a "
+            "placeable core must stay "
             "back from the die edge; a master with no LEF SIZE contributes "
             "nothing and is named in "
             "`ring_depth_masters_without_a_lef_size`, so a consumer can "
@@ -2509,9 +2577,9 @@ def run(project: Path, pdk_root: Optional[str], pdk: Optional[str],
         "corner_master": corner_master,
         "corner_width_um": corner_w,
         "edge_spacing_um": edge_um,
-        "edge_spacing_source": decls.sources.get("PAD_EDGE_SPACING"),
+        "edge_spacing_source": edge_source,
         "die_side_um": die_um,
-        "basis": ("twice the library's declared PAD_EDGE_SPACING, plus two "
+        "basis": ("twice the effective PAD_EDGE_SPACING, plus two "
                   "corner cells, plus the pads on the longest side, at each "
                   "master's own LEF width, rounded up to a whole micron -- the "
                   "same three terms `pad_ring_gen.side_width` subtracts, in "
