@@ -1380,7 +1380,7 @@ def _post_reset_independence(model: dict, rows: List[dict], work_dir: Path,
     reset cofactors equal on that reachable domain. This is a composed,
     post-reset fact, never independence for arbitrary pre-reset state.
 
-    Only already-defined, nonforcing data/retention rows are eligible. A
+    Only already-defined residual transition rows are eligible. A
     partial force, opposite edge/clock, literal undef or unfinished query
     cannot supply a premise. The original mixed-data refusal remains live.
     """
@@ -1388,8 +1388,7 @@ def _post_reset_independence(model: dict, rows: List[dict], work_dir: Path,
     forces = [r for r in rows if r.get("classification") == "RESET_FORCE"]
     polarities = {r.get("polarity") for r in forces}
     candidates = [r for r in rows if not r.get("unsupported") and
-                  r.get("classification") == "UNRESOLVED_DATA_DEPENDENCE" and
-                  r.get("native_relation", {}).get("name") == "DEFINED_NONFORCING_RESET_DEPENDENCE"]
+                  r.get("classification") == "UNRESOLVED_DATA_DEPENDENCE"]
     if len(polarities) != 1 or not candidates:
         return {"status": "NOT_APPLICABLE", "certificates": []}
     polarity = next(iter(polarities))
@@ -1765,6 +1764,15 @@ def reset_control_mapping(netlist: dict, raw: Optional[dict], top: str,
                 any(p in row["controls"] for p in ("SRST", "ARST", "SET", "CLR")) else "NO_DEPENDENCE")
         elif set(row["reset_reaches"]) <= {"EN"}:
             row["classification"] = "RETENTION_CONTROL"
+        elif (all(a.get(f"{role}_reachable{arm}") == "PROVED" for arm in (0, 1)
+                  for role in ("force_zero", "force_one")) and
+              {a["retain0"], a["retain1"]} == {"PROVED", "REFUTED"}):
+            # Raw proc preserves enable as a D/feedback mux. One complete
+            # cofactor retains Q, the other is defined ordinary data, and
+            # neither has a feasible constant-force domain. This is the
+            # same retention role as an explicit EN pin, not a reset force.
+            row["classification"] = "RETENTION_CONTROL"
+            row["proof_basis"] = "native_full_domain_retention_cofactor"
         elif (a["zero0"] == "PROVED" or a["one0"] == "PROVED") and (
                 a["zero1"] == "PROVED" or a["one1"] == "PROVED"):
             row["classification"] = "DATA_VALUE"

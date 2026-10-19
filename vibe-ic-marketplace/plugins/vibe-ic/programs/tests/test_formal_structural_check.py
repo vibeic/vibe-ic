@@ -267,6 +267,51 @@ def test_post_reset_native_independence_requires_total_same_edge_premises(tmp_pa
     assert mapping["unresolved"] and not mapping["complete"], mapping
 
 
+@pytest.mark.parametrize("case", ["inhibit-high", "inhibit-low", "enable-high", "opposite-force", "mixed-data", "vector-undef-kept"])
+def test_raw_feedback_retention_has_the_same_force_boundary_as_enable(tmp_path, case):
+    _yosys()
+    low = case == "inhibit-low"
+    reset = "!rst" if low else "rst"
+    enable = "rst" if case in {"enable-high", "inhibit-low"} else "!rst"
+    body = f"if ({reset}) q[0]<=0; else q[0]<=d[0]; if ({enable}) q[1]<=d[1];"
+    if case == "opposite-force":
+        body = "if(rst) q[0]<=0; else q[0]<=d[0]; if(!rst) q[1]<=0; else q[1]<=d[1];"
+    elif case == "mixed-data":
+        body = "if(rst) q[0]<=0; else q[0]<=d[0]; q[1]<=rst ? d[1]^clear : d[1];"
+    rtl = tmp_path / "m.v"
+    if case == "vector-undef-kept":
+        # Preserve the conservative literal-X refusal when a wide raw mux
+        # contains undef in another lane; retention cannot erase that refusal.
+        rtl.write_text(_control_rtl("begin " + body + " q[2] <= en ? 1'bx : d[2]; end", width=3))
+    else:
+        # A separate independent undef flop keeps the actual raw proc model
+        # without putting X in a wide mux shared with the retention bit.
+        rtl.write_text("module m(input clk,rst,en,clear,input [2:0] d,output reg [1:0] q,output reg poison);\n"
+            "always @(posedge clk) begin " + body + " end\n"
+            "always @(posedge clk) poison <= en ? 1'bx : d[2];\nendmodule\n")
+    out = tmp_path / "mapping.json"
+    claim = "active_low" if low else "active_high"
+    rc = fsc.main(["--rtl", str(rtl), "--top", "m", "--claim", f"reset_polarity:rst:{claim}",
+                   "--work-dir", str(tmp_path), "--json", str(out)])
+    rec = json.loads(out.read_text())
+    expected = fsc.REFUTED if case == "opposite-force" else fsc.NOT_DISCHARGED if case in {"mixed-data", "vector-undef-kept"} else fsc.PASS
+    assert rec["verdict"] == expected, rec
+    assert rc == (0 if expected == fsc.PASS else 1), rec
+    mapping = rec["claims"][0]["reset_control_mapping"]
+    assert mapping["state_model"] == "raw_pre_cleanup_current_source", mapping
+    assert len(mapping["raw_identities"]) == len(mapping["rows"]) == 3, mapping
+    assert mapping["native_exit_code"] == 0, mapping
+    progress = mapping["query_progress"]
+    assert progress["completed"] == progress["planned"] and not progress["unknown"], progress
+    if expected == fsc.PASS:
+        row = next(r for r in mapping["rows"] if r["classification"] == "RETENTION_CONTROL")
+        assert row["proof_basis"] == "native_full_domain_retention_cofactor", row
+        a = row["native_queries"]
+        assert {a["retain0"], a["retain1"]} == {"PROVED", "REFUTED"}, row
+        assert all(a[f"{role}_reachable{arm}"] == "PROVED" for arm in (0, 1)
+                   for role in ("force_zero", "force_one")), row
+
+
 @pytest.mark.parametrize("width,value", [(1,1),(3,5)])
 def test_native_reset_parameter_and_async_timing_controls(tmp_path, width, value):
     _yosys()
