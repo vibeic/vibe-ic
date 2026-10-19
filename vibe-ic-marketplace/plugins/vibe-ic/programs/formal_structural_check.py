@@ -1320,6 +1320,92 @@ def _reset_row_cone_eligibility(model: dict) -> dict:
                       else "combinational-feedback"}
 
 
+def _raw_reset_force(mod: dict, signal: str, targets: list, work_dir: Path,
+                     container: Optional[str]) -> Tuple[dict, dict]:
+    """Prove a total defined reset arm in the unoptimized transition graph.
+
+    The other arm must have a native undefined-value witness. No raw X is
+    replaced by an optimized constant, and neither an enable-conditional
+    force nor undefined reset data can satisfy the full-domain certificate.
+    """
+    if not targets:
+        return {}, {}
+    reset_bit, why = _port_bit(mod, signal)
+    if reset_bit is None:
+        return {}, {"refusal": why}
+    model, rows = _transition_pair(mod, reset_bit)
+    eligibility = _reset_row_cone_eligibility(model)
+    if not eligibility["eligible"]:
+        return {}, {"refusal": "raw transition cone not supported", "eligibility": eligibility}
+    wanted = set(targets)
+    selected = [(i, r) for i, r in enumerate(rows)
+                if (r["cell"], r["bit_index"]) in wanted
+                and not r.get("unsupported") and r["reset_reaches"]]
+    work_dir.mkdir(parents=True, exist_ok=True)
+    model_path, ys = work_dir / "raw_reset_force.json", work_dir / "raw_reset_force.ys"
+    _aa.write_json(model_path, model)
+    script = [f"read_json {model_path.resolve()}", "hierarchy -top transition_pair",
+              "log VIBEIC_TRANSITION_QUERY domain",
+              "sat -timeout 10 -enable_undef -set-def-inputs -show-inputs",
+              "log VIBEIC_TRANSITION_COMPLETE domain"]
+    specs = {}
+    for i, row in selected:
+        ports = row["query_ports"]
+        queries = {f"undef{a}": (f"n{a}", None) for a in (0, 1)}
+        for a in (0, 1):
+            for value, role in (("0", "force_zero"), ("1", "force_one")):
+                queries[f"{role}_total{a}"] = (f"{role}_guard{a}", "1")
+                queries[f"{role}_valid{a}"] = (f"{role}_valid{a}", "1")
+                queries[f"value_{value}_{a}"] = (f"n{a}", value)
+        observed = sorted({ports[p] for p, _ in queries.values()})
+        script += ["select -module transition_pair",
+                   "select " + " ".join("w:" + p for p in observed) + " %% %ci*"]
+        shown = " ".join("-show " + p for p in observed)
+        for key, (port, value) in queries.items():
+            ident = f"{i}_{key}"
+            specs[ident] = (i, key)
+            option = (f"-set-any-undef {ports[port]}" if value is None else
+                      f"-prove {ports[port]} {value}")
+            script += ["log VIBEIC_TRANSITION_QUERY " + ident,
+                       f"sat -timeout 10 -enable_undef -set-def-inputs {option} -show-inputs {shown}",
+                       "log VIBEIC_TRANSITION_COMPLETE " + ident]
+        script.append("select -clear")
+    _aa.write_text(ys, "\n".join(script) + "\n")
+    command = f"yosys -Q -T -s {ys.resolve()}"
+    if container:
+        import _container_exec as ce
+        argv = ce.exec_argv(container, command, tag="formal_structural_check")
+    else:
+        argv = ["yosys", "-Q", "-T", "-s", str(ys.resolve())]
+    rc, stdout, stderr, run = _native_query_run(argv, container=container, command=command)
+    native = _native_artifacts(work_dir, "raw_reset_force", stdout, stderr, run)
+    progress = _transition_query_progress(stdout + stderr, ["domain", *specs])
+    detail = {"native_run": native, "query_progress": progress,
+              "model_sha256": file_sha256(model_path), "script_sha256": file_sha256(ys),
+              "raw_literal_undef_preserved": True}
+    answers = progress["by_identity"]
+    if rc or answers["domain"]["result"] != "HAS_UNDEF" or any(
+            r["status"] != "COMPLETED" or r["result"] == "UNKNOWN"
+            for r in answers.values()):
+        return {}, detail
+    certificates = {}
+    for i, row in selected:
+        a = {key: answers[ident]["result"] for ident, (j, key) in specs.items() if j == i}
+        for arm in (0, 1):
+            for value, role in (("0", "force_zero"), ("1", "force_one")):
+                if (a[f"undef{arm}"] == "NO_UNDEF" and
+                        a[f"undef{1-arm}"] == "HAS_UNDEF" and
+                        all(a[k] == "PROVED" for k in (
+                            f"{role}_total{arm}", f"{role}_valid{arm}", f"value_{value}_{arm}"))):
+                    certificates[(row["cell"], row["bit_index"])] = {
+                        "rule": "RAW_DEFINED_TOTAL_RESET_FORCE", "status": "CERTIFIED",
+                        "polarity": "active_high" if arm else "active_low", "force_value": value,
+                        "raw_q": row["q"], "raw_cell": row["cell"], "raw_q_index": row["bit_index"],
+                        "priority": row["priority"], "queries": a,
+                        "scope": "raw defined full reset arm; opposite undefined arm remains undefined"}
+    return certificates, detail
+
+
 def reset_control_mapping(netlist: dict, raw: Optional[dict], top: str,
                           signal: str, work_dir: Path,
                           container: Optional[str] = None) -> dict:
@@ -1449,6 +1535,11 @@ def reset_control_mapping(netlist: dict, raw: Optional[dict], top: str,
                         and len(raw_sources[next(iter(aliases[qb]))]) == 1
                         and not row_by_q[next(iter(aliases[qb]))].get("unsupported")]
         certificates = _raw_reset_independence(raw_mod, signal, cert_targets)
+        force_certificates, force_detail = _raw_reset_force(
+            raw_mod, signal, [(n, i) for n, i, _ in cert_targets
+                              if certificates.get((n, i), {}).get("status") != "CERTIFIED"],
+            work_dir / "raw_reset_force", container)
+        result["raw_reset_force"] = force_detail
         for name, cell, kind in _cells(raw_mod):
             if kind == "ff":
                 for i, qb in enumerate(cell.get("connections", {}).get("Q") or []):
@@ -1467,6 +1558,10 @@ def reset_control_mapping(netlist: dict, raw: Optional[dict], top: str,
                                 if cert is not None:
                                     identities[-1]["reset_independence_certificate"] = cert
                                     row["reset_independence_certificate"] = cert
+                                force_cert = force_certificates.get((name, i))
+                                if force_cert is not None:
+                                    identities[-1]["raw_reset_force_certificate"] = force_cert
+                                    row["raw_reset_force_certificate"] = force_cert
                     if len(mapped) != 1:
                         result["unresolved"].append(f"{name}.Q[{i}]: missing/ambiguous current Q identity")
     result["raw_identities"] = identities
@@ -1576,6 +1671,13 @@ def reset_control_mapping(netlist: dict, raw: Optional[dict], top: str,
             row["classification"] = "NO_DEPENDENCE"
             row["proof_basis"] = "complete_raw_transition_fanin"
             row["reason"] = "declared reset absent from complete raw one-step transition fan-in; literal undef retained"
+        elif (row.get("raw_reset_force_certificate", {}).get("status") == "CERTIFIED"
+                and row.get("unsupported") == "literal-X/undef retained from raw next-state transition"
+                and not rc and domain_reachable):
+            cert = row["raw_reset_force_certificate"]
+            row.update(classification="RESET_FORCE", polarity=cert["polarity"], total_force=True,
+                       proof_basis="raw_defined_total_reset_force",
+                       timing="asynchronous" if any(p in row["reset_reaches"] for p in _ASYNC_PINS) else "synchronous")
         elif row.get("unsupported") or rc or not a or "UNKNOWN" in a.values():
             row["reason"] = row.get("unsupported") or f"native transition query unavailable (rc={rc})"
         elif any(a[k] != "NO_UNDEF" for k in ("undef0", "undef1")):

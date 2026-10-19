@@ -720,3 +720,48 @@ def test_native_cofactor_keeps_named_container_on_the_existing_local_route(tmp_p
     assert observed == (0, 'NATIVE_NORMALIZED_COFACTOR_SUPPORT'), observed
     assert payloads == {9: {7}}, observation
     assert info['native_run']['supervision'] == 'host_process_and_progress', observation
+
+
+@pytest.mark.parametrize("reset_branch,normal_branch,declared,expected", [
+    ("1'b0", "en ? 1'bx : q", "active_high", fsc.PASS),
+    ("1'b0", "en ? 1'bx : q", "active_low", fsc.REFUTED),
+    ("1'b1", "en ? 1'bx : q", "active_high", fsc.PASS),
+    ("1'bx", "d", "active_high", fsc.NOT_DISCHARGED),
+    ("en ? 1'b0 : q", "1'bx", "active_high", fsc.NOT_DISCHARGED),
+])
+def test_raw_undef_requires_defined_total_reset_arm(tmp_path, reset_branch, normal_branch, declared, expected):
+    _yosys()
+    rtl = tmp_path / "m.v"
+    rtl.write_text("module m(input clk,rst,en,d,output reg q);\n"
+                   "always @(posedge clk) if(rst) q <= " + reset_branch +
+                   "; else q <= " + normal_branch + ";\nendmodule\n")
+    rec = fsc.check([rtl], "m", [{"rule":"reset_polarity", "signal":"rst", "value":declared}], tmp_path)
+    assert rec["verdict"] == expected, rec
+    mapping = rec["claims"][0]["reset_control_mapping"]
+    assert len(mapping["raw_identities"]) == 1
+    if expected in {fsc.PASS, fsc.REFUTED}:
+        row = mapping["rows"][0]
+        assert row["classification"] == "RESET_FORCE"
+        cert = row["raw_reset_force_certificate"]
+        assert cert["polarity"] == "active_high" and cert["force_value"] == reset_branch[-1]
+        assert cert["queries"]["undef1"] == "NO_UNDEF"
+        assert cert["queries"]["undef0"] == "HAS_UNDEF"
+        assert "literal-X/undef" in row["unsupported"]
+        assert mapping["raw_reset_force"]["query_progress"]["completed"] == mapping["raw_reset_force"]["query_progress"]["planned"]
+    else:
+        assert mapping["unresolved"] and not mapping["complete"]
+
+
+def test_raw_undef_defined_force_honors_active_low_reset(tmp_path):
+    _yosys()
+    rtl = tmp_path / "m.v"
+    rtl.write_text("module m(input clk,rst,en,output reg q);\n"
+                   "always @(posedge clk) if(!rst) q<=1'b1; else if(en) q<=1'bx;\n"
+                   "endmodule\n")
+    rec = fsc.check([rtl], "m", [{"rule":"reset_polarity", "signal":"rst", "value":"active_low"}], tmp_path)
+    assert rec["verdict"] == fsc.PASS, rec
+    mapping = rec["claims"][0]["reset_control_mapping"]
+    assert len(mapping["raw_identities"]) == 1
+    cert = mapping["rows"][0]["raw_reset_force_certificate"]
+    assert cert["polarity"] == "active_low" and cert["force_value"] == "1"
+    assert cert["queries"]["undef0"] == "NO_UNDEF" and cert["queries"]["undef1"] == "HAS_UNDEF"
