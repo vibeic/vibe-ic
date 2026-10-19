@@ -5,23 +5,23 @@
   "populations": {
     "programs_top_level": {
       "definition": "Every *.py directly in plugins/vibe-ic/programs/ (top level, NOT recursive). Helpers (_*.py), DEPRECATED_* and *_shim.py ARE included. This is the population the shell glob `programs/*.py` expands to. NOTE: the git pathspec `programs/*.py` is NOT the same thing \u2014 git's `*` crosses `/`, so `git ls-files 'programs/*.py'` returns the RECURSIVE population instead.",
-      "count": 1611,
-      "sha256_of_sorted_paths": "7c7571bc46c8c559c565718ba5693c8d960943ac9419ee06fdd0a4def309af94"
+      "count": 1612,
+      "sha256_of_sorted_paths": "5f3a0a952042cfa27da7dda3af7fa010868832bbd6d812cbb3f35a5a32d23839"
     },
     "programs_catalogued": {
       "definition": "programs_top_level minus helpers and deprecation shims (_*.py, DEPRECATED_*, *_shim.py, and any file whose first 2000 chars contain 'DEPRECATION SHIM'). This is the population catalogued in programs/INDEX.md by tools/gen_programs_index.py.",
-      "count": 1448,
-      "sha256_of_sorted_paths": "d5181fc7008ad3bd9fc682be16bfba7399eb9ca369712d06a20fd052ec165584"
+      "count": 1449,
+      "sha256_of_sorted_paths": "03d99961713ac2ae990d0c9a4f7b5d0f2ba36dbdf34e4d49d3dea8ef1c1df2e2"
     },
     "programs_tree_all_py": {
       "definition": "Every *.py at ANY depth under plugins/vibe-ic/programs/, including programs/tests/ and the sub-packages. Roughly programs_top_level + test_files + sub-package modules.",
-      "count": 6227,
-      "sha256_of_sorted_paths": "7e8ddfd69600611e92165fb5bc2b4275f8d2206666a6172d8308308972d749dd"
+      "count": 6230,
+      "sha256_of_sorted_paths": "6cc172fc3c2e20faf1909c8d4b68cd12a1710f1f4e5bbe8259fa839a62986ed9"
     },
     "test_files": {
       "definition": "Every test_*.py at any depth under plugins/vibe-ic/programs/tests/.",
-      "count": 4472,
-      "sha256_of_sorted_paths": "def8795f3ee576413b776162cf4eff4da79afbc621f93c85f0b32eb3ef5c01ca"
+      "count": 4473,
+      "sha256_of_sorted_paths": "23f7435fe15fcd58c29d33f0646e3dacd72b6413f6aacccab54a11e766823f8c"
     },
     "mcp_eda_test_files": {
       "definition": "Every test_*.py directly under plugins/vibe-ic/mcp-eda/test/.",

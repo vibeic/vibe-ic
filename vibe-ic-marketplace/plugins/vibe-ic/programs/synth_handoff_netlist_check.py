@@ -485,15 +485,24 @@ def bound_handoff(project: Path) -> Optional[dict]:
         if mapped.resolve() != expected.resolve() or doc.get('netlist') != mapped.name:
             raise ValueError('handoff does not name the production mapped netlist')
         state = json.loads((folder / 'state_out.json').read_text())
-        raw, _, report = _native_synthesis(
+        raw, config, report = _native_synthesis(
             project, folder, binding['top'],
             path_resolver=_project_path_resolver(project, folder, state))
         if binding['receipt_sha256'] != _sha(folder / 'vibeic_receipt.json'):
             raise ValueError('native producer receipt changed after publication')
+        import librelane_postmap as postmap
+        parent = raw
+        raw, child_folder = postmap.selected(project, binding, parent, folder)
+        if child_folder:
+            report = check(raw, config)
+            if report["verdict"] != "PASS":
+                raise ValueError('; '.join(report['findings']))
         canonical = mapped.parent / 'netlist.v'
         if any(_sha(p) != binding['netlist_sha256'] for p in (raw, mapped, canonical)):
             raise ValueError('native/mapped/canonical handoff bytes disagree')
-        report.update({'producer': 'LibreLane.Yosys.Synthesis',
+        report.update({'producer': ('LibreLane.Yosys.Synthesis -> Vibeic.PostMapRepair'
+                                    if child_folder else 'LibreLane.Yosys.Synthesis'),
+                       'native': str(raw), 'parent': str(parent),
                        'canonical': str(canonical), 'mapped': str(mapped),
                        'netlist_sha256': binding['netlist_sha256'],
                        'flattened': True, 'reason_class': 'tool_handoff_verified'})

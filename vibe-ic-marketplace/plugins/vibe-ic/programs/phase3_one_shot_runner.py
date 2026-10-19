@@ -17486,8 +17486,19 @@ def _step_synth_librelane(project: Path, top: str, pdk: PdkConfig,
         _log_surviving_artefact([str(netlist.parent / "netlist.v")],
                                 produced_by="LibreLane.Yosys.Synthesis",
                                 tool="yosys", exit_code=0)
+        import librelane_postmap as _postmap
+        _child = _postmap.run_and_publish(
+            project, top, pdk, container, parent_folder=folder, image=image,
+            mounts=mounts, pdk_root=pdk_root_guest, area_receipt=area_receipt,
+            area_run_manifest=area_run_manifest)
+        if _child is not None:
+            area_incomplete = area_incomplete or _child["area_budget_rc"] == 2
+            stats = Path(_child["stats"])
+            _log_surviving_artefact([str(netlist), str(netlist.parent / "netlist.v")],
+                                  produced_by="Vibeic.PostMapRepair", tool="openroad", exit_code=0)
         return StepResult("synth", "NOT_MEASURED" if area_incomplete else "PASS",
                           time.time() - t0,
+                          (f"Native post-map repair selected; child area gate rc={_child['area_budget_rc']}; LEC/timing remain independent; " if _child else "") +
                           f"LibreLane Yosys.Synthesis: {netlist.name}; "
                           f"area gate rc={gate.returncode}; "
                           f"pdk gate rc={pdk_gate.returncode}; "
@@ -17497,7 +17508,7 @@ def _step_synth_librelane(project: Path, top: str, pdk: PdkConfig,
                              if area_incomplete else ""),
                           [str(netlist), str(stat), str(stats), str(folder / "state_out.json"),
                            str(area_report)],
-                          extras={"area_budget_rc": gate.returncode},
+                          extras={"area_budget_rc": gate.returncode, **({"post_map": _child} if _child else {})},
                           reason_class="inconclusive" if area_incomplete else "")
     except (_ll.Refusal, OSError, ValueError) as exc:
         stopped = (_ll.tool_stop_reason(exc.code)
@@ -17543,6 +17554,14 @@ def step_synth(project: Path, top: str, pdk: PdkConfig,
                           reason_class="tool_absent" if _status == "NOT_MEASURED" else "")
     import librelane_contract as _ll
     _mode = _ll.selected_mode(project, "9")
+    import librelane_postmap as _postmap
+    try:
+        requested_postmap = _postmap.mode(project)
+    except (ValueError, _ll.Refusal) as exc:
+        return StepResult("synth", "FAIL", 0.0, str(exc))
+    if requested_postmap != "off" and _mode != "librelane":
+        return StepResult("synth", "FAIL", 0.0,
+                          "LL_POSTMAP_ROUTE_UNSUPPORTED: post-map repair requires the native synthesis handoff")
     if _mode == "librelane":
         return _step_synth_librelane(
             project, top, pdk, container, area_receipt=area_receipt,
@@ -60983,6 +61002,11 @@ def _prepare_prelayout_librelane(project: Path, top: str, pdk: PdkConfig,
         raise contract.Refusal("LL_PDK_ROOT_MISSING", str(root))
     mounts = [(root, "/pdk")]
     netlist = _pl.synth_dir(project) / f"{top}_synth.v"
+    import synth_handoff_netlist_check as handoff
+    bound = handoff.bound_handoff(project)
+    if bound is not None:
+        if bound.get("verdict") != "PASS" or Path(bound["mapped"]) != netlist:
+            raise contract.Refusal("LL_PRELAYOUT_HANDOFF_INVALID", str(bound))
     rtl = sorted(_pl.rtl_dir(project).glob("*.sv")) + sorted(_pl.rtl_dir(project).glob("*.v"))
     stem = Path(str(getattr(pdk, "liberty", ""))).stem
     scl = stem.split("__", 1)[0] if "__" in stem else None

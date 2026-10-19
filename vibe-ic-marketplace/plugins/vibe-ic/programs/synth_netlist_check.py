@@ -975,6 +975,16 @@ def _bound_native_netlist(netlist_path: Path) -> Optional[Path]:
         if "librelane_synthesis" not in doc:
             return None
         binding = doc["librelane_synthesis"]
+        if isinstance(binding, dict) and "post_map" in binding:
+            import synth_handoff_netlist_check as handoff
+            current = handoff.bound_handoff(project)
+            if not isinstance(current, dict) or current.get("verdict") != "PASS":
+                raise NativeBindingRefusal("post-map synthesis handoff is unbound")
+            candidate = Path(current["native"])
+            if (not _digest_matches(audited, binding.get("netlist_sha256"))
+                    or not _digest_matches(candidate, binding.get("netlist_sha256"))):
+                raise NativeBindingRefusal("post-map selected bytes differ from audited product")
+            return candidate
         if not isinstance(binding, dict):
             raise NativeBindingRefusal("native synthesis handoff binding shape changed")
         if binding.get("schema") != "vibe-ic/librelane-synthesis-handoff/1":

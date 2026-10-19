@@ -317,3 +317,7 @@ class ExternalCaptureLaunchRetap(OpenROADStep):
     def get_script_path(self) -> str:
         return os.path.join(os.path.dirname(__file__),
                             "external_capture_launch_retap_step.tcl")
+
+# Step 9 mapped-product implementation transform.
+from .postmap_repair import PostMapRepair  # noqa: E402,F401
+__all__ += ["PostMapRepair"]

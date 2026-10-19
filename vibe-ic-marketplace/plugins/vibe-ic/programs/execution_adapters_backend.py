@@ -977,6 +977,38 @@ def backend_project_input_contract(project: Path, step_id: str, *,
                 result.extend(_mapped_receipt_state_files(
                     root, folder_path, receipt, state,
                     collect_missing=collect_missing))
+    # A selected mapped-product child is part of this same checkpoint subject.
+    # Carry its exact native receipt closure, never an ambient source project.
+    child = binding.get("post_map") if isinstance(binding, dict) else None
+    if child is not None:
+        if not isinstance(child, dict):
+            raise ValueError("backend post-map binding is malformed")
+        for key in ("folder", "resolved_config", "state_in"):
+            value = child.get(key)
+            rel = Path(value) if isinstance(value, str) else Path("..")
+            if rel.is_absolute() or ".." in rel.parts or not rel.parts:
+                raise ValueError("backend post-map path escaped project")
+            target = root / rel
+            if target.is_symlink() or not target.resolve().is_relative_to(root):
+                raise ValueError("backend post-map path is unsafe")
+            if key != "folder":
+                carry_checkpoint_file(rel.as_posix())
+        child_folder = root / child["folder"]
+        receipt = json.loads((child_folder / "vibeic_receipt.json").read_text())
+        state = json.loads((child_folder / "state_out.json").read_text())
+        carry_checkpoint_file(str((child_folder / "vibeic_receipt.json").relative_to(root)))
+        for name, digest in receipt["sha256"].items():
+            rel = Path(name)
+            if rel.is_absolute() or ".." in rel.parts or not rel.parts:
+                raise ValueError("backend post-map receipt path is unsafe")
+            target = child_folder / rel
+            carry_checkpoint_file(str(target.relative_to(root)))
+            if target.is_file() and em.digest(target) != digest:
+                raise ValueError("backend post-map receipt digest mismatch")
+        result.extend(_mapped_receipt_state_files(root, child_folder, receipt, state,
+                                                 collect_missing=collect_missing))
+        for name in (child.get("basis") or {}):
+            carry_checkpoint_file(name)
     # The resolver validates the original producer state path from this
     # receipt; the resolved config is its explicit input fingerprint.
     if (root / "phase3/librelane/synthesis_resolved.json").is_file():

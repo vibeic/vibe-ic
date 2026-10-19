@@ -1734,9 +1734,10 @@ def emit_lint_config(project: Path, pdk: str, output: Path, top: str,
 
 
 def verify_synthesis_stat(stat_path: Path, state: dict, stats_path: Path,
-                          top: str, output: Path) -> dict:
+                          top: str, output: Path | None) -> dict:
     """Bind the area-gate input and copied netlist to Yosys's native stat."""
-    output.unlink(missing_ok=True)
+    if output is not None:
+        output.unlink(missing_ok=True)
     stat = _load(stat_path)
     stats = _load(stats_path)
     module = stat.get('modules', {}).get('\\' + top)
@@ -1768,7 +1769,8 @@ def verify_synthesis_stat(stat_path: Path, state: dict, stats_path: Path,
               'area_um2': area, 'stat_sha256': digest(stat_path),
               'native_netlist_sha256': native_hash,
               'area_gate_input_sha256': digest(stats_path)}
-    write_json(output, report)
+    if output is not None:
+        write_json(output, report)
     return report
 
 
@@ -1792,6 +1794,7 @@ _EARLY_STEP_INPUTS: dict[str, tuple[str, ...]] = {
     'Verilator.Lint': (), 'Yosys.JsonHeader': (), 'Yosys.Synthesis': ('json_h',),
     'OpenROAD.CheckSDCFiles': ('nl',), 'OpenROAD.STAPrePNR': ('nl',),
     'OpenROAD.Floorplan': ('nl',), 'Yosys.EQY': ('nl',),
+    'Vibeic.PostMapRepair': ('nl',),
     'Checker.YosysUnmappedCells': ('nl',), 'Checker.YosysSynthChecks': ('nl',),
     'Checker.NetlistAssignStatements': ('nl',),
     'Magic.RCX': ('gds',), 'Magic.DRC': ('gds',),
@@ -3760,7 +3763,9 @@ def resolve_step_config(project: Path, image: str, source: Path, output: Path,
     volumes = ['-v', f'{project.resolve()}:{project.resolve()}']
     for host, guest in mounts or []:
         volumes += ['-v', f'{host.resolve()}:{guest}:ro']
+    step_id = _load(source).get('meta', {}).get('step', '')
     result = run_container([docker, 'run', *_dmem.docker_memory_flags(), '--rm', *volumes,
+                            *_plugin_args([step_id]),
                             '--entrypoint', 'python3', image, '-c', script],
                            probe_deadline_s=PROBE_DEADLINE_S)
     if result.returncode or not output.is_file():
@@ -4188,6 +4193,12 @@ def run_chain(project: Path, image: str, steps: list[tuple[str, Path, Path]],
         # cannot substitute a mutable wrapper command after the run.  Older
         # receipts remain deliberately unmeasured; new synthesis receipts
         # carry the real command bytes automatically at this existing seam.
+        if step_id == 'Vibeic.PostMapRepair':
+            for name in ('COMMANDS', 'statistics.ys', 'statistics.log'):
+                path = folder / name
+                if not path.is_file() or not path.stat().st_size:
+                    raise Refusal('LL_POSTMAP_EXECUTION_MISSING', str(path))
+                hashes[name] = digest(path)
         if step_id == 'Yosys.Synthesis':
             commands = folder / 'COMMANDS'
             if commands.is_file() and commands.stat().st_size:
