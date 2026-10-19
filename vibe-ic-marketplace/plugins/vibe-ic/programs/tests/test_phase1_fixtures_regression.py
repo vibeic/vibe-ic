@@ -56,6 +56,7 @@ _EXPECTED: dict[str, str] = {
     "litescope":   "LiteScope",
     "taxi":        "Taxi Transport Library",
     "benchmark_a":      "EXAMPLE_CHIP",
+    "neutral_bound_type_width": "NeutralCore",
     # #3106: the native intake project's identity is also pinned.
     "subservient_l2_section_tail": "subservient",
     "neutral_many_sections": "NeutralCore",

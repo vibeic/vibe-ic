@@ -292,6 +292,11 @@ def _probe(project, context, ports, author_sha):
 
 def admit(project: Path, content: dict) -> dict:
     """Validate all author input and fresh measurements before changing L9."""
+    return _admit(project, content, _probe)
+
+
+def _admit(project: Path, content: dict, measure) -> dict:
+    """Shared source/role/type admission; measurement owns its evidence mode."""
     project = Path(project)
     path = _path(project, INPUT)
     if not path.exists():
@@ -411,7 +416,7 @@ def admit(project: Path, content: dict) -> dict:
     if any(name not in original and name not in claimed for name in physical):
         _fail("new physical port is not mapped from an original logical interface")
     author_sha = hashlib.sha256(raw).hexdigest()
-    proof = _probe(project, context, list(physical.values()), author_sha)
+    proof = measure(project, context, list(physical.values()), author_sha)
     # A changed source, package, or author choice during elaboration is never
     # published against an earlier roster/hash descriptor.
     if path.read_bytes() != raw or input_contract(project, content)["input_files"] != data["input_files"]:
@@ -448,3 +453,85 @@ def admit(project: Path, content: dict) -> dict:
         "proof": {"path": f"{REPORT}/proof.json", "sha256": _sha(project / REPORT / "proof.json")},
         "review": "PENDING_INDEPENDENT_D1"}
     return out
+
+
+def current_published_ports(project: Path, content: dict) -> dict:
+    """Read-only validation of a native publication, never an authored PASS.
+
+    Reuse ordinary source/role/type admission, then independently bind its
+    retained measurement to current author/package bytes, exact probe and
+    terminal execution artifacts. Reconstruct and compare the actual physical
+    aliases, so a numeric width patched into L9 cannot satisfy a consumer.
+    This does not rerun tools, write reports, or alter the raw L1 view.
+    """
+    ledger = content.get("interface_binding_authoring")
+    if not isinstance(ledger, dict) or content.get("phase1_step_error"):
+        _fail("current native publication is absent or failed")
+    proof_rel = f"{REPORT}/proof.json"
+    execution_rel = f"{REPORT}/execution.json"
+
+    def retained(project, context, ports, author_sha):
+        proof_path = _path(project, proof_rel)
+        proof = json.loads(proof_path.read_text(), object_pairs_hook=_unique)
+        execution = json.loads(_path(project, execution_rel).read_text(), object_pairs_hook=_unique)
+        reference = {"path": proof_rel, "sha256": _sha(proof_path)}
+        if (ledger.get("input") != INPUT or ledger.get("input_sha256") != author_sha
+                or ledger.get("proof") != reference or ledger.get("measurement") != proof
+                or proof.get("schema") != "vibeic.phase1-interface-binding-measurement.v1"
+                or proof.get("author_input_sha256") != author_sha or proof.get("context") != context
+                or execution.get("schema") != "vibeic.phase1-interface-binding-execution.v1"
+                or execution.get("author_input_sha256") != author_sha
+                or execution.get("semantic_proof") != reference):
+            _fail("retained measurement is not bound to current author/proof")
+        for receipt in (proof, execution):
+            if any(type(receipt.get(k)) is not int or receipt[k] != 0
+                   for k in ("elaboration_rc", "simulation_rc")):
+                _fail("retained elaboration/simulation did not succeed")
+        identity = proof.get("execution_identity")
+        if (not isinstance(identity, dict) or identity != execution.get("execution_identity")
+                or identity.get("image_digest") != context["image"]):
+            _fail("retained execution does not bind the selected image")
+        if "transport" in identity:
+            # The official native runner publishes either local execution in
+            # its attested image or a fresh pinned docker run. Older composed
+            # writers instead identify an existing container explicitly.
+            if (set(identity) != {"transport", "image_digest"}
+                    or identity["transport"] not in ("local", "fresh_docker_run")):
+                _fail("unsupported retained native execution identity")
+        elif not all(isinstance(identity.get(k), str) and identity[k]
+                     for k in ("container", "container_id", "image_id")):
+            _fail("retained execution does not identify its native container")
+        artifacts = execution.get("artifacts")
+        expected_artifacts = {f"{REPORT}/{name}" for name in
+                              ("type_probe.sv", "elaboration.log", "measurements.log")}
+        if not isinstance(artifacts, dict) or set(artifacts) != expected_artifacts:
+            _fail("retained execution artifact roster differs")
+        for rel, digest in artifacts.items():
+            if not isinstance(digest, str) or not _HASH.fullmatch(digest) or _sha(_path(project, rel)) != digest:
+                _fail(f"retained execution artifact changed: {rel}")
+        declarations = ",\n".join(f"  {p['direction']} {p['type_ref']} {p['name']}" for p in ports)
+        lines = [f"module vibeic_interface_binding_probe(\n{declarations}\n);", "initial begin"]
+        for p in ports:
+            lines.append(f'  $display("VIBEIC_PORT|{p["name"]}|{p["direction"]}|{p["type_ref"]}|%0d", $bits({p["name"]}));')
+        source = "\n".join(lines + ["  $finish;", "end", "endmodule", ""])
+        if (_path(project, f"{REPORT}/type_probe.sv").read_text() != source
+                or proof.get("probe_sha256") != hashlib.sha256(source.encode()).hexdigest()):
+            _fail("retained probe differs from selected physical types")
+        expected = [{k: p[k] for k in ("name", "direction", "type_ref", "width")} for p in ports]
+        measured = []
+        for line in _path(project, f"{REPORT}/measurements.log").read_text().splitlines():
+            if line.startswith("VIBEIC_PORT|"):
+                cells = line.split("|")
+                if len(cells) != 5 or not cells[4].isdigit():
+                    _fail("malformed retained measurement")
+                measured.append(dict(name=cells[1], direction=cells[2], type_ref=cells[3], width=int(cells[4])))
+        if measured != expected or proof.get("measurements") != expected:
+            _fail("retained measured types/widths differ from selected ports")
+        return proof
+
+    rebuilt = _admit(Path(project), content, retained)
+    if rebuilt.get("interface_binding_authoring") != ledger:
+        _fail("published binding ledger differs from current admission")
+    if any(rebuilt[key] != content[key] for key in PORT_KEYS):
+        _fail("published physical ports differ from current measured binding")
+    return {p["name"]: copy.deepcopy(p) for p in ledger["physical_ports"]}

@@ -12,8 +12,11 @@ THROUGH L9 — `phase1_doc_one_shot_runner` promotes each L1 pin's
 measured `grep -c pin_table` = 0 in both `phase2_scaffold_gen.py` and
 `_specrtl_common.py`). The earlier wording here said phase2 derived every
 port declaration FROM `L1.pin_table[]` directly; that sent the next author
-to the wrong file, which is how #404 cost a day. The gate itself is
-unchanged and still correct — L1 is where the width must become actionable.
+to the wrong file, which is how #404 cost a day. L1 is the raw source
+view; a current native package binding may legitimately resolve nominal
+types only in L9, the physical view the ordinary consumer actually reads.
+For that case this gate independently validates the retained native
+publication before using its width, without rewriting L1 (#3278).
 `l9_rtl_pin_consistency_check` later diffs the emitted RTL back against the
 same table.
 
@@ -22,7 +25,7 @@ same table.
 at any version. It is the executable statement of the derivation a
 conforming phase 2 owes, and this gate names it for that reason. So a pin
 whose width is not resolvable to an integer is a pin any conforming phase 2
-would emit as a 1-bit scalar port — and nothing errors at that moment. The
+could otherwise emit as a 1-bit scalar port — and nothing errors at that moment. The
 failure surfaces many steps later as a width-mismatch, a truncated
 datapath, or an `l9_rtl_pin_consistency` diff with an opaque cause.
 Advising here would reproduce the documented failure mode where a layer
@@ -496,6 +499,23 @@ def evaluate(project: Path) -> Dict[str, Any]:
 
     violations: List[Dict[str, Any]] = []
     resolved_symbolically: List[Dict[str, Any]] = []
+    resolved_from_binding: List[Dict[str, Any]] = []
+    physical: Dict[str, Any] = {}
+    # A verified physical L9 is a consuming view, not a second raw L1. Do
+    # not trust a numeric L9 field or ledger status on its own. Reuse native
+    # source admission and independently validate its current tool artifacts.
+    import interface_bindings
+    l9_path = _pl.generated_docs_dir(project) / "L9_INTEGRATION_SPEC.json"
+    try:
+        l9 = json.loads(l9_path.read_text()) if l9_path.is_file() else {}
+        if (project / interface_bindings.INPUT).exists() or (
+                isinstance(l9, dict) and "interface_binding_authoring" in l9):
+            if not isinstance(l9, dict):
+                raise ValueError("L9 is not an object")
+            physical = interface_bindings.current_published_ports(project, l9)
+    except (OSError, ValueError, TypeError, KeyError) as exc:
+        violations.append({"pin": None, "kind": "native_binding_not_current",
+                           "detail": str(exc)})
     bus_confirmed = 0
     for pin in pin_table:
         if not isinstance(pin, dict):
@@ -505,6 +525,18 @@ def evaluate(project: Path) -> Dict[str, Any]:
             continue
         name = name.strip()
         got = _resolved_width(pin, params)
+        bound = physical.get(name)
+        if bound is not None:
+            if got is not None and got != bound["width"]:
+                violations.append({"pin": name, "kind": "raw_physical_width_conflict",
+                                   "l1_width": got, "physical_width": bound["width"],
+                                   "detail": "raw L1 width differs from current measured physical width"})
+            elif got is None:
+                got = bound["width"]
+                resolved_from_binding.append({"pin": name, "bits": got,
+                                              "type_ref": bound["type_ref"],
+                                              "consuming_field": "L9.top_ports/ports",
+                                              "proof": l9["interface_binding_authoring"]["proof"]})
         lower = numeric.get(name)
         # Disclose every width that came from a resolved parameter rather
         # than from an integer L1 already carried: it is the weaker of the
@@ -531,7 +563,7 @@ def evaluate(project: Path) -> Dict[str, Any]:
                         f"`{name}`, so it is at least {lower} bits wide, but "
                         f"L1 carries width={pin.get('width')!r} / "
                         f"msb={pin.get('msb')!r} / lsb={pin.get('lsb')!r} — "
-                        f"a conforming phase 2 would emit a 1-bit port."),
+                        f"no independently current physical binding supplies its width."),
                 })
             elif got < lower and not _declared_range_covers(pin, lower - 1):
                 violations.append({
@@ -567,6 +599,7 @@ def evaluate(project: Path) -> Dict[str, Any]:
         "bus_confirmed": bus_confirmed,
         "violations": violations,
         "symbolic_widths_resolved": resolved_symbolically,
+        "native_binding_widths_resolved": resolved_from_binding,
     }
     if not violations:
         if bus_confirmed == 0:
