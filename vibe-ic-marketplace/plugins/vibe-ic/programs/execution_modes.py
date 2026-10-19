@@ -1675,23 +1675,8 @@ def _canonical_flow_requirements() -> tuple[str, dict[str, dict]]:
     if not isinstance(flow, dict) or not isinstance(flow.get('steps'), list):
         raise Refusal('PORTFOLIO_CANONICAL_INVALID', str(flow_path))
     flow_sha = _canonical_flow_authority(flow_path)
-    requirements = {}
-    for step in flow['steps']:
-        step_id = str(step.get('id'))
-        gates = set()
-        gate = step.get('gate') or {}
-        for clause in [gate, *gate.get('all_of', [])]:
-            for key in ('program_exit_zero', 'advisory_program_exit_zero',
-                        'optional_program_exit_zero'):
-                value = clause.get(key) if isinstance(clause, dict) else None
-                command = value if isinstance(value, str) else (
-                    value.get('command', '') if isinstance(value, dict) else '')
-                if command:
-                    gates.add(Path(command.split()[0]).name)
-        requirements[step_id] = dict(
-            gates=frozenset(gates),
-            outputs=tuple(step.get('required_outputs') or ()),
-        )
+    import _flow_yaml
+    requirements = _flow_yaml.step_requirements(flow)
     if len(requirements) != 70:
         raise Refusal('PORTFOLIO_CANONICAL_INVALID', str(len(requirements)))
     result = (flow_sha, requirements)

@@ -98,6 +98,31 @@ def clear_cache() -> None:
     PARSES.clear()
 
 
+def step_requirements(flow: dict) -> dict[str, dict]:
+    """Extract declared gates and outputs without granting source authority.
+
+    Installed Default callers use the bundled flow. Git-bound candidate
+    callers verify their source separately before using these same contracts.
+    """
+    requirements = {}
+    for step in flow['steps']:
+        gates = set()
+        gate = step.get('gate') or {}
+        for clause in [gate, *gate.get('all_of', [])]:
+            for key in ('program_exit_zero', 'advisory_program_exit_zero',
+                        'optional_program_exit_zero'):
+                value = clause.get(key) if isinstance(clause, dict) else None
+                command = value if isinstance(value, str) else (
+                    value.get('command', '') if isinstance(value, dict) else '')
+                if command:
+                    gates.add(Path(command.split()[0]).name)
+        requirements[str(step.get('id'))] = dict(
+            gates=frozenset(gates),
+            outputs=tuple(step.get('required_outputs') or ()),
+        )
+    return requirements
+
+
 def ordered_step_ids(*, stages=None, execution_stages=None, execution_tracks=None) -> tuple[str, ...]:
     """The declared execution order; step labels are never numeric ranks."""
     selected = None if stages is None else frozenset(stages)

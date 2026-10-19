@@ -6,6 +6,10 @@ import os
 import sys
 
 import pytest
+import shutil
+import subprocess
+
+from _hostpaths import require_repo
 
 PROGRAMS = Path(os.environ.get('VIBEIC_VERSION_REVIEW_PROGRAMS',
                               str(Path(__file__).resolve().parent.parent)))
@@ -158,3 +162,84 @@ def test_default_condition_skip_has_a_version_without_running_tool(tmp_path, mon
     assert record['status'] == 'NOT_APPLICABLE'
     assert not record['canonical_pass']
     assert versions.latest_pass(tmp_path, '15.5ic') is None
+
+
+@pytest.fixture(scope='module')
+def installed_plugin(tmp_path_factory):
+    # Ship production files at an arbitrary cache path, with no enclosing Git
+    # checkout. Do not accidentally import the developer's programs in-process.
+    destination = tmp_path_factory.mktemp('installed-flow') / 'plugin cache' / 'vibe-ic'
+    shutil.copytree(PROGRAMS.parent, destination, ignore=shutil.ignore_patterns(
+        '.git', 'node_modules', '__pycache__', '.pytest_cache', 'tests'))
+    probe = subprocess.run(['git', '-C', str(destination), 'rev-parse', '--show-toplevel'],
+                           capture_output=True, text=True)
+    assert probe.returncode != 0, 'installed-layout control is inside a Git checkout'
+    return destination
+
+
+@pytest.mark.parametrize('invalid_clock', [False, True], ids=['valid-sdc', 'bad-clock'])
+def test_installed_default_retains_real_sdc_consumer(
+        tmp_path, installed_plugin, invalid_clock):
+    source = require_repo('vibe-ic-marketplace', 'plugins', 'vibe-ic', 'programs',
+                          'tests', 'fixtures', 'ppa', 'power', 'activity_basis_pair',
+                          'constraint.sdc')
+    constraints = tmp_path / 'phase2/stage2/constraints/constraint.sdc'
+    constraints.parent.mkdir(parents=True)
+    content = source.read_text()
+    if invalid_clock:
+        import re
+        content, count = re.subn(r'(-period\s+)\S+', r'\g<1>-1', content, count=1)
+        assert count == 1
+    constraints.write_text(content)
+    l8 = tmp_path / 'phase1/generated_docs/L8_TIMING_WAVEFORM.json'
+    l8.parent.mkdir(parents=True)
+    l8.write_text('{"clocks":{}}\n')
+    # Select the supported direct SDC consumer, independent of PnR defaults.
+    switch = tmp_path / 'phase3/librelane_switch.json'
+    switch.parent.mkdir()
+    switch.write_text('{"steps":{"8":"direct"}}\n')
+    script = r'''
+import json
+from pathlib import Path
+import sys
+sys.path.insert(0, sys.argv[1])
+import execution_policy as policy
+import step_preflight as preflight
+import step_output_collector as versions
+import design_one_shot_runner as design
+project = Path(sys.argv[2])
+runtime = policy.bootstrap(project)
+assert runtime['policy']['mode'] == 'default'
+result = preflight.retained_call(project, '8', design.step_sdc_validation, project)
+record = next(row for row in versions._read_index(project)['steps'] if row['id'] == '8')
+assert record['status'] == result.status
+assert (project / 'reports/phase2/sdc_check.json').is_file()
+# Loading installed metadata must not grant Git-bound candidate authority.
+import execution_modes as em
+try:
+    em._canonical_flow_requirements()
+except em.Refusal as exc:
+    assert exc.code.startswith('PORTFOLIO_CANONICAL_'), exc
+else:
+    raise AssertionError('installed files acquired Git candidate authority')
+print(json.dumps({'status': result.status, 'detail': result.detail}))
+'''
+    environment = {key: value for key, value in os.environ.items()
+                   if not key.startswith(('GIT_', 'VIBEIC_EXECUTION_', 'VIBEIC_LIBRELANE_'))}
+    environment.pop('VIBEIC_IC_IP_ROUTE', None)
+    environment.update(PYTHONDONTWRITEBYTECODE='1',
+                       CLAUDE_PLUGIN_ROOT=str(installed_plugin),
+                       VIBE_IC_PROGRAMS_DIR=str(installed_plugin / 'programs'))
+    ran = subprocess.run([sys.executable, '-I', '-c', script,
+                          str(installed_plugin / 'programs'), str(tmp_path)],
+                         cwd=tmp_path, env=environment, capture_output=True,
+                         text=True, timeout=60)
+    assert ran.returncode == 0, ran.stdout + ran.stderr
+    report = json.loads(ran.stdout.splitlines()[-1])
+    assert report['status'] == ('FAIL' if invalid_clock else 'PASS'), report
+    if invalid_clock:
+        assert 'sdc_syntax_check rc=1' in report['detail']
+    else:
+        validator = json.loads((tmp_path / 'reports/sdc_validator.json').read_text())
+        assert validator['verdict'] == 'PASS'
+        assert validator['sdc_files_checked'] == [str(constraints)]

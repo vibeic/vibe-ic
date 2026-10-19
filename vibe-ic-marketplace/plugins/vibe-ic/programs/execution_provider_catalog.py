@@ -25,9 +25,12 @@ BACKEND_ROWS = BACKEND_POLICY["rows"]
 # come from the canonical flow used by the runner and input preparation.
 # A stored policy snapshot must not make the consumer check older outputs.
 import _flow_yaml
-from execution_modes import _canonical_flow_requirements
-_canonical_rows = {str(row["id"]): row for row in _flow_yaml.load()["steps"]}
-_, _current_requirements = _canonical_flow_requirements()
+_canonical_flow = _flow_yaml.load()
+_canonical_rows = {str(row["id"]): row for row in _canonical_flow["steps"]}
+# This descriptive catalog is also imported by installed Default runners.
+# Read the bundled contract without requiring a repository checkout; Ultra's
+# source/portfolio admission retains its independent Git authority checks.
+_current_requirements = _flow_yaml.step_requirements(_canonical_flow)
 for _sid, _backend in BACKEND_ROWS.items():
     _backend["canonical_row"] = _canonical_rows[_sid]
     _backend["portfolio_policy"] = {
