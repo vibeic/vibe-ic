@@ -412,9 +412,13 @@ def reset_vector(project: Path, decl: Dict[str, Any]) -> Tuple[Optional[int], st
 
 
 def parse_sram_protocol(token: str) -> Tuple[Optional[Dict[str, Any]], str]:
-    from reset_invariant_oracle_tb_gen import RETENTION_PROTOCOL
-    if token == RETENTION_PROTOCOL:
-        return {"kind": "sdp", "width": 8, "read_latency": 0,
+    from reset_invariant_oracle_tb_gen import RETENTION_PROTOCOL, SINGLE_PORT_RETENTION_PROTOCOL
+    if token in (RETENTION_PROTOCOL, SINGLE_PORT_RETENTION_PROTOCOL):
+        # Five semantic roles; a single-port contract binds both addresses to
+        # the same physical output. The shared reader validates that exact
+        # alias, widths and asynchronous-read timing before admitting it.
+        return {"kind": "sp" if token == SINGLE_PORT_RETENTION_PROTOCOL else "sdp",
+                "width": 8, "read_latency": 0,
                 "stated_roles": ["raddr", "rdata", "waddr", "wdata", "we"],
                 "explicit_roles_required": True}, "declared registered byte SRAM protocol parsed"
     m = _SDP_RE.match(str(token or "").strip().lower())
@@ -774,6 +778,9 @@ def gen_tb(facts: Dict[str, Any]) -> str:
         read_pipe = ("  always @* if (ren) rdata = mem[raddr % MEMSIZE];" if "ren" in p else
                      "  always @* rdata = mem[raddr % MEMSIZE];")
     ren_setup = "" if "ren" in p else "  assign ren = 1'b1;\n"
+    shared_address = p["raddr"] == p["waddr"]
+    address_setup = "  assign raddr = waddr;\n" if shared_address else ""
+    read_address_connection = ("" if shared_address else f"    .{p['raddr']}(raddr),\n")
     ren_connection = f",\n    .{p['ren']}(ren));" if "ren" in p else ");"
     return f"""// Flow-authored ISA-suite testbench (isa_suite_producer). No harness copied.
 `timescale 1ns/1ps
@@ -786,7 +793,7 @@ module isa_tb;
   wire [31:0] waddr, raddr;
   wire [7:0] wdata;
   wire wen, ren;
-{ren_setup}  reg [7:0] rdata;
+{ren_setup}{address_setup}  reg [7:0] rdata;
   reg [7:0] mem [0:MEMSIZE-1];
   always @(posedge clk) if (wen) mem[waddr % MEMSIZE] <= wdata;
 {read_pipe}
@@ -796,8 +803,7 @@ module isa_tb;
 {ties}    .{p['waddr']}(waddr),
     .{p['wdata']}(wdata),
     .{p['wen']}(wen),
-    .{p['raddr']}(raddr),
-    .{p['rdata']}(rdata){ren_connection}
+{read_address_connection}    .{p['rdata']}(rdata){ren_connection}
   integer i, cyc, th, sb, se, fd, iv, settle;
   string hexfile, sigfile;
   reg seen;

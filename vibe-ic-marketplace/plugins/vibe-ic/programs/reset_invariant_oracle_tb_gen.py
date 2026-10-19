@@ -302,6 +302,7 @@ def _vstr(text: str) -> str:
 
 
 RETENTION_PROTOCOL = "registered_dual_port_8bit_async_read_sync_write"
+SINGLE_PORT_RETENTION_PROTOCOL = "registered_single_port_8bit_async_read_sync_write"
 RETENTION_HEADER = "// VIBEIC_RESET_RETENTION: "
 RETENTION_EDGES = 6
 RETENTION_ACTIVE_CYCLES = 64
@@ -453,8 +454,11 @@ def declared_retention_memory(project: Path, dut: str,
         ("raddr", "read_address"), ("waddr", "write_address"),
         ("wdata", "write_data"), ("rdata", "read_data"), ("we", "write_enable"))}
     ins, outs = dict(inputs), dict(outputs)
+    single_port = protocol["kind"] == "sp"
     if (any(not isinstance(n, str) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_$]*", n)
-            for n in memory.values()) or len(set(memory.values())) != 5
+            for n in memory.values())
+            or len(set(memory.values())) != (4 if single_port else 5)
+            or (single_port and memory["raddr"] != memory["waddr"])
             or memory["rdata"] not in ins
             or any(memory[k] not in outs for k in ("raddr", "waddr", "wdata", "we"))):
         return None, "NOT_MEASURED: selected memory roles do not bind to the actual DUT ports"
