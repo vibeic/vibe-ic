@@ -46380,6 +46380,7 @@ def _doc_module_name_label_or_inline(extracted: Dict[str, str]) -> Optional[str]
         return None
     label_counts: Dict[str, int] = {}
     stated_counts: Dict[str, int] = {}
+    interface_names: Set[str] = set()
     inline_counts: Dict[str, int] = {}
     for _src, text in extracted.items():
         if not text:
@@ -46390,6 +46391,18 @@ def _doc_module_name_label_or_inline(extracted: Dict[str, str]) -> Optional[str]
         # `_doc_design_request_module_name` below already strips the same
         # values for the same reason; this makes the property hold per-scan
         # rather than per-caller.
+        # The Comportable sentence names the interface's subject. Unlike a
+        # passing inline reference, this grammar does not infer a name from
+        # algorithm vocabulary or filename shape. Keep exact legal spelling.
+        # A URL before the subject is prose, not an HDL // comment. Blank URL
+        # spans before the existing comment stripper, keeping actual comments
+        # inert without dropping the rest of the documentation sentence.
+        interface_text = re.sub(r"https?://[^\s)]+", lambda m: " " * len(m.group()), text)
+        interface_text = _strip_hdl_comments(interface_text)
+        for match in _RE_V638_COMPORTABLE_INTRO.finditer(interface_text):
+            name = match.group("name")
+            if name.lower() not in _VERILOG_RESERVED_KEYWORDS:
+                interface_names.add(name)
         text = _strip_hdl_comments(text)
         for m in _RE_DOC_TOP_MODULE_NAME_LABEL.finditer(text):
             nm = (m.group("n1") or m.group("n2") or m.group("n3") or "").strip()
@@ -46411,9 +46424,14 @@ def _doc_module_name_label_or_inline(extracted: Dict[str, str]) -> Optional[str]
                 inline_counts[nm] = inline_counts.get(nm, 0) + 1
     # A formal label is stronger than a stated top, which is stronger than a
     # passing inline module reference.
-    for counts in (label_counts, stated_counts, inline_counts):
+    for counts in (label_counts, stated_counts):
         if counts:
             return sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[0][0]
+    if interface_names:
+        # Multiple IP interface subjects do not identify the design's top.
+        return next(iter(interface_names)) if len(interface_names) == 1 else None
+    if inline_counts:
+        return sorted(inline_counts.items(), key=lambda kv: (-kv[1], kv[0]))[0][0]
     return None
 
 

@@ -426,3 +426,37 @@ def test_l2_complete_body_reaches_expert_but_missing_tail_is_rejected(tmp_path):
     bad = expert.converge_ai_expectation(tmp_path, expectation)
     assert bad["usable"] and bad["met"] is False, bad
     assert bad["missing_tokens"] == [tail], bad
+
+
+@pytest.mark.parametrize("target", ["packet_engine", "sha256"])
+def test_phase1_comportable_module_target_outranks_helper(tmp_path, target):
+    from programs import phase1_doc_one_shot_runner as producer
+    docs = {name: text.replace("`packet_engine`", f"`{target}`")
+            for name, text in _load_fixture("comportable_module_target").items()}
+    producer.gen_l1_datasheet(tmp_path, docs)
+    result = producer.gen_l9_integration_spec(tmp_path, docs, {})
+    doc = json.loads(result.path.read_text())
+    assert doc["top_module"] == target
+    assert doc["top_module_status"] == "declared_in_input"
+
+
+def test_phase1_comportable_module_target_does_not_override_explicit_top():
+    from programs import phase1_doc_one_shot_runner as producer
+    docs = _load_fixture("comportable_module_target")
+    docs["owner.md"] = "The top module is `system_top`."
+    assert producer._doc_module_name_label_or_inline(docs) == "system_top"
+
+
+def test_phase1_comportable_module_target_conflicts_remain_unselected():
+    from programs import phase1_doc_one_shot_runner as producer
+    docs = _load_fixture("comportable_module_target")
+    docs["second.md"] = "the module **`other_engine`** has the following hardware interfaces defined"
+    assert producer._doc_module_name_label_or_inline(docs) is None
+
+
+def test_phase1_comportable_module_target_survives_preceding_url():
+    from programs import phase1_doc_one_shot_runner as producer
+    text = ("Referring to [interface convention](https://example.org/convention), "
+            "the module **`sha256`** has the following hardware interfaces defined")
+    assert producer._doc_module_name_label_or_inline({"interfaces.md": text}) == "sha256"
+    assert producer._doc_module_name_label_or_inline({"interfaces.md": "// " + text}) is None
