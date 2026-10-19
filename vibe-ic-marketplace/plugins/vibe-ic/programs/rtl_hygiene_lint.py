@@ -3926,11 +3926,31 @@ def rule_continuous_vs_procedural_driver(src: str, path: str) -> List[Finding]:
                 r'\bassign\b[^;]*;',
                 lambda m: ''.join('\n' if c == '\n' else ' ' for c in m.group(0)),
                 body)
+            # Reuse the statement-level assignment classifier. The lexical
+            # block tail can include a following declaration whose initializer
+            # compares `signal <= limit`; that is a read, not a second driver.
+            assigned = _procedural_assigned_lhs(body_noassign)
+            # A for header is the exception to parenthesized reads: its first
+            # and third clauses contain procedural writes. Do not include the
+            # middle condition, or relational RHS operands in either clause.
+            for loop in re.finditer(r'\bfor\s*\(', body_noassign):
+                header = _module_ports.extract_balanced(body_noassign, loop.end() - 1)
+                if header is None:
+                    continue
+                clauses = _module_ports.split_top_level(header[0], separator=';')
+                if len(clauses) != 3:
+                    continue
+                for clause in (clauses[0], clauses[2]):
+                    for statement in _module_ports.split_top_level(clause):
+                        lhs = re.match(r'\s*([A-Za-z_]\w*)\s*(?:\[[^\]]+\]\s*)*'
+                                       r'(?:<=|=(?!=))', statement)
+                        if lhs:
+                            assigned.add(lhs.group(1))
             for am in re.finditer(
                     r'(?<![<>!=])\b([A-Za-z_]\w*)\s*(?:\[[^\]]+\])?\s*(?:<=|=)(?!=)',
                     body_noassign):
                 nm = am.group(1)
-                if nm in VERILOG_KEYWORDS:
+                if nm in VERILOG_KEYWORDS or nm not in assigned:
                     continue
                 proc_lhs.add(nm)
                 # report at the procedural-assignment site (where iverilog points)
@@ -6982,14 +7002,22 @@ def _native_driver_view(files, top, defines, parameters, include_dirs, output_di
                'native_returncode': None, 'transport_returncode': None}
     def quote(value):
         return '"' + str(value).replace('\\', '\\\\').replace('"', '\\"') + '"'
-    # -nosynthesis prevents Yosys from silently introducing a compile define
-    # that the caller did not select. There is no guessed active branch.
-    read = 'read_verilog -sv -nosynthesis ' + ' '.join(
+    # SystemVerilog needs the same native language frontend as synthesis.
+    # Both paths disable the implicit synthesis define: only caller-selected
+    # defines and parameters determine the elaborated driver configuration.
+    slang = any(p.suffix == '.sv' for p in files)
+    prefix = ('read_slang --keep-hierarchy --single-unit --no-synthesis-define '
+              f'--top {top} ' if slang else 'read_verilog -sv -nosynthesis ')
+    read = prefix + ' '.join(
         ['-D' + d for d in defines]
+        + (['-G' + p for p in parameters] if slang else [])
         # Yosys consumes the -I suffix literally, including any quote marks.
-        + ['-I' + str(p) for p in include_dirs] + [quote(p) for p in files])
+        + ['-I' + str(p) for p in include_dirs]
+        # read_slang receives literal quotes, unlike read_verilog. Refuse
+        # unrepresentable path tokens below rather than alter the source path.
+        + [str(p) if slang else quote(p) for p in files])
     commands = [read]
-    for parameter in parameters:
+    for parameter in ([] if slang else parameters):
         name, value = parameter.split('=', 1)
         commands.append(f'chparam -set {name} {value} {top}')
     native_json = work / 'design.json'
@@ -6998,6 +7026,10 @@ def _native_driver_view(files, top, defines, parameters, include_dirs, output_di
     script = work / 'elaborate.ys'
     atomic_write_text(script, ';\n'.join(commands) + '\n')
     try:
+        if slang and any(any(c.isspace() or c in ';"\\' for c in str(p))
+                         for p in [*files, *include_dirs]):
+            raise ValueError('native read_slang cannot represent the selected source/include '
+                             'path token; driver proof NOT_MEASURED')
         if any(any(c.isspace() for c in str(p)) for p in include_dirs):
             raise ValueError('native Yosys -Idir cannot represent an include directory '
                              'containing whitespace; driver proof NOT_MEASURED')
