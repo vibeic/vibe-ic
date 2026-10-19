@@ -1284,6 +1284,9 @@ def reset_control_mapping(netlist: dict, raw: Optional[dict], top: str,
         result["unresolved"] += raw_census["latch"] + raw_census["memory"] + raw_census["unclassified"]
         aliases = {}
         raw_drivers = _drivers(raw_mod)
+        raw_reset_bit, _ = _port_bit(raw_mod, signal)
+        raw_reset_cone = _cone(raw_mod, raw_reset_bit) if raw_reset_bit is not None else set()
+        raw_independent, raw_dependent = {}, set()
         raw_q = {q for _, c, k in _cells(raw_mod) if k == "ff" for q in _bits(c, "Q")}
 
         def literal_undef(bit):
@@ -1323,17 +1326,50 @@ def reset_control_mapping(netlist: dict, raw: Optional[dict], top: str,
                     aliases.setdefault(qb, set()).add(other[i])
         for name, cell, kind in _cells(raw_mod):
             if kind == "ff":
-                for i, qb in enumerate(cell.get("connections", {}).get("Q") or []):
+                connections = cell.get("connections") or {}
+                directions = cell.get("port_directions") or {}
+                pins = {p: list(bits) for p, bits in connections.items()
+                        if directions.get(p) == "input"}
+                known_inputs = (directions.get("Q") == "output" and pins and
+                    all(directions.get(p) == "input" for p in connections if p != "Q"))
+                no_reset_path = (raw_reset_bit is not None and known_inputs and
+                    not raw_reset_cone.intersection(b for bits in pins.values() for b in bits
+                                                    if isinstance(b, int)))
+                for i, qb in enumerate(connections.get("Q") or []):
                     mapped = aliases.get(qb, set())
+                    for current in mapped:
+                        if len(mapped) == 1 and no_reset_path:
+                            raw_independent.setdefault(current, []).append({
+                                "cell": name, "q_index": i, "raw_q": qb,
+                                "raw_input_pins": pins})
+                        else:
+                            raw_dependent.add(current)
                     identities.append({"cell": name, "q_index": i,
                                        "raw_q": qb, "current_q": sorted(mapped),
                                        "literal_undef_in_transition": qb in undef_q})
                     if qb in undef_q:
                         for row in rows:
                             if row["q"] in mapped:
+                                if row.get("unsupported"):
+                                    row["pre_undef_unsupported"] = row["unsupported"]
                                 row["unsupported"] = "literal-X/undef retained from raw next-state transition"
                     if len(mapped) != 1:
                         result["unresolved"].append(f"{name}.Q[{i}]: missing/ambiguous current Q identity")
+        for row in rows:
+            # A literal-undef VALUE cannot prove a reset force. It can still
+            # have a closed reset-INDEPENDENCE answer: every raw identity's
+            # complete D/control/clock pin set is outside the reset fan-out.
+            # Use the pre-cleanup twin, never an optimized-away reset path.
+            # Current Q remains a cut just as in the paired transition model.
+            if (row.get("unsupported") == "literal-X/undef retained from raw next-state transition"
+                    and not row.get("pre_undef_unsupported") and not row["reset_reaches"]
+                    and row["q"] in raw_independent and row["q"] not in raw_dependent):
+                row["raw_reset_independence"] = {
+                    "rule": "RAW_NEXT_STATE_RESET_INDEPENDENCE",
+                    "scope": "reset path only; native undef value remains unsupported",
+                    "raw_reset_bit": raw_reset_bit,
+                    "raw_identities": raw_independent[row["q"]],
+                    "current_q": row["q"], "checked_pins": "all raw input pins including CLK"}
     result["raw_identities"] = identities
     work_dir.mkdir(parents=True, exist_ok=True)
     model_path = work_dir / "transition_pair.json"
@@ -1436,7 +1472,10 @@ def reset_control_mapping(netlist: dict, raw: Optional[dict], top: str,
             for arm in (0, 1) if f"priority_domain{arm}" in a]
         role_proofs += [a[f"priority_valid{arm}"] for arm in (0, 1)
                         if f"priority_valid{arm}" in a]
-        if row.get("unsupported") or rc or not a or "UNKNOWN" in a.values():
+        if row.get("raw_reset_independence"):
+            row["classification"] = "NO_DEPENDENCE"
+            row["reason"] = "all raw next-state input pins have no declared reset path; undef value retained"
+        elif row.get("unsupported") or rc or not a or "UNKNOWN" in a.values():
             row["reason"] = row.get("unsupported") or f"native transition query unavailable (rc={rc})"
         elif any(a[k] != "NO_UNDEF" for k in ("undef0", "undef1")):
             row["reason"] = "literal-X or undefined next-state cofactor"
