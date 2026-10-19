@@ -497,6 +497,9 @@ def _check_professional_execution(tb: Path, dat: Path) -> Optional[str]:
                 or summary != record.get("test_denominator")):
             return "instrumented Python source/JUnit is missing, changed, failed, skipped or zero-test"
         audit = functional_stimulus_audit(tb)
+        if (audit.get('helper_sources', []) !=
+                (record.get('functional_stimulus') or {}).get('helper_sources', [])):
+            return 'instrumented same-bundle helper source closure is missing or changed'
         activity = _professional_input_activity(dat, plan["top"], audit["driven"])
         if not activity or activity != record.get("observed_functional_input_toggles"):
             return "tool data recorded no matching top-level functional-input movement"
@@ -2087,6 +2090,15 @@ def _professional_python_audit(tb: Path) -> Dict[str, Any]:
             except (ValueError, TypeError):
                 dynamic.add(name)
     reads.update(_professional_local_helper_reads(tree, {p['name'] for p in ports}))
+    if not reads:
+        from _professional_helper_observation import asserted_helper_observations
+        helper = asserted_helper_observations(
+            tb, {p['name'] for p in ports}, scope_nodes=_python_scope_nodes,
+            bound_names=_python_bound_names, data_inputs=data_inputs)
+        if helper['reads'] and helper['sources']:
+            reads.update(helper['reads'])
+            out['helper_sources'] = helper['sources']
+            dynamic.update(set(helper['driven']) & data_inputs)
     if not reads or not any(isinstance(n, ast.Assert) for n in ast.walk(tree)):
         out["reason"] = "no observed DUT read and self-check assertion in the Python source"
         return out
