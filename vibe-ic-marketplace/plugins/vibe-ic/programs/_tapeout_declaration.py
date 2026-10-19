@@ -132,6 +132,7 @@ fixed strings are upstream's own variable names and this flow's relative paths.
 from __future__ import annotations
 
 import json
+import math
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -433,7 +434,8 @@ _2B: Tuple[Question, ...] = (
         "pad_edge_spacing_um", SECTION_PAD_RING,
         "How many microns from the die edge to the IO row?",
         "number", "pad_ring_gen", (DELIVERABLE_DIE,),
-        note="`PAD_EDGE_SPACING`."),
+        note="`PAD_EDGE_SPACING`. Finite and nonnegative; zero is an "
+             "explicit edge-to-row distance, not an unanswered question."),
     Question(
         "pad_rotations", SECTION_PAD_RING,
         "What orientation do the pads take? "
@@ -1112,6 +1114,15 @@ def validate(doc: Any) -> List[Dict[str, Any]]:
                 out.append(_refusal(
                     RULE_POINT_INVALID,
                     f"{q.key!r} must be [x, y] in microns", key=q.key))
+        elif q.kind == "number" and q.key == "pad_edge_spacing_um":
+            # Check only floats for finiteness: JSON integers have no infinity,
+            # and converting a large valid integer to float can overflow.
+            if (not _is_number(v) or v < 0
+                    or (isinstance(v, float) and not math.isfinite(v))):
+                out.append(_refusal(
+                    RULE_NUMBER_INVALID,
+                    f"{q.key!r} must be a finite nonnegative number, got {v!r}",
+                    key=q.key))
         elif q.kind == "number":
             if not _is_number(v) or v <= 0:
                 out.append(_refusal(
