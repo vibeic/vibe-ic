@@ -15,6 +15,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 PROGRAMS = Path(__file__).resolve().parents[1]
 if str(PROGRAMS) not in sys.path:
     sys.path.insert(0, str(PROGRAMS))
@@ -86,16 +88,24 @@ def _run(project: Path):
     return out.returncode, doc
 
 
-def _stage_drive(project: Path, analysis_top: str, *, mutate_chip_top: str = ""):
+def _stage_drive(project: Path, analysis_top: str, *, record_state: str = "full",
+                 with_drive: bool = True):
     """Stage a design SDC and exercise the exact Step-23 consumer."""
     import flow_compliance_check as FC
 
     pad_record = project / SE.IO_PAD_RECORD
-    pad = json.loads(pad_record.read_text())
-    pad.update(core_module="neutral_core", chip_top_module="neutral_chip")
-    pad_record.write_text(json.dumps(pad))
-    staged = ("create_clock -name c -period 10 [get_ports clk]\n"
-              "set_input_transition 0.3 [all_inputs]\n")
+    if record_state == "absent":
+        pad_record.unlink(missing_ok=True)
+    else:
+        pad = json.loads(pad_record.read_text())
+        if record_state in ("full", "stale"):
+            pad.update(core_module="neutral_core", chip_top_module="neutral_chip")
+        elif record_state != "sparse":
+            raise AssertionError(f"unknown pad record state {record_state}")
+        pad_record.write_text(json.dumps(pad))
+    staged = "create_clock -name c -period 10 [get_ports clk]\n"
+    if with_drive:
+        staged += "set_input_transition 0.3 [all_inputs]\n"
     text, record = SE.staged_sdc_pad_input_drive(
         project, staged, "input/constraints/neutral.sdc",
         analysis_top=analysis_top)
@@ -103,9 +113,9 @@ def _stage_drive(project: Path, analysis_top: str, *, mutate_chip_top: str = "")
     deck = project / DECK
     deck.parent.mkdir(parents=True, exist_ok=True)
     deck.write_text(text)
-    if mutate_chip_top:
+    if record_state == "stale":
         changed = json.loads(pad_record.read_text())
-        changed["chip_top_module"] = mutate_chip_top
+        changed["chip_top_module"] = "different_chip"
         pad_record.write_text(json.dumps(changed))
     rc, gate = _run(project)
     step23 = FC.check_step(project, _step23_only(), {})
@@ -208,12 +218,45 @@ def test_declared_drive_refuses_a_changed_pad_boundary_record(tmp_path):
     """#3269: a DECLARED line cannot outlive the DIE boundary record whose
     recorded chip top made that declaration applicable."""
     _, record, rc, gate, step23 = _stage_drive(
-        _die(tmp_path), "neutral_chip", mutate_chip_top="different_chip")
+        _die(tmp_path), "neutral_chip", record_state="stale")
     assert record["verdict"] == "DECLARED"
     assert gate["verdict"] == "NOT_MEASURED", gate
     assert rc == 2
     assert step23.status == "NOT_MEASURED"
     assert "different" in gate["reason"]
+
+
+@pytest.mark.parametrize("record_state", ["absent", "sparse", "full", "stale"])
+@pytest.mark.parametrize("with_drive", [False, True], ids=["no-sdc", "sdc"])
+@pytest.mark.parametrize("analysis_top", ["neutral_core", "neutral_chip"],
+                         ids=["core", "chip"])
+def test_pad_drive_boundary_identity_matrix(
+        tmp_path, record_state, with_drive, analysis_top):
+    """#3269 invariant matrix over producer identity, SDC tier, and boundary.
+
+    Only a full, unchanged chip identity admits DECLARED/PDK_IO_TIER. A core
+    identity is explicitly not a pad boundary; absent, sparse, and stale
+    identities remain unresolved at the actual Step-23 consumer.
+    """
+    _, record, rc, gate, step23 = _stage_drive(
+        _die(tmp_path), analysis_top, record_state=record_state,
+        with_drive=with_drive)
+    complete = record_state in ("full", "stale")
+    if not complete:
+        producer_verdict = "NOT_MEASURED"
+    elif analysis_top == "neutral_core":
+        producer_verdict = "NOT_APPLICABLE"
+    elif with_drive:
+        producer_verdict = "DECLARED"
+    else:
+        producer_verdict = "PDK_IO_TIER"
+    gate_verdict = ("PASS" if record_state == "full"
+                    and producer_verdict in ("DECLARED", "PDK_IO_TIER")
+                    else "NOT_MEASURED")
+    assert gate["verdict"] == gate_verdict, gate
+    assert rc == {"PASS": 0, "NOT_MEASURED": 2}[gate_verdict]
+    assert step23.status == gate_verdict
+    assert record["verdict"] == producer_verdict, record
 
 
 def test_an_absent_record_on_a_die_is_rc2(tmp_path):

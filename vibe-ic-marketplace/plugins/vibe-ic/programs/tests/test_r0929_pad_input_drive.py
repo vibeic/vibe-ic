@@ -610,7 +610,8 @@ def test_a_fresh_die_run_carries_the_io_bracket_into_the_pnr_deck(tmp_path, monk
     step7_deck = (proj / S7._record(proj)["path"]).read_text()
     assert "NOT_MEASURED: OFFCHIP_INPUT_DRIVE" in step7_deck
     # step_pnr's pad-ring producer writes its record (the IO views it linked)
-    _io_record(proj, [_io_lib(tmp_path, "ss")])
+    _io_record(proj, [_io_lib(tmp_path, "ss")],
+               core_module="neutral_core", chip_top_module=S7.TOP)
     got = T.asic_sdc_for_pnr(p3, proj, S7.TOP, pdk, "some-container")
     assert got["regenerated"] and "@io_pad_record" in got["regenerated"]
     rec = _record(proj)
@@ -653,7 +654,8 @@ def test_step7_with_a_staged_sdc_on_a_die_resolves_and_rewrites_the_record(tmp_p
     (proj / "input/constraints").mkdir(parents=True)
     (proj / "input/constraints/clock.sdc").write_text(
         "create_clock -name core -period 10 [get_ports clk]\n")
-    _io_record(proj, [_io_lib(tmp_path, "ss")])
+    _io_record(proj, [_io_lib(tmp_path, "ss")],
+               core_module="neutral_core", chip_top_module=S7.TOP)
     stale = proj / _REPORT
     stale.write_text(json.dumps({"verdict": "DECLARED", "sdc_lines": ["x"]}))
     pdk = S7._pdk(monkeypatch)

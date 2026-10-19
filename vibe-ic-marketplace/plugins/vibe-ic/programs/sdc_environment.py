@@ -539,12 +539,15 @@ def _pad_analysis_boundary(project: Path, analysis_top: str
         record = json.loads(raw)
         basis["record_sha256"] = hashlib.sha256(raw).hexdigest()
     except (OSError, ValueError, AttributeError):
+        if analysis_top:
+            basis["why"] = "pad producer record is absent or unreadable"
         return classified("UNSPECIFIED" if not analysis_top else "UNRECORDED")
     if not analysis_top:
         return classified("UNSPECIFIED")
     core = record.get("core_module") if isinstance(record, dict) else None
     chip = record.get("chip_top_module") if isinstance(record, dict) else None
     if not core and not chip:
+        basis["why"] = "pad producer boundary identity is absent"
         return classified("UNRECORDED")
     basis.update(core_module=core, chip_top_module=chip)
     if not isinstance(core, str) or not core or not isinstance(chip, str) or not chip:
@@ -606,7 +609,7 @@ def _pad_input_drive(project: Path, values: Dict[str, Tuple[str, str]],
     cell = out.pop("set_driving_cell", None)
     record: Dict[str, object] = {"schema": PAD_INPUT_DRIVE_SCHEMA,
                                  "applies": True, **identity}
-    if boundary_kind == "UNKNOWN":
+    if boundary_kind in ("UNKNOWN", "UNRECORDED"):
         if cell:
             record["refused_core_driving_cell"] = {"value": cell[0],
                                                    "source": cell[1]}
@@ -728,12 +731,12 @@ def staged_sdc_pad_input_drive(project: Path, text: str, staged_rel: str,
 
     At a known DIE boundary, a staged deck that itself sets
     ``set_input_transition`` or ``set_driving_cell`` has DECLARED the drive
-    (its own lines are the evidence). A stale or unknown analysis boundary
-    stays NOT_MEASURED even if the staged deck carries such a command: an SDC
-    command cannot prove whether it applies to core pins or bond pads. One that
-    sets neither gets the L9 declaration, else the PDK IO bracket, else
-    NOT_MEASURED, appended to the deck; the record is written either way, so a
-    record from an earlier run can never stand for this deck.
+    (its own lines are the evidence). An absent, incomplete, stale, or unknown
+    analysis boundary stays NOT_MEASURED even if the staged deck carries such a
+    command: an SDC command cannot prove whether it applies to core pins or
+    bond pads. One that sets neither gets the L9 declaration, else the PDK IO
+    bracket, else NOT_MEASURED, appended to the deck; the record is written
+    either way, so a record from an earlier run can never stand for this deck.
     """
     _, record = _pad_input_drive(project, {}, container, to_container_path,
                                  analysis_top=analysis_top)
@@ -743,7 +746,7 @@ def staged_sdc_pad_input_drive(project: Path, text: str, staged_rel: str,
            if re.match(r"\s*(set_input_transition|set_driving_cell)\b", ln)]
     boundary = record.get("boundary")
     if (isinstance(boundary, dict)
-            and boundary.get("classification") == "UNKNOWN"):
+            and boundary.get("classification") in ("UNKNOWN", "UNRECORDED")):
         if own:
             record["refused_staged_sdc_lines"] = own
         lines = render_pad_input_drive(record, time_scale)
