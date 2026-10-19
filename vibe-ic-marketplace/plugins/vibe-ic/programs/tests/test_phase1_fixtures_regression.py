@@ -119,6 +119,34 @@ def test_phase1_comportable_struct_bundle_does_not_change_physical_pins(tmp_path
     assert all("interface_contract" not in p for p in [ready, data])
 
 
+@pytest.mark.parametrize("type_first", [False, True])
+def test_phase1_named_port_type_reaches_l9_without_scalar_coercion(tmp_path, type_first):
+    from programs.phase1_doc_one_shot_runner import gen_l1_datasheet, gen_l9_integration_spec
+    from programs._specrtl_common import extract_spec_contract
+    docs = {"interfaces.md": """| Signal | Direction | Type | Description |
+|:--|:--|:--|:--|
+| ready_o | output | logic | Scalar ready |
+| reply_i | input | transport_pkg::reply_t | Structured response |
+"""}
+    if type_first:
+        docs["interfaces.md"] = """| Signal | Type | Direction | Description |
+|:--|:--|:--|:--|
+| ready_o | logic | output | Scalar ready |
+| reply_i | transport_pkg::reply_t | input | Structured response |
+"""
+    l1 = json.loads(Path(gen_l1_datasheet(tmp_path, docs).path).read_text())
+    l9 = json.loads(Path(gen_l9_integration_spec(tmp_path, docs, {}).path).read_text())
+    for pins in [l1["pin_table"], l9["ports"], l9["top_ports"], l9["top_module_pins"]]:
+        rows = {p["name"]: p for p in pins}
+        assert rows["reply_i"].get("type_ref") == "transport_pkg::reply_t"
+        assert rows["reply_i"].get("width") is None
+        assert rows["reply_i"]["width_symbolic"] == "transport_pkg::reply_t"
+        assert rows["ready_o"].get("type_ref") == "logic"
+        assert rows["ready_o"]["width"] == 1
+    contract = extract_spec_contract(json.dumps(l9), is_json=True, confirm=False)
+    assert next(p for p in contract.ports if p.name == "reply_i").width == 0
+
+
 @pytest.mark.parametrize("project,expected", sorted(_EXPECTED.items()))
 def test_phase1_picker_matches_verifier_benchmark(
         project: str, expected: str) -> None:

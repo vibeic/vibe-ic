@@ -5040,6 +5040,17 @@ def _v0_3_2_classify_pin_header(cells: List[str]) -> Optional[Dict[str, int]]:
             roles["description"] = i
     if "name" not in roles or "direction" not in roles:
         return None
+    # With both Direction and Type, Type is a data type, not a synonym for
+    # direction. Retain Type-as-direction compatibility for older two-column
+    # tables, but let an explicit direction header take precedence.
+    explicit_direction = next((i for i, cell in enumerate(cells)
+        if (cell or "").strip(" *`").lower() in _V0_3_2_HEADER_DIR_TOKENS
+        and (cell or "").strip(" *`").lower() != "type"), None)
+    if explicit_direction is not None:
+        roles["direction"] = explicit_direction
+    for i, raw in enumerate(cells):
+        if (raw or "").strip(" *`").lower() in {"type", "data type", "datatype"} and i != roles["direction"]:
+            roles["type_ref"] = i
     return roles
 
 
@@ -5214,6 +5225,7 @@ def _v0_3_2_emit_pins_from_gfm_tables(text: str):
     for roles, rows, ncols in _v0_3_2_iter_gfm_pin_tables(text):
         name_i = roles["name"]
         dir_i = roles["direction"]
+        type_i = roles.get("type_ref")
         width_i = roles.get("width")
         desc_i = roles.get("description")
         for cells in rows:
@@ -5268,6 +5280,8 @@ def _v0_3_2_emit_pins_from_gfm_tables(text: str):
                     "name": _split_nm,
                     "direction": dir_full,
                     "width": width_arg,
+                    "type_ref": ((cells[type_i] or "").strip(" *`").strip()
+                                 if type_i is not None and type_i < len(cells) else None),
                     "description": desc_arg,
                     "source_row": " | ".join(cells)[:120],
                 }
@@ -21953,6 +21967,7 @@ def gen_l1_datasheet(project: Path,
                  source_row: str = "",
                  optional: Optional[bool] = None,
                  interface_contract: Optional[dict] = None,
+                 type_ref: Optional[str] = None,
                  ) -> None:
         """v1.6.248 — shared pin-emit helper. Used by the legacy
         `input|output|inout` keyword scan AND the new RST grid /
@@ -22059,6 +22074,14 @@ def gen_l1_datasheet(project: Path,
                 entry["width_symbolic"] = w_sym
         if description:
             entry["description"] = description
+        if type_ref:
+            entry["type_ref"] = type_ref
+            if not width:
+                if type_ref in {"logic", "bit", "wire", "reg"}:
+                    entry.update(width=1, msb=0, lsb=0)
+                else:
+                    entry["width"] = None
+                    entry["width_symbolic"] = type_ref
         # v0.3.4 — ORGANIC #491 R4. Doc-declared optionality survives
         # to L1.pin_table (and from there to L9.top_ports) so the
         # L9↔RTL consistency gate can treat a doc-optional pin absent
@@ -22083,9 +22106,11 @@ def gen_l1_datasheet(project: Path,
         if (entry.get("interface_contract", {}).get("type_ref")
                 and not prev.get("interface_contract", {}).get("type_ref")):
             new_score = max(new_score, prev_score + 1)
+        if entry.get("type_ref") and not prev.get("type_ref"):
+            new_score = max(new_score, prev_score + 1)
         winner, loser = (entry, prev) if new_score > prev_score else (prev, entry)
         for k in ("width", "msb", "lsb", "width_symbolic",
-                  "description", "io_standard"):
+                  "description", "io_standard", "type_ref"):
             if winner.get(k) in (None, "", "see datasheet") \
                     and loser.get(k) not in (None, "", "see datasheet"):
                 winner[k] = loser[k]
@@ -22094,6 +22119,10 @@ def gen_l1_datasheet(project: Path,
         # merged entry keeps it.
         if loser.get("optional") and not winner.get("optional"):
             winner["optional"] = True
+        if winner.get("type_ref") and winner.get("width_symbolic") == winner["type_ref"]:
+            winner["width"] = None
+            winner.pop("msb", None)
+            winner.pop("lsb", None)
         if loser.get("interface_contract") or winner.get("interface_contract"):
             # The richer table type wins over an earlier bus bullet's unknown
             # type, irrespective of which candidate wins the pin score.
@@ -22409,6 +22438,7 @@ def gen_l1_datasheet(project: Path,
                 extraction_strategy="gfm_multitable_header_role_v0_3_2",
                 source_row=_row_v032.get("source_row") or "",
                 optional=_row_v032.get("optional"),
+                type_ref=_row_v032.get("type_ref"),
             )
             if len(ev) < 24:
                 ev.append({
@@ -51030,7 +51060,7 @@ def gen_l9_integration_spec(project: Path,
             # typed-width fields so the L9↔RTL gate sees doc-declared
             # optionality on L9.top_ports too.
             for _k in ("width", "msb", "lsb", "width_symbolic",
-                       "optional", "interface_contract"):
+                       "optional", "interface_contract", "type_ref"):
                 _v = p.get(_k)
                 if _v is not None:
                     entry_l9[_k] = _v
@@ -63012,7 +63042,7 @@ def _promote_l1_pins_to_l9_ports(
         es = p.get("extraction_strategy")
         if es:
             entry["extraction_strategy"] = es
-        for _k in ("width", "msb", "lsb", "width_symbolic", "optional", "interface_contract"):
+        for _k in ("width", "msb", "lsb", "width_symbolic", "optional", "interface_contract", "type_ref"):
             _v = p.get(_k)
             if _v is not None:
                 entry[_k] = _v

@@ -89,3 +89,11 @@ class TestParamWidth:
             '{"ports":[{"name":"a","dir":"input","width":"WB_AW"}]}',
             is_json=True, confirm=False)
         assert c.ports[0].width == C.WIDTH_UNKNOWN
+
+    def test_projected_type_without_literal_width_remains_unknown(self):
+        c = C.extract_spec_contract(
+            '{"ports":[{"name":"reply_i","dir":"input",'
+            '"type_ref":"transport_pkg::reply_t",'
+            '"width_symbolic":"transport_pkg::reply_t"}]}',
+            is_json=True, confirm=False)
+        assert c.ports[0].width == 0

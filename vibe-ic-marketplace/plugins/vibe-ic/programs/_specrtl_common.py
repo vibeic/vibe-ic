@@ -1584,6 +1584,8 @@ def _json_port_width(d: dict) -> int:
     width (a non-integer string like `WB_AW` / `DATA_WIDTH-1:0`) is UNKNOWN, not
     a literal 1 — return 0 (the width-UNKNOWN sentinel) so the width-mismatch
     check skips it rather than asserting a false literal width."""
+    if 'width' not in d and d.get('width_symbolic'):
+        return 0
     w = d.get('width', 1)
     try:
         return int(w)
