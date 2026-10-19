@@ -113,15 +113,23 @@ KNOB_NAMES = ("ic_name", "pdk", "mode")
 
 # This fixed, Expert-authored INPUT is consumed by the normal L9 producer.
 # Its absence is recorded too: adding a first choice must invalidate reuse.
-# Other plugin_input files are not made Phase-1 inputs by this boundary.
+# Other plugin_input files are not made Phase-1 inputs by these boundaries.
 QUALIFIED_OUTPUT_INPUT = "plugin_input/qualified-outputs.json"
+INTERFACE_BINDING_INPUT = "plugin_input/interface-bindings.json"
+INTERFACE_CONTEXT = "plugin_input/interface_context"
+
+
+def _fixed_author_input_hash(project: Path, rel: str) -> Optional[str]:
+    path = Path(project)
+    for part in Path(rel).parts:
+        path = path / part
+        if path.is_symlink():
+            return "INVALID_AUTHOR_SYMLINK"
+    return _sha256(path)
 
 
 def _qualified_output_input_hash(project: Path) -> Optional[str]:
-    path = Path(project) / QUALIFIED_OUTPUT_INPUT
-    if path.is_symlink() or path.parent.is_symlink():
-        return "INVALID_AUTHOR_SYMLINK"
-    return _sha256(path)
+    return _fixed_author_input_hash(project, QUALIFIED_OUTPUT_INPUT)
 
 
 def _oracle_reason(rel: str) -> Optional[str]:
@@ -487,7 +495,7 @@ def docs_snapshot(project: Optional[Path]) -> Dict[str, Optional[str]]:
 
 
 def _input_roots(project: Path) -> List[Path]:
-    roots = [Path(project) / "input"]
+    roots = [Path(project) / "input", Path(project) / INTERFACE_CONTEXT]
     if hasattr(_pl, "input_doc_dir"):
         roots.append(_pl.input_doc_dir(Path(project)))
     return roots
@@ -520,11 +528,13 @@ def input_tree_snapshot(project: Path) -> Dict[str, Tuple[Optional[str], int]]:
                 mt = f.stat().st_mtime_ns
             except OSError:
                 mt = 0
-            out[rel] = (_sha256(f), mt)
-    author = project / QUALIFIED_OUTPUT_INPUT
-    if author.exists() or author.is_symlink():
-        out[QUALIFIED_OUTPUT_INPUT] = (_qualified_output_input_hash(project),
-                                       author.lstat().st_mtime_ns)
+            h = (_fixed_author_input_hash(project, rel)
+                 if rel.startswith(INTERFACE_CONTEXT + "/") else _sha256(f))
+            out[rel] = (h, mt)
+    for rel in (QUALIFIED_OUTPUT_INPUT, INTERFACE_BINDING_INPUT):
+        author = project / rel
+        if author.exists() or author.is_symlink():
+            out[rel] = (_fixed_author_input_hash(project, rel), author.lstat().st_mtime_ns)
     return out
 
 
@@ -571,9 +581,23 @@ def design_input_record(project: Path, io: Dict[str, Set[str]],
             rel = _rel(project, q)
             if rel is not None and not _oracle_reason(rel):
                 listed.add(rel)
-    # Do not broaden plugin_input to an input root or list its other entries.
-    # Recording this file even while absent detects create/change/delete.
-    files.add(QUALIFIED_OUTPUT_INPUT)
+    # Only these two author inputs and the fixed package-context root belong
+    # to Phase 1. Record absent paths too, detecting first admission/addition.
+    files.update((QUALIFIED_OUTPUT_INPUT, INTERFACE_BINDING_INPUT))
+    listed.add(INTERFACE_CONTEXT)
+    # The external elaborator opens package files outside Python's read hook.
+    # Bind the entire fixed context even before the first author manifest, so
+    # a nested provider edit/addition cannot outlive a baseline source roster.
+    context = project / INTERFACE_CONTEXT
+    if context.is_dir() and not context.is_symlink():
+        for q in sorted(context.rglob("*")):
+            rel = q.relative_to(project).as_posix()
+            if _oracle_reason(rel):
+                continue
+            if q.is_symlink() or q.is_file():
+                files.add(rel)
+            elif q.is_dir():
+                listed.add(rel)
     return {"files": sorted(files), "listed_dirs": sorted(listed),
             "flow_written": sorted(flow_written)}
 
@@ -603,8 +627,9 @@ def inputs_digest(project: Path, record: Optional[Dict[str, Any]] = None,
     fw = set(record.get("flow_written") or ())
     parts = []
     for rel in record.get("files") or ():
-        h = (_qualified_output_input_hash(project)
-             if rel == QUALIFIED_OUTPUT_INPUT else _sha256(project / rel))
+        h = (_fixed_author_input_hash(project, rel)
+             if rel in (QUALIFIED_OUTPUT_INPUT, INTERFACE_BINDING_INPUT)
+             or rel.startswith(INTERFACE_CONTEXT + "/") else _sha256(project / rel))
         parts.append(f"f\0{rel}\0{h or 'ABSENT'}")
     for rel in record.get("listed_dirs") or ():
         parts.append(f"d\0{rel}\0{'|'.join(_listing(project, rel, fw))}")

@@ -52668,6 +52668,8 @@ def gen_l9_integration_spec(project: Path,
     # Implementation readers still validate their full synthesis handoff.
     bound = _stgtop.bind_selected_interface(
         project, content, include_synthesis_handoff=False)
+    import interface_bindings
+    bound = interface_bindings.admit(project, bound)
     bound = _admit_qualified_output_input(project, bound)
     return _write_l_doc(
         project, "L9_INTEGRATION_SPEC", bound, evidence,
@@ -64588,6 +64590,8 @@ def main() -> int:
                    help="Exit 1 on TODO stubs OR coverage < 80%%.")
     p.add_argument("--describe-qualified-output-input", action="store_true",
                    help="Print the current typed Expert qualifier INPUT contract; write nothing.")
+    p.add_argument("--describe-interface-binding-input", action="store_true",
+                   help="Print the current source-bound package/interface INPUT contract; write nothing.")
     p.add_argument("--ic-name", default=None,
                    help="ORGANIC #541 — authoritative chip name. When given, "
                         "it OVERRIDES the doc heuristic (CLI > docs) so a "
@@ -64618,14 +64622,19 @@ def main() -> int:
         print(f"ERROR: input/docs/ missing under {project}", file=sys.stderr)
         return 2
 
-    if args.describe_qualified_output_input:
+    if args.describe_qualified_output_input or args.describe_interface_binding_input:
         try:
             l9 = _try_load_l_doc(project, "L9_INTEGRATION_SPEC")
             if not isinstance(l9, dict):
                 raise ValueError("no current L9 port roster to describe")
             current = _stgtop.bind_selected_interface(
                 project, l9, include_synthesis_handoff=False)
-            print(json.dumps(qualified_output_input_contract(project, current),
+            if args.describe_interface_binding_input:
+                import interface_bindings
+                descriptor = interface_bindings.input_contract(project, current)
+            else:
+                descriptor = qualified_output_input_contract(project, current)
+            print(json.dumps(descriptor,
                              indent=2, ensure_ascii=False))
             return 0
         except (OSError, ValueError, TypeError) as exc:

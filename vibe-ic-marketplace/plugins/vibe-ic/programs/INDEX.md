@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1446
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1446)
+- **Total programs (excluding helpers / shims):** 1447
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1447)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1437 |
+| `any` | 1438 |
 
 ## Alphabetical listing
 
@@ -643,6 +643,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `instruction_coverage_measure` | any | — | the INSTRUMENT for the `instruction` coverage dimension (R-0915-131). |
 | `instrument_calibration` | any | — | every instrument is CALIBRATED before it judges. |
 | `integration_spec_audit` | any | — | Deterministic compliance check for integration-spec-gen. |
+| `interface_bindings` | any | — | Explicit source-bound Phase-1 physical interface authoring. |
 | `interface_encoding_audit` | any | — | Detect gray-code vs binary encoding mismatches across module boundaries. |
 | `interlaken_protocol_synth` | any | — | Interlaken protocol synth helper. |
 | `internal_vs_external_timing_check` | any | — | L8 must separate host-side from DUT-side timing. |
@@ -1518,7 +1519,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1437 programs)
+### `any` (1438 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `absence_verdict_names_its_search_space_check` — "not found" must say WHERE it looked.
@@ -2133,6 +2134,7 @@ _(no programs in this group)_
 - `instruction_coverage_measure` — the INSTRUMENT for the `instruction` coverage dimension (R-0915-131).
 - `instrument_calibration` — every instrument is CALIBRATED before it judges.
 - `integration_spec_audit` — Deterministic compliance check for integration-spec-gen.
+- `interface_bindings` — Explicit source-bound Phase-1 physical interface authoring.
 - `interface_encoding_audit` — Detect gray-code vs binary encoding mismatches across module boundaries.
 - `interlaken_protocol_synth` — Interlaken protocol synth helper.
 - `internal_vs_external_timing_check` — L8 must separate host-side from DUT-side timing.

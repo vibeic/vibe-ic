@@ -42,6 +42,13 @@ def evidence(project: Path, step_id: str) -> list[Path]:
                       "input/phase1_prompt.md", "input/phase1_structured.yaml",
                       "input/docs/**/*", "phase1/input_doc/**/*",
                       "plugin_input/qualified-outputs.json",
+                      "plugin_input/interface-bindings.json",
+                      "plugin_input/interface_context/**/*",
+                      "reports/phase1/interface_binding/proof.json",
+                      "reports/phase1/interface_binding/execution.json",
+                      "reports/phase1/interface_binding/type_probe.sv",
+                      "reports/phase1/interface_binding/elaboration.log",
+                      "reports/phase1/interface_binding/measurements.log",
                       "phase1/generated_docs/L*.json",
                       "reports/audit/phase1/expert_parse_track_pack/l_doc_expectations.json")
     if sid == "1":
