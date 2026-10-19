@@ -1,0 +1,41 @@
+{
+  "fixture_scope": "UNIT_SOURCE_ONLY_NOT_CANONICAL_IC",
+  "fields": {
+    "top_module": "port_frame",
+    "top_ports": [
+      {
+        "name": "clk_i",
+        "dir": "input",
+        "width": 1
+      },
+      {
+        "name": "rst_n",
+        "dir": "input",
+        "width": 1
+      },
+      {
+        "name": "data_i",
+        "dir": "input",
+        "width": 8
+      },
+      {
+        "name": "out_o",
+        "dir": "output",
+        "width": 8
+      }
+    ],
+    "clocks": [
+      {
+        "name": "clk_i",
+        "period_ns": 10
+      }
+    ],
+    "reset_domains": [
+      {
+        "name": "rst_n",
+        "polarity": "active_low",
+        "sync": "async"
+      }
+    ]
+  }
+}
