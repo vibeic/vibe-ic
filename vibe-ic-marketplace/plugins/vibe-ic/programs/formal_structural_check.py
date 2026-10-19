@@ -1325,8 +1325,8 @@ def _reset_row_cone_eligibility(model: dict) -> dict:
     total = {"$and", "$or", "$xor", "$xnor", "$not", "$mux", "$eq", "$ne",
              "$eqx", "$nex", "$logic_not", "$logic_and", "$logic_or",
              "$reduce_and", "$reduce_or", "$reduce_xor", "$reduce_xnor",
-             "$reduce_bool", "$add", "$sub", "$shiftx"}
-    # Native add/sub are finite-width total functions. shiftx is total in
+             "$reduce_bool", "$add", "$sub", "$mul", "$shiftx"}
+    # Native add/sub/mul are finite-width total functions. shiftx is total in
     # Yosys's undef-aware value domain (out-of-range bits remain undef).
     # Cone selection never defines those bits: the existing undef queries
     # and every role/priority arm still run with -enable_undef.

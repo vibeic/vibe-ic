@@ -634,6 +634,9 @@ def test_xnor_reduction_preserves_ordinary_data_current_q_and_undef_refusals(tmp
     ("if(rst) q<=0; else q<=(d+en)-(clear);", fsc.PASS),
     ("if(!rst) q<=0; else q<=(d+en)-(clear);", fsc.REFUTED),
     ("if(rst) q<=0; else q<=d[en +: 2];", fsc.NOT_DISCHARGED),
+    pytest.param("if(rst) q<=0; else q<=d*{en,clear};", fsc.PASS, id="multiply-force-high"),
+    pytest.param("if(!rst) q<=0; else q<=d*{en,clear};", fsc.REFUTED, id="multiply-wrong-force"),
+    pytest.param("if(rst) q<=d*(en ? 2'bxx : 2'b11); else q<=d;", fsc.NOT_DISCHARGED, id="multiply-undef"),
 ])
 def test_arithmetic_and_undefined_shift_use_exact_cones_without_new_credit(tmp_path, body, expected):
     _yosys()
@@ -641,7 +644,8 @@ def test_arithmetic_and_undefined_shift_use_exact_cones_without_new_credit(tmp_p
     rtl.write_text(_control_rtl(body))
     rec=fsc.check([rtl], "m", [{"rule":"reset_polarity", "signal":"rst", "value":"active_high"}], tmp_path)
     mapping=rec["claims"][0]["reset_control_mapping"]
-    assert mapping["native_row_cone"]["eligible"], mapping["native_row_cone"]
+    assert mapping["native_row_cone"]["reason"] == "single-driver-total-boolean-dag", mapping["native_row_cone"]
+    assert mapping["native_row_cone"]["eligible"] is True, mapping["native_row_cone"]
     assert rec["verdict"] == expected, rec
     progress=mapping["query_progress"]
     assert progress["completed"] == progress["planned"] and not progress["unknown"], progress
@@ -666,6 +670,9 @@ def test_native_container_queries_use_identity_supervision_not_client_timeout(mo
     "if(rst) q<=0; else q<=(d+en)-clear;",
     "if(!rst) q<=0; else q<=(d+en)-clear;",
     "if(rst) q<=0; else q<=d[en +: 2];",
+    pytest.param("if(rst) q<=0; else q<=d*{en,clear};", id="multiply-force-high"),
+    pytest.param("if(!rst) q<=0; else q<=d*{en,clear};", id="multiply-wrong-force"),
+    pytest.param("if(rst) q<=d*(en ? 2'bxx : 2'b11); else q<=d;", id="multiply-undef"),
 ])
 def test_native_cone_and_whole_model_answers_match_every_identity_and_arm(tmp_path, monkeypatch, body):
     _yosys()
