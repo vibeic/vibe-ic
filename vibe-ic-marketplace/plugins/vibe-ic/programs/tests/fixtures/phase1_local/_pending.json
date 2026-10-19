@@ -273,5 +273,16 @@
     "version_observed": "1.29.96-derived exact source e907cbfc746889bbc0d67d9a4937f711ac5ffd5a",
     "version_lkg": "Not established. This is a frozen neutral current-source counterexample, not a fabricated release regression interval.",
     "fixture_path": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/fixtures/phase1_local/l8_width_role_authority/width_authority.md"
+  },
+  {
+    "issue": 3234,
+    "project": "l8_literal_parameter_owner",
+    "layer": "L8",
+    "field": "L8_RTL_CONSTANTS.parameters[] -> L9_INTEGRATION_SPEC.parameters[]",
+    "expected": "{\"parameters\":[{\"name\":\"TAG_BITS\",\"default\":\"80\"},{\"name\":\"DIGEST_BITS\",\"default\":\"224\"}]}",
+    "actual": "{\"L8_RTL_CONSTANTS.parameters\":[],\"L9_INTEGRATION_SPEC.parameters\":[],\"ordinary_cli_natural_rc\":0}",
+    "version_observed": "1.30.8 exact official 164664a5d7495802fe09f22feb59ed76d79c7d89",
+    "version_lkg": "Not established. Current official source omission, not an invented release regression interval.",
+    "fixture_path": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/fixtures/phase1_local/l8_literal_parameter_owner/literal_parameters.md"
   }
 ]

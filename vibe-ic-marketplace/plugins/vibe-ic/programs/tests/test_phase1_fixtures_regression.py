@@ -553,3 +553,58 @@ def test_l23_fenced_documentation_does_not_declare_security(tmp_path):
     doc = emit_l_doc_skeleton("L23", project_dir=tmp_path)
     assert doc["fields"]["side_channel_mitigation"] == [], doc["fields"]
     assert doc["fields"].get("security_requirements_present", False) is False
+
+
+# #3234: literal defaults must enter the selected module namespace before
+# the existing flat L8-to-L9 mirror; no source confidence is promoted.
+def _l8_literal_owner_emit(tmp_path, text):
+    from programs import phase1_doc_one_shot_runner as D
+    docs = {"literal_parameters.md": text}
+    D.gen_l8_timing_waveform(tmp_path, docs)
+    D.gen_l9_integration_spec(tmp_path, docs, {})
+    D._post_emit_mirror_parameters_to_l9_v1_6_327(tmp_path)
+    generated = tmp_path / "phase1/generated_docs"
+    return [json.loads((generated / name).read_text()) for name in
+            ("L8_RTL_CONSTANTS.json", "L9_INTEGRATION_SPEC.json")]
+
+
+@pytest.mark.parametrize("filename, expected", [
+    ("literal_parameters.md", {"TAG_BITS": "80", "DIGEST_BITS": "224"}),
+    ("03-declared-rtl-widths.md", {"TAG_BITS": "80", "DIGEST_BITS": "224"}),
+    ("04-headed-named-widths.md", {"PACKET_WIDTH_BITS": "72", "SAMPLE_WIDTH_BITS": "24"}),
+    ("05-header-table-widths.md", {"HEADER_BITS": "40", "TRAILER_BITS": "12"}),
+])
+def test_l8_literal_parameter_owner_keeps_declared_names_and_values(tmp_path, filename, expected):
+    fixture = Path(__file__).parent / "fixtures/phase1_local/l8_literal_parameter_owner" / filename
+    for doc in _l8_literal_owner_emit(tmp_path, fixture.read_text()):
+        assert {p["name"]: str(p["default"]) for p in doc["parameters"]} == expected
+
+
+@pytest.mark.parametrize("sibling_first", [True, False])
+def test_l8_literal_parameter_owner_does_not_borrow_sibling_defaults(tmp_path, sibling_first):
+    fixture = Path(__file__).parent / "fixtures/phase1_local/l8_literal_parameter_owner/modules.md"
+    text = fixture.read_text()
+    if not sibling_first:
+        preamble, remainder = text.split("## Sibling module trace_aux", 1)
+        sibling, top = remainder.split("## Selected top module frame_top", 1)
+        text = preamble + "## Selected top module frame_top" + top + "\n## Sibling module trace_aux" + sibling
+    l8, l9 = _l8_literal_owner_emit(tmp_path, text)
+    assert l9["top_module"] == "frame_top"
+    for doc in (l9, l8):
+        actual = {p["name"]: str(p["default"]) for p in doc["parameters"]}
+        assert actual.get("DATA_BITS") == "20"
+        assert set(actual) == {"DATA_BITS"}
+        assert all(p["module_owner"] == "frame_top" for p in doc["parameters"])
+
+
+def test_l8_literal_parameter_owner_multiple_modules_need_source_authority(tmp_path):
+    fixture = Path(__file__).parent / "fixtures/phase1_local/l8_literal_parameter_owner/modules.md"
+    text = fixture.read_text().replace("The selected top module is `frame_top`.\n", "")
+    with pytest.raises(ValueError, match="L8_PARAMETER_OWNER_UNRESOLVED"):
+        _l8_literal_owner_emit(tmp_path, text)
+
+
+def test_l8_literal_parameter_owner_ignores_commented_declarations(tmp_path):
+    text = "```systemverilog\n// parameter integer UNRELATED = 99;\n/* localparam integer OTHER = 17; */\n```\nmodule documentation_only #(\n"
+    for doc in _l8_literal_owner_emit(tmp_path, text):
+        assert doc.get("parameters", []) == []

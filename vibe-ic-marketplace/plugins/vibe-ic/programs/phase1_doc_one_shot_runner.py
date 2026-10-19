@@ -42648,6 +42648,79 @@ def _single_declared_input_clock_port(project: Path) -> Optional[str]:
     return next(iter(names)) if len(names) == 1 else None
 
 
+# #3234: documented literal defaults are scoped before the flat L9 mirror.
+_L8_LITERAL_PARAM_DECL = re.compile(
+    r"\b(?P<kind>parameter|localparam)\s+"
+    r"(?:(?:(?:integer|int|longint|shortint|byte|bit|logic|reg|wire|signed|unsigned)\b"
+    r"|\[[^\]\r\n]+\])\s+)*"
+    r"(?P<name>[A-Za-z_]\w*)\s*=\s*"
+    r"(?P<value>\d+'[bBhHdDoO][0-9a-fA-F_]+|0[xX][0-9a-fA-F]+|\d+)"
+    r"[ \t]*(?=[;,\r\n`]|$)")
+
+def _l8_literal_parameter_rows(extracted: Dict[str, str]) -> List[Dict[str, Any]]:
+    """Keep documented literal defaults inside the selected module namespace.
+
+    A flat L9 parameter environment cannot represent sibling defaults. With
+    multiple documented modules, explicit source authority must select one;
+    otherwise the owning producer refuses rather than choosing an encounter.
+    Standalone declaration snippets without module bodies remain supported.
+    """
+    if not any(_L8_LITERAL_PARAM_DECL.search(_strip_hdl_comments(text or ""))
+               for text in extracted.values()):
+        return []
+    module_start = re.compile(
+        r"(?m)^[ \t]*module(?:[ \t]+(?:automatic|static))?[ \t]+"
+        r"(?P<name>[A-Za-z_]\w*)[ \t]*(?=[#(;])")
+    module_end = re.compile(r"(?m)^[ \t]*endmodule\b")
+    declarations, module_names, selected = [], set(), set()
+    for fname, original in extracted.items():
+        text = _strip_hdl_comments(original or "")
+        for match in _RE_DOC_TOP_MODULE_NAME_LABEL.finditer(text):
+            name = match.group("n1") or match.group("n2") or match.group("n3")
+            if name and _is_valid_explicit_module_name_candidate(name):
+                selected.add(name)
+        for match in _RE_DOC_TOP_MODULE_TOP_IS_NAMED.finditer(text):
+            quoted, bare = match.group("q"), match.group("b")
+            if quoted and _is_valid_explicit_module_name_candidate(quoted):
+                selected.add(quoted)
+            elif bare and _is_valid_top_module_candidate(bare):
+                selected.add(bare)
+        starts = list(module_start.finditer(text))
+        regions = []
+        for index, start in enumerate(starts):
+            end = module_end.search(text, start.end())
+            if end is None or (index + 1 < len(starts) and end.start() > starts[index + 1].start()):
+                raise ValueError("L8_PARAMETER_OWNER_UNRESOLVED: unclosed documented module")
+            owner = start.group("name")
+            module_names.add(owner)
+            regions.append((start.start(), end.end(), owner))
+        for match in _L8_LITERAL_PARAM_DECL.finditer(text):
+            owner = next((name for lo, hi, name in regions if lo <= match.start() < hi), None)
+            declarations.append((fname, match, owner))
+    if not declarations:
+        return []
+    requested = _doc_design_request_module_name(extracted)
+    if requested:
+        selected.add(requested)
+    if len(selected) > 1:
+        raise ValueError("L8_PARAMETER_OWNER_UNRESOLVED: conflicting explicit top modules")
+    top = next(iter(selected)) if selected else (next(iter(module_names)) if len(module_names) == 1 else None)
+    if module_names and top is None:
+        raise ValueError("L8_PARAMETER_OWNER_UNRESOLVED: multiple documented modules require selected top")
+    rows = []
+    for fname, match, owner in declarations:
+        if module_names and owner is None:
+            raise ValueError("L8_PARAMETER_OWNER_UNRESOLVED: literal declaration outside documented module")
+        if owner is not None and owner != top:
+            continue
+        row = {"name": match.group("name"), "default": match.group("value"),
+               "source": fname, "declaration_kind": match.group("kind"),
+               "extraction_strategy": "literal_rtl_parameter_declaration"}
+        if owner is not None:
+            row["module_owner"] = owner
+        rows.append(row)
+    return rows
+
 # v1.6.360 — for #255 P2 ORGANIC. Width-role bigram structural anchor.
 # Pre-v1.6.360 the `_RE_WIDTH_ROLE` bigram matcher emitted generic
 # English nouns (`register`, `address`, `input`, `output`, `word`,
@@ -44415,6 +44488,15 @@ def gen_l8_timing_waveform(project: Path,
     # L5 bullet_kv) and a README H4 lands once at each L doc.
     _l8_parameters: List[Dict[str, Any]] = []
     _l8_param_seen: Set[Tuple[str, str]] = set()
+    for entry in _l8_literal_parameter_rows(extracted):
+        key = (entry["name"].upper(), entry["default"])
+        if key in _l8_param_seen:
+            continue
+        _l8_param_seen.add(key)
+        _l8_parameters.append(entry)
+        _v1_6_395_push_l8_evidence(
+            evidence, entry["source"], f"{entry['name']} = {entry['default']}",
+            entry["extraction_strategy"])
     for fname, text in extracted.items():
         for p_entry in _v1_6_321_extract_design_parameters(text or ""):
             p_name = (p_entry.get("name") or "").strip()
