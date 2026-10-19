@@ -883,6 +883,10 @@ def _render_sdc(top: str, clock_port: str, period_ns: float,
     lines.append("")
     for name, rec in (reset_contract or {}).items():
         lines.append(f"# Reset {name}: {rec['sync']}; semantics alone author no timing cut")
+        for binding in rec.get("domain_bindings", []):
+            lines.append(f"# Reset {name}/{binding['clock']}: assertion={binding['assertion']} "
+                         f"release={binding['release']} to {binding['release_clock']} "
+                         f"stages={binding['release_stages']}; sync summarizes assertion only")
     if reset_contract:
         lines.append("")
     # Pick a short user-friendly clock name
@@ -1298,7 +1302,11 @@ def main(argv: Optional[List[str]] = None) -> int:
               % (_declared, len(dropped_pins)))
 
     try:
+        from _reset_input_semantics import admit_reset_phases
+        phases = admit_reset_phases(project, [l9, _l8_wave], top_ports)
         resets = _reset_contract(l9, _l8_wave, top_ports)
+        for name, bindings in phases.items():
+            resets[name]["domain_bindings"] = bindings
         l19 = _load_json(_pl.generated_docs_dir(project) /
                          "L19_CONSTRAINTS_PDK.json") or {}
         io_max, io_source = _io_delay_max(project, l19, period_ns)

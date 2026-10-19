@@ -144,6 +144,8 @@ def _load_clock_reset(project: Path, ports: List[dict]) -> Dict[str, Any]:
     # domain, so enrich the selected real port from L8 rather than defaulting
     # an unrelated `clk` at 10 ns.
     l8 = _read_json(_gd(project) / "L8_TIMING_WAVEFORM.json") or {}
+    from _reset_input_semantics import admit_reset_phases
+    phases = admit_reset_phases(project, [l9, l8], set(names.values()))
     f8 = l8.get("fields", l8)
     for c in (f8.get("clocks") or f8.get("clock_domains") or []):
         if not isinstance(c, dict) or not c.get("name"):
@@ -170,15 +172,28 @@ def _load_clock_reset(project: Path, ports: List[dict]) -> Dict[str, Any]:
                 active_high = "active_low" not in pol and not (
                     pol == "low")
             active_high = not ("low" in pol)
-            s = str(r.get("sync") or r.get("reset_strategy") or "").lower()
+            legacy = r.get("sync") or r.get("reset_strategy") or ""
+            if not isinstance(legacy, str):
+                raise ValueError("RESET_PHASE_SOURCE_ADMISSION_REFUSED: legacy sync must be a string")
+            s = legacy.lower()
             if "async" in s:
                 sync = False
             break
     # name heuristic: *_n / *n reset is active-low
     if rst and re.search(r"(_n|n)$", rst.lower()):
         active_high = False
-    return {"clk": clk, "rst": rst, "edge": edge, "period_ns": period_ns,
-            "active_high": active_high, "sync": sync}
+    result = {"clk": clk, "rst": rst, "edge": edge, "period_ns": period_ns,
+              "active_high": active_high, "sync": sync}
+    if rst in phases:
+        binding = next((b for b in phases[rst] if b["clock"] == clk), None)
+        if binding is None:
+            raise ValueError("RESET_PHASE_SOURCE_ADMISSION_REFUSED: selected clock is unbound")
+        result.update({"active_high": binding["polarity"] == "active_high",
+                       "sync": binding["assertion"] == "synchronous",
+                       "domain_bindings": phases[rst], "release": binding["release"],
+                       "release_clock": binding["release_clock"],
+                       "release_stages": binding["release_stages"]})
+    return result
 
 
 def _port_width(p: dict) -> int:
@@ -701,7 +716,8 @@ async def _reset(dut):
         for _ in range(3):
             await RisingEdge(getattr(dut, CLK))
         getattr(dut, RST).value = {rst_off}
-    await RisingEdge(getattr(dut, CLK))
+    for _ in range({cr.get('release_stages', 1)}):
+        await RisingEdge(getattr(dut, CLK))
 
 
 def _start_clock(dut):

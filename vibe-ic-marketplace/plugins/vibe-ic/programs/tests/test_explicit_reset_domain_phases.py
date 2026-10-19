@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import json
+import ast
 import sys
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -108,3 +110,83 @@ def test_historical_phase_row_does_not_replace_current_reset_declaration():
             'rst_n is an active-high synchronous reset.\n')
     assert R.reset_semantics('rst_n', text) == {'sync': 'synchronous', 'polarity': 'active_high'}
     assert R.reset_domain_bindings('rst_n', {'reset.md': text}) == []
+
+
+def _consume(project, docs):
+    import professional_tb_gen as T
+    cr = T._load_clock_reset(project, docs['L9_INTEGRATION_SPEC.json']['ports'])
+    cp = subprocess.run([sys.executable, str(PROGRAMS / 'sdc_gen.py'), str(project), '--force'],
+                        capture_output=True, text=True)
+    return cr, cp
+
+
+@pytest.mark.parametrize('depth', [2, 3])
+def test_current_source_phase_admission_positive(tmp_path, depth):
+    text = FIXTURE.read_text().replace('| 2 |', f'| {depth} |')
+    if depth == 3:
+        text = text.replace('two rising clock edges', 'three rising clock edges')
+    docs = _emit(tmp_path, text)
+    cr, cp = _consume(tmp_path, docs)
+    assert cp.returncode == 0, cp.stdout + cp.stderr
+    assert cr['sync'] is False
+    assert cr['release_clock'] == 'clk_i'
+    assert cr['release_stages'] == depth
+    assert len(cr['domain_bindings']) == 2
+    decks = list((tmp_path / 'phase2/stage1/fpga').glob('*.sdc'))
+    assert decks
+    for p in decks:
+        text = p.read_text()
+        assert 'set_false_path' not in text
+        assert f'release=synchronous to clk_i stages={depth}' in text
+        assert f'release=synchronous to clk_aux_i stages={depth}' in text
+    # Exercise the real common-header consumer without a simulator, DUT or
+    # reference TB: its selected-clock post-release wait must use this depth.
+    import professional_tb_gen as T
+    header = ast.parse(T._emit_common_header({'cr': cr, 'top': 'neutral_core',
+                                            'ports': docs['L9_INTEGRATION_SPEC.json']['ports']}))
+    reset = next(n for n in header.body if isinstance(n, ast.AsyncFunctionDef) and n.name == '_reset')
+    assert isinstance(reset.body[-1], ast.For)
+    assert reset.body[-1].iter.args[0].value == depth
+
+
+@pytest.mark.parametrize('mutation', ['assertion', 'depth', 'missing', 'source', 'release_clock',
+                                     'float_depth', 'projection_empty', 'basis', 'direction_and_missing'])
+def test_current_source_phase_admission_refuses(tmp_path, mutation):
+    import professional_tb_gen as T
+    docs = _emit(tmp_path, FIXTURE.read_text())
+    def visit(value):
+        if isinstance(value, dict):
+            if mutation == 'assertion':
+                if 'assertion' in value: value['assertion'] = 'synchronous'
+                if 'sync' in value: value['sync'] = 'synchronous'
+            if mutation in ('depth', 'float_depth') and 'release_stages' in value:
+                value['release_stages'] = 3 if mutation == 'depth' else 2.0
+            if mutation in ('missing', 'direction_and_missing'):
+                value.pop('domain_bindings', None); value.pop('reset_bindings', None)
+            if mutation == 'direction_and_missing' and value.get('name') == 'rst_n':
+                for key in ('direction', 'mode', 'io'):
+                    if key in value: value[key] = 'output'
+            if mutation == 'projection_empty' and 'reset_bindings' in value:
+                value['reset_bindings'] = []
+            if mutation == 'basis' and 'basis' in value:
+                value['basis'][0]['quote'] = 'unrelated current input'
+            if mutation == 'release_clock' and 'release_clock' in value:
+                value['release_clock'] = 'clk_aux_i'
+            for child in value.values(): visit(child)
+        elif isinstance(value, list):
+            for child in value: visit(child)
+    if mutation == 'source':
+        path = tmp_path / 'input/docs/reset.md'
+        path.write_text(path.read_text().replace('| asynchronous |', '| synchronous |'))
+    else:
+        for name, doc in docs.items():
+            visit(doc)
+            (tmp_path / 'phase1/generated_docs' / name).write_text(json.dumps(doc))
+    before = {p: p.read_bytes() for p in (tmp_path / 'phase1/generated_docs').glob('*.json')}
+    cp = subprocess.run([sys.executable, str(PROGRAMS / 'sdc_gen.py'), str(tmp_path), '--force'],
+                        capture_output=True, text=True)
+    assert cp.returncode == 1, cp.stdout + cp.stderr  # Base observes concrete rc0.
+    assert 'RESET_PHASE_SOURCE_ADMISSION_REFUSED' in cp.stdout + cp.stderr
+    with pytest.raises(ValueError, match='RESET_PHASE_SOURCE_ADMISSION_REFUSED'):
+        T._load_clock_reset(tmp_path, docs['L9_INTEGRATION_SPEC.json']['ports'])
+    assert all(p.read_bytes() == data for p, data in before.items())
