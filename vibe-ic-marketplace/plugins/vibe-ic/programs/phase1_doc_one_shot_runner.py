@@ -65262,6 +65262,9 @@ def main() -> int:
             l9 = _try_load_l_doc(project, "L9_INTEGRATION_SPEC")
             if not isinstance(l9, dict):
                 raise ValueError("no current L9 port roster to describe")
+            if l9.get("phase1_step_error"):
+                raise ValueError("failed L9 cannot describe an INPUT contract; "
+                                 "recover the ordinary producer first")
             current = _stgtop.bind_selected_interface(
                 project, l9, include_synthesis_handoff=False)
             if args.describe_interface_binding_input:
