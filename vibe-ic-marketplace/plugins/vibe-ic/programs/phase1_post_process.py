@@ -548,15 +548,21 @@ def input_documents(project_dir: Path) -> List[Path]:
                   if p.is_file() and p.suffix.lower() in _INPUT_DOC_SUFFIXES)
 
 
+def _l23_extract(project_dir: Path) -> Optional[Dict[str, Any]]:
+    """Copy explicit security sections into L23's existing typed records."""
+    from l23_security_requirements_extract import extract_security_requirements
+    return extract_security_requirements(project_dir)
+
+
 def _l24_extract(project_dir: Path) -> Optional[Dict[str, Any]]:
     """L24's requirement rows, via its own extractor module."""
     from l24_signoff_requirements_extract import extract_signoff_requirements
     return extract_signoff_requirements(project_dir)
 
 
-#: layer -> the extractor that fills it from the input. R-0915-38 registers
-#: L24; a layer with no entry keeps the skeleton it has today.
-_LAYER_EXTRACTORS: Dict[str, Any] = {"L24": _l24_extract}
+#: Layer -> source extractor. A layer without an entry keeps its skeleton.
+#: L23 preserves typed source clauses; L24 extracts signoff requirements.
+_LAYER_EXTRACTORS: Dict[str, Any] = {"L23": _l23_extract, "L24": _l24_extract}
 
 
 def _term_in(term: str, lowered_text: str) -> bool:
@@ -726,9 +732,10 @@ def emit_l_doc_skeleton(l_doc_code: str,
         if extractor is not None:
             try:
                 extracted = extractor(Path(project_dir))
-            except Exception:
-                # Fail-open: a crashing extractor must never take the L-doc
-                # emit down. The layer keeps the skeleton it has today.
+            except Exception as exc:
+                # Keep the honest skeleton, while making the declined
+                # extraction visible to the runner and its authoring owner.
+                print(f"LAYER_EXTRACTION_FAILED {l_doc_code}: {exc}", file=sys.stderr)
                 extracted = None
     if extracted:
         fields_template.update(extracted)
@@ -746,6 +753,7 @@ def emit_l_doc_skeleton(l_doc_code: str,
         "evidence": [],
         "extraction_hints": hints,
         "extraction_status": ("DECLARED_ABSENT_FROM_INPUT" if absent
+                              else "PARTIALLY_EXTRACTED" if extracted and str(l_doc_code).upper() == "L23"
                               else "EXTRACTED" if (extracted or matrix)
                               else "NOT_YET_EXTRACTED"),
         "emitted_by": _pmd.emitted_by(
@@ -764,7 +772,19 @@ def emit_l_doc_skeleton(l_doc_code: str,
             f"{len(absent['terms_searched'])} term(s) "
             f"({', '.join(absent['terms_searched'][:6])}...), 0 matched. "
             f"See applicability_evidence for the full scan.")
-    if extracted:
+    if extracted and str(l_doc_code).upper() == "L23":
+        # The runner forwards a dictionary through the canonical write
+        # chokepoint. Keep the source references, rather than the discarded
+        # empty-list skeleton evidence, so source_documents is populated too.
+        evidence: Dict[str, List[Dict[str, str]]] = {}
+        for key in ("key_handling", "attack_surface", "side_channel_mitigation"):
+            for record in extracted.get(key, []):
+                evidence.setdefault(record["source"], []).append({
+                    "literal": record["name"],
+                    "label": f"{key} ({record['evidence']})",
+                })
+        out["evidence"] = evidence
+    elif extracted:
         out["extraction_evidence_scan"] = extracted.get(
             "signoff_requirements_scan")
     if matrix:

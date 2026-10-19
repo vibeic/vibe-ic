@@ -58,6 +58,8 @@ _EXPECTED: dict[str, str] = {
     "benchmark_a":      "EXAMPLE_CHIP",
     # #3106: the native intake project's identity is also pinned.
     "subservient_l2_section_tail": "subservient",
+    "neutral_many_sections": "NeutralCore",
+    "neutral_security": "NeutralCore",
 }
 
 
@@ -426,3 +428,115 @@ def test_l2_complete_body_reaches_expert_but_missing_tail_is_rejected(tmp_path):
     bad = expert.converge_ai_expectation(tmp_path, expectation)
     assert bad["usable"] and bad["met"] is False, bad
     assert bad["missing_tokens"] == [tail], bad
+
+
+@pytest.mark.parametrize("library", [False, True])
+def test_neutral_many_sections_from_native_intake(tmp_path, library):
+    from programs import phase1_doc_one_shot_runner as producer
+    text = _load_fixture("neutral_many_sections")["neutral_many_sections.md"]
+    if library:
+        text += "\nThis transport library supports AXI, APB, UART and I2C.\n"
+    result = producer.gen_l2_frs(tmp_path, {"neutral_many_sections.md": text})
+    rows = json.loads(result.path.read_text())["frs_sections"]
+    assert len(rows) == 70, rows[-1]
+    assert rows[-1]["title"] == "Functional requirement 69"
+    assert "marker_69" in rows[-1]["content"]
+
+
+def test_neutral_security_from_native_intake(tmp_path):
+    from programs.phase1_post_process import emit_l_doc_skeleton
+    text = _load_fixture("neutral_security")["neutral_security.md"]
+    docs = tmp_path / "input/docs"
+    docs.mkdir(parents=True)
+    (docs / "neutral_security.md").write_text(text)
+    doc = emit_l_doc_skeleton("L23", "crypto_accelerator", project_dir=tmp_path)
+    # The existing empty list is the observed wrong value, before testing any
+    # newly populated field or helper. This must bite on the unmodified base.
+    assert len(doc["fields"]["side_channel_mitigation"]) == 1, doc["fields"]
+    assert bool(doc["fields"]["key_handling"]) is True, doc["fields"]
+    records = doc["fields"]["side_channel_mitigation"]
+    assert "first-order masking" in json.dumps(records)
+    assert "neutral_security.md" in json.dumps(records)
+
+
+def test_l23_source_records_reach_canonical_writer_and_typed_consumer(tmp_path):
+    from programs import phase1_doc_one_shot_runner as producer
+    from programs import l23_security_requirements_typed_check as consumer
+    from programs import spi_protocol_synth
+    docs = tmp_path / "input/docs"
+    docs.mkdir(parents=True)
+    text = _load_fixture("neutral_security")["neutral_security.md"]
+    (docs / "neutral_security.md").write_text(text)
+    # A persisted class is the standard upstream precondition of this writer.
+    reports = tmp_path / "reports"
+    reports.mkdir()
+    (reports / "ic_class.json").write_text(json.dumps({
+        "ic_class": "crypto_accelerator"}))
+    producer._emit_l19_to_l23_skeletons(tmp_path)
+    generated = tmp_path / "phase1/generated_docs"
+    spi_protocol_synth._apply_universal(generated)
+    path = generated / "L23_SECURITY_REQUIREMENTS.json"
+    doc = json.loads(path.read_text())
+    assert doc["fields"]["security_requirements_present"] is True
+    assert doc["extraction_status"] == "PARTIALLY_EXTRACTED"
+    assert "input/docs/neutral_security.md" in doc["source_documents"]
+    assert "does not specify" not in doc["fields"]["notes"]
+    assert consumer.inspect(tmp_path)["verdict"] == "PASS"
+    # The existing consumer must reject a record whose source was gutted.
+    for key in ("key_handling", "attack_surface", "side_channel_mitigation"):
+        for record in doc["fields"][key]:
+            record.pop("evidence")
+            record.pop("source")
+    path.write_text(json.dumps(doc))
+    result = consumer.inspect(tmp_path)
+    assert result["verdict"] == "FAIL", result
+    assert result["blocking_findings"][0]["id"] == "VACUOUS_SECURITY_ASSERTION"
+
+
+def test_l23_no_security_source_does_not_gain_security_records(tmp_path):
+    from programs.phase1_post_process import emit_l_doc_skeleton
+    from programs import l23_security_requirements_typed_check as consumer
+    docs = tmp_path / "input/docs"
+    docs.mkdir(parents=True)
+    source = docs / "neutral_security.md"
+    source.write_text(_load_fixture("neutral_security")["neutral_security.md"])
+    populated = emit_l_doc_skeleton("L23", project_dir=tmp_path)
+    assert populated["fields"]["security_requirements_present"] is True
+    # Replacing the source must remove the previously extracted facts.
+    source.write_text("## Operating requirements\n"
+                      "The unit shall complete a transaction within four cycles.\n"
+                      "| alert_o | output | Detect tampering / attack. |\n")
+    doc = emit_l_doc_skeleton("L23", project_dir=tmp_path)
+    assert doc["fields"]["key_handling"] == {}
+    assert doc["fields"]["side_channel_mitigation"] == []
+    assert doc["fields"]["attack_surface"] == []
+    assert doc["extraction_status"] == "NOT_YET_EXTRACTED"
+    generated = tmp_path / "phase1/generated_docs"
+    generated.mkdir(parents=True)
+    (generated / "L23_SECURITY_REQUIREMENTS.json").write_text(json.dumps(doc))
+    assert consumer.inspect(tmp_path)["verdict"] == "SKIP"
+
+
+@pytest.mark.parametrize("heading,next_heading", [
+    ("## Side-channel countermeasures", "## Operating requirements"),
+    ("Side-channel countermeasures\n----------------------------",
+     "Operating requirements\n----------------------"),
+    ("== Side-channel countermeasures", "== Operating requirements"),
+    ("1.1 Side-channel countermeasures", "1.2 Operating requirements"),
+])
+def test_l23_preserves_source_options_and_negations_at_section_boundary(
+        tmp_path, heading, next_heading):
+    from programs.phase1_post_process import emit_l_doc_skeleton
+    docs = tmp_path / "input/docs"
+    docs.mkdir(parents=True)
+    body = ("The unit may disable masking at compile time.\n"
+            "This mode does not protect against higher-order attacks.")
+    (docs / "specification.md").write_text(
+        heading + "\n\n" + body + "\n\n" + next_heading +
+        "\n\nThis unrelated control uses a key to select an operation.\n")
+    doc = emit_l_doc_skeleton("L23", project_dir=tmp_path)
+    records = doc["fields"]["side_channel_mitigation"]
+    assert len(records) == 1, records
+    assert records[0]["description"] == body
+    assert doc["fields"]["key_handling"] == []
+    assert doc["fields"]["secure_boot"] is False

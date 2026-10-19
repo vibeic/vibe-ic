@@ -9942,9 +9942,9 @@ def _emit_l19_to_l23_skeletons(project: Path) -> List["LDocResult"]:
             # (single source of truth), never a stale/hardcoded class.
             skeleton = _emit_sk(code, ic_class, project_dir=project)
             # emit_l_doc_skeleton returns a dict; _write_l_doc takes
-            # content + evidence. The skeleton's own `evidence` list is
-            # discarded (shape mismatch); evidence map starts empty.
-            evidence = skeleton.pop("evidence", []) if isinstance(skeleton.get("evidence"), list) else {}
+            # content + evidence. Empty-list skeleton evidence is discarded;
+            # populated extractors already supply the canonical source map.
+            evidence = skeleton.pop("evidence", {})
             if not isinstance(evidence, dict):
                 evidence = {}
             if code == "L19" and _selected_pdk and isinstance(
@@ -24239,7 +24239,7 @@ def gen_l2_frs(project: Path,
             "schema_version": 2,
             "doc_class": "frs",
             "ic_name": ic_name,
-            "frs_sections": _v1_6_392_filtered_sections[:64],
+            "frs_sections": _v1_6_392_filtered_sections,
             "no_frs_sections_in_input": not _v1_6_392_filtered_sections,
             "protocol_overview": None,
             "no_protocol_overview_in_input": True,
@@ -25069,7 +25069,7 @@ def gen_l2_frs(project: Path,
         "schema_version": 2,
         "doc_class": "frs",
         "ic_name": ic_name,
-        "frs_sections": _v1_6_392_filtered_sections[:64],
+        "frs_sections": _v1_6_392_filtered_sections,
         # `no_frs_sections_in_input` was set upstream from the
         # un-filtered list. If we filtered every section out, mark
         # the field as empty so downstream gates pick up the gap.
