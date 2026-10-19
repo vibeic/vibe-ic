@@ -1708,7 +1708,7 @@ def phase2_pdk(project: Path, *, selected: str | None = None) -> tuple[str, str]
 def emit_lint_config(project: Path, pdk: str, output: Path, top: str,
                      rtl_files: list[Path], top_source: str,
                      pdk_source: str = 'phase3/librelane_switch.json.pdk') -> dict:
-    """Bind Verilator.Lint to the design's own RTL and declared top.
+    """Bind lint and its copied JSON header to the selected RTL and reader.
 
     Step 2 runs before any Phase-3 artefact exists, so this reads nothing
     from phase3/stage3; unlike `emit_config` it needs no pad or die input."""
@@ -1723,6 +1723,11 @@ def emit_lint_config(project: Path, pdk: str, output: Path, top: str,
     _set(result, sources, 'PDK', pdk, pdk_source)
     _set(result, sources, 'VERILOG_FILES', [str(path.resolve()) for path in rtl_files],
          '_rtl_include_hub.silicon_rtl_selection (the step-9 synthesis input)')
+    # Step 2 copies this raw config for Yosys.JsonHeader. Retain the same
+    # source-extension reader choice as step_synth instead of resolving its
+    # default Verilog reader against a declared SystemVerilog closure.
+    _set(result, sources, 'USE_SLANG', any(path.suffix == '.sv' for path in rtl_files),
+         'selected SystemVerilog source; step_synth frontend parity')
     write_json(output, result)
     write_json(output.with_suffix('.provenance.json'), sources)
     return result
