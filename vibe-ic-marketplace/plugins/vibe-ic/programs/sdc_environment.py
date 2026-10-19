@@ -527,31 +527,36 @@ def _pad_analysis_boundary(project: Path, analysis_top: str
     """
     basis: Dict[str, object] = {"record": IO_PAD_RECORD,
                                 "analysis_top": analysis_top}
+
+    def classified(kind: str) -> Tuple[str, Dict[str, object]]:
+        basis["classification"] = kind
+        return kind, basis
+
     if not analysis_top:
-        return "UNSPECIFIED", basis
+        return classified("UNSPECIFIED")
     try:
         import json
         record = json.loads((Path(project) / IO_PAD_RECORD).read_text())
     except (OSError, ValueError, AttributeError):
-        return "UNRECORDED", basis
+        return classified("UNRECORDED")
     core = record.get("core_module") if isinstance(record, dict) else None
     chip = record.get("chip_top_module") if isinstance(record, dict) else None
     if not core and not chip:
-        return "UNRECORDED", basis
+        return classified("UNRECORDED")
     basis.update(core_module=core, chip_top_module=chip)
     if not isinstance(core, str) or not core or not isinstance(chip, str) or not chip:
         basis["why"] = "pad producer boundary identity is incomplete"
-        return "UNKNOWN", basis
+        return classified("UNKNOWN")
     if core == chip:
         basis["why"] = "pad producer names the same core and chip top"
-        return "UNKNOWN", basis
+        return classified("UNKNOWN")
     if analysis_top == core:
-        return "CORE", basis
+        return classified("CORE")
     if analysis_top == chip:
-        return "CHIP", basis
+        return classified("CHIP")
     basis["why"] = (f"analysis top {analysis_top!r} matches neither recorded "
                     f"core {core!r} nor chip top {chip!r}")
-    return "UNKNOWN", basis
+    return classified("UNKNOWN")
 
 
 def _pad_input_drive(project: Path, values: Dict[str, Tuple[str, str]],
@@ -717,11 +722,14 @@ def staged_sdc_pad_input_drive(project: Path, text: str, staged_rel: str,
                                ) -> Tuple[str, Dict[str, object]]:
     """The same ladder for a design-staged SDC on a DIE top.
 
-    A staged deck that itself sets ``set_input_transition`` or
-    ``set_driving_cell`` has DECLARED the drive (its own lines are the
-    evidence). One that sets neither gets the L9 declaration, else the PDK IO
-    bracket, else NOT_MEASURED, appended to the deck; the record is written
-    either way, so a record from an earlier run can never stand for this deck.
+    At a known DIE boundary, a staged deck that itself sets
+    ``set_input_transition`` or ``set_driving_cell`` has DECLARED the drive
+    (its own lines are the evidence). A stale or unknown analysis boundary
+    stays NOT_MEASURED even if the staged deck carries such a command: an SDC
+    command cannot prove whether it applies to core pins or bond pads. One that
+    sets neither gets the L9 declaration, else the PDK IO bracket, else
+    NOT_MEASURED, appended to the deck; the record is written either way, so a
+    record from an earlier run can never stand for this deck.
     """
     _, record = _pad_input_drive(project, {}, container, to_container_path,
                                  analysis_top=analysis_top)
@@ -729,6 +737,18 @@ def staged_sdc_pad_input_drive(project: Path, text: str, staged_rel: str,
         return text, record
     own = [ln.strip() for ln in text.splitlines()
            if re.match(r"\s*(set_input_transition|set_driving_cell)\b", ln)]
+    boundary = record.get("boundary")
+    if (isinstance(boundary, dict)
+            and boundary.get("classification") == "UNKNOWN"):
+        if own:
+            record["refused_staged_sdc_lines"] = own
+        lines = render_pad_input_drive(record, time_scale)
+        record["sdc_lines"] = pad_drive_sdc_lines(record, time_scale)
+        if lines:
+            text = text.rstrip("\n") + ("\n# R-0929-PAD-INPUT-DRIVE "
+                                        "(stale analysis boundary; staged input "
+                                        "drive not admitted)\n") + "\n".join(lines) + "\n"
+        return text, record
     if own:
         identity = {k: record[k] for k in ("analysis_top", "boundary")
                     if k in record}

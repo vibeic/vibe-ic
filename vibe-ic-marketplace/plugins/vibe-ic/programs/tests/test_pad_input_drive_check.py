@@ -84,6 +84,28 @@ def _run(project: Path):
     return out.returncode, doc
 
 
+def _stage_drive(project: Path, analysis_top: str):
+    """Stage a design SDC and exercise the exact Step-23 consumer."""
+    import flow_compliance_check as FC
+
+    pad_record = project / SE.IO_PAD_RECORD
+    pad = json.loads(pad_record.read_text())
+    pad.update(core_module="neutral_core", chip_top_module="neutral_chip")
+    pad_record.write_text(json.dumps(pad))
+    staged = ("create_clock -name c -period 10 [get_ports clk]\n"
+              "set_input_transition 0.3 [all_inputs]\n")
+    text, record = SE.staged_sdc_pad_input_drive(
+        project, staged, "input/constraints/neutral.sdc",
+        analysis_top=analysis_top)
+    SE.write_pad_input_drive_record(project, record)
+    deck = project / DECK
+    deck.parent.mkdir(parents=True, exist_ok=True)
+    deck.write_text(text)
+    rc, gate = _run(project)
+    step23 = FC.check_step(project, _step23_only(), {})
+    return text, record, rc, gate, step23
+
+
 def test_step23_declares_the_clause():
     text = FLOW.read_text()
     step23 = text[text.index("\n  - id: 23\n"):text.index("\n  - id: 24")]
@@ -151,6 +173,29 @@ def test_a_not_measured_drive_is_rc2_never_pass(tmp_path):
     assert (rc, doc["verdict"]) == (2, "NOT_MEASURED")
     assert doc["reason_class"] == "BLOCKED_BY_UPSTREAM"
     assert doc["reason"].startswith("off-chip input drive NOT_MEASURED:")
+
+
+def test_staged_drive_cannot_override_a_stale_analysis_boundary(tmp_path):
+    """Neutral counterexample: an SDC command cannot identify which boundary
+    the stale analysis top represents, so actual Step 23 must stay unresolved."""
+    text, record, rc, gate, step23 = _stage_drive(
+        _die(tmp_path), "neutral_stale_top")
+    assert gate["verdict"] == "NOT_MEASURED", gate
+    assert record["verdict"] == "NOT_MEASURED", record
+    assert rc == 2
+    assert step23.status == "NOT_MEASURED"
+    assert record["boundary"]["classification"] == "UNKNOWN"
+    assert record["refused_staged_sdc_lines"] == [
+        "set_input_transition 0.3 [all_inputs]"]
+    assert "# NOT_MEASURED: OFFCHIP_INPUT_DRIVE" in text
+
+
+def test_staged_drive_is_declared_at_the_recorded_chip_top(tmp_path):
+    """Positive control: the same declaration is admissible at the producer's
+    recorded chip boundary and the actual Step-23 gate passes."""
+    _, record, rc, gate, step23 = _stage_drive(_die(tmp_path), "neutral_chip")
+    assert (record["verdict"], rc, gate["verdict"], step23.status) == (
+        "DECLARED", 0, "PASS", "PASS")
 
 
 def test_an_absent_record_on_a_die_is_rc2(tmp_path):
