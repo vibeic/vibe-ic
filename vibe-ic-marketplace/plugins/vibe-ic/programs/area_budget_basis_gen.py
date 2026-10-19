@@ -38,6 +38,10 @@ WHAT IS WRITTEN
 ===============
   answers.synthesis_area_budget        status, rationale, stdcell_area_gate,
                                        basis (every citation, structured)
+  synthesis_area_budget                when this supported top-level answer
+                                       already exists, keep it equal to the
+                                       regenerated nested answer so it cannot
+                                       shadow the producer's new result
   answer_provenance.synthesis_area_budget
                                        answered_by=program, producer,
                                        derived_from_attested {deliverable:
@@ -522,14 +526,19 @@ def apply(doc: Dict[str, Any], got: Dict[str, Any],
     """(new document, revision record or {}). The owner's answers are copied
     through untouched; only this program's own field, its provenance record,
     the revision log and (once) the `_comment` disclosure change."""
-    old = (doc.get("answers") or {}).get(KEY)
+    nested = (doc.get("answers") or {}).get(KEY)
+    # The ordinary declaration reader gives a present top-level answer
+    # precedence. Preserve that supported representation when regenerating
+    # this producer-owned field instead of leaving an older value to shadow
+    # the new nested answer.
+    old = doc.get(KEY, nested)
     new = copy.deepcopy(doc)
     deliverable, ref = got["deliverable"], got["ref"]
     old_prov_map = doc.get(TD.PROVENANCE_KEY)
     old_prov = (old_prov_map.get(KEY) if isinstance(old_prov_map, dict)
                 else None)
     prov_rec = provenance_record(got)
-    if old == got["budget"] and old_prov == prov_rec:
+    if old == got["budget"] and nested == got["budget"] and old_prov == prov_rec:
         return new, {}
     # WHY it changed, from the recorded structure only (never its prose).
     recorded = (old_prov.get(TD.DERIVED_FROM_ATTESTED)
@@ -552,6 +561,8 @@ def apply(doc: Dict[str, Any], got: Dict[str, Any],
     if _RULING_RE.fullmatch(ref) and ref not in rulings:
         rulings.append(ref)
     new["answers"][KEY] = got["budget"]
+    if KEY in new:
+        new[KEY] = copy.deepcopy(got["budget"])
     prov = new.get(TD.PROVENANCE_KEY)
     if not isinstance(prov, dict):
         prov = {}
@@ -627,7 +638,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     if got["status"] == "WRITE":
         new, revision = apply(doc, got, args.reason)
         own = [r for r in TD.derived_answer_refusals(new, project)
-               if r["field"] == f"answers.{KEY}"]
+               if r.get("key") == KEY]
         if own:                                      # pragma: no cover
             print(f"REFUSED: {PROGRAM} wrote an answer its own gate refuses: "
                   f"{own[0]['message']}", file=sys.stderr)
