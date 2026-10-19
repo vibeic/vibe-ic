@@ -217,6 +217,9 @@ def main():
     cx = (die.left + die.right) // 2
     cy = (die.bottom + die.top) // 2
     res["die_box_dbu"] = [die.left, die.bottom, die.right, die.top]
+    res["die_box_um"] = [round(v * lin.dbu, 4) for v in
+                         (die.left, die.bottom, die.right, die.top)]
+    res["input_dbu_um"] = lin.dbu
     horiz = (added & pya.Region(
         pya.Box(span.left, cy, span.right, cy + 1))).merged().count()
     vert = (added & pya.Region(

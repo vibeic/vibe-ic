@@ -656,10 +656,9 @@ def die_size(project: Path, gds: Path,
     ring must fit the layout it is being added to, so where both exist the
     built one wins and this changes nothing for any project that has a DEF —
     which is every project that has ever reached this step. Where they
-    DISAGREE that is a real defect, and it is 37.5ic's general precheck that
-    owns it: comparing the layout against the declaration is that step's job,
-    and quietly sealing to the declared number here would erase the evidence
-    it reads.
+    DISAGREE that is a real defect. The Magic seal-ring producer refuses the
+    disagreement before promotion; 37.5ic's general precheck independently
+    compares the finished layout against the declaration.
 
     What it DOES close: a self-tape-out that streamed a GDS and carries no DEF
     used to reach "no DIEAREA found; caller must pass --die-width/--die-height"
@@ -1621,6 +1620,8 @@ def run(project: Path, gds: Optional[str], script: Optional[str],
             expected_box, expected_source = built_die_rectangle(project, decl)
             extent = ring_check.get("ring_extent") or {}
             outer = (extent.get("outer") or {}).get("um")
+            input_box = ring_check.get("die_box_um")
+            declared_box = _declared(decl, _DECL_DIE_AREA)
             # The verifier proves annulus topology around the INPUT geometry.
             # A small ring around a small core can pass that test while the
             # rest of the built die remains outside it; the final GDS bbox may
@@ -1629,6 +1630,8 @@ def run(project: Path, gds: Optional[str], script: Optional[str],
             seal["ring_die_extent"] = {
                 "expected_um": expected_box, "expected_source": expected_source,
                 "measured_ring_outer_um": outer,
+                "measured_input_gds_um": input_box,
+                "answered_die_area_um": declared_box,
                 "comparison_tolerance_um": 0.0001,
             }
             if (expected_box is None or not isinstance(outer, list)
@@ -1644,6 +1647,36 @@ def run(project: Path, gds: Optional[str], script: Optional[str],
                     f"match the built die rectangle {expected_box} um "
                     f"({expected_source}); whole-GDS bounding box and ring "
                     "topology alone cannot prove die-edge enclosure")
+                seal["gds_out_unpromoted"] = str(staged)
+                return done(seal, ring_check)
+            if (not isinstance(input_box, list) or len(input_box) != 4
+                    or not all(isinstance(v, (int, float)) and not isinstance(v, bool)
+                               and math.isfinite(v) for v in input_box)
+                    or input_box[0] < outer[0] - 0.0001
+                    or input_box[1] < outer[1] - 0.0001
+                    or input_box[2] > outer[2] + 0.0001
+                    or input_box[3] > outer[3] + 0.0001):
+                seal["state"] = "FAIL"
+                seal["rule"] = "SEAL_RING_INPUT_OUTSIDE_DIE"
+                seal["reason"] = (
+                    f"original input GDS geometry {input_box} um is not fully "
+                    f"contained by the Magic ring's measured outer edge {outer} um; "
+                    "a stale DEF cannot authorize sealing only part of the die")
+                seal["gds_out_unpromoted"] = str(staged)
+                return done(seal, ring_check)
+            if declared_box is not None and (
+                    not isinstance(declared_box, (list, tuple))
+                    or len(declared_box) != 4
+                    or not all(isinstance(v, (int, float)) and not isinstance(v, bool)
+                               and math.isfinite(v) for v in declared_box)
+                    or any(abs(a - b) > 0.0001
+                           for a, b in zip(declared_box, expected_box))):
+                seal["state"] = "FAIL"
+                seal["rule"] = "SEAL_RING_DECLARED_DIE_MISMATCH"
+                seal["reason"] = (
+                    f"answered die area {declared_box} um disagrees with built "
+                    f"die rectangle {expected_box} um ({expected_source}); "
+                    "a ring matching only one authority cannot be promoted")
                 seal["gds_out_unpromoted"] = str(staged)
                 return done(seal, ring_check)
             seal["ring_die_extent"]["state"] = "PASS"

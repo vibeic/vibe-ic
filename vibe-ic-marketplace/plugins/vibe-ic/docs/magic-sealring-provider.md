@@ -53,13 +53,18 @@ other PDK shapes may extend beyond a marker frame; translation cannot change
 their width. Choose frame/offset/inset explicitly. The ring's own measured
 outer extent must equal the built DEF DIEAREA (or the answered die area when no
 DEF exists); a full-sized whole-GDS bbox supplied by old geometry cannot make
-a smaller or displaced ring pass. This capability does not pick those values
+a smaller or displaced ring pass. The original input GDS geometry must also
+fit inside the ring's measured outer extent. Where an owner has answered the
+die-area declaration, it must agree with the built DEF DIEAREA before the GDS
+is promoted. These checks reject a stale DEF that describes only part of the
+input die. This capability does not pick those values
 for an existing project.
 
 ## Scope of acceptance
 
 The original `sealring_verify` still verifies output geometry, marker and hollow
-annulus. The producer compares the measured ring outer extent to the built die
+annulus. The producer compares the measured ring outer extent to the built die,
+contains the original input GDS, and reconciles the answered die rectangle
 before promoting the GDS or writing the finished DEF.
 `die_finishing_check` consumes that real report. `general_precheck` still compares
 the complete GDS extent/origin with the unchanged whole-DIE declaration. A good

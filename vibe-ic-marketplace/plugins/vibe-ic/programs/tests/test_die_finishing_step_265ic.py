@@ -45,6 +45,8 @@ if str(_PROGRAMS) not in sys.path:
 import _klayout_launch as KL                                  # noqa: E402
 import die_finishing_check as DFC                             # noqa: E402
 import die_finishing_gen as DFG                               # noqa: E402
+import _owner_declared as OD                                   # noqa: E402
+import _tapeout_declaration as TD                              # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import _progress_run as _pr  # noqa: E402
@@ -247,6 +249,53 @@ generate_sealring(sys.argv[1],sys.argv[2],sys.argv[3],False,True)
     result = _run(project, script, monkeypatch)
     assert result["seal_ring"]["state"] == "FAIL", result
     assert result["seal_ring"]["rule"] == "SEAL_RING_DIE_EXTENT_MISMATCH", result
+    assert DFC.evaluate(project)["verdict"] == "FAIL"
+    assert not (project / DFG._DEF_REL).exists()
+
+
+@pytest.mark.parametrize("def_um,decl_um,rule", [
+    (180, None, "SEAL_RING_INPUT_OUTSIDE_DIE"),
+    (200, 220, "SEAL_RING_DECLARED_DIE_MISMATCH"),
+])
+def test_magic_ring_rejects_stale_die_authority(
+        tmp_path, monkeypatch, def_um, decl_um, rule):
+    """A stale DEF or declaration must not launder a partial die into PASS."""
+    pytest.importorskip("pya")
+    project = _project(tmp_path)
+    (project / "phase3/stage3/pnr/routed.def").write_text(
+        "VERSION 5.8 ;\nDESIGN chip_top ;\nUNITS DISTANCE MICRONS 1000 ;\n"
+        f"DIEAREA ( 0 0 ) ( {def_um * 1000} {def_um * 1000} ) ;\nEND DESIGN\n")
+    if decl_um is not None:
+        declared, _ = TD.merge_answers(TD.blank_declaration(), {
+            "deliverable": "DIE", "database_unit_um": 0.001,
+            "die_area_um": [0, 0, decl_um, decl_um], "die_origin_um": [0, 0],
+            "top_cell": "chip_top", "seal_ring_required": True})
+        OD.attest(declared)
+        decl_path = project / TD.DECLARATION_REL
+        decl_path.parent.mkdir(parents=True, exist_ok=True)
+        decl_path.write_text(json.dumps(declared))
+    bridge = project / "input/pdk/bridge/signoff_config.json"
+    bridge.parent.mkdir(parents=True)
+    bridge.write_text(json.dumps({"die_finishing": {"magic_geometry": {
+        "size_convention": "outer", "offset_um": [0, 0],
+        "provider_size_um": [def_um, def_um]}}}))
+    script = project / "neutral_gen_sealring.py"
+    script.write_text('''# Usage: neutral_gen_sealring.py width height target_dir [-force] [-outer] [-keep]
+import sys
+from pathlib import Path
+import pya
+def generate_sealring(width, height, target_dir, force, keep):
+    l=pya.Layout();l.dbu=0.001;t=l.create_cell("neutral_ring")
+    w=round(float(width)/l.dbu);h=round(float(height)/l.dbu)
+    ring=pya.Region(pya.Box(0,0,w,h))-pya.Region(pya.Box(6000,6000,w-6000,h-6000))
+    t.shapes(l.layer(99,0)).insert(ring)
+    Path(target_dir).mkdir(parents=True,exist_ok=True)
+    l.write(str(Path(target_dir)/"neutral_ring.gds"))
+generate_sealring(sys.argv[1],sys.argv[2],sys.argv[3],False,True)
+''')
+    result = _run(project, script, monkeypatch)
+    assert result["seal_ring"]["state"] == "FAIL", result
+    assert result["seal_ring"]["rule"] == rule, result
     assert DFC.evaluate(project)["verdict"] == "FAIL"
     assert not (project / DFG._DEF_REL).exists()
 
