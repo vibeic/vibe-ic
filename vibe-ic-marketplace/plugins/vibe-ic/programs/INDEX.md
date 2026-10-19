@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1446
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1446)
+- **Total programs (excluding helpers / shims):** 1447
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1447)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1437 |
+| `any` | 1438 |
 
 ## Alphabetical listing
 
@@ -706,6 +706,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `l22_checklist_milestone_emit` | any | — | the verification checklist's own milestones. |
 | `l22_coverage_goal_emit` | any | — | lift measurable coverage targets out of the design's own input docs and into L22, the layer that CONSUMES them. |
 | `l22_verification_plan_measurable_check` | any | — | SEMANTIC gate for L22_VERIFICATION_PLAN (batch layergate-7). |
+| `l23_security_requirements_extract` | any | — | Preserve source-declared security clauses in L23's existing typed fields. |
 | `l23_security_requirements_typed_check` | any | — | SEMANTIC gate for L23_SECURITY_REQUIREMENTS (batch layergate-7). |
 | `l24_signoff_evidence_backed_check` | any | — | batch-8 / layergate-8 (L24_SIGNOFF) |
 | `l24_signoff_requirements_extract` | any | — | R-0915-38. |
@@ -1518,7 +1519,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1437 programs)
+### `any` (1438 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `absence_verdict_names_its_search_space_check` — "not found" must say WHERE it looked.
@@ -2196,6 +2197,7 @@ _(no programs in this group)_
 - `l22_checklist_milestone_emit` — the verification checklist's own milestones.
 - `l22_coverage_goal_emit` — lift measurable coverage targets out of the design's own input docs and into L22, the layer that CONSUMES them.
 - `l22_verification_plan_measurable_check` — SEMANTIC gate for L22_VERIFICATION_PLAN (batch layergate-7).
+- `l23_security_requirements_extract` — Preserve source-declared security clauses in L23's existing typed fields.
 - `l23_security_requirements_typed_check` — SEMANTIC gate for L23_SECURITY_REQUIREMENTS (batch layergate-7).
 - `l24_signoff_evidence_backed_check` — batch-8 / layergate-8 (L24_SIGNOFF)
 - `l24_signoff_requirements_extract` — R-0915-38.
