@@ -469,6 +469,40 @@ def _scannable_docs(project: Path) -> List[Path]:
     return out
 
 
+def _vdda_is_pvt_supply_header(lines: List[str], index: int,
+                               start: int, end: int) -> bool:
+    """A bounded PVT rail-list column is not a regulator declaration (#3283).
+
+    Recognize an actual Markdown header plus separator, a point/corner and
+    temperature column, and an I/O/pad column containing only rail names.
+    Output/circuit prose and malformed or ambiguous tables keep their demand.
+    This exempts only this VDDA occurrence, never other LDO aliases or text.
+    """
+    line = lines[index]
+    if line[start:end].casefold() != "vdda" or index + 1 >= len(lines):
+        return False
+    if not line.strip().startswith("|") or not line.strip().endswith("|"):
+        return False
+    positions = [m.start() for m in re.finditer(r"\|", line)]
+    spans = list(zip(positions, positions[1:]))
+    cells = [line[a + 1:b].strip() for a, b in spans]
+    if (len(cells) < 3
+            or not any(re.fullmatch(r"(?:PVT\s+)?(?:point|corner)", c, re.I) for c in cells)
+            or not any(re.fullmatch(r"(?:temperature|temp)(?:\s*\(\s*°?C\s*\))?", c, re.I) for c in cells)):
+        return False
+    separator = lines[index + 1].strip()
+    if not separator.startswith("|") or not separator.endswith("|"):
+        return False
+    rules = separator.split("|")[1:-1]
+    if len(rules) != len(cells) or not all(re.fullmatch(r"\s*:?-{3,}:?\s*", c) for c in rules):
+        return False
+    rail = r"(?:`[A-Za-z_]\w*`|[A-Za-z_]\w*)"
+    for (a, b), cell in zip(spans, cells):
+        if a < start and end <= b:
+            return bool(re.fullmatch(r"(?:I/O|IO|pad)\s+" + rail + r"(?:\s*/\s*" + rail + r")*", cell, re.I))
+    return False
+
+
 def _scan_docs(project: Path) -> Dict[str, List[Tuple[str, int, str]]]:
     """Scan docs for analog keywords; return {class_id: [(file, line, text)]}."""
     hits: Dict[str, List[Tuple[str, int, str]]] = {
@@ -480,7 +514,8 @@ def _scan_docs(project: Path) -> Dict[str, List[Tuple[str, int, str]]]:
         except Exception:
             continue
         rel = str(f.relative_to(project))
-        for i, line in enumerate(text.splitlines(), start=1):
+        lines = text.splitlines()
+        for i, line in enumerate(lines, start=1):
             if _NEGATION_RE.search(line):
                 continue
             for cid, (pat, _) in _KEYWORD_CLASSES.items():
@@ -492,6 +527,8 @@ def _scan_docs(project: Path) -> Dict[str, List[Tuple[str, int, str]]]:
                 # count and must not force an L5 analog block.
                 positive_hit = False
                 for m in pat.finditer(line):
+                    if cid == "ldo" and _vdda_is_pvt_supply_header(lines, i - 1, m.start(), m.end()):
+                        continue
                     if not _keyword_is_negated(line, m.start(), m.end()):
                         positive_hit = True
                         break

@@ -317,5 +317,16 @@
     "version_observed": "1.30.8 exact official 164664a5d7495802fe09f22feb59ed76d79c7d89",
     "version_lkg": "Not established. Current official source omission, not an invented release regression interval.",
     "fixture_path": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/fixtures/phase1_local/l8_literal_parameter_owner/literal_parameters.md"
+  },
+  {
+    "issue": 3283,
+    "project": "neutral_pvt_supply_rail",
+    "layer": "L5_ADI_SPEC",
+    "field": "analog_blocks",
+    "expected": "The ordinary L5 producer keeps analog_blocks=[] and analog_blocks_detected=false. The existing analog correspondence consumer must not demand an LDO merely because the PVT supply-table header includes VDDA; no-keyword/no-circuit vacuity remains its existing rc2, not executed analog PASS. True LDO/regulator/VREG/VDD_LDO requirements and actual VDDA-output declarations must remain protected; removing their required L5 block must still fail. Do not invent an L5 block, rename input rails or add a waiver.",
+    "actual": "The current ordinary caller emits L5 analog_blocks=[] but analog_content_detected_must_emit_l5_check exits1 demanding ldo from the supply-table header's bare VDDA token. The issue records the caller-measured header and a neutral drop-in input; the isolated neutral source->producer->ordinary-consumer execution and controls will be run before owner code changes.",
+    "version_observed": "Pinned composed source05 5d176a143b7aa60cf53fecda830519181bf9a52b, tree0bab9035dd8428a8ab45d08f0689bf1685b09015. Official baseline existence and behavior are not asserted until separately checked.",
+    "version_lkg": "",
+    "fixture_path": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/fixtures/phase1_local/neutral_pvt_supply_rail/pvt_supply_rail.md"
   }
 ]

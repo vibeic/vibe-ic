@@ -56,6 +56,7 @@ _EXPECTED: dict[str, str] = {
     "litescope":   "LiteScope",
     "taxi":        "Taxi Transport Library",
     "benchmark_a":      "EXAMPLE_CHIP",
+    "neutral_pvt_supply_rail": "NeutralCore",
     # #3106: the native intake project's identity is also pinned.
     "subservient_l2_section_tail": "subservient",
     "neutral_many_sections": "NeutralCore",
@@ -133,6 +134,22 @@ def test_phase1_picker_no_fpga_board_in_results() -> None:
         f"This is the v1.6.58/v1.6.60 regression class; "
         f"check `_FPGA_BOARD_RE` coverage."
     )
+
+
+def test_neutral_pvt_supply_rail(tmp_path):
+    """#3283: a native supply table is not a missing regulator circuit."""
+    from programs import phase1_doc_one_shot_runner as producer
+    import subprocess
+    import sys
+    source = tmp_path / "input/docs/pvt_supply_rail.md"
+    source.parent.mkdir(parents=True)
+    text = _load_fixture("neutral_pvt_supply_rail")["pvt_supply_rail.md"]
+    source.write_text(text)
+    emitted = producer.gen_l5_adi_spec(tmp_path, {source.name: text})
+    assert json.loads(emitted.path.read_text())["analog_blocks"] == []
+    gate = Path(producer.__file__).with_name("analog_content_detected_must_emit_l5_check.py")
+    result = subprocess.run([sys.executable, str(gate), str(tmp_path)], capture_output=True, text=True)
+    assert result.returncode == 2, result.stdout + result.stderr
 
 
 def _field_doc(tmp_path: Path, layer: str, text: str) -> dict:
