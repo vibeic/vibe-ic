@@ -1580,6 +1580,31 @@ def emit_config(project: Path, pdk: str, output: Path) -> dict:
     return result
 
 
+def synthesis_levers(project: Path) -> dict[str, str] | None:
+    """Declared native synthesis strategy; None preserves the absent authority.
+
+    The native config owns the effective default. Keep None, an explicit empty
+    object and an explicit AREA 0 distinct for handoff currentness, even when
+    all three result in the same native strategy. No arbitrary config overlay.
+    """
+    path = project / 'phase3/librelane_switch.json'
+    doc = _load(path) if path.is_file() else {}
+    if not isinstance(doc, dict):
+        raise Refusal('LL_SYNTH_LEVER_INVALID', 'switch must be an object')
+    if 'synthesis_levers' not in doc:
+        return None
+    raw = doc['synthesis_levers']
+    if not isinstance(raw, dict):
+        raise Refusal('LL_SYNTH_LEVER_INVALID', 'synthesis_levers must be an object')
+    from _ppa.synthesis import STRATEGIES
+    for key, value in raw.items():
+        if key != 'SYNTH_STRATEGY':
+            raise Refusal('LL_SYNTH_LEVER_UNKNOWN', str(key))
+        if not isinstance(value, str) or value not in STRATEGIES:
+            raise Refusal('LL_SYNTH_LEVER_INVALID', f'{key}: {value!r}')
+    return dict(raw)
+
+
 def emit_synthesis_config(project: Path, pdk: str, output: Path,
                           rtl_files: list[Path], defines: list[str],
                           use_slang: bool,
@@ -1630,6 +1655,9 @@ def emit_synthesis_config(project: Path, pdk: str, output: Path,
     pinned = catalog_synth_safe_params_check.top_synth_parameters(project, top) if top else None
     if pinned:
         _set(result, sources, 'SYNTH_PARAMETERS', pinned[0], pinned[1])
+    for key, value in (synthesis_levers(project) or {}).items():
+        _set(result, sources, key, value,
+             f'phase3/librelane_switch.json synthesis_levers.{key}')
     write_json(output, result)
     write_json(output.with_suffix('.provenance.json'), sources)
     return result
@@ -4036,6 +4064,12 @@ def run_chain(project: Path, image: str, steps: list[tuple[str, Path, Path]],
                        # are inputs too: an edited deck must re-run the step.
                        'config_files': config_file_hashes(_load(config), mounts or []),
                        'step': step_id}
+        if step_id == 'Yosys.Synthesis':
+            declared_synthesis = synthesis_levers(project)
+            if declared_synthesis is not None:
+                # Bind raw author authority at the actual native invocation,
+                # independently of its effective value in the resolved config.
+                fingerprint['synthesis_levers'] = declared_synthesis
         if provider is not None:
             fingerprint['local_provider'] = provider.as_record()
         elif _ce.no_container_route():

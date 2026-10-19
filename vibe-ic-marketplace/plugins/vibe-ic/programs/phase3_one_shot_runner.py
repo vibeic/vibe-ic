@@ -17557,11 +17557,15 @@ def step_synth(project: Path, top: str, pdk: PdkConfig,
     import librelane_postmap as _postmap
     try:
         requested_postmap = _postmap.mode(project)
+        requested_synthesis = _ll.synthesis_levers(project)
     except (ValueError, _ll.Refusal) as exc:
         return StepResult("synth", "FAIL", 0.0, str(exc))
     if requested_postmap != "off" and _mode != "librelane":
         return StepResult("synth", "FAIL", 0.0,
                           "LL_POSTMAP_ROUTE_UNSUPPORTED: post-map repair requires the native synthesis handoff")
+    if requested_synthesis is not None and _mode != "librelane":
+        return StepResult("synth", "FAIL", 0.0,
+                          "LL_SYNTH_LEVER_ROUTE_UNSUPPORTED: synthesis levers require the native synthesis handoff")
     if _mode == "librelane":
         return _step_synth_librelane(
             project, top, pdk, container, area_receipt=area_receipt,

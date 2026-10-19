@@ -385,6 +385,16 @@ def _native_synthesis(project: Path, folder: Path, top: str, *, path_resolver=No
             raise ValueError(f'native receipt mismatch: {rel}')
     if inp['config'] != _sha(project / 'phase3/librelane/synthesis_resolved.json'):
         raise ValueError('producer consumed a different resolved config')
+    declared = LC.synthesis_levers(project)
+    if (('synthesis_levers' in inp) != (declared is not None)
+            or inp.get('synthesis_levers') != declared):
+        raise ValueError('native producer synthesis declaration differs from current source authority')
+    expected_strategy = (declared or {}).get('SYNTH_STRATEGY', 'AREA 0')
+    # Older default-only receipts may omit the field. An explicit declaration
+    # must be carried by the actual native config, not inferred by this reader.
+    strategy = cfg.get('SYNTH_STRATEGY', 'AREA 0' if declared is None else None)
+    if strategy != expected_strategy:
+        raise ValueError('producer synthesis strategy differs from current declaration/default')
     pdk, _ = LC.phase2_pdk(project, selected=cfg.get('PDK'))
     if cfg.get('PDK') != pdk or cfg.get('DESIGN_NAME') != top:
         raise ValueError('producer PDK/top differs from declared input')
@@ -453,6 +463,9 @@ def publish_handoff(project: Path, folder: Path, mapped: Path, top: str) -> dict
         'mapped': str(mapped.relative_to(project)),
         'netlist_sha256': _sha(raw),
         'receipt_sha256': _sha(folder / 'vibeic_receipt.json')}
+    declared = json.loads((folder / 'vibeic_receipt.json').read_text())['input'].get('synthesis_levers')
+    if declared is not None:
+        doc['librelane_synthesis']['synthesis_levers'] = declared
     write_json(sidecar, doc)
     return doc['librelane_synthesis']
 
@@ -472,6 +485,10 @@ def bound_handoff(project: Path) -> Optional[dict]:
             return None
         if not isinstance(binding, dict) or binding.get('schema') != 'vibe-ic/librelane-synthesis-handoff/1':
             raise ValueError('current LibreLane synthesis handoff is absent')
+        declared = LC.synthesis_levers(project)
+        if (('synthesis_levers' in binding) != (declared is not None)
+                or binding.get('synthesis_levers') != declared):
+            raise ValueError('published synthesis declaration differs from current source authority')
         from l_doc_consumer_contract import l_doc_fields
         l9 = l_doc_fields(LC._ldoc(project / 'phase1/generated_docs', 'L9_INTEGRATION_SPEC.json'))
         declared_top = l9.get('top_module')
