@@ -1324,9 +1324,9 @@ def _raw_reset_force(mod: dict, signal: str, targets: list, work_dir: Path,
                      container: Optional[str]) -> Tuple[dict, dict]:
     """Prove a total defined reset arm in the unoptimized transition graph.
 
-    The other arm must have a native undefined-value witness. No raw X is
-    replaced by an optimized constant, and neither an enable-conditional
-    force nor undefined reset data can satisfy the full-domain certificate.
+    The other arm must have an undefined-value or nonconstant-data witness.
+    No raw X is replaced by an optimized constant, and neither a conditional
+    force nor undefined reset data satisfies the full-domain certificate.
     """
     if not targets:
         return {}, {}
@@ -1335,8 +1335,6 @@ def _raw_reset_force(mod: dict, signal: str, targets: list, work_dir: Path,
         return {}, {"refusal": why}
     model, rows = _transition_pair(mod, reset_bit)
     eligibility = _reset_row_cone_eligibility(model)
-    if not eligibility["eligible"]:
-        return {}, {"refusal": "raw transition cone not supported", "eligibility": eligibility}
     wanted = set(targets)
     selected = [(i, r) for i, r in enumerate(rows)
                 if (r["cell"], r["bit_index"]) in wanted
@@ -1358,8 +1356,9 @@ def _raw_reset_force(mod: dict, signal: str, targets: list, work_dir: Path,
                 queries[f"{role}_valid{a}"] = (f"{role}_valid{a}", "1")
                 queries[f"value_{value}_{a}"] = (f"n{a}", value)
         observed = sorted({ports[p] for p, _ in queries.values()})
-        script += ["select -module transition_pair",
-                   "select " + " ".join("w:" + p for p in observed) + " %% %ci*"]
+        if eligibility["eligible"]:
+            script += ["select -module transition_pair",
+                       "select " + " ".join("w:" + p for p in observed) + " %% %ci*"]
         shown = " ".join("-show " + p for p in observed)
         for key, (port, value) in queries.items():
             ident = f"{i}_{key}"
@@ -1369,7 +1368,8 @@ def _raw_reset_force(mod: dict, signal: str, targets: list, work_dir: Path,
             script += ["log VIBEIC_TRANSITION_QUERY " + ident,
                        f"sat -timeout 10 -enable_undef -set-def-inputs {option} -show-inputs {shown}",
                        "log VIBEIC_TRANSITION_COMPLETE " + ident]
-        script.append("select -clear")
+        if eligibility["eligible"]:
+            script.append("select -clear")
     _aa.write_text(ys, "\n".join(script) + "\n")
     command = f"yosys -Q -T -s {ys.resolve()}"
     if container:
@@ -1380,7 +1380,7 @@ def _raw_reset_force(mod: dict, signal: str, targets: list, work_dir: Path,
     rc, stdout, stderr, run = _native_query_run(argv, container=container, command=command)
     native = _native_artifacts(work_dir, "raw_reset_force", stdout, stderr, run)
     progress = _transition_query_progress(stdout + stderr, ["domain", *specs])
-    detail = {"native_run": native, "query_progress": progress,
+    detail = {"native_run": native, "query_progress": progress, "row_cone": eligibility,
               "model_sha256": file_sha256(model_path), "script_sha256": file_sha256(ys),
               "raw_literal_undef_preserved": True}
     answers = progress["by_identity"]
@@ -1393,8 +1393,11 @@ def _raw_reset_force(mod: dict, signal: str, targets: list, work_dir: Path,
         a = {key: answers[ident]["result"] for ident, (j, key) in specs.items() if j == i}
         for arm in (0, 1):
             for value, role in (("0", "force_zero"), ("1", "force_one")):
-                if (a[f"undef{arm}"] == "NO_UNDEF" and
-                        a[f"undef{1-arm}"] == "HAS_UNDEF" and
+                other = 1 - arm
+                discriminating = (a[f"undef{other}"] == "HAS_UNDEF" or
+                    (a[f"undef{other}"] == "NO_UNDEF" and
+                     all(a[f"value_{v}_{other}"] == "REFUTED" for v in ("0", "1"))))
+                if (a[f"undef{arm}"] == "NO_UNDEF" and discriminating and
                         all(a[k] == "PROVED" for k in (
                             f"{role}_total{arm}", f"{role}_valid{arm}", f"value_{value}_{arm}"))):
                     certificates[(row["cell"], row["bit_index"])] = {
@@ -1402,7 +1405,7 @@ def _raw_reset_force(mod: dict, signal: str, targets: list, work_dir: Path,
                         "polarity": "active_high" if arm else "active_low", "force_value": value,
                         "raw_q": row["q"], "raw_cell": row["cell"], "raw_q_index": row["bit_index"],
                         "priority": row["priority"], "queries": a,
-                        "scope": "raw defined full reset arm; opposite undefined arm remains undefined"}
+                        "scope": "raw defined full reset arm; opposite data/undef is not replaced"}
     return certificates, detail
 
 

@@ -765,3 +765,21 @@ def test_raw_undef_defined_force_honors_active_low_reset(tmp_path):
     cert = mapping["rows"][0]["raw_reset_force_certificate"]
     assert cert["polarity"] == "active_low" and cert["force_value"] == "1"
     assert cert["queries"]["undef0"] == "NO_UNDEF" and cert["queries"]["undef1"] == "HAS_UNDEF"
+
+
+def test_raw_pmux_unreachable_default_undef_does_not_replace_reset_proof(tmp_path):
+    _yosys()
+    rtl = tmp_path / "m.v"
+    rtl.write_text("module m(input clk,rst,en,d,output reg q);\n"
+                   "always @(posedge clk) if(rst) q<=0; else case(en)\n"
+                   "1'b0:q<=q; 1'b1:q<=d; default:q<=1'bx; endcase\nendmodule\n")
+    rec = fsc.check([rtl], "m", [{"rule":"reset_polarity", "signal":"rst", "value":"active_high"}], tmp_path)
+    assert rec["verdict"] == fsc.PASS, rec
+    mapping = rec["claims"][0]["reset_control_mapping"]
+    assert len(mapping["raw_identities"]) == 1
+    row = mapping["rows"][0]
+    assert row["classification"] == "RESET_FORCE"
+    cert = row["raw_reset_force_certificate"]
+    assert cert["queries"]["undef0"] == cert["queries"]["undef1"] == "NO_UNDEF"
+    assert cert["queries"]["value_0_0"] == cert["queries"]["value_1_0"] == "REFUTED"
+    assert mapping["raw_reset_force"]["row_cone"]["eligible"] is False
