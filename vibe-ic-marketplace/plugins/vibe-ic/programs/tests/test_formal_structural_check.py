@@ -209,6 +209,64 @@ def test_complete_reset_mapping_normal_cli_preserves_force_priority_and_unknowns
                        for proof in ("roles_disjoint", "roles_cover")), residual
 
 
+@pytest.mark.parametrize("case", ["high-zero", "high-one", "low-zero", "free-enable",
+    "partial-force", "other-clock", "other-edge", "residual-data"])
+def test_post_reset_native_independence_requires_total_same_edge_premises(tmp_path, case):
+    _yosys()
+    low = case == "low-zero"
+    value = int(case == "high-one")
+    reset = "!rst" if low else "rst"
+    if case == "partial-force":
+        reset += " & clear"
+    enable = "!gate" if value else "gate"
+    if case == "free-enable":
+        enable = "en"
+    elif case == "residual-data":
+        enable += " | en"
+    target_edge = "posedge other_clk" if case == "other-clock" else "negedge clk" if case == "other-edge" else "posedge clk"
+    rtl = tmp_path / "m.v"
+    rtl.write_text("module m(input clk,other_clk,rst,en,clear,input [1:0] d,output reg gate,q);\n"
+        f"always @(posedge clk) if ({reset}) gate <= 1'b{value}; else gate <= en;\n"
+        f"always @({target_edge}) if ({enable}) q <= rst ? d[1] : d[0];\nendmodule\n")
+    out = tmp_path / "mapping.json"
+    claim = "active_low" if low else "active_high"
+    rc = fsc.main(["--rtl", str(rtl), "--top", "m", "--claim", f"reset_polarity:rst:{claim}",
+                   "--work-dir", str(tmp_path), "--json", str(out)])
+    rec = json.loads(out.read_text())
+    positive = case in {"high-zero", "high-one", "low-zero"}
+    # A composed reset-prefix certificate does not close the unrestricted
+    # structural polarity obligation, even on the positive evidence arms.
+    assert rec["verdict"] == fsc.NOT_DISCHARGED and rc == 1, rec
+    mapping = rec["claims"][0]["reset_control_mapping"]
+    assert len(mapping["raw_identities"]) == 2, mapping
+    progress = mapping["query_progress"]
+    assert progress["completed"] == progress["planned"] and not progress["unknown"], mapping
+    if positive:
+        row = next(r for r in mapping["rows"] if r["classification"] == "UNRESOLVED_DATA_DEPENDENCE")
+        # The normal CLI must distinguish a proved post-reset relation from
+        # the pre-fix one-step-only diagnostic. Its blocking verdict stays.
+        assert row["reason"] == ("POST_RESET_COFACTOR_INDEPENDENCE: reset-independent after an asserted clock edge; "
+                                 "unrestricted first-edge force sense remains unresolved"), row
+    certified = [r for r in mapping["rows"] if r.get("post_reset_certificate")]
+    assert len(certified) == int(positive), mapping
+    if positive:
+        row = certified[0]
+        # Its unconstrained relation is still unequal. The new certificate
+        # reports a composed post-reset scope rather than rewriting that fact.
+        assert row["native_queries"]["equal"] == "REFUTED", row
+        cert = row["post_reset_certificate"]
+        assert cert["active_reset_value"] == int(not low), cert
+        assert cert["scope"] == "after at least one asserted reset edge on the same clock and edge", cert
+        assert len(cert["premises"]) == 1 and cert["premises"][0]["value"] == value, cert
+        assert cert["premises"][0]["q"] != row["q"], cert
+        post = mapping["post_reset_independence"]
+        assert post["native_exit_code"] == 0 and post["status"] == "COMPLETED", post
+        assert post["query_progress"]["completed"] == post["query_progress"]["planned"], post
+        assert post["query_progress"]["by_identity"][cert["domain_query"]]["result"] == "HAS_UNDEF", post
+        assert post["query_progress"]["by_identity"][cert["equality_query"]]["result"] == "PROVED", post
+    assert mapping["unresolved"] and not mapping["complete"], mapping
+
+
 @pytest.mark.parametrize("width,value", [(1,1),(3,5)])
 def test_native_reset_parameter_and_async_timing_controls(tmp_path, width, value):
     _yosys()
