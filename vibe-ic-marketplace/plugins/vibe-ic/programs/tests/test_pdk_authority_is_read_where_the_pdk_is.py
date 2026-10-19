@@ -103,8 +103,19 @@ def test_a_container_reader_finds_a_magic_provider_without_claiming_invocation()
     rd, _ = _reader({provider: "# positional generator\n"})
     has, path, tried = A.seal_ring_facility(Path(vol), reader=rd)
     assert has is True and path == provider
-    assert A.seal_ring_invocation_supported(Path(vol), path) is False
+    assert A.seal_ring_invocation_supported(Path(vol), path, reader=rd) is False
     assert any("libs.tech/magic/seal_ring_generator" in item for item in tried)
+
+
+def test_magic_provider_reports_supported_invocation_only_for_declared_api():
+    vol = "/foss/pdks/somepdk"
+    provider = f"{vol}/libs.tech/magic/seal_ring_generator/neutral_gen_sealring.py"
+    api = ("# Usage: neutral_gen_sealring.py width height target_dir [-outer] [-keep]\n"
+           "def generate_sealring(width, height, target_dir):\n    pass\n")
+    rd, _ = _reader({provider: api})
+    assert A.seal_ring_invocation_supported(Path(vol), provider, reader=rd) is True
+    unknown, _ = _reader({provider: "# no known interface\n"})
+    assert A.seal_ring_invocation_supported(Path(vol), provider, reader=unknown) is False
 
 
 def test_unreachable_remote_glob_is_unknown_not_process_absence():

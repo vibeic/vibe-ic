@@ -48,15 +48,19 @@ chip-area convention. `--magic-geometry` accepts the same JSON object and record
 that CLI authority. Missing/invalid authority refuses before invocation.
 
 The provider frame, complete generated envelope, ring offset, original core/pad
-placement, and declared whole-DIE geometry are different facts. Fiducials or
+placement, and built whole-DIE rectangle are different facts. Fiducials or
 other PDK shapes may extend beyond a marker frame; translation cannot change
-their width. Choose frame/offset/inset explicitly and measure the resulting
-whole GDS. This capability does not pick those values for an existing project.
+their width. Choose frame/offset/inset explicitly. The ring's own measured
+outer extent must equal the built DEF DIEAREA (or the answered die area when no
+DEF exists); a full-sized whole-GDS bbox supplied by old geometry cannot make
+a smaller or displaced ring pass. This capability does not pick those values
+for an existing project.
 
 ## Scope of acceptance
 
 The original `sealring_verify` still verifies output geometry, marker and hollow
-annulus; the existing producer writes the finished DEF only after acceptance.
+annulus. The producer compares the measured ring outer extent to the built die
+before promoting the GDS or writing the finished DEF.
 `die_finishing_check` consumes that real report. `general_precheck` still compares
 the complete GDS extent/origin with the unchanged whole-DIE declaration. A good
 ring can therefore correctly fail the separate size check.

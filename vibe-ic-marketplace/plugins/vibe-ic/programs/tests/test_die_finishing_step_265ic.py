@@ -216,6 +216,41 @@ generate_sealring(sys.argv[1],sys.argv[2],sys.argv[3],False,True)
     assert original.area() == 200000 * 200000
 
 
+@pytest.mark.parametrize("frame_um,offset_um", [
+    (180, [0, 0]),  # original geometry keeps the whole-GDS bbox at 200
+    (200, [5, 0]),  # correct size at the wrong origin
+])
+def test_magic_ring_must_cover_the_built_die_rectangle(
+        tmp_path, monkeypatch, frame_um, offset_um):
+    """Topology alone cannot prove that a ring encloses the declared die."""
+    pytest.importorskip("pya")
+    project = _project(tmp_path)
+    bridge = project / "input/pdk/bridge/signoff_config.json"
+    bridge.parent.mkdir(parents=True)
+    bridge.write_text(json.dumps({"die_finishing": {"magic_geometry": {
+        "size_convention": "outer", "offset_um": offset_um,
+        "provider_size_um": [frame_um, frame_um]}}}))
+    script = project / "neutral_gen_sealring.py"
+    script.write_text('''# Usage: neutral_gen_sealring.py width height target_dir [-force] [-outer] [-keep]
+import sys
+from pathlib import Path
+import pya
+def generate_sealring(width, height, target_dir, force, keep):
+    l=pya.Layout();l.dbu=0.001;t=l.create_cell("neutral_ring")
+    w=round(float(width)/l.dbu);h=round(float(height)/l.dbu)
+    ring=pya.Region(pya.Box(0,0,w,h))-pya.Region(pya.Box(6000,6000,w-6000,h-6000))
+    t.shapes(l.layer(99,0)).insert(ring)
+    Path(target_dir).mkdir(parents=True,exist_ok=True)
+    l.write(str(Path(target_dir)/"neutral_ring.gds"))
+generate_sealring(sys.argv[1],sys.argv[2],sys.argv[3],False,True)
+''')
+    result = _run(project, script, monkeypatch)
+    assert result["seal_ring"]["state"] == "FAIL", result
+    assert result["seal_ring"]["rule"] == "SEAL_RING_DIE_EXTENT_MISMATCH", result
+    assert DFC.evaluate(project)["verdict"] == "FAIL"
+    assert not (project / DFG._DEF_REL).exists()
+
+
 @pytest.mark.parametrize("geometry", [
     None,
     {"size_convention": "outer", "offset_um": [0, 0]},

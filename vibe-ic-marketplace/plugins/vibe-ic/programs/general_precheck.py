@@ -1510,7 +1510,7 @@ def _step_delegate(ev: StepEvidence, step: Step, project: Path,
                 "measured for one. A declared not-applicable is refused; only "
                 "a technology with no seal-ring facility at all earns "
                 "NOT_APPLICABLE"
-                + (". This provider is not supported by the current KLayout "
+                + (". This provider is not supported by the current "
                    "die-finishing caller" if seal_invocation_supported is False
                    else ""))
             return

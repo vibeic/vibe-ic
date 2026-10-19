@@ -605,19 +605,24 @@ def seal_ring_facility(volume: Optional[Path], reader=None
 def seal_ring_invocation_supported(volume: Optional[Path], provider: Optional[str],
                                    reader=None
                                    ) -> Optional[bool]:
-    """Whether the discovered provider has the KLayout form this flow drives."""
+    """Whether this flow recognizes the selected provider's actual interface.
+
+    Provider presence, readable source, and supported invocation are separate
+    questions. Use the producer's own classifier on the selected PDK reader;
+    a Magic symlink under the conventional KLayout name must be classified by
+    its resolved family and script bytes, not by its spelling.
+    """
     if volume is None or provider is None:
         return None
-    from die_finishing_gen import _PDK_SCRIPT_REL as rel
-    if provider != str(volume / rel):
-        return False
+    from die_finishing_gen import detect_form_source
     try:
         resolved = _query(Path(provider), "realpath", reader=reader)
+        source = _query(Path(provider), "read", reader=reader)
     except OSError:
         return None
-    # A conventional KLayout pathname can be a symlink to a positional Magic
-    # generator. In that case its spelling is not proof of invocation support.
-    return str(resolved) == str(volume / rel)
+    form, _ = detect_form_source(str(resolved),
+                                 "\n".join(source.splitlines()[:200]))
+    return form in ("pya-cli", "klayout-rd", "magic-positional")
 
 
 #: THE FLOW'S OWN MARKER LAYERS, derived from the writer, never typed here.

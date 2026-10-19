@@ -607,6 +607,38 @@ def provider_target(project: Path) -> Optional[Dict[str, Any]]:
     return value
 
 
+def built_die_rectangle(project: Path, declared: Optional[Dict[str, Any]] = None
+                        ) -> Tuple[Optional[List[float]], str]:
+    """The built DIEAREA, or the declared rectangle when no DEF exists.
+
+    A GDS bounding box is not a die boundary: pre-existing core/outline
+    geometry can keep it full-sized even when an imported ring is too small.
+    """
+    for pat in ("phase3/stage3/pnr/routed.def", "phase3/stage3/pnr/*.def",
+                "**/*.def"):
+        for d in sorted(project.glob(pat)):
+            if not d.is_file():
+                continue
+            try:
+                text = d.read_text(errors="ignore")
+            except OSError:
+                continue
+            m = re.search(r"DIEAREA\s*\(\s*(-?\d+)\s+(-?\d+)\s*\)\s*"
+                          r"\(\s*(-?\d+)\s+(-?\d+)\s*\)", text)
+            u = re.search(r"UNITS\s+DISTANCE\s+MICRONS\s+(\d+)", text)
+            if m:
+                scale = float(u.group(1)) if u else 1000.0
+                return ([int(m.group(i)) / scale for i in (1, 2, 3, 4)],
+                        f"DIEAREA of {d.relative_to(project)}")
+    rect = _declared(declared or {}, _DECL_DIE_AREA)
+    if (isinstance(rect, (list, tuple)) and len(rect) == 4
+            and all(isinstance(c, (int, float)) and not isinstance(c, bool)
+                    and math.isfinite(c) for c in rect)
+            and rect[2] > rect[0] and rect[3] > rect[1]):
+        return [float(c) for c in rect], f"{_DECL_SOURCE}.{_DECL_DIE_AREA}"
+    return None, "no DEF DIEAREA or answered die_area_um"
+
+
 def die_size(project: Path, gds: Path,
              width: Optional[float],
              height: Optional[float],
@@ -639,32 +671,13 @@ def die_size(project: Path, gds: Path,
     if profile is not None:
         width, height = profile["technical_target"]["dimensions_um"]
         return float(width), float(height), PROVIDER_TARGET_REL + ".technical_target.dimensions_um (engineering target, not a reservation)"
-    for pat in ("phase3/stage3/pnr/routed.def", "phase3/stage3/pnr/*.def",
-                "**/*.def"):
-        for d in sorted(project.glob(pat)):
-            if not d.is_file():
-                continue
-            try:
-                text = d.read_text(errors="ignore")
-            except OSError:
-                continue
-            m = re.search(r"DIEAREA\s*\(\s*(-?\d+)\s+(-?\d+)\s*\)\s*"
-                          r"\(\s*(-?\d+)\s+(-?\d+)\s*\)", text)
-            u = re.search(r"UNITS\s+DISTANCE\s+MICRONS\s+(\d+)", text)
-            if not m:
-                continue
-            scale = float(u.group(1)) if u else 1000.0
-            x0, y0, x1, y1 = (int(m.group(i)) for i in (1, 2, 3, 4))
-            return ((x1 - x0) / scale, (y1 - y0) / scale,
-                    f"DIEAREA of {d.relative_to(project)}")
-    rect = _declared(declared or {}, _DECL_DIE_AREA)
-    if (isinstance(rect, (list, tuple)) and len(rect) == 4
-            and all(isinstance(c, (int, float)) and not isinstance(c, bool)
-                    for c in rect)):
-        w, h = float(rect[2]) - float(rect[0]), float(rect[3]) - float(rect[1])
+    rect, rect_source = built_die_rectangle(project, declared)
+    if rect is not None:
+        w, h = rect[2] - rect[0], rect[3] - rect[1]
         if w > 0 and h > 0:
-            return w, h, (f"{_DECL_SOURCE}.{_DECL_DIE_AREA} {list(rect)} "
-                          "(no DEF DIEAREA on this tree)")
+            suffix = (f" {rect} (no DEF DIEAREA on this tree)"
+                      if rect_source.startswith(_DECL_SOURCE) else "")
+            return w, h, rect_source + suffix
     return None, None, ("no DIEAREA found in any DEF and "
                         f"{_DECL_SOURCE}.{_DECL_DIE_AREA} is "
                         f"{_td.NOT_DETERMINED}; caller must pass "
@@ -708,6 +721,20 @@ def _read_remote(runner, path: str, limit: int = 200) -> Optional[str]:
     return out if rc == 0 else None
 
 
+def detect_form_source(script: str, text: str) -> Tuple[str, str]:
+    """Classify a provider from bytes read in the selected PDK environment."""
+    if _PYA_CLI_MARKER in text:
+        return "pya-cli", f"the script declares {_PYA_CLI_MARKER}"
+    if (re.search(r"\bwidth\s+height\s+target_dir\b", text)
+            and "-outer" in text and "-keep" in text
+            and re.search(r"def\s+generate_sealring\s*\(", text)):
+        return "magic-positional", "the provider declares width height target_dir and -outer/-keep"
+    if "/libs.tech/magic/" in str(script).replace("\\", "/"):
+        return "unsupported", "the Magic provider does not declare a supported invocation interface"
+    return "klayout-rd", (f"the script does not declare {_PYA_CLI_MARKER}, so it "
+                          "is driven as a KLayout batch script")
+
+
 def detect_form(runner, script: str) -> Tuple[str, str]:
     """(form, why) — how this PDK script wants to be invoked.
 
@@ -719,16 +746,7 @@ def detect_form(runner, script: str) -> Tuple[str, str]:
     if text is None:
         return "pya-cli", ("could not read the script to detect its interface; "
                            "kept the default pya-cli form")
-    if _PYA_CLI_MARKER in text:
-        return "pya-cli", f"the script declares {_PYA_CLI_MARKER}"
-    if (re.search(r"\bwidth\s+height\s+target_dir\b", text)
-            and "-outer" in text and "-keep" in text
-            and re.search(r"def\s+generate_sealring\s*\(", text)):
-        return "magic-positional", "the provider declares width height target_dir and -outer/-keep"
-    if "/libs.tech/magic/" in str(script).replace("\\", "/"):
-        return "unsupported", "the Magic provider does not declare a supported invocation interface"
-    return "klayout-rd", (f"the script does not declare {_PYA_CLI_MARKER}, so it "
-                          "is driven as a KLayout batch script")
+    return detect_form_source(script, text)
 
 
 def derive_tech(runner, script: str) -> Tuple[Optional[str], str]:
@@ -1599,6 +1617,36 @@ def run(project: Path, gds: Optional[str], script: Optional[str],
         pass
 
     if ring_check.get("verdict") == "PASS":
+        if form == "magic-positional":
+            expected_box, expected_source = built_die_rectangle(project, decl)
+            extent = ring_check.get("ring_extent") or {}
+            outer = (extent.get("outer") or {}).get("um")
+            # The verifier proves annulus topology around the INPUT geometry.
+            # A small ring around a small core can pass that test while the
+            # rest of the built die remains outside it; the final GDS bbox may
+            # still equal DIEAREA because its old geometry supplies the edges.
+            # Compare the RING'S OWN measured outer edge to the built die.
+            seal["ring_die_extent"] = {
+                "expected_um": expected_box, "expected_source": expected_source,
+                "measured_ring_outer_um": outer,
+                "comparison_tolerance_um": 0.0001,
+            }
+            if (expected_box is None or not isinstance(outer, list)
+                    or len(outer) != 4
+                    or not all(isinstance(v, (int, float)) and not isinstance(v, bool)
+                               and math.isfinite(v) for v in outer)
+                    or any(abs(a - b) > 0.0001
+                           for a, b in zip(outer, expected_box))):
+                seal["state"] = "FAIL"
+                seal["rule"] = "SEAL_RING_DIE_EXTENT_MISMATCH"
+                seal["reason"] = (
+                    f"the Magic ring's own outer extent {outer} um does not "
+                    f"match the built die rectangle {expected_box} um "
+                    f"({expected_source}); whole-GDS bounding box and ring "
+                    "topology alone cannot prove die-edge enclosure")
+                seal["gds_out_unpromoted"] = str(staged)
+                return done(seal, ring_check)
+            seal["ring_die_extent"]["state"] = "PASS"
         # ── REFUSE TO SEAL A CORE THAT IS ALREADY IN THE BAND ──────────────
         # MEASURED (vibe-ic#2122 / vibeic-eda#189) on one gf180mcuD die: the
         # same generator and the same deck gave 16 violations for the ring on

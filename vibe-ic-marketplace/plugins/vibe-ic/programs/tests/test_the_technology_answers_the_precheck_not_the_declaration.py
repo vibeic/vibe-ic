@@ -215,7 +215,7 @@ def test_magic_provider_is_available_but_cannot_grant_process_absence(
     assert ev.measured["seal_ring_facility_path"] == str(generator)
     assert ev.measured["seal_ring_invocation_supported"] is False
     if required is False:
-        assert "not supported by the current KLayout" in ev.evidence
+        assert "not supported by the current die-finishing" in ev.evidence
 
 
 def test_klayout_convention_symlink_to_magic_is_not_supported_invocation(
