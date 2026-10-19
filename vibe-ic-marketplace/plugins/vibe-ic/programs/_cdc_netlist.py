@@ -24,6 +24,11 @@ reset is the outermost `$mux` in front of D with a constant arm, an enable is
 a `$mux` whose other arm is the flop's own Q, and an async reset is the `ARST`
 pin of `$adff`.
 
+SystemVerilog source uses the native Slang reader in one compilation unit,
+with the existing package/import ordering before elaboration. Plain Verilog
+keeps the legacy reader. Both preserve the CDC producer's default SYNTHESIS
+define, and the actual frontend/read order remain part of the native binding.
+
 The step switch (`librelane_contract.selected_mode(project, "3")`):
   direct    — regex front ends only (explicit opt-out)
   librelane — the netlist rules decide; a missing netlist refuses (no fallback)
@@ -83,9 +88,28 @@ def gate_mode(project: Path) -> str:
 
 # ─────────────────────────────── front end ────────────────────────────────
 
+def _uses_slang(files: List[Path], sv: bool = True) -> bool:
+    return sv and any(Path(f).suffix == ".sv" for f in files)
+
+
+def _read_order(files: List[Path], sv: bool = True) -> List[Path]:
+    if _uses_slang(files, sv):
+        from rtl_transitive_cone import topological_package_first
+        return topological_package_first(list(files))
+    return list(files)
+
+
 def yosys_script(files: List[Path], top: Optional[str], out: Path,
                  sv: bool = True) -> str:
-    reads = [f"read_verilog {'-sv ' if sv else ''}-defer {f}" for f in files]
+    if _uses_slang(files, sv):
+        files = _read_order(files, sv)
+        if any(any(c.isspace() or c in ';"\\' for c in str(f)) for f in files):
+            raise Refusal("CDC_NETLIST_UNSUPPORTED_PATH",
+                          "read_slang cannot represent the selected source path token")
+        reads = ["read_slang --single-unit " + (f"--top {top} " if top else "")
+                 + " ".join(map(str, files))]
+    else:
+        reads = [f"read_verilog {'-sv ' if sv else ''}-defer {f}" for f in files]
     passes = list(JSON_HEADER_PASSES)
     if top:
         passes = [p.format(top=top) for p in passes]
@@ -128,7 +152,9 @@ def source_binding(project: Path, top: Optional[str],
                 "phase3/librelane_switch.json"):
         if (project / rel).is_file():
             deps.add(project / rel)
-    options = {"sv": True, "passes": list(JSON_HEADER_PASSES),
+    options = {"sv": True,
+               "frontend": "read_slang" if _uses_slang(files) else "read_verilog",
+               "passes": list(JSON_HEADER_PASSES),
                "requested_top": top, "declared_top": declared}
     inputs = [("source", p, "raw") for p in sorted(deps)]
     fingerprint, why = resolved_inputs_digest(
@@ -207,7 +233,7 @@ def build(project: Path, rtl_files: List[Path], top: Optional[str],
     out.parent.mkdir(parents=True, exist_ok=True)
     tmp = out.with_suffix(".json.tmp")
     tmp.unlink(missing_ok=True)
-    files = [Path(f).resolve() for f in rtl_files]
+    files = _read_order([Path(f).resolve() for f in rtl_files])
     script = yosys_script(files, top, tmp)
     if shutil.which("yosys"):
         argv = ["yosys", "-q", "-p", script]
