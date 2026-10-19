@@ -24124,7 +24124,7 @@ def step_arith_declaration_emit(project: Path) -> StepResult:
 
     NON-BLOCKING BY CONSTRUCTION. The emitter is FAIL-CLOSED: when a required
     field is not derivable it writes no file and exits rc=1. That is reported
-    here as SKIP with the emitter's own reason, never as FAIL — whether the
+    here as NOT_MEASURED with the emitter's own reason, never as FAIL — whether the
     absent file MATTERS is `spec_required_artifact_check`'s decision (it
     knows if the spec demanded it), not this producer's. So wiring this in
     cannot newly fail any IC that was passing.
@@ -24154,14 +24154,18 @@ def step_arith_declaration_emit(project: Path) -> StepResult:
     arithmetic-only emitter was the sole producer and could not know the
     contract.
 
-    Order: ask the contract-driven emitter FIRST. It exits 3 (NO_CONTRACT) when
-    the spec declares no declaration contract at all, which is precisely the
-    arithmetic-primitive case — so that rc falls through to the previous
-    behaviour, unchanged. When a contract IS declared, its fail-closed reason
-    names THAT SPEC'S fields, which is the reason an author can act on.
+    Order: ask the contract-driven emitter FIRST. Its rc 3 (NO_CONTRACT) or
+    rc 4 (NOTHING_TO_DECLARE) does not identify an arithmetic top. Only after
+    that result, a positively classified, registered non-arithmetic top makes
+    the arithmetic fallback NOT_APPLICABLE. Arithmetic classes (including
+    registry synonyms) and unknown classification retain the leaf's fail-closed
+    behavior. An internal multiplier does not make a crypto top an arithmetic
+    leaf. When a contract IS declared, its fail-closed reason names THAT SPEC'S
+    fields, which is the reason an author can act on.
 
-    STILL NON-BLOCKING BY CONSTRUCTION: every path here returns PASS or SKIP,
-    never FAIL, so no IC that passes today can newly fail.
+    Every path here returns PASS, NOT_MEASURED or a declared NOT_APPLICABLE,
+    never FAIL. The required-artifact consumer still decides whether the
+    declaration is required; this producer does not waive that requirement.
 
     A DESIGN THAT SUPPLIES ITS RTL. The contract emitter also records what the
     flow knows about supplied RTL (the staged files, the top, its ports) under
@@ -24196,8 +24200,8 @@ def step_arith_declaration_emit(project: Path) -> StepResult:
 
     # 1. The contract-driven emitter: the field list comes from THIS project's
     #    spec, so it is the only one that can satisfy a spec-declared contract.
-    #    rc 3 = NO_CONTRACT and rc 4 = NOTHING_TO_DECLARE both mean "this spec
-    #    declares no machine-readable contract", i.e. fall through.
+    #    rc 3 = NO_CONTRACT; rc 4 = NOTHING_TO_DECLARE (only optional,
+    #    undetermined fields). Neither result proves arithmetic applicability.
     spec_cp = _run("spec_declaration_emit.py", _top_args)
     if spec_cp is not None and spec_cp.returncode not in (3, 4):
         if spec_cp.returncode == 0 and out_p.is_file():
@@ -24230,7 +24234,30 @@ def step_arith_declaration_emit(project: Path) -> StepResult:
                           [str(_rec)] if _rec is not None and _rec.is_file() else [],
                           reason_class=_V.ReasonClass.EXECUTION_ERROR)
 
-    # 2. No spec-declared contract — the previous behaviour, byte for byte.
+    # 2. Use the same persisted native class authority as the rest of the run.
+    #    Do not call this runner's refreshing detector: it restamps L-docs and
+    #    could classify a different, later document state (#435). Unknown or
+    #    unavailable class/contract evidence never authorizes an N/A escape.
+    if spec_cp is not None and spec_cp.returncode in (3, 4):
+        try:
+            from ic_class_profile import detect_ic_class as _profile_detect
+            _profile = _profile_detect(project) or {}
+            _class = _profile.get("ic_class", "unknown")
+            _entry = _lookup_class(_class)
+        except Exception:
+            _entry = None
+        _name = (_entry or {}).get("name")
+        if _name and _name not in (
+                "digital_arithmetic_primitive", "unknown_protocol_class"):
+            return StepResult(
+                "arith_declaration_emit", "NOT_APPLICABLE", time.time() - t0,
+                f"arithmetic-only declaration fallback not applicable to "
+                f"registered top class {_name}; spec_declaration_emit "
+                f"returned rc={spec_cp.returncode}; no arithmetic declaration written",
+                declared_by=f"native ic_class_profile: {_class} ({_name}); "
+                            f"spec_declaration_emit rc={spec_cp.returncode}")
+
+    # 3. Arithmetic or uncertain applicability — keep the leaf fail-closed.
     prog = PROGRAMS_DIR / "arith_declaration_emit.py"
     if not prog.is_file():
         return StepResult("arith_declaration_emit", "NOT_MEASURED", time.time() - t0,
