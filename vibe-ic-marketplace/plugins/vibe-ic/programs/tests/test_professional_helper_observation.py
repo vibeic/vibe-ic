@@ -141,6 +141,8 @@ def project(tmp_path, variant='sibling'):
         source = source.replace('actual = await block_value(env)', '_first = await block_value(env)\n        env.constant = True\n        actual = await block_value(env)')
     elif variant in {'keyword_mutator', 'aggregate_mutator'}:
         source = source.replace('from wire_bfm import WireEnvironment', 'from wire_bfm import WireEnvironment\nfrom unavailable import mutate').replace('    env = WireEnvironment(dut)', '    env = WireEnvironment(dut)\n    ' + ('mutate(binding=env)' if variant == 'keyword_mutator' else 'mutate([env])'))
+    elif variant == 'class_method_rebound':
+        helper = 'async def replacement(self):\n    return 0x3a\n' + helper + '\n    output = replacement\n'
     elif variant != 'sibling':
         raise AssertionError(variant)
     (bundle / 'expert_reference_tb.py').write_text(source)
@@ -167,7 +169,7 @@ def test_reachable_asserted_observation_is_admitted(tmp_path, variant):
     'short_circuit', 'constant_condition', 'dead_assertion',
     'caller_late_binding', 'caller_dead_binding', 'dynamic_constructor',
     'dynamic_alias_write', 'shadowed_conversion', 'posonly_constructor_keyword',
-    'unresolved_mutator', 'presence_only', 'shadowed_presence', 'finally_swallow_return', 'except_swallow', 'recursive_helper', 'depth_overflow', 'memo_field_changed', 'keyword_mutator', 'aggregate_mutator',
+    'unresolved_mutator', 'presence_only', 'shadowed_presence', 'finally_swallow_return', 'except_swallow', 'recursive_helper', 'depth_overflow', 'memo_field_changed', 'keyword_mutator', 'aggregate_mutator', 'class_method_rebound',
 ])
 def test_unestablished_or_unasserted_helper_observation_stays_refused(tmp_path, variant):
     audit = coverage.functional_stimulus_audit(project(tmp_path, variant))

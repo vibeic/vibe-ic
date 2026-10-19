@@ -33,6 +33,7 @@ class _Object:
     module: Path
     node: ast.ClassDef
     fields: dict = field(default_factory=dict)
+    bindings: dict = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -169,8 +170,12 @@ class _Graph:
                     return value.fields[node.attr]
                 methods = [n for n in value.node.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
                            and n.name == node.attr]
-                if len(methods) == 1:
+                if methods:
+                    if len(methods) != 1 or value.bindings.get(node.attr) != 1:
+                        raise _Unestablished('class callable binding is ambiguous')
                     return _Function(value.module, methods[0], value)
+                if node.attr in value.bindings:
+                    raise _Unestablished('class callable is not uniquely established')
             if isinstance(value, tuple) and value and value[0] == 'module':
                 return self.module(value[1])[1].get(node.attr, _UNKNOWN)
             return _UNKNOWN
@@ -426,6 +431,9 @@ class _Graph:
         if any(not isinstance(n, (ast.Assign, ast.AnnAssign, ast.Expr, ast.Pass)) for n in constructor.body):
             return _UNKNOWN
         instance = _Object(function.module, node)
+        for statement in node.body:
+            for name in self.bound_names(list(self.scope_nodes([statement]))):
+                instance.bindings[name] = instance.bindings.get(name, 0) + 1
         self.call(_Function(function.module, constructor, instance), args, kwargs)
         aliases = {name for name, value in instance.fields.items() if value is _DUT}
         if not aliases:
