@@ -497,12 +497,16 @@ def _finding(rule: str, severity: str, message: str, **evidence) -> dict:
 
 
 def _sync_stage2(nl: Netlist, stage1: Flop, index: int, domain: str) -> bool:
-    """Is stage1.Q[index] sampled directly by another flop of `domain`?"""
+    """Is stage1.Q[index] sampled by a distinct bit lane of `domain`?"""
     bit = stage1.q[index]
     for f in nl.flops:
-        if f is stage1 or nl.domain(f) != domain:
+        if nl.domain(f) != domain:
             continue
         for i in range(len(f.d)):
+            # Another lane of a packed word is a separate sample. The same
+            # lane (or a Q alias) is a hold, not a second synchronizer stage.
+            if f is stage1 and (i == index or f.q[i] == bit):
+                continue
             if nl.direct_source(f, i) == bit:
                 return True
     return False
