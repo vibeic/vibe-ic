@@ -643,6 +643,7 @@ def test_native_container_queries_use_identity_supervision_not_client_timeout(mo
         calls.append((container,command,kwargs))
         return subprocess.CompletedProcess([], ce.STALLED_RC, "partial query\n", "owned job reaped")
     monkeypatch.setattr(ce,"run_in_container_supervised",supervised)
+    monkeypatch.setattr(ce,"local_exec_mode",lambda _tag: False)
     rc,out,err,meta=fsc._native_query_run(["docker","exec"], container="test-container", command="yosys -s model.ys")
     assert calls == [("test-container","yosys -s model.ys",{"ceiling_s":120})]
     assert rc == ce.STALLED_RC and out == "partial query\n" and err == "owned job reaped"
@@ -672,6 +673,53 @@ def test_native_cone_and_whole_model_answers_match_every_identity_and_arm(tmp_pa
     def answers(mapping):
         return [(r["cell"],r["bit_index"],r["classification"],r["native_queries"]) for r in mapping["rows"]]
     assert answers(left) == answers(right)
+
+
+def test_native_host_progress_finishes_past_recorded_batch_budget(tmp_path):
+    """Real progressing Python child, not a simulator or mocked supervisor."""
+    import time
+    program = ("import time\n"
+               "start=time.monotonic()\n"
+               "for tick in range(12):\n"
+               " print('NATIVE_PROGRESS', tick, time.monotonic()-start, flush=True)\n"
+               " time.sleep(0.02)\n"
+               "print('NATIVE_BATCH_COMPLETED', flush=True)\n")
+    argv = [sys.executable, '-u', '-c', program]
+    budget = 0.05
+    start = time.monotonic()
+    rc, stdout, stderr, native = fsc._native_query_run(argv, timeout=budget)
+    elapsed = time.monotonic() - start
+    observation = {'scope': 'Process/progress ownership software fixture only; no EDA',
+                   'argv': argv, 'recorded_budget_seconds': budget, 'elapsed_seconds': elapsed,
+                   'rc': rc, 'stdout': stdout, 'stderr': stderr, 'native': native}
+    (tmp_path / 'HOST_PROGRESS_OBSERVATION.json').write_text(json.dumps(observation, indent=2))
+    assert (rc, native['termination'], 'NATIVE_BATCH_COMPLETED' in stdout) == (0, 'COMPLETED', True), observation
+    ticks = [line.split() for line in stdout.splitlines() if line.startswith('NATIVE_PROGRESS ')]
+    assert len(ticks) == 12 and float(ticks[-1][2]) > budget, observation
+    assert elapsed > budget, observation
+
+
+def test_native_cofactor_keeps_named_container_on_the_existing_local_route(tmp_path):
+    """Actual in-image Yosys/normal cofactor owner; no Docker exec/mock tool."""
+    import _container_exec as ce
+    _yosys()
+    assert ce.local_exec_mode('formal_structural_check'), 'this control requires the pinned no-Docker image route'
+    model = {'modules': {'transition_pair': {
+        'attributes': {'top': 1}, 'cells': {},
+        'ports': {'input_7': {'direction': 'input', 'bits': [2]},
+                  'q0_n0': {'direction': 'output', 'bits': [2]},
+                  'q0_n1': {'direction': 'output', 'bits': [2]}},
+        'netnames': {}}}}
+    rows = [{'q': 9, 'query_ports': {'n0': 'q0_n0', 'n1': 'q0_n1'}}]
+    info, payloads = fsc._cofactor_payload_support(model, rows, tmp_path,
+                                                 container='normal-runner-default')
+    observation = {'scope': 'Real native cofactor normalization with a container label on the existing local route',
+                   'native': info, 'payloads': {str(k): sorted(v) for k, v in payloads.items()}}
+    (tmp_path / 'LOCAL_ROUTE_OBSERVATION.json').write_text(json.dumps(observation, indent=2))
+    observed = (info['native_exit_code'], info['status'])
+    assert observed == (0, 'NATIVE_NORMALIZED_COFACTOR_SUPPORT'), observed
+    assert payloads == {9: {7}}, observation
+    assert info['native_run']['supervision'] == 'host_process_and_progress', observation
 
 
 @pytest.mark.parametrize("main_reset,scratch_event,scratch_body,expected", [

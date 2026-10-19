@@ -24698,9 +24698,9 @@ def step_emit_phase2_manifests(project: Path,
                     # all retain the same canonical evidence artifact. The gate
                     # decides the row from its contents; the runner never makes
                     # a failed proof disappear.
-                    written.append("formal/results.json")
+                    written.append((formal_dir / "results.json").relative_to(project).as_posix())
                 if (formal_dir / "formal_env_unavailable.json").is_file():
-                    written.append("formal/formal_env_unavailable.json")
+                    written.append((formal_dir / "formal_env_unavailable.json").relative_to(project).as_posix())
             elif _gen.get("verdict") == "NOT_APPLICABLE":
                 _payload = {
                     "verdict": "SKIPPED-CONDITION",
@@ -24716,13 +24716,13 @@ def step_emit_phase2_manifests(project: Path,
                 # not a shorter line.
                 _aa.write_json(formal_dir / "formal_not_applicable.json",
                                _payload)
-                written.append("formal/formal_not_applicable.json")
+                written.append((formal_dir / "formal_not_applicable.json").relative_to(project).as_posix())
             else:
                 # `generate` already wrote formal_authoring_request.json with
                 # the exact L3/L6/L8 IDs and REQUIRED_NOT_INVOKED receipt state.
                 # The /vibe-ic-phase2 command consumes that artifact and invokes
                 # formal-verify; until it does, Step 5 is INCOMPLETE.
-                written.append("formal/formal_authoring_request.json")
+                written.append((formal_dir / "formal_authoring_request.json").relative_to(project).as_posix())
         except Exception as _e:  # preserve the run; make the missing work loud
             _payload = {
                 "verdict": "INCOMPLETE",
@@ -24745,7 +24745,7 @@ def step_emit_phase2_manifests(project: Path,
             # it actionable.
             _aa.write_json(formal_dir / "formal_authoring_request.json",
                            _payload)
-            written.append("formal/formal_authoring_request.json")
+            written.append((formal_dir / "formal_authoring_request.json").relative_to(project).as_posix())
 
     # Step 6: FPGA early prototype + audit
     fpga_compile_step = by_name.get("fpga_compile")

@@ -497,3 +497,66 @@ def test_normal_phase2_report_survives_absent_advisory_handoff(tmp_path, monkeyp
         'scope': 'Real manifest/audit/main/report; neutral unrelated producers and native process leaf',
         'handoff': handoff_state, 'rc': rc, 'report': report, 'hygiene': hygiene, 'audit': audit,
     }, indent=2))
+
+
+@pytest.mark.parametrize('synth_status', ['FAIL', 'PASS'])
+def test_manifest_publication_discloses_current_refusal_and_replaces_old_lint_pass(tmp_path, synth_status):
+    expected = _absent_selected_handoff(tmp_path)
+    rtl = tmp_path / 'phase2/stage1/rtl/core.v'
+    rtl.parent.mkdir(parents=True)
+    rtl.write_text('module core(input clk, output y); assign y=clk; endmodule\n')
+    old = tmp_path / 'reports/phase2/lint/rtl_hygiene.json'
+    old.parent.mkdir(parents=True)
+    old.write_text('{"verdict":"PASS","evidence":"old.log"}')
+    legacy = tmp_path / _SYNTH_LOG_REL
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text(_REAL_STAT_LOG)
+    result = DOSR.step_emit_phase2_manifests(tmp_path, [_synth(synth_status)], 'core', None)
+    hygiene = json.loads(old.read_text())
+    assert result.name == 'phase2_manifests'
+    assert hygiene['verdict'] == 'INCOMPLETE' and hygiene['reason_class'] == 'tool_handoff_invalid', hygiene
+    assert hygiene['reason'] == expected, hygiene
+    assert hygiene['rtl_files'] == ['core.v'] and 'evidence' not in hygiene, hygiene
+    assert all((tmp_path / rel).is_file() for rel in result.output_files), result.output_files
+    # Publication must not convert the strict reader's refusal into a usable
+    # legacy transcript, even if the incoming source row itself claims PASS.
+    with pytest.raises(ValueError, match='SYNTH_LOG_HANDOFF_UNBOUND'):
+        DOSR._synthesis_log_path(tmp_path)
+
+
+def test_full_phase2_report_survives_real_manifest_emitter_on_failed_synthesis(tmp_path, monkeypatch):
+    """Actual coordinator, strict reader, emitter and final writer; neutral unrelated leaves."""
+    _absent_selected_handoff(tmp_path)
+    docs = tmp_path / 'phase1/generated_docs'
+    docs.mkdir(parents=True)
+    for number in range(1, 14):
+        (docs / f'L{number}.json').write_text('{}')
+    rtl = tmp_path / 'phase2/stage1/rtl/core.v'
+    rtl.parent.mkdir(parents=True)
+    rtl.write_text('module core(input clk, output y); assign y=clk; endmodule\n')
+    (tmp_path / 'reports').mkdir()
+    for name in list(vars(DOSR)):
+        if not name.startswith('step_') or name in ('step_synth_log_audit', 'step_emit_phase2_manifests'):
+            continue
+        def neutral(*args, _name=name, **kwargs):
+            result = (_synth('FAIL') if _name == 'step_yosys_synth' else
+                      DOSR.StepResult(_name.removeprefix('step_'), 'NOT_APPLICABLE', 0.0,
+                                      'unrelated producer outside manifest publication regression',
+                                      declared_by='neutral coordinator fixture'))
+            return [result] if _name == 'step_dft_lec_chain' else result
+        monkeypatch.setattr(DOSR, name, neutral)
+    monkeypatch.setattr(DOSR._spf, 'gate', lambda project, owner, site, refuse, fn, *a, **kw:
+                        fn(*a, **{k: v for k, v in kw.items() if not k.startswith('_preflight')}))
+    import execution_policy
+    import flow_declared_producer_run
+    monkeypatch.setattr(execution_policy, '_ordinary_runtime', None)
+    monkeypatch.setattr(flow_declared_producer_run, 'run_for_step', lambda *a, **kw: None)
+    monkeypatch.setattr(sys, 'argv', ['design', str(tmp_path), '--skip-hardware',
+                                    '--skip-phase3', '--skip-analog', '--max-rtl-repair-retries', '0'])
+    assert DOSR.main() == 1
+    report = json.loads((tmp_path / 'reports/orchestrator/phase2_one_shot.json').read_text())
+    rows = {row['name']: row for row in report['steps']}
+    assert report['verdict'] == 'FAIL' and not report.get('final_audit_pending'), report
+    assert rows['yosys_synth']['status'] == 'FAIL'
+    hygiene = json.loads((tmp_path / 'reports/phase2/lint/rtl_hygiene.json').read_text())
+    assert hygiene['verdict'] == 'INCOMPLETE' and 'SYNTH_LOG_HANDOFF_UNBOUND' in hygiene['reason']

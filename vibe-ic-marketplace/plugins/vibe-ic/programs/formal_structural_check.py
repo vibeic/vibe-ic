@@ -981,8 +981,8 @@ def _native_query_run(argv: List[str], timeout: int = 120, *,
     """
     supervision = "host_process_and_progress"
     try:
-        if container:
-            import _container_exec as ce
+        import _container_exec as ce
+        if container and not ce.local_exec_mode("formal_structural_check"):
             if not command:
                 raise ValueError("container native query requires its exact command")
             supervision = "container_identity_and_progress"
