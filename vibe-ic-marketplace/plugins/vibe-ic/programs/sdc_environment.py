@@ -532,13 +532,16 @@ def _pad_analysis_boundary(project: Path, analysis_top: str
         basis["classification"] = kind
         return kind, basis
 
+    try:
+        import hashlib
+        import json
+        raw = (Path(project) / IO_PAD_RECORD).read_bytes()
+        record = json.loads(raw)
+        basis["record_sha256"] = hashlib.sha256(raw).hexdigest()
+    except (OSError, ValueError, AttributeError):
+        return classified("UNSPECIFIED" if not analysis_top else "UNRECORDED")
     if not analysis_top:
         return classified("UNSPECIFIED")
-    try:
-        import json
-        record = json.loads((Path(project) / IO_PAD_RECORD).read_text())
-    except (OSError, ValueError, AttributeError):
-        return classified("UNRECORDED")
     core = record.get("core_module") if isinstance(record, dict) else None
     chip = record.get("chip_top_module") if isinstance(record, dict) else None
     if not core and not chip:
@@ -586,8 +589,9 @@ def _pad_input_drive(project: Path, values: Dict[str, Tuple[str, str]],
                         "verdict": "NOT_MEASURED",
                         "reason": f"route undeterminable: {exc!r}"}
     boundary_kind, boundary = _pad_analysis_boundary(project, analysis_top)
-    identity = ({"analysis_top": analysis_top, "boundary": boundary}
-                if analysis_top else {})
+    identity = {"boundary": boundary}
+    if analysis_top:
+        identity["analysis_top"] = analysis_top
     if not die or boundary_kind == "CORE":
         reason = (f"current analysis top {analysis_top!r} is the recorded core "
                   f"boundary; future chip top {boundary.get('chip_top_module')!r} "

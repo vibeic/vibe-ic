@@ -16,13 +16,15 @@ import sys
 from pathlib import Path
 
 PROGRAMS = Path(__file__).resolve().parents[1]
-FLOW = PROGRAMS.parent / "flow" / "phase1_phase2_phase3.yaml"
 if str(PROGRAMS) not in sys.path:
     sys.path.insert(0, str(PROGRAMS))
 
+from _hostpaths import require_repo  # noqa: E402
 import _tapeout_declaration as TD  # noqa: E402
 import sdc_environment as SE  # noqa: E402
 
+FLOW = require_repo("vibe-ic-marketplace", "plugins", "vibe-ic", "flow",
+                    "phase1_phase2_phase3.yaml")
 CLAUSE = "pad_input_drive_check . --json reports/phase3/sta/pad_input_drive_check.json"
 DECK = "phase3/stage3/pnr/constraint.sdc"
 _LIB = """library ("quartz_io__ss") {
@@ -84,7 +86,7 @@ def _run(project: Path):
     return out.returncode, doc
 
 
-def _stage_drive(project: Path, analysis_top: str):
+def _stage_drive(project: Path, analysis_top: str, *, mutate_chip_top: str = ""):
     """Stage a design SDC and exercise the exact Step-23 consumer."""
     import flow_compliance_check as FC
 
@@ -101,6 +103,10 @@ def _stage_drive(project: Path, analysis_top: str):
     deck = project / DECK
     deck.parent.mkdir(parents=True, exist_ok=True)
     deck.write_text(text)
+    if mutate_chip_top:
+        changed = json.loads(pad_record.read_text())
+        changed["chip_top_module"] = mutate_chip_top
+        pad_record.write_text(json.dumps(changed))
     rc, gate = _run(project)
     step23 = FC.check_step(project, _step23_only(), {})
     return text, record, rc, gate, step23
@@ -196,6 +202,18 @@ def test_staged_drive_is_declared_at_the_recorded_chip_top(tmp_path):
     _, record, rc, gate, step23 = _stage_drive(_die(tmp_path), "neutral_chip")
     assert (record["verdict"], rc, gate["verdict"], step23.status) == (
         "DECLARED", 0, "PASS", "PASS")
+
+
+def test_declared_drive_refuses_a_changed_pad_boundary_record(tmp_path):
+    """#3269: a DECLARED line cannot outlive the DIE boundary record whose
+    recorded chip top made that declaration applicable."""
+    _, record, rc, gate, step23 = _stage_drive(
+        _die(tmp_path), "neutral_chip", mutate_chip_top="different_chip")
+    assert record["verdict"] == "DECLARED"
+    assert gate["verdict"] == "NOT_MEASURED", gate
+    assert rc == 2
+    assert step23.status == "NOT_MEASURED"
+    assert "different" in gate["reason"]
 
 
 def test_an_absent_record_on_a_die_is_rc2(tmp_path):

@@ -127,16 +127,20 @@ def judge(project: Path, deck_rel: str = SIGNOFF_DECK) -> Dict[str, Any]:
         return dict(out, verdict="NOT_MEASURED",
                     reason=f"off-chip input drive {rec.get('verdict')}: "
                            f"{rec.get('reason') or 'unresolved'}")
-    was = (rec.get("pdk_io_tier") or {}).get("record_sha256")
-    if rec.get("verdict") == "PDK_IO_TIER":
-        try:
-            now = hashlib.sha256((project / _se.IO_PAD_RECORD).read_bytes()).hexdigest()
-        except OSError:
-            now = None
-        if not was or was != now:
-            return dict(out, verdict="NOT_MEASURED",
-                        reason=f"the drive was resolved from a different "
-                               f"{_se.IO_PAD_RECORD} than the one on disk")
+    boundary = rec.get("boundary") if isinstance(rec.get("boundary"), dict) else {}
+    bound_record = boundary.get("record")
+    was = boundary.get("record_sha256")
+    try:
+        now = hashlib.sha256((project / _se.IO_PAD_RECORD).read_bytes()).hexdigest()
+    except OSError:
+        now = None
+    out["pad_record"] = {"record": bound_record,
+                         "resolved_sha256": was,
+                         "current_sha256": now}
+    if bound_record != _se.IO_PAD_RECORD or not was or was != now:
+        return dict(out, verdict="NOT_MEASURED",
+                    reason=f"the drive was resolved from a different "
+                           f"{_se.IO_PAD_RECORD} than the one on disk")
     lines: List[str] = [str(x) for x in rec.get("sdc_lines") or [] if str(x).strip()]
     if not lines:
         return dict(out, verdict="NOT_MEASURED",
