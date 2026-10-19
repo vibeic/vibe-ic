@@ -176,6 +176,20 @@ free choices through `spec_declaration_emit.py --set`, preserve imported IP
 pins, and attribute the authored-glue correction separately. Do not waive an
 input retention failure or hand-edit producer provenance to admit a repair.
 
+### Skill: Defined idle values at a registered external memory boundary
+
+**Pattern**: Reused minimally reset IP can expose undefined scratch address or write data while its client admission is known inactive, and registering that payload can leak X/Z onto the public memory interface.
+
+**When to apply**: An authored integration wrapper publishes a continuously available memory address or observable write-data output around reused IP with minimally reset internal datapaths.
+
+**What to do**: Trace the real internal read and write admissions and the external sampling contract. Where the input leaves idle payloads free, retain or select a legal defined idle address and choose a defined idle write-data value. Preserve every active transaction address/data and its registered write-enable alignment, read latency, first reset edge and whole-memory retention. Use ordinary conditional four-state merging for uncertain admission; never treat X/Z as inactive. A cycle indication is not automatically a read-enable. Keep the normal reset and CPU tests unchanged and rerun them through both the core and generated pad top; include a reverse control and a reset-write mutant.
+
+**Worked pattern** (anonymized): A shared byte memory had correct computed store/load results but an undefined idle address and idle write data after reset release. Selecting known idle payloads only when the corresponding admissions were inactive cleared both native failures; reversing the wrapper change restored both, while a reset-write mutant still corrupted memory.
+
+**Why this is GENERAL**: This is integration and protocol craft for reused minimally reset IP and external memories. It adds no register reset, signal-name heuristic, checker exemption or alternate simulator model.
+
+_Captured by benchmark-enhancement-capture 2026-10-19._
+
 ## SOURCE_MANIFEST.json — the keystone reused-IP artifact (mandatory)
 
 `phase2/stage1/rtl/SOURCE_MANIFEST.json` is the **keystone** that turns on
