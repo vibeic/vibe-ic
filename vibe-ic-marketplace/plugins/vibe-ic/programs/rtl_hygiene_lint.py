@@ -85,6 +85,10 @@ v0.1.24/v0.1.25 fail-case loops 2026-05-27/28):
      reset edge → last-write-wins race). Does NOT fire on a single always block,
      on a reset-COMPLEMENTARY same-clock split (`if(rst)`/`if(!rst)`), or on
      disjoint bit-slice writers. Advisory WARN; chip-AGNOSTIC structural parse.
+  14. Hidden mutable state in a continuous function call
+     Resolve builtin module declarations and same-module helper calls; WARN
+     when a mutable dependency is absent from explicit arguments. Unsupported
+     closure is disclosed NOT_MEASURED; signatures are never auto-rewritten.
 
 Usage:
     python3 rtl_hygiene_lint.py <files.v|.sv ...>
@@ -2356,6 +2360,237 @@ def autofix_incomplete_sensitivity(path: Path) -> Tuple[int, List[str]]:
         labels.append(f"@({sens.strip()})")
     path.write_text(src)
     return len(labels), labels
+
+
+# ---------------------------------------------------------------------------
+# Continuous function calls: hidden mutable dependencies (read-only rule).
+# Reuse the hierarchy parser's lexical masks, module regions and balanced
+# groups. This is deliberately a closed source subset, not an SV elaborator.
+# ---------------------------------------------------------------------------
+_DEPENDENCY_TYPES = (
+    r'input|output|inout|wire|tri|reg|logic|bit|byte|shortint|int|integer|'
+    r'longint|time|signed|unsigned|var|automatic|static')
+
+
+def _dependency_decl_names(text: str, *, bare=False) -> Optional[Set[str]]:
+    """Builtin typed declarators; None means unsupported, never a guess."""
+    prefix = re.match(r'\s*(?:(?:' + _DEPENDENCY_TYPES + r')\b\s*)+', text)
+    if prefix is None and not bare:
+        return None
+    rest = text[prefix.end():] if prefix else text.strip()
+    while rest.lstrip().startswith('['):
+        rest = rest.lstrip()
+        group = _module_ports.extract_balanced(rest, 0, opener='[', closer=']')
+        if group is None:
+            return None
+        rest = rest[group[1] + 1:]
+    names: Set[str] = set()
+    for part in _module_ports.split_top_level(rest.rstrip().rstrip(';')):
+        match = re.match(r'\s*([A-Za-z_]\w*)\b', part)
+        if match is None or match.group(1) in VERILOG_KEYWORDS:
+            return None
+        tail = part[match.end():].lstrip()
+        while tail.startswith('['):
+            group = _module_ports.extract_balanced(tail, 0, opener='[', closer=']')
+            if group is None:
+                return None
+            tail = tail[group[1] + 1:].lstrip()
+        if tail and not tail.startswith('='):
+            return None
+        names.add(match.group(1))
+    return names
+
+
+def _dependency_ids(text: str) -> Set[str]:
+    """Unqualified value names, excluding literal tails and member labels."""
+    text = re.sub(r"(?:\b\d+)?'[sS]?[bBoOdDhH][0-9a-fA-FxXzZ?_]+", ' ', text)
+    return {m.group() for m in re.finditer(r'(?<![\w$.:])[A-Za-z_]\w*', text)
+            if m.group() not in VERILOG_KEYWORDS
+            and not re.match(r'\s*(?:\(|::)', text[m.end():])}
+
+
+def _dependency_calls(text: str):
+    for match in re.finditer(r'(?<![\w$.:])([A-Za-z_]\w*)\s*\(', text):
+        name = match.group(1)
+        if name in VERILOG_KEYWORDS:
+            continue
+        group = _module_ports.extract_balanced(text, match.end() - 1)
+        yield name, match.start(), group[0] if group else None
+
+
+def rule_continuous_function_hidden_globals(src: str, path: str) -> List[Finding]:
+    """Warn only on resolved module-state reads absent from call arguments.
+
+    Icarus and Verilator can differ when a continuously called function reads
+    mutable module state outside its formals. Resolve same-module helper calls,
+    but never rewrite signatures. Incomplete source closure is an explicit
+    nonblocking NOT_MEASURED diagnostic, not proof of a clean dependency set.
+    Parameters/enums/locals are not inferred to be mutable module declarations.
+    """
+    if not re.search(r'\bfunction\b', src) or not re.search(r'\bassign\b', src):
+        return []
+    findings: List[Finding] = []
+    try:
+        masked = _module_ports.lexical_mask(src, attributes=True)
+    except ValueError:
+        return [Finding(path, 1, 'WARN', 'continuous-function-dependency-unresolved', '',
+                        'NOT_MEASURED: lexical discovery failed; no automatic rewrite.',
+                        False, 'Incomplete function dependency analysis')]
+    for module, start, body_start, end in _module_ports.module_regions(masked, []):
+        body = masked[body_start:end]
+        surface = list(body)
+        module_function_scope = _mask_generate_blocks(body)
+        functions: Dict[str, dict] = {}
+        for match in re.finditer(r'\bfunction\b(.*?)\bendfunction\b', body, re.S):
+            text = match.group(1)
+            semi = text.find(';')
+            header, code = text[:semi], text[semi + 1:]
+            # Packed ranges may contain calls. Only an opening parenthesis
+            # outside [] can start the formal list.
+            bracket = 0
+            opening = -1
+            for pos, char in enumerate(header):
+                if char == '[': bracket += 1
+                elif char == ']': bracket -= 1
+                elif char == '(' and bracket == 0:
+                    opening = pos
+                    break
+            before = header if opening < 0 else header[:opening]
+            name_match = re.search(r'([A-Za-z_]\w*)\s*$', before)
+            if name_match is None or semi < 0:
+                continue
+            name = name_match.group(1)
+            local = {name}
+            reasons: Set[str] = set()
+            if (_enclosing_begin_end(body, match.start()) is not None
+                    or not module_function_scope[match.start():match.start() + 8].strip()):
+                reasons.add('function is outside the modeled module scope')
+            if re.search(r'`|::|\\', header):
+                reasons.add('unresolved function header scope/type')
+            if name in functions:
+                reasons.add('duplicate function definition')
+            if opening >= 0:
+                group = _module_ports.extract_balanced(header, opening)
+                if group is None or header[group[1] + 1:].strip():
+                    reasons.add('unresolved formal list')
+                else:
+                    for arg in _module_ports.split_top_level(group[0]):
+                        if not arg.strip(): continue
+                        names = _dependency_decl_names(arg, bare=True)
+                        if names is None or '=' in arg or re.search(r'\b(output|inout|ref)\b', arg):
+                            reasons.add('unresolved or side-effecting formal')
+                        else:
+                            local.update(names)
+            for decl in re.finditer(r'\b(?:' + _DEPENDENCY_TYPES + r')\b[^;]*;', code):
+                names = _dependency_decl_names(decl.group())
+                if names: local.update(names)
+                if names and _enclosing_begin_end(code, decl.start()) is not None:
+                    reasons.add('nested local declaration scope')
+            if re.search(r'\b(typedef|enum|struct|union|class|task)\b|`|::|\\|(?<!\d)\.(?!\d)', code):
+                reasons.add('unresolved function scope/type/preprocessor context')
+            functions[name] = {'code': code, 'local': local, 'reasons': reasons}
+            for pos in range(match.start(), match.end()):
+                if surface[pos] != '\n': surface[pos] = ' '
+        if not functions:
+            continue
+        surface = ''.join(surface)
+        # Procedural statements cannot supply module declarations or continuous
+        # assignment sites. Preserve generate scopes for their legal assigns.
+        out = list(surface)
+        for match in re.finditer(r'\b(always(?:_comb|_ff|_latch)?|initial|final)\b', surface):
+            stop = _procedural_statement_end(surface, match.end())
+            for pos in range(match.start(), max(match.end(), stop)):
+                if out[pos] != '\n': out[pos] = ' '
+        surface = ''.join(out)
+        declaration_surface = _blank_balanced_begin_end_scopes(_mask_generate_blocks(surface))
+        mutable: Set[str] = set()
+        port_issues: List[str] = []
+        ports = _module_ports.parse_port_list_ansi(masked[start:body_start], path, 1, port_issues)
+        mutable.update(n for n, p in ports.items() if p.direction in ('input', 'output', 'inout'))
+        for stmt, _line in _module_ports._collect_statements(declaration_surface):
+            # A parameter/enum/typedef statement does not START with a builtin
+            # variable/net type, even if its type contains the word logic.
+            names = _dependency_decl_names(stmt)
+            if names: mutable.update(names)
+        module_reasons = set(port_issues)
+        if ('`' in body or re.search(r'\b(class|task|clocking|property|sequence)\b', body)
+                or re.search(r'`(?:ifdef|ifndef|elsif|else|endif|include|define|undef)\b', masked)):
+            module_reasons.add('unresolved module scope/preprocessor context')
+        for name, fn in functions.items():
+            fn['reads'] = (_dependency_ids(fn['code']) & mutable) - fn['local']
+            if collect_lhs_set(fn['code']) & mutable - fn['local']:
+                fn['reasons'].add('function writes module state')
+
+        resolved = {}
+
+        def closure(name, stack):
+            if name in stack:
+                return set(), {'recursive helper closure'}, set(stack) | {name}
+            if len(stack) > 32:
+                return set(), {'helper closure depth limit'}, {name}
+            if name in resolved:
+                return resolved[name]
+            fn = functions[name]
+            reads, reasons, visited = set(fn['reads']), set(fn['reasons']), {name}
+            for callee, _pos, actual in _dependency_calls(fn['code']):
+                if actual is None or callee not in functions:
+                    reasons.add('unresolved helper ' + callee)
+                    continue
+                extra, issues, chain = closure(callee, stack + [name])
+                reads.update(extra)
+                reasons.update(issues)
+                visited.update(chain)
+            resolved[name] = (reads, reasons, visited)
+            return reads, reasons, visited
+
+        for assign in re.finditer(r'\bassign\b([^;]*);', surface, re.S):
+            equal = re.search(r'(?<![<>=!])=(?!=)', assign.group(1))
+            if equal is None: continue
+            rhs = assign.group(1)[equal.end():]
+            for name, pos, actual in _dependency_calls(rhs):
+                if name not in functions: continue
+                reads, reasons, chain = closure(name, [])
+                reasons.update(module_reasons)
+                line = masked[:body_start + assign.start(1) + equal.end() + pos].count('\n') + 1
+                if actual is None: reasons.add('unbalanced actual arguments')
+                elif re.search(r'`|::|\\|(?<!\d)\.(?!\d)', actual):
+                    reasons.add('unresolved actual argument scope')
+                else:
+                    # A selected/expression actual does not prove that every
+                    # bit of a hidden whole-object read triggers this call.
+                    actual_ids = _dependency_ids(actual)
+                    plain = {a.strip() for a in _module_ports.split_top_level(actual)
+                             if re.fullmatch(r'\s*[A-Za-z_]\w*\s*', a)}
+                    if reads & (actual_ids - plain):
+                        reasons.add('unresolved expression actual dependency')
+                    shadowed = set(re.findall(r'\bgenvar\s+([A-Za-z_]\w*)', body))
+                    cursor = assign.start()
+                    while (scope := _enclosing_begin_end(surface, cursor)) is not None:
+                        scoped = re.sub(r'^\s*:\s*[A-Za-z_]\w*', ' ',
+                                        surface[scope[0]:scope[1]])
+                        for stmt, _ in _module_ports._collect_statements(scoped):
+                            shadowed.update(_dependency_decl_names(stmt) or set())
+                        cursor = scope[0] - len('begin')
+                    if reads & actual_ids & shadowed:
+                        reasons.add('actual argument may bind a nested declaration')
+                if reasons:
+                    findings.append(Finding(path, line, 'WARN',
+                        'continuous-function-dependency-unresolved', module + '.' + name,
+                        'NOT_MEASURED: ' + '; '.join(sorted(reasons)) +
+                        '; no clean dependency proof or automatic rewrite.', False,
+                        'Incomplete function dependency analysis'))
+                    continue
+                missing = reads - _dependency_ids(actual)
+                if missing:
+                    symbols = ','.join(sorted(missing))
+                    findings.append(Finding(path, line, 'WARN',
+                        'continuous-function-hidden-global', symbols,
+                        f'Continuous call {module}.{name} (helpers: {", ".join(sorted(chain))}) '
+                        f'reads mutable module state [{symbols}] absent from its explicit '
+                        'actual arguments. Pass the dependencies as function formals/actuals; '
+                        'supported simulators may otherwise retain a stale result. '
+                        'No automatic rewrite.'))
+    return findings
 
 
 # ---------------------------------------------------------------------------
@@ -6889,6 +7124,7 @@ def lint_file(path: Path, native_design=None, *, hierarchy=None) -> List[Finding
     if hierarchy is None:
         results += rule_undriven_output_port(src, str(path))
     results += rule_incomplete_sensitivity(src, str(path))
+    results += rule_continuous_function_hidden_globals(raw, str(path))
     results += rule_vector_self_shift_fold(src, str(path))
     results += rule_reserved_word_identifier(src, str(path))
     results += rule_unguarded_sim_only_assert(raw, str(path))

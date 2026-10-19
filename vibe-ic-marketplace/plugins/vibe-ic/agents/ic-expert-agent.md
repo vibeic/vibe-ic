@@ -3945,3 +3945,31 @@ not, which only the corner run can say.
 **Why this is GENERAL**: it is arithmetic-datapath craft about carry propagation
 and corner derating. It names no design, no algorithm, no vendor and no PDK, and
 applies to any full-width multi-operand sum in any clocked design.
+
+### Skill: Continuous-call functions expose mutable dependencies
+
+Enforced for a closed source subset by
+`programs/rtl_hygiene_lint.py::rule_continuous_function_hidden_globals`.
+When a continuous RHS calls a combinational function, make every mutable
+module-state dependency an explicit function formal and call argument,
+including dependencies read by helper functions. For example,
+`assign phase = choose(enabled)` must not hide a read of `complete` inside
+`choose`; pass `complete` explicitly while preserving the equation, latency,
+handshake and all callers. Constants, enum labels, locals and existing formal
+arguments are not mutable module-state dependencies.
+
+The owner rule diagnoses only resolved builtin module declarations and
+unambiguous same-module helper closure. Recursion, conditional preprocessing,
+unknown callees and unmodeled scopes produce a visible nonblocking
+`NOT_MEASURED` limitation, not a clean proof or permission to rewrite arbitrary
+signatures. It does not apply event-list reasoning to `always_comb` functions.
+Review those unresolved cases using their actual scope and public contract;
+never interpret the absence of a concrete warning as full SV dependency proof.
+
+Freeze a neutral transition assertion, then run it on the supported native
+simulators before and after explicit dependency passing. Toggle the hidden
+state while holding ordinary call arguments constant; retain compiler and
+simulation return codes separately, and restore the exact original source to
+confirm the assertion fails again. Also rerun the original public interface
+sequence. A tool difference alone does not establish a fork bug, and switching
+the canonical simulator or suppressing its failure does not repair the RTL.
