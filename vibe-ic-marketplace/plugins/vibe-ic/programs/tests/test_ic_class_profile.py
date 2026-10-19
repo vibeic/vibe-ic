@@ -278,3 +278,50 @@ def test_required_layers_contract() -> None:
     # from this profile → they resolve to skip; the L1-L13 mandatory set is
     # byte-unchanged (still the 13 above).
     assert set(spec["skip"]) == {"L24", "L25", "L26", "L27"}
+
+
+@pytest.mark.parametrize("serial_description", [
+    "A UART serial peripheral transmits and receives frames over a serial "
+    "data line. The transmitter shifts a start bit, eight data bits, a "
+    "parity bit and a stop bit using a programmable baud-rate clock divider.",
+    "A synchronous serial bus supports controller and target roles on four "
+    "wires with a clock line, data lines and select pin. Shift registers "
+    "sample data at each selected bit time.",
+    "A transmitter and receiver use shift registers for frames with a start "
+    "bit, eight data bits and a stop bit using a programmable baud rate generator.",
+    "SPI controller has master/slave operation and shift register. A clock "
+    "divisor controls the clock line; data line uses chip select. The payload "
+    "can carry AES encryption and 128-bit key material.",
+    "A transmitter and receiver each use a shift register. The baud rate "
+    "generator controls the data line for communication with the host.",
+])
+def test_serial_wire_peripheral_keeps_class_with_incidental_crypto(
+        tmp_path, serial_description):
+    description = (serial_description +
+                   " The application may encrypt a payload using AES before "
+                   "transmission; cipher key management is outside this block.")
+    _write_l_docs(tmp_path, {
+        "L1_DATASHEET.json": {"description": description},
+        "L2_FRS.json": {},
+    })
+    result = detect_ic_class(tmp_path)
+    assert result["ic_class"] == "serial_peripheral_protocol", result
+
+
+@pytest.mark.parametrize("internal_description", [
+    "The finite-field multiplier computes partial products in a serial-parallel "
+    "fashion. Internal data bits are shifted between multiplication stages. "
+    "The cipher transmits and receives data through its register interface.",
+    "The serial-parallel multiplier processes shifted internal state. "
+    "Software sets the START bit to initiate the operation.",
+])
+def test_crypto_internal_serial_math_and_start_register_are_not_wire_protocols(
+        tmp_path, internal_description):
+    _write_l_docs(tmp_path, {
+        "L1_DATASHEET.json": {
+            "description": "The accelerator implements the AES algorithm for "
+                           "block cipher encryption with a key schedule."},
+        "L2_FRS.json": {"functional_requirements": internal_description},
+    })
+    result = detect_ic_class(tmp_path)
+    assert result["ic_class"] == "crypto_accelerator", result

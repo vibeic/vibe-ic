@@ -58,6 +58,7 @@ _EXPECTED: dict[str, str] = {
     "benchmark_a":      "EXAMPLE_CHIP",
     # #3106: the native intake project's identity is also pinned.
     "subservient_l2_section_tail": "subservient",
+    "neutral_crypto_internal_serial": "NeutralCipher",
 }
 
 
@@ -426,3 +427,16 @@ def test_l2_complete_body_reaches_expert_but_missing_tail_is_rejected(tmp_path):
     bad = expert.converge_ai_expectation(tmp_path, expectation)
     assert bad["usable"] and bad["met"] is False, bad
     assert bad["missing_tokens"] == [tail], bad
+
+
+def test_neutral_crypto_internal_serial_from_native_intake(tmp_path):
+    from programs.ic_class_profile import detect_ic_class
+    text = _load_fixture("neutral_crypto_internal_serial")[
+        "neutral_crypto_internal_serial.md"]
+    generated = tmp_path / "phase1/generated_docs"
+    generated.mkdir(parents=True)
+    (generated / "L1_DATASHEET.json").write_text(json.dumps({
+        "ic_name": "NeutralCipher", "description": text}))
+    (generated / "L2_FRS.json").write_text("{}")
+    result = detect_ic_class(tmp_path)
+    assert result["ic_class"] == "crypto_accelerator", result

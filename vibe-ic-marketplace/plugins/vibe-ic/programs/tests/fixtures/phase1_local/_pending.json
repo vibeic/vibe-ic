@@ -185,5 +185,16 @@
     "version_observed": "1.28.48; current composed SOURCE HEAD 832cb2a45a007f5181f3061e5f6ea75e5d39fc12 / tree a3e0131b480152c83da41111e8fbecd507a61281. Owner phase1_doc_one_shot_runner.py SHA256 a54df8a93d126849948ae92cabf5f31b7741bb8ec28c8915bfc69e8a89794c58. 當次28 docs為CURRENT48；不借舊47 PASS、SIG或 expert 計數。",
     "version_lkg": "",
     "fixture_path": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/fixtures/phase1_local/subservient_l2_section_tail/L1_product_metadata.md"
+  },
+  {
+    "issue": 3216,
+    "project": "neutral_crypto_internal_serial",
+    "layer": "Phase1 reports/ic_class.json (L1/L2-based classifier)",
+    "field": "ic_class",
+    "expected": "crypto_accelerator. Internal serial-parallel finite-field arithmetic is not an external serial peripheral protocol; genuine UART/SPI peripherals with incidental encryption mentions must remain serial_peripheral_protocol.",
+    "actual": "Native detect_ic_class on the L1 description holding this snippet and empty L2 yields ic_class=serial_peripheral_protocol; decisive_evidence=no analog + serial-peripheral structural signature (>=3 features, not bus-interconnect). Same wrong value on the real canonical project after all L2 source sections were restored.",
+    "version_observed": "1.29.96; official f38b8dc032effcd63a4f210fc9404aa0f43342d5 with composed Phase1 repairs at 7adea81a17615de845383a8b656144c4163b2f84.",
+    "version_lkg": "",
+    "fixture_path": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/fixtures/phase1_local/neutral_crypto_internal_serial/neutral_crypto_internal_serial.md"
   }
 ]

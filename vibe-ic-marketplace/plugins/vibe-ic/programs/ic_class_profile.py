@@ -1318,7 +1318,36 @@ def _looks_like_serial_peripheral_protocol(
     if not text:
         return False
     hits = sum(1 for _, pat in _SERIAL_PROTO_FEATURES if pat.search(text))
-    return hits >= 3
+    if hits < 3:
+        return False
+    # Internal serial arithmetic, shifted state and a register's START bit
+    # can satisfy three independent keyword features in a cipher engine.
+    # Resolve only that overlap: the existing algorithm-guarded crypto
+    # signature needs source evidence of an actual serial wire interface
+    # before serial-peripheral precedence is justified. A real serial
+    # peripheral keeps that precedence even if its payload mentions crypto.
+    if _looks_like_crypto_accelerator(l1, l2):
+        serial_surface = re.search(
+            r"\bserial\s+(?:communication\s+)?"
+            r"(?:peripheral|interface|protocol|port|link|bus|transceiver)\b",
+            text, re.IGNORECASE)
+        framed_serial = (re.search(r"\bstart\s+bit\b", text, re.IGNORECASE)
+                         and re.search(r"\bstop\s+bit\b", text, re.IGNORECASE))
+        # Wire descriptions need not use the noun phrase "serial interface":
+        # a clock/data/select bundle or a baud-controlled data wire carries
+        # the same external contract. A START register bit alone does not.
+        data_wire = re.search(r"\bdata\s+(?:line|pin)s?\b", text, re.IGNORECASE)
+        clock_wire = re.search(r"\bclock\s+(?:line|pin)s?\b", text, re.IGNORECASE)
+        select_wire = re.search(
+            r"\b(?:(?:chip|slave)\s+select|select\s+(?:line|pin)s?)\b",
+            text, re.IGNORECASE)
+        baud_framing = re.search(
+            r"\bbaud[- ]*(?:rate|divisor|generator)\b|"
+            r"\b(?:nominal\s+)?bit\s+(?:rate|time|timing)\b",
+            text, re.IGNORECASE)
+        wired_serial = data_wire and (baud_framing or (clock_wire and select_wire))
+        return bool(serial_surface or framed_serial or wired_serial)
+    return True
 
 
 # ---------------------------------------------------------------------
