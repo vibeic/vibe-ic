@@ -563,7 +563,8 @@ def test_preload_metadata_consumer_refuses_forged_pass_over_first_edge_change(tm
 
 
 @pytest.mark.parametrize("protocol", ["sdp8_raddr_waddr_wdata_rdata_we_sync0r",
-    "registered_dual_port_8bit_async_read_sync_write"], ids=["sdp-five", "canonical-five"])
+    "registered_dual_port_8bit_async_read_sync_write",
+    "registered_single_port_8bit_async_read_sync_write"], ids=["sdp-five", "canonical-five", "single-port"])
 @pytest.mark.parametrize("good", [True, False], ids=["retained", "first-edge-corruption"])
 def test_native_retention_uses_the_shared_selected_five_role_contract(tmp_path, monkeypatch, protocol, good):
     import sys
@@ -575,6 +576,17 @@ def test_native_retention_uses_the_shared_selected_five_role_contract(tmp_path, 
         path = project / "plugin_output/declaration.json"
         decl = json.loads(path.read_text())
         decl.update(sram_interface_protocol=protocol, memsize_bytes=8, reset_pc=0)
+        if protocol == "registered_single_port_8bit_async_read_sync_write":
+            text = rtl.read_text().replace("output reg [2:0] o_store_raddr, ", "")
+            text = text.replace("o_store_raddr <= 0;", "").replace("o_store_raddr <= 2;", "")
+            rtl.write_text(text.replace("o_store_waddr", "o_store_addr"))
+            decl["sram_interface"]["read_address"] = "o_store_addr"
+            decl["sram_interface"]["write_address"] = "o_store_addr"
+            l9 = project / "phase1/generated_docs/L9_INTEGRATION_SPEC.json"
+            docs = json.loads(l9.read_text())
+            docs["top_ports"] = [dict(port, name="o_store_addr") if port["name"] == "o_store_waddr" else port
+                                 for port in docs["top_ports"] if port["name"] != "o_store_raddr"]
+            l9.write_text(json.dumps(docs))
         path.write_text(json.dumps(decl, indent=2))
         return rtl
     monkeypatch.setattr(sys.modules[__name__], "prepare", selected_prepare)

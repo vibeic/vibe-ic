@@ -302,6 +302,7 @@ def _vstr(text: str) -> str:
 
 
 RETENTION_PROTOCOL = "registered_dual_port_8bit_async_read_sync_write"
+SINGLE_PORT_RETENTION_PROTOCOL = "registered_single_port_8bit_async_read_sync_write"
 RETENTION_HEADER = "// VIBEIC_RESET_RETENTION: "
 RETENTION_EDGES = 6
 RETENTION_ACTIVE_CYCLES = 64
@@ -435,6 +436,8 @@ def declared_retention_memory(project: Path, dut: str,
     single_port_8bit_async_read_posedge_write uses one ``address`` field plus
     write_data/read_data/write_enable. Internal read/write address roles share
     that physical port; dual-port protocols still require five distinct ports.
+    The explicit registered_single_port_8bit_async_read_sync_write alias uses
+    read_address/write_address naming the same actual port, without address.
     """
     path = Path(project) / "plugin_output/declaration.json"
     try:
@@ -457,12 +460,17 @@ def declared_retention_memory(project: Path, dut: str,
     if (not isinstance(roles, dict) or type(roles.get("read_latency_cycles", 0)) is not int
             or roles.get("read_latency_cycles", 0) != 0 or "read_enable" in roles):
         return None, "NOT_MEASURED: selected protocol needs explicit SRAM roles and asynchronous read"
-    if single_port and any(key in roles for key in ("read_address", "write_address")):
-        return None, "NOT_MEASURED: single-port SRAM needs one address role, not separate read/write addresses"
+    if single_port:
+        if decl["sram_interface_protocol"] == SINGLE_PORT_RETENTION_PROTOCOL:
+            if ("address" in roles or "read_address" not in roles or "write_address" not in roles
+                    or roles["read_address"] != roles["write_address"]):
+                return None, "NOT_MEASURED: selected single-port alias needs equal read/write address roles without address"
+        elif any(key in roles for key in ("read_address", "write_address")):
+            return None, "NOT_MEASURED: single-port SRAM needs one address role, not separate read/write addresses"
     memory = {role: roles.get(key) for role, key in (
         ("raddr", "read_address"), ("waddr", "write_address"),
         ("wdata", "write_data"), ("rdata", "read_data"), ("we", "write_enable"))}
-    if single_port:
+    if single_port and decl["sram_interface_protocol"] != SINGLE_PORT_RETENTION_PROTOCOL:
         memory["raddr"] = memory["waddr"] = roles.get("address")
     ins, outs = dict(inputs), dict(outputs)
     if (any(not isinstance(n, str) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_$]*", n)

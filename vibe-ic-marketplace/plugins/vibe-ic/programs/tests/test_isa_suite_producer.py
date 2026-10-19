@@ -1341,6 +1341,106 @@ endmodule
 _FIVE_ROLE_PROTOCOLS = ("sdp8_raddr_waddr_wdata_rdata_we_sync0r",
                         "registered_dual_port_8bit_async_read_sync_write")
 
+_SINGLE_PORT_PROTOCOL = "registered_single_port_8bit_async_read_sync_write"
+
+
+def _single_port_project(tmp_path, mutation=None):
+    project = _five_role_project(tmp_path, _FIVE_ROLE_PROTOCOLS[0],
+                                 "wrong_address" if mutation == "wrong_address" else None)
+    path = project / "plugin_output/declaration.json"
+    decl = json.loads(path.read_text())
+    decl["sram_interface_protocol"] = _SINGLE_PORT_PROTOCOL
+    roles = decl["sram_interface"]
+    roles["read_address"] = roles["write_address"] = "o_mem_addr"
+    rtl = project / "phase2/stage1/rtl/soc_top.v"
+    text = rtl.read_text().replace(
+        "output wire [aw-1:0] o_mem_raddr, output wire [aw-1:0] o_mem_waddr,",
+        "output wire [aw-1:0] o_mem_addr,").replace(
+        "assign o_mem_raddr=address; assign o_mem_waddr=8;",
+        "assign o_mem_addr=write_enable ? 8 : address;")
+    if mutation == "missing_role":
+        roles.pop("write_address")
+    elif mutation == "split_address":
+        roles["write_address"] = "o_other_addr"
+        text = text.replace("output wire [aw-1:0] o_mem_addr,",
+                            "output wire [aw-1:0] o_mem_addr, output wire [aw-1:0] o_other_addr,")
+    elif mutation == "wrong_width":
+        text = text.replace("input wire [7:0] i_mem_data", "input wire [3:0] i_mem_data")
+    elif mutation == "synchronous_read":
+        roles["read_latency_cycles"] = 1
+    elif mutation == "data_alias":
+        roles["write_data"] = "o_mem_addr"
+    elif mutation == "unknown_protocol":
+        decl["sram_interface_protocol"] = "unregistered_memory_guess"
+    path.write_text(json.dumps(decl, indent=2))
+    rtl.write_text(text)
+    return project
+
+
+def test_single_port_memory_binds_one_address_for_both_owning_readers(tmp_path):
+    import testbench_gen as tb
+    import reset_invariant_oracle_tb_gen as retention
+    project = _single_port_project(tmp_path)
+    facts, why = I.design_facts(project)
+    top, ports, _ = tb.resolve_dut(project, "soc_top")
+    memory, reason = retention.declared_retention_memory(project, top,
+        [(n, w) for d, w, n in ports if d == "input"],
+        [(n, w) for d, w, n in ports if d == "output"])
+    assert facts is not None and memory is not None, (why, reason)
+    assert facts["sram_ports"]["raddr"] == facts["sram_ports"]["waddr"] == "o_mem_addr"
+    assert memory["raddr"] == memory["waddr"] == "o_mem_addr"
+    assert facts["sram"]["read_latency"] == 0
+
+
+@pytest.mark.parametrize("mutation", ["missing_role", "split_address", "wrong_width",
+    "synchronous_read", "data_alias", "unknown_protocol"])
+def test_single_port_contract_refuses_unsupported_or_ambiguous_binding(tmp_path, mutation):
+    facts, why = I.design_facts(_single_port_project(tmp_path, mutation))
+    assert facts is None and why, (mutation, facts, why)
+
+
+@pytest.mark.parametrize("protocol", ["single_port_8bit_async_read_posedge_write",
+    "registered_single_port_8bit_async_read_sync_write"], ids=["address-only", "semantic-alias"])
+def test_single_port_typed_contracts_refuse_mixed_address_shapes(tmp_path, protocol):
+    import testbench_gen as tb
+    import reset_invariant_oracle_tb_gen as retention
+    project = _single_port_project(tmp_path)
+    path = project / "plugin_output/declaration.json"
+    decl = json.loads(path.read_text())
+    decl["sram_interface_protocol"] = protocol
+    decl["sram_interface"]["address"] = decl["sram_interface"]["read_address"]
+    path.write_text(json.dumps(decl))
+    facts, why = I.design_facts(project)
+    top, ports, _ = tb.resolve_dut(project, "soc_top")
+    memory, reason = retention.declared_retention_memory(project, top,
+        [(n, w) for d, w, n in ports if d == "input"],
+        [(n, w) for d, w, n in ports if d == "output"])
+    assert facts is None and why, (protocol, facts, why)
+    assert memory is None and reason, (protocol, memory, reason)
+
+
+@pytest.mark.parametrize("wrong_address", [False, True], ids=["correct", "wrong-address"])
+def test_native_single_port_parent_observes_async_bytes_and_real_writes(tmp_path, wrong_address):
+    import subprocess
+    project = _single_port_project(tmp_path, "wrong_address" if wrong_address else None)
+    facts, why = I.design_facts(project)
+    assert facts is not None, why
+    work = tmp_path / "native-single"
+    work.mkdir()
+    parent = work / "isa_tb.v"
+    parent.write_text(I.gen_tb(facts))
+    dut = project / "phase2/stage1/rtl/soc_top.v"
+    (work / "memory.hex").write_text("\n".join(f"{b:02x}" for b in [0x19, 0xa6] + [0] * 14) + "\n")
+    cp = subprocess.run(["iverilog", "-g2012", "-s", "isa_tb", "-o", "sim", str(parent), str(dut)],
+                        cwd=work, capture_output=True, text=True)
+    assert cp.returncode == 0, cp.stdout + cp.stderr
+    run = subprocess.run(["vvp", "sim", "+hex=memory.hex", "+tohost=8"],
+                         cwd=work, capture_output=True, text=True)
+    verdict, why = I.judge_tohost(0, I.parse_tb_transcript(run.stdout))
+    assert run.returncode == (1 if wrong_address else 0), run.stdout + run.stderr
+    assert verdict == (I.FAIL if wrong_address else I.PASS), (why, run.stdout)
+    assert ("ASYNC0_VALUE_FAIL" if wrong_address else "FIVE_ROLE_ASYNC_VALUE_PASS") in run.stdout
+
 
 def _five_role_project(tmp_path, protocol, mutation=None):
     project = _project(tmp_path, units=("I",), memsize_bytes=16, rf_storage="flops",

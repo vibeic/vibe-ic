@@ -363,17 +363,18 @@ def test_native_log_refusals_never_fall_back_to_an_unrelated_legacy_log(tmp_path
                 path.write_text(json.dumps(doc))
             elif damage == 'rtl':
                 (project / 'phase2/stage1/rtl/core.v').write_text('module changed; endmodule\n')
-            with pytest.raises((ValueError, OSError, RuntimeError)) as refusal:
+            with pytest.raises((ValueError, OSError, RuntimeError)) as refused:
                 DOSR._synthesis_log_path(project)
+            expected = f'{type(refused.value).__name__}: {refused.value}'
             row = _row(DOSR.step_synth_log_audit(project, _synth('PASS')))
             assert row['verdict'] == 'NOT_MEASURED' and row['reason'], row
             assert row.get('rc') is None, row
-            DOSR.step_emit_phase2_manifests(project, [])
+            result = DOSR.step_emit_phase2_manifests(project, [])
             hygiene = json.loads((project / 'reports/phase2/lint/rtl_hygiene.json').read_text())
-            assert hygiene['verdict'] == 'INCOMPLETE', hygiene
-            assert hygiene['reason_class'] == 'TOOL_HANDOFF_INVALID', hygiene
-            assert hygiene['reason'] == f'{type(refusal.value).__name__}: {refusal.value}', hygiene
-            assert 'evidence' not in hygiene, hygiene
+            assert result.status == 'PASS'  # publication completed, not synthesis
+            assert hygiene['verdict'] == 'INCOMPLETE' and hygiene['reason'] == expected, hygiene
+            assert hygiene.get('evidence') is None, hygiene
+            assert legacy.read_text() == _REAL_STAT_LOG
 
 
 def test_a_bound_native_log_without_accounting_keeps_a_real_fail_receipt(tmp_path, monkeypatch):
@@ -409,38 +410,93 @@ def test_absent_selected_handoff_is_disclosed_without_running_log_gate(tmp_path,
     assert not (tmp_path / _SYNTH_LOG_REL).exists()
 
 
-def test_normal_phase2_report_survives_absent_advisory_handoff(tmp_path, monkeypatch):
-    """Real coordinator/audit/report writer; unrelated producers are neutral leaves."""
-    expected = _absent_selected_handoff(tmp_path)
-    docs = tmp_path / 'phase1/generated_docs'
-    docs.mkdir(parents=True)
+@pytest.mark.parametrize('handoff_state', ['absent', 'bound', 'native-failed'])
+def test_normal_phase2_report_survives_absent_advisory_handoff(tmp_path, monkeypatch, handoff_state):
+    """Real manifest owner, coordinator and final report; no EDA invocation.
+
+    Native synthesis and all unrelated producer leaves are declared neutral.
+    A real run_chain/receipt fixture supplies the bound-log cases; the strict
+    handoff reader, advisory audit and complete manifest writer remain real.
+    """
+    if handoff_state == 'absent':
+        project = tmp_path / 'project'
+        project.mkdir()
+        expected = _absent_selected_handoff(project)
+        rtl = project / 'phase2/stage1/rtl/core.v'
+        rtl.parent.mkdir(parents=True)
+        rtl.write_text('module core(input a, output y); assign y=a; endmodule\n')
+    else:
+        project, _ = _native_log_project(tmp_path, monkeypatch,
+                                         critical_error=handoff_state == 'native-failed')
+        if handoff_state == 'native-failed':
+            with pytest.raises(ValueError) as refused:
+                DOSR._synthesis_log_path(project)
+            expected = f'ValueError: {refused.value}'
+        else:
+            expected = None
+    switch = project / 'phase3/librelane_switch.json'
+    selected = json.loads(switch.read_text())
+    selected['steps']['3'] = 'direct'  # unrelated CDC producer is outside this fixture
+    switch.write_text(json.dumps(selected))
+    synth_status = 'PASS' if handoff_state == 'bound' else 'FAIL'
+    docs = project / 'phase1/generated_docs'
+    docs.mkdir(parents=True, exist_ok=True)
     for number in range(1, 14):
         (docs / f'L{number}.json').write_text('{}')
     for name in list(vars(DOSR)):
-        if not name.startswith('step_') or name == 'step_synth_log_audit':
+        if not name.startswith('step_') or name in ('step_synth_log_audit', 'step_emit_phase2_manifests'):
             continue
         def neutral(*args, _name=name, **kwargs):
-            result = (_synth('FAIL') if _name == 'step_yosys_synth' else
+            result = (_synth(synth_status) if _name == 'step_yosys_synth' else
                       DOSR.StepResult(_name.removeprefix('step_'), 'NOT_APPLICABLE', 0.0,
-                                      'unrelated producer outside this advisory regression',
+                                      'unrelated producer outside this reporting regression',
                                       declared_by='neutral coordinator fixture'))
             return [result] if _name == 'step_dft_lec_chain' else result
         monkeypatch.setattr(DOSR, name, neutral)
     monkeypatch.setattr(DOSR._spf, 'gate', lambda project, owner, site, refuse, fn, *a, **kw:
                         fn(*a, **{k: v for k, v in kw.items() if not k.startswith('_preflight')}))
     import execution_policy
+    import flow_declared_producer_run
+    monkeypatch.setattr(flow_declared_producer_run, 'run_for_step', lambda *a, **kw: None)
+    monkeypatch.setattr(DOSR, '_audit_after_declared_producers', lambda *a, **kw:
+        DOSR.StepResult('final_audit', 'NOT_MEASURED', 0.0,
+                        'unrelated whole-flow audit outside this reporting fixture',
+                        reason_class=DOSR._V.ReasonClass.NOT_EXECUTED))
+    # The manifest's canonical step consumers are separate from this writer.
+    # Keep their absence explicit, not PASS, while exercising real retention.
+    import execution_backend_gates
+    monkeypatch.setattr(execution_backend_gates, 'evaluate', lambda *a, **kw:
+                        {'status': 'NOT_MEASURED',
+                         'reasons': ['unrelated canonical consumer outside reporting fixture']})
+    monkeypatch.setattr(DOSR._pl, 'emit_final_summary', lambda *a, **kw: False)
     monkeypatch.setattr(execution_policy, '_ordinary_runtime', None)
-    monkeypatch.setattr(sys, 'argv', ['design', str(tmp_path), '--skip-hardware',
-                                    '--skip-phase3', '--skip-analog', '--exit-step', '9',
+    monkeypatch.setattr(sys, 'argv', ['design', str(project), '--skip-hardware',
+                                    '--skip-phase3', '--skip-analog',
                                     '--max-rtl-repair-retries', '0'])
-    assert DOSR.main() == 1
-    report = json.loads((tmp_path / 'reports/orchestrator/phase2_one_shot.json').read_text())
+    rc = DOSR.main()
+    assert rc == 1  # incomplete neutral fixture is never whole-flow PASS
+    report = json.loads((project / 'reports/orchestrator/phase2_one_shot.json').read_text())
     rows = {row['name']: row for row in report['steps']}
-    assert report['verdict'] == 'FAIL', report
-    assert rows['yosys_synth']['status'] == 'FAIL', rows['yosys_synth']
+    assert not report.get('final_audit_pending'), report
+    assert rows['yosys_synth']['status'] == synth_status, rows['yosys_synth']
+    if synth_status == 'FAIL':
+        assert report['verdict'] == 'FAIL', report
+        assert rows['yosys_synth']['status'] == 'FAIL', rows['yosys_synth']
     audit = rows['synth_log_audit']['extras']['synth_log_audit']
-    assert audit['verdict'] == 'NOT_MEASURED' and audit['reason'] == expected, audit
-    assert not (tmp_path / _SYNTH_LOG_REL).exists()
+    hygiene = json.loads((project / 'reports/phase2/lint/rtl_hygiene.json').read_text())
+    assert rows['phase2_manifests']['status'] == 'PASS'
+    if expected is None:
+        assert audit['verdict'] == 'PASS' and hygiene['verdict'] == 'PASS', (audit, hygiene)
+        assert hygiene['evidence'].endswith('/invocation.log'), hygiene
+    else:
+        assert audit['verdict'] == 'NOT_MEASURED' and audit['reason'] == expected, audit
+        assert hygiene['verdict'] == 'INCOMPLETE' and hygiene['reason'] == expected, hygiene
+        assert hygiene.get('evidence') is None, hygiene
+    assert not (project / _SYNTH_LOG_REL).exists()
+    (tmp_path / 'REPORTING_OBSERVATION.json').write_text(json.dumps({
+        'scope': 'Real manifest/audit/main/report; neutral unrelated producers and native process leaf',
+        'handoff': handoff_state, 'rc': rc, 'report': report, 'hygiene': hygiene, 'audit': audit,
+    }, indent=2))
 
 
 @pytest.mark.parametrize('synth_status', ['FAIL', 'PASS'])
@@ -458,7 +514,7 @@ def test_manifest_publication_discloses_current_refusal_and_replaces_old_lint_pa
     result = DOSR.step_emit_phase2_manifests(tmp_path, [_synth(synth_status)], 'core', None)
     hygiene = json.loads(old.read_text())
     assert result.name == 'phase2_manifests'
-    assert hygiene['verdict'] == 'INCOMPLETE' and hygiene['reason_class'] == 'TOOL_HANDOFF_INVALID', hygiene
+    assert hygiene['verdict'] == 'INCOMPLETE' and hygiene['reason_class'] == 'tool_handoff_invalid', hygiene
     assert hygiene['reason'] == expected, hygiene
     assert hygiene['rtl_files'] == ['core.v'] and 'evidence' not in hygiene, hygiene
     assert all((tmp_path / rel).is_file() for rel in result.output_files), result.output_files

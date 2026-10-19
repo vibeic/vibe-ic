@@ -413,8 +413,8 @@ def reset_vector(project: Path, decl: Dict[str, Any]) -> Tuple[Optional[int], st
 
 
 def parse_sram_protocol(token: str) -> Tuple[Optional[Dict[str, Any]], str]:
-    from reset_invariant_oracle_tb_gen import RETENTION_PROTOCOL
-    if token == SINGLE_PORT_PROTOCOL:
+    from reset_invariant_oracle_tb_gen import RETENTION_PROTOCOL, SINGLE_PORT_RETENTION_PROTOCOL
+    if token in (SINGLE_PORT_PROTOCOL, SINGLE_PORT_RETENTION_PROTOCOL):
         return {"kind": "sp", "width": 8, "read_latency": 0,
                 "stated_roles": ["addr", "rdata", "wdata", "we"],
                 "explicit_roles_required": True}, "declared single-port byte SRAM protocol parsed"
