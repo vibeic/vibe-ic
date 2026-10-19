@@ -349,36 +349,170 @@ def vectors_from_named_standards(text: str,
     return out, named
 
 
-def declared_mmio_interface(extracted: dict, ports: list) -> Optional[dict]:
+def declared_mmio_interface(extracted: dict, ports: list,
+                            owner: Optional[str] = None) -> Optional[dict]:
     """Bind an explicit register-interface declaration to its own typed ports.
 
     This describes source transport for an author handoff; it does not provide
     a bus driver or infer roles from signal names.
     """
+    import _header_lexicon as headers
     import _prose_polarity as polarity
     from _reset_input_semantics import current_clause
-    phrase = re.compile(r'\bmemory[- ]mapped\s+register\s+interface\b', re.I)
-    assertion = re.compile(r'\b(?:has|use[sd]?|with|implements)\s+(?:an?\s+)?'
-                           r'memory[- ]mapped\s+register\s+interface\b', re.I)
+    phrase = re.compile(r'\bmemory[- ]mapped\s+register\s+(?:interface|file)\b', re.I)
+    generic_en = r'(?:the|this|our)\s+(?:current\s+)?(?:register\s+)?' \
+                 r'(?:peripheral|device|design|block|module|unit|core|chip)'
+    generic_zh = r'(?:本|此|這個|这个)(?:裝置|装置|設計|设计|模組|模块|單元|单元|晶片|芯片)'
+    subjects = [generic_en, generic_zh]
+    if isinstance(owner, str) and re.fullmatch(r'[A-Za-z_][A-Za-z0-9_$]*', owner):
+        # RTL identifiers are case-sensitive. The surrounding prose is not.
+        subjects.append(r'(?:the\s+)?(?:module\s+)?(?-i:' + re.escape(owner)
+                        + r')(?:\s+(?:module|block|device|peripheral|unit|core|chip))?')
+    assertion = re.compile(
+        r'\s*(?:' + '|'.join(subjects) + r')(?:'
+        r'\s+(?:(?:does|do)\s+not\s+|never\s+|no\s+longer\s+)?'
+        r'(?:has|have|uses?|implements?|adopts?|provides?|exposes?)\s+(?:(?:an?|the|no)\s+)?'
+        r'|\s*(?:不|未|尚未)?(?:採用|采用|使用|具備|具有)\s*)'
+        r'|\s*(?:' + generic_en + r'|an?\s+(?:register\s+)?'
+        r'(?:peripheral|device|design|block|module|unit|core|chip))'
+        r'\s+with\s+(?:(?:an?|the)\s+)?', re.I)
+    nonbinding = re.compile(r'\b(?:examples?|comparison|hypothetical|optional|old|earlier|former|'
+                            r'may|might|could|would|perhaps|proposed|should|suggest(?:ed|s)?|'
+                            r'recommend(?:ed|s)?)\b|範例|示例|例如|曾|原先|原本|過去|过去|'
+                            r'歷史|历史|可能|或許|或许|也許|也许|比較|比较|對比|对比|'
+                            r'建議|建议|提議|提议|考慮|考虑|計畫|计划|打算|擬|拟|未來|未来|'
+                            r'將|将|假設|假设|如果|可(?:以)?(?:採用|采用|使用|具備|具有)', re.I)
+    # Shared polarity lacks these Mandarin forms. Keep this declaration's
+    # additional vocabulary local rather than changing other extractors.
+    denied_zh = re.compile(r'未(?:曾)?(?:採用|采用|使用|具備|具有|透過|通过|經由)')
+    name = r'`?[A-Za-z_][A-Za-z0-9_$]*`?'
+    binding = re.compile(r'(?:\b(?:using|through|via)\b|透過|通过|經由)\s+'
+                         r'(?P<names>' + name + r'(?:\s*(?:/|,|、|\band\b|和|與|与)\s*'
+                         + name + r')*)', re.I)
+
+    def source_path(source):
+        source = str(source)
+        return source if source.startswith('input/') else f'input/docs/{source}'
+
+    def clauses(quote):
+        for clause in re.split(r'。|[;；]|(?<=[.!?])\s+', quote.replace('`', '').replace('*', '')):
+            clause = current_clause(clause)
+            if clause and not nonbinding.search(clause):
+                yield clause
+
+    def current_lines(text):
+        headings, fenced = [], False
+        for index, quote in enumerate(str(text).splitlines()):
+            if re.match(r'^\s*(```|~~~)', quote):
+                fenced = not fenced
+            heading = re.match(r'^\s{0,3}(#{1,6})\s+(.+)', quote)
+            if heading:
+                while headings and headings[-1][0] >= len(heading[1]):
+                    headings.pop()
+                headings.append((len(heading[1]), bool(current_clause(heading[2]))
+                                 and not nonbinding.search(heading[2])))
+            if fenced or heading or not all(current for _, current in headings):
+                continue
+            yield index, quote
+
+    def source_ports(text):
+        columns, previous = None, -2
+        vocabulary = {role: headers.tokens_for(role) for role in ('name', 'width', 'direction')}
+        for index, raw in current_lines(text):
+            if index != previous + 1:
+                columns = None
+            previous = index
+            if not raw.strip().startswith('|'):
+                columns = None
+                continue
+            cells = [cell.strip().strip('`*').strip() for cell in raw.strip().strip('|').split('|')]
+            roles = {role: [i for i, cell in enumerate(cells) if cell.lower() in words]
+                     for role, words in vocabulary.items()}
+            # Match the ordinary producer's Type-as-payload precedence when
+            # the table also supplies an explicit direction column.
+            explicit = [i for i in roles['direction'] if cells[i].lower() != 'type']
+            roles['direction'] = explicit or roles['direction']
+            if all(roles.values()):
+                columns = {role: indices[0] for role, indices in roles.items()
+                           if len(indices) == 1}
+                if len(columns) != 3 or len(set(columns.values())) != 3:
+                    columns = None
+                continue
+            if columns is None or len(cells) <= max(columns.values()):
+                continue
+            if current_clause(raw):
+                yield {role: cells[position] for role, position in columns.items()}
+
+    def literal_width(cell):
+        number = re.fullmatch(r'([1-9]\d*)(?:[- ]bits?)?', cell, re.I)
+        if number:
+            return int(number[1])
+        bounds = re.fullmatch(r'\[\s*(\d+)\s*:\s*(\d+)\s*\]', cell)
+        return abs(int(bounds[1]) - int(bounds[2])) + 1 if bounds else None
+
     declarations, denied = [], False
     for source, text in extracted.items():
-        for line_number, quote in enumerate(str(text).splitlines(), 1):
-            current = re.split(r'\bfor\s+comparison\b', quote, maxsplit=1, flags=re.I)[0]
-            line = current_clause(current)
-            if not phrase.search(line):
-                continue
-            if polarity.is_denied(line):
-                denied = True
-            elif assertion.search(line):
-                declarations.append((source, line_number, quote))
+        lines = str(text).splitlines()
+        for index, quote in current_lines(text):
+            for line in clauses(quote):
+                match = phrase.search(line)
+                if not match:
+                    continue
+                # The subject must own/use this exact noun phrase. An earlier
+                # unrelated verb or a comparison's "with" is not a declaration.
+                if not assertion.fullmatch(line[:match.start()]):
+                    continue
+                if polarity.is_denied(line) or denied_zh.search(line):
+                    denied = True
+                else:
+                    end = index + 1
+                    while end < len(lines) and lines[end].strip() and not re.match(r'^\s*[#|`~]', lines[end]):
+                        end += 1
+                    declarations.append((source_path(source), index + 1, quote,
+                                         '\n'.join(lines[index:end])))
     if denied or not declarations or len({d[0] for d in declarations}) != 1:
         return None
-    source, line_number, quote = declarations[0]
-    source = str(source) if str(source).startswith('input/') else f'input/docs/{source}'
-    bound = [dict(port) for port in ports if isinstance(port, dict)
-             and port.get('evidence') == source and port.get('name')
-             and (port.get('direction') or port.get('mode')) in {'input', 'output', 'inout'}
-             and type(port.get('width')) is int and port['width'] > 0]
+    source, line_number, quote, _ = declarations[0]
+    named = set()
+    for _, _, _, paragraph in declarations:
+        for line in clauses(paragraph):
+            for match in binding.finditer(line):
+                if polarity.is_denied(line) or denied_zh.search(line):
+                    return None
+                named.update(re.findall(r'[A-Za-z_][A-Za-z0-9_$]*',
+                                        re.sub(r'\band\b', '', match['names'], flags=re.I)))
+    groups = {}
+    for port in ports:
+        if (isinstance(port, dict) and port.get('name')
+                and (port.get('direction') or port.get('mode')) in {'input', 'output', 'inout'}
+                and type(port.get('width')) is int and port['width'] > 0):
+            groups.setdefault(port.get('evidence'), []).append(dict(port))
+    bound = groups.get(source, [])
+    if bound and named and not named.issubset({p['name'] for p in bound}):
+        return None
+    if not bound:
+        # A sibling document is eligible only when this declaration explicitly
+        # names its ports and each typed port is owned by that source's table.
+        # Bare presence elsewhere in the corpus is not a source binding.
+        if not named:
+            return None
+        documents = {source_path(key): str(value) for key, value in extracted.items()}
+        candidates = []
+        for owner, group in groups.items():
+            if owner not in documents or not named.issubset({p['name'] for p in group}):
+                continue
+            rows = list(source_ports(documents[owner]))
+            def owns(port):
+                matches = [row for row in rows if row['name'] == port['name']]
+                return bool(matches) and all(literal_width(row['width']) == port['width']
+                    and row['direction'].lower() == (port.get('direction') or port.get('mode'))
+                    for row in matches)
+
+            if all(owns(port) for port in group):
+                candidates.append(group)
+        if len(candidates) != 1:
+            return None
+        bound = candidates[0]
     if not bound:
         return None
     return {'name': 'memory_mapped_register', 'matched_token': 'memory-mapped register interface',

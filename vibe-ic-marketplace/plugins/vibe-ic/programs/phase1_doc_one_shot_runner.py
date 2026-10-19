@@ -53215,7 +53215,8 @@ def gen_l9_integration_spec(project: Path,
     if not bound.get("interface_type") and not bound.get("interface_types"):
         import known_answer_vector
         declared = known_answer_vector.declared_mmio_interface(
-            extracted, bound.get("top_ports") or bound.get("ports") or [])
+            extracted, bound.get("top_ports") or bound.get("ports") or [],
+            owner=bound.get("top_module"))
         if declared is not None:
             bound["interface_type"] = declared["name"]
             bound["interface_types"] = [declared]
