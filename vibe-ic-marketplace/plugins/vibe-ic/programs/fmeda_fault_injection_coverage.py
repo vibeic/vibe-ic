@@ -188,22 +188,22 @@ def dc_verdict(dc_pct: float, floor: Optional[float]) -> Tuple[bool, str]:
 
 # ───────────────────── injection-result parsing ─────────────────────────
 _GOLDEN_RE = re.compile(
-    r"^GOLDEN\s+DATA\s+(\d+)\s+DETECT\s+([01])\s+MATCH\s+([01])", re.MULTILINE)
+    r"^GOLDEN\s+DATA\s+(\d+)\s+DETECT\s+([01])\s+MATCH\s+(NA|[01])(?:\s+CODE_KNOWN\s+([01]))?$", re.MULTILINE)
 _FAULT_RE = re.compile(
-    r"^FAULT\s+(\S+)\s+DETECT\s+([01])\s+MATCH\s+([01])", re.MULTILINE)
+    r"^FAULT\s+(\S+)\s+DETECT\s+([01])\s+MATCH\s+(NA|[01])$", re.MULTILINE)
 
 
 @dataclass
 class Injection:
     fault_id: str
     detect: bool
-    match: bool
+    match: Optional[bool]
 
     @property
     def covered(self) -> bool:
         # Covered if the mechanism flagged the fault OR still produced the
         # correct value (corrected / masked). Both are "handled" for DC.
-        return self.detect or self.match
+        return self.detect or self.match is True
 
 
 @dataclass
@@ -237,7 +237,7 @@ class InjectionResults:
         return cov, len(by_site)
 
 
-def parse_injection_results(stdout: str) -> InjectionResults:
+def parse_injection_results(stdout: str, *, correction: bool = True) -> InjectionResults:
     """Parse the testbench transcript into structured injections + a baseline
     validity flag. Pure, unit-tested.
 
@@ -249,19 +249,20 @@ def parse_injection_results(stdout: str) -> InjectionResults:
     golden = _GOLDEN_RE.findall(stdout)
     notes: List[str] = []
     golden_ok = len(golden) > 0
-    for d, det, mat in golden:
+    for d, det, mat, known in golden:
         if det != "0":
             golden_ok = False
             notes.append(f"golden data={d}: mechanism FALSE-ALARMED (DETECT=1) "
                          f"with no fault injected")
-        if mat != "1":
+        if (correction and mat != "1") or (not correction and
+                                            (mat != "NA" or known != "1")):
             golden_ok = False
             notes.append(f"golden data={d}: fault-free decode MISMATCH "
                          f"(MATCH=0) — encoder/decoder not inverse")
     if not golden:
         notes.append("no GOLDEN baseline line emitted — cannot validate harness")
     injections = [
-        Injection(fid, det == "1", mat == "1")
+        Injection(fid, det == "1", None if mat == "NA" else mat == "1")
         for fid, det, mat in _FAULT_RE.findall(stdout)
     ]
     return InjectionResults(golden_ok=golden_ok, golden_count=len(golden),
@@ -728,7 +729,7 @@ def _stimulus_values(data_width: int, max_vectors: int = 64) -> List[int]:
 
 
 def build_ecc_injection_tb(spec: MechanismSpec,
-                           max_vectors: int = 64) -> str:
+                           max_vectors: int = 64, *, detection_only: bool = False) -> str:
     """Render a self-contained iverilog testbench that injects one single-bit
     stuck-at fault per codeword bit per stimulus value and prints one
     `FAULT d<d>_b<i> DETECT <x> MATCH <x>` line + a `GOLDEN ...` baseline. The
@@ -781,13 +782,21 @@ def build_ecc_injection_tb(spec: MechanismSpec,
     lines.append("            #1;")
     lines.append("            faulted = code;")           # fault-free
     lines.append("            #1;")
-    lines.append(f"            $display(\"GOLDEN DATA %0d DETECT %0d MATCH %0d\","
-                 f" data, {detect_expr}, {match_expr});")
+    if detection_only:
+        lines.append(f"            $display(\"GOLDEN DATA %0d DETECT %0d MATCH NA CODE_KNOWN %0d\","
+                     f" data, {detect_expr}, ((^code) !== 1'bx));")
+    else:
+        lines.append(f"            $display(\"GOLDEN DATA %0d DETECT %0d MATCH %0d\","
+                     f" data, {detect_expr}, {match_expr});")
     lines.append(f"            for (i = 0; i < {N}; i = i + 1) begin")
     lines.append("                faulted = code ^ (1'b1 << i);")   # single stuck-at
     lines.append("                #1;")
-    lines.append(f"                $display(\"FAULT d%0d_b%0d DETECT %0d MATCH %0d\","
-                 f" data, i, {detect_expr}, {match_expr});")
+    if detection_only:
+        lines.append(f"                $display(\"FAULT d%0d_b%0d DETECT %0d MATCH NA\","
+                     f" data, i, {detect_expr});")
+    else:
+        lines.append(f"                $display(\"FAULT d%0d_b%0d DETECT %0d MATCH %0d\","
+                     f" data, i, {detect_expr}, {match_expr});")
     lines.append("            end")
     lines.append("        end")
     lines.append("        $finish;")
@@ -1191,6 +1200,17 @@ def _vacuous_token_line(verdict: str) -> str:
 
 # ──────────────────────────────── main ──────────────────────────────────
 def run(project: Path, args) -> Tuple[int, dict]:
+    import _fmeda_mechanisms as declared
+    if (project / declared.MANIFEST).exists() or (project / declared.MANIFEST).is_symlink():
+        try:
+            return declared.measure(project, args)
+        except (declared.Refusal, OSError, ValueError) as exc:
+            return 1, {"schema": declared.REPORT_SCHEMA, "applicable": True,
+                       "measured": False, "verdict": "FAIL", "ge_floor": False,
+                       "reason": f"declared mechanism admission refused: {exc}"}
+    if bool(args.enc_module) != bool(args.dec_module):
+        return 1, {"applicable": True, "measured": False, "verdict": "FAIL",
+                   "reason": "incomplete explicit mechanism: both encoder and checker are required"}
     # 1) resolve the mechanism spec: explicit flags win; else auto-detect.
     spec: Optional[MechanismSpec] = None
     # WHAT THE AUTO-DETECT SCAN ENUMERATED. Stays empty on the explicit-flags
@@ -1378,7 +1398,17 @@ def run(project: Path, args) -> Tuple[int, dict]:
         return 1, rep
 
     # 3) render TB + run the REAL injection
-    tb = build_ecc_injection_tb(spec, max_vectors=args.max_vectors)
+    # Missing corrected output is a declared detection-only mode only with
+    # complete explicit wiring; never infer that capability from auto-detect.
+    detection_only = (spec.source == "explicit" and spec.dec_out is None)
+    if detection_only and (not spec.detect_port or not spec_rtl_rel or
+                           spec.data_width <= 0 or spec.code_width <= 0 or
+                           args.max_vectors <= 0):
+        rep = build_report(spec, None, args.asil, floor)
+        rep["reason"] = "detection-only explicit wiring requires encoder, checker, detect port, source files and positive widths/vectors"
+        return 1, rep
+    tb = build_ecc_injection_tb(spec, max_vectors=args.max_vectors,
+                                detection_only=detection_only)
     tb_rel = FI_TB_RELPATH                      # the DECLARED path, not a copy
     tb_path = project / tb_rel
     tb_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1413,8 +1443,20 @@ def run(project: Path, args) -> Tuple[int, dict]:
         rep["injection_exit_code"] = ec
         return 1, rep
 
-    results = parse_injection_results(out)
+    if detection_only:
+        try:
+            results, baseline, faults = declared.census(out, spec, args.max_vectors)
+        except declared.Refusal as exc:
+            rep = build_report(spec, None, args.asil, floor, tool_log=log)
+            rep["reason"] = str(exc)
+            return 1, rep
+    else:
+        results = parse_injection_results(out)
     rep = build_report(spec, results, args.asil, floor, tool_log=log)
+    if detection_only:
+        rep.update(correction_applicable=False, baseline=baseline,
+                   fault_list=faults, fault_list_truncated=False,
+                   detection_criterion="detect_flag_asserted")
     return (0 if rep["ge_floor"] else 1), rep
 
 

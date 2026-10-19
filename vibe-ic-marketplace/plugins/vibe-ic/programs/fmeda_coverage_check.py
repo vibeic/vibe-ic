@@ -65,8 +65,19 @@ import fmeda_fault_injection_coverage as fi  # noqa: E402
 
 
 def check(report: dict, asil_override: Optional[str],
-          min_dc: Optional[float]) -> dict:
+          min_dc: Optional[float], project: Optional[Path] = None) -> dict:
     """Recompute the verdict from raw counts. Pure — the authoritative gate."""
+    import _fmeda_mechanisms as declared
+    manifest_present = project is not None and ((project / declared.MANIFEST).exists() or
+                                               (project / declared.MANIFEST).is_symlink())
+    if manifest_present or report.get("schema") == declared.REPORT_SCHEMA:
+        try:
+            if project is None:
+                raise declared.Refusal("current project required for declared mechanism evidence")
+            return declared.consume(project, report, asil_override, min_dc)
+        except (declared.Refusal, OSError, ValueError, TypeError, KeyError) as exc:
+            return {"gate": "fmeda_coverage_check", "verdict": "FAIL", "passed": False,
+                    "reason": f"declared mechanism evidence refused: {exc}"}
     mechanism = report.get("mechanism")
     legacy_auto = (isinstance(mechanism, dict)
                    and mechanism.get("source") == "auto-detected")
@@ -156,19 +167,21 @@ def main(argv=None) -> int:
                 else _pl.reports_phase2_dir(project) / "safety" /
                 "fmeda_coverage.json")
     if not rpt_path.exists():
+        import _fmeda_mechanisms as declared
+        required = args.require or (project / declared.MANIFEST).exists() or (project / declared.MANIFEST).is_symlink()
         res = {"gate": "fmeda_coverage_check",
-               "verdict": "FAIL" if args.require else "VACUOUS_PASS",
-               "passed": not args.require,
+               "verdict": "FAIL" if required else "VACUOUS_PASS",
+               "passed": not required,
                "reason": f"report not found: {rpt_path}"
-               + ("" if args.require else " — soft skip")}
-        rc = 1 if args.require else 0
+               + ("" if required else " — soft skip")}
+        rc = 1 if required else 0
     else:
         try:
             report = json.loads(rpt_path.read_text())
         except (OSError, json.JSONDecodeError) as e:
             print(f"fmeda_coverage_check: bad report: {e}", file=sys.stderr)
             return 2
-        res = check(report, args.asil, args.min_dc)
+        res = check(report, args.asil, args.min_dc, project)
         rc = 0 if res["passed"] else 1
         if _sa.evidence_of(res) is not None:
             # DECIDED, not vacuous: rc 2 is the only channel that carries a
