@@ -300,6 +300,39 @@ generate_sealring(sys.argv[1],sys.argv[2],sys.argv[3],False,True)
     assert not (project / DFG._DEF_REL).exists()
 
 
+def test_magic_ring_extent_ignores_detached_non_ring_outliers(tmp_path, monkeypatch):
+    """Unrelated new shapes cannot enlarge a smaller annulus to DIEAREA."""
+    pytest.importorskip("pya")
+    project = _project(tmp_path)
+    bridge = project / "input/pdk/bridge/signoff_config.json"
+    bridge.parent.mkdir(parents=True)
+    bridge.write_text(json.dumps({"die_finishing": {"magic_geometry": {
+        "size_convention": "outer", "offset_um": [0, 0],
+        "provider_size_um": [200, 200]}}}))
+    script = project / "neutral_gen_sealring.py"
+    script.write_text('''# Usage: neutral_gen_sealring.py width height target_dir [-force] [-outer] [-keep]
+import sys
+from pathlib import Path
+import pya
+def generate_sealring(width, height, target_dir, force, keep):
+    l=pya.Layout();l.dbu=0.001;t=l.create_cell("neutral_ring")
+    ring=pya.Region(pya.Box(10000,10000,190000,190000))-pya.Region(pya.Box(16000,16000,184000,184000))
+    t.shapes(l.layer(99,0)).insert(ring)
+    for box in (pya.Box(0,0,1000,1000),pya.Box(199000,199000,200000,200000)):
+        t.shapes(l.layer(100,0)).insert(box)
+    Path(target_dir).mkdir(parents=True,exist_ok=True)
+    l.write(str(Path(target_dir)/"neutral_ring.gds"))
+generate_sealring(sys.argv[1],sys.argv[2],sys.argv[3],False,True)
+''')
+    result = _run(project, script, monkeypatch)
+    seal = result["seal_ring"]
+    assert seal["state"] == "FAIL", result
+    assert seal["rule"] == "SEAL_RING_DIE_EXTENT_MISMATCH", result
+    assert seal["ring_check"]["ring_extent"]["outer"]["um"] == [10, 10, 190, 190]
+    assert DFC.evaluate(project)["verdict"] == "FAIL"
+    assert not (project / DFG._DEF_REL).exists()
+
+
 @pytest.mark.parametrize("geometry", [
     None,
     {"size_convention": "outer", "offset_um": [0, 0]},

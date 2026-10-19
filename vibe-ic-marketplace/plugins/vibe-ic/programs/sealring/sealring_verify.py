@@ -50,9 +50,12 @@ required to behave like one, measured with no tuned constant and no PDK literal:
   * the die centre itself is NOT covered by the added geometry (a ring is
     hollow; a solid slab over the core is not a seal ring).
 
-Those three together cannot be satisfied by a dot, a stripe down one edge, or a
-filled block, and they hold for a ring of any thickness, any layer count and any
-PDK. Verified on a real PDK-generated ring: 2 horizontal crossings,
+The crossings must come from a connected annular component. When the PDK
+declares a marker, only newly added geometry on that layer may define its
+extent; other newly added shapes are not ring-edge evidence. Those conditions
+cannot be satisfied by a dot, a stripe down one edge, or a filled block, and
+they hold for a ring of any thickness and any PDK. Verified on a real
+PDK-generated ring: 2 horizontal crossings,
 2 vertical, centre uncovered.
 
 chip/PDK-AGNOSTIC: every layer this reads is DISCOVERED by diffing the two
@@ -165,6 +168,7 @@ def main():
         before[_spec(lin, li)] = pya.Region(tin.begin_shapes_rec(li))
     added = pya.Region()
     per_layer = []
+    layer_deltas = {}
     for li in lout.layer_indexes():
         spec = _spec(lout, li)
         ro = pya.Region(tout.begin_shapes_rec(li))
@@ -177,6 +181,7 @@ def main():
         per_layer.append({"layer": spec, "polygons": delta.count(),
                           "area_um2": round(delta.area() * lout.dbu * lout.dbu, 3),
                           "new_layer": spec not in before})
+        layer_deltas[spec] = delta
         added += delta
     added = added.merged()
     res["added_layers"] = sorted(p["layer"] for p in per_layer)
@@ -191,6 +196,7 @@ def main():
     # The PDK's own guard-ring MARKER layer, when the caller declared one. This
     # is the only PDK-specific fact in the whole check and it is INPUT, never a
     # literal: absent -> the structural ring test below still decides.
+    marker_delta = None
     if marker:
         try:
             ml, md = marker.split("/", 1)
@@ -203,11 +209,18 @@ def main():
                         f"the declared guard-ring marker layer {marker} carries "
                         "no geometry in the sealed layout")
         mcount = pya.Region(tout.begin_shapes_rec(mi)).count()
-        res["marker_layer"] = {"spec": marker, "shapes": mcount}
+        marker_delta = layer_deltas.get(marker)
+        res["marker_layer"] = {
+            "spec": marker, "shapes": mcount,
+            "added_polygons": marker_delta.count() if marker_delta is not None else 0}
         if mcount == 0:
             return emit("FAIL",
                         f"the declared guard-ring marker layer {marker} carries "
                         "no geometry in the sealed layout")
+        if marker_delta is None or marker_delta.is_empty():
+            return emit("FAIL",
+                        f"the declared guard-ring marker layer {marker} gained "
+                        "no geometry from this generator invocation")
 
     # Ring topology — see the module docstring. The centre comes from the die
     # (the INPUT layout); the scan lines span the SEALED bbox, so a ring drawn
@@ -220,14 +233,51 @@ def main():
     res["die_box_um"] = [round(v * lin.dbu, 4) for v in
                          (die.left, die.bottom, die.right, die.top)]
     res["input_dbu_um"] = lin.dbu
-    horiz = (added & pya.Region(
-        pya.Box(span.left, cy, span.right, cy + 1))).merged().count()
-    vert = (added & pya.Region(
-        pya.Box(cx, span.bottom, cx + 1, span.top))).merged().count()
-    centre = (added & pya.Region(
-        pya.Box(cx - 1, cy - 1, cx + 1, cy + 1))).count()
-    res["ring"] = {"horizontal_crossings": horiz, "vertical_crossings": vert,
-                   "centre_covered": bool(centre)}
+    hline = pya.Region(pya.Box(span.left, cy, span.right, cy + 1))
+    vline = pya.Region(pya.Box(cx, span.bottom, cx + 1, span.top))
+    center = pya.Region(pya.Box(cx - 1, cy - 1, cx + 1, cy + 1))
+    # A detached new marker is not part of the ring, even if its position
+    # enlarges the bbox of every newly added shape to the full DIEAREA.
+    # When the PDK declares its ring marker, measure that layer's NEW geometry:
+    # connected fiducials on other layers can also enlarge the union bbox.
+    # Otherwise select only connected added components that themselves cross
+    # both centre lines twice and leave the centre open. Unrelated outliers
+    # remain in added_geometry but never become ring extent authority.
+    ring_source = marker_delta if marker_delta is not None else added
+    res["ring_extent_source"] = (f"new geometry on marker {marker}"
+                                 if marker_delta is not None else
+                                 "connected annulus in newly added geometry")
+    source_horiz = (ring_source & hline).merged().count()
+    source_vert = (ring_source & vline).merged().count()
+    source_centre = (ring_source & center).count()
+    res["ring"] = {"horizontal_crossings": source_horiz,
+                   "vertical_crossings": source_vert,
+                   "centre_covered": bool(source_centre)}
+    if source_centre:
+        return emit("FAIL", "the geometry the PDK script added does not "
+                    "enclose the die because it covers the die centre — "
+                    "that is a slab over the core, not a seal ring")
+    ring_geometry = pya.Region()
+    ring_components = 0
+    for polygon in ring_source.each():
+        component = pya.Region(polygon)
+        if ((component & hline).merged().count() >= 2
+                and (component & vline).merged().count() >= 2
+                and (component & center).count() == 0):
+            ring_geometry += component
+            ring_components += 1
+    ring_geometry = ring_geometry.merged()
+    res["ring_components"] = ring_components
+    if ring_geometry.is_empty():
+        return emit("FAIL", "the added geometry does not enclose the die: "
+                    "no connected annulus crosses both die-centre axes twice "
+                    "while leaving the centre open")
+    horiz = (ring_geometry & hline).merged().count()
+    vert = (ring_geometry & vline).merged().count()
+    centre = (ring_geometry & center).count()
+    res["ring_connected"] = {"horizontal_crossings": horiz,
+                             "vertical_crossings": vert,
+                             "centre_covered": bool(centre)}
 
     # The ring's OUTER and INNER extents, measured rather than assumed. The
     # inner box is the hole: everything inside the ring's own bounding box that
@@ -255,13 +305,11 @@ def main():
         return (max((b.right if horizontal else b.top) for b in before),
                 min((b.left if horizontal else b.bottom) for b in after))
 
-    hcut = (added & pya.Region(
-        pya.Box(span.left, cy, span.right, cy + 1))).merged()
-    vcut = (added & pya.Region(
-        pya.Box(cx, span.bottom, cx + 1, span.top))).merged()
+    hcut = (ring_geometry & hline).merged()
+    vcut = (ring_geometry & vline).merged()
     gx = _gap(hcut, span.left, span.right, cx, True)
     gy = _gap(vcut, span.bottom, span.top, cy, False)
-    ob = added.bbox()
+    ob = ring_geometry.bbox()
     dbu = lout.dbu
 
     def _box(l, b, r, t):
@@ -330,7 +378,8 @@ def main():
                         r += before[sp]
                 return r.merged()
 
-            _ring_specs = sorted(p["layer"] for p in per_layer)
+            _ring_specs = sorted(sp for sp, delta in layer_deltas.items()
+                                 if (delta & ring_geometry).merged().count())
             _shared = [sp for sp in _ring_specs if sp in before]
             _core = _core_of(_shared)
             _out = (_core - _keep_r).merged()

@@ -63,7 +63,11 @@ for an existing project.
 ## Scope of acceptance
 
 The original `sealring_verify` still verifies output geometry, marker and hollow
-annulus. The producer compares the measured ring outer extent to the built die,
+annulus. When the PDK declares a ring-marker layer, its newly added connected
+annulus supplies the extent; otherwise a connected annulus is selected from the
+new geometry. Other new shapes, including detached or connected corner markers,
+cannot enlarge the ring's reported extent. The producer compares that measured
+ring outer extent to the built die,
 contains the original input GDS, and reconciles the answered die rectangle
 before promoting the GDS or writing the finished DEF.
 `die_finishing_check` consumes that real report. `general_precheck` still compares
