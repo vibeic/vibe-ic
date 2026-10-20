@@ -2661,7 +2661,8 @@ def _reset_memory_binding(source: dict, lowered: dict, top: str, clock: str) -> 
     missing, merged, ambiguous or unsupported identity refuses the whole route.
     Clock observations and temporal HDL constructors do not use this route.
     """
-    proof = {"inside": False, "failed_preconditions": [], "source_aliases": {}, "views": {}}
+    proof = {"inside": False, "failed_preconditions": [], "source_aliases": {},
+             "constant_combinational_roms": {}, "views": {}}
     fails = proof["failed_preconditions"]
     original = _top_module(source.get("raw"), top) if source.get("raw") else None
     optimized = _top_module(source.get("netlist"), top) if source.get("netlist") else None
@@ -2674,11 +2675,28 @@ def _reset_memory_binding(source: dict, lowered: dict, top: str, clock: str) -> 
         fails.append("source raw/optimized memory declarations disagree")
         return proof
     aliases = proof["source_aliases"]
+    roms = proof["constant_combinational_roms"]
     for name, memory in memories.items():
         width, size, start = (memory.get(k) for k in ("width", "size", "start_offset"))
         src = (memory.get("attributes") or {}).get("src")
-        if (_param_bit(memory.get("hide_name", 0)) or not src or
-                not all(type(v) is int for v in (width, size, start)) or width <= 0 or size <= 0):
+        if (not src or not all(type(v) is int for v in (width, size, start))
+                or width <= 0 or size <= 0):
+            fails.append(f"unsupported source reset memory: {name}")
+            continue
+        raw_rom = _clock_combinational_rom(original, name, memory)
+        optimized_rom = _clock_combinational_rom(
+            optimized, name, (optimized.get("memories") or {})[name])
+        if raw_rom and optimized_rom:
+            # A completely initialized, asynchronous-read, writer-free ROM is
+            # combinational logic, not resettable state.  Require the closed
+            # native shape independently in both source views before excluding
+            # it from the sequential word/write-clock/Q population below.
+            roms[name] = {"width": width, "size": size, "start_offset": start,
+                          "src": src, "raw": True, "optimized": True}
+            continue
+        if raw_rom != optimized_rom:
+            fails.append(f"source reset ROM classification disagrees: {name}")
+        if _param_bit(memory.get("hide_name", 0)):
             fails.append(f"unsupported source reset memory: {name}")
             continue
         for word in range(start, start + size):
@@ -2710,6 +2728,8 @@ def _reset_memory_binding(source: dict, lowered: dict, top: str, clock: str) -> 
         memid = str(params.get("MEMID", "")).lstrip("\\")
         if memid not in memories:
             fails.append(f"unbound original memory port: {name}")
+        if memid in roms:
+            continue
         if cell["type"] == "$memwr_v2" and _param_bit(params.get("CLK_ENABLE")) == 1:
             clk = _bits(cell, "CLK")
             edge = _param_bit(params.get("CLK_POLARITY"))
@@ -2720,7 +2740,9 @@ def _reset_memory_binding(source: dict, lowered: dict, top: str, clock: str) -> 
                 written.add(memid)
         elif cell["type"] != "$memrd" or _param_bit(params.get("CLK_ENABLE")) != 0:
             fails.append(f"unsupported source reset memory port: {name}")
-    if written != set(memories) or len(clocks) != 1:
+    sequential_memories = set(memories) - set(roms)
+    if (not sequential_memories or written != sequential_memories
+            or len(clocks) != 1):
         fails.append("source memories lack one complete synchronous write-clock population")
     input_clocks = {b for p in original.get("ports", {}).values() if p.get("direction") == "input"
                     and len(p.get("bits", [])) == 1 for b in p["bits"] if isinstance(b, int)}

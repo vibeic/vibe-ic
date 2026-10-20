@@ -16,7 +16,6 @@ Test cases:
   10. Multi-file design parsed correctly
 """
 import json
-import hashlib
 import shutil
 import subprocess
 import sys
@@ -29,6 +28,164 @@ assert SCRIPT.exists(), f"Script not found: {SCRIPT}"
 
 sys.path.insert(0, str(SCRIPT.parent))
 import interface_encoding_audit as iea  # noqa: E402
+
+
+@pytest.mark.parametrize('body', ["if (flag) seen <= 1'b1;", "if (!flag) seen <= 1'b1;",
+                                "seen <= flag ? 1'b1 : 1'b0;",
+                                "seen <= !flag ? 1'b1 : 1'b0;"])
+def test_native_whole_scalar_predicate_is_encoding_invariant(tmp_path, body):
+    files = _predicate_design(body)
+    result, report = run_cli(tmp_path, files, 'top', extra=('-D', 'NATIVE_PREDICATE'))
+    assert result.returncode == 0, result.stderr
+    assert report['discovery']['complete'] is True
+    edge = _predicate_edge(report)
+    assert edge['status'] == 'MATCH', edge
+    assert edge['producer_encoding'] == 'BIT_VALUE', edge
+    assert 'data encoding is not inferred' in edge['producer_evidence']
+    assert edge['consumer_encoding'] == 'PREDICATE', edge
+    assert 'all references' in edge['consumer_evidence']
+    assert '0,1,x,z' in edge['consumer_evidence']
+    # The unrelated seed carrier is still UNKNOWN; no zero-mismatch PASS.
+    assert report['summary']['total_interfaces'] == 4
+    assert report['summary']['unknowns'] == 3
+    assert report['summary']['verdict'] == 'INCONCLUSIVE'
+
+
+@pytest.mark.parametrize('body,width,connection,native', [
+    ("if (flag) seen <= 1'b1; assign escape = flag;", '', 'link', True),
+    ("if (flag + 1) seen <= 1'b1;", '', 'link', True),
+    ("if (flag == 1'b1) seen <= 1'b1;", '', 'link', True),
+    ("if (flag[0]) seen <= 1'b1;", '[0:0]', 'link', True),
+    ("if (flag) seen <= 1'b1;", '[1:0]', 'link', True),
+    ("if (flag) seen <= 1'b1;", '[0:0]', 'link[0]', True),
+    ("if (flag) seen <= 1'b1;", '', 'link', False),
+    ("if (flag) seen <= 1'b1; if (flag & seed) seen <= 1'b0;", '', 'link', True),
+    ("seen <= seed + flag ? 1'b1 : 1'b0;", '', 'link', True),
+    ("seen <= seed == flag ? 1'b1 : 1'b0;", '', 'link', True),
+    ("seen <= seed <= flag ? 1'b1 : 1'b0;", '', 'link', True),
+    ("seen <= 1'bz ===\nflag ? 1'b1 : 1'b0;", '', 'link', True),
+])
+def test_predicate_proof_refuses_other_use_or_unbound_edge(tmp_path, body, width, connection, native):
+    files = _predicate_design(body, width=width, connection=connection)
+    result, report = run_cli(tmp_path, files, 'top',
+                             extra=('-D', 'NATIVE_PREDICATE') if native else ())
+    assert result.returncode == 0, result.stderr
+    assert report['discovery']['complete'] is True
+    edge = _predicate_edge(report)
+    assert edge['status'] == 'UNKNOWN', edge
+    assert edge['consumer_encoding'] != 'PREDICATE', edge
+    assert report['summary']['total_interfaces'] == 4
+    assert report['summary']['verdict'] == 'INCONCLUSIVE'
+
+
+def _predicate_design(body, width='', connection='link'):
+    return {'design.v': f'''
+module producer(input {width} seed, output {width} flag);
+  assign flag = ~seed;
+endmodule
+module consumer(input clk, input {width} flag, output reg seen);
+  wire escape;
+  wire seed = 1'b1;
+  always @(posedge clk) begin
+    {body.replace('assign escape = flag;', '')}
+  end
+  {'assign escape = flag;' if 'assign escape = flag;' in body else ''}
+endmodule
+module top(input clk, input {width} seed, output seen);
+  wire {width} link;
+  producer source(.seed(seed), .flag(link));
+  consumer sink(.clk(clk), .flag({connection}), .seen(seen));
+endmodule
+'''}
+
+
+def _predicate_edge(report):
+    edges = [row for row in report['interfaces'] if row['wire_name'] == 'link'
+             and row['producer_port'] == row['consumer_port'] == 'flag']
+    assert len(edges) == 1, report
+    return edges[0]
+
+
+def test_predicate_four_state_branch_lemma_in_verilog(tmp_path):
+    source = tmp_path / 'branch.v'
+    source.write_text('''
+module branch_lemma;
+  reg b;
+  wire g = b ^ (b >> 1);
+  integer i, direct_yes, gray_yes, direct_no, gray_no;
+  initial begin
+    for (i=0; i<4; i=i+1) begin
+      case(i) 0:b=1'b0; 1:b=1'b1; 2:b=1'bx; 3:b=1'bz; endcase
+      #1;
+      direct_yes=0; gray_yes=0; direct_no=0; gray_no=0;
+      if(b) direct_yes=1;
+      if(g) gray_yes=1;
+      if(!b) direct_no=1;
+      if(!g) gray_no=1;
+      if(direct_yes !== (i==1) || direct_no !== (i==0)) $fatal(1,"bad native if semantics");
+      if(direct_yes !== gray_yes || direct_no !== gray_no) $fatal(1,"not invariant");
+      if((b ? 4'b1010 : 4'b1001) !== (g ? 4'b1010 : 4'b1001)) $fatal(1,"ternary not invariant");
+      if((!b ? 4'b1010 : 4'b1001) !== (!g ? 4'b1010 : 4'b1001)) $fatal(1,"negative ternary not invariant");
+    end
+    $display("FOUR_NATIVE_BRANCH_CASES_PASS");
+    $finish;
+  end
+endmodule
+''')
+    compile = subprocess.run(['iverilog', '-g2012', '-o', str(tmp_path / 'branch'), str(source)],
+                             capture_output=True, text=True)
+    assert compile.returncode == 0, compile.stderr
+    sim = subprocess.run(['vvp', str(tmp_path / 'branch')], capture_output=True, text=True)
+    assert sim.returncode == 0, sim.stdout + sim.stderr
+    assert 'FOUR_NATIVE_BRANCH_CASES_PASS' in sim.stdout
+
+
+_PREDICATE_ONLY_SOURCE = '''
+`ifdef OMITTED
+`endif
+module producer(input seed, output flag);
+  assign flag = ~seed;
+endmodule
+module consumer(input flag);
+  always @* if(flag) begin end
+endmodule
+module neutral;
+  wire link;
+  producer source(.seed(1'b0), .flag(link));
+  consumer sink(.flag(link));
+endmodule
+'''
+
+
+def test_predicate_receipt_is_fresh_source_evidence_not_authored_pass(tmp_path):
+    result, report = run_cli(tmp_path, {'neutral.v': _PREDICATE_ONLY_SOURCE}, 'neutral')
+    assert result.returncode == 0, result.stderr
+    assert report['summary']['total_interfaces'] == report['summary']['matches'] == 1
+    assert report['interfaces'][0]['consumer_encoding'] == 'PREDICATE'
+    assert _consume_encoding_receipt(tmp_path).state == 'PASS'
+    report_bytes = (tmp_path / 'out/encoding_audit_report.json').read_bytes()
+    source = tmp_path / 'rtl/neutral.v'
+    source.write_text(source.read_text().replace('if(flag)', "if(flag == 1'b1)"))
+    assert _consume_encoding_receipt(tmp_path).state == 'NOT_MEASURED'
+    assert (tmp_path / 'out/encoding_audit_report.json').read_bytes() == report_bytes
+
+
+def test_p0_consumes_the_native_predicate_proof_without_a_waiver(tmp_path, monkeypatch):
+    import flow_compliance_check as flow
+    project = tmp_path / 'project'
+    rtl = project / 'phase2/stage1/rtl'
+    rtl.mkdir(parents=True)
+    (rtl / 'neutral.v').write_text(_PREDICATE_ONLY_SOURCE)
+    docs = project / 'phase1/generated_docs'
+    docs.mkdir(parents=True)
+    (docs / 'L9_INTEGRATION_SPEC.json').write_text(json.dumps({'top_module': 'neutral'}))
+    monkeypatch.setattr(flow, '_STRUCTURAL_RTL_GATES', ('interface_encoding_audit',))
+    records = []
+    flow._run_structural_rtl_gates(project, records_out=records)
+    assert len(records) == 1
+    assert records[0]['verdict'] == 'PASS', records
+    assert records[0]['evidence']['exit_code'] == 0
+    assert records[0]['evidence']['receipt_state'] == 'PASS'
 
 
 _CONTEXT_BINDING_SOURCE = '''

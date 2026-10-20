@@ -25,6 +25,7 @@ PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROGRAMS))
 
 import formal_structural_check as fsc  # noqa: E402
+from _hostpaths import require_repo  # noqa: E402
 from not_verified_tier import skip_not_verified  # noqa: E402
 
 SYNC = """module m(input clk, input rst, input [3:0] d, output reg [3:0] q);
@@ -919,7 +920,9 @@ def test_raw_pmux_unreachable_default_undef_does_not_replace_reset_proof(tmp_pat
 
 def test_raw_arithmetic_constant_force_cannot_be_reclassified_as_retention(tmp_path):
     _yosys()
-    source = Path(__file__).parent / "fixtures/formal_reset/retention_algebraic_opposite_force.v"
+    source = require_repo("vibe-ic-marketplace", "plugins", "vibe-ic", "programs",
+                          "tests", "fixtures", "formal_reset",
+                          "retention_algebraic_opposite_force.v")
     rtl = tmp_path / "m.v"
     rtl.write_bytes(source.read_bytes())
     out = tmp_path / "mapping.json"
@@ -1024,6 +1027,103 @@ _RESET_ARRAY_ARMS = {
     'array_async_low': (_RESET_ARRAY.replace('@(posedge clk)', '@(posedge clk or negedge rst_n)'), 'PASS', 'REFUTED'),
     'scalar_async_low': (_RESET_SCALAR.replace('@(posedge clk)', '@(posedge clk or negedge rst_n)'), 'PASS', 'REFUTED'),
 }
+
+_RESET_ROM_VALUES = [17, 206, 57, 143, 84, 233, 6, 190,
+                     72, 165, 31, 249, 118, 3, 212, 95]
+_RESET_ROM_BODY = (
+    "always @* begin\n case(opcode)\n"
+    + "".join(f"4'd{i}: lookup=8'd{value};\n"
+              for i, value in enumerate(_RESET_ROM_VALUES))
+    + "default: lookup=8'd0;\n endcase\nend\n")
+_RESET_ARRAY_ROM = _RESET_ARRAY.replace(
+    " input [3:0] d,output [3:0] y);",
+    " input [3:0] d,input [3:0] opcode,output [3:0] y,output reg [7:0] lookup);")
+_RESET_ARRAY_ROM = _RESET_ARRAY_ROM.replace("endmodule\n", _RESET_ROM_BODY + "endmodule\n")
+
+_RESET_ARRAY_ROM_ARMS = {
+    "plain-low": (_RESET_ARRAY, "PASS", "PASS"),
+    "rom-low": (_RESET_ARRAY_ROM, "PASS", "PASS"),
+    "plain-high": (_RESET_ARRAY.replace("if (!rst_n)", "if (rst_n)"),
+                   "REFUTED", "PASS"),
+    "rom-high": (_RESET_ARRAY_ROM.replace("if (!rst_n)", "if (rst_n)"),
+                 "REFUTED", "PASS"),
+    "plain-async": (_RESET_ARRAY.replace("@(posedge clk)",
+                                         "@(posedge clk or negedge rst_n)"),
+                    "PASS", "REFUTED"),
+    "rom-async": (_RESET_ARRAY_ROM.replace("@(posedge clk)",
+                                             "@(posedge clk or negedge rst_n)"),
+                  "NOT_DISCHARGED", "NOT_DISCHARGED"),
+}
+
+
+def _reset_table_rom(*, writable=False, synchronous_read=False):
+    text = _RESET_ARRAY.replace(
+        " input [3:0] d,output [3:0] y);",
+        " input [3:0] d,input [3:0] opcode,output [3:0] y,output reg [7:0] lookup);")
+    text = text.removesuffix("endmodule\n")
+    text += "reg [7:0] table_data [0:15];\ninitial begin\n"
+    text += "".join(f" table_data[{i}]=8'd{value};\n"
+                    for i, value in enumerate(_RESET_ROM_VALUES))
+    text += "end\n"
+    if writable:
+        text += "always @(posedge clk) if (we) table_data[opcode] <= {4'b0,d};\n"
+    if synchronous_read:
+        text += "always @(posedge clk) lookup <= table_data[opcode];\n"
+    else:
+        text += "always @* lookup = table_data[opcode];\n"
+    return text + "endmodule\n"
+
+
+_UNPROVEN_RESET_ROM_ARMS = {
+    "undefined-initializer": _RESET_ARRAY_ROM.replace("8'd17", "8'bxxxxxxxx"),
+    "runtime-writer": _reset_table_rom(writable=True),
+    "synchronous-read": _reset_table_rom(synchronous_read=True),
+}
+
+
+@pytest.mark.parametrize("arm", _RESET_ARRAY_ROM_ARMS)
+def test_constant_combinational_rom_preserves_array_reset_construction(tmp_path, arm):
+    """#3370: immutable lookup state is outside the reset-state population."""
+    _yosys()
+    text, polarity, timing = _RESET_ARRAY_ROM_ARMS[arm]
+    rtl = tmp_path / "neutral.v"
+    rtl.write_text(text)
+    claims = [
+        {"rule": "reset_polarity", "signal": "rst_n", "value": "active_low"},
+        {"rule": "reset_sync", "signal": "rst_n", "value": "synchronous"},
+    ]
+    rec = fsc.check([rtl], "neutral", claims, tmp_path / "normal", None,
+                    klass={"clock": "clk", "resets": ["rst_n"]})
+    assert [claim["verdict"] for claim in rec["claims"]] == [polarity, timing], rec
+    if arm in ("rom-low", "rom-high"):
+        construction, = rec["reset_memory_construction"]
+        assert construction["inside"], construction
+        assert len(construction["constant_combinational_roms"]) == 1
+        rom = next(iter(construction["constant_combinational_roms"].values()))
+        assert rom["width"] == 8 and rom["size"] == 16
+        assert rom["raw"] and rom["optimized"]
+        for view in construction["views"].values():
+            assert set(view["aliases"]) == {f"words[{i}]" for i in range(4)}
+            assert view["q_count"] == 16
+
+
+@pytest.mark.parametrize("arm", _UNPROVEN_RESET_ROM_ARMS)
+def test_unproven_rom_shapes_still_refuse_array_reset_construction(tmp_path, arm):
+    _yosys()
+    rtl = tmp_path / "neutral.v"
+    rtl.write_text(_UNPROVEN_RESET_ROM_ARMS[arm])
+    claims = [
+        {"rule": "reset_polarity", "signal": "rst_n", "value": "active_low"},
+        {"rule": "reset_sync", "signal": "rst_n", "value": "synchronous"},
+    ]
+    rec = fsc.check([rtl], "neutral", claims, tmp_path / "normal", None,
+                    klass={"clock": "clk", "resets": ["rst_n"]})
+    assert [claim["verdict"] for claim in rec["claims"]] == [
+        "NOT_DISCHARGED", "NOT_DISCHARGED"], rec
+    construction, = rec["reset_memory_construction"]
+    assert not construction["inside"]
+    assert not construction["constant_combinational_roms"]
+    assert construction["failed_preconditions"]
 
 
 @pytest.mark.parametrize('arm', _RESET_ARRAY_ARMS)

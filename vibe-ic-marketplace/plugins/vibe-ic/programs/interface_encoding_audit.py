@@ -69,6 +69,7 @@ class ModuleInfo:
     ports: List[PortInfo]
     body: str               # source code body (comments stripped)
     source_body: str = ''    # retain strings for configured generate selection
+    native_widths: Dict[str, int] = field(default_factory=dict)
 
 
 @dataclass
@@ -77,11 +78,12 @@ class InstanceInfo:
     module_type: str
     parent_module: str
     connections: Dict[str, str]   # port_name -> signal_name
+    connection_expressions: Dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
 class EncodingClassification:
-    encoding: str           # "BINARY" | "GRAY" | "UNKNOWN"
+    encoding: str           # BINARY | GRAY | UNKNOWN; closed proof: BIT_VALUE / PREDICATE
     evidence: str           # human-readable reason
     line: int               # source line where evidence was found
 
@@ -318,6 +320,7 @@ def parse_instances(body: str, parent_module: str, *, native_checked: bool = Fal
             continue
 
         connections: Dict[str, str] = {}
+        connection_expressions: Dict[str, str] = {}
         malformed = False
         for item in split_top_level(conn_text):
             item = item.strip()
@@ -343,6 +346,7 @@ def parse_instances(body: str, parent_module: str, *, native_checked: bool = Fal
             if not tail:
                 # `.port` is a legal implicit same-name connection.
                 connections[port] = port
+                connection_expressions[port] = port
                 continue
             if not tail.startswith('('):
                 malformed = True
@@ -352,6 +356,7 @@ def parse_instances(body: str, parent_module: str, *, native_checked: bool = Fal
                 malformed = True
                 continue
             sig = actual_result[0].strip()
+            connection_expressions[port] = sig
             sm = re.fullmatch(r'(\w+)(?:\s*\[[^\]]+\])?', sig)
             if sm:
                 connections[port] = sm.group(1)
@@ -378,7 +383,8 @@ def parse_instances(body: str, parent_module: str, *, native_checked: bool = Fal
             inst_name=inst_name,
             module_type=mod_type,
             parent_module=parent_module,
-            connections=connections))
+            connections=connections,
+            connection_expressions=connection_expressions))
         if malformed:
             _discovery_issue(
                 f"unsupported connection syntax in {parent_module}.{inst_name}")
@@ -792,6 +798,158 @@ def _check_gray_code_comparison(bit_value: int, width: int) -> Optional[int]:
     return None
 
 
+_EXPRESSION_TOKEN = re.compile(
+    r'[A-Za-z_$][A-Za-z0-9_$]*|'
+    r'<<<=' + r'|>>>=' + r'|===' + r'|!==' + r'|<<=' + r'|>>=' +
+    r'|==|!=|<=|>=|\+=|-=|\*=|/=|%=|&=|\|=|\^=|'
+    r'::|&&|\|\||<<|>>|\+\+|--|->|=>|\*\*|\S')
+_STATEMENT_OPENERS = {
+    'begin', 'else', 'end', 'endcase', 'fork', 'join', 'join_any',
+    'join_none', 'initial', 'always', 'always_ff', 'always_comb',
+    'always_latch', 'do',
+}
+
+
+def _balanced_expression_tokens(body):
+    """Return source-offset tokens plus delimiter pairs, or refuse imbalance.
+
+    Physical lines are deliberately absent from this grammar.  Strings are
+    masked without moving offsets, and every (), [] and {} must balance before
+    a ternary condition can be certified.
+    """
+    try:
+        masked = lexical_mask(body)
+    except ValueError:
+        return None, None
+    tokens = [(match.group(0), match.start(), match.end())
+              for match in _EXPRESSION_TOKEN.finditer(masked)]
+    stack = []
+    pairs = {}
+    opener_for = {')': '(', ']': '[', '}': '{'}
+    for index, (value, _, _) in enumerate(tokens):
+        if value in '([{':
+            stack.append((value, index))
+        elif value in ')]}':
+            if not stack or stack[-1][0] != opener_for[value]:
+                return None, None
+            _, opening = stack.pop()
+            pairs[opening] = index
+            pairs[index] = opening
+    if stack:
+        return None, None
+    return tokens, pairs
+
+
+def _nonblocking_assignment_boundary(tokens, pairs, operator):
+    """Whether ``operator`` is a statement-initial bare-LHS ``<=``.
+
+    The same token is relational inside expressions.  Requiring a bare LHS at
+    a statement boundary prevents ``dst <= seed <= flag ?`` from treating the
+    second operator as an assignment boundary.
+    """
+    lhs = operator - 1
+    if lhs < 0 or not re.fullmatch(r'[A-Za-z_]\w*', tokens[lhs][0]):
+        return False
+    previous = lhs - 1
+    if previous < 0:
+        return True
+    value = tokens[previous][0]
+    if value == ';' or value in _STATEMENT_OPENERS:
+        return True
+    if value == ')':
+        opening = pairs.get(previous)
+        return (opening is not None and opening > 0
+                and tokens[opening - 1][0] in {'if', 'else'})
+    return False
+
+
+def _whole_ternary_predicate_spans(body, port):
+    """Offsets of ternary conditions whose complete expression is port/!port."""
+    tokens, pairs = _balanced_expression_tokens(body)
+    if tokens is None:
+        return []
+    spans = []
+    for question, (value, _, _) in enumerate(tokens):
+        if value != '?' or question == 0:
+            continue
+        port_token = question - 1
+        if tokens[port_token][0] != port:
+            continue
+        condition = port_token
+        if condition and tokens[condition - 1][0] == '!':
+            condition -= 1
+        boundary = condition - 1
+        if boundary < 0:
+            valid = True
+        else:
+            previous = tokens[boundary][0]
+            # Preserve the deliberately closed grammar.  A predicate inside a
+            # select or concatenation is still a data expression and remains
+            # UNKNOWN, even when that nested ternary itself branches on port.
+            valid = previous in {'(', ',', ':', '?', '='}
+            if previous == '<=':
+                valid = _nonblocking_assignment_boundary(tokens, pairs, boundary)
+        if valid:
+            spans.append((tokens[port_token][1], tokens[port_token][2],
+                          tokens[condition][1]))
+    return spans
+
+
+def _whole_scalar_predicate(wire, producer, producer_port, consumer,
+                            consumer_port, parent, instances):
+    """Closed non-word grammar, not a scalar encoding default.
+
+    Both declared boundary ports and the parent carrier must be native whole
+    one-bit values, with unselected named connections. EVERY consumer reference
+    must be the entire condition of if(p), if(!p), p?a:b or !p?a:b; a second data/arithmetic/
+    comparison/instance use refuses. No alias chasing or partial proof applies.
+
+    For this domain G(b)=b^(b>>1) has the same if-branch choice as b:
+    0 -> 0, 1 -> 1, x -> x, z -> x (x and z both select the false arm).
+    Negation preserves these choices too; ternary merges the same two arms
+    for either unknown condition (x/z). This proves only Gray/Binary branch
+    invariance, never producer encoding, data functionality or control polarity.
+    """
+    if (_DISCOVERY_ISSUES or _CONFIGURATION.get('native', {}).get('status') != 'MEASURED'
+            or not re.fullmatch(r'[A-Za-z_]\w*', wire)
+            or producer.native_widths.get(producer_port) != 1
+            or consumer.native_widths.get(consumer_port) != 1
+            or parent.native_widths.get(wire) != 1
+            or not any(p.name == producer_port and p.direction == 'output'
+                       for p in producer.ports)
+            or not any(p.name == consumer_port and p.direction == 'input'
+                       for p in consumer.ports)):
+        return None
+    for module, port in ((producer, producer_port), (consumer, consumer_port)):
+        boundaries = [inst for inst in instances
+                      if inst.parent_module == parent.name
+                      and inst.module_type == module.name
+                      and inst.connections.get(port) == wire]
+        if not boundaries or any(inst.connection_expressions.get(port) != wire
+                                 for inst in boundaries):
+            return None
+    name = re.escape(consumer_port)
+    refs = list(re.finditer(r'(?<![\w$])' + name + r'(?![\w$])', consumer.body))
+    guards = list(re.finditer(r'\bif\s*\(\s*!?\s*(' + name + r')\s*\)', consumer.body))
+    # A physical newline is never an expression boundary.  Tokenise and
+    # balance the containing expression so a suffix such as
+    # ``1'bz ===\n p ? x : y`` cannot be promoted to a whole predicate.
+    selectors = _whole_ternary_predicate_spans(consumer.body, consumer_port)
+    proven = {m.span(1) for m in guards} | {(start, end)
+                                            for start, end, _ in selectors}
+    if not refs or {m.span() for m in refs} != proven:
+        return None
+    evidence_starts = [m.start() for m in guards] + [start for _, _, start in selectors]
+    lines = ','.join(str(consumer.body.count('\n', 0, start) + 1)
+                     for start in evidence_starts)
+    return EncodingClassification(
+        'PREDICATE',
+        f'native whole scalar ports/carrier; all references to {consumer_port} '
+        f'are complete if(p)/if(!p) or p?a:b/!p?a:b conditions at body line(s) {lines}; '
+        'Gray/Binary branch invariant over 0,1,x,z; producer encoding unclassified',
+        consumer.body.count('\n', 0, evidence_starts[0]) + 1)
+
+
 # ---------------------------------------------------------------------------
 # Cross-module interface tracing
 # ---------------------------------------------------------------------------
@@ -1042,7 +1200,9 @@ def _active_native_view(modules, headers, files, top, defines, parameters,
         active_modules[name] = ModuleInfo(
             name, source.file,
             [PortInfo(p.name, p.direction, p.width, name) for p in source.ports],
-            lexical_mask(body, attributes=True))
+            lexical_mask(body, attributes=True),
+            native_widths={key: len(spec['bits']) for key, spec in
+                           {**native.get('netnames', {}), **native_ports}.items()})
         children = {cell_name: cell['type']
                     for cell_name, cell in native.get('cells', {}).items()
                     if cell['type'] in native_modules}
@@ -1168,8 +1328,24 @@ def run_audit(
         # Classify consumer encoding (how the signal is compared)
         cons_class = classify_consumer_encoding(cons_module.body, cons_port)
 
+        # A measured mismatch remains authoritative. A whole scalar boundary
+        # consumed exclusively as a predicate has a finite encoding-invariance
+        # proof; unsupported references remain in the same UNKNOWN population.
+        predicate = _whole_scalar_predicate(
+            wire, prod_module, prod_port, cons_module, cons_port,
+            all_modules[parent_mod], all_instances)
+
         # Determine match status
-        if prod_class.encoding == "UNKNOWN" or cons_class.encoding == "UNKNOWN":
+        if predicate is not None and cons_class.encoding == 'UNKNOWN':
+            if prod_class.encoding == 'UNKNOWN':
+                prod_class = EncodingClassification(
+                    'BIT_VALUE',
+                    'native whole one-bit boundary value in a predicate-only edge; '
+                    'Gray/Binary data encoding is not inferred', 0)
+            cons_class = predicate
+            status = 'MATCH'
+            severity = 'INFO'
+        elif prod_class.encoding == "UNKNOWN" or cons_class.encoding == "UNKNOWN":
             status = "UNKNOWN"
             severity = "INFO"
         elif prod_class.encoding == cons_class.encoding:

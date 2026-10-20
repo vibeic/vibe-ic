@@ -1158,13 +1158,19 @@ def retained_steps(step_ids, *, canonical_acceptance: bool = False):
 
     This is for a shared emitter, not separate producers or a dispatch plan.
     Each row still runs its own unchanged consumer and gets its own verdict.
+    ``step_ids`` may be a pure call selector when one shared emitter owns a
+    conditional row.  The selector receives the same arguments as the wrapped
+    function and must return only the rows that invocation actually owns.
     """
     import functools
-    ids = [str(sid) for sid in step_ids]
+    static_ids = None if callable(step_ids) else [str(sid) for sid in step_ids]
 
     def decorate(fn):
         @functools.wraps(fn)
         def retained(project, *args, **kwargs):
+            selected = (step_ids(project, *args, **kwargs)
+                        if static_ids is None else static_ids)
+            ids = [str(sid) for sid in selected]
             dec = Decision(runner=fn.__module__, site=fn.__name__, flow_steps=ids)
             return _retained_dispatch(Path(project), dec, None, fn,
                                       (project, *args), kwargs,

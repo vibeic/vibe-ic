@@ -24280,11 +24280,22 @@ def step_arith_declaration_emit(project: Path) -> StepResult:
                       f"written — {reason}", reason_class=_V.ReasonClass.EXECUTION_ERROR)
 
 
-@_spf.retained_steps(('5', '6', '39'), canonical_acceptance=True)
+def _phase2_manifest_retained_steps(_project: Path, _plan: List[StepResult],
+                                    top_name: Optional[str] = None,
+                                    container: str = _pin.default_container_name(),
+                                    *, emit_formal: bool = True) -> Tuple[str, ...]:
+    """Rows this invocation actually owns before retention begins."""
+    del top_name, container
+    return ('5', '6', '39') if emit_formal else ('6', '39')
+
+
+@_spf.retained_steps(_phase2_manifest_retained_steps,
+                     canonical_acceptance=True)
 def step_emit_phase2_manifests(project: Path,
                                 plan: List[StepResult],
                                 top_name: Optional[str] = None,
-                                container: str = _pin.default_container_name()) -> StepResult:
+                                container: str = _pin.default_container_name(),
+                                *, emit_formal: bool = True) -> StepResult:
     """Write canonical Phase 2 step-artifact manifests so flow_compliance_check
     --strict (--phase 2) sees the evidence the runner has already produced.
 
@@ -24684,7 +24695,12 @@ def step_emit_phase2_manifests(project: Path,
                            "ran (#436)"),
             })
 
-    # Step 5: formal.
+    # Step 5: formal.  A bounded frontend continuation may legitimately select
+    # steps 2--3 without selecting Step 5.  Manifest emission still owns the
+    # selected frontend documents in that case, but it must not refresh formal
+    # evidence, launch a property generator, or let SBY rewrite task folders.
+    # The caller derives ``emit_formal`` from the same canonical window used by
+    # dispatch; standalone/unbounded callers retain the historical default.
     # ORGANIC-20260606 #433(c): the formal step must NEVER copy testbench
     # results as a proof — a TB run is not a formal run, and `all_proved`
     # may only be written by an actual proof tool. The pre-fix shape
@@ -24692,7 +24708,6 @@ def step_emit_phase2_manifests(project: Path,
     # `verdict: PASS, all_proved: true` from "iverilog reference TB
     # scenarios").
     formal_dir = _pl.formal_dir(project)
-    formal_dir.mkdir(parents=True, exist_ok=True)
     # Issue #1974: program-first property authoring with an honest denominator.
     # The generator reads the design's L3/L6/L8 declarations, authors only the
     # construction-safe reset properties it can bind, and writes the exact
@@ -24704,9 +24719,9 @@ def step_emit_phase2_manifests(project: Path,
     # A counterexample is evidence. Deleting it and replacing it with a skip was
     # the false-green defect, so this block never unlinks results.json.
     _formal_results = formal_dir / "results.json"
-    _refresh_formal = not _formal_results.is_file()
+    _refresh_formal = emit_formal and not _formal_results.is_file()
     _formal_refresh_reason = None
-    if not _refresh_formal:
+    if emit_formal and not _refresh_formal:
         try:
             import formal_proof_evidence_check as _formal_evidence
             _retained_formal = json.loads(_formal_results.read_text())
@@ -24719,7 +24734,8 @@ def step_emit_phase2_manifests(project: Path,
                 _refresh_formal = bool(_formal_refresh_reason)
         except (OSError, ValueError, TypeError):
             _refresh_formal = True
-    if _refresh_formal:
+    if emit_formal and _refresh_formal:
+        formal_dir.mkdir(parents=True, exist_ok=True)
         try:
             import sys as _sys
             if str(PROGRAMS_DIR) not in _sys.path:
@@ -25178,13 +25194,15 @@ def step_emit_phase2_manifests(project: Path,
 @_spf.retained_steps(('2', '3', '4'), canonical_acceptance=True)
 def _complete_phase2_frontend(project: Path, plan: List[StepResult],
                               top_name: Optional[str] = None,
-                              container: str = _pin.default_container_name()) -> StepResult:
+                              container: str = _pin.default_container_name(),
+                              *, emit_formal: bool = True) -> StepResult:
     """Complete the real runner's RTL/CDC/simulation outputs after coverage.
 
     Standalone manifest emission remains an existing component operation.
     Only this actual runner seam owns the complete frontend consumers.
     """
-    result = step_emit_phase2_manifests(project, plan, top_name, container)
+    result = step_emit_phase2_manifests(
+        project, plan, top_name, container, emit_formal=emit_formal)
     # Step2 also owns producer-written ROM/rewrite/lint evidence. Its full
     # consumer must see those outputs here, rather than before the later
     # all-step producer sweep. Keep the existing emitter return semantics:
@@ -27649,8 +27667,9 @@ def main() -> int:
             project, plan, ic_class, evidence,
             invocation_context=_dispatch_invocation_context)
     if any(_step_requested(s) for s in ("2", "3", "4")):
-        plan.append(_complete_phase2_frontend(project, plan, args.top_name,
-                                               args.container))
+        plan.append(_complete_phase2_frontend(
+            project, plan, args.top_name, args.container,
+            emit_formal=_step_requested("5")))
     else:
         plan.append(StepResult(
             "phase2_manifests", "NOT_APPLICABLE", 0.0,

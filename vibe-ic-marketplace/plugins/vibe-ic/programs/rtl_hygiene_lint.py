@@ -7827,6 +7827,96 @@ def _extract_top_module_body(src: str):
     return src[last_mod_decl:last_endmod], last_mod_decl
 
 
+def autofix_automatic_case_default(path: Path) -> Tuple[int, List[str]]:
+    """Make an automatic function's proven implicit-X return explicit.
+
+    The ordinary --fix caller requires a successful native pre-compile. Reuse
+    the existing function/case spans, width and literal helpers, accepting only
+    a closed subset: explicit automatic four-state packed result, one ANSI
+    four-state packed input, and begin/case/endcase/end with literal-only,
+    whole-result assignments. Each binary selector value occurs exactly once.
+    There are no locals, initializers, calls, extra statements or state writes.
+    Thus an unmatched X/Z selector leaves the fresh automatic result all X;
+    assigning a result-width X on that path preserves its four-state value.
+
+    Preprocessor contexts and observable attributes refuse the entire file.
+    This is not an unread-sink proof or a general function/body parser.
+    """
+    try:
+        raw = path.read_bytes().decode('utf-8')
+    except UnicodeError:
+        return 0, []
+    src = strip_comments(raw)
+    if (re.search(r'[`"\\]|\b(?:class|interface|package|task|checker)\b', src)
+            or any(_module_ports._attribute_start(src, m.start())
+                   for m in re.finditer(r'\(\*', src))):
+        return 0, []
+    header = re.compile(
+        r'\s*automatic\s+(?:(?:reg|logic)\s+)?'
+        r'\[\s*(\d+)\s*:\s*(\d+)\s*\]\s+([A-Za-z_]\w*)\s*'
+        r'\(\s*input\s+(?:(?:reg|logic)\s+)?'
+        r'\[\s*(\d+)\s*:\s*(\d+)\s*\]\s+([A-Za-z_]\w*)\s*\)\s*;\s*begin\s*')
+    edits = []
+    for function in _FUNC_TASK_RE.finditer(src):
+        if function.group(1) != 'function':
+            continue
+        body = function.group(2)
+        declaration = header.match(body)
+        if declaration is None:
+            continue
+        hi, lo, name, _in_hi, _in_lo, selector = declaration.groups()
+        result_width = abs(int(hi) - int(lo)) + 1
+        # Resolve only this exact formal declaration, never a same-named
+        # module/sibling declaration. Whitespace does not affect its type.
+        formal = declaration.group().split('(', 1)[1]
+        width = _resolve_selector_width(' '.join(formal.split()), selector)
+        if width is None or not 1 <= width <= 8 or not 1 <= result_width <= 4096:
+            continue
+        cases = _case_spans(body)
+        if len(cases) != 1:
+            continue
+        expr, start, end = cases[0]
+        opening = re.match(r'case\s*\([^)]*\)', body[start:])
+        if (opening is None or expr.strip() != selector
+                or body[declaration.end():start].strip()
+                or body[end + len('endcase'):].strip() != 'end'):
+            continue
+        arms = _module_ports.split_top_level(body[start + opening.end():end], ';')
+        if arms[-1].strip() or len(arms) != (1 << width) + 1:
+            continue
+        labels = []
+        for arm in arms[:-1]:
+            assignment = re.fullmatch(r'\s*(.*?)\s*:\s*' + re.escape(name)
+                                      + r'\s*=\s*(.*?)\s*', arm, re.S)
+            if assignment is None:
+                break
+            label, value = assignment.groups()
+            label_type = _SIZED_LITERAL_RE.fullmatch(label)
+            value_type = _SIZED_LITERAL_RE.fullmatch(value)
+            label_value = _sized_literal_value(label)
+            result_value = _sized_literal_value(value)
+            if (label_type is None or value_type is None
+                    or label_type.group(2) or value_type.group(2)
+                    or int(label_type.group(1)) != width
+                    or int(value_type.group(1)) != result_width
+                    or label_value is None or result_value is None
+                    or label_value >= (1 << width)
+                    or result_value >= (1 << result_width)):
+                break
+            labels.append(label_value)
+        if len(labels) != (1 << width) or set(labels) != set(range(1 << width)):
+            continue
+        offset = function.start(2) + end
+        prefix = raw[raw.rfind('\n', 0, offset) + 1:offset]
+        indent = prefix if not prefix.strip() else ''
+        edits.append((offset, f"default: {name} = {result_width}'bx;\n{indent}", name))
+    for offset, insertion, _name in reversed(edits):
+        raw = raw[:offset] + insertion + raw[offset:]
+    if edits:
+        path.write_bytes(raw.encode('utf-8'))
+    return len(edits), [name for _offset, _insertion, name in edits]
+
+
 def main():
     ap = argparse.ArgumentParser(description='General RTL hygiene lint.')
     ap.add_argument('files', nargs='*', help='Verilog/SystemVerilog files')
@@ -7848,6 +7938,8 @@ def main():
                          'they stop false-failing the synth gate); and (c) a narrowly '
                          'proven delay-driven no-input oscillator blocking self-toggle '
                          '(rewrite `=` to `<=` to remove active-region sampling races). '
+                         'Also make implicit-X fallthrough explicit in a proven '
+                         'literal-only automatic function case (requires native compilation). '
                          'Regardless of caller/prompt.')
     ap.add_argument('--strict', action='store_true',
                     help='ORGANIC #770 — sole-emit hard-block mode. Identical '
@@ -7911,6 +8003,7 @@ def main():
         sens_total = 0
         outreg_total = 0
         clock_toggle_total = 0
+        automatic_case_total = 0
         for f in args.files:
             p = Path(f)
             if not p.exists():
@@ -7957,9 +8050,19 @@ def main():
             if ct:
                 print(f"{f}: rewrote delayed oscillator self-toggle(s) to NBA: "
                       f"{ctlabels}")
-            if _iv and pre_ok and (ir or orr or n or g or w or s or ct) and not _compiles(p):
+            ac, aclabels = autofix_automatic_case_default(p) if _iv and pre_ok else (0, [])
+            if ac:
+                print(f"{f}: made automatic function implicit-X case default(s) explicit: {aclabels}")
+            remaining = strip_comments(p.read_text(errors='replace'))
+            if _function_spans(remaining) and rule_case_coverage(remaining, f):
+                print(f"INFO automatic-case-fix-refused: {f}: native compilation or "
+                      "literal-only automatic-case proof unavailable; findings retained")
+            if any(fd.rule == 'unread-reg' for fd in rule_undriven_and_unread(remaining, f)):
+                print(f"INFO unread-sink-fix-refused: {f}: complete elaborated source/include "
+                      "read and ownership census unavailable; findings retained")
+            if _iv and pre_ok and (ir or orr or n or g or w or s or ct or ac) and not _compiles(p):
                 p.write_text(pre_text)
-                ir = orr = n = g = w = s = ct = 0
+                ir = orr = n = g = w = s = ct = ac = 0
                 print(f"WARN fix-reverted-noncompiling: {f} compiled before "
                       f"--fix but not after; ALL fixes reverted (#533 "
                       f"compile-neutrality net — file a backlog with this "
@@ -7971,13 +8074,15 @@ def main():
             sens_total += s
             outreg_total += orr
             clock_toggle_total += ct
+            automatic_case_total += ac
         print(f"rtl_hygiene_lint --fix: repaired {total} reset-less registered output(s), "
               f"fenced {guarded_total} sim-only assertion construct(s), "
               f"inserted {cast_total} value-identical width cast(s), "
               f"removed illegal `reg` from {inreg_total} input/inout port(s), "
               f"promoted {outreg_total} duplicate-declared output port(s) to `output reg`, "
               f"rewrote {sens_total} incomplete sensitivity list(s) to @(*), "
-              f"rewrote {clock_toggle_total} delayed oscillator self-toggle(s) to NBA")
+              f"rewrote {clock_toggle_total} delayed oscillator self-toggle(s) to NBA, "
+              f"made {automatic_case_total} automatic function X default(s) explicit")
         return 0
 
     sev_order = {'ERROR': 2, 'WARN': 1, 'INFO': 0}
