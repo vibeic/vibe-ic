@@ -34,6 +34,89 @@ def _run(project_dir: Path) -> subprocess.CompletedProcess:
     )
 
 
+def _nonqualifying_encoding_report(receipt, status='FAIL', role='audit'):
+    return {
+        'program': 'flow_compliance_check', 'invoked_as': role,
+        'invocation': 'prior-measurement-1730000000000',
+        'scope': {'stage': '1', 'steps_judged': ['P0']},
+        'overall': status, 'gate_execution_ledger': [],
+        'steps': [{'id': 'P0', 'status': status, 'gate_records': [{
+            'name': 'interface_encoding_audit', 'verdict': 'INCOMPLETE',
+            'reason_class': 'EXECUTION_ERROR',
+            'evidence': {'exit_code': 0, 'receipt_state': 'NOT_MEASURED',
+                         'receipt_detail': f'receipt={receipt} sha256=0123456789abcdef — '
+                                           'producer_inconclusive_or_unknown; fresh.'},
+        }]}],
+    }
+
+
+def _run_owned_storage(project):
+    return subprocess.run([sys.executable, str(PROG), str(project), '--auditor-record',
+                           'reports/audit/phase23_completion_audit.json'],
+                          capture_output=True, text=True)
+
+
+@pytest.mark.parametrize('status', ['FAIL', 'NOT_MEASURED'])
+@pytest.mark.parametrize('role', ['audit', 'producer'])
+def test_nonqualifying_encoding_diagnostic_is_not_a_current_proof_declaration(tmp_path, status, role):
+    receipt = Path('/tmp') / ('lost-proof-' + tmp_path.name) / 'encoding_audit_report.json'
+    record = tmp_path / 'reports/negative_measurement.json'
+    record.parent.mkdir()
+    record.write_text(json.dumps(_nonqualifying_encoding_report(receipt, status, role)))
+    original = record.read_bytes()
+    actual = _run_owned_storage(tmp_path)
+    assert actual.returncode == 0, actual.stdout + actual.stderr
+    assert 'receipt_detail' in actual.stdout
+    assert record.read_bytes() == original
+    # Standalone forensics still reports the real loss, with no owner context.
+    forensic = _run(tmp_path)
+    assert forensic.returncode == 1, forensic.stdout + forensic.stderr
+    assert str(receipt) in forensic.stdout
+
+
+@pytest.mark.parametrize('variant', [
+    'overall_pass', 'step_pass', 'qualifying_gate', 'qualifying_receipt', 'failed_exit',
+    'other_gate', 'other_program', 'empty_invocation', 'malformed_scope', 'missing_ledger',
+    'bad_digest', 'stale_source', 'declared_output_same_path', 'declared_output_other_path',
+    'duplicate_key', 'malformed_role', 'malformed_overall', 'malformed_step_status',
+    'boolean_exit', 'wrong_step', 'other_reason_class',
+])
+def test_current_or_untyped_proof_paths_remain_storage_failures(tmp_path, variant):
+    receipt = Path('/tmp') / ('lost-proof-' + tmp_path.name) / 'encoding_audit_report.json'
+    doc = _nonqualifying_encoding_report(receipt)
+    gate = doc['steps'][0]['gate_records'][0]
+    if variant == 'overall_pass': doc['overall'] = 'PASS'
+    elif variant == 'step_pass': doc['steps'][0]['status'] = 'PASS'
+    elif variant == 'qualifying_gate': gate['verdict'] = 'PASS'
+    elif variant == 'qualifying_receipt': gate['evidence']['receipt_state'] = 'PASS'
+    elif variant == 'failed_exit': gate['evidence']['exit_code'] = 1
+    elif variant == 'other_gate': gate['name'] = 'other_audit'
+    elif variant == 'other_program': doc['program'] = 'other_producer'
+    elif variant == 'empty_invocation': doc['invocation'] = ''
+    elif variant == 'malformed_scope': doc['scope'] = []
+    elif variant == 'missing_ledger': del doc['gate_execution_ledger']
+    elif variant == 'bad_digest': gate['evidence']['receipt_detail'] = gate['evidence']['receipt_detail'].replace('0123456789abcdef', 'not-a-digest')
+    elif variant == 'stale_source': gate['evidence']['receipt_detail'] = gate['evidence']['receipt_detail'].replace('fresh.', 'source_manifest_stale_or_wrong_root.')
+    elif variant == 'declared_output_same_path': doc['outputs'] = [str(receipt)]
+    elif variant == 'declared_output_other_path': doc['outputs'] = [str(receipt.with_name('active_native_context.json'))]
+    elif variant == 'malformed_role': doc['invoked_as'] = []
+    elif variant == 'malformed_overall': doc['overall'] = {}
+    elif variant == 'malformed_step_status': doc['steps'][0]['status'] = []
+    elif variant == 'boolean_exit': gate['evidence']['exit_code'] = False
+    elif variant == 'wrong_step': doc['steps'][0]['id'] = 4
+    elif variant == 'other_reason_class': gate['reason_class'] = 'UNKNOWN'
+    text = json.dumps(doc)
+    if variant == 'duplicate_key': text = text.replace('"overall": "FAIL"', '"overall": "PASS", "overall": "FAIL"')
+    record = tmp_path / 'reports/negative_measurement.json'
+    record.parent.mkdir()
+    record.write_text(text)
+    original = record.read_bytes()
+    actual = _run_owned_storage(tmp_path)
+    assert actual.returncode == 1, actual.stdout + actual.stderr
+    assert '[FAIL] project_outputs_in_tree_check:' in actual.stdout
+    assert record.read_bytes() == original
+
+
 @pytest.fixture
 def volatile_project():
     """A project root that really is on a VOLATILE root, whatever TMPDIR says.

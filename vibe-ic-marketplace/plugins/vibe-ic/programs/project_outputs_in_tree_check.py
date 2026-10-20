@@ -741,6 +741,34 @@ def _auditor_diagnostic_text(txt: str, auditor_records: List[str]
         if not isinstance(records, list):
             continue
         for gi, gate in enumerate(records):
+            # A failed measurement explicitly refuses this receipt as proof.
+            # Its diagnostic is not a new output declaration on the next audit
+            # pass. Keep qualifying/stale/malformed receipts and all other
+            # fields visible, and never rewrite the original report bytes.
+            evidence = gate.get("evidence") if isinstance(gate, dict) else None
+            if (doc.get("program") == "flow_compliance_check"
+                    and doc.get("invoked_as") in ("audit", "producer")
+                    and doc.get("overall") in ("FAIL", "NOT_MEASURED")
+                    and step.get("id") == "P0"
+                    and step.get("status") in ("FAIL", "NOT_MEASURED")
+                    and isinstance(gate, dict)
+                    and gate.get("name") == "interface_encoding_audit"
+                    and gate.get("verdict") == "INCOMPLETE"
+                    and gate.get("reason_class") == "EXECUTION_ERROR"
+                    and isinstance(evidence, dict)
+                    and type(evidence.get("exit_code")) is int
+                    and evidence["exit_code"] == 0
+                    and evidence.get("receipt_state") == "NOT_MEASURED"
+                    and isinstance(evidence.get("receipt_detail"), str)):
+                detail = re.fullmatch(
+                    r"receipt=(/[^\s]+/encoding_audit_report\.json) "
+                    r"sha256=([0-9a-f]{16}) — producer_inconclusive_or_unknown; fresh\.",
+                    evidence["receipt_detail"])
+                if detail:
+                    evidence["receipt_detail"] = (
+                        "nonqualifying receipt sha256=" + detail.group(2) +
+                        "; producer_inconclusive_or_unknown; original diagnostic retained")
+                    projected.append(f"steps/{si}/gate_records/{gi}/evidence/receipt_detail")
             if (not isinstance(gate, dict)
                     or gate.get("name") != "project_outputs_in_tree_check"
                     or not isinstance(gate.get("evidence"), dict)
