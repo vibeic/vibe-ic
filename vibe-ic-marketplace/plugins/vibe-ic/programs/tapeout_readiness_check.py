@@ -1124,10 +1124,7 @@ def evaluate(
         atomic_write_text(run_root / "bond_pad_edge_distance.json",
                           json.dumps(rep.bond_pad_edge_distance, indent=2))
         edge = rep.bond_pad_edge_distance
-        if rep.verdict == PASS and edge["verdict"] != PASS:
-            rep.verdict = FAIL if edge["verdict"] == FAIL else NOT_DETERMINED
-            rep.reason = "bond_pad_edge_distance: " + edge["verdict"] + ": " + edge["reason"]
-        if precheck_src and rep.verdict == PASS:
+        if precheck_src and rep.verdict == PASS and edge["verdict"] in (PASS, "MANUAL_REVIEW"):
             try:
                 from die_finishing_gen import publish_provider_release, _REPORT_REL
                 fill_report = project / "reports/phase3/cmp_fill_emit.json"
@@ -1141,6 +1138,9 @@ def evaluate(
             except Exception as exc:
                 rep.verdict = NOT_DETERMINED
                 rep.reason = f"provider assembly was not admitted: {exc}"
+        if rep.verdict == PASS and edge["verdict"] != PASS:
+            rep.verdict = FAIL if edge["verdict"] == FAIL else NOT_DETERMINED
+            rep.reason = "bond_pad_edge_distance: " + edge["verdict"] + ": " + edge["reason"]
     return rep
 
 

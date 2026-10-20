@@ -1922,7 +1922,9 @@ def publish_provider_release(project: Path, record_path: Path, *,
     edge_path = project / "reports/phase3/bond_pad_edge_distance.json"
     edge = measure(project, Path(final["path"]), profile_path=instruction)
     atomic_write_json(edge_path, edge)
-    if edge["verdict"] != "PASS":
+    # This technical lineage feeds later signoff; packaging review remains
+    # disclosed here and is resolved by final readiness. Measured FAIL refuses.
+    if edge["verdict"] not in ("PASS", "MANUAL_REVIEW"):
         raise ValueError("bond_pad_edge_distance: " + edge["verdict"] + ": " + edge["reason"])
     files["bond_pad_edge_distance"] = _release_file(edge_path)
     finished_def = project / "phase3/stage3/pnr/provider_die_finished.def"

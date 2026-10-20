@@ -464,15 +464,11 @@ def test_bond_measurement_preserves_real_operator_refusal(bond_geometry):
     # separately when replaying read-only captured receipts.
 
 
-@pytest.mark.parametrize('limit,expected', [(None, 'MANUAL_REVIEW'), (199, 'FAIL'), (200, 'PASS')])
-def test_provider_assembly_does_not_admit_unreviewed_bond_geometry(bond_geometry, limit, expected):
-    """Neutral source lineage, actual native openings; no native PV claim."""
+@pytest.fixture
+def bond_assembly(bond_geometry):
+    """Neutral technical lineage with actual native opening geometry."""
     import _gds_admission as admission
     project, path, gds = bond_geometry
-    value = json.loads(path.read_text())
-    if limit is not None:
-        value['bond_pad_edge_distance']['max_distance_um'] = limit
-    path.write_text(json.dumps(value))
     reports = project / 'reports/phase3'; reports.mkdir(parents=True)
     routed = project / 'phase3/stage3/pnr/routed.def'; routed.parent.mkdir(parents=True)
     routed.write_text('UNITS DISTANCE MICRONS 1000 ;\nDIEAREA ( 0 0 ) ( 400000 500000 ) ;\nEND DESIGN\n')
@@ -496,6 +492,16 @@ def test_provider_assembly_does_not_admit_unreviewed_bond_geometry(bond_geometry
         'steps': steps, 'input': finishing._release_file(gds), 'output': finishing._release_file(gds),
         'slot': '1x1', 'packaging': 'bare_die', 'assigned_id': None, 'official_entry': {'neutral': True}})
     dest = reports / 'assembly.json'
+    return project, path, gds, operator, seal, dest
+
+
+@pytest.mark.parametrize('limit,expected', [(None, 'MANUAL_REVIEW'), (199, 'FAIL'), (200, 'PASS')])
+def test_provider_assembly_does_not_admit_unreviewed_bond_geometry(bond_assembly, limit, expected):
+    project, path, gds, operator, seal, dest = bond_assembly
+    value = json.loads(path.read_text())
+    if limit is not None:
+        value['bond_pad_edge_distance']['max_distance_um'] = limit
+    path.write_text(json.dumps(value))
     try:
         admitted = finishing.publish_provider_release(project, dest, source_project=project,
             instruction=path, precheck=operator, finishing=seal)
@@ -503,14 +509,56 @@ def test_provider_assembly_does_not_admit_unreviewed_bond_geometry(bond_geometry
     except ValueError as exc:
         actual = next((state for state in ('MANUAL_REVIEW', 'FAIL')
                        if 'bond_pad_edge_distance: ' + state in str(exc)), str(exc))
-    assert actual == expected
-    if expected == 'PASS':
-        assert admitted['basis']['bond_pad_edge_distance']['distances_um']['top'] == 200
-        assert admitted['basis']['files']['bond_pad_edge_distance'] == finishing._release_file(
-            reports / 'bond_pad_edge_distance.json')
+    assert actual == ('PASS' if expected == 'MANUAL_REVIEW' else expected)
+    edge_path = project / 'reports/phase3/bond_pad_edge_distance.json'
+    if expected in ('PASS', 'MANUAL_REVIEW'):
+        readback = finishing.read_admitted_release(project, dest)
+        assert readback['basis'] == admitted['basis']
+        assert readback['basis']['bond_pad_edge_distance']['verdict'] == expected
+        assert readback['basis']['bond_pad_edge_distance']['distances_um']['top'] == 200
+        assert readback['basis']['files']['bond_pad_edge_distance'] == finishing._release_file(edge_path)
+        assert readback['basis']['platform_accepted'] is False
+        assert readback['basis']['provider_precheck']['accepted'] is False
+        final = _bond_readiness(project, gds, project / 'final-readiness')
+        assert final.verdict == ('NOT_DETERMINED' if expected == 'MANUAL_REVIEW' else 'PASS')
+        assert final.bond_pad_edge_distance['verdict'] == expected
     else:
         assert not dest.exists()
-        assert json.loads((reports / 'bond_pad_edge_distance.json').read_text())['verdict'] == expected
+        assert json.loads(edge_path.read_text())['verdict'] == 'FAIL'
+
+
+def test_normal_native_precheck_retains_manual_bond_assembly(bond_assembly):
+    project, path, gds, operator, seal, dest = bond_assembly
+    value = json.loads(path.read_text()); value['precheck_source'] = 'input/official'
+    path.write_text(json.dumps(value))
+    finished = project / finishing._DEF_REL
+    finished.write_bytes((finished.parent / 'routed.def').read_bytes())
+    (project / finishing._REPORT_REL).write_bytes(seal.read_bytes())
+    runroot = project / 'operator-run'
+    def transport(command, timeout):
+        # Only the official subprocess is substituted; actual readiness,
+        # technical producer/reader and native opening measurement execute.
+        for i, step in enumerate(readiness.SHUTTLES[readiness.DEFAULT_SHUTTLE].ladder, 1):
+            if step.cob_only:
+                continue
+            folder = runroot / f'{i:02d}-{readiness._slug(step.step_id)}'
+            folder.mkdir(parents=True)
+            (folder / 'state_out.json').write_text('{}')
+        output = runroot / 'processed.gds'; output.write_bytes(gds.read_bytes())
+        receipt = json.loads(operator.read_text())
+        receipt['output'] = finishing._release_file(output)
+        (runroot / 'provider_precheck.json').write_text(json.dumps(receipt))
+        return 0, 'neutral operator source transport, no native PV claim', ''
+    final = readiness.evaluate(project, layout=gds, top='neutral_top', rundir=runroot, runner=transport)
+    assert final.verdict == 'NOT_DETERMINED'
+    assert final.bond_pad_edge_distance['verdict'] == 'MANUAL_REVIEW'
+    admitted = finishing.read_admitted_release(project, Path('reports/phase3/provider_die_assembly.json'))
+    edge_path = project / 'reports/phase3/bond_pad_edge_distance.json'
+    assert admitted['basis']['bond_pad_edge_distance']['verdict'] == 'MANUAL_REVIEW'
+    assert admitted['basis']['bond_pad_edge_distance']['distances_um'] == final.bond_pad_edge_distance['distances_um']
+    assert admitted['basis']['files']['bond_pad_edge_distance'] == finishing._release_file(edge_path)
+    assert admitted['basis']['platform_accepted'] is False
+    assert admitted['basis']['provider_precheck']['accepted'] is False
 
 
 @pytest.mark.parametrize('final_present', [True, False])

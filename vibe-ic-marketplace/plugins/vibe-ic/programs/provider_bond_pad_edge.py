@@ -6,7 +6,7 @@ masters; otherwise use the selected PDK's existing discovery). max_distance_um
 is a provider/packaging declaration, never a tool default. technical_target
 supplies dimensions_um and optional origin_um (the operator slot starts at 0,0).
 Missing authority/geometry is NOT_MEASURED; measured distances without a limit
-are MANUAL_REVIEW. Both prevent an assembly/precheck PASS. No layout is changed.
+are MANUAL_REVIEW. Both prevent final readiness PASS. No layout is changed.
 """
 from __future__ import annotations
 
