@@ -328,5 +328,16 @@
     "version_observed": "Pinned composed source 5d176a143b7aa60cf53fecda830519181bf9a52b, tree 0bab9035dd8428a8ab45d08f0689bf1685b09015. The interface binder is a stacked addition; official baseline availability must be checked before any PR claims.",
     "version_lkg": "",
     "fixture_path": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/fixtures/phase1_local/neutral_bound_type_width/neutral_bound_type_width.md"
+  },
+  {
+    "issue": 3289,
+    "project": "neutral_io_analysis_prose",
+    "layer": "L1_DATASHEET",
+    "field": "pin_table",
+    "expected": "[] — this input declares no hardware port. `SDC` identifies an implementation constraint document and `ROOT` an authoring role. They must not become physical pin declarations merely because an I/O-related heading and the English word input coexist.",
+    "actual": "Two pin_table rows named SDC and ROOT, each mode=input, rtl_name=sdc/root, with source evidence pointing at this prose document.",
+    "version_observed": "1.30.25 official fixed checkout e67b74e3e9204aa37fd8eaaf8d66266bfa8c2812, native gen_l1_datasheet rc=0. Also seen on retained source d63906f6ae37bf0030059d9b6304ebcc5fe349b9 (manifest1.29.96).",
+    "version_lkg": "",
+    "fixture_path": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/fixtures/phase1_local/neutral_io_analysis_prose/physical_io_analysis.md"
   }
 ]

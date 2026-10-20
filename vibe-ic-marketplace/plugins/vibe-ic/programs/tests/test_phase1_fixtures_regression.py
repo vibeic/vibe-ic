@@ -609,3 +609,28 @@ def test_l8_literal_parameter_owner_ignores_commented_declarations(tmp_path):
     text = "```systemverilog\n// parameter integer UNRELATED = 99;\n/* localparam integer OTHER = 17; */\n```\nmodule documentation_only #(\n"
     for doc in _l8_literal_owner_emit(tmp_path, text):
         assert doc.get("parameters", []) == []
+
+
+@pytest.mark.parametrize("case", ["intake_prose", "explicit_same_names", "columns", "prefix_direction", "pipe_table"])
+def test_neutral_io_analysis_prose_requires_a_pin_declaration(case, tmp_path):
+    from programs import phase1_doc_one_shot_runner as producer
+    if case == "intake_prose":
+        text = "\n".join(_load_fixture("neutral_io_analysis_prose").values())
+        wanted = {}
+    elif case == "explicit_same_names":
+        text = ("## Externally-observable interface (per the chip's top pins)\n\n"
+                "- Digital input `SDC`.\n- Digital output `ROOT`.\n")
+        wanted = {"SDC": "input", "ROOT": "output"}
+    elif case == "pipe_table":
+        text = "# I/O pins\n\n| Pin | Direction | Description |\n|---|---|---|\n| SDC | input | Data pin |\n| ROOT | output | Result pin |\n"
+        wanted = {"SDC": "input", "ROOT": "output"}
+    elif case == "columns":
+        text = "# I/O pins\n\nSDC input Data input pin\nROOT output Result output pin\n"
+        wanted = {"SDC": "input", "ROOT": "output"}
+    else:
+        text = "# I/O pins\n\ninput SDC Digital input pin\noutput ROOT Digital result pin\n"
+        wanted = {"SDC": "input", "ROOT": "output"}
+    result = producer.gen_l1_datasheet(tmp_path, {"physical_io_analysis.md": text})
+    doc = json.loads(result.path.read_text())
+    got = {p["name"]: p["mode"] for p in doc["pin_table"]}
+    assert got == wanted, (case, got, wanted)

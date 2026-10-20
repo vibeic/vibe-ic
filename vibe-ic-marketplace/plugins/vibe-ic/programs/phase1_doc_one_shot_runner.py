@@ -11398,12 +11398,20 @@ def _v455_sanitize_and_merge_pins(
                         continue
                     if _is_pipe_table_row(line) or f"`{name}`" in line:
                         return True
-                    # plaintext COLUMN-table row: the line carries a
-                    # STANDALONE SINGULAR direction token (any case) —
-                    # prose uses plurals ("Analog inputs …") which the
-                    # word boundary rejects (#455)
-                    if re.search(r"(?<![\w])(?:input|output|inout|i/o)"
-                                 r"(?![\w])", line, re.IGNORECASE):
+                    # Plain column rows bind THIS name to its direction.
+                    # A direction elsewhere in an I/O prose sentence does
+                    # not declare every capitalized tool/author noun a pin.
+                    direction = r"(?:input|output|inout|i/o)"
+                    width = r"(?:\[[^]\n]+\]|\d+)"
+                    prefix = r"^\s*(?:[-*+]\s+)?(?:\d+\s+)?"
+                    named = re.escape(name) + r"(?![\w])"
+                    name_first = (prefix + named + r"\s*(?::\s*|\(\s*|\s+)"
+                                  + r"(?:" + width + r"\s+)?" + direction
+                                  + r"(?![\w])")
+                    direction_first = (prefix + direction + r"\s+"
+                                       + r"(?:" + width + r"\s+)?" + named)
+                    if (re.search(name_first, line, re.IGNORECASE)
+                            or re.search(direction_first, line, re.IGNORECASE)):
                         return True
         return False
 
