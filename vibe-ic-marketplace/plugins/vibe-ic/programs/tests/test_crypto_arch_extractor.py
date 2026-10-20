@@ -151,3 +151,81 @@ def test_issue3288_full_block_scope_and_conflicts(text, expected):
     out = mod.extract_crypto_arch(text)
     assert out.get("latency_cycles_per_block") == expected
     assert ("latency_cycles_per_block_evidence" in out) == (expected is not None)
+
+def test_softwrapped_variant_list_does_not_choose_its_last_count():
+    for text in ("Modes use 56 / 66 /\n72 cycles per block.",
+                 "Modes use 56, 66,\n72 cycles per block."):
+        out = mod.extract_crypto_arch(text)
+        assert "latency_cycles_per_block" not in out, (text, out)
+        assert "latency_cycles_per_block_evidence" not in out, (text, out)
+
+
+def test_softwrapped_explicit_block_unit_preserves_source_evidence():
+    text = "Latency is 66 clock cycles\nper block."
+    out = mod.extract_crypto_arch(text)
+    assert out["latency_cycles_per_block"] == 66, out
+    assert out["latency_cycles_per_block_evidence"]["line"] == 1
+    assert out["latency_cycles_per_block_evidence"]["matched_token"] == "66 clock cycles\nper block"
+
+
+def test_variant_ranges_do_not_choose_their_last_count():
+    for text in ("Modes take 56 - 72 cycles per block.",
+                 "Modes take 56 to 72 cycles per block.",
+                 "Modes take 56–72 cycles per block."):
+        out = mod.extract_crypto_arch(text)
+        assert "latency_cycles_per_block" not in out, (text, out)
+        assert "latency_cycles_per_block_evidence" not in out, (text, out)
+
+
+@pytest.mark.parametrize("text,expected", [
+    ("Modes use 56, 66, and\n72 cycles per block.", None),
+    ("Modes use 56, 66, or\n72 clock cycles per block.", None),
+    ("Modes use 56,\n66, and\n72 cycles per block.", None),
+    ("Modes use 56 / 66 /\n72 cycles per block.", None),
+    ("Modes take between 56 and\n72 cycles per block.", None),
+    ("Modes take 56—72 cycles per block.", None),
+    ("Mode A uses 66 cycles per block.", None),
+    ("Latency is 66 cycles per block for mode A.", None),
+    ("In the fast mode, latency is 66 cycles per block.", None),
+    ("Variant A has a 66-cycle block latency.", None),
+    ("Mode-dependent latency is 66 cycles per block.", None),
+    ("All modes use 66 cycles per block.", 66),
+    ("Every variant uses 66 cycles per block.", 66),
+    ("The core has two modes. Latency is 66 cycles per block.", 66),
+    ("The core has two modes.\n\nLatency is 66 clock cycles\nper block.", 66),
+    ("Block latency is 66 cycles.\nAlso 66 cycles per block.", 66),
+    ("The core uses 1 cycle per round.\nLatency is 66 cycles per block.", 66),
+    ("The core uses 1 cycle per round.", None),
+    ("Latency is 66 clock cycles\n\nper block.", None),
+    ("Mode-independent latency is 66 cycles per block.", 66),
+    ("Latency is 66 cycles per block regardless of mode.", 66),
+    ("Latency is 66 cycles per block independent of the variant.", 66),
+    ("Latency is 56, 66, and\n72 cycles per block.", None),
+    ("Latency is 56, 66, or\n72 clock cycles per block.", None),
+    ("Supported latencies are 56 / 66 /\n72 cycles per block.", None),
+    ("Latency ranges from 56 to\n72 cycles per block.", None),
+], ids=["oxford-and", "oxford-or", "two-softwraps", "slash-list",
+        "between-range", "em-dash-range", "mode-prefix", "mode-suffix",
+        "named-mode", "variant-prefix", "mode-dependent", "all-modes",
+        "every-variant", "separate-sentence", "separate-paragraph",
+        "repeated-scalar", "round-and-block", "round-only", "paragraph-boundary",
+        "mode-independent", "regardless-of-mode", "independent-of-variant",
+        "plain-oxford-and", "plain-oxford-or", "plain-slash", "plain-range"])
+def test_block_scalar_scope_reaches_ordinary_post_emitter(tmp_path, text, expected):
+    """Source scope is retained through the existing ordinary L1 consumer."""
+    from programs import phase1_doc_one_shot_runner as producer
+
+    docs = tmp_path / "input" / "docs"
+    docs.mkdir(parents=True)
+    (docs / "README.md").write_text(text)
+    generated = tmp_path / "phase1" / "generated_docs"
+    generated.mkdir(parents=True)
+    l1 = generated / "L1_DATASHEET.json"
+    l1.write_text(json.dumps({"class_path": "crypto_block_cipher"}))
+    producer._post_emit_crypto_arch_into_L1(tmp_path)
+    result = json.loads(l1.read_text()).get("architecture", {})
+    if expected is None:
+        assert "latency_cycles_per_block" not in result, result
+    else:
+        assert result.get("latency_cycles_per_block") == expected, result
+    assert ("latency_cycles_per_block_evidence" in result) == (expected is not None)

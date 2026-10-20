@@ -361,5 +361,16 @@
     "version_observed": "1.29.96, retained execution source d63906f6ae37bf0030059d9b6304ebcc5fe349b9. Owning crypto_arch_extractor.py SHA256 fae61be2c6fc3e7340f5ae3a5ca76e623f3aca10a7e738ebf74cee08039dd272. Fixed official e67b74e3e9204aa37fd8eaaf8d66266bfa8c2812 is the separate repair/transport target, not yet claimed reproduced there.",
     "version_lkg": "",
     "fixture_path": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/fixtures/phase1_local/neutral_round_vs_block_latency/timing_contract.md"
+  },
+  {
+    "issue": 3296,
+    "project": "neutral_wrapped_block_latency",
+    "layer": "L1_DATASHEET",
+    "field": "architecture.latency_cycles_per_block",
+    "expected": "Omit `architecture.latency_cycles_per_block` and its evidence: the input declares multiple mode-dependent values, not one selected scalar. The original source text remains available. In the separate positive control `Latency is 66 clock cycles\\nper block.`, preserve the typed integer66 and exact starting-line/matched-token evidence. Do not multiply round counts or infer variant selection.",
+    "actual": "The softwrapped slash/comma lists return integer72 with `matched_token: \"72 cycles per block\"`; the wrapped positive loses66. Numeric range forms also return72. None of these effects are needed to fix the original per-round-vs-per-block problem, whose basic controls now pass.",
+    "version_observed": "1.30.32, exact official commit400840b089083915d9420191b8397ce5c92025a1, tree55b5ad54216f1615c365fdadaee31f2b09bdd51c. No moving-main or tool-image assumption.",
+    "version_lkg": "Unknown.",
+    "fixture_path": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/fixtures/phase1_local/neutral_wrapped_block_latency/wrapped_latency.md"
   }
 ]

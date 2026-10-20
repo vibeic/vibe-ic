@@ -70,7 +70,9 @@ _MESSAGE_BLOCK_RE = re.compile(
 _STATE_BITS_RE = re.compile(
     r"\b(\d+)\s*[-\s]?bit\s+state\b", re.IGNORECASE)
 _BLOCK_LATENCY_PATTERNS = (
-    re.compile(r"\b(\d+)\s+cycles?\s+per\s+block\b", re.IGNORECASE),
+    re.compile(
+        r"(?<![\w.+-])(\d+)\s+(?:clock\s+)?cycles?\s+per\s+"
+        r"(?:data\s+)?block\b", re.IGNORECASE),
     re.compile(
         r"\b(?:per[-\s]+block|block)\s+latency\s*(?:is|of|=|:)\s*"
         r"(\d+)\s+cycles?\b", re.IGNORECASE),
@@ -84,6 +86,16 @@ _BLOCK_LATENCY_PATTERNS = (
         r"\b(\d+)\s*[-\s]+cycle\s+latency\s+per\s+block\b",
         re.IGNORECASE),
 )
+_LATENCY_LIST_PREFIX_RE = re.compile(
+    r"\b\d+(?:\s*(?:/|,|-|–|—|\bor\b|\band\b|\bto\b))+\s*$",
+    re.IGNORECASE)
+_LATENCY_PARAGRAPH_BOUNDARY_RE = re.compile(r"\n[ \t]*\n")
+_LATENCY_CLAUSE_BOUNDARY_RE = re.compile(r"(?<=[.!?;])\s+|\n[ \t]*\n")
+_LATENCY_VARIANT_RE = re.compile(r"\b(?:mode|variant)s?\b", re.IGNORECASE)
+_LATENCY_SHARED_VARIANT_RE = re.compile(
+    r"\b(?:(?:all|each|every|both)\s+(?:(?:supported|available)\s+)?"
+    r"|(?:regardless|independent|irrespective)\s+of\s+(?:the\s+)?)$",
+    re.IGNORECASE)
 
 # v1.6.108 — key/nonce patterns
 _KEY_BITS_RE = re.compile(
@@ -227,6 +239,22 @@ def _scan_message_block(text: str
     return None
 
 
+def _latency_is_variant_bound(text: str, start: int, end: int) -> bool:
+    """A count for a named mode is not the unqualified design scalar.
+
+    Inspect its own sentence/paragraph, including a qualifier after the unit.
+    Explicitly shared counts such as ``all modes use 66`` remain scalars.
+    """
+    left = 0
+    for boundary in _LATENCY_CLAUSE_BOUNDARY_RE.finditer(text, 0, start):
+        left = boundary.end()
+    right = _LATENCY_CLAUSE_BOUNDARY_RE.search(text, end)
+    clause = text[left:right.start() if right else len(text)]
+    return any(not _LATENCY_SHARED_VARIANT_RE.search(clause[:mode.start()])
+               and not re.match(r"[-\s]+independent\b", clause[mode.end():], re.I)
+               for mode in _LATENCY_VARIANT_RE.finditer(clause))
+
+
 def _scan_block_latency(text: str) -> Optional[Tuple[int, int, str]]:
     """Extract only an explicit full-block cycle count.
 
@@ -235,13 +263,23 @@ def _scan_block_latency(text: str) -> Optional[Tuple[int, int, str]]:
     without a variant binding this scalar is left absent.
     """
     matches = []
-    for lineno, line in enumerate(text.split("\n"), start=1):
-        for pattern in _BLOCK_LATENCY_PATTERNS:
-            for match in pattern.finditer(line):
-                matches.append((int(match.group(1)), lineno, match.group(0)))
-    if not matches or len({value for value, _, _ in matches}) != 1:
+    for pattern_index, pattern in enumerate(_BLOCK_LATENCY_PATTERNS):
+        for match in pattern.finditer(text):
+            if _LATENCY_PARAGRAPH_BOUNDARY_RE.search(match.group(0)):
+                continue
+            # A softwrap does not select the final list/range member. Keep
+            # paragraph boundaries, without an arbitrary character window.
+            prefix = _LATENCY_PARAGRAPH_BOUNDARY_RE.split(text[:match.start(1)])[-1]
+            if (_LATENCY_LIST_PREFIX_RE.search(prefix)
+                    or _latency_is_variant_bound(text, match.start(), match.end())):
+                return None
+            lineno = text.count("\n", 0, match.start()) + 1
+            matches.append((int(match.group(1)), lineno, match.group(0),
+                            pattern_index, match.start()))
+    if not matches or len({row[0] for row in matches}) != 1:
         return None
-    return matches[0]
+    # Preserve the existing line/pattern priority when counts agree.
+    return min(matches, key=lambda row: (row[1], row[3], row[4]))[:3]
 
 
 def _scan_rounds(text: str

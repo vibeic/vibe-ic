@@ -637,3 +637,11 @@ def test_l8_literal_parameter_owner_ignores_commented_declarations(tmp_path):
     text = "```systemverilog\n// parameter integer UNRELATED = 99;\n/* localparam integer OTHER = 17; */\n```\nmodule documentation_only #(\n"
     for doc in _l8_literal_owner_emit(tmp_path, text):
         assert doc.get("parameters", []) == []
+
+
+def test_neutral_wrapped_block_latency():
+    from programs.crypto_arch_extractor import extract_crypto_arch
+    source = _load_fixture("neutral_wrapped_block_latency")
+    actual = extract_crypto_arch("\n".join(source.values()))
+    assert "latency_cycles_per_block" not in actual, actual
+    assert "latency_cycles_per_block_evidence" not in actual, actual
