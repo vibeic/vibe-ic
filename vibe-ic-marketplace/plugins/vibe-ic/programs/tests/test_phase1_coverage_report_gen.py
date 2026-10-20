@@ -499,3 +499,136 @@ def test_wave9_quality_distribution_in_report(tmp_path):
     qd = js["evidence_quality_distribution"]
     assert qd["high"] == 1, qd
     assert qd["missing"] == 1, qd
+
+
+# #3377 — alias classification is INPUT-context authority, independent of
+# whether an extractor happened to carry the alias into generated L docs.
+import pytest
+
+
+@pytest.mark.parametrize("text, expected", [
+    ("| Pin | Function |\n| --- | --- |\n| GPIO0/SCL | clock input |", {"GPIO0/SCL"}),
+    ("| Signal name | Description |\n| --- | --- |\n| DATA0/data_i | payload |", {"DATA0/data_i"}),
+    ("| Alias | Meaning |\n| --- | --- |\n| BUS0/bus_i | port |", {"BUS0/bus_i"}),
+    ("Pin alias: GPIO0/SCL is the clock input.", {"GPIO0/SCL"}),
+    ("The signal DATA0/data_i carries payload.", {"DATA0/data_i"}),
+    ("GPIO0/SCL are aliases for the clock input.", {"GPIO0/SCL"}),
+    ("GPIO0/SCL is a pin alias for the clock input.", {"GPIO0/SCL"}),
+    ("Signal naming aliases: ACC_ID / id_bus / GPIO_0[0]", {"ACC_ID / id_bus / GPIO_0[0]"}),
+    ("ACC_ID / id_bus / GPIO_0[0]", {"ACC_ID / id_bus / GPIO_0[0]"}),
+    ("- `GPIO0/SCL`", {"GPIO0/SCL"}),
+    ("| Pin | Function |\n| --- | --- |\n| PDK/default | input |", {"PDK/default"}),
+    ("Source constraints override a derived PDK/default environment value.", set()),
+    ("Prefer an explicit API/fallback configuration value.", set()),
+    ("Use the selected FLOW/default environment value.", set()),
+    ("| Policy | Value |\n| --- | --- |\n| Derived | SDK/default |", set()),
+    ("| Signal policy | Rationale |\n| --- | --- |\n| SDK/default | inherited configuration |", set()),
+    ("| Pin voltage | Meaning |\n| --- | --- |\n| FLOW/default | environment selection |", set()),
+    ("| Pin | Description |\n| --- | --- |\n| GPIO0/SCL | Use SDK/default environment |", {"GPIO0/SCL"}),
+    ("| Pin | Function |\n| --- | --- |\n| GPIO0/SCL | clock |\n\nUse PDK/default environment.", {"GPIO0/SCL"}),
+])
+def test_pin_alias_input_context(tmp_path, text, expected):
+    import phase1_coverage_report_gen as owner
+    _put_extracted(tmp_path, "spec.txt", text)
+    # No generated docs exist: true aliases remain in the denominator.
+    patterns = owner._autodiscover_patterns(tmp_path, persist=False)
+    aliases = {lit for lit, label in patterns["spec.txt"]
+               if label == "auto-discovered (pin_alias)"}
+    assert aliases == expected
+
+
+def _alias_project(tmp_path, *, missing=False):
+    _put_extracted(tmp_path, "spec.txt",
+                   "| Pin | Function |\n| --- | --- |\n"
+                   "| GPIO0/SCL | clock input |\n\n"
+                   "Source constraints override a derived PDK/default environment value.")
+    pin = {"name": "GPIO0", "aliases": ["SCL"]}
+    if not missing:
+        pin["display_label"] = "GPIO0/SCL"
+    _put_l(tmp_path, "L1.json", {"pin_table": [pin], "pdk": "fixture_only"})
+
+
+@pytest.mark.parametrize("missing", [False, True])
+def test_pin_alias_ordinary_consumers(tmp_path, missing):
+    _alias_project(tmp_path, missing=missing)
+    r = _run(tmp_path)
+    assert r.returncode == 0, r.stdout + r.stderr
+    report = json.loads((tmp_path / "reports/phase1/extraction_coverage_report.json").read_text())
+    misses = {x["literal"] for d in report["per_doc"] for x in d["missing_literals"]}
+    assert misses == ({"GPIO0/SCL"} if missing else set())
+    # Keep 100% threshold; the missing full alias cannot be hidden by the
+    # separately present GPIO0 and SCL identifiers.
+    for program, expected_rc in [("phase1_coverage_report_present_check.py", int(missing)),
+                                 ("extraction_coverage_check.py", int(missing)),
+                                 ("extraction_coverage_denominator_audit.py", 0)]:
+        rr = subprocess.run([sys.executable, str(PROG.with_name(program)), str(tmp_path)],
+                            capture_output=True, text=True)
+        assert rr.returncode == expected_rc, (program, rr.stdout, rr.stderr)
+
+
+@pytest.mark.parametrize("in_input", [False, True])
+@pytest.mark.parametrize("auto_seeded", [False, True])
+def test_pin_alias_replay_respects_pattern_authority(tmp_path, in_input, auto_seeded):
+    import phase1_coverage_report_gen as report_owner
+    import extraction_coverage_check as gate_owner
+    _alias_project(tmp_path)
+    label = "auto-discovered (pin_alias)" if auto_seeded else "user policy requirement"
+    _put_patterns(tmp_path, {"spec.txt": [
+        {"literal": "GPIO0/SCL", "label": "auto-discovered (pin_alias)"},
+        {"literal": "PDK/default", "label": label},
+    ]}, in_input=in_input)
+    expected = {"GPIO0/SCL"} if auto_seeded else {"GPIO0/SCL", "PDK/default"}
+    for owner in (report_owner, gate_owner):
+        patterns, _ = owner._load_explicit_patterns(tmp_path)
+        assert {lit for lit, _ in patterns["spec.txt"]} == expected
+    r = _run(tmp_path)
+    assert r.returncode == 0, r.stdout + r.stderr
+    report = json.loads((tmp_path / "reports/phase1/extraction_coverage_report.json").read_text())
+    assert report["overall"]["total"] == len(expected)
+    assert report["ll38_verdict"] == ("PASS" if auto_seeded else "FAIL")
+    # The separate canonical-pattern provenance guard remains authoritative:
+    # a curated denominator must not gain coverage credit by this repair.
+    rr = subprocess.run([sys.executable, str(PROG.with_name("phase1_coverage_report_present_check.py")), str(tmp_path)], capture_output=True, text=True)
+    assert rr.returncode == 1
+    if auto_seeded:
+        assert "SELF-REFERENTIAL" in rr.stdout
+
+
+def test_pin_alias_unreadable_source_cache_is_not_pruned(tmp_path):
+    import phase1_coverage_report_gen as report_owner
+    import extraction_coverage_check as gate_owner
+    _put_patterns(tmp_path, {"absent.txt": [
+        {"literal": "GPIO0/SCL", "label": "auto-discovered (pin_alias)"}]})
+    for owner in (report_owner, gate_owner):
+        patterns, _ = owner._load_explicit_patterns(tmp_path)
+        assert patterns["absent.txt"] == [("GPIO0/SCL", "auto-discovered (pin_alias)")]
+
+
+
+def test_pin_alias_missing_seed_is_still_an_obligation(tmp_path):
+    import phase1_coverage_report_gen as report_owner
+    import extraction_coverage_check as gate_owner
+    _alias_project(tmp_path, missing=True)
+    _put_patterns(tmp_path, {"spec.txt": [
+        {"literal": "GPIO0/SCL", "label": "auto-discovered (pin_alias)"}]})
+    for owner in (report_owner, gate_owner):
+        patterns, _ = owner._load_explicit_patterns(tmp_path)
+        assert patterns["spec.txt"] == [("GPIO0/SCL", "auto-discovered (pin_alias)")]
+    assert _run(tmp_path).returncode == 0
+    report = json.loads((tmp_path / "reports/phase1/extraction_coverage_report.json").read_text())
+    assert report["overall"] == {"hit": 0, "total": 1, "pct": 0.0}
+    rr = subprocess.run([sys.executable, str(PROG.with_name("extraction_coverage_check.py")), str(tmp_path)], capture_output=True, text=True)
+    assert rr.returncode == 1, rr.stdout + rr.stderr
+
+
+def test_pin_alias_auto_output_is_rediscovered_not_trusted(tmp_path):
+    _alias_project(tmp_path)
+    auto_path = tmp_path / "phase1/extraction_patterns.auto.json"
+    auto_path.write_text(json.dumps({"spec.txt": [
+        {"literal": "PDK/default", "label": "auto-discovered (pin_alias)"}]}))
+    assert _run(tmp_path).returncode == 0
+    auto = json.loads(auto_path.read_text())
+    aliases = {x["literal"] for x in auto["spec.txt"] if x["label"] == "auto-discovered (pin_alias)"}
+    assert aliases == {"GPIO0/SCL"}
+    assert _run(tmp_path).returncode == 0
+    assert json.loads(auto_path.read_text()) == auto

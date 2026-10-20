@@ -225,6 +225,66 @@ _AUTODISCOVERY_REGEX_FAMILIES = (
         r"engineer|factory|production)\b",
         re.IGNORECASE)),
 )
+# A slash-shaped token is only an alias obligation when the INPUT gives
+# naming context. Keep the legacy standalone alias-list grammar; a bare
+# "ACC_ID / id_bus / GPIO_0[0]" remains a declaration without an L-doc lookup.
+_PIN_ALIAS_RX = dict(_AUTODISCOVERY_REGEX_FAMILIES)["pin_alias"]
+_PIN_ALIAS_HEADER = re.compile(
+    r"(?:pins?|signals?|ports?)(?:\s*/\s*(?:pins?|signals?|ports?|alias(?:es)?))?"
+    r"(?:\s+(?:names?|labels?|identifiers?|alias(?:es)?))?"
+    r"|alias(?:es)?(?:\s+(?:names?|mapping))?", re.I)
+_PIN_ALIAS_PREFIX = re.compile(
+    r"(?:\b(?:pin|signal|port)(?:\s+(?:names?|naming))?(?:\s+alias(?:es)?)?"
+    r"|\balias(?:es)?(?:\s+group)?)\s*[:=]?\s*$", re.I)
+_PIN_ALIAS_SUFFIX = re.compile(
+    r"^\s+(?:is|are)\s+(?:an?\s+)?(?:(?:pin|signal|port)\s+)?alias(?:es)?\b", re.I)
+
+
+def _pin_alias_literals(text: str):
+    """Yield input-declared aliases, never consulting generated L docs.
+
+    Recognise named pin/signal/port/alias columns of Markdown tables,
+    explicit naming prose, and the existing standalone alias-list form.
+    Other cells and surrounding prose cannot supply an alias by slash alone.
+    """
+    previous_cells = []
+    alias_columns = set()
+    for line in text.splitlines():
+        if "|" in line:
+            cells = [c.strip() for c in line.strip().strip("|").split("|")]
+            if cells and all(re.fullmatch(r":?-+:?", c.replace(" ", ""))
+                             for c in cells):
+                alias_columns = {i for i, c in enumerate(previous_cells)
+                                 if _PIN_ALIAS_HEADER.fullmatch(c.strip("`* "))}
+                # A generic "Name" column is a pin name only in a typed table.
+                if alias_columns:
+                    alias_columns.update(i for i, c in enumerate(previous_cells)
+                                         if c.lower() in {"name", "identifier", "label"})
+            elif alias_columns:
+                for i in sorted(alias_columns):
+                    if i < len(cells):
+                        for match in _PIN_ALIAS_RX.finditer(cells[i]):
+                            yield match.group().strip()
+            previous_cells = cells
+            continue
+        previous_cells = []
+        alias_columns = set()
+        bare = re.sub(r"^\s*[-*+]\s+", "", line).strip().strip("`").rstrip(".;,")
+        if _PIN_ALIAS_RX.fullmatch(bare):
+            yield bare
+            continue
+        for match in _PIN_ALIAS_RX.finditer(line):
+            prefix = line[:match.start()].rstrip("` ")
+            suffix = line[match.end():].lstrip("`")
+            if (_PIN_ALIAS_PREFIX.search(prefix)
+                    or _PIN_ALIAS_SUFFIX.search(suffix)):
+                yield match.group().strip()
+
+
+def _is_auto_pin_alias(label: str) -> bool:
+    return str(label or "").strip().lower() == "auto-discovered (pin_alias)"
+
+
 # Raised 100 → 10000 to align with extraction_coverage_denominator_audit
 # (which has no cap). Cap-100 was dropping ~70% of distinct vendor tokens
 # per Wave-on-fix v1.6.10, causing the denominator-shrink gating pattern
@@ -318,7 +378,9 @@ def _reconcile_with_docs(project, patterns):
     forever, so literals a later documentation edit DELETED stay pinned in
     the denominator where nothing can ever credit them. Human-curated
     entries are never pruned -- a curated pattern is deliberately allowed
-    not to occur in the document.
+    not to occur in the document. Auto-seeded pin aliases also require the
+    current source's naming context, so old regex-only seeds cannot restore
+    a policy-prose false alias.
     """
     out = {}
     for filename, tuples in patterns.items():
@@ -338,8 +400,10 @@ def _reconcile_with_docs(project, patterns):
         if text is None:
             out[filename] = tuples
             continue
+        aliases = set(_pin_alias_literals(text))
         kept = [(lit, lbl) for lit, lbl in tuples
-                if not _is_auto_seeded(lbl) or lit in text]
+                if not _is_auto_seeded(lbl)
+                or (lit in text and (not _is_auto_pin_alias(lbl) or lit in aliases))]
         if kept:
             out[filename] = kept
     return out
@@ -380,7 +444,9 @@ def _autodiscover_patterns(project: Path, *, persist: bool = True):
         items = []
         for label, rx in _AUTODISCOVERY_REGEX_FAMILIES:
             hits = 0
-            for m in rx.findall(text):
+            candidates = (_pin_alias_literals(text) if label == "pin_alias"
+                          else rx.findall(text))
+            for m in candidates:
                 tok = m.strip() if isinstance(m, str) else ""
                 # v0.119.40 — belt-and-suspenders: drop any literal that
                 # carries an embedded LF/CR/TAB. These bytes get escaped

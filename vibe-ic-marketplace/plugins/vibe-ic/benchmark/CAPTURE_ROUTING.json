@@ -17,6 +17,16 @@
       "bucket_B_skill_file": "agents/ic-expert-agent.md",
       "bucket_B_section_anchor": "NL spec phrase patterns"
     },
+    "phase1.coverage_discovery": {
+      "description": "Capture subtype for INPUT-context coverage literal classification and replay authority; does not add a flow step or alter acceptance thresholds.",
+      "bucket_A_program": "programs/phase1_coverage_report_gen.py",
+      "bucket_A_related": [
+        "programs/extraction_coverage_check.py",
+        "programs/phase1_coverage_report_present_check.py",
+        "programs/extraction_coverage_denominator_audit.py"
+      ],
+      "bucket_B_skill_file": "skills/phase1-output-verify/SKILL.md"
+    },
     "phase1.integration_contract": {
       "description": "Capture subtype for L9 implementation presence and L19 constraint-policy carry-through from layered design inputs; does not add a flow step.",
       "bucket_A_program": "programs/l9_l19_contract_carrythrough.py",
