@@ -540,6 +540,154 @@ def _resolver(project, used, container):
     return sources, "fixture models"
 
 
+# Issue 3330: the public two-comparison core/envelope input. Reuse the ordinary
+# project factory and authored-TB ladder; execute the production dispatch.
+_BINDING_INSTANCES = {
+    'wildcard': 'core dut(.*);',
+    'explicit': 'core dut(.a(a),.y(y));',
+    'mixed': 'core dut(.a(~drive),.*);',
+    'implicit_named': 'core dut(.a,.*);',
+    'wildcard_first': 'core dut(.*, .a(~drive));',
+    'all_overridden': 'core dut(.*, .a(a), .y(y));',
+    'parameterized': 'core #(.W($clog2(2))) dut(.*);',
+    'array': 'core dut[0:0](.*);',
+    'comments': '/* core example(.*); */ core dut(/* binding */ .*);',
+    'no_extra': 'core dut(.*);',
+}
+
+
+def _binding_project(tmp_path, variant='wildcard', *, defect=None):
+    fs = _fsf()
+    case = {'name': 'tb', 'kind': 'functional_vector',
+            'stimulus': 'a=0 then a=1; compare y=a', 'expected': '100% PASS'}
+    project = _mk_project(tmp_path, die=True, cases=[case])
+    gd = project / 'phase1/generated_docs'
+    _write(gd / 'L2_FRS.json', json.dumps({'function': 'y = a'}))
+    _write(gd / 'L9_INTEGRATION_SPEC.json', json.dumps({'top_module': 'core',
+        'top_ports': [{'name': 'a', 'direction': 'input', 'width': 1},
+                      {'name': 'y', 'direction': 'output', 'width': 1}]}))
+    parameter = '#(parameter W=1)' if variant == 'parameterized' else ''
+    _write(project / f'phase2/stage1/rtl/{CORE}.v',
+           f'module core {parameter}(input a,output y); assign y=a; endmodule\n')
+    extra = '' if variant == 'no_extra' else ',inout VPWR'
+    logic = 'assign y=~a;' if defect == 'bad_logic' else 'core u_core(.a(a),.y(y));'
+    top = _write(project / 'phase3/stage3/pnr/chip_top_io.v',
+                 f'module envelope {parameter}(input a,output y{extra}); {logic} endmodule\n')
+    _write(project / fs.CHIP_TOP_RECORD_REL, json.dumps({
+        'verdict': 'WROTE', 'core_module': 'core', 'chip_top_module': 'envelope',
+        'chip_top_verilog': str(top.relative_to(project))}))
+    inst = _BINDING_INSTANCES[variant]
+    signals = 'reg a=0; wire y;'
+    drive = 'a=1;'
+    if variant in ('mixed', 'wildcard_first'):
+        signals = 'reg drive=1; wire y;'
+        drive = 'drive=0;'
+    if defect == 'missing_signal':
+        signals = 'wire y;'
+        drive = ''
+    if defect == 'missing_output':
+        signals = 'reg a=0;'
+    if defect == 'multiple':
+        inst += ' core other(.*);'
+    if defect == 'comma_instances':
+        inst = 'core dut(.*), other(.*);'
+    tb = f'''module tb;
+{signals}
+{inst}
+initial begin
+ #1; if(y!==0) begin $display("[TB tb] FAIL zero mismatch"); $fatal(1,"zero mismatch"); end
+ {drive} #1; if(y!==1) begin $display("[TB tb] FAIL one mismatch"); $fatal(1,"one mismatch"); end
+ $display("ORACLE_TB_DONE pass=2/2");
+ $display("[TB tb] PASS two actual output comparisons"); $finish;
+end
+endmodule
+'''
+    if defect == 'wrong_expected':
+        tb = tb.replace('if(y!==0)', 'if(y!==1)')
+    if variant == 'comments':
+        tb = tb.replace('initial begin', 'initial begin\n $display("core example(.*);");')
+    _write(project / 'input/tb/tb.v', tb)
+    if defect == 'missing_source':
+        top.unlink()
+    return project
+
+
+def _binding_native(project):
+    launched = []
+    real_popen = subprocess.Popen
+    def observe(*args, **kwargs):
+        process = real_popen(*args, **kwargs)
+        launched.append((process, {'argv': args[0], 'pid': process.pid,
+                                  'parent_pid': os.getpid()}))
+        return process
+    with patch.object(subprocess, 'Popen', observe):
+        result = _fsf().generate(project, route='DIE', model_resolver=_resolver)
+    handles = []
+    for process, row in launched:
+        row['rc'] = process.poll()
+        assert row['rc'] is not None, row
+        handles.append(row)
+    _write(project / 'native_handles.json', json.dumps(handles, indent=2))
+    rc, consumed, sentinel = gate.functional_full_stack_verdict(project)
+    _write(project / 'consumer.json', json.dumps(
+        {'rc': rc, 'report': consumed, 'sentinel': sentinel}, indent=2))
+    return result, rc, consumed
+
+
+@pytest.mark.skipif(not shutil.which('iverilog'), reason='native Icarus required')
+@pytest.mark.parametrize('variant', list(_BINDING_INSTANCES))
+def test_original_wildcard_binding_native_producer_and_consumer(tmp_path, variant):
+    project = _binding_project(tmp_path, variant)
+    result, rc, consumed = _binding_native(project)
+    entry, = result['cases']
+    assert entry['build_rc'] == 0, entry
+    assert entry['run_rc'] == 0 and entry['checks'] == {'passed': 2, 'total': 2}, entry
+    assert result['verdict'] == 'PASS' and result['counts']['rows'] == 1, result
+    assert rc == 0 and consumed['verdict'] == 'PASS', consumed
+    text = (project / entry['tb']).read_text()
+    assert 'VPWR' not in text
+    if variant in ('mixed', 'wildcard_first'):
+        assert '.a(~drive)' in text
+    if variant == 'comments':
+        assert '/* core example(.*); */' in text
+        assert '$display("core example(.*);");' in text
+
+
+@pytest.mark.skipif(not shutil.which('iverilog'), reason='native Icarus required')
+@pytest.mark.parametrize('defect', ['missing_signal', 'missing_output', 'bad_logic',
+                                    'wrong_expected', 'missing_source',
+                                    'multiple', 'comma_instances'])
+def test_original_wildcard_binding_preserves_native_failures(tmp_path, defect):
+    project = _binding_project(tmp_path, defect=defect)
+    result, rc, consumed = _binding_native(project)
+    assert result['counts']['rows'] == (0 if defect == 'missing_source' else 1)
+    mismatch = defect in ('bad_logic', 'wrong_expected')
+    assert rc == (1 if mismatch else 2), consumed
+    assert result['verdict'] == ('FAIL' if mismatch else 'NOT_MEASURED')
+    if defect in ('missing_signal', 'missing_output'):
+        entry, = result['cases']
+        assert entry['build_rc'] != 0 and entry['state'] == 'errored', entry
+        log = (project / entry['build_log']).read_text()
+        assert ('a' if defect == 'missing_signal' else 'y') in log and 'VPWR' not in log, log
+    elif mismatch:
+        entry, = result['cases']
+        assert entry['build_rc'] == 0 and entry['run_rc'] != 0, entry
+        assert entry['state'] == 'failed'
+    else:
+        assert json.loads((project / 'native_handles.json').read_text()) == []
+        if defect != 'missing_source':
+            assert result['cases'][0]['state'] == 'no_oracle'
+
+
+def test_original_wildcard_binding_requires_original_port_context():
+    fs = _fsf()
+    text, reason = fs.retarget_instance('module tb; core dut(.*); endmodule',
+                                       'core', 'envelope')
+    assert (text is None, 'MISSING_ORIGINAL_PORT_BINDINGS' in reason) == (True, True)
+    explicit, reason = fs.retarget_instance('core dut(.a(a),.y(y));', 'core', 'envelope')
+    assert explicit == 'envelope dut(.a(a),.y(y));'
+
+
 class _FakeSim:
     """A simulator stand-in: builds succeed; a run reports what the TB's own
     population is, scored as `outcome(case, nv)` says. It reads the testbench

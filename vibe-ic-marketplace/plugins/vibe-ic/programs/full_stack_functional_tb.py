@@ -101,6 +101,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 import _hdl_code_text as _hdl_text
 import _path_layout as _pl
 from _atomic_artefact import write_text as _atomic_write_text
+from module_port_audit import extract_balanced, split_top_level
 
 PROGRAM = "full_stack_functional_tb"
 SCHEMA = "vibeic.full_stack_functional.v1"
@@ -253,30 +254,107 @@ def _l9_top_module(project: Path) -> Optional[str]:
     return str(v).strip() if isinstance(v, str) and v.strip() else None
 
 
-def _instance_re(module: str) -> "re.Pattern":
-    return re.compile(r"\b" + re.escape(module)
-                      + r"(\s+(?:#\s*\((?:[^()]|\([^()]*\))*\)\s*)?"
-                        r"[A-Za-z_][A-Za-z0-9_$]*\s*(?:\[[^\]]*\]\s*)?\()")
+def _instances(blank: str, module: str) -> List[Tuple[int, str, int]]:
+    """(module offset, instance name, connection opener) in blanked HDL.
+
+    Use the shared balanced reader for parameter expressions and array ranges;
+    their nesting must not change whether the retargeter or tracer sees a DUT.
+    """
+    hits = []
+    for match in re.finditer(r"\b" + re.escape(module) + r"\b", blank):
+        index = match.end()
+        while index < len(blank) and blank[index].isspace():
+            index += 1
+        if index < len(blank) and blank[index] == '#':
+            index += 1
+            while index < len(blank) and blank[index].isspace():
+                index += 1
+            params = extract_balanced(blank, index)
+            if params is None:
+                continue
+            index = params[1] + 1
+        inst = re.match(r"\s*([A-Za-z_][A-Za-z0-9_$]*)\s*", blank[index:])
+        if inst is None:
+            continue
+        index += inst.end()
+        while index < len(blank) and blank[index] == '[':
+            dimension = extract_balanced(blank, index, opener='[', closer=']')
+            if dimension is None:
+                break
+            index = dimension[1] + 1
+            while index < len(blank) and blank[index].isspace():
+                index += 1
+        if index < len(blank) and blank[index] == '(':
+            hits.append((match.start(), inst.group(1), index))
+    return hits
 
 
 def instance_count(text: str, module: str) -> int:
     """How many instances of `module` the HDL `text` makes (comments and
     strings blanked first, so a commented-out instance is not one)."""
-    return len(_instance_re(module).findall(
-        _hdl_text.strip_hdl_comments_and_strings(text)))
+    return len(_instances(
+        _hdl_text.strip_hdl_comments_and_strings(text), module))
 
 
-def retarget_instance(text: str, core: str, top: str
+def retarget_instance(text: str, core: str, top: str,
+                      core_ports: Optional[List[Tuple[str, str, str]]] = None
                       ) -> Tuple[Optional[str], str]:
     """Swap the testbench's ONE `core` instance for `top`, offsets from the
-    comment-blanked text so a comment can neither be rewritten nor count."""
+    comment-blanked text so a comment can neither be rewritten nor count.
+
+    Wildcards bind only the original core ports resolved by the caller. Explicit
+    authored connections win; no auxiliary port or supply value is invented.
+    Without that context the three-argument API must request authored bindings.
+    """
     blank = _hdl_text.strip_hdl_comments_and_strings(text)
-    hits = list(_instance_re(core).finditer(blank))
+    hits = _instances(blank, core)
     if len(hits) != 1:
         return None, (f"the testbench makes {len(hits)} instance(s) of the core "
                       f"`{core}`; exactly one is retargetable to `{top}`")
-    m = hits[0]
-    return (text[:m.start()] + top + text[m.start() + len(core):],
+    start, _name, opener = hits[0]
+    conns = extract_balanced(blank, opener)
+    if conns is None or not blank[conns[1] + 1:].lstrip().startswith(';'):
+        return None, ("AMBIGUOUS_ORIGINAL_PORT_BINDINGS: require one complete "
+                      "authored instance, not a partial or multi-instance declaration")
+    parts = split_top_level(conns[0])
+    wildcard = [i for i, part in enumerate(parts) if part.strip() == '.*']
+    edits = [(start, start + len(core), top)]
+    if wildcard:
+        names = [n for _d, _w, n in core_ports or []]
+        if (len(wildcard) != 1 or not names or len(set(names)) != len(names)
+                or any(not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_$]*', n) for n in names)):
+            return None, ("MISSING_ORIGINAL_PORT_BINDINGS: wildcard retargeting "
+                          "requires unambiguous parsed original core ports; "
+                          "author explicit named connections")
+        explicit = set()
+        for i, part in enumerate(parts):
+            if i == wildcard[0]:
+                continue
+            named = re.fullmatch(r'\s*\.\s*([A-Za-z_][A-Za-z0-9_$]*)\s*(.*)',
+                                 part, re.DOTALL)
+            if named is None:
+                return None, "AMBIGUOUS_ORIGINAL_PORT_BINDINGS: author named connections beside .*"
+            tail = named.group(2).strip()
+            actual = extract_balanced(tail, 0) if tail else None
+            if (tail and (actual is None or tail[actual[1] + 1:].strip())) or named.group(1) in explicit:
+                return None, "AMBIGUOUS_ORIGINAL_PORT_BINDINGS: malformed or duplicate named connection"
+            explicit.add(named.group(1))
+        i = wildcard[0]
+        offset = opener + 1 + sum(len(part) + 1 for part in parts[:i])
+        token = re.search(r'\.\s*\*', parts[i])
+        # Per-port SystemVerilog .name keeps .*'s requirement that the signal
+        # already exists. .name(name) would silently create an implicit wire
+        # for a missing binding, changing a native elaboration error into X/Z.
+        expansion = ', '.join(f'.{n}' for n in names if n not in explicit)
+        edits.append((offset + token.start(), offset + token.end(), expansion))
+        if not expansion:
+            # All original ports already have authored overrides. Remove one
+            # separator, preserving comments and whitespace around the wildcard.
+            comma = offset - 1 if i else offset + len(parts[i])
+            edits.append((comma, comma + 1, ''))
+    for begin, end, replacement in sorted(edits, reverse=True):
+        text = text[:begin] + replacement + text[end:]
+    return (text,
             f"core `{core}` instance retargeted to the full-stack top `{top}`")
 
 
@@ -506,13 +584,15 @@ def stage_models(project: Path, out_dir: Path, used_cells: set,
 # ---------------------------------------------------------------------------
 def dut_instance_name(text: str, module: str) -> Optional[str]:
     """The name of the testbench's ONE instance of `module`, or None."""
-    hits = list(_instance_re(module).finditer(
-        _hdl_text.strip_hdl_comments_and_strings(text)))
+    blank = _hdl_text.strip_hdl_comments_and_strings(text)
+    hits = _instances(blank, module)
     if len(hits) != 1:
         return None
-    m = re.search(r"([A-Za-z_][A-Za-z0-9_$]*)\s*(?:\[[^\]]*\]\s*)?\($",
-                  hits[0].group(1))
-    return m.group(1) if m else None
+    if blank[:hits[0][2]].rstrip().endswith(']'):
+        # An array has indexed scopes, not the scalar scope `<tb>.<instance>`.
+        # Decline that trace without breaking the authored functional run.
+        return None
+    return hits[0][1]
 
 
 def trace_dumper(text: str, tb_top: str, dut_module: str, wd: Path
@@ -965,7 +1045,7 @@ def generate(project: Path, container: Optional[str] = None,
                     and instance_count(text, top["module"]) == 1):
                 new, rwhy = text, "authored testbench already instantiates the required full-stack top"
             else:
-                new, rwhy = retarget_instance(text, core_mod, top["module"])
+                new, rwhy = retarget_instance(text, core_mod, top["module"], core_ports)
             if new is None:
                 entry.update(state=NO_ORACLE, reason=rwhy,
                              tb=_rel(project, path))
@@ -1167,7 +1247,7 @@ def _datapath_case(project: Path, core_mod: str, core_ports: list,
                                         "delivered_memsize_bytes")})
     text = built["tb_text"]
     if top["pad_ring"]:
-        text, rwhy = retarget_instance(text, core_mod, top["module"])
+        text, rwhy = retarget_instance(text, core_mod, top["module"], core_ports)
         if text is None:
             entry.update(state=NO_ORACLE, reason=rwhy)
             return entry
