@@ -111,7 +111,9 @@ def test_self_reported_skip_becomes_step_skip(tmp_path):
         "verdict": "SKIPPED-CONDITION",
         "reason": "no formal proof tool ran in this chain"}))
     r = F.check_step(tmp_path, _step(), waivers={})
-    assert r.status == "NOT_APPLICABLE", r
+    assert r.status == "NOT_MEASURED", r
+    assert r.reason_class == "flow_does_not_perform"
+    assert r.declared_by == ""
     assert "no formal proof tool" in " ".join(r.reasons)
 
 
@@ -294,3 +296,62 @@ def test_zero_byte_handoff_member_hard_fails(tmp_path):
     assert r.returncode == 1, r.stdout + r.stderr
     assert "FOUNDRY_HANDOFF_ZERO_BYTE_MEMBER" in r.stdout
     assert "chip_top.magic_merged.gds" in r.stdout
+
+
+
+def test_applicable_cdc_skip_is_named_not_measured(tmp_path):
+    _mk(tmp_path, "reports/crossing.json", json.dumps({
+        "verdict": "SKIPPED-CONDITION", "reason": "flow has not run multi-clock analysis"}))
+    result = F.StepResult(id=3, name="CDC", stage="stage1", status="PASS",
+                          evidence=["reports/crossing.json"])
+    result = F._evidence_integrity_scan(tmp_path, result)
+    assert result.status == "NOT_MEASURED", result
+    assert result.reason_class == "flow_does_not_perform"
+    assert result.declared_by == ""
+
+
+def test_validated_input_na_is_not_reclassified(tmp_path):
+    import _flow_yaml
+    # Reuse the existing INPUT-corroborated L20 declaration contract.
+    _mk(tmp_path, "input/docs/design.md", "A small core multiplies two numbers.\n")
+    _mk(tmp_path, "phase1/generated_docs/L20_DFT_SCAN_TOPOLOGY.json", json.dumps({
+        "doc_id": "L20", "fields": {"dft_present": False, "scan_chains": [],
+                                      "bist_mbist": [], "jtag_tap": None}}))
+    step = next(s for s in _flow_yaml.load()["steps"] if str(s["id"]) == "11")
+    result = F.check_step(tmp_path, step, waivers={})
+    assert result.status == "NOT_APPLICABLE", result
+    declaration = F._l_doc_declares_absence(tmp_path, step["condition"]["l_doc_declares"])
+    assert declaration is not None
+    assert declaration[2]["documents_scanned"] == ["input/docs/design.md"]
+    assert declaration[2]["documents_matching"] == 0
+    assert "input/docs/design.md" in " ".join(result.reasons)
+    # Changing the actual INPUT to require the capability withdraws N/A.
+    _mk(tmp_path, "input/docs/design.md", "A DFT wrapper is required.\n")
+    assert F._l_doc_declares_absence(tmp_path, step["condition"]["l_doc_declares"]) is None
+    assert F.check_step(tmp_path, step, waivers={}).status == "FAIL"
+
+
+def test_self_fail_still_dominates_self_skip(tmp_path):
+    _mk(tmp_path, "reports/crossing.json", json.dumps({"verdict": "SKIPPED-CONDITION"}))
+    _mk(tmp_path, "reports/reset.json", json.dumps({"verdict": "FAIL"}))
+    result = F.StepResult(id=3, name="CDC", stage="stage1", status="PASS",
+                          evidence=["reports/crossing.json", "reports/reset.json"])
+    assert F._evidence_integrity_scan(tmp_path, result).status == "FAIL"
+
+
+def test_repo_step3_contract_retains_unperformed_scope(tmp_path):
+    from _hostpaths import require_repo
+    import _flow_yaml
+    # Real maintained flow artefact, independently selects actual Step3 outputs.
+    repo = require_repo()
+    flow_path = repo / "vibe-ic-marketplace/plugins/vibe-ic/flow/phase1_phase2_phase3.yaml"
+    flow = _flow_yaml.load(flow_path)
+    step = next(s for s in flow["steps"] if str(s["id"]) == "3")
+    evidence = step["required_outputs"]
+    assert "reports/phase2/cdc/crossing.json" in evidence
+    for rel in evidence:
+        _mk(tmp_path, rel, json.dumps({"verdict": "SKIPPED-CONDITION", "reason": "flow unperformed"}))
+    result = F.StepResult(id=3, name=step["name"], stage=step["stage"], status="PASS", evidence=evidence)
+    result = F._evidence_integrity_scan(tmp_path, result)
+    assert result.status == "NOT_MEASURED"
+    assert result.reason_class == "flow_does_not_perform"

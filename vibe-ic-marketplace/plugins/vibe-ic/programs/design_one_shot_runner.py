@@ -21146,9 +21146,12 @@ def _cdc_top_clock_ports(rtl_files: List[Path],
     def _clock_inputs(body: str) -> set:
         body = _hdl_code_text.strip_hdl_comments_and_strings(body)
         out = set()
-        for pm in input_port_re.finditer(body):
-            nm = pm.group(1)
-            if ("clk" in nm.lower() or "clock" in nm.lower()) \
+        # Use the same ANSI/non-ANSI port grammar as the other RTL consumers.
+        # A direction applies to all comma continuations, not only its first name.
+        import reset_clock_variant_alias as _rcv
+        for direction, _width, nm in _rcv.parse_module_ports(
+                "module _cdc_ports " + body + " endmodule", "_cdc_ports"):
+            if direction == "input" and ("clk" in nm.lower() or "clock" in nm.lower()) \
                     and not rst_re.search(nm):
                 out.add(nm)
         return out
@@ -24569,15 +24572,25 @@ def step_emit_phase2_manifests(project: Path,
             else:
                 _nl_payload = {"verdict": "SKIPPED-CONDITION",
                                "reason": _ev + ": multi-clock design; the "
-                               "crossing rules run in clock_domain_reg_crossing_check "
-                               "on this netlist, and no CDC engine is installed (#436)",
+                               "runner has not performed full multi-clock CDC "
+                               "qualification. Separate native rule reports retain "
+                               "their own measured scope.",
                                "clocks_found": _nl_domains, "front_end": "netlist"}
-            w("reports/phase2/cdc/crossing.json", _nl_payload)
+            # All three domain summaries use the selected native authority.
+            # A regex single-clock sibling must not contradict the same graph.
+            for _report in ("crossing", "async_input", "reset_dep"):
+                _payload = dict(_nl_payload)
+                if _report != "crossing":
+                    _payload.pop("crossings", None)
+                    if _report == "async_input" and _payload["verdict"] == "PASS":
+                        _payload["async_inputs"] = []
+                w(f"reports/phase2/cdc/{_report}.json", _payload)
         elif _cdc_mode == "librelane":
-            w("reports/phase2/cdc/crossing.json", {
-                "verdict": "FAIL", "front_end": "netlist",
-                "reason": "step 3 selects the netlist front end and the netlist "
-                          "was not produced: " + str(_nl_rec.get("reason"))})
+            for _report in ("crossing", "async_input", "reset_dep"):
+                w(f"reports/phase2/cdc/{_report}.json", {
+                    "verdict": "FAIL", "front_end": "netlist",
+                    "reason": "step 3 selects the netlist front end and the netlist "
+                              "was not produced: " + str(_nl_rec.get("reason"))})
 
     # Step 4: simulation.
     # ORGANIC-20260606-verdict-only-pass-artifacts-no-evidence (#433a):

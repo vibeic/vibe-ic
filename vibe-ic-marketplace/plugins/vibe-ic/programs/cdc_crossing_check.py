@@ -172,6 +172,8 @@ def _classify_canonical_verdicts(project_dir: Path) -> dict:
     disclosed_skip = False
     skip_reasons: List[str] = []
     present_paths: List[str] = []
+    invalid_paths: List[str] = []
+    pass_paths: List[str] = []
     for rel in CANONICAL_JSON_PATHS:
         cand = project_dir / rel
         if not cand.is_file():
@@ -180,22 +182,31 @@ def _classify_canonical_verdicts(project_dir: Path) -> dict:
         try:
             doc = json.loads(cand.read_text())
         except Exception:
-            # Unreadable canonical JSON is NOT a disclosed skip — it must
-            # not be allowed to masquerade as an honest deferral.
+            # A different sibling's skip cannot disclose this unreadable result.
+            invalid_paths.append(rel)
+            continue
+        if not isinstance(doc, dict):
+            invalid_paths.append(rel)
             continue
         verdict = doc.get("verdict")
-        if verdict == "FAIL":
+        if verdict == "PASS":
+            pass_paths.append(rel)
+        elif verdict == "FAIL":
             genuine_fail = True
         elif verdict == SKIPPED_CONDITION_VERDICT:
             disclosed_skip = True
             reason = doc.get("reason")
             if isinstance(reason, str) and reason:
                 skip_reasons.append(reason)
+        else:
+            invalid_paths.append(rel)
     return {
         "genuine_fail": genuine_fail,
         "disclosed_skip": disclosed_skip,
         "skip_reasons": skip_reasons,
         "present_paths": present_paths,
+        "invalid_paths": invalid_paths,
+        "pass_paths": pass_paths,
     }
 
 
@@ -228,6 +239,41 @@ def audit_cdc(project_dir: Path) -> AuditResult:
             "has_clock_ref": False,
             "has_crossing": False,
             "genuine_cdc_fail": True,
+        }
+        return result
+
+    if canon["invalid_paths"]:
+        result.findings.append(Finding(
+            rule="CDC_REPORT_READABLE", severity="ERROR",
+            message="Unreadable or unrecognized canonical CDC report(s): " + ", ".join(canon["invalid_paths"])))
+        result.summary = {"files_found": len(canon["present_paths"]),
+                          "has_clock_ref": False, "has_crossing": False}
+        return result
+
+    # A canonical deferred scope is not discharged by a different sibling's
+    # single-clock PASS. Preserve partial results without a clean overall PASS.
+    if canon["disclosed_skip"]:
+        reason = (canon["skip_reasons"][0]
+                  if canon["skip_reasons"]
+                  else "CDC report disclosed SKIPPED-CONDITION (#436)")
+        result.findings.append(Finding(
+            rule="CDC_CAPABILITY_GAP_DEFERRED", severity="INFO",
+            message=(f"CDC verdict is SKIPPED-CONDITION ({CDC_CAP_FLAG}, "
+                     f"WAIVED-DEFERRED, review_required: run a real CDC "
+                     f"tool at sign-off) — disclosed capability gap, not "
+                     f"a failure (#673). Reason: {reason}")))
+        result.passed = True
+        result.summary = {
+            "files_found": len(canon["present_paths"]),
+            "has_clock_ref": False,
+            "has_crossing": False,
+            "cdc_skipped_condition": True,
+            "deferred": True,
+            "cap_flag": CDC_CAP_FLAG,
+            "skip_reasons": canon["skip_reasons"],
+            "canonical_json_pass": len(canon["pass_paths"]),
+            "partial_pass_reports": canon["pass_paths"],
+            "single_clock_pass": False,
         }
         return result
 
@@ -273,28 +319,6 @@ def audit_cdc(project_dir: Path) -> AuditResult:
         # sign-off, #436), not a missing report. Carry it as `cap:cdc`,
         # WAIVED-DEFERRED, review_required — and PASS the gate (exit 0) so it
         # does not cascade-block all of Phase 3.
-        if canon["disclosed_skip"]:
-            reason = (canon["skip_reasons"][0]
-                      if canon["skip_reasons"]
-                      else "CDC report disclosed SKIPPED-CONDITION (#436)")
-            result.findings.append(Finding(
-                rule="CDC_CAPABILITY_GAP_DEFERRED", severity="INFO",
-                message=(f"CDC verdict is SKIPPED-CONDITION ({CDC_CAP_FLAG}, "
-                         f"WAIVED-DEFERRED, review_required: run a real CDC "
-                         f"tool at sign-off) — disclosed capability gap, not "
-                         f"a failure (#673). Reason: {reason}")))
-            result.passed = True
-            result.summary = {
-                "files_found": len(canon["present_paths"]),
-                "has_clock_ref": False,
-                "has_crossing": False,
-                "cdc_skipped_condition": True,
-                "deferred": True,
-                "cap_flag": CDC_CAP_FLAG,
-                "skip_reasons": canon["skip_reasons"],
-            }
-            return result
-
         result.findings.append(Finding(
             rule="CDC_REPORT_EXISTS", severity="ERROR",
             message="No CDC report found (searched *cdc*.rpt/log, *clock_domain*, *clock_crossing*)"))

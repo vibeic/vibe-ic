@@ -190,3 +190,38 @@ def test_single_flat_module_still_passes_regression(tmp_path):
     d = _cdc_verdict(tmp_path)
     assert d["verdict"] == "PASS", d
     assert d["clocks_found"] == ["clk_i"]
+
+
+# #3387: shared ANSI declarations carry the same root ports as repeated ones.
+def test_bundled_clock_inputs_preserve_both_domains(tmp_path):
+    rtl = tmp_path / "phase2/stage1/rtl"
+    rtl.mkdir(parents=True)
+    (rtl / "unit.v").write_text(
+        "module unit(input wire clk_a,clk_b,rst_n,output reg q); "
+        "reg x; always @(posedge clk_a) x<=1; "
+        "always @(posedge clk_b) q<=x; endmodule\n")
+    _select_root_port_scan(tmp_path)
+    P2.step_emit_phase2_manifests(tmp_path, [], top_name="unit", emit_formal=False)
+    for name in ("crossing", "async_input", "reset_dep"):
+        d = json.loads((tmp_path / f"reports/phase2/cdc/{name}.json").read_text())
+        assert d["clocks_found"] == ["clk_a", "clk_b"], d
+        assert d["verdict"] == "SKIPPED-CONDITION", d
+
+
+def test_bundled_clock_parser_matches_repeated_and_nonansi(tmp_path):
+    import re
+    forms = [
+        "module unit(input wire clk_a,clk_b,rst_n,output q); endmodule",
+        "module unit(input wire clk_a,input wire clk_b,input wire rst_n,output q); endmodule",
+        "module unit(clk_a,clk_b,rst_n,q); input clk_a,clk_b,rst_n; output q; endmodule",
+    ]
+    observed = []
+    for index, text in enumerate(forms):
+        path = tmp_path / f"ports{index}.v"
+        path.write_text(text)
+        clocks, _ = P2._cdc_top_clock_ports(
+            [path], "unit", tmp_path,
+            re.compile(r"\binput\s+(?:wire\s+)?([A-Za-z_]\w*)"),
+            re.compile(r"rst|reset"))
+        observed.append(clocks)
+    assert observed == [{"clk_a", "clk_b"}] * 3

@@ -228,3 +228,39 @@ def test_classify_helper_directly(tmp_path):
     assert c["genuine_fail"] is False
     assert c["skip_reasons"] and "multi-clock" in c["skip_reasons"][0]
     assert len(c["present_paths"]) == 3
+
+
+
+def test_crossing_skip_not_hidden_by_single_clock_siblings(tmp_path):
+    _write_canonical(tmp_path, {"verdict": "PASS", "evidence": "single clock domain",
+                                "clocks_found": ["clk_a"], "async_inputs": []})
+    (tmp_path / CANONICAL_CROSSING).write_text(json.dumps(_multiclock_skip_payload()))
+    result = C.audit_cdc(tmp_path)
+    assert result.summary.get("single_clock_pass") is not True
+    assert result.passed is True
+    assert result.summary.get("deferred") is True
+    assert result.summary.get("cap_flag") == "cap:cdc"
+    assert result.summary.get("canonical_json_pass") == 2
+    assert result.summary.get("single_clock_pass") is not True
+
+
+CANONICAL_CROSSING = "reports/phase2/cdc/crossing.json"
+
+
+def test_genuine_fail_dominates_skip_and_pass(tmp_path):
+    _write_canonical(tmp_path, _multiclock_skip_payload())
+    (tmp_path / "reports/phase2/cdc/reset_dep.json").write_text(json.dumps(
+        {"verdict": "FAIL", "reason": "reset dependency cycle"}))
+    result = C.audit_cdc(tmp_path)
+    assert result.passed is False
+    assert result.summary.get("genuine_cdc_fail") is True
+    assert result.summary.get("deferred") is not True
+
+
+def test_corrupt_sibling_not_hidden_by_disclosed_skip(tmp_path):
+    _write_canonical(tmp_path, _multiclock_skip_payload())
+    for payload in ("{broken", "[]", json.dumps({"verdict": "MAYBE"})):
+        (tmp_path / "reports/phase2/cdc/reset_dep.json").write_text(payload)
+        result = C.audit_cdc(tmp_path)
+        assert result.passed is False, payload
+        assert result.summary.get("deferred") is not True, payload

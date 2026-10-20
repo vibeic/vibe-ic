@@ -15266,7 +15266,11 @@ def _evidence_integrity_scan(project: Path,
             "executed verification — excluded from strict PASS: "
             + "; ".join(stub_hits[:4]))
     elif self_skipped:
-        result.status = _T.Verdict.NOT_APPLICABLE.value
+        # An artifact's nonexecution is not an INPUT absence declaration.
+        # Validated design N/A exits before this plain-PASS-only scan.
+        result.status = _T.Verdict.NOT_MEASURED.value
+        result.reason_class = _T.ReasonClass.FLOW_DOES_NOT_PERFORM.value
+        result.declared_by = ""
         result.reasons.append(
             "verdict artifact self-reports SKIPPED-CONDITION (#433c): "
             + "; ".join(self_skipped[:3]))
@@ -15287,17 +15291,16 @@ def _apply_capability_gap(result: "StepResult", sid) -> "StepResult":
     conversion is never silently skipped; evidence-backed verdicts are
     untouched."""
     # R-0915-85 — the would-be-MISSING verdict is now
-    # FAIL(missing_artefact); the conversion target is NOT_APPLICABLE, because
-    # a REGISTERED platform capability gap is a declaration about this
-    # platform, and `declared_by` names the flag.
+    # FAIL(missing_artefact). A registered platform capability gap explains
+    # nonexecution; it is not a design INPUT absence declaration.
     if (result.status == _T.Verdict.FAIL.value
             and result.reason_class == _T.ReasonClass.MISSING_ARTEFACT.value
             and isinstance(sid, int)
             and sid in _PLATFORM_CAPABILITY_GAPS):
         flag = _PLATFORM_CAPABILITY_GAPS[sid]
-        result.status = _T.Verdict.NOT_APPLICABLE.value
-        result.reason_class = ""
-        result.declared_by = f"platform capability gap flag [{flag}]"
+        result.status = _T.Verdict.NOT_MEASURED.value
+        result.reason_class = _T.ReasonClass.FLOW_DOES_NOT_PERFORM.value
+        result.declared_by = ""
         # v1.3.94 — a flag with an ACCURATE rationale override (a step the
         # runner DOES implement but cannot complete for a data/model gap) uses
         # its own text; the rest use the generic "not implemented yet".
