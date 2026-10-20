@@ -1779,6 +1779,12 @@ _V1_6_334_RE_SECTION_HEADER_MD_ATX = re.compile(
     r"^\s*(#{2,4})\s+(" + _V1_6_630_TITLE_FIRST + r"[\w\s\-,/()&]+?)\s*#*\s*$",
     re.MULTILINE,
 )
+# L2 semantic sections may carry requirements directly under the document
+# title. Other header consumers retain the existing H2-H4 default.
+_L2_RE_SECTION_HEADER_MD_ATX_WITH_H1 = re.compile(
+    r"^\s*(#{1,4})\s+(" + _V1_6_630_TITLE_FIRST + r"[\w\s\-,/()&]+?)\s*#*\s*$",
+    re.MULTILINE,
+)
 
 # AsciiDoc heading: `== Title`, `=== Title`. Same depth range
 # (level-1 `= Title` is the doctitle).
@@ -1907,7 +1913,8 @@ def _v1_6_444_underline_shape_label(source_path) -> str:
 def _v1_6_334_extract_multi_shape_section_headers(
         text: str,
         source_path: str = None,
-        deduplicate: bool = True) -> List[Dict[str, Any]]:
+        deduplicate: bool = True,
+        include_md_h1: bool = False) -> List[Dict[str, Any]]:
     """v1.6.334 — for #232 P2 ORGANIC. Extract section headers across
     Markdown ATX (`## Title`), RST setext underline (`Title\\n====`),
     AsciiDoc (`== Title`), and the legacy numbered shape
@@ -1923,6 +1930,8 @@ def _v1_6_334_extract_multi_shape_section_headers(
     metadata. Duplicate (title, shape) pairs are de-duplicated by default;
     positional section-role callers use ``deduplicate=False`` so repeated
     sibling headings still terminate the preceding section.
+    ``include_md_h1`` opts semantic L2 consumers into the introductory
+    document-title body without changing other layers' header populations.
 
     v1.6.357 — for #252 P3. Now also returns ``match_end`` so the
     caller can slice the prose body between this heading and the
@@ -1981,7 +1990,9 @@ def _v1_6_334_extract_multi_shape_section_headers(
             continue
         _push(title, m.group(1), "numbered", m.start(), m.end())
     # Markdown ATX.
-    for m in _V1_6_334_RE_SECTION_HEADER_MD_ATX.finditer(text):
+    md_atx_re = (_L2_RE_SECTION_HEADER_MD_ATX_WITH_H1 if include_md_h1
+                 else _V1_6_334_RE_SECTION_HEADER_MD_ATX)
+    for m in md_atx_re.finditer(text):
         depth_hashes = m.group(1)
         sec_id = f"h{len(depth_hashes)}"
         _push(m.group(2), sec_id, "md_atx", m.start(), m.end())
@@ -3146,6 +3157,29 @@ def _is_install_verb_v1_6_315(title) -> bool:
     if not isinstance(title, str) or not title:
         return False
     return bool(_RE_INSTALL_VERB_v1_6_315.search(title))
+
+
+def _l2_is_host_setup_section(title: str, content: str) -> bool:
+    """Reject host installation guides, not hardware setup/hold contracts.
+
+    Require a complete host-guide title and a body made only of explicit
+    installation instructions. A host note cannot withdraw a functional
+    timing sentence in the same section.
+    """
+    if not re.fullmatch(
+            r"\s*(?:(?:build(?:ing)?|setup|install(?:ation|ing)?)"
+            r"(?:\s+(?:instructions?|guide|steps?|environment|tools?))?|"
+            r"(?:host|software|development|build|installation)\s+"
+            r"(?:setup|environment))\s*", title, re.IGNORECASE):
+        return False
+    instructions = [part.strip() for part in
+                    re.split(r"[.!?;]\s+|\n+", content) if part.strip()]
+    return bool(instructions) and all(
+        re.match(r"(?:Run\s+)?(?:pip[23]?|npm|apt(?:-get)?)\s+install\b",
+                 part, re.IGNORECASE)
+        or re.match(r"Install\s+(?:(?:the|a)\s+)?host\s+"
+                    r"(?:compiler|toolchain)\b", part, re.IGNORECASE)
+        for part in instructions)
 _RE_BULLET_DIR_PAREN = re.compile(
     r"(?i)\b(?P<dir>input|output|inout|in|out|io)\b"
 )
@@ -24073,7 +24107,7 @@ def gen_l2_frs(project: Path,
         # (`md_setext` for .md, `adoc_underline` for .adoc; legacy
         # `rst_underline` preserved for .rst / unknown).
         multi_shape_hits = _v1_6_334_extract_multi_shape_section_headers(
-            text, source_path=fname)
+            text, source_path=fname, include_md_h1=True)
         for i, hit in enumerate(multi_shape_hits):
             sec_id = hit["section_id"]
             title = hit["title"]
@@ -24093,7 +24127,6 @@ def gen_l2_frs(project: Path,
             # functional-requirements section.
             if _is_fpga_platform_token_v1_6_315(title):
                 continue
-            seen.add(title)
             # v1.6.357 — for #252 P3. Replace the v1.6.0 literal
             # pointer string `"see input_doc/<fname>"` with the
             # actual prose body sliced between this heading and the
@@ -24108,6 +24141,14 @@ def gen_l2_frs(project: Path,
                 # consumers, not a bounded preview. Preserve every fact.
                 text, heading_end, next_offset, max_chars=None,
             )
+            # A title without introductory prose is not another requirement.
+            # Still retain every heading as a boundary before filtering it.
+            if (sec_id == "h1" and heading_shape == "md_atx"
+                    and not content_body.strip()):
+                continue
+            if _l2_is_host_setup_section(title, content_body):
+                continue
+            seen.add(title)
             sections.append({
                 "section": sec_id,
                 "title": title,

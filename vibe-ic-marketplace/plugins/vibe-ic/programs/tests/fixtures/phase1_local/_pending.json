@@ -361,5 +361,16 @@
     "version_observed": "1.29.96, retained execution source d63906f6ae37bf0030059d9b6304ebcc5fe349b9. Owning crypto_arch_extractor.py SHA256 fae61be2c6fc3e7340f5ae3a5ca76e623f3aca10a7e738ebf74cee08039dd272. Fixed official e67b74e3e9204aa37fd8eaaf8d66266bfa8c2812 is the separate repair/transport target, not yet claimed reproduced there.",
     "version_lkg": "",
     "fixture_path": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/fixtures/phase1_local/neutral_round_vs_block_latency/timing_contract.md"
+  },
+  {
+    "issue": 3299,
+    "project": "neutral_functional_preamble",
+    "layer": "L2_FRS",
+    "field": "frs_sections[].content",
+    "expected": "Preserve the source sentence `The cipher can either encrypt or decrypt, but not both at the same time.` in a source-bound current functional L2 section, with the existing Block handling section preserved. The same requirement must remain present if moved under an explicit H2 `Cipher operation` header. Introductory H1 functional prose is not an absence declaration. Do not invent functional requirements from Build/Setup/installation prose or copy whole nonfunctional documents into FRS.",
+    "actual": "H1 form: L2 `frs_sections` contains only title `Block handling` with content `A completed block is returned on output_valid.`; the supplied mutually exclusive encryption/decryption obligation is absent. With identical sentence under H2 `Cipher operation`, it is present. Ordinary native neutral control therefore rejects the H1 output, rather than merely observing a missing schema field.",
+    "version_observed": "1.30.30, exact commit2a02a3f2538e8ce4b47ec0332273afe873b8f3ee, owner phase1_doc_one_shot_runner.py SHA256 c4116c40ec59a542db17355e42faa866d140d02901137913891c70697f7a55ef. Rechecked on exact400840b089083915d9420191b8397ce5c92025a1 (1.30.32), owner SHA256 983013b5ce98bcfdaf7123f124b23c4e60e17f3067fdbbc40d3439dd6a478c14: same H1=false/H2=true.",
+    "version_lkg": "Unknown.",
+    "fixture_path": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/fixtures/phase1_local/neutral_functional_preamble/functional_preamble.md"
   }
 ]

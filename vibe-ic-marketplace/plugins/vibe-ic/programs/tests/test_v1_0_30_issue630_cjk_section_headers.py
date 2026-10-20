@@ -102,3 +102,125 @@ def test_gen_l2_frs_mines_cjk_sections(tmp_path):
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))
+
+
+# #3299: preserve functional H1 prose without admitting host setup guides.
+@pytest.mark.parametrize(
+    "text,required,forbidden",
+    [('# Functional Overview\n'
+      '\n'
+      'The cipher can either encrypt or decrypt, but not both at the same time.\n'
+      '\n'
+      '## Block handling\n'
+      'A completed block is returned on output_valid.\n',
+      ['The cipher can either encrypt or decrypt, but not both at the same time.',
+       'A completed block is returned on output_valid.'],
+      []),
+     ('# Functional Overview\n'
+      '\n'
+      '## Cipher operation\n'
+      'The cipher can either encrypt or decrypt, but not both at the same time.\n'
+      '\n'
+      '## Block handling\n'
+      'A completed block is returned on output_valid.\n',
+      ['The cipher can either encrypt or decrypt, but not both at the same time.'],
+      []),
+     ('# Theory of Operation\n'
+      '\n'
+      'The cipher can either encrypt or decrypt, but not both at the same time.\n'
+      '\n'
+      '## Block handling\n'
+      'A completed block is returned on output_valid.\n',
+      ['The cipher can either encrypt or decrypt, but not both at the same time.'],
+      []),
+     ('# Build instructions\n'
+      '\n'
+      'Install the host compiler before running the build.\n'
+      '\n'
+      '## Setup\n'
+      'Run pip install in a virtual environment.\n',
+      [],
+      ['Install the host compiler before running the build.',
+       'Run pip install in a virtual environment.']),
+     ('# Functional Overview\n'
+      '\n'
+      'The cipher can either encrypt or decrypt, but not both at the same time.\n'
+      '\n'
+      '## Setup\n'
+      'Run pip install in a virtual environment.\n'
+      '\n'
+      '## Block handling\n'
+      'A completed block is returned on output_valid.\n',
+      ['The cipher can either encrypt or decrypt, but not both at the same time.',
+       'A completed block is returned on output_valid.'],
+      ['Run pip install in a virtual environment.']),
+     ('## Setup and hold timing\n'
+      'The data setup time shall be 2 ns before the active clock edge.\n',
+      ['The data setup time shall be 2 ns before the active clock edge.'],
+      []),
+     ('# 功能定義\n本模組每次只能執行一種運算。\n\n## 輸出行為\n輸出有效時結果保持穩定。\n',
+      ['本模組每次只能執行一種運算。', '輸出有效時結果保持穩定。'],
+      [])],
+    ids=['h1-functional', 'h2-positive', 'theory-introduction', 'build-setup-negative', 'functional-before-setup', 'hardware-setup-hold', 'cjk-h1'],
+)
+def test_l2_functional_preamble_source_scope(tmp_path, text, required, forbidden):
+    docs = tmp_path / "input/docs"
+    docs.mkdir(parents=True)
+    (docs / "spec.md").write_text(text)
+    R.gen_l2_frs(tmp_path, {"spec.md": text})
+    actual = json.loads((tmp_path / "phase1/generated_docs/L2_FRS.json").read_text())
+    content = "\n".join(row.get("content", "") for row in actual["frs_sections"])
+    for sentence in required:
+        assert sentence in content, actual["frs_sections"]
+    for sentence in forbidden:
+        assert sentence not in content, actual["frs_sections"]
+    assert all(row["evidence"] == "input/docs/spec.md" for row in actual["frs_sections"])
+
+
+def test_general_heading_walker_still_excludes_markdown_h1_by_default():
+    hits = _hits("# Functional Overview\nIntro prose.\n\n## Block handling\nBlock body.\n")
+    assert [(h["section_id"], h["title"]) for h in hits] == [("h2", "Block handling")]
+
+
+def test_hardware_setup_contract_survives_host_installation_note(tmp_path):
+    text = '## Setup and hold timing\nThe data setup time shall be 2 ns before the active clock edge.\nA software note uses pip install to prepare its optional analysis environment.\n'
+    R.gen_l2_frs(tmp_path, {"spec.md": text})
+    actual = json.loads((tmp_path / "phase1/generated_docs/L2_FRS.json").read_text())
+    content = "\n".join(row.get("content", "") for row in actual["frs_sections"])
+    assert 'The data setup time shall be 2 ns before the active clock edge.' in content, actual["frs_sections"]
+
+
+def test_mixed_functional_body_under_bare_setup_is_not_installation_only(tmp_path):
+    text = '## Setup\nThe data setup time shall be 2 ns before the active clock edge.\nRun pip install in a virtual environment.\n'
+    R.gen_l2_frs(tmp_path, {"spec.md": text})
+    actual = json.loads((tmp_path / "phase1/generated_docs/L2_FRS.json").read_text())
+    content = "\n".join(row.get("content", "") for row in actual["frs_sections"])
+    assert 'The data setup time shall be 2 ns before the active clock edge.' in content, actual["frs_sections"]
+
+
+@pytest.mark.parametrize(
+    "text,required",
+    [('## Setup and hold timing\n'
+      'The data setup time shall be 2 ns before the active clock edge.\n'
+      'A software note uses pip install to prepare its optional analysis environment.\n'
+      '\n'
+      '## Output transfer\n'
+      'A completed block is returned on output_valid.\n',
+      ['The data setup time shall be 2 ns before the active clock edge.',
+       'A completed block is returned on output_valid.']),
+     ('## Setup\n'
+      'The data setup time shall be 2 ns before the active clock edge.\n'
+      'Run pip install in a virtual environment.\n'
+      '\n'
+      '## Output transfer\n'
+      'A completed block is returned on output_valid.\n',
+      ['The data setup time shall be 2 ns before the active clock edge.',
+       'A completed block is returned on output_valid.'])],
+    ids=["hardware-title-nonempty", "bare-setup-nonempty"],
+)
+def test_mixed_setup_retains_hardware_and_unrelated_output_section(tmp_path, text, required):
+    R.gen_l2_frs(tmp_path, {"spec.md": text})
+    actual = json.loads((tmp_path / "phase1/generated_docs/L2_FRS.json").read_text())
+    content = "\n".join(row.get("content", "") for row in actual["frs_sections"])
+    assert required[1] in content, actual["frs_sections"]
+    assert required[0] in content, actual["frs_sections"]
