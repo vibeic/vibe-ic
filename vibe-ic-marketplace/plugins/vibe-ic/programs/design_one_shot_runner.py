@@ -26025,6 +26025,99 @@ def _finish_selected_interface_currentness(project: Path) -> StepResult:
                       reason_class='awaiting_signed_judgement' if pending and not rejected else '')
 
 
+def _current_phase2_consumer(project: Path, step_id: str, started_at: float):
+    """Read a retained complete consumer only while its exact inputs/outputs hold."""
+    import _flow_yaml
+    import execution_backend_gates as gates
+    import execution_backend_worker as worker
+    import execution_modes
+    import step_output_collector as versions
+    try:
+        accepted = next((r for r in versions.current_acceptance(project, started_at)
+                         if str(r['id']) == step_id), None)
+        if not accepted or accepted['status'] != 'PASS' or not accepted['canonical_pass']:
+            return None
+        consumer = accepted['result']['canonical_consumer']
+        step = consumer['step']
+        binding = step['output_binding']
+        row = next(r for r in _flow_yaml.load()['steps'] if str(r['id']) == step_id)
+        inputs = worker._declared_input_files(project, row.get('required_inputs', ()))
+        if not (consumer['status'] == step['status'] == 'PASS'
+                and str(step['id']) == step_id and not accepted.get('capture_errors')
+                and binding['n_specs'] > 0
+                and binding['n_specs'] == binding['n_satisfied'] == binding['n_step_attributed']
+                and binding['n_project_glob'] == 0
+                and accepted['inputs'] and accepted['inputs'] == inputs
+                and accepted['outputs']
+                and all((project / r['rel']).is_file()
+                        and hashlib.sha256((project / r['rel']).read_bytes()).hexdigest() == r['sha256']
+                        for r in accepted['outputs'])
+                and consumer['outputs'] == gates.contracts(project, row)):
+            return None
+        return accepted
+    except (OSError, ValueError, TypeError, KeyError, execution_modes.Refusal):
+        return None
+
+
+def step_synthesis_handoff(project: Path, *, plan=None) -> StepResult:
+    """Run the existing Step14 report producers and its complete consumer.
+
+    A bounded caller must supply current Step9/13 acceptance. The established
+    unbounded audit still supplies its own upstream ordering and applicability.
+    Missing requested inputs remain NOT_MEASURED; this never runs a whole audit.
+    """
+    t0 = time.time()
+    if plan is not None:
+        if any(s.status == 'FAIL' for s in plan):
+            return StepResult('synthesis_handoff', 'NOT_MEASURED', 0.0,
+                              'Step14 blocked by an earlier measured failure',
+                              reason_class=_V.ReasonClass.UPSTREAM_FAILED)
+        for sid in ('9', '13'):
+            if _current_phase2_consumer(project, sid, 0.0) is None:
+                return StepResult('synthesis_handoff', 'NOT_MEASURED', 0.0,
+                                  f'Step14 awaits current complete Step{sid} acceptance',
+                                  reason_class=_V.ReasonClass.UPSTREAM_REFUSED)
+    handoff_acceptance = {'verdict': 'NOT_MEASURED',
+                          'detail': 'Step14 complete capture did not finish'}
+    try:
+        import flow_declared_producer_run as declared
+        import step_output_collector as versions
+        from execution_backend_producers import _current_step_producer_authority
+
+        def produce_handoff():
+            census = declared.run_for_step(
+                project, '14', timeout=_pl.audit_timeout_s(project))
+            allowed, reason, authority = _current_step_producer_authority(
+                census, project=project)
+            return {'rc': 0 if allowed else 1 if authority == 'FAIL' else 2,
+                    'authority_verdict': authority, 'authority_detail': reason,
+                    'current_step_producers': census}
+
+        # Capture the real synthesis input before these report producers
+        # write, then retain the unchanged complete Step14 consumer.
+        retained = _spf.retained_call(
+            project, '14', produce_handoff, canonical_acceptance=True)
+        handoff_producers = retained['current_step_producers']
+        current = next(row for row in versions._read_index(project)['steps']
+                       if str(row['id']) == '14')
+        record = json.loads((versions._versions_root(project) /
+                             current['folder'] / 'outputs.json').read_text())
+        status = ('PASS' if record.get('canonical_pass') and record['status'] == 'PASS'
+                  else 'FAIL' if record['status'] == 'FAIL' else 'NOT_MEASURED')
+        handoff_acceptance = {'verdict': status, 'folder': current['folder']}
+        print('[phase2] Step14 handoff producers: '
+              f"{handoff_producers['verdict']}; "
+              f"{handoff_producers['executed']} executed")
+    except Exception as exc:  # The audit retains missing/failed evidence.
+        print(f'[WARN] Step14 handoff producers did not complete: {exc}',
+              file=sys.stderr)
+    status = handoff_acceptance['verdict']
+    return StepResult('synthesis_handoff', status, time.time() - t0,
+                      'Step14 complete handoff: ' + status,
+                      extras={'step14_handoff': handoff_acceptance},
+                      reason_class=_V.ReasonClass.INPUT_ABSENT if status == 'NOT_MEASURED' else '')
+
+
 def _audit_after_declared_producers(project: Path, skip_analog: bool) -> StepResult:
     """Run declared producers before the audit; their rc is a recorded fact.
 
@@ -26060,40 +26153,7 @@ def _audit_after_declared_producers(project: Path, skip_analog: bool) -> StepRes
     handoff_acceptance = None
     if (execution_policy.request()['mode'] == 'default'
             and (_pl.synth_dir(project) / 'netlist.v').is_file()):
-        handoff_acceptance = {'verdict': 'NOT_MEASURED',
-                              'detail': 'Step14 complete capture did not finish'}
-        try:
-            import flow_declared_producer_run as declared
-            import step_output_collector as versions
-            from execution_backend_producers import _current_step_producer_authority
-
-            def produce_handoff():
-                census = declared.run_for_step(
-                    project, '14', timeout=_pl.audit_timeout_s(project))
-                allowed, reason, authority = _current_step_producer_authority(
-                    census, project=project)
-                return {'rc': 0 if allowed else 1 if authority == 'FAIL' else 2,
-                        'authority_verdict': authority, 'authority_detail': reason,
-                        'current_step_producers': census}
-
-            # Capture the real synthesis input before these report producers
-            # write, then retain the unchanged complete Step14 consumer.
-            retained = _spf.retained_call(
-                project, '14', produce_handoff, canonical_acceptance=True)
-            handoff_producers = retained['current_step_producers']
-            current = next(row for row in versions._read_index(project)['steps']
-                           if str(row['id']) == '14')
-            record = json.loads((versions._versions_root(project) /
-                                 current['folder'] / 'outputs.json').read_text())
-            status = ('PASS' if record.get('canonical_pass') and record['status'] == 'PASS'
-                      else 'FAIL' if record['status'] == 'FAIL' else 'NOT_MEASURED')
-            handoff_acceptance = {'verdict': status, 'folder': current['folder']}
-            print('[phase2] Step14 handoff producers: '
-                  f"{handoff_producers['verdict']}; "
-                  f"{handoff_producers['executed']} executed")
-        except Exception as exc:  # The audit retains missing/failed evidence.
-            print(f'[WARN] Step14 handoff producers did not complete: {exc}',
-                  file=sys.stderr)
+        handoff_acceptance = step_synthesis_handoff(project).extras['step14_handoff']
     # The producer sweep may create or replace attested files. The audit must
     # read a summary of that resulting tree, even when the sweep exits nonzero.
     _pl.emit_final_summary(project, PROGRAMS_DIR)
@@ -26931,8 +26991,9 @@ def main() -> int:
         # full-stack top. Default's DIE top needs the mapped Step-9 netlist;
         # execute its existing logical pad producer below before Step 5 is
         # consumed, rather than waiting for the Phase 3 physical producer.
-        _full_stack_after_synth = _phase2_needs_logical_pad_top(project)
-        if not _full_stack_after_synth:
+        _full_stack_after_synth = (_step_requested('5')
+                                   and _phase2_needs_logical_pad_top(project))
+        if _step_requested('5') and not _full_stack_after_synth:
             plan.append(step_full_stack_functional_tb(project, args.container))
         # ORGANIC #2064 — the ANALOG-ACCEPTANCE producer and its executor, in
         # the same order and for the same reason as the pair above: the L10
@@ -27507,6 +27568,19 @@ def main() -> int:
                                        else None))
         plan.extend(_dft_chain)
 
+    # Step14's whole-flow tail is intentionally skipped by a bounded run.
+    # Its existing scoped producer/complete consumer still belongs to 11..14.
+    if _bounded:
+        if _before_entry('synthesis_handoff', _entry_site):
+            plan.append(_entry_sentinel('synthesis_handoff'))
+        elif _after_exit('synthesis_handoff'):
+            plan.append(_exit_sentinel('synthesis_handoff'))
+        else:
+            plan.append(_spf.gate(
+                project, 'design_one_shot_runner', 'synthesis_handoff',
+                _preflight_refusal('synthesis_handoff'),
+                step_synthesis_handoff, project, plan=plan))
+
     # Flow step FS1 (blocks on step 11). Its gate's producer is run here so
     # the report exists before the audit reads it. A declared window does
     # not own FS1, so a bounded run does not dispatch it.
@@ -27883,6 +27957,15 @@ def _aggregate_verdict(plan: List[StepResult], *, project: Optional[Path] = None
                 effective.remove(early)
         except (OSError, ValueError, KeyError, TypeError):
             pass                            # missing/stale acceptance remains owed
+    # The connectivity-only skeleton remains an observation in the report.
+    # Only this invocation's fully bound Step4 consumer can discharge that
+    # same functional responsibility. Partial populations and measured FAIL
+    # remain effective, and Step5's logical-pad population is independent.
+    if (aggregate_project is not None and started_at is not None
+            and _current_phase2_consumer(aggregate_project, '4', started_at) is not None):
+        effective = [s for s in effective if not (
+            s.name == 'full_stack_tb_gen' and s.status == 'NOT_MEASURED'
+            and s.reason_class == _V.ReasonClass.NO_POPULATION)]
     # The canonical consumer owns the existing board-capability exclusion.
     # Keep raw compile/burn rows unmeasured; only their contribution to THIS
     # aggregate follows a current, digest-bound Step 6 exclusion. A real

@@ -72,6 +72,128 @@ def _calls(node: ast.AST):
     return [n for n in ast.walk(node) if isinstance(n, ast.Call)]
 
 
+@pytest.mark.parametrize('damage,expected', [
+    ('current', 'PASS'), ('missing', 'NOT_MEASURED'),
+    ('old', 'NOT_MEASURED'), ('source', 'NOT_MEASURED'),
+    ('output', 'NOT_MEASURED'), ('unbound', 'NOT_MEASURED'),
+    ('partial', 'NOT_MEASURED'), ('failed', 'FAIL'),
+])
+def test_step4_skeleton_retires_only_for_current_complete_consumer(
+        tmp_path, monkeypatch, damage, expected):
+    """Source fold control with a mocked consumer, never native qualification.
+
+    The bytes and canonical row are real neutral data; the complete consumer
+    is supplied at its existing API boundary to isolate observation lifecycle.
+    """
+    import hashlib
+    import execution_backend_gates as gates
+    import execution_backend_worker as worker
+    import step_output_collector as versions
+    import _flow_yaml
+    dsr = _load('design_one_shot_runner')
+    row = next(r for r in _flow_yaml.load()['steps'] if str(r['id']) == '4')
+    files = {
+        'phase2/stage1/rtl/window_logic.v': 'module window_logic(input a, output y); assign y=a; endmodule\n',
+        'phase1/generated_docs/L10_TEST_CASES.json': '{"test_cases": [{"id": "selector", "kind": "functional_vector", "inputs": {"a": 1}, "expected_outputs": {"y": 1}}]}',
+        'phase1/generated_docs/L12_BEHAVIORAL_SEQUENCES.json': '{"sequences": [{"id": "selector"}]}',
+    }
+    for rel, data in files.items():
+        path = tmp_path / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(data)
+    output_rels = [spec.split(' OR ')[0].replace('**', 'neutral').replace('*', 'neutral')
+                   for spec in row['required_outputs']]
+    for rel in output_rels:
+        path = tmp_path / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text('source-only consumer boundary fixture\n')
+    sha = lambda p: hashlib.sha256(p.read_bytes()).hexdigest()
+    accepted = {
+        'id': '4', 'status': 'PASS', 'canonical_pass': True, 'capture_errors': [],
+        'inputs': worker._declared_input_files(tmp_path, row['required_inputs']),
+        'outputs': [{'rel': rel, 'sha256': sha(tmp_path / rel)} for rel in output_rels],
+        'result': {'canonical_consumer': {
+            'status': 'PASS', 'step': {'id': '4', 'status': 'PASS',
+                'output_binding': {'n_specs': 3, 'n_satisfied': 3,
+                                   'n_step_attributed': 3, 'n_project_glob': 0}},
+            'outputs': gates.contracts(tmp_path, row)}},
+    }
+    if damage == 'source':
+        (tmp_path / next(iter(files))).write_text('module changed; endmodule\n')
+    elif damage == 'output':
+        (tmp_path / output_rels[0]).write_text('changed output\n')
+    elif damage == 'unbound':
+        accepted['result']['canonical_consumer']['step']['output_binding']['n_step_attributed'] = 0
+    elif damage == 'partial':
+        accepted['canonical_pass'] = False
+    current = [] if damage in ('missing', 'old') else [accepted]
+    monkeypatch.setattr(versions, 'current_acceptance', lambda project, began: current)
+    skeleton = dsr.StepResult('full_stack_tb_gen', 'NOT_MEASURED',
+                              reason_class='no_population')
+    oracle = dsr.StepResult('reference_tb', 'PASS', extras={'functional_verified': True})
+    plan = [skeleton, oracle]
+    if damage == 'failed':
+        plan.insert(0, dsr.StepResult('full_stack_tb_gen', 'FAIL', detail='actual mismatch'))
+    assert dsr._aggregate_verdict(plan, project=tmp_path, started_at=time.time()-1) == expected
+    assert skeleton.status == 'NOT_MEASURED' and skeleton.reason_class == 'no_population'
+    # A Step5 population remains owed even with an accepted Step4 consumer.
+    assert dsr._aggregate_verdict(plan + [dsr.StepResult(
+        'full_stack_functional_tb', 'NOT_MEASURED', reason_class='input_absent')],
+        project=tmp_path, started_at=time.time()-1) == ('FAIL' if damage == 'failed' else 'NOT_MEASURED')
+
+
+@pytest.mark.parametrize('entry,exit_step,expected', [
+    ('11', '14', {'11', '12', '13', '14'}),
+    ('11', '13', {'11', '12', '13'}),
+])
+def test_phase2_window_plans_the_requested_handoff(entry, exit_step, expected):
+    import step_preflight as spf
+    dsr = _load('design_one_shot_runner')
+    sites = spf.RUNNER_PLANS['design_one_shot_runner'].sites
+    entry_site = spf.site_for_step('design_one_shot_runner', entry)
+    names = [n for n, _ in sites]
+    sentinels = names[:names.index(entry_site)] + dsr._exit_pruned_sites(sites, exit_step)
+    assert dsr.dispatched_step_ids(sites, sentinels) == expected
+
+
+@pytest.mark.parametrize('entry,exit_step,bounded,expected', [
+    ('11', '14', True, ['synthesis_handoff']),
+    ('11', '13', True, []),
+    (None, None, False, []),  # unbounded retains its established audit-tail owner
+])
+def test_bounded_handoff_reaches_existing_scoped_producer(
+        tmp_path, entry, exit_step, bounded, expected):
+    """Actual main dispatch statements; callbacks are source-wiring evidence."""
+    from types import SimpleNamespace
+    import step_preflight as spf
+    dsr = _load('design_one_shot_runner')
+    sites = spf.RUNNER_PLANS['design_one_shot_runner'].sites
+    seen = []
+    helpers = {'_site_order', '_before_entry', '_after_exit', '_entry_sentinel', '_exit_sentinel'}
+    nodes = []
+    for node in _main_node().body:
+        if isinstance(node, ast.FunctionDef) and node.name in helpers:
+            nodes.append(node)
+        elif isinstance(node, ast.If) and any(isinstance(n, ast.Name)
+                and n.id == 'step_synthesis_handoff' for n in ast.walk(node)):
+            nodes.append(node)
+    def handoff(*a, **kw):
+        seen.append('synthesis_handoff')
+        return dsr.StepResult('synthesis_handoff', 'NOT_MEASURED', reason_class='input_absent')
+    env = {'_spf': SimpleNamespace(RUNNER_PLANS=spf.RUNNER_PLANS,
+               gate=lambda p, r, s, refusal, fn, *a, **k: fn(*a, **k)),
+           '_preflight_refusal': lambda name: None, '_bounded': bounded,
+           '_entry_site': spf.site_for_step('design_one_shot_runner', entry) if entry else None,
+           '_exit_pruned': dsr._exit_pruned_sites(sites, exit_step) if exit_step else [],
+           'args': SimpleNamespace(entry_step=entry, exit_step=exit_step),
+           'StepResult': dsr.StepResult, 'step_synthesis_handoff': handoff,
+           'project': tmp_path, 'plan': [], '_run_started_at': time.time()}
+    exec(compile(ast.fix_missing_locations(ast.Module(body=nodes, type_ignores=[])), str(RUNNER), 'exec'), env)
+    assert seen == expected
+    if seen:
+        assert dsr._aggregate_verdict(env['plan']) == 'NOT_MEASURED'
+
+
 @pytest.mark.parametrize("entry,exit_site,expected", [
     (None, None, ["asic_sdc", "sdc_validation", "yosys_synth"]),
     ("yosys_synth", None, ["sdc_validation", "yosys_synth"]),
@@ -330,16 +452,16 @@ def test_dispatched_step_ids_come_from_the_runs_own_record(_=None):
 
     # nothing sentinelled -> everything dispatched
     assert dsr.dispatched_step_ids(sites, set()) == {"1", "2", "3", "4", "7", "9",
-                                                    "11", "12", "13"}
+                                                    "11", "12", "13", "14"}
     # the --entry-step 9 reality: the run books sentinels for the two guarded
     # sites only, so step 4 IS dispatched and must be reported as dispatched
     ids = dsr.dispatched_step_ids(sites, {"rtl_gen", "rtl_validate"})
     assert "4" in ids, (
         "step 4 ran and was reported out-of-window -- the table's answer, not "
         "the run's")
-    assert ids == {"4", "7", "9", "11", "12", "13"}
+    assert ids == {"4", "7", "9", "11", "12", "13", "14"}
     # an exit sentinel removes its whole span
-    assert dsr.dispatched_step_ids(sites, {"yosys_synth", "dft_lec_chain"}) == \
+    assert dsr.dispatched_step_ids(sites, {"yosys_synth", "dft_lec_chain", "synthesis_handoff"}) == \
         {"1", "2", "3", "4", "7"}
     assert dsr.dispatched_step_ids((), {"anything"}) == set()
 
@@ -1002,6 +1124,7 @@ def test_main_dispatch_respects_selected_frontend_ownership(
         'dispatched_step_ids': dsr.dispatched_step_ids,
         '_window_flags': dsr.declared_window_flags(entry, exit_step),
         'StepResult': dsr.StepResult, 'project': tmp_path, 'plan': plan,
+        '_sim_rows': [], '_adopted_step4_producer': lambda *args: None,
         'args': SimpleNamespace(entry_step=entry, exit_step=exit_step,
                                 top_name='unit_top', container='LOCAL', pdk='unit_pdk',
                                 skip_hardware=not board_requested, max_rtl_repair_retries=0),
@@ -1070,7 +1193,7 @@ def test_recorded_window_does_not_hide_an_accidental_dispatch():
            '_after_exit': lambda *_: False}
     exec(compile(ast.fix_missing_locations(ast.Module(body=[fn], type_ignores=[])),
                  str(RUNNER), 'exec'), env)
-    assert env['_window_step_ids']() == {'4', '7', '9', '11', '12', '13'}
+    assert env['_window_step_ids']() == {'4', '7', '9', '11', '12', '13', '14'}
 
 
 @pytest.mark.parametrize("entry,exit_step,selected", [

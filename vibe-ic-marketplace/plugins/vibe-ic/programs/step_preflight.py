@@ -250,6 +250,9 @@ RUNNER_PLANS: Dict[str, RunnerPlan] = {
             ("yosys_synth", ("9",)),
             # main():16198 — plan.extend(step_dft_lec_chain(...))
             ("dft_lec_chain", ("11", "12", "13")),
+            # Whole-flow runs reach this producer through their audit tail;
+            # bounded continuations dispatch its scoped handoff directly.
+            ("synthesis_handoff", ("14",)),
         ),
     ),
     "phase3_one_shot_runner": RunnerPlan(

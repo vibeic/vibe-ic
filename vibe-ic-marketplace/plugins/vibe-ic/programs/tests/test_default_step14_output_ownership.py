@@ -69,6 +69,50 @@ def test_handoff_cannot_accept_reports_without_its_synthesis_input(tmp_path):
     assert result.status != 'PASS', result
 
 
+@pytest.mark.parametrize('upstream,missing,expected', [
+    ('PASS', '9', 'NOT_MEASURED'),
+    ('PASS', '13', 'NOT_MEASURED'),
+    ('FAIL', None, 'FAIL'),
+])
+def test_bounded_handoff_keeps_missing_dependencies_and_real_lec_failure(
+        tmp_path, monkeypatch, upstream, missing, expected):
+    """Drive the live bounded main dispatch; no dependency PASS is persisted."""
+    import ast
+    from _runner_ast_fixture import called_main
+    import design_one_shot_runner as runner
+    sites = preflight.RUNNER_PLANS['design_one_shot_runner'].sites
+    main = called_main(ast.parse(Path(runner.__file__).read_text()))
+    helpers = {'_site_order', '_before_entry', '_after_exit', '_entry_sentinel', '_exit_sentinel'}
+    nodes = []
+    for node in main.body:
+        if isinstance(node, ast.FunctionDef) and node.name in helpers:
+            nodes.append(node)
+        elif isinstance(node, ast.If) and any(isinstance(n, ast.Name)
+                and n.id == 'step_synthesis_handoff' for n in ast.walk(node)):
+            nodes.append(node)
+    if hasattr(runner, '_current_phase2_consumer'):
+        monkeypatch.setattr(runner, '_current_phase2_consumer',
+                            lambda p, sid, began: None if sid == missing else {'source_only_dependency': sid})
+    def forbidden(*a, **k):
+        raise AssertionError('blocked Step14 reached its producer')
+    monkeypatch.setattr(producers, 'run_for_step', forbidden)
+    plan = [runner.StepResult('lec_equivalence', upstream)]
+    env = {'_spf': SimpleNamespace(RUNNER_PLANS=preflight.RUNNER_PLANS,
+               gate=lambda p, r, s, refusal, fn, *a, **k: fn(*a, **k)),
+           '_preflight_refusal': lambda name: None,
+           '_bounded': True, '_entry_site': 'dft_lec_chain',
+           '_exit_pruned': runner._exit_pruned_sites(sites, '14'),
+           'StepResult': runner.StepResult, 'project': tmp_path, 'plan': plan,
+           'args': SimpleNamespace(entry_step='11', exit_step='14'),
+           'step_synthesis_handoff': getattr(runner, 'step_synthesis_handoff', forbidden)}
+    exec(compile(ast.fix_missing_locations(ast.Module(body=nodes, type_ignores=[])),
+                 runner.__file__, 'exec'), env)
+    assert runner._aggregate_verdict(plan) == expected
+    assert not (tmp_path / producers.REPORT_REL).exists()
+    if upstream == 'FAIL':
+        assert plan[0].status == 'FAIL'
+
+
 # Public handoff transport controls.  The existing neutral fixture is explicitly
 # producer-shaped source data, not a claim that Yosys or an IC run executed.
 def _default_handoff_audit(project, monkeypatch):
