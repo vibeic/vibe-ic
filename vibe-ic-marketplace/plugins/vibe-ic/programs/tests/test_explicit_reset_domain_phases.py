@@ -16,14 +16,14 @@ import phase1_doc_one_shot_runner as D
 FIXTURE = Path(__file__).parent / 'fixtures/phase1_local/neutral_reset_domain_phases/reset.md'
 
 
-def _emit(project, text):
+def _emit(project, text, clocks=('clk_i', 'clk_aux_i')):
     source = project / 'input/docs/reset.md'
     source.parent.mkdir(parents=True)
     source.write_text(text)
     sdc = project / 'input/constraints/clocks.sdc'
     sdc.parent.mkdir(parents=True)
-    sdc.write_text('create_clock -name main -period 20 [get_ports clk_i]\n'
-                   'create_clock -name aux -period 32 [get_ports clk_aux_i]\n')
+    sdc.write_text(''.join(f'create_clock -name {clock} -period {20 + i * 12} '
+                           f'[get_ports {clock}]\n' for i, clock in enumerate(clocks)))
     extracted = {'reset.md': text}
     D.gen_l1_datasheet(project, extracted)
     D.gen_l8_timing_waveform(project, extracted)
@@ -253,3 +253,119 @@ def test_current_phase_no_enable_note_keeps_the_declared_release(tmp_path):
     assert cr['release_stages'] == 2
     assert cr['sync'] is False
     assert len(cr['domain_bindings']) == 2
+
+
+_PHASE_SENTENCE = ('rst_n remains the same active-low system reset for both domains, '
+                   'with asynchronous assertion and separate two-stage synchronous release.')
+_PHASE_PROSE = [
+    ('verbatim', _PHASE_SENTENCE, True),
+    ('table_only', '', True),
+    ('numeric_prefix', 'rst_n has asynchronous assertion and 2-stage synchronous release.', True),
+    ('suffix_with_word', 'rst_n has synchronous release with two stages.', True),
+    ('suffix_through_number', 'rst_n has synchronous release through 2 stages.', True),
+    ('phase_first', 'rst_n assertion is asynchronous and release is synchronous.', True),
+    ('release_first', 'rst_n has two-stage synchronous release and asynchronous assertion.', True),
+    ('explicit_clock', 'rst_n has synchronous release to core_clock through 2 stages.', True),
+    ('explicit_both_clocks', 'rst_n has synchronous release to core_clock and entropy_clock.', True),
+    ('another_reset', 'other_reset has asynchronous release.\n' + _PHASE_SENTENCE, True),
+    ('wrong_assertion', 'rst_n has synchronous assertion and synchronous release.', False),
+    ('wrong_release', 'rst_n has asynchronous assertion and asynchronous release.', False),
+    ('wrong_polarity', _PHASE_SENTENCE.replace('active-low', 'active-high'), False),
+    ('wrong_clock', 'rst_n has synchronous release to absent_clock.', False),
+    ('additional_wrong_clock', 'rst_n has synchronous release to core_clock and absent_clock.', False),
+    ('wrong_prefix_word', 'rst_n has three-stage synchronous release.', False),
+    ('wrong_prefix_number', 'rst_n has 3-stage synchronous release.', False),
+    ('wrong_suffix_with_word', 'rst_n has synchronous release with three stages.', False),
+    ('wrong_suffix_through_number', 'rst_n has synchronous release through 3 stages.', False),
+    ('wrong_clock_depth', 'rst_n has synchronous release to core_clock through 3 stages.', False),
+    ('unknown_depth', 'rst_n has synchronous release with unspecified stages.', False),
+    ('fractional_depth', 'rst_n has synchronous release through 2.2 stages.', False),
+    ('compound_depth', 'rst_n has twenty-two-stage synchronous release.', False),
+    ('alternative_depth', 'rst_n has synchronous release through 3 or 2 stages.', False),
+    ('bounded_depth', 'rst_n has synchronous release through at least 2 stages.', False),
+    ('conflicting_depth', 'rst_n has two-stage synchronous release through 3 stages.', False),
+    ('denied_assertion', 'rst_n does not have asynchronous assertion.', False),
+    ('denied_release', 'rst_n does not have synchronous release.', False),
+    ('legacy_ambiguity', 'rst_n is an active-low synchronous/asynchronous reset.', False),
+    ('phase_ambiguity', 'rst_n has asynchronous/synchronous release.', False),
+    ('unphased_conflict', _PHASE_SENTENCE + '\nrst_n is synchronous.', False),
+    ('residual_conflict', 'rst_n has asynchronous assertion and synchronous release and synchronous reset.', False),
+]
+
+
+@pytest.mark.parametrize('case,prose,accepted', _PHASE_PROSE, ids=[row[0] for row in _PHASE_PROSE])
+def test_phase_prose_reaches_ordinary_reset_consumers(tmp_path, case, prose, accepted):
+    from programs.tests._hostpaths import require_repo
+    import professional_tb_gen as T
+    fixture = require_repo('vibe-ic-marketplace', 'plugins', 'vibe-ic', 'programs',
+                           'tests', 'fixtures', 'phase1_local', 'neutral_reset_phase_prose',
+                           'neutral_reset_phase_prose.md')
+    text = fixture.read_text().replace(_PHASE_SENTENCE, prose)
+    docs = _emit(tmp_path, text, clocks=('core_clock', 'entropy_clock'))
+    before = {p: p.read_bytes() for p in (tmp_path / 'phase1/generated_docs').glob('*.json')}
+    cp = subprocess.run([sys.executable, str(PROGRAMS / 'sdc_gen.py'), str(tmp_path), '--force'],
+                        capture_output=True, text=True)
+    assert cp.returncode == (0 if accepted else 1), cp.stdout + cp.stderr
+    if accepted:
+        cr = T._load_clock_reset(tmp_path, docs['L9_INTEGRATION_SPEC.json']['ports'])
+        assert cr['sync'] is False
+        assert cr['active_high'] is False
+        bindings = cr['domain_bindings']
+        assert {row['clock'] for row in bindings} == {'core_clock', 'entropy_clock'}
+        for row in bindings:
+            assert (row['assertion'], row['release'], row['release_clock'],
+                    row['release_stages'], row['polarity']) == (
+                        'asynchronous', 'synchronous', row['clock'], 2, 'active_low')
+        decks = list((tmp_path / 'phase2/stage1/fpga').glob('*.sdc'))
+        assert decks
+        for deck in decks:
+            emitted = deck.read_text()
+            assert 'release=synchronous to core_clock stages=2' in emitted
+            assert 'release=synchronous to entropy_clock stages=2' in emitted
+            assert 'set_false_path' not in emitted
+    else:
+        assert 'RESET_PHASE_SOURCE_ADMISSION_REFUSED' in cp.stdout + cp.stderr
+        with pytest.raises(ValueError, match='RESET_PHASE_SOURCE_ADMISSION_REFUSED'):
+            T._load_clock_reset(tmp_path, docs['L9_INTEGRATION_SPEC.json']['ports'])
+    assert all(p.read_bytes() == data for p, data in before.items())
+
+
+@pytest.mark.parametrize('prose,accepted', [
+    ('rst_n has two-stage synchronous release.', False),
+    ('rst_n has two-stage synchronous release to core_clock.', True),
+    ('rst_n has synchronous release to entropy_clock through 3 stages.', True),
+], ids=['shared_depth_conflict', 'core_depth_matches', 'entropy_depth_matches'])
+def test_prose_depth_is_checked_against_its_own_domain(tmp_path, prose, accepted):
+    text = FIXTURE.read_text().replace('clk_aux_i', 'entropy_clock').replace('clk_i', 'core_clock')
+    text = text.replace('| synchronous to entropy_clock | 2 |', '| synchronous to entropy_clock | 3 |')
+    docs = _emit(tmp_path, text + '\n' + prose, clocks=('core_clock', 'entropy_clock'))
+    if accepted:
+        cr, cp = _consume(tmp_path, docs)
+        assert cp.returncode == 0, cp.stdout + cp.stderr
+        assert {row['clock']: row['release_stages'] for row in cr['domain_bindings']} == {
+            'core_clock': 2, 'entropy_clock': 3}
+    else:
+        import professional_tb_gen as T
+        cp = subprocess.run([sys.executable, str(PROGRAMS / 'sdc_gen.py'), str(tmp_path), '--force'],
+                            capture_output=True, text=True)
+        assert cp.returncode == 1, cp.stdout + cp.stderr
+        with pytest.raises(ValueError, match='RESET_PHASE_SOURCE_ADMISSION_REFUSED'):
+            T._load_clock_reset(tmp_path, docs['L9_INTEGRATION_SPEC.json']['ports'])
+
+
+def test_current_prose_change_refuses_stale_generated_phase_values(tmp_path):
+    import professional_tb_gen as T
+    text = FIXTURE.read_text() + '\nrst_n has synchronous release through 2 stages.\n'
+    docs = _emit(tmp_path, text)
+    _, cp = _consume(tmp_path, docs)
+    assert cp.returncode == 0, cp.stdout + cp.stderr
+    before = {p: p.read_bytes() for p in (tmp_path / 'phase1/generated_docs').glob('*.json')}
+    source = tmp_path / 'input/docs/reset.md'
+    source.write_text(text.replace('through 2 stages', 'through 3 stages'))
+    cp = subprocess.run([sys.executable, str(PROGRAMS / 'sdc_gen.py'), str(tmp_path), '--force'],
+                        capture_output=True, text=True)
+    assert cp.returncode == 1, cp.stdout + cp.stderr
+    assert 'RESET_PHASE_SOURCE_ADMISSION_REFUSED' in cp.stdout + cp.stderr
+    with pytest.raises(ValueError, match='RESET_PHASE_SOURCE_ADMISSION_REFUSED'):
+        T._load_clock_reset(tmp_path, docs['L9_INTEGRATION_SPEC.json']['ports'])
+    assert all(p.read_bytes() == data for p, data in before.items())
