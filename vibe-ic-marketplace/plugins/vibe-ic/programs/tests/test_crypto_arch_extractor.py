@@ -151,3 +151,27 @@ def test_issue3288_full_block_scope_and_conflicts(text, expected):
     out = mod.extract_crypto_arch(text)
     assert out.get("latency_cycles_per_block") == expected
     assert ("latency_cycles_per_block_evidence" in out) == (expected is not None)
+
+def test_softwrapped_variant_list_does_not_choose_its_last_count():
+    for text in ("Modes use 56 / 66 /\n72 cycles per block.",
+                 "Modes use 56, 66,\n72 cycles per block."):
+        out = mod.extract_crypto_arch(text)
+        assert "latency_cycles_per_block" not in out, (text, out)
+        assert "latency_cycles_per_block_evidence" not in out, (text, out)
+
+
+def test_softwrapped_explicit_block_unit_preserves_source_evidence():
+    text = "Latency is 66 clock cycles\nper block."
+    out = mod.extract_crypto_arch(text)
+    assert out["latency_cycles_per_block"] == 66, out
+    assert out["latency_cycles_per_block_evidence"]["line"] == 1
+    assert out["latency_cycles_per_block_evidence"]["matched_token"] == "66 clock cycles\nper block"
+
+
+def test_variant_ranges_do_not_choose_their_last_count():
+    for text in ("Modes take 56 - 72 cycles per block.",
+                 "Modes take 56 to 72 cycles per block.",
+                 "Modes take 56–72 cycles per block."):
+        out = mod.extract_crypto_arch(text)
+        assert "latency_cycles_per_block" not in out, (text, out)
+        assert "latency_cycles_per_block_evidence" not in out, (text, out)

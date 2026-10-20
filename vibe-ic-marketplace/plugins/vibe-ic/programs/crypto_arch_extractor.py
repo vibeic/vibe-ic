@@ -70,7 +70,9 @@ _MESSAGE_BLOCK_RE = re.compile(
 _STATE_BITS_RE = re.compile(
     r"\b(\d+)\s*[-\s]?bit\s+state\b", re.IGNORECASE)
 _BLOCK_LATENCY_PATTERNS = (
-    re.compile(r"\b(\d+)\s+cycles?\s+per\s+block\b", re.IGNORECASE),
+    re.compile(
+        r"(?<![\w.+-])(\d+)\s+(?:clock\s+)?cycles?\s+per\s+"
+        r"(?:data\s+)?block\b", re.IGNORECASE),
     re.compile(
         r"\b(?:per[-\s]+block|block)\s+latency\s*(?:is|of|=|:)\s*"
         r"(\d+)\s+cycles?\b", re.IGNORECASE),
@@ -84,6 +86,9 @@ _BLOCK_LATENCY_PATTERNS = (
         r"\b(\d+)\s*[-\s]+cycle\s+latency\s+per\s+block\b",
         re.IGNORECASE),
 )
+_LATENCY_LIST_PREFIX_RE = re.compile(
+    r"\b\d+(?:\s*(?:/|,|-|–|—|\bor\b|\band\b|\bto\b)\s*\d+)*"
+    r"\s*(?:/|,|-|–|—|\bor\b|\band\b|\bto\b)\s*$", re.IGNORECASE)
 
 # v1.6.108 — key/nonce patterns
 _KEY_BITS_RE = re.compile(
@@ -235,13 +240,20 @@ def _scan_block_latency(text: str) -> Optional[Tuple[int, int, str]]:
     without a variant binding this scalar is left absent.
     """
     matches = []
-    for lineno, line in enumerate(text.split("\n"), start=1):
-        for pattern in _BLOCK_LATENCY_PATTERNS:
-            for match in pattern.finditer(line):
-                matches.append((int(match.group(1)), lineno, match.group(0)))
-    if not matches or len({value for value, _, _ in matches}) != 1:
+    for pattern_index, pattern in enumerate(_BLOCK_LATENCY_PATTERNS):
+        for match in pattern.finditer(text):
+            # A softwrap does not select the final list/range member. Keep
+            # paragraph boundaries, without an arbitrary character window.
+            prefix = re.split(r"\n[ \t]*\n", text[:match.start(1)])[-1]
+            if _LATENCY_LIST_PREFIX_RE.search(prefix):
+                return None
+            lineno = text.count("\n", 0, match.start()) + 1
+            matches.append((int(match.group(1)), lineno, match.group(0),
+                            pattern_index, match.start()))
+    if not matches or len({row[0] for row in matches}) != 1:
         return None
-    return matches[0]
+    # Preserve the existing line/pattern priority when counts agree.
+    return min(matches, key=lambda row: (row[1], row[3], row[4]))[:3]
 
 
 def _scan_rounds(text: str
