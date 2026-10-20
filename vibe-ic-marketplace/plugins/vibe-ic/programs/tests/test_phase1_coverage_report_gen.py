@@ -632,3 +632,16 @@ def test_pin_alias_auto_output_is_rediscovered_not_trusted(tmp_path):
     assert aliases == {"GPIO0/SCL"}
     assert _run(tmp_path).returncode == 0
     assert json.loads(auto_path.read_text()) == auto
+
+
+@pytest.mark.parametrize("text, expected", [
+    ("ACC_ID / id_bus / GPIO_0[0] / ALT_NAME", {"ACC_ID / id_bus / GPIO_0[0]"}),
+    ("ACC_ID / id_bus / GPIO_0[0] / ALT_NAME / alt_i", {"ACC_ID / id_bus / GPIO_0[0]", "ALT_NAME / alt_i"}),
+    ("**GPIO0/SCL**", {"GPIO0/SCL"}),
+])
+def test_pin_alias_legacy_bare_list(tmp_path, text, expected):
+    import phase1_coverage_report_gen as owner
+    _put_extracted(tmp_path, "spec.txt", text)
+    patterns = owner._autodiscover_patterns(tmp_path, persist=False)
+    assert {lit for lit, label in patterns["spec.txt"]
+            if label == "auto-discovered (pin_alias)"} == expected

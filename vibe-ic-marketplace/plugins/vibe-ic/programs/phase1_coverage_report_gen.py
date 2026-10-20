@@ -229,6 +229,8 @@ _AUTODISCOVERY_REGEX_FAMILIES = (
 # naming context. Keep the legacy standalone alias-list grammar; a bare
 # "ACC_ID / id_bus / GPIO_0[0]" remains a declaration without an L-doc lookup.
 _PIN_ALIAS_RX = dict(_AUTODISCOVERY_REGEX_FAMILIES)["pin_alias"]
+_PIN_ALIAS_LIST = re.compile(
+    r"[A-Z][A-Z0-9_]{1,20}(?:\s*/\s*[A-Za-z][A-Za-z0-9_\[\]]{1,30})+")
 _PIN_ALIAS_HEADER = re.compile(
     r"(?:pins?|signals?|ports?)(?:\s*/\s*(?:pins?|signals?|ports?|alias(?:es)?))?"
     r"(?:\s+(?:names?|labels?|identifiers?|alias(?:es)?))?"
@@ -269,9 +271,12 @@ def _pin_alias_literals(text: str):
             continue
         previous_cells = []
         alias_columns = set()
-        bare = re.sub(r"^\s*[-*+]\s+", "", line).strip().strip("`").rstrip(".;,")
-        if _PIN_ALIAS_RX.fullmatch(bare):
-            yield bare
+        bare = re.sub(r"^\s*[-*+]\s+", "", line).strip().strip("`*").rstrip(".;,")
+        if _PIN_ALIAS_LIST.fullmatch(bare):
+            # Preserve the old regex's literal segmentation even for longer
+            # declared lists; the context guard must not lose an obligation.
+            for match in _PIN_ALIAS_RX.finditer(bare):
+                yield match.group().strip()
             continue
         for match in _PIN_ALIAS_RX.finditer(line):
             prefix = line[:match.start()].rstrip("` ")
