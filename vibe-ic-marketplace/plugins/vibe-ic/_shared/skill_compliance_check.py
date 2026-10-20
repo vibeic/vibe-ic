@@ -957,6 +957,17 @@ def _encoding_native_source_error(payload: Dict[str, Any], receipt: Path) -> Opt
                 or script_rec['sha256'] != _receipt_digest(script)
                 or script_rec['text'] != script.read_text()):
             return 'native_script_not_current'
+        programs = Path(__file__).resolve().parent.parent / 'programs'
+        if str(programs) not in sys.path:
+            sys.path.insert(0,str(programs))
+        import rtl_hygiene_lint as driver
+        design = context.parent / 'design.json'
+        expected_script = driver._native_driver_script(
+            list(map(Path,native['files'])), native['top'], cfg['defines'], cfg['parameters'],
+            list(map(Path,dirs)), design,
+            keep_hierarchy=any(Path(p).suffix.lower()=='.sv' for p in native['files']))
+        if script_rec['text'] != expected_script:
+            return 'native_script_selected_configuration_disagrees'
         command = ['yosys', '-Q', '-s', str(script)]
         if native.get('native_command') != command:
             return 'native_command_not_this_invocation'
@@ -982,7 +993,7 @@ def _encoding_native_source_error(payload: Dict[str, Any], receipt: Path) -> Opt
                 or native['top'] not in json.loads(design.read_text())['modules']
                 or not (context.parent / 'native.log').is_file()):
             return 'native_output_not_this_invocation'
-    except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+    except (OSError, ValueError, KeyError, TypeError, AttributeError, ImportError) as exc:
         return 'native_proof_incomplete:' + str(exc)
     return None
 

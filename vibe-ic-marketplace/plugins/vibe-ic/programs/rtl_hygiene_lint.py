@@ -7043,6 +7043,36 @@ sys.exit(record['native_returncode'] if record['native_returncode'] is not None 
     return result
 
 
+def _native_driver_script(files, top, defines, parameters, include_dirs, native_json,
+                          *, keep_hierarchy=False):
+    """The actual producer's script grammar, shared with receipt admission."""
+    def quote(value):
+        return '"' + str(value).replace('\\', '\\\\').replace('"', '\\"') + '"'
+    sv = any(Path(p).suffix.lower() == '.sv' for p in files)
+    if sv:
+        read = 'read_slang ' + ('--keep-hierarchy ' if keep_hierarchy else '')
+        read += '--single-unit --no-synthesis-define --top ' + top
+        read += ' ' + ' '.join(['-G ' + p for p in parameters]
+                               + ['-D ' + d for d in defines]
+                               + ['-I ' + str(p) for p in include_dirs]
+                               + [str(p) for p in files])
+    else:
+        read = 'read_verilog -sv -nosynthesis ' + ' '.join(
+            ['-D' + d for d in defines] + ['-I' + str(p) for p in include_dirs]
+            + [quote(p) for p in files])
+    if keep_hierarchy:
+        return read + (f'; hierarchy -check -top {top}; proc; check -assert; '
+                       f'write_json {native_json}\n')
+    commands = [read]
+    if not sv:
+        for parameter in parameters:
+            name, value = parameter.split('=', 1)
+            commands.append(f'chparam -set {name} {value} {top}')
+    commands += [f'hierarchy -check -top {top}', 'proc', 'check -assert',
+                 'write_json ' + quote(native_json)]
+    return ';\n'.join(commands) + '\n'
+
+
 def _native_driver_view(files, top, defines, parameters, include_dirs, output_dir):
     """Elaborate the selected closure once; never accept an old JSON as proof.
 
@@ -7075,34 +7105,13 @@ def _native_driver_view(files, top, defines, parameters, include_dirs, output_di
                'include_dirs': [str(p) for p in include_dirs], 'input_sha256': before,
                'backend': 'not-launched', 'image': None,
                'native_returncode': None, 'transport_returncode': None}
-    def quote(value):
-        return '"' + str(value).replace('\\', '\\\\').replace('"', '\\"') + '"'
     # Use the native SystemVerilog frontend for selected .sv sources. Preserve
     # the caller's top, parameters and defines; neither frontend may silently
     # introduce SYNTHESIS. No fallback may turn an elaboration error into PASS.
-    if any(p.suffix.lower() == '.sv' for p in files):
-        read = 'read_slang --single-unit --no-synthesis-define --top ' + top
-        read += ' ' + ' '.join(['-G ' + p for p in parameters]
-                                + ['-D ' + d for d in defines]
-                                # Slang receives Yosys command tokens literally:
-                                # quoted paths become filenames with quote bytes.
-                                + ['-I ' + str(p) for p in include_dirs]
-                                + [str(p) for p in files])
-    else:
-        read = 'read_verilog -sv -nosynthesis ' + ' '.join(
-            ['-D' + d for d in defines]
-            # Yosys consumes the -I suffix literally, including any quote marks.
-            + ['-I' + str(p) for p in include_dirs] + [quote(p) for p in files])
-    commands = [read]
-    if not any(p.suffix.lower() == '.sv' for p in files):
-        for parameter in parameters:
-            name, value = parameter.split('=', 1)
-            commands.append(f'chparam -set {name} {value} {top}')
     native_json = work / 'design.json'
-    commands += [f'hierarchy -check -top {top}', 'proc', 'check -assert',
-                 'write_json ' + quote(native_json)]
     script = work / 'elaborate.ys'
-    atomic_write_text(script, ';\n'.join(commands) + '\n')
+    atomic_write_text(script, _native_driver_script(files, top, defines, parameters,
+                                                   include_dirs, native_json))
     try:
         if any(any(c.isspace() for c in str(p)) for p in include_dirs):
             raise ValueError('native Yosys -Idir cannot represent an include directory '

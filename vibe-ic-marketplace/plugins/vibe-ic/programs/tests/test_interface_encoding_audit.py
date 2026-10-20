@@ -51,6 +51,7 @@ endmodule
     'prior_context_correct_hash', 'outside_context_correct_hash',
     'embedded_context_disagrees', 'native_json_changed', 'prior_script_replay',
     'input_hash_forged', 'boolean_native_rc',
+    'coherent_foreign_top', 'coherent_foreign_define', 'coherent_foreign_parameter',
 ])
 def test_current_encoding_native_proof_refuses_context_replay(tmp_path, damage):
     prior = tmp_path / 'prior'
@@ -85,6 +86,16 @@ def test_current_encoding_native_proof_refuses_context_replay(tmp_path, damage):
             script.write_bytes(Path(old_payload['configuration']['native_script']['path']).read_bytes())
             cfg['native_script']['text'] = script.read_text()
             cfg['native_script']['sha256'] = hashlib.sha256(script.read_bytes()).hexdigest()
+        elif damage.startswith('coherent_foreign_'):
+            if damage == 'coherent_foreign_top':
+                cfg['top'] = native['top'] = payload['summary']['top_module'] = 'producer'
+            elif damage == 'coherent_foreign_define':
+                cfg['defines'] = native['defines'] = ['NOT_IN_THE_NATIVE_COMMAND']
+            else:
+                cfg['parameters'] = native['parameters'] = ['NOT_IN_THE_NATIVE_COMMAND=1']
+            cfg['native'] = native
+            context.write_text(json.dumps(native,indent=2)+'\n')
+            cfg['native_context_sha256'] = hashlib.sha256(context.read_bytes()).hexdigest()
         else:
             if damage == 'input_hash_forged':
                 native['input_sha256'] = {k:'0'*64 for k in native['input_sha256']}

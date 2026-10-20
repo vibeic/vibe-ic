@@ -978,10 +978,8 @@ def _active_native_view(modules, headers, files, top, defines, parameters,
             context['input_sha256'] = hashes()
             native_json = native_dir / 'design.json'
             script = native_dir / 'elaborate.ys'
-            script.write_text('read_slang --keep-hierarchy --single-unit --no-synthesis-define --top ' + top +
-                ' ' + ' '.join(['-G ' + p for p in parameters] + ['-D ' + d for d in defines] +
-                                ['-I ' + str(p) for p in dirs] + list(map(str, files))) +
-                f'; hierarchy -check -top {top}; proc; check -assert; write_json {native_json}\n')
+            script.write_text(lint._native_driver_script(
+                files, top, defines, parameters, dirs, native_json, keep_hierarchy=True))
             result = lint._native_driver_run(script, native_dir, dirs, context)
             (native_dir / 'native.log').write_text(result.stdout + result.stderr)
             if result.returncode != 0:
