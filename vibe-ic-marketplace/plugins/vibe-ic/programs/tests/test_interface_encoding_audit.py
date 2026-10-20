@@ -731,6 +731,97 @@ def _population(report):
     )
 
 
+def _counter_projection_design(kind):
+    width = 5 if kind == 'whole' else 3
+    projected = 'state' if kind == 'whole' else 'state[6:4]'
+    updates = "if (rst) state <= 5'd0; else state <= state + {4'd0, en};"
+    if kind == 'xor':
+        projected = 'state[6:4] ^ (state[6:4] >> 1)'
+    elif kind == 'masked':
+        projected = "state[6:4] & 3'd3"
+    elif kind == 'mixed':
+        updates = "if (rst) state <= 5'd0; else if (en) state <= state ^ (state >> 1); else state <= state + 5'd1;"
+    elif kind == 'partial':
+        updates += ' state[2] <= en;'
+    elif kind == 'constant':
+        updates = "if (rst) state <= 5'd0; else state <= 5'd4;"
+    elif kind == 'computed_slice':
+        projected = 'state[6-0:4]'
+    return {'design.v': f'''
+module counter_source(input clk, rst, en, output [{width-1}:0] value);
+reg [6:2] state;
+always @(posedge clk) begin {updates} end
+assign value = {projected};
+endmodule
+module count_sink(input [{width-1}:0] value, output reached);
+assign reached = (value == {width}'d4);
+endmodule
+module counter_projection(input clk, rst, en, output reached);
+wire [{width-1}:0] observed;
+counter_source src(.clk(clk), .rst(rst), .en(en), .value(observed));
+count_sink dst(.value(observed), .reached(reached));
+endmodule
+'''}
+
+
+@pytest.mark.parametrize('kind', ['whole', 'slice'])
+def test_binary_counter_alias_and_fixed_slice_keep_numeric_encoding(tmp_path, kind):
+    res, report = run_cli(tmp_path, _counter_projection_design(kind), 'counter_projection')
+    assert res.returncode == 0, res.stderr
+    row, = [x for x in report['interfaces'] if x['wire_name'] == 'observed']
+    assert (row['producer_encoding'], row['consumer_encoding'], row['status']) == ('BINARY', 'BINARY', 'MATCH')
+    assert report['discovery']['complete'] is True
+
+
+@pytest.mark.parametrize('kind', ['xor', 'masked', 'mixed', 'partial', 'constant', 'computed_slice'])
+def test_counter_projection_does_not_invent_encoding_for_other_dataflows(tmp_path, kind):
+    res, report = run_cli(tmp_path, _counter_projection_design(kind), 'counter_projection')
+    assert res.returncode == 0, res.stderr
+    row, = [x for x in report['interfaces'] if x['wire_name'] == 'observed']
+    assert (row['producer_encoding'], row['status']) == ('UNKNOWN', 'UNKNOWN')
+
+
+@pytest.mark.parametrize('kind,rc', [('whole', 0), ('slice', 0), ('xor', 1)])
+def test_counter_projection_native_values_and_gray_transform_control(tmp_path, kind, rc):
+    rtl = tmp_path / 'rtl'
+    rtl.mkdir()
+    source = rtl / 'design.v'
+    source.write_text(_counter_projection_design(kind)['design.v'])
+    shift = 0 if kind == 'whole' else 2
+    tb = tmp_path / 'probe.v'
+    tb.write_text(f'''
+module probe;
+reg clk=0, rst=1, en=0;
+wire reached;
+integer expected=0, i;
+counter_projection dut(.clk(clk), .rst(rst), .en(en), .reached(reached));
+task tick;
+begin
+ #5; clk=1; #1;
+ if (rst) expected=0; else expected=(expected+en)&31;
+ if (dut.observed !== (expected >> {shift}))
+   $fatal(1, "PROJECTION_VALUE expected=%0d observed=%0d", expected >> {shift}, dut.observed);
+ if (reached !== ((expected >> {shift}) == 4)) $fatal(1, "consumer value mismatch");
+ #4; clk=0;
+end
+endtask
+initial begin
+ tick();
+ for (i=0;i<256;i=i+1) begin rst=(i%37==0); en=(i%3!=0); tick(); end
+ $display("PROJECTION_NATIVE_PASS 257"); $finish;
+end
+endmodule
+''')
+    executable = tmp_path / 'probe.vvp'
+    compile_result = subprocess.run(['iverilog', '-g2012', '-s', 'probe', '-o',
+                                     str(executable), str(source), str(tb)], capture_output=True, text=True)
+    assert compile_result.returncode == 0, compile_result.stderr
+    actual = subprocess.run(['vvp', str(executable)], capture_output=True, text=True)
+    assert actual.returncode == rc, actual.stdout + actual.stderr
+    assert ('PROJECTION_NATIVE_PASS 257' in actual.stdout) == (rc == 0)
+    assert ('PROJECTION_VALUE expected=2 observed=3' in actual.stdout) == (kind == 'xor')
+
+
 def test_nested_parameter_expression_keeps_complete_hierarchy_population(tmp_path):
     nested_res, nested = run_cli(
         tmp_path / "nested", _nested_parameter_design("$clog2(N + 1)"),

@@ -434,6 +434,73 @@ def parse_verilog_literal(lit: str) -> Optional[Tuple[int, int]]:
     return (width, value)
 
 
+def _binary_counter_projection(body: str, signal_name: str) -> Optional[EncodingClassification]:
+    """Recognize one fixed projection of an explicitly numeric counter.
+
+    This is deliberately a closed grammar: one continuous output driver,
+    literal state bounds, whole-state arithmetic updates and literal resets.
+    Arbitrary aliases, transforms and partially written storage stay UNKNOWN.
+    The caller supplies the native-selected module body.
+    """
+    clean = lexical_mask(body, attributes=True)
+    name = re.escape(signal_name)
+    drivers = list(re.finditer(r'\bassign\s+' + name + r'\s*=\s*([^;]+);', clean))
+    writes = list(re.finditer(r'\b' + name + r'\s*(?:\[[^]]+\]\s*)?(?:<=|=(?!=))', clean))
+    if len(drivers) != 1 or len(writes) != 1:
+        return None
+    projection = re.fullmatch(
+        r'\s*([A-Za-z_]\w*)\s*(?:\[\s*(\d+)\s*(?::\s*(\d+)\s*)?\])?\s*',
+        drivers[0].group(1))
+    if not projection:
+        return None
+    state, high, low = projection.groups()
+    if state == signal_name:
+        return None
+    state_name = re.escape(state)
+    declarations = list(re.finditer(
+        r'\b(?:reg|logic|bit)\s*\[\s*(\d+)\s*:\s*(\d+)\s*\]\s*' +
+        state_name + r'\s*;', clean))
+    if len(declarations) != 1:
+        return None
+    left, right = map(int, declarations[0].groups())
+    if high is not None:
+        start, end = int(high), int(low if low is not None else high)
+        if not (min(left, right) <= start <= max(left, right)
+                and min(left, right) <= end <= max(left, right)):
+            return None
+        if low is not None and (start > end) != (left > right) and start != end:
+            return None
+    # Reject partial/blocking drivers, unknown write forms and child drivers.
+    assignments = list(re.finditer(
+        r'\b' + state_name + r'\s*(\[[^]]+\])?\s*(<=|=(?!=))\s*([^;]+);', clean))
+    if not assignments or re.search(r'\b' + state_name + r'\s*(?:\+\+|--|[+\-*/&|^]=)', clean):
+        return None
+    if re.search(r'\.\w+\s*\(\s*' + state_name + r'\s*(?:\[|\))', clean):
+        return None
+    literal = r"(?:\d+\s*'\s*[sS]?[bB][01_]+|\d+\s*'\s*[sS]?[oO][0-7_]+|\d+\s*'\s*[sS]?[dD][0-9_]+|\d+\s*'\s*[sS]?[hH][0-9a-fA-F_]+|'[01]|\d+)"
+    atom = r'(?:' + literal + r'|[A-Za-z_]\w*(?:\s*\[\s*\d+\s*(?::\s*\d+\s*)?\])?)'
+    term = r'(?:' + atom + r'|\{\s*' + atom + r'(?:\s*,\s*' + atom + r')+\s*\})'
+    update = re.compile(state_name + r'\s*[+\-]\s*' + term)
+    arithmetic = []
+    for assignment in assignments:
+        selected, operator, expression = assignment.groups()
+        if selected is not None or operator != '<=':
+            return None
+        expression = expression.strip()
+        if update.fullmatch(expression):
+            arithmetic.append(assignment)
+        elif not re.fullmatch(literal, expression):
+            return None
+    if not arithmetic:
+        return None
+    line = clean.count('\n', 0, drivers[0].start()) + 1
+    update_lines = ','.join(str(clean.count('\n', 0, a.start()) + 1) for a in arithmetic)
+    return EncodingClassification(
+        'BINARY',
+        f'fixed counter projection: {signal_name} = {projection.group(0).strip()}; '
+        f'{state}[{left}:{right}] whole-state arithmetic at line(s) {update_lines}', line)
+
+
 def classify_producer_encoding(body: str, signal_name: str) -> EncodingClassification:
     """
     Classify how a signal is produced:
@@ -507,6 +574,9 @@ def classify_producer_encoding(body: str, signal_name: str) -> EncodingClassific
                 f"decimal/hex constant assignment to {signal_name}",
                 lineno)
 
+    projection = _binary_counter_projection(body, signal_name)
+    if projection is not None:
+        return projection
     return EncodingClassification("UNKNOWN", "encoding could not be determined", 0)
 
 
