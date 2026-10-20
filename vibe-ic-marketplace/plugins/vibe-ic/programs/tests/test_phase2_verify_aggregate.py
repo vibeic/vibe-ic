@@ -179,3 +179,18 @@ def test_hygiene_child_uses_project_context_without_hiding_findings(tmp_path, mo
         if kind == "warning":
             assert "0 errors, 1 warnings, 0 info" in row.stdout_tail, row.as_dict()
     assert "no safely parsed module" not in row.stdout_tail + row.stderr_tail
+
+
+def test_project_hygiene_child_keeps_native_artifacts_in_project(tmp_path, monkeypatch):
+    project = _native_project(tmp_path)
+    caller = tmp_path / "caller"
+    caller.mkdir(mode=0o555)
+    monkeypatch.chdir(caller)
+    try:
+        row = mod._run_check("rtl_hygiene_lint", "rtl_hygiene_lint.py", [],
+                             Path("../project"))
+        assert row.exit_code == 0, row.as_dict()
+        assert len(list(project.glob("native-elaboration-*/context.json"))) == 1
+        assert list(caller.iterdir()) == []
+    finally:
+        caller.chmod(0o755)

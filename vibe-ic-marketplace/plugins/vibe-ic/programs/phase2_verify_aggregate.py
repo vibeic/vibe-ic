@@ -136,6 +136,7 @@ def scan_artifacts(project_dir: Path, target: str | None = None) -> List[Artifac
 
 def _run_check(label: str, name: str, extra_args: List[str],
                project_dir: Path) -> CheckResult:
+    project_dir = project_dir.resolve()
     rtl_dir = project_dir / "phase2" / "stage1" / "rtl"
     cmd = [sys.executable, str(PROGRAMS_DIR / name)]
     if name == "rtl_precheck_gate.py":
@@ -152,7 +153,8 @@ def _run_check(label: str, name: str, extra_args: List[str],
         raise ValueError(f"no child CLI adapter for {name}")
     try:
         proc = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=180, check=False)
+            cmd, capture_output=True, text=True, timeout=180, check=False,
+            cwd=project_dir)
         return CheckResult(
             name=label, exit_code=proc.returncode,
             stdout_tail=proc.stdout[-500:], argv=cmd, stderr_tail=proc.stderr[-1000:],
