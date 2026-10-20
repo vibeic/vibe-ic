@@ -11,6 +11,13 @@ Pairs with provenance_logger.py. A flow gate asks:
 
 If yes → PASS. If no (no entry, wrong tool, hash mismatch, no file) → FAIL.
 
+For a canonical synthesis alias selected by the native post-map handoff, a
+Yosys-only allow-list names the immutable synthesis PARENT. The existing native
+handoff validator must prove the current Yosys → OpenROAD transform; both real
+writer records must bind, and ``--require-measured`` applies to both runs. The
+reported terminal writer remains OpenROAD. Other outputs and tool filters keep
+their ordinary terminal-writer meaning.
+
 ``--require-measured`` adds the question this check could never ask
 -------------------------------------------------------------------
 Everything above binds an ARTEFACT to a RUN. It has never asked whether that
@@ -193,6 +200,99 @@ def _find_entry(entries: List[dict], out_rel: str,
     return matches[0][1], []
 
 
+def _synthesis_chain(project: Path, entries: List[dict], out_rel: str,
+                     allowed: set, cache: dict) -> dict | None:
+    """Bind a selected native post-map child to its required Yosys parent.
+
+    This route is only for the canonical synthesis aliases and a Yosys-only
+    caller. Ordinary tool filters retain their terminal-writer meaning. The
+    existing native handoff validator, not a ledger label or a newer hash,
+    proves the transform before the two actual writers are consumed.
+    """
+    if not allowed or not allowed <= {"yosys", "yosys-abc"}:
+        return None
+    import _path_layout as layout
+    directory = layout.synth_dir(project)
+    if (project / out_rel).parent != directory:
+        return None
+    canonical = str((directory / "netlist.v").relative_to(project))
+    try:
+        mapped = layout.mapped_synth_netlist(project)
+    except (OSError, ValueError, TypeError, AttributeError):
+        mapped = None
+    aliases = {canonical}
+    if mapped is not None:
+        aliases.add(str(mapped.relative_to(project)))
+    if out_rel not in aliases:
+        return None
+    try:
+        doc = json.loads((directory / "synth_inputs.json").read_text())
+        binding = (doc.get("librelane_synthesis") or {}) if isinstance(doc, dict) else {}
+        child = binding.get("post_map") if isinstance(binding, dict) else None
+    except (OSError, ValueError, TypeError):
+        child = None
+    try:
+        switch = json.loads((project / "phase3/librelane_switch.json").read_text())
+        requested = isinstance(switch, dict) and switch.get("post_map_repair", "off") != "off"
+    except (OSError, ValueError):
+        requested = False
+    if child is None and not requested:
+        return None
+    key = tuple(sorted(allowed))
+    if key in cache:
+        return cache[key]
+    try:
+        import synth_handoff_netlist_check as handoff
+        native = handoff.bound_handoff(project)
+        if not native or native.get("verdict") != "PASS":
+            detail = "; ".join((native or {}).get("findings") or ["native handoff absent"])
+            raise ValueError(detail)
+        if native.get("producer") != "LibreLane.Yosys.Synthesis -> Vibeic.PostMapRepair":
+            raise ValueError("requested post-map handoff has no verified native transform")
+        parent = Path(native["parent"])
+        terminal = Path(native["native"])
+        parent_rel = str(parent.relative_to(project))
+        terminal_rel = str(terminal.relative_to(project))
+        verified_aliases = {str(Path(native[name]).relative_to(project))
+                            for name in ("canonical", "mapped")}
+        if out_rel not in verified_aliases:
+            raise ValueError("output is not a verified post-map synthesis alias")
+        parent_sha = _sha256_file(parent)
+        parent_entry, reasons = _find_entry(entries, parent_rel, allowed, parent_sha, project)
+        if parent_entry is None:
+            raise ValueError("native Yosys parent: " + "; ".join(reasons))
+        declared = parent_entry.get("outputs", {}).get(parent_rel)
+        if declared is None:
+            declared = next((value for value in parent_entry.get("outputs", {}).values()
+                             if _bare_digest(value) == _bare_digest(parent_sha)), None)
+        if not parent_sha or _bare_digest(declared) != _bare_digest(parent_sha):
+            raise ValueError("native Yosys parent provenance hash mismatch")
+        # A generic OpenROAD record is not a post-map invocation. Its native
+        # identity has been checked above; now require its real publisher row.
+        terminal_rows = [row for row in entries
+                         if row.get("record") == "artefact"
+                         and row.get("produced_by") == "Vibeic.PostMapRepair"]
+        terminal_sha = _sha256_file(terminal)
+        terminal_entry, reasons = _find_entry(
+            terminal_rows, out_rel, {"openroad"}, terminal_sha, project)
+        if terminal_entry is None:
+            raise ValueError("native post-map child: " + "; ".join(reasons))
+        result = {"entry": terminal_entry, "parent_entry": parent_entry,
+                  "evidence": {
+                      "contract": "verified_native_synthesis_postmap_chain",
+                      "allowed_tools_scope": "native_yosys_parent",
+                      "parent": {"path": parent_rel, "sha256": parent_sha,
+                                 "tool": parent_entry["tool"]},
+                      "child": {"path": terminal_rel, "sha256": terminal_sha,
+                                "tool": terminal_entry["tool"],
+                                "produced_by": terminal_entry["produced_by"]},
+                      "native_handoff": native["producer"]}}
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        result = {"error": "native synthesis lineage invalid: " + str(exc)}
+    cache[key] = result
+    return result
+
+
 def main(argv: List[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[1])
     p.add_argument("project_dir")
@@ -296,6 +396,7 @@ def main(argv: List[str] | None = None) -> int:
     #: Artefacts whose claimed witness the flow-log reader may not judge
     #: (instrument_calibration's contract: NOT_MEASURED, never a FAIL).
     uncalibrated: List[str] = []
+    synthesis_chains: dict = {}
 
     for out_rel_pattern, tools_csv in zip(args.output, args.tool):
         allowed = {t.strip() for t in tools_csv.split(",") if t.strip()}
@@ -341,8 +442,20 @@ def main(argv: List[str] | None = None) -> int:
             disk_hash = _sha256_file(abs_out)
 
             # Find a matching entry
-            entry, reasons = _find_entry(entries, out_rel, allowed, disk_hash,
-                                          project)
+            chain = _synthesis_chain(project, entries, out_rel, allowed, synthesis_chains)
+            parent_entry = None
+            if chain is not None:
+                if "error" in chain:
+                    check["reasons"].append(chain["error"])
+                    report["checks"].append(check)
+                    overall_ok = False
+                    continue
+                entry, reasons = chain["entry"], []
+                parent_entry = chain["parent_entry"]
+                check["synthesis_lineage"] = json.loads(json.dumps(chain["evidence"]))
+            else:
+                entry, reasons = _find_entry(entries, out_rel, allowed, disk_hash,
+                                              project)
             if entry is None:
                 check["reasons"].extend(reasons)
                 report["checks"].append(check)
@@ -380,10 +493,11 @@ def main(argv: List[str] | None = None) -> int:
             # miss below: a run that states it measured nothing is a FAIL
             # whether or not its witness can be judged.
             unjudged = None
-            if _tool_log_provenance.claims_witness(entry):
-                ok, why = _tool_log_provenance.verify_witness(entry, project)
-                if ok == _tool_log_provenance.UNCALIBRATED:
-                    unjudged = why
+            for source in [entry] + ([parent_entry] if parent_entry is not None else []):
+                if _tool_log_provenance.claims_witness(source):
+                    ok, why = _tool_log_provenance.verify_witness(source, project)
+                    if ok == _tool_log_provenance.UNCALIBRATED:
+                        unjudged = why
 
             # ── THE MEASUREMENT QUESTION, asked where the binding is
             # decided. By here the artefact IS bound to an exit-0 run by this
@@ -397,11 +511,20 @@ def main(argv: List[str] | None = None) -> int:
                     "not_measured_class": meas.reason_class,
                     "not_measured_reason": meas.reason,
                 }
-                if meas.hard_miss:
+                parent_meas = (_mcp_measurement.from_provenance_entry(parent_entry)
+                               if parent_entry is not None else None)
+                if parent_meas is not None:
+                    check["synthesis_lineage"]["parent"]["measurement"] = {
+                        "declared": parent_meas.declared, "measured": parent_meas.measured,
+                        "not_measured_class": parent_meas.reason_class,
+                        "not_measured_reason": parent_meas.reason}
+                hard = meas if meas.hard_miss else (
+                    parent_meas if parent_meas is not None and parent_meas.hard_miss else None)
+                if hard is not None:
                     check["status"] = "FAIL"
                     check["reasons"].append(
                         f"the run bound to this artefact states it measured "
-                        f"NOTHING [{meas.reason_class}]: {meas.reason} — the "
+                        f"NOTHING [{hard.reason_class}]: {hard.reason} — the "
                         f"artefact exists and the tool exited 0, and neither "
                         f"is evidence the work was done")
                     report["checks"].append(check)
@@ -419,12 +542,13 @@ def main(argv: List[str] | None = None) -> int:
                 continue
 
             if args.require_measured:
-                if meas.undeclared:
+                if meas.undeclared or (parent_meas is not None and parent_meas.undeclared):
                     # NOT a failure and NOT a pass. See the module docstring.
                     check["status"] = "UNMEASURED"
                     check["reasons"].append(
                         f"the run bound to this artefact declares no "
-                        f"measurement record, so whether {entry.get('tool')} "
+                        f"measurement record, so whether "
+                        f"{(parent_entry if parent_meas is not None and parent_meas.undeclared else entry).get('tool')} "
                         f"performed its work is not stated anywhere — "
                         f"unmeasured, which is neither measured nor failed")
                     check["tool"] = entry.get("tool")

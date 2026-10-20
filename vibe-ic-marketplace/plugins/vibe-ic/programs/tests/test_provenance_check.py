@@ -124,3 +124,155 @@ def test_logger_and_checker_roundtrip(tmp_path):
     ], check=True, timeout=15)
     r = _run_check(str(tmp_path), "--output", "out.txt", "--tool", "echo")
     assert r.returncode == 0, r.stdout + r.stderr
+
+
+# These are consumer contract fixtures, not native EDA measurements. The native
+# handoff validator has its own transport tests; real retained producer/consumer
+# controls additionally exercise it without replacing any native validation.
+import pytest  # noqa: E402
+import provenance_check as pc  # noqa: E402
+import synth_handoff_netlist_check as handoff  # noqa: E402
+
+
+@pytest.fixture
+def synthesis_chain(tmp_path, monkeypatch):
+    p = tmp_path / "project"
+    rels = {
+        "parent": "phase3/librelane/02-yosys-synthesis/top.nl.v",
+        "native": "phase3/librelane/postmap/01-vibeic-postmaprepair/top.nl.v",
+        "canonical": "phase2/stage2/synth/netlist.v",
+        "mapped": "phase2/stage2/synth/top_synth.v",
+    }
+    for name, rel in rels.items():
+        path = p / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("parent\n" if name == "parent" else "post-map child\n")
+    (p / "phase2/stage2/synth/synth_inputs.json").write_text(json.dumps({
+        "netlist": "top_synth.v", "librelane_synthesis": {"post_map": {"fixture": True}}}))
+    (p / "phase3/librelane_switch.json").write_text(json.dumps({"post_map_repair": "pre_placement"}))
+    rows = [
+        {"timestamp": "2026-10-20T00:00:00Z", "record": "artefact", "tool": "yosys",
+         "exit_code": 0, "outputs": {rels["parent"]: _sha(p / rels["parent"])},
+         "measurement": {"schema": "mcp-eda/measurement/1", "measured": True}},
+        {"timestamp": "2026-10-20T00:00:01Z", "record": "artefact", "tool": "openroad",
+         "produced_by": "Vibeic.PostMapRepair", "exit_code": 0,
+         "outputs": {rels[k]: _sha(p / rels[k]) for k in ("canonical", "mapped")},
+         "measurement": {"schema": "mcp-eda/measurement/1", "measured": True}},
+    ]
+    native = {"verdict": "PASS", "producer": "LibreLane.Yosys.Synthesis -> Vibeic.PostMapRepair",
+              **{k: str(p / v) for k, v in rels.items()}}
+    calls = []
+    def validate(project):
+        assert project == p
+        calls.append(project)
+        return native
+    monkeypatch.setattr(handoff, "bound_handoff", validate)
+    def run(tools="yosys,yosys-abc", output=None, pnr=False):
+        (p / "provenance.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows))
+        report = tmp_path / "report.json"
+        args = [str(p), "--tool", tools, "--require-measured", "--json", str(report)]
+        args += ["--pnr-netlist"] if pnr else ["--output", output or rels["canonical"]]
+        rc = pc.main(args)
+        return rc, json.loads(report.read_text())
+    return p, rels, rows, native, calls, run
+
+
+@pytest.mark.parametrize("pnr", [False, True])
+def test_native_synthesis_chain_keeps_both_writer_identities(synthesis_chain, pnr):
+    _, _, _, _, calls, run = synthesis_chain
+    rc, report = run(pnr=pnr)
+    assert rc == 0
+    assert {row["status"] for row in report["checks"]} == {"PASS"}
+    assert {row["tool"] for row in report["checks"]} == {"openroad"}
+    for row in report["checks"]:
+        chain = row["synthesis_lineage"]
+        assert chain["parent"]["tool"] == "yosys"
+        assert chain["child"]["produced_by"] == "Vibeic.PostMapRepair"
+        assert chain["allowed_tools_scope"] == "native_yosys_parent"
+    assert len(calls) == 1  # Fresh per analysis, shared only by the two aliases.
+    assert run(pnr=pnr)[0] == 0
+    assert len(calls) == 2
+
+
+@pytest.mark.parametrize("damage", ["missing_parent", "parent_tool", "parent_hash", "child_tool",
+                                    "child_publisher", "child_exit", "child_hash", "missing_child",
+                                    "native_handoff", "native_producer"])
+def test_native_synthesis_chain_refuses_a_broken_link(synthesis_chain, damage):
+    _, _, rows, native, _, run = synthesis_chain
+    if damage == "missing_parent":
+        rows.pop(0)
+    elif damage == "parent_tool":
+        rows[0]["tool"] = "foreign"
+    elif damage == "parent_hash":
+        rows[0]["outputs"] = {key: "sha256:" + "0" * 64 for key in rows[0]["outputs"]}
+    elif damage == "child_tool":
+        rows[1]["tool"] = "yosys"  # Relabelling OpenROAD cannot satisfy the parent allow-list.
+    elif damage == "child_publisher":
+        rows[1]["produced_by"] = "unrelated.OpenROAD"
+    elif damage == "child_exit":
+        rows[1]["exit_code"] = 1
+    elif damage == "child_hash":
+        rows[1]["outputs"] = {key: "sha256:" + "0" * 64 for key in rows[1]["outputs"]}
+    elif damage == "missing_child":
+        rows.pop(1)
+    elif damage == "native_handoff":
+        native.update(verdict="FAIL", findings=["current native input changed"])
+    elif damage == "native_producer":
+        native["producer"] = "unrelated.OpenROAD"
+    rc, report = run()
+    assert rc == 1
+    assert {row["status"] for row in report["checks"]} == {"FAIL"}
+
+
+@pytest.mark.parametrize("writer", [0, 1])
+@pytest.mark.parametrize("measurement,expected_rc,status", [
+    ({"schema": "mcp-eda/measurement/1", "measured": False,
+      "not_measured_class": "TOOL_DID_NOT_RUN", "not_measured_reason": "no work"}, 1, "FAIL"),
+    (None, 0, "UNMEASURED"),
+])
+def test_native_synthesis_chain_measures_both_runs(synthesis_chain, writer, measurement, expected_rc, status, capsys):
+    _, _, rows, _, _, run = synthesis_chain
+    if measurement is None:
+        del rows[writer]["measurement"]
+    else:
+        rows[writer]["measurement"] = measurement
+    rc, report = run()
+    assert rc == expected_rc
+    assert {row["status"] for row in report["checks"]} == {status}
+    if status == "UNMEASURED":
+        assert "INCOMPLETE:" in capsys.readouterr().out
+
+
+def test_native_synthesis_chain_does_not_broaden_generic_tool_filters(synthesis_chain):
+    p, _, rows, _, calls, run = synthesis_chain
+    rel = "phase3/stage3/pnr/other.v"
+    path = p / rel
+    path.parent.mkdir(parents=True)
+    path.write_text("post-map child\n")
+    rows[1]["outputs"][rel] = _sha(path)
+    rc, report = run(output=rel)
+    assert rc == 1
+    assert report["checks"][0]["status"] == "FAIL"
+    assert len(calls) == 0
+
+
+def test_native_synthesis_chain_preserves_terminal_tool_mode(synthesis_chain):
+    _, _, _, _, calls, run = synthesis_chain
+    rc, report = run(tools="openroad")
+    assert rc == 0
+    assert {row["status"] for row in report["checks"]} == {"PASS"}
+    assert len(calls) == 0
+
+
+@pytest.mark.parametrize("verified,expected_rc,status", [(False, 1, "FAIL"),
+    (pc._tool_log_provenance.UNCALIBRATED, 0, "NOT_MEASURED")])
+def test_native_synthesis_chain_preserves_parent_witness_disposition(
+        synthesis_chain, monkeypatch, verified, expected_rc, status, capsys):
+    _, _, rows, _, _, run = synthesis_chain
+    monkeypatch.setattr(pc._tool_log_provenance, "claims_witness", lambda row: row.get("tool") == "yosys")
+    monkeypatch.setattr(pc._tool_log_provenance, "verify_witness", lambda row, project: (verified, "controlled reader result"))
+    rc, report = run()
+    assert rc == expected_rc
+    assert {row["status"] for row in report["checks"]} == {status}
+    if status == "NOT_MEASURED":
+        assert "INCOMPLETE:" in capsys.readouterr().out
