@@ -24,7 +24,9 @@ def clock_project(tmp_path, monkeypatch):
               "create_clock -name system -period 12 [get_ports tick]\n")
     tech = put(tmp_path, "input/pdk/tech.lef", "VERSION 5.8 ;\nEND LIBRARY\n")
     cell = put(tmp_path, "input/pdk/cell.lef", "MACRO neutral\nEND neutral\n")
-    pdk = SimpleNamespace(name="open_fixture", tech_lef=str(tech), cell_lef=str(cell), macro_lefs=[])
+    liberty = put(tmp_path, "input/pdk/active.lib", "library(neutral) {}\n")
+    pdk = SimpleNamespace(name="open_fixture", tech_lef=str(tech), cell_lef=str(cell),
+                          liberty=str(liberty), macro_lefs=[])
     def native(project, tool, args, log):
         Path(log).write_text("CLOCK_PLAN_PDK open_fixture\nCLOCK_PLAN_NATIVE system|12|tick\nCLOCK_PLAN_DONE\n")
         return 0, {"rc": 0, "argv": [tool, *args]}

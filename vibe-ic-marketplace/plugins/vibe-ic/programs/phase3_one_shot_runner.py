@@ -59929,6 +59929,9 @@ def emit_clock_plan(project: Path, clock_plan: Path, primary_def: Path,
                               _chip_path_requests_pad_ring(project) else None)
                 refusal = _pc.clock_plan_receipt_lef_refusal(
                     existing.get("current"), pdk, io_context=io_context)
+                if not refusal:
+                    refusal = _pc.clock_plan_receipt_liberty_refusal(
+                        existing.get("current"), pdk)
                 required_inputs = ["floorplan", "recipe", "sdc_0"]
                 if pdk is None:
                     # Direct legacy callers do not carry the resolved PDK;

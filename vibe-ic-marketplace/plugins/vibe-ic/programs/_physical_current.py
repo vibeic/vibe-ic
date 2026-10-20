@@ -43,8 +43,8 @@ def native_image(project, tool):
     return resolve_image(Path(project))
 
 
-def lef_entries(project, paths, *, image=None):
-    """Hash image-owned LEFs in that image, and mounted project LEFs locally.
+def _pdk_entries(project, paths, *, image=None, view="LEF"):
+    """Hash image-owned PDK views there, and mounted project views locally.
 
     A same-named host file is not evidence about an image-owned PDK. Read
     raw bytes without copying or rewriting the PDK into the host namespace.
@@ -65,22 +65,30 @@ def lef_entries(project, paths, *, image=None):
         argv = native_argv(project, "python3", ["-c", code, *map(str, external)], image=image)
         cp = run_container(argv, probe_deadline_s=60)
         if cp.returncode:
-            raise ValueError(f"CURRENT_IMAGE_LEF_UNAVAILABLE: {image}: {cp.stderr[-1000:]}")
+            raise ValueError(f"CURRENT_IMAGE_{view}_UNAVAILABLE: {image}: {cp.stderr[-1000:]}")
         try:
             # The image's normal --skip entry point emits startup diagnostics
             # before the program's single JSON line. Keep that front door.
             rows = json.loads(cp.stdout.strip().splitlines()[-1])
             if not isinstance(rows, list) or [row["path"] for row in rows] != list(map(str, external)):
-                raise ValueError("image LEF readback does not match requested paths")
+                raise ValueError(f"image {view} readback does not match requested paths")
             for row in rows:
                 if (not isinstance(row.get("bytes"), int) or row["bytes"] <= 0
                         or not re.fullmatch(r"[0-9a-f]{64}", str(row.get("sha256", "")))):
-                    raise ValueError("image LEF readback has no measured bytes/hash")
+                    raise ValueError(f"image {view} readback has no measured bytes/hash")
                 measured[row["path"]] = dict(row, image=image)
         except (ValueError, TypeError, KeyError, IndexError) as exc:
-            raise ValueError(f"CURRENT_IMAGE_LEF_UNAVAILABLE: {image}: {exc}") from exc
+            raise ValueError(f"CURRENT_IMAGE_{view}_UNAVAILABLE: {image}: {exc}") from exc
     return [measured[str(path)] if str(path) in measured else
             entry(project, path, external=True) for path in paths]
+
+
+def lef_entries(project, paths, *, image=None):
+    return _pdk_entries(project, paths, image=image, view="LEF")
+
+
+def liberty_entries(project, paths, *, image=None):
+    return _pdk_entries(project, paths, image=image, view="LIBERTY")
 
 
 def design_of(path):
@@ -127,7 +135,10 @@ def validate(project, record, *, step, stage, tools, required_inputs,
             raise ValueError("CURRENT_CONTEXT_EMPTY")
         lef_rows = {}
         if step == "16" and isinstance(record.get("inputs"), dict):
-            roles = [role for role in record["inputs"] if role.startswith("pdk_lef_")]
+            roles = [role for role in record["inputs"]
+                     if role.startswith(("pdk_lef_", "pdk_liberty_"))]
+            if "pdk_liberty_0" not in record["inputs"]:
+                raise ValueError("CURRENT_TIMING_LIBRARIES_MISSING")
             selected = native_image(project, "openroad")
             # Compare the current pin before opening an old image. A valid old
             # hash cannot authorize reuse after the selected runtime changes.
@@ -137,9 +148,14 @@ def validate(project, record, *, step, stage, tools, required_inputs,
                     raise ValueError(f"CURRENT_HASH_MISSING: {role}")
                 if row.get("image") and row["image"] != selected:
                     raise ValueError(f"CURRENT_IMAGE_CHANGED: {role}")
-            lef_rows = dict(zip(roles, lef_entries(project,
-                [record["inputs"][role]["path"] if Path(record["inputs"][role]["path"]).is_absolute()
-                 else Path(project) / record["inputs"][role]["path"] for role in roles], image=selected)))
+            for prefix, reader in (("pdk_lef_", lef_entries),
+                                   ("pdk_liberty_", liberty_entries)):
+                group = [role for role in roles if role.startswith(prefix)]
+                paths = [record["inputs"][role]["path"]
+                         if Path(record["inputs"][role]["path"]).is_absolute()
+                         else Path(project) / record["inputs"][role]["path"]
+                         for role in group]
+                lef_rows.update(zip(group, reader(project, paths, image=selected)))
         for field, required in (("inputs", required_inputs),
                                 ("outputs", required_outputs)):
             rows = record.get(field)
@@ -266,6 +282,41 @@ def clock_plan_receipt_lef_refusal(record, pdk, *, io_context=None):
     return ""
 
 
+def clock_plan_liberty_paths(pdk):
+    """The resolved active standard-cell and declared macro timing views.
+
+    Geometry cannot supply SDC library-cell semantics. Do not guess a corner
+    or borrow another library when the caller's resolved timing view is absent.
+    """
+    primary = getattr(pdk, "liberty", None)
+    if not isinstance(primary, str) or not primary.strip():
+        raise ValueError("CLOCK_PLAN_LIBERTY_MISSING")
+    return list(dict.fromkeys([primary, *(str(path) for path in
+                               (getattr(pdk, "macro_libs", []) or []))]))
+
+
+def clock_plan_receipt_liberty_refusal(record, pdk):
+    """The producer's complete timing-view set must still be selected on reuse."""
+    try:
+        expected = [str(Path(path).resolve()) for path in clock_plan_liberty_paths(pdk)]
+        inputs = record.get("inputs") if isinstance(record, dict) else None
+        if not isinstance(inputs, dict):
+            raise ValueError("CURRENT_INPUTS_MISSING")
+        rows = []
+        for role, row in inputs.items():
+            if not re.fullmatch(r"pdk_liberty_\d+", str(role)):
+                continue
+            if not isinstance(row, dict) or not isinstance(row.get("path"), str):
+                raise ValueError(f"CURRENT_PDK_LIBERTY_ROW_INVALID: {role}")
+            rows.append((int(role.rsplit("_", 1)[1]), str(Path(row["path"]).resolve())))
+        actual = [path for _, path in sorted(rows)]
+        if actual != expected or sorted(i for i, _ in rows) != list(range(len(expected))):
+            return f"CURRENT_PDK_LIBERTY_SET_CHANGED: recorded={actual} expected={expected}"
+    except (OSError, ValueError, TypeError) as exc:
+        return f"CURRENT_PDK_LIBERTY_SET_UNAVAILABLE: {exc}"
+    return ""
+
+
 def clock_plan(project, plan, floorplan, sdcs, pdk):
     """OpenROAD reads the current floorplan and evaluates the declared SDC."""
     from _atomic_artefact import write_json
@@ -281,9 +332,12 @@ def clock_plan(project, plan, floorplan, sdcs, pdk):
     # The runner already supplied any required IO views in macro_lefs. Use
     # the same normalized load set that validates reuse of this measurement.
     lefs = clock_plan_lef_paths(pdk)
+    liberties = clock_plan_liberty_paths(pdk)
     image = native_image(project, "openroad")
     for i, row in enumerate(lef_entries(project, lefs, image=image)):
         inputs[f"pdk_lef_{i}"] = row
+    for i, row in enumerate(liberty_entries(project, liberties, image=image)):
+        inputs[f"pdk_liberty_{i}"] = row
     plan.parent.mkdir(parents=True, exist_ok=True)
     script, log = plan.with_suffix(".tcl"), plan.with_suffix(".log")
     def quote(path):
@@ -294,6 +348,7 @@ def clock_plan(project, plan, floorplan, sdcs, pdk):
         raise ValueError("CLOCK_PLAN_PDK_NAME_INVALID")
     script.write_text("\n".join([
         f'puts "CLOCK_PLAN_PDK {pdk.name}"',
+        *[f"read_liberty {quote(path)}" for path in liberties],
         *[f"read_lef {quote(path)}" for path in lefs],
         f"read_def {quote(floorplan)}",
         *[f"read_sdc {quote(path)}" for path in sdcs],
@@ -318,9 +373,14 @@ def clock_plan(project, plan, floorplan, sdcs, pdk):
     if rc or not clocks or "CLOCK_PLAN_DONE" not in text or re.search(r"\[ERROR\]|^Error:", text, re.M):
         raise ValueError(f"CLOCK_PLAN_NATIVE_REFUSED: rc={rc}; {text[-500:]}")
     current_lefs = lef_entries(project, lefs, image=image)
+    current_liberties = liberty_entries(project, liberties, image=image)
     for role, row in inputs.items():
-        actual = (current_lefs[int(role.rsplit("_", 1)[1])] if role.startswith("pdk_lef_")
-                  else entry(project, project / row["path"]))
+        if role.startswith("pdk_lef_"):
+            actual = current_lefs[int(role.rsplit("_", 1)[1])]
+        elif role.startswith("pdk_liberty_"):
+            actual = current_liberties[int(role.rsplit("_", 1)[1])]
+        else:
+            actual = entry(project, project / row["path"])
         if actual != row:
             raise ValueError(f"CLOCK_PLAN_INPUT_CHANGED: {role}")
     current = build(project, "16", "stage3", design, pdk.name, "openroad",
