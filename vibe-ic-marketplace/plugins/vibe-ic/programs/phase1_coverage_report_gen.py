@@ -285,6 +285,8 @@ def _pin_alias_literals(text: str):
         previous_cells = []
         alias_columns = set()
         bare = re.sub(r"^\s*[-*+]\s+", "", line).strip().strip("`*").rstrip(".;,")
+        if bare.startswith("(") and bare.endswith(")"):
+            bare = bare[1:-1].strip().strip("`*")
         if _PIN_ALIAS_LIST.fullmatch(bare):
             # Preserve the old regex's literal segmentation even for longer
             # declared lists; the context guard must not lose an obligation.
@@ -294,6 +296,10 @@ def _pin_alias_literals(text: str):
         for match in _PIN_ALIAS_RX.finditer(line):
             prefix = line[:match.start()].rstrip("`* \"'")
             suffix = line[match.end():].lstrip("`*\"'")
+            # A paired group may wrap the alternate names after a pin
+            # location (including Markdown code quotes), not arbitrary prose.
+            if prefix.endswith("(") and suffix.lstrip().startswith(")"):
+                prefix = prefix[:-1].rstrip()
             if (_PIN_ALIAS_PREFIX.search(prefix)
                     or _PIN_ALIAS_SUFFIX.search(suffix)):
                 yield match.group().strip()

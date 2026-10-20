@@ -716,3 +716,43 @@ def test_pin_alias_naming_link_context(tmp_path, text, expected):
     patterns = owner._autodiscover_patterns(tmp_path, persist=False)
     assert {lit for lit, label in patterns["spec.txt"]
             if label == "auto-discovered (pin_alias)"} == expected
+
+
+@pytest.mark.parametrize("text, expected", [
+    ("Pin 7 (GPIO0/SCL)", {"GPIO0/SCL"}),
+    ("Pin 7 (`GPIO0/SCL`)", {"GPIO0/SCL"}),
+    ("Signal[12] (DATA0/data_i)", {"DATA0/data_i"}),
+    ("Port #83 (BUS0/bus_i)", {"BUS0/bus_i"}),
+    ("(ACC_ID / id_bus / GPIO_0[0])", {"ACC_ID / id_bus / GPIO_0[0]"}),
+    ("Source policy (PDK/default) takes precedence.", set()),
+    ("Source configuration (`API/default`) applies here.", set()),
+])
+def test_pin_alias_parenthesized_name_context(tmp_path, text, expected):
+    import phase1_coverage_report_gen as owner
+    _put_extracted(tmp_path, "spec.txt", text)
+    patterns = owner._autodiscover_patterns(tmp_path, persist=False)
+    assert {lit for lit, label in patterns["spec.txt"]
+            if label == "auto-discovered (pin_alias)"} == expected
+
+
+@pytest.mark.parametrize("text", ["Pin 7 (GPIO0/SCL)", "Pin 7 (`GPIO0/SCL`)"])
+@pytest.mark.parametrize("covered", [False, True])
+def test_pin_alias_parenthesized_name_ordinary(tmp_path, text, covered):
+    _put_extracted(tmp_path, "spec.txt", text)
+    pin = {"name": "GPIO0"}
+    if covered:
+        pin["display_label"] = "GPIO0/SCL"
+    _put_l(tmp_path, "L1.json", {"pin_table": [pin], "unrelated_symbol": "SCL"})
+    assert _run(tmp_path).returncode == 0
+    report = json.loads((tmp_path / "reports/phase1/extraction_coverage_report.json").read_text())
+    aliases = [r for d in report["per_doc"] for key in ("hit_literals", "missing_literals")
+               for r in d[key] if r["label"] == "auto-discovered (pin_alias)"]
+    assert aliases == [{"literal": "GPIO0/SCL", "label": "auto-discovered (pin_alias)"}]
+    assert report["overall"] == {"hit": 3 if covered else 2, "total": 3,
+                                 "pct": 100.0 if covered else 66.7}
+    for program, expected_rc in [("phase1_coverage_report_present_check.py", 0 if covered else 1),
+                                 ("extraction_coverage_check.py", 0 if covered else 1),
+                                 ("extraction_coverage_denominator_audit.py", 0)]:
+        rr = subprocess.run([sys.executable, str(PROG.with_name(program)), str(tmp_path)],
+                            capture_output=True, text=True)
+        assert rr.returncode == expected_rc, (program, rr.stdout, rr.stderr)
