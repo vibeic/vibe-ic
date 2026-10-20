@@ -900,5 +900,100 @@ def test_unsupported_preprocessing_is_typed_unknown(tmp_path):
     assert report['summary']['verdict'] == 'INCONCLUSIVE'
 
 
+@pytest.mark.parametrize('variant', ['generate-label', 'constant-input', 'inactive-expression'])
+def test_configured_live_instances_are_not_blocked_by_preselection_syntax(tmp_path, variant):
+    source = _OPTIONAL_SOURCE
+    if variant == 'generate-label':
+        source = source.replace(' producer p(',
+            ' generate if (1) begin : live_region\n producer p(')
+        source = source.replace(' consumer c(.count(count), .hit(hit));',
+            ' consumer c(.count(count), .hit(hit));\n end endgenerate')
+    elif variant == 'constant-input':
+        source = source.replace('input [3:0] count, output hit',
+            'input [3:0] count, input enable, output hit')
+        source = source.replace('.count(count), .hit(hit)',
+            ".count(count), .enable(1'b1), .hit(hit)")
+    else:
+        source = source.replace('`ifdef OPTIONAL',
+            'generate if (0) begin : disabled')
+        source = source.replace('.clk(clk));\n`endif',
+            '.clk(clk ^ hit));\nend endgenerate')
+    res, report = run_cli(tmp_path, {'neutral.v': source}, 'neutral')
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert report['discovery']['complete'] is True, report['discovery']
+    assert report['discovery']['instances_discovered'] == 2
+    assert (report['summary']['matches'], report['summary']['unknowns']) == (1, 2)
+    assert report['summary']['verdict'] == 'INCONCLUSIVE'
+
+
+def test_live_missing_child_with_expression_still_refuses(tmp_path):
+    source = _OPTIONAL_SOURCE.replace('.clk(clk));\n`endif',
+        '.clk(clk ^ hit));\n`endif')
+    res, report = run_cli(tmp_path, {'neutral.v': source}, 'neutral',
+                          extra=['-D', 'OPTIONAL'])
+    assert res.returncode == 2
+    assert not report['discovery']['complete']
+    assert any('missing_optional' in issue for issue in report['discovery']['issues'])
+
+
+@pytest.mark.parametrize('mode,rc,complete', [('FAST', 0, True), ('SLOW', 2, False)])
+def test_native_string_parameter_selects_the_source_generate_arm(tmp_path, mode, rc, complete):
+    source = _OPTIONAL_SOURCE.replace('module neutral(input',
+        f'module neutral #(parameter MODE="{mode}")(input').replace(
+        '`ifdef OPTIONAL', 'generate if (MODE == "SLOW") begin : optional_arm').replace(
+        '`endif', 'end endgenerate')
+    res, report = run_cli(tmp_path, {'neutral.v': source}, 'neutral')
+    assert res.returncode == rc, res.stdout + res.stderr
+    assert report['discovery']['complete'] is complete, report['discovery']
+    if complete:
+        assert (report['summary']['matches'], report['summary']['unknowns']) == (1, 2)
+
+
+def test_native_checked_live_expression_stays_an_opaque_encoding_obligation(tmp_path):
+    source = _OPTIONAL_SOURCE.replace('input [3:0] count, output hit',
+        'input [3:0] count, input enable, output hit').replace(
+        '.count(count), .hit(hit)', '.count(count), .enable(clk ^ count[0]), .hit(hit)')
+    res, report = run_cli(tmp_path, {'neutral.v': source}, 'neutral')
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert report['discovery']['complete'] is True, report['discovery']
+    assert report['summary']['matches'] == 1
+    assert report['summary']['unknowns'] == 3
+    assert report['summary']['verdict'] == 'INCONCLUSIVE'
+    opaque = report['configuration']['opaque_connections']
+    assert any(row['expression'] == 'clk ^ count[0]' for row in opaque)
+    assert _consume_encoding_receipt(tmp_path).state == 'NOT_MEASURED'
+
+
+@pytest.mark.parametrize('kind,verdict', [('unknown', 'INCOMPLETE'),
+                                       ('match', 'PASS'), ('mismatch', 'FAIL'),
+                                       ('absent', 'SKIP')])
+def test_p0_reads_the_encoding_receipt_instead_of_advisory_rc0(tmp_path, monkeypatch,
+                                                            kind, verdict):
+    import flow_compliance_check as flow
+    project = tmp_path / 'project'
+    rtl = project / 'phase2/stage1/rtl'
+    rtl.mkdir(parents=True)
+    docs = project / 'phase1/generated_docs'
+    docs.mkdir(parents=True)
+    (docs / 'L9_INTEGRATION_SPEC.json').write_text(json.dumps({'top_module': 'neutral'}))
+    if kind == 'absent':
+        source = 'module neutral(input d, output q); assign q = d; endmodule\n'
+    elif kind == 'unknown':
+        source = _OPTIONAL_SOURCE
+    else:
+        literal = "6'd3" if kind == 'match' else "6'b110000"
+        source = ("module producer(output reg [5:0] count); initial count <= 6'd0; endmodule\n"
+                  "module consumer(input [5:0] count); always @* if(count == " + literal +
+                  ") begin end endmodule\n"
+                  "module neutral; wire [5:0] count; producer p(.count(count)); "
+                  "consumer c(.count(count)); endmodule\n")
+    (rtl / 'neutral.v').write_text(source)
+    monkeypatch.setattr(flow, '_STRUCTURAL_RTL_GATES', ('interface_encoding_audit',))
+    records = []
+    flow._run_structural_rtl_gates(project, records_out=records)
+    assert len(records) == 1
+    assert records[0]['verdict'] == verdict, records
+
+
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])

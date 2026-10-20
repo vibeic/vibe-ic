@@ -11658,6 +11658,46 @@ def _run_structural_rtl_gates(project: Path,
                  "elapsed_s": round(res.elapsed_s, 1)},
                 reason_class=_reason_taxonomy.EXECUTION_ERROR)
         r = _watchdog.completed_process(argv, res)
+        if gate_name == "interface_encoding_audit" and r.returncode == 0:
+            # The encoding CLI keeps rc0 advisory for UNKNOWN populations.
+            # Use its existing source-bound receipt validator, just as the
+            # independent RTL-review consumer does, before awarding P0 PASS.
+            try:
+                shared = PROGRAMS_DIR.parent / "_shared"
+                if str(shared) not in sys.path:
+                    sys.path.insert(0, str(shared))
+                import skill_compliance_check as receipt_check
+                findings = receipt_check._cc_audit_receipt_evidence(
+                    {"id": "P0_interface_encoding_audit", "auditor": gate_name},
+                    "", receipt_check.CheckContext(
+                        output_path=gate_scratch_dir / "review.md",
+                        evidence_dirs=[gate_scratch_dir / gate_name],
+                        rtl_source_root=rtl_dir))
+                if len(findings) != 1:
+                    raise ValueError("encoding receipt validator returned no unique decision")
+                finding = findings[0]
+                evidence = {"exit_code": 0, "receipt_state": finding.state,
+                            "receipt_detail": finding.detail}
+                if finding.state == "PASS":
+                    return _p0_gate_record(gate_name, "PASS", finding.description, evidence)
+                if finding.state == "FAIL":
+                    return _p0_gate_record(gate_name, "FAIL", finding.description, evidence)
+                if finding.state == "NOT_APPLICABLE":
+                    report = json.loads((gate_scratch_dir / gate_name /
+                                         "encoding_audit_report.json").read_text())
+                    evidence[_sa.EVIDENCE_KEY] = _sa.absence(
+                        "source file(s) in the validated native applicability proof",
+                        len(report["source"]["files"]))
+                    return _p0_gate_record(
+                        gate_name, "SKIP", finding.description, evidence,
+                        reason_class=_reason_taxonomy.NOT_APPLICABLE_BY_STRUCTURE)
+                return _p0_gate_record(
+                    gate_name, "INCOMPLETE", finding.description, evidence,
+                    reason_class=_reason_taxonomy.EXECUTION_ERROR)
+            except (OSError, ValueError, KeyError, TypeError, ImportError) as exc:
+                return _p0_gate_record(
+                    gate_name, "INCOMPLETE", f"encoding receipt could not be validated: {exc}",
+                    {"exit_code": 0}, reason_class=_reason_taxonomy.EXECUTION_ERROR)
         if r.returncode == 2:
             # #492 — rc 2 carried two unrelated meanings: "there was no input
             # to check" (a benign verdict FROM the gate) and "you called me

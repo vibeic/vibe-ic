@@ -68,6 +68,7 @@ class ModuleInfo:
     file: str
     ports: List[PortInfo]
     body: str               # source code body (comments stripped)
+    source_body: str = ''    # retain strings for configured generate selection
 
 
 @dataclass
@@ -206,7 +207,8 @@ def parse_modules(src: str, filepath: str) -> List[ModuleInfo]:
         if any(p.direction == 'UNKNOWN' for p in ports):
             _discovery_issue(f"unresolved port direction in module '{mod_name}' ({filepath})")
         modules.append(ModuleInfo(name=mod_name, file=filepath,
-                                  ports=ports, body=body))
+                                  ports=ports, body=body,
+                                  source_body=src[body_start:body_end]))
     return modules
 
 
@@ -244,7 +246,8 @@ def _split_ports(text: str) -> List[str]:
 # ---------------------------------------------------------------------------
 # Instance parser
 # ---------------------------------------------------------------------------
-def parse_instances(body: str, parent_module: str) -> List[InstanceInfo]:
+def parse_instances(body: str, parent_module: str, *, native_checked: bool = False
+                    ) -> List[InstanceInfo]:
     """Find named-port module instantiations using balanced delimiters."""
     instances: List[InstanceInfo] = []
     # Keywords that look like instances but aren't
@@ -294,6 +297,9 @@ def parse_instances(body: str, parent_module: str) -> List[InstanceInfo]:
             cursor = m.end()
             continue
         inst_name = inst_match.group(1)
+        if inst_name in non_instance:
+            cursor = m.end()
+            continue
         index += inst_match.end()
         while index < len(body) and body[index].isspace():
             index += 1
@@ -351,15 +357,28 @@ def parse_instances(body: str, parent_module: str) -> List[InstanceInfo]:
                 connections[port] = sm.group(1)
             elif not sig:
                 connections[port] = ''
+            elif parse_verilog_literal(sig) is not None or isinstance(
+                    _hierarchy.constant(sig, {}), int):
+                # A literal input has no cross-module wire to trace. Keep
+                # the instance for native hierarchy closure, without making
+                # this constant an encoding result or inventing a wire name.
+                connections[port] = ''
+            elif native_checked:
+                # Native elaboration validated this live expression. Retain
+                # it verbatim as an opaque parent-side carrier: encoding
+                # inference must not collapse a concat/ternary into one net.
+                connections[port] = sig
+                _CONFIGURATION.setdefault('opaque_connections', []).append({
+                    'module': parent_module, 'instance': inst_name,
+                    'port': port, 'expression': sig})
             else:
                 malformed = True
 
-        if connections:
-            instances.append(InstanceInfo(
-                inst_name=inst_name,
-                module_type=mod_type,
-                parent_module=parent_module,
-                connections=connections))
+        instances.append(InstanceInfo(
+            inst_name=inst_name,
+            module_type=mod_type,
+            parent_module=parent_module,
+            connections=connections))
         if malformed:
             _discovery_issue(
                 f"unsupported connection syntax in {parent_module}.{inst_name}")
@@ -820,6 +839,13 @@ def _active_native_view(modules, headers, files, top, defines, parameters,
             _CONFIGURATION['native'] = json.loads(context_file.read_text())
             _CONFIGURATION['native_context'] = str(context_file)
             _CONFIGURATION['native_context_sha256'] = hashlib.sha256(context_file.read_bytes()).hexdigest()
+            log = context_file.parent / 'native.log'
+            if (_CONFIGURATION['native'].get('status') == 'NOT_MEASURED'
+                    and log.is_file()):
+                errors = [line for line in log.read_text(errors='replace').splitlines()
+                          if line.lstrip().startswith('ERROR:')]
+                if errors:
+                    _CONFIGURATION['native_error'] = errors[-1]
             script = context_file.parent / 'elaborate.ys'
             if script.is_file():
                 _CONFIGURATION['native_script'] = {
@@ -893,26 +919,36 @@ def _active_native_view(modules, headers, files, top, defines, parameters,
         if original not in modules:
             raise ValueError(f'unsupported native module identity: {name}')
         source = modules[original]
-        expressions = _hierarchy.parameter_expressions(headers[original], source.body)
+        source_body = source.source_body or source.body
+        expressions = _hierarchy.parameter_expressions(headers[original], source_body)
+        defaults = _hierarchy.resolve_parameters(expressions)
         values = {}
         for key, value in native.get('parameter_default_values', {}).items():
+            if (isinstance(defaults.get(key), str) and isinstance(value, str)
+                    and re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', value)):
+                # Native Yosys publishes a declared string as text. Keep
+                # the selected specialization, rather than reading it as bits.
+                values[key] = value
+                continue
             if not isinstance(value, str) or not re.fullmatch('[01]+', value):
                 raise ValueError(f'unsupported native parameter: {name}.{key}')
             values[key] = int(value, 2)
         params = _hierarchy.resolve_parameters(expressions, values)
-        body = _hierarchy.active_body(source.body, params, lint._procedural_statement_end)
+        body = _hierarchy.active_body(source_body, params, lint._procedural_statement_end)
         native_ports = native.get('ports', {})
         if ({p.name: p.direction for p in source.ports} !=
                 {p: spec['direction'] for p, spec in native_ports.items()}):
             raise ValueError(f'source/native port population differs: {name}')
         active_modules[name] = ModuleInfo(
             name, source.file,
-            [PortInfo(p.name, p.direction, p.width, name) for p in source.ports], body)
+            [PortInfo(p.name, p.direction, p.width, name) for p in source.ports],
+            lexical_mask(body, attributes=True))
         children = {cell_name: cell['type']
                     for cell_name, cell in native.get('cells', {}).items()
                     if cell['type'] in native_modules}
         seen = set()
-        for instance in parse_instances(body, name):
+        for instance in parse_instances(lexical_mask(body, attributes=True), name,
+                                         native_checked=True):
             candidates = [cell for cell in children
                           if cell == instance.inst_name or
                           cell.endswith('.' + instance.inst_name)]
@@ -982,15 +1018,18 @@ def run_audit(
             if mod.name in all_modules:
                 _discovery_issue(f'duplicate module definition: {mod.name}')
             all_modules[mod.name] = mod
-            insts = parse_instances(mod.body, mod.name)
-            all_instances.extend(insts)
     if configured and not _DISCOVERY_ISSUES:
         try:
             all_modules, all_instances = _active_native_view(
                 all_modules, headers, vfiles, top_module, list(defines),
                 list(parameters), list(include_dirs), output_dir)
         except (OSError, ValueError, KeyError, TypeError) as exc:
-            _discovery_issue(f'active source UNKNOWN: {exc}')
+            detail = _CONFIGURATION.get('native_error', '')
+            _discovery_issue(f'active source UNKNOWN: {exc}' +
+                             (f'; {detail}' if detail else ''))
+    elif not configured:
+        for mod in all_modules.values():
+            all_instances.extend(parse_instances(mod.body, mod.name))
     _DISCOVERED_MODULE_COUNT = len(all_modules)
     _DISCOVERED_INSTANCE_COUNT = len(all_instances)
 
