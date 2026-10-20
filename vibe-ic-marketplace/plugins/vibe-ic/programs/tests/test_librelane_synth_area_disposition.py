@@ -94,6 +94,22 @@ def synth_case(tmp_path, monkeypatch, ceiling=None, damage=None, critical='clean
     def checked_run(argv, **kwargs):
         program = Path(argv[1]).stem if len(argv) > 1 else ''
         calls.append(program)
+        if program == 'provenance_check' and damage in (
+                'measurement_missing', 'measurement_false',
+                'measurement_benign', 'measurement_foreign'):
+            ledger = project / 'provenance.jsonl'
+            rows = [json.loads(line) for line in ledger.read_text().splitlines()]
+            for row in rows:
+                if damage == 'measurement_missing':
+                    row.pop('measurement', None)
+                elif damage == 'measurement_foreign':
+                    row['tool'] = 'foreign_tool'
+                else:
+                    row['measurement'].update(
+                        measured=False,
+                        not_measured_class=('NOTHING_TO_MEASURE' if damage == 'measurement_benign'
+                                            else 'TOOL_DID_NOT_RUN'))
+            ledger.write_text(''.join(json.dumps(row) + '\n' for row in rows))
         if damage == program:
             if program == 'synth_netlist_check':
                 Path(argv[argv.index('--netlist') + 1]).write_text('')
@@ -106,6 +122,26 @@ def synth_case(tmp_path, monkeypatch, ceiling=None, damage=None, critical='clean
         if program == 'area_total_vs_budget_check' and damage == 'area_cli_error':
             return subprocess.CompletedProcess(argv, 2, '', 'usage error')
         result = real_run(argv, **kwargs)
+        if program == 'provenance_check':
+            report = Path(argv[argv.index('--json') + 1])
+            observed = json.loads(report.read_text())
+            put(folder / 'provenance_cli_observation.json',
+                {'returncode': result.returncode, 'report': observed})
+            # Corrupt only a report the ordinary subprocess actually wrote;
+            # these are consumer transport controls, not EDA measurements.
+            if damage == 'report_missing':
+                report.unlink()
+            elif damage == 'report_malformed':
+                report.write_text('{invalid json')
+            elif damage and damage.startswith('report_'):
+                if damage == 'report_empty_checks': observed['checks'] = []
+                elif damage == 'report_duplicate_checks': observed['checks'] *= 2
+                elif damage == 'report_wrong_output': observed['checks'][0]['output'] = 'another/native.v'
+                elif damage == 'report_unknown_status': observed['checks'][0]['status'] = 'UNKNOWN'
+                elif damage == 'report_measurement_missing': observed['checks'][0].pop('measurement')
+                elif damage == 'report_measurement_string':
+                    observed['checks'][0]['measurement'].update(declared='true', measured='true')
+                put(report, observed)
         if program == 'area_total_vs_budget_check' and damage in {'area_report_missing', 'area_report_malformed', 'area_report_conflicting'}:
             report = folder / 'area_budget_gate.json'
             if damage == 'area_report_missing':
@@ -217,6 +253,56 @@ def test_first_parent_provenance_precedes_requested_postmap_handoff(
     assert check['declared_under'] == 'phase2/stage2/synth/top_synth.v'
     rows = [json.loads(line) for line in (project / 'provenance.jsonl').read_text().splitlines()]
     assert rows[-1]['produced_by'] == 'LibreLane.Yosys.Synthesis'
+
+
+@pytest.mark.parametrize('damage,status,cli_rc,cli_status', [
+    (None, 'PASS', 0, 'PASS'),
+    ('measurement_missing', 'NOT_MEASURED', 0, 'UNMEASURED'),
+    ('measurement_false', 'FAIL', 1, 'FAIL'),
+    ('measurement_benign', 'NOT_MEASURED', 0, 'PASS'),
+    ('measurement_foreign', 'FAIL', 1, 'FAIL'),
+    ('report_missing', 'FAIL', 0, 'PASS'),
+    ('report_malformed', 'FAIL', 0, 'PASS'),
+    ('report_empty_checks', 'FAIL', 0, 'PASS'),
+    ('report_duplicate_checks', 'FAIL', 0, 'PASS'),
+    ('report_wrong_output', 'FAIL', 0, 'PASS'),
+    ('report_unknown_status', 'FAIL', 0, 'PASS'),
+    ('report_measurement_missing', 'FAIL', 0, 'PASS'),
+    ('report_measurement_string', 'FAIL', 0, 'PASS'),
+])
+def test_initial_parent_disposition_controls_publication(
+        tmp_path, monkeypatch, damage, status, cli_rc, cli_status):
+    """No handoff/postmap may consume an unmeasured or malformed parent.
+
+    The actual provenance subprocess retains its public three-state contract.
+    Native transport/final publishers are neutral fixtures, not EDA results.
+    """
+    import librelane_postmap as postmap
+
+    project = tmp_path / 'project'
+    put(project / 'phase3/librelane_switch.json',
+        {'steps': {'9': 'librelane'}, 'post_map_repair': 'pre_placement'})
+    child_calls = []
+    monkeypatch.setattr(postmap, 'run_and_publish',
+                        lambda *a, **kw: child_calls.append((a, kw)))
+    result, _, published, folder = synth_case(
+        tmp_path, monkeypatch, ceiling='10x10', damage=damage)
+    observation = json.loads((folder / 'provenance_cli_observation.json').read_text())
+    put(folder / 'owner_publication_observation.json', {
+        'damage': damage, 'owner_status': result.status,
+        'owner_detail': result.detail, 'reason_class': result.reason_class,
+        'handoff_publish_count': len(published), 'postmap_entry_count': len(child_calls),
+        'ordinary_cli': observation,
+        'scope': 'real runner and ordinary gate subprocess; native transport and final publishers are fixtures',
+    })
+    assert observation['returncode'] == cli_rc
+    assert observation['report']['checks'][0]['status'] == cli_status
+    assert result.status == status, result.detail
+    assert len(published) == len(child_calls) == (1 if status == 'PASS' else 0)
+    if status == 'NOT_MEASURED':
+        assert result.reason_class == 'inconclusive'
+    elif damage and damage.startswith('report_'):
+        assert 'LL_PROVENANCE_REPORT_INVALID' in result.detail
 
 
 @pytest.mark.parametrize('damage', ['area_report_missing', 'area_report_malformed', 'area_report_conflicting', 'area_cli_error'])
