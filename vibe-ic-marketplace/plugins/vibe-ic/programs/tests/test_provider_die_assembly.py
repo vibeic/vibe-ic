@@ -354,3 +354,192 @@ def test_normal_density_materializes_selected_provider_encoding(tmp_path, monkey
     assert config["mfg_grid_um"] == original["mfg_grid_um"]
     assert config["_derivation"]["density_floor_pct"] == original["_derivation"]["density_floor_pct"]
     assert bool(config["_derivation"].get("provider_fill_encoding")) == (provider == "wafer.space")
+
+
+@pytest.fixture
+def bond_geometry(tmp_path):
+    """Native neutral geometry; the operator transport below is source-only."""
+    import klayout.db as k
+    path = profile(tmp_path)
+    pdk = tmp_path / 'input/pdk'
+    pdk.mkdir()
+    (pdk / 'layers.lyp').write_text('<layer-properties><properties>'
+        '<source>BondOpening 73/4@1</source></properties></layer-properties>')
+    (pdk / 'io.lef').write_text('MACRO neutral_pad\n CLASS PAD INOUT ;\n'
+                               ' SIZE 40 BY 50 ;\nEND neutral_pad\n')
+    value = json.loads(path.read_text())
+    value.pop('precheck_source', None)
+    value['technical_target']['origin_um'] = [0, 0]
+    value['bond_pad_edge_distance'] = {
+        'opening_layer': {'name': 'BondOpening', 'layer_properties': 'input/pdk/layers.lyp'},
+        'io_lefs': ['input/pdk/io.lef']}
+    path.write_text(json.dumps(value))
+    layout = k.Layout(); layout.dbu = 0.001
+    top = layout.create_cell('neutral_top')
+    pad = layout.create_cell('neutral_pad')
+    opening = layout.create_cell('neutral_opening')
+    layer = layout.layer(73, 4)
+    opening.shapes(layer).insert(k.Box(0, 0, 10000, 20000))
+    pad.insert(k.CellInstArray(opening.cell_index(), k.Trans()))
+    # Hierarchical openings + rotation + an array: all must reach top coordinates.
+    top.insert(k.CellInstArray(pad.cell_index(), k.Trans(20000, 30000)))
+    top.insert(k.CellInstArray(pad.cell_index(), k.Trans(k.Trans.R90, 300000, 290000)))
+    top.insert(k.CellInstArray(pad.cell_index(), k.Trans(150000, 120000),
+                              k.Vector(20000, 0), k.Vector(0, 30000), 2, 2))
+    # Neither a large non-pad polygon nor an overhanging label is a pad opening.
+    top.shapes(layer).insert(k.Box(-500000, -500000, 800000, 900000))
+    opening.shapes(layer).insert(k.Text('not geometry', k.Trans(900000, 900000)))
+    gds = tmp_path / 'neutral.gds'; layout.write(str(gds))
+    return tmp_path, path, gds
+
+
+def _bond_readiness(project, gds, runroot):
+    def transport(command, timeout):
+        # Only the operator subprocess is substituted. Exercise the real
+        # readiness consumer, real evidence parser, and native pad measurement.
+        for i, step in enumerate(readiness.SHUTTLES[readiness.DEFAULT_SHUTTLE].ladder, 1):
+            if step.cob_only:
+                continue
+            folder = runroot / f'{i:02d}-{readiness._slug(step.step_id)}'
+            folder.mkdir(parents=True)
+            (folder / 'state_out.json').write_text('{}')
+        return 0, 'neutral operator transport, no native PV claim', ''
+    return readiness.evaluate(project, layout=gds, top='neutral_top', rundir=runroot,
+                              image_resolver=lambda image, pull: image, runner=transport)
+
+
+@pytest.mark.parametrize('case,expected', [
+    ('missing_limit', 'NOT_DETERMINED'), ('declared_pass', 'PASS'),
+    ('declared_fail', 'FAIL'), ('missing_layer', 'NOT_DETERMINED'),
+    ('missing_master', 'NOT_DETERMINED'), ('invalid_limit', 'NOT_DETERMINED'),
+    ('missing_authority', 'NOT_DETERMINED')])
+def test_bond_opening_geometry_reaches_provider_precheck(bond_geometry, case, expected):
+    project, path, gds = bond_geometry
+    value = json.loads(path.read_text()); rule = value['bond_pad_edge_distance']
+    if case == 'declared_pass':
+        rule['max_distance_um'] = 200
+    elif case == 'declared_fail':
+        rule['max_distance_um'] = 199
+    elif case == 'missing_layer':
+        rule['opening_layer']['name'] = 'AbsentOpening'
+    elif case == 'missing_master':
+        (project / 'input/pdk/io.lef').write_text('MACRO not_a_pad\n CLASS CORE ;\nEND not_a_pad\n')
+    elif case == 'invalid_limit':
+        rule['max_distance_um'] = True
+    elif case == 'missing_authority':
+        del value['bond_pad_edge_distance']
+    path.write_text(json.dumps(value))
+    before = gds.read_bytes()
+    report = _bond_readiness(project, gds, project / 'operator')
+    assert report.verdict == expected, report.reason
+    measured = report.as_dict()['bond_pad_edge_distance']
+    assert measured == json.loads((project / 'operator/bond_pad_edge_distance.json').read_text())
+    assert gds.read_bytes() == before
+    if case in ('missing_limit', 'declared_pass', 'declared_fail', 'invalid_limit'):
+        assert measured['distances_um'] == {'left': 20, 'bottom': 30, 'right': 100, 'top': 200}
+        assert measured['opening_count'] == 6
+        assert measured['assembly']['strategy'] == 'preserve_source_placement'
+        assert measured['assembly']['applied_offset_um'] == [0, 0]
+        assert measured['input']['sha256'] == hashlib.sha256(before).hexdigest()
+        assert measured['verdict'] == {'missing_limit': 'MANUAL_REVIEW', 'declared_pass': 'PASS',
+                                       'declared_fail': 'FAIL', 'invalid_limit': 'NOT_MEASURED'}[case]
+    else:
+        assert measured['verdict'] == 'NOT_MEASURED'
+        assert measured['reason']
+
+
+def test_bond_measurement_preserves_real_operator_refusal(bond_geometry):
+    from _hostpaths import require_repo
+    project, _, gds = bond_geometry
+    repo = require_repo()
+    import shutil
+    retained = project / 'retained-refusal'
+    shutil.copytree(repo / 'vibe-ic-marketplace/plugins/vibe-ic/programs/tests/fixtures/shuttle_precheck_refusal', retained)
+    report = readiness.evaluate(project, layout=gds, top='neutral_top', rundir=retained,
+                               image_resolver=lambda image, pull: image,
+                               runner=lambda command, timeout: (1, '', ''))
+    assert report.verdict == 'FAIL'
+    assert report.failed_steps == ['KLayout.CheckSize']
+    # Keep retained operator evidence immutable; local geometry report is written
+    # separately when replaying read-only captured receipts.
+
+
+@pytest.mark.parametrize('limit,expected', [(None, 'MANUAL_REVIEW'), (199, 'FAIL'), (200, 'PASS')])
+def test_provider_assembly_does_not_admit_unreviewed_bond_geometry(bond_geometry, limit, expected):
+    """Neutral source lineage, actual native openings; no native PV claim."""
+    import _gds_admission as admission
+    project, path, gds = bond_geometry
+    value = json.loads(path.read_text())
+    if limit is not None:
+        value['bond_pad_edge_distance']['max_distance_um'] = limit
+    path.write_text(json.dumps(value))
+    reports = project / 'reports/phase3'; reports.mkdir(parents=True)
+    routed = project / 'phase3/stage3/pnr/routed.def'; routed.parent.mkdir(parents=True)
+    routed.write_text('UNITS DISTANCE MICRONS 1000 ;\nDIEAREA ( 0 0 ) ( 400000 500000 ) ;\nEND DESIGN\n')
+    raw = routed.with_name('raw.gds'); raw.write_bytes(gds.read_bytes())
+    def write(dest, data):
+        dest.write_text(json.dumps(data)); return finishing._release_file(dest)
+    write(reports / 'prestream_gate.json', {'verdict': 'PASS', 'layout_digest': 'neutral-source-control'})
+    admission.admit_gds(project, raw, 'neutral-source-control', [routed])
+    write(reports / 'fill_librelane.json', {'default_stream': {
+        'stream': str(raw), 'stream_sha256': finishing._release_file(raw)['sha256']}})
+    seal = reports / 'seal.json'
+    extent = {'outer': {'um': [0, 0, 400, 500]}, 'inner': {'um': [5, 5, 395, 495]}}
+    write(seal, {'seal_ring': {'state': 'PASS', 'gds_in': str(raw), 'gds_out': str(gds),
+        'core_clearance': {'state': 'MEASURED', 'population_empty': False, 'encroaching_polygons': 0},
+        'ring_check': {'ring_extent': extent}}, 'artefacts': {'routed_def_in': str(routed)}})
+    steps = [{'state_out': write(reports / f'state-{i}.json', {'scope': 'neutral source control'})}
+             for i in range(16)]
+    operator = reports / 'operator.json'
+    write(operator, {'producer': 'wafer_space_precheck', 'returncode': 0, 'verdict': 'PASS',
+        'all_steps_requested': True, 'input_unchanged': True, 'expected_steps': list(range(16)),
+        'steps': steps, 'input': finishing._release_file(gds), 'output': finishing._release_file(gds),
+        'slot': '1x1', 'packaging': 'bare_die', 'assigned_id': None, 'official_entry': {'neutral': True}})
+    dest = reports / 'assembly.json'
+    try:
+        admitted = finishing.publish_provider_release(project, dest, source_project=project,
+            instruction=path, precheck=operator, finishing=seal)
+        actual = 'PASS'
+    except ValueError as exc:
+        actual = next((state for state in ('MANUAL_REVIEW', 'FAIL')
+                       if 'bond_pad_edge_distance: ' + state in str(exc)), str(exc))
+    assert actual == expected
+    if expected == 'PASS':
+        assert admitted['basis']['bond_pad_edge_distance']['distances_um']['top'] == 200
+        assert admitted['basis']['files']['bond_pad_edge_distance'] == finishing._release_file(
+            reports / 'bond_pad_edge_distance.json')
+    else:
+        assert not dest.exists()
+        assert json.loads((reports / 'bond_pad_edge_distance.json').read_text())['verdict'] == expected
+
+
+@pytest.mark.parametrize('final_present', [True, False])
+def test_native_provider_bond_measurement_uses_actual_final_output(bond_geometry, final_present):
+    import klayout.db as k
+    project, path, gds = bond_geometry
+    value = json.loads(path.read_text()); value['precheck_source'] = 'input/official'
+    path.write_text(json.dumps(value))
+    finished = project / finishing._DEF_REL; finished.parent.mkdir(parents=True)
+    finished.write_text('DIEAREA ( 0 0 ) ( 400000 500000 ) ;\nEND DESIGN\n')
+    runroot = project / 'operator'
+    def transport(command, timeout):
+        for i, step in enumerate(readiness.SHUTTLES[readiness.DEFAULT_SHUTTLE].ladder, 1):
+            if step.cob_only:
+                continue
+            folder = runroot / f'{i:02d}-{readiness._slug(step.step_id)}'; folder.mkdir(parents=True)
+            (folder / 'state_out.json').write_text('{}')
+        if final_present:
+            layout = k.Layout(); layout.read(str(gds))
+            layout.top_cell().transform(k.Trans(10000, 15000))
+            layout.write(str(runroot / 'processed.gds'))
+        return 0, 'neutral operator source transport, no native PV claim', ''
+    report = readiness.evaluate(project, layout=gds, top='neutral_top', rundir=runroot, runner=transport)
+    assert report.verdict == 'NOT_DETERMINED'
+    edge = report.as_dict()['bond_pad_edge_distance']
+    if final_present:
+        assert edge['distances_um'] == {'left': 30, 'bottom': 45, 'right': 90, 'top': 185}
+        assert edge['input']['sha256'] != hashlib.sha256(gds.read_bytes()).hexdigest()
+        assert edge['verdict'] == 'MANUAL_REVIEW'
+    else:
+        assert edge['verdict'] == 'NOT_MEASURED'
+        assert edge['distances_um'] is None

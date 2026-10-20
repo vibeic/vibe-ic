@@ -558,6 +558,7 @@ class ReadinessReport:
     rundir: Optional[str] = None
     returncode: Optional[int] = None
     command: List[str] = field(default_factory=list)
+    bond_pad_edge_distance: Dict[str, Any] = field(default_factory=dict)
     stdout_tail: str = ""
     stderr_tail: str = ""
     #: `resolve_submission_prep` output for this shuttle — which of the in-tree
@@ -1050,16 +1051,6 @@ def evaluate(
     run = runner or default_runner
     try:
         rc, out, err = run(cmd, timeout)
-        if precheck_src and profile is not None and rc == 0:
-            from die_finishing_gen import publish_provider_release, _REPORT_REL
-            fill_report = project / "reports/phase3/cmp_fill_emit.json"
-            publish_provider_release(
-                project, Path("reports/phase3/provider_die_assembly.json"),
-                source_project=Path(profile.get("source_checkpoint") or project),
-                instruction=project / PROVIDER_TARGET_REL,
-                precheck=run_root / "provider_precheck.json",
-                finishing=project / _REPORT_REL,
-                fill_report=fill_report if fill_report.is_file() else None)
     except Exception as e:  # noqa: BLE001 — any orchestration crash is undetermined
         rep = _report(
             NOT_DETERMINED,
@@ -1124,6 +1115,32 @@ def evaluate(
     rep.steps_with_evidence = with_evidence
     rep.failed_steps = failed
     rep.undetermined_steps = undet
+    if profile is not None:
+        from provider_bond_pad_edge import measure
+        # Native operator WriteLayout is the final geometry. An absent output
+        # never falls back to the pre-operator layout and claims a measurement.
+        final_gds = run_root / "processed.gds" if precheck_src else chosen
+        rep.bond_pad_edge_distance = measure(project, final_gds, top=top)
+        atomic_write_text(run_root / "bond_pad_edge_distance.json",
+                          json.dumps(rep.bond_pad_edge_distance, indent=2))
+        edge = rep.bond_pad_edge_distance
+        if rep.verdict == PASS and edge["verdict"] != PASS:
+            rep.verdict = FAIL if edge["verdict"] == FAIL else NOT_DETERMINED
+            rep.reason = "bond_pad_edge_distance: " + edge["verdict"] + ": " + edge["reason"]
+        if precheck_src and rep.verdict == PASS:
+            try:
+                from die_finishing_gen import publish_provider_release, _REPORT_REL
+                fill_report = project / "reports/phase3/cmp_fill_emit.json"
+                publish_provider_release(
+                    project, Path("reports/phase3/provider_die_assembly.json"),
+                    source_project=Path(profile.get("source_checkpoint") or project),
+                    instruction=project / PROVIDER_TARGET_REL,
+                    precheck=run_root / "provider_precheck.json",
+                    finishing=project / _REPORT_REL,
+                    fill_report=fill_report if fill_report.is_file() else None)
+            except Exception as exc:
+                rep.verdict = NOT_DETERMINED
+                rep.reason = f"provider assembly was not admitted: {exc}"
     return rep
 
 

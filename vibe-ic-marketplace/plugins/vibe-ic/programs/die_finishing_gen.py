@@ -1918,6 +1918,13 @@ def publish_provider_release(project: Path, record_path: Path, *,
         raise ValueError("the requested engineering target differs from the operator run")
     if official["packaging"] != "bare_die" or official.get("assigned_id") is not None:
         raise ValueError("this bare-die engineering release cannot claim an assigned ID")
+    from provider_bond_pad_edge import measure
+    edge_path = project / "reports/phase3/bond_pad_edge_distance.json"
+    edge = measure(project, Path(final["path"]), profile_path=instruction)
+    atomic_write_json(edge_path, edge)
+    if edge["verdict"] != "PASS":
+        raise ValueError("bond_pad_edge_distance: " + edge["verdict"] + ": " + edge["reason"])
+    files["bond_pad_edge_distance"] = _release_file(edge_path)
     finished_def = project / "phase3/stage3/pnr/provider_die_finished.def"
     ok, why = write_finished_def(Path(seal_doc["artefacts"]["routed_def_in"]), finished_def,
                                  seal["ring_check"]["ring_extent"])
@@ -1930,6 +1937,7 @@ def publish_provider_release(project: Path, record_path: Path, *,
               "basis": {"files": files, "current_signoff": current_signoff or {},
                         "provider": "wafer.space", "slot": official["slot"], "CoB": False,
                         "engineering_target": target, "platform_accepted": False,
+                        "bond_pad_edge_distance": edge,
                         "official_precheck_report": files["official_precheck"],
                         "official_revision": official["official_entry"],
                         "provider_precheck": {
