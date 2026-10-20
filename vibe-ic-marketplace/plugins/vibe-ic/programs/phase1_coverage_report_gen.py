@@ -273,7 +273,7 @@ def _pin_alias_literals(text: str):
                 table_delimiter = delimiter
             declared_columns = {i for i, c in enumerate(cells)
                                 if _PIN_ALIAS_HEADER.fullmatch(c.strip("`* "))}
-            if declared_columns and not any(
+            if not alias_columns and declared_columns and not any(
                     _PIN_ALIAS_RX.search(c) for i, c in enumerate(cells)
                     if i not in declared_columns):
                 alias_columns = declared_columns
