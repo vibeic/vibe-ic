@@ -747,6 +747,8 @@ def _counter_projection_design(kind):
         updates = "if (rst) state <= 5'd0; else state <= 5'd4;"
     elif kind == 'computed_slice':
         projected = 'state[6-0:4]'
+    elif kind == 'concat_write':
+        updates += ' {state[6:4],state[3:2]} <= {state[6:4] ^ (state[6:4] >> 1),state[3:2]};'
     return {'design.v': f'''
 module counter_source(input clk, rst, en, output [{width-1}:0] value);
 reg [6:2] state;
@@ -773,7 +775,7 @@ def test_binary_counter_alias_and_fixed_slice_keep_numeric_encoding(tmp_path, ki
     assert report['discovery']['complete'] is True
 
 
-@pytest.mark.parametrize('kind', ['xor', 'masked', 'mixed', 'partial', 'constant', 'computed_slice'])
+@pytest.mark.parametrize('kind', ['xor', 'masked', 'mixed', 'partial', 'constant', 'computed_slice', 'concat_write'])
 def test_counter_projection_does_not_invent_encoding_for_other_dataflows(tmp_path, kind):
     res, report = run_cli(tmp_path, _counter_projection_design(kind), 'counter_projection')
     assert res.returncode == 0, res.stderr

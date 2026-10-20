@@ -444,6 +444,14 @@ def _binary_counter_projection(body: str, signal_name: str) -> Optional[Encoding
     """
     clean = lexical_mask(body, attributes=True)
     name = re.escape(signal_name)
+    # Concatenated LHS writes are not captured by a single-identifier driver.
+    # Do not mistake one recognized write for the complete driver set.
+    def other_write(target):
+        return (re.search(r'\{[^;]*\b' + target + r'\b[^;]*\}\s*(?:<=|=(?!=))', clean)
+                or re.search(r'(?:\+\+|--)\s*\b' + target + r'\b', clean))
+
+    if other_write(name):
+        return None
     drivers = list(re.finditer(r'\bassign\s+' + name + r'\s*=\s*([^;]+);', clean))
     writes = list(re.finditer(r'\b' + name + r'\s*(?:\[[^]]+\]\s*)?(?:<=|=(?!=))', clean))
     if len(drivers) != 1 or len(writes) != 1:
@@ -457,6 +465,8 @@ def _binary_counter_projection(body: str, signal_name: str) -> Optional[Encoding
     if state == signal_name:
         return None
     state_name = re.escape(state)
+    if other_write(state_name):
+        return None
     declarations = list(re.finditer(
         r'\b(?:reg|logic|bit)\s*\[\s*(\d+)\s*:\s*(\d+)\s*\]\s*' +
         state_name + r'\s*;', clean))
