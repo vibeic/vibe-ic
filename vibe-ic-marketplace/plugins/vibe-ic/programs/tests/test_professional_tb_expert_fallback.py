@@ -253,6 +253,52 @@ def _native_signature_run(project):
     return step, report, rc, result
 
 
+@pytest.mark.parametrize('mutation', ['none', 'expert', 'producer', 'layer'])
+def test_native_expert_review_survives_identity_publication(tmp_path, mutation):
+    """The producer and later identity sweep must publish the same review bytes."""
+    import ai_signed_judgement as judgement
+    import design_one_shot_runner as runner
+
+    project, out = _signature_project(tmp_path)
+    # Exercise the retained-results path in both actual native invocations.
+    # This obsolete file is invalidated before any simulator verdict is read.
+    (out / 'results.xml').write_text('<obsolete/>\n')
+    step, report, rc, result = _native_signature_run(project)
+    assert (step.status, rc, result['verdict']) == ('PASS', 0, 'PASS'), report
+    receipt_path = project / 'reports/audit/ai_judgements/4.json'
+    receipt_path.parent.mkdir(parents=True)
+    digest = judgement.evidence_sha256(project, '4')
+    receipt_path.write_text(json.dumps({
+        'schema': judgement.SCHEMA, 'step_id': '4', 'verdict': 'PASS',
+        'signed_by': 'synthetic-native-reference-reviewer',
+        'judgement': 'Reviewed the native eight byte stores and their independent expected values.',
+        'evidence_sha256': digest}))
+    assert judgement.check(project, '4')[0]
+    report_path = project / 'reports/phase2/gates/professional_tb.json'
+    original = report_path.read_bytes()
+
+    runner.step_stamp_gate_reports(project)
+    assert judgement.check(project, '4')[0] is True, 'normal identity publication invalidated the current expert review'
+    assert report_path.read_bytes() == original
+    assert json.loads(original)['design_identity'] == runner._design_identity_fields(project)
+
+    step, report, rc, result = _native_signature_run(project)
+    assert (step.status, rc, result['verdict']) == ('PASS', 0, 'PASS'), report
+    assert report_path.read_bytes() == original
+    assert judgement.check(project, '4')[0]
+    runner.step_stamp_gate_reports(project)
+    assert report_path.read_bytes() == original
+    assert judgement.evidence_sha256(project, '4') == digest
+    target = {
+        'expert': out / 'expert_reference_tb.py',
+        'producer': report_path,
+        'layer': project / 'phase1/generated_docs/L9_INTEGRATION_SPEC.json',
+    }.get(mutation)
+    if target is not None:
+        target.write_bytes(target.read_bytes() + b'\n ')
+    assert judgement.check(project, '4')[0] == (mutation == 'none')
+
+
 def _actual_signature_events(project, out):
     log = (out / "cocotb_run.log").read_text()
     events = ast.literal_eval(re.search(r"ACTUAL_STORE_EVENTS (\[[^\n]*\])", log).group(1))

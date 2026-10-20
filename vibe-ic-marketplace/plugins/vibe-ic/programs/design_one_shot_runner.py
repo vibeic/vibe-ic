@@ -9943,8 +9943,12 @@ def step_professional_tb_gen(project: Path, top_name: str = "",
     report = gates_dir / "professional_tb.json"
 
     def _write(obj: Dict[str, Any]) -> None:
+        # This report is signed at the Step4 expert handoff. Publish the same
+        # identity now that the later gate-report sweep would add, so a normal
+        # publication cannot change already-reviewed evidence bytes.
+        payload = {**obj, "design_identity": _design_identity_fields(project)}
         try:
-            report.write_text(json.dumps(obj, indent=2) + "\n")
+            report.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
         except OSError:
             pass
 
