@@ -375,6 +375,8 @@ def io_supply_pad_sufficiency(components, def_text: str, library) -> Dict[str, A
                 if inst != 'PIN':
                     pin_nets.setdefault((inst, pin), set()).add(net)
     domains = {}
+    unresolved_supply_pair = False
+    unknown_supply_pairs = set()
     for inst, master in pads:
         nets = {'POWER': set(), 'GROUND': set()}
         missing = False
@@ -385,6 +387,8 @@ def io_supply_pad_sufficiency(components, def_text: str, library) -> Dict[str, A
                 nets[use].update(connected)
         if missing or any(len(v) != 1 for v in nets.values()):
             unknown.append(inst)
+            if classes[master] in _PAD_POWER_CLASSES:
+                unresolved_supply_pair = True
             continue
         key = (next(iter(nets['POWER'])), next(iter(nets['GROUND'])))
         signal = classes[master] in _PAD_SIGNAL_CLASSES
@@ -394,6 +398,7 @@ def io_supply_pad_sufficiency(components, def_text: str, library) -> Dict[str, A
             use = roles.get(master, {}).get(bond, ('', ''))[1]
             if use not in nets:
                 unknown.append(inst)
+                unknown_supply_pairs.add(key)
                 continue
         row = domains.setdefault(key, {'power_net': key[0], 'ground_net': key[1],
                                       'signal_pads': 0, 'power_pads': 0, 'ground_pads': 0,
@@ -402,10 +407,11 @@ def io_supply_pad_sufficiency(components, def_text: str, library) -> Dict[str, A
             row['signal_pads'] += 1
         else:
             row['power_pads' if use == 'POWER' else 'ground_pads'] += 1
-    unknown_supply = any(i in unknown and classes.get(m) == 'PAD POWER'
-                         for i, m in components)
     bad, incomplete = False, bool(unknown or not census.get('source'))
     for key, row in domains.items():
+        # Unknown bond roles affect their known pair only. An unresolved pair
+        # may belong to any candidate domain and must remain conservative.
+        unknown_supply = unresolved_supply_pair or key in unknown_supply_pairs
         compared = set()
         for contract in library['limits']:
             declaration = contract['declaration']

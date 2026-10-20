@@ -318,3 +318,40 @@ def test_unknown_supply_bond_cannot_prove_a_shortage(tmp_path):
     assert c['result'] == 'MANUAL_REVIEW'
     assert c['unknown_domain_instances'] == ['h', 'l']
     assert all(v['result'] == 'NOT_DETERMINED' for v in c['domains'][0]['comparisons'])
+
+
+def _domain_failure_with_unknown_supply(known_pair):
+    # The R2 review's exact neutral counterexample, through the owner API.
+    classes = {'sig': 'PAD INPUT', 'hi': 'PAD POWER', 'lo': 'PAD POWER',
+               'unknown_hi': 'PAD POWER'}
+    roles = {m: {'H': ('INOUT', 'POWER'), 'L': ('INOUT', 'GROUND')} for m in classes}
+    library = {'classes': classes, 'pin_roles': roles, 'bond_pins': {'hi': ['H'], 'lo': ['L']},
+               'limits': [{'declaration': {'domains': [{'power_net': 'upper',
+                   'ground_net': 'lower', 'max_signal_pads_per_power_pad': 1,
+                   'max_signal_pads_per_ground_pad': 1}]},
+                   'source': {'path': 'neutral-authority.json', 'sha256': 'neutral'}}], 'errors': []}
+    components = [('s0', 'sig'), ('s1', 'sig'), ('hp', 'hi'), ('lp', 'lo')]
+    text = ('SPECIALNETS 2 ;\n- upper ( s0 H ) ( s1 H ) ( hp H ) ( lp H ) ;\n'
+            '- lower ( s0 L ) ( s1 L ) ( hp L ) ( lp L ) ;\nEND SPECIALNETS\n')
+    control = S.io_supply_pad_sufficiency(components, text, library)
+    extra = text.replace('SPECIALNETS 2 ;', 'SPECIALNETS 4 ;' if known_pair else 'SPECIALNETS 3 ;')
+    extra = extra.replace('END SPECIALNETS', '- other_upper ( extra H ) ;\n' +
+                          ('- other_lower ( extra L ) ;\n' if known_pair else '') + 'END SPECIALNETS')
+    return control, S.io_supply_pad_sufficiency(components + [('extra', 'unknown_hi')], extra, library)
+
+
+def test_known_other_supply_domain_cannot_mask_declared_failure():
+    control, mixed = _domain_failure_with_unknown_supply(known_pair=True)
+    assert control['result'] == 'FAIL'
+    assert mixed['result'] == 'FAIL'
+    assert mixed['status'] == 'AUTOMATED'
+    assert [v['result'] for v in mixed['domains'][0]['comparisons']] == ['FAIL', 'FAIL']
+    assert mixed['unknown_domain_instances'] == ['extra']
+
+
+def test_unknown_supply_rail_pair_keeps_candidate_domain_undetermined():
+    control, mixed = _domain_failure_with_unknown_supply(known_pair=False)
+    assert control['result'] == 'FAIL'
+    assert mixed['result'] == 'MANUAL_REVIEW'
+    assert [v['result'] for v in mixed['domains'][0]['comparisons']] == ['NOT_DETERMINED'] * 2
+    assert mixed['unknown_domain_instances'] == ['extra']
