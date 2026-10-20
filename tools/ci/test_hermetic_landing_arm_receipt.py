@@ -241,8 +241,29 @@ def _write_completion(case: dict[str, Path], payload: dict) -> None:
 
 def _landing_case(tmp_path: Path, arm: str = "A2") -> dict[str, Path]:
     case = _case(tmp_path)
-    proc = _invoke(case, arm)
+    # This module tests receipt grammar over a fake Docker world and fictional
+    # object IDs, not host NDA execution. Acquire its transport through A2;
+    # construct the B2 public measurement fixture explicitly. Actual detector
+    # execution, binding and refusals are covered by test_trusted_nda_host.
+    proc = _invoke(case, "A2" if arm == "B2" else arm)
     assert proc.returncode == 0, proc.stderr
+    if arm == "B2":
+        receipt = _receipt(case)
+        env = dict(value.split("=", 1)
+                   for value in receipt["container"]["process_environment"])
+        env["GATEKEEPER_VERIFY_ARM"] = "B2"
+        env["VIBEIC_NDA_HOST_RESULT"] = json.dumps({
+            "kind": "vibeic.trusted-host-nda/v1", "payload": {
+                "base": BASE, "head": HEAD, "tree": TREE,
+                "range": BASE + ".." + HEAD,
+                "source_sha256": {name: "1" * 64 for name in (
+                    "commit_msg_nda_check.py", "nda_diff_scan_check.py", "_commercial_pdk.py")},
+                "guards": [{"guard": name, "rc": 0} for name in (
+                    "commit_msg_nda_check.py", "nda_diff_scan_check.py")],
+            }}, sort_keys=True, separators=(",", ":"))
+        receipt["container"]["process_environment"] = [
+            name + "=" + value for name, value in sorted(env.items())]
+        _write_receipt(case, receipt)
     hygiene = case["output"] / "hygiene.json"
     hygiene.write_text('{"complete":true,"schema":1}\n', encoding="utf-8")
     _write_completion(case, _completion_payload(_receipt(case), arm, hygiene))

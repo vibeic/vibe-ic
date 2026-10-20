@@ -227,6 +227,50 @@ class Refusal(RuntimeError):
     """The runner cannot produce trustworthy candidate evidence."""
 
 
+class NDARejection(RuntimeError):
+    """The trusted scanner measured forbidden committed input."""
+
+
+NDA_RESULT_ENV = "VIBEIC_NDA_HOST_RESULT"
+
+
+def _nda_host():
+    spec = importlib.util.spec_from_file_location(
+        "_hermetic_trusted_nda_host", Path(__file__).with_name("trusted_nda_host.py"))
+    if spec is None or spec.loader is None:
+        raise Refusal("trusted NDA boundary is unavailable")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def _prepare_host_nda(subject: Path, reviewed: dict[str, str],
+                      command: list[str], runtime: Path | None = None) -> dict | None:
+    # BASE still owns the caller and runtime selection. A new runner can be
+    # reviewed without changing the verifier that must first admit its code.
+    if (reviewed["GATEKEEPER_VERIFY_ARM"] != "B2"
+            or command[0] != "/subject/tools/gatekeeper-land.sh"):
+        return None
+    nda = _nda_host()
+    try:
+        head = nda._git(subject, ["rev-parse", "HEAD"])
+        result = nda.run(subject, reviewed["GATEKEEPER_BASE"], head,
+                         forbidden_roots=(() if runtime is None else (runtime,)))
+        codes = [row["rc"] for row in result["payload"]["guards"]]
+        if any(code not in (0, 1) for code in codes):
+            raise Refusal("trusted NDA detector was not measured")
+        if any(code == 1 for code in codes):
+            raise NDARejection()
+        nda.public_result(nda._canonical(result).decode().strip())
+        return result
+    except NDARejection:
+        raise
+    except Exception:
+        # Resolver/git errors may contain private paths or scanner text.
+        raise Refusal("trusted NDA detector input is unavailable or invalid") from None
+
+
 class SignalExit(BaseException):
     def __init__(self, signum: int):
         super().__init__(signum)
@@ -434,6 +478,14 @@ def _receipt_process_env(values: Any) -> dict[str, str]:
         raise ValueError(f"receipt reviewed environment differs: {exc}") from exc
     fixed = _fixed_process_env(reviewed["GATEKEEPER_VERIFY_ARM"])
     expected = set(fixed) | set(reviewed) | dynamic
+    if NDA_RESULT_ENV in parsed:
+        if reviewed["GATEKEEPER_VERIFY_ARM"] != "B2":
+            raise ValueError("host NDA result belongs only to B2")
+        try:
+            _nda_host().public_result(parsed[NDA_RESULT_ENV])
+        except Exception:
+            raise ValueError("receipt host NDA result is invalid") from None
+        expected.add(NDA_RESULT_ENV)
     if set(parsed) != expected:
         raise ValueError("receipt process environment name set differs")
     for name, value in fixed.items():
@@ -1844,6 +1896,10 @@ def validate_receipt(doc: Any) -> dict[str, Any]:
     if (not isinstance(command, list) or not command
             or not all(isinstance(arg, str) and "\0" not in arg for arg in command)):
         raise ValueError("receipt command is malformed")
+    if ((receipt_process_env["GATEKEEPER_VERIFY_ARM"] == "B2"
+         and command[0] == "/subject/tools/gatekeeper-land.sh")
+            != (NDA_RESULT_ENV in receipt_process_env)):
+        raise ValueError("receipt landing command lacks its trusted NDA result")
     inputs = _exact_keys(receipt["inputs"], {
         "corpus", "overlays", "progress_plan", "runtime",
         "runtime_progress_plan", "selection", "subject"
@@ -2123,6 +2179,7 @@ def run(args: argparse.Namespace) -> int:
                            if row["destination"] == command[0])
     if not int(command_overlay["source_file"]["permissions"], 8) & stat.S_IXOTH:
         raise Refusal("candidate overlay command is not executable by uid 65534")
+    host_nda = _prepare_host_nda(subject, reviewed_env, command, runtime)
     for destination, label in ((output, "output directory"),
                                (receipt_path, "receipt")):
         if (_inside(destination, subject) or _inside(destination, runtime)
@@ -2171,6 +2228,8 @@ def run(args: argparse.Namespace) -> int:
         "VIBEIC_HERMETIC_PROGRESS_PREFIX": PROGRESS_PREFIX.decode("ascii"),
         "VIBEIC_HERMETIC_PROGRESS_SCOPE": plan["scope"],
     }
+    if host_nda is not None:
+        process_env[NDA_RESULT_ENV] = _nda_host()._canonical(host_nda).decode().strip()
     process_environment = [
         f"{name}={process_env[name]}" for name in sorted(process_env)
     ]
@@ -2304,6 +2363,13 @@ def run(args: argparse.Namespace) -> int:
             raise Refusal("candidate stopped-state proof changed during export")
         _strip_volume_ready_marker(artifacts_dir)
         _publish_stream_artifacts(artifacts_dir, stdout_path, stderr_path)
+        if host_nda is not None:
+            nda = _nda_host()
+            try:
+                nda.verify_completion(host_nda["payload"], subject,
+                                      artifacts_dir / "landing-completion.json", "B2")
+            except Exception:
+                raise Refusal("trusted NDA result and B2 completion disagree") from None
         artifacts = _artefact_manifest(artifacts_dir)
 
         final_inputs = {
@@ -2392,6 +2458,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"[NORECORD] hermetic candidate interrupted by signal {exc.signum}",
               file=sys.stderr)
         return 128 + exc.signum
+    except NDARejection:
+        print("[REFUSE] trusted NDA guard found forbidden committed input", file=sys.stderr)
+        return 1
     except (OSError, UnicodeError, ValueError, Refusal,
             json.JSONDecodeError, subprocess.SubprocessError) as exc:
         print(f"[NORECORD] hermetic candidate: {exc}", file=sys.stderr)

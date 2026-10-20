@@ -644,12 +644,22 @@ landing_unit_cheap_nda_messages() {
     landing_skip "$1" "range is empty"
     return 0
   fi
+  if [ -n "${VIBEIC_NDA_HOST_RESULT:-}" ]; then
+    run "$1" "NDA — trusted host commit messages" python3 "$RUNTIME_ROOT/tools/ci/trusted_nda_host.py" \
+      check-unit --repo "$ROOT" --base "$BASE" --guard commit_msg_nda_check.py
+    return
+  fi
   run "$1" "NDA — commit messages"   python3 "$PROGRAMS/commit_msg_nda_check.py" --repo "$ROOT" --rev-range "$RANGE"
 }
 landing_unit_cheap_nda_content() {
   if [ "$GK_RANGE_N" = "0" ]; then
     landing_skip "$1" "range is empty"
     return 0
+  fi
+  if [ -n "${VIBEIC_NDA_HOST_RESULT:-}" ]; then
+    run "$1" "NDA — trusted host content and paths" python3 "$RUNTIME_ROOT/tools/ci/trusted_nda_host.py" \
+      check-unit --repo "$ROOT" --base "$BASE" --guard nda_diff_scan_check.py
+    return
   fi
   run "$1" "NDA — added content/paths" python3 "$PROGRAMS/nda_diff_scan_check.py" --rev-range "$RANGE"
 }

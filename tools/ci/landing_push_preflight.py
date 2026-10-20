@@ -59,6 +59,7 @@ GATES = (
     "nda_diff_scan_check.py",
     "git_prohibition_guard.py",
 )
+NDA_GUARDS = frozenset({"commit_msg_nda_check.py", "nda_diff_scan_check.py"})
 BASE_FILES = GATES + ("_commercial_pdk.py",)
 
 
@@ -69,12 +70,25 @@ def _gate_record(name: str, proc: subprocess.CompletedProcess) -> dict[str, Any]
     lines = [line.strip() for line in
              visible.decode("utf-8", errors="replace").splitlines()
              if line.strip()]
+    # The two NDA guards can be handed private detector literals on the host.
+    # Their streams may be useful for local diagnosis, but a broken formatter
+    # must not copy private text into a durable/public preflight receipt.
+    if name in NDA_GUARDS:
+        summary = ("NDA guard PASS" if proc.returncode == 0 else
+                   "NDA guard REFUSE" if proc.returncode == 1 else
+                   "NDA guard NORECORD")
+    else:
+        summary = (lines[-1] if lines else "NO OUTPUT")[:1000]
+    stdout_sha256 = ("0" * 64 if name in NDA_GUARDS
+                     else hashlib.sha256(stdout).hexdigest())
+    stderr_sha256 = ("0" * 64 if name in NDA_GUARDS
+                     else hashlib.sha256(stderr).hexdigest())
     return {
         "name": name,
         "rc": proc.returncode,
-        "stdout_sha256": hashlib.sha256(stdout).hexdigest(),
-        "stderr_sha256": hashlib.sha256(stderr).hexdigest(),
-        "summary": (lines[-1] if lines else "NO OUTPUT")[:1000],
+        "stdout_sha256": stdout_sha256,
+        "stderr_sha256": stderr_sha256,
+        "summary": summary,
     }
 
 
