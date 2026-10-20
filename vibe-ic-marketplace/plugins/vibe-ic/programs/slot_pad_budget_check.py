@@ -659,10 +659,14 @@ def parse_top_ports(text: str, top: str,
     # share a line with its predecessor, or start after an `endif. Inferring
     # conditionality from the previous name would attribute the wrong port.
     conditional_spans: List[Tuple[int, int]] = []
+    conditional_events: List[Tuple[int, str]] = []
     depth_cond = 0
     offset = 0
     for line in stripped.splitlines(keepends=True):
         s = line.strip()
+        directive = re.match(r"^`(ifdef|ifndef|elsif|else|endif)\b", s)
+        if directive:
+            conditional_events.append((offset, directive.group(1)))
         if re.match(r"^`(?:ifdef|ifndef)\b", s):
             depth_cond += 1
         elif re.match(r"^`endif\b", s):
@@ -675,8 +679,16 @@ def parse_top_ports(text: str, top: str,
     ports: List[Dict[str, Any]] = []
     unparsed: List[str] = []
     direction: Optional[str] = None
-    inherited_type = ""
     offset = m.end() + open_i + 1
+    # Keep the possible inherited direction/packed-width contexts at each
+    # branch join. A textual last declaration is not authority for a branch
+    # that may be absent. Each branch starts from its entry context; explicit
+    # declarations reset it. This does not select defines or preprocess RTL.
+    type_states = {(None, 1)}
+    branch_stack: List[Dict[str, Any]] = []
+    events = iter((pos, kind) for pos, kind in conditional_events
+                  if offset <= pos < m.end() + close_i)
+    event = next(events, None)
     for raw_decl in split_top_level(rest[open_i + 1:close_i]):
         chunk_start = offset
         offset += len(raw_decl) + 1
@@ -692,6 +704,26 @@ def parse_top_ports(text: str, top: str,
         # `split_port_tail` for the measurement that found this.
         head, unpacked = split_port_tail(tail)
         name_match = re.search(r"([A-Za-z_]\w*)\s*$", head)
+        name_pos = (chunk_start + raw_decl.find(decl)
+                    + (dm.start(2) if dm else 0)
+                    + (name_match.start(1) if name_match else 0))
+        while event is not None and event[0] <= name_pos:
+            kind = event[1]
+            if kind in ("ifdef", "ifndef"):
+                branch_stack.append({"entry": set(type_states),
+                                     "exits": set(), "has_else": False})
+            elif branch_stack:
+                frame = branch_stack[-1]
+                frame["exits"].update(type_states)
+                if kind in ("elsif", "else"):
+                    type_states = set(frame["entry"])
+                    frame["has_else"] |= kind == "else"
+                else:  # endif: include the absent arm when there is no else.
+                    if not frame["has_else"]:
+                        frame["exits"].update(frame["entry"])
+                    type_states = frame["exits"]
+                    branch_stack.pop()
+            event = next(events, None)
         # A continuation is just its own declarator, not a second type. Keep
         # unsupported chunks visible and invalidate a partial budget below.
         if (not name_match or (not dm and
@@ -702,15 +734,21 @@ def parse_top_ports(text: str, top: str,
         name = name_match.group(1)
         if dm:
             direction = dm.group(1)
-            inherited_type = head[:name_match.start(1)]
-        width = _width(inherited_type, params)
+            type_states = {(direction, _width(head[:name_match.start(1)], params))}
+        directions = {d for d, _ in type_states}
+        widths = {w for _, w in type_states}
+        # Equal known widths/directions remain decidable even when the type
+        # spelling differs. Otherwise the existing unresolved-width consumer
+        # must refuse a partial sum, including across else/elsif/endif.
+        width = (next(iter(widths)) if len(widths) == len(directions) == 1
+                 and None not in directions else None)
+        if len(directions) == 1 and None not in directions:
+            direction = next(iter(directions))
         if unpacked:
             n = unpacked_count(unpacked, params)
             # None x anything stays None: an array whose length nobody supplied
             # is UNDECIDED, never a guessed pad count.
             width = None if (width is None or n is None) else width * n
-        name_pos = (chunk_start + raw_decl.find(decl)
-                    + (dm.start(2) if dm else 0) + name_match.start(1))
         ports.append({"dir": direction, "name": name,
                       "width": width,
                       "conditional": any(a <= name_pos < b
@@ -834,10 +872,12 @@ def evaluate(slots: Dict[str, Dict[str, Any]], ports: List[Dict[str, Any]]
             "reason_class": _reason_taxonomy.ZERO_DENOMINATOR,
             "reason": "the width of "
                       f"{len(budget['unresolved_width_ports'])} port(s) is "
-                      "parameterised and no value was supplied: "
+                      "not uniquely resolved from its declared type and "
+                      "supplied values: "
                       + ", ".join(budget["unresolved_width_ports"][:12])
-                      + " — supply them with --param NAME=VALUE; a width this "
-                        "gate invented would be a pad count nobody chose",
+                      + " — supply missing parameters with --param NAME=VALUE "
+                        "or resolve conditional types in the elaborated top; "
+                        "a width this gate invented would be a pad count nobody chose",
             "unresolved_width_ports": budget["unresolved_width_ports"],
             "partial_signal_bits_EXCLUDING_UNRESOLVED": need,
             "note": "the partial sum is NOT a verdict and must not be read as one",
@@ -1573,9 +1613,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                    "reason_class": _reason_taxonomy.ZERO_DENOMINATOR,
                    "reason": ("the width of "
                               f"{len(_budget['unresolved_width_ports'])} "
-                              "port(s) is parameterised and neither the "
-                              "command line nor the design's own "
-                              f"{DESIGN_DECLARATION_REL} supplies a value: "
+                              "port(s) is not uniquely resolved from its "
+                              "declared type and supplied values: "
                               + ", ".join(_budget["unresolved_width_ports"][:12])
                               + " — a width this gate invented would be a pad "
                                 "count nobody chose"),

@@ -1099,3 +1099,39 @@ def test_ansi_missing_pad_reaches_the_real_runner_as_FAIL():
     result = R.step_slot_pad_budget(p, "widget")
     assert result.status == "FAIL", result.detail
     assert result.extras["exit_code"] == 1
+
+
+@pytest.mark.parametrize("body,expected", [
+    ("input [3:0] a,\n`ifdef SMALL\n input [0:0] b, branch,\n`endif\n c, input [1:0] explicit_port, final_port",
+     [("a",4),("b",1),("branch",1),("c",None),("explicit_port",2),("final_port",2)]),
+    ("input [3:0] a,\n`ifdef SMALL\n input [0:0] b, branch,\n`else\n other,\n`endif\n c",
+     [("a",4),("b",1),("branch",1),("other",4),("c",None)]),
+    ("input [3:0] a,\n`ifdef SMALL\n input [3:0] b,\n`endif\n c",
+     [("a",4),("b",4),("c",4)]),
+    ("input [3:0] a,\n`ifdef SMALL\n input [1:0] b,\n`elsif MEDIUM\n input [2:0] middle,\n`else\n input [0:0] other,\n`endif\n c",
+     [("a",4),("b",2),("middle",3),("other",1),("c",None)]),
+])
+def test_ansi_conditional_type_authority_does_not_guess_after_branch_join(body, expected):
+    ports = S.parse_top_ports("module widget(" + body + "); endmodule", "widget")
+    assert [(p["name"],p["width"]) for p in ports] == expected
+    assert ports[0]["_unparsed_chunks"] == []
+
+
+@pytest.mark.parametrize("ambiguous", [True, False])
+def test_ansi_conditional_width_public_cli_refuses_false_six_pad_FITS(tmp_path, ambiguous):
+    width = "3:0" if ambiguous else "0:0"
+    rtl = ("module widget(input [" + width + "] a,\n`ifdef SMALL\n"
+           " input [0:0] b,\n`endif\n c); endmodule")
+    source = tmp_path / "phase2/stage1/rtl/widget.sv"
+    source.parent.mkdir(parents=True)
+    source.write_text(rtl)
+    slot = tmp_path / "input/submission_template/slots/six.json"
+    slot.parent.mkdir(parents=True)
+    slot.write_text(json.dumps({"PAD_SOUTH":[f"bidir[{i}].pad" for i in range(6)]}))
+    out = tmp_path / "budget.json"
+    cp = _supervised([sys.executable, str(PROG / "slot_pad_budget_check.py"),
+                      str(tmp_path), "--top", "widget", "--json", str(out)])
+    rep = json.loads(out.read_text())
+    assert (cp.returncode, rep["verdict"]) == ((2,"UNDECIDED") if ambiguous else (0,"FITS"))
+    assert (rep["unresolved_width_ports"] if ambiguous else
+            rep["interface"]["unresolved_width_ports"]) == (["c"] if ambiguous else [])
