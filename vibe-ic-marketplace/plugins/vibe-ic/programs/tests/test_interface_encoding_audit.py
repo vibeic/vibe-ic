@@ -995,5 +995,57 @@ def test_p0_reads_the_encoding_receipt_instead_of_advisory_rc0(tmp_path, monkeyp
     assert records[0]['verdict'] == verdict, records
 
 
+@pytest.mark.parametrize('literal,verdict', [("6'd3", 'PASS'), ("6'b110000", 'FAIL')])
+def test_p0_encoding_receipt_survives_dispatch_and_storage_gate(tmp_path, monkeypatch,
+                                                               literal, verdict):
+    import flow_compliance_check as flow
+    project = tmp_path / 'project'
+    rtl = project / 'phase2/stage1/rtl'
+    rtl.mkdir(parents=True)
+    docs = project / 'phase1/generated_docs'
+    docs.mkdir(parents=True)
+    (docs / 'L9_INTEGRATION_SPEC.json').write_text(json.dumps({'top_module': 'neutral'}))
+    (rtl / 'neutral.v').write_text(
+        "module producer(output reg [5:0] count); initial count <= 6'd0; endmodule\n"
+        "module consumer(input [5:0] count); always @* if(count == " + literal +
+        ") begin end endmodule\n"
+        "module neutral; wire [5:0] count; generate if (1) begin : active "
+        "producer p(.count(count)); consumer c(.count(count)); end endgenerate endmodule\n")
+    monkeypatch.setattr(flow, '_STRUCTURAL_RTL_GATES', ('interface_encoding_audit',))
+    records = []
+    flow._run_structural_rtl_gates(project, records_out=records)
+    assert records[0]['verdict'] == verdict
+    # This is the normal persisted consumer record, after worker cleanup.
+    report = project / 'reports/phase2/gates/stage1_compliance.json'
+    report.parent.mkdir(parents=True)
+    report.write_text(json.dumps({'steps': [{'step': 'P0', 'gate_records': records}]}))
+    stored = subprocess.run([sys.executable, str(SCRIPT.parent / 'project_outputs_in_tree_check.py'),
+                             str(project)], capture_output=True, text=True)
+    assert stored.returncode == 0, stored.stdout + stored.stderr
+    receipts = list((project / '.vibeic-state/audit_receipts').rglob('encoding_audit_report.json'))
+    assert len(receipts) == 1
+    receipt = json.loads(receipts[0].read_text())
+    context = Path(receipt['configuration']['native_context'])
+    assert context.is_file()
+    assert context.resolve().is_relative_to(project.resolve())
+    if verdict == 'PASS':
+        assert receipts[0].as_posix() in records[0]['evidence']['receipt_detail']
+
+
+def test_p0_encoding_receipt_refuses_outside_project_state_alias(tmp_path, monkeypatch):
+    import flow_compliance_check as flow
+    project = tmp_path / 'project'
+    rtl = project / 'rtl'
+    rtl.mkdir(parents=True)
+    (rtl / 'neutral.v').write_text('module neutral(input d, output q); assign q=d; endmodule\n')
+    outside = tmp_path / 'outside'
+    outside.mkdir()
+    (project / '.vibeic-state').symlink_to(outside, target_is_directory=True)
+    monkeypatch.setattr(flow, '_STRUCTURAL_RTL_GATES', ('interface_encoding_audit',))
+    with pytest.raises(ValueError, match='AUDIT_RECEIPT_OUTSIDE_PROJECT'):
+        flow._run_structural_rtl_gates(project, records_out=[])
+    assert list(outside.iterdir()) == []
+
+
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])

@@ -11608,6 +11608,17 @@ def _run_structural_rtl_gates(project: Path,
     # read-only with respect to the design and parallel gates cannot collide.
     _contract_scratch = tempfile.TemporaryDirectory(prefix="vibe-ic-p0-")
     gate_scratch_dir = Path(_contract_scratch.name)
+    # Encoding verdicts publish a source-bound receipt, whose native context
+    # must outlive this dispatch. Create it in the same persistent runtime
+    # state used by redirected audit receipts, before invoking the producer;
+    # moving only its JSON later would invalidate the context paths/hashes.
+    encoding_receipt_dir = gate_scratch_dir
+    if "interface_encoding_audit" in _STRUCTURAL_RTL_GATES:
+        receipt_root = project / ".vibeic-state" / "audit_receipts"
+        if not receipt_root.resolve().is_relative_to(project.resolve()):
+            raise ValueError("AUDIT_RECEIPT_OUTSIDE_PROJECT")
+        receipt_root.mkdir(parents=True, exist_ok=True)
+        encoding_receipt_dir = Path(tempfile.mkdtemp(prefix="p0_receipt_", dir=receipt_root))
     # ── #NNN: parallel structural-gate evaluation ─────────────────────────
     # Each structural gate is an INDEPENDENT read-only validator run as its own
     # subprocess with `cwd=project` (no `os.chdir`); the only per-gate output is
@@ -11632,9 +11643,11 @@ def _run_structural_rtl_gates(project: Path,
         # gate uses project.rglob for RTL discovery, so giving them the project
         # root finds RTL AND project files. The rtl_dir check above only gates
         # the entire runner ("if no RTL at all, skip the lot").
+        worker_scratch = (encoding_receipt_dir if gate_name == "interface_encoding_audit"
+                          else gate_scratch_dir)
         argv = _structural_gate_argv(gate_name, project, rtl_dir=rtl_dir,
                                      strict_timing=strict_timing,
-                                     scratch_dir=gate_scratch_dir)
+                                     scratch_dir=worker_scratch)
         # TIMEOUT-AS-VERDICT (census row plugin/programs/flow_compliance_check.py
         # :7368, class A — "handler records a FAILING verdict"). The fixed 60 s
         # was a RUNTIME guess, and when it fired the umbrella wrote FAIL against
@@ -11671,8 +11684,8 @@ def _run_structural_rtl_gates(project: Path,
                 findings = receipt_check._cc_audit_receipt_evidence(
                     {"id": "P0_interface_encoding_audit", "auditor": gate_name},
                     "", receipt_check.CheckContext(
-                        output_path=gate_scratch_dir / "review.md",
-                        evidence_dirs=[gate_scratch_dir / gate_name],
+                        output_path=worker_scratch / "review.md",
+                        evidence_dirs=[worker_scratch / gate_name],
                         rtl_source_root=rtl_dir))
                 if len(findings) != 1:
                     raise ValueError("encoding receipt validator returned no unique decision")
@@ -11684,7 +11697,7 @@ def _run_structural_rtl_gates(project: Path,
                 if finding.state == "FAIL":
                     return _p0_gate_record(gate_name, "FAIL", finding.description, evidence)
                 if finding.state == "NOT_APPLICABLE":
-                    report = json.loads((gate_scratch_dir / gate_name /
+                    report = json.loads((worker_scratch / gate_name /
                                          "encoding_audit_report.json").read_text())
                     evidence[_sa.EVIDENCE_KEY] = _sa.absence(
                         "source file(s) in the validated native applicability proof",
