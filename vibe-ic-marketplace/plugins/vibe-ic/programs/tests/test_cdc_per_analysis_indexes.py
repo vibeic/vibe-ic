@@ -293,3 +293,89 @@ def test_native_real_header_options_top_and_partial_inputs_still_refuse(tmp_path
     l9.write_text(json.dumps({"top_module": "different_top"}))
     with pytest.raises(cdc.Refusal, match="CDC_NETLIST_TOP_MISMATCH"):
         cdc.require_binding(tmp_path, netlist, cdc.load(netlist))
+
+
+@pytest.mark.parametrize("width", [16, 32, 64, 128])
+def test_dense_consumer_storage_retains_destinations_once(width):
+    model, _work = vector_model(width)
+    lookup = cdc._LookupSnapshot(model)
+    for bit in model.flops[0].q:
+        assert lookup.consumers(bit) == [
+            (model.flops[1], index, False) for index in range(width)]
+    groups = getattr(lookup, "_consumer_groups", None)
+    if groups is None:
+        retained_rows = sum(map(len, lookup._consumers.values()))
+    else:
+        retained_rows = sum(len(rows) for domains in groups.values()
+                            for rows in domains.values())
+    destinations = sum(len(flop.d) for flop in model.flops)
+    # Count actual retained owner rows, not wall time or an invented estimate.
+    # The eager owner retains width*width + width tuples in this vector shape.
+    assert retained_rows == destinations, {
+        "retained_rows": retained_rows, "destinations": destinations}
+    assert sum(map(len, groups)) == 2 * width
+    assert len(groups) == width + 1
+    assert lookup._data_cones is None
+
+
+def test_compact_consumers_preserve_default_order_direct_flags_and_current_model():
+    flops = [cdc.Flop("sender", "$dff", 1, 1, [3, 4], [10, 11]),
+             cdc.Flop("receiver", "$dff", 2, 1, [20, 10], [30, 31]),
+             cdc.Flop("same_clock", "$dff", 1, 1, [20, 11], [40, 41]),
+             cdc.Flop("receiver2", "$dff", 2, 1, [11, 20], [50, 51])]
+    cell = {"type": "$xor", "connections": {"A": [10, 11, 3], "Y": [20]},
+            "port_directions": {"A": "input", "Y": "output"}}
+    model = cdc.Netlist("neutral_groups", {"inputs": ("input", [1, 2, 3, 4])},
+                        {"mix": cell}, {}, {20: ("mix", "Y")}, flops)
+    lookup = cdc._LookupSnapshot(model)
+    for bit in [3, 4, 10, 11, 99, "x"]:
+        expected = []
+        for flop in flops:
+            skip = {flop.srst} if flop.srst is not None else None
+            for index, target in enumerate(flop.d):
+                q, p = model.cone([target], skip)
+                if bit in q | p:
+                    expected.append((flop, index, model.direct_source(flop, index) == bit))
+        assert lookup.consumers(bit) == expected
+        domain = lookup.domain(flops[0])
+        assert lookup.consumers(bit, exclude_domain=domain) == [
+            row for row in expected if lookup.domain(row[0]) != domain]
+    # A fresh analysis must not reuse old groups after data or clock edits.
+    cell["connections"]["A"] = [4]
+    flops[2].clk = 2
+    current = cdc._LookupSnapshot(model)
+    assert current.consumers(3) == [(flops[0], 0, True)]
+    assert [f.name for f, _i, _d in current.consumers(10)] == ["receiver"]
+    assert current.domain(flops[2]) == current.domain(flops[1])
+
+
+def test_native_same_clock_reset_cycle_remains_blocking(tmp_path):
+    rtl = tmp_path / "phase2/stage1/rtl/neutral_reset_cycle.v"
+    rtl.parent.mkdir(parents=True)
+    rtl.write_text("""module neutral_reset_cycle(input clk, ext_rst,
+      input [1:0] data_i, output reg [1:0] q);
+      wire reset_a = ext_rst | q[1];
+      wire reset_b = ext_rst | q[0];
+      always @(posedge clk or posedge reset_a)
+        if (reset_a) q[0] <= 1'b0; else q[0] <= data_i[0];
+      always @(posedge clk or posedge reset_b)
+        if (reset_b) q[1] <= 1'b0; else q[1] <= data_i[1];
+    endmodule\n""")
+    l9 = tmp_path / "phase1/generated_docs/L9_INTEGRATION_SPEC.json"
+    l9.parent.mkdir(parents=True)
+    l9.write_text(json.dumps({"top_module": "neutral_reset_cycle"}))
+    path = cdc.build(tmp_path, [rtl], "neutral_reset_cycle")
+    model = cdc.load(path)
+    cdc.require_binding(tmp_path, path, model)
+    assert len(model.flops) == 2
+    assert all(flop.type == "$adff" and flop.arst is not None for flop in model.flops)
+    assert len(cdc.clock_domains(model)) == 1
+    report = tmp_path / "ordinary_reset.json"
+    done = subprocess.run([
+        sys.executable, str(PROG / "reset_dependency_check.py"), str(tmp_path),
+        "--front-end", "netlist", "--json", str(report)],
+        capture_output=True, text=True)
+    doc = json.loads(report.read_text())
+    assert done.returncode == 1 and doc["passed"] is False, doc
+    assert any(row["rule"] == "CIRCULAR_RESET_DEPENDENCY" and
+               row["severity"] == "ERROR" for row in doc["findings"])

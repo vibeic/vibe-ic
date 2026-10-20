@@ -564,8 +564,9 @@ class _LookupSnapshot:
             for f in nl.flops}
         self._direct_sources: Dict[Tuple[int, int], Optional[object]] = {}
         self._data_cones: Optional[List[Tuple[Flop, int, Set[object]]]] = None
-        self._consumers: Optional[
-            Dict[object, List[Tuple[Flop, int, bool]]]] = None
+        self._consumer_groups: Optional[
+            Dict[frozenset, Dict[str, List[
+                Tuple[int, Flop, int, Optional[object]]]]]] = None
         self._direct_consumers: Optional[
             Dict[object, List[Tuple[Flop, int]]]] = None
         self._cone_inputs: Dict[str, Tuple[object, ...]] = {}
@@ -702,15 +703,33 @@ class _LookupSnapshot:
                         (flop, index, q_bits | port_bits))
         return self._data_cones
 
-    def consumers(self, source_bit) -> List[Tuple[Flop, int, bool]]:
-        if self._consumers is None:
-            self._consumers = {}
-            for flop, index, cone in self.data_cones():
-                direct = self.direct_source(flop, index)
-                for bit in cone:
-                    self._consumers.setdefault(bit, []).append(
-                        (flop, index, direct == bit))
-        return self._consumers.get(source_bit, [])
+    def consumers(self, source_bit, *, exclude_domain: Optional[str] = None
+                  ) -> List[Tuple[Flop, int, bool]]:
+        # Retain each destination once, grouped by shared immutable frontier.
+        # Do not materialize the source x destination relation or data_cones.
+        # Domain buckets let the register rule skip same-domain rows before
+        # expansion; the default query retains every domain and original order.
+        if self._consumer_groups is None:
+            self._consumer_groups = {}
+            ordinal = 0
+            for flop in self.nl.flops:
+                skip = {flop.srst} if flop.srst is not None else None
+                domain = self.domain(flop)
+                for index, bit in enumerate(flop.d):
+                    q_bits, port_bits = self.cone([bit], skip=skip)
+                    frontier = frozenset(q_bits | port_bits)
+                    domains = self._consumer_groups.setdefault(frontier, {})
+                    domains.setdefault(domain, []).append(
+                        (ordinal, flop, index, self.direct_source(flop, index)))
+                    ordinal += 1
+        rows = [row for frontier, domains in self._consumer_groups.items()
+                if source_bit in frontier
+                for domain, group in domains.items()
+                if exclude_domain is None or domain != exclude_domain
+                for row in group]
+        rows.sort(key=lambda row: row[0])
+        return [(flop, index, direct == source_bit)
+                for _ordinal, flop, index, direct in rows]
 
     def sync_stage2(self, stage1: Flop, index: int, domain: str) -> bool:
         if self._direct_consumers is None:
@@ -751,10 +770,12 @@ def _data_cones(nl: Netlist, lookup: Optional[_LookupSnapshot] = None
 
 
 def _consumers(nl: Netlist, source_bit,
-               lookup: Optional[_LookupSnapshot] = None
+               lookup: Optional[_LookupSnapshot] = None, *,
+               exclude_domain: Optional[str] = None
                ) -> List[Tuple[Flop, int, bool]]:
     """(flop, D index, direct?) for every flop whose data cone reads the bit."""
-    return (lookup or _LookupSnapshot(nl)).consumers(source_bit)
+    return (lookup or _LookupSnapshot(nl)).consumers(
+        source_bit, exclude_domain=exclude_domain)
 
 
 def clock_domains(nl: Netlist, lookup: Optional[_LookupSnapshot] = None
@@ -778,7 +799,7 @@ def reg_crossing_findings(nl: Netlist,
         send = lookup.domain(src)
         synced_all: Dict[str, bool] = {}
         for idx, bit in enumerate(src.q):
-            for f, i, direct in _consumers(nl, bit, lookup):
+            for f, i, direct in _consumers(nl, bit, lookup, exclude_domain=send):
                 recv = lookup.domain(f)
                 if recv == send:
                     continue
