@@ -2,7 +2,7 @@
 #
 # restart-eda.sh — recreate the `vibeic-eda` MCP-EDA container on a chosen image
 # tag, faithfully preserving the existing container's mounts / cmd / user /
-# workdir. Swaps ONLY the image; everything else is carried over verbatim.
+# workdir. Also exposes this helper's serving plugin bundle read-only.
 #
 # Why this exists: the eda-tools MCP server (.mcp.json) binds the container by
 # NAME (`vibeic-eda`), not by image tag — so "use the newest image" means
@@ -182,6 +182,18 @@ add_mount() {
   fi
 }
 
+# The Python producers run inside the EDA container but live in the serving
+# plugin, outside the design tree. Mount the WHOLE bundle: the entry scripts
+# import sibling modules. Resolve it through the same installed/source lookup
+# as the memory helper, never an old container mount or another cache version.
+# Declare it first so a stale mapping at this destination cannot win the
+# destination deduplication when cloning the previous container's config.
+_MEMTOOL="$(find_plugin_program _docker_memory.py || true)"
+if [[ -n "$_MEMTOOL" && -f "$_MEMTOOL" ]]; then
+  PLUGIN_ROOT="$(dirname "$(dirname "$_MEMTOOL")")"
+  add_mount "$PLUGIN_ROOT" "$PLUGIN_ROOT" ro bind
+fi
+
 if docker container inspect "$NAME" >/dev/null 2>&1; then
   HAVE_OLD=1
   OLD_IMG="$(docker inspect "$NAME" --format '{{.Config.Image}}')"
@@ -308,7 +320,6 @@ done
 #
 #   VIBEIC_DOCKER_MEMORY=48g   explicit ceiling
 #   VIBEIC_DOCKER_MEMORY=0     opt out on purpose
-_MEMTOOL="$(find_plugin_program _docker_memory.py || true)"
 declare -a MEMFLAGS=()
 if [[ -n "$_MEMTOOL" && -f "$_MEMTOOL" ]]; then
   if _memout="$(python3 "$_MEMTOOL" --flags 2>&1)"; then

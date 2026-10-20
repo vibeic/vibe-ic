@@ -69,6 +69,8 @@ The helper:
 
 - preserves an existing container's mounts, command, user, and working directory;
 - creates both the host-path identity mount and `/foss/designs` mount on a fresh install;
+- mounts its own complete serving plugin root at the same path, read-only, so
+  in-container Python producers can import their sibling modules;
 - derives matching `--memory` and `--memory-swap` limits from the host policy;
 - refuses to replace a container while an EDA process is running unless the
   operator explicitly sets `FORCE=1`;
@@ -148,8 +150,17 @@ container on it:
 PULL=1 bash tools/vibeic-eda/restart-eda.sh
 ```
 
-The helper reuses the existing container configuration. When there is no
-existing container, provide `DESIGNS_DIR` or `VIBEIC_DESIGNS` as shown above.
+The helper reuses the existing design/PDK mounts and adds the UPDATED helper's
+whole plugin root read-only. A prior mapping at that root is replaced by the
+current bundle, rather than keeping old bundle bytes at the serving program
+path. Run the helper belonging to the same installed bundle as the MCP
+registration; selecting a different cache version does not update that
+registration. Restart the client after a plugin upgrade to serve the new
+bundle. `docker restart` alone retains the old mount configuration.
+
+When there is no existing container, provide `DESIGNS_DIR` or `VIBEIC_DESIGNS`
+as shown above. Mounting only a producer entry file is insufficient because
+its sibling imports belong to the complete plugin bundle.
 
 ## Troubleshooting
 

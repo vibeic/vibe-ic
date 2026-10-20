@@ -48,6 +48,17 @@ if verb == "inspect":
     elif fmt == "{{.Config.WorkingDir}}": print("/work")
     elif fmt == "{{.Image}}": print(os.environ["MOCK_IMAGE_ID"])
     elif "{{range .Config.Cmd}}" in fmt: print("--skip\nsleep\ninfinity")
+    elif "{{range .Mounts}}" in fmt:
+        # Read back the actual installer-generated mounts, including the
+        # serving bundle. The busy guard's idle path must reach this check.
+        calls = [json.loads(line) for line in open(os.environ["MOCK_LOG"])]
+        created = next((c for c in calls if c[:1] == ["run"]), [])
+        for i, word in enumerate(created):
+            if word == "-v":
+                parts = created[i + 1].split(":")
+                opts = parts[2].split(",") if len(parts) > 2 else []
+                print(parts[1] + "|" + parts[0] + "|" +
+                      ("false" if "ro" in opts else "true"))
     sys.exit(0)
 if verb == "run":
     print("fixture-new-container")

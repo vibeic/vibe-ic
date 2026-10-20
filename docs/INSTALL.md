@@ -83,7 +83,22 @@ cd vibe-ic-marketplace/plugins/vibe-ic/mcp-eda && npm install
 
 ## Step 3 — MCP auto-wire (Docker ↔ plugin)
 
-No manual wiring. The plugin ships `.mcp.json`:
+From the installed plugin root used by the MCP registration (containing
+`.mcp.json`, `programs/`, `mcp-eda/`, and `tools/`), run the shipped helper:
+
+```bash
+DESIGNS_DIR="$VIBEIC_DESIGNS" PULL=1 bash tools/vibeic-eda/restart-eda.sh
+```
+
+This completes the container setup from Step 1 using the plugin's resolved
+image. It preserves existing design/PDK mounts and exposes this complete
+serving plugin bundle read-only at its host path. The design mounts alone do
+not expose Python producers outside the design tree; mounting only an entry
+file leaves its sibling imports unavailable. After an upgrade, run the UPDATED
+installed bundle's helper and restart the client so the MCP registration and
+container use that same bundle. `docker restart` keeps the old mounts.
+
+The plugin ships `.mcp.json`:
 
 ```json
 { "mcpServers": { "eda-tools": {

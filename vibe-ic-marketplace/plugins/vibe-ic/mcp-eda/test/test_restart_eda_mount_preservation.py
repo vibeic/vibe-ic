@@ -43,6 +43,7 @@ pytestmark = pytest.mark.skipif(
 
 IMAGE = "vibeic/vibeic-eda:mock"
 TARGET_ID = "sha256:" + "a" * 64
+RUNTIME_BIND = "{0}:{0}:ro".format(Path(__file__).resolve().parents[2])
 
 #: A mocked `docker` CLI. It answers only the queries this script makes, keyed
 #: off the go-template it is handed, and records every invocation.
@@ -214,7 +215,7 @@ def test_structured_mounts_are_cloned(tmp_path):
          "ReadOnly": True}]))
     r = h.run()
     assert r.returncode == 0, r.stderr
-    assert h.mount_args() == [f"{src}:/work:ro"], (h.run_argv(), r.stdout)
+    assert h.mount_args() == [RUNTIME_BIND, f"{src}:/work:ro"], (h.run_argv(), r.stdout)
 
 
 def test_issue_literal_shape_refuses_rather_than_recreating_bare(tmp_path):
@@ -240,7 +241,7 @@ def test_legacy_binds_are_still_cloned(tmp_path):
         binds=[f"{a}:{a}", f"{b}:/foss/designs"], mounts=None))
     r = h.run()
     assert r.returncode == 0, r.stderr
-    assert h.mount_args() == [f"{a}:{a}", f"{b}:/foss/designs"]
+    assert h.mount_args() == [RUNTIME_BIND, f"{a}:{a}", f"{b}:/foss/designs"]
 
 
 def test_mixed_forms_deduplicate_by_destination(tmp_path):
@@ -254,7 +255,7 @@ def test_mixed_forms_deduplicate_by_destination(tmp_path):
                 {"Type": "bind", "Source": str(y), "Target": "/other"}]))
     r = h.run()
     assert r.returncode == 0, r.stderr
-    assert h.mount_args() == [f"{a}:/dst", f"{y}:/other"]
+    assert h.mount_args() == [RUNTIME_BIND, f"{a}:/dst", f"{y}:/other"]
 
 
 def test_propagation_is_retained(tmp_path):
@@ -265,7 +266,7 @@ def test_propagation_is_retained(tmp_path):
          "BindOptions": {"Propagation": "rshared"}}]))
     r = h.run()
     assert r.returncode == 0, r.stderr
-    assert h.mount_args() == [f"{src}:/p:rshared"]
+    assert h.mount_args() == [RUNTIME_BIND, f"{src}:/p:rshared"]
 
 
 # --- readback: an image-id match is not a successful recreate ---------------
@@ -395,7 +396,8 @@ class TestFreshContainerBranch:
         designs.mkdir()
         h, r = self._fresh(tmp_path, designs)
         assert r.returncode == 0, r.stderr
-        assert h.mount_args() == [f"{designs}:{designs}", f"{designs}:/foss/designs"]
+        assert h.mount_args() == [RUNTIME_BIND, f"{designs}:{designs}",
+                                  f"{designs}:/foss/designs"]
 
     def test_canonical_user_workdir_and_cmd(self, tmp_path):
         designs = tmp_path / "designs"

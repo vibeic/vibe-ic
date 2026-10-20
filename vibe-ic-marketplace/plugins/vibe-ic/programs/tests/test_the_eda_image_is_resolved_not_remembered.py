@@ -1481,7 +1481,8 @@ def test_issue3021_upgrade_and_fresh_preflight_share_one_digest(tmp_path, layout
     assert record["verdict"] == "RUNTIME_PAIR_MATCH", record
     assert record["required_digest"] == record["found_digest"] == "sha256:" + "2" * 64
     assert [c for c in harness.calls() if c[:1] == ["pull"]] == [["pull", new_ref]]
-    assert harness.mount_args() == [f"{tmp_path / 'neutral-work'}:/neutral-work:ro"]
+    assert harness.mount_args() == [f"{_PLUGIN}:{_PLUGIN}:ro",
+                                    f"{tmp_path / 'neutral-work'}:/neutral-work:ro"]
 
 
 def test_issue3021_digest_only_image_is_selected_by_the_actual_cli(tmp_path):
