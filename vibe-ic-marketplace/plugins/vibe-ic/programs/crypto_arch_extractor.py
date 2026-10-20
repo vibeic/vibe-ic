@@ -47,9 +47,10 @@ Patterns target prose like:
 Each successfully extracted field gets a sibling ``<field>_evidence``
 dict carrying source / line / matched_token / extraction_strategy.
 
-First-match-wins per field — never aggregates, never overwrites later
-mentions. This keeps the output stable on README files that mention
-"rounds" several times in different contexts.
+First-match-wins per field except block latency, which requires an explicit
+block scope and is omitted if the input gives conflicting block values.
+This keeps the output stable on README files that mention "rounds" several
+times in different contexts without confusing round rate with block latency.
 
 Class-conditional gating happens at the call site (crypto_block_cipher,
 crypto_stream_cipher, crypto_hash) — saves cycles + avoids false
@@ -68,8 +69,21 @@ _MESSAGE_BLOCK_RE = re.compile(
     r"\b(\d+)\s*[-\s]?bit\s+(?:message\s+)?block\b", re.IGNORECASE)
 _STATE_BITS_RE = re.compile(
     r"\b(\d+)\s*[-\s]?bit\s+state\b", re.IGNORECASE)
-_LATENCY_CYCLES_RE = re.compile(
-    r"\b(\d+)\s+cycles?(?:\s+per\s+block)?\b", re.IGNORECASE)
+_BLOCK_LATENCY_PATTERNS = (
+    re.compile(r"\b(\d+)\s+cycles?\s+per\s+block\b", re.IGNORECASE),
+    re.compile(
+        r"\b(?:per[-\s]+block|block)\s+latency\s*(?:is|of|=|:)\s*"
+        r"(\d+)\s+cycles?\b", re.IGNORECASE),
+    re.compile(
+        r"\blatency\s+per\s+block\s*(?:is|of|=|:)\s*"
+        r"(\d+)\s+cycles?\b", re.IGNORECASE),
+    re.compile(
+        r"\b(\d+)\s*[-\s]+cycle\s+(?:per[-\s]+block|block)\s+latency\b",
+        re.IGNORECASE),
+    re.compile(
+        r"\b(\d+)\s*[-\s]+cycle\s+latency\s+per\s+block\b",
+        re.IGNORECASE),
+)
 
 # v1.6.108 — key/nonce patterns
 _KEY_BITS_RE = re.compile(
@@ -213,6 +227,23 @@ def _scan_message_block(text: str
     return None
 
 
+def _scan_block_latency(text: str) -> Optional[Tuple[int, int, str]]:
+    """Extract only an explicit full-block cycle count.
+
+    Per-round, per-byte, and other rates cannot populate a full-block
+    latency. Conflicting full-block figures may describe different variants;
+    without a variant binding this scalar is left absent.
+    """
+    matches = []
+    for lineno, line in enumerate(text.split("\n"), start=1):
+        for pattern in _BLOCK_LATENCY_PATTERNS:
+            for match in pattern.finditer(line):
+                matches.append((int(match.group(1)), lineno, match.group(0)))
+    if not matches or len({value for value, _, _ in matches}) != 1:
+        return None
+    return matches[0]
+
+
 def _scan_rounds(text: str
                  ) -> Optional[Tuple[int, int, str]]:
     """v1.6.108 (#40 Bug 4A) + v1.6.110 (#42) — prefer default-adjacent
@@ -282,8 +313,7 @@ def extract_crypto_arch(readme_text: str) -> Dict:
         ("message_block_bits", _scan_message_block),
         ("state_bits", lambda t: _scan(t, _STATE_BITS_RE)),
         ("rounds", _scan_rounds),
-        ("latency_cycles_per_block",
-         lambda t: _scan(t, _LATENCY_CYCLES_RE)),
+        ("latency_cycles_per_block", _scan_block_latency),
         # v1.6.108 — added per #40 Bug 4A
         ("key_bits", lambda t: _scan(t, _KEY_BITS_RE)),
         ("nonce_bits", lambda t: _scan(t, _NONCE_BITS_RE)),

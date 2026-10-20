@@ -350,5 +350,16 @@
     "version_observed": "Pinned composed source05 5d176a143b7aa60cf53fecda830519181bf9a52b, tree0bab9035dd8428a8ab45d08f0689bf1685b09015. Official baseline existence and behavior are not asserted until separately checked.",
     "version_lkg": "",
     "fixture_path": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/fixtures/phase1_local/neutral_pvt_supply_rail/pvt_supply_rail.md"
+  },
+  {
+    "issue": 3288,
+    "project": "neutral_round_vs_block_latency",
+    "layer": "L1_DATASHEET",
+    "field": "architecture.latency_cycles_per_block",
+    "expected": "66. Only an explicit per-block value may populate this per-block scalar. With just the per-round sentence, omit the scalar. Multiple variant-dependent block values must remain variant-bound and must not be replaced by a per-round number.",
+    "actual": "1, with matched_token `1 cycle` from the per-round sentence, despite the later explicit 66 cycles per block.",
+    "version_observed": "1.29.96, retained execution source d63906f6ae37bf0030059d9b6304ebcc5fe349b9. Owning crypto_arch_extractor.py SHA256 fae61be2c6fc3e7340f5ae3a5ca76e623f3aca10a7e738ebf74cee08039dd272. Fixed official e67b74e3e9204aa37fd8eaaf8d66266bfa8c2812 is the separate repair/transport target, not yet claimed reproduced there.",
+    "version_lkg": "",
+    "fixture_path": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/fixtures/phase1_local/neutral_round_vs_block_latency/timing_contract.md"
   }
 ]
