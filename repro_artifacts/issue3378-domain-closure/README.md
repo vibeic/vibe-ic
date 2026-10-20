@@ -16,3 +16,7 @@ The miter completed 256 four-state source/selector probes and 64 serial frames: 
 Two initial fixture/metadata-reader setup failures are retained, explicitly excluded from product-red counts. Fresh successful native analysis has a separate log and readback; no previous receipts were rewritten.
 
 This packet reopens the same producer word-domain defect. The original four direct forms became UNKNOWN in 1.30.53, but transitive aliases and control dependencies bypass its RHS-only width check. Native structural fan-in reaches data width3 / phase width2 in the three negatives; only seed width1 in both positives. Structural fan-in is not minimal Boolean support. No whole IC or shipping acceptance is claimed.
+
+## Parent input binding (additional epoch)
+
+`parent_alias` moves the same wider Gray projection into the parent and binds it to a one-bit producer input. The producer is just `assign flag = seed`. Local-only cone tracing would falsely admit this same serialized word. Actual source53 audit rc0: six rows,1MATCH/5UNKNOWN; link falselyBIT_VALUE/PREDICATE MATCH. Original native reconstruction compilesrc0 / runs exactrc1, binary2observed3. ExpectedlinkUNKNOWN. `parent-native-evidence.json.gz` separately preserves this fixture and original native receipts/model/context/logs/mounts. Its row population is six, not seven, and is never mixed with the earlier cases. A repair must follow actual hierarchical input bindings or carry an explicitly unproved contract; local leaf-port width is insufficient. Earlier64-filepacket remains byte-identical at741c722.
