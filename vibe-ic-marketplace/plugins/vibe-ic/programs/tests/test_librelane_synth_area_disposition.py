@@ -178,6 +178,47 @@ def test_missing_tool_netlist_remains_failure(tmp_path, monkeypatch):
     assert not published
 
 
+@pytest.mark.parametrize('damage', [None, 'provenance_check', 'synth_netlist_check'])
+def test_first_parent_provenance_precedes_requested_postmap_handoff(
+        tmp_path, monkeypatch, damage):
+    """Run the owner and real gates before any handoff/child is published.
+
+    Native transport and final publishers are fixtures, as in synth_case;
+    the actual provenance subprocess must consume the original Yosys source.
+    The separate terminal-alias tests still require the complete child.
+    """
+    import librelane_postmap as postmap
+
+    project = tmp_path / 'project'
+    put(project / 'phase3/librelane_switch.json',
+        {'steps': {'9': 'librelane'}, 'post_map_repair': 'pre_placement'})
+    child_calls = []
+    monkeypatch.setattr(postmap, 'run_and_publish',
+                        lambda *a, **kw: child_calls.append((a, kw)))
+    result, calls, published, folder = synth_case(
+        tmp_path, monkeypatch, ceiling='10x10', damage=damage)
+    if damage:
+        assert result.status == 'FAIL', result.detail
+        assert not published
+        assert not child_calls
+        return
+    assert result.status == 'PASS', result.detail
+    assert [c for c in calls if c in CHECKS] == CHECKS
+    assert len(published) == len(child_calls) == 1
+    sidecar = json.loads((project / 'phase2/stage2/synth/synth_inputs.json').read_text())
+    assert 'librelane_synthesis' not in sidecar
+    report = json.loads((folder / 'provenance_gate.json').read_text())
+    assert len(report['checks']) == 1
+    check = report['checks'][0]
+    assert check['status'] == 'PASS', check
+    assert check['output'] == 'phase3/librelane/02-yosys-synthesis/top.nl.v'
+    assert check['tool'] == 'yosys'
+    assert check['measurement']['measured'] is True
+    assert check['declared_under'] == 'phase2/stage2/synth/top_synth.v'
+    rows = [json.loads(line) for line in (project / 'provenance.jsonl').read_text().splitlines()]
+    assert rows[-1]['produced_by'] == 'LibreLane.Yosys.Synthesis'
+
+
 @pytest.mark.parametrize('damage', ['area_report_missing', 'area_report_malformed', 'area_report_conflicting', 'area_cli_error'])
 def test_unexplained_rc2_never_reuses_or_fabricates_area_evidence(tmp_path, monkeypatch, damage):
     result, calls, published, _ = synth_case(tmp_path, monkeypatch, damage=damage)

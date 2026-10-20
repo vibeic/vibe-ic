@@ -17469,9 +17469,12 @@ def _step_synth_librelane(project: Path, top: str, pdk: PdkConfig,
         if pdk_gate.returncode != 0:
             raise _ll.Refusal("LL_PDK_CONSISTENCY_FAILED",
                               f"rc={pdk_gate.returncode}: " + pdk_gate.stdout[-500:])
+        # The native Yosys parent exists before publish_handoff/post-map.
+        # Check its own bytes here; final aliases require the complete child
+        # lineage when the ordinary Step9 consumer adopts them.
         provenance_gate = subprocess.run(
             [sys.executable, str(PROGRAMS_DIR / "provenance_check.py"),
-             str(project), "--output", str(netlist.relative_to(project)),
+             str(project), "--output", str(source.relative_to(project)),
              "--tool", "yosys", "--require-measured",
              "--json", str(folder / "provenance_gate.json")],
             capture_output=True, text=True)
