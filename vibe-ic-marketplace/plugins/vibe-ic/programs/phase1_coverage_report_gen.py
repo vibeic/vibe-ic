@@ -225,50 +225,103 @@ _AUTODISCOVERY_REGEX_FAMILIES = (
         r"engineer|factory|production)\b",
         re.IGNORECASE)),
 )
+# A slash-shaped token is only an alias obligation when the INPUT gives
+# naming context. Keep the legacy standalone alias-list grammar; a bare
+# "ACC_ID / id_bus / GPIO_0[0]" remains a declaration without an L-doc lookup.
+_PIN_ALIAS_RX = dict(_AUTODISCOVERY_REGEX_FAMILIES)["pin_alias"]
+_PIN_ALIAS_LIST = re.compile(
+    r"[A-Z][A-Z0-9_]{1,20}(?:\s*/\s*[A-Za-z][A-Za-z0-9_\[\]]{1,30})+")
+_PIN_ALIAS_HEADER = re.compile(
+    r"(?:pins?|pads?|signals?|ports?)(?:\s*/\s*(?:pins?|pads?|signals?|ports?|alias(?:es)?))?"
+    r"(?:\s+(?:names?|labels?|identifiers?|alias(?:es)?))?"
+    r"|alias(?:es)?(?:\s+(?:names?|mapping))?", re.I)
+# Numbered/indexed pin declarations are naming authority too: the ordinal
+# locates the pin, not a word between "pin" and its alternate names to discard.
+_PIN_ALIAS_INDEX = (
+    r"(?:[ \t]*(?:(?:no\.?|number)[ \t]+|#[ \t]*)?\d+"
+    r"(?:[ \t]*[-:][ \t]*\d+)?"
+    r"|[ \t]*\[[ \t]*\d+(?:[ \t]*:[ \t]*\d+)?[ \t]*\]"
+    r"|[ \t]*\([ \t]*\d+[ \t]*\))?")
+_PIN_ALIAS_PREFIX = re.compile(
+    r"(?:(?:\b(?:pin|pad|signal|port)" + _PIN_ALIAS_INDEX
+    + r"(?:\s+(?:names?|naming))?(?:\s+alias(?:es)?)?"
+    r"|\balias(?:es)?(?:\s+group)?)(?:\s+(?:is|are))?"
+    r"(?:\s+(?:named|called|labelled|labeled))?"
+    r"|\b(?:input|output|inout)\s+(?:is|are|named|called))\s*[:=]?\s*$", re.I)
+_PIN_ALIAS_SUFFIX = re.compile(
+    r"^(?:\s+(?:is|are)\s+|\s*,\s*|\s*\(\s*)(?:an?\s+|the\s+)?"
+    r"(?:(?:(?:pin|pad|signal|port)\s+)?alias(?:es)?\b"
+    r"|(?:[A-Za-z][A-Za-z0-9_-]*[ \t]+)*"
+    r"(?:input|output|inout|pin|pad|signal|port)[ \t]*(?:[.,;:)]|$))", re.I)
+
+
+def _pin_alias_literals(text: str):
+    """Yield input-declared aliases, never consulting generated L docs.
+
+    Recognise named pin/pad/signal/port/alias columns of Markdown/TSV tables,
+    explicit naming prose, and the existing standalone alias-list form.
+    Other cells and surrounding prose cannot supply an alias by slash alone.
+    """
+    alias_columns = set()
+    table_delimiter = None
+    for line in text.splitlines():
+        delimiter = "|" if "|" in line else ("\t" if "\t" in line else None)
+        if delimiter:
+            cells = [c.strip() for c in line.strip().strip("|").split(delimiter)]
+            if delimiter != table_delimiter:
+                alias_columns = set()
+                table_delimiter = delimiter
+            declared_columns = {i for i, c in enumerate(cells)
+                                if _PIN_ALIAS_HEADER.fullmatch(c.strip("`* "))}
+            if declared_columns and not any(
+                    _PIN_ALIAS_RX.search(c) for i, c in enumerate(cells)
+                    if i not in declared_columns):
+                alias_columns = declared_columns
+                # A generic "Name" column is a pin name only in a typed table.
+                alias_columns.update(i for i, c in enumerate(cells)
+                                     if c.lower() in {"name", "identifier", "label"})
+                continue
+            if cells and all(re.fullmatch(r":?-+:?", c.replace(" ", ""))
+                             for c in cells):
+                continue
+            elif alias_columns:
+                for i in sorted(alias_columns):
+                    if i < len(cells):
+                        for match in _PIN_ALIAS_RX.finditer(cells[i]):
+                            yield match.group().strip()
+            continue
+        alias_columns = set()
+        table_delimiter = None
+        bare = re.sub(r"^\s*[-*+]\s+", "", line).strip().strip("`*").rstrip(".;,")
+        if bare.startswith("(") and bare.endswith(")"):
+            bare = bare[1:-1].strip().strip("`*")
+        if _PIN_ALIAS_LIST.fullmatch(bare):
+            # Preserve the old regex's literal segmentation even for longer
+            # declared lists; the context guard must not lose an obligation.
+            for match in _PIN_ALIAS_RX.finditer(bare):
+                yield match.group().strip()
+            continue
+        for match in _PIN_ALIAS_RX.finditer(line):
+            prefix = line[:match.start()].rstrip("`* \"'")
+            suffix = line[match.end():].lstrip("`*\"'")
+            # A paired group may wrap the alternate names after a pin
+            # location (including Markdown code quotes), not arbitrary prose.
+            if prefix.endswith("(") and suffix.lstrip().startswith(")"):
+                prefix = prefix[:-1].rstrip()
+            if (_PIN_ALIAS_PREFIX.search(prefix)
+                    or _PIN_ALIAS_SUFFIX.search(suffix)):
+                yield match.group().strip()
+
+
+def _is_auto_pin_alias(label: str) -> bool:
+    return str(label or "").strip().lower() == "auto-discovered (pin_alias)"
+
+
 # Raised 100 → 10000 to align with extraction_coverage_denominator_audit
 # (which has no cap). Cap-100 was dropping ~70% of distinct vendor tokens
 # per Wave-on-fix v1.6.10, causing the denominator-shrink gating pattern
 # even on legitimate runs.
 _AUTODISCOVERY_PER_REGEX_CAP = 10000
-
-# A slash is punctuation, not evidence that the surrounding words name pins.
-# Keep the existing alias spelling family, but admit a match only when its
-# source line declares aliases explicitly or is a row under a pin-like table
-# header.  This leaves the 100% coverage threshold unchanged and keeps the
-# obligation attached to the source declaration rather than to a token
-# blacklist.
-_PIN_ALIAS_DECLARATION_PREFIX = re.compile(
-    r"(?:\b(?:pin|pad|port|signal)(?:\s+naming)?"
-    r"(?:\s+(?:name|alias(?:es)?))?|\balias(?:es)?)\s*[:=]?\s*$",
-    re.IGNORECASE,
-)
-_PIN_ALIAS_TABLE_HEADER = re.compile(
-    r"\b(?:pin|pad|port|signal|alias(?:es)?)\b", re.IGNORECASE)
-
-
-def _pin_alias_has_declaration_context(text: str, start: int) -> bool:
-    """Return whether a slash match is presented as a pin alias declaration."""
-    line_start = text.rfind("\n", 0, start) + 1
-    line_end = text.find("\n", start)
-    if line_end < 0:
-        line_end = len(text)
-    line = text[line_start:line_end]
-    prefix = text[line_start:start]
-    if _PIN_ALIAS_DECLARATION_PREFIX.search(prefix):
-        return True
-
-    # Markdown and extracted PDF tables commonly put a separator line between
-    # their header and the data row.  Inspect the three preceding lines, but
-    # only for a structured row; prose merely mentioning a pin elsewhere must
-    # not classify every later slash phrase as an alias.
-    if "|" not in line and "\t" not in line:
-        return False
-    previous = text[:line_start].splitlines()[-3:]
-    return any(
-        ("|" in candidate or "\t" in candidate)
-        and _PIN_ALIAS_TABLE_HEADER.search(candidate)
-        for candidate in previous
-    )
 
 # Stop-list of common false-positive all-caps tokens. Chip-AGNOSTIC.
 _AUTODISCOVERY_STOPLIST = frozenset({
@@ -357,7 +410,9 @@ def _reconcile_with_docs(project, patterns):
     forever, so literals a later documentation edit DELETED stay pinned in
     the denominator where nothing can ever credit them. Human-curated
     entries are never pruned -- a curated pattern is deliberately allowed
-    not to occur in the document.
+    not to occur in the document. Auto-seeded pin aliases also require the
+    current source's naming context, so old regex-only seeds cannot restore
+    a policy-prose false alias.
     """
     out = {}
     for filename, tuples in patterns.items():
@@ -377,8 +432,10 @@ def _reconcile_with_docs(project, patterns):
         if text is None:
             out[filename] = tuples
             continue
+        aliases = set(_pin_alias_literals(text))
         kept = [(lit, lbl) for lit, lbl in tuples
-                if not _is_auto_seeded(lbl) or lit in text]
+                if not _is_auto_seeded(lbl)
+                or (lit in text and (not _is_auto_pin_alias(lbl) or lit in aliases))]
         if kept:
             out[filename] = kept
     return out
@@ -419,12 +476,10 @@ def _autodiscover_patterns(project: Path, *, persist: bool = True):
         items = []
         for label, rx in _AUTODISCOVERY_REGEX_FAMILIES:
             hits = 0
-            for match in rx.finditer(text):
-                if (label == "pin_alias"
-                        and not _pin_alias_has_declaration_context(
-                            text, match.start())):
-                    continue
-                tok = match.group(0).strip()
+            candidates = (_pin_alias_literals(text) if label == "pin_alias"
+                          else rx.findall(text))
+            for m in candidates:
+                tok = m.strip() if isinstance(m, str) else ""
                 # v0.119.40 — belt-and-suspenders: drop any literal that
                 # carries an embedded LF/CR/TAB. These bytes get escaped
                 # by json.dumps when the L*.json haystack is serialised,
