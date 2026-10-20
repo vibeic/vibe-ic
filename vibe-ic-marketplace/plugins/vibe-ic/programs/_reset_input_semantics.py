@@ -267,10 +267,14 @@ def _prose_phases(line):
         phase = 'release' if phase == 'deassertion' else phase
         suffix = line[match.end():matches[i + 1].start() if i + 1 < len(matches) else len(line)]
         prefix = line[matches[i - 1].end() if i else 0:match.start()]
-        target = re.match(r'\s+(?:to|on)\s+(`?[A-Za-z_][\w$]*`?'
-                          r'(?:\s*(?:,|and)\s*`?[A-Za-z_][\w$]*`?)*)', suffix, re.I)
-        clocks = {name for name in re.findall(r'[A-Za-z_][\w$]*', target[1])
-                  if name.lower() != 'and'} if target else set()
+        # Clock and stage qualifiers can appear in either order. Collect every
+        # explicit target in this phase, so an earlier valid target cannot hide
+        # an incompatible target after the depth.
+        targets = re.finditer(r'\b(?:to|on)\s+(`?[A-Za-z_][\w$]*`?'
+                              r'(?:\s*(?:,|and)\s*`?[A-Za-z_][\w$]*`?)*)', suffix, re.I)
+        clocks = {name for target in targets
+                  for name in re.findall(r'[A-Za-z_][\w$]*', target[1])
+                  if name.lower() != 'and'}
         stages = []
         if phase == 'release':
             before = re.search(r'(?<![\w.-])([\w.+-]+)[ -]stages?\s*$', prefix, re.I)
