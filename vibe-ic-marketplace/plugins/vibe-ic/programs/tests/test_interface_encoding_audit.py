@@ -30,7 +30,7 @@ sys.path.insert(0, str(SCRIPT.parent))
 import interface_encoding_audit as iea  # noqa: E402
 
 
-def run_cli(tmp_path, files: dict, top_module: str, severity='INFO'):
+def run_cli(tmp_path, files: dict, top_module: str, severity='INFO', extra=()):
     """Write Verilog files and run the CLI, return parsed JSON report."""
     rtl_dir = tmp_path / 'rtl'
     rtl_dir.mkdir(parents=True, exist_ok=True)
@@ -43,7 +43,7 @@ def run_cli(tmp_path, files: dict, top_module: str, severity='INFO'):
          '--rtl-dir', str(rtl_dir),
          '--top-module', top_module,
          '--out-dir', str(out_dir),
-         '--severity', severity],
+         '--severity', severity, *extra],
         capture_output=True, text=True)
     report_path = out_dir / 'encoding_audit_report.json'
     if report_path.exists():
@@ -794,6 +794,110 @@ def test_unresolved_top_refuses_zero_population(tmp_path):
     assert report["summary"]["verdict"] == "INCONCLUSIVE"
     assert any("top module 'missing_top'" in item
                for item in report["discovery"]["issues"])
+
+
+# Public issue-3327 intake: the selected file contains an inactive missing child.
+_OPTIONAL_SOURCE = """module producer(input clk, output reg [3:0] count);
+ always @(posedge clk) count <= count + 1'b1;
+endmodule
+module consumer(input [3:0] count, output hit);
+ assign hit = (count == 4'd3);
+endmodule
+module neutral(input clk, output hit);
+ wire [3:0] count;
+ producer p(.clk(clk), .count(count));
+ consumer c(.count(count), .hit(hit));
+`ifdef OPTIONAL
+ missing_optional u_optional(.clk(clk));
+`endif
+endmodule
+"""
+
+
+def _consume_encoding_receipt(tmp_path):
+    sys.path.insert(0, str(SCRIPT.parent.parent / '_shared'))
+    import skill_compliance_check as scc
+    findings = scc._cc_audit_receipt_evidence(
+        {'id': 'X_interface_encoding_audit', 'auditor': 'interface_encoding_audit'},
+        '', scc.CheckContext(output_path=tmp_path / 'review.md',
+                             evidence_dirs=[tmp_path / 'out'],
+                             rtl_source_root=tmp_path / 'rtl'))
+    assert len(findings) == 1
+    return findings[0]
+
+
+def test_inactive_optional_child_has_complete_active_discovery(tmp_path):
+    res, report = run_cli(tmp_path, {'neutral.v': _OPTIONAL_SOURCE}, 'neutral')
+    assert res.returncode == 0, res.stderr
+    assert report['discovery']['complete'] is True
+    assert report['discovery']['modules_discovered'] == 3
+    assert report['discovery']['instances_discovered'] == 2
+    assert (report['summary']['matches'], report['summary']['unknowns']) == (1, 2)
+    assert report['summary']['verdict'] == 'INCONCLUSIVE'
+    finding = _consume_encoding_receipt(tmp_path)
+    assert (finding.id, finding.severity, finding.state) == (
+        'X_interface_encoding_audit', 'FAIL', 'NOT_MEASURED')
+
+
+def test_inactive_conditional_port_and_connection_are_absent(tmp_path):
+    source = _OPTIONAL_SOURCE.replace(
+        'input [3:0] count, output hit',
+        'input [3:0] count, output hit\n`ifdef OPTIONAL\n, input extra\n`endif\n')
+    source = source.replace('.hit(hit));',
+                            '.hit(hit)\n`ifdef OPTIONAL\n, .extra(clk)\n`endif\n);')
+    res, report = run_cli(tmp_path, {'neutral.sv': source}, 'neutral')
+    assert res.returncode == 0, res.stderr
+    assert report['discovery']['complete'] is True
+    assert report['summary']['total_interfaces'] == 3
+    context = Path(report['configuration']['native_context'])
+    assert 'read_slang --keep-hierarchy --single-unit --no-synthesis-define --top neutral' in (
+        context.parent / 'elaborate.ys').read_text()
+
+
+def test_inactive_optional_does_not_hide_real_encoding_mismatch(tmp_path):
+    source = _OPTIONAL_SOURCE.replace("count == 4'd3", "count == 4'b1100")
+    res, report = run_cli(tmp_path, {'neutral.v': source}, 'neutral')
+    assert res.returncode == 1
+    assert report['summary']['mismatches'] == 1
+    assert report['summary']['verdict'] == 'FAIL'
+    assert report['discovery']['complete'] is True
+    assert _consume_encoding_receipt(tmp_path).state == 'FAIL'
+
+
+def test_selected_define_keeps_live_missing_child_refusal(tmp_path):
+    res, report = run_cli(tmp_path, {'neutral.v': _OPTIONAL_SOURCE}, 'neutral',
+                          extra=['-D', 'OPTIONAL'])
+    assert res.returncode == 2, res.stdout + res.stderr
+    assert report['discovery']['complete'] is False
+    assert any('missing_optional' in s for s in report['discovery']['issues'])
+    assert report['configuration']['defines'] == ['OPTIONAL']
+    assert _consume_encoding_receipt(tmp_path).state == 'NOT_MEASURED'
+
+
+def test_selected_parameter_controls_active_generate_closure(tmp_path):
+    source = _OPTIONAL_SOURCE.replace('module neutral(input',
+        'module neutral #(parameter ENABLE=1)(input').replace(
+        '`ifdef OPTIONAL', 'generate if (ENABLE) begin : optional_arm').replace(
+        '`endif', 'end endgenerate')
+    res, report = run_cli(tmp_path, {'neutral.v': source}, 'neutral',
+                          extra=['-P', 'ENABLE=0'])
+    assert res.returncode == 0, res.stderr
+    assert report['discovery']['complete'] is True
+    assert report['discovery']['instances_discovered'] == 2
+    assert report['configuration']['parameters'] == ['ENABLE=0']
+    res, report = run_cli(tmp_path / 'active', {'neutral.v': source}, 'neutral',
+                          extra=['-P', 'ENABLE=1'])
+    assert res.returncode == 2
+    assert report['discovery']['complete'] is False
+
+
+def test_unsupported_preprocessing_is_typed_unknown(tmp_path):
+    source = '`include "unknown_context.vh"\n' + _OPTIONAL_SOURCE
+    res, report = run_cli(tmp_path, {'neutral.v': source}, 'neutral')
+    assert res.returncode == 2
+    assert report['discovery']['complete'] is False
+    assert report['configuration']['state'] == 'UNKNOWN'
+    assert report['summary']['verdict'] == 'INCONCLUSIVE'
 
 
 if __name__ == '__main__':

@@ -10,7 +10,9 @@ gray-code values like `6'b11_0000` for 32. Because binary 32 = 6'b10_0000
 but gray-code 32 = 6'b11_0000, ALL packet validation failed silently.
 
 This program:
-  1. Parses Verilog/SystemVerilog RTL files in a design directory
+  1. Parses the active Verilog/SystemVerilog source in a design directory,
+     using shared bounded preprocessing and native configured hierarchy.
+     Unsupported macro/include/generate syntax remains explicitly UNKNOWN.
   2. Builds a module hierarchy by parsing module definitions and instances
   3. For each output port, classifies the encoding used by the producer:
      - BINARY: counter increment (reg <= reg + 1), direct arithmetic
@@ -42,6 +44,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _rtl_audit_applicability as _applicability
+import rtl_hierarchy_drivers as _hierarchy
 from module_port_audit import (
     extract_balanced, split_top_level, lexical_mask, module_regions,
     parse_port_list_ansi, parse_non_ansi_ports)
@@ -103,6 +106,7 @@ class InterfaceAuditResult:
 _DISCOVERY_ISSUES: List[str] = []
 _DISCOVERED_MODULE_COUNT = 0
 _DISCOVERED_INSTANCE_COUNT = 0
+_CONFIGURATION: dict = {}
 
 
 def _discovery_issue(message: str) -> None:
@@ -794,9 +798,139 @@ def build_interface_map(
 _NOTHING_EXAMINED: List[str] = []
 
 
+def _active_native_view(modules, headers, files, top, defines, parameters,
+                        include_dirs, output_dir):
+    """Bind configured source bodies to the existing native elaboration owner.
+
+    The bounded shared preprocessor selects source text, never encoding. Native
+    module variants supply their actual parameters and child types. Unsupported
+    source constructs stay UNKNOWN; lowered netlist arithmetic is not used to
+    guess an encoding for source that the lexical classifier cannot understand.
+    """
+    import hashlib
+    import tempfile
+    import rtl_hygiene_lint as lint
+
+    work = Path(output_dir) if output_dir else Path(tempfile.mkdtemp(
+        prefix='encoding-active-source-'))
+    work = work / 'active-source'
+    work.mkdir(parents=True, exist_ok=True)
+    def retain_context(context_file):
+        if context_file.is_file():
+            _CONFIGURATION['native'] = json.loads(context_file.read_text())
+            _CONFIGURATION['native_context'] = str(context_file)
+            _CONFIGURATION['native_context_sha256'] = hashlib.sha256(context_file.read_bytes()).hexdigest()
+            script = context_file.parent / 'elaborate.ys'
+            if script.is_file():
+                _CONFIGURATION['native_script'] = {
+                    'path': str(script), 'sha256': hashlib.sha256(script.read_bytes()).hexdigest(),
+                    'text': script.read_text()}
+    if any(Path(p).suffix.lower() == '.sv' for p in files):
+        # The driver owner intentionally flattens SV. This audit needs native
+        # module boundaries (as in _fmeda_mechanisms.native_script), so retain
+        # hierarchy while using its existing executor and context contract.
+        native_dir = Path(tempfile.mkdtemp(prefix='native-elaboration-', dir=work))
+        files = [Path(p).resolve() for p in files]
+        dirs = sorted({Path(p).resolve() for p in include_dirs} | {p.parent for p in files})
+        context_file = native_dir / 'context.json'
+        context = dict(top=top, files=list(map(str, files)), defines=defines,
+                       parameters=parameters, include_dirs=list(map(str, dirs)))
+        try:
+            if (not re.fullmatch(r'[A-Za-z_]\w*', top) or
+                    any(not re.fullmatch(r'[A-Za-z_]\w*(?:=[^\s;"\\]+)?', d) for d in defines) or
+                    any(not re.fullmatch(r'[A-Za-z_]\w*=[0-9+-]+', p) for p in parameters) or
+                    any(re.search(r'[\s;"\\]', str(p)) for p in [*files, *dirs])):
+                raise ValueError('unsupported native compile context')
+            tracked = set(files)
+            for directory in dirs:
+                tracked.update(p for p in directory.rglob('*')
+                               if p.is_file() and p.suffix in {'.v', '.sv', '.vh', '.svh'})
+            def hashes():
+                return {str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(tracked)}
+            context['input_sha256'] = hashes()
+            native_json = native_dir / 'design.json'
+            script = native_dir / 'elaborate.ys'
+            script.write_text('read_slang --keep-hierarchy --single-unit --no-synthesis-define --top ' + top +
+                ' ' + ' '.join(['-G ' + p for p in parameters] + ['-D ' + d for d in defines] +
+                                ['-I ' + str(p) for p in dirs] + list(map(str, files))) +
+                f'; hierarchy -check -top {top}; proc; check -assert; write_json {native_json}\n')
+            result = lint._native_driver_run(script, native_dir, dirs, context)
+            (native_dir / 'native.log').write_text(result.stdout + result.stderr)
+            if result.returncode != 0:
+                raise ValueError(f'native Yosys elaboration failed (rc={result.returncode}); {native_dir}')
+            if hashes() != context['input_sha256']:
+                raise ValueError('native elaboration inputs changed during this invocation')
+            design = json.loads(native_json.read_text())
+            context.update(status='MEASURED', native_json_sha256=hashlib.sha256(native_json.read_bytes()).hexdigest())
+        except (OSError, ValueError) as exc:
+            context.update(status='NOT_MEASURED', reason=str(exc))
+            raise
+        finally:
+            context_file.write_text(json.dumps(context, indent=2))
+            retain_context(context_file)
+    else:
+        before = set(work.glob('native-elaboration-*'))
+        try:
+            design = lint._native_driver_view(
+                files, top, defines, parameters, include_dirs, work)
+        finally:
+            # Keep the native receipt even when a live child is missing.
+            created = set(work.glob('native-elaboration-*')) - before
+            if len(created) == 1:
+                context_file = created.pop() / 'context.json'
+                retain_context(context_file)
+
+    native_modules = design['modules']
+    active_modules = {}
+    active_instances = []
+    for name, native in native_modules.items():
+        original = native.get('attributes', {}).get('hdlname', name)
+        if original not in modules and '$' in name:
+            # Native Slang --keep-hierarchy uses declaration$full.instance.path.
+            declaration, instance_path = name.split('$', 1)
+            if declaration in modules and instance_path.startswith(top + '.'):
+                original = declaration
+        if original not in modules:
+            raise ValueError(f'unsupported native module identity: {name}')
+        source = modules[original]
+        expressions = _hierarchy.parameter_expressions(headers[original], source.body)
+        values = {}
+        for key, value in native.get('parameter_default_values', {}).items():
+            if not isinstance(value, str) or not re.fullmatch('[01]+', value):
+                raise ValueError(f'unsupported native parameter: {name}.{key}')
+            values[key] = int(value, 2)
+        params = _hierarchy.resolve_parameters(expressions, values)
+        body = _hierarchy.active_body(source.body, params, lint._procedural_statement_end)
+        native_ports = native.get('ports', {})
+        if ({p.name: p.direction for p in source.ports} !=
+                {p: spec['direction'] for p, spec in native_ports.items()}):
+            raise ValueError(f'source/native port population differs: {name}')
+        active_modules[name] = ModuleInfo(
+            name, source.file,
+            [PortInfo(p.name, p.direction, p.width, name) for p in source.ports], body)
+        children = {cell_name: cell['type']
+                    for cell_name, cell in native.get('cells', {}).items()
+                    if cell['type'] in native_modules}
+        seen = set()
+        for instance in parse_instances(body, name):
+            candidates = [cell for cell in children
+                          if cell == instance.inst_name or
+                          cell.endswith('.' + instance.inst_name)]
+            if len(candidates) != 1 or candidates[0] in seen:
+                raise ValueError(f'unsupported source/native instance: {name}.{instance.inst_name}')
+            cell = candidates[0]
+            seen.add(cell)
+            instance.module_type = children[cell]
+            active_instances.append(instance)
+        if seen != set(children):
+            raise ValueError(f'incomplete source/native child population: {name}')
+    return active_modules, active_instances
+
+
 def run_audit(
     rtl_dir: str,
-    top_module: str
+    top_module: str,
+    *, defines=(), parameters=(), include_dirs=(), output_dir=None,
 ) -> List[InterfaceAuditResult]:
     """
     Run the full encoding audit on an RTL directory.
@@ -807,6 +941,12 @@ def run_audit(
     _DISCOVERY_ISSUES.clear()
     _DISCOVERED_MODULE_COUNT = 0
     _DISCOVERED_INSTANCE_COUNT = 0
+    _CONFIGURATION.clear()
+    _CONFIGURATION.update(top=top_module, defines=list(defines),
+                          parameters=list(parameters),
+                          include_dirs=[str(Path(p).resolve()) for p in include_dirs],
+                          preprocessor='rtl_hierarchy_drivers.preprocess',
+                          state='UNKNOWN')
     rtl_path = Path(rtl_dir)
     if not rtl_path.exists():
         print(f"ERROR: RTL directory not found: {rtl_dir}", file=sys.stderr)
@@ -823,9 +963,20 @@ def run_audit(
     # Parse all modules
     all_modules: Dict[str, ModuleInfo] = {}
     all_instances: List[InstanceInfo] = []
+    headers = {}
+    selected_defines = {d.split('=', 1)[0] for d in defines}
+    configured = bool(defines or parameters or include_dirs)
 
     for vf in vfiles:
         src = strip_comments(vf.read_text(errors='replace'))
+        configured = configured or bool(re.search(r'`|\bgenerate\b', lexical_mask(src)))
+        try:
+            src = _hierarchy.preprocess(src, selected_defines)
+        except ValueError as exc:
+            _discovery_issue(f'active source UNKNOWN ({vf}): {exc}')
+            continue
+        for name, start, body_start, _ in module_regions(src):
+            headers[name] = src[start:body_start]
         mods = parse_modules(src, str(vf))
         for mod in mods:
             if mod.name in all_modules:
@@ -833,6 +984,13 @@ def run_audit(
             all_modules[mod.name] = mod
             insts = parse_instances(mod.body, mod.name)
             all_instances.extend(insts)
+    if configured and not _DISCOVERY_ISSUES:
+        try:
+            all_modules, all_instances = _active_native_view(
+                all_modules, headers, vfiles, top_module, list(defines),
+                list(parameters), list(include_dirs), output_dir)
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            _discovery_issue(f'active source UNKNOWN: {exc}')
     _DISCOVERED_MODULE_COUNT = len(all_modules)
     _DISCOVERED_INSTANCE_COUNT = len(all_instances)
 
@@ -849,6 +1007,8 @@ def run_audit(
     if _DISCOVERY_ISSUES:
         print("WARNING: incomplete hierarchy discovery: " +
               "; ".join(_DISCOVERY_ISSUES), file=sys.stderr)
+    else:
+        _CONFIGURATION['state'] = 'MEASURED'
 
     # Build interface map
     interfaces = build_interface_map(all_modules, all_instances)
@@ -909,6 +1069,12 @@ def main():
                     help='Top-level module name')
     ap.add_argument('--out-dir', required=True,
                     help='Output directory for JSON report')
+    ap.add_argument('-D', '--define', action='append', default=[],
+                    help='Selected compile define (repeatable NAME or NAME=value)')
+    ap.add_argument('-I', '--include-dir', action='append', default=[],
+                    help='Declared native include directory (repeatable)')
+    ap.add_argument('-P', '--parameter', action='append', default=[],
+                    help='Selected top parameter NAME=integer (repeatable)')
     ap.add_argument('--severity', choices=['ERROR', 'WARN', 'INFO'],
                     default='INFO',
                     help='Minimum severity to report (default: INFO)')
@@ -920,7 +1086,9 @@ def main():
         source_manifest = _applicability.source_census(Path(args.rtl_dir))
     except (OSError, ValueError, UnicodeError) as exc:
         source_error = str(exc)
-    results = run_audit(args.rtl_dir, args.top_module)
+    results = run_audit(args.rtl_dir, args.top_module, defines=args.define,
+                        parameters=args.parameter, include_dirs=args.include_dir,
+                        output_dir=args.out_dir)
     if source_manifest is not None:
         try:
             if _applicability.source_census(Path(args.rtl_dir)) != source_manifest:
@@ -976,6 +1144,7 @@ def main():
                         if source_error else [])),
         },
         'source': source_manifest,
+        'configuration': dict(_CONFIGURATION),
     }
     if not results:
         applicability = _applicability.assess(
