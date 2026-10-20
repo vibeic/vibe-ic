@@ -53,7 +53,9 @@ BASIS_TOKENS: Dict[str, Tuple[str, ...]] = {
 
 #: The `STA_BASIS: <VALUE>` stamp the STA emitters write into a report body.
 #: Read as a PREFIX so a new suffix needs no change here.
-STAMP_RE = re.compile(r"^\s*#?\s*STA_BASIS\s*:\s*([A-Z_]+)", re.M)
+# Prefix whitespace is line-local; the comment suffix requires an actual '#'
+# so ordinary indented report rows cannot split it between two stars (#3342).
+STAMP_RE = re.compile(r"^[^\S\n]*(?:#[^\S\n]*)?STA_BASIS\s*:\s*([A-Z_]+)", re.M)
 
 
 def normalise_basis(value: str) -> Optional[str]:

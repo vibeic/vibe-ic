@@ -417,7 +417,7 @@ def _merge_slack(cur: Optional[float], new: Optional[float]) -> Optional[float]:
 #: `eda_report_audit` already reads. PRE-PnR emitters stamp
 #: `PRE_LAYOUT_ESTIMATE`; post-route emitters stamp `POST_ROUTE_SPEF` /
 #: `POST_ROUTE_NO_SPEF` or carry no stamp at all.
-_STA_BASIS_STAMP_RE = re.compile(r"^\s*#?\s*STA_BASIS\s*:\s*([A-Z_]+)",
+_STA_BASIS_STAMP_RE = re.compile(r"^[^\S\n]*(?:#[^\S\n]*)?STA_BASIS\s*:\s*([A-Z_]+)",
                                  re.MULTILINE)
 
 BASIS_PRE_LAYOUT = "PRE_LAYOUT"

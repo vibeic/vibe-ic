@@ -3255,11 +3255,15 @@ def _signoff_basis_corners_elsewhere(project_dir: Path, declared_basis: str) -> 
 #: asked" stop being the same silence. `_sta_time_unit` quotes it in the reason
 #: it publishes, which is what makes the stamp a disclosure rather than a
 #: decoration nothing consumes.
+# A stamp starts on its own line. Keep prefix whitespace on that line and
+# include the comment's whitespace only when '#' is present. Two overlapping
+# whitespace stars around an optional '#' backtrack quadratically through
+# every indented path-table row before a tail stamp (issue #3342).
 _STA_TIME_UNIT_NOT_STATED_RE = re.compile(
-    r"(?:^|\n)\s*#?\s*STA_TIME_UNIT_NOT_STATED\s*:\s*(?P<why>[^\n]*)")
+    r"(?:^|\n)[^\S\n]*(?:#[^\S\n]*)?STA_TIME_UNIT_NOT_STATED\s*:\s*(?P<why>[^\n]*)")
 
 _STA_TIME_UNIT_RE = re.compile(
-    r"(?:^|\n)\s*#?\s*(?:STA_TIME_UNIT\s*:\s*|set_cmd_units\s+-time\s+"
+    r"(?:^|\n)[^\S\n]*(?:#[^\S\n]*)?(?:STA_TIME_UNIT\s*:\s*|set_cmd_units\s+-time\s+"
     r"|time\s+1)(?P<unit>[munpf]?s)\b", re.I)
 
 #: Multiplier onto NANOSECONDS.
@@ -3270,7 +3274,7 @@ _STA_TIME_TO_NS = {"s": 1e9, "ms": 1e6, "us": 1e3, "ns": 1.0,
 #: The report names the liberty it timed against; a liberty DECLARES its time
 #: unit. After the round-2 review that is the only authority this tree has.
 _STA_BASIS_LIBERTY_RE = re.compile(
-    r"(?:^|\n)\s*#?\s*STA_BASIS_LIBERTY\s*:\s*(?P<path>\S+)", re.I)
+    r"(?:^|\n)[^\S\n]*(?:#[^\S\n]*)?STA_BASIS_LIBERTY\s*:\s*(?P<path>\S+)", re.I)
 _LIBERTY_TIME_UNIT_RE = re.compile(
     r"\btime_unit\s*:\s*\"?\s*1?\s*(?P<unit>[munpf]?s)\s*\"?\s*;", re.I)
 
@@ -3580,10 +3584,10 @@ def _slack_row(fp: Any, slacks: Dict[str, Optional[float]],
 #: stamps `STA_PARASITICS_PROVENANCE: PNR_SESSION_UNVERIFIED`. Both lines are a
 #: closed grammar the flow writes itself, read between line anchors.
 _STA_ALIAS_BASIS_RE = re.compile(
-    r"^[ \t]*#?[ \t]*STA_ALIAS_BASIS[ \t]*:[ \t]*(sta(?:_[a-z0-9]+)*\.rpt)[ \t]*$",
+    r"^[ \t]*(?:#[ \t]*)?STA_ALIAS_BASIS[ \t]*:[ \t]*(sta(?:_[a-z0-9]+)*\.rpt)[ \t]*$",
     re.MULTILINE)
 _STA_PNR_SESSION_UNVERIFIED_RE = re.compile(
-    r"^[ \t]*#?[ \t]*STA_PARASITICS_PROVENANCE[ \t]*:[ \t]*"
+    r"^[ \t]*(?:#[ \t]*)?STA_PARASITICS_PROVENANCE[ \t]*:[ \t]*"
     r"PNR_SESSION_UNVERIFIED[ \t]*$", re.MULTILINE)
 #: The one basis name that IS the in-session report.
 _STA_IN_SESSION_BASIS = "sta.rpt"
