@@ -348,6 +348,22 @@ class Netlist:
                port_labels: Optional[Dict[object, str]] = None) -> str:
         return self.bit_label(self.root(flop.clk), port_labels)
 
+    def sample_edge(self, flop: Flop) -> int:
+        """Clock edge at the root net, accounting for transparent inversions."""
+        bit = flop.clk
+        edge = flop.clk_pol
+        for _ in range(32):
+            drv = self.drivers.get(bit)
+            if not drv:
+                break
+            cell = self.cells[drv[0]]
+            if cell["type"] not in _TRANSPARENT:
+                break
+            if cell["type"] in {"$not", "$_NOT_"}:
+                edge ^= 1
+            bit = cell["connections"]["A"][0]
+        return edge
+
     def cone(self, bits: Iterable, skip: Optional[Set[object]] = None, *,
              q_of: Optional[Dict[object, Flop]] = None,
              ports: Optional[Dict[object, str]] = None
@@ -518,6 +534,7 @@ class _LookupSnapshot:
         self.q_of = {b: f for f in nl.flops for b in f.q}
         self.domains = {
             id(f): nl.domain(f, self.port_labels) for f in nl.flops}
+        self.sample_edges = {id(f): nl.sample_edge(f) for f in nl.flops}
         self.labels = {
             id(f): (nl.bit_label(f.q[0], self.port_labels).split("[")[0]
                     if f.q else f.name)
@@ -583,6 +600,10 @@ class _LookupSnapshot:
         bit = stage1.q[index]
         return any(
             self.domain(flop) == domain
+            # A two-flop synchroniser needs two samples on the same edge.
+            # Compare at the root clock net: an inverted clock also changes
+            # the sampling edge, even if both flop cells say positive edge.
+            and self.sample_edges[id(flop)] == self.sample_edges[id(stage1)]
             and not (flop is stage1
                      and (d_index == index or flop.q[d_index] == bit))
             for flop, d_index in self._direct_consumers.get(bit, ()))

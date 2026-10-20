@@ -11,7 +11,7 @@ PROG = Path(os.environ.get("CDC_STAGE_PROBE_PROGRAMS", str(Path(__file__).resolv
 sys.path.insert(0, str(PROG))
 import _cdc_netlist as cdc
 pytestmark = pytest.mark.skipif(not shutil.which("yosys"), reason="native Yosys required")
-CASES = [('separate2', 'module neutral_cdc(input logic clk_a,clk_b,rst_n,en_i,data_i,output logic[1:0]out_o); logic launch; always_ff @(posedge clk_a)launch<=data_i; logic first,second; always_ff @(posedge clk_b) first<=launch; always_ff @(posedge clk_b) second<=first; assign out_o={second,first}; endmodule\n', 0), ('packed2', 'module neutral_cdc(input logic clk_a,clk_b,rst_n,en_i,data_i,output logic[1:0]out_o); logic launch; always_ff @(posedge clk_a)launch<=data_i; logic [1:0] chain; always_ff @(posedge clk_b) chain <= {chain[0], launch}; assign out_o=chain; endmodule\n', 0), ('packed-parallel1', 'module neutral_cdc(input logic clk_a,clk_b,rst_n,en_i,data_i,output logic[1:0]out_o); logic launch; always_ff @(posedge clk_a)launch<=data_i; logic [1:0] chain; always_ff @(posedge clk_b) chain <= {chain[1], launch}; assign out_o=chain; endmodule\n', 1)]
+CASES = [('separate2', 'module neutral_cdc(input logic clk_a,clk_b,rst_n,en_i,data_i,output logic[1:0]out_o); logic launch; always_ff @(posedge clk_a)launch<=data_i; logic first,second; always_ff @(posedge clk_b) first<=launch; always_ff @(posedge clk_b) second<=first; assign out_o={second,first}; endmodule\n', 0), ('packed2', 'module neutral_cdc(input logic clk_a,clk_b,rst_n,en_i,data_i,output logic[1:0]out_o); logic launch; always_ff @(posedge clk_a)launch<=data_i; logic [1:0] chain; always_ff @(posedge clk_b) chain <= {chain[0], launch}; assign out_o=chain; endmodule\n', 0), ('negative-edge2', 'module neutral_cdc(input logic clk_a,clk_b,rst_n,en_i,data_i,output logic[1:0]out_o); logic launch; always_ff @(posedge clk_a)launch<=data_i; logic first,second; always_ff @(negedge clk_b) first<=launch; always_ff @(negedge clk_b) second<=first; assign out_o={second,first}; endmodule\n', 0), ('packed-parallel1', 'module neutral_cdc(input logic clk_a,clk_b,rst_n,en_i,data_i,output logic[1:0]out_o); logic launch; always_ff @(posedge clk_a)launch<=data_i; logic [1:0] chain; always_ff @(posedge clk_b) chain <= {chain[1], launch}; assign out_o=chain; endmodule\n', 1)]
 
 @pytest.mark.parametrize("label,source,expected", CASES, ids=[x[0] for x in CASES])
 def test_native_two_sample_pipeline(tmp_path, label, source, expected):
@@ -28,6 +28,70 @@ def test_native_two_sample_pipeline(tmp_path, label, source, expected):
     assert document["summary"]["netlist_read"] is True
     actual_rc = result.returncode
     assert actual_rc == expected, document["findings"]
+
+
+@pytest.mark.parametrize("first_edge,second_edge", [
+    ("posedge", "negedge"), ("negedge", "posedge")],
+    ids=["positive-to-negative", "negative-to-positive"])
+def test_native_opposite_edge_cannot_certify_two_sample_sync(
+        tmp_path, first_edge, second_edge):
+    rtl = tmp_path / "phase2/stage1/rtl/neutral.sv"
+    rtl.parent.mkdir(parents=True)
+    rtl.write_text(f"""module neutral_cdc(input logic clk_a, clk_b, data_i,
+        output logic out_o);
+      logic launch, first, second;
+      always_ff @(posedge clk_a) launch <= data_i;
+      always_ff @({first_edge} clk_b) first <= launch;
+      always_ff @({second_edge} clk_b) second <= first;
+      assign out_o = second;
+    endmodule
+    """)
+    native = cdc.build(tmp_path, [rtl], "neutral_cdc")
+    model = cdc.load(native)
+    cdc.require_binding(tmp_path, native, model)
+    receiving = [f for f in model.flops if model.domain(f) == "clk_b"]
+    assert len(receiving) == 2
+    assert {f.clk_pol for f in receiving} == {0, 1}
+    report = tmp_path / "ordinary.json"
+    result = subprocess.run([
+        sys.executable, str(PROG / "clock_domain_reg_crossing_check.py"),
+        str(tmp_path), "--front-end", "netlist", "--json", str(report)],
+        capture_output=True, text=True)
+    document = json.loads(report.read_text())
+    assert document["summary"]["netlist_read"] is True
+    assert result.returncode == 1, (result.stdout, result.stderr, document)
+    assert [f["rule"] for f in document["findings"]] == ["CDC_REG_NO_SYNC"]
+
+
+@pytest.mark.parametrize("second_edge,expected", [
+    ("posedge", 1), ("negedge", 0)],
+    ids=["effective-opposite-edge", "effective-same-edge"])
+def test_native_inverted_clock_sampling_edge(tmp_path, second_edge, expected):
+    rtl = tmp_path / "phase2/stage1/rtl/neutral.sv"
+    rtl.parent.mkdir(parents=True)
+    rtl.write_text(f"""module neutral_cdc(input logic clk_a, clk_b, data_i,
+        output logic out_o);
+      logic launch, first, second;
+      wire inverted_clk = ~clk_b;
+      always_ff @(posedge clk_a) launch <= data_i;
+      always_ff @(posedge clk_b) first <= launch;
+      always_ff @({second_edge} inverted_clk) second <= first;
+      assign out_o = second;
+    endmodule
+    """)
+    native = cdc.build(tmp_path, [rtl], "neutral_cdc")
+    model = cdc.load(native)
+    cdc.require_binding(tmp_path, native, model)
+    report = tmp_path / "ordinary.json"
+    result = subprocess.run([
+        sys.executable, str(PROG / "clock_domain_reg_crossing_check.py"),
+        str(tmp_path), "--front-end", "netlist", "--json", str(report)],
+        capture_output=True, text=True)
+    document = json.loads(report.read_text())
+    assert document["summary"]["netlist_read"] is True
+    assert result.returncode == expected, (result.stdout, result.stderr, document)
+    assert [f["rule"] for f in document["findings"]] == (
+        [] if expected == 0 else ["CDC_REG_NO_SYNC"])
 
 
 def _stage_results(model, word, index):
@@ -132,3 +196,32 @@ def test_native_async_input_uses_distinct_packed_lane(tmp_path, second, expected
     assert document["summary"]["netlist_read"] is True
     assert result.returncode == expected, document["findings"]
     assert [f["rule"] for f in document["findings"]] == ([] if expected == 0 else ["ASYNC_INPUT_NO_SYNC"])
+
+
+@pytest.mark.parametrize("second_edge,expected", [
+    ("posedge", 0), ("negedge", 1)],
+    ids=["same-edge", "opposite-edge"])
+def test_native_async_input_second_stage_requires_same_edge(
+        tmp_path, second_edge, expected):
+    rtl = tmp_path / "phase2/stage1/rtl/neutral.sv"
+    rtl.parent.mkdir(parents=True)
+    rtl.write_text(f"""module neutral_async(input logic clk_b, signal_raw,
+        output logic out_o);
+      logic first, second;
+      always_ff @(posedge clk_b) first <= signal_raw;
+      always_ff @({second_edge} clk_b) second <= first;
+      assign out_o = second;
+    endmodule
+    """)
+    native = cdc.build(tmp_path, [rtl], "neutral_async")
+    cdc.require_binding(tmp_path, native, cdc.load(native))
+    report = tmp_path / "async.json"
+    result = subprocess.run([
+        sys.executable, str(PROG / "cdc_async_input_check.py"),
+        str(tmp_path), "--front-end", "netlist", "--json", str(report)],
+        capture_output=True, text=True)
+    document = json.loads(report.read_text())
+    assert document["summary"]["netlist_read"] is True
+    assert result.returncode == expected, (result.stdout, result.stderr, document)
+    assert [f["rule"] for f in document["findings"]] == (
+        [] if expected == 0 else ["ASYNC_INPUT_NO_SYNC"])
