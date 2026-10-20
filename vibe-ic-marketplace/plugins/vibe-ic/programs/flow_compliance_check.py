@@ -10465,6 +10465,15 @@ _P0_GATE_DECLARES_REASON_CLASS: frozenset = frozenset({
     "l24_signoff_evidence_backed_check",
 })
 
+# These JSON-capable leaves state a structural absence together with the
+# enumeration that establishes it. The record guard needs both fields; a
+# class recovered from a display line alone cannot survive that guard.
+_P0_GATE_DECLARES_STRUCTURAL_ABSENCE: frozenset = frozenset({
+    "arbiter_starvation_check", "bram_pdob_combinational_check",
+    "cross_module_1cycle_handshake_check", "frame_end_detection_check",
+    "tx_abort_during_transmission_check", "break_handler_safety_check",
+})
+
 
 #: Gates whose deciding line cannot carry what they flagged (a 200-character
 #: cap, #2084) and which write it IN FULL to a `--json` report the umbrella
@@ -10516,15 +10525,16 @@ def _p0_flagged(gate_name: str, scratch_dir: Optional[Path]) -> List[str]:
 def _p0_declared_report_path(gate_name: str, project: Path,
                              scratch_dir: Optional[Path]) -> Optional[Path]:
     """Where a declaring gate's `--json` report is written, or None."""
-    if gate_name not in _P0_GATE_DECLARES_REASON_CLASS:
+    if gate_name not in (_P0_GATE_DECLARES_REASON_CLASS |
+                         _P0_GATE_DECLARES_STRUCTURAL_ABSENCE):
         return None
     scratch = scratch_dir or (project / ".p0-gate-scratch")
     return scratch / f"{gate_name}.declared.json"
 
 
-def _p0_declared_reason_class(gate_name: str, project: Path,
-                              scratch_dir: Optional[Path]) -> Optional[str]:
-    """The class the gate STATED in its own report, or None.
+def _p0_declared_report(gate_name: str, project: Path,
+                        scratch_dir: Optional[Path]) -> Optional[Dict[str, Any]]:
+    """The declaring gate's own report, including its evidence, or None.
 
     Conservative in the only direction that matters: an absent, unreadable or
     silent report returns None and the caller keeps the reading it had.
@@ -10536,7 +10546,14 @@ def _p0_declared_reason_class(gate_name: str, project: Path,
         report = json.loads(path.read_text(encoding="utf-8", errors="replace"))
     except (OSError, ValueError):
         return None
-    return _reason_taxonomy.report_reason_class(report)
+    return report if isinstance(report, dict) else None
+
+
+def _p0_declared_reason_class(gate_name: str, project: Path,
+                              scratch_dir: Optional[Path]) -> Optional[str]:
+    """The class the gate STATED in its own report, or None."""
+    return _reason_taxonomy.report_reason_class(
+        _p0_declared_report(gate_name, project, scratch_dir))
 
 
 def _structural_gate_argv(gate_name: str,
@@ -11699,11 +11716,15 @@ def _run_structural_rtl_gates(project: Path,
             if _early is not None:
                 _evidence["reason_class"] = _reason_taxonomy.ASKED_BEFORE_PRODUCER
                 _evidence["asked_before_producer"] = _early
-            _declared_cls = _p0_declared_reason_class(
+            _declared_report = _p0_declared_report(
                 gate_name, project, gate_scratch_dir)
+            _declared_cls = _reason_taxonomy.report_reason_class(_declared_report)
             if _declared_cls:
                 _evidence["reason_class"] = _declared_cls
                 _evidence["skip_kind"] = "declared-by-gate"
+                _enumeration = _sa.evidence_of(_declared_report)
+                if _enumeration is not None:
+                    _evidence[_sa.EVIDENCE_KEY] = _enumeration
             _reason_class = _reason_taxonomy.infer_nonverdict_reason(
                 verdict="SKIP", message=_skip_line, evidence=_evidence)
             return _p0_gate_record(

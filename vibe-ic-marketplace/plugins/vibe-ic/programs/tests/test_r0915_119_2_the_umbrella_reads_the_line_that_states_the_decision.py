@@ -34,6 +34,7 @@ states nothing keeps `informative[0]` byte for byte.
 from __future__ import annotations
 
 import ast
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -202,6 +203,48 @@ def test_every_structural_checker_is_decided_through_the_umbrella_door(
     cls = _classify(line)
     assert cls == CLS, (mod, r.returncode, line, cls)
     assert cls in T.SKIP_ELIGIBLE
+
+
+JSON_CHECKERS = [name for name in PROJECT_CHECKERS + RTL_DIR_CHECKERS
+                 if name != "l4_regmap_enumerated_values_typed_check"]
+
+
+@pytest.mark.parametrize("gate", JSON_CHECKERS)
+def test_real_p0_dispatch_preserves_the_leaf_enumeration(tmp_path, monkeypatch, gate):
+    project = tmp_path / "project"
+    rtl = project / "phase2/stage1/rtl"
+    rtl.mkdir(parents=True)
+    (rtl / "plain.v").write_text(PLAIN_RTL)
+    docs = project / "phase1/generated_docs"
+    docs.mkdir(parents=True)
+    (docs / "L9_RTL_STRUCTURE.json").write_text(json.dumps({
+        "schema_version": 2, "submodules": [{"name": "plain"}],
+        "memories": [{"name": "external_memory"}]}))
+    (docs / "L6_CONTROL_LOGIC.json").write_text(json.dumps({
+        "schema_version": 2, "fsm_states": [{"name": "IDLE"}]}))
+    # Select real registered consumers; do not substitute their result or
+    # bypass the umbrella's argv, subprocess, report reader or record guard.
+    monkeypatch.setattr(F, "_STRUCTURAL_RTL_GATES", (gate,))
+    records = []
+    F._run_structural_rtl_gates(project, records_out=records)
+    assert len(records) == 1
+    record = records[0]
+    assert record["evidence"].get("exit_code") == 2, record
+    assert record["reason_class"] == CLS, record
+    assert record["verdict"] == "SKIP", record  # never PASS credit
+    assert SA.is_valid(record["evidence"].get(SA.EVIDENCE_KEY)), record
+
+
+@pytest.mark.parametrize("enumeration", [None, {},
+    {"population": "modules", "scanned": 0, "found": 0},
+    {"population": "modules", "scanned": 1, "found": 1},
+    {"population": "modules", "scanned": True, "found": 0}])
+def test_p0_record_still_refuses_an_unbacked_structural_class(enumeration):
+    record = F._p0_gate_record(
+        "probe_check", "SKIP", SENTENCE,
+        {"exit_code": 2, SA.EVIDENCE_KEY: enumeration}, reason_class=CLS)
+    assert record["verdict"] == "INCOMPLETE"
+    assert record["reason_class"] == T.EXECUTION_ERROR
 
 
 # ── 6. the deck's own hygiene ─────────────────────────────────────────────
