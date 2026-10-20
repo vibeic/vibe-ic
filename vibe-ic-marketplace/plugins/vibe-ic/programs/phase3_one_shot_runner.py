@@ -76470,23 +76470,57 @@ def _classify_io_cell(master: str) -> str:
     return "nonesd_pad"                                   # IO pad, no clamp token
 
 
-def _esd_pad_ring_presence(components: List[Tuple[str, str]]) -> Dict[str, Any]:
+def _esd_pad_ring_presence(components: List[Tuple[str, str]],
+                           classes: Optional[Dict[str, str]] = None,
+                           esd_evidence: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """ESD pad-ring presence check (deterministic, pure).
 
     Given parsed DEF COMPONENTS [(inst, master), ...], classify the IO-ring cells
-    and decide ESD presence. chip-AGNOSTIC — matches only generic name substrings,
-    never design-specific names. (Validated on the real Caravel chip_io.def ring.)
+    and decide ESD presence. LEF roles drive instance counts when available;
+    readable IO netlists provide device evidence. Disclosed name hints remain
+    the fallback (including the legacy Caravel classifications).
 
     Verdict over the SIGNAL-PAD set (IO pads minus structural fillers):
       * 0 signal pads                  → status N/A   (core macro — no pad ring)
       * >=1 signal pad, >=1 ESD-bearing → status MANUAL_REVIEW, esd_presence PRESENT
-      * >=1 signal pad, 0  ESD-bearing → status MANUAL_REVIEW, esd_presence MISSING
+      * all pads explicitly noesd      → MANUAL_REVIEW, esd_presence MISSING
+      * no positive/negative evidence  → MANUAL_REVIEW, NOT_DETERMINED
 
     HONESTY: a core-only macro returns N/A, NOT PASS. When pads are present, this
     proves ESD CELLS exist (or are absent) — it does NOT prove every pad has a
     complete primary+secondary discharge path to a correctly-stitched clamp rail;
     that needs layout+SPICE (commercial PERC). So the status stays MANUAL_REVIEW,
     never auto-PASS; `esd_presence` reports the accurate presence sub-result."""
+    # The sweep already owns pad roles/counts. Use its census for the memo too,
+    # keeping legacy callers' list fields beside the explicit instance counts.
+    if classes:
+        import perc_corpus_sweep as _perc
+        census = _perc.pad_ring_census(components, classes, esd_evidence)
+        if census.get('source'):
+            masters = census['pad_masters']
+            evidence = {m: esd_evidence[m] for m in masters
+                        if esd_evidence and m in esd_evidence}
+            present = [m for m in masters if (
+                evidence.get(m, {}).get('presence') == 'PRESENT'
+                if m in evidence else _classify_io_cell(m) == 'esd_pad')]
+            bases = {evidence[m]['basis'] for m in present if m in evidence}
+            if not bases:
+                bases = {v['basis'] for v in evidence.values()}
+            basis = ('pdk_netlist' if bases == {'pdk_netlist'} else
+                     'mixed' if len(bases) > 1 else next(iter(bases), 'name_hint_fallback'))
+            note = (f"{census['pads']} signal/power pad instances "
+                    f"({census['signal_pads']} signal, {census['power_pads']} power); "
+                    f"{census['esd_cells']} ESD-bearing. Presence {census['esd_presence']}; "
+                    f"basis {basis}. ESD sizing, discharge resistance and HBM/CDM "
+                    "robustness remain MANUAL_REVIEW.")
+            if census['esd_presence'] == 'MISSING':
+                note += ' Explicit noesd declarations: possible ESD GAP.'
+            if census['esd_unidentified']:
+                note += f" {census['esd_unidentified']} pad instances NOT_DETERMINED."
+            return dict(census, pads=masters, esd_cells=present,
+                        pad_count=census['pads'], esd_count=census['esd_cells'],
+                        structural_count=census['structural'], basis=basis,
+                        master_evidence=evidence, note=note)
     esd_pads, nonesd_pads, structural = [], [], []
     for _i, m in components:
         role = _classify_io_cell(m)
@@ -76504,6 +76538,7 @@ def _esd_pad_ring_presence(components: List[Tuple[str, str]]) -> Dict[str, Any]:
         "pad_count": len(signal_pads),
         "esd_count": len(esd_cells),
         "structural_count": len(set(structural)),
+        "basis": "name_hint_fallback",
     }
     if not signal_pads:
         base.update({
@@ -76527,14 +76562,17 @@ def _esd_pad_ring_presence(components: List[Tuple[str, str]]) -> Dict[str, Any]:
                 "stitched clamp rail (layout+SPICE topology — commercial PERC)."),
         })
         return base
+    negated = all(any(t in m.lower() for t in _ESD_NEGATION_HINTS) for m in signal_pads)
     base.update({
         "status": "MANUAL_REVIEW",
-        "esd_presence": "MISSING",
-        "note": (
+        "esd_presence": "MISSING" if negated else "NOT_DETERMINED",
+        "note": ((
             f"{len(signal_pads)} signal/power pad master(s) but 0 carry an "
             "integral ESD clamp (only bare/noesd/plain-analog pads detected). "
             "Likely ESD GAP — MANUAL review required to confirm the pad frame "
-            "provides ESD protection (this presence check found none)."),
+            "provides ESD protection (this presence check found none).") if negated else
+            "IO pad names provide no ESD evidence: NOT_DETERMINED; name_hint_fallback, "
+            "not verified PDK netlist evidence. MANUAL_REVIEW required."),
     })
     return base
 
@@ -77036,7 +77074,10 @@ def _emit_perc_equivalent(project: Path, top: str, pdk: PdkConfig,
 
     # --- structural facts from the DEF (chip-AGNOSTIC) --------------------
     components = _parse_def_components(def_file)
-    esd = _esd_pad_ring_presence(components)
+    import perc_corpus_sweep as _perc
+    io_library = _perc.perc_io_evidence(project, _pdk_dir_of(pdk) or None)
+    esd = _esd_pad_ring_presence(components, io_library['classes'],
+                                io_library['esd_evidence'])
     # (Cross-voltage-domain now uses _xdomain_levelshifter_check, which counts
     # domains robustly from NETS+SPECIALNETS — see below; the old SPECIALNETS-only
     # single_supply heuristic was removed in v0.2.11 as it mis-classified Caravel.)
@@ -77159,9 +77200,14 @@ def _emit_perc_equivalent(project: Path, top: str, pdk: PdkConfig,
         "category": "ESD protection presence",
         "status": esd["status"],   # N/A (core macro) or MANUAL_REVIEW
         "result": esd["status"],
-        "tool": "DEF/GDS pad-ring scan (presence) + MANUAL confirm",
+        "tool": "DEF pad census + IO library device evidence / disclosed name fallback",
         "pad_count": esd["pad_count"],
         "esd_cell_count": esd["esd_count"],
+        "esd_presence": esd["esd_presence"],
+        "basis": esd["basis"],
+        "master_evidence": esd.get("master_evidence", {}),
+        "library_sources": io_library["sources"],
+        "library_errors": io_library["errors"],
         "note": esd["note"],
     }
     if esd["status"] == "MANUAL_REVIEW":
@@ -77190,6 +77236,8 @@ def _emit_perc_equivalent(project: Path, top: str, pdk: PdkConfig,
             "record_to": "categories[].checklist[].confirmed (this report)",
         }
     categories.append(esd_cat)
+    categories.append(_perc.io_supply_pad_sufficiency(
+        components, def_file.read_text(errors='replace'), io_library))
 
     # ESD discharge-path TOPOLOGY (v0.2.9) — AUTOMATES the connectivity half:
     # conclusive open-loop / dangling-clamp / unrated-clamp gaps from DEF
@@ -77707,6 +77755,19 @@ def _emit_perc_signoff_memo(project: Path, top: str,
     lines.append("|---|---|---|---|")
     lines.extend(_row(c) for c in categories)
     lines.append("")
+    for c in categories:
+        if c['category'] == 'io_supply_pad_sufficiency':
+            lines.append('## IO supply pad counts and declared limits')
+            lines.append('')
+            lines.append(c['note'])
+            for domain in c['domains']:
+                for comparison in domain['comparisons']:
+                    lines.append(f"- {domain['power_net']}/{domain['ground_net']}: "
+                                 f"{comparison['limit']} = {comparison['value']}; "
+                                 f"{comparison['result']}; authority "
+                                 f"{comparison['source']['path']} "
+                                 f"(sha256 {comparison['source']['sha256']})")
+            lines.append('')
     # Manual checklist appendix — pending items spelled out, NOT pre-checked.
     manual = [c for c in categories if c["status"] == "MANUAL_REVIEW"]
     if manual:

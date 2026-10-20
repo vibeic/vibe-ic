@@ -54,8 +54,11 @@ from __future__ import annotations
 
 import argparse
 import glob
+import hashlib
 import json
+import math
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -137,7 +140,8 @@ def physical_classes(design_dir: Optional[str]) -> Dict[str, Any]:
     return out
 
 
-def pad_ring_census(components: List["tuple"], classes: Dict[str, str]) -> Dict[str, Any]:
+def pad_ring_census(components: List["tuple"], classes: Dict[str, str],
+                    esd_evidence: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Pad and ESD counts per INSTANCE, the pad role taken from the master's LEF CLASS.
 
     Returns None-equivalent `{"source": None}` when no component's master has a PAD/IO-corner
@@ -162,7 +166,11 @@ def pad_ring_census(components: List["tuple"], classes: Dict[str, str]) -> Dict[
     pads = signal + power
     if not pads and not structural:
         return {"source": None}
-    identified = [m for m in pads if _p._classify_io_cell(m) == "esd_pad"]
+    def protected(m):
+        if esd_evidence is not None and m in esd_evidence:
+            return esd_evidence[m]["presence"] == "PRESENT"
+        return _p._classify_io_cell(m) == "esd_pad"
+    identified = [m for m in pads if protected(m)]
     negated = [m for m in pads
                if any(t in m.lower() for t in _p._ESD_NEGATION_HINTS)]
     unidentified = [m for m in pads if m not in identified and m not in negated]
@@ -211,6 +219,240 @@ def pad_ring_census(components: List["tuple"], classes: Dict[str, str]) -> Dict[
                  "documentation." if unidentified and not identified else
                  "pad roles from LEF CLASS; counts are instances")),
     }
+
+
+def perc_io_evidence(design_dir: Path, pdk_dir: Optional[str]) -> Dict[str, Any]:
+    """Read the run's IO views through the existing PDK discovery/read authority.
+
+    Presence only: direct bond-to-rail drain-SAB MOS/diodes, or a diode across
+    LEF-declared power/ground rails. No size, rating or robustness is inferred.
+    Unreadable/missing netlists never acquire a pdk_netlist evidence label.
+    """
+    phys = physical_classes(str(design_dir))
+    classes = dict(phys['classes'])
+    roles, bonds, subckts, sub_sources = {}, {}, {}, {}
+    sources, errors, limits = [], [], []
+    lefs = [design_dir / f for f in phys['sources']['lef']]
+    netlists, liberties = [], []
+    tree = Path(pdk_dir) if pdk_dir else None
+    if tree:
+        try:
+            lefs += _pr.discover_io_lefs(str(tree.parent), tree.name)
+            netlists = _pr.discover_io_netlists(str(tree.parent), tree.name)
+            liberties = _pr.discover_io_liberty(str(tree.parent), tree.name)
+        except OSError as exc:
+            errors.append(str(exc))
+
+    def read(path, kind):
+        try:
+            text = _pr._ask(path, 'read')
+            source = {'path': str(path), 'sha256': hashlib.sha256(text.encode()).hexdigest(),
+                      'kind': kind}
+            sources.append(source)
+            return text, source
+        except OSError as exc:
+            errors.append(f'{path}: {exc}')
+            return None, None
+
+    for path in dict.fromkeys(lefs):
+        text, _ = read(path, 'lef')
+        if text is not None:
+            classes.update(_pr.parse_lef_macro_classes(text))
+            roles.update(_pr.parse_lef_pin_roles(text))
+    for path in liberties:
+        text, _ = read(path, 'liberty_roles')
+        if text is not None:
+            for master, cell in _pr.parse_liberty_supply_view(text)['cells'].items():
+                for pins in cell.values():
+                    for pin, attrs in pins.items():
+                        if str(attrs.get('is_pad', '')).lower() == 'true':
+                            bonds.setdefault(master, set()).add(pin)
+    for path in netlists:
+        text, source = read(path, 'io_netlist')
+        if text is not None:
+            for master, body in _pr.parse_spice_subckts(text).items():
+                subckts.setdefault(master, body)
+                sub_sources.setdefault(master, source)
+    evidence = {}
+    for master in classes:
+        if classes[master] not in _PAD_SIGNAL_CLASSES + _PAD_POWER_CLASSES:
+            continue
+        devices = []
+        source = sub_sources.get(master)
+        ports, body = subckts.get(master, ([], []))
+        uses = {p: u for p, (_d, u) in roles.get(master, {}).items()}
+        supply = {p for p in ports if uses.get(p) in ('POWER', 'GROUND')}
+        bond = bonds.get(master, set())
+        if len(bond) != 1:
+            bond = set()
+        for t in body:
+            # A model is the last positional token before parameters. A gate
+            # or bulk-only PAD connection is not a discharge path.
+            positional = []
+            for token in t[1:]:
+                if '=' in token:
+                    break
+                positional.append(token)
+            if len(positional) < 3:
+                continue
+            nodes, model = positional[:-1], positional[-1].lower()
+            kind = None
+            if (len(nodes) == 4 and re.search(r'(?:^|_)dss$', model)
+                    and ((nodes[0] in bond and nodes[2] in supply)
+                         or (nodes[2] in bond and nodes[0] in supply))):
+                kind = 'bond_drain_sab_mos'
+            if len(nodes) == 2 and (t[0][:1].lower() == 'd' or model.startswith('diode_')):
+                a, b = nodes
+                if (a in bond and b in supply) or (b in bond and a in supply):
+                    kind = 'bond_rail_diode'
+                if (classes[master] in _PAD_POWER_CLASSES
+                        and {uses.get(a), uses.get(b)} == {'POWER', 'GROUND'}
+                        and (a in bond or b in bond)):
+                    kind = 'rail_diode'
+            if kind:
+                devices.append({'element': t[0], 'model': model, 'nodes': nodes, 'kind': kind})
+        negated = any(t in master.lower() for t in _p._ESD_NEGATION_HINTS)
+        fallback = source is None and _p._classify_io_cell(master) == 'esd_pad'
+        evidence[master] = {
+            'presence': ('MISSING' if negated else 'PRESENT' if devices or fallback
+                         else 'NOT_DETERMINED'),
+            'basis': ('explicit_noesd' if negated else 'pdk_netlist' if devices
+                      else 'pdk_netlist_unproven' if source else 'name_hint_fallback'),
+            'devices': devices, 'source': source}
+    # L19 owns physical constraints; L9 may carry an explicit integration
+    # contract. Read the same field in either; retain every authority, never
+    # silently prefer a weaker limit. Provider bridge declarations use it too.
+    gd = _p._pl.generated_docs_dir(design_dir)
+    contracts = sorted(gd.glob('L19*.json')) + sorted(gd.glob('L9*.json'))
+    if tree:
+        contracts.append(tree / 'bridge/signoff_config.json')
+    for path in contracts:
+        try:
+            if not _pr._ask(path, 'is_file'):
+                continue
+            text, source = read(path, 'supply_limit_contract')
+            doc = json.loads(text) if text is not None else {}
+            if 'io_supply_pad_sufficiency' in doc:
+                limits.append({'declaration': doc['io_supply_pad_sufficiency'], 'source': source})
+        except (OSError, ValueError, TypeError) as exc:
+            errors.append(f'{path}: {exc}')
+    return {'classes': classes, 'pin_roles': roles,
+            'bond_pins': {m: sorted(v) for m, v in bonds.items()},
+            'esd_evidence': evidence, 'limits': limits, 'sources': sources, 'errors': errors}
+
+
+def io_supply_pad_sufficiency(components, def_text: str, library) -> Dict[str, Any]:
+    """Advisory PERC row; declared count violations contribute AUTOMATED FAIL.
+
+    Counts are physical instances in each resolvable (power_net, ground_net).
+    LEF USE identifies rails; Liberty is_pad identifies a supply pad's bond.
+    Ambiguous/unconnected domains stay unknown. PASS means the declared count
+    comparison only, never ESD/IR/SSN sign-off. There is no default ratio.
+
+    Contract: io_supply_pad_sufficiency.domains[] contains power_net,
+    ground_net, max_signal_pads_per_power_pad and/or
+    max_signal_pads_per_ground_pad. Limits must be finite positive numbers.
+    """
+    classes, roles = library['classes'], library['pin_roles']
+    census = pad_ring_census(components, classes)
+    pads = [(i, m) for i, m in components
+            if classes.get(m) in _PAD_SIGNAL_CLASSES + _PAD_POWER_CLASSES]
+    unknown = [i for i, m in components if m in census.get('unclassified_masters', [])]
+    if not census.get('source'):
+        unknown = [i for i, m in components
+                   if _p._classify_io_cell(m) in ('esd_pad', 'nonesd_pad')]
+    # Retain PIN identity (the old topology reader deliberately drops it).
+    # DEF wildcard terminals apply only to masters that declare that pin.
+    pin_nets = {}
+    for tag in ('NETS', 'SPECIALNETS'):
+        section = re.search(r'^\s*' + tag + r'\b.*?^\s*END\s+' + tag + r'\b',
+                            def_text, re.M | re.S)
+        if not section:
+            continue
+        for ent in re.split(r'\n\s*-\s+', section.group())[1:]:
+            net = ent.split()[0]
+            for inst, pin in _p._NET_TERMINAL_RE.findall(ent):
+                if inst != 'PIN':
+                    pin_nets.setdefault((inst, pin), set()).add(net)
+    domains = {}
+    for inst, master in pads:
+        nets = {'POWER': set(), 'GROUND': set()}
+        missing = False
+        for pin, (_direction, use) in roles.get(master, {}).items():
+            if use in nets:
+                connected = pin_nets.get((inst, pin), pin_nets.get(('*', pin), set()))
+                missing |= len(connected) != 1
+                nets[use].update(connected)
+        if missing or any(len(v) != 1 for v in nets.values()):
+            unknown.append(inst)
+            continue
+        key = (next(iter(nets['POWER'])), next(iter(nets['GROUND'])))
+        signal = classes[master] in _PAD_SIGNAL_CLASSES
+        if not signal:
+            bonds = library['bond_pins'].get(master, [])
+            bond = bonds[0] if len(bonds) == 1 else None
+            use = roles.get(master, {}).get(bond, ('', ''))[1]
+            if use not in nets:
+                unknown.append(inst)
+                continue
+        row = domains.setdefault(key, {'power_net': key[0], 'ground_net': key[1],
+                                      'signal_pads': 0, 'power_pads': 0, 'ground_pads': 0,
+                                      'comparisons': []})
+        if signal:
+            row['signal_pads'] += 1
+        else:
+            row['power_pads' if use == 'POWER' else 'ground_pads'] += 1
+    unknown_supply = any(i in unknown and classes.get(m) == 'PAD POWER'
+                         for i, m in components)
+    bad, incomplete = False, bool(unknown or not census.get('source'))
+    for key, row in domains.items():
+        compared = set()
+        for contract in library['limits']:
+            declaration = contract['declaration']
+            limits = declaration.get('domains', []) if isinstance(declaration, dict) else []
+            if not isinstance(limits, list):
+                incomplete = True
+                continue
+            for limit in limits:
+                if not isinstance(limit, dict) or (limit.get('power_net'), limit.get('ground_net')) != key:
+                    continue
+                for polarity, count in (('power', 'power_pads'), ('ground', 'ground_pads')):
+                    name = 'max_signal_pads_per_' + polarity + '_pad'
+                    value = limit.get(name)
+                    if value is None:
+                        continue
+                    if (isinstance(value, bool) or not isinstance(value, (int, float))
+                            or not math.isfinite(value) or value <= 0):
+                        incomplete = True
+                        continue
+                    failed = row['signal_pads'] > value * row[count]
+                    bad |= failed and not unknown_supply
+                    compared.add(polarity)
+                    row['comparisons'].append({'limit': name, 'value': value,
+                                               'result': ('NOT_DETERMINED' if unknown_supply
+                                                          else 'FAIL' if failed else 'PASS'),
+                                               'source': contract['source']})
+        if compared != {'power', 'ground'}:
+            incomplete = True
+    result = 'FAIL' if bad else 'MANUAL_REVIEW' if incomplete or not domains else 'PASS'
+    if not pads and not census.get('source') and not any(
+            _p._classify_io_cell(m) != 'other' for _, m in components):
+        result = 'N/A'
+    rows = list(domains.values())
+    detail = '; '.join(f"{r['power_net']}/{r['ground_net']}: {r['signal_pads']} signal, "
+                       f"{r['power_pads']} power, {r['ground_pads']} ground pad instances"
+                       for r in rows)
+    return {'category': 'io_supply_pad_sufficiency',
+            'status': 'AUTOMATED' if result in ('PASS', 'FAIL') else result,
+            'result': result, 'tool': 'DEF instances + LEF roles + Liberty bond terminals',
+            'signal_pads': census.get('signal_pads'), 'power_pads': census.get('power_pads'),
+            'domains': rows, 'unknown_domain_instances': sorted(unknown),
+            'authority': library['limits'], 'library_errors': library['errors'],
+            'note': (detail + f'; {len(unknown)} unknown-domain instance(s). ' +
+                     ('Declared count comparison only; ESD/IR/SSN robustness remains manual.'
+                      if result in ('PASS', 'FAIL') else
+                      'Supply sufficiency NOT_DETERMINED: no complete applicable declared limits '
+                      'or domain evidence; MANUAL_REVIEW. No default ratio.'))}
 
 
 def _pick_routed_def(design_dir: str) -> Optional[str]:
