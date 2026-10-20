@@ -619,7 +619,7 @@ def parse_top_ports(text: str, top: str,
     # separately, because whether they exist depends on a define this gate does
     # not know.
     src = re.sub(r"^[ \t]*`(?:ifdef|ifndef|elsif|else|endif|define|undef)\b[^\n]*$",
-                 "", src, flags=re.M)
+                 lambda m: " " * len(m.group(0)), src, flags=re.M)
     m = re.search(r"\bmodule\s+" + re.escape(top) + r"\b", src)
     if not m:
         return None
@@ -655,72 +655,83 @@ def parse_top_ports(text: str, top: str,
                 break
     if close_i < 0:
         return None
-    # Which port NAMES sat inside a conditional block, read off the ORIGINAL
-    # text (the directives were stripped above so the parse would not lose
-    # them). Reported, never guessed at.
-    conditional: set = set()
-    raw_no_comment = stripped
+    # Keep the actual declarator's source position: an ANSI continuation may
+    # share a line with its predecessor, or start after an `endif. Inferring
+    # conditionality from the previous name would attribute the wrong port.
+    conditional_spans: List[Tuple[int, int]] = []
     depth_cond = 0
-    for line in raw_no_comment.splitlines():
-        # Stripped again HERE, on the value the scan actually reads. The
-        # whole-text pass above already cleared it; this call is what makes
-        # that true LOCALLY, so a later change to where `raw_no_comment` comes
-        # from cannot quietly re-open the hole. `_DIR_RE` must never see a
-        # character a stripper has not looked at.
-        s = _strip_hdl_attributes(_strip_hdl_comments(line)).strip()
+    offset = 0
+    for line in stripped.splitlines(keepends=True):
+        s = line.strip()
         if re.match(r"^`(?:ifdef|ifndef)\b", s):
             depth_cond += 1
-            continue
-        if re.match(r"^`endif\b", s):
+        elif re.match(r"^`endif\b", s):
             depth_cond = max(0, depth_cond - 1)
-            continue
-        if depth_cond > 0:
-            dm2 = _DIR_RE.match(s)
-            if dm2:
-                toks2 = dm2.group(2).replace(")", " ").split()
-                if toks2:
-                    conditional.add(toks2[-1].strip(";,"))
+        elif depth_cond > 0:
+            conditional_spans.append((offset, offset + len(line)))
+        offset += len(line)
 
+    from module_port_audit import split_top_level
     ports: List[Dict[str, Any]] = []
     unparsed: List[str] = []
-    for decl in rest[open_i + 1:close_i].split(","):
+    direction: Optional[str] = None
+    inherited_type = ""
+    offset = m.end() + open_i + 1
+    for raw_decl in split_top_level(rest[open_i + 1:close_i]):
+        chunk_start = offset
+        offset += len(raw_decl) + 1
         # Same rule as the conditional scan above: the chunk that reaches
         # `_DIR_RE` is stripped on its own account, not on a sibling's.
-        decl = _strip_hdl_attributes(_strip_hdl_comments(decl)).strip()
+        decl = _strip_hdl_attributes(_strip_hdl_comments(raw_decl)).strip()
         if not decl:
             continue
         dm = _DIR_RE.match(decl)
-        if not dm:
-            # A chunk that is not a port declaration is usually a continuation
-            # of a packed type; record a bounded sample rather than discarding
-            # silently, so a parse that is losing ports is VISIBLE.
-            if len(unparsed) < 12:
-                unparsed.append(decl[:60])
-            continue
-        direction, tail = dm.group(1), dm.group(2)
+        tail = dm.group(2) if dm else decl
         # An initialiser and an unpacked array both sit AFTER the name, so the
         # last token is not the name until they are removed. See
         # `split_port_tail` for the measurement that found this.
         head, unpacked = split_port_tail(tail)
-        toks = head.replace(")", " ").split()
-        if not toks:
+        name_match = re.search(r"([A-Za-z_]\w*)\s*$", head)
+        # A continuation is just its own declarator, not a second type. Keep
+        # unsupported chunks visible and invalidate a partial budget below.
+        if (not name_match or (not dm and
+                (direction is None or head.strip() != name_match.group(1)))):
+            if len(unparsed) < 12:
+                unparsed.append(decl[:60])
             continue
-        name = toks[-1].strip(";,")
-        glued = _GLUED_NAME_RE.match(name)
-        if glued:
-            name = glued.group(1)
-        width = _width(head, params)
+        name = name_match.group(1)
+        if dm:
+            direction = dm.group(1)
+            inherited_type = head[:name_match.start(1)]
+        width = _width(inherited_type, params)
         if unpacked:
             n = unpacked_count(unpacked, params)
             # None x anything stays None: an array whose length nobody supplied
             # is UNDECIDED, never a guessed pad count.
             width = None if (width is None or n is None) else width * n
+        name_pos = (chunk_start + raw_decl.find(decl)
+                    + (dm.start(2) if dm else 0) + name_match.start(1))
         ports.append({"dir": direction, "name": name,
                       "width": width,
-                      "conditional": name in conditional})
+                      "conditional": any(a <= name_pos < b
+                                         for a, b in conditional_spans)})
     if ports:
         ports[0]["_unparsed_chunks"] = unparsed
     return ports
+
+
+def _incomplete_port_parse(ports: Optional[List[Dict[str, Any]]]
+                           ) -> Optional[Dict[str, Any]]:
+    chunks = [c for p in ports or [] for c in p.get("_unparsed_chunks", [])]
+    if not chunks:
+        return None
+    return {"check": "slot_pad_budget", "verdict": "UNDECIDED", "rc": 2,
+            "reason_class": _reason_taxonomy.EXECUTION_ERROR,
+            "rule": "TOP_PORT_PARSE_INCOMPLETE",
+            "reason": "top-level port declarations could not be fully parsed: "
+                      + "; ".join(chunks)
+                      + " — a partial interface cannot establish a pad budget",
+            "unparsed_port_chunks": chunks}
 
 
 def interface_budget(ports: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -781,6 +792,9 @@ def fold_candidates(ports: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 # --------------------------------------------------------------------------- #
 def evaluate(slots: Dict[str, Dict[str, Any]], ports: List[Dict[str, Any]]
              ) -> Dict[str, Any]:
+    incomplete = _incomplete_port_parse(ports)
+    if incomplete:
+        return incomplete
     budget = interface_budget(ports)
     folds = fold_candidates(ports)
     foldable_bits = sum(f["pads_saved"] for f in folds)
@@ -1501,6 +1515,9 @@ def main(argv: Optional[List[str]] = None) -> int:
                                       for k, v in sorted(_param_conflicts.items()))),
                "parameter_conflicts": _param_conflicts,
                "note": "a question with two answers has not been answered"}
+        rc = 2
+    elif (_die_is_its_own_operator or _route_na is None) and _incomplete_port_parse(ports):
+        rep = _incomplete_port_parse(ports)
         rc = 2
     elif _die_is_its_own_operator and not ports:
         # A DIE THAT DECLARES NO TOP PORTS AT ALL is the one undecidable case

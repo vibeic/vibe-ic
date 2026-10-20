@@ -1014,3 +1014,88 @@ def test_the_undecided_line_carries_the_disclosed_skip_marker():
     rc, line = first_line(str(proj))
     assert rc == 0 and "[CANNOT CHECK]" not in line, (
         f"a real verdict wears the disclosed-skip marker: {line}")
+
+
+# ANSI continuations share direction/type/packed ranges, not unpacked arrays.
+def test_ansi_continuations_inherit_type_range_but_not_unpacked_dimensions():
+    rtl = ("module widget(input wire clk, aux, rst_n, "
+           "input logic signed [3:0] first[2], second[3], "
+           "output logic [7:0] result={4'b0,4'b0}, mirror); endmodule")
+    ports = S.parse_top_ports(rtl, "widget")
+    assert [(p["dir"], p["name"], p["width"]) for p in ports] == [
+        ("input", "clk", 1), ("input", "aux", 1),
+        ("input", "rst_n", 1), ("input", "first", 8),
+        ("input", "second", 12), ("output", "result", 8),
+        ("output", "mirror", 8)]
+    assert ports[0]["_unparsed_chunks"] == []
+
+
+def test_ansi_continuation_with_unknown_packed_width_stays_unresolved():
+    ports = S.parse_top_ports(
+        "module widget(input [WIDTH-1:0] first, second); endmodule", "widget")
+    rep = S.evaluate({"slot": _slot_ingested()}, ports)
+    assert rep["verdict"] == "UNDECIDED"
+    assert rep["unresolved_width_ports"] == ["first", "second"]
+
+
+def test_ansi_continuations_keep_their_own_conditional_source_position():
+    rtl = ("module widget(input wire clk,\n`ifdef OPT\n"
+           " input wire first, second,\n`endif\n"
+           " third, output wire done); endmodule")
+    ports = S.parse_top_ports(rtl, "widget")
+    assert [(p["name"], p["conditional"]) for p in ports] == [
+        ("clk", False), ("first", True), ("second", True),
+        ("third", False), ("done", False)]
+
+
+_ANSI_RTL = ("module widget(input wire clk, secondary_clk, rst_n, "
+             "input wire [3:0] data, output logic warn, fatal); endmodule")
+_ANSI_PLAN = """# Physical Pad Placement
+
+The I/O cell library is delegated to the PDK.
+
+| side | signals |
+| --- | --- |
+| S | `clk`, `secondary_clk`, `rst_n` |
+| N | `data[3:0]` |
+| E | `warn`, `fatal` |
+| W | - |
+"""
+
+
+@pytest.mark.parametrize("missing", [False, True])
+def test_ansi_public_cli_measures_the_last_port_and_rejects_a_missing_pad(missing):
+    import test_r0915101_a_die_budgets_against_its_own_pad_ring as D
+    plan = _ANSI_PLAN.replace("`warn`, `fatal`", "`warn`") if missing else _ANSI_PLAN
+    p = D._project(rtl=_ANSI_RTL, l3=plan)
+    out = p / "result.json"
+    cp = _supervised([sys.executable, str(PROG / "slot_pad_budget_check.py"),
+                      str(p), "--top", "widget", "--json", str(out)])
+    rep = json.loads(out.read_text())
+    assert (cp.returncode, rep["verdict"]) == ((1, "DOES_NOT_FIT") if missing
+                                             else (0, "FITS"))
+    assert rep["own_ring_arithmetic"]["signal_pads_owed"] == 7
+    assert rep["own_ring"]["unbonded_declared_bits"] == (["fatal"] if missing else [])
+
+
+def test_ansi_unknown_header_chunk_cannot_produce_a_partial_FITS():
+    import test_r0915101_a_die_budgets_against_its_own_pad_ring as D
+    rtl = "module widget(input wire clk, bus_if.endpoint bus, output wire done); endmodule"
+    ports = S.parse_top_ports(rtl, "widget")
+    rep = S.evaluate({"slot": _slot_ingested()}, ports)
+    assert (rep["rc"], rep["verdict"]) == (2, "UNDECIDED")
+    assert rep["rule"] == "TOP_PORT_PARSE_INCOMPLETE"
+    p = D._project(rtl=rtl, l3=_ANSI_PLAN)
+    rc, rep = D._run(p)
+    assert (rc, rep["verdict"]) == (2, "UNDECIDED")
+    assert rep["unparsed_port_chunks"] == ["bus_if.endpoint bus"]
+
+
+def test_ansi_missing_pad_reaches_the_real_runner_as_FAIL():
+    import design_one_shot_runner as R
+    import test_r0915101_a_die_budgets_against_its_own_pad_ring as D
+    p = D._project(rtl=_ANSI_RTL,
+                   l3=_ANSI_PLAN.replace("`warn`, `fatal`", "`warn`"))
+    result = R.step_slot_pad_budget(p, "widget")
+    assert result.status == "FAIL", result.detail
+    assert result.extras["exit_code"] == 1
