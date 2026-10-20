@@ -1260,3 +1260,94 @@ def test_real_rtl_alias_leaves_follow_their_owned_dispatch_span(
     fail = dsr.StepResult('measured_control', 'FAIL', 0.0, 'measured software failure')
     assert dsr._aggregate_verdict([fail, *plan]) == 'FAIL'
     assert not dsr._pl.rtl_dir(tmp_path).exists()
+
+
+# Issue #3373: frontend completion used to dispatch Step 5 outside the window.
+def _formal_manifest_window(project, entry, exit_step):
+    """Execute the real main predicate/callsite and the whole manifest owner.
+
+    Other dispatch sites are outside this extraction. The tests below control
+    formal tools; a native producer/ordinary-consumer probe complements them.
+    """
+    from types import SimpleNamespace
+    import step_preflight as spf
+    dsr = _load('design_one_shot_runner')
+    sites = spf.RUNNER_PLANS['design_one_shot_runner'].sites
+    entry_site = spf.site_for_step('design_one_shot_runner', entry) if entry else None
+    pruned = dsr._exit_pruned_sites(sites, exit_step) if exit_step else []
+    helpers = {'_site_order', '_before_entry', '_after_exit', '_step_requested'}
+    nodes = [n for n in _main_node().body
+             if isinstance(n, ast.FunctionDef) and n.name in helpers
+             or isinstance(n, ast.If) and any(isinstance(c, ast.Call)
+                 and isinstance(c.func, ast.Name)
+                 and c.func.id == '_complete_phase2_frontend' for c in ast.walk(n))]
+    assert len(nodes) == 5, 'the actual main completion seam must remain reachable'
+    env = {
+        '_spf': spf, '_entry_site': entry_site, '_exit_pruned': pruned,
+        '_bounded': dsr.run_is_bounded(entry_site, pruned, [n for n, _ in sites]),
+        '_window_flags': dsr.declared_window_flags(entry, exit_step),
+        'args': SimpleNamespace(entry_step=entry, exit_step=exit_step,
+                                top_name='ctr', container=''),
+        'project': project, 'plan': [], 'StepResult': dsr.StepResult,
+        '_complete_phase2_frontend': dsr._complete_phase2_frontend,
+    }
+    exec(compile(ast.fix_missing_locations(ast.Module(body=nodes, type_ignores=[])),
+                 str(RUNNER), 'exec'), env)
+    return env['plan']
+
+
+@pytest.mark.parametrize('entry,exit_step,selected', [
+    ('2', '3', False), ('4', '4', False), ('4', 'sim', False),
+    ('4', '5', True), ('sim', '5', True), (None, None, True),
+    ('1', '13', True),
+])
+@pytest.mark.parametrize('retained', [False, True], ids=['fresh', 'stale-error'])
+def test_formal_manifest_work_obeys_the_actual_main_window(
+        tmp_path, monkeypatch, entry, exit_step, selected, retained):
+    import execution_policy as policy
+    import formal_harness_gen as harness
+    import formal_property_run as proof
+    import hashlib
+    project = tmp_path / 'project'
+    rtl = project / 'phase2/stage1/rtl/ctr.v'
+    rtl.parent.mkdir(parents=True)
+    rtl.write_text('module ctr(input clk,input rst,output reg q);\n'
+                   'always @(posedge clk) if(rst) q<=0; else q<=!q;\nendmodule\n')
+    formal = project / 'phase2/stage1/formal'
+    formal.mkdir(parents=True)
+    (formal / 'retained-task').mkdir()
+    (formal / 'retained-task/trace.sentinel').write_bytes(b'previous task bytes\n')
+    if retained:
+        # This is a controlled ERROR record, not a fabricated native CEX.
+        (formal / 'results.json').write_text('{"verdict":"ERROR","all_proved":false}\n')
+    def snapshot():
+        return {str(p.relative_to(formal)): hashlib.sha256(p.read_bytes()).hexdigest()
+                for p in formal.rglob('*') if p.is_file()}
+    before = snapshot()
+    calls = []
+    def generate(**kwargs):
+        calls.append('generator')
+        (formal / 'formal_ctr.sv').write_text('controlled native-dispatch transport\n')
+        return {'verdict': 'EMITTED', 'harness_path': str(formal / 'formal_ctr.sv'),
+                'rtl_files': [str(rtl)], 'harness_module': 'formal_ctr'}
+    def run(*args, **kwargs):
+        calls.append('runner')
+        (formal / 'results.json').write_text('{"verdict":"FAIL","all_proved":false}\n')
+        return {'verdict': 'FAIL'}
+    # Existing Ultra component transport avoids non-formal Default consumers;
+    # it does not alter the selected window predicates or formal owner body.
+    monkeypatch.setattr(policy, 'request', lambda: {'mode': 'ultra'})
+    monkeypatch.setattr(harness, 'generate', generate)
+    monkeypatch.setattr(proof, 'run', run)
+    plan = _formal_manifest_window(project, entry, exit_step)
+    assert calls == (['generator', 'runner'] if selected else [])
+    if selected:
+        assert json.loads((formal / 'results.json').read_text())['verdict'] == 'FAIL'
+        if retained:
+            history, = (formal.parent / 'formal_history').glob('*')
+            assert {str(p.relative_to(history)): hashlib.sha256(p.read_bytes()).hexdigest()
+                    for p in history.rglob('*') if p.is_file()} == before
+    else:
+        assert snapshot() == before, 'window exclusion must preserve every old task/evidence byte'
+        assert not (formal.parent / 'formal_history').exists()
+        assert 'outside the declared window' in plan[-1].detail

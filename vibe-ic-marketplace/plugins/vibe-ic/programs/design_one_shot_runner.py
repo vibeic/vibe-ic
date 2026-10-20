@@ -24284,7 +24284,8 @@ def step_arith_declaration_emit(project: Path) -> StepResult:
 def step_emit_phase2_manifests(project: Path,
                                 plan: List[StepResult],
                                 top_name: Optional[str] = None,
-                                container: str = _pin.default_container_name()) -> StepResult:
+                                container: str = _pin.default_container_name(),
+                                *, formal_requested: bool = True) -> StepResult:
     """Write canonical Phase 2 step-artifact manifests so flow_compliance_check
     --strict (--phase 2) sees the evidence the runner has already produced.
 
@@ -24691,111 +24692,115 @@ def step_emit_phase2_manifests(project: Path,
     # byte-copied sim_full_stack/results.json (or fabricated
     # `verdict: PASS, all_proved: true` from "iverilog reference TB
     # scenarios").
-    formal_dir = _pl.formal_dir(project)
-    formal_dir.mkdir(parents=True, exist_ok=True)
-    # Issue #1974: program-first property authoring with an honest denominator.
-    # The generator reads the design's L3/L6/L8 declarations, authors only the
-    # construction-safe reset properties it can bind, and writes the exact
-    # unresolved obligation IDs for the formal-verify expert. Three states are
-    # intentionally distinct:
-    #   * a real run leaves results.json + .sby + transcript, PASS or FAIL;
-    #   * a design-declared inapplicable step leaves a reviewable N/A marker;
-    #   * applicable work with no sound property is INCOMPLETE, never SKIP.
-    # A counterexample is evidence. Deleting it and replacing it with a skip was
-    # the false-green defect, so this block never unlinks results.json.
-    _formal_results = formal_dir / "results.json"
-    _refresh_formal = not _formal_results.is_file()
-    _formal_refresh_reason = None
-    if not _refresh_formal:
-        try:
-            import formal_proof_evidence_check as _formal_evidence
-            _retained_formal = json.loads(_formal_results.read_text())
-            _refresh_formal = bool(_formal_evidence.proof_source_staleness(
-                project, formal_dir, _retained_formal))
-            if not _refresh_formal:
+    # Step 5 has no dedicated dispatch site. The actual main window predicate
+    # still owns its numeric span; a frontend manifest refresh cannot grant
+    # permission to generate properties, refresh history or run a proof tool.
+    if formal_requested:
+        formal_dir = _pl.formal_dir(project)
+        formal_dir.mkdir(parents=True, exist_ok=True)
+        # Issue #1974: program-first property authoring with an honest denominator.
+        # The generator reads the design's L3/L6/L8 declarations, authors only the
+        # construction-safe reset properties it can bind, and writes the exact
+        # unresolved obligation IDs for the formal-verify expert. Three states are
+        # intentionally distinct:
+        #   * a real run leaves results.json + .sby + transcript, PASS or FAIL;
+        #   * a design-declared inapplicable step leaves a reviewable N/A marker;
+        #   * applicable work with no sound property is INCOMPLETE, never SKIP.
+        # A counterexample is evidence. Deleting it and replacing it with a skip was
+        # the false-green defect, so this block never unlinks results.json.
+        _formal_results = formal_dir / "results.json"
+        _refresh_formal = not _formal_results.is_file()
+        _formal_refresh_reason = None
+        if not _refresh_formal:
+            try:
+                import formal_proof_evidence_check as _formal_evidence
+                _retained_formal = json.loads(_formal_results.read_text())
+                _refresh_formal = bool(_formal_evidence.proof_source_staleness(
+                    project, formal_dir, _retained_formal))
+                if not _refresh_formal:
+                    import formal_property_run as _fpr
+                    _formal_refresh_reason = _fpr.incomplete_program_refresh_reason(
+                        _retained_formal)
+                    _refresh_formal = bool(_formal_refresh_reason)
+            except (OSError, ValueError, TypeError):
+                _refresh_formal = True
+        if _refresh_formal:
+            try:
+                import sys as _sys
+                if str(PROGRAMS_DIR) not in _sys.path:
+                    _sys.path.insert(0, str(PROGRAMS_DIR))
+                import formal_harness_gen as _fhg
                 import formal_property_run as _fpr
-                _formal_refresh_reason = _fpr.incomplete_program_refresh_reason(
-                    _retained_formal)
-                _refresh_formal = bool(_formal_refresh_reason)
-        except (OSError, ValueError, TypeError):
-            _refresh_formal = True
-    if _refresh_formal:
-        try:
-            import sys as _sys
-            if str(PROGRAMS_DIR) not in _sys.path:
-                _sys.path.insert(0, str(PROGRAMS_DIR))
-            import formal_harness_gen as _fhg
-            import formal_property_run as _fpr
-            if _formal_results.is_file():
-                # A stale proof is history, never disposable evidence. SBY
-                # refreshes its task folders, so retain the whole old epoch
-                # (including failed transcripts and CEX) before generating.
-                _history = formal_dir.parent / "formal_history" / f"pre_refresh_{time.time_ns()}"
-                shutil.copytree(formal_dir, _history)
-            _gen = _fhg.generate(project=project, top=top_name,
-                                 container=(container or None))
-            if _gen.get("verdict") == "EMITTED":
-                _res = _fpr.run(
-                    project,
-                    harness=Path(_gen["harness_path"]),
-                    rtl=[Path(p) for p in _gen["rtl_files"]],
-                    top=_gen["harness_module"],
-                    container=(container or None),
-                    timeout=300,
-                    continuation_refresh_reason=_formal_refresh_reason)
-                if (formal_dir / "results.json").is_file():
-                    # PASS, INCOMPLETE, INCONCLUSIVE and a real counterexample
-                    # all retain the same canonical evidence artifact. The gate
-                    # decides the row from its contents; the runner never makes
-                    # a failed proof disappear.
-                    written.append((formal_dir / "results.json").relative_to(project).as_posix())
-                if (formal_dir / "formal_env_unavailable.json").is_file():
-                    written.append((formal_dir / "formal_env_unavailable.json").relative_to(project).as_posix())
-            elif _gen.get("verdict") == "NOT_APPLICABLE":
+                if _formal_results.is_file():
+                    # A stale proof is history, never disposable evidence. SBY
+                    # refreshes its task folders, so retain the whole old epoch
+                    # (including failed transcripts and CEX) before generating.
+                    _history = formal_dir.parent / "formal_history" / f"pre_refresh_{time.time_ns()}"
+                    shutil.copytree(formal_dir, _history)
+                _gen = _fhg.generate(project=project, top=top_name,
+                                     container=(container or None))
+                if _gen.get("verdict") == "EMITTED":
+                    _res = _fpr.run(
+                        project,
+                        harness=Path(_gen["harness_path"]),
+                        rtl=[Path(p) for p in _gen["rtl_files"]],
+                        top=_gen["harness_module"],
+                        container=(container or None),
+                        timeout=300,
+                        continuation_refresh_reason=_formal_refresh_reason)
+                    if (formal_dir / "results.json").is_file():
+                        # PASS, INCOMPLETE, INCONCLUSIVE and a real counterexample
+                        # all retain the same canonical evidence artifact. The gate
+                        # decides the row from its contents; the runner never makes
+                        # a failed proof disappear.
+                        written.append((formal_dir / "results.json").relative_to(project).as_posix())
+                    if (formal_dir / "formal_env_unavailable.json").is_file():
+                        written.append((formal_dir / "formal_env_unavailable.json").relative_to(project).as_posix())
+                elif _gen.get("verdict") == "NOT_APPLICABLE":
+                    _payload = {
+                        "verdict": "SKIPPED-CONDITION",
+                        "applicability": "NOT_APPLICABLE",
+                        "program": "formal_harness_gen",
+                        "declaration": _gen.get("declaration"),
+                        "reason": _gen.get("reason"),
+                    }
+                    # vibe-ic#1082 — a DECLARED required_output is written
+                    # through the atomic helper. A raw write_text can be killed
+                    # part-way and leave a truncated file that `required_outputs`
+                    # reads as present; the guarantee is rename-survives-SIGKILL,
+                    # not a shorter line.
+                    _aa.write_json(formal_dir / "formal_not_applicable.json",
+                                   _payload)
+                    written.append((formal_dir / "formal_not_applicable.json").relative_to(project).as_posix())
+                else:
+                    # `generate` already wrote formal_authoring_request.json with
+                    # the exact L3/L6/L8 IDs and REQUIRED_NOT_INVOKED receipt state.
+                    # The /vibe-ic-phase2 command consumes that artifact and invokes
+                    # formal-verify; until it does, Step 5 is INCOMPLETE.
+                    written.append((formal_dir / "formal_authoring_request.json").relative_to(project).as_posix())
+            except Exception as _e:  # preserve the run; make the missing work loud
                 _payload = {
-                    "verdict": "SKIPPED-CONDITION",
-                    "applicability": "NOT_APPLICABLE",
-                    "program": "formal_harness_gen",
-                    "declaration": _gen.get("declaration"),
-                    "reason": _gen.get("reason"),
+                    "verdict": "INCOMPLETE",
+                    "program": "design_one_shot_runner",
+                    "fallback_skill": "formal-verify",
+                    "invocation_status": "REQUIRED_NOT_INVOKED",
+                    "property_denominator": 1,
+                    "authored_property_count": 0,
+                    "unresolved_obligations": [{
+                        "id": "formal.authoring_program_error",
+                        "layer": "formal",
+                        "description": repr(_e),
+                        "status": "UNAUTHORED",
+                    }],
+                    "reason": f"formal program-first authoring failed: {_e!r}",
                 }
-                # vibe-ic#1082 — a DECLARED required_output is written
-                # through the atomic helper. A raw write_text can be killed
-                # part-way and leave a truncated file that `required_outputs`
-                # reads as present; the guarantee is rename-survives-SIGKILL,
-                # not a shorter line.
-                _aa.write_json(formal_dir / "formal_not_applicable.json",
+                # vibe-ic#1082 — declared required_output, atomic. This is the
+                # error path: a half-written receipt here would say the authoring
+                # request exists while carrying none of the obligations that make
+                # it actionable.
+                _aa.write_json(formal_dir / "formal_authoring_request.json",
                                _payload)
-                written.append((formal_dir / "formal_not_applicable.json").relative_to(project).as_posix())
-            else:
-                # `generate` already wrote formal_authoring_request.json with
-                # the exact L3/L6/L8 IDs and REQUIRED_NOT_INVOKED receipt state.
-                # The /vibe-ic-phase2 command consumes that artifact and invokes
-                # formal-verify; until it does, Step 5 is INCOMPLETE.
                 written.append((formal_dir / "formal_authoring_request.json").relative_to(project).as_posix())
-        except Exception as _e:  # preserve the run; make the missing work loud
-            _payload = {
-                "verdict": "INCOMPLETE",
-                "program": "design_one_shot_runner",
-                "fallback_skill": "formal-verify",
-                "invocation_status": "REQUIRED_NOT_INVOKED",
-                "property_denominator": 1,
-                "authored_property_count": 0,
-                "unresolved_obligations": [{
-                    "id": "formal.authoring_program_error",
-                    "layer": "formal",
-                    "description": repr(_e),
-                    "status": "UNAUTHORED",
-                }],
-                "reason": f"formal program-first authoring failed: {_e!r}",
-            }
-            # vibe-ic#1082 — declared required_output, atomic. This is the
-            # error path: a half-written receipt here would say the authoring
-            # request exists while carrying none of the obligations that make
-            # it actionable.
-            _aa.write_json(formal_dir / "formal_authoring_request.json",
-                           _payload)
-            written.append((formal_dir / "formal_authoring_request.json").relative_to(project).as_posix())
 
     # Step 6: FPGA early prototype + audit
     fpga_compile_step = by_name.get("fpga_compile")
@@ -25171,20 +25176,25 @@ def step_emit_phase2_manifests(project: Path,
 
     return StepResult("phase2_manifests", "PASS",
                       time.time() - t0,
-                      f"{len(written)} manifest(s) written",
+                      f"{len(written)} manifest(s) written" +
+                      ("; Step 5 formal is outside the declared window; "
+                       "existing proof, task folders and counterexamples retained"
+                       if not formal_requested else ""),
                       written)
 
 
 @_spf.retained_steps(('2', '3', '4'), canonical_acceptance=True)
 def _complete_phase2_frontend(project: Path, plan: List[StepResult],
                               top_name: Optional[str] = None,
-                              container: str = _pin.default_container_name()) -> StepResult:
+                              container: str = _pin.default_container_name(),
+                              *, formal_requested: bool = True) -> StepResult:
     """Complete the real runner's RTL/CDC/simulation outputs after coverage.
 
     Standalone manifest emission remains an existing component operation.
     Only this actual runner seam owns the complete frontend consumers.
     """
-    result = step_emit_phase2_manifests(project, plan, top_name, container)
+    result = step_emit_phase2_manifests(
+        project, plan, top_name, container, formal_requested=formal_requested)
     # Step2 also owns producer-written ROM/rewrite/lint evidence. Its full
     # consumer must see those outputs here, rather than before the later
     # all-step producer sweep. Keep the existing emitter return semantics:
@@ -27649,8 +27659,9 @@ def main() -> int:
             project, plan, ic_class, evidence,
             invocation_context=_dispatch_invocation_context)
     if any(_step_requested(s) for s in ("2", "3", "4")):
-        plan.append(_complete_phase2_frontend(project, plan, args.top_name,
-                                               args.container))
+        plan.append(_complete_phase2_frontend(
+            project, plan, args.top_name, args.container,
+            formal_requested=_step_requested("5")))
     else:
         plan.append(StepResult(
             "phase2_manifests", "NOT_APPLICABLE", 0.0,
