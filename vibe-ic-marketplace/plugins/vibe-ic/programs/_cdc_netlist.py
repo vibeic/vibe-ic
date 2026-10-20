@@ -534,6 +534,127 @@ def _finding(rule: str, severity: str, message: str, **evidence) -> dict:
             "file": NETLIST_REL, "line": 0, "evidence": evidence}
 
 
+class _ConeSnapshot:
+    """Shared conservative cell cones, scoped to one analysis and skip set.
+
+    The existing model gives every combinational output the cell's entire
+    input fan-in. Resolve that same relation once per cell, rather than once
+    per output bit for every flop D bit. Iterative SCC closure keeps cycles
+    complete; caching a partially visited DFS node would lose reachability.
+    Terminal sets use integer masks internally, never a changed bit-lane model.
+    Nothing is cached on the mutable Netlist or across analyses.
+    """
+
+    def __init__(self, nl: Netlist, q_of, ports):
+        self.nl, self.q_of, self.ports = nl, q_of, ports
+        self.terminals = list(q_of) + [b for b in ports if b not in q_of]
+        self.q_count = len(q_of)
+        self.terminal_masks = {b: 1 << i for i, b in enumerate(self.terminals)}
+        self.cell_inputs: Dict[str, Tuple[object, ...]] = {}
+        self.contexts: Dict[frozenset, dict] = {}
+
+    def _resolve(self, bit, skip):
+        if self.nl.is_const(bit) or bit in skip:
+            return None, 0
+        if bit in self.terminal_masks:
+            return None, self.terminal_masks[bit]
+        driver = self.nl.drivers.get(bit)
+        if driver is None:
+            return None, 0
+        name = driver[0]
+        kind = self.nl.cells[name]["type"]
+        if kind in FLOP_TYPES or kind in _MEMORY:
+            return None, 0
+        return name, 0
+
+    def _edges(self, name, skip, context):
+        if name not in context["edges"]:
+            if name not in self.cell_inputs:
+                cell = self.nl.cells[name]
+                self.cell_inputs[name] = tuple(dict.fromkeys(
+                    bit for pin, conn in cell["connections"].items()
+                    if not (cell.get("port_directions", {}).get(pin) == "output"
+                            or (not cell.get("port_directions") and pin in _OUTPUT_PORTS))
+                    for bit in conn if not self.nl.is_const(bit)))
+            children, mask = set(), 0
+            for bit in self.cell_inputs[name]:
+                child, terminal = self._resolve(bit, skip)
+                mask |= terminal
+                if child is not None:
+                    children.add(child)
+            context["edges"][name] = tuple(children)
+            context["terminals"][name] = mask
+        return context["edges"][name]
+
+    def _close(self, root, skip, context):
+        memo = context["memo"]
+        if root in memo:
+            return memo[root]
+        indices, low, active, members = {}, {}, set(), []
+        frames = []
+
+        def enter(name):
+            indices[name] = low[name] = len(indices)
+            active.add(name)
+            members.append(name)
+            frames.append((name, iter(self._edges(name, skip, context))))
+
+        enter(root)
+        while frames:
+            name, edges = frames[-1]
+            child = next(edges, None)
+            if child is not None:
+                if child in memo:
+                    continue
+                if child not in indices:
+                    enter(child)
+                elif child in active:
+                    low[name] = min(low[name], indices[child])
+                continue
+            frames.pop()
+            if low[name] == indices[name]:
+                component = []
+                while True:
+                    node = members.pop()
+                    active.remove(node)
+                    component.append(node)
+                    if node == name:
+                        break
+                mask = 0
+                for node in component:
+                    mask |= context["terminals"][node]
+                    for target in context["edges"][node]:
+                        mask |= memo.get(target, 0)
+                for node in component:
+                    memo[node] = mask
+            if frames:
+                parent = frames[-1][0]
+                low[parent] = min(low[parent], low[name])
+        return memo[root]
+
+    def mask(self, bits, skip=None):
+        skip = frozenset(skip or ())
+        context = self.contexts.setdefault(skip, {
+            "edges": {}, "terminals": {}, "memo": {}})
+        mask = 0
+        for bit in bits:
+            node, terminal = self._resolve(bit, skip)
+            mask |= terminal
+            if node is not None:
+                mask |= self._close(node, skip, context)
+        return mask
+
+    def cone(self, bits, skip=None):
+        mask = self.mask(bits, skip)
+        found_q, found_p = set(), set()
+        while mask:
+            lowest = mask & -mask
+            index = lowest.bit_length() - 1
+            (found_q if index < self.q_count else found_p).add(self.terminals[index])
+            mask ^= lowest
+        return found_q, found_p
+
+
 class _LookupSnapshot:
     """Indexes valid only for one analysis of the model's current state."""
 
@@ -550,6 +671,7 @@ class _LookupSnapshot:
             b: n for n, (direction, bits) in nl.ports.items()
             if direction in ("input", "inout") for b in bits}
         self.q_of = {b: f for f in nl.flops for b in f.q}
+        self._cones = _ConeSnapshot(nl, self.q_of, self.port_bits)
         self.domains = {
             id(f): nl.domain(f, clock_labels) for f in nl.flops}
         self.sample_edges = {id(f): nl.sample_edge(f) for f in nl.flops}
@@ -559,8 +681,8 @@ class _LookupSnapshot:
             for f in nl.flops}
         self._direct_sources: Dict[Tuple[int, int], Optional[object]] = {}
         self._data_cones: Optional[List[Tuple[Flop, int, Set[object]]]] = None
-        self._consumers: Optional[
-            Dict[object, List[Tuple[Flop, int, bool]]]] = None
+        self._consumer_groups: Optional[
+            Dict[int, List[Tuple[int, Flop, int, Optional[object]]]]] = None
         self._direct_consumers: Optional[
             Dict[object, List[Tuple[Flop, int]]]] = None
 
@@ -575,8 +697,7 @@ class _LookupSnapshot:
 
     def cone(self, bits: Iterable, skip: Optional[Set[object]] = None
              ) -> Tuple[Set[object], Set[object]]:
-        return self.nl.cone(bits, skip=skip, q_of=self.q_of,
-                            ports=self.port_bits)
+        return self._cones.cone(bits, skip)
 
     def direct_source(self, flop: Flop, index: int) -> Optional[object]:
         key = (id(flop), index)
@@ -596,15 +717,28 @@ class _LookupSnapshot:
                         (flop, index, q_bits | port_bits))
         return self._data_cones
 
-    def consumers(self, source_bit) -> List[Tuple[Flop, int, bool]]:
-        if self._consumers is None:
-            self._consumers = {}
-            for flop, index, cone in self.data_cones():
-                direct = self.direct_source(flop, index)
-                for bit in cone:
-                    self._consumers.setdefault(bit, []).append(
-                        (flop, index, direct == bit))
-        return self._consumers.get(source_bit, [])
+    def consumers(self, source_bit, exclude_domain=None) -> List[Tuple[Flop, int, bool]]:
+        # Store each destination once, grouped by its shared source mask.
+        # Expanding the full source x destination relation eagerly can exhaust
+        # memory even after cone traversal is fast. Ordinals retain the exact
+        # former flop/D-bit order when groups are expanded on demand.
+        if self._consumer_groups is None:
+            self._consumer_groups = {}
+            ordinal = 0
+            for flop in self.nl.flops:
+                skip = {flop.srst} if flop.srst is not None else None
+                for index, bit in enumerate(flop.d):
+                    mask = self._cones.mask([bit], skip)
+                    self._consumer_groups.setdefault(mask, []).append(
+                        (ordinal, flop, index, self.direct_source(flop, index)))
+                    ordinal += 1
+        source = self._cones.terminal_masks.get(source_bit, 0)
+        rows = [row for mask, group in self._consumer_groups.items()
+                if mask & source for row in group
+                if exclude_domain is None or self.domain(row[1]) != exclude_domain]
+        rows.sort(key=lambda row: row[0])
+        return [(flop, index, direct == source_bit)
+                for _ordinal, flop, index, direct in rows]
 
     def sync_stage2(self, stage1: Flop, index: int, domain: str) -> bool:
         if self._direct_consumers is None:
@@ -645,10 +779,10 @@ def _data_cones(nl: Netlist, lookup: Optional[_LookupSnapshot] = None
 
 
 def _consumers(nl: Netlist, source_bit,
-               lookup: Optional[_LookupSnapshot] = None
+               lookup: Optional[_LookupSnapshot] = None, exclude_domain=None
                ) -> List[Tuple[Flop, int, bool]]:
     """(flop, D index, direct?) for every flop whose data cone reads the bit."""
-    return (lookup or _LookupSnapshot(nl)).consumers(source_bit)
+    return (lookup or _LookupSnapshot(nl)).consumers(source_bit, exclude_domain)
 
 
 def clock_domains(nl: Netlist, lookup: Optional[_LookupSnapshot] = None
@@ -672,7 +806,7 @@ def reg_crossing_findings(nl: Netlist,
         send = lookup.domain(src)
         synced_all: Dict[str, bool] = {}
         for idx, bit in enumerate(src.q):
-            for f, i, direct in _consumers(nl, bit, lookup):
+            for f, i, direct in _consumers(nl, bit, lookup, exclude_domain=send):
                 recv = lookup.domain(f)
                 if recv == send:
                     continue
