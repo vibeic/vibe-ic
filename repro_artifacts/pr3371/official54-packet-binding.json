@@ -1,0 +1,13 @@
+{
+  "archive": "official54-portable-evidence.tar.gz",
+  "sha256": "da074655459a490dd7ad7b7700e237981b9dbd37da28b8ae00acbea3762447c3",
+  "bytes": 647834,
+  "payload_files": 285,
+  "members": 286,
+  "native_index_entries": 60,
+  "native_unique_objects": 51,
+  "candidate": "85a1bdd67e138fb6063eca5fce6f69fd2f952b14",
+  "tree": "bd81308b8dca2de6086dabccb1e2abc935c4db96",
+  "base": "ae5600157f8ac19e63ce21e92a8de51e07ded91c",
+  "scope": "Additive source54 portable original-input/component proof,not IC acceptance"
+}

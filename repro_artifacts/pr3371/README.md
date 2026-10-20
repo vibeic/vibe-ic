@@ -20,3 +20,7 @@ Fresh encoding receipts/context/native JSON/script/log bytes are included as con
 The original per-file SPDX notices and the upstream ISC notice are retained. No files under the plugin prefix changed in this evidence commit.
 
 Raw launch.json source_postimages fields describe the underlying host source export. For reverse, the five base overlays listed in mounts determine the effective product bytes. effective-product-postimages.json records four additional read-only in-container probes of those exact source/overlay configurations, confirming base/reverse and candidate/restore identity. These probes neither rerun nor replace the preserved native P0 results. The archive and historical input bytes remain unchanged.
+
+## Additive official54 integration epoch
+
+The current PR head is85a1bdd67e138fb6063eca5fce6f69fd2f952b14, based on official54 ae5600157f8ac19e63ce21e92a8de51e07ded91c;165fixedIDs,25observed-valueFAIL/140PASS ->165PASS ->same25FAIL/140PASS ->165PASS. Eight exact-source normalP0arms plus eight default anonymous publicGit replay arms measured. See [official54-README.md](official54-README.md), [new archive](official54-portable-evidence.tar.gz), and [exact packet binding](official54-packet-binding.json). The original source51archive above and its hashes remain unchanged; this evidence branch has no product-prefix change. Both are component proofs, not official adoption or ICacceptance.
