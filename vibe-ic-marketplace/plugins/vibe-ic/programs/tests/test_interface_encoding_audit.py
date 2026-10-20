@@ -16,6 +16,7 @@ Test cases:
   10. Multi-file design parsed correctly
 """
 import json
+import hashlib
 import shutil
 import subprocess
 import sys
