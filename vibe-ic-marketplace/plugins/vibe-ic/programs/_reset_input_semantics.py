@@ -267,14 +267,28 @@ def _prose_phases(line):
         phase = 'release' if phase == 'deassertion' else phase
         suffix = line[match.end():matches[i + 1].start() if i + 1 < len(matches) else len(line)]
         prefix = line[matches[i - 1].end() if i else 0:match.start()]
-        # Clock and stage qualifiers can appear in either order. Collect every
-        # explicit target in this phase, so an earlier valid target cannot hide
-        # an incompatible target after the depth.
-        targets = re.finditer(r'\b(?:to|on)\s+(`?[A-Za-z_][\w$]*`?'
-                              r'(?:\s*(?:,|and)\s*`?[A-Za-z_][\w$]*`?)*)', suffix, re.I)
-        clocks = {name for target in targets
-                  for name in re.findall(r'[A-Za-z_][\w$]*', target[1])
-                  if name.lower() != 'and'}
+        # Validate complete target clauses, not a recognized prefix. Conjunctive
+        # lists admit every named clock; alternatives or unsupported remainder
+        # leave the phase unknown even when no stage qualifier is present.
+        targets = list(re.finditer(r'\b(?:to|on)\s+', suffix, re.I))
+        clocks = set()
+        invalid_targets = False
+        for j, target in enumerate(targets):
+            clause = suffix[target.end():targets[j + 1].start()
+                            if j + 1 < len(targets) else len(suffix)]
+            # Stage values are validated below. Remove only their finite
+            # qualifier grammar here; any other trailing text must still parse.
+            clause = re.sub(r'\s+(?:through|with|after)\s+[\w.+-]+[ -]stages?\b',
+                            '', clause, flags=re.I).strip().rstrip('.!?').strip()
+            if j + 1 < len(targets):
+                clause = re.sub(r'\s+and$', '', clause, flags=re.I)
+            for token in re.split(r'\s*,\s*(?:and\s+)?|\s+and\s+', clause, flags=re.I):
+                clock = re.fullmatch(r'`([A-Za-z_][\w$]*)`|([A-Za-z_][\w$]*)', token)
+                name = (clock[1] or clock[2]) if clock else None
+                if name is None or name.lower() in ('and', 'or'):
+                    invalid_targets = True
+                else:
+                    clocks.add(name)
         stages = []
         if phase == 'release':
             before = re.search(r'(?<![\w.-])([\w.+-]+)[ -]stages?\s*$', prefix, re.I)
@@ -287,7 +301,7 @@ def _prose_phases(line):
             if stages and re.search(r'\bor\b|/|\bat\s+(?:least|most)\b', stage_text, re.I):
                 stages.append('unknown')
         mixed = re.search(r'\b(?:asynchronous|synchronous)\s*(?:/|or|and)\s*$', prefix, re.I)
-        yield {'phase': phase, 'mode': 'unknown' if mixed or is_denied(line, ignore_bracketed=False)
+        yield {'phase': phase, 'mode': 'unknown' if invalid_targets or mixed or is_denied(line, ignore_bracketed=False)
                else (match['mode'] or match['mode_after']).lower(),
                'clocks': clocks, 'stages': stages, 'span': match.span()}
     # A synchrony word beside an unparsed phase is not permission to use the
