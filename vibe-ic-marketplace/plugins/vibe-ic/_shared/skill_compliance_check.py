@@ -892,6 +892,101 @@ def _receipt_digest(path: Path) -> str:
     return sha256(path.read_bytes()).hexdigest()
 
 
+def _encoding_native_source_error(payload: Dict[str, Any], receipt: Path) -> Optional[str]:
+    """Bind configured native evidence to this receipt's actual invocation.
+
+    Unconfigured lexical audits retain their existing source contract. A
+    claimed native proof must retain the parsed context, current source
+    closure, tool command, script and native JSON in the same receipt tree.
+    A correct hash of a foreign context is not this producer's evidence.
+    """
+    cfg = payload.get('configuration')
+    cfg = cfg if isinstance(cfg, dict) else {}
+    native_required = any(isinstance(row, dict) and (
+        row.get('producer_encoding') == 'BIT_VALUE' or row.get('consumer_encoding') == 'PREDICATE')
+        for row in payload.get('interfaces', []))
+    if not native_required and not any(k in cfg for k in ('native', 'native_context', 'native_script')):
+        return None
+    def unique(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError('duplicate_native_context_key')
+            result[key] = value
+        return result
+    try:
+        native = cfg['native']
+        context = Path(cfg['native_context'])
+        if (not context.is_absolute() or context.resolve() != context
+                or not context.is_relative_to(receipt.parent.absolute() / 'active-source')
+                or context.name != 'context.json'
+                or _receipt_digest(context) != cfg['native_context_sha256']):
+            return 'native_context_outside_current_receipt_or_hash_mismatch'
+        measured = json.loads(context.read_text(), object_pairs_hook=unique)
+        if not isinstance(native, dict) or measured != native or native.get('status') != 'MEASURED':
+            return 'native_context_embedded_configuration_disagrees'
+        if any(type(native.get(k)) is not int or native[k] != 0
+               for k in ('native_returncode', 'transport_returncode')):
+            return 'native_tool_did_not_exit_naturally_zero'
+        if (native.get('top') != cfg.get('top') or cfg['top'] != payload['summary']['top_module']
+                or any(native.get(k) != cfg.get(k) for k in ('defines', 'parameters'))):
+            return 'native_selected_configuration_disagrees'
+        source = payload['source']
+        files = [str(Path(source['root']) / row['path']) for row in source['files']
+                 if Path(row['path']).suffix.lower() in ('.v', '.sv')]
+        if (not files or not isinstance(native.get('files'), list)
+                or sorted(native['files']) != sorted(files)):
+            return 'native_source_population_disagrees'
+        dirs = sorted(set(cfg['include_dirs']) | {str(Path(p).parent) for p in files})
+        if native.get('include_dirs') != dirs:
+            return 'native_include_population_disagrees'
+        tracked = set(map(Path, files))
+        for directory in map(Path, dirs):
+            if not directory.is_absolute() or directory.resolve() != directory or not directory.is_dir():
+                return 'native_source_directory_not_current'
+            tracked.update(p for p in directory.rglob('*')
+                           if p.is_file() and p.suffix in {'.v', '.sv', '.vh', '.svh'})
+        if any(p.resolve() != p or p.is_symlink() for p in tracked):
+            return 'native_source_alias'
+        hashes = {str(p):_receipt_digest(p) for p in sorted(tracked)}
+        if native.get('input_sha256') != hashes:
+            return 'native_input_hashes_not_current'
+        script = context.parent / 'elaborate.ys'
+        script_rec = cfg['native_script']
+        if (script.resolve() != script or script_rec['path'] != str(script)
+                or script_rec['sha256'] != _receipt_digest(script)
+                or script_rec['text'] != script.read_text()):
+            return 'native_script_not_current'
+        command = ['yosys', '-Q', '-s', str(script)]
+        if native.get('native_command') != command:
+            return 'native_command_not_this_invocation'
+        if native.get('backend') in ('local', 'in-image'):
+            if native.get('command') != command:
+                return 'native_transport_command_disagrees'
+        elif native.get('backend') == 'docker':
+            process = context.parent / 'native_process.json'
+            record = json.loads(process.read_text(), object_pairs_hook=unique)
+            if (process.resolve() != process or record != native.get('native_process')
+                    or record.get('command') != command
+                    or type(record.get('native_returncode')) is not int
+                    or record['native_returncode'] != 0
+                    or native.get('command', [])[-len(command):] != command):
+                return 'native_process_not_this_invocation'
+        else:
+            return 'native_transport_unresolved'
+        design = context.parent / 'design.json'
+        output = re.search(r'\bwrite_json\s+(?:"([^"]+)"|([^\s;]+))\s*;?\s*$', script_rec['text'])
+        if (not output or Path(output.group(1) or output.group(2)) != design
+                or design.resolve() != design
+                or native.get('native_json_sha256') != _receipt_digest(design)
+                or native['top'] not in json.loads(design.read_text())['modules']
+                or not (context.parent / 'native.log').is_file()):
+            return 'native_output_not_this_invocation'
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+        return 'native_proof_incomplete:' + str(exc)
+    return None
+
+
 def _cc_audit_receipt_evidence(spec: Dict[str, Any], text: str,
                                ctx: Optional[CheckContext] = None
                                ) -> List[Finding]:
@@ -1176,6 +1271,9 @@ def _cc_audit_receipt_evidence(spec: Dict[str, Any], text: str,
                     source_error = str(exc)
                 if source_error is None and measured_source != source:
                     source_error = 'source_manifest_stale_or_wrong_root'
+
+        if auditor == 'interface_encoding_audit':
+            source_error = source_error or _encoding_native_source_error(payload, found)
 
         if measured_failure:
             return [Finding(

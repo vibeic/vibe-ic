@@ -682,7 +682,7 @@ def _parse_argv(argv: List[str]) -> Tuple[Optional[str], Optional[str],
 
 
 def _write_report(report: Optional[str], verdict: str, rc: int,
-                  flagged: List[dict], excluded: List[str]) -> None:
+                  flagged: List[dict], excluded: List[str], encoding_producer=None) -> None:
     """The findings IN FULL, beside the capped stdout line (see --json)."""
     if not report:
         return
@@ -697,11 +697,81 @@ def _write_report(report: Optional[str], verdict: str, rc: int,
         "reason_class": None,
         "flagged": flagged,
         "auditor_records_not_judged": excluded,
+        "encoding_producer": encoding_producer,
     })
 
 
-def _auditor_diagnostic_text(txt: str, auditor_records: List[str]
-                             ) -> Tuple[str, List[str]]:
+def _current_encoding_producer(project: Path):
+    """Only actual current source/native evidence admits a new continuation.
+
+    The owning P0 dispatcher supplies the exact receipt/hash after the actual
+    producer returns. Historical missing evidence remains missing; this admits
+    only a diagnostic role in the presence of independently verified current
+    producer evidence. A hand-written history shape alone grants nothing.
+    """
+    try:
+        cap = json.loads(os.environ.get('VIBEIC_P0_ENCODING_PRODUCER', 'null'))
+        if not isinstance(cap, dict) or set(cap) != {'path', 'sha256'}:
+            return None
+        receipt = Path(cap['path'])
+        state = project / '.vibeic-state/audit_receipts'
+        if (not receipt.is_absolute() or receipt.resolve() != receipt
+                or not receipt.is_relative_to(state)
+                or receipt.name != 'encoding_audit_report.json'
+                or _sha256_file(receipt) != cap['sha256']):
+            return None
+        payload = json.loads(receipt.read_text())
+        cfg = payload.get('configuration') or {}
+        summary = payload.get('summary') or {}
+        discovery = payload.get('discovery') or {}
+        rows = payload.get('interfaces')
+        if (payload.get('report_schema') != 'vibeic.interface_encoding_audit.v2'
+                or type(payload.get('producer_returncode')) is not int
+                or payload['producer_returncode'] != 0
+                or not isinstance(cfg.get('native'), dict)
+                or discovery.get('complete') is not True or discovery.get('issues') != []
+                or not isinstance(rows, list) or not rows
+                or not all(isinstance(r, dict) and r.get('status') in
+                           ('MATCH', 'MISMATCH', 'UNKNOWN') for r in rows)
+                or type(summary.get('total_interfaces')) is not int
+                or summary['total_interfaces'] != len(rows)
+                or any(type(summary.get(k)) is not int or summary[k] != sum(
+                    row['status'] == status for row in rows)
+                    for k, status in (('matches','MATCH'),('mismatches','MISMATCH'),('unknowns','UNKNOWN')))):
+            return None
+        # Select the actual project source, independently of the receipt's
+        # self-declared root, using the same existing front-door locations.
+        rtl = next((project / rel for rel in ('phase2/stage1/rtl','rtl','src','hdl')
+                    if (project / rel).is_dir() and (any((project / rel).glob('*.v'))
+                        or any((project / rel).glob('*.sv')))), None)
+        if rtl is None and (any(project.glob('*.v')) or any(project.glob('*.sv'))):
+            rtl = project
+        if rtl is None:
+            return None
+        shared = Path(__file__).resolve().parent.parent / '_shared'
+        if str(shared) not in sys.path:
+            sys.path.insert(0,str(shared))
+        import skill_compliance_check as checker
+        if checker._encoding_native_source_error(payload, receipt):
+            return None
+        findings = checker._cc_audit_receipt_evidence(
+            {'id':'storage_current_encoding','auditor':'interface_encoding_audit'}, '',
+            checker.CheckContext(output_path=receipt.parent/'review.md',
+                                 evidence_dirs=[receipt.parent], rtl_source_root=rtl))
+        if len(findings) != 1:
+            return None
+        finding = findings[0]
+        if (finding.state != 'PASS' and not (
+                finding.state == 'NOT_MEASURED' and
+                finding.detail.endswith('producer_inconclusive_or_unknown; fresh.'))):
+            return None
+        return cap
+    except (OSError, ValueError, TypeError, KeyError, AttributeError, ImportError):
+        return None
+
+
+def _auditor_diagnostic_text(txt: str, auditor_records: List[str],
+                             encoding_producer=None) -> Tuple[str, List[str]]:
     """Project typed auditor diagnostics onto their current declaration role.
 
     An old gate finding records an earlier measurement, not a fresh output
@@ -746,7 +816,8 @@ def _auditor_diagnostic_text(txt: str, auditor_records: List[str]
             # pass. Keep qualifying/stale/malformed receipts and all other
             # fields visible, and never rewrite the original report bytes.
             evidence = gate.get("evidence") if isinstance(gate, dict) else None
-            if (doc.get("program") == "flow_compliance_check"
+            if (encoding_producer is not None
+                    and doc.get("program") == "flow_compliance_check"
                     and doc.get("invoked_as") in ("audit", "producer")
                     and doc.get("overall") in ("FAIL", "NOT_MEASURED")
                     and step.get("id") == "P0"
@@ -818,6 +889,7 @@ def main() -> int:
     if not project.is_dir():
         print(f"ERROR: {project} not a directory", file=sys.stderr)
         return 2
+    encoding_producer = _current_encoding_producer(project) if auditor_records else None
     # The invoking auditor's own record(s): not judged here (see --auditor-record).
     auditor_excluded: List[str] = []
     auditor_diagnostics: List[Tuple[str, List[str]]] = []
@@ -874,7 +946,7 @@ def main() -> int:
             except Exception:
                 continue
             if f.suffix == ".json":
-                txt, fields = _auditor_diagnostic_text(txt, auditor_records)
+                txt, fields = _auditor_diagnostic_text(txt, auditor_records, encoding_producer)
                 if fields:
                     auditor_diagnostics.append((f.relative_to(project).as_posix(), fields))
             from_log = f.name.endswith(".log")
@@ -1020,7 +1092,7 @@ def main() -> int:
               f"whose declarations were themselves written outside the tree — "
               f"which is the very condition this gate exists to detect — so a "
               f"zero denominator may not be reported as a clean scan.")
-        _write_report(report, "NOT_CHECKED", 2, [], auditor_excluded)
+        _write_report(report, "NOT_CHECKED", 2, [], auditor_excluded, encoding_producer)
         return 2
 
     # ORGANIC #622 — a /tmp reference found INSIDE A LOG FILE (*.log) is a
@@ -1222,7 +1294,7 @@ def main() -> int:
               f"the run', derived from the run root, not a list of four "
               f"directories)")
         _emit_notes()
-        _write_report(report, "PASS", 0, [], auditor_excluded)
+        _write_report(report, "PASS", 0, [], auditor_excluded, encoding_producer)
         return 0
 
     # Split: live (file exists at /tmp) vs. dangling (referenced but gone).
@@ -1243,7 +1315,7 @@ def main() -> int:
               f"{fail_count} external-path reference(s) but {waiver_n} "
               f"waiver(s) under '{WAIVER_KEY}'.")
         _emit_notes()
-        _write_report(report, "PASS_WITH_WAIVER", 0, flagged, auditor_excluded)
+        _write_report(report, "PASS_WITH_WAIVER", 0, flagged, auditor_excluded, encoding_producer)
         return 0
 
     # THE DECIDING LINE (#2084). First, and tagged with the severity this
@@ -1361,7 +1433,7 @@ def main() -> int:
           f"update references. Then re-run audit. To accept volatile "
           f"storage (e.g. cache that's intentionally ephemeral), add "
           f"waiver '{WAIVER_KEY}' (one per path, >={WAIVER_MIN} chars).")
-    _write_report(report, "FAIL", 1, flagged, auditor_excluded)
+    _write_report(report, "FAIL", 1, flagged, auditor_excluded, encoding_producer)
     return 1
 
 

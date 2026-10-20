@@ -11637,6 +11637,7 @@ def _run_structural_rtl_gates(project: Path,
     # vocabularies, and the two could be edited apart. The buckets are now
     # projected from the records by `_p0_buckets_from_records` after the
     # dispatch, so there is exactly one authoring site per gate.
+    encoding_first = None
     def _eval_gate_worker(gate_name: str) -> Dict[str, Any]:
         # #492 — the argv comes from the named builder, not an inline literal,
         # so the regression tests exercise the real construction path. Each
@@ -11657,8 +11658,18 @@ def _run_structural_rtl_gates(project: Path,
         # however long it legitimately takes, and the caller's 60 s is re-read as
         # what it should always have been: how long this gate may show no
         # progress at all before it is called hung.
-        res = _watchdog.run_host_supervised(
-            argv, cwd=str(project), stall_grace_s=_P0_GATE_STALL_GRACE_S)
+        child_env = None
+        if gate_name == 'project_outputs_in_tree_check':
+            child_env = os.environ.copy()
+            child_env.pop('VIBEIC_P0_ENCODING_PRODUCER', None)
+            receipt = encoding_receipt_dir / 'interface_encoding_audit/encoding_audit_report.json'
+            if encoding_first is not None and receipt.is_file():
+                child_env['VIBEIC_P0_ENCODING_PRODUCER'] = json.dumps({
+                    'path':str(receipt), 'sha256':hashlib.sha256(receipt.read_bytes()).hexdigest()})
+        supervision = dict(cwd=str(project), stall_grace_s=_P0_GATE_STALL_GRACE_S)
+        if child_env is not None:
+            supervision['env'] = child_env
+        res = _watchdog.run_host_supervised(argv, **supervision)
         if res.outcome in ("stalled", "ceiling"):
             # Still a FAIL — an unevaluated gate cannot pass — but the reason
             # now states what was actually observed. "made no forward progress"
@@ -11908,11 +11919,27 @@ def _run_structural_rtl_gates(project: Path,
         # `passed_gate_count` could never be recovered by reading the reasons
         # list, and was 0 for the artifact's entire history. It contributes a
         # RECORD.
-        return _p0_gate_record(gate_name, "PASS", "", {"exit_code": 0})
+        evidence = {"exit_code": 0}
+        if gate_name == 'project_outputs_in_tree_check':
+            path = _p0_flagged_report_path(gate_name, gate_scratch_dir)
+            try:
+                report = json.loads(path.read_text()) if path is not None else None
+            except (OSError, ValueError):
+                report = None
+            if isinstance(report, dict) and report.get('encoding_producer'):
+                evidence['encoding_producer'] = report['encoding_producer']
+        return _p0_gate_record(gate_name, "PASS", "", evidence)
 
     # Build the ordered task list: filter-skips resolve immediately (preserving
     # their position); runnable gates are submitted to the pool. Then dispatch
     # every result into fails/skips/waivers in canonical gate order.
+    # This dependency is data, not registry order. Produce and retain the
+    # current encoding evidence before storage can project prior negative
+    # diagnostics. All gates still execute once and publish in registry order.
+    if (all(name in _STRUCTURAL_RTL_GATES for name in
+            ('interface_encoding_audit','project_outputs_in_tree_check'))
+            and (PROGRAMS_DIR / 'interface_encoding_audit.py').is_file()):
+        encoding_first = _eval_gate_worker('interface_encoding_audit')
     _sworkers = _compliance_workers(len(_STRUCTURAL_RTL_GATES))
     _pending: List[tuple] = []  # (tag, item) tag∈{"imm","fut"}
     _ex = ThreadPoolExecutor(max_workers=_sworkers) if _sworkers > 1 else None
@@ -12032,7 +12059,9 @@ def _run_structural_rtl_gates(project: Path,
                         {"skip_kind": "analog-track-deferred"},
                         reason_class=_reason_taxonomy.EXTERNAL)))
                 continue
-            if _ex is not None:
+            if gate_name == 'interface_encoding_audit' and encoding_first is not None:
+                _pending.append(("imm", encoding_first))
+            elif _ex is not None:
                 _pending.append(("fut", _ex.submit(_eval_gate_worker, gate_name)))
             else:
                 _pending.append(("imm", _eval_gate_worker(gate_name)))

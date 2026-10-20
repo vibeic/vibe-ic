@@ -17,6 +17,8 @@ Covers:
 from __future__ import annotations
 
 import json
+import hashlib
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -50,10 +52,28 @@ def _nonqualifying_encoding_report(receipt, status='FAIL', role='audit'):
     }
 
 
-def _run_owned_storage(project):
+def _encoding_producer(project):
+    from test_interface_encoding_audit import _CONTEXT_BINDING_SOURCE
+    rtl = project / 'phase2/stage1/rtl'
+    rtl.mkdir(parents=True)
+    (rtl / 'neutral.v').write_text(_CONTEXT_BINDING_SOURCE)
+    output = project / '.vibeic-state/audit_receipts/p0_receipt_test/interface_encoding_audit'
+    result = subprocess.run([sys.executable, str(PROG.parent / 'interface_encoding_audit.py'),
+        '--rtl-dir', str(rtl), '--top-module', 'neutral', '--out-dir', str(output)],
+        capture_output=True, text=True)
+    assert result.returncode == 0, result.stdout + result.stderr
+    receipt = output / 'encoding_audit_report.json'
+    return {'path':str(receipt), 'sha256':hashlib.sha256(receipt.read_bytes()).hexdigest()}
+
+
+def _run_owned_storage(project, producer=None):
+    env = os.environ.copy()
+    env.pop('VIBEIC_P0_ENCODING_PRODUCER', None)
+    if producer is not None:
+        env['VIBEIC_P0_ENCODING_PRODUCER'] = json.dumps(producer)
     return subprocess.run([sys.executable, str(PROG), str(project), '--auditor-record',
                            'reports/audit/phase23_completion_audit.json'],
-                          capture_output=True, text=True)
+                          capture_output=True, text=True, env=env)
 
 
 @pytest.mark.parametrize('status', ['FAIL', 'NOT_MEASURED'])
@@ -64,7 +84,7 @@ def test_nonqualifying_encoding_diagnostic_is_not_a_current_proof_declaration(tm
     record.parent.mkdir()
     record.write_text(json.dumps(_nonqualifying_encoding_report(receipt, status, role)))
     original = record.read_bytes()
-    actual = _run_owned_storage(tmp_path)
+    actual = _run_owned_storage(tmp_path, _encoding_producer(tmp_path))
     assert actual.returncode == 0, actual.stdout + actual.stderr
     assert 'receipt_detail' in actual.stdout
     assert record.read_bytes() == original
@@ -111,10 +131,103 @@ def test_current_or_untyped_proof_paths_remain_storage_failures(tmp_path, varian
     record.parent.mkdir()
     record.write_text(text)
     original = record.read_bytes()
-    actual = _run_owned_storage(tmp_path)
+    actual = _run_owned_storage(tmp_path, _encoding_producer(tmp_path))
     assert actual.returncode == 1, actual.stdout + actual.stderr
     assert '[FAIL] project_outputs_in_tree_check:' in actual.stdout
     assert record.read_bytes() == original
+
+
+@pytest.mark.parametrize('damage', ['absent', 'missing_receipt', 'wrong_digest',
+    'outside_context', 'prior_context', 'stale_source', 'no_native_proof', 'foreign_project'])
+def test_shape_only_history_needs_a_current_bound_encoding_producer(tmp_path, damage):
+    record = tmp_path / 'reports/forged-history.json'
+    record.parent.mkdir()
+    record.write_text(json.dumps(_nonqualifying_encoding_report(
+        Path('/tmp/forged-history-with-no-producer/encoding_audit_report.json'))))
+    original = record.read_bytes()
+    producer = None if damage == 'absent' else _encoding_producer(tmp_path)
+    if producer is not None:
+        assert _run_owned_storage(tmp_path, producer).returncode == 0
+        receipt = Path(producer['path'])
+        payload = json.loads(receipt.read_text())
+        if damage == 'missing_receipt': receipt.unlink()
+        elif damage == 'wrong_digest': producer['sha256'] = '0'*64
+        elif damage == 'stale_source':
+            with (tmp_path / 'phase2/stage1/rtl/neutral.v').open('a') as f: f.write('// changed source\n')
+        elif damage == 'foreign_project':
+            producer = _encoding_producer(tmp_path / 'different-project')
+        else:
+            cfg = payload['configuration']
+            if damage == 'outside_context':
+                outside = tmp_path / 'outside-context.json'
+                outside.write_bytes(Path(cfg['native_context']).read_bytes())
+                cfg['native_context'] = str(outside)
+                cfg['native_context_sha256'] = hashlib.sha256(outside.read_bytes()).hexdigest()
+            elif damage == 'prior_context':
+                prior = _encoding_producer(tmp_path / 'prior-project')
+                older = json.loads(Path(prior['path']).read_text())['configuration']
+                cfg['native_context'] = older['native_context']
+                cfg['native_context_sha256'] = older['native_context_sha256']
+            elif damage == 'no_native_proof':
+                for key in ('native','native_context','native_context_sha256','native_script'):
+                    cfg.pop(key, None)
+            receipt.write_text(json.dumps(payload,indent=2)+'\n')
+            producer['sha256'] = hashlib.sha256(receipt.read_bytes()).hexdigest()
+    result = _run_owned_storage(tmp_path, producer)
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert '[FAIL] project_outputs_in_tree_check:' in result.stdout
+    assert record.read_bytes() == original
+
+
+@pytest.mark.parametrize('workers', [1, 4])
+@pytest.mark.parametrize('damage', ['clean', 'prior_context_replay'])
+def test_normal_p0_storage_depends_on_actual_current_encoding_producer(tmp_path, monkeypatch, workers, damage):
+    import flow_compliance_check as flow
+    from test_interface_encoding_audit import _CONTEXT_BINDING_SOURCE
+    project = tmp_path / 'project'
+    rtl = project / 'phase2/stage1/rtl'
+    rtl.mkdir(parents=True)
+    (rtl / 'neutral.v').write_text(_CONTEXT_BINDING_SOURCE)
+    docs = project / 'phase1/generated_docs'
+    docs.mkdir(parents=True)
+    (docs / 'L9_INTEGRATION_SPEC.json').write_text(json.dumps({'top_module':'neutral'}))
+    record = project / 'reports/negative_measurement.json'
+    record.parent.mkdir()
+    record.write_text(json.dumps(_nonqualifying_encoding_report(
+        Path('/tmp/old-negative-no-longer-a-current-declaration/encoding_audit_report.json'))))
+    original = record.read_bytes()
+    prior = _encoding_producer(tmp_path / 'prior-project')
+    older = json.loads(Path(prior['path']).read_text())['configuration']
+    actual_run = flow._watchdog.run_host_supervised
+    calls = []
+    def execute(argv, **kw):
+        result = actual_run(argv, **kw)
+        gate = next((Path(a).stem for a in argv if a.endswith('_check.py') or
+                     a.endswith('interface_encoding_audit.py')), '')
+        calls.append(gate)
+        if gate == 'interface_encoding_audit' and damage != 'clean':
+            output = Path(argv[argv.index('--out-dir')+1]) / 'encoding_audit_report.json'
+            payload = json.loads(output.read_text())
+            payload['configuration']['native_context'] = older['native_context']
+            payload['configuration']['native_context_sha256'] = older['native_context_sha256']
+            output.write_text(json.dumps(payload,indent=2)+'\n')
+        return result  # actual native process result, never an authored verdict
+    monkeypatch.setattr(flow._watchdog,'run_host_supervised',execute)
+    monkeypatch.setattr(flow,'_compliance_workers',lambda _:workers)
+    monkeypatch.setattr(flow,'_STRUCTURAL_RTL_GATES',
+                        ('project_outputs_in_tree_check','interface_encoding_audit'))
+    records = []
+    flow._run_structural_rtl_gates(project,records_out=records)
+    assert [r['name'] for r in records] == ['project_outputs_in_tree_check','interface_encoding_audit']
+    assert records[0]['verdict'] == ('PASS' if damage == 'clean' else 'FAIL'), records
+    assert records[1]['verdict'] == ('PASS' if damage == 'clean' else 'INCOMPLETE'), records
+    assert calls.count('interface_encoding_audit') == calls.count('project_outputs_in_tree_check') == 1
+    assert record.read_bytes() == original
+    if damage == 'clean':
+        receipts = list((project / '.vibeic-state/audit_receipts').rglob('encoding_audit_report.json'))
+        assert len(receipts) == 1
+        observed_digest = records[0]['evidence'].get('encoding_producer',{}).get('sha256')
+        assert observed_digest == hashlib.sha256(receipts[0].read_bytes()).hexdigest()
 
 
 @pytest.fixture

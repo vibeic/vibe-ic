@@ -16,6 +16,7 @@ Test cases:
   10. Multi-file design parsed correctly
 """
 import json
+import hashlib
 import shutil
 import subprocess
 import sys
@@ -28,6 +29,77 @@ assert SCRIPT.exists(), f"Script not found: {SCRIPT}"
 
 sys.path.insert(0, str(SCRIPT.parent))
 import interface_encoding_audit as iea  # noqa: E402
+
+
+_CONTEXT_BINDING_SOURCE = '''
+`ifdef OMITTED
+`endif
+module producer(output reg [5:0] count);
+ initial count <= 6'd0;
+endmodule
+module consumer(input [5:0] count);
+ always @* if(count == 6'd3) begin end
+endmodule
+module neutral;
+ wire [5:0] count;
+ producer p(.count(count)); consumer c(.count(count));
+endmodule
+'''
+
+
+@pytest.mark.parametrize('damage', [
+    'prior_context_correct_hash', 'outside_context_correct_hash',
+    'embedded_context_disagrees', 'native_json_changed', 'prior_script_replay',
+    'input_hash_forged', 'boolean_native_rc',
+])
+def test_current_encoding_native_proof_refuses_context_replay(tmp_path, damage):
+    prior = tmp_path / 'prior'
+    current = tmp_path / 'current'
+    for root in (prior, current):
+        result, report = run_cli(root, {'neutral.v': _CONTEXT_BINDING_SOURCE}, 'neutral')
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert report['summary']['matches'] == report['summary']['total_interfaces'] == 1
+        assert _consume_encoding_receipt(root).state == 'PASS'
+    path = current / 'out/encoding_audit_report.json'
+    original = {p:p.read_bytes() for p in (current / 'out').rglob('*') if p.is_file()}
+    payload = json.loads(path.read_text())
+    old_payload = json.loads((prior / 'out/encoding_audit_report.json').read_text())
+    cfg = payload['configuration']
+    context = Path(cfg['native_context'])
+    native = json.loads(context.read_text())
+    try:
+        if damage == 'prior_context_correct_hash':
+            cfg['native_context'] = old_payload['configuration']['native_context']
+            cfg['native_context_sha256'] = old_payload['configuration']['native_context_sha256']
+        elif damage == 'outside_context_correct_hash':
+            outside = tmp_path / 'outside-context.json'
+            outside.write_bytes(context.read_bytes())
+            cfg['native_context'] = str(outside)
+            cfg['native_context_sha256'] = hashlib.sha256(outside.read_bytes()).hexdigest()
+        elif damage == 'embedded_context_disagrees':
+            cfg['native']['top'] = 'different_top'
+        elif damage == 'native_json_changed':
+            (context.parent / 'design.json').write_text('{}\n')
+        elif damage == 'prior_script_replay':
+            script = context.parent / 'elaborate.ys'
+            script.write_bytes(Path(old_payload['configuration']['native_script']['path']).read_bytes())
+            cfg['native_script']['text'] = script.read_text()
+            cfg['native_script']['sha256'] = hashlib.sha256(script.read_bytes()).hexdigest()
+        else:
+            if damage == 'input_hash_forged':
+                native['input_sha256'] = {k:'0'*64 for k in native['input_sha256']}
+            else:
+                native['native_returncode'] = False
+            cfg['native'] = native
+            context.write_text(json.dumps(native,indent=2)+'\n')
+            cfg['native_context_sha256'] = hashlib.sha256(context.read_bytes()).hexdigest()
+        path.write_text(json.dumps(payload,indent=2)+'\n')
+        finding = _consume_encoding_receipt(current)
+    finally:
+        for p, data in original.items():
+            p.write_bytes(data)
+    assert _consume_encoding_receipt(current).state == 'PASS'
+    assert finding.state == 'NOT_MEASURED', finding
 
 
 def run_cli(tmp_path, files: dict, top_module: str, severity='INFO', extra=()):
