@@ -2054,6 +2054,61 @@ _PIN_TABLE_LINE_RE = re.compile(
     re.IGNORECASE,
 )
 
+
+def _l1_bare_pin_declaration(line: str) -> Optional[Tuple[Set[str], str]]:
+    """Read a complete name/direction row, never a prose prefix (#3289).
+
+    Code and pipe tables have their own parsers. This fallback accepts bare
+    lists with an explicit direction, optional packed width/type, and the
+    ordinary parenthesis/colon/dash separators used in interface documents.
+    """
+    identifier = r"[A-Za-z_][\w$]*"
+    separator = r"\s*(?:[,/&]|\band\b)\s*"
+    names = rf"{identifier}(?:{separator}{identifier})*"
+    width = r"(?:\[\s*\d+\s*:\s*\d+\s*\]|\(\d+\))"
+    prefix = r"\s*(?:(?:[-*+]|\d+[.)])\s+)?"
+    direction = r"input|output|inout"
+    patterns = (
+        prefix + rf"(?P<direction>{direction})\s+(?:(?:wire|reg|logic)\s+)?"
+        + rf"(?:{width}\s+)?(?P<names>{names})\s*;?\s*",
+        prefix + rf"(?P<names>{names})\s*(?:{width}\s*)?"
+        + rf"(?:\(\s*(?P<direction>{direction})\s*\)|"
+        + r"(?:[:\-—]\s*|\s+)(?:is\s+(?:an?\s+)?)?"
+        + rf"(?P<bare_direction>{direction})"
+        + r")\s*;?\s*",
+    )
+    for pattern in patterns:
+        match = re.fullmatch(pattern, line, re.IGNORECASE)
+        if match:
+            fields = match.groupdict()
+            return (set(re.findall(identifier, fields["names"])),
+                    (fields.get("direction") or fields["bare_direction"]).lower())
+    return None
+
+
+def _l1_pin_narrative_text(text: str) -> str:
+    """Leave code to the code-port parser, preserving narrative offsets."""
+    spans = list(_ppx._verilog_region_spans(text))
+    fence = None
+    offset = 0
+    for line in text.splitlines(keepends=True):
+        marker = re.match(r"^[ \t]*(`{3,}|~{3,})(.*)$", line.rstrip("\r\n"))
+        if fence is not None:
+            spans.append((offset, offset + len(line)))
+            if (marker and marker[1][0] == fence[0]
+                    and len(marker[1]) >= len(fence) and not marker[2].strip()):
+                fence = None
+        elif marker:
+            fence = marker[1]
+            spans.append((offset, offset + len(line)))
+        offset += len(line)
+    chars = list(text)
+    for start, end in spans:
+        for index in range(start, end):
+            if chars[index] not in "\r\n":
+                chars[index] = " "
+    return "".join(chars)
+
 # A whitespace-delimited token carrying a path separator: a file path, never a
 # port declaration nor a port name. Masked out of the narrative line-scan
 # before the direction anchor is searched and before names are tokenised.
@@ -11136,6 +11191,7 @@ def _v455_interface_pins(extracted: Dict[str, str]) -> List[dict]:
     for body in (extracted or {}).values():
         if not body:
             continue
+        body = _l1_pin_narrative_text(body)
         for start, end in _port_context_heading_ranges(body):
             _chunk = body[start:end]
             # ORGANIC #376 — GFM omits a table's outer pipes, so the
@@ -11143,7 +11199,16 @@ def _v455_interface_pins(extracted: Dict[str, str]) -> List[dict]:
             # a row by its table BLOCK, not by a leading `|` it may not
             # have. Computed once per chunk.
             _gfm_rows = _gfm_pipe_table_row_indices(_chunk)
-            for _line_i, line in enumerate(_chunk.splitlines()):
+            chunk_lines = _chunk.splitlines()
+            table_roles = None
+            for _line_i, line in enumerate(chunk_lines):
+                if (_line_i + 1 < len(chunk_lines)
+                        and _v0_3_2_is_pipe_row(line)
+                        and _v0_3_2_is_sep_row(chunk_lines[_line_i + 1])):
+                    table_roles = _v0_3_2_classify_pin_header(
+                        _v0_3_2_split_pipe_cells(line))
+                elif not _v0_3_2_is_pipe_row(line):
+                    table_roles = None
                 direction = _v455_dir_from_line(line)
                 # ORGANIC #610 — a port cell may annotate ONE canonical port
                 # with an inline alternate-spelling: ``\`name\` (or \`alt\`)`` /
@@ -11226,6 +11291,18 @@ def _v455_interface_pins(extracted: Dict[str, str]) -> List[dict]:
                     # submodule-port token is not promoted).
                     if _is_pipe_row and tok not in _leading_cell_toks:
                         continue
+                    if _is_pipe_row:
+                        # Header roles own table directions. A mention in a
+                        # Notes/description cell cannot repair an invalid or
+                        # absent Direction cell (#3289).
+                        cells = _v0_3_2_split_pipe_cells(line)
+                        dir_i = (table_roles or {}).get("direction")
+                        raw_dir = (cells[dir_i].strip(" *`").lower().replace("/", "")
+                                   if dir_i is not None and dir_i < len(cells) else "")
+                        direction = _DIR_ABBR_TO_FULL.get(raw_dir)
+                        if direction not in {"input", "output", "inout"}:
+                            continue
+                        _is_port_table_row = True
                     if (not _is_pipe_row
                             and _v455_logical_declaration_token(line, _tm.start())):
                         continue
@@ -22571,6 +22648,7 @@ def gen_l1_datasheet(project: Path,
         # in markdown ```verilog``` fences or RST `.. code-block::
         # verilog` directives → L1.pin_table.
         for vbody in _extract_verilog_blocks(text or ""):
+            vbody = _strip_hdl_comments(vbody)
             for m in _RE_VERILOG_PORT_DECL.finditer(vbody):
                 name = m.group("name")
                 msb = m.group("msb"); lsb = m.group("lsb")
@@ -22714,6 +22792,7 @@ def gen_l1_datasheet(project: Path,
         # gate on body remains; shell-log false positives still filtered.
         for vbody in _v1_6_406_extract_markdown_indented_verilog_blocks(
                 text or ""):
+            vbody = _strip_hdl_comments(vbody)
             for m in _RE_VERILOG_PORT_DECL.finditer(vbody):
                 name = m.group("name")
                 msb = m.group("msb"); lsb = m.group("lsb")
@@ -22770,10 +22849,14 @@ def gen_l1_datasheet(project: Path,
         # table always carries a direction column, so this can only ever
         # REMOVE a promotion the design never declared.
         _encoding_table_lines = _l15x.gfm_encoding_table_line_indices(text)
+        narrative_text = _l1_pin_narrative_text(text)
         _running_offset = 0
-        for _line_no, line in enumerate(text.splitlines()):
+        for _line_no, line in enumerate(narrative_text.splitlines()):
             line_offset = _running_offset
-            if _line_no in _encoding_table_lines:
+            if (_line_no in _encoding_table_lines or _is_pipe_table_row(line)):
+                # The structural parsers above own code and tables. A code
+                # comment is not a port; a table's Notes cell cannot supply
+                # the direction its named Direction column did not declare.
                 _running_offset += len(line) + 1
                 continue
             # +1 for the newline `splitlines` stripped (last line
@@ -22833,6 +22916,10 @@ def gen_l1_datasheet(project: Path,
             mode_token = ml.group(1).lower()
             if mode_token not in {"input", "output", "inout"}:
                 continue
+            declaration = _l1_bare_pin_declaration(scan_line)
+            if declaration is None:
+                continue
+            declared_names, token_mode = declaration
             tokens = list(re.finditer(r"[^\s\t\|,]+", scan_line))
             if len(tokens) < 2:
                 continue
@@ -22842,12 +22929,12 @@ def gen_l1_datasheet(project: Path,
                     "INPUT", "OUTPUT", "INOUT", "BIDIR", "POWER", "GROUND",
                     "AC", "DC", "DUT", "VDD", "VSS",
                 } and t.upper() not in _PROTOCOL_ACRONYM_DENY:
-                    own_sentence = _v455_sentence_for_span(scan_line, token_match.start())
-                    own_direction = _PIN_TABLE_LINE_RE.search(own_sentence)
-                    if own_direction is None or own_direction.group(1).lower() not in {"input", "output", "inout"}:
+                    # A heading supplies context, not a declaration. Only a
+                    # name/direction row may introduce a legacy bare pin;
+                    # implementation nouns elsewhere on the line cannot borrow
+                    # its direction. Structured tables/code are read above.
+                    if t not in declared_names:
                         continue
-                    token_mode = _v455_dir_for_span(
-                        scan_line, token_match.start(), own_direction.group(1).lower())
                     # v1.6.264 — for #122 ORGANIC. Common-English
                     # deny-list for narrative-fallback emission.
                     # Structural extractors carry
@@ -23255,6 +23342,12 @@ def gen_l1_datasheet(project: Path,
             _v2060_seen_pins.add(_nm.lower())
             _pin = dict(_entry)
             _pin.setdefault("evidence", f"input/docs/{_fname}")
+            # Parsed code ports must carry the same typed handoff as the
+            # primary emitters. Aliases remain input-declared only (#3289).
+            _pin.setdefault("aliases", _v1_6_363_extract_doc_declared_aliases(
+                _nm, source_row=str(_entry.get("source_line") or "")))
+            _pin.setdefault("rtl_name", _nm.lower())
+            _pin.setdefault("board_name", _nm)
             # The record SAYS it carries a port table — the #2060 contract, so
             # this never depends on its strategy name being on a list.
             _pin["from_port_table"] = True

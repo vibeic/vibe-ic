@@ -148,6 +148,13 @@ def test_neutral_physical_signoff_list(tmp_path):
     assert payload["analog_blocks_detected"] is False
 
 
+def test_neutral_io_analysis_prose(tmp_path):
+    """#3289: implementation prose under an I/O heading declares no pins."""
+    from programs import phase1_doc_one_shot_runner as producer
+    emitted = producer.gen_l1_datasheet(tmp_path, _load_fixture("neutral_io_analysis_prose"))
+    assert json.loads(Path(emitted.path).read_text())["pin_table"] == []
+
+
 def test_neutral_pvt_supply_rail(tmp_path):
     """#3283: a native supply table is not a missing regulator circuit."""
     from programs import phase1_doc_one_shot_runner as producer
