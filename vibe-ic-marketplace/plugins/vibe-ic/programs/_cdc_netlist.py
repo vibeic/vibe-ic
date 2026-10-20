@@ -850,9 +850,135 @@ def async_input_findings(nl: Netlist, is_candidate,
     return findings
 
 
+def _reset_cycle_analysis(edges: Dict[object, Set[object]], bit_label):
+    """Complete modeled-graph detection, one bounded witness per cyclic SCC.
+
+    Enumerating simple paths is not needed to block a cyclic reset graph and
+    cannot prove absence when cut off by depth. Both SCC passes visit the full
+    graph. Witnesses are diagnostics, not an exhaustive list of all cycles.
+    """
+    from collections import deque
+
+    nodes = set(edges)
+    nodes.update(v for values in edges.values() for v in values)
+    labels = {v: bit_label(v) for v in nodes}
+    def key(v):
+        return labels[v], type(v).__name__, str(v)
+    ordered_nodes = sorted(nodes, key=key)
+    forward = {v: tuple(sorted(edges.get(v, ()), key=key))
+               for v in ordered_nodes}
+    reverse = {v: [] for v in ordered_nodes}
+    for v in ordered_nodes:
+        for nxt in forward[v]:
+            reverse[nxt].append(v)
+    work = {"forward_edges_examined": 0, "reverse_edges_examined": 0,
+            "witness_edges_examined": 0, "forward_nodes_finished": 0,
+            "reverse_nodes_visited": 0}
+
+    finished = []
+    seen = set()
+    for start in ordered_nodes:
+        if start in seen:
+            continue
+        seen.add(start)
+        stack = [(start, iter(forward[start]))]
+        while stack:
+            node, successors = stack[-1]
+            nxt = next(successors, None)
+            if nxt is None:
+                finished.append(node)
+                work["forward_nodes_finished"] += 1
+                stack.pop()
+                continue
+            work["forward_edges_examined"] += 1
+            if nxt not in seen:
+                seen.add(nxt)
+                stack.append((nxt, iter(forward[nxt])))
+
+    components = []
+    seen = set()
+    for start in reversed(finished):
+        if start in seen:
+            continue
+        seen.add(start)
+        stack = [start]
+        component = []
+        while stack:
+            node = stack.pop()
+            component.append(node)
+            work["reverse_nodes_visited"] += 1
+            for nxt in reverse[node]:
+                work["reverse_edges_examined"] += 1
+                if nxt not in seen:
+                    seen.add(nxt)
+                    stack.append(nxt)
+        components.append(sorted(component, key=key))
+    components.sort(key=lambda c: key(c[0]))
+
+    witnesses = []
+    cyclic = []
+    for component in components:
+        root = component[0]
+        if len(component) == 1 and root not in edges.get(root, ()):
+            continue
+        members = set(component)
+        if root in edges.get(root, ()):
+            witness = [root]
+        else:
+            first = None
+            for nxt in forward[root]:
+                work["witness_edges_examined"] += 1
+                if nxt in members:
+                    first = nxt
+                    break
+            previous = {first: None}
+            queue = deque([first])
+            while queue and root not in previous:
+                node = queue.popleft()
+                for nxt in forward[node]:
+                    work["witness_edges_examined"] += 1
+                    if nxt in members and nxt not in previous:
+                        previous[nxt] = node
+                        queue.append(nxt)
+                        if nxt == root:
+                            break
+            if root not in previous:
+                raise Refusal("RESET_CYCLE_ANALYSIS_INCOMPLETE",
+                              "cyclic reset component has no closed witness")
+            path = [root]
+            while previous[path[-1]] is not None:
+                path.append(previous[path[-1]])
+            witness = [root] + list(reversed(path))[:-1]
+        witnesses.append(witness)
+        cyclic.append({"members": [labels[v] for v in component],
+                       "member_bits": component,
+                       "witness": [labels[v] for v in witness + [witness[0]]],
+                       "witness_bits": witness + [witness[0]]})
+    metadata = {
+        "reporting_policy": "one_witness_per_cyclic_scc",
+        "cycle_detection_complete": True, "all_cycles_enumerated": False,
+        "graph_scope": "existing_modeled_arst_srst_dependency_graph",
+        "reset_role_policy": "unchanged_arst_srst_outer_mux_model",
+        "native_reset_role_coverage": "not_assessed_by_cycle_detection",
+        "reset_nodes": len(nodes),
+        "reset_edges": sum(len(values) for values in forward.values()),
+        "scc_count": len(components), "cyclic_scc_count": len(cyclic),
+        "reported_witnesses": len(witnesses), "cyclic_components": cyclic,
+        "work_scope": "cycle_graph_analysis_after_dependency_cones",
+        "work": work}
+    return witnesses, metadata
+
+
 def reset_dependency_findings(
-        nl: Netlist, lookup: Optional[_LookupSnapshot] = None) -> List[dict]:
-    """A reset net whose own fan-in contains a flop it resets (a cycle)."""
+        nl: Netlist, lookup: Optional[_LookupSnapshot] = None, *,
+        analysis_meta: Optional[Dict[str, object]] = None) -> List[dict]:
+    """Block every cyclic reset SCC; report one deterministic cycle witness.
+
+    This completely detects cycles in the existing modeled ARST/SRST graph,
+    not all native reset roles or all-cycle enumeration.
+    Every emitted finding remains an ERROR and the consumer still blocks on
+    any finding. The reset-role graph construction is unchanged.
+    """
     import instrument_calibration
     instrument_calibration.assert_calibrated("_cdc_netlist::reset_dependency_findings")
     lookup = lookup or _LookupSnapshot(nl)
@@ -872,29 +998,22 @@ def reset_dependency_findings(
         for qb in qbits:
             for r2 in reset_of.get(q_of[qb].name, ()):
                 edges.setdefault(r2, set()).add(r)
+    witnesses, metadata = _reset_cycle_analysis(edges, lookup.bit_label)
     findings: List[dict] = []
-    reported: Set[frozenset] = set()
-    for start in sorted(edges, key=str):
-        stack = [(start, [start])]
-        while stack:
-            node, path = stack.pop()
-            for nxt in edges.get(node, ()):
-                if nxt == start:
-                    cyc = frozenset(path)
-                    if cyc not in reported:
-                        reported.add(cyc)
-                        labels = [lookup.bit_label(b) for b in path]
-                        findings.append(_finding(
-                            "CIRCULAR_RESET_DEPENDENCY", "ERROR",
-                            "reset net(s) " + " -> ".join(labels + [labels[0]])
-                            + " feed back through flops they reset",
-                            cycle=labels))
-                elif nxt not in path and len(path) < 16:
-                    stack.append((nxt, path + [nxt]))
+    for witness in witnesses:
+        labels = [lookup.bit_label(b) for b in witness]
+        findings.append(_finding(
+            "CIRCULAR_RESET_DEPENDENCY", "ERROR",
+            "reset net(s) " + " -> ".join(labels + [labels[0]])
+            + " feed back through flops they reset",
+            cycle=labels))
+    if analysis_meta is not None:
+        analysis_meta.update(metadata)
     return findings
 
 
-def judge(nl: Netlist, rule: str, is_candidate=None) -> List[dict]:
+def judge(nl: Netlist, rule: str, is_candidate=None, *,
+          analysis_meta: Optional[Dict[str, object]] = None) -> List[dict]:
     """The one entry every gate uses to judge a netlist.
 
     Each rule carries its own `assert_calibrated` line: one pair per rule, so
@@ -907,7 +1026,7 @@ def judge(nl: Netlist, rule: str, is_candidate=None) -> List[dict]:
         return async_input_findings(
             nl, is_candidate or (lambda _n: False), lookup)
     if rule == "reset_dependency":
-        return reset_dependency_findings(nl, lookup)
+        return reset_dependency_findings(nl, lookup, analysis_meta=analysis_meta)
     raise ValueError(rule)
 
 
@@ -976,10 +1095,11 @@ def apply_front_end(project: Path, mode: str, netlist_arg: Optional[str],
                 {"front_end": "netlist" if mode == "librelane" else "dual",
                  "netlist": str(netlist_arg or NETLIST_REL), "netlist_read": False})
     import instrument_calibration
+    analysis_meta: Dict[str, object] = {}
     try:
         nl = load(path)
         binding = require_binding(project, path, nl)
-        rows = judge(nl, rule, is_candidate)
+        rows = judge(nl, rule, is_candidate, analysis_meta=analysis_meta)
     except (Refusal, instrument_calibration.Uncalibrated) as exc:
         code = getattr(exc, "code", "NETLIST_RULE_UNCALIBRATED")
         return ([_finding(code, "ERROR", str(exc))],
@@ -991,6 +1111,8 @@ def apply_front_end(project: Path, mode: str, netlist_arg: Optional[str],
         "netlist_top": nl.top, "netlist_flops": len(nl.flops),
         "netlist_clock_domains": clock_domains(nl),
         "netlist_input_fingerprint": binding["input"]["fingerprint"]}
+    if analysis_meta:
+        extra["reset_dependency_analysis"] = analysis_meta
     if mode == "librelane":
         extra["front_end"] = "netlist"
         return rows, extra
