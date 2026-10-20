@@ -38,7 +38,13 @@ whole-string compare — that is the #545 fix.
 from __future__ import annotations
 
 from pathlib import Path
+import sys
 from typing import List
+
+# The audit loaders also import this file by path, without a package/PYTHONPATH.
+if str(Path(__file__).resolve().parent) not in sys.path:
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _path_layout as _pl
 
 # Directory components excluded by exact name (build / output / scratch dirs).
 #
@@ -125,16 +131,36 @@ def is_excluded_rel(rel: Path) -> bool:
     return any(is_excluded_component(p) for p in rel.parts[:-1])
 
 
+def rtl_source_roots(project_dir: Path, *, include_staged_input: bool = False
+                     ) -> List[Path]:
+    """Use the current build stage when present, including an empty stage.
+
+    Retained producer history, reverse controls and backend work are evidence,
+    not additional source roots. Legacy/standalone trees without the canonical
+    stage retain their previous recursive scan. The broader structural helper
+    explicitly keeps its pre-existing staged-macro input policy.
+    """
+    current = _pl.rtl_dir(project_dir)
+    if not current.is_dir():
+        return [project_dir]
+    roots = [current]
+    staged = project_dir / "input"
+    if include_staged_input and staged.is_dir():
+        roots.append(staged)
+    return roots
+
+
 def authoritative_rtl_files(project_dir: Path,
                             exts=("*.v", "*.sv")) -> List[Path]:
     """Return the authoritative-RTL file list under `project_dir`, applying the
     canonical scan-scope exclusions (#545). chip-AGNOSTIC."""
     out: List[Path] = []
     for ext in exts:
-        for f in project_dir.rglob(ext):
-            if not f.is_file():
-                continue
-            if is_excluded_rel(f.relative_to(project_dir)):
-                continue
-            out.append(f)
+        for root in rtl_source_roots(project_dir):
+            for f in root.rglob(ext):
+                if not f.is_file():
+                    continue
+                if is_excluded_rel(f.relative_to(project_dir)):
+                    continue
+                out.append(f)
     return out

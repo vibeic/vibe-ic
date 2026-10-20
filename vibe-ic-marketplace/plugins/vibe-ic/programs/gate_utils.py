@@ -90,14 +90,17 @@ def read_text(path: Path) -> str:
 
 
 def find_rtl_files(project: Path) -> list[Path]:
+    from rtl_scan_scope import rtl_source_roots
+
     out: list[Path] = []
     for ext in ("*.v", "*.sv"):
-        for f in project.rglob(ext):
-            if not f.is_file():
-                continue
-            if dir_parts_excluded(f.relative_to(project).parts[:-1]):
-                continue
-            out.append(f)
+        for root in rtl_source_roots(project, include_staged_input=True):
+            for f in root.rglob(ext):
+                if not f.is_file():
+                    continue
+                if dir_parts_excluded(f.relative_to(project).parts[:-1]):
+                    continue
+                out.append(f)
     return out
 
 
