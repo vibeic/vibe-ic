@@ -509,6 +509,11 @@ import pytest
 @pytest.mark.parametrize("text, expected", [
     ("| Pin | Function |\n| --- | --- |\n| GPIO0/SCL | clock input |", {"GPIO0/SCL"}),
     ("| Signal name | Description |\n| --- | --- |\n| DATA0/data_i | payload |", {"DATA0/data_i"}),
+    ("Pad alias: GPIO0/SCL", {"GPIO0/SCL"}),
+    ("Pad\tFunction\nGPIO0/SCL\tserial clock input", {"GPIO0/SCL"}),
+    ("Name\tPad\tFunction\nGPIO0/SCL\t7\tserial clock input", {"GPIO0/SCL"}),
+    ("Pad\tFunction\nGPIO0/SCL\tUse SDK/default environment", {"GPIO0/SCL"}),
+    ("Policy\tValue\nDerived\tSDK/default", set()),
     ("| Alias | Meaning |\n| --- | --- |\n| BUS0/bus_i | port |", {"BUS0/bus_i"}),
     ("Pin alias: GPIO0/SCL is the clock input.", {"GPIO0/SCL"}),
     ("The signal DATA0/data_i carries payload.", {"DATA0/data_i"}),
@@ -535,6 +540,47 @@ def test_pin_alias_input_context(tmp_path, text, expected):
     aliases = {lit for lit, label in patterns["spec.txt"]
                if label == "auto-discovered (pin_alias)"}
     assert aliases == expected
+
+
+@pytest.mark.parametrize("text", [
+    "| Pin | Function |\n| --- | --- |\n| GPIO0 | signal |\n| GPIO1/SDA | serial data |",
+    "Pin\tFunction\nGPIO0\tsignal\nGPIO1/SDA\tserial data",
+])
+@pytest.mark.parametrize("covered", [False, True])
+def test_pin_alias_table_data_does_not_redefine_header(tmp_path, text, covered):
+    _put_extracted(tmp_path, "spec.txt", text)
+    pins = [{"name": "GPIO0"}, {"name": "GPIO1"}]
+    if covered:
+        pins[1]["display_label"] = "GPIO1/SDA"
+    _put_l(tmp_path, "L1.json", {"pin_table": pins, "unrelated_symbol": "SDA"})
+    assert _run(tmp_path).returncode == 0
+    report = json.loads((tmp_path / "reports/phase1/extraction_coverage_report.json").read_text())
+    aliases = [r for d in report["per_doc"] for key in ("hit_literals", "missing_literals")
+               for r in d[key] if r["label"] == "auto-discovered (pin_alias)"]
+    assert aliases == [{"literal": "GPIO1/SDA", "label": "auto-discovered (pin_alias)"}]
+    assert report["overall"] == {"hit": 4 if covered else 3, "total": 4,
+                                  "pct": 100.0 if covered else 75.0}
+    for program, expected_rc in [("phase1_coverage_report_present_check.py", 0 if covered else 1),
+                                 ("extraction_coverage_check.py", 0 if covered else 1),
+                                 ("extraction_coverage_denominator_audit.py", 0)]:
+        rr = subprocess.run([sys.executable, str(PROG.with_name(program)), str(tmp_path)],
+                            capture_output=True, text=True)
+        assert rr.returncode == expected_rc, (program, rr.stdout, rr.stderr)
+
+
+@pytest.mark.parametrize("text", [
+    "| Pin | Function |\n| --- | --- |\n| GPIO0 | signal |\n\n"
+    "| Function | Pin |\n| --- | --- |\n| serial data | GPIO1/SDA |",
+    "Pin\tFunction\nGPIO0\tsignal\n\nFunction\tPin\nserial data\tGPIO1/SDA",
+    "| Pin | Function |\n| --- | --- |\n| GPIO0 | signal |\n"
+    "Function\tPin\nserial data\tGPIO1/SDA",
+])
+def test_pin_alias_table_boundary_selects_new_header(tmp_path, text):
+    import phase1_coverage_report_gen as owner
+    _put_extracted(tmp_path, "spec.txt", text)
+    patterns = owner._autodiscover_patterns(tmp_path, persist=False)
+    assert {lit for lit, label in patterns["spec.txt"]
+            if label == "auto-discovered (pin_alias)"} == {"GPIO1/SDA"}
 
 
 def _alias_project(tmp_path, *, missing=False):

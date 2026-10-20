@@ -232,7 +232,7 @@ _PIN_ALIAS_RX = dict(_AUTODISCOVERY_REGEX_FAMILIES)["pin_alias"]
 _PIN_ALIAS_LIST = re.compile(
     r"[A-Z][A-Z0-9_]{1,20}(?:\s*/\s*[A-Za-z][A-Za-z0-9_\[\]]{1,30})+")
 _PIN_ALIAS_HEADER = re.compile(
-    r"(?:pins?|signals?|ports?)(?:\s*/\s*(?:pins?|signals?|ports?|alias(?:es)?))?"
+    r"(?:pins?|pads?|signals?|ports?)(?:\s*/\s*(?:pins?|pads?|signals?|ports?|alias(?:es)?))?"
     r"(?:\s+(?:names?|labels?|identifiers?|alias(?:es)?))?"
     r"|alias(?:es)?(?:\s+(?:names?|mapping))?", re.I)
 # Numbered/indexed pin declarations are naming authority too: the ordinal
@@ -243,47 +243,55 @@ _PIN_ALIAS_INDEX = (
     r"|[ \t]*\[[ \t]*\d+(?:[ \t]*:[ \t]*\d+)?[ \t]*\]"
     r"|[ \t]*\([ \t]*\d+[ \t]*\))?")
 _PIN_ALIAS_PREFIX = re.compile(
-    r"(?:(?:\b(?:pin|signal|port)" + _PIN_ALIAS_INDEX
+    r"(?:(?:\b(?:pin|pad|signal|port)" + _PIN_ALIAS_INDEX
     + r"(?:\s+(?:names?|naming))?(?:\s+alias(?:es)?)?"
     r"|\balias(?:es)?(?:\s+group)?)(?:\s+(?:is|are))?"
     r"(?:\s+(?:named|called|labelled|labeled))?"
     r"|\b(?:input|output|inout)\s+(?:is|are|named|called))\s*[:=]?\s*$", re.I)
 _PIN_ALIAS_SUFFIX = re.compile(
     r"^(?:\s+(?:is|are)\s+|\s*,\s*|\s*\(\s*)(?:an?\s+|the\s+)?"
-    r"(?:(?:(?:pin|signal|port)\s+)?alias(?:es)?\b"
+    r"(?:(?:(?:pin|pad|signal|port)\s+)?alias(?:es)?\b"
     r"|(?:[A-Za-z][A-Za-z0-9_-]*[ \t]+)*"
-    r"(?:input|output|inout|pin|signal|port)[ \t]*(?:[.,;:)]|$))", re.I)
+    r"(?:input|output|inout|pin|pad|signal|port)[ \t]*(?:[.,;:)]|$))", re.I)
 
 
 def _pin_alias_literals(text: str):
     """Yield input-declared aliases, never consulting generated L docs.
 
-    Recognise named pin/signal/port/alias columns of Markdown tables,
+    Recognise named pin/pad/signal/port/alias columns of Markdown/TSV tables,
     explicit naming prose, and the existing standalone alias-list form.
     Other cells and surrounding prose cannot supply an alias by slash alone.
     """
-    previous_cells = []
     alias_columns = set()
+    table_delimiter = None
     for line in text.splitlines():
-        if "|" in line:
-            cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        delimiter = "|" if "|" in line else ("\t" if "\t" in line else None)
+        if delimiter:
+            cells = [c.strip() for c in line.strip().strip("|").split(delimiter)]
+            if delimiter != table_delimiter:
+                alias_columns = set()
+                table_delimiter = delimiter
+            declared_columns = {i for i, c in enumerate(cells)
+                                if _PIN_ALIAS_HEADER.fullmatch(c.strip("`* "))}
+            if not alias_columns and declared_columns and not any(
+                    _PIN_ALIAS_RX.search(c) for i, c in enumerate(cells)
+                    if i not in declared_columns):
+                alias_columns = declared_columns
+                # A generic "Name" column is a pin name only in a typed table.
+                alias_columns.update(i for i, c in enumerate(cells)
+                                     if c.lower() in {"name", "identifier", "label"})
+                continue
             if cells and all(re.fullmatch(r":?-+:?", c.replace(" ", ""))
                              for c in cells):
-                alias_columns = {i for i, c in enumerate(previous_cells)
-                                 if _PIN_ALIAS_HEADER.fullmatch(c.strip("`* "))}
-                # A generic "Name" column is a pin name only in a typed table.
-                if alias_columns:
-                    alias_columns.update(i for i, c in enumerate(previous_cells)
-                                         if c.lower() in {"name", "identifier", "label"})
+                continue
             elif alias_columns:
                 for i in sorted(alias_columns):
                     if i < len(cells):
                         for match in _PIN_ALIAS_RX.finditer(cells[i]):
                             yield match.group().strip()
-            previous_cells = cells
             continue
-        previous_cells = []
         alias_columns = set()
+        table_delimiter = None
         bare = re.sub(r"^\s*[-*+]\s+", "", line).strip().strip("`*").rstrip(".;,")
         if bare.startswith("(") and bare.endswith(")"):
             bare = bare[1:-1].strip().strip("`*")
