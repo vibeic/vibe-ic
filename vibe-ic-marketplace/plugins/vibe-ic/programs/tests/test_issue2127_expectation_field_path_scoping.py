@@ -627,3 +627,127 @@ def test_an_expectation_that_is_not_withdrawn_says_so(tmp_path):
         p, _exp("e", "L4_REGMAP", "records.name", ["STATUS_WORD"]))
     assert c["withdrawn_reason"] is None
     assert c["met"] is True
+
+
+# #3383: opt-in RFC6901 addresses, independent of legacy dotted paths.
+import pytest
+
+
+def _pointer_project(tmp_path):
+    return _project(tmp_path, layers={"L4_REGMAP": {"registers": [
+        {"name": "CONTROL_A", "fields": [{"field_name": "MODE", "msb": 1,
+          "lsb": 1, "access": "RW", "reset": "0x0"}]},
+        {"name": "CONTROL_B", "fields": [{"field_name": "MODE", "msb": 7,
+          "lsb": 7, "access": "RO", "reset": "0x1"}]}],
+        "metadata": {"name": "CONTROL_A", "msb": 1, "lsb": 1,
+                     "access": "RW", "reset": "0x0"}}})
+
+
+def _pointer_split():
+    leaves = [("/registers/0/name", "CONTROL_A"),
+              ("/registers/0/fields/0/field_name", "MODE"),
+              ("/registers/0/fields/0/msb", "1"),
+              ("/registers/0/fields/0/lsb", "1"),
+              ("/registers/0/fields/0/access", "RW"),
+              ("/registers/0/fields/0/reset", "0x0")]
+    return {"id": "one-record", "requirement": "CONTROL_A.MODE bit1 RW reset0",
+            "evidence": ["input/docs/spec.md: declared register field"],
+            "sub_expectations": [{"layer": "L4_REGMAP", "field_path": path,
+                                  "expected_tokens": [token]}
+                                 for path, token in leaves]}
+
+
+def test_issue3383_exact_record_does_not_borrow_sibling_value(tmp_path):
+    p = _pointer_project(tmp_path)
+    path = "/registers/0/fields/0/msb"
+    yes = T.converge_ai_expectation(p, _exp("yes", "L4", path, ["1"]))
+    no = T.converge_ai_expectation(p, _exp("no", "L4", path, ["7"]))
+    assert yes["met"] is True and yes["scope"] == "json_pointer"
+    assert no["usable"] is True and no["met"] is False
+    assert no["missing_tokens"] == ["7"]
+
+
+def test_issue3383_split_preserves_one_parent_and_each_leaf(tmp_path):
+    r = T.converge_ai_expectation(_pointer_project(tmp_path), _pointer_split())
+    assert r["usable"] is True and r["met"] is True
+    assert len(r["sub_results"]) == 6
+    assert all(b["field_path_status"] == "DECLARED"
+               and b["scope"] == "json_pointer" for b in r["sub_results"])
+
+
+@pytest.mark.parametrize("key,bad", [("name", "OTHER_CONTROL"), ("msb", 7),
+                                    ("lsb", 7), ("access", "RO"),
+                                    ("reset", "0x1")])
+def test_issue3383_changed_selected_leaf_not_rescued_by_metadata(tmp_path, key, bad):
+    p = _pointer_project(tmp_path)
+    file = p / "phase1/generated_docs/L4_REGMAP.json"
+    original = file.read_bytes()
+    data = json.loads(original)
+    target = data["registers"][0] if key == "name" else data["registers"][0]["fields"][0]
+    target[key] = bad
+    file.write_text(json.dumps(data))
+    r = T.converge_ai_expectation(p, _pointer_split())
+    assert r["usable"] is True and r["met"] is False
+    file.write_bytes(original)
+    assert T.converge_ai_expectation(p, _pointer_split())["met"] is True
+
+
+@pytest.mark.parametrize("path", ["/missing", "/registers/9/name",
+    "/registers/00/name", "/registers/-1/name", "/registers/-/name",
+    "/registers/+0/name", "/registers/0/name/child", "/registers/0/~2",
+    "/registers/0/name~", "/Registers/0/name", "/fields/registers/0/name",
+    "/registers[0]/name"])
+def test_issue3383_invalid_pointer_refuses_without_whole_layer_agreement(tmp_path, path):
+    p = _pointer_project(tmp_path)
+    r = T.converge_ai_expectation(p, _exp("bad", "L4", path, ["CONTROL_A"]))
+    assert r["usable"] is False and r["met"] is False
+    assert r["field_path_status"] == "UNDECLARED"
+    assert r["scope"] == "json_pointer_refused"
+    assert "JSON Pointer" in r["observed"]
+    assert T.refuse_undeclared_field_path(T.authoring_schema(p), "L4", path)
+
+
+@pytest.mark.parametrize("pointer,value", [("/a~1b", 1), ("/m~0n", 2),
+    ("/~01", 3), ("/", 4), ("/01", 5), ("/list/0", None),
+    ("/Case", 6), ("/case", 7), ("/\u00e9", 8), ("/e\u0301", 9)])
+def test_issue3383_rfc_pointer_keys_escape_order_and_null(pointer, value):
+    blob = {"a/b": 1, "m~n": 2, "~1": 3, "": 4, "01": 5,
+            "list": [None], "Case": 6, "case": 7, "\u00e9": 8, "e\u0301": 9}
+    assert T.subtree_at(blob, pointer) == [value]
+    assert T.field_path_status(blob, pointer) == "DECLARED"
+
+
+def test_issue3383_schema_vocabulary_and_resolver_are_one_authority(tmp_path):
+    p = _pointer_project(tmp_path)
+    schema = T.authoring_schema(p)
+    doc = json.loads((p / "phase1/generated_docs/L4_REGMAP.json").read_text())
+    info = schema["layers"]["L4_REGMAP"]
+    paths = info["declared_json_pointer_paths"]
+    assert "/registers/0/fields/0/reset" in paths
+    assert info["declared_json_pointer_count"] == len(paths)
+    for path in paths:
+        assert T.subtree_at(doc, path) is not None
+        assert T.field_path_status(doc, path) == "DECLARED"
+        assert T.refuse_undeclared_field_path(schema, "L4", path) is None
+    assert T.refuse_undeclared_field_path(schema, "L4", "/registers/999/name")
+    assert "/registers/0/name" not in info["declared_field_paths"]
+
+
+def test_issue3383_ambiguous_json_member_refused_only_by_pointer(tmp_path):
+    p = _pointer_project(tmp_path)
+    file = p / "phase1/generated_docs/L4_REGMAP.json"
+    file.write_text('{"records":[{"name":"FIRST","name":"LAST","bit":1}]}')
+    r = T.converge_ai_expectation(p, _exp("ambiguous", "L4", "/records/0/name", ["LAST"]))
+    assert r["usable"] is False and r["met"] is False
+    assert T.refuse_undeclared_field_path(T.authoring_schema(p), "L4", "/records/0/name")
+    # Last-key legacy JSON behavior is unchanged; pointers do not change it.
+    legacy = T.converge_ai_expectation(p, _exp("old", "L4", "records.name", ["LAST"]))
+    assert legacy["met"] is True and legacy["scope"] == "field_path"
+
+
+def test_issue3383_legacy_bracket_index_still_elides_to_all_records(tmp_path):
+    p = _pointer_project(tmp_path)
+    r = T.converge_ai_expectation(p, _exp("old", "L4", "registers[0].fields.msb", ["7"]))
+    assert r["met"] is True and r["scope"] == "field_path"
+    assert T.subtree_at({"fields": {"X": 1}}, "/X") is None
+    assert T.subtree_at({"fields": {"X": 1}}, "X") == [1]

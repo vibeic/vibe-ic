@@ -1294,6 +1294,53 @@ def present_in_units(phrase: str, units: List[str]) -> bool:
     return any(phrase_present(phrase, u) for u in units)
 
 
+class _PointerObject(dict):
+    """Retain duplicate-member ambiguity for RFC6901; legacy keeps last value."""
+    def __init__(self, pairs):
+        super().__init__(pairs)
+        seen = set()
+        self.duplicate_keys = set()
+        for key, _ in pairs:
+            if key in seen:
+                self.duplicate_keys.add(key)
+            seen.add(key)
+
+
+def _is_json_pointer(field_path: Any) -> bool:
+    return isinstance(field_path, str) and field_path.startswith("/")
+
+
+def _pointer_at(blob: Any, pointer: str) -> Optional[list]:
+    """RFC6901 string representation, exact root/case; never legacy fallback.
+
+    An unresolved/invalid selector returns None, including ambiguous object
+    members and the nonexistent array member '-'. A selected JSON null is
+    [None], not an absent selector. URI-fragment syntax is not enabled here.
+    """
+    node = blob
+    for raw in pointer[1:].split("/"):
+        if re.search(r"~(?:[^01]|$)", raw):
+            return None
+        token = raw.replace("~1", "/").replace("~0", "~")
+        if isinstance(node, dict):
+            if token not in node or token in getattr(node, "duplicate_keys", ()):
+                return None
+            node = node[token]
+        elif isinstance(node, list):
+            if not re.fullmatch(r"0|[1-9][0-9]*", token):
+                return None
+            # Bounds without converting arbitrarily long input to an int.
+            if len(token) > len(str(len(node))):
+                return None
+            index = int(token)
+            if index >= len(node):
+                return None
+            node = node[index]
+        else:
+            return None
+    return [node]
+
+
 def subtree_at(blob: Any, field_path: Any, layer: Any = None) -> Optional[list]:
     """The node(s) the expectation's `field_path` addresses, or None.
 
@@ -1304,6 +1351,8 @@ def subtree_at(blob: Any, field_path: Any, layer: Any = None) -> Optional[list]:
     "the path is there and empty" are different answers and this repo has
     measured what happens when a program supplies one for the other.
     """
+    if _is_json_pointer(field_path):
+        return _pointer_at(blob, field_path)
     key = _normalise_field_path(field_path, layer)
     if not key:
         return None
@@ -1432,6 +1481,9 @@ def field_path_status(blob: Any, field_path: Any, layer: Any = None) -> str:
     question, an undeclared one is an authoring question, and conflating them
     is how the second became invisible.
     """
+    if _is_json_pointer(field_path):
+        return "DECLARED" if subtree_at(blob, field_path, layer) is not None \
+            else "UNDECLARED"
     if not _normalise_field_path(field_path, layer):
         return "ABSENT"
     return "DECLARED" if subtree_at(blob, field_path, layer) is not None \
@@ -1510,6 +1562,32 @@ def declared_field_paths(blob: Any, layer: Any = None,
     return sorted(kept)
 
 
+def declared_json_pointer_paths(blob: Any) -> List[str]:
+    """Exact record/leaf vocabulary, filtered by the review-time resolver.
+
+    Unlike the shallow dotted-path hint this is complete: an absent selector
+    must be refused rather than accepted through a truncated hint list.
+    """
+    out = []
+
+    def walk(node, prefix):
+        if isinstance(node, dict):
+            children = node.items()
+        elif isinstance(node, list):
+            children = enumerate(node)
+        else:
+            return
+        for key, value in children:
+            token = str(key).replace("~", "~0").replace("/", "~1")
+            path = prefix + "/" + token
+            if subtree_at(blob, path) is not None:
+                out.append(path)
+                walk(value, path)
+
+    walk(blob, "")
+    return sorted(out)
+
+
 def authoring_schema(project: Path) -> Dict[str, Any]:
     """THE DECLARATION AN EXPECTATION AUTHOR IS HANDED (#2150 F5).
 
@@ -1553,19 +1631,23 @@ def authoring_schema(project: Path) -> Dict[str, Any]:
     unreadable: List[str] = []
     for f in files:
         try:
-            blob = json.loads(f.read_text(errors="replace"))
+            blob = json.loads(f.read_text(errors="replace"),
+                              object_pairs_hook=_PointerObject)
         except (OSError, ValueError) as exc:
             # Named, never silently absent: a layer nobody could read is not a
             # layer that declares nothing.
             unreadable.append(f"{f.stem}: {exc.__class__.__name__}")
             continue
         paths = declared_field_paths(blob, f.stem)
+        pointers = declared_json_pointer_paths(blob)
         layers[f.stem] = {
             "purpose": purpose.get(f.stem, "no taxonomy entry declares this "
                                            "layer name"),
             "declared_field_path_count": len(paths),
             "declared_field_paths": paths[:AUTHORING_PATHS_PER_LAYER],
             "truncated": len(paths) > AUTHORING_PATHS_PER_LAYER,
+            "declared_json_pointer_paths": pointers,
+            "declared_json_pointer_count": len(pointers),
         }
     return {
         "status": "OK",
@@ -1589,6 +1671,17 @@ def authoring_schema(project: Path) -> Dict[str, Any]:
         # represent are named here, at authoring time, by the same
         # declaration `unaskable_tokens` refuses by at review time.
         "expected_tokens_rule": TOKEN_LANGUAGE,
+        "json_pointer_field_path": {
+            "standard": "https://www.rfc-editor.org/rfc/rfc6901",
+            "opt_in": "field_path starts with /; JSON string representation only",
+            "resolution": "exact L-doc root, case-sensitive keys, ~1 then ~0; "
+                          "zero-based array indices without signs or leading zeros",
+            "failure": "invalid, absent, ambiguous or out-of-bounds selectors "
+                       "are authoring refusals; never whole-layer fallback",
+            "enumeration": "complete, resolver-verified declared_json_pointer_paths; "
+                           "dotted-path depth/cap and fields-prefix aliases do not apply",
+            "split": "use existing conjunctive sub_expectations with explicit "
+                     "parent/child leaf pointers; no implicit join or value inference"},
         "qualified_output_expectation": {
             "input": "plugin_input/qualified-outputs.json",
             "input_schema": "vibeic.phase1-qualified-output-input.v1",
@@ -1617,7 +1710,9 @@ def authoring_schema(project: Path) -> Dict[str, Any]:
                      "L9 port aliases, not token coincidence. Neither the L9 "
                      "writer nor this track creates or signs its matching answer.")},
         "rule": ("an expectation's `field_path` MUST be one this schema lists "
-                 "for the layer it addresses, or be omitted entirely. A path "
+                 "for the layer it addresses (declared_field_paths for legacy "
+                 "dotted paths, declared_json_pointer_paths for / pointers), "
+                 "or be omitted entirely. A legacy path "
                  "no layer declares is refused BY NAME at review time and the "
                  "reading silently falls back to the whole layer, so the "
                  "finding then describes a field nothing looked at"),
@@ -1666,6 +1761,12 @@ def refuse_undeclared_field_path(schema: Dict[str, Any], layer: Any,
     if stem is None:
         return (f"no layer named {layer!r} is in this Phase-1 root; it "
                 f"carries {sorted(layers)}")
+    if _is_json_pointer(field_path):
+        if field_path in layers[stem].get("declared_json_pointer_paths", []):
+            return None
+        return (f"{stem} declares no unambiguous RFC6901 JSON Pointer "
+                f"{field_path!r}; select a current exact record/leaf. "
+                "Invalid or missing pointers never fall back to the whole layer.")
     declared = layers[stem]["declared_field_paths"]
     norm = _normalise_field_path(field_path, layer)
     if any(_normalise_field_path(d) == norm for d in declared):
@@ -2712,7 +2813,8 @@ def converge_ai_expectation(project: Path, exp: Any) -> Dict[str, Any]:
         return base
     base["layer_present"] = True
     try:
-        blob = json.loads(path.read_text(errors="replace"))
+        blob = json.loads(path.read_text(errors="replace"),
+                          object_pairs_hook=_PointerObject)
     except (OSError, ValueError) as exc:
         base["observed"] = (f"{base['layer']} exists but does not parse "
                             f"({exc.__class__.__name__}); unreadable content "
@@ -2727,6 +2829,14 @@ def converge_ai_expectation(project: Path, exp: Any) -> Dict[str, Any]:
     if base["field_path_status"] == "UNDECLARED":
         base["layer_declares"] = sorted(
             blob.keys() if isinstance(blob, dict) else [])
+        if _is_json_pointer(base["field_path"]):
+            base["usable"] = False
+            base["scope"] = "json_pointer_refused"
+            base["observed"] = (
+                f"{base['layer']} does not resolve the RFC6901 JSON Pointer "
+                f"{base['field_path']!r} unambiguously. This is an authoring "
+                "refusal, not a design comparison; no whole-layer reading occurred.")
+            return base
 
     # #2127 addendum (#2128) — WHERE the tokens are looked for.
     #
@@ -2746,7 +2856,8 @@ def converge_ai_expectation(project: Path, exp: Any) -> Dict[str, Any]:
         base["scope"] = "whole_layer"
         units = _haystack_units(blob)
     else:
-        base["scope"] = "field_path"
+        base["scope"] = "json_pointer" if _is_json_pointer(base["field_path"]) \
+            else "field_path"
         units = [u for node in subtree for u in _haystack_units(node)]
 
     missing = [t for t in base["expected_tokens"]
@@ -2754,7 +2865,7 @@ def converge_ai_expectation(project: Path, exp: Any) -> Dict[str, Any]:
     base["met"] = not missing
     base["missing_tokens"] = missing
     where = (f"{base['layer']}.{base['field_path']}"
-             if base["scope"] == "field_path" else
+             if base["scope"] in ("field_path", "json_pointer") else
              f"{base['layer']} (WHOLE LAYER — the expectation's field_path "
              f"{base['field_path']!r} does not resolve, so the reading is "
              f"UNSCOPED and any field of the layer could satisfy a token)")
