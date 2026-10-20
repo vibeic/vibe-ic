@@ -10,7 +10,10 @@ evidence; the bespoke scanners reject the documented false-positives
 from __future__ import annotations
 
 import sys
+import json
 from pathlib import Path
+
+import pytest
 
 _HERE = Path(__file__).resolve().parent
 _PROGRAMS = _HERE.parent
@@ -98,3 +101,53 @@ def test_first_match_wins_does_not_aggregate():
     out = mod.extract_crypto_arch(txt)
     assert out["digest_width_bits"] == 256
     assert out["digest_width_bits_evidence"]["line"] == 1
+
+
+def test_issue3288_round_rate_does_not_beat_block_latency(tmp_path):
+    """The intake document must reach the ordinary L1 post-emitter."""
+    from programs.tests._hostpaths import require_repo
+    from programs import phase1_doc_one_shot_runner as producer
+
+    fixture = require_repo(
+        "vibe-ic-marketplace", "plugins", "vibe-ic", "programs", "tests",
+        "fixtures", "phase1_local", "neutral_round_vs_block_latency",
+        "timing_contract.md",
+    )
+    docs = tmp_path / "input" / "docs"
+    docs.mkdir(parents=True)
+    (docs / "README.md").write_text(fixture.read_text())
+    generated = tmp_path / "phase1" / "generated_docs"
+    generated.mkdir(parents=True)
+    l1 = generated / "L1_DATASHEET.json"
+    l1.write_text(json.dumps({"class_path": "crypto_block_cipher"}))
+
+    producer._post_emit_crypto_arch_into_L1(tmp_path)
+    result = json.loads(l1.read_text())["architecture"]
+    assert result["latency_cycles_per_block"] == 66
+    evidence = result["latency_cycles_per_block_evidence"]
+    assert evidence["line"] == 4
+    assert evidence["matched_token"].lower() == "66 cycles per block"
+
+
+def test_issue3288_round_only_has_no_block_latency():
+    out = mod.extract_crypto_arch(
+        "The cipher operates at approximately 1 cycle per round.\n")
+    assert "latency_cycles_per_block" not in out
+    assert "latency_cycles_per_block_evidence" not in out
+
+
+@pytest.mark.parametrize("text,expected", [
+    ("Latency is 66 cycles per block.\nThe core uses 1 cycle per round.", 66),
+    ("The core uses 1 cycle per round.\nBlock latency is 66 cycles.", 66),
+    ("Latency per block: 66 cycles.", 66),
+    ("The core uses 1 cycle per round.\nA 66-cycle block latency applies.", 66),
+    ("The core has a 66-cycle latency per block.", 66),
+    ("Latency is 1 cycle per byte and 2 cycles per beat.", None),
+    ("Latency is 1 cycle per iteration.", None),
+    ("Variant A is 66 cycles per block.\nVariant B is 82 cycles per block.", None),
+    ("Block latency is 66 cycles.\nAlso 66 cycles per block.", 66),
+])
+def test_issue3288_full_block_scope_and_conflicts(text, expected):
+    out = mod.extract_crypto_arch(text)
+    assert out.get("latency_cycles_per_block") == expected
+    assert ("latency_cycles_per_block_evidence" in out) == (expected is not None)

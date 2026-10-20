@@ -1287,6 +1287,22 @@ def _run_step_0_5ic(project: Path, pdk: str = "") -> int:
         pass
 
     for argv in (fetch, ingest, answers, declare):
+        if argv is answers and answers_path is not None:
+            # Refresh the design-owned source BEFORE the transcription reads it.
+            # Refreshing only the merged copy leaves this file stale, and the
+            # declaration gate correctly refuses that source on a rerun.
+            import area_budget_basis_gen as _area_basis
+            area_doc, area_error = _TD.load(answers_path)
+            if area_error or not isinstance(area_doc, dict):
+                print(f"      ERROR: design area basis input unreadable: "
+                      f"{area_error}", file=sys.stderr)
+                return 1
+            if _area_basis.derive(project, area_doc)["status"] == "WRITE":
+                if _area_basis.main([
+                        str(project), "--answers", str(answers_path),
+                        "--json", str(project / "reports/phase1/"
+                                     "area_budget_basis_design.json")]) != 0:
+                    return 1
         if argv is declare:
             src = (merged_answers if merged_answers.is_file()
                    else answers_path)

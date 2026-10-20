@@ -26,6 +26,7 @@ import _submission_template as ST  # noqa: E402
 import flow_compliance_check as FCC  # noqa: E402
 import phase1_doc_one_shot_runner as P1  # noqa: E402
 import phase1_one_shot_runner as PHASE1  # noqa: E402
+import area_budget_basis_gen as AREA_BASIS  # noqa: E402
 
 AREA_KEY = "synthesis_area_budget"
 LIMIT = "LIMIT"
@@ -85,6 +86,62 @@ def _run(program: Path, project: Path, report_rel: str):
 
 def _limit(w=40, h=50):
     return {"status": LIMIT, "max_die_dimensions_um": [w, h]}
+
+
+def test_step05ic_refreshes_design_area_evidence_before_merging(tmp_path):
+    """The declaration gate must consume the current design-owned answer."""
+    project = tmp_path / "neutral_die"
+    docs = project / "input/docs/dimensions.md"
+    docs.parent.mkdir(parents=True)
+    docs.write_text("The target process is sky130A. The implementation "
+                    "selects die size 975 x 625 um.\n")
+    design = project / ST.DESIGN_ANSWERS_REL
+    _write_json(design, {
+        "schema": "vibe-ic/step_0_5ic_answers/1",
+        "answers": {"deliverable": "DIE", "top_cell": "neutral_top"},
+        "answer_provenance": {
+            "deliverable": {"answered_by": "owner", "citation":
+                            "Neutral fixture: deliver a standalone DIE."},
+            "top_cell": {"answered_by": "owner", "citation":
+                         "Neutral fixture top cell choice."},
+        },
+    })
+    assert AREA_BASIS.main([str(project)]) == 0
+    old = json.loads(design.read_text())
+    docs.write_text(docs.read_text() +
+                    "Package documentation is maintained separately.\n")
+    key = "synthesis_area_budget"
+    expected = AREA_BASIS.rederive(project, old)["provenance"]
+    assert expected["inputs_sha256"] != (
+        old["answer_provenance"][key]["inputs_sha256"])
+    assert PHASE1._run_step_0_5ic(project, pdk="sky130A") == 0
+    refreshed = json.loads(design.read_text())
+    assert refreshed["answer_provenance"][key] == expected
+    assert refreshed["answers"]["deliverable"] == old["answers"]["deliverable"]
+    assert refreshed["answers"]["top_cell"] == old["answers"]["top_cell"]
+    merged = json.loads((project / "input/submission_template/operator_answers.json").read_text())
+    assert merged["answer_provenance"][key] == refreshed["answer_provenance"][key]
+    gate = __import__("tapeout_declaration_check").evaluate(project)
+    assert gate["verdict"] == "PASS", gate["refusals"]
+
+    unchanged = design.read_bytes()
+    assert PHASE1._run_step_0_5ic(project, pdk="sky130A") == 0
+    assert design.read_bytes() == unchanged
+
+    docs.write_text("The target process is sky130A. The implementation "
+                    "selects die size 1000 x 650 um.\n")
+    assert PHASE1._run_step_0_5ic(project, pdk="sky130A") == 0
+    resized = json.loads(design.read_text())
+    assert resized["answers"][key]["max_die_dimensions_um"] == [1000.0, 650.0]
+    assert __import__("tapeout_declaration_check").evaluate(project)["verdict"] == "PASS"
+
+    resized["answer_provenance"][key]["inputs_sha256"] = "0" * 64
+    _write_json(design, resized)
+    refused = __import__("tapeout_declaration_check").evaluate(project)
+    assert refused["verdict"] == "FAIL"
+    assert any(r["rule"] == "DERIVED_ANSWER_STALE" and
+               r["path"] == ST.DESIGN_ANSWERS_REL
+               for r in refused["refusals"])
 
 
 @pytest.mark.parametrize("measured,expected_rc,expected_verdict", [

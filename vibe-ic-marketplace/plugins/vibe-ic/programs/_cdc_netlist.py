@@ -335,22 +335,26 @@ class Netlist:
             bit = cell["connections"]["A"][0]
         return bit
 
-    def bit_label(self, bit) -> str:
+    def bit_label(self, bit, port_labels: Optional[Dict[object, str]] = None) -> str:
         if self.is_const(bit):
             return f"const:{bit}"
-        port = {b: n for n, (_d, bits) in self.ports.items() for b in bits}
+        port = port_labels if port_labels is not None else {
+            b: n for n, (_d, bits) in self.ports.items() for b in bits}
         if bit in port:
             return port[bit]
         return self.names.get(bit, f"net#{bit}")
 
-    def domain(self, flop: Flop) -> str:
-        return self.bit_label(self.root(flop.clk))
+    def domain(self, flop: Flop,
+               port_labels: Optional[Dict[object, str]] = None) -> str:
+        return self.bit_label(self.root(flop.clk), port_labels)
 
-    def cone(self, bits: Iterable, skip: Optional[Set[object]] = None
+    def cone(self, bits: Iterable, skip: Optional[Set[object]] = None, *,
+             q_of: Optional[Dict[object, Flop]] = None,
+             ports: Optional[Dict[object, str]] = None
              ) -> Tuple[Set[object], Set[object]]:
         """Backward combinational cone. Returns (flop Q bits, port bits)."""
-        q_of = self.flop_of_q()
-        ports = self.port_bits
+        q_of = self.flop_of_q() if q_of is None else q_of
+        ports = self.port_bits if ports is None else ports
         seen: Set[object] = set()
         found_q: Set[object] = set()
         found_p: Set[object] = set()
@@ -379,7 +383,9 @@ class Netlist:
                 stack.extend(b for b in conn if not self.is_const(b))
         return found_q, found_p
 
-    def direct_source(self, flop: Flop, index: int) -> Optional[object]:
+    def direct_source(self, flop: Flop, index: int, *,
+                      ports: Optional[Dict[object, str]] = None
+                      ) -> Optional[object]:
         """The one bit D[index] samples with no logic between, else None.
 
         Passing a `$mux` is allowed when its other arm is a constant (reset or
@@ -387,6 +393,7 @@ class Netlist:
         """
         bit = flop.d[index]
         own = flop.q[index]
+        ports = self.port_bits if ports is None else ports
         for _ in range(64):
             if self.is_const(bit):
                 return None
@@ -394,7 +401,7 @@ class Netlist:
             if not drv:
                 return bit
             cell = self.cells[drv[0]]
-            if cell["type"] in FLOP_TYPES or bit in self.port_bits:
+            if cell["type"] in FLOP_TYPES or bit in ports:
                 return bit
             if cell["type"] in ("$buf", "$pos", "$_BUF_"):
                 bit = cell["connections"]["A"][0]
@@ -461,6 +468,7 @@ def load(path: Path, top: Optional[str] = None) -> Netlist:
                 width = len(net.get("bits", []))
                 names[b] = n if width == 1 else f"{n}[{i}]"
     nl = Netlist(top=top, ports=ports, cells=mod.get("cells", {}), names=names)
+    port_labels = {b: n for n, (_d, bits) in ports.items() for b in bits}
     for cname, cell in nl.cells.items():
         dirs = cell.get("port_directions") or {}
         for pin, conn in cell.get("connections", {}).items():
@@ -484,7 +492,8 @@ def load(path: Path, top: Optional[str] = None) -> Netlist:
                     arst=(c.get("ARST") or [None])[0])
         flop.srst = (c.get("SRST") or [None])[0] or \
             _outer_reset_mux(nl, flop.d)
-        flop.label = nl.bit_label(flop.q[0]).split("[")[0] if flop.q else cname
+        flop.label = nl.bit_label(flop.q[0], port_labels).split("[")[0] \
+            if flop.q else cname
         nl.flops.append(flop)
     return nl
 
@@ -496,64 +505,139 @@ def _finding(rule: str, severity: str, message: str, **evidence) -> dict:
             "file": NETLIST_REL, "line": 0, "evidence": evidence}
 
 
-def _sync_stage2(nl: Netlist, stage1: Flop, index: int, domain: str) -> bool:
-    """Is stage1.Q[index] sampled directly by another flop of `domain`?"""
-    bit = stage1.q[index]
-    for f in nl.flops:
-        if f is stage1 or nl.domain(f) != domain:
-            continue
-        for i in range(len(f.d)):
-            if nl.direct_source(f, i) == bit:
-                return True
-    return False
+class _LookupSnapshot:
+    """Indexes valid only for one analysis of the model's current state."""
+
+    def __init__(self, nl: Netlist):
+        self.nl = nl
+        self.port_labels = {
+            b: n for n, (_d, bits) in nl.ports.items() for b in bits}
+        self.port_bits = {
+            b: n for n, (direction, bits) in nl.ports.items()
+            if direction in ("input", "inout") for b in bits}
+        self.q_of = {b: f for f in nl.flops for b in f.q}
+        self.domains = {
+            id(f): nl.domain(f, self.port_labels) for f in nl.flops}
+        self.labels = {
+            id(f): (nl.bit_label(f.q[0], self.port_labels).split("[")[0]
+                    if f.q else f.name)
+            for f in nl.flops}
+        self._direct_sources: Dict[Tuple[int, int], Optional[object]] = {}
+        self._data_cones: Optional[List[Tuple[Flop, int, Set[object]]]] = None
+        self._consumers: Optional[
+            Dict[object, List[Tuple[Flop, int, bool]]]] = None
+        self._direct_consumers: Optional[
+            Dict[object, List[Tuple[Flop, int]]]] = None
+
+    def domain(self, flop: Flop) -> str:
+        return self.domains[id(flop)]
+
+    def label(self, flop: Flop) -> str:
+        return self.labels[id(flop)]
+
+    def bit_label(self, bit) -> str:
+        return self.nl.bit_label(bit, self.port_labels)
+
+    def cone(self, bits: Iterable, skip: Optional[Set[object]] = None
+             ) -> Tuple[Set[object], Set[object]]:
+        return self.nl.cone(bits, skip=skip, q_of=self.q_of,
+                            ports=self.port_bits)
+
+    def direct_source(self, flop: Flop, index: int) -> Optional[object]:
+        key = (id(flop), index)
+        if key not in self._direct_sources:
+            self._direct_sources[key] = self.nl.direct_source(
+                flop, index, ports=self.port_bits)
+        return self._direct_sources[key]
+
+    def data_cones(self) -> List[Tuple[Flop, int, Set[object]]]:
+        if self._data_cones is None:
+            self._data_cones = []
+            for flop in self.nl.flops:
+                skip = {flop.srst} if flop.srst is not None else None
+                for index, bit in enumerate(flop.d):
+                    q_bits, port_bits = self.cone([bit], skip=skip)
+                    self._data_cones.append(
+                        (flop, index, q_bits | port_bits))
+        return self._data_cones
+
+    def consumers(self, source_bit) -> List[Tuple[Flop, int, bool]]:
+        if self._consumers is None:
+            self._consumers = {}
+            for flop, index, cone in self.data_cones():
+                direct = self.direct_source(flop, index)
+                for bit in cone:
+                    self._consumers.setdefault(bit, []).append(
+                        (flop, index, direct == bit))
+        return self._consumers.get(source_bit, [])
+
+    def sync_stage2(self, stage1: Flop, index: int, domain: str) -> bool:
+        if self._direct_consumers is None:
+            self._direct_consumers = {}
+            for flop in self.nl.flops:
+                for d_index in range(len(flop.d)):
+                    source = self.direct_source(flop, d_index)
+                    if source is not None:
+                        self._direct_consumers.setdefault(source, []).append(
+                            (flop, d_index))
+        bit = stage1.q[index]
+        return any(
+            self.domain(flop) == domain
+            and not (flop is stage1
+                     and (d_index == index or flop.q[d_index] == bit))
+            for flop, d_index in self._direct_consumers.get(bit, ()))
 
 
-def _data_cones(nl: Netlist) -> List[Tuple[Flop, int, Set[object]]]:
-    """Every flop D bit's cone, computed once per netlist.
+def _sync_stage2(nl: Netlist, stage1: Flop, index: int, domain: str,
+                 lookup: Optional[_LookupSnapshot] = None) -> bool:
+    """Is stage1.Q[index] sampled by a distinct bit lane of `domain`?"""
+    return (lookup or _LookupSnapshot(nl)).sync_stage2(
+        stage1, index, domain)
+
+
+def _data_cones(nl: Netlist, lookup: Optional[_LookupSnapshot] = None
+                ) -> List[Tuple[Flop, int, Set[object]]]:
+    """Every flop D bit's cone, computed once per analysis.
 
     The sync-reset select is excluded: a reset reaching a flop is a reset
     question (the RDC rule), not a data crossing.
     """
-    cached = getattr(nl, "_cones", None)
-    if cached is None:
-        cached = []
-        for f in nl.flops:
-            skip = {f.srst} if f.srst is not None else None
-            for i, d in enumerate(f.d):
-                q, p = nl.cone([d], skip=skip)
-                cached.append((f, i, q | p))
-        nl._cones = cached
-    return cached
+    return (lookup or _LookupSnapshot(nl)).data_cones()
 
 
-def _consumers(nl: Netlist, source_bit) -> List[Tuple[Flop, int, bool]]:
+def _consumers(nl: Netlist, source_bit,
+               lookup: Optional[_LookupSnapshot] = None
+               ) -> List[Tuple[Flop, int, bool]]:
     """(flop, D index, direct?) for every flop whose data cone reads the bit."""
-    return [(f, i, nl.direct_source(f, i) == source_bit)
-            for f, i, cone in _data_cones(nl) if source_bit in cone]
+    return (lookup or _LookupSnapshot(nl)).consumers(source_bit)
 
 
-def clock_domains(nl: Netlist) -> List[str]:
-    return sorted({nl.domain(f) for f in nl.flops})
+def clock_domains(nl: Netlist, lookup: Optional[_LookupSnapshot] = None
+                  ) -> List[str]:
+    current = lookup or _LookupSnapshot(nl)
+    return sorted({current.domain(f) for f in nl.flops})
 
 
-def reg_crossing_findings(nl: Netlist) -> List[dict]:
+def reg_crossing_findings(nl: Netlist,
+                          lookup: Optional[_LookupSnapshot] = None) -> List[dict]:
     """A flop of domain A read by a flop of domain B (clock_domain_reg_crossing)."""
     import instrument_calibration
     instrument_calibration.assert_calibrated("_cdc_netlist::reg_crossing_findings")
-    domains = clock_domains(nl)
+    lookup = lookup or _LookupSnapshot(nl)
+    domains = clock_domains(nl, lookup)
     if len(domains) < 2:
         return []
     findings: List[dict] = []
     per_pair: Dict[Tuple[str, str], List[Tuple[Flop, bool]]] = {}
     for src in nl.flops:
-        send = nl.domain(src)
+        send = lookup.domain(src)
         synced_all: Dict[str, bool] = {}
         for idx, bit in enumerate(src.q):
-            for f, i, direct in _consumers(nl, bit):
-                recv = nl.domain(f)
+            for f, i, direct in _consumers(nl, bit, lookup):
+                recv = lookup.domain(f)
                 if recv == send:
                     continue
-                ok = direct and _sync_stage2(nl, f, i, recv)
+                ok = direct and _sync_stage2(nl, f, i, recv, lookup)
                 synced_all[recv] = synced_all.get(recv, True) and ok
         for recv, ok in synced_all.items():
             per_pair.setdefault((send, recv), []).append((src, ok))
@@ -561,14 +645,15 @@ def reg_crossing_findings(nl: Netlist) -> List[dict]:
         control = any(ok for _f, ok in rows)
         for src, ok in rows:
             width = len(src.q)
-            ev = {"register": src.label, "width": width, "from_domain": send,
+            label = lookup.label(src)
+            ev = {"register": label, "width": width, "from_domain": send,
                   "to_domain": recv, "synchronised": ok,
                   "control_path_synchronised": control, "cell": src.name}
             if ok:
-                if width > 1 and "gray" not in src.label.lower():
+                if width > 1 and "gray" not in label.lower():
                     findings.append(_finding(
                         "CDC_MULTIBIT_NO_GRAY", "WARN",
-                        f"{width}-bit '{src.label}' crosses '{send}'->'{recv}' "
+                        f"{width}-bit '{label}' crosses '{send}'->'{recv}' "
                         f"through per-bit synchronisers with no gray evidence",
                         **ev, gray_evidence=False))
                 continue
@@ -576,16 +661,17 @@ def reg_crossing_findings(nl: Netlist) -> List[dict]:
             findings.append(_finding(
                 "CDC_UNSYNCED_DATA_QUALIFIED" if qualified else "CDC_REG_NO_SYNC",
                 "WARN" if qualified else "ERROR",
-                (f"{width}-bit '{src.label}' crosses '{send}'->'{recv}' "
+                (f"{width}-bit '{label}' crosses '{send}'->'{recv}' "
                  f"unsynchronised beside a synchronised control path")
                 if qualified else
-                (f"'{src.label}' (clock '{send}') is read by clock '{recv}' "
+                (f"'{label}' (clock '{send}') is read by clock '{recv}' "
                  f"with no 2-flop synchroniser"),
                 **ev))
     return findings
 
 
-def async_input_findings(nl: Netlist, is_candidate) -> List[dict]:
+def async_input_findings(nl: Netlist, is_candidate,
+                         lookup: Optional[_LookupSnapshot] = None) -> List[dict]:
     """A top-level async input port sampled without a 2-flop synchroniser.
 
     `is_candidate(name)` is the regex gate's own port-name classifier; the
@@ -594,6 +680,7 @@ def async_input_findings(nl: Netlist, is_candidate) -> List[dict]:
     """
     import instrument_calibration
     instrument_calibration.assert_calibrated("_cdc_netlist::async_input_findings")
+    lookup = lookup or _LookupSnapshot(nl)
     clock_or_reset = {nl.root(f.clk) for f in nl.flops} | \
         {nl.root(f.arst) for f in nl.flops if f.arst is not None}
     findings: List[dict] = []
@@ -603,23 +690,27 @@ def async_input_findings(nl: Netlist, is_candidate) -> List[dict]:
         for bit in bits:
             if bit in clock_or_reset:
                 continue
-            for f, i, direct in _consumers(nl, bit):
-                if direct and _sync_stage2(nl, f, i, nl.domain(f)):
+            for f, i, direct in _consumers(nl, bit, lookup):
+                if direct and _sync_stage2(
+                        nl, f, i, lookup.domain(f), lookup):
                     continue
+                label = lookup.label(f)
                 findings.append(_finding(
                     "ASYNC_INPUT_NO_SYNC", "ERROR",
-                    f"async input port '{name}' reaches flop '{f.label}' "
+                    f"async input port '{name}' reaches flop '{label}' "
                     + ("through logic" if not direct else
                        "with no second synchroniser stage"),
-                    port=name, flop=f.label, direct=direct))
+                    port=name, flop=label, direct=direct))
                 break
     return findings
 
 
-def reset_dependency_findings(nl: Netlist) -> List[dict]:
+def reset_dependency_findings(
+        nl: Netlist, lookup: Optional[_LookupSnapshot] = None) -> List[dict]:
     """A reset net whose own fan-in contains a flop it resets (a cycle)."""
     import instrument_calibration
     instrument_calibration.assert_calibrated("_cdc_netlist::reset_dependency_findings")
+    lookup = lookup or _LookupSnapshot(nl)
     resets: Dict[object, List[Flop]] = {}
     for f in nl.flops:
         for r in (f.arst, f.srst):
@@ -630,9 +721,9 @@ def reset_dependency_findings(nl: Netlist) -> List[dict]:
         for f in flops:
             reset_of.setdefault(f.name, set()).add(r)
     edges: Dict[object, Set[object]] = {r: set() for r in resets}
-    q_of = nl.flop_of_q()
+    q_of = lookup.q_of
     for r in resets:
-        qbits, _ports = nl.cone([r])
+        qbits, _ports = lookup.cone([r])
         for qb in qbits:
             for r2 in reset_of.get(q_of[qb].name, ()):
                 edges.setdefault(r2, set()).add(r)
@@ -647,7 +738,7 @@ def reset_dependency_findings(nl: Netlist) -> List[dict]:
                     cyc = frozenset(path)
                     if cyc not in reported:
                         reported.add(cyc)
-                        labels = [nl.bit_label(b) for b in path]
+                        labels = [lookup.bit_label(b) for b in path]
                         findings.append(_finding(
                             "CIRCULAR_RESET_DEPENDENCY", "ERROR",
                             "reset net(s) " + " -> ".join(labels + [labels[0]])
@@ -664,12 +755,14 @@ def judge(nl: Netlist, rule: str, is_candidate=None) -> List[dict]:
     Each rule carries its own `assert_calibrated` line: one pair per rule, so
     a calibrated crossing rule cannot vouch for the reset rule.
     """
+    lookup = _LookupSnapshot(nl)
     if rule == "reg_crossing":
-        return reg_crossing_findings(nl)
+        return reg_crossing_findings(nl, lookup)
     if rule == "async_input":
-        return async_input_findings(nl, is_candidate or (lambda _n: False))
+        return async_input_findings(
+            nl, is_candidate or (lambda _n: False), lookup)
     if rule == "reset_dependency":
-        return reset_dependency_findings(nl)
+        return reset_dependency_findings(nl, lookup)
     raise ValueError(rule)
 
 
