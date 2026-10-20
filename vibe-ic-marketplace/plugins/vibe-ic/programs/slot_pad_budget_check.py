@@ -60,9 +60,12 @@ count it may invent. Re-measured on the published corpus: the first row sums to
 UNDECIDED, not a 502-bit refusal. A reader who compares an unelaborated run
 against this table and finds it short has found that rule, not a defect.
 
-The pad inventory is not a guess and not a constant written into this file: step
-0.5ic ingests the shuttle operator's own slot files, and each one LISTS ITS PADS
-BY INSTANCE, per die side. This gate counts them.
+The pad inventory is not a guess and not a constant written into this file.
+For fixed-roster contracts, step 0.5ic ingests the operator's per-side instance
+lists and this gate counts them. A typed geometry-only contract supplies no
+logical roster: the design's declared ring is measured for signal bonding,
+while the selected operator's die, layer and mask constraints remain bound.
+An absent list alone never establishes that contract role or physical fit.
 
 THE OTHER HALF — A FIT THAT NEEDS A BOND-OUT DECISION, NAMED NOT TAKEN
 =======================================================================
@@ -85,8 +88,8 @@ with the enable signals that could drive it.
 
 WHAT IS DECIDED, AND WHAT IS NOT
 ================================
-    DECIDED    the pad inventory of every ingested slot, by role, by counting
-               the operator's own per-side pad instance lists
+    DECIDED    fixed-roster slot inventories by role, or logical signal bonding
+               to the design's ring under a source-bound geometry-only contract
     DECIDED    the design's declared top-level signal-bit count
     DECIDED    fits / does not fit / does not fit but has fold candidates
     NOT DECIDED whether a fold candidate is protocol-safe
@@ -1193,6 +1196,65 @@ def _load_slots(project: str) -> Dict[str, Dict[str, Any]]:
     return out
 
 
+def bound_geometry_contract(project: str, slots: Dict[str, Dict[str, Any]]
+                            ) -> Optional[Dict[str, Any]]:
+    """A selected, source-bound geometry contract, never a missing pad list.
+
+    Only an adapter's explicit typed role permits design-owned bonding under
+    an operator binding. Unknown lists, even an explicitly empty fixed roster,
+    stale source bytes and conflicting normalized fields retain the ordinary
+    inventory path. Physical geometry and mask acceptance stay unmeasured here.
+    """
+    own = _json_at(project, _ST.DESIGN_ANSWERS_REL) or {}
+    operator = own.get("operator_template")
+    if not isinstance(operator, dict):
+        return None
+    selected = operator.get("slot")
+    if not isinstance(selected, str) or not selected.strip():
+        return None
+    matches = [s for s in slots.values() if s.get("slot") == selected.strip()]
+    if len(matches) != 1:
+        return None
+    slot = matches[0]
+    expected = {"schema": _ST.PAD_CONTRACT_SCHEMA,
+                "kind": _ST.GEOMETRY_ONLY_PAD_CONTRACT}
+    if slot.get("pad_contract") != expected:
+        return None
+    pads = slot.get("pads")
+    if (not isinstance(pads, dict) or pads.get("count") != 0
+            or any(pads.get(k) for k in
+                   ("lists", "keys_matched", "unmatched_list_keys"))):
+        return None
+    source_name = slot.get("source_file")
+    source_hash = slot.get("source_sha256")
+    if not isinstance(source_name, str) or not isinstance(source_hash, str):
+        return None
+    source = Path(source_name)
+    if _ST.sha256_file(source) != source_hash:
+        return None
+    mapping, error = _ST._load_mapping(source)
+    if error or not isinstance(mapping, dict):
+        return None
+    current = _ST.slot_record(source, mapping, source.parent)
+    if any(current.get(k) != slot.get(k) for k in
+           ("slot", "pads", "die_area", "pad_contract")):
+        return None
+    rect = _ST.parse_rect((slot.get("die_area") or {}).get("rect"))
+    if rect is None or any(x <= 0 for x in _ST.rect_wh(rect)):
+        return None
+    if _ST.sha256_file(source) != source_hash:
+        return None
+    return {
+        "slot": selected.strip(), "source_file": str(source),
+        "source_sha256": source_hash, "pad_contract": expected,
+        "die_area": slot["die_area"], "physical_mask": mapping.get("PAD_MASK"),
+        "forbidden_layers": mapping.get("FORBIDDEN_LAYERS"),
+        "required_marker_layers": mapping.get("REQUIRED_MARKER_LAYERS"),
+        "geometric_fit": "NOT_MEASURED",
+        "geometric_fit_owner": "physical pad-ring and operator precheck",
+    }
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     # `GateArgumentParser`, not the stdlib one. argparse exits 2 on a rejected
     # command line, and 2 is THIS FLOW'S VACUOUS_PASS tier -- so a malformed
@@ -1434,7 +1496,21 @@ def main(argv: Optional[List[str]] = None) -> int:
     # to say the same of an owner-attested DIE that binds no operator, a die
     # was taking it too. A die is not exempt from a pad budget; it is its own
     # operator, and its budget is the ring below.
-    _die_is_its_own_operator = _declared_die and not _operator_bound
+    # A geometry-only operator owns the physical constraints; the design still
+    # owns logical bonding. This is not the no-operator route stand-down.
+    _geometry_contract = (bound_geometry_contract(str(a.project), slots)
+                          if _declared_die and _operator_bound else None)
+    _die_is_its_own_operator = (_declared_die and
+                               (not _operator_bound or _geometry_contract is not None))
+    _own_ring_budget_basis = ("operator_geometry:own_pad_ring" if _geometry_contract
+                              else "37.5self:own_pad_ring")
+    _own_ring_context = (
+        "this delivery is a DIE whose bound operator supplies a geometry-only "
+        "contract and leaves logical bonding to the design"
+        if _geometry_contract else
+        "this delivery is a DIE and binds no operator template")
+    _ring_owner = ("the design owns its logical pad-ring budget" if _geometry_contract
+                   else "the die is its own operator")
     _declared_ring = (declared_own_ring(_decl_doc) if _die_is_its_own_operator
                       else None)
     # TWO ANSWERS ABOUT ONE WIDTH FIRST, for every route. A contradiction in
@@ -1462,8 +1538,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         # input.
         rep = {"check": "slot_pad_budget", "verdict": "UNDECIDED", "rc": 2,
                "reason_class": _reason_taxonomy.ZERO_DENOMINATOR,
-               "reason": (f"this delivery is a DIE and binds no operator "
-                          f"template, so its budget is its own pad ring "
+               "reason": (f"{_own_ring_context}, so its budget is its own pad ring "
                           f"measured against the pins it declares — and the "
                           f"design declares NO top-level port: top module "
                           f"'{a.top}' was not found in "
@@ -1477,7 +1552,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                                          f"read for top module '{a.top}' from "
                                          f"{rtl_files or 'no staged RTL'}"),
                              "owner": "design input"}],
-               "budget_basis": "37.5self:own_pad_ring",
+               "budget_basis": _own_ring_budget_basis,
                "deliverable_source": _die_word_source,
                "note": ("a design-input gap, named — not a question blocked "
                         "on an upstream step")}
@@ -1514,7 +1589,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                               + " — a width this gate invented would be a pad "
                                 "count nobody chose"),
                    "unresolved_width_ports": _budget["unresolved_width_ports"],
-                   "budget_basis": "37.5self:own_pad_ring",
+                   "budget_basis": _own_ring_budget_basis,
                    "deliverable_source": _die_word_source}
             rc = 2
         elif not _ring["measurable"]:
@@ -1533,11 +1608,10 @@ def main(argv: Optional[List[str]] = None) -> int:
                 "verdict": "UNDECIDED",
                 "rc": 2,
                 "reason_class": _reason_taxonomy.ZERO_DENOMINATOR,
-                "budget_basis": "37.5self:own_pad_ring",
+                "budget_basis": _own_ring_budget_basis,
                 "deliverable_source": _die_word_source,
                 "reason": (
-                    "this delivery is a DIE and binds no operator template, so "
-                    "the die is its own operator and its budget is its own pad "
+                    f"{_own_ring_context}, so {_ring_owner} and its budget is its own pad "
                     "ring — and the design states that ring in neither place it "
                     "may be stated: "
                     + ("`pad_order_by_side` names "
@@ -1630,11 +1704,10 @@ def main(argv: Optional[List[str]] = None) -> int:
                 "check": "slot_pad_budget",
                 "verdict": "FITS" if _fits else "DOES_NOT_FIT",
                 "rc": 0 if _fits else 1,
-                "budget_basis": "37.5self:own_pad_ring",
+                "budget_basis": _own_ring_budget_basis,
                 "ring_source": _ring_source,
                 "basis": (
-                    "this delivery is a DIE and binds no operator template, so "
-                    "the die is its own operator: the budget is the pad ring "
+                    f"{_own_ring_context}, so {_ring_owner}: the budget is the pad ring "
                     "the design declares for itself ("
                     + (f"{_TD.DECLARATION_REL}, "
                        if _ring_source == "declaration:pad_signal_map"
@@ -1642,9 +1715,12 @@ def main(argv: Optional[List[str]] = None) -> int:
                     + f"{_inv['declared_pads_total']} pad(s) from "
                     f"{'+'.join(_inv['declared_by'])}) against the "
                     f"{_inv['declared_signal_bits']} signal bit(s) it declares "
-                    f"on top module {a.top!r}. No external slot exists to "
-                    "measure against; the operator catalogue on disk is "
-                    "information, not a purchase"),
+                    f"on top module {a.top!r}. "
+                    + ("The selected operator's die, layer and mask constraints "
+                       "remain bound; physical fit is not measured by this "
+                       "logical bonding check." if _geometry_contract else
+                       "No external slot exists to measure against; the operator "
+                       "catalogue on disk is information, not a purchase")),
                 "own_ring": _inv,
                 "own_ring_arithmetic": _arith,
                 "own_ring_measured_by": {"step": OWN_RING_STEP,
@@ -1733,6 +1809,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     else:
         rep = evaluate(slots, ports)
         rc = int(rep["rc"])
+    if (_geometry_contract is not None
+            and rep.get("budget_basis") == _own_ring_budget_basis):
+        rep["operator_geometry_contract"] = _geometry_contract
     if defaults_used:
         rep["params_from_top_module_defaults"] = defaults_used
     if derived_used:
@@ -1782,14 +1861,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     print(f"{_mark}slot_pad_budget_check: {rep['verdict']}")
     if rep["verdict"] in ("UNDECIDED", "NOT_APPLICABLE"):
         print(f"  {rep.get('reason', 'no reason recorded')}")
-    elif rep.get("budget_basis") == "37.5self:own_pad_ring":
+    elif rep.get("budget_basis") in {"37.5self:own_pad_ring",
+                                     "operator_geometry:own_pad_ring"}:
         # The die's own ring is a different measurement from an operator
         # slot's inventory and says so in its own words, not in the slot
         # report's field names.
         _inv_p = rep.get("own_ring") or {}
         _ar = rep.get("own_ring_arithmetic") or {}
-        print(f"  basis                          : 37.5self — the die is its "
-              f"own operator")
+        print(f"  basis                          : {rep['budget_basis']}")
         print(f"  ring the design declares       : {rep.get('ring_source')} "
               f"({(rep.get('derived_ring') or {}).get('source') or _TD.DECLARATION_REL})")
         print(f"  declared signal bits           : "

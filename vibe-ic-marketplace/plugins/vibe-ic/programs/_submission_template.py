@@ -69,6 +69,12 @@ from flow_condition_reachability_check import (  # noqa: E402
 
 SCHEMA = "submission_template/1"
 
+# Adapter-owned description of the published contract's role. This does not
+# state a pad count or physical fit and is distinct from operator constants.
+PAD_CONTRACT_KEY = "_vibeic_pad_contract"
+PAD_CONTRACT_SCHEMA = "vibeic.submission_pad_contract.v1"
+GEOMETRY_ONLY_PAD_CONTRACT = "geometry_only"
+
 # Paths this step owns, exactly as `flow/phase1_phase2_phase3.yaml` declares
 # them for step 0.5ic. Relative to the design's project root.
 REPORT_REL = "reports/phase1/submission_template.json"
@@ -411,6 +417,8 @@ def slot_record(path: Path, mapping: dict, root: Path) -> dict:
     if ring_k is not None:
         rec["ring"] = {"key": ring_k, "raw": ring_v,
                        "value": dec_str(_dec(ring_v))}
+    if PAD_CONTRACT_KEY in mapping:
+        rec["pad_contract"] = mapping[PAD_CONTRACT_KEY]
     return rec
 
 

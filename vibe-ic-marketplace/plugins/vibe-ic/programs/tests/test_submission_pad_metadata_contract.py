@@ -7,6 +7,9 @@ import _submission_template as ST
 import submission_template_fetch as FETCH
 import submission_template_ingest as ING
 import submission_template_check as CHK
+import slot_pad_budget_check as BUDGET
+import _tapeout_declaration as TD
+import _owner_declared as OD
 
 
 def _fetched(tmp_path, monkeypatch):
@@ -80,3 +83,82 @@ def test_catalogue_layer_classification_does_not_choose_operator_slot(tmp_path,m
     doc=json.loads((project/ST.REPORT_REL).read_text())
     assert doc['ingest']['declared_slot'] is None
     assert {r['rule'] for r in doc['check']['refusals']}=={'SLOT_NOT_DECLARED'}
+
+
+def _budget_project(tmp_path, monkeypatch, *, small_ring=False, change=None):
+    root, path, raw = _fetched(tmp_path, monkeypatch)
+    if change == 'missing-contract':
+        raw.pop('_vibeic_pad_contract', None)
+    elif change == 'malformed-contract':
+        raw['_vibeic_pad_contract'] = {'kind': 'geometry_only'}
+    elif change == 'unread-pad-list':
+        raw['PAD_RING'] = ['unread_pad']
+    elif change == 'explicit-empty-pad-list':
+        raw['PADS'] = []
+    path.write_text(json.dumps(raw))
+    project = tmp_path / 'design'
+    project.mkdir()
+    assert ING.main([str(project), '--template', str(root), '--slot', 'neutral']) == 0
+    declaration, _ = TD.merge_answers(TD.blank_declaration(),
+        {'deliverable': 'DIE', 'top_cell': 'widget'})
+    OD.attest(declaration)
+    (project / TD.DECLARATION_REL).write_text(json.dumps(declaration))
+    own = {'operator_template': {'slot': 'neutral'},
+           'answers': {'deliverable': 'DIE', 'top_cell': 'widget'}}
+    (project / ST.DESIGN_ANSWERS_REL).write_text(json.dumps(OD.attest(own)))
+    rtl = project / 'phase2/stage1/rtl'
+    rtl.mkdir(parents=True)
+    (rtl / 'widget.v').write_text(
+        'module widget(input i_clk, input i_rst, output [1:0] o_gpio); endmodule\n')
+    docs = project / 'input/docs'
+    docs.mkdir()
+    gpio = 'o_gpio[0]' if small_ring else 'o_gpio'
+    (docs / 'placement.md').write_text(
+        '# Interface\n\n## Physical Pad Placement\n\n| side | signals |\n'
+        '|---|---|\n| E | `i_clk`, `i_rst` |\n| N | `' + gpio + '` |\n')
+    if change == 'stale-source':
+        path.write_text(path.read_text() + '\n')
+    elif change == 'unselected-slot':
+        own['operator_template']['slot'] = 'not_selected'
+        (project / ST.DESIGN_ANSWERS_REL).write_text(json.dumps(OD.attest(own)))
+    return project, path
+
+
+def _budget(project):
+    report = project / 'budget.json'
+    rc = BUDGET.main([str(project), '--top', 'widget', '--json', str(report)])
+    return rc, json.loads(report.read_text())
+
+
+def test_geometry_contract_uses_design_bonding_and_preserves_operator_constraints(tmp_path, monkeypatch):
+    project, source = _budget_project(tmp_path, monkeypatch)
+    binding = (project / ST.DESIGN_ANSWERS_REL).read_bytes()
+    rc, report = _budget(project)
+    assert (rc, report['verdict']) == (0, 'FITS'), report
+    assert report['own_ring']['bonded_declared_bits'] == 2
+    assert report['own_ring']['unbonded_count'] == 0
+    assert report['own_ring_arithmetic']['ring_geometric_capacity_pads'] is None
+    contract = report['operator_geometry_contract']
+    assert contract['slot'] == 'neutral'
+    assert contract['source_sha256'] == ST.sha256_file(source)
+    assert contract['geometric_fit'] == 'NOT_MEASURED'
+    assert contract['die_area']['rect'] == ['0', '0', '800', '1000']
+    assert contract['forbidden_layers'] == [{'name': 'excluded', 'layer': 50, 'datatype': 0}]
+    assert (project / ST.DESIGN_ANSWERS_REL).read_bytes() == binding
+
+
+def test_geometry_contract_still_rejects_an_unbonded_real_signal(tmp_path, monkeypatch):
+    project, _ = _budget_project(tmp_path, monkeypatch, small_ring=True)
+    rc, report = _budget(project)
+    assert (rc, report['verdict']) == (1, 'DOES_NOT_FIT'), report
+    assert report['own_ring']['unbonded_declared_bits'] == ['o_gpio[1]']
+
+
+@pytest.mark.parametrize('change', ['missing-contract', 'malformed-contract',
+    'unread-pad-list', 'explicit-empty-pad-list', 'stale-source', 'unselected-slot'])
+def test_missing_or_conflicting_geometry_authority_cannot_borrow_the_design_ring(
+        tmp_path, monkeypatch, change):
+    project, _ = _budget_project(tmp_path, monkeypatch, change=change)
+    rc, report = _budget(project)
+    assert (rc, report['verdict']) == (2, 'UNDECIDED'), report
+    assert 'operator_geometry_contract' not in report

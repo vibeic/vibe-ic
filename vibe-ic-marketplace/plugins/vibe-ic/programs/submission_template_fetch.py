@@ -357,6 +357,13 @@ def _adapt_wafer_space(project: Path, digest: str, shuttle: Any,
             "TOP_CELL": (raw["pad_masks"].get(mask) or {}).get("top_cell"),
             "DATABASE_UNIT_UM": (raw["pad_masks"].get(mask) or {}).get("dbu"),
             "PAD_MASK": mask,
+            # This adapter reads size/layer/mask constraints, not a fixed
+            # logical pad roster. Preserve that role for the bonding-budget
+            # consumer without inventing instances or a geometric capacity.
+            _st.PAD_CONTRACT_KEY: {
+                "schema": _st.PAD_CONTRACT_SCHEMA,
+                "kind": _st.GEOMETRY_ONLY_PAD_CONTRACT,
+            },
             # Refused layers, and the DIRECTION each is refused in, taken from
             # the operator's own condition rather than from its variable names.
             "FORBIDDEN_LAYERS": [
