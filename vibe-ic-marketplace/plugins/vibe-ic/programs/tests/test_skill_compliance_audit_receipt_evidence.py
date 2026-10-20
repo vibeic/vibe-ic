@@ -48,6 +48,7 @@ sys.path.insert(0, str(_PLUGIN / "_shared"))
 import skill_compliance_check as scc  # noqa: E402
 sys.path.insert(0, str(_PLUGIN / 'programs'))
 import _rtl_audit_applicability as rtl_applicability  # noqa: E402
+import _interface_encoding_population as encoding_population  # noqa: E402
 
 _NAMED = ("X_interface_encoding_audit",
           "X_crc_bitorder_check",
@@ -144,6 +145,8 @@ def _drive(tmp_path, doc_text, receipts, yml=None):
                 summary['rtl_dir'] = str(rtl)
                 summary['verdict'] = 'FAIL' if summary['mismatches'] else 'PASS'
                 payload['producer_returncode'] = int(bool(summary['mismatches']))
+                payload['interface_population'] = encoding_population.binding(
+                    payload['interfaces'])
             elif name == 'crc_bitorder_report.json':
                 payload['files_scanned'] = [str(source)]
                 payload['producer_returncode'] = int(payload.get('summary_status') == 'WARN')

@@ -1211,6 +1211,11 @@ def _cc_audit_receipt_evidence(spec: Dict[str, Any], text: str,
                                         ('mismatches', 'MISMATCH'), ('unknowns', 'UNKNOWN'))))
             if not counts_ok or summary.get('verdict') not in ('PASS', STATE_NOT_APPLICABLE):
                 status_error = status_error or 'invalid_or_nonpassing_interface_population'
+            sys.path.insert(0, str(Path(__file__).resolve().parent.parent / 'programs'))
+            import _interface_encoding_population as interface_population
+            if not interface_population.matches(
+                    payload.get('interface_population'), rows):
+                status_error = status_error or 'interface_population_binding_mismatch'
         elif auditor == 'crc_bitorder_check':
             if payload.get('summary_status') not in ('PASS', STATE_NOT_APPLICABLE):
                 status_error = status_error or 'nonpassing_crc_verdict'
@@ -1369,6 +1374,12 @@ def _cc_audit_receipt_evidence(spec: Dict[str, Any], text: str,
                         selected_root.absolute() != configured.absolute())
             selected_root = configured if selected_root is None else selected_root
         ok, reason = rtl_applicability.verify(applicability, auditor, selected_root)
+        if auditor == 'interface_encoding_audit':
+            configuration_ok, configuration_reason = \
+                rtl_applicability.receipt_configuration_matches(
+                    applicability, payload.get('configuration'), selected_root)
+            if not configuration_ok:
+                ok, reason = False, configuration_reason
         if conflict:
             ok, reason = False, 'consumer_source_root_conflict'
         if not (ok and valid_population and subject_ok and source_ok):

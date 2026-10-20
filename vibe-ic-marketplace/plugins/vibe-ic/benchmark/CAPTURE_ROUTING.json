@@ -17,6 +17,16 @@
       "bucket_B_skill_file": "agents/ic-expert-agent.md",
       "bucket_B_section_anchor": "NL spec phrase patterns"
     },
+    "phase1.coverage_discovery": {
+      "description": "Capture subtype for INPUT-context coverage literal classification and replay authority; does not add a flow step or alter acceptance thresholds.",
+      "bucket_A_program": "programs/phase1_coverage_report_gen.py",
+      "bucket_A_related": [
+        "programs/extraction_coverage_check.py",
+        "programs/phase1_coverage_report_present_check.py",
+        "programs/extraction_coverage_denominator_audit.py"
+      ],
+      "bucket_B_skill_file": "skills/phase1-output-verify/SKILL.md"
+    },
     "phase1.integration_contract": {
       "description": "Capture subtype for L9 implementation presence and L19 constraint-policy carry-through from layered design inputs; does not add a flow step.",
       "bucket_A_program": "programs/l9_l19_contract_carrythrough.py",
@@ -155,6 +165,16 @@
         "programs/vacuous_testbench_check.py"
       ],
       "bucket_B_skill_file": "skills/testbench-gen/SKILL.md"
+    },
+    "phase2.l10_unit_tb.testbench_gen.run_unit_tbs": {
+      "description": "L10 named unit-testbench generation, native execution, per-case JUnit and current execution receipt. This is the existing unit-TB owner, distinct from the full-stack professional testbench producer.",
+      "bucket_A_program": "programs/testbench_gen.py",
+      "bucket_A_related": [
+        "programs/_l10_execution.py",
+        "programs/l10_tb_conformance_check.py"
+      ],
+      "bucket_B_skill_file": "skills/testbench-gen/SKILL.md",
+      "bucket_B_section_anchor": "L10 unit-oracle recovery"
     },
     "phase2.full_stack_tb.cpu_datapath_program.build": {
       "description": "Capture subtype for the declared CPU data-path program and testbench producer; routing only, not a new flow step.",

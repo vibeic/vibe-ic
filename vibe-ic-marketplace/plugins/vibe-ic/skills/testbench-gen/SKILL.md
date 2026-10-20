@@ -154,10 +154,21 @@ convention relaxes an incorrect declared window.
 ## Capture
 
 Any recovery here (a new reference-model pattern, a new coverage-derivation rule,
-a streaming-alignment case) is captured per `benchmark-enhancement-capture`:
-program-first into `professional_tb_gen.py` (a deterministic derivation rule) so
-the next design gets it automatically — and, if the gap is in a forked sim tool
-(Verilator/Icarus/cocotb), as a **Bucket-T** forked-tool item.
+a streaming-alignment case) is captured per `benchmark-enhancement-capture`.
+Route full-stack professional-testbench recovery to `professional_tb_gen.py`.
+Route an exact-name L10 `.v` / `.sv` unit oracle from
+`testbench_gen.run_unit_tbs` through the canonical
+`phase2.l10_unit_tb.testbench_gen.run_unit_tbs` entry: Bucket A belongs to
+`testbench_gen.py` with `_l10_execution.py` as its receipt owner, and Bucket B
+belongs in this skill. Do not borrow the full-stack route for a unit-TB record.
+
+For L10 unit-oracle recovery, keep the authored TB bytes and bind the complete
+source closure needed to reproduce its expected result. A wrong expected value
+or wrong stimulus must still compile and then fail the native comparison; the
+restored original bytes must pass through the normal producer and write a fresh
+execution receipt. A broad reference-suite PASS cannot credit a named vector it
+did not execute. If the gap is in a forked simulator (Verilator/Icarus/cocotb),
+also emit a **Bucket-T** forked-tool item.
 
 ## Gaps to grow into (from the 2026-07-11 verification research)
 

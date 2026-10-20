@@ -44,6 +44,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _rtl_audit_applicability as _applicability
+import _interface_encoding_population as _population
 import rtl_hierarchy_drivers as _hierarchy
 from module_port_audit import (
     extract_balanced, split_top_level, lexical_mask, module_regions,
@@ -245,6 +246,16 @@ def _split_ports(text: str) -> List[str]:
     return split_top_level(text)
 
 
+def _fixed_nested_bit_select(text: str) -> Optional[str]:
+    """Return a canonical fixed nested bit-select, or None if unsupported."""
+    match = re.fullmatch(
+        r'([A-Za-z_]\w*)((?:\s*\[\s*\d+\s*\]){2,})', text)
+    if match is None:
+        return None
+    indices = re.findall(r'\[\s*(\d+)\s*\]', match.group(2))
+    return match.group(1) + ''.join(f'[{index}]' for index in indices)
+
+
 # ---------------------------------------------------------------------------
 # Instance parser
 # ---------------------------------------------------------------------------
@@ -357,8 +368,14 @@ def parse_instances(body: str, parent_module: str, *, native_checked: bool = Fal
                 continue
             sig = actual_result[0].strip()
             connection_expressions[port] = sig
+            nested_select = _fixed_nested_bit_select(sig)
             sm = re.fullmatch(r'(\w+)(?:\s*\[[^\]]+\])?', sig)
-            if sm:
+            if nested_select is not None:
+                # Retain a closed, fixed nested selection in the population.
+                # Its encoding remains unsupported and is forced UNKNOWN by
+                # run_audit rather than inferred from the formal port bodies.
+                connections[port] = nested_select
+            elif sm:
                 connections[port] = sm.group(1)
             elif not sig:
                 connections[port] = ''
@@ -895,6 +912,48 @@ def _whole_ternary_predicate_spans(body, port):
     return spans
 
 
+_VERILOG_NUMBER = re.compile(
+    r"(?:\b\d+\s*)?'[sS]?[bBoOdDhH][0-9a-fA-F_xXzZ?]+|\b\d+\b")
+
+
+def _producer_one_bit_source_domain(producer, producer_port):
+    """Return source-bound proof that every output value is one-bit sourced.
+
+    A one-bit boundary width alone is insufficient: a producer can serialize a
+    wider encoded word through that bit over time.  Admit the predicate lemma
+    only when each assignment to the output depends solely on native one-bit
+    nets (or literals).  Unknown functions, parameters and wider/select source
+    nets remain outside this deliberately closed proof.
+    """
+    if (_CONFIGURATION.get('native', {}).get('status') != 'MEASURED'
+            or producer.native_widths.get(producer_port) != 1):
+        return None
+    target = re.escape(producer_port)
+    assignments = list(re.finditer(
+        r'(?<![\w.$])(?:assign\s+)?' + target
+        + r'\s*(?:<=|=(?!=))\s*([^;]+);', producer.body,
+        re.MULTILINE | re.DOTALL))
+    if not assignments:
+        return None
+    dependencies = set()
+    for assignment in assignments:
+        expression = _VERILOG_NUMBER.sub(' ', assignment.group(1))
+        # Calls, hierarchical references and concatenations need their own
+        # typed producer contract; width inference here would be a guess.
+        if '$' in expression or '{' in expression or '}' in expression:
+            return None
+        names = set(re.findall(r'(?<![\w$])[A-Za-z_]\w*(?![\w$])', expression))
+        for name in names:
+            if producer.native_widths.get(name) != 1:
+                return None
+            dependencies.add(name)
+    lines = ','.join(str(producer.body.count('\n', 0, item.start()) + 1)
+                     for item in assignments)
+    named = ','.join(sorted(dependencies)) or 'literal-only'
+    return (f'native one-bit source domain at assignment line(s) {lines}; '
+            f'all source nets are one bit: {named}; no wider word projection inferred')
+
+
 def _whole_scalar_predicate(wire, producer, producer_port, consumer,
                             consumer_port, parent, instances):
     """Closed non-word grammar, not a scalar encoding default.
@@ -910,7 +969,8 @@ def _whole_scalar_predicate(wire, producer, producer_port, consumer,
     for either unknown condition (x/z). This proves only Gray/Binary branch
     invariance, never producer encoding, data functionality or control polarity.
     """
-    if (_DISCOVERY_ISSUES or _CONFIGURATION.get('native', {}).get('status') != 'MEASURED'
+    producer_domain = _producer_one_bit_source_domain(producer, producer_port)
+    if (_DISCOVERY_ISSUES or producer_domain is None
             or not re.fullmatch(r'[A-Za-z_]\w*', wire)
             or producer.native_widths.get(producer_port) != 1
             or consumer.native_widths.get(consumer_port) != 1
@@ -942,12 +1002,15 @@ def _whole_scalar_predicate(wire, producer, producer_port, consumer,
     evidence_starts = [m.start() for m in guards] + [start for _, _, start in selectors]
     lines = ','.join(str(consumer.body.count('\n', 0, start) + 1)
                      for start in evidence_starts)
-    return EncodingClassification(
-        'PREDICATE',
-        f'native whole scalar ports/carrier; all references to {consumer_port} '
-        f'are complete if(p)/if(!p) or p?a:b/!p?a:b conditions at body line(s) {lines}; '
-        'Gray/Binary branch invariant over 0,1,x,z; producer encoding unclassified',
-        consumer.body.count('\n', 0, evidence_starts[0]) + 1)
+    return (
+        EncodingClassification(
+            'PREDICATE',
+            f'native whole scalar ports/carrier; all references to {consumer_port} '
+            f'are complete if(p)/if(!p) or p?a:b/!p?a:b conditions at body line(s) {lines}; '
+            'Gray/Binary branch invariant over 0,1,x,z; producer encoding unclassified',
+            consumer.body.count('\n', 0, evidence_starts[0]) + 1),
+        producer_domain,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1265,7 +1328,8 @@ def run_audit(
 
     for vf in vfiles:
         src = strip_comments(vf.read_text(errors='replace'))
-        configured = configured or bool(re.search(r'`|\bgenerate\b', lexical_mask(src)))
+        configured = configured or bool(re.search(
+            r'`|\\|\b(?:parameter|defparam|generate|genvar)\b', lexical_mask(src)))
         try:
             src = _hierarchy.preprocess(src, selected_defines)
         except ValueError as exc:
@@ -1322,27 +1386,34 @@ def run_audit(
         if not prod_module or not cons_module:
             continue
 
-        # Classify producer encoding (how the signal is generated)
-        prod_class = classify_producer_encoding(prod_module.body, prod_port)
+        if _fixed_nested_bit_select(wire) is not None:
+            evidence = (f'unsupported fixed nested bit-select carrier {wire}; '
+                        'retained in interface population')
+            prod_class = EncodingClassification('UNKNOWN', evidence, 0)
+            cons_class = EncodingClassification('UNKNOWN', evidence, 0)
+            predicate = None
+        else:
+            # Classify producer encoding (how the signal is generated)
+            prod_class = classify_producer_encoding(prod_module.body, prod_port)
 
-        # Classify consumer encoding (how the signal is compared)
-        cons_class = classify_consumer_encoding(cons_module.body, cons_port)
+            # Classify consumer encoding (how the signal is compared)
+            cons_class = classify_consumer_encoding(cons_module.body, cons_port)
 
-        # A measured mismatch remains authoritative. A whole scalar boundary
-        # consumed exclusively as a predicate has a finite encoding-invariance
-        # proof; unsupported references remain in the same UNKNOWN population.
-        predicate = _whole_scalar_predicate(
-            wire, prod_module, prod_port, cons_module, cons_port,
-            all_modules[parent_mod], all_instances)
+            # A measured mismatch remains authoritative. A whole scalar boundary
+            # consumed exclusively as a predicate has a finite encoding-invariance
+            # proof; unsupported references remain in the same UNKNOWN population.
+            predicate = _whole_scalar_predicate(
+                wire, prod_module, prod_port, cons_module, cons_port,
+                all_modules[parent_mod], all_instances)
 
         # Determine match status
         if predicate is not None and cons_class.encoding == 'UNKNOWN':
+            predicate_class, producer_domain = predicate
             if prod_class.encoding == 'UNKNOWN':
                 prod_class = EncodingClassification(
                     'BIT_VALUE',
-                    'native whole one-bit boundary value in a predicate-only edge; '
-                    'Gray/Binary data encoding is not inferred', 0)
-            cons_class = predicate
+                    producer_domain + '; Gray/Binary data encoding is not inferred', 0)
+            cons_class = predicate_class
             status = 'MATCH'
             severity = 'INFO'
         elif prod_class.encoding == "UNKNOWN" or cons_class.encoding == "UNKNOWN":
@@ -1438,6 +1509,7 @@ def main():
     out_path = Path(args.out_dir)
     out_path.mkdir(parents=True, exist_ok=True)
     report_file = out_path / 'encoding_audit_report.json'
+    interface_rows = [asdict(r) for r in results]
     report = {
         'report_schema': 'vibeic.interface_encoding_audit.v2',
         'summary': {
@@ -1448,7 +1520,8 @@ def main():
             'top_module': args.top_module,
             'rtl_dir': args.rtl_dir,
         },
-        'interfaces': [asdict(r) for r in results],
+        'interfaces': interface_rows,
+        'interface_population': _population.binding(interface_rows),
         'discovery': {
             'complete': (not _DISCOVERY_ISSUES and not _NOTHING_EXAMINED and
                          source_error is None),
@@ -1464,7 +1537,7 @@ def main():
     if not results:
         applicability = _applicability.assess(
             'interface_encoding_audit', Path(args.rtl_dir),
-            top_module=args.top_module)
+            top_module=args.top_module, configuration=_CONFIGURATION)
         report['applicability'] = applicability
         if (not _DISCOVERY_ISSUES and not _NOTHING_EXAMINED and
                 applicability['state'] == _applicability.NOT_APPLICABLE):

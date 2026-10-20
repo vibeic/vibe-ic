@@ -38,8 +38,11 @@ _COMB_CELLS = frozenset({
     "$sshr", "$shift", "$shiftx", "$lt", "$le", "$eq", "$ne", "$eqx",
     "$nex", "$ge", "$gt", "$add", "$sub", "$mul", "$div", "$mod",
     "$pow", "$neg", "$mux", "$pmux", "$demux", "$bmux", "$slice",
-    "$concat",
+    "$concat", "$buf",
 })
+_MEMORY_CELLS = frozenset({"$mem", "$mem_v2", "$meminit", "$meminit_v2",
+                           "$memrd", "$memrd_v2", "$memwr", "$memwr_v2"})
+_SELECTION_SCHEMA = "vibeic.rtl_audit_selected_configuration.v1"
 
 
 def _scope_text(text: str) -> str:
@@ -126,7 +129,9 @@ def _quoted(path: Path) -> str:
     return '"' + str(path) + '"'
 
 
-def _elaborate(files: list[Path], *, source_sha256: dict[str, str] | None = None) -> dict[str, Any]:
+def _elaborate(files: list[Path], *, root: Path | None = None,
+               source_sha256: dict[str, str] | None = None,
+               selection: dict[str, Any] | None = None) -> dict[str, Any]:
     executable = shutil.which("yosys")
     if executable is None:
         raise ValueError("elaborator_unavailable")
@@ -135,17 +140,51 @@ def _elaborate(files: list[Path], *, source_sha256: dict[str, str] | None = None
         # in the tool would not prove that the census hashes describe the
         # input actually elaborated, even with a later directory recheck.
         snapshots = []
+        snapshot_root = Path(tmp) / "source"
         for index, path in enumerate(files):
             _quoted(path)  # Keep the declared source-path support boundary.
             raw = path.read_bytes()
             if source_sha256 is not None and hashlib.sha256(raw).hexdigest() != source_sha256.get(str(path)):
                 raise ValueError("source_changed_before_elaboration")
-            snapshot = Path(tmp) / f"source_{index}.sv"
+            if root is None:
+                snapshot = Path(tmp) / f"source_{index}.sv"
+            else:
+                snapshot = snapshot_root / path.relative_to(root)
+                snapshot.parent.mkdir(parents=True, exist_ok=True)
             snapshot.write_bytes(raw)
             snapshots.append(snapshot)
         output = Path(tmp) / "design.json"
-        script = ("read_verilog -sv " + " ".join(_quoted(p) for p in snapshots)
-                  + "; hierarchy -check; proc; write_json " + _quoted(output))
+        if selection is None:
+            script = ("read_verilog -sv " + " ".join(_quoted(p) for p in snapshots)
+                      + "; hierarchy -check; proc; write_json " + _quoted(output))
+        else:
+            top = selection["top_module"]
+            compile_files = [p for p in snapshots if p.suffix.lower() in {".v", ".sv"}]
+            if not compile_files:
+                raise ValueError("empty_selected_compilation_units")
+            include_dirs = [snapshot_root / p for p in selection["include_dirs"]]
+            if any(any(c.isspace() for c in str(p)) for p in [*compile_files, *include_dirs]):
+                raise ValueError("unsupported_selected_source_path")
+            if any(p.suffix.lower() == ".sv" for p in compile_files):
+                read = ("read_slang --keep-hierarchy --single-unit "
+                        "--no-synthesis-define --top " + top + " " + " ".join(
+                            ["-G " + p for p in selection["parameters"]] +
+                            ["-D " + d for d in selection["defines"]] +
+                            ["-I " + str(p) for p in include_dirs] +
+                            [str(p) for p in compile_files]))
+                commands = [read]
+            else:
+                read = "read_verilog -sv -nosynthesis " + " ".join(
+                    ["-D" + d for d in selection["defines"]] +
+                    ["-I" + str(p) for p in include_dirs] +
+                    [_quoted(p) for p in compile_files])
+                commands = [read]
+                for parameter in selection["parameters"]:
+                    name, value = parameter.split("=", 1)
+                    commands.append(f"chparam -set {name} {value} {top}")
+            commands += [f"hierarchy -check -top {top}", "proc", "check -assert",
+                         "write_json " + _quoted(output)]
+            script = "; ".join(commands)
         result = subprocess.run([executable, "-Q", "-T", "-p", script],
                                 capture_output=True, text=True, timeout=60)
         if result.returncode != 0 or not output.is_file():
@@ -156,7 +195,7 @@ def _elaborate(files: list[Path], *, source_sha256: dict[str, str] | None = None
     return payload
 
 
-def _module_facts(modules: dict[str, Any]) -> dict[str, Any]:
+def _module_facts(modules: dict[str, Any], *, allow_memory: bool = False) -> dict[str, Any]:
     """Enumerate every emitted module/cell, keeping unknowns blocking."""
     children: set[str] = set()
     child_count = 0
@@ -165,7 +204,7 @@ def _module_facts(modules: dict[str, Any]) -> dict[str, Any]:
         attrs = module.get("attributes", {})
         if any(int(str(attrs.get(k, "0")), 2) for k in ("blackbox", "whitebox")):
             raise ValueError("black_box_module")
-        if module.get("memories"):
+        if module.get("memories") and not allow_memory:
             raise ValueError("unsupported_memory")
         wide += sum(len(n.get("bits", [])) > 1
                     for n in module.get("netnames", {}).values())
@@ -176,13 +215,239 @@ def _module_facts(modules: dict[str, Any]) -> dict[str, Any]:
             if kind in modules:
                 child_count += 1
                 children.add(kind)
-            elif kind not in _STATE_CELLS | _COMB_CELLS:
+            elif kind not in _STATE_CELLS | _COMB_CELLS | (
+                    _MEMORY_CELLS if allow_memory else frozenset()):
                 raise ValueError("unsupported_or_unresolved_cell")
     roots = sorted(set(modules) - children)
     if len(roots) != 1:
         raise ValueError("ambiguous_or_recursive_hierarchy")
     return {"modules": sorted(modules), "top_module": roots[0],
             "child_instances": child_count, "wide_data_nets_and_ports": wide}
+
+
+def _memory_facts(texts: list[str], modules: dict[str, Any]) -> dict[str, Any]:
+    """Bind a narrow literal unpacked-memory source census to native memories."""
+    import module_port_audit as ports
+
+    declaration = re.compile(
+        r"\b(?:reg|logic|wire)\s+(?:signed\s+)?"
+        r"\[\s*(\d+)\s*:\s*(\d+)\s*\]\s*([A-Za-z_]\w*)\s*"
+        r"\[\s*(\d+)\s*:\s*(\d+)\s*\]\s*;")
+    broad = re.compile(r"\b(?:reg|logic|wire|integer|[A-Za-z_]\w*)\s+"
+                       r"(?:signed\s+)?(?:\[[^\]]+\]\s*)?"
+                       r"[A-Za-z_]\w*\s*\[")
+    source: dict[str, dict[str, dict[str, int]]] = {}
+    for text in texts:
+        issues = []
+        for module, _, body_start, end in ports.module_regions(text, issues):
+            body = text[body_start:end]
+            matches = list(declaration.finditer(body))
+            scrubbed = list(body)
+            for match in matches:
+                scrubbed[match.start():match.end()] = " " * (match.end() - match.start())
+                msb, lsb, name, high, low = match.groups()
+                row = {"width": abs(int(msb) - int(lsb)) + 1,
+                       "size": abs(int(high) - int(low)) + 1,
+                       "start_offset": min(int(high), int(low))}
+                if row["width"] * row["size"] > _MAX_SOURCE_BYTES * 8:
+                    raise ValueError("unsupported_memory_size")
+                if name in source.setdefault(module, {}):
+                    raise ValueError("duplicate_memory_declaration")
+                source[module][name] = row
+            if broad.search("".join(scrubbed)):
+                raise ValueError("unsupported_memory_declaration")
+        if issues:
+            raise ValueError("incomplete_memory_module_census")
+
+    native: dict[str, dict[str, dict[str, int]]] = {}
+    for module, payload in modules.items():
+        memories = payload.get("memories", {})
+        if not isinstance(memories, dict):
+            raise ValueError("malformed_native_memory_census")
+        for name, row in memories.items():
+            if not isinstance(row, dict) or any(type(row.get(key)) is not int
+                                                for key in ("width", "size", "start_offset")):
+                raise ValueError("malformed_native_memory")
+            native.setdefault(module, {})[name] = {
+                key: row[key] for key in ("width", "size", "start_offset")}
+        for cell in payload.get("cells", {}).values():
+            if cell.get("type") not in _MEMORY_CELLS:
+                continue
+            memid = cell.get("parameters", {}).get("MEMID")
+            if not isinstance(memid, str) or memid.lstrip("\\") not in memories:
+                raise ValueError("unbound_native_memory_cell")
+    source = {m: rows for m, rows in source.items() if rows}
+    native = {m: rows for m, rows in native.items() if rows}
+    if not source or source != native:
+        raise ValueError("source_native_memory_census_disagrees")
+    return {"modules": source,
+            "memory_bits": sum(row["width"] * row["size"]
+                               for memories in source.values() for row in memories.values())}
+
+
+def _relative_directory(root: Path, value: Any) -> str:
+    if not isinstance(value, str):
+        raise ValueError("malformed_selected_include_directory")
+    path = Path(value).absolute()
+    if not path.is_dir() or path.is_symlink() or path.resolve() != path:
+        raise ValueError("selected_include_directory_missing_or_symlinked")
+    try:
+        relative = path.relative_to(root)
+    except ValueError as exc:
+        raise ValueError("selected_include_directory_outside_source_root") from exc
+    return relative.as_posix()
+
+
+def _selected_source(texts: list[str], configuration: Any) -> bool:
+    if isinstance(configuration, dict) and any(configuration.get(key)
+                                               for key in ("defines", "parameters",
+                                                           "include_dirs")):
+        return True
+    return any(re.search(r"`|\\|\b(?:parameter|defparam|generate|genvar)\b", text)
+               for text in texts)
+
+
+def _selection_from_configuration(configuration: Any, root: Path,
+                                  sources: list[Path], records: list[dict[str, Any]],
+                                  top_module: str | None, required: bool
+                                  ) -> dict[str, Any] | None:
+    """Validate the producer's retained native capsule and normalize its inputs."""
+    if not isinstance(configuration, dict) or configuration.get("state") != "MEASURED":
+        if required:
+            raise ValueError("selected_native_context_unmeasured")
+        return None
+    top = configuration.get("top")
+    if not isinstance(top, str) or not re.fullmatch(r"[A-Za-z_]\w*", top):
+        raise ValueError("invalid_selected_top")
+    if top_module is not None and top != top_module:
+        raise ValueError("selected_top_mismatch")
+    defines = configuration.get("defines")
+    parameters = configuration.get("parameters")
+    declared_dirs = configuration.get("include_dirs")
+    if (not isinstance(defines, list) or
+            any(not isinstance(item, str) or
+                not re.fullmatch(r"[A-Za-z_]\w*(?:=[^\s;\"\\]+)?", item)
+                for item in defines) or len(defines) != len(set(defines))):
+        raise ValueError("invalid_selected_defines")
+    if (not isinstance(parameters, list) or
+            any(not isinstance(item, str) or
+                not re.fullmatch(r"[A-Za-z_]\w*=[0-9+-]+", item)
+                for item in parameters) or len(parameters) != len(set(parameters))):
+        raise ValueError("invalid_selected_parameters")
+    if not isinstance(declared_dirs, list):
+        raise ValueError("invalid_selected_include_directories")
+    declared = [_relative_directory(root, item) for item in declared_dirs]
+    if len(declared) != len(set(declared)):
+        raise ValueError("duplicate_selected_include_directory")
+    if not required:
+        if defines or parameters or declared:
+            raise ValueError("selected_context_not_accounted")
+        return None
+
+    native = configuration.get("native")
+    if (not isinstance(native, dict) or native.get("status") != "MEASURED" or
+            native.get("native_returncode") != 0 or
+            native.get("transport_returncode") != 0 or native.get("top") != top or
+            native.get("defines") != defines or native.get("parameters") != parameters):
+        raise ValueError("selected_native_context_unmeasured")
+    expected_files = sorted(str(path) for path in sources
+                            if path.suffix.lower() in {".v", ".sv"})
+    if sorted(native.get("files", [])) != expected_files:
+        raise ValueError("selected_native_source_set_incomplete")
+    effective_dirs = sorted(set(declared) | {
+        path.parent.relative_to(root).as_posix() for path in sources
+        if path.suffix.lower() in {".v", ".sv"}})
+    native_dirs = native.get("include_dirs")
+    if (not isinstance(native_dirs, list) or
+            sorted(_relative_directory(root, item) for item in native_dirs) != effective_dirs):
+        raise ValueError("selected_native_include_set_mismatch")
+    expected_hashes = {str(path): record["sha256"]
+                       for path, record in zip(sources, records)}
+    if native.get("input_sha256") != expected_hashes:
+        raise ValueError("selected_native_input_digest_mismatch")
+    if not re.fullmatch(r"[0-9a-f]{64}", str(native.get("native_json_sha256", ""))):
+        raise ValueError("selected_native_output_digest_missing")
+
+    context_path = configuration.get("native_context")
+    context_digest = configuration.get("native_context_sha256")
+    script_row = configuration.get("native_script")
+    if (not isinstance(context_path, str) or not isinstance(context_digest, str) or
+            not isinstance(script_row, dict) or
+            not all(isinstance(script_row.get(key), str)
+                    for key in ("path", "sha256", "text"))):
+        raise ValueError("selected_native_capsule_missing")
+    context_file, script_file = Path(context_path), Path(script_row["path"])
+    try:
+        context_raw, script_raw = context_file.read_bytes(), script_file.read_bytes()
+        context_payload = json.loads(context_raw)
+    except (OSError, ValueError) as exc:
+        raise ValueError("selected_native_capsule_unreadable") from exc
+    if (hashlib.sha256(context_raw).hexdigest() != context_digest or
+            context_payload != native or
+            hashlib.sha256(script_raw).hexdigest() != script_row["sha256"] or
+            script_raw.decode("utf-8", errors="strict") != script_row["text"]):
+        raise ValueError("selected_native_capsule_stale")
+    return {"schema": _SELECTION_SCHEMA, "top_module": top,
+            "defines": defines, "parameters": parameters,
+            "declared_include_dirs": sorted(declared),
+            "include_dirs": effective_dirs}
+
+
+def _validate_selection(selection: Any, root: Path) -> dict[str, Any]:
+    if not isinstance(selection, dict) or set(selection) != {
+            "schema", "top_module", "defines", "parameters",
+            "declared_include_dirs", "include_dirs"}:
+        raise ValueError("malformed_selected_configuration")
+    if selection.get("schema") != _SELECTION_SCHEMA:
+        raise ValueError("unsupported_selected_configuration_schema")
+    top = selection.get("top_module")
+    defines, parameters = selection.get("defines"), selection.get("parameters")
+    declared, effective = (selection.get("declared_include_dirs"),
+                           selection.get("include_dirs"))
+    if not isinstance(top, str) or not re.fullmatch(r"[A-Za-z_]\w*", top):
+        raise ValueError("invalid_selected_top")
+    if (not isinstance(defines, list) or len(defines) != len(set(defines)) or
+            any(not isinstance(item, str) or
+                not re.fullmatch(r"[A-Za-z_]\w*(?:=[^\s;\"\\]+)?", item)
+                for item in defines)):
+        raise ValueError("invalid_selected_defines")
+    if (not isinstance(parameters, list) or len(parameters) != len(set(parameters)) or
+            any(not isinstance(item, str) or
+                not re.fullmatch(r"[A-Za-z_]\w*=[0-9+-]+", item)
+                for item in parameters)):
+        raise ValueError("invalid_selected_parameters")
+    if (not isinstance(declared, list) or not isinstance(effective, list) or
+            any(not isinstance(item, str) for item in [*declared, *effective]) or
+            sorted(set(declared)) != declared or sorted(set(effective)) != effective or
+            not set(declared).issubset(effective)):
+        raise ValueError("invalid_selected_include_directories")
+    for item in effective:
+        path = root / item
+        if (Path(item).is_absolute() or ".." in Path(item).parts or not path.is_dir() or
+                path.is_symlink() or path.resolve() != path):
+            raise ValueError("selected_include_directory_missing_or_symlinked")
+    return selection
+
+
+def receipt_configuration_matches(claim: Any, configuration: Any,
+                                  root: Path | None) -> tuple[bool, str]:
+    """Bind a producer's selected native capsule to the applicability claim."""
+    if root is None:
+        return False, "consumer_source_root_undeclared"
+    try:
+        root = Path(root).absolute()
+        sources, records, texts = _census(root)
+        required = _selected_source(texts, configuration)
+        measured = _selection_from_configuration(
+            configuration, root, sources, records,
+            claim.get("facts", {}).get("top_module") if isinstance(claim, dict) else None,
+            required)
+        expected = claim.get("selection") if isinstance(claim, dict) else None
+        if measured != expected:
+            raise ValueError("selected_configuration_or_capsule_drift")
+        return True, "selected_configuration_bound" if required else "plain_configuration_bound"
+    except (OSError, ValueError, UnicodeError, KeyError, TypeError) as exc:
+        return False, str(exc) if isinstance(exc, ValueError) else type(exc).__name__
 
 
 def _fixed_localparam_facts(texts: list[str], modules: dict[str, Any]) -> dict[str, Any]:
@@ -324,7 +589,8 @@ def _has_state_recurrence(module: dict[str, Any]) -> bool:
 
 
 def assess(auditor: str, root: Path, *, files: Iterable[Path] | None = None,
-           top_module: str | None = None) -> dict[str, Any]:
+           top_module: str | None = None, configuration: Any = None,
+           selected_configuration: Any = None) -> dict[str, Any]:
     """Build a reproducible absence claim or an explicit blocking UNKNOWN."""
     result: dict[str, Any] = {"schema": SCHEMA, "auditor": auditor,
                              "state": UNKNOWN}
@@ -339,20 +605,31 @@ def assess(auditor: str, root: Path, *, files: Iterable[Path] | None = None,
         result["source"] = {"root": str(root), "files": records,
                             "sha256": hashlib.sha256(json.dumps(
                                 records, sort_keys=True).encode()).hexdigest()}
-        # Never turn default-configuration elision into a universal absence.
-        if any(re.search(r"`|\\|\b(?:parameter|defparam|generate|genvar)\b", t)
-               for t in texts):
+        requires_selection = _selected_source(texts, configuration)
+        if selected_configuration is not None:
+            selection = _validate_selection(selected_configuration, root)
+            requires_selection = True
+        else:
+            selection = _selection_from_configuration(
+                configuration, root, sources, records, top_module, requires_selection)
+        if requires_selection and selection is None:
             raise ValueError("unsupported_configuration_or_preprocessing")
+        if selection is not None:
+            if top_module is not None and selection["top_module"] != top_module:
+                raise ValueError("selected_top_mismatch")
+            result["selection"] = selection
         if auditor != "interface_encoding_audit" and any(
                 re.search(r"\blocalparam\b", t) for t in texts):
             raise ValueError("unsupported_configuration_or_preprocessing")
         # Frontends can drop an unused unpacked memory before writing JSON.
         # Its absence there is not a complete census of the source structure.
-        if any(re.search(r"\b(?:reg|logic|wire)\s+(?:signed\s+)?"
-                         r"(?:\[[^\]]+\]\s*)?[A-Za-z_]\w*\s*\[", t)
-               or re.search(r"\]\s*[A-Za-z_]\w*\s*\[", t) for t in texts):
+        source_memory = any(re.search(
+            r"\b(?:reg|logic|wire)\s+(?:signed\s+)?"
+            r"(?:\[[^\]]+\]\s*)?[A-Za-z_]\w*\s*\[", t)
+            or re.search(r"\]\s*[A-Za-z_]\w*\s*\[", t) for t in texts)
+        if auditor != "interface_encoding_audit" and source_memory:
             raise ValueError("unsupported_memory")
-        modules = _elaborate(sources, source_sha256={
+        modules = _elaborate(sources, root=root, selection=selection, source_sha256={
             str(path): record["sha256"] for path, record in zip(sources, records)
         })["modules"]
         # The tool read immutable snapshots of the census bytes. Reject live
@@ -361,7 +638,10 @@ def assess(auditor: str, root: Path, *, files: Iterable[Path] | None = None,
         after_sources, after_records, _ = _census(root)
         if after_sources != sources or after_records != records:
             raise ValueError("source_changed_during_elaboration")
-        facts = _module_facts(modules)
+        facts = _module_facts(modules, allow_memory=auditor == "interface_encoding_audit")
+        if auditor == "interface_encoding_audit" and (
+                source_memory or any(module.get("memories") for module in modules.values())):
+            facts["internal_memories"] = _memory_facts(texts, modules)
         if any(re.search(r"\blocalparam\b", t) for t in texts):
             facts["fixed_internal_constants"] = _fixed_localparam_facts(texts, modules)
         if top_module is not None and top_module != facts["top_module"]:
@@ -419,7 +699,8 @@ def verify(claim: Any, auditor: str, root: Path | None,
         return False, "consumer_source_root_undeclared"
     if not isinstance(claim, dict) or claim.get("state") != NOT_APPLICABLE:
         return False, "no_structural_not_applicable_claim"
-    measured = assess(auditor, root, top_module=top_module)
+    measured = assess(auditor, root, top_module=top_module,
+                      selected_configuration=claim.get("selection"))
     if measured.get("state") != NOT_APPLICABLE:
         return False, "remeasurement_" + measured.get("reason", UNKNOWN)
     if claim != measured:

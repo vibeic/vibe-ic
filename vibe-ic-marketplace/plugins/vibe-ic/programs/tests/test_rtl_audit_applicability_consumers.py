@@ -198,7 +198,7 @@ def test_renamed_and_case_encoded_state_recurrence_is_not_counter_absence(tmp_pa
 @pytest.mark.parametrize("text", [
     "module storage(input clk, output value); missing child(.clk(clk), .value(value)); endmodule",
     "(* blackbox *) module storage(input clk, output value); endmodule",
-    "module storage #(parameter WIDTH = 1)(input [WIDTH-1:0] sample, output [WIDTH-1:0] value); assign value = sample; endmodule",
+    "module storage #(parameter WIDTH = MISSING)(input [WIDTH-1:0] sample, output [WIDTH-1:0] value); assign value = sample; endmodule",
     "`include \"missing.svh\"\nmodule storage(); endmodule",
     "module storage(input clk); /* unterminated",
     "module storage(input clk); wire [7:0] memory [0:3]; endmodule",
@@ -370,7 +370,9 @@ def _interface_constant_receipt(tmp_path, case, monkeypatch):
 @pytest.mark.parametrize('case', _INTERFACE_CONSTANTS)
 def test_fixed_internal_constant_public_interface_absence(tmp_path, monkeypatch, case):
     source, rtl, evidence, run, report, findings, _ = _interface_constant_receipt(tmp_path, case, monkeypatch)
-    expected = 'NOT_APPLICABLE' if case in {'literal', 'ansi_unused_localparam', 'fixed_localparam'} else 'NOT_MEASURED'
+    expected = 'NOT_APPLICABLE' if case in {
+        'literal', 'ansi_unused_localparam', 'fixed_localparam', 'external_parameter'
+    } else 'NOT_MEASURED'
     # The literal and internal-constant positives close an absent subject;
     # neither the producer nor the unchanged P0 consumer labels that PASS.
     assert [f.state for f in findings] == [expected], (run.stdout, run.stderr, report, findings)
@@ -392,11 +394,13 @@ def test_fixed_internal_constant_public_interface_absence(tmp_path, monkeypatch,
         assert proof['facts']['modules'] == ['top'] and proof['facts']['child_instances'] == 0
         assert proof['structural_absence']['scanned'] == 1
         assert proof['source']['files'][0]['size_bytes'] == len(rtl.read_bytes())
-        if case != 'literal':
+        if case in {'ansi_unused_localparam', 'fixed_localparam'}:
             constants = proof['facts']['fixed_internal_constants']['top']
             assert list(constants['values'].values()) == [4], constants
             assert constants['ports'] == {'a': {'direction': 'input', 'width': 4},
                                           'y': {'direction': 'output', 'width': 4}}
+        if case == 'external_parameter':
+            assert proof['selection']['top_module'] == 'top'
     else:
         assert report['summary']['verdict'] == 'INCONCLUSIVE', report
         if case == 'child_instance':
@@ -418,3 +422,188 @@ def test_fixed_internal_constant_receipt_requires_current_complete_source(tmp_pa
         {'id': 'P0_interface_encoding_audit', 'auditor': 'interface_encoding_audit'}, '',
         checker.CheckContext(output_path=tmp_path / 'review.md', evidence_dirs=[evidence], rtl_source_root=source))
     assert [f.state for f in findings] == ['NOT_MEASURED'], findings
+
+
+# #3372/#3374: the same constructor owns internal-memory and selected-native
+# zero-boundary evidence.  Every case runs the public producer and the actual
+# receipt consumer; the direct native reads qualify the two boundary controls.
+_MEMORY_PORTS = ('input wire clk, input wire we, input wire [1:0] addr, '
+                 'input wire [3:0] data, output wire [3:0] q')
+_MEMORY_RTL = (f'module top({_MEMORY_PORTS});\n'
+               '  reg [3:0] bank [0:3];\n'
+               '  always @(posedge clk) if (we) bank[addr] <= data;\n'
+               '  assign q = bank[addr];\nendmodule\n')
+_DIRECTIVE_RTL = ('`default_nettype none\n'
+                  'module unit(input a, output z); assign z = a; endmodule\n'
+                  '`default_nettype wire\n')
+_PARAMETER_RTL = ('module leaf(input a, output z); assign z = a; endmodule\n'
+                  'module unit #(parameter ENABLE_CHILD=0)(input a, output z);\n'
+                  'generate if (ENABLE_CHILD) begin: g\n'
+                  '  leaf u(.a(a), .z(z));\n'
+                  'end else begin: n\n'
+                  '  assign z = a;\n'
+                  'end endgenerate\nendmodule\n')
+_DEFINE_RTL = ('module leaf(input a, output z); assign z = a; endmodule\n'
+               'module unit(input a, output z);\n'
+               '`ifdef ENABLE_CHILD\n'
+               '  leaf u(.a(a), .z(z));\n'
+               '`else\n'
+               '  assign z = a;\n'
+               '`endif\nendmodule\n')
+
+
+def _interface_absence_case(tmp_path, text, *, top='unit', suffix='.sv', options=()):
+    from dataclasses import asdict
+    sys.path.insert(0, str(PLUGIN / '_shared'))
+    import skill_compliance_check as checker
+
+    rtl = tmp_path / 'rtl'
+    rtl.mkdir()
+    source = rtl / ('source' + suffix)
+    source.write_text(text)
+    evidence = tmp_path / 'evidence'
+    selected = [str(rtl) if value == '{rtl}' else value for value in options]
+    run = subprocess.run([
+        sys.executable, '-B', str(PRODUCERS / 'interface_encoding_audit.py'),
+        '--rtl-dir', str(rtl), '--top-module', top, '--out-dir', str(evidence),
+        *selected], text=True, capture_output=True)
+    report = json.loads((evidence / FILENAMES[0]).read_text())
+    findings = checker._cc_audit_receipt_evidence(
+        {'id': 'P0_interface_encoding_audit', 'auditor': 'interface_encoding_audit'}, '',
+        checker.CheckContext(output_path=tmp_path / 'review.md', evidence_dirs=[evidence],
+                             rtl_source_root=rtl))
+    (tmp_path / 'producer.stdout').write_text(run.stdout)
+    (tmp_path / 'producer.stderr').write_text(run.stderr)
+    (tmp_path / 'consumer.json').write_text(json.dumps(
+        [asdict(finding) for finding in findings], indent=2) + '\n')
+    return rtl, source, evidence, run, report, findings, checker
+
+
+def _native_graph(tmp_path, source, top):
+    graph = tmp_path / 'native-graph.json'
+    run = subprocess.run([
+        'yosys', '-Q', '-T', '-p',
+        f'read_verilog -sv "{source}"; proc; write_json "{graph}"; '
+        f'hierarchy -check -top {top}'], text=True, capture_output=True)
+    (tmp_path / 'native.stdout').write_text(run.stdout)
+    (tmp_path / 'native.stderr').write_text(run.stderr)
+    return run, json.loads(graph.read_text())
+
+
+def test_supported_internal_memory_closes_only_the_absent_interface_subject(tmp_path):
+    rtl, source, _, run, report, findings, _ = _interface_absence_case(
+        tmp_path, _MEMORY_RTL, top='top', suffix='.v')
+    assert run.returncode == 0, run.stdout + run.stderr
+    assert report['discovery'] == {'complete': True, 'modules_discovered': 1,
+                                   'instances_discovered': 0, 'issues': []}
+    assert report['summary']['verdict'] == 'NOT_APPLICABLE'
+    assert [finding.state for finding in findings] == ['NOT_APPLICABLE']
+    proof = report['applicability']
+    assert proof['facts']['internal_memories']['memory_bits'] == 16
+    native, design = _native_graph(tmp_path, source, 'top')
+    assert native.returncode == 0, native.stderr
+    assert sum(row['width'] * row['size']
+               for module in design['modules'].values()
+               for row in module.get('memories', {}).values()) == 16
+    assert not [cell for module in design['modules'].values()
+                for cell in module.get('cells', {}).values()
+                if cell['type'] in design['modules']]
+
+
+@pytest.mark.parametrize('kind', ['real_child', 'unresolved_child'])
+def test_memory_shape_does_not_close_real_or_unresolved_boundaries(tmp_path, kind):
+    if kind == 'real_child':
+        text = ('module leaf(input wire [3:0] data, output wire [3:0] q); '
+                'assign q=data; endmodule\n' +
+                f'module top({_MEMORY_PORTS}); leaf u_leaf(.data(data), .q(q)); endmodule\n')
+    else:
+        text = (f'module top({_MEMORY_PORTS}); '
+                'absent_leaf u_leaf(.data(data), .q(q)); endmodule\n')
+    _, source, _, run, report, findings, _ = _interface_absence_case(
+        tmp_path, text, top='top', suffix='.v')
+    native, design = _native_graph(tmp_path, source, 'top')
+    assert [finding.state for finding in findings] == ['NOT_MEASURED']
+    if kind == 'real_child':
+        assert run.returncode == native.returncode == 0
+        children = [cell for module in design['modules'].values()
+                    for cell in module.get('cells', {}).values()
+                    if cell['type'] in design['modules']]
+        assert len(children) == 1
+    else:
+        assert run.returncode == 2 and native.returncode == 1
+        assert native.stderr.strip() == (
+            "ERROR: Module `\\absent_leaf' referenced in module `\\top' "
+            "in cell `\\u_leaf' is not part of the design.")
+        assert report['summary']['verdict'] == 'INCONCLUSIVE'
+
+
+@pytest.mark.parametrize(('case', 'text', 'options'), [
+    ('directive', _DIRECTIVE_RTL, ()),
+    ('parameter_default', _PARAMETER_RTL, ()),
+    ('parameter_selected_zero', _PARAMETER_RTL, ('-P', 'ENABLE_CHILD=0')),
+    ('define_selected_off', _DEFINE_RTL, ()),
+    ('include_context', 'module unit(input a, output z); assign z=a; endmodule\n',
+     ('-I', '{rtl}')),
+])
+def test_selected_native_zero_edge_is_structural_not_applicable(
+        tmp_path, case, text, options):
+    _, _, _, run, report, findings, _ = _interface_absence_case(
+        tmp_path, text, options=options)
+    assert run.returncode == 0, (case, run.stdout, run.stderr)
+    assert report['discovery']['complete'] is True
+    assert report['summary']['total_interfaces'] == 0
+    assert report['summary']['verdict'] == 'NOT_APPLICABLE'
+    assert [finding.state for finding in findings] == ['NOT_APPLICABLE']
+    selection = report['applicability']['selection']
+    assert selection['top_module'] == 'unit' and selection['include_dirs'] == ['.']
+    assert report['configuration']['native']['status'] == 'MEASURED'
+
+
+def test_selected_define_that_activates_a_child_never_becomes_absence(tmp_path):
+    _, _, _, run, report, findings, _ = _interface_absence_case(
+        tmp_path, _DEFINE_RTL, options=('-D', 'ENABLE_CHILD'))
+    assert run.returncode == 0, run.stdout + run.stderr
+    assert report['discovery']['complete'] is True
+    assert report['discovery']['instances_discovered'] == 1
+    assert report['summary']['total_interfaces'] > 0
+    assert report['summary']['verdict'] == 'INCONCLUSIVE'
+    assert [finding.state for finding in findings] == ['NOT_MEASURED']
+    assert report.get('applicability') is None
+
+
+@pytest.mark.parametrize('mutation', [
+    'source', 'parameter_context', 'define_context', 'include_context',
+    'missing_native_capsule', 'stale_native_capsule',
+])
+def test_selected_native_receipt_drift_remains_not_measured(tmp_path, mutation):
+    if mutation == 'parameter_context':
+        text, options = _PARAMETER_RTL, ('-P', 'ENABLE_CHILD=0')
+    elif mutation == 'define_context':
+        text, options = _DIRECTIVE_RTL, ('-D', 'FEATURE=0')
+    elif mutation == 'include_context':
+        text, options = _DIRECTIVE_RTL, ('-I', '{rtl}')
+    else:
+        text, options = _DIRECTIVE_RTL, ()
+    rtl, source, evidence, _, report, findings, checker = _interface_absence_case(
+        tmp_path, text, options=options)
+    assert [finding.state for finding in findings] == ['NOT_APPLICABLE']
+    if mutation == 'source':
+        source.write_text(source.read_text() + '\n')
+    else:
+        if mutation == 'parameter_context':
+            report['configuration']['parameters'] = ['ENABLE_CHILD=1']
+        elif mutation == 'define_context':
+            report['configuration']['defines'] = ['FEATURE=1']
+        elif mutation == 'include_context':
+            report['configuration']['include_dirs'] = []
+        elif mutation == 'missing_native_capsule':
+            report['configuration'].pop('native')
+        else:
+            context = Path(report['configuration']['native_context'])
+            context.write_text(context.read_text() + '\n')
+        (evidence / FILENAMES[0]).write_text(json.dumps(report, indent=2))
+    findings = checker._cc_audit_receipt_evidence(
+        {'id': 'P0_interface_encoding_audit', 'auditor': 'interface_encoding_audit'}, '',
+        checker.CheckContext(output_path=tmp_path / 'review.md', evidence_dirs=[evidence],
+                             rtl_source_root=rtl))
+    assert [finding.state for finding in findings] == ['NOT_MEASURED']

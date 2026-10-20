@@ -101,6 +101,9 @@ import subprocess
 import sys
 from pathlib import Path
 import _path_layout as _pl
+# #3377: use the report owner's INPUT-context classification for both fresh
+# discovery and replayed auto-seeded aliases; custom patterns keep authority.
+from phase1_coverage_report_gen import _pin_alias_literals, _is_auto_pin_alias
 
 # BACKLOG-v13 Wave 7 — binary-doc extensions handled by
 # `_ensure_extracted_docs` so the gate sees the same inputs as the
@@ -476,7 +479,10 @@ def _reconcile_with_docs(project: Path, patterns: dict) -> dict:
     and broke 3 tests, not from caution.
 
     For an auto-seeded literal, keep it only while its own source document
-    still contains it. A literal the documents no longer make is outside
+    still declares it. Auto-seeded pin aliases additionally require current
+    INPUT naming context through the report owner's classifier; mere presence
+    of a slash phrase cannot resurrect an old regex-only seed.
+    A literal the documents no longer make is outside
     what this gate measures ("did every literal in the docs reach a typed
     field"), so removing it restores the gate's stated semantics rather
     than relaxing them.
@@ -495,12 +501,14 @@ def _reconcile_with_docs(project: Path, patterns: dict) -> dict:
         except Exception:
             out[filename] = tuples
             continue
+        aliases = set(_pin_alias_literals(text))
         kept = [(lit, lbl) for lit, lbl in tuples
-                if not _is_auto_seeded(lbl) or lit in text]
+                if not _is_auto_seeded(lbl)
+                or (lit in text and (not _is_auto_pin_alias(lbl) or lit in aliases))]
         dropped = len(tuples) - len(kept)
         if dropped:
             print(f"INFO — reconcile: dropped {dropped} pinned literal(s) "
-                  f"absent from {filename} (stale pattern cache)",
+                  f"no longer declared in {filename} (stale pattern cache)",
                   file=sys.stderr)
         if kept:
             out[filename] = kept
@@ -605,6 +613,17 @@ def _autodiscover_patterns(project: Path, *, persist: bool = True) -> dict:
                 hits += 1
                 if hits >= _AUTODISCOVERY_PER_REGEX_CAP:
                     break
+        # Keep the mandatory alias family aligned with the report. Do not
+        # condition discovery on whether the generated docs contain the alias.
+        alias_hits = 0
+        for tok in _pin_alias_literals(text):
+            if tok in seen or any(c in tok for c in "\n\r\t"):
+                continue
+            seen.add(tok)
+            items.append((tok, "auto-discovered (pin_alias)"))
+            alias_hits += 1
+            if alias_hits >= _AUTODISCOVERY_PER_REGEX_CAP:
+                break
         # Wave 31 (v0.119.63) — full_file_scan_fix: ensure 100% of
         # input/docs/ files appear in the coverage tally even when zero
         # auto-discovered patterns fire (rig_spec excluded).

@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "_shared"))
 
 import _rtl_audit_applicability as applicability  # noqa: E402
+import _interface_encoding_population as encoding_population  # noqa: E402
 import interface_encoding_audit as interface_audit  # noqa: E402
 import rtl_hygiene_lint as hygiene  # noqa: E402
 import skill_compliance_check as compliance  # noqa: E402
@@ -33,6 +34,8 @@ def _interface_report(rtl: Path, *, status="MATCH", verdict="PASS",
                       "issues": [] if discovery_complete else ["incomplete"]},
         "source": source,
     }
+    payload['interface_population'] = encoding_population.binding(
+        payload['interfaces'])
     return payload
 
 
@@ -236,7 +239,7 @@ def test_reverse_mutations_make_each_property_control_red(tmp_path, monkeypatch,
                             'mask_attributes_only', lambda src: src)
         control = test_ansi_attribute_output_keeps_mismatch_population
     else:
-        def bare_named_driver_regex(src):
+        def bare_named_driver_regex(src, uncertain=None):
             return {match.group(2): match.group(1) for match in re.finditer(
                 r'\.(\w+)\s*\(\s*(\w+)\s*\)', src)}
         monkeypatch.setattr(hygiene, 'collect_instance_connections', bare_named_driver_regex)

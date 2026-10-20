@@ -94,6 +94,7 @@ try:
 except Exception:  # pragma: no cover — never let a helper import break the gate
     _tbg = None
 import _l10_execution as _l10x
+import _dv_milestone_assessment as _dvm
 import l10_coverage_goal_classify as _cgc
 
 
@@ -1675,6 +1676,7 @@ def evaluate(
     project_root: Optional[str] = None,
     producer_scaffold_kinds: Optional[frozenset] = None,
     execution_record: Optional[Dict[str, Any]] = None,
+    milestone_assessment: Optional[Dict[str, Any]] = None,
 ) -> Tuple[List[Dict[str, Any]], int, int]:
     """Return (results, ok_count, fail_count) for L10 vectors/checklists.
 
@@ -1782,10 +1784,12 @@ def evaluate(
 
         # ORGANIC #808 — verification_checklist (DV-milestone) rows are scoped
         # OUT of the TB-evidence demand: a DV process milestone is not
-        # TB-traceable, so credit the row's CARRIED status instead. A
-        # satisfied/deferred row (Done/N/A/Waived/Pass) is credited as ok; a
-        # blank/None-or-explicit-FAIL row surfaces as a checklist gap (NOT a
-        # TB-evidence failure, so it can never mask a missing digital TB).
+        # TB-traceable. Preserve the imported source status, and when a
+        # separate current assessment is bound to the exact source row, L10,
+        # RTL context and evidence bytes, let that assessment describe the
+        # current run. A current PASS may close a historically blank row; a
+        # current FAIL/INCOMPLETE may reopen a historically Done row. Missing,
+        # stale or malformed current evidence never changes the source result.
         # §4.05 NO-LEAK: only kind=verification_checklist reaches this branch —
         # functional_vector / functional / cmd_response cases fall through to the
         # unchanged TB-evidence logic below.
@@ -1799,8 +1803,32 @@ def evaluate(
         # carries no digital signal; a digital case falls through and still
         # FAILs without TB evidence.
         if is_verification_checklist(c) and not _has_digital_signal(c, is_cmd_rsp):
-            cls = classify_checklist(c)
-            st = checklist_status(c) or "none"
+            source_cls = classify_checklist(c)
+            source_status = checklist_status(c)
+            current_verdict, current_reason, current_row = _dvm.row_state(
+                case_id, milestone_assessment)
+            if current_verdict == _dvm.PASS:
+                cls = "satisfied"
+            elif current_verdict in (_dvm.FAIL, _dvm.INCOMPLETE):
+                cls = "checklist_gap"
+            else:
+                cls = source_cls
+            st = source_status or "none"
+            current = {
+                "available": current_verdict is not None,
+                "verdict": current_verdict,
+                "reason": current_reason,
+                "producer": (current_row or {}).get("producer"),
+                "acceptance_condition": ((current_row or {}).get(
+                    "acceptance_condition")),
+                "signed_by": (current_row or {}).get("signed_by"),
+                "review": (current_row or {}).get("review"),
+                "evidence": (current_row or {}).get("evidence") or [],
+                "refusals": (current_row or {}).get("refusals") or [],
+            }
+            basis = (f"current assessment {current_verdict}"
+                     if current_verdict is not None
+                     else f"imported source status={st}")
             if cls == "satisfied":
                 results.append({
                     "id": case_id,
@@ -1808,8 +1836,7 @@ def evaluate(
                     "kind": case_kind(c),
                     "evidence": [
                         f"verification_checklist DV-milestone satisfied "
-                        f"(status={st}); not TB-traceable, credited by carried "
-                        f"status (ORGANIC #808)"
+                        f"({basis}); not TB-traceable (ORGANIC #808; #3381)"
                     ],
                     "pass": True,
                     "status": "pass",
@@ -1818,6 +1845,9 @@ def evaluate(
                     "review_required": False,
                     "capability_gap": None,
                     "producer_scaffold_scope": _scaffold_scope(c),
+                    "source_status": source_status or None,
+                    "source_classification": source_cls,
+                    "current_assessment": current,
                 })
                 ok_count += 1
             else:
@@ -1827,8 +1857,9 @@ def evaluate(
                     "kind": case_kind(c),
                     "evidence": [
                         f"verification_checklist DV-milestone NOT satisfied "
-                        f"(status={st}); surfaced as a checklist shortfall, NOT "
-                        f"a TB-evidence failure (ORGANIC #808; review_required)"
+                        f"({basis}); surfaced as a checklist shortfall, NOT a "
+                        f"TB-evidence failure (ORGANIC #808; #3381; "
+                        f"review_required)"
                     ],
                     "pass": False,
                     "status": "checklist_gap",
@@ -1837,6 +1868,9 @@ def evaluate(
                     "review_required": True,
                     "capability_gap": None,
                     "producer_scaffold_scope": _scaffold_scope(c),
+                    "source_status": source_status or None,
+                    "source_classification": source_cls,
+                    "current_assessment": current,
                 })
                 checklist_gap_count += 1
             continue
@@ -2402,6 +2436,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     prod_scope = producer_scope_report(cases)
 
     exec_record = _l10x.load_record(Path(project_root or "."), Path(args.l10))
+    checklist_rows = [case for case in cases
+                      if is_verification_checklist(case)]
+    milestone_assessment = _dvm.load_record(
+        Path(project_root or "."), Path(args.l10), checklist_rows)
     results, ok_count, fail_count = evaluate(
         cases, tb_blob, summary,
         skip_analog=args.skip_analog, analog_anchor=analog_anchor,
@@ -2409,6 +2447,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         cpu_oracle_anchor_desc=cpu_anchor, project_root=project_root,
         producer_scaffold_kinds=scaffold_kinds_of(prod_scope),
         execution_record=exec_record,
+        milestone_assessment=milestone_assessment,
     )
     not_executed_count = count_not_executed(results)
     scope_gap = count_producer_scope_gap(results)
@@ -2473,6 +2512,19 @@ def main(argv: Optional[List[str]] = None) -> int:
             "unclaimed_rows": _l10x.unclaimed_rows(
                 [str(case.get("id", case.get("name", "")))
                  for case in all_cases], exec_record),
+        },
+        "dv_milestone_assessment": {
+            "available": milestone_assessment.get("available"),
+            "reason": milestone_assessment.get("reason"),
+            "path": milestone_assessment.get("path"),
+            "sha256": milestone_assessment.get("sha256"),
+            "rows_declared": len(milestone_assessment.get("rows") or {}),
+            "malformed_rows": milestone_assessment.get("malformed") or [],
+            "unclaimed_rows": milestone_assessment.get("unclaimed_rows") or [],
+            "note": ("Imported source status is preserved on each checklist "
+                     "result; only a current assessment bound to the exact "
+                     "L10 row, RTL context and evidence bytes can change the "
+                     "current classification."),
         },
         "waived": waive_count,
         "checklist_gaps": checklist_gap_count,
