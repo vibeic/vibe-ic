@@ -18,7 +18,12 @@ FRONT END. The netlist is exactly what LibreLane's `Yosys.JsonHeader` writes
     rename -top <T>; proc; flatten; opt_clean -purge; json -o <out>
 
 `build()` runs those passes (local yosys, else the image
-`librelane_contract.resolve_image` answers), and `load()` accepts either that output or a LibreLane
+`librelane_contract.resolve_image` answers), retains their raw JSON, then runs
+native constant normalization in a fresh invocation of the same engine. The
+explicit second step folds binary constant expressions without optimizing flop
+types or clock inversions. Both invocations and artifacts bind the CDC input;
+this extension is not a claim about LibreLane's own JsonHeader pass list.
+`load()` accepts either the normalized output or a LibreLane
 `Yosys.JsonHeader` `json_h` file. After `proc` without `opt_dff`, a sync
 reset is the outermost `$mux` in front of D with a constant arm, an enable is
 a `$mux` whose other arm is the flop's own Q, and an async reset is the `ARST`
@@ -56,6 +61,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 NETLIST_REL = "reports/phase2/cdc/netlist.json"
 NETLIST_LOG_REL = "reports/phase2/cdc/netlist.yosys.log"
 NETLIST_MANIFEST_REL = "reports/phase2/cdc/netlist_front_end.json"
+NETLIST_RAW_REL = "reports/phase2/cdc/netlist.raw.json"
+NETLIST_NORMALIZE_LOG_REL = "reports/phase2/cdc/netlist.normalize.yosys.log"
 
 #: `librelane/scripts/pyosys/json_header.py` after reading the sources.
 JSON_HEADER_PASSES = (
@@ -65,6 +72,11 @@ JSON_HEADER_PASSES = (
     "flatten",
     "opt_clean -purge",
 )
+
+# A fresh native read is intentional: the active Slang design does not fold
+# every constant expression in-place. Preserve unknowns and native clock edges;
+# in particular do not use opt_dff, -full or -undriven here.
+CONSTANT_NORMALIZATION_PASSES = ("opt_expr -keepdc -noclkinv", "opt_clean -purge")
 
 FLOP_TYPES = {"$dff", "$adff", "$dffe", "$adffe", "$sdff", "$sdffe",
               "$sdffce", "$dffsr", "$dffsre", "$aldff", "$aldffe"}
@@ -119,6 +131,12 @@ def yosys_script(files: List[Path], top: Optional[str], out: Path,
     return "; ".join(reads + passes + [f"json -o {out}"])
 
 
+def normalization_script(raw: Path, out: Path) -> str:
+    """Native JSON constant folding, in a separate invocation of the producer."""
+    return "; ".join([f"read_json {raw}", *CONSTANT_NORMALIZATION_PASSES,
+                      f"json -o {out}"])
+
+
 def source_binding(project: Path, top: Optional[str],
                    rtl_files: Optional[List[Path]] = None) -> dict:
     """Current native frontend inputs, using the existing source/hash contracts.
@@ -160,6 +178,8 @@ def source_binding(project: Path, top: Optional[str],
     options = {"sv": True,
                "frontend": "read_slang" if _uses_slang(files) else "read_verilog",
                "passes": list(JSON_HEADER_PASSES),
+               "normalization": {"frontend": "read_json",
+                                 "passes": list(CONSTANT_NORMALIZATION_PASSES)},
                "requested_top": top, "declared_top": declared}
     inputs = [("source", p, "raw") for p in sorted(deps)]
     fingerprint, why = resolved_inputs_digest(
@@ -201,21 +221,38 @@ def require_binding(project: Path, path: Path, nl: "Netlist") -> dict:
         order = producer["read_order"]
         if not root.is_absolute() or not isinstance(order, list) or sorted(order) != current["rtl_files"]:
             raise ValueError("native command read a partial/different source population")
+        raw = root / NETLIST_RAW_REL
         script = yosys_script([Path(os.path.normpath(root / rel)) for rel in order], top,
-                              root / Path(NETLIST_REL).with_suffix(".json.tmp"))
+                              raw.with_suffix(".json.tmp"))
         argv = producer["argv"]
         if argv[-3:] != ["-q", "-p", script] or not (
                 argv[0] == "yosys" or
                 any(argv[i:i + 2] == ["--entrypoint", "yosys"]
                     for i in range(len(argv) - 1))):
             raise ValueError("native invocation does not match frontend sources/top/options")
+        normalization = producer.get("normalization")
+        if (not isinstance(normalization, dict)
+                or type(normalization.get("exit_code")) is not int
+                or normalization["exit_code"] != 0
+                or normalization.get("argv") != argv[:-3] + [
+                    "-q", "-p", normalization_script(
+                        raw, root / Path(NETLIST_REL).with_suffix(".json.tmp"))]):
+            raise ValueError("missing successful normalization by the same native engine")
         hashes = rec.get("sha256") or {}
         log = path.parent / Path(NETLIST_LOG_REL).name
+        raw = path.parent / Path(NETLIST_RAW_REL).name
+        normalize_log = path.parent / Path(NETLIST_NORMALIZE_LOG_REL).name
         if (hashes.get("netlist.json") != ll.digest(path)
-                or hashes.get("netlist.yosys.log") != ll.digest(log)):
+                or hashes.get("netlist.yosys.log") != ll.digest(log)
+                or hashes.get("netlist.raw.json") != ll.digest(raw)
+                or normalization.get("input_sha256") != ll.digest(raw)
+                or hashes.get("netlist.normalize.yosys.log") != ll.digest(normalize_log)):
             raise Refusal("CDC_NETLIST_STALE", "native output or invocation log hash changed")
         if not log.read_text().startswith("$ " + " ".join(argv) + "\n"):
             raise ValueError("invocation transcript does not record this native command")
+        if not normalize_log.read_text().startswith(
+                "$ " + " ".join(normalization["argv"]) + "\n"):
+            raise ValueError("normalization transcript does not record this native command")
     except Refusal:
         raise
     except (OSError, ValueError, KeyError, TypeError, ll.Refusal) as exc:
@@ -226,20 +263,26 @@ def require_binding(project: Path, path: Path, nl: "Netlist") -> dict:
 
 def build(project: Path, rtl_files: List[Path], top: Optional[str],
           image: Optional[str] = None, docker: str = "docker") -> Path:
-    """Write NETLIST_REL for `rtl_files` with the Yosys.JsonHeader passes."""
+    """Write a bound raw JsonHeader and its native constant-normalized CDC input."""
     project = Path(project).resolve()
     out = project / NETLIST_REL
     log = project / NETLIST_LOG_REL
     manifest = project / NETLIST_MANIFEST_REL
+    raw = project / NETLIST_RAW_REL
+    normalize_log = project / NETLIST_NORMALIZE_LOG_REL
     # No failed, partial or interrupted producer can leave a prior admission.
     manifest.unlink(missing_ok=True)
     out.unlink(missing_ok=True)
+    raw.unlink(missing_ok=True)
+    normalize_log.unlink(missing_ok=True)
     binding = source_binding(project, top, rtl_files)
     out.parent.mkdir(parents=True, exist_ok=True)
     tmp = out.with_suffix(".json.tmp")
     tmp.unlink(missing_ok=True)
+    raw_tmp = raw.with_suffix(".json.tmp")
+    raw_tmp.unlink(missing_ok=True)
     files = _read_order([Path(f).resolve() for f in rtl_files])
-    script = yosys_script(files, top, tmp)
+    script = yosys_script(files, top, raw_tmp)
     if shutil.which("yosys"):
         argv = ["yosys", "-q", "-p", script]
     else:
@@ -264,24 +307,44 @@ def build(project: Path, rtl_files: List[Path], top: Optional[str],
                 "--entrypoint", "yosys", image, "-q", "-p", script]
     done = subprocess.run(argv, capture_output=True, text=True)
     log.write_text("$ " + " ".join(argv) + "\n" + done.stdout + done.stderr)
-    if done.returncode or not tmp.is_file():
+    if done.returncode or not raw_tmp.is_file():
         raise Refusal("CDC_NETLIST_BUILD_FAILED",
                       f"yosys rc={done.returncode}; {NETLIST_LOG_REL}")
     if source_binding(project, top, rtl_files) != binding:
         raise Refusal("CDC_NETLIST_STALE", "sources changed during native producer run")
+    raw_tmp.replace(raw)
+    import librelane_contract as ll
+    raw_hash = ll.digest(raw)
+    # Reuse the entire engine/container/memory/mount/user prefix. A fresh process
+    # is necessary for this native normalization, not a different backend.
+    normalize_argv = argv[:-3] + ["-q", "-p", normalization_script(raw, tmp)]
+    normalized = subprocess.run(normalize_argv, capture_output=True, text=True)
+    normalize_log.write_text("$ " + " ".join(normalize_argv) + "\n"
+                             + normalized.stdout + normalized.stderr)
+    if normalized.returncode or not tmp.is_file():
+        raise Refusal("CDC_NETLIST_BUILD_FAILED",
+                      f"normalization yosys rc={normalized.returncode}; "
+                      f"{NETLIST_NORMALIZE_LOG_REL}")
+    if (source_binding(project, top, rtl_files) != binding
+            or ll.digest(raw) != raw_hash):
+        raise Refusal("CDC_NETLIST_STALE", "sources or raw input changed during normalization")
     nl = load(tmp)
     if ((top and nl.top != top)
             or binding["options"]["declared_top"] not in (None, nl.top)):
         raise Refusal("CDC_NETLIST_TOP_MISMATCH", "native JSON top differs from requested/declared top")
     tmp.replace(out)
-    import librelane_contract as ll
     ll.write_json(manifest, {
         "input": binding, "top": nl.top,
         "producer": {"step": "Yosys.JsonHeader", "argv": argv,
                      "exit_code": done.returncode, "image": image,
                      "source_root": str(project),
+                     "normalization": {"argv": normalize_argv,
+                                       "exit_code": normalized.returncode,
+                                       "input_sha256": raw_hash},
                      "read_order": [os.path.relpath(f, project) for f in files]},
-        "sha256": {"netlist.json": ll.digest(out), "netlist.yosys.log": ll.digest(log)}})
+        "sha256": {"netlist.json": ll.digest(out), "netlist.yosys.log": ll.digest(log),
+                   "netlist.raw.json": raw_hash,
+                   "netlist.normalize.yosys.log": ll.digest(normalize_log)}})
     return out
 
 
