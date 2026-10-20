@@ -235,11 +235,22 @@ _PIN_ALIAS_HEADER = re.compile(
     r"(?:pins?|signals?|ports?)(?:\s*/\s*(?:pins?|signals?|ports?|alias(?:es)?))?"
     r"(?:\s+(?:names?|labels?|identifiers?|alias(?:es)?))?"
     r"|alias(?:es)?(?:\s+(?:names?|mapping))?", re.I)
+# Numbered/indexed pin declarations are naming authority too: the ordinal
+# locates the pin, not a word between "pin" and its alternate names to discard.
+_PIN_ALIAS_INDEX = (
+    r"(?:[ \t]*(?:(?:no\.?|number)[ \t]+|#[ \t]*)?\d+"
+    r"(?:[ \t]*[-:][ \t]*\d+)?"
+    r"|[ \t]*\[[ \t]*\d+(?:[ \t]*:[ \t]*\d+)?[ \t]*\]"
+    r"|[ \t]*\([ \t]*\d+[ \t]*\))?")
 _PIN_ALIAS_PREFIX = re.compile(
-    r"(?:\b(?:pin|signal|port)(?:\s+(?:names?|naming))?(?:\s+alias(?:es)?)?"
+    r"(?:\b(?:pin|signal|port)" + _PIN_ALIAS_INDEX
+    + r"(?:\s+(?:names?|naming))?(?:\s+alias(?:es)?)?"
     r"|\balias(?:es)?(?:\s+group)?)\s*[:=]?\s*$", re.I)
 _PIN_ALIAS_SUFFIX = re.compile(
-    r"^\s+(?:is|are)\s+(?:an?\s+)?(?:(?:pin|signal|port)\s+)?alias(?:es)?\b", re.I)
+    r"^\s+(?:is|are)\s+(?:an?\s+|the\s+)?"
+    r"(?:(?:(?:pin|signal|port)\s+)?alias(?:es)?\b"
+    r"|(?:[A-Za-z][A-Za-z0-9_-]*[ \t]+)*"
+    r"(?:input|output|inout|pin|signal|port)[ \t]*(?:[.,;:]|$))", re.I)
 
 
 def _pin_alias_literals(text: str):
