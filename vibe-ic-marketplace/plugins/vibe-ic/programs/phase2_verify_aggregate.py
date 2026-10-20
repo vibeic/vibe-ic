@@ -144,7 +144,10 @@ def _run_check(label: str, name: str, extra_args: List[str],
         spec = _pl.generated_docs_dir(project_dir) / "L9_INTEGRATION_SPEC.json"
         cmd += ["--rtl-dir", str(rtl_dir), "--spec", str(spec)]
     elif name == "rtl_hygiene_lint.py":
-        cmd += [str(path) for path in collect_rtl_files([], str(rtl_dir))]
+        # The project adapter owns the silicon source set, declared top and
+        # catalog parameters. Bare files lose that context and reject legal
+        # package compilation units before native elaboration can judge them.
+        cmd += ["--project", str(project_dir)]
     else:
         raise ValueError(f"no child CLI adapter for {name}")
     try:

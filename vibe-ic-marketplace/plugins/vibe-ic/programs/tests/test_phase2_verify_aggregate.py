@@ -77,7 +77,8 @@ def _native_aggregate(project, *extra):
     output = project / "aggregate.json"
     result = subprocess.run([sys.executable, mod.__file__, str(project),
                              "--out-json", str(output), "--strict", *extra],
-                            capture_output=True, text=True, timeout=180)
+                            capture_output=True, text=True, timeout=180,
+                            cwd=project)
     assert output.is_file(), result.stdout + result.stderr
     return result, json.loads(output.read_text())
 
@@ -144,3 +145,37 @@ def test_child_usage_failure_retains_actual_argv_and_stderr(tmp_path, monkeypatc
     assert row.exit_code == 2 and row.argv == observed[0]
     assert "required --spec" in row.stderr_tail
     assert row.reason_class == "INVOCATION_ERROR"
+
+
+@pytest.mark.parametrize("kind", ["package", "missing_provider", "warning"])
+def test_hygiene_child_uses_project_context_without_hiding_findings(tmp_path, monkeypatch, kind):
+    """Exercise the real child at its default policy, without mock reports."""
+    rtl = tmp_path / "phase2/stage1/rtl"
+    rtl.mkdir(parents=True)
+    docs = tmp_path / "phase1/generated_docs"
+    docs.mkdir(parents=True)
+    (docs / "L9_INTEGRATION_SPEC.json").write_text(
+        json.dumps({"top_module": "neutral_top"}))
+    (rtl / "byte_ops_pkg.sv").write_text(
+        "package byte_ops;\n"
+        "function automatic logic [7:0] fold(input logic [7:0] value);\n"
+        "  fold = value ^ 8'h5a;\n"
+        "endfunction\nendpackage\n")
+    (rtl / "neutral_top.sv").write_text(
+        "module neutral_top import byte_ops::*;\n"
+        "(input logic [7:0] data_i, output logic [7:0] data_o);\n"
+        + ("logic unused;\n" if kind == "warning" else "")
+        + "assign data_o = fold(data_i);\nendmodule\n")
+    if kind == "missing_provider":
+        (rtl / "byte_ops_pkg.sv").unlink()
+    monkeypatch.chdir(tmp_path)
+    row = mod._run_check("rtl_hygiene_lint", "rtl_hygiene_lint.py", [], tmp_path)
+    if kind == "package":
+        assert row.exit_code == 0, row.as_dict()
+        assert "0 errors, 0 warnings, 0 info" in row.stdout_tail, row.as_dict()
+    else:
+        assert row.exit_code == 1, row.as_dict()
+        assert row.reason_class == "CHECK_FAILED", row.as_dict()
+        if kind == "warning":
+            assert "0 errors, 1 warnings, 0 info" in row.stdout_tail, row.as_dict()
+    assert "no safely parsed module" not in row.stdout_tail + row.stderr_tail
