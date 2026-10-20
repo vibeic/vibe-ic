@@ -197,3 +197,19 @@ handoff lines, tool invocations.
 **Your task is not complete until the audit returns PASS.** Missing
 elements are the single largest source of skill-execution non-determinism
 across different agents.
+
+### Skill: Legal delayed acknowledgement withdrawal with public observation
+
+**Pattern**: Nominal service can complete while leaving a source-permitted request-low acknowledgement tail untested.
+
+**When to apply**: Native coverage identifies that branch and the original interface and reset prose permit bounded delayed withdrawal with stable payload.
+
+**What to do**: Read the complete handshake and reset obligations before choosing a finite transaction schedule; do not transfer a reset-only timing requirement to every transaction. Admit the normal design class and expert-reference contract first. Give one owner to the public service coroutine, use a separate public-pin monitor to check request remains low and acknowledgement, validity and payload remain stable throughout the selected tail, then withdraw acknowledgement and restore the existing service even on failure. Check subsequent progress against an independently specified result from the input, never an expected value inferred from the DUT. Keep the original vector and control populations, their order and goldens intact; append a named case in the persistent expert source with its complete source closure. A wrong independent expected result must compile and reach a real native comparison failure; exact restoration must pass. A zero-tail control may isolate coverage causality but does not qualify delayed-tail behavior. Hand the complete source back to the normal professional generator and native/JUnit consumers for fresh full-population measurement.
+
+**Why not Bucket A**: The interface prose permits several finite service schedules and does not uniquely select an observable progress witness. Those choices require source-bound engineering judgment; existing programs retain source, population, execution and coverage validation.
+
+**Worked pattern** (anonymized): A delayed-tail case passed with a separate public monitor and an input-derived functional golden. Changing one expected result caused a native comparison failure and restoring the exact source passed. An identified native branch counted three, zero and three in delayed-tail, zero-tail and restored arms without changing the coverage denominator. A driver delivery count alone did not prove internal one-time consumption.
+
+**Why this is GENERAL**: Applies to request/acknowledgement interfaces with source-supported payload stability, legal bounded timing and independently observable progress. It establishes the measured public behavior and selected branch, not complete internal consumption, clock-domain signoff or whole-design qualification.
+
+_Captured by benchmark-enhancement-capture 2026-10-21._

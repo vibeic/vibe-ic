@@ -1,0 +1,22 @@
+type: enhancement
+severity: P2
+component: program:professional_tb_gen
+plugin_version: "1.30.54"
+
+title: >-
+  Declare event-counter lifetime and case ownership before generating counter-delta assertions
+
+pattern: |
+  A reusable test environment retains monotonic diagnostic event counters across reset and earlier legal fault tests. A later case asserts an absolute zero, treating historical events as new failures. Automatically clearing the counter instead destroys the history and can hide a real event. A generator cannot choose the correct case boundary from an arbitrary counter name or reset invocation.
+
+suggested_fix: |
+  Proposed augmentation of the existing professional testbench generator, not a new global checker. First define a supported typed environment contract for the counter producer, monotonic lifetime, reset behavior, sampling boundary after the case reset and required settling, continuous monitor ownership and case identity. Preserve the separate input-derived public fault-status assertion. Do not infer ownership from a field name or assume reset clears an environment counter.
+  Once that contract is admitted, sample baseline without clearing history, sample after at the case endpoint, record both integer values, and compare after minus baseline with the declared allowed new-event count. Zero-new-event cases require a delta of zero even when baseline is nonzero. Counter regression, unavailable samples or unsupported lifetime must remain incomplete rather than receive a default zero or PASS. Bind the resulting observation to the actual case execution and existing source closure.
+  Existing expert-source implementation already records baseline, after and delta for one appended control. Its positive and restored native runs passed. A legal preceding public fault produced baseline one, after one, delta zero in an independent history-integration arm; the later complete population retained baseline four, after four, delta zero. Counters were not cleared. A wrong functional golden compiled and failed a real comparison before restoration passed; that is an oracle negative, not a counter-delta negative.
+  Engineering acceptance still needs a neutral generated environment with zero history/no new event, nonzero history/no new event, and a real newly raised monitored event that fails the zero-delta comparison. Include a reset that preserves history, multiple cases, a missing contract, malformed samples, counter regression and an incorrectly cleared-history control. Verify generator and ordinary native consumer behavior, with exact source reversal/restoration and unchanged prior populations. No generic counter-specific negative or corpus sweep has been measured yet.
+  Bucket C; why not Bucket A: subtraction is deterministic, but the shared generator currently exposes no typed environment-counter lifetime, sampling or ownership contract. Defining and validating that producer/consumer contract and its native fixture corpus is prerequisite engineering. No product rule is implemented by this backlog, and the arithmetic rule is not moved into skill prose.
+
+id: "ORGANIC-20261021-professional-event-counter-ownership"
+submitted_at: "2026-10-21T05:57:04+08:00"
+session_context: >-
+  Capture from a source-owned request/acknowledgement timing recovery and actual history-integration control. The associated deterministic Bucket-A item remains a proposed augmentation, not an applied rule. This backlog records the missing shared ownership contract; residual stimulus and progress-witness judgment is documented separately in the testbench skill.
