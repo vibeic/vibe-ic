@@ -243,14 +243,16 @@ _PIN_ALIAS_INDEX = (
     r"|[ \t]*\[[ \t]*\d+(?:[ \t]*:[ \t]*\d+)?[ \t]*\]"
     r"|[ \t]*\([ \t]*\d+[ \t]*\))?")
 _PIN_ALIAS_PREFIX = re.compile(
-    r"(?:\b(?:pin|signal|port)" + _PIN_ALIAS_INDEX
+    r"(?:(?:\b(?:pin|signal|port)" + _PIN_ALIAS_INDEX
     + r"(?:\s+(?:names?|naming))?(?:\s+alias(?:es)?)?"
-    r"|\balias(?:es)?(?:\s+group)?)\s*[:=]?\s*$", re.I)
+    r"|\balias(?:es)?(?:\s+group)?)(?:\s+(?:is|are))?"
+    r"(?:\s+(?:named|called|labelled|labeled))?"
+    r"|\b(?:input|output|inout)\s+(?:is|are|named|called))\s*[:=]?\s*$", re.I)
 _PIN_ALIAS_SUFFIX = re.compile(
-    r"^\s+(?:is|are)\s+(?:an?\s+|the\s+)?"
+    r"^(?:\s+(?:is|are)\s+|\s*,\s*|\s*\(\s*)(?:an?\s+|the\s+)?"
     r"(?:(?:(?:pin|signal|port)\s+)?alias(?:es)?\b"
     r"|(?:[A-Za-z][A-Za-z0-9_-]*[ \t]+)*"
-    r"(?:input|output|inout|pin|signal|port)[ \t]*(?:[.,;:]|$))", re.I)
+    r"(?:input|output|inout|pin|signal|port)[ \t]*(?:[.,;:)]|$))", re.I)
 
 
 def _pin_alias_literals(text: str):
@@ -290,8 +292,8 @@ def _pin_alias_literals(text: str):
                 yield match.group().strip()
             continue
         for match in _PIN_ALIAS_RX.finditer(line):
-            prefix = line[:match.start()].rstrip("` ")
-            suffix = line[match.end():].lstrip("`")
+            prefix = line[:match.start()].rstrip("`* \"'")
+            suffix = line[match.end():].lstrip("`*\"'")
             if (_PIN_ALIAS_PREFIX.search(prefix)
                     or _PIN_ALIAS_SUFFIX.search(suffix)):
                 yield match.group().strip()

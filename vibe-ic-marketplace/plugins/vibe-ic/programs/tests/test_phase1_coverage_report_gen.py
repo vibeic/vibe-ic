@@ -698,3 +698,21 @@ def test_pin_alias_declaration_ordinary_missing_reverse(tmp_path, text, covered)
         rr = subprocess.run([sys.executable, str(PROG.with_name(program)), str(tmp_path)],
                             capture_output=True, text=True)
         assert rr.returncode == expected_rc, (program, rr.stdout, rr.stderr)
+
+
+@pytest.mark.parametrize("text, expected", [
+    ("Pin 7 is named GPIO0/SCL.", {"GPIO0/SCL"}),
+    ("The serial clock input is GPIO0/SCL.", {"GPIO0/SCL"}),
+    ("GPIO0/SCL, the serial clock input.", {"GPIO0/SCL"}),
+    ("GPIO0/SCL (the serial clock input)", {"GPIO0/SCL"}),
+    ("Pin 7: **GPIO0/SCL** is the serial clock input.", {"GPIO0/SCL"}),
+    ('Pin 7: "GPIO0/SCL" is the serial clock input.', {"GPIO0/SCL"}),
+    ("API/default, the configured input mode.", set()),
+    ("Pin 7 is configured through API/default policy.", set()),
+])
+def test_pin_alias_naming_link_context(tmp_path, text, expected):
+    import phase1_coverage_report_gen as owner
+    _put_extracted(tmp_path, "spec.txt", text)
+    patterns = owner._autodiscover_patterns(tmp_path, persist=False)
+    assert {lit for lit, label in patterns["spec.txt"]
+            if label == "auto-discovered (pin_alias)"} == expected
