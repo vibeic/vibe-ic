@@ -18,3 +18,5 @@ Observed full registry results, four arms each with real history and an explicit
 Fresh encoding receipts/context/native JSON/script/log bytes are included as content-addressed objects. They are reproduction outputs and do not reconstruct missing historical proof. The fixture is an original Subservient subset, not the full3.1GB project and not a SHA256 project. Other fixture FAIL/INCOMPLETE/BLOCKED results remain; this is not a whole-P0, Phase2 or IC PASS. Source51/candidate qualification remains separate from official52 shipping.
 
 The original per-file SPDX notices and the upstream ISC notice are retained. No files under the plugin prefix changed in this evidence commit.
+
+Raw launch.json source_postimages fields describe the underlying host source export. For reverse, the five base overlays listed in mounts determine the effective product bytes. effective-product-postimages.json records four additional read-only in-container probes of those exact source/overlay configurations, confirming base/reverse and candidate/restore identity. These probes neither rerun nor replace the preserved native P0 results. The archive and historical input bytes remain unchanged.
