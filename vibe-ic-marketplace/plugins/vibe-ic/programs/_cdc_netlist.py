@@ -125,13 +125,15 @@ def source_binding(project: Path, top: Optional[str],
 
     Headers and structured top/switch declarations are dependencies too. A
     partial read cannot establish a verdict over the current source population.
-    No HDL is parsed here; the Yosys frontend remains the producer.
+    Include dependencies use the existing resolver; the Yosys frontend remains
+    the connectivity producer.
     """
     import _specrtl_common as sources
     from _chip_synth_read import NON_SILICON_SUBSTRS
     from _step_identity import resolved_inputs_digest
     import librelane_contract as ll
     from p0_tool_frontend_check import _top
+    from formal_property_run import resolve_include_headers
     project = Path(project).resolve()
     files = [p.resolve() for p in sources.rtl_source_files(project)
              if not any(t in p.name.lower() for t in NON_SILICON_SUBSTRS)]
@@ -147,6 +149,9 @@ def source_binding(project: Path, top: Optional[str],
     deps = set(files)
     deps.update(p.resolve() for p in sources.rtl_source_files(
         project, exts=("*.vh", "*.svh")))
+    # Explicit includes remain inputs even when they live outside the canonical
+    # tree. Reuse the existing resolver rather than widening the header census.
+    deps.update(p.resolve() for p in resolve_include_headers(files, [project]))
     for rel in ("phase1/generated_docs/L9_INTEGRATION_SPEC.json",
                 "phase1/generated_docs/L9_INTEGRATION.json",
                 "phase3/librelane_switch.json"):
@@ -563,6 +568,8 @@ class _LookupSnapshot:
             Dict[object, List[Tuple[Flop, int, bool]]]] = None
         self._direct_consumers: Optional[
             Dict[object, List[Tuple[Flop, int]]]] = None
+        self._cone_inputs: Dict[str, Tuple[object, ...]] = {}
+        self._cone_reach: Dict[frozenset, Dict[str, Tuple[frozenset, frozenset]]] = {}
 
     def domain(self, flop: Flop) -> str:
         return self.domains[id(flop)]
@@ -575,8 +582,107 @@ class _LookupSnapshot:
 
     def cone(self, bits: Iterable, skip: Optional[Set[object]] = None
              ) -> Tuple[Set[object], Set[object]]:
-        return self.nl.cone(bits, skip=skip, q_of=self.q_of,
-                            ports=self.port_bits)
+        """Share whole-cell reachability within this analysis, including cycles.
+
+        Every output of a combinational cell has the same conservative fan-in.
+        Collapse those outputs to one node; condense cycles before memoizing
+        frontiers, so a back edge never publishes a partial cone. Reset cuts
+        have separate closures, while raw cell adjacency is shared. Dense
+        frontier/consumer relations can still require quadratic storage.
+        """
+        cut = frozenset(skip or ())
+        cache = self._cone_reach.setdefault(cut, {})
+
+        def node(bit, qbits, pbits):
+            if self.nl.is_const(bit) or bit in cut:
+                return None
+            if bit in self.q_of:
+                qbits.add(bit)
+            elif bit in self.port_bits:
+                pbits.add(bit)
+            else:
+                driver = self.nl.drivers.get(bit)
+                if driver:
+                    name = driver[0]
+                    cell = self.nl.cells[name]
+                    if cell["type"] not in FLOP_TYPES | _MEMORY:
+                        return name
+            return None
+
+        found_q, found_p = set(), set()
+        roots = {name for bit in bits
+                 if (name := node(bit, found_q, found_p)) is not None}
+        graph, frontiers = {}, {}
+        pending = list(roots)
+        while pending:
+            name = pending.pop()
+            if name in cache or name in graph:
+                continue
+            if name not in self._cone_inputs:
+                cell = self.nl.cells[name]
+                directions = cell.get("port_directions", {})
+                self._cone_inputs[name] = tuple(
+                    bit for pin, conn in cell["connections"].items()
+                    if not (directions.get(pin) == "output" or
+                            (not directions and pin in _OUTPUT_PORTS))
+                    for bit in conn if not self.nl.is_const(bit))
+            qbits, pbits = set(), set()
+            children = {child for bit in self._cone_inputs[name]
+                        if (child := node(bit, qbits, pbits)) is not None}
+            graph[name] = children
+            frontiers[name] = (qbits, pbits)
+            pending.extend(children)
+
+        # Iterative Kosaraju avoids recursion limits on deep native logic.
+        # Edges point towards inputs; reversed component order resolves inputs
+        # first. Already-cached descendants form complete frontier boundaries.
+        seen, order = set(), []
+        reverse = {name: [] for name in graph}
+        for name, children in graph.items():
+            for child in children:
+                if child in graph:
+                    reverse[child].append(name)
+        for start in graph:
+            stack = [(start, False)]
+            while stack:
+                name, done = stack.pop()
+                if done:
+                    order.append(name)
+                elif name not in seen:
+                    seen.add(name)
+                    stack.append((name, True))
+                    stack.extend((child, False) for child in graph[name]
+                                 if child in graph and child not in seen)
+        seen, components = set(), []
+        for start in reversed(order):
+            if start in seen:
+                continue
+            component, stack = [], [start]
+            seen.add(start)
+            while stack:
+                name = stack.pop()
+                component.append(name)
+                for parent in reverse[name]:
+                    if parent not in seen:
+                        seen.add(parent)
+                        stack.append(parent)
+            components.append(component)
+        for component in reversed(components):
+            members = set(component)
+            qbits, pbits = set(), set()
+            for name in component:
+                qbits.update(frontiers[name][0])
+                pbits.update(frontiers[name][1])
+                for child in graph[name] - members:
+                    qbits.update(cache[child][0])
+                    pbits.update(cache[child][1])
+            result = (frozenset(qbits), frozenset(pbits))
+            for name in component:
+                cache[name] = result
+        for name in roots:
+            found_q.update(cache[name][0])
+            found_p.update(cache[name][1])
+        return found_q, found_p
 
     def direct_source(self, flop: Flop, index: int) -> Optional[object]:
         key = (id(flop), index)

@@ -141,11 +141,13 @@ def rtl_source_files(project_dir,
     if not root.is_dir():
         return []
     canonical = root / "phase2" / "stage1" / "rtl"
-    if canonical.is_dir():
+    if canonical.is_dir() and any(
+            p.is_file() for ext in RTL_SOURCE_EXTS for p in canonical.rglob(ext)):
         files = [p for ext in exts for p in canonical.rglob(ext)
                  if p.is_file()]
-        if files:
-            return sorted(set(files))
+        # Authority follows the RTL population, including an empty header-only
+        # query. Otherwise an unrelated scratch header changes native binding.
+        return sorted(set(files))
     out: List[Path] = []
     for ext in exts:
         for p in root.rglob(ext):

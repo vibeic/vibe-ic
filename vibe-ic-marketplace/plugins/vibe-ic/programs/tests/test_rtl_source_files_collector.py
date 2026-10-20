@@ -54,6 +54,19 @@ def test_canonical_dir_without_rtl_falls_back(tmp_path):
     assert got == [keep]
 
 
+def test_empty_header_subset_keeps_canonical_rtl_authority(tmp_path):
+    _mk(tmp_path / "phase2/stage1/rtl/top.v")
+    _mk(tmp_path / "verification/scratch.svh", "`define UNUSED 1\n")
+    assert sc.rtl_source_files(tmp_path, exts=("*.vh", "*.svh")) == []
+
+
+def test_headers_fall_back_without_canonical_rtl_population(tmp_path):
+    canonical = _mk(tmp_path / "phase2/stage1/rtl/defs.vh")
+    external = _mk(tmp_path / "src/constants.svh")
+    assert sc.rtl_source_files(tmp_path, exts=("*.vh", "*.svh")) == \
+        sorted([canonical, external])
+
+
 # ---------------------------------------------------------------------------
 # 2. fallback: generated-output dir exclusion + size cap
 # ---------------------------------------------------------------------------
