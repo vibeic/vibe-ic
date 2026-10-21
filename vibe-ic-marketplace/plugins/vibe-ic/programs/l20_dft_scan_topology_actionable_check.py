@@ -185,6 +185,26 @@ _BIST_IS_A_MESSAGE_NAME_RE = re.compile(
     r"ordered\s+set|payload|dword|opcode|command\s+type|message\s+type)\b",
     re.IGNORECASE)
 
+# A requirement to preserve STATUS or reconcile a future interface is not a
+# selection of DFT topology.  These sentences still contain genuine
+# requirement framing ("must not be dropped", "must reconcile"), so the
+# shared framing predicate cannot distinguish them without changing every
+# consumer.  Keep the policy with L20's own vocabulary.
+_DFT_STATUS_ONLY_RE = re.compile(
+    r"\b(?:not[_ -]?measured|unknown(?:\s+or\s+planned)?|planned|"
+    r"pre[_ -]?dft|provisional|future|"
+    r"must\s+not\s+be\s+dropped|must\s+reconcile|"
+    r"remains?\s+(?:unknown|unmeasured|not[_ -]?measured))\b",
+    re.IGNORECASE,
+)
+_DFT_CONCRETE_REQUIREMENT_RE = re.compile(
+    r"\b(?:requires?|required)\b"
+    r"|\b(?:shall|must)\s+(?:be\s+)?"
+    r"(?:provided|supported|implemented|inserted|included|measured|"
+    r"achieved|exposed)\b",
+    re.IGNORECASE,
+)
+
 
 def _bist_is_a_message_name(matched: str, sentence: str) -> bool:
     """True when THIS match spends the BIST token on a protocol message name.
@@ -202,6 +222,24 @@ def _bist_is_a_message_name(matched: str, sentence: str) -> bool:
     if not _BIST_TOKEN_RE.fullmatch((matched or "").strip()):
         return False
     return bool(_BIST_IS_A_MESSAGE_NAME_RE.search(sentence or ""))
+
+
+def _dft_is_status_only(_matched: str, sentence: str) -> bool:
+    """True when the sentence preserves an unresolved DFT state, not topology.
+
+    A concrete selection wins even when its current measurement is pending:
+    "a scan chain is required; ATPG coverage is NOT_MEASURED" remains a
+    requirement.  This keeps the reject narrower than a bare status-token
+    filter.
+    """
+    text = sentence or ""
+    return (bool(_DFT_STATUS_ONLY_RE.search(text))
+            and not bool(_DFT_CONCRETE_REQUIREMENT_RE.search(text)))
+
+
+def _reject_dft_vocab(matched: str, sentence: str) -> bool:
+    return (_bist_is_a_message_name(matched, sentence)
+            or _dft_is_status_only(matched, sentence))
 
 
 # Sibling layers that legitimately carry a DFT requirement upstream of
@@ -291,7 +329,7 @@ def _dft_hits(texts) -> List[Dict[str, Any]]:
     return framed_hits(texts, _DFT_VOCAB_RE,
                        drop_denied=True,
                        drop_out_of_scope=True,
-                       reject=_bist_is_a_message_name)
+                       reject=_reject_dft_vocab)
 
 
 def _backend_dft_artifacts(project: Path) -> List[str]:

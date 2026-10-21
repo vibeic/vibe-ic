@@ -289,6 +289,33 @@ def test_bare_vocabulary_without_requirement_framing_does_not_fire(tmp_path):
     assert r.returncode == 2, r.stdout + r.stderr
 
 
+def test_planned_not_measured_dft_status_is_not_a_selected_requirement(
+        tmp_path):
+    """#3457: preservation/reconciliation prose must not demand topology."""
+    text = (
+        "The early wrapper is PRE_DFT_FUNCTIONAL.\n"
+        "Its DFT check remains NOT_MEASURED.\n"
+        "Unknown or planned DFT is preserved.\n"
+        "A known scan/test-access interface must not be dropped, and the "
+        "final producer must reconcile the actual selected mapped/DFT port "
+        "roster.\n"
+    )
+    r = _run(_mk(tmp_path, l20=_SKELETON, docs={"status.txt": text}))
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "REQUIREMENT_OUTSIDE_CONSUMING_LAYER" not in r.stdout
+
+
+def test_required_dft_still_fails_when_coverage_is_not_measured(tmp_path):
+    """Reverse control: pending evidence cannot erase a selected topology."""
+    text = (
+        "The device requires one full scan chain.\n"
+        "ATPG coverage is NOT_MEASURED and shall be measured before release.\n"
+    )
+    r = _run(_mk(tmp_path, l20=_SKELETON, docs={"requirement.txt": text}))
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "REQUIREMENT_OUTSIDE_CONSUMING_LAYER" in r.stdout
+
+
 # ── F3 BACKEND_INSERTED_UNDECLARED_TOPOLOGY — advises, never blocks ──
 
 def test_backend_artifacts_advise_but_do_not_block(tmp_path):
