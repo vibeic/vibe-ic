@@ -453,6 +453,38 @@ def _row(claim: Dict[str, Any]) -> str:
             f"| {ev_txt} | {_cite(claim['id'])} |")
 
 
+def _evidence_rows(claims: List[Dict[str, Any]]) -> List[Dict[str, str]]:
+    """Return each distinct evidence identity once, in stable order.
+
+    The human report must expose the same hash-bound artefacts as claims.json;
+    otherwise the mandatory ppa-measure compliance gate has no evidence it can
+    inspect.  Missing digests remain visibly missing rather than being filled
+    with a synthetic value.
+    """
+    seen: Dict[Tuple[str, str, str], Dict[str, str]] = {}
+    for claim in claims:
+        for evidence in claim.get("evidence") or []:
+            row = {
+                "path": str(evidence.get("path", "")).strip(),
+                "sha256": str(evidence.get("sha256", "")).strip(),
+                "tool": str(evidence.get("tool", "")).strip(),
+            }
+            key = (row["path"], row["sha256"], row["tool"])
+            if row["path"] and key not in seen:
+                seen[key] = row
+    return [seen[key] for key in sorted(seen)]
+
+
+def _scope_example(claims: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """A real canonical record excerpt for the report's scope contract."""
+    for claim in sorted(claims, key=lambda c: (c["metric"], c["id"])):
+        scope = claim.get("scope")
+        if isinstance(scope, dict) and scope:
+            return {"schema": METRIC_SCHEMA, "metric": claim["metric"],
+                    "scope": scope}
+    return {"schema": METRIC_SCHEMA, "scope": {}}
+
+
 _TABLE_HEAD = ("| metric | status | value | scope | evidence | claim |\n"
                "|---|---|---|---|---|---|")
 
@@ -470,7 +502,11 @@ def render_report(claims: List[Dict[str, Any]], coverage: Dict[str, Any],
     out: List[str] = []
     out.append("# PPA report")
     out.append("")
-    out.append("## What this report is")
+    out.append(
+        "Verdict authority: _ppa/feasibility.py — this report states no "
+        "pass/fail of its own.")
+    out.append("")
+    out.append("## Summary")
     out.append("")
     out.append(
         f"Every row below came from a `{METRIC_SCHEMA}` record under "
@@ -487,6 +523,14 @@ def render_report(claims: List[Dict[str, Any]], coverage: Dict[str, Any],
     out.append("")
 
     out.append("## Measurement coverage")
+    out.append("")
+    out.append(
+        f"Coverage: MEASURED={by_status.get('MEASURED', 0)} "
+        f"NOT_MEASURED={by_status.get('NOT_MEASURED', 0)} "
+        f"NOT_APPLICABLE={by_status.get('NOT_APPLICABLE', 0)} "
+        f"{_cite(cov + '.MEASURED')} "
+        f"{_cite(cov + '.NOT_MEASURED')} "
+        f"{_cite(cov + '.NOT_APPLICABLE')}")
     out.append("")
     out.append(f"Records read from `{source_root}`: **{coverage['total']}** "
                f"{_cite(cov + '.total')}")
@@ -521,6 +565,19 @@ def render_report(claims: List[Dict[str, Any]], coverage: Dict[str, Any],
         out.append(f"No file under `{source_root}` failed to parse "
                    f"{unreadable_cite}.")
         out.append("")
+
+    out.append("## Measurements")
+    out.append("")
+    out.append(
+        "The axis tables below are the human view of the canonical records. "
+        "This excerpt shows the machine-readable scope shape copied from one "
+        "of those records:")
+    out.append("")
+    out.append("```json")
+    out.extend(json.dumps(_scope_example(claims), indent=2,
+                          sort_keys=True, ensure_ascii=False).splitlines())
+    out.append("```")
+    out.append("")
 
     for axis in AXIS_ORDER:
         rows = [c for c in claims if _axis_of(c["metric"]) == axis]
@@ -561,6 +618,21 @@ def render_report(claims: List[Dict[str, Any]], coverage: Dict[str, Any],
                        f"| {_cite(c['id'])} |")
     out.append("")
 
+    out.append("## Evidence")
+    out.append("")
+    out.append("| artefact | sha256 | tool |")
+    out.append("|---|---|---|")
+    evidence_rows = _evidence_rows(claims)
+    if evidence_rows:
+        for evidence in evidence_rows:
+            digest = evidence["sha256"] or "not recorded"
+            tool = evidence["tool"] or "not recorded"
+            out.append(f"| `{evidence['path']}` | `{digest}` | `{tool}` |")
+    else:
+        out.append(
+            "| no source artefact was recorded | not recorded | not recorded |")
+    out.append("")
+
     out.append("## How to check this report")
     out.append("")
     out.append("```")
@@ -575,6 +647,8 @@ def render_report(claims: List[Dict[str, Any]], coverage: Dict[str, Any],
         "claims more than the artefact behind it supports, and `--cite-numbers` "
         "additionally goes red on any sentence here that states a number "
         "without naming the claim it came from.")
+    out.append("")
+    out.append("Next: run /ppa-diagnose")
     out.append("")
     return "\n".join(out)
 
