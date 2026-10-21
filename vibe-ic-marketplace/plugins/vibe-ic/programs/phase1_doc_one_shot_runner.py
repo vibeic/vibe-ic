@@ -10290,13 +10290,20 @@ def _emit_l24_to_l27_docs(project: Path) -> List["LDocResult"]:
         try:
             if _is_applicable(ic_class, code):
                 content = _emit_sk(code, ic_class, project_dir=project)
-                # Discard the skeleton's own (empty) evidence list; _write_l_doc
-                # (re)writes extraction_evidence from the evidence argument.
+                # The skeleton emitter may be a real extractor.  L25, for
+                # example, carries explicit negative reliability facts and
+                # their source map.  Transport that map through the shared
+                # writer instead of replacing it with an empty dict; the
+                # writer owns sanitising and serialising extraction_evidence.
+                evidence = {}
                 if isinstance(content, dict):
-                    content.pop("evidence", None)
+                    evidence = content.pop("evidence", {})
+                    if not isinstance(evidence, dict):
+                        evidence = {}
             else:
                 content = _na_stub(ic_class, code)
-            r = _write_l_doc(project, doc_name, content, {})
+                evidence = {}
+            r = _write_l_doc(project, doc_name, content, evidence)
             out.append(r)
         except Exception as e:
             print(f"      L24-L27 emit {doc_name} crashed: {e}",

@@ -10,6 +10,7 @@ PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROGRAMS))
 
 import phase1_post_process as post  # noqa: E402
+import phase1_doc_one_shot_runner as runner  # noqa: E402
 
 
 def _project(tmp_path: Path, text: str) -> Path:
@@ -111,4 +112,43 @@ def test_altered_cited_literal_fails_consumer(tmp_path):
          str(project)], text=True, capture_output=True, check=False)
     assert result.returncode == 1, result.stdout + result.stderr
     assert "not occur in the file" in result.stdout
+
+
+def test_real_l24_l27_bridge_preserves_negative_evidence_for_consumer(tmp_path):
+    """The canonical producer bridge must not erase extractor evidence.
+
+    ``emit_l_doc_skeleton`` returns both the negative L25 fields and their
+    source map.  The L24-L27 bridge historically passed an empty evidence map
+    to the common writer, so the final file kept the claims but lost the proof
+    and the real structural consumer returned rc=1.  Exercise that bridge,
+    then mutate the cited input to prove the consumer is reading it.
+    """
+    source = (
+        "The TT/SS/FF points are discrete analysis points, not a qualification "
+        "of a continuous voltage/temperature range.\n"
+        "IR/EM/ESD verification and current-capacity acceptance remain "
+        "unmeasured obligations.\n")
+    project = _project(tmp_path, source)
+
+    produced = runner._emit_l24_to_l27_docs(project)
+    assert any(r.path.name == "L25_RELIABILITY_MISSION_PROFILE.json"
+               for r in produced)
+    final = json.loads((project / "phase1" / "generated_docs"
+                        / "L25_RELIABILITY_MISSION_PROFILE.json").read_text())
+    assert final["extraction_evidence"], final
+
+    accepted = subprocess.run(
+        [sys.executable,
+         str(PROGRAMS / "l25_reliability_envelope_actionable_check.py"),
+         str(project)], text=True, capture_output=True, check=False)
+    assert accepted.returncode == 0, accepted.stdout + accepted.stderr
+
+    (project / "input" / "docs" / "reliability.md").write_text(
+        "The source was replaced after extraction.\n", encoding="utf-8")
+    stale = subprocess.run(
+        [sys.executable,
+         str(PROGRAMS / "l25_reliability_envelope_actionable_check.py"),
+         str(project)], text=True, capture_output=True, check=False)
+    assert stale.returncode == 1, stale.stdout + stale.stderr
+    assert "not occur in the file" in stale.stdout
 
