@@ -34,10 +34,10 @@ def _run(project: Path):
                            str(project)], capture_output=True, text=True)
 
 
-def _log(project: Path, rule: str):
+def _log(project: Path, rule: str, file_key: str = "rtl.sv:1"):
     (project / "WARN_ACCEPTANCE_LOG.md").write_text(
         "| gate | file | rule | resolution |\n"
-        f"| clock_domain_reg_crossing_check | rtl.sv:1 | {rule} | reviewed |\n")
+        f"| clock_domain_reg_crossing_check | {file_key} | {rule} | reviewed |\n")
 
 
 def test_rule_is_preserved_in_unaddressed_diagnostic(tmp_path):
@@ -57,6 +57,13 @@ def test_only_the_exact_rule_row_accepts_the_warning(tmp_path):
     _log(project, RULE)
     actual = _run(project)
     assert actual.returncode == 0, actual.stdout + actual.stderr
+
+
+def test_same_rule_for_a_different_file_does_not_accept(tmp_path):
+    project = _project(tmp_path)
+    _log(project, RULE, "other.sv:1")
+    actual = _run(project)
+    assert actual.returncode == 1, actual.stdout + actual.stderr
 
 
 def test_rule_specific_silence_comment_accepts_the_warning(tmp_path):

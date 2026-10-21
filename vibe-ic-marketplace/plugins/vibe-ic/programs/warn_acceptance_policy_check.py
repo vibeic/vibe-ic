@@ -159,8 +159,15 @@ def _check_acceptance_log(warn: Dict, project_dir: Path) -> bool:
         if len(cells) < 5:
             continue
         gate_col = cells[1] if len(cells) > 1 else ""
+        file_col = cells[2] if len(cells) > 2 else ""
         rule_col = cells[3] if len(cells) > 3 else ""
+        source_file = warn["file"]
+        source_line = warn["line"]
+        file_keys = {source_file}
+        if isinstance(source_line, int):
+            file_keys.add(f"{source_file}:{source_line}")
         if (warn["identifier"] and warn["program"] == gate_col
+                and file_col in file_keys
                 and warn["identifier"] == rule_col):
             return True
     return False
