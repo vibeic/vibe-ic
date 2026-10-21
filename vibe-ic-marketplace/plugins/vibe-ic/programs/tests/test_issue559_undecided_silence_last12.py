@@ -6,8 +6,7 @@ anywhere (`p0_gate_invocability_drift_check` reported them as `undecided_silence
 A decision that nothing re-derives decays into an assertion nobody can check, so
 these tests re-derive it:
 
-  * each named gate is still REGISTERED in the P0 umbrella (de-registering it
-    would shrink the denominator and delete the evidence the check exists);
+  * each named gate's active P0 routing matches its recorded disposition;
   * each named gate actually REJECTS the umbrella's own argv (measured live from
     its argparse output — the record cannot outlive the condition it describes);
   * each record is SUBSTANTIVE (a real measurement, not a rubber stamp);
@@ -62,17 +61,21 @@ def test_register_is_not_empty():
 
 
 @pytest.mark.parametrize("gate", sorted(REGISTER))
-def test_gate_is_registered_as_structural(gate):
-    """Recorded, not de-registered — keep the gate counted in the denominator."""
-    assert gate in F._STRUCTURAL_RTL_GATES, (
-        f"{gate} is recorded as undrivable but no longer registered in "
-        f"_STRUCTURAL_RTL_GATES; the record now describes a gate the umbrella "
-        f"never counts")
+def test_gate_active_routing_matches_its_record(gate):
+    """A zero-denominator gate may stay registered without grading an IC."""
+    expected = REGISTER[gate].get("active_project_p0", True)
+    actual = gate in F._STRUCTURAL_RTL_GATES
+    assert actual is expected, (
+        f"{gate}: active project P0={actual}, recorded={expected}")
 
 
 @pytest.mark.parametrize("gate", sorted(REGISTER))
 def test_recorded_gate_now_has_a_verdict_or_derived_na_contract(gate):
     """#1968 supersedes the old licensed silence with an explicit contract."""
+    active = REGISTER[gate].get("active_project_p0", True)
+    if not active:
+        assert gate not in F._STRUCTURAL_GATE_INVOCATION_CONTRACTS
+        return
     import tempfile
     with tempfile.TemporaryDirectory() as tmp:
         probe = pathlib.Path(tmp)

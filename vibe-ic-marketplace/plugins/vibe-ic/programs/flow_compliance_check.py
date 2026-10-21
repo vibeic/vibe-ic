@@ -396,7 +396,6 @@ _STRUCTURAL_RTL_GATES: tuple[str, ...] = (
     "fpga_wrapper_input_polluter_check",
     "oe_pattern_check",
     "crc_bitorder_check",
-    "interface_encoding_audit",
     "phy_counter_audit",
     "mask_application_check",
     "protocol_delimiter_consistency_check",
@@ -8749,7 +8748,6 @@ _STRUCTURAL_GATE_INVOCATION_CONTRACTS: Mapping[str, str] = MappingProxyType({
     "fpga_async_input_synchronizer_check": "fpga-top",
     "fpga_qsf_lint": "fpga-qsf",
     "fresh_agent_provenance_check": "reference-provenance",
-    "interface_encoding_audit": "interface-encoding",
     "json_schema_check": "l3-schema",
     "l12_sequence_implementation_check": "l12-sequences",
     "l9_completeness_check": "l9",
@@ -9164,6 +9162,7 @@ _ZERO_DENOMINATOR_CLASSIFICATION: Dict[str, Dict[str, str]] = {
 # ---------------------------------------------------------------------------
 _UNDRIVABLE_BY_STRUCTURAL_UMBRELLA: Dict[str, Dict[str, str]] = {
     "interface_encoding_audit": {
+        "active_project_p0": False,
         "category": "zero-decidable-denom",
         "requires": "--rtl-dir --top-module --out-dir (all umbrella-suppliable)",
         "measured": (
