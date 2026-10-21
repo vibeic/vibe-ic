@@ -1,5 +1,6 @@
 import hashlib
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -36,6 +37,21 @@ def _clear(monkeypatch):
     # pytest must restore that process state before an unrelated runner test.
     monkeypatch.setenv(rpt.ENV_ROOT, "")
     monkeypatch.setenv(rpt.ENV_MANIFEST, "")
+    monkeypatch.delenv("PYTHONDONTWRITEBYTECODE", raising=False)
+    monkeypatch.setattr(sys, "dont_write_bytecode", False)
+
+
+def test_activation_keeps_python_cache_out_of_retained_source(
+        tmp_path, monkeypatch):
+    _clear(monkeypatch)
+    programs = _plugin(tmp_path / "installed", "1.0.0", "print('A')\n")
+    project = tmp_path / "project"
+    project.mkdir()
+
+    rpt.activate(project, programs, programs / "runner.py")
+
+    assert sys.dont_write_bytecode is True
+    assert os.environ["PYTHONDONTWRITEBYTECODE"] == "1"
 
 
 def test_active_run_keeps_version_a_after_installed_tree_is_replaced(

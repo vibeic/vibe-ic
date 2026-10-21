@@ -295,6 +295,13 @@ def activate(project: Path, source_programs: Path,
              runner_file: Path) -> RuntimeProgramTree:
     """Retain the tree and put its flat programs directory first on sys.path."""
     tree = retain(project, source_programs)
+    # The retained tree is immutable invocation source.  Without both forms of
+    # this guard, imports in this interpreter and ordinary descendant Python
+    # processes create __pycache__ below the project-owned retained tree.  That
+    # is an unauthorized source-tree mutation and also self-invalidates the
+    # Phase-1 RTL transaction that the retained child is serving.
+    sys.dont_write_bytecode = True
+    os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
     retained_runner = tree.programs_dir / Path(runner_file).name
     tree.verify_child(retained_runner)
     retained = str(tree.programs_dir)

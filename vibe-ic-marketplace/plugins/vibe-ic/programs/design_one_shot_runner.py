@@ -3771,6 +3771,49 @@ def _phase1_tree_manifest_fd(
     return manifest
 
 
+def _phase1_runtime_launch_receipt_rel(project: Path) -> Optional[str]:
+    """Return the one runner-owned audit file allowed to move during dispatch.
+
+    A retained child is verified immediately before launch and that verification
+    atomically advances ``launches.json``.  The file therefore cannot remain
+    byte-identical to the snapshot while an ordinary producer is running.  It
+    is audit metadata, not a design input or generator output.  Bind the
+    exception to the active tree's digest-shaped canonical location so no
+    caller can use this seam to exempt an arbitrary project file.
+    """
+    tree = _RUNTIME_PROGRAM_TREE
+    if tree is None:
+        return None
+    try:
+        tree_sha = str(tree.tree_sha256)
+        launch = Path(tree.launch_path)
+        manifest = Path(tree.manifest_path)
+        project_root = Path(project).absolute()
+        launch_rel = launch.relative_to(project_root)
+        manifest_rel = manifest.relative_to(project_root)
+    except (AttributeError, KeyError, TypeError, ValueError):
+        return None
+    expected_parent = Path(".vibeic") / "runtime-program-trees" / tree_sha
+    if launch_rel != expected_parent / "launches.json":
+        return None
+    if manifest_rel != expected_parent / "manifest.json":
+        return None
+    return launch_rel.as_posix()
+
+
+def _phase1_live_matches_snapshot(
+        live: Dict[str, _Phase1TreeEntry],
+        baseline: Dict[str, _Phase1TreeEntry],
+        project: Path) -> bool:
+    """Compare a live tree while excluding only its bound launch receipt."""
+    receipt = _phase1_runtime_launch_receipt_rel(project)
+    if receipt is None:
+        return live == baseline
+    return ({rel: entry for rel, entry in live.items() if rel != receipt}
+            == {rel: entry for rel, entry in baseline.items()
+                if rel != receipt})
+
+
 def _phase1_copy_entry_fd(
         src_parent_fd: int, src_name: str,
         dst_parent_fd: int, dst_name: str,
@@ -3912,7 +3955,7 @@ def _phase1_snapshot_to_stage(
         os.close(stage_fd)
     binding.require_current()
     live = _phase1_tree_manifest_fd(binding.project_fd, binding.project)
-    if live != baseline:
+    if not _phase1_live_matches_snapshot(live, baseline, binding.project):
         raise _Phase1RtlOutputRefused(
             "PROJECT_CHANGED_DURING_SNAPSHOT", binding.project,
             "the held project changed while the isolated RTL snapshot was built")
@@ -4335,7 +4378,7 @@ def _phase1_commit_staged_tree(
     tops = _phase1_top_names_changed(baseline, final)
     binding.require_current()
     live = _phase1_tree_manifest_fd(binding.project_fd, binding.project)
-    if live != baseline:
+    if not _phase1_live_matches_snapshot(live, baseline, binding.project):
         raise _Phase1RtlOutputRefused(
             "PROJECT_CHANGED_BEFORE_RTL_COMMIT", binding.project,
             "the held project no longer matches the snapshot used by RTL dispatch")
@@ -4401,9 +4444,11 @@ def _phase1_commit_staged_tree(
                     "a prepared output subtree does not match staging")
 
         binding.require_current()
-        if (_phase1_tree_manifest_fd(
-                binding.project_fd, binding.project,
-                ignore_top={container_name}) != baseline):
+        prepared_live = _phase1_tree_manifest_fd(
+            binding.project_fd, binding.project,
+            ignore_top={container_name})
+        if not _phase1_live_matches_snapshot(
+                prepared_live, baseline, binding.project):
             raise _Phase1RtlOutputRefused(
                 "PROJECT_CHANGED_DURING_RTL_PREPARE", binding.project,
                 "the held project changed while final RTL subtrees were prepared")
@@ -4448,9 +4493,11 @@ def _phase1_commit_staged_tree(
         # caller performs one more live-root/result acceptance check while this
         # returned handle still owns all old subtrees.
         binding.require_current()
-        if (_phase1_tree_manifest_fd(
-                binding.project_fd, binding.project,
-                ignore_top={container_name}) != final):
+        published_live = _phase1_tree_manifest_fd(
+            binding.project_fd, binding.project,
+            ignore_top={container_name})
+        if not _phase1_live_matches_snapshot(
+                published_live, final, binding.project):
             raise _Phase1RtlOutputRefused(
                 "RTL_TRANSACTION_FINAL_VERIFY_FAILED", binding.project,
                 "the published project tree does not match staged outputs")
