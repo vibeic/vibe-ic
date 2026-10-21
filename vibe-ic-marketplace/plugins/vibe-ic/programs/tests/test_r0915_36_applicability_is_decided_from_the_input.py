@@ -178,7 +178,14 @@ def test_a_word_merely_CONTAINING_a_term_is_not_the_subject(tmp_path, decoy):
 def test_an_unregistered_layer_is_untouched(tmp_path):
     """Every other layer keeps the APPLICABLE skeleton it has today."""
     proj = _project(tmp_path, spec_md="It multiplies.\n")
-    for code in ("L20", "L21", "L22", "L23"):
+    # L20 gained the narrowly scoped, source-table extractor in #3443.  It is
+    # still an APPLICABLE, unextracted skeleton for this unrelated input; only
+    # L21/L22 remain wholly unregistered here (L23 was already registered).
+    assert "L20" in P._LAYER_EXTRACTORS
+    l20 = _emit(proj, "L20")
+    assert l20["applicability"] == "APPLICABLE"
+    assert l20["extraction_status"] == "NOT_YET_EXTRACTED"
+    for code in ("L21", "L22"):
         assert code not in P._INPUT_SUBJECT_TERMS
         assert code not in P._LAYER_EXTRACTORS
         doc = _emit(proj, code)

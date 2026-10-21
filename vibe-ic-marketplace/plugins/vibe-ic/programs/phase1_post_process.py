@@ -566,9 +566,16 @@ def _l25_extract(project_dir: Path) -> Optional[Dict[str, Any]]:
     return extract_negative_reliability(project_dir)
 
 
+def _l20_extract(project_dir: Path) -> Optional[Dict[str, Any]]:
+    """L20's explicit, typed scan topology from design-owned input."""
+    from l20_dft_scan_topology_extract import extract_dft_scan_topology
+    return extract_dft_scan_topology(project_dir)
+
+
 #: Layer -> source extractor. A layer without an entry keeps its skeleton.
 #: L23 preserves typed source clauses; L24 extracts signoff requirements.
 _LAYER_EXTRACTORS: Dict[str, Any] = {
+    "L20": _l20_extract,
     "L23": _l23_extract,
     "L24": _l24_extract,
 }
@@ -755,7 +762,7 @@ def emit_l_doc_skeleton(l_doc_code: str,
                 print(f"LAYER_EXTRACTION_FAILED {l_doc_code}: {exc}", file=sys.stderr)
                 extracted = None
     if extracted:
-        if str(l_doc_code or "").upper() == "L25":
+        if str(l_doc_code or "").upper() in ("L20", "L25"):
             fields_template.update(extracted.get("fields", {}))
         else:
             fields_template.update(extracted)
@@ -804,7 +811,7 @@ def emit_l_doc_skeleton(l_doc_code: str,
                     "label": f"{key} ({record['evidence']})",
                 })
         out["evidence"] = evidence
-    elif extracted and str(l_doc_code or "").upper() == "L25":
+    elif extracted and str(l_doc_code or "").upper() in ("L20", "L25"):
         out["extraction_evidence"] = extracted.get("extraction_evidence", {})
         out["evidence"] = extracted.get("extraction_evidence", {})
         out["source_documents"] = extracted.get("source_documents", [])
