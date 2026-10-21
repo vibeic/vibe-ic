@@ -1,0 +1,4 @@
+Verification shall exercise reset interruption at every transfer phase.
+Verification shall exercise withheld clocks.
+Verification shall exercise delayed responses and return-to-idle qualification.
+Verification shall exercise stuck-high acknowledgment behavior.

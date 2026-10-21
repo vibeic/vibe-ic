@@ -53810,6 +53810,81 @@ def _applies_when(text: str) -> "Optional[Dict[str, str]]":
     return {"option": m.group(1), "stated": m.group(0)}
 
 
+# #3469 — an imperative verification requirement is a declaration that a
+# scenario must eventually be checked.  It is not yet an executable test case
+# when the input gives no stimulus and no oracle.  Keep those two states in
+# separate containers so Phase 1 preserves the requirement without allowing a
+# downstream runner to count prose as measured coverage.
+_L10_OBLIGATION_RE = re.compile(
+    r"(?i)^(?:verification|tests?|testing|validation|qualification)\s+"
+    r"(?:shall|must)\s+(?:exercise|cover|verify|check|test|validate)\b")
+_L10_OBLIGATION_RETIRED_RE = re.compile(
+    r"(?i)\b(?:is|are|was|were)?\s*(?:not|no\s+longer)\s+required\b")
+
+
+def _harvest_verification_obligations(
+        extracted: Dict[str, str]) -> List[Dict[str, Any]]:
+    """Preserve source-bound imperative verification obligations.
+
+    Only a sentence whose grammatical subject is verification/testing and
+    whose modal is ``shall`` or ``must`` qualifies.  Descriptive prose and
+    denied/retired requirements do not.  A fenced example is not a design
+    declaration.  The row intentionally has no stimulus, expected value,
+    result, or coverage field: those facts are unresolved from the input.
+    """
+    rows: List[Dict[str, Any]] = []
+    seen: Set[Tuple[str, int, str]] = set()
+    used_names: Set[str] = set()
+    for source, text in (extracted or {}).items():
+        if not isinstance(text, str):
+            continue
+        in_fence = False
+        for line_no, raw in enumerate(text.splitlines(), 1):
+            stripped = raw.strip()
+            if stripped.startswith(("```", "~~~")):
+                in_fence = not in_fence
+                continue
+            if in_fence or not stripped or stripped.startswith("|"):
+                continue
+            prose = re.sub(
+                r"^(?:[-*+]\s+|\d+[.)]\s+|>\s+)", "", stripped).strip()
+            # A document often keeps a whole paragraph on one physical line.
+            # Evaluate each sentence, while retaining the physical source line
+            # for an exact citation.
+            for sentence in re.split(r"(?<=[.!?])\s+", prose):
+                sentence = sentence.strip()
+                if not _L10_OBLIGATION_RE.match(sentence):
+                    continue
+                # The anchored grammar already refuses "shall not exercise".
+                # Refuse a later explicit retirement too, but do not apply the
+                # broad prose-negation classifier: "verify no response" is a
+                # positive obligation to test negative behaviour.
+                if _L10_OBLIGATION_RETIRED_RE.search(sentence):
+                    continue
+                key = (str(source), line_no, sentence)
+                if key in seen:
+                    continue
+                seen.add(key)
+                stem = re.sub(
+                    r"[^a-z0-9]+", "_", sentence.lower()).strip("_")
+                stem = stem[:64] or f"verification_obligation_{len(rows) + 1}"
+                name = stem
+                suffix = 2
+                while name in used_names:
+                    name = f"{stem[:58]}_{suffix}"
+                    suffix += 1
+                used_names.add(name)
+                rows.append({
+                    "name": name,
+                    "kind": "verification_obligation",
+                    "statement": sentence,
+                    "oracle_status": "UNRESOLVED_FROM_INPUT",
+                    "source": str(source),
+                    "source_line": line_no,
+                })
+    return rows
+
+
 def _harvest_test_cases_from_input_tables(
         extracted: Dict[str, str]) -> List[Dict[str, Any]]:
     """Harvest typed test cases from verification-plan tables in the input
@@ -54275,6 +54350,17 @@ def gen_l10_test_cases(project: Path,
             "literal": _dv["description"][:120],
             "label": "DV checklist row → functional test case (#670)"})
 
+    # #3469 — preserve imperative verification obligations even when their
+    # executable oracle is absent.  They remain outside `test_cases`, so no
+    # execution gate can mistake declaration capture for a test or PASS.
+    test_obligations = _harvest_verification_obligations(extracted)
+    for _obligation in test_obligations:
+        evidence.setdefault(_obligation["source"], []).append({
+            "literal": _obligation["statement"],
+            "label": ("imperative verification obligation; executable "
+                      "oracle unresolved from input"),
+        })
+
     # v1.6.67 — closes issue #8 Bug B (L10 half). Mirror the
     # `no_<X>_in_input` emission convention used by L1/L3/L5/L6/L7/
     # L8/L9/L11/L13 so downstream consumers can distinguish
@@ -54411,6 +54497,8 @@ def gen_l10_test_cases(project: Path,
         "ic_name": ic_name,
         "test_cases": cases,
         "no_test_cases_in_input": no_test_cases_in_input,
+        "test_obligations": test_obligations,
+        "no_test_obligations_in_input": not bool(test_obligations),
         "bring_up_sequence": bring_up_sequence,
         "no_bring_up_sequence_in_input": no_bring_up_sequence_in_input,
         # The census is published whether or not it found anything: a reader

@@ -405,5 +405,16 @@
     "version_observed": "1.30.32, exact official commit400840b089083915d9420191b8397ce5c92025a1, tree55b5ad54216f1615c365fdadaee31f2b09bdd51c. No moving-main or tool-image assumption.",
     "version_lkg": "Unknown.",
     "fixture_path": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/fixtures/phase1_local/neutral_wrapped_block_latency/wrapped_latency.md"
+  },
+  {
+    "issue": 3469,
+    "project": "opentitan_aes",
+    "layer": "L10_TEST_CASES",
+    "field": "test_obligations, test_cases, no_test_cases_in_input",
+    "expected": "L10 preserves four source-bound verification obligations and explicitly marks their executable oracle unresolved from input. It must not fabricate stimulus timing, expected signal values, pass status, or measured coverage, and must not route these statements into L22 regression_matrix or numeric coverage_goals.",
+    "actual": "The canonical producer returns rc=0 with test_cases=[], no_test_cases_in_input=true, and none of reset interruption, withheld clocks, delayed responses, or stuck-high appears in L10.",
+    "version_observed": "v1.30.61, v1.30.96, and main 3ce036897d",
+    "version_lkg": "",
+    "fixture_path": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/fixtures/phase1_local/opentitan_aes/l10_verification_shall.txt"
   }
 ]

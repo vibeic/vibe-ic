@@ -1007,6 +1007,13 @@ def emit_compliance_vectors(l10: dict, l16: dict, l22: dict) -> str:
             txt = str(item.get("name") if isinstance(item, dict) else item)
             if txt:
                 lines.append(f"L10: {txt[:120]}")
+    # #3469 — unresolved obligations are declarations, not executable cases.
+    # Carry their source statement into the compliance catalog without
+    # synthesising a stimulus, oracle, result, or coverage claim.
+    for item in _list_or_empty(l10.get("test_obligations")):
+        txt = str(item.get("statement") if isinstance(item, dict) else item)
+        if txt:
+            lines.append(f"L10: {txt[:120]}")
     # L16 must-have compliance.
     #
     # SILENT DEAD READ (fixed): this used to read only `must_have_properties` /
