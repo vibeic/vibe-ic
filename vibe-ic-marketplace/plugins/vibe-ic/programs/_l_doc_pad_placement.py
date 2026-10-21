@@ -167,8 +167,8 @@ _MIN_DISTANCE_RE = re.compile(
     r"min[_\s]*distance\s*[=:]\s*(?P<v>\d+(?:\.\d+)?)", re.I)
 
 #: A document sentence that hands the IO cell library to the PDK. Both tokens
-#: required, on one line, so a line merely mentioning the PDK does not count.
-_IO_TOKEN_RE = re.compile(r"\bi/?o\s+(?:cell|pad)\b", re.I)
+#: are required in that sentence, so an unrelated PDK mention does not count.
+_IO_TOKEN_RE = re.compile(r"\bi/?o\s+(?:cell|pad)s?\b", re.I)
 _PDK_TOKEN_RE = re.compile(r"\bpdk\b", re.I)
 
 #: `<expr>` forms this module resolves. An integer, a declared parameter, or a
@@ -263,14 +263,24 @@ def parse_pad_placement(text: str, source: str) -> Optional[PadPlacement]:
     design whose pad ring is empty are different facts and only one of them
     can be checked.
     """
-    # A line that DENIES the delegation states the opposite of one that makes
-    # it — "the I/O cells are NOT taken from the PDK" carries both tokens and
-    # is not a delegation. The line is already this predicate's whole record
-    # ("Both tokens required, on one line"), so the polarity question is asked
-    # of the same line and of nothing wider.
-    delegates = any(_IO_TOKEN_RE.search(ln) and _PDK_TOKEN_RE.search(ln)
-                    and _is_denied(ln) is None
-                    for ln in text.splitlines())
+    # A SENTENCE that DENIES the delegation states the opposite of one that
+    # makes it — "the I/O cells are NOT taken from the PDK" carries both
+    # tokens and is not a delegation.  A markdown paragraph commonly keeps
+    # several sentences on one physical line, so a neighbouring sentence such
+    # as "No signal is dropped" must not retract the PDK choice.  Both tokens
+    # must occur in the same sentence and polarity is asked of that sentence.
+    delegates = False
+    for line in text.splitlines():
+        for io_token in _IO_TOKEN_RE.finditer(line):
+            lo, hi = _sentence_scope(line, io_token.start(), io_token.end(),
+                                     extra_breaks=("\n",))
+            sentence = line[lo:hi]
+            if (_PDK_TOKEN_RE.search(sentence)
+                    and _is_denied(sentence) is None):
+                delegates = True
+                break
+        if delegates:
+            break
     for title, body in _sections(text):
         if not (_PAD_TOKEN_RE.search(title)
                 and _PLACEMENT_TOKEN_RE.search(title)):

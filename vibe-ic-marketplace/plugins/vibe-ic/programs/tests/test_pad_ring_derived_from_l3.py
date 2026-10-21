@@ -342,6 +342,48 @@ def test_a_denied_delegation_sentence_does_not_delegate():
         denied, "d.md").delegates_io_library_to_pdk is False
 
 
+@pytest.mark.parametrize("noun", ["I/O cells", "IO pads"])
+def test_plural_io_cells_and_pads_delegate_to_the_pdk(noun):
+    """Ordinary plural prose carries the same delegation as the singular.
+
+    Keep the same-line PDK and denial controls here: broadening the noun must
+    not turn a bare IO mention or a rejected delegation into authority.
+    """
+    base = _POLARITY_DOC.replace(
+        "The I/O cell library is provided by the PDK.",
+        f"{noun} are selected from the pinned process PDK library.")
+    got = LDOC.parse_pad_placement(base, "d.md")
+    assert got is not None
+    assert got.delegates_io_library_to_pdk is True
+
+    no_pdk = base.replace(" from the pinned process PDK library", " locally")
+    assert LDOC.parse_pad_placement(
+        no_pdk, "d.md").delegates_io_library_to_pdk is False
+
+    denied = base.replace("are selected", "are NOT selected")
+    assert LDOC.parse_pad_placement(
+        denied, "d.md").delegates_io_library_to_pdk is False
+
+
+def test_a_neighbouring_denial_does_not_retract_pdk_delegation():
+    """A paragraph may put several sentences on one physical line.
+
+    The second sentence constrains the signal partition; it does not deny the
+    first sentence's PDK library authority.  A same-sentence denial remains
+    rejected by the paired control.
+    """
+    positive = _POLARITY_DOC.replace(
+        "The I/O cell library is provided by the PDK.",
+        "I/O cells are selected from the pinned process PDK IO library. "
+        "No signal is serialized, dropped, tied, or renamed by this plan.")
+    assert LDOC.parse_pad_placement(
+        positive, "d.md").delegates_io_library_to_pdk is True
+
+    denied = positive.replace("are selected", "are NOT selected")
+    assert LDOC.parse_pad_placement(
+        denied, "d.md").delegates_io_library_to_pdk is False
+
+
 def test_the_min_distance_denial_reach_is_the_sentence():
     """Both directions AND the stated limit of the reach, in one place, so the
     limit cannot rot into a silent surprise.
