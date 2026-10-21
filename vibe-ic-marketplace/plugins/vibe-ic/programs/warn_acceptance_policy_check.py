@@ -100,9 +100,16 @@ def _load_gate_reports(reports_dir: Path) -> List[Dict]:
             if not isinstance(finding, dict):
                 continue
             if finding.get("severity") == "WARN":
+                rule = finding.get("rule")
+                category = finding.get("category")
+                identifier = (rule if isinstance(rule, str) and rule.strip()
+                              else category if isinstance(category, str)
+                              else "")
                 warns.append({
                     "program": program,
-                    "category": finding.get("category", ""),
+                    "identifier": identifier.strip(),
+                    "rule": rule if isinstance(rule, str) else "",
+                    "category": category if isinstance(category, str) else "",
                     "file": finding.get("file", ""),
                     "line": finding.get("line", 0),
                     "message": finding.get("message", ""),
@@ -122,8 +129,10 @@ def _check_silence_comment(warn: Dict, project_dir: Path) -> bool:
     except OSError:
         return False
 
-    category = warn["category"].lower().replace("_", "-")
-    silence_re = re.compile(rf'//\s*{re.escape(category)}-ok', re.IGNORECASE)
+    identifier = warn["identifier"].lower().replace("_", "-")
+    if not identifier:
+        return False
+    silence_re = re.compile(rf'//\s*{re.escape(identifier)}-ok', re.IGNORECASE)
 
     target_line = warn["line"]
     start = max(0, target_line - 6)
@@ -151,7 +160,8 @@ def _check_acceptance_log(warn: Dict, project_dir: Path) -> bool:
             continue
         gate_col = cells[1] if len(cells) > 1 else ""
         rule_col = cells[3] if len(cells) > 3 else ""
-        if warn["program"] in gate_col and warn["category"] in rule_col:
+        if (warn["identifier"] and warn["program"] == gate_col
+                and warn["identifier"] == rule_col):
             return True
     return False
 
@@ -194,7 +204,7 @@ def audit(
             unaddressed.append(w)
             findings.append(Finding(
                 "WARN", "UNADDRESSED_WARN",
-                f"WARN from {w['program']}/{w['category']} at "
+                f"WARN from {w['program']}/{w['identifier']} at "
                 f"{w['file']}:{w['line']} has no silence comment "
                 f"or WARN_ACCEPTANCE_LOG.md entry. Address the "
                 f"finding or document acceptance before declaring done.",
