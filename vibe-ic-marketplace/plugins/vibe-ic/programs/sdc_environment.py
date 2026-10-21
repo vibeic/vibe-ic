@@ -724,6 +724,31 @@ def pad_drive_sdc_lines(record: Optional[Dict[str, object]],
             if ln and not ln.startswith("#")]
 
 
+def _disable_refused_staged_drive(text: str) -> str:
+    """Make each refused physical drive command inert in the consumer deck.
+
+    The exact original line remains visible in the comment and in
+    ``refused_staged_sdc_lines``.  Executing a line after recording that it was
+    not admitted makes the record and its consumer contradict one another.
+    The NOT_MEASURED record remains authoritative downstream; disabling the
+    command does not turn the unresolved boundary into a timing PASS.
+    """
+    out: List[str] = []
+    continuing = False
+    for raw in text.splitlines(keepends=True):
+        refused = continuing or bool(re.match(
+            r"\s*(set_input_transition|set_driving_cell)\b", raw))
+        if refused:
+            ending = "\n" if raw.endswith("\n") else ""
+            line = raw[:-1] if ending else raw
+            out.append(
+                f"# R-0929-PAD-INPUT-DRIVE REFUSED: {line} [disabled]{ending}")
+            continuing = line.rstrip().endswith("\\")
+        else:
+            out.append(raw)
+    return "".join(out)
+
+
 def staged_sdc_pad_input_drive(project: Path, text: str, staged_rel: str,
                                container: str = "",
                                to_container_path: Optional[Callable[[str, str], str]] = None,
@@ -752,6 +777,7 @@ def staged_sdc_pad_input_drive(project: Path, text: str, staged_rel: str,
             and boundary.get("classification") in ("UNKNOWN", "UNRECORDED")):
         if own:
             record["refused_staged_sdc_lines"] = own
+            text = _disable_refused_staged_drive(text)
         lines = render_pad_input_drive(record, time_scale)
         record["sdc_lines"] = pad_drive_sdc_lines(record, time_scale)
         if lines:

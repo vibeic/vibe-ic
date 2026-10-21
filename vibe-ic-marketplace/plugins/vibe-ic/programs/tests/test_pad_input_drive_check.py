@@ -204,15 +204,42 @@ def test_staged_drive_cannot_override_a_stale_analysis_boundary(tmp_path):
     assert record["boundary"]["classification"] == "UNKNOWN"
     assert record["refused_staged_sdc_lines"] == [
         "set_input_transition 0.3 [all_inputs]"]
+    assert "set_input_transition 0.3 [all_inputs]" not in [
+        line.strip() for line in text.splitlines()
+        if line.strip() and not line.lstrip().startswith("#")]
     assert "# NOT_MEASURED: OFFCHIP_INPUT_DRIVE" in text
 
 
 def test_staged_drive_is_declared_at_the_recorded_chip_top(tmp_path):
     """Positive control: the same declaration is admissible at the producer's
     recorded chip boundary and the actual Step-23 gate passes."""
-    _, record, rc, gate, step23 = _stage_drive(_die(tmp_path), "neutral_chip")
+    text, record, rc, gate, step23 = _stage_drive(
+        _die(tmp_path), "neutral_chip")
     assert (record["verdict"], rc, gate["verdict"], step23.status) == (
         "DECLARED", 0, "PASS", "PASS")
+    assert "set_input_transition 0.3 [all_inputs]" in [
+        line.strip() for line in text.splitlines()
+        if line.strip() and not line.lstrip().startswith("#")]
+
+
+def test_refused_multiline_drive_cannot_leave_an_active_continuation(tmp_path):
+    """A wrapped command is one command; every physical line becomes inert."""
+    project = _die(tmp_path)
+    pad_record = project / SE.IO_PAD_RECORD
+    pad = json.loads(pad_record.read_text())
+    pad.update(verdict="WROTE", core_module="neutral_core",
+               chip_top_module="neutral_chip")
+    pad_record.write_text(json.dumps(pad))
+    staged = ("create_clock -period 10 [get_ports clk]\n"
+              "set_input_transition -max 0.3 \\\n"
+              "  [all_inputs]\n")
+    text, record = SE.staged_sdc_pad_input_drive(
+        project, staged, "input/constraints/neutral.sdc",
+        analysis_top="neutral_stale_top")
+    assert record["verdict"] == "NOT_MEASURED"
+    active = [line for line in text.splitlines()
+              if line.strip() and not line.lstrip().startswith("#")]
+    assert active == ["create_clock -period 10 [get_ports clk]"]
 
 
 def test_declared_drive_refuses_a_changed_pad_boundary_record(tmp_path):
