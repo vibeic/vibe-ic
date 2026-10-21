@@ -48,3 +48,78 @@ def test_with_waveform(tmp_path):
     # scan now counts what it walked. The assertion is STRONGER here, not
     # weaker: it pins the count to the fixture's own content.
     assert "enumerated 1" in r.stdout and "found 0" in r.stdout, r.stdout
+
+
+def _project_with_timing(tmp_path: Path, l1: dict, l2: dict) -> tuple[Path, Path]:
+    gd = tmp_path / "phase1" / "generated_docs"
+    gd.mkdir(parents=True)
+    (gd / "L1_DATASHEET.json").write_text(json.dumps(l1))
+    (gd / "L2_FRS.json").write_text(json.dumps(l2))
+    (gd / "L5_ADI_SPEC.json").write_text(
+        json.dumps({"no_analog": True, "analog_blocks": []}))
+    wf = gd / "L8_TIMING_WAVEFORM.json"
+    # Ordinary external I/O timing is populated, so the older structural-
+    # absence escape cannot decide this case.
+    wf.write_text(json.dumps({
+        "timing_windows": [{"name": "input_setup", "max_ns": 2.0}],
+        "timing_constants": [{"name": "output_delay", "value": 20,
+                              "unit": "ns"}],
+        "waveforms": [],
+    }))
+    return tmp_path, wf
+
+
+def test_registry_proven_non_half_duplex_is_not_applicable(tmp_path):
+    project, wf = _project_with_timing(
+        tmp_path,
+        {"description": "AES block cipher encryption and decryption",
+         "features": ["128-bit key schedule", "S-box rounds"]},
+        {"protocol_overview": None},
+    )
+    report = project / "gate.json"
+    r = _run([str(wf), "--json", str(report)])
+    doc = json.loads(report.read_text())
+    assert r.returncode == 0, (r.stdout, r.stderr, doc)
+    assert doc["verdict"] == "VACUOUS_PASS", doc
+    assert doc["reason_class"] == "DESIGN_DECLARED_NA", doc
+    assert doc["applicability_evidence"] == {
+        "ic_class": "crypto_accelerator",
+        "verification_track": "generic_full_stack",
+        "half_duplex_bus": False,
+        "registry_matched": True,
+        "decisive_evidence": (
+            "no analog + crypto-accelerator structural signature "
+            "(algorithm_family deny-guard + >=2 features, #542)"),
+    }
+
+
+def test_unregistered_class_never_opens_registry_escape(tmp_path, monkeypatch):
+    import internal_vs_external_timing_check as gate
+    import ic_class_profile
+
+    project, wf = _project_with_timing(
+        tmp_path, {"description": "opaque digital device"},
+        {"protocol_overview": None},
+    )
+    monkeypatch.setattr(
+        ic_class_profile, "detect_ic_class",
+        lambda _project: {"ic_class": "future_unregistered_class"})
+    monkeypatch.setattr(
+        ic_class_profile, "class_verification_flags",
+        lambda _class: {"registry_matched": False,
+                        "half_duplex_bus": False})
+    assert gate._registry_non_half_duplex(str(wf), wf) is None
+
+
+def test_explicit_half_duplex_true_overrides_non_half_duplex_class(tmp_path):
+    project, wf = _project_with_timing(
+        tmp_path,
+        {"description": "AES block cipher encryption and decryption",
+         "features": ["128-bit key schedule", "S-box rounds"]},
+        {"protocol_overview": {"half_duplex": True}},
+    )
+    report = project / "gate.json"
+    r = _run([str(wf), "--json", str(report)])
+    doc = json.loads(report.read_text())
+    assert r.returncode != 0, (r.stdout, r.stderr, doc)
+    assert doc["verdict"] != "VACUOUS_PASS", doc

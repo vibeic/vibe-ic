@@ -560,6 +560,45 @@ def _read_l2_half_duplex(arg: str) -> bool | None:
     return None
 
 
+def _registry_non_half_duplex(arg: str, resolved: Path) -> dict[str, Any] | None:
+    """Return auditable class evidence only for an explicit registry false.
+
+    Phase 1 intentionally leaves L2.protocol_overview null for ICs whose
+    interface is not a wire protocol. The project-wide class detector is the
+    canonical authority for that applicability decision. Unknown classes,
+    unregistered classes, detector failures, and registry values other than
+    the literal boolean False all fail closed by returning None.
+
+    An explicit L2 half_duplex=true is handled before this helper is used, so
+    a class/declaration conflict never suppresses the timing checks.
+    """
+    p = Path(arg)
+    project: Path | None = p if p.is_dir() else None
+    if project is None:
+        gd = resolved.parent
+        if gd.name == "generated_docs" and gd.parent.name == "phase1":
+            project = gd.parent.parent
+    if project is None or not project.is_dir():
+        return None
+    try:
+        from ic_class_profile import detect_ic_class, class_verification_flags
+        profile = detect_ic_class(project) or {}
+        ic_class = str(profile.get("ic_class") or "unknown")
+        flags = class_verification_flags(ic_class)
+    except Exception:
+        return None
+    if (flags.get("registry_matched") is not True
+            or flags.get("half_duplex_bus") is not False):
+        return None
+    return {
+        "ic_class": ic_class,
+        "verification_track": flags.get("verification_track"),
+        "half_duplex_bus": False,
+        "registry_matched": True,
+        "decisive_evidence": profile.get("decisive_evidence", ""),
+    }
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(
         description="Require L8 to separate host-side (RX) and DUT-side (TX) timing groups.",
@@ -580,6 +619,10 @@ def main() -> int:
         return 2
     waveform_path = str(resolved)
     half_duplex_l2 = _read_l2_half_duplex(args.waveform)
+    registry_non_hd = (
+        _registry_non_half_duplex(args.waveform, resolved)
+        if half_duplex_l2 is None else None
+    )
 
     try:
         with open(waveform_path, "r") as f:
@@ -616,6 +659,40 @@ def main() -> int:
                 # reads, or a green vacuous record is filed INCOMPLETE.
                 "reason_class": "DESIGN_DECLARED_NA",
                 "skip_kind": "class-not-applicable",
+                "rationale": msg,
+            }, indent=2)
+            if args.json == "-":
+                print(txt)
+            else:
+                Path(args.json).parent.mkdir(parents=True, exist_ok=True)
+                Path(args.json).write_text(txt + "\n")
+        else:
+            print(msg)
+        return 0
+
+    # #3415: non-protocol classes must not be forced to invent an L2
+    # half-duplex declaration merely to disable a rule outside their class.
+    # This requires a registry match and the literal half_duplex_bus=false.
+    # Unknown classes stay INCOMPLETE, and explicit L2 true above prevents
+    # the class fact from masking contradictory design input.
+    if registry_non_hd is not None:
+        msg = (
+            "VACUOUS_PASS: canonical IC-class registry declares "
+            f"half_duplex_bus=false for {registry_non_hd['ic_class']!r} "
+            f"(verification_track="
+            f"{registry_non_hd.get('verification_track')!r}) -- RX/TX "
+            "single-wire timing split rule does not apply."
+        )
+        if args.json:
+            txt = json.dumps({
+                "source_file": waveform_path,
+                "total_findings": 0,
+                "errors": 0,
+                "findings": [],
+                "verdict": "VACUOUS_PASS",
+                "reason_class": "DESIGN_DECLARED_NA",
+                "skip_kind": "class-not-applicable",
+                "applicability_evidence": registry_non_hd,
                 "rationale": msg,
             }, indent=2)
             if args.json == "-":
