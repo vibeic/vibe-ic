@@ -1961,23 +1961,49 @@ _TOKEN_BREADTH_CEILING = 0.5
 # a claim that they do not exist.
 
 
+def _negative_status_key(key: str) -> bool:
+    """True when a field reports absence/refusal rather than design intent.
+
+    These fields can quote the exact fact they failed to establish.  Treating
+    their text or Boolean value as positive content lets a diagnostic such as
+    ``half_duplex is not True`` plus an unrelated ``no_*_in_input: false``
+    prove that another layer owns ``half_duplex=false`` (#3464).
+    """
+    low = str(key or "").strip().lower()
+    return bool(
+        (low.startswith("no_") and low.endswith("_in_input"))
+        or low.endswith(("_skipped_reason", "_refusal", "_diagnostic",
+                         "_error", "_warning"))
+    )
+
+
 def _ownership_units(blob: Any) -> List[str]:
     """The layer's CONTENT as haystack units — the document minus its
     envelope. See `_L_DOC_ENVELOPE_KEYS` for what is dropped and why."""
-    if not isinstance(blob, dict):
-        return _haystack_units(blob)
     out: List[str] = []
-    for key, value in blob.items():
-        if key in _L_DOC_ENVELOPE_KEYS:
-            continue
-        if key == _EVIDENCE_KEY:
-            # values only: the source-path keys are provenance, not content.
-            for entry in (value.values() if isinstance(value, dict)
-                          else [value]):
-                out.extend(_evidence_units(entry))
-            continue
-        out.append(str(key))
-        out.extend(_haystack_units(value))
+
+    def walk(node: Any, path: List[str]) -> None:
+        if isinstance(node, dict):
+            for key, value in node.items():
+                if not path and key in _L_DOC_ENVELOPE_KEYS:
+                    continue
+                if _negative_status_key(key):
+                    continue
+                if not path and key == _EVIDENCE_KEY:
+                    # values only: source-path keys are provenance.
+                    for entry in (value.values()
+                                  if isinstance(value, dict) else [value]):
+                        out.extend(_evidence_units(entry))
+                    continue
+                out.append(str(key))
+                walk(value, path + [str(key)])
+        elif isinstance(node, list):
+            for value in node:
+                walk(value, path)
+        elif node is not None:
+            out.append(str(node))
+
+    walk(blob, [])
     return out
 
 
@@ -2387,6 +2413,8 @@ def token_paths(blob: Any, token: str) -> List[str]:
     def walk(node: Any, path: List[str]) -> None:
         if isinstance(node, dict):
             for k, v in node.items():
+                if _negative_status_key(k):
+                    continue
                 walk(v, path + [str(k)])
         elif isinstance(node, list):
             for v in node:
@@ -2461,6 +2489,20 @@ def carriage_sentence(carriage: Dict[str, Any]) -> str:
                 f"bucket ({', '.join(where[:4])}) and under no field named "
                 "for it. Recorded as a DISAGREEMENT, not promoted: "
                 + CARRIAGE_RULE + ".")
+    absent = carriage.get("tokens_in_no_layer") or []
+    if absent:
+        carried = carriage.get("tokens_carried_elsewhere") or []
+        # The row-level verdict is deliberately an OR over tokens (#2150),
+        # but the prose must not turn that partial observation into an owner
+        # claim about the whole fact.  In particular, a ubiquitous Boolean
+        # ``false`` does not prove that another layer owns ``half_duplex=false``
+        # when ``half_duplex`` itself is nowhere in that layer (#3465).
+        return (
+            "Carriage: only part of the fact appears in named fields in other "
+            f"layers (carried token(s): {', '.join(carried) or '(none)'}); "
+            f"token(s) {', '.join(absent)} are in NO other layer. This partial "
+            "match does not establish that another layer owns the fact."
+        )
     where = sorted({f"{stem}.{q}"
                     for t in per.values()
                     for stem, qs in t["named"].items() for q in qs})
