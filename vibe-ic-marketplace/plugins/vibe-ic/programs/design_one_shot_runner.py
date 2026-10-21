@@ -21367,7 +21367,16 @@ def dft_scan_insertion_contract(project: Path) -> Tuple[bool, str]:
     evidence = result.get("evidence") or {}
     actionable = int(evidence.get("typed_scan_chain_count") or 0) > 0
     if verdict in ("PASS", "PASS_WITH_ADVISORY") and actionable:
-        return True, "L20 declares an actionable DFT scan topology"
+        try:
+            import fault_scan_chain_insert as _scan_contract
+            _binding, problems = _scan_contract.load_l20_scan_contract(project)
+        except Exception as exc:  # noqa: BLE001
+            problems = [f"L20 fixed-producer compatibility check crashed: {exc}"]
+        if problems:
+            return False, (
+                "L20 topology is not implementable by Step 11: "
+                + "; ".join(problems))
+        return True, "L20 declares a Step-11-compatible one-chain DFT topology"
     return False, (
         "L20 does not authorize automatic scan insertion "
         f"(verdict={verdict or 'UNKNOWN'}; "
@@ -21510,9 +21519,17 @@ def scan_netlist_is_real_chain(project: Path) -> bool:
     artefact must still be on disk. PURE apart from the two reads.
     """
     meta = _read_scan_chain_meta(project)
-    return bool(meta and meta.get("published")
-                and meta.get("chain_length_matches_flop_count")
-                and (project / "phase2/stage2/dft/scan_netlist.v").is_file())
+    if not (meta and meta.get("published")
+            and meta.get("chain_length_matches_flop_count")
+            and meta.get("authorized_by_l20_contract")
+            and (project / "phase2/stage2/dft/scan_netlist.v").is_file()):
+        return False
+    try:
+        import fault_scan_chain_insert as _scan_contract
+        current, _reason = _scan_contract.l20_binding_is_current(project, meta)
+        return current
+    except Exception:  # fail closed; stale/unreadable authority is no authority
+        return False
 
 
 def lec_producer_yosys_timeout_s() -> int:
@@ -22679,7 +22696,8 @@ def _step_dft_insertion(project: Path, top_name: str, container: str,
                      str(project), "--netlist",
                      "phase2/stage2/synth/netlist.v",
                      "--clock", clk, "--json",
-                     str(_scan_json.relative_to(project))]
+                     str(_scan_json.relative_to(project)),
+                     "--l20-contract"]
         # `fault chain` DEFAULTS to inserting a top-level boundary-scan
         # register wrapping every port. On a FIXED-PINOUT WRAPPER — a design
         # whose die outline and pin placement are fixed by a parent's DEF
@@ -22735,7 +22753,16 @@ def _step_dft_insertion(project: Path, top_name: str, container: str,
         except Exception as exc:                       # noqa: BLE001
             _scan_rc, _scan_tail = -1, f"execution error: {exc}"
         _scan_meta = _read_scan_chain_meta(project)
+        _binding_current = False
         if _scan_rc == 0 and (_scan_meta or {}).get("published"):
+            try:
+                import fault_scan_chain_insert as _scan_contract
+                _binding_current, _binding_reason = (
+                    _scan_contract.l20_binding_is_current(project, _scan_meta))
+            except Exception as exc:  # noqa: BLE001
+                _binding_reason = f"L20 binding check crashed: {exc}"
+        if (_scan_rc == 0 and (_scan_meta or {}).get("published")
+                and _binding_current):
             # Bind this producer receipt to the consumer contract that
             # authorized it.  PnR requires this bit as well, so stale scan
             # artifacts from an earlier run cannot silently alter a later
@@ -22755,6 +22782,12 @@ def _step_dft_insertion(project: Path, top_name: str, container: str,
                 output_files=["phase2/stage2/dft/scan_netlist.v",
                               "reports/phase2/dft/scan_chain.json"]))
         else:
+            if _scan_rc == 0 and (_scan_meta or {}).get("published"):
+                _scan_rc = 1
+                _scan_meta["published"] = False
+                _scan_meta.setdefault("problems", []).append(_binding_reason)
+                _scan_json.write_text(json.dumps(_scan_meta, indent=2) + "\n")
+                (project / "phase2/stage2/dft/scan_netlist.v").unlink(missing_ok=True)
             # NO scan_netlist.v is published on this path. Downstream reads the
             # ABSENCE, exactly as it did before scan insertion existed.
             _dft_disclose_skip(

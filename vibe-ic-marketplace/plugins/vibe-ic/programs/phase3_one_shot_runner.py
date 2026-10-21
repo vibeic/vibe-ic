@@ -36687,13 +36687,22 @@ def pnr_input_netlist(project: Path, top: str) -> Tuple[Path, str, bool]:
             (project / "reports/phase2/dft/scan_chain.json").read_text())
     except (OSError, ValueError):
         meta = None
+    binding_current = False
+    _binding_reason = "no scan receipt"
+    if isinstance(meta, dict):
+        try:
+            import fault_scan_chain_insert as _scan_contract
+            binding_current, _binding_reason = (
+                _scan_contract.l20_binding_is_current(project, meta))
+        except Exception as exc:  # noqa: BLE001
+            _binding_reason = f"L20 binding check crashed: {exc}"
     if not (isinstance(meta, dict) and meta.get("published")
             and meta.get("chain_length_matches_flop_count")
-            and meta.get("authorized_by_l20_contract")):
+            and meta.get("authorized_by_l20_contract") and binding_current):
         return pre_dft, (
-            f"{pre_dft.name} (pre-DFT) — no measured, L20-authorized scan "
+            f"{pre_dft.name} (pre-DFT) — no measured, current-L20-bound scan "
             f"chain for this run; the implemented design carries NO scan "
-            f"chain"), False
+            f"chain ({_binding_reason})"), False
     if not post_dft.is_file():
         return pre_dft, (
             f"{pre_dft.name} (pre-DFT) — a scan chain WAS inserted but step 12 "

@@ -39,6 +39,7 @@ import design_one_shot_runner as R          # noqa: E402
 import lec_equivalence_check as G           # noqa: E402
 import lec_gate_netlist_select as S         # noqa: E402
 import phase3_one_shot_runner as P3         # noqa: E402
+import fault_scan_chain_insert as SCI        # noqa: E402
 
 TOP = "tiny"
 SYNTH = "phase2/stage2/synth"
@@ -82,12 +83,31 @@ def _tree(tmp_path: Path, *, mapped: bool = True, scan: str = "") -> Path:
         (p / "phase2/stage2/dft/scan_netlist.v").write_text(_POST_DFT_V)
         (p / POST_DFT).write_text(_POST_DFT_V)
         (p / SCAN_META).parent.mkdir(parents=True)
-        (p / SCAN_META).write_text(json.dumps({
+        meta = {
             "published": True, "chain_length_matches_flop_count": True,
             "authorized_by_l20_contract": scan == "authorized",
             "dft_ports": ["shift", "test", "sin", "sout"],
             "functional_mode_tieoff": {"shift": 0, "test": 0, "sin": 0},
-            "scan_out_port": "sout"}))
+            "scan_out_port": "sout", "clock": "clk",
+            "input_flop_count": 1, "internal_chain_length": 1,
+        }
+        if scan == "authorized":
+            gd = p / "phase1/generated_docs"
+            gd.mkdir(parents=True)
+            (gd / "L20_DFT_SCAN_TOPOLOGY.json").write_text(json.dumps({
+                "doc_id": "L20", "applicability": "APPLICABLE",
+                "extraction_status": "EXTRACTED",
+                "fields": {"dft_present": True, "scan_chains": [{
+                    "name": "tiny_scan", "length": 1,
+                    "scan_in": "sin", "scan_out": "sout", "clock": "clk",
+                }]},
+            }))
+            binding, problems = SCI.load_l20_scan_contract(p, "clk", 1)
+            assert not problems
+            meta["l20_contract"] = binding
+            meta["l20_reconciliation"] = SCI.reconcile_l20_scan_contract(
+                binding, meta)
+        (p / SCAN_META).write_text(json.dumps(meta))
     return p
 
 
@@ -164,7 +184,7 @@ def test_unauthorised_chain_proves_the_routed_pre_dft_netlist_unconstrained(
     so step 13 proves the mapped pre-DFT netlist, and applies no scan
     constraint to it even though a published scan netlist is on disk."""
     proj = _tree(tmp_path, scan="unauthorized")
-    assert R.scan_netlist_is_real_chain(proj)
+    assert not R.scan_netlist_is_real_chain(proj)
     R.step_lec_equivalence(proj, TOP, "")
     (argv,) = lec_runs
     assert _gate_arg(argv) == MAPPED

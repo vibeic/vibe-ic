@@ -59,6 +59,7 @@ if _os.path.dirname(_os.path.abspath(__file__)) not in _sys.path:
 
 
 import argparse
+import hashlib
 import json
 import re
 import subprocess
@@ -69,6 +70,7 @@ from pathlib import Path
 import _path_layout as _pl
 import fault_atpg_run as _fatpg
 import floorplan_contract as _fpc
+import l_doc_consumer_contract as _ldoc
 import pdk_cell_models as _pcm  # ciel version-hash live resolution (gf180)
 
 
@@ -111,6 +113,134 @@ DFT_PORTS = (*FUNCTIONAL_MODE_TIEOFF, SCAN_OUT_PORT)
 
 SCAN_NETLIST_REL = "phase2/stage2/dft/scan_netlist.v"
 SCAN_JSON_REL = "reports/phase2/dft/scan_chain.json"
+
+
+def load_l20_scan_contract(project: Path, expected_clock: str | None = None,
+                           expected_length: int | None = None
+                           ) -> tuple[dict | None, list[str]]:
+    """The one-chain contract this producer can implement, plus refusals.
+
+    ``fault chain`` exposes one internal chain with fixed ``sin``/``sout``
+    ports.  It cannot implement multiple chains or a declared shift-frequency
+    policy.  Refuse those shapes before launching the native tool rather than
+    treating an actionable L20 as a boolean authorization.
+    """
+    path, doc = _ldoc.load_l_doc(project, "L20")
+    if path is None or not isinstance(doc, dict):
+        return None, ["canonical L20 scan contract is missing or unparseable"]
+    try:
+        raw = path.read_bytes()
+        rel = path.relative_to(project).as_posix()
+    except (OSError, ValueError):
+        return None, ["canonical L20 scan contract cannot be read in-project"]
+    fields = _ldoc.l_doc_fields(doc)
+    chains = fields.get("scan_chains") if isinstance(fields, dict) else None
+    if not isinstance(chains, list) or len(chains) != 1:
+        count = len(chains) if isinstance(chains, list) else 0
+        return None, [
+            f"fault chain supports exactly one declared scan chain; L20 has {count}"]
+    chain = chains[0]
+    if not isinstance(chain, dict):
+        return None, ["L20 scan_chains[0] is not a typed record"]
+    problems: list[str] = []
+    name = chain.get("name")
+    length = chain.get("length")
+    scan_in = chain.get("scan_in")
+    scan_out = chain.get("scan_out")
+    clock = chain.get("clock")
+    if not isinstance(name, str) or not name.strip():
+        problems.append("L20 scan chain has no non-empty canonical name")
+    if isinstance(length, bool) or not isinstance(length, int) or length <= 0:
+        problems.append("L20 scan chain length is not a positive integer")
+    if scan_in != "sin":
+        problems.append(
+            f"L20 scan_in={scan_in!r}; fault chain implements fixed port 'sin'")
+    if scan_out != "sout":
+        problems.append(
+            f"L20 scan_out={scan_out!r}; fault chain implements fixed port 'sout'")
+    if not isinstance(clock, str) or not clock.strip():
+        problems.append("L20 scan chain clock is empty")
+    elif expected_clock is not None and clock != expected_clock:
+        problems.append(
+            f"L20 clock={clock!r} does not match Step 11 clock={expected_clock!r}")
+    if expected_length is not None and length != expected_length:
+        problems.append(
+            f"L20 length={length!r} does not match mapped-netlist flop count "
+            f"{expected_length}")
+    for key in ("frequency_mhz", "shift_frequency_mhz", "shift_freq_mhz"):
+        if chain.get(key) not in (None, ""):
+            problems.append(
+                f"L20 {key}={chain.get(key)!r} is declared, but fault chain "
+                "has no shift-frequency actuator")
+    if problems:
+        return None, problems
+    canonical = {
+        "name": name.strip(), "length": length, "scan_in": scan_in,
+        "scan_out": scan_out, "clock": clock,
+    }
+    return {
+        "path": rel,
+        "sha256": hashlib.sha256(raw).hexdigest(),
+        "chain_count": 1,
+        "chain": canonical,
+    }, []
+
+
+def reconcile_l20_scan_contract(binding: dict, report: dict) -> dict:
+    """Compare native measurements to the exact L20 declaration. PURE."""
+    chain = binding.get("chain") if isinstance(binding, dict) else None
+    chain = chain if isinstance(chain, dict) else {}
+    ports = set(report.get("dft_ports") or [])
+    measured_count = 1 if isinstance(report.get("internal_chain_length"), int) else 0
+    problems: list[str] = []
+    if measured_count != binding.get("chain_count"):
+        problems.append(
+            f"measured chain count {measured_count} != declared "
+            f"{binding.get('chain_count')}")
+    if report.get("internal_chain_length") != chain.get("length"):
+        problems.append(
+            f"measured chain length {report.get('internal_chain_length')!r} != "
+            f"declared {chain.get('length')!r}")
+    for key in ("scan_in", "scan_out"):
+        if chain.get(key) not in ports:
+            problems.append(
+                f"measured DFT ports do not contain declared {key}="
+                f"{chain.get(key)!r}")
+    if report.get("clock") != chain.get("clock"):
+        problems.append(
+            f"measured clock {report.get('clock')!r} != declared "
+            f"{chain.get('clock')!r}")
+    return {
+        "ok": not problems,
+        "declared": chain,
+        "measured": {
+            "chain_count": measured_count,
+            "length": report.get("internal_chain_length"),
+            "dft_ports": sorted(ports),
+            "clock": report.get("clock"),
+        },
+        "problems": problems,
+    }
+
+
+def l20_binding_is_current(project: Path, report: dict) -> tuple[bool, str]:
+    """Re-derive the current contract and compare its path, bytes and fields."""
+    recorded = report.get("l20_contract") if isinstance(report, dict) else None
+    if not isinstance(recorded, dict):
+        return False, "scan report carries no L20 path/SHA binding"
+    current, problems = load_l20_scan_contract(
+        project, expected_clock=report.get("clock"),
+        expected_length=report.get("input_flop_count"))
+    if problems or current is None:
+        return False, "; ".join(problems or ["current L20 is unsupported"])
+    if current != recorded:
+        return False, "current L20 path, SHA-256, or typed chain differs from receipt"
+    reconciliation = report.get("l20_reconciliation")
+    measured = reconcile_l20_scan_contract(current, report)
+    if (not isinstance(reconciliation, dict)
+            or reconciliation != measured or not measured.get("ok")):
+        return False, "scan report does not carry a passing L20 reconciliation"
+    return True, "current L20 bytes and measured scan chain reconcile"
 
 
 # ---------------------------------------------------------------------------
@@ -544,6 +674,7 @@ def run_chain(project: Path, netlist_rel: str, clock: str,
               pdk_dir: Path | None = None,
               skip_boundary: str = "auto",
               top_module: str | None = None,
+              require_l20_contract: bool = False,
               timeout: int = 900) -> tuple[int, dict]:
     """Insert a real scan chain.  Returns (exit_code, report_dict).
 
@@ -565,6 +696,19 @@ def run_chain(project: Path, netlist_rel: str, clock: str,
     if not src.is_file():
         return 2, {"stage": "input", "error": f"netlist not found: {netlist_rel}"}
     netlist_text = src.read_text(encoding="utf-8", errors="replace")
+
+    l20_contract = None
+    if require_l20_contract:
+        l20_contract, l20_problems = load_l20_scan_contract(
+            project, expected_clock=clock,
+            expected_length=count_flops(netlist_text))
+        if l20_problems or l20_contract is None:
+            return 1, {
+                "stage": "l20_contract", "netlist": netlist_rel,
+                "clock": clock, "problems": l20_problems,
+                "error": "L20 topology is incompatible with this one-chain producer",
+                "published": False,
+            }
 
     if _fatpg.is_generic_unmapped(netlist_text):
         return 2, {
@@ -924,7 +1068,18 @@ def run_chain(project: Path, netlist_rel: str, clock: str,
         "log_tail": log[-1500:],
         **verdict,
     }
-    if not verdict["ok"]:
+    if l20_contract is not None:
+        report["l20_contract"] = l20_contract
+        reconciliation = reconcile_l20_scan_contract(l20_contract, report)
+        report["l20_reconciliation"] = reconciliation
+        if not reconciliation["ok"]:
+            report["problems"].extend(reconciliation["problems"])
+            report["ok"] = False
+        current, reason = l20_binding_is_current(project, report)
+        if not current:
+            report["problems"].append(reason)
+            report["ok"] = False
+    if not report["ok"]:
         # A chain that does not account for every flop is NOT published as the
         # implementation netlist — publishing it would put an untestable
         # design into PnR under a name that says it is testable.
@@ -965,6 +1120,9 @@ def main(argv: list[str] | None = None) -> int:
                    help="Top module name — used by 'auto' skip-boundary "
                         "detection to match the fixed-pinout DEF template to "
                         "THIS top.")
+    p.add_argument("--l20-contract", action="store_true",
+                   help="Require and reconcile the current canonical L20 "
+                        "one-chain contract before publishing.")
     p.add_argument("--pdk-dir", default=None)
     p.add_argument("--json", default=SCAN_JSON_REL,
                    help=f"Report JSON path relative to project "
@@ -988,6 +1146,7 @@ def main(argv: list[str] | None = None) -> int:
         liberty_override=args.liberty, dff_cells_override=args.dff_cells,
         pdk_dir=Path(args.pdk_dir).resolve() if args.pdk_dir else None,
         skip_boundary=args.skip_boundary, top_module=args.top_module,
+        require_l20_contract=args.l20_contract,
         timeout=args.timeout)
 
     out = project / args.json

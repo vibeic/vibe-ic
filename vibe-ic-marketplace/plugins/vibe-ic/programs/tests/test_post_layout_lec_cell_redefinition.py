@@ -160,7 +160,7 @@ def _scan_project(tmp_path: Path, with_chain: bool = True) -> Path:
     (pnr / f"{TOP}.def").write_text("DIEAREA ( 0 0 ) ( 100 100 ) ;\n")
     meta = tmp_path / "reports/phase2/dft"
     meta.mkdir(parents=True, exist_ok=True)
-    (meta / "scan_chain.json").write_text(json.dumps({
+    receipt = {
         "published": bool(with_chain),
         "chain_length_matches_flop_count": bool(with_chain),
         # ce4fd747f: PnR routes the scan netlist only when the L20 contract
@@ -170,7 +170,27 @@ def _scan_project(tmp_path: Path, with_chain: bool = True) -> Path:
         "dft_ports": ["sin", "shift", "sout"],
         "internal_chain_length": 65, "boundary_chain_length": 34,
         "area_instances_delta": 201, "area_instances_delta_pct": 70.0,
-    }))
+        "clock": "clk", "input_flop_count": 65,
+    }
+    if with_chain:
+        gd = tmp_path / "phase1/generated_docs"
+        gd.mkdir(parents=True)
+        (gd / "L20_DFT_SCAN_TOPOLOGY.json").write_text(json.dumps({
+            "doc_id": "L20", "applicability": "APPLICABLE",
+            "extraction_status": "EXTRACTED",
+            "fields": {"dft_present": True, "scan_chains": [{
+                "name": "widget_scan", "length": 65,
+                "scan_in": "sin", "scan_out": "sout", "clock": "clk",
+            }]},
+        }))
+        import fault_scan_chain_insert as _scan_contract
+        binding, problems = _scan_contract.load_l20_scan_contract(
+            tmp_path, "clk", 65)
+        assert not problems
+        receipt["l20_contract"] = binding
+        receipt["l20_reconciliation"] = (
+            _scan_contract.reconcile_l20_scan_contract(binding, receipt))
+    (meta / "scan_chain.json").write_text(json.dumps(receipt))
     return tmp_path
 
 

@@ -7,6 +7,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 
 PROGRAMS = Path(__file__).resolve().parents[1]
 if str(PROGRAMS) not in sys.path:
@@ -27,6 +29,15 @@ The design shall implement the following DFT scan topology.
 | --- | --- | --- | --- | --- |
 | core_scan_0 | 128 | scan_in_0 | scan_out_0 | scan_clk |
 | core_scan_1 | 96 | scan_in_1 | scan_out_1 | scan_clk |
+"""
+
+AES_REAL = """# AES DFT engineering decision
+
+## DFT / Scan Topology
+
+| Chain | Length | Scan In | Scan Out | Clock | Shift Frequency MHz |
+|---|---:|---|---|---|---:|
+| chain_0 | 21,406 | sin | sout | clk_i | 10 |
 """
 
 
@@ -80,6 +91,40 @@ def test_emitter_publishes_extracted_l20_and_consumer_passes(tmp_path):
     result = _run_gate(project)
     assert result.returncode == 0, result.stdout + result.stderr
     assert "PASS" in result.stdout
+
+
+def test_real_aes_grouped_length_and_frequency_reach_consumer(tmp_path):
+    project = _project(tmp_path, AES_REAL)
+    doc = _write_emitted_l20(project)
+    assert doc["extraction_status"] == "EXTRACTED"
+    row = doc["fields"]["scan_chains"][0]
+    assert {key: row[key] for key in (
+        "name", "length", "scan_in", "scan_out", "clock", "frequency_mhz",
+    )} == {
+        "name": "chain_0",
+        "length": 21406,
+        "scan_in": "sin",
+        "scan_out": "sout",
+        "clock": "clk_i",
+        "frequency_mhz": 10.0,
+    }
+    assert row["source"]["document"] == "input/docs/dft.md"
+    result = _run_gate(project)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("bad", [
+    "0", "-1", "+1", "21.5", "21k", "2,14,06", "21,40", "01,406",
+])
+def test_malformed_or_nonpositive_grouped_length_is_rejected(tmp_path, bad):
+    project = _project(tmp_path, AES_REAL.replace("21,406", bad))
+    assert X.extract_dft_scan_topology(project) is None
+
+
+@pytest.mark.parametrize("bad", ["0", "-1", "10 MHz", "unknown"])
+def test_invalid_optional_shift_frequency_is_rejected(tmp_path, bad):
+    project = _project(tmp_path, AES_REAL.replace("| 10 |", f"| {bad} |"))
+    assert X.extract_dft_scan_topology(project) is None
 
 
 def test_real_phase1_writer_and_consumer_replay(tmp_path, monkeypatch):

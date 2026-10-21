@@ -28,6 +28,7 @@ if str(PROGRAMS) not in sys.path:
     sys.path.insert(0, str(PROGRAMS))
 
 import phase3_one_shot_runner as p3            # noqa: E402
+import fault_scan_chain_insert as sci           # noqa: E402
 
 
 GOOD_META = {
@@ -39,6 +40,8 @@ GOOD_META = {
     "area_instances_delta": 200,
     "area_instances_delta_pct": 70.18,
     "dft_ports": ["sin", "shift", "test", "tck", "sout"],
+    "clock": "clk",
+    "input_flop_count": 64,
 }
 
 SCAN_HEADER = """\
@@ -80,6 +83,25 @@ def _tree(tmp_path, *, meta=None, post_dft=None, pre_dft=True):
     if post_dft is not None:
         (synth / "post_dft_netlist.v").write_text(post_dft)
     if meta is not None:
+        meta = dict(meta)
+        if meta.get("authorized_by_l20_contract"):
+            gd = tmp_path / "phase1" / "generated_docs"
+            gd.mkdir(parents=True)
+            (gd / "L20_DFT_SCAN_TOPOLOGY.json").write_text(json.dumps({
+                "doc_id": "L20", "applicability": "APPLICABLE",
+                "extraction_status": "EXTRACTED",
+                "fields": {"dft_present": True, "scan_chains": [{
+                    "name": "chain0", "length": meta["input_flop_count"],
+                    "scan_in": "sin", "scan_out": "sout",
+                    "clock": meta["clock"],
+                }]},
+            }))
+            binding, problems = sci.load_l20_scan_contract(
+                tmp_path, meta["clock"], meta["input_flop_count"])
+            assert not problems
+            meta.setdefault("l20_contract", binding)
+            meta.setdefault("l20_reconciliation",
+                            sci.reconcile_l20_scan_contract(binding, meta))
         j = tmp_path / "reports/phase2/dft/scan_chain.json"
         j.parent.mkdir(parents=True)
         j.write_text(json.dumps(meta))
@@ -139,7 +161,15 @@ class TestNeverRoutesAnythingUnproven:
         p = _tree(tmp_path, meta=meta, post_dft=SCAN_HEADER)
         nl, note, is_scan = p3.pnr_input_netlist(p, "spm")
         assert nl.name == "spm_synth.v" and is_scan is False
-        assert "L20-authorized" in note
+        assert "current-L20-bound" in note
+
+    def test_changed_l20_bytes_make_a_former_receipt_stale(self, tmp_path):
+        p = _tree(tmp_path, meta=GOOD_META, post_dft=SCAN_HEADER)
+        l20 = p / "phase1/generated_docs/L20_DFT_SCAN_TOPOLOGY.json"
+        l20.write_text(l20.read_text().replace('"chain0"', '"renamed"'))
+        nl, note, is_scan = p3.pnr_input_netlist(p, "spm")
+        assert nl.name == "spm_synth.v" and is_scan is False
+        assert "differs from receipt" in note
 
     def test_chain_that_misses_flops(self, tmp_path):
         """A chain that leaves flops off it is untestable silicon.  It must not
