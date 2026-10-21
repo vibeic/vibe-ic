@@ -1117,6 +1117,11 @@ def functional_full_stack_verdict(project: Path):
                 problems.append(f"{row['case']}: recorded but not a declared "
                                 f"case")
                 continue
+            process = _fsf.process_milestone_disposition(case)
+            if process:
+                row["step5_disposition"] = process["disposition"]
+                dispositions.append(process)
+                continue
             cov = _fsf.coverage_figure_exemption(case)
             if cov:
                 row["step5_disposition"] = cov["disposition"]

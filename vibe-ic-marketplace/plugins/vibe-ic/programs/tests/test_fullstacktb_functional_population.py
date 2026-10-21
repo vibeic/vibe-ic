@@ -540,6 +540,46 @@ def _resolver(project, used, container):
     return sources, "fixture models"
 
 
+def test_process_milestone_disposition_survives_strict_consumer_rederivation(tmp_path):
+    fs = _fsf()
+    cases = [
+        {"name": "spec_complete", "kind": "verification_checklist",
+         "status": "Done", "stimulus": "DV checklist item SPEC_COMPLETE — Done",
+         "expected": "DV checklist item satisfied (Done)"},
+        {"name": "real_case", "kind": "functional_vector",
+         "stimulus": "drive x=1 and y=1", "expected": "observe p"},
+    ]
+    project = _mk_project(tmp_path, die=True, cases=cases)
+    _write(fs.functional_dir(project) / 'real_case.v', '''module real_case;
+      reg clk=0, rst=0; reg [7:0] x=1; reg y=1; wire p;
+      dut_core dut(.clk(clk),.rst(rst),.x(x),.y(y),.p(p));
+      initial begin $display("[TB real_case] PASS"); $finish; end
+    endmodule
+    ''')
+
+    def dispatch(argv, *_args):
+        return (0, '[TB real_case] PASS\n') if argv[0] == 'vvp' else (0, '')
+
+    result = fs.generate(project, route='DIE', dispatch=dispatch,
+                         model_resolver=_resolver)
+    assert result['verdict'] == 'PASS', result
+    assert result['counts'] == {
+        'passed': 1, 'failed': 0, 'errored': 0, 'no_oracle': 0,
+        'excluded': 1, 'short_population': 0, 'rows': 2, 'executed': 1}
+    process, executed = result['cases']
+    assert process['state'] == 'excluded'
+    assert process['step5_disposition']['disposition'] == fs.DISP_PROCESS_MILESTONE
+    assert executed['state'] == 'passed'
+
+    rc, consumed, sentinel = gate.functional_full_stack_verdict(project)
+    assert rc == 0 and sentinel is None, consumed
+    assert consumed['verdict'] == 'PASS' and consumed['scored_cases'] == 1
+    disposition, = consumed['step5_dispositions']
+    assert disposition['case'] == 'spec_complete'
+    assert disposition['disposition'] == fs.DISP_PROCESS_MILESTONE
+    assert disposition['blocking'] is False
+
+
 # Issue 3330: the public two-comparison core/envelope input. Reuse the ordinary
 # project factory and authored-TB ladder; execute the production dispatch.
 _BINDING_INSTANCES = {
