@@ -228,6 +228,41 @@ def _l9_port_names(l9: Dict[str, Any]) -> Tuple[List[str], str]:
     return [], ""
 
 
+def _bound_logical_interface_names(l9: Dict[str, Any],
+                                   physical_ports: set) -> set:
+    """Logical req/rsp descriptors retained by an admitted native binding.
+
+    interface_bindings.admit deliberately keeps these source declarations
+    in its ledger while publishing only their request/response leaves in the
+    physical L9 roster. They are not physical pins. Exempt a source name
+    only when the ledger identifies the original row as an interface and both
+    selected leaves are present in the current physical roster; a partial or
+    invented ledger therefore cannot hide a missing port.
+    """
+    ledger = l9.get("interface_binding_authoring")
+    if not isinstance(ledger, dict):
+        return set()
+    source = {
+        _norm(row.get("name"))
+        for row in ledger.get("source_interface", [])
+        if isinstance(row, dict)
+        and row.get("direction") == "interface"
+        and isinstance(row.get("name"), str)
+        and row.get("name").strip()
+    }
+    out = set()
+    for row in ledger.get("logical_bindings", []):
+        if not isinstance(row, dict):
+            continue
+        name = _norm(row.get("source_name"))
+        req = _norm(row.get("request_port"))
+        rsp = _norm(row.get("response_port"))
+        if (name in source and req in physical_ports
+                and rsp in physical_ports and req != rsp):
+            out.add(name)
+    return out
+
+
 def _addr_of(entry: Dict[str, Any]) -> Optional[int]:
     """Coerce an OTP-byte / OTP-field address to an int, accepting
     int, '0x..' hex, or decimal-string forms."""
@@ -571,10 +606,16 @@ def _rel_pin_table_subset_ports(l1, l9) -> RelationFinding:
                                causes=[c for c in _causes
                                        if c["pin"] in _first20])
     port_set = set(port_names)
+    bound_logical = _bound_logical_interface_names(l9, port_set)
     missing: List[str] = []
     absent_entries: List[Tuple[str, Dict[str, Any]]] = []
     for p in pins:
         if not isinstance(p, dict):
+            continue
+        # An admitted req/rsp binding retains its logical source declaration
+        # in L1 and in L9's ledger, but the L9 port roster is physical.
+        if (p.get("mode") == "interface"
+                and _l1_pin_primary(p) in bound_logical):
             continue
         aliases = _l1_pin_aliases(p)
         if not aliases:
@@ -605,8 +646,18 @@ def _rel_pin_table_subset_ports(l1, l9) -> RelationFinding:
                                violations=published,
                                causes=[c for c in causes
                                        if c["pin"] in set(published)])
-    return RelationFinding(rid, "PASS",
-                           f"all {len(pins)} L1 pins present in L9 ports[{src}]")
+    physical_pin_count = sum(
+        1 for p in pins
+        if isinstance(p, dict)
+        and not (p.get("mode") == "interface"
+                 and _l1_pin_primary(p) in bound_logical)
+    )
+    return RelationFinding(
+        rid, "PASS",
+        f"all {physical_pin_count} physical L1 pins present in L9 ports[{src}]"
+        + (f"; {len(bound_logical)} bound logical interface descriptor(s) "
+           "retained in the binding ledger" if bound_logical else ""),
+    )
 
 
 def _rel_otp_bytes_subset_layout(l11, l4) -> RelationFinding:

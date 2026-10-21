@@ -64,6 +64,88 @@ def test_pin_alias_matches_port(tmp_path: Path) -> None:
     assert verdict == "PASS"
 
 
+def test_admitted_logical_binding_is_not_compared_as_a_physical_pin(
+        tmp_path: Path) -> None:
+    """#3458: the ledger owns tl; the physical roster owns its leaves."""
+    _w(tmp_path, "L1_DATASHEET.json", {
+        "pin_table": [
+            {"name": "clk_i", "mode": "input"},
+            {"name": "tl", "mode": "interface"},
+            {"name": "tl_i", "mode": "input"},
+            {"name": "tl_o", "mode": "output"},
+        ],
+    })
+    _w(tmp_path, "L9_INTEGRATION_SPEC.json", {
+        "ports": [
+            {"name": "clk_i"}, {"name": "tl_i"}, {"name": "tl_o"},
+        ],
+        "interface_binding_authoring": {
+            "source_interface": [
+                {"name": "tl", "direction": "interface"},
+            ],
+            "logical_bindings": [{
+                "source_name": "tl",
+                "request_port": "tl_i",
+                "response_port": "tl_o",
+            }],
+        },
+    })
+    verdict, findings, _ = check(tmp_path)
+    assert verdict == "PASS", findings
+    relation = {f.relation: f for f in findings}[
+        "R_pin_table_subset_ports"]
+    assert "1 bound logical interface descriptor" in relation.detail
+
+
+def test_incomplete_logical_binding_cannot_hide_missing_physical_ports(
+        tmp_path: Path) -> None:
+    """Reverse control: both selected leaves must exist before exemption."""
+    _w(tmp_path, "L1_DATASHEET.json", {
+        "pin_table": [
+            {"name": "tl", "mode": "interface"},
+            {"name": "tl_i", "mode": "input"},
+            {"name": "tl_o", "mode": "output"},
+        ],
+    })
+    _w(tmp_path, "L9_INTEGRATION_SPEC.json", {
+        "ports": [{"name": "tl_o"}],
+        "interface_binding_authoring": {
+            "source_interface": [
+                {"name": "tl", "direction": "interface"},
+            ],
+            "logical_bindings": [{
+                "source_name": "tl",
+                "request_port": "tl_i",
+                "response_port": "tl_o",
+            }],
+        },
+    })
+    verdict, findings, _ = check(tmp_path)
+    assert verdict == "FAIL"
+    relation = {f.relation: f for f in findings}[
+        "R_pin_table_subset_ports"]
+    assert {"tl", "tl_i"} <= set(relation.violations)
+
+
+def test_unbound_interface_row_remains_a_cross_consistency_failure(
+        tmp_path: Path) -> None:
+    """Reverse control: mode=interface alone grants no exemption."""
+    _w(tmp_path, "L1_DATASHEET.json", {
+        "pin_table": [
+            {"name": "clk_i", "mode": "input"},
+            {"name": "logical_bus", "mode": "interface"},
+        ],
+    })
+    _w(tmp_path, "L9_INTEGRATION_SPEC.json", {
+        "ports": [{"name": "clk_i"}],
+    })
+    verdict, findings, _ = check(tmp_path)
+    assert verdict == "FAIL"
+    relation = {f.relation: f for f in findings}[
+        "R_pin_table_subset_ports"]
+    assert relation.violations == ["logical_bus"]
+
+
 # ---------------------------------------------------------------------------
 # real FAIL — reproduces the 2nd__serv corpus divergence
 # ---------------------------------------------------------------------------
