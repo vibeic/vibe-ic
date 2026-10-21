@@ -5,6 +5,7 @@ fault_scan_chain_insert.py — REAL scan-chain insertion via `fault chain`.
 Produces the IMPLEMENTATION netlist that carries the scan chain:
 
   <project>/phase2/stage2/dft/scan_netlist.v        (scan-inserted netlist)
+  <project>/phase2/stage2/dft/scan_shift.sdc        (declared scan timing mode)
   <project>/reports/phase2/dft/scan_chain.json      (MEASURED chain metadata)
 
 WHY THIS PROGRAM EXISTS
@@ -61,6 +62,7 @@ if _os.path.dirname(_os.path.abspath(__file__)) not in _sys.path:
 import argparse
 import hashlib
 import json
+import math
 import re
 import subprocess
 import sys
@@ -113,6 +115,8 @@ DFT_PORTS = (*FUNCTIONAL_MODE_TIEOFF, SCAN_OUT_PORT)
 
 SCAN_NETLIST_REL = "phase2/stage2/dft/scan_netlist.v"
 SCAN_JSON_REL = "reports/phase2/dft/scan_chain.json"
+SCAN_SHIFT_SDC_REL = "phase2/stage2/dft/scan_shift.sdc"
+_SAFE_CLOCK_PORT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_$]*$")
 
 
 def load_l20_scan_contract(project: Path, expected_clock: str | None = None,
@@ -121,9 +125,9 @@ def load_l20_scan_contract(project: Path, expected_clock: str | None = None,
     """The one-chain contract this producer can implement, plus refusals.
 
     ``fault chain`` exposes one internal chain with fixed ``sin``/``sout``
-    ports.  It cannot implement multiple chains or a declared shift-frequency
-    policy.  Refuse those shapes before launching the native tool rather than
-    treating an actionable L20 as a boolean authorization.
+    ports.  It cannot implement multiple chains.  A declared shift frequency
+    is implemented by a separate scan-mode SDC, never by replacing the
+    functional-mode constraint set.
     """
     path, doc = _ldoc.load_l_doc(project, "L20")
     if path is None or not isinstance(doc, dict):
@@ -167,23 +171,86 @@ def load_l20_scan_contract(project: Path, expected_clock: str | None = None,
         problems.append(
             f"L20 length={length!r} does not match mapped-netlist flop count "
             f"{expected_length}")
-    for key in ("frequency_mhz", "shift_frequency_mhz", "shift_freq_mhz"):
-        if chain.get(key) not in (None, ""):
+    frequency = None
+    frequency_keys = [
+        key for key in ("frequency_mhz", "shift_frequency_mhz",
+                        "shift_freq_mhz")
+        if chain.get(key) not in (None, "")]
+    if len(frequency_keys) > 1:
+        problems.append(
+            "L20 declares more than one shift-frequency field; refusing to "
+            "choose precedence")
+    elif frequency_keys:
+        value = chain.get(frequency_keys[0])
+        if (isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(float(value))
+                or not float(value) > 0):
             problems.append(
-                f"L20 {key}={chain.get(key)!r} is declared, but fault chain "
-                "has no shift-frequency actuator")
+                f"L20 {frequency_keys[0]}={value!r} is not a positive number")
+        elif not _SAFE_CLOCK_PORT_RE.fullmatch(str(clock or "")):
+            problems.append(
+                f"L20 clock={clock!r} cannot be emitted safely as a scan-mode "
+                "SDC port")
+        else:
+            frequency = float(value)
     if problems:
         return None, problems
     canonical = {
         "name": name.strip(), "length": length, "scan_in": scan_in,
         "scan_out": scan_out, "clock": clock,
     }
+    if frequency is not None:
+        canonical["frequency_mhz"] = frequency
     return {
         "path": rel,
         "sha256": hashlib.sha256(raw).hexdigest(),
         "chain_count": 1,
         "chain": canonical,
     }, []
+
+
+def scan_shift_constraint(binding: dict) -> tuple[str, dict] | None:
+    """Build the dedicated scan-mode timing actuator for an L20 frequency.
+
+    The file is intentionally separate from the functional SDC.  Its content
+    and receipt both bind back to the exact L20 bytes, so a changed frequency
+    cannot reuse an earlier constraint.
+    """
+    chain = binding.get("chain") if isinstance(binding, dict) else None
+    chain = chain if isinstance(chain, dict) else {}
+    frequency = chain.get("frequency_mhz")
+    if frequency is None:
+        return None
+    clock = chain.get("clock")
+    if (isinstance(frequency, bool)
+            or not isinstance(frequency, (int, float))
+            or not math.isfinite(float(frequency))
+            or not float(frequency) > 0
+            or not isinstance(clock, str)
+            or not _SAFE_CLOCK_PORT_RE.fullmatch(clock)):
+        raise ValueError("unsupported L20 scan-shift clock/frequency")
+    period_ns = 1000.0 / float(frequency)
+    period_text = format(period_ns, ".12g")
+    text = (
+        "# Generated scan-shift timing mode; functional constraints unchanged.\n"
+        f"# L20: {binding.get('path')} sha256={binding.get('sha256')}\n"
+        f"create_clock -name {{scan_shift}} -period {period_text} "
+        f"[get_ports {{{clock}}}]\n"
+        "set_case_analysis 1 [get_ports {shift}]\n"
+        "set_case_analysis 1 [get_ports {test}]\n"
+    )
+    metadata = {
+        "path": SCAN_SHIFT_SDC_REL,
+        "sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+        "clock": clock,
+        "frequency_mhz": float(frequency),
+        "period_ns": period_ns,
+        "mode_controls": {"shift": 1, "test": 1},
+        "l20_path": binding.get("path"),
+        "l20_sha256": binding.get("sha256"),
+    }
+    return text, metadata
 
 
 def reconcile_l20_scan_contract(binding: dict, report: dict) -> dict:
@@ -210,6 +277,17 @@ def reconcile_l20_scan_contract(binding: dict, report: dict) -> dict:
         problems.append(
             f"measured clock {report.get('clock')!r} != declared "
             f"{chain.get('clock')!r}")
+    expected_constraint = scan_shift_constraint(binding)
+    declared_constraint = report.get("scan_shift_constraint")
+    if expected_constraint is None:
+        if declared_constraint not in (None, {}):
+            problems.append(
+                "measured report carries a scan-shift constraint that L20 did "
+                "not declare")
+    elif declared_constraint != expected_constraint[1]:
+        problems.append(
+            "measured scan-shift constraint does not match the declared "
+            "frequency, clock, or current L20 bytes")
     return {
         "ok": not problems,
         "declared": chain,
@@ -218,6 +296,7 @@ def reconcile_l20_scan_contract(binding: dict, report: dict) -> dict:
             "length": report.get("internal_chain_length"),
             "dft_ports": sorted(ports),
             "clock": report.get("clock"),
+            "scan_shift_constraint": declared_constraint,
         },
         "problems": problems,
     }
@@ -240,6 +319,16 @@ def l20_binding_is_current(project: Path, report: dict) -> tuple[bool, str]:
     if (not isinstance(reconciliation, dict)
             or reconciliation != measured or not measured.get("ok")):
         return False, "scan report does not carry a passing L20 reconciliation"
+    expected_constraint = scan_shift_constraint(current)
+    if expected_constraint is not None and report.get("published"):
+        _text, metadata = expected_constraint
+        constraint_path = project / metadata["path"]
+        try:
+            actual_sha = hashlib.sha256(constraint_path.read_bytes()).hexdigest()
+        except OSError:
+            return False, "declared scan-shift constraint artifact is missing"
+        if actual_sha != metadata["sha256"]:
+            return False, "scan-shift constraint artifact differs from receipt"
     return True, "current L20 bytes and measured scan chain reconcile"
 
 
@@ -698,6 +787,7 @@ def run_chain(project: Path, netlist_rel: str, clock: str,
     netlist_text = src.read_text(encoding="utf-8", errors="replace")
 
     l20_contract = None
+    shift_constraint = None
     if require_l20_contract:
         l20_contract, l20_problems = load_l20_scan_contract(
             project, expected_clock=clock,
@@ -709,6 +799,7 @@ def run_chain(project: Path, netlist_rel: str, clock: str,
                 "error": "L20 topology is incompatible with this one-chain producer",
                 "published": False,
             }
+        shift_constraint = scan_shift_constraint(l20_contract)
 
     if _fatpg.is_generic_unmapped(netlist_text):
         return 2, {
@@ -1059,6 +1150,8 @@ def run_chain(project: Path, netlist_rel: str, clock: str,
     }
     if l20_contract is not None:
         report["l20_contract"] = l20_contract
+        if shift_constraint is not None:
+            report["scan_shift_constraint"] = shift_constraint[1]
         reconciliation = reconcile_l20_scan_contract(l20_contract, report)
         report["l20_reconciliation"] = reconciliation
         if not reconciliation["ok"]:
@@ -1076,6 +1169,18 @@ def run_chain(project: Path, netlist_rel: str, clock: str,
         return 1, report
 
     (project / SCAN_NETLIST_REL).write_bytes(produced.read_bytes())
+    if shift_constraint is not None:
+        constraint_text, constraint_meta = shift_constraint
+        constraint_path = project / constraint_meta["path"]
+        constraint_path.parent.mkdir(parents=True, exist_ok=True)
+        constraint_tmp = constraint_path.with_suffix(".sdc.tmp")
+        constraint_tmp.write_text(constraint_text, encoding="utf-8")
+        constraint_tmp.replace(constraint_path)
+    else:
+        # This producer owns the canonical scan-mode SDC. A fresh contract
+        # with no frequency must not leave an earlier run's actuator looking
+        # current beside the newly published chain.
+        (project / SCAN_SHIFT_SDC_REL).unlink(missing_ok=True)
     report["published"] = True
     return 0, report
 
