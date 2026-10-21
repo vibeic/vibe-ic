@@ -33,7 +33,11 @@ _ALIASES = {
                  "scan_out_port", "so", "sout", "output port", "output_port"},
     "clock": {"clock", "clk", "scan clock", "scan_clock", "shift clock",
               "shift_clock", "clock domain", "clock_domain"},
+    "frequency_mhz": {"frequency mhz", "frequency_mhz",
+                      "shift frequency mhz", "shift_frequency_mhz",
+                      "shift freq mhz", "shift_freq_mhz"},
 }
+_REQUIRED_COLUMNS = {"name", "length", "scan_in", "scan_out", "clock"}
 
 
 def _cells(line: str) -> List[str]:
@@ -63,7 +67,22 @@ def _column_map(headers: List[str]) -> Optional[Dict[str, int]]:
                 if canonical in found:
                     return None
                 found[canonical] = index
-    return found if set(found) == set(_ALIASES) else None
+    return found if _REQUIRED_COLUMNS.issubset(found) else None
+
+
+def _positive_decimal_integer(value: str) -> Optional[int]:
+    """Strict positive decimal, optionally with conventional 3-digit groups."""
+    if not re.fullmatch(r"(?:[1-9][0-9]*|[1-9][0-9]{0,2}(?:,[0-9]{3})+)",
+                        value):
+        return None
+    return int(value.replace(",", ""))
+
+
+def _positive_decimal(value: str) -> Optional[float]:
+    if not re.fullmatch(r"[0-9]+(?:\.[0-9]+)?", value):
+        return None
+    number = float(value)
+    return number if number > 0 else None
 
 
 def _table_at(lines: List[str], index: int, source: str,
@@ -91,11 +110,12 @@ def _table_at(lines: List[str], index: int, source: str,
         if any(not value or _UNRESOLVED_RE.fullmatch(value)
                for value in selected.values()):
             return None
-        if not re.fullmatch(r"[1-9][0-9]*", selected["length"]):
+        length = _positive_decimal_integer(selected["length"])
+        if length is None:
             return None
-        rows.append({
+        row = {
             "name": selected["name"],
-            "length": int(selected["length"]),
+            "length": length,
             "scan_in": selected["scan_in"],
             "scan_out": selected["scan_out"],
             "clock": selected["clock"],
@@ -108,7 +128,13 @@ def _table_at(lines: List[str], index: int, source: str,
                     lines[cursor].encode("utf-8")).hexdigest(),
                 "document_sha256": digest,
             },
-        })
+        }
+        if "frequency_mhz" in selected:
+            frequency = _positive_decimal(selected["frequency_mhz"])
+            if frequency is None:
+                return None
+            row["frequency_mhz"] = frequency
+        rows.append(row)
         cursor += 1
     return (rows, cursor) if rows else None
 
