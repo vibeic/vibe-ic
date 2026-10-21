@@ -108,6 +108,20 @@ It **combines open-source** frameworks rather than re-inventing them: **cocotb**
 
 _Captured by benchmark-enhancement-capture 2026-10-15._
 
+### Skill: Mode-conditioned meaningfulness in reference oracles
+
+**Pattern**: A software-visible field is explicitly meaningful only in selected modes or states, but a Tier-3 reference oracle asserts one exact value unconditionally and rejects another source-permitted implementation.
+
+**When to apply**: Authoring or reviewing a full-stack expert reference when `verification_plan.json` carries `mode_conditioned_field_profiles`, or when INPUT describes a register or protocol field as not meaningful, undefined, or don't-care under a named condition.
+
+**What to do**: Build a field-by-mode profile from the cited INPUT statement. When its condition holds, do not assert an exact value for that field. Continue to check every source-defined peer field, transaction timing, known-value requirement and observable effect. In each mode where the field is meaningful, retain its complete source-supported behavior. Keep two legal-value positive arms for the non-meaningful mode, a meaningful-mode negative control, and a reverse mutation of a neighboring defined field. Derive neither the condition nor an expected value from DUT traces.
+
+**Worked pattern** (anonymized): A status bit reports lost output in manual overwrite mode but is explicitly not meaningful in automatic stall mode. Automatic readback zero and one are both legal for that bit. Manual loss behavior, output-valid, idle and stall remain checked. Removing all checks for the register is a vacuous repair and must fail the peer-field reverse control.
+
+**Why this is GENERAL**: Mode-dependent status and capability fields occur in accelerators, peripherals, CPUs and mixed-mode controllers. The producer emits source-cited profiles without a design name, address, bit number or inferred trace value; the expert review applies them to arbitrary Tier-3 oracle code.
+
+_Captured by benchmark-enhancement-capture 2026-10-21._
+
 ## Optional reset-retention byte stimulus
 
 When a retention test needs a designer-chosen memory stimulus, declare

@@ -112,6 +112,79 @@ def _detect_ic_class(project: Path) -> str:
     return str((d.get("fields", d) or {}).get("ic_class") or "unknown")
 
 
+_FIELD_HEADING_RE = re.compile(
+    r"^\s*#{2,6}\s+([A-Za-z_][\w.-]*)\s*\.\s*"
+    r"([A-Za-z_][\w.-]*)\s*$")
+_CONDITIONED_MEANING_RE = re.compile(
+    r"(?i)\b(?:this\s+)?(?:field|flag|signal|value|bit)\s+"
+    r"(?:is\s+)?(?:not\s+meaningful|undefined|(?:a\s+)?don['’]?t[-\s]+care)\s+"
+    r"(?:if|when)\s+(.+?)(?:[.;]|$)")
+
+
+def _json_strings(value: Any):
+    """Yield strings from an L-doc without assuming one layer's schema."""
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for child in value.values():
+            yield from _json_strings(child)
+    elif isinstance(value, list):
+        for child in value:
+            yield from _json_strings(child)
+
+
+def mode_conditioned_field_profiles(project: Path) -> List[dict]:
+    """Expose INPUT-derived exact-value exclusions for Tier-3 oracle review.
+
+    The producer does not attempt to prove arbitrary Python dataflow. It emits
+    only source text with a local ``REGISTER.FIELD`` heading and an explicit
+    mode condition, so the judgment layer can avoid inventing a value where
+    the design input says none is meaningful.
+    """
+    profiles = []
+    seen = set()
+    try:
+        docs = sorted(_gd(project).glob("L*.json"))
+    except OSError:
+        docs = []
+    for path in docs:
+        document = _read_json(path)
+        if document is None:
+            continue
+        for text in _json_strings(document):
+            register = field = None
+            for raw_line in text.splitlines():
+                line = raw_line.strip()
+                heading = _FIELD_HEADING_RE.match(line)
+                if heading:
+                    register, field = heading.groups()
+                    continue
+                if line.startswith("#"):
+                    register = field = None
+                    continue
+                if register is None or field is None:
+                    continue
+                match = _CONDITIONED_MEANING_RE.search(line)
+                if not match:
+                    continue
+                condition = match.group(1).strip()
+                key = (register.casefold(), field.casefold(),
+                       condition.casefold(), line.casefold())
+                if key in seen:
+                    continue
+                seen.add(key)
+                profiles.append({
+                    "register": register,
+                    "field": field,
+                    "condition": condition,
+                    "statement": line,
+                    "source": str(path.relative_to(project)),
+                    "oracle_policy": (
+                        "do_not_assert_exact_field_value_when_condition_holds"),
+                })
+    return profiles
+
+
 # --------------------------------------------------------------------------
 # Interface / clock / reset extraction (L9 primary, L1 pin_table fallback)
 # --------------------------------------------------------------------------
@@ -1180,6 +1253,14 @@ def generate(project: Path, out_dir: Optional[Path] = None) -> dict:
         "closure": cov["fields"]["closure_policy"],
         **({'random_goal_plan': random_plan} if random_plan else {}),
     }
+    conditioned_profiles = mode_conditioned_field_profiles(project)
+    conditioned_metadata = {}
+    if conditioned_profiles:
+        conditioned_metadata = {
+            "mode_conditioned_field_profiles": conditioned_profiles,
+            "mode_conditioned_oracle_review_required": run_kind == "expert_reference",
+        }
+        vplan.update(conditioned_metadata)
     memory_metadata = {}
     if memory_cases:
         from time import time_ns
@@ -1205,6 +1286,7 @@ def generate(project: Path, out_dir: Optional[Path] = None) -> dict:
     return {"status": "PASS", "ic_class": ic_class, "dut_kind": run_kind,
             **({'random_goal_plan': random_plan} if random_plan else {}),
             **memory_metadata,
+            **conditioned_metadata,
             "reference_model_tier": ref_tier, "out_dir": str(out),
             # HOW MANY SOURCES THE EMITTED MAKEFILE WILL COMPILE. With none,
             # `emit_makefile` falls back to `$(PWD)/<top>.v`, which is not
