@@ -162,6 +162,13 @@ _STA_DIRS = (
 )
 _STA_GLOB = "sta*.rpt"
 
+# Step 10's Default pre-layout publisher keeps one report per PVT corner in
+# this declared subdirectory.  This is deliberately an explicit one-level
+# pattern rather than ``rglob``: the three roots above also carry diagnostics
+# and scratch trees, and a nested file is not sign-off evidence merely because
+# its basename begins with ``sta``.  See vibeic/vibe-ic#3422.
+_STA_SUBDIR_GLOBS = ("prelayout_per_corner/sta*.rpt",)
+
 #: Role-bearing corner declarations. ONLY these are read.
 #:
 #: `corners_available` / `corners_extracted` / the `pvt_matrix` corner list are
@@ -316,9 +323,10 @@ def discover_reports(project: Path,
         d = project / rel
         if not d.is_dir():
             continue
-        for f in sorted(d.glob(_STA_GLOB)):
-            if f.is_file():
-                candidates.setdefault(str(f.resolve()), f)
+        for pattern in (_STA_GLOB,) + _STA_SUBDIR_GLOBS:
+            for f in sorted(d.glob(pattern)):
+                if f.is_file():
+                    candidates.setdefault(str(f.resolve()), f)
 
     # BYTE EQUALITY DETECTS, IT DOES NOT DECIDE. Two lanes fixed F-10
     # independently and their tests assert opposite things:

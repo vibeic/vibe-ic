@@ -888,6 +888,46 @@ def _publish_twice(tmp_path, name, body):
     return a / name, b / name
 
 
+def test_default_prelayout_per_corner_reports_are_discovered(tmp_path):
+    """Issue #3422: discovery must match the runner's Step-10 layout.
+
+    The basename matches ``sta*.rpt`` only below ``prelayout_per_corner``.
+    The old non-recursive glob therefore returned an empty population on a
+    real run even though all three PVT reports existed.
+    """
+    sta = tmp_path / "phase3" / "stage3" / "sta"
+    nested = sta / "prelayout_per_corner" / "sta_SS.rpt"
+    nested.parent.mkdir(parents=True)
+    nested.write_text(SINGLE_CORNER_STAMPED)
+
+    found = timing.discover_reports(tmp_path)
+
+    assert [p.resolve() for p in found] == [nested.resolve()]
+    rows, notes = timing.timing_rows(tmp_path)
+    assert rows, "the discovered report produced no timing records: %r" % notes
+    assert any(r["status"] == timing.MEASURED for r in rows), rows
+
+
+def test_unrelated_nested_sta_report_is_not_discovered(tmp_path):
+    """The #3422 repair is bounded to the publisher's declared subdirectory.
+
+    A recursive scan would also promote scratch or diagnostic reports into the
+    measurement denominator based only on their basename.
+    """
+    sta = tmp_path / "phase3" / "stage3" / "sta"
+    expected = sta / "prelayout_per_corner" / "sta_SS.rpt"
+    unrelated = sta / "scratch" / "sta_debug.rpt"
+    expected.parent.mkdir(parents=True)
+    unrelated.parent.mkdir(parents=True)
+    expected.write_text(SINGLE_CORNER_STAMPED)
+    unrelated.write_text(SINGLE_CORNER_STAMPED)
+
+    found = timing.discover_reports(tmp_path)
+
+    assert expected.resolve() in {p.resolve() for p in found}
+    assert unrelated.resolve() not in {p.resolve() for p in found}
+
+
 def test_a_report_published_into_two_directories_is_read_ONCE(tmp_path):
     """THE F-10 GUARD, and the producer is what closes it.
 
