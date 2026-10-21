@@ -1434,7 +1434,7 @@ def test_native_checked_live_expression_stays_an_opaque_encoding_obligation(tmp_
     assert _consume_encoding_receipt(tmp_path).state == 'NOT_MEASURED'
 
 
-@pytest.mark.parametrize('kind,verdict', [('unknown', 'INCOMPLETE'),
+@pytest.mark.parametrize('kind,verdict', [('unknown', 'WAIVED'),
                                        ('match', 'PASS'), ('mismatch', 'FAIL'),
                                        ('absent', 'SKIP')])
 def test_p0_reads_the_encoding_receipt_instead_of_advisory_rc0(tmp_path, monkeypatch,
@@ -1463,6 +1463,33 @@ def test_p0_reads_the_encoding_receipt_instead_of_advisory_rc0(tmp_path, monkeyp
     flow._run_structural_rtl_gates(project, records_out=records)
     assert len(records) == 1
     assert records[0]['verdict'] == verdict, records
+    if kind == 'unknown':
+        assert records[0]['evidence']['ticket'] == 'vibeic/vibe-ic#3368'
+        assert records[0]['evidence']['review_required'] is True
+        assert records[0]['evidence']['receipt_state'] == 'NOT_MEASURED'
+        assert records[0]['evidence']['unknowns'] > 0
+        assert records[0]['evidence']['mismatches'] == 0
+
+
+def test_p0_unknown_encoding_waiver_requires_bound_population(tmp_path, monkeypatch):
+    import flow_compliance_check as flow
+    project = tmp_path / 'project'
+    rtl = project / 'phase2/stage1/rtl'
+    rtl.mkdir(parents=True)
+    (rtl / 'neutral.v').write_text(_OPTIONAL_SOURCE)
+    docs = project / 'phase1/generated_docs'
+    docs.mkdir(parents=True)
+    (docs / 'L9_INTEGRATION_SPEC.json').write_text(
+        json.dumps({'top_module': 'neutral'}))
+    monkeypatch.setattr(flow, '_STRUCTURAL_RTL_GATES',
+                        ('interface_encoding_audit',))
+    monkeypatch.setattr(flow._encoding_population, 'matches',
+                        lambda binding, rows: False)
+    records = []
+    flow._run_structural_rtl_gates(project, records_out=records)
+    assert len(records) == 1
+    assert records[0]['verdict'] == 'INCOMPLETE', records
+    assert records[0]['evidence']['receipt_state'] == 'NOT_MEASURED'
 
 
 @pytest.mark.parametrize('literal,verdict', [("6'd3", 'PASS'), ("6'b110000", 'FAIL')])

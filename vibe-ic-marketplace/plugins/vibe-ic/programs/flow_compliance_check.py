@@ -117,6 +117,7 @@ import _sta_supersession                          # R-0915-28 (amended)
 import _gate_invocation
 import _flow_reason_taxonomy as _reason_taxonomy
 import _structural_absence as _sa  # R-0915-119: the reader's half of guard (i)
+import _interface_encoding_population as _encoding_population
 import _watchdog
 import l_doc_consumer_contract as _ldoc
 import phase1_post_process as _p1pp  # R-0915-64: the ONE input scanner
@@ -11716,6 +11717,65 @@ def _run_structural_rtl_gates(project: Path,
                     return _p0_gate_record(
                         gate_name, "SKIP", finding.description, evidence,
                         reason_class=_reason_taxonomy.NOT_APPLICABLE_BY_STRUCTURE)
+                if finding.state == "NOT_MEASURED":
+                    # The audit's complete interface population is broader
+                    # than its finite Gray/Binary grammars. A fresh, internally
+                    # bound population with no measured mismatch is retained as
+                    # deferred semantic coverage, not misreported as an
+                    # execution error. This is deliberately narrower than the
+                    # finding state: stale source/native context, dropped rows,
+                    # malformed counts and every measured mismatch keep their
+                    # blocking paths.
+                    report = json.loads((worker_scratch / gate_name /
+                                         "encoding_audit_report.json").read_text())
+                    summary = report.get("summary")
+                    rows = report.get("interfaces")
+                    discovery = report.get("discovery")
+                    configuration = report.get("configuration")
+                    native = (configuration.get("native")
+                              if isinstance(configuration, dict) else None)
+                    unknown_population = (
+                        isinstance(summary, dict)
+                        and isinstance(rows, list)
+                        and report.get("producer_returncode") == 0
+                        and summary.get("verdict") == "INCONCLUSIVE"
+                        and type(summary.get("total_interfaces")) is int
+                        and type(summary.get("matches")) is int
+                        and type(summary.get("mismatches")) is int
+                        and type(summary.get("unknowns")) is int
+                        and summary["total_interfaces"] == len(rows) > 0
+                        and summary["mismatches"] == 0
+                        and summary["unknowns"] > 0
+                        and summary["matches"] + summary["unknowns"] == len(rows)
+                        and all(isinstance(row, dict)
+                                and row.get("status") in {"MATCH", "UNKNOWN"}
+                                for row in rows)
+                        and _encoding_population.matches(
+                            report.get("interface_population"), rows)
+                        and isinstance(discovery, dict)
+                        and discovery.get("complete") is True
+                        and discovery.get("issues") == []
+                        and isinstance(configuration, dict)
+                        and configuration.get("state") == "MEASURED"
+                        and isinstance(native, dict)
+                        and native.get("status") == "MEASURED"
+                        and "producer_inconclusive_or_unknown; fresh"
+                            in finding.detail)
+                    if unknown_population:
+                        evidence.update({
+                            "ticket": "vibeic/vibe-ic#3368",
+                            "review_required": True,
+                            "reason": (
+                                "complete fresh interface population contains "
+                                "unsupported encoding semantics"),
+                            "detail": finding.detail,
+                            "total_interfaces": summary["total_interfaces"],
+                            "matches": summary["matches"],
+                            "mismatches": summary["mismatches"],
+                            "unknowns": summary["unknowns"],
+                        })
+                        return _p0_gate_record(
+                            gate_name, "WAIVED", finding.description, evidence)
                 return _p0_gate_record(
                     gate_name, "INCOMPLETE", finding.description, evidence,
                     reason_class=_reason_taxonomy.EXECUTION_ERROR)
