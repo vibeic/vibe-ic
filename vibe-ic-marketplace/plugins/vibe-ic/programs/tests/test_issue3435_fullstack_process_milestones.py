@@ -62,4 +62,3 @@ def test_blank_or_failed_status_is_visible_but_not_claimed_verified_here():
         assert disposition["source_status"] == (status.lower() if status else None)
         assert disposition["blocking"] is False
         assert "not claimed" in disposition["note"]
-

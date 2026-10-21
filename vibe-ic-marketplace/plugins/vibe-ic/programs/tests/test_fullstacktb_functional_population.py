@@ -652,6 +652,148 @@ endmodule
     return project
 
 
+def test_first_fullstack_run_imports_canonical_authored_sv_before_retarget(
+        tmp_path, monkeypatch):
+    project = _binding_project(tmp_path)
+    fs = _fsf()
+    delivered = project / 'input/tb/tb.v'
+    canonical = project / 'phase2/stage1/sim/tb/tb.sv'
+    canonical.parent.mkdir(parents=True, exist_ok=True)
+    original = delivered.read_bytes()
+    canonical.write_bytes(original)
+    delivered.unlink()
+    observed = []
+    real_retarget = fs.retarget_instance
+
+    def observe_retarget(text, *args, **kwargs):
+        observed.append(text.encode())
+        return real_retarget(text, *args, **kwargs)
+
+    calls = []
+
+    def transport(argv, wd, container, simulator, timeout):
+        calls.append(argv)
+        return 83, 'source-only transport refusal; no simulator executed'
+
+    monkeypatch.setattr(fs, 'retarget_instance', observe_retarget)
+    result = fs.generate(
+        project, route='DIE', dispatch=transport,
+        model_resolver=lambda *args: ({'/neutral/unused.v':
+                                       'module unused; endmodule\n'},
+                                      'neutral source model'))
+
+    copied = fs.functional_dir(project) / 'tb.sv'
+    provenance = [row for row in result.get('preserved_authored', [])
+                  if row.get('origin') == 'canonical_step4']
+    assert observed == [original], 'retargeter must receive the exact canonical bytes'
+    assert copied.is_file() and not (copied.parent / 'tb.v').exists()
+    assert 'envelope dut' in copied.read_text() and 'core dut' not in copied.read_text()
+    assert len(calls) == 1 and calls[0][-1] == str(copied)
+    assert provenance == [{
+        'case': 'tb',
+        'source': 'phase2/stage1/sim/tb/tb.sv',
+        'sha256': hashlib.sha256(original).hexdigest(),
+        'path': 'phase2/stage1/sim_full_stack/functional/tb.sv',
+        'copied_sha256': hashlib.sha256(original).hexdigest(),
+        'origin': 'canonical_step4',
+    }]
+
+
+@pytest.mark.parametrize('marker_name', [
+    'ORACLE_GENERATED_MARKER', 'ORACLE_NONE_MARKER'])
+def test_first_fullstack_run_does_not_import_non_authored_or_undeclared_tbs(
+        tmp_path, marker_name):
+    project = _binding_project(tmp_path)
+    fs = _fsf()
+    tbg = importlib.import_module('testbench_gen')
+    (project / 'input/tb/tb.v').unlink()
+    tb_dir = project / 'phase2/stage1/sim/tb'
+    marker = getattr(tbg, marker_name)
+    _write(tb_dir / 'tb.sv', f'// {marker}\nmodule tb; endmodule\n')
+    _write(tb_dir / 'undeclared.sv', 'module undeclared; endmodule\n')
+
+    result = fs.generate(
+        project, route='DIE',
+        dispatch=lambda *args: (83, 'source-only refusal'),
+        model_resolver=lambda *args: ({'/neutral/unused.v':
+                                       'module unused; endmodule\n'},
+                                      'neutral source model'))
+
+    functional = fs.functional_dir(project)
+    assert result['cases'], result
+    assert not (functional / 'tb.sv').exists()
+    assert not (functional / 'undeclared.sv').exists()
+    assert not [row for row in result.get('preserved_authored', [])
+                if row.get('origin') == 'canonical_step4']
+
+
+def test_first_fullstack_run_refuses_duplicate_canonical_tb_variants_before_dispatch(
+        tmp_path):
+    project = _binding_project(tmp_path)
+    fs = _fsf()
+    (project / 'input/tb/tb.v').unlink()
+    tb_dir = project / 'phase2/stage1/sim/tb'
+    _write(tb_dir / 'tb.v', 'module tb; endmodule\n')
+    _write(tb_dir / 'tb.sv', 'module tb; endmodule\n')
+    calls = []
+
+    result = fs.generate(
+        project, route='DIE',
+        dispatch=lambda *args: calls.append(args) or (0, ''),
+        model_resolver=lambda *args: ({'/neutral/unused.v':
+                                       'module unused; endmodule\n'},
+                                      'neutral source model'))
+
+    assert result['verdict'] == 'NOT_MEASURED'
+    assert result['reason_class'] == 'EXECUTION_ERROR'
+    assert 'duplicate unit TB case: tb' in result['reason']
+    assert calls == []
+
+
+def test_fullstack_denominator_runs_real_case_and_reports_103_process_milestones(
+        tmp_path):
+    project = _binding_project(tmp_path)
+    fs = _fsf()
+    rows = [{
+        'name': 'tb', 'kind': 'functional_vector',
+        'stimulus': 'drive a=0 then a=1', 'expected': 'compare y=a',
+    }]
+    rows.extend({
+        'name': f'process_item_{index}',
+        'kind': 'verification_checklist',
+        'status': 'Done',
+        'stimulus': f'DV checklist item ITEM_{index} — Done',
+        'expected': 'DV checklist item satisfied (Done)',
+    } for index in range(103))
+    l10 = project / 'phase1/generated_docs/L10_TEST_CASES.json'
+    l10.write_text(json.dumps({'test_cases': rows}))
+    calls = []
+
+    def transport(argv, wd, container, simulator, timeout):
+        calls.append(argv)
+        return ((0, '[TB tb] PASS\n') if argv[0] == 'vvp' else (0, ''))
+
+    result = fs.generate(
+        project, route='DIE', dispatch=transport,
+        model_resolver=lambda *args: ({'/neutral/unused.v':
+                                       'module unused; endmodule\n'},
+                                      'neutral source model'))
+
+    assert result['verdict'] == 'PASS', result
+    assert result['counts'] == {
+        'passed': 1, 'failed': 0, 'errored': 0, 'no_oracle': 0,
+        'excluded': 103, 'short_population': 0, 'rows': 104, 'executed': 1,
+    }
+    process = [row for row in result['cases']
+               if row.get('step5_disposition', {}).get('disposition')
+               == fs.DISP_PROCESS_MILESTONE]
+    assert len(process) == 103
+    assert all(row['state'] == 'excluded'
+               and row['step5_disposition']['source_status'] == 'done'
+               and not row['step5_disposition']['blocking'] for row in process)
+    assert len(calls) == 2
+
+
 def _binding_native(project):
     launched = []
     real_popen = subprocess.Popen
@@ -1058,6 +1200,12 @@ def test_gate_refuses_a_population_that_executed_nothing(tmp_path, capsys,
     (0, "ORACLE_TB_DONE pass=27/28\nORACLE_MISMATCH: no single\n", "failed"),
     (0, "ORACLE_TB_DONE pass=0/0\n", "errored"),
     (0, "[TB c1] PASS — holds\n", "passed"),
+    (0, "PASS c1 exact authored oracle matched\n", "passed"),
+    (0, "PASS other exact authored oracle matched\n", "errored"),
+    (0, "PASS c1_alias is not c1\n", "errored"),
+    (0, "PASS generic text without a case\n", "errored"),
+    (1, "PASS c1 exact authored oracle matched\n", "errored"),
+    (0, "PASS c1 exact authored oracle matched\nFAIL c1 later mismatch\n", "failed"),
     (1, "[TB c1] FAIL: x asserted\n", "failed"),
     (0, "[TB other] PASS — holds\n", "errored"),
     (0, "simulation finished\n", "errored"),

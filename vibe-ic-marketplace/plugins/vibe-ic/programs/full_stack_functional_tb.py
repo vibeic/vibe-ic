@@ -363,6 +363,12 @@ def retarget_instance(text: str, core: str, top: str,
 # ---------------------------------------------------------------------------
 _TB_VERDICT_RE = re.compile(
     r"(?m)^\s*\[TB\s+([A-Za-z_][A-Za-z0-9_$]*)\]\s+(PASS|FAIL)\b")
+# Canonical authored Step-4 tests may name their verdict as ``PASS <case>``.
+# Bind the complete first token pair to the requested L10 case; a generic
+# PASS, substring or another case receives no credit, while FAIL, mismatch and
+# nonzero-return controls below still dominate.
+_AUTHORED_VERDICT_RE = re.compile(
+    r"(?m)^\s*(PASS|FAIL)\s+([A-Za-z_][A-Za-z0-9_$]*)\b")
 _ORACLE_DONE_RE = re.compile(r"(?m)^\s*ORACLE_TB_DONE\s+pass=(\d+)/(\d+)")
 _FAIL_LINE_RE = re.compile(r"(?m)^\s*(?:\[[^\]]*\]\s*)?FAIL\b")
 _MISMATCH_RE = re.compile(r"(?m)^\s*ORACLE_MISMATCH\b")
@@ -401,7 +407,8 @@ def score_transcript(case: str, rc: Optional[int], text: str
     """The case's verdict from ITS OWN simulation transcript.
 
     PASSED  rc 0, no FAIL / ORACLE_MISMATCH line, and either the case's own
-            `[TB <case>] PASS` marker or an `ORACLE_TB_DONE pass=n/n`, n > 0.
+            `[TB <case>] PASS` / `PASS <case>` marker or an
+            `ORACLE_TB_DONE pass=n/n`, n > 0.
     FAILED  the transcript carries the case's FAIL marker, any FAIL line, an
             ORACLE_MISMATCH, or a golden count below its denominator.
     ERRORED anything else — including a clean exit that printed no verdict,
@@ -419,6 +426,8 @@ def _score_transcript(case: str, rc: Optional[int], text: str
     done = list(_ORACLE_DONE_RE.finditer(text))
     words = [m.group(2) for m in _TB_VERDICT_RE.finditer(text)
              if m.group(1) == case]
+    words += [m.group(1) for m in _AUTHORED_VERDICT_RE.finditer(text)
+              if m.group(2) == case]
     fail_line = bool(_FAIL_LINE_RE.search(text) or _MISMATCH_RE.search(text))
     checks = None
     scenario = re.findall(
@@ -796,11 +805,11 @@ DATAPATH_KEY = "cpu_datapath"
 
 
 def process_milestone_disposition(case: dict) -> Optional[Dict[str, Any]]:
-    """Exclude a declared DV process milestone from the functional denominator.
+    """Keep a DV process milestone outside the functional denominator.
 
-    Reuse the L10 consumer's kind and digital-signal guard.  The row remains
+    Reuse the L10 consumer's kind and digital-signal guard. The row stays
     visible and its status remains owned by that checklist consumer; this only
-    says a project milestone is not a circuit stimulus/expected-value pair.
+    states that a project milestone is not a circuit stimulus/oracle pair.
     """
     import l10_tb_conformance_check as _l10
     category = str(case.get("category", case.get("type", case.get("kind", "")))
@@ -811,8 +820,10 @@ def process_milestone_disposition(case: dict) -> Optional[Dict[str, Any]]:
         return None
     name = str(case.get("name") or case.get("id") or "")
     return {
-        "case": name, "disposition": DISP_PROCESS_MILESTONE,
-        "blocking": False, "ruling": "ORGANIC #808 / v1.15.80",
+        "case": name,
+        "disposition": DISP_PROCESS_MILESTONE,
+        "blocking": False,
+        "ruling": "ORGANIC #808 / v1.15.80",
         "source_status": _l10.checklist_status(case) or None,
         "note": ("declared verification-checklist process milestone; excluded "
                  "from the executable functional denominator, not claimed "
@@ -990,24 +1001,69 @@ def generate(project: Path, container: Optional[str] = None,
         step4 = {}
     disp = dispatch or default_dispatch
     run_root = fdir / "run"
+
+    declared_names = {
+        str(case.get("name") or case.get("id") or "") for case in cases
+        if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_$]*",
+                        str(case.get("name") or case.get("id") or ""))
+    }
+    seeded_names = set()
+    try:
+        canonical_authored = _tbg.authored_unit_tb_paths(project)
+    except (OSError, ValueError) as exc:
+        return _finish(NOT_MEASURED, EXECUTION_ERROR,
+                       f"canonical Step-4 authored TBs are ambiguous: {exc}")
+    for authored in canonical_authored:
+        if authored.stem not in declared_names:
+            continue
+        target = fdir / authored.name
+        shutil.copy2(authored, target)
+        digest = sha256_file(authored)
+        copied_digest = sha256_file(target)
+        if copied_digest != digest:
+            return _finish(NOT_MEASURED, EXECUTION_ERROR,
+                           f"canonical Step-4 authored TB copy changed bytes: "
+                           f"{_rel(project, authored)}")
+        seeded_names.add(authored.stem)
+        rec.setdefault("preserved_authored", []).append({
+            "case": authored.stem,
+            "source": _rel(project, authored),
+            "sha256": digest,
+            "path": _rel(project, target),
+            "copied_sha256": copied_digest,
+            "origin": "canonical_step4",
+        })
     if previous is not None:
         for case in cases:
             name = str(case.get("name") or case.get("id") or "")
             if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_$]*", name):
                 continue
-            authored = _tbg.authored_oracle_preserved(previous, name, None)
+            if name in seeded_names:
+                continue
+            try:
+                authored = _tbg.authored_oracle_preserved(previous, name, None)
+            except ValueError as exc:
+                return _finish(NOT_MEASURED, EXECUTION_ERROR,
+                               f"previous full-stack authored TBs are "
+                               f"ambiguous: {exc}")
             if authored is not None:
-                target = fdir / f"{name}.v"
+                target = fdir / authored.name
                 shutil.copy2(authored, target)
                 rec.setdefault("preserved_authored", []).append({
                     "case": name, "source": _rel(project, authored),
-                    "sha256": sha256_file(authored), "path": _rel(project, target)})
+                    "sha256": sha256_file(authored),
+                    "path": _rel(project, target),
+                    "origin": "previous_full_stack"})
     # ONE call into the Step-4 unit-TB producer's own ladder, into this
     # producer's directory, with the substance-floor scaffold withheld: a case
     # no real oracle grounds gets no file here, never a connectivity stand-in.
-    n_emitted = _tbg.emit_unit_tbs(project, core_mod, None, report,
-                                   out_dir=fdir, scaffold=False,
-                                   case_stated=True)
+    try:
+        n_emitted = _tbg.emit_unit_tbs(project, core_mod, None, report,
+                                       out_dir=fdir, scaffold=False,
+                                       case_stated=True)
+    except ValueError as exc:
+        return _finish(NOT_MEASURED, EXECUTION_ERROR,
+                       f"functional authored TBs are ambiguous: {exc}")
     rec["ladder"] = {"emitted": n_emitted,
                      "dut_resolution": report.get("dut_resolution"),
                      "reason": report.get("reason")}
@@ -1036,7 +1092,8 @@ def generate(project: Path, container: Optional[str] = None,
         if cov:
             # The ladder may have grounded it; a testbench for a case that is
             # not counted must not sit beside the ones that are.
-            (fdir / f"{name}.v").unlink(missing_ok=True)
+            for suffix in (".v", ".sv"):
+                (fdir / f"{name}{suffix}").unlink(missing_ok=True)
             entry.update(state=EXCLUDED, step5_disposition=cov, reason=(
                 f"the case's acceptance `{case.get('expected')}` is a coverage "
                 f"FIGURE its own text names ({cov['basis']['names_coverage_in']}"
@@ -1044,12 +1101,19 @@ def generate(project: Path, container: Optional[str] = None,
                 f"it is not a functional full-stack case and is not counted "
                 f"as one"))
             continue
-        path = fdir / f"{name}.v"
-        if not path.is_file():
+        variants = [path for suffix in (".v", ".sv")
+                    if (path := fdir / f"{name}{suffix}").is_file()]
+        if len(variants) > 1:
+            return _finish(NOT_MEASURED, EXECUTION_ERROR,
+                           f"duplicate functional TB case {name}: "
+                           + ", ".join(_rel(project, path)
+                                       for path in variants))
+        if not variants:
             entry.update(state=NO_ORACLE, reason=(
                 "no oracle family grounds this case from the design input"),
                 **_not_run_detail(project, case, ic_class, report, step4))
             continue
+        path = variants[0]
         text = path.read_text(errors="replace")
         entry["family"] = _family_of(text)
         if entry["family"] == "declared_arithmetic_scenario":
