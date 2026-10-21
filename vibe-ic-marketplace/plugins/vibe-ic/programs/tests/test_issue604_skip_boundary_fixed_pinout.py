@@ -201,7 +201,7 @@ class TestFlagReachesFaultChain:
     def _run_and_capture(self, tmp_path, skip_mode):
         captured = {}
 
-        def _fake_run_docker(project, cmd, timeout=600, pdk_dir=None):
+        def _fake_run_docker(project, cmd, timeout=600, pdk_dir=None, **kwargs):
             captured["cmd"] = list(cmd)
             # produce a plausible chained netlist so run_chain proceeds far
             # enough to record the decision, then measures a 3-flop chain.

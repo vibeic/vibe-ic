@@ -22740,18 +22740,17 @@ def _step_dft_insertion(project: Path, top_name: str, container: str,
                           str((project / "input" / "pdk").resolve())]
         _scan_t0 = time.time()
         try:
-            # CZT-11 — supervised, not clocked. The 1800 s literal here
-            # stopped a scan-chain insertion that was still inserting, and the
-            # arm below then recorded it as an "execution error" of the tool:
-            # a host condition written down as a fact about the program.
-            _sc = _pr.run(_scan_cmd, capture_output=True, text=True)
+            # `fault_scan_chain_insert` owns the ONE authoritative supervisor:
+            # its container-aware probe sees CPU/I/O inside the named
+            # container and reaps that exact container on a genuine stall.
+            # An outer `_progress_run` cannot see the reparented engine; it
+            # killed the quiet waiting Python parent while `fault chain` was
+            # still advancing, then let ATPG overlap the orphaned writer.
+            # Wait for the producer normally.  It cannot return until its
+            # inner supervisor has completed or reaped the engine.
+            _sc = subprocess.run(_scan_cmd, capture_output=True, text=True)
             _scan_rc = _sc.returncode
             _scan_tail = (_sc.stderr or _sc.stdout or "")[-300:]
-        except _pr.Stalled as exc:
-            # A STALL IS NOT AN EXECUTION ERROR. The tool ran; every readable
-            # progress signal then sat still. Same non-zero rc (the caller
-            # only tests `== 0`), a tail that says which of the two it was.
-            _scan_rc, _scan_tail = _pr.RC_STALLED, f"STALLED: {exc}"[-300:]
         except Exception as exc:                       # noqa: BLE001
             _scan_rc, _scan_tail = -1, f"execution error: {exc}"
         _scan_meta = _read_scan_chain_meta(project)

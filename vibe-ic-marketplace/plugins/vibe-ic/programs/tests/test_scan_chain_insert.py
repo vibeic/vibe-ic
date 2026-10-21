@@ -22,6 +22,7 @@ carries.
 from __future__ import annotations
 
 import json
+import inspect
 import sys
 from pathlib import Path
 
@@ -33,6 +34,8 @@ if str(PROGRAMS) not in sys.path:
 
 import fault_scan_chain_insert as sci          # noqa: E402
 import fault_atpg_run as fatpg                 # noqa: E402
+import design_one_shot_runner as runner        # noqa: E402
+import _watchdog as watchdog                   # noqa: E402
 
 
 # Real `fault chain` stdout, copied verbatim from a measured run
@@ -57,6 +60,38 @@ META_JSON = json.dumps({
               {"name": "p", "kind": "output", "width": 1, "ordinal": 0}],
 })
 CHAINED_HEAD = f"/* FAULT METADATA: '{META_JSON}' END FAULT METADATA */\n"
+
+
+class TestContainerAwareSupervision:
+    """The leaf owns container supervision; the runner only waits for it."""
+
+    def test_chain_uses_inner_supervisor_and_preserves_stall_rc(
+            self, tmp_path, monkeypatch):
+        netlist = tmp_path / "phase2/stage2/synth/netlist.v"
+        netlist.parent.mkdir(parents=True)
+        netlist.write_text(_mapped_netlist(), encoding="utf-8")
+        captured = {}
+
+        def fake_run_docker(project, cmd, **kwargs):
+            captured.update(kwargs)
+            return watchdog.RC_STALLED, "", "measured inner stall"
+
+        monkeypatch.setattr(sci._fatpg, "_run_docker", fake_run_docker)
+        rc, report = sci.run_chain(
+            tmp_path, "phase2/stage2/synth/netlist.v", "clk", "sky130",
+            timeout=1234)
+
+        assert captured["supervised"] is True
+        assert captured["ceiling_s"] == 1234
+        assert "timeout" not in captured
+        assert rc == watchdog.RC_STALLED
+        assert report["exit"] == watchdog.RC_STALLED
+        assert report["stage"] == "chain"
+
+    def test_runner_does_not_nest_host_watchdog_around_scan_producer(self):
+        source = inspect.getsource(runner._step_dft_insertion)
+        assert "subprocess.run(_scan_cmd" in source
+        assert "_pr.run(_scan_cmd" not in source
 
 
 def _mapped_netlist(n_flops: int = 64) -> str:
