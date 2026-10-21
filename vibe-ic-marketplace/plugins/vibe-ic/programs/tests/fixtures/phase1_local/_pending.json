@@ -405,5 +405,16 @@
     "version_observed": "1.30.32, exact official commit400840b089083915d9420191b8397ce5c92025a1, tree55b5ad54216f1615c365fdadaee31f2b09bdd51c. No moving-main or tool-image assumption.",
     "version_lkg": "Unknown.",
     "fixture_path": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/fixtures/phase1_local/neutral_wrapped_block_latency/wrapped_latency.md"
+  },
+  {
+    "issue": 3467,
+    "project": "opentitan_aes",
+    "layer": "L20_DFT_SCAN_TOPOLOGY",
+    "field": "fields.dft_present, fields.notes, extraction_status, source_documents",
+    "expected": "A source-bound PLANNED_UNMEASURED state distinct from DFT present, owner-declared no DFT, and extraction not run; no invented scan chains, pins, frequency, ATPG coverage, or completion.",
+    "actual": "The canonical producer returns rc=0 but leaves extraction_status=NOT_YET_EXTRACTED, dft_present=false, source_documents=[], and notes claiming the spec does not specify DFT/scan topology.",
+    "version_observed": "v1.30.61, v1.30.96, and main 3ce036897d",
+    "version_lkg": "",
+    "fixture_path": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/fixtures/phase1_local/opentitan_aes/l20_planned_unmeasured.txt"
   }
 ]

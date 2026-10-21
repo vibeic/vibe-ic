@@ -62032,6 +62032,25 @@ def _post_emit_l22_coverage_goals(project: Path) -> int:
     return n
 
 
+def _post_emit_l20_dft_intent(project: Path) -> int:
+    """Project explicit planned/unmeasured DFT intent after L20 exists."""
+    from l20_dft_intent_emit import run as _l20_dft_emit
+
+    rep = _l20_dft_emit(project)
+    if not isinstance(rep, dict):
+        raise RuntimeError("l20_dft_intent_emit returned no report")
+    status = rep.get("status")
+    if status == "SKIPPED":
+        return 0
+    if status != "OK":
+        raise RuntimeError(
+            f"l20_dft_intent_emit {status}: {rep.get('reason')}")
+    n = int(rep.get("emitted_count", 0) or 0)
+    if n:
+        print("      L20 DFT intent: recorded planned/unmeasured state")
+    return n
+
+
 def _post_emit_l19_constraint_tokens(project: Path) -> int:
     """Lift constraints stated in design prose into their L19 consumer.
 
@@ -69526,6 +69545,16 @@ def main() -> int:
     _layergate2_result = _run_layergate2(project)
     if _layergate2_result:
         cov_gate_failed = True
+
+    # #3467 — run after every protocol overlay that may rewrite L20. The
+    # skeleton's false value is a producer default, not an owner declaration;
+    # preserve explicit planned/unmeasured intent as unknown before gates read
+    # the final layer.
+    try:
+        _post_emit_l20_dft_intent(project)
+    except Exception as _l20_intent_err:
+        print(f"      L20 DFT intent emit FAILED (fail-open): "
+              f"{_l20_intent_err}", file=sys.stderr)
 
     print(f"[15/15] coverage report ...")
     pct, report = emit_coverage_report(project, extracted, results)

@@ -1,0 +1,4 @@
+The pre-DFT wrapper is functional only.
+DFT remains planned and unmeasured.
+Preserve any known scan/test-access interface.
+The final producer must reconcile the actual mapped/DFT pad roster.
