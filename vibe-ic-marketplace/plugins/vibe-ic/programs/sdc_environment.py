@@ -720,6 +720,8 @@ def render_pad_input_drive(record: Optional[Dict[str, object]],
 def pad_drive_sdc_lines(record: Optional[Dict[str, object]],
                         time_scale: float = 1.0) -> List[str]:
     """The command (non-comment) lines the sign-off deck must carry."""
+    if isinstance(record, dict) and record.get("verdict") == "PAD_TRANSLATED":
+        return [str(ln) for ln in record.get("sdc_lines") or [] if str(ln).strip()]
     return [ln for ln in render_pad_input_drive(record, time_scale)
             if ln and not ln.startswith("#")]
 
@@ -749,6 +751,223 @@ def _disable_refused_staged_drive(text: str) -> str:
     return "".join(out)
 
 
+def _disable_staged_external_electrical(text: str) -> str:
+    """Disable external slew/load commands that could not be translated.
+
+    The original command remains byte-visible as a comment.  A core STA must
+    never continue with an off-chip transition or receiver load after the pad
+    producer proved that another electrical boundary sits between them.
+    """
+    out: List[str] = []
+    continuing = False
+    for raw in text.splitlines(keepends=True):
+        refused = continuing or bool(re.match(
+            r"\s*(set_input_transition|set_load)\b", raw))
+        if refused:
+            ending = "\n" if raw.endswith("\n") else ""
+            line = raw[:-1] if ending else raw
+            out.append("# R-0929-CORE-PAD-TRANSLATION EXTERNAL_ONLY: "
+                       f"{line} [disabled at core boundary]{ending}")
+            continuing = line.rstrip().endswith("\\")
+        else:
+            out.append(raw)
+    return "".join(out)
+
+
+def _staged_electrical_command(line: str) -> Optional[Dict[str, str]]:
+    """Parse the deliberately narrow single-line staged SDC subset.
+
+    Translation is accepted only when the selector can be checked against the
+    pad producer's exact port inventory.  Unsupported Tcl stays fail-closed.
+    """
+    m = re.match(
+        r"^\s*(set_input_transition|set_load)\s+"
+        r"(?:(-min|-max)\s+)?([0-9.eE+-]+)\s+"
+        r"(\[(all_inputs|all_outputs)\]|\[get_ports\s+\{([^}]*)\}\])\s*$",
+        line)
+    if not m:
+        return None
+    try:
+        value = float(m.group(3))
+    except ValueError:
+        return None
+    if not math.isfinite(value) or value < 0:
+        return None
+    return {"command": m.group(1), "mode": m.group(2) or "",
+            "value": f"{value:g}", "selector": m.group(4),
+            "collection": m.group(5) or "get_ports",
+            "patterns": m.group(6) or ""}
+
+
+def _selected_pad_model(command: Dict[str, str], pads: Dict[str, object]
+                        ) -> Tuple[Optional[Tuple[str, str, str]], str]:
+    """Return one unambiguous (master, bond terminal, core pin) model."""
+    import fnmatch
+    direction = "input" if command["command"] == "set_input_transition" else "output"
+    candidates = [p for p in pads.values() if p.get("direction") in
+                  (("input", "inout") if direction == "input" else ("output", "inout"))]
+    if command["collection"] in ("all_inputs", "all_outputs"):
+        chosen = candidates
+    else:
+        patterns = command["patterns"].split()
+        if not patterns:
+            return None, "get_ports selector is empty"
+        chosen = [p for p in candidates if any(
+            fnmatch.fnmatchcase(str(p.get("port", "")), pat) for pat in patterns)]
+        missing = [pat for pat in patterns if not any(
+            fnmatch.fnmatchcase(str(p.get("port", "")), pat) for p in candidates)]
+        if missing:
+            return None, "selector pattern(s) absent from pad inventory: " + ", ".join(missing)
+    if not chosen:
+        return None, "selector reaches no signal pad"
+    models = {(str(p.get("master") or ""), str(p.get("terminal") or ""),
+               str(p.get("core_pin") or "")) for p in chosen}
+    if any(not all(model) for model in models):
+        return None, "selected pad record lacks master, terminal, or core_pin"
+    if len(models) != 1:
+        return None, "selector spans heterogeneous pad models"
+    return next(iter(models)), ""
+
+
+def _liberty_cap_scale_pf(text: str) -> Optional[float]:
+    """Scale one Liberty capacitance unit to pF (the OpenSTA set_load unit)."""
+    m = re.search(r"\bcapacitive_load_unit\s*\(\s*([0-9.eE+-]+)\s*,\s*"
+                  r"([fpnu]?f)\s*\)", text, re.I)
+    if not m:
+        return 1.0                 # Liberty default is 1 pF
+    try:
+        value = float(m.group(1))
+    except ValueError:
+        return None
+    unit = m.group(2).lower()
+    return value * {"ff": 1e-3, "pf": 1.0, "nf": 1e3, "uf": 1e6}.get(unit, float("nan"))
+
+
+def _pad_core_pin_capacitance(project: Path, model: Tuple[str, str, str],
+                              container: str,
+                              to_container_path: Optional[Callable[[str, str], str]]
+                              ) -> Tuple[Optional[Dict[str, object]], str]:
+    """Bound the selected output pad's core-input capacitance across IO views."""
+    import hashlib
+    import json
+    master, _terminal, core_pin = model
+    try:
+        record = json.loads((Path(project) / IO_PAD_RECORD).read_text())
+        libs = [str(x) for x in record.get("io_library_liberty") or [] if isinstance(x, str)]
+    except (OSError, ValueError, AttributeError):
+        return None, "pad producer record is absent or unreadable"
+    # Most PDKs use the cell name in the Liberty filename.  This avoids
+    # hundreds of irrelevant container reads while retaining a safe fallback.
+    likely = [p for p in libs if master in Path(p).name]
+    scan = likely or libs
+    views: List[Dict[str, object]] = []
+    for path in scan:
+        text, where = _read_pdk_file(path, container, to_container_path)
+        if text is None:
+            continue
+        cells = dict(_liberty_blocks(text, "cell"))
+        if master not in cells:
+            continue
+        pins = dict(_liberty_blocks(cells[master], "pin"))
+        if core_pin not in pins:
+            return None, f"{master}/{core_pin} is absent from {path}"
+        own = _own_attrs(pins[core_pin])
+        cap = re.search(r"\bcapacitance\s*:\s*([0-9.eE+-]+)", own)
+        scale = _liberty_cap_scale_pf(text)
+        if not cap or scale is None or not math.isfinite(scale):
+            return None, f"{master}/{core_pin} has no usable capacitance in {path}"
+        value = float(cap.group(1)) * scale
+        if not math.isfinite(value) or value <= 0:
+            return None, f"{master}/{core_pin} has invalid capacitance in {path}"
+        views.append({"liberty": path, "read_from": where,
+                      "sha256": hashlib.sha256(text.encode()).hexdigest(),
+                      "capacitance_pf": value})
+    if not views:
+        return None, f"no characterised IO Liberty view for {master}/{core_pin}"
+    return {"master": master, "pin": core_pin,
+            "min_pf": min(float(v["capacitance_pf"]) for v in views),
+            "max_pf": max(float(v["capacitance_pf"]) for v in views),
+            "views": views}, ""
+
+
+def _translate_core_pad_electrical(project: Path, text: str,
+                                   record: Dict[str, object], container: str,
+                                   to_container_path: Optional[Callable[[str, str], str]],
+                                   time_scale: float
+                                   ) -> Tuple[str, Dict[str, object]]:
+    """Translate bond-side staged constraints onto the current core boundary."""
+    import json
+    try:
+        pad_record = json.loads((Path(project) / IO_PAD_RECORD).read_text())
+    except (OSError, ValueError, AttributeError):
+        pad_record = {}
+    pads = _signal_pad_instances(pad_record) if isinstance(pad_record, dict) else {}
+    raw_commands = [ln.strip() for ln in text.splitlines()
+                    if re.match(r"\s*(set_input_transition|set_load)\b", ln)]
+    if not raw_commands:
+        return text, record
+    parsed = [_staged_electrical_command(ln) for ln in raw_commands]
+    translated: List[str] = []
+    evidence: List[Dict[str, object]] = []
+    caps: Dict[Tuple[str, str, str], Dict[str, object]] = {}
+    why = ""
+    for original, command in zip(raw_commands, parsed):
+        if command is None:
+            why = f"unsupported staged electrical command: {original}"
+            break
+        model, why = _selected_pad_model(command, pads)
+        if model is None:
+            break
+        master, terminal, core_pin = model
+        mode = (command["mode"] + " ") if command["mode"] else ""
+        if command["command"] == "set_input_transition":
+            value = float(command["value"]) * time_scale
+            line = (f"set_driving_cell {mode}-lib_cell {master} -from_pin {terminal} "
+                    f"-pin {core_pin} -input_transition_rise {value:g} "
+                    f"-input_transition_fall {value:g} {command['selector']}")
+            detail: Dict[str, object] = {"original": original, "translated": [line],
+                                         "pad_model": list(model)}
+        else:
+            if model not in caps:
+                cap, why = _pad_core_pin_capacitance(
+                    project, model, container, to_container_path)
+                if cap is None:
+                    break
+                caps[model] = cap
+            cap = caps[model]
+            if command["mode"] == "-min":
+                values = [("-min", float(cap["min_pf"]))]
+            elif command["mode"] == "-max":
+                values = [("-max", float(cap["max_pf"]))]
+            else:
+                values = [("-max", float(cap["max_pf"])),
+                          ("-min", float(cap["min_pf"]))]
+            lines = [f"set_load {flag} {value:g} {command['selector']}"
+                     for flag, value in values]
+            line = ""
+            detail = {"original": original, "translated": lines,
+                      "pad_model": list(model), "capacitance": cap}
+        translated.extend(detail["translated"])
+        evidence.append(detail)
+    base = _disable_staged_external_electrical(text)
+    identity = {k: record[k] for k in ("analysis_top", "boundary") if k in record}
+    if why:
+        failed = {"schema": PAD_INPUT_DRIVE_SCHEMA, "applies": True,
+                  "verdict": "NOT_MEASURED", "model": "core pad boundary translation",
+                  "reason": why, "refused_staged_sdc_lines": raw_commands,
+                  "translation": evidence, **identity}
+        return (base.rstrip("\n") + "\n# NOT_MEASURED: CORE_PAD_ELECTRICAL_BOUNDARY; "
+                + why + "\n"), failed
+    resolved = {"schema": PAD_INPUT_DRIVE_SCHEMA, "applies": True,
+                "verdict": "PAD_TRANSLATED", "model": "core pad boundary translation",
+                "source": f"design-staged SDC translated through {IO_PAD_RECORD}",
+                "external_sdc_lines": raw_commands, "sdc_lines": translated,
+                "translation": evidence, **identity}
+    body = base.rstrip("\n") + "\n# R-0929-CORE-PAD-TRANSLATION: selected by current " \
+        f"{IO_PAD_RECORD}.\n" + "\n".join(translated) + "\n"
+    return body, resolved
+
+
 def staged_sdc_pad_input_drive(project: Path, text: str, staged_rel: str,
                                container: str = "",
                                to_container_path: Optional[Callable[[str, str], str]] = None,
@@ -769,6 +988,11 @@ def staged_sdc_pad_input_drive(project: Path, text: str, staged_rel: str,
     _, record = _pad_input_drive(project, {}, container, to_container_path,
                                  analysis_top=analysis_top)
     if not record.get("applies"):
+        boundary = record.get("boundary")
+        if (isinstance(boundary, dict)
+                and boundary.get("classification") == "CORE"):
+            return _translate_core_pad_electrical(
+                project, text, record, container, to_container_path, time_scale)
         return text, record
     own = [ln.strip() for ln in text.splitlines()
            if re.match(r"\s*(set_input_transition|set_driving_cell)\b", ln)]

@@ -123,7 +123,7 @@ def judge(project: Path, deck_rel: str = SIGNOFF_DECK) -> Dict[str, Any]:
                     reason="no readable pad-input-drive record for this DIE top: "
                            "the off-chip input drive was never resolved")
     out["drive"] = {k: rec.get(k) for k in ("verdict", "model", "source")}
-    if rec.get("verdict") not in ("DECLARED", "PDK_IO_TIER"):
+    if rec.get("verdict") not in ("DECLARED", "PDK_IO_TIER", "PAD_TRANSLATED"):
         return dict(out, verdict="NOT_MEASURED",
                     reason=f"off-chip input drive {rec.get('verdict')}: "
                            f"{rec.get('reason') or 'unresolved'}")

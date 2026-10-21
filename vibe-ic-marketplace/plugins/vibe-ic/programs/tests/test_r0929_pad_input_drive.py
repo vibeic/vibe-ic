@@ -570,6 +570,92 @@ def test_a_staged_sdc_that_sets_its_own_drive_is_declared(tmp_path):
     assert rec["sdc_lines"] == ["set_input_transition 0.3 [all_inputs]"]
 
 
+def _core_pad_translation_fixture(tmp_path, *, output_master="quartz_io__signal"):
+    project = _die(tmp_path)
+    lib = tmp_path / "pdk" / "quartz_io__signal_tt.lib"
+    lib.parent.mkdir(parents=True, exist_ok=True)
+    lib.write_text('''library (quartz_io_tt) {
+  capacitive_load_unit (1, pf);
+  cell (quartz_io__signal) {
+    pin (PAD) { direction : input; is_pad : true; }
+    pin (IN) { direction : output; timing () { related_pin : "PAD"; } }
+    pin (OUT) { direction : input; capacitance : 0.04; }
+  }
+  cell (quartz_io__other) {
+    pin (PAD) { direction : input; is_pad : true; }
+    pin (OUT) { direction : input; capacitance : 0.08; }
+  }
+}\n''')
+    _io_record(project, [lib], core_module="neutral_core",
+               chip_top_module="neutral_chip")
+    path = project / "reports/phase3/io_pad_chip_top.json"
+    doc = json.loads(path.read_text())
+    doc["pad_instances"] = {
+        "u_clk": {"port": "clk", "master": "quartz_io__signal",
+                  "terminal": "PAD", "core_pin": "IN", "direction": "input"},
+        "u_data": {"port": "data[0]", "master": "quartz_io__signal",
+                   "terminal": "PAD", "core_pin": "IN", "direction": "input"},
+        "u_out": {"port": "out", "master": output_master,
+                  "terminal": "PAD", "core_pin": "OUT", "direction": "output"},
+    }
+    path.write_text(json.dumps(doc))
+    return project
+
+
+def test_core_boundary_translates_external_slew_and_load_through_selected_pad(tmp_path):
+    import sdc_environment as SE
+    project = _core_pad_translation_fixture(tmp_path)
+    staged = ("set_input_transition -max 25 [get_ports {clk data*}]\n"
+              "set_input_transition -min 0.01 [get_ports {clk data*}]\n"
+              "set_load -max 5 [get_ports {out}]\n"
+              "set_load -min 0 [get_ports {out}]\n")
+    text, rec = SE.staged_sdc_pad_input_drive(
+        project, staged, "input/constraints/t.sdc", analysis_top="neutral_core")
+    assert rec["verdict"] == "PAD_TRANSLATED"
+    assert _commands(text, "set_input_transition") == []
+    assert _commands(text, "set_driving_cell") == [
+        "set_driving_cell -max -lib_cell quartz_io__signal -from_pin PAD -pin IN "
+        "-input_transition_rise 25 -input_transition_fall 25 [get_ports {clk data*}]",
+        "set_driving_cell -min -lib_cell quartz_io__signal -from_pin PAD -pin IN "
+        "-input_transition_rise 0.01 -input_transition_fall 0.01 [get_ports {clk data*}]",
+    ]
+    assert _commands(text, "set_load") == [
+        "set_load -max 0.04 [get_ports {out}]",
+        "set_load -min 0.04 [get_ports {out}]",
+    ]
+    assert rec["external_sdc_lines"] == staged.splitlines()
+    assert rec["translation"][2]["capacitance"]["views"][0]["sha256"]
+
+
+def test_core_boundary_refuses_a_selector_with_heterogeneous_pad_models(tmp_path):
+    import sdc_environment as SE
+    project = _core_pad_translation_fixture(tmp_path)
+    path = project / "reports/phase3/io_pad_chip_top.json"
+    doc = json.loads(path.read_text())
+    doc["pad_instances"]["u_data"]["master"] = "quartz_io__other"
+    path.write_text(json.dumps(doc))
+    staged = "set_input_transition -max 1 [all_inputs]\n"
+    text, rec = SE.staged_sdc_pad_input_drive(
+        project, staged, "input/constraints/t.sdc", analysis_top="neutral_core")
+    assert rec["verdict"] == "NOT_MEASURED"
+    assert "heterogeneous pad models" in rec["reason"]
+    assert _commands(text, "set_input_transition") == []
+    assert _commands(text, "set_driving_cell") == []
+    assert "CORE_PAD_ELECTRICAL_BOUNDARY" in text
+
+
+def test_chip_boundary_keeps_the_declared_bond_side_constraints(tmp_path):
+    import sdc_environment as SE
+    project = _core_pad_translation_fixture(tmp_path)
+    staged = ("set_input_transition -max 1 [all_inputs]\n"
+              "set_load -max 2 [all_outputs]\n")
+    text, rec = SE.staged_sdc_pad_input_drive(
+        project, staged, "input/constraints/t.sdc", analysis_top="neutral_chip")
+    assert text == staged
+    assert rec["verdict"] == "DECLARED"
+    assert rec["sdc_lines"] == ["set_input_transition -max 1 [all_inputs]"]
+
+
 def test_an_absent_record_on_a_die_top_is_not_measured(tmp_path):
     import sdc_environment as SE
     assert "never resolved" in SE.pad_input_drive_not_measured(_die(tmp_path))

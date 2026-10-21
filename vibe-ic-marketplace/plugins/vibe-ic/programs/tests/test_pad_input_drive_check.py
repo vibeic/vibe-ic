@@ -272,6 +272,10 @@ def test_pad_drive_boundary_identity_matrix(
     complete = record_state in ("full", "stale")
     if not complete:
         producer_verdict = "NOT_MEASURED"
+    elif analysis_top == "neutral_core" and with_drive:
+        # This deliberately sparse legacy fixture has no pad_instances map,
+        # so an external staged edge cannot be translated onto the core.
+        producer_verdict = "NOT_MEASURED"
     elif analysis_top == "neutral_core":
         producer_verdict = "NOT_APPLICABLE"
     elif with_drive:
@@ -285,6 +289,27 @@ def test_pad_drive_boundary_identity_matrix(
     assert rc == {"PASS": 0, "NOT_MEASURED": 2}[gate_verdict]
     assert step23.status == gate_verdict
     assert record["verdict"] == producer_verdict, record
+
+
+def test_core_pad_translation_is_accepted_only_with_its_exact_deck_lines(tmp_path):
+    project = _die(tmp_path)
+    path = project / SE.IO_PAD_RECORD
+    pad = json.loads(path.read_text())
+    pad["pad_instances"] = {
+        "u_clk": {"port": "clk", "master": "quartz_io__in",
+                  "terminal": "PAD", "core_pin": "Y", "direction": "input"}}
+    path.write_text(json.dumps(pad))
+    text, record, rc, gate, step23 = _stage_drive(
+        project, "neutral_core", record_state="full", with_drive=True)
+    assert record["verdict"] == "PAD_TRANSLATED"
+    assert "set_driving_cell" in text and "set_input_transition" not in [
+        line.split()[0] for line in text.splitlines()
+        if line.strip() and not line.lstrip().startswith("#")]
+    assert (rc, gate["verdict"], step23.status) == (0, "PASS", "PASS")
+    deck = project / DECK
+    deck.write_text(deck.read_text().replace(record["sdc_lines"][0], ""))
+    rc, gate = _run(project)
+    assert (rc, gate["verdict"]) == (1, "FAIL")
 
 
 def test_an_absent_record_on_a_die_is_rc2(tmp_path):
