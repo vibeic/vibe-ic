@@ -691,7 +691,7 @@ def assess(auditor: str, root: Path, *, files: Iterable[Path] | None = None,
         else:
             modules = _elaborate(sources, root=root, selection=selection, source_sha256={
                 str(path): record["sha256"] for path, record in zip(sources, records)
-            }, executor_configuration=(configuration if selection is not None else None))["modules"]
+            }, executor_configuration=configuration)["modules"]
         # The tool read immutable snapshots of the census bytes. Reject live
         # source or membership changes while it ran as well, so the resulting
         # claim also describes the directory the consumer will remeasure.

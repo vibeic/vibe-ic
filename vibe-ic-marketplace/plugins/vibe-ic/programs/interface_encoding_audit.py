@@ -1486,7 +1486,16 @@ def run_audit(
             if mod.name in all_modules:
                 _discovery_issue(f'duplicate module definition: {mod.name}')
             all_modules[mod.name] = mod
-    if configured and not _DISCOVERY_ISSUES:
+    lexical_instances = ([] if configured else [
+        instance for mod in all_modules.values()
+        for instance in parse_instances(mod.body, mod.name)])
+    # Existing source-level interface classification retains source module
+    # identity when a real subject is already present.  Native execution is
+    # additionally mandatory for an apparent zero boundary: only elaboration,
+    # through the selected executor, may prove that the lexical zero is real.
+    native_required = configured or not build_interface_map(all_modules,
+                                                             lexical_instances)
+    if native_required and not _DISCOVERY_ISSUES:
         try:
             all_modules, all_instances = _active_native_view(
                 all_modules, headers, vfiles, top_module, list(defines),
@@ -1495,9 +1504,8 @@ def run_audit(
             detail = _CONFIGURATION.get('native_error', '')
             _discovery_issue(f'active source UNKNOWN: {exc}' +
                              (f'; {detail}' if detail else ''))
-    elif not configured:
-        for mod in all_modules.values():
-            all_instances.extend(parse_instances(mod.body, mod.name))
+    else:
+        all_instances = lexical_instances
     _DISCOVERED_MODULE_COUNT = len(all_modules)
     _DISCOVERED_INSTANCE_COUNT = len(all_instances)
 
