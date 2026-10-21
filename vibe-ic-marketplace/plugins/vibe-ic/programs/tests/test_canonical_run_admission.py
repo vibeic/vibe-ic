@@ -111,6 +111,29 @@ def test_canonical_authored_rtl_change_reopens_phase2_admission(tmp_path):
     assert reopened.reason == "ADMITTED"
 
 
+def test_librelane_switch_change_reopens_phase2_but_reports_do_not(tmp_path):
+    project = _project(tmp_path / "proj")
+    switch = project / "phase3" / "librelane_switch.json"
+    switch.parent.mkdir(parents=True)
+    switch.write_text(json.dumps({"image": "repo@sha256:" + "a" * 64}) + "\n")
+
+    first = _admit(project)
+    assert first.admitted
+
+    reports = project / "reports"
+    reports.mkdir()
+    (reports / "regenerated.json").write_text('{"status":"new"}\n')
+    report_only = _admit(project)
+    assert not report_only.admitted
+    assert report_only.reason == "DUPLICATE_NO_NEW_EVIDENCE"
+    assert report_only.identity_sha256 == first.identity_sha256
+
+    switch.write_text(json.dumps({"image": "repo@sha256:" + "b" * 64}) + "\n")
+    changed = _admit(project)
+    assert changed.admitted
+    assert changed.identity_sha256 != first.identity_sha256
+
+
 def test_substantive_identity_changes_reopen_but_runtime_ledger_does_not(tmp_path):
     project = _project(tmp_path / "proj")
     assert _admit(project).admitted

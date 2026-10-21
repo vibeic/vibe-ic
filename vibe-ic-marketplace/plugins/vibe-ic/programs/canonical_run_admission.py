@@ -149,7 +149,7 @@ def build_identity(project: Path, span: str, *, container_image: str,
             # never do so.
             "input", "phase1/input_doc", "SOURCE_MANIFEST.md",
             "phase2/stage1/rtl", "phase2/stage2/constraints",
-            "input/constraints",
+            "input/constraints", "phase3/librelane_switch.json",
         )),
         "phase1_receipt_sha256": phase1_receipt,
         "phase3_input_sha256": (_phase3_input_digest(project)
