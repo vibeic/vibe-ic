@@ -272,7 +272,8 @@ def parse_instances(body: str, parent_module: str, *, native_checked: bool = Fal
         'genvar', 'integer', 'real', 'if', 'else', 'case', 'casez',
         'casex', 'endcase', 'for', 'while', 'repeat', 'begin', 'end',
         'fork', 'join', 'wait', 'disable', 'typedef', 'struct', 'enum',
-        'union', 'packed', 'signed', 'unsigned', 'return',
+        'union', 'packed', 'signed', 'unsigned', 'return', 'automatic',
+        'static',
     }
 
     cursor = 0
