@@ -791,7 +791,34 @@ DISP_EXCLUDED = "excluded_by_ruling"
 DISP_NOT_APPLICABLE = "design_declared_na"
 DISP_ISA_CREDITED = "isa_credited"
 DISP_UNMEASURED = "not_measured"
+DISP_PROCESS_MILESTONE = "process_milestone_not_a_functional_case"
 DATAPATH_KEY = "cpu_datapath"
+
+
+def process_milestone_disposition(case: dict) -> Optional[Dict[str, Any]]:
+    """Exclude a declared DV process milestone from the functional denominator.
+
+    Reuse the L10 consumer's kind and digital-signal guard.  The row remains
+    visible and its status remains owned by that checklist consumer; this only
+    says a project milestone is not a circuit stimulus/expected-value pair.
+    """
+    import l10_tb_conformance_check as _l10
+    category = str(case.get("category", case.get("type", case.get("kind", "")))
+                   or "").strip().lower()
+    is_cmd_rsp = category in ("cmd_response", "cmd_rsp", "happy", "happy_path")
+    if (not _l10.is_verification_checklist(case)
+            or _l10._has_digital_signal(case, is_cmd_rsp)):
+        return None
+    name = str(case.get("name") or case.get("id") or "")
+    return {
+        "case": name, "disposition": DISP_PROCESS_MILESTONE,
+        "blocking": False, "ruling": "ORGANIC #808 / v1.15.80",
+        "source_status": _l10.checklist_status(case) or None,
+        "note": ("declared verification-checklist process milestone; excluded "
+                 "from the executable functional denominator, not claimed "
+                 "executed or functionally verified; status remains owned by "
+                 "l10_tb_conformance_check"),
+    }
 
 
 def unexecuted_disposition(project: Path, case: dict, ic_class: Optional[str],
@@ -997,6 +1024,14 @@ def generate(project: Path, container: Optional[str] = None,
             entry.update(state=NO_ORACLE,
                          reason=f"case name {name!r} is not a legal identifier")
             continue
+        process = process_milestone_disposition(case)
+        if process:
+            for suffix in (".v", ".sv"):
+                (fdir / f"{name}{suffix}").unlink(missing_ok=True)
+            entry.update(state=EXCLUDED, step5_disposition=process, reason=(
+                "verification-checklist process milestone; no functional "
+                "testbench is required or credited by Step 5"))
+            continue
         cov = coverage_figure_exemption(case)
         if cov:
             # The ladder may have grounded it; a testbench for a case that is
@@ -1181,7 +1216,7 @@ def generate(project: Path, container: Optional[str] = None,
             f"executed and passed"))
     kinds = {k: sum(1 for d in bar["dispositions"] if d["disposition"] == k)
              for k in (DISP_EXCLUDED, DISP_NOT_APPLICABLE, DISP_ISA_CREDITED,
-                       DISP_COVERAGE_FIGURE)}
+                       DISP_COVERAGE_FIGURE, DISP_PROCESS_MILESTONE)}
     return _finish(PASS, None, (
         f"{executed} functional case(s) executed through `{top['module']}` and "
         f"every one matched the oracle its design input states"
