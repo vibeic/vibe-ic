@@ -1,0 +1,42 @@
+LANDING NOTE — v1.12.10 — next/jd3-matrix-outputs
+
+SKIPPED: the landing gate (tools/gatekeeper-land.sh). Owner authorised pushing
+without it for this queue: it judges ABSOLUTELY and refuses on main's
+pre-existing reds, so it refuses every candidate today regardless of merit.
+
+RAN INSTEAD: the complete affected modules, whole, never a -k selection, in BOTH
+lanes, on the rebased tree that shipped (parent 5d1b82988):
+  host   python3 -m pytest programs/tests/test_matrix_d3_outputs_produced.py
+         programs/tests/test_matrix_d7_outputs_list_complete.py
+         programs/tests/test_matrix_mutation_ledger.py
+         -> 1 failed, 278 passed, 69 skipped, 4 xfailed
+  image  tools/ci/run_suite_in_eda_image.sh, same three modules,
+         ghcr.io/vibeic/vibeic-eda@sha256:66c33ff2...
+         -> 18 failed, 261 passed, 69 skipped, 4 xfailed
+Both cleared ids GREEN in both lanes; both confirmed COLLECTED.
+
+NOT RUN: the four-face pin of programs/ci_harness_timeout_ceiling_check.py.
+It is not applicable — this branch does not touch tools/gatekeeper-land.sh
+(verified by name against the diff, not assumed).
+
+PRE-EXISTING REDS CARRIED ONTO MAIN UNCHANGED, NOT ATTRIBUTED:
+  test_the_dropped_edge_RETURNS_when_the_step_stops_supplying_the_flag
+    both lanes; repaired by next/matrix-63x8-family, not by this branch.
+  16x test_lock2_the_mutation_really_reddens_its_witness[...]
+    IMAGE ONLY and NORECORD, not red: `cp -al` returns 1 across a filesystem
+    boundary because the subject is a git WORKTREE under /home while TMPDIR is
+    the container /tmp. Apparatus, not tree. Remedy: a fresh --no-local clone.
+  test_d3_waived_unproven_entries_have_no_committed_artefact   image only.
+  test_the_generator_cli_can_go_red_and_green
+    4 anchored figures in matrix_63x8/flowref.py each off by one, moved by the
+    v1.12.3 advisory clause. Pre-existing on main.
+None is a listed BOTH row; none was moved.
+
+TABLE. Re-read from live origin/main (72a558fdb5) immediately before editing.
+The branch's own table edit was DISCARDED: it still declared the vanished
+BOTH 47 / CLEARED 8 baseline and would have written 45/10, silently reverting
+the 11 ids cleared at 5a9bc15fd6. Counts re-derived from the rows present:
+BOTH 34 + CLEARED 21 + FLAKY 2 = 57. Verified on the fetched object.
+
+now-ratios are 0/1 0/1 — one image run and one host run, the table's stated
+minimum of >=1 observation per lane, recorded as exactly what was taken.

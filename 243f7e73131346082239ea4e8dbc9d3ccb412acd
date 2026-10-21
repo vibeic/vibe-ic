@@ -1,0 +1,56 @@
+LANDED v1.12.11 from next/redsince-counts-stopwatch
+parent 2ffa7a594 (v1.12.10) — ordinary fast-forward, 8 commits.
+
+REBASED TWICE. The first rebase produced a v1.12.10 version commit; a sibling
+lane took that number while the modules were running, and the second rebase
+DROPPED my bump as "patch contents already upstream". The bump was re-authored
+at v1.12.11 and the affected modules were re-run on the rebased tree, so
+HEAD^{tree} is the tree that was measured.
+
+PROTECTED PATH, SAID PLAINLY: tools/gatekeeper-land.sh is 1 of the 47 in
+tools/ci/protected_landing_transition.json. This lands as an ordinary push
+under the owner's standing authorisation to land without the gate, not as a
+PREPARE/ACTIVATE pair, and it does not pretend to be one.
+
+THE FOUR FACES, enumerated from ci_harness_timeout_ceiling_check's own slicing
+code and not from the diff, because the rule is a conjunction:
+  whole file              MOVED  -> re-pinned c8ddd93f, read back from the
+                                    check's own FAIL text
+  execution prefix        MOVED  -> re-pinned baf6a0c0, same way
+  run_pytest              EQUAL  \
+  run_repo_tools_pytest   EQUAL   > sliced every run; `lanes sliced=3`
+  run_unselectable_pytest EQUAL  /
+  pytest_per_file_junit   EQUAL  -> the semantic driver, not in the diff
+The check then exits 0 with passed: true.
+
+TWO DEFECTS THE REBASE EXPOSED IN THE BRANCH'S OWN NEW TESTS, both fixed here,
+neither by weakening:
+  * tools/test_gatekeeper_land_lanes.py passed timeout=120 at four call sites
+    against a per-call ceiling of 60 (harness / CEILING_DIVISOR). The harness
+    kills the file first, so 120 was a bound that could never fire. The four
+    now take the helper's default, which IS the ceiling. tools findings 4 -> 0.
+  * test_the_partition_cannot_move_the_verdict anchored its expired row at
+    HEAD~1. Ages count from since_date TO HEAD, so at max_days=0.001 the row is
+    expired only if the last two commits are >86.4s apart; a landing writes
+    them seconds apart and the gap here was 18s, so the row read as LIVE and
+    the run reported "0 NEW red". The anchor is now the repository ROOT commit
+    and the precondition is asserted. Negative control executed: silencing the
+    subject's expiry arm fails the test at its returncode==1 assertion, not at
+    the new precondition.
+
+RAN, whole modules, no -k, TMPDIR=/var/tmp/jl (outside the account home —
+under it, hermetic_candidate_runner refuses every mount and 23 landing arms
+report NORECORD about this host rather than about the tree):
+  programs lane (16 modules incl. the whole landing_merge_verdict module)
+  tools lane   (5 modules incl. both new files)
+
+CARRIED ONTO MAIN UNCHANGED, PRE-EXISTING, NOT ATTRIBUTED TO THIS BRANCH:
+  test_issue1470_atomic_declared_report.py::test_the_gate_is_green_and_the_ratchet_holds
+It is one of the 34 BOTH rows in the criterion table. Its finding names
+extraction_credited_by_prose_only_check.py:168 and flow_output_substance.py:765
+— neither file is in this branch. Control taken on clean main at 2ffa7a594:
+1 failed, 6 passed, the same ID.
+
+CRITERION TABLE: docs/research/2026-08-21-main-92-red-triage-ratios.md is NOT
+edited by this landing. This branch clears none of the 34 BOTH rows, so no row
+was moved and no count was changed. BOTH stays 34.

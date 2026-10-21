@@ -1,0 +1,48 @@
+LANDED fix/whole-population-reachability (94f99eee15) as a PROTECTED PAIR
+  PREPARE  73115c82c [v1.12.2]  manifest only
+  ACTIVATE 8bd79875e [v1.12.3]  this commit
+
+WHY A PAIR: the branch edits tools/ci/repo_hygiene_gates.sh, one of the 47
+sha256-pinned paths. jland re-rendered the manifest at v1.12.1, so the drift my
+36 added lines cause is MINE, not inherited -- an earlier reading of this
+(against d0c73aa09) called it pre-existing and that was wrong; on c4e59efa7 only
+landing_merge_verdict.py drifts on clean main. Manifest rendered by
+protected_landing_manifest_author.py --commit c4e59efa7, never hand-edited;
+exactly 1 path differs between the two states. content_pinned_authority went
+2 hashing-to-neither -> 0.
+
+ONE REPAIR BEYOND THE BRANCH. The branch's own new fixture could not pass:
+gate_mutation_fixtures resolved only $ROOT/$PLUGIN/$PG/$PJSON, so the gate
+declaration's $RUNTIME_ROOT stayed LITERAL in the argv and the CAN-PASS arm was
+REJECTED rc=2 -- a gate that cannot pass its own good input. $PG is itself
+spelled $RUNTIME_ROOT/.../programs, so the engine now resolves $RUNTIME_ROOT
+the same way. Nothing was weakened; all 75 fixture pairs discriminate.
+
+RAN (whole modules): test_program_reachability_check_sees_the_whole_tree,
+test_a_sentence_about_a_program_is_not_a_call, test_gate_fixtures_discriminate
+(75 pairs), test_gate_mutation_fixture_check, test_protected_landing_transition
+  -> 144 passed, 1 failed
+program_reachability_check --root . --strict -> rc=0, 1298 scanned, 0
+unreachable, 374 s on the exact tree pushed (tree 68a1a560a).
+flow_condition_reachability / flow_dependency_graph / flow_step_can_fail /
+flow_gate_enforcement_audit / ci_harness_timeout_ceiling / inventory --check /
+both version sync checks / version_bump_monotonic -> all rc=0.
+Protected modules: 45 passed, 1 skipped.
+
+CARRIED ONTO MAIN UNCHANGED, both measured identical on clean c4e59efa7:
+  - test_the_real_repo_is_clean_under_this_gate: 3 gates carry no fixture
+    ('OpenSTA error-abort left armed', 'no pattern-based process kill',
+    'plugin self-audit'). Census IMPROVES: 141->142 declared, 69->70 both arms.
+  - checker_execution_wiring_audit rc=1: attestation_preflight_check.py,
+    generated_test_list_min_guard.py, landing_noop_verdict_check.py -- all three
+    arrived with c4e59efa7's ACTIVATE, byte-identical red set.
+  - the PREPARE necessarily ADOPTED landing_merge_verdict.py's drifted bytes
+    into current==next, because the author OBSERVES the tree. A pin this lane
+    did not author; named in the PREPARE message so it is not silent.
+
+NOT RUN: the full suite. No base arm, no differential, no set-difference claim
+-- that machinery was deleted at v1.12.1.
+
+TWO EARLY MEASUREMENTS WERE VOID and were re-taken: a reachability run whose
+tree I reset underneath it mid-run (killed, rc=144 -- killed is not red), and an
+rc read after a pipe to head, which reported head's status not git apply's.

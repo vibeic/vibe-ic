@@ -1,0 +1,45 @@
+LANDING v1.12.18 — next/matrix-63x8-family
+
+RAN: test_matrix_63x8_ledger.py, test_matrix_63x8_coverage.py,
+test_matrix_63x8_census_freshness.py, test_matrix_63x8_figure_coverage.py,
+test_matrix_d7_outputs_list_complete.py — WHOLE modules, no -k, serial, no
+xdist, VIBEIC_CORPUS_ROOT unset, PYTHONDONTWRITEBYTECODE=1, TMPDIR=/tmp/kl/tmp.
+Result 202 passed, 1 failed, 1 skipped, 4 xfailed in 416 s, on the tree pushed.
+Re-measured ON the rebase, not before it. All five moved ids PASSED by exact
+node name in a -v run.
+
+ALSO RAN: gen_matrix_63x8_census.py --check-figures (rc 0, 57 anchored figures
+across 36 corpus files), and FALSIFIED it by reverting one digit
+(required_outputs_file 124 -> 123) -> rc 1 naming flowref.py:76 and both
+numbers. gen_program_inventory.py --check rc 0.
+
+PRE-EXISTING RED CARRIED ONTO MAIN UNCHANGED, NOT ATTRIBUTED:
+  test_matrix_63x8_coverage.py::test_no_cell_is_counted_enforced_while_its_predicate_is_red
+It is itself a BOTH row of the criterion table (2/2 2/2) and remains one. Every
+cell it names is a d3 (outputs_produced) coordinate reported ENFORCED while the
+live run skipped it — the d3 predicates need a published corpus this checkout
+does not carry. Not introduced by this branch and not closable by it.
+
+FOUR ROWS NOT MOVED, DELIBERATELY: census_freshness::test_the_census_block_is_fresh,
+::test_the_published_total_equals_the_live_census,
+coverage::test_every_cell_has_a_live_outcome_and_the_outcome_run_is_not_starved,
+::test_the_enforcement_census_is_reported_for_humans. All four were GREEN on the
+HOST lane at this tree. NOT moved because the pinned-image lane could not be run
+on this host (/AI_IC_design does not exist here, so the image lane's mount point
+is absent) and the document's own rule requires BOTH lanes. One lane is an
+observation, not a clearance. The host half is written into the document so the
+next agent with an image lane can finish it without redoing it.
+
+SKIPPED: the landing gate (tools/gatekeeper-land.sh) — owner-authorised; it
+judges ABSOLUTELY and refuses on main's pre-existing reds. No four-face re-pin
+required: this diff touches neither tools/gatekeeper-land.sh nor
+programs/ci_harness_timeout_ceiling_check.py.
+
+REBASED TWICE during verification: from 243f7e731 onto a1df3aa28, then onto
+0c754c57d when another lane landed v1.12.17. The criterion table was untouched
+by both, so the row edit stood; the version was re-derived each time.
+
+TABLE: BOTH 16 -> 11, CLEARED 39 -> 44, verified against the copy fetched back
+from origin rather than the local file. Each count equals the rows present.
+The branch's own table edit (computed against BOTH 34) was discarded, not
+replayed.

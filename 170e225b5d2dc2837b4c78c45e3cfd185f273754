@@ -1,0 +1,53 @@
+CORRECTION TO THIS COMMIT MESSAGE, and the result it failed to state.
+
+1. MECHANISM, over-attributed. The message says the remaining points "straddled
+   transparent buffers the router had inserted". That was the HYPOTHESIS the lane
+   was sent to test, and the lane REFUTED it. The mechanism is COMMUTATIVE PIN
+   PERMUTATION: a pin swapped between the two sides had its cut point deleted
+   rather than paired, and the repair is a gate-side pin-correspondence rename.
+   Buffer-straddling is not the cause; do not cite this commit as evidence for it.
+
+2. THE RESULT, which this message omits entirely. On the frozen
+   subservient x gf180mcuD post-layout LEC, measured with the pinned Yosys
+   (0.68+, git sha1 7a41b1522), the lane's own logs on 8HD-4
+   /home/reyerchu/_lane_czlecwall/run/log/:
+
+     R0_base.log   1345 $equiv, 1328 proven, 17 unproven   97.04 s
+     E1_rename.log 1345 $equiv, 1345 proven,  0 unproven    2.69 s
+                   "Equivalence successfully proven!"
+
+   The denominator is UNCHANGED at 1345. No point was blacklisted, waived or
+   removed; the 17 became provable. This is the first benchmark IC in this
+   campaign whose post-layout LEC closes.
+
+   The proof can still refuse: a 2-line mutant of the shipped netlist yields
+   "model found: FAIL!" (CEX_mutant.log) against the shipped netlist's
+   "no model found: SUCCESS!" (CEX_correct.log).
+
+3. RULINGS ANSWERED AFTER THE FACT, both of which affect what this commit
+   contains. They were open when it landed, and the branch's own choice stood by
+   default rather than by decision. Recorded so that is not mistaken for a ruling:
+
+   R1 partial acceptance -- UPHELD. The branch applies the rename to the ACCEPTED
+   SUBSET rather than all-or-nothing, and that is correct: only 6 of subservient's
+   17 were permuted pins, so an all-or-nothing gate would have refused to pair any
+   of them and helped nothing. The runner's safety is present in the diff, not only
+   in prose: if the total moves (_t1 != _t2) it sets reproof_run=False, records
+   denominator_moved, and KEEPS the first-pass verdict.
+
+   R2 the blacklist re-proof fallback -- KEPT for now, and FLAGGED. It is a path
+   that can exclude points, which is the shape this repo forbids, and the lane's
+   supporting claim that it moved a denominator 1925 -> 1923 could not be located
+   in its own evidence. Whether it can move a denominator is now its own question;
+   it is not answered by this landing.
+
+4. AN UNCORROBORATED NUMBER IN THE LANE'S PROSE, so nobody quotes it. Its
+   FINDINGS.md reports an unbounded PDR run ("Property proved",
+   "Invariant F[24] : 531 clauses", "Time = 6.56 sec"). Those strings appear in
+   prose only; a sweep of the whole run/ tree finds no abc/PDR log containing them.
+   The claim that an unbounded engine closes in 6.6 s what k-induction could not
+   close in 2106 s is NOT corroborated by a saved tool log and must not be repeated
+   as measured.
+
+Verified independently of the lane before landing: two-tree falsification against
+main 3e3d0a46ec gave GREEN arm 11 passed, RED arm 10 failed / 1 passed.

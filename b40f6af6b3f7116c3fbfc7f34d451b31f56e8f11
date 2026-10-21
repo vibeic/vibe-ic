@@ -1,0 +1,11 @@
+Landing decision: no new red relative to exact base ba5863b84b1803289b23858545242962ad2eec40.
+
+Pre-existing and identical on base and candidate tree cd2d7767fcb851f853db182c07ae357c5482fc2a:
+
+programs.tests.test_flow_matrix_census_freshness::test_the_census_block_is_fresh
+programs.tests.test_flow_matrix_census_freshness::test_the_generator_cli_can_go_red_and_green
+programs.tests.test_flow_matrix_census_freshness::test_the_published_total_equals_the_live_census
+
+Exact two-tree flow files: base 3 failed/3 passed, candidate 3 failed/3 passed. Evidence SHA-256 base-flow=cf6e6be0325c34e396fdeef55c8c0124772f4f99379c94d38923b1f6d83f3c59 candidate-flow=c260afbab1b7c7b8b9681890e2594a540be29b3a8047b82a0f49bf9ff60131bd.
+
+The two PPA reds from the first stamp were a bundle-checkout graph defect: historical checkpoint afbf611ceb1965d0ebcbeb298991f925c43a59d3 was absent. In complete object graphs, base and candidate each pass 17/17. Evidence SHA-256 base=fc8d8134080c5f48738735c83c7cf2e6f324b5f50f5de782b1de3c087cf49b27 candidate=58693cea936b237a5d1ffe8c26369e3f440d4add10ca797e2778197c354ee470.

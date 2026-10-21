@@ -1,0 +1,11 @@
+LANDING v1.12.0 — jlvs/lvs-family-remeasured (b276834c8), rebased onto 638505d44. Docs only.
+SKIPPED: landing gate + pre-push hook (--no-verify), owner waiver. FULL cadence
+NOT run despite the MILESTONE tier the assigner stamped on the .99 rollover.
+NOT MEASURED BY ME: the IMAGE lane. I reproduced the HOST lane only.
+RAN INSTEAD: the 3 LVS modules whole, host lane -> 36 passed, 1 skipped, rc 0.
+FALSIFIED: disabled the stub's FEEDBACK_OUT write -> test_lvs_runs_and_passes_on_match
+and test_lvs_fails_on_real_mismatch went RED with EXTRACTION_FEEDBACK_ABSENT,
+3 non-extraction tests stayed green. Reverted.
+LEDGER: BOTH 55->47, CLEARED 8, FLAKY 2 (=57). Rows moved with their original
+ratios kept, not deleted. Other pre-existing reds carried onto main unchanged.
+PROTECTED: none touched; gatekeeper-land.sh NOT touched.

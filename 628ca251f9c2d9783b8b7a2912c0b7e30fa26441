@@ -1,0 +1,79 @@
+LANDING NOTE — v1.12.8 @ 628ca251f, direct to main, landing gate not used
+(owner authorisation: the gate judges ABSOLUTELY and refuses on main's
+pre-existing reds, so it refuses every candidate today).
+
+WHAT THIS IS, AND WHAT IT IS NOT
+  This is NOT the landing of `lane/gate-corrupted-checkout`. That branch was
+  landed by another checkout as 5ecd04595 [v1.12.7] while I had it rebased and
+  gate-verified, despite my dispatch saying nobody else was on it. Its four
+  files are BYTE-IDENTICAL between that landing and my prepared tree, and both
+  re-pinned the same two of four `ci_harness_timeout_ceiling_check` faces to the
+  same digests, so pushing mine would have been a duplicate. I did not push it.
+
+  What I landed instead is the uncovered RED that landing left on main.
+
+THE RED, MEASURED ON CLEAN 5ecd04595
+  gen_program_inventory.py --check   rc=1, six stated-count problem(s)
+  PROGRAM_INVENTORY.json  test_files=2878  programs_tree_all_py=4243  (correct)
+  the six prose sites      still 2877 / 4242                          (stale)
+
+  The generator REWRITES the JSON and only REPORTS the prose. A landing that
+  runs it and reads the first line it prints ships this state. Fixed by reading
+  each count BY KEY out of the regenerated artefact and applying it to the one
+  line the generator named, asserting the expected old substring on that exact
+  line first -- never a blind substitution of `2877`, because several
+  populations here are simultaneously true and count different things.
+
+  After: gen_program_inventory.py --check rc=0.
+
+RAN (whole modules)
+  test_program_inventory_no_drift.py + test_skill_inventory_no_drift.py
+    + test_content_pinned_authority_verified_only_at_merge.py -> 35 passed rc=0
+  gen_program_inventory --check, marketplace_version_sync_check,
+    plugin_version_prose_sync_check, version_bump_monotonic_check,
+    ci_harness_timeout_ceiling_check,
+    content_pinned_authority_verified_only_at_merge           -> all rc=0
+
+  A rc=4 "no tests ran" was hit first on a guessed module name
+  (`test_gen_program_inventory.py`, which does not exist) and was NOT counted as
+  a pass; the real modules are named above.
+
+SKIPPED, and what was run instead
+  The full suite. Run instead: the modules owning the checker that was red, plus
+  every version/inventory/pin gate. No base arm, no differential, no set
+  difference -- deleted at v1.12.1. The landing gate was not run, per the
+  authorisation above.
+
+PRE-EXISTING REDS CARRIED ONTO MAIN UNCHANGED, not caused here
+  THREE protected authority paths hash to neither pinned state in
+  tools/ci/protected_landing_transition.json:
+
+    tools/ci/repo_hygiene_gates.sh                7b02a77833b7
+        drifted BEFORE v1.12.6 -- measured on clean 366e99c27, one path, before
+        either of tonight's branches existed.
+    tools/gatekeeper-land.sh                      6a4b8f1fe9
+    programs/ci_harness_timeout_ceiling_check.py  (v1.12.7 bytes)
+        both edited by v1.12.7.
+
+  `content_pinned_authority_verified_only_at_merge.py` reports this as a WARN
+  and exits 0, and every manifest consumer is green
+  (test_content_pinned_authority_verified_only_at_merge.py,
+  test_issue1704_a_moved_ratchet_states_its_cause.py, test_gatekeeper_review.py,
+  landing_pytest_runtime_preflight.py, retired_pytest_plugin_request_check.py).
+  The refusal it warns about lives on the MERGE path,
+  tools/gatekeeper-verify-merge.sh, which the direct-push path does not use.
+
+  RE-RENDERING IT IS A SEPARATE, TWO-LANDING JOB and was deliberately not
+  half-done here: a PREPARE landing installs a manifest whose `next` names the
+  future bytes, and an ACTIVATE landing installs them; one squash cannot
+  express both. The tools are
+      tools/ci/protected_landing_manifest_author.py
+          --commit <main> --transition-id <id> --current-id <id> --next-id <id>
+          --next-file <PATH>=<FILE> ...
+      tools/ci/protected_landing_transition.py verify | push-preflight
+  and the manifest currently reads current.id='live-at-c4e59efa78',
+  next.id='reachability-audit-v1-12-2-next'.
+
+NO OTHER UNATTRIBUTED RED was encountered in any module run.
+No assertion was weakened, no case deleted, no skipif added, no tolerance
+widened, no exemption re-dated.

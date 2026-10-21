@@ -1,0 +1,22 @@
+LANDING v1.11.97 — fix/slice-extraction-structured-vacuity (f61fe28cf)
+
+SKIPPED: the landing gate (tools/gatekeeper-land.sh) and the pre-push hook
+(pushed --no-verify). Owner waived the gate for these repairs: it judges
+ABSOLUTELY and refuses on main's pre-existing reds, so it refuses every
+candidate today regardless of merit. The waiver changes WHO measures, not
+WHETHER.
+
+RAN INSTEAD: both affected test files WHOLE on the candidate tree, single arm
+(no base arm, no differential — owner instruction 2026-08-28):
+  programs/tests/test_issue901_structured_vacuity_reaches_the_step_verdict.py
+  programs/tests/test_v1_4_66_issue171_step4_professional_tb_supersede.py
+  -> 31 passed, 0 failed, rc=0. Red set from JUnit XML: EMPTY.
+
+FALSIFICATION: dropped 'reports/phase2/coverage/coverage_verilator.json' from
+the _step4() mirror, re-creating drift against the production yaml.
+test_fixture_matches_the_flow_yaml went RED (rc=1). Reverted; tree clean.
+
+PRE-EXISTING REDS: main's pre-existing red set is carried onto main UNCHANGED.
+This landing neither clears nor adds to it, and makes no claim about its count.
+
+PROTECTED PATHS: none touched; no re-pin required or performed.

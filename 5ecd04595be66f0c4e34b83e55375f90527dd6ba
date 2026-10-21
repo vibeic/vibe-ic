@@ -1,0 +1,22 @@
+LANDING v1.12.7 — lane/gate-corrupted-checkout (b81b27206), rebased onto 366e99c27.
+SKIPPED: landing gate + pre-push hook (--no-verify), owner waiver. Full suite NOT run.
+IMAGE lane NOT measured by me.
+FOUR-FACE RE-PIN of tools/gatekeeper-land.sh, enumerated from the CHECK's own
+slicing code (landing_semantic_progress_contract / _semantic_driver_contract_errors),
+all four recomputed and rewritten even where unchanged:
+  1 _LANDING_SCRIPT_SHA256           aa79ad10 -> 6a4b8f1f  CHANGED
+  2 _LANDING_EXECUTION_PREFIX_SHA256 b58c10cd -> 0db85d8d  CHANGED
+  3 _LANDING_LANE_SHA256 x3          unchanged, VERIFIED not assumed
+  4 _SEMANTIC_DRIVER_SHA256          unchanged, VERIFIED not assumed
+ci_harness_timeout_ceiling_check exits 0. Falsified: appended one unreviewed line
+to gatekeeper-land.sh -> [FAIL] again. Restored -> 0.
+RAN INSTEAD: 3 affected modules whole -> 70 passed, rc 0.
+FALSIFIED (subject): forced declared_concurrent_lanes() to ignore the declaration
+-> 2 cases RED. Reverted.
+NOT MEASURED: gate_host_independence_check's PASS direction. It ran 28 min to
+completion on the clean tree and returned rc 2 NO_STIMULUS — 'the checkout carried
+no untracked and no ignored path ... all 132 probed gate(s) agreed by construction
+... This is not a pass.' Recorded as a refusal, not as green.
+COLLISION: gatekeeper-land.sh is shared with the differential-removal lane
+(c4e59efa7). I landed SECOND. Any later lane touching it must re-render all four
+faces the same way.

@@ -1,0 +1,68 @@
+LANDED v1.12.12 from fix/main-code-reds-jslice
+parent 243f7e731 (v1.12.11) — ordinary fast-forward, 8 commits.
+
+SKIPPED AS ALREADY LANDED — 5 of the branch's 13 commits. Main repaired the
+same defect a different way while the branch was parked, so each is dropped
+WHOLE rather than merged over the landed fix:
+  fc66b1113 stall-watchdog cpu-probe double; 48addc5f3 per-source merge at the
+  pad-ring site and the `== 0` bound; 32fefd538 hardmacro magic PATH control;
+  c58bdcc72 step-4 coverage mirror; 1218b7aa0 hygiene exemption quoting (which
+  applies EMPTY against main).
+The first four each conflicted, and taking the branch's side would have doubled
+the deletion count from 16 to 112 — every extra deletion being a landed line.
+Each branch alternative is arguably stronger in one respect and none is worth
+overwriting a reviewed landed fix to obtain; that is a judgement, and it is
+recorded here rather than made silently.
+
+CORRECTED RATHER THAN CARRIED: `3fc5ef7cc` wires the process-kill checker into
+tools/ci/run_plugin_self_audit.sh with a comment asserting the wiring audit is
+RED for that name. It is green — 6efe67a27 / 638505d44 wired the same checker
+from repo_hygiene_gates.sh at `--root "$PG"`. The wiring is KEPT because
+$PLUGIN_ROOT is strictly broader than $PG and the checker's own docstring
+records a real pattern kill under mcp-eda/test, outside programs/; the stale
+premise is rewritten in its own commit so the shipped comment is not misleading.
+
+RAN, whole modules, no -k selection, host lane,
+PYTHONDONTWRITEBYTECODE=1, TMPDIR=/var/tmp/jl (outside the account home),
+VIBEIC_CORPUS_ROOT unset — three invocations:
+  lane A (17 modules: pad-ring, prose polarity, the 7 flow_compliance modules,
+          the 7 output_snippet / looks_like_python_traceback consumers,
+          corpus-B, flatten-for-quartus)
+        -> 446 passed, 14 skipped, 3 xfailed, rc 0
+  lane B (21 LEC modules + the silent-decline ratchet in
+          test_issue693_signoff_integrity_wiring)
+        -> 373 passed, 10 subtests passed, rc 0
+  lane C (checker_execution_wiring_audit, gate_is_wired, the 5 version modules,
+          program_inventory_no_drift)
+        -> 162 passed, rc 0
+981 passed in total. NO red, attributed or otherwise.
+
+INVENTORY: gen_program_inventory.py --check exits 0 — this landing adds no
+programs/**.py and removes none. marketplace_version_sync_check and
+plugin_version_prose_sync_check both PASS at 1.12.12; 0 files still state
+1.12.11.
+
+CRITERION TABLE: BOTH 34 -> 32, CLEARED 21 -> 23. Counts re-derived from the
+visible rows twice, by two different matchers, after the edit; the ledger's
+`^  BOTH +N$` shape is preserved and the new rows use the existing column
+layout. Measured in BOTH lanes on BOTH trees, whole modules in one invocation,
+71 collected and 0 skipped in every run:
+    control 243f7e731   host 1 failed / 70 passed   image 1 failed / 70 passed
+    subject 51c0db4b7   host 71 passed              image 71 passed
+The control's failing set is exactly
+`test_issue712_prose_polarity.py::test_the_gate_is_GREEN_on_the_tree_that_ships`
+and no other ID, in both lanes.
+  * that ID is cleared BY this landing (the pad-ring reader now consults
+    `_prose_polarity`);
+  * `test_flow_compliance_check_gate.py::test_a_real_verdict_is_not_mistaken_for_a_crash`
+    was cleared EARLIER, at a4db289d9 (v1.12.4), and the row was never moved.
+    It is measured green in both lanes on BOTH trees and the section in the
+    document says plainly that this branch did not clear it.
+No assertion was weakened, no case deleted, no skipif added, no tolerance
+widened, no exemption re-dated, no baseline written.
+
+NOT RUN: the pinned-image lane for the full affected-module set. It was run for
+the two criterion modules, where a two-lane measurement is the table's own
+standard. The remaining modules are pure-python source and fixture tests with
+no container dependency; the host lane is the whole affected population for
+them, and that is stated rather than implied.

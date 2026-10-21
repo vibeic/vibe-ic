@@ -1,0 +1,49 @@
+LANDED next/land-1791-eco-taxonomy (PR #1791) as v1.12.20 at c4fba40c4.
+
+SKIPPED: tools/gatekeeper-land.sh — owner-authorised; it judges ABSOLUTELY and
+refuses on main's pre-existing reds, so it refuses every candidate today. This
+branch touches neither gatekeeper-land.sh nor ci_harness_timeout_ceiling_check.py,
+so the four-face re-pin does not apply (checked by name over the branch's own
+file list, not inferred).
+
+RAN INSTEAD: 56 affected modules WHOLE at HEAD^{tree} f53402ec8, the exact tree
+pushed. No -k, serial, no xdist, PYTHONDONTWRITEBYTECODE=1, VIBEIC_CORPUS_ROOT
+unset, TMPDIR=/tmp/vibeic-pt-landq4 (outside every checkout). rc 0 on all 56 —
+1434 passed, 0 failed, 69 skipped, 4 xfailed. Population = the rename's textual
+blast radius (every module referencing a renamed identifier, old name or new)
+plus every module the change touched or renamed.
+
+Also at the final tree: gen_program_inventory --check rc 0 (no regeneration
+needed; the branch carried its own), marketplace_version_sync_check PASS,
+plugin_version_prose_sync_check PASS, version_bump_monotonic_check PASS
+(1.12.19 -> 1.12.20 strict). The branch had claimed 1.12.19; main reached 1.12.19
+first, so this landing re-bumped to 1.12.20. 0 files still state 1.12.19.
+
+FALSIFIED, NOT TRUSTED: planted eco_loop_iter into postroute_timing_repair_audit.py
+and test_repair_taxonomy_has_no_false_eco_names went RED naming file and token;
+reverted, tree confirmed clean. Flow yaml re-parsed old-vs-new here: 68 steps,
+ids identical, total_steps 44, final_gate equal, exactly steps 23/31/32 differ.
+d3_manifest_declaration_parity_check rc 0 (166 paths / 66 steps / 0 uncovered).
+flow_compliance_check --list-structural-gates rc 0.
+
+PRE-EXISTING REDS CARRIED ONTO MAIN UNCHANGED: none observed in the affected
+set, so nothing was attributed and nothing was carried.
+
+TABLE: no row moved, deliberately — no node id of this change, including the 16
+renamed test modules, is a row of the triage document. Re-read from live
+origin/main immediately before the push and re-derived by counting rows:
+BOTH 11/11, CLEARED 44/44, FLAKY 2/2, total 57. BOTH is 11 after this landing.
+
+NOT LANDED, AND WHY (recorded here because the next lane needs it):
+ * fix/timeout-as-verdict-direct-progress and next/timeout-verdict-handlers are
+   HELD on owner instruction: a timeout must be replaced by a WATCHDOG, not
+   relabelled from FAIL to NOT_MEASURED. Measured on the rebased handlers
+   branch: zero of its seven program files gain supervision; every change is
+   'return 1' -> 'return 2' with the killing subprocess timeout untouched. Its
+   commit 61824c5b3 IS the correct shape (progress supervision over the landing
+   verifier's run tree) and should be kept when the branch is re-authored.
+ * agent/jflowmx-rename-flow-matrix stays held: the criterion is BOTH 0, it is
+   11, and all 11 rows live in the files that rename would move.
+ * assembly/main-green-0828 should be retired, not merged: its two-dot diff
+   against live main is +3260/-8256 over 73 files and the deletions are whole
+   test modules main still carries.
