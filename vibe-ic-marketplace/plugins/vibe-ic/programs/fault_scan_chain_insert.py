@@ -668,8 +668,15 @@ def run_chain(project: Path, netlist_rel: str, clock: str,
             cmd += ["--reset-active-low"]
     cmd.append(f"/work/{fault_input_rel}")
 
-    ec, out, err = _fatpg._run_docker(project, cmd, timeout=timeout,
-                                      pdk_dir=pdk_dir)
+    # The engine runs in a sibling container.  A host supervisor wrapped
+    # around this Python process cannot see that container's CPU progress: the
+    # docker client has a flat, mostly-idle host process tree while `fault`
+    # works in the engine namespace.  Supervise at the transport seam where
+    # `_docker_watchdog` can probe and reap the named container.  `timeout` is
+    # retained as a recorded ceiling only; it is not a deadline that can kill
+    # a progressing insertion.
+    ec, out, err = _fatpg._run_docker(
+        project, cmd, pdk_dir=pdk_dir, supervised=True, ceiling_s=timeout)
     log = (out + "\n" + err)
     produced = project / out_rel
     if ec != 0 or not produced.is_file():
@@ -839,7 +846,11 @@ def run_chain(project: Path, netlist_rel: str, clock: str,
                 f"losslessly (they carry real nets). Scan insertion on a design "
                 f"with a driven bidirectional top-level port is an open backlog "
                 f"item (bidirectional boundary-scan cell).")
-        return 1, err_report
+        # Preserve the supervisor's semantic rc (notably RC_STALLED=199) so
+        # the parent can distinguish a measured stall from an ordinary tool
+        # failure.  A zero exit with a missing output remains a producer
+        # failure and therefore maps to 1.
+        return ec if ec != 0 else 1, err_report
 
     chained_text = produced.read_text(encoding="utf-8", errors="replace")
     if stripped_inout:
@@ -958,7 +969,11 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--json", default=SCAN_JSON_REL,
                    help=f"Report JSON path relative to project "
                         f"(default {SCAN_JSON_REL})")
-    p.add_argument("--timeout", type=int, default=900)
+    p.add_argument(
+        "--timeout", type=int, default=900,
+        help=("Recorded runtime ceiling in seconds. Crossing it is reported "
+              "but does not terminate a progressing fault-chain container; "
+              "the container-aware stall supervisor remains authoritative."))
     args = p.parse_args(argv)
 
     project = Path(args.project_dir).resolve()

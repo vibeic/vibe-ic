@@ -22722,18 +22722,16 @@ def _step_dft_insertion(project: Path, top_name: str, container: str,
                           str((project / "input" / "pdk").resolve())]
         _scan_t0 = time.time()
         try:
-            # CZT-11 — supervised, not clocked. The 1800 s literal here
-            # stopped a scan-chain insertion that was still inserting, and the
-            # arm below then recorded it as an "execution error" of the tool:
-            # a host condition written down as a fact about the program.
-            _sc = _pr.run(_scan_cmd, capture_output=True, text=True)
+            # The producer supervises its own sibling container at the only
+            # seam that can observe container CPU and reap its unique name.
+            # Wrapping this Python process in `_progress_run` is nested
+            # supervision over a flat docker-client host tree: it falsely
+            # declares a live engine stalled, kills the producer, and lets the
+            # flow advance while the container continues writing.  Wait for
+            # the producer's authoritative rc instead.
+            _sc = subprocess.run(_scan_cmd, capture_output=True, text=True)
             _scan_rc = _sc.returncode
             _scan_tail = (_sc.stderr or _sc.stdout or "")[-300:]
-        except _pr.Stalled as exc:
-            # A STALL IS NOT AN EXECUTION ERROR. The tool ran; every readable
-            # progress signal then sat still. Same non-zero rc (the caller
-            # only tests `== 0`), a tail that says which of the two it was.
-            _scan_rc, _scan_tail = _pr.RC_STALLED, f"STALLED: {exc}"[-300:]
         except Exception as exc:                       # noqa: BLE001
             _scan_rc, _scan_tail = -1, f"execution error: {exc}"
         _scan_meta = _read_scan_chain_meta(project)
