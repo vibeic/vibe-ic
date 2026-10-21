@@ -202,6 +202,36 @@ _LIBERTY_HEADER_SCAN = re.compile(
     + _LIBERTY_GAP + r'\)' + _LIBERTY_GAP + r'\{)', re.S)
 
 
+def _liberty_offset_is_code(text: str, stop: int) -> bool:
+    """Whether ``stop`` is outside a Liberty comment or quoted string."""
+    state, i = "code", 0
+    while i < stop:
+        pair = text[i:i + 2]
+        if state == "code":
+            if pair == "/*":
+                state, i = "block", i + 2
+                continue
+            if pair == "//":
+                state, i = "line", i + 2
+                continue
+            if text[i] == '"':
+                state = "string"
+        elif state == "block":
+            if pair == "*/":
+                state, i = "code", i + 2
+                continue
+        elif state == "line":
+            if text[i] in "\r\n":
+                state = "code"
+        elif text[i] == "\\":
+            i += 2
+            continue
+        elif text[i] == '"':
+            state = "code"
+        i += 1
+    return state == "code"
+
+
 def _liberty_may_have_selected_cell(text: str, masters: set[str]) -> bool:
     """Cheap conservative prefilter for exact Liberty ``cell`` headers.
 
@@ -212,6 +242,32 @@ def _liberty_may_have_selected_cell(text: str, masters: set[str]) -> bool:
     structural parse.
     """
     if not masters:
+        return False
+    # Most linked PDK views cannot contain a producer-selected master at all.
+    # Reject those bytes with the string engine before the grammar scanner
+    # walks every quoted attribute and comment in a potentially large Liberty
+    # file.  This is conservative: any exact quoted/bare header, and any
+    # escaped spelling that could contain a selected master, necessarily
+    # contains the master's literal bytes.  A comment/string-only occurrence
+    # still reaches the grammar scan below and cannot fabricate a cell header.
+    name_chars = r"A-Za-z0-9_.$/:+\-"
+    may_name_exact = any(re.search(
+        rf"(?<![{name_chars}]){re.escape(master)}(?![{name_chars}])", text)
+        for master in masters)
+    if not may_name_exact:
+        return False
+    names = "|".join(re.escape(master) for master in sorted(masters, key=len,
+                                                            reverse=True))
+    exact_header = re.compile(
+        r"\bcell" + _LIBERTY_GAP + r"\(" + _LIBERTY_GAP
+        + rf'(?:"(?:{names})"|(?:{names}))'
+        + _LIBERTY_GAP + r"\)" + _LIBERTY_GAP + r"\{", re.S)
+    for hit in exact_header.finditer(text):
+        if _liberty_offset_is_code(text, hit.start()):
+            return True
+    # Preserve the prior conservative handling for unusual escaped cell names.
+    # This slow fallback is unreachable for ordinary exact headers above.
+    if not any("\\" + master in text for master in masters):
         return False
     for hit in _LIBERTY_HEADER_SCAN.finditer(text):
         if hit.group("header") is not None:
@@ -463,67 +519,82 @@ def _core_pad_models(project: Path, container: str = "",
 
     models: Dict[str, Dict[str, object]] = {}
     errors: List[str] = []
+    resolved_signatures: Dict[Tuple[str, str, str, str],
+                              Tuple[Dict[str, object], List[str]]] = {}
     for name, pad in sorted(pads.items()):
         master = str(pad["master"])
         terminal = str(pad["terminal"])
         core_pin = str(pad["core_pin"])
         direction = str(pad["direction"])
-        present = cell_views.get(master, [])
-        if not present:
-            errors.append(f"{name}: master {master} absent from linked IO Liberty")
-            continue
         model: Dict[str, object] = {
             "instance": name, "port": str(pad["port"]), "master": master,
             "terminal": terminal, "core_pin": core_pin, "direction": direction,
         }
-        if direction in ("input", "inout"):
-            missing_arc = []
-            for path, cell_body, _unit_pf in present:
-                pin_bodies = dict(_liberty_blocks(cell_body, "pin"))
-                core_body = pin_bodies.get(core_pin)
-                terminal_body = pin_bodies.get(terminal)
-                core_dir = (re.search(r"\bdirection\s*:\s*\"?(\w+)",
-                                      _own_attrs(core_body or "")))
-                terminal_dir = (re.search(r"\bdirection\s*:\s*\"?(\w+)",
-                                          _own_attrs(terminal_body or "")))
-                has_arc = any(
-                    (lambda rel: bool(rel and rel.group(1) == terminal))(
-                        re.search(r"\brelated_pin\s*:\s*\"?([^\";\s]+)",
-                                  _own_attrs(timing)))
-                    for _unused, timing in _liberty_blocks(core_body or "", "timing"))
-                if (not core_dir or core_dir.group(1) != "output"
-                        or not terminal_dir
-                        or terminal_dir.group(1) not in ("input", "inout")
-                        or not has_arc):
-                    missing_arc.append(path)
-            if missing_arc:
-                errors.append(f"{name}: no {terminal}->{core_pin} input-pad arc in "
-                              + ", ".join(missing_arc))
-            else:
-                model["input_arc"] = f"{terminal}->{core_pin}"
-        if direction in ("output", "inout"):
-            caps: List[float] = []
-            missing_cap = []
-            for path, cell_body, unit_pf in present:
-                pin_body = dict(_liberty_blocks(cell_body, "pin")).get(core_pin)
-                cap = re.search(r"\bcapacitance\s*:\s*([0-9.eE+-]+)",
-                                _own_attrs(pin_body or ""))
-                if not cap or unit_pf <= 0:
-                    missing_cap.append(path)
-                    continue
-                try:
-                    value = float(cap.group(1)) * unit_pf
-                except ValueError:
-                    value = -1.0
-                if not math.isfinite(value) or value < 0:
-                    missing_cap.append(path)
+        signature = (master, terminal, core_pin, direction)
+        if signature not in resolved_signatures:
+            resolved: Dict[str, object] = {}
+            signature_errors: List[str] = []
+            present = cell_views.get(master, [])
+            if not present:
+                signature_errors.append(
+                    f"master {master} absent from linked IO Liberty")
+            if present and direction in ("input", "inout"):
+                missing_arc = []
+                for path, cell_body, _unit_pf in present:
+                    pin_bodies = dict(_liberty_blocks(cell_body, "pin"))
+                    core_body = pin_bodies.get(core_pin)
+                    terminal_body = pin_bodies.get(terminal)
+                    core_dir = (re.search(r"\bdirection\s*:\s*\"?(\w+)",
+                                          _own_attrs(core_body or "")))
+                    terminal_dir = (re.search(r"\bdirection\s*:\s*\"?(\w+)",
+                                              _own_attrs(terminal_body or "")))
+                    has_arc = any(
+                        (lambda rel: bool(rel and rel.group(1) == terminal))(
+                            re.search(r"\brelated_pin\s*:\s*\"?([^\";\s]+)",
+                                      _own_attrs(timing)))
+                        for _unused, timing in
+                        _liberty_blocks(core_body or "", "timing"))
+                    if (not core_dir or core_dir.group(1) != "output"
+                            or not terminal_dir
+                            or terminal_dir.group(1) not in ("input", "inout")
+                            or not has_arc):
+                        missing_arc.append(path)
+                if missing_arc:
+                    signature_errors.append(
+                        f"no {terminal}->{core_pin} input-pad arc in "
+                        + ", ".join(missing_arc))
                 else:
-                    caps.append(value)
-            if missing_cap or not caps:
-                errors.append(f"{name}: no sourced {core_pin} capacitance in "
-                              + ", ".join(missing_cap or [p for p, _b, _u in present]))
-            else:
-                model["core_load_pf"] = {"min": min(caps), "max": max(caps)}
+                    resolved["input_arc"] = f"{terminal}->{core_pin}"
+            if present and direction in ("output", "inout"):
+                caps: List[float] = []
+                missing_cap = []
+                for path, cell_body, unit_pf in present:
+                    pin_body = dict(_liberty_blocks(cell_body, "pin")).get(core_pin)
+                    cap = re.search(r"\bcapacitance\s*:\s*([0-9.eE+-]+)",
+                                    _own_attrs(pin_body or ""))
+                    if not cap or unit_pf <= 0:
+                        missing_cap.append(path)
+                        continue
+                    try:
+                        value = float(cap.group(1)) * unit_pf
+                    except ValueError:
+                        value = -1.0
+                    if not math.isfinite(value) or value < 0:
+                        missing_cap.append(path)
+                    else:
+                        caps.append(value)
+                if missing_cap or not caps:
+                    signature_errors.append(
+                        f"no sourced {core_pin} capacitance in "
+                        + ", ".join(missing_cap
+                                    or [p for p, _b, _u in present]))
+                else:
+                    resolved["core_load_pf"] = {
+                        "min": min(caps), "max": max(caps)}
+            resolved_signatures[signature] = (resolved, signature_errors)
+        resolved, signature_errors = resolved_signatures[signature]
+        model.update(resolved)
+        errors.extend(f"{name}: {reason}" for reason in signature_errors)
         models[str(pad["port"])] = model
     if errors:
         basis["why"] = "; ".join(errors)

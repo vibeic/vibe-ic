@@ -724,6 +724,21 @@ def test_issue3440_prefilter_does_not_admit_comment_or_string_headers(text):
     assert SE._liberty_may_have_selected_cell(text, {"neutral_pad"}) is False
 
 
+def test_issue3440_absent_master_never_enters_full_grammar_scan(monkeypatch):
+    """An irrelevant large view is rejected before scanning every string."""
+    import sdc_environment as SE
+
+    class ForbiddenScan:
+        def finditer(self, _text):
+            raise AssertionError("full Liberty grammar scan reached")
+
+    monkeypatch.setattr(SE, "_LIBERTY_HEADER_SCAN", ForbiddenScan())
+    assert SE._liberty_may_have_selected_cell(
+        'library (unrelated) { cell (neutral_pad_wrapped) { '
+        'comment : "large"; } }',
+        {"neutral_pad"}) is False
+
+
 def test_issue3440_irrelevant_views_are_hash_bound_without_deep_parse(tmp_path):
     """The translated commands stay identical while irrelevant views are cheap."""
     import sdc_environment as SE
@@ -766,6 +781,33 @@ def test_issue3440_irrelevant_views_are_hash_bound_without_deep_parse(tmp_path):
     assert basis["prefilter_skipped_view_count"] == 200
     assert len(basis["views"]) == 201
     assert all(len(view["sha256"]) == 64 for view in basis["views"])
+
+
+def test_issue3440_repeated_pads_parse_each_signature_once(tmp_path, monkeypatch):
+    import sdc_environment as SE
+    project = _core_wrapper_project(tmp_path)
+    record_path = project / "reports/phase3/io_pad_chip_top.json"
+    record = json.loads(record_path.read_text())
+    for index in range(100):
+        record["pad_instances"][f"u_pad_a_{index}"] = {
+            "port": f"a_{index}", "master": "neutral_pad",
+            "terminal": "PAD", "core_pin": "IN", "direction": "input"}
+        record["pad_instances"][f"u_pad_y_{index}"] = {
+            "port": f"y_{index}", "master": "neutral_pad",
+            "terminal": "PAD", "core_pin": "OUT", "direction": "output"}
+    record_path.write_text(json.dumps(record))
+
+    block_calls = {}
+    real_blocks = SE._liberty_blocks
+
+    def counted_blocks(text, kind):
+        block_calls[kind] = block_calls.get(kind, 0) + 1
+        return real_blocks(text, kind)
+
+    monkeypatch.setattr(SE, "_liberty_blocks", counted_blocks)
+    models, _basis = SE._core_pad_models(project)
+    assert models is not None and len(models) == 202
+    assert block_calls["pin"] == 2  # once per distinct pad signature
 
 
 def test_issue3440_unrelated_attribute_cannot_fabricate_selected_master(tmp_path):
