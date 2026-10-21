@@ -60,6 +60,64 @@ def test_positive_a_well_formed_corpus_generates(tmp_path):
                                                 "NOT_MEASURED": 1}}
 
 
+def test_positive_the_canonical_assembler_bundle_generates(tmp_path):
+    """Issue #3423: the documented assembler output is a report input."""
+    path = tmp_path / "bundle.json"
+    path.write_text(json.dumps({
+        "schema": gen.metric_contract.BUNDLE_SCHEMA_ID,
+        "records": [_measured(), _not_measured()],
+        "records_digest": "sha256:" + "b" * 64,
+    }), encoding="utf-8")
+
+    rc, result = gen.generate(path)
+
+    assert rc == gen.RC_OK, result
+    assert result["coverage"] == {
+        "total": 2,
+        "by_status": {"MEASURED": 1, "NOT_MEASURED": 1},
+    }
+
+
+def test_unknown_wrapper_does_not_gain_authority_from_a_records_key(tmp_path):
+    """Only the shared closed carrier registry may unwrap a document."""
+    path = tmp_path / "unknown.json"
+    path.write_text(json.dumps({
+        "schema": "vibeic.ppa.unknown.v1",
+        "records": [_measured()],
+    }), encoding="utf-8")
+
+    rc, result = gen.generate(path)
+
+    assert (rc, result["code"]) == (gen.RC_UNDETERMINED, "EMPTY_CORPUS")
+
+
+def test_empty_canonical_bundle_remains_an_explicit_empty_corpus(tmp_path):
+    path = tmp_path / "empty_bundle.json"
+    path.write_text(json.dumps({
+        "schema": gen.metric_contract.BUNDLE_SCHEMA_ID,
+        "records": [],
+        "records_digest": "sha256:" + "c" * 64,
+    }), encoding="utf-8")
+
+    rc, result = gen.generate(path)
+
+    assert (rc, result["code"]) == (gen.RC_UNDETERMINED, "EMPTY_CORPUS")
+
+
+def test_malformed_record_inside_bundle_is_still_refused(tmp_path):
+    path = tmp_path / "bad_bundle.json"
+    path.write_text(json.dumps({
+        "schema": gen.metric_contract.BUNDLE_SCHEMA_ID,
+        "records": [_measured(status="NOT_MEASURED", reason="missing")],
+        "records_digest": "sha256:" + "d" * 64,
+    }), encoding="utf-8")
+
+    rc, result = gen.generate(path)
+
+    assert (rc, result["code"]) == (gen.RC_REFUSED,
+                                    "VALUE_WITHOUT_MEASUREMENT")
+
+
 def test_the_not_measured_row_is_printed_not_omitted(tmp_path):
     """The row that must never be omitted (spec §18).
 

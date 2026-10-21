@@ -67,6 +67,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))  # sibling imports reso
 from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082
 from _ppa import cli_exit  # PPA_INTERFACES §1: argparse exits 2; a bad invocation is 3
 from _ppa import canonical_json as cj  # the ONLY serializer for anything hashed
+from _ppa import metrics as metric_contract  # the ONE record-carrier registry
 
 RC_OK = 0
 RC_REFUSED = 1
@@ -159,6 +160,13 @@ def _records_in(payload: Any) -> List[Any]:
     rather than this function silently skipping it — a skipped record is a row
     that never appears, which is the omission this program exists to prevent.
     """
+    if (isinstance(payload, dict)
+            and payload.get("schema") in metric_contract.RECORD_CARRIERS):
+        # The assembler and domain producers use registered envelopes whose
+        # member keys differ (`records`, `rows`, `metrics`).  Do not duplicate
+        # that schema-to-member mapping here: the shared contract is what keeps
+        # a newly registered carrier readable by every consumer.  #3423.
+        return metric_contract.records_from_document(payload)
     if isinstance(payload, dict) and isinstance(payload.get("metrics"), list):
         return list(payload["metrics"])
     if isinstance(payload, list):
@@ -181,7 +189,12 @@ def load_metrics(root: Path) -> Tuple[List[Dict[str, Any]], List[Tuple[Path, str
         except (OSError, ValueError) as exc:
             unreadable.append((path, f"{type(exc).__name__}: {exc}"))
             continue
-        for rec in _records_in(payload):
+        try:
+            payload_records = _records_in(payload)
+        except metric_contract.MetricError as exc:
+            unreadable.append((path, f"{exc.code}: {exc.message}"))
+            continue
+        for rec in payload_records:
             if isinstance(rec, dict) and rec.get("schema") != METRIC_SCHEMA:
                 # Not ours. A corpus directory legitimately holds other JSON,
                 # and refusing a neighbour's file would make this gate depend on
