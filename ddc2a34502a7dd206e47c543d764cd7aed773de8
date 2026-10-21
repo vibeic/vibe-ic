@@ -1,0 +1,21 @@
+Landing evidence for ddc2a34502a7dd206e47c543d764cd7aed773de8
+
+Base: 3ce036897d64cbb5d524a64d418d75515cdd0fbe
+Tree: 33edd904727b354fc486917883d7dc268b9c45f5
+Version: 1.30.99
+Issue: #3455
+
+Changed-scope evidence:
+- test_serial_parallel_mul_synth.py: 22/22 PASS in pinned EDA image
+- retained real SPM candidate replay: five native Verilator scenarios PASS
+- professional cocotb: 10,008/10,008 vectors PASS, zero mismatch
+- Step 4 candidate gate: 5/5 goals measured PASS
+- reverse replay without repair: corner, consecutive transaction, and reset return NOT_MEASURED
+- adversarial review: /mnt/ssd2/codex_tasks/out/spm-step4-landing-20261022/ADVERSARIAL_REVIEW.md
+
+Exact-base pre-existing reds independently reproduced:
+- loop_watchdog_compliance_check: klayout_pdk_lvs.py lines 995, 1025, 1134, 1160
+- prose_polarity: reset_sync_structural_exception::_liberty_ffs
+- plugin_full_audit: _analog_block_intent, _native_erc, _professional_helper_observation, l23_security_requirements_extract, l25_reliability_negative_extract
+
+The candidate does not change any named pre-existing-red path. Full landing run judged absolutely and therefore refused a green stamp; the exact named base probes establish these reds pre-existed this landing.
