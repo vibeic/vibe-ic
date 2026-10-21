@@ -45862,10 +45862,12 @@ _TIMING_TABLE_LINE_RE = re.compile(
     r"(?:\s*\t+\s*([\d]+\.?[\d]*))?\s*(?:\t.*)?$",
     re.MULTILINE,
 )
-# Generic in-line forms: "RSP_Time = 22.7us" / "tBR 9.4 us"
+# Generic in-line forms: "RSP_Time = 22.7us" / "tBR 9.4 us".
+# Horizontal whitespace is deliberate: a name cannot bind a value on the
+# following prose line.
 _TIMING_INLINE_RE = re.compile(
-    r"\b([A-Za-z][A-Za-z0-9_]{1,30})\s*[:=]?\s*"
-    r"(\d+\.?\d*)\s*(us|μs|µs|ns|ms|ticks)\b",
+    r"\b([A-Za-z][A-Za-z0-9_]{1,30})[ \t]*[:=]?[ \t]*"
+    r"(\d+\.?\d*)[ \t]*(us|μs|µs|ns|ms|ticks)\b",
     re.IGNORECASE,
 )
 # Strategy C — bare numeric+unit harvest for PPT/slide-style content
@@ -45913,6 +45915,41 @@ _V1_6_299_UNIT_SUFFIX_MAP = {
     "ps": "_ps",
     "s": "_s",
 }
+
+
+def _issue3456_is_structured_timing_identifier(name: str) -> bool:
+    """Return whether a separator-free token has identifier structure.
+
+    Explicit ``name = value`` and ``name: value`` bindings do not need this
+    predicate.  It only preserves legacy compact forms such as ``tBR 9.4 us``
+    while rejecting ordinary sentence words such as ``The 2 ns`` and
+    ``remaining 18 ns``.  The accepted shapes are language-neutral identifier
+    structure: underscore, digit, all-uppercase acronym, or lower-to-upper
+    transition.
+    """
+    if not isinstance(name, str) or len(name) < 2:
+        return False
+    return bool(
+        "_" in name
+        or any(ch.isdigit() for ch in name)
+        or (name.isupper() and any(ch.isalpha() for ch in name))
+        or re.search(r"[a-z][A-Z]", name)
+    )
+
+
+def _issue3456_unique_timing_name(base: str, used: Set[str]) -> str:
+    """Reserve a deterministic unique name without inventing semantics."""
+    if base not in used:
+        used.add(base)
+        return base
+    suffix = 2
+    while True:
+        suffix_text = f"_{suffix}"
+        candidate = f"{base[:80 - len(suffix_text)]}{suffix_text}"
+        if candidate not in used:
+            used.add(candidate)
+            return candidate
+        suffix += 1
 
 
 # v1.6.342 — for #239 P2. Pipe-table row-label dedupe helper. When N
@@ -46134,6 +46171,11 @@ def gen_l8_timing_waveform_doc(project: Path,
         # Strategy B: inline "<NAME> = <NUM> <UNIT>" forms (chip-AGNOSTIC).
         for m in _TIMING_INLINE_RE.finditer(text):
             name, val, unit = m.group(1), m.group(2), m.group(3)
+            binding_text = text[m.end(1):m.start(2)]
+            has_explicit_binding = ":" in binding_text or "=" in binding_text
+            if (not has_explicit_binding
+                    and not _issue3456_is_structured_timing_identifier(name)):
+                continue
             try:
                 vf = float(val)
             except ValueError:
@@ -46176,6 +46218,7 @@ def gen_l8_timing_waveform_doc(project: Path,
     # cluster, and it cleanly rejects narrative prose.
     timing_constants: List[Dict[str, Any]] = []
     seen_bare: Set[Tuple[str, str]] = set()
+    used_bare_names: Set[str] = set()
     bare_idx = 0
     for fname, text in extracted.items():
         # v1.6.345 — for #242 P2 ORGANIC. Skip third-party industry-spec
@@ -46343,8 +46386,10 @@ def gen_l8_timing_waveform_doc(project: Path,
             # `name` silently overwrite N-1 of N entries.
             _v1_6_342_name = _v1_6_342_name_with_row_label(
                 text, m.start(), _v1_6_299_name, bare_idx + 1)
+            _issue3456_name = _issue3456_unique_timing_name(
+                _v1_6_342_name, used_bare_names)
             timing_constants.append({
-                "name": _v1_6_342_name,
+                "name": _issue3456_name,
                 "value": vf,
                 "unit": unit_norm,
                 "source": fname,

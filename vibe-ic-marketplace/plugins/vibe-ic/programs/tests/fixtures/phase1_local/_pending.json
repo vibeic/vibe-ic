@@ -405,5 +405,16 @@
     "version_observed": "1.30.32, exact official commit400840b089083915d9420191b8397ce5c92025a1, tree55b5ad54216f1615c365fdadaee31f2b09bdd51c. No moving-main or tool-image assumption.",
     "version_lkg": "Unknown.",
     "fixture_path": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/fixtures/phase1_local/neutral_wrapped_block_latency/wrapped_latency.md"
+  },
+  {
+    "issue": 3456,
+    "project": "opentitan_aes_sky130a_l8_timing",
+    "layer": "L8_TIMING_WAVEFORM",
+    "field": "fields.timing_constants[].name",
+    "expected": "Narrative words such as The/the/remaining do not become timing_window identifiers. Bare numeric timing literals remain source-bound and use unique deterministic names; explicit t_setup/t_hold/t_period assignments retain those exact names.",
+    "actual": "Typed timing names are prose words such as The, the, and remaining; multiple numeric values under one heading also receive the same duplicate name.",
+    "version_observed": "v1.30.61 and v1.30.96",
+    "version_lkg": "Unknown",
+    "fixture_path": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/fixtures/phase1_local/opentitan_aes_sky130a_l8_timing/timing_prose.md"
   }
 ]
