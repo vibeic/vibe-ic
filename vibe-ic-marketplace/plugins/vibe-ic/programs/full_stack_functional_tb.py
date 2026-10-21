@@ -363,6 +363,12 @@ def retarget_instance(text: str, core: str, top: str,
 # ---------------------------------------------------------------------------
 _TB_VERDICT_RE = re.compile(
     r"(?m)^\s*\[TB\s+([A-Za-z_][A-Za-z0-9_$]*)\]\s+(PASS|FAIL)\b")
+# Canonical authored Step-4 tests predate the bracketed producer grammar and
+# name their verdict as ``PASS <case> ...``.  Bind the whole first token pair
+# to the requested L10 case; a generic PASS, substring or another case gets no
+# credit, and the ordinary FAIL/mismatch/rc controls below still dominate.
+_AUTHORED_VERDICT_RE = re.compile(
+    r"(?m)^\s*(PASS|FAIL)\s+([A-Za-z_][A-Za-z0-9_$]*)\b")
 _ORACLE_DONE_RE = re.compile(r"(?m)^\s*ORACLE_TB_DONE\s+pass=(\d+)/(\d+)")
 _FAIL_LINE_RE = re.compile(r"(?m)^\s*(?:\[[^\]]*\]\s*)?FAIL\b")
 _MISMATCH_RE = re.compile(r"(?m)^\s*ORACLE_MISMATCH\b")
@@ -401,7 +407,8 @@ def score_transcript(case: str, rc: Optional[int], text: str
     """The case's verdict from ITS OWN simulation transcript.
 
     PASSED  rc 0, no FAIL / ORACLE_MISMATCH line, and either the case's own
-            `[TB <case>] PASS` marker or an `ORACLE_TB_DONE pass=n/n`, n > 0.
+            `[TB <case>] PASS` / `PASS <case>` marker or an
+            `ORACLE_TB_DONE pass=n/n`, n > 0.
     FAILED  the transcript carries the case's FAIL marker, any FAIL line, an
             ORACLE_MISMATCH, or a golden count below its denominator.
     ERRORED anything else — including a clean exit that printed no verdict,
@@ -419,6 +426,8 @@ def _score_transcript(case: str, rc: Optional[int], text: str
     done = list(_ORACLE_DONE_RE.finditer(text))
     words = [m.group(2) for m in _TB_VERDICT_RE.finditer(text)
              if m.group(1) == case]
+    words += [m.group(1) for m in _AUTHORED_VERDICT_RE.finditer(text)
+              if m.group(2) == case]
     fail_line = bool(_FAIL_LINE_RE.search(text) or _MISMATCH_RE.search(text))
     checks = None
     scenario = re.findall(
