@@ -1528,7 +1528,9 @@ _STRUCTURAL_RTL_GATES: tuple[str, ...] = (
     # run can hide.
     # v1.6.38 — `emitter_failure_mode_check` /
     # `literal_verdict_keyword_check` / `source_chip_agnostic_check` /
-    # `changelog_metric_reproducibility_check` are intentionally NOT
+    # `changelog_metric_reproducibility_check`, `openroad_tcl_deprecation_check`,
+    # `phase1_gate_contract_check`, and `practical_notes_specificity_check` are
+    # intentionally NOT
     # wired here: they audit the *plugin source* (a project would not
     # normally ship a fork of plugin code), so they run as standalone
     # CI / pre-commit gates against the plugin tree, not against
@@ -1571,7 +1573,6 @@ _STRUCTURAL_RTL_GATES: tuple[str, ...] = (
     "layer_extension_presence_check",   # patched v1.6.4: silent-skip on generic classes
     "manifest_leak_check",
     "no_protocol_consistency_check",
-    "openroad_tcl_deprecation_check",
     "output_artifact_check",
     "payload_bit_position_check",
     # phase1_consistency_check / phase1_doc_presence_check retracted v1.6.4
@@ -1579,8 +1580,6 @@ _STRUCTURAL_RTL_GATES: tuple[str, ...] = (
     # on Path B projects that ran phase1 from input/docs.
     "phase1_k5_quality_check",
     "phase1_quality_parity_check",
-    "phase1_gate_contract_check",
-    "practical_notes_specificity_check",
     "rtl_precheck_gate",
     "scope_periodic_pulse_check",
     # `skill_compliance_triangle_check` was registered here but the program
@@ -8776,14 +8775,11 @@ _STRUCTURAL_GATE_INVOCATION_CONTRACTS: Mapping[str, str] = MappingProxyType({
     "mask_application_check": "declared-masks",
     "module_port_audit": "module-ports",
     "oe_pattern_check": "rtl-files-output",
-    "openroad_tcl_deprecation_check": "no-args",
     "otp_write_lock_gate_check": "rtl-dir",
     "output_artifact_check": "rtl-artifacts",
     "packet_length_check_present": "rtl-dir",
     "payload_bit_position_check": "payload-bitmap",
     "periodic_signal_required_check": "periodic-signals",
-    "phase1_gate_contract_check": "no-args",
-    "practical_notes_specificity_check": "no-args",
     "pre_awake_silence_check": "rtl-dir",
     "protocol_gap_check": "protocol-gap",
     "pulse_decoder_edge_check": "rtl-dir",

@@ -57,11 +57,15 @@ def test_hygiene_script_exists():
 
 
 @pytest.mark.parametrize("gate", sorted(REGISTER))
-def test_gate_is_still_registered_in_the_project_umbrella(gate):
-    """Recorded, not de-registered — the record describes a live registration."""
-    assert gate in F._STRUCTURAL_RTL_GATES, (
-        f"{gate} is recorded here but no longer registered; the entry now "
-        f"explains a state that does not exist")
+def test_gate_registration_follows_its_declared_scope(gate):
+    """Plugin self-checks run in repo hygiene, hardware gates stay conditional."""
+    scope = REGISTER[gate]["scope"]
+    if scope == "plugin-self-check":
+        assert gate not in F._STRUCTURAL_RTL_GATES, (
+            f"{gate} audits plugin source but is still dispatched once per IC")
+    else:
+        assert gate in F._STRUCTURAL_RTL_GATES, (
+            f"{gate} is a hardware gate but disappeared from project routing")
 
 
 @pytest.mark.parametrize("gate", sorted(REGISTER))
