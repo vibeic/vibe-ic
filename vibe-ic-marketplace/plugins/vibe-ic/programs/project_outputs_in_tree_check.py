@@ -662,6 +662,39 @@ def _inside_project(path_str: str, project: Path) -> bool:
     return p == project or project in p.parents
 
 
+def _inside_declared_relocation(path_str: str, project: Path,
+                                declaration: Path) -> bool:
+    """True for an original-root self-reference in an exact audit copy.
+
+    ``flow_compliance_check --read-only`` copies the whole project and exports
+    ``VIBEIC_AUDIT_RELOCATED_FROM``. Reports in that copy still contain the
+    original project's absolute self-references. Those references are not
+    external storage, but the exemption is valid only when the declaration
+    being scanned is byte-identical in both roots. This keeps an unrelated or
+    tampered tree from using the environment variable to launder a real
+    outside-root reference.
+    """
+    raw = os.environ.get("VIBEIC_AUDIT_RELOCATED_FROM", "")
+    if not raw or not Path(raw).is_absolute():
+        return False
+    try:
+        original = Path(raw).resolve(strict=True)
+        current = project.resolve(strict=True)
+        cited = Path(path_str).resolve()
+        rel_decl = declaration.resolve(strict=True).relative_to(current)
+        original_decl = original / rel_decl
+        cited.relative_to(original)
+    except (OSError, ValueError):
+        return False
+    if (not original.is_dir() or original == current
+            or original.name != current.name
+            or not original_decl.is_file()):
+        return False
+    declaration_sha = _sha256_file(declaration)
+    return (declaration_sha is not None
+            and declaration_sha == _sha256_file(original_decl))
+
+
 def _parse_argv(argv: List[str]) -> Tuple[Optional[str], Optional[str],
                                            List[str]]:
     """(project, --json REPORT, [--auditor-record REL ...]) from `argv`."""
@@ -960,7 +993,8 @@ def main() -> int:
                 # be. Must precede the exists() classification: otherwise
                 # auditing a project that itself lives under /tmp reports the
                 # project's OWN files as external storage.
-                if _inside_project(p, project):
+                if (_inside_project(p, project)
+                        or _inside_declared_relocation(p, project, f)):
                     in_tree_self += 1
                     # DISCLOSED, NEVER BLOCKING. An in-tree self-reference whose
                     # file is not on disk is a different question from this
@@ -1006,7 +1040,8 @@ def main() -> int:
                 p = m.group(1).rstrip(".,;:)")
                 if p in seen or p in seen_derived:
                     continue
-                if _inside_project(p, project):
+                if (_inside_project(p, project)
+                        or _inside_declared_relocation(p, project, f)):
                     in_tree_self += 1
                     seen_derived.add(p)
                     # THE SECOND PASS COUNTS TOO. The absent-in-tree disclosure
