@@ -44,6 +44,19 @@ _MEMORY_CELLS = frozenset({"$mem", "$mem_v2", "$meminit", "$meminit_v2",
                            "$memrd", "$memrd_v2", "$memwr", "$memwr_v2"})
 _SELECTION_SCHEMA = "vibeic.rtl_audit_selected_configuration.v1"
 
+# These tokens can precede an indexed expression or a vector declaration, but
+# none can name a storage datatype.  Excluding them at the *start* of the
+# fallback declaration match is important: filtering a completed cross-line
+# match would consume the beginning of a following real declaration and could
+# hide an unsupported datatype there.
+_NON_TYPE_MEMORY_PREFIXES = frozenset({
+    "always", "always_comb", "always_ff", "always_latch", "assign",
+    "begin", "case", "casex", "casez", "else", "end", "endcase",
+    "endfunction", "endgenerate", "endmodule", "endtask", "for",
+    "foreach", "forever", "function", "generate", "genvar", "if",
+    "initial", "module", "repeat", "return", "task", "while",
+})
+
 
 def _scope_text(text: str) -> str:
     """Lexically blank comments/strings; never silently swallow malformed text."""
@@ -250,7 +263,10 @@ def _memory_facts(texts: list[str], modules: dict[str, Any]) -> dict[str, Any]:
         r"\b(?:reg|logic|wire)\s+(?:signed\s+)?"
         r"\[\s*(\d+)\s*:\s*(\d+)\s*\]\s*([A-Za-z_]\w*)\s*"
         r"\[\s*(\d+)\s*:\s*(\d+)\s*\]\s*;")
-    broad = re.compile(r"\b(?:reg|logic|wire|integer|[A-Za-z_]\w*)\s+"
+    non_types = "|".join(re.escape(word) for word in
+                         sorted(_NON_TYPE_MEMORY_PREFIXES))
+    broad = re.compile(rf"\b(?!(?:{non_types})\b)"
+                       r"(?:reg|logic|wire|integer|[A-Za-z_]\w*)\s+"
                        r"(?:signed\s+)?(?:\[[^\]]+\]\s*)?"
                        r"[A-Za-z_]\w*\s*\[")
     source: dict[str, dict[str, dict[str, int]]] = {}
