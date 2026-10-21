@@ -623,6 +623,48 @@ def _core_wrapper_project(tmp_path, *, related_pin="PAD"):
     return project
 
 
+@pytest.mark.parametrize(("declaration", "expected_pf"), [
+    ("capacitive_load_unit (1, pf);", 1.0),
+    ('capacitive_load_unit(1.000000, \\\n  "pf");', 1.0),
+    ('capacitive_load_unit /* gap */ ( 2 , // unit follows\n "ff" );', 0.002),
+    ('capacitive_load_unit(3, nf);', 3000.0),
+])
+def test_issue3427_real_liberty_capacitance_unit_grammar(declaration, expected_pf):
+    """Quoted continued PDK syntax has the same unit authority as one-line syntax."""
+    import sdc_environment as SE
+    assert SE._liberty_capacitance_unit_pf(declaration) == expected_pf
+
+
+@pytest.mark.parametrize("declaration", [
+    'capacitive_load_unit(1, "xf");',
+    'capacitive_load_unit(0, "pf");',
+    'capacitive_load_unit(-1, "pf");',
+    'capacitive_load_unit(1, "pf);',
+])
+def test_issue3427_invalid_liberty_capacitance_unit_is_refused(declaration):
+    import sdc_environment as SE
+    assert SE._liberty_capacitance_unit_pf(declaration) is None
+
+
+def test_issue3427_quoted_continued_unit_translates_output_load(tmp_path):
+    """The real sky130 IO unit spelling cannot make a present OUT cap unsourced."""
+    import sdc_environment as SE
+    project = _core_wrapper_project(tmp_path)
+    record = json.loads((project / "reports/phase3/io_pad_chip_top.json").read_text())
+    liberty = Path(record["io_library_liberty"][0])
+    liberty.write_text(liberty.read_text().replace(
+        "capacitive_load_unit (1, pf);",
+        'capacitive_load_unit(1.000000, \\\n  "pf");'))
+    staged = ("set_input_transition -max 25 [get_ports {a}]\n"
+              "set_load -max 5 [get_ports {y}]\n")
+    text, rec = SE.staged_sdc_pad_input_drive(
+        project, staged, "input/constraints/external.sdc",
+        analysis_top="neutral_core")
+    assert rec["verdict"] == "PAD_TRANSLATED"
+    assert rec["pad_model_basis"]["views"][0]["capacitance_unit_pf"] == 1.0
+    assert "set_load -max 0.04 [get_ports {y}]" in text
+
+
 def test_issue3427_core_boundary_translates_external_pad_constraints(tmp_path):
     """25 ns / 5 pF stay external facts; the core sees the selected pad."""
     import sdc_environment as SE

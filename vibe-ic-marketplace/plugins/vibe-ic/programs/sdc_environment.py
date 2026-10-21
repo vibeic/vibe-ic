@@ -381,17 +381,21 @@ def _signal_pad_instances(record: Dict[str, object]) -> Dict[str, object]:
 
 def _liberty_capacitance_unit_pf(text: str) -> Optional[float]:
     """Return the pF represented by one Liberty capacitance unit."""
+    gap = r"(?:\s|\\\r?\n|/\*.*?\*/|//[^\r\n]*(?:\r?\n|$))*"
     match = re.search(
-        r"\bcapacitive_load_unit\s*\(\s*([0-9.eE+-]+)\s*,\s*([fpnu]f)\s*\)",
-        text, re.I)
+        r"\bcapacitive_load_unit" + gap + r"\(" + gap
+        + r"([0-9.eE+-]+)" + gap + r"," + gap
+        + r'(?:"([fpnu]f)"|([fpnu]f))' + gap + r"\)",
+        text, re.I | re.S)
     if not match:
         return None
     try:
         number = float(match.group(1))
     except ValueError:
         return None
+    unit = match.group(2) or match.group(3)
     scale = {"ff": 1e-3, "pf": 1.0, "nf": 1e3, "uf": 1e6}.get(
-        match.group(2).lower())
+        unit.lower())
     return number * scale if scale is not None and number > 0 else None
 
 
