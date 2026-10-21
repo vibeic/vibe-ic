@@ -39,6 +39,7 @@ import argparse
 import json
 import re
 import sys
+from collections import Counter
 from dataclasses import dataclass, asdict, field
 from pathlib import Path
 
@@ -1284,6 +1285,41 @@ def build_interface_map(
 _NOTHING_EXAMINED: List[str] = []
 
 
+def _bind_native_instances(source_instances, children, parent_module):
+    """Expand one live source template to its complete native replica set."""
+    name_population = Counter(instance.inst_name for instance in source_instances)
+    seen = set()
+    active = []
+    for instance in source_instances:
+        candidates = sorted(cell for cell in children
+                            if cell == instance.inst_name or
+                            cell.endswith('.' + instance.inst_name))
+        if (not candidates or
+                (len(candidates) > 1 and name_population[instance.inst_name] != 1)):
+            raise ValueError(
+                f'unsupported source/native instance: {parent_module}.{instance.inst_name}')
+        replicas = []
+        for cell in candidates:
+            if cell in seen:
+                raise ValueError(
+                    f'duplicate source/native instance: {parent_module}.{instance.inst_name}')
+            seen.add(cell)
+            replicas.append(cell)
+            active.append(InstanceInfo(
+                inst_name=cell,
+                module_type=children[cell],
+                parent_module=instance.parent_module,
+                connections=dict(instance.connections),
+                connection_expressions=dict(instance.connection_expressions)))
+        if len(replicas) > 1:
+            _CONFIGURATION.setdefault('native_instance_replicas', []).append({
+                'module': parent_module, 'source_instance': instance.inst_name,
+                'native_instances': replicas})
+    if seen != set(children):
+        raise ValueError(f'incomplete source/native child population: {parent_module}')
+    return active
+
+
 def _active_native_view(modules, headers, files, top, defines, parameters,
                         include_dirs, output_dir):
     """Bind configured source bodies to the existing native elaboration owner.
@@ -1413,20 +1449,10 @@ def _active_native_view(modules, headers, files, top, defines, parameters,
         children = {cell_name: cell['type']
                     for cell_name, cell in native.get('cells', {}).items()
                     if cell['type'] in native_modules}
-        seen = set()
-        for instance in parse_instances(lexical_mask(body, attributes=True), name,
-                                         native_checked=True):
-            candidates = [cell for cell in children
-                          if cell == instance.inst_name or
-                          cell.endswith('.' + instance.inst_name)]
-            if len(candidates) != 1 or candidates[0] in seen:
-                raise ValueError(f'unsupported source/native instance: {name}.{instance.inst_name}')
-            cell = candidates[0]
-            seen.add(cell)
-            instance.module_type = children[cell]
-            active_instances.append(instance)
-        if seen != set(children):
-            raise ValueError(f'incomplete source/native child population: {name}')
+        source_instances = parse_instances(
+            lexical_mask(body, attributes=True), name, native_checked=True)
+        active_instances.extend(_bind_native_instances(
+            source_instances, children, name))
     return active_modules, active_instances
 
 
