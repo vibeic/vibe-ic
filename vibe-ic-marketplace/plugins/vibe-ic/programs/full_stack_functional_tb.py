@@ -677,6 +677,36 @@ def _family_of(text: str) -> str:
     return "authored_or_delivered"
 
 
+def seed_canonical_authored_oracles(project: Path, cases: List[dict],
+                                    out_dir: Path, record: Dict[str, Any]
+                                    ) -> set[str]:
+    """Copy Step-4's admitted authored oracles into this fresh producer tree.
+
+    The full-stack producer has a private output directory, but authored unit
+    TBs live at the canonical Step-4 consumer input.  Use that producer's own
+    authored-source grammar; generated/scaffold files never gain credit here.
+    ``authored_unit_tb_paths`` also refuses ambiguous ``.v``/``.sv`` pairs.
+    """
+    import testbench_gen as _tbg
+    declared = {str(case.get("name") or case.get("id") or "") for case in cases}
+    copied: set[str] = set()
+    out_dir.mkdir(parents=True, exist_ok=True)
+    for source in _tbg.authored_unit_tb_paths(project):
+        if source.stem not in declared:
+            continue
+        target = out_dir / source.name
+        shutil.copy2(source, target)
+        digest = sha256_file(source)
+        if sha256_file(target) != digest:
+            raise OSError(f"canonical authored oracle copy changed bytes: {source}")
+        record.setdefault("canonical_authored", []).append({
+            "case": source.stem, "source": _rel(project, source),
+            "sha256": digest, "path": _rel(project, target),
+        })
+        copied.add(source.stem)
+    return copied
+
+
 def arithmetic_plan_for_top(project: Path, case: dict, ic_class: str,
                             top: dict, models: list, request: dict) -> Optional[dict]:
     """Re-use the normal producer with the actual selected observation surface.
@@ -907,6 +937,12 @@ def generate(project: Path, container: Optional[str] = None,
         return _finish(NOT_MEASURED, ZERO_DENOMINATOR,
                        "the design input declares no L10 test case, so there "
                        "is no functional case to run through the full stack")
+    try:
+        canonical_authored = seed_canonical_authored_oracles(
+            project, cases, fdir, rec)
+    except (OSError, ValueError) as exc:
+        return _finish(NOT_MEASURED, EXECUTION_ERROR,
+                       f"canonical Step-4 authored oracle intake refused: {exc}")
     core = str(top["core_module"])
     core_mod, core_ports, why = _tbg.resolve_dut(project, core)
     if core_mod is None:
@@ -968,6 +1004,8 @@ def generate(project: Path, container: Optional[str] = None,
             name = str(case.get("name") or case.get("id") or "")
             if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_$]*", name):
                 continue
+            if name in canonical_authored:
+                continue
             authored = _tbg.authored_oracle_preserved(previous, name, None)
             if authored is not None:
                 target = fdir / f"{name}.v"
@@ -1001,7 +1039,8 @@ def generate(project: Path, container: Optional[str] = None,
         if cov:
             # The ladder may have grounded it; a testbench for a case that is
             # not counted must not sit beside the ones that are.
-            (fdir / f"{name}.v").unlink(missing_ok=True)
+            for suffix in (".v", ".sv"):
+                (fdir / f"{name}{suffix}").unlink(missing_ok=True)
             entry.update(state=EXCLUDED, step5_disposition=cov, reason=(
                 f"the case's acceptance `{case.get('expected')}` is a coverage "
                 f"FIGURE its own text names ({cov['basis']['names_coverage_in']}"
@@ -1009,7 +1048,10 @@ def generate(project: Path, container: Optional[str] = None,
                 f"it is not a functional full-stack case and is not counted "
                 f"as one"))
             continue
-        path = fdir / f"{name}.v"
+        # The canonical Step-4 source may be SystemVerilog.  Select the same
+        # admitted authored variant instead of silently looking only for .v.
+        path = (_tbg.authored_oracle_preserved(fdir, name, None)
+                or fdir / f"{name}.v")
         if not path.is_file():
             entry.update(state=NO_ORACLE, reason=(
                 "no oracle family grounds this case from the design input"),

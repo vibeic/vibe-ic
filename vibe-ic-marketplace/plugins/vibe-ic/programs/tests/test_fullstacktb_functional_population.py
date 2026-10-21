@@ -244,6 +244,61 @@ def test_new_handoff_retains_old_failures_and_authored_fullstack_provenance(tmp_
         assert (archive / name).read_text() == text
 
 
+def test_fresh_fullstack_seeds_canonical_step4_authored_sv(tmp_path):
+    fs = _fsf()
+    case = {'name': 'canonical_case', 'kind': 'functional_vector',
+            'stimulus': 'drive x=1 and y=1', 'expected': 'p is observed'}
+    project = _mk_project(tmp_path, die=True, cases=[case])
+    source = project / 'phase2/stage1/sim/tb/canonical_case.sv'
+    authored = '''module canonical_case;
+      reg clk=0, rst=0; reg [7:0] x=1; reg y=1; wire p;
+      dut_core dut(.clk(clk),.rst(rst),.x(x),.y(y),.p(p));
+      initial begin $display("[TB canonical_case] PASS"); $finish; end
+    endmodule
+    '''
+    _write(source, authored)
+    out = project / 'phase2/stage1/sim_full_stack/functional_seed_probe'
+    record = {}
+    copied = fs.seed_canonical_authored_oracles(project, [case], out, record)
+    staged = out / source.name
+    assert copied == {'canonical_case'}
+    assert staged.read_bytes() == source.read_bytes()
+    assert record['canonical_authored'][0]['source'].endswith(source.name)
+
+    calls = []
+    def dispatch(argv, *_args):
+        calls.append(argv)
+        return (0, '[TB canonical_case] PASS\n') if argv[0] == 'vvp' else (0, '')
+    result = fs.generate(project, route='DIE', dispatch=dispatch,
+                         model_resolver=_resolver)
+    entry = result['cases'][0]
+    assert result['verdict'] == 'PASS', result
+    assert entry['state'] == 'passed' and entry['family'] == 'authored_or_delivered'
+    assert entry['retarget'].endswith('`chip_top`')
+    assert result['canonical_authored'][0]['sha256'] == fs.sha256_file(source)
+    assert len(calls) == 2
+
+
+def test_canonical_seed_rejects_generated_undeclared_and_duplicate_sources(tmp_path):
+    fs = _fsf()
+    tbg = importlib.import_module('testbench_gen')
+    case = {'name': 'declared_case'}
+    project = _mk_project(tmp_path, die=False, cases=[case])
+    unit = project / 'phase2/stage1/sim/tb'
+    _write(unit / 'generated_case.v',
+           '// ' + tbg.ORACLE_GENERATED_MARKER + 'unit\nmodule generated_case; endmodule\n')
+    _write(unit / 'undeclared_case.sv', 'module undeclared_case; endmodule\n')
+    out = project / 'seed_negative'
+    record = {}
+    assert fs.seed_canonical_authored_oracles(project, [case], out, record) == set()
+    assert not out.exists() or not list(out.iterdir())
+
+    _write(unit / 'declared_case.v', 'module declared_case; endmodule\n')
+    _write(unit / 'declared_case.sv', 'module declared_case; endmodule\n')
+    with pytest.raises(ValueError, match='duplicate unit TB case'):
+        fs.seed_canonical_authored_oracles(project, [case], out, {})
+
+
 @pytest.mark.parametrize('mutation', ['stale_identity', 'missing_population'])
 def test_observation_source_receipt_controls_still_refuse_missing_evidence(tmp_path, mutation):
     project, cases, models, calls, transport = _observation_project(tmp_path)
