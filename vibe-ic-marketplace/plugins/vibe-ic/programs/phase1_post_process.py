@@ -560,9 +560,24 @@ def _l24_extract(project_dir: Path) -> Optional[Dict[str, Any]]:
     return extract_signoff_requirements(project_dir)
 
 
+def _l25_extract(project_dir: Path) -> Optional[Dict[str, Any]]:
+    """L25's explicit negative qualification/reliability facts."""
+    from l25_reliability_negative_extract import extract_negative_reliability
+    return extract_negative_reliability(project_dir)
+
+
 #: Layer -> source extractor. A layer without an entry keeps its skeleton.
 #: L23 preserves typed source clauses; L24 extracts signoff requirements.
-_LAYER_EXTRACTORS: Dict[str, Any] = {"L23": _l23_extract, "L24": _l24_extract}
+_LAYER_EXTRACTORS: Dict[str, Any] = {
+    "L23": _l23_extract,
+    "L24": _l24_extract,
+}
+
+# Negative-fact extractors are conditional: merely mentioning the layer's
+# subject does not mean there is a negative statement to emit.  Keep them out
+# of `_LAYER_EXTRACTORS`, whose established contract is that a present subject
+# is fully handled and therefore earns EXTRACTED.
+_LAYER_NEGATIVE_FACT_EXTRACTORS: Dict[str, Any] = {"L25": _l25_extract}
 
 
 def _term_in(term: str, lowered_text: str) -> bool:
@@ -728,7 +743,9 @@ def emit_l_doc_skeleton(l_doc_code: str,
     # skeleton. Today that is L24; the registry is the extension point.
     extracted = None
     if not absent and project_dir is not None:
-        extractor = _LAYER_EXTRACTORS.get(str(l_doc_code or "").upper())
+        code = str(l_doc_code or "").upper()
+        extractor = (_LAYER_EXTRACTORS.get(code)
+                     or _LAYER_NEGATIVE_FACT_EXTRACTORS.get(code))
         if extractor is not None:
             try:
                 extracted = extractor(Path(project_dir))
@@ -738,7 +755,10 @@ def emit_l_doc_skeleton(l_doc_code: str,
                 print(f"LAYER_EXTRACTION_FAILED {l_doc_code}: {exc}", file=sys.stderr)
                 extracted = None
     if extracted:
-        fields_template.update(extracted)
+        if str(l_doc_code or "").upper() == "L25":
+            fields_template.update(extracted.get("fields", {}))
+        else:
+            fields_template.update(extracted)
     # L22 owns the width-by-regression obligation.  Preserve the relation when
     # the input states it, instead of emitting the historical empty skeleton.
     matrix = _extract_regression_matrix(project_dir) if str(l_doc_code).upper() == "L22" else {}
@@ -784,6 +804,11 @@ def emit_l_doc_skeleton(l_doc_code: str,
                     "label": f"{key} ({record['evidence']})",
                 })
         out["evidence"] = evidence
+    elif extracted and str(l_doc_code or "").upper() == "L25":
+        out["extraction_evidence"] = extracted.get("extraction_evidence", {})
+        out["evidence"] = extracted.get("extraction_evidence", {})
+        out["source_documents"] = extracted.get("source_documents", [])
+        out["extraction_evidence_scan"] = extracted.get("scan", {})
     elif extracted:
         out["extraction_evidence_scan"] = extracted.get(
             "signoff_requirements_scan")
@@ -895,6 +920,10 @@ def _skeleton_fields_for(l_doc_code: str) -> Dict[str, Any]:
             "qual_standard": None,     # e.g. "JESD47" / "AEC-Q100" / null
             "em_budget": None,
             "aging_margin": None,      # NBTI / HCI aging headroom
+            # Negative facts are not numerical qualification claims.  They
+            # preserve what the input explicitly withholds or leaves open.
+            "qualification_status": None,
+            "unmeasured_obligations": [],
         },
         "L26": {
             "transducer_type": None,   # transduction principle
