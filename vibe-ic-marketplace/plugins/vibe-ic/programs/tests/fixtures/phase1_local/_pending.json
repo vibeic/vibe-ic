@@ -405,5 +405,16 @@
     "version_observed": "1.30.32, exact official commit400840b089083915d9420191b8397ce5c92025a1, tree55b5ad54216f1615c365fdadaee31f2b09bdd51c. No moving-main or tool-image assumption.",
     "version_lkg": "Unknown.",
     "fixture_path": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/fixtures/phase1_local/neutral_wrapped_block_latency/wrapped_latency.md"
+  },
+  {
+    "issue": 3462,
+    "project": "neutral_explicit_full_duplex_l2",
+    "layer": "L2_FRS",
+    "field": "protocol_overview.half_duplex",
+    "expected": "`protocol_overview` is an object with source-bound `half_duplex: false`; `no_protocol_overview_in_input` is false.",
+    "actual": "`protocol_overview` is null while `no_protocol_overview_in_input` is false.",
+    "version_observed": "v1.30.61, v1.30.96, and current main 3ce036897d",
+    "version_lkg": "Unknown",
+    "fixture_path": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/fixtures/phase1_local/neutral_explicit_full_duplex_l2/interface_decisions.md"
   }
 ]

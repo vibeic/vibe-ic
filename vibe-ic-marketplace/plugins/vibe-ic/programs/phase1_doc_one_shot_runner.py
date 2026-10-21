@@ -24303,6 +24303,65 @@ def gen_l2_frs(project: Path,
             evidence.setdefault(f"input/docs/{fname}", []).extend(rejected)
     protocol_concat = " ".join(protocol_extracted.values())
 
+    # #3462 — an explicit boolean binding is stronger than topology
+    # inference.  In particular, `half_duplex = false` is a positive fact,
+    # not the absence of the `half-duplex` keyword.  Only accept the fully
+    # qualified field path with `=`, `:`, or `to`; a bare `full-duplex`
+    # mention is not enough to populate a typed field.  Negated instructions
+    # such as "do not set ..." are refused.
+    _EXPLICIT_HALF_DUPLEX_RE = re.compile(
+        r"`?protocol_overview\s*\.\s*half_duplex`?\s*"
+        r"(?:=|:|\bto\b)\s*`?(true|false)`?",
+        re.IGNORECASE,
+    )
+    _EXPLICIT_BINDING_NEGATION_RE = re.compile(
+        r"\b(?:do\s+not|don't|must\s+not|shall\s+not|never)\b"
+        r"[^.!?]{0,64}$",
+        re.IGNORECASE,
+    )
+    _explicit_half_duplex_bindings: List[Dict[str, Any]] = []
+    for _fname, _text in extracted.items():
+        for _line_no, _line in enumerate((_text or "").splitlines(), 1):
+            for _match in _EXPLICIT_HALF_DUPLEX_RE.finditer(_line):
+                if _EXPLICIT_BINDING_NEGATION_RE.search(
+                        _line[:_match.start()]):
+                    continue
+                _explicit_half_duplex_bindings.append({
+                    "value": _match.group(1).lower() == "true",
+                    "source": f"input/docs/{_fname}",
+                    "line": _line_no,
+                    "literal": _match.group(0),
+                })
+    _explicit_half_duplex_values = {
+        b["value"] for b in _explicit_half_duplex_bindings
+    }
+    _explicit_half_duplex_conflict = (
+        len(_explicit_half_duplex_values) > 1
+    )
+    _explicit_half_duplex_value = (
+        next(iter(_explicit_half_duplex_values))
+        if len(_explicit_half_duplex_values) == 1 else None
+    )
+    if _explicit_half_duplex_conflict:
+        evidence.setdefault(
+            "protocol_overview.explicit_half_duplex_conflict", []
+        ).append({
+            "literal": "true and false",
+            "label": (
+                "conflicting explicit protocol_overview.half_duplex "
+                "bindings — protocol_overview left unresolved"
+            ),
+        })
+    elif _explicit_half_duplex_bindings:
+        for _binding in _explicit_half_duplex_bindings:
+            evidence.setdefault(_binding["source"], []).append({
+                "literal": _binding["literal"],
+                "label": (
+                    "explicit protocol_overview.half_duplex binding "
+                    f"(line {_binding['line']})"
+                ),
+            })
+
     # Detect half-duplex / single-wire keywords for protocol_overview.
     # v1.6.38 — chip-AGNOSTIC extension. Recognises both English and
     # CJK forms of the keyword, and infers half-duplex from the
@@ -24886,7 +24945,7 @@ def gen_l2_frs(project: Path,
         return False
 
     protocol_evidence_found = (
-        half_duplex or one_wire
+        bool(_explicit_half_duplex_bindings) or half_duplex or one_wire
         or any(_has_bus_protocol_evidence(t) for t in protocol_extracted.values())
     )
     # v1.6.295 — for #180 ORGANIC. Compute the class-and-shape-count
@@ -24914,7 +24973,10 @@ def gen_l2_frs(project: Path,
     # suppressed protocol_overview (CPU / analog class OR <2
     # half-duplex shape signals), force the flag to True so the
     # canonical null+flag invariant holds.
-    if protocol_evidence_found and not _v1_6_295_protocol_overview_emit_ok:
+    if (protocol_evidence_found
+            and not _v1_6_295_protocol_overview_emit_ok
+            and _explicit_half_duplex_value is None
+            and not _explicit_half_duplex_conflict):
         no_protocol_overview_in_input = True
     no_frs_sections_in_input = not sections
 
@@ -25021,7 +25083,28 @@ def gen_l2_frs(project: Path,
     # (`_v1_6_295_protocol_overview_emit_ok`) was computed earlier
     # in this function so the flag-computation step could consult
     # it. Apply it here as the final emit guard.
-    if protocol_evidence_found and _v1_6_295_protocol_overview_emit_ok:
+    if (_explicit_half_duplex_value is not None
+            and not _explicit_half_duplex_conflict):
+        _explicit_sources = sorted({
+            b["source"] for b in _explicit_half_duplex_bindings
+        })
+        protocol_overview = {
+            "half_duplex": _explicit_half_duplex_value,
+            # An explicit duplex choice does not state a physical wire count.
+            "wire_count": 1 if one_wire else None,
+            "byte_order": (
+                f"{byte_order_value}-first" if byte_order_value else None),
+            "wake_required_pre_command": (
+                True if wake_required_match else None),
+            "evidence": (
+                "explicit protocol_overview.half_duplex="
+                f"{str(_explicit_half_duplex_value).lower()} binding in "
+                + ", ".join(_explicit_sources)
+            ),
+        }
+    elif (not _explicit_half_duplex_conflict
+          and protocol_evidence_found
+          and _v1_6_295_protocol_overview_emit_ok):
         protocol_overview = {
             "half_duplex": half_duplex,
             "wire_count": 1 if one_wire else (4 if "spi" in protocol_concat.lower() else 2),
@@ -25043,7 +25126,9 @@ def gen_l2_frs(project: Path,
         }
     else:
         protocol_overview = None
-        if protocol_evidence_found and not _v1_6_295_protocol_overview_emit_ok:
+        if (protocol_evidence_found
+                and not _v1_6_295_protocol_overview_emit_ok
+                and not _explicit_half_duplex_conflict):
             # v1.6.295 — for #180 ORGANIC. Emit a provenance hint so
             # downstream consumers can distinguish suppressed-by-gate
             # from never-saw-keyword.
