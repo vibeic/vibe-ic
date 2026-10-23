@@ -14938,16 +14938,56 @@
           "provider": "librelane",
           "tools": "Vibeic.GateLevelSim",
           "native_steps": [
-            "Vibeic.GateLevelSim"
+            "Vibeic.GateLevelSim.compile",
+            "Vibeic.GateLevelSim.simulate_sdf"
           ],
-          "capability_status": "LIMITED_SDF_UNQUALIFIED",
-          "execution_status": "UNIMPLEMENTED"
+          "capability_status": "SUPPORTED_LIMITED_ICARUS_SDF_COMPONENT",
+          "execution_status": "NATIVE_COMPONENT_ONLY_NOT_109_ACCEPTED",
+          "dispatch": {
+            "kind": "native_adapter",
+            "adapter": "flow109_final_gls",
+            "native_step_id": "flow109.D71",
+            "producer": "flow109_final_gls.py:execute",
+            "consumer": "post_layout_sim_check.py:audit",
+            "engine_families": [
+              "iverilog",
+              "vvp"
+            ],
+            "engine_executables": {
+              "iverilog": "iverilog",
+              "vvp": "vvp"
+            },
+            "engine_steps": {
+              "iverilog": [
+                "Vibeic.GateLevelSim.compile"
+              ],
+              "vvp": [
+                "Vibeic.GateLevelSim.simulate_sdf"
+              ]
+            },
+            "acceptance_scope": "final_sdf_gls_component_only",
+            "flow109_metrics_status": "UNIMPLEMENTED",
+            "native_required_outputs": [
+              "gls_runs.json",
+              "final per-corner SDF readback",
+              "declared scenario x corner annotation population",
+              "post_layout_sim_check.json"
+            ]
+          },
+          "limitations": [
+            "Icarus/vvp only; no alternate or commercial simulator result",
+            "qualified component semantics are observed SDF delay application plus declared self-checking functional scenarios",
+            "required timing-check semantics beyond this subset refuse",
+            "component PASS is not final-row, signoff, whole-flow or whole-IC acceptance"
+          ]
         }
       ],
       "complementary_tools": [],
-      "capability_status": "LIMITED_SDF_UNQUALIFIED",
-      "availability_status": "NOT_INVENTORIED_THIS_UPDATE",
+      "capability_status": "SUPPORTED_LIMITED_ICARUS_SDF_COMPONENT",
+      "availability_status": "NATIVE_COMPONENT_ROUTED",
       "source_components": [
+        "flow109_final_gls",
+        "sdf_gate_sim",
         "post_layout_sim_check"
       ],
       "obligations": [
