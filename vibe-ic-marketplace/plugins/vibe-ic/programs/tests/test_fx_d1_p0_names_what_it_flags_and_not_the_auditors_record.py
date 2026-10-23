@@ -224,10 +224,10 @@ def test_redirected_receipt_is_preserved_under_the_project_runtime_state(
     # Exercise the shipped owner command, rather than a fixture-only alias.
     flow = repo_path("vibe-ic-marketplace", "plugins", "vibe-ic",
                      "flow", "phase1_phase2_phase3.yaml").read_text()
-    command = "stage3_compliance . --json reports/phase3/gates/stage3_compliance.json"
+    command = "stage3_compliance . --json reports/phase3/gates/stage3_compliance_verdict.json"
     assert command in flow
     project = _project(tmp_path)
-    target = project / "reports/phase3/gates/stage3_compliance.json"
+    target = project / "reports/phase3/gates/stage3_compliance_verdict.json"
     target.parent.mkdir(parents=True, exist_ok=True)
     seed = b'{"overall":"FAIL","project":"prior-project"}\n'
     target.write_bytes(seed)

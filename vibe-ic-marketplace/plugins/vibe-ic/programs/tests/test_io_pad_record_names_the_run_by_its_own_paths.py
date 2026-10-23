@@ -58,6 +58,7 @@ import _designs_root as DR                              # noqa: E402
 import _l_doc_pad_placement as LPP                      # noqa: E402
 import test_io_pad_chip_top_gen as IO                   # noqa: E402
 import test_io_pad_power_domain_plan as PDP             # noqa: E402
+import fault_scan_chain_insert as SCI                   # noqa: E402
 
 GEN = PROGRAMS / "io_pad_chip_top_gen.py"
 GATE = PROGRAMS / "project_outputs_in_tree_check.py"
@@ -120,6 +121,43 @@ def _container_run_with_scan_core(tmp: Path) -> Tuple[Path, Path]:
     record carries the netlist too). Built, relocated to the container spelling,
     produced there, then relocated to the host spelling."""
     proj, _cfg, _plan = IO._scan_project(tmp)
+    # Bring the older path-relocation fixture up to the current scan-selection
+    # contract.  A published bit alone is no longer enough: PnR selects the
+    # post-DFT subject only when its exact L20 bytes and measured chain agree.
+    net = proj / "phase2/stage2/synth/post_dft_netlist.v"
+    text = net.read_text().replace("serial_in", "sin").replace(
+        "serial_out", "sout").replace("scan_enable", "shift")
+    net.write_text(text)
+    l20 = proj / "phase1/generated_docs/L20_DFT_SCAN_TOPOLOGY.json"
+    l20.write_text(json.dumps({
+        "doc_id": "L20", "applicability": "APPLICABLE",
+        "extraction_status": "EXTRACTED", "fields": {
+            "dft_present": True, "scan_chains": [{
+                "name": "core_scan", "length": 1, "scan_in": "sin",
+                "scan_out": "sout", "clock": "clk"}]}}))
+    meta_path = proj / "reports/phase2/dft/scan_chain.json"
+    meta = json.loads(meta_path.read_text())
+    meta.update({
+        "dft_ports": ["sin", "sout", "shift"],
+        "functional_mode_tieoff": {"sin": 0, "shift": 0},
+        "scan_out_port": "sout", "clock": "clk",
+        "input_flop_count": 1, "internal_chain_length": 1})
+    binding, problems = SCI.load_l20_scan_contract(proj, "clk", 1)
+    assert binding is not None and not problems, problems
+    meta["l20_contract"] = binding
+    meta["l20_reconciliation"] = SCI.reconcile_l20_scan_contract(binding, meta)
+    meta_path.write_text(json.dumps(meta))
+    plan_path = proj / "config/dft_test_access.json"
+    plan = json.loads(plan_path.read_text())
+    plan.update({
+        "netlist_sha256": _sha(net),
+        "scan_metadata_sha256": _sha(meta_path),
+        "functional_mode": {"sin": 0, "shift": 0},
+        "ports": [{"name": name, "direction": direction, "side": "W"}
+                  for name, direction in (("sin", "input"),
+                                           ("sout", "output"),
+                                           ("shift", "input"))]})
+    plan_path.write_text(json.dumps(plan))
     spec_path = proj / "phase1/generated_docs/L9_INTEGRATION_SPEC.json"
     spec = json.loads(spec_path.read_text())
     spec["top_ports"].append({"name": "i_unbuilt", "direction": "input",

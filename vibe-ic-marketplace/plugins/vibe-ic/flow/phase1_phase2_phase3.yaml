@@ -422,7 +422,7 @@ stages:
       # measured at v1.13.54: 6 clauses under `stages:`, 0 dispatchable). The
       # command now lives on the step named below -- ONE declaration, in the
       # section the engine reads -- and this back-pointer says where.
-      dispatched_by: "37"
+      dispatched_by: "36"
 
   # v1.6.13 Wave 88 — Mixed-Signal Integration (M1-M4) inserted
   # between digital stage3 and stage4. Required when analog blocks

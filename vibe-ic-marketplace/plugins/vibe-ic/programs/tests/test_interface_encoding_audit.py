@@ -1310,6 +1310,11 @@ def test_receipt_consumer_refuses_unknown_rows_dropped_from_population(tmp_path)
     report['interfaces'] = retained
     report['summary'].update(total_interfaces=1, matches=1, mismatches=0,
                              unknowns=0, verdict='PASS')
+    # Keep every redundant count internally consistent so this mutation tests
+    # the population binding itself, not the earlier generic count validator.
+    report['semantic_coverage'].update(
+        complete=True, total_interfaces=1, decided=1,
+        not_applicable=0, unknown=0)
     report['producer_returncode'] = 0
     (tmp_path / 'out/encoding_audit_report.json').write_text(json.dumps(report))
     finding = _consume_encoding_receipt(tmp_path)

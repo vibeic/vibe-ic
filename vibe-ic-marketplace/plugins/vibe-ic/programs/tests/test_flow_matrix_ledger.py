@@ -796,6 +796,7 @@ PINNED_OUTPUT_MEMBERS = frozenset({
     ('18', 'reports/spare_cell_coverage.json'),
     ('19', 'phase3/stage3/cts/clock_tree.rpt'),
     ('19', 'phase3/stage3/pnr/post_cts.def'),
+    ('19', 'reports/phase3/librelane_cts_handoff.json'),
     ('2', 'reports/crosslayer/rewrite_equivalence_check.json'),
     ('2', 'reports/phase2/lint/rom_init_lint.json'),
     ('2', 'reports/phase2/lint/rtl_hygiene.json'),
@@ -900,6 +901,7 @@ PINNED_OUTPUT_MEMBERS = frozenset({
     ('37.5ip', 'reports/phase3/digital_hardmacro.json'),
     ('38', 'phase3/stage4/foundry_handoff/corner_test_vectors.json'),
     ('38', 'phase3/stage4/foundry_handoff/mask_spec.json'),
+    ('38', 'phase3/stage4/foundry_handoff/release_manifest.json'),
     ('38', 'phase3/stage4/foundry_handoff/scribe_line_layout.gds OR phase3/stage4/foundry_handoff/scribe_line_layout.PENDING_FOUNDRY.txt'),
     ('38', 'phase3/stage4/foundry_handoff/wat_plan.json'),
     ('38', 'reports/audit/tapeout_checklist.json'),
@@ -1494,7 +1496,12 @@ def test_output_entries_classify_into_the_four_kinds():
     # Step15 publishes the physical SDC before any downstream consumer (+1 FILE).
     # 61b7c4f54 declares the native Step23 STA handoff (+1 FILE, no removals).
     # Step31 native DRC transcript is also a final-metrics input (+1 FILE).
-    assert seen[F.FILE] == 170, (seen, REDERIVE)
+    # 2026-10-24: 227 -> 229, FILE 170 -> 172.  Re-derived by diffing the
+    # live (step, entry) set against this pin: step 19 declares the immutable
+    # LibreLane CTS handoff consumed by step 20, and step 38 declares the
+    # release manifest its resumed native producer writes.  Both are canonical
+    # plain paths; no member left and GLOB/ANY_OF did not move.
+    assert seen[F.FILE] == 172, (seen, REDERIVE)
     assert seen[F.GLOB] == 30, (seen, REDERIVE)
     assert seen[F.ANY_OF] == 27, (seen, REDERIVE)
     # Reported to the orchestrator: the PROGRAM_EXIT form described in the brief

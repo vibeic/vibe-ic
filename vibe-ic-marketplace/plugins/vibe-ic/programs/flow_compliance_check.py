@@ -10603,6 +10603,7 @@ def _structural_gate_argv(gate_name: str,
             project, "phase23_completion_audit.json").relative_to(
                 project).as_posix()]
     if (gate_name == "project_outputs_in_tree_check"
+            and "interface_encoding_audit" not in _STRUCTURAL_RTL_GATES
             and _UNDRIVABLE_BY_STRUCTURAL_UMBRELLA.get(
                 "interface_encoding_audit", {}).get("active_project_p0") is False):
         # The canonical registry retired this producer from project P0. Its

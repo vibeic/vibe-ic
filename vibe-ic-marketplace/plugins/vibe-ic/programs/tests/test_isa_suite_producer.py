@@ -1558,7 +1558,13 @@ def _3130_cache(tmp_path, monkeypatch, mode):
     # The archive input must be byte-identical across independent QA arms.
     monkeypatch.setitem(globals(), 'TARBALL',
                         gzip.compress(gzip.decompress(TARBALL), mtime=0))
-    base = Path(os.environ['ISSUE3130_VOLATILE_ALIAS']) / tmp_path.name
+    # Fleet measurement may retain these observations in caller-owned roots,
+    # but an ordinary suite invocation must remain self-contained.  The prior
+    # fixture made both variables undeclared mandatory inputs and all eleven
+    # controls failed before exercising acquisition or storage.
+    alias = os.environ.get('ISSUE3130_VOLATILE_ALIAS')
+    base = ((Path(alias) / tmp_path.name) if alias
+            else (tmp_path / 'volatile-alias'))
     base.mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr(I.tempfile, 'gettempdir', lambda: str(base))
     monkeypatch.delenv('VIBEIC_ISA_SUITE_CACHE', raising=False)
@@ -1582,7 +1588,8 @@ def _3130_storage(project, output):
 
 def _3130_observed(tmp_path, value):
     import os
-    folder = Path(os.environ['ISSUE3130_VALUES_DIR'])
+    values = os.environ.get('ISSUE3130_VALUES_DIR')
+    folder = Path(values) if values else tmp_path / 'observed-values'
     folder.mkdir(parents=True, exist_ok=True)
     value['input'] = {'tarball_sha256': _sha(TARBALL),
                       'files': {k: _sha(v) for k, v in FILES.items()},

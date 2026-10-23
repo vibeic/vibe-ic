@@ -76,5 +76,8 @@ def test_main_publishes_before_it_audits():
              and n.func.id in ("_publish_record_before_audit",
                                "_audit_after_declared_producers")]
     names = [c[1] for c in sorted(calls)]
+    # The first publication feeds complete Phase-2 consumers.  The second is
+    # the fresh, immediately-adjacent publication that the final audit judges.
     assert names == ["_publish_record_before_audit",
+                     "_publish_record_before_audit",
                      "_audit_after_declared_producers"], names
