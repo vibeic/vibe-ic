@@ -21,9 +21,21 @@ Spec key classification (case-insensitive substring / suffix):
     TRAN : 'tpd', 'tr', 'tf', 'slew', 'settling', 'rise', 'fall', 'jitter',
            'period', 'tphl', 'tplh'
 
-Each spec value may be a bare number or {"value":.., "unit":..}; the value is
-informational (emitted as a trailing comment) — the .meas line itself does
-not need the target value to be a valid measurement extraction.
+Two input shapes are accepted:
+  * map:  {"vout_dc": {"value": 1.2, "unit": "V"}, ...}
+  * canonical list: {"specs": [{"name": "tpd", "target": 5.0,
+                                "unit": "ns", ...}, ...]}
+
+Targets, bounds, and units are copied verbatim into trailing comments.  They
+are never converted, defaulted, or used as simulated values.  A canonical-list
+row with no supported measurement template (notably ENOB/SNDR, which require a
+coherent stimulus and an appropriate capture) makes the generator refuse the
+whole deck.  It never emits a partial deck that could be mistaken for coverage
+of every declared measurement.  Explicit measurement-window metadata is also
+refused until a template can apply that window, rather than silently dropping
+it.  Canonical-list DC and AC rows likewise refuse when the schema does not
+declare the required sweep point or AC frequency; the legacy map interface is
+left unchanged for its existing callers.
 
 Honest-FAIL guarantees:
   * missing spec.json                       -> exit 1, no output
@@ -49,7 +61,7 @@ import argparse
 import json
 import sys
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 GATE = "analog_meas_from_spec_gen"
 
@@ -74,11 +86,11 @@ def _classify(key: str) -> Optional[str]:
 
 def _value_comment(val) -> str:
     if isinstance(val, dict):
-        v = val.get("value")
-        u = val.get("unit", "")
-        if v is not None:
-            return f"  $ target={v}{u}"
-        return ""
+        fields = []
+        for key in ("value", "target", "min", "max", "unit"):
+            if val.get(key) is not None:
+                fields.append(f"{key}={val[key]}")
+        return "  $ " + " ".join(fields) if fields else ""
     if isinstance(val, (int, float, str)):
         return f"  $ target={val}"
     return ""
@@ -97,17 +109,92 @@ def _emit_line(key: str, kind: str, val) -> str:
             f"TARG V(out) VAL=vmid FALL=1{comment}")
 
 
+def _flatten_spec(spec: dict) -> Tuple[Dict[str, object], List[dict], List[dict]]:
+    """Return candidates, canonical-list rows, and malformed row records.
+
+    Map-shaped inputs retain their legacy behavior.  List-shaped inputs are
+    consumed row-for-row so a declared but unsupported measurement cannot
+    disappear while another row makes the overall generator look successful.
+    """
+    candidates: Dict[str, object] = {}
+    declared: List[dict] = []
+    malformed: List[dict] = []
+    for key, value in spec.items():
+        if key not in ("specs", "targets"):
+            candidates[key] = value
+    for container_name in ("specs", "targets"):
+        container = spec.get(container_name)
+        if isinstance(container, dict):
+            for key, value in container.items():
+                if key not in ("specs", "targets"):
+                    candidates[key] = value
+        elif isinstance(container, list):
+            seen = set()
+            for index, row in enumerate(container):
+                if not isinstance(row, dict):
+                    malformed.append({"container": container_name,
+                                      "index": index,
+                                      "reason": "row_not_object"})
+                    continue
+                name = row.get("name")
+                if not isinstance(name, str) or not name.strip():
+                    malformed.append({"container": container_name,
+                                      "index": index,
+                                      "reason": "name_missing"})
+                    continue
+                name = name.strip()
+                if name in seen:
+                    malformed.append({"container": container_name,
+                                      "index": index, "name": name,
+                                      "reason": "duplicate_name"})
+                    continue
+                seen.add(name)
+                declared.append(row)
+                candidates[name] = row
+    return candidates, declared, malformed
+
+
+def _unsupported_rows(rows: List[dict]) -> List[dict]:
+    unsupported = []
+    window_keys = ("window", "measurement_window", "from", "to",
+                   "from_s", "to_s")
+    for row in rows:
+        name = str(row["name"]).strip()
+        windows = {key: row[key] for key in window_keys if key in row}
+        if windows:
+            unsupported.append({"name": name,
+                                "reason": "unsupported_measurement_window",
+                                "window": windows})
+        else:
+            kind = _classify(name)
+            if kind == "DC":
+                unsupported.append({
+                    "name": name,
+                    "reason": "dc_sweep_binding_not_declared",
+                    "unit": row.get("unit")})
+            elif kind == "AC":
+                unsupported.append({
+                    "name": name,
+                    "reason": "ac_frequency_binding_not_declared",
+                    "unit": row.get("unit")})
+            elif kind is None:
+                unsupported.append({
+                    "name": name,
+                    "reason": "unsupported_measurement_template",
+                    "unit": row.get("unit")})
+    return unsupported
+
+
 def generate(spec: dict) -> Tuple[List[str], List[Tuple[str, str]]]:
     """Return (deck_lines, [(key, kind)...]) for the measurable keys."""
     lines: List[str] = ["* auto-generated .meas deck from spec.json"]
     emitted: List[Tuple[str, str]] = []
-    # spec may nest measurable values under a 'specs'/'targets' object.
-    candidates = {}
-    for container in (spec, spec.get("specs"), spec.get("targets")):
-        if isinstance(container, dict):
-            candidates.update(container)
+    candidates, declared, _ = _flatten_spec(spec)
+    unsupported_names = {row["name"] for row in _unsupported_rows(declared)}
     for key in sorted(candidates):
         if key in ("specs", "targets"):
+            continue
+        if key in unsupported_names:
             continue
         kind = _classify(key)
         if kind is None:
@@ -134,7 +221,16 @@ def run(spec_path: Path) -> Tuple[int, dict, str]:
         return 2, {"pass": False, "reason": "spec_not_object",
                    "spec": str(spec_path)}, ""
 
+    _, declared, malformed = _flatten_spec(spec)
+    if malformed:
+        return 2, {"pass": False, "reason": "malformed_measurement_rows",
+                   "spec": str(spec_path), "rows": malformed}, ""
+    unsupported = _unsupported_rows(declared)
     deck_lines, emitted = generate(spec)
+    if unsupported:
+        return 1, {"pass": False, "reason": "unsupported_measurements",
+                   "spec": str(spec_path), "meas_lines": 0,
+                   "unsupported": unsupported}, ""
     if not emitted:
         return 1, {"pass": False, "reason": "no_measurable_keys",
                    "spec": str(spec_path), "meas_lines": 0}, ""
@@ -145,6 +241,7 @@ def run(spec_path: Path) -> Tuple[int, dict, str]:
         "spec": str(spec_path),
         "meas_lines": len(emitted),
         "emitted": [{"key": k, "kind": kind} for k, kind in emitted],
+        "schema": "canonical_list" if declared else "map",
     }
     return 0, summary, deck
 
@@ -160,7 +257,7 @@ def main(argv: Optional[list] = None) -> int:
 
     code, summary, deck = run(args.spec)
 
-    report = {"program": GATE, "version": "1.0.0", "summary": summary}
+    report = {"program": GATE, "version": "1.1.0", "summary": summary}
     if args.json:
         Path(args.json).parent.mkdir(parents=True, exist_ok=True)
         Path(args.json).write_text(
