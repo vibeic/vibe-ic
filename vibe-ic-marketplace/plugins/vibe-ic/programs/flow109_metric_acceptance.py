@@ -914,6 +914,39 @@ def _d44_identity(component: Mapping[str, Any], context: Mapping[str, Any],
     return identity
 
 
+def _d44_measurements(project: Path, context: Mapping[str, Any],
+                      component: Mapping[str, Any], obligations: Mapping[str, Any]
+                      ) -> tuple[dict, dict, dict]:
+    # Import at consumption time: flow109_final_lec imports accept_d44 for its
+    # adapter integration, so a module-level reverse import would be circular.
+    from flow109_final_lec import bind_metrics
+    current = bind_metrics(project, context, component)
+    values = current.get("metrics")
+    if not isinstance(values, Mapping) or set(values) != {
+            "final_lec_unproved", "sta_lvs_release_netlist_mapping"}:
+        missing = {"status": "NOT_MEASURED", "reason": "D44_METRIC_BINDINGS_ABSENT"}
+        return missing, missing, current
+
+    def measurement(name: str, oid: str, *, mapping: bool = False) -> dict:
+        value = values[name]
+        status = value.get("status") if isinstance(value, Mapping) else None
+        if status == "FAIL":
+            return {"status": "FAIL", "reason": value.get("reason") or
+                    "D44 measured metric failure"}
+        if status != "PASS":
+            return {"status": "NOT_MEASURED", "reason": value.get("reason") or
+                    "D44 measurement is not current"}
+        identity = _d44_identity(component, context, obligations[oid])
+        return {"status": "MEASURED",
+                "value": value.get("reference") if mapping else value.get("value"),
+                **({} if mapping else {"unit": value.get("unit")}),
+                "identity": identity}
+
+    return (measurement("final_lec_unproved", "final_lec.final_lec_unproved"),
+            measurement("sta_lvs_release_netlist_mapping",
+                        "final_lec.sta_lvs_release_netlist_mapping", mapping=True), current)
+
+
 def accept_d44(project: Path, context: Mapping[str, Any],
                component: Mapping[str, Any]) -> dict:
     """Evaluate only the two registered D44 bindings; G1-G9 remain separate."""
