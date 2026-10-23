@@ -46,6 +46,26 @@ def _native_refusal_status(code):
     return 'FAIL' if code == 'LL_STEP_FAILED' else 'NOT_MEASURED'
 
 
+def _require_fill_sensitive_extraction(d62):
+    """Refuse to call RCX unless the D62 fill is present and observable.
+
+    OpenROAD density_fill stores neutral metal as OpenDB dbFill objects.  The
+    selected OpenRCX implementation extracts routed-net wire/via shapes; an ODB
+    filename shared with D62 is therefore not proof that those dbFill objects
+    affected the produced parasitics.
+    """
+    measurements = d62.get('measurements') or {}
+    if not isinstance(measurements.get('fill_count_after'), int):
+        raise AdmissionRefusal('D69_NATIVE_FILL_CENSUS_ABSENT',
+                               'D62 native fill_count_after is required')
+    if measurements['fill_count_after'] <= 0:
+        raise AdmissionRefusal('D69_FINAL_ODB_HAS_NO_NATIVE_DENSITY_FILL',
+                               'D62 final ODB contains zero native metal-fill objects')
+    if d62.get('extraction_fill_sensitivity') != 'VERIFIED':
+        raise AdmissionRefusal('D69_FILL_SENSITIVE_RCX_NOT_VERIFIED',
+                               'selected RCX has no verified dbFill extraction view')
+
+
 def operation_sources():
     paths = (Path(__file__), Path(signoff.__file__), Path(files.__file__),
              Path(density.__file__), Path(__file__).with_name('spef_extraction_check.py'))
@@ -70,6 +90,7 @@ def execute(project, context):
         bridge = files.validate_bridge(project, manifest.get('stream_bridge'))
         if bridge['d62_receipt'] != manifest['d62_receipt'] or bridge['odb'] != d62['odb']:
             raise AdmissionRefusal('D69_FINAL_GEOMETRY_MISMATCH', 'stream-out and D62 ODB differ')
+        _require_fill_sensitive_extraction(d62)
         native = manifest.get('librelane') or {}
         if set(native) != {'image', 'pdk_root', 'pdk'}:
             raise AdmissionRefusal('D69_NATIVE_CONFIGURATION_ABSENT', 'image/pdk_root/pdk required')
@@ -130,6 +151,7 @@ def validate_final_parasitics(project, receipt_ref):
             or record.get('final_geometry') != bridge['odb']
             or record.get('final_spefs') != record.get('spefs')):
         raise AdmissionRefusal('D69_FINAL_OUTPUT_BINDING_MISMATCH', 'final ODB/SPEF aliases drifted')
+    _require_fill_sensitive_extraction(d62)
     for path, sha in record['inputs'].items():
         if not Path(path).is_file() or _sha(path) != sha:
             raise AdmissionRefusal('D69_INPUT_CHANGED', path)
