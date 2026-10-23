@@ -1,95 +1,96 @@
-"""D69 must not relabel an ODB path match as fill-sensitive extraction."""
+"""D69 keeps engineering RCX distinct from unmeasured fill response."""
 from __future__ import annotations
 
 import json
+from pathlib import Path
+
 import pytest
 
 from flow109_admission import AdmissionRefusal
 import flow109_final_extract as d69
 
 
-def _d62(fill_count, sensitivity='NOT_VERIFIED'):
-    return {
-        'measurements': {'fill_count_after': fill_count},
-        'extraction_fill_sensitivity': sensitivity,
+def _d62(fill_count=None, **untrusted):
+    measurements = {} if fill_count is None else {'fill_count_after': fill_count}
+    return {'measurements': measurements, **untrusted}
+
+
+@pytest.mark.parametrize('count,reason', [
+    (None, 'D69_NATIVE_FILL_CENSUS_ABSENT'),
+    (0, 'D69_FINAL_ODB_HAS_NO_NATIVE_DENSITY_FILL'),
+    (147, 'D69_SELECTED_RCX_DBFILL_RESPONSE_NOT_PROVEN'),
+])
+def test_fill_scope_is_derived_from_native_census(count, reason):
+    assert d69._fill_extraction_scope(_d62(count)) == {
+        'status': 'NOT_MEASURED',
+        'reason': reason,
+        'native_fill_count': count,
+        'basis': 'source-owned D62 census and selected OpenRCX data model',
     }
 
 
-def test_zero_native_fill_census_refuses_before_rcx():
-    with pytest.raises(AdmissionRefusal, match='D69_FINAL_ODB_HAS_NO_NATIVE_DENSITY_FILL'):
-        d69._require_fill_sensitive_extraction(_d62(0))
+def test_forged_verified_string_cannot_upgrade_fill_scope():
+    baseline = d69._fill_extraction_scope(_d62(147))
+    forged = d69._fill_extraction_scope(_d62(147, extraction_fill_sensitivity='VERIFIED'))
+    assert forged == baseline
+    assert forged['status'] == 'NOT_MEASURED'
 
 
-def test_native_dbfill_without_supported_rcx_view_refuses_before_rcx():
-    with pytest.raises(AdmissionRefusal, match='D69_FILL_SENSITIVE_RCX_NOT_VERIFIED'):
-        d69._require_fill_sensitive_extraction(_d62(147))
+def test_consumer_refuses_forged_fill_sensitive_pass():
+    scope = d69._fill_extraction_scope(_d62(147))
+    record = {
+        'reason': 'D69_ROUTED_ODB_RCX_MEASURED',
+        'component_scope': 'engineering_routed_odb_parasitics',
+        'fill_sensitive_parasitics': {**scope, 'status': 'PASS'},
+    }
+    with pytest.raises(AdmissionRefusal, match='D69_COMPONENT_SCOPE_CHANGED'):
+        d69._component_scope(record, _d62(147))
 
 
-def test_only_explicit_fill_sensitive_extraction_view_can_continue():
-    assert d69._require_fill_sensitive_extraction(_d62(147, 'VERIFIED')) is None
-
-
-def test_missing_native_fill_census_is_not_assumed_zero_or_present():
-    with pytest.raises(AdmissionRefusal, match='D69_NATIVE_FILL_CENSUS_ABSENT'):
-        d69._require_fill_sensitive_extraction({'extraction_fill_sensitivity': 'VERIFIED'})
-
-
-@pytest.mark.parametrize('fill_count,reason', [
-    (0, 'D69_FINAL_ODB_HAS_NO_NATIVE_DENSITY_FILL'),
-    (147, 'D69_FILL_SENSITIVE_RCX_NOT_VERIFIED'),
-])
-def test_execute_refuses_before_native_rcx(tmp_path, monkeypatch, fill_count, reason):
+def test_engineering_rcx_reaches_native_seam_with_fill_scope_unmeasured(tmp_path, monkeypatch):
+    files = {}
+    for name, text in {
+        'd62.json': json.dumps({'outputs': {'filled.def': {'path': 'filled.def', 'sha256': 'x'}}}),
+        'filled.odb': 'odb', 'filled.def': 'def', 'netlist.v': 'module neutral; endmodule',
+        'constraint.sdc': '',
+    }.items():
+        path = tmp_path / name
+        path.write_text(text)
+        files[name] = path
     manifest = {
         'schema': d69.SCHEMA,
-        'd62_receipt': {'path': 'd62.json', 'sha256': 'd62'},
+        'd62_receipt': {'path': str(files['d62.json']), 'sha256': 'd62'},
         'stream_bridge': {'path': 'bridge.json', 'sha256': 'bridge'},
+        'librelane': {'image': 'selected', 'pdk_root': str(tmp_path), 'pdk': 'neutral'},
+        'adopted_views': {
+            'netlist': {'path': str(files['netlist.v']), 'sha256': 'netlist'},
+            'sdc': {'path': str(files['constraint.sdc']), 'sha256': 'sdc'},
+        },
     }
     target = tmp_path / d69.INPUT
     target.parent.mkdir(parents=True)
     target.write_text(json.dumps(manifest))
+    odb_ref = {'path': str(files['filled.odb']), 'sha256': 'odb'}
     monkeypatch.setattr(d69, 'require_launch_admission', lambda *args, **kwargs: None)
-    monkeypatch.setattr(d69.density, 'validate_filled_odb', lambda *args, **kwargs: {
-        'odb': {'path': 'filled.odb', 'sha256': 'odb'},
-        'measurements': {'fill_count_after': fill_count},
-        'extraction_fill_sensitivity': 'NOT_VERIFIED',
-    })
-    monkeypatch.setattr(d69.files, 'validate_bridge', lambda *args, **kwargs: {
-        'd62_receipt': manifest['d62_receipt'],
-        'odb': {'path': 'filled.odb', 'sha256': 'odb'},
-    })
+    monkeypatch.setattr(d69.density, 'validate_filled_odb', lambda *args, **kwargs:
+                        {'odb': odb_ref, 'measurements': {'fill_count_after': 147},
+                         'extraction_fill_sensitivity': 'VERIFIED'})
+    monkeypatch.setattr(d69.files, 'validate_bridge', lambda *args, **kwargs:
+                        {'d62_receipt': manifest['d62_receipt'], 'odb': odb_ref})
+    monkeypatch.setattr(d69, '_bound', lambda project, ref: Path(ref['path']))
+    monkeypatch.setattr(d69, '_sha', lambda path: 'bound')
     launches = []
-    monkeypatch.setattr(d69.signoff, 'run', lambda *args, **kwargs: launches.append(True))
+
+    def native(*args, **kwargs):
+        launches.append((args, kwargs))
+        raise RuntimeError('bounded native seam reached')
+
+    monkeypatch.setattr(d69.signoff, 'run', native)
 
     result = d69.execute(tmp_path, {'context_sha256': 'developer-control'})
 
-    assert result['component_status'] == 'NOT_MEASURED'
-    assert result['reason'] == reason
-    assert result['native_started'] is False
-    assert launches == []
-
-
-def test_source_only_reverse_removing_guard_loses_the_fill_refusal(tmp_path, monkeypatch):
-    manifest = {
-        'schema': d69.SCHEMA,
-        'd62_receipt': {'path': 'd62.json', 'sha256': 'd62'},
-        'stream_bridge': {'path': 'bridge.json', 'sha256': 'bridge'},
-    }
-    target = tmp_path / d69.INPUT
-    target.parent.mkdir(parents=True)
-    target.write_text(json.dumps(manifest))
-    monkeypatch.setattr(d69, 'require_launch_admission', lambda *args, **kwargs: None)
-    monkeypatch.setattr(d69.density, 'validate_filled_odb', lambda *args, **kwargs: {
-        'odb': {'path': 'filled.odb', 'sha256': 'odb'},
-        'measurements': {'fill_count_after': 0},
-        'extraction_fill_sensitivity': 'NOT_VERIFIED',
-    })
-    monkeypatch.setattr(d69.files, 'validate_bridge', lambda *args, **kwargs: {
-        'd62_receipt': manifest['d62_receipt'],
-        'odb': {'path': 'filled.odb', 'sha256': 'odb'},
-    })
-    monkeypatch.setattr(d69, '_require_fill_sensitive_extraction', lambda value: None)
-
-    result = d69.execute(tmp_path, {'context_sha256': 'source-only-reverse'})
-
-    assert result['reason'] == 'D69_NATIVE_CONFIGURATION_ABSENT'
-    assert result['reason'] != 'D69_FINAL_ODB_HAS_NO_NATIVE_DENSITY_FILL'
+    assert len(launches) == 1
+    assert result['native_started'] is True
+    assert result['fill_sensitive_parasitics']['status'] == 'NOT_MEASURED'
+    assert result['fill_sensitive_parasitics']['reason'] == \
+        'D69_SELECTED_RCX_DBFILL_RESPONSE_NOT_PROVEN'
