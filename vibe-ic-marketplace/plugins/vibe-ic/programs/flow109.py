@@ -632,7 +632,16 @@ def prepare_front_door(args, project: Path) -> int | None:
             args.exit_step = context["native_exit_step"]
             return None
         window_admission = source_owned_native_admission(context)
-        if window_admission is None:
+        # Ordinary Default windows use the registered existing native owners.
+        # Each launch retains its native input and current-source checks;
+        # explicit qualification claims keep the strict inventory path.
+        source_owned_window = (
+            context["dispatch_kind"] == "ordered_adapters"
+            and all(source_owned_native_admission(component_context(
+                context, requested_step=row["id"])) is not None
+                    for row in context["resolved_rows"])
+        )
+        if window_admission is None and not source_owned_window:
             _window_inventory(context)
         attempt = _new_attempt(project, context)
         path = destination / "requests" / (context["context_sha256"] + ".json")

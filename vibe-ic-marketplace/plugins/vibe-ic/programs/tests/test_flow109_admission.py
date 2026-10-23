@@ -110,8 +110,8 @@ def test_legacy_launch_has_no_new_requirement(tmp_path, monkeypatch):
     assert admission.require_launch_admission(tmp_path, '19', {}) is None
 
 
-def test_registered_default_native_owner_does_not_claim_generic_qualification(tmp_path):
-    step = 'D45'
+@pytest.mark.parametrize('step', ['D45', 'D69', 'D70', 'D71'])
+def test_registered_default_native_owner_does_not_claim_generic_qualification(tmp_path, step):
     features = next(p['features'] for p in flow109.load_registry()['reference_profiles']
                     if p['name'] == 'Small digital IC without DFT')
     context = flow109.execution_context(flow109.resolve_plan(features), step, step)
@@ -165,15 +165,29 @@ def test_explicit_backend_qualification_claim_stays_strict(tmp_path):
             tmp_path, '15', {'flow109_context': context})
 
 
-def test_caller_cannot_forge_registered_native_owner(tmp_path):
+@pytest.mark.parametrize('step', ['D45', 'D69', 'D70', 'D71'])
+def test_caller_cannot_forge_registered_native_owner(tmp_path, step):
     features = next(p['features'] for p in flow109.load_registry()['reference_profiles']
                     if p['name'] == 'Small digital IC without DFT')
-    context = flow109.execution_context(flow109.resolve_plan(features), 'D45', 'D45')
+    context = flow109.execution_context(flow109.resolve_plan(features), step, step)
     context['resolved_row']['profile']['dispatch']['adapter'] = 'caller_plugin'
     rebind(context)
     with pytest.raises(admission.AdmissionRefusal, match='FLOW109_CONTEXT_INVALID'):
-        admission.require_launch_admission(tmp_path, 'flow109.D45',
+        admission.require_launch_admission(tmp_path, 'flow109.' + step,
                                            {'flow109_context': context})
+
+
+@pytest.mark.parametrize('step', ['D69', 'D70', 'D71'])
+def test_final_native_explicit_qualification_claim_stays_strict(tmp_path, step):
+    features = next(p['features'] for p in flow109.load_registry()['reference_profiles']
+                    if p['name'] == 'Small digital IC without DFT')
+    context = flow109.execution_context(
+        flow109.resolve_plan(features), step, step, runtime_tool_uses=[],
+        qualification_registry='missing-qualifications.json')
+    with pytest.raises(admission.AdmissionRefusal,
+                       match='QUALIFICATION_RUNTIME_ABSENT'):
+        admission.require_launch_admission(
+            tmp_path, 'flow109.' + step, {'flow109_context': context})
 
 
 def test_worker_refuses_before_native_producer(tmp_path, monkeypatch):

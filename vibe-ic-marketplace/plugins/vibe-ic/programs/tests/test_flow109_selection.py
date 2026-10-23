@@ -230,12 +230,19 @@ def test_owner_route_uses_native_span_without_generic_qualification_registry(
     assert request["context_sha256"] == route["context_sha256"]
 
 
-def test_registered_native_component_route_does_not_claim_generic_qualification():
+@pytest.mark.parametrize("step, adapter, component_scope", [
+    ("D45", "flow109_netlist_cdc", None),
+    ("D69", "flow109_final_extract", "final_filled_odb_rcx_component_only"),
+    ("D70", "flow109_final_electrical", "final_sta_native_component_only"),
+    ("D71", "flow109_final_gls", "final_sdf_gls_component_only"),
+])
+def test_registered_native_component_route_does_not_claim_generic_qualification(
+        step, adapter, component_scope):
     plan = flow109.resolve_plan(profile())
-    step = "D45"
     row = flow109.resolve_step(plan, step)
     dispatch = flow109.source_owned_native_dispatch(row)
-    assert dispatch["adapter"].startswith("flow109_")
+    assert dispatch["adapter"] == adapter
+    assert dispatch.get("component_scope") == component_scope
     context = flow109.execution_context(plan, step, step)
     admission = flow109.source_owned_native_admission(context)
     assert admission["admitted"] is True
@@ -246,6 +253,72 @@ def test_registered_native_component_route_does_not_claim_generic_qualification(
                                         qualification_registry="input/qualifications.json")
     assert flow109.source_owned_native_admission(claimed) is None
     assert flow109.source_owned_native_dispatch(flow109.resolve_step(plan, "D62")) is None
+
+
+def test_final_native_window_reaches_real_missing_input_refusal_without_generic_claim(
+        tmp_path, monkeypatch):
+    import _delivery_route
+    import flow109_admission
+
+    assert _delivery_route.admit(tmp_path, "ic") is None
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(json.dumps({"features": profile()}))
+    monkeypatch.delenv(flow109.CONTEXT_ENV, raising=False)
+    monkeypatch.delenv(flow109.ATTEMPT_ENV, raising=False)
+    monkeypatch.setattr(
+        flow109_admission, "require_admission",
+        lambda *a, **k: pytest.fail("generic qualification must remain unclaimed"))
+    args = SimpleNamespace(flow="109", flow109_manifest=manifest,
+                           flow109_plan_only=False, execution_mode="default",
+                           entry_step="D69", exit_step="D71")
+
+    assert flow109.prepare_front_door(args, tmp_path) == 2
+    d69 = json.loads((tmp_path / "reports/flow109/components/D69.json").read_text())
+    assert d69["component_status"] == "NOT_MEASURED"
+    assert d69["reason"] == "D69_REQUIRED_INPUT_ABSENT"
+    assert d69["native_started"] is False
+    assert not (tmp_path / "reports/flow109/components/D70.json").exists()
+    assert not (tmp_path / "reports/flow109/components/D71.json").exists()
+    attempt = next((tmp_path / "reports/flow109/attempts").iterdir())
+    terminal = json.loads((attempt / "result.json").read_text())
+    assert terminal["component_status"] == "NOT_MEASURED"
+    assert terminal["flow109_acceptance"] == "NOT_MEASURED"
+    assert terminal["whole_flow_acceptance"] == "NOT_MEASURED"
+
+
+@pytest.mark.parametrize("step, reason", [
+    ("D69", "D69_REQUIRED_INPUT_ABSENT"),
+    ("D70", "D70_REQUIRED_INPUT_ABSENT"),
+    ("D71", "D71_INPUT_INVALID"),
+])
+def test_final_native_single_entry_reaches_own_missing_input_refusal(
+        tmp_path, monkeypatch, step, reason):
+    import _delivery_route
+    import flow109_admission
+
+    assert _delivery_route.admit(tmp_path, "ic") is None
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(json.dumps({"features": profile()}))
+    monkeypatch.delenv(flow109.CONTEXT_ENV, raising=False)
+    monkeypatch.delenv(flow109.ATTEMPT_ENV, raising=False)
+    monkeypatch.setattr(
+        flow109_admission, "require_admission",
+        lambda *a, **k: pytest.fail("generic qualification must remain unclaimed"))
+    args = SimpleNamespace(flow="109", flow109_manifest=manifest,
+                           flow109_plan_only=False, execution_mode="default",
+                           entry_step=step, exit_step=step)
+
+    assert flow109.prepare_front_door(args, tmp_path) == 2
+    component = json.loads(
+        (tmp_path / f"reports/flow109/components/{step}.json").read_text())
+    assert component["component_status"] == "NOT_MEASURED"
+    assert component["reason"] == reason
+    assert component["native_started"] is False
+    admission_record = json.loads(
+        (tmp_path / "reports/flow109/admission.json").read_text())
+    assert admission_record["status"] == "NOT_APPLICABLE"
+    assert admission_record["qualification_status"] == "NOT_CLAIMED"
+    assert admission_record["flow109_acceptance"] == "NOT_MEASURED"
 
 
 def test_unregistered_adapter_cannot_select_existing_native_policy():

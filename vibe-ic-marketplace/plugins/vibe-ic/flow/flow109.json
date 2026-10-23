@@ -14385,7 +14385,9 @@
             "engine_families": ["openroad"],
             "engine_executables": {"openroad": "openroad"},
             "engine_steps": {"openroad": ["OpenROAD.RCX"]},
-            "acceptance_scope": "final_filled_odb_rcx_component_only",
+            "admission_policy": "source_owned_existing_native",
+            "acceptance_scope": "existing_native_component_only",
+            "component_scope": "final_filled_odb_rcx_component_only",
             "flow109_metrics_status": "UNIMPLEMENTED",
             "native_required_outputs": ["native RCX state and receipt", "per-ruleset SPEF consumer census"]
           }
@@ -14620,7 +14622,9 @@
             "engine_families": ["openroad"],
             "engine_executables": {"openroad": "openroad"},
             "engine_steps": {"openroad": ["OpenROAD.STAPostPNR"]},
-            "acceptance_scope": "final_sta_native_component_only",
+            "admission_policy": "source_owned_existing_native",
+            "acceptance_scope": "existing_native_component_only",
+            "component_scope": "final_sta_native_component_only",
             "flow109_metrics_status": "UNIMPLEMENTED",
             "native_required_outputs": ["all declared STAPostPNR corners and SDFs"]
           }
@@ -14970,7 +14974,9 @@
                 "Vibeic.GateLevelSim.simulate_sdf"
               ]
             },
-            "acceptance_scope": "final_sdf_gls_component_only",
+            "admission_policy": "source_owned_existing_native",
+            "acceptance_scope": "existing_native_component_only",
+            "component_scope": "final_sdf_gls_component_only",
             "flow109_metrics_status": "UNIMPLEMENTED",
             "native_required_outputs": [
               "gls_runs.json",
