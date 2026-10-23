@@ -636,3 +636,118 @@ def test_declared_port_mismatch_is_not_aliased(tmp_path: Path):
                                                              "VREF", "VOUT"])
     got, why = E.load_native_measurement(project, "blk", b / "blk.gds", topo)
     assert got is None and "declared_ports" in why
+
+
+def _source_power_fixture(tmp_path, monkeypatch, *, native_rc=0, diagnostic=""):
+    """Neutral wiring control; transport values are not native qualification."""
+    project, b, _old = _write_native_measurement_fixture(tmp_path)
+    (b / E._A8_MEASUREMENT).unlink()
+    topo = {"ports": ["vp", "vn", "control", "out"], "rails": {"vdd": "vp", "vss": "vn"}}
+    (b / "topology.json").write_text(json.dumps(topo))
+    bindings = []
+    for filename, section in (("device.lib", "nom"), ("passive.lib", "rnom"), ("capacitive.lib", "cnom")):
+        model = b / filename
+        model.write_text(f".lib {section}\n* source-owned neutral model\n.endl {section}\n")
+        bindings.append(f".lib {filename} {section}")
+    (b / "blk.sp").write_text("\n".join(bindings + [".subckt blk vp vn control out", "R1 vp out 11k", ".ends blk", ""]))
+    (b / "tb_blk.sp").write_text(
+        '* delivered source conditions\n.include blk.sp\nVMAIN vp vn 2.3\nVZERO vn 0 0\n'
+        'VREF control vn 0.4\nXDUT vp vn control out blk\nRLOAD out vn 7k\n'
+        '.control\ntran 1n 1u\n.endc\n.end\n')
+    monkeypatch.setattr(E, "magicrc_for", lambda *a: "/pdk/neutral.magicrc")
+    monkeypatch.setattr(E, "_native_ngspice_binary", lambda *a: ("/usr/bin/ngspice", ""))
+    monkeypatch.setattr(E, "_runtime_image_digest", lambda *a: ("sha256:" + "b" * 64, ""))
+    def native(container, cmd, timeout=900, *, marker=None, log_path=None):
+        if marker == "a8_extract.tcl":
+            (b / ".a8_native_stage/blk_extracted.spice").write_text(
+                '.subckt blk vp vn control out\nR1 vp out 11k\n.ends blk\n')
+            return 0, "neutral extraction transport", ""
+        if marker == "a8_native_measurement.sp":
+            (b / "a8_native_ngspice.log").write_text(diagnostic + "idd = 0.0002\npwr = 0.00046\n")
+            return native_rc, "", ""
+        raise AssertionError(cmd)
+    monkeypatch.setattr(E, "_docker_exec", native)
+    return project, b, topo
+
+
+def test_current_native_op_preserves_all_models_sources_and_loads(tmp_path, monkeypatch):
+    project, b, topo = _source_power_fixture(tmp_path, monkeypatch)
+    rec, why = E._native_measurement_produce(project, "blk", "", "/pdk", b / "blk.gds", topo)
+    assert rec is not None, why
+    deck = (b / "a8_native_measurement.sp").read_text()
+    assert all(binding in deck for binding in (".lib device.lib nom", ".lib passive.lib rnom", ".lib capacitive.lib cnom"))
+    assert "VMAIN vp vn 2.3" in deck and "VREF control vn 0.4" in deck
+    assert "RLOAD out vn 7k" in deck and "XU vp vn control out blk" in deck
+    assert "abs(i(VMAIN)*(v(vp)-v(vn)))" in deck
+    assert "tran 1n 1u" not in deck and "*1.2" not in deck
+    assert len(rec["model_bindings"]) == 3
+    assert rec["measured_current_a"] == pytest.approx(0.0002)
+    loaded, why = E.load_native_measurement(project, "blk", b / "blk.gds", topo)
+    assert loaded is not None, why
+    assert loaded["liberty_value"] == pytest.approx(460)
+
+
+@pytest.mark.parametrize("native_rc,diagnostic", [(1, "unknown subckt\n"), (0, "Error: unresolved passive model\n")])
+def test_current_native_failure_cannot_publish_plausible_power(tmp_path, monkeypatch, native_rc, diagnostic):
+    project, b, topo = _source_power_fixture(tmp_path, monkeypatch, native_rc=native_rc, diagnostic=diagnostic)
+    rec, why = E._native_measurement_produce(project, "blk", "", "/pdk", b / "blk.gds", topo)
+    assert rec is None and "ngspice rc=" in why
+    assert not (b / E._A8_MEASUREMENT).exists()
+
+
+def test_native_residual_failure_cannot_publish_plausible_power(tmp_path, monkeypatch):
+    project, b, topo = _source_power_fixture(tmp_path, monkeypatch,
+        diagnostic=";;RESIDUAL_FAIL node=rail err=1.2 unit=V tol=1e-06 strict=0\n")
+    rec, why = E._native_measurement_produce(project, "blk", "", "/pdk", b / "blk.gds", topo)
+    assert rec is None and "invalid operating point (RESIDUAL_FAIL)" in why
+    assert not (b / E._A8_MEASUREMENT).exists()
+
+
+def test_receipt_consumer_refuses_native_residual_even_when_power_matches(tmp_path):
+    project, b, topo = _write_native_measurement_fixture(tmp_path)
+    path = b / E._A8_MEASUREMENT
+    rec = json.loads(path.read_text())
+    log = project / rec["native_log"]
+    log.write_text(log.read_text() + ";;RESIDUAL_FAIL node=rail err=1 unit=V tol=1e-06 strict=0\n")
+    rec["native_log_sha256"] = E._sha256(log)
+    path.write_text(json.dumps(rec))
+    loaded, why = E.load_native_measurement(project, "blk", b / "blk.gds", topo)
+    assert loaded is None and "invalid operating point" in why
+
+
+@pytest.mark.parametrize("positive,negative,expected", [
+    ("vp", "0", "v(vp)"), ("0", "vn", "(-v(vn))"),
+    ("vp", "vn", "(v(vp)-v(vn))"), ("0", "0", "0")])
+def test_native_control_voltage_handles_ground_without_a_vector_zero(positive, negative, expected):
+    assert E._terminal_voltage_expression(positive, negative) == expected
+
+
+def test_current_native_measurement_rejects_missing_model_binding(tmp_path, monkeypatch):
+    project, b, topo = _source_power_fixture(tmp_path, monkeypatch)
+    rec, why = E._native_measurement_produce(project, "blk", "", "/pdk", b / "blk.gds", topo)
+    assert rec is not None, why
+    rec["model_bindings"].pop()
+    (b / E._A8_MEASUREMENT).write_text(json.dumps(rec))
+    loaded, why = E.load_native_measurement(project, "blk", b / "blk.gds", topo)
+    assert loaded is None and "all delivered model libraries" in why
+
+
+def test_current_native_measurement_rejects_changed_source_bias(tmp_path, monkeypatch):
+    project, b, topo = _source_power_fixture(tmp_path, monkeypatch)
+    rec, why = E._native_measurement_produce(project, "blk", "", "/pdk", b / "blk.gds", topo)
+    assert rec is not None, why
+    tb = b / "tb_blk.sp"
+    tb.write_text(tb.read_text().replace("VMAIN vp vn 2.3", "VMAIN vp vn 2.1"))
+    loaded, why = E.load_native_measurement(project, "blk", b / "blk.gds", topo)
+    assert loaded is None and "binding is stale" in why
+
+
+def test_native_op_uses_declared_poweron_plateau_without_transient(tmp_path, monkeypatch):
+    project, b, topo = _source_power_fixture(tmp_path, monkeypatch)
+    tb = b / "tb_blk.sp"
+    tb.write_text(tb.read_text().replace("VMAIN vp vn 2.3", "VMAIN vp vn pwl(0 0 100n 2.3 20u 2.3)"))
+    extracted = b / "post_layout_extracted.spice"
+    text, binding = E._delivered_measurement_deck(project, "blk", extracted, topo["ports"], "blk", topo)
+    assert "VMAIN vp vn dc 2.3 pwl(0 0 100n 2.3 20u 2.3)" in text
+    assert binding["power_sources"][0]["dc_plateau"] == "2.3"
+    assert "tran 1n 1u" not in text

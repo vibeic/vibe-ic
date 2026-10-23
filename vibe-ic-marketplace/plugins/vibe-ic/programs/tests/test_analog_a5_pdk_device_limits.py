@@ -242,3 +242,78 @@ def test_existing_a5_pdk_consumer_accepts_ciel_rule_and_keeps_refusal():
     stage.CIEL_TECH = CIEL_METAL1.replace("allm1 *m1,rm1", "allm1 *m2,rm2")
     facts, why = emitter.read_pdk(stage, "/pdk", "sky130A", None, None)
     assert facts is None and "ENV_UNAVAILABLE" in why and "Metal1" in why
+
+
+# The split-file form observed in the native PDK: the DRC fragment names
+# M1.b=180; its physical scale and layer table are in sibling include files.
+# Values below preserve that rule/scale relationship rather than guessing nm.
+SPLIT_ROOT = DRC.split("cifoutput", 1)[0] + """
+include generic-cifout
+include generic-drc
+"""
+SPLIT_CIF = """cifoutput
+style drc
+ scalefactor 10 nanometers
+end
+"""
+SPLIT_DRC = """drc
+ style drc variants (fast),(full),(routing)
+ scalefactor 10
+ cifstyle drc
+ width *m1,rm1,diffprobe 160 "Metal1 width < %d (M1.a)"
+ spacing allm1,diffprobe allm1,*obsm1 180 touching_ok \\
+        "Metal1 spacing < %d (M1.b)"
+end
+"""
+
+
+def test_split_magic_deck_reads_real_scale_and_layer_context():
+    owner = importlib.import_module("analog_a5_pdk_device_limits")
+    files = {"/pdk/generic.tech": SPLIT_ROOT,
+             "/pdk/generic-cifout.tech": SPLIT_CIF,
+             "/pdk/generic-drc.tech": SPLIT_DRC}
+    assert owner.m1_space_um(SPLIT_DRC) is None
+    context = owner.magic_technology_text("/pdk/generic.tech", files.get)
+    assert owner.m1_space_um(SPLIT_DRC, technology_text=context) == pytest.approx(0.18)
+    changed = context.replace("scalefactor 10 nanometers", "scalefactor 20 nanometers")
+    assert owner.m1_space_um(SPLIT_DRC, technology_text=changed) == pytest.approx(0.36)
+
+
+@pytest.mark.parametrize("cif", ["", SPLIT_CIF.replace("10 nanometers", "nan nanometers"),
+    SPLIT_CIF.replace("10 nanometers", "10 unknown_units")])
+def test_split_magic_missing_or_invalid_scale_never_supplies_clearance(cif):
+    owner = importlib.import_module("analog_a5_pdk_device_limits")
+    context = SPLIT_ROOT.split("include", 1)[0] + cif
+    assert owner.m1_space_um(SPLIT_DRC, technology_text=context) is None
+
+
+def test_split_magic_unreadable_include_and_cycle_are_named_refusals():
+    owner = importlib.import_module("analog_a5_pdk_device_limits")
+    with pytest.raises(ValueError, match="unreadable Magic technology include"):
+        owner.magic_technology_text("/pdk/root.tech", lambda p: "include absent" if p.endswith("root.tech") else None)
+    with pytest.raises(ValueError, match="cyclic Magic technology include"):
+        owner.magic_technology_text("/pdk/root.tech", lambda p: "include root")
+
+
+def test_actual_layout_consumer_uses_split_context_and_refuses_unreadable_scale():
+    fixtures = importlib.import_module("test_analog_a5_layout_emit")
+    emitter = importlib.import_module("analog_a5_layout_emit")
+    class SplitStage(fixtures.FakeStage):
+        missing_scale = False
+        def sh(self, cmd, timeout=900):
+            if cmd.startswith("cat "):
+                path = cmd.split(None, 1)[1].strip("'\"")
+                if path.endswith("/generic.tech"):
+                    return 0, SPLIT_ROOT, ""
+                if path.endswith("/generic-drc.tech"):
+                    return 0, SPLIT_DRC, ""
+                if path.endswith("/generic-cifout.tech"):
+                    return (1, "", "missing CIF scale") if self.missing_scale else (0, SPLIT_CIF, "")
+            return super().sh(cmd, timeout)
+    stage = SplitStage()
+    facts, why = emitter.read_pdk(stage, "/pdk", "generic", None, None)
+    assert facts is not None, why
+    assert facts.m1_space_um == pytest.approx(0.18)
+    stage.missing_scale = True
+    facts, why = emitter.read_pdk(stage, "/pdk", "generic", None, None)
+    assert facts is None and "context is unreadable" in why and "generic-cifout.tech" in why

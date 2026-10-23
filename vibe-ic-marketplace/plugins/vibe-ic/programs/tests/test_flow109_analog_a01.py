@@ -1,7 +1,8 @@
-"""Actual tiny A01 dispatch controls; fixture qualification is not IC signoff.
+"""Legacy qualified A01 component controls; fixture qualification is not IC signoff.
 
 The shipped emitter/checker run as real Python subprocesses. No analog circuit
 simulator, ADC project, oracle, or old PASS is used by these controls.
+Canonical native dispatch is covered separately by test_analog_native_flow.py.
 """
 from __future__ import annotations
 
@@ -10,7 +11,6 @@ import hashlib
 import json
 from pathlib import Path
 import shutil
-import subprocess
 import sys
 
 import pytest
@@ -19,6 +19,7 @@ import flow109
 import flow109_admission as admission
 import flow109_analog as analog
 from _analog_producer_fixture import block, make_project
+from _flow109_legacy_component_fixture import legacy_component_registry, run_legacy_component
 
 
 def _artifact(project, name, text):
@@ -57,24 +58,7 @@ def _case(project, *, specs=True):
 
 
 def _run(project):
-    # Observe actual subprocess launches within the canonical general entry.
-    driver = '''import json,sys
-from pathlib import Path
-sys.path.insert(0, sys.argv[1])
-audit = Path(sys.argv[2])
-def observe(event,args):
-    if event == 'subprocess.Popen':
-        with audit.open('a') as stream:
-            stream.write(json.dumps(str(args))+'\\n')
-sys.addaudithook(observe)
-import vibe_ic_one_shot_runner as runner
-sys.argv=['vibe_ic_one_shot_runner.py',*sys.argv[3:]]
-sys.exit(runner.main())
-'''
-    return subprocess.run([sys.executable, '-c', driver, str(analog.HERE), str(project / 'launches.jsonl'),
-        str(project), '--flow', '109', '--flow109-manifest', str(project / 'manifest.json'),
-        '--entry-step', 'A01', '--exit-step', 'A01', '--route', 'ip', '--no-dashboard'],
-        capture_output=True, text=True)
+    return run_legacy_component(project, 'A01', audit_launches=True)
 
 
 def _save(project, manifest, registry):

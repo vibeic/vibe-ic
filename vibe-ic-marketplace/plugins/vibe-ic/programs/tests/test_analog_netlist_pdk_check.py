@@ -90,9 +90,10 @@ xm1 a b c c some_private_model w=1 l=1
 """
 
 
-def _run(tmp_path: Path) -> subprocess.CompletedProcess:
+def _run(tmp_path: Path, block: str | None = None) -> subprocess.CompletedProcess:
     return subprocess.run(
-        [sys.executable, str(PROG), str(tmp_path), "--json", str(tmp_path / "report.json")],
+        [sys.executable, str(PROG), str(tmp_path), "--json", str(tmp_path / "report.json")]
+        + (["--block", block] if block is not None else []),
         capture_output=True, text=True,
     )
 
@@ -352,6 +353,75 @@ def test_transitive_dut_include_chain_accepted(tmp_path):
     rpt = _load_report(tmp_path)
     assert rpt["passed"] is True
     assert "NATIVE_PDK_INCLUDE_OUT_OF_LADDER" not in _rules(rpt)
+
+
+@pytest.mark.parametrize("quote", ['"', "'"])
+@pytest.mark.parametrize("container_path", [False, True])
+def test_quoted_derived_dut_include_reaches_ladder(tmp_path, quote, container_path):
+    blk = _native_project(tmp_path)
+    inputs = blk / "mc_runs" / "run-neutral" / "inputs"
+    inputs.mkdir(parents=True)
+    dut = inputs / "digest-dut source.sp"
+    model = tmp_path / "input" / "pdk" / "spice" / "nativemodels.lib"
+    dut.write_text(_DUT_SP.replace(
+        "../../../input/pdk/spice/nativemodels.lib", f'{quote}{model}{quote}'))
+    include = Path("/project") / dut.relative_to(tmp_path) if container_path else dut
+    (inputs.parent / "mc_0001.sp").write_text(
+        _TB_SP.replace(".include ldo.sp", f".include {quote}{include}{quote}"))
+    r = _run(tmp_path, block="ldo")
+    rpt = _load_report(tmp_path)
+    assert r.returncode == 0, _errors(rpt)
+    assert rpt["summary"]["files_pass"] == 2
+    assert "DUT_NETLIST_INCLUDE_ACCEPTED" in _rules(rpt)
+
+
+@pytest.mark.parametrize("target", [
+    '"/project/phase3/analog/ldo/missing.sp"',
+    '"/project/../foreign_models.lib"',
+    '"foreign_models.lib"',
+    '"foreign_models.lib',
+])
+def test_quoted_missing_or_foreign_include_still_refused(tmp_path, target):
+    blk = _native_project(tmp_path)
+    (tmp_path.parent / "foreign_models.lib").write_text(_FOREIGN_LIB)
+    (blk / "foreign_models.lib").write_text(_FOREIGN_LIB)
+    (blk / "tb_ldo.sp").write_text(_TB_SP.replace("ldo.sp", target))
+    r = _run(tmp_path)
+    rpt = _load_report(tmp_path)
+    assert r.returncode == 1
+    assert any(f["rule"] == "NATIVE_PDK_INCLUDE_OUT_OF_LADDER"
+               and f["file"].endswith("tb_ldo.sp") for f in _errors(rpt))
+
+
+def test_block_scope_keeps_derived_decks_and_excludes_other_blocks(tmp_path):
+    blk = _native_project(tmp_path)
+    (blk / "ldo.sp").write_text(_DUT_SP)
+    other = blk.parent / "other"
+    other.mkdir()
+    (other / "bad.sp").write_text(_TB_SP.replace("ldo.sp", "missing.sp"))
+    assert _run(tmp_path, block="ldo").returncode == 0
+    assert _load_report(tmp_path)["summary"]["files_checked"] == 1
+    assert _run(tmp_path).returncode == 1
+    derived = blk / "mc_runs" / "run-neutral"
+    derived.mkdir(parents=True)
+    (derived / "bad.sp").write_text(_TB_SP.replace("ldo.sp", "missing.sp"))
+    assert _run(tmp_path, block="ldo").returncode == 1
+    rpt = _load_report(tmp_path)
+    assert rpt["summary"]["files_checked"] == 2
+    assert {f["file"] for f in _errors(rpt)} == {
+        "phase3/analog/ldo/mc_runs/run-neutral/bad.sp"}
+
+
+@pytest.mark.parametrize("phase", ["phase1", "phase2"])
+def test_block_scope_includes_legacy_analog_roots(tmp_path, phase):
+    blk = tmp_path / phase / "analog" / "ldo"
+    blk.mkdir(parents=True)
+    (blk / "ldo.sp").write_text(GF180_GOOD_NETLIST)
+    other = blk.parent / "other"
+    other.mkdir()
+    (other / "bad.sp").write_text(NO_INCLUDE_NETLIST)
+    assert _run(tmp_path, block="ldo").returncode == 0
+    assert _load_report(tmp_path)["summary"]["files_checked"] == 1
 
 
 # -- CONTROL: a genuine out-of-ladder model include is STILL refused --

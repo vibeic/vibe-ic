@@ -245,7 +245,33 @@ def gencell_defaults(text: str, source: str = "") -> Dict[str, dict]:
     return out
 
 
-def m1_space_um(text: str) -> Optional[float]:
+def magic_technology_text(path: str, reader, active: tuple = ()) -> str:
+    """Expand the technology's declared includes through its actual reader.
+
+    Magic permits a split technology: layer identities, DRC rules and CIF
+    scale can live in different files. Their include graph supplies context;
+    neither an unavailable include nor a cycle can supply an assumed scale.
+    """
+    path = str(Path(path))
+    if path in active:
+        raise ValueError(f"cyclic Magic technology include: {path}")
+    text = reader(path)
+    if not isinstance(text, str) or not text.strip():
+        raise ValueError(f"unreadable Magic technology include: {path}")
+    out = []
+    for line in text.splitlines():
+        include = re.fullmatch(r"\s*include\s+(\S+)\s*(?:#.*)?", line)
+        if include:
+            child = Path(path).parent / include[1]
+            if not child.suffix:
+                child = child.with_suffix(".tech")
+            out.append(magic_technology_text(str(child), reader, (*active, path)))
+        else:
+            out.append(line)
+    return "\n".join(out) + "\n"
+
+
+def m1_space_um(text: str, technology_text: str = "") -> Optional[float]:
     """Read the baseline Metal1 rule and its declared physical scale.
 
     Magic DRC distances are dimensionless: CIF microns per database unit
@@ -256,8 +282,11 @@ def m1_space_um(text: str) -> Optional[float]:
     import math
 
     flat = re.sub(r"\\\s*\n", " ", text)
-    sections = _tech_sections(flat)
-    identity = layer_identity(flat)
+    context = re.sub(r"\\\s*\n", " ", technology_text)
+    # Rules are selected from the supplied DRC bytes only. Context contributes
+    # their declared layer identities and units, never a substitute rule.
+    sections = _tech_sections(context + "\n" + flat)
+    identity = layer_identity(context + "\n" + flat)
     target = identity.canon.get("m1", "m1")
     if identity.plane_of and identity.level("m1") != 1:
         return None
@@ -330,6 +359,10 @@ def m1_space_um(text: str) -> Optional[float]:
 
     drc = re.findall(r"^drc\s*\n(.*?)^end\s*$", flat, re.M | re.S)
     cif = re.findall(r"^cifoutput\s*\n(.*?)^end\s*$", flat, re.M | re.S)
+    if not drc and context:
+        drc = re.findall(r"^drc\s*\n(.*?)^end\s*$", context, re.M | re.S)
+    if not cif and context:
+        cif = re.findall(r"^cifoutput\s*\n(.*?)^end\s*$", context, re.M | re.S)
     if drc or cif:
         if len(drc) != 1 or len(cif) != 1:
             return None

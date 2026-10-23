@@ -82,7 +82,7 @@ DEVICE_RE = re.compile(
 )
 
 INCLUDE_RE = re.compile(
-    r"^\s*\.(include|lib)\s+(\S+)",
+    r"^\s*\.(include|lib)\s+(\"[^\"\r\n]+\"|'[^'\r\n]+'|\S+)",
     re.MULTILINE | re.IGNORECASE,
 )
 
@@ -399,7 +399,14 @@ _MAX_INCLUDE_DEPTH = 8
 
 def _include_targets(text: str) -> List[str]:
     """Every `.include`/`.lib` target in `text`, de-quoted."""
-    return [p.strip().strip('"\'') for (_kind, p) in INCLUDE_RE.findall(text)]
+    return [_unquote_include_target(p) for (_kind, p) in INCLUDE_RE.findall(text)]
+
+
+def _unquote_include_target(target: str) -> str:
+    target = target.strip()
+    if len(target) >= 2 and target[0] in ('"', "'") and target[-1] == target[0]:
+        return target[1:-1]
+    return target
 
 
 def _resolve_in_project(inc: str, from_dir: Path, project: Path) -> Optional[Path]:
@@ -411,10 +418,15 @@ def _resolve_in_project(inc: str, from_dir: Path, project: Path) -> Optional[Pat
     out-of-ladder case this gate exists to refuse, so it can never be
     reclassified as a DUT include.
     """
-    raw = (inc or "").strip().strip('"\'')
+    raw = _unquote_include_target(inc or "")
     if not raw:
         return None
     p = Path(raw)
+    # Native tools use the canonical /project bind mount. Resolve that same
+    # project-relative closure on the host, then apply the containment check
+    # below; arbitrary absolute paths and mount escapes remain refused.
+    if p.is_relative_to("/project"):
+        p = project.absolute() / p.relative_to("/project")
     candidates = [p] if p.is_absolute() else [from_dir / p, project / p]
     try:
         root = project.resolve()
@@ -483,7 +495,7 @@ def _native_model_include_ok(text: str, rel_path: str, native_libset: Set[str],
       * no include and a RUNNABLE deck → FAIL (NO_MODEL_INCLUDE — a runnable
         native deck must load the staged native models)."""
     model_includes = [
-        p for (_kind, p) in INCLUDE_RE.findall(text)
+        p for p in _include_targets(text)
         if ("/" in p or "\\" in p or "." in Path(p).name)
     ]
     if model_includes:
@@ -582,7 +594,7 @@ def _analog_roots(project: Path) -> list:
     return out
 
 
-def run_audit(project: Path) -> AuditResult:
+def run_audit(project: Path, block: Optional[str] = None) -> AuditResult:
     result = AuditResult()
 
     analog_roots = _analog_roots(project)
@@ -599,6 +611,8 @@ def run_audit(project: Path) -> AuditResult:
     sp_files = []
     for root in analog_roots:
         for sp in sorted(root.rglob("*.sp")):
+            if block is not None and sp.relative_to(root).parts[0] != block:
+                continue
             key = str(sp.resolve())
             if key in sp_seen:
                 continue
@@ -783,6 +797,7 @@ def main(argv: list = None) -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     ap.add_argument("project_dir", type=Path)
+    ap.add_argument("--block", default=None, help="Check only this analog block, including derived decks")
     ap.add_argument("--json", default=None, help="JSON report output path")
     args = ap.parse_args(argv)
 
@@ -790,7 +805,7 @@ def main(argv: list = None) -> int:
         print(f"ERROR: {args.project_dir} is not a directory", file=sys.stderr)
         return 2
 
-    result = run_audit(args.project_dir)
+    result = run_audit(args.project_dir, block=args.block)
 
     out = json.dumps(asdict(result), indent=2, ensure_ascii=False)
 

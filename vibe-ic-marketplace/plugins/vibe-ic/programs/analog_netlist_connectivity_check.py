@@ -286,7 +286,7 @@ def _check_file(text: str, rel: str, findings: List[Finding]) -> tuple:
     return had_subckt, all_ok
 
 
-def run_audit(project: Path) -> AuditResult:
+def run_audit(project: Path, block: Optional[str] = None) -> AuditResult:
     result = AuditResult()
     analog_dir = _analog_dir(project)
     if analog_dir is None:
@@ -297,6 +297,8 @@ def run_audit(project: Path) -> AuditResult:
         return result
 
     sp_files = sorted(analog_dir.rglob("*.sp"))
+    if block is not None:
+        sp_files = [sp for sp in sp_files if sp.relative_to(analog_dir).parts[0] == block]
     if not sp_files:
         result.findings.append(Finding(
             rule="SKIP_NO_SP_FILES", severity="INFO",
@@ -346,6 +348,7 @@ def main(argv: Optional[list] = None) -> int:
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("project_dir", type=Path)
+    ap.add_argument("--block", help="check only this analog block directory; default: all blocks")
     ap.add_argument("--json", default=None, help="JSON report output path")
     args = ap.parse_args(argv)
 
@@ -353,7 +356,7 @@ def main(argv: Optional[list] = None) -> int:
         print(f"ERROR: {args.project_dir} is not a directory", file=sys.stderr)
         return 2
 
-    result = run_audit(args.project_dir)
+    result = run_audit(args.project_dir, block=args.block)
     out = json.dumps(asdict(result), indent=2, ensure_ascii=False)
     # #521 — routed from the gate's OWN `summary["skipped"]`, never from text.
     skipped = _vx.summary_is_skipped(result.summary)

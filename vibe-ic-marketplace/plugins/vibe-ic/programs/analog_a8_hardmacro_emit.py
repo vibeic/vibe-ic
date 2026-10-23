@@ -62,6 +62,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _container_exec as _ce  # noqa: E402 — the ONE guarded docker-exec argv
 import _eda_pin as _pin  # noqa: E402 — the ONE place the pin is stated
 import magic_extract_spice_emit as _mx  # noqa: E402 — ordinary A7 extraction producer
+import analog_a7_post_layout_emit as _a7  # noqa: E402 — source model/TB relocation
 import _analog_a8_extraction_wrapper as _aw  # noqa: E402
 from _analog_a_check_common import (  # noqa: E402
     DESIGN_CONTENT_FIELD, content_disclosed, load_block_list,
@@ -481,6 +482,7 @@ _POWER_TO_W = {unit: factor * 1e-6
 
 _DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$", re.IGNORECASE)
 _MAG_USE_RE = re.compile(r"(?im)^\s*use\s+(\S+)")
+_INVALID_OP_RE = re.compile(r"(?m)^\s*;;RESIDUAL_FAIL\b")
 
 
 def _runtime_image_digest(container: str) -> Tuple[Optional[str], str]:
@@ -654,6 +656,11 @@ def _extraction_wrapper_contract(project: Path, block: str, extracted: Path,
 def _measurement_deck_text(extracted: Path, ports: List[str], subckt: str,
                            model_path: str, model_section: str,
                            wrapper: Optional[Path] = None) -> str:
+    """Reconstruct the original fixed-bias receipt contract, never a new run.
+
+    Fresh ordinary measurements use the delivered A3 sources below. Keeping
+    this original recipe preserves the meaning of already published receipts.
+    """
     if not isinstance(model_path, str) or not model_path or not isinstance(
             model_section, str) or not re.fullmatch(r"[\w.+-]+", model_section):
         raise ValueError("measurement deck has no explicit PDK model/section")
@@ -667,6 +674,128 @@ def _measurement_deck_text(extracted: Path, ports: List[str], subckt: str,
         "RLOAD vout 0 1meg", f"XU {' '.join(ports)} {subckt}",
         ".control", "set noaskquit", "op", "let pwr = abs(i(VDD))*1.2",
         "print pwr", "quit", ".endc", ".end", ""])
+
+
+def _terminal_voltage_expression(positive: str, negative: str) -> str:
+    """ngspice control expressions have no named voltage vector for node 0."""
+    if positive == "0" and negative == "0":
+        return "0"
+    if negative == "0":
+        return f"v({positive})"
+    if positive == "0":
+        return f"(-v({negative}))"
+    return f"(v({positive})-v({negative}))"
+
+
+def _delivered_measurement_deck(project: Path, block: str, extracted: Path,
+                                ports: List[str], subckt: str,
+                                topology: Dict, wrapper: Optional[Path] = None
+                                ) -> Tuple[str, Dict]:
+    """Replace the DUT in its delivered stimulus; run only native OP power.
+
+    The A3 model bindings and external circuit cards remain the source of the
+    conditions. Power-on PWL supply rails use their own final plateau as the
+    explicit DC bias, retaining the waveform rather than running a transient.
+    """
+    bdir = project / "phase3" / "analog" / block
+    a3, tb = bdir / f"{block}.sp", bdir / f"tb_{block}.sp"
+    if not a3.is_file() or not tb.is_file():
+        raise ValueError("A8 native OP requires the delivered A3 netlist and testbench")
+    if _aw.native_ports(a3.read_text(), block) != ports:
+        raise ValueError("A8 source testbench ports do not match the delivered DUT")
+    bindings = _a7.model_binding_lines(a3.read_text(), bdir, bdir)
+    if not bindings:
+        raise ValueError("A8 delivered A3 netlist has no model bindings")
+    cards, instances = [], []
+    control, subcircuit = False, False
+    for line in _a7._joined_lines(tb.read_text(errors="replace")):
+        stripped = line.strip()
+        if re.match(r"(?i)^\.control\b", stripped):
+            control = True
+            continue
+        if re.match(r"(?i)^\.endc\b", stripped):
+            control = False
+            continue
+        if control or not stripped or stripped.startswith(("*", ";")):
+            continue
+        if re.match(r"(?i)^\.subckt\b", stripped):
+            subcircuit = True
+        if re.match(r"(?i)^\.ends\b", stripped):
+            subcircuit = False
+        if not subcircuit and re.match(r"(?i)^\.(?:end|tran|ac|dc|op|noise|meas\w*|save|print|plot)\b", stripped):
+            continue
+        library = _a7._LIB_RE.match(line)
+        if library:
+            target = library.group(2).strip("'\"")
+            if Path(target).name == f"{block}.sp":
+                continue
+            if not Path(target).is_absolute():
+                target = str((bdir / target).resolve())
+            line = f"{library.group(1)}{json.dumps(target)}{library.group(3)}"
+        fields = stripped.split()
+        if not subcircuit and fields[0].casefold().startswith("x") and len(fields) >= len(ports) + 2 \
+                and fields[len(ports) + 1].casefold() == block.casefold():
+            instances.append(fields)
+            continue
+        cards.append(line)
+    if len(instances) != 1:
+        raise ValueError("A8 native OP requires exactly one delivered DUT instance")
+    nodes = instances[0][1:len(ports) + 1]
+    rail_ports = {str(value).casefold() for value in (topology.get("rails") or {}).values()}
+    rail_nodes = {node.casefold() for port, node in zip(ports, nodes)
+                  if port.casefold() in rail_ports and node != "0"}
+    supplies = []
+    for index, line in enumerate(cards):
+        fields = line.split(None, 3)
+        if len(fields) != 4 or not fields[0].casefold().startswith("v"):
+            continue
+        source, positive, negative, value = fields
+        if not rail_nodes.intersection((positive.casefold(), negative.casefold())):
+            continue
+        pwl = re.fullmatch(r"(?is)\s*pwl\s*\((.*)\)\s*", value)
+        bias = None
+        if pwl:
+            pairs = re.split(r"[\s,]+", pwl.group(1).strip())
+            if len(pairs) < 4 or len(pairs) % 2:
+                raise ValueError("A8 supply PWL has no explicit terminal DC plateau")
+            bias = pairs[-1]
+            cards[index] = f"{source} {positive} {negative} dc {bias} {value}"
+        supplies.append({"source": source, "positive": positive, "negative": negative,
+                         "dc_plateau": bias})
+    if not supplies:
+        raise ValueError("A8 delivered testbench has no voltage source driving its declared rails")
+    current = " + ".join(f"abs(i({row['source']}))" for row in supplies)
+    power = " + ".join(f"abs(i({row['source']})*{_terminal_voltage_expression(row['positive'], row['negative'])})"
+                       for row in supplies)
+    includes = [f".include {json.dumps(str(extracted))}"]
+    if wrapper is not None:
+        includes.append(f".include {json.dumps(str(wrapper))}")
+    text = "\n".join(["* A8 native OP from delivered A3 stimulus and model bindings.",
+                        *bindings, *includes, *cards,
+                        f"XU {' '.join(nodes)} {subckt}", ".control", "set noaskquit", "op",
+                        f"let idd = {current}", f"let pwr = {power}",
+                        "print idd pwr", "quit", ".endc", ".end", ""])
+    return text, {"source_testbench": str(tb.relative_to(project)), "source_testbench_sha256": _sha256(tb),
+                  "source_design_netlist": str(a3.relative_to(project)), "source_design_netlist_sha256": _sha256(a3),
+                  "model_binding_lines": bindings, "power_sources": supplies,
+                  "native_measurement": "native OP sum(abs(I(source)*V(source terminals)))"}
+
+
+def _bound_models(container: str, lines: List[str], directory: Path) -> List[Dict]:
+    records = []
+    for line in lines:
+        fields = shlex.split(line)
+        if len(fields) < 2:
+            raise ValueError("A8 delivered model binding is incomplete")
+        path = Path(fields[1])
+        if not path.is_absolute():
+            path = (directory / path).resolve()
+        digest = _sha256(path) if path.is_file() else _remote_sha256(container, str(path))[0]
+        if digest is None:
+            raise ValueError(f"A8 delivered model source cannot be read: {path}")
+        records.append({"path": str(path), "section": fields[2] if len(fields) > 2 else None,
+                        "sha256": digest})
+    return records
 
 
 def _native_measurement_produce(project: Path, block: str, container: str,
@@ -689,9 +818,6 @@ def _native_measurement_produce(project: Path, block: str, container: str,
     rcfile = magicrc_for(pdk_root, container, tech)
     if rcfile is None:
         return None, f"no Magic rcfile for A5 technology {tech!r}"
-    model, why = _native_model_contract(container, pdk_root, tech)
-    if model is None:
-        return None, why
     ngspice_bin, why = _native_ngspice_binary(container)
     if ngspice_bin is None:
         return None, why
@@ -744,24 +870,28 @@ def _native_measurement_produce(project: Path, block: str, container: str,
             ports = declared
             subckt = wrapper_contract["wrapper_subckt"]
 
-        model_path = model["path"]
-        model_section = model["section"]
-        deck.write_text(_measurement_deck_text(
-            extracted, ports, subckt, model_path, model_section, wrapper_path))
+        deck_text, source_contract = _delivered_measurement_deck(
+            project, block, extracted, ports, subckt, topology, wrapper_path)
+        models = _bound_models(container, source_contract["model_binding_lines"], bdir)
+        model_path, model_section = models[0]["path"], models[0]["section"]
+        deck.write_text(deck_text)
         # Freeze the files actually consumed. Refuse any mutation during the
         # native call, rather than stamping its result with post-call inputs.
-        consumed = [extracted, layout, gds, deck]
+        consumed = [extracted, layout, gds, deck, bdir / f"{block}.sp", bdir / f"tb_{block}.sp"]
+        consumed += [Path(model["path"]) for model in models if Path(model["path"]).is_file()]
         if wrapper_path is not None:
             consumed.append(wrapper_path)
         frozen = {p: _sha256(p) for p in consumed}
         ngspice_rc, ng_out, ng_err = _docker_exec(
             container,
-            f"cd {shlex.quote(str(Path(model_path).parent))} && "
+            f"cd {shlex.quote(str(bdir))} && "
             f"{shlex.quote(ngspice_bin)} -b -o "
             f"{shlex.quote(str(ng_log))} {shlex.quote(str(deck))}",
             marker="a8_native_measurement.sp")
         if any(_sha256(p) != digest for p, digest in frozen.items()):
             return None, "native measurement input group changed during ngspice"
+        if _bound_models(container, source_contract["model_binding_lines"], bdir) != models:
+            return None, "native measurement model sources changed during ngspice"
         if wrapper_contract is not None:
             try:
                 current_contract, _ = _extraction_wrapper_contract(
@@ -775,15 +905,15 @@ def _native_measurement_produce(project: Path, block: str, container: str,
         log_text = ng_log.read_text(errors="replace")
         pwr = re.search(r"(?im)^\s*pwr\s*=\s*([-+0-9.eE]+)", log_text)
         idd = re.search(r"(?im)^\s*idd\s*=\s*([-+0-9.eE]+)", log_text)
-        if ngspice_rc != 0 or (pwr is None and idd is None):
+        if _INVALID_OP_RE.search(log_text):
+            return None, f"ngspice reported invalid operating point (RESIDUAL_FAIL); see {ng_log.name}"
+        import analog_real_corner_sweep as _ars
+        native_errors = _ars._scan_analysis_failures(log_text)
+        if ngspice_rc != 0 or pwr is None or any(native_errors):
             return None, (f"ngspice rc={ngspice_rc} has no native idd/pwr "
                           f"result; see {ng_log.name}")
-        if pwr is not None:
-            power_w = float(pwr.group(1))
-            measured_current = None
-        else:
-            measured_current = float(idd.group(1))
-            power_w = abs(measured_current) * 1.2
+        power_w = float(pwr.group(1))
+        measured_current = float(idd.group(1)) if idd is not None else None
         if not math.isfinite(power_w) or power_w <= 0:
             return None, f"native pwr result is not finite and positive: {power_w!r}"
 
@@ -795,7 +925,9 @@ def _native_measurement_produce(project: Path, block: str, container: str,
             "metric": "cell_leakage_power",
             "value": power_w,
             "unit": "W",
-            "native_measurement": "op source power vector abs(I(VDD))*VDD",
+            **source_contract,
+            "measurement_basis": "delivered_a3_testbench_op",
+            "model_bindings": models,
             "measured_current_a": measured_current,
             "source_layout": str(layout.relative_to(project)),
             "source_layout_sha256": _sha256(layout),
@@ -809,10 +941,12 @@ def _native_measurement_produce(project: Path, block: str, container: str,
             "native_extraction_log_sha256": _sha256(extract_log),
             "simulator": "ngspice native post-layout .op",
             "model_source": model_path,
-            "model_source_sha256": model["sha256"],
+            "model_source_sha256": models[0]["sha256"],
             "model_section": model_section,
             "image_digest": image_digest,
             "declared_ports": list(topology.get("ports") or []),
+            "measurement_deck": str(deck.relative_to(project)),
+            "measurement_deck_sha256": frozen[deck],
         }
         if wrapper_contract is not None:
             rec["extraction_wrapper"] = wrapper_contract
@@ -1013,6 +1147,9 @@ def load_native_measurement(project: Path, block: str, gds: Path,
     if rec.get("metric") != "cell_leakage_power":
         return None, (f"unsupported A8 measurement metric {rec.get('metric')!r}; "
                       "no timing arc or unmeasured power field is invented")
+    source_based = rec.get("measurement_basis") == "delivered_a3_testbench_op"
+    if rec.get("measurement_basis") is not None and not source_based:
+        return None, "unsupported native measurement basis"
     try:
         value = float(rec["value"])
     except (KeyError, TypeError, ValueError):
@@ -1089,10 +1226,11 @@ def load_native_measurement(project: Path, block: str, gds: Path,
                 return None, why
             if deck != (bdir / "a8_native_measurement.sp").resolve():
                 return None, "measurement_deck is not the ordinary A8 deck"
-            wanted = _measurement_deck_text(
-                source_netlist_path, list(topology.get("ports") or []),
-                expected["wrapper_subckt"], rec.get("model_source"),
-                rec.get("model_section"), wrapper_path)
+            wanted = (_delivered_measurement_deck(
+                project, block, source_netlist_path, list(topology.get("ports") or []),
+                expected["wrapper_subckt"], topology, wrapper_path)[0] if source_based else
+                _measurement_deck_text(source_netlist_path, list(topology.get("ports") or []),
+                    expected["wrapper_subckt"], rec.get("model_source"), rec.get("model_section"), wrapper_path))
             if (deck.read_bytes() != wanted.encode() or
                     _sha256(deck) != rec.get("measurement_deck_sha256")):
                 return None, "measurement_deck bypasses raw/wrapper group or is stale"
@@ -1102,8 +1240,34 @@ def load_native_measurement(project: Path, block: str, gds: Path,
             return None, (f"source_netlist .subckt {block!r} ports "
                           f"{extracted_ports!r} do not match topology ports; "
                           "expanded extraction requires a bound wrapper")
-        elif "measurement_deck" in rec or "measurement_deck_sha256" in rec:
+        elif ("measurement_deck" in rec or "measurement_deck_sha256" in rec) and not source_based:
             return None, "measurement deck without extraction_wrapper group"
+        if source_based:
+            wrapper_path = project / wrapper["path"] if isinstance(wrapper, dict) else None
+            wanted, source_contract = _delivered_measurement_deck(
+                project, block, source_netlist_path, list(topology.get("ports") or []),
+                wrapper["wrapper_subckt"] if isinstance(wrapper, dict) else block, topology, wrapper_path)
+            if any(rec.get(key) != value for key, value in source_contract.items()):
+                return None, "delivered A3 testbench/model/power source binding is stale"
+            deck, why = _project_file(project, rec.get("measurement_deck"), field="measurement_deck")
+            if deck is None or deck != (bdir / "a8_native_measurement.sp").resolve():
+                return None, why or "measurement_deck is not the ordinary A8 deck"
+            if deck.read_text() != wanted or _sha256(deck) != rec.get("measurement_deck_sha256"):
+                return None, "measurement_deck does not preserve the delivered DUT testbench"
+            models = rec.get("model_bindings")
+            lines = source_contract["model_binding_lines"]
+            if not isinstance(models, list) or len(models) != len(lines):
+                return None, "native measurement does not bind all delivered model libraries"
+            for line, model in zip(lines, models):
+                fields = shlex.split(line)
+                path = Path(fields[1])
+                if not path.is_absolute():
+                    path = (bdir / path).resolve()
+                if (not isinstance(model, dict) or model.get("path") != str(path)
+                        or model.get("section") != (fields[2] if len(fields) > 2 else None)
+                        or not re.fullmatch(r"[0-9a-f]{64}", str(model.get("sha256", "")))
+                        or (path.is_file() and _sha256(path) != model["sha256"])):
+                    return None, "native measurement model closure binding is stale or incomplete"
     except (OSError, ValueError, TypeError) as exc:
         return None, f"native extraction/wrapper group refused: {exc}"
 
@@ -1120,6 +1284,8 @@ def load_native_measurement(project: Path, block: str, gds: Path,
         return None, f"native_log is unreadable: {exc}"
     pwr_match = re.search(r"(?im)^\s*pwr\s*=\s*([-+0-9.eE]+)", log_text)
     idd_match = re.search(r"(?im)^\s*idd\s*=\s*([-+0-9.eE]+)", log_text)
+    if _INVALID_OP_RE.search(log_text):
+        return None, "native power receipt reports an invalid operating point (RESIDUAL_FAIL)"
     if pwr_match is None and idd_match is None:
         return None, ("native_log has no ngspice pwr/idd result; a typed "
                       "value without its measured terminal-power receipt is "
@@ -1127,7 +1293,13 @@ def load_native_measurement(project: Path, block: str, gds: Path,
     native_power_w: Optional[float] = None
     if pwr_match is not None:
         native_power_w = float(pwr_match.group(1))
-    if idd_match is not None:
+    if source_based and pwr_match is None:
+        return None, "source-preserving native measurement lacks terminal-power pwr"
+    if source_based:
+        import analog_real_corner_sweep as _ars
+        if any(_ars._scan_analysis_failures(log_text)):
+            return None, "native source-preserving power log contains a simulator failure"
+    if idd_match is not None and not source_based:
         idd_power_w = abs(float(idd_match.group(1))) * 1.2
         if native_power_w is not None and not math.isclose(
                 native_power_w, idd_power_w, rel_tol=1e-6, abs_tol=1e-18):

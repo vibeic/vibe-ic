@@ -468,6 +468,20 @@ def read_pdk(stage: Stage, pdk_root: str, family: str,
                       f"{dp} ({derr[:160]}). The Metal1 "
                       f"spacing rule is DERIVED from it, never assumed.")
     facts.m1_space_um = _lim.m1_space_um(dtext)
+    if facts.m1_space_um is None and ttext:
+        # Split Magic PDKs put types/aliases and CIF units in the root
+        # technology's includes, outside the selected DRC fragment.
+        def tech_source(path: str) -> str:
+            if path == tp:
+                return ttext
+            if path == dp:
+                return dtext
+            return read_source([path])[1]
+        try:
+            context = _lim.magic_technology_text(tp, tech_source)
+        except (OSError, ValueError) as exc:
+            return None, f"ENV_UNAVAILABLE: Magic technology context is unreadable: {exc}"
+        facts.m1_space_um = _lim.m1_space_um(dtext, technology_text=context)
     facts.deck = _lim.deck_rules(dtext)
     if facts.m1_space_um is None:
         return None, (f"ENV_UNAVAILABLE: {dp} states no Metal1 minimum-space "

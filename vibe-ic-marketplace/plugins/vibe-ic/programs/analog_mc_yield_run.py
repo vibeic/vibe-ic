@@ -35,9 +35,13 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import math
 import re
+import shlex
 import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -90,6 +94,53 @@ def _load_specs(project: Path, block: str):
             if specs:
                 return specs, str(cand.relative_to(project))
     return {}, None
+
+
+def _source_yield_coverage(project: Path, spec_source: str,
+                           spec_yield: dict, runs: int) -> dict:
+    """Apply the existing analysis selector to actual per-output MC evidence.
+
+    Unclassified supply/load conditions are not invented performance outputs.
+    A required output is covered only when every requested sample supplied a
+    scoreable value; a finite yield over a subset cannot stand for all runs.
+    """
+    import ams_analysis_select
+    source = json.loads((project / spec_source).read_text())
+    analyses, mapping = ams_analysis_select.select(source)
+    normalize = lambda name: _ars.normalize_spec_label(name) or str(name).casefold()
+    required = sorted({normalize(row['key']) for row in mapping})
+    measured = sorted({normalize(name) for name, row in spec_yield.items()
+                       if isinstance(row, dict) and row.get('runs_scored') == runs
+                       and isinstance(row.get('yield_pct'), (int, float))
+                       and not isinstance(row['yield_pct'], bool)
+                       and math.isfinite(row['yield_pct'])})
+    return {'required': required, 'measured': measured,
+            'missing': sorted(set(required) - set(measured)), 'analyses': analyses,
+            'detail': '' if required else 'source-required outputs could not be selected'}
+
+
+def _grade_source_yield(project: Path, spec_source: str,
+                         spec_yield: dict, runs: int) -> dict:
+    """Grade only source performance outputs while retaining partial results."""
+    coverage = _source_yield_coverage(project, spec_source, spec_yield, runs)
+    normalize = lambda name: _ars.normalize_spec_label(name) or str(name).casefold()
+    values = [row['yield_pct'] for name, row in spec_yield.items()
+              if normalize(name) in coverage['required'] and isinstance(row, dict)
+              and isinstance(row.get('yield_pct'), (int, float))
+              and not isinstance(row['yield_pct'], bool) and math.isfinite(row['yield_pct'])]
+    observed = min(values) if values else None
+    complete = bool(coverage['required']) and not coverage['missing']
+    # A real measured failure stays FAIL even when other outputs are absent.
+    # Missing evidence can remove PASS, never erase positive failure evidence.
+    verdict = ('FAIL' if observed is not None and observed < 95.0 else
+               'PASS' if complete else 'NOT_MEASURED')
+    absent = ('MC_REQUIRED_OUTPUTS_NOT_MEASURED: ' + ', '.join(coverage['missing'])
+              if coverage['missing'] else coverage['detail'])
+    reason = ('MC_MEASURED_OUTPUT_YIELD_FAILED' + ('; ' + absent if absent else '')
+              if verdict == 'FAIL' else absent or 'MC_SOURCE_OUTPUT_YIELD_COMPLETE')
+    return {'verdict': verdict, 'rc': 2 if verdict == 'NOT_MEASURED' else 0,
+            'mc_yield_pct': observed if complete else None,
+            'reason': reason, 'mc_source_coverage': coverage}
 
 
 # ORGANIC #142 — a MC iteration is only scoreable against a deck that
@@ -267,6 +318,165 @@ def _assert_single_model_family(wrap_text: str, mc_include_line: str) -> None:
         "native MC deck must not overlay an open-PDK (sky130/gf180) model lib")
 
 
+def _source_path(project: Path, parent: Path, token: str) -> Path:
+    """Resolve delivered include paths, including the canonical project mount."""
+    path = Path(token)
+    if str(path).startswith('/project/'):
+        path = project / path.relative_to('/project')
+    elif not path.is_absolute():
+        path = parent / path
+    return path.resolve()
+
+
+def _cards(text: str):
+    for line in text.splitlines():
+        if not line.strip() or line.lstrip().startswith('*'):
+            continue
+        try:
+            tokens = shlex.split(line)
+        except ValueError:
+            continue
+        if tokens:
+            yield line, tokens
+
+
+def _statistical_closure(project: Path, path: Path, section: str | None,
+                         seen=None) -> tuple[str, list[dict]]:
+    """Inspect the selected foundry section and its actual include closure."""
+    seen = set() if seen is None else seen
+    key = (path, section)
+    if key in seen:
+        return '', []
+    seen.add(key)
+    if not path.is_file():
+        raise ValueError('native statistical model dependency missing: ' + str(path))
+    text = path.read_text(errors='replace')
+    selected, active, found = [], section is None, section is None
+    for line, tokens in _cards(text):
+        directive = tokens[0].casefold()
+        if directive == '.lib' and len(tokens) == 2:
+            active = section is not None and tokens[1].casefold() == section.casefold()
+            found = found or active
+            continue
+        if directive == '.endl':
+            active = section is None
+            continue
+        if active:
+            selected.append(line)
+    if not found:
+        raise ValueError('native statistical section absent: ' + str(path) + ':' + str(section))
+    files = [{'path': str(path), 'sha256': hashlib.sha256(path.read_bytes()).hexdigest(),
+              'section': section}]
+    result = '\n'.join(selected)
+    for _line, tokens in _cards(result):
+        directive = tokens[0].casefold()
+        if directive in ('.include', '.inc') and len(tokens) >= 2:
+            child_section = None
+        elif directive == '.lib' and len(tokens) >= 3:
+            child_section = tokens[2]
+        else:
+            continue
+        child = _source_path(project, path.parent, tokens[1])
+        child_text, child_files = _statistical_closure(project, child, child_section, seen)
+        result += '\n' + child_text
+        files.extend(child_files)
+    return result, files
+
+
+def _statistical_section(project: Path, model: Path, nominal: str):
+    """Select a real statistical sibling of the delivered nominal section.
+
+    Prefer the foundry process-statistical entry, which supplies its own
+    parameter distributions. A mismatch-only entry with a disabled instance
+    switch is refused; this producer never invents a switch override or jitter.
+    """
+    import analog_pdk_deck_context as context
+    sections = context.parse_sections(model.read_text(errors='replace'))
+    base = nominal.casefold()
+    stem = re.sub(r'(?:[_.-](?:tt|typ|typical|nom|nominal))$', '', base)
+    if base in ('tt', 'typ', 'typical', 'nom', 'nominal'):
+        stem = ''
+    candidates = []
+    for section in sections:
+        low = section.casefold()
+        suffix = low[len(base):].lstrip('_.-') if low.startswith(base) else None
+        if suffix is None and stem and low.startswith(stem):
+            suffix = low[len(stem):].lstrip('_.-')
+        if suffix is None and not stem:
+            suffix = low
+        if suffix and re.fullmatch(r'(?:stat|statistical|mismatch|mm|montecarlo)', suffix):
+            candidates.append((0 if suffix in ('stat', 'statistical') else 1, section))
+    if not candidates:
+        return None
+    _rank, selected = min(candidates)
+    closure, files = _statistical_closure(project, model, selected)
+    if not re.search(r'(?i)\b(?:agauss|gauss|aunif|unif|mc_global)\s*\(', closure):
+        raise ValueError('native statistical section has no foundry random distribution: '
+                         + str(model) + ':' + selected)
+    if (re.search(r'(?i)mismatch|(?:^|_)mm(?:_|$)', selected)
+            and re.search(r'(?i)\bmm_ok\s*=\s*0\b', closure)
+            and re.search(r'(?i)\bmm_ok\s*!=\s*1\b', closure)):
+        raise ValueError('native mismatch section requires an explicitly enabled mm_ok '
+                         'device parameter; refusing an inactive mismatch model: '
+                         + str(model) + ':' + selected)
+    return {'model': str(model), 'nominal_section': nominal, 'section': selected,
+            'variation_scope': 'foundry_process_statistics' if _rank == 0 else 'foundry_mismatch',
+            'model_inputs': files}
+
+
+def _native_section_copies(project: Path, deck: Path, destination: Path,
+                            container: str, host_root: Path):
+    """Copy only the delivered circuit closure; bind foundry entry sections.
+
+    Nominal model cards live inside the DUT in many projects. Prepending a raw
+    mismatch leaf neither supplies its corner parameters nor replaces those
+    nominal bindings. These local copies preserve every circuit/stimulus card
+    while changing only real section selections and include paths.
+    """
+    texts, destinations, bindings = {}, {}, []
+
+    def visit(path):
+        if path in destinations:
+            return destinations[path]
+        ident = hashlib.sha256(str(path).encode()).hexdigest()[:12]
+        target = destination / (ident + '-' + path.name)
+        destinations[path] = target
+        rewritten = []
+        for line in path.read_text(errors='replace').splitlines():
+            try:
+                tokens = shlex.split(line) if not line.lstrip().startswith('*') else []
+            except ValueError:
+                tokens = []
+            directive = tokens[0].casefold() if tokens else ''
+            if directive in ('.include', '.inc') and len(tokens) == 2:
+                child = _source_path(project, path.parent, tokens[1])
+                if child.is_file():
+                    copied = visit(child)
+                    mapped = _ars._container_path(container, host_root, copied)
+                    line = '.include "' + mapped + '"'
+            elif directive == '.lib' and len(tokens) == 3:
+                model = _source_path(project, path.parent, tokens[1])
+                if model.is_file():
+                    binding = _statistical_section(project, model, tokens[2])
+                    section = binding['section'] if binding else tokens[2]
+                    if binding and binding not in bindings:
+                        bindings.append(binding)
+                    mapped = _ars._container_path(container, host_root, model)
+                    line = '.lib "' + mapped + '" ' + section
+            rewritten.append(line)
+        texts[target] = '\n'.join(rewritten) + '\n'
+        return target
+
+    root = visit(deck)
+    if not bindings:
+        return None
+    destination.mkdir(parents=True, exist_ok=True)
+    for target, text in texts.items():
+        target.write_text(text)
+    return {'body': texts[root], 'bindings': bindings,
+            'copied_inputs': [str(path) for path in sorted(texts)]}
+
+
 #: The verdict of a run the ENVIRONMENT refused. Deliberately not `SKIP` and
 #: not `UNSCOREABLE`: both of those are statements about the SUBJECT (this
 #: block does not need the step / this block cannot be scored), and a refusal
@@ -369,10 +579,36 @@ def _run_block(project: Path, block: str, container: str, pdk: str,
         mc_include_line = f".lib {pdk_lib} {mc_section}"
         mc_model_section = mc_section
 
-    mc_dir = deck.parent / "mc_runs"
-    mc_dir.mkdir(parents=True, exist_ok=True)
+    mc_root = deck.parent / "mc_runs"
+    mc_root.mkdir(parents=True, exist_ok=True)
+    # Retain earlier native failures and samples when the same canonical
+    # producer is retried. The first run preserves the historical layout.
+    mc_dir = (Path(tempfile.mkdtemp(prefix='run-', dir=mc_root))
+              if any(mc_root.glob('mc_*.sp')) else mc_root)
     deck_body = deck.read_text(errors="replace")
+    section_copies = None
     if native:
+        try:
+            section_copies = _native_section_copies(
+                project, deck, mc_dir / 'inputs', container, host_root)
+        except (OSError, ValueError) as exc:
+            return {'verdict': 'UNSCOREABLE', 'rc': 2, 'mc_runs': 0,
+                    'reason': 'native statistical model binding unavailable: ' + str(exc)}
+    if section_copies:
+        deck_body = section_copies['body']
+        mc_include_line = ''
+        mc_model_section = ','.join(row['section'] for row in section_copies['bindings'])
+    elif native:
+        try:
+            selected_text, _files = _statistical_closure(
+                project, Path(native['mc_lib']), native['mc_section'])
+        except (OSError, ValueError):
+            selected_text = ''
+        if (re.search(r'(?i)\bmm_ok\s*=\s*0\b', selected_text)
+                and re.search(r'(?i)\bmm_ok\s*!=\s*1\b', selected_text)):
+            return {'verdict': 'UNSCOREABLE', 'rc': 2, 'mc_runs': 0,
+                    'reason': 'native mismatch leaf has a disabled mm_ok switch and '
+                              'no supported statistical entry section was bound'}
         # strip ANY caller-side include-form model line (native corner OR a stray
         # open lib) so the wrapper owns the SINGLE native model source — no
         # cross-family mixing (the _assert_single_model_family guard below is the
@@ -396,7 +632,7 @@ def _run_block(project: Path, block: str, container: str, pdk: str,
             f"{mc_include_line}\n"
             + deck_body + ("\n.end\n" if ".end" not in deck_body.lower()
                            else "\n"))
-        if native:
+        if native and not section_copies:
             _assert_single_model_family(wrap_text, mc_include_line)
         wrap.write_text(wrap_text)
         # #464 — _run_ngspice now also returns a per-run sim_status (failed
@@ -406,17 +642,31 @@ def _run_block(project: Path, block: str, container: str, pdk: str,
         # the spec-yield loop below already skips runs missing the metric).
         # Tolerate the legacy 3-tuple return so any pre-existing caller/mock
         # that has not yet adopted the 4-tuple keeps working.
+        # The wrapper is emitted in mc_runs/, but a delivered DUT include is
+        # relative to the ORIGINAL testbench directory. Preserve that native
+        # resolution context instead of running N batches that cannot load it.
         _ret = _ars._run_ngspice(
-            container, _ars._container_path(container, host_root, wrap))
+            container, _ars._container_path(container, host_root, wrap),
+            cwd=_ars._container_path(container, host_root, deck.parent))
         if len(_ret) == 4:
             ok, meas, raw, sim_status = _ret
         else:
             ok, meas, raw = _ret
             sim_status = {"partial": False, "warnings": []}
-        (mc_dir / f"mc_{i:04d}.log").write_text(raw)
+        log = mc_dir / f"mc_{i:04d}.log"
+        log.write_text(raw)
         per_run.append({"seed": i, "ok": ok,
                         "partial_measurement": sim_status["partial"],
-                        "sim_warnings": sim_status["warnings"], **meas})
+                        "sim_warnings": sim_status["warnings"],
+                        "log": str(log.relative_to(project)), **meas})
+
+    failed = [row for row in per_run if not row.get('ok')]
+    native_evidence = {
+        'mc_native_failed': len(failed),
+        'mc_failure_logs': [row['log'] for row in failed],
+        'mc_log_dir': str(mc_dir.relative_to(project)),
+        'mc_model_bindings': section_copies['bindings'] if section_copies else [],
+    }
 
     # per-spec yield
     spec_yield = {}
@@ -451,6 +701,10 @@ def _run_block(project: Path, block: str, container: str, pdk: str,
     scoreable = [v["yield_pct"] for v in spec_yield.values()
                  if v.get("yield_pct") is not None]
     if not scoreable:
+        if per_run and len(failed) == len(per_run):
+            return {'verdict': 'FAIL', 'rc': 1, 'mc_runs': n,
+                    'reason': 'all Monte-Carlo native iterations failed; inspect ' + failed[0]['log'],
+                    'spec_yield': spec_yield, **native_evidence}
         # ORGANIC #142 — distinguish "MC produced NO statistical spread"
         # (degenerate — the mismatch corner section was not selected / mismatch
         # not resampled) from "no scoreable measure at all". The degenerate case
@@ -469,12 +723,12 @@ def _run_block(project: Path, block: str, container: str, pdk: str,
                         f"PDK's statistical/mismatch section AND its MC device "
                         f"variant; refusing to report a fabricated 100%/0% "
                         f"yield. (family-agnostic backstop.)"),
-                    "mc_runs": n, "spec_yield": spec_yield}
-        return {"verdict": "SKIP", "rc": 2,
-                "reason": ("MC ran but no run carried a scoreable measure "
-                           "— check the deck's .meas names vs spec.json"),
-                "mc_runs": n, "spec_yield": spec_yield}
-    mc_yield = min(scoreable)  # worst spec governs
+                    "mc_runs": n, "spec_yield": spec_yield, **native_evidence}
+        # Successful native batches with absent source outputs are incomplete,
+        # not inapplicable. Fall through to the same source-coverage grading
+        # and persist a null aggregate, clearing any older apparent yield.
+    graded = _grade_source_yield(project, spec_src, spec_yield, n)
+    mc_yield = graded['mc_yield_pct']
 
     # write into corner_results.json so the EXISTING A4 gate fires
     cr = project / "phase3" / "analog" / block / "corner_results.json"
@@ -485,6 +739,8 @@ def _run_block(project: Path, block: str, container: str, pdk: str,
         data = {}
     data.update({
         "mc_yield_pct": mc_yield,
+        "mc_verdict": graded['verdict'],
+        "mc_source_coverage": graded['mc_source_coverage'],
         "mc_runs": n,
         "mc_pass": sum(1 for r in per_run if r.get("ok")),
         "mc_seed_range": [1, n],
@@ -494,13 +750,13 @@ def _run_block(project: Path, block: str, container: str, pdk: str,
         "mc_log_dir": str(mc_dir.relative_to(project)),
         "mc_model_section": mc_model_section,
         "mc_pdk_source": (native.get("source") if native else pdk),
+        **native_evidence,
     })
     cr.write_text(json.dumps(data, indent=2) + "\n")
 
-    return {"verdict": "PASS" if mc_yield >= 95.0 else "FAIL", "rc": 0,
-            "mc_yield_pct": mc_yield, "mc_runs": n,
+    return {**graded, "mc_runs": n,
             "spec_yield": spec_yield,
-            "corner_results": str(cr.relative_to(project))}
+            "corner_results": str(cr.relative_to(project)), **native_evidence}
 
 
 def self_name() -> str:

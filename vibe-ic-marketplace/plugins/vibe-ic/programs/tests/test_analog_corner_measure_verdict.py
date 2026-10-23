@@ -159,6 +159,26 @@ def test_text_fallback_nonzero_exit_nulls_everything(monkeypatch):
     assert ss["partial"] is True
 
 
+@pytest.mark.parametrize("sidecar,supports", [(None, False), (_SIDECAR_OK, True)])
+def test_native_residual_failure_rejects_solution_even_with_passing_measures(monkeypatch, sidecar, supports):
+    ok, meas, raw, ss = _run(monkeypatch,
+        _HEALTHY + ";;RESIDUAL_FAIL worst_ratio=2.5 node=vout\n", sidecar, supports=supports)
+    assert ok is False
+    assert all(value is None for value in meas.values())
+    assert ss["failed_analyses"] == ["*"]
+    assert ss["partial"] is True
+    assert any(";;RESIDUAL_FAIL" in warning for warning in ss["warnings"])
+    assert ";;RESIDUAL_FAIL" in raw
+
+
+@pytest.mark.parametrize("notice", [";;RESIDUAL_OK worst_ratio=0.5", ";;RESIDUAL_FAIL_count=0"])
+def test_residual_success_or_different_marker_does_not_invalidate_native_solution(monkeypatch, notice):
+    ok, meas, _raw, ss = _run(monkeypatch, _HEALTHY + notice + "\n", _SIDECAR_OK)
+    assert ok is True
+    assert meas["ugbw"] == pytest.approx(1.2e6)
+    assert ss["partial"] is False
+
+
 # --------------------------------------------------------------------------- #
 # the de-hardcoded "no such vector as <name>"
 # --------------------------------------------------------------------------- #

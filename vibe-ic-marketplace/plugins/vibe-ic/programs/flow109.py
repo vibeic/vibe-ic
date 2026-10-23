@@ -149,7 +149,7 @@ def _tool_uses(row: dict, profile: dict) -> list[dict]:
              "native_step_id": dispatch["native_step_id"],
              "native_steps": dispatch.get("engine_steps", {}).get(tool, profile.get("native_steps", [])),
              "executable_name": dispatch.get("engine_executables", {}).get(tool, tool),
-             "qualification_required": True}
+             "qualification_required": dispatch.get("adapter") != "analog_native_flow"}
             for tool in dispatch["engine_families"]]
 
 
@@ -322,14 +322,20 @@ def component_context(context: Mapping, *, native_step_id: str | None = None,
 
 
 def _window_inventory(context: Mapping) -> None:
+    if all(row["profile"]["dispatch"].get("adapter") == "analog_native_flow"
+           for row in context["resolved_rows"]):
+        return
     runtime = context.get("runtime_tool_uses")
-    expected = [use["use_id"] for row in context["resolved_rows"] for use in row["tool_uses"]]
+    expected = {use["use_id"] for row in context["resolved_rows"] for use in row["tool_uses"]
+                if use.get("qualification_required", True)}
+    optional = {use["use_id"] for row in context["resolved_rows"] for use in row["tool_uses"]
+                if not use.get("qualification_required", True)}
     actual = [item.get("use_id") for item in runtime if isinstance(item, dict)] \
         if isinstance(runtime, list) else []
     if not expected or len(actual) != len(runtime or []) or len(actual) != len(set(actual)) \
-            or set(actual) != set(expected):
+            or not expected.issubset(actual) or set(actual) - expected - optional:
         raise Flow109Error("FLOW109_WINDOW_USE_MISMATCH",
-                           "runtime inventory must exactly cover every selected row use")
+                           "runtime inventory must cover each selected qualified use without unknown uses")
     if not isinstance(context.get("qualification_registry"), str) \
             or not context["qualification_registry"]:
         raise Flow109Error("FLOW109_QUALIFICATION_REGISTRY_ABSENT",
@@ -478,6 +484,10 @@ def prepare_front_door(args, project: Path) -> int | None:
     context = execution_context(plan, args.entry_step, args.exit_step,
                                 runtime_tool_uses=manifest.get("runtime_tool_uses", manifest.get("tool_uses")),
                                 qualification_registry=manifest.get("qualification_registry"))
+    # Native analog steps consume ordinary design configuration and artifacts.
+    # Qualification documents are not a prerequisite for running these tools.
+    if getattr(args, "container", None):
+        os.environ["VIBEIC_ANALOG_CONTAINER"] = str(args.container)
     if context["schema"] == "vibeic.flow109.execution-window.v1":
         _window_inventory(context)
         attempt = _new_attempt(project, context)
@@ -486,13 +496,34 @@ def prepare_front_door(args, project: Path) -> int | None:
         os.environ[CONTEXT_ENV] = str(path.resolve())
         os.environ[ATTEMPT_ENV] = str(attempt.resolve())
         if context["dispatch_kind"] == "ordered_adapters":
+            if all(row["profile"]["dispatch"].get("adapter") == "analog_native_flow"
+                   for row in context["resolved_rows"]):
+                from analog_native_flow import execute_window, _aggregate
+                native = execute_window(project, context)
+                components = []
+                for row in context["resolved_rows"]:
+                    results = [item for item in native["steps"] if item["step"] == row["id"]]
+                    result = {"step_id": row["id"], "component_status": _aggregate(results),
+                              "flow109_acceptance": "NOT_MEASURED",
+                              "native_results": {"steps": results, "attempt": native.get("attempt")},
+                              "reason": native.get("reason", "native analog window executed")}
+                    components.append(result)
+                    write_json(destination / "components" / (row["id"] + ".json"), result)
+                _finish_attempt(attempt, {
+                    "schema": "vibeic.flow109.window-attempt-result.v1",
+                    "context_sha256": context["context_sha256"],
+                    "component_status": native["window_verdict"], "components": components,
+                    "flow109_acceptance": "NOT_MEASURED", "whole_flow_acceptance": "NOT_MEASURED",
+                    "bounded": True, "delivery_accepted": False})
+                return {"PASS": 0, "FAIL": 1, "NOT_MEASURED": 2}[native["window_verdict"]]
             components = []
             for row in context["resolved_rows"]:
                 current = component_context(context, requested_step=row["id"])
                 adapter = row["profile"]["dispatch"]["adapter"]
                 try:
                     from flow109_admission import require_admission, AdmissionRefusal
-                    require_admission(project, current)
+                    if adapter != "analog_native_flow":
+                        require_admission(project, current)
                     from importlib import import_module
                     result = import_module(adapter).execute(project, current)
                 except AdmissionRefusal as exc:
@@ -536,7 +567,9 @@ def prepare_front_door(args, project: Path) -> int | None:
     # Admission is intentionally immediately before actual existing dispatch.
     # There is no marker process or substitute runner behind this branch.
     from flow109_admission import require_admission
-    admission = require_admission(project, context)
+    native_analog = context['resolved_row']['profile']['dispatch'].get('adapter') == 'analog_native_flow'
+    admission = ({"status": "PASS", "basis": "native_analog_configuration", "qualified": False}
+                 if native_analog else require_admission(project, context))
     write_json(destination / "admission.json", admission)
     if not isinstance(admission, dict) or admission.get("status") != "PASS":
         raise Flow109Error("FLOW109_ADMISSION_REFUSED", "qualification did not return PASS")

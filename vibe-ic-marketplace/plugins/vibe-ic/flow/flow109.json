@@ -2199,9 +2199,9 @@
             "analog_a1_spec_emit",
             "analog_a1_spec_extract_check"
           ],
-          "execution_status": "EXISTING_COMPONENT_DISPATCH_NOT_109_ACCEPTANCE",
+          "execution_status": "NATIVE_DEFAULT_DISPATCH",
           "dispatch": {
-            "adapter": "flow109_analog",
+            "adapter": "analog_native_flow",
             "native_step_id": "A1",
             "engine_families": [
               "python3"
@@ -2215,7 +2215,7 @@
                 "analog_a1_spec_extract_check"
               ]
             },
-            "operation_scope": "structured_analog_spec_binding"
+            "operation_scope": "native_analog_step"
           }
         }
       ],
@@ -2325,24 +2325,31 @@
             "ngspice_model_device_smoke",
             "flow109_analog_model_check"
           ],
-          "execution_status": "EXISTING_COMPONENT_DISPATCH_NOT_109_ACCEPTANCE",
+          "execution_status": "NATIVE_DEFAULT_DISPATCH",
           "dispatch": {
-            "adapter": "flow109_analog_a02",
+            "adapter": "analog_native_flow",
             "native_step_id": "flow109.A02",
             "engine_families": [
+              "python3",
               "ngspice"
             ],
             "engine_executables": {
+              "python3": "python3",
               "ngspice": "ngspice"
             },
             "engine_steps": {
+              "python3": [
+                "pdk_analog_completeness_check",
+                "ngspice_model_device_smoke",
+                "flow109_analog_model_check"
+              ],
               "ngspice": [
                 "pdk_analog_completeness_check",
                 "ngspice_model_device_smoke",
                 "flow109_analog_model_check"
               ]
             },
-            "operation_scope": "declared_analog_model_device_smoke"
+            "operation_scope": "native_analog_step"
           }
         }
       ],
@@ -2615,8 +2622,26 @@
           "select_when": "otherwise",
           "provider": "other",
           "tools": "ngspice + Python trim/test-plan emitter",
-          "native_steps": [],
-          "execution_status": "UNIMPLEMENTED"
+          "native_steps": [
+            "analog_native.A03"
+          ],
+          "execution_status": "NATIVE_DEFAULT_DISPATCH",
+          "dispatch": {
+            "adapter": "analog_native_flow",
+            "native_step_id": "flow109.A03",
+            "engine_families": [
+              "python3"
+            ],
+            "engine_executables": {
+              "python3": "python3"
+            },
+            "engine_steps": {
+              "python3": [
+                "analog_native.A03"
+              ]
+            },
+            "operation_scope": "native_analog_step"
+          }
         }
       ],
       "complementary_tools": [],
@@ -2758,9 +2783,9 @@
             "analog_a2_topology_emit",
             "analog_a2_topology_select_check"
           ],
-          "execution_status": "EXISTING_COMPONENT_DISPATCH_NOT_109_ACCEPTANCE",
+          "execution_status": "NATIVE_DEFAULT_DISPATCH",
           "dispatch": {
-            "adapter": "flow109_analog_a04",
+            "adapter": "analog_native_flow",
             "native_step_id": "flow109.A04",
             "engine_families": [
               "python3"
@@ -2774,7 +2799,7 @@
                 "analog_a2_topology_select_check"
               ]
             },
-            "operation_scope": "source_authorized_analog_topology"
+            "operation_scope": "native_analog_step"
           }
         }
       ],
@@ -2890,9 +2915,9 @@
             "analog_a3_netlist_gen_check",
             "ngspice_operating_point"
           ],
-          "execution_status": "EXISTING_COMPONENT_DISPATCH_NOT_109_ACCEPTANCE",
+          "execution_status": "NATIVE_DEFAULT_DISPATCH",
           "dispatch": {
-            "adapter": "flow109_analog_a05",
+            "adapter": "analog_native_flow",
             "native_step_id": "flow109.A05",
             "engine_families": [
               "python3",
@@ -2905,13 +2930,16 @@
             "engine_steps": {
               "python3": [
                 "analog_a3_netlist_emit",
-                "analog_a3_netlist_gen_check"
+                "analog_a3_netlist_gen_check",
+                "ngspice_operating_point"
               ],
               "ngspice": [
+                "analog_a3_netlist_emit",
+                "analog_a3_netlist_gen_check",
                 "ngspice_operating_point"
               ]
             },
-            "operation_scope": "expert_sized_netlist_native_operating_point"
+            "operation_scope": "native_analog_step"
           }
         }
       ],
@@ -3029,8 +3057,26 @@
           "select_when": "otherwise",
           "provider": "other",
           "tools": "ngspice + Python measurement-window validation",
-          "native_steps": [],
-          "execution_status": "UNIMPLEMENTED"
+          "native_steps": [
+            "analog_native.A06"
+          ],
+          "execution_status": "NATIVE_DEFAULT_DISPATCH",
+          "dispatch": {
+            "adapter": "analog_native_flow",
+            "native_step_id": "flow109.A06",
+            "engine_families": [
+              "python3"
+            ],
+            "engine_executables": {
+              "python3": "python3"
+            },
+            "engine_steps": {
+              "python3": [
+                "analog_native.A06"
+              ]
+            },
+            "operation_scope": "native_analog_step"
+          }
         }
       ],
       "complementary_tools": [],
@@ -3123,7 +3169,7 @@
       "id": "A07",
       "key": "base_A6",
       "position": 15,
-      "name": "Analog nominal and PVT simulation",
+      "name": "Analog pre-layout nominal performance",
       "phase": 2,
       "stage": 2,
       "when": "has_analog",
@@ -3158,8 +3204,31 @@
           "select_when": "otherwise",
           "provider": "other",
           "tools": "ngspice nominal DC/AC/transient/noise",
-          "native_steps": [],
-          "execution_status": "UNIMPLEMENTED"
+          "native_steps": [
+            "analog_native.A07"
+          ],
+          "execution_status": "NATIVE_DEFAULT_DISPATCH",
+          "dispatch": {
+            "adapter": "analog_native_flow",
+            "native_step_id": "flow109.A07",
+            "engine_families": [
+              "python3",
+              "ngspice"
+            ],
+            "engine_executables": {
+              "python3": "python3",
+              "ngspice": "ngspice"
+            },
+            "engine_steps": {
+              "python3": [
+                "analog_native.A07"
+              ],
+              "ngspice": [
+                "analog_native.A07"
+              ]
+            },
+            "operation_scope": "native_analog_step"
+          }
         }
       ],
       "complementary_tools": [],
@@ -4769,7 +4838,7 @@
       "id": "A08",
       "key": "base_A7",
       "position": 28,
-      "name": "Analog pre-layout convergence",
+      "name": "Analog pre-layout PVT and operating range",
       "phase": 2,
       "stage": 3,
       "when": "has_analog",
@@ -4804,8 +4873,31 @@
           "select_when": "otherwise",
           "provider": "other",
           "tools": "ngspice deterministic PVT sweep",
-          "native_steps": [],
-          "execution_status": "UNIMPLEMENTED"
+          "native_steps": [
+            "analog_native.A08"
+          ],
+          "execution_status": "NATIVE_DEFAULT_DISPATCH",
+          "dispatch": {
+            "adapter": "analog_native_flow",
+            "native_step_id": "flow109.A08",
+            "engine_families": [
+              "python3",
+              "ngspice"
+            ],
+            "engine_executables": {
+              "python3": "python3",
+              "ngspice": "ngspice"
+            },
+            "engine_steps": {
+              "python3": [
+                "analog_native.A08"
+              ],
+              "ngspice": [
+                "analog_native.A08"
+              ]
+            },
+            "operation_scope": "native_analog_step"
+          }
         }
       ],
       "complementary_tools": [],
@@ -4911,8 +5003,31 @@
           "select_when": "otherwise",
           "provider": "other",
           "tools": "ngspice statistical/mismatch model sweep + Python aggregation",
-          "native_steps": [],
-          "execution_status": "UNIMPLEMENTED"
+          "native_steps": [
+            "analog_native.A09"
+          ],
+          "execution_status": "NATIVE_DEFAULT_DISPATCH",
+          "dispatch": {
+            "adapter": "analog_native_flow",
+            "native_step_id": "flow109.A09",
+            "engine_families": [
+              "python3",
+              "ngspice"
+            ],
+            "engine_executables": {
+              "python3": "python3",
+              "ngspice": "ngspice"
+            },
+            "engine_steps": {
+              "python3": [
+                "analog_native.A09"
+              ],
+              "ngspice": [
+                "analog_native.A09"
+              ]
+            },
+            "operation_scope": "native_analog_step"
+          }
         }
       ],
       "complementary_tools": [],
@@ -5023,8 +5138,31 @@
           "select_when": "otherwise",
           "provider": "other",
           "tools": "ngspice + Python finite trim/calibration runner",
-          "native_steps": [],
-          "execution_status": "UNIMPLEMENTED"
+          "native_steps": [
+            "analog_native.A10"
+          ],
+          "execution_status": "NATIVE_DEFAULT_DISPATCH",
+          "dispatch": {
+            "adapter": "analog_native_flow",
+            "native_step_id": "flow109.A10",
+            "engine_families": [
+              "python3",
+              "ngspice"
+            ],
+            "engine_executables": {
+              "python3": "python3",
+              "ngspice": "ngspice"
+            },
+            "engine_steps": {
+              "python3": [
+                "analog_native.A10"
+              ],
+              "ngspice": [
+                "analog_native.A10"
+              ]
+            },
+            "operation_scope": "native_analog_step"
+          }
         }
       ],
       "complementary_tools": [],
@@ -6717,8 +6855,31 @@
           "select_when": "otherwise",
           "provider": "other",
           "tools": "Magic + PDK PCells/layout generators",
-          "native_steps": [],
-          "execution_status": "UNIMPLEMENTED"
+          "native_steps": [
+            "analog_native.A11"
+          ],
+          "execution_status": "NATIVE_DEFAULT_DISPATCH",
+          "dispatch": {
+            "adapter": "analog_native_flow",
+            "native_step_id": "flow109.A11",
+            "engine_families": [
+              "python3",
+              "magic"
+            ],
+            "engine_executables": {
+              "python3": "python3",
+              "magic": "magic"
+            },
+            "engine_steps": {
+              "python3": [
+                "analog_native.A11"
+              ],
+              "magic": [
+                "analog_native.A11"
+              ]
+            },
+            "operation_scope": "native_analog_step"
+          }
         }
       ],
       "complementary_tools": [],
@@ -6837,7 +6998,46 @@
             "Magic.SpiceExtraction",
             "Netgen.LVS"
           ],
-          "execution_status": "UNIMPLEMENTED"
+          "execution_status": "NATIVE_DEFAULT_DISPATCH",
+          "dispatch": {
+            "adapter": "analog_native_flow",
+            "native_step_id": "flow109.A12",
+            "engine_families": [
+              "python3",
+              "magic",
+              "klayout",
+              "netgen"
+            ],
+            "engine_executables": {
+              "python3": "python3",
+              "magic": "magic",
+              "klayout": "klayout",
+              "netgen": "netgen"
+            },
+            "engine_steps": {
+              "python3": [
+                "KLayout.DRC",
+                "Magic.SpiceExtraction",
+                "Netgen.LVS"
+              ],
+              "magic": [
+                "KLayout.DRC",
+                "Magic.SpiceExtraction",
+                "Netgen.LVS"
+              ],
+              "klayout": [
+                "KLayout.DRC",
+                "Magic.SpiceExtraction",
+                "Netgen.LVS"
+              ],
+              "netgen": [
+                "KLayout.DRC",
+                "Magic.SpiceExtraction",
+                "Netgen.LVS"
+              ]
+            },
+            "operation_scope": "native_analog_step"
+          }
         }
       ],
       "complementary_tools": [],
@@ -6954,7 +7154,28 @@
           "native_steps": [
             "Magic.RCX"
           ],
-          "execution_status": "UNIMPLEMENTED"
+          "execution_status": "NATIVE_DEFAULT_DISPATCH",
+          "dispatch": {
+            "adapter": "analog_native_flow",
+            "native_step_id": "flow109.A13",
+            "engine_families": [
+              "python3",
+              "magic"
+            ],
+            "engine_executables": {
+              "python3": "python3",
+              "magic": "magic"
+            },
+            "engine_steps": {
+              "python3": [
+                "Magic.RCX"
+              ],
+              "magic": [
+                "Magic.RCX"
+              ]
+            },
+            "operation_scope": "native_analog_step"
+          }
         }
       ],
       "complementary_tools": [],
@@ -7071,8 +7292,31 @@
           "select_when": "otherwise",
           "provider": "other",
           "tools": "ngspice post-layout PVT simulation",
-          "native_steps": [],
-          "execution_status": "UNIMPLEMENTED"
+          "native_steps": [
+            "analog_native.A14"
+          ],
+          "execution_status": "NATIVE_DEFAULT_DISPATCH",
+          "dispatch": {
+            "adapter": "analog_native_flow",
+            "native_step_id": "flow109.A14",
+            "engine_families": [
+              "python3",
+              "ngspice"
+            ],
+            "engine_executables": {
+              "python3": "python3",
+              "ngspice": "ngspice"
+            },
+            "engine_steps": {
+              "python3": [
+                "analog_native.A14"
+              ],
+              "ngspice": [
+                "analog_native.A14"
+              ]
+            },
+            "operation_scope": "native_analog_step"
+          }
         }
       ],
       "complementary_tools": [],
@@ -7186,8 +7430,31 @@
           "select_when": "otherwise",
           "provider": "other",
           "tools": "ngspice post-layout statistical/mismatch sweep",
-          "native_steps": [],
-          "execution_status": "UNIMPLEMENTED"
+          "native_steps": [
+            "analog_native.A15"
+          ],
+          "execution_status": "NATIVE_DEFAULT_DISPATCH",
+          "dispatch": {
+            "adapter": "analog_native_flow",
+            "native_step_id": "flow109.A15",
+            "engine_families": [
+              "python3",
+              "ngspice"
+            ],
+            "engine_executables": {
+              "python3": "python3",
+              "ngspice": "ngspice"
+            },
+            "engine_steps": {
+              "python3": [
+                "analog_native.A15"
+              ],
+              "ngspice": [
+                "analog_native.A15"
+              ]
+            },
+            "operation_scope": "native_analog_step"
+          }
         }
       ],
       "complementary_tools": [],
@@ -7316,8 +7583,31 @@
           "select_when": "otherwise",
           "provider": "other",
           "tools": "ngspice reliability/mission analysis + Python limits",
-          "native_steps": [],
-          "execution_status": "UNIMPLEMENTED"
+          "native_steps": [
+            "analog_native.A16"
+          ],
+          "execution_status": "NATIVE_DEFAULT_DISPATCH",
+          "dispatch": {
+            "adapter": "analog_native_flow",
+            "native_step_id": "flow109.A16",
+            "engine_families": [
+              "python3",
+              "ngspice"
+            ],
+            "engine_executables": {
+              "python3": "python3",
+              "ngspice": "ngspice"
+            },
+            "engine_steps": {
+              "python3": [
+                "analog_native.A16"
+              ],
+              "ngspice": [
+                "analog_native.A16"
+              ]
+            },
+            "operation_scope": "native_analog_step"
+          }
         }
       ],
       "complementary_tools": [],
@@ -7458,7 +7748,28 @@
           "native_steps": [
             "Magic.WriteLEF"
           ],
-          "execution_status": "UNIMPLEMENTED"
+          "execution_status": "NATIVE_DEFAULT_DISPATCH",
+          "dispatch": {
+            "adapter": "analog_native_flow",
+            "native_step_id": "flow109.A17",
+            "engine_families": [
+              "python3",
+              "magic"
+            ],
+            "engine_executables": {
+              "python3": "python3",
+              "magic": "magic"
+            },
+            "engine_steps": {
+              "python3": [
+                "Magic.WriteLEF"
+              ],
+              "magic": [
+                "Magic.WriteLEF"
+              ]
+            },
+            "operation_scope": "native_analog_step"
+          }
         }
       ],
       "complementary_tools": [
@@ -9309,8 +9620,31 @@
           "select_when": "otherwise",
           "provider": "other",
           "tools": "Magic + KLayout Python + PDK pad/interconnect generators",
-          "native_steps": [],
-          "execution_status": "UNIMPLEMENTED"
+          "native_steps": [
+            "analog_native.A18"
+          ],
+          "execution_status": "NATIVE_DEFAULT_DISPATCH",
+          "dispatch": {
+            "adapter": "analog_native_flow",
+            "native_step_id": "flow109.A18",
+            "engine_families": [
+              "python3",
+              "magic"
+            ],
+            "engine_executables": {
+              "python3": "python3",
+              "magic": "magic"
+            },
+            "engine_steps": {
+              "python3": [
+                "analog_native.A18"
+              ],
+              "magic": [
+                "analog_native.A18"
+              ]
+            },
+            "operation_scope": "native_analog_step"
+          }
         }
       ],
       "complementary_tools": [],
@@ -15387,8 +15721,26 @@
           "select_when": "otherwise",
           "provider": "vibeic",
           "tools": "Python analog signoff/qualified-view aggregator",
-          "native_steps": [],
-          "execution_status": "UNIMPLEMENTED"
+          "native_steps": [
+            "analog_native.A19"
+          ],
+          "execution_status": "NATIVE_DEFAULT_DISPATCH",
+          "dispatch": {
+            "adapter": "analog_native_flow",
+            "native_step_id": "flow109.A19",
+            "engine_families": [
+              "python3"
+            ],
+            "engine_executables": {
+              "python3": "python3"
+            },
+            "engine_steps": {
+              "python3": [
+                "analog_native.A19"
+              ]
+            },
+            "operation_scope": "native_analog_step"
+          }
         }
       ],
       "complementary_tools": [],

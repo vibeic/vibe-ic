@@ -200,7 +200,7 @@ def _is_whitelisted(path_tok: str, project_root: str = "") -> bool:
 
 
 def run_audit(project: Path,
-              real_root: "Optional[Path]" = None) -> AuditResult:
+              real_root: "Optional[Path]" = None, block: Optional[str] = None) -> AuditResult:
     """`real_root` names the REAL project the decks belong to when `project`
     is a VERIFICATION STAGING tree (A3's `verify_with_checkers` copies the
     deck into a TemporaryDirectory before running the checkers, so the
@@ -230,6 +230,8 @@ def run_audit(project: Path,
             "no_analog_dir")
 
     sp_files = sorted(analog_dir.rglob("*.sp"))
+    if block is not None:
+        sp_files = [sp for sp in sp_files if sp.relative_to(analog_dir).parts[0] == block]
     if not sp_files:
         return _vacuous(
             result, "SKIP_NO_SP_FILES",
@@ -320,6 +322,7 @@ def main(argv: Optional[list] = None) -> int:
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("project_dir", type=Path)
+    ap.add_argument("--block", help="check only this analog block directory; default: all blocks")
     ap.add_argument("--json", default=None, help="JSON report output path")
     ap.add_argument("--project-root", type=Path, default=None,
                     help="the REAL project root the decks belong to, when "
@@ -332,7 +335,7 @@ def main(argv: Optional[list] = None) -> int:
         print(f"ERROR: {args.project_dir} is not a directory", file=sys.stderr)
         return RC_VACUOUS
 
-    result = run_audit(args.project_dir, real_root=args.project_root)
+    result = run_audit(args.project_dir, real_root=args.project_root, block=args.block)
     out = json.dumps(asdict(result), indent=2, ensure_ascii=False)
     if args.json:
         Path(args.json).parent.mkdir(parents=True, exist_ok=True)

@@ -1,4 +1,7 @@
-"""A05 actual netlist/checker/ngspice controls on a tiny neutral circuit."""
+"""Legacy qualified A05 netlist/checker/ngspice controls on a tiny circuit.
+
+Canonical native dispatch is covered separately by test_analog_native_flow.py.
+"""
 from __future__ import annotations
 
 import hashlib
@@ -6,7 +9,6 @@ import json
 from pathlib import Path
 import shutil
 import subprocess
-import sys
 
 import pytest
 
@@ -15,6 +17,7 @@ import flow109_admission as admission
 import flow109_analog_a05 as analog
 import test_flow109_analog_a04 as a04_test
 from flow109_admission import AdmissionRefusal
+from _flow109_legacy_component_fixture import legacy_component_registry, run_legacy_component
 
 
 def _put(project, name, value):
@@ -87,11 +90,7 @@ def _case(project):
 
 
 def _run(project):
-    return subprocess.run([
-        sys.executable, str(analog.HERE / 'vibe_ic_one_shot_runner.py'), str(project),
-        '--flow', '109', '--flow109-manifest', str(project / 'manifest.json'),
-        '--entry-step', 'A05', '--exit-step', 'A05', '--route', 'ip', '--no-dashboard'],
-        capture_output=True, text=True)
+    return run_legacy_component(project, 'A05')
 
 
 def _resign(project, registry, manifest):
