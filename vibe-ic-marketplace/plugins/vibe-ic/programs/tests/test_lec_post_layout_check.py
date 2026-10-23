@@ -17,6 +17,7 @@ Covered:
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -223,51 +224,16 @@ def test_parser_buffer_insert_positive_proves():
     assert r["verdict"] == L.V_PASS and r["equivalent"] is True
 
 
-# ---- REAL in-container soundness negative control (fork-safe, NDA-clean) ---
-# The strongest gate: actually run the FUNCTIONAL recipe on a synthetic
-# combinational Liberty and assert the engine UNPROVES a matched-output function
-# bug and PROVES a buffer-insert. functional read_liberty works on the current
-# image for combinational cells (the fork fix is only needed for ICG cells), so
-# this runs TODAY. Skips when no usable, path-visible container is available.
-def _container_sees(root: Path) -> bool:
-    """True iff `docker exec vibeic-eda` can read a probe file under `root` (i.e.
-    the path is bind-mounted at the same absolute path inside the container)."""
-    try:
-        probe = root / ".lec_container_probe"
-        probe.write_text("ok")
-        r = _pr.run(
-            ["docker", "exec", "vibeic-eda", "bash", "-lc",
-             f"test -f {probe} && cat {probe}"],
-            capture_output=True, text=True)
-        probe.unlink(missing_ok=True)
-        return r.returncode == 0 and "ok" in (r.stdout or "")
-    except (subprocess.SubprocessError, OSError):
-        return False
-
-
-def _mounted_workdir(tmp_path: Path):
-    """A container-visible work dir + a cleanup callback. Prefer pytest's
-    tmp_path (auto-cleaned); if that isn't bind-mounted into the container, fall
-    back to a self-cleaning tempdir under $HOME (mounted here). Returns
-    (dir, cleanup) or (None, noop) when no container-visible path exists."""
-    if _container_sees(tmp_path):
-        return tmp_path, (lambda: None)
-    import tempfile
-    import shutil
-    d = Path(tempfile.mkdtemp(prefix=".lec_it_", dir=str(Path.home())))
-    if _container_sees(d):
-        return d, (lambda: shutil.rmtree(d, ignore_errors=True))
-    shutil.rmtree(d, ignore_errors=True)
-    return None, (lambda: None)
-
-
-def _run_equiv_in_container(ys_text: str, ys_path: Path) -> dict:
+# ---- Native soundness controls, run by the pinned EDA test harness ----------
+# Exercise the tools already supplied to this pytest process. A mutable named
+# container is not a dependency of the proof or a reason to skip its controls.
+def _run_equiv_native(ys_text: str, ys_path: Path) -> dict:
     ys_path.write_text(ys_text)
-    cmd = (f"export PATH=/foss/tools/yosys/bin:/foss/tools/bin:$PATH && "
-           f"yosys -s {ys_path} 2>&1")
-    r = _pr.run(["docker", "exec", "vibeic-eda", "bash", "-lc", cmd],
-                       capture_output=True, text=True)
-    log = "\n".join(ln for ln in (r.stdout or "").splitlines()
+    binary = shutil.which("yosys")
+    assert binary, "Run this soundness control in the EDA image"
+    result = _pr.run([binary, "-s", str(ys_path)],
+                     capture_output=True, text=True)
+    log = "\n".join(ln for ln in ((result.stdout or "") + (result.stderr or "")).splitlines()
                     if not ln.lstrip().startswith("[INFO]"))
     return L.parse_equiv_log(log)
 
@@ -287,9 +253,7 @@ _SOUNDNESS_LIB = """library(soundness) {
 
 
 def test_functional_recipe_unproves_function_bug_in_container(tmp_path):
-    work, cleanup = _mounted_workdir(tmp_path)
-    if work is None:
-        pytest.skip("vibeic-eda container not available / path not bind-mounted")
+    work, cleanup = tmp_path, lambda: None
     try:
         lib = work / "soundness.lib"
         lib.write_text(_SOUNDNESS_LIB)
@@ -307,7 +271,7 @@ def test_functional_recipe_unproves_function_bug_in_container(tmp_path):
             "  BUFX1 u0(.A(a), .Y(t));\n  BUFX1 u1(.A(t), .Y(y));\nendmodule\n")
 
         # (neg) functional recipe MUST NOT prove a matched-output function bug.
-        neg = _run_equiv_in_container(
+        neg = _run_equiv_native(
             L.build_yosys_equiv_script(str(work / "gold_and.v"),
                                        str(work / "gate_nand.v"), str(lib), "top",
                                        functional_lib=True),
@@ -317,7 +281,7 @@ def test_functional_recipe_unproves_function_bug_in_container(tmp_path):
 
         # (bug) the -lib blackbox recipe FALSE-PASSES the same pair — documents
         # the unsoundness the functional path fixes (-lib is fallback-only).
-        bug = _run_equiv_in_container(
+        bug = _run_equiv_native(
             L.build_yosys_equiv_script(str(work / "gold_and.v"),
                                        str(work / "gate_nand.v"), str(lib), "top",
                                        functional_lib=False),
@@ -327,7 +291,7 @@ def test_functional_recipe_unproves_function_bug_in_container(tmp_path):
             "longer does, update this soundness rationale")
 
         # (pos) functional recipe MUST prove a genuine buffer-insert equivalence.
-        pos = _run_equiv_in_container(
+        pos = _run_equiv_native(
             L.build_yosys_equiv_script(str(work / "gold_buf.v"),
                                        str(work / "gate_buf.v"), str(lib), "top",
                                        functional_lib=True),
