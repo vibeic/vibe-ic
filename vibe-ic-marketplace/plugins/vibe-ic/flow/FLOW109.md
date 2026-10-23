@@ -117,8 +117,15 @@ full LEC or gate-level simulation substitutes for the actual EQY proof.
 `input/flow109/D44.json` binds reference RTL, the final adopted netlist,
 functional Liberty, explicit LibreLane PDK/library/root, and STA/LVS-reference/
 release netlist sources. This tranche supports identical logical bytes and no
-power/physical-cell/port transformations. An unqualified representation change
-is `NOT_MEASURED`, never a reason to drop cells or ports. The native generic
+arbitrary power/physical-cell/port transformations. Its one supported physical
+transformation is the source-owned, DEF-bound single-domain powered functional
+view: the current producer restores the adopted supply connections and may
+project only producer-declared supply ports proven inert or fixed at the
+declared powered level. The regenerated views must have matching complete
+functional interfaces and no surviving black/white box. Off-state, switched-
+domain, isolation/retention, or general power-aware equivalence is not claimed.
+Any other representation change is `NOT_MEASURED`, never a reason to drop cells
+or ports. The native generic
 PDK preprocessing branch uses Icarus; LibreLane's other formal-PDK helper
 branch requires its own qualified tool use and is not silently substituted.
 
@@ -127,6 +134,14 @@ All per-use identities bind `flow109_final_lec.operation_sources()` in
 model/proof launch and retains exact native configurations, inputs, source
 hashes and partition evidence. Every declared EQY partition must have a result;
 unresolved/unknown or gold-X partitions cannot produce component PASS.
+
+An immutable retained native EQY receipt may avoid repeating a completed proof,
+but only when its pinned image, native configuration and fingerprint, cell
+models, generated EQY script, proof-kernel sources, complete partition/status
+population, RTL/adopted-netlist identities, and current regenerated physical
+views all revalidate. Changed orchestration is not treated as proof-compatible
+by assertion: the current producer must recreate byte-identical gold and gate
+functional views. Missing or changed evidence refuses adoption.
 
 A proven component publishes
 `adopted/final_lec/sta_lvs_release_netlist_mapping.json` with the common logical

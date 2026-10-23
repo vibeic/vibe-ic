@@ -6,6 +6,7 @@ qualification. No existing IC input, native run, pre-layout PASS or GLS is used.
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 from pathlib import Path
 import shutil
@@ -273,3 +274,106 @@ def test_actual_model_launch_rechecks_qualification_after_preparation(tmp_path, 
     assert record['native_started'] is False
     assert not list(tmp_path.rglob('gold.model.log'))
     assert not list(tmp_path.rglob('*.eqy'))
+
+
+def _retained_case(project, monkeypatch):
+    gold = _put(project, 'evidence/gold.v', 'module chip_top(input a, output p); assign p=a; endmodule\n')
+    gate = _put(project, 'evidence/gate.v', 'module chip_top(input a, output p); assign p=a; endmodule\n')
+    rtl = _put(project, 'inputs/rtl.v', 'module source(input a, output p); assign p=a; endmodule\n')
+    netlist = _put(project, 'inputs/adopted.v', 'module source(input a, output p); assign p=a; endmodule\n')
+    listing = _put(project, 'evidence/scratch/partition.list', 'partition chip_top.p: p\n')
+    pdr = _put(project, 'evidence/scratch/strategies/chip_top.p/pdr/status', 'PASS\n')
+    sat = _put(project, 'evidence/scratch/strategies/chip_top.p/sat/status', 'UNKNOWN\n')
+    proof_value = {'verdict': 'PASS', 'explanation': 'all 1 partition(s) proven',
+        'compared_points': 1, 'proven_points': 1, 'non_equivalent_points': [],
+        'unproven_points': [], 'xbits_partitions': [], 'declared_partitions': ['chip_top.p'],
+        'partitions': {'chip_top.p': {'pdr': 'PASS', 'sat': 'UNKNOWN'}},
+        'evidence_sha256': {'scratch/partition.list': listing['sha256'],
+            'scratch/strategies/chip_top.p/pdr/status': pdr['sha256'],
+            'scratch/strategies/chip_top.p/sat/status': sat['sha256']}}
+    proof = _put(project, 'evidence/proof.json', proof_value)
+    prep_value = {'kind': lec.physical.KIND, 'powered_mode': {'VDD': 1, 'VSS': 0},
+        'projected_supply_ports': {'gold': ['VDD', 'VSS'], 'gate': []},
+        'functional_interfaces': {'gold': {'a': ['input', 1], 'p': ['output', 1]},
+                                  'gate': {'a': ['input', 1], 'p': ['output', 1]}},
+        'outputs': {'gold': gold, 'gate': gate}}
+    old_prep = _put(project, 'evidence/preparation.json', prep_value)
+    current_prep = _put(project, 'reports/current-preparation.json', prep_value)
+    sources_value = {'programs/librelane_eqy.py': 'a',
+                     'programs/lec_post_layout_check.py': 'b',
+                     'native/librelane/steps/yosys.py': 'c'}
+    monkeypatch.setattr(lec, 'operation_sources', lambda: sources_value)
+    sources = _put(project, 'evidence/operation-sources.json', sources_value)
+    model = _put(project, 'evidence/model.v', 'module cell(input a, output y); assign y=a; endmodule\n')
+    model_path = str(project / model['path'])
+    config_value = {'DESIGN_NAME': 'chip_top', 'PDK': 'gf180mcuD',
+                    'STD_CELL_LIBRARY': 'gf180mcu_fd_sc_mcu7t5v0',
+                    'VERILOG_FILES': ['/e/gold'], 'CELL_VERILOG_MODELS': [model_path],
+                    'EQY_SCRIPT': '/e/chip_top.eqy'}
+    config = _put(project, 'evidence/config.json', config_value)
+    proof_value['config_sha256'] = config['sha256']
+    (project / proof['path']).write_text(json.dumps(proof_value))
+    proof = lec._record(project, project / proof['path'])
+    state = _put(project, 'evidence/state.json', {'nl': '/e/gate'})
+    script = lec.eqy.eqy_script('chip_top', [Path('/e/gold')], Path('/e/gate'),
+                                'inputs/lib.lib')
+    fingerprint_value = {'image': lec.EDA_IMAGE, 'state_files': {'/e/gate': gate['sha256']},
+                         'config_files': {'/e/gold': gold['sha256'],
+                             model_path: model['sha256'], '/e/chip_top.eqy':
+                             hashlib.sha256(script.encode()).hexdigest()}}
+    fingerprint = _put(project, 'evidence/fingerprint.json', fingerprint_value)
+    step = _put(project, 'evidence/native-step.json', {'input': fingerprint_value})
+    method = _put(project, 'evidence/method.py', '# retained native method\n')
+    run = _put(project, 'evidence/run.sh', '# retained native invocation\n')
+    native_value = {'component_status': 'PASS', 'native_status': 'PASS',
+        'image': lec.EDA_IMAGE, 'exit_code': 0,
+        'source_closure': {'sha256': sources['sha256']},
+        'positive': {'proof': {'sha256': proof['sha256']}},
+        'physical_preparation': {'sha256': old_prep['sha256']},
+        'raw_adopted_netlist': {'sha256': netlist['sha256']},
+        'reference_rtl': {'sha256': rtl['sha256']}}
+    native = _put(project, 'evidence/native.json', native_value)
+    retained_value = {'schema': lec.RETAINED_SCHEMA, 'status': 'PASS',
+        'image': lec.EDA_IMAGE, 'scope': 'powered single-domain functional subset',
+        'native_receipt': native, 'operation_sources': sources, 'preparation': old_prep,
+        'proof': proof, 'reference_view': gold, 'gate_view': gate, 'config': config,
+        'state_in': state, 'input_fingerprint': fingerprint, 'native_step_receipt': step,
+        'partition_list': listing, 'strategy_statuses': [pdr, sat],
+        'method_source': method, 'run_script': run}
+    retained = _put(project, 'input/flow109/D44-retained-native.json', retained_value)
+    prepared = {'retained_native': project / retained['path'],
+        'transformation_receipt': current_prep,
+        'proof_paths': {'rtl': [project / gold['path']],
+                        'adopted_netlist': project / gate['path']},
+        'paths': {'rtl': [project / rtl['path']],
+                  'adopted_netlist': project / netlist['path']},
+        'manifest': {'top': 'chip_top', 'liberty': {'path': 'inputs/lib.lib'}, 'librelane': {
+            'PDK': 'gf180mcuD', 'STD_CELL_LIBRARY': 'gf180mcu_fd_sc_mcu7t5v0'}}}
+    return prepared, retained_value
+
+
+def test_retained_native_proof_is_reopened_only_for_exact_current_views(tmp_path, monkeypatch):
+    prepared, _ = _retained_case(tmp_path, monkeypatch)
+    proof, adoption = lec._consume_retained_native(tmp_path, prepared)
+    assert proof['verdict'] == 'PASS'
+    assert adoption['mode'] == 'current_views_exactly_match_retained_native_EQY_subject'
+
+
+@pytest.mark.parametrize('damage, reason', [
+    ('partition', 'D44_INPUT_STALE_OR_MISSING'),
+    ('view', 'D44_INPUT_STALE_OR_MISSING'),
+    ('source', 'D44_RETAINED_PROOF_SOURCE_CHANGED')])
+def test_retained_native_proof_refuses_missing_or_stale_evidence(tmp_path, monkeypatch,
+                                                                damage, reason):
+    prepared, retained = _retained_case(tmp_path, monkeypatch)
+    if damage == 'partition':
+        (tmp_path / retained['strategy_statuses'][0]['path']).write_text('FAIL\n')
+    elif damage == 'view':
+        (tmp_path / retained['gate_view']['path']).write_text('stale\n')
+    else:
+        monkeypatch.setattr(lec, 'operation_sources', lambda: {
+            'programs/librelane_eqy.py': 'changed',
+            'programs/lec_post_layout_check.py': 'b',
+            'native/librelane/steps/yosys.py': 'c'})
+    with pytest.raises(admission.AdmissionRefusal, match=reason):
+        lec._consume_retained_native(tmp_path, prepared)
