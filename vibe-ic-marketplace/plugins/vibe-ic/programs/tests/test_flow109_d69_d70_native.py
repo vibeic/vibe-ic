@@ -131,10 +131,15 @@ def test_d70_validator_refuses_duplicate_or_missing_corner_population(
         d70.validate_final_electrical(tmp_path, receipt)
 
 
-def test_final_filled_odb_runs_rcx_then_all_declared_stapostpnr_corners():
+def test_final_filled_odb_runs_rcx_then_all_declared_stapostpnr_corners(monkeypatch):
     control_path = Path('/tmp/vibeic-d69d70-native-control.json')
     if not control_path.is_file():
         pytest.skip('place the bounded native-control manifest in /tmp')
+    # Explicitly use the real enclosing image's attested LOCAL provider.
+    # Other suite controls also need the Docker client, so its presence must
+    # not accidentally turn image-local PDK paths into empty host mounts.
+    import librelane_contract as contract
+    monkeypatch.setenv(contract.LOCAL_PROVIDER_ROUTE_ENV, 'LOCAL')
     control = json.loads(control_path.read_text())
     project = Path(control['project']).resolve()
     pnr = project / 'phase3/stage3/pnr'

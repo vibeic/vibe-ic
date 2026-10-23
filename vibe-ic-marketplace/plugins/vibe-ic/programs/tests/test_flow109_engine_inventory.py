@@ -66,6 +66,13 @@ def test_all_dispatchable_profiles_cover_each_declared_operation_once():
             dispatch = profile.get('dispatch')
             if not dispatch:
                 continue
+            if dispatch.get('kind') == 'canonical_owner_window':
+                # This route delegates to an existing runner, including its
+                # selected native tools; it does not enroll a generic arm.
+                assert dispatch['engine_families'] == []
+                assert flow109._canonical_owner_dispatch({**row, 'profile': profile})
+                assert dispatch['acceptance_scope'] == 'existing_native_component_only'
+                continue
             count += 1
             adapters += bool(dispatch.get('adapter'))
             engines = dispatch['engine_families']

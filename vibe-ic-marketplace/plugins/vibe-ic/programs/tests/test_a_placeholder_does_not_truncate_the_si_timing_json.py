@@ -190,7 +190,8 @@ def test_a_malformed_but_complete_json_says_malformed_not_truncated(
                          stdout="SI_TIMING_JSON_EMIT_DONE pins=1\n")
     assert ok is False
     note = " ".join(notes)
-    assert "malformed" in note and "TRUNCATED" not in note
+    assert "the emit completed" in note and "DOES NOT PARSE" in note
+    assert "TRUNCATED" not in note
 
 
 def test_a_parseable_timing_json_is_accepted(tmp_path, monkeypatch):

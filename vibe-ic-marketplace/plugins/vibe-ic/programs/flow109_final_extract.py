@@ -6,6 +6,12 @@ import json
 from pathlib import Path
 import uuid
 
+import sys
+
+HERE = Path(__file__).resolve().parent
+if str(HERE) not in sys.path:
+    sys.path.insert(0, str(HERE))
+
 from _atomic_artefact import write_json
 from flow109_admission import AdmissionRefusal, require_launch_admission
 import flow109_density_fill as density

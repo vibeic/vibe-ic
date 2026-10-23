@@ -134,9 +134,11 @@ def test_canonical_cli_plan_does_not_credit_or_rewrite_old_pass(tmp_path):
     assert plan["flow109_acceptance"] == "NOT_MEASURED"
     assert old.read_bytes() == before
     assert not (tmp_path / "reports" / "flow109" / "admission.json").exists()
-    # The same actual front door refuses an unmapped producer before tools.
+    # Use a currently unmapped selected row, not a permanently unimplemented
+    # D69: the final RCX producer is now wired.
+    unmapped = next(row['id'] for row in plan['rows'] if not row['profile'].get('dispatch'))
     result = subprocess.run([x for x in command if x != "--flow109-plan-only"]
-                            + ["--entry-step", "D69", "--exit-step", "D69"],
+                            + ["--entry-step", unmapped, "--exit-step", unmapped],
                             text=True, capture_output=True)
     assert result.returncode == 2
     assert "FLOW109_PRODUCER_UNIMPLEMENTED" in result.stderr
@@ -203,6 +205,10 @@ def test_frontend_rows_route_stable_ids_to_existing_default_owner_sites():
 
 def test_owner_route_uses_native_span_without_generic_qualification_registry(
         tmp_path, monkeypatch):
+    # prepare_front_door intentionally installs the active request; restore
+    # that environment at this control's boundary, like the older control.
+    monkeypatch.setenv(flow109.CONTEXT_ENV, "")
+    monkeypatch.delenv(flow109.ATTEMPT_ENV, raising=False)
     import _delivery_route
     assert _delivery_route.admit(tmp_path, "ic") is None
     manifest = tmp_path / "manifest.json"

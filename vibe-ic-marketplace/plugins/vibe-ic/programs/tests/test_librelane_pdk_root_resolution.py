@@ -336,7 +336,7 @@ def test_floorplan_passes_the_pdk_root_gate_with_no_declaration(env, monkeypatch
     with pytest.raises(Reached):
         runner._prepare_librelane_floorplan_for_route(
             env.project, pdk, 'c', env.project / 'phase3/stage3/pnr', None,
-            {'15': 'librelane', '15.5ic': 'librelane'})
+            {'15': 'librelane', '15.5ic': 'librelane'}, bounded_state=True)
 
 
 def test_step_27_corner_mounts_the_resolved_root_with_no_declaration(env):
@@ -351,10 +351,14 @@ def test_step_27_corner_mounts_the_resolved_root_with_no_declaration(env):
     assert tool['mounts'] == [(root / 'gfx', '/pdk/gfx')] and (root / 'gfx').is_dir()
 
 
-def test_step_37_streams_out_on_the_resolved_root_with_no_declaration(env, monkeypatch):
+def test_opt_in_step_37_uses_the_resolved_root_with_no_declaration(env, monkeypatch):
     runner = importlib.import_module('phase3_one_shot_runner')
     import librelane_step37
     import drc_feedback_repair
+    import execution_policy
+    # This is the retained opt-in tool seam. Ordinary Default now owns its
+    # single fill-aware streamer and is covered at that existing boundary.
+    monkeypatch.setattr(execution_policy, 'request', lambda: {'mode': 'ultra'})
 
     class Reached(Exception):
         pass
