@@ -12,6 +12,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -45,6 +46,118 @@ def test_vcd_census_consumes_formal_records_not_prose(tmp_path, values, accepted
         with pytest.raises(admission.AdmissionRefusal,
                            match='D55_VCD_UNKNOWN_OR_UNOBSERVED_SIGNAL'):
             activity.waveform_census(vcd, 'dut', spec)
+
+
+def test_measured_vcd_census_consumes_scalar_and_vector_top_ports(tmp_path):
+    vcd = tmp_path / 'vector.vcd'
+    vcd.write_text('$timescale 1ns $end\n$scope module tb $end\n$scope module dut $end\n'
+                   '$var wire 1 ! clk $end\n$var wire 4 " x [3:0] $end\n'
+                   '$var wire 1 # internal_net $end\n'
+                   '$upscope $end\n$upscope $end\n$enddefinitions $end\n'
+                   '#0\nx!\nb0000 "\n0#\n#1\n0!\n#2\n1!\nb1010 "\n1#\n')
+    ports = [{'name': 'clk', 'direction': 'input', 'width': 1},
+             {'name': 'x', 'direction': 'input', 'width': 4}]
+    result = activity.measured_waveform_census(vcd, 'tb/dut', ports)
+    assert result['window'] == {'start_tick': 0, 'end_tick': 2, 'timescale': '1ns',
+                                'authority': 'measured complete self-checking testbench VCD'}
+    assert result['ports']['x']['width'] == 4
+    assert result['ports']['x']['transitions'] == 1
+    assert result['ports']['clk']['initial_unknown_observations'] == 1
+    assert 'internal_net' not in result['ports']
+
+
+def test_measured_vcd_census_refuses_unknown_after_activity_started(tmp_path):
+    vcd = tmp_path / 'late-x.vcd'
+    vcd.write_text('$timescale 1ns $end\n$scope module dut $end\n'
+                   '$var wire 1 ! clk $end\n$upscope $end\n$enddefinitions $end\n'
+                   '#0\n0!\n#1\nx!\n')
+    with pytest.raises(admission.AdmissionRefusal,
+                       match='D55_VCD_UNKNOWN_OR_UNOBSERVED_SIGNAL'):
+        activity.measured_waveform_census(
+            vcd, 'dut', [{'name': 'clk', 'direction': 'input', 'width': 1}])
+
+
+def test_activity_dump_maps_logical_testbench_top_to_exact_adopted_top(tmp_path):
+    adopted = tmp_path / 'adopted.v'
+    adopted.write_text('module physical (a, y); input a; output y; assign y = a; endmodule\n')
+    tb = tmp_path / 'tb.v'
+    tb.write_text('module tb; reg a; wire y; logical dut(.a(a), .y(y)); '
+                  'initial begin a=0; #2 a=1; #1 $finish; end endmodule\n')
+    calls = []
+    def fake(argv, cwd):
+        calls.append(argv)
+        if argv[0] == 'vvp':
+            (Path(cwd) / 'tb.vcd').write_text(
+                '$scope module tb $end\n$scope module dut $end\n'
+                '$scope module vibeic_adopted $end\n$upscope $end\n'
+                '$upscope $end\n$upscope $end\n$enddefinitions $end\n#0\n')
+        return 0, '', ''
+    result = activity.dump.dump([str(adopted)], [str(tb)], 'physical', tmp_path / 'out',
+                                fake, testbench_dut_module='logical')
+    assert result['status'] == 'PASS'
+    assert result['scope'] == 'tb/dut/vibeic_adopted'
+    mapping = result['logical_to_adopted_mapping']
+    assert mapping['logical_module'] == 'logical' and mapping['adopted_module'] == 'physical'
+    assert str(adopted) in calls[0]
+    wrapper = Path(mapping['wrapper']).read_text()
+    assert 'physical vibeic_adopted (.a(a), .y(y));' in wrapper
+
+
+def test_activity_only_executes_selected_declared_modes_before_load_refusal(tmp_path, monkeypatch):
+    source = tmp_path / 'source.v'; source.write_text('module physical; endmodule\n')
+    tb = tmp_path / 'tb.v'; tb.write_text('module tb; endmodule\n')
+    prepared = {'activity_only': True, 'sources': {'source': 'hash'},
+        'inputs': {str(source): activity._sha(source)}, 'tools': {},
+        'manifest': {'modes': {'one': {}, 'two': {}}, 'top': 'physical',
+                     'testbench_dut_module': 'logical',
+                     'adopted_netlist': activity._record(tmp_path, source)},
+        'requirements': {}, 'declared': {
+            'one': {'name': 'one', 'stimulus': 's', 'expected': 'e', 'evidence': 'r'},
+            'two': {'name': 'two', 'stimulus': 's', 'expected': 'e', 'evidence': 'r'}},
+        'ports': [{'name': 'a', 'direction': 'input', 'width': 1}],
+        'paths': {'adopted_netlist': source, 'simulation_models': [],
+                  'tb:one': tb, 'tb:two': tb}}
+    monkeypatch.setattr(activity, 'require_launch_admission', lambda *_a, **_k: None)
+    monkeypatch.setattr(activity, 'prepare', lambda *_a, **_k: prepared)
+    monkeypatch.setattr(activity, '_before', lambda *_a, **_k: None)
+    def dumped(_rtl, _tbs, _top, folder, _native, **_kwargs):
+        folder.mkdir(parents=True)
+        vcd = folder / 'activity.vcd'
+        vcd.write_text('$timescale 1ns $end\n$scope module tb $end\n'
+                       '$var wire 1 ! a $end\n$upscope $end\n'
+                       '$enddefinitions $end\n#0\n0!\n#1\n1!\n')
+        manifest = {'status': 'PASS', 'vvp_rc': 0, 'vcd': str(vcd),
+                    'vcd_sha256': activity._sha(vcd), 'scope': 'tb'}
+        (folder / activity.dump.MANIFEST).write_text(json.dumps(manifest))
+        return manifest
+    monkeypatch.setattr(activity.dump, 'dump', dumped)
+    result = activity.execute(tmp_path, {'context_sha256': 'current'})
+    assert result['component_status'] == 'NOT_MEASURED'
+    assert result['reason'] == 'D55_LOAD_RAIL_REQUIREMENTS_ABSENT'
+    assert result['functional_scenarios_status'] == 'PASS'
+    assert set(result['modes']) == {'one', 'two'}
+    assert (tmp_path / activity.PARTIAL_FREEZE).is_file()
+    assert not (tmp_path / activity.FREEZE).exists()
+
+
+def test_canonical_d55_engineering_route_needs_no_generic_qualification(tmp_path, monkeypatch):
+    import _delivery_route
+    assert _delivery_route.admit(tmp_path, 'ic') is None
+    features = next(p['features'] for p in flow109.load_registry()['reference_profiles']
+                    if p['name'] == 'Small digital IC without DFT')
+    manifest = tmp_path / 'manifest.json'
+    manifest.write_text(json.dumps({'features': features}))
+    observed = []
+    monkeypatch.setitem(sys.modules, 'flow109_functional_activity', SimpleNamespace(
+        execute=lambda project, context: observed.append(context) or {
+            'component_status': 'NOT_MEASURED', 'flow109_acceptance': 'NOT_MEASURED'}))
+    args = SimpleNamespace(flow='109', flow109_manifest=manifest, flow109_plan_only=False,
+                           execution_mode='default', entry_step='D55', exit_step='D55')
+    assert flow109.prepare_front_door(args, tmp_path) == 2
+    assert observed[0]['requested_step'] == 'D55'
+    assert observed[0]['runtime_tool_uses'] is None
+    assert observed[0]['qualification_registry'] is None
+    assert not (tmp_path / 'reports/flow109/admission.json').exists()
 
 
 def _put(project, name, value):

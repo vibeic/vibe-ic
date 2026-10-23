@@ -11701,6 +11701,8 @@
           "dispatch": {
             "adapter": "flow109_functional_activity",
             "native_step_id": "flow109.D55",
+            "admission_policy": "source_owned_existing_native",
+            "acceptance_scope": "existing_native_component_only",
             "engine_families": [
               "iverilog",
               "vvp",
@@ -11725,7 +11727,8 @@
             }
           },
           "limitations": [
-            "Only full-window single-rail scalar-port adopted-netlist GLS activity is implemented.",
+            "Complete vector-power component acceptance remains limited to full-window single-rail scalar-port adopted-netlist GLS activity.",
+            "Source-declared self-checking scenarios may publish a partial adopted-netlist GLS activity freeze while absent rail/load authority keeps the component NOT_MEASURED.",
             "Pinned LibreLane STAPostPNR has no VCD/SAIF configuration; direct OpenSTA is an activity-consumption complement, not final post-route power adoption.",
             "Mapped RTL VCD/SAIF, analog current traces and qualified upper bounds remain UNIMPLEMENTED.",
             "Complete D55 metric acceptance remains NOT_MEASURED."
