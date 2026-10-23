@@ -7,7 +7,35 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import analog_meas_from_spec_gen as generator
+
 PROG = Path(__file__).resolve().parent.parent / "analog_meas_from_spec_gen.py"
+
+
+def test_explicit_native_bindings_use_actual_branch_and_declared_frequency(tmp_path):
+    path = tmp_path / "spec.json"
+    path.write_text(json.dumps({"specs": [
+        {"name": "iq", "max": 50, "unit": "uA", "measurement": {
+            "analysis": "OP", "expression": "(-i(v_supply)-0.0005)*1e6"}},
+        {"name": "psrr", "min": 40, "unit": "dB", "measurement": {
+            "analysis": "AC", "expression": "-vdb(vout)", "frequency_hz": 173}}]}))
+    rc, report, deck = generator.run(path)
+    assert rc == 0 and report["meas_lines"] == 2
+    assert "(-i(v_supply)-0.0005)*1e6" in deck
+    assert "meas AC psrr FIND bound_psrr AT=173" in deck
+    assert "AT=1k" not in deck and "target=50" not in deck
+
+
+@pytest.mark.parametrize("binding", [
+    {"analysis": "AC", "expression": "-vdb(vout)"},
+    {"analysis": "DC", "expression": "v(vout)"},
+    {"analysis": "OP", "expression": "v(out)\nquit"}])
+def test_incomplete_or_multicommand_explicit_binding_is_refused(binding):
+    with pytest.raises(ValueError):
+        generator.measurement_commands("output_metric", binding)
 
 
 def _run(spec_path: Path, out: Path = None, jpath: Path = None):

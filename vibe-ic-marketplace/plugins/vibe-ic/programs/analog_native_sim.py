@@ -114,7 +114,7 @@ def _measurement_names(text):
         if assignment:
             name, expression = assignment.group(1).casefold(), assignment.group(2)
             references = {token.casefold() for token in re.findall(r"[A-Za-z_]\w*", expression)}
-            if re.search(r"(?i)\b[vi]\s*\(", expression) or vectors.intersection(references):
+            if re.search(r"(?i)\b(?:v(?:db|p|m)?|i)\s*\(", expression) or vectors.intersection(references):
                 vectors.add(name)
             else:
                 vectors.discard(name)
@@ -252,6 +252,131 @@ def _source_deck_coverage(spec_path, deck):
     return metrics, "; ".join(absent)
 
 
+def _bound_studies(project, name, config, options, run, step):
+    """Consume/run ordinary explicit measurement inputs, keeping scope partial."""
+    netlist, _deck, spec = _inputs(project, name, config)
+    entries = config.get("measurement_studies")
+    if entries is None:
+        entries = _read(netlist.parent / "measurement_studies.json")
+        if isinstance(entries, dict):
+            entries = entries.get("studies")
+    if not isinstance(entries, list) or not entries:
+        return None
+    values, units, studies, outputs, executions = {}, {}, [], [], []
+
+    def valid(record, template, bindings_path, bindings):
+        if not isinstance(record, dict) or record.get("bindings") != bindings:
+            return False
+        source = bindings.get("source") or {}
+        if isinstance(source, dict) and source.get("path") and source.get("sha256"):
+            source_path = Path(source["path"])
+            if not source_path.is_file() or source["sha256"] != hashlib.sha256(source_path.read_bytes()).hexdigest():
+                return False
+        views = record.get("native_inputs") or {}
+        from analog_bound_measurements import validate_consumed_inputs
+        current, _why = validate_consumed_inputs(project, views)
+        if not current:
+            return False
+        for role, path in (("netlist", netlist), ("testbench", template), ("bindings", bindings_path)):
+            view = views.get(role) or {}
+            if view.get("path") != str(path.resolve()) or view.get("sha256") != hashlib.sha256(path.read_bytes()).hexdigest():
+                return False
+        for view in views.values():
+            if not isinstance(view, dict) or not view.get("path") or not Path(view["path"]).is_file() or view.get("sha256") != hashlib.sha256(Path(view["path"]).read_bytes()).hexdigest():
+                return False
+        capture = record.get("capture")
+        if capture and (not Path(capture.get("path", "")).is_file()
+                        or capture.get("sha256") != hashlib.sha256(Path(capture["path"]).read_bytes()).hexdigest()):
+            return False
+        native = record.get("executions") or []
+        if not native:
+            return False
+        for execution in native:
+            log = Path(execution.get("log") or "__missing_native_log__")
+            if not log.is_file() or execution.get("log_sha256") != hashlib.sha256(log.read_bytes()).hexdigest():
+                return False
+        # The native transcript is the value authority, even for retained JSON.
+        transcript = "\n".join(Path(execution["log"]).read_text(errors="replace") for execution in native)
+        actual = {key.casefold(): value for key, value in sweep.native_meas_rows(transcript).items()}
+        for match in sweep._MEAS_LINE_RE.finditer(transcript):
+            for key, value in sweep._KV_RE.findall(match.group(1)):
+                actual.setdefault(key.casefold(), float(value))
+        return all(actual.get(key) == value for key, value in (record.get("measurements") or {}).items())
+
+    previous = ((options.get("previous_results") or {}).get("A06") or {}).get(name) or {}
+    retained_studies = (previous.get("metrics") or {}).get("native_measurement_studies") or []
+    for entry in entries:
+        if not isinstance(entry, dict) or not entry.get("testbench") or not entry.get("bindings"):
+            studies.append({"status": "NOT_MEASURED", "detail": "measurement study lacks template/bindings"})
+            continue
+        template = _path(project, entry["testbench"], netlist.parent)
+        bindings_path = _path(project, entry["bindings"], netlist.parent)
+        bindings = _read(bindings_path)
+        if not template.is_file() or not isinstance(bindings, dict):
+            studies.append({"status": "NOT_MEASURED", "detail": "measurement study input absent"})
+            continue
+        candidates = ([entry["result"]] if entry.get("result") else []) + [row["result"]
+            for row in retained_studies if row.get("bindings_path") == str(bindings_path.resolve()) and row.get("result")]
+        record, result_path = None, None
+        for candidate in candidates:
+            path = _path(project, candidate, netlist.parent)
+            data = _read(path)
+            if valid(data, template, bindings_path, bindings):
+                record, result_path = data, path
+                break
+        reused = record is not None
+        if record is None:
+            destination = _attempt(project, step + "-measurements", name)
+            result_path = destination / "result.json"
+            execution = run("analog_bound_measurements.py", [str(project), "--netlist", str(netlist),
+                "--testbench", str(template), "--bindings", str(bindings_path), "--out", str(destination),
+                "--container", str(options.get("container", "")), "--image", str(options.get("image", ""))],
+                outputs=[str(result_path)])
+            executions.append(execution)
+            record = _read(result_path)
+            if not valid(record, template, bindings_path, bindings):
+                studies.append({"status": "NOT_MEASURED", "detail": "native study has no current input/log-bound terminal result"})
+                continue
+        native = record.get("executions") or []
+        codes = [execution.get("returncode") for execution in native]
+        transcript = "\n".join(Path(execution["log"]).read_text(errors="replace") for execution in native)
+        interrupted = any(code in (130, 137, 143) or isinstance(code, int) and code < 0 for code in codes)
+        native_failed = any(isinstance(code, int) and code != 0 for code in codes) or any(
+            sweep._scan_analysis_failures(transcript)) or re.search(
+                r"(?im)\bfatal(?: error)?\b|\bsimulation(?:\(s\)|s)?\s+aborted\b|\btimestep too small\b", transcript)
+        state = record.get("status") if record.get("status") in ("PASS", "FAIL", "NOT_MEASURED") else "NOT_MEASURED"
+        if interrupted or any(not isinstance(code, int) for code in codes):
+            state = "NOT_MEASURED"
+        elif native_failed:
+            state = "FAIL"
+        studies.append({"status": state, "result": str(result_path), "bindings_path": str(bindings_path.resolve()),
+                        "reused": reused, "measurements": record.get("measurements", {}),
+                        "capture": record.get("capture"), "scope": record.get("scope"),
+                        "native_returncodes": codes})
+        outputs.append(str(result_path))
+        if record.get("capture"):
+            outputs.append(record["capture"]["path"])
+        if state == "PASS":
+            for key, value in record.get("measurements", {}).items():
+                if key not in values:
+                    values[key] = value
+                    units[key] = (bindings.get("measurements", {}).get(key) or {}).get("unit")
+    limits = _bounds(spec, config, list(values))
+    compatible = lambda key: not limits.get(key, {}).get("unit") or str(units.get(key)).replace("µ", "u").replace("μ", "u") == str(limits[key]["unit"]).replace("µ", "u").replace("μ", "u")
+    violations = [key for key, value in values.items() if key in limits and compatible(key)
+                  and any(isinstance(limits[key].get(edge), (int, float))
+                          and ((edge == "min" and value < limits[key][edge]) or (edge == "max" and value > limits[key][edge]))
+                          for edge in ("min", "max"))]
+    coverage = _source_measurement_coverage(spec, [{"name": key, "value": value,
+        "status": "PASS" if compatible(key) else "NOT_MEASURED"} for key, value in values.items()])
+    metrics = {**values, "native_measurement_studies": studies, "source_measurement_coverage": coverage,
+               "measured_spec_violations": violations,
+               "ungraded_native_units": [key for key in values if key in limits and not compatible(key)]}
+    return _result("FAIL" if violations or any(row["status"] == "FAIL" for row in studies) else "NOT_MEASURED",
+                   "explicit native studies retained; whole-block measurement coverage remains incomplete",
+                   outputs=outputs, metrics=metrics, executions=executions)
+
+
 def _nominal(project, name, config, options, run, *, step="A07"):
     netlist, deck, spec_path = _inputs(project, name, config)
     native_inputs = {role: {"path": str(path.resolve()),
@@ -267,6 +392,11 @@ def _nominal(project, name, config, options, run, *, step="A07"):
     if step == "A07":
         readiness, missing = _source_deck_coverage(spec_path, deck)
         if missing:
+            studies = _bound_studies(project, name, config, options, run, step)
+            if studies is not None:
+                return result(studies["status"], missing + "; " + studies["detail"],
+                              metrics={**readiness, **studies["metrics"]}, outputs=studies["outputs"],
+                              executions=studies["executions"])
             return result("NOT_MEASURED", missing, metrics=readiness)
     execution = run("@ngspice", ["-b", str(deck)], cwd=deck.parent)
     transcript = _log_text(execution)
@@ -364,6 +494,12 @@ def run_step(step_id, project, block, options, run):
                 return _result("NOT_MEASURED", "source measurement generation did not complete", outputs=outputs, executions=executions)
         if missing:
             status, detail = "NOT_MEASURED", missing
+            studies = _bound_studies(project, name, config, options, run, step_id)
+            if studies is not None:
+                status, detail = studies["status"], detail + "; " + studies["detail"]
+                metrics.update(studies["metrics"])
+                outputs += studies["outputs"]
+                executions += studies["executions"]
         return _result(status, detail, outputs=outputs, metrics=metrics, executions=executions)
     if step_id in ("A07", "A10"):
         if step_id == "A07" and config.get("nominal_testbench"):

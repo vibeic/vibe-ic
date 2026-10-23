@@ -5,6 +5,7 @@ The native-call doubles below test wiring, never claim measured performance.
 from pathlib import Path
 import hashlib
 import json
+import re
 import shutil
 import sys
 
@@ -80,7 +81,8 @@ def _transport(monkeypatch, project, b, topo, *, fail=False, mutate=None):
             h = project / "phase3/analog/hardmacro/ldo_open"
             pins = "\n".join(f"PIN {p}\n PORT\n LAYER Metal3 ;\n RECT 0 0 1 1 ;\n END\nEND {p}"
                              for p in topo["ports"])
-            (h / "ldo_open.lef").write_text(f"MACRO ldo_open\nSIZE 4 BY 4 ;\n{pins}\nEND ldo_open\n")
+            output = Path(re.search(r"(?m)^lef write (.+) -hide$", (h / marker).read_text()).group(1))
+            output.write_text(f"MACRO ldo_open\nSIZE 4 BY 4 ;\n{pins}\nEND ldo_open\n")
             return 0, "unit LEF transport", ""
         raise AssertionError(f"unexpected native command: {cmd}")
 

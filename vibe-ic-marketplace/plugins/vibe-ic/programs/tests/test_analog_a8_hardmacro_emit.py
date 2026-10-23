@@ -14,6 +14,7 @@ chip/PDK-AGNOSTIC.
 from __future__ import annotations
 
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -245,7 +246,11 @@ def test_the_lef_write_carries_a_marker_from_its_own_argv(tmp_path: Path,
 
     def fake_exec(container, cmd, timeout=900, *, marker=None, log_path=None):
         calls.append({"cmd": cmd, "marker": marker})
-        (p / "phase3" / "analog" / "hardmacro" / "blk" / "blk.lef").write_text(
+        hdir = p / "phase3" / "analog" / "hardmacro" / "blk"
+        output = Path(re.search(r"(?m)^lef write (.+) -hide$", (hdir / marker).read_text()).group(1))
+        assert output.is_file() and output.read_bytes() == b""
+        assert output != hdir / "blk.lef"
+        output.write_text(
             "MACRO blk\n  PIN vdd\n    USE POWER ;\n  END vdd\nEND blk\n")
         return 0, "", ""
 
@@ -257,6 +262,8 @@ def test_the_lef_write_carries_a_marker_from_its_own_argv(tmp_path: Path,
     assert manifest["producer"] == "analog_a8_hardmacro_emit"
     assert manifest["source_gds_sha256"] == r["source_gds_sha256"]
     assert set(manifest["views"]) == {".lef", ".lib", ".gds", ".v"}
+    assert manifest["characterization_scope"]["timing_arcs"] == "NOT_MEASURED"
+    assert manifest["characterization_scope"]["full_timing_characterization"] is False
     long_runs = [c for c in calls if "magic" in c["cmd"]]
     assert long_runs and all(c["marker"] and c["marker"] in c["cmd"]
                              for c in long_runs), calls
@@ -549,9 +556,9 @@ END blk
     monkeypatch.setattr(E, "magicrc_for", lambda *a, **k: "/pdk/sky130A.magicrc")
 
     def fake_exec(container, cmd, timeout=900, *, marker=None, log_path=None):
-        (b / "../hardmacro/blk/blk.lef").resolve().parent.mkdir(
-            parents=True, exist_ok=True)
-        (b / "../hardmacro/blk/blk.lef").resolve().write_text(lef)
+        h = project / "phase3/analog/hardmacro/blk"
+        output = Path(re.search(r"(?m)^lef write (.+) -hide$", (h / marker).read_text()).group(1))
+        output.write_text(lef)
         return 0, "A8_LEF_OK", ""
 
     monkeypatch.setattr(E, "_docker_exec", fake_exec)
@@ -619,8 +626,8 @@ END blk
 
     def fake_exec(container, cmd, timeout=900, *, marker=None, log_path=None):
         h = project / "phase3/analog/hardmacro/blk"
-        h.mkdir(parents=True, exist_ok=True)
-        (h / "blk.lef").write_text(lef)
+        output = Path(re.search(r"(?m)^lef write (.+) -hide$", (h / marker).read_text()).group(1))
+        output.write_text(lef)
         return 0, "A8_LEF_OK", ""
 
     monkeypatch.setattr(E, "_docker_exec", fake_exec)
@@ -748,6 +755,62 @@ def test_native_op_uses_declared_poweron_plateau_without_transient(tmp_path, mon
     tb.write_text(tb.read_text().replace("VMAIN vp vn 2.3", "VMAIN vp vn pwl(0 0 100n 2.3 20u 2.3)"))
     extracted = b / "post_layout_extracted.spice"
     text, binding = E._delivered_measurement_deck(project, "blk", extracted, topo["ports"], "blk", topo)
-    assert "VMAIN vp vn dc 2.3 pwl(0 0 100n 2.3 20u 2.3)" in text
+    assert "VMAIN vp vn dc 2.3\n" in text
+    assert "pwl(" not in text
     assert binding["power_sources"][0]["dc_plateau"] == "2.3"
+    assert binding["power_sources"][0]["source_value"] == "pwl(0 0 100n 2.3 20u 2.3)"
+    assert binding["power_sources"][0]["dc_selection"] == "pwl_terminal_plateau"
+    assert binding["source_testbench_sha256"] == E._sha256(tb)
     assert "tran 1n 1u" not in text
+
+
+def test_native_op_explicit_dc_takes_precedence_over_poweron_waveform(tmp_path, monkeypatch):
+    project, b, topo = _source_power_fixture(tmp_path, monkeypatch)
+    tb = b / "tb_blk.sp"
+    tb.write_text(tb.read_text().replace("VMAIN vp vn 2.3", "VMAIN vp vn dc 2.1 pwl(0 0 100n 2.3 20u 2.3)"))
+    extracted = b / "post_layout_extracted.spice"
+    before = extracted.read_bytes()
+    text, binding = E._delivered_measurement_deck(project, "blk", extracted, topo["ports"], "blk", topo)
+    assert "VMAIN vp vn dc 2.1\n" in text and "pwl(" not in text
+    assert binding["power_sources"][0]["dc_selection"] == "explicit_dc"
+    assert binding["power_sources"][0]["dc_plateau"] == "2.1"
+    assert extracted.read_bytes() == before
+    assert "RLOAD out vn 7k" in text
+
+
+@pytest.mark.parametrize("source,expected", [
+    ("", 1e-5), (".options reltol=1e-3", 1e-5),
+    (".option reltol=1e-7", 1e-7), (".options reltol=2u", 2e-6),
+])
+def test_native_op_precision_never_loosens_source_reltol(source, expected):
+    cards, binding = E._native_op_precision([source])
+    assert cards == [f".options reltol={expected:.12g}"]
+    assert binding["reltol"] == expected
+    assert binding["residual_acceptance"] == "unchanged_native_check"
+
+
+def test_native_op_source_precision_expression_is_not_overwritten():
+    cards, binding = E._native_op_precision([".param tol=1e-8", ".options reltol={tol}"])
+    assert cards == []
+    assert binding["source_reltol"] == ["{tol}"]
+    assert binding["selection"] == "source_expression_preserved"
+
+
+@pytest.mark.parametrize("native_rc,native_text", [(1, "MACRO failed\n"), (0, "")])
+def test_native_lef_failure_preserves_prior_delivery(tmp_path, monkeypatch, native_rc, native_text):
+    project, b, topo = _write_native_measurement_fixture(tmp_path)
+    h = project / "phase3/analog/hardmacro/blk"
+    h.mkdir(parents=True)
+    delivered = h / "blk.lef"
+    delivered.write_text("prior native delivery\n")
+    monkeypatch.setattr(E, "magicrc_for", lambda *a, **k: "/pdk/native.magicrc")
+    def native(container, cmd, timeout=900, *, marker=None, log_path=None):
+        output = Path(re.search(r"(?m)^lef write (.+) -hide$", (h / marker).read_text()).group(1))
+        assert output != delivered and output.is_file() and output.read_bytes() == b""
+        output.write_text(native_text)
+        return native_rc, "", "native failure"
+    monkeypatch.setattr(E, "_docker_exec", native)
+    result = E.emit_block(project, "blk", "container", "/pdk")
+    assert result["emitted"] is False and result["rc"] == 2
+    assert delivered.read_text() == "prior native delivery\n"
+    assert not list(h.glob(".blk-native-lef-*"))

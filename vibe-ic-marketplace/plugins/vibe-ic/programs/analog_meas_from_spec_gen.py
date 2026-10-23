@@ -37,6 +37,11 @@ it.  Canonical-list DC and AC rows likewise refuse when the schema does not
 declare the required sweep point or AC frequency; the legacy map interface is
 left unchanged for its existing callers.
 
+Explicit ``measurement`` bindings may instead declare OP/DC/AC, the native
+expression, and the DC point or AC frequency. ``first``/``last`` selects the
+actual endpoint sample without extrapolating beyond a numerical sweep.
+They are callable through ``measurement_commands`` as well as canonical rows.
+
 Honest-FAIL guarantees:
   * missing spec.json                       -> exit 1, no output
   * spec.json that is not valid JSON        -> exit 2
@@ -59,6 +64,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
+import re
 import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -70,6 +77,39 @@ AC_TOKENS = ("gain", "ugbw", "gbw", "_bw", "bandwidth", "pm", "phase_margin",
              "gm", "psrr", "cmrr", "_db", "gain_db")
 TRAN_TOKENS = ("tpd", "_tr", "_tf", "slew", "settling", "rise", "fall",
                "jitter", "period", "tphl", "tplh", "delay")
+
+
+def measurement_commands(key: str, binding: dict) -> Tuple[List[str], str]:
+    """Emit controls for an explicitly bound native expression and point.
+
+    Bindings are ordinary source/testbench inputs. No node, current branch,
+    AC frequency, sweep point, or measured value is inferred from a label.
+    """
+    if not re.fullmatch(r"[A-Za-z_]\w*", key) or not isinstance(binding, dict):
+        raise ValueError("measurement name/binding is invalid")
+    analysis = str(binding.get("analysis", "")).upper()
+    expression = binding.get("expression")
+    if analysis not in ("OP", "DC", "AC") or not isinstance(expression, str) or not expression.strip():
+        raise ValueError("explicit OP/DC/AC analysis and native expression required")
+    if any(char in expression for char in "\r\n;"):
+        raise ValueError("measurement expression must be a single native expression")
+    vector = "bound_" + key
+    lines = [f"let {vector} = {expression}"]
+    if analysis == "OP":
+        lines.append(f'echo "MEAS {key}=" $&{vector}')
+    else:
+        point = binding.get("frequency_hz" if analysis == "AC" else "at")
+        if point in ("first", "last"):
+            scalar = vector + "_sample"
+            index = "0" if point == "first" else f"length({vector})-1"
+            lines += [f"let {scalar} = {vector}[{index}]", f'echo "MEAS {key}=" $&{scalar}']
+            return lines, analysis
+        if isinstance(point, bool) or not isinstance(point, (int, float)) or not math.isfinite(point):
+            raise ValueError("explicit finite AC frequency/DC sweep point required")
+        if analysis == "AC" and point <= 0:
+            raise ValueError("AC frequency must be positive")
+        lines.append(f"meas {analysis} {key} FIND {vector} AT={point:.17g}")
+    return lines, analysis
 
 
 def _classify(key: str) -> Optional[str]:
@@ -161,6 +201,12 @@ def _unsupported_rows(rows: List[dict]) -> List[dict]:
     for row in rows:
         name = str(row["name"]).strip()
         windows = {key: row[key] for key in window_keys if key in row}
+        if "measurement" in row and not windows:
+            try:
+                measurement_commands(name, row["measurement"])
+            except ValueError as exc:
+                unsupported.append({"name": name, "reason": "invalid_measurement_binding", "detail": str(exc)})
+            continue
         if windows:
             unsupported.append({"name": name,
                                 "reason": "unsupported_measurement_window",
@@ -195,6 +241,11 @@ def generate(spec: dict) -> Tuple[List[str], List[Tuple[str, str]]]:
         if key in ("specs", "targets"):
             continue
         if key in unsupported_names:
+            continue
+        if isinstance(candidates[key], dict) and "measurement" in candidates[key]:
+            commands, kind = measurement_commands(key, candidates[key]["measurement"])
+            lines.extend(commands)
+            emitted.append((key, kind))
             continue
         kind = _classify(key)
         if kind is None:

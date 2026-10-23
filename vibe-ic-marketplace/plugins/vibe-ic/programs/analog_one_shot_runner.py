@@ -2747,6 +2747,8 @@ def main() -> int:
                           "ANALOG_DETERMINISTIC_STUBS=1 env var."))
     p.add_argument("--blocks", default="",
                    help="comma-separated subset of block names; default = all")
+    p.add_argument("--post-mc-samples", type=int, default=None,
+                   help="explicit A15 execution sample count (>=2), for --flow 109")
     p.add_argument("--pdk", default="",
                    help=("PDK selector for the A-track's PDK-bound producers. "
                          "Forwarded here by vibe_ic_one_shot_runner so a run "
@@ -2757,6 +2759,9 @@ def main() -> int:
     import execution_policy as execution
     execution.add_arguments(p)
     args = p.parse_args()
+    if args.post_mc_samples is not None:
+        if args.flow != "109" or args.post_mc_samples < 2:
+            p.error("--post-mc-samples requires --flow 109 and a count >= 2")
     if args.flow == "109" and args.execution_mode not in (None, "default"):
         p.error("the native A01-A19 entry currently implements Default mode")
     execution.configure(args)

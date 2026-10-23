@@ -29,8 +29,8 @@ Analog blocks must be verified across process corners, temperature, voltage, and
 | `.op` | DC operating point, bias validation |
 | `.dc` | Sweeps (supply, input, parameter) |
 | `.ac` | Gain, bandwidth, phase margin |
-| `.tran` | Settling, slew, large-signal |
-| `.noise` | Input-referred noise, SNR |
+| `.tran` | Settling, slew, large-signal; sampled converter ENOB/SNR/SNDR via spectrum |
+| `.noise` | Input-referred noise and small-signal analog SNR estimates |
 | `.pss` / `.pac` / `.pnoise` | Periodic steady-state (for RF / SC circuits) |
 | `.mc` | Monte Carlo mismatch + process |
 
@@ -51,6 +51,15 @@ present, adds `.mc` whenever any spec declares a mismatch / σ / yield
 concern, and FAILs honestly (exit 1) when a spec carries no recognizable
 measurable metric. Agent judgment is only needed to override an
 ambiguous / custom spec key the table does not recognize.
+
+ENOB and SINAD require a sampled dynamic measurement; declared converter
+SNR/SNDR use transient capture and spectral processing as well. A small-signal
+`.noise` result cannot establish these converter metrics. Separate physical
+noise specifications still select `.noise`. See
+[Analog Devices MT-003](https://www.analog.com/media/en/training-seminars/tutorials/MT-003.pdf),
+pages 1 and 5–6. Stimulus, sampling and capture settings must be recorded with
+the result; choosing an engineering measurement setting does not add a new
+electrical acceptance requirement to the source specification.
 
 ## Workflow
 

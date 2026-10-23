@@ -86,6 +86,12 @@ def test_a06_does_not_call_literal_echo_a_dut_measure(project):
     assert result["status"] == "NOT_MEASURED"
 
 
+def test_native_ac_probe_and_actual_endpoint_alias_are_measured_definitions():
+    text = ('ac dec 20 1 1Meg\nlet transfer = -vdb(vout)\n'
+            'let endpoint = transfer[length(transfer)-1]\necho "MEAS psrr=" $&endpoint\n')
+    assert sim._measurement_names(text) == ["psrr"]
+
+
 @pytest.mark.parametrize("transcript,expected", [("MEAS level=1.0\n", "PASS"),
                                                   ("MEAS level=\n", "NOT_MEASURED"),
                                                   ("MEAS level=nan\n", "NOT_MEASURED"),
@@ -190,6 +196,113 @@ def test_a07_all_source_metrics_measured_and_within_bounds_pass(project):
         "returncode": 0, "stdout": "MEAS vout=1.2\ndropout = 0.3\niq = 20\npsrr = 50\n"})
     assert result["status"] == "PASS"
     assert result["metrics"]["source_measurement_coverage"]["missing"] == []
+
+
+def _retained_native_study(project, vout=1.2):
+    import analog_bound_measurements as producer
+    bdir = project / "phase3/analog/stage"
+    _source_performance_spec(project)
+    deck = _op_deck(project)
+    deck.write_text(deck.read_text().replace("MEAS level=", "MEAS vout="))
+    template = bdir / "study_tb.sp"
+    template.write_text(deck.read_text().replace('.include "stage.sp"', f'.include "{bdir / "stage.sp"}"'))
+    bindings = {"analysis": {"kind": "OP"}, "measurements": {
+        "vout": {"analysis": "OP", "expression": "v(out)", "unit": "V"},
+        "iq": {"analysis": "OP", "expression": "-i(v1)*1e6", "unit": "uA"}}}
+    binding_path = bdir / "study-bindings.json"
+    binding_path.write_text(json.dumps(bindings))
+    destination = project / "study-results"
+    def run(*args, **kwargs):
+        log = destination / "native.log"
+        log.write_text(f"MEAS vout={vout} iq=20\n")
+        return {"returncode": 0, "log": str(log), "log_sha256": producer.sha(log)}
+    record = producer.run_measurements(project, bdir / "stage.sp", template, bindings, destination, run)
+    record["native_inputs"]["bindings"] = {"path": str(binding_path), "sha256": producer.sha(binding_path)}
+    result_path = destination / "result.json"
+    result_path.write_text(json.dumps(record))
+    return {"testbench": str(template), "bindings": str(binding_path), "result": str(result_path)}
+
+
+@pytest.mark.parametrize("source", ["sidecar", "config", "previous"])
+def test_incomplete_a06_a07_adopt_exact_retained_native_studies_without_duplicate_execution(project, source):
+    entry = _retained_native_study(project)
+    config = {"blocks": {"stage": {"measurement_studies": [entry]}}}
+    if source == "sidecar":
+        (project / "phase3/analog/stage/measurement_studies.json").write_text(json.dumps([entry]))
+        config = {}
+    result = sim.run_step("A06", project, {"name": "stage"}, _options(config=config), _never)
+    assert result["status"] == "NOT_MEASURED"
+    assert result["metrics"]["vout"] == 1.2 and result["metrics"]["iq"] == 20
+    assert result["metrics"]["source_measurement_coverage"]["missing"] == ["dropout", "psrr"]
+    if source == "previous":
+        entry.pop("result")
+    nominal = sim.run_step("A07", project, {"name": "stage"},
+        _options(config=config, previous_results={"A06": {"stage": result}}), _never)
+    assert nominal["status"] == "NOT_MEASURED"
+    assert nominal["metrics"]["native_measurement_studies"][0]["reused"] is True
+    assert nominal["metrics"]["vout"] == 1.2 and nominal["metrics"]["iq"] == 20
+    assert nominal["executions"] == []  # No canonical PRE claim from a different stimulus.
+
+
+def test_partial_native_study_retains_real_failure_before_missing_performance(project):
+    entry = _retained_native_study(project, vout=1.5)
+    result = sim.run_step("A07", project, {"name": "stage"},
+        _options(config={"blocks": {"stage": {"measurement_studies": [entry]}}}), _never)
+    assert result["status"] == "FAIL"
+    assert result["metrics"]["measured_spec_violations"] == ["vout"]
+    assert result["metrics"]["source_measurement_coverage"]["missing"] == ["dropout", "psrr"]
+
+
+def test_stale_or_changed_native_transcript_cannot_supply_retained_values(project):
+    entry = _retained_native_study(project)
+    record = json.loads(Path(entry["result"]).read_text())
+    Path(record["executions"][0]["log"]).write_text("MEAS vout=0 iq=0\n")
+    calls = []
+    def run(program, argv, **kwargs):
+        calls.append(program)
+        return {"returncode": 2}
+    result = sim.run_step("A07", project, {"name": "stage"},
+        _options(config={"blocks": {"stage": {"measurement_studies": [entry]}}}), run)
+    assert calls == ["analog_bound_measurements.py"]
+    assert result["status"] == "NOT_MEASURED" and "vout" not in result["metrics"]
+
+
+@pytest.mark.parametrize("rc,diagnostic,expected", [
+    (1, "", "FAIL"), (0, ";;RESIDUAL_FAIL worst_ratio=2.5\n", "FAIL"),
+    (0, "Error: native AC analysis failed\n", "FAIL"), (143, "", "NOT_MEASURED")])
+def test_cached_pass_word_cannot_hide_actual_native_failure_or_interruption(project, rc, diagnostic, expected):
+    entry = _retained_native_study(project)
+    path = Path(entry["result"])
+    record = json.loads(path.read_text())
+    record["status"] = "PASS"
+    execution = record["executions"][0]
+    execution["returncode"] = rc
+    log = Path(execution["log"])
+    log.write_text(log.read_text() + diagnostic)
+    execution["log_sha256"] = hashlib.sha256(log.read_bytes()).hexdigest()
+    path.write_text(json.dumps(record))
+    result = sim.run_step("A07", project, {"name": "stage"},
+        _options(config={"blocks": {"stage": {"measurement_studies": [entry]}}}), _never)
+    assert result["status"] == expected
+    assert result["metrics"]["native_measurement_studies"][0]["status"] == expected
+    assert "vout" not in result["metrics"] and "iq" not in result["metrics"]
+
+
+def test_old_native_study_without_model_closure_cannot_be_reused(project):
+    entry = _retained_native_study(project)
+    path = Path(entry["result"])
+    record = json.loads(path.read_text())
+    record["native_inputs"] = {key: value for key, value in record["native_inputs"].items()
+                               if not key.startswith("include:")}
+    path.write_text(json.dumps(record))
+    calls = []
+    def run(program, argv, **kwargs):
+        calls.append(program)
+        return {"returncode": 2}
+    result = sim.run_step("A07", project, {"name": "stage"},
+        _options(config={"blocks": {"stage": {"measurement_studies": [entry]}}}), run)
+    assert calls == ["analog_bound_measurements.py"]
+    assert result["status"] == "NOT_MEASURED" and "vout" not in result["metrics"]
 
 
 @pytest.mark.parametrize("transcript,returncode,expected", [

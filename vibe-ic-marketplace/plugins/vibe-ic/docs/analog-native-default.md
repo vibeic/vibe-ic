@@ -9,6 +9,11 @@ python3 programs/analog_one_shot_runner.py /path/to/project \
   --flow 109 --entry-step A01 --exit-step A19 \
   --pdk ihp-sg13g2 --container my-eda --execution-workers 2
 
+# A bounded post-layout statistical execution; count is per RC style.
+python3 programs/analog_one_shot_runner.py /path/to/project \
+  --flow 109 --entry-step A15 --exit-step A15 --blocks regulator \
+  --post-mc-samples 2 --pdk ihp-sg13g2 --container my-eda
+
 python3 programs/vibe_ic_one_shot_runner.py /path/to/project \
   --flow 109 --flow109-manifest /path/to/project/manifest.json \
   --entry-step A04 --exit-step A07 --route ic --container my-eda
@@ -77,3 +82,32 @@ Source-owned mission decks and native thermal, EM or aging reports can be
 supplied through per-step settings. Missing foundry data or unsupported
 native producers are reported directly. A19 requires the actual delivery
 views and prior native results; it cannot sign off an empty package.
+
+A06/A07 can consume explicit native studies from the block's
+`measurement_studies.json` (or `config.blocks.<name>.measurement_studies`):
+
+```json
+[
+  {"testbench": "/path/to/source-load.sp",
+   "bindings": "/path/to/op-measurements.json",
+   "result": "/path/to/completed-study/result.json"}
+]
+```
+
+`analog_bound_measurements.py` emits and runs the declared OP/DC/AC analysis.
+The testbench owns circuit, stimulus and load; bindings select actual native
+expressions, units and analysis points. A retained result is reusable only
+while its DUT, model/include closure, template, bindings, generated deck,
+native log and capture bytes match. Cached JSON cannot replace values from
+the native transcript or hide a simulator failure. Unsupported or unmeasured
+requirements remain visible even when some studies succeed.
+
+A14 may reuse a matching OP study as PRE and derive POST from that same
+template and bindings. A15 consumes those generated POST decks. This keeps
+load and stimulus consistent across pre-layout, post-layout and statistical
+measurements. The `--post-mc-samples` count is per extraction style and does
+not itself establish statistical population coverage.
+
+Block-subset windows retain other blocks' valid results and their original
+producer context. A17 reports its actual characterization scope separately:
+DC power and interface views do not establish unmeasured timing arcs.

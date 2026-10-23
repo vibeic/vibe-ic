@@ -51,13 +51,14 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 PROGRAMS_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(PROGRAMS_DIR))
 
-from _atomic_artefact import write_json  # noqa: E402 - vibe-ic#1082
+from _atomic_artefact import write_json, write_text as atomic_write_text  # noqa: E402 - vibe-ic#1082
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _container_exec as _ce  # noqa: E402 — the ONE guarded docker-exec argv
 import _eda_pin as _pin  # noqa: E402 — the ONE place the pin is stated
@@ -694,8 +695,10 @@ def _delivered_measurement_deck(project: Path, block: str, extracted: Path,
     """Replace the DUT in its delivered stimulus; run only native OP power.
 
     The A3 model bindings and external circuit cards remain the source of the
-    conditions. Power-on PWL supply rails use their own final plateau as the
-    explicit DC bias, retaining the waveform rather than running a transient.
+    conditions. This steady-state deck specializes power-on PWL supply rails
+    to their explicit DC bias, or their own final plateau when no DC value is
+    stated. The original waveform remains bound through source metadata and
+    the testbench hash; the DUT, parasitics and external loads are unchanged.
     """
     bdir = project / "phase3" / "analog" / block
     a3, tb = bdir / f"{block}.sp", bdir / f"tb_{block}.sp"
@@ -752,18 +755,28 @@ def _delivered_measurement_deck(project: Path, block: str, extracted: Path,
         source, positive, negative, value = fields
         if not rail_nodes.intersection((positive.casefold(), negative.casefold())):
             continue
-        pwl = re.fullmatch(r"(?is)\s*pwl\s*\((.*)\)\s*", value)
+        pwl = re.fullmatch(r"(?is)\s*(?:(?:dc\s+)?(?P<dc>\S+)\s+)?pwl\s*\((?P<points>.*)\)\s*", value)
         bias = None
+        selection = "delivered_source"
         if pwl:
-            pairs = re.split(r"[\s,]+", pwl.group(1).strip())
-            if len(pairs) < 4 or len(pairs) % 2:
-                raise ValueError("A8 supply PWL has no explicit terminal DC plateau")
-            bias = pairs[-1]
-            cards[index] = f"{source} {positive} {negative} dc {bias} {value}"
+            bias = pwl.group("dc")
+            selection = "explicit_dc"
+            if bias is None:
+                pairs = re.split(r"[\s,]+", pwl.group("points").strip())
+                if len(pairs) < 4 or len(pairs) % 2:
+                    raise ValueError("A8 supply PWL has no explicit terminal DC plateau")
+                bias = pairs[-1]
+                selection = "pwl_terminal_plateau"
+            # An OP source has one DC condition. Retaining the time waveform
+            # lets native OPtran fallback select its time-zero value instead
+            # of the explicit DC condition, which the residual check refuses.
+            cards[index] = f"{source} {positive} {negative} dc {bias}"
         supplies.append({"source": source, "positive": positive, "negative": negative,
-                         "dc_plateau": bias})
+                         "dc_plateau": bias, "source_value": value,
+                         "dc_selection": selection})
     if not supplies:
         raise ValueError("A8 delivered testbench has no voltage source driving its declared rails")
+    precision_cards, precision = _native_op_precision(cards)
     current = " + ".join(f"abs(i({row['source']}))" for row in supplies)
     power = " + ".join(f"abs(i({row['source']})*{_terminal_voltage_expression(row['positive'], row['negative'])})"
                        for row in supplies)
@@ -771,14 +784,39 @@ def _delivered_measurement_deck(project: Path, block: str, extracted: Path,
     if wrapper is not None:
         includes.append(f".include {json.dumps(str(wrapper))}")
     text = "\n".join(["* A8 native OP from delivered A3 stimulus and model bindings.",
-                        *bindings, *includes, *cards,
+                        *bindings, *includes, *cards, *precision_cards,
                         f"XU {' '.join(nodes)} {subckt}", ".control", "set noaskquit", "op",
                         f"let idd = {current}", f"let pwr = {power}",
                         "print idd pwr", "quit", ".endc", ".end", ""])
     return text, {"source_testbench": str(tb.relative_to(project)), "source_testbench_sha256": _sha256(tb),
                   "source_design_netlist": str(a3.relative_to(project)), "source_design_netlist_sha256": _sha256(a3),
                   "model_binding_lines": bindings, "power_sources": supplies,
+                  "native_op_precision": precision,
                   "native_measurement": "native OP sum(abs(I(source)*V(source terminals)))"}
+
+
+def _native_op_precision(cards: List[str]) -> Tuple[List[str], Dict]:
+    """Tighten OP iteration precision; never change the residual acceptance.
+
+    The native default reltol can stop iteration before the unchanged native
+    KCL check is satisfied on extracted networks. Preserve a stricter source
+    tolerance, and leave unresolved source expressions for ngspice to evaluate.
+    """
+    stated = []
+    for card in cards:
+        if re.match(r"(?i)^\s*\.opt(?:ion|ions)?\b", card):
+            stated.extend(re.findall(r"(?i)\breltol\s*=\s*(\{[^}]*\}|[^\s,]+)", card))
+    values = [_a7.spice_number(token) for token in stated]
+    if any(value is None for value in values):
+        return [], {"source_reltol": stated, "reltol": None,
+                    "selection": "source_expression_preserved"}
+    if any(not math.isfinite(value) or value <= 0 for value in values):
+        raise ValueError("A8 source reltol must be finite and positive")
+    reltol = min([1e-5, *values])
+    return [f".options reltol={reltol:.12g}"], {
+        "source_reltol": stated, "reltol": reltol,
+        "selection": "stricter_of_source_and_native_op_precision",
+        "residual_acceptance": "unchanged_native_check"}
 
 
 def _bound_models(container: str, lines: List[str], directory: Path) -> List[Dict]:
@@ -1385,16 +1423,23 @@ def emit_block(project: Path, block: str, container: str, pdk_root: str,
     hdir.mkdir(parents=True, exist_ok=True)
     tcl = hdir / f"{block}_lef.tcl"
     lef = hdir / f"{block}.lef"
-    tcl.write_text(build_lef_tcl(block, str(gds), str(lef)))
-    rc, out, err = _docker_exec(
-        container,
-        f"cd {shlex.quote(str(hdir))} && magic -dnull -noconsole "
-        f"-rcfile {shlex.quote(rcfile)} {shlex.quote(tcl.name)}",
-        marker=tcl.name)
-    if not lef.is_file() or lef.stat().st_size == 0:
-        return {"block": block, "emitted": False, "rc": 2,
-                "reason": f"magic wrote no LEF (rc={rc})",
-                "tail": (out + err)[-300:]}
+    # Docker may execute Magic as root. Pre-create its unique output as the
+    # caller, then publish only a successful nonempty native result. A prior
+    # delivered LEF is never truncated, reused after native failure, or chowned.
+    with tempfile.TemporaryDirectory(prefix=f".{block}-native-lef-", dir=hdir) as staging:
+        native_lef = Path(staging) / f"{block}.lef"
+        native_lef.write_text("")
+        tcl.write_text(build_lef_tcl(block, str(gds), str(native_lef)))
+        rc, out, err = _docker_exec(
+            container,
+            f"cd {shlex.quote(str(hdir))} && magic -dnull -noconsole "
+            f"-rcfile {shlex.quote(rcfile)} {shlex.quote(tcl.name)}",
+            marker=tcl.name)
+        if rc != 0 or not native_lef.is_file() or native_lef.stat().st_size == 0:
+            return {"block": block, "emitted": False, "rc": 2,
+                    "reason": f"magic wrote no valid LEF (rc={rc})",
+                    "tail": (out + err)[-300:]}
+        lef_text = native_lef.read_text(errors="replace")
     # THE CARVE STAYS ON, AND HERE IS THE HYPOTHESIS THAT DIED.
     #
     # Chip-level Magic extraction reports thousands of `Illegal overlap
@@ -1414,20 +1459,14 @@ def emit_block(project: Path, block: str, container: str, pdk_root: str,
     # arms are simply not yet separable on the sign-off DRC number, because
     # the runner streamed one of them with magic and the other with klayout.
     _rails_map = json.loads(topo.read_text()).get("rails") or {}
-    _pg_text, n_pg = annotate_pg_pins(lef.read_text(errors="replace"),
+    _pg_text, n_pg = annotate_pg_pins(lef_text,
                                       _rails_map)
-    if n_pg:
-        lef.write_text(_pg_text)
-    _sig_text, n_sig = annotate_signal_pins(lef.read_text(errors="replace"),
+    _sig_text, n_sig = annotate_signal_pins(_pg_text,
                                             signals)
-    if n_sig:
-        lef.write_text(_sig_text)
     halo = float(os.environ.get("A8_PIN_ACCESS_CLEARANCE_UM", "0.6"))
-    carved, n_carved = ((lef.read_text(errors="replace"), 0) if halo <= 0
-                        else carve_pin_access(
-                            lef.read_text(errors="replace"), halo))
-    if n_carved:
-        lef.write_text(carved)
+    carved, n_carved = ((_sig_text, 0) if halo <= 0
+                        else carve_pin_access(_sig_text, halo))
+    atomic_write_text(lef, carved)
     (hdir / f"{block}.gds").write_bytes(gds.read_bytes())
     (hdir / f"{block}.v").write_text(interface_verilog(block, rails, signals))
     (hdir / f"{block}.lib").write_text(
@@ -1442,6 +1481,12 @@ def emit_block(project: Path, block: str, container: str, pdk_root: str,
         "schema": "vibe-ic/analog_a8_views/1",
         "producer": "analog_a8_hardmacro_emit",
         "block": block,
+        "characterization_scope": {
+            "interface": "ports_and_power_ground",
+            "dc_power": "native_op_at_delivered_testbench_conditions",
+            "timing_arcs": "NOT_MEASURED",
+            "full_timing_characterization": False,
+        },
         "source_gds": str(gds.relative_to(project)),
         "source_gds_sha256": _sha256(gds),
         "views": {suffix: {"path": str(path.relative_to(project)),
@@ -1474,6 +1519,7 @@ def emit_block(project: Path, block: str, container: str, pdk_root: str,
     write_json(hdir / "a8_views_provenance.json", manifest)
 
     return {"block": block, "emitted": True, "rc": 0,
+            "characterization_scope": manifest["characterization_scope"],
             "lef_bytes": lef.stat().st_size,
             "obs_rects_carved_for_pin_access": n_carved,
             "pg_pins_declared": n_pg,

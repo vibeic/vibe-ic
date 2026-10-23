@@ -157,6 +157,112 @@ def test_bounded_native_pass_does_not_erase_or_inherit_an_unrelated_failure(tmp_
     assert result["verdict"] == "FAIL"
 
 
+def test_block_subset_keeps_other_block_state_without_inheriting_its_failure(tmp_path, monkeypatch):
+    root = project(tmp_path)
+    (root / "phase3/analog/analog_block_list.json").write_text(json.dumps({
+        "blocks": [{"name": "cell_alpha"}, {"name": "cell_beta"}]}))
+    beta = root / "phase3/analog/cell_beta"
+    beta.mkdir()
+    (beta / "cell_beta.sp").write_text("* retained beta input\n")
+    monkeypatch.setattr(native, "_dispatch", lambda step, _p, block, *_args: {
+        "status": "FAIL" if block["name"] == "cell_beta" else "PASS", "outputs": []})
+    native.run_window(root, args())
+    selected = args()
+    selected.blocks = "cell_alpha"
+    result = native.run_window(root, selected)
+    assert result["window_verdict"] == "PASS"
+    assert result["verdict"] == "FAIL"
+    assert {row["block"]: row["status"] for row in result["steps"]} == {
+        "cell_alpha": "PASS", "cell_beta": "FAIL"}
+
+
+def test_measurement_study_declaration_invalidates_only_its_consuming_rows(tmp_path, monkeypatch):
+    root = project(tmp_path)
+    monkeypatch.setattr(native, "_dispatch", lambda *a: {"status": "PASS", "outputs": []})
+    native.run_window(root, args("A05", "A07"))
+    (root / "phase3/analog/cell_alpha/measurement_studies.json").write_text("[]")
+    observed = []
+    def dispatch(step, _project, _block, options, _run):
+        observed.append(set(options["previous_results"]))
+        return {"status": "PASS", "outputs": []}
+    monkeypatch.setattr(native, "_dispatch", dispatch)
+    native.run_window(root, args("A08", "A08"))
+    assert "A05" in observed[-1]
+    assert "A06" not in observed[-1] and "A07" not in observed[-1]
+
+
+def test_post_mc_execution_sample_override_reaches_native_dispatch_without_config_edit(tmp_path, monkeypatch):
+    root = project(tmp_path)
+    seen = []
+    def dispatch(step, _project, _block, options, _run):
+        seen.append(options["post_mc_samples"])
+        return {"status": "NOT_MEASURED", "outputs": []}
+    monkeypatch.setattr(native, "_dispatch", dispatch)
+    request = args("A15", "A15")
+    request.post_mc_samples = 2
+    native.run_window(root, request)
+    assert seen == [2]
+    assert not (root / "input/analog_flow.json").exists()
+
+
+@pytest.mark.parametrize("leaf", ["template.sp", "bindings.json", "native.log"])
+def test_retained_study_changes_are_detected_outside_input_directory(tmp_path, monkeypatch, leaf):
+    root = project(tmp_path)
+    study = root / "continuations/study"
+    study.mkdir(parents=True)
+    for name in ("template.sp", "bindings.json", "native.log"):
+        (study / name).write_text("{}" if name.endswith("json") else "native input\n")
+    record = study / "result.json"
+    record.write_text(json.dumps({"executions": [{"log": str(study / "native.log")}]}))
+    (root / "phase3/analog/cell_alpha/measurement_studies.json").write_text(json.dumps([{
+        "testbench": str(study / "template.sp"), "bindings": str(study / "bindings.json"),
+        "result": str(record)}]))
+    observed = []
+    def dispatch(step, _project, _block, options, _run):
+        observed.append(set(options["previous_results"]))
+        return {"status": "NOT_MEASURED", "outputs": []}
+    monkeypatch.setattr(native, "_dispatch", dispatch)
+    native.run_window(root, args("A07", "A07"))
+    native.run_window(root, args("A08", "A08"))
+    assert "A07" in observed[-1]
+    (study / leaf).write_text('{"changed":true}' if leaf.endswith("json") else "changed\n")
+    native.run_window(root, args("A09", "A09"))
+    assert "A07" not in observed[-1]
+
+
+def test_retained_result_keeps_original_image_attribution_across_execution_contexts(tmp_path, monkeypatch):
+    root = project(tmp_path)
+    monkeypatch.setattr(native, "_dispatch", lambda *a: {"status": "PASS", "outputs": []})
+    first = args("A06", "A06")
+    first.image = "image-A"
+    native.run_window(root, first)
+    second = args("A07", "A07")
+    second.image = "image-B"
+    result = native.run_window(root, second)
+    rows = {row["step"]: row for row in result["steps"]}
+    assert result["image"] == "image-B"
+    assert rows["A06"]["producer_context"]["image"] == "image-A"
+    assert rows["A07"]["producer_context"]["image"] == "image-B"
+
+
+def test_native_discovered_inputs_are_retained_only_while_their_bytes_match(tmp_path, monkeypatch):
+    root = project(tmp_path)
+    source = root / "matched-load.sp"
+    source.write_text("* actual selected post-layout load context\n")
+    observed = []
+    def dispatch(step, _project, _block, options, _run):
+        observed.append(set(options["previous_results"]))
+        return {"status": "NOT_MEASURED", "outputs": [], "native_inputs": {
+            "matched_template": {"path": str(source), "sha256": native._sha(source)}}}
+    monkeypatch.setattr(native, "_dispatch", dispatch)
+    native.run_window(root, args("A14", "A14"))
+    native.run_window(root, args("A15", "A15"))
+    assert "A14" in observed[-1]
+    source.write_text("* different load context\n")
+    native.run_window(root, args("A16", "A16"))
+    assert "A14" not in observed[-1]
+
+
 def test_successful_exit_without_promised_native_output_is_not_pass(tmp_path, monkeypatch):
     root = project(tmp_path)
     monkeypatch.setattr(native, "_dispatch", lambda *arguments: {

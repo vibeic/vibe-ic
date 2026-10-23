@@ -14,7 +14,8 @@ The frozen table (verbatim from the skill, no invented thresholds):
     | spec metric class                       | required analysis |
     |-----------------------------------------|-------------------|
     | gain / bandwidth / phase-margin / GBW   | .ac               |
-    | input-referred noise / SNR / SNDR       | .noise            |
+    | input-referred noise / analog SNR      | .noise            |
+    | ENOB / converter SNR and SNDR          | .tran + spectrum  |
     | settling / slew / large-signal timing   | .tran             |
     | mismatch / process / yield (Monte Carlo)| .mc               |
     | RF / switched-cap periodic steady-state | .pss/.pac/.pnoise |
@@ -35,7 +36,8 @@ does not decide.
 Spec key classification (case-insensitive substring; longest/most
 specific class wins so a key only ever maps to ONE analysis class):
 
-    .noise : 'noise', 'snr', 'sndr', 'enob', 'nsd'
+    .noise : 'noise', 'snr', 'sndr', 'nsd' (converter SNR/SNDR use .tran)
+    .tran  : 'enob', 'sinad' (sampled dynamic performance)
     .pss   : 'pss', 'pac', 'pnoise', 'switched_cap', 'switched-cap',
              'sc_', 'pll_pn', 'phase_noise', 'rf_'
     .ac    : 'gain', 'bandwidth', '_bw', 'ugbw', 'gbw', 'pm',
@@ -81,6 +83,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -117,9 +120,29 @@ _MC_TOKENS = ("mismatch", "sigma", "yield", "monte", "3sigma", "6sigma",
 _ORDER = (".op", ".dc", ".ac", ".tran", ".noise", ".pss", ".mc")
 
 
-def _classify(key: str) -> Optional[str]:
+def _data_converter(spec: dict) -> bool:
+    """Recognize declared converter classes, never a benchmark name."""
+    for field in ("block_type", "converter_type"):
+        value = spec.get(field)
+        if not isinstance(value, str):
+            continue
+        value = re.sub(r"[^a-z0-9]+", "_", value.casefold()).strip("_")
+        if re.search(r"(?:^|_)(?:adc|dac|data_converter|delta_sigma|sigma_delta|"
+                     r"analog_to_digital|digital_to_analog)(?:_|$)", value):
+            return True
+    return False
+
+
+def _classify(key: str, *, converter: bool = False) -> Optional[str]:
     """Map a single spec key to its analysis card, or None."""
     k = key.lower()
+    # ENOB includes distortion and quantization in the sampled output. A
+    # linearized .noise result cannot replace this dynamic measurement.
+    # Technical basis: Analog Devices MT-003, pp. 1 and 5-6.
+    if re.search(r"(?:^|[^a-z0-9])(?:enob|sinad)(?:$|[^a-z0-9])", k):
+        return ".tran"
+    if converter and re.search(r"(?:^|[^a-z0-9])(?:snr|sndr)(?:$|[^a-z0-9])", k):
+        return ".tran"
     for card, tokens in _CLASS_TABLE:
         if any(t in k for t in tokens):
             return card
@@ -182,10 +205,11 @@ def _mc_requested(spec: dict, keys: Dict[str, object]) -> bool:
 def select(spec: dict) -> Tuple[List[str], List[Dict[str, str]]]:
     """Return (sorted_analysis_set, [{key, analysis}...]) for a spec."""
     keys = _flatten_spec(spec)
+    converter = _data_converter(spec)
     mapped: List[Dict[str, str]] = []
     chosen = set()
     for key in sorted(keys):
-        card = _classify(key)
+        card = _classify(key, converter=converter)
         if card is None:
             continue
         mapped.append({"key": key, "analysis": card})

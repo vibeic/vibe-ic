@@ -48,25 +48,63 @@ def _aggregate(rows):
     return "PASS"
 
 
-def _input_views(project, name):
+def _input_views(project, name, step=None):
     paths = list((project / "input").rglob("*"))
     paths += list(layout.generated_docs_dir(project).glob("*.json"))
     directory = layout.analog_dir(project) / name
     paths += [directory / leaf for leaf in
               ("spec.json", "topology.json", "topology.md", f"{name}.sp", f"tb_{name}.sp")]
+    if step in ("A06", "A07"):
+        paths.append(directory / "measurement_studies.json")
     # A configured nominal/calibration deck can live outside the canonical
     # block directory. Retain the actual selected inputs, not only defaults.
     from analog_native_sim import _config, _inputs, _included_paths
     config = _read(project / "input" / "analog_flow.json", {})
-    for step in STEPS[5:10]:
-        selected = _config({"config": config}, {"name": name}, step)
-        if step == "A07" and selected.get("nominal_testbench"):
+    for selected_step in STEPS[5:10]:
+        selected = _config({"config": config}, {"name": name}, selected_step)
+        if selected_step == "A07" and selected.get("nominal_testbench"):
             selected = {**selected, "testbench": selected["nominal_testbench"]}
-        if step == "A10" and isinstance(selected.get("calibration"), dict):
+        if selected_step == "A10" and isinstance(selected.get("calibration"), dict):
             selected = {**selected, **selected["calibration"]}
         netlist, deck, spec = _inputs(project, name, selected)
         paths.extend([netlist, deck, spec])
         paths.extend(_included_paths(deck))
+    if step in ("A06", "A07"):
+        # The declaration names real study inputs outside input/. Changing
+        # one of those inputs must invalidate its retained measurement too.
+        selected = _config({"config": config}, {"name": name}, step)
+        studies = selected.get("measurement_studies")
+        if studies is None:
+            studies = _read(directory / "measurement_studies.json", [])
+        if isinstance(studies, dict):
+            studies = studies.get("studies", [])
+        def referenced(value):
+            if not isinstance(value, str) or not value:
+                return None
+            path = Path(value)
+            path = path if path.is_absolute() else project / path
+            paths.append(path)
+            return path
+        for study in studies if isinstance(studies, list) else []:
+            if not isinstance(study, dict):
+                continue
+            referenced(study.get("testbench"))
+            bindings_path = referenced(study.get("bindings"))
+            bindings = _read(bindings_path, {}) if bindings_path else {}
+            if isinstance(bindings, dict) and isinstance(bindings.get("source"), dict):
+                referenced(bindings["source"].get("path"))
+            result_path = referenced(study.get("result"))
+            record = _read(result_path, {}) if result_path else {}
+            if not isinstance(record, dict):
+                continue
+            for view in (record.get("native_inputs") or {}).values():
+                if isinstance(view, dict):
+                    referenced(view.get("path"))
+            for execution in record.get("executions") or []:
+                if isinstance(execution, dict):
+                    referenced(execution.get("log"))
+            if isinstance(record.get("capture"), dict):
+                referenced(record["capture"].get("path"))
     return {str(path): _sha(path) for path in paths if path.is_file()}
 
 
@@ -197,12 +235,16 @@ def _views(step, project, block, options, run):
     import analog_liberty_nonzero_delay_check as liberty
     audit = liberty.run_audit(project)
     findings = [vars(finding) for finding in audit.findings if finding.block == name]
+    package = layout.analog_dir(project) / "hardmacro" / name
+    provenance = _read(package / "a8_views_provenance.json", {})
     status = ("FAIL" if any(finding["severity"] == "ERROR" for finding in findings) else
               "PASS" if name in audit.summary.get("design_bound_blocks", []) else "NOT_MEASURED")
     return {"status": status,
             "detail": "Native layout views emitted and characterization checked",
-            "outputs": [str(layout.analog_dir(project) / "hardmacro" / name)],
-            "executions": executions, "findings": findings}
+            "outputs": [str(package)],
+            "executions": executions, "findings": findings,
+            "metrics": {"characterization_scope": provenance.get("characterization_scope"),
+                        "native_measurement": provenance.get("native_measurement")}}
 
 
 def _dispatch(step, project, block, options, run):
@@ -245,6 +287,7 @@ def run_window(project, args, *, features=None):
     if any(not isinstance(name, str) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.-]*", name)
            or name in (".", "..") for name in names) or len(set(names)) != len(names):
         raise ValueError("analog block names must be unique safe path components")
+    declared_names = set(names)
     wanted = {name.strip() for name in (getattr(args, "blocks", "") or "").split(",") if name.strip()}
     if wanted:
         if not wanted.issubset(names):
@@ -271,6 +314,7 @@ def run_window(project, args, *, features=None):
                "pdk": _effective_analog_pdk(pdk_args, project),
                "cpus": getattr(args, "execution_cpus", None) or config.get("cpus", 4),
                "workers": getattr(args, "execution_workers", None) or config.get("workers", 1),
+               "post_mc_samples": getattr(args, "post_mc_samples", None),
                "config": config, "features": features, "previous_results": {},
                "active_blocks": config.get("active_blocks", []), "attempt_dir": str(attempt)}
     options["workers"] = max(1, min(int(options["workers"]), len(blocks)))
@@ -280,12 +324,22 @@ def run_window(project, args, *, features=None):
         for retained in previous.get("steps", []):
             name = retained.get("block")
             inputs, outputs = retained.get("input_views"), retained.get("output_views")
-            if (name in names and inputs and inputs == _input_views(project, name)
+            current_inputs = _input_views(project, name, retained.get("step")) if name in declared_names else {}
+            if (name in declared_names and inputs
+                    and all(inputs.get(path) == digest for path, digest in current_inputs.items())
+                    and all(Path(path).is_file() and _sha(path) == digest
+                            for path, digest in inputs.items())
                     and isinstance(outputs, dict)
                     and all(Path(path).is_file() and _sha(path) == digest
                             for path, digest in outputs.items())):
+                retained = dict(retained)
+                retained.setdefault("producer_context", {
+                    "image": previous.get("image"), "container": previous.get("container"),
+                    "driver_sha256": previous.get("source_sha256"),
+                    "attribution": "retained prior execution; not rerun under this window"})
                 options["previous_results"].setdefault(retained["step"], {})[name] = retained
-                if retained["step"] not in STEPS[STEPS.index(entry):STEPS.index(exit_) + 1]:
+                if (name not in names or
+                        retained["step"] not in STEPS[STEPS.index(entry):STEPS.index(exit_) + 1]):
                     rows.append(retained)
     report = {"flow": "analog-A01-A19", "project": str(project),
               "started_at": datetime.now(timezone.utc).isoformat(),
@@ -313,7 +367,12 @@ def run_window(project, args, *, features=None):
         except (OSError, ValueError, KeyError) as exc:
             result = {"status": "NOT_MEASURED", "detail": str(exc), "outputs": []}
         result.update(step=step, block=name, duration_s=time.monotonic() - started)
-        result["input_views"] = _input_views(project, name)
+        result["producer_context"] = {"image": image, "container": container,
+                                      "driver_sha256": report["source_sha256"]}
+        result["input_views"] = _input_views(project, name, step)
+        for view in (result.get("native_inputs") or {}).values():
+            if isinstance(view, dict) and view.get("path") and view.get("sha256"):
+                result["input_views"][view["path"]] = view["sha256"]
         result["output_views"] = _output_views(result)
         write_json(directory / "result.json", result)
         print(f"{step} {name}: {result['status']} — {result.get('detail', '')}", flush=True)
@@ -331,7 +390,7 @@ def run_window(project, args, *, features=None):
                 options["previous_results"].setdefault(step, {})[current["block"]] = current
                 report["verdict"] = _aggregate(rows)
                 report["window_verdict"] = _aggregate([row for row in rows
-                    if entry <= row["step"] <= exit_])
+                    if entry <= row["step"] <= exit_ and row["block"] in names])
                 write_json(attempt / "result.json", report)
                 write_json(parent / "status.json", report)
 

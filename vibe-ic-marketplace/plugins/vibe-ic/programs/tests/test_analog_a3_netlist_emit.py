@@ -53,6 +53,39 @@ def _emit(tmp_path, blocks, *a3args):
     return p, run_prog(A3, p, *a3args)
 
 
+@pytest.mark.parametrize("value,unit", [(0.5, "mA"), (500, "uA"), (500, "µA"), (0.0005, "A")])
+def test_source_current_load_nominal_units_reach_actual_emitted_testbench(tmp_path, value, unit):
+    specs = LDO_SPEC + [{"name": "Iout", "target": value, "min": value / 5,
+                         "max": value * 2, "unit": unit}]
+    project, result = _emit(tmp_path, [block("vreg_alpha", "ldo", specs)])
+    assert result.returncode == 0, result.stdout + result.stderr
+    text = (bdir(project, "vreg_alpha") / "tb_vreg_alpha.sp").read_text()
+    source = re.search(r"(?im)^i_load\s+vout\s+0\s+(\S+)\s*$", text)
+    assert source and float(source.group(1)) == pytest.approx(0.0005)
+    assert not re.search(r"(?im)^r_load\s", text)
+    assert "source iout nominal" in text.lower()
+
+
+def test_source_current_load_bad_unit_is_refused_without_resistor_fallback(tmp_path):
+    specs = LDO_SPEC + [{"name": "Iout", "target": 0.5, "unit": "unreadable-current"}]
+    project, result = _emit(tmp_path, [block("vreg_alpha", "ldo", specs)])
+    assert result.returncode == 2, result.stdout + result.stderr
+    directory = bdir(project, "vreg_alpha")
+    assert not (directory / "tb_vreg_alpha.sp").exists()
+    assert not (directory / "vreg_alpha.sp").exists()
+    gap = read_json(directory / "netlist_gap.json")
+    assert gap["status"] == "TESTBENCH_LOAD_UNBOUND"
+    assert "unsupported source current unit" in gap["reason"]
+
+
+def test_source_current_load_absent_keeps_only_disclosed_legacy_resistor(tmp_path):
+    project, result = _emit(tmp_path, [block("vreg_alpha", "ldo", LDO_SPEC)])
+    assert result.returncode == 0, result.stdout + result.stderr
+    text = (bdir(project, "vreg_alpha") / "tb_vreg_alpha.sp").read_text()
+    assert "r_load vout 0 1k" in text and "legacy testbench condition" in text
+    assert not re.search(r"(?im)^i_load\s", text)
+
+
 def test_a3_refuses_a_capacitor_that_spec_binding_grows_past_the_pdk_limit():
     """A final A3 override, not the library unit, decides drawable geometry."""
     import pdk_analog_layout_minima as limits
