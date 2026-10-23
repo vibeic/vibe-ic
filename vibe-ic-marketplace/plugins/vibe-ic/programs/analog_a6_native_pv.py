@@ -574,7 +574,21 @@ def _klayout_lvs_runset_runner(deck: str, gds: str, netlist: str, block: str,
         return None, {"reason": (f"block netlist declares no .subckt {block} "
                                  f"port list — nothing to bind pins to")}
     cmp_sp = work / f"{block}_lvs_source.spice"
-    prepared, stats = _prep.prepare_source_netlist(src_text, block)
+    topology_path = Path(netlist).parent / "topology.json"
+    try:
+        topology_bytes = (topology_path.read_bytes()
+                          if not _prep.role_models(src_text) and topology_path.is_file() else None)
+        if topology_bytes is None:
+            prepared, stats = _prep.prepare_source_netlist(src_text, block)
+        else:
+            prepared, stats = _prep.prepare_source_netlist(src_text, block,
+                                                           topology=json.loads(topology_bytes))
+    except (ValueError, TypeError) as exc:
+        return None, {"reason": f"comparison topology unavailable: {exc}"}
+    if topology_bytes is not None:
+        import hashlib
+        stats["topology_source"] = {"path": str(topology_path.resolve()),
+                                    "sha256": hashlib.sha256(topology_bytes).hexdigest()}
     cmp_sp.write_text(prepared)
 
     cmp_gds = work / f"{block}_lvs_layout.gds"
