@@ -134,6 +134,13 @@ def require_launch_admission(project, step_id, params=None):
         context = _read(path)
     if context is None:
         return None
+    if (isinstance(context, dict)
+            and context.get('schema') == 'vibeic.flow109.execution-window.v1'):
+        from flow109 import component_context
+        try:
+            context = component_context(context, native_step_id=str(step_id))
+        except ValueError as exc:
+            raise AdmissionRefusal('FLOW109_NATIVE_STEP_MISMATCH', str(step_id)) from exc
     if not isinstance(context, dict) or str(context.get('native_step_id')) != str(step_id):
         raise AdmissionRefusal('FLOW109_NATIVE_STEP_MISMATCH', str(step_id))
     return require_admission(project, context)

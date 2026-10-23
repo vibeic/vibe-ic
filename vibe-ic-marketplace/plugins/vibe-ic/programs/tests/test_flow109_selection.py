@@ -92,8 +92,10 @@ def test_odb_fill_is_not_aliased_to_legacy_gds_fill_pass():
     assert window["resolved_row"]["profile"]["dispatch"]["flow109_metrics_status"] == "UNIMPLEMENTED"
     with pytest.raises(flow109.Flow109Error, match="PRODUCER_UNIMPLEMENTED"):
         flow109.resolve_execution_window(plan, "D69", "D69")
-    with pytest.raises(flow109.Flow109Error, match="WINDOW_UNIMPLEMENTED"):
-        flow109.resolve_execution_window(plan, "D38", "D41")
+    continuation = flow109.resolve_execution_window(plan, "D38", "D41")
+    assert [row["id"] for row in continuation["resolved_rows"]] == ["D38", "D39", "D40", "D41"]
+    assert continuation["native_entry_step"] == "19"
+    assert continuation["native_exit_step"] == "32"
 
 
 def test_context_rejects_changed_tool_identity_and_changed_selection():

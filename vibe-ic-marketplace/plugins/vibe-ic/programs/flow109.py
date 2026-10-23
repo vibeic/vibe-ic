@@ -13,12 +13,14 @@ import os
 from pathlib import Path
 import sys
 from typing import Mapping
+import uuid
 
 HERE = Path(__file__).resolve().parent
 if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
 REGISTRY = HERE.parent / "flow" / "flow109.json"
 CONTEXT_ENV = "VIBEIC_FLOW109_CONTEXT"
+ATTEMPT_ENV = "VIBEIC_FLOW109_ATTEMPT"
 
 
 class Flow109Error(ValueError):
@@ -200,31 +202,66 @@ def resolve_step(plan: Mapping, step_id: str) -> dict:
 
 
 def resolve_execution_window(plan: Mapping, entry: str | None, exit_: str | None) -> dict:
-    """Bind one existing native component without skipping new responsibilities.
+    """Resolve an inclusive selected-row window onto existing component owners.
 
-    Multi-row migration requires actual new acceptance adapters. Translating
-    the first/last IDs into an old span would silently execute a different DAG.
+    This is deliberately not a 109 acceptance scheduler. Every selected row
+    must already name a dispatch owner; a gap refuses the complete request
+    before a neighbouring legacy span can silently cover it.
     """
-    if not entry or exit_ != entry:
-        raise Flow109Error("FLOW109_WINDOW_UNIMPLEMENTED",
-                           "this tranche supports one explicit entry/exit component; full 109 acceptance is unimplemented")
-    row = resolve_step(plan, entry)
-    dispatch = row["profile"].get("dispatch")
-    if not dispatch:
-        raise Flow109Error("FLOW109_PRODUCER_UNIMPLEMENTED", f"{entry}.{row['selected_profile']}")
-    return {"requested_step": entry, "resolved_row": row,
-            "native_step_id": dispatch["native_step_id"]}
+    if not entry or not exit_:
+        raise Flow109Error("FLOW109_WINDOW_REQUIRED", "explicit entry and exit rows are required")
+    ids = [row["id"] for row in plan["rows"]]
+    if entry not in ids:
+        raise Flow109Error("FLOW109_STEP_NOT_SELECTED", str(entry))
+    if exit_ not in ids:
+        raise Flow109Error("FLOW109_STEP_NOT_SELECTED", str(exit_))
+    first, last = ids.index(entry), ids.index(exit_)
+    if first > last:
+        raise Flow109Error("FLOW109_WINDOW_REVERSED", f"{entry} follows {exit_}")
+    rows = [copy.deepcopy(row) for row in plan["rows"][first:last + 1]]
+    missing = [f"{row['id']}.{row['selected_profile']}" for row in rows
+               if not row["profile"].get("dispatch")]
+    if missing:
+        raise Flow109Error("FLOW109_PRODUCER_UNIMPLEMENTED", ", ".join(missing))
+    if len(rows) == 1:
+        dispatch = rows[0]["profile"]["dispatch"]
+        return {"requested_step": entry, "resolved_row": rows[0],
+                "native_step_id": dispatch["native_step_id"]}
+
+    dispatches = [row["profile"]["dispatch"] for row in rows]
+    adapters = [bool(dispatch.get("adapter")) for dispatch in dispatches]
+    if all(adapters):
+        kind = "ordered_adapters"
+    elif not any(adapters) and all(dispatch.get("kind") == "canonical_backend_window"
+                                   for dispatch in dispatches):
+        kind = "canonical_backend_window"
+    else:
+        raise Flow109Error(
+            "FLOW109_WINDOW_DISPATCH_UNSUPPORTED",
+            "a window may not cross adapter and canonical-backend ownership")
+    return {"requested_entry": entry, "requested_exit": exit_,
+            "resolved_rows": rows, "dispatch_kind": kind,
+            "native_entry_step": dispatches[0]["native_step_id"],
+            "native_exit_step": dispatches[-1]["native_step_id"]}
 
 
 _CONTEXT_KEYS = {"schema", "registry_sha256", "planner_sha256", "legacy_flow_sha256",
                  "features", "step_profiles", "requested_step", "resolved_row",
                  "native_step_id", "runtime_tool_uses", "qualification_registry", "context_sha256"}
+_WINDOW_CONTEXT_KEYS = {
+    "schema", "registry_sha256", "planner_sha256", "legacy_flow_sha256",
+    "features", "step_profiles", "requested_entry", "requested_exit",
+    "resolved_rows", "dispatch_kind", "native_entry_step", "native_exit_step",
+    "runtime_tool_uses", "qualification_registry", "context_sha256",
+}
 
 
 def execution_context(plan: dict, entry: str, exit_: str, *,
                       runtime_tool_uses=None, qualification_registry=None) -> dict:
     window = resolve_execution_window(plan, entry, exit_)
-    context = {"schema": "vibeic.flow109.execution-context.v1",
+    schema = ("vibeic.flow109.execution-context.v1" if "requested_step" in window
+              else "vibeic.flow109.execution-window.v1")
+    context = {"schema": schema,
                **{key: plan[key] for key in ("registry_sha256", "planner_sha256", "legacy_flow_sha256",
                                              "features", "step_profiles")},
                **window, "runtime_tool_uses": copy.deepcopy(runtime_tool_uses),
@@ -234,20 +271,173 @@ def execution_context(plan: dict, entry: str, exit_: str, *,
 
 
 def validate_execution_context(context: Mapping) -> dict:
-    if not isinstance(context, Mapping) or set(context) != _CONTEXT_KEYS:
+    if not isinstance(context, Mapping):
+        raise Flow109Error("FLOW109_CONTEXT_INVALID", "expected object")
+    keys = (_WINDOW_CONTEXT_KEYS
+            if context.get("schema") == "vibeic.flow109.execution-window.v1"
+            else _CONTEXT_KEYS)
+    if set(context) != keys:
         raise Flow109Error("FLOW109_CONTEXT_INVALID", "unexpected or missing fields")
-    if context["schema"] != "vibeic.flow109.execution-context.v1":
+    if context["schema"] not in ("vibeic.flow109.execution-context.v1",
+                                 "vibeic.flow109.execution-window.v1"):
         raise Flow109Error("FLOW109_CONTEXT_INVALID", "schema")
     payload = {key: value for key, value in context.items() if key != "context_sha256"}
     if context["context_sha256"] != digest(payload):
         raise Flow109Error("FLOW109_CONTEXT_STALE", "request identity changed")
     current = resolve_plan(context["features"], context["step_profiles"])
-    expected = execution_context(current, context["requested_step"], context["requested_step"],
+    entry = context.get("requested_step", context.get("requested_entry"))
+    exit_ = context.get("requested_step", context.get("requested_exit"))
+    expected = execution_context(current, entry, exit_,
                                  runtime_tool_uses=context["runtime_tool_uses"],
                                  qualification_registry=context["qualification_registry"])
     if dict(context) != expected:
         raise Flow109Error("FLOW109_CONTEXT_STALE", "source registry, producer or selection changed")
     return expected
+
+
+def component_context(context: Mapping, *, native_step_id: str | None = None,
+                      requested_step: str | None = None) -> dict:
+    """Return the current one-row contract selected from a validated window."""
+    context = validate_execution_context(context)
+    if context["schema"] == "vibeic.flow109.execution-context.v1":
+        return context
+    matches = [row for row in context["resolved_rows"]
+               if (requested_step is not None and row["id"] == requested_step)
+               or (requested_step is None and native_step_id is not None
+                   and str(row["profile"]["dispatch"]["native_step_id"])
+                   == str(native_step_id))]
+    if len(matches) != 1:
+        raise Flow109Error("FLOW109_NATIVE_STEP_MISMATCH",
+                           str(requested_step if requested_step is not None else native_step_id))
+    row = matches[0]
+    expected_ids = {item["use_id"] for item in row["tool_uses"]}
+    runtime = context.get("runtime_tool_uses")
+    selected = ([copy.deepcopy(item) for item in runtime
+                 if isinstance(item, dict) and item.get("use_id") in expected_ids]
+                if isinstance(runtime, list) else runtime)
+    plan = resolve_plan(context["features"], context["step_profiles"])
+    return execution_context(
+        plan, row["id"], row["id"], runtime_tool_uses=selected,
+        qualification_registry=context["qualification_registry"])
+
+
+def _window_inventory(context: Mapping) -> None:
+    runtime = context.get("runtime_tool_uses")
+    expected = [use["use_id"] for row in context["resolved_rows"] for use in row["tool_uses"]]
+    actual = [item.get("use_id") for item in runtime if isinstance(item, dict)] \
+        if isinstance(runtime, list) else []
+    if not expected or len(actual) != len(runtime or []) or len(actual) != len(set(actual)) \
+            or set(actual) != set(expected):
+        raise Flow109Error("FLOW109_WINDOW_USE_MISMATCH",
+                           "runtime inventory must exactly cover every selected row use")
+    if not isinstance(context.get("qualification_registry"), str) \
+            or not context["qualification_registry"]:
+        raise Flow109Error("FLOW109_QUALIFICATION_REGISTRY_ABSENT",
+                           "qualification registry required")
+
+
+def _new_attempt(project: Path, context: Mapping) -> Path:
+    parent = project / "reports" / "flow109" / "attempts"
+    parent.mkdir(parents=True, exist_ok=True)
+    attempt = parent / ("window-" + uuid.uuid4().hex)
+    attempt.mkdir()
+    request = {"schema": "vibeic.flow109.window-attempt-request.v1",
+               "context_sha256": context["context_sha256"],
+               "entry": context["requested_entry"], "exit": context["requested_exit"],
+               "dispatch_kind": context["dispatch_kind"],
+               "component_ids": [row["id"] for row in context["resolved_rows"]],
+               "flow109_acceptance": "NOT_MEASURED"}
+    with (attempt / "request.json").open("x", encoding="utf-8") as handle:
+        json.dump(request, handle, sort_keys=True, indent=2)
+        handle.write("\n")
+    return attempt
+
+
+def _finish_attempt(attempt: Path, result: Mapping) -> Path:
+    path = attempt / "result.json"
+    with path.open("x", encoding="utf-8") as handle:
+        json.dump(dict(result), handle, sort_keys=True, indent=2)
+        handle.write("\n")
+    return path
+
+
+def finish_native_window(project: Path, report: Mapping, report_path: Path | None = None) -> dict | None:
+    """Bind a canonical backend report to per-row component evidence."""
+    path = os.environ.get(CONTEXT_ENV)
+    attempt_name = os.environ.get(ATTEMPT_ENV)
+    if not path or not attempt_name:
+        return None
+    try:
+        context = validate_execution_context(json.loads(Path(path).read_text(encoding="utf-8")))
+    except (OSError, ValueError, Flow109Error):
+        return None
+    if (context["schema"] != "vibeic.flow109.execution-window.v1"
+            or context["dispatch_kind"] != "canonical_backend_window"):
+        return None
+    attempt = Path(attempt_name)
+    canonical = []
+    for site in report.get("steps", []) if isinstance(report, Mapping) else []:
+        if isinstance(site, dict):
+            canonical.extend((site.get("extras") or {}).get("canonical_steps") or [])
+    by_native = {str((item.get("extras") or {}).get("step_id")): item
+                 for item in canonical if isinstance(item, dict)}
+    components = []
+    stopped = False
+    for row in context["resolved_rows"]:
+        native = str(row["profile"]["dispatch"]["native_step_id"])
+        item = by_native.get(native)
+        status = str(item.get("status")) if item else "NOT_MEASURED"
+        native_not_applicable = status == "NOT_APPLICABLE"
+        if status not in ("PASS", "FAIL", "NOT_MEASURED"):
+            status = "NOT_MEASURED"
+        reason = ("selected Flow109 row cannot inherit native NOT_APPLICABLE"
+                  if native_not_applicable else
+                  str(item.get("detail") or "") if item else
+                  "not executed: an earlier row stopped" if stopped else
+                  str(report.get("flow109_stop_reason") or "canonical row result absent"))
+        receipt = project / "reports" / "phase3" / "default_steps" / native / "backend_result.json"
+        receipt_body = None
+        if receipt.is_file():
+            try:
+                receipt_body = json.loads(receipt.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                receipt_body = None
+        if status == "PASS" and (not isinstance(receipt_body, dict)
+                                 or receipt_body.get("verdict") != "PASS"):
+            status = "NOT_MEASURED"
+            reason = "canonical current native PASS receipt absent or invalid"
+        component = {
+            "schema": "vibeic.flow109.window-component.v1", "step_id": row["id"],
+            "native_step_id": native, "component_status": status,
+            "reason": reason, "context_sha256": context["context_sha256"],
+            "metric_acceptance_status": row.get("metric_acceptance_status", "UNIMPLEMENTED"),
+            "flow109_acceptance": "NOT_MEASURED", "whole_flow_acceptance": "NOT_MEASURED",
+            "data_dependencies": row["data_deps"],
+            "acceptance_dependencies": row["acceptance_deps"],
+        }
+        if receipt.is_file():
+            component["canonical_receipt"] = {
+                "path": str(receipt.relative_to(project)), "sha256": _file_digest(receipt)}
+        components.append(component)
+        from _atomic_artefact import write_json
+        write_json(project / "reports" / "flow109" / "components" / (row["id"] + ".json"), component)
+        if status != "PASS":
+            stopped = True
+    aggregate = ("FAIL" if any(item["component_status"] == "FAIL" for item in components)
+                 else "PASS" if components and all(item["component_status"] == "PASS"
+                                                    for item in components)
+                 else "NOT_MEASURED")
+    result = {"schema": "vibeic.flow109.window-attempt-result.v1",
+              "context_sha256": context["context_sha256"],
+              "component_status": aggregate, "components": components,
+              "flow109_acceptance": "NOT_MEASURED", "whole_flow_acceptance": "NOT_MEASURED",
+              "bounded": True, "delivery_accepted": False}
+    if report_path is not None and Path(report_path).is_file():
+        result["canonical_window_report"] = {
+            "path": str(Path(report_path).relative_to(project)),
+            "sha256": _file_digest(Path(report_path))}
+    _finish_attempt(attempt, result)
+    return result
 
 
 def prepare_front_door(args, project: Path) -> int | None:
@@ -257,6 +447,7 @@ def prepare_front_door(args, project: Path) -> int | None:
             raise Flow109Error("FLOW109_SELECTION_REQUIRED", "use --flow 109")
         # A stale parent selection cannot turn a later 70-flow launch into 109.
         os.environ.pop(CONTEXT_ENV, None)
+        os.environ.pop(ATTEMPT_ENV, None)
         return None
     # The existing policy parser uses None for an omitted mode and resolves
     # it to Default. Preserve that CLI contract rather than demanding a flag.
@@ -287,6 +478,61 @@ def prepare_front_door(args, project: Path) -> int | None:
     context = execution_context(plan, args.entry_step, args.exit_step,
                                 runtime_tool_uses=manifest.get("runtime_tool_uses", manifest.get("tool_uses")),
                                 qualification_registry=manifest.get("qualification_registry"))
+    if context["schema"] == "vibeic.flow109.execution-window.v1":
+        _window_inventory(context)
+        attempt = _new_attempt(project, context)
+        path = destination / "requests" / (context["context_sha256"] + ".json")
+        write_json(path, context)
+        os.environ[CONTEXT_ENV] = str(path.resolve())
+        os.environ[ATTEMPT_ENV] = str(attempt.resolve())
+        if context["dispatch_kind"] == "ordered_adapters":
+            components = []
+            for row in context["resolved_rows"]:
+                current = component_context(context, requested_step=row["id"])
+                adapter = row["profile"]["dispatch"]["adapter"]
+                try:
+                    from flow109_admission import require_admission, AdmissionRefusal
+                    require_admission(project, current)
+                    from importlib import import_module
+                    result = import_module(adapter).execute(project, current)
+                except AdmissionRefusal as exc:
+                    result = {"schema": "vibeic.flow109.window-component.v1",
+                              "step_id": row["id"], "component_status": "NOT_MEASURED",
+                              "reason": exc.code, "detail": str(exc),
+                              "qualification": exc.report, "native_started": False,
+                              "flow109_acceptance": "NOT_MEASURED"}
+                except Flow109Error as exc:
+                    result = {"schema": "vibeic.flow109.window-component.v1",
+                              "step_id": row["id"], "component_status": "NOT_MEASURED",
+                              "reason": exc.code, "detail": exc.detail,
+                              "native_started": False,
+                              "flow109_acceptance": "NOT_MEASURED"}
+                if (not isinstance(result, dict)
+                        or result.get("component_status") not in ("PASS", "FAIL", "NOT_MEASURED")
+                        or result.get("flow109_acceptance") != "NOT_MEASURED"):
+                    raise Flow109Error("FLOW109_COMPONENT_RESULT_INVALID", adapter)
+                components.append(result)
+                write_json(destination / "components" / (row["id"] + ".json"), result)
+                if result["component_status"] != "PASS":
+                    break
+            aggregate = ("FAIL" if any(x["component_status"] == "FAIL" for x in components)
+                         else "PASS" if len(components) == len(context["resolved_rows"])
+                         and all(x["component_status"] == "PASS" for x in components)
+                         else "NOT_MEASURED")
+            _finish_attempt(attempt, {
+                "schema": "vibeic.flow109.window-attempt-result.v1",
+                "context_sha256": context["context_sha256"],
+                "component_status": aggregate, "components": components,
+                "flow109_acceptance": "NOT_MEASURED", "whole_flow_acceptance": "NOT_MEASURED",
+                "bounded": True, "delivery_accepted": False})
+            return {"PASS": 0, "FAIL": 1, "NOT_MEASURED": 2}[aggregate]
+        write_json(destination / "admission.json", {
+            "status": "NOT_MEASURED", "reason": "PER_LAUNCH_REVALIDATION_REQUIRED",
+            "context_sha256": context["context_sha256"], "native_started": False})
+        args.entry_step = context["native_entry_step"]
+        args.exit_step = context["native_exit_step"]
+        return None
+    os.environ.pop(ATTEMPT_ENV, None)
     # Admission is intentionally immediately before actual existing dispatch.
     # There is no marker process or substitute runner behind this branch.
     from flow109_admission import require_admission

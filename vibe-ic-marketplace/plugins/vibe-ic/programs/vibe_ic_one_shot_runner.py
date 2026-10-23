@@ -2659,6 +2659,9 @@ def _main() -> int:
               f"--require-image to run unpinned (identity is still RECORDED "
               f"to reports/container_image.json).",
               file=sys.stderr)
+        flow109.finish_native_window(project, {
+            "steps": [], "flow109_stop_reason":
+            "required container image identity was not satisfied"})
         lock.release()
         return 2
     if _img_rec.get("verdict") not in ("PASS", None):
@@ -2810,6 +2813,9 @@ def _main() -> int:
                             'rc': 1 if step5_acceptance['verdict'] == 'FAIL' else 2}],
                 'step5_checkpoint_review': step5_acceptance,
                 'whole_flow_verdict': 'NOT_MEASURED'}, project)
+            flow109.finish_native_window(project, {
+                'steps': [], 'flow109_stop_reason':
+                'current Step5 checkpoint acceptance did not pass'})
             lock.release()
             return 1 if step5_acceptance['verdict'] == 'FAIL' else 2
         step7_acceptance = (_complete_step7_sdc(
@@ -2827,6 +2833,9 @@ def _main() -> int:
                             'rc': 1 if status == 'FAIL' else 2}],
                 'step7_sdc_refresh': step7_acceptance,
                 'whole_flow_verdict': 'NOT_MEASURED'}, project)
+            flow109.finish_native_window(project, {
+                'steps': [], 'flow109_stop_reason':
+                'current Step7 constraint consumer did not pass'})
             lock.release()
             return 1 if status == 'FAIL' else 2
         # Only the signed Phase2 handoff adds Step14 here. Isolated backend
@@ -2844,6 +2853,9 @@ def _main() -> int:
                 'step5_checkpoint_review': step5_acceptance,
                 'step14_handoff': step14_acceptance,
                 'whole_flow_verdict': 'NOT_MEASURED'}, project)
+            flow109.finish_native_window(project, {
+                'steps': [], 'flow109_stop_reason':
+                'current Step14 handoff consumer did not pass'})
             lock.release()
             return 1 if step14_acceptance['verdict'] == 'FAIL' else 2
         p3_args = [str(project), "--top-name", args.top_name,
@@ -2899,6 +2911,9 @@ def _main() -> int:
         out = _pl.report_path(project, "vibe_ic_one_shot.json")
         out.parent.mkdir(parents=True, exist_ok=True)
         _write_runner_summary(out, summary, project)
+        # Retain the canonical per-row outcome without promoting component
+        # success to Flow109 metric or whole-flow acceptance.
+        flow109.finish_native_window(project, p3, phase3_report)
         lock.release()
         return (rc or (0 if phase3_verdict in _PHASE_PASS | _PHASE_PASS_WITH_NOTE else 1)
                 if p3 else (rc or 2))
