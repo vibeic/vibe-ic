@@ -30,9 +30,12 @@ def _artifact(project, relative, content):
     return {"path": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
 
 
-def _window_fixture(project, monkeypatch):
+def _window_fixture(project, monkeypatch, entry="D31", exit_="D32"):
     plan = flow109.resolve_plan(_profile())
-    rows = [flow109.resolve_step(plan, step) for step in ("D31", "D32")]
+    selected = [row["id"] for row in plan["rows"]]
+    first, last = selected.index(entry), selected.index(exit_)
+    rows = [flow109.resolve_step(plan, step)
+            for step in selected[first:last + 1]]
     runtime, records, executables = [], [], {}
     for row in rows:
         for number, use in enumerate(row["tool_uses"]):
@@ -59,7 +62,7 @@ def _window_fixture(project, monkeypatch):
     registry = {"schema": "vibeic.flow109.qualifications.v1", "uses": records}
     (project / "qualifications.json").write_text(json.dumps(registry))
     context = flow109.execution_context(
-        plan, "D31", "D32", runtime_tool_uses=runtime,
+        plan, entry, exit_, runtime_tool_uses=runtime,
         qualification_registry="qualifications.json")
     return plan, context, registry
 
@@ -78,6 +81,70 @@ def test_selected_window_resolves_real_canonical_backend_order():
     assert (window["native_entry_step"], window["native_exit_step"]) == ("15", "15.5ic")
     assert window["resolved_rows"][1]["data_deps"][0]["step"] == "D31"
     assert "D31" in window["resolved_rows"][1]["acceptance_deps"]
+
+
+@pytest.mark.parametrize(
+    "entry,exit_,native,components",
+    [
+        ("D77", "D78", ("37.4", "36"),
+         (("signoff_metrics_aggregate",),
+          ("flow_compliance_check", "tapeout_signoff_check"))),
+        ("D80", "D81", ("37.5ic", "38"),
+         (("tapeout_precheck", "ic_release_docs_gen"),
+          ("foundry_handoff_pack_gen", "tapeout_checklist_gen"))),
+    ],
+)
+def test_delivery_windows_route_to_existing_default_consumers(
+        entry, exit_, native, components):
+    import phase3_one_shot_runner as phase3
+    plan = flow109.resolve_plan(_profile())
+    window = flow109.resolve_execution_window(plan, entry, exit_)
+    assert window["dispatch_kind"] == "canonical_backend_window"
+    assert (window["native_entry_step"], window["native_exit_step"]) == native
+    assert phase3._phase3_window_steps(*native) == list(native)
+    assert phase3._phase3_window_sites(*native) == ["default_backend"]
+    assert [row["id"] for row in window["resolved_rows"]] == [entry, exit_]
+    for row, expected in zip(window["resolved_rows"], components):
+        profile = row["profile"]
+        assert tuple(profile["native_steps"]) == expected
+        assert profile["dispatch"]["consumer"] == "execution_backend_gates.py:evaluate"
+        assert profile["dispatch"]["acceptance_scope"] == "existing_native_component_only"
+        assert profile["dispatch"]["flow109_metrics_status"] == "UNIMPLEMENTED"
+
+
+@pytest.mark.parametrize(
+    "entry,exit_,native_statuses,expected,missing_reason",
+    [
+        ("D77", "D78", ("PASS", "FAIL"), "FAIL", ""),
+        ("D80", "D81", ("PASS",), "NOT_MEASURED", "canonical row result absent"),
+    ],
+)
+def test_delivery_receipts_preserve_failure_and_missing_release_evidence(
+        tmp_path, monkeypatch, entry, exit_, native_statuses, expected,
+        missing_reason):
+    _, context, _ = _window_fixture(tmp_path, monkeypatch, entry, exit_)
+    request = tmp_path / "context.json"
+    request.write_text(json.dumps(context))
+    attempt = flow109._new_attempt(tmp_path, context)
+    monkeypatch.setenv(flow109.CONTEXT_ENV, str(request))
+    monkeypatch.setenv(flow109.ATTEMPT_ENV, str(attempt))
+    native = (context["native_entry_step"], context["native_exit_step"])
+    canonical = []
+    for index, status in enumerate(native_statuses):
+        receipt = (tmp_path / "reports/phase3/default_steps" / native[index]
+                   / "backend_result.json")
+        receipt.parent.mkdir(parents=True)
+        receipt.write_text(json.dumps({"verdict": status}))
+        canonical.append({"status": status, "detail": "native-" + status,
+                          "extras": {"step_id": native[index]}})
+    result = flow109.finish_native_window(
+        tmp_path, {"bounded": True, "steps": [
+            {"extras": {"canonical_steps": canonical}}]})
+    assert result["component_status"] == expected
+    assert result["delivery_accepted"] is False
+    assert result["flow109_acceptance"] == "NOT_MEASURED"
+    if missing_reason:
+        assert missing_reason in result["components"][-1]["reason"]
 
 
 def test_window_refuses_unimplemented_required_row_and_reverse():

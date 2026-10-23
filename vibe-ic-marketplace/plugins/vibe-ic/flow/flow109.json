@@ -16456,8 +16456,37 @@
           "select_when": "otherwise",
           "provider": "vibeic",
           "tools": "Python selected-obligation/measurement aggregator",
-          "native_steps": [],
-          "execution_status": "UNIMPLEMENTED"
+          "native_steps": [
+            "signoff_metrics_aggregate"
+          ],
+          "execution_status": "NATIVE_COMPONENT_ONLY_NOT_109_ACCEPTED",
+          "dispatch": {
+            "kind": "canonical_backend_window",
+            "native_step_id": "37.4",
+            "producer": "execution_backend_producers.py:produce",
+            "producer_sites": [
+              "phase3_one_shot_runner.py:step_signoff_metrics_aggregate",
+              "signoff_metrics_aggregate.py:main"
+            ],
+            "engine_families": [
+              "python3"
+            ],
+            "consumer": "execution_backend_gates.py:evaluate",
+            "native_required_outputs": [
+              "phase3/final/metrics.json",
+              "reports/phase3/signoff_metrics_aggregate.json"
+            ],
+            "acceptance_scope": "existing_native_component_only",
+            "flow109_metrics_status": "UNIMPLEMENTED",
+            "engine_executables": {
+              "python3": "python3"
+            },
+            "engine_steps": {
+              "python3": [
+                "signoff_metrics_aggregate"
+              ]
+            }
+          }
         }
       ],
       "complementary_tools": [],
@@ -16553,8 +16582,39 @@
           "select_when": "otherwise",
           "provider": "vibeic",
           "tools": "Python compliance/adopted-evidence checker",
-          "native_steps": [],
-          "execution_status": "UNIMPLEMENTED"
+          "native_steps": [
+            "flow_compliance_check",
+            "tapeout_signoff_check"
+          ],
+          "execution_status": "NATIVE_COMPONENT_ONLY_NOT_109_ACCEPTED",
+          "dispatch": {
+            "kind": "canonical_backend_window",
+            "native_step_id": "36",
+            "producer": "execution_backend_producers.py:produce",
+            "producer_sites": [
+              "phase3_one_shot_runner.py:_default_checklist_layout_receipts",
+              "flow_compliance_check.py:check_step"
+            ],
+            "engine_families": [
+              "python3"
+            ],
+            "consumer": "execution_backend_gates.py:evaluate",
+            "native_required_outputs": [
+              "reports/phase3/gates/stage3_compliance.json",
+              "reports/phase3/layout_receipts.json"
+            ],
+            "acceptance_scope": "existing_native_component_only",
+            "flow109_metrics_status": "UNIMPLEMENTED",
+            "engine_executables": {
+              "python3": "python3"
+            },
+            "engine_steps": {
+              "python3": [
+                "flow_compliance_check",
+                "tapeout_signoff_check"
+              ]
+            }
+          }
         }
       ],
       "complementary_tools": [],
@@ -16776,8 +16836,47 @@
           "select_when": "otherwise",
           "provider": "other",
           "tools": "wafer.space/provider precheck + Python design precheck",
-          "native_steps": [],
-          "execution_status": "UNIMPLEMENTED"
+          "native_steps": [
+            "tapeout_precheck",
+            "ic_release_docs_gen"
+          ],
+          "execution_status": "NATIVE_COMPONENT_ONLY_NOT_109_ACCEPTED",
+          "dispatch": {
+            "kind": "canonical_backend_window",
+            "native_step_id": "37.5ic",
+            "producer": "execution_backend_producers.py:produce",
+            "producer_sites": [
+              "phase3_one_shot_runner.py:_default_ic_release_docs",
+              "phase3_one_shot_runner.py:step_ic_release_docs_gen",
+              "tapeout_precheck.py:main"
+            ],
+            "engine_families": [
+              "python3"
+            ],
+            "consumer": "execution_backend_gates.py:evaluate",
+            "native_required_outputs": [
+              "reports/phase3/tapeout_precheck.json",
+              "reports/phase3/general_precheck.json",
+              "reports/phase3/shuttle_precheck.json",
+              "reports/phase3/docs/SIGNOFF_*.html",
+              "reports/phase3/docs/BRIEF_*.html",
+              "phase3/stage4/documentation/ic/*/PRELIMINARY_DATASHEET.md",
+              "phase3/stage4/documentation/ic/*/RELEASE_NOTES.md",
+              "phase3/stage4/documentation/ic/*/ERRATA.md",
+              "phase3/stage4/documentation/ic/*/documentation_manifest.yaml"
+            ],
+            "acceptance_scope": "existing_native_component_only",
+            "flow109_metrics_status": "UNIMPLEMENTED",
+            "engine_executables": {
+              "python3": "python3"
+            },
+            "engine_steps": {
+              "python3": [
+                "tapeout_precheck",
+                "ic_release_docs_gen"
+              ]
+            }
+          }
         }
       ],
       "complementary_tools": [],
@@ -16887,8 +16986,43 @@
           "select_when": "otherwise",
           "provider": "vibeic",
           "tools": "Python release/benchmark packager and publisher",
-          "native_steps": [],
-          "execution_status": "UNIMPLEMENTED"
+          "native_steps": [
+            "foundry_handoff_pack_gen",
+            "tapeout_checklist_gen"
+          ],
+          "execution_status": "NATIVE_COMPONENT_ONLY_NOT_109_ACCEPTED",
+          "dispatch": {
+            "kind": "canonical_backend_window",
+            "native_step_id": "38",
+            "producer": "execution_backend_producers.py:produce",
+            "producer_sites": [
+              "phase3_one_shot_runner.py:_default_final_handoff",
+              "phase3_one_shot_runner.py:run_pre_audit_producers"
+            ],
+            "engine_families": [
+              "python3"
+            ],
+            "consumer": "execution_backend_gates.py:evaluate",
+            "native_required_outputs": [
+              "reports/audit/tapeout_checklist.json",
+              "phase3/stage4/foundry_handoff/release_manifest.json",
+              "phase3/stage4/foundry_handoff/mask_spec.json",
+              "phase3/stage4/foundry_handoff/wat_plan.json",
+              "phase3/stage4/foundry_handoff/scribe_line_layout.gds OR phase3/stage4/foundry_handoff/scribe_line_layout.PENDING_FOUNDRY.txt",
+              "phase3/stage4/foundry_handoff/corner_test_vectors.json"
+            ],
+            "acceptance_scope": "existing_native_component_only",
+            "flow109_metrics_status": "UNIMPLEMENTED",
+            "engine_executables": {
+              "python3": "python3"
+            },
+            "engine_steps": {
+              "python3": [
+                "foundry_handoff_pack_gen",
+                "tapeout_checklist_gen"
+              ]
+            }
+          }
         }
       ],
       "complementary_tools": [],

@@ -81,9 +81,9 @@ def test_all_dispatchable_profiles_cover_each_declared_operation_once():
             operations = [operation for engine in engines for operation in dispatch['engine_steps'][engine]]
             assert sorted(operations) == sorted(profile['native_steps']), row['id']
             assert all(dispatch['engine_executables'][engine] for engine in engines)
-    # New bounded adapters have independent dispatch controls; retain the
-    # exact original backend population while auditing every new use above.
-    assert count - adapters == 22
+    # Four original-70 delivery owners are now exposed through the existing
+    # canonical backend window; adapters remain counted independently.
+    assert count - adapters == 26
 
 
 def test_explicit_fill_streaming_is_a_distinct_required_native_tool_purpose():
