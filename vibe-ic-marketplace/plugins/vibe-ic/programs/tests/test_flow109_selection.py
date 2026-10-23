@@ -85,11 +85,13 @@ def test_odb_fill_is_not_aliased_to_legacy_gds_fill_pass():
     fill = flow109.resolve_step(plan, "D62")
     assert fill["profile"]["entrypoint"]["command"] == "density_fill"
     assert fill["profile"]["geometry_format"] == "ODB"
-    assert fill["profile"]["native_steps"] == ["OpenROAD.DensityFill"]
+    assert fill["profile"]["native_steps"] == [
+        "OpenROAD.DensityFill", "OpenROAD.CheckMetalDensity",
+        "OpenROAD.CheckFillObstructions"]
     window = flow109.resolve_execution_window(plan, "D62", "D62")
     assert window["native_step_id"] == "flow109.D62"
     assert window["resolved_row"]["profile"]["dispatch"]["adapter"] == "flow109_density_fill"
-    assert window["resolved_row"]["profile"]["dispatch"]["flow109_metrics_status"] == "UNIMPLEMENTED"
+    assert window["resolved_row"]["profile"]["dispatch"]["flow109_metrics_status"] == "IMPLEMENTED_D62_RUNTIME"
     with pytest.raises(flow109.Flow109Error, match="PRODUCER_UNIMPLEMENTED"):
         flow109.resolve_execution_window(plan, "D69", "D69")
     continuation = flow109.resolve_execution_window(plan, "D38", "D41")

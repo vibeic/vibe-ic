@@ -7,6 +7,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import pytest
 
 import flow109
 import flow109_admission as admission
@@ -259,6 +260,26 @@ def test_actual_native_measured_failure_precedes_missing_reference(tmp_path, mon
                     if item["id"] == "base_43.fill_geometry_identity")
     assert geometry["status"] == "FAIL"
     assert not (tmp_path / "reports/flow109/D62/accepted.json").exists()
+
+
+@pytest.mark.parametrize('authority', [
+    'requirements/base_43/fill_density_rules.json',
+    'requirements/base_43/fill_keepout_violations.json'])
+def test_native_fill_handoff_without_additional_audit_documents(tmp_path, authority):
+    _, context = _case(tmp_path)
+    (tmp_path / authority).unlink()
+    result = fill.execute(tmp_path, context)
+    assert result['native_started'] is True
+    assert result['component_status'] == 'PASS'
+    assert result['measurements']['nonfill_geometry_preserved'] is True
+    assert result['measurements']['odb_readback_matches'] is True
+    assert result['handoff']['odb'] == result['outputs']['filled.odb']
+    assert 'density.csv' not in result['outputs']
+    assert result['metric_acceptance_status'] == 'NOT_MEASURED'
+    assert result['metric_acceptance']['delivery_blocked'] is True
+    assert result['flow109_acceptance'] == 'NOT_MEASURED'
+    assert all(item['status'] != 'PASS'
+               for item in result['metric_acceptance']['obligations'])
 
 
 def test_actual_native_density_defect_is_measured_fail(tmp_path, monkeypatch):

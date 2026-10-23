@@ -92,15 +92,24 @@ def test_registry_selects_odb_component_without_gds_alias():
 @pytest.mark.parametrize('authority', [
     'requirements/base_43/fill_density_rules.json',
     'requirements/base_43/fill_keepout_violations.json'])
-def test_missing_metric_authority_stops_before_native(tmp_path, monkeypatch, authority):
+def test_missing_metric_authority_preserves_native_admission(tmp_path, monkeypatch, authority):
     context = _unit_inputs(tmp_path)
     (tmp_path / authority).unlink()
-    monkeypatch.setattr(fill, 'require_launch_admission',
-                        lambda *args, **kwargs: pytest.fail('native admission reached'))
+    prepared = fill.prepare(tmp_path, context)
+    assert prepared['authorities'] == {}
+    assert prepared['authority_inputs'] == {}
+    # Missing audit metadata does not bypass the original launch check.
+    called = []
+    def refuse(*args, **kwargs):
+        called.append('admission')
+        raise AdmissionRefusal('QUALIFICATION_UNSUPPORTED', 'native scope required')
+    monkeypatch.setattr(fill, 'require_launch_admission', refuse)
     result = fill.execute(tmp_path, context)
     assert result['component_status'] == 'NOT_MEASURED'
-    assert result['reason'] == 'METRIC_AUTHORITY_ABSENT'
+    assert result['reason'] == 'QUALIFICATION_UNSUPPORTED'
     assert result['native_started'] is False
+    assert called == ['admission']
+    assert result['metric_acceptance_status'] != 'PASS'
 
 
 @pytest.mark.parametrize('damage', ['diearea', 'wire', 'old_fill_removed'])

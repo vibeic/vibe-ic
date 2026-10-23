@@ -106,7 +106,12 @@ def prepare(project, context):
     try:
         authorities = d62_authorities(project, inputs)
     except MetricRefusal as exc:
-        raise AdmissionRefusal(exc.code, exc.detail) from exc
+        if exc.code != 'METRIC_AUTHORITY_ABSENT':
+            raise AdmissionRefusal(exc.code, exc.detail) from exc
+        # Additional audit documents are not native density_fill inputs.
+        # Preserve the existing qualified fill/readback path; the metric
+        # consumer still refuses density acceptance without those documents.
+        authorities = {}
     authority_inputs = {}
     for name, authority in authorities.items():
         authority_inputs[name] = {'path': authority['path'], 'sha256': authority['sha256']}
@@ -280,7 +285,8 @@ def execute(project, context):
                 _bound(project, entry)
             result['native_started'] = True
         measurements = _native_fill(project, prepared, attempt, before_launch)
-        _native_checks(prepared, attempt, before_launch)
+        if prepared['authorities']:
+            _native_checks(prepared, attempt, before_launch)
         outputs = {p.name: _record(project, p) for p in attempt.iterdir() if p.is_file()}
         result.update(component_status='PASS', measurements=measurements, outputs=outputs,
                       executions=prepared.get('executions', []))

@@ -155,6 +155,13 @@ unmeasured.
 
 ## D62 ODB metal-density fill component
 
+Default execution preserves the existing native fill/readback checks. Missing
+additional density/keepout audit documents do not prevent that native operation
+or its engineering handoff. They leave metric acceptance `NOT_MEASURED` and
+delivery blocked. Supplied documents must remain current and valid. The native
+checkers run when their approved limits are available; missing limits never
+become assumed passing density results.
+
 `--entry-step D62 --exit-step D62` uses OpenROAD `density_fill` on the bound
 input ODB, writes a new ODB in an immutable attempt directory, and opens it in
 an independent native process. `input/flow109/D62.json` binds that input,
