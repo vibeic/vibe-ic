@@ -26,6 +26,7 @@ chip-AGNOSTIC: no design, PDK or corner literal selects a branch.
 from __future__ import annotations
 
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -69,6 +70,148 @@ def corner_sdfs(state: dict) -> Dict[str, Path]:
     return {c: Path(p) for c, p in sdfs.items()}
 
 
+_SDF_DESIGN = re.compile(r'\(\s*DESIGN\s+"([^"]+)"\s*\)')
+_SDF_VERSION = re.compile(r'\(\s*SDFVERSION\s+"([^"]+)"\s*\)')
+_SDF_TIMESCALE = re.compile(
+    r'\(\s*TIMESCALE\s+(1|10|100)(?:\.0*)?\s*(s|ms|us|ns|ps|fs)\s*\)')
+_VERILOG_MODULE = re.compile(
+    r'(?m)^\s*module\s+(?:automatic\s+)?(?:\\([^\s]+)|([A-Za-z_$][\w$]*))')
+
+
+def _balanced_sdf(text: str) -> bool:
+    """Require one balanced S-expression while ignoring quoted parentheses."""
+    depth = roots = 0
+    quoted = escaped = False
+    for char in text:
+        if quoted:
+            if escaped:
+                escaped = False
+            elif char == '\\':
+                escaped = True
+            elif char == '"':
+                quoted = False
+            continue
+        if char == '"':
+            quoted = True
+        elif char == '(':
+            if depth == 0:
+                roots += 1
+            depth += 1
+        elif char == ')':
+            depth -= 1
+            if depth < 0:
+                return False
+    return not quoted and depth == 0 and roots == 1
+
+
+def sdf_export_census(path: Path, design: str) -> dict:
+    """Read back one native SDF as structured producer output, not presence.
+
+    D49 owns this export check. Simulator annotation and scenario execution
+    remain D53's separate responsibility.
+    """
+    try:
+        raw = Path(path).read_text(errors='strict')
+    except (OSError, UnicodeError) as exc:
+        raise Refusal('LL_STAPOSTPNR_SDF_INVALID', f'{path}: {exc}') from exc
+    versions = _SDF_VERSION.findall(raw)
+    designs = _SDF_DESIGN.findall(raw)
+    timescales = _SDF_TIMESCALE.findall(raw)
+    cells = len(re.findall(r'\(\s*CELL\s+\(', raw))
+    delays = len(re.findall(r'\(\s*(?:INTERCONNECT|IOPATH)\b', raw))
+    top_cell = re.search(
+        r'\(\s*CELL\s+\(\s*CELLTYPE\s+"' + re.escape(design)
+        + r'"\s*\)\s+\(\s*INSTANCE\s*\)', raw)
+    if (not _balanced_sdf(raw) or versions != ['3.0'] or designs != [design]
+            or len(timescales) != 1 or cells <= 0 or delays <= 0 or top_cell is None):
+        raise Refusal('LL_STAPOSTPNR_SDF_INVALID',
+                      f'{path}: malformed/incomplete SDF export for {design!r}')
+    return {'path': str(Path(path).resolve()), 'sha256': digest(Path(path)),
+            'design': design, 'version': versions[0],
+            'timescale': ''.join(timescales[0]), 'cell_count': cells,
+            'delay_record_count': delays}
+
+
+def bind_stapostpnr_sdfs(folder: Path, state: dict, *,
+                         required_items: Optional[List[dict]] = None,
+                         expected_netlist: Optional[Path] = None) -> dict:
+    """Bind complete native SDF exports to STAPostPNR's netlist and corners.
+
+    This is the shared producer/consumer seam: D49 qualifies the export, and
+    D53 calls the same function before launching ``Vibeic.GateLevelSim``.
+    It intentionally proves no simulator annotation outcome.
+    """
+    from librelane_contract import validate_step_receipt
+    folder = Path(folder).resolve()
+    receipt = validate_step_receipt(folder, 'OpenROAD.STAPostPNR')
+    try:
+        disk_state = _load(folder / 'state_out.json')
+        config = _load(folder / 'config.json')
+        if state != disk_state:
+            raise ValueError('caller state differs from current producer state')
+        design = config.get('DESIGN_NAME')
+        declared = config.get('STA_CORNERS')
+        if (not isinstance(design, str) or not design
+                or not isinstance(declared, list) or not declared
+                or len(declared) != len(set(declared))
+                or any(not isinstance(corner, str) or not corner for corner in declared)):
+            raise ValueError('producer design/corner declaration is absent or ambiguous')
+        sdfs = corner_sdfs(disk_state)
+        if set(sdfs) != set(declared):
+            raise Refusal('LL_STAPOSTPNR_SDF_CORNER_MISSING',
+                          f'exported={sorted(sdfs)} declared={sorted(declared)}')
+        netlist = Path(str(disk_state.get('nl') or '')).resolve()
+        timed = (receipt.get('input') or {}).get('state_files') or {}
+        if (not netlist.is_file() or timed.get(str(netlist)) != digest(netlist)):
+            raise ValueError('SDF netlist is not the producer-bound timing input')
+        netlist_text = re.sub(r'/\*.*?\*/|//[^\n]*', '',
+                              netlist.read_text(errors='strict'), flags=re.S)
+        modules = {left or right for left, right in _VERILOG_MODULE.findall(netlist_text)}
+        if design not in modules:
+            raise Refusal('LL_STAPOSTPNR_SDF_NETLIST_MISMATCH',
+                          f'{design!r} is not a module in {netlist}')
+        if (expected_netlist is not None
+                and (not Path(expected_netlist).is_file()
+                     or digest(Path(expected_netlist)) != digest(netlist))):
+            raise Refusal('LL_STAPOSTPNR_SDF_NETLIST_MISMATCH',
+                          f'{expected_netlist} differs from {netlist}')
+        required = required_items if required_items is not None else [
+            {'mode': 'functional', 'corner': corner} for corner in declared]
+        if (not isinstance(required, list) or not required
+                or any(not isinstance(item, dict)
+                       or set(item) != {'mode', 'corner'}
+                       or item.get('mode') != 'functional'
+                       or not isinstance(item.get('corner'), str)
+                       or not item['corner'] for item in required)
+                or len({(item['mode'], item['corner']) for item in required}) != len(required)):
+            raise Refusal('LL_STAPOSTPNR_SDF_REQUIREMENTS_INVALID', str(required))
+        missing = sorted({item['corner'] for item in required} - set(sdfs))
+        if missing:
+            raise Refusal('LL_STAPOSTPNR_SDF_CORNER_MISSING', ', '.join(missing))
+        exported = {}
+        bound = receipt.get('sha256') or {}
+        for corner, path in sorted(sdfs.items()):
+            resolved = path.resolve()
+            if not resolved.is_relative_to(folder):
+                raise Refusal('LL_STAPOSTPNR_SDF_OUTPUT_UNBOUND', str(path))
+            relative = str(resolved.relative_to(folder))
+            if bound.get(relative) != digest(resolved):
+                raise Refusal('LL_STAPOSTPNR_SDF_OUTPUT_UNBOUND', relative)
+            exported[corner] = sdf_export_census(resolved, design)
+        return {'producer': 'OpenROAD.STAPostPNR.write_sdf',
+                'state': str(folder / 'state_out.json'),
+                'state_sha256': digest(folder / 'state_out.json'),
+                'receipt': str(folder / 'vibeic_receipt.json'),
+                'receipt_sha256': digest(folder / 'vibeic_receipt.json'),
+                'netlist': str(netlist), 'netlist_sha256': digest(netlist),
+                'declared_corners': list(declared), 'required_items': list(required),
+                'exports': exported}
+    except Refusal:
+        raise
+    except (OSError, UnicodeError, ValueError, TypeError, KeyError) as exc:
+        raise Refusal('LL_STAPOSTPNR_SDF_OUTPUT_UNBOUND', f'{folder}: {exc}') from exc
+
+
 # --- step 29 -----------------------------------------------------------------
 
 def gate_level_sim(project: Path, top: str, image: str, pdk_root: Path, pdk: str,
@@ -78,7 +221,9 @@ def gate_level_sim(project: Path, top: str, image: str, pdk_root: Path, pdk: str
     import sdf_gate_sim as sgs
     import librelane_contract as contract
     sta_folder, state = stapostpnr_state(project)
-    sdfs = corner_sdfs(state)
+    sdf_binding = bind_stapostpnr_sdfs(sta_folder, state)
+    sdfs = {corner: Path(row['path'])
+            for corner, row in sdf_binding['exports'].items()}
     netlist = Path(str(state.get('nl') or ''))
     if not netlist.is_file():
         raise Refusal('LL_STATE_FILE_MISSING', f'nl: {netlist}')

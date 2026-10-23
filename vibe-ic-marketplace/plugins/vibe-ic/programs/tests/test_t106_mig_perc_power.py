@@ -80,16 +80,32 @@ def _stapostpnr(project, *, metric_total=0.026460440829396248, activity=False):
         write(d / 'sta.log', log)
         internal, total = TOTALS[corner]
         write(d / 'power.rpt', POWER_RPT.format(corner=corner, internal=internal, total=total))
-        sdf[corner] = str(write(d / f'chip_top__{corner}.sdf', '(DELAYFILE)\n'))
+        sdf[corner] = str(write(d / f'chip_top__{corner}.sdf', '''(DELAYFILE
+ (SDFVERSION "3.0") (DESIGN "chip_top") (DIVIDER .) (TIMESCALE 1ns)
+ (CELL (CELLTYPE "chip_top") (INSTANCE)
+  (DELAY (ABSOLUTE (INTERCONNECT clk u_core.CLK (0.001:0.001:0.001)))))
+)\n'''))
     netlist = write(project / 'phase3/stage3/pnr/spm_pnr.v', CHIP_TOP)
     views = {v: str(write(project / f'phase3/stage3/pnr/chip_top.{v}', v))
              for v in ('odb', 'def', 'sdc')}
     state = put(folder / 'state_out.json', {
         **views, 'nl': str(netlist), 'sdf': sdf, 'spef': spef,
         'metrics': {'power__total': metric_total}})
-    put(folder / 'vibeic_receipt.json', {'input': {'step': 'OpenROAD.STAPostPNR'}})
     put(folder / 'config.json', {'meta': {'step': 'OpenROAD.STAPostPNR'},
-                                 'DESIGN_NAME': 'chip_top', 'VDD_PIN': 'VDD', 'GND_PIN': 'VSS'})
+                                 'DESIGN_NAME': 'chip_top', 'STA_CORNERS': list(CORNERS),
+                                 'VDD_PIN': 'VDD', 'GND_PIN': 'VSS'})
+    fingerprint = {'step': 'OpenROAD.STAPostPNR',
+                   'state_files': {str(netlist.resolve()): contract.digest(netlist)}}
+    put(folder / 'input_fingerprint.json', fingerprint)
+    put(folder / 'pdk_root.json', {'path': '/fixture/pdk'})
+    write(folder / 'invocation.log', 'fixture OpenROAD.STAPostPNR completed\n')
+    names = ['state_out.json', 'config.json', 'input_fingerprint.json',
+             'pdk_root.json', 'invocation.log']
+    names += [str(Path(path).resolve().relative_to(folder.resolve()))
+              for path in sdf.values()]
+    put(folder / 'vibeic_receipt.json', {
+        'input': fingerprint,
+        'sha256': {name: contract.digest(folder / name) for name in names}})
     put(project / postroute.STEP23_RECORD, {'sta_state': str(state),
                                             'sta_state_sha256': contract.digest(state)})
     return folder, spef
@@ -306,8 +322,6 @@ def _gls_project(tmp_path):
     _declare_chip_top(project)
     write(project / 'phase3/stage3/pnr/chip_top.sdc',
           'create_clock -name clk -period 24.0 [get_ports clk]\n')
-    for sdf in (project / 'phase3/librelane/22-23/02-openroad-stapostpnr').glob('*/*.sdf'):
-        sdf.write_text('(DELAYFILE\n (TIMESCALE 1ns)\n)\n')
     tb = write(project / 'phase2/stage1/sim/tb_case.v', TB)
     put(project / 'reports/phase2/sim/l10_execution.json',
         {'cases': [{'id': 'case_1', 'sim_executed': True, 'tb_file': str(tb)}]})
@@ -327,9 +341,9 @@ def _gls_edge(declared, transcripts):
         if 'librelane.steps run --help' in text or 'bash' in cmd:
             return SimpleNamespace(returncode=0, stdout='', stderr='')
         if 'from librelane.flows.chip import Chip' in text:
-            output = Path(cmd[-3])
-            for step in json.loads(Path(cmd[-4]).read_text()):
-                design = json.loads(Path(cmd[-5]).read_text())
+            output = Path(cmd[-4])
+            for step in json.loads(Path(cmd[-5]).read_text()):
+                design = json.loads(Path(cmd[-6]).read_text())
                 put(output / f'{step}.json', {'meta': {'step': step},
                                               'CELL_VERILOG_MODELS': declared[:1],
                                               'PAD_VERILOG_MODELS': declared[1:],
@@ -360,6 +374,8 @@ def test_step_29_runs_every_corner_sdf_through_the_custom_step(tmp_path, monkeyp
     project, root, declared = _gls_project(tmp_path)
     fake, calls = _gls_edge(declared, lambda corner: VVP_PASS)
     monkeypatch.setattr(contract.subprocess, 'run', fake)
+    monkeypatch.setattr(contract, 'image_capability', lambda *_: {})
+    monkeypatch.setattr(contract._ce, 'no_container_route', lambda: False)
     judged = postroute.gate_level_sim(project, 'spm', 'img', root, 'x',
                                       direct_sdfs=[project / 'one.sdf'])
     assert judged['verdict'] == 'PASS'
@@ -387,6 +403,8 @@ def test_step_29_gates_on_delays_applied_sdf_errors_and_every_case(tmp_path, mon
     project, root, declared = _gls_project(tmp_path)
     fake, _ = _gls_edge(declared, transcript)
     monkeypatch.setattr(contract.subprocess, 'run', fake)
+    monkeypatch.setattr(contract, 'image_capability', lambda *_: {})
+    monkeypatch.setattr(contract._ce, 'no_container_route', lambda: False)
     judged = postroute.gate_level_sim(project, 'spm', 'img', root, 'x')
     assert judged['verdict'] == 'FAIL'
     assert any(reason in c['reasons'] for c in judged['corners'].values())
@@ -396,6 +414,8 @@ def test_step_29_on_librelane_writes_evidence_the_step_29_gate_fails(tmp_path, m
     project, root, declared = _gls_project(tmp_path)
     fake, _ = _gls_edge(declared, lambda c: VVP_PASS + VVP_SDF_ERROR)
     monkeypatch.setattr(contract.subprocess, 'run', fake)
+    monkeypatch.setattr(contract, 'image_capability', lambda *_: {})
+    monkeypatch.setattr(contract._ce, 'no_container_route', lambda: False)
     put(project / 'phase3/librelane_switch.json', {'steps': {'29': 'librelane'},
                                                    'image': 'img', 'pdk_root_host': str(root)})
     runner, _ = _pdk('/p/l.lib')
