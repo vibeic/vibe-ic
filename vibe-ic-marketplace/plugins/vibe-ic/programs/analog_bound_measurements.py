@@ -97,7 +97,17 @@ def emit_deck(template: str, bindings: dict, capture_path: Path | None = None) -
     measurements = bindings.get("measurements")
     if not isinstance(measurements, dict) or not measurements:
         raise ValueError("nonempty explicit measurement bindings required")
-    commands = [command]
+    execution = bindings.get("execution", {})
+    if not isinstance(execution, dict):
+        raise ValueError("execution settings must be an object")
+    threads = execution.get("threads")
+    if threads is not None and (isinstance(threads, bool) or not isinstance(threads, int) or threads < 1):
+        raise ValueError("execution threads must be a positive integer")
+    if execution.get("wait_policy") not in (None, "PASSIVE", "ACTIVE"):
+        raise ValueError("execution wait_policy must be PASSIVE or ACTIVE")
+    # spinit can set num_threads independently of OMP_NUM_THREADS. Set the
+    # caller's scheduling choice in the actual derived native control block.
+    commands = ([f"set num_threads={threads}"] if threads is not None else []) + [command]
     for name, binding in measurements.items():
         emitted, measure_kind = generator.measurement_commands(name, binding)
         if measure_kind != kind:
@@ -153,7 +163,17 @@ def run_measurements(project: Path, netlist: Path, template: Path, bindings: dic
     except (OSError, ValueError) as exc:
         report.update(status="NOT_MEASURED", detail="native model/include inputs unavailable: " + str(exc))
         return report
-    execution = run("@ngspice", ["-b", str(deck)], cwd=template.parent)
+    scheduling = bindings.get("execution") or {}
+    environment = []
+    if scheduling.get("threads") is not None:
+        environment.append("OMP_NUM_THREADS=" + str(scheduling["threads"]))
+    if scheduling.get("wait_policy"):
+        environment.append("OMP_WAIT_POLICY=" + scheduling["wait_policy"])
+        if scheduling["wait_policy"] == "PASSIVE":
+            environment.append("GOMP_SPINCOUNT=0")
+    execution = run("@env" if environment else "@ngspice",
+                    [*environment, "ngspice", "-b", str(deck)] if environment else ["-b", str(deck)],
+                    cwd=template.parent)
     report["executions"] = [execution]
     text = sim._log_text(execution)
     values = {key.casefold(): value for key, value in sweep.native_meas_rows(text).items()}

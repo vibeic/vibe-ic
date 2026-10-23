@@ -44,6 +44,36 @@ def test_native_endpoint_binding_reads_actual_last_sample_without_extrapolation(
     assert ".save v(out)" in deck and ".save v(other)" in deck
 
 
+def test_execution_choice_survives_replaced_controls_and_reaches_native_process(tmp_path):
+    net = tmp_path / "unit.sp"
+    net.write_text(".subckt unit a b\nr1 a b 1k\n.ends unit\n")
+    template = tmp_path / "tb.sp"
+    template.write_text(f'.include "{net}"\nxdut in out unit\nv1 in 0 1\n.options reltol=1e-5\n'
+                        '.control\nset num_threads=8\nop\n.endc\n.end\n')
+    bindings = {"analysis": {"kind": "OP"}, "measurements": {
+        "vout": {"analysis": "OP", "expression": "v(out)"}},
+        "execution": {"threads": 1, "wait_policy": "PASSIVE"}}
+    def run(program, argv, **kwargs):
+        assert program == "@env"
+        assert argv[:4] == ["OMP_NUM_THREADS=1", "OMP_WAIT_POLICY=PASSIVE", "GOMP_SPINCOUNT=0", "ngspice"]
+        deck = Path(argv[-1]).read_text()
+        assert ".control\nset num_threads=1\nop\n" in deck
+        assert "set num_threads=8" not in deck
+        assert ".options reltol=1e-5" in deck
+        return {"returncode": 0, "stdout": "MEAS vout=0.975\n"}
+    result = measurements.run_measurements(tmp_path, net, template, bindings, tmp_path / "result", run)
+    assert result["status"] == "PASS"
+    assert result["bindings"]["execution"] == bindings["execution"]
+
+
+@pytest.mark.parametrize("execution", [{"threads": 0}, {"threads": True},
+    {"threads": 1.5}, {"wait_policy": "PASSIVE;other"}, []])
+def test_invalid_execution_settings_refuse_before_native_launch(execution):
+    with pytest.raises(ValueError):
+        measurements.emit_deck(".end\n", {"analysis": {"kind": "OP"}, "measurements": {
+            "vout": {"analysis": "OP", "expression": "v(out)"}}, "execution": execution})
+
+
 def test_native_capture_uses_wrdata_filename_token_and_retains_bound_vectors(tmp_path):
     binding = {"analysis": {"kind": "OP"}, "measurements": {
         "vout": {"analysis": "OP", "expression": "v(out)"}}, "capture": {"output": "v(out)"}}
