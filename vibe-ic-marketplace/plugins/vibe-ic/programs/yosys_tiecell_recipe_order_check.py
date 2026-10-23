@@ -513,6 +513,48 @@ def _native_log_recipe(text: str, config: dict) -> Optional[str]:
     return "\n".join(commands)
 
 
+def _wrapper_names_current_step_inputs(wrapper: dict, project: Path,
+                                       folder: Path, hashes: dict) -> bool:
+    """Bind a receipt-authenticated wrapper to this step after relocation.
+
+    Native outputs are routinely copied as one project package.  The signed
+    ``COMMANDS`` journal keeps the producer's absolute project root, while the
+    receipt-bound files now live below the adopted root.  Absolute-path
+    equality therefore rejects identical, digest-verified evidence.  Admit a
+    relocated package only when all three recorded arguments name one native
+    step directory, that directory has the same project-relative suffix as
+    the current receipt directory, and the locally present output is itself
+    in the receipt hash map.  This retains the existing fail-closed behavior
+    for crossed step directories, renamed inputs, or unbound outputs.
+    """
+    config_path = folder / "config.json"
+    extra_path = folder / "extra.json"
+    recorded = {
+        "config": Path(wrapper["config_in"]),
+        "extra": Path(wrapper["extra_in"]),
+        "output": Path(wrapper["output"]),
+    }
+    if (recorded["config"].name != config_path.name or
+            recorded["extra"].name != extra_path.name or
+            recorded["output"].name not in hashes or
+            not (folder / recorded["output"].name).is_file()):
+        return False
+    if (recorded["config"].resolve() == config_path.resolve() and
+            recorded["extra"].resolve() == extra_path.resolve() and
+            recorded["output"].resolve().parent == folder):
+        return True
+    parents = {p.parent for p in recorded.values()}
+    if len(parents) != 1 or not all(p.is_absolute() for p in recorded.values()):
+        return False
+    try:
+        relative_step = folder.relative_to(project.resolve()).parts
+    except ValueError:
+        return False
+    old_step = next(iter(parents)).parts
+    return (len(old_step) >= len(relative_step) and
+            old_step[-len(relative_step):] == relative_step)
+
+
 def _native_yosys_recipe(project: Path) -> Optional[dict]:
     """Read the current native Yosys recipe, or disclose why it is unreadable.
 
@@ -618,9 +660,8 @@ def _native_yosys_recipe(project: Path) -> Optional[dict]:
                     raise ValueError("native Yosys receipt does not bind config.json")
                 extra_path = receipt_path.parent / "extra.json"
                 if ("extra.json" not in hashes or not extra_path.is_file() or
-                        Path(wrapper["config_in"]).resolve() != config_path.resolve() or
-                        Path(wrapper["extra_in"]).resolve() != extra_path.resolve() or
-                        Path(wrapper["output"]).resolve().parent != folder):
+                        not _wrapper_names_current_step_inputs(
+                            wrapper, project, folder, hashes)):
                     raise ValueError("native Yosys wrapper does not name current step inputs")
                 config = json.loads(config_path.read_text(errors="replace"))
                 body = _native_log_recipe(

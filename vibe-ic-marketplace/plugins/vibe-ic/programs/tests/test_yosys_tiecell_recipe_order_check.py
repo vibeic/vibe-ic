@@ -272,6 +272,70 @@ def _native_project(tmp_path, commands, *, receipt=True):
     return project
 
 
+def _native_pyosys_project(tmp_path, *, recorded_root, output_name="top.nl.v",
+                           recorded_output_parent=None):
+    """A receipt-bound pyosys run copied beneath a different project root."""
+    project = tmp_path / "adopted"
+    rel = Path("phase3/librelane/06-yosys-synthesis")
+    folder = project / rel
+    folder.mkdir(parents=True)
+    original = Path(recorded_root) / rel
+    output_parent = (Path(recorded_output_parent)
+                     if recorded_output_parent is not None else original)
+    commands = (
+        "yosys -y /tools/synthesize.py -- "
+        f"--config-in {original / 'config.json'} "
+        f"--extra-in {original / 'extra.json'} "
+        f"--output {output_parent / output_name}\n"
+    )
+    files = {
+        "COMMANDS": commands,
+        "config.json": json.dumps({"SYNTH_TIE_UNDEFINED": "low"}) + "\n",
+        "extra.json": "{}\n",
+        output_name: "module top; endmodule\n",
+        "invocation.log": (
+            "Yosys\n"
+            "Executing DFFLIBMAP pass\n"
+            "Executing ABC pass\n"
+            "Executing SETUNDEF pass\n"
+            "Executing HILOMAP pass\n"
+            "Executing CLEAN pass\n"
+        ),
+    }
+    for name, text in files.items():
+        (folder / name).write_text(text)
+    import hashlib
+    (folder / "vibeic_receipt.json").write_text(json.dumps({
+        "input": {"step": "Yosys.Synthesis"},
+        "sha256": {
+            name: hashlib.sha256((folder / name).read_bytes()).hexdigest()
+            for name in files
+        },
+    }))
+    return project
+
+
+def test_receipt_bound_pyosys_run_survives_project_root_relocation(tmp_path):
+    project = _native_pyosys_project(
+        tmp_path, recorded_root="/producer/original-project")
+
+    code, out, err = _run([str(project)])
+
+    assert code == 0, out + err
+    assert "CLEAN" in out
+
+
+def test_relocated_pyosys_run_rejects_output_outside_recorded_step(tmp_path):
+    project = _native_pyosys_project(
+        tmp_path, recorded_root="/producer/original-project",
+        recorded_output_parent="/producer/foreign-step")
+
+    code, out, err = _run([str(project)])
+
+    assert code == 2
+    assert "wrapper does not name current step inputs" in out + err
+
+
 def test_native_receipt_and_commands_win_over_legacy_recipe(tmp_path):
     project = _native_project(tmp_path, _GOOD)
     legacy = project / "phase2/stage2/synth/legacy.ys"
