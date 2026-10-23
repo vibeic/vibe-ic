@@ -280,6 +280,36 @@ def source_owned_native_dispatch(row: Mapping) -> dict | None:
     return dict(dispatch)
 
 
+def _selected_native_sequence(rows) -> dict | None:
+    """Return the one executable mixed-owner layout, or refuse its crossing.
+
+    The front door can run registered adapters before it enters the existing
+    Phase-3 backend, but it cannot resume adapters after that backend returns.
+    Keep that physical ordering explicit instead of treating arbitrary mixed
+    owners as a generic scheduler.
+    """
+    dispatches = [source_owned_native_dispatch(row) for row in rows]
+    if not dispatches or any(dispatch is None for dispatch in dispatches):
+        return None
+    adapters = [bool(dispatch.get("adapter")) for dispatch in dispatches]
+    if not any(adapters) or all(adapters):
+        return None
+    backend_start = next(index for index, adapter in enumerate(adapters)
+                         if not adapter)
+    if (backend_start == 0 or not all(adapters[:backend_start])
+            or any(adapters[backend_start:])
+            or any(dispatch.get("kind") != "canonical_backend_window"
+                   for dispatch in dispatches[backend_start:])):
+        raise Flow109Error(
+            "FLOW109_WINDOW_DISPATCH_UNSUPPORTED",
+            "mixed native windows require an adapter prefix and canonical-backend suffix")
+    return {
+        "adapter_count": backend_start,
+        "backend_entry_step": dispatches[backend_start]["native_step_id"],
+        "backend_exit_step": dispatches[-1]["native_step_id"],
+    }
+
+
 def source_owned_native_admission(context: Mapping) -> dict | None:
     """Record engineering-native ownership without asserting qualification."""
     # An explicit runtime/registry request is a qualification claim and stays
@@ -290,7 +320,8 @@ def source_owned_native_admission(context: Mapping) -> dict | None:
             or context.get("qualification_registry") is not None):
         return None
     if context.get("schema") == "vibeic.flow109.execution-window.v1":
-        if context.get("dispatch_kind") != "canonical_backend_window":
+        if context.get("dispatch_kind") not in (
+                "canonical_backend_window", "selected_native_sequence"):
             return None
         dispatches = [source_owned_native_dispatch(row)
                       for row in context.get("resolved_rows", ())]
@@ -362,6 +393,8 @@ def resolve_execution_window(plan: Mapping, entry: str | None, exit_: str | None
             raise Flow109Error("FLOW109_WINDOW_OWNER_CROSSING_UNSUPPORTED",
                                " -> ".join(owners))
         kind = "canonical_owner_window"
+    elif _selected_native_sequence(rows) is not None:
+        kind = "selected_native_sequence"
     else:
         raise Flow109Error(
             "FLOW109_WINDOW_DISPATCH_UNSUPPORTED",
@@ -492,6 +525,35 @@ def _finish_attempt(attempt: Path, result: Mapping) -> Path:
     return path
 
 
+def _not_executed_component(context: Mapping, row: Mapping, reason: str) -> dict:
+    return {
+        "schema": "vibeic.flow109.window-component.v1",
+        "step_id": row["id"],
+        "native_step_id": row["profile"]["dispatch"]["native_step_id"],
+        "component_status": "NOT_MEASURED",
+        "reason": reason,
+        "context_sha256": context["context_sha256"],
+        "native_started": False,
+        "metric_acceptance_status": row.get("metric_acceptance_status", "UNIMPLEMENTED"),
+        "flow109_acceptance": "NOT_MEASURED",
+        "whole_flow_acceptance": "NOT_MEASURED",
+        "data_dependencies": row["data_deps"],
+        "acceptance_dependencies": row["acceptance_deps"],
+    }
+
+
+def _attempt_result(context: Mapping, components: list[dict]) -> dict:
+    aggregate = ("FAIL" if any(item["component_status"] == "FAIL" for item in components)
+                 else "PASS" if len(components) == len(context["resolved_rows"])
+                 and all(item["component_status"] == "PASS" for item in components)
+                 else "NOT_MEASURED")
+    return {"schema": "vibeic.flow109.window-attempt-result.v1",
+            "context_sha256": context["context_sha256"],
+            "component_status": aggregate, "components": components,
+            "flow109_acceptance": "NOT_MEASURED", "whole_flow_acceptance": "NOT_MEASURED",
+            "bounded": True, "delivery_accepted": False}
+
+
 def finish_native_window(project: Path, report: Mapping, report_path: Path | None = None) -> dict | None:
     """Bind a canonical backend report to per-row component evidence."""
     path = os.environ.get(CONTEXT_ENV)
@@ -503,7 +565,8 @@ def finish_native_window(project: Path, report: Mapping, report_path: Path | Non
     except (OSError, ValueError, Flow109Error):
         return None
     if (context["schema"] != "vibeic.flow109.execution-window.v1"
-            or context["dispatch_kind"] != "canonical_backend_window"):
+            or context["dispatch_kind"] not in (
+                "canonical_backend_window", "selected_native_sequence")):
         return None
     attempt = Path(attempt_name)
     canonical = []
@@ -515,7 +578,36 @@ def finish_native_window(project: Path, report: Mapping, report_path: Path | Non
     components = []
     stopped = False
     for row in context["resolved_rows"]:
-        native = str(row["profile"]["dispatch"]["native_step_id"])
+        dispatch = row["profile"]["dispatch"]
+        native = str(dispatch["native_step_id"])
+        if dispatch.get("adapter"):
+            component_path = (project / "reports" / "flow109" / "components"
+                              / (row["id"] + ".json"))
+            try:
+                component = json.loads(component_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                component = _not_executed_component(
+                    context, row, "selected adapter component receipt absent or invalid")
+            if (not isinstance(component, dict)
+                    or component.get("step_id") != row["id"]
+                    or component.get("context_sha256") != context["context_sha256"]
+                    or component.get("component_status") not in (
+                        "PASS", "FAIL", "NOT_MEASURED")
+                    or component.get("flow109_acceptance") != "NOT_MEASURED"):
+                component = _not_executed_component(
+                    context, row, "selected adapter component receipt absent or invalid")
+            components.append(component)
+            if component["component_status"] != "PASS":
+                stopped = True
+            continue
+        if stopped:
+            component = _not_executed_component(
+                context, row, "not executed: an earlier row stopped")
+            components.append(component)
+            from _atomic_artefact import write_json
+            write_json(project / "reports" / "flow109" / "components"
+                       / (row["id"] + ".json"), component)
+            continue
         item = by_native.get(native)
         status = str(item.get("status")) if item else "NOT_MEASURED"
         native_not_applicable = status == "NOT_APPLICABLE"
@@ -554,15 +646,7 @@ def finish_native_window(project: Path, report: Mapping, report_path: Path | Non
         write_json(project / "reports" / "flow109" / "components" / (row["id"] + ".json"), component)
         if status != "PASS":
             stopped = True
-    aggregate = ("FAIL" if any(item["component_status"] == "FAIL" for item in components)
-                 else "PASS" if components and all(item["component_status"] == "PASS"
-                                                    for item in components)
-                 else "NOT_MEASURED")
-    result = {"schema": "vibeic.flow109.window-attempt-result.v1",
-              "context_sha256": context["context_sha256"],
-              "component_status": aggregate, "components": components,
-              "flow109_acceptance": "NOT_MEASURED", "whole_flow_acceptance": "NOT_MEASURED",
-              "bounded": True, "delivery_accepted": False}
+    result = _attempt_result(context, components)
     if report_path is not None and Path(report_path).is_file():
         result["canonical_window_report"] = {
             "path": str(Path(report_path).relative_to(project)),
@@ -648,6 +732,64 @@ def prepare_front_door(args, project: Path) -> int | None:
         write_json(path, context)
         os.environ[CONTEXT_ENV] = str(path.resolve())
         os.environ[ATTEMPT_ENV] = str(attempt.resolve())
+        if context["dispatch_kind"] == "selected_native_sequence":
+            layout = _selected_native_sequence(context["resolved_rows"])
+            if layout is None:
+                raise Flow109Error("FLOW109_WINDOW_DISPATCH_UNSUPPORTED",
+                                   "selected native sequence changed")
+            write_json(destination / "admission.json", window_admission or {
+                "status": "NOT_MEASURED", "reason": "PER_LAUNCH_REVALIDATION_REQUIRED",
+                "context_sha256": context["context_sha256"], "native_started": False})
+            components = []
+            for row in context["resolved_rows"][:layout["adapter_count"]]:
+                current = component_context(context, requested_step=row["id"])
+                adapter = row["profile"]["dispatch"]["adapter"]
+                try:
+                    from flow109_admission import require_admission, AdmissionRefusal
+                    if source_owned_native_admission(current) is None:
+                        require_admission(project, current)
+                    from importlib import import_module
+                    result = import_module(adapter).execute(project, current)
+                except AdmissionRefusal as exc:
+                    result = {"schema": "vibeic.flow109.window-component.v1",
+                              "step_id": row["id"], "component_status": "NOT_MEASURED",
+                              "reason": exc.code, "detail": str(exc),
+                              "qualification": exc.report, "native_started": False,
+                              "context_sha256": current["context_sha256"],
+                              "flow109_acceptance": "NOT_MEASURED",
+                              "whole_flow_acceptance": "NOT_MEASURED"}
+                except Flow109Error as exc:
+                    result = {"schema": "vibeic.flow109.window-component.v1",
+                              "step_id": row["id"], "component_status": "NOT_MEASURED",
+                              "reason": exc.code, "detail": exc.detail,
+                              "native_started": False,
+                              "context_sha256": current["context_sha256"],
+                              "flow109_acceptance": "NOT_MEASURED",
+                              "whole_flow_acceptance": "NOT_MEASURED"}
+                if (not isinstance(result, dict)
+                        or result.get("step_id") != row["id"]
+                        or result.get("component_status") not in (
+                            "PASS", "FAIL", "NOT_MEASURED")
+                        or result.get("flow109_acceptance") != "NOT_MEASURED"):
+                    raise Flow109Error("FLOW109_COMPONENT_RESULT_INVALID", adapter)
+                # The window identity, rather than a one-row derived identity,
+                # binds this retained component into the later aggregate.
+                result = dict(result, context_sha256=context["context_sha256"])
+                components.append(result)
+                write_json(destination / "components" / (row["id"] + ".json"), result)
+                if result["component_status"] != "PASS":
+                    for later in context["resolved_rows"][len(components):]:
+                        missing = _not_executed_component(
+                            context, later, "not executed: an earlier row stopped")
+                        components.append(missing)
+                        write_json(destination / "components" / (later["id"] + ".json"), missing)
+                    finished = _attempt_result(context, components)
+                    _finish_attempt(attempt, finished)
+                    return {"PASS": 0, "FAIL": 1, "NOT_MEASURED": 2}[
+                        finished["component_status"]]
+            args.entry_step = layout["backend_entry_step"]
+            args.exit_step = layout["backend_exit_step"]
+            return None
         if context["dispatch_kind"] == "ordered_adapters":
             components = []
             for row in context["resolved_rows"]:
