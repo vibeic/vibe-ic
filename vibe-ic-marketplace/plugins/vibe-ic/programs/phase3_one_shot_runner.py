@@ -69747,25 +69747,38 @@ def _librelane_step24_record(project: Path, top: str, pdk: PdkConfig, mode: str,
     import ir_drop_budget_check as _ibc
     rpt = _pl.reports_phase3_dir(project)
     pnr = _pl.pnr_dir(project)
-    routed = Path(routed_def) if routed_def is not None else pnr / f"{top}.def"
-    routed_netlist = Path(netlist) if netlist is not None else pnr / f"{top}_pnr.v"
-    routed_sdc = Path(sdc) if sdc is not None else pnr / "constraint.sdc"
     doc: Dict[str, Any] = {"step": "24", "mode": mode,
-                           "producer": "librelane:OpenROAD.IRDropReport",
-                           "def_sha256": _sha256_file(routed)}
-    inputs = {"def": routed, "netlist": routed_netlist,
-              "sdc": routed_sdc, "spef": spef}
-    doc["inputs"] = {key: {"path": str(path.relative_to(project)),
-                            "sha256": _sha256_file(path) if path.is_file() else None}
-                     for key, path in inputs.items()}
+                           "producer": "librelane:OpenROAD.IRDropReport"}
     try:
         image, root = _librelane_step_ctx(project, "24", pdk.name)
+        current = _la._current_stapostpnr_ir_inputs(
+            project, image, root, pdk.name,
+            {"DESIGN_NAME": top, "meta": "Step 24 current physical subject"})
+        if current:
+            views = current["views"]
+            routed, netlist, sdc, spef = (
+                views[name] for name in ("def", "nl", "sdc", "spef"))
+        else:
+            # Preserve the existing issued physical-subject parameters when
+            # there is no current native STA owner to select executed views.
+            routed = Path(routed_def) if routed_def is not None else pnr / f"{top}.def"
+            netlist = Path(netlist) if netlist is not None else pnr / f"{top}_pnr.v"
+            sdc = Path(sdc) if sdc is not None else pnr / "constraint.sdc"
+        selected = {"def": routed, "netlist": netlist, "sdc": sdc, "spef": spef}
+        doc["def_sha256"] = _sha256_file(routed)
+        doc["inputs"] = {}
+        for name, path in selected.items():
+            try:
+                named = path.relative_to(project)
+            except ValueError:
+                named = path
+            doc["inputs"][name] = {"path": str(named), "sha256": _sha256_file(path)}
         declared = getattr(pdk, "ir_budget_pct", None)
         budget = float(declared if declared is not None else _ibc._DEFAULT_BUDGET_PCT)
         source = ("pdk.ir_budget_pct" if declared is not None else
                   "ir_drop_budget_check._DEFAULT_BUDGET_PCT (the direct verdict's budget)")
         record = _la.run_ir(project, image, root, pdk.name, routed_def=routed,
-                            netlist=routed_netlist, sdc=routed_sdc,
+                            netlist=netlist, sdc=sdc,
                             spef=spef, budget_pct=budget, budget_source=source,
                             supply_nets=dict(zip(("VDD_NETS", "GND_NETS"),
                                                   _discover_power_nets(routed))))

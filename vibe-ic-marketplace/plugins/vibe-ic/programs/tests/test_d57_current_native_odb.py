@@ -11,6 +11,7 @@ import em_current_density_check as current_ir
 import execution_backend_producers as backend
 import execution_modes as execution_modes
 import librelane_ir_antenna as ir
+import phase3_one_shot_runner as runner
 from librelane_contract import Refusal
 
 
@@ -133,6 +134,84 @@ def test_default_step24_without_current_owner_keeps_legacy_spef(tmp_path, monkey
     observed = _step24_selection(project, tmp_path, monkeypatch)
     assert observed == {'status': 'SELECTED', 'path': str(legacy.resolve()),
                         'sha256': _sha(legacy)}
+
+
+def _step24_record_selection(project, pdk_root, monkeypatch):
+    selected = {}
+
+    def capture(_project, _image, _root, _pdk, **kwargs):
+        selected.update({name: str(Path(kwargs[name]).resolve())
+                         for name in ('routed_def', 'netlist', 'sdc', 'spef')})
+        raise Refusal('CONTROL_D57_ALL_VIEWS_SELECTED', json.dumps(selected, sort_keys=True))
+
+    monkeypatch.setattr(runner, '_librelane_step_ctx',
+                        lambda *_a, **_k: (IMAGE, pdk_root))
+    monkeypatch.setattr(runner, '_discover_power_nets', lambda _path: (['P'], ['G']))
+    monkeypatch.setattr(ir, 'run_ir', capture)
+    written = []
+    try:
+        runner._librelane_step24_record(
+            project, 'neutral', SimpleNamespace(name='neutral', ir_budget_pct=5.0),
+            'librelane', project / 'phase3/stage3/extracted/neutral.spef', written)
+        report = json.loads((project / 'reports/phase3/ir_drop_librelane.json').read_text())
+    except Exception as exc:
+        report = {'judgment': {'reasons': [f'escaped: {type(exc).__name__}: {exc}']}}
+    return selected, report, written
+
+
+def test_step24_record_hands_all_exact_current_views_to_native_consumer(
+        tmp_path, monkeypatch):
+    project, pdk_root, paths, _ = _current_scene(tmp_path, monkeypatch)
+    selected, report, written = _step24_record_selection(project, pdk_root, monkeypatch)
+    assert selected == {name: str(paths[key].resolve()) for name, key in (
+        ('routed_def', 'def'), ('netlist', 'nl'), ('sdc', 'sdc'), ('spef', 'spef'))}
+    assert 'CONTROL_D57_ALL_VIEWS_SELECTED' in report['judgment']['reasons'][0]
+    assert written == [str(project / 'reports/phase3/ir_drop_librelane.json')]
+    assert not (project / 'phase3/stage3/pnr/neutral.def').exists()
+
+
+@pytest.mark.parametrize('damage,reason', [
+    ('missing', 'LL_IR_CURRENT_VIEW_MISSING'),
+    ('changed', 'LL_IR_CURRENT_VIEW_CHANGED'),
+    ('foreign_owner', 'LL_IR_CURRENT_STA_INVALID'),
+])
+def test_step24_record_refuses_invalid_current_view_without_legacy_fallback(
+        tmp_path, monkeypatch, damage, reason):
+    project, pdk_root, paths, _ = _current_scene(tmp_path, monkeypatch)
+    legacy = {
+        'def': _write(project / 'phase3/stage3/pnr/neutral.def', 'legacy def\n'),
+        'nl': _write(project / 'phase3/stage3/pnr/neutral_pnr.v', 'module neutral; endmodule\n'),
+        'sdc': _write(project / 'phase3/stage3/pnr/constraint.sdc', 'legacy sdc\n'),
+        'spef': _write(project / 'phase3/stage3/extracted/neutral.spef', '*SPEF legacy\n'),
+    }
+    if damage == 'missing':
+        paths['def'].unlink()
+    elif damage == 'changed':
+        paths['def'].write_text(paths['def'].read_text() + 'changed\n')
+    else:
+        monkeypatch.setattr(current, 'tool_subject', lambda *_a, **_k: (_ for _ in ()).throw(
+            current.Refusal('CURRENT_DEF_FOREIGN_PATH')))
+    selected, report, _ = _step24_record_selection(project, pdk_root, monkeypatch)
+    assert selected == {}
+    assert reason in report['judgment']['reasons'][0]
+    assert all(path.is_file() for path in legacy.values())
+
+
+def test_step24_record_without_current_owner_keeps_all_legacy_views(
+        tmp_path, monkeypatch):
+    project = tmp_path / 'legacy-project'
+    paths = {
+        'routed_def': _write(project / 'phase3/stage3/pnr/neutral.def', 'legacy def\n'),
+        'netlist': _write(project / 'phase3/stage3/pnr/neutral_pnr.v',
+                          'module neutral; endmodule\n'),
+        'sdc': _write(project / 'phase3/stage3/pnr/constraint.sdc', 'legacy sdc\n'),
+        'spef': _write(project / 'phase3/stage3/extracted/neutral.spef', '*SPEF legacy\n'),
+    }
+    pdk_root = tmp_path / 'pdk'
+    (pdk_root / 'neutral').mkdir(parents=True)
+    selected, report, _ = _step24_record_selection(project, pdk_root, monkeypatch)
+    assert selected == {name: str(path.resolve()) for name, path in paths.items()}
+    assert 'CONTROL_D57_ALL_VIEWS_SELECTED' in report['judgment']['reasons'][0]
 
 
 def test_current_native_state_selects_original_odb_and_source_chain(tmp_path, monkeypatch):
