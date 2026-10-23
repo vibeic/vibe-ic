@@ -56,6 +56,8 @@ def _input_views(project, name, step=None):
               ("spec.json", "topology.json", "topology.md", f"{name}.sp", f"tb_{name}.sp")]
     if step in ("A06", "A07"):
         paths.append(directory / "measurement_studies.json")
+    if step == "A16":
+        paths.append(directory / "reliability_inputs.json")
     # A configured nominal/calibration deck can live outside the canonical
     # block directory. Retain the actual selected inputs, not only defaults.
     from analog_native_sim import _config, _inputs, _included_paths

@@ -593,8 +593,95 @@ def test_a16_mission_without_declared_limits_does_not_launch(project, monkeypatc
 def test_a16_absent_native_mission_and_reports_never_become_pass(project):
     result = physical._reliability(project, "unit", "container", "image", "process", {})
     assert result["status"] == "NOT_MEASURED"
-    assert set(result["metrics"]) == {"mission", "thermal", "em", "aging"}
+    assert set(result["metrics"]) == {"mission", "thermal", "ir", "em", "aging"}
     assert all(r["status"] == "NOT_MEASURED" for r in result["metrics"].values())
+
+
+def test_a16_routes_design_applicability_without_hiding_missing_required_evidence(project):
+    def run(program, argv, **kwargs):
+        settings = json.loads(argv[argv.index("--settings") + 1])
+        result = physical._reliability(project, "unit", "container", "image", "process", settings)
+        put(Path(argv[argv.index("--json") + 1]), result)
+        return {"returncode": 2}
+    result = physical.run_step("A16", project, {"name": "unit"}, {"features": {
+        "requires_thermal": False, "requires_aging": False, "requires_ir": True,
+        "requires_em": True}}, run)
+    assert result["status"] == "NOT_MEASURED"
+    assert result["metrics"]["thermal"]["status"] == "NOT_APPLICABLE"
+    assert result["metrics"]["aging"]["status"] == "NOT_APPLICABLE"
+    assert result["metrics"]["em"]["status"] == "NOT_MEASURED"
+    assert set(result["missing_inputs"]) == {"mission.deck", "mission.spec", "ir.report", "em.report"}
+
+
+def test_a16_supplied_thermal_violation_survives_unrequested_feature(project):
+    put(project / "native_power.json", {"total_power_w": 2.0})
+    result = physical._reliability(project, "unit", "container", "image", "process", {
+        "_features": {"requires_thermal": False, "requires_aging": False},
+        "thermal": {"report": "native_power.json", "arguments": {"die_area_mm2": 1.0}}})
+    assert result["status"] == "FAIL"
+    assert result["metrics"]["thermal"]["result"]["verdict"] == "FAIL"
+    assert result["metrics"]["aging"]["status"] == "NOT_APPLICABLE"
+
+
+def test_a16_explicit_missing_thermal_report_remains_unmeasured(project):
+    result = physical._reliability(project, "unit", "container", "image", "process", {
+        "_features": {"requires_thermal": False},
+        "thermal": {"report": "requested_but_missing.json"}})
+    assert result["metrics"]["thermal"]["status"] == "NOT_MEASURED"
+    assert "thermal.report" in result["missing_inputs"]
+
+
+@pytest.mark.parametrize("drop,expected", [(10.0, "NOT_MEASURED"), (100.0, "FAIL")])
+def test_a16_routes_native_ir_report_and_explicit_design_budget(project, drop, expected):
+    put(project / "native_ir.json", {"worst_ir_drop_mv": drop, "vdd_v": 1.2})
+    result = physical._reliability(project, "unit", "container", "image", "process", {
+        "ir": {"report": "native_ir.json", "arguments": {"vdd": 1.2, "budget_pct": 5.0}}})
+    assert result["status"] == expected
+    assert result["metrics"]["ir"]["status"] == ("PASS" if drop == 10.0 else "FAIL")
+    assert "ir_report" in result["native_inputs"]
+
+
+def test_a16_retains_supplied_native_report_and_detects_change_during_check(project, monkeypatch):
+    import thermal_screen_check as thermal
+    source = put(project / "native_power.json", {"total_power_w": 0.1})
+    original = hashlib.sha256(source.read_bytes()).hexdigest()
+    evaluate = thermal.main
+    def changing_report(argv):
+        rc = evaluate(argv)
+        put(source, {"total_power_w": 2.0})
+        return rc
+    monkeypatch.setattr(thermal, "main", changing_report)
+    result = physical._reliability(project, "unit", "container", "image", "process", {
+        "thermal": {"report": "native_power.json", "arguments": {"die_area_mm2": 1.0}}})
+    assert result["metrics"]["thermal"]["status"] == "PASS"
+    assert result["status"] == "NOT_MEASURED"
+    assert result["metrics"]["input_currentness"]["changed"] == ["thermal_report"]
+    assert result["native_inputs"]["thermal_report"]["sha256"] == original
+
+
+def test_a16_block_declaration_routes_mission_and_keeps_every_attempt(project, monkeypatch):
+    import analog_real_corner_sweep as ars
+    import _designs_root as dr
+    put(project / "mission.sp", ".control\nop\necho MEAS max_stress=0.8\n.endc\n.end\n")
+    put(project / "limits.json", {"specs": [{"name": "max_stress", "max": 1.0}]})
+    put(project / "phase3/analog/unit/reliability_inputs.json", {
+        "deck": "mission.sp", "spec": "limits.json"})
+    monkeypatch.setattr(dr, "resolve_host_root", lambda *a: str(project))
+    monkeypatch.setattr(ars, "_container_path", lambda c, root, p: str(p))
+    monkeypatch.setattr(ars, "_run_ngspice", lambda *a, **k: (
+        True, {"max_stress": 0.8}, "native stress result", {}))
+    def run(program, argv, **kwargs):
+        settings = json.loads(argv[argv.index("--settings") + 1])
+        result = physical._reliability(project, "unit", "container", "image", "process", settings)
+        put(Path(argv[argv.index("--json") + 1]), result)
+        return {"returncode": 2}
+    first = physical.run_step("A16", project, {"name": "unit"}, {}, run)
+    second = physical.run_step("A16", project, {"name": "unit"}, {}, run)
+    assert first["metrics"]["mission"]["status"] == "PASS"
+    assert first["native_inputs"]["mission_deck"]["path"] == str(project / "mission.sp")
+    assert "reliability_inputs" in first["native_inputs"]
+    assert first["outputs"][0] != second["outputs"][0]
+    assert all(Path(p).is_file() for p in first["outputs"] + second["outputs"])
 
 
 @pytest.mark.parametrize("stress,expected", [(0.8, "NOT_MEASURED"), (1.2, "FAIL")])

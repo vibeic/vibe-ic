@@ -110,6 +110,14 @@ def run_step(step_id: str, project: Path, block: dict, options: dict,
         return _result("NOT_MEASURED", "analog block has no usable declared name")
     bdir, work = _paths(project, name)
     cfg = _settings(options, step_id, name)
+    if step_id == "A16":
+        # Like nominal measurement studies, mission/report inputs may be
+        # supplied beside the block without changing all upstream inputs.
+        cfg = {**_read(bdir / "reliability_inputs.json"), **cfg}
+        # The flow's existing design applicability owns which analyses are
+        # required. Keep unknown flags conservative, and still evaluate any
+        # supplied evidence even when its analysis was not requested.
+        cfg["_features"] = dict(options.get("features") or {})
     if step_id == "A15" and options.get("post_mc_samples") is not None:
         samples = options["post_mc_samples"]
         if not isinstance(samples, int) or isinstance(samples, bool) or samples < 2:
@@ -736,24 +744,34 @@ def _reliability(project: Path, name: str, container: str, image: str, pdk: str,
     import corner_yield_vs_spec_check as limits
     import thermal_screen_check as thermal
     import em_current_density_check as em
+    import ir_drop_budget_check as ir
     import aging_derate_sta_check as aging
+    import analog_bound_measurements as measurements
 
     _, work = _paths(project, name)
     work.mkdir(parents=True, exist_ok=True)
     records = {}
     outputs = []
     missing_inputs = []
+    native_inputs = {}
+    def remember(role, path):
+        if path.is_file():
+            native_inputs[role] = {"path": str(path.resolve()), "sha256": _sha(path)}
+    remember("reliability_inputs", project / "phase3/analog" / name / "reliability_inputs.json")
     deck = project / str(cfg.get("deck") or "__missing_mission_deck__")
     spec = project / str(cfg.get("spec") or "__missing_reliability_spec__")
     bounds = limits._spec_limits(_read(spec))
     mission_missing = (["mission.deck"] if not deck.is_file() else []) + (
         ["mission.spec"] if not bounds else [])
     if not mission_missing:
+        remember("mission_deck", deck)
+        remember("mission_spec", spec)
+        native_inputs.update(measurements.consumed_input_views(project, deck))
         host = dr.resolve_host_root(project, container)
         ok, values, log, sim = ars._run_ngspice(container,
             ars._container_path(container, host, deck), deck_text=deck.read_text(),
             run_to_completion=True)
-        logfile = work / "reliability.ngspice.log"
+        logfile = work / f"reliability-{uuid.uuid4().hex}.ngspice.log"
         logfile.write_text(log or "")
         outputs.append(logfile)
         missing = [key for key in bounds if values.get(key) is None]
@@ -772,14 +790,22 @@ def _reliability(project: Path, name: str, container: str, image: str, pdk: str,
             "spec": str(spec) if cfg.get("spec") else None}
     # These existing programs evaluate supplied native reports; they do not
     # invent a thermal solution, an EM current or an aging corner.
-    for key, module in (("thermal", thermal), ("em", em), ("aging", aging)):
+    for key, module in (("thermal", thermal), ("ir", ir), ("em", em), ("aging", aging)):
         setting = cfg.get(key) or {}
         report = project / str(setting.get("report") or f"__missing_{key}_report__")
         if not report.is_file():
+            feature = "requires_" + key
+            if not setting and (cfg.get("_features") or {}).get(feature) is False:
+                records[key] = {"status": "NOT_APPLICABLE", "detail":
+                    f"the design declares {feature}=false; no {key} evidence was supplied",
+                    "applicability": {feature: False}}
+                continue
             missing_inputs.append(f"{key}.report")
             records[key] = {"status": "NOT_MEASURED", "detail": f"native {key} report absent"}
             continue
-        argv = [str(report), "--json", str(work / f"reliability_{key}.json")]
+        remember(key + "_report", report)
+        result_path = work / f"reliability_{key}-{uuid.uuid4().hex}.json"
+        argv = [str(report), "--json", str(result_path)]
         for option, value in (setting.get("arguments") or {}).items():
             if value is False or value is None:
                 continue
@@ -787,21 +813,28 @@ def _reliability(project: Path, name: str, container: str, image: str, pdk: str,
                 continue  # A fresh report cannot be relabelled as aged evidence.
             argv.append("--" + option.replace("_", "-"))
             if value is not True:
-                argv.append(str(project / value) if option in
-                            ("die_source", "jmax", "tech_lef", "def_file", "pg_geometry", "fresh")
-                            else str(value))
+                if option in ("die_source", "jmax", "tech_lef", "def_file", "pg_geometry", "fresh"):
+                    path = project / value
+                    remember(key + "_" + option, path)
+                    argv.append(str(path))
+                else:
+                    argv.append(str(value))
         rc = module.main(argv)
-        record = _read(work / f"reliability_{key}.json")
+        record = _read(result_path)
         records[key] = {"status": "PASS" if rc == 0 else "FAIL" if rc == 1 else "NOT_MEASURED",
                         "returncode": rc, "result": record}
-        outputs.append(work / f"reliability_{key}.json")
+        outputs.append(result_path)
+    changed = [role for role, view in native_inputs.items()
+               if not _current_native_views({role: view})]
+    if changed:
+        records["input_currentness"] = {"status": "NOT_MEASURED", "changed": changed}
     statuses = [r["status"] for r in records.values()]
-    detail = "native mission/stress and thermal/EM/aging evidence"
+    detail = "native mission/stress and thermal/IR/EM/aging evidence"
     if missing_inputs:
         detail += "; absent inputs: " + ", ".join(missing_inputs)
     return _result("FAIL" if "FAIL" in statuses else "NOT_MEASURED" if
                    "NOT_MEASURED" in statuses else "PASS", detail, outputs,
-                   metrics=records, missing_inputs=missing_inputs)
+                   metrics=records, missing_inputs=missing_inputs, native_inputs=native_inputs)
 
 
 def main(argv=None) -> int:
