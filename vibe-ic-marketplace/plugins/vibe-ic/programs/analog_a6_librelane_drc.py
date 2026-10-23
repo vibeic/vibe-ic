@@ -387,6 +387,19 @@ def run(project: Path, block: str, image: str,
     return 1 if auth["blocking"] else 0
 
 
+_UNIT_PAYLOAD_MARKER = "VIBEIC_UNIT_TESTCASE_B64="
+
+
+def _unit_case_bytes(stdout: str) -> bytes:
+    """Read one framed testcase; image startup logging is not file content."""
+    import base64
+    payloads = [line[len(_UNIT_PAYLOAD_MARKER):] for line in stdout.splitlines()
+                if line.startswith(_UNIT_PAYLOAD_MARKER)]
+    if len(payloads) != 1 or not payloads[0]:
+        raise ValueError("native unit testcase payload is absent or ambiguous")
+    return base64.b64decode(payloads[0], validate=True)
+
+
 def _capability_controls(arm: "_Arm", block: str, image: str,
                          main_runset: str, cfgs: Dict[str, dict],
                          rules: List[str]) -> Dict[str, dict]:
@@ -428,16 +441,21 @@ def _capability_controls(arm: "_Arm", block: str, image: str,
             if not dst.is_file():
                 import _docker_memory as _dmem
                 from librelane_contract import PROBE_DEADLINE_S, run_container
-                import base64
                 cp = run_container(
                     ["docker", "run", "--rm", *_dmem.docker_memory_flags(),
                      "--entrypoint", "python3", image, "-c",
-                     "import base64,pathlib,sys;print(base64.b64encode(pathlib.Path(sys.argv[1]).read_bytes()).decode())",
+                     "import base64,pathlib,sys;print(" + repr(_UNIT_PAYLOAD_MARKER) +
+                     "+base64.b64encode(pathlib.Path(sys.argv[1]).read_bytes()).decode())",
                      f"{unit_dir}/{tc}"], probe_deadline_s=PROBE_DEADLINE_S)
                 if cp.returncode or not cp.stdout:
                     results[tc] = None
                     continue
-                write_bytes(dst, base64.b64decode(cp.stdout.strip(), validate=True))
+                try:
+                    payload = _unit_case_bytes(cp.stdout)
+                except ValueError:
+                    results[tc] = None
+                    continue
+                write_bytes(dst, payload)
             if len(top) != 1:
                 results[tc] = None
                 continue

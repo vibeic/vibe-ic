@@ -196,7 +196,8 @@ def test_capability_unit_copy_preserves_binary_data_under_shared_probe(tmp_path,
     def copy_probe(cmd, **kwargs):
         calls.append((cmd, kwargs))
         return SimpleNamespace(returncode=0,
-                               stdout=base64.b64encode(raw).decode() + "\n",
+                               stdout="[INFO] startup PATH=/tool/bin\n" + A6._UNIT_PAYLOAD_MARKER +
+                                      base64.b64encode(raw).decode() + "\n",
                                stderr="")
 
     monkeypatch.setattr(contract, "run_container", copy_probe)
@@ -208,6 +209,14 @@ def test_capability_unit_copy_preserves_binary_data_under_shared_probe(tmp_path,
     assert len(calls) == 1
     assert calls[0][1] == {"probe_deadline_s": contract.PROBE_DEADLINE_S}
     assert calls[0][0][-1] == f"{unit_dir}/unit.gds"
+
+
+@pytest.mark.parametrize('stdout', ['', 'AA==\n', A6._UNIT_PAYLOAD_MARKER,
+    A6._UNIT_PAYLOAD_MARKER + 'not!base64',
+    A6._UNIT_PAYLOAD_MARKER + 'AA==\n' + A6._UNIT_PAYLOAD_MARKER + 'AA==\n'])
+def test_testcase_copy_refuses_missing_malformed_or_ambiguous_payload(stdout):
+    with pytest.raises(ValueError):
+        A6._unit_case_bytes(stdout)
 
 
 def test_the_runner_runs_the_arm_only_when_selected_and_it_is_stricter(
