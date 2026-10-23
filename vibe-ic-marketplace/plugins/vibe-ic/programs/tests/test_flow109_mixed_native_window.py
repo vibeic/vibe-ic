@@ -23,6 +23,15 @@ import flow109_clock_plan as clock
 from programs.tests._route_fixture import stage_owner_route
 
 
+@pytest.fixture(autouse=True)
+def _isolate_flow109_window_environment(monkeypatch):
+    # The production front door installs these directly; restore absent or
+    # prior values when pytest reuses this worker for another native owner.
+    for name in (flow109.CONTEXT_ENV, flow109.ATTEMPT_ENV):
+        monkeypatch.setenv(name, os.environ.get(name, ""))
+        monkeypatch.delenv(name)
+
+
 def _profile():
     return next(item["features"] for item in flow109.load_registry()["reference_profiles"]
                 if item["name"] == "Small digital IC without DFT")

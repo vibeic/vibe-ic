@@ -253,9 +253,16 @@ def test_metric_binding_refuses_swapped_or_stale_common_source_chain(tmp_path, d
     accepted = metrics.accept_d44(tmp_path, context, record)
     assert accepted['status'] == 'FAIL'
     assert accepted['delivery_blocked'] is True
+    # Once the adopted netlist changes, the retained proof cannot receive
+    # current-input credit.  The measured mapping failure must still win.
+    proof_status = 'NOT_MEASURED' if damage == 'stale_netlist' else 'PASS'
     assert {item['id']: item['status'] for item in accepted['obligations']} == {
-        'final_lec.final_lec_unproved': 'PASS',
+        'final_lec.final_lec_unproved': proof_status,
         'final_lec.sta_lvs_release_netlist_mapping': 'FAIL'}
+    if damage == 'stale_netlist':
+        proof_metric = next(item for item in accepted['obligations']
+                            if item['id'] == 'final_lec.final_lec_unproved')
+        assert proof_metric['measurement']['reason'] == 'METRIC_EXECUTION_EVIDENCE_STALE'
 
 
 def test_actual_model_launch_rechecks_qualification_after_preparation(tmp_path, monkeypatch):

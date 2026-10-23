@@ -349,7 +349,7 @@ def _provisional_slot_project(tmp_path, *, answered_by="agent",
 def test_provisional_delegated_slot_resolves_to_smallest_adequate_published_slot(
         tmp_path):
     project = _provisional_slot_project(tmp_path)
-    resolved, refusal = RUNNER._resolve_provisional_slot_die(
+    resolved, refusal = RUNNER._ppa_area.resolve_provisional_slot_die(
         project, "100x140", 150)
     assert refusal is None
     assert resolved["intent"] == "DERIVED_PROVISIONAL_SLOT"
@@ -364,7 +364,7 @@ def test_provisional_slot_resolution_uses_canonical_worker_inputs(tmp_path):
     # Default's bounded worker receives the source-bound slot contracts and
     # source JSON, not the earlier Phase-1 reporting copy.
     (project / "reports/phase1/submission_template.json").unlink()
-    resolved, refusal = RUNNER._resolve_provisional_slot_die(
+    resolved, refusal = RUNNER._ppa_area.resolve_provisional_slot_die(
         project, "100x140", 150)
     assert refusal is None
     assert resolved["resolved_slot"] == "wide"
@@ -409,7 +409,7 @@ def test_prepnr_applies_provisional_slot_resolution(tmp_path, monkeypatch):
 
 def test_explicit_owner_slot_is_not_reclassified_as_derived(tmp_path):
     project = _provisional_slot_project(tmp_path, answered_by="owner")
-    resolved, refusal = RUNNER._resolve_provisional_slot_die(
+    resolved, refusal = RUNNER._ppa_area.resolve_provisional_slot_die(
         project, "100x140", 150)
     assert resolved is None
     assert refusal is None
@@ -418,7 +418,7 @@ def test_explicit_owner_slot_is_not_reclassified_as_derived(tmp_path):
 def test_provisional_slot_refuses_stale_catalogue_source(tmp_path):
     project = _provisional_slot_project(tmp_path)
     (project / "input/submission_template_source/wide.json").write_text("changed\n")
-    resolved, refusal = RUNNER._resolve_provisional_slot_die(
+    resolved, refusal = RUNNER._ppa_area.resolve_provisional_slot_die(
         project, "100x140", 150)
     assert resolved is None
     assert refusal.startswith("DERIVED_SLOT_AUTHORITY_INVALID:")
@@ -427,7 +427,7 @@ def test_provisional_slot_refuses_stale_catalogue_source(tmp_path):
 
 def test_provisional_slot_refuses_when_no_published_slot_fits(tmp_path):
     project = _provisional_slot_project(tmp_path)
-    resolved, refusal = RUNNER._resolve_provisional_slot_die(
+    resolved, refusal = RUNNER._ppa_area.resolve_provisional_slot_die(
         project, "100x140", 250)
     assert resolved is None
     assert refusal.startswith("DERIVED_SLOT_NO_ADEQUATE_PUBLISHED_SLOT:")
