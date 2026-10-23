@@ -13170,7 +13170,7 @@
               ]
             },
             "acceptance_scope": "odb_fill_component_only",
-            "flow109_metrics_status": "UNIMPLEMENTED",
+            "flow109_metrics_status": "PARTIAL_RUNTIME_BINDING",
             "native_required_outputs": [
               "filled.odb",
               "receipt.json"
@@ -13202,7 +13202,7 @@
             "checker.base_43.fill_density_rules",
             "producer.base_43.execution"
           ],
-          "status": "UNIMPLEMENTED_METRIC_BINDING"
+          "status": "AUTHORITY_BOUND_MEASUREMENT_NOT_MEASURED"
         },
         {
           "id": "base_43.fill_keepout_violations",
@@ -13238,10 +13238,10 @@
             "checker.base_43.fill_geometry_identity",
             "producer.base_43.execution"
           ],
-          "status": "UNIMPLEMENTED_METRIC_BINDING"
+          "status": "IMPLEMENTED_D62_RUNTIME_BINDING"
         }
       ],
-      "metric_acceptance_status": "UNIMPLEMENTED",
+      "metric_acceptance_status": "PARTIAL_D62_RUNTIME",
       "gate_layer_ids": [
         "G1",
         "G2",

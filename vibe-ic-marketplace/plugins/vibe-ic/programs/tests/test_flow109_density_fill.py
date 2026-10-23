@@ -68,7 +68,7 @@ def test_registry_selects_odb_component_without_gds_alias():
     assert row['profile']['dispatch']['adapter'] == 'flow109_density_fill'
     assert row['profile']['dispatch']['native_step_id'] == 'flow109.D62'
     assert row['tool_uses'][0]['native_steps'] == ['OpenROAD.DensityFill']
-    assert row['metric_acceptance_status'] == 'UNIMPLEMENTED'
+    assert row['metric_acceptance_status'] == 'PARTIAL_D62_RUNTIME'
 
 
 @pytest.mark.parametrize('damage', ['diearea', 'wire', 'old_fill_removed'])

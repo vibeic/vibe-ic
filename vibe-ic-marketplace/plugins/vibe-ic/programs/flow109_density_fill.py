@@ -22,6 +22,7 @@ if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
 
 from flow109_admission import AdmissionRefusal, require_launch_admission
+from flow109_metric_acceptance import accept_d62
 
 INPUT = 'input/flow109/D62.json'
 SCRIPT = HERE / 'flow109_density_fill.tcl'
@@ -35,7 +36,8 @@ def _sha(path):
 def operation_sources():
     # These are the local executable sources this small adapter actually uses.
     # stdlib imports do not introduce unrelated legacy producer dependencies.
-    paths = [Path(__file__), SCRIPT, HERE / 'flow109_admission.py', HERE / 'flow109.py']
+    paths = [Path(__file__), SCRIPT, HERE / 'flow109_admission.py', HERE / 'flow109.py',
+             HERE / 'flow109_metric_acceptance.py']
     return {str(p.relative_to(HERE.parent)): _sha(p) for p in paths}
 
 
@@ -202,6 +204,9 @@ def execute(project, context):
     try:
         prepared = prepare(project, context)
         admission = require_launch_admission(project, 'flow109.D62', {'flow109_context': context})
+        result.update(inputs=prepared['inputs'], manifest=prepared['manifest'],
+                      tool=prepared['tool'], operation_sources=prepared['operation_sources'],
+                      qualification=admission)
         def before_launch():
             require_launch_admission(project, 'flow109.D62', {'flow109_context': context})
             # Input binding is checked again before each native process.
@@ -210,12 +215,12 @@ def execute(project, context):
             result['native_started'] = True
         measurements = _native_fill(project, prepared, attempt, before_launch)
         outputs = {p.name: _record(project, p) for p in attempt.iterdir() if p.is_file()}
-        result.update(component_status='PASS', inputs=prepared['inputs'], manifest=prepared['manifest'],
-                      tool=prepared['tool'], operation_sources=prepared['operation_sources'],
-                      qualification=admission, measurements=measurements, outputs=outputs)
+        result.update(component_status='PASS', measurements=measurements, outputs=outputs)
     except AdmissionRefusal as exc:
         result.update(component_status='FAIL' if exc.status == 'FAIL' else 'NOT_MEASURED',
-                      reason=exc.code, detail=str(exc), qualification_status='NOT_VERIFIED')
+                      reason=exc.code, detail=str(exc))
+        if 'qualification' not in result:
+            result['qualification_status'] = 'NOT_VERIFIED'
     except (OSError, ValueError, KeyError, TypeError, subprocess.TimeoutExpired) as exc:
         result.update(reason='D62_EXECUTION_INCOMPLETE', detail=f'{type(exc).__name__}: {exc}')
     receipt = attempt / 'receipt.json'
@@ -226,10 +231,18 @@ def execute(project, context):
             result['handoff'] = validate_filled_odb(project, result['receipt'])
         except (AdmissionRefusal, OSError, ValueError, KeyError, TypeError) as exc:
             result.pop('receipt', None)
-            result.update(component_status='NOT_MEASURED',
-                          reason='D62_HANDOFF_REFUSED', detail=str(exc))
+            failed = isinstance(exc, AdmissionRefusal) and exc.status == 'FAIL'
+            result.update(component_status='FAIL' if failed else 'NOT_MEASURED',
+                          reason=exc.code if failed else 'D62_HANDOFF_REFUSED', detail=str(exc))
             _write(receipt, result)
             result['receipt'] = _record(project, receipt)
+    if result['component_status'] == 'PASS':
+        try:
+            require_launch_admission(project, 'flow109.D62', {'flow109_context': context})
+        except AdmissionRefusal as exc:
+            result.update(component_status='NOT_MEASURED', reason=exc.code, detail=str(exc))
         else:
             _write(project / 'reports/flow109/D62/accepted.json', result['receipt'])
+    result['metric_acceptance'] = accept_d62(project, context, result)
+    result['metric_acceptance_status'] = result['metric_acceptance']['status']
     return result

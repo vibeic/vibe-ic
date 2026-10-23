@@ -41,6 +41,17 @@ A01_BINDINGS = {
     },
 }
 
+D62_BINDINGS = {
+    "base_43.fill_density_rules": {
+        "operator": "within_declared_bounds",
+        "authority": "requirements/base_43/fill_density_rules.json",
+    },
+    "base_43.fill_geometry_identity": {
+        "operator": "matches_adopted_reference",
+        "authority": "adopted/base_43/fill_geometry_identity.json",
+    },
+}
+
 
 class MetricRefusal(ValueError):
     def __init__(self, code: str, detail: str):
@@ -224,6 +235,141 @@ def _approved_authority(project: Path, reference: str,
     return authority, body
 
 
+def _approved_document(project: Path, relative: str, *, authority: str,
+                       schema: str) -> tuple[dict, dict]:
+    path = _safe_project_file(project, relative)
+    if not path.is_file():
+        raise MetricRefusal("METRIC_AUTHORITY_ABSENT", relative)
+    raw = path.read_bytes()
+    try:
+        body = json.loads(raw)
+    except (TypeError, ValueError) as exc:
+        raise MetricRefusal("METRIC_AUTHORITY_INVALID", relative) from exc
+    approval = body.get("approval") if isinstance(body, dict) else None
+    source = approval.get("source_reference") if isinstance(approval, dict) else None
+    if (not isinstance(body, dict) or body.get("schema") != schema
+            or not isinstance(approval, dict)
+            or approval.get("status") != "APPROVED"
+            or approval.get("authority") != authority
+            or not isinstance(source, dict)
+            or not isinstance(source.get("path"), str)
+            or not _HEX.fullmatch(str(source.get("sha256", "")))):
+        raise MetricRefusal("METRIC_AUTHORITY_UNAPPROVED", relative)
+    source_path = _safe_project_file(project, source["path"])
+    if not source_path.is_file() or _sha(source_path.read_bytes()) != source["sha256"]:
+        raise MetricRefusal("METRIC_AUTHORITY_STALE", source["path"])
+    return ({"status": "APPROVED", "path": relative, "sha256": _sha(raw),
+             "source": {"path": source["path"], "sha256": source["sha256"]},
+             "approval": approval}, body)
+
+
+def _d62_bounds_authority(project: Path, relative: str,
+                          component: Mapping[str, Any]) -> dict:
+    authority, body = _approved_document(project, relative,
+        authority="requirements_owner", schema=AUTHORITY_SCHEMA)
+    limits, units = body.get("limits"), body.get("units")
+    if (not isinstance(limits, Mapping) or not isinstance(units, str) or not units
+            or (limits.get("min") is None and limits.get("max") is None)):
+        raise MetricRefusal("METRIC_AUTHORITY_INVALID", "D62 limits/units")
+    if limits.get("min") is not None:
+        _finite_number(limits["min"])
+    if limits.get("max") is not None:
+        _finite_number(limits["max"])
+    if (limits.get("min") is not None and limits.get("max") is not None
+            and limits["min"] > limits["max"]):
+        raise MetricRefusal("METRIC_AUTHORITY_INVALID", "minimum exceeds maximum")
+    rules = component.get("inputs", {}).get("rules")
+    if (not isinstance(rules, Mapping)
+            or body.get("rules_sha256") != rules.get("sha256")):
+        raise MetricRefusal("METRIC_AUTHORITY_STALE", "D62 rules identity")
+    authority.update(limits=dict(limits), unit=units,
+                     rules_sha256=body["rules_sha256"])
+    return authority
+
+
+def _d62_reference_authority(project: Path, relative: str) -> dict:
+    authority, body = _approved_document(project, relative,
+        authority="layout_owner", schema="vibeic.flow109.adopted-reference.v1")
+    if "reference" not in body or "reference_identity" not in body:
+        raise MetricRefusal("METRIC_AUTHORITY_INVALID", "D62 adopted reference")
+    _identity_complete(body["reference_identity"])
+    authority.update(reference=body["reference"],
+                     reference_identity=body["reference_identity"])
+    return authority
+
+
+def _d62_measurement(project: Path, component: Mapping[str, Any],
+                     context: Mapping[str, Any]) -> dict:
+    if component.get("component_status") == "FAIL":
+        return {"status": "FAIL", "reason": component.get("reason")}
+    if component.get("component_status") != "PASS":
+        return {"status": "NOT_MEASURED", "reason": "D62 component is not current PASS"}
+    uses = context.get("runtime_tool_uses")
+    if not isinstance(uses, list) or len(uses) != 1:
+        return {"status": "NOT_MEASURED", "reason": "exact D62 tool execution identity absent"}
+    from flow109_density_fill import operation_sources, validate_filled_odb
+    handoff = validate_filled_odb(project, component.get("receipt"))
+    if handoff != component.get("handoff"):
+        raise MetricRefusal("METRIC_EVIDENCE_MISMATCH", "D62 consumer handoff")
+    receipt_path = _safe_project_file(project, component["receipt"]["path"])
+    receipt = json.loads(receipt_path.read_text())
+    outputs = receipt.get("outputs")
+    geometry_outputs = {"filled.odb", "before.def", "filled.def", "readback.def",
+                        "producer.census", "consumer.census"}
+    exact_outputs = geometry_outputs | {"producer.log", "consumer.log"}
+    if not isinstance(outputs, dict) or set(outputs) != exact_outputs:
+        raise MetricRefusal("METRIC_EVIDENCE_ABSENT", "D62 exact native output set")
+    if receipt.get("operation_sources") != operation_sources():
+        raise MetricRefusal("METRIC_SOURCE_CHANGED", "D62 operation sources")
+    use = uses[0]
+    expected_qualification = {
+        "status": "PASS", "reason": "QUALIFICATION_BINDINGS_CURRENT",
+        "uses": [{"use_id": use.get("use_id"),
+                  "qualification_sha256": use.get("qualification_sha256")}],
+        "context_sha256": context.get("context_sha256"), "native_started": False}
+    expected_tool = {key: use.get(key) for key in
+                     ("tool_id", "version", "build_sha256", "executable")}
+    if (receipt.get("qualification") != expected_qualification
+            or receipt.get("tool") != expected_tool
+            or set(receipt.get("inputs", {})) != {"input_odb", "rules", "pdk", "config", "executable"}
+            or receipt.get("inputs") != component.get("inputs")
+            or receipt.get("manifest") != component.get("manifest")
+            or outputs != component.get("outputs")
+            or receipt.get("measurements") != component.get("measurements")):
+        raise MetricRefusal("METRIC_EVIDENCE_MISMATCH", "D62 invocation/read-set identity")
+    # Reference value excludes attempt-relative paths. Exact paths and the full
+    # read set remain in identity, while adopted-reference comparison is stable
+    # across independent executions of identical bytes.
+    value = {
+        "manifest_sha256": receipt["manifest"]["sha256"],
+        "inputs": {name: entry["sha256"] for name, entry in receipt["inputs"].items()},
+        "outputs": {name: outputs[name]["sha256"] for name in sorted(geometry_outputs)},
+        "measurements": receipt["measurements"],
+        "tool": receipt["tool"],
+        "qualification": receipt["qualification"],
+        "operation_sources": receipt["operation_sources"],
+    }
+    identity = {
+        "producer": {"name": "flow109_density_fill._native_fill",
+                     "receipt": component["receipt"]},
+        "checker": {"name": "flow109_density_fill.validate_filled_odb",
+                    "measurements": receipt["measurements"]},
+        "tool_execution": {"context_sha256": context.get("context_sha256"),
+                           "use_id": use.get("use_id"),
+                           "qualification_sha256": use.get("qualification_sha256"),
+                           "build_sha256": use.get("build_sha256"),
+                           "executable": use.get("executable")},
+        "consumed_inputs": receipt["inputs"],
+        "requirements": "bound-per-obligation",
+        "configuration": use.get("config"),
+        "models": {"status": "NOT_APPLICABLE_TO_ODB_GEOMETRY_IDENTITY"},
+        "outputs": {name: outputs[name] for name in sorted(exact_outputs)},
+        "source": receipt["operation_sources"],
+    }
+    _identity_complete(identity)
+    return {"status": "MEASURED", "value": value, "identity": identity}
+
+
 def _a01_measurements(project: Path, component: Mapping[str, Any],
                       context: Mapping[str, Any]) -> tuple[dict, dict]:
     if component.get("component_status") == "FAIL":
@@ -397,6 +543,80 @@ def accept_a01(project: Path, context: Mapping[str, Any],
         result.update(status="PASS", delivery_blocked=False,
                       reason="ALL_APPLICABLE_METRICS_CURRENT_AND_PASS")
     elif "FAIL" in statuses:
+        result.update(status="FAIL", reason="MEASURED_METRIC_FAILURE")
+    else:
+        result["reason"] = "METRIC_BINDING_INCOMPLETE_OR_NOT_CURRENT"
+    return result
+
+
+def accept_d62(project: Path, context: Mapping[str, Any],
+               component: Mapping[str, Any]) -> dict:
+    """Bind the real D62 geometry receipt without inventing density signoff."""
+    project = Path(project).resolve()
+    obligations = context.get("resolved_row", {}).get("obligations")
+    result = {"schema": SCHEMA, "row_id": "D62", "status": "NOT_MEASURED",
+              "delivery_blocked": True, "obligations": []}
+    if not isinstance(obligations, list):
+        result["reason"] = "METRIC_OBLIGATIONS_ABSENT"
+        return result
+    try:
+        geometry = _d62_measurement(project, component, context)
+    except (MetricRefusal, OSError, ValueError, KeyError, TypeError) as exc:
+        geometry = {"status": "NOT_MEASURED",
+                    "reason": getattr(exc, "code", "METRIC_EVIDENCE_INVALID"),
+                    "detail": str(exc)}
+    for obligation in obligations:
+        oid = obligation.get("id") if isinstance(obligation, dict) else None
+        binding = D62_BINDINGS.get(oid)
+        if binding is None:
+            result["obligations"].append({"id": oid, "status": "UNIMPLEMENTED_METRIC_BINDING"})
+            continue
+        expectation = obligation.get("expectation", {})
+        ref_key = "bounds_ref" if oid == "base_43.fill_density_rules" else "reference_ref"
+        declared = str(expectation.get(ref_key, "")).partition("#/")[0]
+        if expectation.get("operator") != binding["operator"] or declared != binding["authority"]:
+            result["obligations"].append({"id": oid, "status": "UNIMPLEMENTED_METRIC_BINDING"})
+            continue
+        if oid == "base_43.fill_density_rules":
+            try:
+                authority = _d62_bounds_authority(project, binding["authority"], component)
+                item = {"id": oid, "metric": obligation.get("metric"),
+                        "operator": binding["operator"], "status": "NOT_MEASURED",
+                        "reason": "D62_DENSITY_VALUE_NOT_MEASURED",
+                        "detail": "native receipt reports geometry and fill count, not density",
+                        "authority": authority}
+            except (MetricRefusal, OSError, ValueError, KeyError, TypeError) as exc:
+                item = {"id": oid, "metric": obligation.get("metric"),
+                        "operator": binding["operator"], "status": "NOT_MEASURED",
+                        "reason": getattr(exc, "code", "METRIC_ACCEPTANCE_REFUSED"),
+                        "detail": str(exc)}
+            result["obligations"].append(item)
+            continue
+        # Concrete native/checker failure outranks missing adopted authority.
+        if geometry.get("status") == "FAIL":
+            result["obligations"].append({"id": oid, "metric": obligation.get("metric"),
+                "operator": binding["operator"], "status": "FAIL",
+                "detail": geometry.get("reason") or "measured component failure"})
+            continue
+        try:
+            authority = _d62_reference_authority(project, binding["authority"])
+            measured = dict(geometry)
+            if measured.get("status") == "MEASURED":
+                measured["identity"] = dict(measured["identity"])
+                measured["identity"]["requirements"] = {
+                    "path": authority["path"], "sha256": authority["sha256"],
+                    "source": authority["source"]}
+            status, detail = evaluate_operator(binding["operator"], measured, authority)
+            result["obligations"].append({"id": oid, "metric": obligation.get("metric"),
+                "operator": binding["operator"], "status": status, "detail": detail,
+                "measurement": measured, "authority": authority})
+        except (MetricRefusal, OSError, ValueError, KeyError, TypeError) as exc:
+            result["obligations"].append({"id": oid, "metric": obligation.get("metric"),
+                "operator": binding["operator"], "status": "NOT_MEASURED",
+                "reason": getattr(exc, "code", "METRIC_ACCEPTANCE_REFUSED"),
+                "detail": str(exc)})
+    statuses = [item["status"] for item in result["obligations"]]
+    if "FAIL" in statuses:
         result.update(status="FAIL", reason="MEASURED_METRIC_FAILURE")
     else:
         result["reason"] = "METRIC_BINDING_INCOMPLETE_OR_NOT_CURRENT"
