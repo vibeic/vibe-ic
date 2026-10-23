@@ -618,13 +618,17 @@ def run_ir(project: Path, image: str, pdk_root: Path, pdk: str, *, routed_def: P
            netlist: Path, sdc: Path, spef: Path, budget_pct: Optional[float],
            budget_source: str, lane: str = '24', decap_f: Optional[float] = None,
            decap_source: Optional[str] = None,
-           supply_nets: Optional[Dict[str, List[str]]] = None) -> Dict[str, Any]:
+           supply_nets: Optional[Dict[str, List[str]]] = None,
+           expected_current_records: Optional[Dict[str, Dict[str, str]]] = None
+           ) -> Dict[str, Any]:
     """Bridge the shipped route, run IRDropReport + Vibeic.IRDropChecker, then
     the cross-check.  Returns the record `judge_ir` reads.
 
     `decap_f` (farads, with its declared `decap_source`) is the on-die decap
     `Vibeic.TransientIR` models; the step converts it to the session's unit,
     reads it back and measures its effect.  None: quasi-static."""
+    # `None` preserves unbound direct callers.  A mapping binds the caller's
+    # already-validated current selection; `{}` explicitly binds its absence.
     overlay = ({key: (value, 'current routed DEF SPECIALNETS USE POWER/GROUND')
                 for key, value in supply_nets.items()} if supply_nets is not None else None)
     configs = resolve_step_configs(project, image, pdk, list(IR_STEPS), pdk_root=pdk_root,
@@ -642,6 +646,26 @@ def run_ir(project: Path, image: str, pdk_root: Path, pdk: str, *, routed_def: P
     cfg = _config(ir_cfg)
     current_inputs = _current_stapostpnr_ir_inputs(
         project, image, pdk_root, pdk, cfg)
+    if expected_current_records is not None:
+        required = {'odb', 'def', 'netlist', 'sdc', 'spef', 'sta_state',
+                    'sta_receipt', 'sta_config', 'step23_record'}
+        if not isinstance(expected_current_records, dict):
+            raise Refusal('LL_IR_EXPECTED_CURRENT_RECORDS_INVALID',
+                          f'expected a mapping, got {type(expected_current_records).__name__}')
+        if expected_current_records:
+            if set(expected_current_records) != required or any(
+                    not isinstance(row, dict)
+                    or set(row) != {'path', 'sha256'}
+                    or not isinstance(row['path'], str) or not row['path']
+                    or not isinstance(row['sha256'], str)
+                    or not re.fullmatch(r'[0-9a-f]{64}', row['sha256'])
+                    for row in expected_current_records.values()):
+                raise Refusal('LL_IR_EXPECTED_CURRENT_RECORDS_INVALID',
+                              'current selection records are incomplete or malformed')
+        actual = current_inputs['records'] if current_inputs else {}
+        if expected_current_records != actual:
+            raise Refusal('LL_IR_CURRENT_SELECTION_CHANGED',
+                          f'expected={expected_current_records} actual={actual}')
     input_mode = 'current_stapostpnr_odb' if current_inputs else 'legacy_def_bridge'
     if current_inputs:
         selected = current_inputs['views']

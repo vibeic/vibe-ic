@@ -138,10 +138,12 @@ def test_default_step24_without_current_owner_keeps_legacy_spef(tmp_path, monkey
 
 def _step24_record_selection(project, pdk_root, monkeypatch):
     selected = {}
+    binding = {}
 
     def capture(_project, _image, _root, _pdk, **kwargs):
         selected.update({name: str(Path(kwargs[name]).resolve())
                          for name in ('routed_def', 'netlist', 'sdc', 'spef')})
+        binding.update(kwargs['expected_current_records'])
         raise Refusal('CONTROL_D57_ALL_VIEWS_SELECTED', json.dumps(selected, sort_keys=True))
 
     monkeypatch.setattr(runner, '_librelane_step_ctx',
@@ -156,16 +158,19 @@ def _step24_record_selection(project, pdk_root, monkeypatch):
         report = json.loads((project / 'reports/phase3/ir_drop_librelane.json').read_text())
     except Exception as exc:
         report = {'judgment': {'reasons': [f'escaped: {type(exc).__name__}: {exc}']}}
-    return selected, report, written
+    return selected, binding, report, written
 
 
 def test_step24_record_hands_all_exact_current_views_to_native_consumer(
         tmp_path, monkeypatch):
     project, pdk_root, paths, _ = _current_scene(tmp_path, monkeypatch)
-    selected, report, written = _step24_record_selection(project, pdk_root, monkeypatch)
+    selected, binding, report, written = _step24_record_selection(
+        project, pdk_root, monkeypatch)
     assert selected == {name: str(paths[key].resolve()) for name, key in (
         ('routed_def', 'def'), ('netlist', 'nl'), ('sdc', 'sdc'), ('spef', 'spef'))}
     assert 'CONTROL_D57_ALL_VIEWS_SELECTED' in report['judgment']['reasons'][0]
+    assert set(binding) == {'odb', 'def', 'netlist', 'sdc', 'spef', 'sta_state',
+                            'sta_receipt', 'sta_config', 'step23_record'}
     assert written == [str(project / 'reports/phase3/ir_drop_librelane.json')]
     assert not (project / 'phase3/stage3/pnr/neutral.def').exists()
 
@@ -191,8 +196,9 @@ def test_step24_record_refuses_invalid_current_view_without_legacy_fallback(
     else:
         monkeypatch.setattr(current, 'tool_subject', lambda *_a, **_k: (_ for _ in ()).throw(
             current.Refusal('CURRENT_DEF_FOREIGN_PATH')))
-    selected, report, _ = _step24_record_selection(project, pdk_root, monkeypatch)
+    selected, binding, report, _ = _step24_record_selection(project, pdk_root, monkeypatch)
     assert selected == {}
+    assert binding == {}
     assert reason in report['judgment']['reasons'][0]
     assert all(path.is_file() for path in legacy.values())
 
@@ -209,8 +215,9 @@ def test_step24_record_without_current_owner_keeps_all_legacy_views(
     }
     pdk_root = tmp_path / 'pdk'
     (pdk_root / 'neutral').mkdir(parents=True)
-    selected, report, _ = _step24_record_selection(project, pdk_root, monkeypatch)
+    selected, binding, report, _ = _step24_record_selection(project, pdk_root, monkeypatch)
     assert selected == {name: str(path.resolve()) for name, path in paths.items()}
+    assert binding == {}
     assert 'CONTROL_D57_ALL_VIEWS_SELECTED' in report['judgment']['reasons'][0]
 
 
@@ -361,6 +368,101 @@ def test_run_ir_hands_exact_current_odb_to_existing_state_builder(tmp_path, monk
     assert seen["nl"] == paths["nl"]
     assert seen["sdc"] == paths["sdc"]
     assert seen["spef"] == {"max_*": paths["spef"]}
+
+
+def _run_ir_with_selection_binding(project, pdk_root, direct, actual, expected,
+                                   monkeypatch):
+    configs = {step: _write(project / 'bound-cfg' / (step + '.json'), json.dumps({
+        'DESIGN_NAME': 'neutral', 'DEFAULT_CORNER': 'max_ss',
+        'TECH_LEFS': {'max_*': '/pdk/neutral/tech.lef'},
+        'VDD_NETS': ['P'], 'GND_NETS': ['G'],
+        'meta': {'step': step, 'inputs': ['odb', 'def', 'nl', 'sdc', 'spef']}}))
+        for step in ir.IR_STEPS}
+    monkeypatch.setattr(ir, 'resolve_step_configs', lambda *_a, **_k: configs)
+    monkeypatch.setattr(ir, '_current_stapostpnr_ir_inputs',
+                        lambda *_a, **_k: actual)
+    reached = {}
+
+    def capture(_project, _image, _config, views, *_args, **_kwargs):
+        reached.update(views)
+        raise Refusal('CONTROL_STOP_BEFORE_NATIVE', 'selection binding accepted')
+
+    monkeypatch.setattr(ir, 'state_from_direct', capture)
+    with pytest.raises(Refusal) as caught:
+        ir.run_ir(project, IMAGE, pdk_root, 'neutral',
+                  routed_def=direct['def'], netlist=direct['nl'],
+                  sdc=direct['sdc'], spef=direct['spef'],
+                  budget_pct=5.0, budget_source='source control',
+                  expected_current_records=expected)
+    return str(caught.value), reached
+
+
+def test_run_ir_accepts_only_the_record_callers_exact_current_selection(
+        tmp_path, monkeypatch):
+    project, pdk_root, paths, _ = _current_scene(tmp_path, monkeypatch)
+    selected = ir._current_stapostpnr_ir_inputs(
+        project, IMAGE, pdk_root, 'neutral', {'DESIGN_NAME': 'neutral'})
+    reason, reached = _run_ir_with_selection_binding(
+        project, pdk_root, {'def': paths['def'], 'nl': paths['nl'],
+                            'sdc': paths['sdc'], 'spef': paths['spef']},
+        selected, selected['records'], monkeypatch)
+    assert 'CONTROL_STOP_BEFORE_NATIVE' in reason
+    assert reached['odb'] == paths['odb']
+    assert reached['def'] == paths['def']
+
+
+@pytest.mark.parametrize('case,reason', [
+    ('path_stable_hash_change', 'LL_IR_CURRENT_SELECTION_CHANGED'),
+    ('state_config_swap', 'LL_IR_CURRENT_SELECTION_CHANGED'),
+    ('owner_appeared', 'LL_IR_CURRENT_SELECTION_CHANGED'),
+    ('owner_disappeared', 'LL_IR_CURRENT_SELECTION_CHANGED'),
+    ('missing_required_record', 'LL_IR_EXPECTED_CURRENT_RECORDS_INVALID'),
+    ('malformed_record', 'LL_IR_EXPECTED_CURRENT_RECORDS_INVALID'),
+])
+def test_run_ir_refuses_split_current_selection_before_state_or_native(
+        tmp_path, monkeypatch, case, reason):
+    project, pdk_root, paths, _ = _current_scene(tmp_path, monkeypatch)
+    first = ir._current_stapostpnr_ir_inputs(
+        project, IMAGE, pdk_root, 'neutral', {'DESIGN_NAME': 'neutral'})
+    actual = {**first, 'records': json.loads(json.dumps(first['records']))}
+    expected = json.loads(json.dumps(first['records']))
+    if case == 'path_stable_hash_change':
+        actual['records']['def']['sha256'] = '1' * 64
+    elif case == 'state_config_swap':
+        actual['records']['sta_state'] = {'path': 'phase3/other/state_out.json',
+                                          'sha256': '2' * 64}
+        actual['records']['sta_config'] = {'path': 'phase3/other/config.json',
+                                           'sha256': '3' * 64}
+    elif case == 'owner_appeared':
+        expected = {}
+    elif case == 'owner_disappeared':
+        actual = None
+    elif case == 'missing_required_record':
+        expected.pop('sta_receipt')
+    else:
+        expected['sta_config'] = {'path': '', 'sha256': 'not-a-digest'}
+    message, reached = _run_ir_with_selection_binding(
+        project, pdk_root, {'def': paths['def'], 'nl': paths['nl'],
+                            'sdc': paths['sdc'], 'spef': paths['spef']},
+        actual, expected, monkeypatch)
+    assert reason in message
+    assert reached == {}
+
+
+def test_run_ir_explicit_absent_owner_keeps_legacy_explicit_views(
+        tmp_path, monkeypatch):
+    project = tmp_path / 'bound-legacy'
+    pdk_root = tmp_path / 'pdk'
+    (pdk_root / 'neutral').mkdir(parents=True)
+    direct = {'def': _write(project / 'direct/neutral.def', 'legacy def\n'),
+              'nl': _write(project / 'direct/neutral.v', 'module neutral; endmodule\n'),
+              'sdc': _write(project / 'direct/neutral.sdc', 'legacy sdc\n'),
+              'spef': _write(project / 'direct/neutral.spef', '*SPEF legacy\n')}
+    reason, reached = _run_ir_with_selection_binding(
+        project, pdk_root, direct, None, {}, monkeypatch)
+    assert 'CONTROL_STOP_BEFORE_NATIVE' in reason
+    assert reached == {'def': direct['def'], 'nl': direct['nl'],
+                       'sdc': direct['sdc'], 'spef': {'max_*': direct['spef']}}
 
 
 def test_run_ir_without_current_state_keeps_existing_def_bridge(tmp_path, monkeypatch):
