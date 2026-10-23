@@ -1,9 +1,10 @@
 """Flow 109 A05: expert-bound sizing/netlist plus native ngspice OP.
 
 Supported subset: one or more source-approved blocks whose current A04 IR
-already contains every approved device geometry, a self-contained local model
-library qualified by the current A02 receipt, one explicit corner, and numeric
-operating-point thresholds.  Unsupported or unbound forms fail closed.
+already contains every approved device geometry, model libraries and their
+hash-bound transitive closure qualified by the current A02 receipt, explicit
+per-library corners, and numeric operating-point thresholds. Unsupported or
+unbound forms fail closed.
 """
 from __future__ import annotations
 
@@ -114,8 +115,19 @@ def _a02_models(project, receipt):
             # executed copy would sever the source model identity.
             raise AdmissionRefusal('A05_A02_MODEL_PATH_UNBOUND', smoke['device'])
         path = _bound(project, record, 'A05_A02_MODEL_STALE')
-        out[(str(path), smoke['corner'])] = {'device': smoke['device'],
-                                             'path': path, 'record': record}
+        closure = (smoke.get('model_closure') or {}).get('files')
+        if closure is None:
+            closure = [record]
+        if (not isinstance(closure, list) or not closure
+                or any(not isinstance(item, dict) for item in closure)):
+            raise AdmissionRefusal('A05_A02_MODEL_CLOSURE_UNBOUND', smoke['device'])
+        closure_paths = []
+        for item in closure:
+            closure_paths.append((_bound(project, item, 'A05_A02_MODEL_STALE'), item))
+        out[(str(path), smoke['corner'])] = {
+            'device': smoke['device'], 'path': path, 'record': record,
+            'closure': closure_paths,
+        }
     if not out:
         raise AdmissionRefusal('A05_A02_MODEL_SCOPE_UNBOUND', 'empty')
     return out
@@ -146,9 +158,19 @@ def _requirements(project, manifest):
         name = row.get('block') if isinstance(row, dict) else None
         targets = row.get('operating_point_targets') if isinstance(row, dict) else None
         sizes = row.get('device_sizes') if isinstance(row, dict) else None
+        corners = row.get('corners') if isinstance(row, dict) else None
+        corner = row.get('corner') if isinstance(row, dict) else None
+        corner_set_valid = (
+            isinstance(corner, str) and _IDENT.fullmatch(corner) and corners is None
+        ) or (
+            corner is None and isinstance(corners, list) and corners
+            and len(corners) == len(set(corners))
+            and all(isinstance(value, str) and _IDENT.fullmatch(value)
+                    for value in corners)
+        )
         if (not isinstance(name, str) or not _IDENT.fullmatch(name)
                 or name in indexed or row.get('required_analysis') != 'op'
-                or not isinstance(row.get('corner'), str) or not _IDENT.fullmatch(row['corner'])
+                or not corner_set_valid
                 or not isinstance(sizes, list) or not sizes
                 or not isinstance(targets, dict) or not targets):
             raise AdmissionRefusal('A05_REQUIREMENT_ROW_INVALID', str(name))
@@ -173,6 +195,11 @@ def _requirements(project, manifest):
     return path, body, indexed
 
 
+def _row_corners(row):
+    """Backward-compatible single-corner rows plus real multi-library decks."""
+    return [row['corner']] if row.get('corner') is not None else list(row['corners'])
+
+
 def prepare(project, context):
     context = validate_execution_context(context)
     if context['requested_step'] != 'A05' or context['native_step_id'] != 'flow109.A05':
@@ -193,7 +220,9 @@ def prepare(project, context):
     pdk_path = _bound(project, manifest.get('pdk'))
     pdk = _read(pdk_path)
     if (pdk.get('schema') != SCHEMA or not isinstance(pdk.get('family'), str)
-            or not pdk.get('family') or pdk.get('model_dependency_policy') != 'self_contained_local'):
+            or not pdk.get('family')
+            or pdk.get('model_dependency_policy') not in (
+                'self_contained_local', 'a02_bound_transitive')):
         raise AdmissionRefusal('A05_PDK_DECLARATION_INVALID', str(pdk_path))
     requirements_path, requirements, rows = _requirements(project, manifest)
     a02_path, a02 = _current_receipt(project, manifest.get('a02_receipt'), step='A02',
@@ -212,10 +241,13 @@ def prepare(project, context):
               (manifest_path, pdk_path, requirements_path, a02_path, a04_path)}
     for model in models.values():
         inputs[str(model['path'])] = model['record']['sha256']
+        for dependency, dependency_record in model['closure']:
+            inputs[str(dependency)] = dependency_record['sha256']
     for name, row in rows.items():
-        if not any(corner == row['corner'] for _model_path, corner in models):
-            raise AdmissionRefusal('A05_MODEL_CORNER_NOT_QUALIFIED',
-                                   name + ':' + row['corner'])
+        for corner in _row_corners(row):
+            if not any(qualified == corner for _model_path, qualified in models):
+                raise AdmissionRefusal('A05_MODEL_CORNER_NOT_QUALIFIED',
+                                       name + ':' + corner)
         spec = _bound(project, row['spec'])
         topology = _bound(project, a04_blocks[name].get('topology'), 'A05_A04_TOPOLOGY_STALE')
         ir = _read(topology, 'A05_A04_TOPOLOGY_INVALID')
@@ -223,7 +255,7 @@ def prepare(project, context):
             raise AdmissionRefusal('A05_EXPERT_SIZING_MISMATCH', name)
         inputs[str(spec)] = _sha(spec)
         inputs[str(topology)] = _sha(topology)
-    corners = sorted({row['corner'] for row in rows.values()})
+    corners = sorted({corner for row in rows.values() for corner in _row_corners(row)})
     for identity in uses:
         if (identity['config'] != _record(project, manifest_path)
                 or identity['pdk'] != _record(project, pdk_path)
@@ -253,7 +285,7 @@ def _python(project, context, prepared, argv, log):
     return {'argv': argv, 'returncode': completed.returncode, 'log': _record(project, log)}
 
 
-def _model_loads(project, sp, tb, expected_corner, models):
+def _model_loads(project, sp, tb, expected_corners, models):
     text = sp.read_text(encoding='utf-8')
     tb_text = tb.read_text(encoding='utf-8')
     if not re.search(r'(?im)^\s*op\s*$', tb_text):
@@ -263,7 +295,7 @@ def _model_loads(project, sp, tb, expected_corner, models):
         raise AdmissionRefusal('A05_MODEL_LOAD_ABSENT', str(sp))
     resolved = []
     for raw, corner in loads:
-        if corner != expected_corner:
+        if corner not in expected_corners:
             raise AdmissionRefusal('A05_MODEL_CORNER_MISMATCH', corner)
         candidate = Path(raw)
         if not candidate.is_absolute():
@@ -273,22 +305,20 @@ def _model_loads(project, sp, tb, expected_corner, models):
         key = (str(candidate), corner)
         if key not in models or _sha(candidate) != models[key]['record']['sha256']:
             raise AdmissionRefusal('A05_MODEL_NOT_QUALIFIED_BY_A02', str(candidate))
-        model_text = candidate.read_text(encoding='utf-8', errors='replace')
-        if re.search(r'(?im)^\s*\.inc(?:lude)?\b', model_text) or any(
-                len(line.split()) >= 3 for line in model_text.splitlines()
-                if re.match(r'^\s*\.lib\b', line, re.I)):
-            raise AdmissionRefusal('A05_TRANSITIVE_MODEL_DEPENDENCY_UNSUPPORTED', str(candidate))
-        starts = re.findall(r'(?im)^\s*\.lib\s+(\S+)\s*$', model_text)
-        ends = re.findall(r'(?im)^\s*\.endl\s+(\S+)\s*$', model_text)
-        if starts != ends or starts.count(corner) != 1:
-            raise AdmissionRefusal('A05_MODEL_CORNER_ABSENT', str(candidate) + ':' + corner)
-        resolved.append(candidate)
+        # A02 has already parsed, hash-bound and natively loaded the exact
+        # selected section plus its transitive include closure.  Reuse that
+        # closure instead of imposing the obsolete self-contained-file rule,
+        # which rejects real foundry libraries such as IHP SG13G2.
+        for dependency, record in models[key]['closure']:
+            if _sha(dependency) != record['sha256']:
+                raise AdmissionRefusal('A05_A02_MODEL_STALE', str(dependency))
+            resolved.append(dependency)
     return sorted(set(resolved))
 
 
 def _native(project, context, prepared, attempt, block, row, sp, tb, models):
     _before(project, context, prepared)
-    libraries = _model_loads(project, sp, tb, row['corner'], models)
+    libraries = _model_loads(project, sp, tb, set(_row_corners(row)), models)
     run_root = attempt / 'run'
     copies = []
     for source in [sp, tb, *libraries]:
