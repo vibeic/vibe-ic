@@ -207,35 +207,106 @@ def _pdk(liberty):
                                     metal_prefix='met', tapcell_master='cells__filltie')
 
 
+def _current_power_scene(tmp_path):
+    """Use the existing current-owner fixture, retaining all three power corners.
+
+    Source fixtures only: this extends the native receipt shape rather than
+    reviving the superseded State-only power adoption path.
+    """
+    from test_default_current_power import project, seal
+    project_root, folder, library = project(tmp_path)
+    config_path = project_root / 'phase3/librelane/22-config/OpenROAD.STAPostPNR.json'
+    config = json.loads(config_path.read_text())
+    names = ('nom_typ', 'min_typ', 'max_typ')
+    config['STA_CORNERS'] = list(names)
+    put(config_path, config)
+    put(folder / 'config.json', config)
+    for name, original in zip(names, CORNERS):
+        write(folder / name / 'sta.log',
+              f"SOURCE_FIXTURE_ONLY\nReading cell library for the '{name}' corner at '/pdk/neutral/neutral.lib'\n")
+        internal, total = TOTALS[original]
+        write(folder / name / 'power.rpt',
+              POWER_RPT.format(corner=name, internal=internal, total=total))
+    fingerprint = json.loads((folder / 'input_fingerprint.json').read_text())
+    fingerprint['config'] = contract.digest(config_path)
+    seal(folder, fingerprint)
+    return project_root, folder, library
+
+
 def test_step_33_on_librelane_publishes_the_worst_corner_report_unedited(tmp_path):
-    runner, pdk = _pdk('/p/cells__tt_025C_5v00.lib')
-    folder, _ = _stapostpnr(tmp_path, metric_total=0.5)
-    rpt3 = runner._pl.reports_phase3_dir(tmp_path)
-    rpt3.mkdir(parents=True, exist_ok=True)
+    runner, _ = _pdk('/unused.lib')
+    project, folder, library = _current_power_scene(tmp_path)
+    rpt3 = runner._pl.reports_phase3_dir(project)
     written, notes = [], []
-    runner._step33_tool_arm(tmp_path, 'spm', pdk, 'librelane', rpt3 / 'power.rpt', False, written, notes)
+    runner._step33_tool_arm(project, 'neutral', _pdk(str(library))[1], 'librelane',
+                            rpt3 / 'power.rpt', False, written, notes)
     record = json.loads((rpt3 / 'power.json').read_text())
     assert record['total_power_w'] == pytest.approx(2.646044e-02), notes
     assert record['power_basis'] == 'POST_ROUTE_SPEF'
     assert record['activity']['basis'] == power.BASIS_VECTORLESS
-    body = (folder / 'max_ff_n40C_5v50/power.rpt').read_text()
-    assert (rpt3 / 'power.rpt').read_text().endswith(body)
+    assert (folder / 'max_typ/power.rpt').read_text() in (rpt3 / 'power.rpt').read_text()
+    import _opensta_current as current
+    current.power_binding(project)
+    receipt = json.loads((rpt3 / 'power.current.json').read_text())
+    assert receipt['tool_corner'] == 'max_typ'
+    assert receipt['source_report']['sha256'] == contract.digest(folder / 'max_typ/power.rpt')
     arms = json.loads((rpt3 / 'power_arms.json').read_text())
-    assert arms['canonical'] == 'librelane' and len(arms['tool_corners']) == 3
+    assert arms['canonical'] == 'current_opensta'
+    assert arms['current_receipt_sha256'] == contract.digest(rpt3 / 'power.current.json')
 
 
-def test_step_33_dual_keeps_the_direct_record_and_adds_the_arms(tmp_path):
+def test_step_33_retires_an_unbound_direct_record_even_with_a_legacy_dual_flag(tmp_path):
     runner, pdk = _pdk('/p/cells__tt_025C_5v00.lib')
     _stapostpnr(tmp_path)
     rpt3 = runner._pl.reports_phase3_dir(tmp_path)
     put(rpt3 / 'power.json', {'total_power_w': 0.0215, 'activity': {'basis': 'VECTORLESS'}})
     write(rpt3 / 'power.rpt', 'Total 1.65e-02 4.94e-03 1.58e-06 2.15e-02 100.0%\n')
-    runner._step33_tool_arm(tmp_path, 'spm', pdk, 'dual', rpt3 / 'power.rpt', True, [], [])
-    assert json.loads((rpt3 / 'power.json').read_text())['total_power_w'] == 0.0215
-    assert json.loads((rpt3 / 'power_arms.json').read_text())['mode'] == 'dual'
+    notes = []
+    runner._step33_tool_arm(tmp_path, 'spm', pdk, 'dual', rpt3 / 'power.rpt', True, [], notes)
+    record = json.loads((rpt3 / 'power.json').read_text())
+    assert record['power_measurement'] == 'NOT_MEASURED'
+    assert record['verdict'] == 'NOT_MEASURED'
+    assert 'total_power_w' not in record
+    assert not (rpt3 / 'power_arms.json').exists()
+    assert any('current power NOT_MEASURED' in note for note in notes)
 
 
 # ---------------------------------------------------------------- step 29 ---
+
+def test_native_sdf_exports_bind_the_actual_timed_netlist_and_all_corners(tmp_path):
+    folder, _ = _stapostpnr(tmp_path)
+    state = json.loads((folder / 'state_out.json').read_text())
+    result = postroute.bind_stapostpnr_sdfs(folder, state,
+                                          expected_netlist=Path(state['nl']))
+    assert set(result['exports']) == set(CORNERS)
+    assert result['netlist_sha256'] == contract.digest(Path(state['nl']))
+    assert all(row['design'] == 'chip_top' and row['delay_record_count'] == 1
+               for row in result['exports'].values())
+
+
+@pytest.mark.parametrize('damage', ['stale_bytes', 'wrong_design', 'truncated', 'no_delays'])
+def test_native_sdf_export_damage_refuses_before_simulator(tmp_path, damage):
+    folder, _ = _stapostpnr(tmp_path)
+    state = json.loads((folder / 'state_out.json').read_text())
+    path = Path(state['sdf'][CORNERS[0]])
+    text = path.read_text()
+    if damage == 'wrong_design':
+        text = text.replace('(DESIGN "chip_top")', '(DESIGN "other_top")')
+    elif damage == 'truncated':
+        text = text[:-3]
+    elif damage == 'no_delays':
+        text = text.replace('INTERCONNECT clk u_core.CLK (0.001:0.001:0.001)', 'ABSENT')
+    else:
+        text += '\n'
+    path.write_text(text)
+    if damage != 'stale_bytes':
+        # A freshly hashed malformed export still cannot constitute an SDF.
+        receipt_path = folder / 'vibeic_receipt.json'
+        receipt = json.loads(receipt_path.read_text())
+        receipt['sha256'][str(path.relative_to(folder))] = contract.digest(path)
+        put(receipt_path, receipt)
+    with pytest.raises(contract.Refusal):
+        postroute.bind_stapostpnr_sdfs(folder, state)
 
 TB = '''`timescale 1ns/1ps
 module tb_case;
@@ -341,9 +412,11 @@ def _gls_edge(declared, transcripts):
         if 'librelane.steps run --help' in text or 'bash' in cmd:
             return SimpleNamespace(returncode=0, stdout='', stderr='')
         if 'from librelane.flows.chip import Chip' in text:
-            output = Path(cmd[-4])
-            for step in json.loads(Path(cmd[-5]).read_text()):
-                design = json.loads(Path(cmd[-6]).read_text())
+            script_index = next(i for i, arg in enumerate(cmd)
+                                if 'from librelane.flows.chip import Chip' in str(arg))
+            design = json.loads(Path(cmd[script_index + 1]).read_text())
+            output = Path(cmd[script_index + 3])
+            for step in json.loads(Path(cmd[script_index + 2]).read_text()):
                 put(output / f'{step}.json', {'meta': {'step': step},
                                               'CELL_VERILOG_MODELS': declared[:1],
                                               'PAD_VERILOG_MODELS': declared[1:],
@@ -620,25 +693,32 @@ def test_the_gate_level_sim_step_ships_in_the_plugin_the_contract_mounts():
     assert not imported & {'re', 'sdf_gate_sim'}
 
 
-def test_the_post_route_power_deck_propagates_the_clock_the_routed_netlist_has(tmp_path, monkeypatch):
-    """MEASURED on spm: the direct deck on STAPostPNR's own SPEF read 0.46% low
-    with ideal clocks and matched the tool's report to the last digit once the
-    clock was propagated. A pre-PnR estimate has no clock tree to propagate."""
-    runner, pdk = _pdk(str(tmp_path / 'cells__tt_025C_5v00.lib'))
-    pnr = runner._pl.pnr_dir(tmp_path)
-    write(pnr / 'spm_pnr.v', CHIP_TOP)
-    write(pnr / 'constraint.sdc', 'create_clock -period 24 [get_ports clk]\n')
-    write(runner._pl.extracted_dir(tmp_path) / 'spm.spef', '*SPEF\n')
-    write(runner._pl.synth_dir(tmp_path) / 'spm_synth.v', CHIP_TOP)
+def test_post_route_power_keeps_native_clock_analysis_and_pre_pnr_keeps_ideal_clocks(tmp_path, monkeypatch):
+    """Post-route power adopts the current native STAPostPNR session.
+
+    A second standalone post-route deck would lose that session's clock-tree
+    analysis. The pre-PnR estimate still has no tree to propagate.
+    """
+    runner, _ = _pdk('/unused.lib')
+    project, folder, library = _current_power_scene(tmp_path)
+    rpt = runner._pl.reports_phase3_dir(project) / 'power.rpt'
+    pdk = _pdk(str(library))[1]
+    monkeypatch.setattr(runner, '_docker_exec',
+                        lambda *a, **k: pytest.fail('parallel post-route power session ran'))
+    assert runner._emit_power_report(project, 'neutral', pdk, 'c', rpt, [], basis='post_pnr')
+    assert (folder / 'max_typ/power.rpt').read_text() in rpt.read_text()
+    import _opensta_current as current
+    current.power_binding(project)
+    assert not (rpt.parent / 'power_neutral.tcl').exists()
+    write(runner._pl.synth_dir(project) / 'neutral_synth.v',
+          'module neutral(input x, y, output z); assign z = x & y; endmodule\n')
+    write(runner._pl.pnr_dir(project) / 'constraint.sdc',
+          'create_clock -period 24 [get_ports x]\n')
     monkeypatch.setattr(runner, '_docker_exec', lambda *a, **k: (1, '', ''))
-    rpt = runner._pl.reports_phase3_dir(tmp_path) / 'power.rpt'
-    rpt.parent.mkdir(parents=True, exist_ok=True)
-    for basis, propagated in (('post_pnr', True), ('pre_pnr', False)):
-        runner._emit_power_report(tmp_path, 'spm', pdk, 'c', rpt, [], basis=basis)
-        deck = (rpt.parent / 'power_spm.tcl').read_text()
-        assert ('set_propagated_clock [all_clocks]' in deck) is propagated, basis
-        if propagated:
-            assert deck.index('read_spef') < deck.index('set_propagated_clock')
+    runner._emit_power_report(project, 'neutral', pdk, 'c', rpt, [], basis='pre_pnr')
+    deck = (rpt.parent / 'power_neutral.tcl').read_text()
+    assert 'set_propagated_clock [all_clocks]' not in deck
+    assert 'read_spef' not in deck
 
 
 STA_PATH = '''Startpoint: u_core/_417_ (rising edge-triggered flip-flop clocked by clk)
@@ -946,6 +1026,10 @@ def test_default_gls_manifest_uses_the_compilers_execution_namespace(
               '  (DELAY (ABSOLUTE (INTERCONNECT x u_pad_x.PAD (0.1:0.1:0.1)))))\n'
               ' (CELL (CELLTYPE "cells__in_c") (INSTANCE u_pad_x)\n'
               '  (DELAY (ABSOLUTE (IOPATH PAD Y (0.1:0.1:0.1) (0.1:0.1:0.1)))))\n)\n')
+    # Fixture construction ends here; later missing-model/include controls
+    # still tamper only after the valid producer has been sealed.
+    from test_default_current_power import seal
+    seal(state_path.parent, json.loads((state_path.parent / 'input_fingerprint.json').read_text()))
     if case == 'case_fail':
         bench = project / 'phase2/stage1/sim/tb_case.v'
         bench.write_text(bench.read_text().replace('pass=1/1', 'pass=0/1'))
@@ -1238,14 +1322,14 @@ def _current_output_deadline_fixture(project, root, deadline):
               f' {deadline:.6f} data required time\n 1.000000 data arrival time\n 1.000000 slack (MET)\n')
     put(folder / 'state_out.json', state)
     put(folder / 'config.json', {'meta': {'step': 'OpenROAD.STAPostPNR'},
-         'STA_CORNERS': list(CORNERS), 'CELL_LIBS': libs})
-    bound = {str(f.relative_to(folder)): contract.digest(f) for f in folder.rglob('*')
-             if f.is_file() and f.name != 'vibeic_receipt.json'}
-    put(folder / 'vibeic_receipt.json', {'sha256': bound, 'input': {
+         'DESIGN_NAME': 'public_surface', 'STA_CORNERS': list(CORNERS), 'CELL_LIBS': libs})
+    fingerprint = {
         'step': 'OpenROAD.STAPostPNR',
         'state_files': {str(Path(f)): contract.digest(Path(f))
                         for f in [*(state[v] for v in ('nl', 'sdc', 'odb', 'def')), *state['spef'].values()]},
-        'liberty_files': {f: contract.digest(Path(f)) for group in libs.values() for f in group}}})
+        'liberty_files': {f: contract.digest(Path(f)) for group in libs.values() for f in group}}
+    from test_default_current_power import seal
+    seal(folder, fingerprint)
     put(project / postroute.STEP23_RECORD, {'mode': 'librelane',
          'sta_state': str(folder / 'state_out.json'),
          'sta_state_sha256': contract.digest(folder / 'state_out.json')})
@@ -1323,7 +1407,20 @@ def test_default_gls_observes_the_current_output_deadline(
         return SimpleNamespace(returncode=0, stdout='SOURCE_FIXTURE_ONLY: actual Icarus completed\n', stderr='')
     monkeypatch.setattr(contract, 'run_container', process_edge)
     result = runner._default_pnr_rows(project, 'public_serial_product', cfg, 'SOURCE_FIXTURE_ONLY', ['29'])
-    manifest = json.loads((project / 'phase3/librelane/29-config/gls/gls_manifest.json').read_text())
+    manifest_path = project / 'phase3/librelane/29-config/gls/gls_manifest.json'
+    if case in ('missing_corner', 'changed_corner'):
+        # The bound native producer is checked before compiling a GLS manifest.
+        # Tampering still refuses, at the earlier owning boundary.
+        assert result.status == 'FAIL', result.detail
+        assert 'LL_STEP_OUTPUT_UNBOUND' in result.detail
+        assert 'max.rpt' in result.detail
+        assert native == [] and not manifest_path.exists()
+        assert bench.read_bytes() == original_bytes
+        gate = json.loads((project / 'reports/phase2/gates/post_layout_sim.json').read_text())
+        assert gate['verdict'] in ('FAIL', 'ERROR')
+        assert versions.latest_pass(project, '29') is None
+        return
+    manifest = json.loads(manifest_path.read_text())
     assert bench.read_bytes() == original_bytes
     assert original_plan['observation']['sample_offset_ns'] == 1
     assert original_plan['framing']['settled_latency'] == 1
