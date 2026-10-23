@@ -21,6 +21,39 @@ from programs.tests._analog_producer_fixture import block, make_project, stage_c
 from programs.tests._route_fixture import stage_owner_route
 
 
+_RUNTIME_TREE_ENVS = (
+    "VIBEIC_RETAINED_PLUGIN_ROOT", "VIBEIC_RETAINED_PLUGIN_MANIFEST")
+
+
+def _runtime_tree_path(value) -> bool:
+    return ".vibeic/runtime-program-trees/" in str(value or "").replace("\\", "/")
+
+
+@pytest.fixture(autouse=True)
+def isolated_runtime_program_imports():
+    """A prior in-process front door cannot choose this test's modules.
+
+    Backend entry controls in this module intentionally call ``main`` and
+    activate a project-retained program tree.  That invocation-local path and
+    its imported modules must not survive into the next independent project.
+    """
+    def reset():
+        sys.path[:] = [entry for entry in sys.path
+                       if not _runtime_tree_path(entry)]
+        programs = str(PROGRAMS)
+        sys.path[:] = [entry for entry in sys.path if str(entry) != programs]
+        sys.path.insert(0, programs)
+        for name, module in list(sys.modules.items()):
+            if _runtime_tree_path(getattr(module, "__file__", "")):
+                sys.modules.pop(name, None)
+        for name in _RUNTIME_TREE_ENVS:
+            os.environ.pop(name, None)
+
+    reset()
+    yield
+    reset()
+
+
 def _project(root: Path, names=("alpha", "beta")) -> Path:
     blocks = [block(name, "amplifier", specs=[{
         "name": "vout", "target": 1.0, "units": "V", "source": "doc_alpha.md"}])

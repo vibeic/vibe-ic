@@ -263,8 +263,9 @@ def test_final_native_window_reaches_real_missing_input_refusal_without_generic_
     assert _delivery_route.admit(tmp_path, "ic") is None
     manifest = tmp_path / "manifest.json"
     manifest.write_text(json.dumps({"features": profile()}))
-    monkeypatch.delenv(flow109.CONTEXT_ENV, raising=False)
-    monkeypatch.delenv(flow109.ATTEMPT_ENV, raising=False)
+    for name in (flow109.CONTEXT_ENV, flow109.ATTEMPT_ENV):
+        monkeypatch.setenv(name, __import__("os").environ.get(name, ""))
+        monkeypatch.delenv(name)
     monkeypatch.setattr(
         flow109_admission, "require_admission",
         lambda *a, **k: pytest.fail("generic qualification must remain unclaimed"))
@@ -299,8 +300,9 @@ def test_final_native_single_entry_reaches_own_missing_input_refusal(
     assert _delivery_route.admit(tmp_path, "ic") is None
     manifest = tmp_path / "manifest.json"
     manifest.write_text(json.dumps({"features": profile()}))
-    monkeypatch.delenv(flow109.CONTEXT_ENV, raising=False)
-    monkeypatch.delenv(flow109.ATTEMPT_ENV, raising=False)
+    for name in (flow109.CONTEXT_ENV, flow109.ATTEMPT_ENV):
+        monkeypatch.setenv(name, __import__("os").environ.get(name, ""))
+        monkeypatch.delenv(name)
     monkeypatch.setattr(
         flow109_admission, "require_admission",
         lambda *a, **k: pytest.fail("generic qualification must remain unclaimed"))

@@ -45,7 +45,12 @@ def resolver(monkeypatch):
     calls = []
 
     def run(cmd, **_kw):
-        design_json, requested, root = Path(cmd[-5]), Path(cmd[-4]), Path(cmd[-3])
+        boundary = cmd.index('--entrypoint')
+        assert cmd[boundary + 1] == 'python3'
+        assert cmd[boundary + 3] == '-c'
+        formal = cmd[boundary + 5:]
+        assert len(formal) == 6, formal
+        design_json, requested, root = map(Path, formal[:3])
         d = json.loads(design_json.read_text())
         calls.append(d)
         for s in json.loads(requested.read_text()):

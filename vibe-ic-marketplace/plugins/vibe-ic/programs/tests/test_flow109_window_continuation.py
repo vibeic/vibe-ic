@@ -158,6 +158,9 @@ def test_window_refuses_unimplemented_required_row_and_reverse():
 def test_front_door_preserves_one_row_and_translates_bounded_window(tmp_path, monkeypatch):
     import _delivery_route
     assert _delivery_route.admit(tmp_path, "ic") is None
+    for name in (flow109.CONTEXT_ENV, flow109.ATTEMPT_ENV):
+        monkeypatch.setenv(name, os.environ.get(name, ""))
+        monkeypatch.delenv(name)
     plan, context, registry = _window_fixture(tmp_path, monkeypatch)
     manifest = tmp_path / "manifest.json"
     manifest.write_text(json.dumps({
@@ -179,6 +182,9 @@ def test_source_owned_default_window_uses_existing_launch_admission_without_regi
         tmp_path, monkeypatch):
     import _delivery_route
     assert _delivery_route.admit(tmp_path, "ic") is None
+    for name in (flow109.CONTEXT_ENV, flow109.ATTEMPT_ENV):
+        monkeypatch.setenv(name, os.environ.get(name, ""))
+        monkeypatch.delenv(name)
     plan = flow109.resolve_plan(_profile())
     manifest = tmp_path / "manifest.json"
     manifest.write_text(json.dumps({"features": plan["features"]}))

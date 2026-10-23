@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -127,6 +128,12 @@ def test_registered_default_backend_owner_uses_existing_native_admission(
         tmp_path, monkeypatch):
     import _delivery_route
     assert _delivery_route.admit(tmp_path, 'ic') is None
+    # prepare_front_door installs these directly.  Record their absent state
+    # with monkeypatch so this test cannot leave D31 authority in a later
+    # ordinary producer running in the same pytest worker.
+    for name in (flow109.CONTEXT_ENV, flow109.ATTEMPT_ENV):
+        monkeypatch.setenv(name, os.environ.get(name, ''))
+        monkeypatch.delenv(name)
     features = next(p['features'] for p in flow109.load_registry()['reference_profiles']
                     if p['name'] == 'Small digital IC without DFT')
     plan = flow109.resolve_plan(features)

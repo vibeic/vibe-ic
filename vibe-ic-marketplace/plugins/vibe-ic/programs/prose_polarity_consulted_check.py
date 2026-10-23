@@ -125,6 +125,26 @@ _SEARCH_ATTRS = {"search", "findall", "finditer", "match", "fullmatch"}
 #: The count is printed on every run, clean or not.
 _EXEMPT_REASON_MIN = 80
 _NOT_PROSE: Dict[str, str] = {
+    "flow109_functional_activity::_derive_scenario_authority":
+        "FORMAL SDC, LIBERTY, AND VERILOG CONNECTIVITY GRAMMARS, NOT PROSE. "
+        "The reader accepts line-anchored create_clock, set_output_delay and "
+        "set_load commands, semicolon-terminated Liberty attributes, and named "
+        "Verilog instance port bindings. Exact cardinality, positive finite "
+        "values, rail agreement and output coverage are mandatory. Negated or "
+        "instructional sentences do not match these command productions. "
+        "Falsifier: test_flow109_functional_activity::"
+        "test_scenario_authority_rejects_prose_about_formal_commands exercises "
+        "a canonical positive plus denial and instruction prefixes.",
+    "sim_activity_dump::module_ports":
+        "FORMAL VERILOG MODULE AND PORT DECLARATION GRAMMAR, NOT PROSE. The "
+        "reader first strips line and block comments, then requires one named "
+        "module header, matching ordered port names, semicolon-terminated "
+        "input/output/inout declarations, constant packed bounds and exact "
+        "identifier syntax. A denial or instruction that merely discusses a "
+        "module supplies neither the module production nor its declarations. "
+        "Falsifier: test_flow109_functional_activity::"
+        "test_module_port_census_rejects_prose_about_formal_declarations drives "
+        "the canonical grammar and both prose forms through the actual parser.",
     "flow109_functional_activity::waveform_census":
         "Reads formal VCD header tokens, integer timestamps and anchored scalar "
         "0/1/X/Z value-change records, not natural-language requirements. Scalar "

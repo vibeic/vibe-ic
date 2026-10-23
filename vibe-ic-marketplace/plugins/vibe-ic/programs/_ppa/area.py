@@ -68,6 +68,7 @@ Source: `VIBE_IC_PPA_ENHANCEMENT_SPEC_v1.2_FINAL` §7.3; `docs/PPA_INTERFACES.md
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import sys
@@ -125,8 +126,145 @@ __all__ = [
     "metrics_of_class", "area_record", "proxy_record", "physical_record",
     "digest_of_record", "assert_eligible_for_physical_ppa", "filter_physical",
     "scope_matches", "compare", "area_verdict",
-    "step25_native_density_due", "main",
+    "resolve_provisional_slot_die", "step25_native_density_due", "main",
 ]
+
+
+def resolve_provisional_slot_die(
+        project: Path, declared_die_um: str, required_side_um: int
+        ) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    """Resolve an owner-delegated provisional slot against measured area.
+
+    Fixed owner answers remain fixed.  The only derived case is the existing
+    Step-0.5 pending-fit contract, rebound to the published slot source bytes;
+    the least-area published slot that fits the measured floor is selected.
+    """
+    prefix = "DERIVED_SLOT_AUTHORITY_INVALID:"
+
+    def _load(rel: str) -> Any:
+        return json.loads((project / rel).read_text(errors="replace"))
+
+    try:
+        step0 = _load("input/step_0_5ic_answers.json")
+        declaration = _load(
+            "input/submission_template/tapeout_declaration.json")
+    except (OSError, ValueError) as exc:
+        present = [(project / p).is_file() for p in (
+            "input/step_0_5ic_answers.json",
+            "input/submission_template/tapeout_declaration.json")]
+        if not any(present):
+            return None, None
+        return None, f"{prefix} authority records unreadable: {exc}"
+
+    def _authority(doc: Any) -> Any:
+        return ((doc or {}).get("answer_provenance") or {}).get(
+            "operator_template.slot")
+
+    auth = _authority(step0)
+    decl_auth = _authority(declaration)
+    if not isinstance(auth, dict) or auth.get("answered_by") != "agent":
+        return None, None
+    if auth != decl_auth:
+        return None, (f"{prefix} Step-0.5 and tapeout declaration disagree "
+                      "on operator_template.slot authority")
+    delegation = auth.get("delegation")
+    if (not isinstance(delegation, dict)
+            or delegation.get("answered_by") != "owner"
+            or delegation.get("scope") != "operator_template.slot"):
+        return None, f"{prefix} agent slot has no owner delegation for its scope"
+    if auth.get("fit_status") != "TO_BE_VERIFIED_BY_CANONICAL_AREA_AND_PAD_CHECKS":
+        return None, f"{prefix} agent slot is not marked pending canonical fit checks"
+    if not str(auth.get("fallback") or "").strip():
+        return None, f"{prefix} pending-fit slot has no declared fallback"
+
+    step_slot = ((step0.get("operator_template") or {}).get("slot"))
+    decl_slot = ((declaration.get("operator_template") or {}).get("slot"))
+    if not step_slot or step_slot != decl_slot:
+        return None, f"{prefix} Step-0.5 and tapeout declaration name different slots"
+    expected_operator_source = f"input/submission_template/slots/{step_slot}.yaml"
+    if auth.get("operator_source") != expected_operator_source:
+        return None, f"{prefix} operator_source does not name the declared slot"
+    if not (project / expected_operator_source).is_file():
+        return None, f"{prefix} declared slot contract is absent"
+
+    candidates: List[Dict[str, Any]] = []
+    slot_dir = project / "input" / "submission_template" / "slots"
+    slot_files = sorted(slot_dir.glob("*.yaml"))
+    if not slot_files:
+        return None, f"{prefix} no published slot contracts are present"
+    for slot_file in slot_files:
+        try:
+            rec = json.loads(slot_file.read_text(errors="replace"))
+        except (OSError, ValueError) as exc:
+            return None, f"{prefix} {slot_file.name} unreadable: {exc}"
+        name = rec.get("slot")
+        rel = rec.get("source_relpath")
+        digest = rec.get("source_sha256")
+        if (not isinstance(name, str) or not isinstance(rel, str)
+                or Path(rel).name != rel or not isinstance(digest, str)):
+            return None, f"{prefix} published slot contract {slot_file.name} is incomplete"
+        if slot_file.name != f"{name}.yaml":
+            return None, f"{prefix} published slot filename does not match its slot"
+        source = project / "input" / "submission_template_source" / rel
+        try:
+            actual_digest = hashlib.sha256(source.read_bytes()).hexdigest()
+        except OSError as exc:
+            return None, f"{prefix} {rel} cannot be rebound: {exc}"
+        if actual_digest != digest:
+            return None, f"{prefix} {rel} changed after ingest"
+        rect = ((rec.get("die_area") or {}).get("rect")
+                or (rec.get("die_area") or {}).get("raw"))
+        if isinstance(rect, str):
+            rect = rect.split()
+        try:
+            llx, lly, urx, ury = (float(v) for v in rect)
+            width, height = urx - llx, ury - lly
+        except (TypeError, ValueError):
+            return None, f"{prefix} published slot {name!r} has no valid DIE_AREA"
+        if width <= 0 or height <= 0:
+            return None, f"{prefix} published slot {name!r} has non-positive DIE_AREA"
+        candidates.append({"slot": name, "width": int(round(width)),
+                           "height": int(round(height)),
+                           "source_relpath": rel,
+                           "source_sha256": digest})
+    current = next((c for c in candidates if c["slot"] == step_slot), None)
+    if current is None:
+        return None, f"{prefix} declared slot is absent from the published catalogue"
+    if declared_die_um != f"{current['width']}x{current['height']}":
+        return None, (f"{prefix} L19 die {declared_die_um} does not match "
+                      f"declared slot {step_slot} at "
+                      f"{current['width']}x{current['height']}")
+    declared_rect = ((declaration.get("answers") or {}).get("die_area_um"))
+    try:
+        dw = int(round(float(declared_rect[2]) - float(declared_rect[0])))
+        dh = int(round(float(declared_rect[3]) - float(declared_rect[1])))
+    except (TypeError, ValueError, IndexError):
+        return None, f"{prefix} tapeout declaration has no valid die_area_um"
+    if (dw, dh) != (current["width"], current["height"]):
+        return None, f"{prefix} tapeout die_area_um disagrees with the declared slot"
+
+    adequate = [c for c in candidates
+                if c["width"] >= required_side_um
+                and c["height"] >= required_side_um]
+    if not adequate:
+        return None, (
+            "DERIVED_SLOT_NO_ADEQUATE_PUBLISHED_SLOT: measured pad/technology "
+            f"floor {required_side_um}x{required_side_um} um exceeds every "
+            "source-bound published slot")
+    chosen = min(adequate, key=lambda c: (
+        c["width"] * c["height"], c["width"], c["height"], c["slot"]))
+    return {
+        "intent": "DERIVED_PROVISIONAL_SLOT",
+        "authority": "owner-delegated agent selection pending canonical fit checks",
+        "declared_slot": step_slot,
+        "declared_die_um": declared_die_um,
+        "resolved_slot": chosen["slot"],
+        "resolved_die_um": f"{chosen['width']}x{chosen['height']}",
+        "required_die_side_um": int(required_side_um),
+        "selection": "least published DIE_AREA that fits the measured floor",
+        "source_relpath": chosen["source_relpath"],
+        "source_sha256": chosen["source_sha256"],
+    }, None
 
 SCHEMA = "vibeic.ppa.metric.v1"
 SCHEMA_VERDICT = "vibeic.ppa.area_verdict.v1"

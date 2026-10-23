@@ -8,6 +8,7 @@ from __future__ import annotations
 import copy
 import fnmatch
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -168,6 +169,42 @@ def test_scenario_authority_derives_existing_sdc_liberty_and_pad_connectivity(tm
                for item in result['source_records'].values())
 
 
+@pytest.mark.parametrize('command,replacement', [
+    ('create_clock', 'do not create_clock'),
+    ('set_output_delay', 'please do not infer set_output_delay'),
+    ('set_load', 'the instruction is not to set_load'),
+])
+def test_scenario_authority_rejects_prose_about_formal_commands(
+        tmp_path, command, replacement):
+    paths = _scenario_authority_files(tmp_path)
+    canonical = paths['sdc'].read_text()
+    paths['sdc'].write_text(canonical.replace(command, replacement, 1))
+    with pytest.raises(admission.AdmissionRefusal,
+                       match='D55_SDC_ACTIVITY_AUTHORITY_UNIMPLEMENTED'):
+        activity._derive_scenario_authority(paths, [
+            {'name': 'clk', 'direction': 'input', 'width': 1},
+            {'name': 'p', 'direction': 'output', 'width': 1}])
+
+
+@pytest.mark.parametrize('prose', [
+    'Do not declare module adopted with input a and output y.\n',
+    'Please use a module named adopted, but do not state its ports here.\n',
+])
+def test_module_port_census_rejects_prose_about_formal_declarations(
+        tmp_path, prose):
+    canonical = tmp_path / 'canonical.v'
+    canonical.write_text(
+        '// do not treat module denied(input fake) as a declaration\n'
+        'module adopted (a, y); input a; output y; endmodule\n')
+    assert activity.dump.module_ports(canonical, 'adopted') == [
+        {'name': 'a', 'direction': 'input', 'width': 1, 'packed': ''},
+        {'name': 'y', 'direction': 'output', 'width': 1, 'packed': ''}]
+    discussed = tmp_path / 'discussed.v'
+    discussed.write_text(prose)
+    with pytest.raises(ValueError, match='module adopted not found'):
+        activity.dump.module_ports(discussed, 'adopted')
+
+
 def test_scenario_authority_refuses_cell_pad_corner_mismatch(tmp_path):
     paths = _scenario_authority_files(tmp_path, pad_voltage='3.3')
     with pytest.raises(admission.AdmissionRefusal, match='D55_RAIL_LIBRARY_MISMATCH'):
@@ -186,6 +223,9 @@ def test_native_port_census_expands_vector_bits_without_weakening_scalars():
 def test_canonical_d55_engineering_route_needs_no_generic_qualification(tmp_path, monkeypatch):
     import _delivery_route
     assert _delivery_route.admit(tmp_path, 'ic') is None
+    for name in (flow109.CONTEXT_ENV, flow109.ATTEMPT_ENV):
+        monkeypatch.setenv(name, os.environ.get(name, ''))
+        monkeypatch.delenv(name)
     features = next(p['features'] for p in flow109.load_registry()['reference_profiles']
                     if p['name'] == 'Small digital IC without DFT')
     manifest = tmp_path / 'manifest.json'
@@ -200,7 +240,15 @@ def test_canonical_d55_engineering_route_needs_no_generic_qualification(tmp_path
     assert observed[0]['requested_step'] == 'D55'
     assert observed[0]['runtime_tool_uses'] is None
     assert observed[0]['qualification_registry'] is None
-    assert not (tmp_path / 'reports/flow109/admission.json').exists()
+    admitted = json.loads(
+        (tmp_path / 'reports/flow109/admission.json').read_text())
+    assert admitted['status'] == 'NOT_APPLICABLE'
+    assert admitted['reason'] == 'SOURCE_OWNED_EXISTING_NATIVE_COMPONENT'
+    assert admitted['qualification_status'] == 'NOT_CLAIMED'
+    assert admitted['acceptance_scope'] == 'existing_native_component_only'
+    assert admitted['native_step_id'] == 'flow109.D55'
+    assert admitted['flow109_acceptance'] == 'NOT_MEASURED'
+    assert admitted['whole_flow_acceptance'] == 'NOT_MEASURED'
 
 
 def _put(project, name, value):
