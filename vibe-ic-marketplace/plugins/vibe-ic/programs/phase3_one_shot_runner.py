@@ -39141,7 +39141,7 @@ def _prepnr_geometry(project: Path, top: str, pdk: PdkConfig,
             if _mandated:
                 _derived = None
                 _derived_refusal = None
-                if (_requested_auto and _l9_declared_die_area(project) == die_um
+                if (_requested_auto and _l19_declared_die_area(project) == die_um
                         and _l9_declared_die_area(project) is None):
                     _derived, _derived_refusal = _resolve_provisional_slot_die(
                         project, die_um, _ring_side)

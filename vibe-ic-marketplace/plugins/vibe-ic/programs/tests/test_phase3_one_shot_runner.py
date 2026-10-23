@@ -370,6 +370,43 @@ def test_provisional_slot_resolution_uses_canonical_worker_inputs(tmp_path):
     assert resolved["resolved_slot"] == "wide"
 
 
+def test_prepnr_applies_provisional_slot_resolution(tmp_path, monkeypatch):
+    project = _provisional_slot_project(tmp_path)
+    netlist = project / "netlist.v"
+    netlist.write_text("module top; endmodule\n")
+    monkeypatch.setattr(RUNNER, "_effective_die_um",
+                        lambda *_: ("100x140", "L19 derived test"))
+    monkeypatch.setattr(RUNNER, "_l19_declared_die_area", lambda *_: "100x140")
+    monkeypatch.setattr(RUNNER, "_l9_declared_die_area", lambda *_: None)
+    monkeypatch.setattr(RUNNER, "_strap_plan_core_floor",
+                        lambda *a, **k: (None, "test has no strap floor"))
+    monkeypatch.setattr(RUNNER, "_pdk_nominal_voltage", lambda *a: None)
+    monkeypatch.setattr(RUNNER._ppa_power, "_pdn_em_declared_current",
+                        lambda *a: (None, "test", None))
+    monkeypatch.setattr(RUNNER, "_resolve_auto_die_um",
+                        lambda die, *a, **k: (die, None))
+    monkeypatch.setattr(RUNNER, "_padring_required_die_um",
+                        lambda *_: (150, "measured test ring"))
+    monkeypatch.setattr(RUNNER, "_padring_core_inset_um",
+                        lambda *a, **k: (10, None))
+    monkeypatch.setattr(RUNNER, "_slot_geometry", lambda *_: None)
+    monkeypatch.setattr(RUNNER, "_seal_ring_core_margin_um",
+                        lambda *a, **k: (None, {"applies": False}))
+    monkeypatch.setattr(RUNNER, "seal_ring_die_and_core",
+                        lambda w, h, pad, *_: (w, h, pad, ""))
+    monkeypatch.setattr(RUNNER, "seal_ring_die_too_small", lambda *a: None)
+    monkeypatch.setattr(RUNNER._ppa_area, "real_core_placement_density",
+                        lambda *a: (None, "test"))
+    monkeypatch.setattr(RUNNER, "_chip_path_requests_pad_ring", lambda *_: True)
+    monkeypatch.setattr(RUNNER, "ct03_pin_rect", lambda *a: None)
+    pdk = type("Pdk", (), {"name": "neutral"})()
+    result = RUNNER._prepnr_geometry(
+        project, "top", pdk, "", "auto", 0.5, netlist, 0.0)
+    assert isinstance(result, RUNNER.PrePnrDieCore)
+    assert result.die_um == "170x160"
+    assert result.die_intent["intent"] == "DERIVED_PROVISIONAL_SLOT"
+
+
 def test_explicit_owner_slot_is_not_reclassified_as_derived(tmp_path):
     project = _provisional_slot_project(tmp_path, answered_by="owner")
     resolved, refusal = RUNNER._resolve_provisional_slot_die(
