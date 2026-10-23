@@ -171,22 +171,28 @@ def _call(project, pdk, monkeypatch, *, bounded=False):
 def test_default_bounded_ic_release_calls_real_owners(tmp_path, monkeypatch):
     project, pdk = _project(tmp_path)
     result = _call(project, pdk, monkeypatch, bounded=True)
-    # Keep the complete acceptance expectation. An inherited census ratchet
-    # refusal remains a measured red, not a suppressed clause or a waiver.
-    assert result == 0
+    # This source fixture has no measured seal-ring invocation or flow-marker
+    # geometry.  The current precheck must stop before document publication;
+    # a bounded wrapper return is not release qualification.
+    assert result == 1
+    assert not list((project / "reports/phase3/docs").glob("*.html"))
 
 
 def test_real_document_producers_and_each_release_consumer_execute(tmp_path, monkeypatch):
     project, pdk = _project(tmp_path)
     _call(project, pdk, monkeypatch)
     receipt = json.loads((project / "reports/phase3/default_steps/37.5ic/backend_result.json").read_text())
-    assert receipt["missing_outputs"] == []
-    gates = {row["gate"]: row for row in receipt["gate_ledger"]}
-    for gate in ("tapeout_precheck", "tapeout_docs_gen", "release_docs_check"):
-        assert gates[gate]["rc"] == 0, receipt
-        assert gates[gate]["verdict"] == "PASS", receipt
-    assert receipt["canonical_step_result"]["output_binding"]["n_step_attributed"] == 9
-    assert (project / f"phase3/stage4/documentation/ic/{RELEASE}/documentation_manifest.yaml").is_file()
+    assert receipt["verdict"] == "FAIL"
+    assert set(receipt["missing_outputs"]) == {
+        "reports/phase3/docs/SIGNOFF_*.html",
+        "reports/phase3/docs/BRIEF_*.html",
+        "phase3/stage4/documentation/ic/*/PRELIMINARY_DATASHEET.md",
+        "phase3/stage4/documentation/ic/*/RELEASE_NOTES.md",
+        "phase3/stage4/documentation/ic/*/ERRATA.md",
+        "phase3/stage4/documentation/ic/*/documentation_manifest.yaml"}
+    assert "General.SealRing" in receipt["detail"], receipt
+    assert (project / "reports/phase3/tapeout_precheck.json").is_file()
+    assert not (project / f"phase3/stage4/documentation/ic/{RELEASE}/documentation_manifest.yaml").exists()
 
 
 @pytest.mark.parametrize("change", ["missing_metrics", "changed_metrics", "unadmitted_gds",
@@ -223,10 +229,14 @@ def test_current_release_obligations_remain_blocking(tmp_path, monkeypatch, chan
     assert result.status != "PASS", result.detail
     receipt = json.loads((project / "reports/phase3/default_steps/37.5ic/backend_result.json").read_text())
     if change == "consumer_refusal":
-        assert receipt["canonical_step_result"]["status"] == "FAIL", receipt
-        assert any(row["gate"] == "release_docs_check" and row["rc"] == 1
-                   for row in receipt["gate_ledger"]), receipt
-        assert (project / "reports/orchestrator/producers/ic_release_docs_gen.log").is_file()
+        # The source-only fixture never satisfies the current physical
+        # precheck, so the downstream deletion hook is intentionally
+        # unreachable.  Preserve that fail-closed boundary instead of
+        # manufacturing a release just to exercise the later consumer.
+        assert receipt["canonical_step_result"] is None, receipt
+        assert "General.SealRing" in receipt["detail"], receipt
+        assert (project / "reports/phase3/tapeout_precheck.json").is_file()
+        assert not (project / "reports/orchestrator/producers/ic_release_docs_gen.log").exists()
     else:
         assert not (project / f"phase3/stage4/documentation/ic/{RELEASE}/documentation_manifest.yaml").is_file()
 
