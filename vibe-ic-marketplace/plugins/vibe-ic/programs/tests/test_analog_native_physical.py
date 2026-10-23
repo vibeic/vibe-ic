@@ -42,6 +42,7 @@ def test_layout_executes_producer_and_requires_actual_outputs(project):
     assert result["status"] == "PASS"
     assert calls[-1][0] == "analog_a5_layout_emit.py"
     assert calls[-1][1][calls[-1][1].index("--family") + 1] == "process"
+    assert calls[-1][2]["host"] is True
 
 
 def test_layout_environment_gap_is_not_clean(project):
@@ -342,6 +343,18 @@ def test_post_mc_execution_override_does_not_change_other_steps(project, monkeyp
     assert captured == [{"drc_engine": "native"}]
 
 
+def test_a13_forwards_block_extraction_inputs_with_explicit_settings_precedence(project,monkeypatch):
+    bdir,_=physical._paths(project,'unit')
+    core={'path':'private/core.so','sha256':'a'*64,'target':'/native/tclmagic.so'}
+    put(bdir/'extraction_inputs.json',{'magic_core':core,'styles':['source-style']})
+    captured=[]
+    monkeypatch.setattr(physical,'_native_call',lambda *a:captured.append(a[-1]) or
+                        {'status':'NOT_MEASURED','outputs':[]})
+    physical.run_step('A13',project,{'name':'unit'},
+                      {'config':{'A13':{'styles':['caller-style']}}},None)
+    assert captured==[{'magic_core':core,'styles':['caller-style']}]
+
+
 @pytest.mark.parametrize("parasitic,expected", [(True, "PASS"), (False, "FAIL")])
 def test_a13_runs_native_extraction_without_resim_and_refuses_parasitic_free(project,
         monkeypatch, parasitic, expected):
@@ -353,6 +366,37 @@ def test_a13_runs_native_extraction_without_resim_and_refuses_parasitic_free(pro
     assert calls[0][0][0][0] == "Magic.RCX"
     if parasitic:
         assert result["metrics"]["corners"][0]["depth"] == "RC"
+
+
+@pytest.mark.parametrize('damage',[None,'hash','target','local','drift','receipt-drift'])
+def test_a13_selected_core_uses_readonly_mount_and_current_source_bytes(project,monkeypatch,damage):
+    import librelane_contract as lc
+    calls=_extraction_project(project,monkeypatch)
+    core=put(project/'private/tclmagic.so','native private core fixture')
+    receipt=put(core.parent/'build.json',{'compiled_core':physical._sha(core)})
+    target='/native/lib/magic/tcl/tclmagic.so'
+    selection={'path':str(core),'sha256':physical._sha(core),'target':target,
+               'build_receipt':str(receipt)}
+    monkeypatch.setattr(lc,'_provider_for_image',lambda *a:None)
+    monkeypatch.setattr(lc,'_provider_route',lambda *a:damage=='local')
+    monkeypatch.setattr(lc,'run_container',lambda *a,**k:SimpleNamespace(
+        returncode=0,stdout='/native/lib\n',stderr=''))
+    if damage=='hash':selection['sha256']='0'*64
+    if damage=='target':selection['target']='/wrong/lib/magic/tcl/tclmagic.so'
+    if damage in ('drift','receipt-drift'):
+        chain=lc.run_chain
+        def drifting(*args,**kwargs):
+            result=chain(*args,**kwargs)
+            (core if damage=='drift' else receipt).write_text('changed during native extraction')
+            return result
+        monkeypatch.setattr(lc,'run_chain',drifting)
+    result=physical._extract(project,'unit','container','image','process',{'magic_core':selection})
+    assert result['status']==('PASS' if damage is None else 'NOT_MEASURED')
+    if damage in ('hash','target','local'):assert not calls
+    else:
+        assert calls[0][1]['mounts']==[(core,target)]
+        assert result['native_inputs'][str(core)]['sha256']==selection['sha256']
+        assert str(receipt) in result['native_inputs']
 
 
 @pytest.mark.parametrize("post,expected", [(1.19, "PASS"), (0.8, "FAIL"), (None, "NOT_MEASURED")])
@@ -654,6 +698,7 @@ def test_a16_absent_native_mission_and_reports_never_become_pass(project):
 
 def test_a16_routes_design_applicability_without_hiding_missing_required_evidence(project):
     def run(program, argv, **kwargs):
+        assert kwargs['host'] is True
         settings = json.loads(argv[argv.index("--settings") + 1])
         result = physical._reliability(project, "unit", "container", "image", "process", settings)
         put(Path(argv[argv.index("--json") + 1]), result)

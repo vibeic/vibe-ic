@@ -263,6 +263,23 @@ def test_native_discovered_inputs_are_retained_only_while_their_bytes_match(tmp_
     assert "A14" not in observed[-1]
 
 
+def test_extraction_selector_invalidates_only_a13_and_its_consumers(tmp_path,monkeypatch):
+    root=project(tmp_path);observed=[]
+    def dispatch(step,_project,_block,options,_run):
+        observed.append(set(options['previous_results']))
+        return {'status':'PASS','outputs':[]}
+    monkeypatch.setattr(native,'_dispatch',dispatch)
+    native.run_window(root,args('A11','A14'))
+    before={step:native._input_views(root,'cell_alpha',step) for step in native.STEPS}
+    declaration=root/'phase3/analog/cell_alpha/extraction_inputs.json'
+    declaration.write_text(json.dumps({'magic_core':{'path':'selected.so','sha256':'a'*64}}))
+    after={step:native._input_views(root,'cell_alpha',step) for step in native.STEPS}
+    assert [step for step in native.STEPS if before[step]!=after[step]]==list(native.STEPS[12:])
+    native.run_window(root,args('A15','A15'))
+    assert {'A11','A12'}<=observed[-1]
+    assert not {'A13','A14'}&observed[-1]
+
+
 def test_successful_exit_without_promised_native_output_is_not_pass(tmp_path, monkeypatch):
     root = project(tmp_path)
     monkeypatch.setattr(native, "_dispatch", lambda *arguments: {
@@ -402,6 +419,22 @@ def test_container_subprocess_loads_native_tool_environment_without_shell_interp
     assert seen[0][0][-7:] == ["bash", "-lc", 'exec "$@"', "analog-native", "ngspice", "-b",
                              str(tmp_path / "deck with space.sp")]
     assert execution["returncode"] == 0
+
+
+@pytest.mark.parametrize('host',[False,True])
+def test_caller_can_select_host_orchestration_without_changing_default_native_location(tmp_path,monkeypatch,host):
+    seen=[]
+    def run(command,**kwargs):
+        seen.append((command,kwargs))
+        return SimpleNamespace(returncode=0,stdout='native producer result\n',stderr='')
+    monkeypatch.setattr(native.subprocess,'run',run)
+    runner=native.NativeCommands(tmp_path,tmp_path,'native-box','repo@sha256:fixed')
+    execution=runner('native_program.py',['--container','native-box'],host=host)
+    command,kwargs=seen[0]
+    assert command[0]==(sys.executable if host else 'docker')
+    assert command[-2:]==['--container','native-box']
+    assert kwargs['env']['VIBEIC_EDA_IMAGE']=='repo@sha256:fixed'
+    assert execution['returncode']==0 and execution['argv']==command
 
 
 def test_a19_cannot_sign_off_empty_delivery_even_with_green_step_words(tmp_path):

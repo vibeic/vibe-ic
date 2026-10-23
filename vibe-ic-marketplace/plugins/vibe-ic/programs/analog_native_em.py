@@ -67,6 +67,85 @@ def parse_process_limits(text: str) -> dict:
     return dict(rules)
 
 
+def process_rating_context(text: str) -> dict:
+    """Retain the table's stated rating, without deriving a derating law."""
+    body=text.split('2.15 Maximum Current Densities',1)[-1].split('2.16 Layer Thickness',1)[0]
+    found=re.search(r'\(\s*([\d.]+)\s*years\s*@\s*([+-]?[\d.]+)\s*°?C\s*\)',body)
+    if not found:return {}
+    return {'duration_years':float(found[1]),'temperature_c':float(found[2]),
+            'source_section':'2.15 Maximum Current Densities','source_text':found[0]}
+
+
+def native_rating_context(transcript: str, rating: dict|None, binding: dict) -> dict:
+    values={float(v) for v in re.findall(r'(?i)Doing analysis at TEMP\s*=\s*([+-]?[\d.]+(?:e[+-]?\d+)?)',transcript)}
+    temperature=next(iter(values)) if len(values)==1 else None
+    declared=(binding.get('conditions') or {}).get('temperature_c')
+    if temperature is not None and declared is not None and temperature!=float(declared):
+        raise ValueError('native temperature differs from source-bound conditions')
+    matched=bool(rating) and temperature is not None and temperature==rating.get('temperature_c')
+    return {'source_rating':rating or {},'native_temperature_c':temperature,
+            'temperature_matches_source_rating':matched,
+            'comparison_scope':'source-rated native temperature' if matched else 'numeric current comparison only',
+            'lifetime_scope':'foundry table rating only; no temperature/lifetime extrapolation'}
+
+
+def resistor_aliases(header: dict, rows: list[dict]):
+    """Bind exact zero aliases only under the corrected native reader header."""
+    declared='reader_resistance_offset_ohm' in header or 'zero_resistance' in header
+    corrected=(header.get('reader_resistance_offset_ohm')==0 and
+               header.get('zero_resistance')=='ideal-equivalence')
+    if declared and not corrected:raise ValueError('unsupported native resistor reader semantics')
+    parent={}
+    def root(node):
+        node=node.lower();parent.setdefault(node,node)
+        while parent[node]!=node:
+            parent[node]=parent[parent[node]];node=parent[node]
+        return node
+    ideals=[]
+    if corrected:
+        for row in rows:
+            ideal=row.get('ideal_short')
+            if not isinstance(ideal,bool) or ideal!=(row['resistance_ohm']==0):
+                raise ValueError('ideal alias differs from exact native resistance')
+            if ideal:
+                if row['ext_resistance_value']!=0:raise ValueError('ideal alias EXT value is not zero')
+                a,b=root(row['node_a']),root(row['node_b']);parent[b]=a;ideals.append(row)
+    def same(a,b):return root(a)==root(b)
+    groups=collections.defaultdict(list)
+    for node in list(parent):groups[root(node)].append(node)
+    return corrected,ideals,same,[sorted(group) for group in groups.values()]
+
+
+def bind_native_resistors(header: dict, rows: list[dict], spice_text: str) -> list:
+    """Match actual emitted positive R cards to native geometry and aliases.
+
+    Collectors may use this same binding before resolving each card's actual
+    native voltage vectors. Ideal rows have no resistor/current entry.
+    """
+    import _analog_a8_extraction_wrapper as wrapper
+    corrected,_,_,groups=resistor_aliases(header,rows)
+    labels={node:group[0] for group in groups for node in group}
+    endpoints=lambda nodes:tuple(sorted(labels.get(n.lower(),n.lower()) for n in nodes))
+    bucket=collections.defaultdict(list)
+    for row in rows:
+        if corrected and row['ideal_short']:continue
+        mohms=struct.unpack('f',struct.pack('f',(0 if corrected else .5)+header['resist_scale']*row['ext_resistance_value']))[0]
+        resistance=float(format(mohms/1000,'.6g'))
+        bucket[(endpoints([row['node_a'],row['node_b']]),resistance)].append(row)
+    result=[];names=set()
+    for line in wrapper.logical_lines(spice_text):
+        parts=line.split()
+        if not parts or parts[0][0].lower()!='r' or len(parts)!=4:continue
+        if parts[0].lower() in names:raise ValueError('duplicate native resistor identity')
+        names.add(parts[0].lower());resistance=float(parts[3])
+        key=(endpoints(parts[1:3]),resistance)
+        if not math.isfinite(resistance) or resistance<=0 or not bucket[key]:
+            raise ValueError('native resistor differs from emitted EXT geometry/ideal aliases')
+        result.append((parts,bucket[key].pop(),resistance))
+    if any(bucket.values()):raise ValueError('native positive resistor/geometry multiplicity differs')
+    return result
+
+
 def material_map(technology: str) -> tuple[dict,set]:
     """Bind native types through the actual tech's aliases, LEF and contacts."""
     import analog_a5_pdk_device_limits as pdk
@@ -256,7 +335,7 @@ def mos_stress(source: str, topology: dict, block: str, raw: str,
 
 
 def grade_case(project: Path, setting: dict, limits: dict, aliases: dict, known: set,
-               block: str|None=None) -> tuple[dict,dict]:
+               block: str|None=None, rating_context: dict|None=None) -> tuple[dict,dict]:
     import analog_real_corner_sweep as sweep
     receipt_path=_path(project,setting.get('receipt'));rec=_read(receipt_path)
     views={}
@@ -297,6 +376,7 @@ def grade_case(project: Path, setting: dict, limits: dict, aliases: dict, known:
         return {'status':'FAIL','detail':'native electrical analysis failed','receipt':str(receipt_path)},views
     if rec.get('status')!='PASS' or rec.get('unchanged') is not True:
         raise ValueError('native electrical measurements incomplete or changed')
+    rating=native_rating_context(text,rating_context,rec.get('source_binding') or {})
     if block is not None:
         expected=project/f'phase3/analog/{block}/{block}.sp'
         subjects=[digest for p,digest in rec.get('inputs_before',{}).items() if Path(p).name==block+'.sp']
@@ -357,24 +437,22 @@ def grade_case(project: Path, setting: dict, limits: dict, aliases: dict, known:
     if struct.unpack('f',struct.pack('f',float(scale)))[0]!=header.get('scale_um'):
         raise ValueError('exact CIF units differ from recorded native scale')
     bucket=collections.defaultdict(list)
+    corrected,ideals,same,ideal_groups=resistor_aliases(header,geometry_rows)
     for row in geometry_rows:
         if not row['is_contact']:
             for dimension in ('width','length'):
                 q=row.get(dimension+'_grid')
                 if isinstance(q,bool) or not isinstance(q,int) or q<=0 or q*header['scale_um']!=row.get(dimension+'_um'):
                     raise ValueError('integer geometry differs from native partition dimension')
-        key=(row['node_a'],row['node_b'],row['type'],row['resistance_ohm'])
-        bucket[key].append(row)
+        if not corrected or not row['ideal_short']:
+            key=(row['node_a'],row['node_b'],row['type'],row['resistance_ohm'])
+            bucket[key].append(row)
     voltages=read_op_capture(captures[0]);results=[];excluded=collections.Counter();ranges={}
     resolver,external=_vector_resolver(project,block,rec,raw) if block is not None else (None,{})
     # These mappings identify each measured native vector and actual SPICE
     # resistor. Recompute every current from the hashed capture and circuit.
-    spice={}
-    import _analog_a8_extraction_wrapper as wrapper
-    for line in wrapper.logical_lines(raw.read_text()):
-        parts=line.split()
-        if parts and parts[0][0].lower()=='r' and len(parts)==4:
-            spice[parts[0].lower()]=(parts[1:3],float(parts[3]))
+    spice={parts[0].lower():(parts[1:3],resistance)
+           for parts,_,resistance in bind_native_resistors(header,geometry_rows,raw.read_text())}
     for line in currents[0].open():
         mapping=json.loads(line)
         key=(mapping['node_a'],mapping['node_b'],mapping['type'],mapping['resistance_ohm'])
@@ -383,9 +461,10 @@ def grade_case(project: Path, setting: dict, limits: dict, aliases: dict, known:
         nodes,resistance=spice.pop(mapping['spice_resistor'].lower())
         if nodes!=mapping['spice_nodes'] or resistance!=mapping['spice_resistance_ohm'] or resistance<=0:
             raise ValueError('current mapping differs from native SPICE resistor')
-        if sorted(n.lower() for n in nodes)!=sorted([row['node_a'].lower(),row['node_b'].lower()]):
+        if not ((same(nodes[0],row['node_a']) and same(nodes[1],row['node_b'])) or
+                (same(nodes[1],row['node_a']) and same(nodes[0],row['node_b']))):
             raise ValueError('native resistor endpoints differ from geometry')
-        native_mohm=struct.unpack('f',struct.pack('f',.5+header['resist_scale']*row['ext_resistance_value']))[0]
+        native_mohm=struct.unpack('f',struct.pack('f',(0 if corrected else .5)+header['resist_scale']*row['ext_resistance_value']))[0]
         if float(format(native_mohm/1000,'.6g'))!=resistance:
             raise ValueError('native SPICE resistance differs from emitted EXT geometry row')
         if resolver is not None and [resolver(n) for n in nodes]!=mapping['voltage_vectors']:
@@ -405,6 +484,13 @@ def grade_case(project: Path, setting: dict, limits: dict, aliases: dict, known:
                              drc_qualified=drc_qualified)
         results.append(dict(verdict,material=material,resistor=mapping['spice_resistor'],network=row['network']))
     if spice or any(bucket.values()):raise ValueError('native resistor/geometry/current multiplicity differs')
+    for row in ideals:
+        material=aliases.get(row['type']) or aliases.get(row.get('type_long'))
+        if material:
+            results.append({'status':'NOT_MEASURED','material':material,'network':row['network'],
+                            'detail':'ideal interconnect current is not measured by voltage/resistance'})
+        elif row['type'] in known:excluded[row['type']]+=1
+        else:raise ValueError('native ideal material is not declared by extraction technology')
     states=[r['status'] for r in results]
     status='FAIL' if 'FAIL' in states else 'NOT_MEASURED' if not states or 'NOT_MEASURED' in states else 'PASS'
     roles={}
@@ -429,6 +515,9 @@ def grade_case(project: Path, setting: dict, limits: dict, aliases: dict, known:
             'unmeasured':[r for r in results if r['status']=='NOT_MEASURED'],
             'native_drc_bound_partitions':sum('density_bound_mA_per_um_exact' in r for r in results),
             'non_interconnect_materials':dict(excluded),'conditions':rec.get('source_binding',{}),
+            'rating_context':rating,
+            'ideal_connections':{'count':len(ideals),'alias_groups':ideal_groups,
+                                 'current_scope':'ideal connection currents are not inferred from zero resistance'},
             'pg_voltage_ranges':ranges,'feed_voltages':feeds,'feed_vectors':rail_vectors,'rail_roles':roles,
             'mos_stress':stress,
             'scope':rec.get('scope','selected native DC case')},views
@@ -478,13 +567,15 @@ def run(project: Path, block: str, setting: dict, *, container: str='', output_d
         for p in [source,pdf]:views[str(p)]={'path':str(p),'sha256':_sha(p)}
         converted=subprocess.run(['pdftotext','-layout',str(pdf),'-'],capture_output=True,text=True,check=True)
         limits=parse_process_limits(converted.stdout)
+        rating=process_rating_context(converted.stdout)
+        if rating:rating.update(source_pdf=str(pdf),source_pdf_sha256=expected)
         technology,source_views=read_technology(project,setting.get('magic_tech'),container,work)
         views.update(source_views)
         aliases,known=material_map(technology)
         if not aliases:raise ValueError('native material mapping absent')
         for item in setting.get('cases') or []:
             try:
-                case,bound=grade_case(project,item,limits,aliases,known,block=block)
+                case,bound=grade_case(project,item,limits,aliases,known,block=block,rating_context=rating)
                 views.update(bound);case['name']=item.get('name',Path(item.get('receipt','')).parent.name);cases.append(case)
             except (OSError,ValueError,KeyError,TypeError) as exc:
                 cases.append({'status':'NOT_MEASURED','name':item.get('name'),'detail':str(exc)})

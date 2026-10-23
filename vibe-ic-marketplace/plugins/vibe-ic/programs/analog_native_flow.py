@@ -58,6 +58,8 @@ def _input_views(project, name, step=None):
         paths.append(directory / "sizing_inputs.json")
     if step in STEPS[10:]:
         paths.append(directory / "layout_inputs.json")
+    if step in STEPS[12:]:
+        paths.append(directory / "extraction_inputs.json")
     if step in ("A06", "A07"):
         paths.append(directory / "measurement_studies.json")
     if step == "A16":
@@ -152,7 +154,7 @@ class NativeCommands:
         self.image = image
         self.count = 0
 
-    def __call__(self, program, argv, *, cwd=None, outputs=None, input_text=None):
+    def __call__(self, program, argv, *, cwd=None, outputs=None, input_text=None, host=False):
         self.count += 1
         argv = [str(item) for item in argv]
         cwd = Path(cwd or self.project)
@@ -161,7 +163,7 @@ class NativeCommands:
             command = [tool, *argv]
         else:
             command = [sys.executable, str(HERE / program), *argv]
-        if self.container:
+        if self.container and not host:
             # Keep model paths and the Python/native toolchain in the same
             # environment. The continuation project is mounted at this path.
             if not program.startswith("@"):

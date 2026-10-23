@@ -75,7 +75,7 @@ def _interrupted(rc) -> bool:
 
 
 def _native_call(operation: str, step: str, project: Path, name: str,
-                 options: dict, run: Callable, settings: dict) -> dict:
+                 options: dict, run: Callable, settings: dict, *, host=False) -> dict:
     _, work = _paths(project, name)
     report = work / f"{step}-{uuid.uuid4().hex}.json"
     argv = [operation, str(project), "--block", name, "--json", str(report),
@@ -83,7 +83,8 @@ def _native_call(operation: str, step: str, project: Path, name: str,
             "--pdk", str(options.get("pdk") or ""),
             "--image", str(options.get("image") or ""),
             "--settings", json.dumps(settings)]
-    execution = run("analog_native_physical.py", argv, outputs=[str(report)])
+    execution = run("analog_native_physical.py", argv, outputs=[str(report)],
+                    **({"host": True} if host else {}))
     doc = _read(report)
     if doc.get("status") not in ("PASS", "FAIL", "NOT_MEASURED", "NOT_APPLICABLE"):
         rc = execution.get("returncode")
@@ -118,6 +119,14 @@ def run_step(step_id: str, project: Path, block: dict, options: dict,
         if not isinstance(layout_inputs, dict):
             return _result("NOT_MEASURED", "layout execution inputs must be an object")
         cfg = {**layout_inputs, **cfg}
+    if step_id == "A13" and (bdir / "extraction_inputs.json").is_file():
+        try:
+            extraction_inputs = json.loads((bdir / "extraction_inputs.json").read_bytes())
+        except (OSError, ValueError) as exc:
+            return _result("NOT_MEASURED", f"extraction execution inputs unreadable: {exc}")
+        if not isinstance(extraction_inputs, dict):
+            return _result("NOT_MEASURED", "extraction execution inputs must be an object")
+        cfg = {**extraction_inputs, **cfg}
     if step_id == "A16":
         # Like nominal measurement studies, mission/report inputs may be
         # supplied beside the block without changing all upstream inputs.
@@ -153,9 +162,11 @@ def run_step(step_id: str, project: Path, block: dict, options: dict,
                     "tech_lef", "wire_width_um", "via_pad_half_um", "pg_via_cuts", "pg_wire_width_um"):
             if cfg.get(key) is not None:
                 argv += ["--" + key.replace("_", "-"), str(cfg[key])]
+        # Stage transports Magic/PDK calls to --container; the source-PDF
+        # parser belongs to this host orchestration process.
         execution = run("analog_a5_layout_emit.py", argv,
                         outputs=[str(report), str(bdir / "layout.mag"),
-                                 str(bdir / f"{name}.gds")])
+                                 str(bdir / f"{name}.gds")], host=True)
         doc = _read(report)
         measured = (doc.get("blocks") or {}).get(name, {})
         rc = execution.get("returncode")
@@ -176,7 +187,10 @@ def run_step(step_id: str, project: Path, block: dict, options: dict,
                   "A15": "statistics", "A16": "reliability"}
     if step_id not in operations:
         return _result("NOT_APPLICABLE", f"{step_id} is not a physical analog step")
-    return _native_call(operations[step_id], step_id, project, name, options, run, cfg)
+    # Reliability reads the source PDF here and keeps native analyses on the
+    # explicit --container transport, like the other measured-input readers.
+    return _native_call(operations[step_id], step_id, project, name, options, run, cfg,
+                        **({"host": True} if step_id == "A16" else {}))
 
 
 def _pv(project: Path, name: str, container: str, image: str, pdk: str,
@@ -253,6 +267,47 @@ def _extract(project: Path, name: str, container: str, image: str, pdk: str,
         return _result("NOT_MEASURED", "A11 successful content-bound layout record is absent")
     if not image:
         return _result("NOT_MEASURED", "LibreLane Magic.RCX image is unstated")
+    mounts = []
+    native_inputs = {}
+    selection = cfg.get("magic_core")
+    if selection is not None:
+        if not isinstance(selection, dict):
+            return _result("NOT_MEASURED", "Magic core selection must state path, sha256 and target")
+        core = Path(str(selection.get("path", "")))
+        if not core.is_absolute():
+            core = project / core
+        core = core.resolve()
+        target = str(selection.get("target", ""))
+        expected = selection.get("sha256")
+        if (not core.is_file() or not isinstance(expected, str) or
+                not re.fullmatch(r"[0-9a-f]{64}", expected) or _sha(core) != expected):
+            return _result("NOT_MEASURED", "selected Magic core is absent or differs from its source hash")
+        if not Path(target).is_absolute() or Path(target).name != "tclmagic.so" or ".." in Path(target).parts:
+            return _result("NOT_MEASURED", "selected Magic core needs its explicit absolute installed target")
+        if lc._provider_for_image(image) is not None or lc._provider_route(project):
+            return _result("NOT_MEASURED", "LOCAL execution cannot emulate the selected Magic shared-library mount")
+        # Ask the selected image's ordinary launcher for its actual runtime
+        # prefix; an arbitrary existing .so path would not select its core.
+        try:
+            probe = lc.run_container(["docker", "run", *lc._dmem.docker_memory_flags(),
+                "--rm", "--network", "none", "--entrypoint", "magic", image, "--prefix"],
+                probe_deadline_s=lc.PROBE_DEADLINE_S)
+            prefixes = [line.strip() for line in probe.stdout.splitlines() if line.strip().startswith("/")]
+            if probe.returncode or len(prefixes) != 1 or Path(target) != Path(prefixes[0]) / "magic/tcl/tclmagic.so":
+                return _result("NOT_MEASURED", "selected Magic target differs from the native launcher runtime")
+        except lc.Refusal as exc:
+            return _result("NOT_MEASURED", str(exc))
+        native_inputs[str(core)] = {"path": str(core), "sha256": expected}
+        receipt = selection.get("build_receipt")
+        if receipt is not None:
+            receipt = Path(str(receipt))
+            if not receipt.is_absolute():
+                receipt = project / receipt
+            receipt = receipt.resolve()
+            if not receipt.is_file():
+                return _result("NOT_MEASURED", "selected Magic build receipt is absent")
+            native_inputs[str(receipt)] = {"path": str(receipt), "sha256": _sha(receipt)}
+        mounts.append((core, target))
     try:
         tech = a7.layout_tech(bdir)
     except ValueError as exc:
@@ -300,11 +355,12 @@ def _extract(project: Path, name: str, container: str, image: str, pdk: str,
         try:
             config = lc.resolve_step_config(project, image, source, config, pdk_root=root)
             folders = lc.run_chain(project, image, [(a7.RCX_STEP, config, state)],
-                                   namespace=f"analog/{name}/a13_{slug}", pdk_root=root)
+                                   namespace=f"analog/{name}/a13_{slug}", pdk_root=root,
+                                   **({"mounts": mounts} if mounts else {}))
         except lc.Refusal as exc:
             status = "NOT_MEASURED" if (lc.tool_stop_reason(exc.code) or
-                exc.code in ("LL_IMAGE_INCAPABLE", "LL_CONFIG_RESOLVE_FAILED")) else "FAIL"
-            return _result(status, f"{exc.code}: {exc}", metrics={"corners": corners})
+                exc.code in ("LL_IMAGE_INCAPABLE", "LL_CONFIG_RESOLVE_FAILED", "LL_MOUNTED_FILE_CHANGED")) else "FAIL"
+            return _result(status, f"{exc.code}: {exc}", metrics={"corners": corners}, native_inputs=native_inputs)
         folder = folders[-1]
         extracted = Path(_read(folder / "state_out.json").get("spice_rcx") or "")
         if not extracted.is_file():
@@ -330,10 +386,16 @@ def _extract(project: Path, name: str, container: str, image: str, pdk: str,
                         "sha256": _sha(extracted), "step_dir": str(folder),
                         "depth": audit.depth, "parasitics": audit.summary,
                         "device_inventory": inventory})
+        if any(not Path(view["path"]).is_file() or _sha(Path(view["path"])) != view["sha256"]
+               for view in native_inputs.values()):
+            return _result("NOT_MEASURED", "selected Magic source changed during extraction",
+                           metrics={"corners": corners}, native_inputs=native_inputs)
     return _result("PASS", "native Magic.RCX extraction completed; no resimulation run",
                    [c["extracted_netlist"] for c in corners],
                    metrics={"corners": corners, "layout_sha256": _sha(gds),
-                            "netlist_sha256": _sha(net), "magic_tech": str(tech)})
+                            "netlist_sha256": _sha(net), "magic_tech": str(tech),
+                            **({"magic_core":dict(selection)} if selection is not None else {})},
+                   **({"native_inputs":native_inputs} if native_inputs else {}))
 
 
 def _current_native_views(views: dict) -> bool:

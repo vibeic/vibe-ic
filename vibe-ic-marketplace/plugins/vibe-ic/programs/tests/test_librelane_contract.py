@@ -726,6 +726,42 @@ def test_chain_resumes_success_and_reruns_failed_step(tmp_path, monkeypatch):
     assert len(calls) == 2
 
 
+@pytest.mark.parametrize('change',['bytes','target','during-run'])
+def test_regular_file_mount_binds_cache_and_refuses_drift(tmp_path, monkeypatch, change):
+    from _stated_eda_image import mock_docker_route
+    mock_docker_route(monkeypatch)
+    project=design(tmp_path)
+    gds=project/'unit.gds';gds.write_text('native GDS fixture')
+    state=put(project/'initial.json',{'gds':str(gds)})
+    config=put(project/'config.json',{'meta':{'step':'Magic.RCX'}})
+    core=tmp_path/'private.so';core.write_text('original private core')
+    target='/native/magic/tcl/tclmagic.so';calls=[]
+    def tool_run(cmd,**kwargs):
+        calls.append(cmd)
+        folder=Path(cmd[cmd.index('-o')+1])
+        extracted=folder/'unit.spice';extracted.write_text('native extraction fixture')
+        put(folder/'state_out.json',{'spice_rcx':str(extracted)})
+        if change=='during-run':core.write_text('changed while tool was running')
+        return SimpleNamespace(returncode=0,stdout='native output',stderr='')
+    monkeypatch.setattr(contract,'image_capability',lambda *a:None)
+    monkeypatch.setattr(contract,'run_container',tool_run)
+    invoke=lambda:contract.run_chain(project,'candidate',[('Magic.RCX',config,state)],
+                                     mounts=[(core,target)],pdk_root='/pdk')
+    if change=='during-run':
+        with pytest.raises(contract.Refusal,match='LL_MOUNTED_FILE_CHANGED'):invoke()
+        assert not (project/'phase3/librelane/01-magic-rcx/vibeic_receipt.json').exists()
+        return
+    folder=invoke()[0]
+    assert f'{core}:{target}:ro' in calls[0]
+    invoke();assert len(calls)==1
+    if change=='bytes':core.write_text('new private core at same path')
+    else:target='/other/magic/tcl/tclmagic.so'
+    invoke();assert len(calls)==2
+    assert json.loads((folder/'vibeic_receipt.json').read_text())['input']['mounted_files']==[
+        {'source':str(core),'target':target,'sha256':contract.digest(core)}]
+    assert (project/'phase3/librelane/attempts/01-magic-rcx-0001/vibeic_receipt.json').is_file()
+
+
 def test_chain_stall_is_reaped_by_its_name_and_recorded_unmeasured(tmp_path, monkeypatch):
     from _stated_eda_image import mock_docker_route
     mock_docker_route(monkeypatch)

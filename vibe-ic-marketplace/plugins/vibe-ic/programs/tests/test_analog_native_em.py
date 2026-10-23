@@ -10,6 +10,7 @@ import _analog_a8_extraction_wrapper as wrapper
 
 
 TABLE='''2.15 Maximum Current Densities
+(11 years @105°C)
 Metal1 IMAXM1 mA 0.36 A.v w = 0.16 ... 0.36 µm
 Metal1 JMAXM1 mA/µm 1 A.v w > 0.36 µm
 Metal2 IMAXM2 mA 0.6 A.v w = 0.2 … 0.3 µm
@@ -173,6 +174,106 @@ def test_real_consumer_recomputes_native_current_and_pg_ranges(measured_case):
     assert result['pg_voltage_ranges']['a']=={'min_v':0.,'max_v':.0001,'sampled_endpoints':2}
     assert result['feed_voltages']=={'a':.0001,'b':0.}
     assert str(project/'phase3/analog/unit/unit.gds') in views
+
+
+def corrected_alias_case(measured_case):
+    project,setting,paths=measured_case
+    lines=paths['geometry'].read_text().splitlines();header=json.loads(lines[0]);row=json.loads(lines[1])
+    header.update(reader_resistance_offset_ohm=0,zero_resistance='ideal-equivalence')
+    row.update(node_a='alias_a',ideal_short=False)
+    ideal=dict(row,node_a='a',node_b='alias_a',type='nd',type_long='diffusion',
+               resistance_ohm=0,ext_resistance_value=0,ideal_short=True)
+    paths['geometry'].write_text('\n'.join(json.dumps(r) for r in (header,row,ideal))+'\n')
+    rec=em._read(paths['receipt'])
+    raw=Path(setting['spice']);raw.write_text(raw.read_text().replace('1.0005','1'))
+    mapping=json.loads(paths['currents'].read_text());mapping.update(row)
+    mapping.update(spice_resistance_ohm=1,current_a=.0001)
+    paths['currents'].write_text(json.dumps(mapping)+'\n')
+    rec['inputs_before'].update({str(p):em._sha(p) for p in (paths['geometry'],raw)})
+    rec['outputs'][str(paths['currents'])]=em._sha(paths['currents']);put(paths['receipt'],rec)
+    extraction=Path(setting['extraction_receipt']);er=em._read(extraction)
+    er['outputs'][str(raw)]=em._sha(raw);put(extraction,er)
+    return project,setting,paths
+
+
+def test_corrected_ideal_alias_uses_emitted_positive_resistor_and_actual_vector(measured_case):
+    project,setting,_=corrected_alias_case(measured_case)
+    result,_=grade(project,setting)
+    assert result['status']=='PASS' and result['graded_segments']==1
+    assert result['ideal_connections']['count']==1
+    assert result['ideal_connections']['alias_groups']==[['a','alias_a']]
+    assert result['non_interconnect_materials']=={'nd':1}
+
+
+@pytest.mark.parametrize('damage',['wrong-alias','legacy-header','historical-floor','false-ideal'])
+def test_corrected_alias_cannot_relabel_wrong_nodes_or_historical_resistance(measured_case,damage):
+    project,setting,paths=corrected_alias_case(measured_case)
+    rows=[json.loads(line) for line in paths['geometry'].read_text().splitlines()]
+    if damage=='wrong-alias':rows[2]['node_a']='unrelated'
+    elif damage=='legacy-header':
+        rows[0].pop('reader_resistance_offset_ohm');rows[0].pop('zero_resistance')
+    elif damage=='false-ideal':rows[2]['ext_resistance_value']=.001
+    else:
+        raw=Path(setting['spice']);raw.write_text(raw.read_text().replace('R0 a b 1','R0 a b 1.0005'))
+        rec=em._read(paths['receipt']);rec['inputs_before'][str(raw)]=em._sha(raw);put(paths['receipt'],rec)
+        extraction=Path(setting['extraction_receipt']);er=em._read(extraction)
+        er['outputs'][str(raw)]=em._sha(raw);put(extraction,er)
+    paths['geometry'].write_text(''.join(json.dumps(row)+'\n' for row in rows))
+    rec=em._read(paths['receipt']);rec['inputs_before'][str(paths['geometry'])]=em._sha(paths['geometry']);put(paths['receipt'],rec)
+    with pytest.raises(ValueError):grade(project,setting)
+
+
+def test_ideal_interconnect_does_not_invent_zero_current(measured_case):
+    project,setting,paths=corrected_alias_case(measured_case)
+    rows=[json.loads(line) for line in paths['geometry'].read_text().splitlines()]
+    rows[2].update(type='m2',type_long='metal2')
+    paths['geometry'].write_text(''.join(json.dumps(row)+'\n' for row in rows))
+    rec=em._read(paths['receipt']);rec['inputs_before'][str(paths['geometry'])]=em._sha(paths['geometry']);put(paths['receipt'],rec)
+    result,_=grade(project,setting)
+    assert result['status']=='NOT_MEASURED'
+    assert 'ideal interconnect current is not measured' in result['unmeasured'][0]['detail']
+
+
+@pytest.mark.parametrize('damage',[None,'wrong-alias','legacy-reader'])
+def test_native_magic_zero_material_artifact_binds_only_real_positive_edges(damage):
+    data=json.loads((Path(__file__).parent/'fixtures/native_em_ideal_resistors.json').read_text())
+    header,rows=data['header'],data['geometry']
+    if damage=='wrong-alias':
+        next(row for row in rows if row['ideal_short'])['node_a']='unrelated'
+    elif damage=='legacy-reader':
+        header.pop('reader_resistance_offset_ohm');header.pop('zero_resistance')
+    if damage:
+        with pytest.raises(ValueError):em.bind_native_resistors(header,rows,data['spice'])
+    else:
+        bound=em.bind_native_resistors(header,rows,data['spice'])
+        assert sorted(r for _,_,r in bound)==[.0625,.5]
+        assert all(not row['ideal_short'] for _,row,_ in bound)
+        assert sum(row['ideal_short'] for row in rows)==1
+
+
+@pytest.mark.parametrize('temperature,scope',[(105,'source-rated native temperature'),
+                                           (125,'numeric current comparison only')])
+def test_source_rating_is_distinct_from_bound_native_temperature(measured_case,temperature,scope):
+    project,setting,paths=measured_case
+    paths['log'].write_text(f'Doing analysis at TEMP = {temperature} and TNOM = 27\n')
+    rec=em._read(paths['receipt']);rec['outputs'][str(paths['log'])]=em._sha(paths['log'])
+    rec['source_binding']={'conditions':{'temperature_c':temperature}};put(paths['receipt'],rec)
+    aliases,known=em.material_map(TECH)
+    result,_=em.grade_case(project,setting,em.parse_process_limits(TABLE),aliases,known,
+                           block='unit',rating_context=em.process_rating_context(TABLE))
+    assert result['status']=='PASS'
+    context=result['rating_context']
+    assert context['source_rating']['duration_years']==11 and context['source_rating']['temperature_c']==105
+    assert context['native_temperature_c']==temperature and context['comparison_scope']==scope
+    assert 'no temperature/lifetime extrapolation' in context['lifetime_scope']
+
+
+def test_rating_uses_native_temperature_and_refuses_source_condition_misbinding():
+    with pytest.raises(ValueError,match='native temperature differs'):
+        em.native_rating_context('Doing analysis at TEMP = 125',em.process_rating_context(TABLE),
+                                 {'conditions':{'temperature_c':105}})
+    result=em.native_rating_context('',em.process_rating_context(TABLE),{})
+    assert result['native_temperature_c'] is None and result['comparison_scope']=='numeric current comparison only'
 
 
 @pytest.mark.parametrize('wrong_gds',[False,True])

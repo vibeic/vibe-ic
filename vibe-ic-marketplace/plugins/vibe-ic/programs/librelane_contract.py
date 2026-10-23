@@ -3990,6 +3990,12 @@ def _step_input_identity(fingerprint: dict) -> dict:
     return identity
 
 
+def _file_mount_inputs(mounts: list[tuple[Path, str]]) -> list[dict]:
+    """Bind regular-file overrides; directory mounts keep their own contracts."""
+    return [{'source':str(host.resolve()),'target':guest,'sha256':digest(host)}
+            for host,guest in mounts if host.is_file()]
+
+
 def run_chain(project: Path, image: str, steps: list[tuple[str, Path, Path]],
               *, docker: str = 'docker', mounts: list[tuple[Path, str]] | None = None,
               lane: str | None = None, pdk_root: str | None = None,
@@ -4076,6 +4082,9 @@ def run_chain(project: Path, image: str, steps: list[tuple[str, Path, Path]],
                        # are inputs too: an edited deck must re-run the step.
                        'config_files': config_file_hashes(_load(config), mounts or []),
                        'step': step_id}
+        mounted_files = _file_mount_inputs(mounts or [])
+        if mounted_files:
+            fingerprint['mounted_files'] = mounted_files
         from flow109_frontend import synthesis_fingerprint
         admitted_synthesis = synthesis_fingerprint(project)
         if admitted_synthesis is not None:
@@ -4205,6 +4214,9 @@ def run_chain(project: Path, image: str, steps: list[tuple[str, Path, Path]],
         (folder / 'invocation.log').write_text(completed.stdout + '\n' + completed.stderr)
         if completed.returncode or not (folder / 'state_out.json').exists():
             raise Refusal('LL_STEP_FAILED', f'{step_id}: rc={completed.returncode}; {folder / "invocation.log"}')
+        if mounted_files != _file_mount_inputs(mounts or []):
+            raise Refusal('LL_MOUNTED_FILE_CHANGED',
+                          f'{step_id}: regular-file mount changed during execution')
         if step_id == 'Yosys.Synthesis':
             # Use the existing receipt owner and the actual tool log.  A
             # missing or guest-only path remains absent and therefore keeps
