@@ -436,7 +436,8 @@ from test_librelane_contract import local_image  # existing real attestation rea
 
 
 @pytest.mark.parametrize('condition', ['current', 'missing_receipt', 'changed_material', 'nonzero',
-                                      'local_runner', 'local_runner_nonzero'])
+                                      'local_runner', 'local_runner_nonzero',
+                                      'local_runner_retained_8g'])
 def test_normal373_local_receipts_reach_original_connectivity_consumer(
         tmp_path, monkeypatch, local_image, condition):
     """Real normal producer/LOCAL runner/receipts/consumer; neutral EDA leaves.
@@ -562,6 +563,11 @@ def test_normal373_local_receipts_reach_original_connectivity_consumer(
         'top': 'cal_pg', 'pdk_root': str(root), 'image_id': local_image.image})
     assert result['verdict'] == 'PASS', result
     assert not (p / 'phase3/librelane/37.3-launches.jsonl').exists()
+    if condition == 'local_runner_retained_8g':
+        launch = json.loads(local_image.receipt.read_text())
+        launch['container_inspect']['HostConfig'].update(
+            Memory=8 * 1024**3, MemorySwap=8 * 1024**3)
+        BF.put(local_image.receipt, launch)
     dependency = native.read_current(p)
     assert dependency['count'] == (1 if condition in ('nonzero', 'local_runner_nonzero') else 0)
     assert 'launches' not in dependency['current']['outputs']

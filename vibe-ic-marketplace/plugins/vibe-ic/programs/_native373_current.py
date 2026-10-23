@@ -15,6 +15,7 @@ if _os.path.dirname(_os.path.abspath(__file__)) not in _sys.path:
     _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
 import json
 import os
+import re
 from pathlib import Path
 
 from _atomic_artefact import write_json
@@ -98,15 +99,49 @@ def _local_execution(project, folder, step, image):
     original = receipt["input"].get("local_image")
     _require(isinstance(original, dict), "NATIVE373_LOCAL_IMAGE_MISSING")
     current = lc.local_image_attestation(image)
-    _require(lc._step_input_identity({"local_image": original}) ==
-             lc._step_input_identity({"local_image": current}),
-             "NATIVE373_LOCAL_IMAGE_CHANGED")
+    _retained_local_image(original, current)
     return {"kind": "retained_local_step_receipt", "rc": 0,
             # This argv names the proof owner, not a reconstructed tool argv.
             "argv": ["librelane_contract.run_chain", step,
                      str((folder / "vibeic_receipt.json").relative_to(project))],
             "receipt": pc.entry(project, folder / "vibeic_receipt.json"),
             "local_image": original}
+
+
+def _retained_local_image(original, current):
+    """Validate an immutable LOCAL producer from a read-only consumer frame.
+
+    Memory is part of a fresh execution/cache identity, but it is not a
+    scientific input to a retained rc0 stream result.  Preserve the producer's
+    actual bounded frame and require the live consumer to be independently
+    attested; compare only the image bytes between those two executions.
+    """
+    required = {'image', 'image_id', 'repo_digests', 'cid', 'network_mode',
+                'memory', 'memory_swap', 'auto_remove', 'attestation_path',
+                'attestation_sha256'}
+
+    def valid_frame(record):
+        return (isinstance(record, dict) and required <= set(record)
+                and isinstance(record['image'], str) and bool(record['image'])
+                and bool(re.fullmatch(r'sha256:[0-9a-f]{64}',
+                                      str(record['image_id'])))
+                and isinstance(record['repo_digests'], list)
+                and all(isinstance(value, str) for value in record['repo_digests'])
+                and bool(re.fullmatch(r'[0-9a-f]{64}', str(record['cid'])))
+                and record['network_mode'] == 'none'
+                and type(record['memory']) is int and record['memory'] > 0
+                and type(record['memory_swap']) is int
+                and record['memory_swap'] >= record['memory']
+                and record['auto_remove'] is True
+                and Path(record['attestation_path']).is_absolute()
+                and bool(re.fullmatch(r'[0-9a-f]{64}',
+                                      str(record['attestation_sha256']))))
+
+    _require(valid_frame(original), 'NATIVE373_RETAINED_FRAME_INVALID')
+    _require(valid_frame(current), 'NATIVE373_CONSUMER_FRAME_INVALID')
+    immutable = ('image', 'image_id', 'repo_digests')
+    _require(all(original[key] == current[key] for key in immutable),
+             'NATIVE373_LOCAL_IMAGE_CHANGED')
 
 
 def _local_chain(project, folders):

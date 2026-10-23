@@ -11,6 +11,73 @@ import _native373_current as native
 import _physical_current as pc
 import gds_xor_check as xor
 import librelane_contract as lc
+from test_librelane_contract import local_image  # existing attested-image fixture
+
+
+def retained_local_receipt(tmp_path, local_image, *, change=None):
+    """Neutral immutable producer receipt with a distinct 32 GiB frame."""
+    project = tmp_path / 'retained-project'
+    folder = project / 'phase3/librelane/37.3-compare/02-klayout-xor'
+    folder.mkdir(parents=True)
+    current = lc.local_image_attestation(local_image.image)
+    original = {**current, 'memory': 32 * 1024**3,
+                'memory_swap': 32 * 1024**3}
+    if change == 'image':
+        original['image'] = 'registry.invalid/changed@sha256:' + '1' * 64
+    elif change == 'frame':
+        original['memory'] = 0
+    fingerprint = {'step': 'KLayout.XOR', 'local_image': original}
+    files = {
+        'state_out.json': {'metrics': {}},
+        'input_fingerprint.json': fingerprint,
+        'pdk_root.json': {'execution_route': 'LOCAL'},
+    }
+    for name, value in files.items():
+        (folder / name).write_text(json.dumps(value))
+    (folder / 'invocation.log').write_text('SOURCE_CONTROL retained rc0 producer\n')
+    names = [*files, 'invocation.log']
+    (folder / 'vibeic_receipt.json').write_text(json.dumps({
+        'input': fingerprint,
+        'sha256': {name: pc.digest(folder / name) for name in names}}))
+    return project, folder, original
+
+
+def test_retained_local_producer_frame_is_independent_of_readonly_consumer_budget(
+        tmp_path, monkeypatch, local_image):
+    launch = json.loads(local_image.receipt.read_text())
+    launch['container_inspect']['HostConfig'].update(
+        Memory=8 * 1024**3, MemorySwap=8 * 1024**3)
+    local_image.receipt.write_text(json.dumps(launch))
+    project, folder, original = retained_local_receipt(tmp_path, local_image)
+    try:
+        result = native._local_execution(project, folder, 'KLayout.XOR', local_image.image)
+        observed = {'status': 'ACCEPTED', 'kind': result.get('kind'),
+                    'producer_memory': result.get('local_image', {}).get('memory')}
+    except (ValueError, lc.Refusal) as exc:
+        observed = {'status': 'REFUSED', 'reason': str(exc)}
+    assert observed == {'status': 'ACCEPTED', 'kind': 'retained_local_step_receipt',
+                        'producer_memory': 32 * 1024**3}
+    assert result['kind'] == 'retained_local_step_receipt'
+    assert result['local_image'] == original
+    assert result['local_image']['memory'] == 32 * 1024**3
+    assert lc.local_image_attestation(local_image.image)['memory'] == 8 * 1024**3
+
+
+@pytest.mark.parametrize('change,reason', [
+    ('image', 'NATIVE373_LOCAL_IMAGE_CHANGED'),
+    ('frame', 'NATIVE373_RETAINED_FRAME_INVALID'),
+    ('stale', 'LL_STEP_OUTPUT_UNBOUND'),
+])
+def test_retained_local_producer_refuses_changed_identity_frame_or_input(
+        tmp_path, local_image, change, reason):
+    project, folder, _ = retained_local_receipt(
+        tmp_path, local_image, change=change if change != 'stale' else None)
+    if change == 'stale':
+        fingerprint = json.loads((folder / 'input_fingerprint.json').read_text())
+        fingerprint['stale'] = True
+        (folder / 'input_fingerprint.json').write_text(json.dumps(fingerprint))
+    with pytest.raises((ValueError, lc.Refusal), match=reason):
+        native._local_execution(project, folder, 'KLayout.XOR', local_image.image)
 
 
 @pytest.fixture
