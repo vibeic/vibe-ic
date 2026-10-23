@@ -86,13 +86,16 @@ def execute(project, context):
                or not (f['d_nets'] or f['r_nets']) or f['negative_caps'] or f['negative_net_totals']}
         if bad:
             raise AdmissionRefusal('D69_SPEF_CONSUMER_FAILED', str(bad), status='FAIL')
+        final_spefs = {c: files._record(project, Path(p)) for c, p in run['spef'].items()}
         result.update(component_status='PASS', reason='D69_FINAL_FILLED_ODB_RCX_MEASURED',
+                      producer='flow109_final_extract',
                       d62_receipt=manifest['d62_receipt'], stream_bridge=manifest['stream_bridge'],
                       adopted_views=views, inputs=basis,
                       operation_sources=sources,
+                      final_geometry=bridge['odb'],
                       rcx_state=files._record(project, Path(run['rcx']) / 'state_out.json'),
                       rcx_receipt=files._record(project, Path(run['rcx']) / 'vibeic_receipt.json'),
-                      spefs={c: files._record(project, Path(p)) for c, p in run['spef'].items()},
+                      spefs=final_spefs, final_spefs=final_spefs,
                       spef_consumer=scans, rcx_binding=binding, execution_context=context)
     except AdmissionRefusal as exc:
         result.update(component_status=exc.status, reason=exc.code, detail=str(exc))
@@ -117,6 +120,10 @@ def validate_final_parasitics(project, receipt_ref):
     bridge = files.validate_bridge(project, record['stream_bridge'])
     if bridge['d62_receipt'] != record['d62_receipt'] or bridge['odb'] != d62['odb']:
         raise AdmissionRefusal('D69_FINAL_GEOMETRY_MISMATCH', 'stream-out and D62 ODB differ')
+    if (record.get('producer') != 'flow109_final_extract'
+            or record.get('final_geometry') != bridge['odb']
+            or record.get('final_spefs') != record.get('spefs')):
+        raise AdmissionRefusal('D69_FINAL_OUTPUT_BINDING_MISMATCH', 'final ODB/SPEF aliases drifted')
     for path, sha in record['inputs'].items():
         if not Path(path).is_file() or _sha(path) != sha:
             raise AdmissionRefusal('D69_INPUT_CHANGED', path)
@@ -129,5 +136,6 @@ def validate_final_parasitics(project, receipt_ref):
                            _bound(project, record['rcx_state']).parent / 'state_in.json')
     return {'odb': bridge['odb'], 'd62_receipt': record['d62_receipt'],
             'adopted_views': record['adopted_views'],
-            'spefs': record['spefs'], 'parasitic_receipt': receipt_ref,
+            'spefs': record['spefs'], 'final_geometry': record['final_geometry'],
+            'final_spefs': record['final_spefs'], 'parasitic_receipt': receipt_ref,
             'component_parasitics_current': True, 'flow109_acceptance': 'NOT_MEASURED'}

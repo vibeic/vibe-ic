@@ -49,6 +49,11 @@ def execute(project, context):
         require_launch_admission(project, 'flow109.D70', {'flow109_context': context})
         manifest = _read(project / INPUT)
         if manifest.get('schema') != SCHEMA: raise AdmissionRefusal('D70_REQUIRED_INPUT_INVALID', 'schema')
+        required_corners = manifest.get('required_corners')
+        if (not isinstance(required_corners, list) or not required_corners
+                or len(required_corners) != len(set(required_corners))
+                or not all(isinstance(corner, str) and corner for corner in required_corners)):
+            raise AdmissionRefusal('D70_REQUIRED_CORNERS_ABSENT', 'nonempty unique required_corners required')
         parasitics = extract.validate_final_parasitics(project, manifest.get('final_parasitics_receipt'))
         d69 = _read(files._bound(project, manifest['final_parasitics_receipt']))
         d62 = _read(files._bound(project, d69['d62_receipt']))
@@ -69,12 +74,38 @@ def execute(project, context):
             'spef_producer': 'flow109.D69', 'sta_state': str(state_path),
             'sta_state_sha256': digest(state_path), 'corners': corners, 'judgment': timing})
         _, state = postroute.stapostpnr_state(project); sdfs = postroute.corner_sdfs(state)
+        if (set(required_corners) != set(corners) or set(required_corners) != set(sdfs)
+                or list(required_corners) != list(state.get('sdf') or {})):
+            raise AdmissionRefusal('D70_FINAL_CORNER_STATE_MISMATCH',
+                                   'declared corners must exactly match timing and state SDF population')
+        if (Path(str(state.get('nl') or '')).resolve() != netlist.resolve()
+                or Path(str(state.get('sdc') or '')).resolve() != sdc.resolve()):
+            raise AdmissionRefusal('D70_ADOPTED_VIEW_STATE_MISMATCH', 'STA state netlist/SDC differ')
+        state_spefs = state.get('spef') or {}
+        if (set(state_spefs) != set(parasitics['final_spefs'])
+                or any(Path(str(state_spefs[key])).resolve()
+                       != files._bound(project, parasitics['final_spefs'][key]).resolve()
+                       for key in state_spefs)):
+            raise AdmissionRefusal('D70_FINAL_SPEF_STATE_MISMATCH', 'STA state RC scenes differ from D69')
+        final_sdfs = {c: files._record(project, p) for c, p in sdfs.items()}
+        state_record = files._record(project, state_path)
+        provenance = {'basis': 'D69_final_parasitics',
+                      'd69_receipt': manifest['final_parasitics_receipt'],
+                      'sta_state': state_record,
+                      'declared_corners': required_corners,
+                      'spef_by_rc_scene': parasitics['final_spefs']}
         status = timing['verdict']
         result.update(component_status=status, reason='D70_NATIVE_ELECTRICAL_' + status,
+                      producer='flow109_final_electrical', sdf_role='final',
                       final_parasitics_receipt=manifest['final_parasitics_receipt'],
-                      sta_state=files._record(project, state_path), sta_record=files._record(project, record_path),
+                      d69_receipt=manifest['final_parasitics_receipt'],
+                      netlist=parasitics['adopted_views']['netlist'],
+                      sdc=parasitics['adopted_views']['sdc'],
+                      required_corners=required_corners,
+                      sta_state=state_record, sta_record=files._record(project, record_path),
                       corners=corners, timing_judgment=timing,
-                      sdfs={c: files._record(project, p) for c, p in sdfs.items()},
+                      sdfs=final_sdfs, final_sdfs=final_sdfs,
+                      sdf_provenance=provenance,
                       ir_status='NOT_MEASURED', execution_context=context)
         result['operation_sources'] = sources
     except AdmissionRefusal as exc: result.update(component_status=exc.status, reason=exc.code, detail=str(exc))
@@ -93,12 +124,32 @@ def validate_final_electrical(project, receipt_ref):
     require_launch_admission(project, 'flow109.D70', {'flow109_context': record.get('execution_context')})
     if record.get('operation_sources') != operation_sources():
         raise AdmissionRefusal('D70_OPERATION_SOURCE_CHANGED', 'adapter or retained consumer changed')
-    extract.validate_final_parasitics(project, record['final_parasitics_receipt'])
+    parasitics = extract.validate_final_parasitics(project, record['final_parasitics_receipt'])
     folder, state = postroute.stapostpnr_state(project)
     if files._record(project, folder / 'state_out.json') != record['sta_state']:
         raise AdmissionRefusal('D70_STA_STATE_CHANGED', str(folder))
     if signoff.judge_timing(signoff.corner_timing(folder)) != record['timing_judgment']:
         raise AdmissionRefusal('D70_TIMING_CHANGED', str(folder))
-    postroute.corner_sdfs(state)
+    state_sdfs = postroute.corner_sdfs(state)
+    expected_sdfs = {corner: files._record(project, path)
+                     for corner, path in state_sdfs.items()}
+    if (record.get('producer') != 'flow109_final_electrical'
+            or record.get('sdf_role') != 'final'
+            or record.get('d69_receipt') != record.get('final_parasitics_receipt')
+            or record.get('final_sdfs') != record.get('sdfs')
+            or record.get('final_sdfs') != expected_sdfs
+            or set(record.get('required_corners') or []) != set(state_sdfs)
+            or list(record.get('required_corners') or []) != list(state.get('sdf') or {})
+            or record.get('netlist') != parasitics['adopted_views']['netlist']
+            or record.get('sdc') != parasitics['adopted_views']['sdc']):
+        raise AdmissionRefusal('D70_FINAL_OUTPUT_BINDING_MISMATCH', 'final receipt aliases/state drifted')
+    provenance = record.get('sdf_provenance') or {}
+    if (provenance.get('basis') != 'D69_final_parasitics'
+            or provenance.get('d69_receipt') != record.get('d69_receipt')
+            or provenance.get('sta_state') != record.get('sta_state')
+            or provenance.get('declared_corners') != record.get('required_corners')
+            or provenance.get('spef_by_rc_scene') != parasitics['final_spefs']):
+        raise AdmissionRefusal('D70_FINAL_PROVENANCE_MISMATCH', 'D69/state/corner provenance drifted')
     return {'sta_state': record['sta_state'], 'sdfs': record['sdfs'],
+            'final_sdfs': record['final_sdfs'], 'required_corners': record['required_corners'],
             'component_electrical_current': True, 'flow109_acceptance': 'NOT_MEASURED'}

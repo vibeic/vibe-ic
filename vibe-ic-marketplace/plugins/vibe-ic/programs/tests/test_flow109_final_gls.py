@@ -117,7 +117,15 @@ def _case(project):
         'netlist': netlist, 'sdc': sdc, 'required_corners': ['tt'],
         'final_sdfs': {'tt': sdf}, 'd69_receipt': d69,
         'sdf_provenance': {'basis': 'D69_final_parasitics', 'd69_receipt': d69,
-                           'spef_by_corner': {'tt': spef}}}
+                           'declared_corners': ['tt'],
+                           'spef_by_rc_scene': {'tt': spef}}}
+    state = _put(project, 'reports/flow109/D70/state_out.json', {
+        'nl': str((project / netlist['path']).resolve()),
+        'sdc': str((project / sdc['path']).resolve()),
+        'spef': {'tt': str((project / spef['path']).resolve())},
+        'sdf': {'tt': str((project / sdf['path']).resolve())}})
+    d70_doc['sta_state'] = state
+    d70_doc['sdf_provenance']['sta_state'] = state
     d70 = _put(project, 'reports/flow109/D70/component.json', d70_doc)
     requirements = _put(project, 'requirements/final_gls.json', {
         'approval': {'status': 'APPROVED', 'authority': 'requirements_owner',
@@ -247,19 +255,27 @@ def test_actual_native_negative_output_and_annotation_are_preserved(tmp_path, da
     ('missing_corner', 'D71_FINAL_CORNER_BINDING_MISMATCH'),
     ('stale_sdf', 'D71_INPUT_UNBOUND'),
     ('wrong_netlist', 'D71_D70_NETLIST_DIFFERS_FROM_D44'),
+    ('wrong_state_sdf', 'D71_FINAL_STATE_IDENTITY_MISMATCH'),
 ])
 def test_invalid_final_source_or_required_semantics_refuses_before_native(tmp_path, damage, reason):
     _case(tmp_path)
     manifest_path = tmp_path / final_gls.INPUT
     manifest = json.loads(manifest_path.read_text())
-    if damage in ('candidate', 'wrong_netlist'):
+    if damage in ('candidate', 'wrong_netlist', 'wrong_state_sdf'):
         d70_path = tmp_path / manifest['d70_receipt']['path']
         d70 = json.loads(d70_path.read_text())
         if damage == 'candidate':
             d70.update(schema='vibeic.flow109.candidate-timing.v1', step_id='D49', sdf_role='candidate')
-        else:
+        elif damage == 'wrong_netlist':
             d70['netlist'] = _put(tmp_path, 'inputs/not-adopted.v',
                                   NETLIST.replace('delay_cell u0', 'delay_cell changed_instance'))
+        else:
+            state_path = tmp_path / d70['sta_state']['path']
+            state = json.loads(state_path.read_text())
+            state['sdf']['tt'] = str((tmp_path / 'inputs/not-the-final.sdf').resolve())
+            state_path.write_text(json.dumps(state))
+            d70['sta_state'] = final_gls._record(tmp_path, state_path)
+            d70['sdf_provenance']['sta_state'] = d70['sta_state']
         d70_path.write_text(json.dumps(d70))
         manifest['d70_receipt'] = final_gls._record(tmp_path, d70_path)
         manifest_path.write_text(json.dumps(manifest))

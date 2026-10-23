@@ -19,6 +19,19 @@ def test_native_failure_precedence_is_not_relabelled_unmeasured():
     assert d70._native_refusal_status('LL_DIRECT_SPEF_MISSING') == 'NOT_MEASURED'
 
 
+def test_d70_refuses_an_empty_declared_corner_population_before_native(tmp_path, monkeypatch):
+    manifest = tmp_path / d70.INPUT
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(json.dumps({'schema': d70.SCHEMA,
+                                    'final_parasitics_receipt': {'path': 'unused',
+                                                                 'sha256': '0' * 64}}))
+    monkeypatch.setattr(d70, 'require_launch_admission', lambda *args, **kwargs: None)
+    result = d70.execute(tmp_path, {'context_sha256': 'source-control'})
+    assert result['component_status'] == 'NOT_MEASURED'
+    assert result['reason'] == 'D70_REQUIRED_CORNERS_ABSENT'
+    assert result['native_started'] is False
+
+
 def test_final_filled_odb_runs_rcx_then_all_declared_stapostpnr_corners():
     control_path = Path('/tmp/vibeic-d69d70-native-control.json')
     if not control_path.is_file():

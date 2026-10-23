@@ -177,7 +177,9 @@ def prepare(project, context):
             or not isinstance(provenance, dict)
             or provenance.get('basis') != 'D69_final_parasitics'
             or not _same_record(provenance.get('d69_receipt'), d70.get('d69_receipt'))
-            or provenance.get('spef_by_corner') != final_spefs):
+            or provenance.get('spef_by_rc_scene') != final_spefs
+            or provenance.get('sta_state') != d70.get('sta_state')
+            or provenance.get('declared_corners') != d70.get('required_corners')):
         raise AdmissionRefusal('D71_FINAL_PARASITIC_PROVENANCE_UNBOUND', str(d70_path))
     spef_paths = [_bound(project, record) for record in final_spefs.values()]
     sdc = _bound(project, d70.get('sdc'))
@@ -209,9 +211,21 @@ def prepare(project, context):
     if d70.get('required_corners') != corners or set(d70.get('final_sdfs') or {}) != set(corners):
         raise AdmissionRefusal('D71_FINAL_CORNER_BINDING_MISMATCH', str(d70_path))
 
+    state_path = _bound(project, d70.get('sta_state'))
+    state = _read(state_path)
+    if (list(state.get('sdf') or {}) != corners
+            or Path(str(state.get('nl') or '')).resolve() != netlist
+            or Path(str(state.get('sdc') or '')).resolve() != sdc
+            or set(state.get('spef') or {}) != set(final_spefs)
+            or any(Path(str(state['spef'][scene])).resolve()
+                   != _bound(project, final_spefs[scene]) for scene in final_spefs)):
+        raise AdmissionRefusal('D71_FINAL_STATE_IDENTITY_MISMATCH', str(state_path))
+
     sdfs, census = {}, {}
     for corner in corners:
         path = _bound(project, d70['final_sdfs'][corner])
+        if Path(str(state['sdf'].get(corner) or '')).resolve() != path:
+            raise AdmissionRefusal('D71_FINAL_STATE_IDENTITY_MISMATCH', corner)
         sdfs[corner] = path
         census[corner] = _sdf_census(path, top)
     declared = manifest.get('scenarios')
@@ -253,7 +267,7 @@ def prepare(project, context):
                 or use.get('corner') != ','.join(corners)):
             raise AdmissionRefusal('D71_QUALIFICATION_SCOPE_MISMATCH', use.get('use_id'))
     paths = [project / INPUT, baseline_path, d44_path, proof_path, d70_path, d69_path,
-             final_geometry, *spef_paths, netlist, sdc,
+             final_geometry, *spef_paths, netlist, sdc, state_path,
              requirements_path, operation, model_bundle, *sdfs.values(), *model_paths,
              *(Path(case['testbench']) for case in cases)]
     return {'manifest': manifest, 'top': top, 'netlist': netlist, 'sdc': sdc,
