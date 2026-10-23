@@ -273,6 +273,26 @@ def test_cached_pass_cannot_hide_native_failure_or_interruption(tmp_path, monkey
     assert capture.coherent_sndr(points, 64, 9, 14)["status"] == status
 
 
+@pytest.mark.parametrize('code,line,status', [(124, '', 'NOT_MEASURED'),
+    (124, ';;RESIDUAL_FAIL actual numerical error', 'FAIL'),
+    (124, 'fatal error: actual native analysis', 'FAIL'), (1, '', 'FAIL')])
+def test_current_raw_value_does_not_turn_a_timeout_into_design_failure(tmp_path, code, line, status):
+    project, _settings, directory, record = _method_record(tmp_path)
+    assert record['decoded']['conversions']  # Real decoder output from this finite software-fixture capture.
+    execution = record['executions'][0]
+    log = Path(execution['log']); log.write_text(line)
+    execution.update(returncode=code, log_sha256=capture.bound.sha(log))
+    assert capture.native_execution_failure(record) is (status == 'FAIL')
+    assert capture.coherent_sndr([record], 64, 9, 14)['status'] == status
+    paths = record['native_inputs']
+    def native(deck, target):
+        transcript = target / 'native.log'; transcript.write_text(line)
+        return {'returncode': code, 'log': str(transcript), 'log_sha256': capture.bound.sha(transcript)}
+    measured = capture.run_point(project, Path(paths['netlist']['path']), Path(paths['testbench']['path']),
+        Path(paths['spec']['path']), Path(paths['topology']['path']), record['settings'], tmp_path / 'interrupted', native)
+    assert measured['status'] == status and measured['decoded'] == {}
+
+
 def test_consumer_replays_native_score_instead_of_trusting_cached_pass(tmp_path, monkeypatch):
     points = _series(tmp_path, monkeypatch)
     entries = []

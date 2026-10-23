@@ -317,7 +317,7 @@ def native_execution_failure(record: dict) -> bool:
         log = Path(execution.get("log") or "__missing_native_log__")
         if log.is_file() and execution.get("log_sha256") == bound.sha(log) and native_failed(log.read_text(errors="replace")):
             return True
-        if isinstance(code, int) and code > 0 and code not in (130, 137, 143):
+        if isinstance(code, int) and code > 0 and code not in (124, 130, 137, 143):
             return True
     return False
 
@@ -334,7 +334,7 @@ def coherent_sndr(points: list[dict], length: int, tone_bin: int, target_bits: f
             return {"status": "FAIL", "detail": "native conversion execution failed", "phase_index": index}
         for execution in point.get("executions") or []:
             code = execution.get("returncode")
-            interrupted = isinstance(code, int) and (code < 0 or code in (130, 137, 143))
+            interrupted = isinstance(code, int) and (code < 0 or code in (124, 130, 137, 143))
             log = Path(execution.get("log") or "__missing_native_log__")
             if interrupted:
                 return {"status": "NOT_MEASURED", "detail": "native conversion interrupted", "phase_index": index}
@@ -481,7 +481,7 @@ def run_point(project: Path, netlist: Path, template: Path, spec_path: Path,
                 "executions": [], "clock": list(clock), "incremental_decode": declaration, "decoded": {}}
     execution = run(deck, destination)
     native_log = Path(execution["log"]).read_text(errors="replace")
-    interrupted = execution.get("returncode") in (130, 137, 143) or execution.get("returncode", 0) < 0
+    interrupted = execution.get("returncode") in (124, 130, 137, 143) or execution.get("returncode", 0) < 0
     failed = execution.get("returncode") != 0 or native_failed(native_log)
     record = {"status": "FAIL" if native_failed(native_log) else "NOT_MEASURED" if interrupted else "FAIL" if failed else "NOT_MEASURED", "project": str(project.resolve()),
               "settings": settings, "native_inputs": views, "executions": [execution],

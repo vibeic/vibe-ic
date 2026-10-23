@@ -78,6 +78,30 @@ def _attempt(project, step, name):
     return Path(tempfile.mkdtemp(prefix="run-", dir=root))
 
 
+def _incremental_source_manifest(project, name, config, options, reference, kind):
+    """Bind an explicit native population manifest to this delivered block."""
+    if not isinstance(reference, dict) or not reference.get("path") or not reference.get("sha256"):
+        raise ValueError("incremental study requires a manifest path and digest")
+    path = _path(project, reference["path"], project).resolve()
+    if hashlib.sha256(path.read_bytes()).hexdigest() != reference["sha256"]:
+        raise ValueError("incremental study manifest digest changed")
+    manifest = _read(path)
+    if (not isinstance(manifest, dict) or manifest.get("kind") != kind
+            or manifest.get("stage") != "PRE" or manifest.get("block") != name
+            or Path(manifest.get("project") or "").resolve() != project.resolve()
+            or not options.get("image") or manifest.get("image") != options["image"]):
+        raise ValueError("incremental study manifest does not belong to this block/runtime")
+    views = manifest.get("native_inputs") or {}
+    if not isinstance(views, dict):
+        raise ValueError("incremental study source views must be an object")
+    for role, current in zip(("netlist", "testbench", "spec"), _inputs(project, name, config)):
+        view = views.get(role) or {}
+        if (not isinstance(view, dict) or Path(view.get("path") or "").resolve() != current.resolve()
+                or view.get("sha256") != hashlib.sha256(current.read_bytes()).hexdigest()):
+            raise ValueError("incremental study source differs from the current " + role)
+    return path, manifest
+
+
 def _deck_text(path):
     return "\n".join(line for line in path.read_text(errors="replace").splitlines()
                      if not line.lstrip().startswith(("*", ";")))
@@ -464,10 +488,19 @@ def _bound_studies(project, name, config, options, run, step):
                 and all(row["status"] == "PASS" for row in studies)
                 and all(row["status"] == "PASS" for row in attributed))
     status = "FAIL" if violations or any(row["status"] == "FAIL" for row in studies) else "PASS" if complete else "NOT_MEASURED"
-    result = _result(status,
-                   "native study methods cover source requirements" if complete and step == "A06" else
-                   "native study measurements cover source requirements" if complete else
-                   "explicit native studies retained; whole-block measurement coverage remains incomplete",
+    absent = method_missing if step == "A06" else coverage["missing"]
+    detail = ("native study methods cover source requirements" if complete and step == "A06" else
+              "native study measurements cover source requirements" if complete else
+              "explicit native studies retained; whole-block measurement coverage remains incomplete")
+    if violations:
+        detail = "native study measurements violate source limits: " + ", ".join(violations)
+    elif any(row["status"] == "FAIL" for row in studies):
+        detail = "native measurement study failed"
+    if absent:
+        detail += "; source requirements missing: " + ", ".join(absent)
+    if missing_analyses:
+        detail += "; source analyses missing: " + ", ".join(missing_analyses)
+    result = _result(status, detail,
                    outputs=outputs, metrics=metrics, executions=executions)
     result["native_inputs"] = native_inputs
     return result
@@ -617,7 +650,7 @@ def run_step(step_id, project, block, options, run):
             status, detail = "NOT_MEASURED", missing
             studies = _bound_studies(project, name, config, options, run, step_id)
             if studies is not None:
-                status, detail = studies["status"], studies["detail"] if studies["status"] == "PASS" else detail + "; " + studies["detail"]
+                status, detail = studies["status"], studies["detail"]
                 metrics.update(studies["metrics"])
                 outputs += studies["outputs"]
                 executions += studies["executions"]
@@ -635,16 +668,30 @@ def run_step(step_id, project, block, options, run):
         if nominal.get("status") != "PASS":
             return _result("NOT_MEASURED", "nominal A07 has not passed; PVT sweep was not launched")
         pvt = config.get("pvt")
-        if isinstance(pvt, dict) and "result" in pvt:
-            reference = pvt["result"]
+        incremental = isinstance(pvt, dict) and pvt.get("kind") == "incremental_capture"
+        if isinstance(pvt, dict) and (incremental or "result" in pvt):
+            reference = pvt.get("manifest") if incremental else pvt["result"]
             if not isinstance(reference, dict) or not reference.get("path") or not reference.get("sha256"):
                 return _result("NOT_MEASURED", "bound PRE PVT requires an actual result path and digest")
             reference = {**reference, "path": str(_path(project, reference["path"], project).resolve())}
+            if incremental:
+                try:
+                    _incremental_source_manifest(project, name, config, options, reference,
+                                                 "incremental_capture_pvt")
+                except (OSError, ValueError, TypeError) as exc:
+                    return _result("NOT_MEASURED", str(exc))
             report = _attempt(project, step_id, name) / "pvt-studies.json"
-            execution = run("analog_native_physical.py", ["pvt", str(project), "--block", name,
-                "--container", options["container"], "--image", str(options.get("image", "")),
-                "--pdk", options["pdk"], "--settings", json.dumps({"result": reference}),
-                "--json", str(report)], outputs=[str(report)])
+            if incremental:
+                program, argv = "analog_incremental_pvt.py", ["run", reference["path"],
+                    "--container", options["container"], "--image", options["image"],
+                    "--workers", str(options.get("workers", 1)), "--cpus", str(options.get("cpus", 1)),
+                    "--json", str(report)]
+            else:
+                program, argv = "analog_native_physical.py", ["pvt", str(project), "--block", name,
+                    "--container", options["container"], "--image", str(options.get("image", "")),
+                    "--pdk", options["pdk"], "--settings", json.dumps({"result": reference}),
+                    "--json", str(report)]
+            execution = run(program, argv, outputs=[str(report)])
             record = _read(report)
             record = record if isinstance(record, dict) else {}
             status = record.get("status") if record.get("status") in ("PASS", "FAIL") else "NOT_MEASURED"
@@ -665,7 +712,8 @@ def run_step(step_id, project, block, options, run):
                     and not isinstance(contexts[key]["required_contexts"], bool)
                     and contexts[key]["required_contexts"] > 0
                     and contexts[key].get("measured_contexts") == contexts[key]["required_contexts"]
-                    and not contexts[key].get("missing_contexts") for key in required))
+                    and not contexts[key].get("missing_contexts") and not contexts[key].get("gaps")
+                    for key in required))
             if metrics.get("stage") != "PRE" or status == "PASS" and not complete:
                 status = "NOT_MEASURED"
             result = _result(status, record.get("detail") or "current PRE native PVT study measurements",
@@ -728,9 +776,33 @@ def run_step(step_id, project, block, options, run):
         count = stats.get("n", 100) if isinstance(stats, dict) else 100
         if isinstance(count, bool) or not isinstance(count, int) or count < 1:
             return _result("NOT_MEASURED", "Monte Carlo sample count must be a positive integer")
+        incremental = isinstance(stats, dict) and stats.get("kind") == "incremental_capture"
         population = isinstance(stats, dict) and "references" in stats
         exports, measured_inputs = [], {}
-        if population:
+        if incremental:
+            try:
+                manifest_path, manifest = _incremental_source_manifest(project, name, config, options,
+                    stats.get("manifest"), "incremental_capture_statistics")
+                samples = manifest.get("requested_samples")
+                if (count < 2 or not isinstance(samples, int) or isinstance(samples, bool)
+                        or samples != count):
+                    raise ValueError("incremental statistics require the requested >=2 native chip samples")
+            except (OSError, ValueError, TypeError) as exc:
+                return _result("NOT_MEASURED", str(exc))
+            execution = run("analog_incremental_statistics.py", ["run", str(manifest_path),
+                "--container", options["container"], "--image", options["image"],
+                "--workers", str(options.get("workers", 1)), "--cpus", str(options.get("cpus", 1)),
+                "--json", str(report)], outputs=[str(report)])
+            wrapper = _read(report)
+            wrapper = wrapper if isinstance(wrapper, dict) else {}
+            record = wrapper.get("metrics")
+            if not isinstance(record, dict) or record.get("stage") != "PRE":
+                return _result("NOT_MEASURED", "native incremental population did not return a PRE study",
+                               outputs=[str(report)], executions=[execution])
+            exports, measured_inputs = wrapper.get("outputs", []), wrapper.get("native_inputs", {})
+            record = {**record, "verdict": wrapper.get("status"), "reason": wrapper.get("detail"),
+                      "mc_runs": record.get("samples_executed")}
+        elif population:
             references = stats["references"]
             if count < 2 or not isinstance(references, list) or not references or any(
                     not isinstance(ref, dict) or not ref.get("path") or not ref.get("sha256") for ref in references):
@@ -756,9 +828,14 @@ def run_step(step_id, project, block, options, run):
         status = record.get("verdict")
         status = status if status in ("PASS", "FAIL") else "NOT_MEASURED"
         if status == "PASS" and (execution.get("returncode") != 0 or not record.get("mc_runs")
-                                 or population and record.get("mc_runs") != count):
+                                 or (population or incremental) and record.get("mc_runs") != count
+                                 or incremental and (record.get("requested_samples") != count
+                                     or record.get("native_activation_proven") is not True or record.get("gaps"))):
             status = "NOT_MEASURED"
         metrics = {key: record.get(key) for key in ("mc_runs", "mc_yield_pct", "spec_yield", "corner_results")}
+        if incremental:
+            metrics.update({key: record.get(key) for key in ("requested_samples", "native_activation_proven",
+                            "mc_source_coverage", "cohorts", "gaps", "scope")})
         detail = str(record.get("reason") or "native Monte Carlo yield result")
         if status == "PASS":
             _netlist, _deck, spec = _inputs(project, name, config)
@@ -772,7 +849,7 @@ def run_step(step_id, project, block, options, run):
                 detail = coverage["detail"] or ("source-required Monte Carlo measurements are missing: "
                                                  + ", ".join(coverage["missing"]))
         result = _result(status, detail, outputs=[str(report), *exports], metrics=metrics, executions=[execution])
-        if population:
+        if population or incremental:
             result["native_inputs"] = measured_inputs
         return result
     return _result("NOT_MEASURED", "simulation responsibility is unsupported: " + str(step_id))
