@@ -13,6 +13,16 @@ import flow109_final_gls as gls
 import flow109_metric_acceptance as metrics
 
 
+_D71_FIXTURES = Path(__file__).resolve().parent / "fixtures/flow109_d71"
+
+
+def _frozen_D71_sources():
+    sources = json.loads((_D71_FIXTURES / "frozen-b74-operation-sources-713.json").read_text())
+    provenance = json.loads(
+        (_D71_FIXTURES / "frozen-b74-operation-sources-713.provenance.json").read_text())
+    return sources, provenance
+
+
 def _real_D71_operation_sources():
     from execution_provider_catalog import source_closure
 
@@ -164,26 +174,44 @@ def test_current_native_D71_metrics_are_observed_but_pending_authority_and_upstr
                for item in accepted["obligations"])
 
 
-def test_frozen_b74_population_accepts_only_real_consumer_induced_AST_growth(
-        tmp_path, monkeypatch):
-    component, _ = _case(tmp_path, monkeypatch, mock_sources=False)
-    current = _real_D71_operation_sources()
-    monkeypatch.setattr(gls, "operation_sources", lambda: current)
-    added = {"programs/flow109_final_electrical.py", "programs/flow109_final_extract.py"}
-    assert len(current) == 715 and added < set(current)
-    recorded = {name: digest for name, digest in current.items() if name not in added}
-    recorded[metrics.D71_CONSUMER_SOURCE] = (
-        "e71c21ee7606e23d252fa5b821ac3dae556147948de43a394bc7370e0c37f00d")
+def test_frozen_b74_population_accepts_only_real_consumer_induced_AST_growth():
+    recorded, provenance = _frozen_D71_sources()
     canonical = json.dumps(recorded, sort_keys=True, separators=(",", ":")).encode()
-    assert len(recorded) == 713
-    assert hashlib.sha256(canonical).hexdigest() == (
+    assert len(recorded) == provenance["entry_count"] == 713
+    assert hashlib.sha256(canonical).hexdigest() == provenance["canonical_json_sha256"] == (
         "c76f4ba79eacf8422687c6e1c6ca7c09db03a977ead119a2c1370f397d2f9e06")
-    component["operation_sources"] = recorded
-    accepted = metrics.accept_d71(tmp_path, _context(), component)
-    assert {item["id"]: item["status"] for item in accepted["obligations"]} == {
-        "final_gls.final_sdf_annotation": "NOT_MEASURED",
-        "final_gls.final_gls_scenarios": "NOT_MEASURED",
-        "final_gls.final_gls_function_timing_errors": "PASS"}
+    assert all(not Path(name).is_absolute() and name.startswith("programs/")
+               for name in recorded)
+    native_sources = provenance["native_producer_sources"]
+    assert native_sources and set(native_sources) <= set(recorded)
+    assert {name: recorded[name] for name in native_sources} == native_sources
+
+
+def test_current_tree_real_consumer_AST_growth_uses_its_own_named_baseline():
+    current = _real_D71_operation_sources()
+    _, provenance = _frozen_D71_sources()
+    programs = Path(gls.__file__).resolve().parent
+    native_sources = provenance["native_producer_sources"]
+    assert set(native_sources) <= set(current)
+    assert {name: current[name] for name in native_sources} == native_sources
+    assert all(hashlib.sha256((programs.parent / name).read_bytes()).hexdigest() == digest
+               for name, digest in native_sources.items())
+
+    added = {"programs/flow109_final_electrical.py", "programs/flow109_final_extract.py"}
+    assert added < set(current)
+    generated_baseline = {name: digest for name, digest in current.items()
+                          if name not in added}
+    assert metrics._d71_source_boundary(generated_baseline, current, gls) is True
+
+    changed = dict(current)
+    changed["programs/flow109_final_gls.py"] = "0" * 64
+    assert metrics._d71_source_boundary(generated_baseline, changed, gls) is False
+    missing = dict(current)
+    missing.pop("programs/flow109_final_gls.py")
+    assert metrics._d71_source_boundary(generated_baseline, missing, gls) is False
+    arbitrary = dict(current)
+    arbitrary["programs/arbitrary_consumer_import.py"] = "0" * 64
+    assert metrics._d71_source_boundary(generated_baseline, arbitrary, gls) is False
 
 
 @pytest.mark.parametrize("damage, expected", [

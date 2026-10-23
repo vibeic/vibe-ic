@@ -1,0 +1,15 @@
+{
+  "schema": "vibeic.flow109.d71-source-fixture.v1",
+  "source_commit": "b74a02e0291f3c9098832d9315972b74b7a38f78",
+  "source_record": "original native D71 component operation_sources",
+  "entry_count": 713,
+  "canonical_json_sha256": "c76f4ba79eacf8422687c6e1c6ca7c09db03a977ead119a2c1370f397d2f9e06",
+  "native_producer_sources": {
+    "programs/flow109_final_gls.py": "470b881d0b67a9037797e5025448a8f1de85e771605c83f1b2e7757371c35144",
+    "programs/sdf_gate_sim.py": "8a34ab0940b12c578fc82db45ea542b20784853a9ada7d21add27fed9ac6b453",
+    "programs/post_layout_sim_check.py": "05b4784f72adfdcf688a7d2899c0ba61fad5bb9cc4f4dddcc6c7045dee772f0a",
+    "programs/full_stack_functional_tb.py": "b747e76fdafa481d947a70b8a5b9b3fd03ce66b2ca25380dabe6b5bbaf4478c0",
+    "programs/librelane_plugins/librelane_plugin_vibeic/__init__.py": "2656ed7266901b99c47ef19010b2a52651f0f6b1e2bf1760ca8171698c3a3568"
+  },
+  "scope": "Relative public program paths and hashes only; not native-result reuse authority"
+}
