@@ -686,16 +686,15 @@ def _die_derived_max_wire_length(state_path: Path) -> float:
     state = _load(state_path)
     path = Path(state.get("def", ""))
     text = path.read_text(errors="replace")
+    from _declared_die import def_diearea_um
     units = re.search(r"\bUNITS\s+DISTANCE\s+MICRONS\s+(\d+)\s*;", text)
-    area = re.search(
-        r"\bDIEAREA\s*\(\s*(-?\d+)\s+(-?\d+)\s*\)\s*"
-        r"\(\s*(-?\d+)\s+(-?\d+)\s*\)\s*;", text)
-    if units is None or area is None or int(units.group(1)) <= 0:
-        raise ValueError(f"routed DEF has no usable UNITS/DIEAREA: {path}")
-    x0, y0, x1, y1 = (int(area.group(i)) for i in range(1, 5))
-    shorter_um = min(abs(x1 - x0), abs(y1 - y0)) / int(units.group(1))
+    area = def_diearea_um(text)
+    if units is None or int(units.group(1)) <= 0 or area is None:
+        raise ValueError(f"routed DEF has no usable coordinate units/area: {path}")
+    x0, y0, x1, y1 = area
+    shorter_um = min(abs(x1 - x0), abs(y1 - y0))
     if shorter_um <= 0:
-        raise ValueError(f"routed DEF has an empty DIEAREA: {path}")
+        raise ValueError(f"routed DEF has an empty area: {path}")
     return round(max(200.0, min(2000.0, shorter_um / 3.0)), 6)
 
 

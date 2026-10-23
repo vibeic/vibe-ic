@@ -2568,3 +2568,17 @@ puts "CALLED=$::calls"
     assert result.returncode == 0, result.stderr
     assert not result.stderr
     assert result.stdout.strip() == f'CALLED={expected}'
+
+
+def test_routed_wire_bound_reuses_shared_def_geometry_spellings(tmp_path):
+    routed = tmp_path / "native.def"
+    state = tmp_path / "state.json"
+    state.write_text(json.dumps({"def": str(routed)}))
+    observed = []
+    for rectangle in ("( 0 0 ) ( 3000000 2400000 )", "( 0 0 3000000 2400000 )"):
+        routed.write_text("UNITS DISTANCE MICRONS 1000 ;\nDIEAREA " + rectangle + " ;\n")
+        try:
+            observed.append(prr._die_derived_max_wire_length(state))
+        except ValueError:
+            observed.append("REJECTED")
+    assert observed == [800.0, 800.0]
