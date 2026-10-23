@@ -327,6 +327,19 @@ def test_independent_block_advances_while_another_native_step_is_waiting(tmp_pat
     assert result["verdict"] == "PASS"
 
 
+def test_one_selected_block_keeps_its_bounded_native_job_concurrency(tmp_path, monkeypatch):
+    root = project(tmp_path)
+    (root / "input/analog_flow.json").write_text('{"workers":5,"cpus":5}')
+    observed = []
+    def dispatch(step, _project, block, options, _run):
+        observed.append((options["workers"], options["cpus"]))
+        return {"status": "PASS", "outputs": []}
+    monkeypatch.setattr(native, "_dispatch", dispatch)
+    result = native.run_window(root, args("A07", "A07"))
+    assert observed == [(5, 5)]
+    assert result["window_verdict"] == "PASS"
+
+
 def test_actual_subprocess_error_and_output_are_retained(tmp_path, monkeypatch):
     monkeypatch.setattr(native, "HERE", tmp_path)
     (tmp_path / "native_tool.py").write_text("print('native failure detail')\nraise SystemExit(7)\n")

@@ -966,11 +966,15 @@ def _resolve_params(ir: Dict[str, Any], sv: Dict[str, float]
         if any(n in sv for n in names) or any(
                 knob_src.get(n) == "spec" for n in names):
             spec_bound.append(f"{e['device']}.{e['param']}")
+    explicitly_sized = {f"{name}.{param}"
+        for name, values in ((ir.get("sizing_inputs") or {}).get("device_parameters") or {}).items()
+        for param in values}
     nominal = [f"{d['name']}.{p}"
                for d in ir.get("devices") or []
                for p in ("w", "l", "m")
                if d.get(p) is not None
-               and f"{d['name']}.{p}" not in spec_bound]
+               and f"{d['name']}.{p}" not in spec_bound
+               and f"{d['name']}.{p}" not in explicitly_sized]
     # DEDUPED. An entry may carry more than one expression for the same
     # device parameter -- a unit-element form and a spec-sized form that
     # overwrites it when the declaration carries the row it needs -- and each
@@ -2613,6 +2617,17 @@ def _emit_for_block(project: Path, entry: Dict[str, Any], pdk: str,
                    gap_path=str(gap.relative_to(project)))
         return rec
 
+    sizing_view = (ir.get("sizing_inputs") or {}).get("input_view")
+    if isinstance(sizing_view, dict):
+        sizing_path = Path(sizing_view.get("path") or "__missing_sizing_inputs__")
+        if not sizing_path.is_file() or sizing_view.get("sha256") != _sha256(sizing_path):
+            _drop_stale(bdir, name)
+            gap = write_gap(bdir, project, name, btype, "STALE_DESIGN_SIZING_INPUTS",
+                            "explicit sizing inputs changed since A2; rerun topology emission")
+            rec.update(action="gap", emitted=False, status="STALE_DESIGN_SIZING_INPUTS",
+                       gap_path=str(gap.relative_to(project)))
+            return rec
+
     spec_path = bdir / "spec.json"
     spec = _read_json(spec_path) if spec_path.is_file() else None
     if not isinstance(spec, dict) or not spec_values(spec):
@@ -2843,9 +2858,9 @@ def _emit_for_block(project: Path, entry: Dict[str, Any], pdk: str,
     else:
         prov_lines.append("_provenance: ai_handoff=none")
     prov_lines.append(
-        "_provenance: device geometry above is the topology library nominal "
-        "EXCEPT the spec_bound_params listed; sizing to the bound spec is "
-        "skill `analog-sizing`, not this producer")
+        "_provenance: device geometry is classified by spec_bound_params, "
+        "explicit_design_sizing_params and library_nominal_params in the "
+        "sidecar; explicit sizing requires native validation")
     # vibe-ic#2077 — THE DECK SAYS WHAT IT MEASURES, AND SAYS SO WHEN IT
     # MEASURES NOTHING. Adding `.meas` cards is the one thing that makes an
     # emitted deck differ from the byte-identical decks that preceded it, so
@@ -3083,13 +3098,19 @@ def _emit_for_block(project: Path, entry: Dict[str, Any], pdk: str,
             "fields_defaulted": defaulted,
             "defaults_used": bool(defaulted),
             "spec_bound_params": spec_bound,
+            "explicit_design_sizing_params": sorted(
+                f"{device}.{parameter}"
+                for device, values in ((ir.get("sizing_inputs") or {}).get("device_parameters") or {}).items()
+                for parameter in values),
+            "explicit_design_sizing_input": (ir.get("sizing_inputs") or {}).get("input_view"),
             "library_nominal_params": nominal,
             "ai_handoff": handoff,
             "limits": (
                 "the STRUCTURE is the topology library's circuit class and "
                 "the bound spec values entered only the parameters listed in "
-                "spec_bound_params; every other geometry is a library "
-                "nominal, not a solution of this design's spec."),
+                "spec_bound_params. Explicit design sizing is listed "
+                "separately and requires native validation; the remaining "
+                "library_nominal_params are not a solution of this design's spec."),
         },
         "pdk": dict({k: pdkctx[k] for k in
                      ("family", "registry_family", "model_lib", "typ_section",

@@ -2,9 +2,92 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
 
 import analog_mc_yield_run as mc
+
+
+def test_selected_native_binary_reaches_actual_transport_and_is_hash_bound(tmp_path, monkeypatch):
+    binary = tmp_path / "native-engine"
+    binary.write_bytes(b"selected native executable fixture")
+    seen = []
+    monkeypatch.setattr(mc._ars, "_supports_json_measure", lambda *a: False)
+    monkeypatch.setattr(mc._ars, "_resolve_ngspice", lambda *a: pytest.fail("explicit selection must win"))
+    def execute(container, command, timeout):
+        seen.append(command)
+        return SimpleNamespace(returncode=0, stdout="MEAS vout=1.2\n")
+    monkeypatch.setattr(mc._ars, "_docker", execute)
+    ok, values, _log, state = mc._ars._run_ngspice("container", "/project/deck.sp", cwd="/project",
+        ngspice_bin=str(binary))
+    assert ok and values["vout"] == 1.2
+    assert str(binary) in seen[0]
+    assert state["argv"] == [str(binary), "-b", "/project/deck.sp"]
+    expected = hashlib.sha256(binary.read_bytes()).hexdigest()
+    assert state["native_binary"] == {"path": str(binary), "sha256": expected, "sha256_after": expected}
+
+
+def test_selected_native_binary_mutation_cannot_keep_pass_or_measurements(tmp_path, monkeypatch):
+    binary = tmp_path / "native-engine"
+    binary.write_bytes(b"first executable")
+    monkeypatch.setattr(mc._ars, "_supports_json_measure", lambda *a: False)
+    def execute(*args, **kwargs):
+        binary.write_bytes(b"different executable")
+        return SimpleNamespace(returncode=0, stdout="MEAS vout=1.2\n")
+    monkeypatch.setattr(mc._ars, "_docker", execute)
+    ok, values, _log, state = mc._ars._run_ngspice("container", "/project/deck.sp", ngspice_bin=str(binary))
+    assert not ok and values["vout"] is None
+    assert state["changed_inputs"] == ["native_binary"]
+
+
+@pytest.mark.parametrize("selected", ["relative-engine", "/missing/native-engine"])
+def test_selected_native_binary_requires_absolute_existing_input(tmp_path, monkeypatch, selected):
+    monkeypatch.setattr(mc, "_run_block", lambda *a, **k: pytest.fail("do not launch invalid selection"))
+    result = mc.run_block(tmp_path, "cell", "container", "process", 2, ngspice_bin=selected)
+    assert result["verdict"] == "NOT_MEASURED" and result["mc_runs"] == 0
+
+
+def test_mc_forwards_selected_binary_for_every_sample_and_retains_argv(tmp_path, monkeypatch):
+    _case(tmp_path, monkeypatch)
+    binary = tmp_path / "native-engine"
+    binary.write_bytes(b"selected native executable fixture")
+    seen = []
+    def execute(container, deck, cwd=None, ngspice_bin=None):
+        seen.append(ngspice_bin)
+        value = 1.17 + 0.01 * len(seen)
+        return True, {"vout": value}, f"MEAS vout={value}\n", {
+            "partial": False, "warnings": [], "rc": 0,
+            "argv": [ngspice_bin, "-b", deck], "cwd": cwd}
+    monkeypatch.setattr(mc._ars, "_run_ngspice", execute)
+    result = mc.run_block(tmp_path, "cell_alpha", "container", "process_alpha", 2,
+                          ngspice_bin=str(binary))
+    assert result["verdict"] == "PASS"
+    assert seen == [str(binary)] * 2
+    assert len(result["mc_executions"]) == 2
+    assert all(row["argv"][0] == str(binary) for row in result["mc_executions"])
+    assert result["mc_native_binary"]["sha256"] == result["mc_native_binary"]["sha256_after"]
+
+
+@pytest.mark.parametrize("native_failure", [False, True])
+def test_selected_binary_drift_is_incomplete_and_preserves_actual_native_failure(tmp_path, monkeypatch, native_failure):
+    _case(tmp_path, monkeypatch)
+    binary = tmp_path / "native-engine"
+    binary.write_bytes(b"initial executable")
+    def execute(container, deck, cwd=None, ngspice_bin=None):
+        binary.write_bytes(b"changed executable")
+        return False, {"vout": None}, "Error: analysis aborted\n" if native_failure else "native run completed\n", {
+            "partial": True, "warnings": [], "rc": 1 if native_failure else 0,
+            "changed_inputs": ["native_binary"], "argv": [ngspice_bin, "-b", deck]}
+    monkeypatch.setattr(mc._ars, "_run_ngspice", execute)
+    result = mc.run_block(tmp_path, "cell_alpha", "container", "process_alpha", 2,
+                          ngspice_bin=str(binary))
+    assert result["verdict"] == ("FAIL" if native_failure else "NOT_MEASURED")
+    assert result["mc_native_failed"] == (2 if native_failure else 0)
+    assert len(result["mc_input_drift_logs"]) == 2
+    assert result["mc_yield_pct"] is None
 
 
 def _case(tmp_path, monkeypatch):

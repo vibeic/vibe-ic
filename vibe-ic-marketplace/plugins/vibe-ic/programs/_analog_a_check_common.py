@@ -921,9 +921,19 @@ def netlist_content(block_dir) -> BoundedContent:
     one. Exempting silence here is precisely how silence became cheaper than
     disclosure.
     """
-    return content_class_bounded(
+    result = content_class_bounded(
         [(Path(block_dir) / NETLIST_PROVENANCE_ARTEFACT,
           NETLIST_CONTENT_KEYS)])
+    if result.klass == CONTENT_UNDISCLOSED:
+        # A current read validation discloses an existing typed design without
+        # pretending that the validator historically emitted its frozen bytes.
+        import analog_existing_design_validate as existing
+        validated = existing.consume(Path(block_dir))
+        if validated is not None:
+            klass = classify_design_content(validated.get(DESIGN_CONTENT_FIELD))
+            source = Path(block_dir) / existing.RECEIPT
+            return BoundedContent(klass, source, klass, source, None)
+    return result
 
 
 def _a8_declared_content(block_dir: Path) -> Optional[BoundedContent]:

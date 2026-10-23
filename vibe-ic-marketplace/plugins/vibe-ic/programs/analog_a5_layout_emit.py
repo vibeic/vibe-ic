@@ -121,9 +121,11 @@ import math
 import re
 import shlex
 import shutil
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from fractions import Fraction
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -344,6 +346,8 @@ class PdkFacts:
         # the tech LEF's ROUTING/CUT table (`tech_lef_layers`), or None
         self.tech_lef: Optional[List[dict]] = None
         self.tech_lef_sha256: Optional[str] = None
+        self.cut_current_limits: dict = {}
+        self.cut_current_source: dict = {}
         self.core_pg: dict = {"result": "NOT_MEASURED",
                              "reason": "no resolved standard-cell LEF"}
         self.cell_lef_text: Optional[str] = None
@@ -421,6 +425,46 @@ def over_maxima(devs: Sequence[dict], facts: PdkFacts) -> List[dict]:
                            f"is not the one this netlist asks for."),
             })
     return out
+
+
+def _process_cut_limits(stage: Stage, pdk_root: str, family: str) -> tuple:
+    """Optional explicit foundry per-cut table, with its actual PDF hash.
+
+    LEF CUT scalars retain their standard area-density units. A bundled
+    process document may independently declare a per-via/contact limit;
+    unsupported/absent document formats supply no override.
+    """
+    folder = str(Path(pdk_root) / family / "libs.doc/doc")
+    discover = ("from pathlib import Path; import json; print('A5_PROCESS_PDFS='+json.dumps([str(p) for p in "
+                f"Path({folder!r}).glob('*process*spec*.pdf')]))")
+    rc, out, _ = stage.sh("python3 -c " + shlex.quote(discover), timeout=120)
+    messages = [line.split('=',1)[1] for line in out.splitlines() if line.startswith('A5_PROCESS_PDFS=')]
+    try:
+        paths = json.loads(messages[0]) if rc == 0 and len(messages) == 1 else []
+    except (TypeError, ValueError):
+        paths = []
+    if len(paths) != 1:
+        return {}, {}
+    path = paths[0]
+    copied = str(Path(stage.path or ".") / "a5-current-spec.pdf")
+    if stage.sh("cp -- " + shlex.quote(path) + " " + shlex.quote(copied), timeout=120)[0]:
+        return {}, {}
+    with tempfile.TemporaryDirectory(prefix="a5_current_spec.") as tmp:
+        pdf = Path(tmp) / "process.pdf"
+        if not stage.get("a5-current-spec.pdf", pdf)[0]:
+            return {}, {}
+        try:
+            import analog_native_em
+            text = subprocess.run(["pdftotext", "-layout", str(pdf), "-"],
+                                  capture_output=True, text=True, check=True).stdout
+            rules = analog_native_em.parse_process_limits(text)
+        except (OSError, ValueError, subprocess.SubprocessError):
+            return {}, {}
+        limits = {layer: {"value_mA": rows[0]["value"], "source_rule": rows[0]}
+                  for layer, rows in rules.items() if len(rows) == 1
+                  and rows[0]["unit"] in ("mA/Via", "mA/Cnt")}
+        return limits, {"path": path, "sha256": hashlib.sha256(pdf.read_bytes()).hexdigest(),
+                        "method": "primary process-spec current-per-via/contact table"}
 
 
 def read_pdk(stage: Stage, pdk_root: str, family: str,
@@ -546,6 +590,9 @@ def read_pdk(stage: Stage, pdk_root: str, family: str,
             facts.tech_lef = tech_lef_layers(out)
             facts.sources["tech_lef"] = lp
             facts.tech_lef_sha256 = hashlib.sha256(out.encode()).hexdigest()
+    facts.cut_current_limits, facts.cut_current_source = _process_cut_limits(stage, pdk_root, family)
+    if facts.cut_current_source:
+        facts.sources["process_current_limits"] = facts.cut_current_source["path"]
     cp = _resolved_tech_lef(stage, pdk_root, family,
                             asset_key="cell_lef_glob")
     if cp:
@@ -2218,9 +2265,41 @@ def _via_stack(plan: Plan, net: str, x: int, y: int, level: int, geo: Geo,
     return cx, cy
 
 
+def _pg_route_widths(pin_spec: Optional[dict], geo: Geo,
+                     requested_um: Optional[float]) -> dict:
+    """Optional declared-PG bus/trunk width; local device escapes stay put."""
+    if requested_um is None:
+        return {}
+    if isinstance(requested_um, bool) or not isinstance(requested_um, (float, int)) \
+            or not math.isfinite(requested_um) or requested_um <= 0:
+        raise Refusal("pg_wire_width_um must be a finite positive width")
+    rails = [name for name, spec in (pin_spec or {}).get("ports", {}).items()
+             if spec.get("rail") is True]
+    if not rails:
+        raise Refusal("pg_wire_width_um requires topology-declared PG ports")
+    # Paint uses symmetric integer half-widths: round the requested width
+    # up to a whole pair of native lambda, rather than losing an odd grid.
+    width = 2 * int(math.ceil(requested_um * geo.lam / 2))
+    return {name: {k: max(width, geo.wire[k]) for k in (2, 3)}
+            for name in rails}
+
+
+def _track_offsets(nets: Sequence[str], pitch: int, extras: dict) -> list:
+    """Keep existing clearance while giving only wider tracks extra room."""
+    cursor = previous = 0
+    result = []
+    for net in nets:
+        extra = extras.get(net, 0)
+        cursor += pitch + (previous + extra + 1) // 2
+        result.append(cursor)
+        previous = extra
+    return result
+
+
 def build_plan(devs: Sequence[dict], ports: Sequence[str],
                cells: Dict[tuple, dict], facts: PdkFacts, geo: Geo,
-               tap_clear: int, pin_spec: Optional[dict] = None) -> Plan:
+               tap_clear: int, pin_spec: Optional[dict] = None,
+               pg_wire_width_um: Optional[float] = None) -> Plan:
     plan = Plan()
     body_tap_contact = body_tap_contact_layer(facts.layers)
     body_tap_metal_contact = body_tap_metal_contact_layer(facts.layers)
@@ -2231,14 +2310,17 @@ def build_plan(devs: Sequence[dict], ports: Sequence[str],
     hw2 = max(geo.wire[2] // 2, 1)
     hw3 = max(geo.wire[3] // 2, 1)
     min_gap = 4 * pitch
+    pg_widths = _pg_route_widths(pin_spec, geo, pg_wire_width_um)
+    extra_bus = {n: w[2] - geo.wire[2] for n, w in pg_widths.items()}
+    extra_trunk = {n: w[3] - geo.wire[3] for n, w in pg_widths.items()}
 
     # ── nets and their rails ──────────────────────────────────────────
     nets: List[str] = []
     for net in list(ports) + [n for d in devs for n in d["nets"]]:
         if net not in nets:
             nets.append(net)
-    rail_y = {net: pitch + i * pitch for i, net in enumerate(nets)}
-    row_base = pitch * (len(nets) + 24)
+    rail_y = dict(zip(nets, _track_offsets(nets, pitch, extra_bus)))
+    row_base = pitch * (len(nets) + 24) + sum(extra_bus.values())
 
     # ── per device: which terminals escape at which height, on which side ──
     per_dev: List[dict] = []
@@ -2423,7 +2505,11 @@ def build_plan(devs: Sequence[dict], ports: Sequence[str],
     for i in range(len(per_dev) + 1):
         need = (n_right[i - 1] if i > 0 else 0) + \
                (n_left[i] if i < len(per_dev) else 0)
-        gap_w.append(max(min_gap, (need + 2) * pitch))
+        wider = sum(extra_trunk.get(g["net"], 0)
+                    for index, side in ((i - 1, "right"), (i, "left"))
+                    if 0 <= index < len(per_dev)
+                    for g in per_dev[index]["groups"] if g["side"] == side)
+        gap_w.append(max(min_gap, (need + 2) * pitch + wider))
 
     x = 0
     for i, d in enumerate(per_dev):
@@ -2482,8 +2568,9 @@ def build_plan(devs: Sequence[dict], ports: Sequence[str],
                                  ("left", d["gap_hi"], -1)):
             gs = sorted([g for g in d["groups"] if g["side"] == side],
                         key=lambda g: g["abs_escape_y"])
-            for k, g in enumerate(gs):
-                g["lane_x"] = base + step * (k + 1) * pitch
+            for g, offset in zip(gs, _track_offsets([g["net"] for g in gs],
+                                                   pitch, extra_trunk)):
+                g["lane_x"] = base + step * offset
 
     for d in per_dev:
         for g in d["groups"]:
@@ -2607,7 +2694,9 @@ def build_plan(devs: Sequence[dict], ports: Sequence[str],
             # across to the lane on metal3, then straight down to the rail
             plan.paint(net, "metal3", min(joint, lane) - hw3, ey - hw3,
                        max(joint, lane) + hw3, ey + hw3)
-            plan.paint(net, "metal3", lane - hw3, rail_y[net], lane + hw3, ey)
+            trunk_half = max(pg_widths.get(net, {}).get(3, geo.wire[3]) // 2, 1)
+            plan.paint(net, "metal3", lane - trunk_half, rail_y[net],
+                       lane + trunk_half, ey)
             _via_stack(plan, net, lane, rail_y[net], 2, geo, top=3,
                        sites=sites)
 
@@ -2622,9 +2711,11 @@ def build_plan(devs: Sequence[dict], ports: Sequence[str],
         if not xs:
             continue
         ty = rail_y[net]
-        plan.paint(net, "metal2", min(xs) - pitch, ty - hw2,
-                   max(xs) + pitch, ty + hw2)
-        rail_box[net] = (min(xs) - pitch, ty - hw2, max(xs) + pitch, ty + hw2)
+        bus_half = max(pg_widths.get(net, {}).get(2, geo.wire[2]) // 2, 1)
+        plan.paint(net, "metal2", min(xs) - pitch, ty - bus_half,
+                   max(xs) + pitch, ty + bus_half)
+        rail_box[net] = (min(xs) - pitch, ty - bus_half,
+                         max(xs) + pitch, ty + bus_half)
         if net not in ports or not pin_spec:
             plan.ports.append((net, min(xs), ty))
 
@@ -2809,14 +2900,20 @@ def declared_current_ma(spec: Optional[dict]) -> Tuple[Optional[float], str]:
 
 
 def pin_spec_for(ports: Sequence[str], rails: Optional[dict],
-                 spec: Optional[dict], facts: "PdkFacts", geo: "Geo"
+                 spec: Optional[dict], facts: "PdkFacts", geo: "Geo",
+                 pg_via_cuts: Optional[int] = None
                  ) -> Tuple[Optional[dict], dict]:
     """What every declared port becomes as a pin: its layer, USE, width and
     cuts per via, each with the source it came from. (None, basis) when the
     tech LEF offers no layer to put it on — recorded, never guessed."""
+    if pg_via_cuts is not None and (isinstance(pg_via_cuts, bool) or
+            not isinstance(pg_via_cuts, int) or pg_via_cuts < 1):
+        raise ValueError("pg_via_cuts must be a positive integer")
     basis: dict = {"tech_lef": facts.sources.get("tech_lef"),
                    "tech_lef_sha256": facts.tech_lef_sha256,
                    "core_pg": dict(facts.core_pg)}
+    if facts.cut_current_source:
+        basis["cut_current_limits_source"] = dict(facts.cut_current_source)
     if not facts.tech_lef:
         basis["result"] = "NOT_DETERMINED"
         basis["reason"] = ("no tech LEF was readable, so the routing layers, "
@@ -2870,11 +2967,10 @@ def pin_spec_for(ports: Sequence[str], rails: Optional[dict],
                "width_lam": geo.wire.get(level, 1), "cuts": 1,
                "em": {"result": "NOT_MEASURED", "reason": i_src}}
         if i_ma is not None:
-            # THE EM RULE: the tech LEF's own `DCCURRENTDENSITY AVERAGE` —
-            # mA per um of width for a routing layer, mA per cut for a cut
-            # layer — the table `em_current_density_check` grades. The pin
-            # strip is at least I/J wide, and every via level of its stack
-            # carries at least I/J_cut cuts. The deck minimum is the floor.
+            # LEF routing density is mA/um; CUT density is mA/um^2.
+            # A primary process table can instead state an explicit per-cut
+            # limit. This allocates geometry, not measured current sharing;
+            # native branch currents are checked separately by A16.
             j = lef.get("dc_density")
             em = {"current_mA": i_ma, "current_source": i_src,
                   "rule": (f"{basis['tech_lef']} LAYER {lef['name']} "
@@ -2885,15 +2981,51 @@ def pin_spec_for(ports: Sequence[str], rails: Optional[dict],
                 rec["width_lam"] = max(rec["width_lam"],
                                        int(math.ceil(w_um * geo.lam - 1e-9)))
                 em["width_um_required"] = round(w_um, 4)
-            stack = [cut_of.get(k) for k in range(2, level)]
-            if stack and all(c and c.get("dc_density") for c in stack):
-                rec["cuts"] = max(int(math.ceil(i_ma / c["dc_density"] - 1e-9))
-                                  for c in stack)
-                em["cut_rule"] = [f"LAYER {c['name']} DCCURRENTDENSITY "
-                                  f"AVERAGE {c['dc_density']} (mA/cut)"
-                                  for c in stack]
-            em["result"] = "SIZED" if j else "NOT_MEASURED"
+            cut_limits = []
+            for k in range(2, level):
+                cut = cut_of.get(k)
+                if not cut:
+                    cut_limits = []
+                    break
+                primary = facts.cut_current_limits.get(cut["name"].lower())
+                if primary:
+                    limit = Fraction(str(primary["value_mA"]))
+                    rule = dict(primary, layer=cut["name"], limit_mA=float(limit),
+                                source=dict(facts.cut_current_source))
+                elif cut.get("dc_density"):
+                    # A Magic paint region may generate smaller CIF cuts.
+                    # A DRC-clean cut has at least the PDK's stated minimum
+                    # width on both axes; use that conservative area floor.
+                    minimum = (getattr(geo, "rules", {}) or {}).get("via_width_um", {}).get(k)
+                    if minimum is None:
+                        cut_limits = []
+                        em["cut_sizing_reason"] = "PDK cut-area floor absent; painted enclosure area is not cut area"
+                        break
+                    area = Fraction(str(minimum)) ** 2
+                    limit = Fraction(str(cut["dc_density"])) * area
+                    rule = {"layer": cut["name"], "density_mA_per_um2": cut["dc_density"],
+                            "minimum_cut_area_um2_exact": str(area), "limit_mA": float(limit),
+                            "area_source": facts.sources.get("drc_tech"),
+                            "source": basis["tech_lef"], "unit": "mA/um^2"}
+                else:
+                    cut_limits = []
+                    break
+                if limit <= 0:
+                    raise Refusal("nonpositive cut current limit: " + cut["name"])
+                needed = Fraction(str(i_ma)) / limit
+                cut_limits.append((math.ceil(needed), rule))
+            if cut_limits:
+                rec["cuts"] = max(n for n, _ in cut_limits)
+                em["cut_rule"] = [rule for _, rule in cut_limits]
+                em["cut_sizing_scope"] = "geometry allocation; no measured per-cut sharing is inferred"
+            em["result"] = "SIZED" if j and (level <= 2 or cut_limits) else "NOT_MEASURED"
             rec["em"] = em
+        if is_rail and pg_via_cuts is not None:
+            # Ordinary per-block routing input. These are separate spaced
+            # landing rectangles in _pin_stack_boxes, not a current divided
+            # arithmetically among an unmeasured aggregate contact array.
+            rec["cuts"] = max(rec["cuts"], pg_via_cuts)
+            rec["pg_via_cuts_requested"] = pg_via_cuts
         out[net] = rec
     basis["result"] = "DETERMINED"
     return {"ports": out}, basis
@@ -3478,6 +3610,8 @@ def emit_block(project: Path, block: str, stage: Stage, magicrc: str,
         for k, v in facts.deck.items()}
     report["generator_geometry_um"] = {
         "wire_width": args.wire_width_um,
+        "pg_bus_trunk_width": getattr(args, "pg_wire_width_um", None),
+        "pg_width_scope": "declared PG metal2 global buses and metal3 vertical trunks; local device escapes keep wire_width",
         "via_pad_half": args.via_pad_half_um,
         "note": ("the PDK does not state a routing wire width or a via pad "
                  "size — they are this generator's own choice, which is why "
@@ -3501,13 +3635,19 @@ def emit_block(project: Path, block: str, stage: Stage, magicrc: str,
         isinstance(topo.get("rails"), dict) else None
     pin_spec, pins_basis = pin_spec_for(ports, rails,
                                         _read_json(bdir / "spec.json"),
-                                        facts, geo)
+                                        facts, geo,
+                                        pg_via_cuts=getattr(args, "pg_via_cuts", None))
     report["pins_basis"] = pins_basis
     if facts.cell_lef_text is not None:
         snapshot = bdir / "a5_stdcell_pg.lef"
         snapshot.write_text(facts.cell_lef_text, encoding="utf-8")
         pins_basis["core_pg"]["snapshot"] = str(snapshot.relative_to(project))
-    plan = build_plan(devs, ports, cells, facts, geo, tap_clear, pin_spec)
+    pg_width_um = getattr(args, "pg_wire_width_um", None)
+    report["pg_bus_trunk_widths_um"] = {
+        n: {str(k): w / lam for k, w in layers.items()}
+        for n, layers in _pg_route_widths(pin_spec, geo, pg_width_um).items()}
+    plan = build_plan(devs, ports, cells, facts, geo, tap_clear, pin_spec,
+                      pg_wire_width_um=pg_width_um)
     clearance_deviations(plan, geo, devs)
     # A GEOMETRY THE PDK'S GENCELL CLAMPED. Recorded like every other
     # measurement this emitter makes, and blocking like the short: see
@@ -3826,6 +3966,10 @@ def main(argv: Optional[List[str]] = None) -> int:
                     default=DEFAULT_WIRE_W_UM)
     ap.add_argument("--via-pad-half-um", type=float,
                     default=DEFAULT_VIA_PAD_HALF_UM)
+    ap.add_argument("--pg-via-cuts", type=int,
+                    help="minimum separate cut landings per declared PG pin stack; per-block routing input")
+    ap.add_argument("--pg-wire-width-um", type=float,
+                    help="declared PG metal2 bus/metal3 vertical trunk width only; local device escapes retain --wire-width-um")
     ap.add_argument("--json")
     args = ap.parse_args(argv)
 

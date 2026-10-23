@@ -2409,9 +2409,12 @@ LIBRARY: Dict[str, Dict[str, Any]] = {
                                     "feedback": "cf{i}"},
             # devices whose capacitance is a declared multiple of the
             # integrating capacitor, and the constant naming the multiple
-            "follows_integrating": {"cc{i}": "miller_fraction_of_load"},
+            "follows_integrating": {"cc{i}": "miller_fraction_of_load * ota_compensation_scale"},
         },
-        "spec_knobs": [],
+        "spec_knobs": [{"name": "ota_compensation_scale",
+                        "expr": "ota_compensation_scale", "default": 1.0,
+                        "unit": "ratio",
+                        "rationale": "explicit OTA compensation sizing; scales only each integrator's Miller capacitor, with native stability and settling still required"}],
         "device_param_exprs": [
             {"device": "caz", "param": "l",
              "expr": cap_l_expr("autozero_over_sampling_cap * ("
@@ -3109,9 +3112,9 @@ LIBRARY: Dict[str, Dict[str, Any]] = {
                                "the integrating capacitor is the sampling "
                                "capacitor divided by it")},
                 {"device": "cc{i}", "param": "l",
-                 "expr": cap_l_expr("miller_fraction_of_load * ("
+                 "expr": cap_l_expr("miller_fraction_of_load * ota_compensation_scale * ("
                                     + SAMPLING_CAP_FF_EXPR + ") / {coeff}"),
-                 "ff_expr": ("miller_fraction_of_load * ("
+                 "ff_expr": ("miller_fraction_of_load * ota_compensation_scale * ("
                              + SAMPLING_CAP_FF_EXPR + ") / {coeff}"),
                  "rationale": ("Miller compensation is a fraction of the "
                                "LOAD it has to dominate, and the load is "
@@ -5953,6 +5956,86 @@ def _rename_nets(obj: Any, mapping: Dict[str, str]) -> Any:
     return obj
 
 
+class SizingInputsInvalid(ValueError):
+    """An explicit design sizing choice cannot be applied as declared."""
+
+
+def read_sizing_inputs(project: Path, block: str) -> Dict[str, Any]:
+    """Optional design choices, separate from electrical requirements/defaults.
+
+    Geometry uses the IR's micrometre units. This input does not waive source
+    requirements or establish convergence; native measurements must do that.
+    """
+    path = project / _CANONICAL_ANALOG / block / "sizing_inputs.json"
+    if not path.is_file():
+        return {}
+    try:
+        raw = path.read_bytes()
+        data = json.loads(raw)
+    except (OSError, ValueError) as exc:
+        raise SizingInputsInvalid(f"cannot read sizing_inputs.json: {exc}") from exc
+    if not isinstance(data, dict) or set(data) - {"knobs", "device_parameters", "rationale"}:
+        raise SizingInputsInvalid("sizing_inputs.json expects knobs, device_parameters and optional rationale")
+    for key in ("knobs", "device_parameters"):
+        if not isinstance(data.get(key, {}), dict):
+            raise SizingInputsInvalid(f"sizing_inputs.{key} must be an object")
+    data["input_view"] = {"path": str(path), "sha256": hashlib.sha256(raw).hexdigest()}
+    return data
+
+
+def apply_sizing_inputs(sizing: Dict[str, Any], knobs: Dict[str, Any],
+                        sources: Dict[str, str], defaulted: List[str],
+                        devices: List[Dict[str, Any]], exprs: List[Dict[str, Any]],
+                        minima: Dict[str, Any], maxima: Dict[str, Any]) -> None:
+    """Apply only declared free knobs and directly represented geometry.
+
+    Expression-owned geometry must be changed through its declared knob. This
+    avoids a direct override silently losing to A3's expression evaluation.
+    """
+    def positive(value: Any, label: str) -> float:
+        if (not isinstance(value, (int, float)) or isinstance(value, bool)
+                or not math.isfinite(value) or value <= 0):
+            raise SizingInputsInvalid(f"{label} must be a finite positive number")
+        return float(value)
+
+    for name, value in sizing.get("knobs", {}).items():
+        if name not in knobs:
+            raise SizingInputsInvalid(f"unknown sizing knob {name!r}")
+        number = positive(value, f"knob {name}")
+        if sources.get(name) == "spec":
+            if not math.isclose(number, float(knobs[name]), rel_tol=1e-12):
+                raise SizingInputsInvalid(f"knob {name} is bound by the source specification")
+            continue
+        knobs[name] = number
+        sources[name] = "explicit_design_sizing"
+        if name in defaulted:
+            defaulted.remove(name)
+    by_name = {d["name"]: d for d in devices}
+    expression_owned = {(e.get("device"), e.get("param")) for e in exprs}
+    for name, parameters in sizing.get("device_parameters", {}).items():
+        if name not in by_name or not isinstance(parameters, dict):
+            raise SizingInputsInvalid(f"unknown device or invalid parameters for {name!r}")
+        device = by_name[name]
+        for parameter, value in parameters.items():
+            if parameter not in ("w", "l", "m") or parameter not in device:
+                raise SizingInputsInvalid(f"unknown sizing parameter {name}.{parameter}")
+            if (name, parameter) in expression_owned:
+                raise SizingInputsInvalid(f"{name}.{parameter} is expression-owned; change its declared sizing knob")
+            number = positive(value, f"{name}.{parameter}")
+            if parameter == "m" and number != int(number):
+                raise SizingInputsInvalid(f"{name}.m must be an integer")
+            role = device.get("role")
+            dimension = {"w": "width", "l": "length"}.get(parameter)
+            if dimension:
+                low = (minima.get(role) or {}).get(f"min_{dimension}_um")
+                high = (maxima.get(role) or {}).get(f"max_{dimension}_um")
+                if low is not None and number < float(low):
+                    raise SizingInputsInvalid(f"{name}.{parameter}={number}um is below PDK minimum {low}um")
+                if high is not None and number > float(high):
+                    raise SizingInputsInvalid(f"{name}.{parameter}={number}um exceeds PDK maximum {high}um")
+            device[parameter] = number
+
+
 def build_ir(block: str, btype: str, entry: Dict[str, Any],
              lib: Dict[str, Any], spec_values: Dict[str, float],
              spec_path: Optional[str], project: Path,
@@ -6022,6 +6105,10 @@ def build_ir(block: str, btype: str, entry: Dict[str, Any],
     # so every pre-existing entry takes the identical path it always did.
     devices, internal_nets, param_exprs, stage_rec = expand_stages(
         lib, spec_values)
+    sizing_inputs = read_sizing_inputs(project, block)
+    apply_sizing_inputs(sizing_inputs, knobs, knob_sources, defaulted,
+                        devices, param_exprs, role_minima,
+                        dict(role_maxima or {}))
     # A counter group's WINDOW — the number of clock periods its ripple chain
     # takes to come back to zero — is computed during expansion and is not
     # otherwise nameable: the expression grammar has no logarithm, so nothing
@@ -6163,6 +6250,7 @@ def build_ir(block: str, btype: str, entry: Dict[str, Any],
         "spec_knobs": [dict(k) for k in lib.get("spec_knobs", [])],
         "knobs": knobs,
         "knob_sources": knob_sources,
+        "sizing_inputs": sizing_inputs or None,
         "device_param_exprs": param_exprs,
         # None for an entry with no repeated stage. Present, it is the record
         # of a structure that FOLLOWED FROM THE DECLARATION: how many stages,
@@ -6841,6 +6929,10 @@ def emit_for_block(project: Path, entry: Dict[str, Any],
                     [{"requirement": "capacitor drawable at the library "
                                      "drawn width", "detail": r}
                      for r in exc.refusals], informational)
+    except SizingInputsInvalid as exc:
+        return _gap("INVALID_DESIGN_SIZING_INPUTS",
+                    [{"requirement": "applicable explicit design sizing inputs",
+                      "detail": str(exc)}], informational)
     ir["derived_informational"] = list(informational)
     md = render_md(ir, lib, fam, params)
     bdir.mkdir(parents=True, exist_ok=True)

@@ -38,6 +38,25 @@ def test_incomplete_or_multicommand_explicit_binding_is_refused(binding):
         generator.measurement_commands("output_metric", binding)
 
 
+@pytest.mark.parametrize("statistic", ["AVG", "RMS", "MAX", "MIN", "INTEG"])
+def test_explicit_transient_statistic_uses_native_time_window(statistic):
+    lines, kind = generator.measurement_commands("idd", {"analysis": "TRAN",
+        "expression": "-i(v_supply)", "statistic": statistic, "from_s": 7e-6, "to_s": 9e-6}, stop_s=9.1e-6)
+    assert kind == "TRAN" and lines[0] == "let bound_idd = -i(v_supply)"
+    assert lines[1] == f"meas TRAN idd {statistic} bound_idd FROM={7e-6:.17g} TO={9e-6:.17g}"
+    assert not any("mean(" in line or "avg(" in line for line in lines)
+
+
+@pytest.mark.parametrize("changed", [{"statistic": "mean"}, {"from_s": -1},
+    {"from_s": True}, {"from_s": float("nan")}, {"to_s": float("inf")},
+    {"to_s": 1e-6}, {"to_s": 12e-6}])
+def test_invalid_transient_statistic_or_window_is_refused(changed):
+    binding = {"analysis": "TRAN", "expression": "v(out)", "statistic": "AVG",
+               "from_s": 1e-6, "to_s": 9e-6, **changed}
+    with pytest.raises(ValueError):
+        generator.measurement_commands("metric", binding, stop_s=9.1e-6)
+
+
 def _run(spec_path: Path, out: Path = None, jpath: Path = None):
     cmd = [sys.executable, str(PROG), str(spec_path)]
     if out:

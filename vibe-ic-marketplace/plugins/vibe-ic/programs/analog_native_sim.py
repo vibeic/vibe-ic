@@ -634,6 +634,44 @@ def run_step(step_id, project, block, options, run):
         nominal = prior.get(name, {}) if isinstance(prior, dict) else {}
         if nominal.get("status") != "PASS":
             return _result("NOT_MEASURED", "nominal A07 has not passed; PVT sweep was not launched")
+        pvt = config.get("pvt")
+        if isinstance(pvt, dict) and "result" in pvt:
+            reference = pvt["result"]
+            if not isinstance(reference, dict) or not reference.get("path") or not reference.get("sha256"):
+                return _result("NOT_MEASURED", "bound PRE PVT requires an actual result path and digest")
+            reference = {**reference, "path": str(_path(project, reference["path"], project).resolve())}
+            report = _attempt(project, step_id, name) / "pvt-studies.json"
+            execution = run("analog_native_physical.py", ["pvt", str(project), "--block", name,
+                "--container", options["container"], "--image", str(options.get("image", "")),
+                "--pdk", options["pdk"], "--settings", json.dumps({"result": reference}),
+                "--json", str(report)], outputs=[str(report)])
+            record = _read(report)
+            record = record if isinstance(record, dict) else {}
+            status = record.get("status") if record.get("status") in ("PASS", "FAIL") else "NOT_MEASURED"
+            metrics = record.get("metrics")
+            metrics = metrics if isinstance(metrics, dict) else {}
+            _netlist, _deck, spec = _inputs(project, name, config)
+            required = _source_measurement_coverage(spec, [])["required"]
+            contexts = metrics.get("source_context_coverage")
+            contexts = contexts if isinstance(contexts, dict) else {}
+            total = metrics.get("total_corners")
+            complete = (execution.get("returncode") == 0 and metrics.get("stage") == "PRE"
+                and metrics.get("full_pvt_sweep_executed") is True and metrics.get("design_traceable") is True
+                and isinstance(total, int) and not isinstance(total, bool) and total > 0
+                and metrics.get("corners_executed") == total and bool(required)
+                and not metrics.get("gaps") and not metrics.get("missing_contexts")
+                and all(isinstance(contexts.get(key), dict)
+                    and isinstance(contexts[key].get("required_contexts"), int)
+                    and not isinstance(contexts[key]["required_contexts"], bool)
+                    and contexts[key]["required_contexts"] > 0
+                    and contexts[key].get("measured_contexts") == contexts[key]["required_contexts"]
+                    and not contexts[key].get("missing_contexts") for key in required))
+            if metrics.get("stage") != "PRE" or status == "PASS" and not complete:
+                status = "NOT_MEASURED"
+            result = _result(status, record.get("detail") or "current PRE native PVT study measurements",
+                outputs=[str(report), *record.get("outputs", [])], metrics=metrics, executions=[execution])
+            result["native_inputs"] = record.get("native_inputs", {})
+            return result
         netlist, deck, spec = _inputs(project, name, config)
         status, detail, _required = _validate_deck(netlist, deck, config)
         if status != "PASS":
@@ -690,13 +728,35 @@ def run_step(step_id, project, block, options, run):
         count = stats.get("n", 100) if isinstance(stats, dict) else 100
         if isinstance(count, bool) or not isinstance(count, int) or count < 1:
             return _result("NOT_MEASURED", "Monte Carlo sample count must be a positive integer")
-        execution = run("analog_native_sim.py", ["mc", str(project), "--block", name, "--container", options["container"], "--pdk", options["pdk"], "--n", str(count), "--json", str(report)], outputs=[str(report)])
-        record = _read(report)
+        population = isinstance(stats, dict) and "references" in stats
+        exports, measured_inputs = [], {}
+        if population:
+            references = stats["references"]
+            if count < 2 or not isinstance(references, list) or not references or any(
+                    not isinstance(ref, dict) or not ref.get("path") or not ref.get("sha256") for ref in references):
+                return _result("NOT_MEASURED", "bound PRE statistics require >=2 samples and actual result references")
+            settings = {"stage": "PRE", "samples": count, "references": [
+                {**ref, "path": str(_path(project, ref["path"], project).resolve())} for ref in references]}
+            execution = run("analog_native_physical.py", ["population", str(project), "--block", name,
+                "--container", options["container"], "--image", str(options.get("image", "")),
+                "--pdk", options["pdk"], "--settings", json.dumps(settings), "--json", str(report)],
+                outputs=[str(report)])
+            wrapper = _read(report)
+            wrapper = wrapper if isinstance(wrapper, dict) else {}
+            record = wrapper.get("metrics")
+            exports, measured_inputs = wrapper.get("outputs", []), wrapper.get("native_inputs", {})
+            if not isinstance(record, dict) or record.get("stage") != "PRE":
+                return _result("NOT_MEASURED", "native population did not return the requested PRE study",
+                               outputs=[str(report)], executions=[execution])
+        else:
+            execution = run("analog_native_sim.py", ["mc", str(project), "--block", name, "--container", options["container"], "--pdk", options["pdk"], "--n", str(count), "--json", str(report)], outputs=[str(report)])
+            record = _read(report)
         if not isinstance(record, dict):
             return _result("NOT_MEASURED", "native Monte Carlo result is absent", executions=[execution])
         status = record.get("verdict")
         status = status if status in ("PASS", "FAIL") else "NOT_MEASURED"
-        if status == "PASS" and (execution.get("returncode") != 0 or not record.get("mc_runs")):
+        if status == "PASS" and (execution.get("returncode") != 0 or not record.get("mc_runs")
+                                 or population and record.get("mc_runs") != count):
             status = "NOT_MEASURED"
         metrics = {key: record.get(key) for key in ("mc_runs", "mc_yield_pct", "spec_yield", "corner_results")}
         detail = str(record.get("reason") or "native Monte Carlo yield result")
@@ -711,7 +771,10 @@ def run_step(step_id, project, block, options, run):
                 status = "NOT_MEASURED"
                 detail = coverage["detail"] or ("source-required Monte Carlo measurements are missing: "
                                                  + ", ".join(coverage["missing"]))
-        return _result(status, detail, outputs=[str(report)], metrics=metrics, executions=[execution])
+        result = _result(status, detail, outputs=[str(report), *exports], metrics=metrics, executions=[execution])
+        if population:
+            result["native_inputs"] = measured_inputs
+        return result
     return _result("NOT_MEASURED", "simulation responsibility is unsupported: " + str(step_id))
 
 

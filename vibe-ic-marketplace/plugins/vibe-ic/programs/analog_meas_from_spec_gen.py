@@ -79,7 +79,8 @@ TRAN_TOKENS = ("tpd", "_tr", "_tf", "slew", "settling", "rise", "fall",
                "jitter", "period", "tphl", "tplh", "delay")
 
 
-def measurement_commands(key: str, binding: dict) -> Tuple[List[str], str]:
+def measurement_commands(key: str, binding: dict, *, stop_s=None,
+                         start_s=0.0) -> Tuple[List[str], str]:
     """Emit controls for an explicitly bound native expression and point.
 
     Bindings are ordinary source/testbench inputs. No node, current branch,
@@ -89,13 +90,24 @@ def measurement_commands(key: str, binding: dict) -> Tuple[List[str], str]:
         raise ValueError("measurement name/binding is invalid")
     analysis = str(binding.get("analysis", "")).upper()
     expression = binding.get("expression")
-    if analysis not in ("OP", "DC", "AC") or not isinstance(expression, str) or not expression.strip():
-        raise ValueError("explicit OP/DC/AC analysis and native expression required")
+    if analysis not in ("OP", "DC", "AC", "TRAN") or not isinstance(expression, str) or not expression.strip():
+        raise ValueError("explicit OP/DC/AC/TRAN analysis and native expression required")
     if any(char in expression for char in "\r\n;"):
         raise ValueError("measurement expression must be a single native expression")
     vector = "bound_" + key
     lines = [f"let {vector} = {expression}"]
-    if analysis == "OP":
+    if analysis == "TRAN":
+        statistic = str(binding.get("statistic", "")).upper()
+        first, last = binding.get("from_s"), binding.get("to_s")
+        if statistic not in ("AVG", "RMS", "MAX", "MIN", "INTEG"):
+            raise ValueError("explicit native TRAN statistic required")
+        if any(isinstance(value, bool) or not isinstance(value, (int, float))
+               or not math.isfinite(value) for value in (first, last)) or not 0 <= first < last:
+            raise ValueError("finite nonempty TRAN measurement window required")
+        if first < start_s or (stop_s is not None and last > stop_s):
+            raise ValueError("TRAN measurement window exceeds the retained analysis interval")
+        lines.append(f"meas TRAN {key} {statistic} {vector} FROM={first:.17g} TO={last:.17g}")
+    elif analysis == "OP":
         lines.append(f'echo "MEAS {key}=" $&{vector}')
     else:
         point = binding.get("frequency_hz" if analysis == "AC" else "at")

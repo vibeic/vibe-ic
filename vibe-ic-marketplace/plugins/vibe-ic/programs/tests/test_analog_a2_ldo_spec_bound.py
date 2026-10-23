@@ -47,6 +47,9 @@ BLOCKING at the producer's own tier, and the tests assert the rc:
 """
 from __future__ import annotations
 
+import json
+import hashlib
+from pathlib import Path
 import pytest
 
 from _analog_producer_fixture import (
@@ -123,6 +126,106 @@ def _sized(d, root, pdk="ihp-sg13g2"):
                 if p.startswith("l="):
                     lens[parts[0][1:]] = float(p[2:].rstrip("u"))
     return res, prov, lens
+
+
+def test_explicit_free_sizing_reaches_netlist_and_reference(tmp_path):
+    d, res, root = a2(tmp_path)
+    assert res.returncode == 0
+    (d / "sizing_inputs.json").write_text(json.dumps({
+        "knobs": {"divider_ratio": 1.5},
+        "device_parameters": {"r_bias": {"l": 90.0}},
+        "rationale": "native sensitivity study; explicit design integration reference"}))
+    res = run_prog(A2, root, "--pdk", "ihp-sg13g2")
+    assert res.returncode == 0, res.stdout + res.stderr
+    ir = read_json(d / "topology.json")
+    assert ir["knob_sources"]["divider_ratio"] == "explicit_design_sizing"
+    assert ir["sizing_inputs"]["input_view"]["sha256"]
+    assert "divider_ratio" not in ir["_provenance"]["fields_defaulted"]
+    res, prov, legs = _sized(d, root)
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert legs["r1"] / legs["r2"] == pytest.approx(0.5, rel=1e-5)
+    assert prov["explicit_design_sizing_params"] == ["r_bias.l"]
+    assert "r_bias.l" not in prov["library_nominal_params"]
+    assert prov["explicit_design_sizing_input"] == ir["sizing_inputs"]["input_view"]
+    text = (d / f"{BLK}.sp").read_text()
+    bias = next(line for line in text.splitlines() if line.startswith("xr_bias "))
+    assert float(next(token[2:].rstrip("u") for token in bias.split()
+                      if token.startswith("l="))) == 90
+    testbench = (d / f"tb_{BLK}.sp").read_text()
+    reference = next(line for line in testbench.splitlines() if line.lower().startswith("v_vref "))
+    assert float(reference.split()[-1]) == pytest.approx(0.8)
+
+
+@pytest.mark.parametrize("sizing, expected", [
+    ({"knobs": {"not_a_knob": 2}}, "unknown sizing knob"),
+    ({"knobs": {"divider_ratio": float("nan")}}, "finite positive"),
+    ({"device_parameters": {"r_bias": {"l": -1}}}, "finite positive"),
+    ({"device_parameters": {"r1": {"l": 10}}}, "expression-owned"),
+    ({"device_parameters": {"r_bias": {"w": 0.01}}}, "PDK minimum"),
+])
+def test_invalid_explicit_sizing_is_a_named_gap(tmp_path, sizing, expected):
+    d, res, root = a2(tmp_path)
+    assert res.returncode == 0
+    (d / "sizing_inputs.json").write_text(json.dumps(sizing))
+    res = run_prog(A2, root, "--pdk", "ihp-sg13g2")
+    assert res.returncode != 0
+    gap = read_json(d / "topology_gap.json")
+    assert gap["status"] == "INVALID_DESIGN_SIZING_INPUTS"
+    assert expected in str(gap["admission_refusals"])
+    assert not (d / "topology.json").exists()
+
+
+def test_explicit_sizing_cannot_replace_a_source_bound_reference(tmp_path):
+    d, res, root = a2(tmp_path, vref=0.6)
+    assert res.returncode == 0
+    (d / "sizing_inputs.json").write_text(json.dumps({"knobs": {"divider_ratio": 1.5}}))
+    res = run_prog(A2, root, "--pdk", "ihp-sg13g2")
+    assert res.returncode != 0
+    gap = read_json(d / "topology_gap.json")
+    assert "bound by the source specification" in str(gap["admission_refusals"])
+
+
+def test_absent_explicit_sizing_preserves_library_defaults(tmp_path):
+    d, res, _root = a2(tmp_path)
+    assert res.returncode == 0
+    ir = read_json(d / "topology.json")
+    assert ir["knobs"]["divider_ratio"] == 2.0
+    assert ir["knob_sources"]["divider_ratio"] == "library_default"
+    assert next(device for device in ir["devices"] if device["name"] == "r_bias")["l"] == 60
+    assert ir["sizing_inputs"] is None
+
+
+def test_netlist_refuses_changed_sizing_inputs_until_topology_is_current(tmp_path):
+    d, res, root = a2(tmp_path)
+    assert res.returncode == 0
+    path = d / "sizing_inputs.json"
+    path.write_text(json.dumps({"device_parameters": {"r_bias": {"l": 90}}}))
+    assert run_prog(A2, root, "--pdk", "ihp-sg13g2").returncode == 0
+    assert run_prog(A3, root, "--pdk", "ihp-sg13g2").returncode == 0
+    path.write_text(json.dumps({"device_parameters": {"r_bias": {"l": 95}}}))
+    res = run_prog(A3, root, "--pdk", "ihp-sg13g2")
+    assert res.returncode != 0
+    assert read_json(d / "netlist_gap.json")["status"] == "STALE_DESIGN_SIZING_INPUTS"
+    assert not (d / f"{BLK}.sp").exists()
+
+
+def test_sizing_input_hash_binds_the_same_bytes_that_were_parsed(tmp_path, monkeypatch):
+    import analog_a2_topology_emit as producer
+    root = tmp_path / "project"
+    path = root / "phase3/analog" / BLK / "sizing_inputs.json"
+    path.parent.mkdir(parents=True)
+    original = json.dumps({"knobs": {"divider_ratio": 1.5}}).encode()
+    path.write_bytes(original)
+    original_read_text = Path.read_text
+    def edit_after_text_read(self, *args, **kwargs):
+        text = original_read_text(self, *args, **kwargs)
+        if self == path:
+            self.write_text(json.dumps({"knobs": {"divider_ratio": 1.3}}))
+        return text
+    monkeypatch.setattr(Path, "read_text", edit_after_text_read)
+    result = producer.read_sizing_inputs(root, BLK)
+    assert result["knobs"]["divider_ratio"] == 1.5
+    assert result["input_view"]["sha256"] == hashlib.sha256(original).hexdigest()
 
 
 # ── the capability ────────────────────────────────────────────────────────

@@ -546,6 +546,61 @@ def test_a15_mc_reads_post_layout_not_schematic_and_counts_full_population(proje
     assert not (project / "phase3/analog/unit/corner_results.json").exists()
 
 
+def test_a15_repeated_execution_preserves_previous_native_population(project, monkeypatch):
+    import analog_mc_yield_run as mc
+    _post_statistics_inputs(project)
+    populations = []
+    def execute(study, name, container, pdk, count):
+        marker = put(study / "native-population.txt", str(count))
+        populations.append(marker)
+        return {"verdict": "PASS", "mc_runs": count, "spec_yield": {
+            "vout": {"runs_scored": count, "yield_pct": 100.0}}}
+    monkeypatch.setattr(mc, "run_block", execute)
+    first = physical._statistics(project, "unit", "container", "image", "process", {"samples": 2})
+    second = physical._statistics(project, "unit", "container", "image", "process", {"samples": 5})
+    assert first["status"] == second["status"] == "PASS"
+    assert populations[0] != populations[1]
+    assert [path.read_text() for path in populations] == ["2", "5"]
+    assert first["metrics"]["corners"][0]["study"] != second["metrics"]["corners"][0]["study"]
+
+
+def test_a15_independent_styles_run_in_parallel_with_one_native_thread_each(project, monkeypatch):
+    import threading
+    import analog_mc_yield_run as mc
+    _post_statistics_inputs(project)
+    _, work = physical._paths(project, "unit")
+    state = json.loads((work / "A14.json").read_text())
+    state["metrics"]["corners"].append({**state["metrics"]["corners"][0], "style": "alternate"})
+    put(work / "A14.json", state)
+    barrier = threading.Barrier(2)
+    def execute(study, name, container, pdk, count):
+        deck, _ = mc._find_deck(study, name)
+        assert "set num_threads=1" in deck.read_text()
+        barrier.wait(timeout=5)
+        return {"verdict": "PASS", "mc_runs": count, "spec_yield": {
+            "vout": {"runs_scored": count, "yield_pct": 100.0}}}
+    monkeypatch.setattr(mc, "run_block", execute)
+    result = physical._statistics(project, "unit", "container", "image", "process", {"samples": 2, "workers": 2})
+    assert result["status"] == "PASS"
+    assert result["metrics"]["workers"] == 2 and len(result["metrics"]["corners"]) == 2
+
+
+def test_a15_focused_style_selection_reports_unmeasured_styles(project, monkeypatch):
+    import analog_mc_yield_run as mc
+    _post_statistics_inputs(project)
+    _, work = physical._paths(project, "unit")
+    state = json.loads((work / "A14.json").read_text())
+    state["metrics"]["corners"].append({**state["metrics"]["corners"][0], "style": "alternate"})
+    put(work / "A14.json", state)
+    monkeypatch.setattr(mc, "run_block", lambda *a, **k: {"verdict": "PASS", "mc_runs": 2,
+        "spec_yield": {"vout": {"runs_scored": 2, "yield_pct": 100.0}}})
+    result = physical._statistics(project, "unit", "container", "image", "process",
+                                 {"samples": 2, "styles": ["ngspice()"]})
+    assert result["status"] == "NOT_MEASURED"
+    assert result["metrics"]["unmeasured_styles"] == ["alternate"]
+    assert len(result["metrics"]["corners"]) == 1
+
+
 @pytest.mark.parametrize("yield_pct,extra,verdict,expected", [
     (100.0, [], "PASS", "PASS"),
     (100.0, [{"name": "psrr", "min": 40.0}], "PASS", "NOT_MEASURED"),
@@ -766,3 +821,29 @@ def test_physical_route_names_are_bound_to_shipped_flow_rows():
     assert named["A13"] == "Analog parasitic extraction"
     assert named["A14"] == "Analog post-layout performance"
     assert named["A15"] == "Analog post-layout statistics"
+
+
+def test_a11_uses_declared_routing_geometry_and_explicit_config_wins(project):
+    bdir, _ = physical._paths(project, 'unit')
+    put(bdir / 'layout_inputs.json', {'wire_width_um': 0.6, 'pg_via_cuts': 2, 'pg_wire_width_um': 3})
+    calls = []
+    def run(program, argv, **kwargs):
+        calls.append(argv)
+        put(Path(argv[argv.index('--json') + 1]), {'result': 'ENV_UNAVAILABLE'})
+        return {'returncode': 69}
+    physical.run_step('A11', project, {'name': 'unit'}, {}, run)
+    assert calls[-1][calls[-1].index('--wire-width-um') + 1] == '0.6'
+    assert calls[-1][calls[-1].index('--pg-via-cuts') + 1] == '2'
+    assert calls[-1][calls[-1].index('--pg-wire-width-um') + 1] == '3'
+    physical.run_step('A11', project, {'name': 'unit'}, {
+        'config': {'steps': {'A11': {'wire_width_um': 0.8}}}}, run)
+    assert calls[-1][calls[-1].index('--wire-width-um') + 1] == '0.8'
+
+
+@pytest.mark.parametrize('declared', ['not json', '[]'])
+def test_a11_corrupt_layout_inputs_cannot_silently_use_default_geometry(project, declared):
+    bdir, _ = physical._paths(project, 'unit')
+    put(bdir / 'layout_inputs.json', declared)
+    result = physical.run_step('A11', project, {'name': 'unit'}, {},
+        lambda *a, **k: pytest.fail('invalid selected geometry must not launch native layout'))
+    assert result['status'] == 'NOT_MEASURED'

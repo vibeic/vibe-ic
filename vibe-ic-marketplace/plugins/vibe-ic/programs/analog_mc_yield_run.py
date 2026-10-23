@@ -485,7 +485,7 @@ ENV_REFUSED_VERDICT = "ENV_REFUSED"
 
 
 def run_block(project: Path, block: str, container: str, pdk: str,
-              n: int) -> dict:
+              n: int, *, ngspice_bin: str | None = None) -> dict:
     """Entry point. A path the container cannot be shown to see is a structured
     SKIP naming what IS mounted — never a traceback, never a guessed path.
 
@@ -494,8 +494,13 @@ def run_block(project: Path, block: str, container: str, pdk: str,
     program was never allowed to examine anything, so it reports a REFUSAL —
     its own verdict, its own rc — and writes no yield number of any kind.
     """
+    if ngspice_bin is not None and (not isinstance(ngspice_bin, str)
+            or not Path(ngspice_bin).is_absolute() or not Path(ngspice_bin).is_file()):
+        return {"verdict": "NOT_MEASURED", "rc": 2, "mc_runs": 0,
+                "reason": "selected ngspice_bin must be an absolute existing file"}
     try:
-        return _run_block(project, block, container, pdk, n)
+        return _run_block(project, block, container, pdk, n,
+                          **({"ngspice_bin": ngspice_bin} if ngspice_bin else {}))
     except _container_exec.ContainerImageMismatch as exc:
         return {"verdict": ENV_REFUSED_VERDICT,
                 "rc": _container_exec.EX_ENV_REFUSED, "mc_runs": 0,
@@ -511,7 +516,10 @@ def run_block(project: Path, block: str, container: str, pdk: str,
 
 
 def _run_block(project: Path, block: str, container: str, pdk: str,
-               n: int) -> dict:
+               n: int, *, ngspice_bin: str | None = None) -> dict:
+    selected_binary = ({"path": ngspice_bin,
+                        "sha256": hashlib.sha256(Path(ngspice_bin).read_bytes()).hexdigest()}
+                       if ngspice_bin else None)
     deck, deck_rank = _find_deck(project, block)
     if deck is None:
         # ORGANIC #142 — distinguish "no deck at all" from "only a bare
@@ -548,7 +556,7 @@ def _run_block(project: Path, block: str, container: str, pdk: str,
         return {"verdict": "UNSCOREABLE", "rc": 2,
                 "reason": native["unscoreable"], "mc_runs": 0}
 
-    if not _ars._ngspice_available(container):
+    if not ngspice_bin and not _ars._ngspice_available(container):
         return {"verdict": "SKIP", "rc": 2,
                 "reason": f"ngspice not available in container {container!r}"}
 
@@ -647,7 +655,8 @@ def _run_block(project: Path, block: str, container: str, pdk: str,
         # resolution context instead of running N batches that cannot load it.
         _ret = _ars._run_ngspice(
             container, _ars._container_path(container, host_root, wrap),
-            cwd=_ars._container_path(container, host_root, deck.parent))
+            cwd=_ars._container_path(container, host_root, deck.parent),
+            **({"ngspice_bin": ngspice_bin} if ngspice_bin else {}))
         if len(_ret) == 4:
             ok, meas, raw, sim_status = _ret
         else:
@@ -658,15 +667,30 @@ def _run_block(project: Path, block: str, container: str, pdk: str,
         per_run.append({"seed": i, "ok": ok,
                         "partial_measurement": sim_status["partial"],
                         "sim_warnings": sim_status["warnings"],
+                        **({"execution": sim_status} if ngspice_bin else {}),
                         "log": str(log.relative_to(project)), **meas})
 
-    failed = [row for row in per_run if not row.get('ok')]
+    input_drift = [row for row in per_run if row.get('execution', {}).get('changed_inputs')]
+    failed = [row for row in per_run if not row.get('ok') and (
+        not row.get('execution', {}).get('changed_inputs')
+        or row.get('execution', {}).get('rc', 0) != 0
+        or any(_ars._scan_analysis_failures((project / row['log']).read_text(errors='replace'))))]
     native_evidence = {
         'mc_native_failed': len(failed),
         'mc_failure_logs': [row['log'] for row in failed],
         'mc_log_dir': str(mc_dir.relative_to(project)),
         'mc_model_bindings': section_copies['bindings'] if section_copies else [],
+        **({'mc_input_drift_logs': [row['log'] for row in input_drift]} if input_drift else {}),
     }
+    if selected_binary:
+        after = hashlib.sha256(Path(ngspice_bin).read_bytes()).hexdigest() if Path(ngspice_bin).is_file() else None
+        native_evidence.update(mc_native_binary={**selected_binary, "sha256_after": after},
+                               mc_executions=[{"seed": r["seed"], "log": r["log"],
+                                               **r.get("execution", {})} for r in per_run])
+        if after != selected_binary["sha256"] or input_drift:
+            return {"verdict": "FAIL" if failed else "NOT_MEASURED", "rc": 1 if failed else 2, "mc_runs": n,
+                    "mc_yield_pct": None, "reason": "selected native binary changed during population",
+                    **native_evidence}
 
     # per-spec yield
     spec_yield = {}

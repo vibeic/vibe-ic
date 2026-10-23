@@ -348,7 +348,10 @@ def run_window(project, args, *, features=None):
                "post_mc_samples": getattr(args, "post_mc_samples", None),
                "config": config, "features": features, "previous_results": {},
                "active_blocks": config.get("active_blocks", []), "attempt_dir": str(attempt)}
-    options["workers"] = max(1, min(int(options["workers"]), len(blocks)))
+    # One selected block can still have independent native corner/conversion
+    # jobs. Preserve its explicit execution budget; the block pool only starts
+    # as many tasks as there are declared blocks.
+    options["workers"] = max(1, min(int(options["workers"]), int(options["cpus"])))
     previous = _read(parent / "status.json", {})
     rows = []
     if previous.get("features") == features:

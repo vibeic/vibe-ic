@@ -116,8 +116,16 @@ END TM2
 """
 LEF_PATH = "/pdk/x/libs.ref/lib/lef/x_tech.lef"
 
+# CUT scalars are area density. At the fixture's painted .3um x .3um
+# cuts these values express its intended .4/1.4mA individual-cut limits.
+TECH_LEF = TECH_LEF.replace('DCCURRENTDENSITY AVERAGE 0.4 ;',
+                          'DCCURRENTDENSITY AVERAGE 4.444444444444445 ;')
+TECH_LEF = TECH_LEF.replace('DCCURRENTDENSITY AVERAGE 1.4 ;',
+                          'DCCURRENTDENSITY AVERAGE 15.555555555555556 ;')
+
 # The Metal2 minimum-area rule, in the deck grammar the emitter already reads.
 DRC_TECH = T.DRC_TECH + ' area allm2 144000 200 "Metal2 area < %a (M2.d)"\n'
+DRC_TECH += ''.join(f' width v{k}/m{k} 300 "Via{k} minimum cut width"\n' for k in range(1,7))
 
 # THE MEASURED SHAPE, in the fake PDK: a MOS child with a gate contact at BOTH
 # ends of the gate, each carried to metal2 through its own via1, and only the
@@ -249,7 +257,8 @@ def test_a_signal_pin_touches_the_bottom_and_a_supply_spans_the_block(
 def test_the_pins_are_sized_by_the_declared_current_and_the_lef_em_rule(
         tmp_path, monkeypatch):
     """1.0 mA declared; the tech LEF's DCCURRENTDENSITY gives 2 mA/um on the
-    signal layer and 0.4 mA per cut on every via of its stack: a strip at
+    signal layer and area density equivalent to 0.4 mA per painted cut:
+    a strip at
     least 0.5 um wide and 3 cuts per via level, and the record names the rule
     it used."""
     rc, rep, script = _emit(tmp_path, monkeypatch, LefStage())
