@@ -201,6 +201,53 @@ def test_a14_consumes_extracted_deck_and_native_measurements(project, monkeypatc
     assert "unit__rcx" in (work / "unit_post_ngspice.sp").read_text()
 
 
+@pytest.mark.parametrize("post,expected,missing", [
+    ({"vout": 1.2}, "NOT_MEASURED", ["dropout", "iq", "psrr"]),
+    ({"vout": 1.5}, "FAIL", ["dropout", "iq", "psrr"]),
+    ({"vout": 1.2, "dropout": 0.3, "iq": 20, "psrr": 50}, "PASS", []),
+])
+def test_a14_requires_source_performance_outputs_without_treating_input_conditions_as_outputs(
+        project, monkeypatch, post, expected, missing):
+    import analog_real_corner_sweep as ars
+    import _designs_root as dr
+    _extraction_project(project, monkeypatch)
+    extraction = physical._extract(project, "unit", "container", "image", "process", {})
+    bdir, work = physical._paths(project, "unit")
+    put(work / "A13.json", extraction)
+    put(bdir / "spec.json", {"specs": [
+        {"name": "Vout", "min": 1.1, "max": 1.3},
+        {"name": "Dropout", "max": 0.5}, {"name": "Iq", "max": 50},
+        {"name": "PSRR", "min": 40}, {"name": "Vin", "min": 1.6, "max": 2.0},
+        {"name": "Iout", "min": 0.1, "max": 1.0}]})
+    monkeypatch.setattr(dr, "resolve_host_root", lambda *a: str(project))
+    monkeypatch.setattr(ars, "_container_path", lambda c, root, p: str(p))
+    monkeypatch.setattr(ars, "_run_ngspice", lambda *a, **k: (True, post, "native measured outputs", {}))
+    result = physical._resim(project, "unit", "container", "image", "process", {
+        "_pre_result": _pre_state(project)})
+    assert result["status"] == expected
+    corner = result["metrics"]["corners"][0]
+    assert sorted(corner["missing"]) == missing
+    assert "vin" not in corner["missing"] and "iout" not in corner["missing"]
+    assert corner["violations"] == (["vout"] if expected == "FAIL" else [])
+
+
+def test_a14_keeps_unclassified_custom_output_limit(project, monkeypatch):
+    import analog_real_corner_sweep as ars
+    import _designs_root as dr
+    _extraction_project(project, monkeypatch)
+    extraction = physical._extract(project, "unit", "container", "image", "process", {})
+    bdir, work = physical._paths(project, "unit")
+    put(work / "A13.json", extraction)
+    put(bdir / "spec.json", {"specs": [{"name": "custom_level", "min": 1.1, "max": 1.3}]})
+    monkeypatch.setattr(dr, "resolve_host_root", lambda *a: str(project))
+    monkeypatch.setattr(ars, "_container_path", lambda c, root, p: str(p))
+    monkeypatch.setattr(ars, "_run_ngspice", lambda *a, **k: (True, {"vout": 1.2}, "native measured outputs", {}))
+    result = physical._resim(project, "unit", "container", "image", "process", {
+        "_pre_result": _pre_state(project)})
+    assert result["status"] == "NOT_MEASURED"
+    assert result["metrics"]["corners"][0]["missing"] == ["custom_level"]
+
+
 def test_a14_changed_extracted_bytes_never_simulates(project, monkeypatch):
     import analog_real_corner_sweep as ars
     import _designs_root as dr

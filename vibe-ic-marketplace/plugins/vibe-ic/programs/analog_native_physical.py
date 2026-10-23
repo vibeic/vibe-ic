@@ -407,6 +407,7 @@ def _resim(project: Path, name: str, container: str, image: str, pdk: str,
            cfg: dict) -> dict:
     import analog_a7_post_layout_emit as a7
     import analog_real_corner_sweep as ars
+    import ams_analysis_select
     import _designs_root as dr
     from corner_yield_vs_spec_check import _spec_limits, _violates
 
@@ -430,7 +431,16 @@ def _resim(project: Path, name: str, container: str, image: str, pdk: str,
     ports = a7.subckt_ports(net.read_text(), name)
     if not ports:
         return _result("FAIL", "source netlist declares no block subcircuit")
-    limits = _spec_limits(_read(bdir / "spec.json"))
+    source = _read(bdir / "spec.json")
+    limits = _spec_limits(source)
+    _analyses, mapping = ams_analysis_select.select(source)
+    normalize = lambda key: ars.normalize_spec_label(key) or str(key).casefold()
+    required_outputs = {normalize(row["key"]) for row in mapping}
+    if required_outputs:
+        # Supply/load conditions are source inputs, not measured outputs.
+        # Keep the existing all-limit behavior for unclassified custom specs.
+        limits = {normalize(key): bound for key, bound in limits.items()
+                  if normalize(key) in required_outputs}
     if not limits:
         return _result("NOT_MEASURED", "post-layout acceptance has no declared numeric spec bounds")
     for corner in corners:
