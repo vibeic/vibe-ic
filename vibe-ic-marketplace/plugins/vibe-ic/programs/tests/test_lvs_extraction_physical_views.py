@@ -157,7 +157,9 @@ def test_a_tech_lef_record_that_does_not_verify_refuses_the_window(tmp_path, mon
     assert not str(pdk.tech_lef).endswith("active_via_legalized.tlef")
 
 
-@pytest.mark.parametrize("entry,exit_", [("15", "22"), ("17", "20")])
+@pytest.mark.parametrize("entry,exit_", [
+    ("15", "22"), ("17", "20"), ("20", "22"),
+])
 def test_a_window_that_routes_again_does_not_restore(tmp_path, monkeypatch, entry, exit_):
     """Default contract migration: exact current-row dispatch, not an alias.
 
@@ -359,6 +361,61 @@ def _default_reroute_control(project, pdk, monkeypatch, first, *, missing=False)
         path = project / rel
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text)
+    if not missing:
+        # Step 20 consumes Step 19's immutable, hash-bound CTS handoff, not a
+        # bare post_cts.def. Model the owning producer's actual receipt shape
+        # so the 20->22 positive reaches its controlled native boundary.  The
+        # missing control deliberately creates neither this receipt nor its
+        # source/state, and therefore still proves launch refusal.
+        import librelane_contract as ll
+        cts_rel = Path('phase3/librelane/source-control-cts/00-openroad-cts')
+        cts_root = project / cts_rel
+        cts_root.mkdir(parents=True)
+        cts_source = cts_root / 'view_unit.def'
+        cts_source.write_bytes(
+            (project / 'phase3/stage3/pnr/post_cts.def').read_bytes())
+        cts_state = cts_root / 'state_out.json'
+        cts_state.write_text(json.dumps({
+            'def': str(cts_source.resolve()),
+            'metrics': {'vibeic__cts__max_fanout': 3}}))
+        fingerprint = {'step': 'OpenROAD.CTS', 'config': '0' * 64,
+                       'config_files': {}, 'state_files': {}}
+        (cts_root / 'input_fingerprint.json').write_text(json.dumps(fingerprint))
+        (cts_root / 'pdk_root.json').write_text(
+            json.dumps({'scope': 'SOURCE_CONTROL neutral PDK'}))
+        (cts_root / 'invocation.log').write_text(
+            'SOURCE_CONTROL native-owner receipt; tool not executed\n')
+        cts_report = cts_root / 'cts.rpt'
+        cts_report.write_text('Total number of Clock Roots: 1.\n'
+                              'Total number of Buffers Inserted: 2.\n'
+                              'Total number of Sinks: 9.\n')
+        (cts_root / 'openroad-cts.log').write_text(
+            'SOURCE_CONTROL CTS transcript; tool not executed\n')
+        digest = lambda path: hashlib.sha256(path.read_bytes()).hexdigest()
+        ll.write_json(cts_root / 'vibeic_receipt.json', {
+            'input': fingerprint,
+            'sha256': {str(path.relative_to(cts_root)): digest(path)
+                       for path in cts_root.iterdir() if path.is_file()}})
+        handoff = project / 'reports/phase3/librelane_cts_handoff.json'
+        handoff.parent.mkdir(parents=True, exist_ok=True)
+        handoff.write_text(json.dumps({
+            'program': 'execution_backend_producers._cts_split',
+            'selected': 'librelane',
+            'scope': 'SOURCE_CONTROL native-owner handoff; no native CTS claim',
+            'chain': {'OpenROAD.CTS': str(cts_rel)},
+            'measured_state': str(cts_state.relative_to(project)),
+            'measured_state_sha256': digest(cts_state),
+            'views': {'post_cts_def': {
+                'source': str(cts_source.resolve()),
+                'source_sha256': digest(cts_source),
+                'dest': 'phase3/stage3/pnr/post_cts.def',
+                'dest_sha256': digest(
+                    project / 'phase3/stage3/pnr/post_cts.def')},
+                'cts_rpt': {
+                    'source': str(cts_report.resolve()),
+                    'source_sha256': digest(cts_report),
+                    'dest': str(cts_report.relative_to(project)),
+                    'dest_sha256': digest(cts_report)}}}))
     seen = {'scope': 'SOURCE_CONTROL launcher reachability, not native PnR',
             'restore_calls': 0, 'producer_steps': [], 'launcher_steps': [], 'consumer_steps': [],
             'input_sha256': {str(p.relative_to(project)): hashlib.sha256(p.read_bytes()).hexdigest()
