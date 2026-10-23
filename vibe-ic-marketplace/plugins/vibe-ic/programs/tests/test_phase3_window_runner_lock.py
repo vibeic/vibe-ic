@@ -192,6 +192,13 @@ def test_window_control_lock_stays_under_writable_project(project):
     assert lock_root.is_relative_to(project)
 
 
+def test_window_admission_clone_uses_runtime_scratch(tmp_path, monkeypatch):
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    monkeypatch.setattr(p3.tempfile, "tempdir", str(scratch))
+    assert p3._phase3_admission_temp_root() == scratch
+
+
 def test_enclosing_phase3_hang_is_stopped_by_the_watchdog(
         project, monkeypatch, tmp_path):
     """A grandchild that makes no forward progress is killed with its whole

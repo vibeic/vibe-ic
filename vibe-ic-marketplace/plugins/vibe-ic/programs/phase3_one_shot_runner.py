@@ -78714,6 +78714,11 @@ def _phase3_window_lock_root(project: Path) -> Path:
     return Path(project) / ".vibeic" / "phase3-window-lock"
 
 
+def _phase3_admission_temp_root() -> Path:
+    """Use the runtime scratch area for the disposable admission clone."""
+    return Path(tempfile.gettempdir())
+
+
 def _phase3_window_publication(project: Path, isolated: Path,
                                sources: List[Path],
                                window_run_id: str) -> Tuple[List[str], str]:
@@ -80637,8 +80642,9 @@ def main() -> int:
          **_librelane_admission_facts(project)}
     if _window_sites is not None:
         import tempfile
-        with tempfile.TemporaryDirectory(prefix="phase3-admission-",
-                                         dir=project.parent) as temp:
+        with tempfile.TemporaryDirectory(
+                prefix="phase3-admission-",
+                dir=_phase3_admission_temp_root()) as temp:
             isolated = Path(temp) / project.name
             _phase3_window_clone(project, isolated)
             _canonical = _canonical_admission.admit_span(
