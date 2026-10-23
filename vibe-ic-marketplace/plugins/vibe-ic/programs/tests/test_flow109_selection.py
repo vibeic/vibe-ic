@@ -337,19 +337,21 @@ def test_forged_backend_owner_cannot_select_existing_native_policy():
         flow109.source_owned_native_dispatch(row)
 
 
-def test_d34_clock_planning_reuses_current_step16_owner_and_strict_claim_path():
-    import execution_backend_gates
+def test_d34_clock_planning_registers_real_special_owner_and_strict_claim_path():
+    import flow109_clock_plan
 
     plan = flow109.resolve_plan(profile())
     row = flow109.resolve_step(plan, "D34")
     dispatch = flow109.source_owned_native_dispatch(row)
-    canonical = execution_backend_gates.canonical_family_row("16")
-    assert dispatch["native_step_id"] == "16"
-    assert dispatch["producer"] == "execution_backend_producers.py:produce"
-    assert dispatch["producer_sites"] == [
-        "phase3_one_shot_runner.py:emit_clock_plan"]
-    assert dispatch["consumer"] == "execution_backend_gates.py:evaluate"
-    assert dispatch["native_required_outputs"] == canonical["required_outputs"]
+    assert dispatch["native_step_id"] == "flow109.D34"
+    assert dispatch["adapter"] == "flow109_clock_plan"
+    assert dispatch["admission_policy"] == "source_owned_existing_native"
+    assert dispatch["acceptance_scope"] == "existing_native_component_only"
+    assert flow109_clock_plan._consumer_row()["id"] == 16
+    sources = flow109_clock_plan.operation_sources()
+    assert "programs/phase3_one_shot_runner.py" in sources
+    assert "programs/_physical_current.py" in sources
+    assert "programs/clock_plan_check.py" in sources
     context = flow109.execution_context(plan, "D34", "D34")
     admission = flow109.source_owned_native_admission(context)
     assert admission["status"] == "NOT_APPLICABLE"
@@ -360,7 +362,26 @@ def test_d34_clock_planning_reuses_current_step16_owner_and_strict_claim_path():
         qualification_registry="input/qualifications.json")
     assert flow109.source_owned_native_admission(claimed) is None
 
-    row["profile"]["dispatch"]["native_step_id"] = "17"
+    row["profile"]["dispatch"]["adapter"] = "flow109_missing_clock_owner"
+    with pytest.raises(flow109.Flow109Error, match="FLOW109_NATIVE_OWNER_INVALID"):
+        flow109.source_owned_native_dispatch(row)
+
+
+def test_d44_retained_lec_registers_only_existing_native_admission_fields():
+    plan = flow109.resolve_plan(profile())
+    row = flow109.resolve_step(plan, "D44")
+    dispatch = flow109.source_owned_native_dispatch(row)
+    assert dispatch["adapter"] == "flow109_final_lec"
+    assert dispatch["native_step_id"] == "flow109.D44"
+    assert dispatch["admission_policy"] == "source_owned_existing_native"
+    assert dispatch["acceptance_scope"] == "existing_native_component_only"
+    context = flow109.execution_context(plan, "D44", "D44")
+    admission = flow109.source_owned_native_admission(context)
+    assert admission["status"] == "NOT_APPLICABLE"
+    assert admission["qualification_status"] == "NOT_CLAIMED"
+    assert admission["flow109_acceptance"] == "NOT_MEASURED"
+
+    del row["profile"]["dispatch"]["acceptance_scope"]
     with pytest.raises(flow109.Flow109Error, match="FLOW109_NATIVE_OWNER_INVALID"):
         flow109.source_owned_native_dispatch(row)
 

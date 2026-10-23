@@ -8440,26 +8440,19 @@
           ],
           "execution_status": "NATIVE_COMPONENT_ONLY_NOT_109_ACCEPTED",
           "dispatch": {
-            "kind": "canonical_backend_window",
-            "native_step_id": "16",
-            "producer": "execution_backend_producers.py:produce",
-            "producer_sites": [
-              "phase3_one_shot_runner.py:emit_clock_plan"
-            ],
+            "adapter": "flow109_clock_plan",
+            "native_step_id": "flow109.D34",
+            "admission_policy": "source_owned_existing_native",
             "engine_families": [
-              "opensta"
-            ],
-            "consumer": "execution_backend_gates.py:evaluate",
-            "native_required_outputs": [
-              "phase3/stage3/cts/clock_plan.json"
+              "openroad"
             ],
             "acceptance_scope": "existing_native_component_only",
             "flow109_metrics_status": "UNIMPLEMENTED",
             "engine_executables": {
-              "opensta": "sta"
+              "openroad": "openroad"
             },
             "engine_steps": {
-              "opensta": [
+              "openroad": [
                 "OpenROAD.CheckSDCFiles"
               ]
             }
@@ -10021,6 +10014,8 @@
           "dispatch": {
             "adapter": "flow109_final_lec",
             "native_step_id": "flow109.D44",
+            "admission_policy": "source_owned_existing_native",
+            "acceptance_scope": "existing_native_component_only",
             "flow109_metrics_status": "IMPLEMENTED_D44_RUNTIME",
             "engine_families": [
               "python3",

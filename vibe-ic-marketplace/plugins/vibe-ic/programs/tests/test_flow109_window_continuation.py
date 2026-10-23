@@ -147,17 +147,16 @@ def test_delivery_receipts_preserve_failure_and_missing_release_evidence(
         assert missing_reason in result["components"][-1]["reason"]
 
 
-def test_clock_planning_window_reaches_registered_native_owner_and_reverse():
+def test_clock_planning_row_reaches_registered_special_native_owner_and_reverse():
     plan = flow109.resolve_plan(_profile())
-    window = flow109.resolve_execution_window(plan, "D34", "D35")
-    assert window["dispatch_kind"] == "canonical_backend_window"
-    assert [row["id"] for row in window["resolved_rows"]] == ["D34", "D35"]
-    assert (window["native_entry_step"], window["native_exit_step"]) == ("16", "17")
-    context = flow109.execution_context(plan, "D34", "D35")
+    resolved = flow109.resolve_execution_window(plan, "D34", "D34")
+    assert resolved["resolved_row"]["id"] == "D34"
+    assert resolved["native_step_id"] == "flow109.D34"
+    context = flow109.execution_context(plan, "D34", "D34")
     admission_record = flow109.source_owned_native_admission(context)
     assert admission_record["status"] == "NOT_APPLICABLE"
     assert admission_record["qualification_status"] == "NOT_CLAIMED"
-    assert admission_record["native_step_id"] == ["16", "17"]
+    assert admission_record["native_step_id"] == "flow109.D34"
     assert admission_record["flow109_acceptance"] == "NOT_MEASURED"
     with pytest.raises(flow109.Flow109Error, match="WINDOW_REVERSED"):
         flow109.resolve_execution_window(plan, "D32", "D31")
