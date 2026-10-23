@@ -157,7 +157,7 @@ def test_step_lvs_records_the_layout_and_netlist_it_compares(tmp_path, monkeypat
     stale.write_text('{"stale": true}')
     monkeypatch.setattr(R, "_docker_exec", lambda c, cmd, timeout=0, **_: (0, "", ""))
     monkeypatch.setattr(R, "_to_container_path", lambda s, c: s)
-    R.step_lvs(project, "chip_top", _pdk(), "x")
+    R.step_lvs(project, "chip_top", _pdk(), "x", _direct=True)
     doc = json.loads(stale.read_text())
     layout = project / "phase3/stage3/pnr/chip_top.def"
     assert doc["layout_def"] == {"path": str(layout.resolve()), "sha256": drv._sha(layout)}
@@ -253,7 +253,7 @@ def test_step_lvs_verdict_names_its_own_inputs_record(tmp_path, monkeypatch):
     project = _proj(tmp_path, def_bytes=b"")          # stops at the 0-byte guard
     monkeypatch.setattr(R, "_docker_exec", lambda c, cmd, timeout=0, **_: (0, "", ""))
     monkeypatch.setattr(R, "_to_container_path", lambda s, c: s)
-    R.step_lvs(project, "chip_top", _pdk(), "x")
+    R.step_lvs(project, "chip_top", _pdk(), "x", _direct=True)
     inputs = project / "reports/phase3/lvs_inputs.json"
     verdict = json.loads((project / "reports/phase3/lvs_verdict.json").read_text())
     assert verdict["lvs_inputs"]["sha256"] == drv._sha(inputs)

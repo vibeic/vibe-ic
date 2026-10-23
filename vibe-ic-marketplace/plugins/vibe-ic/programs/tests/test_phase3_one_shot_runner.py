@@ -456,8 +456,9 @@ def test_default_step15_direct_invocation_binds_backend_receipt_before_consumer(
             "create_clock -name clk -period 10 [get_ports clk]\n")
         return RUNNER.StepResult("pnr", "PASS", 0.0, "fixture")
 
-    def fake_declared(current_project, step_id):
+    def fake_declared(current_project, step_id, *, input_manifest=None):
         events.append("declared")
+        assert input_manifest is not None
         report = current_project / "reports/phase2/gates/stage2_compliance.json"
         report.parent.mkdir(parents=True, exist_ok=True)
         report.write_text('{"verdict":"PASS"}\n')

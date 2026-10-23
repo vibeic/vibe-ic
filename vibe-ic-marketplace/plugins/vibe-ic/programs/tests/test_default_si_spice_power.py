@@ -4,6 +4,8 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+
+from test_librelane_contract import local_image  # noqa: F401
 import _plugin_tree  # noqa: F401
 from _hostpaths import require_repo
 import _default_backend_fixtures as BF
@@ -949,8 +951,7 @@ def test_step30_consumer_update_preserves_producer_and_material_refusals(tmp_pat
 
 
 
-def test_step30_native_local_process_uses_its_declared_workdir(tmp_path):
-    import os
+def test_step30_native_local_process_uses_its_declared_workdir(tmp_path, local_image):
     # A real LOCAL child runs inside the attested test image. This neutral
     # process control measures the native transport, not an IC or SPICE result.
     p = tmp_path / 'project'
@@ -959,7 +960,7 @@ def test_step30_native_local_process_uses_its_declared_workdir(tmp_path):
     program = ("import json,os; from pathlib import Path; "
                "Path('process.json').write_text(json.dumps({'cwd':os.getcwd(), "
                "'scope':'SOURCE_FIXTURE_ONLY'})); print('LOCAL_PROCESS_DONE')")
-    result = PST._docker(os.environ['VIBEIC_LIBRELANE_IMAGE'], p, [],
+    result = PST._docker(local_image.image, p, [],
                          ['python3', '-c', program], work)
     assert result.returncode == 0, (result.stdout, result.stderr)
     assert 'LOCAL_PROCESS_DONE' in result.stdout

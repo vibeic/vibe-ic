@@ -76,6 +76,11 @@ def test_default_current_native_manifest_reaches_the_consumer(tmp_path, monkeypa
         "pdk_root": str(project / "neutral_pdk"), "image_id": "SOURCE_CONTROL_ONLY"})
     monkeypatch.setattr(backend, "_parameters", lambda *_: (
         runner, None, cfg, "SOURCE_CONTROL_ONLY"))
+    # This control owns native input-manifest/current-state behaviour, not the
+    # independent Step-7 ASIC-SDC producer. Preserve the fixture's existing
+    # SDC bytes (including the explicit missing-input case) while exercising
+    # the real Step-32 admission, producer and consumers.
+    monkeypatch.setattr(runner, "_refresh_default_step32_sdc", lambda *_: None)
     seen, calls = {}, []
     actual_produce = backend.produce
 

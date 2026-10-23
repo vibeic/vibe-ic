@@ -193,14 +193,12 @@ def post_stream_transport(project, pdk, monkeypatch, calls):
     monkeypatch.setattr(fcc._watchdog, "run_host_supervised", supervised)
 
 
-def fixture(tmp_path, monkeypatch, case):
+def fixture(tmp_path, monkeypatch, case, local_image):
     """Full current finished-stream fixture; native leaves remain explicit controls."""
     import librelane_contract as lc
     from test_default_pnr_row_boundaries import _full_gds_lvs_transport
-    identity = lc.local_image_attestation()
-    image = SimpleNamespace(image=identity['image'],
-        receipt=Path(identity['attestation_path']), readonly_attestation=True)
-    project, pdk, selected, calls, attempt = _checkpoint31_fixture(tmp_path, monkeypatch, image)
+    project, pdk, selected, calls, attempt = _checkpoint31_fixture(
+        tmp_path, monkeypatch, local_image)
     attempt['first'] = False
     _full_gds_lvs_transport(monkeypatch, project, pdk, selected,
                            'lvs_error' if case == 'lvs_fail' else 'current', calls)
@@ -247,9 +245,10 @@ def _assert_full_gds_chain(project, calls):
     assert sum('erc' in row for row in calls if isinstance(row, dict)) == 1
 
 
-def current_window(tmp_path, monkeypatch):
+def current_window(tmp_path, monkeypatch, local_image):
     """Real current Default owner/declared writers/full thirteen-output consumer."""
-    project, pdk, calls, observed, row = fixture(tmp_path, monkeypatch, 'current')
+    project, pdk, calls, observed, row = fixture(
+        tmp_path, monkeypatch, 'current', local_image)
     before = {name: (R._pl.pnr_dir(project) / name).read_bytes()
               for name in ('routed.def', 'spm.gds')}
     selected = R._phase3_window_sites('31', '31')
@@ -273,8 +272,9 @@ def current_window(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize("case", ["current", "missing_erc", "changed_perc", "lvs_fail"])
 def test_bounded_default31_owns_all_current_outputs_before_the_consumer(
-        tmp_path, monkeypatch, case):
-    project, pdk, calls, observed, definition = fixture(tmp_path, monkeypatch, case)
+        tmp_path, monkeypatch, local_image, case):
+    project, pdk, calls, observed, definition = fixture(
+        tmp_path, monkeypatch, case, local_image)
     selected = R._phase3_window_sites("31", "31")
     put(project, "ROUTE_OBSERVATION.json", json.dumps({"selected": selected,
         "required_owner": "Default31 native producer and current-step declared writers"}))
@@ -336,11 +336,12 @@ def test_ultra_keeps_its_existing_step31_sites(monkeypatch):
 
 @pytest.mark.parametrize("case", ["current", "changed_pdk", "changed_gds", "refused_restore"])
 def test_resumed_default31_uses_fresh_admission_basis_before_physical_views(
-        tmp_path, monkeypatch, case):
+        tmp_path, monkeypatch, local_image, case):
     """Real admission/restore/producer/full consumer; native leaves are neutral."""
     import copy
 
-    project, pdk, calls, observed, row = fixture(tmp_path, monkeypatch, "current")
+    project, pdk, calls, observed, row = fixture(
+        tmp_path, monkeypatch, "current", local_image)
     pnr = R._pl.pnr_dir(project)
     macro = put(project, "input/pdk/recorded_macro.lef",
                 "MACRO recorded_macro\n CLASS BLOCK ;\n SIZE 1 BY 1 ;\nEND recorded_macro\n")

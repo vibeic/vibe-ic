@@ -268,6 +268,17 @@ def test_step18_follows_step17_unless_named(tmp_path):
     assert runner._librelane_placement_modes(tmp_path) == {'17': 'librelane', '18': 'direct'}
 
 
+def _neutral_step7_sdc(project):
+    """Current Step-7 reader output for placement-switch seam controls."""
+    path = project / 'phase2/stage2/constraints/dut.asic.sdc'
+    path.parent.mkdir(parents=True, exist_ok=True)
+    text = 'create_clock -period 10 [get_ports clk]\n'
+    path.write_text(text)
+    return {'text': text, 'path': str(path), 'step7_sha256': 'source-control',
+            'deck_sha256': 'source-control', 'regenerated': None,
+            'derivation': None}
+
+
 @pytest.mark.parametrize('steps,code', [
     ({'17': 'librelane'}, 'LL_PLACEMENT_NEEDS_LIBRELANE_FLOORPLAN'),
     ({'15': 'librelane', '15.5ic': 'librelane', '17': 'librelane', '18': 'direct'},
@@ -301,6 +312,8 @@ def test_the_placement_switch_refuses_by_name_and_never_runs_direct(tmp_path, mo
             '_prepare_padring_for_route': must_not,
             '_prepare_librelane_floorplan_for_route': must_not}.items():
         monkeypatch.setattr(runner, name, value)
+    monkeypatch.setattr(runner._ppa_timing, 'asic_sdc_for_pnr',
+                        lambda *_: _neutral_step7_sdc(project))
     result = runner.step_pnr(project, 'dut', pdk, 'unused', '400x400', 0.4)
     assert result.status == 'FAIL' and code in result.detail
     assert result.extras['finding'] == code
@@ -334,6 +347,8 @@ def test_step17_on_librelane_passes_the_step18_plan_to_the_producer(tmp_path, mo
             '_build_pnr_tcl_text': lambda **k: bridge._deck(),
             '_prepare_librelane_floorplan_for_route': producer}.items():
         monkeypatch.setattr(runner, name, value)
+    monkeypatch.setattr(runner._ppa_timing, 'asic_sdc_for_pnr',
+                        lambda *_: _neutral_step7_sdc(project))
     runner.step_pnr(project, 'dut', pdk, 'unused', '400x400', 0.4, spare_density=0.05)
     placement = seen['placement']
     assert placement is not None

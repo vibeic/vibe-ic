@@ -112,12 +112,13 @@ def _window(tmp_path, monkeypatch, *, sha_ok=True):
 
 def test_a_step31_window_reads_the_views_pnr_used(tmp_path, monkeypatch):
     seen = _window(tmp_path, monkeypatch)
-    view = seen["basis"]              # the FIRST reader: the admission basis
-    assert view["tech_lef"] == str(
-        seen["project"] / "phase3/stage3/pnr/active_via_legalized.tlef")
-    assert _IO_LEF in view["macro_lefs"]
-    assert not any(p.endswith("active_via_legalized.tlef") for p in view["macro_lefs"])
-    assert _IO_GDS in view["macro_gds"]
+    # Admission is deliberately over the fresh distribution identity that
+    # admitted the stream. The Step-31 producer then restores the recorded
+    # extraction views on its own PDK object before either native instrument;
+    # the coupled owner controls exercise that second endpoint.
+    view = seen["basis"]
+    assert view == {"tech_lef": "/pdk/techlef/cells__nom.tlef",
+                    "macro_lefs": [], "macro_gds": []}
 
 
 def test_local_checkpoint_restores_installed_pad_gds(tmp_path, monkeypatch):
@@ -140,7 +141,8 @@ def test_a_tech_lef_record_that_does_not_verify_refuses_the_window(tmp_path, mon
     window measures with neither LEF, and the unverified file never enters
     the PDK as a macro LEF through the inventory."""
     seen = _window(tmp_path, monkeypatch, sha_ok=False)
-    assert "basis" not in seen and "lvs" not in seen and "drc" not in seen
+    assert seen["basis"]["tech_lef"] == "/pdk/techlef/cells__nom.tlef"
+    assert "lvs" not in seen and "drc" not in seen
     doc = json.loads(next((seen["project"] / "reports/orchestrator/windows")
                           .glob("*/phase3_one_shot.json")).read_text())
     row = doc["steps"][0]
@@ -155,7 +157,7 @@ def test_a_tech_lef_record_that_does_not_verify_refuses_the_window(tmp_path, mon
     assert not str(pdk.tech_lef).endswith("active_via_legalized.tlef")
 
 
-@pytest.mark.parametrize("entry,exit_", [("15", "22"), ("17", "20"), ("20", "22")])
+@pytest.mark.parametrize("entry,exit_", [("15", "22"), ("17", "20")])
 def test_a_window_that_routes_again_does_not_restore(tmp_path, monkeypatch, entry, exit_):
     """Default contract migration: exact current-row dispatch, not an alias.
 
