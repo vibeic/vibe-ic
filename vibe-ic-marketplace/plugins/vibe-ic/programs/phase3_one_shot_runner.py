@@ -21095,6 +21095,151 @@ def _l19_declared_die_area(project: Optional[Path]) -> Optional[str]:
     return None
 
 
+def _resolve_provisional_slot_die(
+        project: Path, declared_die_um: str, required_side_um: int
+        ) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    """Resolve an agent-selected provisional slot against measured geometry.
+
+    A slot answered by its owner is fixed and returns ``(None, None)``.  The
+    only derived case admitted here is the existing Step-0.5 contract: an
+    agent selection under owner delegation whose fit is explicitly pending
+    the canonical area/pad checks.  Every published slot is then read from
+    the existing ingest report and rebound to the bytes that ingest hashed.
+    The least-area slot that fits the producer's measured square floor wins.
+
+    This function never invents a slot dimension and never edits Phase 1.
+    Invalid/stale derived authority returns a named refusal; a fixed or
+    otherwise inapplicable declaration remains pinned for the caller's
+    ordinary ``PADRING_DIE_TOO_SMALL`` refusal.
+    """
+    prefix = "DERIVED_SLOT_AUTHORITY_INVALID:"
+
+    def _load(rel: str) -> Any:
+        return json.loads((project / rel).read_text(errors="replace"))
+
+    try:
+        step0 = _load("input/step_0_5ic_answers.json")
+        declaration = _load(
+            "input/submission_template/tapeout_declaration.json")
+    except (OSError, ValueError) as exc:
+        # Absence is ordinary for a fixed/non-template design.  A partial
+        # pair, however, is an uncheckable authority chain and must refuse.
+        present = [(project / p).is_file() for p in (
+            "input/step_0_5ic_answers.json",
+            "input/submission_template/tapeout_declaration.json")]
+        if not any(present):
+            return None, None
+        return None, f"{prefix} authority records unreadable: {exc}"
+
+    def _authority(doc: Any) -> Any:
+        return ((doc or {}).get("answer_provenance") or {}).get(
+            "operator_template.slot")
+
+    auth = _authority(step0)
+    decl_auth = _authority(declaration)
+    if not isinstance(auth, dict) or auth.get("answered_by") != "agent":
+        return None, None
+    if auth != decl_auth:
+        return None, (f"{prefix} Step-0.5 and tapeout declaration disagree "
+                      "on operator_template.slot authority")
+    delegation = auth.get("delegation")
+    if (not isinstance(delegation, dict)
+            or delegation.get("answered_by") != "owner"
+            or delegation.get("scope") != "operator_template.slot"):
+        return None, f"{prefix} agent slot has no owner delegation for its scope"
+    if auth.get("fit_status") != "TO_BE_VERIFIED_BY_CANONICAL_AREA_AND_PAD_CHECKS":
+        return None, f"{prefix} agent slot is not marked pending canonical fit checks"
+    if not str(auth.get("fallback") or "").strip():
+        return None, f"{prefix} pending-fit slot has no declared fallback"
+
+    step_slot = ((step0.get("operator_template") or {}).get("slot"))
+    decl_slot = ((declaration.get("operator_template") or {}).get("slot"))
+    if not step_slot or step_slot != decl_slot:
+        return None, f"{prefix} Step-0.5 and tapeout declaration name different slots"
+    expected_operator_source = f"input/submission_template/slots/{step_slot}.yaml"
+    if auth.get("operator_source") != expected_operator_source:
+        return None, f"{prefix} operator_source does not name the declared slot"
+    if not (project / expected_operator_source).is_file():
+        return None, f"{prefix} declared slot contract is absent"
+
+    try:
+        report = _load("reports/phase1/submission_template.json")
+    except (OSError, ValueError) as exc:
+        return None, f"{prefix} submission-template ingest unreadable: {exc}"
+    ingest = (report or {}).get("ingest") or {}
+    if ingest.get("status") != "INGESTED" or ingest.get("declared_slot") != step_slot:
+        return None, f"{prefix} current ingest does not bind the declared slot"
+
+    candidates: List[Dict[str, Any]] = []
+    for rec in ingest.get("slots") or []:
+        name = rec.get("slot")
+        rel = rec.get("source_relpath")
+        digest = rec.get("source_sha256")
+        if (not isinstance(name, str) or not isinstance(rel, str)
+                or Path(rel).name != rel or not isinstance(digest, str)):
+            return None, f"{prefix} published slot catalogue entry is incomplete"
+        source = project / "input" / "submission_template_source" / rel
+        try:
+            actual_digest = hashlib.sha256(source.read_bytes()).hexdigest()
+        except OSError as exc:
+            return None, f"{prefix} {rel} cannot be rebound: {exc}"
+        if actual_digest != digest:
+            return None, f"{prefix} {rel} changed after ingest"
+        rect = ((rec.get("die_area") or {}).get("rect")
+                or (rec.get("die_area") or {}).get("raw"))
+        if isinstance(rect, str):
+            rect = rect.split()
+        try:
+            llx, lly, urx, ury = (float(v) for v in rect)
+            width, height = urx - llx, ury - lly
+        except (TypeError, ValueError):
+            return None, f"{prefix} published slot {name!r} has no valid DIE_AREA"
+        if width <= 0 or height <= 0:
+            return None, f"{prefix} published slot {name!r} has non-positive DIE_AREA"
+        candidates.append({"slot": name, "width": int(round(width)),
+                           "height": int(round(height)),
+                           "source_relpath": rel,
+                           "source_sha256": digest})
+    current = next((c for c in candidates if c["slot"] == step_slot), None)
+    if current is None:
+        return None, f"{prefix} declared slot is absent from the published catalogue"
+    if declared_die_um != f"{current['width']}x{current['height']}":
+        return None, (f"{prefix} L19 die {declared_die_um} does not match "
+                      f"declared slot {step_slot} at "
+                      f"{current['width']}x{current['height']}")
+    declared_rect = ((declaration.get("answers") or {}).get("die_area_um"))
+    try:
+        dw = int(round(float(declared_rect[2]) - float(declared_rect[0])))
+        dh = int(round(float(declared_rect[3]) - float(declared_rect[1])))
+    except (TypeError, ValueError, IndexError):
+        return None, f"{prefix} tapeout declaration has no valid die_area_um"
+    if (dw, dh) != (current["width"], current["height"]):
+        return None, f"{prefix} tapeout die_area_um disagrees with the declared slot"
+
+    adequate = [c for c in candidates
+                if c["width"] >= required_side_um
+                and c["height"] >= required_side_um]
+    if not adequate:
+        return None, (
+            "DERIVED_SLOT_NO_ADEQUATE_PUBLISHED_SLOT: measured pad/technology "
+            f"floor {required_side_um}x{required_side_um} um exceeds every "
+            "source-bound published slot")
+    chosen = min(adequate, key=lambda c: (
+        c["width"] * c["height"], c["width"], c["height"], c["slot"]))
+    return {
+        "intent": "DERIVED_PROVISIONAL_SLOT",
+        "authority": "owner-delegated agent selection pending canonical fit checks",
+        "declared_slot": step_slot,
+        "declared_die_um": declared_die_um,
+        "resolved_slot": chosen["slot"],
+        "resolved_die_um": f"{chosen['width']}x{chosen['height']}",
+        "required_die_side_um": int(required_side_um),
+        "selection": "least published DIE_AREA that fits the measured floor",
+        "source_relpath": chosen["source_relpath"],
+        "source_sha256": chosen["source_sha256"],
+    }, None
+
+
 def _padring_required_die_um(project: Optional[Path]) -> Tuple[Optional[int], str]:
     """The die side the PAD RING needs, off the producer's own record.
 
@@ -22202,7 +22347,8 @@ def _floorplan_rectangles_record(project: Path,
                                  core_pad: int,
                                  ring_inset_um: Optional[float],
                                  seal_ring: Optional[Dict[str, Any]] = None,
-                                 pdn_core_floor: Optional[Dict[str, Any]] = None
+                                 pdn_core_floor: Optional[Dict[str, Any]] = None,
+                                 die_intent: Optional[Dict[str, Any]] = None
                                  ) -> Dict[str, Any]:
     """Write both rectangles and say which is which. Written on EVERY run.
 
@@ -22211,10 +22357,17 @@ def _floorplan_rectangles_record(project: Path,
     was not read. It rides in THIS record rather than a new artefact because it
     is a fact about these two rectangles: a reader asking why the core is
     26 um in and not 10 has to be able to find the answer beside the number."""
+    if die_intent is None:
+        try:
+            prior = json.loads((project / FLOORPLAN_RECTANGLES_REL).read_text())
+            die_intent = prior.get("die_intent")
+        except (OSError, ValueError, AttributeError):
+            die_intent = None
     rec: Dict[str, Any] = {
         "program": "phase3_one_shot_runner.step_pnr",
         "die_rect_um": [int(v) for v in die_rect],
         "die_source": die_source,
+        "die_intent": die_intent,
         "floorplan_rect_um": ([int(v) for v in fp_rect]
                               if fp_rect is not None else None),
         "floorplan_rect_is_the_die": fp_rect is None,
@@ -38848,6 +39001,7 @@ class PrePnrDieCore:
     strap_floor_detail: Any
     strap_floor_um: Any
     ct03_pin_rect: Any
+    die_intent: Dict[str, Any]
     #: the auto-die metrics dict `step_pnr` still reads after the resolution
     #: (the planned-PnR parity report reads its cell area); not in
     #: `as_locals`, whose 18-tuple the between-segments step unpacks too.
@@ -38888,10 +39042,17 @@ def _prepnr_geometry(project: Path, top: str, pdk: PdkConfig,
     # The pad-ring producer already ran before SDC construction above.  Keep
     # using that exact result here; a second dispatch could make the SDC and
     # die read different producer generations.
+    _requested_auto = str(die_um).lower() == "auto"
     die_um, _l9_die_note = _effective_die_um(die_um, project)
     if _l9_die_note:
         print(f"[phase3] {_l9_die_note}", file=sys.stderr)
     _auto_die_requested = str(die_um).lower() == "auto"
+    _die_intent: Dict[str, Any] = {
+        "intent": ("DERIVED_AUTO" if _auto_die_requested else
+                   "DECLARED_FIXED" if _l9_die_note else "EXPLICIT_FIXED"),
+        "requested_die_um": "auto" if _requested_auto else str(die_um),
+        "effective_die_um": str(die_um),
+    }
     _die_source = ("--die-um auto" if _auto_die_requested
                    else (_l9_die_note or f"--die-um {die_um} (explicit)"))
     _auto_die_metrics: dict = {}
@@ -38969,45 +39130,73 @@ def _prepnr_geometry(project: Path, top: str, pdk: PdkConfig,
     _ring_side, _ring_basis = _padring_required_die_um(project)
     if _ring_side is not None:
         _mandated = not _auto_die_requested
+        _derived_slot_applied = False
         try:
             _cur_w, _cur_h = (int(x) for x in str(die_um).lower().split("x"))
         except Exception:
             _cur_w = _cur_h = 0
         if _cur_w < _ring_side or _cur_h < _ring_side:
             if _mandated:
-                return StepResult(
-                    "pnr", "FAIL", time.time() - t0,
-                    f"PADRING_DIE_TOO_SMALL: the die pinned for this run is "
-                    f"{die_um} um and its own pad ring needs at least "
-                    f"{_ring_side}x{_ring_side} um ({_ring_basis}). Growing a "
-                    f"die somebody pinned would replace their floorplan with "
-                    f"one nothing in the design states; shrinking the ring is "
-                    f"not possible without dropping a declared pad. Re-run "
-                    f"with --die-um {_ring_side}x{_ring_side} or state a die "
-                    f"at least that large in the design's floorplan section.")
-            print(f"[phase3] die-um=auto and the design's own pad ring needs "
-                  f"{_ring_side}x{_ring_side} um ({_ring_basis}) — adopting "
-                  f"it over the core-sized {die_um}", file=sys.stderr)
-            # WHAT THE CORE NEEDED IS STILL TRUE AFTER THE RING GREW THE DIE.
-            # Kept here, where the auto-sizer's answer is still in hand, and
-            # applied to the CORE rectangle below.
-            # N4: the auto-sizer now reports its CORE; the die it returned is
-            # that core plus the inset, so the core is the number to keep.
-            _cs = _auto_die_metrics.get("core_side_um")
-            if isinstance(_cs, int) and _cs > 0:
-                _core_sized_um = (_cs, _cs)
-            else:
-                _core_sized_um = (_cur_w, _cur_h) if _cur_w and _cur_h else None
-            die_um = f"{_ring_side}x{_ring_side}"
-            # AND IT IS NO LONGER AUTO. `_auto_die_requested` is the opt-in for
-            # the over-sparse DOWNSIZE retry, whose premise is that a die the
-            # runner sized itself may be tightened freely. That premise is
-            # false the moment a pad ring pins the die: a ring-sized die IS
-            # sparse — MEASURED here, 463 cells in 3162 x 3162 um — and the
-            # retry duly shrank it, to 468 um, and the ring stopped fitting
-            # again with the floor's own message nowhere in sight. The die is
-            # now MANDATED, by the design's own ring, so it is marked as such.
-            _auto_die_requested = False
+                _derived = None
+                _derived_refusal = None
+                if (_requested_auto and _l9_declared_die_area(project) == die_um
+                        and _l9_declared_die_area(project) is None):
+                    _derived, _derived_refusal = _resolve_provisional_slot_die(
+                        project, die_um, _ring_side)
+                if _derived_refusal:
+                    return StepResult("pnr", "FAIL", time.time() - t0,
+                                      _derived_refusal)
+                if _derived is None:
+                    return StepResult(
+                        "pnr", "FAIL", time.time() - t0,
+                        f"PADRING_DIE_TOO_SMALL: the die pinned for this run is "
+                        f"{die_um} um and its own pad ring needs at least "
+                        f"{_ring_side}x{_ring_side} um ({_ring_basis}). Growing a "
+                        f"die somebody pinned would replace their floorplan with "
+                        f"one nothing in the design states; shrinking the ring is "
+                        f"not possible without dropping a declared pad. Re-run "
+                        f"with --die-um {_ring_side}x{_ring_side} or state a die "
+                        f"at least that large in the design's floorplan section.")
+                die_um = _derived["resolved_die_um"]
+                _die_intent = _derived
+                _die_source = (
+                    f"derived provisional slot {_derived['resolved_slot']} "
+                    f"({_derived['source_relpath']}, sha256 "
+                    f"{_derived['source_sha256']})")
+                print(f"[phase3] DERIVED_PROVISIONAL_SLOT: "
+                      f"{_derived['declared_slot']} "
+                      f"({_derived['declared_die_um']} um) does not fit the "
+                      f"measured pad/technology floor {_ring_side}x{_ring_side} "
+                      f"um; selected the least-area adequate published slot "
+                      f"{_derived['resolved_slot']} ({die_um} um), bound to "
+                      f"{_derived['source_relpath']} sha256 "
+                      f"{_derived['source_sha256']}", file=sys.stderr)
+                _cur_w, _cur_h = (int(x) for x in die_um.split("x"))
+                _derived_slot_applied = True
+            if not _derived_slot_applied:
+                print(f"[phase3] die-um=auto and the design's own pad ring needs "
+                      f"{_ring_side}x{_ring_side} um ({_ring_basis}) — adopting "
+                      f"it over the core-sized {die_um}", file=sys.stderr)
+                # WHAT THE CORE NEEDED IS STILL TRUE AFTER THE RING GREW THE DIE.
+                # Kept here, where the auto-sizer's answer is still in hand, and
+                # applied to the CORE rectangle below.
+                # N4: the auto-sizer now reports its CORE; the die it returned is
+                # that core plus the inset, so the core is the number to keep.
+                _cs = _auto_die_metrics.get("core_side_um")
+                if isinstance(_cs, int) and _cs > 0:
+                    _core_sized_um = (_cs, _cs)
+                else:
+                    _core_sized_um = (_cur_w, _cur_h) if _cur_w and _cur_h else None
+                die_um = f"{_ring_side}x{_ring_side}"
+                # AND IT IS NO LONGER AUTO. `_auto_die_requested` is the opt-in for
+                # the over-sparse DOWNSIZE retry, whose premise is that a die the
+                # runner sized itself may be tightened freely. That premise is
+                # false the moment a pad ring pins the die: a ring-sized die IS
+                # sparse — MEASURED here, 463 cells in 3162 x 3162 um — and the
+                # retry duly shrank it, to 468 um, and the ring stopped fitting
+                # again with the floor's own message nowhere in sight. The die is
+                # now MANDATED, by the design's own ring, so it is marked as such.
+                _auto_die_requested = False
     try:
         die_w, die_h = (int(x) for x in die_um.lower().split("x"))
     except Exception:
@@ -39283,7 +39472,8 @@ def _prepnr_geometry(project: Path, top: str, pdk: PdkConfig,
               f"The pins stay on the die boundary and the antenna residual "
               f"that comes from that is REPORTED, not traded.",
               file=sys.stderr)
-    return PrePnrDieCore(die_um=die_um, die_w=die_w, die_h=die_h, core_pad=core_pad, core_w=core_w, core_h=core_h, fp_rect=fp_rect, util=util, auto_die_requested=_auto_die_requested, l9_die_note=_l9_die_note, ring_floor_pad=_ring_floor_pad, ring_inset=_ring_inset, ring_pinned_die=_ring_pinned_die, seal_rec=_seal_rec, slot=_slot, strap_floor_detail=_strap_floor_detail, strap_floor_um=_strap_floor_um, ct03_pin_rect=_ct03_pin_rect, auto_die_metrics=_auto_die_metrics)
+    _die_intent["effective_die_um"] = f"{die_w}x{die_h}"
+    return PrePnrDieCore(die_um=die_um, die_w=die_w, die_h=die_h, core_pad=core_pad, core_w=core_w, core_h=core_h, fp_rect=fp_rect, util=util, auto_die_requested=_auto_die_requested, l9_die_note=_l9_die_note, ring_floor_pad=_ring_floor_pad, ring_inset=_ring_inset, ring_pinned_die=_ring_pinned_die, seal_rec=_seal_rec, slot=_slot, strap_floor_detail=_strap_floor_detail, strap_floor_um=_strap_floor_um, ct03_pin_rect=_ct03_pin_rect, die_intent=_die_intent, auto_die_metrics=_auto_die_metrics)
 
 
 def _prepnr_floorplan(project: Path, top: str, pdk: PdkConfig,
@@ -39321,7 +39511,8 @@ def _prepnr_floorplan(project: Path, top: str, pdk: PdkConfig,
         core_pad=core_pad,
         ring_inset_um=_ring_inset,
         seal_ring=_seal_rec,
-        pdn_core_floor=_strap_floor_detail)
+        pdn_core_floor=_strap_floor_detail,
+        die_intent=_prep_dc.die_intent)
     return _prep_dc
 
 

@@ -21,6 +21,7 @@ the orchestrator's control-flow paths only:
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import re
 import struct
@@ -276,7 +277,9 @@ def test_chip_top_producer_precedes_sdc_and_die_resolution():
     body = geometry[geometry.index('"""', geometry.index('"""') + 3) + 3:]
     first = next(l for l in body.splitlines()
                  if l.strip() and not l.strip().startswith("#"))
-    assert first.strip().startswith("die_um, _l9_die_note = _effective_die_um")
+    assert first.strip().startswith("_requested_auto = str(die_um).lower()")
+    assert geometry.index("_requested_auto =") < geometry.index(
+        "die_um, _l9_die_note = _effective_die_um")
     assert step.count(dispatch_line) == 1
     assert 'supply_plan=(em_floor_for_resize or {}).get("supply_entry_plan")' in step
     # and the dispatch is the ONLY road to the producer from step_pnr: the
@@ -287,6 +290,98 @@ def test_chip_top_producer_precedes_sdc_and_die_resolution():
     dispatch = source[source.index("def _padring_producer_dispatch("):]
     dispatch = dispatch[:dispatch.index("\ndef ", 1)]
     assert dispatch.count("step_io_pad_chip_top_gen(project, container, pdk)") == 1
+
+
+def _provisional_slot_project(tmp_path, *, answered_by="agent",
+                              source_bytes=b'{"slot":"small"}\n'):
+    project = tmp_path / "project"
+    (project / "input/submission_template_source").mkdir(parents=True)
+    (project / "input/submission_template/slots").mkdir(parents=True)
+    (project / "reports/phase1").mkdir(parents=True)
+    source = project / "input/submission_template_source/small.json"
+    source.write_bytes(source_bytes)
+    source_hash = hashlib.sha256(source_bytes).hexdigest()
+    authority = {
+        "answered_by": answered_by,
+        "authority": "Owner delegated implementation decisions",
+        "decision": "initial implementation target",
+        "operator_source": "input/submission_template/slots/small.yaml",
+        "die_width_um": 100,
+        "die_height_um": 140,
+        "fit_status": "TO_BE_VERIFIED_BY_CANONICAL_AREA_AND_PAD_CHECKS",
+        "fallback": "select the smallest adequate published slot",
+        "delegation": {"answered_by": "owner",
+                       "scope": "operator_template.slot",
+                       "citation": "owner delegation"},
+    }
+    answers = {"operator_template": {"slot": "small"},
+               "answer_provenance": {"operator_template.slot": authority}}
+    (project / "input/step_0_5ic_answers.json").write_text(json.dumps(answers))
+    declaration = {"operator_template": {"slot": "small"},
+                   "answer_provenance": {"operator_template.slot": authority},
+                   "answers": {"die_area_um": [0, 0, 100, 140]}}
+    (project / "input/submission_template/tapeout_declaration.json").write_text(
+        json.dumps(declaration))
+    (project / "input/submission_template/slots/small.yaml").write_text(
+        "SLOT: small\nDIE_AREA: 0 0 100 140\n")
+    report = {"ingest": {"status": "INGESTED", "declared_slot": "small",
+                          "slots": [
+                              {"slot": "small", "source_relpath": "small.json",
+                               "source_sha256": source_hash,
+                               "die_area": {"rect": [0, 0, 100, 140]}},
+                              {"slot": "wide", "source_relpath": "wide.json",
+                               "source_sha256": None,
+                               "die_area": {"rect": [0, 0, 170, 160]}},
+                              {"slot": "large", "source_relpath": "large.json",
+                               "source_sha256": None,
+                               "die_area": {"rect": [0, 0, 200, 200]}},
+                          ]}}
+    for name in ("wide", "large"):
+        payload = ('{"slot":"%s"}\n' % name).encode()
+        (project / f"input/submission_template_source/{name}.json").write_bytes(payload)
+        report["ingest"]["slots"][[r["slot"] for r in report["ingest"]["slots"]].index(name)]["source_sha256"] = hashlib.sha256(payload).hexdigest()
+    (project / "reports/phase1/submission_template.json").write_text(
+        json.dumps(report))
+    return project
+
+
+def test_provisional_delegated_slot_resolves_to_smallest_adequate_published_slot(
+        tmp_path):
+    project = _provisional_slot_project(tmp_path)
+    resolved, refusal = RUNNER._resolve_provisional_slot_die(
+        project, "100x140", 150)
+    assert refusal is None
+    assert resolved["intent"] == "DERIVED_PROVISIONAL_SLOT"
+    assert resolved["declared_slot"] == "small"
+    assert resolved["resolved_slot"] == "wide"
+    assert resolved["resolved_die_um"] == "170x160"
+    assert resolved["required_die_side_um"] == 150
+
+
+def test_explicit_owner_slot_is_not_reclassified_as_derived(tmp_path):
+    project = _provisional_slot_project(tmp_path, answered_by="owner")
+    resolved, refusal = RUNNER._resolve_provisional_slot_die(
+        project, "100x140", 150)
+    assert resolved is None
+    assert refusal is None
+
+
+def test_provisional_slot_refuses_stale_catalogue_source(tmp_path):
+    project = _provisional_slot_project(tmp_path)
+    (project / "input/submission_template_source/wide.json").write_text("changed\n")
+    resolved, refusal = RUNNER._resolve_provisional_slot_die(
+        project, "100x140", 150)
+    assert resolved is None
+    assert refusal.startswith("DERIVED_SLOT_AUTHORITY_INVALID:")
+    assert "wide.json changed after ingest" in refusal
+
+
+def test_provisional_slot_refuses_when_no_published_slot_fits(tmp_path):
+    project = _provisional_slot_project(tmp_path)
+    resolved, refusal = RUNNER._resolve_provisional_slot_die(
+        project, "100x140", 250)
+    assert resolved is None
+    assert refusal.startswith("DERIVED_SLOT_NO_ADEQUATE_PUBLISHED_SLOT:")
 
 
 def test_default_step15_direct_invocation_binds_backend_receipt_before_consumer(
