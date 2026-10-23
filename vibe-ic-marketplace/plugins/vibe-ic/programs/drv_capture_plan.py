@@ -146,6 +146,27 @@ def _state(project: Path, final_state: dict | None = None) -> tuple[dict, Path]:
         if not path.is_file() or _sha(path) != final.get("sta_state_sha256"):
             raise ValueError("final STAPostPNR state absent or differs from step 32")
         return json.loads(path.read_text()), path
+    import execution_policy
+    from librelane_postroute import STEP23_RECORD
+    current = project / STEP23_RECORD
+    if execution_policy.request()['mode'] == 'default' and current.is_file():
+        # The ordinary Step23 state owns the current routed measurement.
+        # A retained Step32 candidate may have run with an earlier image and
+        # SDC. Explicit candidate captures above keep their own subject.
+        import librelane_contract as contract
+        recorded = json.loads(current.read_text())
+        path = _run_path(project, str(recorded.get('sta_state') or ''))
+        if not path.is_file() or _sha(path) != recorded.get('sta_state_sha256'):
+            raise ValueError('current Step23 STAPostPNR state absent or changed')
+        receipt = contract.validate_step_receipt(path.parent, 'OpenROAD.STAPostPNR')
+        files = receipt['input'].get('state_files')
+        if not files:
+            raise ValueError('current Step23 input fingerprint is absent')
+        for name, expected in files.items():
+            source = _run_path(project, name)
+            if not source.is_file() or _sha(source) != expected:
+                raise ValueError('current Step23 input changed: ' + name)
+        return json.loads(path.read_text()), path
     repair = project / "reports/phase3/librelane_postroute_repair.json"
     if repair.is_file():
         receipt = json.loads(repair.read_text())
@@ -781,7 +802,10 @@ def _capture_top(project: Path, state_path: Path, state: dict, netlist: Path,
 
 def build(project: Path, *, final_state: dict | None = None) -> dict:
     project = project.resolve()
-    if (final_state is None and
+    import execution_policy
+    current_default = (execution_policy.request()["mode"] == "default" and
+                       (project / "reports/phase3/sta_postpnr_signoff.json").is_file())
+    if (final_state is None and not current_default and
             not (project / "reports/phase3/librelane_postroute_repair.json").is_file() and
             not list((project / "phase3/librelane").glob(
                 "**/04-openroad-stapostpnr/state_out.json"))):
@@ -811,7 +835,8 @@ def build(project: Path, *, final_state: dict | None = None) -> dict:
     else:
         netlist, paired_top = routed_identity
     state_def = _ref(_run_path(project, state["def"]))
-    current_step23 = final_state is not None and final_state.get('capture_step') == '23'
+    current_step23 = ((final_state is None and current_default) or
+                      (final_state is not None and final_state.get('capture_step') == '23'))
     if final_state is None or current_step23:
         # After handoff the canonical routed DEF must be the layout the final
         # STA state measured.
