@@ -1,12 +1,14 @@
 """D45 adopted-netlist CDC/RDC adapter over the existing native consumers.
 
 The supported subset is structural crossing/reset analysis plus correlation of
-current SDC exceptions. Protocol-level multi-bit handshakes, FIFO correctness,
+current SDC exceptions. Protocol checks are not applicable to a decoded
+single-domain design with no crossings; multi-domain/crossing protocol proof,
 reset sequencing and metastability MTBF remain explicitly NOT_MEASURED.
 """
 from __future__ import annotations
 
 from dataclasses import asdict
+import fnmatch
 import hashlib
 import json
 from pathlib import Path
@@ -82,8 +84,48 @@ def prepare(project, context):
     if not isinstance(sdcs, list) or not sdcs:
         raise Refusal("D45_SDC_ABSENT", "nonempty current SDC population required")
     paths = {"netlist": _bound(project, manifest.get("adopted_netlist")),
-             "liberty": _bound(project, manifest.get("liberty")),
-             "sdc": [_bound(project, item) for item in sdcs]}
+             "sdc": [_bound(project, item) for item in sdcs],
+             "sta_config": _bound(project, manifest.get("sta_config")),
+             "sta_receipt": _bound(project, manifest.get("sta_receipt"))}
+    config, receipt = _read(paths["sta_config"]), _read(paths["sta_receipt"])
+    if (receipt.get("sha256", {}).get("config.json") != _sha(paths["sta_config"])
+            or receipt.get("input", {}).get("image") != manifest.get("image")):
+        raise Refusal("D45_LIBRARY_CLOSURE_STALE", "STA config/receipt/image binding differs")
+    corner = config.get("DEFAULT_CORNER")
+    if not isinstance(corner, str) or not corner:
+        raise Refusal("D45_LIBRARY_CLOSURE_INVALID", "DEFAULT_CORNER absent")
+    declared = []
+    for role in ("CELL_LIBS", "PAD_LIBS", "EXTRA_LIBS"):
+        value = config.get(role) or {}
+        if isinstance(value, dict):
+            for pattern, group in value.items():
+                if (not isinstance(pattern, str) or not isinstance(group, list)
+                        or any(not isinstance(item, str) or not item for item in group)):
+                    raise Refusal("D45_LIBRARY_CLOSURE_INVALID", role)
+                if fnmatch.fnmatch(corner, pattern):
+                    declared.extend((role, item) for item in group)
+        elif isinstance(value, list):
+            if any(not isinstance(item, str) or not item for item in value):
+                raise Refusal("D45_LIBRARY_CLOSURE_INVALID", role)
+            declared.extend((role, item) for item in value)
+        else:
+            raise Refusal("D45_LIBRARY_CLOSURE_INVALID", role)
+    if config.get("MACROS"):
+        raise Refusal("D45_LIBRARY_CLOSURE_UNSUPPORTED",
+                      "nonempty MACROS need their declared timing-model closure")
+    library_files = manifest.get("library_files")
+    required = {item for _role, item in declared}
+    if (not required or not isinstance(library_files, dict)
+            or set(library_files) != required):
+        raise Refusal("D45_LIBRARY_CLOSURE_INCOMPLETE",
+                      f"declared={sorted(required)} supplied={sorted(library_files or {})}")
+    paths["liberties"] = []
+    config_files = receipt.get("input", {}).get("config_files") or {}
+    for role, item in declared:
+        path = _bound(project, library_files[item])
+        if config_files.get(item) != _sha(path):
+            raise Refusal("D45_LIBRARY_CLOSURE_STALE", f"{role}: {item}")
+        paths["liberties"].append(path)
     if manifest.get("clock_reset_intent") is not None:
         paths["intent"] = _bound(project, manifest["clock_reset_intent"])
     yosys = shutil.which("yosys")
@@ -118,7 +160,8 @@ def _native_model(project, prepared, attempt):
     output = attempt / "adopted-netlist.json"
     script = attempt / "adopted-netlist.ys"
     script.write_text("\n".join([
-        "read_liberty -ignore_miss_func -ignore_miss_dir " + _word(prepared["paths"]["liberty"]),
+        *("read_liberty -ignore_miss_func -ignore_miss_dir " + _word(path)
+          for path in prepared["paths"]["liberties"]),
         "read_verilog -sv " + _word(prepared["paths"]["netlist"]),
         "hierarchy -check -top " + prepared["manifest"]["top"],
         "flatten", "proc", "opt_clean", "write_json " + _word(output), "",
@@ -216,9 +259,13 @@ def execute(project, context):
             "exception_reconciliation": {"status": "FAIL" if inconsistent else "PASS",
                 "categories": sorted(x for x in exception_categories if x),
                 "consumer_verdict": exception_consumer.get("verdict")},
-            "protocol_semantics": {"status": "NOT_MEASURED",
-                "reason": "D45_PROTOCOL_SEMANTICS_UNSUPPORTED",
-                "detail": "multi-bit handshake/FIFO correctness, reset sequencing and MTBF need protocol-specific proof"},
+            "protocol_semantics": ({"status": "PASS",
+                "reason": "D45_PROTOCOL_SEMANTICS_NOT_APPLICABLE_SINGLE_DOMAIN",
+                "detail": "one decoded clock domain and no structural crossing requires no crossing protocol"}
+                if len(domains) <= 1 and not crossings else
+                {"status": "NOT_MEASURED",
+                 "reason": "D45_PROTOCOL_SEMANTICS_UNSUPPORTED",
+                 "detail": "multi-bit handshake/FIFO correctness, reset sequencing and MTBF need protocol-specific proof"}),
         }
         if not cdc_consumer.get("passed") and not crossing_errors:
             checks["implemented_crossing_census"] = {"status": "FAIL",
@@ -231,6 +278,11 @@ def execute(project, context):
                   "D45_PROTOCOL_SEMANTICS_UNSUPPORTED" if status == "NOT_MEASURED" else None)
         record.update(component_status=status, reason=reason, checks=checks,
                       metrics={"clock_domain_count": len(domains),
+                               "decoded_flop_count": len(model.flops),
+                               "decoded_async_reset_flop_count": sum(
+                                   flop.arst is not None for flop in model.flops),
+                               "decoded_sync_reset_flop_count": sum(
+                                   flop.srst is not None for flop in model.flops),
                                "new_unexplained_crossings": len(crossing_errors),
                                "exception_finding_count": len(inconsistent)},
                       consumers={"cdc_crossing_check": cdc_consumer,
