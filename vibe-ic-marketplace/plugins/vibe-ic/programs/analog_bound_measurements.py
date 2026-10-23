@@ -110,6 +110,11 @@ def emit_deck(template: str, bindings: dict, capture_path: Path | None = None) -
         raise ValueError("execution threads must be a positive integer")
     if execution.get("wait_policy") not in (None, "PASSIVE", "ACTIVE"):
         raise ValueError("execution wait_policy must be PASSIVE or ACTIVE")
+    native_binary = execution.get("ngspice_bin")
+    if native_binary is not None and (not isinstance(native_binary, str) or not Path(native_binary).is_absolute()):
+        raise ValueError("execution ngspice_bin must be an absolute path")
+    if execution.get("method") not in (None, "trap", "gear"):
+        raise ValueError("execution method must be trap or gear")
     # spinit can set num_threads independently of OMP_NUM_THREADS. Set the
     # caller's scheduling choice in the actual derived native control block.
     commands = ([f"set num_threads={threads}"] if threads is not None else []) + [command]
@@ -156,6 +161,10 @@ def emit_deck(template: str, bindings: dict, capture_path: Path | None = None) -
         title = "* Explicit native measurement"
     if temperature is not None:
         title += f"\n.temp {temperature:.17g}"
+    if execution.get("method"):
+        body = re.sub(r"(?im)^\s*\.options?\b[^\n]*", lambda match:
+            re.sub(r"(?i)\bmethod\s*=\s*\S+", "", match[0]), body)
+        body += "\n.options method=" + execution["method"] + "\n"
     return title + "\n" + body.rstrip() + "\n.control\n" + "\n".join(commands) + "\n.endc\n.end\n"
 
 
@@ -174,6 +183,13 @@ def run_measurements(project: Path, netlist: Path, template: Path, bindings: dic
               "bindings": bindings, "measurements": {}, "executions": []}
     if status != "PASS":
         return report
+    native_binary = (bindings.get("execution") or {}).get("ngspice_bin")
+    if native_binary:
+        selected = Path(native_binary)
+        if not selected.is_file():
+            report.update(status="NOT_MEASURED", detail="selected native ngspice binary is absent")
+            return report
+        report["native_inputs"]["native_binary"] = {"path": str(selected), "sha256": sha(selected)}
     try:
         report["native_inputs"].update(consumed_input_views(project, deck))
     except (OSError, ValueError) as exc:
@@ -187,8 +203,8 @@ def run_measurements(project: Path, netlist: Path, template: Path, bindings: dic
         environment.append("OMP_WAIT_POLICY=" + scheduling["wait_policy"])
         if scheduling["wait_policy"] == "PASSIVE":
             environment.append("GOMP_SPINCOUNT=0")
-    execution = run("@env" if environment else "@ngspice",
-                    [*environment, "ngspice", "-b", str(deck)] if environment else ["-b", str(deck)],
+    execution = run("@env" if environment else "@" + (native_binary or "ngspice"),
+                    [*environment, native_binary or "ngspice", "-b", str(deck)] if environment else ["-b", str(deck)],
                     cwd=template.parent)
     report["executions"] = [execution]
     text = sim._log_text(execution)

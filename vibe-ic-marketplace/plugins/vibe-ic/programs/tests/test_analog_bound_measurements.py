@@ -67,11 +67,42 @@ def test_execution_choice_survives_replaced_controls_and_reaches_native_process(
 
 
 @pytest.mark.parametrize("execution", [{"threads": 0}, {"threads": True},
-    {"threads": 1.5}, {"wait_policy": "PASSIVE;other"}, []])
+    {"threads": 1.5}, {"wait_policy": "PASSIVE;other"}, {"method": "gear;other"},
+    {"ngspice_bin": "relative/ngspice"}, []])
 def test_invalid_execution_settings_refuse_before_native_launch(execution):
     with pytest.raises(ValueError):
         measurements.emit_deck(".end\n", {"analysis": {"kind": "OP"}, "measurements": {
             "vout": {"analysis": "OP", "expression": "v(out)"}}, "execution": execution})
+
+
+@pytest.mark.parametrize("environment", [{}, {"threads": 1, "wait_policy": "PASSIVE"}])
+@pytest.mark.parametrize("change_binary", [False, True])
+def test_selected_native_binary_is_executed_and_frozen(tmp_path, environment, change_binary):
+    binary = tmp_path / "selected ngspice"
+    binary.write_bytes(b"selected native bytes")
+    digest = measurements.sha(binary)
+    net = tmp_path / "unit.sp"
+    net.write_text(".subckt unit a b\nr1 a b 1k\n.ends unit\n")
+    template = tmp_path / "tb.sp"
+    template.write_text(f'.include "{net}"\nxdut in out unit\nv1 in 0 1\n'
+                        '.options method=trap reltol=1e-5\n.end\n')
+    bindings = {"analysis": {"kind": "OP"}, "measurements": {
+        "vout": {"analysis": "OP", "expression": "v(out)"}},
+        "execution": {**environment, "ngspice_bin": str(binary), "method": "gear"}}
+    def run(program, argv, **kwargs):
+        assert program == ("@env" if environment else "@" + str(binary))
+        if environment:
+            assert argv[-3] == str(binary)
+        deck = Path(argv[-1]).read_text()
+        assert "method=trap" not in deck and "method=gear" in deck
+        assert "reltol=1e-5" in deck
+        if change_binary:
+            binary.write_bytes(b"changed native bytes")
+        return {"returncode": 0, "stdout": "MEAS vout=0.975\n"}
+    result = measurements.run_measurements(tmp_path, net, template, bindings, tmp_path / "result", run)
+    assert result["native_inputs"]["native_binary"]["sha256"] == digest
+    assert result["status"] == ("NOT_MEASURED" if change_binary else "PASS")
+    assert bool(result["measurements"]) is (not change_binary)
 
 
 @pytest.mark.parametrize("native_temperature,expected", [("-40", "PASS"), ("27", "NOT_MEASURED"),
