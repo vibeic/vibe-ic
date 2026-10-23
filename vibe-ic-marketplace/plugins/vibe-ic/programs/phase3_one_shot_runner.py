@@ -70791,9 +70791,40 @@ _SUPPLY_PREFIXES = ("VDD", "VSS", "VPWR", "VGND", "VCC", "VEE",
 
 
 def _module_port_names(v_text: str, top: str) -> List[str]:
-    """Top-module port identifiers from a Verilog header `module top ( ... );`."""
-    m = re.search(r"\bmodule\s+" + re.escape(top) + r"\s*\((.*?)\)\s*;",
-                  v_text, re.S)
+    """Top ports, including a parameterized RTL reference's balanced header."""
+    text = _strip_v_comments(v_text)
+    m = re.search(r"\bmodule\s+" + re.escape(top) + r"\b\s*", text)
+    if not m:
+        return []
+    offset = m.end()
+    if text[offset:offset + 1] == '#':
+        offset += 1
+        while offset < len(text) and text[offset].isspace():
+            offset += 1
+        if text[offset:offset + 1] != '(':
+            return []
+        depth, quoted, escaped = 0, False, False
+        for index in range(offset, len(text)):
+            char = text[index]
+            if quoted:
+                if escaped:
+                    escaped = False
+                elif char == '\\':
+                    escaped = True
+                elif char == '"':
+                    quoted = False
+            elif char == '"':
+                quoted = True
+            elif char == '(':
+                depth += 1
+            elif char == ')':
+                depth -= 1
+                if depth == 0:
+                    offset = index + 1
+                    break
+        else:
+            return []
+    m = re.match(r"\s*\((.*?)\)\s*;", text[offset:], re.S)
     if not m:
         return []
     names: List[str] = []

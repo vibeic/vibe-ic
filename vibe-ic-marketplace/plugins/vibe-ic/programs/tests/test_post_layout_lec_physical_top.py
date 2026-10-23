@@ -52,6 +52,20 @@ def test_physical_top_gold_is_exact_core_plus_recorded_wrapper(tmp_path):
     assert provenance["combined_gold_sha256"] == _sha(combined)
 
 
+def test_parameterized_reference_uses_exact_rtl_and_wrapper(tmp_path):
+    gold, wrapper, _report = _fixture(tmp_path)
+    gold.write_text('module core #(parameter W = (2 + (1)), parameter S = ")") '
+                    '(input [W-1:0] a, output [W-1:0] y); assign y = ~a; endmodule\n')
+    combined, _ = R._lec_physical_top_gold(
+        tmp_path, 'core', 'chip_top', gold, tmp_path / 'proof')
+    assert combined.read_text() == gold.read_text() + '\n' + wrapper.read_text()
+    assert R._module_port_names(gold.read_text(), 'core') == ['a', 'y']
+
+
+def test_unterminated_parameter_header_is_not_a_module_interface():
+    assert R._module_port_names('module core #(parameter W=(2) (input a);', 'core') == []
+
+
 def test_wrapper_identity_mismatch_refuses_instead_of_guessing(tmp_path):
     gold, _wrapper, report = _fixture(tmp_path)
     doc = json.loads(report.read_text())
