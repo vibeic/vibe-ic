@@ -1660,12 +1660,9 @@ def produce_signoff(project, params):
     elif sid == '27':
         import si_mcf_sta as mcf
         nl = _require(pnr / (top + '_pnr.v'))
-        sdc = _current_physical_sdc(project, params)
         voltage = R._pdk_nominal_voltage(pdk, container)
         if voltage is None:
             raise em.Refusal('BACKEND_SI_VOLTAGE_UNSTATED', sid)
-        mcf_inputs = dict(spef=str(spef), netlist=str(nl), sdc=str(sdc),
-                          liberty=pdk.liberty, top=top, macro_libs=pdk.macro_libs)
         if params.get('execution_mode') == 'default':
             # The current SI owner publishes the compound report and the
             # timing-consumption receipt required by the unchanged full gate.
@@ -1685,6 +1682,9 @@ def produce_signoff(project, params):
                 sdc=inputs['sdc'], liberty=liberties[0], macro_libs=liberties[1:],
                 top=subject.get('physical_top', subject['top']))
         else:
+            sdc = _current_physical_sdc(project, params)
+            mcf_inputs = dict(spef=str(spef), netlist=str(nl), sdc=str(sdc),
+                              liberty=pdk.liberty, top=top, macro_libs=pdk.macro_libs)
             import si_signoff_timing_aware as si
             timing = rpt / 'si_timing.json'
             if not R._emit_si_timing_json(project, top, pdk, container, _require(spef), sdc, nl, timing, notes, voltage):

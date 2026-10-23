@@ -734,6 +734,10 @@ def test_default_mcf_uses_current_physical_subject_and_owns_all_outputs(
     import _sta_basis
     p, cfg, observed, selected, primary, extra = _default_mcf_physical_subject(
         tmp_path, monkeypatch, physical=physical, case=case)
+    import execution_backend_producers as producers
+    def historical_placement_sdc(*args):
+        raise AssertionError('Default SI must use its current STA subject, not Step15 SDC')
+    monkeypatch.setattr(producers, '_current_physical_sdc', historical_placement_sdc)
     began = time.time()
     row = R._default_pnr_rows(p, 'neutral', cfg, 'SOFTWARE_FIXTURE_ONLY', ['27'])
     assert row.status == expected, row.detail
