@@ -28,7 +28,20 @@ import cdc_crossing_check
 import sdc_exception_correlation_check
 
 SCHEMA = "vibeic.flow109.netlist-cdc.v1"
+COMPLETION_SCHEMA = "vibeic.flow109.default-row-completion.v1"
 INPUT = "input/flow109/D45.json"
+REQUIRED_COMPLETION_CHECKS = (
+    "implemented_crossing_census",
+    "new_unexplained_crossings",
+    "reset_dependency",
+    "exception_reconciliation",
+    "protocol_semantics",
+)
+REQUIRED_COMPLETION_OBLIGATIONS = (
+    "netlist_cdc.implemented_crossing_census",
+    "netlist_cdc.new_unexplained_crossings",
+    "netlist_cdc.exception_reconciliation",
+)
 
 
 class Refusal(RuntimeError):
@@ -191,17 +204,17 @@ def _stage_consumers(project, prepared, attempt, crossing):
     for index, source in enumerate(prepared["paths"]["sdc"]):
         target = constraints / f"{index:02d}-{source.name}"
         shutil.copyfile(source, target)
-        copied[str(target.relative_to(stage))] = _sha(target)
+        copied[str(target.relative_to(project))] = _sha(target)
     intent = prepared["paths"].get("intent")
     if intent:
         target = stage / "phase1/generated_docs/L8_TIMING_WAVEFORM.json"
         target.parent.mkdir(parents=True)
         shutil.copyfile(intent, target)
-        copied[str(target.relative_to(stage))] = _sha(target)
+        copied[str(target.relative_to(project))] = _sha(target)
     report = stage / "reports/phase2/cdc/crossing.json"
     report.parent.mkdir(parents=True)
     write_json(report, crossing)
-    copied[str(report.relative_to(stage))] = _sha(report)
+    copied[str(report.relative_to(project))] = _sha(report)
     _unchanged(project, prepared)
     cdc = asdict(cdc_crossing_check.audit_cdc(stage))
     exceptions = sdc_exception_correlation_check.audit(stage)
@@ -296,3 +309,174 @@ def execute(project, context):
     record["receipt"] = {"path": str((attempt / "component.json").relative_to(project))}
     write_json(attempt / "component.json", record)
     return record
+
+
+def _completion_refusal(context, code, detail, *, status="NOT_MEASURED"):
+    return {
+        "schema": COMPLETION_SCHEMA,
+        "step_id": "D45",
+        "default_row_status": status,
+        "completed": False,
+        "reason": code,
+        "detail": detail,
+        "context_sha256": context.get("context_sha256"),
+        "supported_scope": (
+            "single decoded clock domain with no structural crossing; adopted-netlist "
+            "CDC/RDC and current SDC exception correlation"
+        ),
+        "required_checks": list(REQUIRED_COMPLETION_CHECKS),
+        "selected_obligations": list(REQUIRED_COMPLETION_OBLIGATIONS),
+        "flow109_acceptance": "NOT_MEASURED",
+        "whole_flow_acceptance": "NOT_MEASURED",
+        "whole_ic_acceptance": "NOT_MEASURED",
+    }
+
+
+def _current_record(project, record, label):
+    if not isinstance(record, dict) or not record.get("path") or not record.get("sha256"):
+        raise Refusal("D45_COMPLETION_EVIDENCE_MISSING", label)
+    path = Path(record["path"])
+    path = path if path.is_absolute() else project / path
+    try:
+        resolved = path.resolve(strict=True)
+        resolved.relative_to(project)
+    except (OSError, ValueError) as exc:
+        raise Refusal("D45_COMPLETION_EVIDENCE_MISSING", label) from exc
+    if not resolved.is_file() or _sha(resolved) != record["sha256"]:
+        raise Refusal("D45_COMPLETION_EVIDENCE_STALE", label)
+    return resolved
+
+
+def consume_default_row_completion(project, context, component):
+    """Consume D45's current native receipt into a bounded Default-row result.
+
+    This is deliberately D45-specific.  It does not grant Flow109 or whole-IC
+    acceptance and it does not infer coverage outside the declared single-domain
+    supported subset.
+    """
+    project = Path(project).resolve()
+    base = _completion_refusal(context, "D45_COMPLETION_NOT_MEASURED", "not consumed")
+    try:
+        if (context.get("requested_step") != "D45"
+                or context.get("native_step_id") != "flow109.D45"):
+            raise Refusal("D45_COMPLETION_CONTEXT_MISMATCH", "D45 caller required")
+        row = context.get("resolved_row")
+        obligations = row.get("obligations") if isinstance(row, dict) else None
+        obligation_ids = [item.get("id") for item in obligations or []
+                          if isinstance(item, dict)]
+        if tuple(obligation_ids) != REQUIRED_COMPLETION_OBLIGATIONS:
+            raise Refusal("D45_COMPLETION_OBLIGATIONS_MISMATCH", str(obligation_ids))
+        if not isinstance(component, dict):
+            raise Refusal("D45_COMPLETION_RECEIPT_MISSING", "component result absent")
+        receipt = component.get("receipt")
+        if not isinstance(receipt, dict) or not receipt.get("path"):
+            raise Refusal("D45_COMPLETION_RECEIPT_MISSING", "raw component receipt absent")
+        raw_path = (project / receipt["path"]).resolve()
+        try:
+            raw_path.relative_to((project / "reports/flow109/D45").resolve())
+        except ValueError as exc:
+            raise Refusal("D45_COMPLETION_RECEIPT_INVALID", str(raw_path)) from exc
+        if raw_path.name != "component.json" or not raw_path.is_file():
+            raise Refusal("D45_COMPLETION_RECEIPT_MISSING", str(raw_path))
+        raw = _read(raw_path)
+        if raw != component:
+            raise Refusal("D45_COMPLETION_RECEIPT_STALE", "caller result differs from raw receipt")
+        if (raw.get("schema") != SCHEMA or raw.get("step_id") != "D45"
+                or raw.get("context_sha256") != context.get("context_sha256")
+                or raw.get("flow109_acceptance") != "NOT_MEASURED"):
+            raise Refusal("D45_COMPLETION_RECEIPT_INVALID", "schema/step/context/scope mismatch")
+
+        if raw.get("source_sha256") != operation_sources():
+            raise Refusal("D45_COMPLETION_SOURCE_STALE", "operation source closure changed")
+        inputs = raw.get("input_sha256")
+        if not isinstance(inputs, dict) or not inputs:
+            raise Refusal("D45_COMPLETION_INPUTS_MISSING", "bound input population absent")
+        for name, expected in inputs.items():
+            path = Path(name)
+            path = path if path.is_absolute() else project / path
+            if not path.is_file() or _sha(path) != expected:
+                raise Refusal("D45_COMPLETION_INPUT_STALE", str(name))
+        tool = raw.get("tool")
+        if not isinstance(tool, dict) or not tool.get("path") or not tool.get("sha256"):
+            raise Refusal("D45_COMPLETION_TOOL_MISSING", "Yosys identity absent")
+        tool_path = Path(tool["path"]).resolve()
+        if (not tool_path.is_file() or _sha(tool_path) != tool["sha256"]
+                or not shutil.which("yosys")
+                or tool_path != Path(shutil.which("yosys")).resolve()):
+            raise Refusal("D45_COMPLETION_TOOL_STALE", str(tool_path))
+
+        evidence = raw.get("evidence_sha256", {}).get("native")
+        if not isinstance(evidence, dict):
+            raise Refusal("D45_COMPLETION_EVIDENCE_MISSING", "native evidence absent")
+        invocation = evidence.get("invocation")
+        argv = invocation.get("argv") if isinstance(invocation, dict) else None
+        if (not raw.get("native_started") or not isinstance(argv, list) or not argv
+                or Path(argv[0]).resolve() != tool_path
+                or invocation.get("returncode") != 0):
+            raise Refusal("D45_COMPLETION_NATIVE_INVOCATION_INVALID", str(invocation))
+        native_records = {}
+        for label in ("script", "log", "model"):
+            native_records[label] = _current_record(project, evidence.get(label), label)
+        staged = raw.get("evidence_sha256", {}).get("staged")
+        if not isinstance(staged, dict) or not staged:
+            raise Refusal("D45_COMPLETION_EVIDENCE_MISSING", "consumer-stage population absent")
+        for name, expected in staged.items():
+            path = (project / name).resolve()
+            try:
+                path.relative_to(project)
+            except ValueError as exc:
+                raise Refusal("D45_COMPLETION_EVIDENCE_MISSING", name) from exc
+            if not path.is_file() or _sha(path) != expected:
+                raise Refusal("D45_COMPLETION_EVIDENCE_STALE", name)
+
+        status = raw.get("component_status")
+        if status == "FAIL":
+            return {**base, "default_row_status": "FAIL",
+                    "reason": raw.get("reason") or "D45_NATIVE_COMPONENT_FAILED",
+                    "detail": "current native component reported FAIL",
+                    "component_receipt": {"path": str(raw_path.relative_to(project)),
+                                          "sha256": _sha(raw_path)}}
+        if status != "PASS":
+            raise Refusal(raw.get("reason") or "D45_COMPLETION_NOT_MEASURED",
+                          "native component did not pass")
+
+        checks = raw.get("checks")
+        if not isinstance(checks, dict) or set(checks) != set(REQUIRED_COMPLETION_CHECKS):
+            raise Refusal("D45_COMPLETION_CHECK_SET_INVALID", str(sorted(checks or {})))
+        if any(not isinstance(checks[name], dict) or checks[name].get("status") != "PASS"
+               for name in REQUIRED_COMPLETION_CHECKS):
+            raise Refusal("D45_COMPLETION_CHECK_FAILED", "required supported check did not pass")
+        census = checks["implemented_crossing_census"]
+        if census.get("clock_domains") is None or len(census["clock_domains"]) != 1 \
+                or census.get("findings") != []:
+            raise Refusal("D45_COMPLETION_SCOPE_UNSUPPORTED",
+                          "completion requires exactly one decoded domain and no crossing")
+        if checks["new_unexplained_crossings"].get("value") != 0:
+            raise Refusal("D45_COMPLETION_CHECK_FAILED", "unexplained crossing count is nonzero")
+        protocol = checks["protocol_semantics"]
+        if protocol.get("reason") != "D45_PROTOCOL_SEMANTICS_NOT_APPLICABLE_SINGLE_DOMAIN":
+            raise Refusal("D45_COMPLETION_SCOPE_UNSUPPORTED", "protocol absence is not validated")
+        consumers = raw.get("consumers")
+        if (not isinstance(consumers, dict)
+                or consumers.get("cdc_crossing_check", {}).get("passed") is not True
+                or consumers.get("sdc_exception_correlation_check", {}).get("verdict") != "PASS"):
+            raise Refusal("D45_COMPLETION_CONSUMER_REFUSED", "current consumer verdict is not PASS")
+
+        return {
+            **base,
+            "default_row_status": "PASS",
+            "completed": True,
+            "reason": "D45_SUPPORTED_DEFAULT_ROW_COMPLETE",
+            "detail": "all declared D45 supported-subset checks passed current native consumption",
+            "component_receipt": {"path": str(raw_path.relative_to(project)),
+                                  "sha256": _sha(raw_path)},
+            "native_evidence": {name: {"path": str(path.relative_to(project)),
+                                       "sha256": _sha(path)}
+                                for name, path in native_records.items()},
+            "source_sha256": raw["source_sha256"],
+            "input_sha256": inputs,
+            "tool": tool,
+        }
+    except Refusal as exc:
+        return {**base, "default_row_status": exc.status, "reason": exc.code,
+                "detail": str(exc)}

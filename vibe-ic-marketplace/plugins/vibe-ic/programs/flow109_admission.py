@@ -127,7 +127,7 @@ def admit_context(project, context):
 
 
 def require_launch_admission(project, step_id, params=None):
-    """Shared actual-launch seam; absence preserves legacy behavior."""
+    """Shared launch seam; strict qualification claims remain fail-closed."""
     context = (params or {}).get('flow109_context')
     path = os.environ.get('VIBEIC_FLOW109_CONTEXT')
     if context is None and path:
@@ -143,4 +143,12 @@ def require_launch_admission(project, step_id, params=None):
             raise AdmissionRefusal('FLOW109_NATIVE_STEP_MISMATCH', str(step_id)) from exc
     if not isinstance(context, dict) or str(context.get('native_step_id')) != str(step_id):
         raise AdmissionRefusal('FLOW109_NATIVE_STEP_MISMATCH', str(step_id))
+    from flow109 import source_owned_native_admission, validate_execution_context
+    try:
+        context = validate_execution_context(context)
+    except ValueError as exc:
+        raise AdmissionRefusal('FLOW109_CONTEXT_INVALID', str(exc)) from exc
+    owned = source_owned_native_admission(context)
+    if owned is not None:
+        return owned
     return require_admission(project, context)

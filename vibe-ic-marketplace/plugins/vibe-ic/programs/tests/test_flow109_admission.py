@@ -110,6 +110,30 @@ def test_legacy_launch_has_no_new_requirement(tmp_path, monkeypatch):
     assert admission.require_launch_admission(tmp_path, '19', {}) is None
 
 
+def test_registered_default_native_owner_does_not_claim_generic_qualification(tmp_path):
+    step = 'D45'
+    features = next(p['features'] for p in flow109.load_registry()['reference_profiles']
+                    if p['name'] == 'Small digital IC without DFT')
+    context = flow109.execution_context(flow109.resolve_plan(features), step, step)
+    result = admission.require_launch_admission(tmp_path, 'flow109.' + step,
+                                                {'flow109_context': context})
+    assert result['admitted'] is True
+    assert result['status'] == 'NOT_APPLICABLE'
+    assert result['qualification_status'] == 'NOT_CLAIMED'
+    assert result['flow109_acceptance'] == 'NOT_MEASURED'
+
+
+def test_caller_cannot_forge_registered_native_owner(tmp_path):
+    features = next(p['features'] for p in flow109.load_registry()['reference_profiles']
+                    if p['name'] == 'Small digital IC without DFT')
+    context = flow109.execution_context(flow109.resolve_plan(features), 'D45', 'D45')
+    context['resolved_row']['profile']['dispatch']['adapter'] = 'caller_plugin'
+    rebind(context)
+    with pytest.raises(admission.AdmissionRefusal, match='FLOW109_CONTEXT_INVALID'):
+        admission.require_launch_admission(tmp_path, 'flow109.D45',
+                                           {'flow109_context': context})
+
+
 def test_worker_refuses_before_native_producer(tmp_path, monkeypatch):
     import execution_backend_worker as worker
     inputs = tmp_path / 'inputs'

@@ -3,12 +3,17 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 import shutil
+import subprocess
+import sys
 
 import pytest
 
 import _cdc_netlist as native
+import flow109
+import flow109_admission as admission
 import flow109_netlist_cdc as d45
 
 
@@ -25,9 +30,10 @@ def _put(project, name, value):
 def _context():
     registry = json.loads((Path(d45.__file__).parent.parent / "flow/flow109.json").read_text())
     row = next(item for item in registry["rows"] if item["id"] == "D45")
+    row["profile"] = row["profiles"][0]
     return {"requested_step": "D45", "native_step_id": "flow109.D45",
             "context_sha256": "d" * 64,
-            "resolved_row": {"id": "D45", "profile": row["profiles"][0]}}
+            "resolved_row": row}
 
 
 def _case(project, *, inconsistent=False, multi_domain=False):
@@ -69,6 +75,43 @@ endmodule
         "clock_reset_intent": intent})
 
 
+def _frontdoor_case(project):
+    _case(project)
+    _put(project, "input/submission_template/tapeout_declaration.json", {
+        "answers": {"deliverable": "DIE", "top_cell": "neutral"},
+        "answer_provenance": {"deliverable": {
+            "answered_by": "owner", "citation": "D45 neutral native control"}}})
+    features = next(item["features"] for item in flow109.load_registry()["reference_profiles"]
+                    if item["name"] == "Small digital IC without DFT")
+    plan = flow109.resolve_plan(features)
+    config = _put(project, "input/d45-operation.json",
+                  {"operation": "D45 supported Default row completion"})
+    reference = _put(project, "input/d45-reference.json",
+                     {"scope": "developer native control; not product qualification"})
+    not_applicable = {"applicable": False,
+                      "reason": "D45 structural reader loads receipt-bound Liberty files"}
+    uses, records = [], []
+    for use in flow109.resolve_step(plan, "D45")["tool_uses"]:
+        binary = Path(shutil.which(use["executable_name"])).resolve()
+        executable = {"path": str(binary), "sha256": d45._sha(binary)}
+        identity = {"use_id": use["use_id"], "tool_id": use["tool_id"],
+                    "version": "pinned native test image", "build_sha256": executable["sha256"],
+                    "executable": executable, "config": config, "pdk": not_applicable,
+                    "deck": not_applicable, "corner": "receipt-bound-control",
+                    "semantics": {"purpose": use["purpose"],
+                                  "native_steps": use["native_steps"]}}
+        record = {"use_id": use["use_id"], "status": "QUALIFIED",
+                  "identity": identity, "reference_evidence": [reference]}
+        records.append(record)
+        uses.append({**identity, "qualification_sha256": admission.canonical_sha(record)})
+    _put(project, "qualifications.json",
+         {"schema": "vibeic.flow109.qualifications.v1", "uses": records})
+    manifest = project / "manifest.json"
+    manifest.write_text(json.dumps({"features": features,
+        "runtime_tool_uses": uses, "qualification_registry": "qualifications.json"}))
+    return manifest
+
+
 def test_single_domain_without_crossings_runs_consumers_as_bounded_component(tmp_path):
     _case(tmp_path)
     result = d45.execute(tmp_path, _context())
@@ -86,6 +129,73 @@ def test_single_domain_without_crossings_runs_consumers_as_bounded_component(tmp
     assert result["metrics"]["decoded_sync_reset_flop_count"] == 0
     assert result["consumers"]["cdc_crossing_check"]["passed"] is True
     assert result["consumers"]["sdc_exception_correlation_check"]["verdict"] == "PASS"
+
+
+def test_current_native_receipt_completes_only_the_supported_default_row(tmp_path):
+    _case(tmp_path)
+    context = _context()
+    component = d45.execute(tmp_path, context)
+    completion = d45.consume_default_row_completion(tmp_path, context, component)
+    assert completion["default_row_status"] == "PASS", completion
+    assert completion["completed"] is True
+    assert completion["required_checks"] == list(d45.REQUIRED_COMPLETION_CHECKS)
+    assert completion["selected_obligations"] == list(d45.REQUIRED_COMPLETION_OBLIGATIONS)
+    assert completion["flow109_acceptance"] == "NOT_MEASURED"
+    assert completion["whole_flow_acceptance"] == "NOT_MEASURED"
+    assert completion["whole_ic_acceptance"] == "NOT_MEASURED"
+    receipt = tmp_path / completion["component_receipt"]["path"]
+    assert hashlib.sha256(receipt.read_bytes()).hexdigest() == completion["component_receipt"]["sha256"]
+
+
+def test_actual_frontdoor_publishes_d45_default_row_without_flow_acceptance(tmp_path):
+    manifest = _frontdoor_case(tmp_path)
+    env = dict(os.environ)
+    env.pop(flow109.CONTEXT_ENV, None)
+    env.pop(flow109.ATTEMPT_ENV, None)
+    runner = Path(d45.__file__).parent / "vibe_ic_one_shot_runner.py"
+    launched = subprocess.run([sys.executable, str(runner), str(tmp_path),
+        "--flow", "109", "--flow109-manifest", str(manifest),
+        "--entry-step", "D45", "--exit-step", "D45", "--route", "ic",
+        "--no-dashboard"], capture_output=True, text=True, env=env)
+    assert launched.returncode == 0, launched.stdout + launched.stderr
+    result = json.loads((tmp_path / "reports/flow109/default_rows/D45.json").read_text())
+    assert result["default_row_status"] == "PASS"
+    assert result["completed"] is True
+    assert result["flow109_acceptance"] == "NOT_MEASURED"
+    assert "Default row PASS; flow acceptance NOT_MEASURED" in launched.stdout
+
+
+def test_missing_raw_native_receipt_cannot_complete_default_row(tmp_path):
+    _case(tmp_path)
+    context = _context()
+    component = d45.execute(tmp_path, context)
+    (tmp_path / component["receipt"]["path"]).unlink()
+    completion = d45.consume_default_row_completion(tmp_path, context, component)
+    assert completion["default_row_status"] == "NOT_MEASURED"
+    assert completion["completed"] is False
+    assert completion["reason"] == "D45_COMPLETION_RECEIPT_MISSING"
+
+
+def test_stale_native_input_cannot_complete_default_row(tmp_path):
+    _case(tmp_path)
+    context = _context()
+    component = d45.execute(tmp_path, context)
+    (tmp_path / "adopted/current.v").write_text("module changed; endmodule\n")
+    completion = d45.consume_default_row_completion(tmp_path, context, component)
+    assert completion["default_row_status"] == "NOT_MEASURED"
+    assert completion["completed"] is False
+    assert completion["reason"] == "D45_COMPLETION_INPUT_STALE"
+
+
+def test_current_native_failure_remains_failed_default_row(tmp_path):
+    _case(tmp_path, inconsistent=True)
+    context = _context()
+    component = d45.execute(tmp_path, context)
+    assert component["component_status"] == "FAIL"
+    completion = d45.consume_default_row_completion(tmp_path, context, component)
+    assert completion["default_row_status"] == "FAIL", completion
+    assert completion["completed"] is False
+    assert completion["reason"] == "D45_EXCEPTION_INCONSISTENT"
 
 
 def test_unjustified_current_sdc_exception_is_a_real_refusal(tmp_path):

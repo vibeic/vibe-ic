@@ -232,6 +232,58 @@ def _canonical_owner_dispatch(row: Mapping) -> dict | None:
     return dict(dispatch)
 
 
+def source_owned_native_dispatch(row: Mapping) -> dict | None:
+    """Validate the registered Default component route that owns native checks.
+
+    This is the adapter analogue of ``canonical_owner_window``: the frozen
+    source registry, not caller data, selects an existing local owner.  It does
+    not claim generic tool qualification or Flow109 acceptance.
+    """
+    profile = row.get("profile", {})
+    dispatch = profile.get("dispatch")
+    if (not isinstance(dispatch, Mapping)
+            or dispatch.get("admission_policy") != "source_owned_existing_native"):
+        return None
+    adapter = dispatch.get("adapter")
+    native = dispatch.get("native_step_id")
+    engines = dispatch.get("engine_families")
+    if (not isinstance(adapter, str) or not adapter.startswith("flow109_")
+            or not (HERE / (adapter + ".py")).is_file()
+            or native != "flow109." + str(row.get("id"))
+            or dispatch.get("acceptance_scope") != "existing_native_component_only"
+            or not isinstance(engines, list) or not engines
+            or set(dispatch.get("engine_steps", {})) != set(engines)
+            or set(dispatch.get("engine_executables", {})) != set(engines)):
+        raise Flow109Error("FLOW109_NATIVE_OWNER_INVALID", str(row.get("id")))
+    return dict(dispatch)
+
+
+def source_owned_native_admission(context: Mapping) -> dict | None:
+    """Record engineering-native ownership without asserting qualification."""
+    dispatch = source_owned_native_dispatch(context.get("resolved_row", {}))
+    if dispatch is None:
+        return None
+    # An explicit runtime/registry request is a qualification claim and stays
+    # on the strict generic path.  The Default engineering route is selected
+    # only by omitting both; callers cannot use this policy to rescue bad,
+    # stale or unsupported qualification evidence.
+    if (context.get("runtime_tool_uses") is not None
+            or context.get("qualification_registry") is not None):
+        return None
+    return {
+        "status": "NOT_APPLICABLE",
+        "reason": "SOURCE_OWNED_EXISTING_NATIVE_COMPONENT",
+        "admitted": True,
+        "qualification_status": "NOT_CLAIMED",
+        "acceptance_scope": dispatch["acceptance_scope"],
+        "native_step_id": dispatch["native_step_id"],
+        "context_sha256": context.get("context_sha256"),
+        "native_started": False,
+        "flow109_acceptance": "NOT_MEASURED",
+        "whole_flow_acceptance": "NOT_MEASURED",
+    }
+
+
 def resolve_execution_window(plan: Mapping, entry: str | None, exit_: str | None) -> dict:
     """Resolve an inclusive selected-row window onto existing component owners.
 
@@ -556,7 +608,8 @@ def prepare_front_door(args, project: Path) -> int | None:
                 adapter = row["profile"]["dispatch"]["adapter"]
                 try:
                     from flow109_admission import require_admission, AdmissionRefusal
-                    require_admission(project, current)
+                    if source_owned_native_admission(current) is None:
+                        require_admission(project, current)
                     from importlib import import_module
                     result = import_module(adapter).execute(project, current)
                 except AdmissionRefusal as exc:
@@ -619,13 +672,16 @@ def prepare_front_door(args, project: Path) -> int | None:
         args.exit_step = owner_dispatch["owner_exit_step"]
         return None
     os.environ.pop(ATTEMPT_ENV, None)
-    # Admission is intentionally immediately before actual existing dispatch.
-    # There is no marker process or substitute runner behind this branch.
-    from flow109_admission import require_admission
-    admission = require_admission(project, context)
+    # Source-registered Default component owners retain their existing native
+    # input/tool/consumer checks, like canonical_owner_window.  Every route
+    # that explicitly claims generic qualification remains on strict admission.
+    admission = source_owned_native_admission(context)
+    if admission is None:
+        from flow109_admission import require_admission
+        admission = require_admission(project, context)
+        if not isinstance(admission, dict) or admission.get("status") != "PASS":
+            raise Flow109Error("FLOW109_ADMISSION_REFUSED", "qualification did not return PASS")
     write_json(destination / "admission.json", admission)
-    if not isinstance(admission, dict) or admission.get("status") != "PASS":
-        raise Flow109Error("FLOW109_ADMISSION_REFUSED", "qualification did not return PASS")
     path = destination / "requests" / (context["context_sha256"] + ".json")
     write_json(path, context)
     os.environ[CONTEXT_ENV] = str(path.resolve())
@@ -640,9 +696,18 @@ def prepare_front_door(args, project: Path) -> int | None:
                 or result.get('flow109_acceptance') != 'NOT_MEASURED'):
             raise Flow109Error('FLOW109_COMPONENT_RESULT_INVALID', adapter)
         write_json(destination / 'components' / (context['requested_step'] + '.json'), result)
+        row_status = result['component_status']
+        if context['requested_step'] == 'D45':
+            # D45 is the first explicitly supported bounded Default-row result.
+            # Its row-local consumer re-opens and validates the native receipt;
+            # this does not change Flow109 or whole-IC acceptance.
+            completion = import_module(adapter).consume_default_row_completion(
+                project, context, result)
+            write_json(destination / 'default_rows' / 'D45.json', completion)
+            row_status = completion['default_row_status']
         print(f"FLOW109 {context['requested_step']}: component {result['component_status']}; "
-              "metric acceptance NOT_MEASURED")
-        return {'PASS': 0, 'FAIL': 1, 'NOT_MEASURED': 2}[result['component_status']]
+              f"Default row {row_status}; flow acceptance NOT_MEASURED")
+        return {'PASS': 0, 'FAIL': 1, 'NOT_MEASURED': 2}[row_status]
     args.entry_step = context["native_step_id"]
     args.exit_step = context["native_step_id"]
     return None

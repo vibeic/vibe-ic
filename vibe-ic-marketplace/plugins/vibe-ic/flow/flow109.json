@@ -10155,6 +10155,8 @@
           "dispatch": {
             "adapter": "flow109_netlist_cdc",
             "native_step_id": "flow109.D45",
+            "admission_policy": "source_owned_existing_native",
+            "acceptance_scope": "existing_native_component_only",
             "flow109_metrics_status": "IMPLEMENTED_D45_COMPONENT_RUNTIME",
             "engine_families": [
               "python3",

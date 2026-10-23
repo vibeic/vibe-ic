@@ -230,6 +230,31 @@ def test_owner_route_uses_native_span_without_generic_qualification_registry(
     assert request["context_sha256"] == route["context_sha256"]
 
 
+def test_registered_native_component_route_does_not_claim_generic_qualification():
+    plan = flow109.resolve_plan(profile())
+    step = "D45"
+    row = flow109.resolve_step(plan, step)
+    dispatch = flow109.source_owned_native_dispatch(row)
+    assert dispatch["adapter"].startswith("flow109_")
+    context = flow109.execution_context(plan, step, step)
+    admission = flow109.source_owned_native_admission(context)
+    assert admission["admitted"] is True
+    assert admission["status"] == "NOT_APPLICABLE"
+    assert admission["qualification_status"] == "NOT_CLAIMED"
+    assert admission["flow109_acceptance"] == "NOT_MEASURED"
+    claimed = flow109.execution_context(plan, step, step, runtime_tool_uses=[],
+                                        qualification_registry="input/qualifications.json")
+    assert flow109.source_owned_native_admission(claimed) is None
+    assert flow109.source_owned_native_dispatch(flow109.resolve_step(plan, "D62")) is None
+
+
+def test_unregistered_adapter_cannot_select_existing_native_policy():
+    row = flow109.resolve_step(flow109.resolve_plan(profile()), "D45")
+    row["profile"]["dispatch"]["adapter"] = "caller_plugin"
+    with pytest.raises(flow109.Flow109Error, match="FLOW109_NATIVE_OWNER_INVALID"):
+        flow109.source_owned_native_dispatch(row)
+
+
 def test_owner_route_refuses_wrong_owner_and_unknown_native_mapping():
     plan = flow109.resolve_plan(profile())
     row = next(item for item in plan["rows"] if item["id"] == "D12")
