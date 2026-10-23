@@ -92,8 +92,10 @@ def test_odb_fill_is_not_aliased_to_legacy_gds_fill_pass():
     assert window["native_step_id"] == "flow109.D62"
     assert window["resolved_row"]["profile"]["dispatch"]["adapter"] == "flow109_density_fill"
     assert window["resolved_row"]["profile"]["dispatch"]["flow109_metrics_status"] == "IMPLEMENTED_D62_RUNTIME"
-    with pytest.raises(flow109.Flow109Error, match="PRODUCER_UNIMPLEMENTED"):
-        flow109.resolve_execution_window(plan, "D69", "D69")
+    final_extract = flow109.resolve_execution_window(plan, "D69", "D69")
+    assert final_extract["resolved_row"]["profile"]["dispatch"]["adapter"] == "flow109_final_extract"
+    final_electrical = flow109.resolve_execution_window(plan, "D70", "D70")
+    assert final_electrical["resolved_row"]["profile"]["dispatch"]["adapter"] == "flow109_final_electrical"
     continuation = flow109.resolve_execution_window(plan, "D38", "D41")
     assert [row["id"] for row in continuation["resolved_rows"]] == ["D38", "D39", "D40", "D41"]
     assert continuation["native_entry_step"] == "19"

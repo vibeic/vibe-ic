@@ -14370,7 +14370,20 @@
           "native_steps": [
             "OpenROAD.RCX"
           ],
-          "execution_status": "UNIMPLEMENTED"
+          "execution_status": "NATIVE_COMPONENT_ONLY_NOT_109_ACCEPTED",
+          "dispatch": {
+            "kind": "native_adapter",
+            "adapter": "flow109_final_extract",
+            "native_step_id": "flow109.D69",
+            "producer": "flow109_final_extract.py:execute",
+            "consumer": "flow109_final_extract.py:validate_final_parasitics",
+            "engine_families": ["openroad"],
+            "engine_executables": {"openroad": "openroad"},
+            "engine_steps": {"openroad": ["OpenROAD.RCX"]},
+            "acceptance_scope": "final_filled_odb_rcx_component_only",
+            "flow109_metrics_status": "UNIMPLEMENTED",
+            "native_required_outputs": ["native RCX state and receipt", "per-ruleset SPEF consumer census"]
+          }
         }
       ],
       "complementary_tools": [],
@@ -14588,12 +14601,24 @@
           "id": "default",
           "select_when": "otherwise",
           "provider": "librelane",
-          "tools": "OpenROAD.STAPostPNR + OpenROAD.IRDropReport + ngspice + Python EM/mission checks",
+          "tools": "OpenROAD.STAPostPNR (bounded Default component; IR/EM/thermal/SI/aging remain unmeasured)",
           "native_steps": [
-            "OpenROAD.STAPostPNR",
-            "OpenROAD.IRDropReport"
+            "OpenROAD.STAPostPNR"
           ],
-          "execution_status": "UNIMPLEMENTED"
+          "execution_status": "NATIVE_COMPONENT_ONLY_NOT_109_ACCEPTED",
+          "dispatch": {
+            "kind": "native_adapter",
+            "adapter": "flow109_final_electrical",
+            "native_step_id": "flow109.D70",
+            "producer": "flow109_final_electrical.py:execute",
+            "consumer": "flow109_final_electrical.py:validate_final_electrical",
+            "engine_families": ["openroad"],
+            "engine_executables": {"openroad": "openroad"},
+            "engine_steps": {"openroad": ["OpenROAD.STAPostPNR"]},
+            "acceptance_scope": "final_sta_native_component_only",
+            "flow109_metrics_status": "UNIMPLEMENTED",
+            "native_required_outputs": ["all declared STAPostPNR corners and SDFs"]
+          }
         }
       ],
       "complementary_tools": [
