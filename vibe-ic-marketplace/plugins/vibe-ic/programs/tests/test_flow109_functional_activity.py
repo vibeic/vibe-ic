@@ -103,41 +103,84 @@ def test_activity_dump_maps_logical_testbench_top_to_exact_adopted_top(tmp_path)
     assert 'physical vibeic_adopted (.a(a), .y(y));' in wrapper
 
 
-def test_activity_only_executes_selected_declared_modes_before_load_refusal(tmp_path, monkeypatch):
-    source = tmp_path / 'source.v'; source.write_text('module physical; endmodule\n')
-    tb = tmp_path / 'tb.v'; tb.write_text('module tb; endmodule\n')
-    prepared = {'activity_only': True, 'sources': {'source': 'hash'},
-        'inputs': {str(source): activity._sha(source)}, 'tools': {},
-        'manifest': {'modes': {'one': {}, 'two': {}}, 'top': 'physical',
-                     'testbench_dut_module': 'logical',
-                     'adopted_netlist': activity._record(tmp_path, source)},
-        'requirements': {}, 'declared': {
-            'one': {'name': 'one', 'stimulus': 's', 'expected': 'e', 'evidence': 'r'},
-            'two': {'name': 'two', 'stimulus': 's', 'expected': 'e', 'evidence': 'r'}},
-        'ports': [{'name': 'a', 'direction': 'input', 'width': 1}],
-        'paths': {'adopted_netlist': source, 'simulation_models': [],
-                  'tb:one': tb, 'tb:two': tb}}
-    monkeypatch.setattr(activity, 'require_launch_admission', lambda *_a, **_k: None)
-    monkeypatch.setattr(activity, 'prepare', lambda *_a, **_k: prepared)
-    monkeypatch.setattr(activity, '_before', lambda *_a, **_k: None)
-    def dumped(_rtl, _tbs, _top, folder, _native, **_kwargs):
-        folder.mkdir(parents=True)
-        vcd = folder / 'activity.vcd'
-        vcd.write_text('$timescale 1ns $end\n$scope module tb $end\n'
-                       '$var wire 1 ! a $end\n$upscope $end\n'
-                       '$enddefinitions $end\n#0\n0!\n#1\n1!\n')
-        manifest = {'status': 'PASS', 'vvp_rc': 0, 'vcd': str(vcd),
-                    'vcd_sha256': activity._sha(vcd), 'scope': 'tb'}
-        (folder / activity.dump.MANIFEST).write_text(json.dumps(manifest))
-        return manifest
-    monkeypatch.setattr(activity.dump, 'dump', dumped)
-    result = activity.execute(tmp_path, {'context_sha256': 'current'})
-    assert result['component_status'] == 'NOT_MEASURED'
-    assert result['reason'] == 'D55_LOAD_RAIL_REQUIREMENTS_ABSENT'
-    assert result['functional_scenarios_status'] == 'PASS'
-    assert set(result['modes']) == {'one', 'two'}
-    assert (tmp_path / activity.PARTIAL_FREEZE).is_file()
-    assert not (tmp_path / activity.FREEZE).exists()
+def test_generated_oracle_stages_only_positive_edge_sample_delay(tmp_path):
+    source = tmp_path / 'oracle.v'
+    source.write_text('// VIBEIC_TB_ORACLE: GENERATED\nmodule tb;\n'
+                      'initial begin #7 stimulus = 1; @(posedge clk); #1; '
+                      'if (actual !== expected) $fatal; end\n'
+                      'always @(posedge clk); #1; sample_count = sample_count + 1;\nendmodule\n')
+    staged = tmp_path / 'oracle.gls.v'
+    receipt = activity.dump._settled_testbench(source, staged, 'clk', 4.8)
+    assert source.read_text().count('@(posedge clk); #1;') == 2
+    assert staged.read_text().count('@(posedge clk); #4.8;') == 2
+    assert '#7 stimulus = 1' in staged.read_text()
+    assert 'actual !== expected' in staged.read_text()
+    assert receipt['adjusted_sites'] == 2
+    assert receipt['original_sha256'] == activity._sha(source)
+    assert receipt['staged_sha256'] == activity._sha(staged)
+
+
+@pytest.mark.parametrize('text, reason', [
+    ('module tb; @(posedge clk); #1; endmodule\n', 'generated oracle'),
+    ('// VIBEIC_TB_ORACLE: GENERATED\nmodule tb; @(posedge clk); #1; '
+     '@(posedge clk); #2; endmodule\n', 'unique positive-edge sample offset'),
+])
+def test_gls_sample_staging_refuses_unowned_or_ambiguous_driver(tmp_path, text, reason):
+    source = tmp_path / 'oracle.v'; source.write_text(text)
+    with pytest.raises(ValueError, match=reason):
+        activity.dump._settled_testbench(source, tmp_path / 'staged.v', 'clk', 4.8)
+    assert not (tmp_path / 'staged.v').exists()
+
+
+def _scenario_authority_files(tmp_path, *, pad_voltage='5.0'):
+    paths = {}
+    paths['sdc'] = tmp_path / 'constraints.sdc'
+    paths['sdc'].write_text('create_clock -name clk -period 24.0 [get_ports clk]\n'
+                            'set_output_delay 4.8 -clock clk [all_outputs]\n'
+                            'set_load 0.07291 [all_outputs]\n')
+    paths['liberty'] = tmp_path / 'cells.lib'
+    paths['liberty'].write_text('library(cells) {\n nom_voltage : 5;\n'
+                                ' capacitive_load_unit(1, pf);\n}\n')
+    paths['pad_liberty'] = tmp_path / 'pads.lib'
+    paths['pad_liberty'].write_text(
+        f'library(pads) {{\n nom_voltage : {pad_voltage};\n'
+        ' default_power_rail : "VDD";\n power_rail("VDD", 5.0);\n}\n')
+    paths['io_connectivity'] = tmp_path / 'chip_top_io.v'
+    paths['io_connectivity'].write_text(
+        'module chip_top_io(input clk, output p, input VDD, input VSS);\n'
+        '  output_pad u_pad_p (.PAD(p), .VDD(VDD), .VSS(VSS));\nendmodule\n')
+    return paths
+
+
+def test_scenario_authority_derives_existing_sdc_liberty_and_pad_connectivity(tmp_path):
+    paths = _scenario_authority_files(tmp_path)
+    result = activity._derive_scenario_authority(paths, [
+        {'name': 'clk', 'direction': 'input', 'width': 1},
+        {'name': 'p', 'direction': 'output', 'width': 1}])
+    assert result['clock'] == 'clk'
+    assert result['period_ns'] == 24.0
+    assert result['gls_sample_offset_ns'] == 4.8
+    assert result['external_loads'] == {
+        'rails': {'VDD': {'voltage_v': 5.0}},
+        'ports': {'p': {'rail': 'VDD', 'capacitance_library_units': 0.07291}}}
+    assert result['quotes']['capacitance_unit'] == {'scale': 1.0, 'unit': 'pf'}
+    assert all(item['sha256'] == activity._sha(item['path'])
+               for item in result['source_records'].values())
+
+
+def test_scenario_authority_refuses_cell_pad_corner_mismatch(tmp_path):
+    paths = _scenario_authority_files(tmp_path, pad_voltage='3.3')
+    with pytest.raises(admission.AdmissionRefusal, match='D55_RAIL_LIBRARY_MISMATCH'):
+        activity._derive_scenario_authority(paths, [
+            {'name': 'p', 'direction': 'output', 'width': 1}])
+
+
+def test_native_port_census_expands_vector_bits_without_weakening_scalars():
+    assert activity._native_port_names([
+        {'name': 'clk', 'width': 1, 'packed': ''},
+        {'name': 'x', 'width': 4, 'packed': '[3:0]'},
+        {'name': 'y', 'width': 3, 'packed': '[0:2]'}]) == [
+            'clk', 'x[3]', 'x[2]', 'x[1]', 'x[0]', 'y[0]', 'y[1]', 'y[2]']
 
 
 def test_canonical_d55_engineering_route_needs_no_generic_qualification(tmp_path, monkeypatch):

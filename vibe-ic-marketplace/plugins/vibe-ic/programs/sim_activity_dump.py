@@ -95,6 +95,29 @@ def _logical_wrapper(path: Path, logical: str, adopted: str,
     path.write_text("\n".join(lines) + "\n")
 
 
+def _settled_testbench(source: Path, destination: Path, clock: str,
+                       sample_offset_ns: float) -> Dict[str, Any]:
+    """Stage a generated oracle with its sample point moved to SDC authority."""
+    text = source.read_text()
+    if 'VIBEIC_TB_ORACLE: GENERATED' not in text:
+        raise ValueError('GLS sample adjustment requires a generated oracle')
+    pattern = re.compile(r'(@\(posedge\s+' + re.escape(clock)
+                         + r'\)\s*;\s*)#([0-9]+(?:\.[0-9]+)?)\s*;')
+    offsets = [float(match[2]) for match in pattern.finditer(text)]
+    if not offsets or len(set(offsets)) != 1:
+        raise ValueError('generated oracle has no unique positive-edge sample offset')
+    if sample_offset_ns <= offsets[0]:
+        raise ValueError('GLS sample authority must follow the original oracle sample')
+    value = format(sample_offset_ns, '.12g')
+    staged, count = pattern.subn(lambda match: match[1] + '#' + value + ';', text)
+    destination.write_text(staged)
+    return {'original': str(source), 'staged': str(destination), 'clock': clock,
+            'original_sample_offset_ns': offsets[0],
+            'gls_sample_offset_ns': sample_offset_ns, 'adjusted_sites': count,
+            'original_sha256': hashlib.sha256(text.encode()).hexdigest(),
+            'staged_sha256': hashlib.sha256(staged.encode()).hexdigest()}
+
+
 def vcd_scopes(vcd: Path) -> List[str]:
     """Every `a/b/c` scope path declared in the VCD header."""
     stack: List[str] = []
@@ -121,7 +144,9 @@ def dump(rtl: Sequence[str], tbs: Sequence[str], dut_module: str,
          out_dir: Path,
          exec_fn: Optional[Callable[[Sequence[str], str],
                                     Tuple[int, str, str]]] = None,
-         *, testbench_dut_module: Optional[str] = None
+         *, testbench_dut_module: Optional[str] = None,
+         sample_clock: Optional[str] = None,
+         sample_offset_ns: Optional[float] = None
          ) -> Dict[str, Any]:
     """Simulate the first testbench that instantiates `dut_module`, dumping it."""
     exec_fn = exec_fn or _local
@@ -140,6 +165,14 @@ def dump(rtl: Sequence[str], tbs: Sequence[str], dut_module: str,
         return {"status": "NOT_APPLICABLE",
                 "reason": f"no testbench instantiates {logical_module}"}
     tb, tb_top, inst = chosen
+    driver_adjustment = None
+    if sample_clock is not None or sample_offset_ns is not None:
+        if sample_clock is None or sample_offset_ns is None:
+            raise ValueError('sample clock and offset must be supplied together')
+        staged = out_dir / f"{tb.stem}.gls-driver.v"
+        driver_adjustment = _settled_testbench(
+            tb, staged, sample_clock, float(sample_offset_ns))
+        tb = staged
     vcd = out_dir / f"{tb.stem}.vcd"
     vcd.unlink(missing_ok=True)
     dumper = out_dir / f"{DUMP_TOP}.v"
@@ -180,6 +213,8 @@ def dump(rtl: Sequence[str], tbs: Sequence[str], dut_module: str,
                 "vcd_sha256": hashlib.sha256(vcd.read_bytes()).hexdigest()}
     if mapping:
         manifest["logical_to_adopted_mapping"] = mapping
+    if driver_adjustment:
+        manifest["driver_adjustment"] = driver_adjustment
     if not verified:
         manifest["reason"] = f"the VCD header declares no scope {scope}"
     write_json(out_dir / MANIFEST, manifest)

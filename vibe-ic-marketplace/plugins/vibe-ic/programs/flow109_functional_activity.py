@@ -3,9 +3,10 @@
 Uses the existing scoped activity producer and power provenance parser. The
 pinned LibreLane STAPostPNR has no VCD/SAIF config; its underlying OpenSTA is
 used as a complement, not as the final post-route power/signoff operation.
-Complete vector-power measurement remains limited to full-window, single-rail,
-scalar top ports.  The partial self-checking GLS path also inventories vector
-top ports; all three complete D55 obligations stay NOT_MEASURED.
+Complete vector-power measurement remains limited to full-window, single-rail
+loads.  The source-declared self-checking GLS path inventories scalar and vector
+top ports and consumes existing SDC/Liberty/pad connectivity authority.  All
+three complete D55 obligations stay NOT_MEASURED.
 """
 from __future__ import annotations
 
@@ -95,9 +96,10 @@ def _self_contained_simulation_scope(paths):
 
 
 def _scenario_prepare(project, context, manifest, sources):
-    """Prepare source-declared self-checking scenarios without inventing loads."""
+    """Prepare every source-declared scenario and normalize existing authority."""
     paths = {key: _bound(project, manifest.get(key))
-             for key in ('adopted_netlist', 'scenario_requirements', 'sdc')}
+             for key in ('adopted_netlist', 'scenario_requirements', 'sdc',
+                         'liberty', 'pad_liberty', 'io_connectivity')}
     models = manifest.get('simulation_models')
     if not isinstance(models, list) or not models:
         _fail('D55_FUNCTIONAL_MODELS_ABSENT', 'GLS requires bound functional cell models')
@@ -111,10 +113,10 @@ def _scenario_prepare(project, context, manifest, sources):
     if len(declared) != len(rows):
         _fail('D55_SCENARIO_REQUIREMENTS_INVALID', 'unique named test cases required')
     modes = manifest.get('modes')
-    if (not isinstance(modes, dict) or not modes or not set(modes) <= set(declared)
+    if (not isinstance(modes, dict) or not modes or set(modes) != set(declared)
             or not all(IDENT.fullmatch(str(name)) and isinstance(value, dict)
                        for name, value in modes.items())):
-        _fail('D55_REQUIRED_MODE_COVERAGE', 'selected modes must be declared test cases')
+        _fail('D55_REQUIRED_MODE_COVERAGE', 'every declared test case requires a bound driver')
     logical = manifest.get('testbench_dut_module')
     if not IDENT.fullmatch(str(logical or '')):
         _fail('D55_ACTIVITY_BASIS_UNIMPLEMENTED', 'logical testbench DUT module required')
@@ -136,6 +138,8 @@ def _scenario_prepare(project, context, manifest, sources):
         text = re.sub(r'//[^\n]*|/\*.*?\*/', '', path.read_text(), flags=re.S)
         if re.search(r'`include\b|\$(?:readmem[hb]|fopen|system|sdf_annotate)\b', text):
             _fail('D55_TRANSITIVE_SIMULATION_INPUT_UNIMPLEMENTED', str(path))
+    authority = _derive_scenario_authority(paths, ports)
+    paths['liberties'] = [paths['liberty'], paths['pad_liberty']]
     tools, tool_hashes = _resolve_tools(project, context, manifest)
     inputs = {str(project / INPUT): _sha(project / INPUT)}
     for group in paths.values():
@@ -143,7 +147,62 @@ def _scenario_prepare(project, context, manifest, sources):
             inputs[str(path)] = _sha(path)
     return {'manifest': manifest, 'requirements': requirements, 'declared': declared,
             'paths': paths, 'inputs': inputs, 'sources': sources, 'tools': tools,
-            'ports': ports, 'activity_only': True, 'tool_hashes': tool_hashes}
+            'ports': ports, 'scenario_mode': True, 'tool_hashes': tool_hashes,
+            'loads': authority['external_loads'], 'authority': authority}
+
+
+def _derive_scenario_authority(paths, ports):
+    sdc = paths['sdc'].read_text()
+    clocks = re.findall(r'(?m)^\s*create_clock\b.*?-period\s+([0-9.eE+-]+)\s+\[get_ports\s+([A-Za-z_][A-Za-z0-9_$]*)\]', sdc)
+    delays = re.findall(r'(?m)^\s*set_output_delay\s+([0-9.eE+-]+)\s+-clock\s+([A-Za-z_][A-Za-z0-9_$]*)\s+\[all_outputs\]', sdc)
+    loads = re.findall(r'(?m)^\s*set_load\s+([0-9.eE+-]+)\s+\[all_outputs\]', sdc)
+    if len(clocks) != 1 or len(delays) != 1 or len(loads) != 1 or clocks[0][1] != delays[0][1]:
+        _fail('D55_SDC_ACTIVITY_AUTHORITY_UNIMPLEMENTED', 'one clock/output-delay/all-output-load declaration required')
+    period, output_delay, load = float(clocks[0][0]), float(delays[0][0]), float(loads[0])
+    if not all(math.isfinite(value) and value > 0 for value in (period, output_delay, load)) \
+            or output_delay >= period / 2:
+        _fail('D55_SDC_ACTIVITY_AUTHORITY_INVALID', str((period, output_delay, load)))
+    liberty = paths['liberty'].read_text()
+    pad_liberty = paths['pad_liberty'].read_text()
+    nominal = re.findall(r'(?m)^\s*nom_voltage\s*:\s*([0-9.eE+-]+)\s*;', liberty)
+    pad_nominal = re.findall(r'(?m)^\s*nom_voltage\s*:\s*([0-9.eE+-]+)\s*;', pad_liberty)
+    default = re.findall(r'default_power_rail\s*:\s*"([A-Za-z_][A-Za-z0-9_$]*)"', pad_liberty)
+    rails = {name: float(value) for name, value in re.findall(
+        r'power_rail\s*\(\s*"([A-Za-z_][A-Za-z0-9_$]*)"\s*,\s*([0-9.eE+-]+)\s*\)', pad_liberty)}
+    cap_units = re.findall(r'capacitive_load_unit\s*\(\s*([0-9.eE+-]+)\s*,\s*\\?\s*"?([A-Za-z]+)"?\s*\)', liberty)
+    if (len(nominal) != 1 or len(pad_nominal) != 1 or len(default) != 1
+            or len(cap_units) != 1 or default[0] not in rails
+            or float(nominal[0]) != float(pad_nominal[0])):
+        _fail('D55_RAIL_LIBRARY_MISMATCH', 'selected cell/pad operating conditions do not identify one default rail')
+    voltage = float(nominal[0])
+    if rails[default[0]] != voltage:
+        _fail('D55_RAIL_LIBRARY_MISMATCH', default[0])
+    io_text = re.sub(r'//[^\n]*|/\*.*?\*/', '', paths['io_connectivity'].read_text(), flags=re.S)
+    output_ports = [port['name'] for port in ports if port['direction'] == 'output']
+    mapped = {}
+    for port in output_ports:
+        instances = [body for body in re.findall(r'\b[A-Za-z_][A-Za-z0-9_$]*\s+(?:\\\S+|[A-Za-z_][A-Za-z0-9_$]*)\s*\((.*?)\)\s*;', io_text, re.S)
+                     if re.search(r'\.PAD\s*\(\s*' + re.escape(port) + r'\s*\)', body)]
+        if len(instances) != 1 or not re.search(r'\.' + re.escape(default[0])
+                                               + r'\s*\(\s*' + re.escape(default[0]) + r'\s*\)', instances[0]):
+            _fail('D55_OUTPUT_RAIL_CONNECTIVITY_UNRESOLVED', port)
+        mapped[port] = {'rail': default[0], 'capacitance_library_units': load}
+    if not mapped:
+        _fail('D55_OUTPUT_LOAD_COVERAGE', 'adopted design has no output ports')
+    return {'clock': clocks[0][1], 'period_ns': period,
+            'gls_sample_offset_ns': output_delay,
+            'external_loads': {'rails': {default[0]: {'voltage_v': voltage}},
+                               'ports': mapped},
+            'source_records': {'sdc': {'path': str(paths['sdc']), 'sha256': _sha(paths['sdc'])},
+                               'liberty': {'path': str(paths['liberty']), 'sha256': _sha(paths['liberty'])},
+                               'pad_liberty': {'path': str(paths['pad_liberty']), 'sha256': _sha(paths['pad_liberty'])},
+                               'io_connectivity': {'path': str(paths['io_connectivity']), 'sha256': _sha(paths['io_connectivity'])}},
+            'quotes': {'clock': f'create_clock -period {period} [get_ports {clocks[0][1]}]',
+                       'output_delay': f'set_output_delay {output_delay} -clock {delays[0][1]} [all_outputs]',
+                       'load': f'set_load {load} [all_outputs]',
+                       'default_power_rail': default[0],
+                       'nom_voltage_v': voltage,
+                       'capacitance_unit': {'scale': float(cap_units[0][0]), 'unit': cap_units[0][1]}}}
 
 
 def _engineering_native(context):
@@ -384,7 +443,9 @@ def _word(value):
 
 def _power_script(prepared, vcd, scope, output, done):
     paths = prepared['paths']
-    text = 'read_liberty ' + _word(paths['liberty']) + '\nread_verilog ' + _word(paths['adopted_netlist'])
+    liberties = paths.get('liberties', [paths['liberty']])
+    text = ''.join('read_liberty ' + _word(liberty) + '\n' for liberty in liberties)
+    text += 'read_verilog ' + _word(paths['adopted_netlist'])
     text += '\nlink_design ' + prepared['manifest']['top'] + '\nread_sdc ' + _word(paths['sdc']) + '\n'
     text += 'foreach p [all_inputs] { puts "D55_PORT [get_full_name $p] input" }\n'
     text += 'foreach p [all_outputs] { puts "D55_PORT [get_full_name $p] output" }\n'
@@ -397,6 +458,21 @@ def _power_script(prepared, vcd, scope, output, done):
     text += 'report_activity_annotation -report_annotated\nreport_power -digits 9\n'
     text += f'puts "D55_DONE {done}"\n'
     return 'if {[catch {\n' + text + '\n} err]} { puts "D55_NATIVE_FAIL: $err"; exit 1 }\n'
+
+
+def _native_port_names(ports):
+    result = []
+    for port in ports:
+        if port['width'] == 1:
+            result.append(port['name'])
+            continue
+        bounds = re.fullmatch(r'\[\s*(-?\d+)\s*:\s*(-?\d+)\s*\]', port['packed'])
+        if not bounds:
+            _fail('D55_ADOPTED_PORT_SCOPE_UNIMPLEMENTED', str(port))
+        first, last = int(bounds[1]), int(bounds[2])
+        step = 1 if last >= first else -1
+        result.extend(f"{port['name']}[{index}]" for index in range(first, last + step, step))
+    return result
 
 
 def consume_power(report, spec, loads, done):
@@ -413,7 +489,11 @@ def consume_power(report, spec, loads, done):
     activities = {}
     for port, density, duty, origin in re.findall(r'^D55_ACTIVITY (\S+) (\S+) (\S+) (\S+)\s*$', text, re.M):
         activities[port] = {'density_hz': float(density), 'duty': float(duty), 'origin': origin}
-    if set(activities) != set(ports) or any(v['origin'] != 'vcd' for v in activities.values()):
+    clock_port = spec.get('clock_port')
+    invalid_origins = {name: value['origin'] for name, value in activities.items()
+                       if value['origin'] != 'vcd'
+                       and not (name == clock_port and value['origin'] == 'clock')}
+    if set(activities) != set(ports) or invalid_origins:
         _fail('D55_REQUIRED_PORT_NOT_VCD_ANNOTATED', str(activities))
     parsed = power.parse_power_report(text)
     total = parsed.get('total_row')
@@ -454,16 +534,20 @@ def execute(project, context):
                 raise AdmissionRefusal('D55_NATIVE_TOOL_FAILED', str(argv[0]),
                     status='FAIL' if Path(argv[0]).name == 'vvp' else 'NOT_MEASURED')
             return result.returncode, result.stdout, result.stderr
-        mode_specs = (prepared['manifest']['modes'] if prepared.get('activity_only')
+        mode_specs = (prepared['manifest']['modes'] if prepared.get('scenario_mode')
                       else prepared['requirements']['modes'])
         for mode, spec in mode_specs.items():
             folder = attempt / mode
+            dump_options = {}
+            if prepared.get('scenario_mode'):
+                dump_options = {
+                    'testbench_dut_module': prepared['manifest']['testbench_dut_module'],
+                    'sample_clock': prepared['authority']['clock'],
+                    'sample_offset_ns': prepared['authority']['gls_sample_offset_ns']}
             activity = dump.dump([str(prepared['paths']['adopted_netlist']),
                                   *map(str, prepared['paths']['simulation_models'])],
                                  [str(prepared['paths']['tb:' + mode])],
-                                 prepared['manifest']['top'], folder, native,
-                                 testbench_dut_module=(prepared['manifest']['testbench_dut_module']
-                                                       if prepared.get('activity_only') else None))
+                                 prepared['manifest']['top'], folder, native, **dump_options)
             if activity.get('status') != 'PASS' or activity.get('vvp_rc') != 0:
                 _fail('D55_GLS_ACTIVITY_INCOMPLETE', str(activity))
             vcd = Path(activity['vcd'])
@@ -471,48 +555,31 @@ def execute(project, context):
                 _fail('D55_ACTIVITY_GENERATION_STALE', str(vcd))
             for generated in (vcd, folder / dump.MANIFEST):
                 prepared['inputs'][str(generated)] = _sha(generated)
-            if prepared.get('activity_only'):
+            if prepared.get('scenario_mode'):
                 census = measured_waveform_census(vcd, activity['scope'], prepared['ports'])
-                record['modes'][mode] = {'requirement': prepared['declared'][mode],
-                    'activity': _record(project, folder / dump.MANIFEST),
-                    'vcd': _record(project, vcd), 'census': census}
-                continue
-            census = waveform_census(vcd, activity['scope'], spec)
+                consumption_spec = {'required_ports': _native_port_names(prepared['ports']),
+                                    'clock_port': prepared['authority']['clock']}
+            else:
+                census = waveform_census(vcd, activity['scope'], spec)
+                consumption_spec = spec
             script, report = folder / 'power.tcl', folder / 'power.rpt'
             script.write_text(_power_script(prepared, vcd, activity['scope'], report, attempt.name))
             prepared['inputs'][str(script)] = _sha(script)
             _, out, err = native(['opensta', '-no_splash', '-exit', str(script)], str(folder))
             report.write_text(out + err)
             prepared['inputs'][str(report)] = _sha(report)
-            consumed = consume_power(report, spec, prepared['loads'], attempt.name)
-            record['modes'][mode] = {'activity': _record(project, folder / dump.MANIFEST),
+            consumed = consume_power(report, consumption_spec, prepared['loads'], attempt.name)
+            record['modes'][mode] = {
+                **({'requirement': prepared['declared'][mode]} if prepared.get('scenario_mode') else {}),
+                'activity': _record(project, folder / dump.MANIFEST),
                 'vcd': _record(project, vcd), 'census': census, 'power_script': _record(project, script),
                 'power_report': _record(project, report), 'consumption': consumed}
         _before(project, context, prepared)
-        if prepared.get('activity_only'):
-            partial = {'schema': SCHEMA, 'context_sha256': context['context_sha256'],
-                'status': 'NOT_MEASURED', 'reason': 'D55_LOAD_RAIL_REQUIREMENTS_ABSENT',
-                'functional_scenarios_status': 'PASS', 'inputs': prepared['inputs'],
-                'operation_sources': prepared['sources'], 'modes': record['modes'],
-                'adopted_netlist': prepared['manifest']['adopted_netlist'],
-                'missing_required_fields': ['external_loads.rails',
-                                            'external_loads.ports.<output>.rail'],
-                'sdc_load_evidence': 'bound SDC may declare capacitance but does not declare rail mapping',
-                'final_power_adoption': 'NOT_MEASURED', 'flow109_acceptance': 'NOT_MEASURED'}
-            write_json(attempt / 'partial-freeze.json', partial)
-            write_json(project / PARTIAL_FREEZE, partial)
-            record.update(component_status='NOT_MEASURED',
-                          reason='D55_LOAD_RAIL_REQUIREMENTS_ABSENT',
-                          detail='requirements-owner rail and per-output rail mapping are absent',
-                          functional_scenarios_status='PASS',
-                          partial_freeze=_record(project, attempt / 'partial-freeze.json'))
-            record['receipt'] = {'path': str((attempt / 'component.json').relative_to(project))}
-            write_json(attempt / 'component.json', record)
-            return record
         record.update(component_status='PASS', reason='D55_GLS_VECTOR_POWER_COMPONENT_MEASURED')
         frozen = {'schema': SCHEMA, 'context_sha256': context['context_sha256'],
             'inputs': prepared['inputs'], 'operation_sources': prepared['sources'],
             'modes': record['modes'], 'external_loads': prepared['loads'],
+            **({'authority': prepared['authority']} if prepared.get('scenario_mode') else {}),
             'adopted_netlist': prepared['manifest']['adopted_netlist'],
             'final_power_adoption': 'NOT_MEASURED', 'flow109_acceptance': 'NOT_MEASURED'}
         write_json(attempt / 'freeze.json', frozen)
