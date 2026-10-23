@@ -21162,22 +21162,24 @@ def _resolve_provisional_slot_die(
     if not (project / expected_operator_source).is_file():
         return None, f"{prefix} declared slot contract is absent"
 
-    try:
-        report = _load("reports/phase1/submission_template.json")
-    except (OSError, ValueError) as exc:
-        return None, f"{prefix} submission-template ingest unreadable: {exc}"
-    ingest = (report or {}).get("ingest") or {}
-    if ingest.get("status") != "INGESTED" or ingest.get("declared_slot") != step_slot:
-        return None, f"{prefix} current ingest does not bind the declared slot"
-
     candidates: List[Dict[str, Any]] = []
-    for rec in ingest.get("slots") or []:
+    slot_dir = project / "input" / "submission_template" / "slots"
+    slot_files = sorted(slot_dir.glob("*.yaml"))
+    if not slot_files:
+        return None, f"{prefix} no published slot contracts are present"
+    for slot_file in slot_files:
+        try:
+            rec = json.loads(slot_file.read_text(errors="replace"))
+        except (OSError, ValueError) as exc:
+            return None, f"{prefix} {slot_file.name} unreadable: {exc}"
         name = rec.get("slot")
         rel = rec.get("source_relpath")
         digest = rec.get("source_sha256")
         if (not isinstance(name, str) or not isinstance(rel, str)
                 or Path(rel).name != rel or not isinstance(digest, str)):
-            return None, f"{prefix} published slot catalogue entry is incomplete"
+            return None, f"{prefix} published slot contract {slot_file.name} is incomplete"
+        if slot_file.name != f"{name}.yaml":
+            return None, f"{prefix} published slot filename does not match its slot"
         source = project / "input" / "submission_template_source" / rel
         try:
             actual_digest = hashlib.sha256(source.read_bytes()).hexdigest()

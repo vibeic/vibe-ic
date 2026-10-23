@@ -322,8 +322,6 @@ def _provisional_slot_project(tmp_path, *, answered_by="agent",
                    "answers": {"die_area_um": [0, 0, 100, 140]}}
     (project / "input/submission_template/tapeout_declaration.json").write_text(
         json.dumps(declaration))
-    (project / "input/submission_template/slots/small.yaml").write_text(
-        "SLOT: small\nDIE_AREA: 0 0 100 140\n")
     report = {"ingest": {"status": "INGESTED", "declared_slot": "small",
                           "slots": [
                               {"slot": "small", "source_relpath": "small.json",
@@ -340,6 +338,9 @@ def _provisional_slot_project(tmp_path, *, answered_by="agent",
         payload = ('{"slot":"%s"}\n' % name).encode()
         (project / f"input/submission_template_source/{name}.json").write_bytes(payload)
         report["ingest"]["slots"][[r["slot"] for r in report["ingest"]["slots"]].index(name)]["source_sha256"] = hashlib.sha256(payload).hexdigest()
+    for rec in report["ingest"]["slots"]:
+        (project / f"input/submission_template/slots/{rec['slot']}.yaml").write_text(
+            json.dumps(rec))
     (project / "reports/phase1/submission_template.json").write_text(
         json.dumps(report))
     return project
@@ -356,6 +357,17 @@ def test_provisional_delegated_slot_resolves_to_smallest_adequate_published_slot
     assert resolved["resolved_slot"] == "wide"
     assert resolved["resolved_die_um"] == "170x160"
     assert resolved["required_die_side_um"] == 150
+
+
+def test_provisional_slot_resolution_uses_canonical_worker_inputs(tmp_path):
+    project = _provisional_slot_project(tmp_path)
+    # Default's bounded worker receives the source-bound slot contracts and
+    # source JSON, not the earlier Phase-1 reporting copy.
+    (project / "reports/phase1/submission_template.json").unlink()
+    resolved, refusal = RUNNER._resolve_provisional_slot_die(
+        project, "100x140", 150)
+    assert refusal is None
+    assert resolved["resolved_slot"] == "wide"
 
 
 def test_explicit_owner_slot_is_not_reclassified_as_derived(tmp_path):
