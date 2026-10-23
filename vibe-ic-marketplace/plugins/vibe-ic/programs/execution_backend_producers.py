@@ -350,6 +350,55 @@ def _require(path):
     return p
 
 
+def _step24_spef(project, top, legacy):
+    """Select the exact current STA SPEF before requiring the legacy alias.
+
+    The current owner remains authoritative whenever its Step23 record is
+    present.  Its ordinary validator binds State/config/image/PDK material and
+    the selected corner mapping; this seam only confirms that the returned
+    SPEF is a current, project-owned regular file.  Absence of the owner alone
+    preserves the legacy Step24 route.
+    """
+    import librelane_ir_antenna as ir
+
+    project = Path(project).resolve()
+    if not (project / ir.CURRENT_STA_RECORD).is_file():
+        return _require(legacy)
+    import _opensta_current as current
+    try:
+        subject, tool = current.tool_subject(project, top)
+    except (OSError, ValueError, KeyError, TypeError, LibrelaneRefusal) as exc:
+        raise em.Refusal('BACKEND_CURRENT_SPEF_INVALID', str(exc)) from exc
+    rows = [row for row in subject.get('inputs') or []
+            if isinstance(row, dict) and row.get('role') == 'spef']
+    if len(rows) != 1:
+        raise em.Refusal('BACKEND_CURRENT_SPEF_AMBIGUOUS', str(rows))
+    row = rows[0]
+    named = Path(row.get('path') or '')
+    try:
+        spef = named.resolve(strict=True)
+    except OSError as exc:
+        raise em.Refusal('BACKEND_CURRENT_SPEF_MISSING', str(named)) from exc
+    if (named.is_symlink() or not spef.is_file()
+            or not spef.is_relative_to(project)
+            or row.get('resolved') != str(spef)
+            or row.get('sha256') != snap.sha(spef)):
+        code = ('BACKEND_CURRENT_SPEF_FOREIGN' if not spef.is_relative_to(project)
+                else 'BACKEND_CURRENT_SPEF_CHANGED')
+        raise em.Refusal(code, str(named))
+    try:
+        state = json.loads(Path(tool['state']).read_text())
+        mapped = state.get('spef') or {}
+        values = [mapped] if isinstance(mapped, str) else list(mapped.values())
+        selected = {(Path(value) if Path(value).is_absolute()
+                     else project / value).resolve(strict=True) for value in values}
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        raise em.Refusal('BACKEND_CURRENT_SPEF_STATE_INVALID', str(exc)) from exc
+    if spef not in selected:
+        raise em.Refusal('BACKEND_CURRENT_SPEF_MAPPING_MISMATCH', str(spef))
+    return spef
+
+
 def _copy(source, target):
     source = _require(source)
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -1650,7 +1699,7 @@ def produce_signoff(project, params):
                 project, execution_mode='default')
         if subject is None:
             R._librelane_step24_record(
-                project, top, pdk, 'librelane', _require(spef), written)
+                project, top, pdk, 'librelane', _step24_spef(project, top, spef), written)
         else:
             # Consume exactly the paths the ordinary issuer froze.  No
             # canonical alias is authored here; missing or changed issued

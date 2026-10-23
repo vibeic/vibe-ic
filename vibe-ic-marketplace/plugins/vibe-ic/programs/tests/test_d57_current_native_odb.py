@@ -8,6 +8,8 @@ import pytest
 
 import _opensta_current as current
 import em_current_density_check as current_ir
+import execution_backend_producers as backend
+import execution_modes as execution_modes
 import librelane_ir_antenna as ir
 from librelane_contract import Refusal
 
@@ -61,6 +63,76 @@ def _current_scene(tmp_path, monkeypatch):
             "mounts": [(pdk_root / "neutral", "/pdk/neutral")]}
     monkeypatch.setattr(current, "tool_subject", lambda *_args, **_kw: (subject, tool))
     return project, pdk_root, paths, state
+
+
+def _step24_selection(project, tmp_path, monkeypatch):
+    selected = {}
+
+    def capture(_project, _top, _pdk, _mode, spef, _written):
+        selected['path'] = str(Path(spef).resolve())
+        selected['sha256'] = _sha(spef)
+        raise execution_modes.Refusal('CONTROL_D57_SPEF_SELECTED', selected['path'])
+
+    carrier = SimpleNamespace(_librelane_step24_record=capture)
+    pdk = SimpleNamespace(name='neutral')
+    monkeypatch.setattr(backend, '_parameters',
+                        lambda *_a, **_k: (carrier, None, pdk, ''))
+    params = {'step_id': '24', 'top': 'neutral', 'pdk_root': str(tmp_path),
+              'image_id': IMAGE, 'execution_mode': 'default'}
+    try:
+        backend.produce_signoff(project, params)
+    except execution_modes.Refusal as exc:
+        observed = ({'status': 'SELECTED', **selected}
+                    if 'CONTROL_D57_SPEF_SELECTED' in str(exc)
+                    else {'status': 'REFUSED', 'reason': str(exc)})
+    else:
+        observed = {'status': 'UNEXPECTED_RETURN'}
+    return observed
+
+
+def test_default_step24_admits_current_native_spef_without_legacy_alias(
+        tmp_path, monkeypatch):
+    project, _, paths, _ = _current_scene(tmp_path, monkeypatch)
+    legacy = project / 'phase3/stage3/extracted/neutral.spef'
+    assert not legacy.exists()
+    observed = _step24_selection(project, tmp_path, monkeypatch)
+    assert observed == {'status': 'SELECTED', 'path': str(paths['spef'].resolve()),
+                        'sha256': _sha(paths['spef'])}
+
+
+@pytest.mark.parametrize('damage,reason', [
+    ('missing', 'BACKEND_CURRENT_SPEF_MISSING'),
+    ('changed', 'BACKEND_CURRENT_SPEF_CHANGED'),
+    ('foreign', 'BACKEND_CURRENT_SPEF_FOREIGN'),
+])
+def test_default_step24_refuses_invalid_current_spef_without_legacy_fallback(
+        tmp_path, monkeypatch, damage, reason):
+    project, _, paths, state = _current_scene(tmp_path, monkeypatch)
+    if damage == 'missing':
+        paths['spef'].unlink()
+    elif damage == 'changed':
+        paths['spef'].write_text(paths['spef'].read_text() + 'changed\n')
+    else:
+        outside = _write(tmp_path / 'outside/current.spef', '*SPEF foreign\n').resolve()
+        doc = json.loads(state.read_text())
+        doc['spef'] = {'max_*': str(outside)}
+        state.write_text(json.dumps(doc))
+        subject, tool = current.tool_subject(project, 'neutral')
+        subject['inputs'] = [row for row in subject['inputs'] if row['role'] != 'spef']
+        subject['inputs'].append(_record(outside, 'spef'))
+        monkeypatch.setattr(current, 'tool_subject', lambda *_a, **_k: (subject, tool))
+    observed = _step24_selection(project, tmp_path, monkeypatch)
+    assert observed['status'] == 'REFUSED'
+    assert reason in observed['reason']
+    assert not (project / 'phase3/stage3/extracted/neutral.spef').exists()
+
+
+def test_default_step24_without_current_owner_keeps_legacy_spef(tmp_path, monkeypatch):
+    project = tmp_path / 'legacy-project'
+    legacy = _write(project / 'phase3/stage3/extracted/neutral.spef', '*SPEF legacy\n')
+    observed = _step24_selection(project, tmp_path, monkeypatch)
+    assert observed == {'status': 'SELECTED', 'path': str(legacy.resolve()),
+                        'sha256': _sha(legacy)}
 
 
 def test_current_native_state_selects_original_odb_and_source_chain(tmp_path, monkeypatch):
