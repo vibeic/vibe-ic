@@ -23,6 +23,7 @@ from _atomic_artefact import write_json
 from flow109_admission import AdmissionRefusal, require_launch_admission
 from flow109_metric_acceptance import accept_d44
 import librelane_eqy as eqy
+import flow109_final_lec_physical as physical
 
 SCHEMA = 'vibeic.flow109.final-lec.v1'
 INPUT = 'input/flow109/D44.json'
@@ -36,7 +37,8 @@ def _sha(path):
 
 def operation_sources():
     from execution_provider_catalog import source_closure
-    paths = source_closure({HERE / 'librelane_eqy.py', HERE / 'lec_post_layout_check.py'})
+    paths = source_closure({HERE / 'librelane_eqy.py', HERE / 'lec_post_layout_check.py',
+                            HERE / 'flow109_final_lec_physical.py'})
     paths.update((Path(__file__), HERE / 'flow109.py', HERE / 'flow109_admission.py',
                   HERE / 'flow109_metric_acceptance.py'))
     result = {str(path.relative_to(HERE.parent)): _sha(path) for path in sorted(paths)}
@@ -84,15 +86,39 @@ def prepare(project, context):
     manifest = _read(project / INPUT)
     if manifest.get('schema') != SCHEMA or not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_$]*', str(manifest.get('top', ''))):
         raise AdmissionRefusal('D44_INPUT_INVALID', 'schema/top must identify the exact proof subject')
-    if manifest.get('transformations') != []:
-        raise AdmissionRefusal('D44_TRANSFORMATION_NOT_QUALIFIED',
-                               'power/physical-cell or port transformations require their own proven source chain')
+    transforms = manifest.get('transformations')
+    physical_manifest = None
+    if transforms != []:
+        if (not isinstance(transforms, list) or len(transforms) != 1
+                or not isinstance(transforms[0], dict)
+                or set(transforms[0]) != {'kind', 'input'}
+                or transforms[0]['kind'] != physical.KIND):
+            raise AdmissionRefusal('D44_TRANSFORMATION_NOT_QUALIFIED',
+                                   'only source-owned DEF-bound physical preparation is supported')
+        physical_manifest = _read(_bound(project, transforms[0]['input']))
     rtl = manifest.get('rtl')
     if not isinstance(rtl, list) or not rtl:
         raise AdmissionRefusal('D44_RTL_ABSENT', 'nonempty reference RTL population required')
     paths = {'rtl': [_bound(project, item) for item in rtl],
              'adopted_netlist': _bound(project, manifest.get('adopted_netlist')),
              'liberty': _bound(project, manifest.get('liberty'))}
+    physical_inputs = {}
+    if physical_manifest is not None:
+        if (physical_manifest.get('schema') != physical.SCHEMA
+                or physical_manifest.get('top') != manifest['top']
+                or len(paths['rtl']) != 1):
+            raise AdmissionRefusal('D44_PHYSICAL_INPUT_MISMATCH', 'physical schema/top/reference')
+        for name, expected in [('rtl', paths['rtl'][0]),
+                               ('adopted_netlist', paths['adopted_netlist']),
+                               ('liberty', paths['liberty'])]:
+            if _bound(project, physical_manifest.get(name)) != expected:
+                raise AdmissionRefusal('D44_PHYSICAL_INPUT_MISMATCH', name)
+        for name in ('rtl', 'adopted_netlist', 'adopted_state', 'adopted_receipt',
+                     'final_def', 'wrapper', 'wrapper_record', 'liberty', 'io_liberty'):
+            path = _bound(project, physical_manifest.get(name))
+            physical_inputs[str(path)] = _sha(path)
+        path = _bound(project, transforms[0]['input'])
+        physical_inputs[str(path)] = _sha(path)
     roles = manifest.get('consumer_netlists')
     if not isinstance(roles, dict) or set(roles) != {'sta', 'lvs_reference', 'release'}:
         raise AdmissionRefusal('D44_CONSUMER_BASELINE_ABSENT', 'STA/LVS-reference/release must all have a source')
@@ -106,19 +132,28 @@ def prepare(project, context):
             or not Path(native['pdk_root']).is_dir()):
         raise AdmissionRefusal('D44_PDK_CONFIGURATION_ABSENT', 'explicit existing LibreLane PDK root/library required')
     for use in uses:
-        if _bound(project, use['deck']) != paths['liberty']:
+        if physical_manifest is None:
+            if _bound(project, use['deck']) != paths['liberty']:
+                raise AdmissionRefusal('D44_LIBRARY_NOT_QUALIFIED', use['use_id'])
+        elif _read(_bound(project, use['deck'])) != {
+                'liberties': [manifest['liberty'], physical_manifest['io_liberty']]}:
             raise AdmissionRefusal('D44_LIBRARY_NOT_QUALIFIED', use['use_id'])
         pdk = _read(_bound(project, use['pdk']))
-        if pdk != {'librelane': native, 'liberty': manifest['liberty']}:
+        expected_pdk = {'librelane': native, 'liberty': manifest['liberty']}
+        if physical_manifest is not None:
+            expected_pdk.update(io_liberty=physical_manifest['io_liberty'],
+                                physical_input=transforms[0]['input'])
+        if pdk != expected_pdk:
             raise AdmissionRefusal('D44_PDK_SCOPE_NOT_QUALIFIED', use['use_id'])
         config = _read(_bound(project, use['config']))
-        if config != {'schema': SCHEMA, 'operation': 'Yosys.EQY', 'transformations': []}:
+        if config != {'schema': SCHEMA, 'operation': 'Yosys.EQY', 'transformations': transforms}:
             raise AdmissionRefusal('D44_CONFIGURATION_UNSUPPORTED', use['use_id'])
-    inputs = {INPUT: _sha(project / INPUT)}
+    inputs = {INPUT: _sha(project / INPUT), **physical_inputs}
     for group in paths.values():
         for path in group if isinstance(group, list) else [group]:
             inputs[str(path)] = _sha(path)
     return {'manifest': manifest, 'paths': paths, 'sources': sources, 'inputs': inputs,
+            'physical_input': transforms[0]['input'] if physical_manifest is not None else None,
             'tools': {use['tool_id']: use['executable']['path'] for use in uses}}
 
 
@@ -138,8 +173,9 @@ def _yosys_word(path):
 def _model_census(project, prepared, attempt, before):
     """Model/port elaboration only: no second equivalence engine or proof."""
     result = {}
-    for side, files in [('gold', prepared['paths']['rtl']),
-                        ('gate', [prepared['paths']['adopted_netlist']])]:
+    proof_paths = prepared.get('proof_paths', prepared['paths'])
+    for side, files in [('gold', proof_paths['rtl']),
+                        ('gate', [proof_paths['adopted_netlist']])]:
         output = attempt / (side + '.model.json')
         text = ''
         if side == 'gate':
@@ -184,7 +220,7 @@ def _native_eqy(project, prepared, attempt, before):
     from librelane.steps.yosys import EQY
     from librelane.steps import StepError
 
-    manifest, paths = prepared['manifest'], prepared['paths']
+    manifest, paths = prepared['manifest'], prepared.get('proof_paths', prepared['paths'])
     script = attempt / 'final.eqy'
     script.write_text(eqy.eqy_script(manifest['top'], paths['rtl'], paths['adopted_netlist'], str(paths['liberty'])))
     config, _ = Config.load({'DESIGN_NAME': manifest['top'],
@@ -317,17 +353,32 @@ def _mapping_binding(project, context, component, proof_metric):
         'adopted_netlist': _record(project, prepared['paths']['adopted_netlist']),
         'consumer_netlists': {role: _record(project, prepared['paths'][role])
                               for role in ('sta', 'lvs_reference', 'release')},
-        'transformations': [],
+        'transformations': prepared['manifest']['transformations'],
         'mapping': 'same_logical_bytes',
         'consumer_adoption': 'NOT_MEASURED',
         'proof': proof_record,
     }
+    if prepared.get('physical_input'):
+        transform_record = component.get('transformation_receipt')
+        try:
+            transform = _read(_bound(project, transform_record))
+            if (transform.get('kind') != physical.KIND
+                    or transform.get('status') != 'PREPARED_NOT_EQUIVALENCE_PROVEN'
+                    or transform.get('raw_adopted_netlist', {}).get('sha256')
+                    != _sha(prepared['paths']['adopted_netlist'])):
+                raise AdmissionRefusal('D44_PHYSICAL_RECEIPT_DIFFERS', str(transform_record))
+            for path, digest in transform['inputs'].items():
+                if prepared['inputs'].get(path) != digest or _sha(path) != digest:
+                    raise AdmissionRefusal('D44_PHYSICAL_INPUT_MISMATCH', path)
+            for value in transform['outputs'].values():
+                _bound(project, value)
+        except (AdmissionRefusal, KeyError, OSError) as exc:
+            return {'status': 'FAIL', 'reason': 'D44_PHYSICAL_RECEIPT_DIFFERS', 'detail': str(exc)}
+        expected['transformation_receipt'] = transform_record
     if baseline != expected:
         return {'status': 'FAIL', 'reason': 'D44_BASELINE_SUBJECT_MISMATCH'}
     if component.get('source_sha256') != prepared['sources']:
         return {'status': 'FAIL', 'reason': 'D44_OPERATION_SOURCE_CHANGED'}
-    if prepared['manifest'].get('transformations') != []:
-        return {'status': 'FAIL', 'reason': 'D44_TRANSFORMATION_NOT_QUALIFIED'}
     roles = baseline.get('consumer_netlists')
     records = [baseline.get('adopted_netlist')]
     if not isinstance(roles, dict) or set(roles) != {'sta', 'lvs_reference', 'release'}:
@@ -388,6 +439,21 @@ def execute(project, context):
         def before():
             _before(project, context, prepared)
             record['native_started'] = True
+        if prepared.get('physical_input'):
+            view_dir = attempt / 'physical-views'
+            try:
+                views = physical.produce(project, _bound(project, prepared['physical_input']),
+                                         view_dir, before=before)
+            except (ValueError, RuntimeError, KeyError) as exc:
+                raise AdmissionRefusal('D44_PHYSICAL_PROOF_INPUT_REFUSED', str(exc)) from exc
+            record['transformation_receipt'] = _record(project, view_dir / 'preparation.json')
+            prepared['proof_paths'] = {'rtl': [_bound(project, views['outputs']['gold'])],
+                                      'adopted_netlist': _bound(project, views['outputs']['gate']),
+                                      'liberty': prepared['paths']['liberty']}
+            for name in ('gold', 'gate'):
+                item = views['outputs'][name]
+                prepared['inputs'][item['path']] = item['sha256']
+            prepared['inputs'][str(view_dir / 'preparation.json')] = _sha(view_dir / 'preparation.json')
         record['model_census'] = _model_census(project, prepared, attempt, before)
         native_error, models = _native_eqy(project, prepared, attempt, before)
         record.update(native_error=native_error, preprocessing_models=models)
@@ -407,8 +473,10 @@ def execute(project, context):
                 'rtl': [_record(project, p) for p in paths['rtl']],
                 'adopted_netlist': _record(project, paths['adopted_netlist']),
                 'consumer_netlists': {r: _record(project, paths[r]) for r in ('sta', 'lvs_reference', 'release')},
-                'transformations': [], 'mapping': 'same_logical_bytes',
+                'transformations': prepared['manifest']['transformations'], 'mapping': 'same_logical_bytes',
                 'consumer_adoption': 'NOT_MEASURED', 'proof': record['proof_receipt']}
+            if record.get('transformation_receipt'):
+                baseline['transformation_receipt'] = record['transformation_receipt']
             write_json(project / BASELINE, baseline)
             record['common_baseline'] = _record(project, project / BASELINE)
     except AdmissionRefusal as exc:
