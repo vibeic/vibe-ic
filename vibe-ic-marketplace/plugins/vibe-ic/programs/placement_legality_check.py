@@ -457,15 +457,36 @@ def _librelane_placement(project: Path) -> Optional[dict]:
         doc = json.loads(receipt.read_text())
         row = (doc.get("views") or {}).get("def") or {}
         placed = project / _PLACED_DEF_REL
-        if not placed.is_file() or Path(row.get("dest", "")).resolve() != placed.resolve():
+        recorded_dest = Path(row.get("dest", ""))
+        suffix = Path(_PLACED_DEF_REL).parts
+
+        def run_path(value):
+            path = Path(value)
+            if not path.is_absolute():
+                return project / path
+            # A retained checkpoint keeps its canonical relative layout.
+            # Rebase only beneath the root explicitly named by this handoff;
+            # the existing destination digest must still match the copy.
+            if (recorded_dest.is_absolute()
+                    and recorded_dest.parts[-len(suffix):] == suffix):
+                original = recorded_dest.parents[len(suffix) - 1]
+                if path.is_relative_to(original):
+                    return project / path.relative_to(original)
+            return path
+
+        if not placed.is_file() or run_path(str(recorded_dest)).resolve() != placed.resolve():
             out["reason"] = f"the receipt hands no DEF to {_PLACED_DEF_REL}"
             return out
         if row.get("dest_sha256") != _sha256(placed):
             out["reason"] = (f"{_PLACED_DEF_REL} is not the DEF the receipt "
                              f"handed over (sha256 differs)")
             return out
+        state = run_path(doc.get("state", ""))
+        if doc.get("state_sha256") and (not state.is_file()
+                or _sha256(state) != doc["state_sha256"]):
+            out["reason"] = "placement state is absent or differs from the handoff digest"
+            return out
         out["bound"] = True
-        state = Path(doc.get("state", ""))
         chain = state.parent.parent if state.is_file() else None
         steps = []
         for rec in sorted(chain.glob("*/vibeic_receipt.json")) if chain else []:
