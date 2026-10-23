@@ -79721,15 +79721,30 @@ def _phase3_window_enclosing(project: Path, top: str, pdk: PdkConfig,
 
 
 def _phase3_file_manifest(project: Path) -> Dict[str, str]:
-    """Content hashes, including files with preserved or forged mtimes."""
+    """Content hashes, including files with preserved or forged mtimes.
+
+    Project-local runner control state is not a design input.  In particular,
+    a delegated window materialises its immutable program tree below
+    ``.vibeic/runtime-program-trees`` while it is running.  Including that
+    tree makes the read-only audit report thousands of changes caused by the
+    runner itself.  Keep other ``.vibeic`` files visible: only the two owned
+    runtime-control subtrees are excluded.
+    """
     result = {}
     for path in project.rglob("*"):
+        relative = path.relative_to(project)
+        if relative == Path("reports/orchestrator/runtime_program_tree.json"):
+            continue
+        if (len(relative.parts) >= 2 and relative.parts[0] == ".vibeic"
+                and relative.parts[1] in (
+                    "runtime-program-trees", "phase3-window-lock")):
+            continue
         if path.is_file() and not path.is_symlink():
             digest = hashlib.sha256()
             with path.open("rb") as source:
                 for chunk in iter(lambda: source.read(1024 * 1024), b""):
                     digest.update(chunk)
-            result[str(path.relative_to(project))] = digest.hexdigest()
+            result[str(relative)] = digest.hexdigest()
     return result
 
 
