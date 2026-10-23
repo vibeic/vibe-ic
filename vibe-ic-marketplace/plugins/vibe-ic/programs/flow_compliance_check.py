@@ -10602,6 +10602,14 @@ def _structural_gate_argv(gate_name: str,
         argv += ["--auditor-record", _pl.report_path(
             project, "phase23_completion_audit.json").relative_to(
                 project).as_posix()]
+    if (gate_name == "project_outputs_in_tree_check"
+            and _UNDRIVABLE_BY_STRUCTURAL_UMBRELLA.get(
+                "interface_encoding_audit", {}).get("active_project_p0") is False):
+        # The canonical registry retired this producer from project P0. Its
+        # old typed FAIL/NOT_MEASURED receipt paths are historical diagnostics,
+        # not current output declarations. Standalone storage forensics receives
+        # no such owner context and continues to fail on those paths.
+        argv += ["--inactive-auditor", "interface_encoding_audit"]
     return argv
 
 

@@ -76,6 +76,31 @@ def _run_owned_storage(project, producer=None):
                           capture_output=True, text=True, env=env)
 
 
+def test_retired_encoding_auditor_history_is_diagnostic_only_in_owned_p0(tmp_path):
+    """A retired P0 producer cannot leave its old temp receipt as live output."""
+    receipt = Path('/tmp/vibe-ic-p0-retired/interface_encoding_audit/'
+                   'encoding_audit_report.json')
+    record = (tmp_path / 'reports/phase2/gates/'
+              'stage1_compliance.superseded-61.json')
+    record.parent.mkdir(parents=True)
+    record.write_text(json.dumps(_nonqualifying_encoding_report(receipt)))
+    original = record.read_bytes()
+
+    owned = subprocess.run([
+        sys.executable, str(PROG), str(tmp_path),
+        '--auditor-record', 'reports/audit/phase23_completion_audit.json',
+        '--inactive-auditor', 'interface_encoding_audit',
+    ], capture_output=True, text=True)
+    assert owned.returncode == 0, owned.stdout + owned.stderr
+    assert 'historical auditor diagnostic fields' in owned.stdout
+    assert record.read_bytes() == original
+
+    # Outside the canonical owner context the historical path remains visible.
+    forensic = _run(tmp_path)
+    assert forensic.returncode == 1, forensic.stdout + forensic.stderr
+    assert str(receipt) in forensic.stdout
+
+
 @pytest.mark.parametrize('status', ['FAIL', 'NOT_MEASURED'])
 @pytest.mark.parametrize('role', ['audit', 'producer'])
 def test_nonqualifying_encoding_diagnostic_is_not_a_current_proof_declaration(tmp_path, status, role):

@@ -696,11 +696,12 @@ def _inside_declared_relocation(path_str: str, project: Path,
 
 
 def _parse_argv(argv: List[str]) -> Tuple[Optional[str], Optional[str],
-                                           List[str]]:
-    """(project, --json REPORT, [--auditor-record REL ...]) from `argv`."""
+                                           List[str], List[str]]:
+    """Parse project, report, owner records and explicitly inactive auditors."""
     project: Optional[str] = None
     report: Optional[str] = None
     auditor: List[str] = []
+    inactive: List[str] = []
     it = iter(argv)
     for arg in it:
         if arg == "--json":
@@ -709,9 +710,13 @@ def _parse_argv(argv: List[str]) -> Tuple[Optional[str], Optional[str],
             rel = next(it, None)
             if rel:
                 auditor.append(Path(rel).as_posix())
+        elif arg == "--inactive-auditor":
+            name = next(it, None)
+            if name == "interface_encoding_audit":
+                inactive.append(name)
         elif project is None:
             project = arg
-    return project, report, auditor
+    return project, report, auditor, inactive
 
 
 def _write_report(report: Optional[str], verdict: str, rc: int,
@@ -825,7 +830,8 @@ def _current_encoding_producer(project: Path):
 
 
 def _auditor_diagnostic_text(txt: str, auditor_records: List[str],
-                             encoding_producer=None) -> Tuple[str, List[str]]:
+                             encoding_producer=None,
+                             inactive_auditors=()) -> Tuple[str, List[str]]:
     """Project typed auditor diagnostics onto their current declaration role.
 
     An old gate finding records an earlier measurement, not a fresh output
@@ -870,7 +876,8 @@ def _auditor_diagnostic_text(txt: str, auditor_records: List[str],
             # pass. Keep qualifying/stale/malformed receipts and all other
             # fields visible, and never rewrite the original report bytes.
             evidence = gate.get("evidence") if isinstance(gate, dict) else None
-            if (encoding_producer is not None
+            if ((encoding_producer is not None
+                    or "interface_encoding_audit" in inactive_auditors)
                     and doc.get("program") == "flow_compliance_check"
                     and doc.get("invoked_as") in ("audit", "producer")
                     and doc.get("overall") in ("FAIL", "NOT_MEASURED")
@@ -934,10 +941,11 @@ def _auditor_diagnostic_text(txt: str, auditor_records: List[str],
 
 
 def main() -> int:
-    arg_project, report, auditor_records = _parse_argv(sys.argv[1:])
+    arg_project, report, auditor_records, inactive_auditors = _parse_argv(sys.argv[1:])
     if arg_project is None:
         print("usage: project_outputs_in_tree_check <project_dir> "
-              "[--json REPORT] [--auditor-record REL ...]", file=sys.stderr)
+              "[--json REPORT] [--auditor-record REL ...] "
+              "[--inactive-auditor interface_encoding_audit]", file=sys.stderr)
         return 2
     project = Path(arg_project).resolve()
     if not project.is_dir():
@@ -1000,7 +1008,8 @@ def main() -> int:
             except Exception:
                 continue
             if f.suffix == ".json":
-                txt, fields = _auditor_diagnostic_text(txt, auditor_records, encoding_producer)
+                txt, fields = _auditor_diagnostic_text(
+                    txt, auditor_records, encoding_producer, inactive_auditors)
                 if fields:
                     auditor_diagnostics.append((f.relative_to(project).as_posix(), fields))
             from_log = f.name.endswith(".log")
