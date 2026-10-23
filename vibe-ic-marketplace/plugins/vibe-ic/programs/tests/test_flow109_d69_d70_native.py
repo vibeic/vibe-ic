@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from pathlib import Path
 
 import pytest
@@ -53,6 +54,38 @@ def _validator_fixture(tmp_path, monkeypatch, *, required=('tt', 'ss'), state_or
     return receipt_ref
 
 
+def _put_ref(project, relative, value):
+    path = project / relative
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if isinstance(value, (dict, list)):
+        path.write_text(json.dumps(value))
+    else:
+        path.write_text(str(value))
+    return {'path': relative, 'sha256': hashlib.sha256(path.read_bytes()).hexdigest()}
+
+
+def _owner_binding_fixture(tmp_path, monkeypatch, *, ir_verdict='PASS'):
+    d70_ref = _put_ref(tmp_path, 'reports/flow109/D70/current/component.json', {
+        'schema': d70.SCHEMA, 'component_status': 'PASS',
+        'execution_context': {'features': {'requires_ir': True, 'requires_em': True}},
+        'final_parasitics_receipt': {'path': 'd69.json', 'sha256': 'd' * 64},
+        'netlist': {'path': 'final.v', 'sha256': 'n' * 64}})
+    manifest = {'schema': d70.OWNER_INPUT_SCHEMA, 'd70_component': d70_ref,
+                'd55_activity_component': {'path': 'd55.json', 'sha256': '5' * 64},
+                'd55_activity_freeze': {'path': 'freeze.json', 'sha256': 'f' * 64},
+                'd56_power_component': {'path': 'd56.json', 'sha256': '6' * 64},
+                'd57_ir_component': {'path': 'd57.json', 'sha256': '7' * 64}}
+    _put_ref(tmp_path, d70.OWNER_INPUT, manifest)
+    monkeypatch.setattr(d70, 'validate_final_electrical', lambda *_: {})
+    monkeypatch.setattr(d70.extract, 'validate_final_parasitics', lambda *_: {})
+    monkeypatch.setattr(d70, '_activity_binding', lambda *_: {'scope': 'D55 current'})
+    monkeypatch.setattr(d70, '_power_binding', lambda *_: {
+        'verdict': 'PASS', 'scope': 'vectorless static STAPostPNR power'})
+    monkeypatch.setattr(d70, '_ir_binding', lambda *_: {
+        'verdict': ir_verdict, 'scope': 'static IR only'})
+    return d70_ref
+
+
 def test_native_failure_precedence_is_not_relabelled_unmeasured():
     assert d69._native_refusal_status('LL_STEP_FAILED') == 'FAIL'
     assert d70._native_refusal_status('LL_STEP_FAILED') == 'FAIL'
@@ -93,7 +126,7 @@ def test_d70_producer_accepts_equal_corner_population_in_different_order(tmp_pat
     state = {'sdf': {'ss': str(inputs['ss.sdf']), 'tt': str(inputs['tt.sdf'])},
              'nl': str(inputs['netlist.v']), 'sdc': str(inputs['constraint.sdc']),
              'spef': {'nom': str(inputs['nom.spef'])}}
-    parasitics = {'odb': ref(inputs['filled.odb']),
+    parasitics = {'odb': ref(inputs['filled.odb']), 'filled_def': ref(inputs['filled.def']),
         'adopted_views': {'netlist': ref(inputs['netlist.v']), 'sdc': ref(inputs['constraint.sdc'])},
         'spefs': {'nom': ref(inputs['nom.spef'])},
         'final_spefs': {'nom': ref(inputs['nom.spef'])}}
@@ -129,6 +162,93 @@ def test_d70_validator_refuses_duplicate_or_missing_corner_population(
                                  required=required, state_order=state_order)
     with pytest.raises(d70.AdmissionRefusal, match=reason):
         d70.validate_final_electrical(tmp_path, receipt)
+
+
+def test_d70_owner_binding_keeps_dynamic_and_em_unmeasured(tmp_path, monkeypatch):
+    receipt = _owner_binding_fixture(tmp_path, monkeypatch)
+    result = d70.bind_power_ir_owners(tmp_path, receipt)
+    assert result['binding_status'] == 'CURRENT'
+    assert result['component_status'] == 'NOT_MEASURED'
+    assert result['static_power_status'] == 'MEASURED'
+    assert result['static_ir_status'] == 'PASS'
+    assert result['dynamic_power_status'] == 'NOT_MEASURED'
+    assert result['dynamic_ir_status'] == 'NOT_MEASURED'
+    assert result['signal_em_status'] == 'NOT_MEASURED'
+    assert result['whole_ic_acceptance'] == 'NOT_MEASURED'
+
+
+def test_d70_owner_binding_preserves_measured_static_ir_fail(tmp_path, monkeypatch):
+    receipt = _owner_binding_fixture(tmp_path, monkeypatch, ir_verdict='FAIL')
+    result = d70.bind_power_ir_owners(tmp_path, receipt)
+    assert result['binding_status'] == 'CURRENT'
+    assert result['component_status'] == 'FAIL'
+    assert result['reason'] == 'D70_APPLICABLE_OWNER_MEASURED_FAIL'
+
+
+def test_d70_owner_binding_refuses_missing_input(tmp_path, monkeypatch):
+    component = _put_ref(tmp_path, 'component.json', {})
+    monkeypatch.setattr(d70, 'validate_final_electrical', lambda *_: {})
+    result = d70.bind_power_ir_owners(tmp_path, component)
+    assert result['component_status'] == 'NOT_MEASURED'
+    assert result['reason'] == 'D70_REQUIRED_INPUT_ABSENT'
+
+
+def test_d70_record_comparison_refuses_stale_bytes(tmp_path):
+    expected = _put_ref(tmp_path, 'basis/final.v', 'current')
+    observed = dict(expected)
+    observed['sha256'] = '0' * 64
+    with pytest.raises(d70.AdmissionRefusal, match='D70_OWNER_STALE'):
+        d70._same_record(tmp_path, observed, expected, 'D70_OWNER_STALE', 'netlist')
+
+
+def test_d70_ir_refuses_bridge_odb_instead_of_final_odb(tmp_path, monkeypatch):
+    final_odb = _put_ref(tmp_path, 'final/chip.odb', 'final odb')
+    bridge_odb = _put_ref(tmp_path, 'phase3/librelane/24/bridge.odb', 'bridge odb')
+    final_def = _put_ref(tmp_path, 'final/chip.def', 'final def')
+    netlist = _put_ref(tmp_path, 'final/chip.v', 'module chip; endmodule')
+    sdc = _put_ref(tmp_path, 'final/chip.sdc', 'create_clock')
+    spef = _put_ref(tmp_path, 'final/chip.spef', '*SPEF')
+    component = _put_ref(tmp_path, 'reports/flow109/components/D57.json', {
+        'schema': 'vibeic/backend-result/2', 'step_id': '24', 'verdict': 'PASS'})
+    _put_ref(tmp_path, 'reports/phase3/ir_drop_librelane.json', {
+        'inputs': {'def': final_def, 'netlist': netlist, 'sdc': sdc, 'spef': spef},
+        'native_basis': {'odb': {'path': str((tmp_path / bridge_odb['path']).resolve()),
+                                 'sha256': bridge_odb['sha256']}}})
+    import em_current_density_check as current_ir
+    monkeypatch.setattr(current_ir, 'validate_primary_ir',
+                        lambda *_: {'valid': True, 'verdict': 'PASS'})
+    parasitics = {'filled_def': final_def, 'odb': final_odb,
+                  'adopted_views': {'netlist': netlist, 'sdc': sdc},
+                  'final_spefs': {'nom_*': spef}}
+    with pytest.raises(d70.AdmissionRefusal, match='D70_D57_FINAL_ODB_NOT_CONSUMED'):
+        d70._ir_binding(tmp_path, parasitics, {'d57_ir_component': component})
+
+
+def test_d70_ir_accepts_only_selected_current_native_odb(tmp_path, monkeypatch):
+    final_odb = _put_ref(tmp_path, 'final/chip.odb', 'final odb')
+    final_def = _put_ref(tmp_path, 'final/chip.def', 'final def')
+    netlist = _put_ref(tmp_path, 'final/chip.v', 'module chip; endmodule')
+    sdc = _put_ref(tmp_path, 'final/chip.sdc', 'create_clock')
+    spef = _put_ref(tmp_path, 'final/chip.spef', '*SPEF')
+    component = _put_ref(tmp_path, 'reports/flow109/components/D57.json', {
+        'schema': 'vibeic/backend-result/2', 'step_id': '24', 'verdict': 'PASS'})
+    selected = {'odb': final_odb, 'def': final_def, 'netlist': netlist,
+                'sdc': sdc, 'spef': spef}
+    _put_ref(tmp_path, 'reports/phase3/ir_drop_librelane.json', {
+        # The old issuer paths deliberately differ: current mode must use the
+        # producer's selected native state, never this legacy request surface.
+        'inputs': {'def': {'path': 'old.def', 'sha256': '0' * 64}},
+        'record': {'input_mode': 'current_stapostpnr_odb',
+                   'selected_inputs': selected}})
+    import em_current_density_check as current_ir
+    monkeypatch.setattr(current_ir, 'validate_primary_ir',
+                        lambda *_: {'valid': True, 'verdict': 'PASS'})
+    parasitics = {'filled_def': final_def, 'odb': final_odb,
+                  'adopted_views': {'netlist': netlist, 'sdc': sdc},
+                  'final_spefs': {'nom_*': spef}}
+    result = d70._ir_binding(tmp_path, parasitics, {'d57_ir_component': component})
+    assert result['verdict'] == 'PASS'
+    assert result['scope'] == 'static IR only'
 
 
 def test_final_filled_odb_runs_rcx_then_all_declared_stapostpnr_corners():

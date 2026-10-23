@@ -96,6 +96,8 @@ def _input_views(project, name, step=None):
               ("spec.json", "topology.json", "topology.md", f"{name}.sp", f"tb_{name}.sp")]
     if step in STEPS[3:]:
         paths.append(directory / "sizing_inputs.json")
+    if step in STEPS[10:]:
+        paths.append(directory / "layout_inputs.json")
     if step in ("A06", "A07"):
         paths.append(directory / "measurement_studies.json")
     if step == "A16":
@@ -141,6 +143,10 @@ def _input_views(project, name, step=None):
             if not isinstance(study, dict):
                 continue
             referenced(study.get("testbench"))
+            settings_path = referenced(study.get("settings"))
+            settings = _read(settings_path, {}) if settings_path else {}
+            if isinstance(settings, dict):
+                referenced(settings.get("testbench"))
             bindings_path = referenced(study.get("bindings"))
             bindings = _read(bindings_path, {}) if bindings_path else {}
             if isinstance(bindings, dict) and isinstance(bindings.get("source"), dict):
@@ -149,14 +155,22 @@ def _input_views(project, name, step=None):
             record = _read(result_path, {}) if result_path else {}
             if not isinstance(record, dict):
                 continue
-            for view in (record.get("native_inputs") or {}).values():
-                if isinstance(view, dict):
-                    referenced(view.get("path"))
-            for execution in record.get("executions") or []:
-                if isinstance(execution, dict):
-                    referenced(execution.get("log"))
-            if isinstance(record.get("capture"), dict):
-                referenced(record["capture"].get("path"))
+            records = [record]
+            for point in record.get("points") or []:
+                if isinstance(point, dict):
+                    path = referenced(point.get("path"))
+                    data = _read(path, {}) if path else {}
+                    if isinstance(data, dict):
+                        records.append(data)
+            for data in records:
+                for view in (data.get("native_inputs") or {}).values():
+                    if isinstance(view, dict):
+                        referenced(view.get("path"))
+                for execution in data.get("executions") or []:
+                    if isinstance(execution, dict):
+                        referenced(execution.get("log"))
+                if isinstance(data.get("capture"), dict):
+                    referenced(data["capture"].get("path"))
     return {str(path): _sha(path) for path in paths if path.is_file()}
 
 

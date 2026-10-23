@@ -15394,7 +15394,7 @@
             "admission_policy": "source_owned_existing_native",
             "acceptance_scope": "existing_native_component_only",
             "component_scope": "final_sdf_gls_component_only",
-            "flow109_metrics_status": "UNIMPLEMENTED",
+            "flow109_metrics_status": "IMPLEMENTED_D71_RUNTIME",
             "native_required_outputs": [
               "gls_runs.json",
               "final per-corner SDF readback",
@@ -15437,7 +15437,7 @@
             "checker.final_gls.final_sdf_annotation",
             "producer.final_gls.execution"
           ],
-          "status": "UNIMPLEMENTED_METRIC_BINDING"
+          "status": "IMPLEMENTED_D71_RUNTIME_BINDING"
         },
         {
           "id": "final_gls.final_gls_scenarios",
@@ -15457,7 +15457,7 @@
             "checker.final_gls.final_gls_scenarios",
             "producer.final_gls.execution"
           ],
-          "status": "UNIMPLEMENTED_METRIC_BINDING"
+          "status": "IMPLEMENTED_D71_RUNTIME_BINDING"
         },
         {
           "id": "final_gls.final_gls_function_timing_errors",
@@ -15478,10 +15478,10 @@
             "checker.final_gls.final_gls_function_timing_errors",
             "producer.final_gls.execution"
           ],
-          "status": "UNIMPLEMENTED_METRIC_BINDING"
+          "status": "IMPLEMENTED_D71_RUNTIME_BINDING"
         }
       ],
-      "metric_acceptance_status": "UNIMPLEMENTED",
+      "metric_acceptance_status": "IMPLEMENTED_D71_RUNTIME",
       "gate_layer_ids": [
         "G1",
         "G2",

@@ -12,6 +12,9 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+import json
+
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -119,3 +122,75 @@ def test_main_writes_the_prepared_deck_atomically(tmp_path: Path):
     text = out.read_text()
     assert "l=115.38u" in text and ".lib" not in text
     assert not [f for f in out.parent.iterdir() if _aa.is_temp_artefact(f)]
+
+
+def _topology():
+    return {'block': 'blk', 'devices': [
+        {'name': 'mn1', 'role': 'nmos', 'nets': ['vout', 'vin', 'vss', 'vss']},
+        {'name': 'mp1', 'role': 'pmos', 'nets': ['vout', 'vin', 'vdd', 'vdd']},
+        {'name': 'r1', 'role': 'res', 'nets': ['vout', 'vss', 'vss']},
+        {'name': 'c1', 'role': 'cap', 'nets': ['vout', 'vss']}]}
+
+
+def test_declared_topology_roles_prepare_comment_free_dut_without_model_name_guessing():
+    source = '\n'.join(line for line in NETLIST.splitlines() if 'role_models=' not in line)
+    prepared, stats = P.prepare_source_netlist(source, 'blk', topology=_topology())
+    assert stats['device_calls_rewritten'] == 4
+    assert 'Mmn1 vout vin vss vss nfet' in prepared
+    assert 'Cc1 vout vss cmim' in prepared
+    assert 'xsub1 vout vin some_other_block' in prepared
+    assert 'role_models=' not in source
+
+
+@pytest.mark.parametrize('fault', ['wrong_block', 'different_terminals', 'duplicate_identity'])
+def test_topology_fallback_refuses_unrelated_or_ambiguous_declarations(fault):
+    topology = _topology()
+    if fault == 'wrong_block':
+        topology['block'] = 'other'
+    elif fault == 'different_terminals':
+        topology['devices'][0]['nets'][0] = 'other'
+    else:
+        topology['devices'].append(dict(topology['devices'][0]))
+    source = '\n'.join(line for line in NETLIST.splitlines() if 'role_models=' not in line)
+    with pytest.raises(ValueError):
+        P.prepare_source_netlist(source, 'blk', topology=topology)
+
+
+def test_existing_model_provenance_preserves_existing_route():
+    prepared, stats = P.prepare_source_netlist(NETLIST, 'blk', topology={'block': 'other'})
+    assert stats['device_calls_rewritten'] == 4
+    assert 'Mmn1' in prepared
+
+
+def test_topology_fallback_does_not_rewrite_same_instance_name_in_another_subcircuit():
+    source = '\n'.join(line for line in NETLIST.splitlines() if 'role_models=' not in line)
+    source += '\n.subckt other a b\nxmn1 a b other_library\n.ends other\n'
+    prepared, stats = P.prepare_source_netlist(source, 'blk', topology=_topology())
+    assert stats['device_calls_rewritten'] == 4
+    assert 'xmn1 a b other_library' in prepared
+
+
+def test_cli_consumes_explicit_topology_and_leaves_dut_unchanged(tmp_path):
+    source = '\n'.join(line for line in NETLIST.splitlines() if 'role_models=' not in line)
+    src, topology, output = [tmp_path / name for name in ('blk.sp', 'topology.json', 'compare.sp')]
+    src.write_text(source)
+    topology.write_text(json.dumps(_topology()))
+    assert P.main([str(src), '--block', 'blk', '--topology', str(topology), '--out', str(output)]) == 0
+    assert 'Mmn1' in output.read_text() and src.read_text() == source
+
+
+def test_topology_instance_letters_consumes_formal_cards_not_prose():
+    from analog_lvs_comparison_prep import topology_instance_letters
+    topology = {"block": "neutral", "devices": [
+        {"name": "mn1", "role": "nmos", "nets": ["not", "g", "s", "b"]}]}
+    header, end = ".subckt neutral not g s b\n", ".ends neutral\n"
+    for prose in ("* do not instantiate Xmn1 not g s b model",
+                  "do not instantiate Xmn1 not g s b model",
+                  "No Xmn1 not g s b model"):
+        assert topology_instance_letters(header + prose + "\n" + end,
+                                         "neutral", topology) == {}
+    assert topology_instance_letters(header + "Xmn1 not g s b model\n" + end,
+                                     "neutral", topology) == {"mn1": "M"}
+    assert topology_instance_letters(".subckt other not g s b\n"
+                                     "Xmn1 not g s b model\n.ends other\n",
+                                     "neutral", topology) == {}

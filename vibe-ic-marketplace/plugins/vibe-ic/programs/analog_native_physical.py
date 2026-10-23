@@ -206,14 +206,22 @@ def _pv(project: Path, name: str, container: str, image: str, pdk: str,
     if failures:
         return _result("FAIL", "native block DRC/LVS reported a violation", reports,
                        metrics=record)
-    # The existing block PV producer has no analog ERC engine. Its DRC/LVS
-    # execution is useful evidence but cannot stand in for the missing ERC.
-    record["erc"] = {"status": "NOT_MEASURED", "reason":
-        "no native block ERC producer accepts the analog GDS/SPICE inputs; "
-        "the existing _native_erc screen requires a routed digital DEF, cell LEF and Liberty"}
-    return _result("NOT_MEASURED", "native DRC/LVS executed; block ERC remains unmeasured"
-                   if record.get("ran") else record.get("reason", "native PV did not run"),
-                   reports, metrics=record)
+    import analog_native_erc as erc
+    erc_record = erc.run(project, name, container=container,
+                         lvs_deck=erc.select_deck(project, resolved, pdk))
+    record["erc"] = erc_record
+    reports.extend(Path(p) for p in erc_record.get("outputs", []))
+    if erc_record.get("status") == "FAIL":
+        return _result("FAIL", "native analog well/tap ERC reported an electrical violation",
+                       reports, metrics=record,
+                       native_inputs=erc_record.get("native_inputs", {}))
+    pv_pass = (drc.get("verdict") == "PASS" and lvs.get("verdict") == "match")
+    complete = pv_pass and erc_record.get("status") == "PASS"
+    return _result("PASS" if complete else "NOT_MEASURED",
+                   "native block DRC/LVS and well/tap ERC passed" if complete else
+                   erc_record.get("detail", "native physical verification remains incomplete"),
+                   reports, metrics=record,
+                   native_inputs=erc_record.get("native_inputs", {}))
 
 
 def _extract(project: Path, name: str, container: str, image: str, pdk: str,

@@ -86,6 +86,54 @@ def unused_supply_projection(model, candidates, declared_supplies):
     return projected
 
 
+def native_fill_inputs(paths):
+    """Select an existing native FillInsertion view through its owning consumer.
+
+    The route-adoption schema remains unchanged. A fill view is authoritative
+    only when the original fill owner revalidates its native input/output chain.
+    """
+    adopted = read(paths['adopted_receipt'])
+    tool = (adopted.get('odb') or {}).get('tool')
+    if not isinstance(tool, dict):
+        return {}
+    import librelane_fill_dfm as fill
+    if tool.get('step') != fill.ODB_FILL_STEP:
+        raise ValueError('unsupported native adopted-view producer')
+    state_path = paths['adopted_state'].resolve()
+    parts = state_path.parts
+    indices = [i for i in range(len(parts) - 1)
+               if parts[i:i + 2] == ('phase3', 'librelane')]
+    if len(indices) != 1:
+        raise ValueError('native fill state has no unique project owner')
+    owner = Path(*parts[:indices[0]])
+    if (paths['adopted_receipt'].resolve() != (owner / fill.RECORD_REL).resolve()
+            or Path(tool['state']).resolve() != state_path
+            or sha(state_path) != tool['state_sha256']):
+        raise ValueError('native fill adopted state/owner differs')
+    receipt = fill.validate_fill_handoff(owner, tool, routed_def=Path(tool['subject']))
+    state = read(state_path)
+    if (Path(state['nl']).resolve() != paths['adopted_netlist'].resolve()
+            or Path(state['def']).resolve() != paths['final_def'].resolve()
+            or sha(paths['final_def']) != tool['filled_def_sha256']):
+        raise ValueError('native fill final netlist/DEF selection differs')
+    binding = tool['binding']
+    dependencies = [state_path, state_path.parent / 'vibeic_receipt.json',
+                    Path(binding['input_state']), Path(binding['config'])]
+    dependencies += [Path(name) for field in ('state_files', 'config_files')
+                     for name in receipt['input'].get(field, {})]
+    if any(not path.is_file() for path in dependencies):
+        raise ValueError('native fill dependency absent')
+    expected = {**receipt['input'].get('state_files', {}),
+                **receipt['input'].get('config_files', {}),
+                str(state_path): tool['state_sha256'],
+                str(state_path.parent / 'vibeic_receipt.json'): binding['receipt_sha256'],
+                str(Path(binding['input_state'])): receipt['input']['state'],
+                str(Path(binding['config'])): receipt['input']['config']}
+    if any(sha(path) != expected[str(path)] for path in dependencies):
+        raise ValueError('native fill input/output dependency changed')
+    return {str(path.resolve()): expected[str(path)] for path in dependencies}
+
+
 def produce(project, manifest_path, output, *, before=None):
     import phase3_one_shot_runner as phase3
     import lec_post_layout_check as legacy
@@ -105,8 +153,9 @@ def produce(project, manifest_path, output, *, before=None):
     wrapper = read(paths['wrapper_record'])
     if (project / wrapper.get('chip_top_verilog', '')).resolve() != paths['wrapper']:
         raise ValueError('wrapper differs from producer receipt')
+    native_inputs = native_fill_inputs(paths)
     adopted, state = read(paths['adopted_receipt']), read(paths['adopted_state'])
-    if (adopted.get('verdict') != 'PASS' or not adopted.get('adopted')
+    if not native_inputs and (adopted.get('verdict') != 'PASS' or not adopted.get('adopted')
             or sha(adopted['adopted_state']) != sha(paths['adopted_state'])
             or sha(state['nl']) != sha(paths['adopted_netlist'])
             or sha(state['def']) != sha(paths['final_def'])):
@@ -131,7 +180,7 @@ def produce(project, manifest_path, output, *, before=None):
         raise ValueError('restored power conditions differ from producer authority')
     yosys = Path(shutil.which('yosys')).resolve()
     inputs = {str(manifest_path): sha(manifest_path),
-              **{str(path): sha(path) for path in paths.values()}}
+              **{str(path): sha(path) for path in paths.values()}, **native_inputs}
     models, projections, outputs, commands = {}, {}, {}, []
     for side, source in [('gold', gold), ('gate', gate)]:
         model_path = output / f'{side}.elaborated.json'

@@ -326,7 +326,7 @@ if a[0] == "run":
         sys.exit(0)
     if "--entrypoint" in a and a[a.index("--entrypoint") + 1] == "python3" \
             and "base64.b64encode" in j:
-        print(base64.b64encode(b"GDSBYTES").decode())
+        print("VIBEIC_UNIT_TESTCASE_B64=" + base64.b64encode(b"GDSBYTES").decode())
         sys.exit(0)
     if "-c" in a and "Config.load" in a[-1]:
         src = re.search(r"p='([^']+)'", a[-1]).group(1)

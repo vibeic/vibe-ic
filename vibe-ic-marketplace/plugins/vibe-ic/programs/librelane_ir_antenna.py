@@ -114,6 +114,129 @@ RC_SOURCE = ("tech LEF (RESISTANCE RPERSQ / cut RESISTANCE) through LibreLane's 
              "LAYERS_RC and VIAS_R are cleared (measured on gf180mcuD: LAYERS_RC "
              "gave PSM 1.08e-4 ohm/sq on Metal2 vs RPERSQ 0.090; VIAS_R applied "
              "the max_* 16.845 ohm to the nom corner, openroad.py Filter(str))")
+CURRENT_STA_RECORD = 'reports/phase3/sta_postpnr_signoff.json'
+
+
+def _current_stapostpnr_ir_inputs(project: Path, image: str, pdk_root: Path,
+                                  pdk: str, config: Dict[str, Any]
+                                  ) -> Optional[Dict[str, Any]]:
+    """Return the current STA owner's exact physical inputs, or no legacy owner.
+
+    A present current-state record is an assertion that Step 24 must consume
+    that native subject.  Its existing receipt/readset/PDK validator therefore
+    either returns the exact ODB/DEF/netlist/SDC/SPEF population or raises; a
+    stale record never falls back to rebuilding an apparently valid ODB from
+    DEF.  Absence alone preserves the legacy bridge route.
+    """
+    project = Path(project).resolve()
+    step23 = project / CURRENT_STA_RECORD
+    if not step23.is_file():
+        return None
+    import _opensta_current as current
+    top = config.get('DESIGN_NAME')
+    if not isinstance(top, str) or not top:
+        raise Refusal('LL_IR_CURRENT_DESIGN_UNDECLARED', str(config.get('meta')))
+    try:
+        subject, tool = current.tool_subject(project, top)
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        raise Refusal('LL_IR_CURRENT_STA_INVALID', str(exc)) from exc
+    if tool.get('image') != image:
+        raise Refusal('LL_IR_CURRENT_IMAGE_MISMATCH',
+                      f"STA={tool.get('image')} IR={image}")
+    expected_pdk = (Path(pdk_root) / pdk).resolve()
+    mounted = []
+    for host, guest in tool.get('mounts') or []:
+        host = Path(host).resolve()
+        if guest == '/pdk':
+            mounted.append((host / pdk).resolve())
+        elif guest == f'/pdk/{pdk}':
+            mounted.append(host)
+        else:
+            raise Refusal('LL_IR_CURRENT_PDK_MOUNT_MISMATCH', str((host, guest)))
+    if not mounted or any(path != expected_pdk for path in mounted):
+        raise Refusal('LL_IR_CURRENT_PDK_MISMATCH',
+                      f'STA={mounted} IR={expected_pdk}')
+    roles = {row.get('role'): row for row in subject.get('inputs') or []
+             if isinstance(row, dict)}
+
+    def bound_role(role: str, code: str, expected: Optional[Path] = None) -> Path:
+        row = roles.get(role) or {}
+        path = Path(row.get('path') or '')
+        try:
+            resolved = path.resolve(strict=True)
+        except OSError as exc:
+            raise Refusal(code, f'{role}: {path}') from exc
+        if (path.is_symlink() or not resolved.is_file()
+                or row.get('sha256') != digest(resolved)
+                or (expected is not None and resolved != expected.resolve())):
+            raise Refusal(code, f'{role}: {path}')
+        return resolved
+
+    state_path = bound_role('tool_state', 'LL_IR_CURRENT_STATE_CHANGED',
+                            Path(tool['state']))
+    receipt_path = bound_role('tool_receipt', 'LL_IR_CURRENT_RECEIPT_CHANGED')
+    config_path = bound_role('tool_config', 'LL_IR_CURRENT_CONFIG_CHANGED')
+    bound_role('step23_record', 'LL_IR_CURRENT_STEP23_CHANGED', step23)
+    state = _load(state_path)
+    fingerprint = (_load(receipt_path).get('input') or {}).get('state_files') or {}
+
+    def bound_view(name: str) -> Path:
+        recorded_path = Path(state.get(name) or '')
+        path = recorded_path if recorded_path.is_absolute() else project / recorded_path
+        try:
+            resolved = path.resolve(strict=True)
+        except OSError as exc:
+            raise Refusal('LL_IR_CURRENT_VIEW_MISSING', f'{name}: {recorded_path}') from exc
+        # The existing current-owner validator above decides whether a
+        # transport-rebound path is authorized.  Keep its exact selected
+        # object (including a validated external original), but independently
+        # require a regular non-symlink file and its executed fingerprint.
+        if path.is_symlink() or not resolved.is_file():
+            raise Refusal('LL_IR_CURRENT_VIEW_INVALID', f'{name}: {recorded_path}')
+        recorded = (fingerprint.get(str(recorded_path)) or fingerprint.get(str(path))
+                    or fingerprint.get(str(resolved)))
+        if recorded != digest(resolved):
+            raise Refusal('LL_IR_CURRENT_VIEW_CHANGED', f'{name}: {recorded_path}')
+        return resolved
+
+    odb, routed_def = bound_view('odb'), bound_view('def')
+    netlist, sdc = bound_view('nl'), bound_view('sdc')
+    for name, path in (('netlist', netlist), ('sdc', sdc)):
+        row = roles.get(name) or {}
+        if (Path(row.get('path') or '').resolve() != path
+                or row.get('sha256') != digest(path)):
+            raise Refusal('LL_IR_CURRENT_LOGICAL_VIEW_MISMATCH', name)
+    spef_row = roles.get('spef') or {}
+    spef = Path(spef_row.get('path') or '')
+    try:
+        spef = spef.resolve(strict=True)
+    except OSError as exc:
+        raise Refusal('LL_IR_CURRENT_VIEW_MISSING', f'spef: {spef}') from exc
+    state_spefs = state.get('spef') or {}
+    values = [state_spefs] if isinstance(state_spefs, str) else list(state_spefs.values())
+    state_spef_paths = {(Path(value) if Path(value).is_absolute()
+                         else project / value).resolve() for value in values}
+    if (not spef.is_file()
+            or spef_row.get('sha256') != digest(spef)
+            or spef not in state_spef_paths):
+        raise Refusal('LL_IR_CURRENT_SPEF_MISMATCH', str(spef))
+
+    def record(path: Path) -> Dict[str, str]:
+        try:
+            named = path.relative_to(project)
+        except ValueError:
+            named = path
+        return {'path': str(named), 'sha256': digest(path)}
+
+    return {'views': {'odb': odb, 'def': routed_def, 'nl': netlist,
+                      'sdc': sdc, 'spef': spef},
+            'records': {name: record(path) for name, path in (
+                ('odb', odb), ('def', routed_def), ('netlist', netlist),
+                ('sdc', sdc), ('spef', spef), ('sta_state', state_path),
+                ('sta_receipt', receipt_path), ('sta_config', config_path),
+                ('step23_record', step23))},
+            'source': 'current validated OpenROAD.STAPostPNR state',
+            'image': image, 'pdk_root': str(Path(pdk_root).resolve()), 'pdk': pdk}
 
 
 def _run_openroad(project: Path, image: str, tcl: Path, log: Path,
@@ -517,6 +640,16 @@ def run_ir(project: Path, image: str, pdk_root: Path, pdk: str, *, routed_def: P
                {'VIBEIC_IR_BUDGET_PCT': budget_pct, 'source': budget_source})
     ir_cfg = configs['OpenROAD.IRDropReport']
     cfg = _config(ir_cfg)
+    current_inputs = _current_stapostpnr_ir_inputs(
+        project, image, pdk_root, pdk, cfg)
+    input_mode = 'current_stapostpnr_odb' if current_inputs else 'legacy_def_bridge'
+    if current_inputs:
+        selected = current_inputs['views']
+        routed_def, netlist, sdc, spef = (selected[name] for name in
+                                          ('def', 'nl', 'sdc', 'spef'))
+        routed_odb = selected['odb']
+    else:
+        routed_odb = None
     cleared = {key: cfg.get(key) for key in ('LAYERS_RC', 'VIAS_R')}
     for step in OPENROAD_IR_STEPS:
         step_cfg = _config(configs[step])
@@ -538,6 +671,16 @@ def run_ir(project: Path, image: str, pdk_root: Path, pdk: str, *, routed_def: P
         write_json(overrides, record)
     cfg = _config(ir_cfg)
     mounts = [(pdk_root.resolve(), PDK_GUEST_ROOT)]
+    if current_inputs:
+        # A current owner may retain the original adopted object outside the
+        # consumer project.  Do not copy or serialize an alias: expose each
+        # already-validated exact file at its same absolute pathname, read
+        # only, through the existing mount seam used by state_from_direct and
+        # run_chain. Project-contained views already ride the project mount.
+        for source in dict.fromkeys(Path(value).resolve()
+                                    for value in current_inputs['views'].values()):
+            if not source.is_relative_to(project):
+                mounts.append((source, str(source)))
     for source in (routed_def, netlist, sdc, spef):
         if not Path(source).is_file():
             raise Refusal('LL_ROUTE_VIEW_MISSING', str(source))
@@ -545,7 +688,8 @@ def run_ir(project: Path, image: str, pdk_root: Path, pdk: str, *, routed_def: P
     patterns = cfg.get('TECH_LEFS') or {}
     spef_key = _pattern_for(corner, patterns) or '*'
     state = state_from_direct(project, image, ir_cfg,
-                              {'def': routed_def, 'nl': netlist, 'sdc': sdc,
+                              {**({'odb': routed_odb} if routed_odb is not None else {}),
+                               'def': routed_def, 'nl': netlist, 'sdc': sdc,
                                'spef': {spef_key: spef}},
                               project / 'phase3/librelane/24-config/bridge',
                               chain=[configs['Vibeic.IRDropChecker']], mounts=mounts)
@@ -556,6 +700,22 @@ def run_ir(project: Path, image: str, pdk_root: Path, pdk: str, *, routed_def: P
                               'vdd_nets': vdd, 'gnd_nets': gnd, 'pad_plan': pads,
                               'spef': str(spef), 'spef_sha256': digest(spef),
                               'routed_def': str(routed_def), 'def_sha256': digest(routed_def),
+                              'input_mode': input_mode,
+                              'selected_inputs': (current_inputs['records'] if current_inputs else {
+                                  'def': {'path': str(Path(routed_def).resolve()),
+                                          'sha256': digest(routed_def)},
+                                  'netlist': {'path': str(Path(netlist).resolve()),
+                                              'sha256': digest(netlist)},
+                                  'sdc': {'path': str(Path(sdc).resolve()),
+                                          'sha256': digest(sdc)},
+                                  'spef': {'path': str(Path(spef).resolve()),
+                                           'sha256': digest(spef)}}),
+                              'input_source_chain': ({key: current_inputs[key] for key in
+                                  ('source', 'image', 'pdk_root', 'pdk')}
+                                  if current_inputs else {
+                                      'source': 'legacy direct DEF bridge',
+                                      'image': image, 'pdk_root': str(Path(pdk_root).resolve()),
+                                      'pdk': pdk}),
                               'budget_pct': budget_pct, 'budget_source': budget_source,
                               'source_probe': source_probe}
     sources = None

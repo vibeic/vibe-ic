@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1484
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1484)
+- **Total programs (excluding helpers / shims):** 1486
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1486)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1475 |
+| `any` | 1477 |
 
 ## Alphabetical listing
 
@@ -96,6 +96,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `analog_hil_three_way_verdict` | any | — | deterministic three-way HIL verdict table. |
 | `analog_hw_spice_correlation_check` | any | — | deterministic gate for HW-vs-SPICE correlation |
 | `analog_hw_tb_de10lite_budget_check` | any | — | DE10-Lite board-budget gate. |
+| `analog_incremental_capture` | any | — | Native held-input incremental conversions and coherent SNDR/ENOB. |
 | `analog_incremental_decimator` | any | — | R-0915-70: the matched decimator for an INCREMENTAL converter, DERIVED from the loop's own recurrence. |
 | `analog_incremental_resolution` | any | — | what resolution an INCREMENTAL loop can actually reach, MEASURED on its own recurrence. |
 | `analog_interface_classify` | any | — | structural L9 top-interface classifier (ORGANIC #144-sibling, filed as #141). |
@@ -107,6 +108,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `analog_macro_rtl_interface_check` | any | — | the digital side of an analog macro's interface, which nothing compared. |
 | `analog_mc_yield_run` | any | — | REAL Monte-Carlo yield execution for the analog track (flow-completeness review P1-1). |
 | `analog_meas_from_spec_gen` | any | — | deterministic `.meas` statement generator from an analog block spec.json. |
+| `analog_native_erc` | any | — | Native well/tap electrical connectivity checks using the IHP LVS extractor. |
 | `analog_native_flow` | any | — | Run the A01-A19 analog track with existing native producers. |
 | `analog_native_front` | any | — | A01--A05 Default execution using the existing analog producers and consumers. |
 | `analog_native_physical` | any | — | Default analog A11--A16: call the existing native producers. |
@@ -1556,7 +1558,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1475 programs)
+### `any` (1477 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `absence_verdict_names_its_search_space_check` — "not found" must say WHERE it looked.
@@ -1628,6 +1630,7 @@ _(no programs in this group)_
 - `analog_hil_three_way_verdict` — deterministic three-way HIL verdict table.
 - `analog_hw_spice_correlation_check` — deterministic gate for HW-vs-SPICE correlation
 - `analog_hw_tb_de10lite_budget_check` — DE10-Lite board-budget gate.
+- `analog_incremental_capture` — Native held-input incremental conversions and coherent SNDR/ENOB.
 - `analog_incremental_decimator` — R-0915-70: the matched decimator for an INCREMENTAL converter, DERIVED from the loop's own recurrence.
 - `analog_incremental_resolution` — what resolution an INCREMENTAL loop can actually reach, MEASURED on its own recurrence.
 - `analog_interface_classify` — structural L9 top-interface classifier (ORGANIC #144-sibling, filed as #141).
@@ -1639,6 +1642,7 @@ _(no programs in this group)_
 - `analog_macro_rtl_interface_check` — the digital side of an analog macro's interface, which nothing compared.
 - `analog_mc_yield_run` — REAL Monte-Carlo yield execution for the analog track (flow-completeness review P1-1).
 - `analog_meas_from_spec_gen` — deterministic `.meas` statement generator from an analog block spec.json.
+- `analog_native_erc` — Native well/tap electrical connectivity checks using the IHP LVS extractor.
 - `analog_native_flow` — Run the A01-A19 analog track with existing native producers.
 - `analog_native_front` — A01--A05 Default execution using the existing analog producers and consumers.
 - `analog_native_physical` — Default analog A11--A16: call the existing native producers.

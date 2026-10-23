@@ -410,6 +410,86 @@ def _source_owned_identity_case(project, monkeypatch):
     return context, component, obligation, retained
 
 
+def _fresh_source_owned_identity_case(project, monkeypatch):
+    """Small on-disk image of execute()'s fresh-native evidence boundary."""
+    attempt = project / 'reports/flow109/D44/fresh'
+    native = attempt / 'native'
+    gold = _put(project, 'reports/flow109/D44/fresh/physical-views/gold.functional.v',
+                'module chip_top(input a, output p); assign p=a; endmodule\n')
+    gate = _put(project, 'reports/flow109/D44/fresh/physical-views/gate.functional.v',
+                'module chip_top(input a, output p); assign p=a; endmodule\n')
+    raw = _put(project, 'inputs/adopted.v',
+               'module chip_top(input a, output p); assign p=a; endmodule\n')
+    model = _put(project, 'inputs/cells.v',
+                 'module cell(input a, output y); assign y=a; endmodule\n')
+    interfaces = {'gold': {'a': ['input', 1], 'p': ['output', 1]},
+                  'gate': {'a': ['input', 1], 'p': ['output', 1]}}
+    preparation_value = {'schema': lec.physical.SCHEMA,
+        'producer': 'flow109_final_lec_physical',
+        'status': 'PREPARED_NOT_EQUIVALENCE_PROVEN', 'kind': lec.physical.KIND,
+        'top': 'chip_top', 'inputs': {}, 'raw_adopted_netlist': raw,
+        'functional_interfaces': interfaces, 'outputs': {'gold': gold, 'gate': gate}}
+    preparation = _put(project,
+                       'reports/flow109/D44/fresh/physical-views/preparation.json',
+                       preparation_value)
+    config_value = {'DESIGN_NAME': 'chip_top',
+        'VERILOG_FILES': [str((project / gold['path']).resolve())],
+        'CELL_VERILOG_MODELS': [str((project / model['path']).resolve())],
+        'meta': {'step': 'Yosys.EQY'}}
+    config = _put(project, 'reports/flow109/D44/fresh/native/config.json', config_value)
+    state = {'nl': str((project / gate['path']).resolve()), 'metrics': {}}
+    state_in = _put(project, 'reports/flow109/D44/fresh/native/state_in.json', state)
+    state_out = _put(project, 'reports/flow109/D44/fresh/native/state_out.json', state)
+    listing = _put(project, 'reports/flow109/D44/fresh/native/scratch/partition.list',
+                   'partition chip_top.p: p\n')
+    pdr = _put(project,
+               'reports/flow109/D44/fresh/native/scratch/strategies/chip_top.p/pdr/status',
+               'PASS\n')
+    sat = _put(project,
+               'reports/flow109/D44/fresh/native/scratch/strategies/chip_top.p/sat/status',
+               'UNKNOWN\n')
+    proof_value = {'program': 'librelane_eqy', 'engine': 'eqy (LibreLane Yosys.EQY)',
+        'verdict': 'PASS', 'explanation': 'all 1 partition(s) proven',
+        'compared_points': 1, 'proven_points': 1, 'non_equivalent_points': [],
+        'unproven_points': [], 'xbits_partitions': [],
+        'partitions': {'chip_top.p': {'pdr': 'PASS', 'sat': 'UNKNOWN'}},
+        'source': str(native.resolve()), 'config_sha256': config['sha256'],
+        'declared_partitions': ['chip_top.p'],
+        'evidence_sha256': {'scratch/partition.list': listing['sha256'],
+            'scratch/strategies/chip_top.p/pdr/status': pdr['sha256'],
+            'scratch/strategies/chip_top.p/sat/status': sat['sha256']}}
+    proof = _put(project, 'reports/flow109/D44/fresh/eqy-result.json', proof_value)
+    current_sources = {'programs/librelane_eqy.py': 'a' * 64,
+        'programs/lec_post_layout_check.py': 'b' * 64,
+        'native/librelane/steps/yosys.py': 'c' * 64,
+        metrics.D44_METRIC_READER_SOURCE: 'd' * 64}
+    sources = {**current_sources, metrics.D44_METRIC_READER_SOURCE: 'e' * 64}
+    monkeypatch.setattr(lec, 'operation_sources', lambda: current_sources)
+    inputs = {record['path']: record['sha256']
+              for record in (gold, gate, raw, model, preparation)}
+    component = {'component_status': 'PASS', 'native_started': True,
+        'native_error': None, 'proof': proof_value, 'proof_receipt': proof,
+        'transformation_receipt': preparation, 'inputs': inputs,
+        'source_sha256': sources,
+        'preprocessing_models': {str((project / model['path']).resolve()): model['sha256']},
+        'model_census': {
+            'gold': {'modules': ['chip_top'], 'ports': {
+                'a': {'direction': 'input', 'bits': [2]},
+                'p': {'direction': 'output', 'bits': [3]}}},
+            'gate': {'modules': ['chip_top'], 'ports': {
+                'a': {'direction': 'input', 'bits': [4]},
+                'p': {'direction': 'output', 'bits': [5]}}}},
+        'metric_bindings': {'schema': lec.METRICS_SCHEMA}}
+    features = next(p['features'] for p in flow109.load_registry()['reference_profiles']
+                    if p['name'] == 'Small digital IC without DFT')
+    context = flow109.execution_context(flow109.resolve_plan(features), 'D44', 'D44')
+    obligation = context['resolved_row']['obligations'][0]
+    records = {'raw': raw, 'model': model, 'preparation': preparation,
+               'config': config, 'state_in': state_in, 'state_out': state_out,
+               'listing': listing, 'pdr': pdr, 'sat': sat, 'proof': proof}
+    return context, component, obligation, records
+
+
 def test_source_owned_D44_identity_reopens_actual_retained_execution(tmp_path, monkeypatch):
     context, component, obligation, _ = _source_owned_identity_case(tmp_path, monkeypatch)
     try:
@@ -424,6 +504,115 @@ def test_source_owned_D44_identity_reopens_actual_retained_execution(tmp_path, m
     assert execution['policy']['reason'] == 'SOURCE_OWNED_EXISTING_NATIVE_COMPONENT'
     assert execution['native_receipt']['sha256']
     assert execution['model_census'] == component['model_census']
+
+
+def test_source_owned_D44_identity_reopens_fresh_native_execution(tmp_path, monkeypatch):
+    context, component, obligation, _ = _fresh_source_owned_identity_case(tmp_path, monkeypatch)
+    identity = metrics._d44_identity(tmp_path, component, context, obligation)
+    execution = identity['tool_execution']['source_owned']
+    assert execution['mode'] == 'fresh_native_executed'
+    assert execution['proof_engine'] == {
+        'program': 'librelane_eqy', 'engine': 'eqy (LibreLane Yosys.EQY)'}
+    assert execution['proof_source_closure'][metrics.D44_METRIC_READER_SOURCE] == 'e' * 64
+    assert execution['current_metric_reader']['sha256'] == 'd' * 64
+    assert identity['configuration']['partition_evidence']
+
+
+def test_outer_D44_metric_reader_accepts_current_fresh_native_execution(tmp_path, monkeypatch):
+    context, component, _, _ = _fresh_source_owned_identity_case(tmp_path, monkeypatch)
+    current = {'schema': lec.METRICS_SCHEMA, 'status': 'PASS', 'metrics': {
+        'final_lec_unproved': {'status': 'PASS', 'value': 0, 'unit': 'count'},
+        'sta_lvs_release_netlist_mapping': {
+            'status': 'PASS', 'reference': {'adopted_netlist_sha256': '1' * 64}}}}
+    monkeypatch.setattr(lec, 'bind_metrics', lambda *_: current)
+    accepted = metrics.accept_d44(tmp_path, context, component)
+    assert accepted['status'] == 'PASS'
+    assert {item['id']: item['status'] for item in accepted['obligations']} == {
+        'final_lec.final_lec_unproved': 'PASS',
+        'final_lec.sta_lvs_release_netlist_mapping': 'PASS'}
+
+
+def test_outer_reader_reopens_common_baseline_across_only_its_source_change(
+        tmp_path, monkeypatch):
+    context, component, _, records = _fresh_source_owned_identity_case(tmp_path, monkeypatch)
+    raw_path = tmp_path / records['raw']['path']
+    gold_path = tmp_path / 'reports/flow109/D44/fresh/physical-views/gold.functional.v'
+    transformations = [{'kind': lec.physical.KIND, 'input': 'input/flow109/physical.json'}]
+    prepared = {'sources': lec.operation_sources(), 'inputs': component['inputs'],
+        'physical_input': transformations[0]['input'],
+        'manifest': {'transformations': transformations},
+        'paths': {'rtl': [gold_path], 'adopted_netlist': raw_path,
+                  'sta': raw_path, 'lvs_reference': raw_path, 'release': raw_path}}
+    monkeypatch.setattr(lec, 'prepare', lambda *_: prepared)
+    baseline_value = {'schema': lec.SCHEMA, 'producer': 'flow109_final_lec',
+        'context_sha256': context['context_sha256'],
+        'source_sha256': component['source_sha256'],
+        'rtl': [lec._record(tmp_path, gold_path)],
+        'adopted_netlist': records['raw'],
+        'consumer_netlists': {role: records['raw']
+                              for role in ('sta', 'lvs_reference', 'release')},
+        'transformations': transformations, 'mapping': 'same_logical_bytes',
+        'consumer_adoption': 'NOT_MEASURED', 'proof': records['proof'],
+        'transformation_receipt': records['preparation']}
+    baseline = _put(tmp_path, lec.BASELINE, baseline_value)
+    component.update(schema=lec.SCHEMA, step_id='D44', execution_context=context,
+                     common_baseline=baseline)
+    accepted = metrics.accept_d44(tmp_path, context, component)
+    assert accepted['status'] == 'PASS'
+    assert all(item['status'] == 'PASS' for item in accepted['obligations'])
+
+    component['source_sha256']['programs/librelane_eqy.py'] = 'f' * 64
+    refused = metrics.accept_d44(tmp_path, context, component)
+    assert refused['status'] == 'FAIL'
+
+
+@pytest.mark.parametrize('damage', ['netlist', 'missing_partition', 'partition_mismatch',
+                                    'config', 'incomplete', 'blackbox', 'producer_source'])
+def test_source_owned_D44_fresh_identity_refuses_stale_incomplete_or_functionless_evidence(
+        tmp_path, monkeypatch, damage):
+    context, component, obligation, records = _fresh_source_owned_identity_case(
+        tmp_path, monkeypatch)
+    if damage == 'netlist':
+        (tmp_path / records['raw']['path']).write_text('module changed; endmodule\n')
+    elif damage == 'missing_partition':
+        (tmp_path / records['pdr']['path']).unlink()
+    elif damage == 'partition_mismatch':
+        proof_path = tmp_path / records['proof']['path']
+        proof = json.loads(proof_path.read_text())
+        proof['partitions']['chip_top.p']['pdr'] = 'UNKNOWN'
+        proof_path.write_text(json.dumps(proof))
+        component['proof'] = proof
+        component['proof_receipt'] = lec._record(tmp_path, proof_path)
+    elif damage == 'config':
+        (tmp_path / records['config']['path']).write_text('{}')
+    elif damage == 'incomplete':
+        proof_path = tmp_path / records['proof']['path']
+        proof = json.loads(proof_path.read_text())
+        proof['declared_partitions'] = []
+        proof_path.write_text(json.dumps(proof))
+        component['proof'] = proof
+        component['proof_receipt'] = lec._record(tmp_path, proof_path)
+    elif damage == 'blackbox':
+        component['model_census']['gate']['modules'] = []
+    else:
+        component['source_sha256']['programs/librelane_eqy.py'] = 'f' * 64
+    with pytest.raises(metrics.MetricRefusal):
+        metrics._d44_identity(tmp_path, component, context, obligation)
+
+
+def test_D44_measured_failure_precedes_fresh_execution_identity_refusal(
+        tmp_path, monkeypatch):
+    context, component, _, _ = _fresh_source_owned_identity_case(tmp_path, monkeypatch)
+    component['native_started'] = False
+    failed = {'status': 'FAIL', 'reason': 'native counterexample'}
+    monkeypatch.setattr(lec, 'bind_metrics', lambda *_: {'metrics': {
+        'final_lec_unproved': failed,
+        'sta_lvs_release_netlist_mapping': failed}})
+    obligations = {item['id']: item for item in context['resolved_row']['obligations']}
+    unproved, mapping, _ = metrics._d44_measurements(
+        tmp_path, context, component, obligations)
+    assert unproved['status'] == mapping['status'] == 'FAIL'
+    assert metrics.accept_d44(tmp_path, context, component)['status'] == 'FAIL'
 
 
 @pytest.mark.parametrize('damage', ['explicit_empty_claim', 'missing_proof', 'proof',

@@ -8,6 +8,7 @@ import shutil
 import subprocess
 
 import pytest
+from flow109_admission import AdmissionRefusal
 
 import flow109
 import flow109_admission as admission
@@ -342,8 +343,9 @@ def test_registry_routes_only_the_existing_default_icarus_component():
     assert row['profile']['dispatch']['adapter'] == 'flow109_final_gls'
     assert row['profile']['dispatch']['native_step_id'] == 'flow109.D71'
     assert set(row['profile']['dispatch']['engine_families']) == {'iverilog', 'vvp'}
-    assert row['metric_acceptance_status'] == 'UNIMPLEMENTED'
-    assert all(item['status'] == 'UNIMPLEMENTED_METRIC_BINDING' for item in row['obligations'])
+    assert row['metric_acceptance_status'] == 'IMPLEMENTED_D71_RUNTIME'
+    assert all(item['status'] == 'IMPLEMENTED_D71_RUNTIME_BINDING'
+               for item in row['obligations'])
 
 
 def test_caller_authored_upstream_pass_receipts_are_not_native_authority(tmp_path):
@@ -536,3 +538,117 @@ def test_substrate_invalid_final_source_or_required_semantics_refuses_before_nat
     assert record['component_status'] == 'NOT_MEASURED' and record['reason'] == reason
     assert record['native_started'] is False
     assert not list((tmp_path / 'reports/flow109/D71').rglob('gls_runs.json'))
+
+
+def test_engineering_admission_is_source_owned_and_cannot_rescue_qualification_claim():
+    features = next(p['features'] for p in flow109.load_registry()['reference_profiles']
+                    if p['name'] == 'Small digital IC without DFT')
+    context = flow109.execution_context(flow109.resolve_plan(features), 'D71', 'D71')
+    request = {'execution_scope': final_gls.ENGINEERING_SCOPE}
+    assert final_gls._engineering_admission(context, request)
+    assert not final_gls._engineering_admission(context, {})
+    with pytest.raises(AdmissionRefusal, match='D71_ENGINEERING_OWNER_REQUIRED'):
+        final_gls._engineering_admission({**context, 'runtime_tool_uses': []}, request)
+
+
+@pytest.mark.parametrize('damage', [None, 'source', 'derived', 'catalog'])
+def test_engineering_bench_reuses_exact_existing_source_and_annotation_only(tmp_path, damage):
+    text = 'module bench; wire y; final_gls_dut dut(.y(y)); initial begin $display("[TB functional] PASS"); $finish; end endmodule\n'
+    # The native source locator uses a line-anchored instance declaration.
+    text = text.replace('final_gls_dut dut', '\nfinal_gls_dut dut')
+    source = _put(tmp_path, 'source/functional.v', text)
+    derived = final_gls.sgs.inject_sdf_annotation(text, 'bench', 'dut', final_gls.sgs.SDF_PLACEHOLDER)
+    target = _put(tmp_path, 'derived/functional.v', derived)
+    catalog = _put(tmp_path, 'source/catalog.json', {'schema': 'vibeic.full_stack_functional.v1',
+        'program': 'full_stack_functional_tb', 'cases': [{'name': 'functional', 'state': 'passed',
+        'tb': 'source/functional.v', 'tb_sha256': source['sha256']}]})
+    item = {'module': 'bench', 'source_testbench': source, 'testbench': target}
+    if damage == 'source': (tmp_path / source['path']).write_text(text + '// changed')
+    if damage == 'derived':
+        (tmp_path / target['path']).write_text(derived.replace('PASS', 'different oracle'))
+        item['testbench'] = final_gls._record(tmp_path, tmp_path / target['path'])
+    if damage == 'catalog': (tmp_path / catalog['path']).write_text('{}')
+    if damage:
+        with pytest.raises(AdmissionRefusal):
+            final_gls._engineering_bench(tmp_path, {'source_catalog': catalog}, 'functional', item, 'final_gls_dut')
+    else:
+        assert len(final_gls._engineering_bench(tmp_path, {'source_catalog': catalog}, 'functional', item, 'final_gls_dut')) == 2
+
+
+def test_engineering_readback_preserves_measured_error_count_without_tb_fail_marker(tmp_path):
+    stdout = tmp_path / 'stdout.log'
+    stdout.write_text('SDF INFO: Putting delay 1\nFAIL: functional fixed-window bit=0\n'
+                      'ARITH_SCENARIO_DONE transactions=25 comparisons=800 errors=24 held_edges=26\n'
+                      'FATAL: scenario comparator\n')
+    (tmp_path / 'gls_runs.json').write_text(json.dumps({'runs': [{'corner': 'tt', 'case': 'functional',
+        'stdout': str(stdout), 'sim_rc': 1}]}))
+    judged = {'verdict': 'NOT_EXECUTED', 'corners': {'tt': {'verdict': 'NOT_EXECUTED',
+        'reasons': ['NOT_EXECUTED'], 'cases': [{'id': 'functional', 'verdict': None}]}}}
+    result = final_gls.engineering_transcript_readback(tmp_path, judged)
+    assert result['verdict'] == 'FAIL'
+    checks = result['existing_case_readback'][0]['source_self_check']['checks']
+    assert checks == {'total': 25, 'comparisons': 800, 'errors': 24}
+    assert result['corners']['tt']['cases'][0]['verdict'] == 'FAIL'
+
+
+def test_final_sampling_cannot_accept_an_arbitrary_delay_or_untyped_tb(tmp_path):
+    source = tmp_path / 'bench.v'
+    source.write_text('module bench; wire y;\nfinal_gls_dut dut(.y(y)); endmodule\n')
+    with pytest.raises(AdmissionRefusal, match='D71_OBSERVATION_UNSUPPORTED'):
+        final_gls.engineering_bench_text(tmp_path, source, 'bench', 'final_gls_dut',
+                                       observation_schedule='choose_a_passing_delay')
+    with pytest.raises(AdmissionRefusal, match='D71_EXISTING_ARITHMETIC_PRODUCER_REQUIRED'):
+        final_gls.engineering_bench_text(tmp_path, source, 'bench', 'final_gls_dut',
+                                       observation_schedule='native_sta_output_deadline')
+
+
+def test_bounded_native_cases_overlap_isolate_outputs_and_preserve_failures(tmp_path):
+    import threading
+    from types import SimpleNamespace
+    import sys
+    sys.path.insert(0, str(final_gls.HERE / 'librelane_plugins'))
+    from librelane.state import DesignFormat
+    barrier = threading.Barrier(4)
+    lock = threading.Lock()
+    active = peak = 0
+    cwd = Path.cwd()
+    def native(child, state):
+        nonlocal active, peak
+        manifest = json.loads(Path(child.config['VIBEIC_GLS_MANIFEST']).read_text())
+        case = manifest['cases'][0]['id']
+        corner = next(iter(state[DesignFormat.SDF]))
+        with lock:
+            active += 1
+            peak = max(peak, active)
+        try:
+            barrier.wait(timeout=10)
+            assert Path.cwd() == cwd
+            if corner == 'zz' and case == 'b':
+                raise RuntimeError('independent native failure')
+            root = Path(child.step_dir)
+            child._run(['actual-native-boundary', case], str(root/'compile.log'), 900, cwd=str(root))
+            (root/'gls_runs.json').write_text(json.dumps({'runs': [{
+                'corner': corner, 'case': case, 'sdf': state[DesignFormat.SDF][corner],
+                'compile_rc': 0, 'sim_rc': 1 if case == 'a' else 0,
+                'stdout': str(root/'stdout.log'), 'compile_log': str(root/'compile.log')}]}))
+        finally:
+            with lock: active -= 1
+    manifest = {'cases': [{'id': n} for n in ['d','c','b','a']]}
+    step = SimpleNamespace(step_dir=str(tmp_path), config={'VIBEIC_GLS_MANIFEST':'full.json'},
+        _run=lambda argv,log,limit,cwd=None: 0)
+    rows = final_gls.run_native_cases(step, {DesignFormat.NETLIST:'actual.v',
+        DesignFormat.SDF:{'zz':'zz.sdf','aa':'aa.sdf'}}, manifest, workers=4, native_run=native)
+    assert peak == 4
+    assert [(r['corner'],r['case']) for r in rows] == sorted((c,n) for c in ['aa','zz'] for n in ['a','b','c','d'])
+    assert len({r['execution']['worker_output'] for r in rows}) == 8
+    assert [r['sim_rc'] for r in rows if r['case']=='a'] == [1,1]
+    assert next(r for r in rows if (r['corner'],r['case'])==('zz','b'))['compile_rc'] == 125
+    assert len(json.loads((tmp_path/'gls_runs.json').read_text())['runs']) == 8
+    assert Path.cwd() == cwd
+
+
+@pytest.mark.parametrize('workers', [0, 5, True, '4'])
+def test_native_case_worker_budget_cannot_expand(workers, tmp_path):
+    from types import SimpleNamespace
+    with pytest.raises(AdmissionRefusal, match='D71_CASE_WORKERS_INVALID'):
+        final_gls.run_native_cases(SimpleNamespace(step_dir=str(tmp_path)), {}, {}, workers=workers)

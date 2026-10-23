@@ -45,6 +45,7 @@ reported as two `MatchWithWarning` devices and three mismatched nets.
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import sys
 from pathlib import Path
@@ -126,7 +127,9 @@ def _split_call(rest: str) -> Optional[Tuple[List[str], str, List[str]]]:
     return toks[:mi], toks[mi], toks[mi + 1:]
 
 
-def device_calls_to_elements(text: str, letters: Dict[str, str]
+def device_calls_to_elements(text: str, letters: Dict[str, str],
+                             instance_letters: Optional[Dict[str, str]] = None,
+                             instance_block: Optional[str] = None
                              ) -> Tuple[str, int]:
     """Rewrite `X<name> <nets> <model> <params>` to `<letter><name> …`.
 
@@ -135,13 +138,20 @@ def device_calls_to_elements(text: str, letters: Dict[str, str]
     """
     out: List[str] = []
     n = 0
+    selected = instance_block is None
     for line in text.splitlines():
+        begin = _SUBCKT_RE.match(line)
+        if instance_block is not None and begin:
+            selected = begin.group(1).lower() == instance_block.lower()
+        elif instance_block is not None and re.match(r"(?i)^\s*\.ends\b", line):
+            selected = False
         m = _XCALL_RE.match(line)
         if m:
             parts = _split_call(m.group(3))
             if parts:
                 nets, model, params = parts
-                letter = letters.get(model.lower())
+                letter = letters.get(model.lower()) or (
+                    (instance_letters or {}).get(m.group(2).lower()) if selected else None)
                 if letter:
                     out.append(("%s%s%s %s %s %s" % (
                         m.group(1), letter, m.group(2), " ".join(nets),
@@ -163,7 +173,46 @@ def strip_model_libraries(text: str) -> Tuple[str, int]:
     return "\n".join(keep) + ("\n" if text.endswith("\n") else ""), n
 
 
-def prepare_source_netlist(text: str, block: str, grid_um: float = 0.01
+def topology_instance_letters(text: str, block: str, topology: dict) -> Dict[str, str]:
+    """Use declared device identities, roles and exact terminal order as fallback."""
+    if not isinstance(topology, dict) or str(topology.get("block", "")).lower() != block.lower():
+        raise ValueError("comparison topology does not declare this block")
+    devices = topology.get("devices")
+    if not isinstance(devices, list):
+        raise ValueError("comparison topology has no declared device list")
+    declared = {}
+    for device in devices:
+        if not isinstance(device, dict) or not isinstance(device.get("name"), str):
+            raise ValueError("comparison topology device identity absent")
+        name = device["name"].lower()
+        if name in declared:
+            raise ValueError("comparison topology has duplicate device identity: " + name)
+        declared[name] = device
+    selected, out = False, {}
+    for line in text.splitlines():
+        begin = _SUBCKT_RE.match(line)
+        if begin:
+            selected = begin.group(1).lower() == block.lower()
+        elif re.match(r"(?i)^\s*\.ends\b", line):
+            selected = False
+        call = _XCALL_RE.match(line) if selected else None
+        if not call or call.group(2).lower() not in declared:
+            continue
+        device = declared[call.group(2).lower()]
+        parts = _split_call(call.group(3))
+        nets = device.get("nets")
+        if (parts is None or not isinstance(nets, list) or
+                not all(isinstance(net, str) for net in nets) or
+                [net.lower() for net in parts[0]] != [net.lower() for net in nets]):
+            raise ValueError("comparison topology terminals differ for " + call.group(2))
+        letter = ROLE_ELEMENT.get(str(device.get("role", "")).lower())
+        if letter:
+            out[call.group(2).lower()] = letter
+    return out
+
+
+def prepare_source_netlist(text: str, block: str, grid_um: float = 0.01,
+                           topology: Optional[dict] = None
                            ) -> Tuple[str, Dict[str, int]]:
     """The comparison-side copy of a block's source netlist.
 
@@ -174,12 +223,16 @@ def prepare_source_netlist(text: str, block: str, grid_um: float = 0.01
     """
     text, n_lib = strip_model_libraries(text)
     letters = model_element_letters(role_models(text))
-    text, n_dev = device_calls_to_elements(text, letters)
+    instances = topology_instance_letters(text, block, topology) if not letters and topology is not None else {}
+    text, n_dev = device_calls_to_elements(text, letters, instances, block)
     text = "\n".join(grid_snap_spice_params(l, grid_um)
                      for l in text.splitlines()) + "\n"
-    return text, {"model_libraries_dropped": n_lib,
+    stats = {"model_libraries_dropped": n_lib,
                   "device_calls_rewritten": n_dev,
                   "models_mapped": len(letters)}
+    if instances:
+        stats["topology_instances_mapped"] = len(instances)
+    return text, stats
 
 
 #: KLayout script that writes a comparison-side copy of a block GDS keeping only
@@ -217,9 +270,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--block", required=True)
     ap.add_argument("--out", required=True)
     ap.add_argument("--grid-um", type=float, default=0.01)
+    ap.add_argument("--topology", help="explicit declared device roles when netlist role provenance is absent")
     a = ap.parse_args(argv)
     src = Path(a.netlist).read_text()
-    text, stats = prepare_source_netlist(src, a.block, a.grid_um)
+    topology = json.loads(Path(a.topology).read_text()) if a.topology else None
+    text, stats = prepare_source_netlist(src, a.block, a.grid_um, topology)
     # Atomic (vibe-ic#1082): the prepared deck is the comparison INPUT of the
     # LVS run that follows; a half-written one would compare a truncated
     # netlist and report the truncation as a mismatch.

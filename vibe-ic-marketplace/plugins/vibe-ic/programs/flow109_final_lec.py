@@ -135,6 +135,9 @@ def prepare(project, context):
             physical_inputs[str(path)] = _sha(path)
         path = _bound(project, transforms[0]['input'])
         physical_inputs[str(path)] = _sha(path)
+        physical_inputs.update(physical.native_fill_inputs({
+            name: _bound(project, physical_manifest[name])
+            for name in ('adopted_netlist', 'adopted_state', 'adopted_receipt', 'final_def')}))
     roles = manifest.get('consumer_netlists')
     if not isinstance(roles, dict) or set(roles) != {'sta', 'lvs_reference', 'release'}:
         raise AdmissionRefusal('D44_CONSUMER_BASELINE_ABSENT', 'STA/LVS-reference/release must all have a source')

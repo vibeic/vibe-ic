@@ -125,6 +125,15 @@ _SEARCH_ATTRS = {"search", "findall", "finditer", "match", "fullmatch"}
 #: The count is printed on every run, clean or not.
 _EXEMPT_REASON_MIN = 80
 _NOT_PROSE: Dict[str, str] = {
+    "analog_lvs_comparison_prep::topology_instance_letters":
+        "FORMAL SPICE SUBCIRCUIT AND INSTANCE CARDS, NOT PROSE. Anchored "
+        ".subckt/.ends cards select the declared block; an anchored X-instance "
+        "must match a declared topology identity and its exact ordered nets "
+        "before a role supplies an element letter. Commented/negated/instructional "
+        "sentences are not instance cards; a literal net named not is valid "
+        "SPICE and must not be treated as prose negation. Falsifier: "
+        "test_analog_lvs_comparison_prep::"
+        "test_topology_instance_letters_consumes_formal_cards_not_prose.",
     "analog_a8_hardmacro_emit::_delivered_measurement_deck":
         "FORMAL SPICE CIRCUIT CARDS, NOT PROSE. Skips blank/comment/control "
         "cards and requires one named DUT instance with its exact ordered "

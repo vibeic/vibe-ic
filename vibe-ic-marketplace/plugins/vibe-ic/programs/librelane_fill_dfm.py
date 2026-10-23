@@ -905,7 +905,7 @@ def _record_provider_binding(project: Path, fingerprint: dict) -> str:
         image = fingerprint.get('image')
         native._retained_local_provider(project, fingerprint['local_provider'], image)
         return image
-    return resolve_image(project)
+    return resolve_image(project, record=False)
 
 
 def validate_fill_handoff(project: Path, record: dict, *, routed_def: Path) -> dict:

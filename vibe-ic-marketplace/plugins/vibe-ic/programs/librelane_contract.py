@@ -4369,7 +4369,8 @@ def _state_step_id(folder: Path) -> str | None:
     return None
 
 
-def post_pnr_timing_inputs(project: Path, state_path: Path, corner: str) -> dict:
+def post_pnr_timing_inputs(project: Path, state_path: Path, corner: str, *,
+                           allowed_external: set[Path] | None = None) -> dict:
     """The routed netlist, SDC, SPEF and cell libraries `OpenROAD.STAPostPNR`
     timed `corner` with, as project-relative paths.
 
@@ -4377,7 +4378,10 @@ def post_pnr_timing_inputs(project: Path, state_path: Path, corner: str) -> dict
     the one whose corner pattern matches `corner` (the same `fnmatch` rule
     LibreLane applies). The cell libraries are the ones the step's own
     `<corner>/sta.log` says it read. A corner the step did not analyse, an
-    ambiguous or absent SPEF, or a view outside the project is refused.
+    ambiguous or absent SPEF, or a view outside the project is refused. A
+    caller that independently reopened an immutable original owner may name
+    its exact resolved files in ``allowed_external``; no directory-wide
+    exception is inferred here.
     """
     folder = state_path.parent
     step = _state_step_id(folder)
@@ -4402,6 +4406,7 @@ def post_pnr_timing_inputs(project: Path, state_path: Path, corner: str) -> dict
     if not libraries:
         raise Refusal('LL_CORNER_LIBRARY_UNREAD', str(log))
     root = project.resolve()
+    allowed = {Path(path).resolve() for path in (allowed_external or set())}
     result: dict[str, Any] = {'step': step, 'corner': corner,
                               'liberties': libraries}
     for key, value in (('sta_netlist', state.get('nl')),
@@ -4411,10 +4416,13 @@ def post_pnr_timing_inputs(project: Path, state_path: Path, corner: str) -> dict
         if not value or not path.is_file():
             raise Refusal('LL_STATE_FILE_MISSING',
                           f'{key}: no file at path {value!r}')
-        if not path.resolve().is_relative_to(root):
+        resolved = path.resolve()
+        if not resolved.is_relative_to(root) and resolved not in allowed:
             raise Refusal('LL_STATE_OUTSIDE_PROJECT', f'{key}: {value}')
-        result[key] = str(path.resolve().relative_to(root))
-    result['sha256'] = {key: digest(root / result[key])
+        result[key] = (str(resolved.relative_to(root))
+                       if resolved.is_relative_to(root) else str(resolved))
+    result['sha256'] = {key: digest(Path(result[key]) if Path(result[key]).is_absolute()
+                                    else root / result[key])
                         for key in ('sta_netlist', 'sdc', 'spef', 'state')}
     return result
 

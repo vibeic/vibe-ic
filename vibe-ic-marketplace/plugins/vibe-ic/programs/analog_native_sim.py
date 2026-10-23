@@ -340,6 +340,58 @@ def _source_deck_coverage(spec_path, deck):
     return metrics, "; ".join(absent)
 
 
+def attributed_study_measurements(spec_path, bindings, values):
+    """Grade explicitly attributed native contexts against existing source limits."""
+    required = _source_measurement_coverage(spec_path, [])["required"]
+    limits = _bounds(spec_path, {}, required)
+    normalize = lambda key: sweep.normalize_spec_label(str(key)) or str(key).casefold()
+    unit = lambda value: str(value).replace("µ", "u").replace("μ", "u")
+    rows = []
+    for label, value in values.items():
+        binding = (bindings.get("measurements") or {}).get(label) or {}
+        key = normalize(binding.get("spec_key", label))
+        if key not in required:
+            continue  # An engineering point is not an undeclared global metric.
+        bound = limits.get(key) or {}
+        numeric = isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+        compatible = not bound.get("unit") or unit(binding.get("unit")) == unit(bound["unit"])
+        edges = [bound[edge] for edge in ("min", "max") if edge in bound]
+        valid_limits = bool(edges) and all(isinstance(limit, (int, float)) and
+            not isinstance(limit, bool) and math.isfinite(limit) for limit in edges)
+        row = {"name": key, "label": label, "value": value, "unit": binding.get("unit"),
+               "status": "PASS" if numeric and compatible and valid_limits else "NOT_MEASURED"}
+        if binding.get("interpretation") == "upper_bound_when_regulated":
+            paired = binding.get("regulation_measurement")
+            pair_binding = (bindings.get("measurements") or {}).get(paired) or {}
+            pair_value, regulated = values.get(paired), limits.get("vout") or {}
+            regulation_limits = [regulated[edge] for edge in ("min", "max") if edge in regulated]
+            valid_regulation_limits = bool(regulation_limits) and all(
+                isinstance(limit, (int, float)) and not isinstance(limit, bool) and math.isfinite(limit)
+                for limit in regulation_limits)
+            same_point = all(binding.get(field) == pair_binding.get(field)
+                             for field in ("analysis", "at", "frequency_hz"))
+            regulation_ok = (same_point and normalize(pair_binding.get("spec_key", paired)) == "vout"
+                and isinstance(pair_value, (int, float)) and not isinstance(pair_value, bool)
+                and math.isfinite(pair_value) and valid_regulation_limits
+                and (not regulated.get("unit") or unit(pair_binding.get("unit")) == unit(regulated["unit"]))
+                and all((edge != "min" or pair_value >= limit) and
+                        (edge != "max" or pair_value <= limit) for edge, limit in regulated.items()
+                        if edge in ("min", "max")))
+            row.update(interpretation="upper_bound_when_regulated", regulation_measurement=paired,
+                       regulation_valid=regulation_ok)
+            if not regulation_ok:
+                row["status"] = "NOT_MEASURED"
+            if not numeric or value < 0:
+                row.update(status="NOT_MEASURED", detail="dropout headroom upper bound must be nonnegative")
+            elif valid_limits and (("max" in bound and value > bound["max"]) or "min" in bound):
+                row.update(status="NOT_MEASURED", detail="an upper bound alone does not establish this source limit")
+        row["violation"] = row["status"] == "PASS" and any(
+            (edge == "min" and value < limit) or (edge == "max" and value > limit)
+            for edge, limit in bound.items() if edge in ("min", "max"))
+        rows.append(row)
+    return rows
+
+
 def _bound_studies(project, name, config, options, run, step):
     """Consume/run ordinary explicit measurement inputs, keeping scope partial."""
     netlist, _deck, spec = _inputs(project, name, config)
@@ -351,6 +403,7 @@ def _bound_studies(project, name, config, options, run, step):
     if not isinstance(entries, list) or not entries:
         return None
     values, units, studies, outputs, executions = {}, {}, [], [], []
+    attributed, definitions, analyses, native_inputs = [], set(), set(), {}
 
     def valid(record, template, bindings_path, bindings):
         if not isinstance(record, dict) or record.get("bindings") != bindings:
@@ -385,6 +438,17 @@ def _bound_studies(project, name, config, options, run, step):
                 return False
         # The native transcript is the value authority, even for retained JSON.
         transcript = "\n".join(Path(execution["log"]).read_text(errors="replace") for execution in native)
+        expected_temperature = (bindings.get("analysis") or {}).get("temperature_c")
+        if expected_temperature is not None:
+            if (isinstance(expected_temperature, bool) or
+                    not isinstance(expected_temperature, (int, float)) or
+                    not math.isfinite(expected_temperature) or expected_temperature <= -273.15):
+                return False
+            native_temperatures = [float(value) for value in re.findall(
+                r"(?i)Doing analysis at TEMP\s*=\s*([-+\d.eE]+)", transcript)]
+            if (not native_temperatures or not all(math.isclose(value, expected_temperature,
+                    rel_tol=0, abs_tol=1e-6) for value in native_temperatures)):
+                return False
         actual = {key.casefold(): value for key, value in sweep.native_meas_rows(transcript).items()}
         for match in sweep._MEAS_LINE_RE.finditer(transcript):
             for key, value in sweep._KV_RE.findall(match.group(1)):
@@ -394,6 +458,22 @@ def _bound_studies(project, name, config, options, run, step):
     previous = ((options.get("previous_results") or {}).get("A06") or {}).get(name) or {}
     retained_studies = (previous.get("metrics") or {}).get("native_measurement_studies") or []
     for entry in entries:
+        if isinstance(entry, dict) and entry.get("kind") == "incremental_capture":
+            import analog_incremental_capture as incremental
+            row = incremental.consume_study(project, name, entry, options, run, step)
+            studies.append(row)
+            outputs += row.get("outputs", [])
+            executions += row.get("executions", [])
+            native_inputs.update(row.get("native_inputs", {}))
+            if row["status"] == "PASS":
+                definitions.update(row.get("definitions", []))
+                analyses.update(row.get("analyses", []))
+                measured = row.get("measurements", {})
+                values.update(measured)
+                binding = {"measurements": {key: {"unit": "bit" if key == "enob" else "dB"}
+                                             for key in measured}}
+                attributed += attributed_study_measurements(spec, binding, measured)
+            continue
         if not isinstance(entry, dict) or not entry.get("testbench") or not entry.get("bindings"):
             studies.append({"status": "NOT_MEASURED", "detail": "measurement study lacks template/bindings"})
             continue
@@ -445,24 +525,49 @@ def _bound_studies(project, name, config, options, run, step):
         if record.get("capture"):
             outputs.append(record["capture"]["path"])
         if state == "PASS":
+            graded = attributed_study_measurements(spec, bindings, record.get("measurements", {}))
+            attributed += graded
+            definitions.update(row["name"] for row in graded if row["status"] == "PASS")
+            analyses.add("." + str((bindings.get("analysis") or {}).get("kind", "")).lower())
+            native_inputs.update({f"study:{len(studies)}:{role}": view
+                                  for role, view in (record.get("native_inputs") or {}).items()})
             for key, value in record.get("measurements", {}).items():
                 if key not in values:
                     values[key] = value
                     units[key] = (bindings.get("measurements", {}).get(key) or {}).get("unit")
-    limits = _bounds(spec, config, list(values))
-    compatible = lambda key: not limits.get(key, {}).get("unit") or str(units.get(key)).replace("µ", "u").replace("μ", "u") == str(limits[key]["unit"]).replace("µ", "u").replace("μ", "u")
-    violations = [key for key, value in values.items() if key in limits and compatible(key)
-                  and any(isinstance(limits[key].get(edge), (int, float))
-                          and ((edge == "min" and value < limits[key][edge]) or (edge == "max" and value > limits[key][edge]))
-                          for edge in ("min", "max"))]
-    coverage = _source_measurement_coverage(spec, [{"name": key, "value": value,
-        "status": "PASS" if compatible(key) else "NOT_MEASURED"} for key, value in values.items()])
+    violations = [row["label"] for row in attributed if row["violation"]]
+    coverage = _source_measurement_coverage(spec, attributed)
+    missing_analyses = sorted(set(coverage.get("analyses", [])) - analyses)
+    method_missing = sorted(set(coverage["required"]) - definitions)
     metrics = {**values, "native_measurement_studies": studies, "source_measurement_coverage": coverage,
+               "attributed_measurements": attributed,
+               "measurement_definition_coverage": {"source_required": coverage["required"],
+                    "defined": sorted(definitions), "missing": method_missing},
+               "analysis_coverage": {"source_required": coverage.get("analyses", []),
+                    "observed": sorted(analyses), "missing": missing_analyses},
                "measured_spec_violations": violations,
-               "ungraded_native_units": [key for key in values if key in limits and not compatible(key)]}
-    return _result("FAIL" if violations or any(row["status"] == "FAIL" for row in studies) else "NOT_MEASURED",
+               "ungraded_native_units": [row["label"] for row in attributed if row["status"] != "PASS"]}
+    complete = (bool(coverage["required"]) and not missing_analyses
+                and not (method_missing if step == "A06" else coverage["missing"])
+                and all(row["status"] == "PASS" for row in studies)
+                and all(row["status"] == "PASS" for row in attributed))
+    status = "FAIL" if violations or any(row["status"] == "FAIL" for row in studies) else "PASS" if complete else "NOT_MEASURED"
+    result = _result(status,
+                   "native study methods cover source requirements" if complete and step == "A06" else
+                   "native study measurements cover source requirements" if complete else
                    "explicit native studies retained; whole-block measurement coverage remains incomplete",
                    outputs=outputs, metrics=metrics, executions=executions)
+    result["native_inputs"] = native_inputs
+    return result
+
+
+def _has_incremental_study(project, name, config):
+    entries = config.get("measurement_studies")
+    if entries is None:
+        entries = _read(project / "phase3/analog" / name / "measurement_studies.json")
+        entries = entries.get("studies", []) if isinstance(entries, dict) else entries
+    return isinstance(entries, list) and any(isinstance(entry, dict) and
+        entry.get("kind") == "incremental_capture" for entry in entries)
 
 
 def _nominal(project, name, config, options, run, *, step="A07"):
@@ -472,19 +577,27 @@ def _nominal(project, name, config, options, run, *, step="A07"):
                      for role, path in (("netlist", netlist), ("testbench", deck), ("spec", spec_path))}
 
     def result(status, detail, **values):
-        return {**_result(status, detail, **values), "native_inputs": native_inputs}
+        measured_inputs = values.pop("native_inputs", {})
+        return {**_result(status, detail, **values), "native_inputs": {**native_inputs, **measured_inputs}}
 
     status, detail, required = _validate_deck(netlist, deck, config)
     if status != "PASS":
+        studies = _bound_studies(project, name, config, options, run, step) if (
+            status == "NOT_MEASURED" and netlist.is_file()) else None
+        if studies is not None:
+            return result(studies["status"], studies["detail"], metrics=studies["metrics"],
+                          outputs=studies["outputs"], executions=studies["executions"],
+                          native_inputs=studies.get("native_inputs", {}))
         return result(status, detail)
     if step == "A07":
         readiness, missing = _source_deck_coverage(spec_path, deck)
         if missing:
             studies = _bound_studies(project, name, config, options, run, step)
             if studies is not None:
-                return result(studies["status"], missing + "; " + studies["detail"],
+                return result(studies["status"], studies["detail"] if studies["status"] == "PASS" else
+                              missing + "; " + studies["detail"],
                               metrics={**readiness, **studies["metrics"]}, outputs=studies["outputs"],
-                              executions=studies["executions"])
+                              executions=studies["executions"], native_inputs=studies.get("native_inputs", {}))
             return result("NOT_MEASURED", missing, metrics=readiness)
     execution = run("@ngspice", ["-b", str(deck)], cwd=deck.parent)
     transcript = _log_text(execution)
@@ -569,7 +682,8 @@ def run_step(step_id, project, block, options, run):
         config = {**config, **calibration}
     if step_id in ("A07", "A08", "A09", "A10"):
         active = _active_runs(options, name)
-        if active or name in (options.get("active_blocks") or []):
+        independent_capture = step_id == "A07" and _has_incremental_study(project, name, config)
+        if (active or name in (options.get("active_blocks") or [])) and not independent_capture:
             return _result("NOT_MEASURED", "existing native jobs are running; duplicate simulation was not launched",
                            executions=active)
     if step_id == "A06":
@@ -578,6 +692,13 @@ def run_step(step_id, project, block, options, run):
         executions, outputs = [], [str(deck)] if deck.is_file() else []
         metrics = {"required_measurements": required}
         if status != "PASS":
+            studies = _bound_studies(project, name, config, options, run, step_id) if (
+                status == "NOT_MEASURED" and netlist.is_file()) else None
+            if studies is not None:
+                result = _result(studies["status"], studies["detail"], outputs=studies["outputs"],
+                    metrics=studies["metrics"], executions=studies["executions"])
+                result["native_inputs"] = studies.get("native_inputs", {})
+                return result
             return _result(status, detail, outputs=outputs, metrics=metrics)
         coverage, missing = _source_deck_coverage(spec, deck)
         metrics.update(coverage)
@@ -594,11 +715,14 @@ def run_step(step_id, project, block, options, run):
             status, detail = "NOT_MEASURED", missing
             studies = _bound_studies(project, name, config, options, run, step_id)
             if studies is not None:
-                status, detail = studies["status"], detail + "; " + studies["detail"]
+                status, detail = studies["status"], studies["detail"] if studies["status"] == "PASS" else detail + "; " + studies["detail"]
                 metrics.update(studies["metrics"])
                 outputs += studies["outputs"]
                 executions += studies["executions"]
-        return _result(status, detail, outputs=outputs, metrics=metrics, executions=executions)
+        result = _result(status, detail, outputs=outputs, metrics=metrics, executions=executions)
+        if missing and studies is not None:
+            result["native_inputs"] = studies.get("native_inputs", {})
+        return result
     if step_id in ("A07", "A10"):
         if step_id == "A07" and config.get("nominal_testbench"):
             config = {**config, "testbench": config["nominal_testbench"]}

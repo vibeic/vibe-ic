@@ -465,6 +465,7 @@ EXPECTED_CALL_SITES = {
     '_ppa/synthesis.py::run_exploration': 1,
     'analog_a6_librelane_drc.py::_Arm.run': 1,
     'analog_a7_post_layout_emit.py::run': 1,
+    'analog_native_physical.py::_extract': 1,
     'design_one_shot_runner.py::step_rtl_lint_tool': 1,
     'execution_backend_producers.py::_cts_split': 1,
     'execution_backend_producers.py::_state_chain': 1,

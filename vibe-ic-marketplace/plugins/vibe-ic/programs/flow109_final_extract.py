@@ -42,6 +42,50 @@ def _bound(project, ref):
     return files._bound(Path(project), ref)
 
 
+def _retained_geometry(project, manifest):
+    """Reopen the existing Default native owner; never translate its verdict."""
+    import librelane_fill_dfm as retained
+    import _physical_current as current
+    ref = manifest.get('retained_default_fill')
+    report = _bound(project, ref)
+    if report.parts[-3:] != ('reports', 'phase3', 'fill_librelane.json'):
+        raise AdmissionRefusal('D69_RETAINED_OWNER_INVALID', str(report))
+    owner = report.parents[2]
+    stream = retained.validate_default_stream(owner)
+    document = _read(report)
+    tool = document['odb']['tool']
+    state_path = Path(tool['state'])
+    from librelane_contract import digest, validate_step_receipt
+    validate_step_receipt(state_path.parent, retained.ODB_FILL_STEP)
+    if digest(state_path) != tool['state_sha256']:
+        raise AdmissionRefusal('D69_RETAINED_STATE_CHANGED', str(state_path))
+    state = _read(state_path)
+    if not Path(state['odb']).resolve().is_relative_to(state_path.parent.resolve()):
+        raise AdmissionRefusal('D69_RETAINED_ODB_UNBOUND', str(state['odb']))
+    if digest(Path(state['def'])) != tool['filled_def_sha256']:
+        raise AdmissionRefusal('D69_RETAINED_DEF_CHANGED', str(state['def']))
+    actual = current.default_signoff_inputs(owner)
+    views = manifest.get('adopted_views') or {}
+    if not actual or set(views) != {'netlist', 'sdc'}:
+        raise AdmissionRefusal('D69_ADOPTED_VIEWS_ABSENT', 'current netlist and SDC required')
+    expected_sdc = Path(actual.get('sdc') or owner / 'phase3/stage3/pnr/constraint.sdc')
+    for key, expected in [('netlist', Path(actual['netlist'])), ('sdc', expected_sdc)]:
+        if _bound(project, views[key]).resolve() != expected.resolve():
+            raise AdmissionRefusal('D69_RETAINED_ADOPTED_VIEW_MISMATCH', key)
+    if Path(actual['gds']).resolve() != Path(stream['canonical']).resolve():
+        raise AdmissionRefusal('D69_RETAINED_GDS_MISMATCH', str(actual['gds']))
+    if manifest.get('librelane', {}).get('image', stream['image']) != stream['image']:
+        raise AdmissionRefusal('D69_RETAINED_IMAGE_MISMATCH', 'native image differs from stream owner')
+    # Native cell-fill/stream evidence is not a dbFill census or fill-sensitive RC proof.
+    geometry = {'odb': files._record(project, Path(state['odb'])),
+                'filled_def': files._record(project, Path(state['def'])),
+                'retained_default_fill': ref,
+                'native_fill_state': files._record(project, state_path),
+                'native_fill_receipt': files._record(project, state_path.parent / 'vibeic_receipt.json'),
+                'final_gds': files._record(project, Path(actual['gds']))}
+    return geometry
+
+
 def _native_refusal_status(code):
     return 'FAIL' if code == 'LL_STEP_FAILED' else 'NOT_MEASURED'
 
@@ -80,7 +124,9 @@ def _component_scope(record, d62):
 
 def operation_sources():
     paths = (Path(__file__), Path(signoff.__file__), Path(files.__file__),
-             Path(density.__file__), Path(__file__).with_name('spef_extraction_check.py'))
+             Path(density.__file__), Path(__file__).with_name('spef_extraction_check.py'),
+             Path(__file__).with_name('librelane_fill_dfm.py'),
+             Path(__file__).with_name('_physical_current.py'))
     return {str(path.resolve()): _sha(path) for path in paths}
 
 
@@ -98,18 +144,29 @@ def execute(project, context):
         manifest = _read(project / INPUT)
         if manifest.get('schema') != SCHEMA:
             raise AdmissionRefusal('D69_REQUIRED_INPUT_INVALID', 'schema')
-        d62 = density.validate_filled_odb(project, manifest.get('d62_receipt'))
-        bridge = files.validate_bridge(project, manifest.get('stream_bridge'))
-        if bridge['d62_receipt'] != manifest['d62_receipt'] or bridge['odb'] != d62['odb']:
-            raise AdmissionRefusal('D69_FINAL_GEOMETRY_MISMATCH', 'stream-out and D62 ODB differ')
+        retained_geometry = None
+        if manifest.get('retained_default_fill') is not None:
+            if manifest.get('d62_receipt') is not None or manifest.get('stream_bridge') is not None:
+                raise AdmissionRefusal('D69_GEOMETRY_AUTHORITY_AMBIGUOUS', 'one native owner required')
+            retained_geometry = _retained_geometry(project, manifest)
+            d62 = {}
+            bridge = {'odb': retained_geometry['odb']}
+            odb = _bound(project, bridge['odb'])
+            d62_path = _bound(project, manifest['retained_default_fill'])
+            routed_def = _bound(project, retained_geometry['filled_def'])
+        else:
+            d62 = density.validate_filled_odb(project, manifest.get('d62_receipt'))
+            bridge = files.validate_bridge(project, manifest.get('stream_bridge'))
+            if bridge['d62_receipt'] != manifest['d62_receipt'] or bridge['odb'] != d62['odb']:
+                raise AdmissionRefusal('D69_FINAL_GEOMETRY_MISMATCH', 'stream-out and D62 ODB differ')
+            odb, d62_path = _bound(project, bridge['odb']), _bound(project, manifest['d62_receipt'])
+            d62doc = _read(d62_path)
+            routed_def = _bound(project, d62doc['outputs']['filled.def'])
         fill_scope = _fill_extraction_scope(d62)
         result['fill_sensitive_parasitics'] = fill_scope
         native = manifest.get('librelane') or {}
         if set(native) != {'image', 'pdk_root', 'pdk'}:
             raise AdmissionRefusal('D69_NATIVE_CONFIGURATION_ABSENT', 'image/pdk_root/pdk required')
-        odb, d62_path = _bound(project, bridge['odb']), _bound(project, manifest['d62_receipt'])
-        d62doc = _read(d62_path)
-        routed_def = _bound(project, d62doc['outputs']['filled.def'])
         views = manifest.get('adopted_views') or {}
         if set(views) != {'netlist', 'sdc'}:
             raise AdmissionRefusal('D69_ADOPTED_VIEWS_ABSENT', 'netlist and SDC required')
@@ -130,7 +187,8 @@ def execute(project, context):
         result.update(component_status='PASS', reason='D69_ROUTED_ODB_RCX_MEASURED',
                       producer='flow109_final_extract',
                       component_scope='engineering_routed_odb_parasitics',
-                      d62_receipt=manifest['d62_receipt'], stream_bridge=manifest['stream_bridge'],
+                      d62_receipt=manifest.get('d62_receipt'), stream_bridge=manifest.get('stream_bridge'),
+                      retained_geometry=retained_geometry,
                       adopted_views=views, inputs=basis,
                       operation_sources=sources,
                       final_geometry=bridge['odb'],
@@ -157,10 +215,20 @@ def validate_final_parasitics(project, receipt_ref):
     require_launch_admission(project, 'flow109.D69', {'flow109_context': record.get('execution_context')})
     if record.get('operation_sources') != operation_sources():
         raise AdmissionRefusal('D69_OPERATION_SOURCE_CHANGED', 'adapter or retained consumer changed')
-    d62 = density.validate_filled_odb(project, record['d62_receipt'])
-    bridge = files.validate_bridge(project, record['stream_bridge'])
-    if bridge['d62_receipt'] != record['d62_receipt'] or bridge['odb'] != d62['odb']:
-        raise AdmissionRefusal('D69_FINAL_GEOMETRY_MISMATCH', 'stream-out and D62 ODB differ')
+    if record.get('retained_geometry') is not None:
+        geometry = _retained_geometry(project, {**record['retained_geometry'],
+                                               'adopted_views': record['adopted_views']})
+        if geometry != record['retained_geometry']:
+            raise AdmissionRefusal('D69_RETAINED_GEOMETRY_CHANGED', 'native owner changed')
+        d62 = {}
+        bridge = {'odb': geometry['odb']}
+        filled_def = geometry['filled_def']
+    else:
+        d62 = density.validate_filled_odb(project, record['d62_receipt'])
+        bridge = files.validate_bridge(project, record['stream_bridge'])
+        if bridge['d62_receipt'] != record['d62_receipt'] or bridge['odb'] != d62['odb']:
+            raise AdmissionRefusal('D69_FINAL_GEOMETRY_MISMATCH', 'stream-out and D62 ODB differ')
+        filled_def = _read(_bound(project, record['d62_receipt']))['outputs']['filled.def']
     if (record.get('producer') != 'flow109_final_extract'
             or record.get('final_geometry') != bridge['odb']
             or record.get('final_spefs') != record.get('spefs')):
@@ -176,7 +244,7 @@ def validate_final_parasitics(project, receipt_ref):
             raise AdmissionRefusal('D69_SPEF_CHANGED', corner)
     signoff.bind_rcx_spefs(_bound(project, record['rcx_state']).parent,
                            _bound(project, record['rcx_state']).parent / 'state_in.json')
-    return {'odb': bridge['odb'], 'd62_receipt': record['d62_receipt'],
+    return {'odb': bridge['odb'], 'filled_def': filled_def, 'd62_receipt': record['d62_receipt'],
             'adopted_views': record['adopted_views'],
             'spefs': record['spefs'], 'final_geometry': record['final_geometry'],
             'final_spefs': record['final_spefs'], 'parasitic_receipt': receipt_ref,

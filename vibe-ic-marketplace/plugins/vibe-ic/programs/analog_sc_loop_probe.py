@@ -339,7 +339,8 @@ def _instance(tb: str, subckt: str) -> Optional[str]:
 
 def build_deck(tb: str, *, input_port: str, vin: float, inst: str,
                nets: Sequence[str], tstop: float, tstep: float,
-               out_file: str, rel_prefix: str = "") -> str:
+               out_file: str, rel_prefix: str = "",
+               threads: Optional[int] = None) -> str:
     """The A3 testbench, with the input held at `vin`, its own `.save` and
     `.control` replaced by this probe's, and nothing else touched — except
     that a RELATIVE `.include`/`.lib` path is re-rooted by `rel_prefix`,
@@ -374,7 +375,12 @@ def build_deck(tb: str, *, input_port: str, vin: float, inst: str,
         raise ValueError(f"the testbench drives no DC source on "
                          f"`{input_port}`")
     vecs = " ".join(f"v({inst}.{n})" for n in nets)
-    keep += [f".save {vecs}", ".control", "set wr_singlescale",
+    if threads is not None and (isinstance(threads, bool) or not isinstance(threads, int) or threads < 1):
+        raise ValueError("threads must be a positive integer")
+    keep += [f".save {vecs}", ".control"]
+    if threads is not None:
+        keep += [f"set num_threads={threads}", "set numdgt=15"]
+    keep += ["set wr_singlescale",
              "set wr_vecnames", f"tran {tstep:.6g} {tstop:.6g}",
              f"wrdata {out_file} {vecs}", ".endc", ".end"]
     return "\n".join(keep) + "\n"
@@ -412,7 +418,9 @@ def _sha(p: Path) -> Optional[str]:
         return None
 
 
-def _run_decks(decks: Dict[str, Path], container: str, budget_s: float
+def _run_decks(decks: Dict[str, Path], container: str, budget_s: float,
+               workers: Optional[int] = None, threads: Optional[int] = None,
+               wait_policy: Optional[str] = None, working_dir: Optional[Path] = None
                ) -> Dict[str, int]:
     """Every deck in parallel under ONE supervised command (no clock: reaped
     only on a progress stall, vibe-ic#2051/#2083). `budget_s` is a recorded
@@ -429,13 +437,32 @@ def _run_decks(decks: Dict[str, Path], container: str, budget_s: float
     if not decks:
         return {}
     wdir = next(iter(decks.values())).parent
-    parts = [f"cd {shlex.quote(str(wdir))}"]
-    for tag, deck in decks.items():
-        parts.append(
-            f"( ngspice -b {shlex.quote(deck.name)} > "
-            f"{shlex.quote(deck.stem)}.log 2>&1; echo $? > "
-            f"{shlex.quote(deck.stem)}.rc ) &")
-    parts.append("wait")
+    if workers is not None and (isinstance(workers, bool) or not isinstance(workers, int) or workers < 1):
+        raise ValueError("workers must be a positive integer")
+    if threads is not None and (isinstance(threads, bool) or not isinstance(threads, int) or threads < 1):
+        raise ValueError("threads must be a positive integer")
+    if wait_policy not in (None, "PASSIVE", "ACTIVE"):
+        raise ValueError("wait policy must be PASSIVE or ACTIVE")
+    environment = []
+    if threads is not None:
+        environment.append(f"OMP_NUM_THREADS={threads}")
+    if wait_policy:
+        environment.append("OMP_WAIT_POLICY=" + wait_policy)
+        if wait_policy == "PASSIVE":
+            environment.append("GOMP_SPINCOUNT=0")
+    prefix = "env " + " ".join(environment) + " " if environment else ""
+    parts = [f"cd {shlex.quote(str(working_dir or wdir))}"]
+    entries = list(decks.items())
+    count = min(workers or len(entries), len(entries))
+    for start in range(0, len(entries), count):
+        for tag, deck in entries[start:start + count]:
+            selected = deck if working_dir else Path(deck.name)
+            stem = deck.with_suffix("") if working_dir else Path(deck.stem)
+            parts.append(
+                f"( {prefix}ngspice -b {shlex.quote(str(selected))} > "
+                f"{shlex.quote(str(stem))}.log 2>&1; echo $? > "
+                f"{shlex.quote(str(stem))}.rc ) &")
+        parts.append("wait")
     cp = _ce.run_in_container_supervised(container, "\n".join(parts),
                                          ceiling_s=float(budget_s))
     out: Dict[str, int] = {}
@@ -449,7 +476,8 @@ def _run_decks(decks: Dict[str, Path], container: str, budget_s: float
 
 def probe(project: Path, block: str, container: str, validate: bool = False,
           clocks: Optional[int] = None, budget_s: float = 14400.0,
-          reuse_records: bool = False) -> Tuple[int, Dict[str, Any]]:
+          reuse_records: bool = False, workers: Optional[int] = None,
+          threads: Optional[int] = None, wait_policy: Optional[str] = None) -> Tuple[int, Dict[str, Any]]:
     bdir = project / "phase3" / "analog" / block
     ir_p, sp_p = bdir / "topology.json", bdir / f"{block}.sp"
     tb_p, spec_p = bdir / f"tb_{block}.sp", bdir / "spec.json"
@@ -504,24 +532,66 @@ def probe(project: Path, block: str, container: str, validate: bool = False,
     wdir.mkdir(parents=True, exist_ok=True)
     decks: Dict[str, Path] = {}
     vins: Dict[str, float] = {}
+    import analog_bound_measurements as _bound
+    native_tb = _bound.contextual_template(tb, tb_p.parent)
     for tag, u in levels:
         vin = vcm_nom + u * half
         vins[tag] = vin
-        deck = build_deck(tb, input_port=decl["input_port"], vin=vin,
+        deck = build_deck(native_tb, input_port=decl["input_port"], vin=vin,
                           inst=inst, nets=vnets, tstop=tstop,
-                          tstep=period / 200.0, out_file=f"w_{tag}.txt",
-                          rel_prefix="../")
+                          tstep=period / 200.0, out_file=str(wdir / f"w_{tag}.txt"), threads=threads)
         p = wdir / f"{tag}.sp"
-        p.write_text(deck)
+        if reuse_records:
+            if not p.is_file() or p.read_text() != deck:
+                return RC_NO_RECORD, {"status": "NOT_MEASURED", "reason": "cached probe deck differs; native records cannot be relabelled"}
+        else:
+            p.write_text(deck)
         decks[tag] = p
     started = time.time()
-    if reuse_records and all((wdir / f"w_{t}.txt").is_file() for t in decks):
-        # Re-analysis of records this probe already wrote for THESE decks —
-        # the decks were just re-rendered byte-for-byte from the same inputs,
-        # so the records are theirs. Nothing is simulated.
-        rcs = {t: None for t in decks}
+    native_inputs = {role: {"path": str(path.resolve()), "sha256": _sha(path)} for role, path in
+                     (("netlist", sp_p), ("testbench", tb_p), ("spec", spec_p), ("topology", ir_p))}
+    for tag, deck_path in decks.items():
+        native_inputs["deck:" + tag] = {"path": str(deck_path.resolve()), "sha256": _sha(deck_path)}
+        try:
+            native_inputs.update(_bound.consumed_input_views(project, deck_path))
+        except (OSError, ValueError) as exc:
+            return RC_NO_RECORD, {"status": "NOT_MEASURED", "reason": "native input closure unavailable: " + str(exc)}
+    if not any(view["sha256"] == native_inputs["netlist"]["sha256"]
+               for role, view in native_inputs.items() if role.startswith("include:")):
+        return RC_NO_RECORD, {"status": "NOT_MEASURED", "reason": "declared DUT is absent from the native include closure"}
+    execution_settings = {"workers": workers, "threads": threads, "wait_policy": wait_policy,
+                          "container": container, "image": _os.environ.get("VIBEIC_EDA_IMAGE")}
+    snapshot = wdir / "native-inputs.json"
+    if reuse_records:
+        try:
+            prior = json.loads(snapshot.read_text())
+        except (OSError, ValueError):
+            prior = {}
+        if prior != {"native_inputs": native_inputs, "execution": execution_settings} or not all(
+                (wdir / f"w_{tag}.txt").is_file() for tag in decks):
+            return RC_NO_RECORD, {"status": "NOT_MEASURED", "reason": "cached probe lacks matching consumed native input closure"}
+        rcs = {}
+        for tag, deck in decks.items():
+            try:
+                rcs[tag] = int(deck.with_suffix(".rc").read_text().strip())
+            except (OSError, ValueError):
+                rcs[tag] = None
     else:
-        rcs = _run_decks(decks, container, budget_s)
+        _atomic.write_json(snapshot, {"native_inputs": native_inputs, "execution": execution_settings})
+        rcs = _run_decks(decks, container, budget_s, workers, threads, wait_policy, tb_p.parent)
+    native_outputs = {tag: {"returncode": rcs.get(tag), **{kind: {"path": str(path), "sha256": _sha(path)}
+        for kind, path in (("log", deck.with_suffix(".log")), ("returncode_file", deck.with_suffix(".rc")),
+                           ("capture", wdir / f"w_{tag}.txt"))}} for tag, deck in decks.items()}
+    output_snapshot = wdir / "native-outputs.json"
+    if reuse_records:
+        try:
+            previous_outputs = json.loads(output_snapshot.read_text())
+        except (OSError, ValueError):
+            previous_outputs = {}
+        if previous_outputs != native_outputs:
+            return RC_NO_RECORD, {"status": "NOT_MEASURED", "reason": "cached native output bytes differ from their terminal receipt"}
+    else:
+        _atomic.write_json(output_snapshot, native_outputs)
     runs: Dict[str, Any] = {}
     for tag in decks:
         w = read_wrdata(wdir / f"w_{tag}.txt", inst, vnets)
@@ -546,7 +616,21 @@ def probe(project: Path, block: str, container: str, validate: bool = False,
                    for t, u in levels},
         "elapsed_s": round(time.time() - started, 1),
         "container": container,
+        "native_inputs": native_inputs, "execution": execution_settings, "native_outputs": native_outputs,
+        "outputs": [str(path) for path in wdir.iterdir() if path.is_file()],
     }
+    changed = [role for role, view in native_inputs.items() if _sha(Path(view["path"])) != view["sha256"]]
+    import analog_real_corner_sweep as _sweep
+    failed = [tag for tag, deck in decks.items() if (isinstance(rcs.get(tag), int) and rcs[tag] > 0 and
+        rcs[tag] not in (130, 137, 143, 199)) or any(_sweep._scan_analysis_failures(
+        deck.with_suffix(".log").read_text(errors="replace") if deck.with_suffix(".log").is_file() else ""))]
+    interrupted = [tag for tag, deck in decks.items() if rcs.get(tag) is None or rcs.get(tag, 0) < 0 or
+                   rcs.get(tag) in (130, 137, 143, 199) or not deck.with_suffix(".log").is_file()]
+    if changed or failed or interrupted:
+        rec.update(status="FAIL" if failed else "NOT_MEASURED", changed_inputs=changed, failed_native_cases=failed,
+                   incomplete_native_cases=interrupted,
+                   reason="native probe failed or consumed input bytes changed")
+        return RC_FAIL if failed else RC_NO_RECORD, rec
     if len(fit_runs) < 3:
         rec["status"] = "NOT_MEASURED"
         rec["reason"] = "fewer than three fit levels produced a record"
@@ -639,10 +723,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument("--budget-s", type=float, default=14400.0,
                     help="recorded budget; its crossing is announced, it "
                          "stops nothing")
+    ap.add_argument("--workers", type=int, default=None)
+    ap.add_argument("--threads", type=int, default=None)
+    ap.add_argument("--wait-policy", choices=("PASSIVE", "ACTIVE"), default=None)
     a = ap.parse_args(argv)
     project = a.project.resolve()
     rc, rec = probe(project, a.block, a.container, a.validate, a.clocks,
-                    a.budget_s, a.reuse_records)
+                    a.budget_s, a.reuse_records, a.workers, a.threads, a.wait_policy)
     if rc != RC_NA:
         name = VALIDATION_ARTEFACT if a.validate else FIT_ARTEFACT
         _atomic.write_json(project / "phase3" / "analog" / a.block / name,

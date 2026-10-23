@@ -1256,6 +1256,31 @@ def validate_primary_ir(project: Path) -> Dict[str, Any]:
                 project, record["tool_state"], state_sha, None)
         for row in [doc["native_basis"][key] for key in ("odb", "sdc", "spef", "tech_lef")] + doc["native_basis"]["liberties"]:
             _retained_native_path(project, row["path"], row["sha256"], old_root)
+        if record.get("input_mode") == "current_stapostpnr_odb":
+            selected = record.get("selected_inputs")
+            required = {"odb", "def", "netlist", "sdc", "spef", "sta_state",
+                        "sta_receipt", "sta_config", "step23_record"}
+            if not isinstance(selected, dict) or set(selected) != required:
+                raise ValueError("LibreLane IR current STA input population changed")
+            for role, row in selected.items():
+                if not isinstance(row, dict) or set(row) != {"path", "sha256"}:
+                    raise ValueError(f"LibreLane IR current STA {role} binding malformed")
+                path = Path(row["path"])
+                target = path if path.is_absolute() else project / path
+                if ((not path.is_absolute() and ".." in path.parts)
+                        or not row["sha256"] or target.is_symlink()
+                        or not target.is_file() or _native_sha(target) != row["sha256"]):
+                    raise ValueError(f"LibreLane IR current STA bytes changed: {role}")
+            native_odb = doc["native_basis"]["odb"]
+            if (selected["odb"]["sha256"] != native_odb["sha256"]
+                    or Path(native_odb["path"]).resolve()
+                    != (project / selected["odb"]["path"]).resolve()):
+                raise ValueError("LibreLane IR did not consume selected current STA ODB")
+            chain = record.get("input_source_chain") or {}
+            if (chain.get("source") != "current validated OpenROAD.STAPostPNR state"
+                    or not chain.get("image") or not chain.get("pdk_root")
+                    or not chain.get("pdk")):
+                raise ValueError("LibreLane IR current STA source chain missing")
         import librelane_ir_antenna as la
         rebound_record = dict(record)
         rebound_record["tool_state"] = str(tool_state)

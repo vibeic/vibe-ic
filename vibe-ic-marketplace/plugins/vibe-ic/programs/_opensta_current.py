@@ -64,7 +64,7 @@ def corner_identity(liberties):
 
 
 def basis(project, top, liberties, *, coupling=False, extra_inputs=(), physical_top=None,
-          spef=None, netlist=None, sdc=None):
+          spef=None, netlist=None, sdc=None, allowed_external=()):
     """Bind logical artifact paths and the module those bytes actually describe.
 
     A distinct physical top is supplied by the validated tool configuration;
@@ -80,7 +80,9 @@ def basis(project, top, liberties, *, coupling=False, extra_inputs=(), physical_
     paths = {"netlist": Path(netlist) if netlist is not None else pl.pnr_dir(project) / f"{top}_pnr.v",
              "spef": Path(spef) if spef is not None else pl.extracted_dir(project) / f"{top}.spef",
              "sdc": Path(sdc) if sdc is not None else pl.pnr_dir(project) / "constraint.sdc"}
-    inputs = [file_record(p, role, project) for role, p in paths.items()]
+    allowed_external = set(allowed_external)
+    inputs = [file_record(p, role, None if role in allowed_external else project)
+              for role, p in paths.items()]
     if not re.search(r'\bmodule\s+' + re.escape(physical_top) + r'\b', paths['netlist'].read_text()):
         raise Refusal("CURRENT_NETLIST_DESIGN_MISMATCH")
     text = paths['spef'].read_text()
@@ -105,14 +107,16 @@ def basis(project, top, liberties, *, coupling=False, extra_inputs=(), physical_
     return subject
 
 
-def check_files(records, project):
+def check_files(records, project, *, allowed_external=()):
     if not isinstance(records, list) or not records:
         raise Refusal('CURRENT_FILE_BINDINGS_MISSING' + (": " + "check_files.records argument: expected a nonempty list of role/path/resolved/sha256 bindings; no files opened"))
+    allowed_external = set(allowed_external)
     for row in records:
         if not isinstance(row, dict) or not isinstance(row.get("role"), str):
             raise Refusal("CURRENT_FILE_BINDING_TYPE")
         role = row['role']
-        now = file_record(row['path'], role, None if role.startswith('liberty:') else project)
+        now = file_record(row['path'], role, None if (role.startswith('liberty:')
+                          or role in allowed_external) else project)
         if row != now:
             raise Refusal(f"CURRENT_{role.upper()}_BYTES_CHANGED")
 
@@ -130,7 +134,9 @@ def marker(receipt):
 
 def finish(receipt, rc, outputs, receipt_path):
     project = Path(receipt['project'])
-    check_files(receipt['inputs'], project)
+    transport = receipt.get('input_transport') or {}
+    check_files(receipt['inputs'], project,
+                allowed_external=transport.get('roles') or ())
     execution = receipt['execution']
     log = Path(execution['log'])
     text = log.read_text()
@@ -154,7 +160,6 @@ def validate(project, receipt_path, step, outputs):
     if (doc.get('schema') != 'opensta-current-v1' or doc.get('step') != str(step)
             or doc.get('project') != str(project) or doc.get('stage') != 'post_route_extracted'):
         raise Refusal("CURRENT_PROJECT_STAGE_OR_STEP_MISMATCH")
-    check_files(doc['inputs'], project)
     roles = {r['role']: Path(r['path']) for r in doc['inputs']}
     libs = [roles[f'liberty:{i}'] for i in range(sum(k.startswith('liberty:') for k in roles))]
     # A receipt cannot authorize its own alternate module name. Resolve the
@@ -163,6 +168,9 @@ def validate(project, receipt_path, step, outputs):
     if 'tool_state' in roles:
         tool_current, _ = tool_subject(project, doc['top'], corner=doc.get('tool_corner'),
                                        coupling=str(step) == '27')
+    transport = (tool_current or {}).get('input_transport') or {}
+    check_files(doc['inputs'], project,
+                allowed_external=transport.get('roles') or ())
     physical_top = (tool_current or {}).get('physical_top', doc['top'])
     if doc.get('physical_top', doc['top']) != physical_top:
         raise Refusal('CURRENT_TOOL_DESIGN_MISMATCH')
@@ -266,6 +274,77 @@ def si_binding(project):
     return receipt
 
 
+def _validated_original_state_transport(project, state_files, image):
+    """Authorize only exact inputs of one retained Default fill owner.
+
+    A Flow-109 component may live in an isolated transport project while its
+    immutable final-fill ODB/DEF/netlist/SDC remain at the original Default
+    owner's paths.  The executed STAPostPNR readset already hashes those
+    objects.  Reopen the existing fill/stream and signoff owners as the second
+    authority; an arbitrary outside pathname in the readset is never enough.
+    """
+    import _physical_current as physical
+    import librelane_contract as lc
+    import librelane_fill_dfm as fill
+
+    project = Path(project).resolve()
+    if not isinstance(state_files, dict) or not state_files:
+        raise Refusal('CURRENT_STAPOSTPNR_STATE_READSET_MISSING')
+    paths = []
+    recorded_by_path = {}
+    for name, recorded in state_files.items():
+        path = Path(name)
+        try:
+            resolved = path.resolve(strict=True)
+        except OSError as exc:
+            raise Refusal(f'CURRENT_STAPOSTPNR_ORIGINAL_INPUT_MISSING: {path}') from exc
+        if (path.is_symlink() or not resolved.is_file()
+                or not isinstance(recorded, str) or recorded != digest(resolved)):
+            raise Refusal(f'CURRENT_STAPOSTPNR_ORIGINAL_INPUT_CHANGED: {path}')
+        paths.append(resolved)
+        recorded_by_path[resolved] = recorded
+    foreign = {path for path in paths if not path.is_relative_to(project)}
+    if not foreign:
+        return None
+
+    roots = None
+    for path in foreign:
+        owned = {parent for parent in path.parents
+                 if (parent / fill.RECORD_REL).is_file()}
+        roots = owned if roots is None else roots & owned
+    if not roots or len(roots) != 1:
+        raise Refusal('CURRENT_STAPOSTPNR_FOREIGN_INPUT')
+    owner = next(iter(roots)).resolve()
+    try:
+        stream = fill.validate_default_stream(owner)
+        selected = physical.default_signoff_inputs(owner)
+        doc = json.loads((owner / fill.RECORD_REL).read_text())
+        tool = doc['odb']['tool']
+        state_path = Path(tool['state']).resolve(strict=True)
+        lc.validate_step_receipt(state_path.parent, fill.ODB_FILL_STEP)
+        if (digest(state_path) != tool['state_sha256']
+                or stream.get('image') != image
+                or not isinstance(selected, dict)):
+            raise ValueError('owner State/image/signoff mapping changed')
+        state = json.loads(state_path.read_text())
+        odb, routed_def = (Path(state[name]).resolve(strict=True)
+                           for name in ('odb', 'def'))
+        if (not odb.is_relative_to(state_path.parent.resolve())
+                or digest(routed_def) != tool['filled_def_sha256']):
+            raise ValueError('owner ODB/DEF binding changed')
+        expected = {odb, routed_def, Path(selected['netlist']).resolve(strict=True),
+                    Path(selected['sdc']).resolve(strict=True)}
+    except (OSError, ValueError, KeyError, TypeError, lc.Refusal) as exc:
+        raise Refusal(f'CURRENT_STAPOSTPNR_ORIGINAL_OWNER_INVALID: {exc}') from exc
+    if not foreign <= expected:
+        raise Refusal('CURRENT_STAPOSTPNR_FOREIGN_INPUT')
+    return {'kind': 'validated_default_fill_original',
+            'source_project': str(owner),
+            'source_record': {'path': str((owner / fill.RECORD_REL).resolve()),
+                              'sha256': digest(owner / fill.RECORD_REL)},
+            'paths': {str(path): recorded_by_path[path] for path in sorted(foreign)}}
+
+
 def _tool_subject(project, top, *, corner=None, coupling=False):
     """Reuse Step 23's native current state; no producer or mode selection.
 
@@ -299,8 +378,7 @@ def _tool_subject(project, top, *, corner=None, coupling=False):
     evidence._hashes(fp.get('liberty_files'), mounts)
     if not fp.get('liberty_files'):
         raise Refusal('CURRENT_STAPOSTPNR_LIBERTY_BINDING_MISSING' + f": {folder / 'vibeic_receipt.json'}: input.liberty_files requires nonempty executed Liberty bindings")
-    if any(not Path(p).resolve().is_relative_to(project) for p in fp['state_files']):
-        raise Refusal('CURRENT_STAPOSTPNR_FOREIGN_INPUT')
+    transport = _validated_original_state_transport(project, fp['state_files'], image)
     config = json.loads((folder / 'config.json').read_text())
     original_config = project / 'phase3/librelane/22-config/OpenROAD.STAPostPNR.json'
     if (digest(original_config) != fp.get('config')
@@ -317,7 +395,10 @@ def _tool_subject(project, top, *, corner=None, coupling=False):
     corner = corner or selected_corner
     if not corner:
         raise Refusal('CURRENT_STAPOSTPNR_CORNER_MISSING' + f": {project / lp.STEP23_RECORD}: judgment.worst_setup.corner and _tool_subject.corner argument are empty")
-    inputs = lc.post_pnr_timing_inputs(project, folder / 'state_out.json', corner)
+    allowed_paths = set(Path(path) for path in (transport or {}).get('paths', {}))
+    inputs = lc.post_pnr_timing_inputs(
+        project, folder / 'state_out.json', corner,
+        allowed_external=allowed_paths)
     def host(path):
         path = Path(path)
         for source, guest in sorted(mounts, key=lambda m: -len(str(m[1]))):
@@ -333,9 +414,14 @@ def _tool_subject(project, top, *, corner=None, coupling=False):
     # authorize new bytes. Keep the original executed input fingerprint binding.
     if fp['state_files'].get(str(selected_spef)) != digest(selected_spef):
         raise Refusal('CURRENT_STAPOSTPNR_SPEF_HANDOFF_MISMATCH')
+    selected_paths = {'netlist': project / inputs['sta_netlist'],
+                      'sdc': project / inputs['sdc'],
+                      'spef': selected_spef}
+    allowed_external = {role for role, path in selected_paths.items()
+                        if not path.resolve().is_relative_to(project)}
     subject = basis(project, top, libs, coupling=coupling, physical_top=physical_top,
                     spef=selected_spef, netlist=project / inputs['sta_netlist'],
-                    sdc=project / inputs['sdc'])
+                    sdc=project / inputs['sdc'], allowed_external=allowed_external)
     roles = {r['role']: r for r in subject['inputs']}
     for role, key in [('netlist', 'sta_netlist'), ('sdc', 'sdc')]:
         if (digest(project / inputs[key]) != roles[role]['sha256']
@@ -348,6 +434,9 @@ def _tool_subject(project, top, *, corner=None, coupling=False):
         ('step23_record', project / lp.STEP23_RECORD), ('tool_source_config', original_config)]]
     if switch_path.is_file():
         subject['inputs'].append(file_record(switch_path, 'tool_declaration', project))
+    if transport is not None:
+        subject['input_transport'] = {**transport,
+                                      'roles': sorted(allowed_external)}
     subject['tool_image'] = image
     subject['tool_corner'] = corner
     return subject, {'state': folder / 'state_out.json', 'corner': corner,

@@ -270,6 +270,31 @@ def test_stale_or_changed_native_transcript_cannot_supply_retained_values(projec
     assert result["status"] == "NOT_MEASURED" and "vout" not in result["metrics"]
 
 
+@pytest.mark.parametrize('actual_temperature,reuse', [(-40, True), (27, False), (None, False)])
+def test_retained_native_study_requires_actual_requested_temperature(project, actual_temperature, reuse):
+    entry = _retained_native_study(project)
+    result_path, bindings_path = Path(entry['result']), Path(entry['bindings'])
+    record, bindings = json.loads(result_path.read_text()), json.loads(bindings_path.read_text())
+    bindings['analysis']['temperature_c'] = -40
+    bindings_path.write_text(json.dumps(bindings))
+    record['bindings'] = bindings
+    record['native_inputs']['bindings']['sha256'] = hashlib.sha256(bindings_path.read_bytes()).hexdigest()
+    execution = record['executions'][0]
+    log = Path(execution['log'])
+    if actual_temperature is not None:
+        log.write_text(f'Doing analysis at TEMP = {actual_temperature:.6f} and TNOM = 27\n' + log.read_text())
+    execution['log_sha256'] = hashlib.sha256(log.read_bytes()).hexdigest()
+    result_path.write_text(json.dumps(record))
+    calls = []
+    def run(program, argv, **kwargs):
+        calls.append(program)
+        return {'returncode': 2}
+    result = sim.run_step('A07', project, {'name': 'stage'},
+        _options(config={'blocks': {'stage': {'measurement_studies': [entry]}}}), run)
+    assert calls == ([] if reuse else ['analog_bound_measurements.py'])
+    assert ('vout' in result['metrics']) == reuse
+
+
 @pytest.mark.parametrize("rc,diagnostic,expected", [
     (1, "", "FAIL"), (0, ";;RESIDUAL_FAIL worst_ratio=2.5\n", "FAIL"),
     (0, "Error: native AC analysis failed\n", "FAIL"), (143, "", "NOT_MEASURED")])
@@ -736,3 +761,68 @@ def test_real_shipped_native_measurement_deck_is_parsed_without_changing_it():
     assert sim._MEASURE.findall(sim._deck_text(path)) == ["cal_avg", "cal_max", "cal_at"]
     assert sim._ANALYSIS.search(sim._deck_text(path)).group(1).casefold() == "tran"
     assert path.read_bytes() == original
+
+
+def test_explicit_metric_attribution_keeps_every_native_context(project):
+    spec = project / 'phase3/analog/stage/spec.json'
+    spec.write_text(json.dumps({'specs': [{'name': 'vout', 'min': 1.1, 'max': 1.3, 'unit': 'V'},
+                                         {'name': 'psrr', 'min': 40, 'unit': 'dB'}]}))
+    bindings = {'measurements': {
+        'vout_low': {'spec_key': 'vout', 'unit': 'V'},
+        'vout_nominal': {'spec_key': 'vout', 'unit': 'V'},
+        'psrr_1hz': {'unit': 'dB'}}}
+    rows = sim.attributed_study_measurements(spec, bindings, {
+        'vout_low': 1.05, 'vout_nominal': 1.2, 'psrr_1hz': 60})
+    assert [row['label'] for row in rows] == ['vout_low', 'vout_nominal']
+    assert [row['violation'] for row in rows] == [True, False]
+    coverage = sim._source_measurement_coverage(spec, rows)
+    assert coverage['missing'] == ['psrr']
+
+
+@pytest.mark.parametrize('headroom,vout,point,expected,violations', [
+    (0.4, 1.2, 1.6, 'PASS', []),
+    (-0.1, 1.2, 1.6, 'NOT_MEASURED', []),
+    (0.6, 1.2, 1.6, 'NOT_MEASURED', []),
+    (0.4, 1.0, 1.6, 'NOT_MEASURED', ['regulated_vout']),
+    (0.4, 1.2, 1.8, 'NOT_MEASURED', []),
+])
+def test_dropout_upper_bound_needs_same_point_regulation_and_cannot_prove_failure(
+        project, headroom, vout, point, expected, violations):
+    spec = project / 'phase3/analog/stage/spec.json'
+    spec.write_text(json.dumps({'specs': [{'name': 'vout', 'min': 1.1, 'max': 1.3, 'unit': 'V'},
+                                         {'name': 'dropout', 'max': 0.5, 'unit': 'V'}]}))
+    bindings = {'measurements': {
+        'headroom': {'spec_key': 'dropout', 'unit': 'V', 'analysis': 'DC', 'at': 1.6,
+            'interpretation': 'upper_bound_when_regulated', 'regulation_measurement': 'regulated_vout'},
+        'regulated_vout': {'spec_key': 'vout', 'unit': 'V', 'analysis': 'DC', 'at': point}}}
+    rows = sim.attributed_study_measurements(spec, bindings, {'headroom': headroom, 'regulated_vout': vout})
+    assert rows[0]['status'] == expected
+    assert [row['label'] for row in rows if row['violation']] == violations
+
+
+@pytest.mark.parametrize('step,metrics,analyses,expected', [
+    ('A06', {}, ['.op', '.tran'], 'PASS'),
+    ('A06', {}, ['.tran'], 'NOT_MEASURED'),
+    ('A07', {}, ['.op', '.tran'], 'NOT_MEASURED'),
+    ('A07', {'enob': 14.2}, ['.op', '.tran'], 'PASS'),
+    ('A07', {'enob': 14.2}, ['.tran'], 'NOT_MEASURED'),
+    ('A07', {'enob': 12.0}, ['.op', '.tran'], 'FAIL')])
+def test_incremental_consumer_distinguishes_method_from_measured_enob_and_ignores_old_density_guard(
+        project, monkeypatch, step, metrics, analyses, expected):
+    import analog_incremental_capture as incremental
+    spec = project / 'phase3/analog/stage/spec.json'
+    spec.write_text(json.dumps({'specs': [{'name': 'enob', 'min': 14, 'unit': 'bit'}]}))
+    entry = {'kind': 'incremental_capture', 'settings': 'settings.json', 'result': 'series/score.json'}
+    (project / 'phase3/analog/stage/measurement_studies.json').write_text(json.dumps([entry]))
+    calls = []
+    def consume(*arguments):
+        calls.append(arguments[-1])
+        return {'status': 'PASS', 'measurements': metrics, 'definitions': ['enob'],
+                'analyses': analyses, 'outputs': [], 'executions': [], 'native_inputs': {}}
+    monkeypatch.setattr(incremental, 'consume_study', consume)
+    result = sim.run_step(step, project, {'name': 'stage'}, _options(active_blocks=['stage']), _never)
+    assert calls == [step]
+    assert result['status'] == expected
+    assert result['metrics'].get('enob') == metrics.get('enob')
+    if not metrics:
+        assert result['metrics']['source_measurement_coverage']['missing'] == ['enob']
