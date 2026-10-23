@@ -3218,8 +3218,8 @@ def _whole(rect: list[float]) -> list[float | int]:
     return [int(v) if float(v).is_integer() else v for v in rect]
 
 
-def _runner_floorplan(project: Path) -> tuple[list | None, list | None, dict[str, str], str]:
-    """(die, core, sources, why) from the run's one floorplan authority.
+def _runner_floorplan(project: Path) -> tuple[list | None, list | None, dict[str, str], str, dict]:
+    """(die, core, sources, why, record) from the run's floorplan authority.
 
     `phase3_one_shot_runner.step_pnr` writes `floorplan_rectangles.json`
     before it hands steps 15/15.5ic to LibreLane; it is read through
@@ -3230,7 +3230,7 @@ def _runner_floorplan(project: Path) -> tuple[list | None, list | None, dict[str
     import _declared_die as DD
     die, why, record = DD.declared(project)
     if die is None:
-        return None, None, {}, why
+        return None, None, {}, why, record
     die = _whole(die)
     base = DD.FLOORPLAN_RECTANGLES_REL
     sources = {'DIE_AREA': (f"{base}.die_rect_um - {why} "
@@ -3244,7 +3244,57 @@ def _runner_floorplan(project: Path) -> tuple[list | None, list | None, dict[str
         core = _whole([die[0] + pad, die[1] + pad, die[2] - pad, die[3] - pad])
         sources['CORE_AREA'] = (f'{base}.die_rect_um inset by {base}.core_pad_um '
                                 f'({pad}) - the direct deck\'s -core_area')
-    return die, core, sources, why
+    return die, core, sources, why, record
+
+
+def _derived_provisional_die_source(project: Path, record: dict,
+                                    declared: list, settled: list
+                                    ) -> str | None:
+    """Validate the runner's source-bound replacement for a provisional slot.
+
+    The ordinary declared-vs-derived conflict stays fail-closed.  Replacement
+    is admitted only when the existing floorplan record says the declaration
+    was an owner-delegated provisional selection, both old and new rectangles
+    match that record, and the selected slot contract still binds the current
+    source JSON bytes.  No dimension is recomputed here.
+    """
+    intent = record.get('die_intent')
+    if not isinstance(intent, dict) or intent.get('intent') != 'DERIVED_PROVISIONAL_SLOT':
+        return None
+
+    def _wxh(value: Any) -> list[int] | None:
+        match = re.fullmatch(r'\s*(\d+)\s*[xX]\s*(\d+)\s*', str(value or ''))
+        return [0, 0, int(match.group(1)), int(match.group(2))] if match else None
+
+    old_rect = _wxh(intent.get('declared_die_um'))
+    new_rect = _wxh(intent.get('resolved_die_um'))
+    if old_rect is None or new_rect is None:
+        return None
+    if _rect_differs(declared, old_rect) or _rect_differs(settled, new_rect):
+        return None
+    slot = intent.get('resolved_slot')
+    rel = intent.get('source_relpath')
+    expected = intent.get('source_sha256')
+    if (not isinstance(slot, str) or not isinstance(rel, str)
+            or Path(rel).name != rel or not isinstance(expected, str)):
+        return None
+    source = project / 'input' / 'submission_template_source' / rel
+    slot_file = project / 'input' / 'submission_template' / 'slots' / f'{slot}.yaml'
+    try:
+        contract = json.loads(slot_file.read_text(errors='replace'))
+        actual = digest(source)
+        die_area = _rect((contract.get('die_area') or {}).get('rect'),
+                         f'{slot_file}.die_area.rect')
+    except (OSError, ValueError, TypeError):
+        return None
+    if (actual != expected or contract.get('slot') != slot
+            or contract.get('source_relpath') != rel
+            or contract.get('source_sha256') != expected
+            or _rect_differs(_whole(die_area), new_rect)):
+        return None
+    return (f"reports/phase3/floorplan_rectangles.json.die_intent: "
+            f"source-bound provisional slot {intent.get('declared_slot')} -> "
+            f"{slot} ({rel} sha256 {expected})")
 
 
 def _apply_runner_floorplan(project: Path, config: dict, sources: dict,
@@ -3264,13 +3314,17 @@ def _apply_runner_floorplan(project: Path, config: dict, sources: dict,
                           f"{sources.get('FP_SIZING')} = relative: a utilisation-sized "
                           'floorplan cannot carry a pad ring')
         return
-    die, core, derived, why = _runner_floorplan(project)
+    die, core, derived, why, floorplan_record = _runner_floorplan(project)
     if die is not None:
         if 'DIE_AREA' in config:
             if _rect_differs(config['DIE_AREA'], die):
-                raise Refusal('LL_DERIVED_DIE_CONFLICT',
-                              f"declared {config['DIE_AREA']} ({sources['DIE_AREA']}) vs "
-                              f"the run's {die} ({derived['DIE_AREA']})")
+                replacement = _derived_provisional_die_source(
+                    project, floorplan_record, config['DIE_AREA'], die)
+                if replacement is None:
+                    raise Refusal('LL_DERIVED_DIE_CONFLICT',
+                                  f"declared {config['DIE_AREA']} ({sources['DIE_AREA']}) vs "
+                                  f"the run's {die} ({derived['DIE_AREA']})")
+                _set(config, sources, 'DIE_AREA', die, replacement)
         else:
             _set(config, sources, 'DIE_AREA', die, derived['DIE_AREA'])
         _set(config, sources, 'FP_SIZING', config.get('FP_SIZING') or 'absolute',
