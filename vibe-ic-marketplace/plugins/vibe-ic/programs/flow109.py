@@ -241,28 +241,47 @@ def source_owned_native_dispatch(row: Mapping) -> dict | None:
     """
     profile = row.get("profile", {})
     dispatch = profile.get("dispatch")
-    if (not isinstance(dispatch, Mapping)
-            or dispatch.get("admission_policy") != "source_owned_existing_native"):
+    if not isinstance(dispatch, Mapping) or profile.get("id") != "default":
         return None
-    adapter = dispatch.get("adapter")
     native = dispatch.get("native_step_id")
     engines = dispatch.get("engine_families")
-    if (not isinstance(adapter, str) or not adapter.startswith("flow109_")
-            or not (HERE / (adapter + ".py")).is_file()
-            or native != "flow109." + str(row.get("id"))
-            or dispatch.get("acceptance_scope") != "existing_native_component_only"
+    common_invalid = (
+            dispatch.get("acceptance_scope") != "existing_native_component_only"
             or not isinstance(engines, list) or not engines
             or set(dispatch.get("engine_steps", {})) != set(engines)
-            or set(dispatch.get("engine_executables", {})) != set(engines)):
+            or set(dispatch.get("engine_executables", {})) != set(engines))
+    adapter = dispatch.get("adapter")
+    if dispatch.get("admission_policy") == "source_owned_existing_native":
+        invalid = (common_invalid
+                   or not isinstance(adapter, str) or not adapter.startswith("flow109_")
+                   or not (HERE / (adapter + ".py")).is_file()
+                   or native != "flow109." + str(row.get("id")))
+    elif dispatch.get("kind") == "canonical_backend_window" and adapter is None:
+        # The existing backend/release catalogs are the native owner registry.
+        # Flow109 only names their already-supported Default rows; it does not
+        # create a second generic tool-qualification registry.
+        import execution_backend_gates as backend_gates
+        canonical = backend_gates.canonical_family_row(str(native))
+        legacy = {str(item.get("id")) for item in row.get("legacy70", [])
+                  if isinstance(item, Mapping)}
+        invalid = (common_invalid or canonical is None or str(native) not in legacy
+                   or dispatch.get("producer") != "execution_backend_producers.py:produce"
+                   or dispatch.get("consumer") != "execution_backend_gates.py:evaluate"
+                   or not isinstance(dispatch.get("producer_sites"), list)
+                   or not dispatch["producer_sites"]
+                   or any(not isinstance(site, str) or not site
+                          for site in dispatch["producer_sites"])
+                   or list(dispatch.get("native_required_outputs", ())) !=
+                   list(canonical.get("required_outputs", ())))
+    else:
+        return None
+    if invalid:
         raise Flow109Error("FLOW109_NATIVE_OWNER_INVALID", str(row.get("id")))
     return dict(dispatch)
 
 
 def source_owned_native_admission(context: Mapping) -> dict | None:
     """Record engineering-native ownership without asserting qualification."""
-    dispatch = source_owned_native_dispatch(context.get("resolved_row", {}))
-    if dispatch is None:
-        return None
     # An explicit runtime/registry request is a qualification claim and stays
     # on the strict generic path.  The Default engineering route is selected
     # only by omitting both; callers cannot use this policy to rescue bad,
@@ -270,13 +289,30 @@ def source_owned_native_admission(context: Mapping) -> dict | None:
     if (context.get("runtime_tool_uses") is not None
             or context.get("qualification_registry") is not None):
         return None
+    if context.get("schema") == "vibeic.flow109.execution-window.v1":
+        if context.get("dispatch_kind") != "canonical_backend_window":
+            return None
+        dispatches = [source_owned_native_dispatch(row)
+                      for row in context.get("resolved_rows", ())]
+        if not dispatches or any(dispatch is None for dispatch in dispatches):
+            return None
+        native_step = [dispatch["native_step_id"] for dispatch in dispatches]
+        scope = {dispatch["acceptance_scope"] for dispatch in dispatches}
+        if len(scope) != 1:
+            raise Flow109Error("FLOW109_NATIVE_OWNER_INVALID", "mixed acceptance scope")
+    else:
+        dispatch = source_owned_native_dispatch(context.get("resolved_row", {}))
+        if dispatch is None:
+            return None
+        native_step = dispatch["native_step_id"]
+        scope = {dispatch["acceptance_scope"]}
     return {
         "status": "NOT_APPLICABLE",
         "reason": "SOURCE_OWNED_EXISTING_NATIVE_COMPONENT",
         "admitted": True,
         "qualification_status": "NOT_CLAIMED",
-        "acceptance_scope": dispatch["acceptance_scope"],
-        "native_step_id": dispatch["native_step_id"],
+        "acceptance_scope": next(iter(scope)),
+        "native_step_id": native_step,
         "context_sha256": context.get("context_sha256"),
         "native_started": False,
         "flow109_acceptance": "NOT_MEASURED",
@@ -595,7 +631,9 @@ def prepare_front_door(args, project: Path) -> int | None:
             args.entry_step = context["native_entry_step"]
             args.exit_step = context["native_exit_step"]
             return None
-        _window_inventory(context)
+        window_admission = source_owned_native_admission(context)
+        if window_admission is None:
+            _window_inventory(context)
         attempt = _new_attempt(project, context)
         path = destination / "requests" / (context["context_sha256"] + ".json")
         write_json(path, context)
@@ -643,7 +681,7 @@ def prepare_front_door(args, project: Path) -> int | None:
                 "flow109_acceptance": "NOT_MEASURED", "whole_flow_acceptance": "NOT_MEASURED",
                 "bounded": True, "delivery_accepted": False})
             return {"PASS": 0, "FAIL": 1, "NOT_MEASURED": 2}[aggregate]
-        write_json(destination / "admission.json", {
+        write_json(destination / "admission.json", window_admission or {
             "status": "NOT_MEASURED", "reason": "PER_LAUNCH_REVALIDATION_REQUIRED",
             "context_sha256": context["context_sha256"], "native_started": False})
         args.entry_step = context["native_entry_step"]

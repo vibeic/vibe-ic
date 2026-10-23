@@ -123,6 +123,48 @@ def test_registered_default_native_owner_does_not_claim_generic_qualification(tm
     assert result['flow109_acceptance'] == 'NOT_MEASURED'
 
 
+def test_registered_default_backend_owner_uses_existing_native_admission(
+        tmp_path, monkeypatch):
+    import _delivery_route
+    assert _delivery_route.admit(tmp_path, 'ic') is None
+    features = next(p['features'] for p in flow109.load_registry()['reference_profiles']
+                    if p['name'] == 'Small digital IC without DFT')
+    plan = flow109.resolve_plan(features)
+    context = flow109.execution_context(plan, 'D31', 'D31')
+    dispatch = flow109.source_owned_native_dispatch(context['resolved_row'])
+    assert dispatch['kind'] == 'canonical_backend_window'
+    assert dispatch['native_step_id'] == '15'
+    manifest = tmp_path / 'manifest.json'
+    manifest.write_text(json.dumps({'features': plan['features']}))
+    args = SimpleNamespace(flow='109', flow109_manifest=manifest,
+                           flow109_plan_only=False, execution_mode='default',
+                           entry_step='D31', exit_step='D31')
+    assert flow109.prepare_front_door(args, tmp_path) is None
+    assert (args.entry_step, args.exit_step) == ('15', '15')
+    recorded = json.loads(
+        (tmp_path / 'reports/flow109/admission.json').read_text())
+    assert recorded['qualification_status'] == 'NOT_CLAIMED'
+    result = admission.require_launch_admission(
+        tmp_path, '15', {'flow109_context': context})
+    assert result['admitted'] is True
+    assert result['status'] == 'NOT_APPLICABLE'
+    assert result['qualification_status'] == 'NOT_CLAIMED'
+    assert result['acceptance_scope'] == 'existing_native_component_only'
+    assert result['flow109_acceptance'] == 'NOT_MEASURED'
+
+
+def test_explicit_backend_qualification_claim_stays_strict(tmp_path):
+    features = next(p['features'] for p in flow109.load_registry()['reference_profiles']
+                    if p['name'] == 'Small digital IC without DFT')
+    context = flow109.execution_context(
+        flow109.resolve_plan(features), 'D31', 'D31',
+        runtime_tool_uses=[], qualification_registry='missing.json')
+    with pytest.raises(admission.AdmissionRefusal,
+                       match='QUALIFICATION_RUNTIME_ABSENT'):
+        admission.require_launch_admission(
+            tmp_path, '15', {'flow109_context': context})
+
+
 def test_caller_cannot_forge_registered_native_owner(tmp_path):
     features = next(p['features'] for p in flow109.load_registry()['reference_profiles']
                     if p['name'] == 'Small digital IC without DFT')

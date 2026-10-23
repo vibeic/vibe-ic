@@ -255,6 +255,13 @@ def test_unregistered_adapter_cannot_select_existing_native_policy():
         flow109.source_owned_native_dispatch(row)
 
 
+def test_forged_backend_owner_cannot_select_existing_native_policy():
+    row = flow109.resolve_step(flow109.resolve_plan(profile()), "D31")
+    row["profile"]["dispatch"]["native_step_id"] = "caller-step"
+    with pytest.raises(flow109.Flow109Error, match="FLOW109_NATIVE_OWNER_INVALID"):
+        flow109.source_owned_native_dispatch(row)
+
+
 def test_owner_route_refuses_wrong_owner_and_unknown_native_mapping():
     plan = flow109.resolve_plan(profile())
     row = next(item for item in plan["rows"] if item["id"] == "D12")

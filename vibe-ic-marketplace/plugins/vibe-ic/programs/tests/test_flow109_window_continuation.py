@@ -175,6 +175,30 @@ def test_front_door_preserves_one_row_and_translates_bounded_window(tmp_path, mo
     assert json.loads(immutable.read_text())["flow109_acceptance"] == "NOT_MEASURED"
 
 
+def test_source_owned_default_window_uses_existing_launch_admission_without_registry(
+        tmp_path, monkeypatch):
+    import _delivery_route
+    assert _delivery_route.admit(tmp_path, "ic") is None
+    plan = flow109.resolve_plan(_profile())
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(json.dumps({"features": plan["features"]}))
+    args = SimpleNamespace(flow="109", flow109_manifest=manifest,
+                           flow109_plan_only=False, execution_mode="default",
+                           entry_step="D31", exit_step="D32")
+    assert flow109.prepare_front_door(args, tmp_path) is None
+    assert (args.entry_step, args.exit_step) == ("15", "15.5ic")
+    admission_record = json.loads(
+        (tmp_path / "reports/flow109/admission.json").read_text())
+    assert admission_record["status"] == "NOT_APPLICABLE"
+    assert admission_record["qualification_status"] == "NOT_CLAIMED"
+    assert admission_record["native_step_id"] == ["15", "15.5ic"]
+    request = json.loads(Path(os.environ[flow109.CONTEXT_ENV]).read_text())
+    assert admission.require_launch_admission(
+        tmp_path, "15", {"flow109_context": request})["status"] == "NOT_APPLICABLE"
+    assert admission.require_launch_admission(
+        tmp_path, "15.5ic", {"flow109_context": request})["status"] == "NOT_APPLICABLE"
+
+
 def test_canonical_window_missing_inventory_refuses_before_attempt(tmp_path):
     runner = require_repo(
         "vibe-ic-marketplace", "plugins", "vibe-ic", "programs",
