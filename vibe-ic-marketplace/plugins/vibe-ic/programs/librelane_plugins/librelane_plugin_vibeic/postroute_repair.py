@@ -146,6 +146,13 @@ class PostRouteRepair(ResizerStep):
                 default=False,
             ),
             Variable(
+                "VIBEIC_PRR_TARGETED_CAP_BUFFER",
+                bool,
+                "Split a bounded subset of the live max-capacitance data "
+                "net's ODB load pins with native insert_buffer.",
+                default=False,
+            ),
+            Variable(
                 "VIBEIC_PRR_MAX_FANOUT",
                 Optional[int],
                 "The fanout cap sign-off judges: the strictest set_max_fanout "

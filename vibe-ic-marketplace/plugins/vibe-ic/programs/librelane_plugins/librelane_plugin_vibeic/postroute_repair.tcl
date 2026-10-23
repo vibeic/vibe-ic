@@ -246,6 +246,89 @@ proc vic_fanout_over {} {
     }
     return $out
 }
+
+# Split a bounded subset of loads on each currently measured max-capacitance
+# data net.  All identities come from the linked Liberty/ODB and the live STA
+# report; this operation carries no design, instance, net or PDK literal.
+proc vic_targeted_cap_buffer {} {
+    if {![info exists ::env(SYNTH_BUFFER_CELL)]} {
+        error "PRR_TARGETED_BUFFER_MASTER_ABSENT: SYNTH_BUFFER_CELL"
+    }
+    set master [lindex [split $::env(SYNTH_BUFFER_CELL) /] 0]
+    set odb_master 0
+    foreach inst [$::block getInsts] {
+        if {[[$inst getMaster] getName] eq $master} { set odb_master 1; break }
+    }
+    if {!$odb_master || [llength [get_lib_cells -quiet */$master]] == 0} {
+        error "PRR_TARGETED_BUFFER_MASTER_UNLINKED: $master"
+    }
+    set report "$::env(STEP_DIR)/prr_targeted_cap_violators.rpt"
+    if {[catch {report_check_types -max_capacitance -violators -max_count 64 > $report} err]} {
+        error "PRR_TARGETED_CAP_REPORT_FAILED: $err"
+    }
+    set fh [open $report]
+    set rows [split [read $fh] "\n"]
+    close $fh
+    set targets [dict create]
+    foreach row $rows {
+        if {![string match "*(VIOLATED)*" $row]} { continue }
+        if {![regexp {^\s*(\S+)\s+\S+\s+\S+.*\(VIOLATED\)\s*$} $row -> pin]} {
+            error "PRR_TARGETED_CAP_REPORT_UNPARSEABLE: $row"
+        }
+        set sta_pin [get_pins -quiet $pin]
+        if {[llength $sta_pin] != 1} { error "PRR_TARGETED_CAP_PIN_UNRESOLVED: $pin" }
+        set sta_net [get_nets -quiet -of_objects $sta_pin]
+        if {[llength $sta_net] != 1} { error "PRR_TARGETED_CAP_NET_UNRESOLVED: $pin" }
+        set name [get_name [lindex $sta_net 0]]
+        set net [$::block findNet $name]
+        if {$net eq "NULL" || [$net isSpecial] || [$net getSigType] ne "SIGNAL"
+            || [$net isDoNotTouch]} { continue }
+        dict set targets $name $net
+    }
+    if {[dict size $targets] == 0} {
+        error "PRR_TARGETED_CAP_NO_MEASURED_DATA_NET"
+    }
+    set serial 0
+    dict for {net_name net} $targets {
+        set loads [list]
+        set load_xy [dict create]
+        set drivers 0
+        foreach it [$net getITerms] {
+            set io [[$it getMTerm] getIoType]
+            if {$io eq "OUTPUT"} { incr drivers; continue }
+            if {$io ne "INPUT" || [[$it getInst] isDoNotTouch]} { continue }
+            set load "[[$it getInst] getName]/[[$it getMTerm] getName]"
+            lappend loads $load
+            dict set load_xy $load [[$it getInst] getLocation]
+        }
+        if {$drivers != 1 || [llength $loads] < 2} {
+            error "PRR_TARGETED_CAP_UNSUPPORTED_TOPOLOGY: $net_name drivers=$drivers loads=[llength $loads]"
+        }
+        set loads [lsort -dictionary $loads]
+        set take [expr {int(ceil([llength $loads] / 2.0))}]
+        set group [lrange $loads end-[expr {$take - 1}] end]
+        set x 0
+        set y 0
+        foreach load $group {
+            lassign [dict get $load_xy $load] lx ly
+            incr x $lx
+            incr y $ly
+        }
+        set dbu [$::block getDbUnitsPerMicron]
+        set location [list [expr {$x / double($take * $dbu)}] \
+                           [expr {$y / double($take * $dbu)}]]
+        set name "vic_prr_cap_${serial}"
+        while {[$::block findInst $name] ne "NULL"} { incr serial; set name "vic_prr_cap_${serial}" }
+        if {[catch {insert_buffer -buffer_cell $master -net [get_nets $net_name] \
+                -load_pins [get_pins $group] -buffer_name $name \
+                -net_name "${name}_net" -location $location} err]} {
+            error "PRR_TARGETED_CAP_INSERT_FAILED: $net_name: $err"
+        }
+        vic_say "targeted cap split net=$net_name moved=[llength $group] master=$master location=$location"
+        incr serial
+    }
+    utl::metric_integer vibeic__prr__targeted_cap__buffers $serial
+}
 # Nets newly over the cap, or already over it but given still more loads.
 # The latter also worsens the signoff violation and must refuse the candidate.
 proc vic_fanout_added {before now} {
@@ -263,7 +346,19 @@ set rd_args [list -verbose]
 append_if_exists_argument rd_args VIBEIC_PRR_MAX_WIRE_LENGTH -max_wire_length
 append_if_exists_argument rd_args VIBEIC_PRR_SLEW_MARGIN_PCT -slew_margin
 append_if_exists_argument rd_args VIBEIC_PRR_CAP_MARGIN_PCT -cap_margin
-if {$::env(VIBEIC_PRR_SETUP_SEQUENCE) eq "sizeup,swap"} {
+set ::vic_targeted_cap [expr {[info exists ::env(VIBEIC_PRR_TARGETED_CAP_BUFFER)]
+                              && $::env(VIBEIC_PRR_TARGETED_CAP_BUFFER)}]
+if {$::vic_targeted_cap} {
+    # Direct insert_buffer uses OpenDP to select a legal routed placement.
+    # A full placement check validates the current database and initializes
+    # OpenDP's retained row/grid state without moving cells.  Any placement
+    # error refuses this candidate before the actuator can change the design.
+    if {[catch {check_placement -verbose} err]} {
+        puts stderr "VIBEIC_PRR_PLACEMENT_REFUSED: check_placement: $err; the candidate is not written"
+        exit 1
+    }
+    vic_targeted_cap_buffer
+} elseif {$::env(VIBEIC_PRR_SETUP_SEQUENCE) eq "sizeup,swap"} {
     # This candidate must stay sizing-only on the routed design. The DRV
     # controller can run repair_design in its own candidate when needed.
     vic_say "setup sequence sizeup,swap: design buffering deferred to DRV controller"
@@ -289,7 +384,9 @@ lappend hold_args -max_buffer_percent $::env(VIBEIC_PRR_HOLD_MAX_BUFFER_PCT)
 # The normal order keeps hold after setup. A failed native attempt gets one
 # alternate order on the same input route; the sign-off measurements still
 # decide whether its result is admissible.
-if {![info exists ::env(VIBEIC_PRR_MOVE_SEQUENCE)] ||
+if {$::vic_targeted_cap} {
+    vic_say "targeted cap candidate skips whole-design repair_timing"
+} elseif {![info exists ::env(VIBEIC_PRR_MOVE_SEQUENCE)] ||
     $::env(VIBEIC_PRR_MOVE_SEQUENCE) eq "standard"} {
     log_cmd repair_timing {*}$setup_args
     log_cmd repair_timing {*}$hold_args
@@ -306,7 +403,9 @@ set ::vic_fo_repaired [vic_fanout_over]
 # Resizing and hold repair can disturb a fanout tree even with buffer removal
 # disabled. Re-run design repair after both timing passes; the post-route
 # STAPostPNR census decides whether every DRV row closed before adoption.
-log_cmd repair_design {*}$rd_args
+if {!$::vic_targeted_cap} {
+    log_cmd repair_design {*}$rd_args
+}
 vic_census after_timing_drv_recheck
 
 # OpenROAD can leave a short, high-capacitance routed net unchanged even when

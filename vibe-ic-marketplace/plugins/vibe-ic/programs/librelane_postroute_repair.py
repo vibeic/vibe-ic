@@ -79,6 +79,7 @@ import os
 import re
 import subprocess
 import sys
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
@@ -116,6 +117,8 @@ PARAM_VARS = {
     "repair_tns_pct": "VIBEIC_PRR_SETUP_REPAIR_TNS_PCT",
     "bounded_drive_strength": "VIBEIC_PRR_BOUNDED_DRIVE_STRENGTH",
     "cap_margin_pct": "VIBEIC_PRR_CAP_MARGIN_PCT",
+    "max_wire_length_um": "VIBEIC_PRR_MAX_WIRE_LENGTH",
+    "targeted_cap_buffer": "VIBEIC_PRR_TARGETED_CAP_BUFFER",
 }
 
 #: `measure` exits with this when the adopted state cannot answer; the
@@ -678,6 +681,64 @@ def supply_ownership(ctx: Dict[str, Any], def_path: Path) -> Dict[str, Any]:
                 "code": _pgo.UNMEASURED_CODE, "reason": f"{type(exc).__name__}: {exc}"}
 
 
+def _die_derived_max_wire_length(state_path: Path) -> float:
+    """One third of the shorter routed die side, in microns, bounded by policy."""
+    state = _load(state_path)
+    path = Path(state.get("def", ""))
+    text = path.read_text(errors="replace")
+    units = re.search(r"\bUNITS\s+DISTANCE\s+MICRONS\s+(\d+)\s*;", text)
+    area = re.search(
+        r"\bDIEAREA\s*\(\s*(-?\d+)\s+(-?\d+)\s*\)\s*"
+        r"\(\s*(-?\d+)\s+(-?\d+)\s*\)\s*;", text)
+    if units is None or area is None or int(units.group(1)) <= 0:
+        raise ValueError(f"routed DEF has no usable UNITS/DIEAREA: {path}")
+    x0, y0, x1, y1 = (int(area.group(i)) for i in range(1, 5))
+    shorter_um = min(abs(x1 - x0), abs(y1 - y0)) / int(units.group(1))
+    if shorter_um <= 0:
+        raise ValueError(f"routed DEF has an empty DIEAREA: {path}")
+    return round(max(200.0, min(2000.0, shorter_um / 3.0)), 6)
+
+
+def _candidate_native_signoff(ctx: Dict[str, Any], repaired: Path,
+                              lane: str) -> Dict[str, Any]:
+    """Fresh stream, DRC and full LVS for the exact geometry of one candidate."""
+    import librelane_contract as _ll
+    import librelane_pv_signoff as _pv
+
+    project = Path(ctx["project"])
+    pdk_root = next((Path(host) for host, guest in ctx["mounts"]
+                     if guest == _ll.PDK_GUEST_ROOT), None)
+    if pdk_root is None:
+        raise _ll.Refusal("LL_PRR_PV_PDK_UNBOUND", "no /pdk mount in context")
+    stream = "KLayout.StreamOut"
+    configs = _ll.resolve_step_configs(
+        project, ctx["image"], ctx["pdk"], [stream], pdk_root=pdk_root,
+        folder=f"{lane}-pv-stream-config", overlay=_pv.tech_lef_overlay(project))
+    folders = _ll.run_chain(
+        project, ctx["image"], [(stream, configs[stream], repaired)],
+        mounts=[(pdk_root.resolve(), _ll.PDK_GUEST_ROOT)],
+        lane=f"{lane}-pv-stream", pdk_root=_ll.PDK_GUEST_ROOT)
+    streamed = _load(folders[-1] / "state_out.json")
+    gds_value = streamed.get("klayout_gds") or streamed.get("gds")
+    if not isinstance(gds_value, str) or not Path(gds_value).is_file():
+        raise _ll.Refusal("LL_PRR_PV_GDS_ABSENT", repr(gds_value))
+    state = _load(repaired)
+    required = {key: state.get(key) for key in ("def", "nl", "sdc")}
+    missing = [key for key, value in required.items()
+               if not isinstance(value, str) or not Path(value).is_file()]
+    if missing:
+        raise _ll.Refusal("LL_PRR_PV_VIEW_MISSING", str(missing))
+    root = project / ARM_REL / "candidate_signoff" / lane
+    return {half: _pv.run_half(
+                project, ctx["image"], pdk_root, ctx["pdk"], half,
+                gds=Path(gds_value), routed_def=Path(required["def"]),
+                netlist=Path(required["nl"]), sdc=Path(required["sdc"]),
+                powered_netlist=(Path(state["pnl"])
+                                 if isinstance(state.get("pnl"), str) else None),
+                lane_prefix=f"{lane}-pv", record=root / f"{half}.json")
+            for half in ("drc", "lvs")}
+
+
 def actuate(impl: Path, params: Dict[str, Any]) -> int:
     """One candidate from the ADOPTED state, measured; adopted only as far as
     the pointer goes — the closure decides whether it stays."""
@@ -688,12 +749,28 @@ def actuate(impl: Path, params: Dict[str, Any]) -> int:
     ledger = _load(_ledger_path(impl))["candidates"] if _ledger_path(impl).is_file() else []
     index = len(ledger) + 1
     lane = f"{ctx.get('lane', '32')}-cand{index:02d}"
+    effective = dict(params)
+    max_wire_requested = effective.get("max_wire_length_um") == 0
+    targeted_cap_requested = effective.get("targeted_cap_buffer") is True
+    if max_wire_requested:
+        try:
+            effective["max_wire_length_um"] = _die_derived_max_wire_length(
+                Path(cur["repair_input"]))
+        except (OSError, ValueError, KeyError) as exc:
+            row = {"candidate": lane, "params": params,
+                   "from": cur.get("candidate"), "decision": "ACTUATOR_FAILED",
+                   "measurement_status": "NOT_MEASURED",
+                   "reason": f"die-derived max wire length unavailable: {exc}"}
+            _ledger_append(impl, row)
+            return 2
     updates = {PARAM_VARS[k]: (v, f"actuator timing.repair_setup parameter {k}")
-               for k, v in params.items() if v is not None}
+               for k, v in effective.items() if v is not None and
+               not (k == "max_wire_length_um" and v == -1)}
     base_cfg = Path(ctx["configs"][REPAIR_STEP])
     cfg = _ll.derive_step_config(base_cfg, base_cfg.with_name(f"{REPAIR_STEP}@{lane}.json"),
                                  updates)
     row: Dict[str, Any] = {"candidate": lane, "params": params,
+                           "effective_params": effective,
                            "from": cur.get("candidate"), "config": str(cfg)}
     try:
         folder, measurement = _candidate(ctx, cfg, Path(cur["repair_input"]), lane)
@@ -860,6 +937,28 @@ def actuate(impl: Path, params: Dict[str, Any]) -> int:
         _ledger_append(impl, row)
         print(f"candidate {lane} refused: {row['reason']}")
         return 0
+    if max_wire_requested or targeted_cap_requested:
+        try:
+            signoff = _candidate_native_signoff(ctx, repaired, lane)
+        except (OSError, ValueError, _ll.Refusal) as exc:
+            row.update(decision="ACTUATOR_FAILED", measurement_status="NOT_MEASURED",
+                       reason=f"fresh candidate sign-off unavailable: {exc}")
+            _ledger_append(impl, row)
+            return 2
+        row["native_signoff"] = signoff
+        for half in ("drc", "lvs"):
+            verdict = (signoff.get(half) or {}).get("verdict")
+            if verdict == "FAIL":
+                row.update(decision="REFUSED",
+                           reason=f"fresh sign-off {half.upper()} is FAIL")
+                _ledger_append(impl, row)
+                return 0
+            if verdict != "PASS":
+                row.update(decision="ACTUATOR_FAILED",
+                           measurement_status="NOT_MEASURED",
+                           reason=f"fresh sign-off {half.upper()} is {verdict!r}")
+                _ledger_append(impl, row)
+                return 2
     write_json(impl / CURRENT, {
         "candidate": lane, "repair_input": str(repaired),
         "repair_state": str(repaired), "repair_folder": str(folder),
@@ -1650,6 +1749,8 @@ def _validate_resume_readset(project: Path, current: Dict[str, Any],
             if isinstance(row, dict) and isinstance(row.get("dest"), str)}
 
         recorded_image = None
+        producer_program_tree = None
+        next_actuator_plugin = None
         for step in required:
             folder = by_step[step]
             receipt = _ll.validate_step_receipt(folder, step)
@@ -1680,8 +1781,33 @@ def _validate_resume_readset(project: Path, current: Dict[str, Any],
                         raise ValueError(f"{step}: {field} changed: {path}")
             if step == REPAIR_STEP:
                 plugins = fp.get("plugin")
-                if not isinstance(plugins, dict) or plugins != _ll._plugin_digests(step):
-                    raise ValueError(f"{step}: plugin/tool readset changed")
+                if not isinstance(plugins, dict) or not plugins:
+                    raise ValueError(f"{step}: producer plugin readset missing")
+                # The adopted ODB was produced by an older, sealed runtime
+                # tree.  Validate those exact bytes as its producer authority;
+                # separately bind the current plugin bytes that will consume
+                # that ODB for the next actuator.  Comparing old output to new
+                # source would either forbid every repair fix or invite a
+                # blanket freshness exception.
+                roots = project / ".vibeic/runtime-program-trees"
+                for manifest_path in sorted(roots.glob("*/manifest.json")):
+                    manifest = _load(manifest_path)
+                    files = manifest.get("files")
+                    if not isinstance(files, dict) or any(
+                            files.get(f"programs/{rel}") != digest
+                            for rel, digest in plugins.items()):
+                        continue
+                    program_root = manifest_path.parent / "plugin/programs"
+                    if all((program_root / rel).is_file() and
+                           _ll.digest(program_root / rel) == digest
+                           for rel, digest in plugins.items()):
+                        producer_program_tree = str(manifest_path.parent)
+                        break
+                if producer_program_tree is None:
+                    raise ValueError(f"{step}: sealed producer plugin bytes unavailable")
+                next_actuator_plugin = _ll._plugin_digests(step)
+                if not isinstance(next_actuator_plugin, dict) or not next_actuator_plugin:
+                    raise ValueError(f"{step}: next actuator plugin readset missing")
             for field in (("rcx_pdk_files",) if step == "OpenROAD.RCX" else
                           ("liberty_files",) if step == "OpenROAD.STAPostPNR" else ()):
                 values = fp.get(field)
@@ -1709,11 +1835,43 @@ def _validate_resume_readset(project: Path, current: Dict[str, Any],
             if stable != recorded_image:
                 raise ValueError(f"{step}: native tool identity changed")
         return {"verdict": "PASS", "steps": list(required),
-                "image": ctx["image"]}
+                "image": ctx["image"],
+                "producer_program_tree": producer_program_tree,
+                "next_actuator_plugin": next_actuator_plugin}
     except _ll.Refusal as exc:
         raise _ll.Refusal("LL_PRR_RESUME_READSET_STALE", str(exc)) from exc
     except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
         raise _ll.Refusal("LL_PRR_RESUME_READSET_STALE", str(exc)) from exc
+
+
+def _attempted_by_current_actuator(project: Path, ctx: Dict[str, Any],
+                                   row: Dict[str, Any],
+                                   current_plugin: Dict[str, str]) -> bool:
+    """Whether an old row consumed the same targeted native implementation.
+
+    Ordinary measured/refused rungs and every non-targeted actuator remain
+    one-shot.  A targeted rung may be retried only when its old native attempt
+    crashed *and* its immutable input fingerprint proves that it ran different
+    plugin bytes.  Missing or malformed provenance stays attempted (fail
+    closed); this never edits or discounts the historical ledger row.
+    """
+    params = row.get("params") or {}
+    if (row.get("decision") != "ACTUATOR_FAILED"
+            or params.get("targeted_cap_buffer") is not True):
+        return True
+    reason = row.get("reason")
+    if not isinstance(reason, str):
+        return True
+    match = re.search(r"(/[^;\s]+/invocation\.log)", reason)
+    if match is None:
+        return True
+    try:
+        invocation = _resume_host_path(project, ctx, match.group(1))
+        recorded = _load(invocation.parent / "input_fingerprint.json").get("plugin")
+    except (OSError, ValueError, TypeError, KeyError, AttributeError):
+        return True
+    return not (isinstance(recorded, dict) and recorded
+                and recorded != current_plugin)
 
 
 def resume_drv(project: Path, *, registry: Optional[Path] = None,
@@ -1761,6 +1919,37 @@ def resume_drv(project: Path, *, registry: Optional[Path] = None,
 
     before = len(candidates)
     reg = _cl.load_registry(registry, programs_dir=programs_dir)
+    controller = reg.controllers["postroute.repair_drv"]
+    actuator = reg.actuators[controller.actuator_id]
+
+    def canonical(proposal: Dict[str, Any]) -> str:
+        known = {key: value for key, value in proposal.items()
+                 if key in actuator.parameters}
+        bound = actuator.bind_params(known)
+        # YAML plans commonly spell whole-valued `number` parameters as ints,
+        # while argparse records the exact same native request as floats.  The
+        # declared parameter type, not JSON's lexical number spelling, defines
+        # whether an already-attempted rung is the same action.
+        semantic = {
+            key: (float(value)
+                  if actuator.parameters[key].type == "number" else value)
+            for key, value in bound.items()}
+        return json.dumps(semantic, sort_keys=True,
+                          separators=(",", ":"))
+
+    current_plugin = readset_freshness["next_actuator_plugin"]
+    attempted = {canonical(row.get("params") or {}) for row in candidates
+                 if row.get("controller") == "postroute.repair_drv"
+                 and _attempted_by_current_actuator(
+                     project, ctx, row, current_plugin)}
+    untried = tuple(proposal for proposal in controller.plan
+                    if canonical(dict(proposal)) not in attempted)
+    if not untried:
+        raise _ll.Refusal("LL_PRR_RESUME_PLAN_EXHAUSTED",
+                          "every declared DRV proposal is already in the ledger")
+    reg.controllers[controller.controller_id] = replace(
+        controller, plan=untried, max_iterations=len(untried),
+        plateau_patience=min(controller.plateau_patience, len(untried)))
     run = _cl.ClosureController(reg, impl, arm / "closure").run_controller(
         "postroute.repair_drv")
     run_record = run.to_record()
@@ -1831,7 +2020,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     for name in PARAM_VARS:
         a.add_argument("--" + name.replace("_", "-"),
                        type=(str if name == "setup_sequence" else
-                             _bool_arg if name == "bounded_drive_strength" else float),
+                             _bool_arg if name in {"bounded_drive_strength",
+                                                  "targeted_cap_buffer"} else float),
                        default=None)
     args = parser.parse_args(argv)
     impl = Path.cwd()

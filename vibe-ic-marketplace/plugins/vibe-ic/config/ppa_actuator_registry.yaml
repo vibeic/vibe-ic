@@ -356,6 +356,10 @@ actuators:
         - "{bounded_drive_strength}"
         - "--cap-margin-pct"
         - "{cap_margin_pct}"
+        - "--max-wire-length-um"
+        - "{max_wire_length_um}"
+        - "--targeted-cap-buffer"
+        - "{targeted_cap_buffer}"
     parameters:
       setup_margin_ns: {type: number, unit: ns, minimum: 0, maximum: 1.0, default: 0}
       setup_sequence:
@@ -401,6 +405,25 @@ actuators:
           make OpenROAD split a measured residual max-cap net. Candidate
           admission still re-measures every DRV kind, setup, hold, antenna,
           supply ownership and routing.
+      max_wire_length_um:
+        type: number
+        unit: um
+        enum: [-1, 0]
+        default: -1
+        description: >-
+          Existing native repair_design -max_wire_length actuator. Minus one
+          disables it. Zero derives a bounded value from one third of the
+          routed DEF's shorter die side, clamped to 200..2000 um; no chip,
+          PDK, cell or net literal is carried in this registry.
+      targeted_cap_buffer:
+        type: boolean
+        default: false
+        description: >-
+          Ask the native post-route step to split only load pins on measured
+          max-capacitance data nets with insert_buffer.  The buffer master is
+          resolved from the linked SYNTH_BUFFER_CELL and the target net, load
+          pins and placement are read from the adopted ODB; no design name is
+          carried by this actuator.
     preconditions:
       - {kind: file_nonempty, path: "current.json"}
       - {kind: file_nonempty, path: "context.json"}
@@ -508,9 +531,11 @@ controllers:
     plan:
       - {bounded_drive_strength: true, cap_margin_pct: 10}
       - {bounded_drive_strength: true, cap_margin_pct: 20}
+      - {bounded_drive_strength: true, max_wire_length_um: 0}
+      - {targeted_cap_buffer: true}
     stop:
-      max_iterations: 2
-      plateau_patience: 2
+      max_iterations: 4
+      plateau_patience: 3
       wall_seconds: 14400
 
   pnr.deck.hold_block_emission:

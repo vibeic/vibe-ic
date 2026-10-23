@@ -360,13 +360,70 @@ def test_the_repair_actuator_and_its_domains_are_executable_and_in_the_tree():
     assert set(act.parameters) == set(prr.PARAM_VARS)
     assert reg.controllers['postroute.repair_drv'].plan == (
         {'bounded_drive_strength': True, 'cap_margin_pct': 10},
-        {'bounded_drive_strength': True, 'cap_margin_pct': 20},)
+        {'bounded_drive_strength': True, 'cap_margin_pct': 20},
+        {'bounded_drive_strength': True, 'max_wire_length_um': 0},
+        {'targeted_cap_buffer': True},)
     # The native plugin already supports repair_design -cap_margin.  The DRV
     # controller must carry that parameter through instead of retrying the
     # exact same max-cap no-op at every rung.
     assert prr.PARAM_VARS['cap_margin_pct'] == 'VIBEIC_PRR_CAP_MARGIN_PCT'
     assert act.bind_params({'bounded_drive_strength': True,
                             'cap_margin_pct': 10})['cap_margin_pct'] == 10
+    assert prr.PARAM_VARS['max_wire_length_um'] == 'VIBEIC_PRR_MAX_WIRE_LENGTH'
+    assert act.bind_params({'bounded_drive_strength': True,
+                            'max_wire_length_um': 0})['max_wire_length_um'] == 0
+
+
+@pytest.mark.parametrize('failed_half', ('drc', 'lvs'))
+@pytest.mark.parametrize('actuator', ('max_wire', 'targeted_cap'))
+def test_geometry_drv_improvement_cannot_replace_current_when_fresh_pv_fails(
+        tmp_path, monkeypatch, failed_half, actuator):
+    """The max-wire actuator changes geometry, so old-geometry PV is unusable.
+
+    Even a real DRV improvement stays rejected when either fresh sign-off half
+    says FAIL; rollback means the exact current.json bytes remain adopted.
+    """
+    project, arm, impl, _shim = _scenario_impl(
+        tmp_path, baseline=(1.0, 0.4, (0, 1, 0)),
+        candidates=[_cand(0.9, 0.4, (0, 0, 0))])
+    ns = {}
+    monkeypatch.setenv('PRR_SCENARIO', str(tmp_path / 'scenario.json'))
+    _shim_close_arm(ns, monkeypatch)
+    current = json.loads((impl / prr.CURRENT).read_text())
+    input_state = Path(current['repair_input'])
+    baseline_def = write(tmp_path / 'baseline.def',
+                         'UNITS DISTANCE MICRONS 1000 ;\n'
+                         'DIEAREA ( 0 0 ) ( 3000000 2400000 ) ;\n')
+    put(input_state, {'def': str(baseline_def)})
+    before = (impl / prr.CURRENT).read_bytes()
+
+    def pv_gate(_ctx, _state, lane):
+        assert lane == '32-cand01'
+        return {
+            'drc': {'verdict': 'FAIL' if failed_half == 'drc' else 'PASS',
+                    'scope': {'gds_sha256': 'd' * 64, 'def_sha256': 'e' * 64}},
+            'lvs': {'verdict': 'FAIL' if failed_half == 'lvs' else 'PASS',
+                    'scope': {'gds_sha256': 'd' * 64, 'def_sha256': 'e' * 64}},
+        }
+
+    monkeypatch.setattr(prr, '_candidate_native_signoff', pv_gate)
+    requested = ({'bounded_drive_strength': True, 'max_wire_length_um': 0}
+                 if actuator == 'max_wire' else {'targeted_cap_buffer': True})
+    params = closure.load_registry(REGISTRY).actuators[
+        'timing.repair_setup'].bind_params(requested)
+    assert prr.actuate(impl, params) == 0
+    resolved = json.loads((project / 'phase3/librelane/32-config/'
+                           'Vibeic.PostRouteRepair@32-cand01.json').read_text())
+    if actuator == 'max_wire':
+        assert resolved['VIBEIC_PRR_MAX_WIRE_LENGTH'] == 800
+    else:
+        assert resolved['VIBEIC_PRR_TARGETED_CAP_BUFFER'] is True
+    assert resolved['VIBEIC_PRR_CAP_MARGIN_PCT'] == 0
+    assert (impl / prr.CURRENT).read_bytes() == before
+    row = json.loads((arm / prr.LEDGER).read_text())['candidates'][-1]
+    assert row['decision'] == 'REFUSED'
+    assert row['native_signoff'][failed_half]['verdict'] == 'FAIL'
+    assert f'fresh sign-off {failed_half.upper()} is FAIL' in row['reason']
 
 
 def test_bounded_drive_strength_cli_is_strict_boolean():
@@ -445,7 +502,11 @@ def _fresh_resume_fixture(tmp_path):
 def test_resume_drv_refuses_each_changed_live_or_adopted_subject_before_controller(
         tmp_path, monkeypatch, view):
     project, _impl, files = _fresh_resume_fixture(tmp_path)
-    monkeypatch.setattr(prr, '_validate_resume_readset', lambda *_a: {'verdict': 'PASS'})
+    monkeypatch.setattr(
+        prr, '_validate_resume_readset',
+        lambda *_a: {'verdict': 'PASS',
+                     'next_actuator_plugin': {
+                         'postroute_repair.tcl': 'current'}})
     entered = []
     monkeypatch.setattr(closure, 'ClosureController',
                         lambda *_a, **_k: entered.append(True))
@@ -457,7 +518,11 @@ def test_resume_drv_refuses_each_changed_live_or_adopted_subject_before_controll
 
 def test_resume_drv_unchanged_subject_enters_controller(tmp_path, monkeypatch):
     project, _impl, _files = _fresh_resume_fixture(tmp_path)
-    monkeypatch.setattr(prr, '_validate_resume_readset', lambda *_a: {'verdict': 'PASS'})
+    monkeypatch.setattr(
+        prr, '_validate_resume_readset',
+        lambda *_a: {'verdict': 'PASS',
+                     'next_actuator_plugin': {
+                         'postroute_repair.tcl': 'current'}})
     entered = []
 
     class StopHere:
@@ -485,6 +550,16 @@ def _install_resume_readset(project, impl, files, monkeypatch):
     }
     monkeypatch.setattr(contract, 'local_image_attestation',
                         lambda _image: dict(image_identity, cid='c' * 64))
+    producer_plugins = contract._plugin_digests(prr.REPAIR_STEP)
+    producer_tree = project / '.vibeic/runtime-program-trees/fixture-producer'
+    manifest_files = {}
+    for rel, digest in producer_plugins.items():
+        source = PROGRAMS / rel
+        target = producer_tree / 'plugin/programs' / rel
+        write(target, source.read_text())
+        assert contract.digest(target) == digest
+        manifest_files[f'programs/{rel}'] = digest
+    put(producer_tree / 'manifest.json', {'files': manifest_files})
     folders = {}
     for number, step in enumerate((prr.REPAIR_STEP, *prr.MEASURE_STEPS), 1):
         folder = lane / (f'{number:02d}-' + step.lower().replace('.', '-'))
@@ -509,7 +584,7 @@ def _install_resume_readset(project, impl, files, monkeypatch):
             'local_image': image_identity, 'openroad_aliases': {},
         }
         if step == prr.REPAIR_STEP:
-            fp['plugin'] = contract._plugin_digests(step)
+            fp['plugin'] = producer_plugins
         if step == 'OpenROAD.RCX':
             fp['rcx_pdk_files'] = {str(files['model']): contract.digest(files['model'])}
         if step == 'OpenROAD.STAPostPNR':
@@ -539,7 +614,8 @@ def _install_resume_readset(project, impl, files, monkeypatch):
     return folders, image_identity
 
 
-@pytest.mark.parametrize('changed', ('config', 'model', 'pdk', 'tool'))
+@pytest.mark.parametrize('changed', ('config', 'model', 'pdk', 'tool',
+                                     'producer_source', 'producer_missing'))
 def test_resume_drv_readset_change_refuses_before_controller(
         tmp_path, monkeypatch, changed):
     project, impl, files = _fresh_resume_fixture(tmp_path)
@@ -550,6 +626,13 @@ def test_resume_drv_readset_change_refuses_before_controller(
         files['model'].write_text('changed model\n')
     elif changed == 'pdk':
         (folders['OpenROAD.RCX'] / 'pdk_root.json').write_text('{"changed":true}\n')
+    elif changed == 'producer_source':
+        producer = next((project / '.vibeic/runtime-program-trees').glob(
+            '*/plugin/programs/librelane_plugins/librelane_plugin_vibeic/postroute_repair.tcl'))
+        producer.write_text(producer.read_text() + '# stale\n')
+    elif changed == 'producer_missing':
+        next((project / '.vibeic/runtime-program-trees').glob(
+            '*/manifest.json')).unlink()
     else:
         monkeypatch.setattr(contract, 'local_image_attestation',
                             lambda _image: dict(image_identity, image_id='sha256:' + '2' * 64))
@@ -615,12 +698,13 @@ def test_resume_drv_keeps_the_ledger_and_records_only_the_new_controller(
                 'supply_ownership': {'verdict': 'PASS'}})
             return FakeRun()
 
-    monkeypatch.setattr(closure, 'load_registry', lambda *_a, **_k: object())
     monkeypatch.setattr(closure, 'ClosureController', FakeController)
     monkeypatch.setattr(prr, '_validate_resume_subject',
                         lambda *_a: {'live_def_sha256': 'fixture'})
     monkeypatch.setattr(prr, '_validate_resume_readset',
-                        lambda *_a: {'verdict': 'PASS'})
+                        lambda *_a: {'verdict': 'PASS',
+                                     'next_actuator_plugin': {
+                                         'postroute_repair.tcl': 'current'}})
     monkeypatch.setattr(prr, '_stamp_verdict',
                         lambda report: report.update(verdict='PASS', code=None))
     monkeypatch.setattr(prr, '_step32_drv_signoff', lambda *_a: None)
@@ -631,6 +715,93 @@ def test_resume_drv_keeps_the_ledger_and_records_only_the_new_controller(
     assert report['adopted'] == '32-cand02'
     assert report['candidates'][0] == old
     assert report['candidates'][1]['closure_decision'] == 'PROMOTED'
+
+
+def test_resume_drv_skips_measured_global_noops_and_binds_targeted_frontdoor(
+        tmp_path, monkeypatch):
+    project, impl, measurement = _resume_fixture(tmp_path)
+    prior = [{
+        'candidate': f'32-cand0{index + 2}',
+        'controller': 'postroute.repair_drv',
+        # Native CLI parsing records number parameters as floats.  They must
+        # compare equal to the registry's YAML integer spelling.
+        'params': {'bounded_drive_strength': True,
+                   'cap_margin_pct': float(margin)},
+        'decision': 'REFUSED', 'closure_decision': 'ROLLED_BACK',
+    } for index, margin in enumerate((10, 20))]
+    prior.append({
+        'candidate': '32-cand04', 'controller': 'postroute.repair_drv',
+        'params': {'bounded_drive_strength': True,
+                   'max_wire_length_um': 0.0},
+        'decision': 'REFUSED', 'closure_decision': 'ROLLED_BACK',
+    })
+    put(project / prr.ARM_REL / prr.LEDGER, {'candidates': prior})
+    seen = {}
+
+    class FakeRun:
+        def to_record(self):
+            return {'controller': 'postroute.repair_drv', 'outcome': 'PLATEAU',
+                    'iterations': []}
+
+    class FakeController:
+        def __init__(self, reg, _impl, _work):
+            ctl = reg.controllers['postroute.repair_drv']
+            seen['plan'] = ctl.plan
+            seen['max_iterations'] = ctl.max_iterations
+            act = reg.actuators[ctl.actuator_id]
+            seen['argv'] = act.build_argv(_impl, act.bind_params(ctl.plan[0]))
+
+        def run_controller(self, _controller):
+            return FakeRun()
+
+    monkeypatch.setattr(closure, 'ClosureController', FakeController)
+    monkeypatch.setattr(prr, '_validate_resume_subject',
+                        lambda *_a: {'live_def_sha256': 'fixture'})
+    monkeypatch.setattr(prr, '_validate_resume_readset',
+                        lambda *_a: {
+                            'verdict': 'PASS',
+                            'next_actuator_plugin': {
+                                'postroute_repair.tcl': 'current'},
+                        })
+    monkeypatch.setattr(prr, '_stamp_verdict', lambda *_a: None)
+    monkeypatch.setattr(prr, '_step32_drv_signoff', lambda *_a: None)
+    monkeypatch.setattr(prr, '_publish_declared_repair', lambda *_a: None)
+    prr.resume_drv(project)
+    assert seen['plan'] == ({'targeted_cap_buffer': True},)
+    assert seen['max_iterations'] == 1
+    assert seen['argv'][-2:] == ['--targeted-cap-buffer', 'true']
+    assert seen['argv'][seen['argv'].index('--max-wire-length-um') + 1] == '-1'
+    assert seen['argv'][seen['argv'].index('--cap-margin-pct') + 1] == '0'
+    assert json.loads((impl / prr.CURRENT).read_text())['measurement'] == measurement
+
+
+@pytest.mark.parametrize(
+    'decision,targeted,recorded,expected',
+    [
+        ('ACTUATOR_FAILED', True, {'postroute_repair.tcl': 'old'}, False),
+        ('ACTUATOR_FAILED', True, {'postroute_repair.tcl': 'current'}, True),
+        ('ACTUATOR_FAILED', False, {'postroute_repair.tcl': 'old'}, True),
+        ('TOOL_REFUSED', True, {'postroute_repair.tcl': 'old'}, True),
+        ('ACTUATOR_FAILED', True, None, True),
+    ],
+)
+def test_resume_targeted_retry_requires_changed_proven_actuator(
+        tmp_path, decision, targeted, recorded, expected):
+    project = tmp_path / 'project'
+    folder = project / 'phase3/librelane/32-cand07/01-vibeic-postrouterepair'
+    folder.mkdir(parents=True)
+    if recorded is not None:
+        put(folder / 'input_fingerprint.json', {'plugin': recorded})
+    row = {
+        'decision': decision,
+        'params': {'targeted_cap_buffer': targeted},
+        'reason': ('LL_STEP_FAILED: Vibeic.PostRouteRepair: rc=255; '
+                   '/project/phase3/librelane/32-cand07/'
+                   '01-vibeic-postrouterepair/invocation.log'),
+    }
+    assert prr._attempted_by_current_actuator(
+        project, {'project': '/project', 'mounts': []}, row,
+        {'postroute_repair.tcl': 'current'}) is expected
 
 
 def test_the_hold_buffer_budget_above_the_guardrail_is_refused_not_clamped():
@@ -888,6 +1059,44 @@ def test_every_check_placement_is_a_named_refusal():
     assert tcl.count('VIBEIC_PRR_PLACEMENT_REFUSED:') == len(calls)
     assert 'VIBEIC_PRR_PLACEMENT_REFUSED:' in tcl
     assert prr._STEP_REFUSAL.match('VIBEIC_PRR_PLACEMENT_REFUSED: check_placement: x')
+
+
+@pytest.mark.skipif(not __import__('shutil').which('tclsh'), reason='tclsh absent')
+@pytest.mark.parametrize('placement_ok', (True, False))
+def test_targeted_cap_checks_placement_before_direct_insert(tmp_path, placement_ok):
+    """The targeted front door enters its actuator only after the full public
+    placement check succeeds.  A bad placement is a named refusal and cannot
+    create a buffer or write candidate geometry."""
+    tcl = (STEP_DIR / 'postroute_repair.tcl').read_text()
+    start = tcl.index('if {$::vic_targeted_cap} {')
+    end = tcl.index('\n\n# Removing a buffer', start)
+    section = tmp_path / 'targeted_branch.tcl'
+    section.write_text(tcl[start:end])
+    harness = tmp_path / 'harness.tcl'
+    harness.write_text(textwrap.dedent(f'''\
+        set ::vic_targeted_cap 1
+        set ::events [list]
+        set ::env(VIBEIC_PRR_SETUP_SEQUENCE) default
+        proc check_placement {{args}} {{
+            lappend ::events CHECK_PLACEMENT
+            {'return' if placement_ok else 'error "DPL-0033"'}
+        }}
+        proc vic_targeted_cap_buffer {{}} {{lappend ::events ACTUATOR}}
+        proc log_cmd {{args}} {{lappend ::events REPAIR_DESIGN}}
+        rename exit real_exit
+        proc exit {{code}} {{lappend ::events EXIT; error "EXIT:$code"}}
+        set rc [catch {{source {{{section}}}}} err]
+        puts "RC=$rc ERR=$err EVENTS=$::events"
+    '''))
+    result = subprocess.run(['tclsh', str(harness)], text=True,
+                            capture_output=True, check=True)
+    if placement_ok:
+        assert 'RC=0' in result.stdout
+        assert 'EVENTS=CHECK_PLACEMENT ACTUATOR' in result.stdout
+    else:
+        assert 'RC=1 ERR=EXIT:1 EVENTS=CHECK_PLACEMENT EXIT' in result.stdout
+        assert 'ACTUATOR' not in result.stdout
+        assert 'VIBEIC_PRR_PLACEMENT_REFUSED: check_placement: DPL-0033' in result.stderr
 
 
 @pytest.mark.parametrize('line', NAMED_REFUSALS)
