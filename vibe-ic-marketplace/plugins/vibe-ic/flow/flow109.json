@@ -8438,7 +8438,32 @@
           "native_steps": [
             "OpenROAD.CheckSDCFiles"
           ],
-          "execution_status": "UNIMPLEMENTED"
+          "execution_status": "NATIVE_COMPONENT_ONLY_NOT_109_ACCEPTED",
+          "dispatch": {
+            "kind": "canonical_backend_window",
+            "native_step_id": "16",
+            "producer": "execution_backend_producers.py:produce",
+            "producer_sites": [
+              "phase3_one_shot_runner.py:emit_clock_plan"
+            ],
+            "engine_families": [
+              "opensta"
+            ],
+            "consumer": "execution_backend_gates.py:evaluate",
+            "native_required_outputs": [
+              "phase3/stage3/cts/clock_plan.json"
+            ],
+            "acceptance_scope": "existing_native_component_only",
+            "flow109_metrics_status": "UNIMPLEMENTED",
+            "engine_executables": {
+              "opensta": "sta"
+            },
+            "engine_steps": {
+              "opensta": [
+                "OpenROAD.CheckSDCFiles"
+              ]
+            }
+          }
         }
       ],
       "complementary_tools": [],

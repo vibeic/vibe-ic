@@ -337,6 +337,34 @@ def test_forged_backend_owner_cannot_select_existing_native_policy():
         flow109.source_owned_native_dispatch(row)
 
 
+def test_d34_clock_planning_reuses_current_step16_owner_and_strict_claim_path():
+    import execution_backend_gates
+
+    plan = flow109.resolve_plan(profile())
+    row = flow109.resolve_step(plan, "D34")
+    dispatch = flow109.source_owned_native_dispatch(row)
+    canonical = execution_backend_gates.canonical_family_row("16")
+    assert dispatch["native_step_id"] == "16"
+    assert dispatch["producer"] == "execution_backend_producers.py:produce"
+    assert dispatch["producer_sites"] == [
+        "phase3_one_shot_runner.py:emit_clock_plan"]
+    assert dispatch["consumer"] == "execution_backend_gates.py:evaluate"
+    assert dispatch["native_required_outputs"] == canonical["required_outputs"]
+    context = flow109.execution_context(plan, "D34", "D34")
+    admission = flow109.source_owned_native_admission(context)
+    assert admission["status"] == "NOT_APPLICABLE"
+    assert admission["qualification_status"] == "NOT_CLAIMED"
+    assert admission["flow109_acceptance"] == "NOT_MEASURED"
+    claimed = flow109.execution_context(
+        plan, "D34", "D34", runtime_tool_uses=[],
+        qualification_registry="input/qualifications.json")
+    assert flow109.source_owned_native_admission(claimed) is None
+
+    row["profile"]["dispatch"]["native_step_id"] = "17"
+    with pytest.raises(flow109.Flow109Error, match="FLOW109_NATIVE_OWNER_INVALID"):
+        flow109.source_owned_native_dispatch(row)
+
+
 def test_owner_route_refuses_wrong_owner_and_unknown_native_mapping():
     plan = flow109.resolve_plan(profile())
     row = next(item for item in plan["rows"] if item["id"] == "D12")

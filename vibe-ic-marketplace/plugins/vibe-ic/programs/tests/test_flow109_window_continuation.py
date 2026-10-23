@@ -147,10 +147,18 @@ def test_delivery_receipts_preserve_failure_and_missing_release_evidence(
         assert missing_reason in result["components"][-1]["reason"]
 
 
-def test_window_refuses_unimplemented_required_row_and_reverse():
+def test_clock_planning_window_reaches_registered_native_owner_and_reverse():
     plan = flow109.resolve_plan(_profile())
-    with pytest.raises(flow109.Flow109Error, match=r"PRODUCER_UNIMPLEMENTED.*D34"):
-        flow109.resolve_execution_window(plan, "D31", "D35")
+    window = flow109.resolve_execution_window(plan, "D34", "D35")
+    assert window["dispatch_kind"] == "canonical_backend_window"
+    assert [row["id"] for row in window["resolved_rows"]] == ["D34", "D35"]
+    assert (window["native_entry_step"], window["native_exit_step"]) == ("16", "17")
+    context = flow109.execution_context(plan, "D34", "D35")
+    admission_record = flow109.source_owned_native_admission(context)
+    assert admission_record["status"] == "NOT_APPLICABLE"
+    assert admission_record["qualification_status"] == "NOT_CLAIMED"
+    assert admission_record["native_step_id"] == ["16", "17"]
+    assert admission_record["flow109_acceptance"] == "NOT_MEASURED"
     with pytest.raises(flow109.Flow109Error, match="WINDOW_REVERSED"):
         flow109.resolve_execution_window(plan, "D32", "D31")
 
