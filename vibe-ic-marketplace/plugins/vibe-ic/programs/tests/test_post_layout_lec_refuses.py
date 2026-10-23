@@ -162,11 +162,28 @@ def _pdk():
                        drc_deck=n / "d.lydrc")
 
 
-def test_a_failed_proof_makes_the_step_fail(tmp_path):
+def _default_final_inputs(project, monkeypatch):
+    """Isolate LEC adoption on the current Default final-evidence consumer."""
+    pnr = R._pl.pnr_dir(project)
+    pnr.mkdir(parents=True, exist_ok=True)
+    (pnr / 'routed.def').write_text('VERSION 5.8 ;\nEND DESIGN\n')
+    (pnr / 'top.gds').write_bytes(b'isolated layout prerequisite')
+    monkeypatch.setattr(R, '_publish_canonical_gds_alias', lambda *a: None)
+    monkeypatch.setattr(R, '_signoff_regen', lambda *a: False)
+    def density(_project, _top, _pdk, _container, output, _notes):
+        output.write_text('{}\n')
+        return True
+    monkeypatch.setattr(R, '_emit_metal_density_report', density)
+    monkeypatch.setattr(R, '_emit_perc_equivalent', lambda *a: True)
+    monkeypatch.setattr(R, 'run_at_speed_atpg_producers', lambda *a: None)
+
+
+def test_a_failed_proof_makes_the_step_fail(tmp_path, monkeypatch):
     """Not a note, not a warning: `step_canonicalize_artefacts` FAILs, and a
     FAIL step is what makes `phase3_one_shot_runner.main` exit non-zero."""
     _write(tmp_path, _proven(verdict="UNPROVEN", proven_points=1,
                              unproven_points=1))
+    _default_final_inputs(tmp_path, monkeypatch)
     res = R.step_canonicalize_artefacts(tmp_path, "top", _pdk(), "vibeic-eda")
     assert res.status == "FAIL"
     assert "post-layout LEC FAILED" in res.detail
@@ -176,10 +193,11 @@ def test_a_failed_proof_makes_the_step_fail(tmp_path):
     assert R._aggregate_verdict([res]) == "FAIL"
 
 
-def test_a_real_proof_leaves_the_step_alone(tmp_path):
+def test_a_real_proof_leaves_the_step_alone(tmp_path, monkeypatch):
     """The positive control on the same code path — the guard must discriminate,
     not just refuse."""
     _write(tmp_path, _proven())
+    _default_final_inputs(tmp_path, monkeypatch)
     res = R.step_canonicalize_artefacts(tmp_path, "top", _pdk(), "vibeic-eda")
     assert res.status == "PASS"
     assert "post-layout LEC FAILED" not in res.detail

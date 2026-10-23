@@ -366,9 +366,11 @@ def test_recipe_default_escalates_seq_depth():
     ys = L.build_yosys_equiv_script("gold.v", "gate.v", "lib.lib", "top")
     for d in L.DEFAULT_SEQ_DEPTHS:
         assert f"equiv_induct -seq {d}" in ys, d
-    # ascending order (shallow first keeps the common case cheap)
-    idxs = [ys.index(f"equiv_induct -seq {d}") for d in (4, 16, 64)]
+    # The shared ladder first attempts a joint state proof at depth 16;
+    # its fallback induction schedule still escalates 4 -> 16 -> 64.
+    idxs = [ys.rindex(f"equiv_induct -seq {d}") for d in (4, 16, 64)]
     assert idxs == sorted(idxs)
+    assert ys.index("equiv_induct -seq 16") < ys.index("equiv_induct -seq 4")
     # deepest induct comes before the final status readout
     assert ys.index("equiv_induct -seq 64") < ys.index("equiv_status")
 

@@ -20,7 +20,7 @@ import sys
 HERE = Path(__file__).resolve().parent
 if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
-from _atomic_artefact import write_json
+from _atomic_artefact import write_json, write_text
 
 SCHEMA = 'vibeic.flow109.final-lec-physical-inputs.v1'
 KIND = 'def_bound_powered_chip_functional_views_v1'
@@ -136,7 +136,7 @@ def produce(project, manifest_path, output, *, before=None):
     for side, source in [('gold', gold), ('gate', gate)]:
         model_path = output / f'{side}.elaborated.json'
         script = output / f'{side}.elaborate.ys'
-        script.write_text(''.join('read_liberty -ignore_miss_func ' + _word(paths[k]) + '\n'
+        write_text(script, ''.join('read_liberty -ignore_miss_func ' + _word(paths[k]) + '\n'
                                   for k in ('liberty', 'io_liberty'))
                           + 'read_verilog -formal -sv -icells ' + _word(source) + '\n'
                           + f'hierarchy -check -top {top}\nproc\n'
@@ -147,7 +147,7 @@ def produce(project, manifest_path, output, *, before=None):
             before()
         result = subprocess.run(command, capture_output=True, text=True)
         log = output / f'{side}.elaborate.log'
-        log.write_text(result.stdout + result.stderr)
+        write_text(log, result.stdout + result.stderr)
         commands.append({'argv': command, 'exit': result.returncode,
                          'script': record(script), 'log': record(log)})
         if result.returncode or not model_path.is_file():
@@ -164,7 +164,7 @@ def produce(project, manifest_path, output, *, before=None):
         projections[side] = unused_supply_projection(models[side], sorted(absent), supplies)
         final = output / f'{side}.functional.v'
         script = output / f'{side}.project.ys'
-        script.write_text('read_json ' + _word(output / f'{side}.elaborated.json') + '\n'
+        write_text(script, 'read_json ' + _word(output / f'{side}.elaborated.json') + '\n'
                           + ''.join(f'delete {top}/w:{name}\n' for name in projections[side])
                           + 'write_verilog -noattr ' + _word(final) + '\n')
         command = [str(yosys), '-Q', '-T', '-s', str(script)]
@@ -172,7 +172,7 @@ def produce(project, manifest_path, output, *, before=None):
             before()
         result = subprocess.run(command, capture_output=True, text=True)
         log = output / f'{side}.project.log'
-        log.write_text(result.stdout + result.stderr)
+        write_text(log, result.stdout + result.stderr)
         commands.append({'argv': command, 'exit': result.returncode,
                          'script': record(script), 'log': record(log)})
         if result.returncode or not final.is_file():

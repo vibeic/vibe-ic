@@ -101,8 +101,9 @@ def _case(project, *, broken=False, missing_corner=False, transitive=False,
         'required_smokes': smokes})
     declared_models = [model] + dependencies
     _present, spice_inventory_path = analog.completeness._axis_status(project, 'spice_models')
-    spice_inventory = next(row for row in declared_models
-                           if row['path'] == spice_inventory_path)
+    spice_inventory = {'path': spice_inventory_path,
+                       'sha256': hashlib.sha256(
+                           (project / spice_inventory_path).read_bytes()).hexdigest()}
     pdk = _put(project, 'input/flow109/A02-pdk.json', {
         'schema': analog.SCHEMA, 'name': 'open-developer-model',
         'model_files': declared_models,
@@ -269,6 +270,10 @@ def test_bound_transitive_lib_section_is_staged_and_receipted(tmp_path):
 
 def test_unbound_existing_transitive_model_refuses(tmp_path):
     _case(tmp_path, transitive='unbound')
+    pdk = json.loads((tmp_path / 'input/flow109/A02-pdk.json').read_text())
+    assert pdk['inventory_files']['spice_models']['path'].endswith('open_dev_child.lib')
+    assert all(not row['path'].endswith('open_dev_child.lib')
+               for row in pdk['model_files'])
     result = _run(tmp_path)
     assert result.returncode == 2, result.stdout + result.stderr
     assert 'A02_MODEL_DEPENDENCY_UNBOUND' in result.stderr
