@@ -11,6 +11,7 @@ never an implicit false, zero or empty set.
 """
 from __future__ import annotations
 
+import csv
 import hashlib
 import json
 import math
@@ -45,6 +46,10 @@ D62_BINDINGS = {
     "base_43.fill_density_rules": {
         "operator": "within_declared_bounds",
         "authority": "requirements/base_43/fill_density_rules.json",
+    },
+    "base_43.fill_keepout_violations": {
+        "operator": "eq",
+        "authority": "requirements/base_43/fill_keepout_violations.json",
     },
     "base_43.fill_geometry_identity": {
         "operator": "matches_adopted_reference",
@@ -264,27 +269,81 @@ def _approved_document(project: Path, relative: str, *, authority: str,
 
 
 def _d62_bounds_authority(project: Path, relative: str,
-                          component: Mapping[str, Any]) -> dict:
+                          inputs: Mapping[str, Any]) -> dict:
     authority, body = _approved_document(project, relative,
         authority="requirements_owner", schema=AUTHORITY_SCHEMA)
-    limits, units = body.get("limits"), body.get("units")
-    if (not isinstance(limits, Mapping) or not isinstance(units, str) or not units
-            or (limits.get("min") is None and limits.get("max") is None)):
-        raise MetricRefusal("METRIC_AUTHORITY_INVALID", "D62 limits/units")
-    if limits.get("min") is not None:
-        _finite_number(limits["min"])
-    if limits.get("max") is not None:
-        _finite_number(limits["max"])
-    if (limits.get("min") is not None and limits.get("max") is not None
-            and limits["min"] > limits["max"]):
-        raise MetricRefusal("METRIC_AUTHORITY_INVALID", "minimum exceeds maximum")
-    rules = component.get("inputs", {}).get("rules")
-    if (not isinstance(rules, Mapping)
-            or body.get("rules_sha256") != rules.get("sha256")):
-        raise MetricRefusal("METRIC_AUTHORITY_STALE", "D62 rules identity")
-    authority.update(limits=dict(limits), unit=units,
-                     rules_sha256=body["rules_sha256"])
+    limits, scope = body.get("limits"), body.get("scope")
+    if not isinstance(limits, Mapping) or not limits or body.get("units") != "ratio":
+        raise MetricRefusal("METRIC_AUTHORITY_INVALID", "D62 per-layer ratio limits")
+    normalized = {}
+    for layer, band in limits.items():
+        if (not isinstance(layer, str) or not _SAFE.fullmatch(layer)
+                or not isinstance(band, Mapping) or set(band) != {"min", "max"}
+                or (band.get("min") is None and band.get("max") is None)):
+            raise MetricRefusal("METRIC_AUTHORITY_INVALID", "D62 per-layer band shape")
+        low, high = band.get("min"), band.get("max")
+        if low is not None:
+            _finite_number(low)
+        if high is not None:
+            _finite_number(high)
+        if low is not None and high is not None and low > high:
+            raise MetricRefusal("METRIC_AUTHORITY_INVALID", f"{layer}: minimum exceeds maximum")
+        if ((low is not None and not 0.0 <= low <= 1.0)
+                or (high is not None and not 0.0 <= high <= 1.0)):
+            raise MetricRefusal("METRIC_AUTHORITY_INVALID", f"{layer}: density outside [0,1]")
+        normalized[layer] = {"min": low, "max": high}
+    if (not isinstance(scope, Mapping) or scope.get("area") != "core"
+            or scope.get("kind") != "tiled_windows"):
+        raise MetricRefusal("METRIC_AUTHORITY_INVALID", "D62 density scope")
+    window, step = scope.get("window_um"), scope.get("step_um")
+    min_width, min_height = scope.get("minimum_core_dimensions_um", [None, None]) \
+        if isinstance(scope.get("minimum_core_dimensions_um"), list) \
+        and len(scope["minimum_core_dimensions_um"]) == 2 else (None, None)
+    for value in (window, step, min_width, min_height):
+        _finite_number(value)
+    if window <= 0 or step <= 0 or step >= window or min_width < window or min_height < window:
+        raise MetricRefusal("METRIC_AUTHORITY_INVALID",
+                            "positive offset checker grid and minimum core dimensions required")
+    for role in ("rules", "pdk"):
+        record = inputs.get(role)
+        if (not isinstance(record, Mapping)
+                or body.get(f"{role}_sha256") != record.get("sha256")):
+            raise MetricRefusal("METRIC_AUTHORITY_STALE", f"D62 {role} identity")
+    authority.update(limits=normalized, unit="ratio", scope=dict(scope),
+                     rules_sha256=body["rules_sha256"], pdk_sha256=body["pdk_sha256"],
+                     foundry_deck_signoff="NOT_MEASURED")
     return authority
+
+
+def _d62_keepout_authority(project: Path, relative: str,
+                           inputs: Mapping[str, Any]) -> dict:
+    authority, body = _approved_document(project, relative,
+        authority="requirements_owner", schema=AUTHORITY_SCHEMA)
+    if (body.get("expected") != 0 or body.get("unit") != "count"
+            or body.get("checker_semantics") != "opendb_fill_obstruction_overlap"
+            or not isinstance(body.get("validated_absence"), bool)):
+        raise MetricRefusal("METRIC_AUTHORITY_INVALID", "D62 keepout contract")
+    for role in ("rules", "pdk"):
+        record = inputs.get(role)
+        if (not isinstance(record, Mapping)
+                or body.get(f"{role}_sha256") != record.get("sha256")):
+            raise MetricRefusal("METRIC_AUTHORITY_STALE", f"D62 {role} identity")
+    authority.update(value=0, unit="count",
+                     checker_semantics=body["checker_semantics"],
+                     validated_absence=body["validated_absence"],
+                     rules_sha256=body["rules_sha256"], pdk_sha256=body["pdk_sha256"],
+                     foundry_deck_signoff="NOT_MEASURED")
+    return authority
+
+
+def d62_authorities(project: Path, inputs: Mapping[str, Any]) -> dict:
+    """Load both independently approved D62 checker inputs before launch."""
+    return {
+        "density": _d62_bounds_authority(project,
+            D62_BINDINGS["base_43.fill_density_rules"]["authority"], inputs),
+        "keepout": _d62_keepout_authority(project,
+            D62_BINDINGS["base_43.fill_keepout_violations"]["authority"], inputs),
+    }
 
 
 def _d62_reference_authority(project: Path, relative: str) -> dict:
@@ -316,7 +375,9 @@ def _d62_measurement(project: Path, component: Mapping[str, Any],
     outputs = receipt.get("outputs")
     geometry_outputs = {"filled.odb", "before.def", "filled.def", "readback.def",
                         "producer.census", "consumer.census"}
-    exact_outputs = geometry_outputs | {"producer.log", "consumer.log"}
+    checker_outputs = {"density-limits.txt", "density.csv", "checker.census",
+                       "checker.log"}
+    exact_outputs = geometry_outputs | checker_outputs | {"producer.log", "consumer.log"}
     if not isinstance(outputs, dict) or set(outputs) != exact_outputs:
         raise MetricRefusal("METRIC_EVIDENCE_ABSENT", "D62 exact native output set")
     if receipt.get("operation_sources") != operation_sources():
@@ -329,10 +390,31 @@ def _d62_measurement(project: Path, component: Mapping[str, Any],
         "context_sha256": context.get("context_sha256"), "native_started": False}
     expected_tool = {key: use.get(key) for key in
                      ("tool_id", "version", "build_sha256", "executable")}
+    executions = receipt.get("executions")
+    expected_roles = ("fill_producer", "independent_odb_readback",
+                      "current_odb_metric_checker")
+    executable_path = Path(str(use.get("executable", {}).get("path", "")))
+    if not executable_path.is_absolute():
+        executable_path = (project / executable_path).resolve()
+    if (not isinstance(executions, list) or len(executions) != len(expected_roles)
+            or tuple(run.get("role") for run in executions) != expected_roles
+            or any(run.get("returncode") != 0 or not isinstance(run.get("argv"), list)
+                   or len(run["argv"]) != 4 or run["argv"][0] != str(executable_path)
+                   or run["argv"][1:3] != ["-no_init", "-exit"]
+                   or not isinstance(run.get("read_set"), dict) or not run["read_set"]
+                   or not isinstance(run.get("path_bindings"), dict) or not run["path_bindings"]
+                   for run in executions)
+            or Path(executions[0]["argv"][3]).name != "flow109_density_fill.tcl"
+            or Path(executions[1]["argv"][3]).name != "flow109_density_fill.tcl"
+            or Path(executions[2]["argv"][3]).name != "flow109_density_checks.tcl"):
+        raise MetricRefusal("METRIC_EXECUTION_EVIDENCE_INVALID", "D62 native execution set")
     if (receipt.get("qualification") != expected_qualification
             or receipt.get("tool") != expected_tool
             or set(receipt.get("inputs", {})) != {"input_odb", "rules", "pdk", "config", "executable"}
             or receipt.get("inputs") != component.get("inputs")
+            or receipt.get("authorities") != component.get("authorities")
+            or receipt.get("authority_inputs") != component.get("authority_inputs")
+            or executions != component.get("executions")
             or receipt.get("manifest") != component.get("manifest")
             or outputs != component.get("outputs")
             or receipt.get("measurements") != component.get("measurements")):
@@ -358,7 +440,8 @@ def _d62_measurement(project: Path, component: Mapping[str, Any],
                            "use_id": use.get("use_id"),
                            "qualification_sha256": use.get("qualification_sha256"),
                            "build_sha256": use.get("build_sha256"),
-                           "executable": use.get("executable")},
+                           "executable": use.get("executable"),
+                           "executions": executions},
         "consumed_inputs": receipt["inputs"],
         "requirements": "bound-per-obligation",
         "configuration": use.get("config"),
@@ -368,6 +451,130 @@ def _d62_measurement(project: Path, component: Mapping[str, Any],
     }
     _identity_complete(identity)
     return {"status": "MEASURED", "value": value, "identity": identity}
+
+
+def _d62_rule_measurements(project: Path, component: Mapping[str, Any],
+                           context: Mapping[str, Any], geometry: Mapping[str, Any]
+                           ) -> tuple[dict, dict]:
+    if geometry.get("status") != "MEASURED":
+        missing = {"status": geometry.get("status", "NOT_MEASURED"),
+                   "reason": geometry.get("reason") or "D62 geometry is not current"}
+        return missing, missing
+    receipt_path = _safe_project_file(project, component["receipt"]["path"])
+    receipt = json.loads(receipt_path.read_text())
+    authorities = d62_authorities(project, receipt.get("inputs", {}))
+    if authorities != receipt.get("authorities"):
+        raise MetricRefusal("METRIC_AUTHORITY_STALE", "D62 executed authority identity")
+    outputs = receipt["outputs"]
+    census_path = _safe_project_file(project, outputs["checker.census"]["path"])
+    census_lines = census_path.read_text().splitlines()
+    expected_labels = ("DENSITY_VIOLATIONS", "FILL_OBSTRUCTIONS", "FILLS_CHECKED",
+                       "KEEPOUT_VIOLATIONS", "CORE_DBU", "DBU_PER_MICRON")
+    census = {}
+    for line, label in zip(census_lines, expected_labels):
+        fields = line.split()
+        if not fields or fields[0] != label:
+            raise MetricRefusal("METRIC_EVIDENCE_INVALID", "D62 checker census order")
+        census[label] = fields[1:]
+    if len(census_lines) != len(expected_labels):
+        raise MetricRefusal("METRIC_EVIDENCE_INVALID", "D62 checker census length")
+    try:
+        density_violations, obstruction_count, fills_checked, keepout_violations = (
+            int(census[key][0]) for key in expected_labels[:4])
+        core = [int(value) for value in census["CORE_DBU"]]
+        dbu = int(census["DBU_PER_MICRON"][0])
+    except (IndexError, TypeError, ValueError) as exc:
+        raise MetricRefusal("METRIC_EVIDENCE_INVALID", "D62 checker census values") from exc
+    if (len(core) != 4 or dbu <= 0 or any(value < 0 for value in
+            (density_violations, obstruction_count, fills_checked, keepout_violations))):
+        raise MetricRefusal("METRIC_EVIDENCE_INVALID", "D62 checker census range")
+
+    density_path = _safe_project_file(project, outputs["density.csv"]["path"])
+    with density_path.open(newline="") as stream:
+        reader = csv.DictReader(stream)
+        required_fields = ["Layer", "X0", "Y0", "X1", "Y1", "FilledArea(um^2)",
+                           "WindowArea(um^2)", "Density", "Min", "Max", "Status"]
+        if reader.fieldnames != required_fields:
+            raise MetricRefusal("METRIC_EVIDENCE_INVALID", "D62 density CSV header")
+        rows = list(reader)
+    if not rows:
+        raise MetricRefusal("METRIC_EVIDENCE_ABSENT", "D62 density windows")
+    limits = authorities["density"]["limits"]
+    per_layer = {layer: [] for layer in limits}
+    observed_violations = 0
+    for row in rows:
+        try:
+            density = float(row["Density"])
+            low, high = float(row["Min"]), float(row["Max"])
+            bounds = [float(row[key]) for key in ("X0", "Y0", "X1", "Y1")]
+            filled_area, window_area = (float(row[key]) for key in
+                                        ("FilledArea(um^2)", "WindowArea(um^2)"))
+        except (TypeError, ValueError) as exc:
+            raise MetricRefusal("METRIC_EVIDENCE_INVALID", "D62 density row") from exc
+        for value in (density, low, high, *bounds, filled_area, window_area):
+            _finite_number(value)
+        if (window_area <= 0 or bounds[2] <= bounds[0] or bounds[3] <= bounds[1]
+                or row["Status"] not in {"OK", "UNDER", "OVER", "NO_LIMIT"}):
+            raise MetricRefusal("METRIC_EVIDENCE_INVALID", "D62 density window geometry")
+        band = limits.get(row["Layer"])
+        if band is None:
+            if row["Status"] != "NO_LIMIT":
+                raise MetricRefusal("METRIC_EVIDENCE_MISMATCH", "unapproved density layer band")
+            continue
+        expected_low = -1.0 if band["min"] is None else float(band["min"])
+        expected_high = -1.0 if band["max"] is None else float(band["max"])
+        expected_status = ("UNDER" if expected_low >= 0 and density < expected_low
+                           else "OVER" if expected_high >= 0 and density > expected_high
+                           else "OK")
+        if (abs(low - expected_low) > 1e-9 or abs(high - expected_high) > 1e-9
+                or row["Status"] != expected_status):
+            raise MetricRefusal("METRIC_EVIDENCE_MISMATCH", "D62 density authority/result")
+        observed_violations += expected_status != "OK"
+        per_layer[row["Layer"]].append({
+            "window_um": bounds, "density": density, "min": band["min"],
+            "max": band["max"], "status": expected_status})
+    if any(not layer_rows for layer_rows in per_layer.values()):
+        raise MetricRefusal("METRIC_EVIDENCE_ABSENT", "approved D62 density layer unmeasured")
+    if observed_violations != density_violations:
+        raise MetricRefusal("METRIC_EVIDENCE_MISMATCH", "D62 density violation census")
+    scope = authorities["density"]["scope"]
+    core_width, core_height = (core[2] - core[0]) / dbu, (core[3] - core[1]) / dbu
+    min_width, min_height = scope["minimum_core_dimensions_um"]
+    if core_width < min_width or core_height < min_height:
+        raise MetricRefusal("METRIC_SCOPE_UNSUPPORTED", "D62 core below approved density scope")
+
+    common_identity = dict(geometry["identity"])
+    density_identity = dict(common_identity)
+    density_identity["checker"] = {
+        "name": "OpenROAD.check_metal_density",
+        "report": outputs["density.csv"], "census": outputs["checker.census"]}
+    density_identity["requirements"] = {
+        "path": authorities["density"]["path"], "sha256": authorities["density"]["sha256"],
+        "source": authorities["density"]["source"]}
+    keepout_identity = dict(common_identity)
+    keepout_identity["checker"] = {
+        "name": "flow109_density_checks.native_fill_obstruction_overlap",
+        "census": outputs["checker.census"]}
+    keepout_identity["requirements"] = {
+        "path": authorities["keepout"]["path"], "sha256": authorities["keepout"]["sha256"],
+        "source": authorities["keepout"]["source"]}
+    _identity_complete(density_identity)
+    _identity_complete(keepout_identity)
+    density = {"status": "MEASURED", "value": {
+        "per_layer": per_layer, "violations": density_violations,
+        "scope": scope, "core_dimensions_um": [core_width, core_height],
+        "foundry_deck_signoff": "NOT_MEASURED"}, "unit": "ratio",
+        "identity": density_identity}
+    if obstruction_count == 0 and not authorities["keepout"]["validated_absence"]:
+        keepout = {"status": "NOT_MEASURED",
+                   "reason": "D62_KEEPOUT_SET_EMPTY_WITHOUT_VALIDATED_ABSENCE"}
+    else:
+        keepout = {"status": "MEASURED", "value": keepout_violations, "unit": "count",
+                   "checked_fill_obstructions": obstruction_count,
+                   "fills_checked": fills_checked,
+                   "foundry_deck_signoff": "NOT_MEASURED",
+                   "identity": keepout_identity}
+    return density, keepout
 
 
 def _a01_measurements(project: Path, component: Mapping[str, Any],
@@ -565,6 +772,18 @@ def accept_d62(project: Path, context: Mapping[str, Any],
         geometry = {"status": "NOT_MEASURED",
                     "reason": getattr(exc, "code", "METRIC_EVIDENCE_INVALID"),
                     "detail": str(exc)}
+    try:
+        density, keepout = _d62_rule_measurements(project, component, context, geometry)
+    except (MetricRefusal, OSError, ValueError, KeyError, TypeError) as exc:
+        missing = {"status": "NOT_MEASURED",
+                   "reason": getattr(exc, "code", "METRIC_EVIDENCE_INVALID"),
+                   "detail": str(exc)}
+        density, keepout = missing, missing
+    measured_by_id = {
+        "base_43.fill_density_rules": density,
+        "base_43.fill_keepout_violations": keepout,
+        "base_43.fill_geometry_identity": geometry,
+    }
     for obligation in obligations:
         oid = obligation.get("id") if isinstance(obligation, dict) else None
         binding = D62_BINDINGS.get(oid)
@@ -572,19 +791,34 @@ def accept_d62(project: Path, context: Mapping[str, Any],
             result["obligations"].append({"id": oid, "status": "UNIMPLEMENTED_METRIC_BINDING"})
             continue
         expectation = obligation.get("expectation", {})
-        ref_key = "bounds_ref" if oid == "base_43.fill_density_rules" else "reference_ref"
-        declared = str(expectation.get(ref_key, "")).partition("#/")[0]
-        if expectation.get("operator") != binding["operator"] or declared != binding["authority"]:
+        declared_ok = (str(expectation.get("bounds_ref", "")).partition("#/")[0]
+                       == binding["authority"] if oid == "base_43.fill_density_rules"
+                       else str(expectation.get("reference_ref", "")).partition("#/")[0]
+                       == binding["authority"] if oid == "base_43.fill_geometry_identity"
+                       else expectation.get("value") == 0
+                       and expectation.get("unit") == "count")
+        if expectation.get("operator") != binding["operator"] or not declared_ok:
             result["obligations"].append({"id": oid, "status": "UNIMPLEMENTED_METRIC_BINDING"})
+            continue
+        measured = measured_by_id[oid]
+        if measured.get("status") == "FAIL":
+            result["obligations"].append({"id": oid, "metric": obligation.get("metric"),
+                "operator": binding["operator"], "status": "FAIL",
+                "detail": measured.get("reason") or "measured component failure"})
             continue
         if oid == "base_43.fill_density_rules":
             try:
-                authority = _d62_bounds_authority(project, binding["authority"], component)
+                authority = _d62_bounds_authority(project, binding["authority"],
+                                                  component.get("inputs", {}))
+                if measured.get("status") != "MEASURED":
+                    status, detail = "NOT_MEASURED", measured.get("reason", "density not current")
+                elif measured["value"]["violations"]:
+                    status, detail = "FAIL", "native per-layer density window violation"
+                else:
+                    status, detail = "PASS", "all approved per-layer density windows pass"
                 item = {"id": oid, "metric": obligation.get("metric"),
-                        "operator": binding["operator"], "status": "NOT_MEASURED",
-                        "reason": "D62_DENSITY_VALUE_NOT_MEASURED",
-                        "detail": "native receipt reports geometry and fill count, not density",
-                        "authority": authority}
+                        "operator": binding["operator"], "status": status,
+                        "detail": detail, "measurement": measured, "authority": authority}
             except (MetricRefusal, OSError, ValueError, KeyError, TypeError) as exc:
                 item = {"id": oid, "metric": obligation.get("metric"),
                         "operator": binding["operator"], "status": "NOT_MEASURED",
@@ -592,11 +826,20 @@ def accept_d62(project: Path, context: Mapping[str, Any],
                         "detail": str(exc)}
             result["obligations"].append(item)
             continue
-        # Concrete native/checker failure outranks missing adopted authority.
-        if geometry.get("status") == "FAIL":
-            result["obligations"].append({"id": oid, "metric": obligation.get("metric"),
-                "operator": binding["operator"], "status": "FAIL",
-                "detail": geometry.get("reason") or "measured component failure"})
+        if oid == "base_43.fill_keepout_violations":
+            try:
+                authority = _d62_keepout_authority(project, binding["authority"],
+                                                    component.get("inputs", {}))
+                status, detail = evaluate_operator(binding["operator"], measured, authority)
+                item = {"id": oid, "metric": obligation.get("metric"),
+                        "operator": binding["operator"], "status": status, "detail": detail,
+                        "measurement": measured, "authority": authority}
+            except (MetricRefusal, OSError, ValueError, KeyError, TypeError) as exc:
+                item = {"id": oid, "metric": obligation.get("metric"),
+                        "operator": binding["operator"], "status": "NOT_MEASURED",
+                        "reason": getattr(exc, "code", "METRIC_ACCEPTANCE_REFUSED"),
+                        "detail": str(exc)}
+            result["obligations"].append(item)
             continue
         try:
             authority = _d62_reference_authority(project, binding["authority"])
@@ -616,7 +859,11 @@ def accept_d62(project: Path, context: Mapping[str, Any],
                 "reason": getattr(exc, "code", "METRIC_ACCEPTANCE_REFUSED"),
                 "detail": str(exc)})
     statuses = [item["status"] for item in result["obligations"]]
-    if "FAIL" in statuses:
+    if statuses and all(status == "PASS" for status in statuses) \
+            and len(statuses) == len(obligations):
+        result.update(status="PASS", delivery_blocked=False,
+                      reason="ALL_APPLICABLE_METRICS_CURRENT_AND_PASS")
+    elif "FAIL" in statuses:
         result.update(status="FAIL", reason="MEASURED_METRIC_FAILURE")
     else:
         result["reason"] = "METRIC_BINDING_INCOMPLETE_OR_NOT_CURRENT"

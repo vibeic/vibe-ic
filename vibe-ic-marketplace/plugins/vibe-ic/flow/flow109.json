@@ -13138,16 +13138,20 @@
           "id": "default",
           "select_when": "otherwise",
           "provider": "openroad",
-          "tools": "OpenROAD density_fill (ODB metal fill)",
+          "tools": "OpenROAD density_fill + check_metal_density (ODB metal fill)",
           "native_steps": [
-            "OpenROAD.DensityFill"
+            "OpenROAD.DensityFill",
+            "OpenROAD.CheckMetalDensity",
+            "OpenROAD.CheckFillObstructions"
           ],
           "geometry_format": "ODB",
           "entrypoint": {
             "kind": "openroad_tcl",
             "command": "density_fill",
             "native_steps": [
-              "OpenROAD.DensityFill"
+              "OpenROAD.DensityFill",
+              "OpenROAD.CheckMetalDensity",
+              "OpenROAD.CheckFillObstructions"
             ]
           },
           "capability_status": "NOT_QUALIFIED_FOR_FINAL_EXTRACTION",
@@ -13166,13 +13170,17 @@
             },
             "engine_steps": {
               "openroad": [
-                "OpenROAD.DensityFill"
+                "OpenROAD.DensityFill",
+                "OpenROAD.CheckMetalDensity",
+                "OpenROAD.CheckFillObstructions"
               ]
             },
-            "acceptance_scope": "odb_fill_component_only",
-            "flow109_metrics_status": "PARTIAL_RUNTIME_BINDING",
+            "acceptance_scope": "odb_fill_and_runtime_metrics",
+            "flow109_metrics_status": "IMPLEMENTED_D62_RUNTIME",
             "native_required_outputs": [
               "filled.odb",
+              "density.csv",
+              "checker.census",
               "receipt.json"
             ]
           }
@@ -13202,7 +13210,7 @@
             "checker.base_43.fill_density_rules",
             "producer.base_43.execution"
           ],
-          "status": "AUTHORITY_BOUND_MEASUREMENT_NOT_MEASURED"
+          "status": "IMPLEMENTED_D62_RUNTIME_BINDING"
         },
         {
           "id": "base_43.fill_keepout_violations",
@@ -13221,7 +13229,7 @@
             "checker.base_43.fill_keepout_violations",
             "producer.base_43.execution"
           ],
-          "status": "UNIMPLEMENTED_METRIC_BINDING"
+          "status": "IMPLEMENTED_D62_RUNTIME_BINDING"
         },
         {
           "id": "base_43.fill_geometry_identity",
@@ -13241,7 +13249,7 @@
           "status": "IMPLEMENTED_D62_RUNTIME_BINDING"
         }
       ],
-      "metric_acceptance_status": "PARTIAL_D62_RUNTIME",
+      "metric_acceptance_status": "IMPLEMENTED_D62_RUNTIME",
       "gate_layer_ids": [
         "G1",
         "G2",

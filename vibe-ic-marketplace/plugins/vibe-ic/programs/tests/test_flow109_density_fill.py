@@ -35,6 +35,22 @@ def _unit_inputs(project):
            'config': put('inputs/config.json', json.dumps(
                {'schema': fill.SCHEMA, 'operation': 'density_fill', 'area': 'core'})),
            'semantics': {'operation_sources': fill.operation_sources()}}
+    owner = put('inputs/owner.md', 'approved unit-only D62 contract\n')
+    approval = {'status': 'APPROVED', 'authority': 'requirements_owner',
+                'source_reference': owner}
+    put('requirements/base_43/fill_density_rules.json', json.dumps({
+        'schema': 'vibeic.flow109.requirement-authority.v1', 'approval': approval,
+        'limits': {'unit': {'min': 0.1, 'max': 0.9}}, 'units': 'ratio',
+        'scope': {'kind': 'tiled_windows', 'area': 'core', 'window_um': 10.0,
+                  'step_um': 5.0, 'minimum_core_dimensions_um': [10.0, 10.0]},
+        'rules_sha256': manifest['rules']['sha256'],
+        'pdk_sha256': manifest['pdk']['sha256']}))
+    put('requirements/base_43/fill_keepout_violations.json', json.dumps({
+        'schema': 'vibeic.flow109.requirement-authority.v1', 'approval': approval,
+        'expected': 0, 'unit': 'count',
+        'checker_semantics': 'opendb_fill_obstruction_overlap',
+        'validated_absence': True, 'rules_sha256': manifest['rules']['sha256'],
+        'pdk_sha256': manifest['pdk']['sha256']}))
     return {'requested_step': 'D62', 'native_step_id': 'flow109.D62', 'runtime_tool_uses': [use]}
 
 
@@ -67,8 +83,24 @@ def test_registry_selects_odb_component_without_gds_alias():
     assert row['profile']['geometry_format'] == 'ODB'
     assert row['profile']['dispatch']['adapter'] == 'flow109_density_fill'
     assert row['profile']['dispatch']['native_step_id'] == 'flow109.D62'
-    assert row['tool_uses'][0]['native_steps'] == ['OpenROAD.DensityFill']
-    assert row['metric_acceptance_status'] == 'PARTIAL_D62_RUNTIME'
+    assert row['tool_uses'][0]['native_steps'] == [
+        'OpenROAD.DensityFill', 'OpenROAD.CheckMetalDensity',
+        'OpenROAD.CheckFillObstructions']
+    assert row['metric_acceptance_status'] == 'IMPLEMENTED_D62_RUNTIME'
+
+
+@pytest.mark.parametrize('authority', [
+    'requirements/base_43/fill_density_rules.json',
+    'requirements/base_43/fill_keepout_violations.json'])
+def test_missing_metric_authority_stops_before_native(tmp_path, monkeypatch, authority):
+    context = _unit_inputs(tmp_path)
+    (tmp_path / authority).unlink()
+    monkeypatch.setattr(fill, 'require_launch_admission',
+                        lambda *args, **kwargs: pytest.fail('native admission reached'))
+    result = fill.execute(tmp_path, context)
+    assert result['component_status'] == 'NOT_MEASURED'
+    assert result['reason'] == 'METRIC_AUTHORITY_ABSENT'
+    assert result['native_started'] is False
 
 
 @pytest.mark.parametrize('damage', ['diearea', 'wire', 'old_fill_removed'])

@@ -51,7 +51,7 @@ No native reference was qualified by these source changes.
 | D22 | Python/pyosys, Yosys, yosys-abc | Existing Default synthesis owner and canonical synthesis consumers |
 | D44 | Yosys / LibreLane EQY | Final adopted-netlist equivalence component |
 | D55 | Icarus, vvp, OpenSTA | Adopted-netlist GLS activity and per-port vector annotation |
-| D62 | OpenROAD | Native ODB density fill and independent current ODB readback |
+| D62 | OpenROAD | Native ODB density fill, independent current ODB readback, `check_metal_density`, and OpenDB fill-obstruction overlap checker |
 
 D64's digital component binds the interpreter, installed pya/native modules and
 exact stream script separately from KLayout CLI XOR. This does not qualify every

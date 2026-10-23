@@ -22,10 +22,11 @@ if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
 
 from flow109_admission import AdmissionRefusal, require_launch_admission
-from flow109_metric_acceptance import accept_d62
+from flow109_metric_acceptance import MetricRefusal, accept_d62, d62_authorities
 
 INPUT = 'input/flow109/D62.json'
 SCRIPT = HERE / 'flow109_density_fill.tcl'
+CHECK_SCRIPT = HERE / 'flow109_density_checks.tcl'
 SCHEMA = 'vibeic.flow109.density-fill.v1'
 
 
@@ -36,7 +37,7 @@ def _sha(path):
 def operation_sources():
     # These are the local executable sources this small adapter actually uses.
     # stdlib imports do not introduce unrelated legacy producer dependencies.
-    paths = [Path(__file__), SCRIPT, HERE / 'flow109_admission.py', HERE / 'flow109.py',
+    paths = [Path(__file__), SCRIPT, CHECK_SCRIPT, HERE / 'flow109_admission.py', HERE / 'flow109.py',
              HERE / 'flow109_metric_acceptance.py']
     return {str(p.relative_to(HERE.parent)): _sha(p) for p in paths}
 
@@ -100,21 +101,72 @@ def prepare(project, context):
     if not isinstance(rules.get('layers'), dict) or not rules['layers']:
         raise AdmissionRefusal('D62_RULES_ABSENT', 'native OpenROAD layers rules required')
     executable = _bound(project, use.get('executable'))
+    inputs = {key: _record(project, path) for key, path in
+              {**paths, 'config': config_path, 'executable': executable}.items()}
+    try:
+        authorities = d62_authorities(project, inputs)
+    except MetricRefusal as exc:
+        raise AdmissionRefusal(exc.code, exc.detail) from exc
+    authority_inputs = {}
+    for name, authority in authorities.items():
+        authority_inputs[name] = {'path': authority['path'], 'sha256': authority['sha256']}
+        authority_inputs[name + '_source'] = authority['source']
     return {'paths': paths, 'executable': executable, 'config_path': config_path,
             'manifest': _record(project, project / INPUT),
-            'inputs': {key: _record(project, path) for key, path in
-                       {**paths, 'config': config_path, 'executable': executable}.items()},
+            'inputs': inputs, 'authorities': authorities,
+            'authority_inputs': authority_inputs,
             'tool': {key: use[key] for key in ('tool_id', 'version', 'build_sha256', 'executable')},
             'operation_sources': operation_sources()}
 
 
 def _call(executable, env, log):
+    argv = [str(executable), '-no_init', '-exit', str(SCRIPT)]
     with log.open('w') as stream:
-        result = subprocess.run([str(executable), '-no_init', '-exit', str(SCRIPT)],
+        result = subprocess.run(argv,
                                 env={**os.environ, **env}, stdout=stream,
                                 stderr=subprocess.STDOUT)
     if result.returncode:
         raise AdmissionRefusal('D62_NATIVE_FAILED', f'rc={result.returncode}; {log}', status='FAIL')
+    return {'argv': argv, 'returncode': result.returncode,
+            'path_bindings': {key: env[key] for key in sorted(env)}}
+
+
+def _native_checks(prepared, attempt, before_launch):
+    """Run current-ODB density and native fill-obstruction checks."""
+    authority = prepared['authorities']['density']
+    limits = attempt / 'density-limits.txt'
+    lines = ['# approved per-layer density bands; -1 means no stated bound']
+    for layer, band in sorted(authority['limits'].items()):
+        low = -1.0 if band['min'] is None else band['min']
+        high = -1.0 if band['max'] is None else band['max']
+        lines.append(f'{layer} {low} {high}')
+    limits.write_text('\n'.join(lines) + '\n')
+    scope = authority['scope']
+    env = {
+        'VIBEIC_D62_FILLED_ODB': str(attempt / 'filled.odb'),
+        'VIBEIC_D62_DENSITY_LIMITS': str(limits),
+        'VIBEIC_D62_DENSITY_WINDOW_UM': str(scope['window_um']),
+        'VIBEIC_D62_DENSITY_STEP_UM': str(scope['step_um']),
+        'VIBEIC_D62_DENSITY_REPORT': str(attempt / 'density.csv'),
+        'VIBEIC_D62_CHECK_CENSUS': str(attempt / 'checker.census'),
+    }
+    before_launch()
+    argv = [str(prepared['executable']), '-no_init', '-exit', str(CHECK_SCRIPT)]
+    with (attempt / 'checker.log').open('w') as stream:
+        result = subprocess.run(argv, env={**os.environ, **env},
+                                stdout=stream, stderr=subprocess.STDOUT)
+    if result.returncode:
+        raise AdmissionRefusal('D62_CHECKER_FAILED',
+            f'rc={result.returncode}; {attempt / "checker.log"}', status='FAIL')
+    if not (attempt / 'density.csv').is_file() or not (attempt / 'checker.census').is_file():
+        raise AdmissionRefusal('D62_CHECKER_OUTPUT_ABSENT', str(attempt), status='FAIL')
+    prepared.setdefault('executions', []).append({
+        'role': 'current_odb_metric_checker', 'argv': argv,
+        'returncode': result.returncode,
+        'read_set': {
+            'filled_odb': env['VIBEIC_D62_FILLED_ODB'],
+            'density_limits': env['VIBEIC_D62_DENSITY_LIMITS']},
+        'path_bindings': {key: env[key] for key in sorted(env)}})
 
 
 def _fill_records(text):
@@ -154,14 +206,23 @@ def _native_fill(project, prepared, attempt, before_launch):
            'VIBEIC_D62_OUTPUT_DEF': str(attempt / 'filled.def'),
            'VIBEIC_D62_CENSUS': str(attempt / 'producer.census')}
     before_launch()
-    _call(prepared['executable'], env, attempt / 'producer.log')
+    execution = _call(prepared['executable'], env, attempt / 'producer.log')
+    if execution is not None:
+        prepared.setdefault('executions', []).append(
+            {'role': 'fill_producer',
+             'read_set': {'input_odb': env['VIBEIC_D62_INPUT_ODB'],
+                          'rules': env['VIBEIC_D62_RULES']}, **execution})
     if not (attempt / 'filled.odb').is_file():
         raise AdmissionRefusal('D62_OUTPUT_ABSENT', 'native tool did not write ODB')
     env.update(VIBEIC_D62_MODE='verify', VIBEIC_D62_INPUT_ODB=str(attempt / 'filled.odb'),
                VIBEIC_D62_OUTPUT_DEF=str(attempt / 'readback.def'),
                VIBEIC_D62_CENSUS=str(attempt / 'consumer.census'))
     before_launch()
-    _call(prepared['executable'], env, attempt / 'consumer.log')
+    execution = _call(prepared['executable'], env, attempt / 'consumer.log')
+    if execution is not None:
+        prepared.setdefault('executions', []).append(
+            {'role': 'independent_odb_readback',
+             'read_set': {'filled_odb': env['VIBEIC_D62_INPUT_ODB']}, **execution})
     proof = _geometry_proof(attempt / 'before.def', attempt / 'filled.def', attempt / 'readback.def')
     producer = (attempt / 'producer.census').read_text().split()
     consumer = (attempt / 'consumer.census').read_text().split()
@@ -185,6 +246,8 @@ def validate_filled_odb(project, receipt_ref):
     _bound(project, receipt['manifest'])
     for entry in receipt['inputs'].values():
         _bound(project, entry)
+    for entry in receipt.get('authority_inputs', {}).values():
+        _bound(project, entry)
     paths = {name: _bound(project, entry) for name, entry in receipt['outputs'].items()}
     proof = _geometry_proof(paths['before.def'], paths['filled.def'], paths['readback.def'])
     if proof != receipt['measurements']:
@@ -206,16 +269,21 @@ def execute(project, context):
         admission = require_launch_admission(project, 'flow109.D62', {'flow109_context': context})
         result.update(inputs=prepared['inputs'], manifest=prepared['manifest'],
                       tool=prepared['tool'], operation_sources=prepared['operation_sources'],
-                      qualification=admission)
+                      qualification=admission, authorities=prepared['authorities'],
+                      authority_inputs=prepared['authority_inputs'])
         def before_launch():
             require_launch_admission(project, 'flow109.D62', {'flow109_context': context})
             # Input binding is checked again before each native process.
             for entry in prepared['inputs'].values():
                 _bound(project, entry)
+            for entry in prepared['authority_inputs'].values():
+                _bound(project, entry)
             result['native_started'] = True
         measurements = _native_fill(project, prepared, attempt, before_launch)
+        _native_checks(prepared, attempt, before_launch)
         outputs = {p.name: _record(project, p) for p in attempt.iterdir() if p.is_file()}
-        result.update(component_status='PASS', measurements=measurements, outputs=outputs)
+        result.update(component_status='PASS', measurements=measurements, outputs=outputs,
+                      executions=prepared.get('executions', []))
     except AdmissionRefusal as exc:
         result.update(component_status='FAIL' if exc.status == 'FAIL' else 'NOT_MEASURED',
                       reason=exc.code, detail=str(exc))

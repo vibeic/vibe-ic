@@ -146,15 +146,27 @@ previous fill cannot disappear, and the independent fill census must agree.
 
 `flow109_density_fill.validate_filled_odb` verifies the current receipt and
 output hashes before a downstream consumer can use them. The synthetic native
-control proves fill persistence; it does not qualify GF180 rules or establish
-that an extractor models floating-fill capacitance. The handoff therefore
-keeps `extraction_fill_sensitivity: NOT_VERIFIED`. D69 must consume a common
-final ODB/GDS geometry identity and qualified extraction evidence; an old
-pre-fill GDS or SPEF cannot satisfy that requirement.
+control proves fill persistence. The D62 runtime metric checker separately runs
+OpenROAD `check_metal_density` over the current filled ODB using approved,
+rules/PDK-bound per-layer limits and an approved core window/step. It also
+counts actual intersections between `dbFill` rectangles and OpenDB
+`isFillObstruction` rectangles. The receipt binds the three exact native argv
+and read sets, checker sources, authority documents, ODB/DEF outputs, and tool
+identity. An empty keepout set is measured only when the requirements owner has
+explicitly validated its absence.
+
+These are source-qualified D62 current-ODB measurements, not a foundry DFM deck
+signoff. D63 still owns final-GDS DFM semantics; D62 does not reuse fill counts
+as density or invent a zero keepout result. The fixture controls do not qualify
+GF180 rules or establish that an extractor models floating-fill capacitance.
+The handoff therefore keeps `extraction_fill_sensitivity: NOT_VERIFIED`. D69
+must consume a common final ODB/GDS geometry identity and qualified extraction
+evidence; an old pre-fill GDS or SPEF cannot satisfy that requirement.
 
 This adapter does not adopt an old GDS-finishing result, update STA/LVS release
-acceptance, or grant a full D62 or 109-flow PASS. Those metric and downstream
-bindings remain separate implementation work.
+acceptance, or grant a 109-flow PASS. A D62 row PASS covers only its three
+current metric obligations; downstream and whole-flow acceptance remain
+separate.
 
 ## Measured final-extraction blocker
 
