@@ -169,3 +169,75 @@ def test_real_front_door_selection_translates_only_the_named_component(tmp_path,
     assert observed[0]["requested_step"] == "D38"
     context = json.loads(Path(__import__("os").environ[flow109.CONTEXT_ENV]).read_text())
     assert flow109.validate_execution_context(context) == observed[0]
+
+
+def test_frontend_rows_route_stable_ids_to_existing_default_owner_sites():
+    plan = flow109.resolve_plan(profile())
+    expected = {
+        "D01": ("D1", "phase1_one_shot_runner", "D1", "D1"),
+        "D02": ("0.5ic", "phase1_one_shot_runner", "D1", "D1"),
+        "D09": ("1", "design_one_shot_runner", "1", "1"),
+        "D10": ("P0", "design_one_shot_runner", "1", "1"),
+        "D11": ("2", "design_one_shot_runner", "2", "3"),
+        "D12": ("3", "design_one_shot_runner", "2", "3"),
+        "D13": ("4", "design_one_shot_runner", "4", "4"),
+        "D14": ("5", "design_one_shot_runner", "4", "5"),
+        "D19": ("7", "design_one_shot_runner", "7", "7"),
+        "D20": ("8", "design_one_shot_runner", "8", "8"),
+        "D25": ("13", "design_one_shot_runner", "11", "13"),
+        "D26": ("10", "design_one_shot_runner", "10", "10"),
+        "D30": ("14", "design_one_shot_runner", "14", "14"),
+    }
+    for row_id, values in expected.items():
+        row = flow109.resolve_step(plan, row_id)
+        dispatch = row["profile"]["dispatch"]
+        assert dispatch["kind"] == "canonical_owner_window"
+        assert (dispatch["native_step_id"], dispatch["owner_runner"],
+                dispatch["owner_entry_step"], dispatch["owner_exit_step"]) == values
+        assert dispatch["native_step_id"] == row["legacy70"][0]["id"]
+        assert row["profile"]["execution_status"] == "NATIVE_COMPONENT_ONLY_NOT_109_ACCEPTED"
+        assert dispatch["flow109_metrics_status"] == "UNIMPLEMENTED"
+
+
+def test_owner_route_uses_native_span_without_generic_qualification_registry(
+        tmp_path, monkeypatch):
+    import _delivery_route
+    assert _delivery_route.admit(tmp_path, "ic") is None
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(json.dumps({"features": profile()}))
+    monkeypatch.setitem(sys.modules, "flow109_admission", SimpleNamespace(
+        require_admission=lambda *a, **k: pytest.fail("generic qualification must not run")))
+    args = SimpleNamespace(flow="109", flow109_manifest=manifest,
+                           flow109_plan_only=False, execution_mode="default",
+                           entry_step="D12", exit_step="D12")
+    assert flow109.prepare_front_door(args, tmp_path) is None
+    assert (args.entry_step, args.exit_step) == ("2", "3")
+    route = json.loads((tmp_path / "reports/flow109/owner_route.json").read_text())
+    assert route["owner_runner"] == "design_one_shot_runner"
+    assert route["native_step_id"] == "3"
+    assert route["component_status"] == route["flow109_acceptance"] == "NOT_MEASURED"
+    request = json.loads(Path(__import__("os").environ[flow109.CONTEXT_ENV]).read_text())
+    assert request["requested_step"] == "D12"
+    assert request["resolved_row"]["id"] == "D12"
+    assert request["context_sha256"] == route["context_sha256"]
+
+
+def test_owner_route_refuses_wrong_owner_and_unknown_native_mapping():
+    plan = flow109.resolve_plan(profile())
+    row = next(item for item in plan["rows"] if item["id"] == "D12")
+    row["profile"]["dispatch"]["owner_runner"] = "phase1_one_shot_runner"
+    with pytest.raises(flow109.Flow109Error, match="FLOW109_OWNER_MISMATCH"):
+        flow109.resolve_execution_window(plan, "D12", "D12")
+    plan = flow109.resolve_plan(profile())
+    row = next(item for item in plan["rows"] if item["id"] == "D12")
+    row["profile"]["dispatch"]["native_step_id"] = "12"
+    with pytest.raises(flow109.Flow109Error, match="FLOW109_OWNER_NATIVE_MAPPING_UNKNOWN"):
+        flow109.resolve_execution_window(plan, "D12", "D12")
+
+
+def test_frontend_owner_window_preserves_existing_indivisible_spans():
+    window = flow109.resolve_execution_window(flow109.resolve_plan(profile()), "D09", "D14")
+    assert window["dispatch_kind"] == "canonical_owner_window"
+    assert [row["id"] for row in window["resolved_rows"]] == [
+        "D09", "D10", "D11", "D12", "D13", "D14"]
+    assert (window["native_entry_step"], window["native_exit_step"]) == ("1", "5")

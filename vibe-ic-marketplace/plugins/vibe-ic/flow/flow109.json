@@ -1403,7 +1403,15 @@
           "provider": "vibeic",
           "tools": "Python + Codex IC Expert; Poppler/Tesseract intake",
           "native_steps": [],
-          "execution_status": "UNIMPLEMENTED"
+          "execution_status": "NATIVE_COMPONENT_ONLY_NOT_109_ACCEPTED",
+          "dispatch": {
+            "kind": "canonical_owner_window", "owner_runner": "phase1_one_shot_runner",
+            "native_step_id": "D1", "owner_entry_step": "D1", "owner_exit_step": "D1",
+            "producer": "phase1_one_shot_runner.py:doc_extract",
+            "consumer": "phase1_one_shot_runner canonical D1 acceptance",
+            "engine_families": [], "acceptance_scope": "existing_native_component_only",
+            "flow109_metrics_status": "UNIMPLEMENTED"
+          }
         }
       ],
       "complementary_tools": [],
@@ -1520,7 +1528,15 @@
           "provider": "vibeic",
           "tools": "Python/JSON Schema template and endpoint validator",
           "native_steps": [],
-          "execution_status": "UNIMPLEMENTED"
+          "execution_status": "NATIVE_COMPONENT_ONLY_NOT_109_ACCEPTED",
+          "dispatch": {
+            "kind": "canonical_owner_window", "owner_runner": "phase1_one_shot_runner",
+            "native_step_id": "0.5ic", "owner_entry_step": "D1", "owner_exit_step": "D1",
+            "producer": "phase1_one_shot_runner.py:_run_step_0_5ic",
+            "consumer": "phase1_one_shot_runner route declaration acceptance",
+            "engine_families": [], "acceptance_scope": "existing_native_component_only",
+            "flow109_metrics_status": "UNIMPLEMENTED"
+          }
         }
       ],
       "complementary_tools": [],
@@ -3404,7 +3420,15 @@
           "provider": "vibeic",
           "tools": "Python catalog/generator + Codex spec-to-RTL",
           "native_steps": [],
-          "execution_status": "UNIMPLEMENTED"
+          "execution_status": "NATIVE_COMPONENT_ONLY_NOT_109_ACCEPTED",
+          "dispatch": {
+            "kind": "canonical_owner_window", "owner_runner": "design_one_shot_runner",
+            "native_step_id": "1", "owner_entry_step": "1", "owner_exit_step": "1",
+            "producer": "design_one_shot_runner.py:step_rtl_gen",
+            "consumer": "design_one_shot_runner rtl_gen retained acceptance",
+            "engine_families": [], "acceptance_scope": "existing_native_component_only",
+            "flow109_metrics_status": "UNIMPLEMENTED"
+          }
         }
       ],
       "complementary_tools": [],
@@ -3500,7 +3524,15 @@
           "native_steps": [
             "Yosys.JsonHeader"
           ],
-          "execution_status": "UNIMPLEMENTED"
+          "execution_status": "NATIVE_COMPONENT_ONLY_NOT_109_ACCEPTED",
+          "dispatch": {
+            "kind": "canonical_owner_window", "owner_runner": "design_one_shot_runner",
+            "native_step_id": "P0", "owner_entry_step": "1", "owner_exit_step": "1",
+            "producer": "design_one_shot_runner.py:step_rtl_gen",
+            "consumer": "design_one_shot_runner structural preflight gates",
+            "engine_families": [], "acceptance_scope": "existing_native_component_only",
+            "flow109_metrics_status": "UNIMPLEMENTED"
+          }
         }
       ],
       "complementary_tools": [],
@@ -3618,7 +3650,15 @@
             "Checker.LintErrors",
             "Checker.LintTimingConstructs"
           ],
-          "execution_status": "UNIMPLEMENTED"
+          "execution_status": "NATIVE_COMPONENT_ONLY_NOT_109_ACCEPTED",
+          "dispatch": {
+            "kind": "canonical_owner_window", "owner_runner": "design_one_shot_runner",
+            "native_step_id": "2", "owner_entry_step": "2", "owner_exit_step": "3",
+            "producer": "design_one_shot_runner.py:rtl_validate",
+            "consumer": "design_one_shot_runner retained lint acceptance",
+            "engine_families": [], "acceptance_scope": "existing_native_component_only",
+            "flow109_metrics_status": "UNIMPLEMENTED"
+          }
         }
       ],
       "complementary_tools": [],
@@ -3728,7 +3768,15 @@
           "provider": "other",
           "tools": "Python CDC/RDC checkers + SymbiYosys protocol harness",
           "native_steps": [],
-          "execution_status": "UNIMPLEMENTED"
+          "execution_status": "NATIVE_COMPONENT_ONLY_NOT_109_ACCEPTED",
+          "dispatch": {
+            "kind": "canonical_owner_window", "owner_runner": "design_one_shot_runner",
+            "native_step_id": "3", "owner_entry_step": "2", "owner_exit_step": "3",
+            "producer": "design_one_shot_runner.py:rtl_validate",
+            "consumer": "design_one_shot_runner CDC/RDC retained acceptance",
+            "engine_families": [], "acceptance_scope": "existing_native_component_only",
+            "flow109_metrics_status": "UNIMPLEMENTED"
+          }
         }
       ],
       "complementary_tools": [],
@@ -3867,7 +3915,15 @@
           "tools": "Icarus Verilog/vvp + cocotb functional scenarios; Verilator --coverage + verilator_coverage code coverage",
           "native_steps": [],
           "capability_status": "SUPPORTED_SUBSET_NOT_QUALIFIED",
-          "execution_status": "UNIMPLEMENTED"
+          "execution_status": "NATIVE_COMPONENT_ONLY_NOT_109_ACCEPTED",
+          "dispatch": {
+            "kind": "canonical_owner_window", "owner_runner": "design_one_shot_runner",
+            "native_step_id": "4", "owner_entry_step": "4", "owner_exit_step": "4",
+            "producer": "design_one_shot_runner.py:sim",
+            "consumer": "design_one_shot_runner simulation and coverage acceptance",
+            "engine_families": [], "acceptance_scope": "existing_native_component_only",
+            "flow109_metrics_status": "UNIMPLEMENTED"
+          }
         }
       ],
       "complementary_tools": [
@@ -4006,7 +4062,15 @@
           "tools": "SymbiYosys + Yosys SMTBMC/Boolector",
           "native_steps": [],
           "capability_status": "SUPPORTED_SUBSET_NOT_QUALIFIED",
-          "execution_status": "UNIMPLEMENTED"
+          "execution_status": "NATIVE_COMPONENT_ONLY_NOT_109_ACCEPTED",
+          "dispatch": {
+            "kind": "canonical_owner_window", "owner_runner": "design_one_shot_runner",
+            "native_step_id": "5", "owner_entry_step": "4", "owner_exit_step": "5",
+            "producer": "design_one_shot_runner.py:sim",
+            "consumer": "design_one_shot_runner formal manifest acceptance",
+            "engine_families": [], "acceptance_scope": "existing_native_component_only",
+            "flow109_metrics_status": "UNIMPLEMENTED"
+          }
         }
       ],
       "complementary_tools": [],
@@ -5172,7 +5236,15 @@
           "native_steps": [
             "Misc.LoadBaseSDC"
           ],
-          "execution_status": "UNIMPLEMENTED"
+          "execution_status": "NATIVE_COMPONENT_ONLY_NOT_109_ACCEPTED",
+          "dispatch": {
+            "kind": "canonical_owner_window", "owner_runner": "design_one_shot_runner",
+            "native_step_id": "7", "owner_entry_step": "7", "owner_exit_step": "7",
+            "producer": "design_one_shot_runner.py:step_asic_sdc",
+            "consumer": "design_one_shot_runner retained SDC acceptance",
+            "engine_families": [], "acceptance_scope": "existing_native_component_only",
+            "flow109_metrics_status": "UNIMPLEMENTED"
+          }
         }
       ],
       "complementary_tools": [],
@@ -5296,7 +5368,15 @@
           "native_steps": [
             "OpenROAD.CheckSDCFiles"
           ],
-          "execution_status": "UNIMPLEMENTED"
+          "execution_status": "NATIVE_COMPONENT_ONLY_NOT_109_ACCEPTED",
+          "dispatch": {
+            "kind": "canonical_owner_window", "owner_runner": "design_one_shot_runner",
+            "native_step_id": "8", "owner_entry_step": "8", "owner_exit_step": "8",
+            "producer": "vibe_ic_one_shot_runner.py:_complete_step7_sdc",
+            "consumer": "canonical Step8 SDC postcheck",
+            "engine_families": [], "acceptance_scope": "existing_native_component_only",
+            "flow109_metrics_status": "UNIMPLEMENTED"
+          }
         }
       ],
       "complementary_tools": [],
@@ -5957,7 +6037,15 @@
           "native_steps": [
             "Yosys.EQY"
           ],
-          "execution_status": "UNIMPLEMENTED"
+          "execution_status": "NATIVE_COMPONENT_ONLY_NOT_109_ACCEPTED",
+          "dispatch": {
+            "kind": "canonical_owner_window", "owner_runner": "design_one_shot_runner",
+            "native_step_id": "13", "owner_entry_step": "11", "owner_exit_step": "13",
+            "producer": "design_one_shot_runner.py:step_dft_lec_chain",
+            "consumer": "design_one_shot_runner retained DFT/LEC acceptance",
+            "engine_families": [], "acceptance_scope": "existing_native_component_only",
+            "flow109_metrics_status": "UNIMPLEMENTED"
+          }
         }
       ],
       "complementary_tools": [],
@@ -6093,7 +6181,15 @@
           "native_steps": [
             "OpenROAD.STAPrePNR"
           ],
-          "execution_status": "UNIMPLEMENTED"
+          "execution_status": "NATIVE_COMPONENT_ONLY_NOT_109_ACCEPTED",
+          "dispatch": {
+            "kind": "canonical_owner_window", "owner_runner": "design_one_shot_runner",
+            "native_step_id": "10", "owner_entry_step": "10", "owner_exit_step": "10",
+            "producer": "vibe_ic_one_shot_runner.py:_complete_prelayout_timing",
+            "consumer": "canonical Step10 pre-layout timing acceptance",
+            "engine_families": [], "acceptance_scope": "existing_native_component_only",
+            "flow109_metrics_status": "UNIMPLEMENTED"
+          }
         }
       ],
       "complementary_tools": [],
@@ -6597,7 +6693,15 @@
           "provider": "vibeic",
           "tools": "Python verified-netlist handoff + LibreLane State",
           "native_steps": [],
-          "execution_status": "UNIMPLEMENTED"
+          "execution_status": "NATIVE_COMPONENT_ONLY_NOT_109_ACCEPTED",
+          "dispatch": {
+            "kind": "canonical_owner_window", "owner_runner": "design_one_shot_runner",
+            "native_step_id": "14", "owner_entry_step": "14", "owner_exit_step": "14",
+            "producer": "design_one_shot_runner.py:step_synthesis_handoff",
+            "consumer": "design_one_shot_runner retained handoff acceptance",
+            "engine_families": [], "acceptance_scope": "existing_native_component_only",
+            "flow109_metrics_status": "UNIMPLEMENTED"
+          }
         }
       ],
       "complementary_tools": [],

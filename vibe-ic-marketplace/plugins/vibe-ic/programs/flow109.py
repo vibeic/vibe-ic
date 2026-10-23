@@ -201,6 +201,37 @@ def resolve_step(plan: Mapping, step_id: str) -> dict:
     return copy.deepcopy(row)
 
 
+def _canonical_owner_dispatch(row: Mapping) -> dict | None:
+    """Validate a source-owned route into an existing Default runner site."""
+    dispatch = row.get("profile", {}).get("dispatch")
+    if not isinstance(dispatch, Mapping) or dispatch.get("kind") != "canonical_owner_window":
+        return None
+    native = str(dispatch.get("native_step_id") or "")
+    legacy = {str(item.get("id")) for item in row.get("legacy70", [])
+              if isinstance(item, Mapping)}
+    if not native or native not in legacy:
+        raise Flow109Error("FLOW109_OWNER_NATIVE_MAPPING_UNKNOWN",
+                           f"{row.get('id')} -> {native or '<missing>'}")
+    owner = str(dispatch.get("owner_runner") or "")
+    entry = str(dispatch.get("owner_entry_step") or "")
+    exit_ = str(dispatch.get("owner_exit_step") or "")
+    if not owner or not entry or not exit_:
+        raise Flow109Error("FLOW109_OWNER_WINDOW_INVALID", str(row.get("id")))
+    import step_preflight
+    actual = step_preflight.runner_for_step(entry)
+    # Default Steps 8 and 10 are retained front-door consumers whose special
+    # entry branches deliberately sit outside the generic span-head table.
+    if actual is None and owner == "design_one_shot_runner" and entry in ("8", "10"):
+        actual = owner
+    if actual != owner:
+        raise Flow109Error("FLOW109_OWNER_MISMATCH",
+                           f"{row.get('id')}: declared {owner}, actual {actual}")
+    if owner not in ("phase1_one_shot_runner", "design_one_shot_runner",
+                     "phase3_one_shot_runner"):
+        raise Flow109Error("FLOW109_OWNER_UNSUPPORTED", owner)
+    return dict(dispatch)
+
+
 def resolve_execution_window(plan: Mapping, entry: str | None, exit_: str | None) -> dict:
     """Resolve an inclusive selected-row window onto existing component owners.
 
@@ -225,6 +256,7 @@ def resolve_execution_window(plan: Mapping, entry: str | None, exit_: str | None
         raise Flow109Error("FLOW109_PRODUCER_UNIMPLEMENTED", ", ".join(missing))
     if len(rows) == 1:
         dispatch = rows[0]["profile"]["dispatch"]
+        _canonical_owner_dispatch(rows[0])
         return {"requested_step": entry, "resolved_row": rows[0],
                 "native_step_id": dispatch["native_step_id"]}
 
@@ -235,14 +267,25 @@ def resolve_execution_window(plan: Mapping, entry: str | None, exit_: str | None
     elif not any(adapters) and all(dispatch.get("kind") == "canonical_backend_window"
                                    for dispatch in dispatches):
         kind = "canonical_backend_window"
+    elif not any(adapters) and all(dispatch.get("kind") == "canonical_owner_window"
+                                   for dispatch in dispatches):
+        owners = [_canonical_owner_dispatch(row)["owner_runner"] for row in rows]
+        if len(set(owners)) != 1:
+            raise Flow109Error("FLOW109_WINDOW_OWNER_CROSSING_UNSUPPORTED",
+                               " -> ".join(owners))
+        kind = "canonical_owner_window"
     else:
         raise Flow109Error(
             "FLOW109_WINDOW_DISPATCH_UNSUPPORTED",
             "a window may not cross adapter and canonical-backend ownership")
+    native_entry = (dispatches[0].get("owner_entry_step") if kind == "canonical_owner_window"
+                    else dispatches[0]["native_step_id"])
+    native_exit = (dispatches[-1].get("owner_exit_step") if kind == "canonical_owner_window"
+                   else dispatches[-1]["native_step_id"])
     return {"requested_entry": entry, "requested_exit": exit_,
             "resolved_rows": rows, "dispatch_kind": kind,
-            "native_entry_step": dispatches[0]["native_step_id"],
-            "native_exit_step": dispatches[-1]["native_step_id"]}
+            "native_entry_step": native_entry,
+            "native_exit_step": native_exit}
 
 
 _CONTEXT_KEYS = {"schema", "registry_sha256", "planner_sha256", "legacy_flow_sha256",
@@ -479,6 +522,27 @@ def prepare_front_door(args, project: Path) -> int | None:
                                 runtime_tool_uses=manifest.get("runtime_tool_uses", manifest.get("tool_uses")),
                                 qualification_registry=manifest.get("qualification_registry"))
     if context["schema"] == "vibeic.flow109.execution-window.v1":
+        if context["dispatch_kind"] == "canonical_owner_window":
+            path = destination / "requests" / (context["context_sha256"] + ".json")
+            write_json(path, context)
+            os.environ[CONTEXT_ENV] = str(path.resolve())
+            os.environ.pop(ATTEMPT_ENV, None)
+            owner = context["resolved_rows"][0]["profile"]["dispatch"]["owner_runner"]
+            write_json(destination / "owner_route.json", {
+                "schema": "vibeic.flow109.owner-route.v1",
+                "context_sha256": context["context_sha256"],
+                "registry_sha256": context["registry_sha256"],
+                "planner_sha256": context["planner_sha256"],
+                "owner_runner": owner,
+                "entry_step": context["native_entry_step"],
+                "exit_step": context["native_exit_step"],
+                "component_status": "NOT_MEASURED",
+                "flow109_acceptance": "NOT_MEASURED",
+                "native_started": False,
+            })
+            args.entry_step = context["native_entry_step"]
+            args.exit_step = context["native_exit_step"]
+            return None
         _window_inventory(context)
         attempt = _new_attempt(project, context)
         path = destination / "requests" / (context["context_sha256"] + ".json")
@@ -531,6 +595,28 @@ def prepare_front_door(args, project: Path) -> int | None:
             "context_sha256": context["context_sha256"], "native_started": False})
         args.entry_step = context["native_entry_step"]
         args.exit_step = context["native_exit_step"]
+        return None
+    owner_dispatch = _canonical_owner_dispatch(context["resolved_row"])
+    if owner_dispatch is not None:
+        path = destination / "requests" / (context["context_sha256"] + ".json")
+        write_json(path, context)
+        os.environ[CONTEXT_ENV] = str(path.resolve())
+        os.environ.pop(ATTEMPT_ENV, None)
+        write_json(destination / "owner_route.json", {
+            "schema": "vibeic.flow109.owner-route.v1",
+            "context_sha256": context["context_sha256"],
+            "registry_sha256": context["registry_sha256"],
+            "planner_sha256": context["planner_sha256"],
+            "owner_runner": owner_dispatch["owner_runner"],
+            "native_step_id": owner_dispatch["native_step_id"],
+            "entry_step": owner_dispatch["owner_entry_step"],
+            "exit_step": owner_dispatch["owner_exit_step"],
+            "component_status": "NOT_MEASURED",
+            "flow109_acceptance": "NOT_MEASURED",
+            "native_started": False,
+        })
+        args.entry_step = owner_dispatch["owner_entry_step"]
+        args.exit_step = owner_dispatch["owner_exit_step"]
         return None
     os.environ.pop(ATTEMPT_ENV, None)
     # Admission is intentionally immediately before actual existing dispatch.
