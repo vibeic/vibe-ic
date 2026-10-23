@@ -6,13 +6,15 @@ import json
 from pathlib import Path
 import shutil
 import subprocess
-import sys
 
 import pytest
 
 import flow109
 import flow109_admission as admission
 import flow109_final_gls as final_gls
+import flow109_final_lec as final_lec
+import flow109_final_extract as final_extract
+import flow109_final_electrical as final_electrical
 
 
 def _put(project, name, value):
@@ -171,15 +173,166 @@ def _case(project):
     return selection
 
 
-def _run(project):
-    return subprocess.run([sys.executable, str(final_gls.HERE / 'vibe_ic_one_shot_runner.py'),
-        str(project), '--flow', '109', '--flow109-manifest', str(project / 'D71-selection.json'),
-        '--entry-step', 'D71', '--exit-step', 'D71', '--route', 'ic', '--no-dashboard'],
-        capture_output=True, text=True)
+def _admit_substrate_only(project, monkeypatch):
+    """Keep native Icarus controls separate from canonical upstream authority."""
+    manifest = json.loads((project / final_gls.INPUT).read_text())
+    monkeypatch.setattr(final_gls.final_lec, 'validate_common_baseline',
+        lambda *_: {'baseline': manifest['d44_baseline'], 'component_current': True})
+    def parasitics(_project, receipt):
+        d69 = json.loads((project / receipt['path']).read_text())
+        return {'final_geometry': d69['final_geometry'], 'final_spefs': d69['final_spefs'],
+                'component_parasitics_current': True}
+    def electrical(_project, receipt):
+        d70 = json.loads((project / receipt['path']).read_text())
+        return {'sta_state': d70['sta_state'], 'final_sdfs': d70['final_sdfs'],
+                'required_corners': d70['required_corners'],
+                'component_electrical_current': True}
+    monkeypatch.setattr(final_gls.final_extract, 'validate_final_parasitics', parasitics)
+    monkeypatch.setattr(final_gls.final_electrical, 'validate_final_electrical', electrical)
 
 
-def _component(project):
-    return json.loads((project / 'reports/flow109/components/D71.json').read_text())
+def _replace_with_owning_producer_receipts(project, monkeypatch, corners=('tt',)):
+    """Emit D44/D69/D70 receipts through their real row-local producers.
+
+    Heavy EQY/RCX/STA subprocesses are bounded source controls here; the actual
+    Icarus substrate remains exercised separately.  Their owning producers and
+    validators, receipt construction, source checks and consumers are real.
+    """
+    manifest_path = project / final_gls.INPUT
+    manifest = json.loads(manifest_path.read_text())
+    netlist = manifest['d44_baseline']
+    old_baseline = json.loads((project / netlist['path']).read_text())
+    adopted = old_baseline['adopted_netlist']
+    liberty = _put(project, 'inputs/owner-control.lib', 'library(owner_control) { }\n')
+    pdk_root = project / 'inputs/pdk'; pdk_root.mkdir()
+    d44_manifest = {'schema': final_lec.SCHEMA, 'top': 'final_gls_dut',
+        'rtl': [adopted], 'adopted_netlist': adopted, 'liberty': liberty,
+        'librelane': {'PDK': 'neutral', 'STD_CELL_LIBRARY': 'neutral',
+                     'pdk_root': str(pdk_root)}, 'transformations': [],
+        'consumer_netlists': {role: copy.deepcopy(adopted)
+                              for role in ('sta', 'lvs_reference', 'release')}}
+    _put(project, final_lec.INPUT, d44_manifest)
+    d44_config = _put(project, 'input/flow109/D44-owner-operation.json',
+        {'schema': final_lec.SCHEMA, 'operation': 'Yosys.EQY', 'transformations': []})
+    d44_pdk = _put(project, 'input/flow109/D44-owner-pdk.json',
+        {'librelane': d44_manifest['librelane'], 'liberty': liberty})
+    features = next(item['features'] for item in flow109.load_registry()['reference_profiles']
+                    if item['name'] == 'Small digital IC without DFT')
+    plan = flow109.resolve_plan(features)
+    executable = {'path': '/bin/true', 'sha256': final_gls._sha('/bin/true')}
+    d44_uses = [{'use_id': use['use_id'], 'tool_id': use['tool_id'],
+        'version': 'owner source control', 'build_sha256': executable['sha256'],
+        'executable': executable, 'qualification_sha256': executable['sha256'],
+        'config': d44_config, 'pdk': d44_pdk, 'deck': liberty,
+        'semantics': {'operation_sources': final_lec.operation_sources()}}
+        for use in flow109.resolve_step(plan, 'D44')['tool_uses']]
+    d44_context = flow109.execution_context(plan, 'D44', 'D44', runtime_tool_uses=d44_uses,
+                                             qualification_registry='owner-control')
+    monkeypatch.setattr(final_lec, 'require_launch_admission', lambda *args, **kwargs: None)
+    monkeypatch.setattr(final_lec, '_model_census',
+                        lambda *args, **kwargs: {'gold': {'modules': ['final_gls_dut']},
+                                                'gate': {'modules': ['final_gls_dut']}})
+    monkeypatch.setattr(final_lec, '_native_eqy', lambda *args, **kwargs: (None, {}))
+    def proof_control(_folder, output):
+        proof = {'verdict': 'PASS', 'declared_partitions': ['final_gls_dut'],
+                 'partitions': {'final_gls_dut': {'owner_control': 'PASS'}},
+                 'compared_points': 1, 'proven_points': 1,
+                 'non_equivalent_points': [], 'unproven_points': [], 'xbits_partitions': []}
+        output.write_text(json.dumps(proof))
+        return proof
+    monkeypatch.setattr(final_lec, 'consume_eqy', proof_control)
+    d44 = final_lec.execute(project, d44_context)
+    assert d44['component_status'] == 'PASS', d44
+    d44_receipt = final_gls._record(project, project / d44['receipt']['path'])
+    baseline = final_gls._record(project, project / final_lec.BASELINE)
+
+    geometry = _put(project, 'inputs/owner-filled.odb', 'owner filled ODB control\n')
+    routed_def = _put(project, 'inputs/owner-filled.def', 'VERSION 5.8 ; DESIGN final_gls_dut ; END DESIGN\n')
+    sdc = manifest['d70_receipt']
+    old_d70 = json.loads((project / sdc['path']).read_text())
+    sdc = old_d70['sdc']
+    d62_doc = {'outputs': {'filled.def': routed_def, 'filled.odb': geometry}}
+    d62 = _put(project, 'reports/flow109/D62/owner-component.json', d62_doc)
+    bridge = _put(project, 'reports/flow109/D64/owner-bridge.json', {'scope': 'owner control'})
+    monkeypatch.setattr(final_extract, 'require_launch_admission', lambda *args, **kwargs: None)
+    monkeypatch.setattr(final_extract.density, 'validate_filled_odb',
+                        lambda *_: {'odb': geometry})
+    monkeypatch.setattr(final_extract.files, 'validate_bridge',
+                        lambda *_: {'d62_receipt': d62, 'odb': geometry})
+    spef_paths = {scene: project / f'inputs/owner-{scene}.spef'
+                  for scene in ('nom', 'min', 'max')}
+    for path in spef_paths.values():
+        path.write_text('*SPEF "IEEE 1481-1998"\n*DESIGN "final_gls_dut"\n')
+    rcx = project / 'reports/owner-rcx'; rcx.mkdir(parents=True)
+    (rcx / 'state_in.json').write_text('{}')
+    (rcx / 'state_out.json').write_text(json.dumps(
+        {'spef': {f'{scene}_*': str(path.resolve()) for scene, path in spef_paths.items()}}))
+    (rcx / 'vibeic_receipt.json').write_text('{}')
+    monkeypatch.setattr(final_extract.signoff, 'run', lambda *args, **kwargs:
+        {'rcx': rcx, 'spef': {f'{scene}_*': path for scene, path in spef_paths.items()}})
+    monkeypatch.setattr(final_extract.signoff, 'bind_rcx_spefs', lambda *args, **kwargs: {'bound': True})
+    spef_facts = {'has_header': True, 'has_design': True, 'd_nets': 1, 'r_nets': 0,
+                  'negative_caps': [], 'negative_net_totals': []}
+    monkeypatch.setattr(final_extract, 'scan_spef', lambda _path: spef_facts)
+    _put(project, final_extract.INPUT, {'schema': final_extract.SCHEMA,
+        'd62_receipt': d62, 'stream_bridge': bridge,
+        'adopted_views': {'netlist': adopted, 'sdc': sdc},
+        'librelane': {'image': 'owner-control', 'pdk_root': str(pdk_root), 'pdk': 'neutral'}})
+    d69 = final_extract.execute(project, {'context_sha256': 'owner-d69'})
+    assert d69['component_status'] == 'PASS', d69
+    d69_receipt = d69['receipt']
+
+    sdf_paths = {}
+    for corner in corners:
+        path = project / f'inputs/owner-{corner}.sdf'
+        path.write_text(SDF)
+        sdf_paths[corner] = path
+    sta = project / 'reports/owner-sta'; sta.mkdir(parents=True)
+    state = {'nl': str((project / adopted['path']).resolve()),
+             'sdc': str((project / sdc['path']).resolve()),
+             'spef': {f'{scene}_*': str(path.resolve()) for scene, path in spef_paths.items()},
+             'sdf': {corner: str(path.resolve()) for corner, path in sdf_paths.items()}}
+    (sta / 'state_out.json').write_text(json.dumps(state))
+    timing_rows = {corner: {'setup_vio': 0, 'hold_vio': 0, 'max_slew_vio': 0,
+                            'max_cap_vio': 0, 'max_fanout_vio': 0} for corner in corners}
+    monkeypatch.setattr(final_electrical, 'require_launch_admission', lambda *args, **kwargs: None)
+    monkeypatch.setattr(final_electrical.signoff, 'run', lambda *args, **kwargs: {'sta': sta})
+    monkeypatch.setattr(final_electrical.signoff, 'corner_timing', lambda _folder: timing_rows)
+    monkeypatch.setattr(final_electrical.signoff, 'judge_timing',
+                        lambda _rows: {'verdict': 'PASS', 'failing_corners': []})
+    monkeypatch.setattr(final_electrical.postroute, 'stapostpnr_state', lambda _project: (sta, state))
+    monkeypatch.setattr(final_electrical.postroute, 'corner_sdfs',
+                        lambda _state: dict(sdf_paths))
+    _put(project, final_electrical.INPUT, {'schema': final_electrical.SCHEMA,
+        'final_parasitics_receipt': d69_receipt, 'required_corners': list(corners),
+        'librelane': {'image': 'owner-control', 'pdk_root': str(pdk_root), 'pdk': 'neutral'}})
+    d70 = final_electrical.execute(project, {'context_sha256': 'owner-d70'})
+    assert d70['component_status'] == 'PASS', d70
+    d70_receipt = d70['receipt']
+
+    manifest.update(d44_baseline=baseline, d44_component=d44_receipt,
+                    d70_receipt=d70_receipt)
+    requirements_path = project / manifest['requirements']['path']
+    requirements = json.loads(requirements_path.read_text())
+    requirements['required_corners'] = list(corners)
+    requirements_path.write_text(json.dumps(requirements))
+    manifest['requirements'] = final_gls._record(project, requirements_path)
+    manifest_path.write_text(json.dumps(manifest))
+    return d44_receipt, d69_receipt, d70_receipt
+
+
+def _execute_substrate(project, selection):
+    plan = flow109.resolve_plan(selection['features'])
+    context = flow109.execution_context(
+        plan, 'D71', 'D71', runtime_tool_uses=selection['runtime_tool_uses'],
+        qualification_registry=selection['qualification_registry'])
+    context = flow109.component_context(context, native_step_id='flow109.D71')
+    return final_gls.execute(project, context)
+
+
+def _prepare_context():
+    return {'requested_step': 'D71', 'native_step_id': 'flow109.D71',
+            'runtime_tool_uses': []}
 
 
 def test_registry_routes_only_the_existing_default_icarus_component():
@@ -193,11 +346,81 @@ def test_registry_routes_only_the_existing_default_icarus_component():
     assert all(item['status'] == 'UNIMPLEMENTED_METRIC_BINDING' for item in row['obligations'])
 
 
-def test_actual_default_final_sdf_gls_and_checker_readback(tmp_path):
+def test_caller_authored_upstream_pass_receipts_are_not_native_authority(tmp_path):
     _case(tmp_path)
-    proc = _run(tmp_path)
-    assert proc.returncode == 0, proc.stdout + proc.stderr
-    record = _component(tmp_path)
+    with pytest.raises(admission.AdmissionRefusal) as caught:
+        final_gls.prepare(tmp_path, _prepare_context())
+    assert caught.value.code == 'D44_CURRENT_COMPONENT_REQUIRED'
+
+
+def test_canonical_prepare_reopens_all_three_owning_producers(tmp_path, monkeypatch):
+    _case(tmp_path)
+    _d44, d69, d70 = _replace_with_owning_producer_receipts(tmp_path, monkeypatch)
+    prepared = final_gls.prepare(tmp_path, _prepare_context())
+    assert prepared['d44_baseline'] == json.loads(
+        (tmp_path / final_gls.INPUT).read_text())['d44_baseline']
+    assert prepared['d69_receipt'] == d69
+    assert prepared['d70_receipt'] == d70
+    assert set(prepared['sdfs']) == {'tt'}
+
+
+def test_equivalent_corner_population_order_is_not_semantic(tmp_path, monkeypatch):
+    _case(tmp_path)
+    _replace_with_owning_producer_receipts(tmp_path, monkeypatch, corners=('tt', 'ss'))
+    manifest = json.loads((tmp_path / final_gls.INPUT).read_text())
+    requirements_path = tmp_path / manifest['requirements']['path']
+    requirements = json.loads(requirements_path.read_text())
+    requirements['required_corners'] = ['ss', 'tt']
+    requirements_path.write_text(json.dumps(requirements))
+    manifest['requirements'] = final_gls._record(tmp_path, requirements_path)
+    (tmp_path / final_gls.INPUT).write_text(json.dumps(manifest))
+    prepared = final_gls.prepare(tmp_path, _prepare_context())
+    assert set(prepared['sdfs']) == {'tt', 'ss'}
+
+
+@pytest.mark.parametrize('damage,reason', [
+    ('d44_source', 'D44_OPERATION_SOURCE_CHANGED'),
+    ('d69_source', 'D69_OPERATION_SOURCE_CHANGED'),
+    ('d70_source', 'D70_OPERATION_SOURCE_CHANGED'),
+    ('missing_d69', 'D71_INPUT_UNBOUND'),
+])
+def test_current_owner_source_or_producer_loss_refuses(tmp_path, monkeypatch, damage, reason):
+    _case(tmp_path)
+    d44_ref, d69_ref, d70_ref = _replace_with_owning_producer_receipts(tmp_path, monkeypatch)
+    manifest_path = tmp_path / final_gls.INPUT
+    manifest = json.loads(manifest_path.read_text())
+    if damage == 'd44_source':
+        path = tmp_path / d44_ref['path']
+        value = json.loads(path.read_text()); value['source_sha256'] = {'stale': 'source'}
+        path.write_text(json.dumps(value)); manifest['d44_component'] = final_gls._record(tmp_path, path)
+    else:
+        d70_path = tmp_path / d70_ref['path']
+        d70 = json.loads(d70_path.read_text())
+        d69_path = tmp_path / d69_ref['path']
+        if damage == 'missing_d69':
+            d69_path.unlink()
+        elif damage == 'd69_source':
+            d69 = json.loads(d69_path.read_text()); d69['operation_sources'] = {'stale': 'source'}
+            d69_path.write_text(json.dumps(d69))
+            fresh = final_gls._record(tmp_path, d69_path)
+            d70['d69_receipt'] = d70['final_parasitics_receipt'] = fresh
+            d70['sdf_provenance']['d69_receipt'] = fresh
+            d70_path.write_text(json.dumps(d70))
+            manifest['d70_receipt'] = final_gls._record(tmp_path, d70_path)
+        else:
+            d70['operation_sources'] = {'stale': 'source'}
+            d70_path.write_text(json.dumps(d70))
+            manifest['d70_receipt'] = final_gls._record(tmp_path, d70_path)
+    manifest_path.write_text(json.dumps(manifest))
+    with pytest.raises(admission.AdmissionRefusal) as caught:
+        final_gls.prepare(tmp_path, _prepare_context())
+    assert caught.value.code == reason
+
+
+def test_substrate_actual_default_final_sdf_gls_and_checker_readback(tmp_path, monkeypatch):
+    selection = _case(tmp_path)
+    _admit_substrate_only(tmp_path, monkeypatch)
+    record = _execute_substrate(tmp_path, selection)
     assert record['component_status'] == 'PASS', record
     assert record['flow109_acceptance'] == 'NOT_MEASURED'
     assert record['metric_acceptance_status'] == 'UNIMPLEMENTED'
@@ -218,8 +441,10 @@ def test_actual_default_final_sdf_gls_and_checker_readback(tmp_path):
     ('functional_output', 'D71_NATIVE_GLS_FAILED'),
     ('annotation', 'D71_NATIVE_GLS_FAILED'),
 ])
-def test_actual_native_negative_output_and_annotation_are_preserved(tmp_path, damage, reason):
-    _case(tmp_path)
+def test_substrate_actual_native_negative_output_and_annotation_are_preserved(
+        tmp_path, monkeypatch, damage, reason):
+    selection = _case(tmp_path)
+    _admit_substrate_only(tmp_path, monkeypatch)
     manifest_path = tmp_path / final_gls.INPUT
     manifest = json.loads(manifest_path.read_text())
     if damage == 'functional_output':
@@ -236,9 +461,7 @@ def test_actual_native_negative_output_and_annotation_are_preserved(tmp_path, da
         d70_path.write_text(json.dumps(d70))
         manifest['d70_receipt'] = final_gls._record(tmp_path, d70_path)
         manifest_path.write_text(json.dumps(manifest))
-    proc = _run(tmp_path)
-    assert proc.returncode == 1, proc.stdout + proc.stderr
-    record = _component(tmp_path)
+    record = _execute_substrate(tmp_path, selection)
     assert record['component_status'] == 'FAIL' and record['reason'] == reason
     assert record['checker']['verdict'] == 'FAIL'
     corner = record['result']['judge']['corners']['tt']
@@ -257,8 +480,10 @@ def test_actual_native_negative_output_and_annotation_are_preserved(tmp_path, da
     ('wrong_netlist', 'D71_D70_NETLIST_DIFFERS_FROM_D44'),
     ('wrong_state_sdf', 'D71_FINAL_STATE_IDENTITY_MISMATCH'),
 ])
-def test_invalid_final_source_or_required_semantics_refuses_before_native(tmp_path, damage, reason):
-    _case(tmp_path)
+def test_substrate_invalid_final_source_or_required_semantics_refuses_before_native(
+        tmp_path, monkeypatch, damage, reason):
+    selection = _case(tmp_path)
+    _admit_substrate_only(tmp_path, monkeypatch)
     manifest_path = tmp_path / final_gls.INPUT
     manifest = json.loads(manifest_path.read_text())
     if damage in ('candidate', 'wrong_netlist', 'wrong_state_sdf'):
@@ -305,9 +530,9 @@ def test_invalid_final_source_or_required_semantics_refuses_before_native(tmp_pa
             use['qualification_sha256'] = admission.canonical_sha(qitem)
         qualifications.write_text(json.dumps(qdoc))
         (tmp_path / 'D71-selection.json').write_text(json.dumps(selection))
-    proc = _run(tmp_path)
-    assert proc.returncode == 2, proc.stdout + proc.stderr
-    record = _component(tmp_path)
+    # Reload when the control deliberately rebounded the qualification deck.
+    selection = json.loads((tmp_path / 'D71-selection.json').read_text())
+    record = _execute_substrate(tmp_path, selection)
     assert record['component_status'] == 'NOT_MEASURED' and record['reason'] == reason
     assert record['native_started'] is False
     assert not list((tmp_path / 'reports/flow109/D71').rglob('gls_runs.json'))

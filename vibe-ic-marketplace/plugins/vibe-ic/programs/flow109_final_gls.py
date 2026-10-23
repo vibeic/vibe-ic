@@ -32,6 +32,9 @@ from _atomic_artefact import write_json, write_text
 from flow109_admission import AdmissionRefusal, require_launch_admission
 import post_layout_sim_check as postcheck
 import sdf_gate_sim as sgs
+import flow109_final_lec as final_lec
+import flow109_final_extract as final_extract
+import flow109_final_electrical as final_electrical
 
 SCHEMA = 'vibeic.flow109.final-gls.v1'
 D70_SCHEMA = 'vibeic.flow109.final-electrical.v1'
@@ -95,6 +98,11 @@ def _same_record(a, b):
     return isinstance(a, dict) and isinstance(b, dict) and a == b
 
 
+def _same_population(a, b):
+    return (isinstance(a, list) and isinstance(b, list) and bool(a) and bool(b)
+            and len(a) == len(set(a)) and len(b) == len(set(b)) and set(a) == set(b))
+
+
 def _sdf_census(path, top):
     text = Path(path).read_text(errors='replace')
     if text.count('(') != text.count(')') or not re.search(r'\(SDFVERSION\s+"3\.0"\)', text):
@@ -125,7 +133,10 @@ def prepare(project, context):
 
     # D44 owns the adopted final logical subject.  Re-open both the baseline
     # and its current D44 component instead of accepting a caller's PASS word.
-    baseline_path = _bound(project, manifest.get('d44_baseline'))
+    d44_authority = final_lec.validate_common_baseline(project, manifest.get('d44_component'))
+    if d44_authority.get('baseline') != manifest.get('d44_baseline'):
+        raise AdmissionRefusal('D71_D44_ADOPTED_NETLIST_UNBOUND', 'D44 current baseline differs')
+    baseline_path = _bound(project, d44_authority['baseline'])
     if baseline_path != (project / D44_BASELINE).resolve():
         raise AdmissionRefusal('D71_D44_BASELINE_NOT_CANONICAL', str(baseline_path))
     baseline = _read(baseline_path)
@@ -161,8 +172,6 @@ def prepare(project, context):
             or d70.get('sdf_role') != 'final'
             or d70.get('producer') != 'flow109_final_electrical'):
         raise AdmissionRefusal('D71_FINAL_TIMING_RECEIPT_REQUIRED', str(d70_path))
-    if re.search(r'candidate|STAPostPNR|D49', json.dumps(d70.get('sdf_provenance') or {}), re.I):
-        raise AdmissionRefusal('D71_CANDIDATE_SDF_FORBIDDEN', str(d70_path))
     d69_path = _bound(project, d70.get('d69_receipt'))
     d69 = _read(d69_path)
     if (d69.get('schema') != 'vibeic.flow109.final-extract.v1'
@@ -170,6 +179,8 @@ def prepare(project, context):
             or d69.get('producer') != 'flow109_final_extract'
             or d69.get('component_status') != 'PASS'):
         raise AdmissionRefusal('D71_FINAL_EXTRACTION_RECEIPT_REQUIRED', str(d69_path))
+    d69_authority = final_extract.validate_final_parasitics(project, d70.get('d69_receipt'))
+    d70_authority = final_electrical.validate_final_electrical(project, manifest.get('d70_receipt'))
     final_geometry = _bound(project, d69.get('final_geometry'))
     final_spefs = d69.get('final_spefs')
     provenance = d70.get('sdf_provenance')
@@ -179,7 +190,14 @@ def prepare(project, context):
             or not _same_record(provenance.get('d69_receipt'), d70.get('d69_receipt'))
             or provenance.get('spef_by_rc_scene') != final_spefs
             or provenance.get('sta_state') != d70.get('sta_state')
-            or provenance.get('declared_corners') != d70.get('required_corners')):
+            or not _same_population(provenance.get('declared_corners'),
+                                    d70.get('required_corners'))
+            or d69_authority.get('final_geometry') != d69.get('final_geometry')
+            or d69_authority.get('final_spefs') != final_spefs
+            or d70_authority.get('sta_state') != d70.get('sta_state')
+            or d70_authority.get('final_sdfs') != d70.get('final_sdfs')
+            or not _same_population(d70_authority.get('required_corners'),
+                                    d70.get('required_corners'))):
         raise AdmissionRefusal('D71_FINAL_PARASITIC_PROVENANCE_UNBOUND', str(d70_path))
     spef_paths = [_bound(project, record) for record in final_spefs.values()]
     sdc = _bound(project, d70.get('sdc'))
@@ -208,12 +226,13 @@ def prepare(project, context):
         raise AdmissionRefusal('D71_REQUIRED_TIMING_BEHAVIOR_UNSUPPORTED', ', '.join(unsupported))
     if set(behaviors) != SUPPORTED_REQUIRED_BEHAVIORS:
         raise AdmissionRefusal('D71_REQUIRED_TIMING_BEHAVIOR_INCOMPLETE', str(behaviors))
-    if d70.get('required_corners') != corners or set(d70.get('final_sdfs') or {}) != set(corners):
+    if (not _same_population(d70.get('required_corners'), corners)
+            or set(d70.get('final_sdfs') or {}) != set(corners)):
         raise AdmissionRefusal('D71_FINAL_CORNER_BINDING_MISMATCH', str(d70_path))
 
     state_path = _bound(project, d70.get('sta_state'))
     state = _read(state_path)
-    if (list(state.get('sdf') or {}) != corners
+    if (set(state.get('sdf') or {}) != set(corners)
             or Path(str(state.get('nl') or '')).resolve() != netlist
             or Path(str(state.get('sdc') or '')).resolve() != sdc
             or set(state.get('spef') or {}) != set(final_spefs)

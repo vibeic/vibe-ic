@@ -425,13 +425,48 @@ def bind_metrics(project, context, component):
             'scope': 'D44 metric bindings only; not STA/LVS execution or whole-flow acceptance'}
 
 
+def validate_common_baseline(project, receipt_ref):
+    """Re-open D44's current producer, proof and common consumer baseline.
+
+    This is the owning downstream boundary for D44 output.  A project-authored
+    PASS document is not authority: the recorded D44 execution context, current
+    operation sources, native proof and mapping metric must all revalidate.
+    """
+    project = Path(project).resolve()
+    component = _read(_bound(project, receipt_ref))
+    context = component.get('execution_context')
+    if (component.get('schema') != SCHEMA or component.get('step_id') != 'D44'
+            or component.get('component_status') != 'PASS'
+            or not isinstance(context, dict)):
+        raise AdmissionRefusal('D44_CURRENT_COMPONENT_REQUIRED',
+                               'current D44 PASS receipt and execution context required')
+    require_launch_admission(project, 'flow109.D44', {'flow109_context': context})
+    if component.get('source_sha256') != operation_sources():
+        raise AdmissionRefusal('D44_OPERATION_SOURCE_CHANGED', 'D44 producer or consumer changed')
+    rebound = bind_metrics(project, context, component)
+    proof = rebound.get('metrics', {}).get('final_lec_unproved', {})
+    mapping = rebound.get('metrics', {}).get('sta_lvs_release_netlist_mapping', {})
+    if rebound.get('status') != 'PASS' or proof.get('status') != 'PASS' or mapping.get('status') != 'PASS':
+        reason = mapping.get('reason') or proof.get('reason') or rebound.get('reason')
+        raise AdmissionRefusal('D44_CURRENT_BASELINE_NOT_ACCEPTED', str(reason))
+    baseline_ref = mapping.get('reference')
+    if baseline_ref != component.get('common_baseline'):
+        raise AdmissionRefusal('D44_BASELINE_RECEIPT_DIFFERS', str(baseline_ref))
+    baseline = _read(_bound(project, baseline_ref))
+    return {'baseline': baseline_ref, 'adopted_netlist': baseline['adopted_netlist'],
+            'consumer_netlists': baseline['consumer_netlists'], 'proof': baseline['proof'],
+            'component': receipt_ref, 'component_current': True,
+            'flow109_acceptance': 'NOT_MEASURED'}
+
+
 def execute(project, context):
     project = Path(project).resolve()
     attempt = project / 'reports/flow109/D44' / uuid.uuid4().hex
     attempt.mkdir(parents=True, exist_ok=False)
     record = {'schema': SCHEMA, 'step_id': 'D44', 'component_status': 'NOT_MEASURED',
               'flow109_acceptance': 'NOT_MEASURED', 'native_started': False,
-              'context_sha256': context.get('context_sha256'), 'baseline_adoption': 'NOT_MEASURED'}
+              'context_sha256': context.get('context_sha256'), 'execution_context': context,
+              'baseline_adoption': 'NOT_MEASURED'}
     try:
         require_launch_admission(project, 'flow109.D44', {'flow109_context': context})
         prepared = prepare(project, context)
