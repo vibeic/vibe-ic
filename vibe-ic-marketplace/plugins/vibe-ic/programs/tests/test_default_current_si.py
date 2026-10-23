@@ -31,7 +31,13 @@ def fake_windows(monkeypatch, p):
 
 
 @pytest.mark.parametrize("cached", [False, True], ids=["ORDINARY_FIRST_ADOPTION", "CURRENT_CACHE"])
-def test_ordinary_si_caller_adopts_supported_current_subject(tmp_path, monkeypatch, cached):
+def test_retained_bundle_si_caller_adopts_supported_current_subject(tmp_path, monkeypatch, cached):
+    # This historical bundle owns the cache before continuing to its PDN
+    # reader. Ordinary Default now dispatches the native rows independently;
+    # keep this compatibility control explicit instead of expecting that old
+    # following-row boundary from the new Default dispatcher.
+    import execution_policy
+    monkeypatch.setattr(execution_policy, 'request', lambda: {'mode': 'ultra'})
     p, folder, lib = project(tmp_path)
     write(R._pl.pnr_dir(p) / "neutral.def", "VERSION 5.8 ;\nDESIGN neutral ;\nEND DESIGN\n")
     fake_windows(monkeypatch, p)
