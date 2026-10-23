@@ -593,3 +593,41 @@ def test_default_step34_retained_fill_reaches_current_consumer(
     refused = worker.execute_current_step(project, step_id='34', producer=result)
     assert refused['verdict'] == 'NOT_MEASURED'
     assert 'native retained stream refused' in refused['gate_ledger'][0]['reason']
+
+
+@pytest.mark.parametrize('mutation', ['current', 'changed_final_gds', 'missing_native_proof'])
+def test_admitted_default_stream_rechecks_owner_without_restarting_native_producers(
+        tmp_path, monkeypatch, mutation):
+    import phase3_one_shot_runner as R
+    import librelane_contract as LC
+    project, params, first, calls = _retained_default_stream(
+        tmp_path, monkeypatch, native_only_provenance=True)
+    monkeypatch.setattr(R._ga, 'admitted_gds', lambda *_: True)
+    restarted = []
+    def prestream(*args, **kwargs):
+        restarted.append('prestream')
+        return R.StepResult('prestream', 'PASS', 0.0, 'SOURCE_FIXTURE transport',
+                            extras={'layout_digest': 'fixture-layout'})
+    def stream(*args, **kwargs):
+        restarted.append('stream')
+        return R.StepResult('gds', 'PASS', 0.0, 'SOURCE_FIXTURE transport',
+                            extras={'finishing_receipt': first['receipt']})
+    monkeypatch.setattr(R, 'step_prestream_gate', prestream)
+    monkeypatch.setattr(R, 'step_gds', stream)
+    if mutation == 'changed_final_gds':
+        with Path(first['canonical']).open('ab') as output:
+            output.write(b'changed native output')
+    elif mutation == 'missing_native_proof':
+        Path(first['stream_state']).with_name('vibeic_receipt.json').unlink()
+    result = None
+    try:
+        result = producers.produce_signoff(project, params)
+    except LC.Refusal:
+        pass
+    assert len(restarted) == 0, restarted
+    if mutation == 'current':
+        assert result['verdict'] == 'PASS', result
+        assert result['finishing_receipt'] == first['receipt']
+        assert calls == ['primary', 'seal', 'filler-density']
+    else:
+        assert result is None, result

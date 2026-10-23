@@ -1795,6 +1795,26 @@ def produce_signoff(project, params):
             if not R._emit_metal_density_report(project, top, pdk, container, rpt / 'density.json', notes):
                 raise em.Refusal('BACKEND_DENSITY_NATIVE_UNMEASURED', sid)
     elif sid == '37':
+        if params.get('execution_mode') == 'default':
+            import librelane_fill_dfm as fill
+            promotion = project / fill.DEFAULT_STREAM_REL
+            basis, error = R._layout_basis(project, top, pdk, container)
+            if (promotion.is_file() and not error and
+                    R._ga.admitted_gds(project, pnr / (top + '.gds'), basis)):
+                # A final-consumer repair must not replay an already admitted
+                # native stream, seal/fill or its pre-stream instruments. The
+                # existing owner rechecks all retained native bytes, readsets
+                # and per-layer density before the unchanged full row consumer.
+                _step37_retained_output_sources(project, str(promotion))
+                pad = (R.step_pad_ring_final_evidence(
+                    project, top, R.StepResult('gds', 'PASS', 0.0,
+                        'retained native stream owner validated'), container)
+                    if R._chip_path_requests_pad_ring(project) else None)
+                return {'verdict': pad.status if pad else 'PASS',
+                        'detail': (pad.detail if pad else
+                                   'admitted native stream retained and validated'),
+                        'streamout_engine': 'klayout',
+                        'finishing_receipt': str(promotion)}
         pre = R.step_prestream_gate(project, top, pdk, container)
         if pre.status != 'PASS':
             return {'verdict': pre.status, 'detail': pre.detail}

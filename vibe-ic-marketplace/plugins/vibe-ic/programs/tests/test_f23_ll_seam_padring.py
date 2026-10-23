@@ -435,3 +435,79 @@ def test_default_ring_reader_uses_native_placement_and_route_consumers(tmp_path,
     result, doc = _run(project)
     assert result.status == 'FAIL'
     assert any(f.startswith(code) for f in doc['findings']), doc['findings']
+
+
+@pytest.mark.parametrize('change', [
+    'current', 'two-candidates', 'wrong-predecessor', 'wrong-adopted',
+    'unpromoted', 'failed-repair', 'source-changed', 'output-changed',
+    'moved', 'pin-disconnected', 'port-lost',
+])
+def test_default_ring_follows_only_bound_adopted_postroute_views(tmp_path, change):
+    """A genuine native repair may supersede the route packet, never bypass it."""
+    import _default_backend_fixtures as fixtures
+    import librelane_postroute_repair as repair
+    project, route = _native_default_ring_project(tmp_path)
+    pnr = p3._pl.pnr_dir(project)
+    reports = project / 'reports/phase3'
+    initial = put(project / 'phase3/librelane/32-config/bridge/state_in.json',
+                  {'def': str(pnr / 'routed.def'), 'metrics': {}})
+    state = initial
+    candidates = []
+    for index in range(2 if change == 'two-candidates' else 1):
+        name = f'32-cand{index + 1:02d}'
+        folder = project / 'phase3/librelane' / name / '01-native-repair'
+        folder.mkdir(parents=True)
+        output = folder / 'native.def'
+        text = (_def(pad_xy=(0, 60000)) if change == 'moved' else
+                _def().replace('( u_pad_clk PD ) ', '') if change == 'pin-disconnected' else
+                _def(pad_net='clk_buf', pad_driver='( ibuf Z )', extra_nets=(
+                    '- clk ( PIN clk ) ( ibuf I ) + USE SIGNAL ;',)) if change == 'port-lost' else
+                _def(core_net=f'repaired_net_{index}'))
+        output.write_text(text)
+        before = json.loads(state.read_text())
+        folder, _ = fixtures.producer(project, repair.REPAIR_STEP, before,
+            {'def': str(output), 'metrics': {}}, lane=str(folder.relative_to(
+                project / 'phase3/librelane')))
+        fp = json.loads((folder / 'input_fingerprint.json').read_text())
+        fp['state'] = contract.digest(state)
+        if change == 'wrong-predecessor':
+            fp['state_files'][before['def']] = '0' * 64
+        put(folder / 'input_fingerprint.json', fp)
+        receipt = json.loads((folder / 'vibeic_receipt.json').read_text())
+        receipt['input'] = fp
+        receipt['sha256']['input_fingerprint.json'] = contract.digest(folder / 'input_fingerprint.json')
+        put(folder / 'vibeic_receipt.json', receipt)
+        previous_name = candidates[-1]['candidate'] if candidates else None
+        state = folder / 'state_out.json'
+        candidates.append({'candidate': name, 'from': previous_name,
+                           'repair_state': str(state), 'closure_decision': 'PROMOTED'})
+    report = {'input_state': str(initial), 'adopted': name, 'adopted_state': str(state),
+              'verdict': 'PASS', 'candidates': candidates}
+    if change == 'wrong-adopted':
+        report['adopted_state'] = str(route / 'state_out.json')
+    elif change == 'unpromoted':
+        candidates[-1]['closure_decision'] = 'ROLLED_BACK'
+    elif change == 'failed-repair':
+        report['verdict'] = 'FAIL'
+    put(project / repair.REPORT_REL, report)
+    contract.handoff_to_direct(state, {'def': pnr / 'routed.def'},
+                               reports / 'librelane_postroute_repair_handoff.json')
+    if change == 'source-changed':
+        old = json.loads((reports / 'execution-backend-execution-backend-21-handoff.json').read_text())
+        Path(old['views']['def']['source']).write_text('changed historical route')
+    elif change == 'output-changed':
+        (pnr / 'routed.def').write_text((pnr / 'routed.def').read_text() + '\n')
+    result, doc = _run(project)
+    expected = 'PASS' if change in ('current', 'two-candidates') else 'FAIL'
+    assert result.status == expected, doc['findings']
+    if expected == 'PASS':
+        assert doc['findings'] == []
+        assert doc['librelane_ring_evidence']['adopted_route_state'] == str(state)
+    elif change in ('moved', 'pin-disconnected', 'port-lost'):
+        code = {'moved': 'PADRING_LL_RING_MOVED',
+                'pin-disconnected': 'PADRING_LL_RING_PIN_DISCONNECTED',
+                'port-lost': 'PADRING_LL_PORT_CONNECTION_LOST'}[change]
+        assert any(f.startswith(code) for f in doc['findings']), doc['findings']
+    else:
+        assert any(f.startswith('PADRING_LL_NATIVE_CONSUMER_UNBOUND')
+                   for f in doc['findings']), doc['findings']

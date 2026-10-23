@@ -49208,7 +49208,7 @@ def _default_librelane_ring_evidence(project: Path, pnr_dir: Path,
     evidence: Dict[str, Any] = {"mode": "librelane_native_chain"}
     reports = project / "reports/phase3"
     try:
-        def handoff(name, target, expected=None):
+        def handoff(name, target, expected=None, *, published_sha=None):
             doc = json.loads((reports / name).read_text())
             state = Path(doc["state"])
             if expected is not None and state.resolve() != expected.resolve():
@@ -49220,7 +49220,7 @@ def _default_librelane_ring_evidence(project: Path, pnr_dir: Path,
             if (Path(row["source"]).resolve() != source.resolve()
                     or Path(row["dest"]).resolve() != target.resolve()
                     or row["source_sha256"] != ll.digest(source)
-                    or row["dest_sha256"] != ll.digest(target)
+                    or row["dest_sha256"] != (published_sha or ll.digest(target))
                     or row["source_sha256"] != row["dest_sha256"]):
                 raise ValueError(f"{name}: DEF handoff changed")
             return state
@@ -49264,7 +49264,79 @@ def _default_librelane_ring_evidence(project: Path, pnr_dir: Path,
                 stages.append({"step": row["step"], "state": str(state),
                                "sha256": row["sha256"]})
                 previous = state
-            handoff(receipt_name, pnr_dir / target, previous)
+            target_path = pnr_dir / target
+            packet = json.loads((reports / receipt_name).read_text())
+            published = packet["views"]["def"]["dest_sha256"]
+            if sid == "21" and published != ll.digest(target_path):
+                # A later native repair may legitimately replace the canonical
+                # path. Prove its entire adoption chain from the immutable
+                # routing output; never rewrite the historical handoff or
+                # accept a different DEF just because its ring still matches.
+                handoff(receipt_name, target_path, previous, published_sha=published)
+                import librelane_postroute_repair as repair
+                adopted = json.loads((project / repair.REPORT_REL).read_text())
+                candidates = {row["candidate"]: row for row in adopted["candidates"]}
+                chain = []
+                name = adopted["adopted"]
+                while name is not None:
+                    if not name or name in [row["candidate"] for row in chain]:
+                        raise ValueError("post-route repair adoption cycle/absence")
+                    row = candidates[name]
+                    if row["closure_decision"] != "PROMOTED":
+                        raise ValueError("post-route repair was not promoted")
+                    chain.append(row)
+                    name = row["from"]
+                if not chain or adopted.get("verdict") != "PASS":
+                    raise ValueError("post-route repair adoption absent or failed")
+                repair_previous = Path(adopted["input_state"])
+                prior_views = packet["views"]
+                prior_state = json.loads(previous.read_text())
+                for candidate in reversed(chain):
+                    state = Path(candidate["repair_state"])
+                    if (not state.resolve().is_relative_to(
+                            (project / "phase3/librelane").resolve())
+                            or not state.resolve().is_relative_to(
+                                (project / "phase3/librelane" / candidate["candidate"]).resolve())):
+                        raise ValueError("post-route repair outside its native candidate")
+                    receipt = ll.validate_step_receipt(state.parent, repair.REPAIR_STEP)
+                    fp = receipt["input"]
+                    if fp["state"] != ll.digest(repair_previous):
+                        raise ValueError("post-route repair state chain changed")
+                    before = json.loads(repair_previous.read_text())
+                    historic = {}
+                    for role in ("def", "nl"):
+                        if role not in prior_views:
+                            continue
+                        view = prior_views[role]
+                        source = Path(view["source"])
+                        consumed = str(before[role])
+                        if (source.resolve() != Path(prior_state[role]).resolve()
+                                or Path(consumed).resolve() not in
+                                (source.resolve(), Path(view["dest"]).resolve())
+                                or view["source_sha256"] != ll.digest(source)
+                                or fp["state_files"].get(consumed) != view["source_sha256"]):
+                            raise ValueError("post-route repair predecessor view changed")
+                        historic[consumed] = view["source_sha256"]
+                    if str(before["def"]) not in historic:
+                        raise ValueError("post-route repair predecessor DEF absent")
+                    native._hashes({p: sha for p, sha in fp["state_files"].items()
+                                    if p not in historic})
+                    after = json.loads(state.read_text())
+                    prior_views = {role: {"source": after[role], "dest": after[role],
+                                         "source_sha256": ll.digest(Path(after[role]))}
+                                   for role in ("def", "nl") if after.get(role)}
+                    repair_previous = state
+                    prior_state = after
+                    stages.append({"step": repair.REPAIR_STEP, "state": str(state),
+                                   "sha256": ll.digest(state)})
+                    consumers.append(Path(after["def"]))
+                if Path(adopted["adopted_state"]).resolve() != repair_previous.resolve():
+                    raise ValueError("post-route repair adopted state differs")
+                handoff("librelane_postroute_repair_handoff.json", target_path,
+                        repair_previous)
+                evidence["adopted_route_state"] = str(repair_previous)
+            else:
+                handoff(receipt_name, target_path, previous)
             if sid == "17":
                 consumers.append(pnr_dir / target)
         consumers.append(pnr_dir / "routed.def")
