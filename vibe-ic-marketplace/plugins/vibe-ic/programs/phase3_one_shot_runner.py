@@ -78701,6 +78701,19 @@ def _phase3_window_run_id() -> str:
     return safe if safe not in ("", ".", "..") else f"window-{os.getpid()}"
 
 
+def _phase3_window_lock_root(project: Path) -> Path:
+    """Return writable control state for serialising bounded windows.
+
+    A project is commonly bind-mounted at ``/project`` in the native image,
+    whose parent is the read-only-for-the-runner filesystem root.  Keeping
+    this lock beside that mount made ``mkdir /.phase3_window_locks`` fail
+    before the child could publish its bounded report.  ``.vibeic`` already
+    owns project-local runtime control state and is excluded from design
+    artefact manifests, so keep the independent window lock there too.
+    """
+    return Path(project) / ".vibeic" / "phase3-window-lock"
+
+
 def _phase3_window_publication(project: Path, isolated: Path,
                                sources: List[Path],
                                window_run_id: str) -> Tuple[List[str], str]:
@@ -80576,7 +80589,7 @@ def main() -> int:
                       f"re-enters the lock held by parent pid={parent} on "
                       f"{project} (#588 delegated sub-run).",
                       file=sys.stderr)
-        lock_root = project.parent / ".phase3_window_locks" / project.name
+        lock_root = _phase3_window_lock_root(project)
         lock_root.mkdir(parents=True, exist_ok=True)
         _lock = _runner_lock.acquire_or_reenter(
             lock_root, "phase3_bounded_window")

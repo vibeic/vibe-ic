@@ -181,6 +181,17 @@ def test_enclosing_phase3_runs_on_its_copy_under_the_parents_token(
     assert p3._phase3_file_manifest(project) == before
 
 
+def test_window_control_lock_stays_under_writable_project(project):
+    """A bind-mounted ``/project`` may have an unwritable parent (``/``).
+
+    Bounded-window coordination is runtime control state, so it belongs in
+    the project's writable ``.vibeic`` tree instead of beside the mount.
+    """
+    lock_root = p3._phase3_window_lock_root(project)
+    assert lock_root == project / ".vibeic/phase3-window-lock"
+    assert lock_root.is_relative_to(project)
+
+
 def test_enclosing_phase3_hang_is_stopped_by_the_watchdog(
         project, monkeypatch, tmp_path):
     """A grandchild that makes no forward progress is killed with its whole
