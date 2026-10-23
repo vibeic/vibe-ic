@@ -59,8 +59,7 @@ def test_gls_qualifies_both_compile_and_runtime():
 
 def test_all_dispatchable_profiles_cover_each_declared_operation_once():
     registry = flow109.load_registry()
-    count = 0
-    adapters = 0
+    backend_owners = {}
     for row in registry['rows']:
         for profile in row['profiles']:
             dispatch = profile.get('dispatch')
@@ -73,17 +72,26 @@ def test_all_dispatchable_profiles_cover_each_declared_operation_once():
                 assert flow109._canonical_owner_dispatch({**row, 'profile': profile})
                 assert dispatch['acceptance_scope'] == 'existing_native_component_only'
                 continue
-            count += 1
-            adapters += bool(dispatch.get('adapter'))
+            if not dispatch.get('adapter'):
+                backend_owners[(row['id'], profile['id'])] = dispatch['native_step_id']
             engines = dispatch['engine_families']
             assert set(dispatch['engine_steps']) == set(engines)
             assert set(dispatch['engine_executables']) == set(engines)
             operations = [operation for engine in engines for operation in dispatch['engine_steps'][engine]]
             assert sorted(operations) == sorted(profile['native_steps']), row['id']
             assert all(dispatch['engine_executables'][engine] for engine in engines)
-    # Four original-70 delivery owners are now exposed through the existing
-    # canonical backend window; adapters remain counted independently.
-    assert count - adapters == 26
+    # Check the actual stable-ID/native-owner mapping rather than a total
+    # that misses swapped owners and becomes stale when D63 is exposed.
+    expected = {
+        'D31': '15', 'D32': '15.5ic', 'D35': '17', 'D37': '18',
+        'D38': '19', 'D39': '20', 'D40': '21', 'D41': '32',
+        'D43': '26', 'D47': '22', 'D48': '27', 'D49': '23',
+        'D53': '29', 'D54': '30', 'D56': '33', 'D57': '24',
+        'D58': '25', 'D59': '28', 'D60': '37', 'D61': '26.5ic',
+        'D63': '35', 'D64': '37.3', 'D65': '31', 'D77': '37.4',
+        'D78': '36', 'D80': '37.5ic', 'D81': '38',
+    }
+    assert backend_owners == {(step, 'default'): native for step, native in expected.items()}
 
 
 def test_explicit_fill_streaming_is_a_distinct_required_native_tool_purpose():

@@ -1,4 +1,7 @@
-"""A02 actual-ngspice component controls; these are not PDK signoff."""
+"""Legacy qualified A02 component controls; these are not PDK signoff.
+
+Canonical native dispatch is covered separately by test_analog_native_flow.py.
+"""
 from __future__ import annotations
 
 import copy
@@ -14,6 +17,7 @@ import flow109_admission as admission
 import flow109_analog_a02 as analog
 import flow109_analog_model_check as model_check
 from _analog_producer_fixture import block, make_project
+from _flow109_legacy_component_fixture import legacy_component_registry, run_legacy_component
 
 
 def _put(project, name, body):
@@ -77,7 +81,11 @@ def _case(project, *, broken=False, missing_corner=False, transitive=False,
             + ('' if transitive else '.model ' + device
                + ' nmos level=1 vto=0.5 kp=100u\n')
             + '.endl ' + corner + '\n' for corner in ('ss', 'tt', 'ff'))
-        model = _put(project, 'input/pdk/spice/open_dev_models.lib', model_body)
+        # Inventory scans .lib before .scs. Keep the unbound child the unique
+        # .lib representative; filesystem iteration order must not decide this
+        # control's distinction between inventory presence and model admission.
+        model_name = 'open_dev_models.scs' if transitive == 'unbound' else 'open_dev_models.lib'
+        model = _put(project, 'input/pdk/spice/' + model_name, model_body)
     smokes = []
     requested_corners = (('mos_tt',) if pinned_ihp else
                          ('ss', 'tt', 'absent') if missing_corner else ('ss', 'tt', 'ff'))
@@ -141,11 +149,7 @@ def _case(project, *, broken=False, missing_corner=False, transitive=False,
 
 
 def _run(project):
-    return subprocess.run([
-        'python3', str(analog.HERE / 'vibe_ic_one_shot_runner.py'), str(project),
-        '--flow', '109', '--flow109-manifest', str(project / 'manifest.json'),
-        '--entry-step', 'A02', '--exit-step', 'A02', '--route', 'ip', '--no-dashboard'],
-        capture_output=True, text=True)
+    return run_legacy_component(project, 'A02')
 
 
 def test_actual_a02_runs_declared_model_device_smoke_and_keeps_signoff_unmeasured(tmp_path):

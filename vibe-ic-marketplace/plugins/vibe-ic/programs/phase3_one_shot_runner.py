@@ -47778,6 +47778,22 @@ def step_postroute_repair_librelane(project: Path, top: str, pdk: "PdkConfig",
                 f"{view.name} is absent, so there is no routed database for "
                 f"the LibreLane post-route repair to start from")
             return None
+    _prior_report = project / _llprr.REPORT_REL
+    if _prior_report.is_file():
+        try:
+            _prior = json.loads(_prior_report.read_text())
+        except (OSError, ValueError):
+            _prior = {}
+        if (_prior.get("verdict") == "FAIL"
+                and _prior.get("code") == "LL_PRR_DRV_VIOLATION"):
+            try:
+                report = _llprr.resume_drv(project)
+            except _ll.Refusal as exc:
+                return StepResult("postroute_repair_librelane", "NOT_MEASURED",
+                                  time.time() - t0, f"{exc}",
+                                  reason_class=_V.ReasonClass.EXECUTION_ERROR)
+            return _postroute_repair_librelane_result(
+                project, pnr_out, report, t0, handed=True, top=top)
     image = _ll.resolve_image(project)
     try:
         pdk_root = Path(_ll.pdk_root_resolution(project, str(pdk.name),
@@ -63970,6 +63986,35 @@ def _canonicalize_postpnr_prerequisites(project: Path, top: str, pdk: PdkConfig,
                                              if status == "NOT_MEASURED" else ""))
 
 
+def _pnr_fatal_signal_note(project: Path) -> str | None:
+    """Describe a retained fatal-signal receipt without changing its verdict."""
+    path = _pl.reports_phase3_dir(project) / "pnr_fatal_signal.json"
+    if not path.is_file():
+        return None
+    try:
+        record = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return None
+    if not isinstance(record, dict):
+        return None
+    resume = record.get("resume")
+    resume_status = resume.get("status") if isinstance(resume, dict) else None
+    return (
+        f"PnR CRASHED in this project: OpenROAD was killed by "
+        f"{record.get('signal_name')} (rc={record.get('rc')}) in stage "
+        f"{record.get('stage')} — see {path}. "
+        + ("The stage began AFTER pnr.tcl's last sign-off write, so "
+           "the DEF/netlist below were written before it and are from "
+           "that session. "
+           if record.get("crashed_after_signoff_writes")
+           else "The stage ran BEFORE pnr.tcl's sign-off writes. ")
+        + (f"Resume: {resume_status}"
+           + (f" — {resume.get('reason')}" if resume.get("reason") else "")
+           if resume_status else "No resume was recorded.")
+        + " A complete stage-DEF set here is therefore NOT evidence of an "
+          "uninterrupted run.")
+
+
 def _default_poststream_evidence(project: Path, top: str, pdk: PdkConfig,
                                  container: str, *, prepv: bool) -> StepResult:
     """Retain completed Default rows; produce the remaining final evidence."""
@@ -63986,6 +64031,9 @@ def _default_poststream_evidence(project: Path, top: str, pdk: PdkConfig,
     rpt.mkdir(parents=True, exist_ok=True)
     written: List[str] = []
     notes: List[str] = []
+    fatal_note = _pnr_fatal_signal_note(project)
+    if fatal_note:
+        notes.append(fatal_note)
     unmeasured: List[str] = []
     failures: List[str] = []
     _publish_canonical_gds_alias(project, top, written, notes)
@@ -65402,32 +65450,9 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
     # this step looking exactly like an ordinary clean run and drew no note at
     # all. It is read here, so the crash is in the canonicalisation record
     # too, not only in a step detail string a re-run overwrites.
-    _fatal_sig_json = rpt_phase3 / "pnr_fatal_signal.json"
-    if _fatal_sig_json.is_file():
-        try:
-            _fs = json.loads(_fatal_sig_json.read_text())
-        except (OSError, ValueError):
-            _fs = None
-        if isinstance(_fs, dict):
-            _fs_resume = _fs.get("resume")
-            _fs_resume_status = (_fs_resume.get("status")
-                                 if isinstance(_fs_resume, dict) else None)
-            notes.append(
-                f"PnR CRASHED in this project: OpenROAD was killed by "
-                f"{_fs.get('signal_name')} (rc={_fs.get('rc')}) in stage "
-                f"{_fs.get('stage')} — see {_fatal_sig_json}. "
-                + (f"The stage began AFTER pnr.tcl's last sign-off write, so "
-                   f"the DEF/netlist below were written before it and are "
-                   f"from that session. "
-                   if _fs.get("crashed_after_signoff_writes")
-                   else "The stage ran BEFORE pnr.tcl's sign-off writes. ")
-                + (f"Resume: {_fs_resume_status}"
-                   + (f" — {_fs_resume.get('reason')}"
-                      if _fs_resume.get("reason") else "")
-                   if _fs_resume_status
-                   else "No resume was recorded.")
-                + " A complete stage-DEF set here is therefore NOT evidence "
-                  "of an uninterrupted run.")
+    _fatal_note = _pnr_fatal_signal_note(project)
+    if _fatal_note:
+        notes.append(_fatal_note)
     # PDN done flag: written before the pre-stream return above, in BOTH
     # passes (FX_LL21_DECLARED_OUTPUTS)
     if missing_stages:
@@ -69710,7 +69735,10 @@ def _librelane_step_ctx(project: Path, steps: str, pdk: str) -> Tuple[str, Path]
 
 
 def _librelane_step24_record(project: Path, top: str, pdk: PdkConfig, mode: str,
-                         spef: Path, written: List[str]) -> None:
+                         spef: Path, written: List[str], *,
+                         routed_def: Optional[Path] = None,
+                         netlist: Optional[Path] = None,
+                         sdc: Optional[Path] = None) -> None:
     """Step 24 on `OpenROAD.IRDropReport` + `Vibeic.IRDropChecker`, with the
     same-basis cross-check; records `reports/phase3/ir_drop_librelane.json`.
     The SPEF is the canonical one step 22 left (its producer's, never a
@@ -69719,12 +69747,14 @@ def _librelane_step24_record(project: Path, top: str, pdk: PdkConfig, mode: str,
     import ir_drop_budget_check as _ibc
     rpt = _pl.reports_phase3_dir(project)
     pnr = _pl.pnr_dir(project)
-    routed = pnr / f"{top}.def"
+    routed = Path(routed_def) if routed_def is not None else pnr / f"{top}.def"
+    routed_netlist = Path(netlist) if netlist is not None else pnr / f"{top}_pnr.v"
+    routed_sdc = Path(sdc) if sdc is not None else pnr / "constraint.sdc"
     doc: Dict[str, Any] = {"step": "24", "mode": mode,
                            "producer": "librelane:OpenROAD.IRDropReport",
                            "def_sha256": _sha256_file(routed)}
-    inputs = {"def": routed, "netlist": pnr / f"{top}_pnr.v",
-              "sdc": pnr / "constraint.sdc", "spef": spef}
+    inputs = {"def": routed, "netlist": routed_netlist,
+              "sdc": routed_sdc, "spef": spef}
     doc["inputs"] = {key: {"path": str(path.relative_to(project)),
                             "sha256": _sha256_file(path) if path.is_file() else None}
                      for key, path in inputs.items()}
@@ -69735,7 +69765,7 @@ def _librelane_step24_record(project: Path, top: str, pdk: PdkConfig, mode: str,
         source = ("pdk.ir_budget_pct" if declared is not None else
                   "ir_drop_budget_check._DEFAULT_BUDGET_PCT (the direct verdict's budget)")
         record = _la.run_ir(project, image, root, pdk.name, routed_def=routed,
-                            netlist=pnr / f"{top}_pnr.v", sdc=pnr / "constraint.sdc",
+                            netlist=routed_netlist, sdc=routed_sdc,
                             spef=spef, budget_pct=budget, budget_source=source,
                             supply_nets=dict(zip(("VDD_NETS", "GND_NETS"),
                                                   _discover_power_nets(routed))))
@@ -80048,6 +80078,109 @@ def _default_ic_release_docs(project: Path, top: str, pdk: PdkConfig,
 _refresh_default_step32_sdc = functools.partial(
     _ppa_timing.refresh_default_step32_sdc, sys.modules[__name__])
 
+
+def _reuse_current_default_step17(project, pdk, manifest, row_def, attempt,
+                                  step_versions, producers, worker):
+    """Re-consume an exact current Step-17 native output without re-placement.
+
+    D34's reviewed adapter is the only issuer.  Presence alone is never
+    authority: the retained canonical PASS, complete resolved inputs, native
+    handoff and output bytes must all remain exact before the existing declared
+    producer and canonical gate are run again.
+    """
+    import flow109_clock_plan as clock_adapter
+
+    raw = os.environ.pop(clock_adapter.STEP17_REUSE_ENV, None)
+    if raw is None:
+        return None
+    request_path = Path(raw)
+    try:
+        request = json.loads(request_path.read_text())
+        if (request_path.is_symlink() or not request_path.resolve().is_relative_to(
+                (Path(project) / "reports/flow109/D34").resolve())
+                or request.get("schema") != "vibeic.flow109.step17-reuse-request.v1"
+                or request.get("pdk") != getattr(pdk, "name", None)
+                or type(request.get("source_census_count")) is not int
+                or request["source_census_count"] <= 0):
+            raise ValueError("request identity")
+    except (OSError, ValueError, TypeError, AttributeError) as exc:
+        raise ValueError("D35_RETAINED_REQUEST_INVALID: " + str(exc)) from exc
+
+    project = Path(project)
+    backend_path = project / "reports/phase3/default_steps/17/backend_result.json"
+    placed = project / "phase3/stage3/pnr/placed.def"
+    handoff = project / "reports/phase3/librelane_placement_handoff.json"
+    for path, key in ((backend_path, "backend_result_sha256"),
+                      (placed, "placed_def_sha256"),
+                      (handoff, "native_handoff_sha256")):
+        if (path.is_symlink() or not path.is_file()
+                or _sha256_file(path) != request.get(key)):
+            raise ValueError("D35_RETAINED_IDENTITY_CHANGED: " + str(path))
+
+    retained = step_versions.latest_pass(project, "17")
+    if (not retained or retained.get("current_inputs") is not True
+            or retained.get("canonical_pass") is not True
+            or retained.get("status") != "PASS"
+            or retained.get("folder") != request.get("retained_step_folder")):
+        raise ValueError("D35_RETAINED_CURRENT_PASS_ABSENT")
+    resolved = manifest.get("files") if isinstance(manifest, dict) else None
+    normalized = {
+        raw: str(value.get("sha256") if isinstance(value, dict) else value).removeprefix("sha256:")
+        for raw, value in (resolved or {}).items()}
+    retained_inputs = {
+        raw: str(value.get("sha256") if isinstance(value, dict) else value).removeprefix("sha256:")
+        for raw, value in (retained.get("inputs") or {}).items()}
+    if not normalized or normalized != retained_inputs:
+        raise ValueError("D35_RETAINED_INPUT_IDENTITY_CHANGED")
+
+    old = json.loads(backend_path.read_text())
+    expected_outputs = (retained.get("result") or {}).get("outputs") or {}
+    if (old.get("schema") != "vibeic/backend-result/2"
+            or old.get("step_id") != "17" or old.get("verdict") != "PASS"
+            or old.get("producer_verdict") != "PASS"
+            or old.get("gates") != {
+                "backend_canonical": "PASS", "backend_native_substance": "PASS"}
+            or old.get("missing_outputs") != []
+            or old.get("outputs") != expected_outputs):
+        raise ValueError("D35_RETAINED_BACKEND_RESULT_INVALID")
+    for rel, digest in expected_outputs.items():
+        path = project / rel
+        if path.is_symlink() or not path.is_file() or _sha256_file(path) != digest:
+            raise ValueError("D35_RETAINED_OUTPUT_CHANGED: " + rel)
+
+    current = producers._run_current_step_declared_producers(
+        project, "17", manifest)
+    allowed, reason, authority = producers._current_step_producer_authority(
+        current, project=project)
+    if not allowed:
+        raise ValueError("D35_RETAINED_DECLARED_PRODUCER_REFUSED: " + reason)
+    producer = {
+        "verdict": "PASS",
+        "detail": "retained current Step17 native placement; fresh canonical consumer",
+        "current_step_declared_producers": current,
+        "native_receipts": [{
+            "schema": "vibeic/retained-native-step-receipt/1",
+            "step_id": "17", "verdict": "PASS",
+            "handoff": str(handoff.relative_to(project)),
+            "handoff_sha256": request["native_handoff_sha256"],
+            "placed_def_sha256": request["placed_def_sha256"],
+            "source_census_sha256": request["source_census_sha256"],
+            "source_census_count": request["source_census_count"],
+        }],
+        "canonical_receipts": [{
+            "schema": "vibeic/backend-producer-receipt/1",
+            "producer": "retained-current-execution_backend_producers.produce",
+            "step_id": "17", "verdict": "PASS",
+            "prior_backend_result_sha256": request["backend_result_sha256"],
+            "current_step_declared_producers": current,
+        }],
+    }
+    step_versions.publish_producer_outputs(project, attempt)
+    receipt = worker.execute_current_step(project, step_id="17", producer=producer)
+    receipt["retained_native_producer"] = True
+    receipt["retained_source_census_sha256"] = request["source_census_sha256"]
+    return receipt
+
 def _default_pnr_rows(project: Path, top: str, pdk: PdkConfig, container: str,
                       step_ids: List[str], *, die_um: Optional[str] = None,
                       util: Optional[float] = None,
@@ -80187,7 +80320,14 @@ def _default_pnr_rows(project: Path, top: str, pdk: PdkConfig, container: str,
         _publish_in_progress_steps(project, rows)
         with step_versions.active_steps(project, [attempt]):
             try:
-                if sid in ('16', '35', '26.5ic', '36', '37.4', '37.5ic', '37.5ip', '38', 'DT2', 'DT3'):
+                retained_step17 = (_reuse_current_default_step17(
+                    project, pdk, manifest, row_def, attempt, step_versions,
+                    producers, worker) if sid == '17' else None)
+                if retained_step17 is not None:
+                    receipt = retained_step17
+                    status = receipt['verdict']
+                    files = receipt['outputs'] if status == 'PASS' else {}
+                elif sid in ('16', '35', '26.5ic', '36', '37.4', '37.5ic', '37.5ip', '38', 'DT2', 'DT3'):
                     if sid == '16':
                         notes: List[str] = []
                         clock_path = _pl.cts_dir(project) / 'clock_plan.json'
@@ -81410,7 +81550,7 @@ def main() -> int:
             # is measured, but a run whose Step 32 did not PASS has no release
             # credit -- even when the pre-stream gate then PASSes.
             _measurement_only = "; ".join(
-                f"step 32 ({r.name} {r.status}): {r.detail[:200]}"
+                f"step 32 ({r.name} {r.status}): {_rsum.summary_detail(r.detail, r.status, width=200)}"
                 for r in _step32_nonpass)
             if _execution.request()['mode'] == 'default':
                 _prestream_refusal = _measurement_only

@@ -386,6 +386,33 @@ def test_d44_retained_lec_registers_only_existing_native_admission_fields():
         flow109.source_owned_native_dispatch(row)
 
 
+def test_d63_routes_only_to_current_canonical_default35_owner():
+    plan = flow109.resolve_plan(profile())
+    row = flow109.resolve_step(plan, "D63")
+    dispatch = flow109.source_owned_native_dispatch(row)
+
+    assert row["profile"]["execution_status"] == "NATIVE_COMPONENT_ONLY_NOT_109_ACCEPTED"
+    assert dispatch["kind"] == "canonical_backend_window"
+    assert dispatch["native_step_id"] == "35"
+    assert dispatch["producer"] == "execution_backend_producers.py:produce"
+    assert dispatch["consumer"] == "execution_backend_gates.py:evaluate"
+    assert dispatch["native_required_outputs"] == ["reports/phase3/dfm_screen.json"]
+    assert dispatch["acceptance_scope"] == "existing_native_component_only"
+    assert dispatch["flow109_metrics_status"] == "UNIMPLEMENTED"
+    assert row["metric_acceptance_status"] == "UNIMPLEMENTED"
+    assert row["gate_matrix_status"] == "NOT_MEASURED_FOR_109"
+
+    context = flow109.execution_context(plan, "D63", "D63")
+    admission = flow109.source_owned_native_admission(context)
+    assert admission["admitted"] is True
+    assert admission["qualification_status"] == "NOT_CLAIMED"
+    assert admission["flow109_acceptance"] == "NOT_MEASURED"
+
+    context["resolved_row"]["profile"]["dispatch"]["native_step_id"] = "34"
+    with pytest.raises(flow109.Flow109Error, match="FLOW109_CONTEXT_STALE"):
+        flow109.validate_execution_context(context)
+
+
 def test_owner_route_refuses_wrong_owner_and_unknown_native_mapping():
     plan = flow109.resolve_plan(profile())
     row = next(item for item in plan["rows"] if item["id"] == "D12")

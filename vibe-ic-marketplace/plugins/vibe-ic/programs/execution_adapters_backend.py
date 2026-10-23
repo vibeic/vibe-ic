@@ -649,6 +649,132 @@ def _backend_input_contract(step_id: str, spec: Mapping[str, object]) -> tuple[o
     return tuple(values)
 
 
+def default_step24_physical_subject(project: Path, *,
+                                    execution_mode: str = "default") -> dict[str, str] | None:
+    """Resolve Default Step 24's attested physical subject once.
+
+    Both the ordinary issuer and the native producer call this resolver.  It
+    never publishes an alias: the returned paths name the existing DEF,
+    routed netlist, SDC and uniquely selected native RCX result.  Operator,
+    Ultra and uncertain routes return ``None`` and retain their old behavior.
+    """
+    if execution_mode != "default":
+        return None
+
+    root = Path(project).resolve(strict=True)
+    import _tapeout_declaration as td
+    slot_root = root / td.SLOTS_REL
+    has_slots = (slot_root.is_dir() and any(
+        path.is_file() and not path.is_symlink() and path.stat().st_size > 0
+        for path in slot_root.rglob("*")))
+    route, _reason = td.declared_route_on_disk(root, has_slots)
+    if route != td.ROUTE_SELF_TAPEOUT:
+        return None
+
+    handoff_rel = "reports/phase3/io_pad_chip_top.json"
+    handoff = root / handoff_rel
+    try:
+        record = json.loads(handoff.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, ValueError) as exc:
+        raise ValueError("Step-24 self-tapeout pad-top handoff is unreadable") from exc
+    physical = record.get("chip_top_module")
+    logical = record.get("core_module")
+    wrapper = record.get("chip_top_verilog")
+    if (record.get("verdict") != "WROTE"
+            or not isinstance(physical, str) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_$]*", physical)
+            or not isinstance(logical, str) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_$]*", logical)
+            or not isinstance(wrapper, str)):
+        raise ValueError("Step-24 self-tapeout pad-top handoff is not a typed WROTE mapping")
+    declared, err = td.load(root / td.DECLARATION_REL)
+    declared_top = td.answer(declared, "top_cell") if err is None and isinstance(declared, dict) else None
+    if declared_top != logical:
+        raise ValueError(
+            f"Step-24 self-tapeout logical top mismatch: declaration={declared_top!r}, "
+            f"pad handoff={logical!r}")
+
+    def safe_rel(raw: str, label: str) -> str:
+        rel = Path(raw)
+        if rel.is_absolute() or not raw or ".." in rel.parts or rel.as_posix() != raw:
+            raise ValueError(f"Step-24 self-tapeout {label} path is unsafe: {raw!r}")
+        return raw
+
+    wrapper = safe_rel(wrapper, "wrapper")
+    physical_def = f"phase3/stage3/pnr/{physical}.def"
+    routed_netlist = f"phase3/stage3/pnr/{logical}_pnr.v"
+    sdc = "phase3/stage3/pnr/constraint.sdc"
+
+    # A present subject must agree with the producer mapping.  Missing bytes
+    # remain declarations below so the ordinary aggregate reports them as
+    # REQUIRED_INPUT_ABSENT rather than accepting a guessed alias.
+    def_path = root / physical_def
+    if def_path.is_file():
+        match = re.search(r"(?m)^\s*DESIGN\s+(\S+)\s*;", def_path.read_text(errors="replace"))
+        if match is None or match.group(1) != physical:
+            raise ValueError("Step-24 self-tapeout DEF DESIGN disagrees with pad-top handoff")
+    netlist_path = root / routed_netlist
+    if netlist_path.is_file():
+        modules = set(re.findall(r"(?m)^\s*module\s+(?:\\(\S+)|([A-Za-z_][A-Za-z0-9_$]*))",
+                                 netlist_path.read_text(errors="replace")))
+        names = {escaped or plain for escaped, plain in modules}
+        if physical not in names:
+            raise ValueError("Step-24 self-tapeout routed netlist lacks the physical top")
+
+    # Step 22's selected native RCX result is the Step-24 SPEF input.  It is a
+    # bounded, exact file selection; zero or multiple candidates is an honest
+    # missing/ambiguous prerequisite, never a first-match choice.
+    spefs = sorted(root.glob(
+        f"phase3/librelane/*/03-openroad-rcx/nom/{physical}.nom.spef"))
+    if len(spefs) > 1:
+        raise ValueError("Step-24 self-tapeout native SPEF selection is ambiguous")
+    spef = (spefs[0].relative_to(root).as_posix() if spefs else
+            f"phase3/stage3/extracted/{logical}.spef")
+
+    return {
+        "physical_top": physical, "logical_top": logical,
+        "def": physical_def, "netlist": routed_netlist, "sdc": sdc,
+        "spef": spef, "handoff": handoff_rel, "wrapper": wrapper,
+    }
+
+
+def backend_canonical_input_contract(project: Path, step_id: str, declarations,
+                                     *, execution_mode: str = "ultra") -> tuple[object, ...]:
+    """Select Step 24's real routed subject on an attested self-tapeout.
+
+    The canonical row's historical ``routed.def`` name is the logical-core
+    route.  A die with an ``io_pad_chip_top_gen`` handoff instead ships the
+    handoff's physical top, while retaining the logical name on its gate
+    netlist and RCX publication.  Operator/shuttle and uncertain routes keep
+    the canonical declarations byte-for-byte; absence never selects this arm.
+    """
+    values = tuple(declarations or ())
+    if str(step_id) != "24":
+        return values
+    subject = default_step24_physical_subject(
+        project, execution_mode=execution_mode)
+    if subject is None:
+        return values
+
+    selected: list[object] = []
+    for item in values:
+        if (isinstance(item, Mapping)
+                and item.get("path") == "phase3/stage3/pnr/routed.def"):
+            replacement = dict(item)
+            replacement["path"] = subject["def"]
+            selected.append(replacement)
+        else:
+            selected.append(item)
+    selected.extend(subject[key] for key in ("handoff", "wrapper", "netlist", "sdc", "spef"))
+    unique: list[object] = []
+    seen: set[str] = set()
+    for item in selected:
+        key = (json.dumps(item, sort_keys=True, separators=(",", ":"))
+               if isinstance(item, Mapping) else str(item))
+        if key not in seen:
+            seen.add(key)
+            unique.append(item)
+    return tuple(unique)
+
+
 def backend_project_input_contract(project: Path, step_id: str, *,
                                    collect_missing: bool = False,
                                    execution_mode: str = "ultra") -> tuple[object, ...]:
@@ -899,6 +1025,15 @@ def backend_project_input_contract(project: Path, step_id: str, *,
         io_doc = None
     scanned = io_doc.get("documents_scanned") if isinstance(io_doc, Mapping) else None
     if isinstance(scanned, list):
+        self_tapeout_step24 = False
+        if step_id == "24" and execution_mode == "default":
+            import _tapeout_declaration as td
+            slot_root = root / td.SLOTS_REL
+            has_slots = (slot_root.is_dir() and any(
+                path.is_file() and not path.is_symlink() and path.stat().st_size > 0
+                for path in slot_root.rglob("*")))
+            route, _reason = td.declared_route_on_disk(root, has_slots)
+            self_tapeout_step24 = route == td.ROUTE_SELF_TAPEOUT
         for raw in sorted({item for item in scanned if isinstance(item, str)}):
             rel = Path(raw)
             if (rel.is_absolute() or not raw or ".." in rel.parts
@@ -908,6 +1043,13 @@ def backend_project_input_contract(project: Path, step_id: str, *,
             try:
                 resolved = target.resolve(strict=True)
             except (OSError, RuntimeError) as exc:
+                # ``documents_scanned`` is the pad producer's bounded search
+                # population, not a claim that every candidate existed.  On
+                # the attested self-tapeout route, bind candidates that were
+                # actually read; do not manufacture absent operator inputs.
+                # A true operator/shuttle route retains the old hard refusal.
+                if self_tapeout_step24:
+                    continue
                 if collect_missing:
                     result.append(raw)
                     continue
@@ -1249,5 +1391,6 @@ def build_registry(**kwargs) -> em.Registry:
 
 
 __all__ = ["ROWS", "BACKEND_IDS", "register_backend_adapters", "build_registry",
+           "backend_canonical_input_contract", "backend_project_input_contract",
            "step30_instrument_plan", "_step30_simulators", "_step37_route_specs",
            "validate_streamout_receipt"]

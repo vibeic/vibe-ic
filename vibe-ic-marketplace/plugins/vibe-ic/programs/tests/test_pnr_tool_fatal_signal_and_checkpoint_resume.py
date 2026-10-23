@@ -50,6 +50,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import _progress_run as _pr  # noqa: E402
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _pnr_tcl_stub import STUB as _STUB  # noqa: E402
+from test_drc_vacuous_pass_check import _write_gds  # noqa: E402
 
 mod = importlib.import_module("phase3_one_shot_runner")
 
@@ -65,10 +66,16 @@ _MARKER = getattr(mod, "_PNR_STAGE_MARKER", "PNR_STAGE:")
 # ---------------------------------------------------------------------------
 # Fixtures — a PnR project and a fake OpenROAD that can die on a signal
 # ---------------------------------------------------------------------------
-def _sky130_pdk():
+def _sky130_pdk(project: Path):
+    # Timing setup now validates the selected Liberty before launching PnR.
+    # Keep this synthetic session self-contained, but give that validation a
+    # real, readable subject instead of the old never-existing placeholder.
+    liberty = project / "input" / "pdk" / "sky130_fd_sc_hd__tt.lib"
+    liberty.parent.mkdir(parents=True, exist_ok=True)
+    liberty.write_text("library(sky130_fd_sc_hd__tt) {}\n")
     return mod.PdkConfig(
         name="sky130A",
-        liberty="/placeholder/sky130_fd_sc_hd__tt.lib",
+        liberty=str(liberty),
         tech_lef="/placeholder/sky130_fd_sc_hd.tlef",
         cell_lef="/placeholder/sky130_fd_sc_hd.lef",
         cell_gds="/placeholder/sky130_fd_sc_hd.gds",
@@ -320,7 +327,7 @@ def _drive(tmp_path, monkeypatch, *, first_rc, stage,
         return (0, "", "")
 
     monkeypatch.setattr(mod, "_docker_exec", fake_docker_exec)
-    res = mod.step_pnr(project, top, _sky130_pdk(), "iic", "200x200", 0.30)
+    res = mod.step_pnr(project, top, _sky130_pdk(project), "iic", "200x200", 0.30)
     return res, calls, project
 
 
@@ -603,7 +610,7 @@ def test_a_stale_def_does_not_launder_a_crash(tmp_path, monkeypatch):
         return (0, "", "")
 
     monkeypatch.setattr(mod, "_docker_exec", fake_docker_exec)
-    res = mod.step_pnr(project, "widget", _sky130_pdk(), "iic", "200x200",
+    res = mod.step_pnr(project, "widget", _sky130_pdk(project), "iic", "200x200",
                        0.30)
     assert res.status != "PASS"
     assert _says_signal(res.detail or ""), \
@@ -1304,8 +1311,25 @@ def test_the_crash_attestation_has_a_reader_not_only_a_pointer(
     for name in ("floorplan.def", "placed.def", "post_cts.def",
                  "post_hold.def", "routed.def", "widget.def"):
         (out_dir / name).write_text(_def_text(routed=True))
+    # Default canonicalisation requires the final DEF/GDS pair before it may
+    # consume retained post-PnR evidence.  This is a genuine minimal binary
+    # GDS for the neutral unit subject, not a benchmark/sign-off substitute.
+    _write_gds(out_dir / "widget.gds", n_shapes=1, cell="widget")
     rpt = mod._pl.reports_dir(project) / "phase3"
     rpt.mkdir(parents=True, exist_ok=True)
+
+    import execution_policy
+    monkeypatch.setattr(execution_policy, "request",
+                        lambda: {"mode": "default"}, raising=True)
+    default_calls = []
+    default_consumer = mod._default_poststream_evidence
+
+    def _default_consumer(*args, **kwargs):
+        default_calls.append(True)
+        return default_consumer(*args, **kwargs)
+
+    monkeypatch.setattr(mod, "_default_poststream_evidence",
+                        _default_consumer, raising=True)
 
     def _run():
         monkeypatch.setattr(mod, "_docker_exec",
@@ -1313,7 +1337,7 @@ def test_the_crash_attestation_has_a_reader_not_only_a_pointer(
         monkeypatch.setattr(mod, "_to_container_path", lambda s, c: s,
                             raising=True)
         return mod.step_canonicalize_artefacts(project, "widget",
-                                               _sky130_pdk(), "iic")
+                                               _sky130_pdk(project), "iic")
 
     clean = _run()
     assert "PnR CRASHED" not in (clean.detail or ""), \
@@ -1327,6 +1351,8 @@ def test_the_crash_attestation_has_a_reader_not_only_a_pointer(
         "detail_route_completed": True}))
     crashed = _run()
     detail = crashed.detail or ""
+    assert len(default_calls) == 2, \
+        "the regression did not exercise the Default post-stream consumer"
     assert "PnR CRASHED" in detail, \
         ("a complete stage-DEF set produced by a CRASHED session drew no "
          "note — the attestation still has no reader")

@@ -674,9 +674,10 @@ def test_the_declared_lec_budget_is_still_read_from_the_producer():
         R.lec_producer_yosys_timeout_s() + 300
     src = (PROGRAMS / "design_one_shot_runner.py").read_text(
         encoding="utf-8", errors="replace")
-    assert "_LEC_PRODUCER_TIMEOUT_S}s — RECORDED" in src, (
+    assert 'f"budget={_LEC_PRODUCER_TIMEOUT_S}s — enforced "' in src, (
         "the declared budget no longer reaches the step record; a run that "
         "went long is now invisible instead of merely uncut")
+    assert 'f"inside each Yosys invocation)"' in src
 
 
 # ---------------------------------------------------------------------------
@@ -862,7 +863,7 @@ def test_the_kill_record_does_not_name_a_duration_it_never_measured():
     assert "after 7200s" not in out, (
         "the record still names a duration nothing measured:\n" + out)
     assert "rc=137" in out
-    assert "ATTEMPT ADMISSION" in out
+    assert "remaining 7200s total step budget" in out
 
 
 # ---------------------------------------------------------------------------

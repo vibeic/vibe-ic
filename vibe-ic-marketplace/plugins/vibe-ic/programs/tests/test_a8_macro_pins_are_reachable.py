@@ -21,6 +21,8 @@ a bare PIN as INPUT) and reports the PINs it measured in the LEF it wrote.
 from __future__ import annotations
 
 import json
+import hashlib
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -28,6 +30,7 @@ from pathlib import Path
 import _plugin_tree  # noqa: F401 — puts programs/ on sys.path
 
 import analog_a8_hardmacro_emit as E  # noqa: E402
+import phase3_one_shot_runner as P3  # noqa: E402
 
 PROG = Path(_plugin_tree.plugin_path("programs")) / \
     "analog_a8_hardmacro_gen_check.py"
@@ -87,8 +90,33 @@ def _project(tmp_path, pins, declared=True):
     (a / "blk" / "corner_results.json").write_text(json.dumps(
         {"design_content": "structure_and_geometry"}))
     if declared:
+        pg_snapshot = a / "blk" / "a5_stdcell_pg.lef"
+        pg_snapshot.write_text(
+            "MACRO fixture_cell\n  SIZE 10 BY 2 ;\n"
+            "  PIN VPWR\n    USE POWER ;\n    PORT\n"
+            "      LAYER M1 ;\n      RECT 0 1.8 10 2 ;\n"
+            "    END\n  END VPWR\n"
+            "  PIN VGND\n    USE GROUND ;\n    PORT\n"
+            "      LAYER M1 ;\n      RECT 0 0 10 0.2 ;\n"
+            "    END\n  END VGND\nEND fixture_cell\n")
+        measured = P3._discover_pg_from_lef(str(pg_snapshot), "M")
+        assert measured is not None
         (a / "blk" / "layout_provenance.json").write_text(json.dumps(
-            {"pins": DECLARED, "pins_basis": {"tech_lef_layers": TECH}}))
+            {"pins": DECLARED, "pins_basis": {
+                "tech_lef_layers": TECH,
+                "core_pg": {
+                    "result": "MEASURED",
+                    "method": "phase3_one_shot_runner._discover_pg_from_lef",
+                    "snapshot": "phase3/analog/blk/a5_stdcell_pg.lef",
+                    "source": "/fixture/pdk/fixture_stdcell.lef",
+                    "source_sha256": hashlib.sha256(
+                        pg_snapshot.read_bytes()).hexdigest(),
+                    "metal_prefix": "M",
+                    "power_pin": measured[0], "ground_pin": measured[1],
+                    "followpin_layer": measured[2],
+                    "rail_width_um": measured[3],
+                },
+            }}))
     h = a / "hardmacro" / "blk"
     h.mkdir(parents=True)
     body = "".join(_pin(n, *pins[n]) for n in ("vin", "vss", "vref", "vout"))
@@ -190,10 +218,31 @@ def _emit(tmp_path, monkeypatch):
          "rails": {"vdd": "vdd", "vss": "vss"}}))
     monkeypatch.setattr(E, "magicrc_for", lambda *a, **k: "/pdk/x.magicrc")
     monkeypatch.setenv("A8_PIN_ACCESS_CLEARANCE_UM", "0")
+    monkeypatch.setattr(E, "load_native_measurement", lambda *a, **k: ({
+        "liberty_value": 1.0,
+        "liberty_power_unit": "1uW",
+        "measurement_sha256": "m" * 64,
+        "metric": "cell_leakage_power",
+        "value": 1.0,
+        "unit": "uW",
+        "provenance": "real_ngspice",
+        "source_netlist": "phase3/analog/blk/post_layout_extracted.spice",
+        "source_netlist_sha256": "n" * 64,
+        "native_log": "phase3/analog/blk/a8_native_measurement.ngspice.log",
+        "native_log_sha256": "l" * 64,
+        "simulator": "ngspice-fixture",
+        "image_digest": "sha256:" + "a" * 64,
+    }, ""))
 
     def fake_exec(container, cmd, timeout=900, *, marker=None, log_path=None):
-        (p / "phase3" / "analog" / "hardmacro" / "blk" / "blk.lef"
-         ).write_text(BARE_LEF)
+        tcl = p / "phase3" / "analog" / "hardmacro" / "blk" / "blk_lef.tcl"
+        write = next(
+            (shlex.split(line) for line in tcl.read_text().splitlines()
+             if line.startswith("lef write ")),
+            None,
+        )
+        assert write is not None and write[:2] == ["lef", "write"]
+        Path(write[2]).write_text(BARE_LEF)
         return 0, "", ""
 
     monkeypatch.setattr(E, "_docker_exec", fake_exec)

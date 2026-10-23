@@ -196,7 +196,13 @@ def test_fs1_still_runs_its_producer_for_a_digital_design(tmp_path,
     project = tmp_path / "proj"
     project.mkdir()
     row, ran = _fs1(project, None, monkeypatch)
-    assert len(ran) == 1
+    # The current FS1 contract runs the flow-declared injection producer and
+    # then the independent coverage checker before the canonical consumer.
+    # Pin both calls and their order; counting only one was the old API shape.
+    assert [Path(argv[1]).name for argv in ran] == [
+        "fmeda_fault_injection_coverage.py",
+        "fmeda_coverage_check.py",
+    ]
     assert row.status == "FAIL", (row.status, row.detail)
 
 

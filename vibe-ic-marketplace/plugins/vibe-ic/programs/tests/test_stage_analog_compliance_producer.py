@@ -8,13 +8,53 @@ correctly excludes that file as ``audit_created`` and cannot credit it.
 from __future__ import annotations
 
 import json
+import os
 import sys
 from types import SimpleNamespace
 from pathlib import Path
 
+import pytest
+
 
 PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROGRAMS))
+
+
+@pytest.fixture(autouse=True)
+def _restore_process_runtime_tree_state():
+    """The front door normally exits after activating its retained tree.
+
+    This test calls ``main`` in-process, so restore the process state that an
+    actual CLI process would discard on exit.  In particular, do not let its
+    retained modules answer later live-source identity tests.
+    """
+    before_path = list(sys.path)
+    before_env = dict(os.environ)
+    before_modules = dict(sys.modules)
+    before_dont_write = sys.dont_write_bytecode
+    runner_before = sys.modules.get("vibe_ic_one_shot_runner")
+    runner_state = None
+    if runner_before is not None:
+        runner_state = {
+            name: getattr(runner_before, name)
+            for name in ("PROGRAMS_DIR", "_RUNTIME_PROGRAM_TREE", "__file__")
+        }
+    yield
+    sys.path[:] = before_path
+    os.environ.clear()
+    os.environ.update(before_env)
+    sys.dont_write_bytecode = before_dont_write
+    for name in set(sys.modules) - set(before_modules):
+        module = sys.modules.get(name)
+        path = str(getattr(module, "__file__", "") or "")
+        if "/.vibeic/runtime-program-trees/" in path:
+            sys.modules.pop(name, None)
+    for name, module in before_modules.items():
+        if sys.modules.get(name) is not module:
+            sys.modules[name] = module
+    if runner_before is not None and runner_state is not None:
+        for name, value in runner_state.items():
+            setattr(runner_before, name, value)
 
 
 def test_runner_produces_scoped_analog_audit_after_analog(tmp_path, monkeypatch):

@@ -1145,6 +1145,56 @@ def _native_sha(path: Path) -> Optional[str]:
         return None
 
 
+def _retained_project_root(project: Path, doc: Dict[str, Any],
+                           recorded: Path, expected: str) -> tuple[Optional[Path], Path]:
+    """Bind a recorded absolute state to its identical relocated project file.
+
+    The immutable receipt already contains the project-relative artifact name
+    and digest.  Derive the old root only when exactly one such artifact is a
+    suffix of the recorded absolute path, then require an ordinary contained
+    file with the same digest at the current root.  Nothing is rewritten.
+    """
+    matches = []
+    for raw, digest in (doc.get("artifacts") or {}).items():
+        rel = Path(raw) if isinstance(raw, str) else None
+        if (rel is None or rel.is_absolute() or ".." in rel.parts
+                or digest != expected or tuple(recorded.parts[-len(rel.parts):]) != rel.parts):
+            continue
+        matches.append(rel)
+    if len(matches) != 1:
+        raise ValueError("LibreLane IR project-relative tool state binding is ambiguous")
+    rel = matches[0]
+    current = project / rel
+    if (current.is_symlink() or not current.is_file()
+            or not current.resolve().is_relative_to(project.resolve())
+            or _native_sha(current) != expected):
+        raise ValueError("LibreLane IR tool state changed")
+    old_root = recorded
+    for _part in rel.parts:
+        old_root = old_root.parent
+    return old_root, current
+
+
+def _retained_native_path(project: Path, raw: str, expected: str,
+                          old_root: Optional[Path]) -> Path:
+    """Resolve one native-basis path without changing receipt authority."""
+    recorded = Path(raw)
+    if not recorded.is_absolute():
+        if ".." in recorded.parts:
+            raise ValueError("LibreLane IR native basis path is unsafe")
+        current = project / recorded
+    elif old_root is not None and recorded.is_relative_to(old_root):
+        current = project / recorded.relative_to(old_root)
+    else:
+        current = recorded
+    if (current.is_symlink() or not current.is_file()
+            or (current != recorded and
+                not current.resolve().is_relative_to(project.resolve()))
+            or not expected or _native_sha(current) != expected):
+        raise ValueError("LibreLane IR native basis changed")
+    return current
+
+
 def native_project(em_path: Path) -> Optional[Path]:
     """Production reports owe native evidence; standalone offline screens do not."""
     for candidate in (em_path, *em_path.parents):
@@ -1195,13 +1245,21 @@ def validate_primary_ir(project: Path) -> Dict[str, Any]:
                 if path.is_absolute() or ".." in path.parts or not digest or _native_sha(project / path) != digest:
                     raise ValueError(f"LibreLane IR current bytes changed: {name}")
         record = doc["record"]
-        if _native_sha(Path(record["tool_state"])) != record["tool_state_sha256"]:
-            raise ValueError("LibreLane IR tool state changed")
+        recorded_state = Path(record["tool_state"])
+        state_sha = record["tool_state_sha256"]
+        if recorded_state.is_absolute() and _native_sha(recorded_state) != state_sha:
+            old_root, tool_state = _retained_project_root(
+                project, doc, recorded_state, state_sha)
+        else:
+            old_root = None
+            tool_state = _retained_native_path(
+                project, record["tool_state"], state_sha, None)
         for row in [doc["native_basis"][key] for key in ("odb", "sdc", "spef", "tech_lef")] + doc["native_basis"]["liberties"]:
-            if not row["sha256"] or _native_sha(Path(row["path"])) != row["sha256"]:
-                raise ValueError("LibreLane IR native basis changed")
+            _retained_native_path(project, row["path"], row["sha256"], old_root)
         import librelane_ir_antenna as la
-        judged = la.judge_ir(record)
+        rebound_record = dict(record)
+        rebound_record["tool_state"] = str(tool_state)
+        judged = la.judge_ir(rebound_record)
         if judged != doc["judgment"] or judged["verdict"] not in ("PASS", "FAIL"):
             raise ValueError("LibreLane IR measurement/coverage unavailable")
         return {"valid": True, "verdict": judged["verdict"],

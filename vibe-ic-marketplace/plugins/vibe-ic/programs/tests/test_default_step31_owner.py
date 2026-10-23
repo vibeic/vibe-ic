@@ -858,22 +858,6 @@ def _native31_drv_peripheral(project, pdk, monkeypatch, calls, *, root, master):
     monkeypatch.setattr(planner, "_SCENE_PROFILES", profile)
     monkeypatch.setattr(drv, "_SCENE_PROFILES", profile)
     monkeypatch.setattr(_eda_image, "resolve", lambda: image)
-    original_root_resolver = ll.resolve_pdk_root
-
-    def declared_root_metadata(selected_project=None, *args, **kwargs):
-        # Preserve the real declared-root resolver and every material/root
-        # field. The synthetic peripheral needs the original image identity
-        # metadata which a resolved installed-PDK fixture normally supplies.
-        answer = original_root_resolver(selected_project, *args, **kwargs)
-        if selected_project == project and answer:
-            path = project / "phase3/librelane_pdk_root.provenance.json"
-            document = json.loads(path.read_text())
-            proof = ll.local_image_attestation(kwargs.get("image") or image)
-            document.setdefault("derivation", {})["image_id"] = proof["image_id"]
-            path.write_text(json.dumps(document))
-        return answer
-
-    monkeypatch.setattr(ll, "resolve_pdk_root", declared_root_metadata)
     put(project, "phase3/stage3/pnr/routed.odb",
         "SOURCE_CONTROL neutral routed database input\n")
     refs = {}
@@ -898,7 +882,21 @@ def _native31_drv_peripheral(project, pdk, monkeypatch, calls, *, root, master):
     switch_path = project / "phase3/librelane_switch.json"
     switch = json.loads(switch_path.read_text())
     switch.setdefault("steps", {})["23"] = "direct"
+    # Declare the canonical installed root, not the project-local fixture_pdk
+    # symlink that merely selects it.  The production authority intentionally
+    # rejects symlink roots because their target can change after declaration.
+    switch["pdk_root_host"] = str(Path(root).resolve())
     switch_path.write_text(json.dumps(switch))
+    # The retained LOCAL producer published its authority before this helper
+    # added the DRV Liberty/LEF/config bytes.  Publish the current root through
+    # the real producer seam after those additions; the current capture path
+    # reads the receipt directly and does not call resolve_pdk_root itself.
+    authority = ll.pdk_root_resolution(project, pdk.name)
+    assert authority["source"] == "declared"
+    assert authority["declared_by"] == "phase3/librelane_switch.json pdk_root_host"
+    assert authority["pdk"] == pdk.name
+    assert Path(authority["path"]) == Path(root).resolve()
+    assert not Path(authority["path"]).is_symlink()
     drv_run_identity.record(project)
     _stage_receipts(project)
     plan = planner.build(project)

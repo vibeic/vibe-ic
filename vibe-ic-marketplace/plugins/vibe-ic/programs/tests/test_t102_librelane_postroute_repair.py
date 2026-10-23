@@ -359,7 +359,14 @@ def test_the_repair_actuator_and_its_domains_are_executable_and_in_the_tree():
     # Every actuator parameter reaches a variable the plugin step declares.
     assert set(act.parameters) == set(prr.PARAM_VARS)
     assert reg.controllers['postroute.repair_drv'].plan == (
-        {'bounded_drive_strength': True},)
+        {'bounded_drive_strength': True, 'cap_margin_pct': 10},
+        {'bounded_drive_strength': True, 'cap_margin_pct': 20},)
+    # The native plugin already supports repair_design -cap_margin.  The DRV
+    # controller must carry that parameter through instead of retrying the
+    # exact same max-cap no-op at every rung.
+    assert prr.PARAM_VARS['cap_margin_pct'] == 'VIBEIC_PRR_CAP_MARGIN_PCT'
+    assert act.bind_params({'bounded_drive_strength': True,
+                            'cap_margin_pct': 10})['cap_margin_pct'] == 10
 
 
 def test_bounded_drive_strength_cli_is_strict_boolean():
@@ -367,6 +374,263 @@ def test_bounded_drive_strength_cli_is_strict_boolean():
     assert prr._bool_arg('0') is False
     with pytest.raises(prr.argparse.ArgumentTypeError, match='expected true/false'):
         prr._bool_arg('maybe')
+
+
+def _resume_fixture(tmp_path):
+    project = tmp_path / 'project'
+    impl = project / prr.ARM_REL / prr.IMPL_DIR
+    measurement = {
+        'sta_state_sha256': 'a' * 64, 'native_odb_sha256': 'b' * 64,
+        'drv_count': 1, 'drv_pin_checks_state': 'PASS',
+        'drv_pin_checks': [['u/wire/Z', 'cap']], 'antenna_nets': 0,
+    }
+    put(project / prr.REPORT_REL, {
+        'verdict': 'FAIL', 'code': 'LL_PRR_DRV_VIOLATION',
+        'adopted': '32-cand01', 'final': measurement,
+        'closure': [], 'candidates': []})
+    put(impl / prr.CURRENT, {
+        'candidate': '32-cand01', 'measurement': measurement,
+        'repair_state': '/project/old/state_out.json'})
+    put(impl / prr.CONTEXT, {'project': str(project)})
+    put(project / prr.ARM_REL / prr.LEDGER, {'candidates': []})
+    return project, impl, measurement
+
+
+def _fresh_resume_fixture(tmp_path):
+    project, impl, measurement = _resume_fixture(tmp_path)
+    lane = project / 'phase3/librelane/32-cand01'
+    pnr = project / 'phase3/stage3/pnr'
+    files = {
+        'def': write(lane / '01-vibeic-postrouterepair/top.def', 'current def\n'),
+        'nl': write(lane / '01-vibeic-postrouterepair/top.nl.v', 'module top; endmodule\n'),
+        'sdc': write(pnr / 'constraint.sdc', 'create_clock -period 10 clk\n'),
+        'odb': write(lane / '01-vibeic-postrouterepair/top.odb', 'native odb\n'),
+        'model': write(project / 'models/cells.lib', 'library cells {}\n'),
+    }
+    state = put(lane / '01-vibeic-postrouterepair/state_out.json',
+                {key: str(files[key]) for key in ('def', 'nl', 'sdc', 'odb')})
+    sta = put(lane / '04-openroad-stapostpnr/state_out.json',
+              {key: str(files[key]) for key in ('def', 'nl', 'sdc', 'odb')})
+    put(sta.parent / 'input_fingerprint.json', {'state_files': {
+        str(files['sdc']): contract.digest(files['sdc']),
+        str(files['odb']): contract.digest(files['odb']),
+    }})
+    live_def = write(pnr / 'routed.def', files['def'].read_text())
+    live_nl = write(pnr / 'top_pnr.v', files['nl'].read_text())
+    put(project / 'reports/phase3/librelane_postroute_repair_handoff.json', {
+        'state': str(state), 'state_sha256': contract.digest(state),
+        'views': {
+            'def': {'source': str(files['def']), 'source_sha256': contract.digest(files['def']),
+                    'dest': str(live_def), 'dest_sha256': contract.digest(live_def)},
+            'nl': {'source': str(files['nl']), 'source_sha256': contract.digest(files['nl']),
+                   'dest': str(live_nl), 'dest_sha256': contract.digest(live_nl)},
+        }})
+    ctx = {'project': str(project), 'image': 'image@sha256:' + '1' * 64,
+           'pdk': 'processA', 'mounts': [[str(project / 'pdk'), '/pdk']]}
+    put(impl / prr.CONTEXT, ctx)
+    current = json.loads((impl / prr.CURRENT).read_text())
+    current.update(repair_folder=str(lane / '01-vibeic-postrouterepair'),
+                   repair_state=str(state), repair_input=str(state))
+    current['measurement'].update(
+        sta_state=str(sta), sta_state_sha256=contract.digest(sta),
+        native_odb_sha256=contract.digest(files['odb']))
+    put(impl / prr.CURRENT, current)
+    report = json.loads((project / prr.REPORT_REL).read_text())
+    report['final'] = current['measurement']
+    put(project / prr.REPORT_REL, report)
+    return project, impl, files
+
+
+@pytest.mark.parametrize('view', ('def', 'nl', 'sdc', 'odb'))
+def test_resume_drv_refuses_each_changed_live_or_adopted_subject_before_controller(
+        tmp_path, monkeypatch, view):
+    project, _impl, files = _fresh_resume_fixture(tmp_path)
+    monkeypatch.setattr(prr, '_validate_resume_readset', lambda *_a: {'verdict': 'PASS'})
+    entered = []
+    monkeypatch.setattr(closure, 'ClosureController',
+                        lambda *_a, **_k: entered.append(True))
+    files[view].write_text(files[view].read_text() + 'changed\n')
+    with pytest.raises(contract.Refusal, match='LL_PRR_RESUME_SUBJECT_STALE'):
+        prr.resume_drv(project)
+    assert entered == []
+
+
+def test_resume_drv_unchanged_subject_enters_controller(tmp_path, monkeypatch):
+    project, _impl, _files = _fresh_resume_fixture(tmp_path)
+    monkeypatch.setattr(prr, '_validate_resume_readset', lambda *_a: {'verdict': 'PASS'})
+    entered = []
+
+    class StopHere:
+        def __init__(self, *_a, **_k):
+            entered.append(True)
+
+        def run_controller(self, _controller):
+            raise RuntimeError('positive reached controller')
+
+    monkeypatch.setattr(closure, 'ClosureController', StopHere)
+    with pytest.raises(RuntimeError, match='positive reached controller'):
+        prr.resume_drv(project)
+    assert entered == [True]
+
+
+def _install_resume_readset(project, impl, files, monkeypatch):
+    lane = project / 'phase3/librelane/32-cand01'
+    ctx = json.loads((impl / prr.CONTEXT).read_text())
+    Path(ctx['mounts'][0][0]).mkdir(parents=True, exist_ok=True)
+    image_identity = {
+        'image': ctx['image'], 'image_id': 'sha256:' + '1' * 64,
+        'repo_digests': [ctx['image']], 'network_mode': 'none',
+        'memory': 17179869184, 'memory_swap': 17179869184,
+        'auto_remove': True,
+    }
+    monkeypatch.setattr(contract, 'local_image_attestation',
+                        lambda _image: dict(image_identity, cid='c' * 64))
+    folders = {}
+    for number, step in enumerate((prr.REPAIR_STEP, *prr.MEASURE_STEPS), 1):
+        folder = lane / (f'{number:02d}-' + step.lower().replace('.', '-'))
+        if step == prr.REPAIR_STEP:
+            folder = lane / '01-vibeic-postrouterepair'
+        folder.mkdir(parents=True, exist_ok=True)
+        state_out = folder / 'state_out.json'
+        if not state_out.is_file():
+            put(state_out, {key: str(files[key]) for key in ('def', 'nl', 'sdc', 'odb')})
+        state_in = put(folder / 'state_in.json',
+                       {key: str(files[key]) for key in ('def', 'nl', 'sdc', 'odb')})
+        config = put(folder / 'config.json', {'MODEL_FILE': str(files['model'])})
+        pdk_root = put(folder / 'pdk_root.json', {
+            'requested_mounts': [[str(Path(ctx['mounts'][0][0]).resolve()), '/pdk']]})
+        write(folder / 'invocation.log', 'native tool ran\n')
+        fp = {
+            'step': step, 'image': ctx['image'],
+            'config': contract.digest(config), 'state': contract.digest(state_in),
+            'state_files': {str(files[key]): contract.digest(files[key])
+                            for key in ('def', 'nl', 'sdc', 'odb')},
+            'config_files': {str(files['model']): contract.digest(files['model'])},
+            'local_image': image_identity, 'openroad_aliases': {},
+        }
+        if step == prr.REPAIR_STEP:
+            fp['plugin'] = contract._plugin_digests(step)
+        if step == 'OpenROAD.RCX':
+            fp['rcx_pdk_files'] = {str(files['model']): contract.digest(files['model'])}
+        if step == 'OpenROAD.STAPostPNR':
+            fp['liberty_files'] = {str(files['model']): contract.digest(files['model'])}
+        put(folder / 'input_fingerprint.json', fp)
+        hashes = {name: contract.digest(folder / name) for name in (
+            'state_out.json', 'state_in.json', 'config.json', 'pdk_root.json',
+            'invocation.log', 'input_fingerprint.json')}
+        for path in files.values():
+            if path.is_relative_to(folder):
+                hashes[str(path.relative_to(folder))] = contract.digest(path)
+        put(folder / 'vibeic_receipt.json', {'input': fp, 'sha256': hashes})
+        folders[step] = folder
+    context = json.loads((impl / prr.CONTEXT).read_text())
+    context['configs'] = {step: str(folder / 'config.json')
+                          for step, folder in folders.items()}
+    put(impl / prr.CONTEXT, context)
+    ledger_path = project / prr.ARM_REL / prr.LEDGER
+    ledger = json.loads(ledger_path.read_text())
+    adopted = next((row for row in ledger['candidates']
+                    if row.get('candidate') == '32-cand01'), None)
+    if adopted is None:
+        adopted = {'candidate': '32-cand01'}
+        ledger['candidates'].append(adopted)
+    adopted['config'] = str(folders[prr.REPAIR_STEP] / 'config.json')
+    put(ledger_path, ledger)
+    return folders, image_identity
+
+
+@pytest.mark.parametrize('changed', ('config', 'model', 'pdk', 'tool'))
+def test_resume_drv_readset_change_refuses_before_controller(
+        tmp_path, monkeypatch, changed):
+    project, impl, files = _fresh_resume_fixture(tmp_path)
+    folders, image_identity = _install_resume_readset(project, impl, files, monkeypatch)
+    if changed == 'config':
+        (folders[prr.REPAIR_STEP] / 'config.json').write_text('{"changed":true}\n')
+    elif changed == 'model':
+        files['model'].write_text('changed model\n')
+    elif changed == 'pdk':
+        (folders['OpenROAD.RCX'] / 'pdk_root.json').write_text('{"changed":true}\n')
+    else:
+        monkeypatch.setattr(contract, 'local_image_attestation',
+                            lambda _image: dict(image_identity, image_id='sha256:' + '2' * 64))
+    entered = []
+    monkeypatch.setattr(closure, 'ClosureController',
+                        lambda *_a, **_k: entered.append(True))
+    with pytest.raises(contract.Refusal, match='LL_PRR_RESUME_READSET_STALE'):
+        prr.resume_drv(project)
+    assert entered == []
+
+
+def test_resume_drv_unchanged_full_readset_enters_controller(tmp_path, monkeypatch):
+    project, impl, files = _fresh_resume_fixture(tmp_path)
+    _install_resume_readset(project, impl, files, monkeypatch)
+    entered = []
+
+    class StopHere:
+        def __init__(self, *_a, **_k):
+            entered.append(True)
+
+        def run_controller(self, _controller):
+            raise RuntimeError('full readset reached controller')
+
+    monkeypatch.setattr(closure, 'ClosureController', StopHere)
+    with pytest.raises(RuntimeError, match='full readset reached controller'):
+        prr.resume_drv(project)
+    assert entered == [True]
+
+
+def test_resume_drv_refuses_a_stale_current_pointer(tmp_path):
+    project, impl, _ = _resume_fixture(tmp_path)
+    current = json.loads((impl / prr.CURRENT).read_text())
+    current['measurement']['sta_state_sha256'] = 'c' * 64
+    put(impl / prr.CURRENT, current)
+    with pytest.raises(contract.Refusal, match='LL_PRR_RESUME_CURRENT_MISMATCH'):
+        prr.resume_drv(project)
+
+
+def test_resume_drv_keeps_the_ledger_and_records_only_the_new_controller(
+        tmp_path, monkeypatch):
+    project, impl, measurement = _resume_fixture(tmp_path)
+    old = {'candidate': '32-cand01', 'controller': 'postroute.repair_setup'}
+    put(project / prr.ARM_REL / prr.LEDGER, {'candidates': [old]})
+    repaired = dict(measurement, drv_count=0, drv_pin_checks=[])
+
+    class FakeRun:
+        def to_record(self):
+            return {'controller': 'postroute.repair_drv', 'outcome': 'CONVERGED',
+                    'iterations': [{'argv': ['actuate'], 'decision': 'PROMOTED',
+                                    'decision_reason': 'DRV 1 -> 0'}]}
+
+    class FakeController:
+        def __init__(self, _reg, _impl, _work):
+            pass
+
+        def run_controller(self, controller):
+            assert controller == 'postroute.repair_drv'
+            put(project / prr.ARM_REL / prr.LEDGER, {'candidates': [old, {
+                'candidate': '32-cand02', 'measurement': repaired}]})
+            put(impl / prr.CURRENT, {
+                'candidate': '32-cand02', 'measurement': repaired,
+                'repair_state': '/project/new/state_out.json',
+                'supply_ownership': {'verdict': 'PASS'}})
+            return FakeRun()
+
+    monkeypatch.setattr(closure, 'load_registry', lambda *_a, **_k: object())
+    monkeypatch.setattr(closure, 'ClosureController', FakeController)
+    monkeypatch.setattr(prr, '_validate_resume_subject',
+                        lambda *_a: {'live_def_sha256': 'fixture'})
+    monkeypatch.setattr(prr, '_validate_resume_readset',
+                        lambda *_a: {'verdict': 'PASS'})
+    monkeypatch.setattr(prr, '_stamp_verdict',
+                        lambda report: report.update(verdict='PASS', code=None))
+    monkeypatch.setattr(prr, '_step32_drv_signoff', lambda *_a: None)
+    monkeypatch.setattr(prr, '_publish_declared_repair', lambda *_a: None)
+    report = prr.resume_drv(project)
+    assert report['resume']['candidate_ledger_start'] == 1
+    assert report['resume']['candidate_ledger_end'] == 2
+    assert report['adopted'] == '32-cand02'
+    assert report['candidates'][0] == old
+    assert report['candidates'][1]['closure_decision'] == 'PROMOTED'
 
 
 def test_the_hold_buffer_budget_above_the_guardrail_is_refused_not_clamped():

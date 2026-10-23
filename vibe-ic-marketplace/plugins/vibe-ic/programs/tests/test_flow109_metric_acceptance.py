@@ -14,6 +14,7 @@ import flow109_metric_acceptance as metrics
 import flow109_analog as analog
 from programs.tests._hostpaths import require_repo
 from test_flow109_analog_a01 import _case, _run
+from test_flow109_analog_a01 import legacy_component_registry  # noqa: F401
 
 
 def _identity():

@@ -18,6 +18,37 @@ import librelane_contract as _ll  # noqa: E402
 
 def pdk_source_identity(provenance: dict, *, project: Path) -> dict:
     """Read the existing PDK producer's Docker or typed LOCAL witness."""
+    if provenance.get("source") == "declared":
+        # A native in-image run deliberately records an explicitly supplied
+        # PDK_ROOT as ``declared``: the outer container, not a nested Docker
+        # probe, owns both that path and the immutable image identity.  Bind
+        # those two existing authorities independently.  Do not manufacture a
+        # resolved-image derivation for a root the producer did not resolve.
+        pdk = provenance.get("pdk")
+        declared_by = provenance.get("declared_by")
+        root = Path(str(provenance.get("path") or ""))
+        if (not isinstance(pdk, str) or not re.fullmatch(r"[A-Za-z0-9_.-]+", pdk)
+                or declared_by not in {
+                    "env VIBEIC_LIBRELANE_PDK_ROOT",
+                    "phase3/librelane_switch.json pdk_root_host",
+                }
+                or not root.is_absolute() or root.is_symlink()
+                or not (root / pdk).is_dir()):
+            raise ValueError("declared PDK source differs from producer")
+        image = _ll.resolve_image(project, record=False)
+        provider = _ll._provider_for_image(image)
+        if provider is not None:
+            if (Path(provider.pdk_root).resolve() != root.resolve()
+                    or provider.pdk not in (None, pdk)):
+                raise ValueError("declared PDK source differs from producer")
+            return {"pdk": pdk, "image": image, "image_id": str(provider),
+                    "provider": provider.as_record()}
+        try:
+            attestation = _ll.local_image_attestation(image)
+        except _ll.Refusal as exc:
+            raise ValueError("declared PDK image is not locally attested") from exc
+        return {"pdk": pdk, "image": image,
+                "image_id": attestation["image_id"]}
     if provenance.get("source") != "local_provider":
         derivation = provenance["derivation"]
         return {"pdk": derivation["pdk"], "image": derivation["image"],

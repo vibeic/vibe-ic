@@ -227,6 +227,43 @@ def test_current_ir_keeps_its_measured_failure_after_em_only_source_changes(
     assert receipt.read_bytes() == original_bytes
 
 
+def test_current_ir_rebinds_intact_project_relative_native_paths(tmp_path, monkeypatch):
+    """A relocated project consumes identical retained bytes without receipt edits."""
+    test_default_step24_adopts_its_current_native_primary(tmp_path, monkeypatch, "current")
+    original = tmp_path / "project"
+    receipt_rel = Path("reports/phase3/ir_drop_librelane.json")
+    receipt_bytes = (original / receipt_rel).read_bytes()
+    relocated = tmp_path / "relocated"
+    original.rename(relocated)
+    result = emc.validate_primary_ir(relocated)
+    assert result["valid"] is True, result
+    assert result["verdict"] == "PASS", result
+    assert (relocated / receipt_rel).read_bytes() == receipt_bytes
+
+
+@pytest.mark.parametrize("damage", ["missing", "changed", "symlink"])
+def test_current_ir_rebinding_refuses_nonidentical_or_nonregular_state(
+        tmp_path, monkeypatch, damage):
+    test_default_step24_adopts_its_current_native_primary(tmp_path, monkeypatch, "current")
+    original = tmp_path / "project"
+    relocated = tmp_path / "relocated"
+    original.rename(relocated)
+    state = relocated / "phase3/librelane/24/01-openroad-irdropreport/state_out.json"
+    if damage == "missing":
+        state.unlink()
+    elif damage == "changed":
+        state.write_text(state.read_text() + "\nchanged\n")
+    else:
+        outside = tmp_path / "foreign-state.json"
+        outside.write_text(state.read_text())
+        state.unlink()
+        state.symlink_to(outside)
+    result = emc.validate_primary_ir(relocated)
+    assert result["valid"] is False, result
+    assert result["verdict"] == "NOT_MEASURED", result
+    assert result["rule"] == "LL_IR_CURRENT_BINDING_INVALID"
+
+
 @pytest.mark.parametrize("damage", ["missing", "changed", "both_missing", "empty_both"])
 def test_current_ir_requires_each_actual_ir_source_owner(tmp_path, monkeypatch, damage):
     test_default_step24_adopts_its_current_native_primary(tmp_path, monkeypatch, "native_fail")

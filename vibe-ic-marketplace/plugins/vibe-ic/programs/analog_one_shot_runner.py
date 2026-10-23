@@ -2726,6 +2726,12 @@ def _default_analog_rejection(project: Path, sid: str, started_at: float,
 def main() -> int:
     p = argparse.ArgumentParser()
     p.add_argument("project", type=Path)
+    p.add_argument("--flow", choices=("70", "109"), default="70",
+                   help="109 runs the native A01-A19 analog track")
+    p.add_argument("--entry-step", help="First analog row in a 109 continuation (A01-A19)")
+    p.add_argument("--exit-step", help="Last analog row in a 109 continuation (A01-A19)")
+    p.add_argument("--flow109-manifest", type=Path,
+                   help="Existing design feature declarations; qualification files are not required")
     p.add_argument("--container", default=_pin.default_container_name())
     p.add_argument("--allow-deterministic-stubs",
                    action="store_true",
@@ -2741,6 +2747,8 @@ def main() -> int:
                           "ANALOG_DETERMINISTIC_STUBS=1 env var."))
     p.add_argument("--blocks", default="",
                    help="comma-separated subset of block names; default = all")
+    p.add_argument("--post-mc-samples", type=int, default=None,
+                   help="explicit A15 execution sample count (>=2), for --flow 109")
     p.add_argument("--pdk", default="",
                    help=("PDK selector for the A-track's PDK-bound producers. "
                          "Forwarded here by vibe_ic_one_shot_runner so a run "
@@ -2751,12 +2759,28 @@ def main() -> int:
     import execution_policy as execution
     execution.add_arguments(p)
     args = p.parse_args()
+    if args.post_mc_samples is not None:
+        if args.flow != "109" or args.post_mc_samples < 2:
+            p.error("--post-mc-samples requires --flow 109 and a count >= 2")
+    if args.flow == "109" and args.execution_mode not in (None, "default"):
+        p.error("the native A01-A19 entry currently implements Default mode")
     execution.configure(args)
 
     project = args.project.resolve()
     if not project.is_dir():
         print(f"ERROR: not a directory: {project}", file=sys.stderr)
         return 2
+
+    if args.flow == "109":
+        from analog_native_flow import run_window
+        try:
+            result = run_window(project, args)
+        except (OSError, ValueError) as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 2
+        return {"PASS": 0, "FAIL": 1, "NOT_MEASURED": 2}[result["window_verdict"]]
+    if args.entry_step or args.exit_step or args.flow109_manifest:
+        p.error("A01-A19 continuation options require --flow 109")
 
     # BIND OR REFUSE. A `--pdk` that contradicts the design's own declaration
     # is a question this runner is not entitled to answer by itself, so it

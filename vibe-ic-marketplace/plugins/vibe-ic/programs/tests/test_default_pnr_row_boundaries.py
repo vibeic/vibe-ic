@@ -2010,3 +2010,92 @@ def test_inprocess_main_restores_runtime_guard_before_other_consumers(
         capture_output=True, text=True)
     assert consumer.returncode == 0
     assert consumer.stdout.strip() == before["__file__"]
+
+
+def _retained_step17_control(tmp_path, monkeypatch):
+    import flow109_clock_plan as clock_adapter
+
+    project = tmp_path
+    placed = project / 'phase3/stage3/pnr/placed.def'
+    handoff = project / 'reports/phase3/librelane_placement_handoff.json'
+    backend = project / 'reports/phase3/default_steps/17/backend_result.json'
+    for path, body in ((placed, 'VERSION 5.8 ;\nDESIGN unit ;\nEND DESIGN\n'),
+                       (handoff, '{"native":"detailed-placement"}\n')):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(body)
+    output_hash = runner._sha256_file(placed)
+    result = {
+        'schema': 'vibeic/backend-result/2', 'step_id': '17', 'verdict': 'PASS',
+        'producer_verdict': 'PASS',
+        'gates': {'backend_canonical': 'PASS', 'backend_native_substance': 'PASS'},
+        'missing_outputs': [],
+        'outputs': {'phase3/stage3/pnr/placed.def': output_hash},
+    }
+    backend.parent.mkdir(parents=True, exist_ok=True)
+    backend.write_text(json.dumps(result))
+    request = project / 'reports/flow109/D34/attempt/step17_reuse_request.json'
+    request.parent.mkdir(parents=True, exist_ok=True)
+    request.write_text(json.dumps({
+        'schema': 'vibeic.flow109.step17-reuse-request.v1',
+        'source_census_count': 7, 'source_census_sha256': 'source-census',
+        'pdk': 'unit-pdk',
+        'retained_step_folder': 'phase3/stage3/17_old',
+        'backend_result_sha256': runner._sha256_file(backend),
+        'placed_def_sha256': output_hash,
+        'native_handoff_sha256': runner._sha256_file(handoff),
+    }))
+    monkeypatch.setenv(clock_adapter.STEP17_REUSE_ENV, str(request))
+    retained = {
+        'folder': 'phase3/stage3/17_old', 'current_inputs': True,
+        'canonical_pass': True, 'status': 'PASS',
+        'inputs': {'input/a': 'input-hash'}, 'result': result,
+    }
+    versions = SimpleNamespace(
+        latest_pass=lambda *_: retained,
+        publish_producer_outputs=lambda *_: {'published': True})
+    producer_api = SimpleNamespace(
+        _run_current_step_declared_producers=lambda *_: {'verdict': 'PRODUCED'},
+        _current_step_producer_authority=lambda *_a, **_k: (True, '', 'PASS'))
+    worker_api = SimpleNamespace(execute_current_step=lambda *_a, **_k: {
+        'verdict': 'PASS', 'outputs': result['outputs']})
+    return project, placed, versions, producer_api, worker_api
+
+
+def test_retained_step17_reuses_exact_native_bytes_and_runs_current_consumer(
+        tmp_path, monkeypatch):
+    project, _, versions, producer_api, worker_api = _retained_step17_control(
+        tmp_path, monkeypatch)
+    receipt = runner._reuse_current_default_step17(
+        project, SimpleNamespace(name='unit-pdk'),
+        {'files': {'input/a': 'input-hash'}}, {}, {},
+        versions, producer_api, worker_api)
+    assert receipt['verdict'] == 'PASS'
+    assert receipt['retained_native_producer'] is True
+    assert receipt['retained_source_census_sha256'] == 'source-census'
+
+
+def test_retained_step17_refuses_changed_native_output_before_consumer(
+        tmp_path, monkeypatch):
+    project, placed, versions, producer_api, _ = _retained_step17_control(
+        tmp_path, monkeypatch)
+    placed.write_text('VERSION 5.8 ;\nDESIGN changed ;\nEND DESIGN\n')
+    worker_api = SimpleNamespace(execute_current_step=lambda *_a, **_k:
+                                 pytest.fail('consumer reached changed native output'))
+    with pytest.raises(ValueError, match='D35_RETAINED_IDENTITY_CHANGED'):
+        runner._reuse_current_default_step17(
+            project, SimpleNamespace(name='unit-pdk'),
+            {'files': {'input/a': 'input-hash'}}, {}, {},
+            versions, producer_api, worker_api)
+
+
+def test_retained_step17_refuses_cross_pdk_reuse_before_consumer(
+        tmp_path, monkeypatch):
+    project, _, versions, producer_api, _ = _retained_step17_control(
+        tmp_path, monkeypatch)
+    worker_api = SimpleNamespace(execute_current_step=lambda *_a, **_k:
+                                 pytest.fail('consumer reached cross-PDK output'))
+    with pytest.raises(ValueError, match='D35_RETAINED_REQUEST_INVALID'):
+        runner._reuse_current_default_step17(
+            project, SimpleNamespace(name='different-pdk'),
+            {'files': {'input/a': 'input-hash'}}, {}, {},
+            versions, producer_api, worker_api)

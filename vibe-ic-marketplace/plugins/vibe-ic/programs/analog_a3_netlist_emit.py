@@ -110,6 +110,7 @@ import argparse
 import ast as _ast
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
@@ -1419,8 +1420,38 @@ def transient_rail_measurement(ir: Dict[str, Any]
         f"{TRAN_RAIL_MARGIN_FRACTION} x the supply the deck drives")
 
 
+def _current_load(tb: Dict[str, Any], spec: Dict[str, Any]) -> Tuple[List[str], Optional[str]]:
+    """Bind an IR-declared current load to its source nominal and SI unit."""
+    load = tb.get("current_load")
+    if not isinstance(load, dict):
+        return [], None
+    key = str(load.get("spec") or "")
+    rows = spec.get("specs") or []
+    row = next((row for row in rows if isinstance(row, dict)
+                and str(row.get("name") or "").casefold() == key.casefold()), None)
+    if row is None:
+        return list(load.get("fallback_cards") or []), load.get("fallback_condition")
+    value = next((row[field] for field in ("target", "typ", "value")
+                  if isinstance(row.get(field), (int, float)) and not isinstance(row[field], bool)
+                  and math.isfinite(row[field])), None)
+    if value is None:
+        raise ValueError(f"CURRENT_LOAD_UNBOUND: {key} has no finite source nominal target/typ/value")
+    unit = next((str(row[field]).strip().replace("µ", "u").replace("μ", "u")
+                 for field in _UNIT_KEYS if row.get(field) is not None), "")
+    # Keep SI prefixes case-sensitive: mA and MA have different magnitudes.
+    scales = {"": 1.0, "m": 1e-3, "u": 1e-6, "n": 1e-9, "p": 1e-12, "k": 1e3, "M": 1e6}
+    scale = scales.get(unit[:-1]) if unit[-1:].lower() == "a" else None
+    if scale is None:
+        raise ValueError(f"CURRENT_LOAD_UNBOUND: {key} has unsupported source current unit {unit!r}")
+    amps = float(value) * scale
+    if not math.isfinite(amps):
+        raise ValueError(f"CURRENT_LOAD_UNBOUND: {key} current unit conversion is non-finite")
+    card = f"{load['instance']} {load['positive']} {load['negative']} {_fmt(amps)}"
+    return [card], f"load = {_fmt(amps)} A (source {key} nominal {value:g} {unit}; current sink)"
+
+
 def render_testbench(ir: Dict[str, Any], pdkctx: Dict[str, Any],
-                     env: Dict[str, Any], prov_lines: List[str]
+                     env: Dict[str, Any], prov_lines: List[str], spec: Optional[Dict[str, Any]] = None
                      ) -> Tuple[Optional[str], Dict[str, Any], List[str]]:
     """Returns (text, tb_env, notes). None when the IR declares no testbench —
     an honest absence, not an invented stimulus."""
@@ -1429,6 +1460,10 @@ def render_testbench(ir: Dict[str, Any], pdkctx: Dict[str, Any],
         return None, {}, ["the topology IR declares no testbench"]
     block = ir["block"]
     notes: List[str] = []
+    try:
+        load_cards, load_condition = _current_load(tb, spec or {})
+    except ValueError as exc:
+        return None, {}, [str(exc)]
     e: Dict[str, Any] = dict(env)
     nominal = (pdkctx.get("analog_device_params") or {}).get(
         "nominal_supply_v")
@@ -1461,6 +1496,8 @@ def render_testbench(ir: Dict[str, Any], pdkctx: Dict[str, Any],
     L.append("*")
     for ln in tb.get("conditions") or []:
         L.append(f"* condition: {ln.format(**fmt)}")
+    if load_condition:
+        L.append(f"* condition: {load_condition}")
     L.append(f".include {block}.sp")
     for ln in tb.get("stimulus") or []:
         L.append(ln.format(**fmt))
@@ -1470,6 +1507,7 @@ def render_testbench(ir: Dict[str, Any], pdkctx: Dict[str, Any],
     L.append(f"{_TB_DUT_INSTANCE} {' '.join(ports)} {block}")
     for ln in tb.get("cards") or []:
         L.append(ln.format(**fmt))
+    L.extend(load_cards)
     # TOP LEVEL, before `.control`: an `.options` card inside a `.control`
     # block is a `ngspice` interactive command, not a circuit option, and the
     # analysis that follows would still run on the default.
@@ -2819,7 +2857,12 @@ def _emit_for_block(project: Path, entry: Dict[str, Any], pdk: str,
     prov_lines.append(f"_provenance: {transient_rail_measurement(ir)[1]}")
 
     sp_text = render_netlist(ir, pdkctx, prov_lines, overrides, bdir)
-    tb_text, tb_env, tb_notes = render_testbench(ir, pdkctx, env, prov_lines)
+    tb_text, tb_env, tb_notes = render_testbench(ir, pdkctx, env, prov_lines, spec)
+    if tb_text is None and any(note.startswith("CURRENT_LOAD_UNBOUND:") for note in tb_notes):
+        gap = write_gap(bdir, project, name, btype, "TESTBENCH_LOAD_UNBOUND", "; ".join(tb_notes))
+        rec.update(action="gap", emitted=False, status="TESTBENCH_LOAD_UNBOUND",
+                   gap_path=str(gap.relative_to(project)), reason="; ".join(tb_notes))
+        return rec
 
     ok, findings = verify_with_checkers(name, sp_text, tb_text,
                                         design_content,

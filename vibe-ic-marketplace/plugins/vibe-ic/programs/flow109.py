@@ -252,10 +252,21 @@ def source_owned_native_dispatch(row: Mapping) -> dict | None:
             or set(dispatch.get("engine_executables", {})) != set(engines))
     adapter = dispatch.get("adapter")
     if dispatch.get("admission_policy") == "source_owned_existing_native":
-        invalid = (common_invalid
-                   or not isinstance(adapter, str) or not adapter.startswith("flow109_")
-                   or not (HERE / (adapter + ".py")).is_file()
-                   or native != "flow109." + str(row.get("id")))
+        if adapter == "analog_native_flow":
+            # The registered analog table owns both legacy A1 and stable
+            # A01-A19 entries; reuse the same native admission as digital.
+            from analog_native_flow import STEPS
+            legacy = {str(item.get("id")) for item in row.get("legacy70", ())
+                      if isinstance(item, Mapping)}
+            invalid = (common_invalid or row.get("id") not in STEPS
+                       or dispatch.get("operation_scope") != "native_analog_step"
+                       or not (HERE / "analog_native_flow.py").is_file()
+                       or native not in legacy | {"flow109." + str(row.get("id"))})
+        else:
+            invalid = (common_invalid
+                       or not isinstance(adapter, str) or not adapter.startswith("flow109_")
+                       or not (HERE / (adapter + ".py")).is_file()
+                       or native != "flow109." + str(row.get("id")))
     elif dispatch.get("kind") == "canonical_backend_window" and adapter is None:
         # The existing backend/release catalogs are the native owner registry.
         # Flow109 only names their already-supported Default rows; it does not
@@ -485,6 +496,56 @@ def component_context(context: Mapping, *, native_step_id: str | None = None,
         qualification_registry=context["qualification_registry"])
 
 
+def active_native_predecessor(project: Path, native_step_id: str) -> dict | None:
+    """Resolve the selected physical predecessor for one canonical native row.
+
+    Legacy Default runs have no Flow109 context and retain their static YAML
+    predecessor.  A bounded Flow109 launch, however, must not require an
+    optional producer that its validated feature plan did not select.
+    """
+    raw = os.environ.get(CONTEXT_ENV)
+    if not raw:
+        return None
+    project = Path(project).resolve()
+    path = Path(raw)
+    try:
+        expected_parent = (project / "reports" / "flow109" / "requests").resolve()
+        resolved = path.resolve(strict=True)
+        if path.is_symlink() or resolved.parent != expected_parent or not resolved.is_file():
+            raise Flow109Error("FLOW109_CONTEXT_INVALID", "request path is not current project authority")
+        context = validate_execution_context(json.loads(resolved.read_text(encoding="utf-8")))
+        current = component_context(context, native_step_id=str(native_step_id))
+    except (OSError, ValueError, Flow109Error) as exc:
+        if isinstance(exc, Flow109Error):
+            raise
+        raise Flow109Error("FLOW109_CONTEXT_INVALID", str(exc)) from exc
+    row = current["resolved_row"]
+    plan = resolve_plan(current["features"], current["step_profiles"])
+    selected = {item["id"]: item for item in plan["rows"]}
+    candidates = []
+    for dependency in row["data_deps"]:
+        dependency_id = dependency["step"]
+        if dependency["when"] == "producer_selected" and dependency_id not in selected:
+            continue
+        upstream = selected.get(dependency_id)
+        if upstream is None:
+            continue
+        dispatch = upstream["profile"].get("dispatch") or {}
+        if dispatch.get("kind") != "canonical_backend_window":
+            continue
+        defs = [item for item in dispatch.get("native_required_outputs", ())
+                if isinstance(item, str) and item.endswith(".def")]
+        if len(defs) != 1:
+            continue
+        candidates.append((upstream["position"], upstream, dispatch, defs[0]))
+    if not candidates:
+        raise Flow109Error("FLOW109_NATIVE_PREDECESSOR_UNRESOLVED", row["id"])
+    _, upstream, dispatch, output = max(candidates, key=lambda item: item[0])
+    return {"row_id": upstream["id"],
+            "native_step_id": str(dispatch["native_step_id"]),
+            "output": output}
+
+
 def _window_inventory(context: Mapping) -> None:
     runtime = context.get("runtime_tool_uses")
     expected = [use["use_id"] for row in context["resolved_rows"] for use in row["tool_uses"]]
@@ -558,17 +619,24 @@ def finish_native_window(project: Path, report: Mapping, report_path: Path | Non
     """Bind a canonical backend report to per-row component evidence."""
     path = os.environ.get(CONTEXT_ENV)
     attempt_name = os.environ.get(ATTEMPT_ENV)
-    if not path or not attempt_name:
+    if not path:
         return None
     try:
         context = validate_execution_context(json.loads(Path(path).read_text(encoding="utf-8")))
     except (OSError, ValueError, Flow109Error):
         return None
-    if (context["schema"] != "vibeic.flow109.execution-window.v1"
-            or context["dispatch_kind"] not in (
-                "canonical_backend_window", "selected_native_sequence")):
+    if context["schema"] == "vibeic.flow109.execution-context.v1":
+        dispatch = context["resolved_row"]["profile"].get("dispatch") or {}
+        if dispatch.get("kind") != "canonical_backend_window":
+            return None
+        rows = [context["resolved_row"]]
+        attempt = None
+    elif context.get("dispatch_kind") in (
+            "canonical_backend_window", "selected_native_sequence") and attempt_name:
+        rows = context["resolved_rows"]
+        attempt = Path(attempt_name)
+    else:
         return None
-    attempt = Path(attempt_name)
     canonical = []
     for site in report.get("steps", []) if isinstance(report, Mapping) else []:
         if isinstance(site, dict):
@@ -577,7 +645,7 @@ def finish_native_window(project: Path, report: Mapping, report_path: Path | Non
                  for item in canonical if isinstance(item, dict)}
     components = []
     stopped = False
-    for row in context["resolved_rows"]:
+    for row in rows:
         dispatch = row["profile"]["dispatch"]
         native = str(dispatch["native_step_id"])
         if dispatch.get("adapter"):
@@ -646,12 +714,15 @@ def finish_native_window(project: Path, report: Mapping, report_path: Path | Non
         write_json(project / "reports" / "flow109" / "components" / (row["id"] + ".json"), component)
         if status != "PASS":
             stopped = True
-    result = _attempt_result(context, components)
+    aggregate_context = dict(context)
+    aggregate_context["resolved_rows"] = rows
+    result = _attempt_result(aggregate_context, components)
     if report_path is not None and Path(report_path).is_file():
         result["canonical_window_report"] = {
             "path": str(Path(report_path).relative_to(project)),
             "sha256": _file_digest(Path(report_path))}
-    _finish_attempt(attempt, result)
+    if attempt is not None:
+        _finish_attempt(attempt, result)
     return result
 
 
@@ -693,6 +764,10 @@ def prepare_front_door(args, project: Path) -> int | None:
     context = execution_context(plan, args.entry_step, args.exit_step,
                                 runtime_tool_uses=manifest.get("runtime_tool_uses", manifest.get("tool_uses")),
                                 qualification_registry=manifest.get("qualification_registry"))
+    # Native analog steps consume ordinary design configuration and artifacts.
+    # Qualification documents are not a prerequisite for running these tools.
+    if getattr(args, "container", None):
+        os.environ["VIBEIC_ANALOG_CONTAINER"] = str(args.container)
     if context["schema"] == "vibeic.flow109.execution-window.v1":
         if context["dispatch_kind"] == "canonical_owner_window":
             path = destination / "requests" / (context["context_sha256"] + ".json")
@@ -791,6 +866,26 @@ def prepare_front_door(args, project: Path) -> int | None:
             args.exit_step = layout["backend_exit_step"]
             return None
         if context["dispatch_kind"] == "ordered_adapters":
+            if all(row["profile"]["dispatch"].get("adapter") == "analog_native_flow"
+                   for row in context["resolved_rows"]):
+                from analog_native_flow import execute_window, _aggregate
+                native = execute_window(project, context)
+                components = []
+                for row in context["resolved_rows"]:
+                    results = [item for item in native["steps"] if item["step"] == row["id"]]
+                    result = {"step_id": row["id"], "component_status": _aggregate(results),
+                              "flow109_acceptance": "NOT_MEASURED",
+                              "native_results": {"steps": results, "attempt": native.get("attempt")},
+                              "reason": native.get("reason", "native analog window executed")}
+                    components.append(result)
+                    write_json(destination / "components" / (row["id"] + ".json"), result)
+                _finish_attempt(attempt, {
+                    "schema": "vibeic.flow109.window-attempt-result.v1",
+                    "context_sha256": context["context_sha256"],
+                    "component_status": native["window_verdict"], "components": components,
+                    "flow109_acceptance": "NOT_MEASURED", "whole_flow_acceptance": "NOT_MEASURED",
+                    "bounded": True, "delivery_accepted": False})
+                return {"PASS": 0, "FAIL": 1, "NOT_MEASURED": 2}[native["window_verdict"]]
             components = []
             for row in context["resolved_rows"]:
                 current = component_context(context, requested_step=row["id"])

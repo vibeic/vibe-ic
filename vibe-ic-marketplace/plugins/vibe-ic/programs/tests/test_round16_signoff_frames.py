@@ -259,8 +259,9 @@ def test_the_step_record_is_published_before_the_summary_that_quotes_it():
     summary, so a re-run of the same project published the PREVIOUS run's
     numbers: measured `total_violations=216` in `final_summary.md` beside an
     orchestrator record, a DRC report and a steps view that all said 39."""
-    src = Path(mod.__file__).read_text()
-    i_pre = src.index('"record": "in-progress (steps only')
+    import inspect
+    src = inspect.getsource(mod.main)
+    i_pre = src.index("_publish_in_progress_steps(project, plan)")
     i_sum = src.index("fs_ok = _pl.emit_final_summary(")
     i_full = src.index('"steps": [asdict(s) for s in plan],')
     assert i_pre < i_sum < i_full, (
@@ -483,11 +484,12 @@ def test_a8_reports_the_interface_disagreement_at_the_producer():
     still the A8 gate's own, and a design whose blocks declare no interface
     makes the check self-skip exactly as before."""
     import analog_one_shot_runner as a1s
-    src = Path(a1s.__file__).read_text()
-    i = src.index("analog_hardmacro_gds_emit.py")
-    seg = src[i:i + 4000]
+    import inspect
+    seg = inspect.getsource(a1s.step_for_block)
     assert "analog_hardmacro_pinname_consistency_check.py" in seg
     assert "[A8 advisory] interface consistency" in seg
     # advisory: the subprocess result never becomes the step's verdict
     j = seg.index("analog_hardmacro_pinname_consistency_check.py")
-    assert "returncode" not in seg[j:j + 900]
+    next_section = seg.find("# A8 is also the moment", j)
+    assert next_section > j
+    assert "returncode" not in seg[j:next_section]

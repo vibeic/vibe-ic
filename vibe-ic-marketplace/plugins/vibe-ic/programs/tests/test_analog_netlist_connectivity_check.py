@@ -7,6 +7,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 PROG = Path(__file__).resolve().parent.parent / "analog_netlist_connectivity_check.py"
 
 # Every internal net (gate, tail) touched by >=2 pins; all ports used.
@@ -49,9 +51,10 @@ Vin in 0 DC 1.65
 """
 
 
-def _run(tmp_path: Path):
+def _run(tmp_path: Path, block=None):
     return subprocess.run(
         [sys.executable, str(PROG), str(tmp_path),
+         *(["--block", block] if block is not None else []),
          "--json", str(tmp_path / "r.json")],
         capture_output=True, text=True)
 
@@ -106,3 +109,17 @@ def test_edge_missing_dir_exit2(tmp_path):
         [sys.executable, str(PROG), str(tmp_path / "nope")],
         capture_output=True, text=True)
     assert r.returncode == 2
+
+
+@pytest.mark.parametrize("root", ["phase3/analog", "phase2/analog", "analog"])
+@pytest.mark.parametrize("selected,rc,checked", [(None, 1, 2), ("clean", 0, 1),
+                                              ("broken", 1, 1), ("absent", 2, 0)])
+def test_explicit_block_scope_preserves_default_and_selected_defect(tmp_path, root, selected, rc, checked):
+    for name, body in (("clean", GOOD), ("broken", FLOATING)):
+        folder = tmp_path / root / name / "derived"
+        folder.mkdir(parents=True)
+        (folder / "deck.sp").write_text(body)
+    result = _run(tmp_path, selected)
+    assert result.returncode == rc, result.stdout + result.stderr
+    report = json.loads((tmp_path / "r.json").read_text())
+    assert report["summary"].get("files_checked", 0) == checked

@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1478
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1478)
+- **Total programs (excluding helpers / shims):** 1484
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1484)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1469 |
+| `any` | 1475 |
 
 ## Alphabetical listing
 
@@ -76,6 +76,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `analog_block_coverage_check` | any | — | deterministic gate for analog block design coverage |
 | `analog_block_list_emit_check` | any | — | master block-list schema gate. |
 | `analog_block_type_classify` | any | — | deterministic name→type taxonomy lookup. |
+| `analog_bound_measurements` | any | — | Run explicit source-bound OP/DC/AC measurements on a delivered DUT. |
 | `analog_content_detected_must_emit_l5_check` | any | Wave 47 | Prevents silent ``L5_ADI_SPEC.json analog_blocks: []`` SKIP when |
 | `analog_converter_density_grade` | any | — | R-0915-45: EVALUATE the density pass condition the analog harness already DECLARES, on the run's own bitstream. |
 | `analog_corner_admission` | any | — | Fail-closed aggregate-RAM admission for independently launched PVT corners. |
@@ -106,6 +107,10 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `analog_macro_rtl_interface_check` | any | — | the digital side of an analog macro's interface, which nothing compared. |
 | `analog_mc_yield_run` | any | — | REAL Monte-Carlo yield execution for the analog track (flow-completeness review P1-1). |
 | `analog_meas_from_spec_gen` | any | — | deterministic `.meas` statement generator from an analog block spec.json. |
+| `analog_native_flow` | any | — | Run the A01-A19 analog track with existing native producers. |
+| `analog_native_front` | any | — | A01--A05 Default execution using the existing analog producers and consumers. |
+| `analog_native_physical` | any | — | Default analog A11--A16: call the existing native producers. |
+| `analog_native_sim` | any | — | Default analog simulation steps A06--A10 using delivered DUT testbenches. |
 | `analog_netlist_connectivity_check` | any | — | deterministic floating-node / dangling-pin graph check for SPICE subcircuits. |
 | `analog_netlist_include_order_check` | any | — | deterministic SPICE model-include ordering gate. |
 | `analog_netlist_path_lint` | any | — | deterministic absolute-path lint for SPICE netlists. |
@@ -495,6 +500,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `flow109_final_gls` | any | — | D71 final-SDF gate replay on the adopted D44 netlist. |
 | `flow109_final_lec` | any | — | Blocking D44 component: native LibreLane EQY on the adopted final netlist. |
 | `flow109_final_lec_physical` | any | — | Blocking, source-bound physical-chip proof-view preparation for D44. |
+| `flow109_final_perc` | any | — | D66 thin binding to the existing Step-28 PERC-equivalent owner. |
 | `flow109_frontend` | any | — | D22 uses the existing Default synthesis owner and its complete consumer. |
 | `flow109_functional_activity` | any | — | D55 component: adopted-netlist GLS activity and a real vector-power consumer. |
 | `flow109_metric_acceptance` | any | — | Typed runtime metric acceptance for the 109-flow registry. |
@@ -1550,7 +1556,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1469 programs)
+### `any` (1475 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `absence_verdict_names_its_search_space_check` — "not found" must say WHERE it looked.
@@ -1602,6 +1608,7 @@ _(no programs in this group)_
 - `analog_block_coverage_check` — deterministic gate for analog block design coverage
 - `analog_block_list_emit_check` — master block-list schema gate.
 - `analog_block_type_classify` — deterministic name→type taxonomy lookup.
+- `analog_bound_measurements` — Run explicit source-bound OP/DC/AC measurements on a delivered DUT.
 - `analog_content_detected_must_emit_l5_check` — Prevents silent ``L5_ADI_SPEC.json analog_blocks: []`` SKIP when  _[Wave 47]_
 - `analog_converter_density_grade` — R-0915-45: EVALUATE the density pass condition the analog harness already DECLARES, on the run's own bitstream.
 - `analog_corner_admission` — Fail-closed aggregate-RAM admission for independently launched PVT corners.
@@ -1632,6 +1639,10 @@ _(no programs in this group)_
 - `analog_macro_rtl_interface_check` — the digital side of an analog macro's interface, which nothing compared.
 - `analog_mc_yield_run` — REAL Monte-Carlo yield execution for the analog track (flow-completeness review P1-1).
 - `analog_meas_from_spec_gen` — deterministic `.meas` statement generator from an analog block spec.json.
+- `analog_native_flow` — Run the A01-A19 analog track with existing native producers.
+- `analog_native_front` — A01--A05 Default execution using the existing analog producers and consumers.
+- `analog_native_physical` — Default analog A11--A16: call the existing native producers.
+- `analog_native_sim` — Default analog simulation steps A06--A10 using delivered DUT testbenches.
 - `analog_netlist_connectivity_check` — deterministic floating-node / dangling-pin graph check for SPICE subcircuits.
 - `analog_netlist_include_order_check` — deterministic SPICE model-include ordering gate.
 - `analog_netlist_path_lint` — deterministic absolute-path lint for SPICE netlists.
@@ -2017,6 +2028,7 @@ _(no programs in this group)_
 - `flow109_final_gls` — D71 final-SDF gate replay on the adopted D44 netlist.
 - `flow109_final_lec` — Blocking D44 component: native LibreLane EQY on the adopted final netlist.
 - `flow109_final_lec_physical` — Blocking, source-bound physical-chip proof-view preparation for D44.
+- `flow109_final_perc` — D66 thin binding to the existing Step-28 PERC-equivalent owner.
 - `flow109_frontend` — D22 uses the existing Default synthesis owner and its complete consumer.
 - `flow109_functional_activity` — D55 component: adopted-netlist GLS activity and a real vector-power consumer.
 - `flow109_metric_acceptance` — Typed runtime metric acceptance for the 109-flow registry.

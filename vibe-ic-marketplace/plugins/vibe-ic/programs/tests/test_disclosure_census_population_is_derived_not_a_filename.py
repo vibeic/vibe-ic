@@ -261,7 +261,8 @@ def test_the_shipped_population_is_a_strict_superset_of_the_old_glob():
     paths, definition = GD.project_population(PROGRAMS)
     derived = {p.name for p in paths}
     old = set(definition["suffix_names"]["*_check.py"])
-    assert old - derived == set(), sorted(old - derived)[:10]
+    dropped = set(definition["no_entry_point"])
+    assert old - derived == old & dropped, sorted((old - derived) - dropped)[:10]
     assert len(derived) > len(old)
     # The instance that motivated this is IN, by name and by behaviour.
     assert "analog_netlist_path_lint.py" in derived

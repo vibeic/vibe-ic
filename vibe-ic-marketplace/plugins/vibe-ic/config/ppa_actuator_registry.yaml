@@ -354,6 +354,8 @@ actuators:
         - "{repair_tns_pct}"
         - "--bounded-drive-strength"
         - "{bounded_drive_strength}"
+        - "--cap-margin-pct"
+        - "{cap_margin_pct}"
     parameters:
       setup_margin_ns: {type: number, unit: ns, minimum: 0, maximum: 1.0, default: 0}
       setup_sequence:
@@ -387,6 +389,18 @@ actuators:
         description: >-
           After native repair, try a measured linked-Liberty equivalent master
           on residual max-slew violator nets, including newly buffered nets.
+      cap_margin_pct:
+        type: number
+        unit: percent
+        minimum: 0
+        maximum: 20
+        default: 0
+        description: >-
+          Existing native repair_design -cap_margin control. Zero preserves
+          the normal repair; the DRV ladder may use 10 then 20 percent to
+          make OpenROAD split a measured residual max-cap net. Candidate
+          admission still re-measures every DRV kind, setup, hold, antenna,
+          supply ownership and routing.
     preconditions:
       - {kind: file_nonempty, path: "current.json"}
       - {kind: file_nonempty, path: "context.json"}
@@ -492,10 +506,11 @@ controllers:
     objective_domain: timing.drv
     actuator: timing.repair_setup
     plan:
-      - {bounded_drive_strength: true}
+      - {bounded_drive_strength: true, cap_margin_pct: 10}
+      - {bounded_drive_strength: true, cap_margin_pct: 20}
     stop:
-      max_iterations: 1
-      plateau_patience: 1
+      max_iterations: 2
+      plateau_patience: 2
       wall_seconds: 14400
 
   pnr.deck.hold_block_emission:

@@ -49,6 +49,17 @@ def a6_project(tmp_path):
 
 
 def _container_handed_over(monkeypatch, project, flag, env):
+    # This file measures the legacy direct A6 call site.  The integrated
+    # Default cutover now runs its LibreLane arm first, while an ordinary-mode
+    # dispatch may also return before this call site.  Select the actual direct
+    # route and isolate ordinary dispatch without changing the container
+    # precedence asserted below.
+    import execution_analog_caller
+    import librelane_contract
+    monkeypatch.setattr(execution_analog_caller, "dispatch_site",
+                        lambda project, block, step_name: None)
+    monkeypatch.setattr(librelane_contract, "selected_mode",
+                        lambda project, step: "direct")
     seen = []
     monkeypatch.setattr(
         R, "_try_native_a6_pv",

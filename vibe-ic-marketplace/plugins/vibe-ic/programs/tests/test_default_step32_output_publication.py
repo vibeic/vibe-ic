@@ -62,7 +62,7 @@ def test_current_step32_publishes_before_its_output_receipt(tmp_path, monkeypatc
         if case != 'policy_reject':  # that control calls policy directly, outside Default
             assert (root / 'phase3/stage3/pnr/constraint.sdc').read_text() == deck
         native_calls.append("native_child_transport")
-        adopted = "neutral-candidate" if case == "adopted" else None
+        adopted = "neutral-candidate" if case in ("adopted", "measured_fail") else None
         folder = "phase3/librelane/32-neutral/04-openroad-stapostpnr"
         state = _write(root, folder + "/state_out.json", '{"metrics":{"source_control":1}}\n')
         final = {"drv_count": 0, "setup_ws_min": 0.5, "hold_ws_min": 0.2,
@@ -78,6 +78,17 @@ def test_current_step32_publishes_before_its_output_receipt(tmp_path, monkeypatc
         report.update(drv_signoff_verdict="PASS", drv_signoff={
             "verdict": "PASS", "counts": {"max_slew": 0, "max_capacitance": 0, "max_fanout": 0},
             "failures": [], "not_measured": [], "waived": []})
+        if case == "measured_fail":
+            final["drv_count"] = 1
+            report.update(
+                code="LL_PRR_DRV_VIOLATION",
+                antenna_census={"verdict": "PASS"},
+                sta_digest_census={"verdict": "PASS"},
+                drv_signoff_verdict="FAIL")
+            report["drv_signoff"].update(
+                verdict="FAIL",
+                counts={"max_slew": 0, "max_capacitance": 1, "max_fanout": 0},
+                failures=["measured max-cap residue"])
         if adopted:
             baseline["drv_count"] = 1
             d = _write(root, "phase3/librelane/32-neutral/candidate.def", "DESIGN neutral ;\n# candidate\nEND DESIGN\n")
@@ -157,6 +168,21 @@ def test_current_step32_publishes_before_its_output_receipt(tmp_path, monkeypatc
         assert {RAW, CANONICAL} <= set(current["outputs"])
         assert receipt["canonical_step_result"]["status"] == "PASS"
         assert (project / REPAIR / ("repair_log.json" if case == "adopted" else "no_repair_needed.flag")).is_file()
+    if case == "measured_fail":
+        # A real native FAIL still has a current producer and a canonical
+        # decision to report.  The consumer must preserve that FAIL rather
+        # than replacing its provenance with a malformed/null census or a
+        # missing-output diagnosis.
+        assert canonical is not None
+        current = receipt["current_step_declared_producers"]
+        assert current["verdict"] == "FAIL"
+        assert current["authority_verdict"] == "FAIL"
+        assert current["consumer_allowed"] is False
+        assert receipt["verdict"] == "FAIL"
+        assert receipt["missing_outputs"] == []
+        assert {RAW, CANONICAL} <= set(current["outputs"])
+        assert all(row.get("reason") != "current-step producer record is malformed"
+                   for row in receipt["gate_ledger"])
     if case == "native_scope":
         import copy
         import postroute_timing_repair_decision as policy

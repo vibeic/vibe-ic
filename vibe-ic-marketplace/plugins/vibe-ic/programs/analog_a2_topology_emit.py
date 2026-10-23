@@ -1230,10 +1230,14 @@ LIBRARY: Dict[str, Dict[str, Any]] = {
                 "condition, not a spec)",
                 "reference = {vref} V, implied by the bound Vout and the "
                 "divider ratio",
-                "load = 1 kOhm to ground (testbench condition)",
             ],
             "stimulus": ["v_vdd vdd 0 {supply}", "v_vref vref 0 {vref}"],
-            "cards": ["r_load vout 0 1k"],
+            "cards": [],
+            "current_load": {
+                "spec": "iout", "instance": "i_load", "positive": "vout", "negative": "0",
+                "fallback_cards": ["r_load vout 0 1k"],
+                "fallback_condition": "load = 1 kOhm to ground (legacy testbench condition; no source nominal output current)",
+            },
             "control": ["op", "let vo = v(vout)",
                         "echo \"MEAS vout=\" $&vo"],
         },

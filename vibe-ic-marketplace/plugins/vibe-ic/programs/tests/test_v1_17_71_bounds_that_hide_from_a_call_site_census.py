@@ -159,7 +159,7 @@ def test_the_at_speed_dispatch_imposes_no_outer_wall():
     tree = ast.parse(src)
     fn = next(n for n in ast.walk(tree)
               if isinstance(n, ast.FunctionDef)
-              and n.name == "run_at_speed_atpg_producers")
+              and n.name == "_run_at_speed_atpg_producer")
     dispatches = [c for c in ast.walk(fn)
                   if isinstance(c, ast.Call) and c.args
                   and isinstance(c.args[0], ast.Name) and c.args[0].id == "cmd"]
@@ -177,7 +177,7 @@ def test_the_at_speed_argv_still_hands_the_producer_no_budget():
     tree = ast.parse((PROGRAMS / "phase3_one_shot_runner.py").read_text())
     fn = next(n for n in ast.walk(tree)
               if isinstance(n, ast.FunctionDef)
-              and n.name == "run_at_speed_atpg_producers")
+              and n.name == "_run_at_speed_atpg_producer")
     argv = [ast.unparse(a) for a in ast.walk(fn)
             if (isinstance(a, ast.Assign)
                 and any(getattr(t, "id", "") == "cmd" for t in a.targets))

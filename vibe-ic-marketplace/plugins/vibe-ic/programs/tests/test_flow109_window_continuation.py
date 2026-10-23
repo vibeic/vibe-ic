@@ -67,6 +67,19 @@ def _window_fixture(project, monkeypatch, entry="D31", exit_="D32"):
     return plan, context, registry
 
 
+def _one_row_request(project, monkeypatch, step="D38", *, spares=False):
+    features = _profile()
+    features["requires_spares"] = spares
+    plan = flow109.resolve_plan(features)
+    context = flow109.execution_context(plan, step, step)
+    path = project / "reports/flow109/requests" / (context["context_sha256"] + ".json")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(context))
+    monkeypatch.setenv(flow109.CONTEXT_ENV, str(path))
+    monkeypatch.delenv(flow109.ATTEMPT_ENV, raising=False)
+    return context
+
+
 def test_selected_window_resolves_real_canonical_backend_order():
     registry_path = require_repo(
         "vibe-ic-marketplace", "plugins", "vibe-ic", "flow", "flow109.json")
@@ -160,6 +173,85 @@ def test_clock_planning_row_reaches_registered_special_native_owner_and_reverse(
     assert admission_record["flow109_acceptance"] == "NOT_MEASURED"
     with pytest.raises(flow109.Flow109Error, match="WINDOW_REVERSED"):
         flow109.resolve_execution_window(plan, "D32", "D31")
+
+
+def test_cts_predecessor_uses_latest_selected_physical_producer(tmp_path, monkeypatch):
+    _one_row_request(tmp_path, monkeypatch, spares=False)
+    assert flow109.active_native_predecessor(tmp_path, "19") == {
+        "row_id": "D35", "native_step_id": "17",
+        "output": "phase3/stage3/pnr/placed.def"}
+
+    _one_row_request(tmp_path, monkeypatch, spares=True)
+    assert flow109.active_native_predecessor(tmp_path, "19") == {
+        "row_id": "D37", "native_step_id": "18",
+        "output": "phase3/stage3/pnr/post_spare.def"}
+
+
+def test_cts_predecessor_rejects_stale_context(tmp_path, monkeypatch):
+    context = _one_row_request(tmp_path, monkeypatch)
+    path = Path(os.environ[flow109.CONTEXT_ENV])
+    context["features"]["requires_spares"] = True
+    path.write_text(json.dumps(context))
+    with pytest.raises(flow109.Flow109Error, match="FLOW109_CONTEXT_STALE"):
+        flow109.active_native_predecessor(tmp_path, "19")
+
+
+def test_one_row_canonical_receipt_is_component_only(tmp_path, monkeypatch):
+    context = _one_row_request(tmp_path, monkeypatch)
+    receipt = tmp_path / "reports/phase3/default_steps/19/backend_result.json"
+    receipt.parent.mkdir(parents=True, exist_ok=True)
+    receipt.write_text(json.dumps({"verdict": "PASS"}))
+    report = {"steps": [{"extras": {"canonical_steps": [
+        {"status": "PASS", "detail": "current CTS consumer PASS",
+         "extras": {"step_id": "19"}}]}}]}
+    result = flow109.finish_native_window(tmp_path, report)
+    component = json.loads((tmp_path / "reports/flow109/components/D38.json").read_text())
+    assert result["component_status"] == component["component_status"] == "PASS"
+    assert component["context_sha256"] == context["context_sha256"]
+    assert result["flow109_acceptance"] == result["whole_flow_acceptance"] == "NOT_MEASURED"
+    assert result["delivery_accepted"] is False
+    assert not (tmp_path / "reports/flow109/attempts").exists()
+
+
+def test_one_row_missing_canonical_receipt_cannot_pass(tmp_path, monkeypatch):
+    _one_row_request(tmp_path, monkeypatch)
+    report = {"steps": [{"extras": {"canonical_steps": [
+        {"status": "PASS", "detail": "unbound", "extras": {"step_id": "19"}}]}}]}
+    result = flow109.finish_native_window(tmp_path, report)
+    assert result["component_status"] == "NOT_MEASURED"
+    assert "current native PASS receipt absent" in result["components"][0]["reason"]
+
+
+def test_cts_producer_binds_selected_placement_receipt_and_rejects_changed_def(
+        tmp_path, monkeypatch):
+    import execution_backend_producers as producers
+    _one_row_request(tmp_path, monkeypatch)
+    placed = tmp_path / "phase3/stage3/pnr/placed.def"
+    placed.parent.mkdir(parents=True, exist_ok=True)
+    placed.write_text("VERSION 5.8 ;\nDESIGN chip_top ;\nEND DESIGN\n")
+    receipt = tmp_path / "reports/phase3/default_steps/17/backend_result.json"
+    receipt.parent.mkdir(parents=True, exist_ok=True)
+    receipt.write_text(json.dumps({
+        "verdict": "PASS", "producer_verdict": "PASS",
+        "outputs": {"phase3/stage3/pnr/placed.def": hashlib.sha256(
+            placed.read_bytes()).hexdigest()}}))
+    assert producers._cts_selected_predecessor(tmp_path, "19") == "placed.def"
+    placed.write_text(placed.read_text() + "# changed after acceptance\n")
+    with pytest.raises(Exception, match="BACKEND_CTS_PREDECESSOR_UNBOUND"):
+        producers._cts_selected_predecessor(tmp_path, "19")
+
+
+def test_cts_issuer_replaces_only_unselected_spare_input(tmp_path, monkeypatch):
+    import execution_policy
+    _one_row_request(tmp_path, monkeypatch)
+    params = {}
+    execution_policy._fixed_inputs({
+        "project": tmp_path, "policy": {"mode": "default"}, "registry": None,
+    }, "19", parameters=params)
+    declarations = params["resolved_input_manifest"]["declarations"]
+    assert {"from": 17, "path": "phase3/stage3/pnr/placed.def"} in declarations
+    assert {"from": 18, "path": "phase3/stage3/pnr/post_spare.def"} not in declarations
+    assert {"from": 16, "path": "phase3/stage3/cts/clock_plan.json"} in declarations
 
 
 def test_front_door_preserves_one_row_and_translates_bounded_window(tmp_path, monkeypatch):

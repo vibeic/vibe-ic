@@ -613,6 +613,39 @@ def _predecessor_state(project, predecessor):
                          f'{predecessor}: {exc}') from exc
 
 
+def _cts_selected_predecessor(project, sid):
+    """Bind CTS to the latest selected Flow109 physical producer."""
+    default = 'post_spare.def' if sid == '19' else 'post_cts.def'
+    if sid != '19':
+        return default
+    import flow109
+    try:
+        selected = flow109.active_native_predecessor(project, sid)
+    except flow109.Flow109Error as exc:
+        raise em.Refusal(exc.code, exc.detail) from exc
+    if selected is None:
+        return default
+    allowed = {'17': 'placed.def', '18': 'post_spare.def'}
+    native = selected['native_step_id']
+    predecessor = allowed.get(native)
+    expected_rel = PNR + predecessor if predecessor else None
+    if predecessor is None or selected['output'] != expected_rel:
+        raise em.Refusal('BACKEND_CTS_PREDECESSOR_UNSUPPORTED', str(selected))
+    receipt_path = project / 'reports/phase3/default_steps' / native / 'backend_result.json'
+    try:
+        receipt = json.loads(_require(receipt_path).read_text())
+        actual = _require(project / expected_rel)
+        expected = snap.sha(actual)
+        if (receipt.get('verdict') != 'PASS'
+                or receipt.get('producer_verdict') != 'PASS'
+                or receipt.get('outputs', {}).get(expected_rel) != expected):
+            raise ValueError('canonical predecessor PASS/output binding is absent or stale')
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        raise em.Refusal('BACKEND_CTS_PREDECESSOR_UNBOUND',
+                         f'{selected["row_id"]}/{native}: {exc}') from exc
+    return predecessor
+
+
 def _step17_current_sdc_bridge(project, params, bound):
     """Adopt current constraints without reclassifying the retained floorplan.
 
@@ -1197,9 +1230,10 @@ def _cts_split(project, params, R, ll, pdk, overlay):
     corners = json.loads(configs['OpenROAD.STAMidPNR'].read_text()).get('STA_CORNERS') or []
     if not corners:
         raise em.Refusal('BACKEND_CTS_HOLD_CORNERS_UNSTATED', sid)
+    predecessor = _cts_selected_predecessor(project, sid)
     if sid == '19':
         instances = configs['OpenROAD.CTS'].parent / 'pre_cts.instances'
-        components = R._parse_def_components(_require(project / PNR / 'post_spare.def'))
+        components = R._parse_def_components(_require(project / PNR / predecessor))
         if not components:
             raise em.Refusal('BACKEND_PRE_CTS_INSTANCE_POPULATION_EMPTY', sid)
         instances.write_text('\n'.join(name for name, _ in components) + '\n')
@@ -1218,7 +1252,6 @@ def _cts_split(project, params, R, ll, pdk, overlay):
         ll.derive_step_config(native, selected, {'PNR_CORNERS': ([corner], 'resolved STA_CORNERS, one measurement per corner')})
         chain.append(('OpenROAD.STAMidPNR', selected))
     mounts = [(root.resolve(), ll.PDK_GUEST_ROOT)]
-    predecessor = 'post_spare.def' if sid == '19' else 'post_cts.def'
     state = (_require(Path(params['state_in'])) if params.get('state_in') else
              _predecessor_state(project, predecessor))
     folders = ll.run_chain(project, image, [(s, cfg, state) for s, cfg in chain],
@@ -1610,7 +1643,24 @@ def produce_signoff(project, params):
         if failures:
             return {'verdict': 'FAIL', 'detail': '\n'.join(failures)}
     elif sid == '24':
-        R._librelane_step24_record(project, top, pdk, 'librelane', _require(spef), written)
+        subject = None
+        if params.get('execution_mode') == 'default':
+            from execution_adapters_backend import default_step24_physical_subject
+            subject = default_step24_physical_subject(
+                project, execution_mode='default')
+        if subject is None:
+            R._librelane_step24_record(
+                project, top, pdk, 'librelane', _require(spef), written)
+        else:
+            # Consume exactly the paths the ordinary issuer froze.  No
+            # canonical alias is authored here; missing or changed issued
+            # bytes are refused by the worker contract and by _require.
+            R._librelane_step24_record(
+                project, top, pdk, 'librelane',
+                _require(project / subject['spef']), written,
+                routed_def=_require(project / subject['def']),
+                netlist=_require(project / subject['netlist']),
+                sdc=_require(project / subject['sdc']))
         record = json.loads((rpt / R._LL_IR_RECORD).read_text())
         if record.get('record'):
             R._librelane_step24_publish(project, record)
@@ -1744,16 +1794,20 @@ def produce_signoff(project, params):
         # DRV measurement under the current deck. Never resynthesize here.
         _retained_synth_census(project, params, R, ll, pdk)
         row = R.step_postroute_repair_librelane(project, top, pdk, container)
-        if row.status == 'PASS':
+        if row.status in ('PASS', 'FAIL'):
             # The current receipt is checked before the legacy all-step
             # canonicalizer runs. Publish this row's existing canonical
             # decision now, from its bound native measurement, without
-            # replacing the producer's raw decision or rerunning STA.
+            # replacing the producer's raw decision or rerunning STA. A
+            # measured native FAIL needs the same publication: the canonical
+            # record explains that FAIL; it does not convert it to PASS.
             out = project / 'phase3/stage3/postroute_timing_repair'
             producer = R._step32_producer_receipt(project, out)
             if producer is None:
-                return {'verdict': 'NOT_MEASURED',
-                        'detail': 'current Step-32 bound producer decision absent'}
+                if row.status == 'PASS':
+                    return {'verdict': 'NOT_MEASURED',
+                            'detail': 'current Step-32 bound producer decision absent'}
+                return {'verdict': row.status, 'detail': row.detail}
             import librelane_postroute_repair as repair
             source = project / producer['source_report']
             report = json.loads(source.read_text())
@@ -2252,8 +2306,20 @@ def produce(project, params):
         result = produce_signoff(project, params)
     if params.get('stop_on_producer_failure') and result.get('verdict') != 'PASS':
         # The local Default caller cannot advance without this producer's
-        # outputs. Do not spend time generating downstream compliance reports
-        # after preparation or the native tool already refused this row.
+        # outputs. A registry-backed native row can still have authored its
+        # complete current outputs before returning FAIL. Bind those bytes so
+        # the terminal receipt reports the actual producer failure rather than
+        # a malformed/null producer census. Do not run declared downstream
+        # report producers after preparation or the native tool refused.
+        if _native_current_step_producer(sid) is not None:
+            current = _native_current_step_receipt(
+                Path(project), sid, params, result, started_ns, prior_outputs)
+            allowed, reason, authority_verdict = _current_step_producer_authority(
+                current, project=Path(project))
+            current['consumer_allowed'] = allowed
+            current['authority_verdict'] = authority_verdict
+            current['authority_detail'] = reason
+            result['current_step_declared_producers'] = current
         return result
     # The backend consumer runs immediately after this function.  Materialize
     # only this row's flow-declared producer outputs now; the phase runner's

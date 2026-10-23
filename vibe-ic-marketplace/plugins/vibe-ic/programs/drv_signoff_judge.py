@@ -960,6 +960,11 @@ def judge(bundle: dict, *, project: Path | None = None) -> dict:
                 if identity.get("source_tool_image") != identity.get("source_tool_image_id"):
                     raise ValueError("LOCAL capture image identity is not self-bound")
                 expected_source_id = str(captured)
+            elif root_doc.get("source") == "declared":
+                from drv_signoff_anchor import pdk_source_identity
+                source_id = pdk_source_identity(root_doc, project=project)["image_id"]
+                expected_source_id = (identity.get("source_tool_image_id") or
+                                      identity.get("tool_image_digest"))
             else:
                 source_id = (root_doc.get("derivation") or {}).get("image_id")
                 expected_source_id = (identity.get("source_tool_image_id") or

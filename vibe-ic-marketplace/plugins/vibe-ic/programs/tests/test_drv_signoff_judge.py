@@ -1615,6 +1615,32 @@ def test_project_clean_opensta_census_can_reach_pass(tmp_path, monkeypatch,
     assert any("pin_census_report" in reason for reason in result["not_measured"])
 
 
+def test_project_judge_consumes_declared_native_pdk_identity(tmp_path, monkeypatch):
+    import drv_signoff_anchor as anchor
+
+    image_id = 'sha256:' + 'c' * 64
+    bundle, root, provenance_ref, _provenance, _scene = \
+        _project_clean_opensta_census_bundle(tmp_path, monkeypatch, image_id)
+    declared = {
+        'path': str(root), 'source': 'declared',
+        'declared_by': 'env VIBEIC_LIBRELANE_PDK_ROOT', 'pdk': 'synthetic',
+    }
+    Path(provenance_ref['path']).write_text(json.dumps(declared))
+    monkeypatch.setattr(anchor._ll, 'resolve_image',
+                        lambda *_args, **_kwargs: bundle['identity']['source_tool_image'])
+    monkeypatch.setattr(anchor._ll, '_provider_for_image', lambda _image: None)
+    monkeypatch.setattr(anchor._ll, 'local_image_attestation',
+                        lambda _image: {'image_id': image_id})
+
+    assert drv.judge(bundle, project=tmp_path)['verdict'] == 'PASS'
+    monkeypatch.setattr(anchor._ll, 'local_image_attestation',
+                        lambda _image: {'image_id': 'sha256:' + 'd' * 64})
+    wrong = drv.judge(bundle, project=tmp_path)
+    assert wrong['verdict'] == 'NOT_MEASURED'
+    assert 'installed PDK root image identity differs from producer image' in \
+        wrong['not_measured']
+
+
 @pytest.mark.parametrize('case', ['recorded', 'continued', 'no_record',
                                   'late_issued', 'unverified_owner', 'changed_freeze'])
 def test_original_run_start_reaches_the_complete_project_judge(
@@ -3970,6 +3996,54 @@ def test_pdk_anchor_reconstructs_the_named_producer_with_real_local_resolver(tmp
         'source_reader': result, 'refused': refused, 'legacy': legacy,
         'generic_producer_witness': generic_witness, 'generic_source_reader': generic_result,
         'scope': 'Real LOCAL metadata producer/resolver/anchor; no native process or field run.'}, indent=2) + '\n')
+
+
+def test_pdk_anchor_binds_declared_native_root_to_live_image(tmp_path, monkeypatch):
+    """The ordinary native producer's declared-root schema is not a derivation."""
+    import drv_signoff_anchor as anchor
+
+    project = tmp_path / 'project'
+    root = tmp_path / 'pdks'
+    (root / 'gf180mcuD').mkdir(parents=True)
+    image = 'registry.example/vibeic-eda@sha256:' + 'a' * 64
+    image_id = 'sha256:' + 'b' * 64
+    provenance = {
+        'path': str(root), 'source': 'declared',
+        'declared_by': 'env VIBEIC_LIBRELANE_PDK_ROOT',
+        'pdk': 'gf180mcuD',
+        'pdk_from': "caller (the design's resolved PDK)",
+    }
+    monkeypatch.setattr(anchor._ll, 'resolve_image',
+                        lambda *_args, **_kwargs: image)
+    monkeypatch.setattr(anchor._ll, '_provider_for_image', lambda _image: None)
+    monkeypatch.setattr(anchor._ll, 'local_image_attestation',
+                        lambda _image: {'image_id': image_id})
+
+    assert anchor.pdk_source_identity(provenance, project=project) == {
+        'pdk': 'gf180mcuD', 'image': image, 'image_id': image_id}
+
+
+@pytest.mark.parametrize('change', ('missing_tree', 'wrong_pdk', 'unknown_declarer'))
+def test_pdk_anchor_refuses_unbound_declared_native_root(tmp_path, monkeypatch, change):
+    import drv_signoff_anchor as anchor
+
+    root = tmp_path / 'pdks'
+    (root / 'gf180mcuD').mkdir(parents=True)
+    provenance = {
+        'path': str(root), 'source': 'declared',
+        'declared_by': 'env VIBEIC_LIBRELANE_PDK_ROOT',
+        'pdk': 'gf180mcuD',
+    }
+    if change == 'missing_tree':
+        provenance['path'] = str(tmp_path / 'absent')
+    elif change == 'wrong_pdk':
+        provenance['pdk'] = '../other'
+    else:
+        provenance['declared_by'] = 'unbound caller'
+    monkeypatch.setattr(anchor._ll, 'resolve_image',
+                        lambda *_args, **_kwargs: 'unused')
+    with pytest.raises(ValueError, match='declared PDK source differs'):
+        anchor.pdk_source_identity(provenance, project=tmp_path)
 
 
 def test_current_step23_keeps_named_pdk_witness_and_unnamed_runtime_roles(tmp_path, monkeypatch):

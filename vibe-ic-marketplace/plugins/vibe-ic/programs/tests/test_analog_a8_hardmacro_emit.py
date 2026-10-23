@@ -14,6 +14,7 @@ chip/PDK-AGNOSTIC.
 from __future__ import annotations
 
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -245,7 +246,11 @@ def test_the_lef_write_carries_a_marker_from_its_own_argv(tmp_path: Path,
 
     def fake_exec(container, cmd, timeout=900, *, marker=None, log_path=None):
         calls.append({"cmd": cmd, "marker": marker})
-        (p / "phase3" / "analog" / "hardmacro" / "blk" / "blk.lef").write_text(
+        hdir = p / "phase3" / "analog" / "hardmacro" / "blk"
+        output = Path(re.search(r"(?m)^lef write (.+) -hide$", (hdir / marker).read_text()).group(1))
+        assert output.is_file() and output.read_bytes() == b""
+        assert output != hdir / "blk.lef"
+        output.write_text(
             "MACRO blk\n  PIN vdd\n    USE POWER ;\n  END vdd\nEND blk\n")
         return 0, "", ""
 
@@ -257,6 +262,8 @@ def test_the_lef_write_carries_a_marker_from_its_own_argv(tmp_path: Path,
     assert manifest["producer"] == "analog_a8_hardmacro_emit"
     assert manifest["source_gds_sha256"] == r["source_gds_sha256"]
     assert set(manifest["views"]) == {".lef", ".lib", ".gds", ".v"}
+    assert manifest["characterization_scope"]["timing_arcs"] == "NOT_MEASURED"
+    assert manifest["characterization_scope"]["full_timing_characterization"] is False
     long_runs = [c for c in calls if "magic" in c["cmd"]]
     assert long_runs and all(c["marker"] and c["marker"] in c["cmd"]
                              for c in long_runs), calls
@@ -492,6 +499,7 @@ def test_extraction_requires_exact_declared_top_cell(tmp_path: Path,
          "sha256": "a" * 64}, ""))
     monkeypatch.setattr(E, "_native_ngspice_binary",
                         lambda *a, **k: ("/usr/bin/ngspice", ""))
+    monkeypatch.setattr(E, "_remote_sha256", lambda *a: ("c" * 64, ""))
     monkeypatch.setattr(E, "_runtime_image_digest",
                         lambda *a, **k: ("sha256:" + "b" * 64, ""))
     monkeypatch.setattr(E._mx, "build_extraction_tcl",
@@ -549,9 +557,9 @@ END blk
     monkeypatch.setattr(E, "magicrc_for", lambda *a, **k: "/pdk/sky130A.magicrc")
 
     def fake_exec(container, cmd, timeout=900, *, marker=None, log_path=None):
-        (b / "../hardmacro/blk/blk.lef").resolve().parent.mkdir(
-            parents=True, exist_ok=True)
-        (b / "../hardmacro/blk/blk.lef").resolve().write_text(lef)
+        h = project / "phase3/analog/hardmacro/blk"
+        output = Path(re.search(r"(?m)^lef write (.+) -hide$", (h / marker).read_text()).group(1))
+        output.write_text(lef)
         return 0, "A8_LEF_OK", ""
 
     monkeypatch.setattr(E, "_docker_exec", fake_exec)
@@ -619,8 +627,8 @@ END blk
 
     def fake_exec(container, cmd, timeout=900, *, marker=None, log_path=None):
         h = project / "phase3/analog/hardmacro/blk"
-        h.mkdir(parents=True, exist_ok=True)
-        (h / "blk.lef").write_text(lef)
+        output = Path(re.search(r"(?m)^lef write (.+) -hide$", (h / marker).read_text()).group(1))
+        output.write_text(lef)
         return 0, "A8_LEF_OK", ""
 
     monkeypatch.setattr(E, "_docker_exec", fake_exec)
@@ -636,3 +644,237 @@ def test_declared_port_mismatch_is_not_aliased(tmp_path: Path):
                                                              "VREF", "VOUT"])
     got, why = E.load_native_measurement(project, "blk", b / "blk.gds", topo)
     assert got is None and "declared_ports" in why
+
+
+def _source_power_fixture(tmp_path, monkeypatch, *, native_rc=0, diagnostic=""):
+    """Neutral wiring control; transport values are not native qualification."""
+    project, b, _old = _write_native_measurement_fixture(tmp_path)
+    (b / E._A8_MEASUREMENT).unlink()
+    topo = {"ports": ["vp", "vn", "control", "out"], "rails": {"vdd": "vp", "vss": "vn"}}
+    (b / "topology.json").write_text(json.dumps(topo))
+    bindings = []
+    for filename, section in (("device.lib", "nom"), ("passive.lib", "rnom"), ("capacitive.lib", "cnom")):
+        model = b / filename
+        model.write_text(f".lib {section}\n* source-owned neutral model\n.endl {section}\n")
+        bindings.append(f".lib {filename} {section}")
+    (b / "blk.sp").write_text("\n".join(bindings + [".subckt blk vp vn control out", "R1 vp out 11k", ".ends blk", ""]))
+    (b / "tb_blk.sp").write_text(
+        '* delivered source conditions\n.include blk.sp\nVMAIN vp vn 2.3\nVZERO vn 0 0\n'
+        'VREF control vn 0.4\nXDUT vp vn control out blk\nRLOAD out vn 7k\n'
+        '.control\ntran 1n 1u\n.endc\n.end\n')
+    monkeypatch.setattr(E, "magicrc_for", lambda *a: "/pdk/neutral.magicrc")
+    monkeypatch.setattr(E, "_native_ngspice_binary", lambda *a: ("/usr/bin/ngspice", ""))
+    monkeypatch.setattr(E, "_remote_sha256", lambda *a: ("c" * 64, ""))
+    monkeypatch.setattr(E, "_runtime_image_digest", lambda *a: ("sha256:" + "b" * 64, ""))
+    def native(container, cmd, timeout=900, *, marker=None, log_path=None):
+        if marker == "a8_extract.tcl":
+            (b / ".a8_native_stage/blk_extracted.spice").write_text(
+                '.subckt blk vp vn control out\nR1 vp out 11k\n.ends blk\n')
+            return 0, "neutral extraction transport", ""
+        if marker == "a8_native_measurement.sp":
+            (b / "a8_native_ngspice.log").write_text(diagnostic + "idd = 0.0002\npwr = 0.00046\n")
+            return native_rc, "", ""
+        raise AssertionError(cmd)
+    monkeypatch.setattr(E, "_docker_exec", native)
+    return project, b, topo
+
+
+def test_delivered_measurement_deck_ignores_prose_comments(tmp_path, monkeypatch):
+    project, b, topo = _source_power_fixture(tmp_path, monkeypatch)
+    template = b / "tb_blk.sp"
+    template.write_text(template.read_text() + "\n* not VFAKE vp vn PWL(0 0 1n 99)\n")
+    rec, why = E._native_measurement_produce(project, "blk", "", "/pdk", b / "blk.gds", topo)
+    assert rec is not None, why
+    deck = (b / "a8_native_measurement.sp").read_text()
+    assert "VFAKE" not in deck
+    assert "VMAIN vp vn 2.3" in deck
+
+
+def test_current_native_op_preserves_all_models_sources_and_loads(tmp_path, monkeypatch):
+    project, b, topo = _source_power_fixture(tmp_path, monkeypatch)
+    rec, why = E._native_measurement_produce(project, "blk", "", "/pdk", b / "blk.gds", topo)
+    assert rec is not None, why
+    deck = (b / "a8_native_measurement.sp").read_text()
+    assert all(binding in deck for binding in (".lib device.lib nom", ".lib passive.lib rnom", ".lib capacitive.lib cnom"))
+    assert "VMAIN vp vn 2.3" in deck and "VREF control vn 0.4" in deck
+    assert "RLOAD out vn 7k" in deck and "XU vp vn control out blk" in deck
+    assert "abs(i(VMAIN)*(v(vp)-v(vn)))" in deck
+    assert "tran 1n 1u" not in deck and "*1.2" not in deck
+    assert len(rec["model_bindings"]) == 3
+    assert rec["measured_current_a"] == pytest.approx(0.0002)
+    loaded, why = E.load_native_measurement(project, "blk", b / "blk.gds", topo)
+    assert loaded is not None, why
+    assert loaded["liberty_value"] == pytest.approx(460)
+
+
+@pytest.mark.parametrize("native_rc,diagnostic", [(1, "unknown subckt\n"), (0, "Error: unresolved passive model\n")])
+def test_current_native_failure_cannot_publish_plausible_power(tmp_path, monkeypatch, native_rc, diagnostic):
+    project, b, topo = _source_power_fixture(tmp_path, monkeypatch, native_rc=native_rc, diagnostic=diagnostic)
+    rec, why = E._native_measurement_produce(project, "blk", "", "/pdk", b / "blk.gds", topo)
+    assert rec is None and "ngspice rc=" in why
+    assert not (b / E._A8_MEASUREMENT).exists()
+
+
+def test_native_residual_failure_cannot_publish_plausible_power(tmp_path, monkeypatch):
+    project, b, topo = _source_power_fixture(tmp_path, monkeypatch,
+        diagnostic=";;RESIDUAL_FAIL node=rail err=1.2 unit=V tol=1e-06 strict=0\n")
+    rec, why = E._native_measurement_produce(project, "blk", "", "/pdk", b / "blk.gds", topo)
+    assert rec is None and "invalid operating point (RESIDUAL_FAIL)" in why
+    assert not (b / E._A8_MEASUREMENT).exists()
+
+
+def test_receipt_consumer_refuses_native_residual_even_when_power_matches(tmp_path):
+    project, b, topo = _write_native_measurement_fixture(tmp_path)
+    path = b / E._A8_MEASUREMENT
+    rec = json.loads(path.read_text())
+    log = project / rec["native_log"]
+    log.write_text(log.read_text() + ";;RESIDUAL_FAIL node=rail err=1 unit=V tol=1e-06 strict=0\n")
+    rec["native_log_sha256"] = E._sha256(log)
+    path.write_text(json.dumps(rec))
+    loaded, why = E.load_native_measurement(project, "blk", b / "blk.gds", topo)
+    assert loaded is None and "invalid operating point" in why
+
+
+@pytest.mark.parametrize("positive,negative,expected", [
+    ("vp", "0", "v(vp)"), ("0", "vn", "(-v(vn))"),
+    ("vp", "vn", "(v(vp)-v(vn))"), ("0", "0", "0")])
+def test_native_control_voltage_handles_ground_without_a_vector_zero(positive, negative, expected):
+    assert E._terminal_voltage_expression(positive, negative) == expected
+
+
+def test_current_native_measurement_rejects_missing_model_binding(tmp_path, monkeypatch):
+    project, b, topo = _source_power_fixture(tmp_path, monkeypatch)
+    rec, why = E._native_measurement_produce(project, "blk", "", "/pdk", b / "blk.gds", topo)
+    assert rec is not None, why
+    rec["model_bindings"].pop()
+    (b / E._A8_MEASUREMENT).write_text(json.dumps(rec))
+    loaded, why = E.load_native_measurement(project, "blk", b / "blk.gds", topo)
+    assert loaded is None and "all delivered model libraries" in why
+
+
+def test_current_native_measurement_rejects_changed_source_bias(tmp_path, monkeypatch):
+    project, b, topo = _source_power_fixture(tmp_path, monkeypatch)
+    rec, why = E._native_measurement_produce(project, "blk", "", "/pdk", b / "blk.gds", topo)
+    assert rec is not None, why
+    tb = b / "tb_blk.sp"
+    tb.write_text(tb.read_text().replace("VMAIN vp vn 2.3", "VMAIN vp vn 2.1"))
+    loaded, why = E.load_native_measurement(project, "blk", b / "blk.gds", topo)
+    assert loaded is None and "binding is stale" in why
+
+
+def test_native_op_uses_declared_poweron_plateau_without_transient(tmp_path, monkeypatch):
+    project, b, topo = _source_power_fixture(tmp_path, monkeypatch)
+    tb = b / "tb_blk.sp"
+    tb.write_text(tb.read_text().replace("VMAIN vp vn 2.3", "VMAIN vp vn pwl(0 0 100n 2.3 20u 2.3)"))
+    extracted = b / "post_layout_extracted.spice"
+    text, binding = E._delivered_measurement_deck(project, "blk", extracted, topo["ports"], "blk", topo)
+    assert "VMAIN vp vn dc 2.3\n" in text
+    assert "pwl(" not in text
+    assert binding["power_sources"][0]["dc_plateau"] == "2.3"
+    assert binding["power_sources"][0]["source_value"] == "pwl(0 0 100n 2.3 20u 2.3)"
+    assert binding["power_sources"][0]["dc_selection"] == "pwl_terminal_plateau"
+    assert binding["source_testbench_sha256"] == E._sha256(tb)
+    assert "tran 1n 1u" not in text
+
+
+def test_native_op_explicit_dc_takes_precedence_over_poweron_waveform(tmp_path, monkeypatch):
+    project, b, topo = _source_power_fixture(tmp_path, monkeypatch)
+    tb = b / "tb_blk.sp"
+    tb.write_text(tb.read_text().replace("VMAIN vp vn 2.3", "VMAIN vp vn dc 2.1 pwl(0 0 100n 2.3 20u 2.3)"))
+    extracted = b / "post_layout_extracted.spice"
+    before = extracted.read_bytes()
+    text, binding = E._delivered_measurement_deck(project, "blk", extracted, topo["ports"], "blk", topo)
+    assert "VMAIN vp vn dc 2.1\n" in text and "pwl(" not in text
+    assert binding["power_sources"][0]["dc_selection"] == "explicit_dc"
+    assert binding["power_sources"][0]["dc_plateau"] == "2.1"
+    assert extracted.read_bytes() == before
+    assert "RLOAD out vn 7k" in text
+
+
+@pytest.mark.parametrize("source,expected", [
+    ("", 1e-5), (".options reltol=1e-3", 1e-5),
+    (".option reltol=1e-7", 1e-7), (".options reltol=2u", 2e-6),
+])
+def test_native_op_precision_never_loosens_source_reltol(source, expected):
+    cards, binding = E._native_op_precision([source])
+    assert cards == [f".options reltol={expected:.12g}"]
+    assert binding["reltol"] == expected
+    assert binding["residual_acceptance"] == "unchanged_native_check"
+
+
+def test_native_op_source_precision_expression_is_not_overwritten():
+    cards, binding = E._native_op_precision([".param tol=1e-8", ".options reltol={tol}"])
+    assert cards == []
+    assert binding["source_reltol"] == ["{tol}"]
+    assert binding["selection"] == "source_expression_preserved"
+
+
+def test_native_op_solver_defaults_gear_and_preserves_an_explicit_method():
+    cards, binding = E._native_op_solver([])
+    assert cards == [".options method=gear"]
+    assert binding["method"] == "gear" and binding["num_threads"] == 1
+    assert binding["omp_wait_policy"] == "PASSIVE" and binding["gomp_spincount"] == 0
+    cards, binding = E._native_op_solver([".options method=trap trtol=1"])
+    assert cards == [] and binding["method"] == "trap"
+    assert binding["selection"] == "delivered_source"
+
+
+def test_selected_native_binary_is_bound_and_scheduled(tmp_path, monkeypatch):
+    project, b, topo = _source_power_fixture(tmp_path, monkeypatch)
+    monkeypatch.setattr(E, "_docker_exec_raw", lambda *a, **k: (0, "", ""))
+    native = E._docker_exec
+    commands = []
+    def capture(*args, **kwargs):
+        commands.append(args[1])
+        return native(*args, **kwargs)
+    monkeypatch.setattr(E, "_docker_exec", capture)
+    rec, why = E._native_measurement_produce(project, "blk", "", "/pdk", b / "blk.gds", topo,
+                                             ngspice_bin="/candidate/ngspice")
+    assert rec is not None, why
+    assert rec["native_binary"] == {"path": "/candidate/ngspice", "sha256": "c" * 64, "selection": "explicit"}
+    assert "OMP_WAIT_POLICY=PASSIVE GOMP_SPINCOUNT=0 /candidate/ngspice -b" in commands[-1]
+    assert ".options method=gear" in (b / "a8_native_measurement.sp").read_text()
+    assert "set num_threads=1" in (b / "a8_native_measurement.sp").read_text()
+
+
+def test_changed_selected_native_binary_cannot_publish_measurement(tmp_path, monkeypatch):
+    project, b, topo = _source_power_fixture(tmp_path, monkeypatch)
+    digests = iter([("c" * 64, ""), ("d" * 64, "")])
+    monkeypatch.setattr(E, "_remote_sha256", lambda *a: next(digests))
+    rec, why = E._native_measurement_produce(project, "blk", "", "/pdk", b / "blk.gds", topo)
+    assert rec is None and "binary changed" in why
+    assert not (b / E._A8_MEASUREMENT).exists()
+
+
+def test_explicit_different_binary_does_not_reuse_cached_native_measurement(tmp_path, monkeypatch):
+    project, b, topo = _source_power_fixture(tmp_path, monkeypatch)
+    rec, why = E._native_measurement_produce(project, "blk", "", "/pdk", b / "blk.gds", topo)
+    assert rec is not None, why
+    calls = []
+    def produce(*args, **kwargs):
+        calls.append(kwargs["ngspice_bin"])
+        return None, "replacement native execution deliberately stopped"
+    monkeypatch.setattr(E, "_native_measurement_produce", produce)
+    result = E.emit_block(project, "blk", "", "/pdk", ngspice_bin="/candidate/ngspice")
+    assert calls == ["/candidate/ngspice"] and result["emitted"] is False
+    assert "different selected binary" in result["reason"]
+
+
+@pytest.mark.parametrize("native_rc,native_text", [(1, "MACRO failed\n"), (0, "")])
+def test_native_lef_failure_preserves_prior_delivery(tmp_path, monkeypatch, native_rc, native_text):
+    project, b, topo = _write_native_measurement_fixture(tmp_path)
+    h = project / "phase3/analog/hardmacro/blk"
+    h.mkdir(parents=True)
+    delivered = h / "blk.lef"
+    delivered.write_text("prior native delivery\n")
+    monkeypatch.setattr(E, "magicrc_for", lambda *a, **k: "/pdk/native.magicrc")
+    def native(container, cmd, timeout=900, *, marker=None, log_path=None):
+        output = Path(re.search(r"(?m)^lef write (.+) -hide$", (h / marker).read_text()).group(1))
+        assert output != delivered and output.is_file() and output.read_bytes() == b""
+        output.write_text(native_text)
+        return native_rc, "", "native failure"
+    monkeypatch.setattr(E, "_docker_exec", native)
+    result = E.emit_block(project, "blk", "container", "/pdk")
+    assert result["emitted"] is False and result["rc"] == 2
+    assert delivered.read_text() == "prior native delivery\n"
+    assert not list(h.glob(".blk-native-lef-*"))

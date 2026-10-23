@@ -551,9 +551,15 @@ def test_normal373_local_receipts_reach_original_connectivity_consumer(
         return 0, geometry_text, ''
     if not condition.startswith('local_runner'):
         monkeypatch.setattr(native.ShippedXorRunner, 'run', geometry_process)
+    # The current 37.3 contract has a distinct native dependency producer and
+    # backend consumer.  Drive the producer first; produce_signoff now consumes
+    # its retained receipt and must not be expected to launch these steps.
+    R.publish_database_unit_declaration(
+        p, pdk, '', native._source_def(p), publish_declaration=False)
+    native.produce(p, Path(stream['filled_def']))
+    assert executed == list(native.STEPS)
     result = EBP.produce_signoff(p, {'step_id': '37.3', 'execution_mode': 'default',
         'top': 'cal_pg', 'pdk_root': str(root), 'image_id': local_image.image})
-    assert executed == list(native.STEPS)
     assert result['verdict'] == 'PASS', result
     assert not (p / 'phase3/librelane/37.3-launches.jsonl').exists()
     dependency = native.read_current(p)

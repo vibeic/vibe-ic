@@ -32,7 +32,10 @@ def _write(root, relative, text):
     return path
 
 
-@pytest.mark.parametrize("case", ["current", "advisory", "missing_inputs", "missing_report", "malformed_report"])
+@pytest.mark.parametrize("case", [
+    "current", "advisory", "missing_inputs", "missing_report",
+    "malformed_report", "failed_report",
+])
 def test_default_step35_invokes_its_declared_advisory_producer(tmp_path, monkeypatch, case):
     project = tmp_path / "project"
     body = DEF.format(extra=" ".join("via_single ( 10 10 )" for _ in range(18)) if case == "advisory" else "")
@@ -52,6 +55,10 @@ def test_default_step35_invokes_its_declared_advisory_producer(tmp_path, monkeyp
             report.unlink(missing_ok=True)
         elif case == "malformed_report":
             report.write_text('{"verdict":"PASS"}\n')
+        elif case == "failed_report":
+            failed = json.loads(report.read_text())
+            failed["verdict"] = "FAIL"
+            report.write_text(json.dumps(failed) + "\n")
         return result
 
     monkeypatch.setattr(D, "run_for_step", record)
@@ -74,8 +81,13 @@ def test_default_step35_invokes_its_declared_advisory_producer(tmp_path, monkeyp
     assert producer["executed"] == 1, producer
     assert producer["results"][0]["program"] == "dfm_screen_check"
     assert producer["results"][0]["executed"] is True
-    if case in {"missing_report", "malformed_report"}:
+    if case in {"missing_report", "malformed_report", "failed_report"}:
         assert row.status != "PASS", row.detail
+        receipt = json.loads(
+            (project / "reports/phase3/default_steps/35/backend_result.json").read_text())
+        assert receipt["verdict"] != "PASS", receipt
+        if case == "failed_report":
+            assert receipt["canonical_step_result"]["status"] == "FAIL", receipt
     else:
         assert row.status == "PASS", row.detail
         assert document["verdict"] == ("PASS_WITH_ADVISORIES" if case == "advisory" else "PASS")

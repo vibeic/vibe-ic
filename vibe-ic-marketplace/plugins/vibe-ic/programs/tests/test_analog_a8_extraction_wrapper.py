@@ -5,6 +5,7 @@ The native-call doubles below test wiring, never claim measured performance.
 from pathlib import Path
 import hashlib
 import json
+import re
 import shutil
 import sys
 
@@ -49,6 +50,7 @@ def _transport(monkeypatch, project, b, topo, *, fail=False, mutate=None):
     monkeypatch.setattr(E, "magicrc_for", lambda *a: "/pdk/sky130A.magicrc")
     monkeypatch.setattr(E, "_native_model_contract", lambda *a: (
         {"path": "/pdk/model.lib", "section": "tt", "sha256": "a" * 64}, ""))
+    monkeypatch.setattr(E, "_remote_sha256", lambda *a: ("a" * 64, ""))
     monkeypatch.setattr(E, "_native_ngspice_binary", lambda *a: ("/usr/bin/ngspice", ""))
     monkeypatch.setattr(E, "_runtime_image_digest", lambda *a: ("sha256:" + "b" * 64, ""))
 
@@ -64,7 +66,8 @@ def _transport(monkeypatch, project, b, topo, *, fail=False, mutate=None):
             assert f'.include "{raw}"' in deck
             wrapper = b / "a8_extraction_wrapper.spice"
             assert f'.include "{wrapper}"' in deck
-            assert "XU vdd vss vref vout ldo_open__a8_interface" in deck
+            assert "XU vdd 0 vref vout ldo_open__a8_interface" in deck
+            assert "v_vdd vdd 0 1.8" in deck and "v_vref vref 0 0.6" in deck
             assert hashlib.sha256(raw.read_bytes()).hexdigest() == RAW_SHA
             assert "Xnative" in wrapper.read_text()
             if mutate:
@@ -78,7 +81,8 @@ def _transport(monkeypatch, project, b, topo, *, fail=False, mutate=None):
             h = project / "phase3/analog/hardmacro/ldo_open"
             pins = "\n".join(f"PIN {p}\n PORT\n LAYER Metal3 ;\n RECT 0 0 1 1 ;\n END\nEND {p}"
                              for p in topo["ports"])
-            (h / "ldo_open.lef").write_text(f"MACRO ldo_open\nSIZE 4 BY 4 ;\n{pins}\nEND ldo_open\n")
+            output = Path(re.search(r"(?m)^lef write (.+) -hide$", (h / marker).read_text()).group(1))
+            output.write_text(f"MACRO ldo_open\nSIZE 4 BY 4 ;\n{pins}\nEND ldo_open\n")
             return 0, "unit LEF transport", ""
         raise AssertionError(f"unexpected native command: {cmd}")
 
@@ -242,8 +246,10 @@ def test_current_group_mutations_refuse(tmp_path, monkeypatch, mutation):
         rec.pop("measurement_deck")
         rec.pop("measurement_deck_sha256")
     elif mutation == "deck_bypass":
-        deck.write_text(deck.read_text().replace("XU vdd vss vref vout ldo_open__a8_interface",
-                                                "XU vdd vss vref vout ldo_open"))
+        text = deck.read_text()
+        assert text.count("XU vdd 0 vref vout ldo_open__a8_interface") == 1
+        deck.write_text(text.replace("XU vdd 0 vref vout ldo_open__a8_interface",
+                                     "XU vdd 0 vref vout ldo_open"))
         rec["measurement_deck_sha256"] = E._sha256(deck)
     elif mutation == "a3":
         (b / "ldo_open.sp").write_text((b / "ldo_open.sp").read_text() + "* current drift\n")

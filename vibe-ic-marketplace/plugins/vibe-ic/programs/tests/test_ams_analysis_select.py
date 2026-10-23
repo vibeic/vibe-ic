@@ -109,6 +109,40 @@ def test_pass_nested_specs_container(tmp_path):
     assert _summary(r)["blocks"][0]["analyses"] == [".op", ".ac"]
 
 
+def test_adc_enob_requires_transient_spectrum_not_small_signal_noise(tmp_path):
+    spec = {"block_type": "delta_sigma", "specs": [
+        {"name": "enob", "min": 14, "unit": "bit"},
+        {"name": "vref", "target": 1, "unit": "V"}]}
+    sp = tmp_path / "spec.json"
+    sp.write_text(json.dumps(spec))
+    r = _run(sp)
+    assert r.returncode == 0, r.stdout + r.stderr
+    result = _summary(r)["blocks"][0]
+    assert result["analyses"] == [".op", ".tran"]
+    assert {row["key"]: row["analysis"] for row in result["mapping"]}["enob"] == ".tran"
+
+
+def test_converter_snr_keeps_separate_physical_noise_analysis(tmp_path):
+    spec = {"block_type": "sar_adc", "snr_db": 70, "sndr_db": 65,
+            "input_noise": 1e-9}
+    sp = tmp_path / "spec.json"
+    sp.write_text(json.dumps(spec))
+    r = _run(sp)
+    assert r.returncode == 0, r.stdout + r.stderr
+    result = _summary(r)["blocks"][0]
+    assert result["analyses"] == [".op", ".tran", ".noise"]
+    assert {row["key"]: row["analysis"] for row in result["mapping"]} == {
+        "input_noise": ".noise", "snr_db": ".tran", "sndr_db": ".tran"}
+
+
+def test_amplifier_snr_noise_rule_is_preserved(tmp_path):
+    sp = tmp_path / "spec.json"
+    sp.write_text(json.dumps({"block_type": "amplifier", "snr_db": 70}))
+    r = _run(sp)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert _summary(r)["blocks"][0]["analyses"] == [".op", ".noise"]
+
+
 # ---------------------------------------------------------------------------
 # Determinism — same spec always yields same set (the whole point).
 # ---------------------------------------------------------------------------

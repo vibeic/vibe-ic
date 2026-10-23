@@ -23,6 +23,8 @@ Pins:
 chip-AGNOSTIC: monkeypatched container + synthetic fixtures.
 """
 import json
+import os
+import shlex
 import sys
 from pathlib import Path
 
@@ -243,7 +245,18 @@ def _ms_project(tmp_path):
     (hm / "ldo.v").write_text("module ldo(input en, output vout);\nendmodule\n")
     sy = tmp_path / "phase2" / "stage2" / "synth"
     sy.mkdir(parents=True)
-    (sy / "chip_top_synth.v").write_text("module chip_top();\nendmodule\n")
+    (sy / "chip_top_synth.v").write_text(
+        "module chip_top();\n  ldo u_ldo ();\nendmodule\n")
+    pnr = tmp_path / "phase3" / "stage3" / "pnr"
+    pnr.mkdir(parents=True)
+    (pnr / "routed.def").write_text(
+        "DESIGN chip_top ;\nUNITS DISTANCE MICRONS 1000 ;\n"
+        "COMPONENTS 1 ;\n"
+        "- u_ldo ldo + FIXED ( 1000 2000 ) N ;\n"
+        "END COMPONENTS\nEND DESIGN\n")
+    # The stream must be current with respect to the exact DEF whose macro
+    # placement it carries.
+    os.utime(g / "chip_top.gds", None)
     return tmp_path
 
 
@@ -257,11 +270,27 @@ def _fake_ms_docker(lvs_text):
         if cmd.startswith("command -v") or cmd.startswith("test -f") \
                 or cmd.startswith("test -d"):
             return 0, "", ""
+        if "M1_TOOL_IDENTITY" in cmd:
+            return 0, json.dumps({
+                "executable": "/tools/klayout",
+                "sha256": "a" * 64,
+                "version": "KLayout fixture",
+            }), ""
         if "klayout" in cmd:
+            tokens = shlex.split(cmd)
+            env = dict(t.split("=", 1) for t in tokens if "=" in t)
+            out = Path(env["MERGED_OUT"])
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_bytes(b"\x00\x06merged")
+            placements = json.loads(
+                Path(env["PLACEMENTS_JSON"]).read_text())["placements"]
+            placed = [{"macro": cell, **row}
+                      for cell, rows in placements.items() for row in rows]
+            Path(env["MERGE_JSON"]).write_text(json.dumps({
+                "design_top": "chip_top", "single_top": True,
+                "top_cells_after": ["chip_top"], "placed": placed,
+            }))
             import re as _re
-            m = _re.search(r"MERGED_OUT=(\S+)", cmd)
-            Path(m.group(1)).parent.mkdir(parents=True, exist_ok=True)
-            Path(m.group(1)).write_bytes(b"\x00\x06merged")
             t = _re.search(r"tee (\S+/merge\.log)", cmd)
             if t:
                 Path(t.group(1)).write_text("KLAYOUT_MERGE_DONE\n")

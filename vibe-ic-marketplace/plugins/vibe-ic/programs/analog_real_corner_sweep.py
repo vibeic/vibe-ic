@@ -246,6 +246,7 @@ def _supports_json_measure(container, ngspice_bin):
 
 
 _NO_SUCH_VECTOR_RE = re.compile(r"(?i)no such vector\s+as\s+([A-Za-z_]\w*)")
+_RESIDUAL_FAIL_RE = re.compile(r"(?im)^.*;;RESIDUAL_FAIL\b[^\n]*$")
 
 
 def _scan_analysis_failures(txt):
@@ -266,6 +267,15 @@ def _scan_analysis_failures(txt):
             continue
         seen.add(line)
         warnings.append(line)
+    # The native solver can exit zero after reporting an invalid numerical
+    # residual. Its explicit diagnostic invalidates the complete solution,
+    # including values that the per-measure sidecar otherwise marks passing.
+    for m in _RESIDUAL_FAIL_RE.finditer(txt or ""):
+        failed_analyses.add("*")
+        line = m.group(0).strip()
+        if line not in seen:
+            seen.add(line)
+            warnings.append(line)
     for m in _FAILED_MEAS_RE.finditer(txt or ""):
         atype, name = m.group(1), m.group(2)
         if atype:
@@ -1562,6 +1572,11 @@ def _run_ngspice(container, sp_in_container, cwd=None, deck_text=None,
                         "native meas result while the run reported failures — "
                         "nulled (unverifiable, not measured)")
 
+    if "*" in failed_analyses:
+        for k in meas:
+            if meas[k] is not None:
+                meas[k] = None
+                nulled_keys.add(k)
     # Drop metrics whose owning analysis failed (e.g. all AC metrics when the
     # `ac` sweep errored), so a bogus 0.0 never reaches corner_results.json.
     for atype in failed_analyses:
@@ -1600,7 +1615,7 @@ def _run_ngspice(container, sp_in_container, cwd=None, deck_text=None,
     }
     # #438(a): return the FULL transcript — run_block persists it as the
     # per-run ngspice invocation log that substantiates simulator_run.
-    return cp.returncode == 0, meas, txt, sim_status
+    return cp.returncode == 0 and "*" not in failed_analyses, meas, txt, sim_status
 
 def _pick_block_type(block, project):
     """L5-driven type selection — does NOT use topology.md keyword match."""

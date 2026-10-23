@@ -1,11 +1,13 @@
-"""A04 source-authority, upstream-receipt and retained-reader controls."""
+"""Legacy qualified A04 source-authority and retained-reader controls.
+
+Canonical native dispatch is covered separately by test_analog_native_flow.py.
+"""
 from __future__ import annotations
 
 import hashlib
 import json
 from pathlib import Path
 import shutil
-import subprocess
 import sys
 
 import pytest
@@ -15,6 +17,7 @@ import flow109
 import flow109_admission as admission
 import flow109_analog_a04 as analog
 from _analog_producer_fixture import block, make_project
+from _flow109_legacy_component_fixture import legacy_component_registry, run_legacy_component
 
 
 def _put(project, name, value):
@@ -91,11 +94,7 @@ def _case(project):
 
 
 def _run(project):
-    return subprocess.run([
-        sys.executable, str(analog.HERE / 'vibe_ic_one_shot_runner.py'), str(project),
-        '--flow', '109', '--flow109-manifest', str(project / 'manifest.json'),
-        '--entry-step', 'A04', '--exit-step', 'A04', '--route', 'ip', '--no-dashboard'],
-        capture_output=True, text=True)
+    return run_legacy_component(project, 'A04')
 
 
 def test_a04_emits_exact_expert_selected_topology_and_keeps_acceptance_unmeasured(tmp_path):

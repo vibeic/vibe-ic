@@ -115,6 +115,7 @@ PARAM_VARS = {
     "hold_max_buffer_pct": "VIBEIC_PRR_HOLD_MAX_BUFFER_PCT",
     "repair_tns_pct": "VIBEIC_PRR_SETUP_REPAIR_TNS_PCT",
     "bounded_drive_strength": "VIBEIC_PRR_BOUNDED_DRIVE_STRENGTH",
+    "cap_margin_pct": "VIBEIC_PRR_CAP_MARGIN_PCT",
 }
 
 #: `measure` exits with this when the adopted state cannot answer; the
@@ -1556,6 +1557,259 @@ def handoff(project: Path, report: Dict[str, Any], targets: Dict[str, Path]) -> 
     import librelane_contract as _ll
     return _ll.handoff_to_direct(Path(report["adopted_state"]), targets,
                                  project / "reports/phase3/librelane_postroute_repair_handoff.json")
+
+
+def _resume_host_path(project: Path, ctx: Dict[str, Any], value: str) -> Path:
+    path = Path(value)
+    declared_project = Path(ctx["project"])
+    try:
+        return project / path.relative_to(declared_project)
+    except ValueError:
+        pass
+    for host, guest in sorted(ctx.get("mounts") or [],
+                              key=lambda item: len(str(item[1])), reverse=True):
+        try:
+            return Path(host) / path.relative_to(Path(guest))
+        except ValueError:
+            continue
+    return path
+
+
+def _validate_resume_subject(project: Path, current: Dict[str, Any],
+                             ctx: Dict[str, Any]) -> Dict[str, Any]:
+    """Bind the live route to the immutable adopted State before actuation."""
+    import librelane_contract as _ll
+    try:
+        state_path = _resume_host_path(project, ctx, current["repair_state"])
+        state = _load(state_path)
+        handoff_path = project / "reports/phase3/librelane_postroute_repair_handoff.json"
+        handoff = _load(handoff_path)
+        if (_resume_host_path(project, ctx, handoff["state"]) != state_path or
+                handoff["state_sha256"] != _ll.digest(state_path)):
+            raise ValueError("handoff state does not name the adopted State bytes")
+        checked: Dict[str, str] = {}
+        for view in ("def", "nl"):
+            row = handoff["views"][view]
+            source = _resume_host_path(project, ctx, row["source"])
+            dest = _resume_host_path(project, ctx, row["dest"])
+            if source != _resume_host_path(project, ctx, state[view]):
+                raise ValueError(f"{view}: handoff source is not adopted State")
+            source_sha, dest_sha = _ll.digest(source), _ll.digest(dest)
+            if not (source_sha == row["source_sha256"] ==
+                    row["dest_sha256"] == dest_sha):
+                raise ValueError(f"{view}: live handoff bytes changed")
+            checked[f"live_{view}_sha256"] = dest_sha
+        for view in ("sdc", "odb"):
+            path = _resume_host_path(project, ctx, state[view])
+            checked[f"adopted_{view}_sha256"] = _ll.digest(path)
+        measured = current["measurement"]
+        sta_state = _resume_host_path(project, ctx, measured["sta_state"])
+        if _ll.digest(sta_state) != measured["sta_state_sha256"]:
+            raise ValueError("adopted STAPostPNR State bytes changed")
+        sta_fp = _load(sta_state.parent / "input_fingerprint.json")
+        recorded_inputs = sta_fp.get("state_files")
+        if not isinstance(recorded_inputs, dict):
+            raise ValueError("STAPostPNR input readset is missing")
+        for view in ("sdc", "odb"):
+            declared = state[view]
+            if recorded_inputs.get(declared) != checked[f"adopted_{view}_sha256"]:
+                raise ValueError(f"adopted {view.upper()} differs from measured input")
+        if checked["adopted_odb_sha256"] != measured["native_odb_sha256"]:
+            raise ValueError("adopted native ODB differs from measured ODB")
+        return checked
+    except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+        raise _ll.Refusal("LL_PRR_RESUME_SUBJECT_STALE", str(exc)) from exc
+
+
+def _validate_resume_readset(project: Path, current: Dict[str, Any],
+                             ctx: Dict[str, Any]) -> Dict[str, Any]:
+    """Re-hash the retained native chain's configs, models, PDK and tool."""
+    import librelane_contract as _ll
+    try:
+        repair_folder = _resume_host_path(project, ctx, current["repair_folder"])
+        lane = repair_folder.parent
+        by_step: Dict[str, Path] = {}
+        for folder in lane.iterdir():
+            receipt_path = folder / "vibeic_receipt.json"
+            if receipt_path.is_file():
+                step = _load(receipt_path).get("input", {}).get("step")
+                if isinstance(step, str):
+                    by_step[step] = folder
+        required = (REPAIR_STEP, *MEASURE_STEPS)
+        if any(step not in by_step for step in required):
+            raise ValueError(f"retained native chain incomplete: {sorted(by_step)}")
+        ledger = _load(project / ARM_REL / LEDGER).get("candidates") or []
+        adopted_row = next((row for row in ledger
+                            if row.get("candidate") == current.get("candidate")), None)
+        if not isinstance(adopted_row, dict):
+            raise ValueError("adopted candidate has no ledger authority")
+        handoff = _load(project / "reports/phase3/librelane_postroute_repair_handoff.json")
+        promoted_destinations = {
+            str(_resume_host_path(project, ctx, row["dest"]))
+            for row in (handoff.get("views") or {}).values()
+            if isinstance(row, dict) and isinstance(row.get("dest"), str)}
+
+        recorded_image = None
+        for step in required:
+            folder = by_step[step]
+            receipt = _ll.validate_step_receipt(folder, step)
+            fp = receipt["input"]
+            if fp.get("image") != ctx.get("image"):
+                raise ValueError(f"{step}: image identity changed")
+            config_source = (adopted_row.get("config") if step == REPAIR_STEP
+                             else (ctx.get("configs") or {}).get(step))
+            if not isinstance(config_source, str):
+                raise ValueError(f"{step}: resolved config authority missing")
+            if fp.get("config") != _ll.digest(
+                    _resume_host_path(project, ctx, config_source)):
+                raise ValueError(f"{step}: resolved config source changed")
+            if not re.fullmatch(r"[0-9a-f]{64}", str(fp.get("state") or "")):
+                raise ValueError(f"{step}: input State authority missing")
+            for field in ("state_files", "config_files"):
+                values = fp.get(field)
+                if not isinstance(values, dict):
+                    raise ValueError(f"{step}: {field} authority missing")
+                for path, expected in values.items():
+                    actual = _resume_host_path(project, ctx, path)
+                    if field == "state_files" and str(actual) in promoted_destinations:
+                        # The accepted handoff legitimately replaced the route
+                        # and netlist that the first candidate consumed. Their
+                        # current bytes were bound above to the adopted output.
+                        continue
+                    if not isinstance(expected, str) or _ll.digest(actual) != expected:
+                        raise ValueError(f"{step}: {field} changed: {path}")
+            if step == REPAIR_STEP:
+                plugins = fp.get("plugin")
+                if not isinstance(plugins, dict) or plugins != _ll._plugin_digests(step):
+                    raise ValueError(f"{step}: plugin/tool readset changed")
+            for field in (("rcx_pdk_files",) if step == "OpenROAD.RCX" else
+                          ("liberty_files",) if step == "OpenROAD.STAPostPNR" else ()):
+                values = fp.get(field)
+                if not isinstance(values, dict) or not values:
+                    raise ValueError(f"{step}: {field} authority missing")
+                for path, expected in values.items():
+                    actual = _resume_host_path(project, ctx, path)
+                    if not isinstance(expected, str) or _ll.digest(actual) != expected:
+                        raise ValueError(f"{step}: {field} changed: {path}")
+            pdk_record = _load(folder / "pdk_root.json")
+            expected_mounts = [[str(Path(host).resolve()), guest]
+                               for host, guest in ctx.get("mounts") or []]
+            if pdk_record.get("requested_mounts") != expected_mounts:
+                raise ValueError(f"{step}: PDK mount identity changed")
+            image_identity = fp.get("local_image")
+            if not isinstance(image_identity, dict):
+                raise ValueError(f"{step}: native tool identity missing")
+            stable = {key: value for key, value in image_identity.items()
+                      if key not in ("cid", "attestation_path", "attestation_sha256")}
+            if recorded_image is None:
+                live = _ll.local_image_attestation(ctx["image"])
+                recorded_image = {key: value for key, value in live.items()
+                                  if key not in ("cid", "attestation_path",
+                                                 "attestation_sha256")}
+            if stable != recorded_image:
+                raise ValueError(f"{step}: native tool identity changed")
+        return {"verdict": "PASS", "steps": list(required),
+                "image": ctx["image"]}
+    except _ll.Refusal as exc:
+        raise _ll.Refusal("LL_PRR_RESUME_READSET_STALE", str(exc)) from exc
+    except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+        raise _ll.Refusal("LL_PRR_RESUME_READSET_STALE", str(exc)) from exc
+
+
+def resume_drv(project: Path, *, registry: Optional[Path] = None,
+               programs_dir: Optional[Path] = None) -> Dict[str, Any]:
+    """Continue only the DRV controller from a measured residual report.
+
+    Unlike :func:`close_arm`, this does not rebuild the census, delete the
+    candidate ledger, or replay setup/hold candidates.  It is deliberately
+    admissible only when the canonical report and the adopted pointer name the
+    same measured STA state and the report's sole step verdict is residual DRV.
+    """
+    import librelane_contract as _ll
+    from _ppa import closure as _cl
+
+    source = project / REPORT_REL
+    try:
+        report = _load(source)
+        arm = project / ARM_REL
+        impl = arm / IMPL_DIR
+        current = _load(impl / CURRENT)
+        ctx = _load(impl / CONTEXT)
+        ledger_path = _ledger_path(impl)
+        candidates = _load(ledger_path)["candidates"]
+    except (OSError, ValueError, KeyError) as exc:
+        raise _ll.Refusal("LL_PRR_RESUME_STATE_ABSENT", str(exc)) from exc
+    if report.get("verdict") != "FAIL" or report.get("code") != "LL_PRR_DRV_VIOLATION":
+        raise _ll.Refusal("LL_PRR_RESUME_NOT_DRV_RESIDUE",
+                          f"{report.get('verdict')} {report.get('code')}")
+    final = report.get("final") or {}
+    measured = current.get("measurement") or {}
+    identity = ("sta_state_sha256", "native_odb_sha256", "drv_count",
+                "drv_pin_checks_state", "drv_pin_checks")
+    mismatch = [key for key in identity if final.get(key) != measured.get(key)]
+    if mismatch or report.get("adopted") != current.get("candidate"):
+        raise _ll.Refusal(
+            "LL_PRR_RESUME_CURRENT_MISMATCH",
+            f"fields={mismatch}; report adopted={report.get('adopted')!r}; "
+            f"current candidate={current.get('candidate')!r}")
+    if type(measured.get("drv_count")) is not int or measured["drv_count"] <= 0:
+        raise _ll.Refusal("LL_PRR_RESUME_DRV_NOT_VIOLATED",
+                          f"drv_count={measured.get('drv_count')!r}")
+
+    subject_freshness = _validate_resume_subject(project, current, ctx)
+    readset_freshness = _validate_resume_readset(project, current, ctx)
+
+    before = len(candidates)
+    reg = _cl.load_registry(registry, programs_dir=programs_dir)
+    run = _cl.ClosureController(reg, impl, arm / "closure").run_controller(
+        "postroute.repair_drv")
+    run_record = run.to_record()
+    candidates = _load(ledger_path)["candidates"]
+    new_rows = candidates[before:]
+    groups: List[List[Dict[str, Any]]] = []
+    for row in new_rows:
+        if row.get("retry_of") and groups and groups[-1][0].get("candidate") == row["retry_of"]:
+            groups[-1].append(row)
+        else:
+            groups.append([row])
+    actuated = [it for it in run_record.get("iterations") or [] if it.get("argv")]
+    for index, group in enumerate(groups):
+        iteration = actuated[index] if index < len(actuated) else {}
+        for row in group:
+            row["controller"] = "postroute.repair_drv"
+            if row.get("decision") == "ACTUATOR_FAILED":
+                row["closure_decision"] = "ACTUATOR_FAILED"
+                row["closure_reason"] = row.get("reason")
+            else:
+                row["closure_decision"] = iteration.get("decision")
+                row["closure_reason"] = iteration.get("decision_reason")
+    write_json(ledger_path, {"candidates": candidates})
+
+    current = _load(impl / CURRENT)
+    report.setdefault("continuations", []).append({
+        "kind": "postroute.repair_drv", "candidate_ledger_start": before,
+        "input_sta_state_sha256": final.get("sta_state_sha256"),
+        "subject_freshness": subject_freshness,
+        "readset_freshness": readset_freshness,
+        "run": run_record})
+    report.setdefault("closure", []).append(run_record)
+    report["candidates"] = candidates
+    report["adopted"] = current.get("candidate")
+    report["final"] = current.get("measurement")
+    report["final_antenna"] = measured_antenna = (
+        current.get("measurement") or {}).get("antenna_nets")
+    report["final_supply_ownership"] = current.get("supply_ownership")
+    report["adopted_state"] = current.get("repair_state")
+    report["resume"] = {"controller": "postroute.repair_drv",
+                        "outcome": run_record.get("outcome"),
+                        "candidate_ledger_start": before,
+                        "candidate_ledger_end": len(candidates),
+                        "final_antenna_nets": measured_antenna}
+    _stamp_verdict(report)
+    _step32_drv_signoff(project, report)
+    write_json(source, report)
+    _publish_declared_repair(project, report, source)
+    return report
 
 
 def _bool_arg(value: str) -> bool:

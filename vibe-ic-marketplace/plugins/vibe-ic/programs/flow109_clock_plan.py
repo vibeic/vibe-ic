@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 import sys
 import uuid
@@ -23,6 +24,24 @@ from _atomic_artefact import write_json
 SCHEMA = "vibeic.flow109.clock-plan-component.v1"
 OUTPUT = "phase3/stage3/cts/clock_plan.json"
 NATIVE_STEP = "16"
+STEP17_REUSE_ENV = "VIBEIC_FLOW109_STEP17_REUSE_REQUEST"
+
+# Only the reviewed 634 -> 805 Flow109 ownership work may differ while a
+# retained Step-17 producer is adopted.  Everything that could have authored
+# the old placement remains byte-identical or reuse refuses.
+_REUSE_SOURCE_EXCEPTIONS = {
+    "flow/FLOW109.md",
+    "flow/flow109.json",
+    "programs/flow109.py",
+    "programs/flow109_clock_plan.py",
+    "programs/flow109_final_lec.py",
+    "programs/phase3_one_shot_runner.py",
+    "programs/tests/test_flow109_clock_plan.py",
+    "programs/tests/test_flow109_final_lec.py",
+    "programs/tests/test_flow109_mixed_native_window.py",
+    "programs/tests/test_flow109_selection.py",
+    "programs/tests/test_flow109_window_continuation.py",
+}
 
 
 def _sha(path: Path) -> str:
@@ -66,6 +85,59 @@ def _consumer_row() -> dict:
                 "clock_plan_check . --json reports/phase2/gates/clock_plan.json"]):
         raise ValueError("D34_CLOCK_CONSUMER_UNREGISTERED")
     return row
+
+
+def _step17_reuse_request(project: Path, component_attempt: Path,
+                          context: dict) -> Path:
+    """Seal an exact retained-placement request; never authorize by presence."""
+    runtime = json.loads((project / "reports/orchestrator/runtime_program_tree.json").read_text())
+    prior_root = Path(runtime["retained_plugin_root"])
+    current_root = HERE.parent
+    checked = {}
+    for prior in sorted(prior_root.rglob("*")):
+        if not prior.is_file() or prior.is_symlink():
+            continue
+        rel = str(prior.relative_to(prior_root))
+        if rel in _REUSE_SOURCE_EXCEPTIONS:
+            continue
+        current = current_root / rel
+        if current.is_symlink() or not current.is_file() or _sha(current) != _sha(prior):
+            raise ValueError("D35_RETAINED_SOURCE_CHANGED: " + rel)
+        checked[rel] = _sha(current)
+    if not checked:
+        raise ValueError("D35_RETAINED_SOURCE_CENSUS_EMPTY")
+
+    import step_output_collector as versions
+    retained = versions.latest_pass(project, "17")
+    backend = project / "reports/phase3/default_steps/17/backend_result.json"
+    placed = project / "phase3/stage3/pnr/placed.def"
+    handoff = project / "reports/phase3/librelane_placement_handoff.json"
+    if (not retained or retained.get("current_inputs") is not True
+            or retained.get("canonical_pass") is not True
+            or retained.get("status") != "PASS"):
+        raise ValueError("D35_RETAINED_CURRENT_PASS_ABSENT")
+    for path, reason in ((backend, "BACKEND"), (placed, "PLACED_DEF"),
+                         (handoff, "NATIVE_HANDOFF")):
+        if path.is_symlink() or not path.is_file():
+            raise ValueError("D35_RETAINED_" + reason + "_ABSENT")
+    request = component_attempt / "step17_reuse_request.json"
+    clock = json.loads((project / OUTPUT).read_text())
+    clock_pdk = (clock.get("current") or {}).get("pdk")
+    if not isinstance(clock_pdk, str) or not clock_pdk:
+        raise ValueError("D35_RETAINED_CLOCK_PDK_ABSENT")
+    write_json(request, {
+        "schema": "vibeic.flow109.step17-reuse-request.v1",
+        "context_sha256": context.get("context_sha256"),
+        "source_census_count": len(checked),
+        "source_census_sha256": hashlib.sha256(
+            json.dumps(checked, sort_keys=True, separators=(",", ":")).encode()).hexdigest(),
+        "retained_step_folder": retained.get("folder"),
+        "backend_result_sha256": _sha(backend),
+        "placed_def_sha256": _sha(placed),
+        "native_handoff_sha256": _sha(handoff),
+        "pdk": clock_pdk,
+    })
+    return request
 
 
 def execute(project, context):
@@ -145,6 +217,20 @@ def execute(project, context):
                                           "D34_CURRENT_CLOCK_PLAN_REUSED"))
                 else:
                     record["reason"] = "D34_CLOCK_PLAN_NOT_MEASURED"
+                parent_path = os.environ.get("VIBEIC_FLOW109_CONTEXT")
+                try:
+                    parent = json.loads(Path(parent_path).read_text()) if parent_path else {}
+                except (OSError, ValueError, TypeError):
+                    parent = {}
+                if (record["component_status"] == "PASS"
+                        and parent.get("schema") == "vibeic.flow109.execution-window.v1"
+                        and parent.get("requested_entry") == "D34"
+                        and parent.get("requested_exit") == "D35"
+                        and parent.get("dispatch_kind") == "selected_native_sequence"):
+                    request = _step17_reuse_request(project, component_attempt, context)
+                    record["step17_reuse_request"] = {
+                        "path": str(request.relative_to(project)), "sha256": _sha(request)}
+                    os.environ[STEP17_REUSE_ENV] = str(request.resolve())
                 receipt = {
                     "step_id": NATIVE_STEP,
                     "verdict": record["component_status"],

@@ -125,6 +125,27 @@ _SEARCH_ATTRS = {"search", "findall", "finditer", "match", "fullmatch"}
 #: The count is printed on every run, clean or not.
 _EXEMPT_REASON_MIN = 80
 _NOT_PROSE: Dict[str, str] = {
+    "analog_a8_hardmacro_emit::_delivered_measurement_deck":
+        "FORMAL SPICE CIRCUIT CARDS, NOT PROSE. Skips blank/comment/control "
+        "cards and requires one named DUT instance with its exact ordered "
+        "ports. Supply selection reads a voltage-source card on those rails; "
+        "PWL is a full-match production and its explicit DC or terminal pair "
+        "is preserved. No natural-language denial supplies a circuit card. "
+        "Falsifier: test_analog_a8_hardmacro_emit::"
+        "test_delivered_measurement_deck_ignores_prose_comments.",
+    "analog_bound_measurements::run_measurements":
+        "FORMAL NATIVE SPICE OUTPUT RECORDS, NOT REQUIREMENTS PROSE. Numeric "
+        "measurement rows and line-anchored MEAS records supply values; the "
+        "temperature condition requires a line-anchored native Doing analysis "
+        "at TEMP record. Denial/comment prefixes cannot supply these markers. "
+        "Falsifier: test_analog_bound_measurements::"
+        "test_native_measurement_records_are_formal_not_prose.",
+    "analog_native_front::_op_values":
+        "FORMAL NGSPICE OP TABLE, NOT PROSE. A full-line Node Voltage or "
+        "Source Current header opens a numeric two-column table; a full-line "
+        "finite numeric production supplies each value. A sentence about a "
+        "header or voltage is not that table. Falsifier: "
+        "test_analog_native_front::test_op_table_does_not_consume_prose.",
     "flow109_functional_activity::_derive_scenario_authority":
         "FORMAL SDC, LIBERTY, AND VERILOG CONNECTIVITY GRAMMARS, NOT PROSE. "
         "The reader accepts line-anchored create_clock, set_output_delay and "

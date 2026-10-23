@@ -550,6 +550,12 @@ def _fixed_inputs(runtime, step_id: str, *, parameters=None) -> dict:
     if row is None:
         raise Refusal('UNKNOWN_CANONICAL_STEP', step_id)
     declarations = list(row.get('required_inputs') or ())
+    from execution_provider_catalog import BACKEND_IDS
+    if str(step_id) in BACKEND_IDS:
+        from execution_adapters_backend import backend_canonical_input_contract
+        declarations = list(backend_canonical_input_contract(
+            root, str(step_id), declarations,
+            execution_mode=runtime.get('policy', {}).get('mode', 'ultra')))
     if step_id == '0.5ic' and runtime.get('policy', {}).get('mode', 'default') == 'default':
         import _submission_template as template_contract
         import submission_template_fetch as template_fetch
@@ -610,6 +616,19 @@ def _fixed_inputs(runtime, step_id: str, *, parameters=None) -> dict:
             declarations.append('input/docs')
             if (parameters or {}).get('template'):
                 declarations.append(parameters['template'])
+    if str(step_id) == '19':
+        import flow109
+        try:
+            selected = flow109.active_native_predecessor(root, '19')
+        except flow109.Flow109Error as exc:
+            raise Refusal(exc.code, exc.detail) from exc
+        if selected is not None:
+            old = {'from': 18, 'path': 'phase3/stage3/pnr/post_spare.def'}
+            matches = [index for index, item in enumerate(declarations) if item == old]
+            if len(matches) != 1:
+                raise Refusal('FLOW109_NATIVE_PREDECESSOR_DECLARATION_INVALID', str(matches))
+            declarations[matches[0]] = {
+                'from': int(selected['native_step_id']), 'path': selected['output']}
     registry = runtime.get('registry')
     for arm in registry.adapters(step_id) if registry is not None else ():
         # String declarations are required by default.  A caller that intends
@@ -628,7 +647,6 @@ def _fixed_inputs(runtime, step_id: str, *, parameters=None) -> dict:
     # project.  Keep this dynamic set narrow; a static ``phase3/librelane``
     # directory declaration would snapshot stale outputs from unrelated rows
     # and could make the worker appear to consume its own prior result.
-    from execution_provider_catalog import BACKEND_IDS
     if str(step_id) in BACKEND_IDS:
         from execution_adapters_backend import backend_project_input_contract
         for item in backend_project_input_contract(

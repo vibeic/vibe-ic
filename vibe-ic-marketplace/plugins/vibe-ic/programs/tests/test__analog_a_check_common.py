@@ -18,6 +18,8 @@ from __future__ import annotations
 import hashlib
 import importlib
 import json
+import shlex
+from pathlib import Path
 
 import pytest
 
@@ -295,7 +297,19 @@ def _emit_test_views(project, b, monkeypatch):
     lef += "END blk\n"
     def fake_magic(container, cmd, timeout=900, *, marker=None, log_path=None):
         assert "magic" in cmd
-        path = project / "phase3/analog/hardmacro/blk/blk.lef"
+        # Follow the producer's current output contract instead of writing to
+        # the historical final path.  The producer deliberately asks Magic to
+        # write a unique staging file and publishes it only after a successful,
+        # non-empty native result.
+        tcl = project / "phase3/analog/hardmacro/blk/blk_lef.tcl"
+        write = next(
+            (shlex.split(line) for line in tcl.read_text().splitlines()
+             if line.startswith("lef write ")),
+            None,
+        )
+        assert write is not None and write[:2] == ["lef", "write"], \
+            tcl.read_text()
+        path = Path(write[2])
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(lef)
         return 0, "A8_LEF_OK", ""
