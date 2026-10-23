@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1473
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1473)
+- **Total programs (excluding helpers / shims):** 1477
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1477)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1464 |
+| `any` | 1468 |
 
 ## Alphabetical listing
 
@@ -488,13 +488,17 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `flow109_analog_a05` | any | — | Flow 109 A05: expert-bound sizing/netlist plus native ngspice OP. |
 | `flow109_analog_model_check` | any | — | Consume current A02 ngspice model-smoke receipts without granting signoff. |
 | `flow109_density_fill` | any | — | Blocking D62 ODB density-fill component, not a density/tapeout signoff. |
+| `flow109_final_electrical` | any | — | D70 Default bounded component: final RCX SPEFs -> STAPostPNR and SDF. |
+| `flow109_final_extract` | any | — | D69 Default native component: final filled ODB -> OpenROAD.RCX -> SPEF consumer. |
 | `flow109_final_geometry` | any | — | D64 new-geometry component, never adoption of historical stream/PV PASS. |
+| `flow109_final_gls` | any | — | D71 final-SDF gate replay on the adopted D44 netlist. |
 | `flow109_final_lec` | any | — | Blocking D44 component: native LibreLane EQY on the adopted final netlist. |
 | `flow109_final_lec_physical` | any | — | Blocking, source-bound physical-chip proof-view preparation for D44. |
 | `flow109_frontend` | any | — | D22 uses the existing Default synthesis owner and its complete consumer. |
 | `flow109_functional_activity` | any | — | D55 component: adopted-netlist GLS activity and a real vector-power consumer. |
 | `flow109_metric_acceptance` | any | — | Typed runtime metric acceptance for the 109-flow registry. |
 | `flow109_mixed_m01` | any | — | Flow109 M01 adapter over the inherited source extractors and interface gate. |
+| `flow109_netlist_cdc` | any | — | D45 adopted-netlist CDC/RDC adapter over the existing native consumers. |
 | `flow_compliance_check` | any | Wave 91 | Strict Vibe-IC phase 2+3 gate (40 main-track steps + A1-A9 analog + M1-M4 mixed-signal + P0 structural-RTL umbrella in v1.6.15). |
 | `flow_condition_reachability_check` | any | — | the self-disabling-condition guard. |
 | `flow_dashboard` | any | — | unified entry for the Vibe-IC flow execution dashboard. |
@@ -1545,7 +1549,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1464 programs)
+### `any` (1468 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `absence_verdict_names_its_search_space_check` — "not found" must say WHERE it looked.
@@ -2005,13 +2009,17 @@ _(no programs in this group)_
 - `flow109_analog_a05` — Flow 109 A05: expert-bound sizing/netlist plus native ngspice OP.
 - `flow109_analog_model_check` — Consume current A02 ngspice model-smoke receipts without granting signoff.
 - `flow109_density_fill` — Blocking D62 ODB density-fill component, not a density/tapeout signoff.
+- `flow109_final_electrical` — D70 Default bounded component: final RCX SPEFs -> STAPostPNR and SDF.
+- `flow109_final_extract` — D69 Default native component: final filled ODB -> OpenROAD.RCX -> SPEF consumer.
 - `flow109_final_geometry` — D64 new-geometry component, never adoption of historical stream/PV PASS.
+- `flow109_final_gls` — D71 final-SDF gate replay on the adopted D44 netlist.
 - `flow109_final_lec` — Blocking D44 component: native LibreLane EQY on the adopted final netlist.
 - `flow109_final_lec_physical` — Blocking, source-bound physical-chip proof-view preparation for D44.
 - `flow109_frontend` — D22 uses the existing Default synthesis owner and its complete consumer.
 - `flow109_functional_activity` — D55 component: adopted-netlist GLS activity and a real vector-power consumer.
 - `flow109_metric_acceptance` — Typed runtime metric acceptance for the 109-flow registry.
 - `flow109_mixed_m01` — Flow109 M01 adapter over the inherited source extractors and interface gate.
+- `flow109_netlist_cdc` — D45 adopted-netlist CDC/RDC adapter over the existing native consumers.
 - `flow_compliance_check` — Strict Vibe-IC phase 2+3 gate (40 main-track steps + A1-A9 analog + M1-M4 mixed-signal + P0 structural-RTL umbrella in v1.6.15).  _[Wave 91]_
 - `flow_condition_reachability_check` — the self-disabling-condition guard.
 - `flow_dashboard` — unified entry for the Vibe-IC flow execution dashboard.
