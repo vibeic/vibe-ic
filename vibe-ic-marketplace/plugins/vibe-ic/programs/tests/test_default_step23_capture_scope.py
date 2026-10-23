@@ -77,7 +77,15 @@ def test_default_current_consumer_does_not_borrow_final_drv_credit(tmp_path, mon
         status = 'PASS' if point is None else 'NOT_MEASURED'
         return compliance.StepResult(id=row['id'], name=row['name'], stage=row['stage'], status=status)
 
-    monkeypatch.setattr(compliance, 'check_step', controlled_in_flow_instrument)
+    def controlled_evaluate(project, row):
+        verdict = controlled_in_flow_instrument(project, row, {})
+        return {'step': None, 'ledger': [], 'status': verdict.status,
+                'required_commands': gates.required_commands(row)}
+
+    # Bind the symbol the worker actually imported. A full-suite process may
+    # also hold a package-qualified flow_compliance_check module, so patching
+    # that module by name is not a stable owner for this controlled instrument.
+    monkeypatch.setattr(worker, 'evaluate', controlled_evaluate)
     monkeypatch.setattr(worker, '_current_step_producer_authority',
                         lambda *a, **k: (True, '', 'PASS'))
     monkeypatch.setattr(worker, 'resolve_contract', lambda *a: ({}, []))
@@ -85,7 +93,7 @@ def test_default_current_consumer_does_not_borrow_final_drv_credit(tmp_path, mon
     assert result['verdict'] == 'PASS', result
     assert observed == [None]
     assert worker.ROWS['23']['canonical_row'] == canonical
-    final = gates.evaluate(tmp_path, final_row)
+    final = controlled_evaluate(tmp_path, final_row)
     assert observed == [None, 'post_stream']
     assert final['status'] == 'NOT_MEASURED'
     assert worker.ROWS['31']['canonical_row'] == final_row

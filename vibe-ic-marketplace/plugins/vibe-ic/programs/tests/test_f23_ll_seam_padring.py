@@ -347,8 +347,17 @@ def _native_default_ring_project(tmp_path):
         output = folder / 'native.def'
         output.write_text(_def())
         before = json.loads(previous.read_text()) if previous is not None else {'metrics': {}}
+        after = {'def': str(output), 'metrics': {}}
+        if step == 'OpenROAD.DetailedRouting':
+            # Match the real producer contract: the canonical DRC report is
+            # named from the routed ODB subject and is bound into the native
+            # receipt. An empty report is the valid zero-violation result.
+            odb = folder / 'native.odb'
+            odb.write_text('SOURCE_FIXTURE: routed ODB subject\n')
+            (folder / 'native.drc').write_text('')
+            after['odb'] = str(odb)
         folder, _ = fixtures.producer(project, step, before,
-            {'def': str(output), 'metrics': {}}, lane=lane)
+            after, lane=lane)
         if previous is not None:
             fp = json.loads((folder / 'input_fingerprint.json').read_text())
             fp['state'] = contract.digest(previous)
