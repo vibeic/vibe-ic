@@ -26,6 +26,7 @@ import librelane_eqy as eqy
 SCHEMA = 'vibeic.flow109.final-lec.v1'
 INPUT = 'input/flow109/D44.json'
 BASELINE = 'adopted/final_lec/sta_lvs_release_netlist_mapping.json'
+METRICS_SCHEMA = 'vibeic.flow109.D44.metric-bindings.v1'
 
 
 def _sha(path):
@@ -240,6 +241,137 @@ def consume_eqy(folder, output):
     return value
 
 
+def _metric_contract(context):
+    """Return the two source-owned D44 obligations or refuse substitution."""
+    row = context.get('resolved_row')
+    obligations = row.get('obligations') if isinstance(row, dict) else None
+    if not isinstance(row, dict) or row.get('id') != 'D44' or not isinstance(obligations, list):
+        raise AdmissionRefusal('D44_METRIC_CONTRACT_UNBOUND', 'resolved D44 obligations required')
+    by_name = {item.get('metric'): item for item in obligations if isinstance(item, dict)}
+    if set(by_name) != {'final_lec_unproved', 'sta_lvs_release_netlist_mapping'}:
+        raise AdmissionRefusal('D44_METRIC_CONTRACT_UNBOUND', 'exact D44 metric set required')
+    unproved = by_name['final_lec_unproved'].get('expectation')
+    mapping = by_name['sta_lvs_release_netlist_mapping'].get('expectation')
+    if unproved != {'operator': 'eq', 'value': 0, 'unit': 'count',
+                    'source': 'contract invariant: no unresolved required violations'}:
+        raise AdmissionRefusal('D44_METRIC_REQUIREMENT_CHANGED', 'final_lec_unproved')
+    if mapping != {'operator': 'matches_adopted_reference', 'reference_ref': BASELINE}:
+        raise AdmissionRefusal('D44_METRIC_REQUIREMENT_CHANGED',
+                               'sta_lvs_release_netlist_mapping')
+    return by_name
+
+
+def _proof_binding(proof):
+    """Measure unresolved declared partitions; never infer coverage from PASS."""
+    if not isinstance(proof, dict):
+        return {'status': 'NOT_MEASURED', 'reason': 'D44_PROOF_ABSENT'}
+    declared, parts = proof.get('declared_partitions'), proof.get('partitions')
+    if (not isinstance(declared, list) or not declared
+            or len(declared) != len(set(declared)) or not isinstance(parts, dict)
+            or set(declared) != set(parts)):
+        return {'status': 'NOT_MEASURED', 'reason': 'D44_PARTITION_COVERAGE_INCOMPLETE'}
+    statuses = {name: set(strategies.values()) if isinstance(strategies, dict) else set()
+                for name, strategies in parts.items()}
+    native_proven = {name for name, words in statuses.items() if 'PASS' in words}
+    failed = {name for name, words in statuses.items() if 'PASS' not in words and 'FAIL' in words}
+    unknown = set(declared) - native_proven - failed
+    # A gold-X comparison is not a proof even when the native strategy says PASS.
+    xbits = proof.get('xbits_partitions')
+    if not isinstance(xbits, list) or not set(xbits) <= set(declared):
+        return {'status': 'NOT_MEASURED', 'reason': 'D44_PARTITION_CENSUS_INVALID'}
+    unresolved = sorted(failed | unknown | set(xbits))
+    if (proof.get('compared_points') != len(parts)
+            or proof.get('proven_points') != len(native_proven)
+            or set(proof.get('non_equivalent_points') or []) != failed
+            or set(proof.get('unproven_points') or []) != unknown):
+        return {'status': 'NOT_MEASURED', 'reason': 'D44_PARTITION_CENSUS_INVALID'}
+    value = len(unresolved)
+    status = 'PASS' if value == 0 and proof.get('verdict') == 'PASS' else 'FAIL'
+    return {'status': status, 'value': value, 'unit': 'count',
+            'declared_partition_count': len(declared), 'unproved_partitions': unresolved}
+
+
+def _mapping_binding(project, context, component, proof_metric):
+    """Rebind the published common baseline to this exact D44 attempt."""
+    if component.get('component_status') != 'PASS' or proof_metric.get('status') != 'PASS':
+        return {'status': 'NOT_MEASURED', 'reason': 'D44_EQUIVALENCE_PREREQUISITE_UNMET'}
+    path = project / BASELINE
+    try:
+        baseline = _read(path)
+        prepared = prepare(project, context)
+        proof_record = baseline.get('proof')
+        if proof_record != component.get('proof_receipt'):
+            raise AdmissionRefusal('D44_PROOF_RECEIPT_DIFFERS', str(proof_record), status='FAIL')
+        proof_path = _bound(project, proof_record)
+    except AdmissionRefusal as exc:
+        return {'status': 'NOT_MEASURED' if not path.is_file() else 'FAIL',
+                'reason': exc.code, 'detail': str(exc)}
+    expected = {
+        'schema': SCHEMA,
+        'producer': 'flow109_final_lec',
+        'context_sha256': context.get('context_sha256'),
+        'source_sha256': prepared['sources'],
+        'rtl': [_record(project, item) for item in prepared['paths']['rtl']],
+        'adopted_netlist': _record(project, prepared['paths']['adopted_netlist']),
+        'consumer_netlists': {role: _record(project, prepared['paths'][role])
+                              for role in ('sta', 'lvs_reference', 'release')},
+        'transformations': [],
+        'mapping': 'same_logical_bytes',
+        'consumer_adoption': 'NOT_MEASURED',
+        'proof': proof_record,
+    }
+    if baseline != expected:
+        return {'status': 'FAIL', 'reason': 'D44_BASELINE_SUBJECT_MISMATCH'}
+    if component.get('source_sha256') != prepared['sources']:
+        return {'status': 'FAIL', 'reason': 'D44_OPERATION_SOURCE_CHANGED'}
+    if prepared['manifest'].get('transformations') != []:
+        return {'status': 'FAIL', 'reason': 'D44_TRANSFORMATION_NOT_QUALIFIED'}
+    roles = baseline.get('consumer_netlists')
+    records = [baseline.get('adopted_netlist')]
+    if not isinstance(roles, dict) or set(roles) != {'sta', 'lvs_reference', 'release'}:
+        return {'status': 'FAIL', 'reason': 'D44_CONSUMER_BASELINE_ABSENT'}
+    records.extend(roles.values())
+    try:
+        paths = [_bound(project, item) for item in records]
+    except AdmissionRefusal as exc:
+        return {'status': 'FAIL', 'reason': exc.code, 'detail': str(exc)}
+    if len({_sha(item) for item in paths}) != 1:
+        return {'status': 'FAIL', 'reason': 'D44_CONSUMER_BASELINE_DIFFERS'}
+    try:
+        retained = _read(proof_path)
+    except AdmissionRefusal as exc:
+        return {'status': 'FAIL', 'reason': exc.code, 'detail': str(exc)}
+    if retained != component.get('proof'):
+        return {'status': 'FAIL', 'reason': 'D44_PROOF_RECEIPT_DIFFERS'}
+    common = component.get('common_baseline')
+    if not isinstance(common, dict) or common != _record(project, path):
+        return {'status': 'FAIL', 'reason': 'D44_BASELINE_RECEIPT_DIFFERS'}
+    return {'status': 'PASS', 'value': 'matches_adopted_reference',
+            'reference': _record(project, path),
+            'consumer_roles': ['lvs_reference', 'release', 'sta'],
+            'consumer_adoption': 'NOT_MEASURED'}
+
+
+def bind_metrics(project, context, component):
+    """Bind D44's two metrics without promoting them to whole-flow acceptance."""
+    project = Path(project).resolve()
+    try:
+        contract = _metric_contract(context)
+    except AdmissionRefusal as exc:
+        return {'schema': METRICS_SCHEMA, 'step_id': 'D44', 'status': exc.status,
+                'reason': exc.code, 'detail': str(exc), 'metrics': {}}
+    proof = _proof_binding(component.get('proof'))
+    mapping = _mapping_binding(project, context, component, proof)
+    metrics = {'final_lec_unproved': {**proof, 'obligation': contract['final_lec_unproved']},
+               'sta_lvs_release_netlist_mapping': {
+                   **mapping, 'obligation': contract['sta_lvs_release_netlist_mapping']}}
+    statuses = {item['status'] for item in metrics.values()}
+    status = 'FAIL' if 'FAIL' in statuses else ('PASS' if statuses == {'PASS'} else 'NOT_MEASURED')
+    return {'schema': METRICS_SCHEMA, 'step_id': 'D44', 'status': status,
+            'context_sha256': context.get('context_sha256'), 'metrics': metrics,
+            'scope': 'D44 metric bindings only; not STA/LVS execution or whole-flow acceptance'}
+
+
 def execute(project, context):
     project = Path(project).resolve()
     attempt = project / 'reports/flow109/D44' / uuid.uuid4().hex
@@ -259,6 +391,7 @@ def execute(project, context):
         record.update(native_error=native_error, preprocessing_models=models)
         proof = consume_eqy(attempt / 'native', attempt / 'eqy-result.json')
         record['proof'] = proof
+        record['proof_receipt'] = _record(project, attempt / 'eqy-result.json')
         _before(project, context, prepared)
         record['component_status'] = {'PASS': 'PASS', 'FAIL': 'FAIL'}.get(proof['verdict'], 'NOT_MEASURED')
         record['reason'] = proof.get('explanation')
@@ -273,13 +406,14 @@ def execute(project, context):
                 'adopted_netlist': _record(project, paths['adopted_netlist']),
                 'consumer_netlists': {r: _record(project, paths[r]) for r in ('sta', 'lvs_reference', 'release')},
                 'transformations': [], 'mapping': 'same_logical_bytes',
-                'consumer_adoption': 'NOT_MEASURED', 'proof': _record(project, attempt / 'eqy-result.json')}
+                'consumer_adoption': 'NOT_MEASURED', 'proof': record['proof_receipt']}
             write_json(project / BASELINE, baseline)
             record['common_baseline'] = _record(project, project / BASELINE)
     except AdmissionRefusal as exc:
         record.update(component_status=exc.status, reason=exc.code, detail=str(exc))
     except (ImportError, OSError, ValueError) as exc:
         record.update(component_status='NOT_MEASURED', reason='D44_NATIVE_UNAVAILABLE_OR_UNSUPPORTED', detail=str(exc))
+    record['metric_bindings'] = bind_metrics(project, context, record)
     record['receipt'] = {'path': str((attempt / 'component.json').relative_to(project))}
     write_json(attempt / 'component.json', record)
     return record

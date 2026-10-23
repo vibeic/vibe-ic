@@ -111,6 +111,12 @@ def test_actual_general_entry_proves_final_mapped_netlist_and_publishes_common_s
     assert record['proof']['verdict'] == 'PASS'
     assert record['proof']['compared_points'] > 0
     assert set(record['proof']['declared_partitions']) == set(record['proof']['partitions'])
+    metrics = record['metric_bindings']
+    assert metrics['status'] == 'PASS'
+    assert metrics['metrics']['final_lec_unproved']['value'] == 0
+    mapping = metrics['metrics']['sta_lvs_release_netlist_mapping']
+    assert mapping['status'] == 'PASS'
+    assert mapping['consumer_adoption'] == 'NOT_MEASURED'
     baseline = json.loads((tmp_path / lec.BASELINE).read_text())
     assert baseline['consumer_adoption'] == 'NOT_MEASURED'
     assert all(r['sha256'] == baseline['adopted_netlist']['sha256']
@@ -127,8 +133,12 @@ def test_native_logic_change_or_functionless_cell_never_passes(tmp_path, damage,
     assert not (tmp_path / lec.BASELINE).exists()
     if damage == 'logic':
         assert record['proof']['non_equivalent_points']
+        assert record['metric_bindings']['metrics']['final_lec_unproved']['status'] == 'FAIL'
+        assert record['metric_bindings']['metrics']['final_lec_unproved']['value'] > 0
+        assert record['metric_bindings']['metrics']['sta_lvs_release_netlist_mapping']['status'] == 'NOT_MEASURED'
     else:
         assert record['reason'] == 'D44_FUNCTIONAL_MODEL_UNSUPPORTED'
+        assert record['metric_bindings']['status'] == 'NOT_MEASURED'
 
 
 @pytest.mark.parametrize('damage', ['consumer', 'transformation', 'source', 'unsupported'])
@@ -171,6 +181,38 @@ def test_checked_in_native_eqy_sample_cannot_lose_a_required_partition(tmp_path)
     incomplete = lec.consume_eqy(tmp_path / 'native', output)
     assert incomplete['verdict'] == 'NOT_MEASURED'
     assert incomplete['explanation'] == 'D44_PARTITION_COVERAGE_INCOMPLETE'
+    binding = lec._proof_binding(incomplete)
+    assert binding == {'status': 'NOT_MEASURED', 'reason': 'D44_PARTITION_COVERAGE_INCOMPLETE'}
+    forged = copy.deepcopy(complete)
+    forged['partitions'].pop(partition)
+    forged.update(verdict='PASS', compared_points=len(forged['partitions']),
+                  proven_points=len(forged['partitions']), non_equivalent_points=[],
+                  unproven_points=[], xbits_partitions=[])
+    assert lec._proof_binding(forged) == {
+        'status': 'NOT_MEASURED', 'reason': 'D44_PARTITION_COVERAGE_INCOMPLETE'}
+
+
+@pytest.mark.parametrize('damage', ['swapped_baseline', 'stale_proof', 'stale_netlist'])
+def test_metric_binding_refuses_swapped_or_stale_common_source_chain(tmp_path, damage):
+    context = _case(tmp_path)
+    record = lec.execute(tmp_path, context)
+    assert record['metric_bindings']['status'] == 'PASS'
+    baseline_path = tmp_path / lec.BASELINE
+    baseline = json.loads(baseline_path.read_text())
+    if damage == 'swapped_baseline':
+        other = _put(tmp_path, 'inputs/swapped.v', 'module proof_alpha(input a,b,c, output y,z); assign y=a; assign z=b; endmodule')
+        baseline['adopted_netlist'] = other
+        baseline_path.write_text(json.dumps(baseline))
+    elif damage == 'stale_proof':
+        proof = tmp_path / baseline['proof']['path']
+        proof.write_text(proof.read_text() + '\n')
+    else:
+        netlist = tmp_path / baseline['adopted_netlist']['path']
+        netlist.write_text(netlist.read_text() + '\n')
+    rebound = lec.bind_metrics(tmp_path, context, record)
+    assert rebound['status'] == 'FAIL'
+    assert rebound['metrics']['final_lec_unproved']['status'] == 'PASS'
+    assert rebound['metrics']['sta_lvs_release_netlist_mapping']['status'] == 'FAIL'
 
 
 def test_actual_model_launch_rechecks_qualification_after_preparation(tmp_path, monkeypatch):

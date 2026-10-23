@@ -132,8 +132,19 @@ A proven component publishes
 `adopted/final_lec/sta_lvs_release_netlist_mapping.json` with the common logical
 netlist source and proof identity. This prepares the downstream source chain;
 it does not claim that STA, LVS, or release consumers have run/adopted it.
-`flow109_acceptance` and `baseline_adoption` remain `NOT_MEASURED` until their
-individual metric/consumer bindings are implemented.
+The D44 component also evaluates its two row-local runtime bindings. The
+`final_lec_unproved` count is derived from the complete declared EQY partition
+census (including counterexamples, undecided partitions, and gold-X partitions),
+not from the component verdict. The `sta_lvs_release_netlist_mapping` binding
+revalidates the current manifest, qualification/source closure, proof receipt,
+and exact common netlist bytes for all three named roles. Missing or stale
+evidence cannot pass. Its `consumer_adoption: NOT_MEASURED` explicitly means the
+mapping is proven here but downstream STA/LVS execution is not.
+
+These bindings do not convert a component result into row or whole-flow
+acceptance. `flow109_acceptance` and `baseline_adoption` remain `NOT_MEASURED`;
+the shared runtime-metric controller must consume the row-local binding record
+and G1-G9 remain separately unmeasured.
 
 ## D62 ODB metal-density fill component
 
