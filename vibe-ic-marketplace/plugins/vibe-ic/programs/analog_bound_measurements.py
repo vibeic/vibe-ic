@@ -73,6 +73,11 @@ def emit_deck(template: str, bindings: dict, capture_path: Path | None = None) -
     analysis = bindings.get("analysis")
     if not isinstance(analysis, dict):
         raise ValueError("explicit analysis required")
+    temperature = analysis.get("temperature_c")
+    if temperature is not None and (isinstance(temperature, bool) or
+            not isinstance(temperature, (int, float)) or not math.isfinite(temperature) or
+            temperature <= -273.15):
+        raise ValueError("analysis temperature_c must be finite and above absolute zero")
     kind = str(analysis.get("kind", "")).upper()
     if kind == "OP":
         command = "op"
@@ -140,7 +145,18 @@ def emit_deck(template: str, bindings: dict, capture_path: Path | None = None) -
                           ("v(" + node + ")" for node in nodes.split(",")))
     if probes:
         body += "\n.save " + " ".join(sorted(probes)) + "\n"
-    return body.rstrip() + "\n.control\n" + "\n".join(commands) + "\n.endc\n.end\n"
+    if temperature is not None:
+        body = re.sub(r"(?im)^\s*\.temp\b[^\n]*", "", body)
+    # SPICE always treats line 1 as a title. Preserve an ordinary title, but
+    # protect templates beginning with .include/.temp from losing that card.
+    first, separator, remaining = body.partition("\n")
+    if first.strip() and not first.lstrip().startswith(("*", ".", "+")):
+        title, body = first, remaining
+    else:
+        title = "* Explicit native measurement"
+    if temperature is not None:
+        title += f"\n.temp {temperature:.17g}"
+    return title + "\n" + body.rstrip() + "\n.control\n" + "\n".join(commands) + "\n.endc\n.end\n"
 
 
 def run_measurements(project: Path, netlist: Path, template: Path, bindings: dict,
@@ -187,6 +203,18 @@ def run_measurements(project: Path, netlist: Path, template: Path, bindings: dic
         r"(?im)\bfatal(?: error)?\b|\bsimulation(?:\(s\)|s)?\s+aborted\b|\btimestep too small\b", text)
     status = ("NOT_MEASURED" if interrupted else "FAIL" if execution.get("returncode") != 0 or failed
               else "NOT_MEASURED" if missing else "PASS")
+    temperatures = [float(value) for value in re.findall(
+        r"(?i)Doing analysis at TEMP\s*=\s*([-+\d.eE]+)", text)]
+    expected_temperature = (bindings.get("analysis") or {}).get("temperature_c")
+    if expected_temperature is not None:
+        matched = bool(temperatures) and all(math.isclose(value, expected_temperature,
+            rel_tol=0, abs_tol=1e-6) for value in temperatures)
+        report["temperature"] = {"requested_c": expected_temperature,
+                                  "native_c": temperatures, "matched": matched}
+        if not matched:
+            status = "FAIL" if status == "FAIL" else "NOT_MEASURED"
+            values = {}
+            missing.append("matching native temperature condition")
     if bindings.get("capture") and not capture_path.is_file() and status == "PASS":
         status = "NOT_MEASURED"
         missing.append("native curve capture")

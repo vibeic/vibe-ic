@@ -74,6 +74,44 @@ def test_invalid_execution_settings_refuse_before_native_launch(execution):
             "vout": {"analysis": "OP", "expression": "v(out)"}}, "execution": execution})
 
 
+@pytest.mark.parametrize("native_temperature,expected", [("-40", "PASS"), ("27", "NOT_MEASURED"),
+                                                         (None, "NOT_MEASURED")])
+def test_temperature_point_is_a_native_condition_not_a_case_label(tmp_path, native_temperature, expected):
+    net = tmp_path / "unit.sp"
+    net.write_text(".subckt unit a b\nr1 a b 1k\n.ends unit\n")
+    template = tmp_path / "tb.sp"
+    template.write_text(f'.temp 27\n.include "{net}"\nxdut in out unit\nv1 in 0 1\n.end\n')
+    bindings = {"analysis": {"kind": "OP", "temperature_c": -40}, "measurements": {
+        "vout": {"analysis": "OP", "expression": "v(out)"}}}
+    def run(program, argv, **kwargs):
+        deck = Path(argv[-1]).read_text()
+        assert deck.startswith("* Explicit native measurement\n.temp -40\n")
+        assert ".temp 27" not in deck
+        assert f'.include "{net}"' in deck
+        temperature = (f"Doing analysis at TEMP = {native_temperature} and TNOM = 27\n"
+                       if native_temperature is not None else "")
+        return {"returncode": 0, "stdout": temperature + "MEAS vout=0.975\n"}
+    result = measurements.run_measurements(tmp_path, net, template, bindings, tmp_path / "result", run)
+    assert result["status"] == expected
+    assert result["temperature"]["matched"] is (expected == "PASS")
+    assert bool(result["measurements"]) is (expected == "PASS")
+
+
+def test_first_include_card_is_never_lost_as_the_native_title():
+    bindings = {"analysis": {"kind": "OP"}, "measurements": {
+        "vout": {"analysis": "OP", "expression": "v(out)"}}}
+    deck = measurements.emit_deck('.include "unit.sp"\n.end\n', bindings)
+    assert deck.splitlines()[:2] == ["* Explicit native measurement", '.include "unit.sp"']
+
+
+@pytest.mark.parametrize("temperature", [-273.15, True, float("nan"), "-40"])
+def test_invalid_temperature_refuses_before_native_launch(temperature):
+    with pytest.raises(ValueError):
+        measurements.emit_deck(".end\n", {
+            "analysis": {"kind": "OP", "temperature_c": temperature},
+            "measurements": {"vout": {"analysis": "OP", "expression": "v(out)"}}})
+
+
 def test_native_capture_uses_wrdata_filename_token_and_retains_bound_vectors(tmp_path):
     binding = {"analysis": {"kind": "OP"}, "measurements": {
         "vout": {"analysis": "OP", "expression": "v(out)"}}, "capture": {"output": "v(out)"}}
