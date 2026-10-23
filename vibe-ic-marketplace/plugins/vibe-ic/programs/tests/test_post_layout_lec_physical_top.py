@@ -52,6 +52,11 @@ def test_physical_top_gold_is_exact_core_plus_recorded_wrapper(tmp_path):
     assert provenance["combined_gold_sha256"] == _sha(combined)
 
 
+def test_port_parser_retains_dollar_identifier_and_exact_module_match():
+    text = 'module core$extra(input wrong); endmodule\nmodule core$(input right); endmodule'
+    assert R._module_port_names(text, 'core$') == ['right']
+
+
 def test_parameterized_reference_uses_exact_rtl_and_wrapper(tmp_path):
     gold, wrapper, _report = _fixture(tmp_path)
     gold.write_text('module core #(parameter W = (2 + (1)), parameter S = ")") '

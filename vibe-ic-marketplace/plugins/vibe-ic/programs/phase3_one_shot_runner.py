@@ -70793,7 +70793,7 @@ _SUPPLY_PREFIXES = ("VDD", "VSS", "VPWR", "VGND", "VCC", "VEE",
 def _module_port_names(v_text: str, top: str) -> List[str]:
     """Top ports, including a parameterized RTL reference's balanced header."""
     text = _strip_v_comments(v_text)
-    m = re.search(r"\bmodule\s+" + re.escape(top) + r"\b\s*", text)
+    m = re.search(r"\bmodule\s+" + re.escape(top) + r"(?![A-Za-z0-9_$])\s*", text)
     if not m:
         return []
     offset = m.end()
