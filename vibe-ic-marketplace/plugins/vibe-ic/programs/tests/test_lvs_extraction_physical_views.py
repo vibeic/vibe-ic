@@ -120,6 +120,21 @@ def test_a_step31_window_reads_the_views_pnr_used(tmp_path, monkeypatch):
     assert _IO_GDS in view["macro_gds"]
 
 
+def test_local_checkpoint_restores_installed_pad_gds(tmp_path, monkeypatch):
+    project, pdk = _recorded_run(tmp_path)
+    calls = []
+
+    def discover(view, container):
+        calls.append(container)
+        return [_IO_LEF], [_IO_GDS]
+
+    monkeypatch.setattr(mod, "_discover_padring_io_views", discover)
+    result = mod._restore_recorded_physical_views(project, pdk, "")
+    assert calls == [""]
+    assert _IO_GDS in pdk.macro_gds
+    assert result["macro_gds"] == [_IO_GDS]
+
+
 def test_a_tech_lef_record_that_does_not_verify_refuses_the_window(tmp_path, monkeypatch):
     """PnR routed with a tech LEF this tree cannot prove it still holds: the
     window measures with neither LEF, and the unverified file never enters

@@ -37364,7 +37364,7 @@ def _restore_recorded_physical_views(project: Path, pdk: PdkConfig,
         if path not in pdk.macro_lefs:
             pdk.macro_lefs.append(path)
             done["macro_lefs"].append(path)
-    if _padring_chip_top_record(project) is not None and container:
+    if _padring_chip_top_record(project) is not None:
         try:
             _lefs, io_gds = _discover_padring_io_views(pdk, container)
         except (RuntimeError, ValueError, OSError) as exc:
