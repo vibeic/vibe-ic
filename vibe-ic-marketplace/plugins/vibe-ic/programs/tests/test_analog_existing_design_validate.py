@@ -58,6 +58,29 @@ def test_current_read_validation_discloses_actual_design_without_rewriting_emiss
     assert all((bdir / name).read_bytes() == data for name, data in before.items())
 
 
+def test_a17_reads_the_current_validation_without_manufacturing_emission_history(design):
+    import analog_a8_hardmacro_emit as hardmacro
+    project, bdir, _ = design
+    topology = json.loads((bdir / "topology.json").read_text())
+    spec = json.loads((bdir / "spec.json").read_text())
+    spec.update(block="cell", interface={"pins": [{"name": port} for port in topology["ports"]]})
+    (bdir / "spec.json").write_text(json.dumps(spec))
+    (bdir.parent / "analog_block_list.json").write_text(json.dumps({"blocks": ["cell"]}))
+    row = record(design)
+    assert row["status"] == "PASS", row
+    binding, why = hardmacro._declared_a3_subject_binding(project, "cell", bdir, topology)
+    assert (binding or {}).get("a3_netlist_sha256") == row["inputs"]["netlist"]["sha256"]
+    assert binding["source"] == "existing_design_read_validation"
+    assert binding["existing_design_validation"] == str((bdir / existing.RECEIPT).relative_to(project))
+    assert binding["a3_netlist_sha256"] == row["inputs"]["netlist"]["sha256"]
+    assert "netlist_provenance" not in binding
+    assert not (bdir / "netlist_provenance.json").exists()
+    net = bdir / "cell.sp"
+    net.write_text(net.read_text().replace("w=2u", "w=3u"))
+    binding, why = hardmacro._declared_a3_subject_binding(project, "cell", bdir, topology)
+    assert binding is None
+
+
 @pytest.mark.parametrize("old,new", [
     ("w=2u", "w=3u"),
     ("out inp vss vss native_n", "inp out vss vss native_n"),

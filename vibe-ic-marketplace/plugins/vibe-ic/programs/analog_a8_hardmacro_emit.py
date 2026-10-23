@@ -847,6 +847,40 @@ def _bound_models(container: str, lines: List[str], directory: Path) -> List[Dic
     return records
 
 
+def _current_a13_extraction(project: Path, block: str, gds: Path) -> Optional[Dict]:
+    """Consume the current nominal A13 output when the native flow produced it."""
+    record = project / "phase3/librelane/analog" / block / "native_analog/A13.json"
+    if not record.exists():
+        return None
+    state = json.loads(record.read_text())
+    if not isinstance(state, dict):
+        raise ValueError("A13 extraction result must be an object")
+    metrics = state.get("metrics") or {}
+    if not isinstance(metrics, dict):
+        raise ValueError("A13 extraction metrics must be an object")
+    net = project / "phase3/analog" / block / f"{block}.sp"
+    if (state.get("status") != "PASS" or metrics.get("layout_sha256") != _sha256(gds)
+            or metrics.get("netlist_sha256") != _sha256(net)):
+        raise ValueError("A13 extraction does not describe the current layout/circuit")
+    nominal = [row for row in metrics.get("corners", [])
+               if isinstance(row, dict) and re.fullmatch(r"ngspice(?:\(\s*\))?", str(row.get("style", "")))]
+    if len(nominal) != 1:
+        raise ValueError("A13 must identify one nominal native extraction")
+    row = nominal[0]
+    extracted = Path(row["extracted_netlist"]).resolve()
+    log = Path(row["step_dir"]).resolve() / "magic-rcx.log"
+    if (row.get("depth") != "RC" or not extracted.is_relative_to(project.resolve()) or not extracted.is_file()
+            or row.get("sha256") != _sha256(extracted) or not log.is_file()):
+        raise ValueError("A13 nominal extraction or native log is absent/changed")
+    views = dict(state.get("native_inputs") or {})
+    for role, path in (("record", record), ("extracted", extracted), ("log", log)):
+        views[role] = {"path": str(path.resolve()), "sha256": _sha256(path)}
+    if any(not isinstance(view, dict) or not Path(str(view.get("path", ""))).is_file()
+           or view.get("sha256") != _sha256(Path(view["path"])) for view in views.values()):
+        raise ValueError("A13 consumed extraction inputs changed")
+    return views
+
+
 def _native_measurement_produce(project: Path, block: str, container: str,
                                 pdk_root: str, gds: Path,
                                 topology: Dict[str, object], *, ngspice_bin: Optional[str] = None
@@ -893,26 +927,31 @@ def _native_measurement_produce(project: Path, block: str, container: str,
     ng_log = bdir / "a8_native_ngspice.log"
     deck = bdir / "a8_native_measurement.sp"
     try:
-        if stage.exists():
-            shutil.rmtree(stage)
-        ok, stage_why = _stage_layout_subtree(layout, stage, block)
-        if not ok:
-            return None, stage_why
-        tcl = _mx.build_extraction_tcl(
-            block, f"{block}_extracted.spice",
-            _mx.MagicResimExtractOptions())
-        (stage / "a8_extract.tcl").write_text(tcl)
-        magic_cmd = (
-            f"cd {shlex.quote(str(stage))} && magic -dnull -noconsole "
-            f"-rcfile {shlex.quote(rcfile)} a8_extract.tcl")
-        magic_rc, magic_out, magic_err = _docker_exec(
-            container, magic_cmd, marker="a8_extract.tcl")
-        extract_log.write_text((magic_out or "") + (magic_err or ""))
-        stage_net = stage / f"{block}_extracted.spice"
-        if magic_rc != 0 or not stage_net.is_file() \
-                or stage_net.stat().st_size == 0:
-            return None, (f"Magic extraction rc={magic_rc} did not write "
-                          f"{stage_net.name}; see {extract_log.name}")
+        a13 = _current_a13_extraction(project, block, gds)
+        if a13 is not None:
+            stage_net = Path(a13["extracted"]["path"])
+            extract_log.write_bytes(Path(a13["log"]["path"]).read_bytes())
+        else:
+            if stage.exists():
+                shutil.rmtree(stage)
+            ok, stage_why = _stage_layout_subtree(layout, stage, block)
+            if not ok:
+                return None, stage_why
+            tcl = _mx.build_extraction_tcl(
+                block, f"{block}_extracted.spice",
+                _mx.MagicResimExtractOptions())
+            (stage / "a8_extract.tcl").write_text(tcl)
+            magic_cmd = (
+                f"cd {shlex.quote(str(stage))} && magic -dnull -noconsole "
+                f"-rcfile {shlex.quote(rcfile)} a8_extract.tcl")
+            magic_rc, magic_out, magic_err = _docker_exec(
+                container, magic_cmd, marker="a8_extract.tcl")
+            extract_log.write_text((magic_out or "") + (magic_err or ""))
+            stage_net = stage / f"{block}_extracted.spice"
+            if magic_rc != 0 or not stage_net.is_file() \
+                    or stage_net.stat().st_size == 0:
+                return None, (f"Magic extraction rc={magic_rc} did not write "
+                              f"{stage_net.name}; see {extract_log.name}")
         try:
             extracted.write_bytes(stage_net.read_bytes())
         except OSError as exc:
@@ -940,6 +979,8 @@ def _native_measurement_produce(project: Path, block: str, container: str,
         # Freeze the files actually consumed. Refuse any mutation during the
         # native call, rather than stamping its result with post-call inputs.
         consumed = [extracted, layout, gds, deck, bdir / f"{block}.sp", bdir / f"tb_{block}.sp"]
+        if a13 is not None:
+            consumed += [Path(view["path"]) for view in a13.values()]
         consumed += [Path(model["path"]) for model in models if Path(model["path"]).is_file()]
         if wrapper_path is not None:
             consumed.append(wrapper_path)
@@ -1019,6 +1060,8 @@ def _native_measurement_produce(project: Path, block: str, container: str,
             rec["measurement_deck_sha256"] = frozen[deck]
             rec["subject_binding"] = wrapper_contract["subject_binding"]
             rec[DESIGN_CONTENT_FIELD] = rec["subject_binding"][DESIGN_CONTENT_FIELD]
+        if a13 is not None:
+            rec["a13_extraction"] = a13
         write_json(bdir / _A8_MEASUREMENT, rec)
         return rec, ""
     except (OSError, ValueError, subprocess.SubprocessError) as exc:
@@ -1040,54 +1083,59 @@ def _declared_a3_subject_binding(project: Path, block: str, bdir: Path,
                                  ) -> Tuple[Optional[Dict[str, object]], str]:
     """Read, never infer, the existing A3 subject declaration.
 
-    A8 binds its native measurement only when the block is declared and A3's
-    producer sidecar names the same netlist, topology, and spec bytes.  The R3
-    open fixture lacks this sidecar and stays design-content undisclosed.
+    A8 uses the emitter's source declaration or the existing current typed-DUT
+    read validation. These remain distinct sources; neither invents emission
+    history. Without either source the design content remains undisclosed.
     """
     declared = load_block_list(project)
     if not declared or block not in declared:
         return None, ""
     sidecar = bdir / "netlist_provenance.json"
-    if not sidecar.is_file():
-        return None, "declared block has no A3 netlist_provenance.json"
-    try:
-        doc = json.loads(sidecar.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        return None, f"A3 netlist_provenance.json is unreadable: {exc}"
-    if not isinstance(doc, dict) or doc.get("block") != block:
-        return None, "A3 netlist provenance names a different block"
-    prov = doc.get("_provenance")
-    if not isinstance(prov, dict):
-        return None, "A3 netlist provenance has no _provenance object"
-    content = prov.get(DESIGN_CONTENT_FIELD)
-    if not content_disclosed(content):
-        return None, "A3 netlist provenance has no disclosed design_content"
-
     topology_path = bdir / "topology.json"
     spec_path = bdir / "spec.json"
     netlist_path = bdir / f"{block}.sp"
-    rendered = prov.get("rendered_from")
-    if not isinstance(rendered, dict):
-        return None, "A3 netlist provenance has no rendered_from inputs"
-    topology_claim = rendered.get("topology_json")
-    spec_claim = rendered.get("spec_json")
-    if not isinstance(topology_claim, dict) or not isinstance(spec_claim, dict):
-        return None, "A3 netlist provenance has no topology/spec source claims"
-    for path, claim, expected in (
-        (topology_path, topology_claim, topology_path),
-        (spec_path, spec_claim, spec_path),
-    ):
-        if claim.get("path") != str(expected.relative_to(project)):
-            return None, f"A3 source claim does not name {expected.name}"
-        if not path.is_file() or _sha256(path) != str(
-                claim.get("sha256") or "").lower():
-            return None, f"A3 source claim is stale for {expected.name}"
-    if not netlist_path.is_file():
-        return None, "A3 declared netlist is absent"
-    artifact_hash = str(prov.get("artifact_sha256") or "").lower()
-    if not re.fullmatch(r"[0-9a-f]{64}", artifact_hash) \
-            or _sha256(netlist_path) != artifact_hash:
-        return None, "A3 declared netlist hash is stale or missing"
+    source_kind, source_field = "a3_netlist_provenance", "netlist_provenance"
+    if not sidecar.is_file():
+        import analog_existing_design_validate as existing
+        validated = existing.consume(bdir)
+        if validated is None:
+            return None, "declared block has no A3 netlist_provenance.json or current typed-design validation"
+        sidecar = bdir / existing.RECEIPT
+        source_kind, source_field = "existing_design_read_validation", "existing_design_validation"
+        content = validated.get(DESIGN_CONTENT_FIELD)
+        artifact_hash = validated["inputs"]["netlist"]["sha256"]
+    else:
+        try:
+            doc = json.loads(sidecar.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            return None, f"A3 netlist_provenance.json is unreadable: {exc}"
+        if not isinstance(doc, dict) or doc.get("block") != block:
+            return None, "A3 netlist provenance names a different block"
+        prov = doc.get("_provenance")
+        if not isinstance(prov, dict):
+            return None, "A3 netlist provenance has no _provenance object"
+        content = prov.get(DESIGN_CONTENT_FIELD)
+        if not content_disclosed(content):
+            return None, "A3 netlist provenance has no disclosed design_content"
+        rendered = prov.get("rendered_from")
+        if not isinstance(rendered, dict):
+            return None, "A3 netlist provenance has no rendered_from inputs"
+        topology_claim = rendered.get("topology_json")
+        spec_claim = rendered.get("spec_json")
+        if not isinstance(topology_claim, dict) or not isinstance(spec_claim, dict):
+            return None, "A3 netlist provenance has no topology/spec source claims"
+        for path, claim in ((topology_path, topology_claim), (spec_path, spec_claim)):
+            if claim.get("path") != str(path.relative_to(project)):
+                return None, f"A3 source claim does not name {path.name}"
+            if not path.is_file() or _sha256(path) != str(claim.get("sha256") or "").lower():
+                return None, f"A3 source claim is stale for {path.name}"
+        if not netlist_path.is_file():
+            return None, "A3 declared netlist is absent"
+        artifact_hash = str(prov.get("artifact_sha256") or "").lower()
+        if not re.fullmatch(r"[0-9a-f]{64}", artifact_hash) or _sha256(netlist_path) != artifact_hash:
+            return None, "A3 declared netlist hash is stale or missing"
+    if not content_disclosed(content):
+        return None, "current typed-design validation has no disclosed design_content"
     try:
         spec = json.loads(spec_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
@@ -1109,11 +1157,11 @@ def _declared_a3_subject_binding(project: Path, block: str, bdir: Path,
         return None, "declared analog block list disappeared"
     binding: Dict[str, object] = {
         "producer": "analog_a8_hardmacro_emit",
-        "source": "a3_netlist_provenance",
+        "source": source_kind,
         "block": block,
         DESIGN_CONTENT_FIELD: content,
-        "netlist_provenance": str(sidecar.relative_to(project)),
-        "netlist_provenance_sha256": _sha256(sidecar),
+        source_field: str(sidecar.relative_to(project)),
+        source_field + "_sha256": _sha256(sidecar),
         "a3_netlist": str(netlist_path.relative_to(project)),
         "a3_netlist_sha256": artifact_hash,
         "topology": str(topology_path.relative_to(project)),
@@ -1263,6 +1311,14 @@ def load_native_measurement(project: Path, block: str, gds: Path,
     if source_netlist_path == (bdir / f"{block}.sp").resolve():
         return None, ("source_netlist names the A3 input netlist; a native "
                       "post-layout extracted netlist is required")
+    try:
+        a13 = _current_a13_extraction(project, block, gds)
+        if ((a13 is None and "a13_extraction" in rec)
+                or (a13 is not None and (rec.get("a13_extraction") != a13
+                    or _sha256(source_netlist_path) != a13["extracted"]["sha256"]))):
+            return None, "native measurement does not consume the current A13 extraction"
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        return None, f"current A13 extraction is unavailable: {exc}"
     try:
         extracted_text = source_netlist_path.read_text(errors="replace") \
             if source_netlist_path is not None else ""
@@ -1545,7 +1601,7 @@ def emit_block(project: Path, block: str, container: str, pdk_root: str, *, ngsp
             "image_digest": measurement["image_digest"],
         },
     }
-    for key in ("extraction_wrapper", "measurement_deck", "measurement_deck_sha256", "native_binary", "native_op_solver"):
+    for key in ("extraction_wrapper", "measurement_deck", "measurement_deck_sha256", "native_binary", "native_op_solver", "a13_extraction"):
         if key in measurement:
             manifest["native_measurement"][key] = measurement[key]
     if DESIGN_CONTENT_FIELD in measurement:

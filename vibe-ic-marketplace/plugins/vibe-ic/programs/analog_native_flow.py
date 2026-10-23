@@ -65,6 +65,8 @@ def _input_views(project, name, step=None):
     if step == "A16":
         paths.append(directory / "reliability_inputs.json")
     if step == "A17":
+        paths.append(project / "phase3/librelane/analog" / name / "native_analog/A13.json")
+        paths.append(directory / "existing_design_validation.json")
         declaration = directory / "characterization_inputs.json"
         paths.append(declaration)
         from analog_native_physical import _settings
@@ -276,6 +278,7 @@ def _views(step, project, block, options, run):
             "detail": "Native layout views emitted and characterization checked",
             "outputs": [str(package)],
             "executions": executions, "findings": findings,
+            "native_inputs": (provenance.get("native_measurement") or {}).get("a13_extraction", {}),
             "metrics": {"characterization_scope": provenance.get("characterization_scope"),
                         "native_measurement": provenance.get("native_measurement")}}
 

@@ -696,6 +696,68 @@ def test_current_native_op_preserves_all_models_sources_and_loads(tmp_path, monk
     assert loaded["liberty_value"] == pytest.approx(460)
 
 
+def _a13_fixture(project, b):
+    folder = project / "phase3/librelane/analog/blk/a13/01-magic-rcx"
+    folder.mkdir(parents=True)
+    raw = folder / "blk.rcx.spice"
+    raw.write_text('.subckt blk vp vn control out\nR1 vp out 11k\nC1 out vn 2e-15\n.ends blk\n')
+    (folder / "magic-rcx.log").write_text("neutral native extraction transcript\n")
+    core = folder / "selected-core"
+    core.write_bytes(b"neutral core bytes")
+    record = folder.parent.parent / "native_analog/A13.json"
+    record.parent.mkdir()
+    state = {"status": "PASS", "metrics": {
+        "layout_sha256": E._sha256(b / "blk.gds"), "netlist_sha256": E._sha256(b / "blk.sp"),
+        "corners": [{"style": "ngspice()", "depth": "RC", "step_dir": str(folder),
+                     "extracted_netlist": str(raw), "sha256": E._sha256(raw)}]},
+        "native_inputs": {"core": {"path": str(core), "sha256": E._sha256(core)}}}
+    record.write_text(json.dumps(state))
+    return record, raw, core, state
+
+
+def test_a17_consumes_current_a13_without_another_extraction_and_still_measures_power(tmp_path, monkeypatch):
+    project, b, topo = _source_power_fixture(tmp_path, monkeypatch)
+    record, raw, core, state = _a13_fixture(project, b)
+    original = E._docker_exec
+    calls = []
+    def native(*args, **kwargs):
+        calls.append(kwargs.get("marker"))
+        return original(*args, **kwargs)
+    monkeypatch.setattr(E, "_docker_exec", native)
+    rec, why = E._native_measurement_produce(project, "blk", "", "/pdk", b / "blk.gds", topo)
+    assert rec is not None, why
+    assert calls == ["a8_native_measurement.sp"]
+    assert (b / "a8_post_layout_extracted.spice").read_bytes() == raw.read_bytes()
+    assert rec["a13_extraction"]["extracted"]["sha256"] == E._sha256(raw)
+    loaded, why = E.load_native_measurement(project, "blk", b / "blk.gds", topo)
+    assert loaded is not None, why
+    assert loaded["liberty_value"] == pytest.approx(460)
+    core.write_bytes(b"changed core")
+    loaded, why = E.load_native_measurement(project, "blk", b / "blk.gds", topo)
+    assert loaded is None
+    assert "A13" in why
+
+
+@pytest.mark.parametrize("damage", ["gds", "dut", "raw", "core", "status", "depth"])
+def test_a17_stale_a13_never_falls_back_to_a_different_extraction(tmp_path, monkeypatch, damage):
+    project, b, topo = _source_power_fixture(tmp_path, monkeypatch)
+    record, raw, core, state = _a13_fixture(project, b)
+    if damage in ("gds", "dut", "raw", "core"):
+        target = {"gds": b / "blk.gds", "dut": b / "blk.sp", "raw": raw, "core": core}[damage]
+        target.write_bytes(target.read_bytes() + b"changed")
+    else:
+        if damage == "status": state["status"] = "NOT_MEASURED"
+        else: state["metrics"]["corners"][0]["depth"] = "C"
+        record.write_text(json.dumps(state))
+    def forbidden(*args, **kwargs):
+        raise AssertionError("stale A13 must refuse before native execution")
+    monkeypatch.setattr(E, "_docker_exec", forbidden)
+    rec, why = E._native_measurement_produce(project, "blk", "", "/pdk", b / "blk.gds", topo)
+    assert rec is None
+    assert "A13" in why
+    assert not (b / E._A8_MEASUREMENT).exists()
+
+
 @pytest.mark.parametrize("native_rc,diagnostic", [(1, "unknown subckt\n"), (0, "Error: unresolved passive model\n")])
 def test_current_native_failure_cannot_publish_plausible_power(tmp_path, monkeypatch, native_rc, diagnostic):
     project, b, topo = _source_power_fixture(tmp_path, monkeypatch, native_rc=native_rc, diagnostic=diagnostic)

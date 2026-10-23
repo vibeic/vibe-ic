@@ -964,7 +964,9 @@ def _a8_declared_content(block_dir: Path) -> Optional[BoundedContent]:
         content = measurement.get(DESIGN_CONTENT_FIELD)
         if not content_disclosed(content) or content != binding[DESIGN_CONTENT_FIELD]:
             return None
-        for field in ("netlist_provenance", "a3_netlist", "topology", "spec",
+        subject_record = ("existing_design_validation" if binding.get("source") ==
+                          "existing_design_read_validation" else "netlist_provenance")
+        for field in (subject_record, "a3_netlist", "topology", "spec",
                       "declared_block_list"):
             hit, _ = producer._project_file(project, binding[field], field=field)
             if hit is None:
