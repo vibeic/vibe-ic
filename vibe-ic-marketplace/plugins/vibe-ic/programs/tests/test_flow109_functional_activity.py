@@ -543,3 +543,74 @@ def test_unknown_engine_from_producer_has_no_raw_argv_fallback(tmp_path, monkeyp
     assert record['reason'] == 'D55_UNDECLARED_ENGINE'
     assert not record['native_started'] and not record['commands']
     assert not (tmp_path / activity.FREEZE).exists()
+
+
+def _row_context():
+    features = next(p['features'] for p in flow109.load_registry()['reference_profiles']
+                    if p['name'] == 'Small digital IC without DFT')
+    return flow109.execution_context(flow109.resolve_plan(features), 'D55', 'D55')
+
+
+def _sealed_row_command_failure(project):
+    producer = project / 'producer'
+    consumer = project / 'consumer'
+    producer.mkdir(); consumer.mkdir()
+    freeze = {'schema': activity.SCHEMA, 'context_sha256': 'producer-context',
+        'flow109_acceptance': 'NOT_MEASURED', 'final_power_adoption': 'NOT_MEASURED',
+        'modes': {}, 'inputs': {}, 'operation_sources': {}}
+    frozen = _put(producer, activity.FREEZE, freeze)
+    component = {'schema': activity.SCHEMA, 'step_id': 'D55',
+        'component_status': 'PASS', 'native_started': True,
+        'context_sha256': 'producer-context', 'flow109_acceptance': 'NOT_MEASURED',
+        'final_power_adoption': 'NOT_MEASURED', 'modes': {}, 'inputs': {},
+        'operation_sources': {}, 'reason': 'D55_GLS_VECTOR_POWER_COMPONENT_MEASURED',
+        'commands': [{'argv': ['/tools/vvp'], 'rc': 9}],
+        'freeze': {'path': frozen['path'], 'sha256': frozen['sha256']},
+        'receipt': {'path': 'reports/flow109/D55/attempt/component.json'}}
+    _put(producer, component['receipt']['path'], component)
+    canonical = _put(producer, 'reports/flow109/components/D55.json', component)
+    inspect = _put(producer, 'native/container-inspect.json', {'sealed': True})
+    row_input = {'schema': activity.ROW_INPUT_SCHEMA,
+        'producer_project': str(producer), 'producer_source_head': 'producer-head',
+        'producer_adapter_sha256': 'producer-adapter',
+        'component': canonical, 'freeze': frozen, 'container_inspect': inspect}
+    _put(consumer, activity.ROW_INPUT, row_input)
+    return producer, consumer
+
+
+def test_sealed_native_command_failure_remains_failed_row_without_launch(tmp_path, monkeypatch):
+    _producer, consumer = _sealed_row_command_failure(tmp_path)
+    monkeypatch.setattr(activity.subprocess, 'run',
+                        lambda *_a, **_k: pytest.fail('sealed consumer must not launch native'))
+    result = activity.consume_sealed_default_row(consumer, _row_context())
+    assert (result['default_row_status'], result['reason'], result['native_started']) == (
+        'FAIL', 'D55_ROW_NATIVE_COMMAND_FAILED', False)
+
+
+def test_sealed_authority_mount_relocation_keeps_hash_and_values_strict():
+    first = {'clock': 'clk', 'period_ns': 24.0,
+        'source_records': {'sdc': {'path': '/work/project/current.sdc', 'sha256': 'a' * 64}}}
+    relocated = copy.deepcopy(first)
+    relocated['source_records']['sdc']['path'] = '/producer/current.sdc'
+    assert activity._authority_identity(first) == activity._authority_identity(relocated)
+    relocated['source_records']['sdc']['sha256'] = 'b' * 64
+    assert activity._authority_identity(first) != activity._authority_identity(relocated)
+
+
+@pytest.mark.parametrize('damage, reason', [
+    ('missing', 'D55_ROW_EVIDENCE_STALE'),
+    ('changed', 'D55_ROW_EVIDENCE_STALE'),
+])
+def test_missing_or_changed_sealed_component_refuses_before_launch(
+        tmp_path, monkeypatch, damage, reason):
+    producer, consumer = _sealed_row_command_failure(tmp_path)
+    component = producer / 'reports/flow109/components/D55.json'
+    if damage == 'missing':
+        component.unlink()
+    else:
+        component.write_text(component.read_text() + '\n')
+    monkeypatch.setattr(activity.subprocess, 'run',
+                        lambda *_a, **_k: pytest.fail('refusal must precede native launch'))
+    result = activity.consume_sealed_default_row(consumer, _row_context())
+    assert (result['default_row_status'], result['reason'], result['native_started']) == (
+        'NOT_MEASURED', reason, False)

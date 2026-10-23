@@ -30,9 +30,19 @@ from _ppa import power
 
 SCHEMA = 'vibeic.flow109.functional-activity.v1'
 INPUT = 'input/flow109/D55.json'
+ROW_INPUT = 'input/flow109/D55-row.json'
+ROW_INPUT_SCHEMA = 'vibeic.flow109.functional-activity-row-input.v1'
+ROW_SCHEMA = 'vibeic.flow109.functional-activity-default-row.v1'
 FREEZE = 'adopted/functional_activity/gls_activity_freeze.json'
 PARTIAL_FREEZE = 'adopted/functional_activity/gls_activity_partial.json'
 IDENT = re.compile(r'[A-Za-z_][A-Za-z0-9_$]*\Z')
+REQUIRED_ROW_OBLIGATIONS = (
+    'functional_activity.functional_mission_modes',
+    'functional_activity.activity_waveform_bound_identity',
+    'functional_activity.load_rail_mapping',
+)
+PINNED_IMAGE = ('ghcr.io/vibeic/vibeic-eda@sha256:'
+                '0fc30ecd1307a11bd7757d1c5710127cd88e245059f29eab8b52e38ba4d60406')
 
 
 def _sha(path):
@@ -503,8 +513,268 @@ def consume_power(report, spec, loads, done):
             'scope': 'component vector-power only; final post-route power adoption NOT_MEASURED'}
 
 
+def _producer_path(root, name):
+    """Resolve paths recorded by the sealed `/work/project` producer."""
+    path = Path(name)
+    prefix = Path('/work/project')
+    if path.is_absolute() and path.is_relative_to(prefix):
+        path = root / path.relative_to(prefix)
+    elif not path.is_absolute():
+        path = root / path
+    return path.resolve()
+
+
+def _producer_record(root, record, label):
+    if not isinstance(record, dict) or not record.get('path') or not record.get('sha256'):
+        _fail('D55_ROW_EVIDENCE_MISSING', label)
+    path = _producer_path(root, record['path'])
+    if not path.is_file() or _sha(path) != record['sha256']:
+        _fail('D55_ROW_EVIDENCE_STALE', label)
+    return path
+
+
+def _producer_bound(root, value, label):
+    if not isinstance(value, dict) or not value.get('path') or not value.get('sha256'):
+        _fail('D55_ROW_INPUT_MISSING', label)
+    path = _producer_path(root, value['path'])
+    if not path.is_file() or _sha(path) != value['sha256']:
+        _fail('D55_ROW_INPUT_STALE', label)
+    return path
+
+
+def _row_base(context, status='NOT_MEASURED', reason='D55_ROW_NOT_MEASURED', detail='not consumed'):
+    return {'schema': ROW_SCHEMA, 'step_id': 'D55', 'component_status': status,
+            'default_row_status': status, 'completed': False, 'reason': reason,
+            'detail': detail, 'native_started': False,
+            'context_sha256': context.get('context_sha256'),
+            'selected_obligations': list(REQUIRED_ROW_OBLIGATIONS),
+            'flow109_acceptance': 'NOT_MEASURED',
+            'whole_flow_acceptance': 'NOT_MEASURED',
+            'whole_ic_acceptance': 'NOT_MEASURED',
+            'final_power_adoption': 'NOT_MEASURED'}
+
+
+def _container_identity(path):
+    value = json.loads(path.read_text())
+    if isinstance(value, list) and len(value) == 1:
+        value = value[0]
+    if not isinstance(value, dict):
+        _fail('D55_ROW_NATIVE_AUTHORITY_INVALID', 'container inspect is not one object')
+    state, host, config = value.get('State', {}), value.get('HostConfig', {}), value.get('Config', {})
+    if (config.get('Image') != PINNED_IMAGE or state.get('ExitCode') != 0
+            or state.get('OOMKilled') is not False or host.get('NetworkMode') != 'none'
+            or host.get('NanoCpus') != 4_000_000_000
+            or host.get('Memory') != 8 * 1024 ** 3
+            or host.get('ReadonlyRootfs') is not True):
+        _fail('D55_ROW_NATIVE_AUTHORITY_INVALID', 'pinned image/confinement/exit mismatch')
+    return {'cid': value.get('Id'), 'image': config['Image'], 'exit_code': state['ExitCode'],
+            'oom_killed': state['OOMKilled'], 'network_mode': host['NetworkMode'],
+            'nano_cpus': host['NanoCpus'], 'memory_bytes': host['Memory'],
+            'readonly_rootfs': host['ReadonlyRootfs'], 'sha256': _sha(path)}
+
+
+def _authority_identity(value):
+    """Compare authority facts without treating an attested RO mount as drift."""
+    if not isinstance(value, dict):
+        return value
+    normalized = dict(value)
+    normalized['source_records'] = {
+        name: {'sha256': record.get('sha256')}
+        for name, record in (value.get('source_records') or {}).items()
+        if isinstance(record, dict)
+    }
+    return normalized
+
+
+def consume_sealed_default_row(project, context):
+    """Re-open an immutable D55 native component as a bounded Default row.
+
+    This consumer never launches simulation or OpenSTA.  It hashes every sealed
+    input/output, re-runs the existing authority and power-report consumers, and
+    preserves the producer and current consumer identities as distinct records.
+    """
+    project = Path(project).resolve()
+    base = _row_base(context)
+    try:
+        if context.get('requested_step') != 'D55' or context.get('native_step_id') != 'flow109.D55':
+            _fail('D55_ROW_CONTEXT_MISMATCH', 'normal109 D55 caller required')
+        row = context.get('resolved_row') or {}
+        obligations = tuple(item.get('id') for item in row.get('obligations', [])
+                            if isinstance(item, dict))
+        if obligations != REQUIRED_ROW_OBLIGATIONS:
+            _fail('D55_ROW_OBLIGATIONS_MISMATCH', str(obligations))
+        invocation_path = project / ROW_INPUT
+        invocation = _read(invocation_path)
+        if invocation.get('schema') != ROW_INPUT_SCHEMA:
+            _fail('D55_ROW_INVOCATION_INVALID', str(invocation_path))
+        root = Path(invocation.get('producer_project', '')).resolve()
+        if not root.is_dir():
+            _fail('D55_ROW_PRODUCER_MISSING', str(root))
+        component_path = _producer_record(root, invocation.get('component'), 'component')
+        freeze_path = _producer_record(root, invocation.get('freeze'), 'freeze')
+        inspect_path = _producer_record(root, invocation.get('container_inspect'), 'container_inspect')
+        if component_path != (root / 'reports/flow109/components/D55.json').resolve() \
+                or freeze_path != (root / FREEZE).resolve():
+            _fail('D55_ROW_INVOCATION_INVALID', 'canonical component/freeze paths required')
+        component, frozen = _read(component_path), _read(freeze_path)
+        if (component.get('schema') != SCHEMA or component.get('step_id') != 'D55'
+                or component.get('flow109_acceptance') != 'NOT_MEASURED'
+                or component.get('final_power_adoption') != 'NOT_MEASURED'):
+            _fail('D55_ROW_COMPONENT_INVALID', 'schema/step/scope mismatch')
+        raw_path = _producer_path(root, (component.get('receipt') or {}).get('path', ''))
+        if not raw_path.is_file() or _read(raw_path) != component:
+            _fail('D55_ROW_COMPONENT_STALE', 'canonical and raw component differ')
+        attempt_freeze = _producer_record(root, component.get('freeze'), 'attempt freeze')
+        if _read(attempt_freeze) != frozen:
+            _fail('D55_ROW_FREEZE_STALE', 'canonical and attempt freeze differ')
+        if (frozen.get('schema') != SCHEMA or frozen.get('context_sha256') != component.get('context_sha256')
+                or frozen.get('flow109_acceptance') != 'NOT_MEASURED'
+                or frozen.get('final_power_adoption') != 'NOT_MEASURED'
+                or frozen.get('modes') != component.get('modes')
+                or frozen.get('inputs') != component.get('inputs')
+                or frozen.get('operation_sources') != component.get('operation_sources')):
+            _fail('D55_ROW_FREEZE_INVALID', 'component/freeze identity mismatch')
+
+        if component.get('component_status') == 'FAIL':
+            return {**base, 'component_status': 'FAIL', 'default_row_status': 'FAIL',
+                    'reason': component.get('reason') or 'D55_ROW_NATIVE_FAILED',
+                    'detail': 'sealed native component reported FAIL',
+                    'producer_component': invocation['component']}
+        commands = component.get('commands')
+        if not isinstance(commands, list):
+            _fail('D55_ROW_COMMAND_RECEIPTS_MISSING', 'native command population absent')
+        bad_commands = [index for index, command in enumerate(commands)
+                        if not isinstance(command, dict) or command.get('rc') != 0]
+        if bad_commands:
+            return {**base, 'component_status': 'FAIL', 'default_row_status': 'FAIL',
+                    'reason': 'D55_ROW_NATIVE_COMMAND_FAILED',
+                    'detail': f'nonzero native command receipts: {bad_commands}',
+                    'producer_component': invocation['component']}
+        if component.get('component_status') != 'PASS' or not component.get('native_started'):
+            _fail(component.get('reason') or 'D55_ROW_COMPONENT_NOT_MEASURED',
+                  'sealed native component did not PASS')
+
+        inputs = component.get('inputs')
+        if not isinstance(inputs, dict) or not inputs:
+            _fail('D55_ROW_INPUTS_MISSING', 'sealed input population absent')
+        input_paths = {}
+        for name, expected in inputs.items():
+            path = _producer_path(root, name)
+            if not path.is_file() or _sha(path) != expected:
+                _fail('D55_ROW_INPUT_STALE', str(name))
+            input_paths[name] = path
+        d55_inputs = [path for name, path in input_paths.items()
+                      if str(name).endswith('/input/flow109/D55.json')]
+        if len(d55_inputs) != 1:
+            _fail('D55_ROW_INPUTS_MISSING', 'exact producer D55 manifest required')
+        producer_manifest = _read(d55_inputs[0])
+        if producer_manifest.get('schema') != SCHEMA:
+            _fail('D55_ROW_INPUTS_INVALID', 'producer manifest schema mismatch')
+        paths = {key: _producer_bound(root, producer_manifest.get(key), key)
+                 for key in ('adopted_netlist', 'scenario_requirements', 'sdc',
+                             'liberty', 'pad_liberty', 'io_connectivity')}
+        requirements = _read(paths['scenario_requirements'])
+        declared = {item.get('name'): item for item in requirements.get('test_cases', [])
+                    if isinstance(item, dict) and isinstance(item.get('name'), str)}
+        modes = component.get('modes')
+        if not isinstance(modes, dict) or set(modes) != set(declared) or frozen.get('modes') != modes:
+            _fail('D55_ROW_MODE_COVERAGE_MISMATCH', 'declared and sealed scenarios differ')
+        ports = dump.module_ports(paths['adopted_netlist'], producer_manifest.get('top', ''))
+        authority = _derive_scenario_authority(paths, ports)
+        if (_authority_identity(authority) != _authority_identity(frozen.get('authority'))
+                or authority['external_loads'] != frozen.get('external_loads')):
+            _fail('D55_ROW_LOAD_RAIL_MAPPING_MISMATCH', 'current authority differs from freeze')
+
+        expected_tools = ('iverilog', 'vvp', 'sta')
+        if len(commands) != len(modes) * len(expected_tools):
+            _fail('D55_ROW_COMMAND_RECEIPTS_MISSING', 'three native commands required per scenario')
+        for index, command in enumerate(commands):
+            argv = command.get('argv')
+            if not isinstance(argv, list) or not argv \
+                    or Path(argv[0]).name != expected_tools[index % len(expected_tools)]:
+                _fail('D55_ROW_COMMAND_IDENTITY_INVALID', str(index))
+            _producer_record(root, command.get('log'), f'command-{index} log')
+
+        attempt_name = raw_path.parent.name
+        native_ports = _native_port_names(ports)
+        validated_modes = {}
+        for name, evidence in modes.items():
+            if evidence.get('requirement') != declared[name]:
+                _fail('D55_ROW_MODE_REQUIREMENT_MISMATCH', name)
+            activity_path = _producer_record(root, evidence.get('activity'), name + ' activity')
+            vcd_path = _producer_record(root, evidence.get('vcd'), name + ' vcd')
+            _producer_record(root, evidence.get('power_script'), name + ' power script')
+            report_path = _producer_record(root, evidence.get('power_report'), name + ' power report')
+            activity_record = _read(activity_path)
+            if (activity_record.get('status') != 'PASS' or activity_record.get('vvp_rc') != 0
+                    or activity_record.get('vcd_sha256') != _sha(vcd_path)):
+                _fail('D55_ROW_ACTIVITY_RECEIPT_INVALID', name)
+            consumed = consume_power(report_path, {'required_ports': native_ports,
+                'clock_port': authority['clock']}, authority['external_loads'], attempt_name)
+            if consumed != evidence.get('consumption'):
+                _fail('D55_ROW_POWER_CONSUMER_MISMATCH', name)
+            census = evidence.get('census')
+            if (not isinstance(census, dict) or census.get('scope') != activity_record.get('scope')
+                    or set((census.get('ports') or {})) != {port['name'] for port in ports}
+                    or census.get('window', {}).get('authority')
+                    != 'measured complete self-checking testbench VCD'):
+                _fail('D55_ROW_WAVEFORM_IDENTITY_INVALID', name)
+            validated_modes[name] = {'activity': evidence['activity'], 'vcd': evidence['vcd'],
+                                     'power_report': evidence['power_report'],
+                                     'annotated_pin_activities': consumed['activity_provenance']['annotated_pin_activities'],
+                                     'total_w': consumed['power']['total_w']}
+
+        source = component.get('operation_sources')
+        if not isinstance(source, dict):
+            _fail('D55_ROW_SOURCE_IDENTITY_MISSING', 'producer source closure absent')
+        expected_adapter = invocation.get('producer_adapter_sha256')
+        if source.get('programs/flow109_functional_activity.py') != expected_adapter:
+            _fail('D55_ROW_SOURCE_IDENTITY_STALE', 'producer adapter identity mismatch')
+        for relative in ('programs/sim_activity_dump.py', 'programs/_ppa/power.py'):
+            if source.get(relative) != _sha(HERE.parent / relative):
+                _fail('D55_ROW_SOURCE_IDENTITY_STALE', relative)
+        container = _container_identity(inspect_path)
+        obligations = [
+            {'id': REQUIRED_ROW_OBLIGATIONS[0], 'status': 'PASS',
+             'evidence': {'declared_modes': sorted(modes), 'native_command_count': len(commands)}},
+            {'id': REQUIRED_ROW_OBLIGATIONS[1], 'status': 'PASS',
+             'evidence': {'modes': validated_modes}},
+            {'id': REQUIRED_ROW_OBLIGATIONS[2], 'status': 'PASS',
+             'evidence': {'authority': authority}},
+        ]
+        return {**base, 'component_status': 'PASS', 'default_row_status': 'PASS',
+                'completed': True, 'reason': 'D55_SUPPORTED_DEFAULT_ROW_COMPLETE',
+                'detail': 'sealed current native component passed all declared D55 row consumers',
+                'producer_context_sha256': component['context_sha256'],
+                'producer_source_head': invocation.get('producer_source_head'),
+                'producer_component': {**invocation['component'], 'raw_path': str(raw_path)},
+                'producer_freeze': invocation['freeze'], 'producer_operation_sources': source,
+                'consumer_source_sha256': {'programs/flow109_functional_activity.py': _sha(__file__),
+                    'programs/sim_activity_dump.py': _sha(HERE / 'sim_activity_dump.py'),
+                    'programs/_ppa/power.py': _sha(HERE / '_ppa/power.py')},
+                'native_authority': container, 'obligations': obligations,
+                'input_sha256': inputs, 'native_command_count': len(commands)}
+    except AdmissionRefusal as exc:
+        return {**base, 'component_status': exc.status, 'default_row_status': exc.status,
+                'reason': exc.code, 'detail': str(exc)}
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        return {**base, 'reason': 'D55_ROW_EVIDENCE_INVALID', 'detail': str(exc)}
+
+
+def _execute_row_invocation(project, context):
+    result = consume_sealed_default_row(project, context)
+    attempt = project / 'reports/flow109/D55-row' / uuid.uuid4().hex
+    attempt.mkdir(parents=True, exist_ok=False)
+    result['receipt'] = {'path': str((attempt / 'completion.json').relative_to(project))}
+    write_json(attempt / 'completion.json', result)
+    write_json(project / 'reports/flow109/default_rows/D55.json', result)
+    return result
+
+
 def execute(project, context):
     project = Path(project).resolve()
+    if (project / ROW_INPUT).is_file():
+        return _execute_row_invocation(project, context)
     (project / FREEZE).unlink(missing_ok=True)
     (project / PARTIAL_FREEZE).unlink(missing_ok=True)
     attempt = project / 'reports/flow109/D55' / uuid.uuid4().hex
