@@ -34,6 +34,16 @@ def _read(path):
     return value
 
 
+def _required_corner_population(value):
+    """Return the declared scene population, rejecting absent/duplicate names."""
+    if (not isinstance(value, list) or not value
+            or not all(isinstance(corner, str) and corner for corner in value)
+            or len(value) != len(set(value))):
+        raise AdmissionRefusal('D70_REQUIRED_CORNERS_ABSENT',
+                               'nonempty unique required_corners required')
+    return set(value)
+
+
 def execute(project, context):
     project = Path(project).resolve(); attempt = project / 'reports/flow109/D70' / uuid.uuid4().hex
     attempt.mkdir(parents=True, exist_ok=False)
@@ -50,10 +60,7 @@ def execute(project, context):
         manifest = _read(project / INPUT)
         if manifest.get('schema') != SCHEMA: raise AdmissionRefusal('D70_REQUIRED_INPUT_INVALID', 'schema')
         required_corners = manifest.get('required_corners')
-        if (not isinstance(required_corners, list) or not required_corners
-                or len(required_corners) != len(set(required_corners))
-                or not all(isinstance(corner, str) and corner for corner in required_corners)):
-            raise AdmissionRefusal('D70_REQUIRED_CORNERS_ABSENT', 'nonempty unique required_corners required')
+        required_population = _required_corner_population(required_corners)
         parasitics = extract.validate_final_parasitics(project, manifest.get('final_parasitics_receipt'))
         d69 = _read(files._bound(project, manifest['final_parasitics_receipt']))
         d62 = _read(files._bound(project, d69['d62_receipt']))
@@ -74,8 +81,8 @@ def execute(project, context):
             'spef_producer': 'flow109.D69', 'sta_state': str(state_path),
             'sta_state_sha256': digest(state_path), 'corners': corners, 'judgment': timing})
         _, state = postroute.stapostpnr_state(project); sdfs = postroute.corner_sdfs(state)
-        if (set(required_corners) != set(corners) or set(required_corners) != set(sdfs)
-                or list(required_corners) != list(state.get('sdf') or {})):
+        if (required_population != set(corners) or required_population != set(sdfs)
+                or required_population != set(state.get('sdf') or {})):
             raise AdmissionRefusal('D70_FINAL_CORNER_STATE_MISMATCH',
                                    'declared corners must exactly match timing and state SDF population')
         if (Path(str(state.get('nl') or '')).resolve() != netlist.resolve()
@@ -131,6 +138,7 @@ def validate_final_electrical(project, receipt_ref):
     if signoff.judge_timing(signoff.corner_timing(folder)) != record['timing_judgment']:
         raise AdmissionRefusal('D70_TIMING_CHANGED', str(folder))
     state_sdfs = postroute.corner_sdfs(state)
+    required_population = _required_corner_population(record.get('required_corners'))
     expected_sdfs = {corner: files._record(project, path)
                      for corner, path in state_sdfs.items()}
     if (record.get('producer') != 'flow109_final_electrical'
@@ -138,8 +146,8 @@ def validate_final_electrical(project, receipt_ref):
             or record.get('d69_receipt') != record.get('final_parasitics_receipt')
             or record.get('final_sdfs') != record.get('sdfs')
             or record.get('final_sdfs') != expected_sdfs
-            or set(record.get('required_corners') or []) != set(state_sdfs)
-            or list(record.get('required_corners') or []) != list(state.get('sdf') or {})
+            or required_population != set(state_sdfs)
+            or required_population != set(state.get('sdf') or {})
             or record.get('netlist') != parasitics['adopted_views']['netlist']
             or record.get('sdc') != parasitics['adopted_views']['sdc']):
         raise AdmissionRefusal('D70_FINAL_OUTPUT_BINDING_MISMATCH', 'final receipt aliases/state drifted')

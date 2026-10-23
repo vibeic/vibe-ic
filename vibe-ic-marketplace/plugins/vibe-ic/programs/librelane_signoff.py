@@ -577,7 +577,7 @@ def judge_timing(corners: dict) -> dict:
         return {'verdict': 'FAIL', 'reason': 'LL_POSTROUTE_IDEAL_CLOCK', 'ideal_clocks': ideal}
     failing = sorted(c for c, row in corners.items()
                      if row['setup_ws'] < 0 or row['hold_ws'] < 0 or row['setup_vio'] or row['hold_vio']
-                     or row['max_slew_vio'] or row['max_cap_vio'])
+                     or row['max_slew_vio'] or row['max_cap_vio'] or row['max_fanout_vio'])
     worst_setup = min(corners, key=lambda c: corners[c]['setup_ws'])
     worst_hold = min(corners, key=lambda c: corners[c]['hold_ws'])
     return {'verdict': 'FAIL' if failing else 'PASS', 'failing_corners': failing,

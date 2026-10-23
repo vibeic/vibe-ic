@@ -376,7 +376,8 @@ STA_LOG = ("Reading timing models for corner {c}…\n"
            "Reading top-level netlist at '/w/spm_pnr.v'…\n")
 
 
-def _sta_folder(tmp_path, *, setup=1.0, hold=0.4, ideal=(), derate=True, drop=None, spefs=None):
+def _sta_folder(tmp_path, *, setup=1.0, hold=0.4, ideal=(), derate=True, drop=None,
+                violations=None, spefs=None):
     folder = tmp_path / 'sta'
     metrics = {}
     for c in CORNERS:
@@ -387,7 +388,8 @@ def _sta_folder(tmp_path, *, setup=1.0, hold=0.4, ideal=(), derate=True, drop=No
             write(folder / c / signoff.CORNER_REPORT,
                   'OCV_DERATE_APPLIED early=0.95 late=1.05 flat-OCV source=TIME_DERATING_CONSTRAINT=5\n')
         for key, metric in signoff.TIMING_METRICS.items():
-            value = setup if key == 'setup_ws' else hold if key == 'hold_ws' else 0
+            value = (setup if key == 'setup_ws' else hold if key == 'hold_ws'
+                     else (violations or {}).get(key, 0))
             metrics[f'{metric}__corner:{c}'] = value
     if drop:
         metrics.pop(drop)
@@ -421,6 +423,15 @@ def test_an_absent_metric_or_derate_record_is_not_measured_never_zero(tmp_path):
 def test_a_negative_corner_fails(tmp_path):
     judged = signoff.judge_timing(signoff.corner_timing(_sta_folder(tmp_path, hold=-0.2)))
     assert judged['verdict'] == 'FAIL' and judged['failing_corners'] == sorted(CORNERS)
+
+
+@pytest.mark.parametrize('metric', (
+    'setup_vio', 'hold_vio', 'max_slew_vio', 'max_cap_vio', 'max_fanout_vio'))
+def test_each_measured_violation_count_fails(metric, tmp_path):
+    judged = signoff.judge_timing(signoff.corner_timing(
+        _sta_folder(tmp_path, violations={metric: 1})))
+    assert judged['verdict'] == 'FAIL'
+    assert judged['failing_corners'] == sorted(CORNERS)
 
 
 # --------------------------------------------------- the agreement arms ---
