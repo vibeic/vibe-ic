@@ -335,6 +335,49 @@ def test_actual_subprocess_error_and_output_are_retained(tmp_path, monkeypatch):
     assert Path(execution["log"]).read_text() == "native failure detail\n"
 
 
+def test_changed_sizing_input_invalidates_its_actual_consumers_only(tmp_path, monkeypatch):
+    root = project(tmp_path)
+    directory = root / "phase3/analog/cell_alpha"
+    declarations = directory / "sizing_inputs.json"
+    declarations.write_text('{"knobs":{"divider_ratio":2.0}}')
+    calls = []
+    def dispatch(step, *arguments):
+        calls.append(step)
+        return {"status": "PASS", "outputs": []}
+    monkeypatch.setattr(native, "_dispatch", dispatch)
+    native.run_window(root, args("A01", "A05"))
+    declarations.write_text('{"knobs":{"divider_ratio":1.5}}')
+    report = native.run_window(root, args("A06", "A06"))
+    retained = {row["step"] for row in report["steps"]}
+    assert {"A01", "A02", "A03", "A06"}.issubset(retained)
+    assert not {"A04", "A05"} & retained
+    assert calls == ["A01", "A02", "A03", "A04", "A05", "A06"]
+
+
+def test_a17_selects_explicit_native_binary_without_changing_gds_producer(tmp_path):
+    root = project(tmp_path)
+    directory = root / "phase3/analog/cell_alpha"
+    (directory / "layout.mag").write_text("magic\n")
+    selected = root / "native-tools/ngspice"
+    selected.parent.mkdir()
+    selected.write_text("native binary identity")
+    declaration = directory / "characterization_inputs.json"
+    declaration.write_text(json.dumps({"ngspice_bin": str(selected)}))
+    calls = []
+    def run(program, argv):
+        calls.append((program, argv))
+        return {"returncode": 0 if len(calls) == 1 else 1}
+    result = native._views("A17", root, {"name": "cell_alpha"}, {"container": "native"}, run)
+    assert result["status"] == "FAIL"
+    assert "--ngspice-bin" not in calls[0][1]
+    assert calls[1][1][-2:] == ["--ngspice-bin", str(selected)]
+    before = native._input_views(root, "cell_alpha", "A17")
+    selected.write_text("changed native binary identity")
+    after = native._input_views(root, "cell_alpha", "A17")
+    assert before[str(selected)] != after[str(selected)]
+    assert str(declaration) in after
+
+
 def test_container_subprocess_loads_native_tool_environment_without_shell_interpolation(tmp_path, monkeypatch):
     seen = []
     def run(command, **kwargs):

@@ -54,10 +54,20 @@ def _input_views(project, name, step=None):
     directory = layout.analog_dir(project) / name
     paths += [directory / leaf for leaf in
               ("spec.json", "topology.json", "topology.md", f"{name}.sp", f"tb_{name}.sp")]
+    if step in STEPS[3:]:
+        paths.append(directory / "sizing_inputs.json")
     if step in ("A06", "A07"):
         paths.append(directory / "measurement_studies.json")
     if step == "A16":
         paths.append(directory / "reliability_inputs.json")
+    if step == "A17":
+        declaration = directory / "characterization_inputs.json"
+        paths.append(declaration)
+        from analog_native_physical import _settings
+        selected = {**_read(declaration, {}), **_settings(
+            {"config": _read(project / "input/analog_flow.json", {})}, "A17", name)}
+        if selected.get("ngspice_bin"):
+            paths.append(Path(selected["ngspice_bin"]))
     # A configured nominal/calibration deck can live outside the canonical
     # block directory. Retain the actual selected inputs, not only defaults.
     from analog_native_sim import _config, _inputs, _included_paths
@@ -225,9 +235,14 @@ def _views(step, project, block, options, run):
         return {"status": "NOT_MEASURED", "detail": "Native layout input is absent",
                 "outputs": []}
     executions = []
+    from analog_native_physical import _settings
+    settings = {**_read(directory / "characterization_inputs.json", {}),
+                **_settings(options, "A17", name)}
     for program in ("analog_hardmacro_gds_emit.py", "analog_a8_hardmacro_emit.py"):
-        result = run(program, [str(project), "--block", name,
-                              "--container", options["container"]])
+        argv = [str(project), "--block", name, "--container", options["container"]]
+        if program == "analog_a8_hardmacro_emit.py" and settings.get("ngspice_bin"):
+            argv += ["--ngspice-bin", str(settings["ngspice_bin"])]
+        result = run(program, argv)
         executions.append(result)
         if result["returncode"]:
             rc = result["returncode"]

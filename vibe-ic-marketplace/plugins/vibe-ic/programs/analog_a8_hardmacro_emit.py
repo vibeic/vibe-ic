@@ -777,6 +777,7 @@ def _delivered_measurement_deck(project: Path, block: str, extracted: Path,
     if not supplies:
         raise ValueError("A8 delivered testbench has no voltage source driving its declared rails")
     precision_cards, precision = _native_op_precision(cards)
+    method_cards, solver = _native_op_solver(cards)
     current = " + ".join(f"abs(i({row['source']}))" for row in supplies)
     power = " + ".join(f"abs(i({row['source']})*{_terminal_voltage_expression(row['positive'], row['negative'])})"
                        for row in supplies)
@@ -784,14 +785,15 @@ def _delivered_measurement_deck(project: Path, block: str, extracted: Path,
     if wrapper is not None:
         includes.append(f".include {json.dumps(str(wrapper))}")
     text = "\n".join(["* A8 native OP from delivered A3 stimulus and model bindings.",
-                        *bindings, *includes, *cards, *precision_cards,
-                        f"XU {' '.join(nodes)} {subckt}", ".control", "set noaskquit", "op",
+                        *bindings, *includes, *cards, *precision_cards, *method_cards,
+                        f"XU {' '.join(nodes)} {subckt}", ".control", "set noaskquit", "set num_threads=1", "op",
                         f"let idd = {current}", f"let pwr = {power}",
                         "print idd pwr", "quit", ".endc", ".end", ""])
     return text, {"source_testbench": str(tb.relative_to(project)), "source_testbench_sha256": _sha256(tb),
                   "source_design_netlist": str(a3.relative_to(project)), "source_design_netlist_sha256": _sha256(a3),
                   "model_binding_lines": bindings, "power_sources": supplies,
                   "native_op_precision": precision,
+                  "native_op_solver": solver,
                   "native_measurement": "native OP sum(abs(I(source)*V(source terminals)))"}
 
 
@@ -819,6 +821,15 @@ def _native_op_precision(cards: List[str]) -> Tuple[List[str], Dict]:
         "residual_acceptance": "unchanged_native_check"}
 
 
+def _native_op_solver(cards: List[str]) -> Tuple[List[str], Dict]:
+    methods = [value for card in cards if re.match(r"(?i)^\s*\.opt(?:ion|ions)?\b", card)
+               for value in re.findall(r"(?i)\bmethod\s*=\s*([^\s,]+)", card)]
+    return ([] if methods else [".options method=gear"]), {
+        "method": methods[-1] if methods else "gear",
+        "selection": "delivered_source" if methods else "native_op_default",
+        "num_threads": 1, "omp_wait_policy": "PASSIVE", "gomp_spincount": 0}
+
+
 def _bound_models(container: str, lines: List[str], directory: Path) -> List[Dict]:
     records = []
     for line in lines:
@@ -838,7 +849,7 @@ def _bound_models(container: str, lines: List[str], directory: Path) -> List[Dic
 
 def _native_measurement_produce(project: Path, block: str, container: str,
                                 pdk_root: str, gds: Path,
-                                topology: Dict[str, object]
+                                topology: Dict[str, object], *, ngspice_bin: Optional[str] = None
                                 ) -> Tuple[Optional[Dict[str, object]], str]:
     """Ordinary A8 producer path: extract the A5 view, then measure power.
 
@@ -856,9 +867,22 @@ def _native_measurement_produce(project: Path, block: str, container: str,
     rcfile = magicrc_for(pdk_root, container, tech)
     if rcfile is None:
         return None, f"no Magic rcfile for A5 technology {tech!r}"
-    ngspice_bin, why = _native_ngspice_binary(container)
+    explicit_binary = ngspice_bin is not None
+    if explicit_binary:
+        if not Path(ngspice_bin).is_absolute():
+            return None, "explicit ngspice binary must be an absolute execution-side path"
+        rc, _out, why = _docker_exec_raw(container, f"test -x {shlex.quote(ngspice_bin)}")
+        if rc != 0:
+            return None, f"explicit ngspice binary is not executable: {ngspice_bin}"
+    else:
+        ngspice_bin, why = _native_ngspice_binary(container)
     if ngspice_bin is None:
         return None, why
+    binary_hash, why = _remote_sha256(container, ngspice_bin)
+    if binary_hash is None:
+        return None, "selected ngspice binary cannot be hashed: " + why
+    native_binary = {"path": ngspice_bin, "sha256": binary_hash,
+                     "selection": "explicit" if explicit_binary else "discovered"}
     image_digest, image_why = _runtime_image_digest(container)
     if image_digest is None:
         return None, image_why
@@ -923,11 +947,13 @@ def _native_measurement_produce(project: Path, block: str, container: str,
         ngspice_rc, ng_out, ng_err = _docker_exec(
             container,
             f"cd {shlex.quote(str(bdir))} && "
-            f"{shlex.quote(ngspice_bin)} -b -o "
+            f"OMP_WAIT_POLICY=PASSIVE GOMP_SPINCOUNT=0 {shlex.quote(ngspice_bin)} -b -o "
             f"{shlex.quote(str(ng_log))} {shlex.quote(str(deck))}",
             marker="a8_native_measurement.sp")
         if any(_sha256(p) != digest for p, digest in frozen.items()):
             return None, "native measurement input group changed during ngspice"
+        if _remote_sha256(container, ngspice_bin)[0] != binary_hash:
+            return None, "selected ngspice binary changed during native measurement"
         if _bound_models(container, source_contract["model_binding_lines"], bdir) != models:
             return None, "native measurement model sources changed during ngspice"
         if wrapper_contract is not None:
@@ -966,6 +992,7 @@ def _native_measurement_produce(project: Path, block: str, container: str,
             **source_contract,
             "measurement_basis": "delivered_a3_testbench_op",
             "model_bindings": models,
+            "native_binary": native_binary,
             "measured_current_a": measured_current,
             "source_layout": str(layout.relative_to(project)),
             "source_layout_sha256": _sha256(layout),
@@ -1374,10 +1401,16 @@ def load_native_measurement(project: Path, block: str, gds: Path,
     # validated above.  Keep the two paths distinct: reusing ``path`` here
     # would publish the wrapper digest under ``measurement_sha256``.
     out["measurement_sha256"] = _sha256(measurement_path)
+    if "native_binary" in rec:
+        binary = rec["native_binary"]
+        if (not isinstance(binary, dict) or not isinstance(binary.get("path"), str)
+                or not Path(binary["path"]).is_absolute()
+                or not re.fullmatch(r"[0-9a-f]{64}", str(binary.get("sha256", "")))):
+            return None, "native binary provenance is absent or malformed"
     return out, ""
 
 
-def emit_block(project: Path, block: str, container: str, pdk_root: str,
+def emit_block(project: Path, block: str, container: str, pdk_root: str, *, ngspice_bin: Optional[str] = None,
                ) -> Dict:
     bdir = project / "phase3" / "analog" / block
     gds = bdir / f"{block}.gds"
@@ -1396,9 +1429,14 @@ def emit_block(project: Path, block: str, container: str, pdk_root: str,
     topology = json.loads(topo.read_text())
     measurement, measurement_reason = load_native_measurement(
         project, block, gds, topology)
+    if measurement is not None and ngspice_bin is not None:
+        digest = _remote_sha256(container, ngspice_bin)[0]
+        prior_binary = measurement.get("native_binary") or {}
+        if digest is None or prior_binary.get("path") != ngspice_bin or prior_binary.get("sha256") != digest:
+            measurement, measurement_reason = None, "cached native measurement used a different selected binary"
     if measurement is None:
         produced, produce_reason = _native_measurement_produce(
-            project, block, container, pdk_root, gds, topology)
+            project, block, container, pdk_root, gds, topology, **({"ngspice_bin": ngspice_bin} if ngspice_bin is not None else {}))
         if produced is None:
             return {"block": block, "emitted": False, "rc": 1,
                     "reason": (f"{measurement_reason}; ordinary native "
@@ -1507,7 +1545,7 @@ def emit_block(project: Path, block: str, container: str, pdk_root: str,
             "image_digest": measurement["image_digest"],
         },
     }
-    for key in ("extraction_wrapper", "measurement_deck", "measurement_deck_sha256"):
+    for key in ("extraction_wrapper", "measurement_deck", "measurement_deck_sha256", "native_binary", "native_op_solver"):
         if key in measurement:
             manifest["native_measurement"][key] = measurement[key]
     if DESIGN_CONTENT_FIELD in measurement:
@@ -1557,6 +1595,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--block", action="append")
     ap.add_argument("--container", default=_pin.default_container_name())
     ap.add_argument("--pdk-root", default="/foss/pdks")
+    ap.add_argument("--ngspice-bin", default=None, help="Absolute ngspice executable path in the selected execution environment")
     ap.add_argument("--json")
     a = ap.parse_args(argv)
     project = Path(a.project)
@@ -1564,7 +1603,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     if not blocks:
         print("A8_EMIT: no declared analog block — nothing to package")
         return 0
-    results = [emit_block(project, b, a.container, a.pdk_root) for b in blocks]
+    results = [emit_block(project, b, a.container, a.pdk_root,
+                          **({"ngspice_bin": a.ngspice_bin} if a.ngspice_bin is not None else {})) for b in blocks]
     worst = max(r["rc"] for r in results)
     for r in results:
         print("A8_EMIT %s: %s" % (

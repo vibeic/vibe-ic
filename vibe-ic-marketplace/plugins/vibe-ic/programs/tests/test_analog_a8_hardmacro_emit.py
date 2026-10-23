@@ -499,6 +499,7 @@ def test_extraction_requires_exact_declared_top_cell(tmp_path: Path,
          "sha256": "a" * 64}, ""))
     monkeypatch.setattr(E, "_native_ngspice_binary",
                         lambda *a, **k: ("/usr/bin/ngspice", ""))
+    monkeypatch.setattr(E, "_remote_sha256", lambda *a: ("c" * 64, ""))
     monkeypatch.setattr(E, "_runtime_image_digest",
                         lambda *a, **k: ("sha256:" + "b" * 64, ""))
     monkeypatch.setattr(E._mx, "build_extraction_tcl",
@@ -663,6 +664,7 @@ def _source_power_fixture(tmp_path, monkeypatch, *, native_rc=0, diagnostic=""):
         '.control\ntran 1n 1u\n.endc\n.end\n')
     monkeypatch.setattr(E, "magicrc_for", lambda *a: "/pdk/neutral.magicrc")
     monkeypatch.setattr(E, "_native_ngspice_binary", lambda *a: ("/usr/bin/ngspice", ""))
+    monkeypatch.setattr(E, "_remote_sha256", lambda *a: ("c" * 64, ""))
     monkeypatch.setattr(E, "_runtime_image_digest", lambda *a: ("sha256:" + "b" * 64, ""))
     def native(container, cmd, timeout=900, *, marker=None, log_path=None):
         if marker == "a8_extract.tcl":
@@ -794,6 +796,57 @@ def test_native_op_source_precision_expression_is_not_overwritten():
     assert cards == []
     assert binding["source_reltol"] == ["{tol}"]
     assert binding["selection"] == "source_expression_preserved"
+
+
+def test_native_op_solver_defaults_gear_and_preserves_an_explicit_method():
+    cards, binding = E._native_op_solver([])
+    assert cards == [".options method=gear"]
+    assert binding["method"] == "gear" and binding["num_threads"] == 1
+    assert binding["omp_wait_policy"] == "PASSIVE" and binding["gomp_spincount"] == 0
+    cards, binding = E._native_op_solver([".options method=trap trtol=1"])
+    assert cards == [] and binding["method"] == "trap"
+    assert binding["selection"] == "delivered_source"
+
+
+def test_selected_native_binary_is_bound_and_scheduled(tmp_path, monkeypatch):
+    project, b, topo = _source_power_fixture(tmp_path, monkeypatch)
+    monkeypatch.setattr(E, "_docker_exec_raw", lambda *a, **k: (0, "", ""))
+    native = E._docker_exec
+    commands = []
+    def capture(*args, **kwargs):
+        commands.append(args[1])
+        return native(*args, **kwargs)
+    monkeypatch.setattr(E, "_docker_exec", capture)
+    rec, why = E._native_measurement_produce(project, "blk", "", "/pdk", b / "blk.gds", topo,
+                                             ngspice_bin="/candidate/ngspice")
+    assert rec is not None, why
+    assert rec["native_binary"] == {"path": "/candidate/ngspice", "sha256": "c" * 64, "selection": "explicit"}
+    assert "OMP_WAIT_POLICY=PASSIVE GOMP_SPINCOUNT=0 /candidate/ngspice -b" in commands[-1]
+    assert ".options method=gear" in (b / "a8_native_measurement.sp").read_text()
+    assert "set num_threads=1" in (b / "a8_native_measurement.sp").read_text()
+
+
+def test_changed_selected_native_binary_cannot_publish_measurement(tmp_path, monkeypatch):
+    project, b, topo = _source_power_fixture(tmp_path, monkeypatch)
+    digests = iter([("c" * 64, ""), ("d" * 64, "")])
+    monkeypatch.setattr(E, "_remote_sha256", lambda *a: next(digests))
+    rec, why = E._native_measurement_produce(project, "blk", "", "/pdk", b / "blk.gds", topo)
+    assert rec is None and "binary changed" in why
+    assert not (b / E._A8_MEASUREMENT).exists()
+
+
+def test_explicit_different_binary_does_not_reuse_cached_native_measurement(tmp_path, monkeypatch):
+    project, b, topo = _source_power_fixture(tmp_path, monkeypatch)
+    rec, why = E._native_measurement_produce(project, "blk", "", "/pdk", b / "blk.gds", topo)
+    assert rec is not None, why
+    calls = []
+    def produce(*args, **kwargs):
+        calls.append(kwargs["ngspice_bin"])
+        return None, "replacement native execution deliberately stopped"
+    monkeypatch.setattr(E, "_native_measurement_produce", produce)
+    result = E.emit_block(project, "blk", "", "/pdk", ngspice_bin="/candidate/ngspice")
+    assert calls == ["/candidate/ngspice"] and result["emitted"] is False
+    assert "different selected binary" in result["reason"]
 
 
 @pytest.mark.parametrize("native_rc,native_text", [(1, "MACRO failed\n"), (0, "")])
