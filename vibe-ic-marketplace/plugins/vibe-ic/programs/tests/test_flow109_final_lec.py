@@ -292,7 +292,10 @@ def _retained_case(project, monkeypatch):
             'scratch/strategies/chip_top.p/pdr/status': pdr['sha256'],
             'scratch/strategies/chip_top.p/sat/status': sat['sha256']}}
     proof = _put(project, 'evidence/proof.json', proof_value)
-    prep_value = {'kind': lec.physical.KIND, 'powered_mode': {'VDD': 1, 'VSS': 0},
+    prep_value = {'schema': lec.physical.SCHEMA, 'producer': 'flow109_final_lec_physical',
+        'status': 'PREPARED_NOT_EQUIVALENCE_PROVEN', 'kind': lec.physical.KIND,
+        'top': 'chip_top', 'inputs': {}, 'raw_adopted_netlist': netlist,
+        'powered_mode': {'VDD': 1, 'VSS': 0},
         'projected_supply_ports': {'gold': ['VDD', 'VSS'], 'gate': []},
         'functional_interfaces': {'gold': {'a': ['input', 1], 'p': ['output', 1]},
                                   'gate': {'a': ['input', 1], 'p': ['output', 1]}},
@@ -357,6 +360,16 @@ def test_retained_native_proof_is_reopened_only_for_exact_current_views(tmp_path
     proof, adoption = lec._consume_retained_native(tmp_path, prepared)
     assert proof['verdict'] == 'PASS'
     assert adoption['mode'] == 'current_views_exactly_match_retained_native_EQY_subject'
+
+
+def test_current_retained_physical_views_are_consumed_without_producer_rerun(tmp_path,
+                                                                             monkeypatch):
+    prepared, retained = _retained_case(tmp_path, monkeypatch)
+    retained['current_preparation'] = prepared['transformation_receipt']
+    Path(prepared['retained_native']).write_text(json.dumps(retained))
+    views, receipt = lec._retained_physical_views(tmp_path, prepared)
+    assert views['status'] == 'PREPARED_NOT_EQUIVALENCE_PROVEN'
+    assert receipt == prepared['transformation_receipt']
 
 
 @pytest.mark.parametrize('damage, reason', [

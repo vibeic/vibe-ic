@@ -508,9 +508,10 @@ def _consume_retained_native(project, prepared):
                 'reference_view', 'gate_view', 'config', 'state_in',
                 'input_fingerprint', 'native_step_receipt', 'partition_list',
                 'method_source', 'run_script'}
+    base_keys = required | {'strategy_statuses', 'schema', 'status', 'image', 'scope'}
     if (retained.get('schema') != RETAINED_SCHEMA or retained.get('status') != 'PASS'
-            or retained.get('image') != EDA_IMAGE or set(retained) !=
-            required | {'strategy_statuses', 'schema', 'status', 'image', 'scope'}):
+            or retained.get('image') != EDA_IMAGE
+            or set(retained) not in (base_keys, base_keys | {'current_preparation'})):
         raise AdmissionRefusal('D44_RETAINED_RECEIPT_INVALID', str(path))
     files = {name: _project_bound(project, retained[name]) for name in required}
     native, proof = _read(files['native_receipt']), _read(files['proof'])
@@ -599,6 +600,36 @@ def _consume_retained_native(project, prepared):
                    'mode': 'current_views_exactly_match_retained_native_EQY_subject'}
 
 
+def _retained_physical_views(project, prepared):
+    """Re-open a current-source preparation receipt without rerunning its producer."""
+    retained_path = prepared.get('retained_native')
+    if retained_path is None:
+        return None
+    retained = _read(retained_path)
+    current = retained.get('current_preparation')
+    if current is None:
+        return None
+    receipt_path = _project_bound(project, current)
+    views = _read(receipt_path)
+    if (views.get('schema') != physical.SCHEMA or views.get('producer') !=
+            'flow109_final_lec_physical' or views.get('status') !=
+            'PREPARED_NOT_EQUIVALENCE_PROVEN' or views.get('kind') != physical.KIND):
+        raise AdmissionRefusal('D44_RETAINED_TRANSFORMATION_INVALID', str(receipt_path))
+    if (views.get('top') != prepared['manifest']['top']
+            or views.get('raw_adopted_netlist', {}).get('sha256') !=
+               _sha(prepared['paths']['adopted_netlist'])):
+        raise AdmissionRefusal('D44_RETAINED_TRANSFORMATION_CHANGED', str(receipt_path))
+    for input_path, digest in (views.get('inputs') or {}).items():
+        if prepared['inputs'].get(input_path) != digest or _sha(input_path) != digest:
+            raise AdmissionRefusal('D44_PHYSICAL_INPUT_MISMATCH', input_path)
+    outputs = views.get('outputs')
+    if not isinstance(outputs, dict) or set(outputs) != {'gold', 'gate'}:
+        raise AdmissionRefusal('D44_RETAINED_VIEW_CHANGED', 'output population')
+    for side, value in outputs.items():
+        _bound(project, value)
+    return views, _record(project, receipt_path)
+
+
 def execute(project, context):
     project = Path(project).resolve()
     attempt = project / 'reports/flow109/D44' / uuid.uuid4().hex
@@ -615,20 +646,26 @@ def execute(project, context):
             _before(project, context, prepared)
             record['native_started'] = True
         if prepared.get('physical_input'):
-            view_dir = attempt / 'physical-views'
-            try:
-                views = physical.produce(project, _bound(project, prepared['physical_input']),
-                                         view_dir, before=before)
-            except (ValueError, RuntimeError, KeyError) as exc:
-                raise AdmissionRefusal('D44_PHYSICAL_PROOF_INPUT_REFUSED', str(exc)) from exc
-            record['transformation_receipt'] = _record(project, view_dir / 'preparation.json')
+            retained_views = _retained_physical_views(project, prepared)
+            if retained_views is not None:
+                views, record['transformation_receipt'] = retained_views
+                record['physical_preparation_reused'] = True
+            else:
+                view_dir = attempt / 'physical-views'
+                try:
+                    views = physical.produce(project, _bound(project, prepared['physical_input']),
+                                             view_dir, before=before)
+                except (ValueError, RuntimeError, KeyError) as exc:
+                    raise AdmissionRefusal('D44_PHYSICAL_PROOF_INPUT_REFUSED', str(exc)) from exc
+                record['transformation_receipt'] = _record(project, view_dir / 'preparation.json')
             prepared['proof_paths'] = {'rtl': [_bound(project, views['outputs']['gold'])],
                                       'adopted_netlist': _bound(project, views['outputs']['gate']),
                                       'liberty': prepared['paths']['liberty']}
             for name in ('gold', 'gate'):
                 item = views['outputs'][name]
                 prepared['inputs'][item['path']] = item['sha256']
-            prepared['inputs'][str(view_dir / 'preparation.json')] = _sha(view_dir / 'preparation.json')
+            transformation_path = _bound(project, record['transformation_receipt'])
+            prepared['inputs'][str(transformation_path)] = _sha(transformation_path)
             prepared['transformation_receipt'] = record['transformation_receipt']
         record['model_census'] = _model_census(project, prepared, attempt, before)
         if prepared.get('retained_native'):
