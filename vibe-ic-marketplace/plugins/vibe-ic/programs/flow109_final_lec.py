@@ -21,6 +21,7 @@ if str(HERE) not in sys.path:
 
 from _atomic_artefact import write_json
 from flow109_admission import AdmissionRefusal, require_launch_admission
+from flow109_metric_acceptance import accept_d44
 import librelane_eqy as eqy
 
 SCHEMA = 'vibeic.flow109.final-lec.v1'
@@ -36,7 +37,8 @@ def _sha(path):
 def operation_sources():
     from execution_provider_catalog import source_closure
     paths = source_closure({HERE / 'librelane_eqy.py', HERE / 'lec_post_layout_check.py'})
-    paths.update((Path(__file__), HERE / 'flow109.py', HERE / 'flow109_admission.py'))
+    paths.update((Path(__file__), HERE / 'flow109.py', HERE / 'flow109_admission.py',
+                  HERE / 'flow109_metric_acceptance.py'))
     result = {str(path.relative_to(HERE.parent)): _sha(path) for path in sorted(paths)}
     # Native EQY is Python too; its installed Step implementation is part of
     # the qualified operation, rather than merely the interpreter version.
@@ -414,6 +416,11 @@ def execute(project, context):
     except (ImportError, OSError, ValueError) as exc:
         record.update(component_status='NOT_MEASURED', reason='D44_NATIVE_UNAVAILABLE_OR_UNSUPPORTED', detail=str(exc))
     record['metric_bindings'] = bind_metrics(project, context, record)
+    record['metric_acceptance'] = accept_d44(project, context, record)
+    record['metric_acceptance_status'] = record['metric_acceptance']['status']
+    record['unimplemented_obligations'] = [
+        item['id'] for item in record['metric_acceptance']['obligations']
+        if item['status'] == 'UNIMPLEMENTED_METRIC_BINDING']
     record['receipt'] = {'path': str((attempt / 'component.json').relative_to(project))}
     write_json(attempt / 'component.json', record)
     return record

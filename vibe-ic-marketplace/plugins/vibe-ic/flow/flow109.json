@@ -9870,6 +9870,7 @@
           "dispatch": {
             "adapter": "flow109_final_lec",
             "native_step_id": "flow109.D44",
+            "flow109_metrics_status": "IMPLEMENTED_D44_RUNTIME",
             "engine_families": [
               "python3",
               "yosys",
@@ -9938,7 +9939,7 @@
             "checker.final_lec.final_lec_unproved",
             "producer.final_lec.execution"
           ],
-          "status": "UNIMPLEMENTED_METRIC_BINDING"
+          "status": "IMPLEMENTED_D44_RUNTIME_BINDING"
         },
         {
           "id": "final_lec.sta_lvs_release_netlist_mapping",
@@ -9956,10 +9957,10 @@
             "checker.final_lec.sta_lvs_release_netlist_mapping",
             "producer.final_lec.execution"
           ],
-          "status": "UNIMPLEMENTED_METRIC_BINDING"
+          "status": "IMPLEMENTED_D44_RUNTIME_BINDING"
         }
       ],
-      "metric_acceptance_status": "UNIMPLEMENTED",
+      "metric_acceptance_status": "IMPLEMENTED_D44_RUNTIME",
       "gate_layer_ids": [
         "G1",
         "G2",

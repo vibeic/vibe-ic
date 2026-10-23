@@ -868,3 +868,122 @@ def accept_d62(project: Path, context: Mapping[str, Any],
     else:
         result["reason"] = "METRIC_BINDING_INCOMPLETE_OR_NOT_CURRENT"
     return result
+
+
+D44_BINDINGS = {
+    "final_lec.final_lec_unproved": {
+        "operator": "eq",
+        "value": 0,
+        "unit": "count",
+    },
+    "final_lec.sta_lvs_release_netlist_mapping": {
+        "operator": "matches_adopted_reference",
+        "authority": "adopted/final_lec/sta_lvs_release_netlist_mapping.json",
+    },
+}
+
+
+def _d44_identity(component: Mapping[str, Any], context: Mapping[str, Any],
+                  obligation: Mapping[str, Any]) -> dict:
+    uses = context.get("runtime_tool_uses")
+    if not isinstance(uses, list) or not uses:
+        raise MetricRefusal("METRIC_EXECUTION_EVIDENCE_INVALID",
+                            "exact D44 tool execution identities absent")
+    inputs = component.get("inputs")
+    sources = component.get("source_sha256")
+    if not isinstance(inputs, Mapping) or not inputs or not isinstance(sources, Mapping) or not sources:
+        raise MetricRefusal("METRIC_IDENTITY_INCOMPLETE", "D44 inputs/source closure")
+    identity = {
+        "producer": {"name": "flow109_final_lec.execute",
+                     "proof_receipt": component.get("proof_receipt")},
+        "checker": {"name": "flow109_final_lec.bind_metrics",
+                    "binding_schema": component.get("metric_bindings", {}).get("schema")},
+        "tool_execution": {
+            "context_sha256": context.get("context_sha256"),
+            "uses": [{key: use.get(key) for key in
+                      ("use_id", "tool_id", "build_sha256", "executable",
+                       "qualification_sha256")} for use in uses],
+        },
+        "consumed_inputs": dict(inputs),
+        "requirements": {"obligation": dict(obligation),
+                         "registry_sha256": context.get("registry_sha256")},
+        "configuration": {use.get("use_id"): use.get("config") for use in uses},
+        "source": dict(sources),
+    }
+    _identity_complete(identity)
+    return identity
+
+
+def accept_d44(project: Path, context: Mapping[str, Any],
+               component: Mapping[str, Any]) -> dict:
+    """Evaluate only the two registered D44 bindings; G1-G9 remain separate."""
+    project = Path(project).resolve()
+    declared = context.get("resolved_row", {}).get("obligations")
+    result = {"schema": SCHEMA, "row_id": "D44", "status": "NOT_MEASURED",
+              "delivery_blocked": True, "obligations": [],
+              "scope": "D44 row metrics only; not production qualification or G1-G9"}
+    if not isinstance(declared, list):
+        result["reason"] = "METRIC_OBLIGATIONS_ABSENT"
+        return result
+    obligations = {item.get("id"): item for item in declared if isinstance(item, Mapping)}
+    if set(obligations) != set(D44_BINDINGS):
+        result["reason"] = "METRIC_OBLIGATIONS_UNREGISTERED"
+        return result
+    unproved, mapping, current = _d44_measurements(project, context, component, obligations)
+    measured_by_id = {
+        "final_lec.final_lec_unproved": unproved,
+        "final_lec.sta_lvs_release_netlist_mapping": mapping,
+    }
+    for obligation in declared:
+        oid = obligation["id"]
+        binding = D44_BINDINGS[oid]
+        expectation = obligation.get("expectation", {})
+        declared_ok = (expectation == {
+            "operator": "eq", "value": binding.get("value"), "unit": binding.get("unit"),
+            "source": "contract invariant: no unresolved required violations"}
+            if oid == "final_lec.final_lec_unproved" else expectation == {
+                "operator": "matches_adopted_reference",
+                "reference_ref": binding.get("authority")})
+        if not declared_ok:
+            result["obligations"].append({"id": oid,
+                "status": "UNIMPLEMENTED_METRIC_BINDING"})
+            continue
+        measured = measured_by_id[oid]
+        if measured.get("status") == "FAIL":
+            result["obligations"].append({"id": oid, "metric": obligation.get("metric"),
+                "operator": binding["operator"], "status": "FAIL",
+                "detail": measured.get("reason") or "measured component failure"})
+            continue
+        try:
+            if oid == "final_lec.final_lec_unproved":
+                authority = {"status": "APPROVED", "value": binding["value"],
+                    "unit": binding["unit"], "authority": "flow109_registry_contract",
+                    "registry_sha256": context.get("registry_sha256")}
+            else:
+                if measured.get("status") != "MEASURED":
+                    authority = {"status": "NOT_MEASURED"}
+                else:
+                    reference = current["metrics"]["sta_lvs_release_netlist_mapping"]
+                    authority = {"status": "APPROVED", "reference": reference["reference"],
+                        "reference_identity": measured["identity"],
+                        "authority": "current_adopted_D44_reference",
+                        "path": binding["authority"]}
+            status, detail = evaluate_operator(binding["operator"], measured, authority)
+            result["obligations"].append({"id": oid, "metric": obligation.get("metric"),
+                "operator": binding["operator"], "status": status, "detail": detail,
+                "measurement": measured, "authority": authority})
+        except (MetricRefusal, OSError, ValueError, KeyError, TypeError) as exc:
+            result["obligations"].append({"id": oid, "metric": obligation.get("metric"),
+                "operator": binding["operator"], "status": "NOT_MEASURED",
+                "reason": getattr(exc, "code", "METRIC_ACCEPTANCE_REFUSED"),
+                "detail": str(exc)})
+    statuses = [item["status"] for item in result["obligations"]]
+    if statuses and all(status == "PASS" for status in statuses) \
+            and len(statuses) == len(declared):
+        result.update(status="PASS", delivery_blocked=False,
+                      reason="ALL_APPLICABLE_METRICS_CURRENT_AND_PASS")
+    elif "FAIL" in statuses:
+        result.update(status="FAIL", reason="MEASURED_METRIC_FAILURE")
+    else:
+        result["reason"] = "METRIC_BINDING_INCOMPLETE_OR_NOT_CURRENT"
+    return result

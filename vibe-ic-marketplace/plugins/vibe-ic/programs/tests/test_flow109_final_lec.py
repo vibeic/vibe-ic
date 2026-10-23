@@ -18,6 +18,7 @@ import pytest
 import flow109
 import flow109_admission as admission
 import flow109_final_lec as lec
+import flow109_metric_acceptance as metrics
 from programs.tests._hostpaths import require_repo
 
 
@@ -94,6 +95,21 @@ endmodule
     return context
 
 
+def test_registry_registers_only_the_two_D44_runtime_bindings():
+    registry = flow109.load_registry()
+    features = next(p['features'] for p in registry['reference_profiles']
+                    if p['name'] == 'Small digital IC without DFT')
+    row = flow109.resolve_step(flow109.resolve_plan(features), 'D44')
+    assert row['profile']['dispatch']['flow109_metrics_status'] == 'IMPLEMENTED_D44_RUNTIME'
+    assert row['metric_acceptance_status'] == 'IMPLEMENTED_D44_RUNTIME'
+    assert {item['id']: item['status'] for item in row['obligations']} == {
+        'final_lec.final_lec_unproved': 'IMPLEMENTED_D44_RUNTIME_BINDING',
+        'final_lec.sta_lvs_release_netlist_mapping': 'IMPLEMENTED_D44_RUNTIME_BINDING'}
+    assert set(metrics.D44_BINDINGS) == {
+        'final_lec.final_lec_unproved',
+        'final_lec.sta_lvs_release_netlist_mapping'}
+
+
 def test_actual_general_entry_proves_final_mapped_netlist_and_publishes_common_source_chain(tmp_path):
     _case(tmp_path)
     legacy = tmp_path / 'reports/lec.json'
@@ -117,6 +133,13 @@ def test_actual_general_entry_proves_final_mapped_netlist_and_publishes_common_s
     mapping = metrics['metrics']['sta_lvs_release_netlist_mapping']
     assert mapping['status'] == 'PASS'
     assert mapping['consumer_adoption'] == 'NOT_MEASURED'
+    acceptance = record['metric_acceptance']
+    assert record['metric_acceptance_status'] == acceptance['status'] == 'PASS'
+    assert acceptance['delivery_blocked'] is False
+    assert {item['id']: item['status'] for item in acceptance['obligations']} == {
+        'final_lec.final_lec_unproved': 'PASS',
+        'final_lec.sta_lvs_release_netlist_mapping': 'PASS'}
+    assert record['flow109_acceptance'] == 'NOT_MEASURED'
     baseline = json.loads((tmp_path / lec.BASELINE).read_text())
     assert baseline['consumer_adoption'] == 'NOT_MEASURED'
     assert all(r['sha256'] == baseline['adopted_netlist']['sha256']
@@ -136,9 +159,12 @@ def test_native_logic_change_or_functionless_cell_never_passes(tmp_path, damage,
         assert record['metric_bindings']['metrics']['final_lec_unproved']['status'] == 'FAIL'
         assert record['metric_bindings']['metrics']['final_lec_unproved']['value'] > 0
         assert record['metric_bindings']['metrics']['sta_lvs_release_netlist_mapping']['status'] == 'NOT_MEASURED'
+        assert record['metric_acceptance_status'] == 'FAIL'
+        assert record['metric_acceptance']['delivery_blocked'] is True
     else:
         assert record['reason'] == 'D44_FUNCTIONAL_MODEL_UNSUPPORTED'
         assert record['metric_bindings']['status'] == 'NOT_MEASURED'
+        assert record['metric_acceptance_status'] == 'NOT_MEASURED'
 
 
 @pytest.mark.parametrize('damage', ['consumer', 'transformation', 'source', 'unsupported'])
@@ -167,6 +193,7 @@ def test_unqualified_or_unbound_subject_stops_before_model_or_proof_launch(tmp_p
 
 
 def test_checked_in_native_eqy_sample_cannot_lose_a_required_partition(tmp_path):
+    context = _case(tmp_path)
     sample = require_repo('vibe-ic-marketplace', 'plugins', 'vibe-ic', 'programs', 'calibration',
                           'eqy_defined_init_negative.tar')
     scratch = tmp_path / 'native/scratch'
@@ -190,6 +217,14 @@ def test_checked_in_native_eqy_sample_cannot_lose_a_required_partition(tmp_path)
                   unproven_points=[], xbits_partitions=[])
     assert lec._proof_binding(forged) == {
         'status': 'NOT_MEASURED', 'reason': 'D44_PARTITION_COVERAGE_INCOMPLETE'}
+    component = {'component_status': 'NOT_MEASURED', 'proof': incomplete,
+                 'flow109_acceptance': 'NOT_MEASURED'}
+    accepted = metrics.accept_d44(tmp_path, context, component)
+    assert accepted['status'] == 'NOT_MEASURED'
+    assert accepted['delivery_blocked'] is True
+    assert {item['id']: item['status'] for item in accepted['obligations']} == {
+        'final_lec.final_lec_unproved': 'NOT_MEASURED',
+        'final_lec.sta_lvs_release_netlist_mapping': 'NOT_MEASURED'}
 
 
 @pytest.mark.parametrize('damage', ['swapped_baseline', 'stale_proof', 'stale_netlist'])
@@ -213,6 +248,12 @@ def test_metric_binding_refuses_swapped_or_stale_common_source_chain(tmp_path, d
     assert rebound['status'] == 'FAIL'
     assert rebound['metrics']['final_lec_unproved']['status'] == 'PASS'
     assert rebound['metrics']['sta_lvs_release_netlist_mapping']['status'] == 'FAIL'
+    accepted = metrics.accept_d44(tmp_path, context, record)
+    assert accepted['status'] == 'FAIL'
+    assert accepted['delivery_blocked'] is True
+    assert {item['id']: item['status'] for item in accepted['obligations']} == {
+        'final_lec.final_lec_unproved': 'PASS',
+        'final_lec.sta_lvs_release_netlist_mapping': 'FAIL'}
 
 
 def test_actual_model_launch_rechecks_qualification_after_preparation(tmp_path, monkeypatch):

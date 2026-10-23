@@ -141,10 +141,17 @@ and exact common netlist bytes for all three named roles. Missing or stale
 evidence cannot pass. Its `consumer_adoption: NOT_MEASURED` explicitly means the
 mapping is proven here but downstream STA/LVS execution is not.
 
-These bindings do not convert a component result into row or whole-flow
-acceptance. `flow109_acceptance` and `baseline_adoption` remain `NOT_MEASURED`;
-the shared runtime-metric controller must consume the row-local binding record
-and G1-G9 remain separately unmeasured.
+The source-whitelisted runtime-metric consumer re-evaluates both bindings from
+current evidence and applies the registry's typed `eq` and
+`matches_adopted_reference` operators. Its row record sets `delivery_blocked`
+for missing/stale or failing evidence, and only both current obligations may
+produce row-metric `PASS`. The canonical single-component dispatcher still
+returns the component verdict rather than this row record; changing that shared
+policy is outside D44 registration. This does not convert a component result
+into whole-flow acceptance:
+`flow109_acceptance` and `baseline_adoption` remain `NOT_MEASURED`, downstream
+production qualification is not inferred, and G1-G9 remain separately
+unmeasured.
 
 ## D62 ODB metal-density fill component
 
