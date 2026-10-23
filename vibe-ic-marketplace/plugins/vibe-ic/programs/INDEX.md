@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1477
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1477)
+- **Total programs (excluding helpers / shims):** 1478
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1478)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1468 |
+| `any` | 1469 |
 
 ## Alphabetical listing
 
@@ -487,6 +487,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `flow109_analog_a04` | any | — | Flow 109 A04: source-authorized topology emission and retained checking. |
 | `flow109_analog_a05` | any | — | Flow 109 A05: expert-bound sizing/netlist plus native ngspice OP. |
 | `flow109_analog_model_check` | any | — | Consume current A02 ngspice model-smoke receipts without granting signoff. |
+| `flow109_clock_plan` | any | — | D34 adapter for the existing special Default clock-plan producer. |
 | `flow109_density_fill` | any | — | Blocking D62 ODB density-fill component, not a density/tapeout signoff. |
 | `flow109_final_electrical` | any | — | D70 Default bounded component: final RCX SPEFs -> STAPostPNR and SDF. |
 | `flow109_final_extract` | any | — | D69 Default native component: final filled ODB -> OpenROAD.RCX -> SPEF consumer. |
@@ -1549,7 +1550,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1468 programs)
+### `any` (1469 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `absence_verdict_names_its_search_space_check` — "not found" must say WHERE it looked.
@@ -2008,6 +2009,7 @@ _(no programs in this group)_
 - `flow109_analog_a04` — Flow 109 A04: source-authorized topology emission and retained checking.
 - `flow109_analog_a05` — Flow 109 A05: expert-bound sizing/netlist plus native ngspice OP.
 - `flow109_analog_model_check` — Consume current A02 ngspice model-smoke receipts without granting signoff.
+- `flow109_clock_plan` — D34 adapter for the existing special Default clock-plan producer.
 - `flow109_density_fill` — Blocking D62 ODB density-fill component, not a density/tapeout signoff.
 - `flow109_final_electrical` — D70 Default bounded component: final RCX SPEFs -> STAPostPNR and SDF.
 - `flow109_final_extract` — D69 Default native component: final filled ODB -> OpenROAD.RCX -> SPEF consumer.
