@@ -883,31 +883,198 @@ D44_BINDINGS = {
 }
 
 
-def _d44_identity(component: Mapping[str, Any], context: Mapping[str, Any],
+def _d44_bound_file(project: Path, record: Any, label: str) -> Path:
+    if (not isinstance(record, Mapping) or not isinstance(record.get("path"), str)
+            or not _HEX.fullmatch(str(record.get("sha256", "")))):
+        raise MetricRefusal("METRIC_EXECUTION_EVIDENCE_INVALID", f"{label} record")
+    path = _safe_project_file(project, record["path"])
+    if not path.is_file() or _sha(path.read_bytes()) != record["sha256"]:
+        raise MetricRefusal("METRIC_EXECUTION_EVIDENCE_STALE", label)
+    return path
+
+
+def _d44_bound_json(project: Path, record: Any, label: str) -> tuple[Path, dict]:
+    path = _d44_bound_file(project, record, label)
+    try:
+        value = json.loads(path.read_text())
+    except (OSError, ValueError, TypeError) as exc:
+        raise MetricRefusal("METRIC_EXECUTION_EVIDENCE_INVALID", label) from exc
+    if not isinstance(value, dict):
+        raise MetricRefusal("METRIC_EXECUTION_EVIDENCE_INVALID", label)
+    return path, value
+
+
+def _d44_current_inputs(project: Path, component: Mapping[str, Any]) -> dict:
+    inputs = component.get("inputs")
+    if not isinstance(inputs, Mapping) or not inputs:
+        raise MetricRefusal("METRIC_IDENTITY_INCOMPLETE", "D44 consumed inputs")
+    current = {}
+    for name, digest in inputs.items():
+        if not isinstance(name, str) or not _HEX.fullmatch(str(digest)):
+            raise MetricRefusal("METRIC_EXECUTION_EVIDENCE_INVALID", "D44 input record")
+        path = Path(name)
+        path = path if path.is_absolute() else project / path
+        if not path.is_file() or _sha(path.read_bytes()) != digest:
+            raise MetricRefusal("METRIC_EXECUTION_EVIDENCE_STALE", name)
+        current[name] = digest
+    return current
+
+
+def _d44_source_owned_identity(project: Path, component: Mapping[str, Any],
+                               context: Mapping[str, Any]) -> tuple[dict, dict]:
+    import flow109
+    try:
+        current_context = flow109.validate_execution_context(context)
+        admission = flow109.source_owned_native_admission(current_context)
+    except (ValueError, KeyError, TypeError) as exc:
+        raise MetricRefusal("METRIC_EXECUTION_EVIDENCE_INVALID",
+                            "current source-owned D44 context required") from exc
+    if (not isinstance(admission, Mapping) or admission.get("admitted") is not True
+            or admission.get("reason") != "SOURCE_OWNED_EXISTING_NATIVE_COMPONENT"
+            or admission.get("native_step_id") != "flow109.D44"
+            or admission.get("acceptance_scope") != "existing_native_component_only"):
+        raise MetricRefusal("METRIC_EXECUTION_EVIDENCE_INVALID",
+                            "current source-owned D44 admission required")
+    if component.get("component_status") != "PASS":
+        raise MetricRefusal("METRIC_EXECUTION_EVIDENCE_INVALID", "D44 PASS component required")
+    adoption = component.get("retained_native")
+    if (not isinstance(adoption, Mapping)
+            or adoption.get("mode") != "current_views_exactly_match_retained_native_EQY_subject"):
+        raise MetricRefusal("METRIC_EXECUTION_EVIDENCE_INVALID",
+                            "D44 retained-native adoption receipt required")
+    _, retained = _d44_bound_json(project, adoption.get("receipt"), "retained manifest")
+    required = {"native_receipt", "operation_sources", "preparation", "proof",
+                "reference_view", "gate_view", "config", "state_in",
+                "input_fingerprint", "native_step_receipt", "partition_list",
+                "strategy_statuses", "method_source", "run_script", "argv",
+                "current_preparation"}
+    if (retained.get("schema") != "vibeic.flow109.final-lec-retained-native.v1"
+            or retained.get("status") != "PASS" or not required <= set(retained)):
+        raise MetricRefusal("METRIC_EXECUTION_EVIDENCE_INVALID", "retained manifest schema")
+    records, values = {}, {}
+    json_records = {"native_receipt", "operation_sources", "preparation", "proof",
+                    "config", "state_in", "input_fingerprint", "native_step_receipt",
+                    "current_preparation"}
+    for name in json_records:
+        records[name], values[name] = _d44_bound_json(project, retained[name], name)
+    for name in required - json_records - {"strategy_statuses"}:
+        records[name] = _d44_bound_file(project, retained[name], name)
+    status_records = retained["strategy_statuses"]
+    if not isinstance(status_records, list) or not status_records:
+        raise MetricRefusal("METRIC_EXECUTION_EVIDENCE_INVALID", "partition statuses")
+    status_paths = []
+    for index, record in enumerate(status_records):
+        path = _d44_bound_file(project, record, f"partition status {index}")
+        status_paths.append({"path": str(path.relative_to(project)), "sha256": record["sha256"]})
+    native, proof = values["native_receipt"], values["proof"]
+    config, fingerprint = values["config"], values["input_fingerprint"]
+    step = values["native_step_receipt"]
+    from flow109_final_lec import EDA_IMAGE, operation_sources
+    argv_path = records["argv"]
+    try:
+        argv = json.loads(argv_path.read_text())
+    except (OSError, ValueError, TypeError) as exc:
+        raise MetricRefusal("METRIC_EXECUTION_EVIDENCE_INVALID", "native argv") from exc
+    image = retained.get("image")
+    local = step.get("input", {}).get("local_image")
+    if (image != EDA_IMAGE or native.get("component_status") != "PASS"
+            or native.get("native_status") != "PASS"
+            or native.get("exit_code") != 0 or native.get("image") != image
+            or not isinstance(local, Mapping) or local.get("image") != image
+            or native.get("image_id") != local.get("image_id")
+            or not re.fullmatch(r"sha256:[0-9a-f]{64}", str(native.get("image_id", "")))
+            or not _HEX.fullmatch(str(native.get("cid", "")))
+            or local.get("cid") != native.get("cid") or local.get("network_mode") != "none"
+            or not isinstance(argv, list) or not all(isinstance(item, str) for item in argv)
+            or image not in argv
+            or argv.index(image) + 1 >= len(argv) or argv[argv.index(image) + 1] != "--skip"):
+        raise MetricRefusal("METRIC_EXECUTION_EVIDENCE_INVALID", "native image/command identity")
+    if (native.get("source_closure", {}).get("sha256") != retained["operation_sources"]["sha256"]
+            or native.get("positive", {}).get("proof", {}).get("sha256") !=
+               retained["proof"]["sha256"]
+            or native.get("argv", {}).get("sha256") != retained["argv"]["sha256"]
+            or proof.get("config_sha256") != retained["config"]["sha256"]
+            or step.get("input") != fingerprint):
+        raise MetricRefusal("METRIC_EXECUTION_EVIDENCE_INVALID",
+                            "native proof/config/source identity")
+    component_proof_path, component_proof = _d44_bound_json(
+        project, component.get("proof_receipt"), "current proof")
+    if component_proof != proof or component.get("proof") != proof:
+        raise MetricRefusal("METRIC_EXECUTION_EVIDENCE_STALE", "current proof differs")
+    if component.get("transformation_receipt") != retained["current_preparation"]:
+        raise MetricRefusal("METRIC_EXECUTION_EVIDENCE_STALE", "current preparation differs")
+    sources = component.get("source_sha256")
+    if not isinstance(sources, Mapping) or dict(sources) != operation_sources():
+        raise MetricRefusal("METRIC_EXECUTION_EVIDENCE_STALE", "D44 source closure")
+    execution = {
+        "policy": dict(admission),
+        "image": image,
+        "image_id": native.get("image_id"),
+        "cid": native.get("cid"),
+        "argv": {"path": str(argv_path.relative_to(project)),
+                 "sha256": retained["argv"]["sha256"]},
+        "native_receipt": dict(retained["native_receipt"]),
+        "native_step_receipt": dict(retained["native_step_receipt"]),
+        "method_source": dict(retained["method_source"]),
+        "run_script": dict(retained["run_script"]),
+        "model_census": component.get("model_census"),
+    }
+    configuration = {
+        "config": dict(retained["config"]),
+        "input_fingerprint": dict(retained["input_fingerprint"]),
+        "original_source_closure": dict(retained["operation_sources"]),
+        "original_preparation": dict(retained["preparation"]),
+        "original_state": dict(retained["state_in"]),
+        "reference_view": dict(retained["reference_view"]),
+        "gate_view": dict(retained["gate_view"]),
+        "current_preparation": dict(retained["current_preparation"]),
+        "partition_list": dict(retained["partition_list"]),
+        "partition_statuses": status_paths,
+        "current_proof": {"path": str(component_proof_path.relative_to(project)),
+                          "sha256": component["proof_receipt"]["sha256"]},
+    }
+    _identity_complete({"producer": {"retained": dict(adoption)},
+                        "checker": {"name": "flow109_final_lec.bind_metrics"},
+                        "tool_execution": execution,
+                        "consumed_inputs": _d44_current_inputs(project, component),
+                        "requirements": {"registry_sha256": context.get("registry_sha256")},
+                        "configuration": configuration})
+    return execution, configuration
+
+
+def _d44_identity(project: Path, component: Mapping[str, Any], context: Mapping[str, Any],
                   obligation: Mapping[str, Any]) -> dict:
     uses = context.get("runtime_tool_uses")
-    if not isinstance(uses, list) or not uses:
-        raise MetricRefusal("METRIC_EXECUTION_EVIDENCE_INVALID",
-                            "exact D44 tool execution identities absent")
-    inputs = component.get("inputs")
+    explicit_claim = uses is not None or context.get("qualification_registry") is not None
+    if explicit_claim:
+        if not isinstance(uses, list) or not uses:
+            raise MetricRefusal("METRIC_EXECUTION_EVIDENCE_INVALID",
+                                "exact D44 qualified tool execution identities absent")
+        tool_execution = {
+            "context_sha256": context.get("context_sha256"),
+            "uses": [{key: use.get(key) for key in
+                      ("use_id", "tool_id", "build_sha256", "executable",
+                       "qualification_sha256")} for use in uses],
+        }
+        configuration = {use.get("use_id"): use.get("config") for use in uses}
+    else:
+        tool_execution, configuration = _d44_source_owned_identity(project, component, context)
+        tool_execution = {"context_sha256": context.get("context_sha256"),
+                          "source_owned": tool_execution}
+    inputs = _d44_current_inputs(project, component)
     sources = component.get("source_sha256")
-    if not isinstance(inputs, Mapping) or not inputs or not isinstance(sources, Mapping) or not sources:
+    if not isinstance(sources, Mapping) or not sources:
         raise MetricRefusal("METRIC_IDENTITY_INCOMPLETE", "D44 inputs/source closure")
     identity = {
         "producer": {"name": "flow109_final_lec.execute",
                      "proof_receipt": component.get("proof_receipt")},
         "checker": {"name": "flow109_final_lec.bind_metrics",
                     "binding_schema": component.get("metric_bindings", {}).get("schema")},
-        "tool_execution": {
-            "context_sha256": context.get("context_sha256"),
-            "uses": [{key: use.get(key) for key in
-                      ("use_id", "tool_id", "build_sha256", "executable",
-                       "qualification_sha256")} for use in uses],
-        },
+        "tool_execution": tool_execution,
         "consumed_inputs": dict(inputs),
         "requirements": {"obligation": dict(obligation),
                          "registry_sha256": context.get("registry_sha256")},
-        "configuration": {use.get("use_id"): use.get("config") for use in uses},
+        "configuration": configuration,
         "source": dict(sources),
     }
     _identity_complete(identity)
@@ -936,7 +1103,12 @@ def _d44_measurements(project: Path, context: Mapping[str, Any],
         if status != "PASS":
             return {"status": "NOT_MEASURED", "reason": value.get("reason") or
                     "D44 measurement is not current"}
-        identity = _d44_identity(component, context, obligations[oid])
+        try:
+            identity = _d44_identity(project, component, context, obligations[oid])
+        except (MetricRefusal, OSError, ValueError, KeyError, TypeError) as exc:
+            return {"status": "NOT_MEASURED",
+                    "reason": getattr(exc, "code", "METRIC_EXECUTION_EVIDENCE_INVALID"),
+                    "detail": str(exc)}
         return {"status": "MEASURED",
                 "value": value.get("reference") if mapping else value.get("value"),
                 **({} if mapping else {"unit": value.get("unit")}),

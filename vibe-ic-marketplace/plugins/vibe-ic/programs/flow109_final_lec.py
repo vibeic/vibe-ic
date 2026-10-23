@@ -509,9 +509,10 @@ def _consume_retained_native(project, prepared):
                 'input_fingerprint', 'native_step_receipt', 'partition_list',
                 'method_source', 'run_script'}
     base_keys = required | {'strategy_statuses', 'schema', 'status', 'image', 'scope'}
+    optional_keys = {'current_preparation', 'argv'}
     if (retained.get('schema') != RETAINED_SCHEMA or retained.get('status') != 'PASS'
-            or retained.get('image') != EDA_IMAGE
-            or set(retained) not in (base_keys, base_keys | {'current_preparation'})):
+            or retained.get('image') != EDA_IMAGE or not base_keys <= set(retained)
+            or set(retained) - base_keys > optional_keys):
         raise AdmissionRefusal('D44_RETAINED_RECEIPT_INVALID', str(path))
     files = {name: _project_bound(project, retained[name]) for name in required}
     native, proof = _read(files['native_receipt']), _read(files['proof'])

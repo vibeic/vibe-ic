@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import inspect
 import json
 from pathlib import Path
 import shutil
@@ -320,16 +321,23 @@ def _retained_case(project, monkeypatch):
     state = _put(project, 'evidence/state.json', {'nl': '/e/gate'})
     script = lec.eqy.eqy_script('chip_top', [Path('/e/gold')], Path('/e/gate'),
                                 'inputs/lib.lib')
+    cid = '1' * 64
+    local_image = {'image': lec.EDA_IMAGE, 'image_id': 'sha256:' + '2' * 64,
+                   'cid': cid, 'network_mode': 'none'}
     fingerprint_value = {'image': lec.EDA_IMAGE, 'state_files': {'/e/gate': gate['sha256']},
                          'config_files': {'/e/gold': gold['sha256'],
                              model_path: model['sha256'], '/e/chip_top.eqy':
-                             hashlib.sha256(script.encode()).hexdigest()}}
+                             hashlib.sha256(script.encode()).hexdigest()},
+                         'local_image': local_image}
     fingerprint = _put(project, 'evidence/fingerprint.json', fingerprint_value)
     step = _put(project, 'evidence/native-step.json', {'input': fingerprint_value})
     method = _put(project, 'evidence/method.py', '# retained native method\n')
     run = _put(project, 'evidence/run.sh', '# retained native invocation\n')
+    argv = _put(project, 'evidence/argv.json',
+                ["docker", "run", lec.EDA_IMAGE, "--skip", "bash", "/evidence/run.sh"])
     native_value = {'component_status': 'PASS', 'native_status': 'PASS',
-        'image': lec.EDA_IMAGE, 'exit_code': 0,
+        'image': lec.EDA_IMAGE, 'image_id': local_image['image_id'], 'cid': cid, 'exit_code': 0,
+        'argv': {'sha256': argv['sha256']},
         'source_closure': {'sha256': sources['sha256']},
         'positive': {'proof': {'sha256': proof['sha256']}},
         'physical_preparation': {'sha256': old_prep['sha256']},
@@ -342,7 +350,7 @@ def _retained_case(project, monkeypatch):
         'proof': proof, 'reference_view': gold, 'gate_view': gate, 'config': config,
         'state_in': state, 'input_fingerprint': fingerprint, 'native_step_receipt': step,
         'partition_list': listing, 'strategy_statuses': [pdr, sat],
-        'method_source': method, 'run_script': run}
+        'method_source': method, 'run_script': run, 'argv': argv}
     retained = _put(project, 'input/flow109/D44-retained-native.json', retained_value)
     prepared = {'retained_native': project / retained['path'],
         'transformation_receipt': current_prep,
@@ -370,6 +378,80 @@ def test_current_retained_physical_views_are_consumed_without_producer_rerun(tmp
     views, receipt = lec._retained_physical_views(tmp_path, prepared)
     assert views['status'] == 'PREPARED_NOT_EQUIVALENCE_PROVEN'
     assert receipt == prepared['transformation_receipt']
+
+
+def _source_owned_identity_case(project, monkeypatch):
+    prepared, retained = _retained_case(project, monkeypatch)
+    argv = retained.pop('argv')
+    retained['current_preparation'] = prepared['transformation_receipt']
+    Path(prepared['retained_native']).write_text(json.dumps(retained))
+    proof, adoption = lec._consume_retained_native(project, prepared)
+    retained['argv'] = argv
+    Path(prepared['retained_native']).write_text(json.dumps(retained))
+    adoption['receipt'] = lec._record(project, Path(prepared['retained_native']))
+    features = next(p['features'] for p in flow109.load_registry()['reference_profiles']
+                    if p['name'] == 'Small digital IC without DFT')
+    context = flow109.execution_context(flow109.resolve_plan(features), 'D44', 'D44')
+    component = {'component_status': 'PASS', 'proof': proof,
+        'proof_receipt': retained['proof'], 'transformation_receipt': retained['current_preparation'],
+        'retained_native': adoption, 'inputs': {'inputs/rtl.v': lec._sha(project / 'inputs/rtl.v')},
+        'source_sha256': lec.operation_sources(),
+        'model_census': {'gold': {'modules': ['chip_top'], 'ports': {'p': {'direction': 'output'}}},
+                         'gate': {'modules': ['chip_top'], 'ports': {'p': {'direction': 'output'}}}},
+        'metric_bindings': {'schema': lec.METRICS_SCHEMA}}
+    obligation = context['resolved_row']['obligations'][0]
+    return context, component, obligation, retained
+
+
+def test_source_owned_D44_identity_reopens_actual_retained_execution(tmp_path, monkeypatch):
+    context, component, obligation, _ = _source_owned_identity_case(tmp_path, monkeypatch)
+    try:
+        if len(inspect.signature(metrics._d44_identity).parameters) == 3:
+            identity = metrics._d44_identity(component, context, obligation)
+        else:
+            identity = metrics._d44_identity(tmp_path, component, context, obligation)
+    except metrics.MetricRefusal as exc:
+        identity = {'refusal': exc.code}
+    assert 'tool_execution' in identity, identity
+    execution = identity['tool_execution']['source_owned']
+    assert execution['policy']['reason'] == 'SOURCE_OWNED_EXISTING_NATIVE_COMPONENT'
+    assert execution['native_receipt']['sha256']
+    assert execution['model_census'] == component['model_census']
+
+
+@pytest.mark.parametrize('damage', ['explicit_empty_claim', 'missing_proof', 'proof',
+                                    'partition', 'input', 'source', 'config', 'tool',
+                                    'forged_context'])
+def test_source_owned_D44_identity_refuses_missing_stale_or_forged_evidence(
+        tmp_path, monkeypatch, damage):
+    context, component, obligation, retained = _source_owned_identity_case(tmp_path, monkeypatch)
+    if damage == 'explicit_empty_claim':
+        context['runtime_tool_uses'] = []
+    elif damage == 'missing_proof':
+        component.pop('proof_receipt')
+    elif damage == 'proof':
+        (tmp_path / retained['proof']['path']).write_text('{}')
+    elif damage == 'partition':
+        (tmp_path / retained['strategy_statuses'][0]['path']).write_text('FAIL\n')
+    elif damage == 'input':
+        (tmp_path / 'inputs/rtl.v').write_text('module changed; endmodule\n')
+    elif damage == 'source':
+        component['source_sha256'] = {'changed': 'source'}
+    elif damage == 'config':
+        (tmp_path / retained['config']['path']).write_text('{}')
+    elif damage == 'tool':
+        native_path = tmp_path / retained['native_receipt']['path']
+        native = json.loads(native_path.read_text())
+        native['image_id'] = 'sha256:' + 'f' * 64
+        native_path.write_text(json.dumps(native))
+        retained['native_receipt'] = lec._record(tmp_path, native_path)
+        manifest = tmp_path / 'input/flow109/D44-retained-native.json'
+        manifest.write_text(json.dumps(retained))
+        component['retained_native']['receipt'] = lec._record(tmp_path, manifest)
+    else:
+        context['resolved_row']['profile']['dispatch'].pop('admission_policy')
+    with pytest.raises(metrics.MetricRefusal):
+        metrics._d44_identity(tmp_path, component, context, obligation)
 
 
 @pytest.mark.parametrize('damage, reason', [
