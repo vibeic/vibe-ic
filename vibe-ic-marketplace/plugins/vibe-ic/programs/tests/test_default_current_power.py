@@ -180,6 +180,71 @@ def bind_original_transport(p, folder, original):
     return fp
 
 
+def corner_power(index):
+    internal = (index + 1) * 1e-3
+    switching, leakage = 1e-3, 1e-6
+    total = internal + switching + leakage
+    row = (f'{internal:.9e} {switching:.9e} {leakage:.9e} '
+           f'{total:.9e} 100.0%')
+    zero = '0.000000000e+00 0.000000000e+00 0.000000000e+00 0.000000000e+00 0.0%'
+    return ('OpenSTA report_power\n'
+            'Group                    Internal    Switching      Leakage        Total\n'
+            '                            Power        Power        Power        Power (Watts)\n'
+            '------------------------------------------------------------------------\n'
+            f'Sequential           {zero}\n'
+            f'Combinational        {row}\n'
+            f'Clock                {zero}\n'
+            f'Macro                {zero}\n'
+            f'Pad                  {zero}\n'
+            '------------------------------------------------------------------------\n'
+            f'Total                {row}\n')
+
+
+def nine_corner_transport(tmp_path, monkeypatch):
+    """Nine distinct executed mappings over one retained original owner."""
+    p, folder, _ = project(tmp_path)
+    original = original_transport(tmp_path, monkeypatch, p, folder)
+    bind_original_transport(p, folder, original)
+    (folder / 'nom_typ/sta.log').unlink()
+    (folder / 'nom_typ/power.rpt').unlink()
+    corners = [f'corner_{index}' for index in range(9)]
+    state_path = folder / 'state_out.json'
+    state = json.loads(state_path.read_text())
+    config_path = p / 'phase3/librelane/22-config/OpenROAD.STAPostPNR.json'
+    config = json.loads(config_path.read_text())
+    state['spef'], config['CELL_LIBS'] = {}, {}
+    libraries = {}
+    for index, corner in enumerate(corners):
+        spef = write(p / f'phase3/stage3/extracted/{corner}.spef',
+                     SPEF + f'\n*COMMENT {corner}\n')
+        state['spef'][corner] = str(spef)
+        guest = f'/pdk/neutral/{corner}.lib'
+        library = write(p / f'fixture_pdk/neutral/{corner}.lib',
+                        f'library({corner}) {{ default_operating_conditions: typ; }}\n')
+        config['CELL_LIBS'][corner] = [guest]
+        libraries[guest] = LC.digest(library)
+        write(folder / corner / 'sta.log',
+              f"Reading cell library for the '{corner}' corner at '{guest}'\n")
+        write(folder / corner / 'power.rpt', corner_power(index))
+    put(state_path, state)
+    put(config_path, config)
+    put(folder / 'config.json', config)
+    fp = json.loads((folder / 'input_fingerprint.json').read_text())
+    fp['config'] = LC.digest(config_path)
+    fp['config_files'] = dict(libraries)
+    fp['liberty_files'] = dict(libraries)
+    fp['state_files'] = {str(path): LC.digest(path) for path in (
+        original['odb'], original['def'], original['netlist'], original['sdc'],
+        *(p / f'phase3/stage3/extracted/{corner}.spef' for corner in corners))}
+    seal(folder, fp)
+    marker = p / LP.STEP23_RECORD
+    record = json.loads(marker.read_text())
+    record['sta_state_sha256'] = LC.digest(state_path)
+    record['judgment']['worst_setup']['corner'] = corners[0]
+    put(marker, record)
+    return p, folder, original, corners
+
+
 def produce(p, folder, lib, monkeypatch, step):
     assert step == '33'
     monkeypatch.setattr(R, '_docker_exec', lambda *a, **k: pytest.fail('parallel power producer ran'))
@@ -213,6 +278,62 @@ def test_current_power_adopts_validated_original_owner_transport(tmp_path, monke
     assert transport['source_record']['sha256'] == LC.digest(original['record'])
     original['netlist'].write_text(original['netlist'].read_text() + '\nchanged\n')
     assert gate(p, '33') == 1
+
+
+def test_nine_corner_adoption_reuses_common_owner_and_validates_every_mapping(
+        tmp_path, monkeypatch):
+    p, folder, _, corners = nine_corner_transport(tmp_path, monkeypatch)
+    common_calls, corner_calls = [], []
+    real_common = C._validated_original_state_transport
+    real_corner = C._tool_subject_from_common
+
+    def observe_common(*args, **kwargs):
+        common_calls.append(tuple(args))
+        return real_common(*args, **kwargs)
+
+    def observe_corner(common, **kwargs):
+        corner_calls.append(kwargs.get('corner'))
+        return real_corner(common, **kwargs)
+
+    monkeypatch.setattr(C, '_validated_original_state_transport', observe_common)
+    monkeypatch.setattr(C, '_tool_subject_from_common', observe_corner)
+    notes = []
+    report = p / 'reports/phase3/power.rpt'
+    assert power.adopt_current_power_report(p, 'neutral', report, notes) is True
+    values = power.stapostpnr_corner_power(folder)
+    assert list(values) == corners
+    assert len({row['total_w'] for row in values.values()}) == 9
+    # One batch admission plus the existing receipt and signoff publication
+    # consumers: bounded independently of the number of corners.
+    assert len(common_calls) == 3
+    assert corner_calls[:9] == corners
+    assert corner_calls[9:] == [corners[-1], corners[-1]]
+    assert json.loads(report.with_suffix('.current.json').read_text())['tool_corner'] == corners[-1]
+
+
+def test_nine_corner_publication_revalidates_late_owner_change(tmp_path, monkeypatch):
+    p, _, original, _ = nine_corner_transport(tmp_path, monkeypatch)
+    real_binding = C.power_binding
+    changed = False
+    refusals = []
+
+    def change_before_publication(project):
+        nonlocal changed
+        if not changed:
+            original['netlist'].write_text(original['netlist'].read_text() + '\nlate change\n')
+            changed = True
+        try:
+            return real_binding(project)
+        except (OSError, ValueError, KeyError, TypeError, LC.Refusal) as exc:
+            refusals.append(str(exc))
+            raise
+
+    monkeypatch.setattr(C, 'power_binding', change_before_publication)
+    report = p / 'reports/phase3/power.rpt'
+    notes = []
+    assert power.adopt_current_power_report(p, 'neutral', report, notes) is False
+    assert changed and not report.exists() and not report.with_suffix('.current.json').exists()
+    assert any('LL_INPUT_CHANGED' in refusal for refusal in refusals), (refusals, notes)
 
 
 def test_original_transport_refuses_unrelated_or_changed_outside_input(tmp_path, monkeypatch):

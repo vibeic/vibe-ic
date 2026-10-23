@@ -345,8 +345,8 @@ def _validated_original_state_transport(project, state_files, image):
             'paths': {str(path): recorded_by_path[path] for path in sorted(foreign)}}
 
 
-def _tool_subject(project, top, *, corner=None, coupling=False):
-    """Reuse Step 23's native current state; no producer or mode selection.
+def _tool_common(project, top):
+    """Validate the immutable Step23/owner inputs once for one caller attempt.
 
     The retained run_chain fingerprint, not recomputed State hashes, binds the
     original material files. Netlist/SDC copies must match those bytes; the
@@ -388,13 +388,30 @@ def _tool_subject(project, top, *, corner=None, coupling=False):
     physical_top = config.get('DESIGN_NAME')
     if not isinstance(physical_top, str) or not re.fullmatch(r'[A-Za-z_][\w$]*', physical_top):
         raise Refusal('CURRENT_DESIGN_NAME_INVALID')
-    record = json.loads((project / lp.STEP23_RECORD).read_text())
+    record_path = project / lp.STEP23_RECORD
+    record = json.loads(record_path.read_text())
     selected_corner = ((record.get('judgment') or {}).get('worst_setup') or {}).get('corner')
+    return {'project': project, 'top': top, 'folder': folder, 'fp': fp,
+            'image': image, 'runtime': runtime, 'mounts': mounts,
+            'transport': transport, 'physical_top': physical_top,
+            'selected_corner': selected_corner, 'switch_path': switch_path,
+            'original_config': original_config, 'record_path': record_path}
+
+
+def _tool_subject_from_common(common, *, corner=None, coupling=False):
+    """Validate one corner against a call-local, already validated snapshot."""
+    import librelane_contract as lc
+
+    project, top, folder = (common[name] for name in ('project', 'top', 'folder'))
+    fp, image, runtime = (common[name] for name in ('fp', 'image', 'runtime'))
+    mounts, transport = common['mounts'], common['transport']
+    physical_top, selected_corner = common['physical_top'], common['selected_corner']
+    switch_path, original_config = common['switch_path'], common['original_config']
     if coupling and corner is not None and corner != selected_corner:
         raise Refusal('CURRENT_SI_CORNER_MISMATCH')
     corner = corner or selected_corner
     if not corner:
-        raise Refusal('CURRENT_STAPOSTPNR_CORNER_MISSING' + f": {project / lp.STEP23_RECORD}: judgment.worst_setup.corner and _tool_subject.corner argument are empty")
+        raise Refusal('CURRENT_STAPOSTPNR_CORNER_MISSING' + f": {common['record_path']}: judgment.worst_setup.corner and _tool_subject.corner argument are empty")
     allowed_paths = set(Path(path) for path in (transport or {}).get('paths', {}))
     inputs = lc.post_pnr_timing_inputs(
         project, folder / 'state_out.json', corner,
@@ -431,7 +448,7 @@ def _tool_subject(project, top, *, corner=None, coupling=False):
         ('tool_state', folder / 'state_out.json'), ('tool_config', folder / 'config.json'),
         ('tool_receipt', folder / 'vibeic_receipt.json'),
         ('tool_corner_log', folder / corner / 'sta.log'),
-        ('step23_record', project / lp.STEP23_RECORD), ('tool_source_config', original_config)]]
+        ('step23_record', common['record_path']), ('tool_source_config', original_config)]]
     if switch_path.is_file():
         subject['inputs'].append(file_record(switch_path, 'tool_declaration', project))
     if transport is not None:
@@ -444,8 +461,39 @@ def _tool_subject(project, top, *, corner=None, coupling=False):
                      'mounts': [(Path(host), guest) for host, guest in mounts]}
 
 
+def _tool_subject(project, top, *, corner=None, coupling=False):
+    """Reuse Step 23's native current state; no producer or mode selection.
+
+    The retained run_chain fingerprint, not recomputed State hashes, binds the
+    original material files. Netlist/SDC copies must match those bytes; the
+    selected corner's SPEF is consumed directly, without rewriting a nominal alias.
+    """
+    return _tool_subject_from_common(
+        _tool_common(project, top), corner=corner, coupling=coupling)
+
+
 def tool_subject(project, top, *, corner=None, coupling=False):
     try:
         return _tool_subject(project, top, corner=corner, coupling=coupling)
+    except ToolRefusal as exc:
+        raise Refusal(str(exc)) from exc
+
+
+def tool_subject_batch(project, top, corners):
+    """Validate all power corners with one attempt-scoped common snapshot.
+
+    This is not a cache: the returned mapping never escapes the caller that
+    requested it. Each corner still resolves and hashes its own executed
+    Liberty/SPEF/log mapping. The publishing consumer must call its ordinary
+    binding validator afterwards, which reopens every common input.
+    """
+    corners = list(corners)
+    if (not corners or any(not isinstance(corner, str) or not corner for corner in corners)
+            or len(set(corners)) != len(corners)):
+        raise Refusal('CURRENT_STAPOSTPNR_CORNER_BATCH_INVALID')
+    try:
+        common = _tool_common(project, top)
+        return {corner: _tool_subject_from_common(common, corner=corner)
+                for corner in corners}
     except ToolRefusal as exc:
         raise Refusal(str(exc)) from exc

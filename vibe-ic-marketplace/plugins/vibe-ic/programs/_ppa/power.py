@@ -2129,11 +2129,12 @@ def adopt_current_power_report(project: Path, top: str, power_rpt: Path,
         if not corners or any(row["status"] != "MEASURED"
                               for row in corners.values()):
             raise current.Refusal("CURRENT_POWER_CORNERS_UNMEASURED")
-        # Validate every measured corner before choosing the largest total.
-        for corner in corners:
-            current.tool_subject(project, top, corner=corner)
+        # Validate every measured corner while reopening the immutable common
+        # producer/owner chain once for this adoption attempt. Publication
+        # below calls power_binding, which independently reopens that chain.
+        subjects = current.tool_subject_batch(project, top, corners)
         worst = max(corners, key=lambda corner: corners[corner]["total_w"])
-        subject, tool = current.tool_subject(project, top, corner=worst)
+        subject, tool = subjects[worst]
         source = Path(corners[worst]["report"])
         power_rpt.write_text(current_tool_power_text(
             worst, corners[worst], source.read_text(),
