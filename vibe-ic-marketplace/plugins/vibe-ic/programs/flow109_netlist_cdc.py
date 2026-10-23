@@ -1,0 +1,246 @@
+"""D45 adopted-netlist CDC/RDC adapter over the existing native consumers.
+
+The supported subset is structural crossing/reset analysis plus correlation of
+current SDC exceptions. Protocol-level multi-bit handshakes, FIFO correctness,
+reset sequencing and metastability MTBF remain explicitly NOT_MEASURED.
+"""
+from __future__ import annotations
+
+from dataclasses import asdict
+import hashlib
+import json
+from pathlib import Path
+import re
+import shutil
+import subprocess
+import sys
+import uuid
+
+HERE = Path(__file__).resolve().parent
+if str(HERE) not in sys.path:
+    sys.path.insert(0, str(HERE))
+
+from _atomic_artefact import write_json
+import _cdc_netlist as native
+import cdc_crossing_check
+import sdc_exception_correlation_check
+
+SCHEMA = "vibeic.flow109.netlist-cdc.v1"
+INPUT = "input/flow109/D45.json"
+
+
+class Refusal(RuntimeError):
+    def __init__(self, code, detail, *, status="NOT_MEASURED"):
+        self.code, self.status = code, status
+        super().__init__(f"{code}: {detail}")
+
+
+def _sha(path):
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def _read(path):
+    try:
+        value = json.loads(Path(path).read_text())
+    except (OSError, ValueError) as exc:
+        raise Refusal("D45_INPUT_ABSENT", str(path)) from exc
+    if not isinstance(value, dict):
+        raise Refusal("D45_INPUT_INVALID", str(path))
+    return value
+
+
+def _bound(project, value):
+    if not isinstance(value, dict) or not value.get("path") or not value.get("sha256"):
+        raise Refusal("D45_INPUT_UNBOUND", str(value))
+    path = Path(value["path"])
+    path = path if path.is_absolute() else project / path
+    if not path.is_file() or _sha(path) != value["sha256"]:
+        raise Refusal("D45_INPUT_STALE_OR_MISSING", str(path))
+    return path.resolve()
+
+
+def operation_sources():
+    from execution_provider_catalog import source_closure
+    files = source_closure({Path(__file__), HERE / "_cdc_netlist.py",
+                            HERE / "cdc_crossing_check.py",
+                            HERE / "sdc_exception_correlation_check.py"})
+    return {str(path.relative_to(HERE.parent)): _sha(path) for path in sorted(files)}
+
+
+def prepare(project, context):
+    if context.get("requested_step") != "D45" or context.get("native_step_id") != "flow109.D45":
+        raise Refusal("D45_CONTEXT_MISMATCH", "adopted-netlist CDC/RDC component only")
+    row = context.get("resolved_row") or {}
+    dispatch = ((row.get("profile") or {}).get("dispatch") or {})
+    if row.get("id") != "D45" or dispatch.get("adapter") != "flow109_netlist_cdc":
+        raise Refusal("D45_CONTEXT_MISMATCH", "source-owned D45 dispatch required")
+    manifest = _read(project / INPUT)
+    top = manifest.get("top")
+    if manifest.get("schema") != SCHEMA or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_$]*", str(top or "")):
+        raise Refusal("D45_INPUT_INVALID", "schema/top")
+    sdcs = manifest.get("sdc")
+    if not isinstance(sdcs, list) or not sdcs:
+        raise Refusal("D45_SDC_ABSENT", "nonempty current SDC population required")
+    paths = {"netlist": _bound(project, manifest.get("adopted_netlist")),
+             "liberty": _bound(project, manifest.get("liberty")),
+             "sdc": [_bound(project, item) for item in sdcs]}
+    if manifest.get("clock_reset_intent") is not None:
+        paths["intent"] = _bound(project, manifest["clock_reset_intent"])
+    yosys = shutil.which("yosys")
+    if not yosys:
+        raise Refusal("D45_NATIVE_TOOL_UNAVAILABLE", "yosys")
+    inputs = {INPUT: _sha(project / INPUT)}
+    for value in paths.values():
+        for path in value if isinstance(value, list) else [value]:
+            inputs[str(path)] = _sha(path)
+    sources = operation_sources()
+    return {"manifest": manifest, "paths": paths, "inputs": inputs,
+            "sources": sources, "yosys": Path(yosys).resolve(),
+            "yosys_sha256": _sha(Path(yosys).resolve())}
+
+
+def _unchanged(project, prepared):
+    if operation_sources() != prepared["sources"]:
+        raise Refusal("D45_OPERATION_SOURCE_CHANGED", "source changed before consumer")
+    for name, digest in prepared["inputs"].items():
+        path = project / name if not Path(name).is_absolute() else Path(name)
+        if not path.is_file() or _sha(path) != digest:
+            raise Refusal("D45_INPUT_STALE_OR_MISSING", name)
+    if _sha(prepared["yosys"]) != prepared["yosys_sha256"]:
+        raise Refusal("D45_NATIVE_TOOL_CHANGED", str(prepared["yosys"]))
+
+
+def _word(path):
+    return '"' + str(path).replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def _native_model(project, prepared, attempt):
+    output = attempt / "adopted-netlist.json"
+    script = attempt / "adopted-netlist.ys"
+    script.write_text("\n".join([
+        "read_liberty -ignore_miss_func -ignore_miss_dir " + _word(prepared["paths"]["liberty"]),
+        "read_verilog -sv " + _word(prepared["paths"]["netlist"]),
+        "hierarchy -check -top " + prepared["manifest"]["top"],
+        "flatten", "proc", "opt_clean", "write_json " + _word(output), "",
+    ]))
+    _unchanged(project, prepared)
+    argv = [str(prepared["yosys"]), "-Q", "-T", "-s", str(script)]
+    process = subprocess.run(argv, capture_output=True, text=True)
+    log = attempt / "adopted-netlist.yosys.log"
+    log.write_text(process.stdout + process.stderr)
+    if process.returncode or not output.is_file():
+        raise Refusal("D45_NATIVE_MODEL_FAILED", f"yosys rc={process.returncode}; {log}")
+    _unchanged(project, prepared)
+    model = native.load(output, prepared["manifest"]["top"])
+    if not model.flops:
+        raise Refusal("D45_ADOPTED_SEQUENTIAL_MODEL_UNSUPPORTED", "native model has zero decoded flops")
+    return model, {"invocation": {"argv": argv, "returncode": process.returncode},
+                   "script": {"path": str(script), "sha256": _sha(script)},
+                   "log": {"path": str(log), "sha256": _sha(log)},
+                   "model": {"path": str(output), "sha256": _sha(output)}}
+
+
+def _stage_consumers(project, prepared, attempt, crossing):
+    stage = attempt / "consumer-stage"
+    constraints = stage / "phase2/stage2/constraints"
+    constraints.mkdir(parents=True)
+    copied = {}
+    for index, source in enumerate(prepared["paths"]["sdc"]):
+        target = constraints / f"{index:02d}-{source.name}"
+        shutil.copyfile(source, target)
+        copied[str(target.relative_to(stage))] = _sha(target)
+    intent = prepared["paths"].get("intent")
+    if intent:
+        target = stage / "phase1/generated_docs/L8_TIMING_WAVEFORM.json"
+        target.parent.mkdir(parents=True)
+        shutil.copyfile(intent, target)
+        copied[str(target.relative_to(stage))] = _sha(target)
+    report = stage / "reports/phase2/cdc/crossing.json"
+    report.parent.mkdir(parents=True)
+    write_json(report, crossing)
+    copied[str(report.relative_to(stage))] = _sha(report)
+    _unchanged(project, prepared)
+    cdc = asdict(cdc_crossing_check.audit_cdc(stage))
+    exceptions = sdc_exception_correlation_check.audit(stage)
+    return cdc, exceptions, copied
+
+
+def execute(project, context):
+    project = Path(project).resolve()
+    attempt = project / "reports/flow109/D45" / uuid.uuid4().hex
+    attempt.mkdir(parents=True, exist_ok=False)
+    record = {"schema": SCHEMA, "step_id": "D45", "component_status": "NOT_MEASURED",
+              "flow109_acceptance": "NOT_MEASURED", "native_started": False,
+              "context_sha256": context.get("context_sha256"),
+              "scope": "adopted-netlist structural CDC/RDC and current SDC exception correlation"}
+    try:
+        prepared = prepare(project, context)
+        record.update(source_sha256=prepared["sources"], input_sha256=prepared["inputs"],
+                      tool={"path": str(prepared["yosys"]),
+                            "sha256": prepared["yosys_sha256"]})
+        record["native_started"] = True
+        model, native_evidence = _native_model(project, prepared, attempt)
+        domains = native.clock_domains(model)
+        crossings = native.reg_crossing_findings(model)
+        reset_meta = {}
+        resets = native.reset_dependency_findings(model, metadata=reset_meta)
+        crossing_errors = [item for item in crossings if item.get("severity") == "ERROR"]
+        crossing_warnings = [item for item in crossings if item.get("severity") != "ERROR"]
+        if crossing_errors:
+            crossing_report = {"verdict": "FAIL", "front_end": "adopted-netlist",
+                               "clocks_found": domains, "crossings": crossings}
+        elif len(domains) <= 1:
+            crossing_report = {"verdict": "PASS", "front_end": "adopted-netlist",
+                               "clocks_found": domains, "crossings": [],
+                               "evidence": "single clock domain in current adopted native netlist; no clock-domain crossings exist"}
+        else:
+            crossing_report = {"verdict": "SKIPPED-CONDITION", "front_end": "adopted-netlist",
+                               "clocks_found": domains, "crossings": crossings,
+                               "reason": "structural census found no blocking crossing; protocol semantics remain unsupported"}
+        cdc_consumer, exception_consumer, staged = _stage_consumers(
+            project, prepared, attempt, crossing_report)
+        exception_categories = {item.get("category") for item in exception_consumer.get("findings", [])}
+        inconsistent = exception_categories & {"SDC_EXCEPTION_UNJUSTIFIED",
+            "SDC_EXCEPTION_UNVERIFIABLE", "SDC_EXCEPTION_TOO_BROAD",
+            "SDC_MULTICYCLE_SUSPECT", "SDC_EXCEPTION_EVIDENCE_UNREAD"}
+        reset_errors = [item for item in resets if item.get("severity") == "ERROR"]
+        checks = {
+            "implemented_crossing_census": {"status": "FAIL" if crossing_errors else
+                "NOT_MEASURED" if crossing_warnings or len(domains) > 1 else "PASS",
+                "clock_domains": domains, "findings": crossings},
+            "new_unexplained_crossings": {"status": "FAIL" if crossing_errors else
+                "NOT_MEASURED" if crossing_warnings or len(domains) > 1 else "PASS",
+                "value": len(crossing_errors), "unit": "count"},
+            "reset_dependency": {"status": "FAIL" if reset_errors else "PASS",
+                                 "findings": resets, "metadata": reset_meta},
+            "exception_reconciliation": {"status": "FAIL" if inconsistent else "PASS",
+                "categories": sorted(x for x in exception_categories if x),
+                "consumer_verdict": exception_consumer.get("verdict")},
+            "protocol_semantics": {"status": "NOT_MEASURED",
+                "reason": "D45_PROTOCOL_SEMANTICS_UNSUPPORTED",
+                "detail": "multi-bit handshake/FIFO correctness, reset sequencing and MTBF need protocol-specific proof"},
+        }
+        if not cdc_consumer.get("passed") and not crossing_errors:
+            checks["implemented_crossing_census"] = {"status": "FAIL",
+                "reason": "D45_CDC_CONSUMER_REFUSED", "consumer": cdc_consumer}
+        statuses = [item["status"] for item in checks.values()]
+        status = "FAIL" if "FAIL" in statuses else "NOT_MEASURED" if "NOT_MEASURED" in statuses else "PASS"
+        reason = ("D45_EXCEPTION_INCONSISTENT" if inconsistent else
+                  "D45_CROSSING_UNEXPLAINED" if crossing_errors else
+                  "D45_RESET_DEPENDENCY" if reset_errors else
+                  "D45_PROTOCOL_SEMANTICS_UNSUPPORTED" if status == "NOT_MEASURED" else None)
+        record.update(component_status=status, reason=reason, checks=checks,
+                      metrics={"clock_domain_count": len(domains),
+                               "new_unexplained_crossings": len(crossing_errors),
+                               "exception_finding_count": len(inconsistent)},
+                      consumers={"cdc_crossing_check": cdc_consumer,
+                                 "sdc_exception_correlation_check": exception_consumer},
+                      evidence_sha256={"native": native_evidence, "staged": staged})
+    except Refusal as exc:
+        record.update(component_status=exc.status, reason=exc.code, detail=str(exc))
+    except (OSError, ValueError, native.Refusal) as exc:
+        record.update(component_status="NOT_MEASURED",
+                      reason="D45_NATIVE_UNAVAILABLE_OR_UNSUPPORTED", detail=str(exc))
+    record["receipt"] = {"path": str((attempt / "component.json").relative_to(project))}
+    write_json(attempt / "component.json", record)
+    return record

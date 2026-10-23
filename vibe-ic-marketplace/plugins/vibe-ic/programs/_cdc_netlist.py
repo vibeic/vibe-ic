@@ -80,6 +80,7 @@ CONSTANT_NORMALIZATION_PASSES = ("opt_expr -keepdc -noclkinv", "opt_clean -purge
 
 FLOP_TYPES = {"$dff", "$adff", "$dffe", "$adffe", "$sdff", "$sdffe",
               "$sdffce", "$dffsr", "$dffsre", "$aldff", "$aldffe"}
+_INTERNAL_ADFF_RE = re.compile(r"^\$_DFF_([NP])([NP])([01])_$")
 #: Single-input cells a clock or reset may pass through and stay the same net.
 _TRANSPARENT = {"$buf", "$pos", "$not", "$_BUF_", "$_NOT_"}
 _MEMORY = {"$mem", "$mem_v2", "$memrd", "$memrd_v2"}
@@ -90,6 +91,10 @@ class Refusal(RuntimeError):
     def __init__(self, code: str, detail: str):
         self.code = code
         super().__init__(f"{code}: {detail}")
+
+
+def _is_flop_type(cell_type: str) -> bool:
+    return cell_type in FLOP_TYPES or _INTERNAL_ADFF_RE.fullmatch(cell_type) is not None
 
 
 def gate_mode(project: Path) -> str:
@@ -493,7 +498,7 @@ class Netlist:
             if not drv:
                 continue
             cell = self.cells[drv[0]]
-            if cell["type"] in FLOP_TYPES or cell["type"] in _MEMORY:
+            if _is_flop_type(cell["type"]) or cell["type"] in _MEMORY:
                 continue
             for pin, conn in cell["connections"].items():
                 if cell.get("port_directions", {}).get(pin) == "output" or \
@@ -520,7 +525,7 @@ class Netlist:
             if not drv:
                 return bit
             cell = self.cells[drv[0]]
-            if cell["type"] in FLOP_TYPES or bit in ports:
+            if _is_flop_type(cell["type"]) or bit in ports:
                 return bit
             if cell["type"] in ("$buf", "$pos", "$_BUF_"):
                 bit = cell["connections"]["A"][0]
@@ -631,10 +636,25 @@ def load(path: Path, top: Optional[str] = None) -> Netlist:
         if cell["type"] in _MEMORY:
             nl.memories += 1
     for cname, cell in nl.cells.items():
-        if cell["type"] not in FLOP_TYPES:
+        if not _is_flop_type(cell["type"]):
             continue
         c = cell["connections"]
         params = cell.get("parameters", {})
+        internal = _INTERNAL_ADFF_RE.fullmatch(cell["type"])
+        if internal:
+            if (set(c) != {"C", "D", "Q", "R"}
+                    or any(len(c[pin]) != 1 for pin in c)):
+                raise Refusal("CDC_NETLIST_UNSUPPORTED_ASYNC_CONTROL",
+                              f"{cname} ({cell['type']}): expected scalar C/D/Q/R")
+            flop = Flop(name=cname, type=cell["type"], clk=c["C"][0],
+                        clk_pol=1 if internal.group(1) == "P" else 0,
+                        d=list(c["D"]), q=list(c["Q"]), arst=c["R"][0],
+                        arst_pin="R", arst_pol=1 if internal.group(2) == "P" else 0,
+                        arst_value=[internal.group(3)],
+                        arst_source=cell.get("attributes", {}).get("src", ""))
+            flop.label = nl.bit_label(flop.q[0], port_labels).split("[")[0]
+            nl.flops.append(flop)
+            continue
         async_pins = set(c) & {"ARST", "ALOAD", "SET", "CLR"}
         # One arst bit cannot represent independent set/clear controls. Refuse
         # at the shared loader so every ordinary CDC/RDC consumer fails closed.
