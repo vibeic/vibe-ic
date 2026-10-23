@@ -3283,8 +3283,12 @@ def _derived_provisional_die_source(project: Path, record: dict,
     try:
         contract = json.loads(slot_file.read_text(errors='replace'))
         actual = digest(source)
-        die_area = _rect((contract.get('die_area') or {}).get('rect'),
-                         f'{slot_file}.die_area.rect')
+        die_area = (contract.get('die_area') or {}).get('rect')
+        if isinstance(die_area, str):
+            die_area = die_area.split()
+        die_area = [float(v) for v in die_area]
+        if len(die_area) != 4:
+            return None
     except (OSError, ValueError, TypeError):
         return None
     if (actual != expected or contract.get('slot') != slot

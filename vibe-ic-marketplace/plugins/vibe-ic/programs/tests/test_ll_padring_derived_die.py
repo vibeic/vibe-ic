@@ -133,7 +133,7 @@ def test_a_source_bound_provisional_slot_may_replace_its_declared_target(
     source_hash = contract.digest(source)
     slot = {"slot": "larger", "source_relpath": "larger.json",
             "source_sha256": source_hash,
-            "die_area": {"rect": new}}
+            "die_area": {"rect": [str(v) for v in new]}}
     put(p / 'input/submission_template/slots/larger.yaml', json.dumps(slot))
     record = dict(RECORD, die_rect_um=new,
                   die_intent={
