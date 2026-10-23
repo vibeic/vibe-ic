@@ -2467,8 +2467,30 @@
           "select_when": "otherwise",
           "provider": "vibeic",
           "tools": "Python mixed-interface contract emitter + Codex IC Expert",
-          "native_steps": [],
-          "execution_status": "UNIMPLEMENTED"
+          "native_steps": [
+            "spec_analog_iface_extract",
+            "l21_doc_supply_rail_synth",
+            "analog_digital_interface_check"
+          ],
+          "execution_status": "EXISTING_COMPONENT_DISPATCH_NOT_109_ACCEPTANCE",
+          "dispatch": {
+            "adapter": "flow109_mixed_m01",
+            "native_step_id": "flow109.M01",
+            "engine_families": [
+              "python3"
+            ],
+            "engine_executables": {
+              "python3": "python3"
+            },
+            "engine_steps": {
+              "python3": [
+                "spec_analog_iface_extract",
+                "l21_doc_supply_rail_synth",
+                "analog_digital_interface_check"
+              ]
+            },
+            "operation_scope": "source_bound_mixed_signal_interface_contract"
+          }
         }
       ],
       "complementary_tools": [],
