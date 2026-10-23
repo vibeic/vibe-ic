@@ -38,9 +38,10 @@ def _sha(path):
     return "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def _project(tmp_path):
+def _project(tmp_path, monkeypatch=None, *, native_lvs=False):
     project = build_project(tmp_path / "project", releases=(RELEASE,))
-    _write(project, "input/project.json", {"design": DESIGN, "pdk": PDK})
+    pdk_name = "procx" if native_lvs else PDK
+    _write(project, "input/project.json", {"design": DESIGN, "pdk": pdk_name})
     # The existing public kit supplies a real layout, DEF, second-view netlist,
     # L-documents and product data. Answer the independent declaration reader.
     doc, ignored = declaration.merge_answers(declaration.blank_declaration(), {
@@ -65,7 +66,7 @@ def _project(tmp_path):
     # real general-precheck technology reader uses the pinned image's PDK.
     liberty = _write(project, "input/neutral.lib", "library(neutral) {}\n")
     lef = _write(project, "input/neutral.lef", "VERSION 5.8 ;\nEND LIBRARY\n")
-    pdk = runner.PdkConfig(PDK, str(liberty), str(lef), str(lef),
+    pdk = runner.PdkConfig(pdk_name, str(liberty), str(lef), str(lef),
                            None, "neutral", None)
     basis, error = runner._layout_basis(project, DESIGN, pdk, "")
     assert not error, error
@@ -136,6 +137,23 @@ def _project(tmp_path):
            "=== SETUP (max) ===\ntns max 0.0\n=== HOLD (min) ===\ntns max 0.0\n")
     _write(project, "reports/phase3/sta_spef_based.rpt",
            "SIGNOFF_CHECK_TYPES_REPORTED recovery max_slew max_capacitance\n")
+    if native_lvs:
+        # Current open-PDK routing requires the full-GDS LibreLane LVS owner.
+        # Drive its actual run_chain/judge producer against the selected public
+        # fixture stream; do not substitute the older direct lvs.json PASS.
+        assert monkeypatch is not None
+        from _native_signoff_fixture import producer
+        producer(project, monkeypatch, "lvs", both_lvs=True, gds_path=gds)
+        switch = json.loads((project / "phase3/librelane_switch.json").read_text())
+        # Preserve every other direct owner selected above.  The producer
+        # helper owns only the Step-31 LVS half; allowing its minimal switch
+        # fixture to erase Step 9 would falsely demand a LibreLane synthesis
+        # handoff, and erasing Step 26 would replace the actual antenna report.
+        switch["steps"] = {sid: "direct" for sid in ("9", "26", "34", "37")}
+        # Dual keeps the existing direct DRC authority while the LVS half's
+        # current contract still consumes the full-GDS LibreLane producer.
+        switch["steps"]["31"] = "dual"
+        _write(project, "phase3/librelane_switch.json", switch)
     assert metrics.main([str(project)]) == 0
     return project, pdk
 
@@ -168,37 +186,98 @@ def _call(project, pdk, monkeypatch, *, bounded=False):
     return result
 
 
+def _accept_physical_precheck(project, monkeypatch):
+    """Fixture boundary: physical prerequisites were accepted already.
+
+    This substitutes only the precheck owner at both call sites.  The document
+    producers, their output binding, and the retained release consumer remain
+    real and are the integration subject of the tests below.
+    """
+    import flow_compliance_check as compliance
+
+    report = project / "reports/phase3/tapeout_precheck.json"
+
+    def write_receipt():
+        body = {
+            "verdict": "PASS", "invoked_as": "producer",
+            "scope": ("SOURCE_CONTROL accepted-physical-precondition fixture; "
+                      "not native IC qualification"),
+            "fixture_boundary": "physical precheck only",
+        }
+        for relative in ("reports/phase3/general_precheck.json",
+                         "reports/phase3/shuttle_precheck.json",
+                         "reports/phase3/tapeout_precheck.json"):
+            _write(project, relative, body)
+
+    actual_gate = runner._run_declared_signoff_gate
+
+    def accepted_gate(proj, name, program, out_rel, extra_argv):
+        if name == "tapeout_precheck":
+            write_receipt()
+            return runner.StepResult(name, "PASS", 0.0,
+                                     "accepted physical-precondition fixture",
+                                     [str(project / "reports/phase3/general_precheck.json"),
+                                      str(project / "reports/phase3/shuttle_precheck.json"),
+                                      str(report)])
+        return actual_gate(proj, name, program, out_rel, extra_argv)
+
+    monkeypatch.setattr(runner, "_run_declared_signoff_gate", accepted_gate)
+    actual_check = compliance._check_program_exit_zero
+
+    def accepted_check(proj, cmd_str):
+        if compliance._gate_name(cmd_str) == "tapeout_precheck":
+            write_receipt()
+            compliance._record_gate_execution(cmd_str, 0, "PASS",
+                                               evidence=json.loads(report.read_text()))
+            return compliance._ProgramCheckResult(
+                True, "accepted physical-precondition fixture", 0,
+                "PASS", "PASS", None)
+        return actual_check(proj, cmd_str)
+
+    monkeypatch.setattr(compliance, "_check_program_exit_zero", accepted_check)
+
+
 def test_default_bounded_ic_release_calls_real_owners(tmp_path, monkeypatch):
-    project, pdk = _project(tmp_path)
+    project, pdk = _project(tmp_path, monkeypatch, native_lvs=True)
+    _accept_physical_precheck(project, monkeypatch)
     result = _call(project, pdk, monkeypatch, bounded=True)
-    # This source fixture has no measured seal-ring invocation or flow-marker
-    # geometry.  The current precheck must stop before document publication;
-    # a bounded wrapper return is not release qualification.
-    assert result == 1
-    assert not list((project / "reports/phase3/docs").glob("*.html"))
+    assert result == 0
 
 
 def test_real_document_producers_and_each_release_consumer_execute(tmp_path, monkeypatch):
-    project, pdk = _project(tmp_path)
+    project, pdk = _project(tmp_path, monkeypatch, native_lvs=True)
+    _accept_physical_precheck(project, monkeypatch)
     _call(project, pdk, monkeypatch)
     receipt = json.loads((project / "reports/phase3/default_steps/37.5ic/backend_result.json").read_text())
+    assert receipt["missing_outputs"] == []
+    gates = {row["gate"]: row for row in receipt["gate_ledger"]}
+    for gate in ("tapeout_precheck", "tapeout_docs_gen", "release_docs_check"):
+        assert gates[gate]["rc"] == 0, receipt
+        assert gates[gate]["verdict"] == "PASS", receipt
+    assert receipt["canonical_step_result"]["output_binding"]["n_step_attributed"] == 9
+    assert (project / f"phase3/stage4/documentation/ic/{RELEASE}/documentation_manifest.yaml").is_file()
+
+
+def test_missing_seal_precheck_blocks_document_publication(tmp_path, monkeypatch):
+    """The new physical-input negative is additional to the release positive."""
+    project, pdk = _project(tmp_path)
+    result = _call(project, pdk, monkeypatch)
+    assert result.status != "PASS", result.detail
+    receipt = json.loads(
+        (project / "reports/phase3/default_steps/37.5ic/backend_result.json").read_text())
     assert receipt["verdict"] == "FAIL"
-    assert set(receipt["missing_outputs"]) == {
-        "reports/phase3/docs/SIGNOFF_*.html",
-        "reports/phase3/docs/BRIEF_*.html",
-        "phase3/stage4/documentation/ic/*/PRELIMINARY_DATASHEET.md",
-        "phase3/stage4/documentation/ic/*/RELEASE_NOTES.md",
-        "phase3/stage4/documentation/ic/*/ERRATA.md",
-        "phase3/stage4/documentation/ic/*/documentation_manifest.yaml"}
     assert "General.SealRing" in receipt["detail"], receipt
+    assert receipt["canonical_step_result"] is None
     assert (project / "reports/phase3/tapeout_precheck.json").is_file()
+    assert not (project / "reports/orchestrator/producers/ic_release_docs_gen.log").exists()
     assert not (project / f"phase3/stage4/documentation/ic/{RELEASE}/documentation_manifest.yaml").exists()
 
 
 @pytest.mark.parametrize("change", ["missing_metrics", "changed_metrics", "unadmitted_gds",
                                     "producer_refusal", "consumer_refusal"])
 def test_current_release_obligations_remain_blocking(tmp_path, monkeypatch, change):
-    project, pdk = _project(tmp_path)
+    project, pdk = _project(tmp_path, monkeypatch, native_lvs=True)
+    _accept_physical_precheck(project, monkeypatch)
     if change == "missing_metrics":
         (project / "phase3/final/metrics.json").unlink()
     elif change == "changed_metrics":
@@ -229,14 +308,10 @@ def test_current_release_obligations_remain_blocking(tmp_path, monkeypatch, chan
     assert result.status != "PASS", result.detail
     receipt = json.loads((project / "reports/phase3/default_steps/37.5ic/backend_result.json").read_text())
     if change == "consumer_refusal":
-        # The source-only fixture never satisfies the current physical
-        # precheck, so the downstream deletion hook is intentionally
-        # unreachable.  Preserve that fail-closed boundary instead of
-        # manufacturing a release just to exercise the later consumer.
-        assert receipt["canonical_step_result"] is None, receipt
-        assert "General.SealRing" in receipt["detail"], receipt
-        assert (project / "reports/phase3/tapeout_precheck.json").is_file()
-        assert not (project / "reports/orchestrator/producers/ic_release_docs_gen.log").exists()
+        assert receipt["canonical_step_result"]["status"] == "FAIL", receipt
+        assert any(row["gate"] == "release_docs_check" and row["rc"] == 1
+                   for row in receipt["gate_ledger"]), receipt
+        assert (project / "reports/orchestrator/producers/ic_release_docs_gen.log").is_file()
     else:
         assert not (project / f"phase3/stage4/documentation/ic/{RELEASE}/documentation_manifest.yaml").is_file()
 

@@ -186,16 +186,39 @@ def test_step32_lets_an_owner_waived_row_reach_stream_out(tmp_path, monkeypatch,
     can admit a release. Adjacent missing-route controls retain the stop rule.
     """
     import phase3_one_shot_runner as R
-    if status == "PASS":
-        # This fixture has no current chip pad-ring/ESD/PG evidence.  Keep the
-        # scheduling assertion, but do not turn its fake ASCII GDS into an
-        # admitted chip-layout PASS.  Actual native positive coverage belongs
-        # to the coupled D31/D32 owner controls.
-        assert R._step32_lets_the_chain_continue("PASS")
-        return
     import test_r0929_tail_continues as tail
     project = tail._project(tmp_path, cached_die=tail.OLD_DIE, cached_util=tail.OLD_UTIL)
+    if status == "PASS":
+        # The integration subject is Step32 -> stream scheduling, not a chip
+        # pad-ring claim.  Use the real delivery declaration reader to select
+        # a legal HARDMACRO stream, whose current contract owes no pad ring;
+        # DIE/pad evidence remains covered by the dedicated D31/D32 controls.
+        from _delivery_declaration import declare_delivery
+        declare_delivery(project, "HARDMACRO")
+        assert not R._chip_path_requests_pad_ring(project)
     driven = tail._drive(monkeypatch, project, die=tail.NEW_DIE, util=tail.NEW_UTIL)
+    if status == "PASS":
+        # The legacy transport fixture predates the stream-substance guard and
+        # writes an ASCII sentinel named .gds.  Preserve the same actual
+        # Step32 -> step_gds scheduling boundary, but make its positive product
+        # a real minimal GDSII stream so the current admission consumer can
+        # inspect and retain it.
+        from _gdsii import write_gdsii
+
+        def valid_gds(proj, top, pdk, container):
+            driven.called.append("gds")
+            gds = R._pl.pnr_dir(proj) / f"{top}.gds"
+            write_gdsii(gds, cell=top)
+            return R.StepResult("gds", "PASS", 0.0,
+                                "valid source-control GDSII derived from new DEF",
+                                [str(gds)])
+
+        monkeypatch.setattr(R, "step_gds", valid_gds)
+        # This focused test ends at the stream/admission consumer.  Legacy
+        # pre-audit packaging is a later subject and quarantines an IP stream
+        # because no chip handoff is owed; it must not erase the product whose
+        # Step32 scheduling this case asserts.
+        monkeypatch.setattr(R, "run_pre_audit_producers", lambda *a, **k: [])
     tail._stage_fill(monkeypatch, project, driven)
     row = tail._repair_producer(monkeypatch, project, "librelane", status,
                                 "current measured Step-32 row")
@@ -206,8 +229,15 @@ def test_step32_lets_an_owner_waived_row_reach_stream_out(tmp_path, monkeypatch,
                                  id="synthetic-step32", owner="reyerchu",
                                  reason="synthetic owner deviation control, approved 2026-09-30"
                              ).to_dict()] if status == "WAIVED" else []))
-    monkeypatch.setattr(R, "step_postroute_repair_librelane",
-                        lambda *args, **kwargs: repair_row)
+    def measured_repair(proj, *args, **kwargs):
+        # A successful Step-32 owner leaves one unambiguous shipped route.
+        # The old fixture's top DEF and routed DEF predate that invariant.
+        if status == "PASS":
+            pnr = R._pl.pnr_dir(proj)
+            (pnr / "routed.def").write_bytes((pnr / f"{tail.TOP}.def").read_bytes())
+        return repair_row
+
+    monkeypatch.setattr(R, "step_postroute_repair_librelane", measured_repair)
     rc = R.main()
     rows = tail._plan(project)
     assert rows[row]["status"] == status
