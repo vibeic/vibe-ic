@@ -175,6 +175,18 @@ if run.returncode:
     sys.exit(run.returncode)
 state = json.load(open(argv[argv.index("-i") + 1]))
 state["metrics"] = {}
+if step == "OpenROAD.DetailedRouting":
+    design = cfg.get("DESIGN_NAME", "neutral")
+    odb = os.path.join(out, design + ".odb")
+    open(odb, "wb").write(b"routed database subject")
+    state["odb"] = odb
+    mode = cfg.get("FAKE_DRC_MODE", "canonical")
+    if mode == "canonical":
+        open(os.path.join(out, design + ".drc"), "wb").write(
+            cfg.get("FAKE_DRC_BYTES", "").encode())
+    elif mode == "wrong-subject":
+        open(os.path.join(out, "other_subject.drc"), "wb").write(b"")
+    print("fake DetailedRouting invocation completed")
 json.dump(state, open(os.path.join(out, "state_out.json"), "w"))
 '''
 
@@ -246,6 +258,48 @@ def test_a_chain_without_a_stage_step_gets_no_probe(tmp_path, monkeypatch):
     folder = _run(project, docker, state, ("OpenROAD.CheckAntennas", {}))[0]
     assert "drv_stage_probe" not in json.loads((folder / "input_fingerprint.json").read_text())
     assert not (project / "phase3/librelane/l/.openroad_home").exists()
+
+
+def test_detailed_route_receipt_binds_only_current_subject_drc(tmp_path, monkeypatch):
+    docker = _fake_docker(tmp_path, monkeypatch)
+    project, state = _project(tmp_path)
+    folder = _run(project, docker, state,
+                  ("OpenROAD.DetailedRouting", {"DESIGN_NAME": "neutral"}))[0]
+    receipt = ll.validate_step_receipt(folder, "OpenROAD.DetailedRouting")
+    report = folder / "neutral.drc"
+    assert report.is_file() and report.stat().st_size == 0
+    assert receipt["sha256"].get("neutral.drc", "UNBOUND") == ll.digest(report)
+    assert not any(name.endswith("other_subject.drc") for name in receipt["sha256"])
+
+
+@pytest.mark.parametrize("mode", ["missing", "wrong-subject"])
+def test_detailed_route_refuses_missing_or_wrong_subject_drc(tmp_path, monkeypatch, mode):
+    docker = _fake_docker(tmp_path, monkeypatch)
+    project, state = _project(tmp_path)
+    try:
+        _run(project, docker, state, ("OpenROAD.DetailedRouting", {
+            "DESIGN_NAME": "neutral", "FAKE_DRC_MODE": mode}))
+        observed = "ACCEPTED"
+    except ll.Refusal as failure:
+        observed = failure.code
+    assert observed == "LL_DETAILED_ROUTE_DRC_MISSING"
+    folder = project / "phase3/librelane/l/01-openroad-detailedrouting"
+    assert not (folder / "vibeic_receipt.json").exists()
+
+
+def test_detailed_route_receipt_refuses_changed_drc_bytes(tmp_path, monkeypatch):
+    docker = _fake_docker(tmp_path, monkeypatch)
+    project, state = _project(tmp_path)
+    folder = _run(project, docker, state, ("OpenROAD.DetailedRouting", {
+        "DESIGN_NAME": "neutral", "FAKE_DRC_BYTES": "violation type: spacing\n"}))[0]
+    report = folder / "neutral.drc"
+    report.write_text("violation type: changed subject\n")
+    try:
+        ll.validate_step_receipt(folder, "OpenROAD.DetailedRouting")
+        observed = "ACCEPTED"
+    except ll.Refusal as failure:
+        observed = failure.code
+    assert observed == "LL_STEP_OUTPUT_UNBOUND"
 
 
 def test_stage_reports_allow_the_sdc_warmup_before_native_redirection(tmp_path, monkeypatch):

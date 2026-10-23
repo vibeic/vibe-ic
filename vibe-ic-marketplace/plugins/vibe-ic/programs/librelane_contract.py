@@ -1818,6 +1818,23 @@ def _walk_paths(value: Any):
         yield Path(value)
 
 
+def _detailed_route_drc_output(folder: Path, state: dict) -> Path:
+    """Return the canonical DRC report for this routed ODB subject.
+
+    DetailedRouting also keeps working copies below ``drt-run-*``.  The
+    invocation's canonical report is the top-level sibling whose basename is
+    the routed ODB basename; accepting an arbitrary ``*.drc`` could bind a
+    report for another subject.
+    """
+    odb = state.get('odb')
+    if not isinstance(odb, str) or Path(odb).suffix != '.odb':
+        raise Refusal('LL_DETAILED_ROUTE_DRC_UNIDENTIFIED', str(odb))
+    report = folder / (Path(odb).stem + '.drc')
+    if not report.is_file():
+        raise Refusal('LL_DETAILED_ROUTE_DRC_MISSING', str(report))
+    return report
+
+
 # Early steps consume only the views produced so far. Floorplan creates
 # the first ODB/DEF/SDC from the mapped netlist.
 # A lone analog block has only a GDS: these steps declare GDS as their
@@ -1878,6 +1895,11 @@ def validate_step_receipt(folder: Path, step: str) -> dict:
             if path.is_relative_to(folder) and \
                     hashes.get(str(path.relative_to(folder))) != digest(path):
                 raise ValueError(f'unbound output view: {path}')
+        if step == 'OpenROAD.DetailedRouting':
+            report = _detailed_route_drc_output(folder, state)
+            name = str(report.relative_to(folder))
+            if hashes.get(name) != digest(report):
+                raise ValueError(f'unbound canonical detailed-route DRC: {report}')
         return receipt
     except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
         raise Refusal('LL_STEP_OUTPUT_UNBOUND', f'{folder}: {exc}') from exc
@@ -4240,6 +4262,9 @@ def run_chain(project: Path, image: str, steps: list[tuple[str, Path, Path]],
                 hashes[str(path.relative_to(folder))] = digest(path)
             if step_id == 'OpenROAD.STAPostPNR' and path.is_file() and path.name == 'sta.log':
                 hashes[str(path.relative_to(folder))] = digest(path)
+        if step_id == 'OpenROAD.DetailedRouting':
+            report = _detailed_route_drc_output(folder, out_state)
+            hashes[str(report.relative_to(folder))] = digest(report)
         # LibreLane's Yosys step records the exact native invocation in
         # COMMANDS.  Bind that journal alongside invocation.log so a consumer
         # cannot substitute a mutable wrapper command after the run.  Older
