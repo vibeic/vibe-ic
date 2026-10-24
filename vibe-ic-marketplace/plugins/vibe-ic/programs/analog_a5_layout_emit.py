@@ -1532,6 +1532,7 @@ class Plan:
         self.island_patches: dict = {}
         self.patch_of: Dict[Tuple[str, tuple], str] = {}
         self.row_base = 0
+        self.access_necks: List[dict] = []
         # the gencells' OWN geometry, placed. The emitter does not draw it
         # and cannot change it, but its routing runs beside it, and a
         # clearance record that cannot see the thing the routing is closest
@@ -2261,7 +2262,8 @@ def _island_candidates(span: int):
 
 def _via_stack(plan: Plan, net: str, x: int, y: int, level: int, geo: Geo,
                top: int = 3, sites: Optional["Sites"] = None,
-               friendly=None, dev: Optional[dict] = None) -> Tuple[int, int]:
+               friendly=None, dev: Optional[dict] = None,
+               compact_terminal: bool = False) -> Tuple[int, int]:
     """Carry a terminal from the metal the gencell delivered it on to the
     routing layer, and give every cut the metal the deck demands around it.
 
@@ -2292,6 +2294,8 @@ def _via_stack(plan: Plan, net: str, x: int, y: int, level: int, geo: Geo,
 
     pad = max(geo.via_pad[k] for k in vias)
     pad_min = max(geo.via_pad_min[k] for k in vias)
+    if compact_terminal:
+        pad = pad_min
     enc_short = max(geo.short_half[k] - geo.via_pad[k] for k in vias)
     enc_long = max(geo.enc_half[k] - geo.via_pad[k] for k in vias)
 
@@ -2406,7 +2410,7 @@ def _track_offsets(nets: Sequence[str], pitch: int, extras: dict) -> list:
 
 
 def _collect_close_plain_rows(groups: List[dict], bbox: Sequence[int],
-                              geo: Geo) -> None:
+                              geo: Geo) -> bool:
     """Wide singleton escapes leave dense terminal/tap rows on M2 outside."""
     plain = [g for g in groups if not g.get("body_tap")]
     route_space = geo.metal_space("metal3")
@@ -2418,7 +2422,7 @@ def _collect_close_plain_rows(groups: List[dict], bbox: Sequence[int],
             g["net"] != other["net"]
             and 0 < abs(g["escape_y"] - other["escape_y"]) < spacing
             for g in plain for other in groups):
-        return
+        return False
     split = (min(g["y"] for g in plain) + max(g["y"] for g in plain)) / 2
     below = above = 0
     for g in sorted(plain, key=lambda item: (-len(item["labels"]), item["y"])):
@@ -2429,6 +2433,62 @@ def _collect_close_plain_rows(groups: List[dict], bbox: Sequence[int],
         else:
             above += 1
             g["escape_y"] = bbox[3] + above * geo.pitch()
+    return True
+
+
+def _body_escape_side(group: dict, bbox: Sequence[int], dense: bool, default: str) -> str:
+    if not dense or not group.get("body_tap"):
+        return default
+    x = group["labels"][0]["x"]
+    return "left" if abs(x - bbox[0]) <= abs(bbox[2] - x) else "right"
+
+
+def _terminal_access_width(group: dict, groups: Sequence[dict], geo: Geo) -> int:
+    """Use a native minimum only where the requested terminal squares clash."""
+    requested = geo.wire[3]
+    minimum_um = geo.rules["metal_width_um"].get(3)
+    if group.get("body_tap") or minimum_um is None:
+        return requested
+    minimum = int(math.ceil(minimum_um * geo.lam - 1e-9))
+    if minimum >= requested:
+        return requested
+    clearance = requested + geo.metal_space("metal3")
+    tight = any(other["net"] != group["net"]
+                and max(abs(label["x"] - peer["x"]), abs(label["y"] - peer["y"])) < clearance
+                for label in group["labels"] for other in groups
+                if not other.get("body_tap") for peer in other["labels"])
+    return minimum if tight else requested
+
+
+def _paint_terminal_stub(plan: Plan, group: dict, dev: dict, cx: int, cy: int,
+                         ey: int, geo: Geo) -> None:
+    requested = geo.wire[3]
+    width = group.get("access_width", requested)
+    half = max(requested // 2, 1)
+    if width == requested:
+        plan.paint(group["net"], "metal3", cx - half, min(cy, ey) - half,
+                   cx + half, max(cy, ey) + half)
+        return
+    neck_half = max((width + 1) // 2, 1)
+    ox, oy = dev["origin"]
+    # The requested-width flare stays outside the actual native cell and
+    # its terminal islands; the narrow segment crosses the local stub field.
+    margin = half + geo.spacing_reach("metal3")
+    boundary = oy + (dev["bbox"][1] - margin if ey < cy else dev["bbox"][3] + margin)
+    flare = max(ey, boundary) if ey < cy else min(ey, boundary)
+    neck = (cx - neck_half, min(cy, flare) - neck_half,
+            cx + neck_half, max(cy, flare) + neck_half)
+    plan.paint(group["net"], "metal3", *neck)
+    plan.paint(group["net"], "metal3", cx - half, min(flare, ey) - half,
+               cx + half, max(flare, ey) + half)
+    plan.access_necks.append({"device": dev["dev"]["name"], "net": group["net"],
+        "layer": "metal3", "requested_width_um": requested / geo.lam,
+        "actual_width_um": (2 * neck_half) / geo.lam,
+        "neck_box_lambda": list(neck), "flare_y_lambda": flare,
+        "native_cell_bbox_lambda": [ox + dev["bbox"][0], oy + dev["bbox"][1],
+                                     ox + dev["bbox"][2], oy + dev["bbox"][3]],
+        "source_minimum_width_um": geo.rules["metal_width_um"][3],
+        "scope": "native terminal access geometry; actual extracted resistance/current still require EM grading"})
 
 
 def build_plan(devs: Sequence[dict], ports: Sequence[str],
@@ -2590,7 +2650,9 @@ def build_plan(devs: Sequence[dict], ports: Sequence[str],
                            "body_tap_direct_m1": direct_m1,
                            "level": 1})
 
-        _collect_close_plain_rows(groups, cell["bbox"], geo)
+        dense_collection = _collect_close_plain_rows(groups, cell["bbox"], geo)
+        for g in groups:
+            g["access_width"] = _terminal_access_width(g, groups, geo)
 
         # two groups escaping at one height take opposite sides, so their
         # metal3 runs are on opposite sides of the device and never meet
@@ -2598,7 +2660,8 @@ def build_plan(devs: Sequence[dict], ports: Sequence[str],
             row = sorted([g for g in groups if g["escape_y"] == y],
                          key=lambda g: min(l["x"] for l in g["labels"]))
             for idx, g in enumerate(row):
-                g["side"] = "left" if idx % 2 == 0 else "right"
+                g["side"] = _body_escape_side(g, cell["bbox"], dense_collection,
+                                              "left" if idx % 2 == 0 else "right")
                 if idx >= 2:
                     plan.deviate(
                         dev, "escape_sides_available", 2, idx + 1,
@@ -2730,9 +2793,9 @@ def build_plan(devs: Sequence[dict], ports: Sequence[str],
                 fr = friendly_conductor(d["rows"], f"metal{level}", lx, ly,
                                         reach=geo.default_space)
                 cx, cy = _via_stack(plan, g["net"], lx, ly, level, geo, top=3,
-                                    sites=sites, friendly=fr, dev=d["dev"])
-                plan.paint(g["net"], "metal3", cx - hw3, min(cy, ey) - hw3,
-                           cx + hw3, max(cy, ey) + hw3)
+                                    sites=sites, friendly=fr, dev=d["dev"],
+                                    compact_terminal=g["access_width"] < geo.wire[3])
+                _paint_terminal_stub(plan, g, d, cx, cy, ey, geo)
                 endpoints.append((cx, ey))
             g["stub_endpoints"] = endpoints
 
@@ -3871,6 +3934,7 @@ def emit_block(project: Path, block: str, stage: Stage, magicrc: str,
 
     report["result"] = "OK"
     report["shapes_painted"] = len(plan.shapes)
+    report["terminal_access_necks"] = list(plan.access_necks)
     # WHAT THE GENCELLS LEFT UNROUTED AND TOO SMALL, and what became of it.
     # See `floating_metal_patches`.
     fl = dict(plan.island_patches)

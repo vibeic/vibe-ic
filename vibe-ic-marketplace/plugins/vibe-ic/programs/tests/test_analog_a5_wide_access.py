@@ -207,3 +207,92 @@ def test_native_indentation_inline_comments_and_result_assignment_are_supported(
     source = source.replace("\nmet_lay.sep(mn_e", "\nmn_e_l = met_lay.sep(mn_e")
     source = "\n".join("  " + line + "  # native declaration" for line in source.splitlines())
     assert spacing.parse_native_rules(config, source) == expected
+
+
+@pytest.mark.parametrize("count", [0, 1, 2])
+def test_stage_login_banner_requires_one_framed_source_payload(count):
+    config, source = native_declarations()
+    files = {"/pdk/source.json": {"text": config, "sha256": "config-hash"},
+             "/pdk/source.drc": {"text": source, "sha256": "rule-hash"}}
+    message = "A5_NATIVE_SPACING=" + json.dumps(files) + "\n"
+    stage = SimpleNamespace(sh=lambda *a, **k: (0, "[INFO] PATH=example\n" + message*count, ""))
+    result = spacing.read_native_rules(stage, "/pdk", "family")
+    assert result["status"] == ("READ" if count == 1 else "UNSUPPORTED_OR_ABSENT")
+    if count == 1:
+        assert result["sources"]["/pdk/source.drc"]["sha256"] == "rule-hash"
+
+
+@pytest.mark.parametrize("x,side", [(-80, "left"), (80, "right")])
+def test_dense_body_connection_escapes_toward_its_actual_nearest_edge(x, side):
+    group = {"body_tap": True, "labels": [{"x": x, "y": -84}]}
+    original = copy.deepcopy(group)
+    assert layout._body_escape_side(group, (-141, -130, 141, 130), True, "left") == side
+    assert group == original
+    assert layout._body_escape_side(group, (-141, -130, 141, 130), False, "left") == "left"
+
+
+def test_actual_47_grid_gate_contact_uses_native_access_and_external_flare():
+    g = geo()
+    groups = [{"net": "drain", "labels": [{"x": -44, "y": 0}]},
+              {"net": "source", "labels": [{"x": 44, "y": 0}]},
+              {"net": "gate", "labels": [{"x": 0, "y": 47}]}]
+    width = layout._terminal_access_width(groups[0], groups, g)
+    assert width == 20  # this fixture's source-provided straight-metal minimum
+    plan = layout.Plan()
+    group = dict(groups[0], access_width=width)
+    dev = {"origin": (0, 0), "bbox": (-141, -130, 141, 130), "dev": {"name": "unit"}}
+    layout._paint_terminal_stub(plan, group, dev, -46, 0, -530, g)
+    record = plan.access_necks[0]
+    assert record["actual_width_um"] == .2 and record["requested_width_um"] == .6
+    assert record["neck_box_lambda"][2] - record["neck_box_lambda"][0] == 20
+    wide = plan.shapes[-1]["box"]
+    assert wide[3] <= -130 - g.spacing_reach("metal3")
+    # A remote native contact is unaffected by the engineering width choice.
+    remote = [{"net": "a", "labels": [{"x": 0, "y": 0}]},
+              {"net": "b", "labels": [{"x": 0, "y": 240}]}]
+    assert layout._terminal_access_width(remote[0], remote, g) == 60
+
+
+@pytest.mark.parametrize("tap_x", [-80, 80])
+def test_production_dense_plan_keeps_mirrored_body_escape_outside_stubs(monkeypatch, tap_x):
+    dev = {"name": "unit", "model": "native_mos", "class": "mosfet",
+           "nets": ["drain", "gate", "source", "body"],
+           "pars": {"w": .5, "l": .5, "m": 1}}
+    cell = layout.parse_cell("""magic
+magscale 1 1
+<< metal1 >>
+rect -120 -94 120 -74
+rect -120 74 120 94
+rect -120 -74 -100 74
+rect 100 -74 120 74
+<< metal2 >>
+rect -54 -22 -34 22
+rect 34 -22 54 22
+rect -14 32 14 62
+<< labels >>
+rlabel metal1 0 -84 0 -84 0 B
+rlabel metal2 -44 0 -44 0 0 D
+rlabel metal2 44 0 44 0 0 S
+rlabel metal2 0 47 0 47 0 G
+<< end >>
+""")
+    cell.update(bbox=(-141, -130, 141, 130), delta=(141, 130))
+    pdk = SimpleNamespace(layers=None, gencells={"native_mos": {
+        "namespace": "provider", "params": ["w", "l", "m", "guard"]}})
+    monkeypatch.setattr(layout, "ring_layer_of", lambda _: "metal1")
+    monkeypatch.setattr(layout, "body_tap_direct_m1_layer", lambda *a: "metal1")
+    monkeypatch.setattr(layout, "choose_tap", lambda *a: (tap_x, -84, 100, False))
+    plan = layout.build_plan([dev], dev["nets"], {layout.config_key(dev): cell}, pdk, geo(), 0)
+    assert not layout.net_shorts(plan)
+    # The placement command plus actual native placement delta locates the
+    # unchanged chosen ring contact; inspect the production paint itself.
+    fields = plan.tcl[0].split()
+    origin_x = int(fields[1]) + cell["delta"][0]
+    horizontal = [r["box"] for r in plan.shapes if r["net"] == "body"
+                  and r["layer"] == "metal3"
+                  and r["box"][2]-r["box"][0] > 2*(r["box"][3]-r["box"][1])]
+    assert horizontal
+    if tap_x > 0:
+        assert all(box[0] > origin_x for box in horizontal)
+    else:
+        assert all(box[2] < origin_x for box in horizontal)

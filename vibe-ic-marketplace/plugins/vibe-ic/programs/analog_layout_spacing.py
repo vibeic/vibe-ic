@@ -62,13 +62,17 @@ def read_native_rules(stage, pdk_root: str, family: str) -> dict:
               "r=Path(" + repr(root) + ");"
               "a=list(r.glob('*tech_default.json'));b=list(r.glob('**/*metaln.drc'));"
               "p=(a+b) if len(a)==len(b)==1 else [];"
-              "print(json.dumps({str(x):{'text':x.read_text(),"
+              "print('A5_NATIVE_SPACING='+json.dumps({str(x):{'text':x.read_text(),"
               "'sha256':hashlib.sha256(x.read_bytes()).hexdigest()}for x in p}))")
     try:
         rc, out, error = stage.sh("python3 -c " + shlex.quote(script), timeout=120)
         if rc:
             raise ValueError("native conditional-spacing sources unavailable: " + error[:160])
-        files = json.loads(out)
+        messages = [line.split('=', 1)[1] for line in out.splitlines()
+                    if line.startswith('A5_NATIVE_SPACING=')]
+        if len(messages) != 1:
+            raise ValueError("native conditional-spacing payload is absent or ambiguous")
+        files = json.loads(messages[0])
         config = next(value["text"] for path, value in files.items() if path.endswith(".json"))
         source = next(value["text"] for path, value in files.items() if path.endswith(".drc"))
         rules = parse_native_rules(config, source)
