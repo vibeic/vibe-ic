@@ -557,20 +557,59 @@ def collect(manifest):
                 "metrics": {"stage": "PRE", "cohorts": rows, "gaps": [str(exc)]}}
 
 
+def _nominal_context(project, views):
+    """Actual nominal includes and ordered selected library contexts only."""
+    template = Path(views["testbench"]["path"])
+    closure = bound.consumed_input_views(project, template)
+    if not closure:
+        raise ValueError("nominal source model/include closure is empty")
+    def signature(text, files):
+        # Expanded text retains include order and position; file/section hash
+        # multiplicities retain the selected closure without project paths.
+        return (hashlib.sha256(text.encode()).hexdigest(), tuple(sorted(
+            (str(row.get("section") or "").casefold(), row["sha256"]) for row in files)))
+    text, files = mc._statistical_closure(project, template.resolve(), None)
+    includes = signature(text, files)
+    net = Path(views["netlist"]["path"])
+    libraries = []
+    for _line, tokens in mc._cards(bound.contextual_template(net.read_text(), net.parent)):
+        if tokens[0].casefold() != ".lib" or len(tokens) != 3:
+            continue
+        library = mc._source_path(project, net.parent, tokens[1])
+        # Do not inspect or require unselected mismatch siblings. The MC
+        # manifest validates those independently before its cohorts can run.
+        text, files = mc._statistical_closure(project, library, tokens[2])
+        libraries.append((tokens[2].casefold(), signature(text, files)))
+    return closure, (includes, tuple(libraries))
+
+
 def _nominal_control(manifest):
     reference = manifest.get("nominal_score")
     if not reference or not _current({"nominal_score": reference}):
         raise ValueError("a current source nominal A07 score reference is required before cohort series launch")
     path = Path(reference["path"])
     score = json.loads(path.read_text())
+    source = manifest["native_inputs"]
+    roles = ("netlist", "testbench", "spec", "topology")
+    if not _current({role: source[role] for role in roles}):
+        raise ValueError("current nominal source inputs are absent or changed")
+    _source_closure, source_context = _nominal_context(Path(manifest["project"]), source)
     for entry in score.get("points") or []:
         point = json.loads(Path(entry["path"]).read_text())
         phase = point.get("settings", {}).get("phase_index")
+        views = point.get("native_inputs") or {}
         if point.get("settings") != capture.phase_settings(manifest["common_settings"], phase) \
                 or point.get("image") != manifest["image"] \
-                or any(point.get("native_inputs", {}).get(role) != manifest["native_inputs"][role]
-                       for role in ("netlist", "testbench", "spec", "topology")):
+                or any(views.get(role, {}).get("sha256") != source[role]["sha256"] for role in roles):
             raise ValueError("nominal A07 points do not belong to the current source DUT and measurement method")
+        project = Path(point["project"])
+        if not _current(views) or not bound.validate_consumed_inputs(project, views)[0] \
+                or not capture.declared_dut_consumed(views):
+            raise ValueError("nominal A07 actual consumed inputs are absent, stale, or incomplete")
+        expected, context = _nominal_context(project, views)
+        actual = {role: view for role, view in views.items() if role.startswith("include:")}
+        if actual != expected or context != source_context:
+            raise ValueError("nominal A07 consumed model/include context differs from the source nominal context")
     replay = capture.replay_score(path)
     if replay.get("status") != "PASS":
         raise ValueError("native nominal A07 raw replay must PASS before cohort series launch")

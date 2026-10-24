@@ -2,6 +2,7 @@
 import json
 from pathlib import Path
 import multiprocessing
+import shutil
 import time
 
 import pytest
@@ -229,6 +230,152 @@ def _nominal(method, root):
                'temperature_c': 27, 'score': str(root / 'score.json')}
     _native_fixture_series(context)
     return Path(context['score'])
+
+
+def _adopted_nominal(method, root, *, changed=None, shared_model=False, adoption_subdir='adopted-project'):
+    """Same source bytes on a different project; original native receipts stay put."""
+    project, settings, library, wrapper = method
+    net = project / 'phase3/analog/converter/converter.sp'
+    leaf = project / 'nominal devices.lib'
+    leaf.write_text('.param actual_nominal=1\n')
+    library.write_text(library.read_text().replace('.lib device_tt\n',
+        '.lib device_tt\n.include "nominal devices.lib"\n', 1))
+    model_token = '../../../model.lib'
+    if shared_model:
+        shared = root / 'shared-pdk'
+        shared.mkdir(parents=True)
+        for path in (library, wrapper, leaf):
+            shutil.copy2(path, shared / path.name)
+        model_token = str(shared / library.name)
+    net.write_text(net.read_text().replace(str(library), model_token))
+    score = _nominal(method, root / 'original-native')
+    canonical = root / adoption_subdir
+    shutil.copytree(project / 'phase3/analog/converter', canonical / 'phase3/analog/converter')
+    for path in (settings, *project.glob('*.lib')):
+        shutil.copy2(path, canonical / path.name)
+    if changed:
+        changed(canonical)
+    manifest = stats.prepare(canonical, 'converter', canonical / settings.name, root / 'chips', 2,
+        image='fixture-image', reference_ports=['ref_hi', 'ref_lo'], nominal_score=score)
+    return manifest, score
+
+
+@pytest.mark.parametrize('adoption_subdir', ['adopted-project', 'different/deeper/adopted-project'])
+def test_nominal_adoption_accepts_shared_external_pdk_at_different_project_depths(method, tmp_path, adoption_subdir):
+    manifest, score = _adopted_nominal(method, tmp_path / 'adoption', shared_model=True,
+                                      adoption_subdir=adoption_subdir)
+    assert stats._validate(manifest)[0] == manifest['cohorts']
+    assert stats._nominal_control(manifest) == stats._view(score)
+
+
+def test_nominal_adoption_rejects_swapped_plain_include_leaves_with_equal_hash_multiset(method, tmp_path):
+    project = method[0]
+    first, second = project / 'first.lib', project / 'second.lib'
+    first.write_text('.param ordered_value=1\n'); second.write_text('.param ordered_value=2\n')
+    net = project / 'phase3/analog/converter/converter.sp'
+    net.write_text('.include "../../../first.lib"\n.include "../../../second.lib"\n' + net.read_text())
+    def swapped(canonical):
+        a, b = canonical / first.name, canonical / second.name
+        one, two = a.read_bytes(), b.read_bytes()
+        a.write_bytes(two); b.write_bytes(one)
+    manifest, score = _adopted_nominal(method, tmp_path / 'adoption', changed=swapped)
+    point = json.loads(Path(json.loads(score.read_text())['points'][0]['path']).read_text())
+    original, old_context = stats._nominal_context(Path(point['project']), point['native_inputs'])
+    adopted, new_context = stats._nominal_context(Path(manifest['project']), manifest['native_inputs'])
+    assert sorted(row['sha256'] for row in original.values()) == sorted(row['sha256'] for row in adopted.values())
+    assert old_context != new_context
+    with pytest.raises(ValueError, match='model/include context'):
+        stats._nominal_control(manifest)
+
+
+def test_nominal_adoption_accepts_identical_current_source_and_only_actual_nominal_models(method, tmp_path):
+    def different_unused_mismatch(project):
+        path = project / 'mismatch devices.lib'
+        path.write_text(path.read_text().replace('1e-9', '2e-9'))
+    manifest, score = _adopted_nominal(method, tmp_path / 'adoption', changed=different_unused_mismatch)
+    original = {str(path): path.read_bytes() for path in score.parent.rglob('*') if path.is_file()}
+    point = json.loads(Path(json.loads(score.read_text())['points'][0]['path']).read_text())
+    assert point['native_inputs']['netlist'] != manifest['native_inputs']['netlist']
+    assert point['native_inputs']['netlist']['sha256'] == manifest['native_inputs']['netlist']['sha256']
+    assert stats._validate(manifest)[0] == manifest['cohorts']  # New mismatch source is still independently current.
+    assert stats._nominal_control(manifest) == stats._view(score)
+    assert all(Path(path).read_bytes() == data for path, data in original.items())
+
+
+def test_nominal_adoption_rejects_changed_actually_consumed_model_with_equal_role_hashes(method, tmp_path):
+    def different_nominal(project):
+        (project / 'nominal devices.lib').write_text('.param actual_nominal=2\n')
+    manifest, score = _adopted_nominal(method, tmp_path / 'adoption', changed=different_nominal)
+    point = json.loads(Path(json.loads(score.read_text())['points'][0]['path']).read_text())
+    assert all(point['native_inputs'][role]['sha256'] == manifest['native_inputs'][role]['sha256']
+               for role in ('netlist', 'testbench', 'spec', 'topology'))
+    with pytest.raises(ValueError, match='model/include context'):
+        stats._nominal_control(manifest)
+
+
+@pytest.mark.parametrize('role', ['netlist', 'testbench', 'spec', 'topology'])
+def test_nominal_adoption_requires_each_current_source_role_hash(method, tmp_path, role):
+    def different_role(project):
+        path = stats.pvt._paths(project, 'converter')[role]
+        path.write_text(path.read_text() + '\n')
+    manifest, _score = _adopted_nominal(method, tmp_path / 'adoption', changed=different_role)
+    with pytest.raises(ValueError, match='current source DUT'):
+        stats._nominal_control(manifest)
+
+
+@pytest.mark.parametrize('mutation', ['missing_include', 'extra_include', 'changed_model', 'image', 'settings'])
+def test_nominal_adoption_keeps_actual_closure_image_and_common_settings_checks(method, tmp_path, mutation):
+    manifest, score = _adopted_nominal(method, tmp_path / 'adoption')
+    data = json.loads(score.read_text())
+    path = Path(data['points'][0]['path']); point = json.loads(path.read_text())
+    if mutation == 'missing_include':
+        del point['native_inputs'][next(key for key in point['native_inputs'] if key.startswith('include:'))]
+    elif mutation == 'extra_include':
+        extra = path.parent / 'unconsumed.lib'; extra.write_text('.param irrelevant=1\n')
+        point['native_inputs']['include:' + str(extra)] = stats._view(extra)
+    elif mutation == 'changed_model':
+        source = Path(method[0]) / 'nominal devices.lib'
+        source.write_text('.param actual_nominal=2\n')
+    elif mutation == 'image':
+        point['image'] = 'different-image'
+    else:
+        point['settings']['sample_fraction'] = .625
+    path.write_text(json.dumps(point)); data['points'][0] = stats._view(path)
+    score.write_text(json.dumps(data)); manifest['nominal_score'] = stats._view(score)
+    with pytest.raises(ValueError, match='actual consumed|current source DUT'):
+        stats._nominal_control(manifest)
+
+
+@pytest.mark.parametrize('mutation', ['section', 'multiplicity'])
+def test_nominal_context_preserves_selected_section_and_ordered_load_multiplicity(method, tmp_path, mutation):
+    manifest, _score = _adopted_nominal(method, tmp_path / 'adoption')
+    inputs = manifest['native_inputs']
+    before = stats._nominal_context(Path(manifest['project']), inputs)[1]
+    net = Path(inputs['netlist']['path'])
+    text = net.read_text()
+    if mutation == 'section':
+        # Both sections live in the same unchanged library file.
+        text = text.replace(' device_tt\n', ' device_tt_stat\n', 1)
+    else:
+        text = text.splitlines()[0] + '\n' + text
+    net.write_text(text)
+    after = stats._nominal_context(Path(manifest['project']), inputs)[1]
+    assert before != after
+    assert before[1] != after[1]
+
+
+@pytest.mark.parametrize('code,suffix', [(1, ''), (0, ';;RESIDUAL_FAIL native\n'), (124, '')])
+def test_nominal_adoption_replays_native_failure_and_interruption_instead_of_cached_pass(method, tmp_path, code, suffix):
+    manifest, score = _adopted_nominal(method, tmp_path / 'adoption')
+    data = json.loads(score.read_text())
+    path = Path(data['points'][0]['path']); point = json.loads(path.read_text())
+    point['executions'][0]['returncode'] = code
+    log = Path(point['executions'][0]['log']); log.write_text(log.read_text() + suffix)
+    point['executions'][0]['log_sha256'] = stats.bound.sha(log)
+    path.write_text(json.dumps(point)); data['points'][0] = stats._view(path)
+    score.write_text(json.dumps(data)); manifest['nominal_score'] = stats._view(score)
+    with pytest.raises(ValueError, match='native nominal A07 raw replay must PASS'):
+        stats._nominal_control(manifest)
 
 
 @pytest.mark.parametrize('cached', [False, True])
