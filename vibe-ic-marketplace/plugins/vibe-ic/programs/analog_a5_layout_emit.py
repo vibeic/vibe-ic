@@ -356,6 +356,7 @@ class PdkFacts:
         self.tech_lef_sha256: Optional[str] = None
         self.cut_current_limits: dict = {}
         self.cut_current_source: dict = {}
+        self.width_spacing_source: dict = {}
         self.core_pg: dict = {"result": "NOT_MEASURED",
                              "reason": "no resolved standard-cell LEF"}
         self.cell_lef_text: Optional[str] = None
@@ -535,6 +536,10 @@ def read_pdk(stage: Stage, pdk_root: str, family: str,
             return None, f"ENV_UNAVAILABLE: Magic technology context is unreadable: {exc}"
         facts.m1_space_um = _lim.m1_space_um(dtext, technology_text=context)
     facts.deck = _lim.deck_rules(dtext)
+    import analog_layout_spacing
+    facts.width_spacing_source = analog_layout_spacing.read_native_rules(stage, pdk_root, family)
+    if facts.width_spacing_source["rules"]:
+        facts.deck["metal_width_spacing_um"] = facts.width_spacing_source["rules"]
     if facts.m1_space_um is None:
         return None, (f"ENV_UNAVAILABLE: {dp} states no Metal1 minimum-space "
                       f"rule this program can read. The bulk-tap clearance "
@@ -1447,14 +1452,29 @@ class Geo:
             # via, because `pitch()` sizes its corridors from it.
             self.patch[k] = self.long_half[k]
 
-    def metal_space(self, layer: str) -> int:
+    def metal_space(self, layer: str, box=None, other=None) -> int:
         m = _METAL_RE.match(layer) or _VIA_RE.match(layer)
         if m:
             n = int(m.group(1))
             if _VIA_RE.match(layer) and not _METAL_RE.match(layer):
                 return self.rules_via_space(n)
-            return self.space.get(n, self.default_space)
+            distance = self.space.get(n, self.default_space)
+            if box is not None and other is not None:
+                width = max(min(box[2] - box[0], box[3] - box[1]),
+                            min(other[2] - other[0], other[3] - other[1])) / self.lam
+                parallel = max(0, min(box[2], other[2]) - max(box[0], other[0]),
+                               min(box[3], other[3]) - max(box[1], other[1])) / self.lam
+                for rule in self.rules.get("metal_width_spacing_um", {}).get(n, []):
+                    if width > rule["width_gt_um"] and parallel > rule["parallel_gt_um"]:
+                        distance = max(distance, int(math.ceil(rule["spacing_um"] * self.lam)))
+            return distance
         return self.default_space
+
+    def spacing_reach(self, layer: str) -> int:
+        match = _METAL_RE.match(layer)
+        rules = self.rules.get("metal_width_spacing_um", {}).get(int(match[1]), []) if match else []
+        return max([self.metal_space(layer)] +
+                   [int(math.ceil(rule["spacing_um"] * self.lam)) for rule in rules])
 
     def rules_via_space(self, k: int) -> int:
         um = self.rules["via_space_um"].get(k)
@@ -2061,6 +2081,29 @@ def friendly_conductor(rows: Sequence[dict], layer: str, x: int, y: int,
 # So the island is placed, not assumed: this index answers "may a box of
 # this size stand here?" for the device geometry, and the search below takes
 # the nearest position to the terminal where the answer is yes.
+def _rectangle_union_area(boxes: Sequence[Sequence[int]]) -> int:
+    """Exact area of axis-aligned native-grid rectangles, including overlaps."""
+    boxes = [b for b in boxes if b[0] < b[2] and b[1] < b[3]]
+    xs = sorted({x for b in boxes for x in (b[0], b[2])})
+    area = 0
+    for left, right in zip(xs, xs[1:]):
+        intervals = sorted((b[1], b[3]) for b in boxes
+                           if b[0] < right and left < b[2])
+        low = high = None
+        length = 0
+        for bottom, top in intervals:
+            if high is None or bottom > high:
+                if high is not None:
+                    length += high - low
+                low, high = bottom, top
+            else:
+                high = max(high, top)
+        if high is not None:
+            length += high - low
+        area += (right - left) * length
+    return area
+
+
 class Sites:
     """The device geometry an island must clear, indexed by layer and cell.
 
@@ -2077,6 +2120,7 @@ class Sites:
     def __init__(self, rows: Sequence[dict], geo: Geo) -> None:
         self.geo = geo
         self.grid: Dict[tuple, List[dict]] = {}
+        self.polygons: Dict[tuple, List[dict]] = {}
         for r in rows:
             self.add(r)
 
@@ -2087,6 +2131,8 @@ class Sites:
         that is what a wider island makes possible where a narrower one
         could not reach."""
         b = r["box"]
+        if "lcomp" in r:
+            self.polygons.setdefault((r["layer"], r["lcomp"]), []).append(r)
         for gx in range(b[0] // self.CELL, b[2] // self.CELL + 1):
             for gy in range(b[1] // self.CELL, b[3] // self.CELL + 1):
                 self.grid.setdefault((r["layer"], gx, gy), []).append(r)
@@ -2114,8 +2160,7 @@ class Sites:
         are rejected too. Refusing a legal position costs a lambda of travel;
         accepting an illegal one costs a violation."""
         for layer in layers:
-            s = self.geo.metal_space(layer)
-            rows = self.near(layer, box, s)
+            rows = self.near(layer, box, self.geo.spacing_reach(layer))
             merged = set()
             for r in rows:
                 if "lcomp" not in r:
@@ -2125,6 +2170,7 @@ class Sites:
                         and b[1] <= box[3] and box[1] <= b[3]:
                     merged.add(r["lcomp"])
             for r in rows:
+                s = self.geo.metal_space(layer, box, r["box"])
                 if "lcomp" not in r:
                     # this emitter's own paint. One conductor is one net
                     # here, so a same-net rectangle is skipped and every
@@ -2138,10 +2184,14 @@ class Sites:
                         return False
                     continue
                 if r["lcomp"] in merged:
-                    # one polygon with this island: no spacing rule applies
-                    # between the parts of a single polygon — but a polygon
-                    # this island has no business joining is a SHORT.
+                    # Joining one part does not excuse a narrow notch beside
+                    # another part of that same native polygon.
                     if friendly is None or r.get("comp") != friendly:
+                        return False
+                    b = r["box"]
+                    dx = max(b[0] - box[2], box[0] - b[2], 0)
+                    dy = max(b[1] - box[3], box[1] - b[3], 0)
+                    if (dx or dy) and dx < s and dy < s:
                         return False
                     continue
                 b = r["box"]
@@ -2150,6 +2200,16 @@ class Sites:
                 if dx < s and dy < s:
                     return False
         return True
+
+    def merged_area(self, box: Sequence[int], layer: str, friendly) -> int:
+        """Area actually joined on this metal; another layer adds no area."""
+        components = {r["lcomp"] for r in self.near(layer, box, 0)
+                      if r.get("comp") == friendly and "lcomp" in r
+                      and r["box"][0] < box[2] and box[0] < r["box"][2]
+                      and r["box"][1] < box[3] and box[1] < r["box"][3]}
+        boxes = [box] + [r["box"] for component in components
+                        for r in self.polygons[(layer, component)]]
+        return _rectangle_union_area(boxes)
 
     def touches(self, box: Sequence[int], layer: str, friendly) -> bool:
         """True when the box actually OVERLAPS the conductor it is there to
@@ -2282,6 +2342,13 @@ def _via_stack(plan: Plan, net: str, x: int, y: int, level: int, geo: Geo,
                     continue
                 if not sites.touches(box, term_layer, friendly):
                     continue
+                # The reduced-area option is legal only when the native
+                # terminal plus this island really reaches the area floor.
+                # Merely touching a labelled, subminimum pad is insufficient.
+                if (friendly is not None and area < area_full
+                        and sites.merged_area(box, term_layer, friendly)
+                        < geo.area_lam2.get(level, 0)):
+                    continue
                 placed = (x + dx, y + dy, ax, ay, p)
                 break
             if placed is not None:
@@ -2336,6 +2403,32 @@ def _track_offsets(nets: Sequence[str], pitch: int, extras: dict) -> list:
         result.append(cursor)
         previous = extra
     return result
+
+
+def _collect_close_plain_rows(groups: List[dict], bbox: Sequence[int],
+                              geo: Geo) -> None:
+    """Wide singleton escapes leave dense terminal/tap rows on M2 outside."""
+    plain = [g for g in groups if not g.get("body_tap")]
+    route_space = geo.metal_space("metal3")
+    for rule in geo.rules.get("metal_width_spacing_um", {}).get(3, []):
+        if geo.wire[3] / geo.lam > rule["width_gt_um"]:
+            route_space = max(route_space, int(math.ceil(rule["spacing_um"] * geo.lam)))
+    spacing = geo.wire[3] + route_space
+    if not any(not g["strapped"] for g in plain) or not any(
+            g["net"] != other["net"]
+            and 0 < abs(g["escape_y"] - other["escape_y"]) < spacing
+            for g in plain for other in groups):
+        return
+    split = (min(g["y"] for g in plain) + max(g["y"] for g in plain)) / 2
+    below = above = 0
+    for g in sorted(plain, key=lambda item: (-len(item["labels"]), item["y"])):
+        g["strapped"] = True
+        if g["y"] <= split:
+            below += 1
+            g["escape_y"] = bbox[1] - below * geo.pitch()
+        else:
+            above += 1
+            g["escape_y"] = bbox[3] + above * geo.pitch()
 
 
 def build_plan(devs: Sequence[dict], ports: Sequence[str],
@@ -2484,6 +2577,7 @@ def build_plan(devs: Sequence[dict], ports: Sequence[str],
                     "the gencell's local-interconnect residue to metal1; the "
                     "body tap is left unconnected rather than guessed")
             groups.append({"net": ring_labels[0][0], "y": ty,
+                           "body_tap": True,
                            "escape_y": ty, "strapped": False,
                            "labels": [{"x": tx, "y": ty, "level": 1,
                                        "name": "tap"}],
@@ -2495,6 +2589,8 @@ def build_plan(devs: Sequence[dict], ports: Sequence[str],
                                                else body_tap_local),
                            "body_tap_direct_m1": direct_m1,
                            "level": 1})
+
+        _collect_close_plain_rows(groups, cell["bbox"], geo)
 
         # two groups escaping at one height take opposite sides, so their
         # metal3 runs are on opposite sides of the device and never meet
@@ -3668,6 +3764,7 @@ def emit_block(project: Path, block: str, stage: Stage, magicrc: str,
                               "source": src}
     report["pdk_limits"] = limits_used
     report["pdk_sources"] = dict(facts.sources)
+    report["width_spacing_source"] = dict(facts.width_spacing_source)
     report["m1_space_um"] = facts.m1_space_um
 
     lam, cells = probe(stage, magicrc, devs, facts)
