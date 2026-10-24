@@ -542,13 +542,16 @@ def test_current_odb_consumer_keeps_measured_fail_then_refuses_changed_odb(
                       ("sta_receipt", "phase3/librelane/current/vibeic_receipt.json"),
                       ("sta_config", "phase3/librelane/current/config.json"),
                       ("step23_record", ir.CURRENT_STA_RECORD)):
-        selected[role] = relative_record(_write(project / rel, role + "\n"))
+        content = json.dumps({'DESIGN_NAME': 'neutral'}) if role == 'sta_config' else role + "\n"
+        selected[role] = relative_record(_write(project / rel, content))
     doc["record"]["input_mode"] = "current_stapostpnr_odb"
     doc["record"]["selected_inputs"] = selected
     doc["record"]["input_source_chain"] = {
         "source": "current validated OpenROAD.STAPostPNR state",
         "image": IMAGE, "pdk_root": str(project / "fixture_pdk"), "pdk": "neutral"}
     receipt.write_text(json.dumps(doc))
+    monkeypatch.setattr(ir, '_current_stapostpnr_ir_inputs',
+                        lambda *_a, **_k: {'records': selected})
     checked = current_ir.validate_primary_ir(project)
     assert checked["valid"] is True
     assert checked["verdict"] == "FAIL"
@@ -557,4 +560,93 @@ def test_current_odb_consumer_keeps_measured_fail_then_refuses_changed_odb(
     refused = current_ir.validate_primary_ir(project)
     assert refused["valid"] is False
     assert refused["verdict"] == "NOT_MEASURED"
-    assert "LibreLane IR current bytes changed" in refused["reason"]
+    assert "LibreLane IR current STA bytes changed: odb" in refused["reason"]
+
+
+def _absolute_owner_primary(tmp_path, monkeypatch, case='current'):
+    from test_default_step24_current_adoption import (
+        test_default_step24_adopts_its_current_native_primary as established_case)
+    established_case(tmp_path, monkeypatch, case)
+    project = tmp_path / 'project'
+    receipt = project / 'reports/phase3/ir_drop_librelane.json'
+    doc = json.loads(receipt.read_text())
+
+    def relative_record(path):
+        path = Path(path).resolve()
+        return {'path': str(path.relative_to(project)), 'sha256': _sha(path)}
+
+    selected = {role: dict(doc['inputs'][role])
+                for role in ('def', 'netlist', 'sdc', 'spef')}
+    selected['odb'] = {'path': doc['native_basis']['odb']['path'],
+                       'sha256': doc['native_basis']['odb']['sha256']}
+    for role, rel in (('sta_state', 'phase3/librelane/current/state_out.json'),
+                      ('sta_receipt', 'phase3/librelane/current/vibeic_receipt.json'),
+                      ('sta_config', 'phase3/librelane/current/config.json'),
+                      ('step23_record', ir.CURRENT_STA_RECORD)):
+        content = json.dumps({'DESIGN_NAME': 'neutral'}) if role == 'sta_config' else role + '\n'
+        selected[role] = relative_record(_write(project / rel, content))
+    absolute_def = (project / selected['def']['path']).resolve()
+    selected['def'] = {'path': str(absolute_def), 'sha256': _sha(absolute_def)}
+    doc['inputs']['def'] = dict(selected['def'])
+    doc['record']['input_mode'] = 'current_stapostpnr_odb'
+    doc['record']['selected_inputs'] = selected
+    doc['record']['input_source_chain'] = {
+        'source': 'current validated OpenROAD.STAPostPNR state',
+        'image': IMAGE, 'pdk_root': str(project / 'fixture_pdk'), 'pdk': 'neutral'}
+    receipt.write_text(json.dumps(doc))
+    owner = {'records': json.loads(json.dumps(selected))}
+    monkeypatch.setattr(ir, '_current_stapostpnr_ir_inputs',
+                        lambda *_a, **_k: owner)
+    return project, receipt, doc, selected, owner
+
+
+def test_primary_ir_accepts_exact_absolute_current_original_owner(
+        tmp_path, monkeypatch):
+    project, _, _, selected, _ = _absolute_owner_primary(tmp_path, monkeypatch)
+    observed = current_ir.validate_primary_ir(project)
+    assert observed['valid'] is True
+    assert observed['verdict'] == 'PASS'
+    assert Path(selected['def']['path']).is_absolute()
+
+
+@pytest.mark.parametrize('damage,reason', [
+    ('wrong_owner', 'owner selection changed'),
+    ('wrong_path', 'current bytes changed'),
+    ('wrong_hash', 'current STA bytes changed'),
+    ('missing', 'current STA bytes changed'),
+    ('malformed', 'binding malformed'),
+    ('contradictory', 'owner selection changed'),
+])
+def test_primary_ir_refuses_unbound_absolute_or_damaged_current_owner(
+        tmp_path, monkeypatch, damage, reason):
+    project, receipt, doc, selected, owner = _absolute_owner_primary(tmp_path, monkeypatch)
+    original = Path(selected['def']['path'])
+    if damage == 'wrong_owner':
+        other = _write(tmp_path / 'other-owner/neutral.def', original.read_text())
+        owner['records']['def'] = {'path': str(other.resolve()), 'sha256': _sha(other)}
+    elif damage == 'wrong_path':
+        other = _write(tmp_path / 'other-path/neutral.def', original.read_text())
+        doc['inputs']['def'] = {'path': str(other.resolve()), 'sha256': _sha(other)}
+    elif damage == 'wrong_hash':
+        doc['inputs']['def']['sha256'] = '1' * 64
+        selected['def']['sha256'] = '1' * 64
+        owner['records']['def']['sha256'] = '1' * 64
+    elif damage == 'missing':
+        original.unlink()
+    elif damage == 'malformed':
+        doc['record']['selected_inputs']['def'] = {'path': str(original)}
+    else:
+        owner['records']['sta_receipt']['sha256'] = '2' * 64
+    receipt.write_text(json.dumps(doc))
+    observed = current_ir.validate_primary_ir(project)
+    assert observed['valid'] is False
+    assert observed['verdict'] == 'NOT_MEASURED'
+    assert reason in observed['reason']
+
+
+def test_primary_ir_exact_absolute_owner_preserves_measured_fail(
+        tmp_path, monkeypatch):
+    project, _, _, _, _ = _absolute_owner_primary(tmp_path, monkeypatch, 'native_fail')
+    observed = current_ir.validate_primary_ir(project)
+    assert observed['valid'] is True
+    assert observed['verdict'] == 'FAIL'

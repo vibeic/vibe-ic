@@ -1235,15 +1235,6 @@ def validate_primary_ir(project: Path) -> Dict[str, Any]:
         if (not {"def", "netlist", "sdc", "spef"}.issubset(doc["inputs"])
                 or not {"reports/phase3/ir_drop.json", "reports/phase3/ir_drop.rpt"}.issubset(doc["published"])):
             raise ValueError("LibreLane IR required input/publication binding removed")
-        for population in ("inputs", "artifacts", "published"):
-            rows = doc[population]
-            if not rows:
-                raise ValueError(f"LibreLane IR {population} population absent")
-            for key, row in rows.items():
-                name, digest = (row["path"], row["sha256"]) if population == "inputs" else (key, row)
-                path = Path(name)
-                if path.is_absolute() or ".." in path.parts or not digest or _native_sha(project / path) != digest:
-                    raise ValueError(f"LibreLane IR current bytes changed: {name}")
         record = doc["record"]
         recorded_state = Path(record["tool_state"])
         state_sha = record["tool_state_sha256"]
@@ -1256,6 +1247,7 @@ def validate_primary_ir(project: Path) -> Dict[str, Any]:
                 project, record["tool_state"], state_sha, None)
         for row in [doc["native_basis"][key] for key in ("odb", "sdc", "spef", "tech_lef")] + doc["native_basis"]["liberties"]:
             _retained_native_path(project, row["path"], row["sha256"], old_root)
+        selected = None
         if record.get("input_mode") == "current_stapostpnr_odb":
             selected = record.get("selected_inputs")
             required = {"odb", "def", "netlist", "sdc", "spef", "sta_state",
@@ -1271,16 +1263,46 @@ def validate_primary_ir(project: Path) -> Dict[str, Any]:
                         or not row["sha256"] or target.is_symlink()
                         or not target.is_file() or _native_sha(target) != row["sha256"]):
                     raise ValueError(f"LibreLane IR current STA bytes changed: {role}")
-            native_odb = doc["native_basis"]["odb"]
-            if (selected["odb"]["sha256"] != native_odb["sha256"]
-                    or Path(native_odb["path"]).resolve()
-                    != (project / selected["odb"]["path"]).resolve()):
-                raise ValueError("LibreLane IR did not consume selected current STA ODB")
             chain = record.get("input_source_chain") or {}
             if (chain.get("source") != "current validated OpenROAD.STAPostPNR state"
                     or not chain.get("image") or not chain.get("pdk_root")
                     or not chain.get("pdk")):
                 raise ValueError("LibreLane IR current STA source chain missing")
+            config_path = Path(selected["sta_config"]["path"])
+            config_path = config_path if config_path.is_absolute() else project / config_path
+            import librelane_ir_antenna as la
+            try:
+                owner = la._current_stapostpnr_ir_inputs(
+                    project, chain["image"], Path(chain["pdk_root"]), chain["pdk"],
+                    json.loads(config_path.read_text()))
+            except (OSError, ValueError, KeyError, TypeError, AttributeError, la.Refusal) as exc:
+                raise ValueError(f"LibreLane IR current STA owner invalid: {exc}") from exc
+            if not owner or owner.get("records") != selected:
+                raise ValueError("LibreLane IR current STA owner selection changed")
+        for population in ("inputs", "artifacts", "published"):
+            rows = doc[population]
+            if not rows:
+                raise ValueError(f"LibreLane IR {population} population absent")
+            for key, row in rows.items():
+                name, digest = (row["path"], row["sha256"]) if population == "inputs" else (key, row)
+                path = Path(name)
+                target = path if path.is_absolute() else project / path
+                absolute_current_owner = (population == "inputs" and path.is_absolute()
+                                          and selected is not None and key in selected
+                                          and row == selected[key])
+                if ((path.is_absolute() and not absolute_current_owner)
+                        or (not path.is_absolute() and ".." in path.parts)
+                        or not digest or _native_sha(target) != digest):
+                    raise ValueError(f"LibreLane IR current bytes changed: {name}")
+        # The retained-path checks above bind the same state/native basis,
+        # including existing digest-proven project relocation.  Do not reopen
+        # an unavailable historical pathname after validating its exact rebind.
+        if selected is not None:
+            native_odb = doc["native_basis"]["odb"]
+            if (selected["odb"]["sha256"] != native_odb["sha256"]
+                    or Path(native_odb["path"]).resolve()
+                    != (project / selected["odb"]["path"]).resolve()):
+                raise ValueError("LibreLane IR did not consume selected current STA ODB")
         import librelane_ir_antenna as la
         rebound_record = dict(record)
         rebound_record["tool_state"] = str(tool_state)
