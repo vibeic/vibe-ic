@@ -7,6 +7,8 @@ import pytest
 import _default_backend_fixtures as fixtures
 import _opensta_current as current
 import execution_adapters_backend as adapters
+import execution_backend_producers as producers
+import execution_modes as modes
 import execution_policy as policy
 import librelane_contract as contract
 import librelane_ir_antenna as ir
@@ -15,6 +17,7 @@ from test_default_current_power import (
     NETLIST, SPEF, bind_original_transport, original_transport,
     project as current_power_project,
 )
+from test_default_step24_self_tapeout_inputs import _project as self_tapeout_project
 
 
 def _write(path, text):
@@ -23,8 +26,7 @@ def _write(path, text):
     return path
 
 
-def _scene(tmp_path):
-    project = _project(tmp_path)
+def _install_current(project):
     _write(project / "input/step_0_5ic_answers.json", "{}\n")
     _write(project / "input/submission_template/neutral.json", "{}\n")
     native = project / "phase3/librelane/final-sta-inputs"
@@ -72,6 +74,10 @@ def _scene(tmp_path):
     return project, folder, {key: Path(value) for key, value in views.items()
                              if key not in {"spef", "metrics"}} | {
                                  "spef": Path(views["spef"][corner])}
+
+
+def _scene(tmp_path):
+    return _install_current(_project(tmp_path))
 
 
 def _issued(project, mode="default"):
@@ -182,3 +188,68 @@ def test_operator_and_legacy_step24_requirements_are_unchanged(tmp_path):
     legacy = adapters.backend_canonical_input_contract(
         project, "24", operator, execution_mode="default")
     assert legacy == operator
+
+
+@pytest.mark.parametrize("legacy_aliases", ["absent", "present"])
+def test_default_producer_prefers_current_views_over_self_tapeout_aliases(
+        tmp_path, monkeypatch, legacy_aliases):
+    project, _, views = _install_current(self_tapeout_project(tmp_path))
+    # This is the actual uncovered case: the old physical subject is declared,
+    # but its historical files may be unavailable in the current-owner carrier.
+    # Keeping them in the paired arm proves the reverse on compared path values,
+    # not merely because an old alias is absent.
+    if legacy_aliases == "absent":
+        for path in (
+            project / "phase3/stage3/pnr/chip_top.def",
+            project / "phase3/stage3/pnr/core_pnr.v",
+            project / "phase3/stage3/pnr/constraint.sdc",
+            project / "phase3/librelane/32-unit/03-openroad-rcx/nom/chip_top.nom.spef",
+        ):
+            path.unlink()
+    seen = {}
+
+    class NativeEntryReached(RuntimeError):
+        pass
+
+    class Runner:
+        @staticmethod
+        def _librelane_step24_record(project, top, pdk, mode, spef, written,
+                                     *, routed_def=None, netlist=None, sdc=None):
+            seen.update(spef=Path(spef), routed_def=routed_def,
+                        netlist=netlist, sdc=sdc)
+            raise NativeEntryReached("controlled current D57 native entry")
+
+    monkeypatch.setattr(producers, "_parameters", lambda *_: (
+        Runner, None, type("Pdk", (), {"name": "neutral"})(), ""))
+    with pytest.raises(NativeEntryReached, match="controlled current D57 native entry"):
+        producers.produce_signoff(project, {
+            "step_id": "24", "top": "neutral", "pdk_name": "neutral",
+            "pdk_root": str(tmp_path), "image_id": "SOURCE_CONTROL_ONLY",
+            "execution_mode": "default",
+        })
+    assert seen["spef"] == views["spef"]
+    assert seen["routed_def"] is None
+    assert seen["netlist"] is None
+    assert seen["sdc"] is None
+
+
+def test_default_producer_refuses_stale_current_before_self_tapeout_fallback(
+        tmp_path, monkeypatch):
+    project, _, views = _install_current(self_tapeout_project(tmp_path))
+    views["spef"].write_text(views["spef"].read_text() + "stale\n")
+    entered = []
+
+    class Runner:
+        @staticmethod
+        def _librelane_step24_record(*args, **kwargs):
+            entered.append((args, kwargs))
+
+    monkeypatch.setattr(producers, "_parameters", lambda *_: (
+        Runner, None, type("Pdk", (), {"name": "neutral"})(), ""))
+    with pytest.raises(modes.Refusal, match="BACKEND_CURRENT_SPEF_INVALID: LL_INPUT_CHANGED"):
+        producers.produce_signoff(project, {
+            "step_id": "24", "top": "neutral", "pdk_name": "neutral",
+            "pdk_root": str(tmp_path), "image_id": "SOURCE_CONTROL_ONLY",
+            "execution_mode": "default",
+        })
+    assert entered == []

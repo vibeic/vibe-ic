@@ -1694,9 +1694,11 @@ def produce_signoff(project, params):
     elif sid == '24':
         subject = None
         if params.get('execution_mode') == 'default':
-            from execution_adapters_backend import default_step24_physical_subject
-            subject = default_step24_physical_subject(
-                project, execution_mode='default')
+            import librelane_ir_antenna as ir
+            if not (project / ir.CURRENT_STA_RECORD).is_file():
+                from execution_adapters_backend import default_step24_physical_subject
+                subject = default_step24_physical_subject(
+                    project, execution_mode='default')
         if subject is None:
             R._librelane_step24_record(
                 project, top, pdk, 'librelane', _step24_spef(project, top, spef), written)
