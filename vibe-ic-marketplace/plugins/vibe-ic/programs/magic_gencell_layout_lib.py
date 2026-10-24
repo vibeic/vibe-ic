@@ -54,6 +54,7 @@ from __future__ import annotations
 
 import math
 import re
+from decimal import Decimal, ROUND_HALF_UP
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 # ── LAW #22: .mag coordinate spaces ───────────────────────────────────────
@@ -296,9 +297,12 @@ def grid_snap_spice_params(line: str, grid_um: float = 0.01) -> str:
     the deck's stated intent executed where the tool fails to.
     """
     def snap(m):
-        v = float(m.group(2))
-        q = round(v / grid_um) * grid_um
-        return f"{m.group(1)}={q:g}u"
+        # Native coordinate rounding sends a positive half-grid dimension
+        # upward. Python round() instead chooses the even integer. Preserve
+        # the original decimal token so binary conversion cannot move a tie.
+        grid = Decimal(str(grid_um))
+        q = (Decimal(m.group(2)) / grid).to_integral_value(rounding=ROUND_HALF_UP) * grid
+        return f"{m.group(1)}={float(q):g}u"
     return _WL_RE.sub(snap, line)
 
 
