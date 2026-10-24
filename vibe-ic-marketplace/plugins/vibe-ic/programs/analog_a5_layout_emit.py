@@ -2398,8 +2398,13 @@ def build_plan(devs: Sequence[dict], ports: Sequence[str],
         bx1, by1, bx2, by2 = cell["bbox"]
         n_below = n_above = 0
         split_y = (min(g["y"] for g in groups) + max(g["y"] for g in groups)) / 2 if groups else 0
+        collect_all = any(len(g["labels"]) > 1 for g in groups)
         for g in sorted(groups, key=lambda g: (-len(g["labels"]), g["y"])):
-            if len(g["labels"]) == 1:
+            # A singleton between fingers is still inside their stub field.
+            # Its ordinary horizontal M3 escape would short through the
+            # neighboring terminal's M3 stubs (notably an even two-finger
+            # device's one source between its two drain contacts).
+            if len(g["labels"]) == 1 and not collect_all:
                 g["escape_y"] = g["y"]
                 g["strapped"] = False
                 continue

@@ -64,7 +64,7 @@ def test_ambiguous_finger_fields_refuse_before_native_execution(tmp_path):
         layout.gencell_call(dev, "drawn", facts("ng", "nf"))
 
 
-@pytest.mark.parametrize("finger_count", [4, 64])
+@pytest.mark.parametrize("finger_count", [2, 4, 64])
 def test_three_interleaved_terminal_groups_keep_separate_conductors(finger_count):
     """A third M2 strap used to short its stubs through the gate strap."""
     dev = {"name": "unit", "model": "native_mos", "class": "mosfet",
@@ -73,6 +73,7 @@ def test_three_interleaved_terminal_groups_keep_separate_conductors(finger_count
     contacts = []
     for i in range(finger_count):
         contacts.append(("G" + str(i), 120 * i + 60, 300))
+    for i in range(finger_count + 1):
         contacts.append((("D" if i % 2 == 0 else "S") + str(i), 120 * i, 0))
     contacts.append(("B", -180, 150))
     text = ["magic", "magscale 1 1", "<< metal2 >>"]
@@ -83,7 +84,7 @@ def test_three_interleaved_terminal_groups_keep_separate_conductors(finger_count
     cell = layout.parse_cell("\n".join(text))
     # The model has no body-contact ring; keep the cell's placement envelope
     # wider than its isolated routing pads, as a real child well does.
-    cell.update(bbox=(-250, -400, 120 * finger_count + 100, 700), delta=(0, 0))
+    cell.update(bbox=(-250, -400, 120 * finger_count + 100, 700), delta=(250, 400))
     pdk = facts()
     pdk.layers = None
     geo = layout.Geo(limits.deck_rules(""), 0.21, 100, 0.3, 0.15)
