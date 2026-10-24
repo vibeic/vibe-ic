@@ -181,3 +181,93 @@ def test_source_hash_drift_refuses_every_historical_context(case):
     record = consume(case)
     assert record["status"] == "NOT_MEASURED"
     assert "current canonical PRE DUT" in record["detail"]
+
+
+def add_ac_contexts(case):
+    """Synthetic native-protocol records exercise the real binding/deck reader."""
+    project, manifest = case
+    data = json.loads(manifest.read_text())
+    for index, original in enumerate(list(data["rows"])):
+        op = json.loads(Path(original["result"]).read_text())
+        root = project / "ac-studies" / str(index)
+        net = Path(op["native_inputs"]["netlist"]["path"])
+        template = put(root / "template.sp", Path(op["native_inputs"]["testbench"]["path"]).read_text()
+            .replace("v_feed vin 0 " + str(op["bindings"]["integration_condition"]["vin_v"]),
+                     "v_feed vin 0 " + str(op["bindings"]["integration_condition"]["vin_v"]) + " ac 1"))
+        binding = {"analysis":{"kind":"AC", "temperature_c":op["bindings"]["analysis"]["temperature_c"],
+                               "points":10, "start_hz":1, "stop_hz":1e6},
+            "integration_condition":op["bindings"]["integration_condition"],
+            "measurements":{"rejection_at_default_point":{"analysis":"AC", "expression":"-vdb(vout)",
+                "frequency_hz":1000, "unit":"dB", "spec_key":"psrr"}}}
+        bindings = put(root / "bindings.json", binding)
+        def run(program, argv, **kwargs):
+            log = put(root / "native.log", f'Doing analysis at TEMP = {binding["analysis"]["temperature_c"]} and TNOM = 27\n'
+                'MEAS rejection_at_default_point=60\n')
+            return {"returncode":0, "log":str(log), "log_sha256":physical._sha(log)}
+        record = bound.run_measurements(project, net, template, binding, root / "native", run)
+        assert record["status"] == "PASS", record
+        record["native_inputs"].update(bindings=view(bindings), source_netlist=op["native_inputs"]["source_netlist"])
+        path = put(root / "native/result.json", record)
+        data["rows"].append({"result":str(path)})
+    put(manifest, data)
+
+
+def test_ac_psrr_and_dc_outputs_can_complete_same_native_context_without_band_invention(case):
+    add_ac_contexts(case)
+    result = consume(case)
+    assert result["status"] == "PASS", result["metrics"]["gaps"]
+    assert result["metrics"]["corners_executed"] == 45
+    assert result["metrics"]["source_context_coverage"]["psrr"]["measured_contexts"] == 45
+    assert result["metrics"]["psrr_measurement_frequency_hz"] == 1000
+    assert "no source-provided/all-frequency band" in result["metrics"]["psrr_scope"]
+    assert len(result["metrics"]["contexts"]) == 90
+
+
+@pytest.mark.parametrize("mutation", ["amplitude", "output", "frequency", "duplicate_ac"])
+def test_ac_psrr_wrong_source_or_mixed_context_cannot_complete_coverage(case, mutation):
+    add_ac_contexts(case)
+    project, manifest = case
+    data = json.loads(manifest.read_text())
+    path = Path(data["rows"][45]["result"])
+    record = json.loads(path.read_text())
+    if mutation == "duplicate_ac":
+        data["rows"][-1] = data["rows"][45]
+        put(manifest, data)
+    else:
+        binding = record["bindings"]
+        template = Path(record["native_inputs"]["testbench"]["path"])
+        if mutation == "amplitude":
+            template.write_text(template.read_text().replace("ac 1", "ac 0.01"))
+        elif mutation == "output":
+            binding["measurements"]["rejection_at_default_point"]["expression"] = "-vdb(vin)"
+        else:
+            binding["measurements"]["rejection_at_default_point"]["frequency_hz"] = 100
+        bindings = Path(record["native_inputs"]["bindings"]["path"])
+        put(bindings, binding)
+        deck = Path(record["native_inputs"]["deck"]["path"])
+        deck.write_text(bound.emit_deck(bound.contextual_template(template.read_text(), template.parent), binding, deck.parent / "curve.dat"))
+        record["native_inputs"].update(testbench=view(template), deck=view(deck), bindings=view(bindings))
+        put(path, record)
+    result = consume(case)
+    assert result["status"] == "NOT_MEASURED"
+    assert result["metrics"]["source_context_coverage"]["psrr"]["measured_contexts"] < 45
+    assert result["metrics"]["gaps"]
+
+
+@pytest.mark.parametrize("failure", ["below_source_minimum", "native_residual"])
+def test_actual_ac_failure_keeps_precedence_over_other_missing_coverage(case, failure):
+    add_ac_contexts(case)
+    _project, manifest = case
+    data = json.loads(manifest.read_text())
+    path = Path(data["rows"][45]["result"])
+    record = json.loads(path.read_text());log = Path(record["executions"][0]["log"])
+    if failure == "below_source_minimum":
+        record["measurements"]["rejection_at_default_point"] = 30
+        log.write_text(log.read_text().replace("point=60", "point=30"))
+    else:
+        log.write_text(log.read_text() + ";;RESIDUAL_FAIL native AC residual\n")
+    record["executions"][0]["log_sha256"] = physical._sha(log)
+    put(path, record)
+    data["rows"].pop()  # Missing another context cannot hide actual AC failure.
+    put(manifest, data)
+    assert consume(case)["status"] == "FAIL"

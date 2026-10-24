@@ -155,7 +155,7 @@ def run_step(step_id: str, project: Path, block: dict, options: dict,
             return _result("NOT_MEASURED", "statistical workers and execution worker budget must be positive integers")
         cfg["workers"] = min(budget, selected_workers)
         cfg["cpus"] = options.get("cpus", budget)
-    if step_id == "A14":
+    if step_id in ("A14", "A15"):
         current = ((options.get("previous_results") or {}).get("A07") or {}).get(name)
         if isinstance(current, dict):
             # Transfer only the already-produced input state and transcript
@@ -541,9 +541,10 @@ def _pre_layout_measurements(project: Path, name: str, cfg: dict) -> tuple[dict,
     candidates = []
     if isinstance(cfg.get("_pre_result"), dict):
         candidates.append(cfg["_pre_result"])
-    state = _read(project / "reports" / "analog_native" / "status.json")
-    candidates += [row for row in state.get("steps", []) if isinstance(row, dict)
-                   and row.get("step") == "A07" and row.get("block") == name]
+    else:
+        state = _read(project / "reports" / "analog_native" / "status.json")
+        candidates = [row for row in state.get("steps", []) if isinstance(row, dict)
+                      and row.get("step") == "A07" and row.get("block") == name]
     study = _pre_measurement_study(project, net, candidates, measured_log,
                                  cfg.get("_analysis_kinds", ("OP",)))
     if study is not None:
@@ -644,8 +645,9 @@ def _adopted_studies(project: Path, name: str, cfg: dict) -> tuple[list, list]:
     import analog_real_corner_sweep as sweep
     bdir, _ = _paths(project, name)
     candidates = [cfg["_pre_result"]] if isinstance(cfg.get("_pre_result"), dict) else []
-    candidates += [row for row in _read(project / "reports/analog_native/status.json").get("steps", [])
-                   if isinstance(row, dict) and row.get("step") == "A07" and row.get("block") == name]
+    if not isinstance(cfg.get("_pre_result"), dict):
+        candidates = [row for row in _read(project / "reports/analog_native/status.json").get("steps", [])
+                      if isinstance(row, dict) and row.get("step") == "A07" and row.get("block") == name]
     studies, gaps, seen = [], [], set()
     def measured(text):
         return {} if any(sweep._scan_analysis_failures(text)) else _native_values(text)
@@ -1282,6 +1284,30 @@ def _grade_measurement_population(project: Path, name: str, study: Path, native:
     return record
 
 
+def _selected_post_contexts(project: Path, name: str, cfg: dict, corners: list) -> list:
+    """Reuse POST measurements of exactly the explicitly adopted PRE studies."""
+    if not isinstance(cfg.get("_pre_result"), dict) or not any(
+            row.get("native_measurement_studies") for row in corners):
+        return corners
+    studies, gaps = _adopted_studies(project, name, cfg)
+    if any(gap.get("status") == "FAIL" for gap in gaps):
+        raise NativeStudyFailed("explicitly adopted PRE native analysis failed")
+    if gaps or not studies:
+        raise ValueError("explicitly adopted PRE studies are absent or incomplete")
+    def identity(record):
+        path = Path(record["result"])
+        return str((path if path.is_absolute() else project / path).resolve()), record["result_sha256"]
+    expected = {identity(study["state"]) for study in studies}
+    selected = []
+    for corner in corners:
+        matches = [row for row in corner.get("native_measurement_studies", [])
+                   if identity(row.get("pre") or {}) in expected]
+        if len(matches) != len(expected) or {identity(row["pre"]) for row in matches} != expected:
+            raise ValueError("each extracted style needs exactly one POST result for every adopted PRE study")
+        selected.append({**corner, "native_measurement_studies": matches})
+    return selected
+
+
 def _statistics(project: Path, name: str, container: str, image: str, pdk: str,
                 cfg: dict, *, _one_style: bool = False) -> dict:
     if cfg.get("kind") == "incremental_capture":
@@ -1300,6 +1326,12 @@ def _statistics(project: Path, name: str, container: str, image: str, pdk: str,
     if not corners:
         return _result("NOT_MEASURED", "no extracted post-layout testbench from A14",
                        missing_inputs=["A14.metrics.corners"])
+    try:
+        corners = _selected_post_contexts(project, name, cfg, corners)
+    except NativeStudyFailed as exc:
+        return _result("FAIL", str(exc))
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        return _result("NOT_MEASURED", "POST study selection unavailable: " + str(exc))
     unmeasured_styles = []
     if cfg.get("styles") is not None:
         selected_styles = cfg["styles"]

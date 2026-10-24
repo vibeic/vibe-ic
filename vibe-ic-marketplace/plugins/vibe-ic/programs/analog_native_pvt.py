@@ -92,21 +92,54 @@ def _template_conditions(net, template, canonical_tb, binding, name):
     ground = next((nodes[key] for key in ("vss", "gnd", "ground") if key in nodes), None)
     if ground != "0" or vin is None or vout is None:
         raise ValueError("PVT supply/load connections are not explicit source-DUT pins")
+    analysis = binding.get("analysis") or {}
+    kind = str(analysis.get("kind", "")).upper()
+    def source_value(tokens):
+        tail = tokens[3:]
+        if tail and tail[0].casefold() == "dc":
+            tail = tail[1:]
+        if not tail or spice.spice_number(tail[0]) is None:
+            raise ValueError("PVT source has no explicit DC value")
+        dc, magnitude, phase = spice.spice_number(tail[0]), 0., 0.
+        tail = tail[1:]
+        if tail:
+            if kind != "AC" or len(tail) not in (2, 3) or tail[0].casefold() != "ac" \
+                    or spice.spice_number(tail[1]) is None or (len(tail) == 3 and spice.spice_number(tail[2]) is None):
+                raise ValueError("PVT source is not an explicit constant with a declared AC stimulus")
+            magnitude = spice.spice_number(tail[1])
+            phase = spice.spice_number(tail[2]) if len(tail) == 3 else 0.
+        return dc, magnitude, phase
     selected, values = {}, {}
-    for key, kind, node in (("vin", "v", vin), ("iout", "i", vout)):
-        sources = [tokens for tokens in lines if tokens[0][0].casefold() == kind
+    for key, source_kind, node in (("vin", "v", vin), ("iout", "i", vout)):
+        sources = [tokens for tokens in lines if tokens[0][0].casefold() == source_kind
                    and len(tokens) >= 4 and tokens[1:3] == [node, ground]]
         if len(sources) != 1:
             raise ValueError(f"PVT {key} requires one explicit independent source at its DUT pin")
         tokens = sources[0]
-        tail = tokens[3:]
-        if tail[0].casefold() == "dc":
-            tail = tail[1:]
-        if len(tail) != 1 or spice.spice_number(tail[0]) is None:
-            raise ValueError(f"PVT {key} source is not an explicit constant")
-        selected[key], values[key] = tokens[0].casefold(), spice.spice_number(tail[0])
-    analysis = binding.get("analysis") or {}
-    kind = str(analysis.get("kind", "")).upper()
+        selected[key], values[key] = tokens[0].casefold(), source_value(tokens)[0]
+    psrr = [row for label, row in binding.get("measurements", {}).items()
+            if sweep.normalize_spec_label(row.get("spec_key", label)) == "psrr"]
+    if psrr:
+        if kind != "AC":
+            raise ValueError("PVT PSRR requires an actual AC analysis")
+        for tokens in lines:
+            if tokens[0][0].casefold() not in ("v", "i"):
+                continue
+            _dc, magnitude, phase = source_value(tokens)
+            if tokens[0].casefold() == selected["vin"]:
+                if magnitude != 1 or phase != 0:
+                    raise ValueError("PVT -VDB PSRR requires unit AC stimulus at the actual DUT supply")
+            elif magnitude != 0:
+                raise ValueError("PVT PSRR has another active AC source")
+        for row in psrr:
+            if re.sub(r"\s+", "", str(row.get("expression", ""))).casefold() != f"-vdb({vout})".casefold():
+                raise ValueError("PVT PSRR does not measure rejection at the actual DUT output")
+            frequency = row.get("frequency_hz")
+            if frequency == "last":
+                frequency = analysis.get("stop_hz")
+            if not _number(frequency) or frequency <= 0 or not all(_number(analysis.get(edge)) for edge in ("start_hz", "stop_hz")) \
+                    or not analysis["start_hz"] <= frequency <= analysis["stop_hz"]:
+                raise ValueError("PVT PSRR requires a declared native AC measurement frequency")
     if kind == "DC":
         start, stop, step = (analysis.get(key) for key in ("start", "stop", "step"))
         if any(not _number(value) for value in (start, stop, step)) or not step or (stop - start) * step <= 0:
@@ -119,8 +152,8 @@ def _template_conditions(net, template, canonical_tb, binding, name):
         values[next(key for key, value in selected.items() if value == source)] = endpoint
         if any(row.get("at") != "last" for row in binding.get("measurements", {}).values()):
             raise ValueError("PVT DC observations do not all use the actual final sweep point")
-    elif kind != "OP":
-        raise ValueError("PVT contexts require actual OP or endpoint DC measurements")
+    elif kind not in ("OP", "AC"):
+        raise ValueError("PVT contexts require actual OP, endpoint DC or explicit AC measurements")
 
     def signature(path):
         result = []
@@ -145,6 +178,7 @@ def run_pvt_studies(project: Path, name: str, reference: dict) -> dict:
     bdir, _work = physical._paths(project, name)
     net, spec, tb = bdir / (name + ".sp"), bdir / "spec.json", bdir / ("tb_" + name + ".sp")
     consumed, outputs, rows, gaps, seen, failed = {}, [], [], [], set(), False
+    measured_contexts, psrr_frequency = set(), None
     try:
         if not isinstance(reference, dict) or not reference.get("path"):
             raise ValueError("PVT result requires an actual manifest path and sha256")
@@ -208,7 +242,7 @@ def run_pvt_studies(project: Path, name: str, reference: dict) -> dict:
             outputs.append(str(path))
             candidate = {"metrics": {"native_measurement_studies": [{"result": str(path),
                 "bindings_path": views.get("bindings", {}).get("path"), "status": record.get("status")}]}}
-            measured, state = physical._pre_measurement_study(project, variant, [candidate], physical._native_values, ("OP", "DC"))
+            measured, state = physical._pre_measurement_study(project, variant, [candidate], physical._native_values, ("OP", "DC", "AC"))
             for j, execution in enumerate(record.get("executions", [])):
                 view = {"path": execution.get("log"), "sha256": execution.get("log_sha256")}
                 consumed[prefix + f"log:{j}"] = view
@@ -232,13 +266,23 @@ def run_pvt_studies(project: Path, name: str, reference: dict) -> dict:
             observations = sim.attributed_study_measurements(spec, binding, measured)
             violation = any(row.get("violation") for row in observations)
             failed = failed or violation
-            if key in seen:
-                raise ValueError("duplicate PVT context cannot substitute for a missing corner/condition")
+            present = {row["name"] for row in observations if row.get("status") == "PASS"}
+            if any((key, output) in measured_contexts for output in present):
+                raise ValueError("duplicate PVT output/context cannot substitute for a missing corner/condition")
+            if any(row["name"] == "psrr" for row in observations):
+                frequencies = {value.get("frequency_hz") if value.get("frequency_hz") != "last" else binding["analysis"].get("stop_hz")
+                    for label, value in binding["measurements"].items()
+                    if sweep.normalize_spec_label(value.get("spec_key", label)) == "psrr"}
+                if len(frequencies) != 1 or (psrr_frequency is not None and psrr_frequency not in frequencies):
+                    raise ValueError("PVT PSRR measurement frequency differs between contexts")
+                psrr_frequency = next(iter(frequencies))
             seen.add(key)
+            measured_contexts.update((key, output) for output in present)
             for row in observations:
                 if row.get("status") == "PASS":
                     coverage[row["name"]].add(key)
             rows.append({"context": list(key), "status": "FAIL" if violation else "PASS", "result": str(path),
+                         "analysis": binding["analysis"],
                          "source_observations": observations, "measurements": measured,
                          "native_temperatures_c": state["native_temperatures_c"]})
         except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
@@ -259,6 +303,8 @@ def run_pvt_studies(project: Path, name: str, reference: dict) -> dict:
         ("; missing source outputs: " + ", ".join(missing_outputs) if missing_outputs else ""),
         sorted({path for path in outputs if path}), native_inputs=consumed,
         metrics={"stage": "PRE", "total_corners": len(expected), "corners_executed": len(seen),
+                 "psrr_measurement_frequency_hz": psrr_frequency,
+                 "psrr_scope": "rejection only at the declared measurement point; no source-provided/all-frequency band is inferred",
                  "full_pvt_sweep_executed": not missing_contexts and not gaps,
                  "design_traceable": not gaps, "spec_results": [observation for row in rows
                     for observation in row.get("source_observations", [])],

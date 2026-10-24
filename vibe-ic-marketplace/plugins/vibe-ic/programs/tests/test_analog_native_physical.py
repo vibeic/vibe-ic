@@ -27,6 +27,55 @@ def project(tmp_path):
     return project
 
 
+@pytest.mark.parametrize("selector", ["_pre_layout_measurements", "_adopted_studies"])
+@pytest.mark.parametrize("explicit", [True, False])
+def test_explicit_pre_adoption_is_authoritative_over_historical_public_rows(project, monkeypatch, selector, explicit):
+    parents = []
+    for label in ("fresh", "historical"):
+        result = put(project / f"{label}.json", {"bindings": {"analysis": {"kind": "OP"}}})
+        parents.append({"id": label, "step": "A07", "block": "unit",
+                        "metrics": {"native_measurement_studies": [{"result": str(result)}]}})
+    put(project / "reports/analog_native/status.json", {"steps": [parents[1]]})
+    seen = []
+    def consume(_project, _net, candidates, *_args):
+        seen.append([row["id"] for row in candidates])
+        return {"vout": 1.2}, {"status": "PASS"}
+    monkeypatch.setattr(physical, "_pre_measurement_study", consume)
+    getattr(physical, selector)(project, "unit", {"_pre_result": parents[0]} if explicit else {})
+    assert seen == [["fresh" if explicit else "historical"]]
+
+
+@pytest.mark.parametrize("damage,expected", [(None, "NOT_MEASURED"), ("missing", "NOT_MEASURED"),
+    ("duplicate", "NOT_MEASURED"), ("pre_failure", "FAIL"), ("post_failure", "FAIL")])
+def test_statistics_reuses_exact_adopted_post_contexts_without_combining_historical_runtime(
+        project, monkeypatch, damage, expected):
+    refs = [{"result": str(project / f"pre-{i}.json"), "result_sha256": str(i) * 64} for i in range(3)]
+    current = [{"pre": ref, "post_marker": f"current-{i}"} for i, ref in enumerate(refs[:2])]
+    rows = [*current, {"pre": refs[2], "post_marker": "historical-other-runtime"}]
+    if damage == "missing":
+        rows.pop(0)
+    if damage == "duplicate":
+        rows.append(current[0])
+    _, work = physical._paths(project, "unit")
+    a14 = put(work / "A14.json", {"metrics": {"corners": [
+        {"style": "actual-style", "native_measurement_studies": rows}]}})
+    before = physical._sha(a14)
+    monkeypatch.setattr(physical, "_adopted_studies", lambda *a: (
+        [{"state": ref} for ref in refs[:2]], [{"status": "FAIL"}] if damage == "pre_failure" else []))
+    seen = []
+    def compose(_project, studies):
+        seen.append(studies)
+        if damage == "post_failure":
+            raise physical.NativeStudyFailed("selected POST native failure")
+        raise ValueError("stop after actual POST selection; no native draw launched")
+    monkeypatch.setattr(physical, "_compose_measurement_sequence", compose)
+    result = physical._statistics(project, "unit", "container", "image", "pdk",
+                                  {"samples": 2, "_pre_result": {"status": "PASS"}})
+    assert result["status"] == expected
+    assert seen == ([current] if damage in (None, "post_failure") else [])
+    assert physical._sha(a14) == before
+
+
 def test_layout_executes_producer_and_requires_actual_outputs(project):
     calls = []
     def run(program, argv, **kwargs):
@@ -295,7 +344,8 @@ def test_a14_refuses_actual_or_unproved_noncanonical_pre_testbench(project, kind
     assert "canonical" in record["detail"] or "changed" in record["detail"]
 
 
-def test_a14_transfers_consumed_native_input_identity_to_resimulation(project, monkeypatch):
+@pytest.mark.parametrize("step", ["A14", "A15"])
+def test_post_steps_transfer_consumed_native_input_identity(project, monkeypatch, step):
     state = _pre_state(project)
     state["native_inputs"] = {"testbench": {"path": "actual-native-deck.sp", "sha256": "measured"}}
     captured = []
@@ -303,7 +353,7 @@ def test_a14_transfers_consumed_native_input_identity_to_resimulation(project, m
         captured.append(args[-1])
         return {"status": "NOT_MEASURED", "outputs": []}
     monkeypatch.setattr(physical, "_native_call", native)
-    physical.run_step("A14", project, {"name": "unit"},
+    physical.run_step(step, project, {"name": "unit"},
         {"previous_results": {"A07": {"unit": state}}}, None)
     assert captured[0]["_pre_result"]["native_inputs"] == state["native_inputs"]
 
