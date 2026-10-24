@@ -31,7 +31,7 @@ INPUTS, all files, none of them a design:
 
   1. the A3 block netlist `phase3/analog/<block>/<block>.sp`, parsed for the
      subckt name, its port order, and per device (name, model, terminals,
-     w, l, m). Nothing else is read from it. Section 4.05: the netlist is
+     w, l, m, ng/nf). Nothing else is read from it. Section 4.05: the netlist is
      design INPUT; no oracle, golden or harness artefact is ever opened.
   2. the PDK's own gencell definitions and DRC deck, through
      `analog_a5_pdk_device_limits` — (lmin, wmin) per model, Metal1 minimum
@@ -316,7 +316,15 @@ def parse_netlist(sp: Path) -> Tuple[str, List[str], List[dict]]:
         i = len(toks)
         while i > 1 and "=" in toks[i - 1]:
             k, _, v = toks[i - 1].partition("=")
-            val = _param_value(v)
+            if k.lower() in ("ng", "nf"):
+                try:
+                    val = float(v)
+                except ValueError:
+                    raise ValueError(f"{toks[0]}: finger count must be a positive integer") from None
+                if not math.isfinite(val) or val < 1 or not val.is_integer():
+                    raise ValueError(f"{toks[0]}: finger count must be a positive integer")
+            else:
+                val = _param_value(v)
             if val is not None:
                 pars[k.lower()] = val
             i -= 1
@@ -764,7 +772,8 @@ def parse_cell(text: str, layers: Optional["_lim.LayerIdentity"] = None
 
 def config_key(dev: dict) -> tuple:
     p = dev["pars"]
-    return (dev["model"], p.get("w"), p.get("l"), int(p.get("m", 1) or 1))
+    base = (dev["model"], p.get("w"), p.get("l"), int(p.get("m", 1) or 1))
+    return base + tuple((key, p[key]) for key in ("ng", "nf") if key in p)
 
 
 def gencell_call(dev: dict, inst: str, facts: PdkFacts) -> str:
@@ -773,6 +782,41 @@ def gencell_call(dev: dict, inst: str, facts: PdkFacts) -> str:
     own, read from its `_defaults` proc."""
     rec = facts.gencells[dev["model"]]
     accepted = set(rec["params"])
+    fingers = {key: dev["pars"][key] for key in ("ng", "nf") if key in dev["pars"]}
+    if fingers:
+        if (len(fingers) != 1 or any(isinstance(value, bool) or not isinstance(value, (int, float))
+                or not math.isfinite(value) or value < 1 or int(value) != value for value in fingers.values())):
+            raise Refusal(f"{dev['name']}: exactly one positive integer finger parameter is required")
+        declared = sorted(accepted & {"ng", "nf"})
+        if not declared:
+            raise Refusal(f"{dev['model']}: native PCell declares no finger parameter")
+        count = int(next(iter(fingers.values())))
+        args = []
+        for key in ("w", "l"):
+            if key in accepted and dev["pars"].get(key) is not None:
+                # The PDK's SPICE converter owns total-width versus
+                # per-finger geometry, so give it actual SPICE units.
+                args += [key, _fmt(dev["pars"][key]) + "u"]
+        if "m" in accepted:
+            args += ["m", str(int(dev["pars"].get("m", 1) or 1))]
+        args += [key + " " + str(count) for key in fingers]
+        if "guard" in accepted:
+            args += ["guard", "1"]
+        converter = f"{rec['namespace']}::{dev['model']}_convert"
+        return "\n".join([
+            f"if {{[llength [info commands {converter}]] != 1}} {{error {{native PCell SPICE converter is absent}}}}",
+            f"set a5_finger_parameters [{converter} [dict create {' '.join(args)}]]",
+            "set a5_finger_fields 0",
+            "foreach a5_finger_key {ng nf} {",
+            "  if {[dict exists $a5_finger_parameters $a5_finger_key]} {",
+            f"    if {{$a5_finger_key ni {{{' '.join(declared)}}}}} {{error {{converted finger parameter is undeclared}}}}",
+            f"    if {{[dict get $a5_finger_parameters $a5_finger_key] != {count}}} {{error {{native converter changed finger count}}}}",
+            "    incr a5_finger_fields",
+            "  }",
+            "}",
+            "if {$a5_finger_fields != 1} {error {native converter dropped or duplicated finger count}}",
+            f"magic::gencell {rec['namespace']}::{dev['model']} {inst} {{*}}$a5_finger_parameters",
+        ])
     args = []
     for key in ("w", "l"):
         if key in accepted and dev["pars"].get(key) is not None:
