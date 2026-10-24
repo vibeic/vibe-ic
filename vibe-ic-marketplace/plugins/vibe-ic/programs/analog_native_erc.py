@@ -48,17 +48,58 @@ rescue => e
   erc_error = e.message
 end
 erc_metal_indexes = l2n_data.layer_indexes.select { |i| l2n_data.layer_name(i).start_with?('ERC_METAL_') }
+erc_soft_indexes = l2n_data.layer_indexes.to_h { |i| [l2n_data.layer_name(i), i] }
+erc_soft_edges = __ERC_SOFT_EDGES__
 erc_bodies = []
 erc_devices = 0
 erc_netlist.each_circuit do |c|
+  # Native soft-net joining deliberately omits floating nets. A labelled metal
+  # tie can therefore remain separate before top-level pins are made. Read its
+  # physical path through exactly the source-declared soft materials instead;
+  # never join nets or add pins to make the check pass.
+  nets = c.each_net.to_a
+  regions = {}
+  nets.each do |n|
+    regions[n.cluster_id] = {}
+    (erc_metal_indexes + erc_soft_edges.flatten.map { |name| erc_soft_indexes.fetch(name) }).uniq.each do |i|
+      r = l2n_data.polygons_of_net(n, i)
+      regions[n.cluster_id][i] = r unless r.is_empty?
+    end
+  end
   c.each_device do |d|
     erc_devices += 1
     next unless d.device_class.is_a?(RBA::DeviceClassMOS4Transistor)
     bulk = d.net_for_terminal('B')
     metal_tied = bulk && erc_metal_indexes.any? { |i| !l2n_data.polygons_of_net(bulk, i).is_empty? }
+    queue = bulk && !metal_tied ? [bulk.cluster_id] : []
+    paths = bulk ? {bulk.cluster_id => []} : {}
+    tie_path = metal_tied ? [] : nil
+    until queue.empty?
+      current = queue.shift
+      if erc_metal_indexes.any? { |i| regions[current].has_key?(i) }
+        metal_tied = true
+        tie_path = paths[current]
+        break
+      end
+      erc_soft_edges.each do |lower_name, upper_name|
+        lower = regions[current][erc_soft_indexes.fetch(lower_name)]
+        next unless lower
+        nets.each do |other|
+          target = other.cluster_id
+          next if paths.has_key?(target)
+          upper = regions[target][erc_soft_indexes.fetch(upper_name)]
+          next unless upper && lower.bbox.touches?(upper.bbox)
+          next if lower.interacting(upper).is_empty?
+          paths[target] = paths[current] + [{'from_cluster' => current,
+            'to_cluster' => target, 'lower_layer' => lower_name,
+            'upper_layer' => upper_name, 'overlap_area_dbu2' => (lower & upper).area}]
+          queue << target
+        end
+      end
+    end
     erc_bodies << {'circuit'=>c.name, 'device'=>d.expanded_name,
       'device_class'=>d.device_class.name, 'bulk_net'=>bulk && bulk.expanded_name,
-      'metal_tied'=>!!metal_tied}
+      'metal_tied'=>!!metal_tied, 'native_soft_tie_path'=>tie_path}
   end
 end
 File.write($erc_json, JSON.pretty_generate({'engine'=>'KLayout LayoutToNetlist',
@@ -91,9 +132,17 @@ def _derive(text: str) -> str:
     capture = "# RF MOS model mapping"
     if text.count(setup) != 1 or text.count(capture) != 1:
         raise ValueError("unsupported foundry LVS execution layout")
-    names = "\n".join(f"name({m}, 'ERC_METAL_{i}')" for i, m in enumerate(_METALS))
+    pairs = [re.fullmatch(r"soft_connect\((\w+), (\w+)\)", value).groups()
+             for value in _SOFT.values()]
+    soft_layers = sorted({layer for pair in pairs for layer in pair})
+    names = "\n".join([*(f"name({m}, 'ERC_METAL_{i}')" for i, m in enumerate(_METALS)),
+                       *(f"name({layer}, 'ERC_SOFT_{layer}')" for layer in soft_layers)])
     text = text.replace(setup, "top_level(true)\nignore_extraction_errors(true)\n" + names + "\n" + setup)
-    return text.replace(capture, _CAPTURE + "\n" + capture)
+    # _SOFT declares upper -> lower. The physical well-tie search follows the
+    # same native geometry from the bulk upward; no additional edges are added.
+    edges = [[f"ERC_SOFT_{lower}", f"ERC_SOFT_{upper}"] for upper, lower in pairs]
+    native_capture = _CAPTURE.replace("__ERC_SOFT_EDGES__", json.dumps(edges))
+    return text.replace(capture, native_capture + "\n" + capture)
 
 
 def grade(record: dict, returncode: int) -> tuple[str, str]:
