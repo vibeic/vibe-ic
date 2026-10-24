@@ -1,22 +1,48 @@
 """Read native ngspice real raw captures and integrate their actual time grid."""
 from pathlib import Path
+import gzip
+import hashlib
 import math
+import os
 import re
 
 import numpy as np
 
 
 class NativeRaw:
-    def __init__(self, path):
+    def __init__(self, path, *, expected_raw_sha256=None, expected_raw_bytes=None):
         self.path=Path(path);header=[]
-        with self.path.open('rb') as stream:
+        compressed=self.path.suffix=='.gz'
+        digest=hashlib.sha256()
+        with (gzip.open(self.path,'rb') if compressed else self.path.open('rb')) as stream:
             while True:
-                line=stream.readline()
+                try:line=stream.readline(4*1024*1024+1)
+                except EOFError as exc:raise ValueError('compressed native raw stream truncated') from exc
                 if not line or stream.tell()>4*1024*1024:
                     raise ValueError('native raw header incomplete')
+                digest.update(line)
                 decoded=line.decode('utf-8').strip();header.append(decoded)
                 if decoded in ('Binary:','Values:'):
                     offset=stream.tell();mode=decoded;break
+            if compressed:
+                if mode!='Binary:':raise ValueError('compressed native raw must have a binary payload')
+                def dimension(key):
+                    value=next((l.split(':',1)[1].strip() for l in header if l.startswith(key+':')),None)
+                    if value is None or not value.isdigit() or int(value)<1:raise ValueError('native raw dimensions absent')
+                    return int(value)
+                expected=dimension('No. Points')*dimension('No. Variables')*8
+                if expected_raw_bytes is not None and (isinstance(expected_raw_bytes,bool)
+                        or not isinstance(expected_raw_bytes,int) or expected_raw_bytes!=offset+expected):
+                    raise ValueError('native raw byte count differs from declared dimensions')
+                payload=bytearray()
+                while len(payload)<=expected:
+                    try:part=stream.read(min(1024*1024,expected+1-len(payload)))
+                    except EOFError as exc:raise ValueError('compressed native raw stream truncated') from exc
+                    if not part:break
+                    payload.extend(part);digest.update(part)
+                if len(payload)!=expected:raise ValueError('native raw payload dimensions differ')
+                if expected_raw_sha256 is not None and digest.hexdigest()!=expected_raw_sha256:
+                    raise ValueError('decompressed native raw SHA differs')
         self.plot=next((l.split(':',1)[1].strip() for l in header if l.startswith('Plotname:')),'')
         flags=next((l.split(':',1)[1].split() for l in header if l.startswith('Flags:')),[])
         if 'real' not in flags or 'complex' in flags:raise ValueError('real native capture required')
@@ -33,8 +59,11 @@ class NativeRaw:
         if len(set(self.names))!=m:raise ValueError('duplicate native raw vectors')
         self.index={name:i for i,name in enumerate(self.names)}
         if mode=='Binary:':
-            if self.path.stat().st_size-offset!=n*m*8:raise ValueError('native raw payload dimensions differ')
-            self.values=np.memmap(self.path,mode='r',dtype='<f8',offset=offset,shape=(n,m))
+            if compressed:
+                self.values=np.frombuffer(memoryview(payload).toreadonly(),dtype='<f8').reshape(n,m)
+            else:
+                if self.path.stat().st_size-offset!=n*m*8:raise ValueError('native raw payload dimensions differ')
+                self.values=np.memmap(self.path,mode='r',dtype='<f8',offset=offset,shape=(n,m))
         else:
             with self.path.open() as stream:
                 stream.seek(offset);lines=[l.split() for l in stream if l.strip()]
@@ -46,6 +75,7 @@ class NativeRaw:
                 values.extend(float(l[-1]) for l in lines[point*m:(point+1)*m])
             self.values=np.array(values).reshape(n,m)
         self.shape=(n,m)
+
 
     def row(self, index=0):
         values=self.values[index]
@@ -136,3 +166,32 @@ def product_statistics(raw: NativeRaw, window, left, right):
     if not all(math.isfinite(value) for value in (integral,low,high)):
         raise ValueError('nonfinite integrated native product')
     return {'avg':integral/total,'min':low,'max':high,'peak_abs':max(abs(low),abs(high))}
+
+
+def native_capture(record, *, transient):
+    """Select only a receipt-bound stored capture; legacy plain outputs stay valid."""
+    outputs=record.get('outputs') or {};name='tran.raw' if transient else 'op.raw'
+    metadata=record.get('native_raw')
+    if metadata is None:
+        selected=[Path(p) for p in outputs if p.endswith('/'+name)]
+        if len(selected)!=1:raise ValueError('native capture absent or ambiguous')
+        return selected[0],{}
+    required={'executed_path','stored_path','encoding','sha256','raw_sha256','raw_bytes'}
+    if not isinstance(metadata,dict) or not required<=set(metadata) or metadata['encoding']!='gzip':
+        raise ValueError('native raw storage metadata incomplete')
+    executed,stored=Path(metadata['executed_path']),Path(metadata['stored_path'])
+    if (executed.name!=name or stored.name!=name+'.gz'
+            or os.path.abspath(executed.parent)!=os.path.abspath(stored.parent)
+            or outputs.get(str(stored))!=metadata['sha256']):
+        raise ValueError('stored native raw is not its declared output')
+    argv=record.get('argv') or []
+    if (argv.count('-r')!=1 or argv.index('-r')+1>=len(argv)
+            or os.path.abspath(argv[argv.index('-r')+1])!=os.path.abspath(executed)):
+        raise ValueError('stored native raw is not bound to the executed native argv')
+    if (not re.fullmatch(r'[0-9a-f]{64}',str(metadata['raw_sha256']))
+            or isinstance(metadata['raw_bytes'],bool) or not isinstance(metadata['raw_bytes'],int)
+            or metadata['raw_bytes']<=0):
+        raise ValueError('original native raw identity incomplete')
+    if any(p.endswith('/'+name) for p in outputs):
+        raise ValueError('native raw storage outputs are ambiguous')
+    return stored,{'expected_raw_sha256':metadata['raw_sha256'],'expected_raw_bytes':metadata['raw_bytes']}

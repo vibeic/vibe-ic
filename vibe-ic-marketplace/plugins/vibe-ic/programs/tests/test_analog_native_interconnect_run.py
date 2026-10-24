@@ -1,4 +1,6 @@
 import json
+import gzip
+import os
 from pathlib import Path
 import sys
 
@@ -138,3 +140,124 @@ def test_bounded_stop_is_incomplete_but_actual_residual_failure_stays_fail(sourc
     result=producer.run(project,'unit',settings,work,'native')
     assert result['status']==expected and result['unchanged'] is False
     assert (work/'native-execution.json').is_file()
+
+
+def storage_run(source_case,monkeypatch,*,scratch=False,fatal=False,after_capture=None):
+    import numpy as np
+    project,settings,work=source_case
+    settings.update(analysis={'kind':'OP','temperature_c':105},timeout_s=10,compress_raw=True)
+    ram=project/'host-ram';ram.mkdir();monkeypatch.setattr(producer,'RAW_RAM_ROOT',ram)
+    if scratch:
+        target=project/'visible-native-scratch';target.mkdir();settings['raw_scratch_dir']=str(target)
+    producer.write(work/'settings.json',settings)
+    monkeypatch.setattr(producer,'native_hashes',lambda container,paths:{p:producer.sha(p) for p in paths})
+    original=(b'Title: binary native OP\nPlotname: Operating Point\nFlags: real\nNo. Variables: 2\n'
+              b'No. Points: 1\nVariables:\n0 v(a) voltage\n1 v(b) voltage\nBinary:\n'
+              +np.array([.001,0],dtype='<f8').tobytes())
+    def execute(command,directory,container,environment,seconds,log,capture,budget):
+        assert command[command.index('-r')+1]==work/'op.raw'
+        assert 'run op.raw\n' in (work/'op.sp').read_text()
+        assert capture.is_symlink() is scratch
+        capture.write_bytes(original)
+        (work/'native.log').write_text(';;RESIDUAL_FAIL actual solver refusal\n' if fatal else
+                                     'Doing analysis at TEMP = 105\nNo. of Data Rows : 1\n')
+        if after_capture:after_capture(capture)
+        return {'argv':list(map(str,command)),'returncode':1 if fatal else 0,'capture_budget_exceeded':False}
+    monkeypatch.setattr(producer,'execute',execute)
+    return producer.run(project,'unit',settings,work,'native'),original
+
+
+@pytest.mark.parametrize('scratch',[False,True])
+def test_completed_raw_is_losslessly_stored_and_current_before_owned_scratch_cleanup(source_case,monkeypatch,scratch):
+    project,_,work=source_case
+    record,original=storage_run(source_case,monkeypatch,scratch=scratch)
+    assert record['status']=='PASS' and record['measured_segments']==1
+    metadata=record['native_raw'];stored=Path(metadata['stored_path'])
+    assert stored==work/'op.raw.gz' and gzip.decompress(stored.read_bytes())==original
+    assert metadata['raw_sha256']==__import__('hashlib').sha256(original).hexdigest()
+    assert metadata['raw_bytes']==len(original) and metadata['sha256']==producer.sha(stored)
+    assert record['outputs'][str(stored)]==metadata['sha256']
+    assert not os.path.lexists(work/'op.raw') and not list((project/'host-ram').iterdir())
+    if scratch:assert not list((project/'visible-native-scratch').iterdir())
+    saved=json.loads((work/'command.json').read_text())
+    assert saved==record and json.loads((work/'raw-storage-cleanup.json').read_text())['ram_removed']
+    from analog_native_waveform import native_capture,NativeRaw
+    selected,identity=native_capture(saved,transient=False)
+    assert NativeRaw(selected,**identity).row()=={'a':.001,'b':0.,'0':0.}
+
+
+@pytest.mark.parametrize('fatal',[False,True])
+def test_ssd_copy_failure_preserves_verified_ram_archive_and_native_failure_precedence(source_case,monkeypatch,fatal):
+    project,_,work=source_case
+    original_copy=producer.shutil.copyfileobj
+    def fail_ssd(source,target,*args):
+        if str(getattr(target,'name','')).endswith('.gz.copy'):raise OSError('bounded SSD full control')
+        return original_copy(source,target,*args)
+    monkeypatch.setattr(producer.shutil,'copyfileobj',fail_ssd)
+    record,original=storage_run(source_case,monkeypatch,scratch=True,fatal=fatal)
+    assert record['status']==('FAIL' if fatal else 'NOT_MEASURED')
+    recovery=json.loads((work/'raw-storage-ram.json').read_text())
+    ram=Path(recovery['ram_gzip'])
+    assert gzip.decompress(ram.read_bytes())==original
+    assert producer._gzip_identity(ram)==(recovery['raw_sha256'],len(original))
+    assert not (work/'raw-storage-cleanup.json').exists() and not (work/'op.raw.gz').exists()
+    assert 'SSD full' in record['raw_storage_error']
+    assert (work/'native-execution.json').is_file() and (work/'command.json').is_file()
+
+
+def test_ram_compression_failure_keeps_original_native_raw_and_recovery_journal(source_case,monkeypatch):
+    _,_,work=source_case
+    def fail(*args):raise OSError('bounded RAM write control')
+    monkeypatch.setattr(producer.shutil,'copyfileobj',fail)
+    record,original=storage_run(source_case,monkeypatch,scratch=True)
+    assert record['status']=='NOT_MEASURED' and (work/'op.raw').read_bytes()==original
+    journal=json.loads((work/'raw-storage-start.json').read_text())
+    assert journal['phase']=='COMPRESSING' and Path(journal['real_native_path']).read_bytes()==original
+    assert not (work/'raw-storage-ram.json').exists()
+
+
+@pytest.mark.parametrize('fatal',[False,True])
+def test_truncated_ram_archive_is_bounded_and_never_removes_original_raw(source_case,monkeypatch,fatal):
+    _,_,work=source_case;identity=producer._gzip_identity
+    def truncated(path):
+        path.write_bytes(path.read_bytes()[:-5])
+        return identity(path)
+    monkeypatch.setattr(producer,'_gzip_identity',truncated)
+    record,original=storage_run(source_case,monkeypatch,scratch=True,fatal=fatal)
+    assert record['status']==('FAIL' if fatal else 'NOT_MEASURED')
+    assert (work/'op.raw').read_bytes()==original
+    assert (work/'raw-storage-start.json').is_file() and not (work/'raw-storage-ram.json').exists()
+    assert 'raw_storage_error' in record
+
+
+@pytest.mark.parametrize('replacement',['alias','target'])
+def test_changed_owned_alias_or_target_is_refused_without_deleting_foreign_bytes(source_case,monkeypatch,replacement):
+    project,_,work=source_case;foreign=project/'foreign.raw';foreign.write_bytes(b'foreign bytes')
+    def replace(capture):
+        if replacement=='alias':capture.unlink();capture.symlink_to(foreign)
+        else:
+            target=capture.resolve();target.unlink();target.symlink_to(foreign)
+    record,_=storage_run(source_case,monkeypatch,scratch=True,after_capture=replace)
+    assert record['status']=='NOT_MEASURED' and foreign.read_bytes()==b'foreign bytes'
+    assert 'changed' in record['raw_storage_error']
+    assert not (work/'op.raw.gz').exists()
+
+
+@pytest.mark.parametrize('options',[
+    {'compress_raw':1},{'compress_raw':'true'},{'raw_scratch_dir':'scratch'},
+    {'compress_raw':True,'raw_scratch_dir':'missing'},
+    {'compress_raw':True,'raw_scratch_dir':False},
+])
+def test_invalid_raw_storage_setting_refuses_before_native(source_case,monkeypatch,options):
+    project,settings,work=source_case;settings.update(options)
+    monkeypatch.setattr(producer,'execute',lambda *args:pytest.fail('native must not execute'))
+    with pytest.raises(ValueError):producer.run(project,'unit',settings,work,'native')
+    assert not (work/'native-execution.json').exists()
+
+
+def test_native_scratch_must_be_visible_and_existing_target_is_never_overwritten(tmp_path,monkeypatch):
+    scratch=tmp_path/'scratch';scratch.mkdir();work=tmp_path/'work';work.mkdir();capture=work/'op.raw'
+    monkeypatch.setattr(producer,'native_hashes',lambda *args:{})
+    with pytest.raises(ValueError,match='not visible'):producer._capture_target(capture,scratch,'native')
+    assert capture.is_symlink() and capture.resolve().is_file()
+    with pytest.raises(ValueError,match='already exists'):producer._capture_target(capture,scratch,'native')

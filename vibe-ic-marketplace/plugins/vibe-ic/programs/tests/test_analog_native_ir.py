@@ -69,3 +69,27 @@ def test_a16_reuses_one_native_current_read_for_em_and_ir(tmp_path, monkeypatch)
     assert result['metrics']['em']['status'] == 'FAIL'
     assert result['metrics']['ir']['status'] == 'PASS'
     assert result['status'] == 'FAIL'
+
+
+def test_plain_and_lossless_gzip_native_voltages_preserve_17p45_percent_ir_failure(tmp_path):
+    import gzip
+    import hashlib
+    import numpy as np
+    from analog_native_waveform import NativeRaw
+    plain=tmp_path/'op.raw'
+    original=(b'Title: native IR capture\nPlotname: Operating Point\nFlags: real\nNo. Variables: 3\n'
+              b'No. Points: 1\nVariables:\n0 v(feed) voltage\n1 v(far) voltage\n2 v(return) voltage\nBinary:\n'
+              +np.array([1.2,.9906,0],dtype='<f8').tobytes())
+    plain.write_bytes(original);stored=tmp_path/'op.raw.gz';stored.write_bytes(gzip.compress(original))
+    readers=[NativeRaw(plain),NativeRaw(stored,expected_raw_sha256=hashlib.sha256(original).hexdigest(),
+                                      expected_raw_bytes=len(original))]
+    results=[]
+    for raw in readers:
+        volts=raw.row();case=_case(volts['far'],volts['return'])
+        case['feed_voltages']['supply']=volts['feed']
+        results.append(physical._ir_from_native_interconnect({'cases':[case]}, {}, tmp_path))
+    assert results[0]['status']==results[1]['status']=='FAIL'
+    assert results[0]['cases'][0]['measurement']==results[1]['cases'][0]['measurement']
+    assert results[0]['cases'][0]['status']==results[1]['cases'][0]['status']=='FAIL'
+    assert results[1]['cases'][0]['measurement']['max_drop_mv']==pytest.approx(209.4)
+    assert results[1]['cases'][0]['gate']['budget_pct']==10

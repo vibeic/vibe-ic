@@ -6,13 +6,16 @@ Settings select actual testbench/model files, native tools and analysis bounds.
 """
 from pathlib import Path
 import argparse
+import gzip
 import hashlib
 import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
+import tempfile
 import time
 
 sys.path.insert(0,str(Path(__file__).resolve().parent))
@@ -24,7 +27,11 @@ import _analog_a8_extraction_wrapper as wrapper
 import _container_exec as container_exec
 
 
-def sha(path):return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+def sha(path):
+    digest=hashlib.sha256()
+    with Path(path).open('rb') as stream:
+        for chunk in iter(lambda:stream.read(1024*1024),b''):digest.update(chunk)
+    return digest.hexdigest()
 def current_sha(path):
     try:return sha(path)
     except OSError:return None
@@ -70,6 +77,111 @@ def native_hashes(container,paths):
     command=container_exec.docker_exec_argv(container,'python3','-c',code) if container else [sys.executable,'-c',code]
     result=subprocess.run(command,capture_output=True,text=True,check=True)
     return json.loads(result.stdout)
+
+
+RAW_RAM_ROOT=Path('/dev/shm')
+
+
+def _storage_options(project,settings):
+    enabled=settings.get('compress_raw',False)
+    if not isinstance(enabled,bool):raise ValueError('compress_raw must be boolean')
+    scratch=settings.get('raw_scratch_dir')
+    if scratch is not None:
+        if not enabled:raise ValueError('raw_scratch_dir requires compress_raw=True')
+        if not isinstance(scratch,str) or not scratch:raise ValueError('raw_scratch_dir must name an existing directory')
+        scratch=path(project,scratch)
+        if not scratch.is_dir() or scratch.stat().st_uid!=os.getuid():
+            raise ValueError('raw_scratch_dir must preexist and be caller owned')
+    return enabled,scratch
+
+
+def _capture_target(capture,scratch,container):
+    if os.path.lexists(capture):raise ValueError('native capture target already exists')
+    state={'executed':capture,'real':capture,'scratch':None}
+    if scratch is not None:
+        child=Path(tempfile.mkdtemp(prefix='native-raw-',dir=scratch))
+        real=child/capture.name
+        with real.open('xb'):pass
+        identity=real.stat()
+        capture.symlink_to(real)
+        alias=capture.lstat()
+        state.update(real=real,scratch=child,identity=(identity.st_dev,identity.st_ino),
+                     alias_identity=(alias.st_dev,alias.st_ino))
+        if container and native_hashes(container,[str(real)])!={str(real):sha(real)}:
+            raise ValueError('raw scratch target is not visible in the native container')
+    return state
+
+
+def _owned_raw(state):
+    capture,real=state['executed'],state['real']
+    if state['scratch'] is not None:
+        alias=capture.lstat()
+        if (not stat.S_ISLNK(alias.st_mode) or (alias.st_dev,alias.st_ino)!=state['alias_identity']
+                or os.readlink(capture)!=str(real)):
+            raise ValueError('owned native capture alias changed')
+    elif capture.is_symlink():raise ValueError('refusing an undeclared native capture symlink')
+    info=real.lstat()
+    if not stat.S_ISREG(info.st_mode) or ('identity' in state and
+            (info.st_dev,info.st_ino)!=state['identity']):
+        raise ValueError('owned native raw target identity changed')
+    return real,info
+
+
+def _gzip_identity(path):
+    digest=hashlib.sha256();size=0
+    with gzip.open(path,'rb') as stream:
+        for chunk in iter(lambda:stream.read(1024*1024),b''):
+            digest.update(chunk);size+=len(chunk)
+    return digest.hexdigest(),size
+
+
+def _store_raw(state,work):
+    """Archive only a completed owned regular raw, retaining RAM on failure."""
+    real,before=_owned_raw(state);original=sha(real)
+    final=state['executed'].with_name(state['executed'].name+'.gz')
+    staged=final.with_name(final.name+'.copy')
+    if os.path.lexists(final) or os.path.lexists(staged):raise ValueError('stored native raw output already exists')
+    ram=Path(tempfile.mkdtemp(prefix='native-raw-gzip-',dir=RAW_RAM_ROOT));compressed=ram/final.name
+    write(work/'raw-storage-start.json',{'executed_path':str(state['executed']),'real_native_path':str(real),
+        'native_identity':[before.st_dev,before.st_ino],'raw_sha256':original,'raw_bytes':before.st_size,
+        'ram_gzip':str(compressed),'phase':'COMPRESSING'})
+    with real.open('rb') as source,compressed.open('xb') as output:
+        with gzip.GzipFile(filename='',mode='wb',fileobj=output,mtime=0,compresslevel=6) as target:
+            shutil.copyfileobj(source,target,1024*1024)
+    if _gzip_identity(compressed)!=(original,before.st_size):
+        raise ValueError('native raw RAM gzip is not lossless')
+    same,after=_owned_raw(state)
+    if (same!=real or (after.st_dev,after.st_ino,after.st_size)!=(before.st_dev,before.st_ino,before.st_size)
+            or sha(real)!=original):raise ValueError('native raw changed during compression')
+    metadata={'executed_path':os.path.abspath(state['executed']),'stored_path':str(final),
+              'encoding':'gzip','sha256':sha(compressed),'raw_sha256':original,'raw_bytes':before.st_size}
+    recovery={**metadata,'real_native_path':str(real),'native_identity':[before.st_dev,before.st_ino],
+              'ram_gzip':str(compressed),'phase':'RAM_VERIFIED'}
+    write(work/'raw-storage-ram.json',recovery)
+    # Binary writing has ended. Guarded removal frees SSD space before its
+    # archive is copied back; the verified RAM gzip remains recoverable.
+    _owned_raw(state)
+    if state['scratch'] is not None:state['executed'].unlink()
+    real.unlink()
+    with compressed.open('rb') as source,staged.open('xb') as output:
+        shutil.copyfileobj(source,output,1024*1024);output.flush();os.fsync(output.fileno())
+    if sha(staged)!=metadata['sha256'] or _gzip_identity(staged)!=(original,before.st_size):
+        raise ValueError('stored native raw copy is not lossless')
+    os.link(staged,final);staged.unlink()
+    write(work/'raw-storage-ssd.json',{**recovery,'phase':'SSD_VERIFIED'})
+    return metadata,compressed,state
+
+
+def _cleanup_raw_storage(stored,work):
+    metadata,compressed,state=stored
+    try:
+        if sha(Path(metadata['stored_path']))!=metadata['sha256'] or sha(compressed)!=metadata['sha256']:
+            raise ValueError('native raw archive identity changed before cleanup')
+        compressed.unlink();compressed.parent.rmdir()
+        if state['scratch'] is not None:state['scratch'].rmdir()
+        cleanup={'ram_removed':True,'scratch_removed':state['scratch'] is not None}
+    except (OSError,ValueError) as exc:cleanup={'ram_removed':False,'detail':str(exc)}
+    write(work/'raw-storage-cleanup.json',cleanup)
 
 
 def extract(project,block,settings,work,container):
@@ -177,6 +289,7 @@ def prepare(project,block,settings,work,init_text=''):
 
 
 def run(project,block,settings,work,container):
+    compress,scratch=_storage_options(project,settings)
     init_text=''
     if settings.get('spiceinit'):
         command=(container_exec.docker_exec_argv(container,'cat',settings['spiceinit']) if container
@@ -184,6 +297,7 @@ def run(project,block,settings,work,container):
         init_text=subprocess.run(command,capture_output=True,text=True,check=True).stdout
     record,resistors,deck=prepare(project,block,settings,work,init_text)
     kind=record['analysis']['kind'].upper();capture=work/('op.raw' if kind=='OP' else 'tran.raw')
+    storage_state=_capture_target(capture,scratch,container) if compress else None
     log=work/'native.log';record['status']='RUNNING'
     record['native_init_before']=native_hashes(container,settings.get('native_init_paths',[]))
     write(work/'command.json',record)
@@ -208,9 +322,20 @@ def run(project,block,settings,work,container):
     status=('FAIL' if fatal else 'NOT_MEASURED' if
             native['returncode'] in (124,130,137,143,-9,-15) or native['capture_budget_exceeded'] or not record['unchanged']
             else 'PASS' if native['returncode']==0 else 'FAIL')
+    stored=None
+    if compress:
+        try:
+            stored=_store_raw(storage_state,work)
+            record['native_raw']=stored[0]
+            capture=Path(record['native_raw']['stored_path'])
+        except (OSError,ValueError,EOFError) as exc:
+            record['raw_storage_error']=str(exc)
+            if status!='FAIL':status='NOT_MEASURED'
     if status=='PASS':
         try:
-            raw=wave.NativeRaw(capture)
+            options=({'expected_raw_sha256':record['native_raw']['raw_sha256'],
+                      'expected_raw_bytes':record['native_raw']['raw_bytes']} if stored else {})
+            raw=wave.NativeRaw(capture,**options)
             resolver,_=em._vector_resolver(project,block,record,path(project,settings['spice']))
             expressions=[(resolver(parts[1]),resolver(parts[2]),resistance) for parts,row,resistance in resistors]
             if kind=='OP':
@@ -230,7 +355,12 @@ def run(project,block,settings,work,container):
         except (OSError,ValueError,KeyError) as exc:status='NOT_MEASURED';record['capture_error']=str(exc)
     record['status']=status;record['native_failures']=failures
     record['outputs']={str(p):sha(p) for p in work.iterdir() if p.is_file() and p.name!='command.json'}
-    write(work/'command.json',record);return record
+    write(work/'command.json',record)
+    if stored:
+        _cleanup_raw_storage(stored,work)
+        record['outputs']={str(p):sha(p) for p in work.iterdir() if p.is_file() and p.name!='command.json'}
+        write(work/'command.json',record)
+    return record
 
 
 def main():

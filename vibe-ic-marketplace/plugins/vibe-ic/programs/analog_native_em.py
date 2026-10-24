@@ -31,7 +31,10 @@ if str(Path(__file__).resolve().parent) not in sys.path:
 
 
 def _sha(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+    digest=hashlib.sha256()
+    with path.open('rb') as stream:
+        for chunk in iter(lambda:stream.read(1024*1024),b''):digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _read(path: Path) -> dict:
@@ -174,7 +177,13 @@ def material_map(technology: str) -> tuple[dict,set]:
     return aliases,set(identity.canon)
 
 
-def read_op_capture(path: Path) -> dict:
+def read_op_capture(path: Path, **raw_identity) -> dict:
+    if path.suffix=='.gz':
+        from analog_native_waveform import NativeRaw
+        raw=NativeRaw(path,**raw_identity)
+        if raw.plot!='Operating Point' or raw.shape[0]!=1:
+            raise ValueError('native OP capture must contain one point')
+        return raw.row()
     with path.open('rb') as src:
         binary=b'Binary:' in src.read(4*1024*1024)
     if binary:
@@ -401,7 +410,9 @@ def grade_case(project: Path, setting: dict, limits: dict, aliases: dict, known:
         else: raise ValueError('native electrical input changed: '+p)
     analysis=rec.get('analysis') or {'kind':'OP'}
     transient=str(analysis.get('kind','OP')).upper()=='TRAN'
-    captures=[Path(p) for p in outputs if p.endswith('/tran.raw' if transient else '/op.raw')]
+    from analog_native_waveform import native_capture
+    stored_capture,raw_identity=native_capture(rec,transient=transient)
+    captures=[stored_capture]
     currents=[Path(p) for p in outputs if p.endswith('/currents.jsonl')]
     if len(logs)!=1 or len(captures)!=1 or len(currents)!=1:
         raise ValueError('native log/capture/current mapping absent or ambiguous')
@@ -498,13 +509,13 @@ def grade_case(project: Path, setting: dict, limits: dict, aliases: dict, known:
             raise ValueError('transient analysis differs from the executed native deck')
         if rating['native_temperature_c'] is not None and rating['native_temperature_c']!=analysis.get('temperature_c'):
             raise ValueError('transient temperature differs from the native transcript')
-        capture=NativeRaw(captures[0]);voltages=capture.row();window=analysis['window_s']
+        capture=NativeRaw(captures[0],**raw_identity);voltages=capture.row();window=analysis['window_s']
         voltage_names=[name for name in capture.names if name!='time']
         voltage_stats=dict(zip(voltage_names,window_statistics(capture,window,
                            [(name,'0',1) for name in voltage_names])))
         voltage_stats['0']={'min':0.,'max':0.,'avg':0.,'rms':0.,'peak_abs':0.,'abs_avg':0.}
     else:
-        voltages=read_op_capture(captures[0]);voltage_stats={}
+        voltages=read_op_capture(captures[0],**raw_identity);voltage_stats={}
     results=[];excluded=collections.Counter();ranges={}
     resolver,external=_vector_resolver(project,block,rec,raw) if block is not None else (None,{})
     # These mappings identify each measured native vector and actual SPICE
