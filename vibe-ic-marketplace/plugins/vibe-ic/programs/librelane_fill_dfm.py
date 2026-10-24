@@ -388,12 +388,10 @@ def resume_candidate_gds(project: Path, image: str, pdk_root: Path, pdk: str, *,
 
     filler_dir = root / 'density/01-klayout-filler'
     density_dir = root / 'density/02-klayout-density'
-    checker_dir = root / 'density/03-checker-klayoutdensity'
     topped_density_dir = root / 'density-topped/01-klayout-density'
     topped_checker_dir = root / 'density-topped/02-checker-klayoutdensity'
     filler_state, filler_receipt = checked(filler_dir, 'KLayout.Filler')
     density_state, density_receipt = checked(density_dir, 'KLayout.Density')
-    _checker_state, checker_receipt = checked(checker_dir, 'Checker.KLayoutDensity')
     topped_state, topped_density_receipt = checked(
         topped_density_dir, 'KLayout.Density')
     _topped_checker_state, topped_checker_receipt = checked(
@@ -445,7 +443,6 @@ def resume_candidate_gds(project: Path, image: str, pdk_root: Path, pdk: str, *,
     native_rows = {
         'KLayout.Filler': (filler_dir, filler_receipt),
         'KLayout.Density.before_topup': (density_dir, density_receipt),
-        'Checker.KLayoutDensity.before_topup': (checker_dir, checker_receipt),
         'KLayout.Density': (topped_density_dir, topped_density_receipt),
         'Checker.KLayoutDensity': (topped_checker_dir, topped_checker_receipt),
     }

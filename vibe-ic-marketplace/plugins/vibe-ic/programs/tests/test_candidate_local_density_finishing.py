@@ -232,6 +232,37 @@ def test_retained_finish_replays_only_ratio_after_validating_native_readsets(can
     assert not any(row.get('step') for row in new_calls)
 
 
+def test_retained_finish_allows_absent_checker_after_expected_prefill_density_refusal(
+        candidate):
+    c = candidate
+    _finish(c)
+    checker = (c.project / 'phase3/librelane/candidate/finishing/density/'
+               '03-checker-klayoutdensity')
+    for path in sorted(checker.iterdir(), reverse=True):
+        path.unlink()
+    checker.rmdir()
+    result = fill.resume_candidate_gds(
+        c.project, 'neutral-image', c.root, 'processA', gds=c.gds,
+        state=c.state, config=c.config, lane='candidate/finishing',
+        ratio_lane='candidate/expected-checker-refusal-ratios')
+    assert result['density'][fill.DENSITY_METRIC] == 0
+
+
+def test_retained_finish_requires_final_zero_density_checker(candidate):
+    c = candidate
+    _finish(c)
+    receipt = (c.project / 'phase3/librelane/candidate/finishing/density-topped/'
+               '02-checker-klayoutdensity/vibeic_receipt.json')
+    receipt.unlink()
+    before = len(c.calls)
+    with pytest.raises(lc.Refusal, match='LL_STEP_OUTPUT_UNBOUND'):
+        fill.resume_candidate_gds(
+            c.project, 'neutral-image', c.root, 'processA', gds=c.gds,
+            state=c.state, config=c.config, lane='candidate/finishing',
+            ratio_lane='candidate/missing-final-checker-ratios')
+    assert len(c.calls) == before
+
+
 def test_retained_finish_accepts_native_numeric_string_die_coordinates(candidate):
     c = candidate
     c.damage['kind'] = 'string_die'
