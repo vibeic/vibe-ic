@@ -2,6 +2,7 @@
 import copy
 import json
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -9,8 +10,34 @@ import analog_incremental_post_layout as post
 import analog_incremental_capture as capture
 import analog_incremental_pvt as pvt
 from test_analog_incremental_statistics import method as statistical_method, pvt_method, _write_probe
-from test_analog_incremental_pvt import _native_fixture_series
+from test_analog_incremental_pvt import _native_fixture_series as _fixture_series
 from test_analog_incremental_capture import _dump
+
+
+def _timed_dump(path, common, topology):
+    """Synthetic phase values under the actual prepared observation names."""
+    timing = capture._transfer_timing(topology, common['reset_node'], common.get('transfer_gate_nodes'))
+    path = _dump(path)
+    n_columns = {group['n_gate'] for group in timing['groups']}
+    p_columns = {group['p_gate'] for group in timing['groups']}
+    assert not n_columns & p_columns
+    lines = path.read_text().splitlines()
+    lines[0] = 'time output reset input ' + ' '.join(timing['columns'])
+    for index in range(1, len(lines)):
+        fields = lines[index].split()
+        phase = [fields[4] if column in n_columns else fields[5] for column in timing['columns']]
+        lines[index] = ' '.join([*fields[:4], *phase])
+    path.write_text('\n'.join(lines))
+    return path
+
+
+def _native_fixture_series(context, limit=None):
+    project = Path(context['project'])
+    common = post._read(context['settings']['path'])
+    topology = post._read(project / 'phase3/analog/converter/topology.json')
+    with patch.dict(_fixture_series.__globals__,
+                    {'_dump': lambda path: _timed_dump(path, common, topology)}):
+        return _fixture_series(context, limit)
 
 
 @pytest.fixture
@@ -72,6 +99,40 @@ def test_prepare_uses_actual_wrapper_reset_and_whole_pre_pvt_matrix(source, tmp_
         assert '.param source_header=0.75' in wrapper
         assert 'rpex ain split 5' in Path(style['extracted_body']['path']).read_text()
     assert all(Path(path).read_bytes() == value for path, value in original.items())
+
+
+def test_transfer_gate_exposed_as_extra_native_port_uses_wrapper_forwarding(source, tmp_path):
+    extraction = post._read(source['extraction'])
+    for corner in extraction['metrics']['corners']:
+        path = Path(corner['extracted_netlist'])
+        lines = path.read_text().splitlines()
+        lines = [line + ' transfer_n transfer_p' if line.startswith('.subckt converter ') else line
+                 for line in lines]
+        path.write_text('\n'.join(lines) + '\n')
+        corner['sha256'] = capture.bound.sha(path)
+    capture.write_json(source['extraction'], extraction)
+    manifest = prepared(source, tmp_path / 'POST-forwarded-gates')
+    for style in manifest['styles']:
+        mapping = style['probe_mapping']['transfer_gates']
+        assert len(mapping['nodes']) == 8
+        assert all(node.startswith('xdut.rcx_int_') for node in mapping['nodes'].values())
+        assert post._read(style['settings']['path'])['transfer_gate_nodes'] == mapping['nodes']
+    assert post._validate(manifest)['kind'] == 'incremental_capture_pvt'
+
+
+def test_altered_transfer_map_refuses_before_any_spice(source, tmp_path, monkeypatch):
+    manifest = prepared(source, tmp_path / 'POST')
+    style = manifest['styles'][0]
+    settings = Path(style['settings']['path']); common = post._read(settings)
+    first = next(iter(common['transfer_gate_nodes']))
+    common['transfer_gate_nodes'][first] = 'xdut.unrelated_native_node'
+    capture.write_json(settings, common)
+    style['settings'] = post._view(settings)  # Resealing one view cannot replace the reconstructed mapping.
+    monkeypatch.setattr(pvt, 'run', lambda *a, **k: pytest.fail('wrong map must refuse before SPICE'))
+    monkeypatch.setattr(post, '_run_probes', lambda *a, **k: pytest.fail('wrong map must refuse before probes'))
+    result = post.run(manifest, 'fixture-container', 'fixture-image')
+    assert result['status'] == 'NOT_MEASURED'
+    assert 'POST inputs differ' in result['detail']
 
 
 def test_missing_pre_score_never_launches_post_native_or_credits_input_readiness(source, tmp_path, monkeypatch):
@@ -194,7 +255,8 @@ def test_selected_native_binary_reaches_actual_point_callback_and_cannot_be_rela
     def native(_self, program, argv, **kwargs):
         seen.append((program, argv))
         assert program == '@env' and str(binary) in argv and 'OMP_WAIT_POLICY=PASSIVE' in argv
-        raw = _dump(target / 'conversion.dat')
+        raw = _timed_dump(target / 'conversion.dat', common,
+                          post._read(style['native_inputs']['topology']['path']))
         raw.write_text('\n'.join(' '.join([f'{float(line.split()[0]) * 1e-6:.17g}', *line.split()[1:]])
             if line and line[0].isdigit() else line for line in raw.read_text().splitlines()))
         log = target / 'native.log'; log.write_text('Doing analysis at TEMP = 27\n')
@@ -299,3 +361,132 @@ def test_known_native_failure_keeps_precedence_over_incomplete_runtime_receipt(s
     state, _, _ = post._probe_state(probe, group['fingerprint_bindings'], manifest['image'],
         {'path':str(tmp_path / 'unbound-selected-binary'), 'sha256':'0'*64})
     assert state == 'FAIL'
+
+
+@pytest.fixture
+def physical_gate(tmp_path):
+    """Source/A5/native-ext identity with a real gate beyond positive R."""
+    from _analog_producer_common import content_digest
+    root = tmp_path / 'gate-source'; root.mkdir()
+    model = root / 'device.lib'
+    model.write_text('.subckt fixture_fet d g s b\n.ends fixture_fet\n')
+    net = root / 'converter.sp'
+    net.write_text('.include "device.lib"\n.subckt converter ain dout vdd vss\n'
+        'xsw dout control ain vss fixture_fet w=2u l=1u\n.ends converter\n')
+    tb = root / 'tb_converter.sp'
+    tb.write_text('.include "converter.sp"\nxdut ain dout vdd 0 converter\n.end\n')
+    mag = root / 'layout.mag'; mag.write_text('magic\nuse fixture_fet_UNIT d0\n')
+    provenance = root / 'layout_provenance.json'
+    capture.write_json(provenance, {'producer': 'analog_a5_layout_emit', 'result': 'OK',
+        'netlist_content_sha256': content_digest(net.read_text()), 'layout_mag': str(mag)})
+    step = tmp_path / 'gate-extraction'; (step / 'extraction_full').mkdir(parents=True)
+    ext = step / 'extraction_full/converter.ext'
+    ext.write_text('node "d0.D" 0 0 0\nequiv "d0.D" "dout"\n'
+        'node "d0.G" 0 0 0\nequiv "d0.G" "gate_bus"\n'
+        'node "d0.S" 0 0 0\nequiv "d0.S" "ain"\n'
+        'node "d0.B" 0 0 0\nequiv "d0.B" "vss"\n')
+    raw = ('.subckt converter ain dout vdd vss\n'
+        'xnative drain_terminal gate_terminal source_terminal bulk_terminal fixture_fet w=2u l=1u\n'
+        'r_d dout drain_terminal 12\nr_g gate_bus gate_terminal 207.7\n'
+        'r_s ain source_terminal 21\nr_b vss bulk_terminal 4\n.ends converter\n')
+    return {'net': net, 'tb': tb, 'raw': raw, 'model': model, 'mag': mag, 'ext': ext,
+        'provenance': provenance, 'corner': {'step_dir': str(step), 'extracted_netlist': str(step / 'raw.spice')},
+        'device': {'name': 'sw', 'role': 'nmos', 'nets': ['dout', 'control', 'ain', 'vss']}}
+
+
+def _physical_gate(case, **overrides):
+    data = {**case, **overrides}
+    return post._physical_transfer_gate('converter', data['net'], data['tb'], data['raw'],
+        data['corner'], data['device'], data.get('logical', 'xdut.control'))
+
+
+def test_native_gate_is_selected_beyond_positive_resistor_without_voltage_collapse(physical_gate):
+    case = physical_gate
+    original = case['raw']
+    node, proof = _physical_gate(case)
+    assert node == 'xdut.gate_terminal' and node != 'xdut.gate_bus'
+    assert proof['kind'] == 'source_physical_device_terminal'
+    assert proof['source_device'] == 'sw' and proof['layout_instance'] == 'd0'
+    assert proof['native_instance'] == 'xnative'
+    assert post._current(proof['supporting_inputs'])
+    assert case['raw'] == original and 'r_g gate_bus gate_terminal 207.7' in original
+
+
+def test_retained_instance_also_observes_actual_gate_beyond_resistor(physical_gate):
+    raw = ('.subckt converter ain dout vdd vss\n'
+        'xsw dout gate_terminal ain vss fixture_fet w=2u l=1u\n'
+        'r_gate control gate_terminal 207.7\n.ends converter\n')
+    node, proof = _physical_gate(physical_gate, raw=raw, corner=None)
+    assert node == 'xdut.gate_terminal'
+    assert proof['kind'] == 'retained_native_device_terminal'
+
+
+def test_wrapper_parameters_do_not_become_extra_mos_terminals(physical_gate):
+    physical_gate['model'].write_text('.subckt fixture_fet d g s b params: w=2u l=1u\n.ends fixture_fet\n')
+    node, _proof = _physical_gate(physical_gate)
+    assert node == 'xdut.gate_terminal'
+
+
+def test_mixed_case_spice_identity_preserves_the_actual_gate_spelling(physical_gate):
+    from _analog_producer_common import content_digest
+    case = physical_gate
+    case['net'].write_text(case['net'].read_text().replace(
+        'xsw dout control ain vss fixture_fet', 'XSW DOUT CONTROL AIN VSS FIXTURE_FET'))
+    record = post._read(case['provenance'])
+    record['netlist_content_sha256'] = content_digest(case['net'].read_text())
+    capture.write_json(case['provenance'], record)
+    case['raw'] = case['raw'].replace('gate_terminal', 'Gate_TERMINAL').replace('fixture_fet w=', 'FIXTURE_FET w=')
+    node, _proof = _physical_gate(case)
+    assert node == 'xdut.Gate_TERMINAL'
+
+
+@pytest.mark.parametrize('mutation', ['source', 'layout', 'model', 'missing_ext', 'wrong_ext',
+                                     'ambiguous_ext', 'foreign_model', 'ambiguous_mos', 'foreign_instance'])
+def test_physical_gate_requires_unambiguous_source_layout_model_and_native_ext(physical_gate, mutation):
+    case = physical_gate
+    if mutation == 'source':
+        case['net'].write_text(case['net'].read_text().replace('control', 'foreign_control'))
+        case['device'] = {**case['device'], 'nets': ['dout', 'foreign_control', 'ain', 'vss']}
+    elif mutation == 'layout':
+        case['mag'].write_text('magic\nuse unrelated_fet_UNIT d0\n')
+    elif mutation == 'model':
+        case['model'].write_text('.subckt fixture_fet d s g b\n.ends fixture_fet\n')
+    elif mutation == 'missing_ext':
+        case['ext'].unlink()
+    elif mutation == 'wrong_ext':
+        case['ext'].write_text(case['ext'].read_text().replace('"gate_bus"', '"dout"'))
+    elif mutation == 'ambiguous_ext':
+        case['ext'].write_text(case['ext'].read_text() + 'equiv "d0.G" "unjoined_anchor"\n')
+        case['raw'] = case['raw'].replace('.ends converter', 'r_other unjoined_anchor unrelated 2\n.ends converter')
+    elif mutation == 'foreign_model':
+        case['raw'] = case['raw'].replace('fixture_fet w=', 'unrelated_fet w=')
+    elif mutation == 'ambiguous_mos':
+        case['raw'] = case['raw'].replace('.ends converter',
+            'xsecond drain_terminal gate_terminal source_terminal bulk_terminal fixture_fet w=2u l=1u\n.ends converter')
+    elif mutation == 'foreign_instance':
+        case['logical'] = 'unrelated_dut.control'
+    with pytest.raises(ValueError):
+        _physical_gate(case)
+
+
+def test_retained_instance_cannot_bypass_actual_wrapper_terminal_order(tmp_path):
+    # Executed review counterexample against7edb038b: the old direct branch
+    # returnedxdut.source even thoughG was the third actual wrapper terminal.
+    net = tmp_path / 'converter.sp'; tb = tmp_path / 'tb.sp'
+    net.write_text('.subckt odd_fet D S G B\nMcore D G S B native_n w=1u l=1u\n.ends odd_fet\n'
+        '.subckt converter drain source actual_gate bulk\n'
+        'xsw drain source actual_gate bulk odd_fet w=1u l=1u\n.ends converter\n')
+    tb.write_text('xdut drain source actual_gate bulk converter\n.end\n')
+    raw = ('.subckt converter drain source actual_gate bulk\n'
+        'xsw drain source actual_gate bulk odd_fet w=1u l=1u\n.ends converter\n')
+    with pytest.raises(ValueError, match='d/g/s/b terminal order'):
+        post._physical_transfer_gate('converter', net, tb, raw, None,
+            {'name': 'sw', 'role': 'nmos', 'nets': ['drain', 'source', 'actual_gate', 'bulk']}, 'xdut.actual_gate')
+
+
+@pytest.mark.parametrize('header', ['d g s b extra', 'd g s b\n.ends fixture_fet\n.subckt fixture_fet d s g b'])
+def test_extra_or_conflicting_wrapper_ports_refuse_even_on_retained_route(physical_gate, header):
+    physical_gate['model'].write_text('.subckt fixture_fet ' + header + '\n.ends fixture_fet\n')
+    raw = ('.subckt converter ain dout vdd vss\nxsw dout control ain vss fixture_fet w=2u l=1u\n.ends converter\n')
+    with pytest.raises(ValueError, match='d/g/s/b terminal order'):
+        _physical_gate(physical_gate, raw=raw, corner=None)

@@ -110,7 +110,8 @@ def _native_fixture_series(context, limit=None):
     points = []
     prototype = Path(context["score"]).parent / "fixture-prototype.dat"
     prototype.parent.mkdir(parents=True)
-    declaration = capture.stimulus.incremental_decode(spec, topology)
+    _text, clock, declaration = capture.prepare_deck(template, spec, topology,
+        capture.phase_settings(settings, 0), prototype.parent)
     candidates = []
     for pattern in itertools.product((0, 1.2), repeat=3):
         raw = _dump(prototype)
@@ -128,7 +129,7 @@ def _native_fixture_series(context, limit=None):
             fields[0] = f"{t * 1e-6:.17g}"
             lines.append(" ".join(fields))
         raw.write_text("\n".join(lines))
-        decoded = capture.decode_capture(raw, (0, 1e-6, 1.8), declaration, capture.phase_settings(settings, 0))
+        decoded = capture.decode_capture(raw, clock, declaration, capture.phase_settings(settings, 0))
         if decoded["conversions"]:
             candidates.append((decoded["conversions"][0]["decoded"], raw.read_text()))
     prototype.unlink()
@@ -141,7 +142,7 @@ def _native_fixture_series(context, limit=None):
         # several of them, rather than reducing this instrument to one bit.
         target = 4 * math.sin(angle)
         chosen = min(candidates, key=lambda item: abs(item[0] - target))[1]
-        chosen = "\n".join(" ".join([*line.split()[:3], f"{local['held_input_v']:.17g}"])
+        chosen = "\n".join(" ".join([*line.split()[:3], f"{local['held_input_v']:.17g}", *line.split()[4:]])
             if line and line[0].isdigit() else line for line in chosen.splitlines())
         def native(deck, target_dir):
             (target_dir / "conversion.dat").write_text(chosen)

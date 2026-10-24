@@ -203,6 +203,177 @@ def _post_template(block, source_net, source_tb, post_net, raw, mapping, origina
     return text, match[1], dropped
 
 
+def _physical_transfer_gate(block, source_net, source_tb, raw, corner, device, logical):
+    """Observe the MOS gate itself, retaining every distributed resistor."""
+    import analog_a5_layout_emit as layout
+    import analog_lvs_comparison_prep as calls
+
+    def mos_cards(text):
+        result = []
+        for line in a7._joined_lines(text):
+            parts = line.split()
+            if not parts:
+                continue
+            if parts[0].lower().startswith('x'):
+                call = calls._split_call(' '.join(parts[1:]))
+                if call and len(call[0]) == 4:
+                    result.append((parts[0], call[0], call[1]))
+            elif parts[0].lower().startswith('m') and len(parts) >= 6:
+                result.append((parts[0], parts[1:5], parts[5]))
+        return result
+
+    source_cards = [row for row in mos_cards(source_net.read_text())
+                    if [node.casefold() for node in row[1]] == [node.casefold() for node in device['nets']]]
+    if len(source_cards) != 1:
+        raise ValueError('source transfer switch card is absent or ambiguous: ' + device['name'])
+    source_card = source_cards[0]
+    if source_card[0].casefold().startswith('x'):
+        closure, _ = mc._statistical_closure(source_net.parent, source_net, None)
+        headers = []
+        for line in a7._joined_lines(closure):
+            tokens = line.split()
+            if len(tokens) >= 3 and tokens[0].casefold() == '.subckt' and tokens[1].casefold() == source_card[2].casefold():
+                pins = re.split(r'\s+(?:params?:|[A-Za-z_]\w*\s*=)',
+                    ' '.join(tokens[2:]), maxsplit=1, flags=re.I)[0]
+                headers.append(tuple(pin.casefold() for pin in pins.split()))
+        if not headers or set(headers) != {('d', 'g', 's', 'b')}:
+            raise ValueError('transfer MOS model does not declare d/g/s/b terminal order')
+    raw_cards = mos_cards(raw)
+    ports, internal = a7.rcx_nets(raw, block)
+    raw_nodes = {node.casefold() for node in ports | internal}
+    parent = {}
+
+    def root(node):
+        node = node.casefold()
+        parent.setdefault(node, node)
+        trail = []
+        while parent[node] != node:
+            trail.append(node)
+            node = parent[node]
+        for previous in trail:
+            parent[previous] = node
+        return node
+
+    for line in a7._joined_lines(raw):
+        tokens = line.split()
+        if len(tokens) == 4 and tokens[0].casefold().startswith('r'):
+            parent[root(tokens[2])] = root(tokens[1])
+    instance = logical.partition('.')[0]
+    if instance.casefold() not in a7.dut_instances(source_tb.read_text(), block):
+        raise ValueError('transfer observation does not identify the actual source DUT')
+    # Some extractors retain both instance identity and logical conductor
+    # names. Match connectivity; do not assume a resistor makes equal voltage.
+    direct = [row for row in raw_cards if row[0].casefold() == source_card[0].casefold()
+              and row[2].casefold() == source_card[2].casefold()
+              and all(node.casefold() in raw_nodes for node in source_card[1])
+              and [root(node) for node in row[1]] == [root(node) for node in source_card[1]]]
+    if len(direct) == 1:
+        return instance + '.' + direct[0][1][1], {
+            'kind': 'retained_native_device_terminal', 'source_device': device['name'],
+            'source_terminal': 'g', 'native_instance': direct[0][0],
+            'native_node': direct[0][1][1], 'supporting_inputs': {},
+            'scope': 'actual retained MOS gate; distributed resistors are not collapsed'}
+    if len(direct) > 1:
+        raise ValueError('native transfer switch identity is ambiguous')
+
+    # Reuse the existing source/layout/native-ext identity seam, then resolve
+    # the selected device terminal beyond its positive interconnect resistors.
+    from _analog_producer_common import layout_netlist_identity
+    record_path = source_net.parent / 'layout_provenance.json'
+    if corner is None or not record_path.is_file():
+        raise ValueError('actual transfer terminal requires source-to-layout identity')
+    record = _read(record_path)
+    if record.get('producer') != 'analog_a5_layout_emit' or record.get('result') != 'OK' \
+            or layout_netlist_identity(record, source_net.read_text())[0] != 'MATCH':
+        raise ValueError('actual source-to-layout transfer identity is unavailable')
+    mag = Path(record.get('layout_mag') or source_net.parent / 'layout.mag')
+    ext = Path(corner.get('step_dir') or Path(corner['extracted_netlist']).parent) / 'extraction_full' / (block + '.ext')
+    if not mag.is_file() or not ext.is_file():
+        raise ValueError('actual transfer layout/native extraction identity is absent')
+    support = {'supporting_inputs': {'layout_provenance': _view(record_path),
+        'layout_mag': _view(mag), 'native_ext': _view(ext)}}
+    _name, _pins, devices = layout.parse_netlist(source_net)
+    selected = [(index, row) for index, row in enumerate(devices)
+                if row['name'].casefold() == device['name'].casefold()]
+    if len(selected) != 1 or selected[0][1]['model'].casefold() != source_card[2].casefold():
+        raise ValueError('source transfer switch has no unique A5 device identity')
+    index, selected_device = selected[0]
+    mag = Path(support['supporting_inputs']['layout_mag']['path'])
+    uses = [shlex.split(line)[1] for line in mag.read_text().splitlines()
+            if line.startswith('use ') and len(shlex.split(line)) >= 3
+            and shlex.split(line)[2].casefold() == f'd{index}']
+    if len(uses) != 1 or not (uses[0].casefold() == selected_device['model'].casefold()
+            or uses[0].casefold().startswith(selected_device['model'].casefold() + '_')):
+        raise ValueError('selected transfer layout instance does not identify its source model')
+    ext_parent = {}
+
+    def ext_root(node):
+        node = node.casefold()
+        ext_parent.setdefault(node, node)
+        trail = []
+        while ext_parent[node] != node:
+            trail.append(node)
+            node = ext_parent[node]
+        for previous in trail:
+            ext_parent[previous] = node
+        return node
+
+    ext = Path(support['supporting_inputs']['native_ext']['path'])
+    for line in ext.read_text().splitlines():
+        tokens = shlex.split(line)
+        if tokens and tokens[0] == 'node' and len(tokens) >= 2:
+            ext_root(tokens[1])
+        elif tokens and tokens[0] == 'equiv' and len(tokens) == 3:
+            ext_parent[ext_root(tokens[2])] = ext_root(tokens[1])
+    expected = []
+    for terminal in 'dgsb':
+        alias = f'd{index}.{terminal}'.casefold()
+        if alias not in ext_parent:
+            raise ValueError('selected transfer terminal lacks native pre-resistance identity')
+        component = ext_root(alias)
+        anchors = {root(node) for node in list(ext_parent) if node in raw_nodes and ext_root(node) == component}
+        if len(anchors) != 1:
+            raise ValueError('selected transfer terminal has ambiguous extracted connectivity')
+        expected.append(next(iter(anchors)))
+    for left in range(4):
+        for right in range(left + 1, 4):
+            if source_card[1][left].casefold() != source_card[1][right].casefold() and expected[left] == expected[right]:
+                raise ValueError('native interconnect joins different transfer source nets')
+    found = [row for row in raw_cards if row[2].casefold() == selected_device['model'].casefold()
+             and root(row[1][1]) == expected[1] and root(row[1][3]) == expected[3]
+             and {root(row[1][0]), root(row[1][2])} == {expected[0], expected[2]}]
+    if len(found) != 1:
+        raise ValueError('actual transfer MOS gate is absent or ambiguous after extraction')
+    return instance + '.' + found[0][1][1], {
+        'kind': 'source_physical_device_terminal', 'source_device': device['name'],
+        'source_terminal': 'g', 'layout_instance': f'd{index}',
+        'native_instance': found[0][0], 'native_node': found[0][1][1],
+        'supporting_inputs': support['supporting_inputs'],
+        'scope': 'actual MOS gate selected by source/layout/terminal connectivity; positive resistors retained'}
+
+
+def _post_transfer_observations(block, source_net, source_tb, topology, raw, corner, mapping, reset):
+    timing = capture._transfer_timing(topology, reset)
+    devices = {device['name']: device for device in topology['devices']}
+    ports, internal = a7.rcx_nets(raw, block)
+    nodes, observations = {}, {}
+    for group in timing['groups']:
+        for polarity in ('n', 'p'):
+            switch = group[polarity + '_switch']
+            if switch in nodes:
+                continue
+            logical = group[polarity + '_gate'][2:-1]
+            native, proof = _physical_transfer_gate(
+                block, source_net, source_tb, raw, corner, devices[switch], logical)
+            text, _dropped = a7.remap_probes(source_tb.read_text() + '\n.save v(' + native + ')',
+                block, ports, internal, mapping)
+            match = re.fullmatch(r'\s*\.save\s+v\(([^()]+)\)\s*', text.splitlines()[-1])
+            if not match:
+                raise ValueError('actual extracted transfer gate cannot be observed')
+            nodes[switch], observations[switch] = match[1], proof
+    return {'nodes': nodes, 'observations': observations}
+
+
 def _make_style(project, block, source, common, corner, root, pre_plan, image, native_binary, reset_observation):
     study = root / 'project'
     paths = pvt._paths(study, block)
@@ -219,7 +390,10 @@ def _make_style(project, block, source, common, corner, root, pre_plan, image, n
     paths['testbench'].write_text(template)
     for role in ('spec', 'topology'):
         paths[role].symlink_to(source[role]['path'])
-    effective = {**common, 'testbench': str(paths['testbench']), 'reset_node': reset}
+    transfer = _post_transfer_observations(block, Path(source['netlist']['path']),
+        Path(source['testbench']['path']), _read(source['topology']['path']), raw, corner, mapping, common['reset_node'])
+    effective = {**common, 'testbench': str(paths['testbench']), 'reset_node': reset,
+                 'transfer_gate_nodes': transfer['nodes']}
     if native_binary:
         effective['native_binary'] = native_binary
     settings = root / 'common.json'
@@ -230,7 +404,8 @@ def _make_style(project, block, source, common, corner, root, pre_plan, image, n
     capture.write_json(plan_path, plan)
     return {'style': corner['style'], 'project': str(study), 'settings': _view(settings),
         'native_inputs': {role: _view(path) for role, path in paths.items()}, 'extracted_body': _view(body_path),
-        'pvt_manifest': _view(plan_path), 'probe_mapping': {'source_reset': common['reset_node'], 'post_reset': reset, 'observation': observation},
+        'pvt_manifest': _view(plan_path), 'probe_mapping': {'source_reset': common['reset_node'], 'post_reset': reset,
+            'observation': observation, 'transfer_gates': transfer},
         'dropped_template_measures': dropped, 'extracted_netlist': _view(corner['extracted_netlist'])}
 
 
@@ -308,6 +483,9 @@ def prepare(project, block, settings, extraction, pre_pvt_manifest, pre_score, d
     for context in contexts:
         source.update({'reset-support:' + context['style'] + ':' + key: value
                        for key, value in context['probe_mapping']['observation'].get('supporting_inputs', {}).items()})
+        for switch, proof in context['probe_mapping']['transfer_gates']['observations'].items():
+            source.update({'transfer-support:' + context['style'] + ':' + switch + ':' + key: value
+                           for key, value in proof.get('supporting_inputs', {}).items()})
     manifest = {'kind': KIND, 'stage': 'POST', 'operation': 'prepare', 'status': 'PASS',
         'detail': 'actual PEX PVT input views prepared; no POST conversion measured', 'project': str(project),
         'block': block, 'destination': str(destination), 'image': image, 'common_settings': common,
@@ -386,13 +564,17 @@ def _validate(manifest):
         text, reset, dropped = _post_template(block, paths['netlist'], template, current['netlist'],
             Path(corner['extracted_netlist']).read_text(), mapping, common['reset_node'],
             corner=corner, selector=manifest.get('reset_observation'), observation=observation)
-        effective = {**common, 'testbench': str(current['testbench']), 'reset_node': reset}
+        transfer = _post_transfer_observations(block, paths['netlist'], template, _read(source['topology']['path']),
+            Path(corner['extracted_netlist']).read_text(), corner, mapping, common['reset_node'])
+        effective = {**common, 'testbench': str(current['testbench']), 'reset_node': reset,
+                     'transfer_gate_nodes': transfer['nodes']}
         if source.get('native_binary'):
             effective['native_binary'] = source['native_binary']
         if current['netlist'].read_text() != wrapper or Path(context['extracted_body']['path']).read_text() != body \
                 or context['extracted_body'] != _view(current['netlist'].with_name(block + '__rcx.sp')) \
                 or current['testbench'].read_text() != text or context['dropped_template_measures'] != dropped \
-                or context['probe_mapping'] != {'source_reset': common['reset_node'], 'post_reset': reset, 'observation': observation} \
+                or context['probe_mapping'] != {'source_reset': common['reset_node'], 'post_reset': reset,
+                    'observation': observation, 'transfer_gates': transfer} \
                 or not _current({'settings': context['settings'], 'pvt': context['pvt_manifest']}) \
                 or _read(context['settings']['path']) != effective:
             raise ValueError('POST inputs differ beyond the actual extraction wrapper/probe remap')
