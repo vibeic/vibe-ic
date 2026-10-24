@@ -259,10 +259,28 @@ def _views(step, project, block, options, run):
         result = run("@magic", command, cwd=script.parent,
                      input_text=script.read_text() + "\nquit -noprompt\n",
                      outputs=settings.get("outputs", []))
-        return {"status": "PASS" if result["returncode"] == 0 and
-                settings.get("outputs") and not result["missing_outputs"] else "FAIL",
-                "detail": "Native pure-analog top implementation executed",
-                "outputs": settings.get("outputs", []), "executions": [result]}
+        receipt = Path(settings.get("evidence", "__absent_a18_evidence__"))
+        receipt = receipt if receipt.is_absolute() else project / receipt
+        evidence = _read(receipt, {})
+        if not isinstance(evidence, dict):
+            evidence = {}
+        status = evidence.get("component_status", "NOT_MEASURED")
+        if status not in STATUSES:
+            status = "NOT_MEASURED"
+        detail = (evidence.get("reason") or evidence.get("detail") or
+                  f"Native A18 component reported {status}")
+        if status != "FAIL" and result["returncode"] != 0:
+            status = "FAIL"
+            detail = f"Native pure-analog top implementation exited {result['returncode']}"
+        elif status != "FAIL" and not settings.get("outputs"):
+            status = "FAIL"
+            detail = "Native pure-analog top implementation declares no outputs"
+        elif status != "FAIL" and result["missing_outputs"]:
+            status = "FAIL"
+            detail = "Native pure-analog top implementation omitted declared outputs"
+        return {"status": status, "detail": detail,
+                "outputs": settings.get("outputs", []), "executions": [result],
+                "native_evidence": evidence}
     if step == "A19":
         prior = options["previous_results"]
         rows = [{"step": sid, **prior.get(sid, {}).get(name, {
