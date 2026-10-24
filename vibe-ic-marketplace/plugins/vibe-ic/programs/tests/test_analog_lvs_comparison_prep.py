@@ -194,3 +194,34 @@ def test_topology_instance_letters_consumes_formal_cards_not_prose():
     assert topology_instance_letters(".subckt other not g s b\n"
                                      "Xmn1 not g s b model\n.ends other\n",
                                      "neutral", topology) == {}
+@pytest.mark.parametrize('typed',[False,True])
+def test_comparison_consumer_matches_native_half_grid_geometry_without_changing_dut(tmp_path,typed):
+    import hashlib
+    source=('* _provenance: role_models={\'cap\': \'neutral_mim\'}\n' if not typed else '')
+    source+='.subckt neutral p q\nxstorage p q neutral_mim w=10u l=21.505u m=1\n.ends neutral\n'
+    declaration={'block':'neutral','devices':[{'name':'storage','role':'cap','nets':['p','q']}]}
+    original=source.encode();before=hashlib.sha256(original).hexdigest()
+    src=tmp_path/'source.sp';src.write_bytes(original)
+    topology=tmp_path/'topology.json';topology.write_text(json.dumps(declaration))
+    output=tmp_path/'comparison.sp'
+    args=[str(src),'--block','neutral','--out',str(output)]
+    if typed:args+=['--topology',str(topology)]
+    assert P.main(args)==0
+    # Positive half-up grid arithmetic: round(21.505 / .01) * .01 = 21.51um,
+    # or 21510 units at 1nm. This CLI test does not replay native polygons.
+    native_length_um=21510/1000
+    assert f'Cstorage p q neutral_mim w=10u l={native_length_um:g}u m=1' in output.read_text()
+    assert src.read_bytes()==original and hashlib.sha256(src.read_bytes()).hexdigest()==before
+
+
+def test_old_half_even_helper_fails_actual_comparison_consumer_oracle(monkeypatch):
+    import magic_gencell_layout_lib as library
+    source="* _provenance: role_models={'cap': 'neutral_mim'}\n.subckt neutral p q\nxstorage p q neutral_mim w=10u l=21.505u\n.ends neutral\n"
+    correct,_=P.prepare_source_netlist(source,'neutral')
+    def old_grid_snap(line,grid_um=.01):
+        return library._WL_RE.sub(lambda match:f'{match.group(1)}={round(float(match.group(2))/grid_um)*grid_um:g}u',line)
+    monkeypatch.setattr(P,'grid_snap_spice_params',old_grid_snap)
+    prior,_=P.prepare_source_netlist(source,'neutral')
+    assert 'Cstorage p q neutral_mim w=10u l=21.51u' in correct
+    assert 'Cstorage p q neutral_mim w=10u l=21.5u' in prior
+    assert correct!=prior and 'l=21.51u' not in prior

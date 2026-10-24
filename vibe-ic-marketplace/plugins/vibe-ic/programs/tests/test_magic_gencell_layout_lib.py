@@ -3,6 +3,7 @@ measured u_hawaii_adc failure (LAWS #22-#24 + the manifest audit + the
 comparison-grid rule), so a regression here re-opens a real silicon defect."""
 import sys
 from pathlib import Path
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -158,6 +159,24 @@ def test_grid_snap_only_touches_w_l():
 def test_grid_snap_is_identity_on_grid():
     line = "Mx d g s b nmos w=7.83u l=1u"
     assert M.grid_snap_spice_params(line) == line
+
+
+@pytest.mark.parametrize('value,grid,expected',[
+    ('21.505',.01,'21.51'),('21.515',.01,'21.52'),
+    ('12.345',.01,'12.35'),('1.25',.02,'1.26'),
+    ('21.5049',.01,'21.5'),('21.5051',.01,'21.51'),
+    ('7.83',.01,'7.83'),('1',.01,'1'),
+])
+def test_positive_comparison_grid_uses_native_half_up_and_preserves_non_ties(value,grid,expected):
+    line=f'Cneutral node_a node_b neutral_cap w=10u l={value}u m=3 area=12.345u'
+    assert M.grid_snap_spice_params(line,grid)==(
+        f'Cneutral node_a node_b neutral_cap w=10u l={expected}u m=3 area=12.345u')
+
+
+def test_grid_snap_does_not_round_other_parameters_or_non_geometric_text():
+    line='Cneutral n0 n1 arbitrary_model w=2.125u l=1.235u m=1.235 val=1.235u small=1.235u'
+    assert M.grid_snap_spice_params(line)==(
+        'Cneutral n0 n1 arbitrary_model w=2.13u l=1.24u m=1.235 val=1.235u small=1.235u')
 
 
 # ── LAW #25: contact-enclosure repair of a vendor gencell ─────────────────
