@@ -241,6 +241,114 @@ def test_current_ir_rebinds_intact_project_relative_native_paths(tmp_path, monke
     assert (relocated / receipt_rel).read_bytes() == receipt_bytes
 
 
+def _external_current_primary(tmp_path, monkeypatch, case="current"):
+    """Turn the existing neutral IR result into a real current-owner receipt."""
+    test_default_step24_adopts_its_current_native_primary(tmp_path, monkeypatch, case)
+    project, pdk_root, paths, state = _sta_scene(tmp_path, monkeypatch)
+    original = tmp_path / "adopted-original"
+    external = {
+        "odb": _write(original, "neutral.odb", paths["odb"].read_text()),
+        "def": _write(original, "neutral.def", paths["def"].read_text()),
+    }
+    paths.update(external)
+    state.write_text(json.dumps({
+        "odb": str(paths["odb"]), "def": str(paths["def"]),
+        "nl": str(paths["nl"]), "sdc": str(paths["sdc"]),
+        "spef": {"max_*": str(paths["spef"])}, "metrics": {},
+    }))
+    receipt = state.parent / "vibeic_receipt.json"
+    receipt.write_text(json.dumps({"input": {"state_files": {
+        str(path): _sha(path) for path in paths.values()
+    }}}))
+    subject, tool = sta_current.tool_subject(project, "neutral")
+    roles = {row["role"]: row for row in subject["inputs"]}
+    roles["tool_state"].update(_sta_record(state, "tool_state"))
+    roles["tool_receipt"].update(_sta_record(receipt, "tool_receipt"))
+    monkeypatch.setattr(sta_current, "tool_subject",
+                        lambda *_args, **_kwargs: (subject, tool))
+    selected = la._current_stapostpnr_ir_inputs(
+        project, tool["image"], pdk_root, "neutral", {"DESIGN_NAME": "neutral"})
+
+    report = project / "reports/phase3/ir_drop_librelane.json"
+    doc = json.loads(report.read_text())
+    doc["inputs"] = {role: dict(selected["records"][role])
+                     for role in ("def", "netlist", "sdc", "spef")}
+    doc["record"].update({
+        "input_mode": "current_stapostpnr_odb",
+        "selected_inputs": selected["records"],
+        "input_source_chain": {key: selected[key] for key in
+                               ("source", "image", "pdk_root", "pdk")},
+    })
+    for role in ("odb", "sdc", "spef"):
+        row = selected["records"][role]
+        path = Path(row["path"])
+        path = path if path.is_absolute() else project / path
+        doc["native_basis"][role] = {"path": str(path.resolve()),
+                                     "sha256": row["sha256"]}
+    report.write_text(json.dumps(doc))
+    return project, report, selected, paths, state
+
+
+def test_current_ir_accepts_owned_external_views_through_current_validator(
+        tmp_path, monkeypatch):
+    project, report, selected, paths, _ = _external_current_primary(
+        tmp_path, monkeypatch)
+    before = report.read_bytes()
+    result = emc.validate_primary_ir(project)
+    assert result["valid"] is True, result
+    assert result["verdict"] == "PASS", result
+    assert Path(selected["records"]["def"]["path"]) == paths["def"]
+    assert paths["def"].is_relative_to(tmp_path / "adopted-original")
+    assert report.read_bytes() == before
+
+
+@pytest.mark.parametrize("damage", [
+    "malformed", "unbound", "changed", "owner_stale", "wrong_role",
+    "selected_self_asserted", "missing_owner", "symlink",
+])
+def test_current_ir_refuses_unowned_or_stale_external_inputs(
+        tmp_path, monkeypatch, damage):
+    project, report, selected, paths, state = _external_current_primary(
+        tmp_path, monkeypatch)
+    doc = json.loads(report.read_text())
+    if damage == "malformed":
+        doc["inputs"]["def"] = {"path": str(paths["def"])}
+    elif damage == "unbound":
+        foreign = _write(tmp_path / "foreign", "foreign.def", paths["def"].read_text())
+        doc["inputs"]["def"] = {"path": str(foreign), "sha256": _sha(foreign)}
+    elif damage == "changed":
+        paths["def"].write_text(paths["def"].read_text() + "changed\n")
+    elif damage == "owner_stale":
+        state.write_text(state.read_text() + "\n")
+    elif damage == "wrong_role":
+        doc["inputs"]["def"] = dict(selected["records"]["netlist"])
+    elif damage == "selected_self_asserted":
+        forged = _write(project, "forged.def", paths["def"].read_text())
+        forged_row = {"path": str(forged.relative_to(project)),
+                      "sha256": _sha(forged)}
+        doc["inputs"]["def"] = dict(forged_row)
+        doc["record"]["selected_inputs"]["def"] = dict(forged_row)
+    elif damage == "missing_owner":
+        (project / la.CURRENT_STA_RECORD).unlink()
+    else:
+        contents = paths["def"].read_text()
+        paths["def"].unlink()
+        target = _write(tmp_path / "foreign", "symlink-target.def", contents)
+        paths["def"].symlink_to(target)
+    report.write_text(json.dumps(doc))
+    result = emc.validate_primary_ir(project)
+    assert result["valid"] is False, (damage, result)
+    assert result["verdict"] == "NOT_MEASURED", (damage, result)
+    assert result["rule"] == "LL_IR_CURRENT_BINDING_INVALID"
+
+
+def test_current_ir_owned_external_measured_fail_stays_fail(tmp_path, monkeypatch):
+    project, _, _, _, _ = _external_current_primary(
+        tmp_path, monkeypatch, "native_fail")
+    result = emc.validate_primary_ir(project)
+    assert result["valid"] is True, result
+    assert result["verdict"] == "FAIL", result
+
 @pytest.mark.parametrize("damage", ["missing", "changed", "symlink"])
 def test_current_ir_rebinding_refuses_nonidentical_or_nonregular_state(
         tmp_path, monkeypatch, damage):
