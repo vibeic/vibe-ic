@@ -124,6 +124,9 @@ def candidate(tmp_path, monkeypatch):
             assert derived['keepout_boxes_um'] == [[-0.3, -0.3, 5.3, 5.3]]
             _put(Path(cmd[cmd.index('--report') + 1]), {
                 'verdict': 'FAIL' if damage['kind'] == 'fill' else 'PASS',
+                'keepout': {'declared': True},
+                'gds_in': cmd[cmd.index('--gds') + 1],
+                'gds_out': cmd[cmd.index('--out') + 1],
                 'layers': [{'name': 'metal1'}]})
         else:
             specs = json.loads(Path(cmd[cmd.index('--specs') + 1]).read_text())
@@ -204,3 +207,54 @@ def test_candidate_refuses_stale_native_inputs_before_finishing(candidate, chang
     with pytest.raises(lc.Refusal): _finish(c)
     assert c.calls == []
     assert not (c.project / 'phase3/librelane/candidate/finishing').exists()
+
+
+def test_retained_finish_replays_only_ratio_after_validating_native_readsets(candidate):
+    c = candidate
+    first = _finish(c)
+    old_ratio = c.project / 'phase3/librelane/candidate/finishing/density-topped-ratios/density_ratios.json'
+    old_bytes = old_ratio.read_bytes()
+    before = len(c.calls)
+    resumed = fill.resume_candidate_gds(
+        c.project, 'neutral-image', c.root, 'processA', gds=c.gds,
+        state=c.state, config=c.config, lane='candidate/finishing',
+        ratio_lane='candidate/finishing-resume-ratios')
+    assert resumed['gds_sha256'] == first['gds_sha256']
+    assert resumed['density'][fill.DENSITY_METRIC] == 0
+    assert resumed['reuse']['scope'].endswith('ratio replay only')
+    assert old_ratio.read_bytes() == old_bytes
+    new_calls = c.calls[before:]
+    assert len(new_calls) == 1 and 'argv' in new_calls[0]
+    assert not any(row.get('step') for row in new_calls)
+
+
+@pytest.mark.parametrize('change', ['topped_gds', 'density_receipt', 'density_config',
+                                     'topup_odb_binding'])
+def test_retained_finish_stale_readset_refuses_before_ratio(candidate, change):
+    c = candidate
+    _finish(c)
+    root = c.project / 'phase3/librelane/candidate/finishing'
+    target = {
+        'topped_gds': root / 'density-topup/filled.topped.gds',
+        'density_receipt': root / 'density-topped/01-klayout-density/vibeic_receipt.json',
+        'density_config': root / 'config/KLayout.Density.json',
+        'topup_odb_binding': root / 'density-topup/pdk_fill_config.json',
+    }[change]
+    if change == 'topped_gds':
+        target.write_bytes(b'stale topped geometry')
+    else:
+        value = json.loads(target.read_text())
+        if change == 'density_receipt':
+            value['input']['config'] = '0' * 64
+        elif change == 'density_config':
+            value['DESIGN_NAME'] = 'changed'
+        else:
+            value['_derivation']['placed_instance_keepout']['source_sha256'] = '0' * 64
+        _put(target, value)
+    before = len(c.calls)
+    with pytest.raises(lc.Refusal):
+        fill.resume_candidate_gds(
+            c.project, 'neutral-image', c.root, 'processA', gds=c.gds,
+            state=c.state, config=c.config, lane='candidate/finishing',
+            ratio_lane=f'candidate/rejected-{change}')
+    assert len(c.calls) == before

@@ -307,6 +307,166 @@ def finish_candidate_gds(project: Path, image: str, pdk_root: Path, pdk: str, *,
                      'prefill PPA only, fill-aware final electrical unproven'}
 
 
+def resume_candidate_gds(project: Path, image: str, pdk_root: Path, pdk: str, *,
+                         gds: Path, state: Path, config: Path, lane: str,
+                         ratio_lane: str) -> dict:
+    """Resume only the ratio consumer of a retained candidate finish.
+
+    The finished GDS is derived from ``lane``, never supplied by the caller.
+    All retained native fill/density receipts, configs, bridge subjects and
+    placement-derived top-up provenance are validated before a new ratio
+    consumer is started. Full DRC/LVS remain mandatory for the caller.
+    """
+    project, gds, state, config = (Path(p).resolve()
+                                   for p in (project, gds, state, config))
+    lanes = project / 'phase3/librelane'
+    root = (lanes / lane).resolve()
+    ratio_root = (lanes / ratio_lane).resolve()
+    if (not lane or not ratio_lane or Path(lane).is_absolute()
+            or Path(ratio_lane).is_absolute() or '..' in Path(lane).parts
+            or '..' in Path(ratio_lane).parts or not root.is_relative_to(lanes)
+            or not ratio_root.is_relative_to(lanes) or root == lanes
+            or ratio_root == lanes or not root.is_dir() or ratio_root.exists()
+            or not state.is_relative_to(lanes) or state.name != 'state_out.json'):
+        raise Refusal('LL_CANDIDATE_FINISHING_LOCATION', f'{lane}: {ratio_lane}')
+
+    cfg = _load(config)
+    step = cfg.get('meta', {}).get('step')
+    receipt = validate_step_receipt(state.parent, step) if step else None
+    if (not receipt or not cfg.get('DESIGN_NAME')
+            or receipt['input'].get('image') != image
+            or receipt['input'].get('config') != digest(config)
+            or receipt['input'].get('config_files') !=
+               config_file_hashes(cfg, _mounts(pdk_root, pdk))):
+        raise Refusal('LL_CANDIDATE_FINISHING_CONFIG', str(config))
+    current = _load(state)
+    placement = {'config': cfg}
+    for view in ('def', 'odb'):
+        path = Path(current.get(view) or '').resolve()
+        if (not path.is_relative_to(state.parent) or not path.is_file()
+                or receipt['sha256'].get(str(path.relative_to(state.parent))) != digest(path)):
+            raise Refusal('LL_CANDIDATE_FINISHING_VIEW', view)
+        placement[view] = path
+    if not gds.is_file():
+        raise Refusal('LL_GDS_MISSING', str(gds))
+
+    from librelane_contract import _def_die_area
+    die = _def_die_area(placement['def'])
+    if not die or _def_design_name(placement['def']) != cfg['DESIGN_NAME']:
+        raise Refusal('LL_CANDIDATE_FINISHING_CONFIG', 'candidate DEF identity differs')
+    inputs = {str(p): digest(p) for p in (gds, state, config,
+              state.parent / 'vibeic_receipt.json', placement['def'], placement['odb'])}
+
+    configs = {name: root / 'config' / f'{name}.json' for name in GDS_FILL_STEPS}
+    density_cfg = _load(configs['KLayout.Density'])
+    if (density_cfg.get('DESIGN_NAME') != cfg['DESIGN_NAME']
+            or density_cfg.get('DIE_AREA') != die):
+        raise Refusal('LL_CANDIDATE_FINISHING_CONFIG', str(configs['KLayout.Density']))
+
+    def checked(folder: Path, producer: str) -> tuple[dict, dict]:
+        native_receipt = validate_step_receipt(folder, producer)
+        expected_cfg = configs[producer]
+        if (native_receipt['input'].get('image') != image
+                or native_receipt['input'].get('config') != digest(expected_cfg)
+                or native_receipt['input'].get('config_files') !=
+                   config_file_hashes(_load(expected_cfg), _mounts(pdk_root, pdk))):
+            raise Refusal('LL_CANDIDATE_FINISHING_CONFIG', str(expected_cfg))
+        return _load(folder / 'state_out.json'), native_receipt
+
+    filler_dir = root / 'density/01-klayout-filler'
+    density_dir = root / 'density/02-klayout-density'
+    checker_dir = root / 'density/03-checker-klayoutdensity'
+    topped_density_dir = root / 'density-topped/01-klayout-density'
+    topped_checker_dir = root / 'density-topped/02-checker-klayoutdensity'
+    filler_state, filler_receipt = checked(filler_dir, 'KLayout.Filler')
+    density_state, density_receipt = checked(density_dir, 'KLayout.Density')
+    _checker_state, checker_receipt = checked(checker_dir, 'Checker.KLayoutDensity')
+    topped_state, topped_density_receipt = checked(
+        topped_density_dir, 'KLayout.Density')
+    _topped_checker_state, topped_checker_receipt = checked(
+        topped_checker_dir, 'Checker.KLayoutDensity')
+
+    filled = Path(filler_state.get('gds') or '').resolve()
+    topped = Path(topped_state.get('gds') or '').resolve()
+    before_count = _count((density_state.get('metrics') or {}).get(DENSITY_METRIC))
+    after_count = _count((topped_state.get('metrics') or {}).get(DENSITY_METRIC))
+    if (not filled.is_relative_to(root) or not filled.is_file()
+            or not topped.is_relative_to(root) or not topped.is_file()
+            or Path(_load(filler_dir / 'state_in.json').get('gds') or '').resolve() != gds
+            or Path(density_state.get('gds') or '').resolve() != filled
+            or Path(_load(topped_density_dir / 'state_in.json').get('gds') or '').resolve() != topped
+            or before_count in (None, 0) or after_count != 0):
+        raise Refusal('LL_CANDIDATE_FINISHING_GDS_UNBOUND', str(root))
+
+    def bridge(name: str, producer: str, subject: Path, config_path: Path) -> None:
+        doc = _load(root / 'bridges' / name / 'bridge_receipt.json')
+        view = (doc.get('views') or {}).get('gds') or {}
+        if (doc.get('step') != producer or doc.get('image') != image
+                or doc.get('config_sha256') != digest(config_path)
+                or Path(view.get('source') or '').resolve() != subject
+                or view.get('sha256') != digest(subject)):
+            raise Refusal('LL_CANDIDATE_FINISHING_GDS_UNBOUND', f'bridge {name}')
+    bridge('density', 'KLayout.Filler', gds, configs['KLayout.Filler'])
+    bridge('density-topped', 'KLayout.Density', topped,
+           configs['KLayout.Density'])
+
+    topup_dir = root / 'density-topup'
+    topup_report = _load(topup_dir / 'fill_report.json')
+    topup_config = _load(topup_dir / 'pdk_fill_config.json')
+    derivation = topup_config.get('_derivation') or {}
+    keepout = derivation.get('placed_instance_keepout') or {}
+    if (topup_report.get('verdict') != 'PASS' or not topup_report.get('layers')
+            or not (topup_report.get('keepout') or {}).get('declared')
+            or Path(topup_report.get('gds_in') or '').resolve() != filled
+            or Path(topup_report.get('gds_out') or '').resolve() != topped
+            or Path(keepout.get('source') or '').resolve() != placement['odb']
+            or keepout.get('source_sha256') != digest(placement['odb'])
+            or digest(filled) == digest(topped)):
+        raise Refusal('LL_CANDIDATE_FINISHING_TOPUP_UNBOUND', str(topup_dir))
+
+    ratios = measure_density_ratios(project, image, pdk_root, pdk, topped,
+                                    configs['KLayout.Density'], ratio_lane)
+    if any(not Path(path).is_file() or digest(Path(path)) != sha
+           for path, sha in inputs.items()):
+        raise Refusal('LL_CANDIDATE_FINISHING_INPUT_CHANGED', str(state))
+    native_rows = {
+        'KLayout.Filler': (filler_dir, filler_receipt),
+        'KLayout.Density.before_topup': (density_dir, density_receipt),
+        'Checker.KLayoutDensity.before_topup': (checker_dir, checker_receipt),
+        'KLayout.Density': (topped_density_dir, topped_density_receipt),
+        'Checker.KLayoutDensity': (topped_checker_dir, topped_checker_receipt),
+    }
+    native = {name: {'path': str(folder / 'vibeic_receipt.json'),
+                     'sha256': digest(folder / 'vibeic_receipt.json')}
+              for name, (folder, _receipt) in native_rows.items()}
+    density_report = topped_density_dir / 'reports/density.klayout.json'
+    density = {
+        'step': 'KLayout.Density', 'state': str(topped_density_dir / 'state_out.json'),
+        'state_sha256': digest(topped_density_dir / 'state_out.json'),
+        'subject': str(topped), 'subject_sha256': digest(topped),
+        DENSITY_METRIC: 0, 'checker_error': None,
+        'report': str(density_report) if density_report.is_file() else None,
+        'rules': density_rules(density_report) if density_report.is_file() else None,
+        'pdk_density_before_topup': before_count,
+        'density_topup': {'gds': str(topped), 'gds_sha256': digest(topped),
+                          'input_sha256': digest(filled),
+                          'report': str(topup_dir / 'fill_report.json'),
+                          'report_sha256': digest(topup_dir / 'fill_report.json'),
+                          'config': str(topup_dir / 'pdk_fill_config.json'),
+                          'config_sha256': digest(topup_dir / 'pdk_fill_config.json'),
+                          'layers': topup_report['layers']},
+        'ratios': ratios,
+    }
+    return {'gds': str(topped), 'gds_sha256': digest(topped),
+            'density': density, 'inputs': inputs, 'native_receipts': native,
+            'configs': {name: {'path': str(path), 'sha256': digest(path)}
+                        for name, path in configs.items()},
+            'reuse': {'lane': lane, 'ratio_lane': ratio_lane,
+                      'scope': 'validated filler/top-up/density receipts; ratio replay only'},
+            'scope': 'candidate-local finishing; full DRC/LVS still required; '
+                     'prefill PPA only, fill-aware final electrical unproven'}
+
+
 def density_rules(report: Path) -> Optional[Dict[str, int]]:
     """{rule: violation count} from the deck's `density.klayout.json`."""
     try:

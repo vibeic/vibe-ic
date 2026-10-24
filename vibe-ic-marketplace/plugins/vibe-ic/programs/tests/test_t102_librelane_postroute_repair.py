@@ -2718,3 +2718,52 @@ def test_finishing_or_pv_refusal_never_calls_controller_or_changes_pointer(
         prr.resume_candidate_finishing(project, '32-cand09', f'lane-{case}')
     assert entered == []
     assert current.read_bytes() == before
+
+
+def test_retained_finish_lane_uses_resume_helper_then_the_same_pv_gate(
+        tmp_path, monkeypatch):
+    project = tmp_path / 'project'
+    impl = project / prr.ARM_REL / prr.IMPL_DIR
+    current = put(impl / prr.CURRENT, {'candidate': '32-cand01'})
+    state = put(tmp_path / 'state.json', {})
+    config = put(tmp_path / 'config.json', {})
+    old_gds = write(tmp_path / 'old.gds', 'old\n')
+    finished_gds = write(tmp_path / 'finished.gds', 'finished\n')
+    ledger = put(project / prr.ARM_REL / prr.LEDGER, {'candidates': []})
+    retained = {
+        'ctx': {'project': str(project), 'image': 'image', 'pdk': 'processA',
+                'mounts': [[str(tmp_path / 'pdk'), contract.PDK_GUEST_ROOT]]},
+        'current': {'candidate': '32-cand01'}, 'row': {'decision': 'REFUSED'},
+        'report': {}, 'report_path': project / prr.REPORT_REL,
+        'ledger_path': ledger,
+        'paths': {'repair_state': state, 'config': config, 'gds': old_gds},
+        'hashes': {'repair_state': contract.digest(state),
+                   'config': contract.digest(config), 'gds': contract.digest(old_gds),
+                   'def': 'd' * 64},
+        'current_freshness': {'verdict': 'PASS'}, 'density_before': 3,
+    }
+    monkeypatch.setattr(prr, '_retained_candidate_finishing_inputs',
+                        lambda *_a, **_k: retained)
+    fill = importlib.import_module('librelane_fill_dfm')
+    calls = []
+    monkeypatch.setattr(fill, 'finish_candidate_gds',
+                        lambda *_a, **_k: pytest.fail('must not replay finishing'))
+    def resume(*_args, **kwargs):
+        calls.append(kwargs)
+        return {'gds': str(finished_gds),
+                'gds_sha256': contract.digest(finished_gds),
+                'density': {'klayout__density_error__count': 0,
+                            'checker_error': None}}
+    monkeypatch.setattr(fill, 'resume_candidate_gds', resume)
+    monkeypatch.setattr(prr, '_finished_candidate_pv', lambda *_a, **_k: {
+        'drc': {'verdict': 'FAIL', 'scope': {}},
+        'lvs': {'verdict': 'PASS', 'scope': {}}})
+    with pytest.raises(contract.Refusal, match='LL_PRR_FINISHING_DRC_FAIL'):
+        prr.resume_candidate_finishing(
+            project, '32-cand09', '32-cand09-finishing-02',
+            reuse_finished_lane='32-cand09-finishing-01')
+    assert calls == [{
+        'gds': old_gds, 'state': state, 'config': config,
+        'lane': '32-cand09-finishing-01',
+        'ratio_lane': '32-cand09-finishing-02-ratios'}]
+    assert json.loads(current.read_text())['candidate'] == '32-cand01'

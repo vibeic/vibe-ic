@@ -2090,6 +2090,7 @@ def _run_finished_candidate_controller(project: Path, record: Path, *,
 
 
 def resume_candidate_finishing(project: Path, candidate: str, lane: str, *,
+                               reuse_finished_lane: Optional[str] = None,
                                registry: Optional[Path] = None,
                                programs_dir: Optional[Path] = None) -> Dict[str, Any]:
     """Finish/PV one retained density refusal, then run normal DRV adoption.
@@ -2118,10 +2119,17 @@ def resume_candidate_finishing(project: Path, candidate: str, lane: str, *,
     current_sha = _ll.digest(current_path)
     ledger_sha = _ll.digest(retained["ledger_path"])
     try:
-        finished = _fill.finish_candidate_gds(
-            project, ctx["image"], pdk_root, ctx["pdk"],
-            gds=retained["paths"]["gds"], state=retained["paths"]["repair_state"],
-            config=retained["paths"]["config"], lane=lane)
+        if reuse_finished_lane:
+            finished = _fill.resume_candidate_gds(
+                project, ctx["image"], pdk_root, ctx["pdk"],
+                gds=retained["paths"]["gds"], state=retained["paths"]["repair_state"],
+                config=retained["paths"]["config"], lane=reuse_finished_lane,
+                ratio_lane=f"{lane}-ratios")
+        else:
+            finished = _fill.finish_candidate_gds(
+                project, ctx["image"], pdk_root, ctx["pdk"],
+                gds=retained["paths"]["gds"], state=retained["paths"]["repair_state"],
+                config=retained["paths"]["config"], lane=lane)
         pv = _finished_candidate_pv(ctx, retained, finished, lane)
         refusal = _finished_candidate_gate_reason(finished, pv, retained)
     except (OSError, ValueError, _ll.Refusal) as exc:
@@ -2376,6 +2384,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     f.add_argument("--project", type=Path, required=True)
     f.add_argument("--candidate", required=True)
     f.add_argument("--lane", required=True)
+    f.add_argument("--reuse-finished-lane")
     adopt = sub.add_parser("adopt-finished", help=argparse.SUPPRESS)
     adopt.add_argument("--record", type=Path, required=True)
     args = parser.parse_args(argv)
@@ -2383,7 +2392,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.command == "measure":
         return measure(impl, args.domain, args.json)
     if args.command == "finish-candidate":
-        report = resume_candidate_finishing(args.project, args.candidate, args.lane)
+        report = resume_candidate_finishing(
+            args.project, args.candidate, args.lane,
+            reuse_finished_lane=args.reuse_finished_lane)
         print(json.dumps({"verdict": report.get("verdict"),
                           "adopted": report.get("adopted"),
                           "candidate_finishing": report.get("candidate_finishing")},
