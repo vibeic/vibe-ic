@@ -449,6 +449,7 @@ def test_step37_rechecks_topped_gds_before_selection(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize('case', [
     'measured-in-window', 'measured-below-window', 'unresolved-deck-layer',
+    'measured-string-die',
 ])
 def test_native_die_density_emitter_reaches_the_existing_consumer(
         tmp_path, monkeypatch, case):
@@ -468,6 +469,10 @@ def test_native_die_density_emitter_reaches_the_existing_consumer(
     project = tmp_path / 'native-project'
     project.mkdir()
     root, cfg = _pdk(tmp_path)
+    if case == 'measured-string-die':
+        config = json.loads(cfg.read_text())
+        config['DIE_AREA'] = [str(v) for v in config['DIE_AREA']]
+        _put(cfg, config)
     if case == 'unresolved-deck-layer':
         deck = root / 'processA/tech/density.drc'
         deck.write_text(deck.read_text().replace(
@@ -512,6 +517,9 @@ def test_native_die_density_emitter_reaches_the_existing_consumer(
         refusal = str(exc)
     report = project / 'phase3/librelane/37-native-density/density_ratios.json'
     measured = json.loads(report.read_text())
+    if case == 'measured-string-die':
+        assert measured['declared_die'] == [0.0, 0.0, 100.0, 100.0]
+        assert measured['extent_matches_declared_die'] is True
     published = fill.publish_metal_density(project, ratios, gds, 'processA') if ratios else None
     consumer_rc = None
     consumer = None
@@ -558,6 +566,61 @@ def test_native_die_density_emitter_reaches_the_existing_consumer(
         assert consumer['per_layer']['metal2']['status'] == 'PASS', values
         assert consumer.get('unchecked_layers', []) == [], values
         assert 'max=generic-default' in consumer['per_layer']['metal1']['window_source'], values
+
+
+@pytest.mark.parametrize('extent_from_deck', [False, True])
+def test_density_declared_numeric_strings_match_numbers(tmp_path, extent_from_deck):
+    import klayout.db as k
+    import die_density_ratio_emit as emitter
+
+    layout = k.Layout(); layout.dbu = .001
+    top = layout.create_cell('top')
+    top.shapes(layout.layer(99, 0)).insert(k.Box(0, 0, 100000, 100000))
+    top.shapes(layout.layer(61, 0)).insert(k.Box(0, 0, 40000, 100000))
+    gds = tmp_path / 'neutral.gds'; layout.write(str(gds))
+    specs = {'M1.4': {'layers': [[61, 0]]}}
+    before = fill.digest(gds)
+    numeric = emitter.measure(gds, specs, [0, 0, 100, 100], extent_from_deck=extent_from_deck)
+    strings = emitter.measure(gds, specs, ['0', '0.0', '1e2', '100.000'],
+                              extent_from_deck=extent_from_deck)
+    assert strings == numeric
+    assert strings['status'] == 'MEASURED'
+    assert strings['layers']['M1.4']['ratio'] == .4
+    assert strings['extent_matches_declared_die'] is True
+    assert fill.digest(gds) == before
+
+
+@pytest.mark.parametrize('extent_from_deck', [False, True])
+@pytest.mark.parametrize('coords', [
+    ['0', '0', 'NaN', '100'], ['0', '0', 'inf', '100'],
+    ['0', '0', '-Infinity', '100'], ['0', '0', 'not-a-number', '100'],
+    ['0', '0', '0', '100'], ['100', '100', '0', '0'], ['0', '0', '100'],
+])
+def test_density_invalid_declared_coordinates_still_refuse(tmp_path, extent_from_deck, coords):
+    import klayout.db as k
+    import die_density_ratio_emit as emitter
+
+    layout = k.Layout(); top = layout.create_cell('top')
+    top.shapes(layout.layer(99, 0)).insert(k.Box(0, 0, 100000, 100000))
+    gds = tmp_path / 'neutral.gds'; layout.write(str(gds))
+    specs = _put(tmp_path / 'specs.json', {'M1.4': {'layers': [[61, 0]]}})
+    out = tmp_path / 'ratios.json'
+    argv = ['--gds', str(gds), '--specs', str(specs), '--die', json.dumps(coords), '--out', str(out)]
+    if extent_from_deck: argv.append('--extent-from-deck')
+    assert emitter.main(argv) == 2
+    assert json.loads(out.read_text())['status'] == 'NOT_MEASURED'
+
+
+def test_density_different_declared_extent_still_refuses(tmp_path):
+    import klayout.db as k
+    import die_density_ratio_emit as emitter
+
+    layout = k.Layout(); layout.dbu = .001
+    top = layout.create_cell('top')
+    top.shapes(layout.layer(99, 0)).insert(k.Box(0, 0, 100000, 100000))
+    gds = tmp_path / 'neutral.gds'; layout.write(str(gds))
+    with pytest.raises(ValueError, match='DIE_AREA differs from KLayout density extent'):
+        emitter.measure(gds, {'M1.4': {'layers': [[61, 0]]}}, ['0', '0', '101', '100'])
 
 
 @pytest.mark.parametrize('route', ['provider', 'project-local', 'docker'])

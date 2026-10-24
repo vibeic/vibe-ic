@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 from pathlib import Path
 
@@ -28,7 +29,11 @@ def measure(gds: Path, specs: dict, die: list[float], *, cell: str | None = None
         raise ValueError('GDS has no declared top cell')
     if top.cell_index() not in {c.cell_index() for c in layout.top_cells()}:
         raise ValueError('declared design is not a GDS root')
-    declared_die = list(die)
+    declared_die = [float(v) for v in die]
+    if (len(declared_die) != 4 or not all(math.isfinite(v) for v in declared_die)
+            or declared_die[0] >= declared_die[2] or declared_die[1] >= declared_die[3]):
+        raise ValueError('DIE_AREA requires four finite coordinates with positive bounds')
+    die = declared_die
     bbox = top.bbox()
     dbu = layout.dbu
     if extent_from_deck:
