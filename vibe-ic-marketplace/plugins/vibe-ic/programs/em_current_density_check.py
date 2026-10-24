@@ -1245,8 +1245,6 @@ def validate_primary_ir(project: Path) -> Dict[str, Any]:
             old_root = None
             tool_state = _retained_native_path(
                 project, record["tool_state"], state_sha, None)
-        for row in [doc["native_basis"][key] for key in ("odb", "sdc", "spef", "tech_lef")] + doc["native_basis"]["liberties"]:
-            _retained_native_path(project, row["path"], row["sha256"], old_root)
         selected = None
         if record.get("input_mode") == "current_stapostpnr_odb":
             selected = record.get("selected_inputs")
@@ -1294,9 +1292,10 @@ def validate_primary_ir(project: Path) -> Dict[str, Any]:
                         or (not path.is_absolute() and ".." in path.parts)
                         or not digest or _native_sha(target) != digest):
                     raise ValueError(f"LibreLane IR current bytes changed: {name}")
-        # The retained-path checks above bind the same state/native basis,
-        # including existing digest-proven project relocation.  Do not reopen
-        # an unavailable historical pathname after validating its exact rebind.
+        # Preserve exact native-basis/relocation validation after the more
+        # specific current-selection checks, keeping their refusal diagnosis.
+        for row in [doc["native_basis"][key] for key in ("odb", "sdc", "spef", "tech_lef")] + doc["native_basis"]["liberties"]:
+            _retained_native_path(project, row["path"], row["sha256"], old_root)
         if selected is not None:
             native_odb = doc["native_basis"]["odb"]
             if (selected["odb"]["sha256"] != native_odb["sha256"]
