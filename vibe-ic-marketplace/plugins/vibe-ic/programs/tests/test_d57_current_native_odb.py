@@ -611,7 +611,7 @@ def test_primary_ir_accepts_exact_absolute_current_original_owner(
 
 @pytest.mark.parametrize('damage,reason', [
     ('wrong_owner', 'owner selection changed'),
-    ('wrong_path', 'current bytes changed'),
+    ('wrong_path', 'role binding changed'),
     ('wrong_role', 'role binding changed'),
     ('wrong_hash', 'current STA bytes changed'),
     ('missing', 'current STA bytes changed'),
