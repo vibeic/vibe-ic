@@ -1288,6 +1288,9 @@ def validate_primary_ir(project: Path) -> Dict[str, Any]:
                 absolute_current_owner = (population == "inputs" and path.is_absolute()
                                           and selected is not None and key in selected
                                           and row == selected[key])
+                if (population == "inputs" and selected is not None
+                        and (key not in selected or row != selected[key])):
+                    raise ValueError(f"LibreLane IR current STA role binding changed: {key}")
                 if ((path.is_absolute() and not absolute_current_owner)
                         or (not path.is_absolute() and ".." in path.parts)
                         or not digest or _native_sha(target) != digest):

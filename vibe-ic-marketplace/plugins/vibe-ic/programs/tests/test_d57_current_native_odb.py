@@ -612,6 +612,7 @@ def test_primary_ir_accepts_exact_absolute_current_original_owner(
 @pytest.mark.parametrize('damage,reason', [
     ('wrong_owner', 'owner selection changed'),
     ('wrong_path', 'current bytes changed'),
+    ('wrong_role', 'role binding changed'),
     ('wrong_hash', 'current STA bytes changed'),
     ('missing', 'current STA bytes changed'),
     ('malformed', 'binding malformed'),
@@ -627,6 +628,8 @@ def test_primary_ir_refuses_unbound_absolute_or_damaged_current_owner(
     elif damage == 'wrong_path':
         other = _write(tmp_path / 'other-path/neutral.def', original.read_text())
         doc['inputs']['def'] = {'path': str(other.resolve()), 'sha256': _sha(other)}
+    elif damage == 'wrong_role':
+        doc['inputs']['def'] = dict(selected['netlist'])
     elif damage == 'wrong_hash':
         doc['inputs']['def']['sha256'] = '1' * 64
         selected['def']['sha256'] = '1' * 64
