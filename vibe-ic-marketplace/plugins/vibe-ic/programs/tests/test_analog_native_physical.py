@@ -1,6 +1,7 @@
 """Native A11--A16 execution adapters, with real product parsers and helpers."""
 import hashlib
 import json
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -353,6 +354,83 @@ def test_a13_forwards_block_extraction_inputs_with_explicit_settings_precedence(
     physical.run_step('A13',project,{'name':'unit'},
                       {'config':{'A13':{'styles':['caller-style']}}},None)
     assert captured==[{'magic_core':core,'styles':['caller-style']}]
+
+
+@pytest.mark.parametrize("step", ["A14", "A15"])
+def test_incremental_post_inputs_reach_the_normal_native_dispatch_with_bounded_workers(project, monkeypatch, step):
+    bdir, _ = physical._paths(project, "unit")
+    declaration = {"kind": "incremental_capture", "manifest": {"path": "post.json", "sha256": "a" * 64},
+                   "workers": 8, "samples": 3}
+    put(bdir / "post_layout_inputs.json", declaration)
+    captured = []
+    monkeypatch.setattr(physical, "_native_call", lambda *a: captured.append(a[-1]) or
+                        {"status": "NOT_MEASURED", "outputs": []})
+    physical.run_step(step, project, {"name": "unit"},
+        {"config": {step: {"workers": 4}}, "workers": 2, "cpus": 3}, None)
+    assert captured == [{**declaration, "workers": 2, "cpus": 3}]
+
+
+@pytest.mark.parametrize("operation,status", [("resim", "PASS"), ("resim", "FAIL"),
+                                             ("statistics", "PASS"), ("statistics", "FAIL")])
+def test_incremental_post_dispatch_preserves_native_verdict_and_actual_operation(project, monkeypatch, operation, status):
+    import types
+    manifest = {"kind": "incremental_capture_post_layout", "stage": "POST", "project": str(project),
+                "block": "unit", "image": "selected-image"}
+    path = project / "post.json"
+    put(path, manifest)
+    calls = []
+    def run(*args, **kwargs):
+        calls.append((args, kwargs))
+        return {"status": status, "detail": "native result", "outputs": []}
+    monkeypatch.setitem(sys.modules, "analog_incremental_post_layout", types.SimpleNamespace(run=run))
+    cfg = {"kind": "incremental_capture", "manifest": {"path": str(path), "sha256": physical._sha(path)},
+           "workers": 2, "cpus": 3, "samples": 4}
+    fn = physical._resim if operation == "resim" else physical._statistics
+    result = fn(project, "unit", "selected-container", "selected-image", "pdk", cfg)
+    assert result["status"] == status
+    assert calls == [((manifest, "selected-container", "selected-image", 2, 3),
+                      {"operation": operation, **({"samples": 4} if operation == "statistics" else {})})]
+    assert result["native_inputs"]["manifest"]["sha256"] == physical._sha(path)
+
+
+@pytest.mark.parametrize("field,value", [("project", "/different-project"), ("block", "other-block"),
+                                        ("stage", "PRE"), ("image", "different-image")])
+def test_incremental_post_cannot_adopt_another_subject_or_pre_stage(project, monkeypatch, field, value):
+    import types
+    manifest = {"kind": "incremental_capture_post_layout", "stage": "POST", "project": str(project),
+                "block": "unit", "image": "selected-image"}
+    manifest[field] = value
+    path = project / "post.json"
+    put(path, manifest)
+    calls = []
+    monkeypatch.setitem(sys.modules, "analog_incremental_post_layout",
+                        types.SimpleNamespace(run=lambda *a, **k: calls.append(a)))
+    result = physical._resim(project, "unit", "container", "selected-image", "pdk",
+        {"kind": "incremental_capture", "manifest": {"path": str(path), "sha256": physical._sha(path)}})
+    assert result["status"] == "NOT_MEASURED"
+    assert calls == []
+
+
+@pytest.mark.parametrize("damage", ["changed", "missing"])
+@pytest.mark.parametrize("native_status,expected", [("PASS", "NOT_MEASURED"), ("FAIL", "FAIL")])
+def test_incremental_post_changed_plan_removes_pass_but_retains_native_failure(project, monkeypatch, native_status, expected, damage):
+    import types
+    path = project / "post.json"
+    put(path, {"kind": "incremental_capture_post_layout", "stage": "POST", "project": str(project),
+               "block": "unit", "image": "selected-image"})
+    before = physical._sha(path)
+    def run(*args, **kwargs):
+        if damage == "missing":
+            path.unlink()
+        else:
+            path.write_text(path.read_text() + "\n")
+        return {"status": native_status, "outputs": []}
+    monkeypatch.setitem(sys.modules, "analog_incremental_post_layout", types.SimpleNamespace(run=run))
+    result = physical._resim(project, "unit", "container", "selected-image", "pdk",
+        {"kind": "incremental_capture", "manifest": {"path": str(path), "sha256": before}})
+    assert result["status"] == expected
+    assert result["manifest_changed_during_execution"] is True
+    assert result["native_inputs"]["manifest"]["sha256"] == before
 
 
 @pytest.mark.parametrize("parasitic,expected", [(True, "PASS"), (False, "FAIL")])

@@ -60,6 +60,8 @@ def _input_views(project, name, step=None):
         paths.append(directory / "layout_inputs.json")
     if step in STEPS[12:]:
         paths.append(directory / "extraction_inputs.json")
+    if step in ("A14", "A15", "A19"):
+        paths.append(directory / "post_layout_inputs.json")
     if step in ("A06", "A07"):
         paths.append(directory / "measurement_studies.json")
     if step == "A16":

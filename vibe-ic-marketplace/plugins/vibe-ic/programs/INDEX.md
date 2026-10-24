@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1485
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1485)
+- **Total programs (excluding helpers / shims):** 1489
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1489)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1476 |
+| `any` | 1480 |
 
 ## Alphabetical listing
 
@@ -99,6 +99,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `analog_hw_tb_de10lite_budget_check` | any | — | DE10-Lite board-budget gate. |
 | `analog_incremental_capture` | any | — | Native held-input incremental conversions and coherent SNDR/ENOB. |
 | `analog_incremental_decimator` | any | — | R-0915-70: the matched decimator for an INCREMENTAL converter, DERIVED from the loop's own recurrence. |
+| `analog_incremental_post_layout` | any | — | Replay native incremental ADC PVT and mismatch cohorts after actual PEX. |
 | `analog_incremental_pvt` | any | — | Prepare, run, or independently collect actual incremental ADC PVT series. |
 | `analog_incremental_resolution` | any | — | what resolution an INCREMENTAL loop can actually reach, MEASURED on its own recurrence. |
 | `analog_incremental_statistics` | any | — | Prepare and replay foundry-mismatch incremental ADC chip cohorts. |
@@ -111,13 +112,16 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `analog_macro_rtl_interface_check` | any | — | the digital side of an analog macro's interface, which nothing compared. |
 | `analog_mc_yield_run` | any | — | REAL Monte-Carlo yield execution for the analog track (flow-completeness review P1-1). |
 | `analog_meas_from_spec_gen` | any | — | deterministic `.meas` statement generator from an analog block spec.json. |
-| `analog_native_em` | any | — | Grade native OP interconnect currents against source-provided PDK limits. |
+| `analog_mos_geometry` | any | — | Source-bound calibrated MOS geometry and declared wrapper finger counts. |
+| `analog_native_em` | any | — | Grade native OP/TRAN interconnect currents against source-provided PDK limits. |
 | `analog_native_erc` | any | — | Native well/tap electrical connectivity checks using the IHP LVS extractor. |
 | `analog_native_flow` | any | — | Run the A01-A19 analog track with existing native producers. |
 | `analog_native_front` | any | — | A01--A05 Default execution using the existing analog producers and consumers. |
+| `analog_native_interconnect_run` | any | — | Native unmerged geometry extraction and source-testbench OP/TRAN capture. |
 | `analog_native_physical` | any | — | Default analog A11--A16: call the existing native producers. |
 | `analog_native_pvt` | any | — | Consume actual PRE native PVT studies without rerunning or relabeling them. |
 | `analog_native_sim` | any | — | Default analog simulation steps A06--A10 using delivered DUT testbenches. |
+| `analog_native_waveform` | any | — | Read native ngspice real raw captures and integrate their actual time grid. |
 | `analog_netlist_connectivity_check` | any | — | deterministic floating-node / dangling-pin graph check for SPICE subcircuits. |
 | `analog_netlist_include_order_check` | any | — | deterministic SPICE model-include ordering gate. |
 | `analog_netlist_path_lint` | any | — | deterministic absolute-path lint for SPICE netlists. |
@@ -1557,7 +1561,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1476 programs)
+### `any` (1480 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `absence_verdict_names_its_search_space_check` — "not found" must say WHERE it looked.
@@ -1632,6 +1636,7 @@ _(no programs in this group)_
 - `analog_hw_tb_de10lite_budget_check` — DE10-Lite board-budget gate.
 - `analog_incremental_capture` — Native held-input incremental conversions and coherent SNDR/ENOB.
 - `analog_incremental_decimator` — R-0915-70: the matched decimator for an INCREMENTAL converter, DERIVED from the loop's own recurrence.
+- `analog_incremental_post_layout` — Replay native incremental ADC PVT and mismatch cohorts after actual PEX.
 - `analog_incremental_pvt` — Prepare, run, or independently collect actual incremental ADC PVT series.
 - `analog_incremental_resolution` — what resolution an INCREMENTAL loop can actually reach, MEASURED on its own recurrence.
 - `analog_incremental_statistics` — Prepare and replay foundry-mismatch incremental ADC chip cohorts.
@@ -1644,13 +1649,16 @@ _(no programs in this group)_
 - `analog_macro_rtl_interface_check` — the digital side of an analog macro's interface, which nothing compared.
 - `analog_mc_yield_run` — REAL Monte-Carlo yield execution for the analog track (flow-completeness review P1-1).
 - `analog_meas_from_spec_gen` — deterministic `.meas` statement generator from an analog block spec.json.
-- `analog_native_em` — Grade native OP interconnect currents against source-provided PDK limits.
+- `analog_mos_geometry` — Source-bound calibrated MOS geometry and declared wrapper finger counts.
+- `analog_native_em` — Grade native OP/TRAN interconnect currents against source-provided PDK limits.
 - `analog_native_erc` — Native well/tap electrical connectivity checks using the IHP LVS extractor.
 - `analog_native_flow` — Run the A01-A19 analog track with existing native producers.
 - `analog_native_front` — A01--A05 Default execution using the existing analog producers and consumers.
+- `analog_native_interconnect_run` — Native unmerged geometry extraction and source-testbench OP/TRAN capture.
 - `analog_native_physical` — Default analog A11--A16: call the existing native producers.
 - `analog_native_pvt` — Consume actual PRE native PVT studies without rerunning or relabeling them.
 - `analog_native_sim` — Default analog simulation steps A06--A10 using delivered DUT testbenches.
+- `analog_native_waveform` — Read native ngspice real raw captures and integrate their actual time grid.
 - `analog_netlist_connectivity_check` — deterministic floating-node / dangling-pin graph check for SPICE subcircuits.
 - `analog_netlist_include_order_check` — deterministic SPICE model-include ordering gate.
 - `analog_netlist_path_lint` — deterministic absolute-path lint for SPICE netlists.

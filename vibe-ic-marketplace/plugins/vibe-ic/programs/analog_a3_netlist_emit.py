@@ -162,7 +162,7 @@ PRODUCER = "analog_a3_netlist_emit"
 
 
 def producer_fingerprint() -> str:
-    """A digest of THIS producer's own source, stamped into the provenance.
+    """A digest of this producer and its geometry resolver, stamped into provenance.
 
     MEASURED (round 23): an artefact that names its producer but not WHICH
     producer cannot be told apart from a stale one, so the runner skipped the
@@ -172,7 +172,8 @@ def producer_fingerprint() -> str:
     """
     import hashlib
     try:
-        return hashlib.sha256(Path(__file__).read_bytes()).hexdigest()[:16]
+        return hashlib.sha256(Path(__file__).read_bytes() + b"\0" +
+            Path(__file__).with_name("analog_mos_geometry.py").read_bytes()).hexdigest()[:16]
     except OSError:                                     # pragma: no cover
         return ""
 PROVENANCE_SCHEMA = 1
@@ -911,6 +912,7 @@ def resolve_pdk_context(project: Path, pdk: str, container: str,
         "cross_pdk_bindings": cross,
         "library_family": lib_family,
         "deck_context": ctx_json,
+        "container": container,
     }
 
 
@@ -971,7 +973,7 @@ def _resolve_params(ir: Dict[str, Any], sv: Dict[str, float]
         for param in values}
     nominal = [f"{d['name']}.{p}"
                for d in ir.get("devices") or []
-               for p in ("w", "l", "m")
+               for p in ("w", "l", "m", "ng")
                if d.get(p) is not None
                and f"{d['name']}.{p}" not in spec_bound
                and f"{d['name']}.{p}" not in explicitly_sized]
@@ -1037,6 +1039,10 @@ def _validate_ir(ir: Dict[str, Any], pdkctx: Dict[str, Any],
     visible_pin_count: Dict[str, int] = {}
     for d in ir.get("devices") or []:
         role = d.get("role")
+        if d.get("ng") is not None and (role not in ("nmos", "pmos") or
+                isinstance(d["ng"], bool) or not isinstance(d["ng"], (int, float)) or
+                not math.isfinite(d["ng"]) or d["ng"] < 1 or d["ng"] != int(d["ng"])):
+            problems.append(f"device `{d.get('name')}` has invalid MOS finger count")
         nets = d.get("nets") or []
         want = role_terms.get(role)
         if want is not None and len(nets) != want:
@@ -1195,6 +1201,11 @@ def render_netlist(ir: Dict[str, Any], pdkctx: Dict[str, Any],
     # and `stage_deck_inputs` for the two staging sites that had to reproduce
     # the project's shape before this was emittable. A library outside the
     # project is a host installation and keeps its absolute path.
+    import analog_mos_geometry as _mos
+    _geometry = _mos.discover_context(pdkctx,
+        project=_project_root_of(deck_dir) if deck_dir is not None else None,
+        container=pdkctx.get("container", ""))
+    overrides, _finger_records = _mos.apply_fingers(ir, overrides, _geometry)
     block = ir["block"]
     metric = any(u == "metric" for u in
                  (pdkctx.get("geometry_units") or {}).values())
@@ -1256,7 +1267,15 @@ def render_netlist(ir: Dict[str, Any], pdkctx: Dict[str, Any],
         m = overrides.get(d["name"], {}).get("m", d.get("m"))
         if m is not None:
             parts.append(f"m={_fmt(float(m))}")
+        ng = overrides.get(d["name"], {}).get("ng", d.get("ng"))
+        if ng is not None:
+            formal = (_geometry.get(d["role"]) or {}).get("finger_parameter")
+            if not formal:
+                raise _mos.GeometryDomainError(d["name"] + ": unsupported wrapper finger parameter")
+            parts.append(f"{formal}={int(ng)}")
         for k, v in (d.get("params") or {}).items():
+            if k.casefold() in ("ng", "nf"):
+                continue
             parts.append(f"{k}={v}")
         L.append(" ".join(parts))
     L.append(f".ends {block}")
@@ -2716,6 +2735,17 @@ def _emit_for_block(project: Path, entry: Dict[str, Any], pdk: str,
         return rec
 
     overrides, spec_bound, nominal, env = _resolve_params(ir, sv)
+    import analog_mos_geometry as _mos
+    try:
+        _mos_context = _mos.discover_context(pdkctx, project, container)
+        overrides, _mos_records = _mos.apply_fingers(ir, overrides, _mos_context)
+    except _mos.GeometryDomainError as exc:
+        gap = write_gap(bdir, project, name, btype, "MOS_GEOMETRY_NOT_REPRESENTABLE", str(exc))
+        rec.update(action="refused", emitted=False, status="MOS_GEOMETRY_NOT_REPRESENTABLE",
+                   gap_path=str(gap.relative_to(project)), reason=str(exc))
+        return rec
+    pdkctx["mos_geometry"] = _mos_context
+    pdkctx["mos_fingering"] = _mos_records
     # A3 owns final geometry: these values include bindings A2 could not yet
     # see. Refuse before emitting a deck that A5 could only clamp or reject.
     bound_limit_violations = bound_geometry_limit_violations(ir, pdkctx,
@@ -3118,7 +3148,9 @@ def _emit_for_block(project: Path, entry: Dict[str, Any], pdk: str,
                     # vibe-ic#903 — the election and the domain it was scoped
                     # to, so the sidecar answers "why THIS device" without a
                     # reader re-deriving it from the lib names.
-                    role_model_election=pdkctx.get("role_model_election")),
+                    role_model_election=pdkctx.get("role_model_election"),
+                    mos_geometry=pdkctx.get("mos_geometry", {}),
+                    mos_fingering=pdkctx.get("mos_fingering", [])),
         "testbench": {"path": (f"tb_{name}.sp" if tb_text else None),
                       "conditions": tb_notes},
         "verification": {"checkers": findings, "simulation": sim},

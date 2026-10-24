@@ -539,8 +539,7 @@ def _nominal(project, name, config, options, run, *, step="A07"):
         if missing:
             studies = _bound_studies(project, name, config, options, run, step)
             if studies is not None:
-                return result(studies["status"], studies["detail"] if studies["status"] == "PASS" else
-                              missing + "; " + studies["detail"],
+                return result(studies["status"], studies["detail"],
                               metrics={**readiness, **studies["metrics"]}, outputs=studies["outputs"],
                               executions=studies["executions"], native_inputs=studies.get("native_inputs", {}))
             return result("NOT_MEASURED", missing, metrics=readiness)

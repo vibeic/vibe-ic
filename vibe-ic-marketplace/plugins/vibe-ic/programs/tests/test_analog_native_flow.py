@@ -280,6 +280,15 @@ def test_extraction_selector_invalidates_only_a13_and_its_consumers(tmp_path,mon
     assert not {'A13','A14'}&observed[-1]
 
 
+def test_incremental_post_plan_changes_invalidate_its_consumers_without_repeating_physical_producers(tmp_path):
+    root = project(tmp_path)
+    before = {step: native._input_views(root, "cell_alpha", step) for step in native.STEPS}
+    declaration = root / "phase3/analog/cell_alpha/post_layout_inputs.json"
+    declaration.write_text(json.dumps({"kind": "incremental_capture", "manifest": {"path": "post.json", "sha256": "a" * 64}}))
+    after = {step: native._input_views(root, "cell_alpha", step) for step in native.STEPS}
+    assert [step for step in native.STEPS if before[step] != after[step]] == ["A14", "A15", "A19"]
+
+
 def test_successful_exit_without_promised_native_output_is_not_pass(tmp_path, monkeypatch):
     root = project(tmp_path)
     monkeypatch.setattr(native, "_dispatch", lambda *arguments: {

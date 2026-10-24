@@ -176,6 +176,19 @@ def test_real_consumer_recomputes_native_current_and_pg_ranges(measured_case):
     assert str(project/'phase3/analog/unit/unit.gds') in views
 
 
+def test_frozen_executed_driver_is_preferred_to_mutable_source_path(measured_case):
+    project,setting,paths=measured_case
+    driver=put(project/'producer.py','executed source bytes\n')
+    frozen=put(paths['receipt'].parent/'executed_driver.py',driver.read_text())
+    rec=em._read(paths['receipt']);rec['inputs_before'][str(driver)]=em._sha(driver)
+    rec['executed_driver_copy']=str(frozen);put(paths['receipt'],rec)
+    first,views=grade(project,setting)
+    assert first['status']=='PASS' and str(frozen) in views and str(driver) not in views
+    driver.write_text('later unrelated producer implementation\n')
+    second,after=grade(project,setting)
+    assert second['status']=='PASS' and views==after
+
+
 def corrected_alias_case(measured_case):
     project,setting,paths=measured_case
     lines=paths['geometry'].read_text().splitlines();header=json.loads(lines[0]);row=json.loads(lines[1])
@@ -274,6 +287,62 @@ def test_rating_uses_native_temperature_and_refuses_source_condition_misbinding(
                                  {'conditions':{'temperature_c':105}})
     result=em.native_rating_context('',em.process_rating_context(TABLE),{})
     assert result['native_temperature_c'] is None and result['comparison_scope']=='numeric current comparison only'
+
+
+def transient_case(measured_case,scale):
+    import numpy as np
+    from analog_native_waveform import NativeRaw,window_statistics
+    project,setting,paths=measured_case;work=paths['receipt'].parent
+    analysis={'kind':'TRAN','step_s':.001,'stop_s':2,'start_s':0,'temperature_c':27,'window_s':[0,2]}
+    raw=work/'tran.raw'
+    matrix=np.array([[0,-scale,0],[.1,-.8*scale,0],[1,scale,0],[2,3*scale,0]],dtype='<f8')
+    raw.write_bytes(b'Title: native fixture\nPlotname: Transient Analysis\nFlags: real\nNo. Variables: 3\nNo. Points: 4\nVariables:\n0 time time\n1 v(a) voltage\n2 v(b) voltage\nBinary:\n'+matrix.tobytes())
+    stats=window_statistics(NativeRaw(raw),analysis['window_s'],[('a','b',1.0005)])[0]
+    mapping=json.loads(paths['currents'].read_text());mapping.pop('current_a');mapping.pop('voltage_v')
+    mapping['current_statistics_a']=stats;paths['currents'].write_text(json.dumps(mapping)+'\n')
+    settings=put(work/'settings.json',{'analysis':analysis})
+    deck=work/'op.sp';deck.write_text('xdut a b unit\n.tran .001 2 0\n.end\n')
+    rec=em._read(paths['receipt']);rec.update(analysis=analysis,deck=str(deck))
+    rec['inputs_before'].update({str(p):em._sha(p) for p in (settings,deck)})
+    rec['outputs'].pop(str(paths['capture']));rec['outputs'].update({str(p):em._sha(p) for p in (raw,paths['currents'])})
+    put(paths['receipt'],rec)
+    return project,setting,paths,stats
+
+
+@pytest.mark.parametrize('scale,expected',[(.0001,'PASS'),(.001,'NOT_MEASURED')])
+def test_native_transient_current_uses_integrals_and_peak_excess_is_not_lifetime_fail(measured_case,scale,expected):
+    project,setting,_,statistics=transient_case(measured_case,scale)
+    result,_=grade(project,setting)
+    assert result['status']==expected and result['measurement_status']=='PASS'
+    assert statistics['avg']==pytest.approx(scale/1.0005)
+    assert result['pg_voltage_ranges']['a']['min_v']==-scale
+    assert result['pg_voltage_ranges']['a']['max_v']==3*scale
+    assert result['feed_voltages']=={'a':3*scale,'b':0.}
+    assert result['analysis']['window_s']==[0,2]
+    if expected=='NOT_MEASURED':
+        assert result['violations']==[]
+        assert result['unmeasured'][0]['numeric_peak_comparison']=='ABOVE_DC_TABLE'
+        assert result['unmeasured'][0]['current_statistics_a']==statistics
+
+
+@pytest.mark.parametrize('damage',['statistics','settings','deck','native-failure'])
+def test_transient_stats_and_executed_analysis_are_current_and_native_fail_stays_fail(measured_case,damage):
+    project,setting,paths,_=transient_case(measured_case,.0001)
+    rec=em._read(paths['receipt'])
+    if damage=='statistics':
+        row=json.loads(paths['currents'].read_text());row['current_statistics_a']['peak_abs']=0
+        paths['currents'].write_text(json.dumps(row)+'\n');rec['outputs'][str(paths['currents'])]=em._sha(paths['currents'])
+    elif damage=='settings':rec['analysis']['window_s']=[.1,2]
+    elif damage=='deck':
+        deck=Path(rec['deck']);deck.write_text(deck.read_text().replace('.tran .001 2 0','.tran .002 2 0'))
+        rec['inputs_before'][str(deck)]=em._sha(deck)
+    else:
+        paths['log'].write_text(';;RESIDUAL_FAIL actual native refusal\n')
+        rec['outputs'][str(paths['log'])]=em._sha(paths['log'])
+    put(paths['receipt'],rec)
+    if damage=='native-failure':assert grade(project,setting)[0]['status']=='FAIL'
+    else:
+        with pytest.raises(ValueError):grade(project,setting)
 
 
 @pytest.mark.parametrize('wrong_gds',[False,True])

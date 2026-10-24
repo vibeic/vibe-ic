@@ -1486,11 +1486,9 @@ class Plan:
     do not touch is a producer nobody can audit:
 
       * every device sits in ONE row, so each occupies its own x interval;
-      * the terminals of one net at one height are strapped together on
-        metal2 at a height just above or just below that row of contacts —
-        two nets sharing a contact row take OPPOSITE sides, which is what
-        keeps an interleaved multi-finger device's drain strap clear of its
-        source stubs;
+      * multi-contact terminals leave on parallel metal3 stubs and join a
+        metal2 strap outside the device. A via joins every stub to its own
+        strap; another net's stub can cross that strap without joining it;
       * each strap escapes sideways on metal3 into the corridor between two
         devices and drops to its net's metal2 rail below the row. Lanes in a
         corridor are handed out in order of the height they come from, so an
@@ -2392,23 +2390,24 @@ def build_plan(devs: Sequence[dict], ports: Sequence[str],
             groups.append({"net": net, "y": y, "labels": glabs,
                            "level": min(l["level"] for l in glabs)})
 
-        # A group of ONE contact escapes at its own height. A group of SEVERAL
-        # contacts on one row — the fingers of a multi-finger device — must
-        # first be tied together, and the strap cannot sit on that row: the
-        # other net's fingers are interleaved with it. So it is reserved a
-        # height OUTSIDE the device, alternately below and above, one strap
-        # per row of its own. Every stub then runs away from the shared
-        # contact row in one direction only, which is what keeps a drain
-        # strap clear of the source stubs it passes.
+        # Reserve a separate outside row for each multi-contact group.
+        # Collection uses M3 stubs and M2 straps: alternating two M2 straps
+        # above/below is insufficient when gate, source and drain all have
+        # several contacts. The third group's stubs would cross the first
+        # group's strap on the same conductor plane.
         bx1, by1, bx2, by2 = cell["bbox"]
         n_below = n_above = 0
+        split_y = (min(g["y"] for g in groups) + max(g["y"] for g in groups)) / 2 if groups else 0
         for g in sorted(groups, key=lambda g: (-len(g["labels"]), g["y"])):
             if len(g["labels"]) == 1:
                 g["escape_y"] = g["y"]
                 g["strapped"] = False
                 continue
             g["strapped"] = True
-            if n_below <= n_above:
+            # Leave lower and upper contact rows away from one another.
+            # In particular, a gate above interleaved diffusion contacts
+            # must not send its M3 stub back through their terminal vias.
+            if g["y"] <= split_y:
                 n_below += 1
                 g["escape_y"] = by1 - n_below * pitch
             else:
@@ -2616,6 +2615,26 @@ def build_plan(devs: Sequence[dict], ports: Sequence[str],
                                                    pitch, extra_trunk)):
                 g["lane_x"] = base + step * offset
 
+    # Reserve EVERY multi-contact M3 stub before any collection via. Native
+    # M2 pads can use diagonal clearance; extending them straight through
+    # another terminal's row would destroy that clearance.
+    # An island must see later groups' stubs as well as earlier ones.
+    for d in per_dev:
+        for g in d["groups"]:
+            if not g["strapped"]:
+                continue
+            endpoints = []
+            ey = g["abs_escape_y"]
+            for lx, ly, level in g["abs_labels"]:
+                fr = friendly_conductor(d["rows"], f"metal{level}", lx, ly,
+                                        reach=geo.default_space)
+                cx, cy = _via_stack(plan, g["net"], lx, ly, level, geo, top=3,
+                                    sites=sites, friendly=fr, dev=d["dev"])
+                plan.paint(g["net"], "metal3", cx - hw3, min(cy, ey) - hw3,
+                           cx + hw3, max(cy, ey) + hw3)
+                endpoints.append((cx, ey))
+            g["stub_endpoints"] = endpoints
+
     for d in per_dev:
         for g in d["groups"]:
             net, ey, lane = g["net"], g["abs_escape_y"], g["lane_x"]
@@ -2638,23 +2657,23 @@ def build_plan(devs: Sequence[dict], ports: Sequence[str],
                     plan.paint(net, tap_metal_contact, tx - hp, ty - hp,
                                tx + hp, ty + hp)
             if g["strapped"]:
-                # THE STUB STARTS WHERE THE STACK ENDED UP. An island that
-                # was moved a lambda off its label and then wired from the
-                # label is not connected to itself.
+                # Cross other groups' vertical M3 stubs on M2, joining only
+                # this group's endpoints. Use the placed via coordinates,
+                # including a local M2 connection if its island moved.
                 xs = []
-                for (lx, ly, level) in g["abs_labels"]:
-                    fr = friendly_conductor(d["rows"], f"metal{level}", lx, ly,
-                                            reach=geo.default_space)
-                    cx, cy = _via_stack(plan, net, lx, ly, level, geo, top=2,
-                                        sites=sites, friendly=fr,
-                                        dev=d["dev"])
+                for sx, sy in g["stub_endpoints"]:
+                    cx, cy = _via_stack(plan, net, sx, sy, 3, geo, top=2,
+                                        sites=sites, dev=d["dev"])
+                    plan.paint(net, "metal3", min(sx, cx) - hw3, sy - hw3,
+                               max(sx, cx) + hw3, sy + hw3)
+                    plan.paint(net, "metal3", cx - hw3, min(sy, cy) - hw3,
+                               cx + hw3, max(sy, cy) + hw3)
+                    plan.paint(net, "metal2", cx - hw2, min(cy, ey) - hw2,
+                               cx + hw2, max(cy, ey) + hw2)
                     xs.append(cx)
-                    plan.paint(net, "metal2", cx - hw2, min(cy, ey),
-                               cx + hw2, max(cy, ey))
                 plan.paint(net, "metal2", min(xs) - hw2, ey - hw2,
                            max(xs) + hw2, ey + hw2)
                 joint = max(xs) if g["side"] == "right" else min(xs)
-                _via_stack(plan, net, joint, ey, 2, geo, top=3, sites=sites)
             elif g["level"] > ROUTE_LEVEL:
                 # THE TERMINAL IS DELIVERED ABOVE THE ROUTING LAYER, and
                 # every plane between the two is the DEVICE'S OWN.
@@ -2735,9 +2754,14 @@ def build_plan(devs: Sequence[dict], ports: Sequence[str],
                     # one moved island from re-ordering every lane.
                     plan.paint(net, "metal3", cx - hw3, min(cy, ey) - hw3,
                                cx + hw3, max(cy, ey) + hw3)
-            # across to the lane on metal3, then straight down to the rail
-            plan.paint(net, "metal3", min(joint, lane) - hw3, ey - hw3,
-                       max(joint, lane) + hw3, ey + hw3)
+            # The collection strap stays on M2 out to its lane, passing
+            # other M3 stubs without joining them. Single contacts retain
+            # their ordinary M3 escape.
+            esc_layer, esc_half = ("metal2", hw2) if g["strapped"] else ("metal3", hw3)
+            plan.paint(net, esc_layer, min(joint, lane) - esc_half, ey - esc_half,
+                       max(joint, lane) + esc_half, ey + esc_half)
+            if g["strapped"]:
+                _via_stack(plan, net, lane, ey, 2, geo, top=3, sites=sites)
             trunk_half = max(pg_widths.get(net, {}).get(3, geo.wire[3]) // 2, 1)
             plan.paint(net, "metal3", lane - trunk_half, rail_y[net],
                        lane + trunk_half, ey)

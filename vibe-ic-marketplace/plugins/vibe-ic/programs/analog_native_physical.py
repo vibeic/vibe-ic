@@ -127,6 +127,14 @@ def run_step(step_id: str, project: Path, block: dict, options: dict,
         if not isinstance(extraction_inputs, dict):
             return _result("NOT_MEASURED", "extraction execution inputs must be an object")
         cfg = {**extraction_inputs, **cfg}
+    if step_id in ("A14", "A15") and (bdir / "post_layout_inputs.json").is_file():
+        try:
+            post_inputs = json.loads((bdir / "post_layout_inputs.json").read_bytes())
+        except (OSError, ValueError) as exc:
+            return _result("NOT_MEASURED", f"post-layout execution inputs unreadable: {exc}")
+        if not isinstance(post_inputs, dict):
+            return _result("NOT_MEASURED", "post-layout execution inputs must be an object")
+        cfg = {**post_inputs, **cfg}
     if step_id == "A16":
         # Like nominal measurement studies, mission/report inputs may be
         # supplied beside the block without changing all upstream inputs.
@@ -140,12 +148,13 @@ def run_step(step_id: str, project: Path, block: dict, options: dict,
         if not isinstance(samples, int) or isinstance(samples, bool) or samples < 2:
             return _result("NOT_MEASURED", "post_mc_samples must be an integer >= 2")
         cfg["samples"] = samples
-    if step_id == "A15" and options.get("workers") is not None:
+    if step_id in ("A14", "A15") and options.get("workers") is not None:
         budget = options["workers"]
         selected_workers = cfg.get("workers", budget)
         if any(not isinstance(value, int) or isinstance(value, bool) or value < 1 for value in (budget, selected_workers)):
             return _result("NOT_MEASURED", "statistical workers and execution worker budget must be positive integers")
         cfg["workers"] = min(budget, selected_workers)
+        cfg["cpus"] = options.get("cpus", budget)
     if step_id == "A14":
         current = ((options.get("previous_results") or {}).get("A07") or {}).get(name)
         if isinstance(current, dict):
@@ -792,8 +801,46 @@ def _resim_studies(project: Path, name: str, container: str, image: str, pdk: st
         metrics={"study_groups": groups, "corners": records, "pre_gaps": gaps}, native_inputs=inputs)
 
 
+def _incremental_post_layout(project: Path, name: str, container: str, image: str,
+                             cfg: dict, operation: str) -> dict:
+    """Dispatch the same delivered block to its native incremental POST plan."""
+    try:
+        reference = cfg.get("manifest")
+        if not isinstance(reference, dict) or not reference.get("path"):
+            raise ValueError("incremental POST requires a manifest path and digest")
+        path = Path(reference["path"])
+        path = path if path.is_absolute() else project / path
+        if not path.is_file() or reference.get("sha256") != _sha(path):
+            raise ValueError("incremental POST manifest is absent or changed")
+        manifest = _read(path)
+        if (manifest.get("kind") != "incremental_capture_post_layout" or manifest.get("stage") != "POST"
+                or manifest.get("block") != name or Path(str(manifest.get("project", ""))).resolve() != project.resolve()
+                or not image or manifest.get("image") != image):
+            raise ValueError("incremental POST manifest does not belong to this delivered block/runtime")
+        import analog_incremental_post_layout as post
+        result = post.run(manifest, container, image, cfg.get("workers", 1), cfg.get("cpus", 1),
+                          operation=operation, **({"samples": cfg["samples"]}
+                                                 if operation == "statistics" and "samples" in cfg else {}))
+        if result.get("status") not in ("PASS", "FAIL", "NOT_MEASURED"):
+            raise ValueError("incremental POST producer returned no terminal result")
+        try:
+            drift = _sha(path) != reference["sha256"]
+        except OSError:
+            drift = True
+        if drift:
+            result["manifest_changed_during_execution"] = True
+            if result["status"] != "FAIL":
+                result.update(status="NOT_MEASURED", detail="incremental POST manifest changed during native execution")
+        result.setdefault("native_inputs", {})["manifest"] = {"path": str(path.resolve()), "sha256": reference["sha256"]}
+        return result
+    except (OSError, ValueError, KeyError, TypeError, ImportError) as exc:
+        return _result("NOT_MEASURED", f"incremental POST could not execute: {exc}")
+
+
 def _resim(project: Path, name: str, container: str, image: str, pdk: str,
            cfg: dict, *, _compound: bool = False) -> dict:
+    if cfg.get("kind") == "incremental_capture":
+        return _incremental_post_layout(project, name, container, image, cfg, "resim")
     import analog_a7_post_layout_emit as a7
     import analog_real_corner_sweep as ars
     import ams_analysis_select
@@ -1237,6 +1284,8 @@ def _grade_measurement_population(project: Path, name: str, study: Path, native:
 
 def _statistics(project: Path, name: str, container: str, image: str, pdk: str,
                 cfg: dict, *, _one_style: bool = False) -> dict:
+    if cfg.get("kind") == "incremental_capture":
+        return _incremental_post_layout(project, name, container, image, cfg, "statistics")
     import analog_mc_yield_run as mc
     import analog_a7_post_layout_emit as a7
     import shutil
@@ -1426,10 +1475,12 @@ def _ir_from_native_interconnect(measured: dict, setting: dict, work: Path) -> d
             report = {"max_drop_mv": float(1000 * (droop + bounce)), "vdd": float(number(vdd) - number(vss)),
                       "supply_droop_mv": float(1000 * droop), "ground_bounce_mv": float(1000 * bounce),
                       "case": case.get("name"), "native_receipt": case.get("receipt"),
+                      "analysis": case.get("analysis") or {"kind": "OP"},
+                      "feed_voltage_ranges": case.get("feed_voltage_ranges", {}),
                       "rail_networks": {"vdd": power, "vss": ground},
                       "budget_source": "explicit project setting" if "budget_pct" in (setting.get("arguments") or {})
                           else "existing ir_drop_budget_check default; not a source-specified budget",
-                      "scope": "conservative static IR bound for this supplied native OP case"}
+                      "scope": "conservative native voltage-envelope IR bound for the supplied analysis/window"}
             _write(path, report)
             passed, grade = ir.evaluate(path, None, budget)
             records.append({"status": "PASS" if passed else "FAIL", "measurement": report, "gate": grade})
@@ -1437,7 +1488,7 @@ def _ir_from_native_interconnect(measured: dict, setting: dict, work: Path) -> d
         states = [row["status"] for row in records]
         return {"status": "FAIL" if "FAIL" in states else "PASS" if states else "NOT_MEASURED",
                 "cases": records, "outputs": outputs,
-                "scope": "only supplied full-RC native DC cases; no transient or omitted mission coverage"}
+                "scope": "supplied accepted full-RC OP or transient windows; omitted mission conditions remain unmeasured"}
     except (ValueError, TypeError) as exc:
         return {"status": "FAIL" if any(row["status"] == "FAIL" for row in records) else "NOT_MEASURED",
                 "detail": str(exc), "cases": records, "outputs": outputs}
@@ -1588,6 +1639,7 @@ def _mission_from_native_interconnect(measured: dict) -> dict:
                         ambiguous.append(observation)
             cases.append({"status": "FAIL" if violations else "NOT_MEASURED" if ambiguous else "PASS", "case": case.get("name"),
                           "devices": len(devices), "terminal_pairs": 6 * len(devices),
+                          "analysis": case.get("analysis") or {"kind": "OP"},
                           "violations": violations, "ambiguous_intrinsic_branch": ambiguous,
                           "limits": limits, "limit_sources": sources})
         if not _current_native_views(views):
@@ -1595,7 +1647,7 @@ def _mission_from_native_interconnect(measured: dict) -> dict:
         return {"status": "FAIL" if any(row["status"] == "FAIL" for row in cases) else
                           "NOT_MEASURED" if not cases or any(row["status"] == "NOT_MEASURED" for row in cases)
                           else "PASS", "cases": cases,
-                "scope": "MOS terminal stress only for the supplied accepted full-RC OP cases; no transient/lifetime claim"}
+                "scope": "MOS terminal magnitudes for supplied accepted full-RC analyses/windows; lifetime is unmeasured"}
     except (OSError, ValueError, KeyError, TypeError) as exc:
         return {"status": "FAIL" if any(row["status"] == "FAIL" for row in cases) else "NOT_MEASURED",
                 "detail": str(exc), "cases": cases}

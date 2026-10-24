@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Grade native OP interconnect currents against source-provided PDK limits.
+"""Grade native OP/TRAN interconnect currents against source-provided PDK limits.
 
 Settings contain limits_source (the PDF copy/hash receipt), magic_tech (the
 actual extraction technology, local or in the selected container), and cases.
@@ -7,8 +7,8 @@ Each case supplies receipt, geometry and optional unit_binding/spice paths.
 An optional same-layout native pv_receipt enables conservative sheet-tile
 density bounds below the foundry's drawn-width regime; it cannot approve a
 subminimum drawn wire or turn an excessive bound into a measured violation.
-These are ordinary measured inputs. This module does not run a second OP or
-turn selected DC cases into a transient/whole-mission acceptance claim.
+These are ordinary measured inputs. This module does not resimulate a DUT or
+turn selected cases/windows into a whole-mission acceptance claim.
 """
 from __future__ import annotations
 
@@ -175,6 +175,14 @@ def material_map(technology: str) -> tuple[dict,set]:
 
 
 def read_op_capture(path: Path) -> dict:
+    with path.open('rb') as src:
+        binary=b'Binary:' in src.read(4*1024*1024)
+    if binary:
+        from analog_native_waveform import NativeRaw
+        raw=NativeRaw(path)
+        if raw.plot!='Operating Point' or raw.shape[0]!=1:
+            raise ValueError('native OP capture must contain one point')
+        return raw.row()
     lines=path.read_text().splitlines()
     if not any(re.match(r'(?i)^Plotname:\s*Operating Point\s*$',x) for x in lines):
         raise ValueError('native capture is not an operating point')
@@ -188,6 +196,31 @@ def read_op_capture(path: Path) -> dict:
     out={re.sub(r'^v\((.*)\)$',r'\1',name):v for name,v in zip(names,values)}
     out['0']=0.0
     return out
+
+
+def supply_wave_statistics(capture,window,deck: str,supplies: dict,external: dict) -> dict:
+    """Measure explicitly selected native voltage-source branches and I*V."""
+    from analog_native_waveform import window_statistics,product_statistics
+    from _analog_a8_extraction_wrapper import logical_lines
+    if not isinstance(supplies,dict):raise ValueError('supply selections must map rails to native voltage sources')
+    cards=[line.split() for line in logical_lines(deck)]
+    result={}
+    for net,identity in supplies.items():
+        if not isinstance(identity,str) or not identity:raise ValueError('native supply source name required')
+        sources=[card for card in cards if card and card[0].lower()==identity.lower()
+                 and card[0].lower().startswith('v')]
+        if len(sources)!=1 or len(sources[0])<4:raise ValueError('declared native supply source is absent/ambiguous')
+        name,positive,negative=sources[0][:3]
+        if positive.lower()!=external.get(net.lower(),net.lower()):
+            raise ValueError('native supply source does not feed its declared rail')
+        vectors=[v for v in (f'i({name.lower()})',name.lower()+'#branch') if v in capture.index]
+        if len(vectors)!=1:raise ValueError('native supply branch current is absent/ambiguous')
+        voltage=(positive.lower(),negative.lower(),1);current=(vectors[0],'0',-1)
+        result[net]={'source':name,'positive_node':positive,'negative_node':negative,
+            'current_vector':vectors[0],'current_a':window_statistics(capture,window,[current])[0],
+            'voltage_v':window_statistics(capture,window,[voltage])[0],
+            'power_w':product_statistics(capture,window,voltage,current),'window_s':window}
+    return result
 
 
 def evaluate_row(row: dict, rules: list, width: Fraction|None, *, drc_qualified=False) -> dict:
@@ -252,7 +285,8 @@ def _vector_resolver(project: Path, block: str, rec: dict, raw: Path):
     input_paths=[Path(p) for p in rec.get('inputs_before',{})]
     wp=[p for p in input_paths if p.name=='interface.sp']
     pp=[p for p in input_paths if p.name=='post.sp']
-    dp=[p for p in input_paths if p.name=='op.sp']
+    dp=([Path(rec['deck'])] if rec.get('deck') and Path(rec['deck']) in input_paths
+        else [p for p in input_paths if p.name=='op.sp'])
     if len(wp)!=1 or len(pp)!=1 or len(dp)!=1 or wp[0].read_text()!=expected:
         raise ValueError('actual native current hierarchy inputs absent or changed')
     def instance(path,model):
@@ -361,11 +395,13 @@ def grade_case(project: Path, setting: dict, limits: dict, aliases: dict, known:
     # the exact executed copy must match the already-recorded source hash.
     for p,digest in (rec.get('inputs_before') or {}).items():
         actual=Path(p)
-        if actual.is_file() and _sha(actual)==digest: consume(actual,digest)
-        elif rec.get('executed_driver_copy') and _sha(Path(rec['executed_driver_copy']))==digest:
+        if rec.get('executed_driver_copy') and _sha(Path(rec['executed_driver_copy']))==digest:
             consume(rec['executed_driver_copy'],digest)
+        elif actual.is_file() and _sha(actual)==digest: consume(actual,digest)
         else: raise ValueError('native electrical input changed: '+p)
-    captures=[Path(p) for p in outputs if p.endswith('/op.raw')]
+    analysis=rec.get('analysis') or {'kind':'OP'}
+    transient=str(analysis.get('kind','OP')).upper()=='TRAN'
+    captures=[Path(p) for p in outputs if p.endswith('/tran.raw' if transient else '/op.raw')]
     currents=[Path(p) for p in outputs if p.endswith('/currents.jsonl')]
     if len(logs)!=1 or len(captures)!=1 or len(currents)!=1:
         raise ValueError('native log/capture/current mapping absent or ambiguous')
@@ -447,12 +483,39 @@ def grade_case(project: Path, setting: dict, limits: dict, aliases: dict, known:
         if not corrected or not row['ideal_short']:
             key=(row['node_a'],row['node_b'],row['type'],row['resistance_ohm'])
             bucket[key].append(row)
-    voltages=read_op_capture(captures[0]);results=[];excluded=collections.Counter();ranges={}
+    if transient:
+        from analog_native_waveform import NativeRaw,window_statistics
+        settings_paths=[Path(p) for p in rec.get('inputs_before',{}) if Path(p).name=='settings.json']
+        source_settings=_read(settings_paths[0]) if len(settings_paths)==1 else {}
+        if source_settings.get('analysis')!=analysis:
+            raise ValueError('transient analysis differs from its source settings')
+        deck_path=Path(rec.get('deck') or next((p for p in rec.get('inputs_before',{}) if Path(p).name=='op.sp'),''))
+        from _analog_a8_extraction_wrapper import logical_lines
+        commands=[line.split()[1:] for line in logical_lines(deck_path.read_text())
+                  if line.lower().startswith('.tran ')]
+        expected=[analysis[key] for key in ('step_s','stop_s','start_s')]
+        if len(commands)!=1 or list(map(float,commands[0]))!=expected:
+            raise ValueError('transient analysis differs from the executed native deck')
+        if rating['native_temperature_c'] is not None and rating['native_temperature_c']!=analysis.get('temperature_c'):
+            raise ValueError('transient temperature differs from the native transcript')
+        capture=NativeRaw(captures[0]);voltages=capture.row();window=analysis['window_s']
+        voltage_names=[name for name in capture.names if name!='time']
+        voltage_stats=dict(zip(voltage_names,window_statistics(capture,window,
+                           [(name,'0',1) for name in voltage_names])))
+        voltage_stats['0']={'min':0.,'max':0.,'avg':0.,'rms':0.,'peak_abs':0.,'abs_avg':0.}
+    else:
+        voltages=read_op_capture(captures[0]);voltage_stats={}
+    results=[];excluded=collections.Counter();ranges={}
     resolver,external=_vector_resolver(project,block,rec,raw) if block is not None else (None,{})
     # These mappings identify each measured native vector and actual SPICE
     # resistor. Recompute every current from the hashed capture and circuit.
-    spice={parts[0].lower():(parts[1:3],resistance)
-           for parts,_,resistance in bind_native_resistors(header,geometry_rows,raw.read_text())}
+    bound=bind_native_resistors(header,geometry_rows,raw.read_text())
+    spice={parts[0].lower():(parts[1:3],resistance) for parts,_,resistance in bound}
+    if transient:
+        if resolver is None:raise ValueError('transient current requires its native hierarchy resolver')
+        statistics=window_statistics(capture,window,
+            [(resolver(parts[1]),resolver(parts[2]),resistance) for parts,_,resistance in bound])
+        native_stats={parts[0].lower():stats for (parts,_,_),stats in zip(bound,statistics)}
     for line in currents[0].open():
         mapping=json.loads(line)
         key=(mapping['node_a'],mapping['node_b'],mapping['type'],mapping['resistance_ohm'])
@@ -469,19 +532,35 @@ def grade_case(project: Path, setting: dict, limits: dict, aliases: dict, known:
             raise ValueError('native SPICE resistance differs from emitted EXT geometry row')
         if resolver is not None and [resolver(n) for n in nodes]!=mapping['voltage_vectors']:
             raise ValueError('native voltage vectors do not address the actual resistor endpoints')
-        va,vb=[voltages[v.lower()] for v in mapping['voltage_vectors']]
-        if [va,vb]!=mapping['voltage_v'] or (va-vb)/resistance!=mapping['current_a']:
-            raise ValueError('current mapping differs from actual native voltage/resistance')
-        span=ranges.setdefault(row['network'],{'min_v':min(va,vb),'max_v':max(va,vb),'sampled_endpoints':0})
-        span['min_v']=min(span['min_v'],va,vb);span['max_v']=max(span['max_v'],va,vb);span['sampled_endpoints']+=2
+        if transient:
+            current_stats=native_stats[mapping['spice_resistor'].lower()]
+            if current_stats!=mapping.get('current_statistics_a'):
+                raise ValueError('current statistics differ from the actual native time grid')
+            value=current_stats['peak_abs']
+            va,vb=[voltage_stats[v.lower()] for v in mapping['voltage_vectors']]
+            low,high=min(va['min'],vb['min']),max(va['max'],vb['max'])
+        else:
+            va,vb=[voltages[v.lower()] for v in mapping['voltage_vectors']]
+            if [va,vb]!=mapping['voltage_v'] or (va-vb)/resistance!=mapping['current_a']:
+                raise ValueError('current mapping differs from actual native voltage/resistance')
+            value=(va-vb)/resistance;low,high=min(va,vb),max(va,vb)
+        span=ranges.setdefault(row['network'],{'min_v':low,'max_v':high,'sampled_endpoints':0})
+        span['min_v']=min(span['min_v'],low);span['max_v']=max(span['max_v'],high);span['sampled_endpoints']+=2
         material=aliases.get(row['type']) or aliases.get(row.get('type_long'))
         if not material:
             if row['type'] not in known:raise ValueError('native material is not declared by extraction technology')
             excluded[row['type']]+=1;continue
         if material not in limits:raise ValueError('foundry interconnect current limit absent: '+material)
         width=None if row['is_contact'] else row.get('width_grid',0)*scale
-        verdict=evaluate_row(dict(row,current_a=(va-vb)/resistance),limits[material],width,
+        verdict=evaluate_row(dict(row,current_a=value),limits[material],width,
                              drc_qualified=drc_qualified)
+        if transient:
+            verdict['current_statistics_a']=current_stats
+            verdict['current_scope']='measured transient window; peak comparison is a sufficient DC-capacity upper bound only'
+            if verdict['status']=='FAIL':
+                verdict['numeric_peak_comparison']='ABOVE_DC_TABLE'
+                verdict['status']='NOT_MEASURED'
+                verdict['detail']='peak exceeds the DC table; no source AC/lifetime derating rule is supplied'
         results.append(dict(verdict,material=material,resistor=mapping['spice_resistor'],network=row['network']))
     if spice or any(bucket.values()):raise ValueError('native resistor/geometry/current multiplicity differs')
     for row in ideals:
@@ -500,6 +579,15 @@ def grade_case(project: Path, setting: dict, limits: dict, aliases: dict, known:
             consume(topology);roles=_read(topology).get('rails') or {}
     rail_vectors=setting.get('rails') or {net:external.get(str(net).lower(),str(net).lower()) for net in roles.values()}
     feeds={net:voltages[vector.lower()] for net,vector in rail_vectors.items() if vector.lower() in voltages}
+    feed_ranges={}
+    if transient:
+        for role,net in roles.items():
+            vector=rail_vectors.get(net,'').lower()
+            if vector in voltage_stats:
+                stat=voltage_stats[vector];feed_ranges[net]={'min_v':stat['min'],'max_v':stat['max']}
+                feeds[net]=stat['min'] if role.lower() in ('vss','gnd','ground') else stat['max']
+        supply_stats=supply_wave_statistics(capture,window,deck_path.read_text(),
+                                           source_settings.get('supplies') or {},external)
     stress={}
     if block is not None:
         try:
@@ -508,9 +596,28 @@ def grade_case(project: Path, setting: dict, limits: dict, aliases: dict, known:
             stress=mos_stress((project/f'phase3/analog/{block}/{block}.sp').read_text(),
                               _read(project/f'phase3/analog/{block}/topology.json'),block,
                               raw.read_text(),texts,voltages,resolver)
+            if transient and stress.get('status')=='PASS':
+                pairs=('gs','gd','gb','ds','db','sb');expressions=[]
+                for device in stress['devices']:
+                    vectors=device['terminal_vectors']
+                    expressions.extend((vectors[pair[0]],vectors[pair[1]],1) for pair in pairs)
+                maxima=window_statistics(capture,window,expressions);position=0;models={}
+                for device in stress['devices']:
+                    device.pop('terminal_voltages_v',None)
+                    device['terminal_voltage_ranges_v']={terminal:voltage_stats[vector]
+                        for terminal,vector in device['terminal_vectors'].items()}
+                    device['pairs_v']={pair:maxima[position+i]['peak_abs'] for i,pair in enumerate(pairs)}
+                    position+=len(pairs)
+                    for pair,value in device['pairs_v'].items():
+                        prior=models.setdefault(device['model'],{}).get(pair,{'value_v':-1})
+                        if value>prior['value_v']:models[device['model']][pair]={'value_v':value,'instance':device['instance']}
+                stress.update(maxima_by_model=models,window_s=window,
+                              scope='actual MOS terminal extrema over the supplied native transient window')
         except (OSError,ValueError,KeyError,TypeError) as exc:
             stress={'status':'NOT_MEASURED','detail':str(exc)}
-    return {'status':status,'receipt':str(receipt_path),'graded_segments':len(results),
+    if any(not Path(view['path']).is_file() or _sha(Path(view['path']))!=view['sha256'] for view in views.values()):
+        raise ValueError('consumed native interconnect inputs changed during derivation')
+    return {'status':status,'measurement_status':'PASS','receipt':str(receipt_path),'graded_segments':len(results),
             'violations':[r for r in results if r['status']=='FAIL'],
             'unmeasured':[r for r in results if r['status']=='NOT_MEASURED'],
             'native_drc_bound_partitions':sum('density_bound_mA_per_um_exact' in r for r in results),
@@ -519,6 +626,10 @@ def grade_case(project: Path, setting: dict, limits: dict, aliases: dict, known:
             'ideal_connections':{'count':len(ideals),'alias_groups':ideal_groups,
                                  'current_scope':'ideal connection currents are not inferred from zero resistance'},
             'pg_voltage_ranges':ranges,'feed_voltages':feeds,'feed_vectors':rail_vectors,'rail_roles':roles,
+            **({'analysis':analysis,'feed_voltage_ranges':feed_ranges,
+                 'supply_statistics':supply_stats,
+                 'current_statistics_file':str(currents[0]),
+                 'integration':'piecewise-linear integration on actual adaptive native time points'} if transient else {}),
             'mos_stress':stress,
             'scope':rec.get('scope','selected native DC case')},views
 
@@ -584,8 +695,10 @@ def run(project: Path, block: str, setting: dict, *, container: str='', output_d
         if absent:cases.append({'status':'NOT_MEASURED','detail':'declared mission cases absent','missing_cases':absent})
         states=[c['status'] for c in cases]
         status='FAIL' if 'FAIL' in states else 'NOT_MEASURED' if not states or 'NOT_MEASURED' in states else 'PASS'
-        record={'status':status,'detail':'source-bound native DC interconnect EM','cases':cases,
-                'limits':limits,'native_inputs':views,'scope':'only the supplied native DC cases; transient/peak mission coverage is not inferred'}
+        transient=any((case.get('analysis') or {}).get('kind','').upper()=='TRAN' for case in cases)
+        record={'status':status,'detail':'source-bound native '+('transient' if transient else 'DC')+' interconnect EM','cases':cases,
+                'limits':limits,'native_inputs':views,
+                'scope':'only supplied native OP cases/transient windows; no omitted mission or lifetime extrapolation'}
     except (OSError,ValueError,KeyError,TypeError,subprocess.SubprocessError) as exc:
         record={'status':'NOT_MEASURED','detail':str(exc),'cases':cases,'native_inputs':views}
     target=work/'result.json';target.write_text(json.dumps(record,indent=2)+'\n');outputs.append(str(target));record['outputs']=outputs

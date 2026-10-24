@@ -6016,15 +6016,32 @@ def apply_sizing_inputs(sizing: Dict[str, Any], knobs: Dict[str, Any],
         if name not in by_name or not isinstance(parameters, dict):
             raise SizingInputsInvalid(f"unknown device or invalid parameters for {name!r}")
         device = by_name[name]
+        normalized = {}
         for parameter, value in parameters.items():
-            if parameter not in ("w", "l", "m") or parameter not in device:
+            if parameter not in ("w", "l", "m", "ng") or (parameter != "ng" and parameter not in device):
                 raise SizingInputsInvalid(f"unknown sizing parameter {name}.{parameter}")
+            if parameter == "ng" and device.get("role") not in ("nmos", "pmos"):
+                raise SizingInputsInvalid(f"{name}.ng is valid only for MOS devices")
             if (name, parameter) in expression_owned:
                 raise SizingInputsInvalid(f"{name}.{parameter} is expression-owned; change its declared sizing knob")
             number = positive(value, f"{name}.{parameter}")
-            if parameter == "m" and number != int(number):
-                raise SizingInputsInvalid(f"{name}.m must be an integer")
-            role = device.get("role")
+            if parameter in ("m", "ng") and number != int(number):
+                raise SizingInputsInvalid(f"{name}.{parameter} must be an integer")
+            normalized[parameter] = int(number) if parameter == "ng" else number
+        candidate = dict(device, **normalized)
+        role = device.get("role")
+        finger_count = candidate.get("ng", 1) if role in ("nmos", "pmos") else 1
+        if isinstance(finger_count, bool) or not isinstance(finger_count, (int, float)) or not math.isfinite(finger_count) or finger_count < 1 or finger_count != int(finger_count):
+            raise SizingInputsInvalid(f"{name}.ng must be a positive integer")
+        dimensions = set(normalized) & {"w", "l"}
+        if "ng" in normalized:
+            dimensions.add("w")
+        for parameter in dimensions:
+            number = positive(candidate.get(parameter), f"{name}.{parameter}")
+            # Width is the total across fingers, whereas native PCell width
+            # bounds describe one finger. Multiplicity remains independent.
+            if parameter == "w":
+                number /= finger_count
             dimension = {"w": "width", "l": "length"}.get(parameter)
             if dimension:
                 low = (minima.get(role) or {}).get(f"min_{dimension}_um")
@@ -6033,7 +6050,7 @@ def apply_sizing_inputs(sizing: Dict[str, Any], knobs: Dict[str, Any],
                     raise SizingInputsInvalid(f"{name}.{parameter}={number}um is below PDK minimum {low}um")
                 if high is not None and number > float(high):
                     raise SizingInputsInvalid(f"{name}.{parameter}={number}um exceeds PDK maximum {high}um")
-            device[parameter] = number
+        device.update(normalized)
 
 
 def build_ir(block: str, btype: str, entry: Dict[str, Any],

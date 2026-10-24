@@ -6,6 +6,7 @@ import pytest
 
 import _plugin_tree
 import analog_a5_layout_emit as layout
+import analog_a5_pdk_device_limits as limits
 
 
 def device(path, suffix="ng=2"):
@@ -61,3 +62,36 @@ def test_ambiguous_finger_fields_refuse_before_native_execution(tmp_path):
     dev = device(tmp_path / "source.sp", "ng=2 nf=2")
     with pytest.raises(layout.Refusal, match="exactly one"):
         layout.gencell_call(dev, "drawn", facts("ng", "nf"))
+
+
+@pytest.mark.parametrize("finger_count", [4, 64])
+def test_three_interleaved_terminal_groups_keep_separate_conductors(finger_count):
+    """A third M2 strap used to short its stubs through the gate strap."""
+    dev = {"name": "unit", "model": "native_mos", "class": "mosfet",
+           "nets": ["drain", "gate", "source", "body"],
+           "pars": {"w": 8 * finger_count, "l": 0.5, "m": 1}}
+    contacts = []
+    for i in range(finger_count):
+        contacts.append(("G" + str(i), 120 * i + 60, 300))
+        contacts.append((("D" if i % 2 == 0 else "S") + str(i), 120 * i, 0))
+    contacts.append(("B", -180, 150))
+    text = ["magic", "magscale 1 1", "<< metal2 >>"]
+    text += [f"rect {x-15} {y-15} {x+15} {y+15}" for _, x, y in contacts]
+    text += ["<< labels >>"]
+    text += [f"rlabel metal2 {x} {y} {x} {y} 0 {name}" for name, x, y in contacts]
+    text += ["<< end >>"]
+    cell = layout.parse_cell("\n".join(text))
+    # The model has no body-contact ring; keep the cell's placement envelope
+    # wider than its isolated routing pads, as a real child well does.
+    cell.update(bbox=(-250, -400, 120 * finger_count + 100, 700), delta=(0, 0))
+    pdk = facts()
+    pdk.layers = None
+    geo = layout.Geo(limits.deck_rules(""), 0.21, 100, 0.3, 0.15)
+    plan = layout.build_plan([dev], dev["nets"], {layout.config_key(dev): cell}, pdk, geo, 0)
+    assert layout.net_shorts(plan) == []
+    # Every contact reaches the routing layer through a real endpoint via.
+    vias = [r for r in plan.shapes if r["layer"] == "via2"]
+    for net in ("gate", "drain", "source"):
+        assert sum(r["net"] == net for r in vias) >= sum(
+            name.startswith({"gate": "G", "drain": "D", "source": "S"}[net])
+            for name, _, _ in contacts)
