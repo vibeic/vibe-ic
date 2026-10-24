@@ -69,6 +69,10 @@ def candidate(tmp_path, monkeypatch):
             value = {**cfg, 'meta': {'step': step}}
             for key, (v, _) in (kwargs.get('overlay') or {}).items():
                 value[key] = v
+            if damage['kind'] == 'string_die' and 'DIE_AREA' in value:
+                value['DIE_AREA'] = [str(item) for item in value['DIE_AREA']]
+            if damage['kind'] == 'nonfinite_die' and 'DIE_AREA' in value:
+                value['DIE_AREA'] = ['0', '0', 'NaN', '100']
             if damage['kind'] == 'missing_deck': value.pop('KLAYOUT_DENSITY_RUNSET')
             if damage['kind'] == 'missing_script': value.pop('KLAYOUT_FILLER_SCRIPT')
             path = _put(project / 'phase3/librelane' / folder / (step + '.json'), value)
@@ -226,6 +230,25 @@ def test_retained_finish_replays_only_ratio_after_validating_native_readsets(can
     new_calls = c.calls[before:]
     assert len(new_calls) == 1 and 'argv' in new_calls[0]
     assert not any(row.get('step') for row in new_calls)
+
+
+def test_retained_finish_accepts_native_numeric_string_die_coordinates(candidate):
+    c = candidate
+    c.damage['kind'] = 'string_die'
+    first = _finish(c)
+    resumed = fill.resume_candidate_gds(
+        c.project, 'neutral-image', c.root, 'processA', gds=c.gds,
+        state=c.state, config=c.config, lane='candidate/finishing',
+        ratio_lane='candidate/string-die-resume-ratios')
+    assert resumed['gds_sha256'] == first['gds_sha256']
+
+
+@pytest.mark.parametrize('die', [
+    ['0', '0', 'NaN', '100'], ['0', '0', 'inf', '100'],
+    ['0', '0', '0', '100'], ['100', '100', '0', '0'], ['0', '0', '100'],
+])
+def test_retained_finish_refuses_invalid_numeric_string_die(die):
+    assert fill._finite_die_box(die) is None
 
 
 @pytest.mark.parametrize('change', ['topped_gds', 'density_receipt', 'density_config',

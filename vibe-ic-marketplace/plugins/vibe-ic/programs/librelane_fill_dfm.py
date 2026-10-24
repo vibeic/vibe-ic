@@ -87,6 +87,18 @@ def _count(value: Any) -> Optional[int]:
     return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
 
 
+def _finite_die_box(value: Any) -> Optional[tuple[float, float, float, float]]:
+    """Normalize JSON numeric coordinates while refusing invalid geometry."""
+    try:
+        box = tuple(float(item) for item in value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if (len(box) != 4 or not all(math.isfinite(item) for item in box)
+            or box[2] <= box[0] or box[3] <= box[1]):
+        return None
+    return box
+
+
 def cell_patterns(config: Dict[str, Any]) -> Dict[str, List[str]]:
     """The decap and fill master patterns, exactly as `fill.tcl` strips them."""
     out = {}
@@ -360,7 +372,8 @@ def resume_candidate_gds(project: Path, image: str, pdk_root: Path, pdk: str, *,
     configs = {name: root / 'config' / f'{name}.json' for name in GDS_FILL_STEPS}
     density_cfg = _load(configs['KLayout.Density'])
     if (density_cfg.get('DESIGN_NAME') != cfg['DESIGN_NAME']
-            or density_cfg.get('DIE_AREA') != die):
+            or _finite_die_box(density_cfg.get('DIE_AREA')) != _finite_die_box(die)
+            or _finite_die_box(die) is None):
         raise Refusal('LL_CANDIDATE_FINISHING_CONFIG', str(configs['KLayout.Density']))
 
     def checked(folder: Path, producer: str) -> tuple[dict, dict]:
