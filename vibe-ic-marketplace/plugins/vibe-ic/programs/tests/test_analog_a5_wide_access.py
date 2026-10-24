@@ -72,6 +72,36 @@ def test_preferred_native_island_and_neighbor_stub_need_compact_access():
     assert narrow == original
 
 
+@pytest.mark.parametrize("vertical", [False, True])
+def test_body_island_search_also_clears_the_actual_jog_and_escape(monkeypatch, vertical):
+    g = geo()
+    cy = 300 if vertical else 0
+    obstacle = (-10, 180, 10, 220) if vertical else (-150, -50, -130, 50)
+    sites = layout.Sites([], g)
+    sites.add({"net": "drain", "layer": "metal3", "box": obstacle})
+    # Both island positions are legal on their own. Only the second can
+    # reach the already allocated lane without crossing the drain stub.
+    monkeypatch.setattr(layout, "_island_candidates", lambda *a: iter([(0, 0), (-240, 0)]))
+    before = layout.Plan()
+    assert layout._via_stack(before, "body", 0, cy, 2, g, sites=sites) == (0, cy)
+    after = layout.Plan()
+    assert layout._via_stack(after, "body", 0, cy, 2, g, sites=sites,
+                             exit_path=(-500, 0, 30)) == (-240, cy)
+    assert not after.deviations
+    assert sites.clear((-270, -30, -210, cy + 30), ["metal3"], None, "body")
+    assert sites.clear((-530, -30, -210, 30), ["metal3"], None, "body")
+
+
+def test_legal_body_exit_does_not_change_preferred_island_geometry():
+    g = geo()
+    sites = layout.Sites([], g)
+    before, after = layout.Plan(), layout.Plan()
+    assert layout._via_stack(before, "body", 0, 0, 2, g, sites=sites) == (0, 0)
+    assert layout._via_stack(after, "body", 0, 0, 2, g, sites=sites,
+                             exit_path=(-500, 0, 30)) == (0, 0)
+    assert after.shapes == before.shapes
+
+
 def test_actual_subminimum_contact_plus_fallback_pad_is_not_minimum_area():
     # Translated native M2.d marker: .088 um2 pad plus .0242 um2 extension.
     sites = layout.Sites([native_row((0, 0, 20, 44))], geo())

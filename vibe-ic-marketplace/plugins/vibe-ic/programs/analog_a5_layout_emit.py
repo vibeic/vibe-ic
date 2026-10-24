@@ -2262,7 +2262,8 @@ def _island_candidates(span: int):
 def _via_stack(plan: Plan, net: str, x: int, y: int, level: int, geo: Geo,
                top: int = 3, sites: Optional["Sites"] = None,
                friendly=None, dev: Optional[dict] = None,
-               compact_terminal: bool = False) -> Tuple[int, int]:
+               compact_terminal: bool = False,
+               exit_path: Optional[Tuple[int, int, int]] = None) -> Tuple[int, int]:
     """Carry a terminal from the metal the gencell delivered it on to the
     routing layer, and give every cut the metal the deck demands around it.
 
@@ -2343,6 +2344,16 @@ def _via_stack(plan: Plan, net: str, x: int, y: int, level: int, geo: Geo,
                 box = (x + dx - ax, y + dy - ay, x + dx + ax, y + dy + ay)
                 if not sites.clear(box, layers, friendly, net):
                     continue
+                if exit_path is not None:
+                    lane, ey, half = exit_path
+                    cx0, cy0 = x + dx, y + dy
+                    jog = (cx0 - half, min(cy0, ey) - half,
+                           cx0 + half, max(cy0, ey) + half)
+                    escape = (min(cx0, lane) - half, ey - half,
+                              max(cx0, lane) + half, ey + half)
+                    if not all(sites.clear(path, ["metal3"], friendly, net)
+                               for path in (jog, escape)):
+                        continue
                 if not sites.touches(box, term_layer, friendly):
                     continue
                 # The reduced-area option is legal only when the native
@@ -2943,7 +2954,11 @@ def build_plan(devs: Sequence[dict], ports: Sequence[str],
                                         reach=geo.default_space)
                 cx, cy = _via_stack(plan, net, lx, ly, level, geo,
                                     top=ROUTE_LEVEL,
-                                    sites=sites, friendly=fr, dev=d["dev"])
+                                    sites=sites, friendly=fr, dev=d["dev"],
+                                    exit_path=(lane, ey, hw3)
+                                    if g.get("body_tap") and any(
+                                        p["strapped"] for p in d["groups"]
+                                        if not p.get("body_tap")) else None)
                 joint = cx
                 if cy != ey:
                     # a metal3 jog back to the escape height. Metal3 is the
