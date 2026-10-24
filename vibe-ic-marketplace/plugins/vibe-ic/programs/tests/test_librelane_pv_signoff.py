@@ -942,3 +942,27 @@ def test_other_bytes_than_the_promoted_stream_take_the_direct_comparison(tmp_pat
 def test_the_drc_script_prints_a_per_pair_defect_metric():
     script = (PLUGIN / "finishing_xor.drc").read_text()
     assert "vibeic__finishing_xor__defect__count__pair:" in script
+
+
+def test_candidate_pv_preserves_canonical_half_namespace(tmp_path, monkeypatch):
+    """Exercise the actual native adapter used by repair, without replacing it."""
+    project, pnr, configs, pdk_root = _half_project(tmp_path, pv.DRC_CHAIN)
+    monkeypatch.setattr(pv, "resolve_step_configs", lambda *a, **k: configs)
+    _fake_tool(monkeypatch, {"Magic.DRC": {"magic__drc_error__count": 0},
+                             "KLayout.DRC": {"klayout__drc_error__count": 0},
+                             "KLayout.Density": {"klayout__density_error__count": 0}})
+    views = dict(gds=pnr / "chip.gds", routed_def=pnr / "chip.def",
+                 netlist=pnr / "chip_pnr.v", sdc=pnr / "constraint.sdc")
+    canonical = pv.run_half(project, "img", pdk_root, "procA", "drc", **views)
+    record_path = project / pv.RECORD_REL.format(half="drc")
+    before = record_path.read_bytes()
+    candidate_record = project / "reports/candidate/drc.json"
+    observed = pv.run_half(project, "img", pdk_root, "procA", "drc", **views,
+                           lane_prefix="candidate-finished-pv", record=candidate_record)
+    assert canonical["verdict"] == observed["verdict"] == "PASS"
+    assert record_path.read_bytes() == before
+    assert json.loads(candidate_record.read_text())["scope"] == canonical["scope"]
+    folder = project / "phase3/librelane/candidate-finished-pv-drc/01-magic-drc"
+    assert (folder / "state_out.json").is_file()
+    bridge = project / "phase3/librelane/candidate-finished-pv-drc-config/bridge/state_in.json"
+    assert json.loads(bridge.read_text())["gds"] == str(views["gds"].resolve())
